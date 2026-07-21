@@ -43,6 +43,7 @@
 #include "codegen/rbank/value_requirements.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -99,12 +100,14 @@ inline LaneAssignment color_linear_scan(const AbstractProblem &p,
         const ValueRequirements &r = v->req;
 
         if (r.fixed_reg >= 0) {
-            // Pin duro: solo esa lane (si es de la clase, asignable, soporta el
-            // ancho y esta libre).  Si no, el valor se derrama (infactible).
+            // Pin duro: solo esa lane (si es de la clase, asignable, soporta el ancho
+            // y esta libre) y ademas SOBREVIVE a los hazards (no debe-memoria, la lane
+            // no esta prohibida).  Si no, el valor se derrama (infactible).
             const uint8_t fid = static_cast<uint8_t>(r.fixed_reg);
             const Lane *l = bank.by_id(fid);
-            if (l && l->cls == r.cls && bank.is_allocatable(fid, vec_active) &&
-                bank.supports(fid, r.width) && lane_free(fid))
+            if (!r.must_be_memory() && !r.lane_forbidden(fid) && l && l->cls == r.cls &&
+                bank.is_allocatable(fid, vec_active) && bank.supports(fid, r.width) &&
+                lane_free(fid))
                 chosen = fid;
         } else {
             // Primera lane ADMISIBLE (correctitud dura, via AllowedLaneSet) y libre.
@@ -135,38 +138,41 @@ inline LaneAssignment color_linear_scan(const AbstractProblem &p,
  */
 /**
  * @struct ColoringValidation
- * @brief Veredicto de correctitud DESGLOSADO por categoria (no un bool).  Cuando el
- *        shadow falla sobre un corpus grande, esto dice QUE parte del modelo esta
- *        incompleta (reserved=1 vs crosscall=3 vs overlap=0...) en vez de solo
- *        "invalid".  Convierte el shadow en un oraculo de regresiones.  DATOS puros.
+ * @brief Veredicto de correctitud por @c LaneHazard (no N campos ad hoc).  Cuando el
+ *        shadow falla sobre un corpus grande dice QUE hazard viola (must_memory=3
+ *        lane_forbidden=5 caller_saved=2...) -- oraculo de regresiones.  Un nuevo
+ *        hazard del runtime = un valor mas en el enum, sin tocar esta struct.
  */
 struct ColoringValidation {
-    uint32_t overlap_errors   = 0; ///< dos valores que interfieren en lanes que aliasan.
-    uint32_t crosscall_errors = 0; ///< valor cross-call en lane VOLATILE (caller-saved).
-    uint32_t width_errors     = 0; ///< lane no soporta el ancho del valor.
-    uint32_t class_errors     = 0; ///< lane de clase de recurso incorrecta.
-    uint32_t reserved_errors  = 0; ///< lane no asignable (scratch/reservada/inexistente).
-    uint32_t fixed_errors     = 0; ///< valor pinado no esta en su fixed_reg.
+    // DOS niveles distintos, no se mezclan:
+    std::array<uint32_t, kLaneHazardCount> by_hazard{}; ///< restricciones del VALOR (LaneHazard).
+    uint32_t overlap = 0; ///< violacion del COLOREADO (dos valores que interfieren) -- otro nivel.
 
+    /** @brief Suma un LaneHazard del valor (NONE = no-op: la lane era admisible). */
+    void bump(LaneHazard k) noexcept {
+        if (k != LaneHazard::NONE) ++by_hazard[static_cast<size_t>(k)];
+    }
+    void bump_overlap() noexcept { ++overlap; }
+    uint32_t count(LaneHazard k) const noexcept { return by_hazard[static_cast<size_t>(k)]; }
     uint32_t total() const noexcept {
-        return overlap_errors + crosscall_errors + width_errors + class_errors +
-               reserved_errors + fixed_errors;
+        uint32_t s = overlap;
+        for (uint32_t n : by_hazard) s += n;
+        return s;
     }
     bool ok() const noexcept { return total() == 0; }
-    /** @brief Acumula (para el agregado del corpus). */
     void add(const ColoringValidation &o) noexcept {
-        overlap_errors += o.overlap_errors;   crosscall_errors += o.crosscall_errors;
-        width_errors += o.width_errors;       class_errors += o.class_errors;
-        reserved_errors += o.reserved_errors; fixed_errors += o.fixed_errors;
+        for (size_t i = 0; i < kLaneHazardCount; ++i) by_hazard[i] += o.by_hazard[i];
+        overlap += o.overlap;
     }
 };
 
 /**
- * @brief Valida un coloreo DESGLOSANDO cada tipo de violacion (no corta al primer
- *        error como @c validate_assignment).  Recorre requisitos por-valor (clase,
- *        ancho, asignabilidad, pin, cross-call) + interferencia (aristas cuyas lanes
- *        aliasan).  Un valor PINADO: el ABI manda -> solo se comprueba que este en su
- *        lane; las demas reglas no se le aplican (el pin es de nivel superior).
+ * @brief Valida un coloreo por LaneHazard (no corta al primer error).  FUENTE UNICA:
+ *        pregunta @c lane_hazard -- la MISMA funcion que consume el coloreo -- para
+ *        cada valor en registro; si la lane no es admisible, cuenta ESE hazard.  Asi
+ *        el validador nunca reinterpreta crosses_call/is_gc: cuando @c lane_hazard
+ *        gana un hazard nuevo, el validador lo recoge SOLO.  La interferencia (entre
+ *        pares, no por-lane) se cuenta aparte en @c ColoringValidation::overlap.
  */
 inline ColoringValidation validate_coloring(const AbstractProblem &p,
                                             const LaneAssignment &a,
@@ -175,19 +181,20 @@ inline ColoringValidation validate_coloring(const AbstractProblem &p,
     ColoringValidation v;
     for (const AbstractValue &val : p.values) {
         const int lane = a.lane_of(val.value_id);
-        if (lane == kSpilled) continue; // en memoria: no ocupa lane.
+        if (lane == kSpilled) continue; // en memoria: siempre valido (incl. must_memory).
         const Lane *l = bank.by_id(static_cast<uint8_t>(lane));
-        if (!l) { ++v.reserved_errors; continue; }
+        if (!l) { v.bump(LaneHazard::NOT_ALLOCATABLE); continue; }
         if (val.req.fixed_reg >= 0) {
-            if (lane != val.req.fixed_reg) ++v.fixed_errors; // pin: solo su lane.
+            // Pin: la unica lane valida es su fixed_reg; ademas debe sobrevivir a los
+            // hazards que NO dependen del pin (must_memory / lane_forbidden).
+            if (lane != val.req.fixed_reg) v.bump(LaneHazard::PIN_VIOLATED);
+            else if (val.req.must_be_memory()) v.bump(LaneHazard::MUST_MEMORY);
+            else if (val.req.lane_forbidden(static_cast<uint8_t>(lane)))
+                v.bump(LaneHazard::LANE_FORBIDDEN);
             continue;
         }
-        if (l->cls != val.req.cls) ++v.class_errors;
-        if (!l->allocatable(vec_active)) ++v.reserved_errors;
-        if (!l->supports(val.req.width)) ++v.width_errors;
-        if (val.req.crosses_call &&
-            l->preservation_of(val.req.width) != SavePolicy::PRESERVED)
-            ++v.crosscall_errors;
+        // Rama GENERAL: exactamente el mismo juicio que el coloreo (lane_hazard).
+        v.bump(lane_hazard(val.req, *l, vec_active));
     }
     const ConstraintSet inter = build_interference(p); // re-abstraccion de LiveRanges.
     for (const Constraint &c : inter.items) {
@@ -196,7 +203,7 @@ inline ColoringValidation validate_coloring(const AbstractProblem &p,
         if (la == kSpilled || lb == kSpilled) continue;
         const AliasSet *aa = bank.aliases_of(static_cast<uint8_t>(la));
         const AliasSet *ab = bank.aliases_of(static_cast<uint8_t>(lb));
-        if (aa && ab && aa->overlaps(*ab)) ++v.overlap_errors;
+        if (aa && ab && aa->overlaps(*ab)) v.bump_overlap(); // nivel COLOREADO, aparte.
     }
     return v;
 }

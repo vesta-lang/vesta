@@ -56,40 +56,80 @@ namespace codegen {
 namespace rbank {
 
 /**
- * @brief ¿La lane @p lane es ADMISIBLE (correctitud DURA) para el valor @p r?
- *        Version PURA: recibe la @c Lane -> cero busquedas (usar cuando ya iteras
- *        @c bank.lanes; es el hot path del coloreo).
- *
- * Reglas ESTATICAS de correctitud (no dinamicas -- @c lane_free lo comprueba el
- * coloreo aparte):
- *   1. clase de recurso correcta,
- *   2. asignable (no scratch/frame/reservada; respeta VEC_ACC demand-driven),
- *   3. soporta el ancho del valor,
- *   4. CONSTRAINT ABI: si @p r cruza un CALL, la lane debe ser PRESERVED
- *      (callee-saved) -- una lane VOLATILE la destruye el CALL.
- *
- * NO evalua el pin (@c fixed_reg): un pin es una restriccion de NIVEL SUPERIOR al
- * allocator (el ABI, una calling convention concreta o el inline-asm ya fijaron ese
- * registro), asi que el allocator no tiene libertad y el pin prevalece sobre
- * @c crosses_call -- no es una excepcion arbitraria, es que la eleccion ya no es del
- * allocator.  El pin lo maneja el coloreo/builder en su rama propia; esta funcion es
- * la rama GENERAL (sin pin).
+ * @enum LaneHazard
+ * @brief Por que una lane NO satisface los REQUISITOS DE UN VALOR (o @c NONE si los
+ *        satisface).  UN solo concepto en vez de N categorias ad hoc: el allocator no
+ *        distingue GC de EH de inline-asm de ABI -- todas son restricciones del mismo
+ *        nivel (el VALOR).  El origen (GC/EH/asm/...) se pierde a proposito: al
+ *        coloreador solo le importa el EFECTO.  Nuevos hazards del runtime = nuevo
+ *        valor aqui, sin tocar el algoritmo.  NOTA: la interferencia (OVERLAP) NO esta
+ *        aqui -- es una propiedad del COLOREADO (entre DOS valores), otro nivel.  DATO
+ *        (i18n): se mapea a VXNNNN al emitir.
  */
-inline bool lane_admissible(const ValueRequirements &r, const Lane &lane,
-                            bool vec_active) {
-    if (lane.cls != r.cls) return false;                    // (1) clase.
-    if (!lane.allocatable(vec_active)) return false;        // (2) asignable.
-    if (!lane.supports(r.width)) return false;              // (3) ancho.
-    // (4) CORRECTITUD ABI: cross-call -> solo callee-saved (PRESERVED).
-    if (r.crosses_call && lane.preservation_of(r.width) != SavePolicy::PRESERVED)
-        return false;
-    return true;
+enum class LaneHazard : uint8_t {
+    NONE = 0,          ///< la lane satisface los requisitos del valor.
+    WRONG_CLASS,       ///< lane de otra clase de recurso.
+    NOT_ALLOCATABLE,   ///< lane reservada/scratch/frame (no asignable).
+    UNSUPPORTED_WIDTH, ///< la lane no soporta el ancho del valor.
+    MUST_MEMORY,       ///< el valor DEBE residir en memoria (GC/EH/force_spill/addr).
+    LANE_FORBIDDEN,    ///< la lane muere en un punto que el valor atraviesa (asm/stub).
+    NOT_PRESERVED,     ///< el valor requiere una lane PRESERVADA (cross-call) y no lo es.
+    PIN_VIOLATED,      ///< la lane no satisface el pin (fixed_reg) del valor.
+};
+static constexpr size_t kLaneHazardCount = 8;
+
+/** @brief Nombre corto del LaneHazard (para paneles/diagnostico). */
+inline const char *lane_hazard_name(LaneHazard k) {
+    switch (k) {
+        case LaneHazard::NONE:              return "none";
+        case LaneHazard::WRONG_CLASS:       return "class";
+        case LaneHazard::NOT_ALLOCATABLE:   return "reserved";
+        case LaneHazard::UNSUPPORTED_WIDTH: return "width";
+        case LaneHazard::MUST_MEMORY:       return "must_memory";
+        case LaneHazard::LANE_FORBIDDEN:    return "lane_forbidden";
+        case LaneHazard::NOT_PRESERVED:     return "not_preserved";
+        case LaneHazard::PIN_VIOLATED:      return "pin";
+    }
+    return "?";
 }
 
 /**
- * @brief Conveniencia por id: hace UN @c by_id y delega en la version pura.  Para
- *        callers que solo tienen el id fisico (filtro de victimas, validacion).
+ * @brief El hazard que hace INADMISIBLE la lane @p lane para el valor @p r, o
+ *        @c LaneHazard::NONE si es admisible.  FUENTE UNICA DE VERDAD: tanto el coloreo
+ *        (@c lane_admissible) como el validador (@c validate_coloring) preguntan AQUI
+ *        -- nunca reinterpretan crosses_call/is_gc por su cuenta.
+ *
+ * Version PURA (recibe la @c Lane -> cero busquedas; hot path del coloreo).  NO evalua
+ * el pin (rama GENERAL): un pin es restriccion de nivel superior (ABI/asm ya fijaron el
+ * registro) y lo maneja el coloreo/builder aparte -> @c PIN_VIOLATED no lo devuelve
+ * esta funcion.  Orden = prioridad del diagnostico (la PRIMERA razon que falla).
  */
+inline LaneHazard lane_hazard(const ValueRequirements &r, const Lane &lane,
+                              bool vec_active) {
+    // Debe residir en memoria: ninguna lane sirve (GC root cross-call, live-in a un
+    // handler abnormal/force_spill, address-taken).  El allocator NO necesita saber el
+    // MOTIVO -- solo "no puede vivir en registro".
+    if (r.must_be_memory())                        return LaneHazard::MUST_MEMORY;
+    if (lane.cls != r.cls)                         return LaneHazard::WRONG_CLASS;
+    if (!lane.allocatable(vec_active))             return LaneHazard::NOT_ALLOCATABLE;
+    if (!lane.supports(r.width))                   return LaneHazard::UNSUPPORTED_WIDTH;
+    // Lane muerta en un punto que el valor atraviesa (clobbers de asm/setjmp/stub/
+    // syscall...).  Bitmask precomputado -> el coloreo no sabe el origen.
+    if (r.lane_forbidden(lane.id))                 return LaneHazard::LANE_FORBIDDEN;
+    // El valor requiere una lane PRESERVADA (esta viva a traves de un CALL que clobbea
+    // las volatiles).  El nombre no menciona "caller-saved": el requisito es "preservada".
+    if (r.crosses_call && lane.preservation_of(r.width) != SavePolicy::PRESERVED)
+        return LaneHazard::NOT_PRESERVED;
+    return LaneHazard::NONE;
+}
+
+/** @brief ¿La lane @p lane es admisible para @p r?  (@c lane_hazard == NONE). */
+inline bool lane_admissible(const ValueRequirements &r, const Lane &lane,
+                            bool vec_active) {
+    return lane_hazard(r, lane, vec_active) == LaneHazard::NONE;
+}
+
+/** @brief Conveniencia por id: hace UN @c by_id y delega en la version pura. */
 inline bool lane_admissible(const ValueRequirements &r, uint8_t lane_id,
                             const PhysicalRegisterBank &bank, bool vec_active) {
     const Lane *l = bank.by_id(lane_id);
@@ -126,12 +166,14 @@ inline AllowedLanes build_allowed_lanes(const AbstractProblem &p,
     for (const AbstractValue &v : p.values) {
         std::vector<uint8_t> lanes;
         if (v.req.fixed_reg >= 0) {
-            // Pin duro: solo esa lane (si es usable).  Restriccion de NIVEL SUPERIOR
-            // al allocator (ABI/calling-convention/inline-asm ya fijaron el registro),
-            // por eso prevalece sobre crosses_call -- el allocator no tiene libertad.
+            // Pin duro: solo esa lane (si es usable y sobrevive a los hazards).
+            // Restriccion de NIVEL SUPERIOR al allocator (ABI/asm ya fijaron el
+            // registro); prevalece sobre crosses_call pero no sobre debe-memoria ni
+            // una lane clobbeada (si su pin muere, el valor es infactible en registro).
             const uint8_t fid = static_cast<uint8_t>(v.req.fixed_reg);
             const Lane *l = bank.by_id(fid);
-            if (l && l->cls == v.req.cls && l->allocatable(vec_active) &&
+            if (!v.req.must_be_memory() && !v.req.lane_forbidden(fid) && l &&
+                l->cls == v.req.cls && l->allocatable(vec_active) &&
                 l->supports(v.req.width))
                 lanes.push_back(fid);
         } else {

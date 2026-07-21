@@ -103,6 +103,26 @@ inline AbstractProblem intervals_to_problem(const jit::IntervalResult &ivs) {
                 if (cp >= r.from && cp < r.to) { av.req.crosses_call = true; break; }
             if (av.req.crosses_call) break;
         }
+        // HAZARD "debe-memoria" -- UN solo mecanismo (residency=MEMORY), varios origenes:
+        //  (a) GC root cross-call: el stackmap lo describe en el slot (si quedara en
+        //      registro el GC no lo veria).  Antes era una regla GC aparte; ahora es el
+        //      mismo "debe-memoria" que (b).
+        //  (b) force_spill: valor live-in a un sucesor abnormal (handler); el throw
+        //      clobbea TODOS los regs, solo la memoria sobrevive.
+        if ((av.req.crosses_call && av.req.is_gc) ||
+            (iv.vreg < ivs.force_spill.size() && ivs.force_spill[iv.vreg]))
+            av.req.residency = Residency::MEMORY;
+        // HAZARD "lanes muertas" (asm_clobbers): las lanes que un INLINE_ASM destruye
+        // en un punto que este valor atraviesa (incluye callee-saved que el CALL no
+        // protege).  Semilla del ClobberPoint: se PRE-COMPUTA la union por valor.
+        for (const jit::IntervalResult::AsmClobberSite &site : ivs.asm_clobbers) {
+            bool covers = false;
+            for (const jit::LiveRange &r : iv.ranges)
+                if (site.pos >= r.from && site.pos < r.to) { covers = true; break; }
+            if (!covers) continue;
+            for (uint8_t cr : site.regs)
+                if (cr < 64) av.req.forbidden_lanes |= (1ull << cr);
+        }
         p.values.push_back(av);
     }
     return p;

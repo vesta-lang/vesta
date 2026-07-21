@@ -89,7 +89,20 @@ struct ValueRequirements {
     /// Pin DURO a un registro fisico (inline asm / arg/ret del ABI): id o -1.
     int16_t fixed_reg = -1;
 
+    /// Lanes fisicas PROHIBIDAS para este valor (bitmask por id, 0..63): alguna
+    /// muere en un punto que el valor atraviesa (caller-saved de un CALL, clobbers
+    /// de un INLINE_ASM, de un stub/syscall/trampolin...).  Al allocator le da igual
+    /// QUE lo causo: solo "esta lane no sobrevive".  Es la SEMILLA del futuro
+    /// ClobberPoint/HazardPoint unificado: hoy se PRE-COMPUTA por valor (union de los
+    /// clobbers en su rango); manyana un vector<ClobberPoint> con posiciones lo
+    /// derivara y @c crosses_call se reexpresara como "caller-saved en forbidden".
+    uint64_t forbidden_lanes = 0;
+
     bool has_fixed_reg() const noexcept { return fixed_reg >= 0; }
+    /** @brief True si la lane fisica @p id esta prohibida (algun hazard la mata). */
+    bool lane_forbidden(uint8_t id) const noexcept {
+        return id < 64 && (forbidden_lanes & (1ull << id)) != 0;
+    }
     /** @brief True si el valor DEBE residir en memoria (residency o addr-taken). */
     bool must_be_memory() const noexcept {
         return residency == Residency::MEMORY || address_taken;

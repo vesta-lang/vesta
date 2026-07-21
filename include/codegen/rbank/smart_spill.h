@@ -117,8 +117,9 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
         if (r.fixed_reg >= 0) {
             const uint8_t fid = static_cast<uint8_t>(r.fixed_reg);
             const Lane *l = bank.by_id(fid);
-            if (l && l->cls == r.cls && bank.is_allocatable(fid, vec_active) &&
-                bank.supports(fid, r.width) && lane_free(fid))
+            if (!r.must_be_memory() && !r.lane_forbidden(fid) && l && l->cls == r.cls &&
+                bank.is_allocatable(fid, vec_active) && bank.supports(fid, r.width) &&
+                lane_free(fid))
                 return fid;
             return kSpilled;
         }

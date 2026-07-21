@@ -109,9 +109,7 @@ void print_shadow_summary() {
                  "  coste spill: linear=%.1f  rbank=%.1f\n"
                  "  cross-call:  vivos=%llu | caller-saved(PELIGRO) linear=%llu rbank=%llu"
                  " | callee-saved linear=%llu rbank=%llu\n"
-                 "  correctitud: rbank INVALIDOS=%u  linear INVALIDOS=%u (modelo; 0 = OK)\n"
-                 "  rbank errores por categoria: overlap=%u crosscall=%u width=%u"
-                 " class=%u reserved=%u fixed=%u\n",
+                 "  correctitud: rbank INVALIDOS=%u  linear INVALIDOS=%u (modelo; 0 = OK)\n",
                  a.functions, a.equal, a.improved, a.worsened,
                  (unsigned long long)a.linear_spills, (unsigned long long)a.rbank_spills,
                  a.linear_spill_cost, a.rbank_spill_cost,
@@ -120,10 +118,20 @@ void print_shadow_summary() {
                  (unsigned long long)a.rbank_xcall_caller,
                  (unsigned long long)a.linear_xcall_callee,
                  (unsigned long long)a.rbank_xcall_callee,
-                 a.rbank_invalid, a.linear_invalid,
-                 a.rbank_errors.overlap_errors, a.rbank_errors.crosscall_errors,
-                 a.rbank_errors.width_errors, a.rbank_errors.class_errors,
-                 a.rbank_errors.reserved_errors, a.rbank_errors.fixed_errors);
+                 a.rbank_invalid, a.linear_invalid);
+    // Desglose por LaneHazard (restricciones del VALOR) + overlap (COLOREADO, aparte).
+    // Iterar el enum -> nuevos hazards aparecen SOLOS sin tocar este print.
+    std::fprintf(stderr, "  rbank hazards:");
+    bool any = false;
+    for (size_t i = 1; i < codegen::rbank::kLaneHazardCount; ++i) {
+        const uint32_t n = a.rbank_errors.by_hazard[i];
+        if (!n) continue;
+        std::fprintf(stderr, " %s=%u",
+                     codegen::rbank::lane_hazard_name(static_cast<codegen::rbank::LaneHazard>(i)), n);
+        any = true;
+    }
+    if (a.rbank_errors.overlap) { std::fprintf(stderr, " overlap=%u", a.rbank_errors.overlap); any = true; }
+    std::fprintf(stderr, "%s\n", any ? "" : " (ninguno)");
 }
 
 /** @brief Corre rbank sobre el mismo problema que linear_scan y acumula el panel. */
@@ -210,6 +218,38 @@ void run_shadow(const IntervalResult &ivs, const RegAlloc &ra,
                      sr.copies_removed, rep.diff.spills_delta, rep.diff.spill_cost_delta,
                      sl.xcall_values, sl.xcall_caller, sr.xcall_caller,
                      sl.xcall_callee, sr.xcall_callee);
+}
+
+/** @brief ¿Usar rbank como allocator de PRODUCCION? (F5.b, gate VESTA_RBANK_PROD). */
+bool rbank_prod_enabled() {
+    static const bool on = [] {
+        const char *e = std::getenv("VESTA_RBANK_PROD");
+        return e && e[0] && e[0] != '0';
+    }();
+    return on;
+}
+
+/**
+ * @brief Allocator de PRODUCCION via rbank: colorea el problema (smart_spill sobre
+ *        el envolvente) y lo traduce a jit::RegAlloc con el puente mecanico.  El
+ *        ssa_coalesce del backend ya elimino las copias antes -> el modelo NO
+ *        re-coalesce (cada vreg tiene su asignacion).  @p vreg_count = mf.vreg_count
+ *        (denso).  El oraculo de su correctitud es el backend (diff_harness/e2e).
+ */
+RegAlloc rbank_allocate(const IntervalResult &ivs, const ir::IrFunction &fn,
+                        uint32_t vreg_count) {
+    using namespace codegen::rbank;
+#if defined(_WIN32)
+    const bool sysv = false;
+#else
+    const bool sysv = true;
+#endif
+    PhysicalRegisterBank bank = physical_bank_x86_64(sysv, backend_caps_host());
+    ConstraintSet cs;
+    OptimizationContext ctx = make_context(bank, cs);
+    const AbstractProblem p = intervals_to_problem(ivs);
+    const LaneAssignment la = color_smart_spill(p, ctx, fn_needs_vec_reserve(fn));
+    return regalloc_from_lanes(la, p, bank, vreg_count);
 }
 
 /**
@@ -311,10 +351,16 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
      *    reconstruye los intervalos sobre la forma coalescida. */
     IntervalResult ivs = build_intervals(mf, tri);
     if (apply_ssa_coalesce(mf, fn)) ivs = build_intervals(mf, tri);
-    RegAlloc ra = linear_scan(ivs, tri);
 
-    /* SHADOW: corre rbank en paralelo (gated; NO usa su resultado). */
-    run_shadow(ivs, ra, fn);
+    /* F5.b: allocator de PRODUCCION.  Gate VESTA_RBANK_PROD -> rbank; si no,
+     * linear_scan (default).  El verificador adversarial de GC roots de abajo +
+     * diff_harness/e2e son el oraculo de correctitud del rbank. */
+    RegAlloc ra = rbank_prod_enabled() ? rbank_allocate(ivs, fn, mf.vreg_count)
+                                       : linear_scan(ivs, tri);
+
+    /* SHADOW: corre rbank en paralelo (gated; NO usa su resultado).  Con
+     * VESTA_RBANK_PROD activo 'ra' YA es rbank -> el shadow no aporta; se omite. */
+    if (!rbank_prod_enabled()) run_shadow(ivs, ra, fn);
 
     /* 3b. Verificador adversarial (commit 6): TODO GC root vivo a traves
      *     de un call DEBE estar en un slot, para que su stackmap lo

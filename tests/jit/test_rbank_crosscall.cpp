@@ -41,7 +41,7 @@ static int g_fail = 0;
 
 static AbstractValue mkval(uint32_t id, uint32_t start, uint32_t end,
                            ResourceClass cls, ViewWidth w, bool crosses_call = false,
-                           int fixed = -1) {
+                           int fixed = -1, bool must_memory = false) {
     AbstractValue v;
     v.value_id = id;
     v.start = start;
@@ -51,6 +51,8 @@ static AbstractValue mkval(uint32_t id, uint32_t start, uint32_t end,
     v.req.width = w;
     v.req.crosses_call = crosses_call;
     v.req.fixed_reg = static_cast<int16_t>(fixed);
+    // "debe-memoria": mecanismo unificado (GC root cross-call, force_spill, addr-taken).
+    if (must_memory) v.req.residency = Residency::MEMORY;
     return v;
 }
 
@@ -130,6 +132,31 @@ int main() {
             }
             CHECK(in_caller == 0, smart ? "smart puso un cross-call en caller-saved"
                                         : "linear puso un cross-call en caller-saved");
+        }
+    }
+
+    // --- GC root cross-call: DEBE ir a memoria (slot), nunca a registro ---
+    std::printf("\n[GC root cross-call -> slot (stackmap), nunca registro]\n");
+    {
+        // Un handle GC vivo a traves de un CALL no admite NINGUNA lane.
+        const ValueRequirements gc_x = mkval(1, 0, 10, ResourceClass::GP,
+                                            ViewWidth::W8, /*xcall=*/true, -1,
+                                            /*is_gc=*/true).req;
+        size_t admissible = 0;
+        for (const Lane &l : bank.lanes)
+            if (lane_admissible(gc_x, l, false)) ++admissible;
+        CHECK(admissible == 0, "un GC cross-call admitio una lane (deberia spillear)");
+
+        // El coloreo lo derrama aunque haya callee-saved libres.
+        AbstractProblem p;
+        p.values = {mkval(1, 0, 30, ResourceClass::GP, ViewWidth::W8, true, -1, true)};
+        for (bool smart : {false, true}) {
+            LaneAssignment s = smart ? color_smart_spill(p, ctx, false)
+                                     : color_linear_scan(p, bank, false);
+            CHECK(s.lane_of(1) == kSpilled,
+                  smart ? "smart no derramo el GC cross-call"
+                        : "linear no derramo el GC cross-call");
+            CHECK(is_proper_coloring(p, s, bank, false), "coloreo GC invalido");
         }
     }
 
