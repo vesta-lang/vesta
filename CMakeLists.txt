@@ -989,6 +989,20 @@ else ()
     target_link_libraries(test_rbank_profile_adapter PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# build_value_requirements (snapshot vivo) + auditor: corre los adaptadores sobre
+# una funcion real y detecta valores imposibles.
+add_executable(test_rbank_build tests/jit/test_rbank_build.cpp)
+target_include_directories(test_rbank_build PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_build PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_build PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_build PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_build PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 # ---------------------------------------------------------------------------
 # libvesta: DLL/.so con C-ABI estable para embeber VestaVM en cualquier
 # lenguaje (Python via ctypes, Rust FFI, C#, C, ...).  Expone
