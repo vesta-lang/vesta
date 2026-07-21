@@ -39,6 +39,43 @@ namespace jit {
 
 namespace {
 /**
+ * @brief Reserva VEC_ACC DEMAND-DRIVEN (Fase 2): ¿la funcion @p fn necesita
+ *        reservar XMM10-13?  True si usa CUALQUIER op vectorial (VEC_*): esas
+ *        pueden ocupar XMM10-13 (los 4 acumuladores de reduccion + el broadcast
+ *        en XMM13).  Las funciones PURAMENTE ESCALARES FP no tocan esos registros
+ *        -> el allocator puede asignarselos (14 lanes FP en vez de 10).  La MISMA
+ *        condicion decide la reserva Y el uso (el selector solo fija XMM13-idx si
+ *        hay ops VEC_*), asi que nadie pisa un acumulador vivo.
+ *        Gate VESTA_NO_WIDE_HOME=1 fuerza la reserva SIEMPRE (A/B = comportamiento
+ *        anterior: 10 lanes para toda funcion).
+ */
+bool fn_needs_vec_reserve(const ir::IrFunction &fn) {
+    static const bool gate_force = [] {
+        const char *e = std::getenv("VESTA_NO_WIDE_HOME");
+        return e && e[0] && e[0] != '0';
+    }();
+    if (gate_force) return true;
+    for (const auto &b : fn.blocks)
+        for (const auto &in : b.instrs)
+            switch (in.op) {
+            case ir::IrOp::VEC_UNOP:
+            case ir::IrOp::VEC_BINOP:
+            case ir::IrOp::VEC_FMA:
+            case ir::IrOp::VEC_BINOP_S:
+            case ir::IrOp::VEC_BCAST:
+            case ir::IrOp::VEC_ACC_ZERO:
+            case ir::IrOp::VEC_ACC_ADD:
+            case ir::IrOp::VEC_ACC_FMA:
+            case ir::IrOp::VEC_ACC_STORE:
+            case ir::IrOp::VEC_ACC_COMBINE:
+                return true;
+            default:
+                break;
+            }
+    return false;
+}
+
+/**
  * @brief Scheduler machine-level (C2.15) sobre el MFunction fisico, tras el
  *        regalloc y antes de encodear.  Default ON; @c VESTA_SCHED=0 lo desactiva
  *        (A/B).  Reordena por camino critico/latencia respetando el DAG completo
@@ -126,7 +163,9 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
                      resolve_symbol))
         return nullptr;
 
-    const TargetRegInfo &tri = target_x86_64_vm_abi();
+    /* Reserva VEC_ACC demand-driven: XMM10-13 asignables si la funcion NO usa
+     * el path vectorial (14 lanes FP escalares en vez de 10). */
+    const TargetRegInfo &tri = target_x86_64_vm_abi(fn_needs_vec_reserve(fn));
 
     /* 2. Intervalos + P1 coalescing + 3. asignacion (commit 6: el linear_scan
      *    FUERZA a slot los GC roots vivos a traves de un call).
@@ -396,9 +435,11 @@ vreg_compile_native(const ir::IrFunction &fn, const CallResolver &resolve_call,
                     std::vector<std::pair<uint32_t, std::string>>
                         *asm_labels_out,
                     std::vector<Stackmap> *stackmaps_out) {
-    /* Ruta AOT x86: construye el X86Target y delega en el orquestador comun. */
+    /* Ruta AOT x86: construye el X86Target y delega en el orquestador comun.
+     * Reserva VEC_ACC demand-driven (misma politica que el JIT). */
     const X86Target target(resolve_call, ent, resolve_native, resolve_symbol,
-                           pic, target_sysv, mode32, fisa, emit_line_map);
+                           pic, target_sysv, mode32, fisa, emit_line_map,
+                           fn_needs_vec_reserve(fn));
     return vreg_compile_native_target(fn, target, relocs_out, line_map_out,
                                       asm_labels_out, stackmaps_out);
 }
