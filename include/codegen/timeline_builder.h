@@ -27,7 +27,7 @@
 #ifndef VESTA_CODEGEN_TIMELINE_BUILDER_H
 #define VESTA_CODEGEN_TIMELINE_BUILDER_H
 
-#include "codegen/allocation_timeline.h"
+#include "codegen/allocation_result.h" // AllocationResult (FrameLayout + AllocationTimeline)
 #include "codegen/regalloc.h"
 #include "codegen/split_plan.h"
 #include "jit/interval.h" // jit::IntervalResult / LiveInterval / LiveRange
@@ -47,7 +47,7 @@ namespace codegen {
  * timeline plano (conservador: nunca emite algo incorrecto, solo ignora el split).
  */
 inline AllocationTimeline build_allocation_timeline(const RegAlloc &ra,
-                                                    const jit::IntervalResult &ivs,
+                                                    const jit::IntervalResult *ivs,
                                                     const SplitPlan &plan) {
     assert(plan.empty() &&
            "build_allocation_timeline: manejo de SplitInterval aun no implementado "
@@ -55,23 +55,54 @@ inline AllocationTimeline build_allocation_timeline(const RegAlloc &ra,
     (void)plan; // reservado para el siguiente incremento (procesar los SplitInterval).
 
     AllocationTimeline tl;
-    const uint32_t n = static_cast<uint32_t>(ivs.intervals.size());
-    tl.values.resize(n);
-    for (uint32_t vreg = 0; vreg < n; ++vreg) {
-        const jit::LiveInterval &li = ivs.intervals[vreg];
-        ValueLocationTimeline &vt = tl.values[vreg];
-        vt.vreg = vreg;
-        if (li.ranges.empty()) continue; // vreg muerto -> sin segmentos.
-        // Ubicacion PLANA del vreg (misma para toda su vida en el caso trivial).
-        const Location loc =
-            (vreg < ra.assign.size()) ? ra.assign[vreg] : Location{};
-        // Un segmento por LiveRange (respeta los huecos de liveness).  [from, to)
-        // semiabierto, igual que el LiveRange -> sin off-by-one.
-        vt.segments.reserve(li.ranges.size());
-        for (const jit::LiveRange &r : li.ranges)
-            vt.segments.push_back({LinearPos{r.from}, LinearPos{r.to}, loc});
+    if (ivs) {
+        // Con rangos: un segmento por @c LiveRange (respeta los huecos de liveness).
+        // [from, to) semiabierto igual que el LiveRange -> sin off-by-one.
+        const uint32_t n = static_cast<uint32_t>(ivs->intervals.size());
+        tl.values.resize(n);
+        for (uint32_t vreg = 0; vreg < n; ++vreg) {
+            const jit::LiveInterval &li = ivs->intervals[vreg];
+            ValueLocationTimeline &vt = tl.values[vreg];
+            vt.vreg = vreg;
+            if (li.ranges.empty()) continue; // vreg muerto -> sin segmentos.
+            const Location loc =
+                (vreg < ra.assign.size()) ? ra.assign[vreg] : Location{};
+            vt.segments.reserve(li.ranges.size());
+            for (const jit::LiveRange &r : li.ranges)
+                vt.segments.push_back({LinearPos{r.from}, LinearPos{r.to}, loc});
+        }
+    } else {
+        // Sin rangos (caller que no construye intervals): un unico segmento que cubre
+        // TODA la funcion [0, MAX) por cada vreg con ubicacion real.  El rewrite trivial
+        // no usa la posicion -> equivalente a la RegAlloc plana.  El fin usa el maximo
+        // (no @c invalid(): aqui MAX es un extremo real "hasta el final", no un estado).
+        const uint32_t n = static_cast<uint32_t>(ra.assign.size());
+        tl.values.resize(n);
+        for (uint32_t vreg = 0; vreg < n; ++vreg) {
+            ValueLocationTimeline &vt = tl.values[vreg];
+            vt.vreg = vreg;
+            const Location loc = ra.assign[vreg];
+            if (loc.loc == RegAlloc::Loc::NONE) continue; // muerto -> sin segmentos.
+            vt.segments.push_back({LinearPos{0}, LinearPos{0xFFFFFFFFu}, loc});
+        }
     }
     return tl;
+}
+
+/**
+ * @brief Ensambla el @c AllocationResult que consume el Rewrite: el @c FrameLayout
+ *        (derivado de la @c RegAlloc -- callee-saved + slots, no temporal) + el
+ *        @c AllocationTimeline (via @c build_allocation_timeline).  Es el unico
+ *        artefacto que el Rewrite ve; cada mitad responde su propia pregunta.
+ */
+inline AllocationResult build_allocation_result(const RegAlloc &ra,
+                                                const jit::IntervalResult *ivs,
+                                                const SplitPlan &plan) {
+    AllocationResult ar;
+    ar.frame.callee_saved_used = ra.callee_saved_used;
+    ar.frame.num_spill_slots = ra.num_spill_slots;
+    ar.timeline = build_allocation_timeline(ra, ivs, plan);
+    return ar;
 }
 
 } // namespace codegen

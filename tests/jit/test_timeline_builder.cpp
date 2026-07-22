@@ -54,34 +54,36 @@ int main() {
     ra.assign[2] = {RegAlloc::Loc::NONE, 0, 0};
 
     SplitPlan plan; // vacio -> caso trivial (equivalente a RegAlloc).
-    const AllocationTimeline tl = build_allocation_timeline(ra, ivs, plan);
+    const AllocationResult ar = build_allocation_result(ra, &ivs, plan);
+    const AllocationTimeline &tl = ar.timeline;
 
     CHECK(tl.values.size() == 3);
 
-    // vreg 0: un segmento [10,20) en REG r5.
-    const ValueLocationTimeline *t0 = tl.of(0);
-    CHECK(t0 && t0->segments.size() == 1);
-    CHECK(t0->at(LinearPos{9}) == nullptr);  // antes del rango.
-    const Location *l0 = t0->at(LinearPos{15});
+    // El Rewrite usa SOLO tl.lookup(vreg, pos) (no segments): vreg 0 en REG r5 [10,20).
+    CHECK(tl.lookup(0, LinearPos{9}) == nullptr);  // antes del rango.
+    const Location *l0 = tl.lookup(0, LinearPos{15});
     CHECK(l0 && l0->loc == RegAlloc::Loc::REG && l0->reg == 5);
-    CHECK(t0->at(LinearPos{20}) == nullptr); // 'to' es exclusive.
+    CHECK(tl.lookup(0, LinearPos{20}) == nullptr); // 'to' es exclusive.
 
     // vreg 1: SPILL slot 2 en [4,30).
-    const Location *l1 = tl.of(1)->at(LinearPos{4});
+    const Location *l1 = tl.lookup(1, LinearPos{4});
     CHECK(l1 && l1->loc == RegAlloc::Loc::SPILL && l1->slot == 2);
-    CHECK(tl.of(1)->at(LinearPos{29}) != nullptr);
-    CHECK(tl.of(1)->at(LinearPos{30}) == nullptr);
+    CHECK(tl.lookup(1, LinearPos{29}) != nullptr);
+    CHECK(tl.lookup(1, LinearPos{30}) == nullptr);
 
-    // vreg 2: muerto -> sin segmentos, at() siempre nullptr.
-    CHECK(tl.of(2)->segments.empty());
-    CHECK(tl.of(2)->at(LinearPos{0}) == nullptr);
+    // vreg 2: muerto -> sin ubicacion en ninguna posicion.
+    CHECK(tl.lookup(2, LinearPos{0}) == nullptr);
 
-    // EQUIVALENCIA CON RegAlloc: en toda posicion viva de cada vreg, la ubicacion del
-    // timeline coincide EXACTAMENTE con la asignacion plana.
+    // FrameLayout: viene de la RegAlloc, separado del timeline (no temporal).
+    CHECK(ar.frame.num_spill_slots == ra.num_spill_slots);
+    CHECK(ar.frame.callee_saved_used == ra.callee_saved_used);
+
+    // EQUIVALENCIA CON RegAlloc: en toda posicion viva de cada vreg, lookup coincide
+    // EXACTAMENTE con la asignacion plana.
     for (uint32_t v = 0; v < ivs.intervals.size(); ++v)
         for (const jit::LiveRange &r : ivs.intervals[v].ranges)
             for (uint32_t p = r.from; p < r.to; ++p) {
-                const Location *loc = tl.of(v)->at(LinearPos{p});
+                const Location *loc = tl.lookup(v, LinearPos{p});
                 CHECK(loc && loc->loc == ra.assign[v].loc &&
                       loc->reg == ra.assign[v].reg && loc->slot == ra.assign[v].slot);
             }

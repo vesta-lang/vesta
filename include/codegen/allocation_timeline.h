@@ -70,14 +70,29 @@ struct ValueLocationTimeline {
 
 /**
  * @struct AllocationTimeline
- * @brief El modelo temporal completo: la linea de cada vreg.  Indexable por vreg
- *        denso (los muertos quedan con @c segments vacio).
+ * @brief El modelo temporal PURO: la linea de cada vreg.  Responde SOLO ¿donde vive
+ *        este valor en este instante?  El frame (callee-saved, slots) NO vive aqui --
+ *        no es temporal; es otra pregunta (@c FrameLayout).  Indexable por vreg denso
+ *        (los muertos quedan con @c segments vacio).
+ *
+ * El consumidor (Rewrite) usa SOLO @c lookup(vreg, pos) -- nunca @c segments ni @c at
+ * directamente.  Eso oculta la representacion: manana el lookup puede ser busqueda
+ * lineal / binary search / tabla / cache sin que el Rewrite se entere.  Y como hoy
+ * SIEMPRE existe un segmento que cubre toda la vida, el lookup ya funciona igual con 1
+ * o con N segmentos -> cuando llegue el splitting, el Rewrite NO se toca (solo el
+ * TimelineBuilder genera mas segmentos).
  */
 struct AllocationTimeline {
     std::vector<ValueLocationTimeline> values; ///< por vreg id (denso 0..vreg_count-1).
 
     const ValueLocationTimeline *of(uint32_t vreg) const noexcept {
         return vreg < values.size() ? &values[vreg] : nullptr;
+    }
+    /// Ubicacion de @p vreg en @p pos, o nullptr si no vive ahi.  UNICA via del
+    /// consumidor -- no exponer @c segments al Rewrite (independencia de representacion).
+    const Location *lookup(uint32_t vreg, LinearPos pos) const noexcept {
+        const ValueLocationTimeline *t = of(vreg);
+        return t ? t->at(pos) : nullptr;
     }
 };
 
