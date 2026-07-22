@@ -26,6 +26,7 @@
 #define VESTA_CODEGEN_RBANK_MEASURE_H
 
 #include "analysis/facts/remat_facts.h"
+#include "codegen/rbank/value_requirements.h"
 #include "jit/interval.h"
 #include "jit/linear_scan.h"
 
@@ -67,6 +68,56 @@ inline RematMeasure measure_remat(const jit::RegAlloc &ra,
         if (remat.recipe_of(v).operands.empty()) ++m.spills_remat_leaf;
     }
     return m;
+}
+
+/**
+ * @struct RematDetail
+ * @brief Dirige el esfuerzo al NIVEL correcto (no "¿construyo?" -- el Fact ya vale):
+ *          - HOTNESS: spills recomputables DENTRO de un loop (pagan) vs frios (ruido).
+ *          - RAZON de que el CONST llegue como valor separado y se derrame:
+ *            imm que CABE en 32 bits -> deberia fusionarse como immediate AGUAS ARRIBA
+ *            (selector, nivel mas alto); imm64 -> genuinamente necesita remat/mov imm64.
+ */
+struct RematDetail {
+    uint32_t spills_in_loop = 0; ///< META: TODOS los spills con loop_depth > 0 (hot).
+    uint32_t spills_cold    = 0; ///< META: todos los spills fuera de loop.
+    uint32_t remat_in_loop  = 0; ///< recomputables spilled con loop_depth > 0.
+    uint32_t remat_cold     = 0; ///< recomputables spilled fuera de loop.
+    uint32_t const_imm32    = 0; ///< CONST spilled con imm de 32 bits (fusionable arriba).
+    uint32_t const_imm64    = 0; ///< CONST spilled con imm de 64 bits (necesita remat real).
+
+    void add(const RematDetail &o) noexcept {
+        spills_in_loop += o.spills_in_loop; spills_cold += o.spills_cold;
+        remat_in_loop += o.remat_in_loop;   remat_cold += o.remat_cold;
+        const_imm32 += o.const_imm32;       const_imm64 += o.const_imm64;
+    }
+};
+
+/**
+ * @brief Detalle de los spills recomputables: hotness + por que el CONST no se fusiono
+ *        como immediate.  El instrumento (algoritmo) solo CONSULTA Facts, no los
+ *        reinventa: la hotness por valor ya es un Fact (@c ValueRequirements.loop_depth,
+ *        poblado desde LoopFacts) y el imm ya vive en @c RematFacts.recipe.  No itera
+ *        el IR ni recomputa el loop_depth -- dato (Facts) separado del algoritmo.
+ */
+inline RematDetail measure_remat_detail(const jit::RegAlloc &ra,
+                                        const analysis::RematFacts &remat,
+                                        const std::vector<ValueRequirements> &reqs) {
+    RematDetail d;
+    for (uint32_t v = 0; v < ra.assign.size(); ++v) {
+        if (ra.assign[v].loc != jit::RegAlloc::Loc::SPILL) continue;
+        const bool hot = v < reqs.size() && reqs[v].loop_depth > 0; // Fact consultado.
+        if (hot) ++d.spills_in_loop; else ++d.spills_cold;          // META: todos.
+        if (!remat.is_rematerializable(v)) continue;
+        if (hot) ++d.remat_in_loop; else ++d.remat_cold;
+        const analysis::RematRecipe &r = remat.recipe_of(v);         // el imm del Fact.
+        if (r.op == ir::IrOp::CONST) {
+            const int64_t imm = static_cast<int64_t>(r.imm);
+            if (imm >= INT32_MIN && imm <= INT32_MAX) ++d.const_imm32;
+            else                                      ++d.const_imm64;
+        }
+    }
+    return d;
 }
 
 /**

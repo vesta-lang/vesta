@@ -90,6 +90,7 @@ bool fn_needs_vec_reserve(const ir::IrFunction &fn) {
 //     primero: (a) spills recomputables (RematFacts) y (b) falsas interferencias del
 //     envolvente.  El numero decide el peldano real. ---
 codegen::rbank::RematMeasure    g_remat_agg;
+codegen::rbank::RematDetail     g_remat_detail;
 codegen::rbank::EnvelopeMeasure g_env_agg;
 uint32_t                        g_measure_funcs = 0;
 std::mutex                      g_measure_mtx;
@@ -115,11 +116,16 @@ void print_measure_summary() {
         "\n=== [measure] potencial de mejoras del asignador (%u funciones) ===\n"
         "  (a) REMAT:     spills=%u  recomputables=%u (%.1f%%)  de los cuales HOJA"
         " (CONST/dir, remat casi garantizado)=%u (%.1f%%)\n"
+        "      META spills: en_loop(HOT)=%u  frios=%u   |   recomputables en_loop=%u"
+        " frios=%u   |   CONST imm32(fusionable ARRIBA)=%u imm64=%u\n"
         "  (b) ENVOLVENTE: interferencias env=%llu exactas=%llu falsas=%llu"
         " (%.1f%% inventadas por el envolvente)\n",
         g_measure_funcs,
         r.spills_total, r.spills_rematerializable, pct_remat, r.spills_remat_leaf,
         r.spills_total ? 100.0 * r.spills_remat_leaf / r.spills_total : 0.0,
+        g_remat_detail.spills_in_loop, g_remat_detail.spills_cold,
+        g_remat_detail.remat_in_loop, g_remat_detail.remat_cold,
+        g_remat_detail.const_imm32, g_remat_detail.const_imm64,
         (unsigned long long)e.pairs_envelope, (unsigned long long)e.pairs_exact,
         (unsigned long long)e.false_interfere, pct_false);
 }
@@ -134,9 +140,12 @@ void run_measure(const ir::IrFunction &fn, const IntervalResult &ivs,
     snap.fn = &fn;
     const codegen::rbank::RematMeasure rm =
         codegen::rbank::measure_remat(ra, snap.remat_facts());
+    const codegen::rbank::RematDetail rd =
+        codegen::rbank::measure_remat_detail(ra, snap.remat_facts(), snap.value_reqs());
     const codegen::rbank::EnvelopeMeasure em = codegen::rbank::measure_envelope(ivs);
     std::lock_guard<std::mutex> lk(g_measure_mtx);
     g_remat_agg.add(rm);
+    g_remat_detail.add(rd);
     g_env_agg.add(em);
     ++g_measure_funcs;
 }
