@@ -20,6 +20,7 @@
 #include "jit/linear_scan.h"
 #include "jit/machine_ir.h"
 #include "jit/regalloc_rewrite.h"
+#include "codegen/timeline_builder.h"
 #include "jit/target_reginfo.h"
 #include "jit/x86_encoder.h"
 
@@ -90,7 +91,7 @@ static void test_call_two() {
 
     const TargetRegInfo &tri = target_x86_64_vm_abi();
     codegen::RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
-    MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::HOST_LEAF);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::SplitPlan{}), tri, AbiKind::HOST_LEAF);
     CodeCache cc;
     uint8_t *code = compile(cc, pf);
     CHECK(code != nullptr, "encode ok (2-arg call)");
@@ -123,7 +124,7 @@ static void test_call_three() {
 
     const TargetRegInfo &tri = target_x86_64_vm_abi();
     codegen::RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
-    MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::HOST_LEAF);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::SplitPlan{}), tri, AbiKind::HOST_LEAF);
     CodeCache cc;
     uint8_t *code = compile(cc, pf);
     CHECK(code != nullptr, "encode ok (3-arg call)");

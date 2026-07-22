@@ -29,7 +29,8 @@
 #define VESTA_CODEGEN_ALLOCATION_TIMELINE_H
 
 #include "codegen/linear_pos.h"
-#include "codegen/regalloc.h" // RegAlloc::VAssign como vocabulario de "donde".
+#include "codegen/regalloc.h"          // RegAlloc::VAssign (representacion interna)
+#include "codegen/resolved_location.h" // ResolvedLocation (abstraccion al consumidor)
 
 #include <cstdint>
 #include <vector>
@@ -88,11 +89,36 @@ struct AllocationTimeline {
     const ValueLocationTimeline *of(uint32_t vreg) const noexcept {
         return vreg < values.size() ? &values[vreg] : nullptr;
     }
-    /// Ubicacion de @p vreg en @p pos, o nullptr si no vive ahi.  UNICA via del
-    /// consumidor -- no exponer @c segments al Rewrite (independencia de representacion).
-    const Location *lookup(uint32_t vreg, LinearPos pos) const noexcept {
+    /// Ubicacion de @p vreg en @p pos como ABSTRACCION (@c ResolvedLocation).  UNICA via
+    /// del consumidor -- no expone @c segments (independencia de la representacion
+    /// temporal) NI @c Location (independencia de como se representa una ubicacion): el
+    /// Rewrite pregunta is_register()/is_stack(), nunca compara un enum.
+    ResolvedLocation lookup(uint32_t vreg, LinearPos pos) const noexcept {
         const ValueLocationTimeline *t = of(vreg);
-        return t ? t->at(pos) : nullptr;
+        return to_resolved(t ? t->at(pos) : nullptr);
+    }
+    /// Ubicacion del PRIMER tramo de @p vreg (o @c none() si muerto).  EXCEPCION para
+    /// consultas SIN posicion de valores que NO se fragmentan -- register-bound de inline
+    /// asm: una unica ubicacion en toda su vida, sin ambiguedad de momento.  NO usar en el
+    /// hot path por-operando (ahi el momento SIEMPRE se conoce: use/def).
+    ResolvedLocation first_location(uint32_t vreg) const noexcept {
+        const ValueLocationTimeline *t = of(vreg);
+        return to_resolved((t && !t->segments.empty())
+                               ? &t->segments.front().location
+                               : nullptr);
+    }
+
+  private:
+    /// Traduce la representacion interna (@c Location = REG/SPILL/NONE) a la abstraccion
+    /// @c ResolvedLocation.  La comparacion del enum vive AQUI (en el materializador del
+    /// modelo temporal), NUNCA en el consumidor.
+    static ResolvedLocation to_resolved(const Location *l) noexcept {
+        if (!l) return ResolvedLocation{};
+        if (l->loc == RegAlloc::Loc::REG)
+            return ResolvedLocation{ResolvedLocation::Register{l->reg}};
+        if (l->loc == RegAlloc::Loc::SPILL)
+            return ResolvedLocation{ResolvedLocation::Stack{l->slot}};
+        return ResolvedLocation{};
     }
 };
 

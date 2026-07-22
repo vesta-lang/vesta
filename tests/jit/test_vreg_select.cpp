@@ -20,6 +20,7 @@
 #include "jit/interval.h"
 #include "jit/linear_scan.h"
 #include "jit/regalloc_rewrite.h"
+#include "codegen/timeline_builder.h"
 #include "jit/target_reginfo.h"
 #include "jit/vreg_select.h"
 #include "jit/x86_encoder.h"
@@ -121,7 +122,7 @@ static bool jit_run(const ir::IrFunction &fn, int64_t &result_out) {
     if (!vreg_select(fn, mf)) return false;
     const TargetRegInfo &tri = target_x86_64_vm_abi();
     codegen::RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
-    MFunction pf = rewrite_to_physical(mf, ra, tri);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::SplitPlan{}), tri);
 
     X86Encoder enc;
     std::vector<uint8_t> bytes;

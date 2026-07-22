@@ -43,6 +43,7 @@
 #include <string>
 #include <vector>
 
+#include "codegen/allocation_result.h" // AllocationResult (frame + timeline)
 #include "jit/linear_scan.h"
 #include "jit/machine_ir.h"
 #include "jit/target_reginfo.h"
@@ -94,8 +95,10 @@ struct OsrEmit {
 /**
  * @brief Reescribe @p vf (forma vreg) a una MFunction fisica.
  *
- * @param vf   Funcion en MachineIR vreg (3-operandos).
- * @param ra   Asignacion del linear-scan (vreg -> reg/slot).
+ * @param vf    Funcion en MachineIR vreg (3-operandos).
+ * @param alloc Asignacion materializada (FrameLayout + AllocationTimeline).  El Rewrite
+ *              consulta la ubicacion por MOMENTO del operando -- use/def -- via el
+ *              timeline, sin conocer la convencion de posiciones ni la representacion.
  * @param tri  Descriptor del target (scratch regs, ancho de puntero).
  * @param abi  Convencion del prologue/epilogue (HOST_LEAF o VM).  En VM se
  *             salva/establece RBX = @c ProcessVM* (push rbx + mov rbx,arg0).
@@ -110,7 +113,7 @@ struct OsrEmit {
  *             live-in).  Rellena @c osr->osr_entry_label / @c osr_entry_valid.
  * @return     Nueva MFunction fisica lista para el encoder.
  */
-MFunction rewrite_to_physical(const MFunction &vf, const codegen::RegAlloc &ra,
+MFunction rewrite_to_physical(const MFunction &vf, const codegen::AllocationResult &alloc,
                               const TargetRegInfo &tri,
                               AbiKind abi = AbiKind::HOST_LEAF,
                               const IntervalResult *ivs = nullptr,

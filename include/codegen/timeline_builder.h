@@ -8,13 +8,16 @@
 /**
  * @file codegen/timeline_builder.h
  * @brief @c TimelineBuilder: la TRANSFORMACION que materializa un @c AllocationTimeline
- *        a partir de una asignacion base (@c RegAlloc) + un @c SplitPlan.
+ *        a partir de una asignacion base (@c RegAlloc) + un plan de modificaciones.
  *
- *     RegAlloc (asignacion plana) + SplitPlan (intencion) -> AllocationTimeline
+ *     RegAlloc (asignacion plana) + <un>Plan (intencion) -> AllocationTimeline
  *
- * No decide NADA (eso es del que produjo el SplitPlan): solo materializa el modelo
- * temporal.  Es el unico que sabe convertir "una ubicacion por vreg + intenciones de
- * split" en "la linea temporal de cada vreg" que el Rewrite consume.
+ * NO DECIDE NADA -- solo materializa (la decision es de quien produjo el plan).  Y NO es
+ * "el builder del splitting": es el MATERIALIZADOR del modelo temporal.  Hoy consume un
+ * @c SplitPlan (de la Fragmentation Recovery); el dia que existan un @c RematerializationPlan
+ * o un @c CoalescingPlan deberia materializarlos igual, sin cambiar de naturaleza.  Esa es
+ * la tentacion peligrosa a vigilar cuando llegue el splitting: que el builder empiece a
+ * DECIDIR que partir.  No.  Sigue siendo un constructor -- por eso es una pieza estable.
  *
  * ESTADO (incremento 1 del Splitting): implementa el caso TRIVIAL -- @c SplitPlan
  * vacio -> cada vreg vivo recibe UN segmento por cada @c LiveRange con su ubicacion

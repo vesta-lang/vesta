@@ -59,33 +59,37 @@ int main() {
 
     CHECK(tl.values.size() == 3);
 
-    // El Rewrite usa SOLO tl.lookup(vreg, pos) (no segments): vreg 0 en REG r5 [10,20).
-    CHECK(tl.lookup(0, LinearPos{9}) == nullptr);  // antes del rango.
-    const Location *l0 = tl.lookup(0, LinearPos{15});
-    CHECK(l0 && l0->loc == RegAlloc::Loc::REG && l0->reg == 5);
-    CHECK(tl.lookup(0, LinearPos{20}) == nullptr); // 'to' es exclusive.
+    // El Rewrite usa SOLO tl.lookup(vreg,pos) -> ResolvedLocation (ni segments ni enum):
+    // vreg 0 en REG r5 [10,20).
+    CHECK(tl.lookup(0, LinearPos{9}).is_none());  // antes del rango.
+    const ResolvedLocation l0 = tl.lookup(0, LinearPos{15});
+    CHECK(l0.is_register() && l0.register_id() == 5);
+    CHECK(tl.lookup(0, LinearPos{20}).is_none()); // 'to' es exclusive.
 
-    // vreg 1: SPILL slot 2 en [4,30).
-    const Location *l1 = tl.lookup(1, LinearPos{4});
-    CHECK(l1 && l1->loc == RegAlloc::Loc::SPILL && l1->slot == 2);
-    CHECK(tl.lookup(1, LinearPos{29}) != nullptr);
-    CHECK(tl.lookup(1, LinearPos{30}) == nullptr);
+    // vreg 1: memoria (slot 2) en [4,30).
+    const ResolvedLocation l1 = tl.lookup(1, LinearPos{4});
+    CHECK(l1.is_memory() && l1.stack_slot() == 2);
+    CHECK(!tl.lookup(1, LinearPos{29}).is_none());
+    CHECK(tl.lookup(1, LinearPos{30}).is_none());
 
     // vreg 2: muerto -> sin ubicacion en ninguna posicion.
-    CHECK(tl.lookup(2, LinearPos{0}) == nullptr);
+    CHECK(tl.lookup(2, LinearPos{0}).is_none());
 
     // FrameLayout: viene de la RegAlloc, separado del timeline (no temporal).
     CHECK(ar.frame.num_spill_slots == ra.num_spill_slots);
     CHECK(ar.frame.callee_saved_used == ra.callee_saved_used);
 
-    // EQUIVALENCIA CON RegAlloc: en toda posicion viva de cada vreg, lookup coincide
-    // EXACTAMENTE con la asignacion plana.
+    // EQUIVALENCIA CON RegAlloc: en toda posicion viva de cada vreg, lookup coincide con
+    // la asignacion plana (via los predicados de ResolvedLocation).
     for (uint32_t v = 0; v < ivs.intervals.size(); ++v)
         for (const jit::LiveRange &r : ivs.intervals[v].ranges)
             for (uint32_t p = r.from; p < r.to; ++p) {
-                const Location *loc = tl.lookup(v, LinearPos{p});
-                CHECK(loc && loc->loc == ra.assign[v].loc &&
-                      loc->reg == ra.assign[v].reg && loc->slot == ra.assign[v].slot);
+                const ResolvedLocation loc = tl.lookup(v, LinearPos{p});
+                const auto &va = ra.assign[v];
+                if (va.loc == RegAlloc::Loc::REG)
+                    CHECK(loc.is_register() && loc.register_id() == va.reg);
+                else
+                    CHECK(loc.is_memory() && loc.stack_slot() == va.slot);
             }
 
     std::printf("--- %d checks, %d fallos ---\n", g_checks, g_fails);

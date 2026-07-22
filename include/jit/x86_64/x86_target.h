@@ -19,6 +19,7 @@
 #ifndef VESTA_JIT_X86_64_X86_TARGET_H
 #define VESTA_JIT_X86_64_X86_TARGET_H
 
+#include "codegen/timeline_builder.h" // build_allocation_result (RegAlloc -> timeline)
 #include "jit/codegen_target.h"
 #include "jit/peephole.h"
 #include "jit/regalloc_rewrite.h"
@@ -57,8 +58,9 @@ class X86Target final : public CodegenTarget {
 
     MFunction rewrite(const MFunction &vf, const codegen::RegAlloc &ra,
                       const IntervalResult &ivs) const override {
-        return rewrite_to_physical(vf, ra, reg_info(), AbiKind::HOST_LEAF,
-                                   &ivs);
+        return rewrite_to_physical(
+            vf, codegen::build_allocation_result(ra, &ivs, codegen::SplitPlan{}),
+            reg_info(), AbiKind::HOST_LEAF, &ivs);
     }
 
     int encode(MFunction &pf, std::vector<uint8_t> &out) const override {
