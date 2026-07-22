@@ -78,6 +78,21 @@ struct LinearPos {
     }
 };
 
+/**
+ * Codificacion canonica de posiciones del MachineIR: DOS posiciones por instruccion,
+ * indexadas por el indice global @c gi de la instruccion.  @c build_intervals la
+ * implementa; los CONSUMIDORES (p.ej. el Rewrite) NO deben escribir @c 2*gi a mano --
+ * preguntan por el MOMENTO del operando y estas funciones traducen.  Si la codificacion
+ * temporal cambia, cambia SOLO aqui y ninguna otra capa se entera: cada capa conoce las
+ * preguntas que le pertenecen, no las convenciones internas de otra.
+ *
+ *   @c use_point(gi): donde se LEEN los operandos fuente de la instruccion @c gi.
+ *   @c def_point(gi): donde se DEFINE el resultado de la instruccion @c gi (su intervalo
+ *                     empieza aqui -> consultar un dst en use_point daria "no vive aun").
+ */
+constexpr LinearPos use_point(uint32_t gi) noexcept { return LinearPos{2u * gi}; }
+constexpr LinearPos def_point(uint32_t gi) noexcept { return LinearPos{2u * gi + 1u}; }
+
 } // namespace codegen
 
 #endif // VESTA_CODEGEN_LINEAR_POS_H
