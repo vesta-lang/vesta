@@ -97,6 +97,7 @@
 #include "analysis/derived/profile_facts.h"
 #include "analysis/fact_validation.h"
 #include "analysis/facts/loop_facts.h"
+#include "analysis/facts/remat_facts.h"
 #include "codegen/rbank/build_requirements.h"
 #include "codegen/rbank/lazy_fact.h"
 #include "codegen/rbank/physical_bank.h"
@@ -122,8 +123,9 @@ enum class Fact : uint32_t {
     Loops    = 1u << 1, ///< LoopFacts (Tipo A).
     Profile  = 1u << 2, ///< ProfileFacts (Tipo B; depende de Loops + perfil).
     Values   = 1u << 3, ///< ValueRequirements (adaptadores; dep. Liveness+Loops).
-    // Futuro: Dom = 1u<<4, Alias = 1u<<5, Escape = 1u<<6, Memory = 1u<<7, ...
-    All      = Liveness | Loops | Profile | Values,
+    Remat    = 1u << 4, ///< RematFacts (Tipo A, IR-driven: recomputabilidad + receta).
+    // Futuro: Dom = 1u<<5, Alias = 1u<<6, Escape = 1u<<7, Memory = 1u<<8, ...
+    All      = Liveness | Loops | Profile | Values | Remat,
 };
 
 /**
@@ -166,6 +168,7 @@ struct FunctionSnapshot {
     LazyFact<analysis::LoopFacts>            loops;   ///< Tipo A.
     LazyFact<analysis::ProfileFacts>         profile; ///< Tipo B (vacio si no hay perfil).
     LazyFact<std::vector<ValueRequirements>> values;  ///< requisitos por valor.
+    LazyFact<analysis::RematFacts>           remat;   ///< Tipo A (recomputabilidad + receta).
     // Futuro: LazyFact<analysis::DomFacts> dom;  LazyFact<analysis::AliasFacts> alias; ...
 
     /** @brief True si el hecho @p f ya esta materializado en su celda. */
@@ -175,6 +178,7 @@ struct FunctionSnapshot {
         case Fact::Loops:    return loops.ready();
         case Fact::Profile:  return profile.ready();
         case Fact::Values:   return values.ready();
+        case Fact::Remat:    return remat.ready();
         default:             return false;
         }
     }
@@ -209,6 +213,10 @@ struct FunctionSnapshot {
     /** @brief ValueRequirements (arrastra liveness + loops + profile). */
     const std::vector<ValueRequirements> &value_reqs() const {
         return query<std::vector<ValueRequirements>>();
+    }
+    /** @brief RematFacts (recomputabilidad + receta por valor; IR-driven). */
+    const analysis::RematFacts &remat_facts() const {
+        return query<analysis::RematFacts>();
     }
 
     /**
@@ -256,6 +264,8 @@ template <> inline const LazyFact<analysis::ProfileFacts> &
 FunctionSnapshot::cell<analysis::ProfileFacts>() const { return profile; }
 template <> inline const LazyFact<std::vector<ValueRequirements>> &
 FunctionSnapshot::cell<std::vector<ValueRequirements>>() const { return values; }
+template <> inline const LazyFact<analysis::RematFacts> &
+FunctionSnapshot::cell<analysis::RematFacts>() const { return remat; }
 
 // ---------------------------------------------------------------------------
 //  Productores registrados por tipo (QueryProducer<T>): AQUI vive el ALGORITMO.
@@ -287,6 +297,11 @@ template <> struct QueryProducer<std::vector<ValueRequirements>> {
         return assemble_value_requirements(*s.fn, s.query<ir::LivenessResult>(), calls,
                                            s.query<analysis::LoopFacts>(),
                                            s.query<analysis::ProfileFacts>());
+    }
+};
+template <> struct QueryProducer<analysis::RematFacts> {
+    static analysis::RematFacts produce(const FunctionSnapshot &s) {
+        return analysis::compute_remat_facts(*s.fn);
     }
 };
 
