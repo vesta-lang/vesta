@@ -31,10 +31,13 @@
 #include "jit/x86_encoder.h"
 
 #include "codegen/rbank/allocate.h"           // rbank_allocate (allocator UNICO)
+#include "codegen/rbank/function_snapshot.h"  // query<RematFacts> (instrumento)
+#include "codegen/rbank/measure.h"            // instrumento de medicion (diagnostico)
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <vector>
 
 namespace jit {
@@ -81,6 +84,62 @@ bool fn_needs_vec_reserve(const ir::IrFunction &fn) {
 // valido el switch a rbank; cumplido su proposito, su infraestructura (ShadowStats/
 // ShadowReport/validate_coloring) vive en codegen/rbank/shadow.h para los TESTS.  En
 // produccion rbank es el allocator UNICO -- no hay con que comparar en el hot path.
+
+// --- INSTRUMENTO DE MEDICION (gated VESTA_REMAT_MEASURE=1; diagnostico, no cambia
+//     el codigo emitido).  Mide el POTENCIAL de dos mejoras para decidir cual paga
+//     primero: (a) spills recomputables (RematFacts) y (b) falsas interferencias del
+//     envolvente.  El numero decide el peldano real. ---
+codegen::rbank::RematMeasure    g_remat_agg;
+codegen::rbank::EnvelopeMeasure g_env_agg;
+uint32_t                        g_measure_funcs = 0;
+std::mutex                      g_measure_mtx;
+
+bool measure_enabled() {
+    static const bool on = [] {
+        const char *e = std::getenv("VESTA_REMAT_MEASURE");
+        return e && e[0] && e[0] != '0';
+    }();
+    return on;
+}
+
+void print_measure_summary() {
+    std::lock_guard<std::mutex> lk(g_measure_mtx);
+    if (g_measure_funcs == 0) return;
+    const codegen::rbank::RematMeasure &r = g_remat_agg;
+    const codegen::rbank::EnvelopeMeasure &e = g_env_agg;
+    const double pct_remat = r.spills_total
+        ? 100.0 * r.spills_rematerializable / r.spills_total : 0.0;
+    const double pct_false = e.pairs_envelope
+        ? 100.0 * e.false_interfere / e.pairs_envelope : 0.0;
+    std::fprintf(stderr,
+        "\n=== [measure] potencial de mejoras del asignador (%u funciones) ===\n"
+        "  (a) REMAT:     spills=%u  recomputables=%u (%.1f%%)  de los cuales HOJA"
+        " (CONST/dir, remat casi garantizado)=%u (%.1f%%)\n"
+        "  (b) ENVOLVENTE: interferencias env=%llu exactas=%llu falsas=%llu"
+        " (%.1f%% inventadas por el envolvente)\n",
+        g_measure_funcs,
+        r.spills_total, r.spills_rematerializable, pct_remat, r.spills_remat_leaf,
+        r.spills_total ? 100.0 * r.spills_remat_leaf / r.spills_total : 0.0,
+        (unsigned long long)e.pairs_envelope, (unsigned long long)e.pairs_exact,
+        (unsigned long long)e.false_interfere, pct_false);
+}
+
+/** @brief Corre el instrumento (gated) sobre una funcion tras la asignacion. */
+void run_measure(const ir::IrFunction &fn, const IntervalResult &ivs,
+                 const RegAlloc &ra) {
+    if (!measure_enabled()) return;
+    static std::once_flag atexit_once;
+    std::call_once(atexit_once, [] { std::atexit(print_measure_summary); });
+    codegen::rbank::FunctionSnapshot snap;
+    snap.fn = &fn;
+    const codegen::rbank::RematMeasure rm =
+        codegen::rbank::measure_remat(ra, snap.remat_facts());
+    const codegen::rbank::EnvelopeMeasure em = codegen::rbank::measure_envelope(ivs);
+    std::lock_guard<std::mutex> lk(g_measure_mtx);
+    g_remat_agg.add(rm);
+    g_env_agg.add(em);
+    ++g_measure_funcs;
+}
 
 
 /**
@@ -187,6 +246,10 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
      * GC roots de abajo + diff_harness (0 bugs) + e2e (724/0) son su oraculo. */
     RegAlloc ra = codegen::rbank::rbank_allocate(ivs, mf.vreg_count, tri,
                                              fn_needs_vec_reserve(fn));
+
+    /* Instrumento de medicion (gated VESTA_REMAT_MEASURE; diagnostico, no cambia
+     * el codigo): potencial de remat + falsas interferencias del envolvente. */
+    run_measure(fn, ivs, ra);
 
     /* 3b. Verificador adversarial (commit 6): TODO GC root vivo a traves
      *     de un call DEBE estar en un slot, para que su stackmap lo
