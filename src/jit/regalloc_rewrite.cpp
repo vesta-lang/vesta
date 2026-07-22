@@ -189,7 +189,7 @@ bool is_bin_alu(MOp op) noexcept {
  * @brief Estado del rewrite de una funcion.
  */
 struct Lowerer {
-    const RegAlloc &ra;
+    const codegen::RegAlloc &ra;
     const TargetRegInfo &tri;
     bool vm_abi = false;      ///< VM_ABI (salva RBX=ProcessVM*) vs host leaf
     bool no_frame = false;    ///< hoja frameless: sin push/mov rbp ni sub rsp
@@ -241,7 +241,7 @@ struct Lowerer {
     /// en @c rewrite_to_physical tras construir pf.
     MFunction *pf = nullptr;
 
-    Lowerer(const RegAlloc &r, const TargetRegInfo &t, AbiKind abi,
+    Lowerer(const codegen::RegAlloc &r, const TargetRegInfo &t, AbiKind abi,
             bool has_calls, uint32_t alloca_total, bool has_vm_alloca_in,
             uint32_t out_stack_args_in = 0, bool has_stack_params_in = false,
             bool cb_save_regs_in = false)
@@ -2009,7 +2009,7 @@ struct Lowerer {
 
 } // namespace
 
-MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
+MFunction rewrite_to_physical(const MFunction &vf, const codegen::RegAlloc &ra,
                               const TargetRegInfo &tri, AbiKind abi,
                               const IntervalResult *ivs, OsrEmit *osr) {
     /* Detectar si la funcion tiene CALLs (para reservar shadow space). */

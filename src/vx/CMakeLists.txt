@@ -43,6 +43,10 @@ file(GLOB_RECURSE VX_CODEGEN_SRCS
     ${CMAKE_SOURCE_DIR}/src/aot/*.c       ${CMAKE_SOURCE_DIR}/src/aot/*.cpp
     ${CMAKE_SOURCE_DIR}/include/aot/*.h
     ${CMAKE_SOURCE_DIR}/src/jit/*.cpp     ${CMAKE_SOURCE_DIR}/include/jit/*.h
+    # El allocator central (rbank) + estructuras generales del codegen (RegAlloc,
+    # LinearPos, AllocationTimeline...): cambiarlos cambia el codigo emitido -> deben
+    # entrar al hash que invalida el cache de codegen.
+    ${CMAKE_SOURCE_DIR}/include/codegen/*.h  ${CMAKE_SOURCE_DIR}/src/codegen/*.cpp
     ${CMAKE_SOURCE_DIR}/src/port/transpiler_base.cpp
     ${CMAKE_SOURCE_DIR}/src/port/c/c_backend.cpp
     ${CMAKE_SOURCE_DIR}/src/port/snippet_loader.cpp

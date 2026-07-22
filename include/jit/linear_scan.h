@@ -44,6 +44,7 @@
 #ifndef VESTA_JIT_LINEAR_SCAN_H
 #define VESTA_JIT_LINEAR_SCAN_H
 
+#include "codegen/regalloc.h"   // codegen::RegAlloc (estructura general del resultado)
 #include "jit/interval.h"
 #include "jit/target_reginfo.h"
 
@@ -53,48 +54,13 @@
 namespace jit {
 
 /**
- * @struct RegAlloc
- * @brief Resultado de la asignacion de registros.
- */
-struct RegAlloc {
-    /// Ubicacion asignada a un vreg.
-    enum class Loc : uint8_t {
-        NONE = 0, ///< vreg muerto (interval vacio): sin asignacion
-        REG = 1,  ///< en un registro fisico (@c reg)
-        SPILL = 2 ///< en un spill slot de stack (@c slot)
-    };
-    struct VAssign {
-        Loc loc = Loc::NONE;
-        uint8_t reg = 0;   ///< id fisico (valido si loc==REG)
-        uint32_t slot = 0; ///< indice de spill slot (valido si loc==SPILL)
-    };
-    /// Asignacion por vreg id (denso 0..vreg_count-1).
-    std::vector<VAssign> assign;
-    /// Registros callee-saved usados (deduplicados, orden estable).  El
-    /// prologue/epilogue debe push/pop estos.
-    std::vector<uint8_t> callee_saved_used;
-    /// Numero de spill slots reservados (cada uno @c pointer_size bytes).
-    uint32_t num_spill_slots = 0;
-
-    /* ---- Accesores ---- */
-    bool in_reg(uint32_t vid) const noexcept {
-        return vid < assign.size() && assign[vid].loc == Loc::REG;
-    }
-    bool spilled(uint32_t vid) const noexcept {
-        return vid < assign.size() && assign[vid].loc == Loc::SPILL;
-    }
-    uint8_t reg_of(uint32_t vid) const noexcept { return assign[vid].reg; }
-    uint32_t slot_of(uint32_t vid) const noexcept { return assign[vid].slot; }
-};
-
-/**
  * @brief Ejecuta el linear-scan sobre los intervals de una funcion.
  *
  * @param ivs  Live intervals + posiciones de CALL (de @c build_intervals).
  * @param tri  Descriptor del target (pools de registros por clase).
- * @return     Asignacion vreg -> reg/slot.
+ * @return     Asignacion vreg -> reg/slot (@c codegen::RegAlloc, estructura general).
  */
-RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri);
+codegen::RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri);
 
 } // namespace jit
 

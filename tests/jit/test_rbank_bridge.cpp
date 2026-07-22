@@ -7,7 +7,7 @@
 
 /**
  * @file tests/jit/test_rbank_bridge.cpp
- * @brief F5 (backend bridge): traduccion MECANICA LaneAssignment <-> jit::RegAlloc.
+ * @brief F5 (backend bridge): traduccion MECANICA LaneAssignment <-> codegen::RegAlloc.
  *        El puente debe ser tonto y fiel: lane->reg, spill->slot, callee_saved_used
  *        correcto, denso 0..vreg_count-1.  Property: round-trip preserva la ubicacion
  *        (REG/SPILL) y el reg de cada valor.
@@ -19,7 +19,7 @@
 #include <cstdio>
 #include <random>
 
-using namespace jit;            // BackendCaps, RegAlloc.
+using namespace jit;            // BackendCaps, codegen::RegAlloc.
 using namespace codegen::rbank; // el modelo + el puente.
 
 static int g_checks = 0;
@@ -46,7 +46,7 @@ static AbstractValue mkval(uint32_t id, uint32_t start, uint32_t end) {
 }
 
 int main() {
-    std::printf("=== test_rbank_bridge (F5: LaneAssignment <-> jit::RegAlloc) ===\n");
+    std::printf("=== test_rbank_bridge (F5: LaneAssignment <-> codegen::RegAlloc) ===\n");
 
     const BackendCaps caps = [] { BackendCaps c{}; c.sse2 = true; return c; }();
     PhysicalRegisterBank bank = physical_bank_x86_64(true, caps); // SysV.
@@ -72,14 +72,14 @@ int main() {
         la.assign(1, static_cast<uint8_t>(callee_id)); // callee-saved
         la.spill(3);                                    // derramado
 
-        RegAlloc ra = regalloc_from_lanes(la, p, bank, /*vreg_count=*/4);
+        codegen::RegAlloc ra = regalloc_from_lanes(la, p, bank, /*vreg_count=*/4);
         CHECK(ra.assign.size() == 4, "assign no es denso a vreg_count");
-        CHECK(ra.assign[0].loc == RegAlloc::Loc::REG && ra.assign[0].reg == caller_id,
+        CHECK(ra.assign[0].loc == codegen::RegAlloc::Loc::REG && ra.assign[0].reg == caller_id,
               "vreg 0 mal mapeado a caller-saved");
-        CHECK(ra.assign[1].loc == RegAlloc::Loc::REG && ra.assign[1].reg == callee_id,
+        CHECK(ra.assign[1].loc == codegen::RegAlloc::Loc::REG && ra.assign[1].reg == callee_id,
               "vreg 1 mal mapeado a callee-saved");
-        CHECK(ra.assign[2].loc == RegAlloc::Loc::NONE, "vreg 2 (muerto) no es NONE");
-        CHECK(ra.assign[3].loc == RegAlloc::Loc::SPILL, "vreg 3 no quedo SPILL");
+        CHECK(ra.assign[2].loc == codegen::RegAlloc::Loc::NONE, "vreg 2 (muerto) no es NONE");
+        CHECK(ra.assign[3].loc == codegen::RegAlloc::Loc::SPILL, "vreg 3 no quedo SPILL");
         CHECK(ra.num_spill_slots == 1, "num_spill_slots != 1");
         // callee_saved_used: solo el callee, NO el caller.
         CHECK(ra.callee_saved_used.size() == 1 &&
@@ -87,7 +87,7 @@ int main() {
               "callee_saved_used mal (deberia ser solo el callee)");
     }
 
-    // --- round-trip: RegAlloc -> lanes -> RegAlloc preserva ubicacion + reg ---
+    // --- round-trip: codegen::RegAlloc -> lanes -> codegen::RegAlloc preserva ubicacion + reg ---
     std::printf("\n[round-trip preserva REG/SPILL + reg]\n");
     {
         std::mt19937 rng(0xB21D6Eu);
@@ -105,24 +105,24 @@ int main() {
             const uint32_t n = nvals(rng);
 
             AbstractProblem p;
-            RegAlloc orig;
+            codegen::RegAlloc orig;
             orig.assign.resize(n);
             for (uint32_t i = 0; i < n; ++i) {
                 p.values.push_back(mkval(i, 0, 10));
                 if (sp(rng)) {
-                    orig.assign[i] = {RegAlloc::Loc::SPILL, 0, i};
+                    orig.assign[i] = {codegen::RegAlloc::Loc::SPILL, 0, i};
                 } else {
-                    orig.assign[i] = {RegAlloc::Loc::REG, gp[pick(rng)], 0};
+                    orig.assign[i] = {codegen::RegAlloc::Loc::REG, gp[pick(rng)], 0};
                 }
             }
 
             LaneAssignment la = regalloc_to_lanes(orig, p);
-            RegAlloc rt = regalloc_from_lanes(la, p, bank, n);
+            codegen::RegAlloc rt = regalloc_from_lanes(la, p, bank, n);
 
             bool same = true;
             for (uint32_t i = 0; i < n; ++i) {
                 if (orig.assign[i].loc != rt.assign[i].loc) same = false;
-                if (orig.assign[i].loc == RegAlloc::Loc::REG &&
+                if (orig.assign[i].loc == codegen::RegAlloc::Loc::REG &&
                     orig.assign[i].reg != rt.assign[i].reg) same = false;
             }
             if (same) ++ok;

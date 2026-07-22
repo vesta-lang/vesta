@@ -89,7 +89,7 @@ static void test_call_two() {
     mf.blocks.push_back(std::move(b));
 
     const TargetRegInfo &tri = target_x86_64_vm_abi();
-    RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
+    codegen::RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
     MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::HOST_LEAF);
     CodeCache cc;
     uint8_t *code = compile(cc, pf);
@@ -122,7 +122,7 @@ static void test_call_three() {
     mf.blocks.push_back(std::move(b));
 
     const TargetRegInfo &tri = target_x86_64_vm_abi();
-    RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
+    codegen::RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
     MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::HOST_LEAF);
     CodeCache cc;
     uint8_t *code = compile(cc, pf);

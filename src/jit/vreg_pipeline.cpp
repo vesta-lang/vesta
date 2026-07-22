@@ -31,6 +31,7 @@
 #include "jit/x86_encoder.h"
 
 #include "codegen/rbank/allocate.h"           // rbank_allocate (allocator UNICO)
+#include "codegen/rbank/allocator_diagnostics.h" // AllocatorDiagnostics (3er nivel)
 #include "codegen/rbank/function_snapshot.h"  // query<RematFacts> (instrumento)
 #include "codegen/rbank/measure.h"            // instrumento de medicion (diagnostico)
 
@@ -92,6 +93,9 @@ bool fn_needs_vec_reserve(const ir::IrFunction &fn) {
 codegen::rbank::RematMeasure    g_remat_agg;
 codegen::rbank::RematDetail     g_remat_detail;
 codegen::rbank::EnvelopeMeasure g_env_agg;
+codegen::rbank::PressureMeasure g_pressure_agg;
+codegen::rbank::SpillTrace      g_spill_trace_agg;
+codegen::rbank::AllocatorDiagnostics g_alloc_diag_agg;
 uint32_t                        g_measure_funcs = 0;
 std::mutex                      g_measure_mtx;
 
@@ -103,11 +107,41 @@ bool measure_enabled() {
     return on;
 }
 
+// Politica de spill de rbank.  DOS politicas, seleccionables (no escondidas):
+//   - Belady (DEFAULT): victima por next-use (MachineNextUseFacts) / coste.
+//   - Lifetime (A/B, VESTA_BELADY=0): victima por duracion restante / coste.
+// Medido (A/B): en el bench de presion SIMETRICO (16 acumuladores loop-carried) Belady
+// no baja spills porque todos los valores tienen next-use casi igual (poca info
+// temporal).  El cuello REAL es el GREEDY: derrama ~14 cuando el minimo teorico
+// (overflow_exact) es 6.  Belady queda DEFAULT (correcto por diff_harness; es la
+// eleccion de victima informada por el conocimiento), y la palanca pendiente para que
+// el allocator sea rentable es CERRAR ESE GAP del greedy (instrumentar con la
+// maquinaria de Facts por que derrama de mas, luego reconsiderar la politica).
+bool belady_enabled() {
+    static const bool on = [] {
+        const char *e = std::getenv("VESTA_BELADY");
+        return !e || e[0] != '0'; // default ON (Belady); VESTA_BELADY=0 -> Lifetime.
+    }();
+    return on;
+}
+
+// Recovery Pass (2a pasada) on/off para A/B.  Default ON; VESTA_RECOVERY=0 -> greedy
+// sin recuperacion (baseline con la asignacion incompleta).  Permite medir el
+// diagnostico (spills / candidate / wasted_area) con y sin la pasada, mismo binario.
+bool recovery_enabled() {
+    static const bool on = [] {
+        const char *e = std::getenv("VESTA_RECOVERY");
+        return !e || e[0] != '0';
+    }();
+    return on;
+}
+
 void print_measure_summary() {
     std::lock_guard<std::mutex> lk(g_measure_mtx);
     if (g_measure_funcs == 0) return;
     const codegen::rbank::RematMeasure &r = g_remat_agg;
     const codegen::rbank::EnvelopeMeasure &e = g_env_agg;
+    const uint32_t kGpLanes = 14; // GP allocatable x86-64 (r0..r15 menos rsp/rbp).
     const double pct_remat = r.spills_total
         ? 100.0 * r.spills_rematerializable / r.spills_total : 0.0;
     const double pct_false = e.pairs_envelope
@@ -119,7 +153,19 @@ void print_measure_summary() {
         "      META spills: en_loop(HOT)=%u  frios=%u   |   recomputables en_loop=%u"
         " frios=%u   |   CONST imm32(fusionable ARRIBA)=%u imm64=%u\n"
         "  (b) ENVOLVENTE: interferencias env=%llu exactas=%llu falsas=%llu"
-        " (%.1f%% inventadas por el envolvente)\n",
+        " (%.1f%% inventadas por el envolvente)\n"
+        "  (c) PRESION GP: pico env=%u exact=%u | overflow(%u lanes) env=%u"
+        " exact=%u | avoidable(envolvente)=%u  [exact = minimo teorico de spills]\n"
+        "  (d) VICTIMA (Belady): muerta(sin next-use)=%.1f%%  uso-lejano=%.1f%%"
+        "  de %llu spills  [si casi todo es muerta, Belady ~= duracion]\n"
+        "  (e) GREEDY: spills=%u vs minimo(overflow_exact)=%u | pico@%u vivos=%u"
+        " ocupadas=%u LIBRES=%u en-spill=%u -> idle_cap=%u | max_lanes_ociosas=%u"
+        " en %llu puntos | AREA_ociosa=%llu lane-pos  [idle_cap = cap. ociosa del pico]\n"
+        "  (f) TAXONOMIA spills: structural(inevitable)=%llu  fully(grafo)=%llu"
+        "  partially(Splitting)=%llu | RECUPERACION fully: Fully=%llu Recovered=%llu"
+        " Potential=%llu\n"
+        "  (g) SPLITTING techo: splitting_potential=%llu de wasted_lane_area=%llu"
+        " (%.1f%% del area recuperable por una Fragmentation Recovery ideal)\n",
         g_measure_funcs,
         r.spills_total, r.spills_rematerializable, pct_remat, r.spills_remat_leaf,
         r.spills_total ? 100.0 * r.spills_remat_leaf / r.spills_total : 0.0,
@@ -127,12 +173,42 @@ void print_measure_summary() {
         g_remat_detail.remat_in_loop, g_remat_detail.remat_cold,
         g_remat_detail.const_imm32, g_remat_detail.const_imm64,
         (unsigned long long)e.pairs_envelope, (unsigned long long)e.pairs_exact,
-        (unsigned long long)e.false_interfere, pct_false);
+        (unsigned long long)e.false_interfere, pct_false,
+        g_pressure_agg.peak_env_gp, g_pressure_agg.peak_exact_gp, kGpLanes,
+        codegen::rbank::PressureMeasure::overflow(g_pressure_agg.peak_env_gp, kGpLanes),
+        codegen::rbank::PressureMeasure::overflow(g_pressure_agg.peak_exact_gp, kGpLanes),
+        g_pressure_agg.avoidable_gp(kGpLanes),
+        g_spill_trace_agg.spills_total
+            ? 100.0 * g_spill_trace_agg.victims_dead / g_spill_trace_agg.spills_total : 0.0,
+        g_spill_trace_agg.spills_total
+            ? 100.0 * g_spill_trace_agg.victims_alive / g_spill_trace_agg.spills_total : 0.0,
+        (unsigned long long)g_spill_trace_agg.spills_total,
+        g_alloc_diag_agg.spilled_total,
+        codegen::rbank::PressureMeasure::overflow(g_pressure_agg.peak_exact_gp, kGpLanes),
+        g_alloc_diag_agg.peak_position, g_alloc_diag_agg.live_values,
+        g_alloc_diag_agg.occupied_lanes, g_alloc_diag_agg.free_lanes,
+        g_alloc_diag_agg.spilled_in_peak, g_alloc_diag_agg.peak_idle_capacity,
+        g_alloc_diag_agg.max_wasted_lanes,
+        (unsigned long long)g_alloc_diag_agg.points_wasting,
+        (unsigned long long)g_alloc_diag_agg.wasted_lane_area,
+        (unsigned long long)g_spill_trace_agg.tax_structural,
+        (unsigned long long)g_spill_trace_agg.tax_fully,
+        (unsigned long long)g_spill_trace_agg.tax_partially,
+        (unsigned long long)g_spill_trace_agg.tax_fully,
+        (unsigned long long)g_spill_trace_agg.rec_greedy,
+        (unsigned long long)(g_spill_trace_agg.tax_fully >= g_spill_trace_agg.rec_greedy
+                                 ? g_spill_trace_agg.tax_fully - g_spill_trace_agg.rec_greedy
+                                 : 0),
+        (unsigned long long)g_spill_trace_agg.tax_splitting_potential,
+        (unsigned long long)g_alloc_diag_agg.wasted_lane_area,
+        g_alloc_diag_agg.wasted_lane_area
+            ? 100.0 * g_spill_trace_agg.tax_splitting_potential / g_alloc_diag_agg.wasted_lane_area
+            : 0.0);
 }
 
 /** @brief Corre el instrumento (gated) sobre una funcion tras la asignacion. */
 void run_measure(const ir::IrFunction &fn, const IntervalResult &ivs,
-                 const RegAlloc &ra) {
+                 const codegen::RegAlloc &ra) {
     if (!measure_enabled()) return;
     static std::once_flag atexit_once;
     std::call_once(atexit_once, [] { std::atexit(print_measure_summary); });
@@ -143,11 +219,37 @@ void run_measure(const ir::IrFunction &fn, const IntervalResult &ivs,
     const codegen::rbank::RematDetail rd =
         codegen::rbank::measure_remat_detail(ra, snap.remat_facts(), snap.value_reqs());
     const codegen::rbank::EnvelopeMeasure em = codegen::rbank::measure_envelope(ivs);
+    const codegen::rbank::PressureMeasure pm = codegen::rbank::measure_pressure(ivs);
+    const codegen::rbank::AllocatorDiagnostics ad =
+        codegen::rbank::compute_allocator_diagnostics(ivs, ra, 14u); // 14 = GP allocatable.
     std::lock_guard<std::mutex> lk(g_measure_mtx);
     g_remat_agg.add(rm);
     g_remat_detail.add(rd);
     g_env_agg.add(em);
+    g_pressure_agg.add(pm);
+    g_alloc_diag_agg.add(ad);
     ++g_measure_funcs;
+}
+
+/** @brief Envuelve rbank_allocate con el Fact de next-use (Belady): computa
+ *         @c MachineNextUseFacts(mf) y lo cablea al allocator (salvo VESTA_BELADY=0),
+ *         y le pasa el @c SpillTrace de razon-de-victima solo cuando el instrumento
+ *         esta activo.  compute_next_use es barato (2 pasadas sobre mf). */
+codegen::RegAlloc rbank_allocate_belady(const IntervalResult &ivs, const MFunction &mf,
+                                    const TargetRegInfo &tri, bool vec) {
+    jit::MachineNextUseFacts nu;
+    const jit::MachineNextUseFacts *nup = nullptr;
+    if (belady_enabled()) { nu = jit::compute_next_use(mf); nup = &nu; }
+    codegen::rbank::SpillTrace st;
+    codegen::rbank::SpillTrace *stp = measure_enabled() ? &st : nullptr;
+    const uint32_t nvregs = mf.vreg_count;
+    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(ivs, nvregs, tri, vec, nup, stp,
+                                                      recovery_enabled());
+    if (stp) {
+        std::lock_guard<std::mutex> lk(g_measure_mtx);
+        g_spill_trace_agg.add(st);
+    }
+    return ra;
 }
 
 
@@ -253,7 +355,7 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
 
     /* Allocator UNICO: rbank (linear_scan jubilado).  El verificador adversarial de
      * GC roots de abajo + diff_harness (0 bugs) + e2e (724/0) son su oraculo. */
-    RegAlloc ra = codegen::rbank::rbank_allocate(ivs, mf.vreg_count, tri,
+    codegen::RegAlloc ra = rbank_allocate_belady(ivs, mf, tri,
                                              fn_needs_vec_reserve(fn));
 
     /* Instrumento de medicion (gated VESTA_REMAT_MEASURE; diagnostico, no cambia
@@ -367,7 +469,7 @@ uint8_t *vreg_compile_callback(const ir::IrFunction &fn, CodeCache &cc,
 
     IntervalResult ivs = build_intervals(mf, tri);
     if (apply_ssa_coalesce(mf, fn)) ivs = build_intervals(mf, tri);
-    RegAlloc ra = codegen::rbank::rbank_allocate(ivs, mf.vreg_count, tri,
+    codegen::RegAlloc ra = rbank_allocate_belady(ivs, mf, tri,
                                              fn_needs_vec_reserve(fn)); // allocator UNICO (rbank).
 
     /* Verificador adversarial de GC roots (igual que vreg_compile). */
@@ -443,7 +545,7 @@ std::vector<uint8_t> vreg_compile_native_target(
      *    target: toman el TargetRegInfo). */
     IntervalResult ivs = build_intervals(mf, tri);
     if (apply_ssa_coalesce(mf, fn)) ivs = build_intervals(mf, tri);
-    RegAlloc ra = codegen::rbank::rbank_allocate(ivs, mf.vreg_count, tri,
+    codegen::RegAlloc ra = rbank_allocate_belady(ivs, mf, tri,
                                              fn_needs_vec_reserve(fn)); // allocator UNICO (rbank).
 
     /* 4. REWRITE a fisico (prologo/epilogo + spills de la ABI del target). */
@@ -547,7 +649,7 @@ uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,
         return nullptr;
     const TargetRegInfo &tri = target_x86_64_vm_abi();
     IntervalResult ivs = build_intervals(mf, tri);
-    RegAlloc ra = codegen::rbank::rbank_allocate(ivs, mf.vreg_count, tri,
+    codegen::RegAlloc ra = rbank_allocate_belady(ivs, mf, tri,
                                              fn_needs_vec_reserve(fn)); // allocator UNICO (rbank).
     if (!ivs.call_positions.empty()) {
         for (uint32_t vv = 0; vv < mf.vreg_count; ++vv) {

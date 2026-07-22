@@ -7,19 +7,33 @@
 
 /**
  * @file codegen/rbank/measure.h
- * @brief INSTRUMENTO de medicion (el "shadow" de esta fase): mide, SIN tocar el
- *        backend, el POTENCIAL de dos mejoras del asignador para decidir CUAL paga
- *        el alquiler primero (medir antes de construir):
+ * @brief INSTRUMENTO de medicion: mide, SIN tocar el backend, el POTENCIAL de
+ *        mejoras del asignador para decidir CUAL paga el alquiler primero (medir
+ *        antes de construir).  Principio: el allocator NO derrama por un PAR sino
+ *        por PRESION; por eso el instrumento decisivo es (c) el pico de presion.
  *
  *   (a) spills EVITABLES por rematerializacion: de los valores que rbank derrama,
  *       cuantos son RECOMPUTABLES (RematFacts) -> se podrian recomputar en el uso
  *       en vez de reload.  Combina IR (recomputable) con la asignacion real.
- *   (b) FALSAS INTERFERENCIAS del envolvente: pares que el modelo actual marca
- *       interferentes usando el ENVOLVENTE [start,end], pero cuyos segmentos REALES
- *       (con huecos) NO solapan.  Cada una es presion inventada -> spills de mas.
+ *   (b) FALSAS INTERFERENCIAS del envolvente: pares que el modelo marca
+ *       interferentes por el ENVOLVENTE [start,end] pero cuyos segmentos REALES
+ *       (con huecos) NO solapan.  Cada una es presion inventada -- PROXY de (c).
+ *   (c) PICO DE PRESION envolvente vs exacto: el maximo de intervalos vivos a la
+ *       vez por clase.  El allocator derrama cuando el pico supera los lanes; el
+ *       DELTA (env - exact) dice si cerrar el envolvente quita spills REALES o
+ *       ninguno.  A diferencia de (b) -- que cuenta pares que quiza nunca
+ *       coinciden en el tiempo -- (c) mira el instante de MAXIMA presion.
  *
- * Es diagnostico: NO cambia el codigo emitido.  El numero decide si el primer
- * peldano con impacto es remat (a) o cerrar el envolvente (b).
+ * Es diagnostico: NO cambia el codigo emitido.  El numero decide el peldano real.
+ *
+ * DIRECCIONES (documentadas, no ahora):
+ *   - COSTE, no valores: (a) cuenta valores recomputables, pero el objetivo ultimo
+ *     son CICLOS recuperables (estimated_reload vs estimated_remat via
+ *     MachineCostFacts).  Separar "es recomputable" de "merece la pena" cuando el
+ *     coste HW entre en la ecuacion.
+ *   - GENERICO: el patron (optimizacion -> instrumento que mide -> decision) sirve
+ *     igual a scheduler / vectorizer / inlining / LICM / GVN.  Cuando exista un
+ *     segundo consumidor, extraer el molde a un sitio comun (hoy es de rbank).
  */
 
 #ifndef VESTA_CODEGEN_RBANK_MEASURE_H
@@ -30,7 +44,10 @@
 #include "jit/interval.h"
 #include "jit/linear_scan.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <utility>
+#include <vector>
 
 namespace codegen {
 namespace rbank {
@@ -57,11 +74,11 @@ struct RematMeasure {
 /** @brief (a) Mide sobre la asignacion de rbank cuantos spills son recomputables,
  *         separando los HOJA (sin operandos: recompute puro, ganancia casi segura)
  *         de los que necesitan mantener operandos vivos (ganancia condicional al coste). */
-inline RematMeasure measure_remat(const jit::RegAlloc &ra,
+inline RematMeasure measure_remat(const codegen::RegAlloc &ra,
                                   const analysis::RematFacts &remat) {
     RematMeasure m;
     for (uint32_t v = 0; v < ra.assign.size(); ++v) {
-        if (ra.assign[v].loc != jit::RegAlloc::Loc::SPILL) continue;
+        if (ra.assign[v].loc != codegen::RegAlloc::Loc::SPILL) continue;
         ++m.spills_total;
         if (!remat.is_rematerializable(v)) continue;
         ++m.spills_rematerializable;
@@ -100,12 +117,12 @@ struct RematDetail {
  *        poblado desde LoopFacts) y el imm ya vive en @c RematFacts.recipe.  No itera
  *        el IR ni recomputa el loop_depth -- dato (Facts) separado del algoritmo.
  */
-inline RematDetail measure_remat_detail(const jit::RegAlloc &ra,
+inline RematDetail measure_remat_detail(const codegen::RegAlloc &ra,
                                         const analysis::RematFacts &remat,
                                         const std::vector<ValueRequirements> &reqs) {
     RematDetail d;
     for (uint32_t v = 0; v < ra.assign.size(); ++v) {
-        if (ra.assign[v].loc != jit::RegAlloc::Loc::SPILL) continue;
+        if (ra.assign[v].loc != codegen::RegAlloc::Loc::SPILL) continue;
         const bool hot = v < reqs.size() && reqs[v].loop_depth > 0; // Fact consultado.
         if (hot) ++d.spills_in_loop; else ++d.spills_cold;          // META: todos.
         if (!remat.is_rematerializable(v)) continue;
@@ -179,6 +196,93 @@ inline EnvelopeMeasure measure_envelope(const jit::IntervalResult &ivs) {
             else       ++m.false_interfere; // envolvente SI, exacto NO.
         }
     }
+    return m;
+}
+
+/**
+ * @struct PressureMeasure
+ * @brief (c) PICO de presion por clase: envolvente vs exacto.  El allocator NO
+ *        derrama por un par sino por PRESION -- el maximo de intervalos vivos a la
+ *        vez.  @c peak_env usa el envolvente [front, back); @c peak_exact usa los
+ *        segmentos reales.
+ *
+ * La magnitud que decide NO es el pico crudo sino el OVERFLOW = max(0, peak -
+ * lanes): un pico de 9 con 16 lanes no derrama nada; uno de 19 con 16 lanes
+ * derrama 3.  Por eso los peaks se leen via @c overflow():
+ *   - @c overflow(peak_exact, lanes) = spills FORZADOS por la presion real
+ *     (minimo teorico; NINGUNA politica de victima los evita -- son estructurales).
+ *   - @c avoidable = overflow(env) - overflow(exact) = spills que el ENVOLVENTE
+ *     INVENTA; cota superior de lo que se gana cerrando el envolvente (segmentos).
+ * Nota: el pico es una propiedad de los INTERVALOS (liveness), no de la
+ * asignacion -- no cambia al mejorar la eleccion de victima (Belady); lo que esa
+ * mejora reduce es el numero de spills REALES hacia @c overflow(exact).
+ */
+struct PressureMeasure {
+    uint32_t peak_env_gp = 0, peak_exact_gp = 0; ///< pico GP (envolvente / exacto).
+    uint32_t peak_env_fp = 0, peak_exact_fp = 0; ///< pico FP (envolvente / exacto).
+
+    /// Agregado del corpus = PICO (max), no suma: el peor caso manda.
+    void add(const PressureMeasure &o) noexcept {
+        peak_env_gp   = std::max(peak_env_gp, o.peak_env_gp);
+        peak_exact_gp = std::max(peak_exact_gp, o.peak_exact_gp);
+        peak_env_fp   = std::max(peak_env_fp, o.peak_env_fp);
+        peak_exact_fp = std::max(peak_exact_fp, o.peak_exact_fp);
+    }
+
+    /// Spills FORZADOS por presion = max(0, peak - lanes).  0 si @p lanes == 0
+    /// (desconocido).  Es lo que decide el allocator, no el pico crudo.
+    static uint32_t overflow(uint32_t peak, uint32_t lanes) noexcept {
+        return (lanes && peak > lanes) ? peak - lanes : 0;
+    }
+    /// Spills que el ENVOLVENTE inventa en GP (cota sup. de evitables cerrandolo).
+    uint32_t avoidable_gp(uint32_t lanes) const noexcept {
+        return overflow(peak_env_gp, lanes) - overflow(peak_exact_gp, lanes);
+    }
+    /// Idem en FP.
+    uint32_t avoidable_fp(uint32_t lanes) const noexcept {
+        return overflow(peak_env_fp, lanes) - overflow(peak_exact_fp, lanes);
+    }
+};
+
+/** @brief Pico de un sweep de eventos (pos, +-1).  Orden: en el mismo @c pos las
+ *         SALIDAS (-1) antes que las ENTRADAS (+1) -> dos intervalos que se tocan
+ *         en un punto ([a,b)[b,c)) NO cuentan como presion simultanea (semi-abierto). */
+inline uint32_t peak_from_events(std::vector<std::pair<uint32_t, int>> &ev) noexcept {
+    std::sort(ev.begin(), ev.end(),
+              [](const std::pair<uint32_t, int> &a, const std::pair<uint32_t, int> &b) {
+                  return a.first != b.first ? a.first < b.first : a.second < b.second;
+              });
+    int cur = 0, peak = 0;
+    for (const std::pair<uint32_t, int> &e : ev) {
+        cur += e.second;
+        if (cur > peak) peak = cur;
+    }
+    return static_cast<uint32_t>(peak);
+}
+
+/**
+ * @brief (c) Pico de presion por clase, envolvente vs exacto, via sweep de
+ *        eventos.  O(N log N) por clase (diagnostico).  Solo intervalos no vacios.
+ */
+inline PressureMeasure measure_pressure(const jit::IntervalResult &ivs) {
+    std::vector<std::pair<uint32_t, int>> env_gp, ex_gp, env_fp, ex_fp;
+    for (const jit::LiveInterval &iv : ivs.intervals) {
+        if (iv.ranges.empty()) continue;
+        const bool gp = (iv.cls == jit::RegClass::GP);
+        std::vector<std::pair<uint32_t, int>> &env = gp ? env_gp : env_fp;
+        std::vector<std::pair<uint32_t, int>> &ex  = gp ? ex_gp : ex_fp;
+        env.emplace_back(iv.ranges.front().from, +1); // envolvente [front, back).
+        env.emplace_back(iv.ranges.back().to, -1);
+        for (const jit::LiveRange &r : iv.ranges) {   // segmentos reales.
+            ex.emplace_back(r.from, +1);
+            ex.emplace_back(r.to, -1);
+        }
+    }
+    PressureMeasure m;
+    m.peak_env_gp   = peak_from_events(env_gp);
+    m.peak_exact_gp = peak_from_events(ex_gp);
+    m.peak_env_fp   = peak_from_events(env_fp);
+    m.peak_exact_fp = peak_from_events(ex_fp);
     return m;
 }
 

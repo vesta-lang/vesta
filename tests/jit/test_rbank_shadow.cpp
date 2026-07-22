@@ -9,7 +9,7 @@
  * @file tests/jit/test_rbank_shadow.cpp
  * @brief Shadow mode (paso 1): adaptador IntervalResult -> AbstractProblem (extract
  *        facts) + ShadowStats comparables (linear_scan vs rbank).  En AISLAMIENTO:
- *        IntervalResult/RegAlloc sinteticos.  El shadow REAL sobre el corpus es el
+ *        IntervalResult/codegen::RegAlloc sinteticos.  El shadow REAL sobre el corpus es el
  *        cableado en vreg_pipeline (paso 2).
  */
 
@@ -19,7 +19,7 @@
 
 #include <cstdio>
 
-using namespace jit;            // BackendCaps, RegClass, IntervalResult, RegAlloc.
+using namespace jit;            // BackendCaps, RegClass, IntervalResult, codegen::RegAlloc.
 using namespace codegen::rbank; // el modelo.
 
 static int g_checks = 0;
@@ -105,12 +105,12 @@ int main() {
         ivs.max_pos = 16;
         AbstractProblem p = intervals_to_problem(ivs);
 
-        // RegAlloc sintetico del "linear_scan": pongamos 1 spill artificial (vreg 2).
-        jit::RegAlloc ra;
+        // codegen::RegAlloc sintetico del "linear_scan": pongamos 1 spill artificial (vreg 2).
+        codegen::RegAlloc ra;
         ra.assign.resize(3);
-        ra.assign[0] = {jit::RegAlloc::Loc::REG, 16, 0};
-        ra.assign[1] = {jit::RegAlloc::Loc::REG, 17, 0};
-        ra.assign[2] = {jit::RegAlloc::Loc::SPILL, 0, 0};
+        ra.assign[0] = {codegen::RegAlloc::Loc::REG, 16, 0};
+        ra.assign[1] = {codegen::RegAlloc::Loc::REG, 17, 0};
+        ra.assign[2] = {codegen::RegAlloc::Loc::SPILL, 0, 0};
 
         ShadowStats sl = shadow_stats_linear(ra, p, ctx);
         ShadowStats sr = shadow_stats_rbank(p, ctx, false);

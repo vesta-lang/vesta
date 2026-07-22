@@ -120,7 +120,7 @@ static bool jit_run(const ir::IrFunction &fn, int64_t &result_out) {
     MFunction mf;
     if (!vreg_select(fn, mf)) return false;
     const TargetRegInfo &tri = target_x86_64_vm_abi();
-    RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
+    codegen::RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
     MFunction pf = rewrite_to_physical(mf, ra, tri);
 
     X86Encoder enc;

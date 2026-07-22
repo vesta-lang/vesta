@@ -74,7 +74,7 @@ static void test_low_pressure() {
     mf.blocks.push_back(std::move(b));
 
     const TargetRegInfo &tri = target_x86_64_vm_abi();
-    RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
+    codegen::RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
 
     CHECK(ra.num_spill_slots == 0, "sin spills");
     CHECK(ra.in_reg(0), "v0 en reg");
@@ -103,7 +103,7 @@ static void test_cross_call() {
     mf.blocks.push_back(std::move(b));
 
     const TargetRegInfo &tri = target_x86_64_vm_abi();
-    RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
+    codegen::RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
 
     CHECK(ra.in_reg(0), "v0 en reg (no spill: hay callee libres)");
     const uint8_t r = ra.reg_of(0);
@@ -142,7 +142,7 @@ static void test_spill() {
 
     /* Target con SOLO 3 GP asignables: 4 valores vivos a la vez -> 1 spill. */
     TargetRegInfo tri = tiny_target();
-    RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
+    codegen::RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
 
     CHECK(ra.num_spill_slots >= 1, "al menos 1 spill con 4 vivos y 3 regs");
     /* Cuenta cuantos de v0..v3 quedaron en reg (debe ser <= 3). */
@@ -172,7 +172,7 @@ static void test_reuse() {
     mf.blocks.push_back(std::move(b));
 
     const TargetRegInfo &tri = target_x86_64_vm_abi();
-    RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
+    codegen::RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
 
     CHECK(ra.num_spill_slots == 0, "sin spill (vidas disjuntas)");
     CHECK(ra.in_reg(0) && ra.in_reg(1), "v0 y v1 en reg");

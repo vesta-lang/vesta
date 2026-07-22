@@ -1921,6 +1921,67 @@ static void emit_phi_copies(EmitCtx &ctx, IrBlockId pred_id,
     }
     if (copies.empty()) return;
 
+    // Copias del banco ANCHO (ZMM): ambos extremos viven en el banco float
+    // (garantizado por la democion all-or-none de compute_zmm_alloc).  Se
+    // resuelven con `fmov` en un parallel-move DENTRO del banco float (f2 =
+    // scratch de ciclos), disjunto del parallel-move GP de abajo.  Asi el
+    // acumulador loop-carried nunca hace roundtrip movh+bitg2z por GP.
+    {
+        std::vector<PhiCopy> rest;
+        rest.reserve(copies.size());
+        std::unordered_map<int, int> zpend; // f_dst -> f_src (regs del banco)
+        for (const auto &c : copies) {
+            const int zd = ctx.zmm_of(c.dst);
+            const int zs = ctx.zmm_of(c.src);
+            if (zd >= 0 && zs >= 0) {
+                if (zd != zs)
+                    zpend[zd] = zs;
+            } else {
+                rest.push_back(c); // pura GP (o congruente ya coalescida)
+            }
+        }
+        // Emitir las que no son fuente de otra pendiente (sin RAW).
+        bool zch = true;
+        while (zch && !zpend.empty()) {
+            zch = false;
+            for (auto it = zpend.begin(); it != zpend.end();) {
+                const int d = it->first;
+                bool d_is_src = false;
+                for (const auto &p : zpend)
+                    if (p.first != d && p.second == d) {
+                        d_is_src = true;
+                        break;
+                    }
+                if (!d_is_src) {
+                    ctx.out << "    fmov f" << d << ", f" << it->second << "\n";
+                    it = zpend.erase(it);
+                    zch = true;
+                } else {
+                    ++it;
+                }
+            }
+        }
+        // Romper ciclos con f2 (scratch reservado del banco float).
+        while (!zpend.empty()) {
+            auto it = zpend.begin();
+            const int start = it->first;
+            ctx.out << "    fmov f2, f" << start << "\n";
+            int cur = start;
+            for (;;) {
+                const int nxt = zpend.at(cur);
+                zpend.erase(cur);
+                if (nxt == start) {
+                    ctx.out << "    fmov f" << cur << ", f2\n";
+                    break;
+                }
+                ctx.out << "    fmov f" << cur << ", f" << nxt << "\n";
+                cur = nxt;
+            }
+        }
+        copies = std::move(rest);
+        if (copies.empty()) return;
+    }
+
     // Paso 2: separar copias en 3 categorias para preservar semantica
     // "paralela" del PHI (todas las copias deben verse como simultaneas):
     //
@@ -5759,6 +5820,7 @@ static inline bool zmm_consumer_op(IrOp op) {
     case IrOp::FCMP_GT:
     case IrOp::FCMP_LE:
     case IrOp::FCMP_GE:
+    case IrOp::PHI: // el PHI de un acumulador loop-carried consume floats del banco
         return true;
     default:
         return false;
@@ -5868,14 +5930,71 @@ compute_zmm_alloc(const IrFunction &fn, const LivenessResult &liveness) {
             }
         }
     }
+    // Union-find sobre las clases de congruencia PHI: se unen el dst del PHI y
+    // sus phi_args float.  Un valor float es candidato a ZMM si su def es un
+    // productor O es un PHI de un acumulador.  Regla ALL-OR-NONE: un componente
+    // PHI solo es elegible si TODOS sus miembros lo son individualmente -> asi
+    // ninguna copia PHI mezcla banco GP y ZMM (el acumulador loop-carried vive
+    // entero en el banco float, sin roundtrip movh+bitg2z cada iteracion).
+    std::vector<int> uf(nv);
+    for (size_t i = 0; i < nv; ++i)
+        uf[i] = static_cast<int>(i);
+    auto uf_find = [&uf](int x) {
+        while (uf[x] != x) {
+            uf[x] = uf[uf[x]];
+            x = uf[x];
+        }
+        return x;
+    };
+    auto uf_union = [&](int a, int b) {
+        a = uf_find(a);
+        b = uf_find(b);
+        if (a != b)
+            uf[a] = b;
+    };
+    for (const auto &bb : fn.blocks)
+        for (const auto &in : bb.instrs)
+            if (in.op == IrOp::PHI && in.dst != IR_NO_VALUE &&
+                static_cast<size_t>(in.dst) < nv) {
+                const IrType dt = fn.values[in.dst].type;
+                if (dt != IrType::F64 && dt != IrType::F32)
+                    continue;
+                for (const auto &pa : in.phi_args)
+                    if (pa.value != IR_NO_VALUE &&
+                        static_cast<size_t>(pa.value) < nv)
+                        uf_union(static_cast<int>(in.dst),
+                                 static_cast<int>(pa.value));
+            }
+    auto indiv_ok = [&](IrValueId v) -> bool {
+        const IrType t = fn.values[v].type;
+        if (t != IrType::F64 && t != IrType::F32)
+            return false;
+        if (is_param.count(v) || !has_def[v] || bad[v])
+            return false;
+        return zmm_producer_op(def_op[v]) || def_op[v] == IrOp::PHI;
+    };
+    // comp_ok[root] = todos los miembros float del componente son elegibles.
+    std::unordered_map<int, bool> comp_ok;
+    for (IrValueId v = 0; static_cast<size_t>(v) < nv; ++v) {
+        const IrType t = fn.values[v].type;
+        if (t != IrType::F64 && t != IrType::F32)
+            continue;
+        const int r = uf_find(static_cast<int>(v));
+        auto it = comp_ok.find(r);
+        if (it == comp_ok.end())
+            comp_ok[r] = true;
+        if (!indiv_ok(v))
+            comp_ok[r] = false;
+    }
     std::vector<IrValueId> cands;
     for (IrValueId v = 0; static_cast<size_t>(v) < nv; ++v) {
         const IrType t = fn.values[v].type;
         if (t != IrType::F64 && t != IrType::F32)
             continue;
-        if (is_param.count(v) || !has_def[v] || bad[v])
+        if (!indiv_ok(v))
             continue;
-        if (!zmm_producer_op(def_op[v]))
+        auto it = comp_ok.find(uf_find(static_cast<int>(v)));
+        if (it == comp_ok.end() || !it->second)
             continue;
         cands.push_back(v);
     }
@@ -5917,8 +6036,37 @@ compute_zmm_alloc(const IrFunction &fn, const LivenessResult &liveness) {
     // Banco float de la VM interp: 16 registros (f0..f15); el cliente float
     // reserva 3 scratch (f0/f1 = operandos GP, f2 = temp del 2-address).  Para
     // otro ISA basta cambiar estos dos numeros.
-    return wide_bank_linear_scan(std::move(cands), liveness, /*num_regs=*/16,
-                                 /*num_scratch=*/3, prefer);
+    std::unordered_map<IrValueId, int> zmm_map = wide_bank_linear_scan(
+        std::move(cands), liveness, /*num_regs=*/16, /*num_scratch=*/3, prefer);
+    // Democion ALL-OR-NONE: si un componente PHI no quedo ENTERO en el banco
+    // (el linear-scan derramo algun miembro por presion), sacar TODOS sus
+    // miembros del banco.  Garantiza que las copias PHI sean puras GP<->GP o
+    // ZMM<->ZMM (nunca mixtas), que es lo que emit_phi_copies sabe resolver.
+    {
+        std::unordered_map<int, int> total, in_bank;
+        for (IrValueId v = 0; static_cast<size_t>(v) < nv; ++v) {
+            const IrType t = fn.values[v].type;
+            if (t != IrType::F64 && t != IrType::F32)
+                continue;
+            if (!indiv_ok(v))
+                continue;
+            const int r = uf_find(static_cast<int>(v));
+            auto it = comp_ok.find(r);
+            if (it == comp_ok.end() || !it->second)
+                continue;
+            total[r]++;
+            if (zmm_map.count(v))
+                in_bank[r]++;
+        }
+        for (const auto &kv : total)
+            if (kv.second > 1 && in_bank[kv.first] != kv.second) {
+                const int r = kv.first;
+                for (IrValueId v = 0; static_cast<size_t>(v) < nv; ++v)
+                    if (uf_find(static_cast<int>(v)) == r)
+                        zmm_map.erase(v);
+            }
+    }
+    return zmm_map;
 }
 
 static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,

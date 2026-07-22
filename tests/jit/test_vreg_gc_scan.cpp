@@ -120,7 +120,7 @@ static void test_gc_root_found_by_scan() {
     CHECK(vreg_select(fn, mf, AbiKind::VM, resolver), "vreg_select ok");
     const TargetRegInfo &tri = target_x86_64_vm_abi();
     IntervalResult ivs = build_intervals(mf, tri);
-    RegAlloc ra = linear_scan(ivs, tri);
+    codegen::RegAlloc ra = linear_scan(ivs, tri);
     CHECK(ra.spilled(thisp), "this (GC root) spilled");
     MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM, &ivs);
 

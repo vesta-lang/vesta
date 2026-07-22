@@ -8,12 +8,12 @@
 /**
  * @file codegen/rbank/backend_bridge.h
  * @brief BACKEND BRIDGE (F5): traduccion MECANICA entre el resultado del modelo
- *        (@c LaneAssignment) y el que consume el backend (@c jit::RegAlloc), en
+ *        (@c LaneAssignment) y el que consume el backend (@c codegen::RegAlloc), en
  *        ambos sentidos.  Es un puente DELIBERADAMENTE TONTO: cuanto menos decide,
  *        menos superficie de bugs introduce al meter rbank en produccion.
  *
- *     LaneAssignment  --regalloc_from_lanes-->  jit::RegAlloc  --> rewrite_to_physical
- *     jit::RegAlloc   --regalloc_to_lanes---->  LaneAssignment --> is_proper_coloring
+ *     LaneAssignment  --regalloc_from_lanes-->  codegen::RegAlloc  --> rewrite_to_physical
+ *     codegen::RegAlloc   --regalloc_to_lanes---->  LaneAssignment --> is_proper_coloring
  *
  * REGLAS del puente (no decide, solo mapea):
  *   - lane fisica -> @c reg;  @c kSpilled -> spill slot (uno por valor derramado);
@@ -117,16 +117,16 @@ inline AbstractProblem intervals_to_problem(const jit::IntervalResult &ivs) {
 }
 
 /**
- * @brief @c jit::RegAlloc -> @c LaneAssignment (para validar la asignacion de
+ * @brief @c codegen::RegAlloc -> @c LaneAssignment (para validar la asignacion de
  *        PRODUCCION con @c is_proper_coloring / @c validate_coloring).  REG -> lane
  *        (id fisico); todo lo demas (SPILL/NONE/ausente) -> @c kSpilled.
  */
-inline LaneAssignment regalloc_to_lanes(const jit::RegAlloc &ra,
+inline LaneAssignment regalloc_to_lanes(const codegen::RegAlloc &ra,
                                         const AbstractProblem &p) {
     LaneAssignment la;
     for (const AbstractValue &v : p.values) {
         if (v.value_id < ra.assign.size() &&
-            ra.assign[v.value_id].loc == jit::RegAlloc::Loc::REG)
+            ra.assign[v.value_id].loc == codegen::RegAlloc::Loc::REG)
             la.assign(v.value_id, ra.assign[v.value_id].reg);
         else
             la.spill(v.value_id);
@@ -135,7 +135,7 @@ inline LaneAssignment regalloc_to_lanes(const jit::RegAlloc &ra,
 }
 
 /**
- * @brief @c LaneAssignment -> @c jit::RegAlloc (para meter la asignacion del modelo
+ * @brief @c LaneAssignment -> @c codegen::RegAlloc (para meter la asignacion del modelo
  *        en el backend de PRODUCCION).  Puente tonto:
  *          - lane -> @c reg (loc=REG);  @c kSpilled -> slot nuevo (loc=SPILL);
  *          - @c assign es DENSO 0..vreg_count-1: los vregs ausentes/muertos quedan
@@ -149,24 +149,24 @@ inline LaneAssignment regalloc_to_lanes(const jit::RegAlloc &ra,
  *        llamante (p.ej. @c ivs.intervals.size()); los valores del problema son un
  *        subconjunto (los intervalos no vacios).
  */
-inline jit::RegAlloc regalloc_from_lanes(const LaneAssignment &la,
+inline codegen::RegAlloc regalloc_from_lanes(const LaneAssignment &la,
                                          const AbstractProblem &p,
                                          const PhysicalRegisterBank &bank,
                                          uint32_t vreg_count) {
-    jit::RegAlloc ra;
-    ra.assign.assign(vreg_count, jit::RegAlloc::VAssign{}); // todos NONE.
+    codegen::RegAlloc ra;
+    ra.assign.assign(vreg_count, codegen::RegAlloc::VAssign{}); // todos NONE.
     uint32_t next_slot = 0;
     std::vector<uint8_t> callee; // PRESERVED usados (dedup, orden de insercion).
 
     for (const AbstractValue &v : p.values) {
         if (v.value_id >= vreg_count) continue; // defensivo: fuera del rango denso.
         const int lane = la.lane_of(v.value_id);
-        jit::RegAlloc::VAssign a;
+        codegen::RegAlloc::VAssign a;
         if (lane == kSpilled) {
-            a.loc = jit::RegAlloc::Loc::SPILL;
+            a.loc = codegen::RegAlloc::Loc::SPILL;
             a.slot = next_slot++;
         } else {
-            a.loc = jit::RegAlloc::Loc::REG;
+            a.loc = codegen::RegAlloc::Loc::REG;
             a.reg = static_cast<uint8_t>(lane);
             if (bank.preservation(a.reg, v.req.width) == SavePolicy::PRESERVED &&
                 std::find(callee.begin(), callee.end(), a.reg) == callee.end())

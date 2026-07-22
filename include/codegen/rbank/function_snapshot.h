@@ -75,6 +75,56 @@
  * reproducir bugs, comparar snapshots entre versiones, regresion de analisis,
  * herramientas externas.
  *
+ * ===========================================================================
+ *  RELACION CON EL MOTOR (@c analysis/manager/analysis_manager.h)
+ * ===========================================================================
+ * El @c FunctionSnapshot es la CAPA DE CONSULTA del motor de conocimiento, NO
+ * un motor aparte.  El @c AnalysisManager es la CAPA DE GESTION (ciclo de vida
+ * + invalidacion en cascada, transversal a IR y MachineIR); este snapshot es la
+ * VISTA demand-driven que usan allocator / scheduler / codegen.  El mapa global
+ * de capas esta en @c analysis_manager.h.  Misma familia, distinto estilo: el
+ * manager indexa por @c (AnalysisID, unit) con @c PreservedAnalyses; el snapshot
+ * ofrece @c query<T>() por tipo con @c LazyFact.  Hoy el snapshot cachea por su
+ * cuenta; que pida sus hechos AL manager (para heredar su invalidacion) son los
+ * HUECOS documentados en @c optimization_context.h.  No compiten: uno gestiona
+ * QUE sobrevive a un cambio del IR; el otro, COMO se pide un hecho.
+ *
+ * ===========================================================================
+ *  ARBOL DE DEPENDENCIAS (emerge solo: cada produce() llama a otros query<U>())
+ * ===========================================================================
+ *      value_reqs()                          [Values]
+ *        |-- liveness()                       [Liveness]  compute_liveness
+ *        |-- loop_facts()                     [Loops]     compute_loop_facts
+ *        |-- profile_facts()                  [Profile]
+ *        |     '-- loop_facts()   (cache hit)
+ *        '-- call positions <- liveness()   (cache hit)
+ *
+ *      remat_facts()                          [Remat]     compute_remat_facts
+ *                                             (IR-driven, sin dependencias)
+ *
+ * Pedir @c value_reqs() arrastra Liveness + Loops + Profile UNA vez cada uno
+ * (cache); pedir @c remat_facts() no arrastra nada.  El grafo NO se declara en
+ * ningun sitio: EMERGE de que cada @c produce() consulta solo lo que necesita.
+ *
+ * ===========================================================================
+ *  CATALOGO DE HECHOS (los registrados HOY; crece sin tocar el mecanismo)
+ * ===========================================================================
+ *   Fact      value_type                   productor           capa
+ *   -------   --------------------------   -----------------   ----------
+ *   Liveness  ir::LivenessResult           compute_liveness    STRUCTURAL
+ *   Loops     analysis::LoopFacts          compute_loop_facts  DERIVED
+ *   Profile   analysis::ProfileFacts       compute_profile..   DERIVED
+ *   Values    vector<ValueRequirements>    assemble_value..    adaptador
+ *   Remat     analysis::RematFacts         compute_remat..     DERIVED
+ *
+ * Pendientes con MODULO ya existente en @c analysis/ (solo falta registrar su
+ * @c QueryProducer + su celda para consultarlos por aqui): PointsTo + alias
+ * (@c analysis/memory/), EscapeInfo (@c analysis/escape/), SemanticEffects
+ * (@c analysis/effects/), MachineCostFacts (@c analysis/hw/).  Pendientes POR
+ * construir: DomFacts (extraer del optimizer) y next-use / UseDef (habilita
+ * seleccion de victima estilo Belady).  Cada uno = una celda + un
+ * @c QueryProducer; ni @c query<T>() ni los consumidores se tocan.
+ *
  * ESCALADO (mismo modelo mental, sin cambiarlo; cada nivel cuando tenga
  * consumidor real -- NO por prevision):
  *
@@ -98,6 +148,7 @@
 #include "analysis/fact_validation.h"
 #include "analysis/facts/loop_facts.h"
 #include "analysis/facts/remat_facts.h"
+#include "analysis/facts/use_def_facts.h"
 #include "codegen/rbank/build_requirements.h"
 #include "codegen/rbank/lazy_fact.h"
 #include "codegen/rbank/physical_bank.h"
@@ -124,8 +175,9 @@ enum class Fact : uint32_t {
     Profile  = 1u << 2, ///< ProfileFacts (Tipo B; depende de Loops + perfil).
     Values   = 1u << 3, ///< ValueRequirements (adaptadores; dep. Liveness+Loops).
     Remat    = 1u << 4, ///< RematFacts (Tipo A, IR-driven: recomputabilidad + receta).
-    // Futuro: Dom = 1u<<5, Alias = 1u<<6, Escape = 1u<<7, Memory = 1u<<8, ...
-    All      = Liveness | Loops | Profile | Values | Remat,
+    UseDef   = 1u << 5, ///< UseDefFacts (Tipo A, IR-driven: next-use por valor).
+    // Futuro: Dom = 1u<<6, Alias = 1u<<7, Escape = 1u<<8, Memory = 1u<<9, ...
+    All      = Liveness | Loops | Profile | Values | Remat | UseDef,
 };
 
 /**
@@ -169,6 +221,7 @@ struct FunctionSnapshot {
     LazyFact<analysis::ProfileFacts>         profile; ///< Tipo B (vacio si no hay perfil).
     LazyFact<std::vector<ValueRequirements>> values;  ///< requisitos por valor.
     LazyFact<analysis::RematFacts>           remat;   ///< Tipo A (recomputabilidad + receta).
+    LazyFact<analysis::UseDefFacts>          use_def; ///< Tipo A (next-use por valor).
     // Futuro: LazyFact<analysis::DomFacts> dom;  LazyFact<analysis::AliasFacts> alias; ...
 
     /** @brief True si el hecho @p f ya esta materializado en su celda. */
@@ -179,6 +232,7 @@ struct FunctionSnapshot {
         case Fact::Profile:  return profile.ready();
         case Fact::Values:   return values.ready();
         case Fact::Remat:    return remat.ready();
+        case Fact::UseDef:   return use_def.ready();
         default:             return false;
         }
     }
@@ -218,6 +272,10 @@ struct FunctionSnapshot {
     const analysis::RematFacts &remat_facts() const {
         return query<analysis::RematFacts>();
     }
+    /** @brief UseDefFacts (posiciones de uso -> next-use por valor; IR-driven). */
+    const analysis::UseDefFacts &use_def_facts() const {
+        return query<analysis::UseDefFacts>();
+    }
 
     /**
      * @struct ValidationReport
@@ -252,6 +310,20 @@ struct FunctionSnapshot {
     }
 };
 
+// ===========================================================================
+//  RECETA -- anadir un Fact NUEVO (patron de 4 puntos; el mecanismo no cambia).
+//  Ejemplo real que seguir: RematFacts (busca "Remat" en este archivo).
+//    1. Una celda LazyFact<T> como miembro de FunctionSnapshot (seccion de
+//       celdas) + su bit en el enum Fact + su case en is_computed().
+//    2. La especializacion cell<T>() -> devuelve esa celda (mapeo tipo->almacen).
+//    3. La especializacion QueryProducer<T>::produce(snap) -> AQUI el algoritmo;
+//       para sus dependencias llama a snap.query<U>() (el grafo emerge solo).
+//    4. (Opcional) un accessor nombrado como azucar sobre query<T>().
+//  query<T>() y los consumidores NO se tocan.  Pedir un T sin los pasos 2+3 es
+//  un ERROR DE COMPILACION (el primario QueryProducer<T> no tiene definicion),
+//  nunca un fallo silencioso.
+// ===========================================================================
+
 // ---------------------------------------------------------------------------
 //  Mapeo tipo -> celda (cell<T>): parte del ALMACENAMIENTO del snapshot.  Es la
 //  unica pieza que conoce que miembro guarda cada Fact; el resto es generico.
@@ -266,6 +338,8 @@ template <> inline const LazyFact<std::vector<ValueRequirements>> &
 FunctionSnapshot::cell<std::vector<ValueRequirements>>() const { return values; }
 template <> inline const LazyFact<analysis::RematFacts> &
 FunctionSnapshot::cell<analysis::RematFacts>() const { return remat; }
+template <> inline const LazyFact<analysis::UseDefFacts> &
+FunctionSnapshot::cell<analysis::UseDefFacts>() const { return use_def; }
 
 // ---------------------------------------------------------------------------
 //  Productores registrados por tipo (QueryProducer<T>): AQUI vive el ALGORITMO.
@@ -302,6 +376,11 @@ template <> struct QueryProducer<std::vector<ValueRequirements>> {
 template <> struct QueryProducer<analysis::RematFacts> {
     static analysis::RematFacts produce(const FunctionSnapshot &s) {
         return analysis::compute_remat_facts(*s.fn);
+    }
+};
+template <> struct QueryProducer<analysis::UseDefFacts> {
+    static analysis::UseDefFacts produce(const FunctionSnapshot &s) {
+        return analysis::compute_use_def(*s.fn);
     }
 };
 

@@ -13,7 +13,7 @@
  *
  *     IntervalResult (MachineIR real)  --intervals_to_problem-->  AbstractProblem
  *              |                             (EXTRACT FACTS, nada mas)      |
- *         linear_scan -> RegAlloc                                  coalesce + smart_spill
+ *         linear_scan -> codegen::RegAlloc                                  coalesce + smart_spill
  *              |                                                           |
  *         ShadowStats (linear)   <---- comparar ---->   ShadowStats (rbank)
  *
@@ -133,10 +133,10 @@ inline void fill_pressure(const AbstractProblem &p, ShadowStats &s) {
 }
 
 /**
- * @brief Metricas del linear_scan de PRODUCCION (RegAlloc) sobre el mismo problema.
- *        La presion se mide del problema (estructura); los spills, del RegAlloc.
+ * @brief Metricas del linear_scan de PRODUCCION (codegen::RegAlloc) sobre el mismo problema.
+ *        La presion se mide del problema (estructura); los spills, del codegen::RegAlloc.
  */
-inline ShadowStats shadow_stats_linear(const jit::RegAlloc &ra,
+inline ShadowStats shadow_stats_linear(const codegen::RegAlloc &ra,
                                        const AbstractProblem &p,
                                        const OptimizationContext &ctx) {
     ShadowStats s;
@@ -146,8 +146,8 @@ inline ShadowStats shadow_stats_linear(const jit::RegAlloc &ra,
         if (v.req.fixed_reg >= 0) ++s.pinned_values;
         const bool is_gp = v.req.cls == ResourceClass::GP;
         const bool has = v.value_id < ra.assign.size();
-        const bool spilled = has && ra.assign[v.value_id].loc == jit::RegAlloc::Loc::SPILL;
-        const bool inreg   = has && ra.assign[v.value_id].loc == jit::RegAlloc::Loc::REG;
+        const bool spilled = has && ra.assign[v.value_id].loc == codegen::RegAlloc::Loc::SPILL;
+        const bool inreg   = has && ra.assign[v.value_id].loc == codegen::RegAlloc::Loc::REG;
         if (spilled) {
             ++s.spills;
             s.spill_cost += spill_cost_via_objective(v.req, ctx);
@@ -200,7 +200,7 @@ inline ShadowStats shadow_stats_rbank(const AbstractProblem &p,
 }
 
 // regalloc_to_lanes / regalloc_from_lanes viven en backend_bridge.h (el puente
-// RegAlloc <-> modelo, compartido por el shadow y la futura ruta de produccion).
+// codegen::RegAlloc <-> modelo, compartido por el shadow y la futura ruta de produccion).
 
 /**
  * @struct ShadowReport
@@ -213,7 +213,7 @@ inline ShadowStats shadow_stats_rbank(const AbstractProblem &p,
  * problema abstracto), NO el backend.  El backend tiene informacion que el modelo aun
  * no representa (huecos del LiveRange, GC maps, uses, kill positions).  Por eso el
  * switch NO se decide solo con @c valid_rbank: exige ademas convertir la asignacion a
- * RegAlloc y pasarla por TODO el backend (rewrite -> encode -> diff_harness -> e2e).
+ * codegen::RegAlloc y pasarla por TODO el backend (rewrite -> encode -> diff_harness -> e2e).
  * @c valid_rbank es la senyal TEMPRANA de correctitud, no la prueba final.
  */
 struct ShadowReport {

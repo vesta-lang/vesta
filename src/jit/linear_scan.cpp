@@ -17,8 +17,8 @@
 
 namespace jit {
 
-RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
-    RegAlloc out;
+codegen::RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
+    codegen::RegAlloc out;
     const uint32_t NV = static_cast<uint32_t>(ivs.intervals.size());
     out.assign.resize(NV);
     if (NV == 0) return out;
@@ -108,7 +108,7 @@ RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
                     for (size_t a = 0; a < active.size(); ++a) {
                         if (out.assign[active[a]].reg == fr) {
                             const uint32_t av = active[a];
-                            out.assign[av].loc = RegAlloc::Loc::SPILL;
+                            out.assign[av].loc = codegen::RegAlloc::Loc::SPILL;
                             out.assign[av].slot = out.num_spill_slots++;
                             active.erase(active.begin() + a);
                             break;
@@ -116,7 +116,7 @@ RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
                     }
                     occupied[fr] = false;
                 }
-                out.assign[vid].loc = RegAlloc::Loc::REG;
+                out.assign[vid].loc = codegen::RegAlloc::Loc::REG;
                 out.assign[vid].reg = fr;
                 occupied[fr] = true;
                 active.push_back(vid);
@@ -135,7 +135,7 @@ RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
              * catch recarga del slot tras el unwind).  Mismo trato que un GC
              * root cross-call. */
             if (vid < ivs.force_spill.size() && ivs.force_spill[vid]) {
-                out.assign[vid].loc = RegAlloc::Loc::SPILL;
+                out.assign[vid].loc = codegen::RegAlloc::Loc::SPILL;
                 out.assign[vid].slot = out.num_spill_slots++;
                 continue;
             }
@@ -147,7 +147,7 @@ RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
              * lo describe ahi.  Los GC roots que NO cruzan calls siguen en
              * registros (sin coste). */
             if (iv.is_gc() && cc) {
-                out.assign[vid].loc = RegAlloc::Loc::SPILL;
+                out.assign[vid].loc = codegen::RegAlloc::Loc::SPILL;
                 out.assign[vid].slot = out.num_spill_slots++;
                 continue;
             }
@@ -171,7 +171,7 @@ RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
                  * occupied[hr]==false (libre) NO garantiza que hr aun tenga el
                  * valor de partner (pudo morir antes y reusarse el reg). */
                 if (partner < out.assign.size() &&
-                    out.assign[partner].loc == RegAlloc::Loc::REG &&
+                    out.assign[partner].loc == codegen::RegAlloc::Loc::REG &&
                     partner < ivs.intervals.size() &&
                     ivs.intervals[partner].end() + 1u == istart) {
                     const uint8_t hr = out.assign[partner].reg;
@@ -197,7 +197,7 @@ RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
 
             if (chosen >= 0) {
                 const uint8_t r = static_cast<uint8_t>(chosen);
-                out.assign[vid].loc = RegAlloc::Loc::REG;
+                out.assign[vid].loc = codegen::RegAlloc::Loc::REG;
                 out.assign[vid].reg = r;
                 occupied[r] = true;
                 active.push_back(vid);
@@ -248,18 +248,18 @@ RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
             if (!must_reg && (victim_idx < 0 || next_use(vid) >= victim_nu)) {
                 /* Spillear el PROPIO intervalo (su fin es el mas lejano,
                  * o no hay activo robable). */
-                out.assign[vid].loc = RegAlloc::Loc::SPILL;
+                out.assign[vid].loc = codegen::RegAlloc::Loc::SPILL;
                 out.assign[vid].slot = out.num_spill_slots++;
             } else {
                 /* Robar el reg de la victima: la victima va a stack para
                  * toda su vida; este intervalo toma su reg. */
                 const uint32_t jv = active[static_cast<size_t>(victim_idx)];
                 const uint8_t r = out.assign[jv].reg;
-                out.assign[jv].loc = RegAlloc::Loc::SPILL;
+                out.assign[jv].loc = codegen::RegAlloc::Loc::SPILL;
                 out.assign[jv].slot = out.num_spill_slots++;
                 active.erase(active.begin() + victim_idx);
 
-                out.assign[vid].loc = RegAlloc::Loc::REG;
+                out.assign[vid].loc = codegen::RegAlloc::Loc::REG;
                 out.assign[vid].reg = r; // occupied[r] sigue true
                 active.push_back(vid);
                 if (is_callee(r) && !callee_used_flag[r]) {

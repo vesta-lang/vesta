@@ -130,12 +130,37 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
         }
         return kSpilled;
     };
-    // "Conveniencia de derramar" c en el punto @p now: mas tiempo liberado y menos
-    // coste -> mejor victima.  El coste sale del Objective; el tiempo, del LiveRange.
+    // "Conveniencia de derramar" c en el punto @p now: mas HORIZONTE hasta el
+    // proximo uso y menos coste -> mejor victima.  Fase A (transicion a Belady):
+    // se calculan AMBAS metricas -- remaining_life (duracion restante, heuristica
+    // vieja) y next_use_distance (Belady) -- pero la DECISION usa el next-use si el
+    // Fact esta cableado (@c ctx.has_next_use()); remaining_life queda de fallback y
+    // para instrumentacion.  El coste sale del Objective; la fusion es del algoritmo.
+    constexpr double kDeadHorizon = 1e18; // horizonte "infinito": victima muerta ideal.
     auto spill_score = [&](const AbstractValue *c, uint32_t now) -> double {
-        const double freed = static_cast<double>(c->end >= now ? c->end - now : 0) + 1.0;
+        const double remaining =
+            static_cast<double>(c->end >= now ? c->end - now : 0) + 1.0;
         const double cost = spill_cost_via_objective(c->req, ctx);
-        return freed / (cost > 0.0 ? cost : 1e-9); // grande = mejor victima.
+        double horizon = remaining; // fallback: duracion restante (pre-Belady).
+        if (ctx.has_next_use()) {
+            const uint32_t d =
+                ctx.next_use_distance(c->value_id, codegen::LinearPos{now});
+            // d == UINT32_MAX (muerto) -> horizonte infinito (victima ideal);
+            // si no, distancia real al proximo uso (Belady).
+            horizon = (d == UINT32_MAX) ? kDeadHorizon
+                                        : static_cast<double>(d) + 1.0;
+        }
+        return horizon / (cost > 0.0 ? cost : 1e-9); // grande = mejor victima.
+    };
+    // Instrumento (opcional): clasifica POR QUE se eligio una victima.
+    auto record_victim = [&](const AbstractValue *victim, uint32_t now) {
+        if (!ctx.spill_trace) return;
+        ++ctx.spill_trace->spills_total;
+        if (!ctx.has_next_use()) return;
+        const uint32_t d =
+            ctx.next_use_distance(victim->value_id, codegen::LinearPos{now});
+        if (d == UINT32_MAX) ++ctx.spill_trace->victims_dead;  // muerta (Belady trivial).
+        else                 ++ctx.spill_trace->victims_alive; // uso lejano (Belady real).
     };
 
     for (const AbstractValue *v : order) {
@@ -171,6 +196,7 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
             if (sc > best) { best = sc; victim = a.v; }
         }
 
+        record_victim(victim, v->start); // instrumento: razon de la victima.
         if (victim == v) {
             out.spill(v->value_id); // v es la peor de mantener -> derramar v.
         } else {

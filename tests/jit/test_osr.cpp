@@ -204,7 +204,7 @@ int main() {
     }
     const TargetRegInfo &tri = target_x86_64_vm_abi();
     IntervalResult ivs = build_intervals(mf, tri);
-    RegAlloc ra = linear_scan(ivs, tri);
+    codegen::RegAlloc ra = linear_scan(ivs, tri);
 
     OsrEmit osr;
     osr.mode = OsrEmit::C2_ENTRY;

@@ -110,7 +110,7 @@ struct OsrEmit {
  *             live-in).  Rellena @c osr->osr_entry_label / @c osr_entry_valid.
  * @return     Nueva MFunction fisica lista para el encoder.
  */
-MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
+MFunction rewrite_to_physical(const MFunction &vf, const codegen::RegAlloc &ra,
                               const TargetRegInfo &tri,
                               AbiKind abi = AbiKind::HOST_LEAF,
                               const IntervalResult *ivs = nullptr,

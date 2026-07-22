@@ -55,7 +55,7 @@ class X86Target final : public CodegenTarget {
                            mode32_, fisa_, emit_line_map_);
     }
 
-    MFunction rewrite(const MFunction &vf, const RegAlloc &ra,
+    MFunction rewrite(const MFunction &vf, const codegen::RegAlloc &ra,
                       const IntervalResult &ivs) const override {
         return rewrite_to_physical(vf, ra, reg_info(), AbiKind::HOST_LEAF,
                                    &ivs);

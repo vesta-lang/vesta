@@ -499,7 +499,7 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
 namespace {
 
 /// Sustituye un operando VREG por su registro fisico (o UINT8_MAX si spill).
-MOperand phys_of(const MOperand &o, const RegAlloc &ra, bool &is_spill,
+MOperand phys_of(const MOperand &o, const codegen::RegAlloc &ra, bool &is_spill,
                  uint32_t &slot) {
     is_spill = false;
     if (o.kind != MOperandKind::VREG) return o;
@@ -520,7 +520,7 @@ MOperand spill_mem(uint32_t slot, int32_t spill_base) {
 
 } // namespace
 
-MFunction Arm64Target::rewrite(const MFunction &vf, const RegAlloc &ra,
+MFunction Arm64Target::rewrite(const MFunction &vf, const codegen::RegAlloc &ra,
                                const IntervalResult &ivs) const {
     (void)ivs;
     MFunction pf = vf;             // copia estructura (imm64_pool, reloc_symbols)

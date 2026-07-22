@@ -52,6 +52,7 @@
 #include "codegen/rbank/constraints.h"
 #include "codegen/rbank/objective.h"
 #include "codegen/rbank/physical_bank.h"
+#include "jit/interval.h" // MachineNextUseFacts (Fact del nivel MachineIR) + codegen::LinearPos
 
 #include <cstdint>
 
@@ -87,9 +88,56 @@ struct Budget {
 };
 
 /**
+ * @struct SpillTrace
+ * @brief Contador (opcional, gated por el instrumento) de POR QUE se eligio cada
+ *        victima de spill.  Responde la pregunta clave de Belady: ¿esta el
+ *        allocator matando valores YA MUERTOS (next-use trivial) o eligiendo por
+ *        USO MAS LEJANO?  Si casi todas las victimas son "dead", Belady no aporta
+ *        mas que la heuristica de duracion; si hay muchas "alive", Belady trabaja.
+ */
+struct SpillTrace {
+    uint64_t victims_dead  = 0; ///< victima SIN proximo uso (muerta -> Belady trivial).
+    uint64_t victims_alive = 0; ///< victima con next-use finito (Belady real: uso lejano).
+    uint64_t spills_total  = 0; ///< total de valores derramados.
+    // Taxonomia: POR QUE existe cada spill (cierra el modelo explicativo).  La
+    // rellena rbank_allocate con classify_spills sobre la asignacion PRE-recovery.
+    uint64_t tax_fully      = 0; ///< lane libre en TODO su intervalo -> Recovery.
+    uint64_t tax_partially  = 0; ///< lane libre en algun subintervalo -> Splitting.
+    uint64_t tax_structural = 0; ///< nunca hay lane libre -> inevitable (overflow).
+    uint64_t tax_splitting_potential = 0; ///< techo del splitting (area libre de los partially).
+    // Recuperacion real de tax_fully.  KPI: Fully(limite superior) / Recovered(greedy)
+    // / Potential = Fully - Recovered (fully que el greedy no llego a recuperar).
+    uint64_t rec_greedy = 0; ///< spills recuperados por recover_spills (greedy).
+
+    void add(const SpillTrace &o) noexcept {
+        victims_dead += o.victims_dead;
+        victims_alive += o.victims_alive;
+        spills_total += o.spills_total;
+        tax_fully += o.tax_fully;
+        tax_partially += o.tax_partially;
+        tax_structural += o.tax_structural;
+        tax_splitting_potential += o.tax_splitting_potential;
+        rec_greedy += o.rec_greedy;
+    }
+};
+
+/**
  * @struct OptimizationContext
  * @brief Firma estable que recibe la DecisionPolicy: punteros a las piezas +
  *        objetivo/presupuesto por valor.
+ *
+ * PRINCIPIO (no negociable): el contexto NO contiene conocimiento; contiene la
+ * FORMA DE PREGUNTAR al conocimiento.  No es un almacen, es una INTERFAZ.  El
+ * allocator llama @c ctx.next_use_distance() / @c ctx.spill_terms_for() sin saber
+ * de donde sale el dato -> se puede cambiar por completo el backend de Facts sin
+ * tocar ninguna politica.  Esto es lo que lo mantiene respirando a largo plazo.
+ *
+ * EVOLUCION (cuando crezca): separar CONFIGURACION (bank/constraints/objective/
+ * budget) de CONOCIMIENTO (next_use/hw_cost/profile/loop/region/history).  Hoy el
+ * conocimiento son 1-2 punteros sueltos; en cuanto lleguen profile/region/history
+ * hay que agruparlos tras un @c ctx.knowledge.*() para que esto no derive en un
+ * God Object.  El limite es CONCEPTUAL: config = "que problema resolver", knowledge
+ * = "que se de del programa/hardware".
  *
  * Los punteros son NULABLES: un contexto de Fase 0 puede no tener aun Facts,
  * Profile, Region, CandidateSpace o History cableados.  Las accessors permiten
@@ -114,6 +162,16 @@ struct OptimizationContext {
     // hardware (hw_cost) -> terms -> decision.
     SpillCostCard               hw_cost;               ///< coste HW (Tipo C reducido).
 
+    // --- Fact del NIVEL MACHINEIR + trace (cableados por rbank_allocate) ---
+    /// Next-use por vreg (Belady).  PUNTERO (no copia): lo computa el caller
+    /// (@c compute_next_use(mf)) y lo cablea aqui.  nullptr = sin Belady -> el
+    /// allocator cae a la heuristica de duracion restante.  Es la FACHADA de
+    /// Knowledge: el allocator pide @c ctx.next_use_distance(), no sabe su origen.
+    const jit::MachineNextUseFacts *next_use = nullptr;
+    /// Trace opcional de la razon de cada victima de spill (instrumento; nullptr
+    /// = sin conteo).  El allocator lo rellena si esta presente.
+    SpillTrace *spill_trace = nullptr;
+
     // --- Huecos para Fase 0.25+ (accessors lazy al AnalysisManager) ---
     // Se anaden como punteros a los analisis cuando existan, NUNCA copiados:
     //   * Facts        : liveness / loop-info / points-to / escape (capa analysis).
@@ -127,6 +185,19 @@ struct OptimizationContext {
     bool has_bank() const noexcept { return bank != nullptr; }
     bool has_constraints() const noexcept { return constraints != nullptr; }
     bool has_hw_cost() const noexcept { return hw_cost.from_hw; }
+    /// ¿Hay Fact de next-use cableado (Belady disponible)?
+    bool has_next_use() const noexcept { return next_use != nullptr; }
+    /// Distancia al proximo uso del @p vreg desde @p now (dominio MachineIR).
+    /// @c UINT32_MAX si el vreg no se vuelve a usar (muerto -> victima ideal
+    /// Belady), o si no hay Fact cableado.
+    /// DEUDA (consistencia): esto reintroduce un SENTINEL (UINT32_MAX), justo lo
+    /// que @c codegen::LinearPos::invalid() vino a eliminar -- "el infinito no es una
+    /// distancia".  Migrar a un tipo que exprese ausencia (optional<uint32_t> o un
+    /// @c DistanceToNextUse con estado no-valido) cuando se toque la interfaz; el
+    /// caller ya distingue el caso muerto con @c has_next_use() + el horizonte.
+    uint32_t next_use_distance(uint32_t vreg, codegen::LinearPos now) const noexcept {
+        return next_use ? next_use->distance_to_next_use(vreg, now) : UINT32_MAX;
+    }
     const PhysicalRegisterBank &get_bank() const noexcept { return *bank; }
     const ConstraintSet &get_constraints() const noexcept { return *constraints; }
     const ObjectiveWeights &weights() const noexcept { return objective; }

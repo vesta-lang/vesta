@@ -695,4 +695,69 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
     return out;
 }
 
+/*
+ * @brief Produce MachineNextUseFacts: por cada vreg, las posiciones de sus USOS
+ *        (uso en 2*gi) en la MISMA numeracion que build_intervals.  Replica el
+ *        criterio de operandos de build_intervals::each_vreg (roles USE/USEDEF +
+ *        INLINE_ASM_RAW) pero recolecta SOLO los usos (el def no es uso).  Dos
+ *        pasadas -> CSR contiguo.  No mira el IR: solo el MachineIR asignado.
+ */
+MachineNextUseFacts compute_next_use(const MFunction &mf) {
+    MachineNextUseFacts f;
+    const uint32_t NV = mf.vreg_count;
+    const size_t   NB = mf.blocks.size();
+
+    uint32_t total = 0;
+    for (size_t b = 0; b < NB; ++b)
+        total += static_cast<uint32_t>(mf.blocks[b].instrs.size());
+    f.max_pos = 2u * total;
+
+    if (NV == 0) {
+        f.off.assign(1, 0);
+        return f;
+    }
+
+    /* Vregs USADOS de una instr -- mismo criterio que build_intervals::each_vreg,
+     * pero solo USE/USEDEF (para next-use el def no cuenta como uso). */
+    auto each_use = [&mf](const MInstr &in, auto &&fn) {
+        if (in.op == MOp::INLINE_ASM_RAW) {
+            const uint32_t idx = static_cast<uint32_t>(in.src1.value);
+            if (idx < mf.asm_blobs.size())
+                for (uint32_t v : mf.asm_blobs[idx].in_vregs)
+                    fn(v);
+            return;
+        }
+        const InstrRoles roles = operand_roles(in.op);
+        auto is_use = [](OperandRole r) {
+            return r == OperandRole::USE || r == OperandRole::USEDEF;
+        };
+        if (in.dst.is_vreg() && is_use(roles.dst)) fn(in.dst.vreg_id());
+        if (in.src1.is_vreg() && is_use(roles.src1)) fn(in.src1.vreg_id());
+        if (in.src2.is_vreg() && is_use(roles.src2)) fn(in.src2.vreg_id());
+    };
+
+    /* Pasada 1: contar usos por vreg (para dimensionar el CSR). */
+    std::vector<uint32_t> count(NV, 0);
+    for (size_t b = 0; b < NB; ++b)
+        for (const MInstr &in : mf.blocks[b].instrs)
+            each_use(in, [&](uint32_t v) { if (v < NV) ++count[v]; });
+
+    f.off.resize(NV + 1, 0);
+    for (uint32_t v = 0; v < NV; ++v) f.off[v + 1] = f.off[v] + count[v];
+    f.use_pos.resize(f.off[NV]);
+
+    /* Pasada 2: llenar (gi global -> pos de uso 2*gi).  El recorrido lineal es
+     * monotono (2*gi creciente) y el MachineIR ya no tiene PHI (resueltos a
+     * copies), asi que los usos de cada vreg quedan ORDENADOS sin sort. */
+    std::vector<uint32_t> cur(f.off.begin(), f.off.end() - 1);
+    uint32_t gi = 0;
+    for (size_t b = 0; b < NB; ++b)
+        for (const MInstr &in : mf.blocks[b].instrs) {
+            const uint32_t pos = 2u * gi;
+            each_use(in, [&](uint32_t v) { if (v < NV) f.use_pos[cur[v]++] = pos; });
+            ++gi;
+        }
+    return f;
+}
+
 } // namespace jit
