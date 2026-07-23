@@ -188,7 +188,7 @@ bool is_bin_alu(MOp op) noexcept {
  * @struct AllocationResolver
  * @brief El punto de entrada del Rewrite a las ubicaciones.  Es la funcion
  *
- *     (valor, momento)  ->  ResolvedLocation
+ *     (valor, momento)  ->  ValueLocation
  *
  * OCULTA por completo: el timeline, los segmentos, la busqueda por posicion y la
  * convencion temporal (use_point/def_point).  Quien lo usa (el Lowerer) NO sabe COMO se
@@ -201,13 +201,13 @@ struct AllocationResolver {
     const codegen::AllocationTimeline *timeline = nullptr;
     uint32_t cur_gi = 0; ///< instr actual; resolve_use/def preguntan use/def_point(cur_gi).
 
-    codegen::ResolvedLocation resolve_at(uint32_t vid, codegen::LinearPos pos) const noexcept {
+    codegen::ValueLocation resolve_at(uint32_t vid, codegen::LinearPos pos) const noexcept {
         return timeline->lookup(vid, pos);
     }
-    codegen::ResolvedLocation resolve_use(uint32_t vid) const noexcept {
+    codegen::ValueLocation resolve_use(uint32_t vid) const noexcept {
         return resolve_at(vid, codegen::use_point(cur_gi));
     }
-    codegen::ResolvedLocation resolve_def(uint32_t vid) const noexcept {
+    codegen::ValueLocation resolve_def(uint32_t vid) const noexcept {
         return resolve_at(vid, codegen::def_point(cur_gi));
     }
 };
@@ -464,19 +464,19 @@ struct Lowerer {
     }
 
     /**
-     * @brief Traduce una @c ResolvedLocation a operando fisico (registro o slot de stack).
+     * @brief Traduce una @c ValueLocation a operando fisico (registro o slot de stack).
      *        El Rewrite pregunta is_register()/is_stack() -- NUNCA compara un enum ni lee
      *        un slot a pelo.  DEUDA: @c slot_mem SUPONE que "en memoria" == spill slot; el
      *        dia que la memoria pueda ser home location / remat / frame temporal, esto es
-     *        otra traduccion (ver @c resolved_location.h).
+     *        otra traduccion (ver @c value_location.h).
      */
-    MOperand to_operand(codegen::ResolvedLocation rl, uint8_t width) const noexcept {
+    MOperand to_operand(codegen::ValueLocation rl, uint8_t width) const noexcept {
         if (rl.is_register())
             return MOperand::make_reg(static_cast<MReg>(rl.register_id()), width);
         return slot_mem(rl.stack_slot()); // is_stack()
     }
     /* El Rewrite pregunta por el MOMENTO del operando (use/def), nunca por la posicion; el
-     * resolver traduce el momento a una @c ResolvedLocation.  Quien conoce el rol (el que
+     * resolver traduce el momento a una @c ValueLocation.  Quien conoce el rol (el que
      * recorre la instruccion) invoca la resolucion adecuada -- resolve_* no lo deduce. */
     MOperand resolve_use(const MOperand &o) const noexcept {
         return o.is_vreg() ? to_operand(resolver.resolve_use(o.vreg_id()), o.width) : o;
@@ -486,7 +486,7 @@ struct Lowerer {
     }
     /* NO hay helpers de "spilled"/"slot_of": pertenecian al modelo ANTIGUO (spill).  El
      * call site pregunta al resolver por el MOMENTO del operando y lee la
-     * @c ResolvedLocation -- @c resolver.resolve_def(vid).is_memory() / .stack_slot(), o
+     * @c ValueLocation -- @c resolver.resolve_def(vid).is_memory() / .stack_slot(), o
      * @c resolver.resolve_at(v, pos) para los GC roots vivos en un CALL.  Asi el Rewrite
      * habla del modelo TEMPORAL ("¿donde vive este valor en este momento?"), no de spills. */
 
@@ -2427,7 +2427,7 @@ MFunction rewrite_to_physical(const MFunction &vf, const codegen::AllocationResu
                 for (const OsrCaptureSlot &c : caps) {
                     const MOperand dstmem = MOperand::make_mem(
                         MReg::RAX, static_cast<int32_t>(c.vid * 8u));
-                    const codegen::ResolvedLocation cl = alloc.timeline.lookup(
+                    const codegen::ValueLocation cl = alloc.timeline.lookup(
                         c.vid, codegen::LinearPos{2u * first_gi[header]});
                     if (cl.is_register()) {
                         const uint8_t rid = cl.register_id();
@@ -2598,7 +2598,7 @@ MFunction rewrite_to_physical(const MFunction &vf, const codegen::AllocationResu
             for (uint32_t v : live_in) {
                 const MOperand srcmem =
                     MOperand::make_mem(base, static_cast<int32_t>(v * 8u));
-                const codegen::ResolvedLocation vl = alloc.timeline.lookup(
+                const codegen::ValueLocation vl = alloc.timeline.lookup(
                     v, codegen::LinearPos{header_pos});
                 if (vl.is_register()) {
                     ob.push_back(MInstr::make_unary(

@@ -210,7 +210,7 @@ int main() {
     OsrEmit osr;
     osr.mode = OsrEmit::C2_ENTRY;
     osr.header_block = 1; // el loop header
-    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::SplitPlan{}), tri, AbiKind::VM, &ivs, &osr);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM, &ivs, &osr);
 
     CHECK(osr.osr_entry_valid, "se emitio el bloque OSR-entry");
 

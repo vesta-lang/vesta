@@ -18,7 +18,7 @@
  * El Rewrite conoce SOLO dos conceptos: @c result.frame y @c result.timeline.lookup(
  * vreg, pos).  Nada mas.  Lugar del pipeline:
  *
- *     LaneAssignment -> FragmentationRecovery -> SplitPlan -> TimelineBuilder
+ *     LaneAssignment -> FragmentationRecovery -> AssignmentPlan -> TimelineBuilder
  *                                                                 |
  *                                                          AllocationResult
  *                                                          (frame + timeline)

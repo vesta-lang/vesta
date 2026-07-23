@@ -137,7 +137,7 @@ static bool run_vm(const ir::IrFunction &fn, Proxy &px) {
     }
     const TargetRegInfo &tri = target_x86_64_vm_abi();
     codegen::RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
-    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::SplitPlan{}), tri, AbiKind::VM);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM);
     X86Encoder enc;
     std::vector<uint8_t> bytes;
     if (enc.encode(pf, bytes) == 0 || bytes.empty()) {

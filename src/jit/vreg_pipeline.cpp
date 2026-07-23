@@ -389,7 +389,7 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
     }
 
     /* 4. Rewrite a fisico (VM_ABI) + stackmaps de GC roots en cada CALL. */
-    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::SplitPlan{}), tri, AbiKind::VM, &ivs);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM, &ivs);
 
     /* 4b. P1 peephole: borrar los self-moves (`mov rX, rX`) que el coalescing
      *     dejo al asignar el mismo fisico a los dos extremos de una copia. */
@@ -484,7 +484,7 @@ uint8_t *vreg_compile_callback(const ir::IrFunction &fn, CodeCache &cc,
         }
     }
 
-    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::SplitPlan{}), tri, AbiKind::VM, &ivs);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM, &ivs);
     peephole_physical(pf);
     maybe_schedule(pf, sched::EffIsa::X86, sched::SchedMode::JIT_AUTO);
 
@@ -668,7 +668,7 @@ uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,
     osr.mode = OsrEmit::C2_ENTRY;
     osr.header_block = static_cast<MBlockId>(header_block);
     osr.required_captures = required_captures; // red de seguridad live-in
-    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::SplitPlan{}), tri, AbiKind::VM, &ivs, &osr);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM, &ivs, &osr);
     maybe_schedule(pf, sched::EffIsa::X86, sched::SchedMode::JIT_AUTO);
     if (!osr.osr_entry_valid) return nullptr; // no se pudo emitir el entry
 

@@ -6,8 +6,8 @@
  */
 
 /**
- * @file codegen/resolved_location.h
- * @brief @c ResolvedLocation: la ubicacion RESUELTA de un valor materializado, como
+ * @file codegen/value_location.h
+ * @brief @c ValueLocation: la ubicacion RESUELTA de un valor materializado, como
  *        ABSTRACCION -- el consumidor (Rewrite) pregunta @c is_register() / @c is_memory(),
  *        NUNCA lee un enum ni un campo a pelo.
  *
@@ -25,18 +25,18 @@
  * @c Storage -- responde "¿donde se ALMACENA el valor?", no "¿que tipo de sitio es?".)
  */
 
-#ifndef VESTA_CODEGEN_RESOLVED_LOCATION_H
-#define VESTA_CODEGEN_RESOLVED_LOCATION_H
+#ifndef VESTA_CODEGEN_VALUE_LOCATION_H
+#define VESTA_CODEGEN_VALUE_LOCATION_H
 
 #include <cstdint>
 
 namespace codegen {
 
 /**
- * @class ResolvedLocation
+ * @class ValueLocation
  * @brief Donde vive un valor materializado, expuesto SOLO por predicados.
  */
-class ResolvedLocation {
+class ValueLocation {
   public:
     /// Tags de construccion: el productor (el timeline) elige uno.  Un sitio nuevo
     /// (Constant, Home, Tls...) anyade un TAG, no un verbo en el namespace del tipo.
@@ -47,9 +47,9 @@ class ResolvedLocation {
         uint32_t slot;
     };
 
-    constexpr ResolvedLocation() noexcept = default; ///< None (el valor no vive aqui).
-    constexpr ResolvedLocation(Register r) noexcept : kind_(Kind::Register), reg_(r.id) {}
-    constexpr ResolvedLocation(Stack s) noexcept : kind_(Kind::Stack), slot_(s.slot) {}
+    constexpr ValueLocation() noexcept = default; ///< None (el valor no vive aqui).
+    constexpr ValueLocation(Register r) noexcept : kind_(Kind::Register), reg_(r.id) {}
+    constexpr ValueLocation(Stack s) noexcept : kind_(Kind::Stack), slot_(s.slot) {}
 
     constexpr bool is_none() const noexcept { return kind_ == Kind::None; }
 
@@ -72,4 +72,4 @@ class ResolvedLocation {
 
 } // namespace codegen
 
-#endif // VESTA_CODEGEN_RESOLVED_LOCATION_H
+#endif // VESTA_CODEGEN_VALUE_LOCATION_H

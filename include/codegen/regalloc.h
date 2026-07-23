@@ -23,18 +23,18 @@
  * mas campos.  Cada capa responde UNA pregunta (y NINGUNA existente cambia de significado):
  *
  *     LaneAssignment      ¿que lane recibe el valor?
- *     SplitPlan           ¿que parte del valor merece vivir en registro?
+ *     AssignmentPlan           ¿que parte del valor merece vivir en registro?
  *     AllocationTimeline  ¿donde vive el valor en el tiempo?
  *
  * Filosofia del proyecto -- Conocimiento -> Plan -> Transformacion:
  *
  *     Conocimiento:   AllocatorDiagnostics + SpillTaxonomy + execution_weight / hw_cost.
- *     Plan:           SplitPlan  (lo que producen las transformaciones de asignacion).
+ *     Plan:           AssignmentPlan  (lo que producen las transformaciones de asignacion).
  *     Transformacion: TimelineBuilder (materializa un AllocationTimeline) + Rewrite.
  *
- * La transformacion de asignacion produce un @c SplitPlan; @c TimelineBuilder materializa
+ * La transformacion de asignacion produce un @c AssignmentPlan; @c TimelineBuilder materializa
  * un @c AllocationTimeline, que constituye el formato TEMPORAL consumido por el Rewrite.
- * La Recovery encaja: produce un SplitPlan de 1 tramo (MEM->REG cubriendo toda la vida);
+ * La Recovery encaja: produce un AssignmentPlan de 1 tramo (MEM->REG cubriendo toda la vida);
  * el Splitting produce MEM->REG->MEM; el Timeline no sabe cual lo creo (recovered_area lo
  * mide la transformacion, no el Timeline).
  *

@@ -123,7 +123,7 @@ static void test_gc_root_found_by_scan() {
     IntervalResult ivs = build_intervals(mf, tri);
     codegen::RegAlloc ra = linear_scan(ivs, tri);
     CHECK(ra.spilled(thisp), "this (GC root) spilled");
-    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::SplitPlan{}), tri, AbiKind::VM, &ivs);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM, &ivs);
 
     /* 3. Encode -> bytes (rellena pc_offset en pf.stackmaps). */
     X86Encoder enc;

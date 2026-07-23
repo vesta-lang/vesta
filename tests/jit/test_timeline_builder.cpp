@@ -7,7 +7,7 @@
 
 /**
  * @file tests/jit/test_timeline_builder.cpp
- * @brief Splitting incremento 1: el @c TimelineBuilder trivial (SplitPlan vacio) produce
+ * @brief Splitting incremento 1: el @c TimelineBuilder trivial (AssignmentPlan vacio) produce
  *        un @c AllocationTimeline EQUIVALENTE a la @c RegAlloc plana.  Es la garantia que
  *        permitira al Rewrite consumir el timeline sin cambiar el codigo emitido antes de
  *        que exista un split real: en TODA posicion viva, at(pos) == ra.assign[vreg].
@@ -53,21 +53,21 @@ int main() {
     ra.assign[1] = {RegAlloc::Loc::SPILL, 0, /*slot*/ 2};
     ra.assign[2] = {RegAlloc::Loc::NONE, 0, 0};
 
-    SplitPlan plan; // vacio -> caso trivial (equivalente a RegAlloc).
+    AssignmentPlan plan; // vacio -> caso trivial (equivalente a RegAlloc).
     const AllocationResult ar = build_allocation_result(ra, &ivs, plan);
     const AllocationTimeline &tl = ar.timeline;
 
     CHECK(tl.values.size() == 3);
 
-    // El Rewrite usa SOLO tl.lookup(vreg,pos) -> ResolvedLocation (ni segments ni enum):
+    // El Rewrite usa SOLO tl.lookup(vreg,pos) -> ValueLocation (ni segments ni enum):
     // vreg 0 en REG r5 [10,20).
     CHECK(tl.lookup(0, LinearPos{9}).is_none());  // antes del rango.
-    const ResolvedLocation l0 = tl.lookup(0, LinearPos{15});
+    const ValueLocation l0 = tl.lookup(0, LinearPos{15});
     CHECK(l0.is_register() && l0.register_id() == 5);
     CHECK(tl.lookup(0, LinearPos{20}).is_none()); // 'to' es exclusive.
 
     // vreg 1: memoria (slot 2) en [4,30).
-    const ResolvedLocation l1 = tl.lookup(1, LinearPos{4});
+    const ValueLocation l1 = tl.lookup(1, LinearPos{4});
     CHECK(l1.is_memory() && l1.stack_slot() == 2);
     CHECK(!tl.lookup(1, LinearPos{29}).is_none());
     CHECK(tl.lookup(1, LinearPos{30}).is_none());
@@ -79,18 +79,57 @@ int main() {
     CHECK(ar.frame.num_spill_slots == ra.num_spill_slots);
     CHECK(ar.frame.callee_saved_used == ra.callee_saved_used);
 
-    // EQUIVALENCIA CON RegAlloc: en toda posicion viva de cada vreg, lookup coincide con
-    // la asignacion plana (via los predicados de ResolvedLocation).
+    // El timeline trivial es SEMANTICAMENTE equivalente a la asignacion plana: en toda
+    // posicion viva devuelve la misma ubicacion.  Se compara COMPORTAMIENTO, no estructuras.
     for (uint32_t v = 0; v < ivs.intervals.size(); ++v)
         for (const jit::LiveRange &r : ivs.intervals[v].ranges)
             for (uint32_t p = r.from; p < r.to; ++p) {
-                const ResolvedLocation loc = tl.lookup(v, LinearPos{p});
+                const ValueLocation loc = tl.lookup(v, LinearPos{p});
                 const auto &va = ra.assign[v];
                 if (va.loc == RegAlloc::Loc::REG)
                     CHECK(loc.is_register() && loc.register_id() == va.reg);
                 else
                     CHECK(loc.is_memory() && loc.stack_slot() == va.slot);
             }
+
+    /* --- El builder MATERIALIZA las afirmaciones del plan ---
+     * vreg 1 vive en memoria (slot 2) en [4,30); el plan AFIRMA que en [10,20) vive en r7.
+     * Se comprueba el CONTRATO ("que ubicacion da cada posicion"), NUNCA la representacion
+     * interna: cuantos segmentos use el builder es cosa suya (manana podria fusionarlos,
+     * usar un arbol o una tabla y seguir siendo correcto). */
+    AssignmentPlan sp;
+    sp.add(1, LinearPos{10}, LinearPos{20}, ValueLocation{ValueLocation::Register{7}});
+    const AllocationResult ar2 = build_allocation_result(ra, &ivs, sp);
+    const AllocationTimeline &tl2 = ar2.timeline;
+
+    // CONTINUIDAD: barrer TODA la vida, no puntos sueltos.  Un borde corrido (un REG de
+    // mas o de menos en la frontera) se escaparia comprobando solo los extremos.
+    for (uint32_t p = 4; p < 10; ++p)
+        CHECK(tl2.lookup(1, LinearPos{p}).is_memory() &&
+              tl2.lookup(1, LinearPos{p}).stack_slot() == 2);
+    for (uint32_t p = 10; p < 20; ++p) // inicio inclusive, fin exclusive.
+        CHECK(tl2.lookup(1, LinearPos{p}).is_register() &&
+              tl2.lookup(1, LinearPos{p}).register_id() == 7);
+    for (uint32_t p = 20; p < 30; ++p)
+        CHECK(tl2.lookup(1, LinearPos{p}).is_memory() &&
+              tl2.lookup(1, LinearPos{p}).stack_slot() == 2);
+    CHECK(tl2.lookup(1, LinearPos{3}).is_none());  // antes de la vida.
+    CHECK(tl2.lookup(1, LinearPos{30}).is_none()); // fuera de la vida.
+    // Un vreg NO mencionado por el plan queda intacto.
+    CHECK(tl2.lookup(0, LinearPos{15}).is_register() &&
+          tl2.lookup(0, LinearPos{15}).register_id() == 5);
+
+    /* --- Una afirmacion cuyo tramo cae FUERA de la vida del valor no cambia nada ---
+     * (caso barato que caza errores de limites: el intervalo no debe tocar ni inventar). */
+    AssignmentPlan out_of_range;
+    out_of_range.add(1, LinearPos{100}, LinearPos{120},
+                     ValueLocation{ValueLocation::Register{9}});
+    const AllocationResult ar3 = build_allocation_result(ra, &ivs, out_of_range);
+    const AllocationTimeline &tl3 = ar3.timeline;
+    for (uint32_t p = 4; p < 30; ++p) // toda la vida intacta en memoria.
+        CHECK(tl3.lookup(1, LinearPos{p}).is_memory() &&
+              tl3.lookup(1, LinearPos{p}).stack_slot() == 2);
+    CHECK(tl3.lookup(1, LinearPos{110}).is_none()); // el tramo no inventa vida.
 
     std::printf("--- %d checks, %d fallos ---\n", g_checks, g_fails);
     return g_fails ? 1 : 0;

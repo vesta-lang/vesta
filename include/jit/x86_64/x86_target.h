@@ -59,7 +59,7 @@ class X86Target final : public CodegenTarget {
     MFunction rewrite(const MFunction &vf, const codegen::RegAlloc &ra,
                       const IntervalResult &ivs) const override {
         return rewrite_to_physical(
-            vf, codegen::build_allocation_result(ra, &ivs, codegen::SplitPlan{}),
+            vf, codegen::build_allocation_result(ra, &ivs, codegen::AssignmentPlan{}),
             reg_info(), AbiKind::HOST_LEAF, &ivs);
     }
 

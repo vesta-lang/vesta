@@ -96,7 +96,7 @@ static void test_no_spill() {
 
     const TargetRegInfo &tri = target_x86_64_vm_abi();
     codegen::RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
-    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::SplitPlan{}), tri);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri);
 
     CHECK(ra.num_spill_slots == 0, "sin spill con target completo");
     CodeCache cc;
@@ -140,7 +140,7 @@ static void test_with_spill() {
 
     TargetRegInfo tri = small_target();
     codegen::RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
-    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::SplitPlan{}), tri);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri);
 
     CHECK(ra.num_spill_slots >= 1, "hubo spill (4 vivos, 3 regs)");
     CodeCache cc;
