@@ -484,21 +484,11 @@ struct Lowerer {
     MOperand resolve_def(const MOperand &o) const noexcept {
         return o.is_vreg() ? to_operand(resolver.resolve_def(o.vreg_id()), o.width) : o;
     }
-    /* "spilled" = el Rewrite pregunta ¿el valor vive en MEMORIA? (por rol dst=def, o en la
-     * posicion del CALL para los GC roots).  Usa @c is_memory(): si manana la memoria se
-     * diversifica (home/TLS) el predicado sigue valiendo sin enumerar cada tipo. */
-    bool spilled_def(uint32_t vid) const noexcept {
-        return resolver.resolve_def(vid).is_memory();
-    }
-    uint32_t slot_of_def(uint32_t vid) const noexcept {
-        return resolver.resolve_def(vid).stack_slot();
-    }
-    bool spilled_at(uint32_t vid, codegen::LinearPos pos) const noexcept {
-        return resolver.resolve_at(vid, pos).is_memory();
-    }
-    uint32_t slot_of_at(uint32_t vid, codegen::LinearPos pos) const noexcept {
-        return resolver.resolve_at(vid, pos).stack_slot();
-    }
+    /* NO hay helpers de "spilled"/"slot_of": pertenecian al modelo ANTIGUO (spill).  El
+     * call site pregunta al resolver por el MOMENTO del operando y lee la
+     * @c ResolvedLocation -- @c resolver.resolve_def(vid).is_memory() / .stack_slot(), o
+     * @c resolver.resolve_at(v, pos) para los GC roots vivos en un CALL.  Asi el Rewrite
+     * habla del modelo TEMPORAL ("¿donde vive este valor en este momento?"), no de spills. */
 
     /** @brief True si @p o es un valor de coma flotante (vreg de clase FP o
      *  un registro fisico XMM).  Lo usa @c lower() para enrutar los MOV de
@@ -924,7 +914,7 @@ struct Lowerer {
                                 op == MOp::VMULSS || op == MOp::VDIVSS);
             const MOp mv = is_ss ? MOp::MOVSS : MOp::MOVSD;
             const bool dst_spilled =
-                in.dst.is_vreg() && spilled_def(in.dst.vreg_id());
+                in.dst.is_vreg() && resolver.resolve_def(in.dst.vreg_id()).is_memory();
             const MOperand dreg = dst_spilled ? xmm(fscr0) : resolve_def(in.dst);
             MOperand s1 = resolve_use(in.src1);
             if (s1.kind == MOperandKind::MEM) { // vvvv debe ser reg
@@ -958,7 +948,7 @@ struct Lowerer {
                 (op == MOp::ADDSD || op == MOp::MULSD || op == MOp::ADDSS ||
                  op == MOp::MULSS || op == MOp::XORPS || op == MOp::ANDPS);
             const bool dst_spilled =
-                in.dst.is_vreg() && spilled_def(in.dst.vreg_id());
+                in.dst.is_vreg() && resolver.resolve_def(in.dst.vreg_id()).is_memory();
             /* acumulador: el dst fisico si esta en XMM, o fscr0 si spilled. */
             const MOperand acc = dst_spilled ? xmm(fscr0) : resolve_def(in.dst);
             MOperand s1 = resolve_use(in.src1);
@@ -1004,7 +994,7 @@ struct Lowerer {
             }
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
-                    mv, slot_mem(slot_of_def(in.dst.vreg_id())), acc));
+                    mv, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), acc));
             return;
         }
 
@@ -1018,7 +1008,7 @@ struct Lowerer {
                                ? MOp::MOVSS
                                : MOp::MOVSD;
             const bool dst_spilled =
-                in.dst.is_vreg() && spilled_def(in.dst.vreg_id());
+                in.dst.is_vreg() && resolver.resolve_def(in.dst.vreg_id()).is_memory();
             const MOperand pdst = dst_spilled ? xmm(fscr0) : resolve_def(in.dst);
             MOperand s = resolve_use(in.src1);
             if (s.kind == MOperandKind::MEM) {
@@ -1030,7 +1020,7 @@ struct Lowerer {
             out.back().variant = in.variant; // ROUNDSD: modo de redondeo
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
-                    mv, slot_mem(slot_of_def(in.dst.vreg_id())), pdst));
+                    mv, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
             return;
         }
 
@@ -1059,7 +1049,7 @@ struct Lowerer {
         if (op == MOp::CVTSI2SD || op == MOp::CVTSI2SS) {
             const MOp mv = (op == MOp::CVTSI2SS) ? MOp::MOVSS : MOp::MOVSD;
             const bool dst_spilled =
-                in.dst.is_vreg() && spilled_def(in.dst.vreg_id());
+                in.dst.is_vreg() && resolver.resolve_def(in.dst.vreg_id()).is_memory();
             const MOperand pdst = dst_spilled ? xmm(fscr0) : resolve_def(in.dst);
             MOperand s = resolve_use(in.src1); // GP source
             if (s.kind == MOperandKind::MEM) {
@@ -1070,13 +1060,13 @@ struct Lowerer {
             out.back().flags = in.flags; // propagar MI_FLAG_VX_SCALAR
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
-                    mv, slot_mem(slot_of_def(in.dst.vreg_id())), pdst));
+                    mv, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
             return;
         }
         if (op == MOp::CVTTSD2SI || op == MOp::CVTTSS2SI) {
             const MOp mv = (op == MOp::CVTTSS2SI) ? MOp::MOVSS : MOp::MOVSD;
             const bool dst_spilled =
-                in.dst.is_vreg() && spilled_def(in.dst.vreg_id());
+                in.dst.is_vreg() && resolver.resolve_def(in.dst.vreg_id()).is_memory();
             const MOperand pdst = dst_spilled ? reg(scr0) : resolve_def(in.dst);
             MOperand s = resolve_use(in.src1); // XMM source
             if (s.kind == MOperandKind::MEM) {
@@ -1087,12 +1077,12 @@ struct Lowerer {
             out.back().flags = in.flags; // propagar MI_FLAG_VX_SCALAR
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
-                    MOp::MOV, slot_mem(slot_of_def(in.dst.vreg_id())), pdst));
+                    MOp::MOV, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
             return;
         }
         if (op == MOp::CVTSS2SD || op == MOp::CVTSD2SS) {
             const bool dst_spilled =
-                in.dst.is_vreg() && spilled_def(in.dst.vreg_id());
+                in.dst.is_vreg() && resolver.resolve_def(in.dst.vreg_id()).is_memory();
             const MOperand pdst = dst_spilled ? xmm(fscr0) : resolve_def(in.dst);
             MOperand s = resolve_use(in.src1); // XMM source
             if (s.kind == MOperandKind::MEM) {
@@ -1103,7 +1093,7 @@ struct Lowerer {
             out.back().flags = in.flags; // propagar MI_FLAG_VX_SCALAR
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
-                    MOp::MOVSD, slot_mem(slot_of_def(in.dst.vreg_id())), pdst));
+                    MOp::MOVSD, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
             return;
         }
 
@@ -1112,7 +1102,7 @@ struct Lowerer {
          * operando fuente puede estar spilled.  El dst spilled tambien. */
         if (op == MOp::MOVQ_GP_XMM) {
             const bool dst_spilled =
-                in.dst.is_vreg() && spilled_def(in.dst.vreg_id());
+                in.dst.is_vreg() && resolver.resolve_def(in.dst.vreg_id()).is_memory();
             const MOperand pdst = dst_spilled ? xmm(fscr0) : resolve_def(in.dst);
             MOperand s = resolve_use(in.src1); // GP source
             if (s.kind == MOperandKind::MEM) {
@@ -1122,12 +1112,12 @@ struct Lowerer {
             out.push_back(MInstr::make_unary(MOp::MOVQ_GP_XMM, pdst, s));
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
-                    MOp::MOVSD, slot_mem(slot_of_def(in.dst.vreg_id())), pdst));
+                    MOp::MOVSD, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
             return;
         }
         if (op == MOp::MOVQ_XMM_GP) {
             const bool dst_spilled =
-                in.dst.is_vreg() && spilled_def(in.dst.vreg_id());
+                in.dst.is_vreg() && resolver.resolve_def(in.dst.vreg_id()).is_memory();
             const MOperand pdst = dst_spilled ? reg(scr0) : resolve_def(in.dst);
             MOperand s = resolve_use(in.src1); // XMM source
             if (s.kind == MOperandKind::MEM) {
@@ -1137,7 +1127,7 @@ struct Lowerer {
             out.push_back(MInstr::make_unary(MOp::MOVQ_XMM_GP, pdst, s));
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
-                    MOp::MOV, slot_mem(slot_of_def(in.dst.vreg_id())), pdst));
+                    MOp::MOV, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
             return;
         }
 
@@ -1163,11 +1153,11 @@ struct Lowerer {
                 for (uint32_t v = 0; v < NVI; ++v) {
                     const LiveInterval &lv = ivs->intervals[v];
                     if (!lv.is_gc() || !lv.covers(cur_call_pos)) continue;
-                    if (!spilled_at(v, codegen::LinearPos{cur_call_pos}))
+                    if (!resolver.resolve_at(v, codegen::LinearPos{cur_call_pos}).is_memory())
                         continue; // invariante: GC+cross-call -> slot
                     StackmapSlot s;
                     s.rbp_offset =
-                        static_cast<int16_t>(slot_off(slot_of_at(v, codegen::LinearPos{cur_call_pos})));
+                        static_cast<int16_t>(slot_off(resolver.resolve_at(v, codegen::LinearPos{cur_call_pos}).stack_slot()));
                     s.gc_kind = static_cast<StackmapGcKind>(
                         static_cast<uint8_t>(lv.gc_kind - 1u));
                     sm.slots.push_back(s);
@@ -1202,10 +1192,10 @@ struct Lowerer {
                 for (uint32_t v = 0; v < NVI; ++v) {
                     const LiveInterval &lv = ivs->intervals[v];
                     if (!lv.is_gc() || !lv.covers(cur_call_pos)) continue;
-                    if (!spilled_at(v, codegen::LinearPos{cur_call_pos})) continue;
+                    if (!resolver.resolve_at(v, codegen::LinearPos{cur_call_pos}).is_memory()) continue;
                     StackmapSlot s;
                     s.rbp_offset =
-                        static_cast<int16_t>(slot_off(slot_of_at(v, codegen::LinearPos{cur_call_pos})));
+                        static_cast<int16_t>(slot_off(resolver.resolve_at(v, codegen::LinearPos{cur_call_pos}).stack_slot()));
                     s.gc_kind = static_cast<StackmapGcKind>(
                         static_cast<uint8_t>(lv.gc_kind - 1u));
                     sm.slots.push_back(s);
@@ -1281,10 +1271,10 @@ struct Lowerer {
                 for (uint32_t v = 0; v < NVI; ++v) {
                     const LiveInterval &lv = ivs->intervals[v];
                     if (!lv.is_gc() || !lv.covers(cur_call_pos)) continue;
-                    if (!spilled_at(v, codegen::LinearPos{cur_call_pos})) continue;
+                    if (!resolver.resolve_at(v, codegen::LinearPos{cur_call_pos}).is_memory()) continue;
                     StackmapSlot s;
                     s.rbp_offset =
-                        static_cast<int16_t>(slot_off(slot_of_at(v, codegen::LinearPos{cur_call_pos})));
+                        static_cast<int16_t>(slot_off(resolver.resolve_at(v, codegen::LinearPos{cur_call_pos}).stack_slot()));
                     s.gc_kind = static_cast<StackmapGcKind>(
                         static_cast<uint8_t>(lv.gc_kind - 1u));
                     sm.slots.push_back(s);
@@ -1512,12 +1502,12 @@ struct Lowerer {
             const MOperand mem = MOperand::make_mem(addr_reg, fld_disp);
             const MOp mv = fp_mov_for_width(width ? width : 8);
             const bool dst_spilled =
-                in.dst.is_vreg() && spilled_def(in.dst.vreg_id());
+                in.dst.is_vreg() && resolver.resolve_def(in.dst.vreg_id()).is_memory();
             const MOperand pdst = dst_spilled ? xmm(fscr0) : resolve_def(in.dst);
             out.push_back(MInstr::make_unary(mv, pdst, mem));
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
-                    mv, slot_mem(slot_of_def(in.dst.vreg_id())), xmm(fscr0)));
+                    mv, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), xmm(fscr0)));
             return;
         }
 
@@ -1563,7 +1553,7 @@ struct Lowerer {
                 (in.src2.kind == MOperandKind::IMM32) ? in.src2.value : 0;
             MOperand mem = MOperand::make_mem(addr_reg, ld_disp);
             const bool dst_spilled =
-                in.dst.is_vreg() && spilled_def(in.dst.vreg_id());
+                in.dst.is_vreg() && resolver.resolve_def(in.dst.vreg_id()).is_memory();
             MOperand pdst = dst_spilled ? reg(scr0) : resolve_def(in.dst);
             if (width == 8) {
                 out.push_back(MInstr::make_unary(MOp::MOV, pdst, mem));
@@ -1582,7 +1572,7 @@ struct Lowerer {
             }
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
-                    MOp::MOV, slot_mem(slot_of_def(in.dst.vreg_id())), pdst));
+                    MOp::MOV, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
             return;
         }
 
@@ -1635,7 +1625,7 @@ struct Lowerer {
             const MOperand vval = is_store ? resolve_use(in.src2) : MOperand{};
             /* dst del LOAD: reg fisico o scr0 si spilled. */
             const bool dst_spilled =
-                !is_store && in.dst.is_vreg() && spilled_def(in.dst.vreg_id());
+                !is_store && in.dst.is_vreg() && resolver.resolve_def(in.dst.vreg_id()).is_memory();
             MReg pr = MReg::RAX;
             if (!is_store)
                 pr =
@@ -1755,7 +1745,7 @@ struct Lowerer {
             if (inline_ok) out.push_back(MInstr::make_label_def(Ldone));
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
-                    MOp::MOV, slot_mem(slot_of_def(in.dst.vreg_id())),
+                    MOp::MOV, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()),
                     reg(scr0)));
             return;
         }
@@ -1770,12 +1760,12 @@ struct Lowerer {
             alloca_cursor += aligned;
             const MOperand mem = MOperand::make_mem(MReg::RBP, -off);
             const bool dst_spilled =
-                in.dst.is_vreg() && spilled_def(in.dst.vreg_id());
+                in.dst.is_vreg() && resolver.resolve_def(in.dst.vreg_id()).is_memory();
             const MOperand pdst = dst_spilled ? reg(scr0) : resolve_def(in.dst);
             out.push_back(MInstr::make_unary(MOp::LEA, pdst, mem));
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
-                    MOp::MOV, slot_mem(slot_of_def(in.dst.vreg_id())), pdst));
+                    MOp::MOV, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
             return;
         }
 
@@ -1797,10 +1787,10 @@ struct Lowerer {
                     MOperand::make_imm32(static_cast<int32_t>(aligned))));
             out.push_back(MInstr::make_unary(MOp::MOV, sp_mem, reg(scr0)));
             const bool dst_spilled =
-                in.dst.is_vreg() && spilled_def(in.dst.vreg_id());
+                in.dst.is_vreg() && resolver.resolve_def(in.dst.vreg_id()).is_memory();
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
-                    MOp::MOV, slot_mem(slot_of_def(in.dst.vreg_id())),
+                    MOp::MOV, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()),
                     reg(scr0)));
             else
                 out.push_back(
@@ -1810,8 +1800,8 @@ struct Lowerer {
 
         if (op == MOp::MOV) {
             const MOperand rs = resolve_use(in.src1);
-            if (in.dst.is_vreg() && spilled_def(in.dst.vreg_id())) {
-                const uint32_t slot = slot_of_def(in.dst.vreg_id());
+            if (in.dst.is_vreg() && resolver.resolve_def(in.dst.vreg_id()).is_memory()) {
+                const uint32_t slot = resolver.resolve_def(in.dst.vreg_id()).stack_slot();
                 if (rs.kind == MOperandKind::REG) {
                     out.push_back(
                         MInstr::make_unary(MOp::MOV, slot_mem(slot), rs));
@@ -1849,7 +1839,7 @@ struct Lowerer {
                 rs = MOperand::make_reg(scr1, in.src1.width); // width del src
             }
             const bool dst_spilled =
-                in.dst.is_vreg() && spilled_def(in.dst.vreg_id());
+                in.dst.is_vreg() && resolver.resolve_def(in.dst.vreg_id()).is_memory();
             const MOperand pdst = dst_spilled ? reg(scr0) : resolve_def(in.dst);
             MInstr ext;
             ext.op = op;
@@ -1858,7 +1848,7 @@ struct Lowerer {
             out.push_back(ext);
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
-                    MOp::MOV, slot_mem(slot_of_def(in.dst.vreg_id())), pdst));
+                    MOp::MOV, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
             return;
         }
 
@@ -1868,7 +1858,7 @@ struct Lowerer {
              * Solo cantidad INMEDIATA (el selector emite ROL/ROR aqui solo
              * con count constante; variable -> fallback, requiere CL). */
             const bool dst_spilled =
-                in.dst.is_vreg() && spilled_def(in.dst.vreg_id());
+                in.dst.is_vreg() && resolver.resolve_def(in.dst.vreg_id()).is_memory();
             const MOperand pdst = dst_spilled ? reg(scr0) : resolve_def(in.dst);
             const MOperand rs1 = resolve_use(in.src1);
             if (!(pdst.kind == MOperandKind::REG &&
@@ -1881,7 +1871,7 @@ struct Lowerer {
             out.push_back(sh);
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
-                    MOp::MOV, slot_mem(slot_of_def(in.dst.vreg_id())), pdst));
+                    MOp::MOV, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
             return;
         }
 
@@ -1890,12 +1880,12 @@ struct Lowerer {
              * + store).  src puede ser MEM (op r64, r/m64). */
             const MOperand rs = resolve_use(in.src1);
             const bool dst_spilled =
-                in.dst.is_vreg() && spilled_def(in.dst.vreg_id());
+                in.dst.is_vreg() && resolver.resolve_def(in.dst.vreg_id()).is_memory();
             const MOperand pdst = dst_spilled ? reg(scr0) : resolve_def(in.dst);
             out.push_back(MInstr::make_unary(op, pdst, rs));
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
-                    MOp::MOV, slot_mem(slot_of_def(in.dst.vreg_id())), pdst));
+                    MOp::MOV, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
             return;
         }
 
@@ -1903,9 +1893,9 @@ struct Lowerer {
             /* bswap r64: in-place, dst debe ser REG.  Si dst spilled,
              * cargar a scratch, bswap, store.  src1 == dst (mismo vreg). */
             const bool dst_spilled =
-                in.dst.is_vreg() && spilled_def(in.dst.vreg_id());
+                in.dst.is_vreg() && resolver.resolve_def(in.dst.vreg_id()).is_memory();
             if (dst_spilled) {
-                const MOperand sl = slot_mem(slot_of_def(in.dst.vreg_id()));
+                const MOperand sl = slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot());
                 out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0), sl));
                 out.push_back(
                     MInstr::make_unary(MOp::BSWAP, reg(scr0), reg(scr0)));
@@ -1927,12 +1917,12 @@ struct Lowerer {
                 rsrc = reg(scr1);
             }
             const bool dst_spilled =
-                in.dst.is_vreg() && spilled_def(in.dst.vreg_id());
+                in.dst.is_vreg() && resolver.resolve_def(in.dst.vreg_id()).is_memory();
             MInstr c;
             c.op = MOp::CMOVCC;
             c.variant = in.variant;
             if (dst_spilled) {
-                const MOperand sl = slot_mem(slot_of_def(in.dst.vreg_id()));
+                const MOperand sl = slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot());
                 out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0), sl));
                 c.dst = reg(scr0);
                 c.src1 = rsrc;
@@ -1948,7 +1938,7 @@ struct Lowerer {
 
         if (is_bin_alu(op)) {
             const bool dst_spilled =
-                in.dst.is_vreg() && spilled_def(in.dst.vreg_id());
+                in.dst.is_vreg() && resolver.resolve_def(in.dst.vreg_id()).is_memory();
             const MOperand pdst = dst_spilled ? reg(scr0) : resolve_def(in.dst);
             const MOperand rs1 = resolve_use(in.src1);
             const MOperand rs2 = resolve_use(in.src2);
@@ -1966,7 +1956,7 @@ struct Lowerer {
                 out.push_back(MInstr::make_binary(MOp::IMUL, pdst, s1, in.src2));
                 if (dst_spilled)
                     out.push_back(MInstr::make_unary(
-                        MOp::MOV, slot_mem(slot_of_def(in.dst.vreg_id())), pdst));
+                        MOp::MOV, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
                 return;
             }
 
@@ -2011,7 +2001,7 @@ struct Lowerer {
                                        static_cast<MReg>(rs2.reg), 1)));
                 if (dst_spilled)
                     out.push_back(MInstr::make_unary(
-                        MOp::MOV, slot_mem(slot_of_def(in.dst.vreg_id())), pdst));
+                        MOp::MOV, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
                 return;
             }
             if (anti) {
@@ -2039,7 +2029,7 @@ struct Lowerer {
             }
             if (dst_spilled) {
                 out.push_back(MInstr::make_unary(
-                    MOp::MOV, slot_mem(slot_of_def(in.dst.vreg_id())), pdst));
+                    MOp::MOV, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
             }
             return;
         }
