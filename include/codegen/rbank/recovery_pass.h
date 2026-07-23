@@ -95,12 +95,32 @@ struct SpillTaxonomy {
     uint32_t fully      = 0;
     uint32_t partially  = 0;
     uint32_t structural = 0;
-    // splitting_potential = TECHO del splitting: para cada partially, la MAXIMA
-    // duracion libre en una lane admisible (tiempo que ese spill PODRIA estar en
-    // registro en vez de memoria).  Es el wasted_lane_area recuperable si una
-    // Fragmentation Recovery ideal aprovechara todos los huecos disponibles -- se mide
-    // ANTES de implementarla (medir el techo, como fully lo fue de la Recovery).
-    // Cuantifica partially: 954 spills no dicen si son de longitud 1 o 400; esto sí.
+    // splitting_potential = TECHO ESTRUCTURAL del splitting: para cada partially, la
+    // MAXIMA duracion libre en una lane admisible (tiempo que ese spill PODRIA estar en
+    // registro en vez de memoria).  Se mide ANTES de implementar (igual que fully fue el
+    // techo de la Recovery) y cuantifica partially: 954 spills no dicen si son de
+    // longitud 1 o 400; esto si.
+    //
+    // QUE PREGUNTA RESPONDE (no es una cota "floja", es OTRA cota).  Responde:
+    //
+    //     ¿cuanto tiempo de lane libre EXISTE?
+    //
+    // y NO:
+    //
+    //     ¿cuanto tiempo de lane libre coincide con un uso susceptible de recuperarse?
+    //
+    // No descuenta ventanas SIN usos (donde no hay nada que ahorrar), ni la competencia
+    // entre spills por la misma lane, ni las fronteras de bloque.  MEDIDO (2026): el
+    // splitting recupera 33190 de 241372 y el Remaining resultante (209058) convive con
+    // apenas unos miles de posiciones realmente candidatas -- ese Remaining NO es trabajo
+    // pendiente, es una mezcla de oportunidades imposibles, irrelevantes y no explotadas.
+    //
+    // CONSECUENCIA para la regla de oro: mientras el techo sea ESTRUCTURAL, "Remaining
+    // decide el siguiente sprint" no aplica al splitting.  Para que vuelva a decidir hace
+    // falta un techo de OPORTUNIDADES EXPLOTABLES (ventana libre que contenga al menos un
+    // uso) -- un cambio de METRICA, no una correccion.  Es la leccion metodologica del
+    // sprint: un techo mal elegido no da un numero equivocado, da un numero que no
+    // responde a la pregunta que se le hace.
     //
     // METODOLOGIA del backend (no solo del allocator): toda optimizacion nace con el
     // mismo esquema, para dirigirse con datos y no con intuiciones.  REGLA DE ORO:
