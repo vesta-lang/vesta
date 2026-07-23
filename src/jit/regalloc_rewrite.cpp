@@ -13,6 +13,8 @@
 
 #include "jit/regalloc_rewrite.h"
 
+#include "codegen/transition_planner.h" // que movimientos exige cada punto del programa
+
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -484,6 +486,46 @@ struct Lowerer {
     MOperand resolve_def(const MOperand &o) const noexcept {
         return o.is_vreg() ? to_operand(resolver.resolve_def(o.vreg_id()), o.width) : o;
     }
+    /**
+     * @brief Materializa UN movimiento entre dos ubicaciones.  UNICO sitio que decide QUE
+     *        secuencia hace falta; el bucle del Rewrite solo pide "mueve esto alli".
+     *
+     * Aqui crecen los casos SIN que el Rewrite cambie una linea: hoy un MOV, y el caso
+     * memoria->memoria -- que x86 no admite directo -- descompuesto via scratch.  Manana:
+     * MOVSD/MOVSS segun la clase del valor, LEA, recomputar un valor rematerializable,
+     * cualquier otra secuencia.  Esa decision NO pertenece al Rewrite.
+     *
+     * TODO (al llegar planes con valores FP): elegir el mnemonico por la clase del vreg
+     * (MOVSD/MOVSS en vez de MOV).  Hoy ningun productor genera planes -> no se emite nada.
+     */
+    void emit_move(codegen::ValueLocation from, codegen::ValueLocation to,
+                   std::vector<MInstr> &out) const {
+        if (from == to) return;              // ya esta donde debe: nada que mover.
+        if (from.is_none() || to.is_none()) return; // sin ubicacion: nada que materializar.
+        /* Se decide primero la ESTRATEGIA (por el par de ubicaciones) y solo despues se
+         * TRADUCE lo que esa rama necesita.  Importa el orden: cuando existan ubicaciones
+         * que no son un operando (una constante, un valor rematerializable), @c to_operand
+         * no podra construir un MOperand para ellas y su rama emitira otra cosa (un
+         * inmediato, un recomputo, un LEA).  Asi @c to_operand sigue siendo un traductor
+         * PURO ValueLocation -> MOperand y no acaba generando codigo. */
+        if (from.is_memory() && to.is_memory()) {
+            // x86 no admite "mov mem, mem": descomponer via scratch del rewrite (no asignable).
+            out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0), to_operand(from, SZ)));
+            out.push_back(MInstr::make_unary(MOp::MOV, to_operand(to, SZ), reg(scr0)));
+            return;
+        }
+        // registro <- registro | registro <- memoria | memoria <- registro: un movimiento.
+        out.push_back(
+            MInstr::make_unary(MOp::MOV, to_operand(to, SZ), to_operand(from, SZ)));
+    }
+
+    /** @brief Emite los movimientos que el @c TransitionPlanner exige en un punto.  El
+     *  Rewrite no los calcula ni los interpreta: delega cada uno en @c emit_move. */
+    void emit_transitions(const std::vector<codegen::ValueTransition> &ts,
+                          std::vector<MInstr> &out) const {
+        for (const codegen::ValueTransition &t : ts) emit_move(t.from, t.to, out);
+    }
+
     /* NO hay helpers de "spilled"/"slot_of": pertenecian al modelo ANTIGUO (spill).  El
      * call site pregunta al resolver por el MOMENTO del operando y lee la
      * @c ValueLocation -- @c resolver.resolve_def(vid).is_memory() / .stack_slot(), o
@@ -2127,6 +2169,10 @@ MFunction rewrite_to_physical(const MFunction &vf, const codegen::AllocationResu
         tri.arg_regs[static_cast<size_t>(RegClass::GP)].size();
     Lowerer lw(alloc, tri, abi, has_calls, alloca_total, has_vm_alloca,
                max_stack_args, has_stack_params, vf.cb_save_regs);
+    /* Los movimientos que exige el modelo temporal (cuando un valor cambia de ubicacion
+     * entre tramos).  El Rewrite NO los calcula: pregunta por punto del programa y emite.
+     * Sin afirmaciones en el plan el planner esta vacio -> no se emite nada. */
+    const codegen::TransitionPlanner transitions(alloc.timeline);
     lw.naked = vf.naked; //  NR @Naked: sin prologo/epilogo/ret
     lw.ivs = ivs; // commit 6: para construir stackmaps en CALLs
     MFunction pf;
@@ -2296,6 +2342,10 @@ MFunction rewrite_to_physical(const MFunction &vf, const codegen::AllocationResu
             flush_phi(); // resolver las copias de PHI antes del terminador
             lw.cur_call_pos = 2u * gi;
             lw.resolver.cur_gi = gi; // el resolver pregunta use_point/def_point(cur_gi)
+            /* Movimientos que el modelo temporal exige ANTES de esta instruccion (el valor
+             * debe estar ya en su nueva ubicacion cuando se lea).  Van fuera del line map:
+             * no pertenecen a ninguna linea fuente, son codigo de la asignacion. */
+            lw.emit_transitions(transitions.before_instruction(gi), outv);
             /* Solo-LSP: las MInstr fisicas que emite lower() se construyen
              * frescas (make_unary/...), perdiendo el source_pc de @c in.
              * Lo re-estampamos en las instrs anadidas por esta op para que
@@ -2310,6 +2360,9 @@ MFunction rewrite_to_physical(const MFunction &vf, const codegen::AllocationResu
                     if (outv[k].ir_id == 0xFFFFFFFFu) outv[k].ir_id = in.ir_id;
                 }
             }
+            /* Movimientos exigidos DESPUES de esta instruccion (p.ej. tras definir el
+             * valor en un registro, guardarlo en su ubicacion del siguiente tramo). */
+            lw.emit_transitions(transitions.after_instruction(gi), outv);
             ++gi;
         }
         flush_phi(); // por si el bloque termina en copias de PHI

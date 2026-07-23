@@ -14,6 +14,7 @@
  */
 
 #include "codegen/timeline_builder.h"
+#include "codegen/transition_planner.h"
 #include "jit/interval.h"
 
 #include <cstdio>
@@ -130,6 +131,42 @@ int main() {
         CHECK(tl3.lookup(1, LinearPos{p}).is_memory() &&
               tl3.lookup(1, LinearPos{p}).stack_slot() == 2);
     CHECK(tl3.lookup(1, LinearPos{110}).is_none()); // el tramo no inventa vida.
+
+    /* --- TransitionPlanner: "¿que movimientos exige este punto del programa?" ---
+     * Se prueba AISLADO (sin ejecutar el Rewrite).  Sobre el timeline MEM|REG|MEM del vreg
+     * 1 debe exigir exactamente DOS movimientos, en program points, no en posiciones:
+     *   antes de la instr 5  (donde empieza el tramo en registro):  MEM  -> REG r7
+     *   antes de la instr 10 (donde vuelve a memoria):              REG  -> MEM slot 2 */
+    const TransitionPlanner planner(tl2);
+    CHECK(!planner.empty());
+
+    const auto &in5 = planner.before_instruction(5);
+    CHECK(in5.size() == 1);
+    if (in5.size() == 1) {
+        CHECK(in5[0].vreg == 1);
+        CHECK(in5[0].from.is_memory() && in5[0].from.stack_slot() == 2);
+        CHECK(in5[0].to.is_register() && in5[0].to.register_id() == 7);
+    }
+    const auto &in10 = planner.before_instruction(10);
+    CHECK(in10.size() == 1);
+    if (in10.size() == 1) {
+        CHECK(in10[0].vreg == 1);
+        CHECK(in10[0].from.is_register() && in10[0].from.register_id() == 7);
+        CHECK(in10[0].to.is_memory() && in10[0].to.stack_slot() == 2);
+    }
+    // En cualquier otro punto NO se exige nada (ni dentro del tramo ni fuera de la vida).
+    for (uint32_t gi = 0; gi < 20; ++gi) {
+        if (gi == 5 || gi == 10) continue;
+        CHECK(planner.before_instruction(gi).empty());
+        CHECK(planner.after_instruction(gi).empty());
+    }
+
+    /* Sin afirmaciones (timeline trivial) NO hay ningun movimiento: por eso el codigo
+     * emitido no cambia mientras nadie produzca planes. */
+    const TransitionPlanner planner_trivial(tl);
+    CHECK(planner_trivial.empty());
+    for (uint32_t gi = 0; gi < 20; ++gi)
+        CHECK(planner_trivial.before_instruction(gi).empty());
 
     std::printf("--- %d checks, %d fallos ---\n", g_checks, g_fails);
     return g_fails ? 1 : 0;

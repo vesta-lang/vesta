@@ -63,6 +63,15 @@ class ValueLocation {
     constexpr bool is_stack() const noexcept { return kind_ == Kind::Stack; }
     constexpr uint32_t stack_slot() const noexcept { return slot_; }
 
+    /// ¿Es la MISMA ubicacion?  Lo necesita quien detecta que un valor CAMBIA de sitio
+    /// entre dos tramos (si no cambia, no hay nada que mover).
+    constexpr bool operator==(const ValueLocation &o) const noexcept {
+        return kind_ == o.kind_ && reg_ == o.reg_ && slot_ == o.slot_;
+    }
+    constexpr bool operator!=(const ValueLocation &o) const noexcept {
+        return !(*this == o);
+    }
+
   private:
     enum class Kind : uint8_t { None = 0, Register, Stack };
     Kind     kind_ = Kind::None;
