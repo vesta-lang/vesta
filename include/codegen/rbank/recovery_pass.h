@@ -42,6 +42,7 @@
 
 #include "codegen/rbank/abstract_problem.h"
 #include "codegen/rbank/allowed_lanes.h"
+#include "codegen/rbank/lane_occupancy.h"
 #include "codegen/rbank/physical_bank.h"
 
 #include <algorithm>
@@ -55,43 +56,24 @@ namespace rbank {
  * @brief Recupera a registro los vregs derramados que caben en una lane libre en
  *        todo su intervalo.  Modifica @p la in-place.  @return numero de spills
  *        recuperados (para instrumentacion).
+ *
+ * La ocupacion fisica la conoce @c LaneOccupancy (un solo sitio la define): aqui solo
+ * queda la POLITICA -- "primera lane admisible libre en todo el intervalo".
  */
 inline uint32_t recover_spills(const AbstractProblem &p, LaneAssignment &la,
                                const PhysicalRegisterBank &bank, bool vec_active) {
-    // Ocupacion por lane fisica (indexada por id): intervalos [start,end] envolventes
-    // de los valores ya asignados a esa lane.  Array contiguo (no map): pocos ids.
-    uint32_t max_id = 0;
-    for (const Lane &l : bank.lanes)
-        if (l.id > max_id) max_id = l.id;
-    struct Occ { uint32_t start, end; };
-    std::vector<std::vector<Occ>> occ(static_cast<size_t>(max_id) + 1);
-    for (const AbstractValue &v : p.values) {
-        const int lane = la.lane_of(v.value_id);
-        if (lane != kSpilled && lane >= 0 && static_cast<uint32_t>(lane) <= max_id)
-            occ[static_cast<size_t>(lane)].push_back({v.start, v.end});
-    }
-
+    LaneOccupancy occ = lane_occupancy_of(p, la, bank);
     uint32_t recovered = 0;
     for (const AbstractValue &v : p.values) {
         if (la.lane_of(v.value_id) != kSpilled) continue;
+        const PosRange life{v.start, v.end};
         for (const Lane &l : bank.lanes) {
             if (!lane_admissible(v.req, l, vec_active)) continue; // correctitud dura.
-            // ¿Libre en [v.start, v.end] en l y en las lanes que aliasan con l?
-            const AliasSet *ls = bank.aliases_of(l.id);
-            bool free_all = true;
-            for (uint32_t id = 0; id <= max_id && free_all; ++id) {
-                if (occ[id].empty()) continue;
-                const AliasSet *os = bank.aliases_of(static_cast<uint8_t>(id));
-                if (!ls || !os || !ls->overlaps(*os)) continue; // no aliasa con l.
-                for (const Occ &o : occ[id])
-                    if (v.start <= o.end && o.start <= v.end) { free_all = false; break; }
-            }
-            if (free_all) {
-                la.assign(v.value_id, l.id);           // recuperado: spill -> registro.
-                occ[l.id].push_back({v.start, v.end}); // ocupa la lane desde ya.
-                ++recovered;
-                break;
-            }
+            if (!occ.is_free(l.id, life)) continue;
+            la.assign(v.value_id, l.id); // recuperado: spill -> registro.
+            occ.occupy(l.id, life);      // ocupa la lane desde ya.
+            ++recovered;
+            break;
         }
     }
     return recovered;
@@ -164,55 +146,17 @@ struct SpillTaxonomy {
  */
 inline SpillTaxonomy classify_spills(const AbstractProblem &p, const LaneAssignment &la,
                                      const PhysicalRegisterBank &bank, bool vec_active) {
-    uint32_t max_id = 0;
-    for (const Lane &l : bank.lanes)
-        if (l.id > max_id) max_id = l.id;
-    struct Occ { uint32_t start, end; };
-    std::vector<std::vector<Occ>> occ(static_cast<size_t>(max_id) + 1);
-    for (const AbstractValue &v : p.values) {
-        const int lane = la.lane_of(v.value_id);
-        if (lane != kSpilled && lane >= 0 && static_cast<uint32_t>(lane) <= max_id)
-            occ[static_cast<size_t>(lane)].push_back({v.start, v.end});
-    }
-
+    const LaneOccupancy occ = lane_occupancy_of(p, la, bank);
     SpillTaxonomy t;
-    std::vector<Occ> hits; // scratch reusado.
     for (const AbstractValue &v : p.values) {
         if (la.lane_of(v.value_id) != kSpilled) continue;
-        const uint64_t total = static_cast<uint64_t>(v.end) - v.start + 1;
-        uint64_t max_free = 0;  // maxima duracion libre sobre lanes admisibles.
+        const PosRange life{v.start, v.end};
+        uint64_t max_free = 0; // maxima duracion libre sobre lanes admisibles.
         bool any_full = false;
         for (const Lane &l : bank.lanes) {
             if (!lane_admissible(v.req, l, vec_active)) continue;
-            const AliasSet *ls = bank.aliases_of(l.id);
-            hits.clear();
-            for (uint32_t id = 0; id <= max_id; ++id) {
-                if (occ[id].empty()) continue;
-                const AliasSet *os = bank.aliases_of(static_cast<uint8_t>(id));
-                if (!ls || !os || !ls->overlaps(*os)) continue; // no aliasa con l.
-                for (const Occ &o : occ[id])
-                    if (v.start <= o.end && o.start <= v.end)
-                        hits.push_back(
-                            {std::max(o.start, v.start), std::min(o.end, v.end)});
-            }
-            if (hits.empty()) { any_full = true; max_free = total; break; } // 100% libre.
-            std::sort(hits.begin(), hits.end(),
-                      [](const Occ &a, const Occ &b) { return a.start < b.start; });
-            // Union de los hits recortados a [v.start, v.end] -> tiempo OCUPADO; el
-            // libre (= total - ocupado) es lo que el splitting podria dar a registro.
-            uint64_t covered = 0;
-            uint32_t cur_s = hits[0].start, cur_e = hits[0].end;
-            for (size_t i = 1; i < hits.size(); ++i) {
-                if (hits[i].start <= cur_e + 1) {
-                    if (hits[i].end > cur_e) cur_e = hits[i].end; // solapa/contiguo: fusiona.
-                } else {
-                    covered += static_cast<uint64_t>(cur_e) - cur_s + 1;
-                    cur_s = hits[i].start;
-                    cur_e = hits[i].end;
-                }
-            }
-            covered += static_cast<uint64_t>(cur_e) - cur_s + 1;
-            const uint64_t free_len = total - covered; // covered <= total (recortado).
+            const uint64_t free_len = occ.free_time(l.id, life);
+            if (free_len >= life.length()) { any_full = true; break; } // 100% libre.
             if (free_len > max_free) max_free = free_len;
         }
         if (any_full) ++t.fully;

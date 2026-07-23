@@ -108,6 +108,20 @@ struct SpillTrace {
     // Recuperacion real de tax_fully.  KPI: Fully(limite superior) / Recovered(greedy)
     // / Potential = Fully - Recovered (fully que el greedy no llego a recuperar).
     uint64_t rec_greedy = 0; ///< spills recuperados por recover_spills (greedy).
+    // Recuperacion real del SPLITTING (Fragmentation Recovery) sobre los partially.  El
+    // KPI se lee contra tax_splitting_potential: Potential -> Recovered -> Remaining.
+    uint64_t split_values     = 0; ///< valores con al menos un tramo recuperado.
+    uint64_t split_intervals  = 0; ///< tramos del plan.
+    uint64_t split_area       = 0; ///< area de lane devuelta a registro (posiciones).
+    uint64_t split_uses       = 0; ///< usos que pasan a leer de registro.
+    uint64_t split_rej_cost   = 0; ///< huecos descartados por el cost model.
+    uint64_t split_rej_shape  = 0; ///< huecos descartados por las condiciones de forma.
+    // Perfil de la decision (3c.5): sumas para derivar MEDIAS aceptado vs rechazado ->
+    // permite justificar un cambio de parametro con datos, no moviendo constantes.
+    int64_t  split_acc_gain   = 0; ///< suma de ganancia neta de los tramos aceptados.
+    uint64_t split_rej_area   = 0; ///< area de los rechazados por coste.
+    uint64_t split_rej_uses   = 0; ///< usos de los rechazados por coste.
+    int64_t  split_rej_gain   = 0; ///< su ganancia neta (<=0): por cuanto no llegaron.
 
     void add(const SpillTrace &o) noexcept {
         victims_dead += o.victims_dead;
@@ -118,6 +132,16 @@ struct SpillTrace {
         tax_structural += o.tax_structural;
         tax_splitting_potential += o.tax_splitting_potential;
         rec_greedy += o.rec_greedy;
+        split_values += o.split_values;
+        split_intervals += o.split_intervals;
+        split_area += o.split_area;
+        split_uses += o.split_uses;
+        split_rej_cost += o.split_rej_cost;
+        split_acc_gain += o.split_acc_gain;
+        split_rej_area += o.split_rej_area;
+        split_rej_uses += o.split_rej_uses;
+        split_rej_gain += o.split_rej_gain;
+        split_rej_shape += o.split_rej_shape;
     }
 };
 

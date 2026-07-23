@@ -187,6 +187,14 @@ struct IntervalResult {
     /// reg y el legalizado 2-address elide el `mov dst, src1`.  Solo es una
     /// PREFERENCIA: si el reg no esta libre, cae al greedy normal (correcto).
     std::vector<int32_t> coalesce_hint;
+    /// Posicion lineal de inicio de cada bloque (@c 2*first_gi[b]), ascendente.
+    /// Es un HECHO de la ESTRUCTURA del programa, no del allocator: delimita los
+    /// tramos de codigo RECTILINEO (sin bifurcaciones ni confluencias).  Lo necesita
+    /// cualquier transformacion que inserte codigo en un punto y deba garantizar que
+    /// ese punto se ejecuta en el MISMO camino que otro (el splitting: cargar un valor
+    /// a registro y devolverlo a memoria deben ocurrir siempre juntos).  El bloque de
+    /// una posicion @c pos es el ultimo @c b con @c block_starts[b] <= pos.
+    std::vector<uint32_t> block_starts;
 };
 
 /**

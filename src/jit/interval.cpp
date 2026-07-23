@@ -415,6 +415,7 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
             block_end[b] = 2u * gi;
         }
         out.max_pos = 2u * gi;
+        out.block_starts = block_start; // Fact de estructura (tramos rectilineos).
     }
 
     /* Helper: invoca @p fn(vreg_id, role) por cada operando VREG de la

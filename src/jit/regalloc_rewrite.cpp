@@ -498,32 +498,45 @@ struct Lowerer {
      * TODO (al llegar planes con valores FP): elegir el mnemonico por la clase del vreg
      * (MOVSD/MOVSS en vez de MOV).  Hoy ningun productor genera planes -> no se emite nada.
      */
-    void emit_move(codegen::ValueLocation from, codegen::ValueLocation to,
+    void emit_move(codegen::ValueLocation from, codegen::ValueLocation to, bool is_fp,
                    std::vector<MInstr> &out) const {
         if (from == to) return;              // ya esta donde debe: nada que mover.
         if (from.is_none() || to.is_none()) return; // sin ubicacion: nada que materializar.
-        /* Se decide primero la ESTRATEGIA (por el par de ubicaciones) y solo despues se
-         * TRADUCE lo que esa rama necesita.  Importa el orden: cuando existan ubicaciones
-         * que no son un operando (una constante, un valor rematerializable), @c to_operand
-         * no podra construir un MOperand para ellas y su rama emitira otra cosa (un
-         * inmediato, un recomputo, un LEA).  Asi @c to_operand sigue siendo un traductor
-         * PURO ValueLocation -> MOperand y no acaba generando codigo. */
+        /* Se decide primero la ESTRATEGIA (por el par de ubicaciones + la CLASE del valor)
+         * y solo despues se TRADUCE lo que esa rama necesita.  Importa el orden: cuando
+         * existan ubicaciones que no son un operando (una constante, un valor
+         * rematerializable), @c to_operand no podra construir un MOperand para ellas y su
+         * rama emitira otra cosa (un inmediato, un recomputo, un LEA).  Asi @c to_operand
+         * sigue siendo un traductor PURO ValueLocation -> MOperand y no genera codigo.
+         *
+         * La CLASE decide el opcode: un valor float vive en un XMM y mover un XMM con el
+         * @c MOV entero produciria un registro EQUIVOCADO (el encoder leeria el id como
+         * GP).  Es un fallo silencioso, asi que se elige aqui, no en la traduccion. */
+        const MOp mov = is_fp ? MOp::MOVSD : MOp::MOV;
         if (from.is_memory() && to.is_memory()) {
-            // x86 no admite "mov mem, mem": descomponer via scratch del rewrite (no asignable).
-            out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0), to_operand(from, SZ)));
-            out.push_back(MInstr::make_unary(MOp::MOV, to_operand(to, SZ), reg(scr0)));
+            // x86 no admite "mov mem, mem": descomponer via scratch del rewrite.  El
+            // scratch tambien es de la clase del valor (un GP no puede transportar un XMM).
+            const MOperand tmp = is_fp ? MOperand::make_reg(fscr0, SZ) : reg(scr0);
+            out.push_back(MInstr::make_unary(mov, tmp, to_operand(from, SZ)));
+            out.push_back(MInstr::make_unary(mov, to_operand(to, SZ), tmp));
             return;
         }
         // registro <- registro | registro <- memoria | memoria <- registro: un movimiento.
         out.push_back(
-            MInstr::make_unary(MOp::MOV, to_operand(to, SZ), to_operand(from, SZ)));
+            MInstr::make_unary(mov, to_operand(to, SZ), to_operand(from, SZ)));
     }
 
     /** @brief Emite los movimientos que el @c TransitionPlanner exige en un punto.  El
-     *  Rewrite no los calcula ni los interpreta: delega cada uno en @c emit_move. */
+     *  Rewrite no los calcula ni los interpreta: delega cada uno en @c emit_move -- solo
+     *  aporta el dato que el planner no tiene, la CLASE del valor (el modelo temporal
+     *  habla de UBICACIONES; de que tipo es el valor lo sabe el nivel de instrucciones). */
     void emit_transitions(const std::vector<codegen::ValueTransition> &ts,
-                          std::vector<MInstr> &out) const {
-        for (const codegen::ValueTransition &t : ts) emit_move(t.from, t.to, out);
+                          const IntervalResult *ivs, std::vector<MInstr> &out) const {
+        for (const codegen::ValueTransition &t : ts) {
+            const bool is_fp = ivs && t.vreg < ivs->intervals.size() &&
+                               ivs->intervals[t.vreg].cls == RegClass::FP;
+            emit_move(t.from, t.to, is_fp, out);
+        }
     }
 
     /* NO hay helpers de "spilled"/"slot_of": pertenecian al modelo ANTIGUO (spill).  El
@@ -2345,7 +2358,7 @@ MFunction rewrite_to_physical(const MFunction &vf, const codegen::AllocationResu
             /* Movimientos que el modelo temporal exige ANTES de esta instruccion (el valor
              * debe estar ya en su nueva ubicacion cuando se lea).  Van fuera del line map:
              * no pertenecen a ninguna linea fuente, son codigo de la asignacion. */
-            lw.emit_transitions(transitions.before_instruction(gi), outv);
+            lw.emit_transitions(transitions.before_instruction(gi), ivs, outv);
             /* Solo-LSP: las MInstr fisicas que emite lower() se construyen
              * frescas (make_unary/...), perdiendo el source_pc de @c in.
              * Lo re-estampamos en las instrs anadidas por esta op para que
@@ -2362,7 +2375,7 @@ MFunction rewrite_to_physical(const MFunction &vf, const codegen::AllocationResu
             }
             /* Movimientos exigidos DESPUES de esta instruccion (p.ej. tras definir el
              * valor en un registro, guardarlo en su ubicacion del siguiente tramo). */
-            lw.emit_transitions(transitions.after_instruction(gi), outv);
+            lw.emit_transitions(transitions.after_instruction(gi), ivs, outv);
             ++gi;
         }
         flush_phi(); // por si el bloque termina en copias de PHI

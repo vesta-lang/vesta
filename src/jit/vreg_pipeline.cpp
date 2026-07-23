@@ -137,6 +137,18 @@ bool recovery_enabled() {
     return on;
 }
 
+// Fragmentation Recovery (splitting, 3a pasada) on/off para A/B.  Devuelve a REGISTRO
+// POR TRAMOS los spills que no caben enteros en ninguna lane -- la clase `partially` de
+// la taxonomia (62,5% de los spills del corpus).  Cuando esta OFF el plan ni se calcula
+// y el codigo emitido es identico al de antes (coste cero).
+bool splitting_enabled() {
+    static const bool on = [] {
+        const char *e = std::getenv("VESTA_SPLITTING");
+        return e && e[0] && e[0] != '0'; // default OFF mientras se mide.
+    }();
+    return on;
+}
+
 void print_measure_summary() {
     std::lock_guard<std::mutex> lk(g_measure_mtx);
     if (g_measure_funcs == 0) return;
@@ -166,7 +178,11 @@ void print_measure_summary() {
         "  partially(Splitting)=%llu | RECUPERACION fully: Fully=%llu Recovered=%llu"
         " Potential=%llu\n"
         "  (g) SPLITTING techo: splitting_potential=%llu de wasted_lane_area=%llu"
-        " (%.1f%% del area recuperable por una Fragmentation Recovery ideal)\n",
+        " (%.1f%% del area recuperable por una Fragmentation Recovery ideal)\n"
+        "  (h) SPLITTING real: valores=%llu tramos=%llu usos=%llu | AREA Potential=%llu"
+        " Recovered=%llu (%.1f%%) Remaining=%llu | descartados forma=%llu coste=%llu\n"
+        "  (i) SPLITTING perfil: ACEPTADO len=%.1f usos=%.1f ganancia=%.1f | RECHAZADO"
+        " len=%.1f usos=%.1f ganancia=%.1f  [medias por tramo; guia el tuning del modelo]\n",
         g_measure_funcs,
         r.spills_total, r.spills_rematerializable, pct_remat, r.spills_remat_leaf,
         r.spills_total ? 100.0 * r.spills_remat_leaf / r.spills_total : 0.0,
@@ -204,7 +220,41 @@ void print_measure_summary() {
         (unsigned long long)g_alloc_diag_agg.wasted_lane_area,
         g_alloc_diag_agg.wasted_lane_area
             ? 100.0 * g_spill_trace_agg.tax_splitting_potential / g_alloc_diag_agg.wasted_lane_area
-            : 0.0);
+            : 0.0,
+        // (h) Potential -> Recovered -> Remaining: la metodologia aplicada al splitting.
+        // Potential = techo medido ANTES (area libre de los partially); Recovered = lo
+        // que la transformacion consigue de verdad; Remaining = margen para el siguiente
+        // sprint (edge splitting, rangos exactos, pesos de frecuencia...).
+        (unsigned long long)g_spill_trace_agg.split_values,
+        (unsigned long long)g_spill_trace_agg.split_intervals,
+        (unsigned long long)g_spill_trace_agg.split_uses,
+        (unsigned long long)g_spill_trace_agg.tax_splitting_potential,
+        (unsigned long long)g_spill_trace_agg.split_area,
+        g_spill_trace_agg.tax_splitting_potential
+            ? 100.0 * g_spill_trace_agg.split_area / g_spill_trace_agg.tax_splitting_potential
+            : 0.0,
+        (unsigned long long)(g_spill_trace_agg.tax_splitting_potential >=
+                                     g_spill_trace_agg.split_area
+                                 ? g_spill_trace_agg.tax_splitting_potential -
+                                       g_spill_trace_agg.split_area
+                                 : 0),
+        (unsigned long long)g_spill_trace_agg.split_rej_shape,
+        (unsigned long long)g_spill_trace_agg.split_rej_cost,
+        // (i) Medias: sin ellas, tocar los parametros del cost model seria a ciegas --
+        // se sabria que el numero sube, no POR QUE.  Comparar "lo aceptado" con "lo
+        // rechazado por poco" es lo que permite afirmar donde esta el umbral.
+        g_spill_trace_agg.split_intervals
+            ? 1.0 * g_spill_trace_agg.split_area / g_spill_trace_agg.split_intervals : 0.0,
+        g_spill_trace_agg.split_intervals
+            ? 1.0 * g_spill_trace_agg.split_uses / g_spill_trace_agg.split_intervals : 0.0,
+        g_spill_trace_agg.split_intervals
+            ? 1.0 * g_spill_trace_agg.split_acc_gain / g_spill_trace_agg.split_intervals : 0.0,
+        g_spill_trace_agg.split_rej_cost
+            ? 1.0 * g_spill_trace_agg.split_rej_area / g_spill_trace_agg.split_rej_cost : 0.0,
+        g_spill_trace_agg.split_rej_cost
+            ? 1.0 * g_spill_trace_agg.split_rej_uses / g_spill_trace_agg.split_rej_cost : 0.0,
+        g_spill_trace_agg.split_rej_cost
+            ? 1.0 * g_spill_trace_agg.split_rej_gain / g_spill_trace_agg.split_rej_cost : 0.0);
 }
 
 /** @brief Corre el instrumento (gated) sobre una funcion tras la asignacion. */
@@ -237,15 +287,18 @@ void run_measure(const ir::IrFunction &fn, const IntervalResult &ivs,
  *         y le pasa el @c SpillTrace de razon-de-victima solo cuando el instrumento
  *         esta activo.  compute_next_use es barato (2 pasadas sobre mf). */
 codegen::RegAlloc rbank_allocate_belady(const IntervalResult &ivs, const MFunction &mf,
-                                    const TargetRegInfo &tri, bool vec) {
+                                    const TargetRegInfo &tri, bool vec,
+                                    codegen::AssignmentPlan *plan_out) {
     jit::MachineNextUseFacts nu;
     const jit::MachineNextUseFacts *nup = nullptr;
     if (belady_enabled()) { nu = jit::compute_next_use(mf); nup = &nu; }
     codegen::rbank::SpillTrace st;
     codegen::rbank::SpillTrace *stp = measure_enabled() ? &st : nullptr;
     const uint32_t nvregs = mf.vreg_count;
+    // El plan solo se calcula si el caller lo consume Y el splitting esta activo.
+    codegen::AssignmentPlan *pp = splitting_enabled() ? plan_out : nullptr;
     codegen::RegAlloc ra = codegen::rbank::rbank_allocate(ivs, nvregs, tri, vec, nup, stp,
-                                                      recovery_enabled());
+                                                      recovery_enabled(), pp);
     if (stp) {
         std::lock_guard<std::mutex> lk(g_measure_mtx);
         g_spill_trace_agg.add(st);
@@ -356,8 +409,9 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
 
     /* Allocator UNICO: rbank (linear_scan jubilado).  El verificador adversarial de
      * GC roots de abajo + diff_harness (0 bugs) + e2e (724/0) son su oraculo. */
+    codegen::AssignmentPlan plan; // Fragmentation Recovery (vacio si el splitting esta OFF).
     codegen::RegAlloc ra = rbank_allocate_belady(ivs, mf, tri,
-                                             fn_needs_vec_reserve(fn));
+                                             fn_needs_vec_reserve(fn), &plan);
 
     /* Instrumento de medicion (gated VESTA_REMAT_MEASURE; diagnostico, no cambia
      * el codigo): potencial de remat + falsas interferencias del envolvente. */
@@ -389,7 +443,7 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
     }
 
     /* 4. Rewrite a fisico (VM_ABI) + stackmaps de GC roots en cada CALL. */
-    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM, &ivs);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, plan), tri, AbiKind::VM, &ivs);
 
     /* 4b. P1 peephole: borrar los self-moves (`mov rX, rX`) que el coalescing
      *     dejo al asignar el mismo fisico a los dos extremos de una copia. */
@@ -470,8 +524,9 @@ uint8_t *vreg_compile_callback(const ir::IrFunction &fn, CodeCache &cc,
 
     IntervalResult ivs = build_intervals(mf, tri);
     if (apply_ssa_coalesce(mf, fn)) ivs = build_intervals(mf, tri);
+    codegen::AssignmentPlan plan; // Fragmentation Recovery (vacio si el splitting esta OFF).
     codegen::RegAlloc ra = rbank_allocate_belady(ivs, mf, tri,
-                                             fn_needs_vec_reserve(fn)); // allocator UNICO (rbank).
+                                             fn_needs_vec_reserve(fn), &plan); // allocator UNICO.
 
     /* Verificador adversarial de GC roots (igual que vreg_compile). */
     if (!ivs.call_positions.empty()) {
@@ -484,7 +539,7 @@ uint8_t *vreg_compile_callback(const ir::IrFunction &fn, CodeCache &cc,
         }
     }
 
-    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM, &ivs);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, plan), tri, AbiKind::VM, &ivs);
     peephole_physical(pf);
     maybe_schedule(pf, sched::EffIsa::X86, sched::SchedMode::JIT_AUTO);
 
@@ -546,8 +601,12 @@ std::vector<uint8_t> vreg_compile_native_target(
      *    target: toman el TargetRegInfo). */
     IntervalResult ivs = build_intervals(mf, tri);
     if (apply_ssa_coalesce(mf, fn)) ivs = build_intervals(mf, tri);
+    /* El path AOT baja por @c CodegenTarget::rewrite, que aun consume la @c RegAlloc
+     * plana (no el @c AllocationResult) -> no puede materializar un plan.  Se le pasa
+     * nullptr explicitamente: no es que no haya splitting, es que este path todavia no
+     * sabe consumirlo. */
     codegen::RegAlloc ra = rbank_allocate_belady(ivs, mf, tri,
-                                             fn_needs_vec_reserve(fn)); // allocator UNICO (rbank).
+                                             fn_needs_vec_reserve(fn), nullptr);
 
     /* 4. REWRITE a fisico (prologo/epilogo + spills de la ABI del target). */
     MFunction pf = target.rewrite(mf, ra, ivs);
@@ -650,8 +709,9 @@ uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,
         return nullptr;
     const TargetRegInfo &tri = target_x86_64_vm_abi();
     IntervalResult ivs = build_intervals(mf, tri);
+    codegen::AssignmentPlan plan; // Fragmentation Recovery (vacio si el splitting esta OFF).
     codegen::RegAlloc ra = rbank_allocate_belady(ivs, mf, tri,
-                                             fn_needs_vec_reserve(fn)); // allocator UNICO (rbank).
+                                             fn_needs_vec_reserve(fn), &plan); // allocator UNICO.
     if (!ivs.call_positions.empty()) {
         for (uint32_t vv = 0; vv < mf.vreg_count; ++vv) {
             const LiveInterval &lv = ivs.intervals[vv];
@@ -668,7 +728,7 @@ uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,
     osr.mode = OsrEmit::C2_ENTRY;
     osr.header_block = static_cast<MBlockId>(header_block);
     osr.required_captures = required_captures; // red de seguridad live-in
-    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM, &ivs, &osr);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, plan), tri, AbiKind::VM, &ivs, &osr);
     maybe_schedule(pf, sched::EffIsa::X86, sched::SchedMode::JIT_AUTO);
     if (!osr.osr_entry_valid) return nullptr; // no se pudo emitir el entry
 

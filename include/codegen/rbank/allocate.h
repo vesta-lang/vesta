@@ -34,7 +34,9 @@
 #ifndef VESTA_CODEGEN_RBANK_ALLOCATE_H
 #define VESTA_CODEGEN_RBANK_ALLOCATE_H
 
+#include "codegen/assignment_plan.h"           // AssignmentPlan (salida del splitting)
 #include "codegen/rbank/backend_bridge.h"      // intervals_to_problem, regalloc_from_lanes
+#include "codegen/rbank/fragmentation_recovery.h" // build_fragmentation_plan (splitting)
 #include "codegen/rbank/optimization_context.h"
 #include "codegen/rbank/physical_bank.h"
 #include "codegen/rbank/recovery_pass.h"       // recover_spills (2a pasada)
@@ -44,6 +46,7 @@
 #include "jit/linear_scan.h"
 #include "jit/target_reginfo.h"
 
+#include <algorithm>
 #include <cstdint>
 
 namespace codegen {
@@ -58,7 +61,8 @@ namespace rbank {
 inline codegen::RegAlloc rbank_allocate(const jit::IntervalResult &ivs, uint32_t vreg_count,
                                     const jit::TargetRegInfo &tri, bool vec_active,
                                     const jit::MachineNextUseFacts *next_use = nullptr,
-                                    SpillTrace *trace = nullptr, bool recover = true) {
+                                    SpillTrace *trace = nullptr, bool recover = true,
+                                    codegen::AssignmentPlan *plan_out = nullptr) {
     PhysicalRegisterBank bank =
         physical_bank_x86_64_from_reginfo(tri, jit::backend_caps_host());
     ConstraintSet cs;
@@ -88,7 +92,48 @@ inline codegen::RegAlloc rbank_allocate(const jit::IntervalResult &ivs, uint32_t
         const uint32_t rec = recover_spills(p, la, bank, vec_active);
         if (trace) trace->rec_greedy += rec;
     }
-    return regalloc_from_lanes(la, p, bank, vreg_count);
+    codegen::RegAlloc ra = regalloc_from_lanes(la, p, bank, vreg_count);
+
+    /* 3a pasada (Fragmentation Recovery / splitting): los spills que NO caben enteros en
+     * una lane pueden volver a registro POR TRAMOS.  No toca @c la ni @c ra: produce un
+     * plan que materializa el TimelineBuilder aguas abajo.  Sin @p plan_out el splitting
+     * ni siquiera se calcula (coste cero para los callers que no lo consumen). */
+    if (plan_out) {
+        const RecoveryCostModel cost;
+        FragmentationStats fs;
+        *plan_out = build_fragmentation_plan(p, la, bank, vec_active, ivs, cost, &fs);
+        /* CONSECUENCIA MECANICA (no una decision): si un tramo usa una lane PRESERVADA,
+         * el prologo/epilogo TIENE que salvarla -- el plan la escribe igual que si fuese
+         * una asignacion normal.  Derivar el frame del plan es del puente, no del
+         * productor: la Fragmentation Recovery solo afirma "aqui vive en esta lane". */
+        for (const codegen::AssignmentInterval &si : plan_out->intervals) {
+            if (!si.location.is_register()) continue;
+            const uint8_t id = si.location.register_id();
+            const ViewWidth w = (si.vreg < ivs.intervals.size() &&
+                                 ivs.intervals[si.vreg].cls == jit::RegClass::FP)
+                                    ? ViewWidth::W16
+                                    : ViewWidth::W8;
+            if (bank.preservation(id, w) == SavePolicy::PRESERVED &&
+                std::find(ra.callee_saved_used.begin(), ra.callee_saved_used.end(), id) ==
+                    ra.callee_saved_used.end()) {
+                ra.callee_saved_used.push_back(id);
+                std::sort(ra.callee_saved_used.begin(), ra.callee_saved_used.end());
+            }
+        }
+        if (trace) {
+            trace->split_values += fs.values_split;
+            trace->split_intervals += fs.intervals;
+            trace->split_area += fs.recovered_area;
+            trace->split_uses += fs.uses_recovered;
+            trace->split_rej_cost += fs.rejected_cost;
+            trace->split_acc_gain += fs.accepted_gain;
+            trace->split_rej_area += fs.rejected_area;
+            trace->split_rej_uses += fs.rejected_uses;
+            trace->split_rej_gain += fs.rejected_gain;
+            trace->split_rej_shape += fs.rejected_shape;
+        }
+    }
+    return ra;
 }
 
 } // namespace rbank

@@ -37,8 +37,10 @@ static int g_fail = 0;
         }                                                                    \
     } while (0)
 
-/// Azucar: envuelve un uint32_t crudo como posicion del dominio IR.
-static constexpr codegen::LinearPos P(uint32_t v) { return codegen::LinearPos{v}; }
+/// Azucar: envuelve un uint32_t crudo como posicion del dominio IR.  @c ir::LinearPos,
+/// NO @c codegen::LinearPos: @c UseDefFacts es un Fact del IR y mezclar dominios es
+/// justo el error que el tipo fuerte existe para rechazar en compilacion.
+static constexpr ir::LinearPos P(uint32_t v) { return ir::LinearPos{v}; }
 
 static IrInstr mk(IrOp op, IrValueId dst, std::vector<IrValueId> ops = {},
                   uint64_t imm = 0) {
