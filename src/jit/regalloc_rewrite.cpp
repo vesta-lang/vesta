@@ -690,7 +690,7 @@ struct Lowerer {
      */
     size_t emit_host_param_loads(const std::vector<MInstr> &instrs,
                                  const std::vector<uint32_t> &params,
-                                 std::vector<MInstr> &out) const {
+                                 std::vector<MInstr> &out) {
         if (vm_abi || params.empty()) return 0;
         std::vector<std::pair<MReg, MOperand>> reg_moves;    // GP
         std::vector<std::pair<MReg, MOperand>> freg_moves;   // FP (XMM)
@@ -698,10 +698,22 @@ struct Lowerer {
         /* Los MOV param-init son exactamente los lideres del bloque 0 con
          * dst vreg y src registro fisico (arg_reg).  Para los params FLOAT,
          * el src es un XMM arg-reg (el selector contó el indice float aparte
-         * del entero) -> se enrutan a un parallel-move FP via MOVSD. */
+         * del entero) -> se enrutan a un parallel-move FP via MOVSD.
+         *
+         * CADA param-init se resuelve en SU posicion: el i-esimo lider del
+         * bloque 0 tiene gi=i.  Sin fijar @c cur_gi por param, el 2o+ param se
+         * consultaba con la posicion del 1o (o la que quedara), caia FUERA de
+         * su rango vivo (el valor nace mas tarde), el timeline contestaba "en
+         * ningun sitio" (NONE) y @c to_operand lo disfrazaba de scratch -> el
+         * param-load escribia el arg en el scratch, no en el home del param, y
+         * su uso posterior leia un registro con basura.  Mismo fallo -- y misma
+         * cura -- que @c lower_phi_parallel; solo se ve en el AOT (unico que
+         * construye el timeline con RANGOS). */
+        const uint32_t saved_gi = resolver.cur_gi;
         while (n < instrs.size() && n < params.size() &&
                instrs[n].op == MOp::MOV && instrs[n].dst.is_vreg() &&
                instrs[n].src1.is_reg()) {
+            resolver.cur_gi = static_cast<uint32_t>(n); // gi del i-esimo lider = i
             const bool fp = is_fp_operand(instrs[n].dst) ||
                             is_fp_operand(instrs[n].src1);
             const MOperand dst = resolve_def(instrs[n].dst);
@@ -720,6 +732,7 @@ struct Lowerer {
             }
             ++n;
         }
+        resolver.cur_gi = saved_gi; // el param-load no altera el recorrido normal
         if (!reg_moves.empty())
             emit_parallel_moves(std::move(reg_moves), scr1, out);
         if (!freg_moves.empty())
