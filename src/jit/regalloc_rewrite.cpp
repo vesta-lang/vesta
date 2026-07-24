@@ -475,7 +475,26 @@ struct Lowerer {
     MOperand to_operand(codegen::ValueLocation rl, uint8_t width) const noexcept {
         if (rl.is_register())
             return MOperand::make_reg(static_cast<MReg>(rl.register_id()), width);
-        return slot_mem(rl.stack_slot()); // is_stack()
+        if (rl.is_memory()) return slot_mem(rl.stack_slot());
+        /* NINGUNA ubicacion.  Antes esta rama no existia -- "no se donde vive" caia
+         * en la de memoria y @c stack_slot() devolvia 0, asi que se convertia en un
+         * acceso al SLOT 0.  Un slot que puede no existir: si la funcion no derrama,
+         * el frame se omite entero y ese acceso escribe por el RBP del LLAMANTE.
+         * Fue exactamente el fallo que rompio el AOT (bucle infinito o SIGSEGV segun
+         * lo que hubiera debajo), y aguanto oculto porque el JIT nunca produce este
+         * caso -- fail-open puro: el error se disfrazaba de ubicacion valida.
+         *
+         * Ahora es RUIDOSO.  En builds de comprobacion aborta con el sitio exacto; en
+         * release cae al scratch, que existe siempre y no corrompe memoria ajena: si
+         * el valor esta muerto da igual, y si no lo esta el fallo se ve, no se pudre. */
+#ifdef VM_DEBUG_CHECKS
+        std::fprintf(stderr,
+                     "[rewrite] BUG: ValueLocation sin ubicacion en gi=%u -- el "
+                     "timeline no sabe donde vive este valor\n",
+                     resolver.cur_gi);
+        std::abort();
+#endif
+        return MOperand::make_reg(scr0, width);
     }
     /* El Rewrite pregunta por el MOMENTO del operando (use/def), nunca por la posicion; el
      * resolver traduce el momento a una @c ValueLocation.  Quien conoce el rol (el que
@@ -762,10 +781,25 @@ struct Lowerer {
      *  (scr1 rompe ciclos con un scratch reservado), FP via _fp (fscr1).  Los
      *  dst spilled se escriben primero (leen su src pristino antes de que un
      *  reg-move lo pise). */
-    void lower_phi_parallel(const std::vector<const MInstr *> &phis,
+    void lower_phi_parallel(const std::vector<std::pair<const MInstr *, uint32_t>> &phis,
                             std::vector<MInstr> &out) {
+        const uint32_t saved_gi = resolver.cur_gi;
         std::vector<std::pair<MReg, MOperand>> reg_moves, freg_moves;
-        for (const MInstr *p : phis) {
+        for (const std::pair<const MInstr *, uint32_t> &pg : phis) {
+            const MInstr *p = pg.first;
+            /* CADA copia se resuelve en SU posicion.  Se acumulan para emitirlas
+             * como un movimiento paralelo, pero eso es una decision de EMISION: no
+             * las convierte en una sola instruccion, y cada una sigue definiendo su
+             * valor en su propio punto del programa.
+             *
+             * Resolverlas todas con el @c cur_gi que quedara de la instruccion
+             * anterior fue un bug real: las consultas caian FUERA del rango vivo del
+             * valor (nace mas tarde), el timeline contestaba "en ningun sitio" y esa
+             * respuesta llegaba al codigo disfrazada de ubicacion valida.  Solo se
+             * notaba en el AOT porque es el unico que construye el timeline con los
+             * rangos; sobre una base plana cualquier posicion contesta lo mismo y el
+             * desfase quedaba invisible. */
+            resolver.cur_gi = pg.second;
             const bool fp = is_fp_operand(p->dst) || is_fp_operand(p->src1);
             const MOperand dst = resolve_def(p->dst);
             const MOperand src = resolve_use(p->src1);
@@ -797,6 +831,7 @@ struct Lowerer {
                 }
             }
         }
+        resolver.cur_gi = saved_gi; // el batch no altera la posicion del recorrido
         if (!reg_moves.empty())
             emit_parallel_moves(std::move(reg_moves), scr1, out);
         if (!freg_moves.empty())
@@ -2334,7 +2369,7 @@ MFunction rewrite_to_physical(const MFunction &vf, const codegen::AllocationResu
          * lower_phi_parallel (rompe ciclos con scratch); si se bajaran una a
          * una via lw.lower(), la emision secuencial corromperia un ciclo de
          * permutacion creado por el regalloc (post ssa_coalesce). */
-        std::vector<const MInstr *> pending_phi;
+        std::vector<std::pair<const MInstr *, uint32_t>> pending_phi;
         auto flush_phi = [&]() {
             if (pending_phi.empty()) return;
             lw.lower_phi_parallel(pending_phi, outv);
@@ -2348,7 +2383,7 @@ MFunction rewrite_to_physical(const MFunction &vf, const codegen::AllocationResu
             }
             ++ii;
             if (in.op == MOp::MOV && in.variant == 0xFD) {
-                pending_phi.push_back(&in); // acumular; resolver en batch
+                pending_phi.emplace_back(&in, gi); // acumular CON su posicion
                 ++gi;
                 continue;
             }
