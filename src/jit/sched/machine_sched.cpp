@@ -213,14 +213,82 @@ int schedule_region(std::vector<MInstr> &ins, int lo, int hi,
     if (n <= 1) return 0;
 
     // DAG: succ[i] = dependientes de i; indeg[i] = num. de predecesores.
+    //
+    // Se construye por LAST-WRITER / READERS-SINCE en una sola pasada, no
+    // comparando los O(n^2) pares.  La clave: solo hacen falta las dependencias
+    // DIRECTAS (predecesor inmediato).  Una arista transitiva a->c (con a->b->c
+    // ya presente) es redundante -- c no esta "ready" hasta que toda la cadena
+    // a..c este colocada, asi que quitarla no cambia ni las alturas (el camino
+    // critico pasa por el mismo b) ni el orden que elige el list scheduling.
+    // El resultado es identico al DAG completo, verificable con
+    // VESTA_SCHED_VERIFY=1 (compara el ORDEN final contra depends() de TODO par,
+    // incluidas las transitivas) -> mismo schedule, de O(n^2) a O(n*k + m^2).
+    //
+    // Para cada clave de registro se guarda quien la escribio por ultima vez
+    // (RAW/WAW dependen de el) y quien la ha leido DESDE esa escritura (WAR).
+    // Flags igual, con una sola "clave" implicita.  Memoria: comparacion
+    // acotada solo entre las instrucciones que TOCAN memoria (m << n), porque
+    // el alias parcial (a y c aliasan, b no) rompe el last-writer unico.
     std::vector<std::vector<int>> succ(n);
     std::vector<int> indeg(n, 0);
-    for (int i = 0; i < n; ++i)
-        for (int j = i + 1; j < n; ++j)
-            if (depends(eff[lo + i], eff[lo + j], refs[lo + i], refs[lo + j])) {
-                succ[i].push_back(j);
-                ++indeg[j];
+
+    std::unordered_map<uint32_t, int> last_write;             // reg -> ultimo def
+    std::unordered_map<uint32_t, std::vector<int>> readers;   // reg -> lectores
+    int last_flag_write = -1;
+    std::vector<int> flag_readers;
+    std::vector<int> mem_ops; // indices (locales) que tocan memoria, en orden
+
+    // Dedup de aristas por-destino: pred_epoch[a]==j si a ya es predecesor de j.
+    std::vector<int> pred_epoch(n, -1);
+    auto add_pred = [&](int a, int j) {
+        if (a < 0 || a == j || pred_epoch[a] == j) return;
+        pred_epoch[a] = j;
+        succ[a].push_back(j);
+        ++indeg[j];
+    };
+
+    for (int j = 0; j < n; ++j) {
+        const MEffects &e = eff[lo + j];
+        // --- recoger predecesores DIRECTOS de j ---
+        for (uint32_t r : e.reads) { // RAW: leo lo ultimo escrito
+            auto it = last_write.find(r);
+            if (it != last_write.end()) add_pred(it->second, j);
+        }
+        for (uint32_t r : e.writes) { // WAW con el ultimo def + WAR con lectores
+            auto it = last_write.find(r);
+            if (it != last_write.end()) add_pred(it->second, j);
+            auto rd = readers.find(r);
+            if (rd != readers.end())
+                for (int reader : rd->second) add_pred(reader, j);
+        }
+        if (e.reads_flags && last_flag_write >= 0) add_pred(last_flag_write, j);
+        if (e.writes_flags) {
+            if (last_flag_write >= 0) add_pred(last_flag_write, j);
+            for (int reader : flag_readers) add_pred(reader, j);
+        }
+        if (refs[lo + j].touches) { // memoria: comparacion acotada a las mem-ops
+            const MemRef &mj = refs[lo + j];
+            for (int k : mem_ops) {
+                const MemRef &mk = refs[lo + k];
+                // SOLO el hazard de memoria (los de reg/flags ya salieron por su
+                // via); al menos uno escribe y las referencias pueden solapar.
+                if ((mk.writes || mj.writes) && may_alias(mk, mj)) add_pred(k, j);
             }
+        }
+
+        // --- actualizar el estado con j ---
+        for (uint32_t r : e.writes) { // una escritura CORTA los lectores previos
+            last_write[r] = j;
+            readers[r].clear();
+        }
+        for (uint32_t r : e.reads) readers[r].push_back(j);
+        if (e.writes_flags) {
+            last_flag_write = j;
+            flag_readers.clear();
+        }
+        if (e.reads_flags) flag_readers.push_back(j);
+        if (refs[lo + j].touches) mem_ops.push_back(j);
+    }
 
     // Coste COMPLETO por nodo (latencia + throughput reciproco + uops + grupos
     // de puertos) del modelo de coste (generico o de la microarquitectura).

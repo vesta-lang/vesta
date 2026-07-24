@@ -31,13 +31,16 @@
  * operandos derramados esos dos no bastan y hay que pasar por la pila (ver
  * @c emit_three_reg_op en ir_emitter.cpp) -- limitacion conocida, no descuido.
  *
- * PENDIENTE (reserva DEMAND-DRIVEN).  Reservar los tres SIEMPRE cuesta 3 de 16
- * registros incluso en funciones que no los necesitan: r15 solo hace falta si
- * hay llamadas, y r13 solo si hay derrames.  El proyecto ya tiene el precedente
- * de reserva por demanda en el path vreg (@c fn_needs_vec_reserve libera
- * XMM10-13 en funciones sin ops vectoriales).  Aplicarlo aqui exige una pasada
- * optimista (asignar con el pool ampliado y repetir si aparece un derrame),
- * porque "hay derrames" depende de cuantos registros haya.
+ * SOBRE LA RESERVA DEMAND-DRIVEN (medido, NO es una pasada optimista).  La idea
+ * de liberar r13/r14/r15 al pool cuando la funcion no los necesita choca con la
+ * realidad del emisor: los usa HARDCODEADOS en ~42 sitios -- r15 como argc en
+ * cada llamada y como rsp en el bitcast float GP<->ZMM, r14/r13 como scratch de
+ * derrames y de calculo de direcciones.  Liberar uno al pool corromperia
+ * cualquier funcion que lo pise.  Ademas solo se podrian liberar en funciones
+ * HOJA sin floats ni derrames -- justo las que NO tienen presion de registros;
+ * las complejas (donde +registros valdria) usan calls/scratch y no liberarian
+ * nada.  Prerrequisito real: retirar antes esos usos hardcodeados del emisor
+ * (deuda documentada), no una pasada mas.
  *
  * Cuando el numero de valores vivos simultaneamente supera ALLOC_REGS,
  * el asignador derrama (spill) los valores menos prioritarios a slots
