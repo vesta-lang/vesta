@@ -516,6 +516,9 @@ void Scheduler::run_loop() {
                     dispatch_table[0x100 | 0x1C] = &&L_SHR;
                     dispatch_table[0x100 | 0x1D] = &&L_SAR;
                     dispatch_table[0x100 | 0x43] = &&L_SETCC;
+                    /* Carga/almacen universal: las mem-ops mas frecuentes. */
+                    dispatch_table[0x100 | 0x90] = &&L_MLD;
+                    dispatch_table[0x100 | 0x91] = &&L_MST;
                     /* loadz / loadzh (0x7C / 0x7D) caen al SLOW path:
                      * el inlining provoca icache/BTB pressure que regresa
                      * benches con muchos opcodes (poly, callvirt_hot).
@@ -1049,6 +1052,89 @@ void Scheduler::run_loop() {
                 default: taken = false; break;
                 }
                 regs[rdst].qword(taken ? 1 : 0);
+                instance->registers.rip.qword(instance->registers.rip.raw() +
+                                              fl_inl.size_instr);
+                ++profiler_instr_counter;
+                NEXT_DISPATCH();
+            }
+
+            /* MLD/MST: carga/almacen UNIVERSAL (arrays, locales, campos).  Son
+             * las instrucciones de memoria mas frecuentes del hot loop; iban a
+             * L_SLOW (decode + call por puntero) aunque el acceso interno ya
+             * usaba el page-cache.  Handler inline: replica exec_instr_mld/mst
+             * (base +/- index*scale +/- disp, host/VM, sign-ext, anchos 1/2/4/8).
+             * El banco FP (flags b4) y anchos >8 (SIMD) caen a L_SLOW (raros en
+             * codigo entero). */
+            L_MLD: {
+                const auto &m = d->data_instruction.mem_full;
+                if ((m.flags & 0x10) || m.width > 8) goto L_SLOW;
+                auto &regs = instance->registers.regs;
+                uint64_t addr = m.base < 16
+                                    ? regs[m.base].qword()
+                                    : (m.base == 16
+                                           ? instance->registers.base_pointer.raw()
+                                           : instance->registers.stack_pointer.raw());
+                addr += static_cast<uint64_t>(static_cast<int64_t>(m.disp));
+                if (m.flags & 0x02) {
+                    const uint64_t idx = regs[m.index].qword() << m.scale;
+                    if (m.flags & 0x04) addr -= idx; else addr += idx;
+                }
+                uint64_t val;
+                if (m.flags & 0x01) { // host
+                    val = 0;
+                    std::memcpy(&val, reinterpret_cast<const void *>(addr),
+                                m.width);
+                } else {
+                    switch (m.width) {
+                    case 1: val = instance->vm_mem.read_u8(addr); break;
+                    case 2: val = instance->vm_mem.read_u16(addr); break;
+                    case 4: val = instance->vm_mem.read_u32(addr); break;
+                    default: val = instance->vm_mem.read_u64_fast(addr); break;
+                    }
+                }
+                if (m.flags & 0x08) { // sign-extend anchos < 8
+                    switch (m.width) {
+                    case 1: val = static_cast<uint64_t>(
+                                static_cast<int64_t>(static_cast<int8_t>(val))); break;
+                    case 2: val = static_cast<uint64_t>(
+                                static_cast<int64_t>(static_cast<int16_t>(val))); break;
+                    case 4: val = static_cast<uint64_t>(
+                                static_cast<int64_t>(static_cast<int32_t>(val))); break;
+                    default: break;
+                    }
+                }
+                regs[m.reg].qword(val);
+                instance->registers.rip.qword(instance->registers.rip.raw() +
+                                              fl_inl.size_instr);
+                ++profiler_instr_counter;
+                NEXT_DISPATCH();
+            }
+
+            L_MST: {
+                const auto &m = d->data_instruction.mem_full;
+                if ((m.flags & 0x10) || m.width > 8) goto L_SLOW;
+                auto &regs = instance->registers.regs;
+                uint64_t addr = m.base < 16
+                                    ? regs[m.base].qword()
+                                    : (m.base == 16
+                                           ? instance->registers.base_pointer.raw()
+                                           : instance->registers.stack_pointer.raw());
+                addr += static_cast<uint64_t>(static_cast<int64_t>(m.disp));
+                if (m.flags & 0x02) {
+                    const uint64_t idx = regs[m.index].qword() << m.scale;
+                    if (m.flags & 0x04) addr -= idx; else addr += idx;
+                }
+                const uint64_t val = regs[m.reg].qword();
+                if (m.flags & 0x01) { // host
+                    std::memcpy(reinterpret_cast<void *>(addr), &val, m.width);
+                } else {
+                    switch (m.width) {
+                    case 1: instance->vm_mem.write_u8(addr, static_cast<uint8_t>(val)); break;
+                    case 2: instance->vm_mem.write_u16(addr, static_cast<uint16_t>(val)); break;
+                    case 4: instance->vm_mem.write_u32(addr, static_cast<uint32_t>(val)); break;
+                    default: instance->vm_mem.write_u64_fast(addr, val); break;
+                    }
+                }
                 instance->registers.rip.qword(instance->registers.rip.raw() +
                                               fl_inl.size_instr);
                 ++profiler_instr_counter;
