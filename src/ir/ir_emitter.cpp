@@ -6722,6 +6722,18 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
                 << " (no se emite codigo)\n\n";
             continue;
         }
+        // NOTA (medido 2026-07-25): el interp NO divide aristas criticas.  El
+        // critical-edge splitting (que el vreg SI usa) es optimo para el nativo
+        // -- branch predictor de hardware, sin la super-instruccion cmpjmp --
+        // pero PEOR para el interprete: fuerza `cmpjmp` (cuyo next-dispatch
+        // threaded es bimodal, predice peor que un cmp+jcc con dos sitios de
+        // dispatch separados) + un bloque puente por arista (mas transiciones
+        // de bloque).  string_workout regresiona +23% con el split.  El OPTIMO
+        // del interp es el flag-safe inline (emit_phi_copies entre el cmp y el
+        // jcc, sin puente).  Es una divergencia REAL de arquitectura (el vreg
+        // emite las copias de PHI en las aristas; el interp inline), no
+        // duplicacion gratuita.  El pase compartido `split_critical_edges` lo
+        // consume solo el vreg.
         std::string err = emit_function(fn, opts, out, first_func, &mod);
         first_func = false;
         if (!err.empty()) {
