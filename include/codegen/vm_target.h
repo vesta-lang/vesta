@@ -76,9 +76,22 @@ inline jit::TargetRegInfo build_vm_target(bool reserve_scratch = true) {
     // Convencion que el emisor pre-asigna: retorno en r0, argumentos r1-r12.
     for (uint8_t r = 1; r <= 12; ++r) t.arg_regs[GP].push_back(r);
     t.ret_reg[GP] = 0;
-    // Nada se pierde al cruzar un CALL -> todos "sobreviven" (callee_saved es
-    // lo que el modelo entiende por eso).
-    t.callee_saved[GP] = t.allocatable[GP];
+
+    /* Que sobrevive a un CALL.  El emisor salva y restaura los valores vivos
+     * alrededor de la llamada, asi que r1-r12 SI sobreviven.  r0 NO: es donde
+     * el callee deja el valor de RETORNO, y lo escribe DESPUES de cualquier
+     * restauracion.  Un valor colocado ahi y usado tras la llamada se pierde.
+     *
+     * El asignador anterior no lo decia: lo codificaba en el ORDEN de su pool
+     * (`free_pool = [1..12, 0]`, con el comentario "r0 al final ... se reserva
+     * para retorno").  Una preferencia implicita en como se recorre un vector
+     * no es describible, asi que el modelo -- que reparte por lane -- daba r0
+     * el primero y rompia 5 programas del corpus: corrupcion de heap en
+     * 165_unique_dtor y cuelgues en 39_spawn_pingpong, pic_real y
+     * test_av_mixed.  Aqui es un HECHO del ABI, en el sitio donde se describe
+     * la ISA, y el allocator lo respeta sin saber nada de la VM. */
+    for (uint8_t r = 1; r <= last_alloc; ++r) t.callee_saved[GP].push_back(r);
+    t.caller_saved[GP].push_back(0);
     return t;
 }
 

@@ -57,6 +57,7 @@
 
 #include "codegen/rbank/abstract_problem.h"
 #include "codegen/rbank/adapters/liveness_adapter.h"
+#include "codegen/vm_isa_facts.h"
 #include "ir/liveness.h"
 #include "ir/ssa_ir.h"
 
@@ -126,9 +127,26 @@ liveness_to_problem(const ir::IrFunction &fn, const ir::LivenessResult &live,
     rbank::AbstractProblem p;
     p.values.reserve(live.intervals.size());
 
-    // Posiciones de llamada UNA vez (no por valor): el adaptador las linealiza
-    // en el mismo espacio que def/end, que es lo que hace comparable el covers.
-    const std::vector<uint32_t> calls = rbank::collect_call_positions(fn, live);
+    /* Posiciones que DESTRUYEN una lane volatil, UNA vez (no por valor): el
+     * adaptador las linealiza en el mismo espacio que def/end, que es lo que
+     * hace comparable el @c covers.
+     *
+     * Una LLAMADA es un caso de esto, no la definicion.  En la VM tambien lo
+     * son las instrucciones que dejan su resultado o su estado en R0 sin que
+     * R0 sea operando (@c deffield, @c spawn, @c future, @c msgrecv...): un
+     * valor colocado ahi y vivo despues se pierde igual que si lo hubiera
+     * pisado un retorno.  Quien dice cuales son es @c vm_isa_facts.h -- aqui
+     * solo se recogen sus posiciones. */
+    std::vector<uint32_t> calls = rbank::collect_call_positions(fn, live);
+    for (size_t b = 0; b < fn.blocks.size() && b < live.block_start.size(); ++b) {
+        const uint32_t base = live.block_start[b];
+        const std::vector<ir::IrInstr> &ins = fn.blocks[b].instrs;
+        for (size_t j = 0; j < ins.size(); ++j)
+            if (vm_op_clobbers_ret(ins[j].op) && !rbank::ir_op_is_call(ins[j].op))
+                calls.push_back(base + static_cast<uint32_t>(j));
+    }
+    std::sort(calls.begin(), calls.end());
+    calls.erase(std::unique(calls.begin(), calls.end()), calls.end());
 
     /* Pines del ABI de la VM: params[i] -> r(i+1) hasta 12; del 13 en adelante
      * el parametro NO cabe en registro y vive en memoria.  Se indexa por

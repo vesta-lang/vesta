@@ -76,10 +76,23 @@ int main() {
         CHECK(t.arg_regs[GP].front() == 1);
         CHECK(t.arg_regs[GP].back() == 12);
 
-        // En la VM un CALL no clobbea el banco del llamante (frame propio), asi
-        // que ningun asignable es volatil: todos sobreviven.
-        CHECK(t.caller_saved[GP].empty());
-        CHECK(t.callee_saved[GP].size() == t.allocatable[GP].size());
+        /* Que sobrevive a un CALL.  El emisor salva y restaura los valores
+         * vivos alrededor de la llamada, asi que r1-r12 SI sobreviven.  r0 NO:
+         * es donde el callee deja el RETORNO, y lo escribe despues de cualquier
+         * restauracion.
+         *
+         * Este test afirmaba antes lo contrario ("ningun asignable es volatil:
+         * todos sobreviven").  Era falso, y no lo delataba nadie porque el
+         * asignador del interprete esquivaba r0 por el ORDEN de su pool -- una
+         * preferencia implicita, no una regla.  Al conectar el modelo repartia
+         * r0 el primero y rompia cinco programas del corpus.  Ver
+         * @c codegen/vm_isa_facts.h. */
+        CHECK(t.caller_saved[GP].size() == 1);
+        CHECK(has(t.caller_saved[GP], 0)); // r0 = retorno -> volatil
+        CHECK(!has(t.callee_saved[GP], 0));
+        CHECK(t.callee_saved[GP].size() + t.caller_saved[GP].size() ==
+              t.allocatable[GP].size()); // la particion cubre el pool entero
+        for (uint8_t r = 1; r <= 12; ++r) CHECK(has(t.callee_saved[GP], r));
 
         CHECK(t.pointer_size == 8);
     }

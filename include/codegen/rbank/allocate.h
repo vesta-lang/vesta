@@ -53,23 +53,32 @@ namespace codegen {
 namespace rbank {
 
 /**
- * @brief Asigna registros con rbank.  @p vreg_count = tamano DENSO (mf.vreg_count);
- *        @p tri = descriptor del path (JIT/AOT); @p vec_active = usa el path vectorial
- *        (afecta a las lanes VEC_ACC demand-driven).  El ssa_coalesce del backend ya
- *        elimino las copias -> el modelo NO re-coalesce (cada vreg tiene su asignacion).
+ * @brief Resuelve un @c AbstractProblem YA construido: greedy + taxonomia +
+ *        Recovery + puente a @c codegen::RegAlloc.
+ *
+ * Es el NUCLEO del allocator, y esta separado del punto de entrada a proposito.
+ * Los tres modos llegan aqui, pero por PUERTAS distintas: el JIT y el AOT desde
+ * los intervalos del MachineIR (@c intervals_to_problem), el interprete desde la
+ * vivacidad del IR (@c liveness_to_problem) -- son espacios de posiciones
+ * distintos, no el mismo adaptador.  Lo que NO puede diferir es lo que viene
+ * despues: si esta secuencia se copiara para el segundo consumidor, cada mejora
+ * y cada fallo del asignador habria que hacerlos dos veces, que es exactamente
+ * lo que este refactor elimina.
+ *
+ * El splitting (3a pasada) NO esta aqui: necesita los intervalos del MachineIR
+ * para construir el plan, asi que vive en el punto de entrada que los tiene.
+ *
+ * @param vreg_count  tamano DENSO del vector @c assign del resultado.
  */
-inline codegen::RegAlloc rbank_allocate(const jit::IntervalResult &ivs, uint32_t vreg_count,
-                                    const jit::TargetRegInfo &tri, bool vec_active,
-                                    const jit::MachineNextUseFacts *next_use = nullptr,
-                                    SpillTrace *trace = nullptr, bool recover = true,
-                                    codegen::AssignmentPlan *plan_out = nullptr) {
-    PhysicalRegisterBank bank =
-        physical_bank_x86_64_from_reginfo(tri, jit::backend_caps_host());
+inline codegen::RegAlloc rbank_solve(const AbstractProblem &p, uint32_t vreg_count,
+                                     const PhysicalRegisterBank &bank, bool vec_active,
+                                     const jit::MachineNextUseFacts *next_use,
+                                     SpillTrace *trace, bool recover,
+                                     LaneAssignment *la_out = nullptr) {
     ConstraintSet cs;
-    OptimizationContext ctx = make_context(bank, cs);
+    OptimizationContext ctx = make_context(const_cast<PhysicalRegisterBank &>(bank), cs);
     ctx.next_use = next_use;  // Fact MachineIR (Belady); nullptr = fallback duracion.
     ctx.spill_trace = trace;  // instrumento opcional (razon de victima).
-    const AbstractProblem p = intervals_to_problem(ivs);
     LaneAssignment la = color_smart_spill(p, ctx, vec_active);
     // Taxonomia de los spills del greedy (PRE-recovery): fully/partially/structural
     // -- el "mapa" que dirige el siguiente escalon (Fragmentation Recovery ataca los
@@ -93,6 +102,28 @@ inline codegen::RegAlloc rbank_allocate(const jit::IntervalResult &ivs, uint32_t
         if (trace) trace->rec_greedy += rec;
     }
     codegen::RegAlloc ra = regalloc_from_lanes(la, p, bank, vreg_count);
+    if (la_out) *la_out = std::move(la);
+    return ra;
+}
+
+/**
+ * @brief Punto de entrada del JIT y el AOT: parte de los intervalos del
+ *        MachineIR.  @p vreg_count = tamano DENSO (mf.vreg_count); @p tri =
+ *        descriptor del path; @p vec_active = usa el path vectorial (afecta a
+ *        las lanes VEC_ACC demand-driven).  El ssa_coalesce del backend ya
+ *        elimino las copias -> el modelo NO re-coalesce.
+ */
+inline codegen::RegAlloc rbank_allocate(const jit::IntervalResult &ivs, uint32_t vreg_count,
+                                    const jit::TargetRegInfo &tri, bool vec_active,
+                                    const jit::MachineNextUseFacts *next_use = nullptr,
+                                    SpillTrace *trace = nullptr, bool recover = true,
+                                    codegen::AssignmentPlan *plan_out = nullptr) {
+    PhysicalRegisterBank bank =
+        physical_bank_x86_64_from_reginfo(tri, jit::backend_caps_host());
+    const AbstractProblem p = intervals_to_problem(ivs);
+    LaneAssignment la;
+    codegen::RegAlloc ra =
+        rbank_solve(p, vreg_count, bank, vec_active, next_use, trace, recover, &la);
 
     /* 3a pasada (Fragmentation Recovery / splitting): los spills que NO caben enteros en
      * una lane pueden volver a registro POR TRAMOS.  No toca @c la ni @c ra: produce un

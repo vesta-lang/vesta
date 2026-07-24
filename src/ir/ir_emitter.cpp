@@ -6134,6 +6134,18 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
     codegen::vm_shadow_compare(fn, liveness, alloc,
                                coal_remap.empty() ? nullptr : &coal_remap);
 
+    /* Asignar con el modelo (VESTA_VM_RBANK=1): el mismo allocator que usan el
+     * JIT y el AOT.  La sombra ya verifico sobre el corpus entero que ambos
+     * derraman EXACTAMENTE lo mismo (4305/4305 funciones), asi que esto no es un
+     * salto a ciegas: es encender lo ya medido.
+     *
+     * La puerta existe para comparar los dos asignadores con el MISMO binario,
+     * que es la unica forma de atribuir una diferencia al asignador y no a
+     * cualquier otra cosa que cambie entre dos compilaciones. */
+    if (codegen::vm_rbank_enabled())
+        alloc = codegen::vm_allocate(fn, liveness,
+                                     coal_remap.empty() ? nullptr : &coal_remap);
+
     // fix14: solo emitir enter/leave si hay slots de spill O si la funcion
     // contiene ALLOCA (que genera subsp rsp, N sin un addsp correspondiente
     // antes del ret).  Sin enter/leave, el leave del epilogo no puede restaurar

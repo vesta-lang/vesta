@@ -38,6 +38,7 @@
 #ifndef VESTA_CODEGEN_VM_SHADOW_H
 #define VESTA_CODEGEN_VM_SHADOW_H
 
+#include "codegen/rbank/allocate.h"
 #include "codegen/rbank/allowed_lanes.h"
 #include "codegen/rbank/coloring.h"
 #include "codegen/rbank/optimization_context.h"
@@ -172,6 +173,59 @@ inline void vm_shadow_compare(const ir::IrFunction &fn,
     std::lock_guard<std::mutex> lk(vm_shadow_mutex());
     vm_shadow_agg().add_fn(fn.name, static_cast<uint32_t>(p.values.size()),
                            emitter.num_spill_slots, spills_model);
+}
+
+/** @brief ¿Asigna el modelo en vez de @c ir::allocate_regs?  @c VESTA_VM_RBANK. */
+inline bool vm_rbank_enabled() {
+    static const bool on = [] {
+        const char *e = std::getenv("VESTA_VM_RBANK");
+        return e && e[0] && e[0] != '0';
+    }();
+    return on;
+}
+
+/**
+ * @brief Asigna los registros del camino del INTERPRETE con @c codegen::rbank
+ *        -- el mismo allocator que ya usan el JIT y el AOT.
+ *
+ * La funcion se limita a construir el problema en el dominio del IR y delegar en
+ * @c rbank_solve.  NO reimplementa la secuencia greedy/taxonomia/Recovery: si lo
+ * hiciera, el interprete tendria su propia copia del allocator y volveriamos al
+ * punto de partida con otro nombre.
+ *
+ * @param coalesce_remap  congruencias de PHI.  El adaptador las FUNDE al entrar
+ *        (congruentes SON el mismo valor) y aqui se REPARTEN al salir: son la ida
+ *        y la vuelta de la misma transformacion.
+ */
+inline codegen::RegAlloc
+vm_allocate(const ir::IrFunction &fn, const ir::LivenessResult &live,
+            const std::vector<uint32_t> *coalesce_remap) {
+    const rbank::AbstractProblem p = liveness_to_problem(fn, live, coalesce_remap);
+    const uint32_t n = static_cast<uint32_t>(fn.values.size());
+    if (p.values.empty()) {
+        codegen::RegAlloc empty;
+        empty.assign.assign(n, codegen::RegAlloc::VAssign{});
+        return empty;
+    }
+    const rbank::PhysicalRegisterBank bank =
+        rbank::physical_bank_x86_64_from_reginfo(target_vm(), jit::backend_caps_host());
+    codegen::RegAlloc ra =
+        rbank::rbank_solve(p, n, bank, /*vec_active=*/false, /*next_use=*/nullptr,
+                           /*trace=*/nullptr, /*recover=*/true);
+
+    /* Repartir la asignacion del root a los demas miembros de su clase.  El
+     * problema tenia UN valor por clase (fundido en el adaptador), asi que sin
+     * esto los miembros no-root quedarian sin ubicacion. */
+    if (coalesce_remap && !coalesce_remap->empty()) {
+        const std::vector<uint32_t> &remap = *coalesce_remap;
+        ra.assign.resize(n);
+        for (uint32_t v = 0; v < n; ++v) {
+            const uint32_t rt = (v < remap.size()) ? remap[v] : v;
+            if (rt == v || rt >= ra.assign.size()) continue;
+            ra.assign[v] = ra.assign[rt];
+        }
+    }
+    return ra;
 }
 
 } // namespace codegen

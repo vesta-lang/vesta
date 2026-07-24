@@ -211,6 +211,41 @@ int main() {
         }
     }
 
+    /* --- 8. Los clobbers IMPLICITOS de R0 llegan al problema --------------
+     * Muchas instrucciones de la VM dejan su resultado o su estado en R0 sin
+     * que R0 sea operando.  Un valor vivo a traves de una de ellas NO puede
+     * vivir ahi.  El modelo lo entiende con su regla de siempre -- cruzar un
+     * punto que destruye una lane volatil -- pero solo si el adaptador le
+     * cuenta esas posiciones, que es lo que se comprueba aqui.
+     *
+     * Sin esto el asignador reparte R0 como cualquier otro y el valor se
+     * pierde: paso de verdad, con corrupcion de heap y cuelgues en el corpus. */
+    {
+        // Instruccion 3 = DEFFIELD (deja 1/0 en R0), sin ninguna CALL.
+        IrFunction fn = make_fn(8, SIZE_MAX);
+        fn.blocks[0].instrs[3].op = IrOp::DEFFIELD;
+        const LivenessResult live = make_live(8, {{1, 6},   // cruza el clobber
+                                                  {0, 2},   // acaba antes
+                                                  {4, 7},   // empieza despues
+                                                  {3, 3}}); // JUSTO en el
+        const codegen::rbank::AbstractProblem p =
+            codegen::liveness_to_problem(fn, live);
+
+        const auto *cross = find(p, 0), *before = find(p, 1), *after = find(p, 2),
+                   *exact = find(p, 3);
+        CHECK(cross && cross->req.crosses_call);
+        CHECK(before && !before->req.crosses_call);
+        CHECK(after && !after->req.crosses_call);
+        CHECK(exact && exact->req.crosses_call); // el borde CUENTA, como en un call
+
+        // Y una op que NO toca R0 no inventa un clobber donde no lo hay.
+        IrFunction limpia = make_fn(8, SIZE_MAX);
+        limpia.blocks[0].instrs[3].op = IrOp::ADD;
+        const codegen::rbank::AbstractProblem q =
+            codegen::liveness_to_problem(limpia, live);
+        for (const auto &v : q.values) CHECK(!v.req.crosses_call);
+    }
+
     std::printf("--- %d checks, %d fallos ---\n", g_checks, g_fails);
     return g_fails ? 1 : 0;
 }
