@@ -5471,6 +5471,177 @@ int log2_if_power_of_two(uint64_t v) {
 
 } // namespace
 
+// =========================================================================
+//  Pase ir_pass_elim_redundant_sext: elimina SEXT(v) cuando v es una variable
+//  de INDUCCION no-negativa ACOTADA (loop counter tipico) -> el sign-extend es
+//  la identidad.
+// =========================================================================
+//
+// Patron: `%v = phi(init, %inc)` con init CONST >= 0 y `%inc = add(%v, c)`
+// (c CONST > 0), donde el PROPIO bloque del PHI (el loop header) termina en
+// `br_cond(cmp.lt/le %v, K)` (K CONST).  Ese es el test de salida del loop, asi
+// que %v esta ACOTADO GLOBALMENTE: el maximo valor que %v alcanza es el ultimo
+// incremento antes de salir (Kmax + c - 1).  Si ese maximo cabe bajo el bit de
+// signo del ancho (< 2^(bits-1)), %v es un iN canonico en el registro de 64
+// bits (bits altos 0) EN TODA la funcion -> `sext.i64 %v` == %v.  Se reemplazan
+// los usos del SEXT por %v y se borra la instruccion.  Beneficia `seed ^ (u64)i`
+// de los hash-loops (elimina 1 op/iter en los 3 backends).
+//
+// Robusto (no conservador): el numero de usos de %v es IRRELEVANTE -- la cota es
+// una propiedad del valor, no de sus usos.  La cota es GLOBAL (vale en el cuerpo
+// Y en el exit: al salir %v vale como mucho Kmax+c-1, tambien < 2^(bits-1)), asi
+// que NO hace falta analisis de dominancia.  La unica exigencia estructural es
+// que el CMP de salida guarde %v en el header del propio PHI (loop natural).  La
+// verificacion de correctness es la suite e2e (compara resultados reales; el
+// diff_harness NO valdria porque el pase es compartido y los 3 backends
+// coincidirian aunque estuviera mal).
+bool ir_pass_elim_redundant_sext(IrFunction &fn) {
+    // vid -> valor CONST.
+    std::unordered_map<IrValueId, int64_t> const_vids;
+    for (const auto &bb : fn.blocks)
+        for (const auto &ins : bb.instrs)
+            if (ins.op == IrOp::CONST && ins.dst != IR_NO_VALUE)
+                const_vids[ins.dst] = static_cast<int64_t>(ins.imm);
+    auto get_const = [&](IrValueId v, int64_t &out) -> bool {
+        auto it = const_vids.find(v);
+        if (it == const_vids.end()) return false;
+        out = it->second;
+        return true;
+    };
+
+    // dst -> ADD(base, c) con c CONST (recurrencia de la induccion).
+    struct AddDef {
+        IrValueId base;
+        int64_t c;
+    };
+    std::unordered_map<IrValueId, AddDef> add_defs;
+    // dst del CMP -> (operando comparado, K const, incluye_igual).  Cubre el
+    // test de salida del loop `%v < K` (CMP_LT) y `%v <= K` (CMP_LE).
+    struct CmpBound {
+        IrValueId v;
+        int64_t K;
+        bool inclusive; // true = LE (%v <= K), false = LT (%v < K)
+    };
+    std::unordered_map<IrValueId, CmpBound> cmp_bound;
+    for (const auto &bb : fn.blocks)
+        for (const auto &ins : bb.instrs) {
+            if (ins.op == IrOp::ADD && ins.operands.size() == 2 &&
+                ins.dst != IR_NO_VALUE) {
+                int64_t c;
+                if (get_const(ins.operands[1], c))
+                    add_defs[ins.dst] = {ins.operands[0], c};
+                else if (get_const(ins.operands[0], c))
+                    add_defs[ins.dst] = {ins.operands[1], c};
+            }
+            if ((ins.op == IrOp::CMP_LT || ins.op == IrOp::CMP_LE) &&
+                ins.operands.size() == 2 && ins.dst != IR_NO_VALUE) {
+                int64_t k;
+                if (get_const(ins.operands[1], k))
+                    cmp_bound[ins.dst] = {ins.operands[0], k,
+                                          ins.op == IrOp::CMP_LE};
+            }
+        }
+
+    auto narrow_signed_bits = [](IrType t) -> int {
+        switch (t) {
+        case IrType::I8: return 8;
+        case IrType::I16: return 16;
+        case IrType::I32: return 32;
+        default: return 0; // 0 = no aplica
+        }
+    };
+
+    // PHIs que son contadores de induccion no-negativos ACOTADOS por el test de
+    // salida de su PROPIO bloque (loop header).  Robusto: el numero de usos de
+    // %v es irrelevante -- la cota es una propiedad del valor.
+    std::unordered_set<IrValueId> good_phi;
+    for (const auto &bb : fn.blocks) {
+        // El bloque debe terminar en BR_COND; su condicion debe ser
+        // CMP_LT/LE(%phi, K) del MISMO bloque (el header del loop guarda su
+        // propia variable de induccion).  Asi la cota es global (ver arriba)
+        // sin necesitar analisis de dominancia.
+        const IrInstr *term = nullptr;
+        for (auto it = bb.instrs.rbegin(); it != bb.instrs.rend(); ++it) {
+            if (it->op == IrOp::BR_COND) { term = &*it; break; }
+            if (it->op == IrOp::BR || it->op == IrOp::RET ||
+                it->op == IrOp::THROW || it->op == IrOp::TAILCALL)
+                break;
+        }
+        if (term == nullptr || term->operands.empty()) continue;
+        auto cb = cmp_bound.find(term->operands[0]);
+        if (cb == cmp_bound.end()) continue;
+        const IrValueId guarded = cb->second.v; // %v de `%v < K`
+        // K efectivo: LT -> exit cuando %v >= K, ultimo %v en el rango es
+        // K-1+c; LE -> exit cuando %v > K, ultimo es K+c.  Usamos el maximo
+        // valor posible de %v (Kmax) para el chequeo de no-desbordamiento.
+        const int64_t Kmax =
+            cb->second.inclusive ? cb->second.K + 1 : cb->second.K;
+
+        for (const auto &ins : bb.instrs) {
+            if (ins.op != IrOp::PHI || ins.dst != guarded) continue;
+            const int bits = narrow_signed_bits(fn.values[ins.dst].type);
+            if (bits == 0) continue;
+            if (ins.phi_args.size() != 2) continue;
+            const IrValueId a0 = ins.phi_args[0].value;
+            const IrValueId a1 = ins.phi_args[1].value;
+            int64_t init = 0, c = 0;
+            auto try_pair = [&](IrValueId mi, IrValueId minc) -> bool {
+                int64_t ic;
+                if (!get_const(mi, ic) || ic < 0) return false;
+                auto it = add_defs.find(minc);
+                if (it == add_defs.end()) return false;
+                if (it->second.base != ins.dst || it->second.c <= 0)
+                    return false;
+                init = ic;
+                c = it->second.c;
+                return true;
+            };
+            if (!try_pair(a0, a1) && !try_pair(a1, a0)) continue;
+            // Cota global: %v en [init, Kmax + c - 1] (el ultimo incremento
+            // antes de salir).  Debe caber bajo el bit de signo del ancho.
+            const int64_t LIMIT = static_cast<int64_t>(1) << (bits - 1);
+            if (Kmax <= 0) continue;
+            if (Kmax + c - 1 >= LIMIT) continue; // podria tocar el bit de signo
+            good_phi.insert(ins.dst);
+        }
+    }
+
+    if (good_phi.empty()) return false;
+
+    // SEXT(%v) con %v en good_phi -> redundante.  Recolectar sext_dst -> %v.
+    std::unordered_map<IrValueId, IrValueId> replace;
+    for (const auto &bb : fn.blocks)
+        for (const auto &ins : bb.instrs)
+            if (ins.op == IrOp::SEXT && ins.operands.size() == 1 &&
+                ins.dst != IR_NO_VALUE && good_phi.count(ins.operands[0]))
+                replace[ins.dst] = ins.operands[0];
+    if (replace.empty()) return false;
+
+    // Reescribir todos los usos del dst del SEXT por %v.
+    auto remap = [&](IrValueId v) -> IrValueId {
+        auto it = replace.find(v);
+        return it != replace.end() ? it->second : v;
+    };
+    for (auto &bb : fn.blocks)
+        for (auto &ins : bb.instrs) {
+            for (IrValueId &o : ins.operands) o = remap(o);
+            for (auto &pa : ins.phi_args) pa.value = remap(pa.value);
+            if (ins.func_ptr != IR_NO_VALUE) ins.func_ptr = remap(ins.func_ptr);
+        }
+
+    // Borrar las instrucciones SEXT ahora muertas.
+    for (auto &bb : fn.blocks)
+        bb.instrs.erase(
+            std::remove_if(bb.instrs.begin(), bb.instrs.end(),
+                           [&](const IrInstr &ins) {
+                               return ins.op == IrOp::SEXT &&
+                                      ins.dst != IR_NO_VALUE &&
+                                      replace.count(ins.dst) > 0;
+                           }),
+            bb.instrs.end());
+    return true;
+}
+
 bool ir_pass_strength_reduction(IrFunction &fn) {
     bool changed = false;
 
@@ -10684,6 +10855,8 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
             any |= ir_pass_fuse_fma(fn);
             any |= ir_pass_strength_reduction(
                 fn);                    /* mul/div/mod power-of-2 -> shifts */
+            any |= ir_pass_elim_redundant_sext(
+                fn); /* SEXT de induccion no-neg acotada -> identidad */
             any |= ir_pass_reassoc(fn); /* (x op c1) op c2 -> x op (c1 op c2) */
             // LICM RECIBE la tabla points-to del AnalysisManager (no la
             // construye).  Solo se pide si el LICM alias-aware esta activo
