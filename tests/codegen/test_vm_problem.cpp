@@ -162,6 +162,55 @@ int main() {
         CHECK(find(p, 99) == nullptr);
     }
 
+    /* --- 6. Pines de la convencion de llamada -----------------------------
+     * params[i] vive en r(i+1) hasta 12; del 13 en adelante NO cabe en registro
+     * y es memoria.  Es una restriccion del ABI de la VM, no una decision del
+     * asignador, asi que tiene que estar EN el problema: sin ella el modelo no
+     * sabe que un parametro esta clavado y mueve otra cosa (medido: +1 derrame
+     * en 12 funciones del corpus antes de anyadirlos). */
+    {
+        IrFunction fn = make_fn(4, SIZE_MAX);
+        fn.params = {10, 11, 12};
+        LivenessResult live = make_live(4, {});
+        live.intervals = {{10, 0, 3}, {11, 0, 3}, {12, 0, 3}, {50, 1, 2}};
+        const codegen::rbank::AbstractProblem p =
+            codegen::liveness_to_problem(fn, live);
+
+        const auto *p0 = find(p, 10), *p1 = find(p, 11), *p2 = find(p, 12);
+        CHECK(p0 && p0->req.fixed_reg == 1); // params[0] -> r1
+        CHECK(p1 && p1->req.fixed_reg == 2);
+        CHECK(p2 && p2->req.fixed_reg == 3);
+        CHECK(p0 && p0->req.has_fixed_reg());
+        // Un valor que NO es parametro no lleva pin.
+        const auto *v = find(p, 50);
+        CHECK(v && v->req.fixed_reg == -1);
+        CHECK(v && !v->req.must_be_memory());
+    }
+
+    /* --- 7. Mas de 12 parametros: los extra son MEMORIA -------------------- */
+    {
+        IrFunction fn = make_fn(4, SIZE_MAX);
+        LivenessResult live = make_live(4, {});
+        for (IrValueId i = 0; i < 14; ++i) {
+            fn.params.push_back(i);
+            live.intervals.push_back({i, 0, 3});
+        }
+        const codegen::rbank::AbstractProblem p =
+            codegen::liveness_to_problem(fn, live);
+
+        for (IrValueId i = 0; i < 12; ++i) {
+            const auto *v = find(p, i);
+            CHECK(v && v->req.fixed_reg == static_cast<int16_t>(i + 1));
+            CHECK(v && !v->req.must_be_memory());
+        }
+        // El 13o y el 14o no caben en r1-r12: memoria, sin pin.
+        for (IrValueId i = 12; i < 14; ++i) {
+            const auto *v = find(p, i);
+            CHECK(v && v->req.fixed_reg == -1);
+            CHECK(v && v->req.must_be_memory());
+        }
+    }
+
     std::printf("--- %d checks, %d fallos ---\n", g_checks, g_fails);
     return g_fails ? 1 : 0;
 }

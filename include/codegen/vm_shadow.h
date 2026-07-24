@@ -140,15 +140,21 @@ inline void print_vm_shadow_summary() {
  * @param fn        funcion SSA.
  * @param live      vivacidad del IR (la misma que usa el emisor).
  * @param emitter   resultado del asignador actual, para comparar.
+ * @param coalesce_remap  el MISMO remap que recibe ir::allocate_regs.  Sin el,
+ *        la comparacion no seria entre dos asignadores sino entre DOS PROBLEMAS
+ *        distintos: el emisor asigna sobre valores canonicos (congruencias de
+ *        PHI ya fundidas) y el modelo veria mas valores vivos de los que hay.
  */
 inline void vm_shadow_compare(const ir::IrFunction &fn,
                               const ir::LivenessResult &live,
-                              const ir::AllocResult &emitter) {
+                              const ir::AllocResult &emitter,
+                              const std::vector<uint32_t> *coalesce_remap) {
     if (!vm_shadow_enabled()) return; // camino cerrado: coste ~0.
     static std::once_flag once;
     std::call_once(once, [] { std::atexit(print_vm_shadow_summary); });
 
-    const rbank::AbstractProblem p = liveness_to_problem(fn, live);
+    const rbank::AbstractProblem p =
+        liveness_to_problem(fn, live, coalesce_remap);
     if (p.values.empty()) return;
 
     rbank::PhysicalRegisterBank bank =

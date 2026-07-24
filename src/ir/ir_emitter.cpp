@@ -6155,7 +6155,8 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
      * es el ORACULO de diff_harness, asi que cambiar su asignacion de golpe
      * reescribiria el `.vel` de todo el corpus a la vez y no habria forma de
      * distinguir "decide distinto" de "decide MAL". */
-    codegen::vm_shadow_compare(fn, liveness, alloc);
+    codegen::vm_shadow_compare(fn, liveness, alloc,
+                               coal_remap.empty() ? nullptr : &coal_remap);
 
     // fix14: solo emitir enter/leave si hay slots de spill O si la funcion
     // contiene ALLOCA (que genera subsp rsp, N sin un addsp correspondiente

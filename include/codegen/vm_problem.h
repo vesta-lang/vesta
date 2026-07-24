@@ -42,11 +42,14 @@
  *     camino; los ZMM se manejan aparte en el emisor),
  *   - @c crosses_call, via el @c liveness_adapter ya existente.
  *
- * QUE NO se extrae todavia, y por que no es un olvido: los pines de
- * argumento (r1-r12) y el retorno (r0) los pre-asigna hoy el propio
- * @c ir::allocate_regs.  Se anyadiran como @c fixed_reg cuando el modelo
- * SUSTITUYA a ese allocator, no antes -- mientras se corre en SOMBRA, meterlos
- * cambiaria lo que se compara.
+ *   - los PINES de la convencion de llamada: @c params[i] vive en @c r(i+1)
+ *     para i < 12, y a partir de ahi el parametro va DIRECTO a memoria.  No es
+ *     una decision del asignador sino una restriccion del ABI de la VM, asi que
+ *     pertenece al problema, no a quien lo resuelve.  (En la primera version
+ *     del adaptador se dejaron fuera para no alterar lo que se comparaba en el
+ *     modo sombra; medido entonces: el modelo derramaba +1 en 12 funciones de
+ *     4291, todas con muchos valores vivos a la vez -- justo donde no saber que
+ *     un parametro esta clavado obliga a mover otra cosa.)
  */
 
 #ifndef VESTA_CODEGEN_VM_PROBLEM_H
@@ -57,7 +60,9 @@
 #include "ir/liveness.h"
 #include "ir/ssa_ir.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 namespace codegen {
@@ -68,6 +73,9 @@ namespace codegen {
  *
  * @param fn    funcion SSA (para localizar las llamadas).
  * @param live  vivacidad de @c compute_liveness (dominio IR).
+ * @param coalesce_remap  congruencias de PHI (indexado por IrValueId) o nullptr.
+ *        Con el, los valores de una clase se funden en su root con el intervalo
+ *        unido -- porque congruentes SON el mismo valor.
  * @return el problema en el dominio IR, listo para @c color_smart_spill.
  *
  * Los @c value_id son @c IrValueId directamente: el modelo los trata como
@@ -75,13 +83,68 @@ namespace codegen {
  * puede devolver al emisor sin tabla de traduccion.
  */
 inline rbank::AbstractProblem
-liveness_to_problem(const ir::IrFunction &fn, const ir::LivenessResult &live) {
+liveness_to_problem(const ir::IrFunction &fn, const ir::LivenessResult &live,
+                    const std::vector<uint32_t> *coalesce_remap = nullptr) {
+    /* CANONICALIZACION por congruencia de PHI.  Cuando hay remap, los valores
+     * de una misma clase COMPARTEN registro, asi que el problema real tiene un
+     * unico valor por clase con el intervalo UNIDO (def = min, end = max).  Si
+     * se pasaran los intervalos en crudo, el modelo veria mas valores vivos de
+     * los que hay y una presion que no existe -- medido: derramaba +1 en 12
+     * funciones, todas con bucles (que es donde hay PHIs).  No es una decision
+     * del asignador: es que dos valores congruentes SON el mismo valor. */
+    if (coalesce_remap && !coalesce_remap->empty()) {
+        const std::vector<uint32_t> &remap = *coalesce_remap;
+        auto root = [&](ir::IrValueId v) -> ir::IrValueId {
+            return (v != ir::IR_NO_VALUE && v < remap.size()) ? remap[v] : v;
+        };
+        std::unordered_map<ir::IrValueId, ir::LiveInterval> merged;
+        for (const ir::LiveInterval &li : live.intervals) {
+            const ir::IrValueId r = root(li.id);
+            auto it = merged.find(r);
+            if (it == merged.end()) {
+                ir::LiveInterval ni = li;
+                ni.id = r;
+                merged.emplace(r, ni);
+            } else {
+                it->second.def = std::min(it->second.def, li.def);
+                it->second.end = std::max(it->second.end, li.end);
+            }
+        }
+        ir::LivenessResult canon;
+        canon.block_start = live.block_start;
+        canon.block_end = live.block_end;
+        canon.num_instrs = live.num_instrs;
+        canon.intervals.reserve(merged.size());
+        for (auto &kv : merged) canon.intervals.push_back(kv.second);
+        std::sort(canon.intervals.begin(), canon.intervals.end(),
+                  [](const ir::LiveInterval &a, const ir::LiveInterval &b) {
+                      return a.def < b.def || (a.def == b.def && a.id < b.id);
+                  });
+        return liveness_to_problem(fn, canon, nullptr); // ya canonico
+    }
+
     rbank::AbstractProblem p;
     p.values.reserve(live.intervals.size());
 
     // Posiciones de llamada UNA vez (no por valor): el adaptador las linealiza
     // en el mismo espacio que def/end, que es lo que hace comparable el covers.
     const std::vector<uint32_t> calls = rbank::collect_call_positions(fn, live);
+
+    /* Pines del ABI de la VM: params[i] -> r(i+1) hasta 12; del 13 en adelante
+     * el parametro NO cabe en registro y vive en memoria.  Se indexa por
+     * IrValueId para no buscar dentro del bucle. */
+    constexpr size_t kMaxRegParams = 12;
+    std::vector<int16_t> pin;      // -1 = sin pin
+    std::vector<uint8_t> in_memory; // 1 = parametro que no cabe en registro
+    for (size_t i = 0; i < fn.params.size(); ++i) {
+        const ir::IrValueId pid = fn.params[i];
+        if (pid >= pin.size()) {
+            pin.resize(static_cast<size_t>(pid) + 1, -1);
+            in_memory.resize(static_cast<size_t>(pid) + 1, 0);
+        }
+        if (i < kMaxRegParams) pin[pid] = static_cast<int16_t>(i + 1);
+        else in_memory[pid] = 1;
+    }
 
     for (const ir::LiveInterval &iv : live.intervals) {
         if (iv.end < iv.def) continue; // intervalo vacio: el allocator lo ignora.
@@ -92,7 +155,9 @@ liveness_to_problem(const ir::IrFunction &fn, const ir::LivenessResult &live) {
         av.req.value_id = iv.id;
         av.req.cls = rbank::ResourceClass::GP;
         av.req.width = rbank::ViewWidth::W8; // registros de 64 bits.
-        av.req.fixed_reg = -1;               // sin pines mientras corre en sombra.
+        av.req.fixed_reg = (iv.id < pin.size()) ? pin[iv.id] : -1;
+        if (iv.id < in_memory.size() && in_memory[iv.id])
+            av.req.residency = rbank::Residency::MEMORY;
         // crosses_call: lo rellena el adaptador de vivacidad, no este fichero
         // -- asi la respuesta a "por que cruza" es siempre suya.
         rbank::populate_liveness_requirements(av.req, iv, calls);
