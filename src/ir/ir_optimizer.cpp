@@ -5643,19 +5643,104 @@ compute_value_facts(const IrFunction &fn) {
                     }
                 }
                 break;
-            case IrOp::AND:
-                // x & mask (mask CONST >= 0) -> [0, mask]; KnownBits: bits fuera
-                // de la mascara quedan en 0.
+            case IrOp::SUB:
                 if (ins.operands.size() == 2) {
-                    int64_t m;
-                    if ((cst_of(ins.operands[1], m) && m >= 0) ||
-                        (cst_of(ins.operands[0], m) && m >= 0)) {
-                        r.lo = 0;
-                        r.hi = m;
-                        r.kz = ~static_cast<uint64_t>(m); // bits fuera de mask = 0
+                    ValueFacts a = get(ins.operands[0]), b = get(ins.operands[1]);
+                    if (!a.range_full() && !b.range_full()) {
+                        int64_t lo, hi;
+                        if (!__builtin_sub_overflow(a.lo, b.hi, &lo) &&
+                            !__builtin_sub_overflow(a.hi, b.lo, &hi)) {
+                            r.lo = lo;
+                            r.hi = hi;
+                        }
                     }
                 }
                 break;
+            case IrOp::AND: {
+                if (ins.operands.size() != 2) break;
+                // KnownBits: un bit es 0 si lo es en CUALQUIER operando.
+                ValueFacts a = get(ins.operands[0]), b = get(ins.operands[1]);
+                r.kz = a.kz | b.kz;
+                r.ko = a.ko & b.ko;
+                // x & mask (mask CONST >= 0) -> range [0, mask].
+                int64_t m;
+                if ((cst_of(ins.operands[1], m) && m >= 0) ||
+                    (cst_of(ins.operands[0], m) && m >= 0)) {
+                    r.lo = 0;
+                    r.hi = m;
+                }
+                break;
+            }
+            case IrOp::OR: {
+                if (ins.operands.size() != 2) break;
+                // Un bit es 1 si lo es en cualquiera; 0 si lo es en AMBOS.
+                ValueFacts a = get(ins.operands[0]), b = get(ins.operands[1]);
+                r.ko = a.ko | b.ko;
+                r.kz = a.kz & b.kz;
+                break;
+            }
+            case IrOp::XOR: {
+                if (ins.operands.size() != 2) break;
+                ValueFacts a = get(ins.operands[0]), b = get(ins.operands[1]);
+                r.kz = (a.kz & b.kz) | (a.ko & b.ko); // 0^0 o 1^1 -> 0
+                r.ko = (a.kz & b.ko) | (a.ko & b.kz); // 0^1 o 1^0 -> 1
+                break;
+            }
+            case IrOp::SHL: {
+                // a << c (c CONST 0..63): los c bits bajos entran a 0.
+                int64_t c;
+                if (ins.operands.size() == 2 && cst_of(ins.operands[1], c) &&
+                    c >= 0 && c < 64) {
+                    ValueFacts a = get(ins.operands[0]);
+                    const uint64_t low = (c == 0) ? 0ULL : ((1ULL << c) - 1ULL);
+                    r.kz = (a.kz << c) | low;
+                    r.ko = a.ko << c;
+                    if (a.lo >= 0 && a.hi >= 0) { // range solo si no-negativo
+                        int64_t hi;
+                        if (!__builtin_mul_overflow(a.hi, int64_t(1) << c, &hi)) {
+                            r.lo = a.lo << c;
+                            r.hi = hi;
+                        }
+                    }
+                }
+                break;
+            }
+            case IrOp::SHR: {
+                // a >>u c (logico, c CONST): los c bits altos entran a 0.
+                int64_t c;
+                if (ins.operands.size() == 2 && cst_of(ins.operands[1], c) &&
+                    c >= 0 && c < 64) {
+                    ValueFacts a = get(ins.operands[0]);
+                    const uint64_t high =
+                        (c == 0) ? 0ULL : ~(~0ULL >> c); // top c bits
+                    r.kz = (a.kz >> c) | high;
+                    r.ko = a.ko >> c;
+                    if (a.lo >= 0 && a.hi >= 0) {
+                        r.lo = static_cast<int64_t>(static_cast<uint64_t>(a.lo) >> c);
+                        r.hi = static_cast<int64_t>(static_cast<uint64_t>(a.hi) >> c);
+                    }
+                }
+                break;
+            }
+            case IrOp::SAR: {
+                // a >>s c (aritmetico).  Si a es no-negativo (bit signo=0) es
+                // igual que SHR; si no, se rellena con el signo (skip: full).
+                int64_t c;
+                if (ins.operands.size() == 2 && cst_of(ins.operands[1], c) &&
+                    c >= 0 && c < 64) {
+                    ValueFacts a = get(ins.operands[0]);
+                    if ((a.kz & (1ULL << 63)) || (a.lo >= 0 && !a.range_full())) {
+                        const uint64_t high = (c == 0) ? 0ULL : ~(~0ULL >> c);
+                        r.kz = (a.kz >> c) | high;
+                        r.ko = a.ko >> c;
+                        if (a.lo >= 0 && a.hi >= 0) {
+                            r.lo = a.lo >> c;
+                            r.hi = a.hi >> c;
+                        }
+                    }
+                }
+                break;
+            }
             case IrOp::PHI: {
                 bool all = !ins.phi_args.empty();
                 int64_t lo = INT64_MAX, hi = INT64_MIN;
