@@ -1844,6 +1844,29 @@ static bool has_phi_copies_to(EmitCtx &ctx, IrBlockId pred_id,
     return false;
 }
 
+// True si TODAS las copias de PHI de pred->succ son "flag-safe": ambos
+// extremos viven en registro GP o en el banco ZMM (mov/fmov no tocan flags).
+// Un extremo DERRAMADO usa el patron `mov r13, rbp; subu r13, K; mov rN,[r13]`
+// -> el @c subu CLOBBEA los flags.  Solo cuando todas son flag-safe podemos
+// intercalar las copias del false-block ENTRE el @c cmp y el @c jcc sin
+// materializar el bool con @c setcc (ahorra setcc + push/pop + re-comparar).
+static bool phi_copies_flag_safe(EmitCtx &ctx, IrBlockId pred_id,
+                                 IrBlockId succ_id) {
+    if (succ_id >= static_cast<IrBlockId>(ctx.fn.blocks.size())) return true;
+    const IrBlock &succ = ctx.fn.blocks[succ_id];
+    for (const auto &ins : succ.instrs) {
+        if (ins.op != IrOp::PHI) break;
+        if (ins.dst == IR_NO_VALUE) continue;
+        for (const auto &pa : ins.phi_args) {
+            if (pa.block == pred_id && pa.value != IR_NO_VALUE) {
+                if (ctx.alloc.spilled(ins.dst) || ctx.alloc.spilled(pa.value))
+                    return false; // load/store via subu -> clobbea flags
+            }
+        }
+    }
+    return true;
+}
+
 // Emite el lowering de CMP standalone (no fusionada con BR_COND):
 //   cmps r_a, r_b
 //   jmp.<cond> __true
@@ -2891,6 +2914,33 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                                          ctx.block_label(next.false_block));
                         emit_phi_copies(ctx, bid, next.target_block);
                         emit_jmp_or_fallthrough(ctx, bid, next.target_block);
+                    } else if (phi_copies_flag_safe(ctx, bid,
+                                                    next.false_block)) {
+                        // Path FLAG-SAFE (calidad de codegen): cuando TODAS
+                        // las copias de PHI del false-block son reg-a-reg (o
+                        // ZMM), @c mov/@c fmov NO tocan flags -> podemos
+                        // intercalarlas ENTRE el @c cmp y el @c jcc sin
+                        // materializar el bool con @c setcc.  Es el MISMO
+                        // patron que el FCMP fusionado de arriba, con cmp
+                        // entero.  Elimina setcc + push/pop + `mov r13,0` +
+                        // `cmpu` (~5 ops) que el fallback tradicional metia
+                        // por MIEDO al clobber de flags -- miedo que solo
+                        // aplica a copias DERRAMADAS (esas usan @c subu).
+                        // Las operands del cmp (ra/rb) ya se consumieron, asi
+                        // que una copia que reusa su registro es correcta.
+                        //
+                        // Impacto medido: patrones `if (a OP b) stmt;` con
+                        // un merge que copia un acumulador loop-carried (p.ej.
+                        // hash_lookup: `if ((seed&7)==0) acc++`) pasan de 9
+                        // ops a 3 en la region del branch.
+                        const char *cmp_mn = cmp_mnemonic(ins.op);
+                        ctx.out << "    " << cmp_mn << " " << ra << ", " << rb
+                                << "\n";
+                        emit_phi_copies(ctx, bid, next.false_block);
+                        emit_cond_branch(ctx, ins.op,
+                                         ctx.block_label(next.false_block));
+                        emit_phi_copies(ctx, bid, next.target_block);
+                        emit_jmp_or_fallthrough(ctx, bid, next.target_block);
                     } else {
                         // Fallback: cmp + cond branch tradicional.
                         //
@@ -2900,7 +2950,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                         // Resultado: el branch lee flags stale del subu
                         // (siempre ZF=0 porque rbp-K != 0) y NUNCA toma
                         // la rama true.  Sintoma: `if (it == 0) nlen = 1;`
-                        // no actualiza nlen.
+                        // no actualiza nlen.  Solo llegamos aqui cuando
+                        // alguna copia del false-block esta DERRAMADA.
                         //
                         // Tampoco basta con emitir phi_copies antes del
                         // cmp porque los phi dst regs pueden colisionar
