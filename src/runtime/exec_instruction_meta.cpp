@@ -558,7 +558,11 @@ void exec_instr_mld(ProcessVM *vm, const DecodedInstr &instr) {
         case 1: val = vm->vm_mem.read_u8(addr); break;
         case 2: val = vm->vm_mem.read_u16(addr); break;
         case 4: val = vm->vm_mem.read_u32(addr); break;
-        default: val = vm->vm_mem.read_u64(addr); break;
+        // read_u64_fast: page-cache -> memcpy directo en hit (~1 ns) vs TLB
+        // walk completo (~50 ns).  mld es la carga universal del hot loop (arrays,
+        // locales, campos): accesos MAYORMENTE en la misma pagina -> el cache
+        // acierta.  En scattered cae al camino lento (correcto, sin regresion).
+        default: val = vm->vm_mem.read_u64_fast(addr); break;
         }
     }
     // Banco FP (bit 4): el valor cargado va DIRECTO al banco ZMM como float,
@@ -627,7 +631,7 @@ void exec_instr_mst(ProcessVM *vm, const DecodedInstr &instr) {
         case 1: vm->vm_mem.write_u8(addr, static_cast<uint8_t>(val)); break;
         case 2: vm->vm_mem.write_u16(addr, static_cast<uint16_t>(val)); break;
         case 4: vm->vm_mem.write_u32(addr, static_cast<uint32_t>(val)); break;
-        default: vm->vm_mem.write_u64(addr, val); break;
+        default: vm->vm_mem.write_u64_fast(addr, val); break; // page-cache (ver mld)
         }
     }
 }

@@ -1696,7 +1696,13 @@ void exec_instr_fastpush(ProcessVM *vm, const DecodedInstr &instr) {
     while (mask) {
         const int r = __builtin_ctz(static_cast<unsigned int>(mask));
         const uint64_t val = vm->registers.regs[r].qword();
-        vm->vm_mem.write_u64(slot, val);
+        // write_u64_fast: los slots del frame caen todos en la MISMA pagina
+        // (el stack es contiguo), asi que el page-cache acierta tras el primer
+        // acceso -> memcpy directo (~1 ns) en vez de un TLB walk completo por
+        // registro (~50 ns).  fastpush/pop envuelven CADA calln (save/restore
+        // de regs vivos), asi que este era el grueso del coste de las llamadas
+        // nativas en el interp.
+        vm->vm_mem.write_u64_fast(slot, val);
         slot -= 8;
         mask &= static_cast<uint16_t>(mask - 1); // limpiar bit mas bajo
     }
@@ -1724,7 +1730,8 @@ void exec_instr_fastpop(ProcessVM *vm, const DecodedInstr &instr) {
     uint64_t slot = rsp + static_cast<uint64_t>(count - 1) * 8ULL;
     while (mask) {
         const int r = __builtin_ctz(static_cast<unsigned int>(mask));
-        const uint64_t val = vm->vm_mem.read_u64(slot);
+        // read_u64_fast: mismo page-cache que fastpush (frame contiguo).
+        const uint64_t val = vm->vm_mem.read_u64_fast(slot);
         vm->registers.regs[r].qword(val);
         slot -= 8;
         mask &= static_cast<uint16_t>(mask - 1);
