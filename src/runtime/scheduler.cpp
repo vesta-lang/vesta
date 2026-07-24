@@ -511,6 +511,11 @@ void Scheduler::run_loop() {
                     dispatch_table[0x100 | 0x79] = &&L_ALU3;
                     dispatch_table[0x100 | 0x7A] = &&L_ALU3;
                     dispatch_table[0x100 | 0x7B] = &&L_ALU3;
+                    /* Shifts (mode=3) + setcc: hot en loops FNV/hash. */
+                    dispatch_table[0x100 | 0x1B] = &&L_SHL;
+                    dispatch_table[0x100 | 0x1C] = &&L_SHR;
+                    dispatch_table[0x100 | 0x1D] = &&L_SAR;
+                    dispatch_table[0x100 | 0x43] = &&L_SETCC;
                     /* loadz / loadzh (0x7C / 0x7D) caen al SLOW path:
                      * el inlining provoca icache/BTB pressure que regresa
                      * benches con muchos opcodes (poly, callvirt_hot).
@@ -938,6 +943,112 @@ void Scheduler::run_loop() {
                     break;
                 default: goto L_SLOW;
                 }
+                instance->registers.rip.qword(instance->registers.rip.raw() +
+                                              fl_inl.size_instr);
+                ++profiler_instr_counter;
+                NEXT_DISPATCH();
+            }
+
+            /* SHL/SHR/SAR reg,reg (mode=3, 64-bit): compute inline + flags
+             * IDENTICAS al path generico (ShlOp/ShrOp/SarOp): solo CF/OF, ZF/SF
+             * quedan intactos.  Modos parciales caen a L_SLOW.  Ataca los loops
+             * FNV/hash/shift-heavy (hash_lookup: 5 shifts/iter iban a L_SLOW). */
+            L_SHL: {
+                if (fl_inl.mode != 3) goto L_SLOW;
+                auto &regs = instance->registers.regs;
+                auto &fl = instance->registers.flags.bits;
+                const uint8_t rdst = d->data_instruction.reg_data.reg1;
+                const uint8_t rsrc = d->data_instruction.reg_data.reg2;
+                const uint64_t a = regs[rdst].qword();
+                const uint32_t sh = static_cast<uint32_t>(regs[rsrc].qword()) & 63u;
+                const uint64_t res = a << sh;
+                regs[rdst].qword(res);
+                if (sh == 0) {
+                    fl.CF = 0;
+                    fl.OF = 0;
+                } else {
+                    const uint64_t cf = (a >> (64 - sh)) & 1;
+                    fl.CF = cf;
+                    fl.OF = cf ^ (res >> 63);
+                }
+                instance->registers.rip.qword(instance->registers.rip.raw() +
+                                              fl_inl.size_instr);
+                ++profiler_instr_counter;
+                NEXT_DISPATCH();
+            }
+
+            L_SHR: {
+                if (fl_inl.mode != 3) goto L_SLOW;
+                auto &regs = instance->registers.regs;
+                auto &fl = instance->registers.flags.bits;
+                const uint8_t rdst = d->data_instruction.reg_data.reg1;
+                const uint8_t rsrc = d->data_instruction.reg_data.reg2;
+                const uint64_t a = regs[rdst].qword();
+                const uint32_t sh = static_cast<uint32_t>(regs[rsrc].qword()) & 63u;
+                regs[rdst].qword(a >> sh);
+                if (sh == 0) {
+                    fl.CF = 0;
+                } else {
+                    fl.CF = (a >> (sh - 1)) & 1;
+                }
+                fl.OF = 0;
+                instance->registers.rip.qword(instance->registers.rip.raw() +
+                                              fl_inl.size_instr);
+                ++profiler_instr_counter;
+                NEXT_DISPATCH();
+            }
+
+            L_SAR: {
+                if (fl_inl.mode != 3) goto L_SLOW;
+                auto &regs = instance->registers.regs;
+                auto &fl = instance->registers.flags.bits;
+                const uint8_t rdst = d->data_instruction.reg_data.reg1;
+                const uint8_t rsrc = d->data_instruction.reg_data.reg2;
+                const uint64_t a = regs[rdst].qword();
+                const uint32_t sh = static_cast<uint32_t>(regs[rsrc].qword()) & 63u;
+                regs[rdst].qword(
+                    static_cast<uint64_t>(static_cast<int64_t>(a) >> sh));
+                if (sh == 0) {
+                    fl.CF = 0;
+                } else {
+                    fl.CF = (a >> (sh - 1)) & 1;
+                }
+                fl.OF = 0;
+                instance->registers.rip.qword(instance->registers.rip.raw() +
+                                              fl_inl.size_instr);
+                ++profiler_instr_counter;
+                NEXT_DISPATCH();
+            }
+
+            /* SETCC r_dst, cond: escribe 0/1 segun la condicion.  reg1 empaqueta
+             * (cond<<4)|dst.  No toca flags (identico a exec_instr_setcc). */
+            L_SETCC: {
+                auto &regs = instance->registers.regs;
+                const auto &fl = instance->registers.flags.bits;
+                const uint8_t packed = d->data_instruction.reg_data.reg1;
+                const uint8_t cond = (packed >> 4) & 0xF;
+                const uint8_t rdst = packed & 0xF;
+                bool taken;
+                switch (cond) {
+                case 0x00: taken = fl.OF; break;
+                case 0x01: taken = !fl.OF; break;
+                case 0x02: taken = fl.CF; break;
+                case 0x03: taken = !fl.CF; break;
+                case 0x04: taken = fl.ZF; break;
+                case 0x05: taken = !fl.ZF; break;
+                case 0x06: taken = fl.CF || fl.ZF; break;
+                case 0x07: taken = !fl.CF && !fl.ZF; break;
+                case 0x08: taken = fl.SF; break;
+                case 0x09: taken = !fl.SF; break;
+                case 0x0A: taken = fl.ZF && !(fl.SF ^ fl.OF); break;
+                case 0x0B: taken = !fl.ZF; break;
+                case 0x0C: taken = (fl.SF ^ fl.OF); break;
+                case 0x0D: taken = !(fl.SF ^ fl.OF); break;
+                case 0x0E: taken = fl.ZF || (fl.SF ^ fl.OF); break;
+                case 0x0F: taken = true; break;
+                default: taken = false; break;
+                }
+                regs[rdst].qword(taken ? 1 : 0);
                 instance->registers.rip.qword(instance->registers.rip.raw() +
                                               fl_inl.size_instr);
                 ++profiler_instr_counter;
