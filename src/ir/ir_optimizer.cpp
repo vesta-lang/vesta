@@ -5909,6 +5909,11 @@ static bool fold_compares_with_facts(
         return it != facts.end() ? it->second : ValueFacts{};
     };
     constexpr uint64_t SIGN = 1ULL << 63; // bit de signo del registro i64
+    // Un valor es provablemente no-negativo si su bit de signo es known-zero o
+    // su rango arranca en >=0 (el registro unsigned == signed en ese caso).
+    auto nonneg = [&](const ValueFacts &f) -> bool {
+        return (f.kz & SIGN) || (!f.range_full() && f.lo >= 0);
+    };
 
     bool changed = false;
     for (auto &bb : fn.blocks)
@@ -5918,6 +5923,11 @@ static bool fold_compares_with_facts(
             const ValueFacts fb = facts_of(ins.operands[1]);
             const int64_t alo = fa.lo, ahi = fa.hi, blo = fb.lo, bhi = fb.hi;
             const bool a_rng = !fa.range_full(), b_rng = !fb.range_full();
+            // `b == 0` (constante) usado por varios plegados unsigned.
+            const bool b_is0 = b_rng && blo == 0 && bhi == 0;
+            // Ambos no-negativos -> las comparaciones unsigned coinciden con las
+            // signed sobre el mismo rango.
+            const bool both_nn = nonneg(fa) && nonneg(fb);
 
             std::optional<bool> res; // vacio = indeterminado
             switch (ins.op) {
@@ -5963,11 +5973,47 @@ static bool fold_compares_with_facts(
                     if (alo == ahi && blo == bhi && alo == blo) res = true;
                     else if (ahi < blo || bhi < alo) res = false; // disjuntos
                 }
+                // KnownBits: si difieren en un bit conocido (uno lo tiene a 1 y
+                // el otro a 0) nunca son iguales, aunque los rangos se solapen.
+                if (!res && ((fa.ko & fb.kz) | (fa.kz & fb.ko)) != 0)
+                    res = false;
                 break;
             case IrOp::CMP_NE:
                 if (a_rng && b_rng) {
                     if (ahi < blo || bhi < alo) res = true; // disjuntos
                     else if (alo == ahi && blo == bhi && alo == blo) res = false;
+                }
+                if (!res && ((fa.ko & fb.kz) | (fa.kz & fb.ko)) != 0)
+                    res = true; // bits en conflicto -> siempre distintos
+                break;
+            // --- Comparaciones sin signo ---
+            // `x <u 0` es imposible y `x >=u 0` siempre cierto (independiente
+            // del rango).  El resto coincide con la logica signed si ambos
+            // operandos son no-negativos (registro unsigned == signed).
+            case IrOp::CMP_ULT:
+                if (b_is0) res = false;
+                else if (both_nn && a_rng && b_rng) {
+                    if (ahi < blo) res = true;
+                    else if (alo >= bhi) res = false;
+                }
+                break;
+            case IrOp::CMP_UGE:
+                if (b_is0) res = true;
+                else if (both_nn && a_rng && b_rng) {
+                    if (alo >= bhi) res = true;
+                    else if (ahi < blo) res = false;
+                }
+                break;
+            case IrOp::CMP_UGT:
+                if (both_nn && a_rng && b_rng) {
+                    if (alo > bhi) res = true;
+                    else if (ahi <= blo) res = false;
+                }
+                break;
+            case IrOp::CMP_ULE:
+                if (both_nn && a_rng && b_rng) {
+                    if (ahi <= blo) res = true;
+                    else if (alo > bhi) res = false;
                 }
                 break;
             default: break;
