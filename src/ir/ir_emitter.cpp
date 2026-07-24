@@ -46,6 +46,7 @@
 #include "vx/asm/asm_phys_reg.h"          // sustitucion $N -> reg fisico
 #include "jit/inline_asm_trampoline.h" // inc.6: fnv1a64_asm (clave del trampoline)
 #include "jit/ssa_coalesce.h"          // ssa_phi_coalesce_remap (congruencia SSA)
+#include "codegen/parallel_move.h"     // sequence_parallel_moves (compartido 3 modos)
 #include "loader/interp_stackmap.h"    // E.1: INTERP_SM_SLOT_BASE + StackmapGcKind
 #include <sstream>
 #include <cstdio>
@@ -2107,61 +2108,21 @@ static void emit_phi_copies(EmitCtx &ctx, IrBlockId pred_id,
 
     // Paso 3: copia paralela para valores en registro.
     // Mapa: dst_reg -> src_reg (solo registros numericos)
-    std::unordered_map<int, int> pending;
-    for (const auto &c : reg_copies) {
-        int d = ctx.alloc.reg_of(c.dst);
-        int s = ctx.alloc.reg_of(c.src);
-        if (d != s) pending[d] = s;
-    }
-
-    // Emitir copias cuyo destino no es fuente de ninguna otra (no introduce
-    // RAW)
-    bool changed = true;
-    while (changed && !pending.empty()) {
-        changed = false;
-        for (auto it = pending.begin(); it != pending.end();) {
-            int d = it->first;
-            int s = it->second;
-            // Seguro si d no es fuente de otra copia pendiente
-            bool d_is_src = false;
-            for (const auto &p : pending) {
-                if (p.first != d && p.second == d) {
-                    d_is_src = true;
-                    break;
-                }
-            }
-            if (!d_is_src) {
-                ctx.out << "    mov " << reg_name(d) << ", " << reg_name(s)
-                        << "\n";
-                it = pending.erase(it);
-                changed = true;
-            } else {
-                ++it;
-            }
-        }
-    }
-
-    // Paso 4: romper ciclos con r14 como temporal
-    while (!pending.empty()) {
-        auto it = pending.begin();
-        int start = it->first;
-        // Guardar el valor inicial del primer registro del ciclo en r14
-        ctx.out << "    mov " << reg_name(SCRATCH_REG) << ", "
-                << reg_name(start) << "\n";
-        int cur = start;
-        for (;;) {
-            int nxt = pending.at(cur);
-            pending.erase(cur);
-            if (nxt == start) {
-                // Fin del ciclo: restaurar desde r14
-                ctx.out << "    mov " << reg_name(cur) << ", "
-                        << reg_name(SCRATCH_REG) << "\n";
-                break;
-            }
-            ctx.out << "    mov " << reg_name(cur) << ", " << reg_name(nxt)
-                    << "\n";
-            cur = nxt;
-        }
+    // Paso 3+4: copia paralela reg-a-reg via el secuenciador COMPARTIDO
+    // (codegen::sequence_parallel_moves).  Los reg_copies son todos reg->reg
+    // (los derramados se manejan en las categorias (a)/(c)); construimos los
+    // pares {dst_reg, src_reg} y el modulo comun calcula el orden seguro +
+    // rompe ciclos con SCRATCH_REG.  El interp solo EMITE cada paso como un
+    // `mov` de bytecode; misma decision que usa el path vreg.
+    {
+        std::vector<codegen::PMoveStep> pmoves;
+        pmoves.reserve(reg_copies.size());
+        for (const auto &c : reg_copies)
+            pmoves.push_back({ctx.alloc.reg_of(c.dst), ctx.alloc.reg_of(c.src)});
+        for (const auto &step :
+             codegen::sequence_parallel_moves(std::move(pmoves), SCRATCH_REG))
+            ctx.out << "    mov " << reg_name(step.dst) << ", "
+                    << reg_name(step.src) << "\n";
     }
 
     // Paso 5 ( c): spilled-src reg-dst.  Carga directa del slot al
