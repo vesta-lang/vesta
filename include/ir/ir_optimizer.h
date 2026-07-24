@@ -402,7 +402,7 @@ bool ir_pass_strength_reduction(IrFunction &fn);
  * @brief Elimina SEXT redundante de variables de induccion no-negativas
  *        acotadas por el test de salida de su loop (ver ir_optimizer.cpp).
  */
-bool ir_pass_elim_redundant_sext(IrFunction &fn);
+bool ir_pass_elim_redundant_casts(IrFunction &fn);
 
 /**
  * @brief Pase Reassociation.

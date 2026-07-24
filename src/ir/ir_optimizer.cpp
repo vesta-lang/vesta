@@ -5686,7 +5686,8 @@ compute_value_facts(const IrFunction &fn) {
 }
 
 // =========================================================================
-//  Pase ir_pass_elim_redundant_sext: primer consumidor de ValueFacts.
+//  Pase ir_pass_elim_redundant_casts: consumidor de ValueFacts.  Elimina
+//  SEXT/ZEXT/AND-mascara redundantes que los KnownBits prueban identidad.
 // =========================================================================
 //
 // Elimina `sext.i64 (iN v)` cuando KnownBits PRUEBA que los bits [63:N] del
@@ -5698,7 +5699,7 @@ compute_value_facts(const IrFunction &fn) {
 // transforma.  Beneficia `seed ^ (u64)i` de los hash-loops (elimina 1 op/iter
 // en los 3 backends).  Verificacion: e2e (compara resultados; diff_harness NO
 // valdria -- el pase es compartido, los 3 backends coincidirian aun mal).
-bool ir_pass_elim_redundant_sext(IrFunction &fn) {
+bool ir_pass_elim_redundant_casts(IrFunction &fn) {
     auto narrow_bits = [](IrType t) -> int {
         switch (t) {
         case IrType::I8: return 8;
@@ -5712,22 +5713,68 @@ bool ir_pass_elim_redundant_sext(IrFunction &fn) {
         auto it = facts.find(v);
         return it != facts.end() ? it->second : ValueFacts{};
     };
+    // Valor CONST de un vid (para la mascara del AND).
+    std::unordered_map<IrValueId, int64_t> const_vids;
+    for (const auto &bb : fn.blocks)
+        for (const auto &ins : bb.instrs)
+            if (ins.op == IrOp::CONST && ins.dst != IR_NO_VALUE)
+                const_vids[ins.dst] = static_cast<int64_t>(ins.imm);
+    auto cst_of = [&](IrValueId v, int64_t &o) -> bool {
+        auto it = const_vids.find(v);
+        if (it == const_vids.end()) return false;
+        o = it->second;
+        return true;
+    };
 
-    // SEXT(v, iN->i64) redundante si bits [N-1, 64) de v son known-zero (el
-    // valor es no-negativo y cabe en N-1 bits -> sign-extend == identidad, y el
-    // registro ya esta canonico).
+    // Cada cast/mascara cuya redundancia PRUEBAN los KnownBits se reescribe a su
+    // valor fuente.  dst_redundante -> valor_equivalente.
     std::unordered_map<IrValueId, IrValueId> replace;
     for (const auto &bb : fn.blocks)
         for (const auto &ins : bb.instrs) {
-            if (ins.op != IrOp::SEXT || ins.operands.size() != 1 ||
-                ins.dst == IR_NO_VALUE)
-                continue;
-            const IrValueId src = ins.operands[0];
-            const int N = narrow_bits(fn.values[src].type);
-            if (N == 0 || N >= 64) continue;
-            const uint64_t upper = ~((1ULL << (N - 1)) - 1ULL); // bits [N-1, 64)
-            if ((facts_of(src).kz & upper) == upper) // todos known-zero
-                replace[ins.dst] = src;
+            if (ins.dst == IR_NO_VALUE) continue;
+            switch (ins.op) {
+            case IrOp::SEXT: {
+                // SEXT(v, iN->i64) == v si bits [N-1, 64) de v son known-zero
+                // (valor no-negativo, cabe en N-1 bits, registro canonico).
+                if (ins.operands.size() != 1) break;
+                const IrValueId src = ins.operands[0];
+                const int N = narrow_bits(fn.values[src].type);
+                if (N == 0 || N >= 64) break;
+                const uint64_t upper = ~((1ULL << (N - 1)) - 1ULL);
+                if ((facts_of(src).kz & upper) == upper)
+                    replace[ins.dst] = src;
+                break;
+            }
+            case IrOp::ZEXT: {
+                // ZEXT(v, iN->i64) == v si bits [N, 64) de v YA son known-zero
+                // (el zero-extend no cambia nada).
+                if (ins.operands.size() != 1) break;
+                const IrValueId src = ins.operands[0];
+                const int N = narrow_bits(fn.values[src].type);
+                if (N == 0 || N >= 64) break;
+                const uint64_t upper = ~((1ULL << N) - 1ULL); // bits [N, 64)
+                if ((facts_of(src).kz & upper) == upper)
+                    replace[ins.dst] = src;
+                break;
+            }
+            case IrOp::AND: {
+                // v & mask == v si TODOS los bits fuera de mask son known-zero
+                // en v (v no tiene bits que la mascara borre).
+                if (ins.operands.size() != 2) break;
+                int64_t m;
+                IrValueId val = IR_NO_VALUE;
+                if (cst_of(ins.operands[1], m))
+                    val = ins.operands[0];
+                else if (cst_of(ins.operands[0], m))
+                    val = ins.operands[1];
+                if (val == IR_NO_VALUE) break;
+                const uint64_t nm = ~static_cast<uint64_t>(m); // bits fuera de mask
+                if (nm != 0 && (facts_of(val).kz & nm) == nm)
+                    replace[ins.dst] = val;
+                break;
+            }
+            default: break;
+            }
         }
     if (replace.empty()) return false;
 
@@ -5741,12 +5788,13 @@ bool ir_pass_elim_redundant_sext(IrFunction &fn) {
             for (auto &pa : ins.phi_args) pa.value = remap(pa.value);
             if (ins.func_ptr != IR_NO_VALUE) ins.func_ptr = remap(ins.func_ptr);
         }
+    // Borrar los casts/mascaras ahora muertos (su dst esta en replace; en SSA
+    // el dst es unico, asi que basta el dst).
     for (auto &bb : fn.blocks)
         bb.instrs.erase(
             std::remove_if(bb.instrs.begin(), bb.instrs.end(),
                            [&](const IrInstr &ins) {
-                               return ins.op == IrOp::SEXT &&
-                                      ins.dst != IR_NO_VALUE &&
+                               return ins.dst != IR_NO_VALUE &&
                                       replace.count(ins.dst) > 0;
                            }),
             bb.instrs.end());
@@ -10966,8 +11014,8 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
             any |= ir_pass_fuse_fma(fn);
             any |= ir_pass_strength_reduction(
                 fn);                    /* mul/div/mod power-of-2 -> shifts */
-            any |= ir_pass_elim_redundant_sext(
-                fn); /* SEXT de induccion no-neg acotada -> identidad */
+            any |= ir_pass_elim_redundant_casts(
+                fn); /* SEXT/ZEXT/AND-mask redundantes (via ValueFacts) */
             any |= ir_pass_reassoc(fn); /* (x op c1) op c2 -> x op (c1 op c2) */
             // LICM RECIBE la tabla points-to del AnalysisManager (no la
             // construye).  Solo se pide si el LICM alias-aware esta activo
