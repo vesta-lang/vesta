@@ -387,31 +387,44 @@ int schedule_region(std::vector<MInstr> &ins, int lo, int hi,
         if (ready_cycle[i] != ready_cycle[b]) return ready_cycle[i] < ready_cycle[b];
         return i < b;
     };
+    // Conjunto READY = nodos con indeg==0 aun sin colocar.  Antes cada iteracion
+    // reescaneaba las n instrucciones para hallar las listas -> O(n^2) aunque
+    // solo una lo estuviera (una cadena de dependencias es el peor caso: 1 sola
+    // ready por vuelta, pero se escanean n).  Mantener el ready-set explicito
+    // hace que cada vuelta mire solo lo que puede colocar.  La SELECCION no
+    // cambia: @c better desempata por id (determinista), asi que el nodo elegido
+    // es el mismo sea cual sea el orden del set -> schedule identico.
+    std::vector<int> ready;
+    ready.reserve(n);
+    for (int i = 0; i < n; ++i)
+        if (indeg[i] == 0) ready.push_back(i);
+
     while (placed < n) {
-        int best = -1;       // mejor ready-ya que CABE en cur_cycle
-        int best_now = -1;   // mejor ready-ya (ignora recursos: garantia progreso)
-        bool any_ready = false;
-        for (int i = 0; i < n; ++i) {
-            if (done[i] || indeg[i] != 0) continue;
-            any_ready = true;
+        if (ready.empty()) break; // ciclo en el DAG (no deberia): salvaguarda
+        int best = -1, best_now = -1;   // mejor que cabe / mejor ignorando recursos
+        int best_pos = -1, best_now_pos = -1;
+        for (int p = 0; p < static_cast<int>(ready.size()); ++p) {
+            const int i = ready[p];
             if (ready_cycle[i] > cur_cycle) continue; // operandos no listos aun
-            if (best_now < 0 || better(i, best_now)) best_now = i;
-            if (fits(i, cur_cycle) && (best < 0 || better(i, best))) best = i;
+            if (best_now < 0 || better(i, best_now)) { best_now = i; best_now_pos = p; }
+            if (fits(i, cur_cycle) && (best < 0 || better(i, best))) { best = i; best_pos = p; }
         }
         if (best < 0 && best_now < 0) {
-            if (!any_ready) break; // ciclo en el DAG (no deberia): salvaguarda
-            ++cur_cycle;           // nada listo este ciclo -> avanzar
+            ++cur_cycle; // nada listo este ciclo -> avanzar
             continue;
         }
         const int pick = (best >= 0) ? best : best_now; // fuerza si nada cabe
+        const int pick_pos = (best >= 0) ? best_pos : best_now_pos;
         done[pick] = 1;
         ++placed;
         order.push_back(pick);
         place(pick, cur_cycle);
+        ready[pick_pos] = ready.back(); // swap-remove: sale del ready-set
+        ready.pop_back();
         const int finish = cur_cycle + static_cast<int>(ic[pick].latency + 0.5f);
         for (int s : succ[pick]) {
             ready_cycle[s] = std::max(ready_cycle[s], finish);
-            --indeg[s];
+            if (--indeg[s] == 0) ready.push_back(s); // ya colocadas sus deps
         }
     }
     // Salvaguarda (solo si un ciclo del DAG dejo nodos sin colocar): completar
