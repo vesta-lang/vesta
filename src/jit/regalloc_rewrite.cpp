@@ -14,6 +14,7 @@
 #include "jit/regalloc_rewrite.h"
 
 #include "codegen/transition_planner.h" // que movimientos exige cada punto del programa
+#include "codegen/parallel_move.h" // sequence_parallel_moves (compartido 3 modos)
 
 #include <cstdio>
 #include <cstdlib>
@@ -389,45 +390,29 @@ struct Lowerer {
      */
     void emit_parallel_moves(std::vector<std::pair<MReg, MOperand>> moves,
                              MReg scratch, std::vector<MInstr> &out) const {
-        const size_t n = moves.size();
-        std::vector<bool> done(n, false);
-        size_t remaining = n;
-        auto reads_dst = [&](size_t i) -> bool {
-            for (size_t j = 0; j < n; ++j) {
-                if (done[j] || j == i) continue;
-                if (moves[j].second.kind == MOperandKind::REG &&
-                    moves[j].second.reg == reg_id(moves[i].first))
-                    return true;
-            }
-            return false;
-        };
-        while (remaining > 0) {
-            bool progress = false;
-            for (size_t i = 0; i < n; ++i) {
-                if (done[i] || reads_dst(i)) continue;
-                out.push_back(MInstr::make_unary(MOp::MOV, reg(moves[i].first),
-                                                 moves[i].second));
-                done[i] = true;
-                --remaining;
-                progress = true;
-            }
-            if (progress) continue;
-            /* Ciclo: salvar un dst a scratch y romperlo. */
-            for (size_t i = 0; i < n; ++i) {
-                if (done[i]) continue;
-                const MReg d = moves[i].first;
-                out.push_back(
-                    MInstr::make_unary(MOp::MOV, reg(scratch), reg(d)));
-                for (size_t j = 0; j < n; ++j)
-                    if (!done[j] && moves[j].second.kind == MOperandKind::REG &&
-                        moves[j].second.reg == reg_id(d))
-                        moves[j].second = reg(scratch);
-                out.push_back(
-                    MInstr::make_unary(MOp::MOV, reg(d), moves[i].second));
-                done[i] = true;
-                --remaining;
-                break;
-            }
+        // Secuenciacion via el modulo COMPARTIDO (codegen::sequence_parallel_
+        // moves): mismo algoritmo que el interp.  Codificamos el src registro
+        // por su id; un src NO-registro (MEM/derrame) va con sentinela
+        // negativo -(i+1) (nunca lee un dst; su MOperand se recupera del
+        // vector original).  El vreg solo EMITE cada paso como un MOp::MOV.
+        std::vector<codegen::PMoveStep> steps;
+        steps.reserve(moves.size());
+        for (size_t i = 0; i < moves.size(); ++i) {
+            const int dst = reg_id(moves[i].first);
+            const int src = (moves[i].second.kind == MOperandKind::REG)
+                                ? static_cast<int>(moves[i].second.reg)
+                                : -static_cast<int>(i + 1);
+            steps.push_back({dst, src});
+        }
+        for (const auto &st :
+             codegen::sequence_parallel_moves(std::move(steps),
+                                              reg_id(scratch))) {
+            const MOperand src_op =
+                (st.src >= 0)
+                    ? reg(static_cast<MReg>(st.src))
+                    : moves[static_cast<size_t>(-st.src - 1)].second;
+            out.push_back(MInstr::make_unary(
+                MOp::MOV, reg(static_cast<MReg>(st.dst)), src_op));
         }
     }
 
@@ -745,44 +730,26 @@ struct Lowerer {
      *  scratch XMM.  Las fuentes son siempre XMM arg-regs (no memoria). */
     void emit_parallel_moves_fp(std::vector<std::pair<MReg, MOperand>> moves,
                                 MReg scratch, std::vector<MInstr> &out) const {
-        const size_t n = moves.size();
-        std::vector<bool> done(n, false);
-        size_t remaining = n;
-        auto reads_dst = [&](size_t i) -> bool {
-            for (size_t j = 0; j < n; ++j) {
-                if (done[j] || j == i) continue;
-                if (moves[j].second.kind == MOperandKind::REG &&
-                    moves[j].second.reg == reg_id(moves[i].first))
-                    return true;
-            }
-            return false;
-        };
-        while (remaining > 0) {
-            bool progress = false;
-            for (size_t i = 0; i < n; ++i) {
-                if (done[i] || reads_dst(i)) continue;
-                out.push_back(MInstr::make_unary(MOp::MOVSD, xmm(moves[i].first),
-                                                 moves[i].second));
-                done[i] = true;
-                --remaining;
-                progress = true;
-            }
-            if (progress) continue;
-            for (size_t i = 0; i < n; ++i) {
-                if (done[i]) continue;
-                const MReg d = moves[i].first;
-                out.push_back(
-                    MInstr::make_unary(MOp::MOVSD, xmm(scratch), xmm(d)));
-                for (size_t j = 0; j < n; ++j)
-                    if (!done[j] && moves[j].second.kind == MOperandKind::REG &&
-                        moves[j].second.reg == reg_id(d))
-                        moves[j].second = xmm(scratch);
-                out.push_back(MInstr::make_unary(MOp::MOVSD, xmm(d),
-                                                 moves[i].second));
-                done[i] = true;
-                --remaining;
-                break;
-            }
+        // Igual que emit_parallel_moves pero banco XMM (MOp::MOVSD, xmm()); la
+        // SECUENCIACION es la misma (codegen::sequence_parallel_moves).
+        std::vector<codegen::PMoveStep> steps;
+        steps.reserve(moves.size());
+        for (size_t i = 0; i < moves.size(); ++i) {
+            const int dst = reg_id(moves[i].first);
+            const int src = (moves[i].second.kind == MOperandKind::REG)
+                                ? static_cast<int>(moves[i].second.reg)
+                                : -static_cast<int>(i + 1);
+            steps.push_back({dst, src});
+        }
+        for (const auto &st :
+             codegen::sequence_parallel_moves(std::move(steps),
+                                              reg_id(scratch))) {
+            const MOperand src_op =
+                (st.src >= 0)
+                    ? xmm(static_cast<MReg>(st.src))
+                    : moves[static_cast<size_t>(-st.src - 1)].second;
+            out.push_back(MInstr::make_unary(
+                MOp::MOVSD, xmm(static_cast<MReg>(st.dst)), src_op));
         }
     }
 
