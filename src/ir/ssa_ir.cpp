@@ -208,6 +208,7 @@ static const OpEntry OP_TABLE[] = {
     {"load", IrOp::LOAD},
     {"store", IrOp::STORE},
     {"memcpy", IrOp::MEMCPY},
+    {"memset", IrOp::MEMSET},
     {"raw_alloc", IrOp::RAW_ALLOC},
     {"raw_free", IrOp::RAW_FREE},
     {"gc_alloc", IrOp::GC_ALLOC},
@@ -573,6 +574,7 @@ static void print_instr(std::ostream &o, const IrFunction &fn,
         ins.op == IrOp::REJECT || ins.op == IrOp::STORE ||
         ins.op == IrOp::SETFIELD || ins.op == IrOp::RESUME ||
         ins.op == IrOp::SWAPCTX || ins.op == IrOp::MEMCPY ||
+        ins.op == IrOp::MEMSET ||
         ins.op == IrOp::TRYENTER || ins.op == IrOp::GCWB_IR ||
         ins.op == IrOp::GCDEREF_IR || ins.op == IrOp::ARRAY_STORE ||
         ins.op == IrOp::RETHROW || ins.op == IrOp::RSPAWN_RETURN ||
@@ -778,6 +780,7 @@ static void print_instr(std::ostream &o, const IrFunction &fn,
         print_val(o, fn, ins.operands[1]);
         break;
 
+    case IrOp::MEMSET: // memset %dst, %val, %len (mismo formato)
     case IrOp::MEMCPY:
         // memcpy %dst, %src, %len
         o << " ";

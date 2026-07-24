@@ -414,6 +414,26 @@ enum class IrOp : uint16_t {
                    ///< mov si no)
     STORE = 0x92,  ///< store.T  %val, %ptr         (escribir; idem LOAD)
     MEMCPY = 0x93, ///< memcpy %dst_ptr, %src_ptr, %len
+    /**
+     * memset %dst_ptr, %val, %len  -- rellena @c len bytes desde @c dst con el byte
+     * bajo de @c val.  Gemelo de @c MEMCPY.
+     *
+     * POR QUE ES UN OP DEL IR Y NO UNA CADENA DE STORES.  "Esta region se pone a un
+     * valor" es un HECHO SEMANTICO, y desplegarlo en el lowering lo DESTRUYE: ningun
+     * nivel inferior puede reconstruirlo a partir de N stores sueltos.  Es la regla del
+     * optimizer -- cada cosa en el nivel MAS ALTO donde la informacion aun existe.
+     * Medido antes de existir este op: `i32[8192] arr;` (una DECLARACION) generaba
+     * 16397 instrucciones, 86 KB de codigo y 1,7 s de compilacion, porque el zero-fill
+     * se desplegaba a un STORE por cada 8 bytes sin limite.
+     *
+     * Cada backend lo MATERIALIZA segun su contexto, que es justo lo que un op
+     * semantico permite: el interprete un bucle, el JIT/AOT `rep stosb` o SIMD, y un
+     * programa sin runtime la rutina que el usuario haya puesto en su lugar (el
+     * mecanismo de sobrecarga ya existe: @c vx_memset es Vesta puro, sin libc, y el
+     * vectorizador del AOT puede promover su bucle de qwords).  Un tamano pequeno y
+     * constante lo desenrolla el BACKEND -- ahi la decision ya no pierde nada.
+     */
+    MEMSET = 0x9F,
     RAW_ALLOC =
         0x94, ///< %dst = raw_alloc.ptr %size  (rawalloc; dst es puntero host)
     RAW_FREE = 0x95,  ///< raw_free %ptr               (rawfree)

@@ -460,6 +460,48 @@ static void emit_mov_if_needed(EmitCtx &ctx, const std::string &dst,
     }
 }
 
+/**
+ * @brief Emite una instruccion de TRES operandos registro.
+ *
+ * POR QUE HACE FALTA UN HELPER.  @c load_src solo dispone de DOS scratch
+ * (@c r14 y @c r13): su @c scratch_idx es `0 -> r14`, cualquier otro `-> r13`.
+ * Con tres operandos derramados, el tercero PISA al segundo y la instruccion
+ * recibe el mismo registro dos veces -- fue un bug real (183_memcpy_idiom:
+ * `memcpyh r14, r13, r13`, con el `src` machacado por el `len`, SIGSEGV).
+ *
+ * Estrategia: si los tres operandos YA viven en registro -- el caso comun -- se
+ * emiten tal cual, sin un solo movimiento.  Solo si alguno esta derramado se
+ * pasa por la pila, que es el unico modo de materializar tres valores con dos
+ * scratch.  Asi el coste se paga exclusivamente cuando no hay alternativa.
+ */
+static void emit_three_reg_op(EmitCtx &ctx, const char *mnem, IrValueId a,
+                              IrValueId b, IrValueId c) {
+    auto in_reg = [&](IrValueId v) {
+        return v != IR_NO_VALUE &&
+               ctx.alloc.reg_map.find(v) != ctx.alloc.reg_map.end();
+    };
+    if (in_reg(a) && in_reg(b) && in_reg(c)) {
+        const std::string ra = ctx.load_src(a, 0);
+        const std::string rb = ctx.load_src(b, 0);
+        const std::string rc = ctx.load_src(c, 0);
+        ctx.out << "    " << mnem << " " << ra << ", " << rb << ", " << rc
+                << "\n";
+        return;
+    }
+    // Alguno derramado: r10/r11/r12 como portadores.  Se salvan antes (pueden
+    // tener SSA vivos) y los VALORES se empujan segun se cargan, porque
+    // @c load_src emite codigo como efecto colateral y reusa los scratch.
+    ctx.out << "    push r10\n    push r11\n    push r12\n";
+    { const std::string p = ctx.load_src(a, 0); ctx.out << "    push " << p << "\n"; }
+    { const std::string p = ctx.load_src(b, 0); ctx.out << "    push " << p << "\n"; }
+    { const std::string p = ctx.load_src(c, 0); ctx.out << "    push " << p << "\n"; }
+    ctx.out << "    pop r12\n    pop r11\n    pop r10\n";
+    ctx.out << "    " << mnem << " r10, r11, r12\n";
+    ctx.out << "    pop r12\n    pop r11\n    pop r10\n";
+    ctx.r13_cache = -1;
+    ctx.r14_cache = -1;
+}
+
 // Emite `mov r14, K` SOLO si el cache de r14 indica un valor distinto.
 // Si r14 ya tiene K (cacheado de un mov anterior dentro del mismo BB),
 // la emision se omite.  El cache se invalida en bloques nuevos y por
@@ -3955,51 +3997,49 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     }
 
     case IrOp::MEMCPY: {
-        // memcpy HOST->HOST: copia ins.operands[2] bytes desde [src] a [dst],
-        // ambos punteros del proceso HOST.  El viejo `vmcopy` era VM->host
-        // (cursor) -- incorrecto para punteros host y, en la practica, codigo
-        // muerto (solo lo emitian rutas que corren por vreg/AOT, nunca por el
-        // interprete).  El JIT (vreg) baja MEMCPY a `rep movsb`; aqui, para el
-        // interprete (oraculo de diff_harness), emitimos un bucle host->host
-        // byte a byte.  Robusto frente al regalloc: push/pop de r10/r11/r12
-        // como temporales (pueden tener SSA vivos) y r13 como scratch del
-        // byte.  Los operandos se materializan via push de su VALOR (sin
-        // hazard de parallel-move) y se sacan a r10/r11/r12.
+        /* memcpy -> INSTRUCCION de la VM, variante HOST.
+         *
+         * @c IrOp::MEMCPY esta definido como HOST->HOST: ambos operandos son
+         * punteros del proceso host (el pase que lo produce solo reconoce el
+         * idioma de copia sobre punteros host, y el lowering anterior ya usaba
+         * `loadzh`/`movh`).  NO se consulta @c is_host_ptr: hacerlo fue un bug
+         * -- el flag venia a false en el puntero base resuelto por el pase, se
+         * emitia la variante VIRTUAL y el interprete trataba direcciones host
+         * como direcciones VM (SIGSEGV en 183_memcpy_idiom).  Si algun dia
+         * existe una copia VM->VM sera OTRO op, no una variante de este.
+         *
+         * Sustituye al bucle byte a byte que se emitia antes: una vuelta de
+         * dispatch del interprete POR BYTE, cuando la instruccion mueve la
+         * region con movimientos vectoriales de 16/32 bytes.  Se usan los
+         * registros DONDE YA VIVEN los operandos -- forzarlos a unos fijos solo
+         * anyadiria movimientos y trafico de registros. */
         if (ins.operands.size() < 3) break;
-        const std::string lbl_top = ctx.unique_lbl("memcpy_top");
-        const std::string lbl_end = ctx.unique_lbl("memcpy_end");
-        ctx.out << "    push r10\n"; // salvar temporales
-        ctx.out << "    push r11\n";
-        ctx.out << "    push r12\n";
-        // Empujar los VALORES de dst/src/len.  load_src EMITE codigo (carga de
-        // spill) como efecto colateral, asi que hay que capturarlo en una var
-        // ANTES del push (el orden de evaluacion de `<<` no esta especificado
-        // -> interleaving) y empujarlo antes del siguiente load_src (que puede
-        // reusar el mismo scratch r13/r14).
-        { const std::string p = ctx.load_src(ins.operands[0], 0);
-          ctx.out << "    push " << p << "\n"; }
-        { const std::string p = ctx.load_src(ins.operands[1], 0);
-          ctx.out << "    push " << p << "\n"; }
-        { const std::string p = ctx.load_src(ins.operands[2], 0);
-          ctx.out << "    push " << p << "\n"; }
-        ctx.out << "    pop r12\n"; // len
-        ctx.out << "    pop r11\n"; // src
-        ctx.out << "    pop r10\n"; // dst
-        ctx.out << "    cmpu r12, 0\n";
-        ctx.out << "    jmp.je @Absolute(\"" << EmitCtx::abs_lbl(lbl_end)
-                << "\")\n";
-        ctx.out << lbl_top << ":\n";
-        ctx.out << "    loadzh r13b, r11\n";    // byte host [src]
-        ctx.out << "    movh [r10], r13b\n";    // byte host [dst]
-        ctx.out << "    addu r10, 1\n";
-        ctx.out << "    addu r11, 1\n";
-        ctx.out << "    decjnz r12, @Absolute(\"" << EmitCtx::abs_lbl(lbl_top)
-                << "\")\n"; // r12--; if r12!=0 -> top
-        ctx.out << lbl_end << ":\n";
-        ctx.out << "    pop r12\n"; // restaurar temporales
-        ctx.out << "    pop r11\n";
-        ctx.out << "    pop r10\n";
-        // r13/r14 quedan clobreados; invalidar caches de constante.
+        emit_three_reg_op(ctx, "memcpyh", ins.operands[0], ins.operands[1],
+                          ins.operands[2]);
+        ctx.r13_cache = -1;
+        ctx.r14_cache = -1;
+        break;
+    }
+
+    case IrOp::MEMSET: {
+        /* memset -> INSTRUCCION de la VM (una sola), en su variante segun donde
+         * viva el destino: `memseth` para memoria del HOST y `memset` para
+         * memoria VIRTUAL.  Esa eleccion la da @c is_host_ptr del puntero, el
+         * mismo criterio que ya distingue mov/movh y loadz/loadzh.
+         *
+         * Es la razon de ser del op: MEMSET dice QUE hay que hacer y cada
+         * backend elige COMO.  Antes de existir, esto se desplegaba en un STORE
+         * por cada 8 bytes -- `i32[8192] arr;` costaba 16397 instrucciones. */
+        if (ins.operands.size() < 3) break;
+        const bool host = ins.operands[0] < ctx.fn.values.size() &&
+                          ctx.fn.values[ins.operands[0]].is_host_ptr;
+        /* Se usan los registros DONDE YA VIVEN los operandos: la instruccion
+         * toma tres registros cualesquiera, asi que forzarlos a unos fijos solo
+         * anyadiria tres `mov` y trafico de registros que no hace falta.  El
+         * emisor solo tiene DOS scratch, asi que con tres operandos derramados
+         * el tercero pisaria al segundo -- de eso se encarga el helper. */
+        emit_three_reg_op(ctx, host ? "memseth" : "memset", ins.operands[0],
+                          ins.operands[1], ins.operands[2]);
         ctx.r13_cache = -1;
         ctx.r14_cache = -1;
         break;

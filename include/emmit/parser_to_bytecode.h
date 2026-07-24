@@ -705,6 +705,21 @@ static const std::unordered_map<std::string, std::vector<InstrInfo>>
          *  Opcodes 0x76-0x78: unsigned (addu3, subu3, mulu3).
          *  Opcodes 0x79-0x7B: bitwise (and3, or3, xor3) -- sin signo.
          */
+        // Memoria masiva (0xB6-0xB9).  Reusan emit_instr_alu3: su formato
+        // fisico ES "3 registros" con el layout de nibbles estandar
+        // (byte2=(rB<<4)|rA, byte3=(rC<<4)), identico al que necesitan.
+        {"memset",
+         {{0x00, 0xB6, InstrSizeMode::FIXED_4, AddressingMode::REG,
+           emit_instr_alu3}}},
+        {"memseth",
+         {{0x00, 0xB7, InstrSizeMode::FIXED_4, AddressingMode::REG,
+           emit_instr_alu3}}},
+        {"memcpy",
+         {{0x00, 0xB8, InstrSizeMode::FIXED_4, AddressingMode::REG,
+           emit_instr_alu3}}},
+        {"memcpyh",
+         {{0x00, 0xB9, InstrSizeMode::FIXED_4, AddressingMode::REG,
+           emit_instr_alu3}}},
         {"adds3",
          {{0x00, 0x73, InstrSizeMode::FIXED_4, AddressingMode::REG,
            emit_instr_alu3}}},

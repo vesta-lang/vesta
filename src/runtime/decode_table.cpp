@@ -2471,25 +2471,33 @@ InstrFormat decode_table_extended[0X100] = {
      "", Assembly::Bytecode::AddressingMode::COUNT,
      Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
 
-    /* 0xB6 */
-    {//
-     "", Assembly::Bytecode::AddressingMode::COUNT,
-     Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
+    /* 0xB6  memset r_dst, r_val, r_len: relleno en memoria VIRTUAL
+       Convention B (raw bytes): byte2 = (rB << 4) | rA, byte3 = (rC << 4),
+       el MISMO layout de 3 registros que alu3 -- por eso comparten emisor. */
+    {"memset", Assembly::Bytecode::AddressingMode::REG,
+     Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_memset,
+     decode_instr_raw_bytes},
 
-    /* 0xB7 */
-    {//
-     "", Assembly::Bytecode::AddressingMode::COUNT,
-     Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
+    /* 0xB7  memseth r_dst, r_val, r_len: relleno en memoria del HOST
+       Convention B (raw bytes): byte2 = (rB << 4) | rA, byte3 = (rC << 4),
+       el MISMO layout de 3 registros que alu3 -- por eso comparten emisor. */
+    {"memseth", Assembly::Bytecode::AddressingMode::REG,
+     Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_memseth,
+     decode_instr_raw_bytes},
 
-    /* 0xB8 */
-    {//
-     "", Assembly::Bytecode::AddressingMode::COUNT,
-     Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
+    /* 0xB8  memcpy r_dst, r_src, r_len: copia en memoria VIRTUAL
+       Convention B (raw bytes): byte2 = (rB << 4) | rA, byte3 = (rC << 4),
+       el MISMO layout de 3 registros que alu3 -- por eso comparten emisor. */
+    {"memcpy", Assembly::Bytecode::AddressingMode::REG,
+     Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_memcpy,
+     decode_instr_raw_bytes},
 
-    /* 0xB9 */
-    {//
-     "", Assembly::Bytecode::AddressingMode::COUNT,
-     Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
+    /* 0xB9  memcpyh r_dst, r_src, r_len: copia en memoria del HOST
+       Convention B (raw bytes): byte2 = (rB << 4) | rA, byte3 = (rC << 4),
+       el MISMO layout de 3 registros que alu3 -- por eso comparten emisor. */
+    {"memcpyh", Assembly::Bytecode::AddressingMode::REG,
+     Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_memcpyh,
+     decode_instr_raw_bytes},
 
     /* 0xBA */
     {//

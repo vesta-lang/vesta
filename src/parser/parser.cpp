@@ -202,6 +202,12 @@ static const std::unordered_map<std::string, InstructionPattern>
         // pudo coalescer) en una sola instruccion VM.  Reduce dispatch +
         // tiempo de decode.  Encoding FIXED_4 con un opcode extendido por
         // variante (signed/unsigned x 6 ops).
+        // Memoria masiva: (r_dst, r_val|r_src, r_len).  Variante sin sufijo =
+        // memoria VIRTUAL; sufijo 'h' = memoria del HOST (igual que loadz/loadzh).
+        {"memset", {"memset", OpArity::THREE}},
+        {"memseth", {"memseth", OpArity::THREE}},
+        {"memcpy", {"memcpy", OpArity::THREE}},
+        {"memcpyh", {"memcpyh", OpArity::THREE}},
         {"adds3", {"adds3", OpArity::THREE}},
         {"subs3", {"subs3", OpArity::THREE}},
         {"muls3", {"muls3", OpArity::THREE}},

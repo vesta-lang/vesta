@@ -898,6 +898,18 @@ void exec_instr_alu3(ProcessVM *vm, const DecodedInstr &instr);
  */
 void exec_instr_loadz(ProcessVM *vm, const DecodedInstr &instr);
 
+/* --- Memoria masiva (0xB6-0xB9): memset/memcpy en memoria VM y HOST ---
+ * Ver src/runtime/exec_instruction_mem.cpp.  Las cuatro comparten el formato
+ * fisico de 3 registros (Convention B, mismo layout de nibbles que alu3). */
+/** @brief memset r_dst, r_val, r_len -- relleno en memoria VIRTUAL. */
+void exec_instr_memset(ProcessVM *vm, const DecodedInstr &instr);
+/** @brief memseth r_dst, r_val, r_len -- relleno en memoria del HOST. */
+void exec_instr_memseth(ProcessVM *vm, const DecodedInstr &instr);
+/** @brief memcpy r_dst, r_src, r_len -- copia en memoria VIRTUAL. */
+void exec_instr_memcpy(ProcessVM *vm, const DecodedInstr &instr);
+/** @brief memcpyh r_dst, r_src, r_len -- copia en memoria del HOST. */
+void exec_instr_memcpyh(ProcessVM *vm, const DecodedInstr &instr);
+
 /**
  * @brief Ejecuta ADDCUR: suma un inmediato con signo al registro cursor
  * indicado.

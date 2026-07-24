@@ -165,6 +165,7 @@ AotOpClass aot_classify_op(IrOp op) noexcept {
     // cualquier extern); en freestanding el usuario provee __vx_panic_null.
     case IrOp::UNWRAP:
     case IrOp::MEMCPY:
+    case IrOp::MEMSET:
     // -- ops vectoriales fusionadas (SIMD nativo / packed) --
     case IrOp::VEC_UNOP:
     case IrOp::VEC_BINOP:

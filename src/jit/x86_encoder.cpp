@@ -1680,6 +1680,15 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         put8(out, 0xF3); /* prefijo REP */
         put8(out, 0xA4); /* MOVSB */
         return true;
+    case MOp::REP_STOSB:
+        /* REP STOSB: escribe AL en [RDI] RCX veces (DF=0 por la ABI host).
+         * Encoding: F3 (prefijo REP) + AA (STOSB).  Sin REX: stosb usa el
+         * puntero completo RDI de 64 bits en modo long y el operando es el
+         * byte AL.  Es la via rapida del hardware (fast-string-ops/ERMSB)
+         * para rellenar una region -- lo que IrOp::MEMSET describe. */
+        put8(out, 0xF3); /* prefijo REP */
+        put8(out, 0xAA); /* STOSB */
+        return true;
     default:
         /* Opcode no implementado en este encoder. */
         return false;

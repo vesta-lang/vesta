@@ -147,6 +147,7 @@ static bool is_side_effecting(IrOp op) {
     // memoria
     case IrOp::STORE:
     case IrOp::MEMCPY:
+    case IrOp::MEMSET:
     case IrOp::VEC_UNOP:
     case IrOp::VEC_BINOP:
     case IrOp::VEC_FMA:
@@ -6785,6 +6786,7 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
             // memoria total); mas adelante los eff bits de la DB afinan.
             case IrOp::ASM_MICRO:
             case IrOp::MEMCPY:
+            case IrOp::MEMSET:
             case IrOp::VEC_UNOP:
             case IrOp::VEC_BINOP:
             case IrOp::VEC_FMA:
@@ -8228,6 +8230,7 @@ bool ir_pass_licm(IrFunction &fn, const analysis::PointsTo *pt,
                 switch (ins.op) {
                 case IrOp::STORE:
                 case IrOp::MEMCPY:
+                case IrOp::MEMSET:
                 case IrOp::VEC_UNOP:
                 case IrOp::VEC_BINOP:
                 case IrOp::VEC_FMA:
@@ -9569,6 +9572,7 @@ static bool is_sched_barrier(IrOp op) {
     case IrOp::SETFIELD:
     case IrOp::ARRAY_STORE:
     case IrOp::MEMCPY:
+    case IrOp::MEMSET:
     case IrOp::VEC_UNOP:
     case IrOp::VEC_BINOP:
     case IrOp::VEC_FMA:
@@ -9658,6 +9662,7 @@ static bool is_store_like(IrOp op) {
     // como store-like es la barrera conservativa correcta.
     return op == IrOp::STORE || op == IrOp::SETFIELD ||
            op == IrOp::ARRAY_STORE || op == IrOp::MEMCPY ||
+           op == IrOp::MEMSET ||
            op == IrOp::VEC_UNOP || op == IrOp::VEC_BINOP ||
            op == IrOp::VEC_FMA || op == IrOp::VEC_ACC_ZERO ||
            op == IrOp::VEC_ACC_ADD || op == IrOp::VEC_ACC_FMA ||
@@ -10205,13 +10210,20 @@ bool ir_pass_loop_memcpy_idiom(IrFunction &fn) {
         v_dst_base = resolve_base(v_dst_p);
         if (v_src_base == IR_NO_VALUE || v_dst_base == IR_NO_VALUE) continue;
 
-        // OK match completo.  Reemplazar el body por:
-        //   CALLN vio_memcpy(dst, src, N) + br exit
+        /* OK match completo.  Reemplazar el body por:  MEMCPY(dst, src, N) + br
+         *
+         * El op del IR, NO una llamada nativa.  Antes esto emitia
+         * `CALLN vio_memcpy`, que ademas de pagar el sobrecoste de la llamada
+         * ataba el pase a un helper de plugin -- inexistente en freestanding y
+         * fuera del alcance del optimizer, que ya no podia razonar sobre lo que
+         * la copia hace.  Con @c IrOp::MEMCPY el hecho queda EN el IR (efectos,
+         * alias y escape lo entienden) y cada backend lo materializa por su via
+         * mas rapida: instruccion `memcpy`/`memcpyh` en el interprete,
+         * `rep movsb` en el JIT. */
         IrInstr call_ins;
-        call_ins.op = IrOp::CALLN;
-        call_ins.type = IrType::I64;
+        call_ins.op = IrOp::MEMCPY;
+        call_ins.type = IrType::VOID;
         call_ins.dst = IR_NO_VALUE;
-        call_ins.func_name = "stdlib/native/io/vesta_io:vio_memcpy";
         call_ins.operands = {v_dst_base, v_src_base, v_N};
         call_ins.source_line = body.instrs.front().source_line;
 

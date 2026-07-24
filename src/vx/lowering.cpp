@@ -3945,6 +3945,33 @@ void Lowering::emit_zero_fill(ir::IrValueId addr, uint64_t size_bytes,
         st.source_line = line;
         fn_->append(current_block_, std::move(st));
     };
+    /* A partir de cierto tamano se EMITE EL HECHO (`memset`) en vez de
+     * desplegarlo.  Desplegar destruye la semantica "esta region se pone a
+     * cero" y ningun nivel inferior puede reconstruirla: medido, `i32[8192]
+     * arr;` -- una DECLARACION -- generaba 16397 instrucciones, 86 KB de
+     * codigo y 1,7 s de compilacion, con un solo bloque basico de 16405
+     * instrucciones que hacia estallar el scheduler (O(n^2) por bloque).
+     * Crecia lineal (~2n+13) SIN umbral, a cualquier tamano.
+     *
+     * Por debajo del umbral se siguen emitiendo stores: para unos pocos bytes
+     * "store 0" ES la forma optima y no se pierde nada -- ningun backend
+     * tendria algo mejor que hacer con la informacion.  El umbral es de FORMA,
+     * no de politica: quien decide COMO rellenar (bucle, `rep stosb`, SIMD, o
+     * el `memset` que el programa haya puesto en su lugar) es el backend. */
+    static const uint64_t kInlineZeroMax = 64; // bytes desplegados en linea.
+    if (size_bytes > kInlineZeroMax) {
+        ir::IrValueId v_val = emit_const(ir::IrType::I64, 0, line);
+        ir::IrValueId v_len = emit_const(ir::IrType::I64, size_bytes, line);
+        ir::IrInstr ms{};
+        ms.op = ir::IrOp::MEMSET;
+        ms.type = ir::IrType::VOID;
+        ms.dst = ir::IR_NO_VALUE;
+        ms.operands = {addr, v_val, v_len};
+        ms.source_line = line;
+        fn_->append(current_block_, std::move(ms));
+        return;
+    }
+
     uint64_t off = 0;
     while (size_bytes - off >= 8) {
         store_zero(ir::IrType::I64, off);

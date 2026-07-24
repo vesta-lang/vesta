@@ -843,7 +843,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 case ir::IrOp::VEC_BINOP_S:
                 case ir::IrOp::VEC_FMA:
                 case ir::IrOp::VEC_BCAST:
-                case ir::IrOp::MEMCPY: has_complex_mem = true; break;
+                case ir::IrOp::MEMCPY:
+                case ir::IrOp::MEMSET: has_complex_mem = true; break;
                 default: break;
                 }
                 if (has_complex_mem) break;
@@ -3078,6 +3079,62 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     MOperand::none()));
                 O.push_back(MInstr::make_unary(
                     MOp::POP, MOperand::make_reg(MReg::RSI, 8),
+                    MOperand::none()));
+                O.push_back(MInstr::make_unary(
+                    MOp::POP, MOperand::make_reg(MReg::RDI, 8),
+                    MOperand::none()));
+                break;
+            }
+
+            /* MEMSET %dst_ptr, %val, %len -> `rep stosb`.  Gemelo exacto de
+             * MEMCPY: REP STOSB escribe AL en [RDI] RCX veces.  Misma
+             * disciplina auto-contenida respecto al regalloc -- los operandos
+             * se leen a los scratch del rewrite (R10/R11, no asignables) ANTES
+             * de tocar los fisicos fijos, que se salvan con PUSH y se
+             * restauran con POP; asi da igual que asignacion tengan.
+             *
+             * Los fijos aqui son RDI (destino), RCX (contador) y RAX (el byte
+             * en AL).  RAX ademas es el registro de retorno, de ahi que se
+             * salve tambien.
+             *
+             *   MOV R10, dst ; MOV R11, val
+             *   PUSH RDI ; PUSH RCX ; PUSH RAX
+             *   MOV RCX, len ; MOV RDI, R10 ; MOV RAX, R11
+             *   REP STOSB
+             *   POP RAX ; POP RCX ; POP RDI */
+            case ir::IrOp::MEMSET: {
+                flush_pending();
+                if (in.operands.size() != 3) return false;
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(MReg::R10, 8),
+                                               vr(in.operands[0]))); // dst
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(MReg::R11, 8),
+                                               vr(in.operands[1]))); // val
+                O.push_back(MInstr::make_unary(
+                    MOp::PUSH, MOperand::none(),
+                    MOperand::make_reg(MReg::RDI, 8)));
+                O.push_back(MInstr::make_unary(
+                    MOp::PUSH, MOperand::none(),
+                    MOperand::make_reg(MReg::RCX, 8)));
+                O.push_back(MInstr::make_unary(
+                    MOp::PUSH, MOperand::none(),
+                    MOperand::make_reg(MReg::RAX, 8)));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(MReg::RCX, 8),
+                                               vr(in.operands[2]))); // len
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_reg(MReg::RDI, 8),
+                    MOperand::make_reg(MReg::R10, 8)));
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_reg(MReg::RAX, 8),
+                    MOperand::make_reg(MReg::R11, 8))); // AL = byte de relleno
+                O.push_back(MInstr::make_rep_stosb());
+                O.push_back(MInstr::make_unary(
+                    MOp::POP, MOperand::make_reg(MReg::RAX, 8),
+                    MOperand::none()));
+                O.push_back(MInstr::make_unary(
+                    MOp::POP, MOperand::make_reg(MReg::RCX, 8),
                     MOperand::none()));
                 O.push_back(MInstr::make_unary(
                     MOp::POP, MOperand::make_reg(MReg::RDI, 8),

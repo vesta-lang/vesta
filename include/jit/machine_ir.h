@@ -647,6 +647,12 @@ enum class MOp : uint8_t {
      * clobbea vregs porque la save/restore preserva RSI/RDI/RCX). */
     REP_MOVSB = 104,
 
+    /* REP STOSB: gemelo de REP_MOVSB para IrOp::MEMSET -- escribe AL en [RDI]
+     * RCX veces.  Misma disciplina: opera sobre fisicos FIJOS (RDI/RCX/RAX) que
+     * el selector carga y salva/restaura con PUSH/POP, asi que es independiente
+     * del regalloc.  El encoder emite los 2 bytes F3 AA. */
+    REP_STOSB = 105,
+
     /* Packed FP SSE2 (auto-vectorizacion, 2026-06-25): operan sobre 2x f64
      * (128-bit XMM).  Prefijo 66 (packed-double).  Reg-reg (arith) o reg-mem
      * (MOVUPD/MOVAPD).  Base de la vectorizacion de loops float y, a futuro,
@@ -870,6 +876,14 @@ struct MInstr {
     static MInstr make_rep_movsb() noexcept {
         MInstr i;
         i.op = MOp::REP_MOVSB;
+        return i;
+    }
+
+    /** @brief REP STOSB: escribe AL en [RDI] RCX veces.  Sin operandos vreg
+     *  (opera sobre fisicos fijos; el selector los carga/restaura). */
+    static MInstr make_rep_stosb() noexcept {
+        MInstr i;
+        i.op = MOp::REP_STOSB;
         return i;
     }
 
