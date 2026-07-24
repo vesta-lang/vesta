@@ -411,6 +411,13 @@ bool ir_pass_elim_redundant_casts(IrFunction &fn);
 bool ir_pass_fold_compares(IrFunction &fn);
 
 /**
+ * @brief Runner de los consumidores de ValueFacts: computa el analisis UNA vez
+ *        y lo comparte entre todos (elim casts + fold compares), recomputando
+ *        solo si un consumidor muto el IR.  AnalysisCache minimo.
+ */
+bool ir_pass_valuefacts_consumers(IrFunction &fn);
+
+/**
  * @brief Pase Reassociation.
  *
  * Reasocia operaciones binarias asociativas para combinar constantes:

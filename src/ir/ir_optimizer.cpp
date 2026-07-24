@@ -5700,7 +5700,11 @@ compute_value_facts(const IrFunction &fn) {
 // transforma.  Beneficia `seed ^ (u64)i` de los hash-loops (elimina 1 op/iter
 // en los 3 backends).  Verificacion: e2e (compara resultados; diff_harness NO
 // valdria -- el pase es compartido, los 3 backends coincidirian aun mal).
-bool ir_pass_elim_redundant_casts(IrFunction &fn) {
+// Impl interna: opera sobre ValueFacts YA computados (los comparte el runner
+// de consumidores para no recalcular).  El wrapper publico los computa.
+static bool elim_casts_with_facts(
+    IrFunction &fn,
+    const std::unordered_map<IrValueId, ValueFacts> &facts) {
     auto narrow_bits = [](IrType t) -> int {
         switch (t) {
         case IrType::I8: return 8;
@@ -5709,7 +5713,6 @@ bool ir_pass_elim_redundant_casts(IrFunction &fn) {
         default: return 0;
         }
     };
-    const auto facts = compute_value_facts(fn);
     auto facts_of = [&](IrValueId v) -> ValueFacts {
         auto it = facts.find(v);
         return it != facts.end() ? it->second : ValueFacts{};
@@ -5813,8 +5816,9 @@ bool ir_pass_elim_redundant_casts(IrFunction &fn) {
 // una over-aproximacion, asi que `a.hi < b.lo` implica a < b para TODOS los
 // valores reales.  Solo enteros con signo (los rangos son i64 con signo); los
 // CMP_U* se dejan (su semantica unsigned no encaja con el rango signed).
-bool ir_pass_fold_compares(IrFunction &fn) {
-    const auto facts = compute_value_facts(fn);
+static bool fold_compares_with_facts(
+    IrFunction &fn,
+    const std::unordered_map<IrValueId, ValueFacts> &facts) {
     auto facts_of = [&](IrValueId v) -> ValueFacts {
         auto it = facts.find(v);
         return it != facts.end() ? it->second : ValueFacts{};
@@ -5892,6 +5896,26 @@ bool ir_pass_fold_compares(IrFunction &fn) {
             changed = true;
         }
     return changed;
+}
+
+// --- Wrappers publicos (uso standalone): computan los ValueFacts al vuelo. ---
+bool ir_pass_elim_redundant_casts(IrFunction &fn) {
+    return elim_casts_with_facts(fn, compute_value_facts(fn));
+}
+bool ir_pass_fold_compares(IrFunction &fn) {
+    return fold_compares_with_facts(fn, compute_value_facts(fn));
+}
+
+// Runner de los consumidores de ValueFacts: computa el analisis UNA vez y lo
+// comparte; solo lo RECOMPUTA (invalida) si un consumidor muto el IR.  Es el
+// AnalysisCache minimo -- evita re-demostrar las mismas propiedades por pase, y
+// escala a mas consumidores sin multiplicar el coste del analisis.
+bool ir_pass_valuefacts_consumers(IrFunction &fn) {
+    auto facts = compute_value_facts(fn);
+    bool c1 = elim_casts_with_facts(fn, facts);
+    if (c1) facts = compute_value_facts(fn); // invalidado por la mutacion
+    bool c2 = fold_compares_with_facts(fn, facts);
+    return c1 || c2;
 }
 
 bool ir_pass_strength_reduction(IrFunction &fn) {
@@ -11107,10 +11131,9 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
             any |= ir_pass_fuse_fma(fn);
             any |= ir_pass_strength_reduction(
                 fn);                    /* mul/div/mod power-of-2 -> shifts */
-            any |= ir_pass_elim_redundant_casts(
-                fn); /* SEXT/ZEXT/AND-mask redundantes (via ValueFacts) */
-            any |= ir_pass_fold_compares(
-                fn); /* CMP probado constante por el range -> CONST 0/1 */
+            /* Consumidores de ValueFacts: computan el analisis UNA vez y lo
+             * comparten (elim SEXT/ZEXT/AND-mask + fold de CMP probado). */
+            any |= ir_pass_valuefacts_consumers(fn);
             any |= ir_pass_reassoc(fn); /* (x op c1) op c2 -> x op (c1 op c2) */
             // LICM RECIBE la tabla points-to del AnalysisManager (no la
             // construye).  Solo se pide si el LICM alias-aware esta activo
