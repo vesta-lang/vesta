@@ -19,6 +19,7 @@
 #include "analysis/memory/memory_access.h"     // vocabulario UNICO de acceso a memoria
 #include <unordered_map>
 #include <map>
+#include <optional>
 #include <set>
 #include <unordered_set>
 #include <vector>
@@ -5801,6 +5802,98 @@ bool ir_pass_elim_redundant_casts(IrFunction &fn) {
     return true;
 }
 
+// =========================================================================
+//  Pase ir_pass_fold_compares: otro consumidor de ValueFacts.  Pliega un CMP
+//  a CONST 0/1 cuando el RANGE de sus operandos prueba el resultado (siempre
+//  true / siempre false).  El const_fold + unreachable ya existentes propagan
+//  la constante y podan la rama muerta del BR_COND.
+// =========================================================================
+//
+// Razona sobre el VALOR MATEMATICO (range), no sobre bits.  Sound: el range es
+// una over-aproximacion, asi que `a.hi < b.lo` implica a < b para TODOS los
+// valores reales.  Solo enteros con signo (los rangos son i64 con signo); los
+// CMP_U* se dejan (su semantica unsigned no encaja con el rango signed).
+bool ir_pass_fold_compares(IrFunction &fn) {
+    const auto facts = compute_value_facts(fn);
+    auto facts_of = [&](IrValueId v) -> ValueFacts {
+        auto it = facts.find(v);
+        return it != facts.end() ? it->second : ValueFacts{};
+    };
+    constexpr uint64_t SIGN = 1ULL << 63; // bit de signo del registro i64
+
+    bool changed = false;
+    for (auto &bb : fn.blocks)
+        for (auto &ins : bb.instrs) {
+            if (ins.operands.size() != 2 || ins.dst == IR_NO_VALUE) continue;
+            const ValueFacts fa = facts_of(ins.operands[0]);
+            const ValueFacts fb = facts_of(ins.operands[1]);
+            const int64_t alo = fa.lo, ahi = fa.hi, blo = fb.lo, bhi = fb.hi;
+            const bool a_rng = !fa.range_full(), b_rng = !fb.range_full();
+
+            std::optional<bool> res; // vacio = indeterminado
+            switch (ins.op) {
+            case IrOp::CMP_LT:
+                // 1) Range: a<b probado si ahi<blo (siempre) o alo>=bhi (nunca).
+                if (a_rng && b_rng) {
+                    if (ahi < blo) res = true;
+                    else if (alo >= bhi) res = false;
+                }
+                // 2) KnownBits para `a < 0`: el bit de signo lo decide aunque el
+                //    rango sea impreciso.  kz(signo) -> a>=0 -> false;
+                //    ko(signo) -> a<0 -> true.
+                if (!res && b_rng && blo == 0 && bhi == 0) {
+                    if (fa.kz & SIGN) res = false;
+                    else if (fa.ko & SIGN) res = true;
+                }
+                break;
+            case IrOp::CMP_LE:
+                if (a_rng && b_rng) {
+                    if (ahi <= blo) res = true;
+                    else if (alo > bhi) res = false;
+                }
+                break;
+            case IrOp::CMP_GT:
+                if (a_rng && b_rng) {
+                    if (alo > bhi) res = true;
+                    else if (ahi <= blo) res = false;
+                }
+                break;
+            case IrOp::CMP_GE:
+                if (a_rng && b_rng) {
+                    if (alo >= bhi) res = true;
+                    else if (ahi < blo) res = false;
+                }
+                // `a >= 0`: kz(signo) -> true; ko(signo) -> false.
+                if (!res && b_rng && blo == 0 && bhi == 0) {
+                    if (fa.kz & SIGN) res = true;
+                    else if (fa.ko & SIGN) res = false;
+                }
+                break;
+            case IrOp::CMP_EQ:
+                if (a_rng && b_rng) {
+                    if (alo == ahi && blo == bhi && alo == blo) res = true;
+                    else if (ahi < blo || bhi < alo) res = false; // disjuntos
+                }
+                break;
+            case IrOp::CMP_NE:
+                if (a_rng && b_rng) {
+                    if (ahi < blo || bhi < alo) res = true; // disjuntos
+                    else if (alo == ahi && blo == bhi && alo == blo) res = false;
+                }
+                break;
+            default: break;
+            }
+            if (!res) continue;
+            // Reescribir el CMP a CONST: const_fold/unreachable propagan y podan
+            // la rama muerta.
+            ins.op = IrOp::CONST;
+            ins.imm = *res ? 1u : 0u;
+            ins.operands.clear();
+            changed = true;
+        }
+    return changed;
+}
+
 bool ir_pass_strength_reduction(IrFunction &fn) {
     bool changed = false;
 
@@ -11016,6 +11109,8 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
                 fn);                    /* mul/div/mod power-of-2 -> shifts */
             any |= ir_pass_elim_redundant_casts(
                 fn); /* SEXT/ZEXT/AND-mask redundantes (via ValueFacts) */
+            any |= ir_pass_fold_compares(
+                fn); /* CMP probado constante por el range -> CONST 0/1 */
             any |= ir_pass_reassoc(fn); /* (x op c1) op c2 -> x op (c1 op c2) */
             // LICM RECIBE la tabla points-to del AnalysisManager (no la
             // construye).  Solo se pide si el LICM alias-aware esta activo

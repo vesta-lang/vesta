@@ -405,6 +405,12 @@ bool ir_pass_strength_reduction(IrFunction &fn);
 bool ir_pass_elim_redundant_casts(IrFunction &fn);
 
 /**
+ * @brief Pliega un CMP a CONST 0/1 cuando el RANGE (ValueFacts) prueba el
+ *        resultado (siempre true/false).  Habilita poda de ramas muertas.
+ */
+bool ir_pass_fold_compares(IrFunction &fn);
+
+/**
  * @brief Pase Reassociation.
  *
  * Reasocia operaciones binarias asociativas para combinar constantes:
