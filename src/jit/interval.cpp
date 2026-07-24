@@ -630,7 +630,7 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
      * completo) sin que un def en un bloque corte el rango de otro -- a
      * diferencia del set_from ingenuo, que asumia SSA single-def. */
     std::vector<uint32_t> b_first(NV, UINT32_MAX), b_first_def(NV, UINT32_MAX),
-        b_last_use(NV, 0);
+        b_last_use(NV, 0), b_last_def(NV, 0);
     std::vector<uint8_t> b_used(NV, 0), b_def(NV, 0);
     std::vector<uint32_t> touched;
     touched.reserve(64);
@@ -644,6 +644,7 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
             b_first[v] = UINT32_MAX;
             b_first_def[v] = UINT32_MAX;
             b_last_use[v] = 0;
+            b_last_def[v] = 0;
             b_used[v] = 0;
             b_def[v] = 0;
         }
@@ -668,6 +669,7 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
                 if (role == OperandRole::DEF || role == OperandRole::USEDEF) {
                     b_def[v] = 1;
                     if (def_pos < b_first_def[v]) b_first_def[v] = def_pos;
+                    if (def_pos > b_last_def[v]) b_last_def[v] = def_pos;
                     if (def_pos < b_first[v]) b_first[v] = def_pos;
                 }
             });
@@ -681,15 +683,28 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
             if (!in && !out_ && !appears) continue;
             const uint32_t start =
                 in ? bstart : (appears ? b_first[v] : bstart);
+            /* El intervalo debe cubrir TODO punto donde el valor se toca -- lo lean
+             * o lo escriban.  Ultimo uso y ultima definicion son MAXIMOS, no ramas
+             * excluyentes: un operando @c USEDEF (xadd, CMOVcc, atomicas) hace las
+             * dos cosas en la MISMA instruccion, y la escritura cae DESPUES de la
+             * lectura (@c def_pos = use_pos+1).
+             *
+             * Quedarse con el ultimo uso dejaba fuera esa escritura cuando el
+             * resultado moria en el acto.  Un valor que muere no deja de necesitar un
+             * SITIO donde escribirse: preguntar por su ubicacion en su propia
+             * definicion devolvia "en ningun sitio", y esa respuesta viajaba hasta el
+             * codigo emitido.  Solo se veia en el AOT (el unico que construye el
+             * timeline con rangos); sobre una base plana el fallo era invisible. */
             uint32_t end;
-            if (out_)
+            if (out_) {
                 end = bend; // vivo al salir
-            else if (b_used[v])
-                end = b_last_use[v] + 1u; // muere en su ultimo uso
-            else if (b_def[v])
-                end = b_first_def[v] + 1u; // def muerto
-            else
+            } else if (b_used[v] || b_def[v]) {
+                end = bstart;
+                if (b_used[v] && b_last_use[v] + 1u > end) end = b_last_use[v] + 1u;
+                if (b_def[v] && b_last_def[v] + 1u > end) end = b_last_def[v] + 1u;
+            } else {
                 end = bend; // live-in raro: conservador
+            }
             out.intervals[v].add_range(start, end);
         }
     }
