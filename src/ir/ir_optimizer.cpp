@@ -5491,15 +5491,28 @@ int log2_if_power_of_two(uint64_t v) {
 struct ValueFacts {
     int64_t lo = INT64_MIN;
     int64_t hi = INT64_MAX;
-    uint64_t kz = 0; // bits provablemente 0
-    uint64_t ko = 0; // bits provablemente 1
+    uint64_t kz = 0;          // bits provablemente 0  (siempre fisicos, sound)
+    uint64_t ko = 0;          // bits provablemente 1  (siempre fisicos, sound)
+    // reg_exact = el par [lo,hi] describe FIELMENTE el registro de 64 bits, no
+    // un valor matematico abstracto.  SOLO lo ponen las ops cuyo registro ES su
+    // valor matematico (CONST, ADD, SUB, AND-mask, SHL/SHR/SAR, PHI, induccion).
+    // Un futuro LOAD que solo acote el valor logico (pero deje basura en los
+    // bits altos del registro) NO debe ponerlo -> ni el puente rango->bits ni el
+    // folding de comparaciones lo consumiran (evita reintroducir un SEXT/CMP
+    // no-sound).  kz/ko NO dependen de esto: son hechos fisicos por construccion.
+    bool reg_exact = false;
     bool range_full() const { return lo == INT64_MIN && hi == INT64_MAX; }
+    // Rango USABLE = presente Y fiel al registro.  Todos los consumidores de
+    // lo/hi deben pasar por aqui.
+    bool has_range() const { return reg_exact && !range_full(); }
 };
 
 // Deriva bits known-zero altos del rango del VALOR DE REGISTRO: si el valor es
 // no-negativo y cabe en k bits, los bits [k, 64) del registro son 0.  Es el
-// PUENTE sound rango -> representacion fisica.
+// PUENTE sound rango -> representacion fisica, y SOLO se aplica a rangos que
+// describen el registro (reg_exact); si no, no toca los bits.
 static inline void facts_derive_bits_from_range(ValueFacts &f) {
+    if (!f.reg_exact) return; // rango no-fiel al registro: no derivar bits
     if (f.lo < 0) return; // negativo: los bits altos son signo, no 0 (skip)
     if (f.hi == 0) {
         f.kz = ~0ULL; // el valor es 0: todos los bits en 0
@@ -5531,6 +5544,7 @@ compute_value_facts(const IrFunction &fn) {
                 const_vids[ins.dst] = c;
                 ValueFacts f;
                 f.lo = f.hi = c;
+                f.reg_exact = true; // una constante ES su registro
                 // KnownBits exactos de una constante.
                 f.kz = ~static_cast<uint64_t>(c);
                 f.ko = static_cast<uint64_t>(c);
@@ -5615,6 +5629,8 @@ compute_value_facts(const IrFunction &fn) {
             ValueFacts f;
             f.lo = init;
             f.hi = maxv;
+            // La PROCEDENCIA (phi(0,+c) canonico) garantiza el registro exacto.
+            f.reg_exact = true;
             facts_derive_bits_from_range(f);
             facts[ins.dst] = f;
         }
@@ -5634,11 +5650,15 @@ compute_value_facts(const IrFunction &fn) {
             case IrOp::ADD:
                 if (ins.operands.size() == 2) {
                     ValueFacts a = get(ins.operands[0]), b = get(ins.operands[1]);
-                    if (!a.range_full() && !b.range_full()) {
+                    // Solo si AMBOS rangos son fieles al registro: la suma de
+                    // registros exactos es un registro exacto (ADD produce el
+                    // valor real de 64 bits).
+                    if (a.has_range() && b.has_range()) {
                         int64_t lo, hi;
                         if (!sat_add(a.lo, b.lo, lo) && !sat_add(a.hi, b.hi, hi)) {
                             r.lo = lo;
                             r.hi = hi;
+                            r.reg_exact = true;
                         }
                     }
                 }
@@ -5646,12 +5666,13 @@ compute_value_facts(const IrFunction &fn) {
             case IrOp::SUB:
                 if (ins.operands.size() == 2) {
                     ValueFacts a = get(ins.operands[0]), b = get(ins.operands[1]);
-                    if (!a.range_full() && !b.range_full()) {
+                    if (a.has_range() && b.has_range()) {
                         int64_t lo, hi;
                         if (!__builtin_sub_overflow(a.lo, b.hi, &lo) &&
                             !__builtin_sub_overflow(a.hi, b.lo, &hi)) {
                             r.lo = lo;
                             r.hi = hi;
+                            r.reg_exact = true;
                         }
                     }
                 }
@@ -5668,6 +5689,7 @@ compute_value_facts(const IrFunction &fn) {
                     (cst_of(ins.operands[0], m) && m >= 0)) {
                     r.lo = 0;
                     r.hi = m;
+                    r.reg_exact = true; // AND produce el registro real
                 }
                 break;
             }
@@ -5695,11 +5717,12 @@ compute_value_facts(const IrFunction &fn) {
                     const uint64_t low = (c == 0) ? 0ULL : ((1ULL << c) - 1ULL);
                     r.kz = (a.kz << c) | low;
                     r.ko = a.ko << c;
-                    if (a.lo >= 0 && a.hi >= 0) { // range solo si no-negativo
+                    if (a.has_range() && a.lo >= 0 && a.hi >= 0) {
                         int64_t hi;
                         if (!__builtin_mul_overflow(a.hi, int64_t(1) << c, &hi)) {
                             r.lo = a.lo << c;
                             r.hi = hi;
+                            r.reg_exact = true;
                         }
                     }
                 }
@@ -5715,9 +5738,10 @@ compute_value_facts(const IrFunction &fn) {
                         (c == 0) ? 0ULL : ~(~0ULL >> c); // top c bits
                     r.kz = (a.kz >> c) | high;
                     r.ko = a.ko >> c;
-                    if (a.lo >= 0 && a.hi >= 0) {
+                    if (a.has_range() && a.lo >= 0 && a.hi >= 0) {
                         r.lo = static_cast<int64_t>(static_cast<uint64_t>(a.lo) >> c);
                         r.hi = static_cast<int64_t>(static_cast<uint64_t>(a.hi) >> c);
+                        r.reg_exact = true;
                     }
                 }
                 break;
@@ -5729,36 +5753,47 @@ compute_value_facts(const IrFunction &fn) {
                 if (ins.operands.size() == 2 && cst_of(ins.operands[1], c) &&
                     c >= 0 && c < 64) {
                     ValueFacts a = get(ins.operands[0]);
-                    if ((a.kz & (1ULL << 63)) || (a.lo >= 0 && !a.range_full())) {
+                    if ((a.kz & (1ULL << 63)) || (a.has_range() && a.lo >= 0)) {
                         const uint64_t high = (c == 0) ? 0ULL : ~(~0ULL >> c);
                         r.kz = (a.kz >> c) | high;
                         r.ko = a.ko >> c;
-                        if (a.lo >= 0 && a.hi >= 0) {
+                        if (a.has_range() && a.lo >= 0 && a.hi >= 0) {
                             r.lo = a.lo >> c;
                             r.hi = a.hi >> c;
+                            r.reg_exact = true;
                         }
                     }
                 }
                 break;
             }
             case IrOp::PHI: {
-                bool all = !ins.phi_args.empty();
+                // KnownBits del PHI = interseccion (bit conocido solo si lo es
+                // en TODOS los ingresos) -- SIEMPRE sound aunque falte el rango.
+                // El rango solo se toma si TODOS los ingresos tienen rango fiel.
+                bool have_all = !ins.phi_args.empty();
+                bool range_all = have_all;
                 int64_t lo = INT64_MAX, hi = INT64_MIN;
                 uint64_t kz = ~0ULL, ko = ~0ULL;
                 for (const auto &pa : ins.phi_args) {
-                    if (!have(pa.value)) { all = false; break; }
+                    if (!have(pa.value)) { have_all = false; range_all = false; break; }
                     ValueFacts pf = get(pa.value);
-                    if (pf.range_full()) { all = false; break; }
-                    lo = std::min(lo, pf.lo);
-                    hi = std::max(hi, pf.hi);
-                    kz &= pf.kz; // bit known-zero solo si lo es en TODOS
+                    kz &= pf.kz;
                     ko &= pf.ko;
+                    if (pf.has_range()) {
+                        lo = std::min(lo, pf.lo);
+                        hi = std::max(hi, pf.hi);
+                    } else {
+                        range_all = false;
+                    }
                 }
-                if (all && lo <= hi) {
-                    r.lo = lo;
-                    r.hi = hi;
+                if (have_all) {
                     r.kz = kz;
                     r.ko = ko;
+                }
+                if (range_all && lo <= hi) {
+                    r.lo = lo;
+                    r.hi = hi;
+                    r.reg_exact = true;
                 }
                 break;
             }
@@ -5891,6 +5926,81 @@ static bool elim_casts_with_facts(
 }
 
 // =========================================================================
+//  Modelo relacional de comparaciones (para folding por rango Y por guardas).
+//  Cada comparacion se describe como el conjunto de resultados {<,=,>} que la
+//  hacen verdadera, mas su DOMINIO (con o sin signo).  El bit EQ es universal
+//  (la igualdad de bits no depende del signo); los bits LT/GT solo son
+//  comparables dentro del mismo dominio.
+// =========================================================================
+namespace {
+enum class CmpDom { SIGNED, UNSIGNED, ANY };
+constexpr unsigned OUT_LT = 1u, OUT_EQ = 2u, OUT_GT = 4u;
+struct CmpModel {
+    unsigned mask;
+    CmpDom dom;
+    bool valid;
+};
+inline CmpModel cmp_model(IrOp op) {
+    switch (op) {
+    case IrOp::CMP_LT: return {OUT_LT, CmpDom::SIGNED, true};
+    case IrOp::CMP_LE: return {OUT_LT | OUT_EQ, CmpDom::SIGNED, true};
+    case IrOp::CMP_GT: return {OUT_GT, CmpDom::SIGNED, true};
+    case IrOp::CMP_GE: return {OUT_GT | OUT_EQ, CmpDom::SIGNED, true};
+    case IrOp::CMP_ULT: return {OUT_LT, CmpDom::UNSIGNED, true};
+    case IrOp::CMP_ULE: return {OUT_LT | OUT_EQ, CmpDom::UNSIGNED, true};
+    case IrOp::CMP_UGT: return {OUT_GT, CmpDom::UNSIGNED, true};
+    case IrOp::CMP_UGE: return {OUT_GT | OUT_EQ, CmpDom::UNSIGNED, true};
+    case IrOp::CMP_EQ: return {OUT_EQ, CmpDom::ANY, true};
+    case IrOp::CMP_NE: return {OUT_LT | OUT_GT, CmpDom::ANY, true};
+    default: return {0u, CmpDom::ANY, false};
+    }
+}
+// Intercambia operandos (a op b) == (b swap(op) a).
+inline IrOp cmp_swap(IrOp op) {
+    switch (op) {
+    case IrOp::CMP_LT: return IrOp::CMP_GT;
+    case IrOp::CMP_GT: return IrOp::CMP_LT;
+    case IrOp::CMP_LE: return IrOp::CMP_GE;
+    case IrOp::CMP_GE: return IrOp::CMP_LE;
+    case IrOp::CMP_ULT: return IrOp::CMP_UGT;
+    case IrOp::CMP_UGT: return IrOp::CMP_ULT;
+    case IrOp::CMP_ULE: return IrOp::CMP_UGE;
+    case IrOp::CMP_UGE: return IrOp::CMP_ULE;
+    default: return op; // EQ, NE simetricas
+    }
+}
+// Negacion logica: !(a op b) == (a negate(op) b).
+inline IrOp cmp_negate(IrOp op) {
+    switch (op) {
+    case IrOp::CMP_LT: return IrOp::CMP_GE;
+    case IrOp::CMP_GE: return IrOp::CMP_LT;
+    case IrOp::CMP_LE: return IrOp::CMP_GT;
+    case IrOp::CMP_GT: return IrOp::CMP_LE;
+    case IrOp::CMP_ULT: return IrOp::CMP_UGE;
+    case IrOp::CMP_UGE: return IrOp::CMP_ULT;
+    case IrOp::CMP_ULE: return IrOp::CMP_UGT;
+    case IrOp::CMP_UGT: return IrOp::CMP_ULE;
+    case IrOp::CMP_EQ: return IrOp::CMP_NE;
+    case IrOp::CMP_NE: return IrOp::CMP_EQ;
+    default: return op;
+    }
+}
+// Dado que `krel` es CIERTO sobre (x,y), decide si `qop` sobre (x,y) esta
+// determinado: 1 -> siempre true, 0 -> siempre false, -1 -> indeterminado.
+inline int cmp_implies(IrOp krel, IrOp qop) {
+    CmpModel k = cmp_model(krel), q = cmp_model(qop);
+    if (!k.valid || !q.valid) return -1;
+    // Los bits LT/GT solo son comparables dentro del mismo dominio; EQ/NE (ANY)
+    // hacen de puente porque la igualdad de bits no depende del signo.
+    if (!(k.dom == CmpDom::ANY || q.dom == CmpDom::ANY || k.dom == q.dom))
+        return -1;
+    if ((k.mask & ~q.mask) == 0u) return 1;  // resultados de k subset de q
+    if ((k.mask & q.mask) == 0u) return 0;   // disjuntos
+    return -1;
+}
+} // namespace
+
+// =========================================================================
 //  Pase ir_pass_fold_compares: otro consumidor de ValueFacts.  Pliega un CMP
 //  a CONST 0/1 cuando el RANGE de sus operandos prueba el resultado (siempre
 //  true / siempre false).  El const_fold + unreachable ya existentes propagan
@@ -5912,7 +6022,7 @@ static bool fold_compares_with_facts(
     // Un valor es provablemente no-negativo si su bit de signo es known-zero o
     // su rango arranca en >=0 (el registro unsigned == signed en ese caso).
     auto nonneg = [&](const ValueFacts &f) -> bool {
-        return (f.kz & SIGN) || (!f.range_full() && f.lo >= 0);
+        return (f.kz & SIGN) || (f.has_range() && f.lo >= 0);
     };
 
     bool changed = false;
@@ -5922,7 +6032,8 @@ static bool fold_compares_with_facts(
             const ValueFacts fa = facts_of(ins.operands[0]);
             const ValueFacts fb = facts_of(ins.operands[1]);
             const int64_t alo = fa.lo, ahi = fa.hi, blo = fb.lo, bhi = fb.hi;
-            const bool a_rng = !fa.range_full(), b_rng = !fb.range_full();
+            // Rango USABLE = fiel al registro (reg_exact) y no-full.
+            const bool a_rng = fa.has_range(), b_rng = fb.has_range();
             // `b == 0` (constante) usado por varios plegados unsigned.
             const bool b_is0 = b_rng && blo == 0 && bhi == 0;
             // Ambos no-negativos -> las comparaciones unsigned coinciden con las
@@ -6020,22 +6131,143 @@ static bool fold_compares_with_facts(
             }
             if (!res) continue;
             // Reescribir el CMP a CONST: const_fold/unreachable propagan y podan
-            // la rama muerta.
+            // la rama muerta.  Actualizar TAMBIEN el flag is_const del value:
+            // get_const (usado por el branch-fold de const_fold) lo lee de
+            // fn.values, no del opcode de la instr.
             ins.op = IrOp::CONST;
             ins.imm = *res ? 1u : 0u;
             ins.operands.clear();
+            if (ins.dst < fn.values.size()) {
+                fn.values[ins.dst].is_const = true;
+                fn.values[ins.dst].const_val = ins.imm;
+            }
             changed = true;
         }
     return changed;
 }
 
+// =========================================================================
+//  Pase ir_pass_fold_guarded_compares: rango RELACIONAL simbolico.  Pliega un
+//  CMP cuando una GUARDA DOMINANTE ya establece una relacion sobre el MISMO par
+//  de valores SSA (predicate propagation / correlated-branch, como el
+//  LazyValueInfo de LLVM o los ASSERT_EXPR de GCC).  Cierra los bounds-checks
+//  escritos por el usuario con longitud VARIABLE: en un cuerpo de bucle
+//  `for i in 0..len` (guardado por `i < len`), un `if (i >= len) panic` interno
+//  se prueba imposible aunque `len` no sea constante.
+//
+//  Sound: si el bloque B tiene un unico predecesor P que termina en
+//  `br_cond(cmp)` y B es su sucesor true/false, entonces TODO camino a B pasa
+//  por esa arista -> la relacion (o su negacion) se cumple en B y en todo lo
+//  que B domina.  Los valores SSA son unicos, asi que comparar el mismo par
+//  (x,y) es comparar los mismos valores en runtime.
+// =========================================================================
+static bool fold_guarded_compares(IrFunction &fn) {
+    const size_t N = fn.blocks.size();
+    if (N < 2) return false;
+
+    // Mapa cond-value -> (op, a, b) de su CMP definidor.
+    struct CmpDef {
+        IrOp op;
+        IrValueId a, b;
+    };
+    std::unordered_map<IrValueId, CmpDef> cmp_defs;
+    for (const auto &bb : fn.blocks)
+        for (const auto &ins : bb.instrs) {
+            if (ins.dst == IR_NO_VALUE || ins.operands.size() != 2) continue;
+            if (cmp_model(ins.op).valid)
+                cmp_defs[ins.dst] = {ins.op, ins.operands[0], ins.operands[1]};
+        }
+    if (cmp_defs.empty()) return false;
+
+    SrDom d = sr_compute_dom(fn);
+
+    // Predicado activo: relacion CIERTA sobre (a,b).
+    struct Pred {
+        IrOp op;
+        IrValueId a, b;
+    };
+    std::vector<std::vector<Pred>> active(N);
+
+    // Propagacion descendente por el dom-tree (padre antes que hijo): cada
+    // bloque hereda las guardas de su idom y anade la propia (si su unico
+    // predecesor lo guarda con un br_cond sobre un CMP conocido).
+    std::vector<IrBlockId> order;
+    order.reserve(N);
+    {
+        std::vector<IrBlockId> stack{0};
+        while (!stack.empty()) {
+            IrBlockId b = stack.back();
+            stack.pop_back();
+            order.push_back(b);
+            for (IrBlockId c : d.dom_children[b]) stack.push_back(c);
+        }
+    }
+    for (IrBlockId b : order) {
+        if (b != 0 && d.idom[b] != d.UNDEF && d.idom[b] != b)
+            active[b] = active[d.idom[b]]; // hereda del dominador inmediato
+        // Guarda propia: unico predecesor P con br_cond sobre un CMP conocido.
+        if (d.preds[b].size() != 1) continue;
+        IrBlockId p = d.preds[b][0];
+        if (p >= N || fn.blocks[p].instrs.empty()) continue;
+        const IrInstr &term = fn.blocks[p].instrs.back();
+        if (term.op != IrOp::BR_COND || term.operands.empty()) continue;
+        if (term.target_block == term.false_block) continue; // ambos = mismo bb
+        auto it = cmp_defs.find(term.operands[0]);
+        if (it == cmp_defs.end()) continue;
+        bool holds;
+        if (b == term.target_block) holds = true;        // rama true
+        else if (b == term.false_block) holds = false;   // rama false
+        else continue;
+        IrOp op = it->second.op;
+        if (!holds) op = cmp_negate(op); // rama false -> negacion del CMP
+        active[b].push_back({op, it->second.a, it->second.b});
+    }
+
+    // Plegar cada CMP usando los predicados activos de su bloque.
+    bool changed = false;
+    for (IrBlockId bi = 0; bi < N; ++bi) {
+        if (active[bi].empty()) continue;
+        for (auto &ins : fn.blocks[bi].instrs) {
+            if (ins.dst == IR_NO_VALUE || ins.operands.size() != 2) continue;
+            if (!cmp_model(ins.op).valid) continue;
+            const IrValueId x = ins.operands[0], y = ins.operands[1];
+            int res = -1;
+            for (const auto &pr : active[bi]) {
+                IrOp krel;
+                if (pr.a == x && pr.b == y) krel = pr.op;
+                else if (pr.a == y && pr.b == x) krel = cmp_swap(pr.op);
+                else continue;
+                int r = cmp_implies(krel, ins.op);
+                if (r >= 0) { res = r; break; }
+            }
+            if (res < 0) continue;
+            ins.op = IrOp::CONST;
+            ins.imm = res ? 1u : 0u;
+            ins.operands.clear();
+            if (ins.dst < fn.values.size()) {
+                fn.values[ins.dst].is_const = true;
+                fn.values[ins.dst].const_val = ins.imm;
+            }
+            changed = true;
+        }
+    }
+    return changed;
+}
+
 // --- Wrappers publicos (uso standalone): computan los ValueFacts al vuelo. ---
+bool ir_pass_fold_guarded_compares(IrFunction &fn) {
+    return fold_guarded_compares(fn);
+}
 bool ir_pass_elim_redundant_casts(IrFunction &fn) {
     return elim_casts_with_facts(fn, compute_value_facts(fn));
 }
 bool ir_pass_fold_compares(IrFunction &fn) {
     return fold_compares_with_facts(fn, compute_value_facts(fn));
 }
+
+// Fwd: strength reduction que consume ValueFacts (definida mas abajo).
+static bool strength_reduce_with_facts(
+    IrFunction &fn, const std::unordered_map<IrValueId, ValueFacts> &facts);
 
 // Runner de los consumidores de ValueFacts: computa el analisis UNA vez y lo
 // comparte; solo lo RECOMPUTA (invalida) si un consumidor muto el IR.  Es el
@@ -6046,11 +6278,32 @@ bool ir_pass_valuefacts_consumers(IrFunction &fn) {
     bool c1 = elim_casts_with_facts(fn, facts);
     if (c1) facts = compute_value_facts(fn); // invalidado por la mutacion
     bool c2 = fold_compares_with_facts(fn, facts);
-    return c1 || c2;
+    // 3er consumidor: strength reduction (MUL/DIV/MOD por 2^k -> shift/and).
+    // El caso signed DIV/MOD solo aplica si los facts prueban el dividendo
+    // no-negativo.  fold_compares no altera los facts del dividendo (solo
+    // reescribe CMP->CONST), asi que los `facts` siguen validos para el.
+    bool c3 = strength_reduce_with_facts(fn, facts);
+    // 4o consumidor: rango relacional simbolico (guardas dominantes).  No usa
+    // ValueFacts sino dominadores + predicados de guardas; cierra los
+    // bounds-checks de longitud VARIABLE que el rango concreto no ve.
+    bool c4 = fold_guarded_compares(fn);
+    return c1 || c2 || c3 || c4;
 }
 
-bool ir_pass_strength_reduction(IrFunction &fn) {
+static bool strength_reduce_with_facts(
+    IrFunction &fn,
+    const std::unordered_map<IrValueId, ValueFacts> &facts) {
     bool changed = false;
+    constexpr uint64_t SR_SIGN = 1ULL << 63; // bit de signo del registro i64
+    // Un dividendo es provablemente no-negativo si su bit de signo es
+    // known-zero o su rango arranca en >=0.  En ese caso `x / 2^k == x >> k` y
+    // `x % 2^k == x & (2^k-1)` SIN la correccion de redondeo que exige el signo.
+    auto nonneg_val = [&](IrValueId v) -> bool {
+        auto it = facts.find(v);
+        if (it == facts.end()) return false;
+        const ValueFacts &f = it->second;
+        return (f.kz & SR_SIGN) || (f.has_range() && f.lo >= 0);
+    };
 
     /* Pre-build vid -> CONST imm. */
     std::unordered_map<IrValueId, int64_t> const_vids;
@@ -6133,10 +6386,12 @@ bool ir_pass_strength_reduction(IrFunction &fn) {
                 break;
             }
             case IrOp::DIV: {
-                if (ins.type != IrType::U8 && ins.type != IrType::U16 &&
-                    ins.type != IrType::U32 && ins.type != IrType::U64) {
-                    break;
-                }
+                // Unsigned: siempre; signed: solo si el dividendo es
+                // provablemente no-negativo (sin correccion de signo).
+                const bool is_unsigned =
+                    ins.type == IrType::U8 || ins.type == IrType::U16 ||
+                    ins.type == IrType::U32 || ins.type == IrType::U64;
+                if (!is_unsigned && !nonneg_val(ins.operands[0])) break;
                 uint64_t cv = 0;
                 if (!get_const_pos(ins.operands[1], cv)) break;
                 int k = log2_if_power_of_two(cv);
@@ -6149,10 +6404,10 @@ bool ir_pass_strength_reduction(IrFunction &fn) {
                 break;
             }
             case IrOp::MOD: {
-                if (ins.type != IrType::U8 && ins.type != IrType::U16 &&
-                    ins.type != IrType::U32 && ins.type != IrType::U64) {
-                    break;
-                }
+                const bool is_unsigned =
+                    ins.type == IrType::U8 || ins.type == IrType::U16 ||
+                    ins.type == IrType::U32 || ins.type == IrType::U64;
+                if (!is_unsigned && !nonneg_val(ins.operands[0])) break;
                 uint64_t cv = 0;
                 if (!get_const_pos(ins.operands[1], cv)) break;
                 int k = log2_if_power_of_two(cv);
@@ -6182,6 +6437,11 @@ bool ir_pass_strength_reduction(IrFunction &fn) {
     }
 
     return changed;
+}
+
+// Wrapper publico (uso standalone): computa los ValueFacts al vuelo.
+bool ir_pass_strength_reduction(IrFunction &fn) {
+    return strength_reduce_with_facts(fn, compute_value_facts(fn));
 }
 
 // =========================================================================
@@ -11260,10 +11520,10 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
             // quito a*0/a*1/+0.  Gated por @fp(fast) (fn.fp_contract).  Decision
             // unica en el IR -> interp/JIT/AOT consistentes (1 redondeo).
             any |= ir_pass_fuse_fma(fn);
-            any |= ir_pass_strength_reduction(
-                fn);                    /* mul/div/mod power-of-2 -> shifts */
             /* Consumidores de ValueFacts: computan el analisis UNA vez y lo
-             * comparten (elim SEXT/ZEXT/AND-mask + fold de CMP probado). */
+             * comparten -- elim SEXT/ZEXT/AND-mask + fold de CMP probado +
+             * strength reduction (MUL/DIV/MOD por 2^k -> shift/and, incluido el
+             * caso signed cuando el dividendo se prueba no-negativo). */
             any |= ir_pass_valuefacts_consumers(fn);
             any |= ir_pass_reassoc(fn); /* (x op c1) op c2 -> x op (c1 op c2) */
             // LICM RECIBE la tabla points-to del AnalysisManager (no la

@@ -411,6 +411,14 @@ bool ir_pass_elim_redundant_casts(IrFunction &fn);
 bool ir_pass_fold_compares(IrFunction &fn);
 
 /**
+ * @brief Pliega un CMP a CONST cuando una GUARDA DOMINANTE ya establece una
+ *        relacion sobre el mismo par de valores SSA (rango relacional
+ *        simbolico / predicate propagation).  Cierra los bounds-checks de
+ *        longitud VARIABLE (`if (i >= len) panic` dentro de `for i in 0..len`).
+ */
+bool ir_pass_fold_guarded_compares(IrFunction &fn);
+
+/**
  * @brief Runner de los consumidores de ValueFacts: computa el analisis UNA vez
  *        y lo comparte entre todos (elim casts + fold compares), recomputando
  *        solo si un consumidor muto el IR.  AnalysisCache minimo.
