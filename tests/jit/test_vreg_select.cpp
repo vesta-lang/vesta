@@ -18,7 +18,8 @@
 #include "ir/ssa_ir.h"
 #include "jit/code_cache.h"
 #include "jit/interval.h"
-#include "jit/linear_scan.h"
+#include "codegen/regalloc.h"
+#include "codegen/rbank/allocate.h"
 #include "jit/regalloc_rewrite.h"
 #include "codegen/timeline_builder.h"
 #include "jit/target_reginfo.h"
@@ -121,7 +122,7 @@ static bool jit_run(const ir::IrFunction &fn, int64_t &result_out) {
     MFunction mf;
     if (!vreg_select(fn, mf)) return false;
     const TargetRegInfo &tri = target_x86_64_vm_abi();
-    codegen::RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
+    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(build_intervals(mf, tri), mf.vreg_count, tri, false);
     MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri);
 
     X86Encoder enc;

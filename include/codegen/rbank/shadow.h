@@ -47,7 +47,7 @@
 #include "codegen/rbank/optimization_context.h"
 #include "codegen/rbank/smart_spill.h"
 #include "jit/interval.h"
-#include "jit/linear_scan.h"
+#include "codegen/regalloc.h"
 
 #include <cstdint>
 

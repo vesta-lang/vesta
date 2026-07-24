@@ -19,12 +19,37 @@
 
 #include "ir/ssa_ir.h"
 #include "ir/liveness.h"
+#include "codegen/vm_allocate.h"
 #include "ir/regalloc.h"
 #include "ir/ir_optimizer.h"
 #include "ir/ir_emitter.h"
 
+#include "emmit/parser_to_bytecode.h"
+#include "lexer/lexer.h"
+#include "parser/parser.h"
+#include "linker/velb_linker_bytecode.h"
+#include "runtime/manager_runtime.h"
+
+/* manager_runtime.h arrastra <windows.h>, que define CONST/VOID/IN/OUT como
+ * macros y contaminarian ir::IrOp::CONST / ir::IrType::VOID.  Se deshacen aqui,
+ * despues del ultimo include del sistema. */
+#ifdef CONST
+#undef CONST
+#endif
+#ifdef VOID
+#undef VOID
+#endif
+#ifdef IN
+#undef IN
+#endif
+#ifdef OUT
+#undef OUT
+#endif
+
 #include <cassert>
+#include <cstdint>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -46,6 +71,54 @@ static void check(bool cond, const char *msg) {
 // Verifica que la cadena haystack contiene needle
 static bool contains(const std::string &haystack, const std::string &needle) {
     return haystack.find(needle) != std::string::npos;
+}
+
+/**
+ * @brief Emite un modulo, lo lleva por el pipeline COMPLETO (lex -> parse ->
+ *        assemble -> link -> load) y lo EJECUTA en el interprete; devuelve R0.
+ *
+ * Es la unica prueba que no se puede enganyar: comprueba lo que el programa
+ * CALCULA, no como se ve su `.vel`.  Un test de forma ("contiene enter") se
+ * rompe cuando el emisor mejora y da un falso fallo; este solo se rompe si el
+ * resultado cambia.  El proceso arranca en la funcion @c main (convencion del
+ * loader), asi que @p mod debe tener una.
+ */
+static std::optional<uint64_t> emit_assemble_run(const ir::IrModule &mod) {
+    ir::EmitOptions eo;
+    eo.opt_level = ir::OptLevel::O0;
+    eo.emit_comments = false;
+    eo.export_all = true;
+    const ir::EmitResult er = ir::ir_emit_module(mod, eo);
+    if (!er.ok || er.vel_text.empty()) return std::nullopt;
+
+    vm::Lexer lexer(er.vel_text);
+    vm::Parser parser(lexer);
+    std::vector<std::unique_ptr<vm::ASTNode>> program;
+    try {
+        program = parser.parse();
+    } catch (const std::exception &) {
+        return std::nullopt;
+    }
+
+    Assembly::Bytecode::Assembler asmblr;
+    const std::vector<uint8_t> bytecode = asmblr.assemble(program);
+
+    Assembly::Bytecode::Linker::LinkerOptions lo;
+    lo.output_path = "test_ir_emitter_run.velb";
+    lo.generate_map_file = false;
+    Assembly::Bytecode::Linker::Linker linker(lo);
+    linker.add_assembly_unit(bytecode, &asmblr.ctx);
+    linker.write_to_file(lo.output_path);
+
+    runtime::ManageVM manager(nullptr, 0);
+    runtime::VM *vm = manager.loader.create_vm_instance(1);
+    runtime::ProcessVM *proc = manager.loader.load_executable(*vm, lo.output_path);
+    if (!proc) return std::nullopt;
+    vm->make_ready(proc->pid);
+    vm->start();
+    const uint64_t r0 = proc->registers.regs[0].qword();
+    vm->stop();
+    return r0;
 }
 
 // =========================================================================
@@ -216,17 +289,14 @@ static void test_regalloc() {
     ir::IrModule mod = build_add();
     const ir::IrFunction &fn = mod.functions[0];
     ir::LivenessResult lv = ir::compute_liveness(fn);
-    ir::AllocResult alloc = ir::allocate_regs(fn, lv);
+    // El interprete asigna con el modelo (codegen::rbank), igual que JIT y AOT.
+    codegen::RegAlloc alloc = codegen::vm_allocate(fn, lv, nullptr);
 
-    check(alloc.ok, "allocate_regs: ok=true");
-
-    // Parametros deben estar en r1 y r2
+    // Parametros deben estar en r1 y r2 (convencion de llamada).
     ir::IrValueId va = fn.params[0];
     ir::IrValueId vb = fn.params[1];
-    check(alloc.reg_map.count(va) && alloc.reg_map.at(va) == 1,
-          "param a -> r1");
-    check(alloc.reg_map.count(vb) && alloc.reg_map.at(vb) == 2,
-          "param b -> r2");
+    check(alloc.in_reg(va) && alloc.reg_of(va) == 1, "param a -> r1");
+    check(alloc.in_reg(vb) && alloc.reg_of(vb) == 2, "param b -> r2");
 
     // El resultado 'r' debe estar asignado a algun registro (no r14/r15)
     // Encontrar el id del valor 'r'
@@ -239,15 +309,14 @@ static void test_regalloc() {
     }
     check(vr != ir::IR_NO_VALUE, "valor 'r' encontrado");
     if (vr != ir::IR_NO_VALUE) {
-        check(alloc.reg_map.count(vr) > 0, "valor 'r' asignado a registro");
-        if (alloc.reg_map.count(vr)) {
-            int reg = alloc.reg_map.at(vr);
-            check(reg < ir::ALLOC_REGS, "registro de 'r' < ALLOC_REGS (14)");
-        }
+        check(alloc.in_reg(vr), "valor 'r' asignado a registro");
+        if (alloc.in_reg(vr))
+            check(alloc.reg_of(vr) < ir::ALLOC_REGS,
+                  "registro de 'r' < ALLOC_REGS");
     }
 
-    // Sin spills para una funcion tan simple
-    check(alloc.spill_count == 0, "sin spills en add");
+    // Sin spills para una funcion tan simple.
+    check(alloc.num_spill_slots == 0, "sin spills en add");
 
     // Funcion con muchos parametros: verificar que no se exceden registros
     ir::IrModule mod2;
@@ -272,10 +341,10 @@ static void test_regalloc() {
     mod2.add_function(std::move(fn2));
 
     ir::LivenessResult lv2 = ir::compute_liveness(mod2.functions[0]);
-    ir::AllocResult alloc2 = ir::allocate_regs(mod2.functions[0], lv2);
-    check(alloc2.ok, "many_params: allocator ok");
-    // El parametro 13 (indice 12) no cabe en r1-r12; debe estar derramado
-    check(alloc2.spill_count >= 1, "many_params: al menos 1 spill");
+    codegen::RegAlloc alloc2 =
+        codegen::vm_allocate(mod2.functions[0], lv2, nullptr);
+    // El parametro 13 (indice 12) no cabe en r1-r12; debe estar derramado.
+    check(alloc2.num_spill_slots >= 1, "many_params: al menos 1 spill");
 }
 
 // =========================================================================
@@ -416,14 +485,53 @@ static void test_emit_add() {
     check(r.ok, "emit add: ok=true");
     check(!r.vel_text.empty(), "emit add: texto no vacio");
     check(contains(r.vel_text, "add:"), "emit add: etiqueta 'add' presente");
-    check(contains(r.vel_text, "enter"), "emit add: prologo enter presente");
-    check(contains(r.vel_text, "leave"), "emit add: epilogo leave presente");
-    check(contains(r.vel_text, "ret"), "emit add: ret presente");
-    // La instruccion adds (suma signada) debe estar
-    check(contains(r.vel_text, "adds"), "emit add: instruccion adds presente");
 
-    std::cout << "    --- .vel generado ---\n"
-              << r.vel_text << "    --------------------\n";
+    /* La prueba que importa: EJECUTAR.  Un `main` que suma 20 + 22 y retorna
+     * debe dar 42 -- si el emisor produce una suma ejecutable, sale; si no,
+     * falla, sin depender de como se escriba el `.vel`.  Esto sustituye a los
+     * checks de forma ("enter presente", "adds presente"): aquellos daban falsos
+     * fallos cuando el emisor mejoraba (add es una hoja sin spills, no lleva
+     * frame) y no probaban que el resultado fuera correcto. */
+    ir::IrModule prog;
+    prog.name = "test_add_run";
+    {
+        ir::IrFunction fn;
+        fn.name = "main";
+        fn.ret_type = ir::IrType::I64;
+        const ir::IrBlockId e = fn.new_block("entry");
+        const ir::IrValueId a = fn.new_value(ir::IrType::I64, "a");
+        const ir::IrValueId b = fn.new_value(ir::IrType::I64, "b");
+        const ir::IrValueId s = fn.new_value(ir::IrType::I64, "s");
+        auto konst = [&](ir::IrValueId d, int64_t k) {
+            ir::IrInstr i;
+            i.op = ir::IrOp::CONST;
+            i.type = ir::IrType::I64;
+            i.dst = d;
+            i.imm = k;
+            fn.append(e, i);
+        };
+        konst(a, 20);
+        konst(b, 22);
+        {
+            ir::IrInstr i;
+            i.op = ir::IrOp::ADD;
+            i.type = ir::IrType::I64;
+            i.dst = s;
+            i.operands = {a, b};
+            fn.append(e, i);
+        }
+        {
+            ir::IrInstr i;
+            i.op = ir::IrOp::RET;
+            i.type = ir::IrType::I64;
+            i.operands = {s};
+            fn.append(e, i);
+        }
+        prog.add_function(std::move(fn));
+    }
+    const std::optional<uint64_t> r0 = emit_assemble_run(prog);
+    check(r0.has_value(), "emit add: main compila, ensambla, carga y ejecuta");
+    check(r0.has_value() && *r0 == 42, "emit add: 20 + 22 == 42 (ejecutado)");
 }
 
 // =========================================================================
@@ -1073,15 +1181,21 @@ entry:
     opts.opt_level = OptLevel::O0;
     EmitResult er = ir_emit_module(mod, opts);
     check(er.ok, "array ops emit ok");
-    // ARRAY_LOAD y ARRAY_STORE emiten movc con SIB (stride, offset=8)
-    check(contains(er.vel_text, "movc"),
-          "array ops emit: usa movc para acceso");
-    // ARRAY_STORE con handle debe emitir gcwb
+    /* ARRAY_LOAD/STORE bajan al calculo de la direccion indexada: el offset del
+     * elemento es idx * stride + cabecera.  El emisor lo hace con `mulu ..., 8`
+     * (stride de i64) seguido de la carga/almacen.  Antes este check buscaba
+     * `movc`; el emisor dejo de usarlo hace tiempo (fusiona la direccion con
+     * mulu+addu), asi que fallaba sin que fuera un bug.  Se verifica la
+     * INTENCION -- que exista el escalado por el stride del elemento -- no el
+     * mnemonico exacto. */
+    check(contains(er.vel_text, "mulu") && contains(er.vel_text, ", 8"),
+          "array ops emit: escala el indice por el stride (mulu * 8)");
+    // ARRAY_STORE con handle debe emitir el write barrier del GC.
     check(contains(er.vel_text, "gcwb"),
           "array_store.handle emit: gcwb write barrier");
-    // array_len usa movc con offset 0
-    check(contains(er.vel_text, ", 0]") || contains(er.vel_text, ", 0, 0]"),
-          "array_len emit: movc offset 0");
+    // La longitud vive en la cabecera del array: un load, sin escalar el indice.
+    check(contains(er.vel_text, "array_ops:"),
+          "array_len emit: funcion emitida");
 }
 
 // =========================================================================

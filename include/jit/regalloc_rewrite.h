@@ -44,7 +44,8 @@
 #include <vector>
 
 #include "codegen/allocation_result.h" // AllocationResult (frame + timeline)
-#include "jit/linear_scan.h"
+#include "codegen/regalloc.h"
+#include "jit/interval.h"  // IntervalResult / LiveInterval
 #include "jit/machine_ir.h"
 #include "jit/target_reginfo.h"
 

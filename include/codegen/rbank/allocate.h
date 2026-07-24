@@ -43,7 +43,7 @@
 #include "codegen/rbank/smart_spill.h"         // color_smart_spill
 #include "jit/backend_caps.h"
 #include "jit/interval.h"
-#include "jit/linear_scan.h"
+#include "codegen/regalloc.h"
 #include "jit/target_reginfo.h"
 
 #include <algorithm>

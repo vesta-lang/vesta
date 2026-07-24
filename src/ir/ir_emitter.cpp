@@ -39,7 +39,7 @@
 #include "ir/gc_safepoint.h" // pase compartido: raices GC por safepoint
 #include "ir/ir_optimizer.h"
 #include "ir/liveness.h"
-#include "codegen/vm_shadow.h"
+#include "codegen/vm_allocate.h"
 #include "ir/regalloc.h"
 #include "ir/ssa_ir.h"
 #include "vx/asm/asm_effects.h"           // inc.6: asm_canonical_reg
@@ -6122,29 +6122,18 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
             }
         }
     }
-    codegen::RegAlloc alloc = allocate_regs(
-        fn, liveness, coal_remap.empty() ? nullptr : &coal_remap);
-
-    /* MODO SOMBRA (VESTA_VM_SHADOW=1, cerrado por defecto): corre el modelo
-     * (codegen::rbank) EN PARALELO y compara, sin consumir su resultado.  Es el
-     * paso previo a que los TRES modos usen el mismo allocator -- el interprete
-     * es el ORACULO de diff_harness, asi que cambiar su asignacion de golpe
-     * reescribiria el `.vel` de todo el corpus a la vez y no habria forma de
-     * distinguir "decide distinto" de "decide MAL". */
-    codegen::vm_shadow_compare(fn, liveness, alloc,
-                               coal_remap.empty() ? nullptr : &coal_remap);
-
-    /* Asignar con el modelo (VESTA_VM_RBANK=1): el mismo allocator que usan el
-     * JIT y el AOT.  La sombra ya verifico sobre el corpus entero que ambos
-     * derraman EXACTAMENTE lo mismo (4305/4305 funciones), asi que esto no es un
-     * salto a ciegas: es encender lo ya medido.
+    /* UN SOLO ASIGNADOR para los tres modos: el mismo @c codegen::rbank que
+     * usan el JIT y el AOT.  El interprete tenia el suyo (@c ir::allocate_regs,
+     * barrido lineal propio); se jubilo -- dos respuestas a la misma pregunta
+     * obligan a arreglar cada fallo dos veces, y la del interprete guardaba
+     * conocimiento que no estaba dicho en ningun sitio (ver
+     * @c codegen/vm_isa_facts.h).
      *
-     * La puerta existe para comparar los dos asignadores con el MISMO binario,
-     * que es la unica forma de atribuir una diferencia al asignador y no a
-     * cualquier otra cosa que cambie entre dos compilaciones. */
-    if (codegen::vm_rbank_enabled())
-        alloc = codegen::vm_allocate(fn, liveness,
-                                     coal_remap.empty() ? nullptr : &coal_remap);
+     * La migracion se valido con una puerta que permitia correr los dos con el
+     * MISMO binario: 590 programas del corpus, mismo resultado en todos.  La
+     * puerta desaparece con el asignador que comparaba. */
+    codegen::RegAlloc alloc = codegen::vm_allocate(
+        fn, liveness, coal_remap.empty() ? nullptr : &coal_remap);
 
     // fix14: solo emitir enter/leave si hay slots de spill O si la funcion
     // contiene ALLOCA (que genera subsp rsp, N sin un addsp correspondiente

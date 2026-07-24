@@ -42,7 +42,7 @@
 #include "analysis/facts/remat_facts.h"
 #include "codegen/rbank/value_requirements.h"
 #include "jit/interval.h"
-#include "jit/linear_scan.h"
+#include "codegen/regalloc.h"
 
 #include <algorithm>
 #include <cstdint>

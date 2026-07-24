@@ -19,7 +19,7 @@
 #include "jit/codegen_target.h"
 #include "jit/interval.h"
 #include "jit/jit_registry.h"
-#include "jit/linear_scan.h"
+#include "codegen/regalloc.h"
 #include "jit/machine_ir.h"
 #include "jit/peephole.h"
 #include "jit/regalloc_rewrite.h"

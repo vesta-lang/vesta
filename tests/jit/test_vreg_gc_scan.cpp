@@ -24,7 +24,7 @@
 #include "jit/code_cache.h"
 #include "jit/interval.h"
 #include "jit/jit_registry.h"
-#include "jit/linear_scan.h"
+#include "codegen/regalloc.h"
 #include "jit/machine_ir.h"
 #include "jit/regalloc_rewrite.h"
 #include "codegen/timeline_builder.h"

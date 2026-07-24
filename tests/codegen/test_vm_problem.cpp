@@ -145,7 +145,7 @@ int main() {
             CHECK(p.values[i].req.value_id == p.values[i].value_id);
             CHECK(p.values[i].req.cls == codegen::rbank::ResourceClass::GP);
             // Sin pines mientras se corra en SOMBRA: meterlos cambiaria lo que
-            // se compara contra ir::allocate_regs.
+            // el problema es el que resuelve el asignador del interprete.
             CHECK(p.values[i].req.fixed_reg == -1);
         }
         CHECK(p.affinity.edges.empty()); // no se inventan afinidades

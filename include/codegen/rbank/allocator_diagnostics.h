@@ -37,7 +37,7 @@
 #define VESTA_CODEGEN_RBANK_ALLOCATOR_DIAGNOSTICS_H
 
 #include "jit/interval.h"
-#include "jit/linear_scan.h"
+#include "codegen/regalloc.h"
 
 #include <algorithm>
 #include <cstdint>

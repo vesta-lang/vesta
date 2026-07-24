@@ -10,7 +10,7 @@
  * @brief La ISA de la PROPIA VM descrita como un target mas (@c target_vm).
  *
  * Primer paso de unificar los TRES modos (interprete, JIT, AOT) bajo el mismo
- * allocator: hoy el emisor `.vel` usa @c ir::allocate_regs y los otros dos usan
+ * allocator: los TRES modos usan @c codegen::rbank; el emisor `.vel` entra por
  * @c codegen::rbank -- dos asignadores para el mismo problema.
  *
  * Lo que se comprueba aqui NO es que "compile", sino que el descriptor

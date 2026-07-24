@@ -26,7 +26,7 @@
 #define VESTA_JIT_CODEGEN_TARGET_H
 
 #include "jit/interval.h"        // IntervalResult
-#include "jit/linear_scan.h"     // codegen::RegAlloc
+#include "codegen/regalloc.h"
 #include "jit/machine_ir.h"      // MFunction
 #include "jit/sched/machine_effects.h" // sched::EffIsa
 #include "jit/target_reginfo.h"  // TargetRegInfo

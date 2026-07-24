@@ -67,43 +67,6 @@ static constexpr int SCRATCH2_REG = 13; // r13 (reservado junto con r14)
 /** @brief Registro reservado para argc en llamadas. */
 static constexpr int ARGC_REG = 15; // r15
 
-/* El RESULTADO es @c codegen::RegAlloc: LA representacion de una asignacion de
- * registros en el proyecto, la misma que consumen el JIT y el AOT.
- *
- * Antes habia aqui un @c AllocResult propio (dos @c unordered_map dispersos).
- * Se elimino: "una asignacion de registros" no puede tener dos formas segun
- * quien la produzca -- eso obliga a un puente en medio y a arreglar cada fallo
- * dos veces.  La conversion no fue gratis, ademas: la representacion dispersa
- * permitia expresar un valor que esta EN REGISTRO Y DERRAMADO a la vez, estado
- * imposible que ya causo un bug real (ver el desalojo en regalloc.cpp).  Con
- * @c Loc como campo unico, deja de ser expresable. */
-
-
-/**
- * @brief Asigna registros VM a los valores SSA mediante barrido lineal.
- *
- * Implementa el algoritmo de Poletto & Sarkar (1999).
- * Pre-asigna parametros a r1-r12 siguiendo la convencion de llamada.
- * Derrama valores cuando se agotan los ALLOC_REGS registros disponibles.
- *
- * Coalescencia de congruencias de PHI (consumo del remap, sin tocar el SSA):
- * si @p coalesce_remap no es nulo ni vacio, los valores de la misma clase de
- * congruencia (remap[v] == root) comparten un registro VM.  El allocator opera
- * sobre valores CANONICOS (el root de cada clase, con los intervalos unidos) y
- * luego expande la asignacion a todos los miembros.  Asi las copias
- * PHI intra-clase quedan como no-op (mismo reg origen y destino) SIN reescribir
- * el IR a multi-def.  @p coalesce_remap debe garantizar que cada parametro sea
- * el root de su propia clase (el caller lo fuerza).
- *
- * @param fn             Funcion SSA con sus valores y bloques.
- * @param liveness       Resultado del analisis de vivacidad.
- * @param coalesce_remap Remap de congruencia (indexado por IrValueId) o nullptr.
- * @return Resultado con la asignacion de registros y slots de pila.
- */
-codegen::RegAlloc
-allocate_regs(const IrFunction &fn, const LivenessResult &liveness,
-              const std::vector<uint32_t> *coalesce_remap = nullptr);
-
 /**
  * @brief Obtiene el nombre de texto de un registro VM (p.ej. "r0", "r14").
  * @param reg Numero de registro (0-15).
