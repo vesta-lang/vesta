@@ -211,25 +211,11 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
             iv[v].add_range(start, end);
         }
     }
-
-    /* ---- 4b) Usos NO-phi de cada valor (para la regla de soundness) ----
-     * Un phi_arg `s` solo es SEGURO de coalescer con su phi_dst si TODOS sus
-     * usos son phi-args: entonces s "muere" en el borde del phi (copia paralela
-     * en la arista) y NO puede estar vivo a la vez que el phi_dst -> cero
-     * interferencia.  Si s tiene ALGUN uso NO-phi, coalescer puede crear una
-     * interferencia real que el analisis de rangos con numeracion lineal NO
-     * modela bien a traves de un back-edge de loop -- era la causa del hang de
-     * state_machine (el phi de `rng` se coalescia con `rng_next`, que ademas se
-     * usa en el shift que calcula `byte`).  Es el subset provably-sound clasico
-     * (Chaitin/Briggs): coalescer solo copias phi cuyo origen no vive fuera del
-     * phi.  each_use ya EXCLUYE los PHI, asi que esto marca exactamente los
-     * usos no-phi. */
-    std::vector<char> non_phi_used(NV, 0);
-    for (const auto &blk : fn.blocks)
-        for (const ir::IrInstr &in : blk.instrs)
-            each_use(in, [&](ir::IrValueId u) {
-                if (u < NV) non_phi_used[u] = 1;
-            });
+    // (Eliminado el band-aid `non_phi_used`: rechazaba coalescer args con usos
+    // no-phi para no depender de la numeracion lineal imprecisa.  El grafo de
+    // interferencia PRECISO `interfere()` (live-at-def, mas abajo) + el gate
+    // `sibling_dep` cubren la interferencia real -- incluido el caso original
+    // de state_machine -- sin perder el coalescing del acumulador loop-carried.)
 
     /* ---- 5) Coalescing de congruencias de PHI ---- */
     std::vector<uint32_t> parent(NV);
@@ -533,13 +519,14 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
                         continue;
                     }
                 }
-                if (non_phi_used[s]) { // arg vive fuera del phi -> puede interferir
-                    if (dbg)
-                        std::fprintf(stderr,
-                                     "[ssa-coal] %s phi v%u<-v%u NONPHIUSE\n",
-                                     fn.name.c_str(), d, s);
-                    continue;
-                }
+                // (Antes: gate conservador `non_phi_used[s]` -- rechazaba
+                // coalescer cualquier arg con usos NO-phi SIN consultar el grafo
+                // de interferencia.  Era un band-aid sobre la imprecision de la
+                // numeracion lineal; el grafo PRECISO `interfere()` (live-at-def)
+                // de abajo ya detecta la interferencia real, asi que el band-aid
+                // sobra y ademas perdia el coalescing del acumulador loop-carried
+                // -- `acc` cuyo `acc+1` es un uso no-phi legitimo.  La correccion
+                // real es confiar en el grafo preciso + sibling_dep, no rodearlo.)
                 const uint32_t rd = find(d), rs = find(s);
                 if (rd == rs) continue;
                 if (crosses_call(rd) || crosses_call(rs)) {
