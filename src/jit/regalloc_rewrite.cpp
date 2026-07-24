@@ -1118,7 +1118,14 @@ struct Lowerer {
          * deben estar en XMM (reg-reg only).  Spilled -> fscr0/fscr1. */
         if (op == MOp::UCOMISD || op == MOp::UCOMISS) {
             const MOp mv = (op == MOp::UCOMISS) ? MOp::MOVSS : MOp::MOVSD;
-            MOperand a = resolve_def(in.dst); // operando A (UCOMISD a, b)
+            /* El "dst" de UCOMISD es el primer OPERANDO de la comparacion -- se
+             * LEE, no se define (la instruccion solo setea flags).  operand_roles
+             * lo marca R::USE por eso; hay que resolverlo como USO, no como DEF.
+             * Con resolve_def caia en def_point, donde el valor ya no vive: sobre
+             * una base plana daba la misma ubicacion y no se notaba, pero con los
+             * rangos el timeline contestaba "en ningun sitio" (NONE) -- el fallo
+             * que bloqueaba poner rangos en los tres modos. */
+            MOperand a = resolve_use(in.dst); // operando A (UCOMISD a, b)
             MOperand b = resolve_use(in.src1);
             if (a.kind == MOperandKind::MEM) {
                 out.push_back(MInstr::make_unary(mv, xmm(fscr0), a));
