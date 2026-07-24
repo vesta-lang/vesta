@@ -39,6 +39,7 @@
 #include "ir/gc_safepoint.h" // pase compartido: raices GC por safepoint
 #include "ir/ir_optimizer.h"
 #include "ir/liveness.h"
+#include "codegen/vm_shadow.h"
 #include "ir/regalloc.h"
 #include "ir/ssa_ir.h"
 #include "vx/asm/asm_effects.h"           // inc.6: asm_canonical_reg
@@ -6147,6 +6148,14 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
     }
     AllocResult alloc = allocate_regs(
         fn, liveness, coal_remap.empty() ? nullptr : &coal_remap);
+
+    /* MODO SOMBRA (VESTA_VM_SHADOW=1, cerrado por defecto): corre el modelo
+     * (codegen::rbank) EN PARALELO y compara, sin consumir su resultado.  Es el
+     * paso previo a que los TRES modos usen el mismo allocator -- el interprete
+     * es el ORACULO de diff_harness, asi que cambiar su asignacion de golpe
+     * reescribiria el `.vel` de todo el corpus a la vez y no habria forma de
+     * distinguir "decide distinto" de "decide MAL". */
+    codegen::vm_shadow_compare(fn, liveness, alloc);
 
     // fix14: solo emitir enter/leave si hay slots de spill O si la funcion
     // contiene ALLOCA (que genera subsp rsp, N sin un addsp correspondiente
