@@ -4735,6 +4735,15 @@ bool ir_pass_simplify(IrFunction &fn) {
         return true;
     };
 
+    /* Mapa value -> instr definidora (para reescrituras estructurales op-sobre-op
+     * como fneg(fneg x)->x).  Se lee EN VIVO (def->op actual): simplify reescribe
+     * in-place sin redimensionar los vectores, asi que los punteros siguen
+     * validos y nunca se toma una op stale. */
+    std::unordered_map<IrValueId, IrInstr *> def_of;
+    for (auto &bb : fn.blocks)
+        for (auto &ins : bb.instrs)
+            if (ins.dst != IR_NO_VALUE) def_of[ins.dst] = &ins;
+
     for (auto &bb : fn.blocks) {
         for (auto &ins : bb.instrs) {
             switch (ins.op) {
@@ -5013,6 +5022,29 @@ bool ir_pass_simplify(IrFunction &fn) {
             case IrOp::FROUND:
             case IrOp::FTRUNC: {
                 if (ins.operands.empty()) break;
+                /* Idempotencia ESTRUCTURAL de fneg/fabs: bit-exacta para TODO x
+                 * (NaN/Inf/+-0 incluidos), asi que es sound incluso bajo
+                 * @fp(strict).  fneg solo voltea el bit de signo; fabs lo pone a
+                 * 0.  fneg(fneg x)=x; fabs(fabs x)=fabs x; fabs(fneg x)=fabs x. */
+                if (ins.op == IrOp::FNEG || ins.op == IrOp::FABS) {
+                    auto dit = def_of.find(ins.operands[0]);
+                    if (dit != def_of.end() && dit->second != &ins &&
+                        !dit->second->operands.empty()) {
+                        const IrOp dop = dit->second->op;
+                        const IrValueId inner = dit->second->operands[0];
+                        if (ins.op == IrOp::FNEG && dop == IrOp::FNEG) {
+                            rewrite_as_mov(ins, inner);
+                            changed = true;
+                            break;
+                        }
+                        if (ins.op == IrOp::FABS &&
+                            (dop == IrOp::FABS || dop == IrOp::FNEG)) {
+                            ins.operands[0] = inner; // sigue siendo fabs, con x
+                            changed = true;
+                            break;
+                        }
+                    }
+                }
                 int64_t c0 = 0;
                 if (!get_const(ins.operands[0], c0)) break;
                 const bool is_f32 = (ins.type == IrType::F32);
