@@ -5472,55 +5472,84 @@ int log2_if_power_of_two(uint64_t v) {
 } // namespace
 
 // =========================================================================
-//  Pase ir_pass_elim_redundant_sext: elimina SEXT(v) cuando v es una variable
-//  de INDUCCION no-negativa ACOTADA (loop counter tipico) -> el sign-extend es
-//  la identidad.
+//  Fuente de conocimiento: ValueFacts (Range + KnownBits) por valor SSA.
 // =========================================================================
 //
-// Patron: `%v = phi(init, %inc)` con init CONST >= 0 y `%inc = add(%v, c)`
-// (c CONST > 0), donde el PROPIO bloque del PHI (el loop header) termina en
-// `br_cond(cmp.lt/le %v, K)` (K CONST).  Ese es el test de salida del loop, asi
-// que %v esta ACOTADO GLOBALMENTE: el maximo valor que %v alcanza es el ultimo
-// incremento antes de salir (Kmax + c - 1).  Si ese maximo cabe bajo el bit de
-// signo del ancho (< 2^(bits-1)), %v es un iN canonico en el registro de 64
-// bits (bits altos 0) EN TODA la funcion -> `sext.i64 %v` == %v.  Se reemplazan
-// los usos del SEXT por %v y se borra la instruccion.  Beneficia `seed ^ (u64)i`
-// de los hash-loops (elimina 1 op/iter en los 3 backends).
-//
-// Robusto (no conservador): el numero de usos de %v es IRRELEVANTE -- la cota es
-// una propiedad del valor, no de sus usos.  La cota es GLOBAL (vale en el cuerpo
-// Y en el exit: al salir %v vale como mucho Kmax+c-1, tambien < 2^(bits-1)), asi
-// que NO hace falta analisis de dominancia.  La unica exigencia estructural es
-// que el CMP de salida guarde %v en el header del propio PHI (loop natural).  La
-// verificacion de correctness es la suite e2e (compara resultados reales; el
-// diff_harness NO valdria porque el pase es compartido y los 3 backends
-// coincidirian aunque estuviera mal).
-bool ir_pass_elim_redundant_sext(IrFunction &fn) {
-    // vid -> valor CONST.
+// Analisis SOUND (over-aproximacion) que demuestra PROPIEDADES de cada valor;
+// los pases las CONSUMEN sin re-deducir (como KnownBits+ConstantRange de LLVM).
+// Vive en `ir_optimize`, ANTES de la divergencia interp vs vreg -> lo comparten
+// los 3 backends.  Dos hechos DISTINTOS por valor:
+//   - `range`  = el VALOR MATEMATICO del registro de 64 bits: [lo, hi].
+//   - `kz`/`ko` = KnownBits, la REPRESENTACION FISICA: bits provablemente 0 / 1.
+// Son propiedades relacionadas pero NO equivalentes (un i32 con rango [0,200]
+// podria vivir en un registro de 64 con bits altos basura; eliminar un SEXT
+// necesita probar la REPRESENTACION, no solo el rango).  Por eso KnownBits es lo
+// que autoriza eliminar SEXT/ZEXT/TRUNC/AND-mask; el rango sirve de PUENTE:
+// un valor con `range subset [0, 2^k)` tiene los bits [k,64) en 0 (el valor de
+// registro cabe), lo que SI es un hecho fisico.  Cualquier duda -> desconocido.
+struct ValueFacts {
+    int64_t lo = INT64_MIN;
+    int64_t hi = INT64_MAX;
+    uint64_t kz = 0; // bits provablemente 0
+    uint64_t ko = 0; // bits provablemente 1
+    bool range_full() const { return lo == INT64_MIN && hi == INT64_MAX; }
+};
+
+// Deriva bits known-zero altos del rango del VALOR DE REGISTRO: si el valor es
+// no-negativo y cabe en k bits, los bits [k, 64) del registro son 0.  Es el
+// PUENTE sound rango -> representacion fisica.
+static inline void facts_derive_bits_from_range(ValueFacts &f) {
+    if (f.lo < 0) return; // negativo: los bits altos son signo, no 0 (skip)
+    if (f.hi == 0) {
+        f.kz = ~0ULL; // el valor es 0: todos los bits en 0
+        return;
+    }
+    if (f.hi < 0) return; // hi desbordado / desconocido
+    const int hb = 63 - __builtin_clzll(static_cast<uint64_t>(f.hi));
+    const uint64_t known_zero_above =
+        (hb + 1 >= 64) ? 0ULL : ~((1ULL << (hb + 1)) - 1ULL);
+    f.kz |= known_zero_above;
+}
+
+// Computa ValueFacts de cada valor SSA (forward, over-aproximacion sound).
+static std::unordered_map<IrValueId, ValueFacts>
+compute_value_facts(const IrFunction &fn) {
+    std::unordered_map<IrValueId, ValueFacts> facts;
+    auto get = [&](IrValueId v) -> ValueFacts {
+        auto it = facts.find(v);
+        return it != facts.end() ? it->second : ValueFacts{};
+    };
+    auto have = [&](IrValueId v) -> bool { return facts.count(v) > 0; };
+
+    // --- Semilla: constantes + variables de induccion acotadas. ---
     std::unordered_map<IrValueId, int64_t> const_vids;
     for (const auto &bb : fn.blocks)
         for (const auto &ins : bb.instrs)
-            if (ins.op == IrOp::CONST && ins.dst != IR_NO_VALUE)
-                const_vids[ins.dst] = static_cast<int64_t>(ins.imm);
-    auto get_const = [&](IrValueId v, int64_t &out) -> bool {
+            if (ins.op == IrOp::CONST && ins.dst != IR_NO_VALUE) {
+                const int64_t c = static_cast<int64_t>(ins.imm);
+                const_vids[ins.dst] = c;
+                ValueFacts f;
+                f.lo = f.hi = c;
+                // KnownBits exactos de una constante.
+                f.kz = ~static_cast<uint64_t>(c);
+                f.ko = static_cast<uint64_t>(c);
+                facts[ins.dst] = f;
+            }
+    auto cst_of = [&](IrValueId v, int64_t &o) -> bool {
         auto it = const_vids.find(v);
         if (it == const_vids.end()) return false;
-        out = it->second;
+        o = it->second;
         return true;
     };
-
-    // dst -> ADD(base, c) con c CONST (recurrencia de la induccion).
     struct AddDef {
         IrValueId base;
         int64_t c;
     };
     std::unordered_map<IrValueId, AddDef> add_defs;
-    // dst del CMP -> (operando comparado, K const, incluye_igual).  Cubre el
-    // test de salida del loop `%v < K` (CMP_LT) y `%v <= K` (CMP_LE).
     struct CmpBound {
         IrValueId v;
         int64_t K;
-        bool inclusive; // true = LE (%v <= K), false = LT (%v < K)
+        bool inclusive;
     };
     std::unordered_map<IrValueId, CmpBound> cmp_bound;
     for (const auto &bb : fn.blocks)
@@ -5528,38 +5557,26 @@ bool ir_pass_elim_redundant_sext(IrFunction &fn) {
             if (ins.op == IrOp::ADD && ins.operands.size() == 2 &&
                 ins.dst != IR_NO_VALUE) {
                 int64_t c;
-                if (get_const(ins.operands[1], c))
+                if (cst_of(ins.operands[1], c))
                     add_defs[ins.dst] = {ins.operands[0], c};
-                else if (get_const(ins.operands[0], c))
+                else if (cst_of(ins.operands[0], c))
                     add_defs[ins.dst] = {ins.operands[1], c};
             }
             if ((ins.op == IrOp::CMP_LT || ins.op == IrOp::CMP_LE) &&
                 ins.operands.size() == 2 && ins.dst != IR_NO_VALUE) {
                 int64_t k;
-                if (get_const(ins.operands[1], k))
+                if (cst_of(ins.operands[1], k))
                     cmp_bound[ins.dst] = {ins.operands[0], k,
                                           ins.op == IrOp::CMP_LE};
             }
         }
-
-    auto narrow_signed_bits = [](IrType t) -> int {
-        switch (t) {
-        case IrType::I8: return 8;
-        case IrType::I16: return 16;
-        case IrType::I32: return 32;
-        default: return 0; // 0 = no aplica
-        }
-    };
-
-    // PHIs que son contadores de induccion no-negativos ACOTADOS por el test de
-    // salida de su PROPIO bloque (loop header).  Robusto: el numero de usos de
-    // %v es irrelevante -- la cota es una propiedad del valor.
-    std::unordered_set<IrValueId> good_phi;
+    // Induccion: phi(init>=0, %v+c>0) guardada por el br_cond del PROPIO header
+    // (loop natural canonico).  El maximo valor de %v es el ultimo incremento
+    // antes de salir (Kmax+c-1); esa cota GLOBAL da los bits altos known-zero.
+    // Es la PROCEDENCIA (no solo el rango) lo que garantiza la canonicidad: el
+    // registro empieza en CONST 0 (canonico) y solo suma positivos pequenos que
+    // no tocan los bits altos -> sigue canonico.
     for (const auto &bb : fn.blocks) {
-        // El bloque debe terminar en BR_COND; su condicion debe ser
-        // CMP_LT/LE(%phi, K) del MISMO bloque (el header del loop guarda su
-        // propia variable de induccion).  Asi la cota es global (ver arriba)
-        // sin necesitar analisis de dominancia.
         const IrInstr *term = nullptr;
         for (auto it = bb.instrs.rbegin(); it != bb.instrs.rend(); ++it) {
             if (it->op == IrOp::BR_COND) { term = &*it; break; }
@@ -5570,54 +5587,150 @@ bool ir_pass_elim_redundant_sext(IrFunction &fn) {
         if (term == nullptr || term->operands.empty()) continue;
         auto cb = cmp_bound.find(term->operands[0]);
         if (cb == cmp_bound.end()) continue;
-        const IrValueId guarded = cb->second.v; // %v de `%v < K`
-        // K efectivo: LT -> exit cuando %v >= K, ultimo %v en el rango es
-        // K-1+c; LE -> exit cuando %v > K, ultimo es K+c.  Usamos el maximo
-        // valor posible de %v (Kmax) para el chequeo de no-desbordamiento.
+        const IrValueId guarded = cb->second.v;
         const int64_t Kmax =
             cb->second.inclusive ? cb->second.K + 1 : cb->second.K;
-
         for (const auto &ins : bb.instrs) {
             if (ins.op != IrOp::PHI || ins.dst != guarded) continue;
-            const int bits = narrow_signed_bits(fn.values[ins.dst].type);
-            if (bits == 0) continue;
             if (ins.phi_args.size() != 2) continue;
-            const IrValueId a0 = ins.phi_args[0].value;
-            const IrValueId a1 = ins.phi_args[1].value;
             int64_t init = 0, c = 0;
             auto try_pair = [&](IrValueId mi, IrValueId minc) -> bool {
                 int64_t ic;
-                if (!get_const(mi, ic) || ic < 0) return false;
+                if (!cst_of(mi, ic) || ic < 0) return false;
                 auto it = add_defs.find(minc);
-                if (it == add_defs.end()) return false;
-                if (it->second.base != ins.dst || it->second.c <= 0)
+                if (it == add_defs.end() || it->second.base != ins.dst ||
+                    it->second.c <= 0)
                     return false;
                 init = ic;
                 c = it->second.c;
                 return true;
             };
-            if (!try_pair(a0, a1) && !try_pair(a1, a0)) continue;
-            // Cota global: %v en [init, Kmax + c - 1] (el ultimo incremento
-            // antes de salir).  Debe caber bajo el bit de signo del ancho.
-            const int64_t LIMIT = static_cast<int64_t>(1) << (bits - 1);
+            if (!try_pair(ins.phi_args[0].value, ins.phi_args[1].value) &&
+                !try_pair(ins.phi_args[1].value, ins.phi_args[0].value))
+                continue;
+            int64_t maxv;
             if (Kmax <= 0) continue;
-            if (Kmax + c - 1 >= LIMIT) continue; // podria tocar el bit de signo
-            good_phi.insert(ins.dst);
+            if (__builtin_add_overflow(Kmax, c - 1, &maxv)) continue;
+            ValueFacts f;
+            f.lo = init;
+            f.hi = maxv;
+            facts_derive_bits_from_range(f);
+            facts[ins.dst] = f;
         }
     }
 
-    if (good_phi.empty()) return false;
+    // --- Pase forward: cada instr computa sus hechos de los operandos. ---
+    // Orden de bloques del layout (RPO-ish); operando sin hechos (back-edge de
+    // PHI recursivo no-induccion) = desconocido (over-aproximacion sound).
+    auto sat_add = [](int64_t a, int64_t b, int64_t &o) -> bool {
+        return __builtin_add_overflow(a, b, &o);
+    };
+    for (const auto &bb : fn.blocks) {
+        for (const auto &ins : bb.instrs) {
+            if (ins.dst == IR_NO_VALUE || have(ins.dst)) continue;
+            ValueFacts r; // por defecto: FULL / desconocido
+            switch (ins.op) {
+            case IrOp::ADD:
+                if (ins.operands.size() == 2) {
+                    ValueFacts a = get(ins.operands[0]), b = get(ins.operands[1]);
+                    if (!a.range_full() && !b.range_full()) {
+                        int64_t lo, hi;
+                        if (!sat_add(a.lo, b.lo, lo) && !sat_add(a.hi, b.hi, hi)) {
+                            r.lo = lo;
+                            r.hi = hi;
+                        }
+                    }
+                }
+                break;
+            case IrOp::AND:
+                // x & mask (mask CONST >= 0) -> [0, mask]; KnownBits: bits fuera
+                // de la mascara quedan en 0.
+                if (ins.operands.size() == 2) {
+                    int64_t m;
+                    if ((cst_of(ins.operands[1], m) && m >= 0) ||
+                        (cst_of(ins.operands[0], m) && m >= 0)) {
+                        r.lo = 0;
+                        r.hi = m;
+                        r.kz = ~static_cast<uint64_t>(m); // bits fuera de mask = 0
+                    }
+                }
+                break;
+            case IrOp::PHI: {
+                bool all = !ins.phi_args.empty();
+                int64_t lo = INT64_MAX, hi = INT64_MIN;
+                uint64_t kz = ~0ULL, ko = ~0ULL;
+                for (const auto &pa : ins.phi_args) {
+                    if (!have(pa.value)) { all = false; break; }
+                    ValueFacts pf = get(pa.value);
+                    if (pf.range_full()) { all = false; break; }
+                    lo = std::min(lo, pf.lo);
+                    hi = std::max(hi, pf.hi);
+                    kz &= pf.kz; // bit known-zero solo si lo es en TODOS
+                    ko &= pf.ko;
+                }
+                if (all && lo <= hi) {
+                    r.lo = lo;
+                    r.hi = hi;
+                    r.kz = kz;
+                    r.ko = ko;
+                }
+                break;
+            }
+            default: break; // FULL para lo no modelado
+            }
+            facts_derive_bits_from_range(r); // puente rango -> bits altos
+            facts[ins.dst] = r;
+        }
+    }
+    return facts;
+}
 
-    // SEXT(%v) con %v en good_phi -> redundante.  Recolectar sext_dst -> %v.
+// =========================================================================
+//  Pase ir_pass_elim_redundant_sext: primer consumidor de ValueFacts.
+// =========================================================================
+//
+// Elimina `sext.i64 (iN v)` cuando KnownBits PRUEBA que los bits [63:N] del
+// registro de v ya son 0 (valor no-negativo canonico) -> el sign-extend es la
+// identidad.  NO se decide por el rango solo: se exige el hecho FISICO
+// (bits[63:N]==0), que el rango del valor de registro proporciona via
+// facts_derive_bits_from_range.  Generaliza el caso de induccion a CUALQUIER
+// valor cuya representacion se pruebe canonica.  Sound: cualquier duda -> no
+// transforma.  Beneficia `seed ^ (u64)i` de los hash-loops (elimina 1 op/iter
+// en los 3 backends).  Verificacion: e2e (compara resultados; diff_harness NO
+// valdria -- el pase es compartido, los 3 backends coincidirian aun mal).
+bool ir_pass_elim_redundant_sext(IrFunction &fn) {
+    auto narrow_bits = [](IrType t) -> int {
+        switch (t) {
+        case IrType::I8: return 8;
+        case IrType::I16: return 16;
+        case IrType::I32: return 32;
+        default: return 0;
+        }
+    };
+    const auto facts = compute_value_facts(fn);
+    auto facts_of = [&](IrValueId v) -> ValueFacts {
+        auto it = facts.find(v);
+        return it != facts.end() ? it->second : ValueFacts{};
+    };
+
+    // SEXT(v, iN->i64) redundante si bits [N-1, 64) de v son known-zero (el
+    // valor es no-negativo y cabe en N-1 bits -> sign-extend == identidad, y el
+    // registro ya esta canonico).
     std::unordered_map<IrValueId, IrValueId> replace;
     for (const auto &bb : fn.blocks)
-        for (const auto &ins : bb.instrs)
-            if (ins.op == IrOp::SEXT && ins.operands.size() == 1 &&
-                ins.dst != IR_NO_VALUE && good_phi.count(ins.operands[0]))
-                replace[ins.dst] = ins.operands[0];
+        for (const auto &ins : bb.instrs) {
+            if (ins.op != IrOp::SEXT || ins.operands.size() != 1 ||
+                ins.dst == IR_NO_VALUE)
+                continue;
+            const IrValueId src = ins.operands[0];
+            const int N = narrow_bits(fn.values[src].type);
+            if (N == 0 || N >= 64) continue;
+            const uint64_t upper = ~((1ULL << (N - 1)) - 1ULL); // bits [N-1, 64)
+            if ((facts_of(src).kz & upper) == upper) // todos known-zero
+                replace[ins.dst] = src;
+        }
     if (replace.empty()) return false;
 
-    // Reescribir todos los usos del dst del SEXT por %v.
     auto remap = [&](IrValueId v) -> IrValueId {
         auto it = replace.find(v);
         return it != replace.end() ? it->second : v;
@@ -5628,8 +5741,6 @@ bool ir_pass_elim_redundant_sext(IrFunction &fn) {
             for (auto &pa : ins.phi_args) pa.value = remap(pa.value);
             if (ins.func_ptr != IR_NO_VALUE) ins.func_ptr = remap(ins.func_ptr);
         }
-
-    // Borrar las instrucciones SEXT ahora muertas.
     for (auto &bb : fn.blocks)
         bb.instrs.erase(
             std::remove_if(bb.instrs.begin(), bb.instrs.end(),
