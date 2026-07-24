@@ -94,7 +94,7 @@ static inline void emit_spill_access(std::ostringstream &out,
 
 struct EmitCtx {
     const IrFunction &fn;     // funcion SSA a emitir
-    const AllocResult &alloc; // asignacion de registros
+    const codegen::RegAlloc &alloc; // asignacion de registros
     const LivenessResult
         &liveness; // intervalos de vida (necesario para save/restore en CALL)
     std::ostringstream &out; // stream de salida .vel
@@ -170,7 +170,7 @@ struct EmitCtx {
     // nombre base para etiquetas de esta funcion
     std::string fn_lbl;
 
-    EmitCtx(const IrFunction &fn_, const AllocResult &alloc_,
+    EmitCtx(const IrFunction &fn_, const codegen::RegAlloc &alloc_,
             const LivenessResult &liveness_, std::ostringstream &out_,
             bool comments_, bool emit_debug_, bool has_frame_,
             bool emit_stackmaps_ = false)
@@ -202,14 +202,13 @@ struct EmitCtx {
     // lado)
     std::string reg_of(IrValueId vid) const {
         if (vid == IR_NO_VALUE) return "r0";
-        auto it = alloc.reg_map.find(vid);
-        if (it != alloc.reg_map.end()) return reg_name(it->second);
+        if (alloc.in_reg(vid)) return reg_name(alloc.reg_of(vid));
         return reg_name(SCRATCH_REG);
     }
 
     // True si el valor vid tiene un registro asignado (no derramado)
     bool is_in_reg(IrValueId vid) const {
-        return vid != IR_NO_VALUE && alloc.reg_map.count(vid) > 0;
+        return vid != IR_NO_VALUE && alloc.in_reg(vid);
     }
 
     /// @brief Carga un valor DERRAMADO en un registro concreto @p dst_reg.
@@ -242,9 +241,8 @@ struct EmitCtx {
     }
 
     void emit_load_spilled_into(IrValueId vid, const std::string &dst_reg) {
-        auto it = alloc.spill_map.find(vid);
-        if (it == alloc.spill_map.end()) return; // no derramado: nada que hacer
-        emit_spill_load(dst_reg, it->second);
+        if (!alloc.spilled(vid)) return; // no derramado: nada que hacer
+        emit_spill_load(dst_reg, alloc.slot_of(vid));
     }
 
     // Fase 3 (regalloc ZMM): valores float que viven en un registro ZMM del
@@ -260,8 +258,7 @@ struct EmitCtx {
 
     // Numero de registro de un valor (SCRATCH_REG si derramado)
     int reg_num(IrValueId vid) const {
-        auto it = alloc.reg_map.find(vid);
-        if (it != alloc.reg_map.end()) return it->second;
+        if (alloc.in_reg(vid)) return alloc.reg_of(vid);
         return SCRATCH_REG;
     }
 
@@ -286,13 +283,9 @@ struct EmitCtx {
     // independientemente de si vinieron de reg directo o de spill.
     std::string load_src(IrValueId vid, int scratch_idx = 0) {
         if (vid == IR_NO_VALUE) return "r0";
+        if (alloc.in_reg(vid)) return reg_name(alloc.reg_of(vid));
         {
-            auto it = alloc.reg_map.find(vid);
-            if (it != alloc.reg_map.end()) return reg_name(it->second);
-        }
-        {
-            auto it = alloc.spill_map.find(vid);
-            if (it != alloc.spill_map.end()) {
+            if (alloc.spilled(vid)) {
                 int sr = (scratch_idx == 0) ? SCRATCH_REG : SCRATCH2_REG;
                 // Calcular direccion: r13 = rbp - (slot+1)*8.
                 //
@@ -316,7 +309,7 @@ struct EmitCtx {
                 // rsp, frame_size), que es local al frame y nadie mas
                 // toca.  Combinado con el fix de enter (allocacion en
                 // bytes = spill_count*8), los locals viven seguros.
-                emit_spill_load(reg_name(sr), it->second);
+                emit_spill_load(reg_name(sr), alloc.slot_of(vid));
                 if (is_gc_value(vid)) {
                     // El slot contiene el GcHandle.  Convertir a host_ptr
                     // fresco (gcderef indexa la HandleTable, que el GC
@@ -334,24 +327,18 @@ struct EmitCtx {
     // sin emitir codigo (el llamante debe invocar store_spilled despues).
     std::string dst_of(IrValueId vid) {
         if (vid == IR_NO_VALUE) return "r0";
-        auto it = alloc.reg_map.find(vid);
-        if (it != alloc.reg_map.end()) return reg_name(it->second);
+        if (alloc.in_reg(vid)) return reg_name(alloc.reg_of(vid));
         return reg_name(SCRATCH_REG);
     }
 
     // Si vid esta derramado, persiste el valor en su slot de pila.
-    // Bug C fix: si vid sigue en reg_map (caso eviction donde regalloc
-    // reasigno el reg pero el valor aun se usa via spill), leer del reg
-    // real en vez de SCRATCH_REG (que tendria garbage post-call).
+    // Si el valor tiene ademas un registro asignado, leer de EL y no de
+    // SCRATCH_REG (que tendria garbage tras una llamada).
     void store_spilled(IrValueId vid) {
         if (vid == IR_NO_VALUE) return;
-        auto it = alloc.spill_map.find(vid);
-        if (it == alloc.spill_map.end()) return;
+        if (!alloc.spilled(vid)) return;
         std::string src_reg = reg_name(SCRATCH_REG);
-        auto it_reg = alloc.reg_map.find(vid);
-        if (it_reg != alloc.reg_map.end()) {
-            src_reg = reg_name(it_reg->second);
-        }
+        if (alloc.in_reg(vid)) src_reg = reg_name(alloc.reg_of(vid));
         if (is_gc_value(vid)) {
             out << "    gchandle " << reg_name(SCRATCH_REG) << ", " << src_reg
                 << "\n";
@@ -359,7 +346,7 @@ struct EmitCtx {
             r14_cache = -1;
         }
         // Slot en offset NEGATIVO desde rbp; 1 instruccion (mst) con fallback.
-        emit_spill_store(src_reg, it->second);
+        emit_spill_store(src_reg, alloc.slot_of(vid));
     }
 
     // Emite un comentario si los comentarios estan activados
@@ -478,8 +465,7 @@ static void emit_mov_if_needed(EmitCtx &ctx, const std::string &dst,
 static void emit_three_reg_op(EmitCtx &ctx, const char *mnem, IrValueId a,
                               IrValueId b, IrValueId c) {
     auto in_reg = [&](IrValueId v) {
-        return v != IR_NO_VALUE &&
-               ctx.alloc.reg_map.find(v) != ctx.alloc.reg_map.end();
+        return v != IR_NO_VALUE && ctx.alloc.in_reg(v);
     };
     if (in_reg(a) && in_reg(b) && in_reg(c)) {
         const std::string ra = ctx.load_src(a, 0);
@@ -620,8 +606,7 @@ live_regs_through_call(const EmitCtx &ctx, uint32_t call_pos, IrValueId dst) {
     // (interfieren), asi que esta exclusion es no-op en ese caso.
     int dst_reg = -1;
     if (dst != IR_NO_VALUE) {
-        auto dit = ctx.alloc.reg_map.find(dst);
-        if (dit != ctx.alloc.reg_map.end()) dst_reg = dit->second;
+        if (ctx.alloc.in_reg(dst)) dst_reg = ctx.alloc.reg_of(dst);
     }
     std::vector<int> regs;
     regs.reserve(8);
@@ -638,10 +623,9 @@ live_regs_through_call(const EmitCtx &ctx, uint32_t call_pos, IrValueId dst) {
         // en call_pos (si existieran via PHI o similar) no entran al
         // false positive: si vive despues, ya estaba en algun reg antes.
         if (iv.def <= call_pos && call_pos < iv.end) {
-            auto it = ctx.alloc.reg_map.find(iv.id);
-            if (it == ctx.alloc.reg_map.end())
+            if (!ctx.alloc.in_reg(iv.id))
                 continue; // valor spilled, no en registro
-            const int r = it->second;
+            const int r = ctx.alloc.reg_of(iv.id);
             if (r == dst_reg) continue; // comparte reg con dst -> pre-call dead
             if (r >= 0 && r <= 12) regs.push_back(r);
         }
@@ -674,8 +658,7 @@ static bool reg_holds_gc_object(const EmitCtx &ctx, uint32_t call_pos, int r) {
     bool best_is_gc = false;
     for (const auto &iv : ctx.liveness.intervals) {
         if (!(iv.def <= call_pos && call_pos < iv.end)) continue;
-        auto it = ctx.alloc.reg_map.find(iv.id);
-        if (it == ctx.alloc.reg_map.end() || it->second != r) continue;
+        if (!ctx.alloc.in_reg(iv.id) || ctx.alloc.reg_of(iv.id) != r) continue;
         if (static_cast<size_t>(iv.id) >= ctx.fn.values.size()) continue;
         // Elegir el value mas recientemente definido (mayor iv.def) entre
         // los candidatos asignados al mismo reg con range que cubre call_pos.
@@ -713,9 +696,9 @@ static void append_hex_byte(std::string &out, uint8_t b) {
 // El CONJUNTO de raices viene del pase IR compartido
 // (@c ir::safepoint_gc_roots).  Aqui MATERIALIZAMOS cada raiz SSA a su
 // ubicacion fisica VM:
-//   - En un registro VM (reg_map): location = numero de reg (0..15),
+//   - En un registro VM: location = numero de reg (0..15),
 //     kind = HOSTPTR (el reg contiene el host_ptr; ver ir_emitter).
-//   - Derramado a un slot (spill_map): location = 0x40 + slot,
+//   - Derramado a un slot: location = 0x40 + slot,
 //     kind = HANDLE (el slot contiene el GcHandle estable a evacuacion).
 //
 // Nota de soundness: esto es un SUBCONJUNTO estricto de lo que el scan
@@ -779,17 +762,15 @@ static void emit_stackmap_marker(EmitCtx &ctx, const IrBlock &bb, size_t idx) {
     for (IrValueId vid : roots) {
         // Un valor puede tener reg Y spill; incluimos ambos (el reg lleva
         // host_ptr fresco, el slot lleva handle estable).
-        auto it_reg = ctx.alloc.reg_map.find(vid);
-        if (it_reg != ctx.alloc.reg_map.end()) {
-            const int r = it_reg->second;
+        if (ctx.alloc.in_reg(vid)) {
+            const int r = ctx.alloc.reg_of(vid);
             if (r >= 0 && r < 16)
                 locs.push_back({static_cast<uint8_t>(r),
                                 static_cast<uint8_t>(
                                     jit::StackmapGcKind::HOSTPTR)});
         }
-        auto it_sp = ctx.alloc.spill_map.find(vid);
-        if (it_sp != ctx.alloc.spill_map.end()) {
-            const int slot = it_sp->second;
+        if (ctx.alloc.spilled(vid)) {
+            const int slot = static_cast<int>(ctx.alloc.slot_of(vid));
             if (slot >= 0 && slot < 0xC0)
                 locs.push_back(
                     {static_cast<uint8_t>(loader::INTERP_SM_SLOT_BASE + slot),
@@ -916,7 +897,7 @@ static void emit_return_site_stackmap(EmitCtx &ctx, const IrBlock &bb,
         regs_to_save = live_regs_through_call(ctx, pos, ins.dst);
         pushed_pos = pushed_gc_reg_positions(ctx, pos, regs_to_save);
     }
-    const uint32_t spill_count = ctx.alloc.spill_count;
+    const uint32_t spill_count = ctx.alloc.num_spill_slots;
     const int n_saved = static_cast<int>(regs_to_save.size());
 
     std::vector<SmLoc> locs;
@@ -925,9 +906,8 @@ static void emit_return_site_stackmap(EmitCtx &ctx, const IrBlock &bb,
         // (a) Raiz derramada a slot: el slot lleva el GcHandle estable.  Los
         //     slots de spill estan POR ENCIMA de la region ALLOCA (offset fijo
         //     desde caller_rbp), asi que funcionan con o sin ALLOCA.
-        auto it_sp = ctx.alloc.spill_map.find(vid);
-        if (it_sp != ctx.alloc.spill_map.end()) {
-            const int slot = it_sp->second;
+        if (ctx.alloc.spilled(vid)) {
+            const int slot = static_cast<int>(ctx.alloc.slot_of(vid));
             if (slot >= 0 && slot < 0x40)
                 locs.push_back(
                     {static_cast<uint8_t>(loader::INTERP_SM_SLOT_BASE + slot),
@@ -935,9 +915,8 @@ static void emit_return_site_stackmap(EmitCtx &ctx, const IrBlock &bb,
             continue;
         }
         // (b) Raiz register-held empujada a traves del call.
-        auto it_reg = ctx.alloc.reg_map.find(vid);
-        if (it_reg == ctx.alloc.reg_map.end()) continue;
-        const int r = it_reg->second;
+        if (!ctx.alloc.in_reg(vid)) continue;
+        const int r = ctx.alloc.reg_of(vid);
         auto it_push = pushed_pos.find(r);
         if (it_push == pushed_pos.end()) continue; // no empujado (no vivo/reg)
         const int push_idx = it_push->second;
@@ -1211,8 +1190,7 @@ static void emit_restore_all_gc_aware(EmitCtx &ctx, uint32_t call_pos,
 // load_src haria normalmente.
 static void emit_load_spilled_arg(EmitCtx &ctx, int target_reg,
                                   ir::IrValueId vid) {
-    auto it = ctx.alloc.spill_map.find(vid);
-    if (it == ctx.alloc.spill_map.end()) return; // no es spilled, no-op
+    if (!ctx.alloc.spilled(vid)) return; // no es spilled, no-op
     const std::string rd = std::string(reg_name(target_reg));
     /* Scratch para el addr.  Usamos r14 (scratch general) cuando target!=14;
      * cuando target ES r14 reutilizamos el mismo reg (el flujo
@@ -1226,8 +1204,8 @@ static void emit_load_spilled_arg(EmitCtx &ctx, int target_reg,
      * de cycle-breaking que liberamos al final del parallel-move. */
     const char *scratch_reg = "r14";
     ctx.out << "    mov " << scratch_reg << ", rbp\n";
-    ctx.out << "    subu " << scratch_reg << ", " << ((it->second + 1) * 8)
-            << "\n";
+    ctx.out << "    subu " << scratch_reg << ", "
+            << ((ctx.alloc.slot_of(vid) + 1) * 8) << "\n";
     ctx.out << "    mov " << rd << ", [" << scratch_reg << "]\n";
     /* Invalidamos los caches que hayan sido clobered. */
     ctx.r14_cache = -1;
@@ -1409,9 +1387,8 @@ static void emit_select(EmitCtx &ctx, IrValueId dst, IrValueId cond,
     const char *spill_scratch[3] = {"r15", "r14", "r13"};
     int nspill = 0;
     auto op_reg = [&](IrValueId v) -> std::string {
-        auto it = ctx.alloc.reg_map.find(v);
-        if (it != ctx.alloc.reg_map.end())
-            return reg_name(it->second); // reg asignado: sin mov
+        if (ctx.alloc.in_reg(v))
+            return reg_name(ctx.alloc.reg_of(v)); // reg asignado: sin mov
         const char *s = spill_scratch[nspill < 2 ? nspill : 2];
         ++nspill;
         ctx.emit_load_spilled_into(v, s); // derramado: 1 carga
@@ -1850,16 +1827,16 @@ static bool has_phi_copies_to(EmitCtx &ctx, IrBlockId pred_id,
         for (const auto &pa : ins.phi_args) {
             if (pa.block == pred_id && pa.value != IR_NO_VALUE) {
                 // Solo es una colision real si dst != src (mov no trivial).
-                int d_reg = ctx.alloc.reg_map.count(ins.dst)
-                                ? ctx.alloc.reg_map.at(ins.dst)
+                int d_reg = ctx.alloc.in_reg(ins.dst)
+                                ? ctx.alloc.reg_of(ins.dst)
                                 : -1;
-                int s_reg = ctx.alloc.reg_map.count(pa.value)
-                                ? ctx.alloc.reg_map.at(pa.value)
+                int s_reg = ctx.alloc.in_reg(pa.value)
+                                ? ctx.alloc.reg_of(pa.value)
                                 : -2;
                 if (d_reg != s_reg) return true;
                 // Si alguno esta spilled, tambien hay copias (load/store)
-                if (ctx.alloc.spill_map.count(ins.dst) ||
-                    ctx.alloc.spill_map.count(pa.value))
+                if (ctx.alloc.spilled(ins.dst) ||
+                    ctx.alloc.spilled(pa.value))
                     return true;
             }
         }
@@ -1940,7 +1917,7 @@ static void emit_cmp_standalone(EmitCtx &ctx, const IrInstr &ins) {
 //   4. Para los ciclos restantes: romper cada ciclo usando SCRATCH_REG (r14)
 //      como temporal.
 //
-// Para valores derramados (no en reg_map) se usa una carga/almacenamiento
+// Para valores derramados se usa una carga/almacenamiento
 // secuencial a traves de r14; los ciclos con derrames se gestionan igual.
 static void emit_phi_copies(EmitCtx &ctx, IrBlockId pred_id,
                             IrBlockId succ_id) {
@@ -2042,8 +2019,8 @@ static void emit_phi_copies(EmitCtx &ctx, IrBlockId pred_id,
     std::vector<PhiCopy> spilled_src_reg_dst; // (c)
     // Paso 2.a: spilled-dst (cualquier src -> slot).
     for (const auto &c : copies) {
-        bool dst_in_reg = ctx.alloc.reg_map.count(c.dst) > 0;
-        bool src_in_reg = ctx.alloc.reg_map.count(c.src) > 0;
+        bool dst_in_reg = ctx.alloc.in_reg(c.dst);
+        bool src_in_reg = ctx.alloc.in_reg(c.src);
         if (dst_in_reg && src_in_reg) {
             reg_copies.push_back(c);
         } else if (!dst_in_reg) {
@@ -2063,8 +2040,8 @@ static void emit_phi_copies(EmitCtx &ctx, IrBlockId pred_id,
     // Mapa: dst_reg -> src_reg (solo registros numericos)
     std::unordered_map<int, int> pending;
     for (const auto &c : reg_copies) {
-        int d = ctx.alloc.reg_map.at(c.dst);
-        int s = ctx.alloc.reg_map.at(c.src);
+        int d = ctx.alloc.reg_of(c.dst);
+        int s = ctx.alloc.reg_of(c.src);
         if (d != s) pending[d] = s;
     }
 
@@ -2122,11 +2099,10 @@ static void emit_phi_copies(EmitCtx &ctx, IrBlockId pred_id,
     // reg destino.  Seguro emitir DESPUES de los moves reg-to-reg porque
     // dst_reg ya no es fuente de nadie.
     for (const auto &c : spilled_src_reg_dst) {
-        auto it = ctx.alloc.spill_map.find(c.src);
-        if (it == ctx.alloc.spill_map.end()) continue;
-        int d_reg = ctx.alloc.reg_map.at(c.dst);
+        if (!ctx.alloc.spilled(c.src)) continue;
+        int d_reg = ctx.alloc.reg_of(c.dst);
         std::string rd = reg_name(d_reg);
-        ctx.emit_spill_load(rd, it->second);
+        ctx.emit_spill_load(rd, ctx.alloc.slot_of(c.src));
         if (ctx.is_gc_value(c.src)) {
             ctx.out << "    gcderef cur0, " << rd << "\n";
             ctx.out << "    xchg cur0, " << rd << "\n";
@@ -2243,7 +2219,7 @@ static bool is_const_value(const IrBlock &bb, IrValueId val_id,
     // r_dec, r_dec eliminado por emit_phi_copies); phi(otro).reg != reg(i_dec)
     // -> sin colision.
     int dec_reg_idx =
-        ctx.alloc.reg_map.count(sub.dst) ? ctx.alloc.reg_map.at(sub.dst) : -1;
+        ctx.alloc.in_reg(sub.dst) ? ctx.alloc.reg_of(sub.dst) : -1;
     auto phi_writes_to_reg = [&](IrBlockId pred_id, IrBlockId succ_id) -> bool {
         if (succ_id >= static_cast<IrBlockId>(ctx.fn.blocks.size()))
             return false;
@@ -2253,11 +2229,11 @@ static bool is_const_value(const IrBlock &bb, IrValueId val_id,
             if (pi.dst == IR_NO_VALUE) continue;
             for (const auto &pa : pi.phi_args) {
                 if (pa.block == pred_id && pa.value != IR_NO_VALUE) {
-                    int d_reg = ctx.alloc.reg_map.count(pi.dst)
-                                    ? ctx.alloc.reg_map.at(pi.dst)
+                    int d_reg = ctx.alloc.in_reg(pi.dst)
+                                    ? ctx.alloc.reg_of(pi.dst)
                                     : -2;
-                    int s_reg = ctx.alloc.reg_map.count(pa.value)
-                                    ? ctx.alloc.reg_map.at(pa.value)
+                    int s_reg = ctx.alloc.in_reg(pa.value)
+                                    ? ctx.alloc.reg_of(pa.value)
                                     : -3;
                     // Solo problematico si la copy escribe al counter Y
                     // no es trivial (dst != src).  Trivial mov r3, r3
@@ -3139,7 +3115,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         for (size_t ai = 0; ai < nargs; ++ai) {
             ir::IrValueId v = ins.operands[ai];
             int target_reg = static_cast<int>(ai + 1);
-            if (v != IR_NO_VALUE && ctx.alloc.spill_map.count(v)) {
+            if (v != IR_NO_VALUE && ctx.alloc.spilled(v)) {
                 spilled_args.emplace_back(target_reg, v);
             } else {
                 moves.emplace_back(target_reg, ctx.load_src(v, 0));
@@ -3230,7 +3206,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         for (size_t ai = 0; ai < nargs; ++ai) {
             ir::IrValueId v = ins.operands[ai];
             int target_reg = static_cast<int>(ai + 1);
-            if (v != IR_NO_VALUE && ctx.alloc.spill_map.count(v)) {
+            if (v != IR_NO_VALUE && ctx.alloc.spilled(v)) {
                 spilled_args.emplace_back(target_reg, v);
             } else {
                 moves.emplace_back(target_reg, ctx.load_src(v, 0));
@@ -3347,7 +3323,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         for (size_t ai = 0; ai < nargs_decl; ++ai) {
             ir::IrValueId v = ins.operands[ai + 1];
             int target_reg = static_cast<int>(ai + 1);
-            if (v != IR_NO_VALUE && ctx.alloc.spill_map.count(v)) {
+            if (v != IR_NO_VALUE && ctx.alloc.spilled(v)) {
                 spilled_args.emplace_back(target_reg, v);
             } else {
                 moves.emplace_back(target_reg, ctx.load_src(v, 0));
@@ -3413,7 +3389,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         for (size_t ai = 0; ai < nargs; ++ai) {
             ir::IrValueId v = ins.operands[ai + 1];
             int target_reg = static_cast<int>(ai + 2);
-            if (v != IR_NO_VALUE && ctx.alloc.spill_map.count(v)) {
+            if (v != IR_NO_VALUE && ctx.alloc.spilled(v)) {
                 spilled_args.emplace_back(target_reg, v);
             } else {
                 moves.emplace_back(target_reg, ctx.load_src(v, 0));
@@ -3481,7 +3457,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         for (size_t ai = 0; ai < nargs; ++ai) {
             ir::IrValueId v = ins.operands[ai + 2];
             int target_reg = static_cast<int>(ai + 2);
-            if (v != IR_NO_VALUE && ctx.alloc.spill_map.count(v)) {
+            if (v != IR_NO_VALUE && ctx.alloc.spilled(v)) {
                 spilled_args.emplace_back(target_reg, v);
             } else {
                 moves.emplace_back(target_reg, ctx.load_src(v, 0));
@@ -3538,7 +3514,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         for (size_t ai = 0; ai < nargs; ++ai) {
             ir::IrValueId v = ins.operands[ai + 2];
             int target_reg = static_cast<int>(ai + 2);
-            if (v != IR_NO_VALUE && ctx.alloc.spill_map.count(v)) {
+            if (v != IR_NO_VALUE && ctx.alloc.spilled(v)) {
                 spilled_args.emplace_back(target_reg, v);
             } else {
                 moves.emplace_back(target_reg, ctx.load_src(v, 0));
@@ -3611,7 +3587,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         for (size_t ai = 0; ai < nargs; ++ai) {
             ir::IrValueId v = ins.operands[ai + arg_offset];
             int target_reg = static_cast<int>(ai + 1);
-            if (v != IR_NO_VALUE && ctx.alloc.spill_map.count(v)) {
+            if (v != IR_NO_VALUE && ctx.alloc.spilled(v)) {
                 spilled_args.emplace_back(target_reg, v);
             } else {
                 moves.emplace_back(target_reg, ctx.load_src(v, 0));
@@ -5037,7 +5013,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         for (size_t ai = 0; ai < nargs; ++ai) {
             ir::IrValueId v = ins.operands[ai + 1];
             int target_reg = static_cast<int>(ai + 1);
-            if (v != IR_NO_VALUE && ctx.alloc.spill_map.count(v)) {
+            if (v != IR_NO_VALUE && ctx.alloc.spilled(v)) {
                 spilled_args.emplace_back(target_reg, v);
             } else {
                 moves.emplace_back(target_reg, ctx.load_src(v, 0));
@@ -5884,9 +5860,9 @@ wide_bank_linear_scan(std::vector<IrValueId> cands,
                       const LivenessResult &liveness, int num_regs,
                       int num_scratch,
                       const std::unordered_map<IrValueId, IrValueId> &prefer) {
-    std::unordered_map<IrValueId, int> reg_map;
+    std::unordered_map<IrValueId, int> zmm_assign; // banco ZMM, NO el GP
     if (cands.empty())
-        return reg_map;
+        return zmm_assign;
     std::unordered_map<IrValueId, const LiveInterval *> iv;
     for (const auto &it : liveness.intervals)
         iv[it.id] = &it;
@@ -5906,7 +5882,7 @@ wide_bank_linear_scan(std::vector<IrValueId> cands,
         const uint32_t start = it->second->def, end = it->second->end;
         for (size_t k = 0; k < active.size();) {
             if (active[k].first < start) {
-                freep.push_back(reg_map[active[k].second]);
+                freep.push_back(zmm_assign[active[k].second]);
                 active[k] = active.back();
                 active.pop_back();
             } else {
@@ -5921,8 +5897,8 @@ wide_bank_linear_scan(std::vector<IrValueId> cands,
         int reg = -1;
         auto pit = prefer.find(v);
         if (pit != prefer.end()) {
-            auto rit = reg_map.find(pit->second);
-            if (rit != reg_map.end()) {
+            auto rit = zmm_assign.find(pit->second);
+            if (rit != zmm_assign.end()) {
                 auto fit = std::find(freep.begin(), freep.end(), rit->second);
                 if (fit != freep.end()) {
                     reg = *fit;
@@ -5934,10 +5910,10 @@ wide_bank_linear_scan(std::vector<IrValueId> cands,
             reg = freep.back();
             freep.pop_back();
         }
-        reg_map[v] = reg;
+        zmm_assign[v] = reg;
         active.push_back({end, v});
     }
-    return reg_map;
+    return zmm_assign;
 }
 
 // Cliente FLOAT del banco ancho: selecciona los escalares F64/F32 que pueden
@@ -6146,7 +6122,7 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
             }
         }
     }
-    AllocResult alloc = allocate_regs(
+    codegen::RegAlloc alloc = allocate_regs(
         fn, liveness, coal_remap.empty() ? nullptr : &coal_remap);
 
     /* MODO SOMBRA (VESTA_VM_SHADOW=1, cerrado por defecto): corre el modelo
@@ -6167,7 +6143,7 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
     // omitir enter/leave con seguridad: solo tienen push/pop balanceados y
     // callvm/ret que cancelan su propia RSP change.
     bool has_alloca = false;
-    if (alloc.spill_count == 0) {
+    if (alloc.num_spill_slots == 0) {
         for (const IrBlock &bb : fn.blocks) {
             for (const IrInstr &ins : bb.instrs) {
                 if (ins.op == IrOp::ALLOCA) {
@@ -6194,7 +6170,7 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
     // un enter/leave (2 instrs) en funciones que antes eran hoja pero alocan
     // o retienen GC -- despreciable y solo en el camino GC.
     bool force_frame_gc = false;
-    if (opts.emit_stackmaps && alloc.spill_count == 0 && !has_alloca) {
+    if (opts.emit_stackmaps && alloc.num_spill_slots == 0 && !has_alloca) {
         // Posiciones lineales por bloque (para safepoint_gc_roots).
         for (const IrBlock &bb : fn.blocks) {
             for (size_t i = 0; i < bb.instrs.size() && !force_frame_gc; ++i) {
@@ -6216,8 +6192,8 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
                     const std::vector<IrValueId> roots =
                         ir::safepoint_gc_roots(fn, liveness, pos, ins.dst);
                     for (IrValueId vid : roots) {
-                        if (alloc.spill_map.count(vid)) continue; // spill: no push
-                        if (alloc.reg_map.count(vid)) { force_frame_gc = true; break; }
+                        if (alloc.spilled(vid)) continue; // spill: no push
+                        if (alloc.in_reg(vid)) { force_frame_gc = true; break; }
                     }
                     break;
                 }
@@ -6240,7 +6216,7 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
         std::unique(zmm_saved_regs.begin(), zmm_saved_regs.end()),
         zmm_saved_regs.end());
 
-    const bool has_frame = (alloc.spill_count > 0) || has_alloca ||
+    const bool has_frame = (alloc.num_spill_slots > 0) || has_alloca ||
                            force_frame_gc || !zmm_saved_regs.empty();
 
     // Construir el contexto (pasa has_frame para que TAILCALL tambien omita
@@ -6251,7 +6227,7 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
     ctx.mod = mod;
     ctx.zmm_map = std::move(zmm_map);
     ctx.zmm_saved_regs = zmm_saved_regs;
-    ctx.zmm_save_slot_base = alloc.spill_count;
+    ctx.zmm_save_slot_base = alloc.num_spill_slots;
 
     // Etiqueta de funcion (exportada si corresponde)
     if (opts.export_all) {
@@ -6280,7 +6256,7 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
         // El frame reserva los slots de spill + un slot de 8 B por cada registro
         // callee-saved del banco ancho que la funcion usa.
         const uint32_t frame_bytes =
-            (alloc.spill_count + ctx.zmm_saved_regs.size()) * 8;
+            (alloc.num_spill_slots + ctx.zmm_saved_regs.size()) * 8;
         out << "    enter " << frame_bytes << "\n";
     }
 
@@ -6301,35 +6277,32 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
         for (size_t i = 0; i < fn.params.size(); ++i) {
             IrValueId pid = fn.params[i];
             if (i > 0) out << ", ";
-            if (alloc.reg_map.count(pid))
+            if (alloc.in_reg(pid))
                 out << fn.values[pid].name << "="
-                    << reg_name(alloc.reg_map.at(pid));
+                    << reg_name(alloc.reg_of(pid));
             else
                 out << fn.values[pid].name << "=[spill]";
         }
         out << "\n";
     }
 
-    // Bug fix CRITICO: si un parametro fue evictado por el regalloc
-    // (esta en spill_map y NO en reg_map), llega al entry en r1..r_N
-    // segun la calling convention pero el slot esta vacio.  Cualquier
-    // load posterior desde el slot lee garbage -> segfault al primer
-    // uso del param tras un CALL.  Esto afecta especialmente metodos
-    // grandes con muchos locales (Editor.render_buffer, etc.) donde el
-    // regalloc decide spillar `this` por presion de registros.
+    // Bug fix CRITICO: si un parametro fue evictado por el regalloc, llega al
+    // entry en r1..r_N segun la calling convention pero su SLOT esta vacio.
+    // Cualquier load posterior desde el slot lee garbage -> segfault al primer
+    // uso del param tras un CALL.  Esto afecta especialmente metodos grandes
+    // con muchos locales (Editor.render_buffer, etc.) donde el regalloc decide
+    // spillar `this` por presion de registros.
     for (size_t i = 0; i < fn.params.size() && i < 12; ++i) {
         IrValueId pid = fn.params[i];
-        if (alloc.reg_map.count(pid)) continue;
-        auto it_sp = alloc.spill_map.find(pid);
-        if (it_sp == alloc.spill_map.end()) continue;
+        if (!alloc.spilled(pid)) continue;
         const int preg = static_cast<int>(i + 1);
         const bool is_gc = static_cast<size_t>(pid) < fn.values.size() &&
                            fn.values[pid].is_gc_object;
         if (is_gc) {
             out << "    gchandle r14, " << reg_name(preg) << "\n";
-            emit_spill_access(out, "r14", it_sp->second, /*is_load=*/false);
+            emit_spill_access(out, "r14", alloc.slot_of(pid), /*is_load=*/false);
         } else {
-            emit_spill_access(out, reg_name(preg), it_sp->second,
+            emit_spill_access(out, reg_name(preg), alloc.slot_of(pid),
                               /*is_load=*/false);
         }
     }
@@ -6385,8 +6358,7 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
                     continue;
                 // La base debe estar en un registro (no derramada); si estuviera
                 // derramada el path normal ya la carga y no ganamos nada.
-                if (alloc.reg_map.find(base) == alloc.reg_map.end())
-                    continue;
+                if (!alloc.in_reg(base)) continue;
 
                 if (fn.values[off].is_const) {
                     //   offset constante -> [base + disp].
@@ -6422,8 +6394,7 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
                                     ++sh;
                                 const IrValueId mi = mul.operands[0];
                                 if (mi < fn.values.size() &&
-                                    alloc.reg_map.find(mi) !=
-                                        alloc.reg_map.end()) {
+                                    alloc.in_reg(mi)) {
                                     index = mi;
                                     scale = sh;
                                     folded_mul = true;
@@ -6433,9 +6404,7 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
                         }
                     }
                 }
-                if (!folded_mul &&
-                    alloc.reg_map.find(off) == alloc.reg_map.end())
-                    continue;
+                if (!folded_mul && !alloc.in_reg(off)) continue;
                 ctx.addr_fusion[&in] = {base, index, 0, scale};
                 ctx.fused_skip.insert(&prev);
             }
@@ -6496,8 +6465,8 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
     // las demas funciones usan ret para retornar al llamador via callvm.
     out << (is_entry_point ? "    hlt\n\n" : "    ret\n\n");
 
-    if (!alloc.spill_map.empty() && opts.emit_comments) {
-        out << "    // INFO: " << alloc.spill_count
+    if (!(alloc.num_spill_slots == 0) && opts.emit_comments) {
+        out << "    // INFO: " << alloc.num_spill_slots
             << " valor(es) derramado(s) a pila; cargas/almacenamientos "
                "emitidos\n";
     }

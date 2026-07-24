@@ -87,14 +87,15 @@ const char *reg_name(int reg) {
 //  Algoritmo de barrido lineal
 // =========================================================================
 
-AllocResult allocate_regs(const IrFunction &fn, const LivenessResult &liveness,
+codegen::RegAlloc allocate_regs(const IrFunction &fn,
+                               const LivenessResult &liveness,
                           const std::vector<uint32_t> *coalesce_remap) {
     // -------------------------------------------------------------------
     //  Consumo del remap de congruencia (sin reescribir el SSA).
     //  Modelo robusto: la decision de congruencia se computa una sola vez
     //  sobre el IR (jit::ssa_phi_coalesce_remap) y aqui la CONSUMIMOS.  El
     //  allocator opera sobre valores CANONICOS (root de cada clase, con los
-    //  intervalos unidos) y luego expande reg_map/spill_map a los miembros.
+    //  intervalos unidos) y luego expande la asignacion a los miembros.
     //  Asi los valores congruentes comparten registro VM y las copias PHI
     //  intra-clase quedan no-op, SIN crear multi-def en el IR.
     // -------------------------------------------------------------------
@@ -128,26 +129,27 @@ AllocResult allocate_regs(const IrFunction &fn, const LivenessResult &liveness,
         // Correr el scan normal sobre los valores canonicos.  El caller
         // garantiza que cada parametro es el root de su clase, asi que la
         // pre-asignacion de params (por fn.params) encaja con canon.
-        AllocResult r = allocate_regs(fn, canon, nullptr);
+        codegen::RegAlloc r = allocate_regs(fn, canon, nullptr);
         // Expandir la asignacion del root a todos los miembros de la clase.
         const IrValueId NV = static_cast<IrValueId>(fn.values.size());
         for (IrValueId v = 0; v < NV; ++v) {
             IrValueId rt = root(v);
             if (rt == v) continue;
-            auto rit = r.reg_map.find(rt);
-            if (rit != r.reg_map.end()) {
-                r.reg_map[v] = rit->second;
+            if (r.in_reg(rt)) {
+                const uint8_t reg = r.reg_of(rt);
+                r.set_reg(v, reg);
                 continue;
             }
-            auto sit = r.spill_map.find(rt);
-            if (sit != r.spill_map.end()) r.spill_map[v] = sit->second;
+            if (r.spilled(rt)) {
+                const uint32_t slot = r.slot_of(rt);
+                r.set_spill(v, slot);
+            }
         }
         return r;
     }
 
-    AllocResult result;
-    result.spill_count = 0;
-    result.ok = true;
+    codegen::RegAlloc result;
+    result.num_spill_slots = 0;
 
     if (liveness.intervals.empty()) return result;
 
@@ -214,7 +216,7 @@ AllocResult allocate_regs(const IrFunction &fn, const LivenessResult &liveness,
         for (IrValueId pid : fn.params) {
             if (pi >= 12) break; // maximo 12 parametros en registros r1-r12
             int preg = static_cast<int>(pi + 1); // r1, r2, ...
-            result.reg_map[pid] = preg;
+            result.set_reg(pid, static_cast<uint8_t>(preg));
             // quitar preg del pool libre
             auto it = std::find(free_pool.begin(), free_pool.end(), preg);
             if (it != free_pool.end()) free_pool.erase(it);
@@ -223,7 +225,7 @@ AllocResult allocate_regs(const IrFunction &fn, const LivenessResult &liveness,
         // parametros extra (>12) van directamente a spill
         for (; pi < fn.params.size(); ++pi) {
             IrValueId pid = fn.params[pi];
-            result.spill_map[pid] = result.spill_count++;
+            result.set_spill(pid, result.num_spill_slots++);
         }
     }
 
@@ -241,16 +243,14 @@ AllocResult allocate_regs(const IrFunction &fn, const LivenessResult &liveness,
 
     // Agregar al conjunto activo los parametros ya pre-asignados
     for (const auto &li : liveness.intervals) {
-        auto rm = result.reg_map.find(li.id);
-        if (rm != result.reg_map.end()) {
-            active.insert({li.end, li.id, rm->second});
-        }
+        if (result.in_reg(li.id))
+            active.insert({li.end, li.id, result.reg_of(li.id)});
     }
 
     // Barrido lineal sobre intervalos ordenados por def
     for (const auto &li : liveness.intervals) {
         // Saltar valores ya asignados (parametros pre-asignados o extra-spill)
-        if (result.reg_map.count(li.id) || result.spill_map.count(li.id))
+        if (result.in_reg(li.id) || result.spilled(li.id))
             continue;
 
         // Expirar intervalos cuyo end < li.def (ya no estan vivos)
@@ -276,22 +276,25 @@ AllocResult allocate_regs(const IrFunction &fn, const LivenessResult &liveness,
                 // Desalojar el activo con mayor end; su registro pasa a li
                 ActiveEntry spilled = *it_max;
                 active.erase(it_max);
-                result.spill_map[spilled.id] = result.spill_count++;
-                // CRITICAL Bug C fix: borrar reg_map[spilled.id] porque
-                // el reg pasa a `li.id`.  Sin esto, el desalojado quedaria
-                // en ambos reg_map (apuntando a reg ya reusado) y
-                // spill_map.  load_src/dst_of priorizan reg_map (lookup
-                // primero) y retornarian un reg con valor de OTRO IrValueId
-                // tras la reasignacion -> linked list / PHI nodes con
-                // punteros stale tras un CALL.
-                result.reg_map.erase(spilled.id);
+                /* El desalojado pasa a memoria y su registro se reusa para
+                 * `li.id`.  Basta con asignarle la nueva ubicacion: `loc` es UN
+                 * campo, asi que quedar a la vez en registro Y derramado ya no
+                 * es representable.
+                 *
+                 * Con dos mapas independientes SI lo era, y fue un bug real: el
+                 * desalojado seguia en reg_map apuntando a un registro ya
+                 * reasignado, los lectores lo consultaban primero y devolvian el
+                 * valor de OTRO IrValueId -- punteros stale en listas enlazadas
+                 * y nodos PHI despues de un CALL.  Requeria un borrado explicito
+                 * que era facil olvidar; ahora lo garantiza el tipo. */
+                result.set_spill(spilled.id, result.num_spill_slots++);
                 // reusar el registro del desalojado para li
-                result.reg_map[li.id] = spilled.reg;
+                result.set_reg(li.id, static_cast<uint8_t>(spilled.reg));
                 active.insert({li.end, li.id, spilled.reg});
             } else {
                 // El intervalo actual tiene el mayor end; lo derramamos
                 // directamente
-                result.spill_map[li.id] = result.spill_count++;
+                result.set_spill(li.id, result.num_spill_slots++);
             }
         } else {
             // Asignar registro: si hay hint, intentar reusar el reg del
@@ -308,9 +311,8 @@ AllocResult allocate_regs(const IrFunction &fn, const LivenessResult &liveness,
             int reg = -1;
             auto hit = hint_for.find(li.id);
             if (hit != hint_for.end()) {
-                auto rm = result.reg_map.find(hit->second);
-                if (rm != result.reg_map.end()) {
-                    int pref = rm->second;
+                if (result.in_reg(hit->second)) {
+                    int pref = result.reg_of(hit->second);
                     auto pit =
                         std::find(free_pool.begin(), free_pool.end(), pref);
                     if (pit != free_pool.end()) {
@@ -339,7 +341,7 @@ AllocResult allocate_regs(const IrFunction &fn, const LivenessResult &liveness,
                 reg = free_pool.back();
                 free_pool.pop_back();
             }
-            result.reg_map[li.id] = reg;
+            result.set_reg(li.id, static_cast<uint8_t>(reg));
             active.insert({li.end, li.id, reg});
         }
     }

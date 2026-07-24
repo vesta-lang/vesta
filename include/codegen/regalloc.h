@@ -90,6 +90,32 @@ struct RegAlloc {
     }
     uint8_t reg_of(uint32_t vid) const noexcept { return assign[vid].reg; }
     uint32_t slot_of(uint32_t vid) const noexcept { return assign[vid].slot; }
+
+    /* ---- Constructores ----
+     *
+     * Existen para que los productores no repitan el "poner tres campos a la
+     * vez": construir una asignacion es parte de la REPRESENTACION, no logica
+     * de quien la construye.  Crecen el vector porque los productores de estilo
+     * disperso (@c ir::allocate_regs) no conocen el tamano denso de antemano.
+     *
+     * @note @c loc es UN campo, asi que un valor NO puede estar a la vez en
+     *       registro y derramado.  En la representacion dispersa anterior eran
+     *       dos mapas independientes y ese estado SI era representable -- fue
+     *       un bug real (leia del registro ya reasignado).  Aqui deja de ser
+     *       expresable: asignar una ubicacion borra la otra por construccion. */
+    void ensure(uint32_t vid) {
+        if (vid >= assign.size()) assign.resize(static_cast<size_t>(vid) + 1);
+    }
+    void set_reg(uint32_t vid, uint8_t r) {
+        ensure(vid);
+        assign[vid].loc = Loc::REG;
+        assign[vid].reg = r;
+    }
+    void set_spill(uint32_t vid, uint32_t s) {
+        ensure(vid);
+        assign[vid].loc = Loc::SPILL;
+        assign[vid].slot = s;
+    }
 };
 
 } // namespace codegen

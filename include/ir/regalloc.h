@@ -47,11 +47,10 @@
 #ifndef REGALLOC_H
 #define REGALLOC_H
 
+#include "codegen/regalloc.h"
 #include "ir/liveness.h"
-#include <unordered_map>
-#include <string>
-#include <vector>
 #include <cstdint>
+#include <vector>
 
 namespace ir {
 
@@ -68,21 +67,17 @@ static constexpr int SCRATCH2_REG = 13; // r13 (reservado junto con r14)
 /** @brief Registro reservado para argc en llamadas. */
 static constexpr int ARGC_REG = 15; // r15
 
-/**
- * @brief Resultado de la asignacion de registros para una funcion.
+/* El RESULTADO es @c codegen::RegAlloc: LA representacion de una asignacion de
+ * registros en el proyecto, la misma que consumen el JIT y el AOT.
  *
- * Cada valor SSA queda asignado a un registro VM (reg_map) o a un slot
- * de pila (spill_map).  El campo spill_count indica cuantos slots de pila
- * reservar en el prologo de la funcion (cada slot = 8 bytes).
- */
-struct AllocResult {
-    std::unordered_map<IrValueId, int> reg_map; ///< valor -> registro VM (r0-r12)
-    std::unordered_map<IrValueId, uint32_t>
-        spill_map;        ///< valor -> indice de slot pila
-    uint32_t spill_count; ///< numero de slots usados
-    bool ok;              ///< false si hay error irrecuperable
-    std::string error;    ///< descripcion del error si !ok
-};
+ * Antes habia aqui un @c AllocResult propio (dos @c unordered_map dispersos).
+ * Se elimino: "una asignacion de registros" no puede tener dos formas segun
+ * quien la produzca -- eso obliga a un puente en medio y a arreglar cada fallo
+ * dos veces.  La conversion no fue gratis, ademas: la representacion dispersa
+ * permitia expresar un valor que esta EN REGISTRO Y DERRAMADO a la vez, estado
+ * imposible que ya causo un bug real (ver el desalojo en regalloc.cpp).  Con
+ * @c Loc como campo unico, deja de ser expresable. */
+
 
 /**
  * @brief Asigna registros VM a los valores SSA mediante barrido lineal.
@@ -95,7 +90,7 @@ struct AllocResult {
  * si @p coalesce_remap no es nulo ni vacio, los valores de la misma clase de
  * congruencia (remap[v] == root) comparten un registro VM.  El allocator opera
  * sobre valores CANONICOS (el root de cada clase, con los intervalos unidos) y
- * luego expande @c reg_map / @c spill_map a todos los miembros.  Asi las copias
+ * luego expande la asignacion a todos los miembros.  Asi las copias
  * PHI intra-clase quedan como no-op (mismo reg origen y destino) SIN reescribir
  * el IR a multi-def.  @p coalesce_remap debe garantizar que cada parametro sea
  * el root de su propia clase (el caller lo fuerza).
@@ -105,8 +100,9 @@ struct AllocResult {
  * @param coalesce_remap Remap de congruencia (indexado por IrValueId) o nullptr.
  * @return Resultado con la asignacion de registros y slots de pila.
  */
-AllocResult allocate_regs(const IrFunction &fn, const LivenessResult &liveness,
-                          const std::vector<uint32_t> *coalesce_remap = nullptr);
+codegen::RegAlloc
+allocate_regs(const IrFunction &fn, const LivenessResult &liveness,
+              const std::vector<uint32_t> *coalesce_remap = nullptr);
 
 /**
  * @brief Obtiene el nombre de texto de un registro VM (p.ej. "r0", "r14").

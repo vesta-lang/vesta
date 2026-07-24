@@ -147,7 +147,7 @@ inline void print_vm_shadow_summary() {
  */
 inline void vm_shadow_compare(const ir::IrFunction &fn,
                               const ir::LivenessResult &live,
-                              const ir::AllocResult &emitter,
+                              const codegen::RegAlloc &emitter,
                               const std::vector<uint32_t> *coalesce_remap) {
     if (!vm_shadow_enabled()) return; // camino cerrado: coste ~0.
     static std::once_flag once;
@@ -171,7 +171,7 @@ inline void vm_shadow_compare(const ir::IrFunction &fn,
 
     std::lock_guard<std::mutex> lk(vm_shadow_mutex());
     vm_shadow_agg().add_fn(fn.name, static_cast<uint32_t>(p.values.size()),
-                           emitter.spill_count, spills_model);
+                           emitter.num_spill_slots, spills_model);
 }
 
 } // namespace codegen
