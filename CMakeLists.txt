@@ -193,73 +193,44 @@ endif()
 # vx_lib, vmcore, vesta_lsp, vesta_ffi, vesta_rt, tests) enlaza `vesta_openssl`
 # y nada mas.  Se define AQUI, antes del primer add_subdirectory que lo use.
 #
-# Windows: se PREFIERE el enlace ESTATICO (libssl.a + libcrypto.a del sysroot
-# UCRT64/MinGW) para que el binario sea STANDALONE -- OpenSSL embebido, sin
-# acompanar libssl-3-x64.dll / libcrypto-3-x64.dll.  Si no hay .a, se cae a
-# FireDaemon (import libs + DLLs que el empaquetado incluye en ese caso).
+# OpenSSL SIEMPRE ESTATICO -- el binario final es standalone, sin depender de
+# libssl-3-x64.dll / libcrypto-3-x64.dll.  Dos vias, en orden:
+#   1. las .a del sysroot del compilador, si el toolchain las trae (MSYS2 si;
+#      gratis e instantaneo).
+#   2. si no (p.ej. TDM-GCC no las trae), COMPILAR OpenSSL desde el tarball
+#      OFICIAL con el MISMO compilador (BuildOpenSSLStatic.cmake): portable,
+#      multi-compilador, auto-descarga con SHA-256 fijado.  NUNCA se cae a DLLs.
 add_library(vesta_openssl INTERFACE)
 
 if (WIN32)
-    set(OPENSSL_ROOT_DIR "${CMAKE_SOURCE_DIR}/libs/Windows/OpenSSL-Win64")
-    set(OPENSSL_INCLUDE_DIR "${OPENSSL_ROOT_DIR}/include")
-    set(OPENSSL_LIB_DIR "${OPENSSL_ROOT_DIR}/lib/VC/x64/MD")
-
-    get_filename_component(_cc_bin    "${CMAKE_C_COMPILER}" DIRECTORY)  # .../ucrt64/bin
-    get_filename_component(_ucrt_root "${_cc_bin}"          DIRECTORY)  # .../ucrt64
+    get_filename_component(_cc_bin    "${CMAKE_C_COMPILER}" DIRECTORY)
+    get_filename_component(_ucrt_root "${_cc_bin}"          DIRECTORY)
     set(_ossl_a_ssl    "${_ucrt_root}/lib/libssl.a")
     set(_ossl_a_crypto "${_ucrt_root}/lib/libcrypto.a")
 
-    if (MINGW AND EXISTS "${_ossl_a_ssl}" AND EXISTS "${_ossl_a_crypto}")
-        message(STATUS "[OpenSSL] enlace ESTATICO (standalone, sin DLLs): ${_ossl_a_ssl}")
+    if (EXISTS "${_ossl_a_ssl}" AND EXISTS "${_ossl_a_crypto}")
+        # Via 1: .a del sysroot (el toolchain ya las trae).
+        message(STATUS "[OpenSSL] enlace ESTATICO desde el sysroot: ${_ossl_a_ssl}")
         target_include_directories(vesta_openssl INTERFACE "${_ucrt_root}/include")
-        # Orden: ssl antes que crypto; dependencias Win32 de OpenSSL al final
-        # (crypt32: almacen de certificados; gdi32/ws2_32: RNG y sockets).
         target_link_libraries(vesta_openssl INTERFACE
                 "${_ossl_a_ssl}" "${_ossl_a_crypto}" crypt32 gdi32 ws2_32)
-        set(VESTA_OPENSSL_STATIC ON  CACHE INTERNAL "OpenSSL embebido en el binario")
     else ()
-        set(VESTA_OPENSSL_STATIC OFF CACHE INTERNAL "OpenSSL embebido en el binario")
-        # --- Fallback: OpenSSL precompilado (FireDaemon) ---------------------
-        # Las .lib/.dll NO se versionan en git (solo headers + applink.c).  En un
-        # clone limpio se descargan aqui.  Idempotente + hash SHA-256 fijado.
-        if (NOT EXISTS "${OPENSSL_LIB_DIR}/libssl.lib")
-            set(_ossl_ver "3.6.1")
-            set(_ossl_url "https://download.firedaemon.com/FireDaemon-OpenSSL/openssl-${_ossl_ver}.zip")
-            set(_ossl_sha "48f53e49fda1ac9600f6356ef7a88cf9a3a1a4f69abf8e4918453f167884ddf8")
-            set(_ossl_zip "${CMAKE_BINARY_DIR}/openssl-${_ossl_ver}.zip")
-            set(_ossl_dir "${CMAKE_BINARY_DIR}/openssl-${_ossl_ver}-extract")
-            message(STATUS "[OpenSSL] ${OPENSSL_LIB_DIR}/libssl.lib no encontrado; descargando FireDaemon OpenSSL ${_ossl_ver}...")
-            if (NOT EXISTS "${_ossl_zip}")
-                file(DOWNLOAD "${_ossl_url}" "${_ossl_zip}"
-                        SHOW_PROGRESS
-                        EXPECTED_HASH SHA256=${_ossl_sha}
-                        STATUS _ossl_st)
-                list(GET _ossl_st 0 _ossl_code)
-                if (NOT _ossl_code EQUAL 0)
-                    list(GET _ossl_st 1 _ossl_msg)
-                    message(FATAL_ERROR "[OpenSSL] descarga fallo (${_ossl_code}): ${_ossl_msg}\n  URL: ${_ossl_url}\n  Alternativa: descarga el zip a mano y copia x64/lib/{libssl,libcrypto}.lib en ${OPENSSL_LIB_DIR} y x64/bin/*-x64.dll junto al ejecutable.")
-                endif()
-            endif()
-            file(ARCHIVE_EXTRACT INPUT "${_ossl_zip}" DESTINATION "${_ossl_dir}")
-            file(MAKE_DIRECTORY "${OPENSSL_LIB_DIR}")
-            file(COPY "${_ossl_dir}/x64/lib/libssl.lib" "${_ossl_dir}/x64/lib/libcrypto.lib"
-                    DESTINATION "${OPENSSL_LIB_DIR}")
-            file(COPY "${_ossl_dir}/x64/bin/libssl-3-x64.dll" "${_ossl_dir}/x64/bin/libcrypto-3-x64.dll"
-                    DESTINATION "${OPENSSL_ROOT_DIR}/bin")
-            if (NOT EXISTS "${OPENSSL_INCLUDE_DIR}/openssl/ssl.h")
-                file(COPY "${_ossl_dir}/x64/include/openssl" DESTINATION "${OPENSSL_INCLUDE_DIR}")
-            endif()
-            file(COPY "${_ossl_dir}/x64/bin/libssl-3-x64.dll" "${_ossl_dir}/x64/bin/libcrypto-3-x64.dll"
-                    DESTINATION "${CMAKE_BINARY_DIR}")
-            message(STATUS "[OpenSSL] instalado en ${OPENSSL_ROOT_DIR} (lib/VC/x64/MD + bin)")
+        # Via 2: compilar desde fuente con el compilador del build.  Ruta
+        # absoluta: CMAKE_MODULE_PATH todavia no incluye cmake/ en este punto.
+        include("${CMAKE_SOURCE_DIR}/cmake/BuildOpenSSLStatic.cmake")
+        vesta_build_openssl_static()
+        if (NOT VESTA_OSSL_STATIC_OK)
+            message(FATAL_ERROR "[OpenSSL] no se pudo obtener OpenSSL estatico.")
         endif()
-        # applink solo es necesario al mezclar OpenSSL-DLL con el CRT del .exe.
-        add_library(applink STATIC
-                libs/Windows/OpenSSL-Win64/include/openssl/applink.c)
-        target_include_directories(vesta_openssl INTERFACE ${OPENSSL_INCLUDE_DIR})
-        target_link_directories(vesta_openssl INTERFACE ${OPENSSL_LIB_DIR})
-        target_link_libraries(vesta_openssl INTERFACE libssl libcrypto ws2_32 applink)
+        target_include_directories(vesta_openssl INTERFACE "${VESTA_OSSL_STATIC_INCLUDE}")
+        # ssl antes que crypto; luego las deps Win32 de OpenSSL (crypt32 =
+        # almacen de certificados; gdi32/ws2_32 = RNG y sockets).
+        target_link_libraries(vesta_openssl INTERFACE
+                "${VESTA_OSSL_STATIC_SSL}" "${VESTA_OSSL_STATIC_CRYPTO}"
+                crypt32 gdi32 ws2_32)
     endif ()
+    # Siempre estatico -> el empaquetado NO envia DLLs (VestaPackaging.cmake).
+    set(VESTA_OPENSSL_STATIC ON CACHE INTERNAL "OpenSSL embebido en el binario")
 else ()
     find_package(OpenSSL REQUIRED)
     target_link_libraries(vesta_openssl INTERFACE OpenSSL::SSL OpenSSL::Crypto)
