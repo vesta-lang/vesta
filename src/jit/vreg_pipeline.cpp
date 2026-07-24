@@ -26,6 +26,7 @@
 #include "jit/sched/machine_sched.h"
 #include "jit/ssa_coalesce.h"
 #include "jit/target_reginfo.h"
+#include "jit/jit_timing.h"                   // telemetria de tiempo de compilacion
 #include "jit/vreg_select.h"
 #include "jit/x86_64/x86_target.h"
 #include "jit/x86_encoder.h"
@@ -388,6 +389,16 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
                       const CallResolver &resolve_call, const VregEntries &ent,
                       const CallResolver &resolve_native,
                       const CallResolver &resolve_symbol) {
+    /* Telemetria de compilacion (RAII: cuenta tambien los abandonos por fallback).
+     * El JIT compila DURANTE la ejecucion, asi que el reloj de pared mezcla compilar y
+     * ejecutar; separarlos es lo que permite saber si una optimizacion del codigo
+     * generado se esta comiendo su propia ganancia en tiempo de compilacion. */
+    ScopedJitTimer _jt(fn.name.c_str());
+    if (JitTiming::detail_enabled()) { // desglose por funcion: volcado al terminar.
+        static std::once_flag once;
+        std::call_once(once, [] { std::atexit([] { print_jit_timing(true); }); });
+    }
+
     /* 1. Seleccionar MachineIR de vregs (VM_ABI).  Si la funcion usa un
      *    op fuera del subset soportado, abortar -> fallback. */
     MFunction mf;
@@ -456,6 +467,7 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
     if (enc.encode(pf, bytes) == 0 || bytes.empty()) return nullptr;
 
     /* 4. Alojar en el code cache + commit (flush icache). */
+    _jt.set_code_bytes(static_cast<uint32_t>(bytes.size())); // telemetria.
     uint8_t *code = cc.alloc(bytes.size(), 16);
     if (!code) return nullptr;
     std::memcpy(code, bytes.data(), bytes.size());

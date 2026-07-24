@@ -42,6 +42,7 @@
 #include "jit/vec_isa.h" // ancho SIMD del target (--float-isa)
 #include "jit/backend_caps.h" // caps del target para el gate FMA (AOT)
 #include "jit/auto_jit.h"
+#include "jit/jit_timing.h"
 #include "jit/jit_branch_prof.h"
 #include "jit/sched/cost_model.h" // --cpu: microarquitectura objetivo del scheduler
 #include "jit/keystone_asm_backend.h" //  AS inc.4b: registrar backend asm
@@ -4368,6 +4369,27 @@ int main(int argc, char *argv[]) {
             if (result.count("stats")) {
                 long long elapsed_ms = elapsed_ns / 1'000'000;
                 long long elapsed_us = elapsed_ns / 1'000;
+
+                /* Tiempo de COMPILACION del JIT.  Se imprime junto al resto porque el
+                 * reloj de pared los mezcla: el JIT compila mientras el programa corre.
+                 * Sin este desglose no se puede distinguir "el codigo generado es mejor"
+                 * de "la compilacion tardo menos", que es justo lo que hace falta para
+                 * juzgar una optimizacion del backend. */
+                jit::print_jit_timing(jit::JitTiming::detail_enabled());
+                if (jit::JitTiming::instance().count() && elapsed_ns > 0) {
+                    /* El reparto se hace contra (compilar + ejecutar), NO contra
+                     * @c elapsed_ns: ese reloj mide la EJECUCION, y la compilacion
+                     * queda fuera -- dividir por el daba porcentajes de miles por
+                     * ciento.  Un ratio solo significa algo si numerador y denominador
+                     * miden lo mismo. */
+                    const double comp_ms = jit::JitTiming::instance().total_ns() / 1e6;
+                    const double run_ms = elapsed_ns / 1e6;
+                    vesta::scout()
+                        << "[jit] reparto: compilar " << comp_ms << " ms + ejecutar "
+                        << run_ms << " ms  -> compilar = "
+                        << (100.0 * comp_ms / (comp_ms + run_ms)) << "% del trabajo"
+                        << std::endl;
+                }
 
                 uint64_t total_instrs = 0;
                 uint64_t total_jit_instrs = 0;

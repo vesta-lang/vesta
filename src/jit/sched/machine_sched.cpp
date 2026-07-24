@@ -388,6 +388,33 @@ int schedule_region(std::vector<MInstr> &ins, int lo, int hi,
 
 int schedule_function(MFunction &mf, const SchedCostModel &cm, EffIsa isa) {
     int total_moved = 0;
+    /* TELEMETRIA DE FORMA (opt-in, VESTA_SCHED_SHAPE=1): tamano de los bloques.
+     *
+     * El coste del list scheduling crece con el CUADRADO del tamano del bloque, asi que
+     * "el scheduler tarda mucho" tiene DOS causas posibles y muy distintas:
+     *   (a) el algoritmo no escala, o
+     *   (b) el backend esta metiendo miles de instrucciones en UN bloque, y el CFG
+     *       deberia haberlo partido antes.
+     * Son problemas de dueno distinto -- uno es del scheduler, el otro del generador de
+     * bloques -- y arreglar el equivocado no mueve nada.  @c sum_n2 es el predictor
+     * directo del coste: si un solo bloque lo domina, el problema es (b). */
+    static const bool shape = std::getenv("VESTA_SCHED_SHAPE") != nullptr;
+    if (shape) {
+        size_t nb = 0, maxn = 0, sum = 0;
+        unsigned long long sum_n2 = 0;
+        for (const MBlock &b : mf.blocks) {
+            const size_t k = b.instrs.size();
+            ++nb;
+            sum += k;
+            sum_n2 += 1ull * k * k;
+            if (k > maxn) maxn = k;
+        }
+        std::fprintf(stderr,
+                     "[sched-shape] %-34s bloques=%-5zu instrs=%-7zu mayor=%-7zu"
+                     " sum(n^2)=%llu  (el mayor aporta %.1f%%)\n",
+                     mf.name.c_str(), nb, sum, maxn, sum_n2,
+                     sum_n2 ? 100.0 * (1.0 * maxn * maxn) / sum_n2 : 0.0);
+    }
     // Objetos ALLOCA unicos a traves de TODA la funcion (dos allocas siempre
     // distintos, aunque esten en bloques distintos).
     uint32_t next_alloca = OBJ_FIRST_ALLOCA;
