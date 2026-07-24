@@ -1864,6 +1864,52 @@ static void emit_cmp_standalone(EmitCtx &ctx, const IrInstr &ins) {
     const bool is_fcmp = (ins.op == IrOp::FCMP_EQ || ins.op == IrOp::FCMP_NE ||
                           ins.op == IrOp::FCMP_LT || ins.op == IrOp::FCMP_GT ||
                           ins.op == IrOp::FCMP_LE || ins.op == IrOp::FCMP_GE);
+
+    // --- Path branch-free (solo CMP entero): cmps + setcc ---
+    //
+    // Materializar un booleano 0/1 con un salto condicional (cmps + jmp.cc +
+    // mov 0 + jmp + mov 1) mete una RAMA en el codigo por cada comparacion que
+    // produce un valor.  Cuando ese valor alimenta un SELECT (csel, que ES
+    // branch-free) la rama de la condicion arruina el beneficio: el branch
+    // predictor la falla igual.  El VM tiene `setcc r_dst, cond` (opcode 0x43)
+    // que escribe el booleano SIN saltar.  Aqui bajamos las CMP enteras a
+    // `cmps/cmpu + setcc`, quitando la rama por completo.  Beneficia
+    // directamente a patrones tipo branch_unpredict (la condicion del if/else
+    // deja de mispredecir).
+    //
+    // Mapa IR cmp_op -> cond code de setcc (ver exec_instr_setcc):
+    //   EQ=0x04 NE=0x05 LT=0x0C GE=0x0D LE=0x0E
+    //   ULT=0x02 UGE=0x03 ULE=0x06 UGT=0x07
+    // CMP_GT (JG signed) no tiene codigo directo -> se resuelve intercambiando
+    // operandos: `a > b` == `b < a`, con JL (0x0C).  FCMP se queda en el path
+    // branchy (el modelo de flags de float difiere y no queremos regresiones).
+    if (!is_fcmp) {
+        int setcc_cond = -1;
+        bool swap = false;
+        switch (ins.op) {
+        case IrOp::CMP_EQ:  setcc_cond = 0x04; break;
+        case IrOp::CMP_NE:  setcc_cond = 0x05; break;
+        case IrOp::CMP_LT:  setcc_cond = 0x0C; break;
+        case IrOp::CMP_GE:  setcc_cond = 0x0D; break;
+        case IrOp::CMP_LE:  setcc_cond = 0x0E; break;
+        case IrOp::CMP_GT:  setcc_cond = 0x0C; swap = true; break; // b < a
+        case IrOp::CMP_ULT: setcc_cond = 0x02; break;
+        case IrOp::CMP_UGE: setcc_cond = 0x03; break;
+        case IrOp::CMP_ULE: setcc_cond = 0x06; break;
+        case IrOp::CMP_UGT: setcc_cond = 0x07; break;
+        default: break;
+        }
+        if (setcc_cond >= 0) {
+            if (swap)
+                ctx.out << "    " << cmp_mn << " " << rb << ", " << ra << "\n";
+            else
+                ctx.out << "    " << cmp_mn << " " << ra << ", " << rb << "\n";
+            ctx.out << "    setcc " << rd << ", " << setcc_cond << "\n";
+            ctx.store_spilled(ins.dst);
+            return;
+        }
+    }
+
     if (is_fcmp) {
         // FCMP requiere registros ZMM; bitcast bits desde GP via stack.
         // El sufijo ".ps" se anade si los operandos son F32 (el tipo del
