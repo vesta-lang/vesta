@@ -2266,10 +2266,11 @@ InstrFormat decode_table_extended[0X100] = {
      Assembly::Bytecode::InstrSizeMode::FIXED_8, exec_instr_mst,
      decode_instr_mem_full},
 
-    /* 0x92 */
-    {//
-     "", Assembly::Bytecode::AddressingMode::COUNT,
-     Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
+    /* 0x92  sext r_dst, N (FIXED_4): sign-extiende r_dst desde N bits
+       (8/16/32) a 64.  b2=r_dst, b3=N.  1 instr vs mov+shl+sar. */
+    {"sext", Assembly::Bytecode::AddressingMode::REG,
+     Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_sext,
+     decode_instr_raw_bytes},
 
     /* 0x93 */
     {//

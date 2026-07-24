@@ -3102,6 +3102,34 @@ void emit_setcc(const vm::Instruction *instruction_parser,
     code_final.emit8(0x00);                                     // b3
 }
 
+// =========================================================================
+// emit_sext: Convention B, 1 registro + ancho literal (8/16/32)
+// =========================================================================
+
+/**
+ * @brief Emite b2=r_dst (nibble bajo), b3=N (ancho fuente en bits).
+ *
+ * `sext r_dst, N` sign-extiende r_dst desde N bits (8/16/32) a 64.  El ancho
+ * va en el byte3 completo (no cabe en un nibble como el cond de setcc).
+ */
+void emit_sext(const vm::Instruction *instruction_parser,
+               ByteWriter &code_final, const InstrInfo *now_instr,
+               Assembler *assembly_ctx) {
+    (void)now_instr;
+    (void)assembly_ctx;
+    auto r1 = dynamic_cast<vm::RegisterOperand *>(
+        instruction_parser->operands[0].get());
+    auto width = dynamic_cast<vm::NumberOperand *>(
+        instruction_parser->operands[1].get());
+    if (!r1 || !width)
+        throw std::runtime_error(instruction_parser->opcode +
+                                 ": requiere r_dst, N_literal (8/16/32)");
+    uint8_t idx1 = encode_reg_general(r1->name.c_str());
+    uint8_t width_val = static_cast<uint8_t>(std::stoull(width->value) & 0xFF);
+    code_final.emit8(static_cast<uint8_t>(idx1 & 0x0F)); // b2 = r_dst
+    code_final.emit8(width_val);                         // b3 = N (bits)
+}
+
 // emit_gcfinal: gcfinal r_box, kind.  byte2=0, byte3=(kind<<4)|r_box.
 // Mismo empaquetado que decode_instr_two_op_reg espera (reg1=r_box en el
 // nibble bajo, reg2=kind en el nibble alto).

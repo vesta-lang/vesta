@@ -516,6 +516,7 @@ void Scheduler::run_loop() {
                     dispatch_table[0x100 | 0x1C] = &&L_SHR;
                     dispatch_table[0x100 | 0x1D] = &&L_SAR;
                     dispatch_table[0x100 | 0x43] = &&L_SETCC;
+                    dispatch_table[0x100 | 0x92] = &&L_SEXT;
                     /* Carga/almacen universal: las mem-ops mas frecuentes. */
                     dispatch_table[0x100 | 0x90] = &&L_MLD;
                     dispatch_table[0x100 | 0x91] = &&L_MST;
@@ -1052,6 +1053,44 @@ void Scheduler::run_loop() {
                 default: taken = false; break;
                 }
                 regs[rdst].qword(taken ? 1 : 0);
+                instance->registers.rip.qword(instance->registers.rip.raw() +
+                                              fl_inl.size_instr);
+                ++profiler_instr_counter;
+                NEXT_DISPATCH();
+            }
+
+            /* SEXT r_dst, N: sign-extiende r_dst desde N bits (8/16/32) a 64.
+             * b2=r_dst (nibble bajo), b3=N.  Hot en casts de enteros con signo
+             * (loop counters `(u64)i`, etc.); replica exec_instr_sext. */
+            L_SEXT: {
+                auto &regs = instance->registers.regs;
+                const uint8_t rdst =
+                    d->data_instruction.reg_data.reg1 & 0xF;
+                const uint8_t width = d->data_instruction.reg_data.reg2;
+                const uint64_t v = regs[rdst].qword();
+                uint64_t res;
+                switch (width) {
+                case 8:
+                    res = static_cast<uint64_t>(
+                        static_cast<int64_t>(static_cast<int8_t>(v)));
+                    break;
+                case 16:
+                    res = static_cast<uint64_t>(
+                        static_cast<int64_t>(static_cast<int16_t>(v)));
+                    break;
+                case 32:
+                    res = static_cast<uint64_t>(
+                        static_cast<int64_t>(static_cast<int32_t>(v)));
+                    break;
+                default: {
+                    const uint32_t sh =
+                        (64u - (static_cast<uint32_t>(width) & 63u)) & 63u;
+                    res = static_cast<uint64_t>(
+                        static_cast<int64_t>(v << sh) >> sh);
+                    break;
+                }
+                }
+                regs[rdst].qword(res);
                 instance->registers.rip.qword(instance->registers.rip.raw() +
                                               fl_inl.size_instr);
                 ++profiler_instr_counter;

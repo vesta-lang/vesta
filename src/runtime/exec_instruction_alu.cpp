@@ -1527,6 +1527,44 @@ void exec_instr_setcc(ProcessVM *vm, const DecodedInstr &instr) {
         taken ? 1 : 0); // escribir resultado booleano en el registro
 }
 
+/**
+ * @brief SEXT r_dst, N: sign-extiende r_dst desde N bits (8/16/32) a 64.
+ *
+ * b2 (reg1) = r_dst en el nibble bajo; b3 (reg2) = N (ancho fuente en bits).
+ * Equivale a `shl r_dst, 64-N; sar r_dst, 64-N` (replica el bit de signo) pero
+ * en una sola instruccion, sin quemar un scratch para el conteo de shift.  El
+ * IR emitter lo emite donde antes ponia mov+shl+sar para el ensanchamiento con
+ * signo de i8/i16/i32 a i64.
+ */
+void exec_instr_sext(ProcessVM *vm, const DecodedInstr &instr) {
+    const uint8_t dst_reg =
+        instr.data_instruction.reg_data.reg1 & 0xF;        // r_dst (nibble bajo)
+    const uint8_t width = instr.data_instruction.reg_data.reg2; // N bits
+    const uint64_t v = vm->registers.regs[dst_reg].qword();
+    uint64_t res;
+    switch (width) {
+    case 8:
+        res = static_cast<uint64_t>(
+            static_cast<int64_t>(static_cast<int8_t>(v)));
+        break;
+    case 16:
+        res = static_cast<uint64_t>(
+            static_cast<int64_t>(static_cast<int16_t>(v)));
+        break;
+    case 32:
+        res = static_cast<uint64_t>(
+            static_cast<int64_t>(static_cast<int32_t>(v)));
+        break;
+    default: {
+        // Ancho arbitrario < 64: shl + sar aritmetico (enmascara el shift).
+        const uint32_t sh = (64u - (static_cast<uint32_t>(width) & 63u)) & 63u;
+        res = static_cast<uint64_t>(static_cast<int64_t>(v << sh) >> sh);
+        break;
+    }
+    }
+    vm->registers.regs[dst_reg].qword(res);
+}
+
 // =========================================================================
 // CMPJMP / CMPJMPU / DECJNZ -- fusion de cmp+jcc / dec+jnz (mejora hot loops)
 // =========================================================================

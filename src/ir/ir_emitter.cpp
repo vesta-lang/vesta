@@ -2462,14 +2462,12 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 const int dst_bits = static_cast<int>(dst_bytes) * 8;
                 if (dst_bits < 64) {
                     if (dst_signed) {
-                        // Sign-extend solo: shl + sar bastan.  shl/sar
-                        // enmascaran el shift count con (bits-1), asi que
-                        // basta con poner K en el byte bajo del scratch
-                        // (mov scratchb, K = 4 bytes vs 11 bytes en i64).
-                        const int shift = 64 - dst_bits;
-                        emit_mov_scratch_shift_imm(ctx, scratch, shift);
-                        ctx.out << "    shl " << rd << ", " << scratch << "\n";
-                        ctx.out << "    sar " << rd << ", " << scratch << "\n";
+                        // Sign-extend de dst_bits a 64 en UNA instruccion
+                        // (opcode 0x92) -- antes eran 3 (mov scratch, K; shl;
+                        // sar), y el scratch obligaba a recargar K cada
+                        // iteracion en loops.
+                        ctx.out << "    sext " << rd << ", " << dst_bits
+                                << "\n";
                     } else {
                         // Unsigned: AND con mascara para zero-extend.
                         // La mascara es i64 (necesita los 64 bits), asi
@@ -2485,12 +2483,10 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 const int src_bits = static_cast<int>(src_bytes) * 8;
                 if (src_bits < 64) {
                     if (src_signed) {
-                        // Sign-extend solo: shl + sar bastan (AND redundante).
-                        // Mismo truco que arriba: byte-mode mov.
-                        const int shift = 64 - src_bits;
-                        emit_mov_scratch_shift_imm(ctx, scratch, shift);
-                        ctx.out << "    shl " << rd << ", " << scratch << "\n";
-                        ctx.out << "    sar " << rd << ", " << scratch << "\n";
+                        // Sign-extend de src_bits a 64 en UNA instruccion
+                        // (opcode 0x92); ver la rama de truncado arriba.
+                        ctx.out << "    sext " << rd << ", " << src_bits
+                                << "\n";
                     } else {
                         // Unsigned: AND con mascara para zero-extend.
                         const uint64_t mask = (1ULL << src_bits) - 1ULL;

@@ -1111,6 +1111,12 @@ static const std::unordered_map<std::string, std::vector<InstrInfo>>
          {{0x00, 0x43, InstrSizeMode::FIXED_4, AddressingMode::INMED,
            emit_setcc}}},
 
+        /* --- SEXT r_dst, N: sign-extiende r_dst desde N bits (8/16/32) a 64.
+           1 instr en vez de mov+shl+sar.  b2=r_dst, b3=N. --- */
+        {"sext",
+         {{0x00, 0x92, InstrSizeMode::FIXED_4, AddressingMode::INMED,
+           emit_sext}}},
+
         /* --- TRYENTER / TRYLEAVE: frames de excepcion dinamicos --- */
         {"tryenter",
          {{0x00, 0x44, InstrSizeMode::FIXED_4, AddressingMode::REG,

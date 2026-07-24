@@ -424,6 +424,11 @@ void exec_instr_mod_imm(ProcessVM *vm, const DecodedInstr &instr);
 void exec_instr_setcc(ProcessVM *vm, const DecodedInstr &instr);
 
 /**
+ * @brief Ejecuta SEXT r_dst, N: sign-extiende r_dst desde N bits (8/16/32) a 64.
+ */
+void exec_instr_sext(ProcessVM *vm, const DecodedInstr &instr);
+
+/**
  * @brief CSEL r_dst, r_cond, r_a, r_b : @c dst = (cond != 0) ? a : b.
  *
  * Super-instruccion (1 despacho) del @c IrOp::SELECT para el INTERPRETE

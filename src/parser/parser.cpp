@@ -227,6 +227,9 @@ static const std::unordered_map<std::string, InstructionPattern>
         {"loadzh", {"loadzh", OpArity::TWO}},
 
         {"setcc", {"setcc", OpArity::TWO}},
+        // sext r_dst, N: sign-extiende r_dst desde N bits (8/16/32) a 64, en
+        // 1 instr (vs mov+shl+sar).  N es un literal.
+        {"sext", {"sext", OpArity::TWO}},
         {"tryenter", {"tryenter", OpArity::TWO}},
         {"tryleave", {"tryleave", OpArity::ZERO}},
         {"strmake", {"strmake", OpArity::THREE}},

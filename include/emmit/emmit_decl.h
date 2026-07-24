@@ -1188,6 +1188,14 @@ void emit_setcc(const vm::Instruction *instruction_parser,
                 Assembler *assembly_ctx);
 
 /**
+ * @brief Emite SEXT r_dst, N: b2=r_dst (nibble bajo), b3=N (ancho fuente
+ *        8/16/32).  Sign-extiende r_dst desde N bits a 64 en una instruccion.
+ */
+void emit_sext(const vm::Instruction *instruction_parser,
+               ByteWriter &code_final, const InstrInfo *now_instr,
+               Assembler *assembly_ctx);
+
+/**
  * @brief Emite GCFINAL r_box, kind (0x7F): registra/desregistra finalizador GC.
  *
  * Layout: byte2 = 0x00 (ctrl vacio), byte3 = (kind<<4) | r_box.  El decode
