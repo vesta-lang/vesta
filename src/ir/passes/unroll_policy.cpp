@@ -127,9 +127,22 @@ UnrollDecision choose_unroll_factor(const analysis::LoopMetrics &m,
     if (f < 2) return reject(UnrollReject::CodeGrowth);
 
     // UNICO filtro de presion de registros: recortar el factor (no rechazar de
-    // golpe).  Un cuerpo con live=30 aun puede acabar en factor 2 en vez de 1.
+    // golpe).  Un cuerpo con live alto aun puede acabar en factor 2 en vez de 1.
+    //
+    // Modelo: el unroll CONCATENA copias (cadena serial), no las paraleliza; los
+    // loop-carried (live_across) se enhebran y NO coexisten x factor.  Solo
+    // coexisten hasta `ilp_width` copias si el scheduler las interleava.  Por eso
+    // la presion es  live_across * min(factor, ilp_width), no  live_across *
+    // factor: un bucle de dependencia serial (poco live) puede desenrollar mucho
+    // sin spills; uno con muchos carried se acota.  (El interprete no interleava
+    // -> ilp_width 1 -> practicamente sin tope de presion.)
     if (m.live_across > 0) {
-        while (f >= 2 && (int64_t)m.live_across * f > target.registers) f >>= 1;
+        const int ilp = target.ilp_width < 1 ? 1 : target.ilp_width;
+        while (f >= 2) {
+            const int eff = f < ilp ? f : ilp; // copias que coexisten a la vez
+            if ((int64_t)m.live_across * eff <= target.registers) break;
+            f >>= 1;
+        }
         if (f < 2) return reject(UnrollReject::RegisterPressure);
     }
 

@@ -52,17 +52,25 @@ struct UnrollTargetInfo {
                            ///< presion de I-cache).  Una funcion enorme recorta el
                            ///< presupuesto aunque el bucle sea diminuto.  Lo
                            ///< rellena el pase.
+    int ilp_width = 4;     ///< profundidad de interleave que el motor puede
+                           ///< explotar (ventana OoO / del scheduler).  El unroll
+                           ///< CONCATENA copias (cadena serial): los loop-carried
+                           ///< se enhebran y NO coexisten x factor; solo coexisten
+                           ///< hasta ilp_width copias si el scheduler las
+                           ///< paraleliza.  El interprete ejecuta en serie -> 1.
     double hotness = 1.0;  ///< peso de ejecucion (PGO futuro).  1.0 neutro; >1 mas
                            ///< caliente; <1 mas frio; 0.0 = NO se ejecuta nunca.
 
     // La politica NO conoce el backend: cada target es solo un conjunto de
     // parametros cuantitativos.  El interprete es dispatch-bound (el overhead del
-    // bucle domina) -> presupuesto y factor mayores; JIT/AOT moderan por I-cache.
-    static UnrollTargetInfo interp() { return {14, 256, 16, 0, 1.0}; }
-    static UnrollTargetInfo jit() { return {14, 96, 8, 0, 1.0}; }
-    static UnrollTargetInfo aot() { return {14, 160, 8, 0, 1.0}; }
-    /// IR compartido, antes del split de backend: punto medio.
-    static UnrollTargetInfo generic() { return {14, 128, 8, 0, 1.0}; }
+    // bucle domina) -> presupuesto y factor mayores, y NO interleava (ilp 1);
+    // JIT/AOT moderan por I-cache y interleavan (ilp 4).
+    static UnrollTargetInfo interp() { return {14, 256, 16, 0, 1, 1.0}; }
+    static UnrollTargetInfo jit() { return {14, 96, 8, 0, 4, 1.0}; }
+    static UnrollTargetInfo aot() { return {14, 160, 8, 0, 4, 1.0}; }
+    /// IR compartido, antes del split de backend: punto medio (interleave del
+    /// scheduler, presupuesto intermedio).
+    static UnrollTargetInfo generic() { return {14, 128, 8, 0, 4, 1.0}; }
 };
 
 /// Modo de desenrollado elegido.
