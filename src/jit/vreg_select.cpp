@@ -2251,7 +2251,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * (obligado por la ISA de cmpxchg) via precoloreo de un temp;
              * addr/desired quedan LIBRES para el allocator.  ADD (xadd) no
              * fija ningun registro (dst in/out estilo 2-address). */
-            case ir::IrOp::ATOMIC_LD_I64: {
+            case ir::IrOp::ATOMIC_LD: {
                 flush_pending();
                 if (in.operands.size() != 1 || in.dst == ir::IR_NO_VALUE)
                     return false;
@@ -2260,7 +2260,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     MInstr::make_load(vr(in.dst), vr(in.operands[0]), 8, false));
                 break;
             }
-            case ir::IrOp::ATOMIC_ST_I64: {
+            case ir::IrOp::ATOMIC_ST: {
                 flush_pending();
                 if (in.operands.size() != 2) return false;
                 /* mov [addr], val (store alineado; release en x86-TSO). */
@@ -2268,7 +2268,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                                vr(in.operands[1]), 8));
                 break;
             }
-            case ir::IrOp::ATOMIC_ADD_I64: {
+            case ir::IrOp::ATOMIC_ADD: {
                 flush_pending();
                 if (in.operands.size() != 2 || in.dst == ir::IR_NO_VALUE)
                     return false;
@@ -2282,7 +2282,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 O.push_back(xa);
                 break;
             }
-            case ir::IrOp::ATOMIC_CAS_I64: {
+            case ir::IrOp::ATOMIC_CAS: {
                 flush_pending();
                 if (in.operands.size() != 3 || in.dst == ir::IR_NO_VALUE)
                     return false;

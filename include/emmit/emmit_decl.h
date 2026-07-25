@@ -812,6 +812,18 @@ void emit_instr_loadz(const vm::Instruction *instruction_parser,
                       ByteWriter &code_final, const InstrInfo *now_instr,
                       Assembler *assembly_ctx);
 
+/// @brief Atomicos width-aware: el ancho (8/16/32/64) va en el ctrl-byte, leido
+///        del sufijo de tamano del registro de valor.  ld/st FIXED_4, add/cas
+///        FIXED_6.  Ver la definicion en emmit_decl.cpp.
+void emit_instr_atomic_ld(const vm::Instruction *ip, ByteWriter &code,
+                          const InstrInfo *now_instr, Assembler *assembly_ctx);
+void emit_instr_atomic_st(const vm::Instruction *ip, ByteWriter &code,
+                          const InstrInfo *now_instr, Assembler *assembly_ctx);
+void emit_instr_atomic_add(const vm::Instruction *ip, ByteWriter &code,
+                           const InstrInfo *now_instr, Assembler *assembly_ctx);
+void emit_instr_atomic_cas(const vm::Instruction *ip, ByteWriter &code,
+                           const InstrInfo *now_instr, Assembler *assembly_ctx);
+
 /**
  * @brief Emite los operandos de @c getstatic / @c setstatic (FIXED_8).
  *

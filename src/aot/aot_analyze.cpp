@@ -179,10 +179,10 @@ AotOpClass aot_classify_op(IrOp op) noexcept {
     case IrOp::VEC_FMA_S:
     case IrOp::VEC_BCAST:
     // -- atomicos enteros (lock-prefixed nativos) --
-    case IrOp::ATOMIC_LD_I64:
-    case IrOp::ATOMIC_ST_I64:
-    case IrOp::ATOMIC_CAS_I64:
-    case IrOp::ATOMIC_ADD_I64:
+    case IrOp::ATOMIC_LD:
+    case IrOp::ATOMIC_ST:
+    case IrOp::ATOMIC_CAS:
+    case IrOp::ATOMIC_ADD:
     // -- ensamblador host incrustado ( AS) --
     case IrOp::INLINE_ASM:
     // -- asm opaco liftado: emite bytes nativos (ensamblados de su plantilla) --

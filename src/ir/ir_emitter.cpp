@@ -422,6 +422,20 @@ static uint64_t ir_type_size(IrType t) {
     }
 }
 
+// Anade a un NOMBRE de registro ya formado (p.ej. "r5", "r14") el sufijo de
+// tamano (b/w/d) segun el ancho del tipo, para los atomicos width-aware: el
+// emisor de bytecode lee ese sufijo y codifica el mode (8/16/32/64) en el
+// ctrl-byte.  8 bytes -> sin sufijo (registro completo).  Mismo formato que
+// @c reg_name_sized pero operando sobre el string ya resuelto por el regalloc.
+static std::string atomic_sized(const std::string &reg, IrType t) {
+    switch (ir_type_size(t)) {
+    case 1: return reg + "b";
+    case 2: return reg + "w";
+    case 4: return reg + "d";
+    default: return reg; // 8 bytes: registro completo, sin sufijo
+    }
+}
+
 // =========================================================================
 //  Emision de instrucciones individuales
 // =========================================================================
@@ -5109,22 +5123,29 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     // compara ese viejo con SU `expected`, concluia que habia triunfado.  Una
     // escritura atomica perdida que ademas reportaba exito.  Solo se veia con
     // suficiente presion de registros para que algo se derramara.
-    case IrOp::ATOMIC_LD_I64:
+    case IrOp::ATOMIC_LD:
         if (ins.dst != IR_NO_VALUE && !ins.operands.empty()) {
+            // El ANCHO del atomico (1/2/4/8) va en el sufijo de tamano del reg
+            // de VALOR (.b/.w/.d), como loadz -- el emisor lo lee y lo mete en
+            // el ctrl-byte.  La direccion (operando 0) queda a 64 bits (puntero).
             const std::string a = ctx.load_src(ins.operands[0], 0);
-            ctx.out << "    atomicld " << ctx.dst_of(ins.dst) << ", " << a
-                    << "\n";
+            ctx.out << "    atomicld " << atomic_sized(ctx.dst_of(ins.dst),
+                                                       ins.type)
+                    << ", " << a << "\n";
             ctx.store_spilled(ins.dst);
         }
         break;
-    case IrOp::ATOMIC_ST_I64:
+    case IrOp::ATOMIC_ST:
         if (ins.operands.size() >= 2) {
             const std::string a = ctx.load_src(ins.operands[0], 0);
             const std::string v = ctx.load_src(ins.operands[1], 1);
-            ctx.out << "    atomicst " << a << ", " << v << "\n";
+            // Ancho en ins.type (fijado por emit_atomic_st con el ancho del
+            // valor; I64/VOID -> 8 bytes por defecto para productores viejos).
+            ctx.out << "    atomicst " << a << ", " << atomic_sized(v, ins.type)
+                    << "\n";
         }
         break;
-    case IrOp::ATOMIC_CAS_I64:
+    case IrOp::ATOMIC_CAS:
         if (ins.dst != IR_NO_VALUE && ins.operands.size() >= 3) {
             // Tres operandos y solo dos scratch (r14/r13).  Se cargan los dos
             // primeros con los scratch de siempre; el tercero, si hace falta,
@@ -5145,17 +5166,23 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             }
             const std::string a = ctx.load_src(ins.operands[0], 0);
             const std::string e = ctx.load_src(ins.operands[1], 1);
-            ctx.out << "    atomiccas " << ctx.dst_of(ins.dst) << ", " << a
-                    << ", " << e << ", " << d << "\n";
+            // Ancho (mode) en el sufijo del DST; exp/des tambien sized (mismo
+            // ancho); la direccion (a) plana (puntero de 64 bits).
+            ctx.out << "    atomiccas " << atomic_sized(ctx.dst_of(ins.dst),
+                                                        ins.type)
+                    << ", " << a << ", " << atomic_sized(e, ins.type) << ", "
+                    << atomic_sized(d, ins.type) << "\n";
             ctx.store_spilled(ins.dst);
         }
         break;
-    case IrOp::ATOMIC_ADD_I64:
+    case IrOp::ATOMIC_ADD:
         if (ins.dst != IR_NO_VALUE && ins.operands.size() >= 2) {
             const std::string a = ctx.load_src(ins.operands[0], 0);
             const std::string d = ctx.load_src(ins.operands[1], 1);
-            ctx.out << "    atomicadd " << ctx.dst_of(ins.dst) << ", " << a
-                    << ", " << d << "\n";
+            // Ancho (mode) en el sufijo del DST y del delta; direccion plana.
+            ctx.out << "    atomicadd " << atomic_sized(ctx.dst_of(ins.dst),
+                                                        ins.type)
+                    << ", " << a << ", " << atomic_sized(d, ins.type) << "\n";
             ctx.store_spilled(ins.dst);
         }
         break;

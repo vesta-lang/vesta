@@ -134,10 +134,10 @@ LoopMetrics compute_loop_metrics(const ir::IrFunction &fn,
                 if (is_fp(in.op)) ++m.fp_ops;
                 if (is_expensive(in.op)) ++m.expensive_ops;
                 // Efectos no capturados por los conteos: atomics, io, barreras.
-                if (in.op == IrOp::ATOMIC_LD_I64 ||
-                    in.op == IrOp::ATOMIC_ST_I64 ||
-                    in.op == IrOp::ATOMIC_CAS_I64 ||
-                    in.op == IrOp::ATOMIC_ADD_I64 || in.op == IrOp::RAW_ASM)
+                if (in.op == IrOp::ATOMIC_LD ||
+                    in.op == IrOp::ATOMIC_ST ||
+                    in.op == IrOp::ATOMIC_CAS ||
+                    in.op == IrOp::ATOMIC_ADD || in.op == IrOp::RAW_ASM)
                     m.has_side_effects = true;
             }
             if (in.op == IrOp::BR_COND) ++m.branches;

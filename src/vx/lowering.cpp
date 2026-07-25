@@ -13843,12 +13843,23 @@ ir::IrValueId Lowering::lower_expr(ast::Expr *e) {
         auto *fe = static_cast<ast::FloatLitExpr *>(e);
         ir::IrType t = ir_type_from_primitive(e->result_type.kind);
         if (t == ir::IrType::VOID) t = ir::IrType::F64;
-        // Reinterpretamos los bits del double como uint64 para
-        // alojarlos en el campo imm de la instruccion CONST.
+        // Reinterpretamos los bits IEEE del literal como uint64 para alojarlos
+        // en el campo imm de la instruccion CONST.  Para un literal cuyo tipo
+        // es F32, hay que estrechar el double a float PRIMERO y tomar sus 32
+        // bits: sin esto un `atomic<f32>.store(5.0)` guardaba los 32 bits bajos
+        // del PATRON f64 (= 0).  Los literales F64 (el caso por defecto)
+        // conservan los 64 bits del double.
         uint64_t bits;
         static_assert(sizeof(double) == sizeof(uint64_t),
                       "double debe ocupar 64 bits para reinterpret_cast");
-        __builtin_memcpy(&bits, &fe->value, sizeof(double));
+        if (t == ir::IrType::F32) {
+            const float f32v = static_cast<float>(fe->value);
+            uint32_t b32;
+            __builtin_memcpy(&b32, &f32v, sizeof(float));
+            bits = b32; // bits IEEE-754 binary32 en la parte baja
+        } else {
+            __builtin_memcpy(&bits, &fe->value, sizeof(double));
+        }
         return emit_const(t, bits, e->loc.line);
     }
     case ast::NodeKind::BoolLitExpr: {
@@ -22535,6 +22546,108 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     const bool is_z8_atomic_store = (name == "atomic_store_i64");
     const bool is_z8_atomic_cas = (name == "atomic_cas_i64");
     const bool is_z8_atomic_add = (name == "atomic_add_i64");
+    // Atomicos GENERICOS (width-aware): el ancho sale del pointee del puntero.
+    const bool is_atomic_load_g = (name == "atomic_load");
+    const bool is_atomic_store_g = (name == "atomic_store");
+    const bool is_atomic_cas_g = (name == "atomic_cas");
+    const bool is_atomic_add_g = (name == "atomic_add");
+    // Atomicos GENERICOS (ancho = pointee del puntero arg 0).  Se resuelve AQUI,
+    // temprano, antes que cualquier handler que pudiera retornar antes.  Sirven
+    // a atomic<T> para 1/2/4/8 bytes (i8..i64, u8..u64, f32, f64, bool, ptr).
+    if (is_atomic_load_g || is_atomic_store_g || is_atomic_cas_g ||
+        is_atomic_add_g) {
+        ir::IrType wt = ir::IrType::I64;
+        if (!e->args.empty() && e->args[0]->result_type.pointee)
+            wt = ir_type_from_primitive(e->args[0]->result_type.pointee->kind);
+        // Los atomicos operan sobre BITS enteros (banco GP + instruccion `lock`
+        // del ancho).  Un pointee FLOAT (f32/f64) vive en el banco ZMM: la
+        // operacion se hace sobre el entero del MISMO ancho (F32->I32, F64->I64)
+        // y el valor cruza con BITCAST puro (misma anchura, mismos bits IEEE),
+        // que baja a movd/movq -- cero coste.  Sin esto, un `atomic_store` de f32
+        // guardaba los 32 bits bajos de un patron f64 (= 0).
+        const bool is_flt = (wt == ir::IrType::F32 || wt == ir::IrType::F64);
+        const ir::IrType iwt = (wt == ir::IrType::F32)   ? ir::IrType::I32
+                               : (wt == ir::IrType::F64) ? ir::IrType::I64
+                                                         : wt;
+        auto emit_bc = [&](ir::IrValueId src, ir::IrType tgt) -> ir::IrValueId {
+            ir::IrValueId d = fn_->new_value(tgt);
+            ir::IrInstr bc{};
+            bc.op = ir::IrOp::BITCAST;
+            bc.type = tgt;
+            bc.dst = d;
+            bc.operands = {src};
+            bc.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(bc));
+            return d;
+        };
+        if (is_atomic_load_g) {
+            if (e->args.size() != 1) {
+                error_at(e->loc, "atomic_load: requiere 1 argumento (T*)");
+                out_value = ir::IR_NO_VALUE;
+                return true;
+            }
+            const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
+            ir::IrValueId bits = emit_atomic_ld_i64(v_ptr, e->loc.line, iwt);
+            out_value = is_flt ? emit_bc(bits, wt) : bits; // bits GP -> float ZMM
+            return true;
+        }
+        if (is_atomic_store_g) {
+            if (e->args.size() != 2) {
+                error_at(e->loc, "atomic_store: requiere 2 argumentos (T*, T)");
+                out_value = ir::IR_NO_VALUE;
+                return true;
+            }
+            const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
+            ir::IrValueId v_val = lower_expr(e->args[1].get());
+            if (is_flt) {
+                // El valor puede llegar como f64 (un literal `5.0`, que es f64
+                // por defecto, propagado por la cadena de inline sin
+                // re-estrecharse) mientras la celda es f32.  Coaccionar al
+                // ancho float REAL de T antes de tomar sus bits.
+                v_val = cast_if_needed(v_val, fn_->values[v_val].type, wt,
+                                       e->loc.line, true);
+                v_val = emit_bc(v_val, iwt); // float ZMM -> bits GP
+            }
+            emit_atomic_st_i64(v_ptr, v_val, e->loc.line, iwt);
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        if (is_atomic_cas_g) {
+            if (e->args.size() != 3) {
+                error_at(e->loc,
+                         "atomic_cas: requiere 3 argumentos (T*, exp, des)");
+                out_value = ir::IR_NO_VALUE;
+                return true;
+            }
+            const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
+            ir::IrValueId v_exp = lower_expr(e->args[1].get());
+            ir::IrValueId v_des = lower_expr(e->args[2].get());
+            if (is_flt) { // comparar/escribir los BITS, no el valor
+                v_exp = cast_if_needed(v_exp, fn_->values[v_exp].type, wt,
+                                       e->loc.line, true);
+                v_des = cast_if_needed(v_des, fn_->values[v_des].type, wt,
+                                       e->loc.line, true);
+                v_exp = emit_bc(v_exp, iwt);
+                v_des = emit_bc(v_des, iwt);
+            }
+            ir::IrValueId res =
+                emit_atomic_cas_i64(v_ptr, v_exp, v_des, e->loc.line, iwt);
+            out_value = is_flt ? emit_bc(res, wt) : res; // OLD bits -> float
+            return true;
+        }
+        // is_atomic_add_g.  El delta de un xadd es entero por naturaleza; el
+        // .vx nunca invoca atomic_add con float (fetch_add sobre float usa el
+        // bucle CAS de arriba).  Se baja como entero del ancho de T.
+        if (e->args.size() != 2) {
+            error_at(e->loc, "atomic_add: requiere 2 argumentos (T*, delta)");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
+        const ir::IrValueId v_delta = lower_expr(e->args[1].get());
+        out_value = emit_atomic_add_i64(v_ptr, v_delta, e->loc.line, iwt);
+        return true;
+    }
     const bool is_z8_shared_malloc = (name == "shared_malloc");
     const bool is_z8_shared_free = (name == "shared_free");
     // Z.10 builtins: introspeccion + GC placeholder del SharedHeap.
@@ -38322,12 +38435,12 @@ ir::IrValueId Lowering::emit_gc_demote(ir::IrValueId v_src, uint32_t line) {
     return v;
 }
 
-ir::IrValueId Lowering::emit_atomic_ld_i64(ir::IrValueId v_addr,
-                                           uint32_t line) {
-    const ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+ir::IrValueId Lowering::emit_atomic_ld_i64(ir::IrValueId v_addr, uint32_t line,
+                                           ir::IrType wt) {
+    const ir::IrValueId v = fn_->new_value(wt);
     ir::IrInstr ins{};
-    ins.op = ir::IrOp::ATOMIC_LD_I64;
-    ins.type = ir::IrType::I64;
+    ins.op = ir::IrOp::ATOMIC_LD;
+    ins.type = wt; // ancho del atomico (1/2/4/8 -> mode del ctrl-byte)
     ins.dst = v;
     ins.operands = {v_addr};
     ins.source_line = line;
@@ -38336,10 +38449,12 @@ ir::IrValueId Lowering::emit_atomic_ld_i64(ir::IrValueId v_addr,
 }
 
 void Lowering::emit_atomic_st_i64(ir::IrValueId v_addr, ir::IrValueId v_val,
-                                  uint32_t line) {
+                                  uint32_t line, ir::IrType wt) {
     ir::IrInstr ins{};
-    ins.op = ir::IrOp::ATOMIC_ST_I64;
-    ins.type = ir::IrType::VOID;
+    ins.op = ir::IrOp::ATOMIC_ST;
+    // El resultado es VOID pero el ancho viaja en `type` (el ir_emitter lo lee
+    // del tipo del valor almacenado; aqui lo fijamos directamente).
+    ins.type = wt;
     ins.dst = ir::IR_NO_VALUE;
     ins.operands = {v_addr, v_val};
     ins.source_line = line;
@@ -38348,12 +38463,12 @@ void Lowering::emit_atomic_st_i64(ir::IrValueId v_addr, ir::IrValueId v_val,
 
 ir::IrValueId Lowering::emit_atomic_cas_i64(ir::IrValueId v_addr,
                                             ir::IrValueId v_exp,
-                                            ir::IrValueId v_des,
-                                            uint32_t line) {
-    const ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+                                            ir::IrValueId v_des, uint32_t line,
+                                            ir::IrType wt) {
+    const ir::IrValueId v = fn_->new_value(wt);
     ir::IrInstr ins{};
-    ins.op = ir::IrOp::ATOMIC_CAS_I64;
-    ins.type = ir::IrType::I64;
+    ins.op = ir::IrOp::ATOMIC_CAS;
+    ins.type = wt;
     ins.dst = v;
     ins.operands = {v_addr, v_exp, v_des};
     ins.source_line = line;
@@ -38362,12 +38477,12 @@ ir::IrValueId Lowering::emit_atomic_cas_i64(ir::IrValueId v_addr,
 }
 
 ir::IrValueId Lowering::emit_atomic_add_i64(ir::IrValueId v_addr,
-                                            ir::IrValueId v_delta,
-                                            uint32_t line) {
-    const ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+                                            ir::IrValueId v_delta, uint32_t line,
+                                            ir::IrType wt) {
+    const ir::IrValueId v = fn_->new_value(wt);
     ir::IrInstr ins{};
-    ins.op = ir::IrOp::ATOMIC_ADD_I64;
-    ins.type = ir::IrType::I64;
+    ins.op = ir::IrOp::ATOMIC_ADD;
+    ins.type = wt;
     ins.dst = v;
     ins.operands = {v_addr, v_delta};
     ins.source_line = line;

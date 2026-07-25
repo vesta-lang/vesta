@@ -462,30 +462,34 @@ public i64 vx_spin_trylock(i64* lock) {
 // Los metodos usan los wrappers `vx_atomic_*` de arriba, no los builtins: asi
 // `atomic<T>` hereda gratis el gating por `@Target("arch:...")` -- en arm64 los
 // wrappers son ldaxr/stlxr y el struct no se entera.
-/// @brief Tipos que admiten una operacion atomica por su naturaleza.
-///
-/// Un atomico opera sobre un valor plano que la CPU sabe leer, escribir e
-/// intercambiar de una pieza: enteros, punteros y floats.  Un struct o una
-/// clase no entran -- caben en la celda, pero `lock cmpxchg` sobre ellos no
-/// significa nada.
-///
-/// Esto es lo PERMANENTE.  El limite de HOY -- que solo hay primitiva de 64
-/// bits -- no vive aqui, sino en el `static_assert` de cada metodo: cuando
-/// aterricen los anchos de 1/2/4 (y 16 con `cmpxchg16b`), se abre ese assert y
-/// este concepto no se toca.  Meter el ancho aqui haria que el concepto
-/// describiera el calendario en vez del tipo.
-concept AtomicBuiltin<T> {
-    return is_integer<T>() || is_pointer<T>() || is_float<T>();
-}
+// El bound del tipo es el concepto built-in `Scalar` (entero|float|bool|
+// puntero): lo que la CPU sabe leer, escribir e intercambiar de una pieza.  Un
+// struct o una clase no entran -- caben en la celda, pero `lock cmpxchg` sobre
+// ellos no significa nada.  `Scalar` es un concepto UNIVERSAL del lenguaje: vive
+// en el compilador, no aqui (ver doc/VMdoc/Vex/Conceptos.md).
+//
+// Que METODOS existen para cada T lo decide la clausula `where` de cada uno
+// (disponibilidad condicional, estilo Rust `impl where` / Swift `extension
+// where`).  `fetch_add`/`fetch_sub` piden `where T: Numeric` (entero o float);
+// los bit-ops (`fetch_or/and/xor`) piden `where T: Integer`; `fetch_max/min`
+// piden `where T: Comparable`.  Los crudos (`load/store/cas/swap/exchange/
+// compare_*/update`) no piden nada: valen para todo Scalar.  Asi un
+// `atomic<f32>` tiene load/store/cas/swap/fetch_add pero NO fetch_or -- llamarlo
+// da un error claro, no un muro de instanciacion -- y un `atomic<bool>` solo
+// load/store/cas/swap.  El `where` es compile-time: cero codigo emitido.
+//
+// El limite de HOY -- que solo hay primitivas de 1/2/4/8 bytes -- vive en el
+// `static_assert` de ancho de cada metodo; cuando aterrice el de 16 (cmpxchg16b)
+// se abre ese assert y este tipo no cambia.
 
 /// Mensaje del guard de ancho.  En un sitio: lo comparten todos los metodos.
-/// Es lo UNICO que hay que tocar cuando aterricen los anchos de 1/2/4/16.
+/// Es lo UNICO que hay que tocar cuando aterrice el ancho de 16 (cmpxchg16b).
 comptime string VX_ATOMIC_ANCHO =
     "atomic<T>: no hay operacion atomica para el ancho de T. " +
-    "Hoy solo la hay para tipos de 8 bytes (i64/u64/f64/punteros). " +
-    "Usa uno de esos, o protege el valor con 'synchronized'.";
+    "La hay para tipos de 1, 2, 4 u 8 bytes. " +
+    "Para 16 bytes usa dos celdas o protege el valor con 'synchronized'.";
 
-struct atomic<T: AtomicBuiltin> {
+struct atomic<T: Scalar> {
     T cell;
 
     // Los valores cruzan a la primitiva con `bitcast`, no con el cast `(i64) v`:
@@ -503,8 +507,10 @@ struct atomic<T: AtomicBuiltin> {
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(1), total_post: O(1))
     public T __deref__() {
-        static_assert(sizeof<T>() == 8, VX_ATOMIC_ANCHO);
-        return bitcast<T>(vx_atomic_load64((i64*) &this.cell));
+        static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
+                          sizeof<T>() == 4 || sizeof<T>() == 8,
+                      VX_ATOMIC_ANCHO);
+        return atomic_load(&this.cell);
     }
 
     /// `g = v` -- store atomico (release en x86-TSO).
@@ -515,8 +521,10 @@ struct atomic<T: AtomicBuiltin> {
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(1), total_post: O(1))
     public T __assign__(T v) {
-        static_assert(sizeof<T>() == 8, VX_ATOMIC_ANCHO);
-        vx_atomic_store64((i64*) &this.cell, bitcast<i64>(v));
+        static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
+                          sizeof<T>() == 4 || sizeof<T>() == 8,
+                      VX_ATOMIC_ANCHO);
+        atomic_store(&this.cell, v);
         return v;
     }
     // -----------------------------------------------------------------------
@@ -552,21 +560,18 @@ struct atomic<T: AtomicBuiltin> {
                 total_pre: O(1), total_post: O(1), when: is_integer<T>())
     @complexity(partial_pre: O(n), partial_post: O(n),
                 total_pre: O(n), total_post: O(n), when: is_float<T>())
-    public T fetch_add(T d) {
-        static_assert(sizeof<T>() == 8, VX_ATOMIC_ANCHO);
+    public T fetch_add(T d) where T: Numeric {
+        static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
+                          sizeof<T>() == 4 || sizeof<T>() == 8,
+                      VX_ATOMIC_ANCHO);
         if (is_float<T>()) {
             while (true) {
-                i64 viejo = vx_atomic_load64((i64*) &this.cell);
-                T nuevo = bitcast<T>(viejo) + d;
-                if (vx_atomic_cas64((i64*) &this.cell, viejo,
-                                    bitcast<i64>(nuevo)) == viejo) {
-                    return bitcast<T>(viejo);
-                }
+                T viejo = this.load();
+                if (this.compare_exchange(viejo, viejo + d)) { return viejo; }
                 vx_cpu_relax();
             }
         }
-        return bitcast<T>(
-            vx_atomic_add64((i64*) &this.cell, bitcast<i64>(d)));
+        return atomic_add(&this.cell, d); // lock xadd del ancho de T
     }
 
     /// Resta @p d y devuelve el valor ANTERIOR.  Ver @ref fetch_add.
@@ -580,29 +585,27 @@ struct atomic<T: AtomicBuiltin> {
                 total_pre: O(1), total_post: O(1), when: is_integer<T>())
     @complexity(partial_pre: O(n), partial_post: O(n),
                 total_pre: O(n), total_post: O(n), when: is_float<T>())
-    public T fetch_sub(T d) {
-        static_assert(sizeof<T>() == 8, VX_ATOMIC_ANCHO);
+    public T fetch_sub(T d) where T: Numeric {
+        static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
+                          sizeof<T>() == 4 || sizeof<T>() == 8,
+                      VX_ATOMIC_ANCHO);
         if (is_float<T>()) {
             while (true) {
-                i64 viejo = vx_atomic_load64((i64*) &this.cell);
-                T nuevo = bitcast<T>(viejo) - d;
-                if (vx_atomic_cas64((i64*) &this.cell, viejo,
-                                    bitcast<i64>(nuevo)) == viejo) {
-                    return bitcast<T>(viejo);
-                }
+                T viejo = this.load();
+                if (this.compare_exchange(viejo, viejo - d)) { return viejo; }
                 vx_cpu_relax();
             }
         }
-        return bitcast<T>(
-            vx_atomic_add64((i64*) &this.cell, 0 - bitcast<i64>(d)));
+        return atomic_add(&this.cell, 0 - d); // lock xadd con -delta
     }
 
-    // Las operaciones de bits trabajan sobre el PATRON DE BITS, tambien en un
-    // float -- y eso es util, no un accidente: `fetch_xor(0x8000000000000000)`
-    // invierte el signo de un f64 atomicamente, sin leerlo ni escribirlo.
+    // Los bit-ops son solo para enteros (`where T: Integer`): en un float el
+    // operador `|`/`&`/`^` no esta definido.  Para operar los BITS de un float
+    // (p.ej. invertir el signo de un f64 atomicamente) usa un `atomic<u64>`
+    // sobre la representacion, o `fetch_update` con el calculo a mano.
 
     /// `|= mask`; devuelve el valor ANTERIOR.  Bucle CAS -> O(n) sobre los
-    /// reintentos.
+    /// reintentos.  Solo enteros (`where T: Integer`).
     @nothrow
     @nopanic
     @alloc(partial: 0, total: 0)
@@ -610,10 +613,15 @@ struct atomic<T: AtomicBuiltin> {
     @stack(partial: 0, total: 32, when: arch:arm64)
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(n), total_post: O(n))
-    public T fetch_or(T mask) {
-        static_assert(sizeof<T>() == 8, VX_ATOMIC_ANCHO);
-        return bitcast<T>(
-            vx_atomic_or64((i64*) &this.cell, bitcast<i64>(mask)));
+    public T fetch_or(T mask) where T: Integer {
+        static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
+                          sizeof<T>() == 4 || sizeof<T>() == 8,
+                      VX_ATOMIC_ANCHO);
+        while (true) {
+            T viejo = this.load();
+            if (this.compare_exchange(viejo, viejo | mask)) { return viejo; }
+            vx_cpu_relax();
+        }
     }
 
     /// `&= mask`; devuelve el valor ANTERIOR.  Bucle CAS -> O(n).
@@ -624,10 +632,15 @@ struct atomic<T: AtomicBuiltin> {
     @stack(partial: 0, total: 32, when: arch:arm64)
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(n), total_post: O(n))
-    public T fetch_and(T mask) {
-        static_assert(sizeof<T>() == 8, VX_ATOMIC_ANCHO);
-        return bitcast<T>(
-            vx_atomic_and64((i64*) &this.cell, bitcast<i64>(mask)));
+    public T fetch_and(T mask) where T: Integer {
+        static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
+                          sizeof<T>() == 4 || sizeof<T>() == 8,
+                      VX_ATOMIC_ANCHO);
+        while (true) {
+            T viejo = this.load();
+            if (this.compare_exchange(viejo, viejo & mask)) { return viejo; }
+            vx_cpu_relax();
+        }
     }
 
     /// `^= mask`; devuelve el valor ANTERIOR.  Bucle CAS -> O(n).  Util para
@@ -639,19 +652,22 @@ struct atomic<T: AtomicBuiltin> {
     @stack(partial: 0, total: 32, when: arch:arm64)
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(n), total_post: O(n))
-    public T fetch_xor(T mask) {
-        static_assert(sizeof<T>() == 8, VX_ATOMIC_ANCHO);
-        return bitcast<T>(
-            vx_atomic_xor64((i64*) &this.cell, bitcast<i64>(mask)));
+    public T fetch_xor(T mask) where T: Integer {
+        static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
+                          sizeof<T>() == 4 || sizeof<T>() == 8,
+                      VX_ATOMIC_ANCHO);
+        while (true) {
+            T viejo = this.load();
+            if (this.compare_exchange(viejo, viejo ^ mask)) { return viejo; }
+            vx_cpu_relax();
+        }
     }
 
     // -----------------------------------------------------------------------
     //  Operadores: azucar sobre los fetch_*.  Devuelven el valor NUEVO, que es
-    //  lo que vale la expresion `g + d`.
-    //
-    //  Los de bits recomponen el nuevo valor por BITS (no con `|` sobre T):
-    //  asi valen igual para un entero que para un float, cuyos bits tambien se
-    //  pueden operar.
+    //  lo que vale la expresion `g + d`.  Heredan el mismo `where` que su
+    //  fetch_ (los aritmeticos `T: Numeric`, los de bits `T: Integer`), asi que
+    //  `g |= m` solo compila para enteros -- igual que `fetch_or`.
     // -----------------------------------------------------------------------
 
     /// `g += d` / `g = g + d` / `g++`.  Devuelve el valor NUEVO.  Hereda el
@@ -667,7 +683,7 @@ struct atomic<T: AtomicBuiltin> {
                 total_pre: O(1), total_post: O(1), when: is_integer<T>())
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(n), total_post: O(n), when: is_float<T>())
-    public T __iadd__(T d) { return this.fetch_add(d) + d; }
+    public T __iadd__(T d) where T: Numeric { return this.fetch_add(d) + d; }
 
     /// `g -= d` / `g = g - d` / `g--`.  Devuelve el valor NUEVO.  Ver __iadd__.
     @nothrow
@@ -680,7 +696,7 @@ struct atomic<T: AtomicBuiltin> {
                 total_pre: O(1), total_post: O(1), when: is_integer<T>())
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(n), total_post: O(n), when: is_float<T>())
-    public T __isub__(T d) { return this.fetch_sub(d) - d; }
+    public T __isub__(T d) where T: Numeric { return this.fetch_sub(d) - d; }
 
     /// `g |= m` / `g = g | m`.  Devuelve el valor NUEVO.  Bucle CAS en la
     /// primitiva: cuerpo O(1) (una llamada), total O(n) (reintentos).
@@ -691,9 +707,7 @@ struct atomic<T: AtomicBuiltin> {
     @stack(partial: 0, total: 32, when: arch:arm64)
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(n), total_post: O(n))
-    public T __ior__(T m) {
-        return bitcast<T>(bitcast<i64>(this.fetch_or(m)) | bitcast<i64>(m));
-    }
+    public T __ior__(T m) where T: Integer { return this.fetch_or(m) | m; }
 
     /// `g &= m` / `g = g & m`.  Devuelve el valor NUEVO.  Ver __ior__.
     @nothrow
@@ -703,9 +717,7 @@ struct atomic<T: AtomicBuiltin> {
     @stack(partial: 0, total: 32, when: arch:arm64)
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(n), total_post: O(n))
-    public T __iand__(T m) {
-        return bitcast<T>(bitcast<i64>(this.fetch_and(m)) & bitcast<i64>(m));
-    }
+    public T __iand__(T m) where T: Integer { return this.fetch_and(m) & m; }
 
     /// `g ^= m` / `g = g ^ m`.  Devuelve el valor NUEVO.  Ver __ior__.
     @nothrow
@@ -715,9 +727,7 @@ struct atomic<T: AtomicBuiltin> {
     @stack(partial: 0, total: 32, when: arch:arm64)
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(n), total_post: O(n))
-    public T __ixor__(T m) {
-        return bitcast<T>(bitcast<i64>(this.fetch_xor(m)) ^ bitcast<i64>(m));
-    }
+    public T __ixor__(T m) where T: Integer { return this.fetch_xor(m) ^ m; }
 
     // -----------------------------------------------------------------------
     //  CAS y exchange.
@@ -735,10 +745,10 @@ struct atomic<T: AtomicBuiltin> {
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(1), total_post: O(1))
     public T compare_swap(T expected, T desired) {
-        static_assert(sizeof<T>() == 8, VX_ATOMIC_ANCHO);
-        return bitcast<T>(vx_atomic_cas64((i64*) &this.cell,
-                                          bitcast<i64>(expected),
-                                          bitcast<i64>(desired)));
+        static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
+                          sizeof<T>() == 4 || sizeof<T>() == 8,
+                      VX_ATOMIC_ANCHO);
+        return atomic_cas(&this.cell, expected, desired);
     }
 
     /// Exchange: escribe @p v y devuelve el valor ANTERIOR, sin condiciones.
@@ -756,8 +766,15 @@ struct atomic<T: AtomicBuiltin> {
     @complexity(partial_pre: O(1), partial_post: O(1),
                 total_pre: O(1), total_post: O(1), when: arch:arm64)
     public T swap(T v) {
-        static_assert(sizeof<T>() == 8, VX_ATOMIC_ANCHO);
-        return bitcast<T>(vx_atomic_swap64((i64*) &this.cell, bitcast<i64>(v)));
+        static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
+                          sizeof<T>() == 4 || sizeof<T>() == 8,
+                      VX_ATOMIC_ANCHO);
+        // Sin builtin de swap generico: bucle CAS width-aware.
+        while (true) {
+            T viejo = this.load();
+            if (this.compare_exchange(viejo, v)) { return viejo; }
+            vx_cpu_relax();
+        }
     }
 
     /// Como @ref compare_swap pero devuelve SI triunfo.  Es lo que se quiere
@@ -832,7 +849,7 @@ struct atomic<T: AtomicBuiltin> {
     @stack(partial: 0, total: 32, when: arch:arm64)
     @complexity(partial_pre: O(n), partial_post: O(n),
                 total_pre: O(n), total_post: O(n))
-    public T fetch_max(T v) {
+    public T fetch_max(T v) where T: Comparable {
         while (true) {
             T viejo = this.load();
             if (viejo >= v) { return viejo; }
@@ -849,7 +866,7 @@ struct atomic<T: AtomicBuiltin> {
     @stack(partial: 0, total: 32, when: arch:arm64)
     @complexity(partial_pre: O(n), partial_post: O(n),
                 total_pre: O(n), total_post: O(n))
-    public T fetch_min(T v) {
+    public T fetch_min(T v) where T: Comparable {
         while (true) {
             T viejo = this.load();
             if (viejo <= v) { return viejo; }

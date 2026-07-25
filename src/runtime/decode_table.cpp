@@ -2397,30 +2397,28 @@ InstrFormat decode_table_extended[0X100] = {
      decode_instr_two_op_reg},
 
     /* 0xA9 */
-    {// ATOMICLD reg_dst, reg_addr - r_dst = atomic_load_i64(*r_addr).
+    {// ATOMICLD reg_dst_sized, reg_addr - width-aware (ctrl-byte mode).
      "atomicld", Assembly::Bytecode::AddressingMode::REG,
      Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_atomicld,
-     decode_instr_two_op_reg},
+     decode_instr_simple_mov},
 
     /* 0xAA */
-    {// ATOMICST reg_addr, reg_val - atomic_store_i64(*r_addr, r_val).
+    {// ATOMICST reg_addr, reg_val_sized - width-aware (ctrl-byte mode).
      "atomicst", Assembly::Bytecode::AddressingMode::REG,
      Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_atomicst,
-     decode_instr_two_op_reg},
+     decode_instr_simple_mov},
 
     /* 0xAB */
-    {// ATOMICCAS reg_dst, reg_addr, reg_exp, reg_des - 4 regs FIXED_4.
-     // r_dst = compare_exchange_i64(*r_addr, r_exp, r_des) - valor previo.
+    {// ATOMICCAS reg_dst_sized, reg_addr, reg_exp, reg_des - FIXED_6 (ctrl+regs).
      "atomiccas", Assembly::Bytecode::AddressingMode::REG,
-     Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_atomiccas,
-     decode_instr_four_reg},
+     Assembly::Bytecode::InstrSizeMode::FIXED_6, exec_instr_atomiccas,
+     decode_instr_atomic_rmw},
 
     /* 0xAC */
-    {// ATOMICADD reg_dst, reg_addr, reg_delta - 3 regs FIXED_4.
-     // r_dst = atomic_fetch_add_i64(*r_addr, r_delta) - valor previo.
+    {// ATOMICADD reg_dst_sized, reg_addr, reg_delta - FIXED_6 (ctrl+regs).
      "atomicadd", Assembly::Bytecode::AddressingMode::REG,
-     Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_atomicadd,
-     decode_instr_three_reg},
+     Assembly::Bytecode::InstrSizeMode::FIXED_6, exec_instr_atomicadd,
+     decode_instr_atomic_rmw},
 
     /* 0xAD */
     {// SHAREDSTAT reg_dst, reg_op - introspeccion SharedHeap.

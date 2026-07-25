@@ -939,6 +939,22 @@ void decode_instr_four_reg(ProcessVM *vm, DecodedInstr &instr) {
     instr.data_instruction.mem_data.scale = b3 & 0x0F;            // r3
 }
 
+// Atomicos RMW width-aware (atomicadd/atomiccas, FIXED_6): igual que four_reg
+// pero con un ctrl-byte DELANTE que porta el mode (ancho 8/16/32/64).  Layout:
+//   [0x00][op][ctrl=mode<<6][b2=(base<<4)|index][b3=(final<<4)|scale][pad].
+void decode_instr_atomic_rmw(ProcessVM *vm, DecodedInstr &instr) {
+    instr.flags_info.size_instr = 6; // FIXED_6
+    uint64_t base = vm->registers.rip.raw() + 2;
+    uint8_t ctrl = vm->vm_mem[base];
+    uint8_t b2 = vm->vm_mem[base + 1];
+    uint8_t b3 = vm->vm_mem[base + 2];
+    instr.flags_info.mode = (ctrl >> 6) & 0x3; // ancho: 0=8b 1=16b 2=32b 3=64b
+    instr.data_instruction.mem_data.reg_base = (b2 >> 4) & 0x0F;  // dst
+    instr.data_instruction.mem_data.reg_index = b2 & 0x0F;        // addr
+    instr.data_instruction.mem_data.reg_final = (b3 >> 4) & 0x0F; // exp/delta
+    instr.data_instruction.mem_data.scale = b3 & 0x0F;            // des/0
+}
+
 /**
  * @brief Descodificador de @c getstatic / @c setstatic (FIXED_8).
  *

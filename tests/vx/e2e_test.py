@@ -2287,6 +2287,10 @@ modes3_case("gc250", "gc: compactacion mark-compact del OldGen (sliding in-place
 modes3_case("gc252", "gc: campo-referencia gc<Clase> tras major_gc (read encadenado seguro)", "252_gc_ref_field.vx", 42, line=4097)
 
 
+# --- stdlib: ejemplos y tests de la biblioteca estandar de Vesta -----------
+modes3_case("stdlib_atomic", "stdlib atomic<T>: anchos 1/2/4/8 + f32/f64 + bool + disponibilidad por where", "stdlib/atomic.vx", 161, line=4200)
+
+
 # ---  AS: inline asm ---------------------------------------------------
 
 def _write_vx(ctx, name, body):

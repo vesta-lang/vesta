@@ -1927,13 +1927,18 @@ class Lowering {
     ir::IrValueId emit_gc_allocp(ir::IrValueId v_size, uint32_t line);
     ir::IrValueId emit_gc_promote(ir::IrValueId v_src, uint32_t line);
     ir::IrValueId emit_gc_demote(ir::IrValueId v_src, uint32_t line);
-    ir::IrValueId emit_atomic_ld_i64(ir::IrValueId v_addr, uint32_t line);
+    // wt = ancho del atomico (1/2/4/8 bytes via IrType).  Default I64 (8 bytes)
+    // para los builtins Z.8 originales; los genericos pasan el tipo del pointee.
+    ir::IrValueId emit_atomic_ld_i64(ir::IrValueId v_addr, uint32_t line,
+                                     ir::IrType wt = ir::IrType::I64);
     void emit_atomic_st_i64(ir::IrValueId v_addr, ir::IrValueId v_val,
-                            uint32_t line);
+                            uint32_t line, ir::IrType wt = ir::IrType::I64);
     ir::IrValueId emit_atomic_cas_i64(ir::IrValueId v_addr, ir::IrValueId v_exp,
-                                      ir::IrValueId v_des, uint32_t line);
+                                      ir::IrValueId v_des, uint32_t line,
+                                      ir::IrType wt = ir::IrType::I64);
     ir::IrValueId emit_atomic_add_i64(ir::IrValueId v_addr,
-                                      ir::IrValueId v_delta, uint32_t line);
+                                      ir::IrValueId v_delta, uint32_t line,
+                                      ir::IrType wt = ir::IrType::I64);
 
     // --- Static fields + AOP proceed + Async fusion + Intrinsics ---
     ir::IrValueId emit_getstatic(ir::IrValueId v_cls, uint64_t offset,

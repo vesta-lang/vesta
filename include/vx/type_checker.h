@@ -870,6 +870,36 @@ class TypeChecker {
     void verify_pending_type_bounds();
 
     /**
+     * @brief Disponibilidad condicional de un metodo por su clausula `where` (#6).
+     *
+     * Modelo Rust `impl<T: Bound>` / Swift `extension where`.  Un metodo de un
+     * struct/clase generico con `where T: Concepto` (sobre un type-param del
+     * CONTENEDOR) SOLO existe en las instanciaciones cuyo type-arg satisface el
+     * concepto.  Devuelve @c false si algun bound sobre un type-param del
+     * contenedor no se cumple -> el metodo se OMITE (ni se clona ni se
+     * type-checkea), como si no estuviera declarado para ese T.  Los bounds
+     * sobre type-params del PROPIO metodo (`m<U: C>`) se copian a
+     * @p method_only para verificarse al monomorphizar el metodo.
+     *
+     * Se evalua en pre_mono (antes de collect_globals), asi que solo son
+     * fiables los conceptos evaluables SIN layouts: kind-based (Integer,
+     * Numeric, Float, Signed, Unsigned, Bool, Char, Pointer, Scalar, ...) y
+     * predicados is_x / sizeof sobre primitivos.  Un concepto estructural
+     * (has_method) sobre un type-param del contenedor se veria como no
+     * satisfecho aqui; no debe usarse para filtrar existencia.
+     */
+    bool method_available_for_subst(
+        const ast::ClassMethodDecl *m,
+        const std::vector<std::string> &container_params,
+        const std::vector<Type> &container_args,
+        std::vector<ast::TypeBound> &method_only);
+
+    /// Registra @p m como no-disponible en la instanciacion @p container_mangled
+    /// (por su `where`), para dar un mensaje claro si se intenta llamar.
+    void record_unavailable_method(const std::string &container_mangled,
+                                   const ast::ClassMethodDecl *m);
+
+    /**
      * @brief Elige la especializacion de struct mas especifica para @p args (#7).
      *
      * Busca en @c struct_specializations_[base] la especializacion (total o
@@ -2014,6 +2044,12 @@ private:
         SourceLoc loc;
     };
     std::vector<PendingBoundCheck> pending_bound_checks_;
+    /// #6: metodos omitidos por su `where` en una instanciacion concreta.
+    /// Clave = contenedor mangled (`atomic_f32`); valor = [(metodo, requisitos)]
+    /// para dar un mensaje claro si se intenta llamar el metodo no disponible.
+    std::unordered_map<std::string,
+                       std::vector<std::pair<std::string, std::string>>>
+        unavailable_methods_;
     /// Cola de metodos genericos monomorphizados pendientes de anyadir al
     /// AST del contenedor + chequear su body (drenada por
     /// drain_pending_method_monos tras check_functions).

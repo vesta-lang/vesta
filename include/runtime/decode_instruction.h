@@ -440,6 +440,7 @@ void decode_instr_three_reg(ProcessVM *vm, DecodedInstr &instr);
  * Util para @c atomiccas (dst, addr, exp, des).
  */
 void decode_instr_four_reg(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_atomic_rmw(ProcessVM *vm, DecodedInstr &instr);
 
 /**
  * @brief Descodifica una instruccion de acceso a static field (getstatic /

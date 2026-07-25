@@ -218,10 +218,10 @@ static bool is_side_effecting(IrOp op) {
     // llegue  D.8 con CSE block-aware con clobber model, se puede
     // relajar a "pure within block until next CALL/alloc".
     case IrOp::GC_DEREF_HOST:
-    case IrOp::ATOMIC_LD_I64:
-    case IrOp::ATOMIC_ST_I64:
-    case IrOp::ATOMIC_CAS_I64:
-    case IrOp::ATOMIC_ADD_I64:
+    case IrOp::ATOMIC_LD:
+    case IrOp::ATOMIC_ST:
+    case IrOp::ATOMIC_CAS:
+    case IrOp::ATOMIC_ADD:
     case IrOp::GETSTATIC:
     case IrOp::SETSTATIC:
     case IrOp::FINDCLASS:
@@ -7707,13 +7707,13 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
             // GC_PROMOTE/GC_DEMOTE copian memoria cross-heap.
             case IrOp::GC_PROMOTE:
             case IrOp::GC_DEMOTE:
-            // ATOMIC_ST_I64 / ATOMIC_CAS_I64 / ATOMIC_ADD_I64 escriben
-            // memoria; ATOMIC_LD_I64 lee (que es OK para SLF si no hay
+            // ATOMIC_ST / ATOMIC_CAS / ATOMIC_ADD escriben
+            // memoria; ATOMIC_LD lee (que es OK para SLF si no hay
             // store intermedio, pero conservativo clearamos).
-            case IrOp::ATOMIC_LD_I64:
-            case IrOp::ATOMIC_ST_I64:
-            case IrOp::ATOMIC_CAS_I64:
-            case IrOp::ATOMIC_ADD_I64:
+            case IrOp::ATOMIC_LD:
+            case IrOp::ATOMIC_ST:
+            case IrOp::ATOMIC_CAS:
+            case IrOp::ATOMIC_ADD:
             // SMARTPTR_FREE invoca deleter que puede tocar memoria.
             case IrOp::SMARTPTR_FREE:
             // FFI runtime puede mutar cualquier cosa.
@@ -10492,10 +10492,10 @@ static bool is_sched_barrier(IrOp op) {
     case IrOp::GC_PROMOTE:
     case IrOp::GC_DEMOTE:
     case IrOp::GC_HANDLE_FOR_PTR:
-    case IrOp::ATOMIC_LD_I64:
-    case IrOp::ATOMIC_ST_I64:
-    case IrOp::ATOMIC_CAS_I64:
-    case IrOp::ATOMIC_ADD_I64:
+    case IrOp::ATOMIC_LD:
+    case IrOp::ATOMIC_ST:
+    case IrOp::ATOMIC_CAS:
+    case IrOp::ATOMIC_ADD:
     case IrOp::GETSTATIC:
     case IrOp::SETSTATIC:
     case IrOp::FINDCLASS:

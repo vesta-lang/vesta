@@ -459,11 +459,11 @@ enum class IrOp : uint16_t {
                       ///< estatico)
     SETSTATIC = 0x9A, ///< setstatic.i64 %cls, %val, imm=offset    (almacena
                       ///< campo estatico)
-    ATOMIC_LD_I64 = 0x9B, ///< %dst = atomic_ld.i64 [%addr]   (atomic load i64)
-    ATOMIC_ST_I64 = 0x9C, ///< atomic_st.i64 [%addr], %val
-    ATOMIC_CAS_I64 =
+    ATOMIC_LD = 0x9B, ///< %dst = atomic_ld.i64 [%addr]   (atomic load i64)
+    ATOMIC_ST = 0x9C, ///< atomic_st.i64 [%addr], %val
+    ATOMIC_CAS =
         0x9D, ///< %dst = atomic_cas.i64 [%addr], %expected, %desired
-    ATOMIC_ADD_I64 =
+    ATOMIC_ADD =
         0x9E, ///< %dst = atomic_add.i64 [%addr], %delta (fetch-and-add)
               ///< El bloque queda en HandleTable y participa del mark/sweep.
     ///< Si nada lo referencia (stack/regs/external_refs), se libera en

@@ -566,7 +566,15 @@ std::string TypeChecker::monomorphize_class(const std::string &template_name,
     }
     // Clonar metodos.
     for (const auto &m : src->methods) {
+        // #6: disponibilidad condicional por `where` sobre el T de la clase.
+        std::vector<ast::TypeBound> method_only;
+        if (!method_available_for_subst(m.get(), *g.params, *g.args,
+                                        method_only)) {
+            record_unavailable_method(mangled, m.get());
+            continue;
+        }
         auto nm = std::make_unique<ast::ClassMethodDecl>();
+        nm->type_bounds = std::move(method_only); // solo bounds sobre `m<U>`
         nm->loc = m->loc;
         // Si el metodo es el constructor del template, su nombre
         // textualmente coincide con el template_name; en la version
@@ -812,7 +820,17 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
     // Clonar metodos (dtor `__dtor`, copy-hook `__clone__`, y metodos normales;
     // los structs no tienen constructores nombrados como el tipo).
     for (const auto &m : src->methods) {
+        // #6: disponibilidad condicional por `where` sobre el T del struct.  Si
+        // el metodo exige `where T: Concepto` y el arg concreto no lo cumple,
+        // el metodo NO existe en esta instanciacion (no se clona ni type-checkea).
+        std::vector<ast::TypeBound> method_only;
+        if (!method_available_for_subst(m.get(), *g.params, *g.args,
+                                        method_only)) {
+            record_unavailable_method(mangled, m.get());
+            continue;
+        }
         auto nm = std::make_unique<ast::ClassMethodDecl>();
+        nm->type_bounds = std::move(method_only); // solo bounds sobre `m<U>`
         nm->loc = m->loc;
         nm->name = m->name;
         nm->access = m->access;
@@ -11982,9 +12000,21 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 // No es metodo: ¿es un CAMPO puntero a funcion?  -> CALLIND.
                 if (const StructFieldInfo *ff = find_fn_field(slay.fields))
                     return funcptr_field_call(ff->type);
-                diags_.error(e->loc, "el struct '" + bt.struct_name +
-                                         "' no tiene un metodo '" +
-                                         fa->field_name + "'");
+                // #6: ¿fue OMITIDO por su `where` en esta instanciacion?
+                std::string wreq;
+                auto uit = unavailable_methods_.find(bt.struct_name);
+                if (uit != unavailable_methods_.end())
+                    for (const auto &pr : uit->second)
+                        if (pr.first == fa->field_name) { wreq = pr.second; break; }
+                if (!wreq.empty())
+                    diags_.error(e->loc,
+                                 "el metodo '" + fa->field_name +
+                                     "' no esta disponible para '" +
+                                     bt.struct_name + "' (requiere " + wreq + ")");
+                else
+                    diags_.error(e->loc, "el struct '" + bt.struct_name +
+                                             "' no tiene un metodo '" +
+                                             fa->field_name + "'");
                 for (auto &a : e->args)
                     (void)check_expr(a.get());
                 return Type{};
@@ -12002,6 +12032,16 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 const Type ta = check_expr(e->args[i].get());
                 const Type &tp = smtd->param_types[i];
                 if (ta.kind == PrimitiveKind::COUNT) continue;
+                // Coercion de un literal float al ancho del param (`store(5.0)`
+                // con param f32): el literal es f64 por defecto; si no se
+                // re-tipa aqui, el lowering conservaria sus 64 bits IEEE al
+                // meterlos en un slot f32 (guardando basura).  Marca el nodo
+                // como F32 para que el CONST se emita con los 32 bits correctos.
+                if ((tp.kind == PrimitiveKind::F32 ||
+                     tp.kind == PrimitiveKind::F64) &&
+                    e->args[i]->kind == ast::NodeKind::FloatLitExpr &&
+                    ta.kind != tp.kind)
+                    e->args[i]->result_type = tp;
                 if (!types_assignable(tp, ta) &&
                     !value_assignable_to_interface(tp, ta)) {
                     diags_.error(e->args[i]->loc,
@@ -12045,9 +12085,21 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             // No es metodo: ¿es un CAMPO puntero a funcion?  -> CALLIND.
             if (const StructFieldInfo *ff = find_fn_field(cls.fields))
                 return funcptr_field_call(ff->type);
-            diags_.error(e->loc, "la clase '" + bt.struct_name +
-                                     "' no tiene un metodo '" + fa->field_name +
-                                     "'");
+            // #6: ¿fue OMITIDO por su `where` en esta instanciacion?
+            std::string wreq;
+            auto uit = unavailable_methods_.find(bt.struct_name);
+            if (uit != unavailable_methods_.end())
+                for (const auto &pr : uit->second)
+                    if (pr.first == fa->field_name) { wreq = pr.second; break; }
+            if (!wreq.empty())
+                diags_.error(e->loc, "el metodo '" + fa->field_name +
+                                         "' no esta disponible para '" +
+                                         bt.struct_name + "' (requiere " + wreq +
+                                         ")");
+            else
+                diags_.error(e->loc, "la clase '" + bt.struct_name +
+                                         "' no tiene un metodo '" +
+                                         fa->field_name + "'");
             for (auto &a : e->args)
                 (void)check_expr(a.get());
             return Type{};
@@ -13998,6 +14050,35 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         (void)check_expr(e->args[0].get());
         (void)check_expr(e->args[1].get());
         e->result_type = Type{PrimitiveKind::I64};
+        return e->result_type;
+    }
+    // Atomicos GENERICOS width-aware: el resultado es el POINTEE del puntero
+    // (arg 0).  atomic_load(T*)->T, atomic_store(T*,T)->void,
+    // atomic_cas(T*,T,T)->T, atomic_add(T*,T)->T.  El ancho de la op lo saca el
+    // lowering del mismo pointee.  Los usa atomic<T> para 1/2/4/8 bytes.
+    if (id->name == "atomic_load" || id->name == "atomic_store" ||
+        id->name == "atomic_cas" || id->name == "atomic_add") {
+        const size_t need = (id->name == "atomic_load")  ? 1
+                            : (id->name == "atomic_cas") ? 3
+                                                         : 2;
+        if (e->args.size() != need) {
+            diags_.error(e->loc, id->name +
+                                     ": aridad incorrecta para el atomico "
+                                     "generico");
+            e->result_type = Type{};
+            return Type{};
+        }
+        Type ptrt{};
+        for (size_t i = 0; i < e->args.size(); ++i) {
+            Type at = check_expr(e->args[i].get());
+            if (i == 0) ptrt = at;
+        }
+        if (id->name == "atomic_store") {
+            e->result_type = Type{PrimitiveKind::VOID};
+        } else {
+            e->result_type =
+                ptrt.pointee ? *ptrt.pointee : Type{PrimitiveKind::I64};
+        }
         return e->result_type;
     }
     if (id->name == "shared_malloc") {
