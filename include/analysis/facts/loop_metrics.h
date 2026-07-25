@@ -56,13 +56,15 @@ struct LoopMetrics {
 
 /**
  * @brief Mide el cuerpo (bloques @p body) de un bucle de @p fn.  Neutral.
- * @param fn     funcion SSA.
- * @param body   bloques del cuerpo (todos los del bucle salvo el header).
- * @param latch  bloque latch (para estimar los valores vivos en el back-edge).
+ * @param fn   funcion SSA.
+ * @param body bloques del cuerpo (todos los del bucle salvo el header).
+ *
+ * @c live_across (proxy de presion) = valores definidos en el cuerpo y usados
+ * FUERA de el (loop-carried via PHIs del header + live-out); no depende del
+ * latch ni de temporales intra-iteracion.
  */
 LoopMetrics compute_loop_metrics(const ir::IrFunction &fn,
-                                 const std::vector<ir::IrBlockId> &body,
-                                 ir::IrBlockId latch);
+                                 const std::vector<ir::IrBlockId> &body);
 
 } // namespace analysis
 

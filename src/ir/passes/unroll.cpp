@@ -387,7 +387,7 @@ bool ir_pass_unroll(IrFunction &fn, int factor) {
             // Metricas NEUTRALES del cuerpo -> POLITICA (la inteligencia).  El
             // transformador no decide nada: solo clona U veces.
             analysis::LoopMetrics m =
-                analysis::compute_loop_metrics(fn, li.st.body, li.st.latch);
+                analysis::compute_loop_metrics(fn, li.st.body);
             UnrollDecision d = choose_unroll_factor(m, li.trip.trip, target);
             if (want_stats) g_stats.account(d);
             if (!d.allow()) continue;

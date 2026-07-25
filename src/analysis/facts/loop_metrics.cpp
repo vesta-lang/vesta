@@ -103,10 +103,10 @@ bool is_expensive(IrOp op) {
 } // namespace
 
 LoopMetrics compute_loop_metrics(const ir::IrFunction &fn,
-                                 const std::vector<IrBlockId> &body,
-                                 IrBlockId latch) {
+                                 const std::vector<IrBlockId> &body) {
     LoopMetrics m;
     std::unordered_set<IrValueId> body_defs;
+    std::unordered_set<IrBlockId> body_set(body.begin(), body.end());
 
     for (IrBlockId b : body) {
         if (b >= fn.blocks.size()) continue;
@@ -145,18 +145,24 @@ LoopMetrics compute_loop_metrics(const ir::IrFunction &fn,
         }
     }
 
-    // Presion de registros (proxy): valores del cuerpo usados en el latch (vivos
-    // al cerrar la iteracion -> cada copia del unroll los duplica).
-    if (latch < fn.blocks.size()) {
-        std::unordered_set<IrValueId> live;
-        for (const IrInstr &in : fn.blocks[latch].instrs) {
+    // Presion de registros (proxy): valores DEFINIDOS en el cuerpo que se usan
+    // FUERA del cuerpo -- los back-args de las PHIs del header (loop-carried) mas
+    // los live-out.  Son los unicos que cada copia del unroll mantiene vivos a la
+    // vez; los temporales intra-iteracion se consumen dentro de su copia y NO
+    // cuentan.  (El proxy anterior miraba el latch: en un bucle de un solo bloque
+    // latch == cuerpo, contaba los temporales intra-iteracion e inflaba la
+    // presion, capando el factor.)
+    std::unordered_set<IrValueId> live;
+    for (size_t b = 0; b < fn.blocks.size(); ++b) {
+        if (body_set.count((IrBlockId)b)) continue; // solo bloques FUERA del cuerpo
+        for (const IrInstr &in : fn.blocks[b].instrs) {
             for (IrValueId o : in.operands)
                 if (body_defs.count(o)) live.insert(o);
             for (const auto &pa : in.phi_args)
                 if (body_defs.count(pa.value)) live.insert(pa.value);
         }
-        m.live_across = (int)live.size();
     }
+    m.live_across = (int)live.size();
     return m;
 }
 
