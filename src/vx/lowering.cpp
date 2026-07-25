@@ -18366,6 +18366,23 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                 }
                 if (!promote) {
                     ir::IrValueId v = lower_expr(a.get());
+                    // Coercionar el arg a la PRECISION del parametro cuando hay
+                    // mismatch float (p.ej. un literal f64 3.0 pasado a un param
+                    // f32).  Sin esto se pasan los bits f64 tal cual y el callee
+                    // los relee como f32 -> basura (fmul.f32 daba 0).  Solo
+                    // float<->float: los enteros/punteros ya los coacciona el
+                    // type checker.  cast_if_needed es no-op si coinciden.
+                    if (v != ir::IR_NO_VALUE && ai < ns_param_types.size()) {
+                        const ir::IrType pt =
+                            ir_type_from_primitive(ns_param_types[ai].kind);
+                        const ir::IrType at = fn_->values[v].type;
+                        const bool pt_f =
+                            (pt == ir::IrType::F32 || pt == ir::IrType::F64);
+                        const bool at_f =
+                            (at == ir::IrType::F32 || at == ir::IrType::F64);
+                        if (pt != at && pt_f && at_f)
+                            v = cast_if_needed(v, at, pt, e->loc.line);
+                    }
                     arg_vals.push_back(v);
                 }
             }
@@ -19211,6 +19228,24 @@ skip_comptime_eval_for_macro_to_macro:
             // la copia; el `~dtor` de la copia se emite tras el CALL.  Un valor
             // fresco (CallExpr) o un struct sin copy-hook no se clona (move /
             // alias actual).
+            // Coercionar la PRECISION float del arg al tipo del parametro
+            // (p.ej. un literal f64 3.0 pasado a un param f32).  Sin esto se
+            // pasan los bits f64 tal cual y el callee los relee como f32 ->
+            // basura (fmul.f32 de dos params daba 0).  Solo float<->float; los
+            // enteros/punteros/structs los coacciona el type checker o los
+            // paths de arriba.  cast_if_needed es no-op si ya coinciden.
+            if (v_arg != ir::IR_NO_VALUE && callee_sig &&
+                i < callee_sig->param_types.size()) {
+                const ir::IrType pt =
+                    ir_type_from_primitive(callee_sig->param_types[i].kind);
+                const ir::IrType at = fn_->values[v_arg].type;
+                const bool pt_f =
+                    (pt == ir::IrType::F32 || pt == ir::IrType::F64);
+                const bool at_f =
+                    (at == ir::IrType::F32 || at == ir::IrType::F64);
+                if (pt != at && pt_f && at_f)
+                    v_arg = cast_if_needed(v_arg, at, pt, e->loc.line);
+            }
             bool cloned_struct = false;
             if (v_arg != ir::IR_NO_VALUE && ae &&
                 ae->kind == ast::NodeKind::IdentExpr && callee_sig &&

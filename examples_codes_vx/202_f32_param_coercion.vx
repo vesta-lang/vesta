@@ -1,0 +1,26 @@
+namespace ejemplos.f32_param_coercion;
+
+// =============================================================================
+// 202_f32_param_coercion.vx
+//
+// Regresion: pasar un valor f64 (p.ej. el literal 3.0, que por defecto es f64)
+// a un parametro f32 debe CONVERTIR la precision (F64TOF32) en el call site.
+// Antes se pasaban los bits f64 tal cual y el callee los releia como f32 ->
+// basura: `f32 mul(f32 x, f32 k){return x*k;}` con mul(3.0, 2.0) daba 0 (el 2o
+// f32 llegaba 0), afectando interp, jit y aot por igual.
+//
+// i32 y f64 con dos parametros ya funcionaban; el bug era especifico de f32.
+//
+//   vm --run 202.velb --stats           # R00 == 60606
+// =============================================================================
+
+i32 mi(i32 x, i32 k) { return x * k; }   // 3*2 = 6
+f64 md(f64 x, f64 k) { return x * k; }   // 3*2 = 6
+f32 mf(f32 x, f32 k) { return x * k; }   // 3*2 = 6 (era 0 por el bug)
+
+i64 main() {
+    i64 a = (i64) mi(3, 2);
+    i64 b = (i64) md(3.0, 2.0);
+    i64 c = (i64) mf(3.0, 2.0);
+    return a * 10000 + b * 100 + c;   // 6*10000 + 6*100 + 6 = 60606
+}
