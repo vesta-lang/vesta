@@ -223,6 +223,36 @@ class ComptimeRuntime {
                              uint64_t &out_r0) noexcept;
 
     /**
+     * @brief Presupuesto del modo CTPE (compile-time program execution).
+     *
+     * EXCLUSIVO del CTPE inferido; las `comptime`/`@Macro` del lenguaje NO
+     * tienen presupuesto (responsabilidad del programador).
+     */
+    struct CtpeBudget {
+        uint32_t millis = 3000;                          ///< tope de tiempo real.
+        uint64_t max_heap_bytes = 512ull * 1024 * 1024;  ///< tope de heap comptime.
+    };
+
+    /**
+     * @brief Invoca una funcion REGULAR (no @Macro) en modo CTPE RESTRINGIDO.
+     *
+     * A diferencia de @c invoke_simple_macro (sin restriccion, para los @Macro
+     * del lenguaje), este modo aplica el SANDBOX del CTPE: capacidades DENEGADAS
+     * (sin fs/net/ffi/spawn/dlopen/loadmod) + presupuesto (tiempo/heap).  Si la
+     * ejecucion real toca cualquier op no-contenida, el trap del sandbox aborta
+     * limpio.  Registra + eager-compila la funcion on-demand desde el Executable
+     * ya cargado en memoria (cero ficheros).
+     *
+     * @return @c true si completo dentro del presupuesto sin tocar nada
+     *         prohibido (@p out_r0 = R0); @c false si abortó (trap/timeout/oom/
+     *         no encontrada) -> el caller hace FALLBACK (deja la llamada en
+     *         runtime).  NUNCA afecta a las invocaciones de @Macro.
+     */
+    bool try_invoke_ctpe(const std::string &fn_name,
+                         const std::vector<uint64_t> &args,
+                         const CtpeBudget &budget, uint64_t &out_r0) noexcept;
+
+    /**
      * @brief invoca un @Macro que retorna @c string y
      * extrae el contenido como @c std::string host.
      *

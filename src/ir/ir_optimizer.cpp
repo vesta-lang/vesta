@@ -11,6 +11,7 @@
  */
 
 #include "ir/ir_optimizer.h"
+#include "ctpe/evaluable.h"
 #include "ir/passes/if_conversion.h"     // diamante/if-anidado -> SELECT (Capa 1)
 #include "ir/passes/unroll.h"            // desenrollado de bucles (factor automatico)
 #include "ir/passes/select_simplify.h"   // canonicalizacion algebraica de SELECT
@@ -11796,6 +11797,9 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
      * Modelo ROBUSTO: la DECISION de congruencia se computa una sola vez sobre
      * el IR (jit::ssa_phi_coalesce_remap, funcion pura del IR) y cada backend la
      * CONSUME en su out-of-SSA/regalloc SIN tocar el SSA:
+     *   - CTPE (debug, env-gated): loguea que funciones son EVALUABLES en
+     *     compile-time.  Valida el analisis de evaluabilidad sin ejecutar nada.
+     *     Cero coste sin VESTA_CTPE_DEBUG.  (bloque justo antes del cierre.)
      *   - interp: allocate_regs opera sobre valores canonicos (root de cada
      *     clase, intervalos unidos) y expande reg_map a los miembros -> valores
      *     congruentes comparten registro VM, las copias phi intra-clase quedan
@@ -11805,6 +11809,30 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
      * Sin multi-def -> sin ninguno de los edge cases.  El copy coalescing
      * especifico de maquina (2-address `mov dst,src1`) lo hace ademas el
      * coalesce_hint del linear-scan (otro nivel, copias que el IR no ve). */
+
+    // --- CTPE (debug): validacion del analisis de evaluabilidad + candidatos. ---
+    if (std::getenv("VESTA_CTPE_DEBUG")) {
+        ctpe::Evaluability ev = ctpe::compute_evaluability(mod);
+        for (const auto &fn : mod.functions) {
+            if (ev.is_evaluable(fn.name)) {
+                fprintf(stderr, "[ctpe] EVALUABLE  %s\n", fn.name.c_str());
+            } else {
+                auto it = ev.reason.find(fn.name);
+                if (it != ev.reason.end())
+                    fprintf(stderr,
+                            "[ctpe] no         %s  (op=%d pol=%d callee='%s' L%u)\n",
+                            fn.name.c_str(), (int)it->second.op,
+                            (int)it->second.policy, it->second.callee.c_str(),
+                            it->second.source_line);
+                else
+                    fprintf(stderr, "[ctpe] no         %s\n", fn.name.c_str());
+            }
+        }
+        std::vector<ctpe::Candidate> cands = ctpe::find_candidates(mod, ev);
+        for (const auto &c : cands)
+            fprintf(stderr, "[ctpe] CANDIDATO  %s  (ret escalar=%d)\n",
+                    c.fn.c_str(), (int)c.ret_type);
+    }
 }
 
 // Set global de helpers @c __new_<X> marcados como puros por el frontend.

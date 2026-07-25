@@ -282,6 +282,74 @@ bool ComptimeRuntime::invoke_simple_macro(const std::string &macro_name,
     }
 }
 
+// ---------------------------------------------------------------------------
+//  CTPE (Compile-Time Program Execution) -- modo RESTRINGIDO.
+//
+//  A diferencia de la invocacion de @Macro (sin restriccion, responsabilidad
+//  del programador), el CTPE inferido corre en SANDBOX: capacidades externas
+//  DENEGADAS.  Reusa el MISMO ComptimeRuntime (motor global) pero con caps
+//  restringidas SOLO durante esta invocacion; se restauran al salir para no
+//  afectar a los @Macro.  El trap del sandbox + el catch(...) de
+//  invoke_simple_macro garantizan el fallback si la ejecucion real toca algo
+//  prohibido.
+//
+//  Pendiente (siguiente incremento): watchdog de TIEMPO (safepoint_flag +
+//  throw_fatal/longjmp) y tope de HEAP (GcHeap max_bytes).  El presupuesto ya
+//  se recibe; hoy solo se aplican las caps.
+// ---------------------------------------------------------------------------
+bool ComptimeRuntime::try_invoke_ctpe(const std::string &fn_name,
+                                      const std::vector<uint64_t> &args,
+                                      const CtpeBudget &budget,
+                                      uint64_t &out_r0) noexcept {
+    (void)budget; // TODO: watchdog de tiempo + tope de heap.
+    if (!impl_ || !impl_->proc) return false;
+    auto &execs = impl_->mgr.loader.executables;
+    if (execs.empty()) return false;
+    auto &exe = execs.back();
+
+    // 1) Registrar + eager-compilar la funcion regular on-demand (una vez).  El
+    //    Executable ya esta en memoria (cero ficheros): su entry_pc sale del
+    //    symbol_table (`code.<fn>`) y su IR del ir_lookup/ir_functions.
+    if (!macro_entry_pc_.count(fn_name)) {
+        auto sit = exe->symbol_table.find("code." + fn_name);
+        if (sit == exe->symbol_table.end()) return false;
+        register_macro(fn_name, sit->second);
+        auto fnit = exe->ir_lookup.find(fn_name);
+        if (fnit != exe->ir_lookup.end() &&
+            fnit->second < exe->ir_functions.size()) {
+            const uint32_t saved_th = jit::g_jit_threshold;
+            if (saved_th == UINT32_MAX) jit::g_jit_threshold = 1;
+            try {
+                jit::CompileResult res = jit::eager_compile_function(
+                    exe->ir_functions[fnit->second], &exe->ir_lookup,
+                    &exe->ir_functions, &exe->symbol_table);
+                if (res.fn)
+                    impl_->jit_code_by_pc[sit->second] =
+                        reinterpret_cast<void *>(res.fn);
+            } catch (...) {
+            }
+            jit::g_jit_threshold = saved_th;
+        }
+    }
+
+    // 2) Sandbox CTPE: DENEGAR las capacidades externas.  Cualquier op que las
+    //    use (CALLN/dlopen/spawn/msgsend-remoto/loadmod/...) trapea -> FatalError
+    //    -> el catch(...) de invoke_simple_macro devuelve false -> fallback.  Se
+    //    conserva MEM_HOST (acceso normal a objetos) y CLASSREG (inofensivo: el
+    //    pre-filtro ya excluye la metaprogramacion).
+    const uint32_t deny =
+        loader::Caps::FS_READ | loader::Caps::FS_WRITE | loader::Caps::NET |
+        loader::Caps::FFI_CALL | loader::Caps::FFI_OPEN | loader::Caps::SPAWN |
+        loader::Caps::DISTRIB | loader::Caps::LOADMOD;
+    const uint32_t saved_bits = exe->caps.bits;
+    exe->caps.bits = saved_bits & ~deny;
+
+    const bool ok = invoke_simple_macro(fn_name, args, out_r0);
+
+    exe->caps.bits = saved_bits; // restaurar: NO afectar a los @Macro.
+    return ok;
+}
+
 /**
  * @brief    -- construye la clave del cache memoization.
  *
