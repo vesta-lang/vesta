@@ -3519,9 +3519,15 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
                     return false;
                 if (!fp_ok) return false;
+                // Bit 8 del imm = variante SUB (c[i]=a[i]*b[i]-d[i]).  Solo en
+                // el caso element-wise 4-op (la reduccion acc-=a*b seria
+                // VFNMADD, fuera de este patron).
+                const bool fma_sub = fma3 && ((in.imm >> 8) & 1u);
                 MOp fma;
-                if (in.type == ir::IrType::F64) fma = MOp::VFMADD231PD;
-                else if (in.type == ir::IrType::F32) fma = MOp::VFMADD231PS;
+                if (in.type == ir::IrType::F64)
+                    fma = fma_sub ? MOp::VFMSUB231PD : MOp::VFMADD231PD;
+                else if (in.type == ir::IrType::F32)
+                    fma = fma_sub ? MOp::VFMSUB231PS : MOp::VFMADD231PS;
                 else return false;
                 const uint64_t host_w =
                     vec_host_w();

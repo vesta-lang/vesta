@@ -746,11 +746,17 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
     }
 
     case MOp::VFMADD231PD:
-    case MOp::VFMADD231PS: {
-        /* VFMADD231P{D,S} dst, src1(vvvv), src2(rm reg|mem): dst = src1*src2 +
-         * dst (1 redondeo).  66 0F38 B8; W1 para PD, W0 para PS.  Solo AVX/512
-         * (vec_w 32/64); 128b tambien valido pero el vectorizador usa >=256. */
-        const bool ps = (mi.op == MOp::VFMADD231PS);
+    case MOp::VFMADD231PS:
+    case MOp::VFMSUB231PD:
+    case MOp::VFMSUB231PS: {
+        /* VFMADD231P{D,S} dst = src1*src2 + dst;  VFMSUB231P{D,S} dst =
+         * src1*src2 - dst (1 redondeo).  66 0F38; ADD=B8, SUB=BA; W1 para PD,
+         * W0 para PS.  Solo AVX/512 (vec_w 32/64). */
+        const bool ps =
+            (mi.op == MOp::VFMADD231PS || mi.op == MOp::VFMSUB231PS);
+        const bool sub =
+            (mi.op == MOp::VFMSUB231PD || mi.op == MOp::VFMSUB231PS);
+        const uint8_t opbyte = sub ? 0xBA : 0xB8;
         const uint8_t wbit = ps ? 0 : 1;
         const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
         const uint8_t xv = static_cast<uint8_t>(mi.src1.reg) - 16;
@@ -765,7 +771,7 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
             else
                 emit_vx3(xd, xs, xv, wbit, l256, 0, false, out, /*map=*/2,
                           /*pp=*/1);
-            put8(out, 0xB8);
+            put8(out, opbyte);
             put8(out, modrm(3, xd & 7, xs & 7));
         } else if (mi.src2.kind == MOperandKind::MEM) {
             const MReg base = mi.src2.mem_base();
@@ -779,7 +785,7 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
             else
                 emit_vx3(xd, bid, xv, wbit, l256, iid, has_index, out,
                           /*map=*/2, /*pp=*/1);
-            put8(out, 0xB8);
+            put8(out, opbyte);
             emit_modrm_mem(mi.src2, xd & 7, out);
         } else {
             put8(out, 0xCC);

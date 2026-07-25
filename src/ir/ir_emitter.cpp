@@ -4107,6 +4107,10 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const int o_a = fma3 ? 2 : 1;
         const int o_b = fma3 ? 3 : 2;
         const uint64_t width = ins.imm & 0xFF;
+        // Bit 8 = variante SUB (c=a*b-d).  Solo element-wise (4 ops).  Se emula
+        // negando el sumando: fma(a,b,-d) = round(a*b - d), BIT-EXACTO con el
+        // VFMSUB231 del JIT (el -d es exacto).
+        const bool fma_sub = fma3 && ((ins.imm >> 8) & 1u);
         const size_t esz = ir_type_size(ins.type);
         if (esz == 0) break;
         const uint64_t W = width / esz;
@@ -4131,6 +4135,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             }
             ctx.out << "    movh r14" << rsz << ", [r9]\n"; // sumando[k]
             ctx.out << "    bitg2z f0, r14\n";
+            if (fma_sub) ctx.out << "    fneg" << suf << " f0, f0\n"; // -d
             ctx.out << "    movh r13" << rsz << ", [r11]\n"; // a[k]
             ctx.out << "    bitg2z f1, r13\n";
             ctx.out << "    movh r14" << rsz << ", [r12]\n"; // b[k]

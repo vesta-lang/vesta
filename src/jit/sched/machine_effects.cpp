@@ -325,6 +325,8 @@ OpRoles mop_roles(MOp op) {
     case MOp::PMULLD:
     case MOp::VFMADD231PD: // FMA: dst es acumulador (read+written)
     case MOp::VFMADD231PS:
+    case MOp::VFMSUB231PD: // FMSUB: dst = a*b - dst (tambien read+written)
+    case MOp::VFMSUB231PS:
         r.dst_written = true;
         r.dst_read = true;
         break;
@@ -792,6 +794,8 @@ const char *mop_mnemonic(MOp op, EffIsa isa) {
     case MOp::VANDPS: return "vandps";
     case MOp::VFMADD231PD: return "vfmadd231pd";
     case MOp::VFMADD231PS: return "vfmadd231ps";
+    case MOp::VFMSUB231PD: return "vfmsub231pd";
+    case MOp::VFMSUB231PS: return "vfmsub231ps";
     case MOp::VBROADCASTSD: return "vbroadcastsd";
 
     default: return nullptr; // pseudo de VestaVM

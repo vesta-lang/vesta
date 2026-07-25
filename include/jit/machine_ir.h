@@ -742,6 +742,11 @@ enum class MOp : uint8_t {
      * (66 0F38 W0 B8) -> f32.  Solo AVX/AVX512 (no hay FMA en SSE2 base). */
     VFMADD231PD = 141,  ///< VFMADD231PD dst, src1, src2/mem (f64)
     VFMADD231PS = 142,  ///< VFMADD231PS dst, src1, src2/mem (f32)
+    /* VFMSUB231P{D,S} dst = src1*src2 - dst (1 redondeo).  66 0F38 BA; W1=PD,
+     * W0=PS.  Baja el patron element-wise c[i]=a[i]*b[i]-d[i] (VEC_FMA con el
+     * bit sub).  Mismo encoding que VFMADD231 pero opcode BA en vez de B8. */
+    VFMSUB231PD = 240,  ///< VFMSUB231PD dst, src1, src2/mem (f64)
+    VFMSUB231PS = 241,  ///< VFMSUB231PS dst, src1, src2/mem (f32)
     /* FMA ESCALAR (round(a*b+c), 1 redondeo): dst = src1*src2 + dst.  Baja el
      * IrOp::FMA.  VFMADD231SD (66 0F38 W1 B9) -> f64; VFMADD231SS (66 0F38 W0
      * B9) -> f32.  Requiere FMA3 (caps.fma); si no, el vreg cae a interp. */

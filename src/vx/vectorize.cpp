@@ -916,9 +916,12 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         can_fma = (!aot_auto_vec_ && aot_vec_width_ >= 32);
     else
         can_fma = true;
+    // FMA element-wise: c = a*b + d  (subop Add)  o  c = a*b - d  (subop Sub).
+    // Ambos array-only (2 pasos, sin escalares); Sub -> VFMSUB231.
     const bool is_fma = can_fma && S.size() == 2 && !S[0].is_scalar &&
                         S[0].subop == 2 /*Mul*/ && !S[1].is_scalar &&
-                        S[1].subop == 0 /*Add*/;
+                        (S[1].subop == 0 /*Add*/ || S[1].subop == 1 /*Sub*/);
+    const bool fma_sub = is_fma && S[1].subop == 1;
 
     if (MC_DBG)
         std::fprintf(stderr,
@@ -1037,13 +1040,14 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         const ir::IrValueId c_at = ptr_at(v_c, off);
         const ir::IrValueId start_at = ptr_at(v_start, off);
         if (is_fma) {
-            // c = a*b + d  ->  VEC_FMA (4 ops: {c, d, a, b}, 1 redondeo).
+            // c = a*b +/- d  ->  VEC_FMA (4 ops: {c, d, a, b}, 1 redondeo).
+            // bit 8 del imm = SUB (VFMSUB231: a*b - d).
             const ir::IrValueId b_at = ptr_at(step_base[0], off); // S[0]=Mul b
-            const ir::IrValueId d_at = ptr_at(step_base[1], off); // S[1]=Add d
+            const ir::IrValueId d_at = ptr_at(step_base[1], off); // S[1]=Add/Sub
             ir::IrInstr vf{}; vf.op = ir::IrOp::VEC_FMA; vf.type = elem_ty;
             vf.dst = ir::IR_NO_VALUE;
             vf.operands = {c_at, d_at, start_at, b_at};
-            vf.imm = width;
+            vf.imm = width | (fma_sub ? (1ull << 8) : 0ull);
             vf.source_line = ln;
             fn_->append(current_block_, std::move(vf));
         } else
