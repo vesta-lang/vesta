@@ -4054,6 +4054,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const char *iop = (subop == 0)   ? "adds"
                           : (subop == 1) ? "subs"
                                          : "muls";
+        // .ps para f32 (opera el low 32 del banco ZMM); vacio para f64.
+        const std::string suf = (ins.type == IrType::F32) ? ".ps" : "";
         const std::string rsz =
             (esz == 4) ? "d" : (esz == 2) ? "w" : (esz == 1) ? "b" : "";
         ctx.out << "    push r10\n    push r11\n";
@@ -4071,11 +4073,12 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 ctx.out << "    addu r11, " << esz << "\n";
             }
             if (is_fp) {
-                ctx.out << "    movh r14, [r11]\n"; // a[k]
+                // f64=8 bytes -> r14; f32=4 -> r14d; op con sufijo .ps si f32.
+                ctx.out << "    movh r14" << rsz << ", [r11]\n"; // a[k]
                 ctx.out << "    bitg2z f0, r14\n";
-                ctx.out << "    " << fop << " f0, f2\n";
+                ctx.out << "    " << fop << suf << " f0, f2\n";
                 ctx.out << "    bitz2g r14, f0\n";
-                ctx.out << "    movh [r10], r14\n"; // dst[k]
+                ctx.out << "    movh [r10], r14" << rsz << "\n"; // dst[k]
             } else {
                 ctx.out << "    loadzh r14" << rsz << ", r11\n"; // a[k]
                 ctx.out << "    " << iop << " r14, r13\n";        // a OP scalar

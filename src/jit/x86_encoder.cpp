@@ -837,6 +837,51 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         return true;
     }
 
+    case MOp::SHUFPS: {
+        /* SHUFPS dst, src, imm8: NP 0F C6 /r ib.  imm8=0 con dst==src difunde
+         * el lane 0 (f32) a los 4 lanes de un XMM (128b, SSE, sin AVX).  El
+         * imm8 viaja en mi.variant (como ROUNDSS). */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        const uint8_t rex_R = (xd >= 8) ? 1 : 0;
+        const uint8_t rex_B = (xs >= 8) ? 1 : 0;
+        if (rex_R || rex_B) put8(out, 0x40 | (rex_R << 2) | rex_B);
+        put8(out, 0x0F);
+        put8(out, 0xC6);
+        put8(out, modrm(3, xd & 7, xs & 7));
+        put8(out, static_cast<uint8_t>(mi.variant)); // imm8
+        return true;
+    }
+
+    case MOp::VBROADCASTSS: {
+        /* VBROADCASTSS xmm/ymm/zmm, xmm: difunde el f32 bajo a todos los lanes.
+         * VX.128/256.66.0F38.W0 18 /r ; EVEX.512.66.0F38.W0 18 /r.  W0 SIEMPRE
+         * (f32), a diferencia de VBROADCASTSD (W0 VEX / W1 EVEX).  Op de 2
+         * operandos (vvvv no usado).  Valido tambien a 128b (util para f32). */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        const uint8_t vec_w = mi.dst.width ? mi.dst.width : 32;
+        if (vec_w >= 64)
+            emit_evex(xd, xs, VX_NO_VVVV, /*w=*/0, /*ll=*/2, 0, false, out,
+                      /*map=*/2);
+        else
+            emit_vx3(xd, xs, VX_NO_VVVV, /*w=*/0, /*l256=*/(vec_w == 32), 0,
+                     false, out, /*map=*/2);
+        put8(out, 0x18);
+        put8(out, modrm(3, xd & 7, xs & 7));
+        return true;
+    }
+
     case MOp::MOVUPD:
     case MOp::MOVAPD: {
         /* Move packed 2x f64 (16 bytes) XMM<->XMM o XMM<->mem.  Prefijo 66.

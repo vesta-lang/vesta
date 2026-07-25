@@ -309,6 +309,7 @@ OpRoles mop_roles(MOp op) {
     case MOp::XORPD:
     case MOp::ANDPD:
     case MOp::UNPCKLPD:
+    case MOp::SHUFPS: // dst,src,imm -> lanes 0,1 vienen de dst (read+written)
     case MOp::ADDPS:
     case MOp::SUBPS:
     case MOp::MULPS:
@@ -342,6 +343,7 @@ OpRoles mop_roles(MOp op) {
     case MOp::VXORPS:
     case MOp::VANDPS:
     case MOp::VBROADCASTSD:
+    case MOp::VBROADCASTSS:
         r.dst_written = true;
         break;
 
@@ -797,6 +799,8 @@ const char *mop_mnemonic(MOp op, EffIsa isa) {
     case MOp::VFMSUB231PD: return "vfmsub231pd";
     case MOp::VFMSUB231PS: return "vfmsub231ps";
     case MOp::VBROADCASTSD: return "vbroadcastsd";
+    case MOp::VBROADCASTSS: return "vbroadcastss";
+    case MOp::SHUFPS: return "shufps";
 
     default: return nullptr; // pseudo de VestaVM
     }

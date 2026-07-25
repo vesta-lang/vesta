@@ -3361,13 +3361,20 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 // REPLICADO a 64 bits (matcher) para los enteros -> un broadcast
                 // de lane de 64 bits (UNPCKLPD/VBROADCASTSD) llena todos los
                 // sub-lanes con el escalar.
-                const bool is_fp = (in.type == ir::IrType::F64);
+                const bool is_fp = (in.type == ir::IrType::F64 ||
+                                    in.type == ir::IrType::F32);
+                const bool is_f32s = (in.type == ir::IrType::F32);
                 MOp pop;
                 if (in.type == ir::IrType::F64) {
                     pop = (subop == 0)   ? MOp::ADDPD
                           : (subop == 1) ? MOp::SUBPD
                           : (subop == 2) ? MOp::MULPD
                                          : MOp::DIVPD;
+                } else if (in.type == ir::IrType::F32) {
+                    pop = (subop == 0)   ? MOp::ADDPS
+                          : (subop == 1) ? MOp::SUBPS
+                          : (subop == 2) ? MOp::MULPS
+                                         : MOp::DIVPS;
                 } else if (in.type == ir::IrType::I64 ||
                            in.type == ir::IrType::U64) {
                     if (subop == 0) pop = MOp::PADDQ;
@@ -3393,7 +3400,6 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 } else {
                     return false;
                 }
-                (void)is_fp;
                 // HOIST: el escalar ya esta DIFUNDIDO en XMM13 por un VEC_BCAST
                 // del preheader (imm bit 16).  Asi el cuerpo del loop es VX PURO
                 // (vmovupd ymm + vop ymm leyendo XMM13) -> ancho AVX/AVX512 sin
@@ -3427,19 +3433,33 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         : fp1;
                 const MOperand x1 = MOperand::make_reg(scalreg, ew);
                 if (!hoisted) {
-                    // difundir el escalar a fp1 (una vez): f64 via MOVSD; entero
-                    // via MOVQ_GP_XMM del escalar replicado.  Solo SSE2 128b.
-                    if (is_fp)
+                    // difundir el escalar a fp1 (una vez).  Solo SSE2 128b.
+                    if (is_f32s) {
+                        // f32: MOVSS lane 0 + SHUFPS(0) -> los 4 lanes.
                         O.push_back(MInstr::make_unary(
-                            MOp::MOVSD, MOperand::make_reg(fp1, 8),
+                            MOp::MOVSS, MOperand::make_reg(fp1, 4),
                             vrt(in.operands[2])));
-                    else
+                        MInstr sh = MInstr::make_binary(
+                            MOp::SHUFPS, MOperand::make_reg(fp1, 16),
+                            MOperand::make_reg(fp1, 16),
+                            MOperand::make_reg(fp1, 16));
+                        sh.variant = 0;
+                        O.push_back(sh);
+                    } else {
+                        // f64 via MOVSD; entero via MOVQ_GP_XMM (ya replicado a
+                        // 64b) -> UNPCKLPD difunde el lane de 64b.
+                        if (is_fp)
+                            O.push_back(MInstr::make_unary(
+                                MOp::MOVSD, MOperand::make_reg(fp1, 8),
+                                vrt(in.operands[2])));
+                        else
+                            O.push_back(MInstr::make_unary(
+                                MOp::MOVQ_GP_XMM, MOperand::make_reg(fp1, 16),
+                                vr(in.operands[2])));
                         O.push_back(MInstr::make_unary(
-                            MOp::MOVQ_GP_XMM, MOperand::make_reg(fp1, 16),
-                            vr(in.operands[2])));
-                    O.push_back(MInstr::make_unary(
-                        MOp::UNPCKLPD, MOperand::make_reg(fp1, 16),
-                        MOperand::make_reg(fp1, 16)));
+                            MOp::UNPCKLPD, MOperand::make_reg(fp1, 16),
+                            MOperand::make_reg(fp1, 16)));
+                    }
                 }
                 for (uint64_t pc = 0; pc < n_pieces; ++pc) {
                     const int32_t off = static_cast<int32_t>(pc * eff_w);
@@ -3469,16 +3489,37 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const uint64_t chunk_w = in.imm & 0xFF;
                 if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
                     return false;
-                const bool is_fp = (in.type == ir::IrType::F64);
+                const bool is_f64 = (in.type == ir::IrType::F64);
+                const bool is_f32 = (in.type == ir::IrType::F32);
                 const uint64_t host_w = vec_host_w();
                 const uint64_t eff_w = (chunk_w < host_w) ? chunk_w : host_w;
                 // reg destino del broadcast: XMM(13-idx), idx en imm bits 8-10
                 // (permite multiples escalares en XMM10-13 sin colision).
                 const uint64_t bcidx = (in.imm >> 8) & 0x7;
                 const MReg B = static_cast<MReg>(reg_id(MReg::XMM13) - bcidx);
+                if (is_f32) {
+                    // f32: cargar el escalar al lane 0 y difundir a 32b.  SSE2
+                    // 128b via SHUFPS(0); AVX/AVX512 via VBROADCASTSS.
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOVSS, MOperand::make_reg(B, 4),
+                        vrt(in.operands[0])));
+                    if (eff_w <= 16) {
+                        MInstr sh = MInstr::make_binary(
+                            MOp::SHUFPS, MOperand::make_reg(B, 16),
+                            MOperand::make_reg(B, 16),
+                            MOperand::make_reg(B, 16));
+                        sh.variant = 0; // imm8=0 -> lane 0 a los 4
+                        O.push_back(sh);
+                    } else {
+                        O.push_back(MInstr::make_unary(
+                            MOp::VBROADCASTSS, MOperand::make_reg(B, eff_w),
+                            MOperand::make_reg(B, 16)));
+                    }
+                    break;
+                }
                 // cargar el escalar al low de XMM13: f64 via MOVSD; entero via
                 // MOVQ_GP_XMM del valor ya replicado a 64b.
-                if (is_fp)
+                if (is_f64)
                     O.push_back(MInstr::make_unary(
                         MOp::MOVSD, MOperand::make_reg(B, 8),
                         vrt(in.operands[0])));

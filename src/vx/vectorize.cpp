@@ -896,11 +896,9 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
     int n_scalar = 0;
     for (auto &st : S)
         if (st.is_scalar && ++n_scalar > 4) return false; // <=4 escalares (XMM10-13)
-    // f32 con escalar: el broadcast escalar (VEC_BINOP_S/VEC_BCAST) es f64 en el
-    // codegen -> para f32 solo cadenas array-only (a[i]*b[i]+d[i]).  El axpy f32
-    // con escalar (a[i]*k+b[i]) bail hasta tener VBROADCASTSS.
-    if (c_kind == PrimitiveKind::F32 && n_scalar > 0) return false;
-
+    // f32 con escalar YA soportado: VEC_BCAST/VEC_BINOP_S difunden el f32 via
+    // SHUFPS(0) (SSE2 128b) o VBROADCASTSS (AVX/AVX512), y operan packed-single
+    // (ADDPS/MULPS/...).  El escalar se castea a elem_ty (F32) mas abajo.
     const bool is_f32 = (c_kind == PrimitiveKind::F32);
     const ir::IrType elem_ty = is_f32 ? ir::IrType::F32 : ir::IrType::F64;
     const uint64_t esz = is_f32 ? 4u : 8u;
@@ -955,8 +953,10 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         if (S[k].is_scalar) {
             const ir::IrValueId raw = lower_expr(S[k].scal);
             if (raw == ir::IR_NO_VALUE) return false;
+            // Escalar al tipo del elemento (F32 o F64) para que el broadcast y
+            // la op packed sean del ancho de lane correcto.
             step_scalar[k] = cast_if_needed(raw, fn_->values[raw].type,
-                                            ir::IrType::F64, ln);
+                                            elem_ty, ln);
             step_sidx[k] = next_sidx++;
         } else {
             const ir::IrValueId vb = lower_expr(S[k].arr);

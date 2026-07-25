@@ -728,6 +728,9 @@ enum class MOp : uint8_t {
      * Solo AVX (VX.256.66.0F38.W0 19 / EVEX.512.66.0F38.W1 19); para 128b se
      * usa UNPCKLPD.  Construye la mascara de signo wide de fneg/fabs. */
     VBROADCASTSD = 132, ///< VBROADCASTSD ymm/zmm, xmm
+    VBROADCASTSS = 242, ///< VBROADCASTSS xmm/ymm/zmm, xmm (66 0F38 W0 18) f32
+    SHUFPS = 243, ///< SHUFPS dst, src, imm8 (NP 0F C6 /r ib) -- broadcast f32
+                  ///<   lane 0 con imm8=0 (SSE, 128b) cuando no hay AVX
 
     /* Packed SINGLE (f32): mismos opcodes 0F 58/5C/59/5E/51/57/54 que los PD
      * pero SIN el prefijo 66 (pp=00 en VX/EVEX; EVEX W0).  4x f32 (XMM),
