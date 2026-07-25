@@ -4091,6 +4091,44 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         break;
     }
 
+    // VEC_FMA_S: dst[k] += a[k]*escalar (por lane, fmadd = 1 redondeo, BIT-EXACTO
+    // con VFMADD231 del JIT).  Paso "array escalado" del compound.  El escalar es
+    // el operando 2 (leido por lane; el bcast del JIT es no-op aqui).
+    case IrOp::VEC_FMA_S: {
+        if (ins.operands.size() < 3) break;
+        const uint64_t width = ins.imm & 0xFF;
+        const size_t esz = ir_type_size(ins.type);
+        if (esz == 0) break;
+        const uint64_t W = width / esz;
+        const std::string suf = (ins.type == IrType::F32) ? ".ps" : "";
+        const std::string rsz = (esz == 4) ? "d" : "";
+        ctx.out << "    push r10\n    push r11\n";
+        { const std::string p = ctx.load_src(ins.operands[0], 0); // dst
+          ctx.out << "    push " << p << "\n"; }
+        { const std::string p = ctx.load_src(ins.operands[1], 0); // a
+          ctx.out << "    push " << p << "\n"; }
+        { const std::string p = ctx.load_src(ins.operands[2], 0); // escalar
+          ctx.out << "    bitg2z f2, " << p << "\n"; }
+        ctx.out << "    pop r11\n    pop r10\n"; // a, dst
+        for (uint64_t k = 0; k < W; ++k) {
+            if (k > 0) {
+                ctx.out << "    addu r10, " << esz << "\n";
+                ctx.out << "    addu r11, " << esz << "\n";
+            }
+            ctx.out << "    movh r14" << rsz << ", [r11]\n"; // a[k]
+            ctx.out << "    bitg2z f0, r14\n";
+            ctx.out << "    movh r14" << rsz << ", [r10]\n"; // c[k]
+            ctx.out << "    bitg2z f1, r14\n";
+            ctx.out << "    fmadd" << suf << " f1, f0, f2\n"; // f1 = a*esc + c
+            ctx.out << "    bitz2g r14, f1\n";
+            ctx.out << "    movh [r10], r14" << rsz << "\n"; // c[k]
+        }
+        ctx.out << "    pop r11\n    pop r10\n";
+        ctx.r13_cache = -1;
+        ctx.r14_cache = -1;
+        break;
+    }
+
     // VEC_BCAST: hoist del broadcast del escalar a XMM13 (solo JIT).  En el
     // interprete es NO-OP: el VEC_BINOP_S del cuerpo re-lee el escalar (operando
     // 2) por lane, asi que no necesita estado pre-difundido.

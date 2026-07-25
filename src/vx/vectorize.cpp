@@ -852,6 +852,23 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         bool is_scalar;
         IdentExpr *arr;
         ast::Expr *scal;
+        bool is_scaled_arr = false; // c OP (arr[i]*scal) -> VEC_FMA_S
+    };
+    // Hoja "array escalado": arr[i]*escalar o escalar*arr[i] (escalar
+    // invariante).  Es el segundo termino de a[i]*k1 + b[i]*k2.
+    auto as_scaled_arr = [&](ast::Expr *e, IdentExpr **base,
+                             ast::Expr **scal) -> bool {
+        if (!e || e->kind != NodeKind::BinaryExpr) return false;
+        auto *be = static_cast<BinaryExpr *>(e);
+        if (be->op != BinOp::Mul) return false;
+        IdentExpr *b = nullptr;
+        if (as_arr_c(be->lhs.get(), &b) && is_scalar_leaf(be->rhs.get())) {
+            *base = b; *scal = be->rhs.get(); return true;
+        }
+        if (as_arr_c(be->rhs.get(), &b) && is_scalar_leaf(be->lhs.get())) {
+            *base = b; *scal = be->lhs.get(); return true;
+        }
+        return false;
     };
     // Aplanado RECURSIVO con normalizacion de nodos CONMUTATIVOS: para Add/Mul
     // se puede intercambiar operandos (a OP b == b OP a, bit-exacto en IEEE)
@@ -875,7 +892,11 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
             IdentExpr *lb = nullptr;
             const bool arr = as_arr_c(leaf, &lb);
             const bool scal = !arr && is_scalar_leaf(leaf);
-            if (!arr && !scal) return false; // hoja no vectorizable
+            IdentExpr *sab = nullptr;
+            ast::Expr *sscal = nullptr;
+            const bool scaled =
+                !arr && !scal && as_scaled_arr(leaf, &sab, &sscal);
+            if (!arr && !scal && !scaled) return false; // hoja no vectorizable
             const size_t save = S.size();
             IdentExpr *save_start = start_base;
             if (!flatten(prefix)) { // prefijo no es cadena -> restaurar
@@ -883,7 +904,11 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
                 start_base = save_start;
                 return false;
             }
-            S.push_back({so, scal, arr ? lb : nullptr, scal ? leaf : nullptr});
+            if (scaled)
+                S.push_back({so, false, sab, sscal, true}); // arr[i]*scal
+            else
+                S.push_back({so, scal, arr ? lb : nullptr,
+                             scal ? leaf : nullptr, false});
             return true;
         };
         if (try_chain(be->lhs.get(), be->rhs.get())) return true;
@@ -921,6 +946,19 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
                         (S[1].subop == 0 /*Add*/ || S[1].subop == 1 /*Sub*/);
     const bool fma_sub = is_fma && S[1].subop == 1;
 
+    // Pasos "array escalado" (c OP a[i]*k, p.ej. el 2o termino de a*k1 + b*k2):
+    // se bajan a VEC_FMA_S (c += a*k), que requiere VFMADD (AVX).  Solo subop
+    // Add/Sub (el Sub se maneja negando el escalar).  Mul/Div de un array
+    // escalado no encaja -> bail.
+    bool has_scaled = false;
+    for (const auto &st : S) {
+        if (st.is_scaled_arr) {
+            has_scaled = true;
+            if (st.subop != 0 && st.subop != 1) return false;
+        }
+    }
+    if (has_scaled && !can_fma) return false; // VFMADD requiere AVX
+
     if (MC_DBG)
         std::fprintf(stderr,
                      "[mc-idiom] MATCH compound idx=%s steps=%zu scalars=%d\n",
@@ -950,7 +988,25 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
     std::vector<int> step_sidx(S.size(), -1);
     int next_sidx = 0;
     for (size_t k = 0; k < S.size(); ++k) {
-        if (S[k].is_scalar) {
+        if (S[k].is_scaled_arr) {
+            // array base + escalar difundido; c += arr*k (VEC_FMA_S).  Sub ->
+            // c - arr*k = c + arr*(-k): negamos el escalar aqui.
+            const ir::IrValueId vb = lower_expr(S[k].arr);
+            if (vb == ir::IR_NO_VALUE) return false;
+            step_base[k] = vb;
+            ir::IrValueId raw = lower_expr(S[k].scal);
+            if (raw == ir::IR_NO_VALUE) return false;
+            raw = cast_if_needed(raw, fn_->values[raw].type, elem_ty, ln);
+            if (S[k].subop == 1) { // Sub -> negar el escalar
+                const ir::IrValueId neg = fn_->new_value(elem_ty);
+                ir::IrInstr fn{}; fn.op = ir::IrOp::FNEG; fn.type = elem_ty;
+                fn.dst = neg; fn.operands = {raw}; fn.source_line = ln;
+                fn_->append(current_block_, std::move(fn));
+                raw = neg;
+            }
+            step_scalar[k] = raw;
+            step_sidx[k] = next_sidx++;
+        } else if (S[k].is_scalar) {
             const ir::IrValueId raw = lower_expr(S[k].scal);
             if (raw == ir::IR_NO_VALUE) return false;
             // Escalar al tipo del elemento (F32 o F64) para que el broadcast y
@@ -964,6 +1020,9 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
             step_base[k] = vb;
         }
     }
+    // Los broadcasts (escalares + escalados) viven en XMM10-13 (4 regs, sidx
+    // 0-3).  Mas de 4 colisionaria con regs allocatables -> bail.
+    if (next_sidx > 4) return false;
     const ir::IrType idx_ty = fn_->values[i_init].type;
 
     auto bin = [&](ir::IrOp op, ir::IrType ty, ir::IrValueId a,
@@ -988,7 +1047,7 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
     const ir::IrValueId v_W = emit_const(idx_ty, (uint64_t)W, ln);
     const ir::IrValueId v_esz = emit_const(ir::IrType::I64, esz, ln);
     for (size_t k = 0; k < S.size(); ++k) {
-        if (!S[k].is_scalar) continue;
+        if (!S[k].is_scalar && !S[k].is_scaled_arr) continue;
         ir::IrInstr bc{};
         bc.op = ir::IrOp::VEC_BCAST; bc.type = elem_ty;
         bc.dst = ir::IR_NO_VALUE; bc.operands = {step_scalar[k]};
@@ -1053,7 +1112,18 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         } else
         for (size_t k = 0; k < S.size(); ++k) {
             const ir::IrValueId src0 = (k == 0) ? start_at : c_at; // acumulador
-            if (S[k].is_scalar) {
+            if (S[k].is_scaled_arr) {
+                // c += arr[i]*escalar (VEC_FMA_S lee/escribe c_at; escalar
+                // hoisted, ya negado si Sub).  Siempre k>=1 -> src0 == c_at.
+                const ir::IrValueId leaf_at = ptr_at(step_base[k], off);
+                ir::IrInstr vf{}; vf.op = ir::IrOp::VEC_FMA_S; vf.type = elem_ty;
+                vf.dst = ir::IR_NO_VALUE;
+                vf.operands = {c_at, leaf_at, step_scalar[k]};
+                vf.imm = width | (1ull << 16) |
+                         ((uint64_t)(step_sidx[k] & 0x7) << 17);
+                vf.source_line = ln;
+                fn_->append(current_block_, std::move(vf));
+            } else if (S[k].is_scalar) {
                 ir::IrInstr vb{}; vb.op = ir::IrOp::VEC_BINOP_S; vb.type = elem_ty;
                 vb.dst = ir::IR_NO_VALUE;
                 vb.operands = {c_at, src0, step_scalar[k]};
@@ -1125,9 +1195,17 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         };
         ir::IrValueId acc = load_el(v_start);
         for (size_t k = 0; k < S.size(); ++k) {
-            const ir::IrValueId rhs =
-                S[k].is_scalar ? step_scalar[k] : load_el(step_base[k]);
-            acc = bin(fop_of(S[k].subop), elem_ty, acc, rhs);
+            if (S[k].is_scaled_arr) {
+                // acc += arr[i]*escalar (escalar ya negado si Sub -> FADD).
+                const ir::IrValueId ai = load_el(step_base[k]);
+                const ir::IrValueId prod =
+                    bin(ir::IrOp::FMUL, elem_ty, ai, step_scalar[k]);
+                acc = bin(ir::IrOp::FADD, elem_ty, acc, prod);
+            } else {
+                const ir::IrValueId rhs =
+                    S[k].is_scalar ? step_scalar[k] : load_el(step_base[k]);
+                acc = bin(fop_of(S[k].subop), elem_ty, acc, rhs);
+            }
         }
         const ir::IrValueId c_at = ptr_at(v_c, off);
         ir::IrInstr st{}; st.op = ir::IrOp::STORE; st.type = elem_ty;

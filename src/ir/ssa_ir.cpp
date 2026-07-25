@@ -129,6 +129,7 @@ static const OpEntry OP_TABLE[] = {
     {"vec_acc_store", IrOp::VEC_ACC_STORE},
     {"vec_acc_combine", IrOp::VEC_ACC_COMBINE},
     {"vec_binop_s", IrOp::VEC_BINOP_S},
+    {"vec_fma_s", IrOp::VEC_FMA_S},
     {"vec_bcast", IrOp::VEC_BCAST},
     // aritmetica entera extendida (Math-IR-promote wave 4)
     {"iabs", IrOp::IABS},
@@ -583,7 +584,8 @@ static void print_instr(std::ostream &o, const IrFunction &fn,
         ins.op == IrOp::VEC_ACC_ZERO || ins.op == IrOp::VEC_ACC_ADD ||
         ins.op == IrOp::VEC_ACC_FMA || ins.op == IrOp::VEC_ACC_STORE ||
         ins.op == IrOp::VEC_ACC_COMBINE ||
-        ins.op == IrOp::VEC_BINOP_S || ins.op == IrOp::VEC_BCAST) {
+        ins.op == IrOp::VEC_BINOP_S || ins.op == IrOp::VEC_FMA_S ||
+        ins.op == IrOp::VEC_BCAST) {
         print_type = false;
     }
     if (print_type) o << "." << ir_type_name(ins.type);
@@ -807,6 +809,7 @@ static void print_instr(std::ostream &o, const IrFunction &fn,
     case IrOp::VEC_ACC_FMA:
     case IrOp::VEC_ACC_STORE:
     case IrOp::VEC_ACC_COMBINE:
+    case IrOp::VEC_FMA_S:
     case IrOp::VEC_BINOP_S:
         // vec_binop.fN %dst_ptr, %a_ptr[, %b_ptr]   imm=(subop<<8)|ancho.
         // La aridad varia entre estos ops (VEC_ACC_ZERO/COMBINE/STORE tienen 1

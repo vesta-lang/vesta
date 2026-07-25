@@ -157,6 +157,7 @@ static bool is_side_effecting(IrOp op) {
     case IrOp::VEC_ACC_FMA:
     case IrOp::VEC_ACC_STORE:
     case IrOp::VEC_ACC_COMBINE:
+    case IrOp::VEC_FMA_S:
     case IrOp::VEC_BINOP_S:
     case IrOp::VEC_BCAST:
     case IrOp::SETFIELD:
@@ -7665,7 +7666,8 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
             case IrOp::VEC_ACC_FMA:
             case IrOp::VEC_ACC_STORE:
             case IrOp::VEC_ACC_COMBINE:
-            case IrOp::VEC_BINOP_S:
+            case IrOp::VEC_FMA_S:
+    case IrOp::VEC_BINOP_S:
             case IrOp::VEC_BCAST:
             case IrOp::SETFIELD:
             case IrOp::ARRAY_STORE:
@@ -9109,7 +9111,8 @@ bool ir_pass_licm(IrFunction &fn, const analysis::PointsTo *pt,
                 case IrOp::VEC_ACC_FMA:
                 case IrOp::VEC_ACC_STORE:
                 case IrOp::VEC_ACC_COMBINE:
-                case IrOp::VEC_BINOP_S:
+                case IrOp::VEC_FMA_S:
+    case IrOp::VEC_BINOP_S:
                 // VEC_BCAST NO escribe memoria (broadcast escalar->registro) ->
                 // fuera de la lista de escrituras.
                 case IrOp::SETFIELD:
@@ -10451,6 +10454,7 @@ static bool is_sched_barrier(IrOp op) {
     case IrOp::VEC_ACC_FMA:
     case IrOp::VEC_ACC_STORE:
     case IrOp::VEC_ACC_COMBINE:
+    case IrOp::VEC_FMA_S:
     case IrOp::VEC_BINOP_S:
     case IrOp::VEC_BCAST:
     case IrOp::STRFINALIZE:
@@ -10537,7 +10541,8 @@ static bool is_store_like(IrOp op) {
            op == IrOp::VEC_FMA || op == IrOp::VEC_ACC_ZERO ||
            op == IrOp::VEC_ACC_ADD || op == IrOp::VEC_ACC_FMA ||
            op == IrOp::VEC_ACC_STORE || op == IrOp::VEC_ACC_COMBINE ||
-           op == IrOp::VEC_BINOP_S || op == IrOp::VEC_BCAST;
+           op == IrOp::VEC_BINOP_S || op == IrOp::VEC_FMA_S ||
+           op == IrOp::VEC_BCAST;
 }
 
 static bool is_load_like(IrOp op) {
@@ -10596,7 +10601,7 @@ bool ir_pass_schedule(IrFunction &fn, const analysis::PointsTo *pt,
                    : -1;
     };
     auto vec_reg_read = [](const IrInstr &ins) -> int {
-        if (ins.op == IrOp::VEC_BINOP_S &&
+        if ((ins.op == IrOp::VEC_BINOP_S || ins.op == IrOp::VEC_FMA_S) &&
             ((static_cast<uint64_t>(ins.imm) >> 16) & 1))
             return int((static_cast<uint64_t>(ins.imm) >> 17) & 0x7);
         return -1;

@@ -685,6 +685,14 @@ enum class IrOp : uint16_t {
     // No-op en el interprete (su VEC_BINOP_S re-lee el escalar por lane).
     // imm=ancho del chunk.  XMM13 = acc0; scalar-bcast y reduccion no coexisten
     // en un matcher de 1 sentencia, asi que reusar XMM13 es seguro.
+    // VEC_FMA_S dst[i] += a[i] * escalar  (element-wise, escalar difundido).
+    // Paso "array escalado" de un compound (c[i]=a[i]*k1 + b[i]*k2): c = c +
+    // b*k2 en 1 pasada, 1 redondeo (VFMADD231 reg-reg-reg).  El escalar esta
+    // pre-difundido en XMM(13-sidx) por un VEC_BCAST (hoisted).  El SUB se
+    // maneja negando el escalar en el matcher (c - b*k = c + b*(-k)).  Solo
+    // float.  operands = {dst_ptr, a_ptr, scalar_value}; imm = ancho |
+    // hoisted<<16 | sidx<<17.
+    VEC_FMA_S = 0xEC, ///< vec_fma_s.fN %dst, %a, %scalar  (dst += a*scalar)
     VEC_BCAST = 0xEB, ///< vec_bcast.fN %scalar
 
     // ---- intrinsics VM (0xF0-0xFF) ----
