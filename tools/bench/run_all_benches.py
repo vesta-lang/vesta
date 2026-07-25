@@ -54,7 +54,16 @@ LEGACY_SKIP_PATTERN = re.compile(
     r"100_reflection|get_time|test_vptr_loop)"
 )
 
-RUNS_PER_MODE = 3
+# Numero de runs medidos.  Los lenguajes NO interpretados (nativos / JIT) son
+# rapidos y muy sensibles al ruido del scheduler del SO -> se miden muchas veces
+# y se toma la mediana.  Los INTERPRETADOS (Python, interprete Vesta puro) son
+# lentos: 10 runs dispararian el tiempo total del harness sin ganar precision
+# relativa -> se miden pocas veces.
+RUNS_FAST = 10  # c/cpp/go/rust/java/vx_jit/vx_aot_* (no interpretados)
+RUNS_SLOW = 3   # python, vx_interp (interpretados/lentos)
+RUNS_PER_MODE = RUNS_FAST  # default de --runs (compat)
+# Lenguajes interpretados/lentos: se miden con RUNS_SLOW.
+INTERPRETED_LANGS = frozenset({"python", "vx_interp"})
 BENCH_TIMEOUT = 120.0  # algunos benches Python tardan minutos
 
 
@@ -1818,7 +1827,14 @@ def main() -> int:
               "Ej: --langs vx_jit,vx_aot_auto,c,rust"))
     parser.add_argument("--filter", type=str, default="",
                         help="Regex para filtrar benches por nombre")
-    parser.add_argument("--runs", type=int, default=RUNS_PER_MODE)
+    parser.add_argument("--runs", type=int, default=RUNS_FAST,
+                        help=("Runs medidos para lenguajes NO interpretados "
+                              "(nativos/JIT), rapidos y ruidosos (default %d)."
+                              % RUNS_FAST))
+    parser.add_argument("--runs-slow", type=int, default=RUNS_SLOW,
+                        help=("Runs medidos para lenguajes INTERPRETADOS "
+                              "(python, vx_interp), lentos (default %d)."
+                              % RUNS_SLOW))
     parser.add_argument("--timeout", type=float, default=BENCH_TIMEOUT)
     parser.add_argument("--no-plot", action="store_true")
     parser.add_argument("--out-json", type=str, default="bench_results.json")
@@ -2074,9 +2090,12 @@ def main() -> int:
                 env["VESTA_JIT_THRESHOLD"] = "4294967295"
 
             # Run + capturar TODOS los runs individuales (no solo mediana).
+            # Los no interpretados se miden mas veces (rapidos + ruidosos); los
+            # interpretados pocas (lentos).  --runs / --runs-slow lo overridean.
             warm = args.warmup
+            n_runs = args.runs_slow if ln in INTERPRETED_LANGS else args.runs
             label_run = (f"[{idx}/{len(benches)}] {b.name} | "
-                         f"{tc[ln].label} run ({args.runs}x"
+                         f"{tc[ln].label} run ({n_runs}x"
                          + (f"+{warm}W" if warm > 0 else "")
                          + ")")
             # Sprint bench-fair (2026-06-03): por default mode FAIR usa
@@ -2085,7 +2104,7 @@ def main() -> int:
             # (Vesta-lang usa --stats interno, otros wall externo).
             use_vx_wt = (not args.fair) and ln in ("vx_interp", "vx_jit")
             with Spinner(label_run, color=tc[ln].color):
-                runs_ms = all_runs(cmd, env=env, runs=args.runs,
+                runs_ms = all_runs(cmd, env=env, runs=n_runs,
                                     timeout=args.timeout, cwd=cwd,
                                     warmup=warm,
                                     use_vx_walltime=use_vx_wt)
@@ -2166,7 +2185,8 @@ def main() -> int:
     json_data = {
         "vm_binary": str(vm),
         "project_root": str(project_root),
-        "runs_per_mode": args.runs,
+        "runs_per_mode": args.runs,       # no interpretados
+        "runs_per_mode_slow": args.runs_slow,  # interpretados (python, vx_interp)
         "warmup_runs": args.warmup,
         "active_langs": active_langs,
         "elapsed_total_s": elapsed,
