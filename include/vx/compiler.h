@@ -392,6 +392,10 @@ struct CompileResult {
      * structs/arrays (futuros) tambien se beneficien del path VM.
      */
     bool has_lowerable_macros = false;
+    /// true si el modulo tiene candidatos de precomputo CTPE (fn evaluable
+    /// zero-param con retorno escalar).  Informativo; el plegado ocurre dentro
+    /// del emisor cuando VESTA_CTPE esta activo.
+    bool has_ctpe_candidates = false;
 
     /**
      * @brief por cada @Macro que el lowering rechazo

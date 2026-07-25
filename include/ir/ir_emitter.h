@@ -61,6 +61,11 @@ struct EmitOptions {
     bool emit_stackmaps = true;
     bool export_all = false; ///< exportar todas las funciones con @Export
     std::string module_name; ///< nombre @Module (vacio = usar mod.name)
+    /// CTPE (opt-in): si != nullptr, TRAS optimizar se ejecutan los candidatos
+    /// de precomputo (fn evaluable zero-param) en este @c vx::ComptimeRuntime
+    /// (opaco aqui) y se inyecta el resultado escalar como CONST.  nullptr = sin
+    /// CTPE (comportamiento normal, cero coste).
+    void *ctpe_runtime = nullptr;
 };
 
 /**

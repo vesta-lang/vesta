@@ -34,6 +34,17 @@
 #include <iostream>
 
 #include "vx/comptime/comptime_collect.h"
+#include "vx/comptime/comptime_vm.h"
+#include "ctpe/evaluable.h"
+#include <memory>
+
+// Fwd-decl de run_worker (evita arrastrar assembler_multiprocess.h -> json.hpp,
+// que no esta en el include path del frontend).  Firma exacta del header.
+namespace asm_multi_process {
+int run_worker(const std::string &file_name, const std::string &output_prefix,
+                bool skip_preprocessor, bool keep_labels,
+                const std::vector<uint8_t> *ir_section_bytes, bool emit_map);
+}
 #include "vx/type_checker.h"
 
 #include "port/transpiler_base.h"
@@ -1125,6 +1136,55 @@ CompileResult compile_vx_source(const std::string &source,
         /*  AOT: modulo completo (functions + static_data + globals) para
          * que el driver -m aot materialice los literales en .rodata. */
         res.ir_module_cache_bytes = ir::emit_ir_module_cache(irmod_for_section);
+    }
+
+    // --- CTPE (opt-in VESTA_CTPE): precomputo de programas completos. ---
+    // Si el modulo tiene candidatos (fn evaluable zero-param con retorno escalar,
+    // p.ej. un `main` puro), se construye un ComptimeRuntime a partir del .velb
+    // del modulo y el emisor pliega el resultado como CONST.  Es un dos-fases
+    // AUTOCONTENIDO: emit sin plegar -> ensamblar a .velb temporal -> cargar el
+    // runtime -> re-emitir con el runtime activo (el fold vive dentro del emisor).
+    // Gated opt-in: cero efecto sobre compiles normales hasta validarlo.
+    std::unique_ptr<vx::ComptimeRuntime> ctpe_rt;
+    if (std::getenv("VESTA_CTPE") && opts.opt_level >= 2 &&
+        !res.ir_section_bytes.empty()) {
+        ctpe::Evaluability ev = ctpe::compute_evaluability(irmod);
+        std::vector<ctpe::Candidate> cands = ctpe::find_candidates(irmod, ev);
+        res.has_ctpe_candidates = !cands.empty();
+        if (res.has_ctpe_candidates) {
+            // 1) Emit UNFOLDED -> temp .vel -> temp .velb (ensamblado).
+            ir::EmitResult e1 = ir::ir_emit_module(irmod, emit_opts);
+            if (e1.ok) {
+                std::error_code ec;
+                std::filesystem::create_directories(".cache/ctpe/tmp", ec);
+                std::string base =
+                    ".cache/ctpe/tmp/ctpe_" +
+                    std::to_string(std::hash<std::string>{}(e1.vel_text));
+                std::string tvel = base + ".vel";
+                {
+                    std::ofstream o(tvel, std::ios::binary);
+                    o << e1.vel_text;
+                }
+                // Ensamblar el .vel a un .velb con su seccion @ir (para que el
+                // runtime pueda compilar main en JIT y ejecutarlo).
+                int rc = asm_multi_process::run_worker(
+                    tvel, base, /*skip_preprocessor=*/true,
+                    /*keep_labels=*/false, &res.ir_section_bytes,
+                    /*emit_map=*/false);
+                if (rc == 0) {
+                    std::ifstream vf(base + ".velb", std::ios::binary);
+                    std::vector<uint8_t> velb(
+                        (std::istreambuf_iterator<char>(vf)),
+                        std::istreambuf_iterator<char>());
+                    if (!velb.empty()) {
+                        // 2) Cargar el runtime; el re-emit de abajo pliega.
+                        ctpe_rt = std::make_unique<vx::ComptimeRuntime>();
+                        if (ctpe_rt->load_macros_from_bytes(std::move(velb)))
+                            emit_opts.ctpe_runtime = ctpe_rt.get();
+                    }
+                }
+            }
+        }
     }
 
     ir::EmitResult eres = ir::ir_emit_module(irmod, emit_opts);

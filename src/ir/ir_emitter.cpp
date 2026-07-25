@@ -38,6 +38,7 @@
 #include "ir/ir_emitter.h"
 #include "ir/gc_safepoint.h" // pase compartido: raices GC por safepoint
 #include "ir/ir_optimizer.h"
+#include "ctpe/fold.h"
 #include "ir/liveness.h"
 #include "codegen/vm_allocate.h"
 #include "ir/regalloc.h"
@@ -6559,6 +6560,14 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
 
     // Aplicar optimizaciones IR
     ir_optimize(mod, opts.opt_level);
+
+    // CTPE (opt-in): tras optimizar, ejecuta los candidatos de precomputo en el
+    // ComptimeRuntime dado e inyecta el resultado escalar como CONST.  Solo si el
+    // caller paso un runtime (fase 2 del CTPE); nullptr = comportamiento normal.
+    if (opts.ctpe_runtime) {
+        ctpe::fold(mod,
+                   *reinterpret_cast<vx::ComptimeRuntime *>(opts.ctpe_runtime));
+    }
 
     // Reordenamiento PROPIO del interp (post-IR): el list-scheduler del IR
     // (ILP para las ISAs de JIT/AOT) puede separar el add de direccion de su
