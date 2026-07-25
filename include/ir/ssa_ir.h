@@ -1024,6 +1024,9 @@ struct IrBlock {
     std::vector<IrBlockId>
         preds; ///< bloques predecesores (para consistencia de Phi)
     std::vector<IrBlockId> succs; ///< bloques sucesores
+    /// Marcador transitorio (no serializado): el unroller lo pone en el header
+    /// del REMAINDER y del bucle unrollado para no re-desenrollarlos.
+    bool no_unroll = false;
 };
 
 // =========================================================================

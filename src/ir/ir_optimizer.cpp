@@ -12,6 +12,7 @@
 
 #include "ir/ir_optimizer.h"
 #include "ir/passes/if_conversion.h"     // diamante/if-anidado -> SELECT (Capa 1)
+#include "ir/passes/unroll.h"            // desenrollado de bucles (factor automatico)
 #include "ir/passes/select_simplify.h"   // canonicalizacion algebraica de SELECT
 #include "analysis/facts/ir_facts.h"     // hechos (def-use) para el modelo de efectos
 #include "analysis/effects/ir_effects.h"       // modelo unico de efectos (consumidor DCE, A/B)
@@ -11742,6 +11743,27 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
         for (auto &fn : mod.functions) {
             if (fn.is_native) continue;
             ir_pass_escape_detect_gc(fn);
+        }
+    }
+
+    /* Desenrollado de bucles: tras el fix-point (el cuerpo ya esta inlineado/
+     * optimizado -> las metricas reflejan el cuerpo FINAL) y ANTES del
+     * scheduling (que vera el cuerpo desenrollado con mas ILP).  El
+     * transformador NO decide el factor: lo hace la politica (unroll_policy)
+     * sobre metricas NEUTRALES.  Beneficia a los 3 backends: el interprete
+     * ahorra despachos de la guarda/incremento, JIT/AOT exponen ILP y rompen la
+     * dependencia del acumulador de los bucles reducidos.  Tras clonar, una
+     * limpieza local (copy-prop + CSE + const-fold + DCE) optimiza las copias
+     * (dedup de direcciones, plegado de indices).  Kill: VESTA_NO_UNROLL=1. */
+    if (level >= OptLevel::O2) {
+        for (auto &fn : mod.functions) {
+            if (fn.is_native) continue;
+            if (ir_pass_unroll(fn)) {
+                ir_pass_copy_prop(fn);
+                ir_pass_cse(fn);
+                ir_pass_const_fold(fn);
+                ir_pass_dce(fn);
+            }
         }
     }
 

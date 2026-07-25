@@ -27,6 +27,7 @@ LANG_COLORS = {
     "python":       "#17becf",  # cyan
     "java":         "#d62728",  # rojo
     "go":           "#007d9c",  # teal Go (distinto del cyan de python)
+    "rust":         "#CE422B",  # naranja de marca Rust (distinto del gris fallback)
 }
 
 # Labels formateados.
@@ -41,6 +42,7 @@ LANG_LABELS = {
     "python":       "Python",
     "java":         "Java",
     "go":           "Go (gc)",
+    "rust":         "Rust (rustc -O)",
 }
 
 
