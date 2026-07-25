@@ -1797,6 +1797,8 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     };
     ast::IdentExpr *a_base = nullptr, *b_base = nullptr;
     bool is_fma = false;
+    bool is_scalar_fma = false; // acc += a[i]*c (c invariante) -> FMA con bcast
+    ast::Expr *c_expr = nullptr;
     if (rhs->rhs && rhs->rhs->kind == NodeKind::IndexExpr) {
         // reduccion simple: acc += a[i]
         a_base = check_idx_base(rhs->rhs.get());
@@ -1807,8 +1809,27 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
         if (mul->op != BinOp::Mul || !elem_fp) return false;
         a_base = check_idx_base(mul->lhs.get());
         b_base = check_idx_base(mul->rhs.get());
-        if (!a_base || !b_base) return false;
-        is_fma = true;
+        if (a_base && b_base) {
+            is_fma = true; // a[i]*b[i]
+        } else {
+            // scalar-factor: acc += a[i]*c  o  c*a[i]  (c loop-invariante).
+            // El array queda en a_base; el escalar (invariante) en c_expr.  Se
+            // difunde a un buffer host y se reusa la maquinaria VFMADD.
+            ast::Expr *scal_e = nullptr;
+            if (a_base) {
+                scal_e = mul->rhs.get(); // a[i] * c
+            } else if (b_base) {
+                a_base = b_base;         // c * a[i]  -> array a la izquierda
+                b_base = nullptr;
+                scal_e = mul->lhs.get();
+            } else {
+                return false;
+            }
+            if (!scal_e || mc_expr_refs_ident(scal_e, idx_name)) return false;
+            c_expr = scal_e;
+            is_fma = true;
+            is_scalar_fma = true;
+        }
     } else {
         return false;
     }
@@ -1859,11 +1880,23 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     const ir::IrValueId i_init =
         vl.for_init ? lower_expr(vl.for_init) : lookup(idx_name);
     const ir::IrValueId v_a = lower_expr(a_base);
-    const ir::IrValueId v_b = is_fma ? lower_expr(b_base) : ir::IR_NO_VALUE;
+    // v_b: el array b (dot-product) o el buffer host difundido (scalar-factor,
+    // se llena mas abajo en el entry).  v_c: el escalar (scalar-factor), usado
+    // por la cola directamente.
+    ir::IrValueId v_b = ir::IR_NO_VALUE;
+    ir::IrValueId v_c = ir::IR_NO_VALUE;
+    if (is_scalar_fma) {
+        const ir::IrValueId raw = lower_expr(c_expr);
+        if (raw == ir::IR_NO_VALUE) return false;
+        v_c = cast_if_needed(raw, fn_->values[raw].type, elem_ty, ln);
+    } else if (is_fma) {
+        v_b = lower_expr(b_base);
+    }
     const ir::IrValueId v_N = lower_expr(vl.limit);
     if (acc_binding == ir::IR_NO_VALUE || i_init == ir::IR_NO_VALUE ||
         v_a == ir::IR_NO_VALUE || v_N == ir::IR_NO_VALUE ||
-        (is_fma && v_b == ir::IR_NO_VALUE))
+        (is_fma && !is_scalar_fma && v_b == ir::IR_NO_VALUE) ||
+        (is_scalar_fma && v_c == ir::IR_NO_VALUE))
         return false;
     // Resolver el valor inicial (acc_init) y, si es memory-based, el slot
     // externo (acc_slot_ext) al que escribir el resultado final.
@@ -1946,6 +1979,27 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
         az.imm = acc_imm(u, 0); az.source_line = ln;
         fn_->append(entry, std::move(az));
     }
+    // Scalar-factor (acc += a[i]*c): difundir el escalar c a un buffer host de
+    // U*width bytes (U*W elementos) UNA vez.  El VFMADD del cuerpo lo lee como
+    // el "array b" (cada lane = c); la cola escalar usa v_c directamente.  El
+    // buffer cubre el rango de disp del unroll (0..(U-1)*width).
+    if (is_scalar_fma) {
+        v_b = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_b].is_host_ptr = true;
+        ir::IrInstr al{}; al.op = ir::IrOp::ALLOCA; al.type = ir::IrType::I8;
+        al.dst = v_b; al.imm = static_cast<int64_t>(U * width);
+        al.host_alloca = true; al.source_line = ln;
+        fn_->append(entry, std::move(al));
+        for (uint64_t e = 0; e < U * W; ++e) {
+            ir::IrValueId at = v_b;
+            if (e > 0)
+                at = ptr_at(v_b, emit_const(ir::IrType::I64, e * esz, ln));
+            ir::IrInstr st{}; st.op = ir::IrOp::STORE; st.type = elem_ty;
+            st.dst = ir::IR_NO_VALUE; st.operands = {v_c, at};
+            st.source_line = ln;
+            fn_->append(entry, std::move(st));
+        }
+    }
     const ir::IrValueId v_W = emit_const(idx_ty, (uint64_t)W, ln);
     const ir::IrValueId v_UW = emit_const(idx_ty, (uint64_t)(U * W), ln);
     const ir::IrValueId v_esz = emit_const(ir::IrType::I64, esz, ln);
@@ -1990,7 +2044,11 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     const ir::IrValueId off_base =
         bin(ir::IrOp::MUL, ir::IrType::I64, iu64, v_esz);
     const ir::IrValueId a_at0 = ptr_at(v_a, off_base);
-    const ir::IrValueId b_at0 = is_fma ? ptr_at(v_b, off_base) : ir::IR_NO_VALUE;
+    // scalar-factor: b = c_buf FIJO (no avanza con el loop; el VEC_ACC_FMA ya
+    // suma el disp de pieza, que cabe en los U*W elementos del buffer).
+    const ir::IrValueId b_at0 = is_scalar_fma ? v_b
+                                : is_fma ? ptr_at(v_b, off_base)
+                                         : ir::IR_NO_VALUE;
     for (uint8_t u = 0; u < U; ++u) {
         const uint64_t disp = (uint64_t)u * W * esz; // constante de pieza
         ir::IrInstr v{}; v.type = elem_ty; v.dst = ir::IR_NO_VALUE;
@@ -2056,7 +2114,8 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
         const ir::IrValueId off = bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
         const ir::IrValueId a_at = ptr_at(v_a, off);
         if (is_fma) {
-            const ir::IrValueId b_at = ptr_at(v_b, off);
+            // scalar-factor: b = c_buf FIJO (imm=width -> disp 0, dentro de W).
+            const ir::IrValueId b_at = is_scalar_fma ? v_b : ptr_at(v_b, off);
             ir::IrInstr vf{}; vf.op = ir::IrOp::VEC_ACC_FMA; vf.type = elem_ty;
             vf.dst = ir::IR_NO_VALUE;
             vf.operands = {acc_slot, a_at, b_at}; // acc += a*b
@@ -2140,7 +2199,11 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
         const ir::IrValueId off = bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
         const ir::IrValueId ai = load_el(ptr_at(v_a, off));
         ir::IrValueId addend = ai;
-        if (is_fma) {
+        if (is_scalar_fma) {
+            // a[i]*c: el escalar directo (el buffer solo tiene U*W elementos;
+            // en la cola i puede exceder ese rango).
+            addend = bin(ir::IrOp::FMUL, elem_ty, ai, v_c);
+        } else if (is_fma) {
             const ir::IrValueId bi = load_el(ptr_at(v_b, off));
             addend = bin(ir::IrOp::FMUL, elem_ty, ai, bi); // a[i]*b[i]
         }

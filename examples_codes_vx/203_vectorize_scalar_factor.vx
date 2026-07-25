@@ -1,0 +1,28 @@
+namespace ejemplos.vectorize_scalar_factor;
+
+// =============================================================================
+// 203_vectorize_scalar_factor.vx
+//
+// Auto-vectorizacion de una REDUCCION con factor escalar invariante:
+//   for (i)  acc = acc + a[i] * c;        (o conmutado  c * a[i])
+// (a puntero f32|f64 HOST, c escalar loop-invariante, acc acumulador float).
+//
+// Antes bailaba (el matcher de reduccion exigia a[i]*b[i], dos arrays).  Ahora
+// el escalar c se DIFUNDE a un buffer host de U*W elementos UNA vez y se reusa
+// la maquinaria VFMADD231 del dot-product: por chunk, acc_lanes += a * c.  La
+// cola escalar usa c directamente (el buffer solo cubre el chunk).  1 redondeo
+// por lane (fused), igual que el dot-product.
+//
+//   vm --vx examples_codes_vx/203_vectorize_scalar_factor.vx -o sf
+//   vm --run sf.velb --stats                 # R00 == 3825
+// =============================================================================
+
+i64 main() {
+    f64* a = malloc(400);
+    f64 c = 3.0;
+    for (i32 i = 0; i < 50; i++) { a[i] = (f64)(i + 1); }
+    f64 acc = 0.0;
+    for (i32 i = 0; i < 50; i++) { acc = acc + a[i] * c; } // -> VFMADD con bcast
+    free(a);
+    return (i64) acc;   // c * sum(1..50) = 3 * 1275 = 3825
+}
