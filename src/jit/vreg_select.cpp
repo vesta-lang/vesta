@@ -436,6 +436,17 @@ inline int canon_gp_to_mreg(const std::string &c) {
 
 } // namespace
 
+// Watchdog CTPE: direccion del handler de safepoint (0 = desactivado).  Es
+// thread_local porque cada hilo compila de forma aislada; lo setea
+// try_invoke_ctpe alrededor del eager-compile del programa a precomputar.  Con
+// != 0, vreg_select emite un poll de safepoint en cada back-edge (loop) para
+// que el temporizador pueda abortar el precomputo si excede el presupuesto.
+static thread_local uint64_t g_ctpe_sp_handler = 0;
+
+void vreg_set_ctpe_safepoint_handler(uint64_t handler_addr) noexcept {
+    g_ctpe_sp_handler = handler_addr;
+}
+
 bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  const CallResolver &resolve_call, const VregEntries &ent,
                  const CallResolver &resolve_native,
@@ -956,6 +967,17 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             mark(tt, true);
             mark(tf, false);
         }
+    }
+
+    // Watchdog CTPE: si esta activo (thread_local seteado por try_invoke_ctpe),
+    // internamos la direccion del handler de safepoint una vez para emitir un
+    // poll en cada back-edge (loop) y poder abortar el precomputo por tiempo.
+    // Fuera de CTPE (g_ctpe_sp_handler == 0) no se emite -> cero impacto en el
+    // JIT de produccion.
+    int sp_idx = -1;
+    if (g_ctpe_sp_handler != 0) {
+        sp_idx = static_cast<int>(
+            out.intern_imm64(static_cast<int64_t>(g_ctpe_sp_handler)));
     }
 
     for (size_t b = 0; b < NB; ++b) {
@@ -2696,6 +2718,12 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 flush_pending();
                 const ir::IrBlockId t = in.target_block;
                 emit_phi_copies(t); // pred 1-succ: seguro
+                // Watchdog CTPE: poll de safepoint antes de un back-edge (salto
+                // hacia atras = loop) para poder abortar el precomputo.
+                if (sp_idx >= 0 && t <= b) {
+                    O.push_back(MInstr::make_safepoint(
+                        static_cast<uint32_t>(sp_idx)));
+                }
                 // Fall-through: los bloques se emiten en orden 0..NB, asi que un
                 // BR al bloque SIGUIENTE (b+1) es un `jmp` a la instruccion que
                 // le sigue -> redundante.  Se omite (cae por fall-through).
@@ -2720,6 +2748,13 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 }
                 const ir::IrValueId cond = in.operands[0];
+
+                // Watchdog CTPE: poll de safepoint si alguna rama es un
+                // back-edge (do-while: la condicion salta hacia atras al cuerpo).
+                if (sp_idx >= 0 && (tt <= b || tf <= b)) {
+                    O.push_back(MInstr::make_safepoint(
+                        static_cast<uint32_t>(sp_idx)));
+                }
 
                 // La rama FALSE cae por fall-through si su target es el bloque
                 // siguiente (b+1) -> se omite el `jmp` redundante.

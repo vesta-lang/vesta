@@ -36,6 +36,7 @@
 #include "vx/comptime/comptime_collect.h"
 #include "vx/comptime/comptime_vm.h"
 #include "ctpe/evaluable.h"
+#include "jit/auto_jit.h"
 #include <memory>
 
 // Fwd-decl de run_worker (evita arrastrar assembler_multiprocess.h -> json.hpp,
@@ -1138,16 +1139,21 @@ CompileResult compile_vx_source(const std::string &source,
         res.ir_module_cache_bytes = ir::emit_ir_module_cache(irmod_for_section);
     }
 
-    // --- CTPE (opt-in VESTA_CTPE): precomputo de programas completos. ---
+    // --- CTPE (on por defecto; VESTA_NO_CTPE desactiva): precomputo del
+    //     programa completo. ---
     // Si el modulo tiene candidatos (fn evaluable zero-param con retorno escalar,
     // p.ej. un `main` puro), se construye un ComptimeRuntime a partir del .velb
     // del modulo y el emisor pliega el resultado como CONST.  Es un dos-fases
     // AUTOCONTENIDO: emit sin plegar -> ensamblar a .velb temporal -> cargar el
     // runtime -> re-emitir con el runtime activo (el fold vive dentro del emisor).
-    // Gated opt-in: cero efecto sobre compiles normales hasta validarlo.
+    // Solo actua si hay candidato (main puro): el 99% de programas con I/O no lo
+    // son -> sin coste.  Watchdog de 3s (VESTA_CTPE_MS) evita colgar el compile.
     std::unique_ptr<vx::ComptimeRuntime> ctpe_rt;
-    if (std::getenv("VESTA_CTPE") && opts.opt_level >= 2 &&
-        !res.ir_section_bytes.empty()) {
+    // No en modulos con @Macro: el precomputo ya lo hace la maquinaria de macros
+    // (comptime) y su two-phase (VESTA_MC_PREBUILT) choca con el two-phase de
+    // CTPE.  Ademas los macros dejan un runtime comptime propio que conflictua.
+    if (!std::getenv("VESTA_NO_CTPE") && opts.opt_level >= 2 &&
+        !res.ir_section_bytes.empty() && !res.has_lowerable_macros) {
         ctpe::Evaluability ev = ctpe::compute_evaluability(irmod);
         std::vector<ctpe::Candidate> cands = ctpe::find_candidates(irmod, ev);
         res.has_ctpe_candidates = !cands.empty();
@@ -1177,7 +1183,12 @@ CompileResult compile_vx_source(const std::string &source,
                         (std::istreambuf_iterator<char>(vf)),
                         std::istreambuf_iterator<char>());
                     if (!velb.empty()) {
-                        // 2) Cargar el runtime; el re-emit de abajo pliega.
+                        // 2) Cargar el runtime; el re-emit de abajo pliega.  El
+                        // handler de safepoint se activa AQUI (no en
+                        // try_invoke_ctpe) porque main se JIT-compila durante
+                        // load_macros_from_bytes -- antes de invocarlo.  Asi su
+                        // codigo lleva los polls del watchdog.  Reset tras el emit.
+                        jit::jit_set_ctpe_safepoint(jit::jit_safepoint_handler_addr());
                         ctpe_rt = std::make_unique<vx::ComptimeRuntime>();
                         if (ctpe_rt->load_macros_from_bytes(std::move(velb)))
                             emit_opts.ctpe_runtime = ctpe_rt.get();
@@ -1188,6 +1199,9 @@ CompileResult compile_vx_source(const std::string &source,
     }
 
     ir::EmitResult eres = ir::ir_emit_module(irmod, emit_opts);
+    // Fin del modo CTPE: apagar los polls de safepoint para no afectar a los
+    // compiles del JIT en runtime ni a los @Macro del lenguaje.
+    jit::jit_set_ctpe_safepoint(0);
     if (!eres.ok) {
         // Volcar el error del emisor al sumidero unificado.
         SourceLoc loc;

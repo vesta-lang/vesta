@@ -88,20 +88,43 @@ void save_cache(uint64_t key, const CacheMap &m) {
     }
 }
 
-// Reescribe el cuerpo de @p fn a un unico bloque `%r = CONST value; ret %r`.
-// La funcion es zero-param evaluable con retorno escalar; su computacion entera
-// se sustituye por el valor precomputado.
+// Reescribe el cuerpo de @p fn a `[call __module_init*]; %r = CONST value; ret %r`.
+// La funcion es zero-param evaluable con retorno escalar; su COMPUTACION se
+// sustituye por el valor precomputado.  PERO se PRESERVAN las llamadas a
+// `__module_init*` (registro de clases/aspectos en el ClassRegistry global):
+// ese efecto PERSISTE mas alla de main -- si el .velb se carga como modulo via
+// loadmodule, el caller usa las clases registradas.  Plegarlas a un simple
+// CONST las descartaria y romperia la carga cross-modulo (bug loadmod).  Para
+// un programa standalone el __module_init es inofensivo (registra y sigue).
 void replace_body_with_const(ir::IrFunction &fn, uint64_t value, ir::IrType t) {
+    // Recolectar los nombres de las llamadas a __module_init* del cuerpo actual
+    // (en orden) ANTES de limpiar.  Son CALL void sin operandos (registro global).
+    std::vector<std::string> module_inits;
+    for (const auto &blk : fn.blocks)
+        for (const auto &in : blk.instrs)
+            if ((in.op == ir::IrOp::CALL || in.op == ir::IrOp::TAILCALL) &&
+                in.func_name.rfind("__module_init", 0) == 0)
+                module_inits.push_back(in.func_name);
+
     fn.blocks.clear();
     fn.values.clear();
     fn.params.clear();
 
+    ir::IrBlock entry;
+    entry.name = "entry_0";
+
+    // Preservar el registro de modulo (efecto persistente para plugins).
+    for (const auto &mi : module_inits) {
+        ir::IrInstr call{};
+        call.op = ir::IrOp::CALL;
+        call.type = ir::IrType::VOID;
+        call.func_name = mi;
+        entry.instrs.push_back(std::move(call));
+    }
+
     const ir::IrValueId cst = fn.new_value(t);
     fn.values[cst].is_const = true;
     fn.values[cst].const_val = value;
-
-    ir::IrBlock entry;
-    entry.name = "entry_0";
 
     ir::IrInstr c{};
     c.op = ir::IrOp::CONST;

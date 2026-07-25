@@ -31,7 +31,9 @@
 #include "jit/auto_jit.h"         /*   : eager-compile macros */
 #include "ffi/virtual_lib_registry.h" /* #3: resolver vrt:* en el JIT del CV */
 #include "jit/jit_compiler.h" /* CompileResult */
+#include "jit/vreg_pipeline.h" /* CTPE: vreg_set_ctpe_safepoint_handler */
 
+#include <atomic>
 #include <chrono>
 #include <cstdio> //   : snprintf para hex-encode del hash
 #include <cstring>
@@ -301,7 +303,6 @@ bool ComptimeRuntime::try_invoke_ctpe(const std::string &fn_name,
                                       const std::vector<uint64_t> &args,
                                       const CtpeBudget &budget,
                                       uint64_t &out_r0) noexcept {
-    (void)budget; // TODO: watchdog de tiempo + tope de heap.
     if (!impl_ || !impl_->proc) return false;
     auto &execs = impl_->mgr.loader.executables;
     if (execs.empty()) return false;
@@ -319,6 +320,10 @@ bool ComptimeRuntime::try_invoke_ctpe(const std::string &fn_name,
             fnit->second < exe->ir_functions.size()) {
             const uint32_t saved_th = jit::g_jit_threshold;
             if (saved_th == UINT32_MAX) jit::g_jit_threshold = 1;
+            // El handler de safepoint (watchdog) lo activa el orquestador CTPE
+            // (compiler.cpp) ANTES de load_macros_from_bytes -- porque main se
+            // JIT-compila al cargar el .velb, antes de este eager_compile.  Aqui
+            // solo compilamos; el codigo ya lleva los polls.
             try {
                 jit::CompileResult res = jit::eager_compile_function(
                     exe->ir_functions[fnit->second], &exe->ir_lookup,
@@ -332,6 +337,15 @@ bool ComptimeRuntime::try_invoke_ctpe(const std::string &fn_name,
         }
     }
 
+    // 1.5) Requerir JIT: CTPE solo ejecuta el programa si su entry (main)
+    //      JIT-compilo.  El watchdog de tiempo vive en el poll de safepoint que
+    //      emite el JIT en cada back-edge; el interprete no lo tiene, asi que un
+    //      main NO-JIT-able podria colgar la compilacion sin abortar.  Si no hay
+    //      codigo nativo -> no plegar (fallback: corre en runtime normal).
+    auto pcit = macro_entry_pc_.find(fn_name);
+    if (pcit == macro_entry_pc_.end()) return false;
+    if (!impl_->jit_code_by_pc.count(pcit->second)) return false;
+
     // 2) Sandbox CTPE: DENEGAR las capacidades externas.  Cualquier op que las
     //    use (CALLN/dlopen/spawn/msgsend-remoto/loadmod/...) trapea -> FatalError
     //    -> el catch(...) de invoke_simple_macro devuelve false -> fallback.  Se
@@ -344,7 +358,46 @@ bool ComptimeRuntime::try_invoke_ctpe(const std::string &fn_name,
     const uint32_t saved_bits = exe->caps.bits;
     exe->caps.bits = saved_bits & ~deny;
 
+    // 3) Watchdog de tiempo: hilo temporizador que, al vencer el presupuesto,
+    //    pide abortar (vrt_ctpe_request_abort) y patea el safepoint_flag.  El
+    //    poll del JIT lo consulta en el proximo back-edge -> throw_fatal ->
+    //    invoke_simple_macro devuelve false -> no se pliega.  Configurable por
+    //    VESTA_CTPE_MS (default = budget.millis, o 3000).
+    uint32_t ms = budget.millis ? budget.millis : 3000;
+    if (const char *env = std::getenv("VESTA_CTPE_MS")) {
+        char *end = nullptr;
+        const unsigned long v = std::strtoul(env, &end, 10);
+        if (end != env) ms = static_cast<uint32_t>(v);
+    }
+    std::atomic<bool> done{false};
+    runtime::ProcessVM *proc_ptr = impl_->proc;
+    proc_ptr->ctpe_abort = 0;
+    proc_ptr->ctpe_did_abort = 0;
+    std::thread watch([&done, ms, proc_ptr]() {
+        uint32_t waited = 0;
+        while (waited < ms) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            if (done.load(std::memory_order_relaxed)) return;
+            waited += 5;
+        }
+        // Deadline: marcar aborto ANTES de patear el flag (evita la carrera en
+        // que el poll ve el flag pero aun no el aborto).  Ambos viven en el
+        // ProcessVM -> el handler (en vesta_rt) ve la misma instancia.
+        proc_ptr->ctpe_abort = 1;
+        proc_ptr->safepoint_flag = 1;
+    });
+
     const bool ok = invoke_simple_macro(fn_name, args, out_r0);
+
+    done.store(true, std::memory_order_relaxed);
+    watch.join();
+    const bool aborted = proc_ptr->ctpe_did_abort != 0;
+    proc_ptr->ctpe_abort = 0;
+    proc_ptr->safepoint_flag = 0;
+    proc_ptr->ctpe_did_abort = 0;
+    // El watchdog aborto la ejecucion (longjmp): el resultado seria parcial ->
+    // NO plegar (fallback: main corre en runtime).
+    if (aborted) return false;
 
     exe->caps.bits = saved_bits; // restaurar: NO afectar a los @Macro.
     return ok;

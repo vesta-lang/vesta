@@ -1132,6 +1132,38 @@ int main(int argc, char *argv[]) {
 
     if (result.count("help")) {
         vesta::scout() << options.help() << std::endl;
+        vesta::scout() <<
+            R"(Variables de entorno:
+
+  CTPE (precomputo del programa completo en tiempo de compilacion):
+    Ejecuta el main puro (sin I/O, FFI ni memoria cross-proceso) durante la
+    compilacion e inyecta su resultado como constante.  Activo por defecto.
+    VESTA_NO_CTPE            Desactiva CTPE.
+    VESTA_CTPE_MS=N          Presupuesto del watchdog en ms (default 3000); si
+                             el main tarda mas, se aborta y corre en runtime.
+    VESTA_CTPE_DEBUG=1       Traza el analisis (funciones evaluables + candidato).
+
+  JIT:
+    VESTA_JIT_THRESHOLD=N    Invocaciones para disparar auto-JIT en runtime
+                             (UINT32_MAX = desactivado; equivale a -m vm).
+    VESTA_JIT_WARN_UNSUPPORTED=1  Avisa de ops IR que el selector no compila.
+    VESTA_JIT_DISASM=1       Vuelca el codigo nativo JIT-eado (hex + disasm).
+
+  Optimizacion:
+    VESTA_NO_ESCAPE_SCALAR=1 Desactiva el scalar-replacement de objetos GC.
+    VESTA_ESCAPE_DEBUG=1     Traza los veredictos del escape analysis.
+
+  Compilacion modular / cache:
+    VX_PARALLEL_COMPILE=N    Threads de compilacion (0 = auto, 1 = secuencial).
+    VX_NO_CACHE              Ignora el cache incremental de modulos.
+    VX_CACHE_DIR=ruta        Directorio del cache (default .cache/vex).
+    VX_TREE_SHAKE=1          Elimina simbolos no usados entre modulos.
+    VX_VERBOSE_COMPILE=1     Muestra el progreso de compilacion por modulo.
+    VESTA_LINKER_PROFILE=1   Perfila las fases del linker.
+
+  Perfilado (PGO):
+    VESTA_PROFILE_DUMP=ruta  Ruta del .vprof (o usa --profile).
+)" << std::endl;
         return 0;
     }
 

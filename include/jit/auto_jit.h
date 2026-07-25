@@ -154,6 +154,22 @@ extern uint64_t g_vx_swapctx_native;
 uint64_t ensure_vx_swapctx_native(runtime::ProcessVM *vm) noexcept;
 
 /**
+ * @brief Inicializa el subsistema JIT (idempotente) y devuelve la direccion del
+ *        handler de safepoint (@c vrt_safepoint_handler).  La usa el modo CTPE
+ *        para activar los polls de watchdog en el codigo precomputado.  0 si el
+ *        subsistema no pudo inicializarse.
+ */
+uint64_t jit_safepoint_handler_addr() noexcept;
+
+/**
+ * @brief Activa/desactiva el watchdog CTPE: setea la direccion del handler de
+ *        safepoint en la CodeCache global.  Con != 0, el codegen vreg emite un
+ *        poll en cada back-edge de las funciones compiladas.  0 = off.  Debe
+ *        restaurarse a 0 tras compilar el programa a precomputar.
+ */
+void jit_set_ctpe_safepoint(uint64_t handler_addr) noexcept;
+
+/**
  * @brief Devuelve un snapshot legible del estado del JIT
  *        (counters + threshold).  Util para printear al final del
  *        programa con @c --jit-stats flag.

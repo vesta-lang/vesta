@@ -88,6 +88,18 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
                       const CallResolver &resolve_symbol = {});
 
 /**
+ * @brief Watchdog CTPE: activa/desactiva la emision de polls de safepoint en
+ *        los back-edges de las funciones compiladas por vreg en ESTE hilo.
+ *
+ * Con @p handler_addr != 0, cada loop back-edge emite un poll que consulta
+ * @c ProcessVM::ctpe_abort; el temporizador del modo CTPE lo activa al vencer
+ * el presupuesto -> throw_fatal -> se aborta el precomputo.  0 = desactivado
+ * (comportamiento normal del JIT de produccion, cero polls).  Debe restaurarse
+ * a 0 tras compilar el programa a precomputar.
+ */
+void vreg_set_ctpe_safepoint_handler(uint64_t handler_addr) noexcept;
+
+/**
  * @brief Compila @p fn como un ENTRY de callback de ABI C nativo por el path
  *        vreg (jubilacion del selector-slots).
  *

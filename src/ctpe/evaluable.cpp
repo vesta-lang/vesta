@@ -180,11 +180,19 @@ static bool is_scalar(ir::IrType t) {
 
 std::vector<Candidate> find_candidates(const ir::IrModule &mod,
                                        const Evaluability &ev) {
+    // CTPE = ejecutar el PROGRAMA entero desde su punto de entrada (main) en un
+    // solo universo comptime y plegar SU resultado.  Las funciones auxiliares
+    // corren DENTRO de esa ejecucion (mismo universo, efectos correctos entre
+    // llamadas) y NUNCA se pliegan por separado -- plegar una funcion aislada
+    // seria CTFE (evaluacion de funcion), no CTPE, y romperia cualquier auxiliar
+    // con estado por-llamada (p.ej. `g_counter += 1; return g_counter;` llamada
+    // en bucle daria siempre el mismo valor).  El unico candidato es el entry.
     std::vector<Candidate> out;
     for (const auto &fn : mod.functions) {
-        if (!ev.is_evaluable(fn.name)) continue;
-        if (!fn.params.empty()) continue;       // V1: solo entradas triviales.
-        if (!is_scalar(fn.ret_type)) continue;  // V1: solo retorno escalar.
+        if (fn.name != "main") continue;         // solo el punto de entrada.
+        if (!ev.is_evaluable(fn.name)) continue; // sin I/O/FFI/host/distribucion.
+        if (!fn.params.empty()) continue;        // main(argv) lee argv -> no const.
+        if (!is_scalar(fn.ret_type)) continue;   // retorno escalar inyectable.
         out.push_back({fn.name, fn.ret_type});
     }
     return out;

@@ -11,6 +11,8 @@
  *        Ver vreg_pipeline.h y doc/REGALLOC.md.
  */
 
+#include <thread>
+#include <functional>
 #include "jit/vreg_pipeline.h"
 
 #include "ir/ssa_ir.h"
@@ -389,6 +391,12 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
                       const CallResolver &resolve_call, const VregEntries &ent,
                       const CallResolver &resolve_native,
                       const CallResolver &resolve_symbol) {
+    /* Watchdog CTPE: propagar el handler de safepoint de la CodeCache al
+     * thread_local que lee vreg_select.  Se hace AQUI (mismo hilo que
+     * vreg_select) porque el eager-compile de CTPE puede correr en un hilo
+     * distinto al que activo el modo; la CodeCache es el objeto compartido.
+     * Fuera de CTPE, cc.ctpe_safepoint_handler == 0 -> sin polls. */
+    vreg_set_ctpe_safepoint_handler(cc.ctpe_safepoint_handler);
     /* Telemetria de compilacion (RAII: cuenta tambien los abandonos por fallback).
      * El JIT compila DURANTE la ejecucion, asi que el reloj de pared mezcla compilar y
      * ejecutar; separarlos es lo que permite saber si una optimizacion del codigo

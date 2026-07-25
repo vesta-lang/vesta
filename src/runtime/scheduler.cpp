@@ -374,7 +374,18 @@ void Scheduler::run_loop() {
              * El JIT-eated main puede invocar metodos via CALLVIRT
              * (que en el selector baja a vrt_callvirt -> enter_jit). */
             jit::JitFn jf = reinterpret_cast<jit::JitFn>(fn_ptr);
-            (void)jit::enter_jit(jf, reinterpret_cast<vrt_proc *>(instance));
+            /* Armar el setjmp de recuperacion tambien alrededor del jit_entry_fn
+             * (no solo del batch interp de mas abajo): asi el watchdog CTPE puede
+             * abortar main via longjmp desde el poll de safepoint, y ademas un
+             * SIGSEGV dentro de main compilado se recupera igual que en el batch.
+             * setjmp==0: ejecucion normal; !=0: se hizo longjmp (aborto) -> saltar
+             * la ejecucion y dejar el proceso HALT. */
+            instance->av_recovery_active = true;
+            if (setjmp(instance->av_recovery_jmpbuf) == 0) {
+                (void)jit::enter_jit(jf,
+                                     reinterpret_cast<vrt_proc *>(instance));
+            }
+            instance->av_recovery_active = false;
             /* Marcar el proceso como HALT.  No hay mas ejecucion interp. */
             instance->state.store(HALT, std::memory_order_release);
             instance->tsc = 1; /* marcar que ya ejecuto algo */

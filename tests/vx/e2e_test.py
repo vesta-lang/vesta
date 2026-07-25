@@ -118,13 +118,22 @@ class Ctx:
         return p.returncode, (p.stdout or "") + (p.stderr or "")
 
     # -- pasos de alto nivel --------------------------------------------
-    def compile_vx(self, src, out, extra=None, must_succeed=True, cwd=None):
-        """Compila un .vx a .velb.  Devuelve (rc, log).  `src` es absoluto."""
+    def compile_vx(self, src, out, extra=None, must_succeed=True, cwd=None,
+                   env=None):
+        """Compila un .vx a .velb.  Devuelve (rc, log).  `src` es absoluto.
+
+        `env` permite pasar variables de entorno (p.ej. {"VESTA_NO_CTPE": "1"}
+        para verificar codegen que el precomputo CTPE optimizaria al plegar main).
+        """
         args = [VM_EXE, "--vesta", src]
         if extra:
             args += [str(a) for a in extra]
         args += ["-o", self.path(out)]
-        rc, log = self.run(args, cwd=cwd)
+        full_env = None
+        if env:
+            full_env = os.environ.copy()
+            full_env.update({k: str(v) for k, v in env.items()})
+        rc, log = self.run(args, cwd=cwd, env=full_env)
         if must_succeed and not os.path.exists(self.path(out + ".velb")):
             self.fail("compilacion de %s no produjo .velb" % os.path.basename(src),
                       log)
@@ -675,8 +684,14 @@ def _(ctx):
 
 @case("tco")
 def _(ctx):
-    """20. TCO: el optimizador debe emitir `tailcall` + R0 = 42."""
-    ctx.compile_vx(ctx.src("19_tco_basico.vx"), "tco")
+    """20. TCO: el optimizador debe emitir `tailcall` + R0 = 42.
+
+    Se compila con VESTA_NO_CTPE para verificar el CODEGEN del tailcall: con CTPE
+    activo (default), main = `return wrapper(20)` se PRECOMPUTA a la constante 42
+    y el tailcall de wrapper se elimina por DCE (correcto: el resultado es el
+    mismo).  La funcionalidad se valida por el R0 = 42 de abajo (en modo normal).
+    """
+    ctx.compile_vx(ctx.src("19_tco_basico.vx"), "tco", env={"VESTA_NO_CTPE": "1"})
     n = grep_c(read_text(ctx.path("tco.vel")), "tailcall")
     if n < 1:
         ctx.fail("TCO no se aplico (esperado >= 1 tailcall en .vel)")

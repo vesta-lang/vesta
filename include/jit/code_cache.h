@@ -67,6 +67,15 @@ namespace jit {
 class CodeCache {
   public:
     /**
+     * @brief Watchdog CTPE: direccion del handler de safepoint (0 = off).  La
+     * setea el modo CTPE antes de eager-compilar el programa a precomputar; el
+     * codegen vreg emite un poll de safepoint en cada back-edge cuando != 0.
+     * Vive en la CodeCache (objeto unico compartido) para no depender de un
+     * global/thread_local -- el compile puede correr en otro hilo que el setter.
+     */
+    uint64_t ctpe_safepoint_handler = 0;
+
+    /**
      * @brief Construye un cache con maximo @p max_total_bytes.
      * @param chunk_bytes tamano de cada chunk de reserva (default
      *                    1 MiB).  Debe ser potencia de 2.

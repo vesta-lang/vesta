@@ -428,7 +428,16 @@ class ProcessVM {
      * @c std::atomic<bool> @c safepoint_acked posteriormente.
      */
     uint8_t safepoint_flag = 0;
-    uint8_t _safepoint_pad[7] = {0}; ///< Alineacion a 8 bytes
+    /// Watchdog CTPE: el hilo temporizador lo pone a 1 al vencer el
+    /// presupuesto; @c vrt_safepoint_handler lo consulta en el proximo poll y
+    /// aborta (throw_fatal).  Vive en el ProcessVM (una sola instancia) para
+    /// evitar el problema de globales duplicados cross-modulo (vm/DLL/vmcore).
+    uint8_t ctpe_abort = 0;
+    /// Watchdog CTPE (resultado): 1 = el safepoint hizo longjmp para abortar
+    /// la ejecucion precomputada.  Lo lee try_invoke_ctpe: si es 1, NO se pliega
+    /// (el resultado seria parcial/incorrecto).  Distinto de ctpe_abort (peticion).
+    uint8_t ctpe_did_abort = 0;
+    uint8_t _safepoint_pad[5] = {0}; ///< Alineacion a 8 bytes
 
     GlobalPID
         pid; ///< Identificador global del proceso (scheduler_id + local_pid)

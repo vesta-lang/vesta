@@ -35,6 +35,7 @@
 #include <cstring>
 #include <new> // placement-new (vrt_newobjs)
 #include <string>
+#include <csetjmp> // longjmp del watchdog CTPE
 
 /* FFI runtime (vrt_dlopen): API de carga dinamica del SO. */
 #if defined(_WIN32)
@@ -1102,6 +1103,22 @@ void vrt_safepoint_handler(vrt_proc *proc) {
     if (!proc) return;
     runtime::ProcessVM *p = as_proc(proc);
     p->safepoint_flag = 0;
+    /* Watchdog CTPE: si el presupuesto de tiempo vencio (el hilo temporizador
+     * puso proc->ctpe_abort=1), abortar la ejecucion del programa precomputado.
+     * El throw_fatal hace longjmp al scheduler -> el proceso muere ->
+     * invoke_simple_macro devuelve false -> el pase de plegado NO pliega
+     * (fallback: la funcion corre en runtime).  El flag vive en el ProcessVM
+     * (una instancia) -> sin el problema de globales duplicados cross-modulo. */
+    // Watchdog CTPE: si el presupuesto vencio, ABORTAR la ejecucion del programa
+    // precomputado via longjmp al setjmp que el scheduler armo alrededor del
+    // jit_entry_fn (mismo mecanismo que la recuperacion de SIGSEGV).  throw_fatal
+    // NO sirve aqui: solo marca err_thread y RETORNA -> el codigo JIT de main
+    // continuaria hasta terminar.  El longjmp desenrolla el frame JIT y devuelve
+    // el control al scheduler, que marca el proceso HALT sin ejecutar main.
+    if (p->ctpe_abort && p->av_recovery_active) {
+        p->ctpe_did_abort = 1;
+        std::longjmp(p->av_recovery_jmpbuf, 2); // 2 = aborto CTPE (1 = AV/div0)
+    }
     /* TODO D.2-integration:
      *   - Capturar RBP del caller (necesita assembly inline o
      *     llamada con __builtin_frame_address).

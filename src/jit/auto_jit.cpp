@@ -15,6 +15,8 @@
  * el JIT subsystem (10-50 KB de VM reservada para code cache).
  */
 
+#include <thread>
+#include <functional>
 #include "jit/auto_jit.h"
 #include "jit/jit_compiler.h"
 #include "jit/code_cache.h"
@@ -537,6 +539,22 @@ uint64_t reserve_tier_counter(uint64_t fn_pc) {
     return addr;
 }
 } // namespace
+
+// CTPE: inicializa el subsistema JIT (idempotente) y devuelve la direccion del
+// handler de safepoint.  Fuera del namespace anonimo -> linkage externo (la usa
+// comptime_vm.cpp).  Puede llamar a init_jit_subsystem/g_jit_init_flag del
+// namespace anonimo porque son visibles en el namespace jit envolvente (mismo TU).
+uint64_t jit_safepoint_handler_addr() noexcept {
+    std::call_once(g_jit_init_flag, init_jit_subsystem);
+    return g_runtime_entries
+               ? reinterpret_cast<uint64_t>(g_runtime_entries->safepoint_handler)
+               : 0;
+}
+
+void jit_set_ctpe_safepoint(uint64_t handler_addr) noexcept {
+    std::call_once(g_jit_init_flag, init_jit_subsystem);
+    if (g_code_cache) g_code_cache->ctpe_safepoint_handler = handler_addr;
+}
 
 /* Sprint B.1: expose el CodeCache global al runtime (native_callback.cpp).
  * Bypass el namespace anonimo de los singletons; el caller solo recibe

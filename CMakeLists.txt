@@ -1206,10 +1206,14 @@ if (VESTA_BUILD_FFI)
         target_link_libraries(vesta_ffi PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
     endif ()
 
-    # Auto-build: construir el ejecutable `vm` arrastra la construccion de
-    # libvesta.  Asi `cmake --build . --target vm` produce SIEMPRE el DLL/.so
-    # junto al .exe sin que el usuario tenga que pedir el target explicito.
-    add_dependencies(vm vesta_ffi)
+    # Auto-build opt-in: por defecto `cmake --build . --target vm` produce SOLO
+    # el ejecutable (iteracion rapida: un solo enlace).  Con -DVESTA_VM_BUILDS_FFI=ON
+    # tambien arrastra libvesta.dll/.so.  Para construir la DLL a demanda:
+    # `cmake --build . --target vesta_ffi`.
+    option(VESTA_VM_BUILDS_FFI "Construir libvesta junto al ejecutable vm" OFF)
+    if (VESTA_VM_BUILDS_FFI)
+        add_dependencies(vm vesta_ffi)
+    endif ()
 endif ()
 
 # ---------------------------------------------------------------------------
