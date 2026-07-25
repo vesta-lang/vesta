@@ -3322,26 +3322,38 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const MOperand x1 = MOperand::make_reg(fp1, ew);
                 const MOperand r0 = MOperand::make_reg(gp0, 8);
                 const MOperand r1 = MOperand::make_reg(gp1, 8);
+                // Cadena register-resident: c (=x0=fp0) vive en el reg ENTRE
+                // pasos.  Solo con n_pieces==1 (chunk == host width, el caso
+                // comun).  bit 20 = c ya en reg (salta la carga de src0); bit 21
+                // = deja c en reg (salta el store).
+                const bool src0_reg =
+                    (n_pieces == 1) && ((in.imm >> 20) & 1);
+                const bool dst_reg =
+                    (n_pieces == 1) && ((in.imm >> 21) & 1);
                 for (uint64_t pc = 0; pc < n_pieces; ++pc) {
                     // offset de la pieza dentro del chunk (0 cuando n_pieces=1,
                     // que es el unico caso que llega a EVEX -> sin disp).
                     const int32_t off = static_cast<int32_t>(pc * eff_w);
-                    // load a -> x0  ([base+off])
-                    O.push_back(MInstr::make_unary(MOp::MOV, r0,
-                                                   vr(in.operands[1])));
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOVUPD, x0, MOperand::make_mem(gp0, off)));
+                    // load src0(c) -> x0  ([base+off]) salvo que ya este en reg
+                    if (!src0_reg) {
+                        O.push_back(MInstr::make_unary(MOp::MOV, r0,
+                                                       vr(in.operands[1])));
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOVUPD, x0, MOperand::make_mem(gp0, off)));
+                    }
                     // load b -> x1
                     O.push_back(MInstr::make_unary(MOp::MOV, r1,
                                                    vr(in.operands[2])));
                     O.push_back(MInstr::make_unary(
                         MOp::MOVUPD, x1, MOperand::make_mem(gp1, off)));
                     O.push_back(MInstr::make_unary(pop, x0, x1)); // x0 OP= x1
-                    // store -> dst
-                    O.push_back(MInstr::make_unary(MOp::MOV, r0,
-                                                   vr(in.operands[0])));
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOVUPD, MOperand::make_mem(gp0, off), x0));
+                    // store x0 -> dst salvo que se deje en reg
+                    if (!dst_reg) {
+                        O.push_back(MInstr::make_unary(MOp::MOV, r0,
+                                                       vr(in.operands[0])));
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOVUPD, MOperand::make_mem(gp0, off), x0));
+                    }
                 }
                 break;
             }
@@ -3462,19 +3474,28 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                             MOperand::make_reg(fp1, 16)));
                     }
                 }
+                // Register-resident (n_pieces==1): c=x0=fp0 vive entre pasos.
+                const bool src0_reg_s =
+                    (n_pieces == 1) && ((in.imm >> 20) & 1);
+                const bool dst_reg_s =
+                    (n_pieces == 1) && ((in.imm >> 21) & 1);
                 for (uint64_t pc = 0; pc < n_pieces; ++pc) {
                     const int32_t off = static_cast<int32_t>(pc * eff_w);
-                    O.push_back(MInstr::make_unary(MOp::MOV,
-                                                   MOperand::make_reg(gp0, 8),
-                                                   vr(in.operands[1])));
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOVUPD, x0, MOperand::make_mem(gp0, off)));
+                    if (!src0_reg_s) {
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOV, MOperand::make_reg(gp0, 8),
+                            vr(in.operands[1])));
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOVUPD, x0, MOperand::make_mem(gp0, off)));
+                    }
                     O.push_back(MInstr::make_unary(pop, x0, x1)); // x0 OP= esc
-                    O.push_back(MInstr::make_unary(MOp::MOV,
-                                                   MOperand::make_reg(gp0, 8),
-                                                   vr(in.operands[0])));
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOVUPD, MOperand::make_mem(gp0, off), x0));
+                    if (!dst_reg_s) {
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOV, MOperand::make_reg(gp0, 8),
+                            vr(in.operands[0])));
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOVUPD, MOperand::make_mem(gp0, off), x0));
+                    }
                 }
                 break;
             }
@@ -3512,34 +3533,44 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     tri_sel.scratch[static_cast<size_t>(RegClass::FP)];
                 if (gpsc.empty() || fpsc.size() < 2) return false;
                 const MReg gp0 = static_cast<MReg>(gpsc[0]);
-                const MReg fp0 = static_cast<MReg>(fpsc[0]); // xa
-                const MReg fp1 = static_cast<MReg>(fpsc[1]); // xc
+                // c=fp0 (consistente con VEC_BINOP/BINOP_S para la cadena
+                // register-resident); a=fp1.
+                const MReg fp0 = static_cast<MReg>(fpsc[0]); // xc (c)
+                const MReg fp1 = static_cast<MReg>(fpsc[1]); // xa (a)
                 const uint8_t ew = static_cast<uint8_t>(eff_w);
-                const MOperand xa = MOperand::make_reg(fp0, ew);
-                const MOperand xc = MOperand::make_reg(fp1, ew);
+                const MOperand xc = MOperand::make_reg(fp0, ew);
+                const MOperand xa = MOperand::make_reg(fp1, ew);
                 const MOperand xs = MOperand::make_reg(scalreg, ew);
+                const bool src0_reg_f =
+                    (n_pieces == 1) && ((in.imm >> 20) & 1);
+                const bool dst_reg_f =
+                    (n_pieces == 1) && ((in.imm >> 21) & 1);
                 for (uint64_t pc = 0; pc < n_pieces; ++pc) {
                     const int32_t off = static_cast<int32_t>(pc * eff_w);
+                    // xc = c[off] (dst=operands[0], leido por la FMA) salvo reg
+                    if (!src0_reg_f) {
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOV, MOperand::make_reg(gp0, 8),
+                            vr(in.operands[0])));
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOVUPD, xc, MOperand::make_mem(gp0, off)));
+                    }
                     // xa = a[off]
                     O.push_back(MInstr::make_unary(
                         MOp::MOV, MOperand::make_reg(gp0, 8),
                         vr(in.operands[1])));
                     O.push_back(MInstr::make_unary(
                         MOp::MOVUPD, xa, MOperand::make_mem(gp0, off)));
-                    // xc = dst[off]
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOV, MOperand::make_reg(gp0, 8),
-                        vr(in.operands[0])));
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOVUPD, xc, MOperand::make_mem(gp0, off)));
-                    // xc = xa*scal + xc
+                    // xc = xa*scal + xc  (c += a*scal)
                     O.push_back(MInstr::make_binary(fma, xc, xa, xs));
-                    // dst[off] = xc
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOV, MOperand::make_reg(gp0, 8),
-                        vr(in.operands[0])));
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOVUPD, MOperand::make_mem(gp0, off), xc));
+                    // c[off] = xc salvo que se deje en reg
+                    if (!dst_reg_f) {
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOV, MOperand::make_reg(gp0, 8),
+                            vr(in.operands[0])));
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOVUPD, MOperand::make_mem(gp0, off), xc));
+                    }
                 }
                 break;
             }

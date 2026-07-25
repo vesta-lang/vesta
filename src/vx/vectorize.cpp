@@ -1112,6 +1112,15 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         } else
         for (size_t k = 0; k < S.size(); ++k) {
             const ir::IrValueId src0 = (k == 0) ? start_at : c_at; // acumulador
+            // Cadena register-resident: el acumulador c del chunk vive en un XMM
+            // (fp0) ENTRE pasos, en vez de round-trip a memoria.  bit 20 =
+            // SRC0_IN_REG (c ya en reg; salta la carga); bit 21 = DST_IN_REG
+            // (deja c en reg; salta el store).  El PRIMER paso carga start de
+            // memoria; el ULTIMO escribe c a memoria.  El interp los IGNORA
+            // (memoria siempre = mismo valor); solo JIT/AOT los honran cuando
+            // n_pieces==1.  Reduce ~2x el trafico de memoria del element-wise.
+            const uint64_t rr = ((k > 0) ? (1ull << 20) : 0ull) |
+                                ((k + 1 < S.size()) ? (1ull << 21) : 0ull);
             if (S[k].is_scaled_arr) {
                 // c += arr[i]*escalar (VEC_FMA_S lee/escribe c_at; escalar
                 // hoisted, ya negado si Sub).  Siempre k>=1 -> src0 == c_at.
@@ -1120,7 +1129,7 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
                 vf.dst = ir::IR_NO_VALUE;
                 vf.operands = {c_at, leaf_at, step_scalar[k]};
                 vf.imm = width | (1ull << 16) |
-                         ((uint64_t)(step_sidx[k] & 0x7) << 17);
+                         ((uint64_t)(step_sidx[k] & 0x7) << 17) | rr;
                 vf.source_line = ln;
                 fn_->append(current_block_, std::move(vf));
             } else if (S[k].is_scalar) {
@@ -1129,7 +1138,7 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
                 vb.operands = {c_at, src0, step_scalar[k]};
                 // imm: subop(8-15) | ancho(0-7) | hoisted(16) | sidx(17-19).
                 vb.imm = ((uint64_t)S[k].subop << 8) | width | (1ull << 16) |
-                         ((uint64_t)(step_sidx[k] & 0x7) << 17);
+                         ((uint64_t)(step_sidx[k] & 0x7) << 17) | rr;
                 vb.source_line = ln;
                 fn_->append(current_block_, std::move(vb));
             } else {
@@ -1137,7 +1146,7 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
                 ir::IrInstr vb{}; vb.op = ir::IrOp::VEC_BINOP; vb.type = elem_ty;
                 vb.dst = ir::IR_NO_VALUE;
                 vb.operands = {c_at, src0, leaf_at};
-                vb.imm = ((uint64_t)S[k].subop << 8) | width;
+                vb.imm = ((uint64_t)S[k].subop << 8) | width | rr;
                 vb.source_line = ln;
                 fn_->append(current_block_, std::move(vb));
             }
