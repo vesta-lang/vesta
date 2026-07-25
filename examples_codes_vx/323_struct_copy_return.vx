@@ -1,0 +1,29 @@
+/**
+ * @file 323_struct_copy_return.vx
+ * @brief Regresion: copiar `this` a un local, modificar un campo y devolver la
+ *        copia (patron "with"/builder), con un struct de UN campo.
+ *
+ * El bug (arreglado): el pase SROA de structs en pila promovia los ALLOCAs
+ * usando el INDICE de instruccion del ALLOCA recolectado al inicio del pase;
+ * las promociones previas de otros ALLOCAs reindexaban el bloque, con lo que ese
+ * indice acababa apuntando a un STORE del mismo objeto.  El renaming lo saltaba
+ * y el valor escrito se perdia -> la copia devuelta salia con el valor inicial
+ * (0) en vez del modificado.  Se manifestaba solo con structs de 1 campo (los de
+ * >=2 campos no).  Interp / JIT / AOT dan el mismo resultado.
+ *
+ * Resultado esperado: R0 == 147.
+ */
+namespace struct_copy_return;
+
+struct Box {
+    u64 v;
+    // Copia `this`, cambia el campo y devuelve la copia; `this` queda intacto.
+    public Box with(u64 x) { Box r = this; r.v = x; return r; }
+}
+
+i32 main() {
+    Box a; a.v = 5;
+    Box b = a.with(42);    // b = copia de a con v = 42; a sigue con v = 5
+    Box c = b.with(100);   // c = copia de b con v = 100; b sigue con v = 42
+    return (i32)(a.v + b.v + c.v);   // 5 + 42 + 100 = 147
+}

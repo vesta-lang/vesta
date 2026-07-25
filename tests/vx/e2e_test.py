@@ -2287,6 +2287,11 @@ modes3_case("gc250", "gc: compactacion mark-compact del OldGen (sliding in-place
 modes3_case("gc252", "gc: campo-referencia gc<Clase> tras major_gc (read encadenado seguro)", "252_gc_ref_field.vx", 42, line=4097)
 
 
+# --- herencia estatica de structs + Self ----------------------------------
+modes3_case("herencia_self", "herencia estatica de structs + Self (campos/metodos heredados, Self covariante, fluent)", "322_herencia_self.vx", 84, line=4210)
+modes3_case("struct_copy_return", "regresion SROA: copiar this a local + modificar campo + return (struct 1 campo)", "323_struct_copy_return.vx", 147, line=4211)
+
+
 # --- stdlib: ejemplos y tests de la biblioteca estandar de Vesta -----------
 modes3_case("stdlib_atomic", "stdlib atomic<T>: anchos 1/2/4/8 + f32/f64 + bool + disponibilidad por where", "stdlib/atomic.vx", 161, line=4200)
 

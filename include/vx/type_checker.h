@@ -737,6 +737,21 @@ class TypeChecker {
                                     const std::vector<Type> &args,
                                     const SourceLoc &loc);
 
+    /**
+     * @brief Aplana la herencia ESTATICA de structs y resuelve `Self` 
+     *
+     * Corre en pre_mono (antes de @c collect_globals).  Por CADA struct concreto
+     * S (base o derivado): (a) embebe los campos de su cadena de bases al INICIO
+     * (raiz primero, layout-compatible); (b) hereda los metodos de la cadena (el
+     * mas derivado gana por nombre); (c) sustituye el marcador `Self` por el tipo
+     * concreto S en firmas y cuerpos, via @c GenSubst{["Self"],[STRUCT S]} +
+     * @c clone_type_with_subst / @c clone_stmt -- la misma maquinaria de los
+     * genericos.  Tras esto el resto del compilador solo ve structs concretos sin
+     * `Self`.  Aplica las prohibiciones: `Self` por VALOR en el layout, `Self` en
+     * un metodo `@Virtual`.  Ver [[proj_struct_self_inheritance]].
+     */
+    void flatten_struct_inheritance();
+
     /// @brief Resuelve los @c @complexity que el parser dejo pendientes.
     ///
     /// Su `when:` habla del parametro de tipo (`is_float<T>()`), asi que solo

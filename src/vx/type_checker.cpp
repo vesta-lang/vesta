@@ -909,6 +909,247 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
     return mangled;
 }
 
+// ------------------------------------------------------------------
+// Fase 2 de la herencia de structs: aplanado + resolucion de `Self`.
+// Ver [[proj_struct_self_inheritance]].
+// ------------------------------------------------------------------
+
+/// ¿El TypeNode mete un `Self` POR VALOR en el layout? (prohibido como campo).
+/// `Self`, `Optional<Self>`, `Array<Self>` por valor -> true; `Self*` -> false.
+static bool type_has_self_by_value(const ast::TypeNode *t) {
+    if (!t) return false;
+    if (t->kind == ast::NodeKind::NamedTypeNode) {
+        auto *nt = static_cast<const ast::NamedTypeNode *>(t);
+        if (nt->name == "Self") return true;
+        for (const auto &ta : nt->type_args)
+            if (type_has_self_by_value(ta.get())) return true;
+        return false;
+    }
+    if (t->kind == ast::NodeKind::PointerTypeNode) return false; // tras indireccion
+    if (t->kind == ast::NodeKind::ArrayTypeNode) {
+        auto *at = static_cast<const ast::ArrayTypeNode *>(t);
+        return type_has_self_by_value(at->element_type.get());
+    }
+    return false;
+}
+
+/// ¿El TypeNode menciona `Self` en CUALQUIER posicion (incluida tras puntero)?
+static bool type_mentions_self(const ast::TypeNode *t) {
+    if (!t) return false;
+    if (t->kind == ast::NodeKind::NamedTypeNode) {
+        auto *nt = static_cast<const ast::NamedTypeNode *>(t);
+        if (nt->name == "Self") return true;
+        for (const auto &ta : nt->type_args)
+            if (type_mentions_self(ta.get())) return true;
+        return false;
+    }
+    if (t->kind == ast::NodeKind::PointerTypeNode)
+        return type_mentions_self(
+            static_cast<const ast::PointerTypeNode *>(t)->pointee.get());
+    if (t->kind == ast::NodeKind::ArrayTypeNode)
+        return type_mentions_self(
+            static_cast<const ast::ArrayTypeNode *>(t)->element_type.get());
+    if (t->kind == ast::NodeKind::FunctionTypeNode) {
+        auto *ft = static_cast<const ast::FunctionTypeNode *>(t);
+        for (const auto &pt : ft->param_types)
+            if (type_mentions_self(pt.get())) return true;
+        return type_mentions_self(ft->return_type.get());
+    }
+    return false;
+}
+
+/// ¿Un stmt menciona `Self` en el tipo de alguna var-decl local (`Self r`)?
+/// Recorre los contenedores de stmts comunes; los casos raros (cast/new Self en
+/// una expresion suelta) los cubre el uso de Self en firma, que es lo habitual.
+static bool stmt_mentions_self(const ast::Stmt *s) {
+    if (!s) return false;
+    switch (s->kind) {
+    case ast::NodeKind::BlockStmt: {
+        auto *b = static_cast<const ast::BlockStmt *>(s);
+        for (const auto &st : b->body)
+            if (stmt_mentions_self(st.get())) return true;
+        return false;
+    }
+    case ast::NodeKind::VarDeclStmt:
+        return type_mentions_self(
+            static_cast<const ast::VarDeclStmt *>(s)->type.get());
+    case ast::NodeKind::IfStmt: {
+        auto *i = static_cast<const ast::IfStmt *>(s);
+        return stmt_mentions_self(i->then_branch.get()) ||
+               stmt_mentions_self(i->else_branch.get());
+    }
+    case ast::NodeKind::WhileStmt:
+        return stmt_mentions_self(
+            static_cast<const ast::WhileStmt *>(s)->body.get());
+    case ast::NodeKind::ForStmt: {
+        auto *f = static_cast<const ast::ForStmt *>(s);
+        return stmt_mentions_self(f->init.get()) ||
+               stmt_mentions_self(f->body.get());
+    }
+    default:
+        return false;
+    }
+}
+
+/// ¿El struct usa `Self` en alguna firma (return/params) o en el body?
+static bool struct_uses_self(const ast::StructDecl *s) {
+    for (const auto &m : s->methods) {
+        if (m->return_type && type_mentions_self(m->return_type.get()))
+            return true;
+        for (const auto &p : m->params)
+            if (type_mentions_self(p->type.get())) return true;
+        if (m->body && stmt_mentions_self(m->body.get())) return true;
+    }
+    return false;
+}
+
+/// Clona un ClassMethodDecl aplicando la sustitucion @p g (Self -> derivado).
+/// Mismo conjunto de campos que el clon de monomorphize_struct (preserva
+/// contratos de efectos/coste, type-params de metodo generico, etc.).
+static std::unique_ptr<ast::ClassMethodDecl>
+clone_method_subst(const ast::ClassMethodDecl *m, const GenSubst &g) {
+    auto nm = std::make_unique<ast::ClassMethodDecl>();
+    nm->loc = m->loc;
+    nm->name = m->name;
+    nm->access = m->access;
+    nm->is_static = m->is_static;
+    nm->is_final = m->is_final;
+    nm->is_inline = m->is_inline;
+    nm->is_destructor = m->is_destructor;
+    nm->contract_pure = m->contract_pure;
+    nm->contract_nothrow = m->contract_nothrow;
+    nm->contract_nopanic = m->contract_nopanic;
+    nm->contract_alloc = m->contract_alloc;
+    nm->contract_alloc_partial = m->contract_alloc_partial;
+    nm->contract_stack = m->contract_stack;
+    nm->contract_stack_partial = m->contract_stack_partial;
+    nm->complexity_expr = m->complexity_expr;
+    nm->complexity_vars = m->complexity_vars;
+    nm->complexity_partial_pre = m->complexity_partial_pre;
+    nm->complexity_partial_post = m->complexity_partial_post;
+    nm->complexity_total_pre = m->complexity_total_pre;
+    nm->complexity_total_post = m->complexity_total_post;
+    nm->footprint_pending = m->footprint_pending;
+    nm->method_type_params = m->method_type_params;
+    nm->type_bounds = m->type_bounds;
+    if (m->return_type)
+        nm->return_type = clone_type_with_subst(m->return_type.get(), g);
+    for (const auto &p : m->params) {
+        auto np = std::make_unique<ast::ParamDecl>();
+        np->loc = p->loc;
+        np->name = p->name;
+        np->type = clone_type_with_subst(p->type.get(), g);
+        nm->params.push_back(std::move(np));
+    }
+    if (m->body) {
+        auto cb = clone_stmt(m->body.get(), g);
+        if (cb && cb->kind == ast::NodeKind::BlockStmt)
+            nm->body.reset(static_cast<ast::BlockStmt *>(cb.release()));
+    }
+    return nm;
+}
+
+void TypeChecker::flatten_struct_inheritance() {
+    // Indice nombre -> StructDecl.
+    std::unordered_map<std::string, ast::StructDecl *> smap;
+    for (auto &d : mod_.decls)
+        if (d && d->kind == ast::NodeKind::StructDecl) {
+            auto *sd = static_cast<ast::StructDecl *>(d.get());
+            smap[sd->name] = sd;
+        }
+    if (smap.empty()) return;
+
+    // FASE A: computar campos+metodos aplanados de cada struct leyendo los decls
+    // ORIGINALES (sin mutar); FASE B: asignarlos de golpe (asi el multinivel y la
+    // herencia leen siempre los propios sin ver mutaciones intermedias).
+    struct Flat {
+        std::vector<ast::StructFieldDecl> fields;
+        std::vector<std::unique_ptr<ast::ClassMethodDecl>> methods;
+        bool changed = false;
+    };
+    std::unordered_map<std::string, Flat> result;
+
+    for (auto &kv : smap) {
+        ast::StructDecl *S = kv.second;
+        // Cadena de bases de S (S -> ... -> raiz), siguiendo super_name que solo
+        // apunta a otro STRUCT.  Si apunta a algo que no es struct (interface),
+        // se para: la conformidad la valida la fase de interfaces.
+        std::vector<ast::StructDecl *> chain;
+        std::unordered_set<std::string> seen;
+        ast::StructDecl *cur = S;
+        while (cur) {
+            if (seen.count(cur->name)) {
+                diags_.error(cur->loc, "ciclo de herencia de struct en '" +
+                                           cur->name + "'");
+                break;
+            }
+            seen.insert(cur->name);
+            chain.push_back(cur);
+            if (cur->super_name.empty()) break;
+            auto it = smap.find(cur->super_name);
+            if (it == smap.end()) break; // super no es struct
+            cur = it->second;
+        }
+        const bool has_base = chain.size() > 1;
+        // Solo hay trabajo si hereda de otro struct o si usa `Self` (para
+        // resolver Self=S).  Los demas structs se dejan intactos (sin re-clonar).
+        if (!has_base && !struct_uses_self(S)) continue;
+
+        // Sustitucion Self -> S (tipo STRUCT del propio struct).
+        Type sty;
+        sty.kind = PrimitiveKind::STRUCT;
+        sty.struct_name = S->name;
+        std::vector<std::string> params = {"Self"};
+        std::vector<Type> args = {sty};
+        GenSubst g{&params, &args};
+
+        Flat f;
+        // Campos: raiz primero (chain va S->raiz, recorrer al reves).
+        for (auto rit = chain.rbegin(); rit != chain.rend(); ++rit) {
+            for (const auto &fld : (*rit)->fields) {
+                if (type_has_self_by_value(fld.type.get()))
+                    diags_.error(
+                        fld.loc,
+                        "'Self' por valor no puede ser un campo de '" + S->name +
+                            "' (produciria un layout de tamano infinito); usa "
+                            "'Self*'");
+                ast::StructFieldDecl nf;
+                nf.loc = fld.loc;
+                nf.name = fld.name;
+                nf.bit_width = fld.bit_width;
+                nf.type = clone_type_with_subst(fld.type.get(), g);
+                if (fld.default_init)
+                    nf.default_init = clone_expr(fld.default_init.get(), g);
+                f.fields.push_back(std::move(nf));
+            }
+        }
+        // Metodos: raiz->S, el mas derivado gana por nombre.
+        std::unordered_map<std::string, size_t> midx;
+        for (auto rit = chain.rbegin(); rit != chain.rend(); ++rit) {
+            for (const auto &m : (*rit)->methods) {
+                auto clon = clone_method_subst(m.get(), g);
+                auto mi = midx.find(m->name);
+                if (mi != midx.end())
+                    f.methods[mi->second] = std::move(clon);
+                else {
+                    midx[m->name] = f.methods.size();
+                    f.methods.push_back(std::move(clon));
+                }
+            }
+        }
+        f.changed = true;
+        result[S->name] = std::move(f);
+    }
+
+    // FASE B: aplicar los aplanados.
+    for (auto &kv : result) {
+        auto it = smap.find(kv.first);
+        if (it == smap.end() || !kv.second.changed) continue;
+        it->second->fields = std::move(kv.second.fields);
+        it->second->methods = std::move(kv.second.methods);
+    }
+}
+
 // Monomorphizacion de funcion generica.  Clona la FunctionDecl template
 // sustituyendo los type_params en return_type, params y body; la anyade a
 // mod_.decls para que collect_globals registre su firma y el lowering la baje.
@@ -1874,6 +2115,11 @@ bool TypeChecker::run() {
         }
         if (mod_.decls.size() == before) break;
     }
+
+    // Fase 2 de la herencia de structs: aplanar campos+metodos del base en cada
+    // derivado y resolver el marcador `Self` -> tipo concreto, ANTES de que
+    // collect_globals construya los layouts.  Tras esto no queda ningun `Self`.
+    flatten_struct_inheritance();
 
     collect_globals();
 

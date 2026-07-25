@@ -2140,7 +2140,7 @@ struct StructFieldDecl {
 
 /**
  * @struct StructDecl
- * @brief Declaracion de un @c struct (value type sin herencia).
+ * @brief Declaracion de un @c struct (value type con herencia ESTATICA opcional).
  *
  * Solo cubre campos; los metodos opcionales llegan en hitos posteriores.
  * El type checker
@@ -2149,6 +2149,17 @@ struct StructFieldDecl {
  */
 struct StructDecl : Node {
     std::string name;
+    /// Herencia ESTATICA de structs (value-type, sin vtable): el derivado
+    /// `struct D : Base` embebe los campos del base al INICIO de su layout
+    /// (layout-compatible, upcast trivial) y hereda sus metodos con dispatch
+    /// estatico.  El tipo `Self` en los metodos del base se reinstancia al tipo
+    /// concreto del derivado (covarianza estilo CRTP / Rust `Self`), asi los
+    /// operadores comunes viven una sola vez y devuelven el tipo correcto en
+    /// cada derivado.  Vacio = sin base.
+    std::string super_name;
+    /// Interfaces / conceptos que el struct declara satisfacer
+    /// (`struct S : Base, IWide`).  Verificado en compile-time; cero coste.
+    std::vector<std::string> interface_names;
     std::vector<StructFieldDecl> fields;
     /// Metodos del struct (value-type, dispatch estatico).  Reusa
     /// @c ClassMethodDecl pero los structs NO tienen vtable, herencia
@@ -2175,6 +2186,11 @@ struct StructDecl : Node {
     /// del campo mayor y el alineamiento el maximo.  Reusa toda la maquinaria
     /// de struct salvo el calculo de layout (offsets/size).
     bool is_union = false;
+    /// `@Abstract` -- el struct NO es instanciable por si mismo; solo sirve como
+    /// base de otros (`struct D : Base`).  Independiente de `Self`: un struct con
+    /// `Self` es instanciable por defecto (Self = el propio tipo si no hay
+    /// derivado).  Ver [[proj_struct_self_inheritance]].
+    bool is_abstract = false;
     /// Parametros de tipo opcionales (templates).  `struct Box<T> { T v; }`
     /// produce type_params = ["T"].  Vacio para structs no genericos.  Si no
     /// esta vacio, el struct es una plantilla: NO se procesa como concreto;

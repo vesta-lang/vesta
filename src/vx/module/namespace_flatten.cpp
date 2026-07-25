@@ -442,6 +442,16 @@ void mangle_struct_decl_(
         rename_map.emplace(sd->name, newn);
         sd->name = newn;
     }
+    // Herencia de struct (`struct D : Base, IFoo`): renombrar el base y las
+    // interfaces si estan en el rename_map (mismo tratamiento que en la clase).
+    {
+        auto it = rename_map.find(sd->super_name);
+        if (it != rename_map.end()) sd->super_name = it->second;
+    }
+    for (auto &iname : sd->interface_names) {
+        auto it = rename_map.find(iname);
+        if (it != rename_map.end()) iname = it->second;
+    }
     rewrite_bounds_(sd->type_bounds, rename_map);
     // Especializacion total/parcial: el patron `struct Caja<Punto>` guarda
     // los TypeNode del patron en spec_pattern.  Si un tipo del patron es del

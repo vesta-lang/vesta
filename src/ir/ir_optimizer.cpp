@@ -3387,12 +3387,20 @@ bool sr_mem2reg_object(
             /* El alloc: en GC-mode define todos los campos = init_val.  En
              * stack_mode no define nada (el ALLOCA no es un load/store de campo
              * -> classify lo ignora, y aqui no empujamos ningun def). */
-            if (b == call_bi && ii == call_ii) {
-                if (!stack_mode)
-                    for (uint32_t off : offsets) {
-                        stack[off].push_back(init_val[off]);
-                        pushed.push_back(off);
-                    }
+            // GC-mode: el call site (helper `__new_X`) siembra los init de cada
+            // campo; se identifica por (call_bi, call_ii) y se salta.  stack_mode:
+            // el ALLOCA no siembra nada y `classify` ya lo ignora (solo reconoce
+            // LOAD/STORE) -> NO saltar por indice.  Saltarlo era redundante Y
+            // peligroso: `call_ii` se calcula al recolectar los sites, pero las
+            // promociones PREVIAS de otros ALLOCAs pueden reindexar el bloque, con
+            // lo que (call_bi, call_ii) acaba apuntando a un STORE de ESTE objeto
+            // -> el renaming lo saltaba y el valor se perdia (bug del patron
+            // `S r = this; r.x = v; return r`).
+            if (b == call_bi && ii == call_ii && !stack_mode) {
+                for (uint32_t off : offsets) {
+                    stack[off].push_back(init_val[off]);
+                    pushed.push_back(off);
+                }
                 continue;
             }
             uint32_t off;

@@ -1398,6 +1398,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
        helper objetivo (hoy "memcpy"); vacio => no es override. */
     std::string top_helper_override_target;
     bool top_is_introspect = false;
+    bool top_is_abstract = false; /* @Abstract struct: no instanciable, solo base */
     bool top_is_overlay = false;  /* overlay F1: @overlay struct (vista) */
     bool top_is_macro = false;    /* A.43.16: @Macro */
     bool top_is_pure = false;     /* A.43.20: @Pure -- memoizable */
@@ -1460,6 +1461,8 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                 top_is_async = true;
             else if (current_.lexeme == "Introspect")
                 top_is_introspect = true;
+            else if (current_.lexeme == "Abstract")
+                top_is_abstract = true;
             else if (current_.lexeme == "overlay")
                 top_is_overlay = true;
             else if (current_.lexeme == "Macro")
@@ -1927,6 +1930,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     if (current_.kind == TokenKind::KW_STRUCT) {
         auto sd = parse_struct_decl(top_is_overlay);
         if (sd && top_is_introspect) sd->is_introspect = true;
+        if (sd && top_is_abstract) sd->is_abstract = true;
         if (sd && top_is_overlay) sd->is_overlay = true;
         if (sd) {
             sd->contract_pod = top_t_pod;
@@ -4827,6 +4831,24 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
     // #6: clausula `where T: A + B` opcional tras los params.
     if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "where") {
         parse_where_clause(s->type_bounds);
+    }
+    // Herencia estatica opcional via ':' (mismo patron que parse_class_decl):
+    // `struct D : Base` (base) + lista opcional de interfaces `, IFoo, IBar`.
+    // El type checker distingue cual es el struct base y cuales interfaces.
+    if (current_.kind == TokenKind::COLON) {
+        (void)consume();
+        if (current_.kind != TokenKind::IDENTIFIER) {
+            error_here("se esperaba un nombre de struct base o interface tras ':'");
+            return nullptr;
+        }
+        s->super_name = consume().lexeme;
+        while (current_.kind == TokenKind::COMMA) {
+            (void)consume();
+            if (current_.kind == TokenKind::IDENTIFIER)
+                s->interface_names.push_back(consume().lexeme);
+            else
+                break;
+        }
     }
     (void)expect(TokenKind::LBRACE,
                  "se esperaba '{' al abrir el cuerpo del struct");
