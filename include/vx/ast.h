@@ -2352,6 +2352,11 @@ struct ClassMethodDecl : Node {
     bool is_static = false;
     bool is_final = false;
     bool is_override = false;
+    /// `@Virtual` (structs): el metodo se despacha dinamicamente por vtable
+    /// (modelo AOT: vtable estatica + devirtualizacion a llamada directa cuando
+    /// el tipo concreto se conoce).  Opt-in por metodo; el resto es estatico.
+    /// Prohibido combinar con `Self` (mecanismos opuestos) o con `static`.
+    bool is_virtual = false;
     bool is_constructor = false;
     /// true si es destructor `~ClassName()` declarado dentro
     /// del cuerpo de la clase.  Sin parametros (validado en parser).

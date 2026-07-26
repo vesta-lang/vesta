@@ -584,6 +584,7 @@ std::string TypeChecker::monomorphize_class(const std::string &template_name,
         nm->is_static = m->is_static;
         nm->is_final = m->is_final;
         nm->is_override = m->is_override;
+        nm->is_virtual = m->is_virtual;
         nm->is_inline = m->is_inline;
         nm->is_constructor = m->is_constructor;
         nm->advice_kind = m->advice_kind;
@@ -836,6 +837,7 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
         nm->access = m->access;
         nm->is_static = m->is_static;
         nm->is_final = m->is_final;
+        nm->is_virtual = m->is_virtual;
         nm->is_inline = m->is_inline;
         nm->is_destructor = m->is_destructor;
         // Contratos de efectos y coste: son del METODO, asi que viajan a cada
@@ -1014,6 +1016,7 @@ clone_method_subst(const ast::ClassMethodDecl *m, const GenSubst &g) {
     nm->access = m->access;
     nm->is_static = m->is_static;
     nm->is_final = m->is_final;
+    nm->is_virtual = m->is_virtual;
     nm->is_inline = m->is_inline;
     nm->is_destructor = m->is_destructor;
     nm->contract_pure = m->contract_pure;
@@ -1203,6 +1206,27 @@ void TypeChecker::flatten_struct_inheritance() {
         std::unordered_map<std::string, size_t> midx;
         for (auto rit = chain.rbegin(); rit != chain.rend(); ++rit) {
             for (const auto &m : (*rit)->methods) {
+                // Regla 8: PROHIBIDO `Self` en un metodo `@Virtual`.  Son
+                // mecanismos OPUESTOS: `Self` = clon-por-derivado estatico;
+                // `@Virtual` = una sola firma con dispatch dinamico por vtable.
+                if (m->is_virtual) {
+                    bool self_in_sig =
+                        (m->return_type &&
+                         type_mentions_self(m->return_type.get()));
+                    for (const auto &p : m->params)
+                        self_in_sig = self_in_sig ||
+                                      type_mentions_self(p->type.get());
+                    const bool self_in_body =
+                        m->body && stmt_mentions_self(m->body.get());
+                    if (self_in_sig || self_in_body)
+                        diags_.error(
+                            m->loc,
+                            "'Self' no puede usarse en un metodo @Virtual "
+                            "('" + m->name +
+                            "'): Self solo existe durante la monomorfizacion de "
+                            "metodos heredados (dispatch estatico), mientras que "
+                            "@Virtual es dispatch dinamico por vtable");
+                }
                 auto clon = clone_method_subst(m.get(), g);
                 auto mi = midx.find(m->name);
                 if (mi != midx.end())

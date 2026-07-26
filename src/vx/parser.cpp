@@ -4866,10 +4866,26 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
         // libreria estandar que no declara los contratos que el lenguaje ofrece
         // esta diciendo lo contrario de lo que hace.
         MemberContracts mc;
-        parse_member_contracts_(mc);
+        // Anotaciones de metodo en cualquier orden: contratos de huella
+        // (@pure/@nothrow/...) mezclables con `@Virtual` (dispatch dinamico
+        // opt-in por metodo).  parse_member_contracts_ hace return al ver una
+        // anotacion que no es contrato, asi que alternamos hasta agotar ambos.
+        bool annot_virtual = false;
+        for (;;) {
+            parse_member_contracts_(mc);
+            if (current_.kind == TokenKind::AT &&
+                lex_.peek_at(0).kind == TokenKind::IDENTIFIER &&
+                lex_.peek_at(0).lexeme == "Virtual") {
+                (void)consume(); // '@'
+                (void)consume(); // 'Virtual'
+                annot_virtual = true;
+                continue;
+            }
+            break;
+        }
         // Modificadores de acceso opcionales en el miembro.  Los
         // structs son flat: aceptamos public/private (informativo;
-        // sin enforcement por ahora) pero NO static/final/virtual.
+        // sin enforcement por ahora) pero NO static/final.
         uint8_t access = 0; // 0 = public/default, 1 = private
         for (;;) {
             if (current_.kind == TokenKind::KW_PUBLIC) {
@@ -5003,6 +5019,7 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
             m->name = std::move(member_name);
             m->return_type = std::move(type_node);
             m->access = access;
+            m->is_virtual = annot_virtual; // `@Virtual`: dispatch dinamico
             m->method_type_params = method_tparams;
             m->type_bounds = method_tbounds;
             (void)consume(); // '('
