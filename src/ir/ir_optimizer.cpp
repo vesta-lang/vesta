@@ -9666,15 +9666,50 @@ bool ir_pass_speculative_devirt(IrFunction &fn,
 static void reorder_blocks_rpo(IrFunction &fn) {
     const size_t N = fn.blocks.size();
     if (N <= 1) return;
+    /* Mapa nombre_de_bloque -> id.  Resuelve las aristas IMPLICITAS de
+     * LABEL_ADDR: el handler de un tryenter (try/catch) se referencia por
+     * NOMBRE (@Absolute("code.<handler>")), NO por target_block.  Sin capturar
+     * esa arista, el handler queda INALCANZABLE en el DFS -> el RPO lo empuja al
+     * final del post-order -> tras el reverse queda AL PRINCIPIO, desplazando el
+     * entry de la posicion 0 (el interprete/emisor arrancarian por el bloque
+     * equivocado -> excepciones rotas).  Solo cuentan los LABEL_ADDR a bloques
+     * LOCALES de esta funcion (los que apuntan a funciones/lambdas/dtors
+     * externos no estan en el mapa). */
+    /* La clave es el nombre COMPLETO que usa emit_label_addr para un handler
+     * local: "<nombre_funcion>_<nombre_bloque>" (ver lowering del try/catch).
+     * Los LABEL_ADDR a funciones/lambdas/dtors externos llevan el nombre de la
+     * funcion (sin ese prefijo) -> no colisionan con estas claves. */
+    std::unordered_map<std::string, IrBlockId> name2id;
+    for (size_t b = 0; b < N; ++b)
+        if (!fn.blocks[b].name.empty())
+            name2id.emplace(fn.name + "_" + fn.blocks[b].name,
+                            static_cast<IrBlockId>(b));
     auto succs_of = [&](size_t b, std::vector<IrBlockId> &out) {
         out.clear();
         if (fn.blocks[b].instrs.empty()) return;
+        /* Aristas implicitas: un LABEL_ADDR a un bloque local (handler de
+         * excepcion) es un sucesor real; el handler debe quedar alcanzable
+         * desde su bloque de tryenter para no perder el orden topologico. */
+        for (const IrInstr &ins : fn.blocks[b].instrs)
+            if (ins.op == IrOp::LABEL_ADDR) {
+                auto it = name2id.find(ins.func_name);
+                if (it != name2id.end() && it->second != b)
+                    out.push_back(it->second);
+            }
         const IrInstr &t = fn.blocks[b].instrs.back();
         if (t.op == IrOp::BR) {
             if (t.target_block != IR_NO_BLOCK) out.push_back(t.target_block);
         } else if (t.op == IrOp::BR_COND) {
             if (t.target_block != IR_NO_BLOCK) out.push_back(t.target_block);
             if (t.false_block != IR_NO_BLOCK) out.push_back(t.false_block);
+        } else if (t.op == IrOp::SWITCH_DENSE) {
+            /* SWITCH_DENSE tiene sucesores en target_block (default) Y en
+             * jump_targets[] (una entrada por caso).  Omitirlos dejaba los
+             * bloques del match INALCANZABLES en el DFS -> el RPO los enviaba
+             * al final desconectados (match/ADT daban basura).  */
+            if (t.target_block != IR_NO_BLOCK) out.push_back(t.target_block);
+            for (IrBlockId s : t.jump_targets)
+                if (s != IR_NO_BLOCK) out.push_back(s);
         }
     };
     std::vector<std::vector<IrBlockId>> sc(N);
@@ -9699,14 +9734,30 @@ static void reorder_blocks_rpo(IrFunction &fn) {
             stk.pop_back();
         }
     }
-    // Conservar bloques no alcanzables desde el entry (no deberia haber tras
-    // spec_devirt, pero por robustez) al final, en su orden original.
-    for (size_t b = 0; b < N; ++b)
-        if (state[b] != 2) post.push_back(static_cast<IrBlockId>(b));
-    // RPO = reverse(post).  remap[viejo] = nuevo indice.
-    std::vector<IrBlockId> remap(N, IR_NO_BLOCK);
+    // Nuevo orden fisico: RPO de los ALCANZABLES (= reverse del post-order,
+    // deja el entry SIEMPRE en la posicion 0) seguido de los bloques no
+    // alcanzables al FINAL.  Antes se hacia post.push_back(inalcanzable) y luego
+    // reverse(post) -> los inalcanzables quedaban AL PRINCIPIO, desplazando el
+    // entry de la posicion 0 (el interprete/emisor arrancaban por el bloque
+    // equivocado -> resultados corruptos en funciones con cualquier bloque que
+    // succs_of no alcanzara).
+    std::vector<IrBlockId> order;
+    order.reserve(N);
     for (size_t i = 0; i < post.size(); ++i)
-        remap[post[post.size() - 1 - i]] = static_cast<IrBlockId>(i);
+        order.push_back(post[post.size() - 1 - i]);
+    size_t unreachable = 0;
+    for (size_t b = 0; b < N; ++b)
+        if (state[b] != 2) {
+            order.push_back(static_cast<IrBlockId>(b));
+            ++unreachable;
+        }
+    std::vector<IrBlockId> remap(N, IR_NO_BLOCK);
+    for (size_t i = 0; i < order.size(); ++i)
+        remap[order[i]] = static_cast<IrBlockId>(i);
+    if (std::getenv("VESTA_RPO_DUMP"))
+        std::fprintf(stderr, "[rpo] %s: N=%zu inalcanzables=%zu entry->%u\n",
+                     fn.name.c_str(), N, unreachable,
+                     static_cast<unsigned>(remap[0]));
     bool identity = true;
     for (size_t b = 0; b < N; ++b)
         if (remap[b] != static_cast<IrBlockId>(b)) {
@@ -9727,6 +9778,11 @@ static void reorder_blocks_rpo(IrFunction &fn) {
                 ins.target_block = remap[ins.target_block];
             if (ins.false_block != IR_NO_BLOCK && ins.false_block < N)
                 ins.false_block = remap[ins.false_block];
+            /* Remapear tambien los destinos del SWITCH_DENSE: sin esto, aun
+             * con el DFS corregido, los jump_targets[] apuntaban a indices de
+             * bloque VIEJOS tras el reorden -> saltos a bloques equivocados. */
+            for (auto &jt : ins.jump_targets)
+                if (jt != IR_NO_BLOCK && jt < N) jt = remap[jt];
             for (auto &pa : ins.phi_args)
                 if (pa.block < N) pa.block = remap[pa.block];
         }
