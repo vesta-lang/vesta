@@ -234,6 +234,10 @@ struct ClassMethodInfo {
     Type return_type;
     std::vector<Type> param_types;
     uint32_t vtable_index = 0;
+    /// `@Virtual` (structs polimorficos): el metodo se despacha por vtable.
+    /// En un struct polimorfico `vtable_index` es el slot dentro de la vtable
+    /// estatica (blob en static_data); en los no-virtuales no aplica.
+    bool is_virtual = false;
     bool is_constructor = false;
     /// destructor `~ClassName()`.  Sin params, void retorno.
     /// El lowering lo invoca via CALLVIRT al exit del scope para
@@ -295,6 +299,10 @@ struct StructLayout {
     /// zero-inicializa.  Los @c fields usan sus @c offset EXPLICITOS (@offset).
     bool is_union = false; ///< union C-style: campos en offset 0, size=max.
     bool is_abstract = false; ///< `@Abstract`: no instanciable, solo base.
+    /// true si el struct tiene >=1 metodo `@Virtual` (propio o heredado): es
+    /// "polimorfico" y lleva un vptr en offset 0 (los campos empiezan en 8).
+    /// El dispatch de sus metodos virtuales va por vtable estatica.
+    bool is_polymorphic = false;
     bool is_overlay = false;
     /// Overlay: HUELLA estatica de la vista = max(offset+size) sobre los campos
     /// de offset constante, redondeada al alineamiento.  Es lo que `sizeof(T)`

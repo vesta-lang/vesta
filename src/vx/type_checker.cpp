@@ -3306,10 +3306,26 @@ void TypeChecker::collect_globals() {
             layout.name = s->name;
             layout.is_union = s->is_union;
             layout.is_abstract = s->is_abstract;
+            // @Virtual: un struct es POLIMORFICO si tiene >=1 metodo @Virtual
+            // (propio o heredado -- tras el flatten los heredados ya estan en
+            // s->methods con is_virtual preservado).  Un struct polimorfico
+            // lleva un vptr (puntero a vtable estatica) en OFFSET 0; sus campos
+            // empiezan en offset 8.  El upcast por Base* es layout-compatible.
+            bool is_poly = false;
+            for (const auto &m : s->methods)
+                if (m->is_virtual) {
+                    is_poly = true;
+                    break;
+                }
+            layout.is_polymorphic = is_poly;
             // union: `offset` se reutiliza como MAXIMO tamano de campo (todos
             // los campos viven en offset 0); en struct es el offset secuencial.
             uint32_t offset = 0;
             uint32_t max_align = 1;
+            if (is_poly && !s->is_union) {
+                offset = 8;      // reservar [0..8) para el vptr
+                max_align = 8;   // el vptr fuerza alineamiento a 8
+            }
             std::unordered_map<std::string, bool> seen_names;
 
             // Estado para packing de bit fields.
@@ -3732,6 +3748,11 @@ void TypeChecker::collect_globals() {
             // ni constructores; @c defining_class lleva el nombre del
             // struct para que el lowering construya el label correcto.
             std::unordered_map<std::string, bool> seen_methods;
+            // Slot de vtable para los metodos @Virtual, asignado por orden de
+            // aparicion.  Como el flatten deja los metodos raiz-primero y el
+            // override reemplaza EN SU POSICION, el slot de un metodo virtual
+            // coincide entre la base y el derivado -> dispatch por Base* correcto.
+            uint32_t vslot = 0;
             for (const auto &m_uptr : s->methods) {
                 auto *m = m_uptr.get();
                 if (!m) continue;
@@ -3747,6 +3768,8 @@ void TypeChecker::collect_globals() {
                 ClassMethodInfo mi;
                 mi.name = m->name;
                 mi.is_destructor = m->is_destructor;
+                mi.is_virtual = m->is_virtual;
+                if (m->is_virtual) mi.vtable_index = vslot++;
                 mi.defining_class = s->name;
                 mi.source_file = m->loc.file;
                 mi.source_line = m->loc.line;
