@@ -326,6 +326,19 @@ codegen::RegAlloc rbank_allocate_belady(const IntervalResult &ivs, const MFuncti
                 if (ra.assign[v].loc == codegen::RegAlloc::Loc::SPILL)
                     fprintf(stderr, "  [vreg-dump]   v%u -> SPILL slot %u\n", v,
                             ra.assign[v].slot);
+            // ADDs con inmediato en el MachineIR PRE-rewrite (mf): localiza el
+            // `add d_at, 8` de la copia struct y si el rewrite lo elimina.
+            for (size_t b = 0; b < mf.blocks.size(); ++b)
+                for (const auto &in : mf.blocks[b].instrs)
+                    if (in.op == MOp::ADD &&
+                        (in.src2.kind == MOperandKind::IMM32 ||
+                         in.src1.kind == MOperandKind::IMM32)) {
+                        const MOperand &imm = in.src2.kind == MOperandKind::IMM32
+                                                  ? in.src2 : in.src1;
+                        fprintf(stderr,
+                                "  [vreg-dump]   ADD b%zu dst(k=%d v=%d) += %d\n",
+                                b, (int)in.dst.kind, in.dst.value, imm.value);
+                    }
         }
     }
     return ra;

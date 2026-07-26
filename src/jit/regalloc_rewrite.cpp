@@ -1469,14 +1469,23 @@ struct Lowerer {
              *   shift r11, cl      ; CL = RCX (la cuenta)
              *   mov  dst, r11
              * variant: 0=SHL, 1=SHR, 2=SAR. */
-            const MOperand v = resolve_use(in.src1); // value (!= RCX)
+            const MOperand v = resolve_use(in.src1); // value
             const MOperand c = resolve_use(in.src2); // cuenta (pineada a RCX)
+            /* Orden CRITICO: copiar el VALOR a scr1 (r11) ANTES de fijar la
+             * cuenta en RCX.  El allocator NO garantiza value != RCX (el
+             * comentario historico "value (!= RCX)" era una asuncion FALSA
+             * bajo presion de registros): si el valor vive en RCX, fijar la
+             * cuenta primero lo pisaria antes de salvarlo -> el shift operaria
+             * sobre la cuenta en vez del valor (bug de shift-by-CL con el
+             * valor en RCX; interp=correcto, JIT/AOT=corrupto).  Copiando el
+             * valor primero queda a salvo en scr1 (reservado, nunca es la
+             * cuenta) y despues se puede sobrescribir RCX sin perderlo. */
+            out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1), v));
             /* Defensivo: garantizar la cuenta en RCX (no-op si el pin la dejo
              * ya ahi; cubre un eventual spill del tmp). */
             if (!(c.kind == MOperandKind::REG &&
                   c.reg == static_cast<uint8_t>(MReg::RCX)))
                 out.push_back(MInstr::make_unary(MOp::MOV, reg(MReg::RCX), c));
-            out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1), v));
             const MOp mop = (in.variant == 0u)   ? MOp::SHL
                             : (in.variant == 1u) ? MOp::SHR
                             : (in.variant == 2u) ? MOp::SAR
