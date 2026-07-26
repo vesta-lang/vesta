@@ -21193,16 +21193,34 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         rhs = emit_binop_ir(bop, l, r, common, e->loc);
     }
 
-    // @Virtual/struct: si el target es un STRUCT ADDRESS-TAKEN, @c rhs es el PTR
-    // a un buffer origen (el retbuf de un metodo SRET, u otro struct).  Hay que
-    // COPIAR sus bytes al buffer del target, NO rebindear el slot al ptr origen:
-    // con `&x` tomado el buffer del target es fijo (alguien tiene su direccion),
-    // y write_local guardaria el PUNTERO en el slot en vez del contenido.  Esto
-    // arreglaba `x = x.metodo()` (self-assign via SRET) con x address-taken, que
-    // producia basura (guardaba la direccion del retbuf como si fuera el struct).
+    // Self-assign via metodo: `x = x.metodo(...)` (el receptor del metodo ES el
+    // target).  El metodo SRET escribe su retbuf y luego se rebindearia x a ese
+    // retbuf; pero si esto esta en un LOOP, el ALLOCA del retbuf se hoista al
+    // prologo (un solo buffer) y en la 2a+ iteracion `this` (=x, ya rebindeado al
+    // retbuf) y el retbuf ALIASAN -> el metodo lee y escribe el mismo buffer =
+    // corrupcion (el JIT lo sufre; el interp re-aloca por iteracion y lo enmascara).
+    // Tratarlo como el caso address-taken: COPIAR el retbuf al buffer ESTABLE de x
+    // (sin rebind) -> `this` y el retbuf quedan SIEMPRE distintos.
+    bool is_self_method_assign = false;
+    if (e->op == ast::AssignOp::Assign && e->value &&
+        e->value->kind == ast::NodeKind::CallExpr) {
+        auto *cv = static_cast<ast::CallExpr *>(e->value.get());
+        if (cv->callee &&
+            cv->callee->kind == ast::NodeKind::FieldAccessExpr) {
+            auto *fa = static_cast<ast::FieldAccessExpr *>(cv->callee.get());
+            if (fa->base && fa->base->kind == ast::NodeKind::IdentExpr &&
+                static_cast<ast::IdentExpr *>(fa->base.get())->name == id->name)
+                is_self_method_assign = true;
+        }
+    }
+    // @Virtual/struct: si el target es un STRUCT ADDRESS-TAKEN (o un self-assign
+    // via metodo, ver arriba), @c rhs es el PTR a un buffer origen (el retbuf de un
+    // metodo SRET, u otro struct).  Hay que COPIAR sus bytes al buffer del target,
+    // NO rebindear el slot al ptr origen: con `&x` tomado el buffer del target es
+    // fijo, y write_local guardaria el PUNTERO en el slot en vez del contenido.
     if (rhs != ir::IR_NO_VALUE && e->op == ast::AssignOp::Assign &&
         e->target->result_type.kind == PrimitiveKind::STRUCT &&
-        address_taken_locals_.count(id->name) &&
+        (address_taken_locals_.count(id->name) || is_self_method_assign) &&
         !type_is_overlay(e->target->result_type)) {
         const std::string &sn = e->target->result_type.struct_name;
         auto it_sl = tc_.struct_layouts().find(sn);
