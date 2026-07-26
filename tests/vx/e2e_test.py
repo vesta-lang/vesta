@@ -330,6 +330,48 @@ def h_verify_3modes(ctx, label, src, expected, out=None):
     ctx.ok("%s (-m aot) -> exit = %d" % (label, expected))
 
 
+def h_diff3(ctx, label, src, out=None, aot=True):
+    """Red de seguridad diferencial (Pilar 1): el INTERP es el ORACULO; jit y aot
+    deben COINCIDIR con el.  No hay valor esperado fijo -- basta con que los tres
+    modos den el MISMO R0.  Cualquier divergencia (un backend distinto de otro)
+    ROMPE el build: es la garantia 'falla todo o nada' contra desincronizacion de
+    backends.  Usar para casos de presion de registros / control de flujo complejo
+    donde el codegen del JIT/AOT podria divergir del interprete.
+    """
+    out = out or ctx.tag
+    # SIN CTPE: el precomputo CTPE usa el JIT y HORNEA su resultado en el .velb;
+    # si el JIT tiene un bug, contaminaria tambien al interprete -> el oraculo
+    # dejaria de ser fiable.  Compilar sin CTPE da un oraculo (interp) limpio.
+    ctx.compile_vx(ctx.src(src), out, env={"VESTA_NO_CTPE": "1"})
+
+    _, log = ctx.run_velb(out, schedulers=1, mode="vm")
+    oracle = get_r00(log)  # el interprete (sin CTPE) define la verdad
+    if oracle is None:
+        ctx.fail("%s: el interprete (oraculo) no produjo R0" % label, log)
+        return
+    ctx.ok("%s (interp oraculo) -> R0 = 0x%x" % (label, oracle))
+
+    _, log = ctx.run_velb(out, schedulers=1, mode="jit")
+    got = get_r00(log)
+    if got != oracle:
+        ctx.fail("%s DIVERGE: jit R0 == %s != interp 0x%x" % (label, got, oracle),
+                 log)
+        return
+    ctx.ok("%s (jit == interp)" % label)
+
+    if aot:
+        exe = aot_build(ctx, ctx.src(src), out + "_aot", label + " (-m aot)")
+        rc, _ = ctx.run([exe])
+        rc = exit_code(rc)
+        # el oraculo es un R0 completo; el exit-code AOT son 8 bits -> comparar
+        # el byte bajo (misma convencion que h_verify_3modes con exit-codes).
+        if (oracle & 0xFF) != (rc & 0xFF):
+            ctx.fail("%s DIVERGE: aot exit == %d != interp 0x%x (byte bajo)" %
+                     (label, rc, oracle))
+            return
+        ctx.ok("%s (aot == interp)" % label)
+
+
 def aot_build(ctx, src_abs, out, label, cwd=None, fmt=None):
     """Compila un .vx (ruta absoluta) a ejecutable nativo y devuelve su ruta.
 
@@ -449,6 +491,15 @@ def const_reject_case(tag, label, body, line=None):
 def modes3_case(tag, label, src, expected, line=None):
     def fn(ctx):
         h_verify_3modes(ctx, label, src, expected, out=tag)
+    fn.__name__ = "case_" + tag
+    _register(tag, fn, False, line)
+
+
+def diff3_case(tag, label, src, line=None, aot=True):
+    """Red de seguridad diferencial: interp=oraculo, jit y aot deben COINCIDIR.
+    Sin valor esperado; cualquier divergencia entre backends rompe el build."""
+    def fn(ctx):
+        h_diff3(ctx, label, src, out=tag, aot=aot)
     fn.__name__ = "case_" + tag
     _register(tag, fn, False, line)
 
@@ -2296,6 +2347,7 @@ fails_case("iface_no_sat", "struct declara ': IConcepto' pero no lo satisface", 
 modes3_case("abs_chain_iface", "@Abstract hereda de @Abstract + interfaz heredada verificada en el concreto", "327_abstract_cadena_iface.vx", 50)
 modes3_case("virtual_dispatch", "@Virtual: dispatch dinamico por vtable (Figura*->area() del tipo real), interp=jit=aot", "328_virtual_dispatch.vx", 42)
 fails_case("virtual_self_err", "Self prohibido en metodo @Virtual (mecanismos opuestos)", "329_virtual_self_err.vx", "no puede usarse en un metodo @Virtual")
+diff3_case("regpress_udivmod", "presion de registros (udivmod): interp=oraculo, jit y aot deben coincidir", "330_regalloc_pressure_udivmod.vx")
 
 
 # --- stdlib: ejemplos y tests de la biblioteca estandar de Vesta -----------
