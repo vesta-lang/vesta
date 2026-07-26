@@ -294,6 +294,7 @@ struct StructLayout {
     /// de este tipo ES un puntero (host) de 8 bytes; no se aloca buffer ni se
     /// zero-inicializa.  Los @c fields usan sus @c offset EXPLICITOS (@offset).
     bool is_union = false; ///< union C-style: campos en offset 0, size=max.
+    bool is_abstract = false; ///< `@Abstract`: no instanciable, solo base.
     bool is_overlay = false;
     /// Overlay: HUELLA estatica de la vista = max(offset+size) sobre los campos
     /// de offset constante, redondeada al alineamiento.  Es lo que `sizeof(T)`

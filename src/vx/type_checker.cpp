@@ -3200,6 +3200,7 @@ void TypeChecker::collect_globals() {
             StructLayout layout;
             layout.name = s->name;
             layout.is_union = s->is_union;
+            layout.is_abstract = s->is_abstract;
             // union: `offset` se reutiliza como MAXIMO tamano de campo (todos
             // los campos viven en offset 0); en struct es el offset secuencial.
             uint32_t offset = 0;
@@ -6627,6 +6628,21 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
     }
     if (!declare(vd->name, s)) {
         diags_.error(vd->loc, "redefinicion de variable: '" + vd->name + "'");
+    }
+    // @Abstract: un struct abstracto no se puede instanciar por VALOR (solo
+    // sirve de base); como tipo de un puntero (`Base*`) si es valido.  Se chequea
+    // aqui (con o sin init) para cubrir tambien `Base b;` sin inicializador.
+    // @Abstract: un struct abstracto no se puede instanciar por VALOR (solo
+    // sirve de base); como tipo de un puntero (`Base*`) si.  EXCEPCION: dentro de
+    // un metodo del PROPIO abstracto, `Self` se resuelve a el mismo (`Base r`) y
+    // eso es el mecanismo, no una instanciacion del usuario -> permitido.
+    if (s.type.kind == PrimitiveKind::STRUCT &&
+        current_struct_ != s.type.struct_name) {
+        auto it_ab = struct_layouts_.find(s.type.struct_name);
+        if (it_ab != struct_layouts_.end() && it_ab->second.is_abstract)
+            diags_.error(vd->loc, "no se puede instanciar el struct '" +
+                                      s.type.struct_name +
+                                      "' porque es @Abstract; usa un derivado");
     }
     // Safety net (item 1): copia de un struct tainteado (`T s2 = s1;`)
     // propaga el taint -> `s2` tambien apunta al closure-en-stack y su escape

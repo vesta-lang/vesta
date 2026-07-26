@@ -1,0 +1,22 @@
+/**
+ * @file 324_abstract_negativo.vx
+ * @brief Negativo: un struct `@Abstract` no se puede instanciar por valor.
+ *
+ * Debe FALLAR la compilacion con "no se puede instanciar ... @Abstract".
+ * `@Abstract` marca un struct como base-solo (como Wide128 de los wide-ints):
+ * expresa la intencion "este tipo no debe existir por si mismo".  Se usa a
+ * traves de un derivado (`struct Concreto : Base`).
+ */
+namespace abstract_neg;
+
+@Abstract
+struct Forma {
+    i64 lados;
+    public i64 num_lados() { return this.lados; }
+}
+
+i32 main() {
+    Forma f;              // ERROR: 'Forma' es @Abstract, no instanciable
+    f.lados = 3;
+    return (i32) f.num_lados();
+}

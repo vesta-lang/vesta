@@ -2290,6 +2290,7 @@ modes3_case("gc252", "gc: campo-referencia gc<Clase> tras major_gc (read encaden
 # --- herencia estatica de structs + Self ----------------------------------
 modes3_case("herencia_self", "herencia estatica de structs + Self (campos/metodos heredados, Self covariante, fluent)", "322_herencia_self.vx", 84, line=4210)
 modes3_case("struct_copy_return", "regresion SROA: copiar this a local + modificar campo + return (struct 1 campo)", "323_struct_copy_return.vx", 147, line=4211)
+fails_case("abstract_neg", "struct @Abstract no instanciable por valor", "324_abstract_negativo.vx", "es @Abstract")
 
 
 # --- stdlib: ejemplos y tests de la biblioteca estandar de Vesta -----------
