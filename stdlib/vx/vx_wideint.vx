@@ -1,214 +1,346 @@
 /**
  * @file vx_wideint.vx
- * @brief Enteros de ancho fijo grande (128/256/512, con y sin signo) en Vesta
- *        PURO, SIN inline-asm.
+ * @brief Enteros de ancho fijo de 128/256/512 bits, con y sin signo, en Vesta
+ *        puro (sin ensamblador en linea).
  *
- * @par Diseno (decidido por el usuario)
- * Cada tipo es un struct con UN unico miembro `union` que ofrece varias vistas
- * del mismo bloque de bits:
- *   - u128: union { struct { u64 lo; u64 hi; };  u8 bytes[16]; }
- *   - u256: union { struct { u128 lo; u128 hi; }; u8 bytes[32]; }
- *   - u512: union { struct { u256 lo; u256 hi; }; u8 bytes[64]; }
- * Asi se puede operar por palabras de 64 (lo/hi), componer el ancho mayor a
- * partir de dos del anterior, o inspeccionar byte a byte (`x.bytes[i]`).  El
- * layout es identico al de un entero nativo de ese ancho (little-endian).
+ * Cada tipo es un `struct` cuyo unico miembro es una `union` que expone varias
+ * vistas del mismo bloque de bits (limbs de 64, palabras de 32/16, bytes). La
+ * parte comun a con-signo y sin-signo -- bit-identica en ambos -- reside en un
+ * `@Abstract` base del que heredan ambos concretos; su `Self` se resuelve al
+ * tipo derivado al aplanar la herencia, de modo que `u128 + u128 -> u128` sin
+ * duplicar el ~70% compartido.
  *
- * @par Sin asm -- a proposito
- * La aritmetica de acarreo se expresa en Vesta puro: el carry de `a+b` se
- * detecta por el overflow unsigned (`suma < a`), el borrow de `a-b` por
- * `a < b`, y el producto de 128 se arma con cuatro multiplicaciones de 32x32.
- * Es CORRECTO en interp/JIT/AOT.  Hoy el compilador lo baja al patron literal
- * (`add; cmp; setb; add`) en vez de `add; adc`: la fusion de cadenas de acarreo
- * a ADC/SBB es el trabajo de optimizacion pendiente (se hara luego, sin tocar
- * estos tipos).
+ * El acarreo se expresa de forma portable: el `carry` de `a + b` es el overflow
+ * sin signo del limb bajo (`suma < a`), y el `borrow` de `a - b` es su underflow
+ * (`a < b`). La fusion de estas cadenas a `ADC`/`SBB` corresponde al backend y no
+ * afecta a la correccion de estos tipos.
+ *
+ * Todas las operaciones son puras, sin excepciones ni reservas dinamicas.
  */
+namespace std.wideint;
 
 // ===========================================================================
-//  u128  (unsigned 128-bit)
+//  Wide128 -- base abstracta: operaciones bit-identicas para u128 e i128.
 // ===========================================================================
-
-struct u128 {
+@Abstract
+public struct Wide128 {
     union {
-        struct { u64 lo; u64 hi; };
-        u8 bytes[16];
+        struct { u64 lo64; u64 hi64; };
+        u32 words[4];
+        u16 halves[8];
+        u8  bytes[16];
     };
-}
 
-/// Par (cociente, resto) devuelto por la division larga.
-struct u128qr { u128 q; u128 r; }
-
-/// Construye un u128 desde sus dos palabras de 64 (hi:lo).
-public u128 u128_make(u64 hi, u64 lo) {
-    u128 r;
-    r.lo = lo;
-    r.hi = hi;
-    return r;
-}
-
-/// Construye un u128 desde un u64 (parte alta a cero).
-public u128 u128_from(u64 v) {
-    u128 r;
-    r.lo = v;
-    r.hi = 0;
-    return r;
-}
-
-/// Producto COMPLETO de 64x64 -> 128 bits, sin instruccion mul-high: se parte
-/// cada factor en dos mitades de 32 y se recomponen los cuatro productos
-/// parciales.  Es la pieza que necesita la multiplicacion de 128.
-u128 u128_mul64(u64 a, u64 b) {
-    u64 a0 = a & 0xFFFFFFFF;
-    u64 a1 = a >> 32;
-    u64 b0 = b & 0xFFFFFFFF;
-    u64 b1 = b >> 32;
-    u64 p00 = a0 * b0;
-    u64 p01 = a0 * b1;
-    u64 p10 = a1 * b0;
-    u64 p11 = a1 * b1;
-    // Suma de los terminos cruzados en la posicion 2^32.
-    u64 mid = (p00 >> 32) + (p01 & 0xFFFFFFFF) + (p10 & 0xFFFFFFFF);
-    u128 r;
-    r.lo = (p00 & 0xFFFFFFFF) | (mid << 32);
-    r.hi = p11 + (p01 >> 32) + (p10 >> 32) + (mid >> 32);
-    return r;
-}
-
-// --- Aritmetica ------------------------------------------------------------
-
-/// Suma modulo 2^128.  El carry de la palabra baja se detecta por el overflow
-/// unsigned (`lo < this.lo`) y se propaga a la alta.
-public u128 __add__(u128 o) {
-    u128 r;
-    r.lo = this.lo + o.lo;
-    u64 carry = (r.lo < this.lo) ? 1 : 0;
-    r.hi = this.hi + o.hi + carry;
-    return r;
-}
-
-/// Resta modulo 2^128.  El borrow se detecta por `this.lo < o.lo`.
-public u128 __sub__(u128 o) {
-    u128 r;
-    r.lo = this.lo - o.lo;
-    u64 borrow = (this.lo < o.lo) ? 1 : 0;
-    r.hi = this.hi - o.hi - borrow;
-    return r;
-}
-
-/// Producto modulo 2^128.  Los 128 bits del producto de las palabras bajas mas
-/// los terminos cruzados (de los que solo sobreviven los 64 bits bajos).
-public u128 __mul__(u128 o) {
-    u128 r = u128_mul64(this.lo, o.lo);
-    r.hi = r.hi + this.lo * o.hi + this.hi * o.lo;
-    return r;
-}
-
-// --- Logica y desplazamientos ---------------------------------------------
-
-public u128 __and__(u128 o) {
-    u128 r;
-    r.lo = this.lo & o.lo;
-    r.hi = this.hi & o.hi;
-    return r;
-}
-public u128 __or__(u128 o) {
-    u128 r;
-    r.lo = this.lo | o.lo;
-    r.hi = this.hi | o.hi;
-    return r;
-}
-public u128 __xor__(u128 o) {
-    u128 r;
-    r.lo = this.lo ^ o.lo;
-    r.hi = this.hi ^ o.hi;
-    return r;
-}
-/// Complemento a uno (NOT bit a bit).  No hay operador `~` sobre el tipo, asi
-/// que se expone como metodo nombrado.
-public u128 bit_not() {
-    u128 r;
-    r.lo = this.lo ^ 0xFFFFFFFFFFFFFFFF;
-    r.hi = this.hi ^ 0xFFFFFFFFFFFFFFFF;
-    return r;
-}
-
-/// Desplazamiento a la izquierda por @p n bits (logico).  Casos n=0, n>=128,
-/// n>=64 y n<64 tratados aparte para evitar el shift por 64 (indefinido).
-public u128 __lshift__(u64 n) {
-    u128 r;
-    if (n == 0) { r.lo = this.lo; r.hi = this.hi; return r; }
-    if (n >= 128) { r.lo = 0; r.hi = 0; return r; }
-    if (n >= 64) { r.hi = this.lo << (n - 64); r.lo = 0; return r; }
-    r.hi = (this.hi << n) | (this.lo >> (64 - n));
-    r.lo = this.lo << n;
-    return r;
-}
-
-/// Desplazamiento a la derecha por @p n bits (logico, sin signo).
-public u128 __rshift__(u64 n) {
-    u128 r;
-    if (n == 0) { r.lo = this.lo; r.hi = this.hi; return r; }
-    if (n >= 128) { r.lo = 0; r.hi = 0; return r; }
-    if (n >= 64) { r.lo = this.hi >> (n - 64); r.hi = 0; return r; }
-    r.lo = (this.lo >> n) | (this.hi << (64 - n));
-    r.hi = this.hi >> n;
-    return r;
-}
-
-// --- Comparaciones ---------------------------------------------------------
-
-public bool __eq__(u128 o) { return this.hi == o.hi && this.lo == o.lo; }
-public bool __ne__(u128 o) { return this.hi != o.hi || this.lo != o.lo; }
-public bool __lt__(u128 o) {
-    if (this.hi != o.hi) { return this.hi < o.hi; }
-    return this.lo < o.lo;
-}
-public bool __gt__(u128 o) {
-    if (this.hi != o.hi) { return this.hi > o.hi; }
-    return this.lo > o.lo;
-}
-public bool __le__(u128 o) {
-    if (this.hi != o.hi) { return this.hi < o.hi; }
-    return this.lo <= o.lo;
-}
-public bool __ge__(u128 o) {
-    if (this.hi != o.hi) { return this.hi > o.hi; }
-    return this.lo >= o.lo;
-}
-
-// --- Division / modulo (long division binaria) -----------------------------
-
-/// Cociente y resto de a/b por el metodo de restar-y-desplazar (128 vueltas).
-/// Es la version CORRECTA y simple; una version rapida (Knuth D) queda para la
-/// fase de optimizacion.  Divisor 0 -> devuelve (0, a) por convencion.
-u128qr u128_divmod(u128 a, u128 b) {
-    u128qr out;
-    out.q = u128_from(0);
-    out.r = u128_from(0);
-    if (b.__eq__(u128_from(0))) { out.r = a; return out; }
-    u64 one = 1;
-    i32 i = 127;
-    while (i >= 0) {
-        out.r = out.r.__lshift__(1);
-        // Mete el bit i de `a` en el bit 0 del resto parcial.
-        u64 bit;
-        if (i >= 64) { bit = (a.hi >> ((u64) (i - 64))) & one; }
-        else { bit = (a.lo >> ((u64) i)) & one; }
-        out.r.lo = out.r.lo | bit;
-        if (!out.r.__lt__(b)) {
-            out.r = out.r.__sub__(b);
-            if (i >= 64) { out.q.hi = out.q.hi | (one << ((u64) (i - 64))); }
-            else { out.q.lo = out.q.lo | (one << ((u64) i)); }
-        }
-        i = i - 1;
+    /// Suma modular de 128 bits (acarreo entre limbs).
+    public Self __add__(Self o) {
+        Self r;
+        r.lo64 = this.lo64 + o.lo64;
+        u64 carry = 0;
+        if (r.lo64 < this.lo64) { carry = 1; }
+        r.hi64 = this.hi64 + o.hi64 + carry;
+        return r;
     }
-    return out;
+
+    /// Resta modular de 128 bits (prestamo entre limbs).
+    public Self __sub__(Self o) {
+        Self r;
+        r.lo64 = this.lo64 - o.lo64;
+        u64 bw = 0;
+        if (this.lo64 < o.lo64) { bw = 1; }
+        r.hi64 = this.hi64 - o.hi64 - bw;
+        return r;
+    }
+
+    /// AND bit a bit.
+    public Self __and__(Self o) {
+        Self r;
+        r.lo64 = this.lo64 & o.lo64;
+        r.hi64 = this.hi64 & o.hi64;
+        return r;
+    }
+
+    /// OR bit a bit.
+    public Self __or__(Self o) {
+        Self r;
+        r.lo64 = this.lo64 | o.lo64;
+        r.hi64 = this.hi64 | o.hi64;
+        return r;
+    }
+
+    /// XOR bit a bit.
+    public Self __xor__(Self o) {
+        Self r;
+        r.lo64 = this.lo64 ^ o.lo64;
+        r.hi64 = this.hi64 ^ o.hi64;
+        return r;
+    }
+
+    /// Complemento a uno (NOT bit a bit).
+    public Self __not__() {
+        Self r;
+        r.lo64 = ~this.lo64;
+        r.hi64 = ~this.hi64;
+        return r;
+    }
+
+    /// Desplazamiento logico a la izquierda de @p n bits (n>=128 -> 0).
+    public Self __shl__(u64 n) {
+        Self r;
+        if (n == 0) {
+            r.lo64 = this.lo64;
+            r.hi64 = this.hi64;
+        } else if (n >= 128) {
+            r.lo64 = 0;
+            r.hi64 = 0;
+        } else if (n >= 64) {
+            r.hi64 = this.lo64 << (n - 64);
+            r.lo64 = 0;
+        } else {
+            r.hi64 = (this.hi64 << n) | (this.lo64 >> (64 - n));
+            r.lo64 = this.lo64 << n;
+        }
+        return r;
+    }
+
+    /// Igualdad bit a bit.
+    public bool __eq__(Self o) {
+        return (this.lo64 == o.lo64) && (this.hi64 == o.hi64);
+    }
+
+    /// Desigualdad bit a bit.
+    public bool __ne__(Self o) {
+        return (this.lo64 != o.lo64) || (this.hi64 != o.hi64);
+    }
+
+    /// True si el valor es cero.
+    public bool is_zero() {
+        return (this.lo64 == 0) && (this.hi64 == 0);
+    }
+
+    /// Intercambia este valor con @p o (util en los algoritmos de division).
+    public void swap(Self* o) {
+        u64 tl = this.lo64;
+        u64 th = this.hi64;
+        this.lo64 = (*o).lo64;
+        this.hi64 = (*o).hi64;
+        (*o).lo64 = tl;
+        (*o).hi64 = th;
+    }
+
+    /// Comparacion SIN signo: -1 si this<o, 0 si igual, 1 si this>o. Reside en la
+    /// base porque la usa @c udivmod, que opera sobre magnitudes sin signo.
+    public i64 ucmp(Self o) {
+        if (this.hi64 != o.hi64) {
+            if (this.hi64 < o.hi64) { return -1; }
+            return 1;
+        }
+        if (this.lo64 != o.lo64) {
+            if (this.lo64 < o.lo64) { return -1; }
+            return 1;
+        }
+        return 0;
+    }
+
+    /// Division entera SIN signo por el metodo binario (shift-resta, 128
+    /// iteraciones). Devuelve el cociente y deja el resto en @p rem_out. Divisor
+    /// cero -> cociente y resto = 0 (sin excepcion). Es el unico algoritmo
+    /// "pesado"; la variante con signo lo reutiliza sobre las magnitudes.
+    public Self udivmod(Self divisor, Self* rem_out) {
+        Self q;
+        q.lo64 = 0;
+        q.hi64 = 0;
+        Self rem;
+        rem.lo64 = 0;
+        rem.hi64 = 0;
+        if (divisor.is_zero()) {
+            (*rem_out).lo64 = 0;
+            (*rem_out).hi64 = 0;
+            return q;
+        }
+        i64 i = 127;
+        while (i >= 0) {
+            // rem = (rem << 1) | bit_i(this)
+            rem.hi64 = (rem.hi64 << 1) | (rem.lo64 >> 63);
+            rem.lo64 = rem.lo64 << 1;
+            u64 bit;
+            if (i >= 64) { bit = (this.hi64 >> (i - 64)) & 1; }
+            else { bit = (this.lo64 >> i) & 1; }
+            rem.lo64 = rem.lo64 | bit;
+            // si rem >= divisor: rem -= divisor y fija el bit i del cociente
+            if (rem.ucmp(divisor) >= 0) {
+                rem = rem.__sub__(divisor);
+                if (i >= 64) { q.hi64 = q.hi64 | (((u64) 1) << (i - 64)); }
+                else { q.lo64 = q.lo64 | (((u64) 1) << i); }
+            }
+            i = i - 1;
+        }
+        (*rem_out).lo64 = rem.lo64;
+        (*rem_out).hi64 = rem.hi64;
+        return q;
+    }
+
+    /// Producto modular de 128 bits. El producto 64x64->128 del limb bajo se arma
+    /// por descomposicion 32x32; los cross-terms altos se truncan a 128 bits.
+    public Self __mul__(Self o) {
+        u64 al = this.lo64;
+        u64 ah = this.hi64;
+        u64 bl = o.lo64;
+        u64 bh = o.hi64;
+        u64 a0 = al & 0xFFFFFFFF;
+        u64 a1 = al >> 32;
+        u64 b0 = bl & 0xFFFFFFFF;
+        u64 b1 = bl >> 32;
+        u64 t00 = a0 * b0;
+        u64 t01 = a0 * b1;
+        u64 t10 = a1 * b0;
+        u64 t11 = a1 * b1;
+        u64 mid = (t00 >> 32) + (t01 & 0xFFFFFFFF) + (t10 & 0xFFFFFFFF);
+        u64 lo = (t00 & 0xFFFFFFFF) | (mid << 32);
+        u64 hi = t11 + (t01 >> 32) + (t10 >> 32) + (mid >> 32);
+        Self r;
+        r.lo64 = lo;
+        r.hi64 = hi + (al * bh) + (ah * bl); // cross-terms: solo bits altos
+        return r;
+    }
 }
 
-public u128 __div__(u128 o) {
-    u128qr x = u128_divmod(this, o);
-    return x.q;
+// ===========================================================================
+//  u128 -- entero de 128 bits sin signo.
+// ===========================================================================
+public struct u128 : Wide128 {
+    /// Desplazamiento logico a la derecha (rellena con ceros).
+    public u128 __shr__(u64 n) {
+        u128 r;
+        if (n == 0) {
+            r.lo64 = this.lo64;
+            r.hi64 = this.hi64;
+        } else if (n >= 128) {
+            r.lo64 = 0;
+            r.hi64 = 0;
+        } else if (n >= 64) {
+            r.lo64 = this.hi64 >> (n - 64);
+            r.hi64 = 0;
+        } else {
+            r.lo64 = (this.lo64 >> n) | (this.hi64 << (64 - n));
+            r.hi64 = this.hi64 >> n;
+        }
+        return r;
+    }
+
+    /// Cociente entero sin signo.
+    public u128 __div__(u128 o) {
+        u128 rem;
+        return this.udivmod(o, &rem);
+    }
+
+    /// Resto entero sin signo.
+    public u128 __mod__(u128 o) {
+        u128 rem;
+        this.udivmod(o, &rem);
+        return rem;
+    }
+
+    public bool __lt__(u128 o) { return this.ucmp(o) <  0; }
+    public bool __gt__(u128 o) { return this.ucmp(o) >  0; }
+    public bool __le__(u128 o) { return this.ucmp(o) <= 0; }
+    public bool __ge__(u128 o) { return this.ucmp(o) >= 0; }
 }
-public u128 __mod__(u128 o) {
-    u128qr x = u128_divmod(this, o);
-    return x.r;
+
+// ===========================================================================
+//  i128 -- entero de 128 bits con signo (complemento a dos).
+// ===========================================================================
+public struct i128 : Wide128 {
+    /// Negacion en complemento a dos: -x = ~x + 1.
+    public i128 __neg__() {
+        i128 r;
+        r.lo64 = ~this.lo64;
+        r.hi64 = ~this.hi64;
+        u64 lo2 = r.lo64 + 1;
+        u64 carry = 0;
+        if (lo2 < r.lo64) { carry = 1; }
+        r.lo64 = lo2;
+        r.hi64 = r.hi64 + carry;
+        return r;
+    }
+
+    /// True si el valor es negativo (bit de signo del limb alto).
+    public bool is_negative() {
+        return (this.hi64 >> 63) != 0;
+    }
+
+    /// Desplazamiento aritmetico a la derecha (replica el bit de signo).
+    public i128 __shr__(u64 n) {
+        i128 r;
+        u64 sign_fill = 0;
+        if (this.is_negative()) { sign_fill = 0xFFFFFFFFFFFFFFFF; }
+        if (n == 0) {
+            r.lo64 = this.lo64;
+            r.hi64 = this.hi64;
+        } else if (n >= 128) {
+            r.lo64 = sign_fill;
+            r.hi64 = sign_fill;
+        } else if (n >= 64) {
+            i64 hi_s = (i64) this.hi64;
+            r.lo64 = (u64) (hi_s >> (n - 64));
+            r.hi64 = sign_fill;
+        } else {
+            i64 hi_s = (i64) this.hi64;
+            r.lo64 = (this.lo64 >> n) | (this.hi64 << (64 - n));
+            r.hi64 = (u64) (hi_s >> n);
+        }
+        return r;
+    }
+
+    /// Cociente entero con signo (trunca hacia cero). Reduce a la division sin
+    /// signo sobre las magnitudes y corrige el signo del cociente.
+    public i128 __div__(i128 o) {
+        bool neg = this.is_negative() != o.is_negative();
+        i128 a = this;
+        if (a.is_negative()) { a = a.__neg__(); }
+        i128 b = o;
+        if (b.is_negative()) { b = b.__neg__(); }
+        i128 rem;
+        i128 q = a.udivmod(b, &rem);
+        if (neg) { q = q.__neg__(); }
+        return q;
+    }
+
+    /// Resto entero con signo (mismo signo que el dividendo, como en C).
+    public i128 __mod__(i128 o) {
+        bool neg = this.is_negative();
+        i128 a = this;
+        if (a.is_negative()) { a = a.__neg__(); }
+        i128 b = o;
+        if (b.is_negative()) { b = b.__neg__(); }
+        i128 rem;
+        a.udivmod(b, &rem);
+        if (neg) { rem = rem.__neg__(); }
+        return rem;
+    }
+
+    /// Comparacion CON signo: el limb alto se compara como i64; el bajo como u64.
+    public bool __lt__(i128 o) {
+        i64 a_hi = (i64) this.hi64;
+        i64 b_hi = (i64) o.hi64;
+        if (a_hi != b_hi) { return a_hi < b_hi; }
+        return this.lo64 < o.lo64;
+    }
+    public bool __gt__(i128 o) {
+        i64 a_hi = (i64) this.hi64;
+        i64 b_hi = (i64) o.hi64;
+        if (a_hi != b_hi) { return a_hi > b_hi; }
+        return this.lo64 > o.lo64;
+    }
+    public bool __le__(i128 o) {
+        i64 a_hi = (i64) this.hi64;
+        i64 b_hi = (i64) o.hi64;
+        if (a_hi != b_hi) { return a_hi < b_hi; }
+        return this.lo64 <= o.lo64;
+    }
+    public bool __ge__(i128 o) {
+        i64 a_hi = (i64) this.hi64;
+        i64 b_hi = (i64) o.hi64;
+        if (a_hi != b_hi) { return a_hi > b_hi; }
+        return this.lo64 >= o.lo64;
+    }
 }
