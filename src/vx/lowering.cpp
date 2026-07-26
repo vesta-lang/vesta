@@ -21193,6 +21193,79 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         rhs = emit_binop_ir(bop, l, r, common, e->loc);
     }
 
+    // @Virtual/struct: si el target es un STRUCT ADDRESS-TAKEN, @c rhs es el PTR
+    // a un buffer origen (el retbuf de un metodo SRET, u otro struct).  Hay que
+    // COPIAR sus bytes al buffer del target, NO rebindear el slot al ptr origen:
+    // con `&x` tomado el buffer del target es fijo (alguien tiene su direccion),
+    // y write_local guardaria el PUNTERO en el slot en vez del contenido.  Esto
+    // arreglaba `x = x.metodo()` (self-assign via SRET) con x address-taken, que
+    // producia basura (guardaba la direccion del retbuf como si fuera el struct).
+    if (rhs != ir::IR_NO_VALUE && e->op == ast::AssignOp::Assign &&
+        e->target->result_type.kind == PrimitiveKind::STRUCT &&
+        address_taken_locals_.count(id->name) &&
+        !type_is_overlay(e->target->result_type)) {
+        const std::string &sn = e->target->result_type.struct_name;
+        auto it_sl = tc_.struct_layouts().find(sn);
+        if (it_sl != tc_.struct_layouts().end()) {
+            // Para un struct address-taken el ALLOCA ES el buffer; lookup() da su
+            // direccion (read_local haria un LOAD, devolviendo el contenido).
+            const ir::IrValueId dst_addr = lookup(id->name);
+            if (dst_addr != ir::IR_NO_VALUE && dst_addr != rhs) {
+                const uint64_t sz =
+                    static_cast<uint64_t>(it_sl->second.size_bytes);
+                const bool dst_host = fn_->values[dst_addr].is_host_ptr;
+                const bool src_host = fn_->values[rhs].is_host_ptr;
+                const uint64_t qwords = (sz + 7) / 8;
+                for (uint64_t qi = 0; qi < qwords; ++qi) {
+                    const ir::IrValueId v_off = emit_const(
+                        ir::IrType::I64, static_cast<int64_t>(qi * 8),
+                        e->loc.line);
+                    const ir::IrValueId s_at = fn_->new_value(ir::IrType::PTR);
+                    fn_->values[s_at].is_host_ptr = src_host;
+                    {
+                        ir::IrInstr ad{};
+                        ad.op = ir::IrOp::ADD;
+                        ad.type = ir::IrType::I64;
+                        ad.dst = s_at;
+                        ad.operands = {rhs, v_off};
+                        ad.source_line = e->loc.line;
+                        fn_->append(current_block_, std::move(ad));
+                    }
+                    const ir::IrValueId w = fn_->new_value(ir::IrType::I64);
+                    {
+                        ir::IrInstr ld{};
+                        ld.op = ir::IrOp::LOAD;
+                        ld.type = ir::IrType::I64;
+                        ld.dst = w;
+                        ld.operands = {s_at};
+                        ld.source_line = e->loc.line;
+                        fn_->append(current_block_, std::move(ld));
+                    }
+                    const ir::IrValueId d_at = fn_->new_value(ir::IrType::PTR);
+                    fn_->values[d_at].is_host_ptr = dst_host;
+                    {
+                        ir::IrInstr ad{};
+                        ad.op = ir::IrOp::ADD;
+                        ad.type = ir::IrType::I64;
+                        ad.dst = d_at;
+                        ad.operands = {dst_addr, v_off};
+                        ad.source_line = e->loc.line;
+                        fn_->append(current_block_, std::move(ad));
+                    }
+                    {
+                        ir::IrInstr st{};
+                        st.op = ir::IrOp::STORE;
+                        st.type = ir::IrType::I64;
+                        st.operands = {w, d_at};
+                        st.source_line = e->loc.line;
+                        fn_->append(current_block_, std::move(st));
+                    }
+                }
+                return dst_addr;
+            }
+        }
+    }
+
     // Cast final al tipo declarado de la variable y actualizar el scope.
     const ir::IrType rhs_ir =
         (rhs != ir::IR_NO_VALUE) ? fn_->values[rhs].type : dst_ir;
