@@ -306,6 +306,28 @@ codegen::RegAlloc rbank_allocate_belady(const IntervalResult &ivs, const MFuncti
         std::lock_guard<std::mutex> lk(g_measure_mtx);
         g_spill_trace_agg.add(st);
     }
+    // DEBUG Pilar 2: dump de la asignacion si VESTA_VREG_DUMP es substring del
+    // nombre de la funcion.  Muestra vregs totales, spills, y por vreg su Loc.
+    if (const char *want = std::getenv("VESTA_VREG_DUMP")) {
+        if (mf.name.find(want) != std::string::npos) {
+            uint32_t n_reg = 0, n_spill = 0, n_none = 0;
+            for (uint32_t v = 0; v < nvregs && v < ra.assign.size(); ++v) {
+                switch (ra.assign[v].loc) {
+                case codegen::RegAlloc::Loc::REG: n_reg++; break;
+                case codegen::RegAlloc::Loc::SPILL: n_spill++; break;
+                default: n_none++; break;
+                }
+            }
+            fprintf(stderr,
+                    "[vreg-dump] %s: vregs=%u reg=%u SPILL=%u none=%u slots=%u\n",
+                    mf.name.c_str(), nvregs, n_reg, n_spill, n_none,
+                    ra.num_spill_slots);
+            for (uint32_t v = 0; v < nvregs && v < ra.assign.size(); ++v)
+                if (ra.assign[v].loc == codegen::RegAlloc::Loc::SPILL)
+                    fprintf(stderr, "  [vreg-dump]   v%u -> SPILL slot %u\n", v,
+                            ra.assign[v].slot);
+        }
+    }
     return ra;
 }
 
