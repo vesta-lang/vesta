@@ -11818,6 +11818,17 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
      * especifico de maquina (2-address `mov dst,src1`) lo hace ademas el
      * coalesce_hint del linear-scan (otro nivel, copias que el IR no ve). */
 
+    // Orden canonico topologico (RPO) de los bloques de CADA funcion antes de que
+    // el IR se use (emit al .velb, JIT/vreg, CTPE).  El emisor de bytecode y el
+    // codegen del JIT vreg asumen orden ~control-flow (fall-through a bid+1,
+    // liveness lineal); una funcion con cadenas if/else-if que RETORNA STRUCT
+    // (SRET) podia quedar con el bloque EPILOGO en medio (orden NO topologico) ->
+    // el JIT la compilaba mal (retbuf/PHIs perdidos) aunque el interprete la
+    // ejecutara bien.  RPO lo canoniza para AMBOS backends (y para CTPE, que usa
+    // el JIT).  Solo reordena; no cambia la semantica.
+    for (auto &fn : mod.functions)
+        reorder_blocks_rpo(fn);
+
     // --- CTPE (debug): validacion del analisis de evaluabilidad + candidatos. ---
     if (std::getenv("VESTA_CTPE_DEBUG")) {
         ctpe::Evaluability ev = ctpe::compute_evaluability(mod);
