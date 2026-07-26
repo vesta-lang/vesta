@@ -4383,6 +4383,10 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         // Valores por defecto de los campos (`u8 a = 0x10`); el init-list
         // explicito de abajo sobrescribe los campos que liste.
         emit_struct_field_defaults(addr, lay, vd->loc.line);
+        // @Virtual: fijar el vptr del struct polimorfico a su vtable (tras el
+        // zero_fill; el init-list solo escribe campos, no el vptr en offset 0).
+        if (lay.is_polymorphic)
+            emit_struct_vptr_init(addr, lay, vd->loc.line);
         // Zero los storage words de bit fields antes del
         // loop para evitar que el RMW lea basura del ALLOCA.  Los
         // unique (offset, size) ya estan en lay.fields para bit
@@ -4720,6 +4724,13 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         // sobrescribe todo, asi que los defaults solo aplican sin init.
         if (!vd->init)
             emit_struct_field_defaults(addr, lay, vd->loc.line);
+        // @Virtual: un struct polimorfico recien construido apunta su vptr
+        // (offset 0) a la vtable de SU tipo declarado.  Va tras el zero_fill (que
+        // dejo el vptr en 0) y los defaults.  Para `Derivado d;` fija
+        // vptr=vtable_Derivado, de modo que un dispatch posterior por `Base*`
+        // resuelve al metodo del derivado (dispatch dinamico correcto).
+        if (lay.is_polymorphic && !vd->init)
+            emit_struct_vptr_init(addr, lay, vd->loc.line);
         // Ownership ruta B (copy-hook): `S b = a;` donde S declara `__clone__`
         // y `a` es un lvalue struct existente (IdentExpr) es una COPIA.  Modelo
         // (estilo Rust Clone): memcpy bit a bit a->b (abajo) y DESPUES
@@ -18699,11 +18710,19 @@ skip_comptime_eval_for_macro_to_macro:
         // es STRUCT y el layout declara el metodo, emitimos CALL directo
         // a <Struct>__<metodo>(struct_addr, args...).  Si no es un
         // metodo conocido, cae a las rutas siguientes (colecciones, etc).
-        if (fa->base &&
-            fa->base->result_type.kind == PrimitiveKind::STRUCT &&
-            !fa->base->result_type.struct_name.empty()) {
-            auto it_s =
-                tc_.struct_layouts().find(fa->base->result_type.struct_name);
+        // @Virtual: tambien enrutar `ptr.metodo()` sobre un `Struct*` (dispatch
+        // dinamico por vtable).  El struct efectivo es el pointee.
+        std::string sm_struct_name;
+        if (fa->base) {
+            const Type &rbt = fa->base->result_type;
+            if (rbt.kind == PrimitiveKind::STRUCT && !rbt.struct_name.empty())
+                sm_struct_name = rbt.struct_name;
+            else if (rbt.kind == PrimitiveKind::PTR && rbt.pointee &&
+                     rbt.pointee->kind == PrimitiveKind::STRUCT)
+                sm_struct_name = rbt.pointee->struct_name;
+        }
+        if (!sm_struct_name.empty()) {
+            auto it_s = tc_.struct_layouts().find(sm_struct_name);
             if (it_s != tc_.struct_layouts().end()) {
                 bool has_m = false;
                 for (const auto &mm : it_s->second.methods) {
@@ -33029,7 +33048,13 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
     // 'this' en memoria VM por defecto; structs en VM-stack son el
     // caso comun y dominante).
     auto *fa = static_cast<ast::FieldAccessExpr *>(e->callee.get());
-    const Type bt = fa->base->result_type;
+    Type bt = fa->base->result_type;
+    // @Virtual: `ptr.metodo()` sobre un `Struct*` -> el struct es el pointee, y
+    // el `this` es el VALOR del puntero (la direccion del objeto), no la de un
+    // ALLOCA.  lower_expr(fa->base) ya da ese valor.
+    if (bt.kind == PrimitiveKind::PTR && bt.pointee &&
+        bt.pointee->kind == PrimitiveKind::STRUCT)
+        bt = *bt.pointee;
     auto it = tc_.struct_layouts().find(bt.struct_name);
     if (it == tc_.struct_layouts().end()) {
         error_at(e->loc,
@@ -33145,6 +33170,63 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
     for (auto av : arg_vals)
         operands.push_back(av);
 
+    if (mtd->is_virtual) {
+        // @Virtual: dispatch DINAMICO por vtable.  El vptr (offset 0 del objeto)
+        // apunta a la vtable del tipo REAL; el slot da la implementacion.  Es
+        // correcto tanto por Base* (tipo dinamico) como por valor concreto (el
+        // vptr se fija a la vtable del concreto en la construccion).  La
+        // devirtualizacion a CALL directo cuando el tipo es estatico y concreto
+        // es una optimizacion posterior.
+        const uint32_t slot = mtd->vtable_index;
+        // %vptr = LOAD [this_addr + 0]  (this es host -> movh recupera el vptr,
+        // que es una direccion VM de la vtable en la seccion de codigo).
+        const ir::IrValueId v_vptr = fn_->new_value(ir::IrType::PTR);
+        {
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = ir::IrType::I64;
+            ld.dst = v_vptr;
+            ld.operands = {this_addr};
+            ld.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ld));
+        }
+        // %fnaddr = %vptr + slot*8  (%vptr es VM -> load de la entrada es mov VM)
+        ir::IrValueId v_fnaddr = v_vptr;
+        if (slot != 0) {
+            const ir::IrValueId v_off =
+                emit_const(ir::IrType::I64, (uint64_t)slot * 8u, e->loc.line);
+            v_fnaddr = fn_->new_value(ir::IrType::PTR);
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v_fnaddr;
+            ad.operands = {v_vptr, v_off};
+            ad.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ad));
+        }
+        // %fn = LOAD [%fnaddr]  (cfn: direccion del metodo; slot host -> movh)
+        const ir::IrValueId v_fn = fn_->new_value(ir::IrType::PTR);
+        {
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = ir::IrType::I64;
+            ld.dst = v_fn;
+            ld.operands = {v_fnaddr};
+            ld.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ld));
+        }
+        // CALLIND %fn(this_addr, [retbuf], args...)
+        ir::IrInstr ins{};
+        ins.op = ir::IrOp::CALLIND;
+        ins.type = ret_ir;
+        ins.dst = dst;
+        ins.func_ptr = v_fn;
+        ins.operands = std::move(operands);
+        ins.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(ins));
+        return method_sret ? v_retbuf : dst;
+    }
+
     ir::IrInstr ins{};
     ins.op = ir::IrOp::CALL;
     ins.type = ret_ir;
@@ -33155,6 +33237,73 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
     fn_->append(current_block_, std::move(ins));
 
     return method_sret ? v_retbuf : dst;
+}
+
+// ---------------------------------------------------------------------
+// @Virtual: vtable estatica + init del vptr (modelo AOT, structs value-type).
+// ---------------------------------------------------------------------
+
+uint64_t Lowering::get_or_emit_struct_vtable(const StructLayout &lay) {
+    auto cit = struct_vtable_didx_.find(lay.name);
+    if (cit != struct_vtable_didx_.end()) return cit->second;
+
+    // Numero de slots = max(vtable_index)+1 sobre los metodos virtuales.
+    uint32_t nslots = 0;
+    for (const auto &mi : lay.methods)
+        if (mi.is_virtual && mi.vtable_index + 1u > nslots)
+            nslots = mi.vtable_index + 1u;
+    // Blob de nslots*8 bytes a cero; cada slot recibe una reloc ABS64 al
+    // simbolo del metodo (<owner>__<metodo>) que lo ocupa.  El owner es la
+    // clase que DEFINE el metodo tras el aplanado (defining_class = este
+    // struct, porque el flatten reescribe los heredados con el nombre del
+    // derivado -> el override gana su slot con el simbolo del derivado).
+    std::vector<uint8_t> vt(static_cast<size_t>(nslots) * 8u, 0);
+    const uint64_t idx = out_mod_->static_data.push_back(std::move(vt));
+    auto &vm = out_mod_->static_data.meta_at(idx);
+    vm.section_name = ".data.rel.ro"; // RELRO como las vtables de C++
+    vm.flags |= ir::IrModule::SD_FLAG_FORCE_EMIT | ir::IrModule::SD_FLAG_NON_DEDUP;
+    for (const auto &mi : lay.methods) {
+        if (!mi.is_virtual) continue;
+        const std::string owner =
+            mi.defining_class.empty() ? lay.name : mi.defining_class;
+        ir::IrModule::StaticDataMeta::SymRef sr;
+        sr.offset = mi.vtable_index * 8u;
+        sr.sym = owner + "__" + mi.name; // reloc datos->codigo
+        sr.width = 8;
+        sr.is_rel = 0;
+        vm.sym_refs.push_back(std::move(sr));
+    }
+    struct_vtable_didx_[lay.name] = idx;
+    return idx;
+}
+
+void Lowering::emit_struct_vptr_init(ir::IrValueId struct_addr,
+                                     const StructLayout &lay, uint32_t line) {
+    if (!lay.is_polymorphic) return;
+    const uint64_t vt_idx = get_or_emit_struct_vtable(lay);
+    // %vt = &vtable (STR_LIT_ADDR del blob).  La vtable vive en la seccion de
+    // CODIGO (direccion VM en interp/JIT; .rodata en AOT), como un string
+    // literal -> NO is_host_ptr.  El struct SI es host (host_alloca): el STORE
+    // del vptr a [struct_addr+0] usa movh porque struct_addr es host, pero el
+    // VALOR guardado (la direccion de la vtable) es VM.  Al leer el vptr
+    // (load [struct_addr] = movh) se recupera esa direccion VM, y el load de la
+    // entrada (load [vptr] = mov VM) lee la vtable correctamente.
+    const ir::IrValueId v_vt = fn_->new_value(ir::IrType::PTR);
+    ir::IrInstr sa{};
+    sa.op = ir::IrOp::STR_LIT_ADDR;
+    sa.type = ir::IrType::PTR;
+    sa.dst = v_vt;
+    sa.imm = vt_idx;
+    sa.source_line = line;
+    fn_->append(current_block_, std::move(sa));
+    // STORE %vt -> [struct_addr + 0]  (el vptr).
+    ir::IrInstr st{};
+    st.op = ir::IrOp::STORE;
+    st.type = ir::IrType::I64;
+    st.dst = ir::IR_NO_VALUE;
+    st.operands = {v_vt, struct_addr};
+    st.source_line = line;
+    fn_->append(current_block_, std::move(st));
 }
 
 // ---------------------------------------------------------------------

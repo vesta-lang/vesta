@@ -984,6 +984,24 @@ class Lowering {
     ir::IrValueId lower_struct_method_call(ast::CallExpr *e);
 
     /**
+     * @brief @Virtual: emite (una vez, cacheada) la vtable estatica de un struct
+     * polimorfico como blob en @c static_data con @c sym_refs a
+     * @c <owner>__<metodo> por slot (reloc datos->codigo).  Devuelve el indice
+     * del blob en @c static_data.  Modelo AOT: la vtable vive en @c .data.rel.ro.
+     */
+    uint64_t get_or_emit_struct_vtable(const StructLayout &lay);
+
+    /**
+     * @brief @Virtual: inicializa el vptr (offset 0) de un struct polimorfico
+     * recien construido en @p struct_addr apuntandolo a su vtable estatica.
+     */
+    void emit_struct_vptr_init(ir::IrValueId struct_addr,
+                               const StructLayout &lay, uint32_t line);
+
+    /// Cache nombre-de-struct -> indice del blob de su vtable en static_data.
+    std::unordered_map<std::string, uint64_t> struct_vtable_didx_;
+
+    /**
      * @brief Calcula el puntero al elemento indexado (base + i*sizeof(*base)).
      *
      * Helper compartido por @c lower_index (lectura) y la rama IndexExpr

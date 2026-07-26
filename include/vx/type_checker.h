@@ -303,6 +303,11 @@ struct StructLayout {
     /// "polimorfico" y lleva un vptr en offset 0 (los campos empiezan en 8).
     /// El dispatch de sus metodos virtuales va por vtable estatica.
     bool is_polymorphic = false;
+    /// Nombre del struct base (herencia estatica), o vacio.  Preservado del AST
+    /// aunque el flatten ya haya aplanado los campos/metodos; lo usa el upcast
+    /// de puntero `Derivado* -> Base*`.  Si apunta a una interfaz (no struct),
+    /// el recorrido de la cadena para al no hallarlo en struct_layouts_.
+    std::string super_name;
     bool is_overlay = false;
     /// Overlay: HUELLA estatica de la vista = max(offset+size) sobre los campos
     /// de offset constante, redondeada al alineamiento.  Es lo que `sizeof(T)`
@@ -769,6 +774,14 @@ class TypeChecker {
      *        interfaz solo OBLIGA la forma (contrato), no da codigo.
      */
     void verify_struct_interface_conformance();
+
+    /**
+     * @brief @Virtual: true si `value` es asignable a `target` por upcast de
+     * puntero `Derivado* -> Base*` (herencia estatica de structs).  Recorre la
+     * cadena super_name del pointee de @p value buscando el pointee de @p target.
+     * Layout-compatible (el derivado embebe la base al inicio, vptr en offset 0).
+     */
+    bool struct_ptr_upcast_ok(const Type &target, const Type &value) const;
 
     /// @brief Resuelve los @c @complexity que el parser dejo pendientes.
     ///

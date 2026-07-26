@@ -894,6 +894,32 @@ std::unique_ptr<ASTNode> Parser::parse_data_directive() {
             values.push_back(parse_expression());
             break;
 
+        case TokenType::AT: {
+            // `dq @Absolute("code.<sym>")`: referencia absoluta a un simbolo
+            // (reloc datos->codigo).  La usa la vtable de los structs @Virtual.
+            advance(); // consumir '@'
+            if (current.type != TokenType::IDENTIFIER ||
+                current.lexeme != "Absolute") {
+                error(current, "en datos solo se admite @Absolute(\"sym\")");
+                advance();
+                continue;
+            }
+            advance(); // 'Absolute'
+            expectToken(TokenType::LPAREN, "se esperaba '(' tras @Absolute");
+            advance();
+            if (current.type != TokenType::STRING) {
+                error(current, "@Absolute espera una cadena con el simbolo");
+                advance();
+                continue;
+            }
+            std::string sym = current.lexeme;
+            advance(); // la cadena
+            expectToken(TokenType::RPAREN, "se esperaba ')' tras @Absolute(...)");
+            advance();
+            values.push_back(std::make_unique<AbsRefExpr>(std::move(sym)));
+            break;
+        }
+
         default:
             error(current, "Invalid data value");
             advance();

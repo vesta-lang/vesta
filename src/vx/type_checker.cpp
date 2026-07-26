@@ -1052,6 +1052,24 @@ clone_method_subst(const ast::ClassMethodDecl *m, const GenSubst &g) {
     return nm;
 }
 
+bool TypeChecker::struct_ptr_upcast_ok(const Type &target,
+                                       const Type &value) const {
+    if (target.kind != PrimitiveKind::PTR || value.kind != PrimitiveKind::PTR ||
+        !target.pointee || !value.pointee ||
+        target.pointee->kind != PrimitiveKind::STRUCT ||
+        value.pointee->kind != PrimitiveKind::STRUCT)
+        return false;
+    std::string cur = value.pointee->struct_name;
+    int guard = 0;
+    while (!cur.empty() && guard++ < 64) {
+        if (cur == target.pointee->struct_name) return true;
+        auto it = struct_layouts_.find(cur);
+        if (it == struct_layouts_.end()) break;
+        cur = it->second.super_name;
+    }
+    return false;
+}
+
 void TypeChecker::verify_struct_interface_conformance() {
     // Para cada struct que declara `: IConcepto`, exigir que satisfaga el
     // concepto.  Es coste cero: la misma via comptime que `where T: C`, sin
@@ -3318,6 +3336,7 @@ void TypeChecker::collect_globals() {
                     break;
                 }
             layout.is_polymorphic = is_poly;
+            layout.super_name = s->super_name; // para el upcast Derivado*->Base*
             // union: `offset` se reutiliza como MAXIMO tamano de campo (todos
             // los campos viven en offset 0); en struct es el offset secuencial.
             uint32_t offset = 0;
@@ -6989,9 +7008,11 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
                 vd->init->result_type = s.type; // el literal es del newtype
             }
         }
+        // @Virtual: upcast de puntero `Derivado* -> Base*` (herencia estatica).
+        const bool ptr_upcast = struct_ptr_upcast_ok(s.type, t);
         if (!numeric_const_to_newtype && t.kind != PrimitiveKind::COUNT &&
             !types_assignable(s.type, t) &&
-            !class_is_assignable(s.type, t) && !null_to_class) {
+            !class_is_assignable(s.type, t) && !null_to_class && !ptr_upcast) {
             std::string msg = std::string("tipo del inicializador (") +
                               type_to_string(t) +
                               ") incompatible con tipo declarado (" +
@@ -12320,7 +12341,14 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     // lowering emite CALL directo (sin vtable).
     if (e->callee->kind == ast::NodeKind::FieldAccessExpr) {
         auto *fa = static_cast<ast::FieldAccessExpr *>(e->callee.get());
-        const Type bt = check_expr(fa->base.get());
+        Type bt = check_expr(fa->base.get());
+        // @Virtual: `ptr.metodo()` sobre un `Struct*` -> auto-deref al struct
+        // apuntado.  El metodo se despacha sobre el objeto (dispatch dinamico por
+        // vtable si es @Virtual).  Habilita el polimorfismo `Base* p = &derivado;
+        // p.metodo()`.
+        if (bt.kind == PrimitiveKind::PTR && bt.pointee &&
+            bt.pointee->kind == PrimitiveKind::STRUCT)
+            bt = *bt.pointee;
         // Helper: `o.f(args)` donde f es un CAMPO de tipo funcion (cfn/fn) ->
         // llamada INDIRECTA a traves del puntero a funcion guardado en el campo
         // (CALLIND), NO un metodo.  Esto distingue un METODO de struct/clase
@@ -12433,7 +12461,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                     ta.kind != tp.kind)
                     e->args[i]->result_type = tp;
                 if (!types_assignable(tp, ta) &&
-                    !value_assignable_to_interface(tp, ta)) {
+                    !value_assignable_to_interface(tp, ta) &&
+                    !struct_ptr_upcast_ok(tp, ta)) {
                     diags_.error(e->args[i]->loc,
                                  std::string("argumento ") +
                                      std::to_string(i + 1) + " del metodo '" +
@@ -15316,7 +15345,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 e->args[i]->result_type = tp; // constante numerica -> newtype
             } else if (ta.kind != PrimitiveKind::COUNT &&
                        !types_assignable(tp, ta) &&
-                       !value_assignable_to_interface(tp, ta)) {
+                       !value_assignable_to_interface(tp, ta) &&
+                       !struct_ptr_upcast_ok(tp, ta)) {
                 diags_.error(e->args[i]->loc,
                              std::string("argumento ") + std::to_string(i + 1) +
                                  ": tipo (" + type_to_string(ta) +
@@ -15550,7 +15580,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 e->args[i]->result_type = tp; // el literal es del newtype
             } else if (ta.kind != PrimitiveKind::COUNT &&
                        !types_assignable(tp, ta) &&
-                       !value_assignable_to_interface(tp, ta)) {
+                       !value_assignable_to_interface(tp, ta) &&
+                       !struct_ptr_upcast_ok(tp, ta)) {
                 diags_.error(e->args[i]->loc,
                              std::string("argumento ") + std::to_string(i + 1) +
                                  ": tipo (" + type_to_string(ta) +
@@ -15606,7 +15637,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             e->args[i]->result_type = tp; // constante numerica -> newtype
         } else if (ta.kind != PrimitiveKind::COUNT &&
                    !types_assignable(tp, ta) &&
-                   !value_assignable_to_interface(tp, ta)) {
+                   !value_assignable_to_interface(tp, ta) &&
+                   !struct_ptr_upcast_ok(tp, ta)) {
             diags_.error(e->args[i]->loc, std::string("argumento ") +
                                               std::to_string(i + 1) +
                                               ": tipo (" + type_to_string(ta) +

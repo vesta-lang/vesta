@@ -1,0 +1,26 @@
+/**
+ * @file 329_virtual_self_err.vx
+ * @brief Negativo: `Self` no puede usarse en un metodo `@Virtual`.
+ *
+ * Son mecanismos OPUESTOS: `Self` = clon-por-derivado estatico (cada derivado
+ * recibe su propia copia monomorfizada del metodo, con Self = su tipo); un
+ * metodo `@Virtual` tiene UNA sola firma con dispatch dinamico por vtable.
+ * Mezclarlos es ambiguo -> error de compilacion.
+ */
+namespace virtual_self_err;
+
+struct Nodo {
+    i64 v;
+    // ERROR: un metodo @Virtual devuelve Self.
+    @Virtual public Self clonar() {
+        Nodo r;
+        r.v = this.v;
+        return r;
+    }
+}
+
+i32 main() {
+    Nodo n;
+    n.v = 1;
+    return (i32) n.v;
+}

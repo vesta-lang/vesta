@@ -53,6 +53,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iomanip>
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -6859,9 +6860,35 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
             // Si es mayor que el align 16 default del bloque, emitir un
             // @c align directiva especifica antes del label.  Asi
             // @c @align(32) en comptime const arrays produce alineamiento >16.
-            const uint16_t a = mod.static_data.meta_at(i).alignment;
+            const auto &meta_i = mod.static_data.meta_at(i);
+            const uint16_t a = meta_i.alignment;
             if (a > 16) {
                 out << "align " << a << "\n";
+            }
+            // @Virtual: slot con sym_refs (reloc datos->codigo) = una VTABLE.
+            // Se emite como `s_N dq @Absolute("code.<sym>"), ...` en orden de
+            // offset (rellenando huecos con 0).  El linker parchea cada entrada
+            // con la direccion VM del metodo -> el dispatch dinamico funciona en
+            // interp/.velb (no solo en AOT).  Los sym vienen como <owner>__<m>;
+            // el prefijo "code." los ancla a la seccion de codigo.
+            if (!meta_i.sym_refs.empty()) {
+                // Mapa offset -> simbolo (los sym_refs vienen ordenados, pero no
+                // asumimos).  Todos son width=8 (dq) por construccion de la vtable.
+                std::map<uint32_t, std::string> at;
+                for (const auto &sr : meta_i.sym_refs) at[sr.offset] = sr.sym;
+                out << "    s_" << i << " dq ";
+                bool first = true;
+                for (uint32_t off = 0; off + 8u <= bn; off += 8u) {
+                    if (!first) out << ", ";
+                    first = false;
+                    auto its = at.find(off);
+                    if (its != at.end())
+                        out << "@Absolute(\"code." << its->second << "\")";
+                    else
+                        out << "0"; // hueco sin metodo
+                }
+                out << "\n";
+                continue;
             }
             // El parser .vel espera el patron "etiqueta directiva valores"
             // EN LA MISMA LINEA (estilo NASM).  Si separamos la etiqueta

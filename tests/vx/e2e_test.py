@@ -2294,6 +2294,8 @@ fails_case("abstract_neg", "struct @Abstract no instanciable por valor", "324_ab
 modes3_case("iface_abstract", "interfaz (concept, contrato) vs @Abstract (base con impl); struct usa ambos", "325_interfaz_vs_abstract.vx", 67)
 fails_case("iface_no_sat", "struct declara ': IConcepto' pero no lo satisface", "326_interfaz_no_satisface_err.vx", "no satisface el concepto")
 modes3_case("abs_chain_iface", "@Abstract hereda de @Abstract + interfaz heredada verificada en el concreto", "327_abstract_cadena_iface.vx", 50)
+modes3_case("virtual_dispatch", "@Virtual: dispatch dinamico por vtable (Figura*->area() del tipo real), interp=jit=aot", "328_virtual_dispatch.vx", 42)
+fails_case("virtual_self_err", "Self prohibido en metodo @Virtual (mecanismos opuestos)", "329_virtual_self_err.vx", "no puede usarse en un metodo @Virtual")
 
 
 # --- stdlib: ejemplos y tests de la biblioteca estandar de Vesta -----------

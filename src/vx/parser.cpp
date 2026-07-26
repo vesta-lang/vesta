@@ -4871,14 +4871,17 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
         // opt-in por metodo).  parse_member_contracts_ hace return al ver una
         // anotacion que no es contrato, asi que alternamos hasta agotar ambos.
         bool annot_virtual = false;
+        bool annot_override = false;
         for (;;) {
             parse_member_contracts_(mc);
             if (current_.kind == TokenKind::AT &&
                 lex_.peek_at(0).kind == TokenKind::IDENTIFIER &&
-                lex_.peek_at(0).lexeme == "Virtual") {
+                (lex_.peek_at(0).lexeme == "Virtual" ||
+                 lex_.peek_at(0).lexeme == "Override")) {
                 (void)consume(); // '@'
-                (void)consume(); // 'Virtual'
-                annot_virtual = true;
+                const std::string an = consume().lexeme;
+                if (an == "Virtual") annot_virtual = true;
+                else annot_override = true; // @Override en un metodo de struct
                 continue;
             }
             break;
@@ -5020,6 +5023,7 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
             m->return_type = std::move(type_node);
             m->access = access;
             m->is_virtual = annot_virtual; // `@Virtual`: dispatch dinamico
+            m->is_override = annot_override;
             m->method_type_params = method_tparams;
             m->type_bounds = method_tbounds;
             (void)consume(); // '('
