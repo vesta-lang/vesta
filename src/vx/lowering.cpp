@@ -17331,7 +17331,17 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
     case ast::BinOp::BitOr: op = ir::IrOp::OR; break;
     case ast::BinOp::BitXor: op = ir::IrOp::XOR; break;
     case ast::BinOp::Shl: op = ir::IrOp::SHL; break;
-    case ast::BinOp::Shr: op = is_unsign ? ir::IrOp::SHR : ir::IrOp::SAR; break;
+    case ast::BinOp::Shr: {
+        // El shift a la derecha es aritmetico (SAR) sii el LHS (el valor
+        // desplazado) es SIGNED -- NO el tipo comun.  El RHS es solo el contador
+        // de bits y no debe influir en la signedness (semantica C).  Sin esto,
+        // `i64 >> u64` promocionaba a u64 y hacia shift logico (bug: perdia el
+        // signo).
+        const bool lhs_unsign =
+            is_integral(ltk) && !is_signed_integral(ltk);
+        op = lhs_unsign ? ir::IrOp::SHR : ir::IrOp::SAR;
+        break;
+    }
     }
 
     const ir::IrValueId dst = fn_->new_value(result_ir);

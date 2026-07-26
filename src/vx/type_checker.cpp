@@ -1213,8 +1213,36 @@ void TypeChecker::flatten_struct_inheritance() {
                 ast::StructFieldDecl nf;
                 nf.loc = fld.loc;
                 nf.name = fld.name;
-                nf.bit_width = fld.bit_width;
                 nf.type = clone_type_with_subst(fld.type.get(), g);
+                // Preservar TODOS los atributos del campo (sin esto un miembro
+                // ANONIMO -- union/struct sin nombre -- o un array/overlay
+                // heredado se copiaba como campo escalar sin nombre y se perdian
+                // sus subcampos, p.ej. la union lo64/hi64/bytes de un wide-int).
+                nf.is_anonymous = fld.is_anonymous;
+                nf.bit_width = fld.bit_width;
+                nf.explicit_offset = fld.explicit_offset;
+                nf.is_array = fld.is_array;
+                nf.endian = fld.endian;
+                if (fld.offset_expr)
+                    nf.offset_expr = clone_expr(fld.offset_expr.get(), g);
+                if (fld.array_count)
+                    nf.array_count = clone_expr(fld.array_count.get(), g);
+                if (fld.array_stride)
+                    nf.array_stride = clone_expr(fld.array_stride.get(), g);
+                if (fld.endian_expr)
+                    nf.endian_expr = clone_expr(fld.endian_expr.get(), g);
+                if (fld.offset_block) {
+                    auto cb = clone_stmt(fld.offset_block.get(), g);
+                    if (cb && cb->kind == ast::NodeKind::BlockStmt)
+                        nf.offset_block.reset(
+                            static_cast<ast::BlockStmt *>(cb.release()));
+                }
+                if (fld.element_block) {
+                    auto cb = clone_stmt(fld.element_block.get(), g);
+                    if (cb && cb->kind == ast::NodeKind::BlockStmt)
+                        nf.element_block.reset(
+                            static_cast<ast::BlockStmt *>(cb.release()));
+                }
                 if (fld.default_init)
                     nf.default_init = clone_expr(fld.default_init.get(), g);
                 f.fields.push_back(std::move(nf));
