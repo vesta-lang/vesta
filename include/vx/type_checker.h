@@ -753,6 +753,15 @@ class TypeChecker {
      */
     void flatten_struct_inheritance();
 
+    /**
+     * @brief Verifica que cada struct que declara `: IConcepto` satisface ese
+     *        concepto.  Coste cero: es una comprobacion comptime (misma via que
+     *        `where T: C`), no genera codigo ni vtables.  Distinto de heredar de
+     *        un `@Abstract` (que aporta campos + implementacion): aqui la
+     *        interfaz solo OBLIGA la forma (contrato), no da codigo.
+     */
+    void verify_struct_interface_conformance();
+
     /// @brief Resuelve los @c @complexity que el parser dejo pendientes.
     ///
     /// Su `when:` habla del parametro de tipo (`is_float<T>()`), asi que solo

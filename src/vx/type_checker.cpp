@@ -1049,6 +1049,82 @@ clone_method_subst(const ast::ClassMethodDecl *m, const GenSubst &g) {
     return nm;
 }
 
+void TypeChecker::verify_struct_interface_conformance() {
+    // Para cada struct que declara `: IConcepto`, exigir que satisfaga el
+    // concepto.  Es coste cero: la misma via comptime que `where T: C`, sin
+    // vtable ni codigo.  El `super_name` (herencia de un @Abstract) NO se toca
+    // aqui -- eso aporta campos+impl; las `interface_names` solo son contratos.
+    // Indice nombre -> StructDecl para recorrer cadenas de herencia (bases).
+    std::unordered_map<std::string, ast::StructDecl *> smap;
+    for (auto &d : mod_.decls)
+        if (d && d->kind == ast::NodeKind::StructDecl) {
+            auto *sd = static_cast<ast::StructDecl *>(d.get());
+            smap[sd->name] = sd;
+        }
+
+    for (const auto &decl : mod_.decls) {
+        if (!decl || decl->kind != ast::NodeKind::StructDecl) continue;
+        auto *s = static_cast<ast::StructDecl *>(decl.get());
+        // Los templates (`struct Caja<T> : C`) no se verifican sobre el molde;
+        // cada instancia monomorphizada hereda las clausulas y se verifica.
+        if (!s->type_params.empty()) continue;
+
+        // Conceptos exigidos = interfaces declaradas por el struct MAS las de
+        // toda su cadena de bases (@Abstract).  Un @Abstract puede declarar una
+        // interfaz sin implementarla del todo (modelo Java): la obligacion se
+        // TRANSFIERE al derivado concreto.  Recopilamos aqui esa herencia.
+        // Un nombre en la posicion `super_name` que NO resuelve a struct es en
+        // realidad una interfaz (`struct S : IConcepto` sin base concreta).
+        std::vector<std::string> ifaces;
+        std::unordered_set<std::string> seen_iface;
+        auto add_ifaces_of = [&](ast::StructDecl *d) {
+            for (const std::string &n : d->interface_names)
+                if (seen_iface.insert(n).second) ifaces.push_back(n);
+            if (!d->super_name.empty() && smap.find(d->super_name) == smap.end())
+                if (seen_iface.insert(d->super_name).second)
+                    ifaces.push_back(d->super_name);
+        };
+        {
+            std::unordered_set<std::string> seen_base;
+            ast::StructDecl *cur = s;
+            while (cur && seen_base.insert(cur->name).second) {
+                add_ifaces_of(cur);
+                if (cur->super_name.empty()) break;
+                auto it = smap.find(cur->super_name);
+                if (it == smap.end()) break; // super es interfaz, ya contada
+                cur = it->second;            // subir a la base struct
+            }
+        }
+        if (ifaces.empty()) continue;
+
+        // El tipo concreto del struct (nombre ya mangled tras flatten/namespace).
+        Type st{PrimitiveKind::STRUCT};
+        st.struct_name = s->name;
+        for (const std::string &iname : ifaces) {
+            const ConceptEval ev = comptime_eval_concept(*this, iname, st);
+            if (!ev.found) {
+                diags_.error(s->loc, "el struct '" + s->name +
+                                         "' declara ': " + iname +
+                                         "' pero '" + iname +
+                                         "' no es un concepto conocido");
+                continue;
+            }
+            // Un @Abstract NO se verifica estrictamente: puede diferir la
+            // implementacion a sus derivados.  Solo se comprueba que el concepto
+            // exista (diagnostico de nombres mal escritos).  El derivado
+            // concreto que herede de este abstract SI sera verificado (arriba
+            // acumulamos las interfaces heredadas).
+            if (s->is_abstract) continue;
+            if (!ev.satisfied) {
+                diags_.error(s->loc, "el struct '" + s->name +
+                                         "' no satisface el concepto '" + iname +
+                                         "' que declara implementar (directamente "
+                                         "o heredado de una base @Abstract)");
+            }
+        }
+    }
+}
+
 void TypeChecker::flatten_struct_inheritance() {
     // Indice nombre -> StructDecl.
     std::unordered_map<std::string, ast::StructDecl *> smap;
@@ -2128,6 +2204,11 @@ bool TypeChecker::run() {
     // necesitan).  Los bounds de metodos genericos (monomorphizados en
     // check_functions) se verifican al final de check_functions.
     verify_pending_type_bounds();
+
+    // Fase 4b: un struct `: IConcepto` debe satisfacer el concepto (coste cero,
+    // comptime).  Se corre con los layouts ya completos (conceptos estructurales
+    // inspeccionan struct_layouts_).
+    verify_struct_interface_conformance();
 
     /* LANG.fix-2 pre-pase: inicializar los `comptime const|var`
      * globals con sus inits.  Sin esto, los top-level `comptime { }`
