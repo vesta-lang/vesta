@@ -723,6 +723,28 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
             fi.bit_width = f.bit_width;
             s.fields.push_back(std::move(fi));
         }
+        s.super_class = layout.super_name;
+        // Metodos del struct: incluye los HEREDADOS ya aplanados por el flatten
+        // de la herencia (con Self resuelto al derivado) y los operadores.  Sin
+        // esto, un `struct` con metodos importado cross-module no exponia NINGUN
+        // metodo (ni propios, ni heredados, ni __op__).  El dispatch de metodos
+        // de struct es ESTATICO (value-type) -> el mangled_label lleva el nombre
+        // real de la free-function en el .velb (`<mangled_struct>__<metodo>`).
+        s.methods.reserve(layout.methods.size());
+        for (const auto &m : layout.methods) {
+            VxiSymbol::MethodInfo mi;
+            mi.name = m.name;
+            mi.return_type = canonical_typename_of(m.return_type);
+            mi.vtable_index = m.vtable_index;
+            mi.flags = 0;
+            if (m.is_static) mi.flags |= 0x01;
+            if (m.is_constructor) mi.flags |= 0x02;
+            mi.mangled_label = name + "__" + m.name;
+            mi.param_types.reserve(m.param_types.size());
+            for (const auto &pt : m.param_types)
+                mi.param_types.push_back(canonical_typename_of(pt));
+            s.methods.push_back(std::move(mi));
+        }
         out.symbols.push_back(std::move(s));
     }
 
@@ -1531,6 +1553,63 @@ void import_vxi_into_typechecker(
     for (const auto &os : only_symbols)
         if (!is_type_sym(os)) ordered.push_back(&os);
 
+    // Mapa nombre-de-tipo-en-el-ORIGEN -> local_name.  El .vxi serializa los
+    // param_types/return_type de los metodos con el nombre CANONICO (mangled con
+    // su namespace, p.ej. "std__wideint__u128") del modulo origen, pero el
+    // consumidor registra cada tipo con su local_name (p.ej. "u128").  Sin
+    // traducir, `types_assignable` compararia "std__wideint__u128" contra "u128"
+    // y fallaria -> un metodo u operador con parametros del propio modulo no
+    // resolveria cross-module (`a / b` con a,b:u128 daba "u128 no declara /").
+    std::unordered_map<std::string, Type> origin_to_local;
+    for (const auto *os_ptr : ordered) {
+        auto it = by_name.find(os_ptr->name);
+        if (it == by_name.end()) continue;
+        const VxiSymbol &s = mod.symbols[it->second];
+        switch (s.kind) {
+        case VxiSymbolKind::STRUCT:
+        case VxiSymbolKind::CLASS:
+            break;
+        default:
+            continue;
+        }
+        const std::string local =
+            os_ptr->rename.empty() ? os_ptr->name : os_ptr->rename;
+        std::string mangled = s.name;
+        if (!s.ns_path.empty()) {
+            std::string nsm;
+            for (char c : s.ns_path) {
+                if (c == '.')
+                    nsm += "__";
+                else
+                    nsm += c;
+            }
+            mangled = nsm + "__" + s.name;
+        }
+        // Type base local ya construido: se usa DIRECTO (sin resolve_type_string)
+        // porque el struct que porta el metodo todavia no esta registrado cuando
+        // se resuelven sus propios param_types (self-reference: `a / b` con
+        // a,b:u128 -> __div__(u128)).  Solo STRUCT/CLASS por valor (los tipos por
+        // los que se cruzan los operadores); ENUM/typedef caen a resolve_type_string.
+        Type base;
+        if (s.kind == VxiSymbolKind::STRUCT)
+            base = Type{PrimitiveKind::STRUCT, local};
+        else if (s.kind == VxiSymbolKind::CLASS)
+            base = Type{PrimitiveKind::CLASS, local};
+        origin_to_local[mangled] = base;
+        origin_to_local[s.name] = base; // por si la firma usa el nombre simple
+    }
+    // Resuelve un type_string del origen a un Type local.  Para un tipo del
+    // propio modulo importado usado POR VALOR devuelve el Type base ya
+    // construido (sin depender de que este registrado); en cualquier otro caso
+    // (primitivos, punteros, tipos externos) delega en resolve_type_string.
+    auto resolve_imported = [&](const std::string &ts) -> Type {
+        auto direct = origin_to_local.find(ts);
+        if (direct != origin_to_local.end() &&
+            direct->second.kind != PrimitiveKind::VOID)
+            return direct->second;
+        return tc.resolve_type_string(ts);
+    };
+
     for (const auto *os_ptr : ordered) {
         const auto &os = *os_ptr;
         auto it = by_name.find(os.name);
@@ -1612,6 +1691,27 @@ void import_vxi_into_typechecker(
                 sfi.bit_width = fi.bit_width;
                 L.fields.push_back(std::move(sfi));
             }
+            L.super_name = s.super_class;
+            // Metodos del struct importado (propios + heredados aplanados +
+            // operadores).  El lowering del consumidor los usa para resolver
+            // `a.metodo(...)` y los operadores (`a / b` -> __div__) cross-module.
+            L.methods.reserve(s.methods.size());
+            for (const auto &mi : s.methods) {
+                ClassMethodInfo cmi;
+                cmi.name = mi.name;
+                cmi.return_type =
+                    resolve_imported(mi.return_type);
+                cmi.vtable_index = mi.vtable_index;
+                cmi.is_static = (mi.flags & 0x01) != 0;
+                cmi.is_constructor = (mi.flags & 0x02) != 0;
+                cmi.defining_class = local_name;
+                cmi.link_name = mi.mangled_label;
+                cmi.param_types.reserve(mi.param_types.size());
+                for (const auto &pt : mi.param_types)
+                    cmi.param_types.push_back(
+                        resolve_imported(pt));
+                L.methods.push_back(std::move(cmi));
+            }
             tc.register_imported_struct(local_name, std::move(L));
             break;
         }
@@ -1645,14 +1745,17 @@ void import_vxi_into_typechecker(
             for (const auto &mi : s.methods) {
                 ClassMethodInfo cmi;
                 cmi.name = mi.name;
-                cmi.return_type = tc.resolve_type_string(mi.return_type);
+                cmi.return_type =
+                    resolve_imported(mi.return_type);
                 cmi.vtable_index = mi.vtable_index;
                 cmi.is_static = (mi.flags & 0x01) != 0;
                 cmi.is_constructor = (mi.flags & 0x02) != 0;
                 cmi.defining_class = local_name;
+                cmi.link_name = mi.mangled_label;
                 cmi.param_types.reserve(mi.param_types.size());
                 for (const auto &pt : mi.param_types) {
-                    cmi.param_types.push_back(tc.resolve_type_string(pt));
+                    cmi.param_types.push_back(
+                        resolve_imported(pt));
                 }
                 L.methods.push_back(std::move(cmi));
             }

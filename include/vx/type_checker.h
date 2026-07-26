@@ -267,6 +267,12 @@ struct ClassMethodInfo {
     /// lo liste).  El lowering usa este nombre para construir el
     /// label del code_vaddr (@c <defining_class>__<name>).
     std::string defining_class;
+    /// Nombre del SIMBOLO real de la funcion en el .velb para metodos
+    /// IMPORTADOS cross-module (p.ej. "std__wideint__u128____div__").  El
+    /// lowering emite el CALL a este simbolo en vez de reconstruir
+    /// "<struct_local>__<metodo>" (que llevaria el mangling del consumidor y no
+    /// resolveria en el linker).  Vacio para metodos del propio modulo.
+    std::string link_name;
     /// Debug info para stack traces.  Llenado por el type
     /// checker al ver el ClassMethodDecl original.  El lowering lo
     /// emite en __module_init via @c setmethdbg.

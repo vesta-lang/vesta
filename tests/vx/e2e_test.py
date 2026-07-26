@@ -2348,6 +2348,7 @@ modes3_case("abs_chain_iface", "@Abstract hereda de @Abstract + interfaz heredad
 modes3_case("virtual_dispatch", "@Virtual: dispatch dinamico por vtable (Figura*->area() del tipo real), interp=jit=aot", "328_virtual_dispatch.vx", 42)
 fails_case("virtual_self_err", "Self prohibido en metodo @Virtual (mecanismos opuestos)", "329_virtual_self_err.vx", "no puede usarse en un metodo @Virtual")
 diff3_case("regpress_udivmod", "presion de registros (udivmod): interp=oraculo, jit y aot deben coincidir", "330_regalloc_pressure_udivmod.vx")
+diff3_case("wideint_import", "import cross-module de struct con metodos+herencia+operadores (u128 de std.wideint)", "331_wideint_import.vx")
 
 
 # --- stdlib: ejemplos y tests de la biblioteca estandar de Vesta -----------

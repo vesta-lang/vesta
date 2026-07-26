@@ -33332,7 +33332,14 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
     ins.op = ir::IrOp::CALL;
     ins.type = ret_ir;
     ins.dst = dst;
-    ins.func_name = bt.struct_name + "__" + fa->field_name;
+    // Metodo IMPORTADO cross-module: usar el simbolo real del .velb origen
+    // (link_name, p.ej. "std__wideint__u128____div__"); reconstruir
+    // "<struct_local>__<metodo>" llevaria el mangling del consumidor y el linker
+    // no lo resolveria.  Metodos del propio modulo: link_name vacio -> el label
+    // clasico.
+    ins.func_name = mtd->link_name.empty()
+                        ? (bt.struct_name + "__" + fa->field_name)
+                        : mtd->link_name;
     ins.operands = std::move(operands);
     ins.source_line = e->loc.line;
     fn_->append(current_block_, std::move(ins));
