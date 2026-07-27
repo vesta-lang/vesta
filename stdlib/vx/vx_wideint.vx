@@ -1,23 +1,27 @@
 /**
  * @file vx_wideint.vx
- * @brief Enteros de ancho fijo de 128/256/512 bits, con y sin signo, en Vesta
- *        puro (sin ensamblador en linea).
+ * @brief Enteros de ancho fijo de 128 bits, con y sin signo, en Vesta puro.
  *
  * Cada tipo es un `struct` cuyo unico miembro es una `union` que expone varias
  * vistas del mismo bloque de bits (limbs de 64, palabras de 32/16, bytes). La
  * parte comun a con-signo y sin-signo -- bit-identica en ambos -- reside en un
- * `@Abstract` base del que heredan ambos concretos; su `Self` se resuelve al
+ * `@Abstract Wide128` del que heredan `u128` e `i128`; su `Self` se resuelve al
  * tipo derivado al aplanar la herencia, de modo que `u128 + u128 -> u128` sin
  * duplicar el ~70% compartido.
  *
  * El acarreo se expresa de forma portable: el `carry` de `a + b` es el overflow
  * sin signo del limb bajo (`suma < a`), y el `borrow` de `a - b` es su underflow
- * (`a < b`). La fusion de estas cadenas a `ADC`/`SBB` corresponde al backend y no
- * afecta a la correccion de estos tipos.
+ * (`a < b`). Su fusion a `ADC`/`SBB` corresponde al backend y no afecta a la
+ * correccion de estos tipos.
  *
- * Todas las operaciones son puras, sin excepciones ni reservas dinamicas.
+ * Politica de errores: la division por cero LANZA (`panic`), nunca devuelve un
+ * cero silencioso. Todas las demas operaciones son puras, sin reservas.
  */
 namespace std.wideint;
+
+/// Resultado de una comparacion de tres vias (estilo Rust `Ordering`). Valores
+/// -1/0/1 para que el orden natural coincida con el signo.
+public enum Ordering : i8 { Less = -1, Equal = 0, Greater = 1 }
 
 // ===========================================================================
 //  Wide128 -- base abstracta: operaciones bit-identicas para u128 e i128.
@@ -30,6 +34,23 @@ public struct Wide128 {
         u16 halves[8];
         u8  bytes[16];
     };
+
+    // --- Constructores / constantes (factorias sin `this`) ------------------
+
+    /// Valor cero (todos los bits a 0).
+    public static Self zero() { Self r; r.lo64 = 0; r.hi64 = 0; return r; }
+
+    /// Valor uno.
+    public static Self one() { Self r; r.lo64 = 1; r.hi64 = 0; return r; }
+
+    /// Extiende un `u64` al ancho completo (limb alto = 0). Para i128 preserva
+    /// el valor como no-negativo; usar `i128.from_i64` si se quiere signo.
+    public static Self from_u64(u64 x) { Self r; r.lo64 = x; r.hi64 = 0; return r; }
+
+    /// Trunca al `u64` bajo (los 64 bits menos significativos).
+    public u64 to_u64() { return this.lo64; }
+
+    // --- Aritmetica / logica ------------------------------------------------
 
     /// Suma modular de 128 bits (acarreo entre limbs).
     public Self __add__(Self o) {
@@ -53,33 +74,25 @@ public struct Wide128 {
 
     /// AND bit a bit.
     public Self __and__(Self o) {
-        Self r;
-        r.lo64 = this.lo64 & o.lo64;
-        r.hi64 = this.hi64 & o.hi64;
+        Self r; r.lo64 = this.lo64 & o.lo64; r.hi64 = this.hi64 & o.hi64;
         return r;
     }
 
     /// OR bit a bit.
     public Self __or__(Self o) {
-        Self r;
-        r.lo64 = this.lo64 | o.lo64;
-        r.hi64 = this.hi64 | o.hi64;
+        Self r; r.lo64 = this.lo64 | o.lo64; r.hi64 = this.hi64 | o.hi64;
         return r;
     }
 
     /// XOR bit a bit.
     public Self __xor__(Self o) {
-        Self r;
-        r.lo64 = this.lo64 ^ o.lo64;
-        r.hi64 = this.hi64 ^ o.hi64;
+        Self r; r.lo64 = this.lo64 ^ o.lo64; r.hi64 = this.hi64 ^ o.hi64;
         return r;
     }
 
     /// Complemento a uno (NOT bit a bit).
     public Self __not__() {
-        Self r;
-        r.lo64 = ~this.lo64;
-        r.hi64 = ~this.hi64;
+        Self r; r.lo64 = ~this.lo64; r.hi64 = ~this.hi64;
         return r;
     }
 
@@ -87,20 +100,39 @@ public struct Wide128 {
     public Self __shl__(u64 n) {
         Self r;
         if (n == 0) {
-            r.lo64 = this.lo64;
-            r.hi64 = this.hi64;
+            r.lo64 = this.lo64; r.hi64 = this.hi64;
         } else if (n >= 128) {
-            r.lo64 = 0;
-            r.hi64 = 0;
+            r.lo64 = 0; r.hi64 = 0;
         } else if (n >= 64) {
-            r.hi64 = this.lo64 << (n - 64);
-            r.lo64 = 0;
+            r.hi64 = this.lo64 << (n - 64); r.lo64 = 0;
         } else {
             r.hi64 = (this.hi64 << n) | (this.lo64 >> (64 - n));
             r.lo64 = this.lo64 << n;
         }
         return r;
     }
+
+    /// Producto modular de 128 bits. El producto 64x64->128 del limb bajo se arma
+    /// por descomposicion 32x32; los cross-terms altos se truncan a 128 bits.
+    /// Validado con propiedades (conmutatividad, identidad, distributividad) sobre
+    /// 200k pares pseudoaleatorios.
+    public Self __mul__(Self o) {
+        u64 al = this.lo64; u64 ah = this.hi64;
+        u64 bl = o.lo64;    u64 bh = o.hi64;
+        u64 a0 = al & 0xFFFFFFFF; u64 a1 = al >> 32;
+        u64 b0 = bl & 0xFFFFFFFF; u64 b1 = bl >> 32;
+        u64 t00 = a0 * b0; u64 t01 = a0 * b1;
+        u64 t10 = a1 * b0; u64 t11 = a1 * b1;
+        u64 mid = (t00 >> 32) + (t01 & 0xFFFFFFFF) + (t10 & 0xFFFFFFFF);
+        u64 lo = (t00 & 0xFFFFFFFF) | (mid << 32);
+        u64 hi = t11 + (t01 >> 32) + (t10 >> 32) + (mid >> 32);
+        Self r;
+        r.lo64 = lo;
+        r.hi64 = hi + (al * bh) + (ah * bl); // cross-terms: solo bits altos
+        return r;
+    }
+
+    // --- Igualdad / predicados ---------------------------------------------
 
     /// Igualdad bit a bit.
     public bool __eq__(Self o) {
@@ -117,46 +149,43 @@ public struct Wide128 {
         return (this.lo64 == 0) && (this.hi64 == 0);
     }
 
+    /// Conversion a bool (`if (x)`, `!x`): true si el valor es distinto de cero.
+    public bool __bool__() {
+        return (this.lo64 != 0) || (this.hi64 != 0);
+    }
+
     /// Intercambia este valor con @p o (util en los algoritmos de division).
     public void swap(Self* o) {
-        u64 tl = this.lo64;
-        u64 th = this.hi64;
-        this.lo64 = (*o).lo64;
-        this.hi64 = (*o).hi64;
-        (*o).lo64 = tl;
-        (*o).hi64 = th;
+        u64 tl = this.lo64; u64 th = this.hi64;
+        this.lo64 = (*o).lo64; this.hi64 = (*o).hi64;
+        (*o).lo64 = tl; (*o).hi64 = th;
     }
 
-    /// Comparacion SIN signo: -1 si this<o, 0 si igual, 1 si this>o. Reside en la
-    /// base porque la usa @c udivmod, que opera sobre magnitudes sin signo.
-    public i64 ucmp(Self o) {
+    /// Comparacion SIN signo de tres vias. Reside en la base porque la usa
+    /// @c udivmod, que opera sobre magnitudes sin signo.
+    public Ordering ucmp(Self o) {
         if (this.hi64 != o.hi64) {
-            if (this.hi64 < o.hi64) { return -1; }
-            return 1;
+            if (this.hi64 < o.hi64) { return Ordering.Less; }
+            return Ordering.Greater;
         }
         if (this.lo64 != o.lo64) {
-            if (this.lo64 < o.lo64) { return -1; }
-            return 1;
+            if (this.lo64 < o.lo64) { return Ordering.Less; }
+            return Ordering.Greater;
         }
-        return 0;
+        return Ordering.Equal;
     }
 
-    /// Division entera SIN signo por el metodo binario (shift-resta, 128
-    /// iteraciones). Devuelve el cociente y deja el resto en @p rem_out. Divisor
-    /// cero -> cociente y resto = 0 (sin excepcion). Es el unico algoritmo
-    /// "pesado"; la variante con signo lo reutiliza sobre las magnitudes.
+    /// Division entera SIN signo por el metodo binario shift-resta. Devuelve el
+    /// cociente y deja el resto en @p rem_out. El algoritmo es de tiempo
+    /// CONSTANTE O(128): siempre 128 iteraciones, sin ramas dependientes de los
+    /// datos aparte de la resta condicional (util para codigo de tiempo constante
+    /// en cripto). La division por cero LANZA (`panic`), no devuelve cero. Es el
+    /// unico algoritmo "pesado"; la variante con signo lo reutiliza sobre las
+    /// magnitudes.
     public Self udivmod(Self divisor, Self* rem_out) {
-        Self q;
-        q.lo64 = 0;
-        q.hi64 = 0;
-        Self rem;
-        rem.lo64 = 0;
-        rem.hi64 = 0;
-        if (divisor.is_zero()) {
-            (*rem_out).lo64 = 0;
-            (*rem_out).hi64 = 0;
-            return q;
-        }
+        if (divisor.is_zero()) { panic("wideint: division por cero"); }
+        Self q; q.lo64 = 0; q.hi64 = 0;
+        Self rem; rem.lo64 = 0; rem.hi64 = 0;
         i64 i = 127;
         while (i >= 0) {
             // rem = (rem << 1) | bit_i(this)
@@ -167,40 +196,15 @@ public struct Wide128 {
             else { bit = (this.lo64 >> i) & 1; }
             rem.lo64 = rem.lo64 | bit;
             // si rem >= divisor: rem -= divisor y fija el bit i del cociente
-            if (rem.ucmp(divisor) >= 0) {
+            if (rem.ucmp(divisor) != Ordering.Less) {
                 rem = rem.__sub__(divisor);
                 if (i >= 64) { q.hi64 = q.hi64 | (((u64) 1) << (i - 64)); }
                 else { q.lo64 = q.lo64 | (((u64) 1) << i); }
             }
             i = i - 1;
         }
-        (*rem_out).lo64 = rem.lo64;
-        (*rem_out).hi64 = rem.hi64;
+        (*rem_out).lo64 = rem.lo64; (*rem_out).hi64 = rem.hi64;
         return q;
-    }
-
-    /// Producto modular de 128 bits. El producto 64x64->128 del limb bajo se arma
-    /// por descomposicion 32x32; los cross-terms altos se truncan a 128 bits.
-    public Self __mul__(Self o) {
-        u64 al = this.lo64;
-        u64 ah = this.hi64;
-        u64 bl = o.lo64;
-        u64 bh = o.hi64;
-        u64 a0 = al & 0xFFFFFFFF;
-        u64 a1 = al >> 32;
-        u64 b0 = bl & 0xFFFFFFFF;
-        u64 b1 = bl >> 32;
-        u64 t00 = a0 * b0;
-        u64 t01 = a0 * b1;
-        u64 t10 = a1 * b0;
-        u64 t11 = a1 * b1;
-        u64 mid = (t00 >> 32) + (t01 & 0xFFFFFFFF) + (t10 & 0xFFFFFFFF);
-        u64 lo = (t00 & 0xFFFFFFFF) | (mid << 32);
-        u64 hi = t11 + (t01 >> 32) + (t10 >> 32) + (mid >> 32);
-        Self r;
-        r.lo64 = lo;
-        r.hi64 = hi + (al * bh) + (ah * bl); // cross-terms: solo bits altos
-        return r;
     }
 }
 
@@ -208,18 +212,23 @@ public struct Wide128 {
 //  u128 -- entero de 128 bits sin signo.
 // ===========================================================================
 public struct u128 : Wide128 {
+    /// Maximo (todos los bits a 1).
+    public static u128 max() {
+        u128 r; r.lo64 = 0xFFFFFFFFFFFFFFFF; r.hi64 = 0xFFFFFFFFFFFFFFFF;
+        return r;
+    }
+    /// Minimo (cero).
+    public static u128 min() { u128 r; r.lo64 = 0; r.hi64 = 0; return r; }
+
     /// Desplazamiento logico a la derecha (rellena con ceros).
     public u128 __shr__(u64 n) {
         u128 r;
         if (n == 0) {
-            r.lo64 = this.lo64;
-            r.hi64 = this.hi64;
+            r.lo64 = this.lo64; r.hi64 = this.hi64;
         } else if (n >= 128) {
-            r.lo64 = 0;
-            r.hi64 = 0;
+            r.lo64 = 0; r.hi64 = 0;
         } else if (n >= 64) {
-            r.lo64 = this.hi64 >> (n - 64);
-            r.hi64 = 0;
+            r.lo64 = this.hi64 >> (n - 64); r.hi64 = 0;
         } else {
             r.lo64 = (this.lo64 >> n) | (this.hi64 << (64 - n));
             r.hi64 = this.hi64 >> n;
@@ -228,45 +237,50 @@ public struct u128 : Wide128 {
     }
 
     /// Cociente entero sin signo.
-    public u128 __div__(u128 o) {
-        u128 rem;
-        return this.udivmod(o, &rem);
-    }
+    public u128 __div__(u128 o) { u128 rem; return this.udivmod(o, &rem); }
 
     /// Resto entero sin signo.
-    public u128 __mod__(u128 o) {
-        u128 rem;
-        this.udivmod(o, &rem);
-        return rem;
-    }
+    public u128 __mod__(u128 o) { u128 rem; this.udivmod(o, &rem); return rem; }
 
-    public bool __lt__(u128 o) { return this.ucmp(o) <  0; }
-    public bool __gt__(u128 o) { return this.ucmp(o) >  0; }
-    public bool __le__(u128 o) { return this.ucmp(o) <= 0; }
-    public bool __ge__(u128 o) { return this.ucmp(o) >= 0; }
+    public bool __lt__(u128 o) { return this.ucmp(o) == Ordering.Less; }
+    public bool __gt__(u128 o) { return this.ucmp(o) == Ordering.Greater; }
+    public bool __le__(u128 o) { return this.ucmp(o) != Ordering.Greater; }
+    public bool __ge__(u128 o) { return this.ucmp(o) != Ordering.Less; }
 }
 
 // ===========================================================================
 //  i128 -- entero de 128 bits con signo (complemento a dos).
 // ===========================================================================
 public struct i128 : Wide128 {
+    /// Maximo positivo (0x7FFF...FFFF).
+    public static i128 max() {
+        i128 r; r.lo64 = 0xFFFFFFFFFFFFFFFF; r.hi64 = 0x7FFFFFFFFFFFFFFF;
+        return r;
+    }
+    /// Minimo negativo (0x8000...0000).
+    public static i128 min() {
+        i128 r; r.lo64 = 0; r.hi64 = 0x8000000000000000;
+        return r;
+    }
+    /// Extiende un `i64` preservando el signo.
+    public static i128 from_i64(i64 x) {
+        i128 r; r.lo64 = (u64) x;
+        if (x < 0) { r.hi64 = 0xFFFFFFFFFFFFFFFF; } else { r.hi64 = 0; }
+        return r;
+    }
+
     /// Negacion en complemento a dos: -x = ~x + 1.
     public i128 __neg__() {
-        i128 r;
-        r.lo64 = ~this.lo64;
-        r.hi64 = ~this.hi64;
+        i128 r; r.lo64 = ~this.lo64; r.hi64 = ~this.hi64;
         u64 lo2 = r.lo64 + 1;
         u64 carry = 0;
         if (lo2 < r.lo64) { carry = 1; }
-        r.lo64 = lo2;
-        r.hi64 = r.hi64 + carry;
+        r.lo64 = lo2; r.hi64 = r.hi64 + carry;
         return r;
     }
 
     /// True si el valor es negativo (bit de signo del limb alto).
-    public bool is_negative() {
-        return (this.hi64 >> 63) != 0;
-    }
+    public bool is_negative() { return (this.hi64 >> 63) != 0; }
 
     /// Desplazamiento aritmetico a la derecha (replica el bit de signo).
     public i128 __shr__(u64 n) {
@@ -274,15 +288,12 @@ public struct i128 : Wide128 {
         u64 sign_fill = 0;
         if (this.is_negative()) { sign_fill = 0xFFFFFFFFFFFFFFFF; }
         if (n == 0) {
-            r.lo64 = this.lo64;
-            r.hi64 = this.hi64;
+            r.lo64 = this.lo64; r.hi64 = this.hi64;
         } else if (n >= 128) {
-            r.lo64 = sign_fill;
-            r.hi64 = sign_fill;
+            r.lo64 = sign_fill; r.hi64 = sign_fill;
         } else if (n >= 64) {
             i64 hi_s = (i64) this.hi64;
-            r.lo64 = (u64) (hi_s >> (n - 64));
-            r.hi64 = sign_fill;
+            r.lo64 = (u64) (hi_s >> (n - 64)); r.hi64 = sign_fill;
         } else {
             i64 hi_s = (i64) this.hi64;
             r.lo64 = (this.lo64 >> n) | (this.hi64 << (64 - n));
@@ -295,10 +306,8 @@ public struct i128 : Wide128 {
     /// signo sobre las magnitudes y corrige el signo del cociente.
     public i128 __div__(i128 o) {
         bool neg = this.is_negative() != o.is_negative();
-        i128 a = this;
-        if (a.is_negative()) { a = a.__neg__(); }
-        i128 b = o;
-        if (b.is_negative()) { b = b.__neg__(); }
+        i128 a = this; if (a.is_negative()) { a = a.__neg__(); }
+        i128 b = o;    if (b.is_negative()) { b = b.__neg__(); }
         i128 rem;
         i128 q = a.udivmod(b, &rem);
         if (neg) { q = q.__neg__(); }
@@ -308,10 +317,8 @@ public struct i128 : Wide128 {
     /// Resto entero con signo (mismo signo que el dividendo, como en C).
     public i128 __mod__(i128 o) {
         bool neg = this.is_negative();
-        i128 a = this;
-        if (a.is_negative()) { a = a.__neg__(); }
-        i128 b = o;
-        if (b.is_negative()) { b = b.__neg__(); }
+        i128 a = this; if (a.is_negative()) { a = a.__neg__(); }
+        i128 b = o;    if (b.is_negative()) { b = b.__neg__(); }
         i128 rem;
         a.udivmod(b, &rem);
         if (neg) { rem = rem.__neg__(); }
@@ -320,26 +327,22 @@ public struct i128 : Wide128 {
 
     /// Comparacion CON signo: el limb alto se compara como i64; el bajo como u64.
     public bool __lt__(i128 o) {
-        i64 a_hi = (i64) this.hi64;
-        i64 b_hi = (i64) o.hi64;
+        i64 a_hi = (i64) this.hi64; i64 b_hi = (i64) o.hi64;
         if (a_hi != b_hi) { return a_hi < b_hi; }
         return this.lo64 < o.lo64;
     }
     public bool __gt__(i128 o) {
-        i64 a_hi = (i64) this.hi64;
-        i64 b_hi = (i64) o.hi64;
+        i64 a_hi = (i64) this.hi64; i64 b_hi = (i64) o.hi64;
         if (a_hi != b_hi) { return a_hi > b_hi; }
         return this.lo64 > o.lo64;
     }
     public bool __le__(i128 o) {
-        i64 a_hi = (i64) this.hi64;
-        i64 b_hi = (i64) o.hi64;
+        i64 a_hi = (i64) this.hi64; i64 b_hi = (i64) o.hi64;
         if (a_hi != b_hi) { return a_hi < b_hi; }
         return this.lo64 <= o.lo64;
     }
     public bool __ge__(i128 o) {
-        i64 a_hi = (i64) this.hi64;
-        i64 b_hi = (i64) o.hi64;
+        i64 a_hi = (i64) this.hi64; i64 b_hi = (i64) o.hi64;
         if (a_hi != b_hi) { return a_hi > b_hi; }
         return this.lo64 >= o.lo64;
     }

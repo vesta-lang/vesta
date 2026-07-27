@@ -11,3 +11,5 @@ namespace std.types;
 
 /// Octeto sin signo (0..255).  Alias comodo y semantico para buffers de bytes.
 public typedef u8 byte new;
+
+public uintptr nullptr = 0;

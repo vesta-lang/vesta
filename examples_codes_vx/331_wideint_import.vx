@@ -1,25 +1,24 @@
 /**
  * @file 331_wideint_import.vx
- * @brief Import cross-module de un `struct` con metodos, herencia y operadores.
+ * @brief Import cross-module de `std.wideint`: u128 con metodos, herencia,
+ *        operadores, constructores static y conversiones.
  *
- * Ejercita el stdlib `std.wideint`: importa el tipo `u128` (que hereda de
- * `@Abstract Wide128` y sobrecarga /, %, <, >, ==) desde otro modulo.  Antes,
- * el import cross-module de un struct traia el tipo SIN sus metodos (ni propios,
- * ni heredados aplanados, ni operadores).  Ahora el .vxi serializa los metodos
- * de struct y el consumidor resuelve los operadores contra la firma importada.
- *
- * checksum: 1000/7 = 142 resto 6 -> 142*10 + 6 = 1426.  Se valida con la red
- * diferencial (interp = oraculo; jit y aot deben coincidir).
+ * Ejercita el stdlib: `u128.from_u64`, operadores /, %, comparadores, `__bool__`
+ * (`if (x)` / `!x`), `to_u64`.  Se valida con la red diferencial (interp =
+ * oraculo; jit y aot deben coincidir).  checksum: 1000/7 = 142 resto 6.
  */
 import std.wideint only u128;
 
-u128 mk(u64 lo) { u128 r; r.lo64 = lo; r.hi64 = 0; return r; }
-
 i32 main() {
-    u128 a = mk(1000);
-    u128 b = mk(7);
-    u128 q = a / b;      // 142
-    u128 r = a % b;      // 6
-    bool ok = (a > b) && (b < a) && (a != b);
-    return (i32) (q.lo64 * 10 + r.lo64 + (ok ? 0 : 1000));
+    u128 a = u128.from_u64(1000);
+    u128 b = u128.from_u64(7);
+    u128 q = a / b;               // 142
+    u128 r = a % b;               // 6
+    bool ord = (a > b) && (b < a) && (a != b) && (a >= b);
+    u128 z = u128.min();          // 0
+    i32 acc = (i32) (q.to_u64() * 10 + r.to_u64());   // 1426
+    if (!ord) { acc = acc + 1000; }
+    if (z)    { acc = acc + 1000; }   // __bool__ de cero -> false: no suma
+    if (!a)   { acc = acc + 1000; }   // __bool__ de no-cero -> !true: no suma
+    return acc;                        // 1426
 }
