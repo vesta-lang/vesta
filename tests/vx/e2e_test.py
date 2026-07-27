@@ -2349,6 +2349,7 @@ modes3_case("virtual_dispatch", "@Virtual: dispatch dinamico por vtable (Figura*
 fails_case("virtual_self_err", "Self prohibido en metodo @Virtual (mecanismos opuestos)", "329_virtual_self_err.vx", "no puede usarse en un metodo @Virtual")
 diff3_case("regpress_udivmod", "presion de registros (udivmod): interp=oraculo, jit y aot deben coincidir", "330_regalloc_pressure_udivmod.vx")
 diff3_case("wideint_import", "import cross-module de struct con metodos+herencia+operadores (u128 de std.wideint)", "331_wideint_import.vx")
+diff3_case("struct_static", "metodos static en struct (factorias sin this, SRET + escalar)", "332_struct_static_methods.vx")
 
 
 # --- stdlib: ejemplos y tests de la biblioteca estandar de Vesta -----------

@@ -3816,6 +3816,10 @@ void TypeChecker::collect_globals() {
                 mi.name = m->name;
                 mi.is_destructor = m->is_destructor;
                 mi.is_virtual = m->is_virtual;
+                // `static`: factoria/constructor sin `this` (Struct.metodo()).
+                // Sin copiar el flag, el StructLayout siempre lo veia false y la
+                // resolucion de `Struct.zero()` no encontraba el metodo.
+                mi.is_static = m->is_static;
                 if (m->is_virtual) mi.vtable_index = vslot++;
                 mi.defining_class = s->name;
                 mi.source_file = m->loc.file;
@@ -11909,6 +11913,57 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                         }
                     }
                     fa->property_kind = 4;
+                    fa->base->result_type = Type{PrimitiveKind::VOID};
+                    e->result_type = smtd->return_type;
+                    return smtd->return_type;
+                }
+            }
+            // Gemelo para STRUCT: `StructName.staticMethod(...)` (factoria sin
+            // this, p.ej. `u128.zero()`).  Mismo criterio que la clase (es un
+            // nombre de tipo, no una variable: `lookup(...)==nullptr`) + busca el
+            // metodo `is_static` en el StructLayout.  Comparte property_kind=4; el
+            // lowering hace fallback a struct_layouts para el CALL sin `this`.
+            auto it_str_s = struct_layouts_.find(idb->name);
+            if (it_str_s != struct_layouts_.end() &&
+                lookup(idb->name) == nullptr) {
+                const StructLayout &st = it_str_s->second;
+                const ClassMethodInfo *smtd = nullptr;
+                for (const auto &m : st.methods) {
+                    if (m.is_constructor) continue;
+                    if (m.is_static && m.name == fa->field_name) {
+                        smtd = &m;
+                        break;
+                    }
+                }
+                if (smtd) {
+                    if (e->args.size() != smtd->param_types.size()) {
+                        diags_.error(
+                            e->loc,
+                            idb->name + "." + fa->field_name +
+                                ": numero de argumentos incorrecto (esperado " +
+                                std::to_string(smtd->param_types.size()) +
+                                ", recibido " + std::to_string(e->args.size()) +
+                                ")");
+                    }
+                    for (size_t i = 0; i < e->args.size(); ++i) {
+                        Type at = check_expr(e->args[i].get());
+                        if (i < smtd->param_types.size() &&
+                            !types_assignable(smtd->param_types[i], at) &&
+                            at.kind != PrimitiveKind::COUNT) {
+                            diags_.error(
+                                e->loc,
+                                idb->name + "." + fa->field_name + ": arg " +
+                                    std::to_string(i + 1) + " tipo (" +
+                                    type_to_string(at) +
+                                    ") incompatible con (" +
+                                    type_to_string(smtd->param_types[i]) + ")");
+                        }
+                    }
+                    // property_kind=7 (static de STRUCT): distinto del 4 (namespace/
+                    // static de clase) para enrutar a lower_class_method_call, que
+                    // maneja el SRET del retorno struct por valor (factorias que
+                    // devuelven el propio tipo, p.ej. u128.zero()).
+                    fa->property_kind = 7;
                     fa->base->result_type = Type{PrimitiveKind::VOID};
                     e->result_type = smtd->return_type;
                     return smtd->return_type;

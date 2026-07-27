@@ -4887,15 +4887,20 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
             break;
         }
         // Modificadores de acceso opcionales en el miembro.  Los
-        // structs son flat: aceptamos public/private (informativo;
-        // sin enforcement por ahora) pero NO static/final.
+        // structs son flat: aceptamos public/private (informativo; sin
+        // enforcement por ahora) y `static` en METODOS (constructores/factorias
+        // tipo `Box.zero()`: no toman `this`, se llaman via `Struct.metodo(...)`).
         uint8_t access = 0; // 0 = public/default, 1 = private
+        bool is_static = false;
         for (;;) {
             if (current_.kind == TokenKind::KW_PUBLIC) {
                 access = 0;
                 (void)consume();
             } else if (current_.kind == TokenKind::KW_PRIVATE) {
                 access = 1;
+                (void)consume();
+            } else if (current_.kind == TokenKind::KW_STATIC) {
+                is_static = true;
                 (void)consume();
             } else {
                 break;
@@ -5022,6 +5027,7 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
             m->name = std::move(member_name);
             m->return_type = std::move(type_node);
             m->access = access;
+            m->is_static = is_static; // `static`: factoria/constructor sin this
             m->is_virtual = annot_virtual; // `@Virtual`: dispatch dinamico
             m->is_override = annot_override;
             m->method_type_params = method_tparams;
