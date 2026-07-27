@@ -2080,6 +2080,10 @@ struct StructFieldDecl {
     std::unique_ptr<TypeNode> type;
     std::string name;
     SourceLoc loc;
+    /// `static`: el campo NO vive en cada instancia sino una sola vez (storage
+    /// global `<Struct>__<campo>`); habilita singletons y contadores por-tipo.
+    /// Se accede via `Struct.campo` (lectura/escritura), no `instancia.campo`.
+    bool is_static = false;
     /// Miembro ANONIMO C11: `struct { ... };` / `union { ... };` sin nombre de
     /// campo.  Sus campos se APLANAN en el struct contenedor (se accede a
     /// `parent.inner_field` directamente).  @c type apunta al agregado sintetico

@@ -16337,6 +16337,19 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
     if (e->property_kind == 3) {
         return lower_class_field_load(e);
     }
+    // property_kind == 8: static field de struct.  Su storage es la global
+    // sintetica `<Struct>__<campo>` (creada en el parser); la LECTURA es un
+    // acceso a esa global.  base->name ya viene manglado con el namespace (mismo
+    // prefix que recibio la global en el pase de mangling).
+    if (e->property_kind == 8 && e->base &&
+        e->base->kind == ast::NodeKind::IdentExpr) {
+        auto *base_id = static_cast<ast::IdentExpr *>(e->base.get());
+        ast::IdentExpr gid;
+        gid.loc = e->loc;
+        gid.name = base_id->name + "__" + e->field_name;
+        gid.result_type = e->result_type;
+        return lower_ident(&gid);
+    }
     // M.L7 ext: @c namespace.CONSTANT.  El type checker marca con
     // @c property_kind=4 y rellena @c ns_index para que aqui podamos
     // consultar el Sym y -- si es kind=1 (Variable/Const) con literal
@@ -19992,6 +20005,22 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
     if (!e->target) {
         error_at(e->loc, "lowering: target de '=' nulo");
         return ir::IR_NO_VALUE;
+    }
+    // static field de struct como LHS (`Struct.campo = v`): su storage es la
+    // global sintetica `<Struct>__<campo>`.  Reescribimos el target al IdentExpr
+    // de esa global y dejamos que el flujo normal de asignacion-a-global lo
+    // maneje (incluye compound assign).
+    if (e->target->kind == ast::NodeKind::FieldAccessExpr) {
+        auto *fa = static_cast<ast::FieldAccessExpr *>(e->target.get());
+        if (fa->property_kind == 8 && fa->base &&
+            fa->base->kind == ast::NodeKind::IdentExpr) {
+            auto *bid = static_cast<ast::IdentExpr *>(fa->base.get());
+            auto gid = std::make_unique<ast::IdentExpr>();
+            gid->loc = fa->loc;
+            gid->name = bid->name + "__" + fa->field_name;
+            gid->result_type = fa->result_type;
+            e->target = std::move(gid);
+        }
     }
     // Asignacion sobrecargada: el type checker dejo en @c overload_method el
     // dunder (`__assign__` para `=`, `__iadd__` para `+=`, ...).  Se desugara a

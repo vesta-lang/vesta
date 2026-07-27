@@ -5075,6 +5075,7 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
         // Campo.  Reusa el manejo de bit fields del codigo previo.
         ast::StructFieldDecl f;
         f.loc = mloc;
+        f.is_static = is_static; // `static <T> nombre;` -> storage por-tipo
         // Clon del tipo BASE (sin dims de array) para el multi-declarador C
         // `T a, b, c;`: cada declarador extra reutiliza el mismo tipo base.
         auto base_type_clone = clone_type_node_td_(type_node.get());
@@ -5196,6 +5197,18 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
             (void)consume(); // '='
             f.default_init = parse_expr();
         }
+        // Campo `static`: sintetizar su storage como global `<Struct>__<campo>`
+        // (una sola por tipo).  El campo queda en s->fields con is_static para que
+        // el type checker lo registre en static_fields y NO lo cuente en el layout
+        // de instancia; `Struct.campo` resuelve a esta global.
+        if (f.is_static) {
+            auto gvar = std::make_unique<ast::GlobalVarDecl>();
+            gvar->loc = f.loc;
+            gvar->name = s->name + "__" + f.name;
+            gvar->type = clone_type_node_td_(f.type.get());
+            gvar->is_public = s->is_public;
+            pending_before_decls_.push_back(std::move(gvar));
+        }
         s->fields.push_back(std::move(f));
         // Multi-declarador C `T a, b, c;`: cada declarador extra reutiliza el
         // tipo BASE (clon), con sus propias dims de array y bit-width opcionales.
@@ -5231,6 +5244,16 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
             if (current_.kind == TokenKind::ASSIGN) {
                 (void)consume();
                 g.default_init = parse_expr();
+            }
+            // `static` aplica a toda la linea del declarador.
+            g.is_static = is_static;
+            if (g.is_static) {
+                auto gvar = std::make_unique<ast::GlobalVarDecl>();
+                gvar->loc = g.loc;
+                gvar->name = s->name + "__" + g.name;
+                gvar->type = clone_type_node_td_(g.type.get());
+                gvar->is_public = s->is_public;
+                pending_before_decls_.push_back(std::move(gvar));
             }
             s->fields.push_back(std::move(g));
         }

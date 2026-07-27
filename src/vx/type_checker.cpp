@@ -3392,6 +3392,16 @@ void TypeChecker::collect_globals() {
             };
 
             for (const auto &f : s->fields) {
+                // Campo `static`: su storage es la global sintetica
+                // `<Struct>__<campo>` (creada en el parser).  Aqui solo lo
+                // registramos para resolver `Struct.campo` y lo EXCLUIMOS del
+                // layout de instancia (no ocupa espacio en cada valor).
+                if (f.is_static) {
+                    StructFieldInfo sfi;                    sfi.name = f.name;
+                    sfi.type = type_from_node(f.type.get());
+                    layout.static_fields.push_back(std::move(sfi));
+                    continue;
+                }
                 // Miembro ANONIMO C11 (`union { ... };` sin nombre): aplanar sus
                 // campos en ESTE struct (accesibles como `parent.inner`).  El
                 // agregado ocupa espacio como un campo normal; sus campos se
@@ -9045,6 +9055,22 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
                                      e->field_name + "'");
             return Type{};
         }
+        // Gemelo para STRUCT: `Struct.campo_static` (singletons/contadores por
+        // tipo).  El storage es la global `<Struct>__<campo>`; property_kind=8 le
+        // dice al lowering que acceda a esa global en vez del offset de instancia.
+        // Si el campo no es static, NO diagnosticamos aqui: podria ser
+        // `Struct.staticMethod()` (un CallExpr, resuelto en check_call).
+        {
+            auto it_str_static = struct_layouts_.find(base_id->name);
+            if (it_str_static != struct_layouts_.end()) {                for (const auto &f : it_str_static->second.static_fields) {
+                    if (f.name == e->field_name) {
+                        e->property_kind = 8;
+                        e->result_type = f.type;
+                        return f.type;
+                    }
+                }
+            }
+        }
         // L2.3: enum generico template `Maybe.None` -> resolver via
         // expected stack (LHS var-decl/param).  Sin contexto:
         // diagnostic.
@@ -11029,6 +11055,34 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
                             ")");
                 }
                 return ft_static;
+            }
+            // Gemelo para STRUCT: `Struct.campo_static = v` (singletons/
+            // contadores).  Delegamos a check_field_access (property_kind=8) para
+            // no resolver el base como variable (daria "nombre no declarado").
+            auto it_str_lhs = struct_layouts_.find(base_id->name);
+            if (it_str_lhs != struct_layouts_.end()) {
+                bool is_sf = false;
+                for (const auto &f : it_str_lhs->second.static_fields)
+                    if (f.name == fa->field_name) {
+                        is_sf = true;
+                        break;
+                    }
+                if (is_sf) {
+                    Type ft_static = check_field_access(fa);
+                    fa->result_type = ft_static;
+                    const Type tv = check_expr(e->value.get());
+                    if (ft_static.kind != PrimitiveKind::COUNT &&
+                        tv.kind != PrimitiveKind::COUNT &&
+                        !types_assignable(ft_static, tv)) {
+                        diags_.error(
+                            e->loc,
+                            std::string("tipo del valor (") + type_to_string(tv) +
+                                ") incompatible con el static field '" +
+                                fa->field_name + "' (" +
+                                type_to_string(ft_static) + ")");
+                    }
+                    return ft_static;
+                }
             }
         }
 

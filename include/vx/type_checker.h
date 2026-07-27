@@ -292,6 +292,10 @@ struct ClassMethodInfo {
 struct StructLayout {
     std::string name;
     std::vector<StructFieldInfo> fields;
+    /// Campos `static`: NO viven en cada instancia; su storage es una global
+    /// sintetica `<Struct>__<campo>` (una sola por tipo).  Se listan aparte para
+    /// que `Struct.campo` los resuelva (lectura/escritura) sin inflar el layout.
+    std::vector<StructFieldInfo> static_fields;
     /// Metodos del struct (value-type, dispatch estatico).  Reusa
     /// @c ClassMethodInfo; @c vtable_index/@c is_constructor no se usan
     /// (los structs no tienen vtable ni constructores con this(...)).
