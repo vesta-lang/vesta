@@ -62,6 +62,10 @@
 
 namespace vx {
 
+// Definido en vx/comptime/comptime_introspect.h.  Se usa por referencia en las
+// firmas de materializacion de structs comptime, asi que basta declararlo.
+struct ComptimeEvalResult;
+
 /**
  * @class Lowering
  * @brief Convierte un ModuleNode AST en un ir::IrModule SSA.
@@ -891,6 +895,54 @@ class Lowering {
     void emit_struct_init_fields(ir::IrValueId base_addr,
                                  const StructLayout &lay, ast::InitListExpr *il,
                                  uint32_t line);
+    /// Materializa un struct cuyo valor fue calculado en compile-time.
+    /// Cuando una funcion @c comptime devuelve un struct por valor, el resultado
+    /// llega como un valor de compile-time con un campo por cada miembro
+    /// (@c ComptimeEvalResult::struct_fields).  Este metodo aloca el buffer del
+    /// struct y escribe cada campo con su valor constante (STORE), de forma que
+    /// en el binario aparece el struct ya construido, sin llamada en tiempo de
+    /// ejecucion.  Los campos de tipo struct se rellenan recursivamente.
+    /// Devuelve la direccion del struct materializado.
+    ir::IrValueId materialize_comptime_struct(const ComptimeEvalResult &r,
+                                              const StructLayout &lay,
+                                              uint32_t line);
+    /// Rellena, sin alocar, los campos de un struct comptime en @p base_addr.
+    /// Auxiliar recursivo de @c materialize_comptime_struct.
+    void fill_comptime_struct_into(ir::IrValueId base_addr,
+                                   const ComptimeEvalResult &r,
+                                   const StructLayout &lay, uint32_t line);
+
+    // --- F1b: constructor `comptime T(expr)` de un struct (literales de tipo
+    // usuario).  Definidos en comptime/literal_ctor.cpp para no inflar
+    // lowering.cpp (mismo patron que vectorize.cpp). ---
+
+    /// @brief Nombre de la IrFunction de un ctor `comptime` de struct.
+    ///
+    /// Un ctor comptime se ejecuta en la ComptimeVM, asi que baja con el prefijo
+    /// @c __macro_ (lo identifica como codigo comptime) sobre el mismo esquema de
+    /// aridad que el ctor runtime: `__macro_<Struct>__ctor_<aridad>`.
+    ///
+    /// @param struct_name Nombre del struct.
+    /// @param arity       Numero de parametros del constructor.
+    /// @return El nombre mangled de la IrFunction del ctor comptime.
+    std::string comptime_ctor_ir_name(const std::string &struct_name,
+                                      size_t arity) const;
+
+    /// @brief Intenta bajar `T(args)` como constructor `comptime` (F1b).
+    ///
+    /// Si @p slay tiene un ctor @c comptime cuya aridad casa con @p e, ejecuta el
+    /// ctor en la ComptimeVM (@c invoke_struct_macro, convencion SRET donde el
+    /// buffer de retorno ES el @c this del ctor) y materializa el struct como
+    /// datos constantes (@c materialize_comptime_struct), sin llamada en runtime.
+    /// Los tres modos (interp/JIT/AOT) ven el struct ya construido.
+    ///
+    /// @param e    La expresion de llamada `T(args)`.
+    /// @param slay El layout del struct @c T.
+    /// @return La direccion del struct materializado, o @c ir::IR_NO_VALUE si el
+    ///         struct no tiene ctor comptime o los argumentos no son
+    ///         comptime-evaluables (el caller sigue con el ctor runtime).
+    ir::IrValueId try_lower_comptime_ctor_call(ast::CallExpr *e,
+                                               const StructLayout &slay);
     /// Ruta B (H1 paso por valor): copia un struct con copy-hook para pasarlo
     /// por valor a una funcion.  Aloca una copia, memcpy del origen, invoca
     /// `copia.__clone__()` y devuelve la direccion de la copia.  El caller debe

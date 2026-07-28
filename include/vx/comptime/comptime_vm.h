@@ -295,6 +295,32 @@ class ComptimeRuntime {
                                       const std::vector<uint64_t> &args,
                                       std::string &out_str, bool pure) noexcept;
 
+    /**
+     * @brief invoca una funcion @c comptime que devuelve un struct por valor y
+     *        copia los @c struct_size bytes del resultado a @c out_bytes.
+     *
+     * Una funcion que devuelve un struct por valor lo hace por SRET: el valor no
+     * viaja en un registro; el llamante aloca el buffer del resultado y lo pasa
+     * como primer parametro oculto (un @c host_ptr), y la funcion lo rellena.
+     * Este metodo hace de llamante: aloca @c out_bytes en memoria del proceso
+     * (no en la pila de la funcion, que se libera al retornar), lo antepone a
+     * @c args como ese buffer, ejecuta la funcion en la VM de compile-time y
+     * devuelve los bytes escritos.  Como la VM se ejecuta dentro del propio
+     * compilador, el puntero al buffer es una direccion valida que la funcion
+     * escribe con @c movh.
+     *
+     * @param macro_name  Nombre canonico (`__macro_<original>`).
+     * @param args        Argumentos reales (el buffer de retorno se antepone).
+     * @param struct_size Tamano del struct en bytes.
+     * @param out_bytes   Recibe los bytes del struct construido.
+     * @return @c true si la invocacion fue exitosa; @c false si fallo o si el
+     *         total de argumentos (buffer de retorno + reales) excede 12.
+     */
+    bool invoke_struct_macro(const std::string &macro_name,
+                             const std::vector<uint64_t> &args,
+                             size_t struct_size,
+                             std::vector<uint8_t> &out_bytes) noexcept;
+
     /**hits del cache (no toca VM). */
     uint64_t memo_hit_count() const noexcept { return memo_hit_count_; }
     /** misses del cache (invoca VM). */

@@ -2362,6 +2362,12 @@ struct ClassMethodDecl : Node {
     /// Prohibido combinar con `Self` (mecanismos opuestos) o con `static`.
     bool is_virtual = false;
     bool is_constructor = false;
+    /// F1b: constructor `comptime T(expr)` de un struct value-type.  Se ejecuta
+    /// en compile-time (ComptimeVM) y materializa el struct; base de los
+    /// literales de tipo usuario (modelo Swift ExpressibleByIntegerLiteral).
+    /// Solo valido en constructores; el lowering lo baja a `__macro_<T>__ctor_N`
+    /// y el call site `T(literal)` lo invoca via `invoke_struct_macro`.
+    bool is_comptime = false;
     /// true si es destructor `~ClassName()` declarado dentro
     /// del cuerpo de la clase.  Sin parametros (validado en parser).
     /// Body lowereado como un metodo void normal; el frontend invoca

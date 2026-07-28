@@ -4052,6 +4052,70 @@ void Lowering::emit_struct_field_defaults(ir::IrValueId base_addr,
     }
 }
 
+ir::IrValueId Lowering::materialize_comptime_struct(const ComptimeEvalResult &r,
+                                                    const StructLayout &lay,
+                                                    uint32_t line) {
+    // Alocar el buffer del struct en memoria host (es un value-type).
+    const uint64_t buf_bytes =
+        (static_cast<uint64_t>(lay.size_bytes) + 7ULL) & ~7ULL;
+    const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
+    ir::IrInstr al{};
+    al.op = ir::IrOp::ALLOCA;
+    al.type = ir::IrType::I8;
+    al.imm = buf_bytes;
+    al.dst = v_buf;
+    al.host_alloca = true;
+    al.source_line = line;
+    fn_->append(current_block_, std::move(al));
+    fn_->values[v_buf].is_host_ptr = true;
+    fill_comptime_struct_into(v_buf, r, lay, line);
+    return v_buf;
+}
+
+void Lowering::fill_comptime_struct_into(ir::IrValueId base_addr,
+                                         const ComptimeEvalResult &r,
+                                         const StructLayout &lay, uint32_t line) {
+    for (const auto &fi : lay.fields) {
+        auto it = r.struct_fields.find(fi.name);
+        if (it == r.struct_fields.end() || !it->second) continue;
+        const ComptimeValue &cv = *it->second;
+        // Direccion del campo (base + offset), heredando la naturaleza host/VM.
+        ir::IrValueId v_addr = base_addr;
+        if (fi.offset != 0) {
+            const ir::IrValueId v_off =
+                emit_const(ir::IrType::I64, (uint64_t)fi.offset, line);
+            v_addr = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_addr].is_host_ptr = fn_->values[base_addr].is_host_ptr;
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v_addr;
+            ad.operands = {base_addr, v_off};
+            ad.source_line = line;
+            fn_->append(current_block_, std::move(ad));
+        }
+        if (fi.type.kind == PrimitiveKind::STRUCT && cv.is_struct) {
+            // Campo struct anidado: rellenar recursivamente en su direccion.
+            auto its = tc_.struct_layouts().find(fi.type.struct_name);
+            if (its != tc_.struct_layouts().end()) {
+                const ComptimeEvalResult sub = result_from_value(cv);
+                fill_comptime_struct_into(v_addr, sub, its->second, line);
+            }
+            continue;
+        }
+        // Campo escalar: constante + STORE en la direccion del campo.
+        const ir::IrType ir_ft = ir_type_from_primitive(fi.type.kind);
+        const ir::IrValueId v_val = emit_const(ir_ft, (uint64_t)cv.value, line);
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir_ft;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_val, v_addr};
+        st.source_line = line;
+        fn_->append(current_block_, std::move(st));
+    }
+}
+
 void Lowering::emit_struct_init_fields(ir::IrValueId base_addr,
                                        const StructLayout &lay,
                                        ast::InitListExpr *il, uint32_t line) {
@@ -17914,6 +17978,66 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
         return lower_expr(e->macro_expanded.get());
     }
 
+    /* Constructor de STRUCT: `Struct(args)`.  El type checker dejo
+     * result_type = STRUCT y el callee es el nombre de un struct con
+     * constructor.  Value-type: alocamos el buffer del struct en host-stack,
+     * llamamos `<Struct>__ctor(buffer, args...)` -- que lo inicializa via su
+     * `this` -- y el resultado es el propio buffer (ptr al struct construido). */
+    if (e->callee && e->callee->kind == ast::NodeKind::IdentExpr &&
+        e->result_type.kind == PrimitiveKind::STRUCT) {
+        auto *cid = static_cast<ast::IdentExpr *>(e->callee.get());
+        auto it_sc = tc_.struct_layouts().find(cid->name);
+        if (it_sc != tc_.struct_layouts().end() &&
+            cid->name == e->result_type.struct_name) {
+            const StructLayout &slay = it_sc->second;
+            // F1b: si el struct tiene un ctor `comptime` para esta aridad, se
+            // ejecuta en compile-time y el struct se materializa como datos
+            // (sin llamada en runtime); si no aplica, sigue el ctor runtime.
+            if (const ir::IrValueId v_ct =
+                    try_lower_comptime_ctor_call(e, slay);
+                v_ct != ir::IR_NO_VALUE)
+                return v_ct;
+            bool has_ctor = false;
+            for (const auto &m : slay.methods)
+                if (m.is_constructor) {
+                    has_ctor = true;
+                    break;
+                }
+            if (has_ctor) {
+                const uint64_t buf_bytes =
+                    (static_cast<uint64_t>(slay.size_bytes) + 7ULL) & ~7ULL;
+                const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
+                ir::IrInstr al{};
+                al.op = ir::IrOp::ALLOCA;
+                al.type = ir::IrType::I8;
+                al.imm = buf_bytes;
+                al.dst = v_buf;
+                al.host_alloca = true;
+                al.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(al));
+                fn_->values[v_buf].is_host_ptr = true;
+                std::vector<ir::IrValueId> operands;
+                operands.reserve(e->args.size() + 1);
+                operands.push_back(v_buf); // this = buffer a inicializar
+                for (auto &a : e->args) {
+                    const ir::IrValueId av = lower_expr(a.get());
+                    if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+                    operands.push_back(av);
+                }
+                ir::IrInstr ins{};
+                ins.op = ir::IrOp::CALL;
+                ins.type = ir::IrType::VOID;
+                ins.dst = ir::IR_NO_VALUE;
+                ins.func_name =
+                    cid->name + "__ctor_" + std::to_string(e->args.size());
+                ins.operands = std::move(operands);
+                ins.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(ins));
+                return v_buf;
+            }
+        }
+    }
+
     /* `source(arg)` (y cualquier comptime fn IMPORTADA pass-through con un
      * unico param `expr` cuyo body es `return code`): es un quasi-quote --
      * captura su argumento como texto/plantilla y lo DEVUELVE tal cual.  No
@@ -18469,8 +18593,26 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
              * intentamos comptime-eval; en su lugar caemos al
              * lowering normal mas abajo que emitira CALLVM regular
              * a `__macro_<callee>`.  Los args pueden ser params del
-             * macro contenedor (runtime values) lo cual es valido. */
-            if (current_fn_is_macro_ && cit->second && cit->second->is_macro) {
+             * macro contenedor (runtime values) lo cual es valido.
+             *
+             * MA.2-nested-call: la misma regla aplica a una comptime
+             * fn-VM llamada dentro de otra (`comptime Caja caja(){ c.min =
+             * punto(2,3); }`).  Al bajar `__macro_caja` en el pass 1 la
+             * ComptimeVM aun no tiene `__macro_punto`, asi que comptime-eval
+             * daria DIFERIDO y hornearia ceros dentro de `__macro_caja`.  En
+             * su lugar emitimos un CALLVM a `__macro_punto` (con SRET si el
+             * callee devuelve struct por valor): cuando `__macro_caja` corre
+             * en la VM (invocado desde el call site) llama al `__macro_punto`
+             * ya cargado y el struct se rellena de verdad.  Se EXCLUYEN las
+             * force-lowered (un @Macro las baja con nombre plano `code.<X>`;
+             * el rewrite a `__macro_` las rompe -> caen a su propio path en
+             * 18646). */
+            const bool callee_is_vm_comptime =
+                cit->second && !cit->second->is_macro &&
+                comptime_fn_needs_vm(tc_, cit->second) &&
+                comptime_fns_to_force_lower_.count(cid->name) == 0;
+            if (current_fn_is_macro_ && cit->second &&
+                (cit->second->is_macro || callee_is_vm_comptime)) {
                 /* Caer al lowering normal de CallExpr -- no
                  * intentar comptime eval aqui.  El rewrite del
                  * nombre callee_name -> __macro_<name> se hace al
@@ -18571,6 +18713,21 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                     ir::IrType::I64, (uint64_t)r.str.size(), src_line);
                 ir::IrValueId v_str = emit_string_literal_repr(v_addr, v_len, -1, src_line);
                 return v_str;
+            }
+            /* Retorno struct por valor: la funcion comptime calculo el struct y
+             * lo devolvio con un campo por miembro; lo materializamos como un
+             * struct constante (buffer + STORE por campo), sin llamada en
+             * tiempo de ejecucion. */
+            if (r.is_struct) {
+                auto *fn_decl_s = cfns.at(cid->name);
+                if (fn_decl_s && fn_decl_s->return_type) {
+                    const Type rt =
+                        tc_.resolve_type_node(fn_decl_s->return_type.get());
+                    auto it_sl = tc_.struct_layouts().find(rt.struct_name);
+                    if (it_sl != tc_.struct_layouts().end())
+                        return materialize_comptime_struct(r, it_sl->second,
+                                                           src_line);
+                }
             }
             /* Tipo de retorno declarado por la fn. */
             ir::IrType t = ir::IrType::I64;
@@ -29047,9 +29204,35 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         if (!m->method_type_params.empty()) continue;
 
         ir::IrFunction fn;
-        const std::string suffix = m->is_destructor ? std::string("__dtor")
-                                                     : m->name;
+        // El constructor baja a `<Struct>__ctor_<aridad>` (la aridad discrimina
+        // los OVERLOADS, que compartirian `__ctor` y colisionarian); el
+        // destructor a `<Struct>____dtor`; el resto a `<Struct>__<metodo>`.
+        const std::string suffix =
+            m->is_destructor ? std::string("__dtor")
+            : m->is_constructor
+                ? ("ctor_" + std::to_string(m->params.size()))
+                : m->name;
         fn.name = sd->name + "__" + suffix;
+
+        // F1b: un ctor `comptime T(expr)` se ejecuta en la ComptimeVM.  Se baja
+        // con el prefijo `__macro_` (lo identifica como codigo comptime) y se
+        // registra para invocacion; ademas su body se lowerea en modo macro para
+        // que las llamadas comptime internas emitan CALLVM en vez de hornearse
+        // (misma disciplina que lower_function para las comptime fns-VM).
+        const bool is_comptime_ctor = m->is_constructor && m->is_comptime;
+        if (is_comptime_ctor) {
+            fn.name = "__macro_" + fn.name;
+            fn.is_macro_compiled = true;
+            const_cast<TypeChecker &>(tc_).comptime_runtime().register_macro(
+                fn.name, 0);
+        }
+        const bool prev_fn_is_macro = current_fn_is_macro_;
+        current_fn_is_macro_ = is_comptime_ctor;
+        struct MacroGuard {
+            bool *flag;
+            bool saved;
+            ~MacroGuard() { *flag = saved; }
+        } macro_guard{&current_fn_is_macro_, prev_fn_is_macro};
 
         // B.3 contract: si el struct es una instanciacion generica
         // (`atomic_i64` viene de `struct atomic<T>`), marcar la IrFunction con

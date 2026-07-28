@@ -1,0 +1,40 @@
+/**
+ * @file 335_struct_constructors.vx
+ * @brief Constructores de `struct` (value-type) con OVERLOAD por aridad.
+ *
+ * Un `struct` puede declarar constructores nombrados como el propio tipo,
+ * igual que una clase, pero SIN GC: el objeto es value-type, el compilador
+ * aloca el buffer en la pila-host y el constructor lo inicializa via `this`.
+ * Se admite OVERLOAD (varios `Struct(...)` con firmas distintas); la aridad
+ * discrimina cada version.  Se valida con la red diferencial (interp =
+ * oraculo; jit y aot coinciden).
+ */
+namespace sct;
+
+struct Vec {
+    i64 x;
+    i64 y;
+
+    /** @brief Constructor de dos componentes. */
+    public Vec(i64 a, i64 b) {
+        this.x = a;
+        this.y = b;
+    }
+
+    /** @brief Constructor de una componente (diagonal): x == y == a. */
+    public Vec(i64 a) {
+        this.x = a;
+        this.y = a;
+    }
+
+    /** @brief Suma de las dos componentes. */
+    public i64 sum() {
+        return this.x + this.y;
+    }
+}
+
+i32 main() {
+    Vec p = Vec(10, 32); // overload 2-arg: x=10, y=32 -> sum=42
+    Vec q = Vec(21);     // overload 1-arg: x=y=21    -> sum=42
+    return (i32) (p.sum() + q.sum() - 42); // 42 + 42 - 42 = 42
+}

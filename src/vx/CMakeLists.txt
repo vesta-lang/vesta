@@ -186,6 +186,8 @@ add_library(vx_lib STATIC
     # Recolector del conjunto comptime (P1 fase 1: base del artefacto comptime
     # separado que compilara/ejecutara todo el comptime en la ComptimeVM).
     comptime/comptime_collect.cpp
+    # Constructor `comptime T(expr)` de structs: literales de tipo usuario (F1b).
+    comptime/literal_ctor.cpp
     # Sistema de modulos.
     module/module_resolver.cpp
     module/module_interop.cpp

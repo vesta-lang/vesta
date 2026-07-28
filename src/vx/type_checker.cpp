@@ -3817,7 +3817,11 @@ void TypeChecker::collect_globals() {
                 // anyade al layout (es plantilla).  Cada `obj.metodo<U>()`
                 // clona una version concreta via monomorphize_method.
                 if (!m->method_type_params.empty()) continue;
-                if (!seen_methods.emplace(m->name, true).second) {
+                // Los constructores admiten OVERLOAD (varios `Struct(...)` con
+                // firmas distintas), asi que NO participan en la deteccion de
+                // duplicados por nombre (mismo criterio que las clases).
+                if (!m->is_constructor &&
+                    !seen_methods.emplace(m->name, true).second) {
                     diags_.error(m->loc, "metodo duplicado en struct '" +
                                              s->name + "': '" + m->name + "'");
                     continue;
@@ -3826,6 +3830,13 @@ void TypeChecker::collect_globals() {
                 mi.name = m->name;
                 mi.is_destructor = m->is_destructor;
                 mi.is_virtual = m->is_virtual;
+                // Constructor del struct (`Struct(args)`): sin el flag, el
+                // StructLayout no lo distinguia de un metodo normal y la
+                // resolucion de `u128(x)` no lo encontraba.
+                mi.is_constructor = m->is_constructor;
+                // F1b: un ctor `comptime T(expr)` se ejecuta en compile-time y
+                // materializa el struct; el lowering lo baja a un `__macro_`.
+                mi.is_comptime = m->is_comptime;
                 // `static`: factoria/constructor sin `this` (Struct.metodo()).
                 // Sin copiar el flag, el StructLayout siempre lo veia false y la
                 // resolucion de `Struct.zero()` no encontraba el metodo.
@@ -5894,9 +5905,10 @@ void TypeChecker::check_class_method(const ClassLayout &cls,
 
 void TypeChecker::check_struct_method(const StructLayout &lay,
                                       ast::ClassMethodDecl *m) {
-    // Los structs no tienen metodos static / constructores; el parser
-    // ya los excluye.  Aqui solo configuramos el scope con 'this'
-    // (STRUCT) + parametros y chequeamos el body.
+    // Configura el scope con 'this' (STRUCT) + parametros y chequea el body.
+    // Vale igual para metodos normales, factorias `static` y constructores
+    // (`u128(args)`): un constructor es un metodo void cuyo `this` es el buffer
+    // a inicializar; no requiere trato especial en el chequeo del cuerpo.
     const bool saved_static = current_method_is_static_;
     current_method_is_static_ = false;
 
@@ -15401,6 +15413,52 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         }
     }
     if (!s) {
+        // Constructor de STRUCT: `u128(args)` donde el callee es el nombre de un
+        // struct que declara uno o mas constructores.  Overload por aridad Y
+        // tipos (types_assignable).  El resultado es un valor STRUCT; el lowering
+        // baja a `<Struct>__ctor(this, args...)` con SRET.  (No colisiona con
+        // `Struct.metodo()` / `Struct.default()` / `toString`, que son
+        // FieldAccess, ni con `new` -- los structs no usan `new`.)
+        auto it_sc = struct_layouts_.find(id->name);
+        if (it_sc != struct_layouts_.end()) {
+            const StructLayout &slay = it_sc->second;
+            std::vector<Type> arg_types;
+            arg_types.reserve(e->args.size());
+            for (auto &a : e->args)
+                arg_types.push_back(check_expr(a.get()));
+            const ClassMethodInfo *ctor = nullptr;
+            bool any_ctor = false;
+            for (const auto &m : slay.methods) {
+                if (!m.is_constructor) continue;
+                any_ctor = true;
+                if (m.param_types.size() != arg_types.size()) continue;
+                bool ok = true;
+                for (size_t i = 0; i < arg_types.size(); ++i) {
+                    if (arg_types[i].kind == PrimitiveKind::COUNT) continue;
+                    if (!types_assignable(m.param_types[i], arg_types[i])) {
+                        ok = false;
+                        break;
+                    }
+                }
+                if (ok) {
+                    ctor = &m;
+                    break;
+                }
+            }
+            if (any_ctor) {
+                if (!ctor) {
+                    diags_.error(e->loc,
+                                 "ningun constructor de '" + id->name +
+                                     "' coincide con los argumentos dados");
+                    return Type{};
+                }
+                Type rt{PrimitiveKind::STRUCT, id->name};
+                e->result_type = rt;
+                return rt;
+            }
+            // Struct sin constructores declarados: cae al error normal (para
+            // construir por defecto se usa `Struct{...}` o `Struct.default()`).
+        }
         diags_.error(e->loc, "funcion no declarada: '" + id->name + "'");
         for (auto &a : e->args)
             (void)check_expr(a.get());

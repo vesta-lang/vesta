@@ -2352,6 +2352,9 @@ diff3_case("wideint_import", "import cross-module de struct con metodos+herencia
 diff3_case("struct_static", "metodos static en struct (factorias sin this, SRET + escalar)", "332_struct_static_methods.vx")
 diff3_case("struct_static_fields", "campos static en struct (contador/singleton por-tipo)", "334_struct_static_fields.vx")
 diff3_case("wideint_signed", "i128 con signo: div/mod truncados, neg, comparadores (std.wideint)", "333_wideint_signed.vx")
+diff3_case("struct_constructors", "constructores de struct value-type con overload por aridad", "335_struct_constructors.vx")
+diff3_case("comptime_ctor_literal", "constructor comptime de struct (i64 + param expr): literales de tipo usuario", "337_comptime_ctor_literal.vx")
+diff3_case("comptime_parse_literal", "parseo de literal entero en comptime (ctor expr -> helper de parseo -> IntLit)", "338_comptime_parse_literal.vx")
 
 
 # --- stdlib: ejemplos y tests de la biblioteca estandar de Vesta -----------

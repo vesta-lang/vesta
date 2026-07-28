@@ -239,6 +239,10 @@ struct ClassMethodInfo {
     /// estatica (blob en static_data); en los no-virtuales no aplica.
     bool is_virtual = false;
     bool is_constructor = false;
+    /// F1b: constructor `comptime T(expr)` de un struct value-type.  Se ejecuta
+    /// en compile-time (ComptimeVM) y materializa el struct como datos; no emite
+    /// llamada en runtime.  Propagado desde @c ClassMethodDecl::is_comptime.
+    bool is_comptime = false;
     /// destructor `~ClassName()`.  Sin params, void retorno.
     /// El lowering lo invoca via CALLVIRT al exit del scope para
     /// instancias locales que NO escapan

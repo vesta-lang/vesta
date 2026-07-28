@@ -574,6 +574,37 @@ bool ComptimeRuntime::invoke_string_macro(const std::string &macro_name,
     }
 }
 
+bool ComptimeRuntime::invoke_struct_macro(const std::string &macro_name,
+                                          const std::vector<uint64_t> &args,
+                                          size_t struct_size,
+                                          std::vector<uint8_t> &out_bytes) noexcept {
+    /* Una funcion que devuelve un struct por valor lo hace por SRET: el llamante
+     * aloca el buffer del resultado y lo pasa como primer parametro oculto
+     * (host_ptr), y la funcion lo rellena con `movh`.  Aqui hacemos de llamante:
+     * alocamos el buffer en memoria del proceso (out_bytes), no en la pila de la
+     * funcion -- que se libera al retornar --, lo anteponemos a los argumentos
+     * reales y ejecutamos.  Al ser out_bytes memoria ajena al GcHeap, el barrido
+     * de invoke_simple_macro no la toca. */
+    out_bytes.assign(struct_size, 0);
+    /* El buffer de retorno mas los argumentos reales no pueden exceder los 12
+     * registros de la convencion de llamada. */
+    if (args.size() + 1 > 12) return false;
+    std::vector<uint64_t> vm_args;
+    vm_args.reserve(args.size() + 1);
+    vm_args.push_back(static_cast<uint64_t>(
+        reinterpret_cast<uintptr_t>(out_bytes.data())));
+    for (uint64_t a : args) {
+        vm_args.push_back(a);
+    }
+    uint64_t r0 = 0;
+    /* Tras la invocacion, out_bytes ya contiene los bytes del struct escritos
+     * por la funcion a traves del buffer.  R0 (el propio buffer) se ignora. */
+    if (!invoke_simple_macro(macro_name, vm_args, r0)) {
+        return false;
+    }
+    return true;
+}
+
 void ComptimeRuntime::record_expectation(const std::string &macro_name,
                                          std::vector<uint64_t> args,
                                          std::string expected_str,

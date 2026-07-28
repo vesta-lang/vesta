@@ -4934,6 +4934,70 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
             continue;
         }
 
+        // Constructor del struct: el nombre del miembro coincide con el del
+        // struct y va inmediatamente seguido de '('.  Mismo patron que en clase
+        // (parser.cpp caso 1 de parse_class_decl); baja a `<Struct>__ctor(this,
+        // args...)` con SRET (value-type: `this` es un PTR al buffer del struct,
+        // sin GC ni calloc).  Debe detectarse ANTES del caso campo/metodo porque
+        // `u128(...)` empieza por el propio nombre de tipo.
+        // F1b: constructor `comptime T(expr e) { ... }` -- se ejecuta en
+        // compile-time (ComptimeVM) y materializa el struct; base de los
+        // literales de tipo usuario.  El `comptime` es opcional y precede al
+        // nombre del ctor.  Se detecta con peek para no consumirlo si lo que
+        // sigue no es realmente un ctor de este struct.
+        bool ctor_is_comptime = false;
+        if (current_.kind == TokenKind::IDENTIFIER &&
+            current_.lexeme == "comptime" &&
+            lex_.peek_at(0).kind == TokenKind::IDENTIFIER &&
+            lex_.peek_at(0).lexeme == s->name &&
+            lex_.peek_at(1).kind == TokenKind::LPAREN) {
+            (void)consume(); // 'comptime'
+            ctor_is_comptime = true;
+        }
+        if (current_.kind == TokenKind::IDENTIFIER &&
+            current_.lexeme == s->name &&
+            lex_.peek_at(0).kind == TokenKind::LPAREN) {
+            auto m = std::make_unique<ast::ClassMethodDecl>();
+            m->loc = current_.loc;
+            m->name = consume().lexeme;
+            m->is_constructor = true;
+            m->is_comptime = ctor_is_comptime;
+            m->return_type = nullptr; // void implicito
+            m->access = access;
+            (void)expect(TokenKind::LPAREN,
+                         "se esperaba '(' tras nombre del constructor");
+            // Usar parse_param() (no parse_type_node directo) para reconocer un
+            // parametro `expr` (captura el texto crudo del literal en el call
+            // site), necesario para el ctor comptime de literales.
+            while (current_.kind != TokenKind::RPAREN &&
+                   current_.kind != TokenKind::END_OF_FILE) {
+                auto p = parse_param();
+                if (!p) {
+                    synchronize();
+                    break;
+                }
+                m->params.push_back(std::move(p));
+                if (!match(TokenKind::COMMA)) break;
+            }
+            (void)expect(
+                TokenKind::RPAREN,
+                "se esperaba ')' al cerrar parametros del constructor");
+            // F1b: registrar las posiciones de los params `expr` bajo el nombre
+            // del struct, para que el call site `T(literal)` capture el texto
+            // crudo del literal (misma tabla que usan los @Macro con `expr`).
+            {
+                std::vector<int> positions;
+                for (size_t i = 0; i < m->params.size(); ++i)
+                    if (m->params[i] && m->params[i]->is_expr_capture)
+                        positions.push_back((int)i);
+                if (!positions.empty())
+                    macro_expr_params_[s->name] = std::move(positions);
+            }
+            m->body = parse_method_body(/*is_void=*/true);
+            s->methods.push_back(std::move(m));
+            continue;
+        }
+
         // Agregado ANONIMO inline (`struct { ... } campo;` o miembro C11
         // `union { ... };`).  Se emite como struct sintetico top-level y el
         // campo lo referencia; sin nombre de campo -> miembro anonimo (aplanado).

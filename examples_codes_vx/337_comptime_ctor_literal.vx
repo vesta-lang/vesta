@@ -1,0 +1,56 @@
+/**
+ * @file 337_comptime_ctor_literal.vx
+ * @brief Constructor `comptime` de un struct: literales de tipo usuario (F1b).
+ *
+ * Un struct puede declarar un constructor `comptime` que se ejecuta en tiempo
+ * de compilacion (en la ComptimeVM) y cuyo resultado se materializa como un
+ * struct constante en el binario -- sin ninguna llamada en tiempo de ejecucion.
+ * Es la base de los literales de tipo usuario (modelo Swift
+ * ExpressibleByIntegerLiteral): un tipo de libreria se construye desde un
+ * literal sin que el compilador conozca su representacion interna.
+ *
+ * Se cubren las dos formas de argumento:
+ *   - un valor comptime-evaluable normal (`i64`), y
+ *   - un parametro `expr`, que captura el TEXTO CRUDO del call site (aqui el
+ *     ctor mide su longitud); es la forma que permite parsear literales de
+ *     ancho arbitrario (u128, u256, ...).
+ *
+ * Se valida con la red diferencial (interp = oraculo; jit y aot coinciden).
+ */
+namespace ctcl;
+
+/** @brief Par de enteros construido en tiempo de compilacion desde un `i64`. */
+struct Par {
+    i64 a;
+    i64 b;
+
+    /**
+     * @brief Constructor comptime: deriva ambos campos del argumento.
+     * @param x Semilla del par (a = x, b = 2*x).
+     */
+    comptime Par(i64 x) {
+        this.a = x;
+        this.b = x * 2;
+    }
+}
+
+/** @brief Token que guarda la longitud del texto literal que lo construyo. */
+struct Tok {
+    i64 len;
+
+    /**
+     * @brief Constructor comptime: mide el texto crudo capturado.
+     * @param t Texto del literal del call site (parametro `expr`).
+     */
+    comptime Tok(expr t) {
+        this.len = str_length(t);
+    }
+}
+
+i32 main() {
+    Par p = Par(19);    // materializado: a = 19, b = 38
+    Tok k = Tok(hola);  // captura "hola" -> len = 4
+
+    // 19 - 4 + 38 - 11 = 42
+    return (i32) (p.a - k.len + p.b - 11);
+}

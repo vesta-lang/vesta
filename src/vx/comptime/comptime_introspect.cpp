@@ -11,6 +11,16 @@
  *        introspection.  Resuelve metadata por valor literal sin tocar
  *        runtime.  Llamado tanto desde el type checker (validacion) como
  *        desde el lowering (emision de CONST IR).
+ *
+ * @note LEGACY -- el tree-walker `comptime_eval_expr` / `comptime_eval_stmt`
+ *       de este fichero NO es el mecanismo de EJECUCION de codigo comptime del
+ *       lenguaje.  El mecanismo real es el ComptimeRuntime (MC): todo cuerpo
+ *       comptime (`comptime fn`, `comptime { }`, `@Macro`) se baja a IR y se
+ *       ejecuta en la ComptimeVM por INTERPRETE o JIT (JIT preferido; el
+ *       interprete es solo el fallback cuando el JIT no puede compilar la fn).
+ *       Este evaluador de AST queda como resto legacy (resolucion de metadata
+ *       literal simple) y NO debe usarse como base para features nuevas de
+ *       ejecucion comptime -- esas van por IR -> ComptimeVM (interp/JIT).
  */
 
 #include "vx/comptime/comptime_introspect.h"
@@ -1574,6 +1584,61 @@ static ComptimeEvalResult
 comptime_call_fn(TypeChecker &tc, const ast::FunctionDecl *fn,
                  std::vector<ComptimeEvalResult> args);
 
+/**
+ * @brief construye el valor de compile-time de un struct a partir de sus bytes.
+ *
+ * Recorre el layout del struct y, por cada campo, lee sus bytes del buffer
+ * @c bytes (con @c base como desplazamiento del struct dentro del buffer) y los
+ * guarda en @c out.struct_fields.  Los campos de tipo struct se resuelven
+ * recursivamente.  Hoy se soportan campos enteros, @c bool y @c char, y structs
+ * anidados; los campos de otros tipos (coma flotante, punteros) se omiten y
+ * quedan a cero al materializar el struct.
+ *
+ * @param tc    Type checker (para localizar el layout de structs anidados).
+ * @param lay   Layout del struct a reconstruir.
+ * @param bytes Buffer con la representacion en memoria del struct.
+ * @param base  Desplazamiento del struct dentro de @c bytes.
+ * @param out   Resultado a rellenar (@c is_struct queda a @c true).
+ */
+void fill_struct_fields_from_bytes(const TypeChecker &tc,
+                                   const StructLayout &lay,
+                                   const std::vector<uint8_t> &bytes,
+                                   uint32_t base, ComptimeEvalResult &out) {
+    out.ok = true;
+    out.is_struct = true;
+    for (const auto &f : lay.fields) {
+        const uint32_t off = base + f.offset;
+        // Defensa: no leer fuera del buffer del struct.
+        if (static_cast<size_t>(off) + f.size > bytes.size()) continue;
+        ComptimeValue cv;
+        if (f.type.kind == PrimitiveKind::STRUCT) {
+            // Campo struct anidado: reconstruir recursivamente.
+            const auto &slays = tc.struct_layouts();
+            auto it = slays.find(f.type.struct_name);
+            if (it == slays.end() || it->second.is_overlay) continue;
+            ComptimeEvalResult sub;
+            fill_struct_fields_from_bytes(tc, it->second, bytes, off, sub);
+            cv = value_from_result(sub);
+        } else {
+            const PrimitiveKind k = f.type.kind;
+            const bool int_like =
+                k == PrimitiveKind::BOOL || k == PrimitiveKind::CHAR ||
+                k == PrimitiveKind::I8 || k == PrimitiveKind::I16 ||
+                k == PrimitiveKind::I32 || k == PrimitiveKind::I64 ||
+                k == PrimitiveKind::U8 || k == PrimitiveKind::U16 ||
+                k == PrimitiveKind::U32 || k == PrimitiveKind::U64;
+            // Campos aun no soportados (coma flotante, puntero): se omiten.
+            if (!int_like) continue;
+            uint64_t raw = 0;
+            const uint32_t n = f.size < 8u ? f.size : 8u;
+            std::memcpy(&raw, bytes.data() + off, n);
+            cv.value = static_cast<int64_t>(raw);
+        }
+        out.struct_fields[f.name] =
+            std::make_shared<ComptimeValue>(std::move(cv));
+    }
+}
+
 ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                                       const ast::Expr *expr) {
     ComptimeEvalResult r{};
@@ -2529,10 +2594,26 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                 if (comptime_fn_needs_vm(tc, fn_it->second) &&
                     !fn_it->second->is_imported_comptime && !forwarded_expr_arg) {
                     bool ret_is_str = false;
+                    bool ret_is_struct = false;
+                    const StructLayout *ret_slay = nullptr;
                     if (fn_it->second->return_type) {
                         const Type rt = tc.resolve_type_node(
                             fn_it->second->return_type.get());
                         ret_is_str = (rt.kind == PrimitiveKind::STRING);
+                        /* Retorno struct por valor: se recupera por su buffer de
+                         * retorno (SRET) y se reconstruye campo a campo.  Se
+                         * excluyen los enums (comparten el kind STRUCT) y los
+                         * overlay, cuyo valor es un puntero y no un buffer. */
+                        if (rt.kind == PrimitiveKind::STRUCT) {
+                            const auto &slays = tc.struct_layouts();
+                            const auto &elays = tc.enum_layouts();
+                            auto its = slays.find(rt.struct_name);
+                            if (its != slays.end() && !its->second.is_overlay &&
+                                elays.find(rt.struct_name) == elays.end()) {
+                                ret_is_struct = true;
+                                ret_slay = &its->second;
+                            }
+                        }
                     }
                     std::vector<uint64_t> vm_args;
                     vm_args.reserve(args.size());
@@ -2575,6 +2656,21 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                                                      vm_args, out);
                         vr.is_str = true;
                         if (inv) vr.str = std::move(out);
+                        else vr.deferred = true;
+                    } else if (ret_is_struct) {
+                        /* La funcion escribe el struct en un buffer de retorno
+                         * (SRET); recuperamos sus bytes y reconstruimos cada
+                         * campo como valor de compile-time. */
+                        std::vector<uint8_t> sbytes;
+                        const bool inv =
+                            const_cast<TypeChecker &>(tc).comptime_runtime()
+                                .invoke_struct_macro("__macro_" + cid->name,
+                                                     vm_args,
+                                                     ret_slay->size_bytes,
+                                                     sbytes);
+                        if (inv)
+                            fill_struct_fields_from_bytes(tc, *ret_slay, sbytes,
+                                                          0, vr);
                         else vr.deferred = true;
                     } else {
                         uint64_t r0 = 0;
