@@ -12,4 +12,13 @@ namespace std.types;
 /// Octeto sin signo (0..255).  Alias comodo y semantico para buffers de bytes.
 public typedef u8 byte new;
 
+/**
+ * Tanto usize como size_t son sinonimos, por lo que no se crea un tipo fuerte
+ * aqui, se crea como tipo de compatibilidad.
+ * 
+ * Este tipo es 32bits en una CPU de 32bits, de 16 si la CPU es de 16 bits y de
+ * 64bits si la CPU es de 64bits.
+ */
+public typedef usize size_t;
+
 public uintptr nullptr = 0;

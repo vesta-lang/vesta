@@ -15,7 +15,7 @@
 // La salida es legible por maquina; el harness tests/vx/elf_parser_test.py la
 // valida contra un parseo INDEPENDIENTE (no circular).  interp/JIT/AOT.
 
-import "vx_fileio";
+import std.fileio;
 
 @overlay struct Elf64_Phdr {
     u32 p_type   @0x00;
@@ -83,14 +83,14 @@ i64 g_faults = 0;
 
 i32 main() {
     string path = "elf_target.bin";
-    i64 fsize = vx_fileio.file_size(path);
+    i64 fsize = fileio.file_size(path);
     if (fsize < 64) {
         println("uso: coloca un ELF64 en 'elf_target.bin' en el dir actual");
         return 2;
     }
     u64 size = (u64) fsize;
     u8* buf = (u8*) malloc(fsize);
-    i64 n = vx_fileio.file_read_into(path, buf, fsize);
+    i64 n = fileio.file_read_into(path, buf, fsize);
     if (n != fsize) { println("error de lectura"); free(buf); return 3; }
 
     Elf64_Ehdr eh = Elf64_Ehdr(buf);

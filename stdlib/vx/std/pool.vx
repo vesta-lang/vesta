@@ -1,5 +1,5 @@
 /**
- * @file vx_pool.vx
+ * @file pool.vx
  * @brief Scheduler M:N de FIBRAS con work-stealing (deque Chase-Lev lock-free)
  *        para  AOT.  UNIDAD DE EJECUCION UNICA: la Fibra.  Una "tarea"
  *        run-to-completion es simplemente una fibra que nunca hace yield.  SIN
@@ -46,6 +46,8 @@
  * exit son funciones  NORMALES que leen thread_local; no necesitan el @Naked
  * que vx_async exige para poder cederse desde el modo interprete.
  */
+
+namespace std.pool;
 
 import std.types only uintptr, usize;
 
@@ -141,7 +143,7 @@ void __vxp_pause() {
 
 // ===========================================================================
 //  Primitivos de FIBRA (context-switch en asm).  Inlineados aqui (nombres
-//  __vxp_) para que vx_pool sea un modulo autocontenido, igual que vx_async.
+//  __vxp_) para que pool sea un modulo autocontenido, igual que vx_async.
 // ===========================================================================
 
 // fiber_switch: salva callee-saved + rsp en *from, carga de *to.
@@ -468,7 +470,7 @@ void __vxp_sched_enqueue(fiber fib) {
 // ---------------------------------------------------------------------------
 // Primitivas PUBLICAS de suspension para construir canales/mutexes/timers sobre
 // el scheduler.  El llamante posee sus wait-queues (nodos en la pila de la fibra
-// que se bloquea; ver vx_chan) -- vx_pool solo park/wake/identidad.  Portable a
+// que se bloquea; ver chan) -- pool solo park/wake/identidad.  Portable a
 // select/close: una fibra se bloquea con vx_park (hand-off del lock) y otro lado
 // la revive con vx_wake tras sacar su nodo de la wait-queue bajo el lock.
 // ---------------------------------------------------------------------------
@@ -657,7 +659,7 @@ void __vxp_worker(u64 wid) {
  * @brief Arranca el pool con @p nworkers hilos del SO (1..VXP_MAXW).
  * @return Numero de workers arrancados.
  */
-public i64 vx_pool_start(i64 nworkers) {
+public i64 pool_start(i64 nworkers) {
     i64 n = nworkers;
     if (n < 1) { n = 1; }
     if (n > VXP_MAXW) { n = VXP_MAXW; }
@@ -685,7 +687,7 @@ public i64 vx_pool_start(i64 nworkers) {
  *        -> su deque local (localidad); desde fuera (main) -> cola global.
  * @return 1 si se encolo, 0 si no cupo.
  */
-public i64 vx_pool_submit(i64 body, i64 arg) {
+public i64 pool_submit(i64 body, i64 arg) {
     if (__vxp_n <= 0) {
         return 0;
     }
@@ -705,7 +707,7 @@ public i64 vx_pool_submit(i64 body, i64 arg) {
 /**
  * @brief Espera a que TODAS las fibras terminen y para los workers.
  */
-public void vx_pool_join() {
+public void pool_join() {
     while (__vxp_load64(&__vxp_pending) > 0) {
         __vxp_os_yield();
     }

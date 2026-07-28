@@ -1,6 +1,6 @@
 /**
- * @file vx_chan.vx
- * @brief Canales (estilo CSP) sobre el scheduler M:N de fibras (vx_pool).  Una
+ * @file chan.vx
+ * @brief Canales (estilo CSP) sobre el scheduler M:N de fibras (pool).  Una
  *        fibra que hace recv de un canal sin dato (o send de uno lleno) se
  *        BLOQUEA -- sale de la run-queue -- y la operacion opuesta la despierta
  *        EXACTAMENTE a ella, entregandole el valor DIRECTAMENTE.  SIN busy-wait,
@@ -42,12 +42,14 @@
  * unico canal solo evalua una comparacion (`sel == 0`) para el soporte de select.
  *
  * @par Uso
- * Entre FIBRAS (tareas del pool).  main coordina con vx_pool_join (no es fibra:
+ * Entre FIBRAS (tareas del pool).  main coordina con pool_join (no es fibra:
  * no puede bloquearse en un canal ni en un select).
  */
 
-import "vx_atomic" only vx_spin_lock, vx_spin_unlock, vx_atomic_cas64;
-import "vx_pool" only fiber, vx_park, vx_wake, vx_cur_fiber;
+namespace std.chan;
+
+import std.atomic only vx_spin_lock, vx_spin_unlock, atomic_cas64;
+import std.pool only fiber, vx_park, vx_wake, vx_cur_fiber;
 
 // ---------------------------------------------------------------------------
 // Vista tipada (overlay) de la cabecera del canal sobre el bloque host: el valor
@@ -213,7 +215,7 @@ bool __vxch_claim(Waiter w) {
     if (!__vxch_is_select_waiter(w)) {
         return true;
     }
-    if (vx_atomic_cas64((i64*)w.sel, 0, 1) == 0) {
+    if (atomic_cas64((i64*)w.sel, 0, 1) == 0) {
         *(i64*)(w.win) = w.idx;      // publica el indice ganador
         return true;
     }
@@ -225,9 +227,9 @@ bool __vxch_claim(Waiter w) {
  *        cap>=1 -> buffered, REDONDEADA a la siguiente potencia de dos (ring
  *        indexado con `& mask`, sin division).
  * @return el handle @c Chan; su bloque es nulo si no hubo memoria (el llamante
- *         puede comprobarlo con vx_chan_is_null antes de usarlo).
+ *         puede comprobarlo con chan_is_null antes de usarlo).
  */
-public Chan vx_chan_new(i64 cap) {
+public Chan chan_new(i64 cap) {
     i64 c = 0;
     i64 mask = 0;
     if (cap >= 1) {
@@ -238,7 +240,7 @@ public Chan vx_chan_new(i64 cap) {
         mask = c - 1;
     }
     Chan ch = Chan((i64) malloc(CH_HDR + c * 8));
-    if (!vx_chan_is_null(ch)) {
+    if (!chan_is_null(ch)) {
         ch.lock = 0;
         ch.cap = c;
         ch.mask = mask;
@@ -254,14 +256,14 @@ public Chan vx_chan_new(i64 cap) {
     return ch;
 }
 
-/// @return true si el handle no apunta a ningun bloque (OOM en vx_chan_new).
-public bool vx_chan_is_null(Chan ch) {
+/// @return true si el handle no apunta a ningun bloque (OOM en chan_new).
+public bool chan_is_null(Chan ch) {
     return __vxch_base(ch) == 0;
 }
 
 /// Libera el canal (nadie debe estar bloqueado en el).
-public void vx_chan_free(Chan ch) {
-    if (!vx_chan_is_null(ch)) {
+public void chan_free(Chan ch) {
+    if (!chan_is_null(ch)) {
         free((u8*) __vxch_base(ch));
     }
 }
@@ -359,7 +361,7 @@ bool __vxch_send_locked(Chan c, i64 v, fiber* pwake) {
  * @brief Envia @p v por el canal.  Prioridad: (1) receptor en espera -> entrega
  *        directa; (2) hueco en el buffer -> encolar; (3) bloquear en la sendq.
  */
-public void vx_chan_send(Chan ch, i64 v) {
+public void chan_send(Chan ch, i64 v) {
     vx_spin_lock(&ch.lock);
     // Enviar por un canal CERRADO descarta el valor y vuelve (no bloquea ni
     // corrompe el buffer): el productor debe dejar de enviar tras cerrar.
@@ -375,7 +377,7 @@ public void vx_chan_send(Chan ch, i64 v) {
     }
     // (3) Lleno (o rendezvous sin receptor) -> me encolo en la sendq y bloqueo.
     // Solo una FIBRA puede suspenderse; main (None) no puede bloquearse en un
-    // canal (coordina con vx_pool_join) -> suelta el lock y vuelve sin bloquear.
+    // canal (coordina con pool_join) -> suelta el lock y vuelve sin bloquear.
     match vx_cur_fiber() {
         case None => {
             vx_spin_unlock(&ch.lock);
@@ -403,7 +405,7 @@ public void vx_chan_send(Chan ch, i64 v) {
  *        drenado devuelve 0 SIN bloquear (semantica CSP).
  * @return el valor recibido.
  */
-public i64 vx_chan_recv(Chan ch) {
+public i64 chan_recv(Chan ch) {
     vx_spin_lock(&ch.lock);
     i64 val = 0;
     fiber wake = 0;
@@ -413,7 +415,7 @@ public i64 vx_chan_recv(Chan ch) {
         return val;
     }
     // Cerrado y drenado -> devolver 0 sin bloquear.  El consumidor distingue
-    // "cerrado" via vx_chan_is_closed en su condicion de bucle.
+    // "cerrado" via chan_is_closed en su condicion de bucle.
     if (ch.closed) {
         vx_spin_unlock(&ch.lock);
         return 0;
@@ -447,7 +449,7 @@ public i64 vx_chan_recv(Chan ch) {
  *        emisores bloqueados se despiertan (su envio se pierde).  Idempotente.
  *        Tras close, recv de un canal vacio devuelve 0 al instante (no bloquea).
  */
-public void vx_chan_close(Chan ch) {
+public void chan_close(Chan ch) {
     vx_spin_lock(&ch.lock);
     ch.closed = true;
     // Receptores en espera -> reciben 0 (o disparan su select con su indice).  El
@@ -478,7 +480,7 @@ public void vx_chan_close(Chan ch) {
 }
 
 /// @return true si el canal esta cerrado.
-public bool vx_chan_is_closed(Chan ch) {
+public bool chan_is_closed(Chan ch) {
     return ch.closed;
 }
 
@@ -488,7 +490,7 @@ public bool vx_chan_is_closed(Chan ch) {
  * @return true si el valor se entrego/encolo; false si enviaria bloquearia (o
  *         el canal esta cerrado).
  */
-public bool vx_chan_try_send(Chan ch, i64 v) {
+public bool chan_try_send(Chan ch, i64 v) {
     vx_spin_lock(&ch.lock);
     if (ch.closed) {
         vx_spin_unlock(&ch.lock);
@@ -508,11 +510,11 @@ public bool vx_chan_try_send(Chan ch, i64 v) {
  * @brief Recepcion NO-BLOQUEANTE.  Igual que recv pero sin el paso (3): si no
  *        hay dato en el buffer NI emisor esperando, NO bloquea -> devuelve false
  *        y no toca @p out (un canal cerrado+vacio tambien da false; el caller
- *        consulta vx_chan_is_closed).
+ *        consulta chan_is_closed).
  * @param out puntero donde escribir el valor recibido (solo si retorna true).
  * @return true si se recibio un valor (escrito en @p out); false si no habia nada.
  */
-public bool vx_chan_try_recv(Chan ch, i64* out) {
+public bool chan_try_recv(Chan ch, i64* out) {
     vx_spin_lock(&ch.lock);
     i64 val = 0;
     fiber wake = 0;
@@ -530,7 +532,7 @@ public bool vx_chan_try_recv(Chan ch, i64* out) {
 // SELECT: multiplexado sobre varias RECEPCIONES (fan-in).  Primitivo CSP para
 // esperar en N canales a la vez.  Un canal esta "listo" si tiene un valor
 // disponible (buffer/rendezvous) O esta CERRADO (recv de cerrado no espera;
-// entrega 0 -> el caller distingue con vx_chan_is_closed sobre el indice ganador).
+// entrega 0 -> el caller distingue con chan_is_closed sobre el indice ganador).
 // ---------------------------------------------------------------------------
 
 /// Rotacion POR-HILO del arranque del barrido -> reparto JUSTO (no favorecer
@@ -550,7 +552,7 @@ thread_local i64 __vxch_sel_rot = 0;
  * @param out   destino del valor recibido (valido solo si retorna >= 0).
  * @return indice [0,n) del canal que entrego, o -1 si ninguno tenia nada.
  */
-public i64 vx_chan_select_recv(Chan* chans, i64 n, i64* out) {
+public i64 chan_select_recv(Chan* chans, i64 n, i64* out) {
     if (n <= 0) {
         return -1;
     }
@@ -559,10 +561,10 @@ public i64 vx_chan_select_recv(Chan* chans, i64 n, i64* out) {
     for (i64 k = 0; k < n; k++) {
         i64 i = (start + k) % n;      // barrido rotado -> justo
         Chan ch = chans[i];
-        if (vx_chan_try_recv(ch, out)) {
+        if (chan_try_recv(ch, out)) {
             return i;                 // valor disponible -> gana este
         }
-        if (vx_chan_is_closed(ch)) {
+        if (chan_is_closed(ch)) {
             *out = 0;                 // cerrado -> listo con 0 (Go: ok=false)
             return i;
         }
@@ -595,7 +597,7 @@ public i64 vx_chan_select_recv(Chan* chans, i64 n, i64* out) {
  * @param out   destino del valor recibido.
  * @return indice [0,n) del canal que entrego.
  */
-public i64 vx_chan_select_recv_block(Chan* chans, i64 n, i64* out) {
+public i64 chan_select_recv_block(Chan* chans, i64 n, i64* out) {
     if (n <= 0) {
         return -1;
     }
@@ -603,7 +605,7 @@ public i64 vx_chan_select_recv_block(Chan* chans, i64 n, i64* out) {
     match vx_cur_fiber() {
         case None => {
             while (true) {
-                i64 idx = vx_chan_select_recv(chans, n, out);
+                i64 idx = chan_select_recv(chans, n, out);
                 if (idx >= 0) {
                     return idx;
                 }
@@ -731,13 +733,13 @@ i64 __vxch_sel_recv_parked(fiber self, Chan* chans, i64 n, i64* out) {
  *        clausula `default`).
  * @details Recorre los canales desde un indice rotatorio por-hilo.  Un canal
  *          "dispara" si acepta el envio (hay un receptor esperando o hueco en el
- *          buffer) o esta cerrado (el envio se descarta, como en vx_chan_send).
+ *          buffer) o esta cerrado (el envio se descarta, como en chan_send).
  * @param chans array de @p n handles de canal.
  * @param vals  array paralelo con el valor a enviar por cada canal.
  * @param n     numero de canales.
  * @return indice [0,n) del canal que acepto el envio, o -1 si ninguno pudo.
  */
-public i64 vx_chan_select_send(Chan* chans, i64* vals, i64 n) {
+public i64 chan_select_send(Chan* chans, i64* vals, i64 n) {
     if (n <= 0) {
         return -1;
     }
@@ -746,10 +748,10 @@ public i64 vx_chan_select_send(Chan* chans, i64* vals, i64 n) {
     for (i64 k = 0; k < n; k++) {
         i64 i = (start + k) % n;
         Chan ch = chans[i];
-        if (vx_chan_try_send(ch, vals[i])) {
+        if (chan_try_send(ch, vals[i])) {
             return i;                 // aceptado (receptor o buffer)
         }
-        if (vx_chan_is_closed(ch)) {
+        if (chan_is_closed(ch)) {
             return i;                 // cerrado -> el envio se descarta
         }
     }
@@ -761,7 +763,7 @@ public i64 vx_chan_select_send(Chan* chans, i64* vals, i64 n) {
  *        fibra hasta que uno acepte su valor (o se cierre), y devuelve ese caso.
  *        Pensada para fibras del pool; invocada desde el hilo principal degrada a
  *        sondeo repetido (no puede suspenderse).
- * @details Es el simetrico de vx_chan_select_recv_block sobre la cola de envio:
+ * @details Es el simetrico de chan_select_recv_block sobre la cola de envio:
  *   toma el lock de todos los canales en orden de direccion (sin repetir), entrega
  *   por el primero con capacidad (o descarta si esta cerrado) sin suspenderse; si
  *   ninguno acepta, encola un nodo de espera con su valor en la cola de envio de
@@ -775,7 +777,7 @@ public i64 vx_chan_select_send(Chan* chans, i64* vals, i64 n) {
  * @param n     numero de canales.
  * @return indice [0,n) del canal que acepto el envio.
  */
-public i64 vx_chan_select_send_block(Chan* chans, i64* vals, i64 n) {
+public i64 chan_select_send_block(Chan* chans, i64* vals, i64 n) {
     if (n <= 0) {
         return -1;
     }
@@ -783,7 +785,7 @@ public i64 vx_chan_select_send_block(Chan* chans, i64* vals, i64 n) {
     match vx_cur_fiber() {
         case None => {
             while (true) {
-                i64 idx = vx_chan_select_send(chans, vals, n);
+                i64 idx = chan_select_send(chans, vals, n);
                 if (idx >= 0) {
                     return idx;
                 }
@@ -896,7 +898,7 @@ i64 __vxch_sel_send_parked(fiber self, Chan* chans, i64* vals, i64 n) {
 // ---------------------------------------------------------------------------
 // SELECT general: casos de RECEPCION y ENVIO combinados en una sola espera.
 // Cada caso se describe con un overlay SelCase sobre un array que arma el
-// llamante.  vx_chan_select_recv/_send[_block] son atajos ergonomicos para una
+// llamante.  chan_select_recv/_send[_block] son atajos ergonomicos para una
 // sola direccion; este es el primitivo general (multiplexa ambas).
 // ---------------------------------------------------------------------------
 const i64 VXCH_RECV = 0;   // caso de recepcion
@@ -913,7 +915,7 @@ const i64 VXCH_SEND = 1;   // caso de envio
 // Chan; repro completo en la nota del overlay Chan, arriba).  Verificado en las
 // tres formas: campo de struct de valor, campo de overlay, y overlay
 // auto-referencial.  Cuando el campo de tipo overlay guarde el handle, migrar a
-// `public struct SelCase { Chan ch; i64 dir; i64 val; }` + `vx_chan_select(SelCase*, n)`.
+// `public struct SelCase { Chan ch; i64 dir; i64 val; }` + `chan_select(SelCase*, n)`.
 @overlay struct SelCase {
     i64 chan @0x00;   // canal del caso (Chan; i64 por la limitacion de arriba).
     i64 dir  @0x08;   // VXCH_RECV (0) o VXCH_SEND (1).
@@ -934,7 +936,7 @@ const i64 SELCASE_QW = 3;  // qwords por SelCase (24 bytes).
  * @param n     numero de casos.
  * @return indice [0,n) del caso que disparo, o -1 si ninguno estaba listo.
  */
-public i64 vx_chan_select_try(i64 cases, i64 n) {
+public i64 chan_select_try(i64 cases, i64 n) {
     if (n <= 0) {
         return -1;
     }
@@ -946,19 +948,19 @@ public i64 vx_chan_select_try(i64 cases, i64 n) {
         Chan ch = Chan(SelCase(cs).chan);
         if (SelCase(cs).dir == VXCH_RECV) {
             i64 v = 0;
-            if (vx_chan_try_recv(ch, &v)) {
+            if (chan_try_recv(ch, &v)) {
                 SelCase(cs).val = v;
                 return i;
             }
-            if (vx_chan_is_closed(ch)) {
+            if (chan_is_closed(ch)) {
                 SelCase(cs).val = 0;
                 return i;
             }
         } else {
-            if (vx_chan_try_send(ch, SelCase(cs).val)) {
+            if (chan_try_send(ch, SelCase(cs).val)) {
                 return i;
             }
-            if (vx_chan_is_closed(ch)) {
+            if (chan_is_closed(ch)) {
                 return i;              // envio a cerrado: se descarta
             }
         }
@@ -971,7 +973,7 @@ public i64 vx_chan_select_try(i64 cases, i64 n) {
  *        suspendiendo la fibra hasta que uno pueda completarse, y ejecuta ese
  *        caso.  Pensada para fibras del pool; invocada desde el hilo principal
  *        degrada a sondeo repetido (no puede suspenderse).
- * @details Generaliza vx_chan_select_recv_block y vx_chan_select_send_block:
+ * @details Generaliza chan_select_recv_block y chan_select_send_block:
  *   toma el lock de todos los canales implicados en orden de direccion (sin
  *   repetir), completa el primer caso listo sin suspenderse; si ninguno lo esta,
  *   encola un nodo de espera en la cola de recepcion (casos de recepcion) o de
@@ -986,7 +988,7 @@ public i64 vx_chan_select_try(i64 cases, i64 n) {
  * @param n     numero de casos.
  * @return indice [0,n) del caso ejecutado.
  */
-public i64 vx_chan_select(i64 cases, i64 n) {
+public i64 chan_select(i64 cases, i64 n) {
     if (n <= 0) {
         return -1;
     }
@@ -994,7 +996,7 @@ public i64 vx_chan_select(i64 cases, i64 n) {
     match vx_cur_fiber() {
         case None => {
             while (true) {
-                i64 idx = vx_chan_select_try(cases, n);
+                i64 idx = chan_select_try(cases, n);
                 if (idx >= 0) {
                     return idx;
                 }

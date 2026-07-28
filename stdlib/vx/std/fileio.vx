@@ -1,6 +1,8 @@
-// stdlib/vx/vx_fileio.vx
+namespace std.fileio;
+
+// stdlib/vx/fileio.vx
 //
-// @file vx_fileio.vx
+// @file fileio.vx
 // @brief Lectura de ficheros binarios a un buffer, LIBRE de libc de formato.
 //
 // La stdlib de I/O (stdlib/vx/vx_io.vx, stdlib/native/io/vesta_io.c) solo

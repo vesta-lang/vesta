@@ -1,7 +1,7 @@
 /**
- * @file vx_mutex.vx
+ * @file mutex.vx
  * @brief Mutex (exclusion mutua) cooperativo para fibras del scheduler M:N
- *        (vx_pool).  Una fibra que no puede adquirir el mutex se SUSPENDE (sale
+ *        (pool).  Una fibra que no puede adquirir el mutex se SUSPENDE (sale
  *        de la run-queue) en lugar de girar en espera activa; el que libera pasa
  *        la propiedad directamente a la siguiente fibra en cola y la despierta.
  *        SIN busy-wait entre fibras, SIN libc mas alla de malloc, SIN GC.
@@ -17,7 +17,7 @@
  * interno.  Solo la ruta CONTENDIDA (encolar la fibra + suspenderla) y el
  * `unlock` toman el spinlock, que protege la cola de espera y las transiciones
  * de estado bajo contienda.  La cola guarda las FIBRAS bloqueadas usando la
- * wait-queue fiber-nodo de vx_pool (vx_wq_push/pop): una fibra bloqueada en el
+ * wait-queue fiber-nodo de pool (vx_wq_push/pop): una fibra bloqueada en el
  * mutex esta en UNA sola cola, asi que basta su enlace propio (a diferencia del
  * select, que registra un nodo por canal).  Al liberar con fibras en espera se
  * hace un HAND-OFF directo: la propiedad pasa a la primera en cola sin marcar el
@@ -31,9 +31,9 @@
  * cola) hasta que esta ya esta suspendida -> nunca se pierde un wakeup.
  *
  * @par Cuando NO usar un mutex (hay herramientas mas optimas)
- * Para un contador o flag compartido, una operacion ATOMICA (vx_atomic) es mas
+ * Para un contador o flag compartido, una operacion ATOMICA (atomic) es mas
  * eficiente (sin suspension ni cola).  Para transferir propiedad o coordinar
- * etapas, un CANAL (vx_chan) es lo idiomatico.  El mutex es para SECCIONES
+ * etapas, un CANAL (chan) es lo idiomatico.  El mutex es para SECCIONES
  * CRITICAS COMPUESTAS: un invariante de varios pasos sobre una estructura
  * compartida que ninguna atomica cubre por si sola.
  *
@@ -43,10 +43,12 @@
  * adquiere por espera activa cooperativa.
  */
 
+namespace std.mutex;
+
 import std.types only uintptr;
-import "vx_atomic" only vx_spin_lock, vx_spin_unlock, vx_atomic_cas64,
-                     vx_atomic_store64, vx_cpu_relax;
-import "vx_pool" only fiber, vx_park, vx_wake, vx_cur_fiber, vx_wq_push, vx_wq_pop;
+import std.atomic only vx_spin_lock, vx_spin_unlock, atomic_cas64,
+                     atomic_store64, vx_cpu_relax;
+import std.pool only fiber, vx_park, vx_wake, vx_cur_fiber, vx_wq_push, vx_wq_pop;
 
 // ---------------------------------------------------------------------------
 // Vista tipada del mutex sobre su bloque host.  @c held se accede SIEMPRE con
@@ -70,11 +72,11 @@ void __vxm_unlock_after_park(i64 spin_addr, i64 fib) {
 /**
  * @brief Reserva un mutex en el heap host y lo inicializa libre.
  * @return el handle @c Mutex; su bloque es nulo si no hubo memoria (el llamante
- *         puede comprobarlo con vx_mutex_is_null antes de usarlo).
+ *         puede comprobarlo con mutex_is_null antes de usarlo).
  */
-public Mutex vx_mutex_new() {
+public Mutex mutex_new() {
     Mutex m = Mutex((i64) malloc(MUTEX_SZ));
-    if (!vx_mutex_is_null(m)) {
+    if (!mutex_is_null(m)) {
         m.held = 0;
         m.spin = 0;
         m.wq_h = 0;
@@ -83,14 +85,14 @@ public Mutex vx_mutex_new() {
     return m;
 }
 
-/// @return true si el handle no apunta a ningun bloque (OOM en vx_mutex_new).
-public bool vx_mutex_is_null(Mutex m) {
+/// @return true si el handle no apunta a ningun bloque (OOM en mutex_new).
+public bool mutex_is_null(Mutex m) {
     return (i64)&m.held == 0;
 }
 
 /// Libera el mutex (nadie debe poseerlo ni estar en espera).
-public void vx_mutex_free(Mutex m) {
-    if (!vx_mutex_is_null(m)) {
+public void mutex_free(Mutex m) {
+    if (!mutex_is_null(m)) {
         free((u8*)&m.held);   // &m.held = base del bloque (held @0x00)
     }
 }
@@ -100,15 +102,15 @@ public void vx_mutex_free(Mutex m) {
  *        encola la fibra actual y la suspende hasta que otra libere y le pase la
  *        propiedad.  El hilo principal (no es fibra) adquiere por espera activa.
  */
-public void vx_mutex_lock(Mutex m) {
+public void mutex_lock(Mutex m) {
     // Fast-path SIN contencion: una sola atomica.
-    if (vx_atomic_cas64(&m.held, 0, 1) == 0) {
+    if (atomic_cas64(&m.held, 0, 1) == 0) {
         return;
     }
     // Contendido: solo una FIBRA puede suspenderse; el hilo principal gira.
     match vx_cur_fiber() {
         case None => {
-            while (vx_atomic_cas64(&m.held, 0, 1) != 0) {
+            while (atomic_cas64(&m.held, 0, 1) != 0) {
                 vx_cpu_relax();
             }
         }
@@ -117,7 +119,7 @@ public void vx_mutex_lock(Mutex m) {
             // libero entre el fast-path y la toma del spinlock; si sigue tomado,
             // encola la fibra y la suspende (hand-off del spinlock post-switch).
             vx_spin_lock(&m.spin);
-            if (vx_atomic_cas64(&m.held, 0, 1) == 0) {
+            if (atomic_cas64(&m.held, 0, 1) == 0) {
                 vx_spin_unlock(&m.spin);
             } else {
                 vx_wq_push((uintptr)&m.wq_h, (uintptr)&m.wq_t, self);
@@ -133,8 +135,8 @@ public void vx_mutex_lock(Mutex m) {
  * @brief Intento de adquisicion sin suspender (pura atomica, sin spinlock).
  * @return true si se tomo el mutex, false si ya estaba tomado.
  */
-public bool vx_mutex_trylock(Mutex m) {
-    return vx_atomic_cas64(&m.held, 0, 1) == 0;
+public bool mutex_trylock(Mutex m) {
+    return atomic_cas64(&m.held, 0, 1) == 0;
 }
 
 /**
@@ -142,7 +144,7 @@ public bool vx_mutex_trylock(Mutex m) {
  *        primera en cola (hand-off directo, sin marcar el mutex libre) y la
  *        despierta; si no, marca el mutex libre.
  */
-public void vx_mutex_unlock(Mutex m) {
+public void mutex_unlock(Mutex m) {
     vx_spin_lock(&m.spin);
     fiber w = vx_wq_pop((uintptr)&m.wq_h, (uintptr)&m.wq_t);
     if (w != 0) {
@@ -153,6 +155,6 @@ public void vx_mutex_unlock(Mutex m) {
         return;
     }
     // Sin esperas: liberar.
-    vx_atomic_store64(&m.held, 0);
+    atomic_store64(&m.held, 0);
     vx_spin_unlock(&m.spin);
 }

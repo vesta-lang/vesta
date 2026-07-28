@@ -957,6 +957,67 @@ CompileResult compile_vx_project(
     // los simbolos de TODOS los ficheros de un `namespace X;` compartido).
     const NsToAllModnames ns_to_all_modnames = build_ns_to_all_modnames_(work);
 
+    // NS.parcial fix: un mismo `namespace X;` declarado por VARIOS ficheros
+    // (p.ej. std.types = types.vx base + types/<arch>.vx) se parsea como
+    // modulos SEPARADOS, cada uno con su propio TypeChecker.  Una ref
+    // CROSS-FICHERO -- `typedef usize size_t` en la base, con `usize` (newtype)
+    // definido en el fichero del arch -- NO resolvia: el TC de la base no ve
+    // los simbolos del arch, y el flatten (por-modulo) no manglea la ref.
+    // Fix: fusionar las decls de los ficheros SECUNDARIOS en el NamespaceDecl
+    // del PRINCIPAL antes de compilar.  Asi el flatten usa un rename_map COMuN
+    // (manglea `usize` -> `std__types__usize`) y el TC ve todas las decls en
+    // el mismo modulo.  Los secundarios quedan con el NamespaceDecl vacio (se
+    // compilan a un .vxi vacio, sin romper el registro del importador).
+    {
+        auto find_ns_decl = [](ast::ModuleNode *m,
+                               const std::string &ns) -> ast::NamespaceDecl * {
+            if (!m) return nullptr;
+            for (auto &d : m->decls)
+                if (d && d->kind == ast::NodeKind::NamespaceDecl) {
+                    auto *nd = static_cast<ast::NamespaceDecl *>(d.get());
+                    if (nd->name == ns) return nd;
+                }
+            return nullptr;
+        };
+        for (const auto &kv : ns_to_all_modnames) {
+            if (kv.second.size() < 2) continue; // no es namespace parcial
+            const std::string &ns = kv.first;
+            auto it0 = by_name.find(kv.second[0]);
+            if (it0 == by_name.end()) continue;
+            const size_t pidx = it0->second;
+            ast::NamespaceDecl *pns = find_ns_decl(work[pidx].ast.get(), ns);
+            if (!pns) continue;
+            for (size_t k = 1; k < kv.second.size(); ++k) {
+                auto itk = by_name.find(kv.second[k]);
+                if (itk == by_name.end()) continue;
+                ProjectModuleWork &sec = work[itk->second];
+                ast::NamespaceDecl *sns = find_ns_decl(sec.ast.get(), ns);
+                if (!sns) continue;
+                for (auto &d : sns->decls)
+                    pns->decls.push_back(std::move(d));
+                sns->decls.clear();
+                // El source del secundario entra en el hash del principal para
+                // que el cache del .vxi se invalide si cualquier fichero del
+                // namespace parcial cambia.
+                work[pidx].source += "\n";
+                work[pidx].source += sec.source;
+            }
+            // El check de aliases (type_checker) es un SOLO pase ordenado: un
+            // `typedef usize size_t` (alias puro) exige que `usize` (newtype)
+            // ya este procesado.  Tras la fusion las decls quedan intercaladas;
+            // mover los alias PUROS (no-newtype) al final garantiza que sus
+            // underlying (newtypes del mismo ns) ya esten registrados.
+            std::stable_partition(
+                pns->decls.begin(), pns->decls.end(),
+                [](const std::unique_ptr<ast::Node> &d) {
+                    if (d && d->kind == ast::NodeKind::TypeAliasDecl)
+                        return static_cast<ast::TypeAliasDecl *>(d.get())
+                            ->is_newtype; // alias puro (false) -> al final
+                    return true;          // resto -> mantiene delante
+                });
+        }
+    }
+
     //  NS.3: PackageId del proyecto (derivado de vx.toml o anonimo).
     // Compartido por todos los modulos del proyecto salvo override @id.
     const std::string project_package_id = derive_package_id_(root_path);

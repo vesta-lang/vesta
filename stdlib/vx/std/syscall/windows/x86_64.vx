@@ -1,2 +1,20 @@
 namespace std.syscall.windows.x86_64;
 
+/**
+ * Ejecuta una syscall nativa de Windows.
+ *
+ * Según la ABI de Windows x64, antes de ejecutar SYSCALL el registro
+ * RCX debe copiarse a R10, ya que el procesador sobrescribe RCX
+ * durante la transición al kernel.
+ */
+@Naked
+public size_t invoke(syscall_id id) {
+    asm(
+        reg p = id_call,   // in: syscall ID
+    ) {
+        mov r10, rcx
+        mov rax, p
+        syscall
+        ret
+    }
+}

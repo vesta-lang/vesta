@@ -7,7 +7,7 @@
 //
 // MODERNIZADO (2026-07): el BMP se modela con VISTAS TIPADAS (@overlay struct)
 // y FUNCIONES LIBRES en bmp.vx -- sin clases.  El "objeto BMP" es un u8* con el
-// fichero, parseado via overlays; lee via stdlib vx_fileio y vuelca con el
+// fichero, parseado via overlays; lee via stdlib fileio y vuelca con el
 // builtin bg_rgb.  El flag opcional -r WxH se parsea con vio_parse_int de la
 // stdlib nativa (cierra LIM-8); el redimensionado en si sigue fuera de alcance
 // (LIM-9: depende de codecs AWT), asi que -r solo reporta las dimensiones.

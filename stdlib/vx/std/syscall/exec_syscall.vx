@@ -1,10 +1,36 @@
 namespace std.syscall;
 
-private comptime string source(expr code) {
-    return "\"" + code + "\"";
-}
+/**
+ * Para realizar una syscall se debe ejecutar una de las siguientes 
+ * instrucciones en las equivalentes ISA's:
+ *      - x86_64     -> syscall
+ *      - x86        -> sysenter / int 0x80
+ *      - ARM64      -> svc #0
+ *      - RISC-V     -> ecall
+ */
 
-@Macro
-public comptime string syscall_asm(i64 x_unused) {
-    return source(x_unused);
-}
+@Target("!os:windows")
+import std.syscall.linux;
+
+@Target("os:windows")
+import std.syscall.windows;
+
+
+import std.types only size_t;
+
+import std.comptime only source, inject;
+
+/**
+ * Tipo que representa el ID de una syscall del sistema.
+ * 
+ * El tamaño de una syscall ID depende del tamaño de registro de la CPU y de la
+ * convencion en esa ISA.
+ * 
+ * size_t tiene un tamaño equivalente al tamaño de palabra de la CPU, esto
+ * quiere decir que en 64bits size_t son 8 bytes o 64bits, mientras que en
+ * 16bits sera un tipo de 2 bytes.
+ */
+public typedef size_t syscall_id new;
+
+public typedef cfn(syscall_id) -> usize invoke_syscall;
+

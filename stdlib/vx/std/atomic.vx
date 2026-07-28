@@ -1,8 +1,8 @@
 /**
- * @file vx_atomic.vx
+ * @file atomic.vx
  * @brief Operaciones ATOMICAS multi-arquitectura para Vesta, en Vesta puro,
  *        SIN libc.  Libreria de bajo nivel reutilizable por CUALQUIER otra
- *        (vx_mem, vx_sync, vx_pool, colecciones concurrentes, ...).
+ *        (vx_mem, vx_sync, pool, colecciones concurrentes, ...).
  *
  * @par Independiente del OS, dependiente de la ARQUITECTURA
  * Los atomicos son primitivas de la CPU (no del SO): las mismas instrucciones
@@ -16,16 +16,16 @@
  * COMPLETAS.  Un load/store alineado de 8 bytes ya es atomico; se exponen como
  * LLAMADAS opacas -> ademas actuan de barrera del COMPILADOR (no se reordenan
  * accesos a memoria a traves de ellas).  Para el StoreLoad explicito esta
- * @ref vx_atomic_fence (mfence).  En arm64 se usan ldaxr/stlxr (acquire/release)
+ * @ref atomic_fence (mfence).  En arm64 se usan ldaxr/stlxr (acquire/release)
  * + `dmb ish`.
  *
  * @par API (todas sobre i64* host_ptr ALINEADO a 8)
- *   vx_atomic_load64  / vx_atomic_store64   -- load/store atomico + barrera compilador
- *   vx_atomic_cas64                         -- compare-and-swap, devuelve el OLD
- *   vx_atomic_add64   / vx_atomic_sub64     -- fetch-and-add/sub, devuelve el OLD
- *   vx_atomic_swap64                        -- exchange, devuelve el OLD
- *   vx_atomic_or64    / vx_atomic_and64     -- fetch-and-or/and (via CAS), OLD
- *   vx_atomic_fence                         -- barrera de memoria completa (StoreLoad)
+ *   atomic_load64  / atomic_store64   -- load/store atomico + barrera compilador
+ *   atomic_cas64                         -- compare-and-swap, devuelve el OLD
+ *   atomic_add64   / atomic_sub64     -- fetch-and-add/sub, devuelve el OLD
+ *   atomic_swap64                        -- exchange, devuelve el OLD
+ *   atomic_or64    / atomic_and64     -- fetch-and-or/and (via CAS), OLD
+ *   atomic_fence                         -- barrera de memoria completa (StoreLoad)
  *   vx_cpu_relax                            -- hint de spin (pause / yield)
  *
  * @par Contratos declarados (los verifica el compilador; `vm --analyze`)
@@ -61,6 +61,8 @@
  * Declararlas O(1) seria una discrepancia, y el verificador la caza.
  */
 
+namespace std.atomic;
+
 // ===========================================================================
 //  x86-64: lock cmpxchg / lock xadd / xchg / mfence / pause.
 // ===========================================================================
@@ -81,7 +83,7 @@
 @stack(partial: 0, total: 0)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
-public i64 vx_atomic_cas64(i64* addr, i64 expected, i64 desired) {
+public i64 atomic_cas64(i64* addr, i64 expected, i64 desired) {
     return atomic_cas_i64(addr, expected, desired);
 }
 
@@ -93,7 +95,7 @@ public i64 vx_atomic_cas64(i64* addr, i64 expected, i64 desired) {
 @stack(partial: 0, total: 0)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
-public i64 vx_atomic_add64(i64* addr, i64 delta) {
+public i64 atomic_add64(i64* addr, i64 delta) {
     return atomic_add_i64(addr, delta);
 }
 
@@ -107,7 +109,7 @@ public i64 vx_atomic_add64(i64* addr, i64 delta) {
 @stack(partial: 0, total: 0)
 @complexity(partial_pre: O(n), partial_post: O(n),
             total_pre: O(n), total_post: O(n))
-public i64 vx_atomic_swap64(i64* addr, i64 v) {
+public i64 atomic_swap64(i64* addr, i64 v) {
     i64 old = atomic_load_i64(addr);
     while (atomic_cas_i64(addr, old, v) != old) {
         old = atomic_load_i64(addr);
@@ -123,7 +125,7 @@ public i64 vx_atomic_swap64(i64* addr, i64 v) {
 @stack(partial: 0, total: 0)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
-public i64 vx_atomic_load64(i64* addr) {
+public i64 atomic_load64(i64* addr) {
     return atomic_load_i64(addr);
 }
 
@@ -135,7 +137,7 @@ public i64 vx_atomic_load64(i64* addr) {
 @stack(partial: 0, total: 0)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
-public void vx_atomic_store64(i64* addr, i64 v) {
+public void atomic_store64(i64* addr, i64 v) {
     atomic_store_i64(addr, v);
 }
 
@@ -147,7 +149,7 @@ public void vx_atomic_store64(i64* addr, i64 v) {
 @stack(partial: 0, total: 0)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
-public void vx_atomic_fence() {
+public void atomic_fence() {
     asm volatile { mfence };
 }
 
@@ -181,7 +183,7 @@ public void vx_cpu_relax() {
 @stack(partial: 32, total: 32)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
-public i64 vx_atomic_cas64(i64* addr, i64 expected, i64 desired) {
+public i64 atomic_cas64(i64* addr, i64 expected, i64 desired) {
     register("x0") i64* a = addr;
     register("x1") i64 ex = expected;
     register("x2") i64 de = desired;
@@ -206,7 +208,7 @@ public i64 vx_atomic_cas64(i64* addr, i64 expected, i64 desired) {
 @stack(partial: 24, total: 24) // los register + asm gastan frame que la variante x86-64 no
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
-public i64 vx_atomic_add64(i64* addr, i64 delta) {
+public i64 atomic_add64(i64* addr, i64 delta) {
     register("x0") i64* a = addr;
     register("x1") i64 d = delta;
     register("x3") i64 out = 0;
@@ -229,7 +231,7 @@ public i64 vx_atomic_add64(i64* addr, i64 delta) {
 @stack(partial: 24, total: 24) // los register + asm gastan frame que la variante x86-64 no
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
-public i64 vx_atomic_swap64(i64* addr, i64 v) {
+public i64 atomic_swap64(i64* addr, i64 v) {
     register("x0") i64* a = addr;
     register("x1") i64 nv = v;
     register("x3") i64 out = 0;
@@ -249,7 +251,7 @@ public i64 vx_atomic_swap64(i64* addr, i64 v) {
 @stack(partial: 0, total: 0)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
-public i64 vx_atomic_load64(i64* addr) {
+public i64 atomic_load64(i64* addr) {
     return *addr;
 }
 @Target("arch:arm64")
@@ -259,7 +261,7 @@ public i64 vx_atomic_load64(i64* addr) {
 @stack(partial: 0, total: 0)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
-public void vx_atomic_store64(i64* addr, i64 v) {
+public void atomic_store64(i64* addr, i64 v) {
     *addr = v;
 }
 @Target("arch:arm64")
@@ -269,7 +271,7 @@ public void vx_atomic_store64(i64* addr, i64 v) {
 @stack(partial: 0, total: 0)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
-public void vx_atomic_fence() {
+public void atomic_fence() {
     asm volatile { dmb ish };
 }
 @Target("arch:arm64")
@@ -296,8 +298,8 @@ public void vx_cpu_relax() {
 @stack(partial: 0, total: 0)
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
-public i64 vx_atomic_sub64(i64* addr, i64 delta) {
-    return vx_atomic_add64(addr, -delta);
+public i64 atomic_sub64(i64* addr, i64 delta) {
+    return atomic_add64(addr, -delta);
 }
 
 /// fetch-and-or: `*addr |= mask`; devuelve el OLD.  Bucle CAS -> O(n) sobre los
@@ -308,10 +310,10 @@ public i64 vx_atomic_sub64(i64* addr, i64 delta) {
 @stack(partial: 0, total: 0)
 @complexity(partial_pre: O(n), partial_post: O(n),
             total_pre: O(n), total_post: O(n))
-public i64 vx_atomic_or64(i64* addr, i64 mask) {
+public i64 atomic_or64(i64* addr, i64 mask) {
     while (true) {
-        i64 old = vx_atomic_load64(addr);
-        if (vx_atomic_cas64(addr, old, old | mask) == old) {
+        i64 old = atomic_load64(addr);
+        if (atomic_cas64(addr, old, old | mask) == old) {
             return old;
         }
         vx_cpu_relax();
@@ -326,10 +328,10 @@ public i64 vx_atomic_or64(i64* addr, i64 mask) {
 @stack(partial: 0, total: 0)
 @complexity(partial_pre: O(n), partial_post: O(n),
             total_pre: O(n), total_post: O(n))
-public i64 vx_atomic_and64(i64* addr, i64 mask) {
+public i64 atomic_and64(i64* addr, i64 mask) {
     while (true) {
-        i64 old = vx_atomic_load64(addr);
-        if (vx_atomic_cas64(addr, old, old & mask) == old) {
+        i64 old = atomic_load64(addr);
+        if (atomic_cas64(addr, old, old & mask) == old) {
             return old;
         }
         vx_cpu_relax();
@@ -346,10 +348,10 @@ public i64 vx_atomic_and64(i64* addr, i64 mask) {
 @stack(partial: 0, total: 0)
 @complexity(partial_pre: O(n), partial_post: O(n),
             total_pre: O(n), total_post: O(n))
-public i64 vx_atomic_xor64(i64* addr, i64 mask) {
+public i64 atomic_xor64(i64* addr, i64 mask) {
     while (true) {
-        i64 old = vx_atomic_load64(addr);
-        if (vx_atomic_cas64(addr, old, old ^ mask) == old) {
+        i64 old = atomic_load64(addr);
+        if (atomic_cas64(addr, old, old ^ mask) == old) {
             return old;
         }
         vx_cpu_relax();
@@ -371,7 +373,7 @@ public i64 vx_atomic_xor64(i64* addr, i64 mask) {
 @complexity(partial_pre: O(n), partial_post: O(n),
             total_pre: O(n), total_post: O(n))
 public void vx_spin_lock(i64* lock) {
-    while (vx_atomic_cas64(lock, 0, 1) != 0) {
+    while (atomic_cas64(lock, 0, 1) != 0) {
         vx_cpu_relax();
     }
 }
@@ -384,7 +386,7 @@ public void vx_spin_lock(i64* lock) {
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
 public void vx_spin_unlock(i64* lock) {
-    vx_atomic_store64(lock, 0);
+    atomic_store64(lock, 0);
 }
 
 /// Intenta tomar el spinlock sin bloquear.  1 = tomado, 0 = estaba ocupado.
@@ -395,7 +397,7 @@ public void vx_spin_unlock(i64* lock) {
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
 public i64 vx_spin_trylock(i64* lock) {
-    if (vx_atomic_cas64(lock, 0, 1) == 0) {
+    if (atomic_cas64(lock, 0, 1) == 0) {
         return 1;
     }
     return 0;
@@ -420,7 +422,7 @@ public i64 vx_spin_trylock(i64* lock) {
 // para otro hilo en medio; aqui el compilador ve que las dos `g` son la misma
 // posicion y las funde (ver [[Operadores]], fusion read-modify-write).
 //
-// Cero coste frente a llamar a `vx_atomic_add64` a mano: los metodos de un
+// Cero coste frente a llamar a `atomic_add64` a mano: los metodos de un
 // struct se despachan estaticamente y se inlinean, asi que `g += 1` emite la
 // instruccion atomica y nada mas -- sin llamada, sin objeto intermedio.
 //
@@ -447,7 +449,7 @@ public i64 vx_spin_trylock(i64* lock) {
 // tipo no cambia.  Ese es el sitio unico donde se toca.
 //
 // @par Coste
-// Cero frente a llamar a `vx_atomic_add64` a mano: los metodos de un struct se
+// Cero frente a llamar a `atomic_add64` a mano: los metodos de un struct se
 // despachan estaticamente y se inlinean, asi que `g += 1` emite la instruccion
 // atomica y nada mas -- sin llamada, sin objeto intermedio.  El chequeo de
 // ancho es comptime: no queda ni rastro en el binario.
@@ -459,7 +461,7 @@ public i64 vx_spin_trylock(i64* lock) {
 // codigo que parece atomico y no lo es.  Para eso esta el load explicito:
 // `*g < n`, `*g + *h`.
 //
-// Los metodos usan los wrappers `vx_atomic_*` de arriba, no los builtins: asi
+// Los metodos usan los wrappers `atomic_*` de arriba, no los builtins: asi
 // `atomic<T>` hereda gratis el gating por `@Target("arch:...")` -- en arm64 los
 // wrappers son ldaxr/stlxr y el struct no se entera.
 // El bound del tipo es el concepto built-in `Scalar` (entero|float|bool|
@@ -753,7 +755,7 @@ struct atomic<T: Scalar> {
 
     /// Exchange: escribe @p v y devuelve el valor ANTERIOR, sin condiciones.
     /// El coste depende de la ARQUITECTURA, y por eso el contrato va por arch:
-    /// x86-64 no tiene builtin de swap y `vx_atomic_swap64` es un bucle CAS
+    /// x86-64 no tiene builtin de swap y `atomic_swap64` es un bucle CAS
     /// escrito en Vesta (la n son los reintentos), mientras que arm64 lo hace
     /// con el LL/SC nativo, que es una operacion y ya.
     @nothrow

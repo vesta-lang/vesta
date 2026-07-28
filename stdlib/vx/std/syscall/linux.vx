@@ -1,0 +1,37 @@
+namespace std.syscall.linux;
+
+import std.syscall only invoke_syscall, syscall_id;
+
+import std.types only nullptr, size_t, ssize_t;
+
+@Target("arch:x86_64 && !os:windows")
+import std.syscall.linux.x86_64;
+
+@Target("arch:x86_32 && !os:windows")
+import std.syscall.linux.x86_32;
+
+public struct syscall_ctx_invoke {
+    /**
+     * El metodo de invocacion de syscall es administrado por la libreria,
+     * pero el usuario puede personalizar este metodo de invocacion a uno 
+     * alternativo si fuera necesario.
+     */
+    invoke_syscall invoke_method = invoke;
+};
+
+
+
+ssize_t write(
+    u32 fd, 
+    const char *buf, 
+    size_t count
+) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+
+    // ctx.invoke_method(fd, buf, count);
+    return (
+        (cfn(syscall_id, u32, const char *, size_t) -> u64)(ctx.invoke_method)
+    )(
+        __NR_write, fd, buf, count
+    );
+}

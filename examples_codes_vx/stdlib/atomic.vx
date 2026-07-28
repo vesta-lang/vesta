@@ -1,6 +1,6 @@
 /**
  * @file atomic.vx
- * @brief Ejemplo/test de `atomic<T>` de la stdlib (vx_atomic).
+ * @brief Ejemplo/test de `atomic<T>` de la stdlib (atomic).
  *
  * Ejercita:
  *   - los cuatro anchos enteros (i8..i64 / u8..u64) via i32 y u8,
@@ -16,7 +16,7 @@
  */
 namespace stdlib.atomic_demo;
 
-import "vx_atomic" only atomic;
+import std.atomic only atomic;
 
 i32 main() {
     // --- Enteros: fetch_add (lock xadd) + bit-ops (where T: Integer). ---

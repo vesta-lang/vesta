@@ -1314,12 +1314,12 @@ void inject_generic_templates_from_vxi(
     if (!parsed || tmp_diags.has_errors()) return; // best-effort
 
     // El cuerpo de una plantilla puede llamar a funciones de SU PROPIO modulo
-    // (`struct atomic<T>` usando un helper de `vx_atomic`).  Como se re-parsea
+    // (`struct atomic<T>` usando un helper de `atomic`).  Como se re-parsea
     // aqui, esos nombres no estan en el scope del consumidor -- y no deben
     // estarlo: el consumidor puso `only atomic`, no pidio los helpers.
     //
     // Se reescriben en el AST de la plantilla al label REAL que el `.vxi` ya
-    // trae (`vx_atomic__vx_atomic_load64`) y se registra ESE label como funcion
+    // trae (`atomic__atomic_load64`) y se registra ESE label como funcion
     // importada.  Asi la plantilla resuelve y enlaza, y el consumidor sigue sin
     // ver los helpers: el label mangled no es un nombre que nadie escriba.
     {
@@ -1602,12 +1602,28 @@ void import_vxi_into_typechecker(
     // propio modulo importado usado POR VALOR devuelve el Type base ya
     // construido (sin depender de que este registrado); en cualquier otro caso
     // (primitivos, punteros, tipos externos) delega en resolve_type_string.
-    auto resolve_imported = [&](const std::string &ts) -> Type {
+    auto resolve_imported = [&](const std::string &ts_in) -> Type {
+        // Strip de sufijos de puntero: `std__chan__Chan*` -> resolver el base
+        // `std__chan__Chan` via origin_to_local (al Type LOCAL `Chan`) y re-aplicar
+        // el puntero.  Sin esto, un param `f(Chan* c)` de una funcion libre
+        // importada no unificaba con un `Chan*` del consumidor (el base quedaba
+        // como el struct MANGLED std__chan__Chan).
+        std::string ts = ts_in;
+        int nptr = 0;
+        while (!ts.empty() && ts.back() == '*') {
+            ts.pop_back();
+            ++nptr;
+        }
+        Type base;
         auto direct = origin_to_local.find(ts);
         if (direct != origin_to_local.end() &&
             direct->second.kind != PrimitiveKind::VOID)
-            return direct->second;
-        return tc.resolve_type_string(ts);
+            base = direct->second;
+        else
+            base = tc.resolve_type_string(nptr ? ts : ts_in);
+        for (int i = 0; i < nptr; ++i)
+            base = Type::make_ptr(base);
+        return base;
     };
 
     for (const auto *os_ptr : ordered) {
@@ -1634,7 +1650,20 @@ void import_vxi_into_typechecker(
                 continue;
             }
             if (s.kind == VxiSymbolKind::TYPEDEF_NEW) {
-                underlying.nominal_id = tc.allocate_nominal_id();
+                // Id ESTABLE por identidad mangled (mismo canonico que la ruta
+                // del skeleton de tipos, ns_path -> "std__ns__T").  Sin esto un
+                // `only T` recibia un id de contador != al de las firmas de las
+                // funciones libres del mismo modulo (`f(T)`) -> no unificaban.
+                std::string tn_canon;
+                {
+                    std::string nsm;
+                    for (char c : s.ns_path)
+                        nsm += (c == '.') ? std::string("__")
+                                          : std::string(1, c);
+                    tn_canon =
+                        s.ns_path.empty() ? s.name : (nsm + "__" + s.name);
+                }
+                underlying.nominal_id = tc.stable_nominal_id(tn_canon);
                 underlying.nominal_name = local_name;
                 underlying.is_opaque = s.is_opaque;
                 underlying.align_override = s.align_override;
@@ -1787,10 +1816,16 @@ void import_vxi_into_typechecker(
         }
         case VxiSymbolKind::FUNCTION: {
             FunctionSig sig;
-            sig.return_type = tc.resolve_type_string(s.return_type);
+            // Las firmas del .vxi traen los tipos del propio modulo por su
+            // nombre CANONICO mangled (std__ns__T).  resolve_imported (igual
+            // que los metodos, L1716+) los traduce al Type local ya importado
+            // -> `f(T)` unifica con el `T` que el consumidor puso en `only T`.
+            // Con resolve_type_string a secas quedaban como std__ns__T y NO
+            // unificaban (struct Chan y newtype fiber cross-modulo).
+            sig.return_type = resolve_imported(s.return_type);
             sig.param_types.reserve(s.param_types.size());
             for (const auto &pt : s.param_types) {
-                sig.param_types.push_back(tc.resolve_type_string(pt));
+                sig.param_types.push_back(resolve_imported(pt));
             }
             sig.extern_lib = s.is_extern ? s.extern_lib : std::string();
             //  M.5: si el .vxi declara un mangled_label, el
@@ -2000,7 +2035,11 @@ void register_namespace_for_import(TypeChecker &tc,
                 continue; // forward-ref no resolvible -> skip
             }
             if (s.kind == VxiSymbolKind::TYPEDEF_NEW) {
-                underlying.nominal_id = tc.allocate_nominal_id();
+                // Id ESTABLE por identidad mangled: la ruta del `only T`
+                // (que registra el newtype bajo el nombre corto) usa el MISMO
+                // id derivado de este mismo mangled -> `f(T)` (firma libre) y
+                // `T` (tipo importado) unifican.
+                underlying.nominal_id = tc.stable_nominal_id(mangled);
                 underlying.nominal_name = mangled;
                 underlying.is_opaque = s.is_opaque;
                 underlying.align_override = s.align_override;

@@ -25,7 +25,7 @@
  * con `--no-mem`.
  */
 
-import "vx_atomic" only vx_atomic_cas64, vx_cpu_relax;
+import std.atomic only atomic_cas64, vx_cpu_relax;
 
 extern "kernel32.dll" {
     fn VirtualAlloc(u64 addr, u64 size, u32 allocType, u32 protect) -> u64;
@@ -282,28 +282,28 @@ u64 __vmem_size_of(i32 cls) {
 
 // ---------------------------------------------------------------------------
 // Thread-safety OPT-IN del slab.  El allocator es LOCKLESS por defecto (mono-
-// hilo, ~66x): coste CERO.  Cuando el programa lanza hilos (vx_thread/vx_pool
+// hilo, ~66x): coste CERO.  Cuando el programa lanza hilos (vx_thread/pool
 // llaman a vmem_enable_mt()), `__vmem_mt` pasa a 1 y las secciones criticas del
 // SLAB (free-list + bump) se protegen con un spinlock.  El camino LARGE (mmap +
 // header por-bloque) NO necesita lock (el kernel serializa mmap/munmap) -> los
 // allocs grandes siguen lock-free tambien en MT.  Atomicos INLINEADOS (mismo
-// motivo que vx_sync/vx_async: vx_mem se auto-bundlea single-module; vx_atomic
+// motivo que vx_sync/vx_async: vx_mem se auto-bundlea single-module; atomic
 // es la lib canonica reutilizable por el codigo de usuario y otras libs).
 i64 __vmem_mt = 0;    ///< 0 = single-thread (sin lock); 1 = multihilo.
 i64 __vmem_lock = 0;  ///< spinlock del slab (0 = libre).
 
-// El CAS y el hint de spin los pone `vx_atomic` (ver el import de la cabecera):
+// El CAS y el hint de spin los pone `atomic` (ver el import de la cabecera):
 // son primitivas de la stdlib, no algo que este allocator deba reimplementar.
 // Antes tenia su propio `lock cmpxchg` en inline-asm, lo que lo ataba al codigo
 // maquina y dejaba a vx_mem fuera del interprete.
 
-/// Activa el modo multihilo (lo llaman vx_thread/vx_pool al crear el 1er hilo).
+/// Activa el modo multihilo (lo llaman vx_thread/pool al crear el 1er hilo).
 public void vmem_enable_mt() { __vmem_mt = 1; }
 
 /// Toma el spinlock del slab si estamos en modo multihilo (si no, no-op).
 void __vmem_slab_lock() {
     if (__vmem_mt == 0) { return; }
-    while (vx_atomic_cas64(&__vmem_lock, 0, 1) != 0) { vx_cpu_relax(); }
+    while (atomic_cas64(&__vmem_lock, 0, 1) != 0) { vx_cpu_relax(); }
 }
 void __vmem_slab_unlock() {
     if (__vmem_mt == 0) { return; }

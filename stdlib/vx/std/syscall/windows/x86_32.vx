@@ -1,2 +1,15 @@
 namespace std.syscall.windows.types;
 
+/**
+ * Ejecuta una syscall y devuelve el valor en EAX como manda la convencion.
+ */
+@Naked
+public size_t invoke(syscall_id id) {
+    asm(
+        reg p = id_call,   // in: syscall ID
+    ) {
+        mov eax, p
+        int 0x80
+        ret
+    }
+}

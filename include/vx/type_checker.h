@@ -2202,6 +2202,22 @@ private:
     /// distinto.  No tiene efectos secundarios.
     uint32_t allocate_nominal_id() noexcept { return ++newtype_counter_; }
 
+    /// @brief Devuelve un nominal_id ESTABLE y DETERMINISTA derivado del
+    /// nombre canonico @p canonical (el nombre mangled del tipo, p.ej.
+    /// "std__pool__fiber").  Dos importaciones del mismo tipo (una por el
+    /// nombre corto via `only T`, otra por el mangled en las firmas de las
+    /// funciones libres del mismo modulo) obtienen ASI el mismo id -> el
+    /// type checker las unifica.  Rango alto (bit 30) para no chocar con los
+    /// ids de contador de allocate_nominal_id (que empiezan bajos).  FNV-1a 32.
+    uint32_t stable_nominal_id(const std::string &canonical) const noexcept {
+        uint32_t h = 2166136261u;
+        for (char c : canonical) {
+            h ^= static_cast<uint8_t>(c);
+            h *= 16777619u;
+        }
+        return 0x40000000u | (h & 0x3FFFFFFFu);
+    }
+
     // -- Registradores usados solo por el cargador de .vxi (M2.d).
     // Insertan en las tablas internas SIN re-validar (asumen que el
     // .vxi de origen es valido).  Si el nombre ya existe, no se

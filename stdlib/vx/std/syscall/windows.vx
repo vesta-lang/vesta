@@ -1,0 +1,78 @@
+namespace std.syscall.windows;
+
+import std.syscall only invoke_syscall, syscall_id;
+
+import std.types only nullptr;
+
+@Target("arch:x86_64 && os:windows")
+import std.syscall.windows.x86_64 only invoke;
+
+@Target("arch:x86_32 && os:windows")
+import std.syscall.windows.x86_32 only invoke;
+
+public struct syscall_ctx_invoke {
+    /**
+     * El metodo de invocacion de syscall es administrado por la libreria,
+     * pero el usuario puede personalizar este metodo de invocacion a uno 
+     * alternativo si fuera necesario.
+     */
+    invoke_syscall invoke_method = invoke;
+
+    /**
+     * En windows la syscalls cambian entre versiones, es necesario
+     * obtenerlas de forma dinamica en run time.
+     * 
+     * La funcion recibe un puntero de tipo "syscall_ctx_invoke" que
+     * contiene la informacion que necesita la syscall para ser resuelta
+     * y llamada, al tener cada syscall su propia "syscall_ctx_invoke", 
+     * cada syscall puede resolverse y ejecutarse de formas distintas.
+     */
+    resolve_syscall resolve_method = resolve;
+
+    /**
+     * ID syscall a resolver de forma lazy.
+     */
+    syscall_id id = 0;
+
+    /**
+     * Hash obtenido a traves de name_syscall en time-compile
+     */
+    u64 hash = 0;
+
+    /**
+     * Nombre de la syscall en tiempo de compilacion, este campo no existe
+     * en run time y solo se usa para generar el hash de la syscall en windows
+     * que se usa para resolver de forma lazy la syscall ID.
+     */
+    comptime char* name_syscall = nullptr;
+
+    /**
+     * Constructor publico de inicializacion de syscall
+     */
+    public comptime syscall_ctx_invoke(char* name_syscall) {
+        this.name_syscall = name_syscall;
+        hash = 0; /*hash(name_syscall)*/// calcular hash
+    }
+};
+
+
+ULONG KeGetCurrentProcessorNumberEx(
+  /* [out, optional] */
+  PPROCESSOR_NUMBER ProcNumber
+) {
+    static syscall_ctx_invoke ctx = 
+        syscall_ctx_invoke("NtGetCurrentProcessorNumberEx");
+    ctx.resolve(&ctx);
+    
+    // ctx.invoke_method(ProcNumber);
+    return (
+        (cfn(syscall_id, PROCESSOR_NUMBER)->u64)(ctx.invoke_method)
+    )(ctx.id, ProcNumber);
+}
+
+ULONG NtGetCurrentProcessorNumberEx(
+  /* [out, optional] */
+  PPROCESSOR_NUMBER ProcNumber
+) {
+    return KeGetCurrentProcessorNumberEx(ProcNumber);
+}

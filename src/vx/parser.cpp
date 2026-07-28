@@ -1009,7 +1009,7 @@ void Parser::apply_member_contracts_(const MemberContracts &mc,
 //
 //  Campo `when: <expr>` -- contrato CONDICIONAL.  El coste TOTAL de una
 //  funcion depende del target cuando algun callee tiene cuerpos por-arch de
-//  coste distinto: `atomic<T>::exchange` llama a `vx_atomic_swap64`, que en
+//  coste distinto: `atomic<T>::exchange` llama a `atomic_swap64`, que en
 //  x86-64 es un bucle CAS escrito en Vesta (O(n)) y en arm64 el LL/SC nativo
 //  (O(1)).  Sin `when:` no habria ningun valor declarable correcto en las dos.
 //  La expresion es la MISMA de @Target (os/arch/cpu/semver/mode con &&/||/! y
