@@ -1,5 +1,5 @@
 /**
- * @file vx_wideint.vx
+ * @file wideint.vx
  * @brief Enteros de ancho fijo de 128 bits, con y sin signo, en Vesta puro.
  *
  * Cada tipo es un `struct` cuyo unico miembro es una `union` que expone varias
