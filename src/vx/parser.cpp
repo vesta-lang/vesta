@@ -2569,6 +2569,15 @@ bool Parser::looks_like_cast() const noexcept {
 
     const Token &first = mut_lex.peek_at(off);
     const TokenKind first_kind = first.kind;
+    // Tipo CUALIFICADO `ns.Tipo` donde `ns` es un namespace importado
+    // (p.ej. `(types.size_t) 40`).  Simetrico con `looks_like_var_decl`,
+    // que ya acepta `ns.Tipo name`.  El resto de la validacion (cierre `)`
+    // + expr-starter tras el `)`) desambigua de `(obj.field) - x`.
+    const bool is_qualified_ns =
+        first_kind == TokenKind::IDENTIFIER &&
+        imported_namespaces_.count(first.lexeme) > 0 &&
+        mut_lex.peek_at(off + 1).kind == TokenKind::DOT &&
+        mut_lex.peek_at(off + 2).kind == TokenKind::IDENTIFIER;
     const bool is_type_starter =
         primitive_kind_from_token(first_kind) != PrimitiveKind::COUNT ||
         first_kind == TokenKind::KW_FN || first_kind == TokenKind::KW_CFN ||
@@ -2578,9 +2587,16 @@ bool Parser::looks_like_cast() const noexcept {
         // Single-pass: el alias debe estar declarado antes
         // del cast en el archivo.
         || (first_kind == TokenKind::IDENTIFIER &&
-            declared_aliases_.count(first.lexeme) > 0);
+            declared_aliases_.count(first.lexeme) > 0)
+        || is_qualified_ns;
     if (!is_type_starter) return false;
     ++off;
+    // Tipo cualificado: saltar los pares `DOT IDENT` (`.Tipo`, `.Sub.Tipo`).
+    if (is_qualified_ns) {
+        while (mut_lex.peek_at(off).kind == TokenKind::DOT &&
+               mut_lex.peek_at(off + 1).kind == TokenKind::IDENTIFIER)
+            off += 2;
+    }
 
     // Tipo funcion `fn(params) -> ret`: saltar `(...)` balanceado + el
     // `-> tipo_retorno` para reconocer `(fn(...)->R) expr` como cast.
@@ -4024,6 +4040,23 @@ Parser::parse_import_decl(bool is_public_reexport) {
     }
 
     (void)expect(TokenKind::SEMICOLON, "se esperaba ';' al final de 'import'");
+
+    // Registrar el segmento accesor del namespace para que `looks_like_cast`
+    // reconozca un cast al tipo cualificado `(ns.Tipo) x`.  El accesor es el
+    // alias (`import a.b.c as x;` -> `x`) o el ultimo segmento del path
+    // (`import a.b.c;` -> `c`; forma por-path `import "a/b/c";` -> `c`).  Se
+    // registra para AMBAS formas (with/without `only`): el acceso cualificado
+    // `ns.Tipo` es valido aunque el import traiga tambien simbolos desnudos.
+    {
+        std::string accessor = im->alias;
+        if (accessor.empty()) {
+            const std::string &p = im->path;
+            // Ultimo segmento tras '.' (namespace) o '/' (path).
+            size_t cut = p.find_last_of("./");
+            accessor = (cut == std::string::npos) ? p : p.substr(cut + 1);
+        }
+        if (!accessor.empty()) imported_namespaces_.insert(accessor);
+    }
     return im;
 }
 

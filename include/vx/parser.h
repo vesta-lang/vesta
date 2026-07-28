@@ -629,6 +629,14 @@ class Parser {
     /// single-pass: el typedef debe declararse ANTES del uso (igual
     /// que cualquier forward decl en C/Vesta).
     std::unordered_set<std::string> declared_aliases_;
+    /// Segmentos accesores de los namespaces importados (`import a.b.c;` ->
+    /// `c`, o el alias si hay `as`).  Poblado por @c parse_import.  Consultado
+    /// por @c looks_like_cast para reconocer un cast a un tipo CUALIFICADO
+    /// `(ns.Tipo) x` (p.ej. `(types.size_t) 40`), igual que
+    /// @c looks_like_var_decl ya acepta `ns.Tipo name`.  Sin esto la deteccion
+    /// del cast solo veria el primer identifier (`types`, un namespace, no un
+    /// alias) y rechazaria la secuencia como agrupacion.
+    std::unordered_set<std::string> imported_namespaces_;
     /// Nombres de los parametros `expr` de la funcion cuyo CUERPO se esta
     /// parseando ahora mismo.  Sirve para el forwarding de expr-capture anidado:
     /// si el argumento de una llamada a otra fn expr-capture es exactamente uno
