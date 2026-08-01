@@ -10,8 +10,23 @@ import std.types only size_t;
  * syscall usa (aridad/tipos/orden); el compilador toma los primeros N registros
  * de esta firma e INLINA la llamada -- emite solo los movimientos justos (los
  * argumentos no pasados se eliminan).  Sin `ret` en el asm (usa `return`) para
- * permitir el inline.  arg6 va en EBP (frame pointer): el `int 0x80` de 6 args
- * (p.ej. mmap2) pisa el frame -- usalo en un contexto donde EBP este libre.
+ * permitir el inline.
+ *
+ * SEIS ARGUMENTOS NO SE PUEDEN USAR AQUI.  La convencion ocupa siete de los
+ * ocho registros y el sexto cae en EBP, que es el frame pointer: colocarlo
+ * destruye el marco de quien llama y la funcion muere al retornar (verificado:
+ * `mmap` compilaba y luego segfalteaba).  No hay un octavo registro libre --
+ * ESP no cuenta.
+ *
+ * Por eso los envoltorios de `std.syscall.linux` con seis argumentos NO se
+ * declaran para esta arquitectura: usarlos da un error de compilacion que lo
+ * explica, en lugar de un binario que se cae sin decir por que.
+ *
+ * PENDIENTE: la salida historica de Linux para i386 es `old_mmap` (nr 90), que
+ * recibe UN puntero a una estructura con los seis valores y por eso no necesita
+ * el sexto registro.  Implementarlo pide una variante propia por arquitectura
+ * en el generador (`tools/import/gen_syscall_wrappers.py`), donde ya queda la
+ * nota correspondiente.
  */
 public size_t invoke(register("eax") syscall_id id,
                      register("ebx") size_t a1, register("ecx") size_t a2,

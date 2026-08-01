@@ -34,11 +34,6 @@ public struct syscall_ctx_invoke {
 
 // --- Presentes en x86-64 Y x86-32 (cross-arch) ---
 
-public i32 _sysctl(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR__sysctl, a0, a1, a2, a3, a4, a5);
-}
-
 public i32 accept4(i32 a0, void * a1, void * a2, i32 a3) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, i32, void *, void *, i32) -> u64)(ctx.invoke_method))(_NR_accept4, a0, a1, a2, a3);
@@ -62,11 +57,6 @@ public i32 add_key(const char * _type, const char * _description, const void * _
 public i32 adjtimex(void * txc_p) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, void *) -> u64)(ctx.invoke_method))(_NR_adjtimex, txc_p);
-}
-
-public i32 afs_syscall(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_afs_syscall, a0, a1, a2, a3, a4, a5);
 }
 
 public i32 alarm(u32 seconds) {
@@ -164,19 +154,9 @@ public i32 connect(i32 a0, void * a1, i32 a2) {
     return (i32)((cfn(syscall_id, i32, void *, i32) -> u64)(ctx.invoke_method))(_NR_connect, a0, a1, a2);
 }
 
-public ssize_t copy_file_range(i32 fd_in, void * off_in, i32 fd_out, void * off_out, size_t len, u32 flags) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (ssize_t)((cfn(syscall_id, i32, void *, i32, void *, size_t, u32) -> u64)(ctx.invoke_method))(_NR_copy_file_range, fd_in, off_in, fd_out, off_out, len, flags);
-}
-
 public i32 creat(const char * pathname, u32 mode) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, const char *, u32) -> u64)(ctx.invoke_method))(_NR_creat, pathname, mode);
-}
-
-public i32 create_module(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_create_module, a0, a1, a2, a3, a4, a5);
 }
 
 public i32 delete_module(const char * name_user, u32 flags) {
@@ -212,11 +192,6 @@ public i32 epoll_create1(i32 flags) {
 public i32 epoll_ctl(i32 epfd, i32 op, i32 fd, void * event) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, i32, i32, i32, void *) -> u64)(ctx.invoke_method))(_NR_epoll_ctl, epfd, op, fd, event);
-}
-
-public i32 epoll_pwait(i32 epfd, void * events, i32 maxevents, i32 timeout, const void * sigmask, size_t sigsetsize) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, i32, void *, i32, i32, const void *, size_t) -> u64)(ctx.invoke_method))(_NR_epoll_pwait, epfd, events, maxevents, timeout, sigmask, sigsetsize);
 }
 
 public i32 epoll_wait(i32 epfd, void * events, i32 maxevents, i32 timeout) {
@@ -369,19 +344,9 @@ public i32 ftruncate(u32 fd, usize length) {
     return (i32)((cfn(syscall_id, u32, usize) -> u64)(ctx.invoke_method))(_NR_ftruncate, fd, length);
 }
 
-public i32 futex(void * uaddr, i32 op, u32 val, void * utime_, void * uaddr2, u32 val3) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, void *, i32, u32, void *, void *, u32) -> u64)(ctx.invoke_method))(_NR_futex, uaddr, op, val, utime_, uaddr2, val3);
-}
-
 public i32 futimesat(i32 dfd, const char * filename, void * utimes_) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, i32, const char *, void *) -> u64)(ctx.invoke_method))(_NR_futimesat, dfd, filename, utimes_);
-}
-
-public i32 get_kernel_syms(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_get_kernel_syms, a0, a1, a2, a3, a4, a5);
 }
 
 public i32 get_mempolicy(void * policy, void * nmask, usize maxnode, uintptr addr, usize flags) {
@@ -392,11 +357,6 @@ public i32 get_mempolicy(void * policy, void * nmask, usize maxnode, uintptr add
 public i64 get_robust_list(i32 pid, void * head_ptr, void * len_ptr) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i64)((cfn(syscall_id, i32, void *, void *) -> u64)(ctx.invoke_method))(_NR_get_robust_list, pid, head_ptr, len_ptr);
-}
-
-public i32 get_thread_area(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_get_thread_area, a0, a1, a2, a3, a4, a5);
 }
 
 public i32 getcpu(void * cpu, void * node, void * cache) {
@@ -462,11 +422,6 @@ public i32 getpgrp() {
 public i32 getpid() {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id) -> u64)(ctx.invoke_method))(_NR_getpid);
-}
-
-public i32 getpmsg(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_getpmsg, a0, a1, a2, a3, a4, a5);
 }
 
 public i32 getppid() {
@@ -599,11 +554,6 @@ public i32 ioperm(usize from, usize num, i32 on) {
     return (i32)((cfn(syscall_id, usize, usize, i32) -> u64)(ctx.invoke_method))(_NR_ioperm, from, num, on);
 }
 
-public i32 iopl(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_iopl, a0, a1, a2, a3, a4, a5);
-}
-
 public i32 ioprio_get(i32 which, i32 who) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, i32, i32) -> u64)(ctx.invoke_method))(_NR_ioprio_get, which, who);
@@ -699,11 +649,6 @@ public i32 madvise(uintptr start, size_t len, i32 behavior) {
     return (i32)((cfn(syscall_id, uintptr, size_t, i32) -> u64)(ctx.invoke_method))(_NR_madvise, start, len, behavior);
 }
 
-public i32 mbind(uintptr start, usize len, usize mode, const void * nmask, usize maxnode, u32 flags) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, uintptr, usize, usize, const void *, usize, u32) -> u64)(ctx.invoke_method))(_NR_mbind, start, len, mode, nmask, maxnode, flags);
-}
-
 public i32 membarrier(i32 cmd, i32 flags) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, i32, i32) -> u64)(ctx.invoke_method))(_NR_membarrier, cmd, flags);
@@ -759,24 +704,9 @@ public i32 mlockall(i32 flags) {
     return (i32)((cfn(syscall_id, i32) -> u64)(ctx.invoke_method))(_NR_mlockall, flags);
 }
 
-public uintptr mmap(uintptr addr, size_t length, i32 prot, i32 flags, i32 fd, i64 offset_) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (uintptr)((cfn(syscall_id, uintptr, size_t, i32, i32, i32, i64) -> u64)(ctx.invoke_method))(_NR_mmap, addr, length, prot, flags, fd, offset_);
-}
-
-public i32 modify_ldt(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_modify_ldt, a0, a1, a2, a3, a4, a5);
-}
-
 public i32 mount(char * dev_name, char * dir_name, char * type_, usize flags, void * data) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, char *, char *, char *, usize, void *) -> u64)(ctx.invoke_method))(_NR_mount, dev_name, dir_name, type_, flags, data);
-}
-
-public i32 move_pages(i32 pid, usize nr_pages, const void * pages, const void * nodes, void * status, i32 flags) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, i32, usize, const void *, const void *, void *, i32) -> u64)(ctx.invoke_method))(_NR_move_pages, pid, nr_pages, pages, nodes, status, flags);
 }
 
 public i32 mprotect(uintptr start, size_t len, usize prot) {
@@ -869,11 +799,6 @@ public i32 nanosleep(void * rqtp, void * rmtp) {
     return (i32)((cfn(syscall_id, void *, void *) -> u64)(ctx.invoke_method))(_NR_nanosleep, rqtp, rmtp);
 }
 
-public i32 nfsservctl(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_nfsservctl, a0, a1, a2, a3, a4, a5);
-}
-
 public i32 open(const char * filename, i32 flags, u32 mode) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, const char *, i32, u32) -> u64)(ctx.invoke_method))(_NR_open, filename, flags, mode);
@@ -959,39 +884,14 @@ public ssize_t preadv(usize fd, const void * vec, usize vlen, usize pos_l, usize
     return (ssize_t)((cfn(syscall_id, usize, const void *, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_preadv, fd, vec, vlen, pos_l, pos_h);
 }
 
-public ssize_t preadv2(usize fd, const void * vec, usize vlen, usize pos_l, usize pos_h, i32 flags) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (ssize_t)((cfn(syscall_id, usize, const void *, usize, usize, usize, i32) -> u64)(ctx.invoke_method))(_NR_preadv2, fd, vec, vlen, pos_l, pos_h, flags);
-}
-
 public i32 prlimit64(i32 pid, u32 resource, const void * new_rlim, void * old_rlim) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, i32, u32, const void *, void *) -> u64)(ctx.invoke_method))(_NR_prlimit64, pid, resource, new_rlim, old_rlim);
 }
 
-public ssize_t process_vm_readv(i32 pid, const void * lvec, usize liovcnt, const void * rvec, usize riovcnt, usize flags) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (ssize_t)((cfn(syscall_id, i32, const void *, usize, const void *, usize, usize) -> u64)(ctx.invoke_method))(_NR_process_vm_readv, pid, lvec, liovcnt, rvec, riovcnt, flags);
-}
-
-public ssize_t process_vm_writev(i32 pid, const void * lvec, usize liovcnt, const void * rvec, usize riovcnt, usize flags) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (ssize_t)((cfn(syscall_id, i32, const void *, usize, const void *, usize, usize) -> u64)(ctx.invoke_method))(_NR_process_vm_writev, pid, lvec, liovcnt, rvec, riovcnt, flags);
-}
-
-public i32 pselect6(i32 a0, void * a1, void * a2, void * a3, void * a4, void * a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, i32, void *, void *, void *, void *, void *) -> u64)(ctx.invoke_method))(_NR_pselect6, a0, a1, a2, a3, a4, a5);
-}
-
 public i64 ptrace(ssize_t request, ssize_t pid, usize addr, usize data) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i64)((cfn(syscall_id, ssize_t, ssize_t, usize, usize) -> u64)(ctx.invoke_method))(_NR_ptrace, request, pid, addr, data);
-}
-
-public i32 putpmsg(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_putpmsg, a0, a1, a2, a3, a4, a5);
 }
 
 public ssize_t pwrite64(u32 fd, const char * buf, size_t count, i64 pos) {
@@ -1002,16 +902,6 @@ public ssize_t pwrite64(u32 fd, const char * buf, size_t count, i64 pos) {
 public ssize_t pwritev(usize fd, const void * vec, usize vlen, usize pos_l, usize pos_h) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (ssize_t)((cfn(syscall_id, usize, const void *, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_pwritev, fd, vec, vlen, pos_l, pos_h);
-}
-
-public ssize_t pwritev2(usize fd, const void * vec, usize vlen, usize pos_l, usize pos_h, i32 flags) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (ssize_t)((cfn(syscall_id, usize, const void *, usize, usize, usize, i32) -> u64)(ctx.invoke_method))(_NR_pwritev2, fd, vec, vlen, pos_l, pos_h, flags);
-}
-
-public i32 query_module(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_query_module, a0, a1, a2, a3, a4, a5);
 }
 
 public i32 quotactl(u32 cmd, const char * special, u32 id, void * addr) {
@@ -1047,11 +937,6 @@ public ssize_t readv(usize fd, const void * vec, usize vlen) {
 public i32 reboot(i32 magic1, i32 magic2, u32 cmd, void * arg) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, i32, i32, u32, void *) -> u64)(ctx.invoke_method))(_NR_reboot, magic1, magic2, cmd, arg);
-}
-
-public ssize_t recvfrom(i32 a0, void * a1, size_t a2, u32 a3, void * a4, void * a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (ssize_t)((cfn(syscall_id, i32, void *, size_t, u32, void *, void *) -> u64)(ctx.invoke_method))(_NR_recvfrom, a0, a1, a2, a3, a4, a5);
 }
 
 public ssize_t recvmmsg(i32 fd, void * msg, u32 vlen, u32 flags, void * timeout) {
@@ -1122,11 +1007,6 @@ public i32 rt_sigprocmask(i32 how, void * set, void * oset, size_t sigsetsize) {
 public i32 rt_sigqueueinfo(i32 pid, i32 sig, void * uinfo) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, i32, i32, void *) -> u64)(ctx.invoke_method))(_NR_rt_sigqueueinfo, pid, sig, uinfo);
-}
-
-public void rt_sigreturn(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    ((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_rt_sigreturn, a0, a1, a2, a3, a4, a5);
 }
 
 public i32 rt_sigsuspend(void * unewset, size_t sigsetsize) {
@@ -1239,11 +1119,6 @@ public ssize_t sendmsg(i32 fd, void * msg, u32 flags) {
     return (ssize_t)((cfn(syscall_id, i32, void *, u32) -> u64)(ctx.invoke_method))(_NR_sendmsg, fd, msg, flags);
 }
 
-public ssize_t sendto(i32 a0, void * a1, size_t a2, u32 a3, void * a4, i32 a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (ssize_t)((cfn(syscall_id, i32, void *, size_t, u32, void *, i32) -> u64)(ctx.invoke_method))(_NR_sendto, a0, a1, a2, a3, a4, a5);
-}
-
 public i32 set_mempolicy(i32 mode, const void * nmask, usize maxnode) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, i32, const void *, usize) -> u64)(ctx.invoke_method))(_NR_set_mempolicy, mode, nmask, maxnode);
@@ -1252,11 +1127,6 @@ public i32 set_mempolicy(i32 mode, const void * nmask, usize maxnode) {
 public i64 set_robust_list(void * head, size_t len) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i64)((cfn(syscall_id, void *, size_t) -> u64)(ctx.invoke_method))(_NR_set_robust_list, head, len);
-}
-
-public i32 set_thread_area(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_set_thread_area, a0, a1, a2, a3, a4, a5);
 }
 
 public i64 set_tid_address(void * tidptr) {
@@ -1412,11 +1282,6 @@ public i32 socket(i32 a0, i32 a1, i32 a2) {
 public i32 socketpair(i32 a0, i32 a1, i32 a2, void * a3) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, i32, i32, i32, void *) -> u64)(ctx.invoke_method))(_NR_socketpair, a0, a1, a2, a3);
-}
-
-public ssize_t splice(i32 fd_in, void * off_in, i32 fd_out, void * off_out, size_t len, u32 flags) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (ssize_t)((cfn(syscall_id, i32, void *, i32, void *, size_t, u32) -> u64)(ctx.invoke_method))(_NR_splice, fd_in, off_in, fd_out, off_out, len, flags);
 }
 
 public i32 stat(const char * filename, void * statbuf) {
@@ -1629,11 +1494,6 @@ public ssize_t vmsplice(i32 fd, const void * iov, usize nr_segs, u32 flags) {
     return (ssize_t)((cfn(syscall_id, i32, const void *, usize, u32) -> u64)(ctx.invoke_method))(_NR_vmsplice, fd, iov, nr_segs, flags);
 }
 
-public i32 vserver(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_vserver, a0, a1, a2, a3, a4, a5);
-}
-
 public i32 wait4(i32 pid, void * stat_addr, i32 options, void * ru) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, i32, void *, i32, void *) -> u64)(ctx.invoke_method))(_NR_wait4, pid, stat_addr, options, ru);
@@ -1658,9 +1518,33 @@ public ssize_t writev(usize fd, const void * vec, usize vlen) {
 // --- Solo x86-64 ---
 
 @Target("arch:x86_64 && !os:windows")
+public i32 _sysctl(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR__sysctl, a0, a1, a2, a3, a4, a5);
+}
+
+@Target("arch:x86_64 && !os:windows")
 public i32 accept(i32 a0, void * a1, void * a2) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, i32, void *, void *) -> u64)(ctx.invoke_method))(_NR_accept, a0, a1, a2);
+}
+
+@Target("arch:x86_64 && !os:windows")
+public i32 afs_syscall(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_afs_syscall, a0, a1, a2, a3, a4, a5);
+}
+
+@Target("arch:x86_64 && !os:windows")
+public ssize_t copy_file_range(i32 fd_in, void * off_in, i32 fd_out, void * off_out, size_t len, u32 flags) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (ssize_t)((cfn(syscall_id, i32, void *, i32, void *, size_t, u32) -> u64)(ctx.invoke_method))(_NR_copy_file_range, fd_in, off_in, fd_out, off_out, len, flags);
+}
+
+@Target("arch:x86_64 && !os:windows")
+public i32 create_module(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_create_module, a0, a1, a2, a3, a4, a5);
 }
 
 @Target("arch:x86_64 && !os:windows")
@@ -1670,9 +1554,45 @@ public i32 epoll_ctl_old(usize a0, usize a1, usize a2, usize a3, usize a4, usize
 }
 
 @Target("arch:x86_64 && !os:windows")
+public i32 epoll_pwait(i32 epfd, void * events, i32 maxevents, i32 timeout, const void * sigmask, size_t sigsetsize) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (i32)((cfn(syscall_id, i32, void *, i32, i32, const void *, size_t) -> u64)(ctx.invoke_method))(_NR_epoll_pwait, epfd, events, maxevents, timeout, sigmask, sigsetsize);
+}
+
+@Target("arch:x86_64 && !os:windows")
 public i32 epoll_wait_old(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_epoll_wait_old, a0, a1, a2, a3, a4, a5);
+}
+
+@Target("arch:x86_64 && !os:windows")
+public i32 futex(void * uaddr, i32 op, u32 val, void * utime_, void * uaddr2, u32 val3) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (i32)((cfn(syscall_id, void *, i32, u32, void *, void *, u32) -> u64)(ctx.invoke_method))(_NR_futex, uaddr, op, val, utime_, uaddr2, val3);
+}
+
+@Target("arch:x86_64 && !os:windows")
+public i32 get_kernel_syms(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_get_kernel_syms, a0, a1, a2, a3, a4, a5);
+}
+
+@Target("arch:x86_64 && !os:windows")
+public i32 get_thread_area(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_get_thread_area, a0, a1, a2, a3, a4, a5);
+}
+
+@Target("arch:x86_64 && !os:windows")
+public i32 getpmsg(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_getpmsg, a0, a1, a2, a3, a4, a5);
+}
+
+@Target("arch:x86_64 && !os:windows")
+public i32 iopl(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_iopl, a0, a1, a2, a3, a4, a5);
 }
 
 @Target("arch:x86_64 && !os:windows")
@@ -1682,9 +1602,93 @@ public i32 kexec_file_load(i32 kernel_fd, i32 initrd_fd, usize cmdline_len, cons
 }
 
 @Target("arch:x86_64 && !os:windows")
+public i32 mbind(uintptr start, usize len, usize mode, const void * nmask, usize maxnode, u32 flags) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (i32)((cfn(syscall_id, uintptr, usize, usize, const void *, usize, u32) -> u64)(ctx.invoke_method))(_NR_mbind, start, len, mode, nmask, maxnode, flags);
+}
+
+@Target("arch:x86_64 && !os:windows")
+public uintptr mmap(uintptr addr, size_t length, i32 prot, i32 flags, i32 fd, i64 offset_) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (uintptr)((cfn(syscall_id, uintptr, size_t, i32, i32, i32, i64) -> u64)(ctx.invoke_method))(_NR_mmap, addr, length, prot, flags, fd, offset_);
+}
+
+@Target("arch:x86_64 && !os:windows")
+public i32 modify_ldt(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_modify_ldt, a0, a1, a2, a3, a4, a5);
+}
+
+@Target("arch:x86_64 && !os:windows")
+public i32 move_pages(i32 pid, usize nr_pages, const void * pages, const void * nodes, void * status, i32 flags) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (i32)((cfn(syscall_id, i32, usize, const void *, const void *, void *, i32) -> u64)(ctx.invoke_method))(_NR_move_pages, pid, nr_pages, pages, nodes, status, flags);
+}
+
+@Target("arch:x86_64 && !os:windows")
 public i32 newfstatat(i32 dfd, const char * filename, void * statbuf, i32 flag) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, i32, const char *, void *, i32) -> u64)(ctx.invoke_method))(_NR_newfstatat, dfd, filename, statbuf, flag);
+}
+
+@Target("arch:x86_64 && !os:windows")
+public i32 nfsservctl(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_nfsservctl, a0, a1, a2, a3, a4, a5);
+}
+
+@Target("arch:x86_64 && !os:windows")
+public ssize_t preadv2(usize fd, const void * vec, usize vlen, usize pos_l, usize pos_h, i32 flags) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (ssize_t)((cfn(syscall_id, usize, const void *, usize, usize, usize, i32) -> u64)(ctx.invoke_method))(_NR_preadv2, fd, vec, vlen, pos_l, pos_h, flags);
+}
+
+@Target("arch:x86_64 && !os:windows")
+public ssize_t process_vm_readv(i32 pid, const void * lvec, usize liovcnt, const void * rvec, usize riovcnt, usize flags) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (ssize_t)((cfn(syscall_id, i32, const void *, usize, const void *, usize, usize) -> u64)(ctx.invoke_method))(_NR_process_vm_readv, pid, lvec, liovcnt, rvec, riovcnt, flags);
+}
+
+@Target("arch:x86_64 && !os:windows")
+public ssize_t process_vm_writev(i32 pid, const void * lvec, usize liovcnt, const void * rvec, usize riovcnt, usize flags) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (ssize_t)((cfn(syscall_id, i32, const void *, usize, const void *, usize, usize) -> u64)(ctx.invoke_method))(_NR_process_vm_writev, pid, lvec, liovcnt, rvec, riovcnt, flags);
+}
+
+@Target("arch:x86_64 && !os:windows")
+public i32 pselect6(i32 a0, void * a1, void * a2, void * a3, void * a4, void * a5) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (i32)((cfn(syscall_id, i32, void *, void *, void *, void *, void *) -> u64)(ctx.invoke_method))(_NR_pselect6, a0, a1, a2, a3, a4, a5);
+}
+
+@Target("arch:x86_64 && !os:windows")
+public i32 putpmsg(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_putpmsg, a0, a1, a2, a3, a4, a5);
+}
+
+@Target("arch:x86_64 && !os:windows")
+public ssize_t pwritev2(usize fd, const void * vec, usize vlen, usize pos_l, usize pos_h, i32 flags) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (ssize_t)((cfn(syscall_id, usize, const void *, usize, usize, usize, i32) -> u64)(ctx.invoke_method))(_NR_pwritev2, fd, vec, vlen, pos_l, pos_h, flags);
+}
+
+@Target("arch:x86_64 && !os:windows")
+public i32 query_module(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_query_module, a0, a1, a2, a3, a4, a5);
+}
+
+@Target("arch:x86_64 && !os:windows")
+public ssize_t recvfrom(i32 a0, void * a1, size_t a2, u32 a3, void * a4, void * a5) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (ssize_t)((cfn(syscall_id, i32, void *, size_t, u32, void *, void *) -> u64)(ctx.invoke_method))(_NR_recvfrom, a0, a1, a2, a3, a4, a5);
+}
+
+@Target("arch:x86_64 && !os:windows")
+public void rt_sigreturn(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    ((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_rt_sigreturn, a0, a1, a2, a3, a4, a5);
 }
 
 @Target("arch:x86_64 && !os:windows")
@@ -1706,25 +1710,37 @@ public i32 semtimedop(i32 semid, void * sops, u32 nsops, const void * timeout) {
 }
 
 @Target("arch:x86_64 && !os:windows")
+public ssize_t sendto(i32 a0, void * a1, size_t a2, u32 a3, void * a4, i32 a5) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (ssize_t)((cfn(syscall_id, i32, void *, size_t, u32, void *, i32) -> u64)(ctx.invoke_method))(_NR_sendto, a0, a1, a2, a3, a4, a5);
+}
+
+@Target("arch:x86_64 && !os:windows")
+public i32 set_thread_area(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_set_thread_area, a0, a1, a2, a3, a4, a5);
+}
+
+@Target("arch:x86_64 && !os:windows")
+public ssize_t splice(i32 fd_in, void * off_in, i32 fd_out, void * off_out, size_t len, u32 flags) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (ssize_t)((cfn(syscall_id, i32, void *, i32, void *, size_t, u32) -> u64)(ctx.invoke_method))(_NR_splice, fd_in, off_in, fd_out, off_out, len, flags);
+}
+
+@Target("arch:x86_64 && !os:windows")
 public i32 tuxcall(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_tuxcall, a0, a1, a2, a3, a4, a5);
 }
 
+@Target("arch:x86_64 && !os:windows")
+public i32 vserver(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_vserver, a0, a1, a2, a3, a4, a5);
+}
+
 
 // --- Solo x86-32 ---
-
-@Target("arch:x86 && !os:windows")
-public i32 _llseek(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR__llseek, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 _newselect(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR__newselect, a0, a1, a2, a3, a4, a5);
-}
 
 @Target("arch:x86 && !os:windows")
 public i32 bdflush(i32 func, ssize_t data) {
@@ -1733,27 +1749,9 @@ public i32 bdflush(i32 func, ssize_t data) {
 }
 
 @Target("arch:x86 && !os:windows")
-public i32 break_(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_break, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 chown32(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_chown32, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
 public i32 fadvise64_64(i32 fd, i64 offset_, i64 len, i32 advice) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, i32, i64, i64, i32) -> u64)(ctx.invoke_method))(_NR_fadvise64_64, fd, offset_, len, advice);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 fchown32(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_fchown32, a0, a1, a2, a3, a4, a5);
 }
 
 @Target("arch:x86 && !os:windows")
@@ -1781,87 +1779,9 @@ public i32 fstatfs64(u32 fd, size_t sz, void * buf) {
 }
 
 @Target("arch:x86 && !os:windows")
-public i32 ftime(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_ftime, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
 public i32 ftruncate64(u32 fd, i64 length) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, u32, i64) -> u64)(ctx.invoke_method))(_NR_ftruncate64, fd, length);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 getegid32(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_getegid32, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 geteuid32(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_geteuid32, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 getgid32(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_getgid32, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 getgroups32(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_getgroups32, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 getresgid32(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_getresgid32, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 getresuid32(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_getresuid32, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 getuid32(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_getuid32, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 gtty(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_gtty, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 idle(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_idle, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 ipc(u32 call, i32 first, usize second, usize third, void * ptr_, ssize_t fifth) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, u32, i32, usize, usize, void *, ssize_t) -> u64)(ctx.invoke_method))(_NR_ipc, call, first, second, third, ptr_, fifth);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 lchown32(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_lchown32, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 lock(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_lock, a0, a1, a2, a3, a4, a5);
 }
 
 @Target("arch:x86 && !os:windows")
@@ -1871,45 +1791,9 @@ public i32 lstat64(const char * filename, void * statbuf) {
 }
 
 @Target("arch:x86 && !os:windows")
-public uintptr mmap2(uintptr addr, size_t length, i32 prot, i32 flags, i32 fd, i64 pgoffset) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (uintptr)((cfn(syscall_id, uintptr, size_t, i32, i32, i32, i64) -> u64)(ctx.invoke_method))(_NR_mmap2, addr, length, prot, flags, fd, pgoffset);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 mpx(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_mpx, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
 public i32 nice(i32 increment) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, i32) -> u64)(ctx.invoke_method))(_NR_nice, increment);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 oldfstat(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_oldfstat, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 oldlstat(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_oldlstat, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 oldolduname(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_oldolduname, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 oldstat(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_oldstat, a0, a1, a2, a3, a4, a5);
 }
 
 @Target("arch:x86 && !os:windows")
@@ -1919,81 +1803,9 @@ public i32 olduname(void * a0) {
 }
 
 @Target("arch:x86 && !os:windows")
-public i32 prof(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_prof, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 profil(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_profil, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 readdir(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_readdir, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
 public i32 sendfile64(i32 out_fd, i32 in_fd, void * offset_, size_t count) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, i32, i32, void *, size_t) -> u64)(ctx.invoke_method))(_NR_sendfile64, out_fd, in_fd, offset_, count);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 setfsgid32(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_setfsgid32, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 setfsuid32(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_setfsuid32, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 setgid32(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_setgid32, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 setgroups32(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_setgroups32, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 setregid32(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_setregid32, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 setresgid32(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_setresgid32, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 setresuid32(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_setresuid32, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 setreuid32(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_setreuid32, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 setuid32(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_setuid32, a0, a1, a2, a3, a4, a5);
 }
 
 @Target("arch:x86 && !os:windows")
@@ -2024,12 +1836,6 @@ public i32 sigpending(void * uset) {
 public i32 sigprocmask(i32 how, void * set, void * oset) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, i32, void *, void *) -> u64)(ctx.invoke_method))(_NR_sigprocmask, how, set, oset);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 sigreturn(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_sigreturn, a0, a1, a2, a3, a4, a5);
 }
 
 @Target("arch:x86 && !os:windows")
@@ -2069,45 +1875,15 @@ public i32 stime(void * tptr) {
 }
 
 @Target("arch:x86 && !os:windows")
-public i32 stty(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_stty, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
 public i32 truncate64(const char * path, i64 length) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, const char *, i64) -> u64)(ctx.invoke_method))(_NR_truncate64, path, length);
 }
 
 @Target("arch:x86 && !os:windows")
-public i32 ugetrlimit(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_ugetrlimit, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 ulimit(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_ulimit, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
 public i32 umount(char * name, i32 flags) {
     static syscall_ctx_invoke ctx = syscall_ctx_invoke();
     return (i32)((cfn(syscall_id, char *, i32) -> u64)(ctx.invoke_method))(_NR_umount, name, flags);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 vm86(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_vm86, a0, a1, a2, a3, a4, a5);
-}
-
-@Target("arch:x86 && !os:windows")
-public i32 vm86old(usize a0, usize a1, usize a2, usize a3, usize a4, usize a5) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
-    return (i32)((cfn(syscall_id, usize, usize, usize, usize, usize, usize) -> u64)(ctx.invoke_method))(_NR_vm86old, a0, a1, a2, a3, a4, a5);
 }
 
 @Target("arch:x86 && !os:windows")

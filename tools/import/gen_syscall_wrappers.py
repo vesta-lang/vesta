@@ -284,6 +284,25 @@ def main():
             cargs = sig32[name]
         else:
             continue  # sin firma en la API -> no generamos (raro/interno)
+        # LIMITACION x86-32: seis argumentos no caben.  La convencion de
+        # `int 0x80` usa eax + ebx/ecx/edx/esi/edi/ebp, o sea SIETE de los ocho
+        # registros, y el sexto cae en EBP -- que es el frame pointer.
+        # Colocarlo ahi destruye el marco de quien llama, asi que el envoltorio
+        # compilaba y luego moria al retornar.
+        #
+        # La salida historica de Linux para i386 es `old_mmap` (nr 90): recibe
+        # UN puntero a una estructura con los seis valores, y por eso no
+        # necesita el sexto registro.  Implementarlo pide una variante propia
+        # por arquitectura (construir la estructura y pasar su direccion), y
+        # esta pendiente.
+        #
+        # Mientras tanto NO se declaran en 32 bits.  Asi quien las use recibe un
+        # error de COMPILACION que dice que solo existen para otro objetivo, en
+        # vez de un binario que segfaltea sin explicacion.
+        if len([a for a in cargs if a.strip()]) >= 6:
+            in32 = False
+            if not in64:
+                continue
         if in64 and in32:
             both.append((name, cargs))
         elif in64:
