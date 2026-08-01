@@ -273,24 +273,14 @@ public struct Wide128 {
      *         sobre 200000 pares pseudoaleatorios.
      */
     public Self __mul__(Self o) {
-        u64 al = this.lo64;
-        u64 ah = this.hi64;
-        u64 bl = o.lo64;
-        u64 bh = o.hi64;
-        u64 a0 = al & 0xFFFFFFFF;
-        u64 a1 = al >> 32;
-        u64 b0 = bl & 0xFFFFFFFF;
-        u64 b1 = bl >> 32;
-        u64 t00 = a0 * b0;
-        u64 t01 = a0 * b1;
-        u64 t10 = a1 * b0;
-        u64 t11 = a1 * b1;
-        u64 mid = (t00 >> 32) + (t01 & 0xFFFFFFFF) + (t10 & 0xFFFFFFFF);
-        u64 lo = (t00 & 0xFFFFFFFF) | (mid << 32);
-        u64 hi = t11 + (t01 >> 32) + (t10 >> 32) + (mid >> 32);
+        // El producto de los limbs bajos, COMPLETO: su mitad alta es lo que
+        // arrastra al limb alto del resultado.
+        u128 full = u128.mul64_full(this.lo64, o.lo64);
         Self r;
-        r.lo64 = lo;
-        r.hi64 = hi + (al * bh) + (ah * bl);
+        r.lo64 = full.lo64;
+        // Los cruzados solo alcanzan el limb alto, asi que se suman truncados:
+        // lo que desbordan cae fuera de los 128 bits.
+        r.hi64 = full.hi64 + this.lo64 * o.hi64 + this.hi64 * o.lo64;
         return r;
     }
 
