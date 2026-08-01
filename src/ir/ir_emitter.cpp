@@ -209,6 +209,17 @@ struct EmitCtx {
         return reg_name(SCRATCH_REG);
     }
 
+    /// Como @c reg_of, pero indicando QUE scratch se uso al recargar el valor
+    /// (0 = SCRATCH_REG, 1 = SCRATCH2_REG).  Necesario cuando una instruccion
+    /// lee DOS operandos derramados: cada uno vive en un scratch distinto y
+    /// @c reg_of, que siempre devuelve el primero, los confundiria.
+    /// Se usa junto a @c load_src(vid, idx), que es quien emite la carga.
+    std::string reg_at(IrValueId vid, int scratch_idx) const {
+        if (vid == IR_NO_VALUE) return "r0";
+        if (alloc.in_reg(vid)) return reg_name(alloc.reg_of(vid));
+        return reg_name(scratch_idx == 0 ? SCRATCH_REG : SCRATCH2_REG);
+    }
+
     // True si el valor vid tiene un registro asignado (no derramado)
     bool is_in_reg(IrValueId vid) const {
         return vid != IR_NO_VALUE && alloc.in_reg(vid);
@@ -1209,24 +1220,17 @@ static void emit_load_spilled_arg(EmitCtx &ctx, int target_reg,
                                   ir::IrValueId vid) {
     if (!ctx.alloc.spilled(vid)) return; // no es spilled, no-op
     const std::string rd = std::string(reg_name(target_reg));
-    /* Scratch para el addr.  Usamos r14 (scratch general) cuando target!=14;
-     * cuando target ES r14 reutilizamos el mismo reg (el flujo
-     * mov r14,rbp -> subu r14 -> mov r14,[r14] funciona porque el ultimo
-     * mov sobreescribe r14 con el valor cargado).
+    /* La carga se hace con `mld`, que codifica [rbp - off] en UNA instruccion
+     * y NO necesita registro scratch.
      *
-     * Importante: NO usar r13 como scratch.  En el path CALLNI (FFI runtime
-     * indirecto), r13 contiene el fn_ptr a invocar -- pisarlo aqui causa
-     * que el callni salte a memoria invalida.  r14 esta siempre libre en
-     * este punto porque parallel_arg_moves ya termino y r14 es el scratch
-     * de cycle-breaking que liberamos al final del parallel-move. */
-    const char *scratch_reg = "r14";
-    ctx.out << "    mov " << scratch_reg << ", rbp\n";
-    ctx.out << "    subu " << scratch_reg << ", "
-            << ((ctx.alloc.slot_of(vid) + 1) * 8) << "\n";
-    ctx.out << "    mov " << rd << ", [" << scratch_reg << "]\n";
-    /* Invalidamos los caches que hayan sido clobered. */
-    ctx.r14_cache = -1;
-    if (target_reg == 13) ctx.r13_cache = -1;
+     * Antes la direccion se calculaba a mano con r14 (mov r14,rbp; subu; mov)
+     * dando por hecho que r14 estaba libre "porque parallel_arg_moves ya
+     * termino".  Eso solo vale para el marshalling: si el asignador puso en
+     * r14 un valor del LLAMANTE vivo a traves de la llamada, la secuencia lo
+     * machacaba y quedaba corrupto al volver.  Se manifestaba, por ejemplo,
+     * como `bytes()` devolviendo 0 sobre un string valido -- r14 contenia una
+     * direccion de pila en vez del handle. */
+    ctx.emit_spill_load(rd, ctx.alloc.slot_of(vid));
     if (ctx.is_gc_value(vid)) {
         ctx.out << "    gcderef cur0, " << rd << "\n";
         ctx.out << "    xchg cur0, " << rd << "\n";
@@ -4368,8 +4372,11 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // Excluir el reg que llevara r_cls (lo movemos manualmente
         // a r1 antes del newobj; preservarlo seria redundante).
         // El parallel-move es trivial: un solo arg.
-        std::string r_cls = ctx.reg_of(ins.operands[0]);
+        // La recarga va DESPUES del save: emit_save_live_regs usa r14/r13
+        // como scratch y machacaria el valor recien cargado.  load_src (no
+        // reg_of) para que un operando derramado se cargue de verdad.
         emit_save_live_regs(ctx, call_pos, regs_to_save);
+        std::string r_cls = ctx.load_src(ins.operands[0], 0);
         ctx.out << "    mov r1, " << r_cls << "\n";
         ctx.out << "    mov r15, 1\n";
         // E.1: stackmap justo antes del opcode que puede disparar GC.
@@ -4389,8 +4396,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const uint32_t call_pos = lin_pos_of(ctx, bb.id, idx);
         std::vector<int> regs_to_save =
             live_regs_through_call(ctx, call_pos, ins.dst);
-        std::string r_cls = ctx.reg_of(ins.operands[0]);
+        // Recarga DESPUES del save (ver NEWOBJ).
         emit_save_live_regs(ctx, call_pos, regs_to_save);
+        std::string r_cls = ctx.load_src(ins.operands[0], 0);
         ctx.out << "    mov r1, " << r_cls << "\n";
         ctx.out << "    mov r15, 1\n";
         // E.1: stackmap justo antes del opcode que puede disparar GC.
@@ -4435,8 +4443,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     case IrOp::INSTANCEOF: {
         if (ins.operands.size() < 2) break;
         std::string rd = ctx.reg_of(ins.dst);
-        std::string r_obj = ctx.reg_of(ins.operands[0]);
-        std::string r_cls = ctx.reg_of(ins.operands[1]);
+        std::string r_obj = ctx.load_src(ins.operands[0], 0);
+        std::string r_cls = ctx.load_src(ins.operands[1], 1);
         ctx.out << "    instanceof " << rd << ", " << r_obj << ", " << r_cls
                 << "\n";
         break;
@@ -4444,13 +4452,21 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
 
     case IrOp::CHECKCAST: {
         if (ins.operands.size() < 2) break;
-        ctx.out << "    checkcast " << ctx.reg_of(ins.operands[0]) << ", "
-                << ctx.reg_of(ins.operands[1]) << "\n";
+        // Recarga previa de AMBOS operandos, cada uno en su
+        // scratch: reg_of solo consulta y devolveria el
+        // mismo registro para los dos.
+        (void)ctx.load_src(ins.operands[0], 0);
+        (void)ctx.load_src(ins.operands[1], 1);
+        ctx.out << "    checkcast " << ctx.reg_at(ins.operands[0], 0) << ", "
+                << ctx.reg_at(ins.operands[1], 1) << "\n";
         break;
     }
 
     case IrOp::ISNULL: {
         if (!ins.operands.empty())
+            // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
+            // emitir la carga si el valor esta derramado).
+            (void)ctx.load_src(ins.operands[0], 0);
             ctx.out << "    isnull " << ctx.reg_of(ins.dst) << ", "
                     << ctx.reg_of(ins.operands[0]) << "\n";
         break;
@@ -4468,9 +4484,14 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
 
     case IrOp::SPECIALIZE: {
         if (ins.operands.size() < 2) break;
+        // Recarga previa de AMBOS operandos, cada uno en su
+        // scratch: reg_of solo consulta y devolveria el
+        // mismo registro para los dos.
+        (void)ctx.load_src(ins.operands[0], 0);
+        (void)ctx.load_src(ins.operands[1], 1);
         ctx.out << "    specialize " << ctx.reg_of(ins.dst) << ", "
-                << ctx.reg_of(ins.operands[0]) << ", "
-                << ctx.reg_of(ins.operands[1]) << "\n";
+                << ctx.reg_at(ins.operands[0], 0) << ", "
+                << ctx.reg_at(ins.operands[1], 1) << "\n";
         break;
     }
 
@@ -4781,14 +4802,22 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     // --- Excepciones ---
     case IrOp::THROW: {
         if (!ins.operands.empty())
+            // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
+            // emitir la carga si el valor esta derramado).
+            (void)ctx.load_src(ins.operands[0], 0);
             ctx.out << "    throw " << ctx.reg_of(ins.operands[0]) << "\n";
         break;
     }
 
     case IrOp::TRYENTER: {
         if (ins.operands.size() < 2) break;
-        ctx.out << "    tryenter " << ctx.reg_of(ins.operands[0]) << ", "
-                << ctx.reg_of(ins.operands[1]) << "\n";
+        // Recarga previa de AMBOS operandos, cada uno en su
+        // scratch: reg_of solo consulta y devolveria el
+        // mismo registro para los dos.
+        (void)ctx.load_src(ins.operands[0], 0);
+        (void)ctx.load_src(ins.operands[1], 1);
+        ctx.out << "    tryenter " << ctx.reg_at(ins.operands[0], 0) << ", "
+                << ctx.reg_at(ins.operands[1], 1) << "\n";
         break;
     }
 
@@ -4813,6 +4842,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // forzar a r1).  El opcode `await` toma cualquier reg
             // (reg_data.reg1).  Forzar mov a r1 clobreaba el outer
             // future cuando estamos en body de @Async (r1 = param0).
+            // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
+            // emitir la carga si el valor esta derramado).
+            (void)ctx.load_src(ins.operands[0], 0);
             ctx.out << "    await " << ctx.reg_of(ins.operands[0])
                     << "\n"; // bloquea; resultado en r0
             if (ins.dst != IR_NO_VALUE)
@@ -4823,25 +4855,48 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
 
     case IrOp::FULFILL: {
         if (ins.operands.size() < 2) break;
-        std::string r_fut = ctx.reg_of(ins.operands[0]);
-        std::string r_val = ctx.reg_of(ins.operands[1]);
+        std::string r_fut = ctx.load_src(ins.operands[0], 0);
+        std::string r_val = ctx.load_src(ins.operands[1], 1);
         ctx.out << "    fulfill " << r_fut << ", " << r_val << "\n";
         break;
     }
 
     case IrOp::REJECT: {
         if (ins.operands.size() < 2) break;
-        ctx.out << "    reject " << ctx.reg_of(ins.operands[0]) << ", "
-                << ctx.reg_of(ins.operands[1]) << "\n";
+        // Recarga previa de AMBOS operandos, cada uno en su
+        // scratch: reg_of solo consulta y devolveria el
+        // mismo registro para los dos.
+        (void)ctx.load_src(ins.operands[0], 0);
+        (void)ctx.load_src(ins.operands[1], 1);
+        ctx.out << "    reject " << ctx.reg_at(ins.operands[0], 0) << ", "
+                << ctx.reg_at(ins.operands[1], 1) << "\n";
         break;
     }
 
     // --- Distribucion ---
     case IrOp::MSGSEND: {
         if (ins.operands.size() < 3) break;
-        ctx.out << "    msgsend " << ctx.reg_of(ins.operands[0]) << ", "
-                << ctx.reg_of(ins.operands[1]) << ", "
-                << ctx.reg_of(ins.operands[2]) << "\n";
+        // Tres operandos y solo dos scratch (r14/r13).  El TERCERO se carga
+        // PRIMERO porque emit_load_spilled_into usa r13 para la direccion y
+        // machacaria el segundo scratch.  Como destino se usa r0: la propia
+        // instruccion lo sobreescribe con su resultado, asi que no puede
+        // llevar nada vivo.  Si algun otro operando ya vive en r0 se recurre
+        // al registro del dst (libre: aun no se ha escrito).
+        std::string r_len;
+        if (ctx.is_in_reg(ins.operands[2])) {
+            r_len = ctx.reg_of(ins.operands[2]);
+        } else {
+            const std::string u0 = ctx.reg_of(ins.operands[0]);
+            const std::string u1 = ctx.reg_of(ins.operands[1]);
+            r_len = (u0 == "r0" || u1 == "r0") && ins.dst != IR_NO_VALUE
+                        ? ctx.dst_of(ins.dst)
+                        : std::string("r0");
+            ctx.emit_load_spilled_into(ins.operands[2], r_len);
+        }
+        const std::string r_pid = ctx.load_src(ins.operands[0], 0);
+        const std::string r_addr = ctx.load_src(ins.operands[1], 1);
+        ctx.out << "    msgsend " << r_pid << ", " << r_addr << ", "
+                << r_len << "\n";
         if (ins.dst != IR_NO_VALUE)
             emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), "r0");
         break;
@@ -4849,8 +4904,13 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
 
     case IrOp::MSGRECV: {
         if (ins.operands.size() < 2) break;
-        ctx.out << "    msgrecv " << ctx.reg_of(ins.operands[0]) << ", "
-                << ctx.reg_of(ins.operands[1]) << "\n";
+        // Recarga previa de AMBOS operandos, cada uno en su
+        // scratch: reg_of solo consulta y devolveria el
+        // mismo registro para los dos.
+        (void)ctx.load_src(ins.operands[0], 0);
+        (void)ctx.load_src(ins.operands[1], 1);
+        ctx.out << "    msgrecv " << ctx.reg_at(ins.operands[0], 0) << ", "
+                << ctx.reg_at(ins.operands[1], 1) << "\n";
         if (ins.dst != IR_NO_VALUE)
             emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), "r0");
         break;
@@ -4858,8 +4918,13 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
 
     case IrOp::RSPAWN: {
         if (ins.operands.size() < 2) break;
-        ctx.out << "    rspawn " << ctx.reg_of(ins.operands[0]) << ", "
-                << ctx.reg_of(ins.operands[1]) << "\n";
+        // Recarga previa de AMBOS operandos, cada uno en su
+        // scratch: reg_of solo consulta y devolveria el
+        // mismo registro para los dos.
+        (void)ctx.load_src(ins.operands[0], 0);
+        (void)ctx.load_src(ins.operands[1], 1);
+        ctx.out << "    rspawn " << ctx.reg_at(ins.operands[0], 0) << ", "
+                << ctx.reg_at(ins.operands[1], 1) << "\n";
         if (ins.dst != IR_NO_VALUE)
             emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), "r0");
         break;
@@ -4868,22 +4933,37 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     // --- Sincronizacion / monitores ---
     case IrOp::MONENTER:
         if (!ins.operands.empty())
+            // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
+            // emitir la carga si el valor esta derramado).
+            (void)ctx.load_src(ins.operands[0], 0);
             ctx.out << "    monenter " << ctx.reg_of(ins.operands[0]) << "\n";
         break;
     case IrOp::MONEXIT:
         if (!ins.operands.empty())
+            // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
+            // emitir la carga si el valor esta derramado).
+            (void)ctx.load_src(ins.operands[0], 0);
             ctx.out << "    monexit " << ctx.reg_of(ins.operands[0]) << "\n";
         break;
     case IrOp::MONWAIT:
         if (!ins.operands.empty())
+            // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
+            // emitir la carga si el valor esta derramado).
+            (void)ctx.load_src(ins.operands[0], 0);
             ctx.out << "    monwait " << ctx.reg_of(ins.operands[0]) << "\n";
         break;
     case IrOp::MONNOTI:
         if (!ins.operands.empty())
+            // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
+            // emitir la carga si el valor esta derramado).
+            (void)ctx.load_src(ins.operands[0], 0);
             ctx.out << "    monnoti " << ctx.reg_of(ins.operands[0]) << "\n";
         break;
     case IrOp::MONNOTA:
         if (!ins.operands.empty())
+            // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
+            // emitir la carga si el valor esta derramado).
+            (void)ctx.load_src(ins.operands[0], 0);
             ctx.out << "    monnota " << ctx.reg_of(ins.operands[0]) << "\n";
         break;
 
@@ -4910,6 +4990,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     // --- Coroutines / scheduler ---
     case IrOp::SPAWN: {
         if (!ins.operands.empty()) {
+            // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
+            // emitir la carga si el valor esta derramado).
+            (void)ctx.load_src(ins.operands[0], 0);
             ctx.out << "    spawn " << ctx.reg_of(ins.operands[0]) << "\n";
             if (ins.dst != IR_NO_VALUE)
                 emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), "r0");
@@ -4918,13 +5001,21 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     }
     case IrOp::RESUME:
         if (!ins.operands.empty())
+            // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
+            // emitir la carga si el valor esta derramado).
+            (void)ctx.load_src(ins.operands[0], 0);
             ctx.out << "    resume " << ctx.reg_of(ins.operands[0]) << "\n";
         break;
     case IrOp::YIELD: ctx.out << "    yield\n"; break;
     case IrOp::SWAPCTX:
         if (ins.operands.size() >= 2)
-            ctx.out << "    swapctx " << ctx.reg_of(ins.operands[0]) << ", "
-                    << ctx.reg_of(ins.operands[1]) << "\n";
+            // Recarga previa de AMBOS operandos, cada uno en su
+            // scratch: reg_of solo consulta y devolveria el
+            // mismo registro para los dos.
+            (void)ctx.load_src(ins.operands[0], 0);
+            (void)ctx.load_src(ins.operands[1], 1);
+            ctx.out << "    swapctx " << ctx.reg_at(ins.operands[0], 0) << ", "
+                    << ctx.reg_at(ins.operands[1], 1) << "\n";
         break;
 
     case IrOp::SPAWN_ARGS: {
@@ -5023,6 +5114,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         break;
     case IrOp::GETARG:
         if (ins.dst != IR_NO_VALUE && !ins.operands.empty()) {
+            // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
+            // emitir la carga si el valor esta derramado).
+            (void)ctx.load_src(ins.operands[0], 0);
             ctx.out << "    getarg " << ctx.dst_of(ins.dst) << ", "
                     << ctx.reg_of(ins.operands[0]) << "\n";
             ctx.store_spilled(ins.dst);
@@ -5030,13 +5124,23 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         break;
     case IrOp::PANIC:
         if (ins.operands.size() >= 2)
-            ctx.out << "    panic " << ctx.reg_of(ins.operands[0]) << ", "
-                    << ctx.reg_of(ins.operands[1]) << "\n";
+            // Recarga previa de AMBOS operandos, cada uno en su
+            // scratch: reg_of solo consulta y devolveria el
+            // mismo registro para los dos.
+            (void)ctx.load_src(ins.operands[0], 0);
+            (void)ctx.load_src(ins.operands[1], 1);
+            ctx.out << "    panic " << ctx.reg_at(ins.operands[0], 0) << ", "
+                    << ctx.reg_at(ins.operands[1], 1) << "\n";
         break;
     case IrOp::SPAWN_ON: {
         if (ins.operands.size() < 2) break;
-        ctx.out << "    spawnon " << ctx.reg_of(ins.operands[0]) << ", "
-                << ctx.reg_of(ins.operands[1]) << "\n";
+        // Recarga previa de AMBOS operandos, cada uno en su
+        // scratch: reg_of solo consulta y devolveria el
+        // mismo registro para los dos.
+        (void)ctx.load_src(ins.operands[0], 0);
+        (void)ctx.load_src(ins.operands[1], 1);
+        ctx.out << "    spawnon " << ctx.reg_at(ins.operands[0], 0) << ", "
+                << ctx.reg_at(ins.operands[1], 1) << "\n";
         if (ins.dst != IR_NO_VALUE)
             emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), "r0");
         break;
@@ -5054,8 +5158,13 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     // --- move-and-take (intra-thread atomic move) ---
     case IrOp::MVTAKE_IR:
         if (ins.operands.size() >= 2)
-            ctx.out << "    mvtake " << ctx.reg_of(ins.operands[0]) << ", "
-                    << ctx.reg_of(ins.operands[1]) << "\n";
+            // Recarga previa de AMBOS operandos, cada uno en su
+            // scratch: reg_of solo consulta y devolveria el
+            // mismo registro para los dos.
+            (void)ctx.load_src(ins.operands[0], 0);
+            (void)ctx.load_src(ins.operands[1], 1);
+            ctx.out << "    mvtake " << ctx.reg_at(ins.operands[0], 0) << ", "
+                    << ctx.reg_at(ins.operands[1], 1) << "\n";
         break;
 
     // --- gcfinal: registra/desregistra finalizador GC del box ---
@@ -5064,12 +5173,19 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // kind==3 (CLASS_DTOR): lleva un 2o operando = vaddr del dtor
             // concreto (dispatch estatico).  Se emite con el opcode dedicado
             // `gcfinalc r_box, r_dtor` (registra CLASS_DTOR + guarda el vaddr).
-            if (ins.imm == 3 && ins.operands.size() >= 2)
-                ctx.out << "    gcfinalc " << ctx.reg_of(ins.operands[0])
-                        << ", " << ctx.reg_of(ins.operands[1]) << "\n";
-            else
+            if (ins.imm == 3 && ins.operands.size() >= 2) {
+                // Recarga previa de AMBOS operandos, cada uno en su scratch:
+                // reg_of solo consulta y devolveria el mismo registro para los
+                // dos.
+                (void)ctx.load_src(ins.operands[0], 0);
+                (void)ctx.load_src(ins.operands[1], 1);
+                ctx.out << "    gcfinalc " << ctx.reg_at(ins.operands[0], 0)
+                        << ", " << ctx.reg_at(ins.operands[1], 1) << "\n";
+            } else {
+                (void)ctx.load_src(ins.operands[0], 0);
                 ctx.out << "    gcfinal " << ctx.reg_of(ins.operands[0]) << ", "
                         << ins.imm << "\n";
+            }
         }
         break;
 
@@ -5094,6 +5210,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (ins.dst != IR_NO_VALUE && !ins.operands.empty()) {
             // E.1: stackmap justo antes del opcode gcallocp (safepoint).
             emit_stackmap_marker(ctx, bb, idx);
+            // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
+            // emitir la carga si el valor esta derramado).
+            (void)ctx.load_src(ins.operands[0], 0);
             ctx.out << "    gcallocp " << ctx.dst_of(ins.dst) << ", "
                     << ctx.reg_of(ins.operands[0]) << "\n";
             ctx.store_spilled(ins.dst);
@@ -5103,6 +5222,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     // --- static fields: getstatic/setstatic con offset compile-time ---
     case IrOp::GETSTATIC:
         if (ins.dst != IR_NO_VALUE && !ins.operands.empty()) {
+            // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
+            // emitir la carga si el valor esta derramado).
+            (void)ctx.load_src(ins.operands[0], 0);
             ctx.out << "    getstatic " << ctx.dst_of(ins.dst) << ", "
                     << ctx.reg_of(ins.operands[0]) << ", " << ins.imm << "\n";
             ctx.store_spilled(ins.dst);
@@ -5110,8 +5232,13 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         break;
     case IrOp::SETSTATIC:
         if (ins.operands.size() >= 2)
-            ctx.out << "    setstatic " << ctx.reg_of(ins.operands[0]) << ", "
-                    << ctx.reg_of(ins.operands[1]) << ", " << ins.imm << "\n";
+            // Recarga previa de AMBOS operandos, cada uno en su
+            // scratch: reg_of solo consulta y devolveria el
+            // mismo registro para los dos.
+            (void)ctx.load_src(ins.operands[0], 0);
+            (void)ctx.load_src(ins.operands[1], 1);
+            ctx.out << "    setstatic " << ctx.reg_at(ins.operands[0], 0) << ", "
+                    << ctx.reg_at(ins.operands[1], 1) << ", " << ins.imm << "\n";
         break;
 
     // --- atomics i64 ( Z) ---
@@ -5191,8 +5318,13 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     // --- async fusion ---
     case IrOp::FULFILL_HLT:
         if (ins.operands.size() >= 2)
-            ctx.out << "    fulfillhlt " << ctx.reg_of(ins.operands[0]) << ", "
-                    << ctx.reg_of(ins.operands[1]) << "\n";
+            // Recarga previa de AMBOS operandos, cada uno en su
+            // scratch: reg_of solo consulta y devolveria el
+            // mismo registro para los dos.
+            (void)ctx.load_src(ins.operands[0], 0);
+            (void)ctx.load_src(ins.operands[1], 1);
+            ctx.out << "    fulfillhlt " << ctx.reg_at(ins.operands[0], 0) << ", "
+                    << ctx.reg_at(ins.operands[1], 1) << "\n";
         break;
 
     // --- raw_asm-elim wave 3: ops nuevos sin operandos / con imm ---
@@ -5205,7 +5337,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // op=0 (live_count) y op=1 (bytes) producen un valor en r_dst.
         // op=2 (gc_collect) es void: usamos r14 dummy como dst.
         if (ins.operands.empty()) break;
-        std::string r_op = ctx.reg_of(ins.operands[0]);
+        std::string r_op = ctx.load_src(ins.operands[0], 0);
         std::string r_dst =
             (ins.dst != IR_NO_VALUE) ? ctx.dst_of(ins.dst) : std::string("r14");
         ctx.out << "    sharedstat " << r_dst << ", " << r_op << "\n";
@@ -5224,7 +5356,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     case IrOp::RSPAWN_RETURN: {
         // mov r0, payload + hlt fusionado.  Terminator del bloque.
         if (ins.operands.empty()) break;
-        std::string r_payload = ctx.reg_of(ins.operands[0]);
+        std::string r_payload = ctx.load_src(ins.operands[0], 0);
         // emit_mov_if_needed para evitar mov r0, r0 redundante.
         if (r_payload != "r0") {
             ctx.out << "    mov r0, " << r_payload << "\n";
@@ -5351,13 +5483,15 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         emit_save_live_regs(ctx, sp_call_pos, sp_save);
         static thread_local uint64_t sp_label_seq = 0;
         const uint64_t lbl = ++sp_label_seq;
-        std::string r_ptr = ctx.reg_of(ins.operands[0]);
+        // Indices invertidos a proposito: mas abajo se emite
+        // `mov r14, r_del`, asi que r_ptr NO puede vivir en r14.
+        std::string r_ptr = ctx.load_src(ins.operands[0], 1);
         if (ins.imm == 0 && ins.operands.size() >= 2) {
             /* SRET_DISPATCH: deleter es runtime via slot+8 */
             const std::string done_lbl = "__sp_done_" + std::to_string(lbl);
             const std::string default_lbl =
                 "__sp_default_" + std::to_string(lbl);
-            std::string r_del = ctx.reg_of(ins.operands[1]);
+            std::string r_del = ctx.load_src(ins.operands[1], 0);
             ctx.out << "    cmpu " << r_ptr << ", 0\n";
             ctx.out << "    jmp.je " << done_lbl << "\n";
             ctx.out << "    cmpu " << r_del << ", 0\n";
@@ -5393,8 +5527,14 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     // --- string extra ---
     case IrOp::STRGETBYTES:
         if (ins.dst != IR_NO_VALUE && !ins.operands.empty()) {
+            // load_src y NO reg_of: reg_of es una CONSULTA -- si el valor esta
+            // derramado devuelve el registro scratch SIN emitir la recarga.
+            // Asi, el opcode leia lo que hubiera quedado en r14 (una direccion
+            // de pila, no un handle) y bytes() devolvia 0 sobre un string
+            // perfectamente valido.
+            const std::string r_str = ctx.load_src(ins.operands[0], 0);
             ctx.out << "    strgetbytes " << ctx.dst_of(ins.dst) << ", "
-                    << ctx.reg_of(ins.operands[0]) << "\n";
+                    << r_str << "\n";
             ctx.store_spilled(ins.dst);
         }
         break;
@@ -5402,6 +5542,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     // --- Meta-OOP / reflexion /  Z ---
     case IrOp::GC_HANDLE_FOR_PTR:
         if (ins.dst != IR_NO_VALUE && !ins.operands.empty()) {
+            // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
+            // emitir la carga si el valor esta derramado).
+            (void)ctx.load_src(ins.operands[0], 0);
             ctx.out << "    gchandle " << ctx.dst_of(ins.dst) << ", "
                     << ctx.reg_of(ins.operands[0]) << "\n";
             ctx.store_spilled(ins.dst);
@@ -5409,6 +5552,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         break;
     case IrOp::GC_PROMOTE:
         if (ins.dst != IR_NO_VALUE && !ins.operands.empty()) {
+            // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
+            // emitir la carga si el valor esta derramado).
+            (void)ctx.load_src(ins.operands[0], 0);
             ctx.out << "    gcpromote " << ctx.dst_of(ins.dst) << ", "
                     << ctx.reg_of(ins.operands[0]) << "\n";
             ctx.store_spilled(ins.dst);
@@ -5416,6 +5562,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         break;
     case IrOp::GC_DEMOTE:
         if (ins.dst != IR_NO_VALUE && !ins.operands.empty()) {
+            // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
+            // emitir la carga si el valor esta derramado).
+            (void)ctx.load_src(ins.operands[0], 0);
             ctx.out << "    gcdemote " << ctx.dst_of(ins.dst) << ", "
                     << ctx.reg_of(ins.operands[0]) << "\n";
             ctx.store_spilled(ins.dst);
@@ -5423,6 +5572,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         break;
     case IrOp::FINDCLASS:
         if (ins.dst != IR_NO_VALUE && !ins.operands.empty()) {
+            // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
+            // emitir la carga si el valor esta derramado).
+            (void)ctx.load_src(ins.operands[0], 0);
             ctx.out << "    findclass " << ctx.dst_of(ins.dst) << ", "
                     << ctx.reg_of(ins.operands[0]) << "\n";
             ctx.store_spilled(ins.dst);
@@ -5430,6 +5582,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         break;
     case IrOp::DEFCLASS:
         if (ins.dst != IR_NO_VALUE && !ins.operands.empty()) {
+            // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
+            // emitir la carga si el valor esta derramado).
+            (void)ctx.load_src(ins.operands[0], 0);
             ctx.out << "    defclass " << ctx.dst_of(ins.dst) << ", "
                     << ctx.reg_of(ins.operands[0]) << "\n";
             ctx.store_spilled(ins.dst);
@@ -5437,22 +5592,40 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         break;
     case IrOp::DEFFIELD:
         if (ins.operands.size() >= 2)
-            ctx.out << "    deffield " << ctx.reg_of(ins.operands[0]) << ", "
-                    << ctx.reg_of(ins.operands[1]) << "\n";
+            // Recarga previa de AMBOS operandos, cada uno en su
+            // scratch: reg_of solo consulta y devolveria el
+            // mismo registro para los dos.
+            (void)ctx.load_src(ins.operands[0], 0);
+            (void)ctx.load_src(ins.operands[1], 1);
+            ctx.out << "    deffield " << ctx.reg_at(ins.operands[0], 0) << ", "
+                    << ctx.reg_at(ins.operands[1], 1) << "\n";
         break;
     case IrOp::DEFMETHOD:
         if (ins.operands.size() >= 2)
-            ctx.out << "    defmethod " << ctx.reg_of(ins.operands[0]) << ", "
-                    << ctx.reg_of(ins.operands[1]) << "\n";
+            // Recarga previa de AMBOS operandos, cada uno en su
+            // scratch: reg_of solo consulta y devolveria el
+            // mismo registro para los dos.
+            (void)ctx.load_src(ins.operands[0], 0);
+            (void)ctx.load_src(ins.operands[1], 1);
+            ctx.out << "    defmethod " << ctx.reg_at(ins.operands[0], 0) << ", "
+                    << ctx.reg_at(ins.operands[1], 1) << "\n";
         break;
     case IrOp::ADDADVICE:
         if (ins.operands.size() >= 2) {
-            ctx.out << "    addadvice " << ctx.reg_of(ins.operands[0]) << ", "
-                    << ctx.reg_of(ins.operands[1]) << ", " << ins.imm << "\n";
+            // Recarga previa de AMBOS operandos, cada uno en su
+            // scratch: reg_of solo consulta y devolveria el
+            // mismo registro para los dos.
+            (void)ctx.load_src(ins.operands[0], 0);
+            (void)ctx.load_src(ins.operands[1], 1);
+            ctx.out << "    addadvice " << ctx.reg_at(ins.operands[0], 0) << ", "
+                    << ctx.reg_at(ins.operands[1], 1) << ", " << ins.imm << "\n";
         }
         break;
     case IrOp::FINDMETHOD:
         if (ins.dst != IR_NO_VALUE && !ins.operands.empty()) {
+            // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
+            // emitir la carga si el valor esta derramado).
+            (void)ctx.load_src(ins.operands[0], 0);
             ctx.out << "    findmethod " << ctx.dst_of(ins.dst) << ", "
                     << ctx.reg_of(ins.operands[0]) << "\n";
             ctx.store_spilled(ins.dst);
@@ -5460,6 +5633,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         break;
     case IrOp::FINDFIELD:
         if (ins.dst != IR_NO_VALUE && !ins.operands.empty()) {
+            // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
+            // emitir la carga si el valor esta derramado).
+            (void)ctx.load_src(ins.operands[0], 0);
             ctx.out << "    findfield " << ctx.dst_of(ins.dst) << ", "
                     << ctx.reg_of(ins.operands[0]) << "\n";
             ctx.store_spilled(ins.dst);
@@ -5469,8 +5645,13 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // setmethdbg r_method, r_params -> registra debug info (file:line)
         // del MethodInfo* en r_method usando SetMethDebugParams en r_params.
         if (ins.operands.size() >= 2)
-            ctx.out << "    setmethdbg " << ctx.reg_of(ins.operands[0]) << ", "
-                    << ctx.reg_of(ins.operands[1]) << "\n";
+            // Recarga previa de AMBOS operandos, cada uno en su
+            // scratch: reg_of solo consulta y devolveria el
+            // mismo registro para los dos.
+            (void)ctx.load_src(ins.operands[0], 0);
+            (void)ctx.load_src(ins.operands[1], 1);
+            ctx.out << "    setmethdbg " << ctx.reg_at(ins.operands[0], 0) << ", "
+                    << ctx.reg_at(ins.operands[1], 1) << "\n";
         break;
     case IrOp::CALLSUPER: {
         // Signature: operands[0] = v_cls (ClassInfo* host_ptr del super),
