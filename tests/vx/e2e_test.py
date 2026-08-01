@@ -2760,6 +2760,7 @@ r0_case("panic_modulo_importado", "enlace: modulo importado con panic() + global
 # Sin AOT: capturar con try/catch exige el desenrollado nativo de
 # excepciones, que sigue pendiente (el binario nativo aborta en vez de
 # entrar al handler).  En interprete y JIT el FatalError si se captura.
+r0_case("comptime_literal_import", "std.comptime.literal cross-module: parse de un entero en compile-time", "348_comptime_literal_import.vx", 42)
 r0_case("div_cero_detiene", "una division por cero detiene el proceso; capturada es un FatalError", "347_div_cero_detiene.vx", 42)
 modes3_case("optional_struct", "Optional<T> con T = struct por valor (payload dimensionado + copia)", "346_optional_struct.vx", 42)
 r0_case("cme299", "captura expr CROSS-MODULO (src(expr) en otro modulo, DSL crudo)", "299_cross_module_expr.vx", 42, line=3709)

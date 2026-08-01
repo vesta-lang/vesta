@@ -1,0 +1,26 @@
+/**
+ * @file 348_comptime_literal_import.vx
+ * @brief `std.comptime.literal` cruzando el modulo: parsear un entero en
+ *        tiempo de compilacion.
+ *
+ * `parse_int_lit` devuelve un `IntLit` -- un struct con un buffer `unique` de
+ * palabras de 64 bits -- desde una funcion `comptime`, y el consumidor le llama
+ * un metodo.  Es la base de los enteros de ancho arbitrario, asi que conviene
+ * que no se rompa en silencio al cruzar el modulo.
+ *
+ * Dos detalles que este caso fija, ambos comprobados:
+ *   - el import lleva la LISTA de simbolos (`only`).  Con un import de
+ *     namespace completo el tipo llega pero sin sus metodos, y usarlo da
+ *     "IntLit no tiene un metodo word".
+ *   - la llamada encadenada va dentro de una funcion `comptime`.  Escrita
+ *     directamente en el init de un `comptime const`, el evaluador de
+ *     compile-time la rechaza por "no comptime-evaluable": solo enruta a la
+ *     maquina virtual las llamadas cuyo destino es un nombre suelto, y
+ *     `parse_int_lit(s).word(0)` tiene por destino un acceso a miembro.
+ */
+import std.comptime.literal only IntLit, parse_int_lit;
+comptime u64 w0_of(string s) { return parse_int_lit(s).word(0); }
+i32 main() {
+    comptime const u64 W = w0_of("42");
+    return (i32) W;
+}
