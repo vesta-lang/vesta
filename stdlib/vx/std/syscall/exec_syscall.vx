@@ -1,36 +1,28 @@
 namespace std.syscall;
 
 /**
- * Para realizar una syscall se debe ejecutar una de las siguientes 
- * instrucciones en las equivalentes ISA's:
+ * Modulo publico del subsistema de syscalls.  Re-exporta la implementacion del
+ * OS activo (linux/windows via @Target) y los tipos base (std.syscall.abi).
+ *
+ * Para realizar una syscall se ejecuta la instruccion de cada ISA:
  *      - x86_64     -> syscall
  *      - x86        -> sysenter / int 0x80
  *      - ARM64      -> svc #0
  *      - RISC-V     -> ecall
+ *
+ * Los tipos base (syscall_id, invoke_syscall, resolve_syscall) viven en
+ * std.syscall.abi -- un modulo que NO importa a las implementaciones -- para
+ * romper el ciclo exec_syscall -> linux -> exec_syscall.  Es el patron estandar
+ * de un compilador con compilacion incremental por modulo (como Go: paquete
+ * base con los tipos compartidos).
  */
+
+// Re-exporta los tipos base para que `import std.syscall only syscall_id`
+// siga funcionando desde el modulo publico.
+public import std.syscall.abi;
 
 @Target("!os:windows")
 import std.syscall.linux;
 
 @Target("os:windows")
 import std.syscall.windows;
-
-
-import std.types only size_t;
-
-import std.comptime only source, inject;
-
-/**
- * Tipo que representa el ID de una syscall del sistema.
- * 
- * El tamaño de una syscall ID depende del tamaño de registro de la CPU y de la
- * convencion en esa ISA.
- * 
- * size_t tiene un tamaño equivalente al tamaño de palabra de la CPU, esto
- * quiere decir que en 64bits size_t son 8 bytes o 64bits, mientras que en
- * 16bits sera un tipo de 2 bytes.
- */
-public typedef size_t syscall_id new;
-
-public typedef cfn(syscall_id) -> usize invoke_syscall;
-

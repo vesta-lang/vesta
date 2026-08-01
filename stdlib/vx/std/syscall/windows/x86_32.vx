@@ -1,15 +1,34 @@
-namespace std.syscall.windows.types;
+namespace std.syscall.windows.x86_32;
+
+import std.syscall.abi only syscall_id;
+import std.types only size_t, usize;
 
 /**
- * Ejecuta una syscall y devuelve el valor en EAX como manda la convencion.
+ * Ejecuta una syscall nativa de Windows x86-32 (NT).  A diferencia de x86-64
+ * (numero de servicio en RAX + primeros argumentos en R10/RDX/R8/R9), la ABI NT
+ * de 32 bits pasa el numero de servicio en EAX y los ARGUMENTOS POR PILA (EDX
+ * apunta al primer argumento), y el gate al kernel varia segun el entorno:
+ *   - 32-bit nativo:  `sysenter` (via KiFastSystemCall) o el clasico `int 0x2e`.
+ *   - WOW64 (32-bit sobre un Windows de 64 bits):  `call dword ptr fs:[0xC0]`.
+ *
+ * TODO: implementar la convencion real de 32 bits (gate + paso de argumentos por
+ * pila).  Stub passthrough por ahora -- este modulo solo se compila bajo
+ * @Target("arch:x86 && os:windows"), que no es el target activo.
  */
-@Naked
 public size_t invoke(syscall_id id) {
-    asm(
-        reg p = id_call,   // in: syscall ID
-    ) {
-        mov eax, p
-        int 0x80
-        ret
-    }
+    return 0;
+}
+
+/**
+ * Resolutor perezoso del numero de servicio NT para x86-32.  Como en x86-64,
+ * los numeros de servicio de Windows no son estables entre versiones y hay que
+ * localizarlos recorriendo ntdll; el paseo del PEB usa offsets y ancho de
+ * puntero de 32 bits (PEB en fs:[0x30], punteros de 4 bytes) y el stub codifica
+ * el SSN de forma distinta al de x86-64.  Recibe el puntero al
+ * syscall_ctx_invoke (como usize) y actualiza su campo `id`.
+ *
+ * TODO: implementar el paseo real de ntdll de 32 bits (stub passthrough).
+ */
+public usize resolve(usize ctx) {
+    return 0;
 }

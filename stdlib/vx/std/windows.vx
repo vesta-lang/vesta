@@ -3,17 +3,22 @@ namespace std.windows;
 import std.ctypes only int, short_int, long_int, long_long,
                       unsigned_char, unsigned_short_int, unsigned_int,
                       unsigned_long_int, unsigned_long_long;
+
+// Tipos base NT compartidos con std.syscall: se definen UNA sola vez en
+// std.ntwindows y se re-exportan aqui.  Asi no se duplican -- un consumidor que
+// importe a la vez std.windows y std.ntwindows (o std.syscall.windows, que
+// tambien los re-exporta) recibe el mismo simbolo, sin error de redefinicion.
+public import std.ntwindows only ULONG, LONG, USHORT, UCHAR, PVOID, HANDLE,
+                                 SIZE_T, PHANDLE, PULONG, ACCESS_MASK,
+                                 PWSTR;
+
 const u16 PATH_MAX = 260;
 
 typedef int                 BOOL;
 typedef char                CHAR;
 typedef short_int               SHORT;
 typedef int                 INT;
-typedef long_int                LONG;
-typedef u8                  UCHAR;
-typedef u16                 USHORT;
 typedef u32                 UINT;
-typedef u32                 ULONG;
 typedef u8                  BYTE;
 typedef u8                  BOOLEAN;      // Win32: un byte (0/1)
 typedef u16                 WORD;
@@ -33,7 +38,6 @@ typedef i64                 INT64;
 typedef u64                 DWORDLONG;
 
 typedef CHAR *              PCHAR;
-typedef ULONG *             PULONG;
 typedef ULONG64 *           PULONG64;
 typedef DWORD64 *           PDWORD64;
 
@@ -41,7 +45,6 @@ typedef double              LONGLONG;
 typedef double              ULONGLONG;
 
 typedef void                VOID;
-typedef void *              PVOID;
 typedef void *              LPVOID;
 typedef BOOL *              PBOOL;
 typedef BOOL *              LPBOOL;
@@ -50,17 +53,14 @@ typedef LONG *              PLONG;
 typedef LONG *              LPLONG;
 typedef DWORD *             PDWORD;
 
-typedef LPVOID              HANDLE;
 typedef HANDLE              HINSTANCE;
 typedef HANDLE              HWND;
 typedef HINSTANCE           HMODULE;
 typedef HANDLE              HDC;
 typedef HANDLE              HGLRC;
 typedef HANDLE              HMENU;
-typedef HANDLE *            PHANDLE;
 typedef HANDLE *            LPHANDLE;
 
-typedef WCHAR *             PWSTR;
 typedef BYTE *              LPBYTE;
 typedef DWORD *             LPDWORD;
 typedef void *              LPCVOID;
@@ -88,7 +88,6 @@ typedef u64                 ULONG_PTR;
 typedef ULONG_PTR           DWORD_PTR;
 typedef DWORD_PTR *         PDWORD_PTR;
 
-typedef ULONG_PTR           SIZE_T;
 typedef LONG_PTR            SSIZE_T;
 
 typedef CHAR *              LPSTR;
@@ -108,7 +107,6 @@ typedef LPWSTR              LPTSTR;
 //typedef LPSTR               LPTSTR;
 //#endif
 
-typedef DWORD               ACCESS_MASK;
 typedef ACCESS_MASK *       PACCESS_MASK;
 
 typedef HANDLE              HICON;

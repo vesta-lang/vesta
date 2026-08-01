@@ -1,20 +1,43 @@
 namespace std.syscall.windows.x86_64;
 
+import std.syscall.abi only syscall_id;
+import std.types only size_t, usize;
+
 /**
- * Ejecuta una syscall nativa de Windows.
- *
- * Según la ABI de Windows x64, antes de ejecutar SYSCALL el registro
- * RCX debe copiarse a R10, ya que el procesador sobrescribe RCX
- * durante la transición al kernel.
+ * Ejecuta una syscall nativa de Windows x86-64 (NT).  La CONVENCION NT vive
+ * aqui: el numero de servicio en RAX y los argumentos en R10/RDX/R8/R9 (los 4
+ * primeros; el resto por pila).  Difiere de Linux en el PRIMER argumento (R10
+ * en vez de RDI, porque `syscall` machaca RCX -- por eso la ABI NT recibe el
+ * primer argumento en R10 directamente, sin el clasico `mov r10, rcx`).  Un
+ * envoltorio castea `invoke` a un `cfn` con solo los argumentos que esa syscall
+ * usa (aridad/tipos/orden); el compilador toma los primeros N registros de esta
+ * firma e INLINA la llamada -- emite solo los movimientos justos (los argumentos
+ * no pasados se eliminan).  Sin `ret` en el asm (usa `return`) para permitir el
+ * inline.
  */
-@Naked
-public size_t invoke(syscall_id id) {
-    asm(
-        reg p = id_call,   // in: syscall ID
-    ) {
-        mov r10, rcx
-        mov rax, p
-        syscall
-        ret
-    }
+public size_t invoke(register("rax") syscall_id id,
+                     register("r10") size_t a1, register("rdx") size_t a2,
+                     register("r8")  size_t a3, register("r9")  size_t a4) {
+    asm { syscall }
+    return (size_t) id;   // RAX tras el syscall = resultado
+}
+
+/**
+ * Punto de extension para un resolutor del NUMERO DE SERVICIO NT especifico de
+ * x86-64, destinado a rellenar el campo `id` del contexto y ejecutar la syscall
+ * con `invoke` (arriba).
+ *
+ * NO es el resolutor por defecto: el que usa la libreria es
+ * `std.syscall.windows.resolve_ntdll_export`, que localiza el export a traves
+ * del cargador.  Se prefiere porque la resolucion por nombre no depende de la
+ * arquitectura y porque sobrevive a los cambios entre versiones de Windows --
+ * la convencion NT, la forma de los stubs y el entorno (WOW64, Arm64EC) han
+ * variado entre builds, mientras que el nombre exportado es estable.
+ *
+ * Queda como hueco deliberado: el par (resolve_method, invoke_method) del
+ * contexto es reasignable, de modo que quien necesite un esquema distinto puede
+ * enchufar el suyo sin tocar la libreria.
+ */
+public usize resolve(usize ctx) {
+    return 0;
 }

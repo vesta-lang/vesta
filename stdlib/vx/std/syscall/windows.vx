@@ -1,78 +1,420 @@
 namespace std.syscall.windows;
 
-import std.syscall only invoke_syscall, syscall_id;
+import std.syscall.abi only invoke_syscall, syscall_id, resolve_syscall;
 
-import std.types only nullptr;
+import std.types only nullptr, usize;
 
 @Target("arch:x86_64 && os:windows")
-import std.syscall.windows.x86_64 only invoke;
+public import std.syscall.windows.x86_64 only *;
 
-@Target("arch:x86_32 && os:windows")
-import std.syscall.windows.x86_32 only invoke;
+@Target("arch:x86 && os:windows")
+public import std.syscall.windows.x86_32 only *;
+
+// Re-exporta los tipos de la NT API (ULONG, HANDLE, PROCESSOR_NUMBER, ...).
+// Viven en std.ntwindows (al nivel de std, junto a std.windows) porque son
+// tipos de la API de Windows en general, no propios del subsistema de syscalls;
+// ademas ese modulo NO importa a las implementaciones por-arch, lo que rompe el
+// ciclo windows -> arch -> windows.  Al re-importarlos aqui, basta con
+// `import std.syscall.windows` para disponer tanto de los envoltorios NT como
+// de sus tipos.
+public import std.ntwindows;
+
+// Resolutor por defecto.  Vive en un modulo HOJA (solo depende de std.types)
+// para dos cosas: no recrear el ciclo windows -> arch -> windows, y quedar
+// disponible a las dos arquitecturas sin duplicarlo.  Se re-exporta para que el
+// usuario pueda referenciarlo al componer su propio contexto.
+public import std.syscall.windows.ntdll only resolve_ntdll_export;
+
+// ===================================================================
+// Contexto de invocacion de una syscall NT.
+//
+// A diferencia de Linux, los numeros de servicio de Windows NO son
+// estables entre versiones del SO: hay que RESOLVERLOS en tiempo de
+// ejecucion.  El nombre de la syscall solo existe en tiempo de
+// compilacion (campo `comptime`) y se reduce a un HASH que el resolutor
+// usa para localizar el numero de servicio real (recorriendo ntdll).
+// ===================================================================
 
 public struct syscall_ctx_invoke {
     /**
-     * El metodo de invocacion de syscall es administrado por la libreria,
-     * pero el usuario puede personalizar este metodo de invocacion a uno 
-     * alternativo si fuera necesario.
+     * Metodo de invocacion de la syscall.  Lo administra la libreria,
+     * pero el usuario puede reasignarlo a una implementacion alternativa
+     * (p.ej. para hooking o para una convencion distinta).
      */
     invoke_syscall invoke_method = invoke;
 
     /**
-     * En windows la syscalls cambian entre versiones, es necesario
-     * obtenerlas de forma dinamica en run time.
-     * 
-     * La funcion recibe un puntero de tipo "syscall_ctx_invoke" que
-     * contiene la informacion que necesita la syscall para ser resuelta
-     * y llamada, al tener cada syscall su propia "syscall_ctx_invoke", 
-     * cada syscall puede resolverse y ejecutarse de formas distintas.
+     * Resolutor perezoso del objetivo.  En Windows nada es estable entre
+     * versiones del SO -- ni los numeros de servicio ni la forma de los
+     * stubs -- asi que cada contexto se resuelve por separado.  Recibe el
+     * nombre del export (como usize) y devuelve el objetivo; el envoltorio lo
+     * cachea.  Reasignable: quien necesite otro esquema enchufa el suyo.
      */
-    resolve_syscall resolve_method = resolve;
+    resolve_syscall resolve_method = resolve_ntdll_export;
 
     /**
-     * ID syscall a resolver de forma lazy.
+     * Numero de servicio resuelto de forma perezosa.  0 = sin resolver.
+     * Lo rellena un resolutor que trabaje a nivel de ISA (ejecutando la
+     * instruccion de syscall); el resolutor por defecto no lo usa.
      */
     syscall_id id = 0;
 
     /**
-     * Hash obtenido a traves de name_syscall en time-compile
+     * Direccion del objetivo resuelto de forma perezosa.  null = sin resolver.
+     *
+     * Con el par por defecto guarda la DIRECCION del export de ntdll: el
+     * envoltorio la castea al `cfn` de su firma concreta y la llama.  Se
+     * mantiene aparte de `id` para que ambos esquemas -- llamada al export y
+     * ejecucion directa por numero de servicio -- puedan coexistir.
+     */
+    void* target = null;
+
+    /**
+     * Hash del nombre de la syscall, calculado en tiempo de compilacion.
+     * El resolutor lo compara contra el hash de cada export `Nt*`/`Zw*`
+     * de ntdll para localizar el numero de servicio sin llevar el nombre
+     * en texto plano al binario.
      */
     u64 hash = 0;
 
     /**
-     * Nombre de la syscall en tiempo de compilacion, este campo no existe
-     * en run time y solo se usa para generar el hash de la syscall en windows
-     * que se usa para resolver de forma lazy la syscall ID.
+     * Nombre de la syscall EN TIEMPO DE COMPILACION.  Campo `comptime`:
+     * no ocupa espacio en la instancia runtime ni se serializa; solo lo
+     * consume el constructor comptime para derivar `hash`.
      */
     comptime char* name_syscall = nullptr;
 
     /**
-     * Constructor publico de inicializacion de syscall
+     * Constructor comptime: fija el nombre y deriva su hash.  El nombre solo
+     * vive en compile-time; el resolutor por defecto recibe el suyo en el punto
+     * de resolucion (un literal en contexto `string`, que si materializa un
+     * cstring host valido para la API nativa).
      */
     public comptime syscall_ctx_invoke(char* name_syscall) {
         this.name_syscall = name_syscall;
-        hash = 0; /*hash(name_syscall)*/// calcular hash
+        this.hash = 0; // TODO: hash comptime del nombre (fnv1a)
     }
 };
 
-
-ULONG KeGetCurrentProcessorNumberEx(
-  /* [out, optional] */
-  PPROCESSOR_NUMBER ProcNumber
-) {
-    static syscall_ctx_invoke ctx = 
+/**
+ * Numero del procesador logico actual.
+ */
+public ULONG KeGetCurrentProcessorNumberEx(PPROCESSOR_NUMBER ProcNumber) {
+    static syscall_ctx_invoke ctx =
         syscall_ctx_invoke("NtGetCurrentProcessorNumberEx");
-    ctx.resolve(&ctx);
-    
-    // ctx.invoke_method(ProcNumber);
-    return (
-        (cfn(syscall_id, PROCESSOR_NUMBER)->u64)(ctx.invoke_method)
-    )(ctx.id, ProcNumber);
+    if (ctx.target == null) {
+        ctx.target =
+            ctx.resolve_method("NtGetCurrentProcessorNumberEx"); // 1 sola vez.
+    }
+    return ((cfn(PPROCESSOR_NUMBER) -> ULONG)(ctx.target))(ProcNumber);
 }
 
-ULONG NtGetCurrentProcessorNumberEx(
-  /* [out, optional] */
-  PPROCESSOR_NUMBER ProcNumber
-) {
+/**
+ * Alias Nt* de la syscall anterior.
+ */
+public ULONG NtGetCurrentProcessorNumberEx(PPROCESSOR_NUMBER ProcNumber) {
     return KeGetCurrentProcessorNumberEx(ProcNumber);
+}
+
+// ===================================================================
+// Pseudo-handle del proceso actual.
+// ===================================================================
+
+/**
+ * Pseudo-handle del proceso actual: la constante -1 que la NT API acepta en
+ * cualquier parametro `ProcessHandle` sin necesidad de abrir un handle real.
+ *
+ * @return Handle valido para las syscalls de memoria de este proceso.
+ */
+public HANDLE NtCurrentProcess() {
+    return (void*) 0xFFFFFFFFFFFFFFFF;
+}
+
+// ===================================================================
+// Memoria virtual.
+// ===================================================================
+
+/**
+ * Reserva y/o confirma un rango de memoria virtual.
+ *
+ * Las constantes de `AllocationType` (MEM_RESERVE, MEM_COMMIT) y de `Protect`
+ * (PAGE_READWRITE, ...) viven en std.windows.
+ *
+ * @param ProcessHandle  Proceso destino (NtCurrentProcess() para el propio).
+ * @param BaseAddress    [in/out] Direccion deseada, o null para que la elija el
+ *                       sistema; a la vuelta, la direccion real.
+ * @param ZeroBits       Bits altos que deben ser cero en la direccion; 0 = sin
+ *                       restriccion.
+ * @param RegionSize     [in/out] Tamano pedido; a la vuelta, redondeado a
+ *                       pagina.
+ * @param AllocationType MEM_RESERVE, MEM_COMMIT o su combinacion.
+ * @param Protect        Proteccion de las paginas (PAGE_*).
+ * @return STATUS_SUCCESS (0), o un NTSTATUS negativo.
+ */
+public NTSTATUS NtAllocateVirtualMemory(HANDLE ProcessHandle,
+                                        PPVOID BaseAddress, SIZE_T ZeroBits,
+                                        PSIZE_T RegionSize,
+                                        ULONG AllocationType, ULONG Protect) {
+    static syscall_ctx_invoke ctx =
+        syscall_ctx_invoke("NtAllocateVirtualMemory");
+    if (ctx.target == null) {
+        ctx.target = ctx.resolve_method("NtAllocateVirtualMemory");
+    }
+    return ((cfn(HANDLE, PPVOID, SIZE_T, PSIZE_T, ULONG, ULONG)
+                 -> NTSTATUS)(ctx.target))(ProcessHandle, BaseAddress, ZeroBits,
+                                           RegionSize, AllocationType, Protect);
+}
+
+/**
+ * Libera (MEM_RELEASE) o descompromete (MEM_DECOMMIT) memoria virtual.
+ *
+ * Con MEM_RELEASE el tamano debe ser 0 y la direccion la que devolvio
+ * NtAllocateVirtualMemory: se libera el rango entero.
+ *
+ * @param ProcessHandle Proceso destino.
+ * @param BaseAddress   [in/out] Direccion base del rango.
+ * @param RegionSize    [in/out] Tamano; 0 con MEM_RELEASE.
+ * @param FreeType      MEM_RELEASE o MEM_DECOMMIT.
+ * @return STATUS_SUCCESS (0), o un NTSTATUS negativo.
+ */
+public NTSTATUS NtFreeVirtualMemory(HANDLE ProcessHandle, PPVOID BaseAddress,
+                                    PSIZE_T RegionSize, ULONG FreeType) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke("NtFreeVirtualMemory");
+    if (ctx.target == null) {
+        ctx.target = ctx.resolve_method("NtFreeVirtualMemory");
+    }
+    return ((cfn(HANDLE, PPVOID, PSIZE_T, ULONG) -> NTSTATUS)(ctx.target))(
+        ProcessHandle, BaseAddress, RegionSize, FreeType);
+}
+
+/**
+ * Cambia la proteccion de un rango de memoria ya confirmado.  Es la syscall
+ * que necesita el codigo generado en tiempo de ejecucion para pasar una
+ * pagina de escribible a ejecutable.
+ *
+ * @param ProcessHandle Proceso destino.
+ * @param BaseAddress   [in/out] Direccion base; a la vuelta, alineada a pagina.
+ * @param RegionSize    [in/out] Tamano; a la vuelta, redondeado a pagina.
+ * @param NewProtect    Nueva proteccion (PAGE_*).
+ * @param OldProtect    [out] Proteccion anterior.  Obligatorio: no admite null.
+ * @return STATUS_SUCCESS (0), o un NTSTATUS negativo.
+ */
+public NTSTATUS NtProtectVirtualMemory(HANDLE ProcessHandle,
+                                       PPVOID BaseAddress, PSIZE_T RegionSize,
+                                       ULONG NewProtect, PULONG OldProtect) {
+    static syscall_ctx_invoke ctx =
+        syscall_ctx_invoke("NtProtectVirtualMemory");
+    if (ctx.target == null) {
+        ctx.target = ctx.resolve_method("NtProtectVirtualMemory");
+    }
+    return ((cfn(HANDLE, PPVOID, PSIZE_T, ULONG, PULONG) -> NTSTATUS)(
+        ctx.target))(ProcessHandle, BaseAddress, RegionSize, NewProtect,
+                     OldProtect);
+}
+
+// ===================================================================
+// I/O sobre handles ya abiertos.
+// ===================================================================
+
+/**
+ * Cierra un handle del kernel.  Sirve para cualquier objeto: fichero, evento,
+ * seccion, proceso.
+ *
+ * @param Handle Handle a cerrar.
+ * @return STATUS_SUCCESS (0), o un NTSTATUS negativo.
+ */
+public NTSTATUS NtClose(HANDLE Handle) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke("NtClose");
+    if (ctx.target == null) {
+        ctx.target = ctx.resolve_method("NtClose");
+    }
+    return ((cfn(HANDLE) -> NTSTATUS)(ctx.target))(Handle);
+}
+
+/**
+ * Escribe en un fichero o dispositivo.
+ *
+ * Para una escritura sincrona se pasan a null los parametros de completado
+ * asincrono (Event, ApcRoutine, ApcContext) y el handle debe haberse abierto
+ * como sincrono.  Los bytes escritos quedan en `IoStatusBlock.Information`.
+ *
+ * @param FileHandle    Handle del fichero o dispositivo.
+ * @param Event         Evento a senalar al completar, o null.
+ * @param ApcRoutine    Rutina APC de completado, o null.
+ * @param ApcContext    Contexto de la APC, o null.
+ * @param IoStatusBlock [out] Estado y bytes escritos.
+ * @param Buffer        Datos a escribir (memoria host).
+ * @param Length        Numero de bytes.
+ * @param ByteOffset    Desplazamiento absoluto, o null para la posicion actual.
+ * @param Key           Clave de bloqueo, o null.
+ * @return STATUS_SUCCESS (0), o un NTSTATUS negativo.
+ */
+public NTSTATUS NtWriteFile(HANDLE FileHandle, HANDLE Event, PVOID ApcRoutine,
+                            PVOID ApcContext, PIO_STATUS_BLOCK IoStatusBlock,
+                            PVOID Buffer, ULONG Length,
+                            PLARGE_INTEGER ByteOffset, PULONG Key) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke("NtWriteFile");
+    if (ctx.target == null) {
+        ctx.target = ctx.resolve_method("NtWriteFile");
+    }
+    return ((cfn(HANDLE, HANDLE, PVOID, PVOID, PIO_STATUS_BLOCK, PVOID, ULONG,
+                 PLARGE_INTEGER, PULONG) -> NTSTATUS)(ctx.target))(
+        FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, Buffer,
+        Length, ByteOffset, Key);
+}
+
+/**
+ * Lee de un fichero o dispositivo.  Misma convencion que NtWriteFile; los
+ * bytes leidos quedan en `IoStatusBlock.Information`.
+ *
+ * @param FileHandle    Handle del fichero o dispositivo.
+ * @param Event         Evento a senalar al completar, o null.
+ * @param ApcRoutine    Rutina APC de completado, o null.
+ * @param ApcContext    Contexto de la APC, o null.
+ * @param IoStatusBlock [out] Estado y bytes leidos.
+ * @param Buffer        Destino de los datos (memoria host).
+ * @param Length        Capacidad del buffer en bytes.
+ * @param ByteOffset    Desplazamiento absoluto, o null para la posicion actual.
+ * @param Key           Clave de bloqueo, o null.
+ * @return STATUS_SUCCESS (0), o un NTSTATUS negativo.
+ */
+public NTSTATUS NtReadFile(HANDLE FileHandle, HANDLE Event, PVOID ApcRoutine,
+                           PVOID ApcContext, PIO_STATUS_BLOCK IoStatusBlock,
+                           PVOID Buffer, ULONG Length,
+                           PLARGE_INTEGER ByteOffset, PULONG Key) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke("NtReadFile");
+    if (ctx.target == null) {
+        ctx.target = ctx.resolve_method("NtReadFile");
+    }
+    return ((cfn(HANDLE, HANDLE, PVOID, PVOID, PIO_STATUS_BLOCK, PVOID, ULONG,
+                 PLARGE_INTEGER, PULONG) -> NTSTATUS)(ctx.target))(
+        FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, Buffer,
+        Length, ByteOffset, Key);
+}
+
+/**
+ * Fuerza el volcado a disco de los buffers de un fichero.
+ *
+ * @param FileHandle    Handle del fichero.
+ * @param IoStatusBlock [out] Estado de la operacion.
+ * @return STATUS_SUCCESS (0), o un NTSTATUS negativo.
+ */
+public NTSTATUS NtFlushBuffersFile(HANDLE FileHandle,
+                                   PIO_STATUS_BLOCK IoStatusBlock) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke("NtFlushBuffersFile");
+    if (ctx.target == null) {
+        ctx.target = ctx.resolve_method("NtFlushBuffersFile");
+    }
+    return ((cfn(HANDLE, PIO_STATUS_BLOCK) -> NTSTATUS)(ctx.target))(
+        FileHandle, IoStatusBlock);
+}
+
+// ===================================================================
+// Apertura y creacion de ficheros.
+// ===================================================================
+
+/**
+ * Inicializa un UNICODE_STRING a partir de una cadena UTF-16 NUL-terminada
+ * (export de ntdll con el mismo nombre).  Calcula `Length` y `MaximumLength`
+ * recorriendo el buffer hasta el terminador.
+ *
+ * @param DestinationString [out] UNICODE_STRING a rellenar.
+ * @param SourceString      Cadena UTF-16 NUL-terminada, o null.
+ */
+public void RtlInitUnicodeString(PUNICODE_STRING DestinationString,
+                                 PWSTR SourceString) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke("RtlInitUnicodeString");
+    if (ctx.target == null) {
+        ctx.target = ctx.resolve_method("RtlInitUnicodeString");
+    }
+    ((cfn(PUNICODE_STRING, PWSTR) -> void)(ctx.target))(DestinationString,
+                                                        SourceString);
+}
+
+/**
+ * Rellena un OBJECT_ATTRIBUTES (macro homonima de ntdef.h).  No es una
+ * syscall: la NT API la define como macro y aqui es una funcion normal.
+ *
+ * @param InitializedAttributes [out] Estructura a rellenar.
+ * @param ObjectName            Nombre del objeto, ya en formato NT.
+ * @param Attributes            OBJ_* (p.ej. OBJ_CASE_INSENSITIVE).
+ * @param RootDirectory         Directorio base, o null si el nombre es absoluto.
+ * @param SecurityDescriptor    Descriptor de seguridad, o null.
+ */
+public void InitializeObjectAttributes(POBJECT_ATTRIBUTES InitializedAttributes,
+                                       PUNICODE_STRING ObjectName,
+                                       ULONG Attributes, HANDLE RootDirectory,
+                                       PVOID SecurityDescriptor) {
+    // `Length` debe valer el tamano real de la estructura: la syscall lo usa
+    // para validar la version del descriptor.  Se toma con sizeof, no a mano.
+    (*InitializedAttributes).Length = (u32) sizeof<OBJECT_ATTRIBUTES>();
+    (*InitializedAttributes).RootDirectory = RootDirectory;
+    (*InitializedAttributes).ObjectName = ObjectName;
+    (*InitializedAttributes).Attributes = Attributes;
+    (*InitializedAttributes).SecurityDescriptor = SecurityDescriptor;
+    (*InitializedAttributes).SecurityQualityOfService = (void*) 0;
+}
+
+/**
+ * Crea o abre un fichero o dispositivo.
+ *
+ * El nombre va en `ObjectAttributes` en formato NT, no DOS: una ruta como
+ * `C:\dir\f.txt` se escribe `\??\C:\dir\f.txt`.
+ *
+ * @param FileHandle        [out] Handle resultante.
+ * @param DesiredAccess     GENERIC_* | SYNCHRONIZE (de std.windows).
+ * @param ObjectAttributes  Descriptor con el nombre del fichero.
+ * @param IoStatusBlock     [out] Estado y accion realizada.
+ * @param AllocationSize    Tamano inicial, o null.
+ * @param FileAttributes    FILE_ATTRIBUTE_* (de std.windows).
+ * @param ShareAccess       FILE_SHARE_* (de std.windows).
+ * @param CreateDisposition FILE_OPEN, FILE_CREATE, FILE_OVERWRITE_IF, ...
+ * @param CreateOptions     FILE_SYNCHRONOUS_IO_NONALERT, ...
+ * @param EaBuffer          Atributos extendidos, o null.
+ * @param EaLength          Tamano de EaBuffer.
+ * @return STATUS_SUCCESS (0), o un NTSTATUS negativo.
+ */
+public NTSTATUS NtCreateFile(PHANDLE FileHandle, ACCESS_MASK DesiredAccess,
+                             POBJECT_ATTRIBUTES ObjectAttributes,
+                             PIO_STATUS_BLOCK IoStatusBlock,
+                             PLARGE_INTEGER AllocationSize,
+                             ULONG FileAttributes, ULONG ShareAccess,
+                             ULONG CreateDisposition, ULONG CreateOptions,
+                             PVOID EaBuffer, ULONG EaLength) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke("NtCreateFile");
+    if (ctx.target == null) {
+        ctx.target = ctx.resolve_method("NtCreateFile");
+    }
+    return ((cfn(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
+                 PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG)
+                 -> NTSTATUS)(ctx.target))(
+        FileHandle, DesiredAccess, ObjectAttributes, IoStatusBlock,
+        AllocationSize, FileAttributes, ShareAccess, CreateDisposition,
+        CreateOptions, EaBuffer, EaLength);
+}
+
+/**
+ * Abre un fichero o dispositivo ya existente.  Version reducida de
+ * NtCreateFile para cuando no hace falta crear.
+ *
+ * @param FileHandle       [out] Handle resultante.
+ * @param DesiredAccess    GENERIC_* | SYNCHRONIZE (de std.windows).
+ * @param ObjectAttributes Descriptor con el nombre en formato NT.
+ * @param IoStatusBlock    [out] Estado de la operacion.
+ * @param ShareAccess      FILE_SHARE_* (de std.windows).
+ * @param OpenOptions      FILE_SYNCHRONOUS_IO_NONALERT, ...
+ * @return STATUS_SUCCESS (0), o un NTSTATUS negativo.
+ */
+public NTSTATUS NtOpenFile(PHANDLE FileHandle, ACCESS_MASK DesiredAccess,
+                           POBJECT_ATTRIBUTES ObjectAttributes,
+                           PIO_STATUS_BLOCK IoStatusBlock, ULONG ShareAccess,
+                           ULONG OpenOptions) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke("NtOpenFile");
+    if (ctx.target == null) {
+        ctx.target = ctx.resolve_method("NtOpenFile");
+    }
+    return ((cfn(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
+                 ULONG, ULONG) -> NTSTATUS)(ctx.target))(
+        FileHandle, DesiredAccess, ObjectAttributes, IoStatusBlock, ShareAccess,
+        OpenOptions);
 }
