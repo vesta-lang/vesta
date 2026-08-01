@@ -1384,6 +1384,35 @@ CompileResult compile_vx_project(
             std::vector<uint8_t> vbytes;
             if (read_file_bytes_(vp, vbytes)) {
                 auto pr = vxi_parse(vbytes.data(), vbytes.size());
+                // v13: un artefacto atado a OTRO objetivo no sirve.  Solo los
+                // modulos que usan @Target llevan objetivo (el resto va con el
+                // campo vacio y vale para todos), asi que esto no invalida nada
+                // que no dependa de verdad del target.
+                //
+                // Sin esta comprobacion, un .vxi generado compilando para arm64
+                // se servia tal cual en un build x86-64 y metia sus tipos en la
+                // resolucion: el mismo `uintptr` acababa con dos identidades
+                // (`arm64__uintptr` y `std__types__uintptr`) segun la ruta de
+                // importacion, con un error de tipos incomprensible.
+                if (pr.ok && !pr.module_.target.empty()) {
+                    std::string tos;
+                    std::string tarch;
+                    vx::get_aot_condcomp_target(tos, tarch);
+                    if (tos.empty()) tos = vxi_host_os_name();
+                    if (tarch.empty()) tarch = vxi_host_arch_name();
+                    const std::string actual = tos + "|" + tarch;
+                    if (pr.module_.target != actual) {
+                        if (verbose_cache) {
+                            std::ostringstream tmp;
+                            tmp << "[vx-cache] miss (objetivo): '"
+                                << pm.module_name << "' se genero para "
+                                << pr.module_.target << " y se compila para "
+                                << actual << "\n";
+                            std::cerr << tmp.str();
+                        }
+                        pr.ok = false; // fuerza recompilar con este objetivo
+                    }
+                }
                 if (pr.ok && pr.module_.source_hash == source_hash) {
                     //  M4.ext L.13: cache transitivo.  El source_hash
                     // del modulo coincide, pero alguno de sus deps directos
@@ -1976,6 +2005,27 @@ CompileResult compile_vx_project(
                              !module_pkgid_override[i].empty())
                                 ? module_pkgid_override[i]
                                 : project_package_id;
+
+        // v13: atar el .vxi al OBJETIVO, pero solo si el modulo usa @Target --
+        // lo que declara depende entonces del target y su artefacto no vale
+        // para otro.  Los demas (la inmensa mayoria) siguen con un unico .vxi
+        // compartido, de modo que cambiar de objetivo no recompila la stdlib
+        // entera.
+        //
+        // Sin esto, un .vxi generado compilando para arm64 se seguia sirviendo
+        // en un build x86-64 y metia sus tipos en la resolucion: el mismo
+        // `uintptr` acababa con dos identidades segun la ruta de importacion.
+        if (pm.ast && pm.ast->uses_conditional_target) {
+            // Misma fuente de verdad que @Target: el override de cross-target
+            // si lo hay, y el host si no.  Dos lecturas distintas del objetivo
+            // volverian a desincronizar artefacto y compilacion.
+            std::string tos;
+            std::string tarch;
+            vx::get_aot_condcomp_target(tos, tarch);
+            if (tos.empty()) tos = vxi_host_os_name();
+            if (tarch.empty()) tarch = vxi_host_arch_name();
+            pm.vxi.target = tos + "|" + tarch;
+        }
 
         //  M4.ext L.13: poblar dep table con los (name, abi_hash) de
         // los deps directos del modulo.  El loader del cache verifica

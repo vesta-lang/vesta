@@ -767,6 +767,7 @@ std::unique_ptr<ast::ModuleNode> Parser::parse_program() {
     }
     // @NoExceptions (sticky) se aplica a todo el modulo.
     mod->no_exceptions = module_no_exceptions_;
+    mod->uses_conditional_target = module_uses_target_;
     return mod;
 }
 
@@ -1767,6 +1768,12 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                 continue;
             }
             if (is_target) {
+                // Lo que este modulo declara depende del objetivo, asi que su
+                // `.vxi` no puede compartirse entre targets (lo ata el emisor
+                // via VxiHeader::target_offset).  Se marca ANTES de evaluar la
+                // condicion a proposito: el modulo depende del objetivo tanto
+                // si la variante casa como si no.
+                module_uses_target_ = true;
                 // L.24: @Target("os:linux"|"arch:x86_64"|...).  Si la
                 // condicion NO matchea con los build tags actuales,
                 // marcamos top_target_skip para descartar la decl.

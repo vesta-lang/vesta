@@ -54,7 +54,16 @@ inline constexpr uint32_t VXI_MAGIC = 0x49584556u;
 /// v9: ns_path en templates genericas (NS.2 cross-module).
 /// v10: package_id en el header (NS.3, offsets 72/76 del pad v6).
 /// v11: ext_methods (NS.6-ext) -- header crece a 88 (ext_off 80 + ext_count 84).
-inline constexpr uint16_t VXI_FORMAT_VERSION = 12; // param_abi_regs (ABI custom)
+inline constexpr uint16_t VXI_FORMAT_VERSION = 13; // target_offset (@Target)
+
+/// Nombre del SO del HOST de compilacion, en el mismo vocabulario que usan los
+/// atomos `os:` de @Target.  Es el valor por defecto del objetivo cuando no hay
+/// override de cross-target.
+const char *vxi_host_os_name() noexcept;
+
+/// Nombre de la arquitectura del HOST, en el vocabulario de los atomos `arch:`
+/// de @Target.  Mismo papel que @c vxi_host_os_name.
+const char *vxi_host_arch_name() noexcept;
 
 /// Kind del payload dentro de un BlobHeader (.vxi v4).  Asignaciones
 /// estables (persisten en disco).  Cualquier kind desconocido = saltar.
@@ -142,7 +151,22 @@ struct VxiHeader {
     uint32_t blob_pool_offset = 0;
     uint32_t blob_pool_size = 0;
     uint8_t blob_pool_alignment = 8; ///< default 8; reservado para AVX
-    uint8_t _pad[7] = {0, 0, 0, 0, 0, 0, 0};
+    uint8_t _pad[3] = {0, 0, 0};
+    /// v13: OBJETIVO con el que se genero este .vxi, como offset al string
+    /// pool ("<os>|<arch>", p.ej. "windows|x86_64").  **0 = el modulo no usa
+    /// @Target**, asi que su contenido no depende del objetivo y su artefacto
+    /// vale para todos -- que es el caso de la inmensa mayoria de modulos.
+    ///
+    /// Solo los que SI usan @Target quedan atados a un objetivo, y al cargarlos
+    /// un objetivo distinto es fallo de cache, no acierto.  Sin esto, un .vxi
+    /// generado compilando para arm64 se seguia sirviendo en un build x86-64 y
+    /// metia sus tipos en la resolucion: el mismo `uintptr` acababa con dos
+    /// identidades (`arm64__uintptr` y `std__types__uintptr`) segun la ruta.
+    ///
+    /// Se guarda el NOMBRE y no un hash para poder decir en el diagnostico cual
+    /// era el objetivo del artefacto y cual el actual; un hash obligaria a un
+    /// mensaje vago justo donde hace falta precision.
+    uint32_t target_offset = 0;
 };
 
 /**
@@ -348,6 +372,11 @@ struct VxiModule {
     /// namespaces homonimos de paquetes distintos, (b) frontera de la
     /// visibilidad @c internal (visible solo dentro del mismo package_id).
     std::string package_id;
+    /// v13: objetivo con el que se genero/leyo el artefacto, como "<os>|<arch>".
+    /// VACIO = el modulo no usa @Target, asi que su contenido no depende del
+    /// objetivo y el `.vxi` sirve para todos.  Lo rellena el emisor a partir de
+    /// @c ast::ModuleNode::uses_conditional_target.
+    std::string target;
 };
 
 /// Helper: alocar un blob en el pool y devolver su offset.  El emitter

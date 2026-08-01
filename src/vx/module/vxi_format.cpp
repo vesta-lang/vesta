@@ -522,6 +522,10 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
         go.ns_len = static_cast<uint32_t>(g.ns_path.size());
         gen_offs.push_back(go);
     }
+    // v13: internar el OBJETIVO con el que se genera este .vxi, pero SOLO si el
+    // modulo usa @Target.  Vacio -> offset 0 -> artefacto valido para cualquier
+    // objetivo, que es el caso de casi todos los modulos.
+    const uint32_t target_off = mod.target.empty() ? 0u : pool.intern(mod.target);
     // NS.3 (v10): internar el package_id (vacio = paquete anonimo).
     const uint32_t pkgid_off = pool.intern(mod.package_id);
     const uint32_t pkgid_len = static_cast<uint32_t>(mod.package_id.size());
@@ -680,10 +684,11 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
     out[57] = 0;
     out[58] = 0;
     out[59] = 0;
-    out[60] = 0;
-    out[61] = 0;
-    out[62] = 0;
-    out[63] = 0;
+    // v13: target_offset (60).  0 = el modulo no usa @Target -> su contenido
+    // no depende del objetivo y el artefacto vale para todos.  Solo los que si
+    // lo usan quedan atados, para no invalidar la stdlib entera al cambiar de
+    // target.
+    patch_u32(60, target_off);
     // v6: gen_templates_offset (64) + gen_templates_count (68).
     patch_u32(64, gen_start);
     patch_u32(68, static_cast<uint32_t>(mod.generic_templates.size()));
@@ -1095,7 +1100,9 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
     read_u32(data, size, off, blob_pool_offset_hdr);   // v4
     read_u32(data, size, off, blob_pool_size_hdr);     // v4
     read_u8(data, size, off, blob_pool_alignment_hdr); // v4
-    off += 7;                                          // pad (offsets 57..63)
+    off += 3;                                          // pad (offsets 57..59)
+    uint32_t target_off_hdr = 0; // v13 (offset 60, rel al pool; 0 = sin @Target)
+    read_u32(data, size, off, target_off_hdr);
     uint32_t gen_offset_hdr = 0;                        // v6
     uint32_t gen_count_hdr = 0;                         // v6
     read_u32(data, size, off, gen_offset_hdr);
@@ -1384,6 +1391,15 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
                   r.module_.package_id);
     }
 
+    // v13: objetivo del artefacto.  El pool guarda cadenas NUL-terminadas, asi
+    // que se lee hasta el terminador (no hay campo de longitud aparte: el
+    // offset 0 ya distingue "sin @Target").
+    if (target_off_hdr != 0) {
+        const size_t abs = static_cast<size_t>(pool_start) + target_off_hdr;
+        for (size_t i = abs; i < size && data[i] != 0; ++i)
+            r.module_.target.push_back(static_cast<char>(data[i]));
+    }
+
     r.ok = true;
     return r;
 }
@@ -1399,6 +1415,34 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
 // Si dos compiladores producen .vxi con el mismo hash, son
 // ABI-compatibles a nivel cache.  Si difieren, el .vxi se descarta y
 // regenera al siguiente compile.
+// Vocabulario IDENTICO al de los atomos `os:`/`arch:` de @Target (ver
+// target_matches_ en parser.cpp).  Si divergieran, un .vxi quedaria atado a un
+// nombre que la evaluacion de @Target no reconoce y la comparacion fallaria
+// siempre -- cache inutil en vez de cache correcto.
+const char *vxi_host_os_name() noexcept {
+#if defined(_WIN32)
+    return "windows";
+#elif defined(__APPLE__)
+    return "macos";
+#elif defined(__linux__)
+    return "linux";
+#else
+    return "unknown";
+#endif
+}
+
+const char *vxi_host_arch_name() noexcept {
+#if defined(__x86_64__) || defined(_M_X64)
+    return "x86_64";
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    return "arm64";
+#elif defined(__i386__) || defined(_M_IX86)
+    return "x86";
+#else
+    return "unknown";
+#endif
+}
+
 uint64_t vxi_compiler_version_hash() noexcept {
     // String de identidad: includes una etiqueta ABI ('vx-1.0') + el
     // build time del compilador binario para detectar rebuilds del

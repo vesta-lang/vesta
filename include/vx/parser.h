@@ -721,6 +721,11 @@ class Parser {
     /// ModuleNode::no_exceptions -> todas las funciones lo heredan.
     bool module_no_exceptions_ = false;
 
+    /// El modulo usa @Target en alguna declaracion (sticky): se propaga a
+    /// @c ModuleNode::uses_conditional_target para que su `.vxi` quede atado
+    /// al objetivo con que se genero.
+    bool module_uses_target_ = false;
+
     ///  M6.a L.3: visibilidad pendiente capturada en
     /// @c parse_top_level_decl.  Los sub-parsers que produzcan un
     /// nodo top-level llaman @c apply_pending_visibility_ al final

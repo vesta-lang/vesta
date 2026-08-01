@@ -2598,6 +2598,15 @@ struct ModuleNode : Node {
     /// texto fuente para exportarlos cross-module via `.vxi`.  Lo rellena
     /// el parser; lo consume el emitter del `.vxi`.
     std::vector<GenericTemplateExport> generic_template_exports;
+    /// El modulo contiene alguna anotacion @Target, asi que lo que declara
+    /// DEPENDE del objetivo de compilacion.  Lo marca el parser en cuanto ve
+    /// una; lo consume el emisor del `.vxi` para atar el artefacto a su
+    /// objetivo (@c VxiHeader::target_offset).
+    ///
+    /// Es una distincion de eficiencia: sin ella habria que atar TODOS los
+    /// `.vxi` al objetivo y cambiar de target recompilaria la stdlib entera,
+    /// cuando en realidad la inmensa mayoria de modulos no depende de el.
+    bool uses_conditional_target = false;
     ModuleNode() : Node(NodeKind::Module) {}
 };
 
