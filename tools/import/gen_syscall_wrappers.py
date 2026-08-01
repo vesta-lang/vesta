@@ -84,6 +84,34 @@ OVERRIDE = {
     "umount2": ["const char *target", "int flags"],
 }
 
+# Envoltorios de x86-32 escritos a mano porque su firma no encaja en la
+# convencion de `int 0x80`: seis argumentos ocuparian siete registros y el
+# sexto caeria en EBP, que es el frame pointer.
+#
+# El kernel de i386 ya resolvio esto en su dia: `old_mmap` (nr 90) recibe los
+# seis valores en UNA estructura y solo su direccion en un registro.  Es
+# literalmente la razon de que exista.
+MANUAL_X32 = {
+    "mmap": '''@Target("arch:x86 && !os:windows")
+public uintptr mmap(uintptr addr, size_t length, i32 prot, i32 flags, i32 fd,
+                    i64 offset_) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    // El _NR_mmap de i386 (90) es `old_mmap`: los seis valores viajan en una
+    // estructura y al kernel solo se le pasa su DIRECCION, que es como esquiva
+    // quedarse sin registros.  El offset va en BYTES (mmap2, que lo toma en
+    // paginas, necesitaria los seis registros y no sirve aqui).
+    u32[6] a;
+    a[0] = (u32) addr;
+    a[1] = (u32) length;
+    a[2] = (u32) prot;
+    a[3] = (u32) flags;
+    a[4] = (u32) fd;
+    a[5] = (u32) offset_;
+    return (uintptr)((cfn(syscall_id, u32*) -> u64)(ctx.invoke_method))(
+        _NR_mmap, &a[0]);
+}''',
+}
+
 # Palabras que son TIPO (no nombre de variable): si el ultimo token de un arg
 # es una de estas, el arg viene SIN nombre (se genera aN).
 TYPE_WORDS = {
@@ -364,6 +392,18 @@ def main():
         for (n, a) in only32:
             out.append('@Target("arch:x86 && !os:windows")')
             out.append(wrapper(n, a))
+            out.append("")
+    if MANUAL_X32:
+        out.append("")
+        out.append("// --- x86-32: escritos a mano ---")
+        out.append("//")
+        out.append("// Los de SEIS argumentos no caben en la convencion de")
+        out.append("// `int 0x80` (ver la nota de arriba); el kernel de i386")
+        out.append("// ofrece para ellos una entrada que recibe menos")
+        out.append("// registros, y es la que se usa aqui.")
+        out.append("")
+        for n in sorted(MANUAL_X32):
+            out.append(MANUAL_X32[n])
             out.append("")
     out.append("")
 

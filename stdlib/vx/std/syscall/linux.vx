@@ -1892,3 +1892,30 @@ public i32 waitpid(i32 pid, void * stat_addr, i32 options) {
     return (i32)((cfn(syscall_id, i32, void *, i32) -> u64)(ctx.invoke_method))(_NR_waitpid, pid, stat_addr, options);
 }
 
+
+// --- x86-32: escritos a mano ---
+//
+// Los de SEIS argumentos no caben en la convencion de
+// `int 0x80` (ver la nota de arriba); el kernel de i386
+// ofrece para ellos una entrada que recibe menos
+// registros, y es la que se usa aqui.
+
+@Target("arch:x86 && !os:windows")
+public uintptr mmap(uintptr addr, size_t length, i32 prot, i32 flags, i32 fd,
+                    i64 offset_) {
+    static syscall_ctx_invoke ctx = syscall_ctx_invoke();
+    // El _NR_mmap de i386 (90) es `old_mmap`: los seis valores viajan en una
+    // estructura y al kernel solo se le pasa su DIRECCION, que es como esquiva
+    // quedarse sin registros.  El offset va en BYTES (mmap2, que lo toma en
+    // paginas, necesitaria los seis registros y no sirve aqui).
+    u32[6] a;
+    a[0] = (u32) addr;
+    a[1] = (u32) length;
+    a[2] = (u32) prot;
+    a[3] = (u32) flags;
+    a[4] = (u32) fd;
+    a[5] = (u32) offset_;
+    return (uintptr)((cfn(syscall_id, u32*) -> u64)(ctx.invoke_method))(
+        _NR_mmap, &a[0]);
+}
+

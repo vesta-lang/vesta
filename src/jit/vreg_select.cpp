@@ -1267,6 +1267,14 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * arg_regs de su clase (en pila) no se soportan en v1. */
             const size_t gmax_p = areg.size(), fmax_p = fareg.size();
             const int32_t shadow_p = (gmax_p == 4) ? 32 : 0; // home Win64
+            // Tamano de PALABRA del target: lo que ocupa cada argumento en la
+            // pila y lo que miden la direccion de retorno y el frame pointer
+            // guardado.  En 32 bits todo eso vale la mitad; con el 16/8 de
+            // 64 bits el callee leia una posicion mas alla y los argumentos que
+            // no caben en registro llegaban DESPLAZADOS (los tres primeros van
+            // en EAX/EDX/ECX y por eso parecian correctos).
+            const int32_t pal_p = mode32 ? 4 : 8;
+            const int32_t base_p = 2 * pal_p; // retorno + rbp/ebp guardado
             auto is_fparam = [&](ir::IrValueId pv) -> bool {
                 return fp_ok && pv < fn.values.size() &&
                        ir_type_is_float(fn.values[pv].type);
@@ -1330,8 +1338,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 if (is_fparam(pv)) {
                     if (fi_p >= fmax_p) {
                         const int32_t off =
-                            16 + shadow_p +
-                            static_cast<int32_t>((G + (fi_p - fmax_p)) * 8);
+                            base_p + shadow_p +
+                            static_cast<int32_t>(G + (fi_p - fmax_p)) * pal_p;
                         O.push_back(MInstr::make_unary(
                             MOp::MOVSD, vrt(pv),
                             MOperand::make_mem(MReg::RBP, off)));
@@ -1343,8 +1351,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     if (param_custom_reg(i) >= 0) continue;
                     if (gi_p >= gmax_p) {
                         const int32_t off =
-                            16 + shadow_p +
-                            static_cast<int32_t>((gi_p - gmax_p) * 8);
+                            base_p + shadow_p +
+                            static_cast<int32_t>(gi_p - gmax_p) * pal_p;
                         O.push_back(MInstr::make_unary(
                             MOp::MOV, vrt(pv),
                             MOperand::make_mem(MReg::RBP, off)));

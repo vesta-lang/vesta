@@ -1698,6 +1698,41 @@ def _(ctx):
            "munmap) en WSL -> 42")
 
 
+@case("syscalls_linux_wsl_x86_32")
+def _(ctx):
+    """Lo mismo que el caso anterior pero en x86-32, ejecutado en WSL.
+
+    Esta arquitectura no se ejecutaba NUNCA -- ni siquiera producia binario --,
+    asi que acumulaba fallos que solo se ven corriendo: un `mov reg, imm64` que
+    en modo protegido no existe, literales empaquetados de ocho en ocho, el
+    detector de CPU emitido con registros de 64, y los argumentos que no caben
+    en registro leidos con el paso equivocado.
+
+    Que pase aqui prueba de una vez la convencion `int 0x80`, `old_mmap` (la
+    entrada que i386 usa porque no tiene registros para seis argumentos) y el
+    paso de argumentos por pila.
+    """
+    src = os.path.join(VX_DIR, "342_syscalls_os.vx")
+    rc, log = ctx.run([VM_EXE, "-m", "aot", "--vesta", src,
+                       "--aot-arch", "x86-32", "--format", "elf",
+                       "--emit", "exe", "-o", ctx.path("s342_x32")])
+    elf = ctx.path("s342_x32")
+    if not os.path.exists(elf):
+        ctx.fail("no se genero el ELF de 32 bits", log)
+        return
+    if not wsl_disponible():
+        ctx.skip("syscalls x86-32: WSL no disponible, no se ejecuta")
+        return
+    rc2, salida = wsl_run_elf(elf)
+    if rc2 is None:
+        ctx.fail("syscalls x86-32: %s" % salida, log)
+        return
+    if rc2 != 42 or "7/7" not in salida:
+        ctx.fail("syscalls x86-32: exit %s\n%s" % (rc2, salida), log)
+        return
+    ctx.ok("x86-32: 7 syscalls reales por int 0x80 (con old_mmap) en WSL -> 42")
+
+
 @case("target_diag")
 def _(ctx):
     """Usar un simbolo que solo existe para OTRO objetivo lo dice.

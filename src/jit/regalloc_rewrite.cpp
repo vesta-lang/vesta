@@ -238,6 +238,16 @@ struct Lowerer {
     uint32_t out_stack_args = 0;
     /// Offset RSP del primer stack-arg: 32 (Win64 shadow) o 0 (SysV).
     int32_t stack_arg_base = 0;
+    /// Tamano de PALABRA del target: lo que ocupa cada argumento pasado por
+    /// pila.  Se deduce del ABI igual que @c stack_arg_base -- tres registros
+    /// de argumento es regparm(3), o sea x86-32 -- para que siga siendo
+    /// correcto compilando para otra arquitectura que la del host.  Con el 8
+    /// fijo de 64 bits, en 32 los argumentos que no caben en registro salian
+    /// espaciados el doble de lo que el callee espera.
+    int32_t word_bytes() const {
+        return tri.arg_regs[static_cast<size_t>(RegClass::GP)].size() == 3 ? 4
+                                                                          : 8;
+    }
     /// Commit 8: offset (desde RBP) del inicio del area de allocas
     /// (justo debajo de los spill slots) + cursor de asignacion.
     uint32_t alloca_base = 0;
@@ -358,7 +368,8 @@ struct Lowerer {
              * pila) encima del shadow.  Stack-arg j vive en
              * [rsp + stack_arg_base + j*8] en cada call. */
             if (out_stack_args > 0)
-                spill_bytes += static_cast<int32_t>(out_stack_args * 8u);
+                spill_bytes +=
+                    static_cast<int32_t>(out_stack_args) * word_bytes();
             /* Alinear (SZ*total_saved + spill_bytes) a 16 para mantener
              * el stack 16-aligned en CALLs internos.  Con slots de 4
              * (x86-32) el desalineo puede ser 4/8/12 -> padding exacto. */
@@ -905,8 +916,8 @@ struct Lowerer {
                 else {
                     const int32_t off =
                         stack_arg_base +
-                        static_cast<int32_t>(
-                            (G + (pa.idx - fareg.size())) * 8u);
+                        static_cast<int32_t>(G + (pa.idx - fareg.size())) *
+                            word_bytes();
                     smoves.emplace_back(off, pa.loc, true);
                 }
             } else if (pa.custom_reg >= 0) {
@@ -921,7 +932,8 @@ struct Lowerer {
                 else {
                     const int32_t off =
                         stack_arg_base +
-                        static_cast<int32_t>((pa.idx - gareg.size()) * 8u);
+                        static_cast<int32_t>(pa.idx - gareg.size()) *
+                            word_bytes();
                     smoves.emplace_back(off, pa.loc, false);
                 }
             }
