@@ -534,6 +534,36 @@ public struct u128 : Wide128 {
      * @param o Divisor.
      * @return El resto, o `None` si el divisor es cero.
      */
+    /**
+     * @brief Producto COMPLETO de dos valores de 64 bits.
+     *
+     * El `__mul__` de este tipo trunca a 128 bits, que es lo correcto para un
+     * `u128 * u128`, pero al componer anchos mayores hace falta el producto
+     * entero: los 64 bits altos de `a * b` son justo lo que arrastra el
+     * siguiente limb.  Se arma por descomposicion en cuatro productos de 32x32,
+     * de modo que ningun paso intermedio desborda los 64 bits.
+     *
+     * @param a Primer factor.
+     * @param b Segundo factor.
+     * @return `a * b` exacto, en 128 bits.
+     */
+    public static u128 mul64_full(u64 a, u64 b) {
+        u64 a0 = a & 0xFFFFFFFF;
+        u64 a1 = a >> 32;
+        u64 b0 = b & 0xFFFFFFFF;
+        u64 b1 = b >> 32;
+        u64 t00 = a0 * b0;
+        u64 t01 = a0 * b1;
+        u64 t10 = a1 * b0;
+        u64 t11 = a1 * b1;
+        // `mid` acumula tres sumandos de 32 bits: cabe de sobra en 64.
+        u64 mid = (t00 >> 32) + (t01 & 0xFFFFFFFF) + (t10 & 0xFFFFFFFF);
+        u128 r;
+        r.lo64 = (t00 & 0xFFFFFFFF) | (mid << 32);
+        r.hi64 = t11 + (t01 >> 32) + (t10 >> 32) + (mid >> 32);
+        return r;
+    }
+
     public Optional<u128> checked_rem(u128 o) {
         if (o.is_zero()) {
             return None();
@@ -1017,6 +1047,37 @@ public struct Wide256 {
     }
 
     /**
+     * @brief Producto modular de 256 bits.
+     *
+     * El producto de las mitades bajas se calcula COMPLETO -- cuatro productos
+     * de 64x64 sin truncar, colocados por peso -- porque sus bits altos son los
+     * que ocupan la mitad alta del resultado.  Los terminos cruzados solo
+     * afectan a esa mitad alta, asi que de ellos basta con los 128 bits bajos;
+     * lo que se van por encima de 256 se descarta, igual que en un entero
+     * nativo.
+     *
+     * @param o Segundo factor.
+     * @return `this * o` truncado a 256 bits.
+     */
+    public Self __mul__(Self o) {
+        Self r;
+        r.lo128 = u128.mul64_full(this.lo128.lo64, o.lo128.lo64);
+        r.hi128 = u128.mul64_full(this.lo128.hi64, o.lo128.hi64);
+
+        // Los dos cruzados pesan 2^64: entran desplazados.
+        Self m1;
+        m1.lo128 = u128.mul64_full(this.lo128.lo64, o.lo128.hi64);
+        m1.hi128 = u128.zero();
+        Self m2;
+        m2.lo128 = u128.mul64_full(this.lo128.hi64, o.lo128.lo64);
+        m2.hi128 = u128.zero();
+
+        Self full = r + (m1 << 64) + (m2 << 64);
+        full.hi128 = full.hi128 + this.lo128 * o.hi128 + this.hi128 * o.lo128;
+        return full;
+    }
+
+    /**
      * @brief Igualdad bit a bit.
      * @param o Valor a comparar.
      * @return `true` si ambas mitades coinciden.
@@ -1101,6 +1162,27 @@ public struct u256 : Wide256 {
      */
     public static u256 min() {
         return u256.zero();
+    }
+
+    /**
+     * @brief Producto COMPLETO de dos valores de 128 bits.
+     *
+     * Devuelve los 256 bits exactos de `a * b`, sin truncar: es la pieza que
+     * permite componer anchos mayores, donde los bits altos del producto no se
+     * pueden tirar.
+     *
+     * @param a Primer factor.
+     * @param b Segundo factor.
+     * @return `a * b` exacto, en 256 bits.
+     */
+    public static u256 mul128_full(u128 a, u128 b) {
+        u256 x;
+        x.lo128 = a;
+        x.hi128 = u128.zero();
+        u256 y;
+        y.lo128 = b;
+        y.hi128 = u128.zero();
+        return x * y;
     }
 
     /**
