@@ -874,8 +874,16 @@ struct Lowerer {
     /** @brief Marshala @c pending_args a los arg_regs del ABI host: los
      *  enteros (GP) con un parallel-move via MOV (scr1 rompe ciclos), los
      *  floats (FP) con un parallel-move via MOVSD a los XMM arg_regs (fscr1).
-     *  Cada arg lleva su indice DENTRO DE SU CLASE.  Limpia @c pending_args. */
-    void marshal_args(std::vector<MInstr> &out) {
+     *  Cada arg lleva su indice DENTRO DE SU CLASE.  Limpia @c pending_args.
+     *
+     *  @param extra_gp Movimiento GP adicional (destino, origen) que entra en el
+     *         MISMO parallel-move.  Lo usa el CALL indirecto para poner el
+     *         puntero de destino a salvo: si se copiase antes o despues, el
+     *         reparto de argumentos podria pisar el registro elegido -- o leer
+     *         de el un valor que ya se habia sobrescrito.  Formando parte del
+     *         parallel-move, el orden y los ciclos los resuelve el algoritmo. */
+    void marshal_args(std::vector<MInstr> &out,
+                      const std::pair<MReg, MOperand> *extra_gp = nullptr) {
         const auto &gareg = tri.arg_regs[static_cast<size_t>(RegClass::GP)];
         const auto &fareg = tri.arg_regs[static_cast<size_t>(RegClass::FP)];
         std::vector<std::pair<MReg, MOperand>> gmoves, fmoves;
@@ -945,6 +953,7 @@ struct Lowerer {
                 out.push_back(MInstr::make_unary(MOp::MOV, dst, sloc));
             }
         }
+        if (extra_gp != nullptr) gmoves.push_back(*extra_gp);
         if (!gmoves.empty()) emit_parallel_moves(std::move(gmoves), scr1, out);
         if (!fmoves.empty())
             emit_parallel_moves_fp(std::move(fmoves), fscr1, out);
@@ -1383,17 +1392,46 @@ struct Lowerer {
              * de los GC roots vivos a traves del call. */
             MOperand tgt = resolve_use(in.src1);
             /* HOST_LEAF CALLIND: hay ARGs pendientes que marshalar a los
-             * arg_regs del ABI host.  CRiTICO: capturar el func_ptr a scr0
-             * (R10) ANTES del marshal (su loc actual puede caer en un arg_reg
-             * que el parallel-move pisaria); luego call scr0.  marshal_args usa
-             * scr1 (R11) -- NO scr0 -- como scratch de los stack-args mem->mem,
-             * asi el target en scr0 SOBREVIVE al marshal (RAX no sirve: el
-             * allocator puede colocar un arg en RAX -> `mov rax,tgt` lo
-             * pisaria; visto con 12 args -> resultado erroneo). */
+             * arg_regs del ABI host, y el registro donde vive el func_ptr
+             * puede ser justo uno de los destinos -- o la FUENTE de otro
+             * argumento.  Se resuelve metiendo "refugio <- func_ptr" DENTRO
+             * del mismo parallel-move: el algoritmo ya sabe ordenar los
+             * movimientos y romper ciclos, asi que el puntero llega intacto
+             * sin importar de donde salga ni quien ocupe su sitio.
+             *
+             * (Antes se copiaba a scr0=R10 ANTES del marshal.  Funcionaba con
+             * el ABI estandar, donde R10 no lleva argumentos, pero no con un
+             * ABI custom: en la convencion de syscall de Linux R10 ES el 4o
+             * argumento, asi que el marshal escribia encima del puntero y el
+             * `call` saltaba al valor del argumento.) */
             if (!pending_args.empty()) {
-                out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0), tgt));
-                tgt = reg(scr0);
-                marshal_args(out);
+                int refugio = static_cast<int>(scr0);
+                bool reclamado[64] = {false};
+                for (const auto &pa : pending_args) {
+                    if (pa.custom_reg >= 0 && pa.custom_reg < 64)
+                        reclamado[pa.custom_reg] = true;
+                }
+                if (reclamado[static_cast<int>(scr0)]) {
+                    /* El selector ya rechazo el caso sin ningun caller-saved
+                     * libre, asi que aqui siempre hay donde ponerlo.  scr1
+                     * (R11) queda fuera: es el scratch con el que el propio
+                     * parallel-move rompe los ciclos. */
+                    const int cand[] = {
+                        static_cast<int>(MReg::RCX), static_cast<int>(MReg::RAX),
+                        static_cast<int>(MReg::R9),  static_cast<int>(MReg::R8),
+                        static_cast<int>(MReg::RDX), static_cast<int>(MReg::RSI),
+                        static_cast<int>(MReg::RDI)};
+                    for (int c : cand) {
+                        if (c < 0 || c >= 64 || reclamado[c]) continue;
+                        if (c == static_cast<int>(scr1)) continue;
+                        refugio = c;
+                        break;
+                    }
+                }
+                const MReg refugio_r = static_cast<MReg>(refugio);
+                const std::pair<MReg, MOperand> mov_tgt(refugio_r, tgt);
+                marshal_args(out, &mov_tgt);
+                tgt = reg(refugio_r);
             } else if (tgt.kind == MOperandKind::MEM) {
                 /* target spilled -> cargar a scratch antes del call. */
                 out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0), tgt));

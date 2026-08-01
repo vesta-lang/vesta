@@ -4990,6 +4990,41 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         vreg_dbg(fn.name.c_str(), "callind(no-fnptr)");
                         return false;
                     }
+                    // Devirtualizacion: func_ptr de un LABEL_ADDR conocido ->
+                    // CALL DIRECTO (sin indireccion).
+                    auto lf = label_fn.find(in.func_ptr);
+                    // Con ABI custom el DESTINO de la llamada necesita un
+                    // registro que ningun argumento reclame (el rewrite lo
+                    // elige); aqui solo se comprueba que exista alguno.  Si el
+                    // ABI declarado ocupase todos los caller-saved no habria
+                    // donde sostener el puntero: se rechaza la funcion para que
+                    // caiga al interprete en vez de emitir un salto a basura.
+                    if (lf == label_fn.end() && !in.call_abi_regs.empty()) {
+                        // R11 no cuenta: el marshal de argumentos lo usa como
+                        // scratch para romper ciclos del parallel-move, asi que
+                        // un puntero guardado ahi no sobrevive.
+                        static const MReg kCallerSaved[] = {
+                            MReg::RAX, MReg::RCX, MReg::RDX, MReg::RSI,
+                            MReg::RDI, MReg::R8,  MReg::R9,  MReg::R10};
+                        bool reclamado[64] = {false};
+                        for (const auto &r : in.call_abi_regs) {
+                            if (r.empty()) continue;
+                            const int p = canon_gp_to_mreg(r, /*for_pin=*/true);
+                            if (p >= 0 && p < 64) reclamado[p] = true;
+                        }
+                        bool hay_libre = false;
+                        for (MReg c : kCallerSaved) {
+                            if (!reclamado[static_cast<int>(c)]) {
+                                hay_libre = true;
+                                break;
+                            }
+                        }
+                        if (!hay_libre) {
+                            vreg_dbg(fn.name.c_str(),
+                                     "callind(abi-ocupa-todos-los-scratch)");
+                            return false;
+                        }
+                    }
                     // ABI custom: el tipo del puntero (cfn) fija los abi_regs en
                     // la instruccion (in.call_abi_regs).  Cero shift: cada arg va
                     // directo a su registro (la ABI la conoce el tipo, no el
@@ -5001,9 +5036,6 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         vreg_dbg(fn.name.c_str(), "callind(host-leaf-args)");
                         return false;
                     }
-                    // Devirtualizacion: func_ptr de un LABEL_ADDR conocido ->
-                    // CALL DIRECTO (sin indireccion).
-                    auto lf = label_fn.find(in.func_ptr);
                     if (lf != label_fn.end()) {
                         O.push_back(MInstr::make_call_sym(
                             out.intern_reloc_symbol(lf->second)));
