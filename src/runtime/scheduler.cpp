@@ -1215,7 +1215,29 @@ void Scheduler::run_loop() {
                 }
                 instance->reductions_remaining--;
 
-                if (__builtin_expect(evt == EVT_EXEC_DONE, 1)) {
+                // La instruccion puede haber lanzado un FatalError SIN handler
+                // (division por cero, unwrap de null, panic...).  En ese caso
+                // `throw_fatal` deja el proceso en HALT y RETORNA -- no salta
+                // a ningun sitio --, asi que sin este corte el lote seguia
+                // ejecutando instrucciones de un programa ya muerto: la
+                // division por cero imprimia su resultado y el proceso acababa
+                // con codigo 0, como si nada hubiera pasado.
+                // La instruccion puede haber lanzado un FatalError SIN handler
+                // (division por cero, unwrap de null, panic...).  `throw_fatal`
+                // deja el proceso en HALT y RETORNA -- no salta a ningun sitio
+                // --, asi que sin mirar el estado aqui el lote seguia
+                // ejecutando instrucciones de un programa ya muerto: la
+                // division por cero imprimia su resultado y el proceso
+                // terminaba con codigo 0, como si nada.  No se puede saltar
+                // directamente al final del lote: hay que caer al bloque
+                // HALT/DEAD de abajo, que es el que descuenta `alive_count` y
+                // suelta el proceso (si no, vuelve a la cola y repite la
+                // instruccion que lo mato, en bucle).
+                const vm_state st_after =
+                    instance->state.load(std::memory_order_relaxed);
+                const bool died_now = (st_after == HALT || st_after == DEAD);
+
+                if (__builtin_expect(evt == EVT_EXEC_DONE && !died_now, 1)) {
                     if (instance->reductions_remaining == 0) goto BATCH_END;
                     {
                         const uint64_t _pc = instance->registers.rip.raw();

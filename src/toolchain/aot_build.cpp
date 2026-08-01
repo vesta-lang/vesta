@@ -554,15 +554,25 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
             if (!aot_no_io && !aot_freestanding) {
                 const std::string io_pfx = "vx_bare_io:";
                 bool uses_io = false, defines_io = false;
+                // Un `unwrap` necesita el hook __vx_panic_null, que vive en el
+                // mismo vx_io.vx.  Un programa que use Optional pero no imprima
+                // nada no arrastraba el runtime, asi que el hook no existia y
+                // el backend acababa pidiendolo como import externo.
+                bool needs_panic_null = false, defines_panic_null = false;
                 for (const auto &af : aot_mod.functions) {
                     if (af.name == "__vx_write") defines_io = true;
+                    if (af.name == "__vx_panic_null") defines_panic_null = true;
                     for (const auto &b : af.blocks)
-                        for (const auto &ins : b.instrs)
+                        for (const auto &ins : b.instrs) {
                             if (ins.op == ir::IrOp::CALLN &&
                                 ins.func_name.rfind(io_pfx, 0) == 0)
                                 uses_io = true;
+                            if (ins.op == ir::IrOp::UNWRAP)
+                                needs_panic_null = true;
+                        }
                 }
-                if (uses_io && !defines_io) {
+                if ((uses_io || (needs_panic_null && !defines_panic_null)) &&
+                    !defines_io) {
                     const std::string exe_dir =
                         std::filesystem::path(fs::get_executable_path())
                             .parent_path()
@@ -754,6 +764,27 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     if (!f.section.empty() || f.is_naked || is_library ||
                         (auto_keep_vec && has_vec(f)))
                         add_live(f.name);
+                }
+                // `unwrap` no llama a su hook en el IR: la llamada a
+                // __vx_panic_null la EMITE el backend (vreg_select) al bajar
+                // IrOp::UNWRAP, o sea despues de esta poda.  Sin sembrarlo
+                // aqui, el hook se elimina por "no alcanzable" y el codegen
+                // acaba pidiendolo como simbolo externo -> queda en la tabla de
+                // imports del PE y Windows rechaza el binario al cargarlo
+                // (STATUS_ENTRYPOINT_NOT_FOUND).  Mismo caso que las variantes
+                // vectoriales de arriba: referencia creada fuera del IR.
+                for (const auto &f : aot_mod.functions) {
+                    bool has_unwrap = false;
+                    for (const auto &b : f.blocks)
+                        for (const auto &in : b.instrs)
+                            if (in.op == ir::IrOp::UNWRAP) {
+                                has_unwrap = true;
+                                break;
+                            }
+                    if (has_unwrap) {
+                        add_live("__vx_panic_null");
+                        break;
+                    }
                 }
                 // Raices por vtablas/datos: nombres referenciados en sym_refs.
                 for (size_t si = 0; si < aot_mod.static_data.size(); ++si)
