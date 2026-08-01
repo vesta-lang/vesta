@@ -329,10 +329,10 @@ public struct Wide128 {
     public void swap(Self* o) {
         u64 tmp_lo = this.lo64;
         u64 tmp_hi = this.hi64;
-        this.lo64 = (*o).lo64;
-        this.hi64 = (*o).hi64;
-        (*o).lo64 = tmp_lo;
-        (*o).hi64 = tmp_hi;
+        this.lo64 = o->lo64;
+        this.hi64 = o->hi64;
+        o->lo64 = tmp_lo;
+        o->hi64 = tmp_hi;
     }
 
     /**
@@ -419,8 +419,8 @@ public struct Wide128 {
             }
             i = i - 1;
         }
-        (*rem_out).lo64 = rem.lo64;
-        (*rem_out).hi64 = rem.hi64;
+        rem_out->lo64 = rem.lo64;
+        rem_out->hi64 = rem.hi64;
         return q;
     }
 }
@@ -1102,6 +1102,77 @@ public struct Wide256 {
     }
 
     /**
+     * @brief Intercambia el valor con el de otro.
+     * @param o Puntero al valor con el que intercambiar.
+     */
+    public void swap(Self* o) {
+        Self tmp = this;
+        this.lo128 = o->lo128;
+        this.hi128 = o->hi128;
+        o->lo128 = tmp.lo128;
+        o->hi128 = tmp.hi128;
+    }
+
+    /**
+     * @brief Division entera SIN signo por el metodo binario shift-resta.
+     *
+     * Recorre los 256 bits del dividendo de mas a menos significativo,
+     * arrastrando un resto al que va bajando un bit en cada vuelta.  Igual que
+     * su equivalente de 128, el numero de vueltas es FIJO -- no depende de los
+     * valores --, lo que lo hace apto para codigo de tiempo constante.  La
+     * variante con signo lo reutiliza sobre las magnitudes.
+     *
+     * Dividir por cero es responsabilidad de quien llama, igual que con los
+     * enteros nativos: no se comprueba ni se traduce a un error propio, y
+     * produce el mismo fallo de division del hardware.
+     *
+     * @param divisor Divisor sin signo.  Cero = fallo de division del hardware.
+     * @param rem_out Puntero de salida donde se deja el resto.
+     * @return El cociente entero sin signo.
+     */
+    public Self udivmod(Self divisor, Self* rem_out) {
+        if (divisor.is_zero()) {
+            // Sin politica propia: se delega en la division entera nativa.
+            u64 boom = 1 / divisor.lo128.lo64;
+            g_wideint_sink = boom;
+        }
+        Self q;
+        q.lo128 = u128.zero();
+        q.hi128 = u128.zero();
+        Self rem;
+        rem.lo128 = u128.zero();
+        rem.hi128 = u128.zero();
+
+        i64 i = 255;
+        while (i >= 0) {
+            // Baja un bit del dividendo al resto.
+            rem = rem << 1;
+            u64 bit = 0;
+            if (i >= 128) {
+                bit = (this.hi128 >> ((u64) (i - 128))).lo64 & 1;
+            } else {
+                bit = (this.lo128 >> ((u64) i)).lo64 & 1;
+            }
+            if (bit != 0) {
+                rem.lo128 = rem.lo128 | u128.one();
+            }
+            // Si el resto ya alcanza al divisor, se lo resta y anota el bit.
+            if (rem.ucmp(divisor) != Ordering.Less) {
+                rem = rem - divisor;
+                if (i >= 128) {
+                    q.hi128 = q.hi128 | (u128.one() << ((u64) (i - 128)));
+                } else {
+                    q.lo128 = q.lo128 | (u128.one() << ((u64) i));
+                }
+            }
+            i = i - 1;
+        }
+        rem_out->lo128 = rem.lo128;
+        rem_out->hi128 = rem.hi128;
+        return q;
+    }
+
+    /**
      * @brief Comparacion de tres vias SIN signo.
      * @param o Valor a comparar.
      * @return `Less`, `Equal` o `Greater`.
@@ -1196,6 +1267,55 @@ public struct u256 : Wide256 {
             r.hi128 = this.hi128 >> n;
         }
         return r;
+    }
+
+    /**
+     * @brief Cociente entero sin signo.
+     * @param o Divisor.  Cero = fallo de division del hardware; usa
+     *          @ref checked_div para comprobarlo antes.
+     * @return `this / o`.
+     */
+    public u256 __div__(u256 o) {
+        u256 rem;
+        return this.udivmod(o, &rem);
+    }
+
+    /**
+     * @brief Resto entero sin signo.
+     * @param o Divisor.  Cero = fallo de division del hardware; usa
+     *          @ref checked_rem para comprobarlo antes.
+     * @return `this % o`.
+     */
+    public u256 __mod__(u256 o) {
+        u256 rem;
+        this.udivmod(o, &rem);
+        return rem;
+    }
+
+    /**
+     * @brief Cociente que no aborta nunca.
+     * @param o Divisor.
+     * @return El cociente, o `None` si el divisor es cero.
+     */
+    public Optional<u256> checked_div(u256 o) {
+        if (o.is_zero()) {
+            return None();
+        }
+        u256 q = this / o;
+        return Some(q);
+    }
+
+    /**
+     * @brief Resto que no aborta nunca.
+     * @param o Divisor.
+     * @return El resto, o `None` si el divisor es cero.
+     */
+    public Optional<u256> checked_rem(u256 o) {
+        if (o.is_zero()) {
+            return None();
+        }
+        u256 r = this % o;
+        return Some(r);
     }
 
     /**
@@ -1348,6 +1468,85 @@ public struct i256 : Wide256 {
             r.hi128.hi64 = sh.hi64;
         }
         return r;
+    }
+
+    /**
+     * @brief Cociente con signo, truncado hacia cero.
+     *
+     * Se divide sobre las magnitudes y se le pone el signo al final: negativo
+     * si los operandos difieren en signo.
+     *
+     * @param o Divisor.  Cero = fallo de division del hardware.
+     * @return `this / o`.
+     */
+    public i256 __div__(i256 o) {
+        bool negative_result = this.is_negative() != o.is_negative();
+        i256 a = this;
+        if (a.is_negative()) {
+            a = -a;
+        }
+        i256 b = o;
+        if (b.is_negative()) {
+            b = -b;
+        }
+        i256 rem;
+        i256 q = a.udivmod(b, &rem);
+        if (negative_result) {
+            q = -q;
+        }
+        return q;
+    }
+
+    /**
+     * @brief Resto con signo.
+     *
+     * Sigue la convencion de C: el signo del resto es el del DIVIDENDO, de modo
+     * que `(a / b) * b + (a % b) == a`.
+     *
+     * @param o Divisor.  Cero = fallo de division del hardware.
+     * @return `this % o`.
+     */
+    public i256 __mod__(i256 o) {
+        i256 a = this;
+        if (a.is_negative()) {
+            a = -a;
+        }
+        i256 b = o;
+        if (b.is_negative()) {
+            b = -b;
+        }
+        i256 rem;
+        a.udivmod(b, &rem);
+        if (this.is_negative()) {
+            rem = -rem;
+        }
+        return rem;
+    }
+
+    /**
+     * @brief Cociente que no aborta nunca.
+     * @param o Divisor.
+     * @return El cociente, o `None` si el divisor es cero.
+     */
+    public Optional<i256> checked_div(i256 o) {
+        if (o.is_zero()) {
+            return None();
+        }
+        i256 q = this / o;
+        return Some(q);
+    }
+
+    /**
+     * @brief Resto que no aborta nunca.
+     * @param o Divisor.
+     * @return El resto, o `None` si el divisor es cero.
+     */
+    public Optional<i256> checked_rem(i256 o) {
+        if (o.is_zero()) {
+            return None();
+        }
+        i256 r = this % o;
+        return Some(r);
     }
 
     /**
