@@ -18,3 +18,17 @@ public typedef u64 usize   new;   // tamano/cuenta de objetos (C size_t)
 public typedef i64 isize   new;   // tamano/diferencia CON signo (Rust isize / ptrdiff)
 @Target("arch:x86_64")
 public typedef i64 ssize   new;   // POSIX ssize_t: tamano con signo (o -1 = error)
+
+// Tipos de COMPATIBILIDAD con C.  DEBILES a proposito (sin `new`): en C
+// `size_t` no es un tipo distinto sino un typedef de un entero sin signo, y
+// pasarle un entero normal es legal.  Quien quiera la seguridad de tipos del
+// lenguaje usa `usize`/`ssize`, que si son fuertes.
+//
+// Se declaran POR ARQUITECTURA, como sus equivalentes fuertes, para conservar
+// el ancho del objetivo (64 bits aqui, 32 en x86, 16 en x86_16).  Declararlos
+// como alias de `usize`/`ssize` les contagiaba la identidad FUERTE, que es
+// justo lo contrario de lo que un tipo de compatibilidad debe hacer.
+@Target("arch:x86_64")
+public typedef u64 size_t;
+@Target("arch:x86_64")
+public typedef i64 ssize_t;

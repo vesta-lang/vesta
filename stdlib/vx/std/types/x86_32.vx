@@ -18,3 +18,9 @@ public typedef u32 usize   new;   // tamano/cuenta de objetos (C size_t)
 public typedef i32 isize   new;   // tamano/diferencia CON signo (Rust isize / ptrdiff)
 @Target("arch:x86")
 public typedef i32 ssize   new;   // POSIX ssize_t: tamano con signo (o -1 = error)
+
+// Tipos de COMPATIBILIDAD con C: DEBILES a proposito (ver x86_64.vx).
+@Target("arch:x86")
+public typedef u32 size_t;
+@Target("arch:x86")
+public typedef i32 ssize_t;

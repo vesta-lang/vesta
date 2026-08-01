@@ -12,21 +12,20 @@ namespace std.types;
 /// Octeto sin signo (0..255).  Alias comodo y semantico para buffers de bytes.
 public typedef u8 byte new;
 
-/**
- * Tanto usize como size_t son sinonimos, por lo que no se crea un tipo fuerte
- * aqui, se crea como tipo de compatibilidad.
- * 
- * Este tipo es 32bits en una CPU de 32bits, de 16 si la CPU es de 16 bits y de
- * 64bits si la CPU es de 64bits.
- */
-public typedef usize size_t;
-
-/**
- * POSIX ssize_t: tamano CON signo (o -1 = error), alias del `ssize` del arch.
- * Igual que size_t es alias de usize -- tipo de compatibilidad, no un tipo
- * fuerte.  Lo usan las APIs estilo POSIX (read/write devuelven ssize_t).
- */
-public typedef ssize ssize_t;
+/* `size_t` y `ssize_t` viven en el fichero del ARCH (types/x86_64.vx y
+ * companeros), no aqui.
+ *
+ * Son tipos de compatibilidad con C y por eso son DEBILES: en C `size_t` no es
+ * un tipo distinto sino un typedef de un entero sin signo, y pasarle un entero
+ * normal es legal.  Declararlos aqui como alias de `usize`/`ssize` les
+ * contagiaba la identidad FUERTE de estos -- lo contrario de lo que un tipo de
+ * compatibilidad debe hacer, y ademas al reves de lo que decia su propio
+ * comentario.
+ *
+ * NO son sinonimos de `usize`/`ssize`: la compatibilidad es con C, no con los
+ * tipos del lenguaje.  Quien quiera seguridad de tipos en tamanos usa `usize`
+ * o `ssize`, que si son fuertes.  Estar en el fichero del arch les conserva el
+ * ancho del objetivo (64 bits en x86-64 y arm64, 32 en x86, 16 en x86_16). */
 
 /**
  * Puntero nulo. Constante para no tener que escribir `0` en 
