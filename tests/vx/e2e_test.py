@@ -1514,6 +1514,51 @@ def _(ctx):
 #     del repo, por lo que van SERIAL (el .sh los corria en secuencia y varios
 #     reutilizan el mismo directorio, p.ej. m6_test lo usan M6, M5.B y M5.C).
 
+@case("ns_partial_id")
+def _(ctx):
+    """Namespace PARCIAL: un tipo debe tener UNA identidad, venga del fichero
+    que venga.
+
+    `namespace pt.core;` lo declaran DOS ficheros.  El resolver devuelve el
+    primero que encuentra escaneando el disco, y los simbolos importados se
+    cualificaban con el nombre de ESE FICHERO -- asi que el mismo typedef
+    entraba como `base__handle` o como `extra__handle` segun quien ganase, y
+    luego no unificaba consigo mismo.  Se veia en la stdlib: `std.types` lo
+    declaran types.vx + types/arm64.vx + types/x86_64.vx, y `uintptr` resolvia
+    unas veces a `arm64__uintptr` y otras a `std__types__uintptr`.
+
+    Aqui el tipo se DECLARA en un fichero y se CONSUME en el otro: si las dos
+    identidades no coinciden, `to_raw(mk())` no pasa el chequeo de tipos.
+    """
+    def w(name, txt):
+        with open(ctx.path(name), "w", encoding="utf-8") as f:
+            f.write(txt)
+
+    w("base.vx",
+      "namespace pt.core;\n"
+      "public typedef u64 handle new;\n"
+      "public handle mk() { return (handle) 20; }\n")
+    # SEGUNDO fichero del MISMO namespace, que usa el tipo del primero.
+    w("extra.vx",
+      "namespace pt.core;\n"
+      "public u64 to_raw(handle h) { return (u64) h; }\n")
+    w("main.vx",
+      "namespace pt.app;\n"
+      "import pt.core only *;\n"
+      "i32 main() { return (i32) (to_raw(mk()) + 22); }\n")
+
+    if not ctx.compile_vx(ctx.path("main.vx"), "nspid"):
+        return
+    _, log = ctx.run_velb("nspid", schedulers=1, mode="vm")
+    got = get_r00(log)
+    if got != 42:
+        ctx.fail("namespace parcial: R00 == %s, se esperaba 42 (el tipo del "
+                 "namespace tiene identidades distintas segun el fichero)" %
+                 got, log)
+        return
+    ctx.ok("namespace parcial: identidad unica del tipo -> R0 = 42")
+
+
 @case("m6", serial=True, line=2407)
 def _(ctx):
     """M6: privacidad cross-module + classes con metodos en el .vxi."""

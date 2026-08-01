@@ -394,6 +394,28 @@ struct ImportRequest {
 /// por-path (que ya soporta acceso cualificado multi-segmento via ns_path).
 using NsToModname = std::unordered_map<std::string, std::string>;
 
+/// `a.b.c` -> `a__b__c`: el mismo aplanado que usa el mangling de namespaces.
+///
+/// Sirve para CUALIFICAR los simbolos que entran por un import por-namespace.
+/// Hacerlo con el nombre de FICHERO era el origen de que un mismo tipo tuviera
+/// varias identidades: `std.types` lo declaran `types.vx`, `types/arm64.vx` y
+/// `types/x86_64.vx`, y el resolver devuelve el PRIMERO que encuentra el
+/// escaneo del disco.  Segun cual ganase, el mismo `uintptr` entraba como
+/// `arm64__uintptr` o como `std__types__uintptr` y luego no unificaba consigo
+/// mismo.  El namespace es el mismo para todos los ficheros que lo declaran,
+/// asi que cualificar por el da UNA identidad estable.
+inline std::string flatten_ns_(const std::string &dotted) {
+    std::string out;
+    out.reserve(dotted.size() + 8);
+    for (const char c : dotted) {
+        if (c == '.')
+            out += "__";
+        else
+            out.push_back(c);
+    }
+    return out;
+}
+
 ///  M.5: renombrar las top-level FunctionDecl y GlobalVarDecl del
 /// modulo con un prefijo `<modname>__`.  Esto evita colisiones de
 /// nombres cuando dos modulos definen una funcion con el mismo nombre
@@ -1723,8 +1745,14 @@ CompileResult compile_vx_project(
                         if (sym.name[0] == '_') continue;
                         synth_only.push_back({sym.name, ""});
                     }
+                    // Cualificar por NAMESPACE, no por fichero: en un namespace
+                    // parcial todos sus ficheros deben dar la MISMA identidad.
+                    const std::string qual =
+                        (req.by_namespace && !req.ns_path.empty())
+                            ? flatten_ns_(req.ns_path)
+                            : req.module_name;
                     auto missing = import_vxi_into_typechecker_with_missing(
-                        *pm.tc, dep_vxi, synth_only, req.module_name);
+                        *pm.tc, dep_vxi, synth_only, qual);
                     (void)missing; // best-effort; los privados ya fueron
                                    //              filtrados al construir el
                                    //              .vxi.
@@ -1778,8 +1806,13 @@ CompileResult compile_vx_project(
                                                    /*ns_prefix=*/"", only_alias);
                 // M2.d: inyeccion directa via only.  M6.a.3: usar la variante
                 // que devuelve los missing para emitir diagnostico claro.
+                // Cualificar por NAMESPACE, no por fichero (ver flatten_ns_).
+                const std::string qual =
+                    (req.by_namespace && !req.ns_path.empty())
+                        ? flatten_ns_(req.ns_path)
+                        : req.module_name;
                 auto missing = import_vxi_into_typechecker_with_missing(
-                    *pm.tc, dep_vxi, req.only_symbols, req.module_name);
+                    *pm.tc, dep_vxi, req.only_symbols, qual);
                 // Namespace PARCIAL: un `import std.types only uintptr` resuelve
                 // `req.module_name` al PRIMER fichero del namespace (p.ej.
                 // arm64), donde el simbolo puede estar @Target-inactivo -> queda
@@ -1809,9 +1842,12 @@ CompileResult compile_vx_project(
                             VxiModule other_store;
                             const VxiModule &other_vxi = filter_internal_(
                                 work[ito->second].vxi, other_store);
+                            // Mismo cualificador que arriba: los ficheros
+                            // restantes del namespace parcial NO pueden dar una
+                            // identidad distinta a la del primero.
                             auto still =
                                 import_vxi_into_typechecker_with_missing(
-                                    *pm.tc, other_vxi, retry, other_mn);
+                                    *pm.tc, other_vxi, retry, qual);
                             // reducir retry a los que aun faltan tras este fichero
                             std::vector<TypeChecker::VxiOnlyEntry> next_retry;
                             for (const auto &os : retry) {

@@ -28,4 +28,17 @@ public typedef usize size_t;
  */
 public typedef ssize ssize_t;
 
+/**
+ * Puntero nulo. Constante para no tener que escribir `0` en 
+ * el codigo.
+ */
 public const uintptr nullptr = 0;
+
+/**
+ * Tipo para expresar offsets de memoria en bytes.  Es un entero con signo.
+ */
+public typedef isize offset new;
+
+public typedef u64 nanoseconds new;
+public typedef u64 microseconds new;
+public typedef u64 milliseconds new;

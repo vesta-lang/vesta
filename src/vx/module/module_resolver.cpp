@@ -830,6 +830,15 @@ uint32_t ModuleGraph::build_from_root(const std::string &root_file) {
         size_t slash = canonical.find_last_of('/');
         if (slash != std::string::npos) {
             root_dir_ = canonical.substr(0, slash);
+        } else {
+            // Sin separador el root es un nombre SUELTO (`vx main.vx`), asi que
+            // vive en el directorio actual.  Dejarlo vacio hacia que
+            // `add_root("")` saliera de inmediato y el indice de namespaces NO
+            // escaneara el directorio del propio fichero raiz: el mismo
+            // proyecto compilaba con ruta absoluta y fallaba con relativa,
+            // diciendo "ningun .vx bajo las source roots lo declara" con el
+            // fichero justo al lado.
+            root_dir_ = ".";
         }
     }
     const uint32_t id = load_and_parse_(canonical);
