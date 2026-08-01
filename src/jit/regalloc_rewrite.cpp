@@ -226,6 +226,8 @@ struct Lowerer {
     bool vm_abi = false;      ///< VM_ABI (salva RBX=ProcessVM*) vs host leaf
     bool no_frame = false;    ///< hoja frameless: sin push/mov rbp ni sub rsp
     bool naked = false;       ///<  NR @Naked: sin prologo/epilogo/ret
+    bool fpo = false;         ///< frame-pointer omission: liga rbp/rsp a un param
+    int32_t frame_below = 0;  ///< FPO: [rbp+off] -> [rsp + frame_below + off]
     uint32_t k = 0;           ///< numero de callee-saved asignados
     uint32_t total_saved = 0; ///< callee-saved + (vm_abi ? 1 (rbx) : 0)
     int32_t spill_bytes = 0;  ///< tamano del area de spills (alineado)
@@ -276,7 +278,7 @@ struct Lowerer {
     Lowerer(const codegen::AllocationResult &a, const TargetRegInfo &t, AbiKind abi,
             bool has_calls, uint32_t alloca_total, bool has_vm_alloca_in,
             uint32_t out_stack_args_in = 0, bool has_stack_params_in = false,
-            bool cb_save_regs_in = false)
+            bool cb_save_regs_in = false, bool binds_frame_reg_in = false)
         : ar(a), tri(t), vm_abi(abi == AbiKind::VM),
           has_vm_alloca(has_vm_alloca_in), out_stack_args(out_stack_args_in),
           cb_save_regs(cb_save_regs_in) {
@@ -304,6 +306,15 @@ struct Lowerer {
                    !jit_no_frameless() &&
                    !jit_osr_count(); /* el trigger (1b) añade un
                   call -> necesita frame con rsp 16-alineado. */
+        /* FPO: la funcion liga rbp/rsp a un param (register("rbp")).  Ese fisico
+         * no puede ser el frame pointer -> NO se emite `mov rbp,rsp` y el frame
+         * se direcciona por RSP (frame_below = distancia rbp-hipotetico a rsp).
+         * Se conserva push/pop rbp (callee-saved).  Solo hoja: con RSP variable
+         * (calls/allocas VM) no habria base estable -> ahi cae al frame normal
+         * (y el binding a rbp seguira siendo responsabilidad del programador). */
+        fpo = binds_frame_reg_in && !has_calls && !has_vm_alloca &&
+              !cb_save_regs_in && !jit_osr_count();
+        if (fpo) no_frame = false; // FPO tiene su propio prologo/epilogo
         /* Las allocas viven debajo de los spill slots. */
         alloca_base = SZ * total_saved + SZ * ar.frame.num_spill_slots;
         spill_bytes =
@@ -360,6 +371,12 @@ struct Lowerer {
         /* Frameless: spill_bytes queda en 0 (no hay spills ni allocas) y
          * no se alinea a 16 ni se reserva shadow space porque no hay
          * CALLs internos. */
+        /* FPO: offset para convertir [rbp+off] (off<0 en los slots) a
+         * [rsp + frame_below + off].  frame_below = distancia entre el RBP
+         * hipotetico (rsp_entrada - SZ, por el push rbp) y el rsp final (tras
+         * push callee-saved + sub rsp, spill_bytes).  Se computa con el
+         * spill_bytes FINAL (ya alineado arriba). */
+        frame_below = static_cast<int32_t>(SZ * total_saved) + spill_bytes;
         const auto &sc = tri.scratch[static_cast<size_t>(RegClass::GP)];
         if (sc.size() >= 1) scr0 = static_cast<MReg>(sc[0]);
         if (sc.size() >= 2) scr1 = static_cast<MReg>(sc[1]);
@@ -374,6 +391,10 @@ struct Lowerer {
         uint8_t idx;
         MOperand loc;
         bool is_fp;
+        /// ABI custom: registro fisico de destino (>=0) tomado de register() en
+        /// el param/tipo cfn.  -1 = ABI estandar (usa arg_regs[idx]).  El
+        /// selector lo pone en @c MInstr::dst del pseudo-ARG.
+        int custom_reg = -1;
     };
     std::vector<PendingArg> pending_args;
 
@@ -430,6 +451,16 @@ struct Lowerer {
         return -static_cast<int32_t>(SZ * total_saved + SZ * (slot + 1u));
     }
 
+    /** @brief Direccion de memoria de un slot del frame dado su offset
+     *  RBP-relativo @p off (negativo).  En modo normal es @c [rbp+off]; en FPO
+     *  (sin frame pointer) es @c [rsp + frame_below + off], donde RBP no existe
+     *  como base.  Centraliza la conversion para que TODO acceso al frame la
+     *  respete. */
+    MOperand frame_mem(int32_t off) const noexcept {
+        if (fpo) return MOperand::make_mem(MReg::RSP, frame_below + off);
+        return MOperand::make_mem(MReg::RBP, off);
+    }
+
     /**
      * @brief Tamano del frame en un safepoint call: RBP - RSP.
      *
@@ -445,9 +476,10 @@ struct Lowerer {
                (spill_bytes > 0 ? static_cast<uint32_t>(spill_bytes) : 0u);
     }
 
-    /** @brief Operando de memoria del spill slot @p slot: [rbp+off]. */
+    /** @brief Operando de memoria del spill slot @p slot: [rbp+off] (o RSP en
+     *  FPO, via @ref frame_mem). */
     MOperand slot_mem(uint32_t slot) const noexcept {
-        return MOperand::make_mem(MReg::RBP, slot_off(slot));
+        return frame_mem(slot_off(slot));
     }
 
     /**
@@ -581,7 +613,13 @@ struct Lowerer {
     void emit_prologue(std::vector<MInstr> &out) const {
         /*  NR @Naked: cero prologo.  El cuerpo (asm) controla todo. */
         if (naked) return;
-        if (!no_frame) {
+        if (fpo) {
+            /* FPO: push rbp para SALVAR el rbp del caller (callee-saved), pero
+             * SIN `mov rbp,rsp` -> rbp queda disponible para el ABI custom (el
+             * 6o arg del int 0x80 x86-32 va en ebp).  El frame se direcciona por
+             * RSP (via frame_mem).  El pop rbp del epilogo lo restaura. */
+            out.push_back(push(MReg::RBP));
+        } else if (!no_frame) {
             out.push_back(push(MReg::RBP));
             out.push_back(
                 MInstr::make_unary(MOp::MOV, reg(MReg::RBP), reg(MReg::RSP)));
@@ -617,6 +655,21 @@ struct Lowerer {
     void emit_epilogue(std::vector<MInstr> &out) const {
         /*  NR @Naked: cero epilogo (el cuerpo provee ret/iretq). */
         if (naked) return;
+        if (fpo) {
+            /* FPO: no hay frame pointer -> deshacer el `sub rsp` con `add rsp`
+             * (no `lea rsp,[rbp-..]`), luego pop callee-saved + pop rbp.  RSP es
+             * estable (fpo solo en hojas: sin CALLs ni allocas VM que lo muevan
+             * de forma no equilibrada). */
+            if (spill_bytes > 0)
+                out.push_back(MInstr::make_unary(
+                    MOp::ADD, reg(MReg::RSP), MOperand::make_imm32(spill_bytes)));
+            for (size_t i = ar.frame.callee_saved_used.size(); i-- > 0;)
+                out.push_back(
+                    pop(static_cast<MReg>(ar.frame.callee_saved_used[i])));
+            if (vm_abi) out.push_back(pop(MReg::RBX));
+            out.push_back(pop(MReg::RBP));
+            return;
+        }
         if (no_frame) {
             /* Frameless: rsp ya apunta justo encima de los registros
              * salvados (no hubo push rbp ni sub rsp).  Solo se deshacen
@@ -848,6 +901,11 @@ struct Lowerer {
                             (G + (pa.idx - fareg.size())) * 8u);
                     smoves.emplace_back(off, pa.loc, true);
                 }
+            } else if (pa.custom_reg >= 0) {
+                // ABI custom (register() en el param/cfn): el destino es el
+                // registro fisico declarado, NO arg_regs[idx].  Va al
+                // parallel-move igual que un arg estandar (rompe ciclos con scr1).
+                gmoves.emplace_back(static_cast<MReg>(pa.custom_reg), pa.loc);
             } else {
                 if (pa.idx < gareg.size())
                     gmoves.emplace_back(static_cast<MReg>(gareg[pa.idx]),
@@ -901,9 +959,13 @@ struct Lowerer {
             /* Acumular: (indice-de-clase, ubicacion fisica, es_fp).  El
              * selector ya numera el indice por clase; la clase se toma del
              * operando vreg (in.src1.vreg_class) o, si ya es un reg fisico,
-             * de si es XMM. */
-            pending_args.push_back(
-                {in.variant, resolve_use(in.src1), is_fp_operand(in.src1)});
+             * de si es XMM.  ABI custom: si el selector puso un reg fisico en
+             * @c dst, ese es el destino del arg (register() en el param/cfn). */
+            const int custom = in.dst.is_reg()
+                                   ? static_cast<int>(in.dst.reg)
+                                   : -1;
+            pending_args.push_back({in.variant, resolve_use(in.src1),
+                                    is_fp_operand(in.src1), custom});
             return;
         }
 
@@ -1411,11 +1473,16 @@ struct Lowerer {
         }
 
         if (op == MOp::RET) {
-            /*  NR @Naked: NO emitir el ret implicito; el cuerpo (asm)
-             * provee la salida real (ret/iretq).  Un ret aqui seria, en el
-             * mejor caso, codigo muerto tras un iretq; en el peor, pisaria
-             * la convencion de interrupcion. */
-            if (naked) return;
+            /*  NR @Naked: NO emitir el ret IMPLICITO (caida-al-final); el cuerpo
+             * (asm) provee la salida real (ret/iretq).  Un ret aqui seria, en el
+             * mejor caso, codigo muerto tras un iretq; en el peor, pisaria la
+             * convencion de interrupcion.  Pero un `return` EXPLICITO del usuario
+             * (MI_FLAG_RET_EXPLICIT, puesto por el selector segun
+             * IrInstr::ret_implicit) SI se materializa: read-back a RAX (ya
+             * emitido antes) + `ret`, SIN epilogo de frame (emit_epilogue es
+             * no-op en naked).  Sin esto, un `@Naked i64 f(){ asm{}; return r; }`
+             * cae a basura tras el cuerpo por falta de ret. */
+            if (naked && !(in.flags & MI_FLAG_RET_EXPLICIT)) return;
             emit_epilogue(out);
             out.push_back(MInstr::make_ret());
             return;
@@ -1844,7 +1911,7 @@ struct Lowerer {
             const int32_t off =
                 static_cast<int32_t>(alloca_base + alloca_cursor + aligned);
             alloca_cursor += aligned;
-            const MOperand mem = MOperand::make_mem(MReg::RBP, -off);
+            const MOperand mem = frame_mem(-off);
             const bool dst_spilled =
                 in.dst.is_vreg() && resolver.resolve_def(in.dst.vreg_id()).is_memory();
             const MOperand pdst = dst_spilled ? reg(scr0) : resolve_def(in.dst);
@@ -2212,7 +2279,8 @@ MFunction rewrite_to_physical(const MFunction &vf, const codegen::AllocationResu
         vf.param_vregs.size() >
         tri.arg_regs[static_cast<size_t>(RegClass::GP)].size();
     Lowerer lw(alloc, tri, abi, has_calls, alloca_total, has_vm_alloca,
-               max_stack_args, has_stack_params, vf.cb_save_regs);
+               max_stack_args, has_stack_params, vf.cb_save_regs,
+               vf.binds_frame_reg);
     /* Los movimientos que exige el modelo temporal (cuando un valor cambia de ubicacion
      * entre tramos).  El Rewrite NO los calcula: pregunta por punto del programa y emite.
      * Sin afirmaciones en el plan el planner esta vacio -> no se emite nada. */

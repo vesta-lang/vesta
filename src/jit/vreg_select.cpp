@@ -419,7 +419,7 @@ inline bool has_critical_edge_to_phi(const ir::IrFunction &fn) {
  * registros vectoriales ("vN") devuelven -1 (el banco FP no es asignable
  * en el regalloc v1).  El selector cae a fallback si recibe -1.
  */
-inline int canon_gp_to_mreg(const std::string &c) {
+inline int canon_gp_to_mreg(const std::string &c, bool for_pin = false) {
     static const struct {
         const char *n;
         int r;
@@ -427,10 +427,25 @@ inline int canon_gp_to_mreg(const std::string &c) {
         {"rax", 0},  {"rcx", 1},  {"rdx", 2},  {"rsi", 6},  {"rdi", 7},
         {"r8", 8},   {"r9", 9},   {"r10", 10}, {"r11", 11}, {"r12", 12},
         {"r13", 13}, {"r14", 14}, {"r15", 15},
-        /* rbx(3)/rsp(4)/rbp(5) RESERVADOS: no se exponen como pin. */
+        /* rsp(4) RESERVADO SIEMPRE (rompe la pila). */
     };
     for (const auto &e : T)
         if (c == e.n) return e.r;
+    /* rbx(3)/rsp(4)/rbp(5): reservados para el uso GENERAL del regalloc (rbx =
+     * ProcessVM* en VM_ABI / callee-saved; rsp = pila; rbp = frame pointer), por
+     * eso canon_gp_to_mreg los rechaza en el manejo de CLOBBERS (donde -1
+     * dispara el save/restore push/pop alrededor del asm, p.ej. cpuid pisa ebx).
+     * Pero una ABI a medida (register en params, p.ej. el `int 0x80` de x86-32
+     * que recibe arg1 en EBX y arg6 en EBP) SI necesita pinear un vreg a ese
+     * fisico: @p for_pin los expone SOLO en ese camino.  SIN red de seguridad:
+     * pinear a rsp/rbp puede corromper la pila/el frame -- es responsabilidad
+     * del programador (mismo contrato que el asm crudo: si pides EBP, sabes que
+     * pisas el frame pointer). */
+    if (for_pin) {
+        if (c == "rbx") return 3;
+        if (c == "rsp") return 4;
+        if (c == "rbp") return 5;
+    }
     return -1;
 }
 
@@ -445,6 +460,17 @@ static thread_local uint64_t g_ctpe_sp_handler = 0;
 
 void vreg_set_ctpe_safepoint_handler(uint64_t handler_addr) noexcept {
     g_ctpe_sp_handler = handler_addr;
+}
+
+// ABI custom por funcion: resuelve los param_abi_regs de un callee por NOMBRE
+// (para el CALL directo).  Lo setea el driver AOT desde su indice fn_by_name
+// antes de compilar; thread_local porque cada hilo compila aislado.  El CALLIND
+// NO lo usa (lleva su ABI en la instruccion, tomada del tipo del puntero).
+// Devuelve nullptr si no hay ABI custom (caso comun).
+static thread_local AbiResolver g_abi_resolver;
+
+void vreg_set_abi_resolver(AbiResolver resolver) noexcept {
+    g_abi_resolver = std::move(resolver);
 }
 
 bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
@@ -511,6 +537,20 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
     /*  NR @Naked: propagar para suprimir prologo/epilogo/ret en el
      * rewrite-to-physical.  El cuerpo (asm) provee su propia salida. */
     out.naked = fn.is_naked;
+    /* FPO: la funcion liga rbp/rsp a un param por ABI custom (register("rbp"),
+     * el 6o arg del int 0x80 x86-32).  Ese fisico no puede ser tambien el frame
+     * pointer -> el rewrite omite `mov rbp,rsp` y direcciona el frame por RSP.
+     * canon_gp_to_mreg(...,for_pin=true) mapea rbp->5, rsp->4. */
+    if (!fn.is_naked) {
+        for (const std::string &r : fn.param_abi_regs) {
+            if (r.empty()) continue;
+            const int p = canon_gp_to_mreg(r, /*for_pin=*/true);
+            if (p == 5 /*rbp*/ || p == 4 /*rsp*/) {
+                out.binds_frame_reg = true;
+                break;
+            }
+        }
+    }
     /* Callback save-set: propagar tras el reset de out (arriba lo borra un
      * MFunction{}); el rewrite reserva 128B para CB_SAVE_REGS/CB_RESTORE_REGS. */
     out.cb_save_regs = cb_save_set;
@@ -701,8 +741,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 continue;
             }
             const std::string canon = vx::asm_canonical_reg(b.reg);
-            const int phys = canon_gp_to_mreg(canon);
-            if (phys < 0) { /* reservado (rbx/rsp/rbp) o no GP -> fallback */
+            const int phys = canon_gp_to_mreg(canon, /*for_pin=*/true);
+            if (phys < 0) { /* rsp o no GP -> fallback (rbx/rbp SI se pinean) */
                 vreg_dbg(fn.name.c_str(), "inline-asm(reg-no-usable)");
                 return false;
             }
@@ -771,7 +811,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
      * arg_reg via MOVSD.  Devuelve false si algun arg excede los arg_regs de
      * su clase (paso por pila no soportado en v1). */
     auto emit_host_args = [&](const std::vector<ir::IrValueId> &operands,
-                              std::vector<MInstr> &OO) -> bool {
+                              std::vector<MInstr> &OO,
+                              const std::vector<std::string> *abi_regs =
+                                  nullptr) -> bool {
         const size_t gmax =
             tri_sel.arg_regs[static_cast<size_t>(RegClass::GP)].size();
         const size_t fmax =
@@ -782,6 +824,12 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             const ir::IrValueId av = operands[a];
             const bool is_f = fp_ok && av < fn.values.size() &&
                               ir_type_is_float(fn.values[av].type);
+            // ABI custom (register() en el param/cfn): si el a-esimo arg declara
+            // un registro fisico, se coloca ahi (via MInstr::dst del pseudo-ARG)
+            // en vez del i-esimo arg-reg del ABI estandar.  Solo GP en v1.
+            int custom_phys = -1;
+            if (abi_regs && a < abi_regs->size() && !(*abi_regs)[a].empty())
+                custom_phys = canon_gp_to_mreg((*abi_regs)[a], /*for_pin=*/true);
             if (is_f) {
                 /* FP: overflow permitido -> stack arg.  El rewrite lo coloca
                  * tras los GP-stack en [rsp+base+(G+(fi-fmax))*8] (convencion
@@ -794,8 +842,11 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 /* GP: overflow permitido -> stack arg (args ilimitados).
                  * El rewrite lo coloca en [rsp+base+(idx-gmax)*8]. */
                 (void)gmax;
-                OO.push_back(
-                    MInstr::make_arg(static_cast<uint8_t>(gi_a), vr(av)));
+                MInstr arg = MInstr::make_arg(static_cast<uint8_t>(gi_a), vr(av));
+                if (custom_phys >= 0)
+                    arg.dst = MOperand::make_reg(static_cast<MReg>(custom_phys),
+                                                 8);
+                OO.push_back(arg);
                 ++gi_a;
             }
         }
@@ -1220,10 +1271,20 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 return fp_ok && pv < fn.values.size() &&
                        ir_type_is_float(fn.values[pv].type);
             };
+            // ¿Este param declara un registro fisico de entrada (ABI custom)?
+            auto param_custom_reg = [&](size_t i) -> int {
+                if (i < fn.param_abi_regs.size() &&
+                    !fn.param_abi_regs[i].empty())
+                    return canon_gp_to_mreg(fn.param_abi_regs[i], /*for_pin=*/true);
+                return -1;
+            };
             // G = nº de GP-stack params (los FP-stack van DESPUES en la pila).
+            // Los params con ABI custom NO cuentan: llegan en su registro fijo,
+            // no consumen un arg-reg estandar ni un slot de pila.
             size_t gp_count = 0;
             for (size_t i = 0; i < fn.params.size(); ++i)
-                if (!is_fparam(fn.params[i])) ++gp_count;
+                if (!is_fparam(fn.params[i]) && param_custom_reg(i) < 0)
+                    ++gp_count;
             const size_t G = (gp_count > gmax_p) ? (gp_count - gmax_p) : 0;
             // PASO 1: params en arg_regs (GP + FP) -> param-init reg.  Deben ir
             // PRIMERO: emit_host_param_loads consume estos lideres (vreg<-reg)
@@ -1239,12 +1300,23 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                 static_cast<MReg>(fareg[fi_p]), 8)));
                     ++fi_p;
                 } else {
-                    if (gi_p < gmax_p)
+                    const int custom = param_custom_reg(i);
+                    if (custom >= 0) {
+                        // ABI custom: el param llega en su registro declarado
+                        // (register()).  MOV lider vreg<-reg fisico -> el
+                        // parallel-move de emit_host_param_loads lo resuelve.  NO
+                        // consume un arg-reg estandar (gi_p intacto).
                         O.push_back(MInstr::make_unary(
                             MOp::MOV, vrt(pv),
-                            MOperand::make_reg(
-                                static_cast<MReg>(areg[gi_p]), 8)));
-                    ++gi_p;
+                            MOperand::make_reg(static_cast<MReg>(custom), 8)));
+                    } else {
+                        if (gi_p < gmax_p)
+                            O.push_back(MInstr::make_unary(
+                                MOp::MOV, vrt(pv),
+                                MOperand::make_reg(
+                                    static_cast<MReg>(areg[gi_p]), 8)));
+                        ++gi_p;
+                    }
                 }
             }
             // PASO 2: params en PILA (overflow GP/FP).  El caller los dejo en
@@ -1266,6 +1338,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     }
                     ++fi_p;
                 } else {
+                    // ABI custom: ya se cargo en el PASO 1 desde su registro; no
+                    // consume un slot de pila ni un indice de arg-reg.
+                    if (param_custom_reg(i) >= 0) continue;
                     if (gi_p >= gmax_p) {
                         const int32_t off =
                             16 + shadow_p +
@@ -2797,6 +2872,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                             MOp::MOV, MOperand::make_reg(MReg::XMM0, 8),
                             vrt(rv)));
                         O.push_back(MInstr::make_ret());
+                        if (!in.ret_implicit)
+                            O.back().flags |= MI_FLAG_RET_EXPLICIT;
                         break;
                     }
                     /* Float return VM_ABI: proc->registers.regs[0] guarda el
@@ -2820,6 +2897,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                          * RAX/XMM0 -> el retorno nativo sobrevive). */
                         if (cb_save_set) O.push_back(MInstr::make_cb_restore());
                         O.push_back(MInstr::make_ret());
+                        if (!in.ret_implicit)
+                            O.back().flags |= MI_FLAG_RET_EXPLICIT;
                         break;
                     }
                     /* GP: VM_ABI -> regs[0] ([rbx+off]); host leaf -> RAX. */
@@ -2854,6 +2933,10 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * restore usa R11 -> no lo pisa. */
                 if (cb_save_set) O.push_back(MInstr::make_cb_restore());
                 O.push_back(MInstr::make_ret());
+                /* @Naked: marcar el RET si proviene de un `return` explicito
+                 * (no del fallthrough sintetico) -> el rewrite lo materializa. */
+                if (!in.ret_implicit)
+                    O.back().flags |= MI_FLAG_RET_EXPLICIT;
                 break;
             }
 
@@ -4806,8 +4889,19 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * a la propia funcion -> resuelta a su mismo offset). */
                 if (abi == AbiKind::HOST_LEAF) {
                     /* Args enteros y flotantes cuentan arg_regs SEPARADOS
-                     * (ABI SysV/Win64): emit_host_args reparte por clase. */
-                    if (!emit_host_args(in.operands, O)) {
+                     * (ABI SysV/Win64): emit_host_args reparte por clase.  ABI
+                     * custom: el resolver da los param_abi_regs del callee (por
+                     * nombre, desde su firma register()) -> cada arg va directo a
+                     * su registro (cero shift).  in.call_abi_regs (si viene ya
+                     * puesto) tiene prioridad. */
+                    const std::vector<std::string> *cabi =
+                        in.call_abi_regs.empty() ? nullptr : &in.call_abi_regs;
+                    if (!cabi && g_abi_resolver) {
+                        const std::vector<std::string> *r =
+                            g_abi_resolver(in.func_name);
+                        if (r && !r->empty()) cabi = r;
+                    }
+                    if (!emit_host_args(in.operands, O, cabi)) {
                         vreg_dbg(fn.name.c_str(), "call(host-leaf-args)");
                         return false;
                     }
@@ -4896,7 +4990,14 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         vreg_dbg(fn.name.c_str(), "callind(no-fnptr)");
                         return false;
                     }
-                    if (!emit_host_args(in.operands, O)) {
+                    // ABI custom: el tipo del puntero (cfn) fija los abi_regs en
+                    // la instruccion (in.call_abi_regs).  Cero shift: cada arg va
+                    // directo a su registro (la ABI la conoce el tipo, no el
+                    // valor runtime del puntero).
+                    if (!emit_host_args(in.operands, O,
+                                        in.call_abi_regs.empty()
+                                            ? nullptr
+                                            : &in.call_abi_regs)) {
                         vreg_dbg(fn.name.c_str(), "callind(host-leaf-args)");
                         return false;
                     }
@@ -5920,7 +6021,11 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 if (abi == AbiKind::HOST_LEAF) {
                     const uint32_t sidx = out.intern_reloc_symbol(
                         "rodata." + std::to_string(in.imm));
-                    if (pic)
+                    /* x86-32 NO tiene lea [rip+disp32]: el mismo encoding es un
+                     * lea ABSOLUTO y el reloc RIP-relativo daria direcciones
+                     * distintas por instruccion para el MISMO slot.  En mode32
+                     * usamos SIEMPRE mov r32, imm32 (ABS32/R_386_32), no-PIE. */
+                    if (pic && !mode32)
                         O.push_back(MInstr::make_lea_rip_sym(vr(in.dst), sidx));
                     else
                         O.push_back(MInstr::make_mov_sym(vr(in.dst), sidx));
@@ -5978,7 +6083,11 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 if (abi == AbiKind::HOST_LEAF) {
                     const uint32_t sidx =
                         out.intern_reloc_symbol("fnsym:" + in.func_name);
-                    if (pic)
+                    /* x86-32: mov r32,imm32 (ABS32) -- x86-32 no tiene lea[rip]
+                     * (ver STR_LIT_ADDR).  El label_addr de una FUNCION guardado
+                     * en memoria (campo cfn de un static ctx) exige direcciones
+                     * absolutas consistentes. */
+                    if (pic && !mode32)
                         O.push_back(MInstr::make_lea_rip_sym(vr(in.dst), sidx));
                     else
                         O.push_back(MInstr::make_mov_sym(vr(in.dst), sidx));

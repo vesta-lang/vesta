@@ -30,6 +30,7 @@
 #include "distrib/dist_runtime.h" /* dtor de VM destruye DistRuntime via unique_ptr */
 #include "jit/auto_jit.h"         /*   : eager-compile macros */
 #include "ffi/virtual_lib_registry.h" /* #3: resolver vrt:* en el JIT del CV */
+#include "jit/interp_jit_bridge.h" /* CTPE: enter_jit (invocacion directa) */
 #include "jit/jit_compiler.h" /* CompileResult */
 #include "jit/vreg_pipeline.h" /* CTPE: vreg_set_ctpe_safepoint_handler */
 
@@ -387,7 +388,54 @@ bool ComptimeRuntime::try_invoke_ctpe(const std::string &fn_name,
         proc_ptr->safepoint_flag = 1;
     });
 
-    const bool ok = invoke_simple_macro(fn_name, args, out_r0);
+    // Invocacion DIRECTA del codigo JIT: sin make_ready, sin scheduler y sin el
+    // run-loop de la VM.  CTPE es JIT; el interprete solo es fallback.
+    //
+    // Hay que replicar la red de recuperacion que el scheduler arma alrededor de
+    // `jit_entry_fn` (scheduler.cpp): sin ella, un throw del propio programa --o
+    // el longjmp con que el watchdog aborta desde el poll de safepoint-- escapa
+    // y se lleva por delante la compilacion entera.  Quitar el envoltorio de VM
+    // no puede significar quitar tambien esa red.
+    //
+    // `ok` es volatile: lo escribe la rama normal y lo lee codigo alcanzable por
+    // longjmp, donde una local no-volatile queda indeterminada.
+    volatile bool ok = false;
+    out_r0 = 0;
+    {
+        runtime::ProcessVM *proc = impl_->proc;
+        // Estado inicial de pila: lo consume el bajado de VM para sus ALLOCA.
+        proc->registers.stack_pointer.qword(impl_->initial_rsp);
+        proc->registers.base_pointer.qword(impl_->initial_rsp);
+        proc->vm_mem.vm_to_host_memcpy(impl_->initial_rsp,
+                                       &impl_->hlt_sentinel_va,
+                                       sizeof(impl_->hlt_sentinel_va));
+        proc->stack_high = impl_->initial_rsp;
+        proc->stack_low_water = impl_->initial_rsp;
+
+        proc->registers.rip.qword(pcit->second);
+        for (size_t i = 0; i < args.size(); ++i)
+            proc->registers.regs[i + 1].qword(args[i]);
+        proc->registers.regs[15].qword(args.size());
+        proc->jit_entry_fn = nullptr; // no se pasa por el scheduler.
+
+        jit::JitFn jf = reinterpret_cast<jit::JitFn>(
+            impl_->jit_code_by_pc[pcit->second]);
+        proc->state.store(runtime::EXECUTE, std::memory_order_relaxed);
+        proc->av_recovery_active = true;
+        // setjmp == 0: ejecucion normal.  != 0: hubo longjmp (aborto del
+        // watchdog o fallo recuperado) -> no hay resultado fiable, no se pliega.
+        if (setjmp(proc->av_recovery_jmpbuf) == 0) {
+            try {
+                (void)jit::enter_jit(jf, reinterpret_cast<vrt_proc *>(proc));
+                out_r0 = proc->registers.regs[0].qword();
+                ok = true;
+            } catch (...) {
+                ok = false;
+            }
+        }
+        proc->av_recovery_active = false;
+        proc->state.store(runtime::HALT, std::memory_order_release);
+    }
 
     done.store(true, std::memory_order_relaxed);
     watch.join();
@@ -395,11 +443,27 @@ bool ComptimeRuntime::try_invoke_ctpe(const std::string &fn_name,
     proc_ptr->ctpe_abort = 0;
     proc_ptr->safepoint_flag = 0;
     proc_ptr->ctpe_did_abort = 0;
+    // Restaurar SIEMPRE, tambien en los caminos de fallo: antes se salia por el
+    // `return false` del aborto sin restaurarlas y el ejecutable se quedaba con
+    // las capacidades denegadas durante el resto de la compilacion, afectando a
+    // los @Macro posteriores.
+    exe->caps.bits = saved_bits;
+
     // El watchdog aborto la ejecucion (longjmp): el resultado seria parcial ->
     // NO plegar (fallback: main corre en runtime).
     if (aborted) return false;
 
-    exe->caps.bits = saved_bits; // restaurar: NO afectar a los @Macro.
+    // El proceso murio por error FATAL (una capacidad denegada por el sandbox,
+    // un deref invalido, cualquier trap).  @c invoke_simple_macro NO se entera:
+    // la VM AISLA el fallo -- mata el proceso y retorna con normalidad, sin
+    // lanzar ninguna excepcion que su `catch (...)` pueda ver -- asi que
+    // devuelve true y R0 conserva un valor RESIDUAL.  Plegar eso hornea un
+    // numero inventado en el binario, y el sintoma aparece lejisimos: en el
+    // resultado del programa ya compilado.  Regla: si el programa no termino
+    // LIMPIO no se pliega nada; esa funcion se compila con normalidad.
+    if (impl_->proc->state.load(std::memory_order_relaxed) == runtime::DEAD)
+        return false;
+
     return ok;
 }
 

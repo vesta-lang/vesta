@@ -1490,6 +1490,21 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
             put8(out, 0xCC);
             return true;
         }
+        if (mode32_) {
+            /* x86-32: mov r32, imm32 (B8+rd + imm32) + MReloc{ABS32}.  x86-32 no
+             * tiene REX ni imm64; la VA de un no-PIE cabe en 32 bits.  El emisor
+             * ELF32 lo traduce a R_386_32. */
+            if (mi.dst.reg >= 8) put8(out, 0x41); /* REX.B para r8d..r15d (raro) */
+            put8(out, 0xB8 + (mi.dst.reg & 7));
+            MReloc r;
+            r.kind = MRelocKind::ABS32;
+            r.patch_at = static_cast<uint32_t>(out.size());
+            r.sym_idx = static_cast<uint32_t>(mi.src1.value);
+            r.addend = 0;
+            fn.relocs.push_back(r);
+            put32(out, 0); /* placeholder imm32 */
+            return true;
+        }
         put_rex(out, true, 0, mi.dst.reg);
         put8(out, 0xB8 + (mi.dst.reg & 7));
         MReloc r;

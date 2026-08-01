@@ -836,6 +836,18 @@ enum class MOp : uint8_t {
  * guardan en flags (esas no son ops float). */
 static constexpr uint16_t MI_FLAG_VX_SCALAR = 0x8000u;
 
+/* Bit de @c MInstr::flags para @c MOp::RET: marca un RET que proviene de un
+ * `return` EXPLICITO del usuario, a diferencia del RET sintetico de caida-al-final
+ * (fallthrough) que el lowering inserta.  NO basta con mirar si el RET porta un
+ * operando: el RET implicito de una funcion con tipo de retorno no-void tambien
+ * lleva un valor (un `0` sintetico), asi que "tiene operando" clasificaria mal un
+ * implicito.  El origen fiable es el lowering (`IrInstr::ret_implicit`).  Lo usa
+ * el rewrite en @Naked: una @Naked NO emite el `ret` implicito (para no pisar el
+ * `iretq`/`ret` que el propio asm provee en un ISR/bootloader), pero un `return`
+ * explicito SI se materializa (read-back a RAX + `ret`) sin el epilogo de frame.
+ * Bit alto -> no colisiona con el stackmap-idx que CALL/SAFEPOINT guardan. */
+static constexpr uint16_t MI_FLAG_RET_EXPLICIT = 0x4000u;
+
 struct MInstr {
     MOp op = MOp::NOP;
     uint8_t variant = 0;
@@ -1313,6 +1325,13 @@ enum class MRelocKind : uint8_t {
     ARM64_CALL26 =
         5, ///< AArch64 bl/b a una FUNCION (R_AARCH64_CALL26): el campo imm26
            ///< del bl = (sym - site) >> 2.  El driver lo encola como callee.
+    ABS32 =
+        6, ///< direccion absoluta 32-bit (mov r32,imm32): *(u32*)@ = sym +
+           ///< addend.  x86-32 no-PIE: la VA cabe en 32 bits (base fija).
+           ///< Equivalente 32-bit de ABS64; el emisor ELF32 lo traduce a
+           ///< R_386_32.  x86-32 NO tiene RIP-relative -> DATA_REL32 daria
+           ///< direcciones inconsistentes; esta es la ref correcta a DATO/
+           ///< FUNCION en 32-bit.
 };
 
 /**
@@ -1569,6 +1588,13 @@ struct MFunction {
     /// rewrite-to-physical.  El cuerpo (asm) provee su propia salida
     /// (ret/iretq).  Propagado desde @c IrFunction::is_naked por vreg-select.
     bool naked = false;
+    /// FPO (frame-pointer omission): la funcion LIGA rbp/rsp a un parametro por
+    /// ABI custom (`register("rbp")`, p.ej. el 6o arg del `int 0x80` x86-32 que
+    /// va en EBP).  Ese registro NO puede ser a la vez el frame pointer -> el
+    /// prologo NO emite `mov rbp,rsp` y el frame se direcciona por RSP.  Se
+    /// preserva `push rbp`/`pop rbp` (callee-saved) alrededor del cuerpo.  Solo
+    /// para funciones hoja (sin CALLs): con RSP variable no habria base estable.
+    bool binds_frame_reg = false;
     /// Callback-ABI (jubilacion de slots): si true, el rewrite reserva 128B
     /// en el frame (save-area de proc->registers[0..15]) para que las
     /// pseudo-ops @c CB_SAVE_REGS / @c CB_RESTORE_REGS del prologo/epilogo del

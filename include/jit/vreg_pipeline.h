@@ -64,6 +64,9 @@ struct NativeReloc {
         ARM64_CALL26 =
             5, ///< AArch64 BL a una FUNCION: parchea imm26 = (target-site)>>2.
                ///< Como CALL_REL32, el driver encola el callee (BFS).
+        ABS32 =
+            6, ///< direccion absoluta 32-bit a un DATO/FUNCION (x86-32 no-PIE):
+               ///< *(u32*)site = VA.  El emisor ELF32 -> R_386_32.
     };
     Kind kind = Kind::CALL_REL32;
     uint32_t offset = 0; ///< byte offset dentro de los bytes de la funcion

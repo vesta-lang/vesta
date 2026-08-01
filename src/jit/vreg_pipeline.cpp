@@ -647,6 +647,19 @@ std::vector<uint8_t> vreg_compile_native_target(
     if (asm_labels_out) asm_labels_out->clear();
     if (stackmaps_out) stackmaps_out->clear();
 
+    /* El codigo NATIVO no lleva NUNCA polls de safepoint del watchdog CTPE.
+     *
+     * Ese poll llama al handler del watchdog, cuya direccion solo es valida
+     * DENTRO del proceso del compilador: en el binario emitido es una llamada a
+     * memoria muerta -> access violation al primer back-edge.  El gate vive en
+     * un thread_local que solo escribe @c vreg_compile (camino JIT), asi que
+     * tras un precomputo CTPE quedaba RANCIO -- @c jit_set_ctpe_safepoint(0)
+     * limpia el campo de la CodeCache, pero nada re-propagaba el 0 al
+     * thread_local -- y la emision nativa posterior en ese mismo hilo heredaba
+     * el handler.  Se pone a 0 aqui: la distincion correcta no es "¿hay CTPE en
+     * esta compilacion?" sino "¿este codigo se ejecuta AQUI o se ENVIA?". */
+    vreg_set_ctpe_safepoint_handler(0);
+
     /* 1. SELECCION: IR (SSA) -> MachineIR de vregs (ABI HOST_LEAF). */
     MFunction mf;
     if (!target.select(fn, mf)) return {};
@@ -696,6 +709,7 @@ std::vector<uint8_t> vreg_compile_native_target(
                 nr.kind = NativeReloc::Kind::DATA_REL32;
                 break;
             case MRelocKind::ABS64: nr.kind = NativeReloc::Kind::ABS64; break;
+            case MRelocKind::ABS32: nr.kind = NativeReloc::Kind::ABS32; break;
             case MRelocKind::TPOFF32:
                 nr.kind = NativeReloc::Kind::TPOFF32;
                 break;

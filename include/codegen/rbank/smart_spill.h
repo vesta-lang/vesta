@@ -64,6 +64,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 namespace codegen {
@@ -100,6 +102,33 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
                   return a->value_id < b->value_id;
               });
 
+    // FIXED INTERVALS (linear-scan clasico): un valor con @c fixed_reg reserva ESA
+    // lane durante todo su rango.  El barrido es por @c start, asi que un valor SIN
+    // pin definido ANTES podria robar una lane que un pin definido DESPUES (aun no
+    // activo) necesita -> el pin, al llegar, no la encuentra y spillea/se desvia
+    // (rompe register("rXX") con varios bindings, p.ej. syscalls).  Se pre-computa
+    // aqui la reserva de cada pin para que @c first_free_lane la respete SIEMPRE.
+    struct FixedIval { uint8_t fid; uint32_t start; uint32_t end; uint32_t vid; };
+    std::vector<FixedIval> fixed_ivals;
+    for (const AbstractValue &v : p.values)
+        if (v.req.fixed_reg >= 0)
+            fixed_ivals.push_back({static_cast<uint8_t>(v.req.fixed_reg), v.start,
+                                   v.end, v.value_id});
+    // ¿La lane @p id la reserva ALGUN pin (distinto de @p self) cuyo rango se
+    // solapa con [@p vs, @p ve]?  El aliasing sub-registro se captura via AliasSet.
+    auto lane_pinned_by_other = [&](uint8_t id, uint32_t vs, uint32_t ve,
+                                    uint32_t self) -> bool {
+        const AliasSet *ca = bank.aliases_of(id);
+        if (!ca) return false;
+        for (const FixedIval &fi : fixed_ivals) {
+            if (fi.vid == self) continue;
+            const AliasSet *fa = bank.aliases_of(fi.fid);
+            if (!fa || !ca->overlaps(*fa)) continue;
+            if (vs <= fi.end && fi.start <= ve) return true; // rangos se solapan
+        }
+        return false;
+    };
+
     // Activos: valor EN REGISTRO cuyo rango no ha terminado.
     struct Active { const AbstractValue *v; int lane; };
     std::vector<Active> active;
@@ -113,19 +142,29 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
         }
         return true;
     };
-    auto first_free_lane = [&](const ValueRequirements &r) -> int {
+    auto first_free_lane = [&](const AbstractValue *v) -> int {
+        const ValueRequirements &r = v->req;
         if (r.fixed_reg >= 0) {
             const uint8_t fid = static_cast<uint8_t>(r.fixed_reg);
             const Lane *l = bank.by_id(fid);
+            // El pin NO exige @c is_allocatable: un @c register("rXX") es una
+            // constraint de NIVEL SUPERIOR (ABI/asm que el usuario fijo, p.ej.
+            // r10 = arg4 de un syscall).  Prevalece sobre la reserva de scratch
+            // (r10/r11 los reserva el rewrite para DIVMOD/atomic/LOAD_VM, pero un
+            // binding explicito los reclama).  Solo respeta las restricciones
+            // duras: debe-memoria, lane prohibida (clobber que el valor atraviesa),
+            // clase, ancho y que la lane este libre.
             if (!r.must_be_memory() && !r.lane_forbidden(fid) && l && l->cls == r.cls &&
-                bank.is_allocatable(fid, vec_active) && bank.supports(fid, r.width) &&
-                lane_free(fid))
+                bank.supports(fid, r.width) && lane_free(fid))
                 return fid;
             return kSpilled;
         }
         for (const Lane &l : bank.lanes) {
             if (!lane_admissible(r, l, vec_active)) continue; // correctitud dura (cero by_id).
             if (!lane_free(l.id)) continue;
+            // Un valor SIN pin no roba una lane RESERVADA por un pin que se solapa
+            // (aunque ese pin aun no este activo): el pin la necesitara al llegar.
+            if (lane_pinned_by_other(l.id, v->start, v->end, v->value_id)) continue;
             return l.id;
         }
         return kSpilled;
@@ -169,7 +208,7 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
                                     [&](const Active &a) { return a.v->end < v->start; }),
                      active.end());
 
-        const int lane = first_free_lane(v->req);
+        const int lane = first_free_lane(v);
         if (lane != kSpilled) {
             out.assign(v->value_id, lane);
             active.push_back({v, lane});

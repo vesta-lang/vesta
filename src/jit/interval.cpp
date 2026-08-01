@@ -481,7 +481,20 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
     /* Posiciones de CALL (para clobbers del allocator, commit 4). */
     for (size_t b = 0; b < NB; ++b) {
         uint32_t gi = first_gi[b];
+        /* ABI custom en un CALL/CALLIND: los pseudo-ARG con destino FIJO
+         * (register() del cfn callee, p.ej. ebx=arg1 de un syscall) colocan su
+         * operando en un registro fisico concreto.  El caller los sobreescribe
+         * con el parallel-move ANTES del call -> esos regs son clobbers para los
+         * vregs vivos A TRAVES del call.  crosses_call solo cubre los
+         * caller-saved; un arg-dst CALLEE-SAVED (ebx/esi/edi en x86-32) NO lo
+         * cubre -> un valor vivo (p.ej. la direccion de un buffer reusado en dos
+         * syscalls) se colocaba en ebx y el mov ebx,arg1 lo destruia.  Se
+         * acumulan los arg-dst hasta el CALL y se registran como clobbers de esa
+         * posicion (mismo mecanismo que asm_clobbers -> forbidden_lanes). */
+        std::vector<uint8_t> pending_arg_regs;
         for (const MInstr &in : mf.blocks[b].instrs) {
+            if (in.op == MOp::ARG && in.dst.is_reg())
+                pending_arg_regs.push_back(in.dst.reg);
             /* DIVMOD_V clobbea RAX/RDX (idiv) -> tratarlo como call-position
              * para que los vregs vivos a traves vayan a callee-saved.
              * LOAD_VM/STORE_VM: su page-miss hace CALL a vrt_vm_read/write
@@ -497,8 +510,15 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
                  * conservador: cualquiera) -> los vregs vivos a traves van a
                  * callee-saved/spill.  Los binding precoloreados son EXENTOS:
                  * el linear_scan les asigna su fixed_reg incondicionalmente. */
-                || in.op == MOp::INLINE_ASM_RAW)
+                || in.op == MOp::INLINE_ASM_RAW) {
                 out.call_positions.push_back(2u * gi);
+                /* Los arg-dst custom de este CALL son clobbers de su posicion
+                 * (incluye callee-saved que crosses_call no protege). */
+                if (!pending_arg_regs.empty()) {
+                    out.asm_clobbers.push_back({2u * gi, pending_arg_regs});
+                    pending_arg_regs.clear();
+                }
+            }
             /*  AS inc.5e: registrar los clobbers EXPLICITOS del asm
              * (callee-saved que el call-position no cubre) por posicion. */
             if (in.op == MOp::INLINE_ASM_RAW) {

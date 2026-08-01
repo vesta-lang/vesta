@@ -360,16 +360,97 @@ def h_diff3(ctx, label, src, out=None, aot=True):
     ctx.ok("%s (jit == interp)" % label)
 
     if aot:
+        # El AOT se construye con la configuracion POR DEFECTO a proposito: el
+        # precomputo CTPE corre en los TRES modos, asi que forzar aqui
+        # VESTA_NO_CTPE taparia justo los fallos que solo aparecen al plegar.
         exe = aot_build(ctx, ctx.src(src), out + "_aot", label + " (-m aot)")
-        rc, _ = ctx.run([exe])
-        rc = exit_code(rc)
+        rc_raw, _ = ctx.run([exe])
+        # Un binario que CASCA no "devuelve" un valor: Windows entrega el
+        # NTSTATUS (0xC0000005 = access violation, 0xC00000FD = desbordamiento
+        # de pila) y POSIX un negativo con la senal.  Enmascarar a 8 bits
+        # convierte 0xC0000005 en un inocente "exit == 5" y manda a buscar un
+        # error de CALCULO donde lo que hay es un CUELGUE.  Se detecta ANTES de
+        # truncar, y se adjunta el log de la construccion.
+        if rc_raw < 0 or (rc_raw & 0xC0000000) == 0xC0000000:
+            ctx.fail("%s: el binario AOT CASCO (codigo 0x%X)" %
+                     (label, rc_raw & 0xFFFFFFFF),
+                     getattr(ctx, "last_aot_log", ""))
+            return
+        rc = exit_code(rc_raw)
         # el oraculo es un R0 completo; el exit-code AOT son 8 bits -> comparar
         # el byte bajo (misma convencion que h_verify_3modes con exit-codes).
         if (oracle & 0xFF) != (rc & 0xFF):
             ctx.fail("%s DIVERGE: aot exit == %d != interp 0x%x (byte bajo)" %
-                     (label, rc, oracle))
+                     (label, rc, oracle),
+                     getattr(ctx, "last_aot_log", ""))
             return
         ctx.ok("%s (aot == interp)" % label)
+
+
+def h_ctpe_conformance(ctx, label, src, out=None):
+    """El precomputo CTPE no puede cambiar el resultado observable del programa.
+
+    CTPE ejecuta `main` al compilar y hornea su resultado como constante.  Si
+    esa constante no coincide con lo que el programa produce de verdad, el
+    compilador emite un binario incorrecto -- y como el precomputo esta ACTIVO
+    POR DEFECTO, eso afecta a cualquier compilacion, no solo al AOT.
+
+    Se compila el MISMO fuente dos veces, con y sin precomputo, y se exige el
+    mismo R0.  La version con CTPE se compila dentro del directorio temporal
+    del caso a proposito: su cache vive en `.cache/ctpe` RELATIVO al cwd, asi
+    que compilando ahi esta siempre FRIO.  Con un cache caliente el pliegue se
+    leeria ya hecho y un error de calculo pasaria inadvertido, que es
+    exactamente como este fallo llego a parecer intermitente.
+    """
+    out = out or ctx.tag
+    ctx.compile_vx(ctx.src(src), out + "_noctpe",
+                   env=dict(os.environ, VESTA_NO_CTPE="1"))
+    _, log = ctx.run_velb(out + "_noctpe", schedulers=1, mode="vm")
+    ref = get_r00(log)
+    if ref is None:
+        ctx.fail("%s: la version sin precomputo no produjo R0" % label, log)
+        return
+    ctx.ok("%s (sin CTPE) -> R0 = 0x%x" % (label, ref))
+
+    ctx.compile_vx(ctx.src(src), out + "_ctpe", cwd=ctx.dir)
+    _, log = ctx.run_velb(out + "_ctpe", schedulers=1, mode="vm")
+    got = get_r00(log)
+    if got != ref:
+        ctx.fail("%s: el precomputo CAMBIA el resultado: R0 == %s, sin "
+                 "precomputo 0x%x" % (label, got, ref), log)
+        return
+    ctx.ok("%s (con CTPE == sin CTPE)" % label)
+
+    # Y en AOT, que es donde el precomputo tiene MAS formas de estropear el
+    # binario: comparte el pipeline vreg con el JIT pero su salida se EJECUTA
+    # EN OTRO PROCESO, asi que cualquier cosa que el precomputo deje puesta en
+    # el codegen (p.ej. los polls de safepoint del watchdog, cuya direccion de
+    # handler solo vive en el compilador) se convierte en un binario que casca.
+    # Sin esta pata la comprobacion no vale: el mismo bug que la motivo pasaba
+    # el camino del interprete sin despeinarse.
+    # Directorio PROPIO para esta pata: el cache de CTPE es relativo al cwd, y
+    # la pata anterior ya lo calento en `ctx.dir`.  Con el cache caliente el
+    # pliegue se LEE en vez de ejecutarse, y entonces el precomputo no llega a
+    # compilar nada por JIT -- que es justo la condicion que destapa el fallo.
+    # Sin este detalle la comprobacion pasa siempre y no vale para nada.
+    aot_dir = ctx.path(out + "_ctpe_aotdir")
+    os.makedirs(aot_dir, exist_ok=True)
+    exe = aot_build(ctx, ctx.src(src), out + "_ctpe_aot",
+                    label + " (-m aot con CTPE)", cwd=aot_dir)
+    if not exe:
+        return
+    rc_raw, _ = ctx.run([exe])
+    if rc_raw < 0 or (rc_raw & 0xC0000000) == 0xC0000000:
+        ctx.fail("%s: con precomputo el binario AOT CASCO (codigo 0x%X)" %
+                 (label, rc_raw & 0xFFFFFFFF),
+                 getattr(ctx, "last_aot_log", ""))
+        return
+    if exit_code(rc_raw) != (ref & 0xFF):
+        ctx.fail("%s: con precomputo el AOT devuelve %d, sin precomputo 0x%x "
+                 "(byte bajo)" % (label, exit_code(rc_raw), ref),
+                 getattr(ctx, "last_aot_log", ""))
+        return
+    ctx.ok("%s (aot con CTPE == sin CTPE)" % label)
 
 
 def h_diff3_stdout(ctx, label, src, out=None, aot=True):
@@ -413,7 +494,7 @@ def h_diff3_stdout(ctx, label, src, out=None, aot=True):
     ctx.ok("%s (aot == interp)" % label)
 
 
-def aot_build(ctx, src_abs, out, label, cwd=None, fmt=None):
+def aot_build(ctx, src_abs, out, label, cwd=None, fmt=None, env=None):
     """Compila un .vx (ruta absoluta) a ejecutable nativo y devuelve su ruta.
 
     El emisor PE escribe el fichero SIN extension .exe; el .sh probaba ambos
@@ -422,7 +503,10 @@ def aot_build(ctx, src_abs, out, label, cwd=None, fmt=None):
     """
     _, log = ctx.run([VM_EXE, "-m", "aot", "--vesta", src_abs,
                       "--format", fmt or AOT_FMT, "--emit", "exe",
-                      "-o", ctx.path(out)], cwd=cwd)
+                      "-o", ctx.path(out)], cwd=cwd, env=env)
+    # Se guarda el log de la construccion para poder adjuntarlo si luego el
+    # binario diverge: sin el, un "aot exit == N" no dice NADA de por que.
+    ctx.last_aot_log = log
     base = ctx.path(out)
     if os.path.exists(base + ".exe"):
         return base + ".exe"
@@ -2397,6 +2481,13 @@ modes3_case("abs_chain_iface", "@Abstract hereda de @Abstract + interfaz heredad
 modes3_case("virtual_dispatch", "@Virtual: dispatch dinamico por vtable (Figura*->area() del tipo real), interp=jit=aot", "328_virtual_dispatch.vx", 42)
 fails_case("virtual_self_err", "Self prohibido en metodo @Virtual (mecanismos opuestos)", "329_virtual_self_err.vx", "no puede usarse en un metodo @Virtual")
 diff3_case("regpress_udivmod", "presion de registros (udivmod): interp=oraculo, jit y aot deben coincidir", "330_regalloc_pressure_udivmod.vx")
+
+
+@case("ctpe_udivmod")
+def case_ctpe_udivmod(ctx):
+    """El precomputo no puede alterar el resultado del udivmod bajo presion."""
+    h_ctpe_conformance(ctx, "CTPE conforme (udivmod bajo presion)",
+                       "330_regalloc_pressure_udivmod.vx")
 diff3_case("wideint_import", "import cross-module de struct con metodos+herencia+operadores (u128 de std.wideint)", "331_wideint_import.vx")
 diff3_case("struct_static", "metodos static en struct (factorias sin this, SRET + escalar)", "332_struct_static_methods.vx")
 diff3_case("struct_static_fields", "campos static en struct (contador/singleton por-tipo)", "334_struct_static_fields.vx")

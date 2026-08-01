@@ -17,6 +17,7 @@
 #include "vx/comptime/comptime_vm.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -106,6 +107,10 @@ void replace_body_with_const(ir::IrFunction &fn, uint64_t value, ir::IrType t) {
                 in.func_name.rfind("__module_init", 0) == 0)
                 module_inits.push_back(in.func_name);
 
+    if (std::getenv("VESTA_CTPE_DEBUG"))
+        std::fprintf(stderr, "[ctpe] %s: plegado, %zu __module_init, %zu params\n",
+                     fn.name.c_str(), module_inits.size(), fn.params.size());
+
     fn.blocks.clear();
     fn.values.clear();
     fn.params.clear();
@@ -168,18 +173,35 @@ int fold(ir::IrModule &mod, vx::ComptimeRuntime &rt, const FoldBudget &budget) {
         auto fit = by_name.find(cand.fn);
         if (fit == by_name.end()) continue;
 
+        // Traza opt-in (VESTA_CTPE_DEBUG=1): que se pliega, con que valor y si
+        // salio del cache o de ejecutar.  Sin ella no hay forma de ver un
+        // precomputo equivocado -- el valor se hornea y el sintoma aparece muy
+        // lejos, en el resultado del programa ya compilado.
+        static const bool trace = std::getenv("VESTA_CTPE_DEBUG") != nullptr;
+
         uint64_t value = 0;
         auto cit = cache.find(cand.fn);
         if (cit != cache.end() && cit->second.first == cand.ret_type) {
             value = cit->second.second; // cache hit: mismo IR -> mismo resultado.
+            if (trace)
+                std::fprintf(stderr, "[ctpe] %s -> 0x%llx (cache)\n",
+                             cand.fn.c_str(), (unsigned long long)value);
         } else {
             uint64_t r0 = 0;
             // Ejecuta la funcion ENTERA en modo CTPE restringido (sandbox +
             // budget).  Si aborta (trap/timeout/oom) -> NO plegar (fallback).
-            if (!rt.try_invoke_ctpe(cand.fn, {}, b, r0)) continue;
+            if (!rt.try_invoke_ctpe(cand.fn, {}, b, r0)) {
+                if (trace)
+                    std::fprintf(stderr, "[ctpe] %s -> NO plegado\n",
+                                 cand.fn.c_str());
+                continue;
+            }
             value = r0;
             cache[cand.fn] = {cand.ret_type, value};
             dirty = true;
+            if (trace)
+                std::fprintf(stderr, "[ctpe] %s -> 0x%llx (ejecutado)\n",
+                             cand.fn.c_str(), (unsigned long long)value);
         }
 
         replace_body_with_const(*fit->second, value, cand.ret_type);
