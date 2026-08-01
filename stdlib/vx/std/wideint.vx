@@ -1121,3 +1121,163 @@ public struct u256 : Wide256 {
         return this.ucmp(o) != Ordering.Less;
     }
 }
+
+// ===========================================================================
+//  i256 -- entero de 256 bits con signo (complemento a dos).
+// ===========================================================================
+
+/**
+ * @brief Entero de 256 bits con signo.
+ *
+ * Comparte con @ref u256 toda la aritmetica y la logica, que en complemento a
+ * dos son bit-identicas; cambia lo que depende del signo: el desplazamiento a
+ * la derecha (que replica el bit alto en vez de meter ceros), los comparadores
+ * y la negacion.  Las dos mitades heredadas siguen siendo sin signo: el signo
+ * es del valor completo, y se lee en el bit mas alto de la mitad alta.
+ */
+public struct i256 : Wide256 {
+
+    /**
+     * @brief Mayor valor representable.
+     * @return `2^255 - 1` (todos los bits a 1 salvo el de signo).
+     */
+    public static i256 max() {
+        i256 r;
+        r.lo128 = u128.max();
+        r.hi128 = u128.max().__shr__(1);
+        return r;
+    }
+
+    /**
+     * @brief Menor valor representable.
+     * @return `-2^255` (solo el bit de signo a 1).
+     */
+    public static i256 min() {
+        i256 r;
+        r.lo128 = u128.zero();
+        r.hi128 = u128.one().__shl__(127);
+        return r;
+    }
+
+    /**
+     * @brief Extiende un `i64` a 256 bits conservando el signo.
+     * @param x Valor de 64 bits con signo.
+     * @return El mismo valor en 256 bits; si @p x es negativo, las partes altas
+     *         se rellenan con unos.
+     */
+    public static i256 from_i64(i64 x) {
+        i256 r;
+        r.lo128 = u128.from_u64((u64) x);
+        if (x < 0) {
+            r.lo128.hi64 = 0xFFFFFFFFFFFFFFFF;
+            r.hi128 = u128.max();
+        } else {
+            r.hi128 = u128.zero();
+        }
+        return r;
+    }
+
+    /**
+     * @brief Indica si el valor es negativo.
+     * @return `true` si el bit mas alto esta a 1.
+     */
+    public bool is_negative() {
+        return (this.hi128.hi64 >> 63) != 0;
+    }
+
+    /**
+     * @brief Negacion en complemento a dos.
+     * @return `-this` (el complemento a uno mas uno).
+     */
+    public i256 __neg__() {
+        i256 inv = this.__not__();
+        i256 uno = i256.one();
+        return inv + uno;
+    }
+
+    /**
+     * @brief Desplazamiento ARITMETICO a la derecha.
+     *
+     * Replica el bit de signo, de modo que un valor negativo sigue siendolo
+     * (y `-1 >> n` es `-1`).
+     *
+     * @param n Numero de bits a desplazar.
+     * @return `this >> n` con extension de signo.
+     */
+    public i256 __shr__(u64 n) {
+        i256 r;
+        // La mitad alta, reinterpretada CON signo: su desplazamiento
+        // aritmetico ya lo resuelve `i128`.
+        i128 hi_s;
+        hi_s.lo64 = this.hi128.lo64;
+        hi_s.hi64 = this.hi128.hi64;
+
+        if (n == 0) {
+            r.lo128 = this.lo128;
+            r.hi128 = this.hi128;
+            return r;
+        }
+        // Relleno de las partes que quedan vacias: unos si es negativo.
+        u128 fill = u128.zero();
+        if (this.is_negative()) {
+            fill = u128.max();
+        }
+        if (n >= 256) {
+            r.lo128 = fill;
+            r.hi128 = fill;
+        } else if (n >= 128) {
+            i128 sh = hi_s.__shr__(n - 128);
+            r.lo128.lo64 = sh.lo64;
+            r.lo128.hi64 = sh.hi64;
+            r.hi128 = fill;
+        } else {
+            r.lo128 = this.lo128.__shr__(n) | this.hi128.__shl__(128 - n);
+            i128 sh = hi_s.__shr__(n);
+            r.hi128.lo64 = sh.lo64;
+            r.hi128.hi64 = sh.hi64;
+        }
+        return r;
+    }
+
+    /**
+     * @brief Menor que (con signo).
+     * @param o Valor a comparar.
+     * @return `true` si `this < o`.
+     */
+    public bool __lt__(i256 o) {
+        bool a_neg = this.is_negative();
+        bool b_neg = o.is_negative();
+        if (a_neg != b_neg) {
+            return a_neg;
+        }
+        // Mismo signo: el orden sin signo coincide con el orden real.
+        return this.ucmp(o) == Ordering.Less;
+    }
+
+    /**
+     * @brief Mayor que (con signo).
+     * @param o Valor a comparar.
+     * @return `true` si `this > o`.
+     */
+    public bool __gt__(i256 o) {
+        return o.__lt__(this);
+    }
+
+    /**
+     * @brief Menor o igual (con signo).
+     * @param o Valor a comparar.
+     * @return `true` si `this <= o`.
+     */
+    public bool __le__(i256 o) {
+        return !o.__lt__(this);
+    }
+
+    /**
+     * @brief Mayor o igual (con signo).
+     * @param o Valor a comparar.
+     * @return `true` si `this >= o`.
+     */
+    public bool __ge__(i256 o) {
+        return !this.__lt__(o);
+    }
+}
