@@ -12,6 +12,16 @@ public import std.syscall.linux.x86_64 only *;
 @Target("arch:x86 && !os:windows")
 public import std.syscall.linux.x86_32 only *;
 
+// Re-exporta los tipos y constantes de la API de Unix (O_*, PROT_*, MAP_*,
+// descriptores estandar, ...).  Viven en `std.unix` -- al nivel de
+// `std.windows`, no aqui dentro -- porque son de la API del sistema y no
+// propios del subsistema de syscalls; ademas ese modulo no importa a las
+// implementaciones por-arch, asi que no recrea el ciclo linux -> arch -> linux.
+// Al re-importarlos aqui basta con `import std.syscall;` para tener las
+// llamadas Y sus constantes.  Simetrico a lo que hace la rama de Windows con
+// `std.ntwindows`.
+public import std.unix;
+
 // `syscall_ctx_invoke` permite PERSONALIZAR el metodo de
 // invocacion por-syscall (reasignar `invoke_method`).  Los
 // wrappers de abajo usan el `invoke` DIRECTO (se INLINA ->

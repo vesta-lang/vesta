@@ -1,0 +1,91 @@
+namespace std.unix;
+
+/**
+ * @file unix.vx
+ * @brief Tipos y constantes de la API de Unix/POSIX.
+ *
+ * Equivalente de `std.windows` para el otro lado: aqui viven las constantes
+ * de la interfaz del sistema (banderas de `open`, protecciones y banderas de
+ * `mmap`, descriptores estandar, ...), NO los envoltorios de syscall.  Esa
+ * separacion es la misma que ya existe en el arbol: `std.ctypes` tiene los
+ * tipos de C puro, `std.windows` y `std.ntwindows` los de Windows, y
+ * `std.syscall.*` unicamente las llamadas.
+ *
+ * El motivo no es de orden sino practico: sin un sitio donde vivan, cada
+ * programa acaba re-declarando `PROT_READ` o `MAP_ANONYMOUS` con su propio
+ * numero magico, y ese valor duplicado deja de estar bajo el control de la
+ * libreria.
+ *
+ * Los valores son los de **Linux** (x86-64 y arm64 coinciden en todo lo que
+ * hay aqui).  Otros Unix difieren en algunas banderas de `open`, asi que al
+ * anadir un sistema nuevo habra que separarlos por `@Target`, igual que se
+ * hace con las implementaciones por arquitectura.
+ */
+
+// `uintptr` (y con el `nullptr`) viene de std.types: las direcciones se
+// expresan con el tipo del lenguaje, no con `void*` crudos.
+import std.types only nullptr, uintptr;
+
+// ===================================================================
+// Descriptores de fichero estandar.
+// ===================================================================
+
+public const i32 STDIN_FILENO  = 0;
+public const i32 STDOUT_FILENO = 1;
+public const i32 STDERR_FILENO = 2;
+
+// ===================================================================
+// Banderas de `open` (bits de acceso + de creacion).
+//
+// Los tres primeros son EXCLUYENTES entre si y ocupan los dos bits bajos:
+// no se combinan con OR entre ellos, solo con las banderas de arriba.
+// ===================================================================
+
+public const i32 O_RDONLY   = 0x0;
+public const i32 O_WRONLY   = 0x1;
+public const i32 O_RDWR     = 0x2;
+
+public const i32 O_CREAT    = 0x40;    ///< Crear si no existe.
+public const i32 O_EXCL     = 0x80;    ///< Con O_CREAT: fallar si ya existe.
+public const i32 O_TRUNC    = 0x200;   ///< Truncar a cero al abrir.
+public const i32 O_APPEND   = 0x400;   ///< Escribir siempre al final.
+public const i32 O_NONBLOCK = 0x800;   ///< No bloquear en las operaciones.
+public const i32 O_DIRECTORY = 0x10000; ///< Fallar si no es un directorio.
+public const i32 O_CLOEXEC  = 0x80000; ///< Cerrar al hacer exec.
+
+// ===================================================================
+// Protecciones de pagina para `mmap` / `mprotect`.  Se combinan con OR.
+// ===================================================================
+
+public const i32 PROT_NONE  = 0x0;
+public const i32 PROT_READ  = 0x1;
+public const i32 PROT_WRITE = 0x2;
+public const i32 PROT_EXEC  = 0x4;
+
+// ===================================================================
+// Banderas de `mmap`.  MAP_SHARED y MAP_PRIVATE son excluyentes.
+// ===================================================================
+
+public const i32 MAP_SHARED    = 0x01;
+public const i32 MAP_PRIVATE   = 0x02;
+public const i32 MAP_FIXED     = 0x10;  ///< Exigir la direccion pedida.
+public const i32 MAP_ANONYMOUS = 0x20;  ///< Sin fichero detras; memoria a cero.
+
+/**
+ * Valor de error de `mmap`.  Es -1 como PUNTERO, no como entero, y por eso no
+ * se compara con `nullptr`: un mapeo fallido devuelve esto, no cero.
+ *
+ * Va tipado como `uintptr` justamente para que comparar el resultado de `mmap`
+ * contra el NO exija un cast.  Declararlo `i64` obligaria a convertir en cada
+ * uso, que es la clase de friccion que empuja a la gente a escribir el numero
+ * magico a mano.
+ */
+public const uintptr MAP_FAILED = -1;
+
+// ===================================================================
+// Origen del desplazamiento en `lseek`.
+// ===================================================================
+
+public const i32 SEEK_SET = 0;
+public const i32 SEEK_CUR = 1;
+public const i32 SEEK_END = 2;
