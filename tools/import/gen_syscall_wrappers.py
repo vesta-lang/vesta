@@ -35,7 +35,28 @@ DATA = os.path.join(HERE, "syscall_data")
 # 0 para exito/-errno).
 # Tipo de retorno por nombre.  Default = i32 (fd/pid/status/-errno).  El syscall
 # deja un long en RAX/EAX; para un fd/pid basta i32 (el error -errno cabe).
-RET_PTR = {"mmap", "mremap", "brk", "shmat", "mmap2"}  # -> void *
+RET_PTR = {"mmap", "mremap", "brk", "shmat", "mmap2"}  # -> uintptr
+
+# Syscalls que hablan de REGIONES de memoria.  En ellas, un argumento llamado
+# `addr` (o equivalente) no es un puntero a datos que nadie vaya a
+# dereferenciar: es la DIRECCION de una region, y el kernel la trata como un
+# numero -- de hecho el propio kernel la declara `void *` en unas
+# (`mmap`) y `unsigned long` en otras (`munmap`).
+#
+# Traducir esa asimetria literalmente dejaba la capa incoherente CONSIGO MISMA:
+# `mmap` devolvia `void *` y `munmap` pedia `usize`, asi que encadenarlas
+# obligaba a un cast aunque el programa no saliera en ningun momento de los
+# tipos de la libreria.  Aqui todas usan `uintptr`, que es el tipo del
+# lenguaje para "direccion".
+MEM_SYSCALLS = {
+    "mmap", "mmap2", "munmap", "mremap", "brk", "mprotect", "madvise",
+    "msync", "mlock", "mlock2", "munlock", "mincore", "shmat", "shmdt",
+    "remap_file_pages", "process_madvise", "pkey_mprotect", "mbind",
+    "migrate_pages", "move_pages", "get_mempolicy", "set_mempolicy",
+}
+# Nombres de argumento que denotan una direccion dentro de esas syscalls.
+ADDR_ARG_NAMES = {"addr", "start", "old_address", "new_address", "shmaddr",
+                  "shmadr"}
 RET_VOID = {"exit", "exit_group", "rt_sigreturn", "restart_syscall"}  # no retorna
 RET_I64 = {  # retornan un offset/tamano/puntero-como-entero de ancho completo
     "lseek", "getcwd", "times", "ptrace", "set_tid_address", "get_robust_list",
@@ -92,7 +113,13 @@ ASM_WORDS = {"times", "db", "dw", "dd", "dq", "byte", "word", "dword", "qword",
 # de syscall generados (un arg que se llame igual que una syscall -- p.ej. `brk`
 # en brk(), `times` en utime() -- colisiona con el wrapper en el lowering).  Se
 # rellena en main() antes de emitir.
-RESERVED_ARGS = set(VX_KEYWORDS) | ASM_WORDS
+#
+# `ctx` entra tambien: es el nombre de la variable local que cada wrapper
+# declara para su metodo de invocacion.  Un parametro con ese nombre
+# (io_destroy, io_setup) quedaba SOMBREADO por ella y al kernel se le pasaba el
+# struct en lugar del argumento -- mal en silencio salvo por un warning de
+# "argumento de tipo distinto al de la firma".
+RESERVED_ARGS = set(VX_KEYWORDS) | ASM_WORDS | {"ctx"}
 
 
 def sanitize(name):
@@ -202,11 +229,16 @@ def wrapper(name, cargs):
         p = split_arg(ca, i)
         if p is not None:
             parsed.append(p)
+    # En las syscalls de memoria, el argumento de direccion es `uintptr`
+    # independientemente de como lo declare el kernel (ver MEM_SYSCALLS).
+    if name in MEM_SYSCALLS:
+        parsed = [("uintptr", n) if n in ADDR_ARG_NAMES else (t, n)
+                  for (t, n) in parsed]
     # Tipo de retorno.
     if name in RET_VOID:
         rdecl, rcast = "void", None
     elif name in RET_PTR:
-        rdecl, rcast = "void *", "(void *)"
+        rdecl, rcast = "uintptr", "(uintptr)"
     elif name in RET_SSIZE:
         rdecl, rcast = "ssize_t", "(ssize_t)"
     elif name in RET_I64:
@@ -264,7 +296,7 @@ def main():
     out.append("")
     out.append("import std.syscall.abi only invoke_syscall, syscall_id;")
     out.append("")
-    out.append("import std.types only nullptr, size_t, ssize_t, usize;")
+    out.append("import std.types only nullptr, size_t, ssize_t, uintptr, usize;")
     out.append("")
     out.append("// trae al scope TODA la implementacion del arch (invoke + los")
     out.append("// 400+ _NR_*) y la re-exporta.")
@@ -291,7 +323,7 @@ def main():
     out.append("// castea `ctx.invoke_method` al `cfn` con la aridad/tipos reales,")
     out.append("// pasando el `_NR_*` como 1er argumento.  Reasignar `ctx.invoke_method`")
     out.append("// permite PERSONALIZAR como se invoca cada syscall.  Retorno: i32")
-    out.append("// (fd/pid/-errno) salvo I/O -> ssize_t, mmap/brk -> void *, lseek -> i64.")
+    out.append("// (fd/pid/-errno) salvo I/O -> ssize_t, mmap/brk -> uintptr, lseek -> i64.")
     out.append("// ===================================================================")
     out.append("")
     out.append("// --- Presentes en x86-64 Y x86-32 (cross-arch) ---")

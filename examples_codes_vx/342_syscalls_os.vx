@@ -36,7 +36,7 @@ namespace ejemplos.syscalls_os;
 // deliberada de la libreria: quien la usa decide si quiere las syscalls del
 // sistema sueltas en su scope o cualificadas.
 import std.syscall only *;
-import std.types only nullptr, uintptr;
+import std.types only nullptr, size_t, ssize_t, uintptr;
 
 // Las constantes de memoria (MEM_*, PAGE_*) son de la API Win32, no de la capa
 // NT, asi que viven en std.windows y se piden aparte.
@@ -46,8 +46,14 @@ import std.windows only *;
 @Target("os:linux")
 import std.unix only *;
 
-/// Pasos que debe completar cada rama para considerarse correcta.
+/// Pasos que debe completar la rama de Windows para considerarse correcta.
+@Target("os:windows")
 const i32 PASOS_ESPERADOS = 6;
+
+/// Pasos que debe completar la rama de Linux.  Es uno mas que en Windows
+/// porque alli reservar y confirmar la memoria es UNA sola syscall.
+@Target("os:linux")
+const i32 PASOS_ESPERADOS = 7;
 
 /// Valor que devuelve el programa cuando todos los pasos salieron bien.
 const i32 EXITO = 42;
@@ -55,8 +61,10 @@ const i32 EXITO = 42;
 /// Patron reconocible que se escribe y se relee en la pagina reservada.
 const u64 PATRON = 0xCAFEBABE;
 
-/// Tamano de la region de memoria que se reserva en ambas ramas.
-const u64 TAM_PAGINA = 4096;
+/// Tamano de la region de memoria que se reserva en ambas ramas.  Es un
+/// TAMANO, no un entero cualquiera, y el tipo lo dice: `size_t` es el que
+/// piden las dos APIs (`SIZE_T` en NT, `size_t` en mmap).
+const size_t PAGE_SIZE = 4096;
 
 // ---------------------------------------------------------------------------
 // Windows: memoria virtual y consulta del proceso, todo por la capa NT.
@@ -83,7 +91,7 @@ i32 corre()
     //     el kernel) y sale con la direccion concedida; `tam` sale redondeado
     //     al tamano de pagina real.
     uintptr base = nullptr;
-    SIZE_T  tam  = TAM_PAGINA;
+    SIZE_T  tam  = PAGE_SIZE;
 
     NTSTATUS st = NtAllocateVirtualMemory(proc,
                                           &base,
@@ -101,7 +109,7 @@ i32 corre()
     // solo que la syscall devolvio cero.
     // La conversion direccion -> puntero es EXPLICITA a proposito: a partir de
     // aqui se va a dereferenciar, y eso merece verse en el codigo.
-    u64* celda = (u64*) base;
+    u64* celda = base;
     *celda = PATRON;
 
     if (*celda == PATRON)
@@ -131,11 +139,18 @@ i32 corre()
         puntos++;
     }
 
-    // (5) Procesador logico actual: basta con que la syscall responda.
+    // (5) Procesador logico actual.  Se comprueba que la estructura salga
+    //     rellena con algo valido: un grupo tiene como mucho 64 procesadores
+    //     logicos, asi que un Number fuera de ese rango significa que la
+    //     syscall no escribio nada y estamos leyendo la pila sin tocar.
     PROCESSOR_NUMBER cpu;
 
     NtGetCurrentProcessorNumberEx(&cpu);
-    puntos++;
+
+    if (cpu.Number < 64)
+    {
+        puntos++;
+    }
 
     println("windows: ${puntos}/${PASOS_ESPERADOS} pasos NT OK");
 
@@ -171,7 +186,7 @@ i32 corre()
     // (2) Mapear una pagina anonima.  mmap NO devuelve nullptr al fallar, sino
     //     MAP_FAILED (-1 como puntero), asi que se compara contra eso.
     uintptr pag = mmap(nullptr,
-                       TAM_PAGINA,
+                       PAGE_SIZE,
                        PROT_READ | PROT_WRITE,
                        MAP_PRIVATE | MAP_ANONYMOUS,
                        -1,
@@ -217,7 +232,10 @@ i32 corre()
     }
 
     // (6) Devolver la pagina al sistema.
-    munmap(pag, TAM_PAGINA);
+    if (munmap(pag, PAGE_SIZE) == 0)
+    {
+        puntos++;
+    }
 
     println("linux: ${puntos}/${PASOS_ESPERADOS} pasos de syscall OK");
 

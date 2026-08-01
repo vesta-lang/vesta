@@ -494,6 +494,51 @@ def h_diff3_stdout(ctx, label, src, out=None, aot=True):
     ctx.ok("%s (aot == interp)" % label)
 
 
+def wsl_disponible():
+    """True si se puede ejecutar un ELF de Linux desde aqui (WSL en marcha).
+
+    Los binarios ELF que emite el AOT solo se pueden PROBAR en Linux; en
+    Windows se comprueba que compilan, pero eso no dice si funcionan.  WSL
+    cierra ese hueco cuando esta disponible.
+    """
+    if not sys.platform.startswith("win"):
+        return False
+    try:
+        r = subprocess.run(["wsl.exe", "-e", "sh", "-c", "echo ok"],
+                           capture_output=True, timeout=60)
+        return r.returncode == 0 and b"ok" in r.stdout
+    except Exception:
+        return False
+
+
+def wsl_run_elf(elf_path, timeout=120):
+    """Ejecuta un ELF en WSL.  Devuelve (rc, salida) o (None, motivo).
+
+    El binario se copia a /tmp porque en /mnt/... el bit de ejecucion depende
+    de como este montado el volumen.
+    """
+    linux_src = "/mnt/" + elf_path[0].lower() + elf_path[2:].replace("\\", "/")
+    guion = ("cp '%s' /tmp/vx_e2e_bin && chmod +x /tmp/vx_e2e_bin && "
+             "/tmp/vx_e2e_bin; echo __RC=$?" % linux_src)
+    try:
+        r = subprocess.run(["wsl.exe", "-e", "sh", "-c", guion],
+                           capture_output=True, timeout=timeout)
+    except Exception as exc:
+        return None, "no se pudo ejecutar en WSL: %s" % exc
+    salida = (r.stdout + r.stderr).decode("utf-8", "replace")
+    salida = salida.replace("\x00", "")
+    rc = None
+    for linea in salida.splitlines():
+        if linea.startswith("__RC="):
+            try:
+                rc = int(linea[5:].strip())
+            except ValueError:
+                pass
+    if rc is None:
+        return None, "no se obtuvo codigo de salida:\n" + salida
+    return rc, salida
+
+
 def aot_build(ctx, src_abs, out, label, cwd=None, fmt=None, env=None):
     """Compila un .vx (ruta absoluta) a ejecutable nativo y devuelve su ruta.
 
@@ -1614,6 +1659,43 @@ def _(ctx):
         return
     ctx.ok("namespaces: mismo nombre en ns distintos + cualificado + parcial "
            "-> R0 = 42")
+
+
+@case("syscalls_linux_wsl")
+def _(ctx):
+    """La rama LINUX de las syscalls, compilada a ELF y EJECUTADA en WSL.
+
+    En Windows solo se ejercita la mitad NT del ejemplo; la de Linux se elegia
+    con @Target y nunca llegaba a correr, asi que podia estar rota sin que
+    nadie se enterase -- y lo estaba: `mmap` recibia los argumentos en los
+    registros equivocados y el proceso moria.
+
+    El AOT evalua @Target contra el TARGET, no contra el host, asi que desde
+    aqui se puede generar el ELF de Linux; WSL lo ejecuta.  Sin WSL el caso se
+    salta (dejando constancia), pero NUNCA da un falso OK.
+    """
+    src = os.path.join(VX_DIR, "342_syscalls_os.vx")
+    elf = aot_build(ctx, src, "s342_elf", "syscalls linux", fmt="elf")
+    if not elf:
+        ctx.fail("no se genero el ELF de la rama linux", ctx.last_aot_log)
+        return
+    if not wsl_disponible():
+        ctx.skip("rama linux de syscalls: WSL no disponible, no se ejecuta")
+        return
+    rc, salida = wsl_run_elf(elf)
+    if rc is None:
+        ctx.fail("rama linux de syscalls: %s" % salida, ctx.last_aot_log)
+        return
+    if rc != 42:
+        ctx.fail("rama linux de syscalls: exit %s, se esperaba 42\n%s"
+                 % (rc, salida), ctx.last_aot_log)
+        return
+    if "7/7" not in salida:
+        ctx.fail("rama linux de syscalls: no se completaron los 7 pasos\n%s"
+                 % salida, ctx.last_aot_log)
+        return
+    ctx.ok("rama linux: 7 syscalls reales (getpid/mmap/open/write/close/"
+           "munmap) en WSL -> 42")
 
 
 @case("target_diag")
