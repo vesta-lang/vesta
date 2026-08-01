@@ -46,7 +46,7 @@ i32 main() {
     if (sh.__shr__(128) != u256.one()) { return 12; }
 
     // Logica bit a bit contra el maximo.
-    if ((u256.zero().__not__()) != u256.max()) { return 13; }
+    if ((~u256.zero()) != u256.max())          { return 13; }
     if ((a & u256.zero()).__bool__())          { return 14; }
     if ((a | u256.zero()) != a)                { return 15; }
     if ((a ^ a).__bool__())                    { return 16; }

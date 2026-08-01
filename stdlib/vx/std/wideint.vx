@@ -230,7 +230,7 @@ public struct Wide128 {
      * @brief Complemento a uno (NOT bit a bit).
      * @return `~this`.
      */
-    public Self __not__() {
+    public Self __invert__() {
         Self r;
         r.lo64 = ~this.lo64;
         r.hi64 = ~this.hi64;
@@ -986,10 +986,10 @@ public struct Wide256 {
      * @brief Complemento a uno (NOT bit a bit).
      * @return `~this`.
      */
-    public Self __not__() {
+    public Self __invert__() {
         Self r;
-        r.lo128 = this.lo128.__not__();
-        r.hi128 = this.hi128.__not__();
+        r.lo128 = this.lo128.__invert__();
+        r.hi128 = this.hi128.__invert__();
         return r;
     }
 
@@ -1231,9 +1231,7 @@ public struct i256 : Wide256 {
      * @return `-this` (el complemento a uno mas uno).
      */
     public i256 __neg__() {
-        i256 inv = this.__not__();
-        i256 uno = i256.one();
-        return inv + uno;
+        return (~this) + i256.one();
     }
 
     /**
