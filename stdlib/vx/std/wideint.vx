@@ -154,6 +154,43 @@ public struct Wide128 {
     }
 
     /**
+     * @brief Suma indicando si se desbordo.
+     *
+     * El acarreo lo produce esta suma, asi que lo devuelve ella: quien componga
+     * un ancho mayor a base de estos no tiene que DEDUCIRLO comparando el
+     * resultado con los sumandos.  Es lo que permite que cada piso se apoye en
+     * el de abajo sin repetir el truco del desbordamiento.
+     *
+     * @param rhs Segundo sumando.
+     * @param carry_out Recibe `true` si la suma desbordo los 128 bits.
+     * @return `this + rhs` truncado a 128 bits.
+     */
+    public Self add_with_carry(Self rhs, bool* carry_out) {
+        Self r = this.__add__(rhs);
+        // Desbordamiento sin signo: el resultado queda por debajo de un
+        // sumando.  La comparacion es SIEMPRE sin signo (`ucmp`), tambien en
+        // el tipo con signo: el acarreo es un hecho sobre los bits.
+        (*carry_out) = (r.ucmp(this) == Ordering.Less);
+        return r;
+    }
+
+    /**
+     * @brief Resta indicando si hubo que pedir prestado.
+     *
+     * Contrapartida de @ref add_with_carry: el prestamo lo produce esta resta y
+     * lo devuelve ella.
+     *
+     * @param rhs Sustraendo.
+     * @param borrow_out Recibe `true` si el minuendo era menor que el
+     *        sustraendo (sin signo) y la resta pidio prestado.
+     * @return `this - rhs` truncado a 128 bits.
+     */
+    public Self sub_with_borrow(Self rhs, bool* borrow_out) {
+        (*borrow_out) = (this.ucmp(rhs) == Ordering.Less);
+        return this.__sub__(rhs);
+    }
+
+    /**
      * @brief AND bit a bit.
      * @param o Segundo operando.
      * @return `this & o`.
@@ -879,12 +916,14 @@ public struct Wide256 {
      */
     public Self __add__(Self o) {
         Self r;
-        r.lo128 = this.lo128 + o.lo128;
-        u128 carry = u128.zero();
-        if (r.lo128 < this.lo128) {
-            carry = u128.one();
+        // El acarreo lo devuelve la mitad baja: este nivel no lo deduce
+        // comparando resultados, solo lo recibe y lo propaga.
+        bool carry = false;
+        r.lo128 = this.lo128.add_with_carry(o.lo128, &carry);
+        r.hi128 = this.hi128 + o.hi128;
+        if (carry) {
+            r.hi128 = r.hi128 + u128.one();
         }
-        r.hi128 = this.hi128 + o.hi128 + carry;
         return r;
     }
 
@@ -896,12 +935,14 @@ public struct Wide256 {
      */
     public Self __sub__(Self o) {
         Self r;
-        r.lo128 = this.lo128 - o.lo128;
-        u128 borrow_out = u128.zero();
-        if (this.lo128 < o.lo128) {
-            borrow_out = u128.one();
+        // Igual que en la suma: el prestamo lo produce y lo devuelve la mitad
+        // baja.
+        bool borrowed = false;
+        r.lo128 = this.lo128.sub_with_borrow(o.lo128, &borrowed);
+        r.hi128 = this.hi128 - o.hi128;
+        if (borrowed) {
+            r.hi128 = r.hi128 - u128.one();
         }
-        r.hi128 = this.hi128 - o.hi128 - borrow_out;
         return r;
     }
 
