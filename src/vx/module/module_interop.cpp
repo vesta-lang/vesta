@@ -664,6 +664,37 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
             if (itns != tc.declared_ns_symbols().end()) {
                 s.ns_path = itns->second.first;
                 s.name = itns->second.second;
+            } else if (tc.is_reexported(kv.first)) {
+                // RE-EXPORTADO: el simbolo NO se declaro aqui, asi que no esta
+                // en declared_ns_symbols y se exportaria con el nombre ya
+                // cualificado (`ch__base__handle`) y sin ns_path.  El siguiente
+                // eslabon de la cadena lo re-cualifica con SU namespace y el
+                // tipo acaba con dos identidades: `ch__base__handle` por el
+                // retorno de la funcion (que si conserva el nombre original) y
+                // `ch__top__handle` al declarar una variable.
+                //
+                // Se recupera la identidad ORIGINAL partiendo por el ultimo
+                // separador: `ch__base__handle` -> ns `ch.base` + `handle`.
+                // Asi el tipo es el MISMO da igual cuantos saltos tenga la
+                // cadena, porque ya no hay nada que recalcular en cada uno.
+                const size_t sep = kv.first.rfind("__");
+                if (sep != std::string::npos && sep > 0) {
+                    std::string flat = kv.first.substr(0, sep);
+                    std::string dotted;
+                    dotted.reserve(flat.size());
+                    for (size_t i = 0; i < flat.size();) {
+                        if (i + 1 < flat.size() && flat[i] == '_' &&
+                            flat[i + 1] == '_') {
+                            dotted.push_back('.');
+                            i += 2;
+                        } else {
+                            dotted.push_back(flat[i]);
+                            ++i;
+                        }
+                    }
+                    s.ns_path = dotted;
+                    s.name = kv.first.substr(sep + 2);
+                }
             }
         }
         if (t.nominal_id != 0) {
@@ -1709,6 +1740,29 @@ void import_vxi_into_typechecker(
                                       : (nsm + "__" + s.name);
         }
 
+        // Recordar el ORIGEN del simbolo importado (namespace donde se declara
+        // + nombre publico).  Sin esto, un modulo que lo RE-EXPORTA lo escribe
+        // en su .vxi con el nombre local y sin ns_path, y el siguiente eslabon
+        // de la cadena lo re-cualifica con SU namespace: el tipo termina con
+        // una identidad por cada salto (`ch__base__handle` en la firma de la
+        // funcion, `ch__top__handle` al declarar una variable) y deja de
+        // unificar consigo mismo.  Guardandolo aqui, la identidad ORIGINAL
+        // viaja intacta por toda la cadena y no hay nada que recalcular.
+        //
+        // SOLO tipos: una funcion re-exportada ya conserva su identidad por
+        // otra via (`mangled_label`), y registrarla aqui la haria pasar por
+        // "declarada localmente" en el export -- esa rama fija la etiqueta al
+        // nombre local y perderia el `ch__base__mk` real, dejando al enlazador
+        // sin resolver la llamada.
+        const bool es_tipo = s.kind == VxiSymbolKind::TYPEDEF_ALIAS ||
+                             s.kind == VxiSymbolKind::TYPEDEF_NEW ||
+                             s.kind == VxiSymbolKind::STRUCT ||
+                             s.kind == VxiSymbolKind::CLASS ||
+                             s.kind == VxiSymbolKind::ENUM;
+        if (es_tipo && !s.ns_path.empty()) {
+            tc.register_declared_ns_symbol(local_name, s.ns_path, s.name);
+        }
+
         switch (s.kind) {
         case VxiSymbolKind::TYPEDEF_ALIAS:
         case VxiSymbolKind::TYPEDEF_NEW: {
@@ -2063,7 +2117,28 @@ void register_namespace_for_import(TypeChecker &tc,
     for (const auto &s : mod.symbols) {
         if (s.kind == VxiSymbolKind::FUNCTION) continue;
         if (s.kind == VxiSymbolKind::GLOBAL_VAR) continue;
-        const std::string mangled_pre = module_name + "__" + s.name;
+        // La identidad de un tipo sale del namespace donde se DECLARA, no del
+        // modulo por el que entra.  Es la MISMA regla que usa la ruta `only`
+        // (`canon`), y tenerlas distintas creaba DOS registros del mismo tipo:
+        // `ch__base__handle` por una y `ch__top__handle` por la otra.
+        //
+        // Depende de que `ns_path` sobreviva a los re-exports (lo garantiza el
+        // registro del origen al importar): sin eso, los nombres ya venian
+        // cualificados y volver a prefijarlos daba `ch__top__ch__base__handle`.
+        std::string mangled_pre;
+        if (s.ns_path.empty()) {
+            mangled_pre = module_name + "__" + s.name;
+        } else {
+            mangled_pre.reserve(s.ns_path.size() + s.name.size() + 4);
+            for (const char c : s.ns_path) {
+                if (c == '.')
+                    mangled_pre += "__";
+                else
+                    mangled_pre.push_back(c);
+            }
+            mangled_pre += "__";
+            mangled_pre += s.name;
+        }
         switch (s.kind) {
         case VxiSymbolKind::STRUCT: {
             StructLayout L;

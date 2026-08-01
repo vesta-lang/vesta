@@ -1559,6 +1559,108 @@ def _(ctx):
     ctx.ok("namespace parcial: identidad unica del tipo -> R0 = 42")
 
 
+@case("ns_cobertura")
+def _(ctx):
+    """Cobertura de namespaces: declaracion, acceso cualificado y parciales.
+
+    Tres cosas que deben convivir sin pisarse:
+
+      1. DOS namespaces distintos declaran un simbolo con el MISMO nombre
+         corto (`value`).  No es una colision: el namespace forma parte de la
+         identidad, y el acceso cualificado los distingue.
+      2. Acceso CUALIFICADO via alias (`import ... as A` -> `A.value()`), que
+         es la forma en que un import plano expone lo que trae.
+      3. Namespace PARCIAL: `app.alpha` esta declarado en DOS ficheros y los
+         simbolos de ambos deben verse como del mismo namespace, incluido un
+         tipo declarado en un fichero y usado en el otro.
+
+    10 (alpha) + 20 (beta) + 12 (la parte partida de alpha) = 42.
+    """
+    def w(name, txt):
+        with open(ctx.path(name), "w", encoding="utf-8") as f:
+            f.write(txt)
+
+    w("nalpha.vx",
+      "namespace app.alpha;\n"
+      "public typedef u64 tag new;\n"
+      "public i32 value() { return 10; }\n"
+      "public tag mktag() { return (tag) 10; }\n")
+    # SEGUNDO fichero del MISMO namespace: CONSUME el tipo declarado en el
+    # primero.  Se recibe por parametro en vez de construirlo con un cast
+    # porque `(tag) 10` no parsea desde otro fichero -- el parser solo
+    # reconoce como tipo los alias declarados en el fichero actual, y con
+    # namespaces parciales el tipo vive en el de al lado.  Es una limitacion
+    # aparte; aqui se mide la IDENTIDAD, no el parseo del cast.
+    w("nalpha2.vx",
+      "namespace app.alpha;\n"
+      "public i32 extra(tag t) { return (i32) ((u64) t + 2); }\n")
+    # Namespace DISTINTO con un simbolo del mismo nombre corto.
+    w("nbeta.vx",
+      "namespace app.beta;\n"
+      "public i32 value() { return 20; }\n")
+    w("main.vx",
+      "namespace app.main;\n"
+      "import app.alpha as A;\n"
+      "import app.beta as B;\n"
+      "i32 main() {\n"
+      "    return A.value() + B.value() + A.extra(A.mktag());\n"
+      "}\n")
+
+    if not ctx.compile_vx(ctx.path("main.vx"), "nscov"):
+        return
+    _, log = ctx.run_velb("nscov", schedulers=1, mode="vm")
+    got = get_r00(log)
+    if got != 42:
+        ctx.fail("cobertura de namespaces: R00 == %s, se esperaba 42" % got, log)
+        return
+    ctx.ok("namespaces: mismo nombre en ns distintos + cualificado + parcial "
+           "-> R0 = 42")
+
+
+@case("reexport_chain")
+def _(ctx):
+    """Re-export encadenado: la identidad de un tipo no puede acumular prefijos.
+
+    `main` importa `ch.top`, que re-exporta `ch.mid`, que re-exporta `ch.base`.
+    El tipo se declara en `ch.base` y se consume en `main`, tres saltos mas
+    arriba.
+
+    Si en cada salto se vuelve a cualificar el nombre en vez de transportar la
+    identidad original, el tipo termina como
+    `ch__top__ch__mid__ch__base__handle` y deja de unificar consigo mismo.  La
+    suite NO tenia ningun caso con cadena de re-exports, asi que un cambio que
+    introducia justo ese doble prefijado pasaba los 782 pasos sin enterarse.
+    """
+    def w(name, txt):
+        with open(ctx.path(name), "w", encoding="utf-8") as f:
+            f.write(txt)
+
+    w("cbase.vx",
+      "namespace ch.base;\n"
+      "public typedef u64 handle new;\n"
+      "public handle mk() { return (handle) 20; }\n")
+    w("cmid.vx",
+      "namespace ch.mid;\n"
+      "public import ch.base;\n")
+    w("ctop.vx",
+      "namespace ch.top;\n"
+      "public import ch.mid;\n")
+    w("main.vx",
+      "namespace ch.app;\n"
+      "import ch.top only *;\n"
+      "i32 main() { handle h = mk(); return (i32) ((u64) h + 22); }\n")
+
+    if not ctx.compile_vx(ctx.path("main.vx"), "rxch"):
+        return
+    _, log = ctx.run_velb("rxch", schedulers=1, mode="vm")
+    got = get_r00(log)
+    if got != 42:
+        ctx.fail("re-export encadenado: R00 == %s, se esperaba 42 (la identidad "
+                 "del tipo acumula prefijos por cada salto)" % got, log)
+        return
+    ctx.ok("re-export encadenado (3 saltos): identidad estable -> R0 = 42")
+
+
 @case("m6", serial=True, line=2407)
 def _(ctx):
     """M6: privacidad cross-module + classes con metodos en el .vxi."""
