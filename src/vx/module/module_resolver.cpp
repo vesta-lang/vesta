@@ -294,6 +294,48 @@ collect_expr_param_fns_(const std::vector<std::unique_ptr<ast::Node>> &decls,
     }
 }
 
+// ---------------------------------------------------------------------------
+// collect_type_names_: recorre las decls de un modulo ya parseado (recursivo
+// dentro de NamespaceDecl) y anota el NOMBRE de cada tipo que declara.
+//
+// El parser necesita saber que nombres son tipos para reconocer `(T) x` como un
+// CAST y no como una expresion entre parentesis, y por si solo unicamente
+// conoce los declarados en el fichero que esta parseando.  Sin esto, un cast a
+// un tipo de otro fichero --incluso del MISMO namespace, partido en varios--
+// no parseaba y el usuario recibia un error de sintaxis que no apuntaba a nada
+// ("se esperaba ';'").
+//
+// Reusa el AST YA parseado del dep, igual que collect_expr_param_fns_: no
+// re-parsea nada.
+// ---------------------------------------------------------------------------
+static void
+collect_type_names_(const std::vector<std::unique_ptr<ast::Node>> &decls,
+                    std::unordered_set<std::string> &out) {
+    for (const auto &d : decls) {
+        if (!d) continue;
+        switch (d->kind) {
+        case ast::NodeKind::TypeAliasDecl:
+            out.insert(static_cast<ast::TypeAliasDecl *>(d.get())->name);
+            break;
+        case ast::NodeKind::StructDecl:
+            out.insert(static_cast<ast::StructDecl *>(d.get())->name);
+            break;
+        case ast::NodeKind::ClassDecl:
+            out.insert(static_cast<ast::ClassDecl *>(d.get())->name);
+            break;
+        case ast::NodeKind::EnumDecl:
+            out.insert(static_cast<ast::EnumDecl *>(d.get())->name);
+            break;
+        case ast::NodeKind::NamespaceDecl:
+            collect_type_names_(
+                static_cast<ast::NamespaceDecl *>(d.get())->decls, out);
+            break;
+        default:
+            break;
+        }
+    }
+}
+
 // gather_public_reexports_: recolecta (path, by_namespace) de las sentencias
 // `public import` (re-export) de un modulo ya parseado (recursivo dentro de
 // NamespaceDecl).  Sirve para seguir la CADENA de re-exports al sembrar los
@@ -481,6 +523,13 @@ uint32_t ModuleGraph::load_and_parse_(const std::string &canonical_path) {
     // por dep.  La entrada de ESTE modulo ya esta reservada (id arriba), asi
     // que un ciclo de imports se corta por el dedup.
     std::unordered_map<std::string, std::vector<int>> imported_expr_params;
+    // Nombres de TIPO visibles desde este modulo (typedefs, structs, clases,
+    // enums de los deps).  El parser los necesita para reconocer `(T) x` como
+    // un cast: sin ellos solo conoce los tipos declarados en el FICHERO
+    // actual, asi que un `(tag) 10` con `tag` declarado en otro fichero --del
+    // mismo namespace, incluso-- no parseaba y daba un error de sintaxis
+    // desconcertante ("se esperaba ';'").
+    std::unordered_set<std::string> imported_type_names;
     {
         // Worklist de module_ids a inspeccionar: los imports directos + la
         // cadena de `public import` (re-exports) transitiva.  Asi una fn `expr`
@@ -509,6 +558,7 @@ uint32_t ModuleGraph::load_and_parse_(const std::string &canonical_path) {
             if (!dep || !dep->parsed_ast) continue;
             collect_expr_param_fns_(dep->parsed_ast->decls,
                                     imported_expr_params);
+            collect_type_names_(dep->parsed_ast->decls, imported_type_names);
             // Seguir los `public import` del dep (re-export transitivo).
             std::vector<std::pair<std::string, bool>> reexp;
             gather_public_reexports_(dep->parsed_ast->decls, reexp);
@@ -520,12 +570,32 @@ uint32_t ModuleGraph::load_and_parse_(const std::string &canonical_path) {
         }
     }
 
+    // Namespaces parciales: los tipos que declaran los ficheros HERMANOS --los
+    // que contribuyen al mismo namespace que este-- son visibles aqui sin
+    // ningun import, asi que el parser tambien tiene que conocerlos.
+    {
+        std::vector<std::string> mis_ns;
+        extract_namespaces_(source, mis_ns);
+        if (!mis_ns.empty()) {
+            build_namespace_index_();
+            for (const auto &ns : mis_ns) {
+                auto itt = ns_types_.find(ns);
+                if (itt == ns_types_.end()) continue;
+                for (const auto &n : itt->second)
+                    imported_type_names.insert(n);
+            }
+        }
+    }
+
     // Lex + parse.  Cada modulo reusa el mismo Diagnostics del graph para
     // que los errores aparezcan agregados al final del build.
     Lexer lexer(source, canonical_path, diags_);
     Parser parser(lexer, diags_);
     if (!imported_expr_params.empty())
         parser.seed_imported_expr_params(imported_expr_params);
+    // Los tipos visibles desde los deps: sin esto `(T) x` con T de otro
+    // fichero no se reconoce como cast.
+    for (const auto &tn : imported_type_names) parser.add_known_alias(tn);
     auto ast = parser.parse_program();
     if (!ast) {
         SourceLoc l;
@@ -627,8 +697,18 @@ ResolveResult ModuleGraph::resolve(const std::string &raw_path,
 // Cubre la forma statement `namespace a.b.c;` y la forma bloque
 // `namespace a.b.c { ... }`.  Un mismo fichero puede declarar varios.
 // ---------------------------------------------------------------------------
-void ModuleGraph::extract_namespaces_(const std::string &source,
-                                      std::vector<std::string> &out) {
+void ModuleGraph::extract_namespaces_(
+    const std::string &source, std::vector<std::string> &out,
+    std::unordered_map<std::string, std::vector<std::string>> *types_by_ns) {
+    // Namespace en curso mientras recorremos el fichero: los tipos se atribuyen
+    // al que este vigente, no a todos los del fichero.
+    std::string cur_ns;
+    auto anota_tipo = [&](const std::string &nombre) {
+        if (!types_by_ns || nombre.empty() || cur_ns.empty()) return;
+        auto &v = (*types_by_ns)[cur_ns];
+        if (std::find(v.begin(), v.end(), nombre) == v.end())
+            v.push_back(nombre);
+    };
     // Diagnostics throwaway: el lex no debe emitir errores relevantes aqui;
     // si los hay, los ignoramos (el parse real reportara).
     Diagnostics scratch;
@@ -655,8 +735,44 @@ void ModuleGraph::extract_namespaces_(const std::string &source,
             if (std::find(out.begin(), out.end(), ns) == out.end()) {
                 out.push_back(ns);
             }
+            cur_ns = ns;
             t = nxt;
             continue;
+        }
+        if (types_by_ns) {
+            if (t.kind == TokenKind::KW_TYPEDEF) {
+                // El nombre es el ultimo identificador a nivel 0 antes del
+                // `;`.  Saltar el interior de las llaves cubre de una vez las
+                // tres formas: alias plano (`typedef u64 size_t;`), newtype con
+                // bloque (`typedef X Y new { ... };`) y el typedef C-style
+                // (`typedef struct { ... } Nombre;`), cuyo nombre va al final.
+                int prof = 0;
+                std::string ultimo;
+                Token c = lex.next();
+                while (c.kind != TokenKind::END_OF_FILE) {
+                    if (c.kind == TokenKind::LBRACE) {
+                        ++prof;
+                    } else if (c.kind == TokenKind::RBRACE) {
+                        if (prof > 0) --prof;
+                    } else if (prof == 0) {
+                        if (c.kind == TokenKind::SEMICOLON) break;
+                        if (c.kind == TokenKind::IDENTIFIER)
+                            ultimo = c.lexeme;
+                    }
+                    c = lex.next();
+                }
+                anota_tipo(ultimo);
+                t = lex.next();
+                continue;
+            }
+            if (t.kind == TokenKind::KW_STRUCT ||
+                t.kind == TokenKind::KW_CLASS ||
+                t.kind == TokenKind::KW_ENUM) {
+                Token id = lex.next();
+                if (id.kind == TokenKind::IDENTIFIER) anota_tipo(id.lexeme);
+                t = id;
+                continue;
+            }
         }
         t = lex.next();
     }
@@ -701,7 +817,15 @@ void ModuleGraph::build_namespace_index_() {
             std::string source;
             if (!read_file_(canonical, source)) continue;
             std::vector<std::string> namespaces;
-            extract_namespaces_(source, namespaces);
+            std::unordered_map<std::string, std::vector<std::string>> tipos;
+            extract_namespaces_(source, namespaces, &tipos);
+            for (auto &kv : tipos) {
+                auto &dst = ns_types_[kv.first];
+                for (const auto &n : kv.second) {
+                    if (std::find(dst.begin(), dst.end(), n) == dst.end())
+                        dst.push_back(n);
+                }
+            }
             for (const auto &ns : namespaces) {
                 auto &files = ns_index_[ns];
                 if (std::find(files.begin(), files.end(), canonical) ==

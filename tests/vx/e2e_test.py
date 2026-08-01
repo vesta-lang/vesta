@@ -1583,17 +1583,16 @@ def _(ctx):
     w("nalpha.vx",
       "namespace app.alpha;\n"
       "public typedef u64 tag new;\n"
-      "public i32 value() { return 10; }\n"
-      "public tag mktag() { return (tag) 10; }\n")
-    # SEGUNDO fichero del MISMO namespace: CONSUME el tipo declarado en el
-    # primero.  Se recibe por parametro en vez de construirlo con un cast
-    # porque `(tag) 10` no parsea desde otro fichero -- el parser solo
-    # reconoce como tipo los alias declarados en el fichero actual, y con
-    # namespaces parciales el tipo vive en el de al lado.  Es una limitacion
-    # aparte; aqui se mide la IDENTIDAD, no el parseo del cast.
+      "public i32 value() { return 10; }\n")
+    # SEGUNDO fichero del MISMO namespace: usa el tipo declarado en el primero
+    # tanto en la firma como en un CAST (`(tag) 10`).  El cast es la parte
+    # delicada: el parser tiene que saber que `tag` es un tipo para no leer
+    # `(tag)` como una expresion entre parentesis, y ese nombre vive en el
+    # fichero de al lado, no en este.
     w("nalpha2.vx",
       "namespace app.alpha;\n"
-      "public i32 extra(tag t) { return (i32) ((u64) t + 2); }\n")
+      "public i32 extra(tag t) { return (i32) ((u64) t + 2); }\n"
+      "public tag mktag() { return (tag) 10; }\n")
     # Namespace DISTINTO con un simbolo del mismo nombre corto.
     w("nbeta.vx",
       "namespace app.beta;\n"
