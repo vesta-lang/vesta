@@ -166,7 +166,7 @@ public struct Wide128 {
      * @return `this + rhs` truncado a 128 bits.
      */
     public Self add_with_carry(Self rhs, bool* carry_out) {
-        Self r = this.__add__(rhs);
+        Self r = this + rhs;
         // Desbordamiento sin signo: el resultado queda por debajo de un
         // sumando.  La comparacion es SIEMPRE sin signo (`ucmp`), tambien en
         // el tipo con signo: el acarreo es un hecho sobre los bits.
@@ -187,7 +187,7 @@ public struct Wide128 {
      */
     public Self sub_with_borrow(Self rhs, bool* borrow_out) {
         (*borrow_out) = (this.ucmp(rhs) == Ordering.Less);
-        return this.__sub__(rhs);
+        return this - rhs;
     }
 
     /**
@@ -242,7 +242,7 @@ public struct Wide128 {
      * @param n Numero de bits a desplazar. `n >= 128` produce cero.
      * @return `this << n` truncado a 128 bits.
      */
-    public Self __shl__(u64 n) {
+    public Self __lshift__(u64 n) {
         Self r;
         if (n == 0) {
             r.lo64 = this.lo64;
@@ -420,7 +420,7 @@ public struct Wide128 {
             rem.lo64 = rem.lo64 | bit;
             // Si rem >= divisor: rem -= divisor y se fija el bit i del cociente.
             if (rem.ucmp(divisor) != Ordering.Less) {
-                rem = rem.__sub__(divisor);
+                rem = rem - divisor;
                 if (i >= 64) {
                     q.hi64 = q.hi64 | (((u64) 1) << (i - 64));
                 } else {
@@ -474,7 +474,7 @@ public struct u128 : Wide128 {
      * @param n Numero de bits a desplazar. `n >= 128` produce cero.
      * @return `this >> n`.
      */
-    public u128 __shr__(u64 n) {
+    public u128 __rshift__(u64 n) {
         u128 r;
         if (n == 0) {
             r.lo64 = this.lo64;
@@ -663,7 +663,7 @@ public struct i128 : Wide128 {
      *          signo completo.
      * @return `this >> n` con extension de signo.
      */
-    public i128 __shr__(u64 n) {
+    public i128 __rshift__(u64 n) {
         i128 r;
         u64 sign_fill = 0;
         if (this.is_negative()) {
@@ -700,16 +700,16 @@ public struct i128 : Wide128 {
         bool negative_result = this.is_negative() != o.is_negative();
         i128 a = this;
         if (a.is_negative()) {
-            a = a.__neg__();
+            a = -a;
         }
         i128 b = o;
         if (b.is_negative()) {
-            b = b.__neg__();
+            b = -b;
         }
         i128 rem;
         i128 q = a.udivmod(b, &rem);
         if (negative_result) {
-            q = q.__neg__();
+            q = -q;
         }
         return q;
     }
@@ -723,16 +723,16 @@ public struct i128 : Wide128 {
         bool negative_result = this.is_negative();
         i128 a = this;
         if (a.is_negative()) {
-            a = a.__neg__();
+            a = -a;
         }
         i128 b = o;
         if (b.is_negative()) {
-            b = b.__neg__();
+            b = -b;
         }
         i128 rem;
         a.udivmod(b, &rem);
         if (negative_result) {
-            rem = rem.__neg__();
+            rem = -rem;
         }
         return rem;
     }
@@ -803,7 +803,7 @@ public struct i128 : Wide128 {
         if (o.is_zero()) {
             return None();
         }
-        i128 q = this.__div__(o);
+        i128 q = this / o;
         return Some(q);
     }
 
@@ -817,7 +817,7 @@ public struct i128 : Wide128 {
         if (o.is_zero()) {
             return None();
         }
-        i128 r = this.__mod__(o);
+        i128 r = this % o;
         return Some(r);
     }
 }
@@ -988,8 +988,8 @@ public struct Wide256 {
      */
     public Self __invert__() {
         Self r;
-        r.lo128 = this.lo128.__invert__();
-        r.hi128 = this.hi128.__invert__();
+        r.lo128 = ~this.lo128;
+        r.hi128 = ~this.hi128;
         return r;
     }
 
@@ -998,7 +998,7 @@ public struct Wide256 {
      * @param n Numero de bits a desplazar. `n >= 256` produce cero.
      * @return `this << n` truncado a 256 bits.
      */
-    public Self __shl__(u64 n) {
+    public Self __lshift__(u64 n) {
         Self r;
         if (n == 0) {
             r.lo128 = this.lo128;
@@ -1007,11 +1007,11 @@ public struct Wide256 {
             r.lo128 = u128.zero();
             r.hi128 = u128.zero();
         } else if (n >= 128) {
-            r.hi128 = this.lo128.__shl__(n - 128);
+            r.hi128 = this.lo128 << (n - 128);
             r.lo128 = u128.zero();
         } else {
-            r.hi128 = this.hi128.__shl__(n) | this.lo128.__shr__(128 - n);
-            r.lo128 = this.lo128.__shl__(n);
+            r.hi128 = (this.hi128 << n) | (this.lo128 >> (128 - n));
+            r.lo128 = this.lo128 << n;
         }
         return r;
     }
@@ -1031,7 +1031,7 @@ public struct Wide256 {
      * @return `true` si alguna mitad difiere.
      */
     public bool __ne__(Self o) {
-        return !this.__eq__(o);
+        return !(this == o);
     }
 
     /**
@@ -1108,7 +1108,7 @@ public struct u256 : Wide256 {
      * @param n Numero de bits a desplazar. `n >= 256` produce cero.
      * @return `this >> n`.
      */
-    public u256 __shr__(u64 n) {
+    public u256 __rshift__(u64 n) {
         u256 r;
         if (n == 0) {
             r.lo128 = this.lo128;
@@ -1117,11 +1117,11 @@ public struct u256 : Wide256 {
             r.lo128 = u128.zero();
             r.hi128 = u128.zero();
         } else if (n >= 128) {
-            r.lo128 = this.hi128.__shr__(n - 128);
+            r.lo128 = this.hi128 >> (n - 128);
             r.hi128 = u128.zero();
         } else {
-            r.lo128 = this.lo128.__shr__(n) | this.hi128.__shl__(128 - n);
-            r.hi128 = this.hi128.__shr__(n);
+            r.lo128 = (this.lo128 >> n) | (this.hi128 << (128 - n));
+            r.hi128 = this.hi128 >> n;
         }
         return r;
     }
@@ -1185,7 +1185,7 @@ public struct i256 : Wide256 {
     public static i256 max() {
         i256 r;
         r.lo128 = u128.max();
-        r.hi128 = u128.max().__shr__(1);
+        r.hi128 = u128.max() >> 1;
         return r;
     }
 
@@ -1196,7 +1196,7 @@ public struct i256 : Wide256 {
     public static i256 min() {
         i256 r;
         r.lo128 = u128.zero();
-        r.hi128 = u128.one().__shl__(127);
+        r.hi128 = u128.one() << 127;
         return r;
     }
 
@@ -1243,7 +1243,7 @@ public struct i256 : Wide256 {
      * @param n Numero de bits a desplazar.
      * @return `this >> n` con extension de signo.
      */
-    public i256 __shr__(u64 n) {
+    public i256 __rshift__(u64 n) {
         i256 r;
         // La mitad alta, reinterpretada CON signo: su desplazamiento
         // aritmetico ya lo resuelve `i128`.
@@ -1265,13 +1265,13 @@ public struct i256 : Wide256 {
             r.lo128 = fill;
             r.hi128 = fill;
         } else if (n >= 128) {
-            i128 sh = hi_s.__shr__(n - 128);
+            i128 sh = hi_s >> (n - 128);
             r.lo128.lo64 = sh.lo64;
             r.lo128.hi64 = sh.hi64;
             r.hi128 = fill;
         } else {
-            r.lo128 = this.lo128.__shr__(n) | this.hi128.__shl__(128 - n);
-            i128 sh = hi_s.__shr__(n);
+            r.lo128 = (this.lo128 >> n) | (this.hi128 << (128 - n));
+            i128 sh = hi_s >> n;
             r.hi128.lo64 = sh.lo64;
             r.hi128.hi64 = sh.hi64;
         }
@@ -1299,7 +1299,7 @@ public struct i256 : Wide256 {
      * @return `true` si `this > o`.
      */
     public bool __gt__(i256 o) {
-        return o.__lt__(this);
+        return o < this;
     }
 
     /**
@@ -1308,7 +1308,7 @@ public struct i256 : Wide256 {
      * @return `true` si `this <= o`.
      */
     public bool __le__(i256 o) {
-        return !o.__lt__(this);
+        return !(o < this);
     }
 
     /**
@@ -1317,6 +1317,6 @@ public struct i256 : Wide256 {
      * @return `true` si `this >= o`.
      */
     public bool __ge__(i256 o) {
-        return !this.__lt__(o);
+        return !(this < o);
     }
 }

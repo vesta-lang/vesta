@@ -20,12 +20,12 @@ i32 main() {
     if (b.is_negative())             { return 2; }
     if (!(a < b))                    { return 3; }
     if (!(b > a))                    { return 4; }
-    if (a.__neg__() != i256.from_i64(100)) { return 5; }
+    if ((-a) != i256.from_i64(100)) { return 5; }
     if ((a + b) != i256.from_i64(-93))     { return 6; }
     if ((b - a) != i256.from_i64(107))     { return 7; }
     i256 mu = i256.from_i64(-1);
-    if (mu.__shr__(5) != mu)         { return 8; }
-    if (i256.from_i64(-64).__shr__(3) != i256.from_i64(-8)) { return 9; }
+    if ((mu >> 5) != mu)         { return 8; }
+    if ((i256.from_i64(-64) >> 3) != i256.from_i64(-8)) { return 9; }
     if (!i256.min().is_negative())   { return 10; }
     if (i256.max().is_negative())    { return 11; }
     if (!(i256.min() < i256.max()))  { return 12; }
