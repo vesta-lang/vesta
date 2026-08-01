@@ -643,6 +643,37 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     // (1 syscall por 4 KiB en vez de 1 por write).
                     for (auto &af : aot_mod.functions) {
                         if (af.name != "main") continue;
+                        // Una llamada de COLA en main no deja donde volcar: el
+                        // tail-call salta sin volver, asi que no hay RET ante el
+                        // que inyectar el flush y todo lo impreso se quedaba en
+                        // el buffer (un `i32 main() { return corre(); }` no
+                        // sacaba una sola linea).  Se deshace la optimizacion
+                        // SOLO en main -- CALL + RET del resultado -- que ahi no
+                        // cuesta nada: es la ultima llamada del programa.
+                        for (auto &b : af.blocks) {
+                            for (size_t i = 0; i < b.instrs.size(); ++i) {
+                                if (b.instrs[i].op != ir::IrOp::TAILCALL)
+                                    continue;
+                                ir::IrInstr &tc = b.instrs[i];
+                                tc.op = ir::IrOp::CALL;
+                                // El tail-call no guardaba el resultado en
+                                // ningun valor (saltaba y ya); ahora hay que
+                                // retornarlo, asi que se le da uno.
+                                if (tc.dst == ir::IR_NO_VALUE &&
+                                    tc.type != ir::IrType::VOID)
+                                    tc.dst = af.new_value(tc.type, "%tc_ret");
+                                ir::IrInstr rt{};
+                                rt.op = ir::IrOp::RET;
+                                rt.type = tc.type;
+                                rt.source_line = tc.source_line;
+                                if (tc.dst != ir::IR_NO_VALUE)
+                                    rt.operands.push_back(tc.dst);
+                                b.instrs.insert(b.instrs.begin() +
+                                                    static_cast<long>(i) + 1,
+                                                std::move(rt));
+                                ++i; // saltar el RET recien insertado
+                            }
+                        }
                         for (auto &b : af.blocks) {
                             std::vector<ir::IrInstr> ni;
                             ni.reserve(b.instrs.size() + 1);
