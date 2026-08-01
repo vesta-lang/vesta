@@ -14,10 +14,23 @@
  * `a - b` es su underflow. Su fusion a `ADC`/`SBB` corresponde al backend y no
  * afecta a la correccion de estos tipos.
  *
- * Politica de errores: la division por cero LANZA (`panic`), nunca devuelve un
- * cero silencioso. Las demas operaciones son puras, sin excepciones ni reservas.
+ * Politica de errores: NINGUNA propia. Dividir por cero es responsabilidad de
+ * quien llama, igual que con los enteros nativos, y produce el mismo fallo de
+ * division del hardware; la biblioteca no lo comprueba, no lo traduce y no
+ * instala manejador alguno -- esa eleccion es del programa, no de la stdlib.
+ * Quien prefiera comprobarlo tiene `checked_div` y `checked_rem`, que no
+ * abortan. Las demas operaciones son puras, sin excepciones ni reservas.
  */
 namespace std.wideint;
+
+/**
+ * @brief Sumidero para efectos que no deben eliminarse.
+ *
+ * La division nativa que provoca el fallo del hardware al dividir por cero no
+ * tiene consumidor; escribir su resultado aqui impide que el optimizador la
+ * borre por inutil.
+ */
+u64 g_wideint_sink = 0;
 
 /**
  * @brief Resultado de una comparacion de tres vias (estilo Rust `Ordering`).
@@ -330,13 +343,25 @@ public struct Wide128 {
      * constante en criptografia. La variante con signo lo reutiliza sobre las
      * magnitudes.
      *
-     * @param divisor Divisor sin signo. Si es cero, LANZA (`panic`).
+     * Dividir por cero es responsabilidad de QUIEN LLAMA, igual que con los
+     * enteros nativos: no se comprueba ni se traduce a ningun error propio de
+     * la biblioteca.  El algoritmo es puro software (desplaza y resta), asi que
+     * un divisor cero no producira por si solo el fallo de la CPU; se fuerza
+     * con una division nativa por el limb bajo del divisor para que el
+     * programa muera exactamente igual que si hubiera escrito `a / 0` sobre un
+     * `u64`.  Quien necesite detectar el caso sin morir tiene
+     * @ref checked_div y @ref checked_rem.
+     *
+     * @param divisor Divisor sin signo.  Cero = fallo de division del hardware.
      * @param rem_out Puntero de salida donde se deja el resto.
      * @return El cociente entero sin signo.
      */
     public Self udivmod(Self divisor, Self* rem_out) {
         if (divisor.is_zero()) {
-            panic("wideint: division por cero");
+            // Sin politica propia: se delega en la division entera nativa,
+            // que con divisor cero es el fallo del hardware.
+            u64 boom = 1 / divisor.lo64;
+            g_wideint_sink = boom;   // impide que el optimizador la elimine
         }
         Self q;
         q.lo64 = 0;
@@ -432,7 +457,8 @@ public struct u128 : Wide128 {
 
     /**
      * @brief Cociente entero sin signo.
-     * @param o Divisor. Si es cero, LANZA (`panic`) via @ref Wide128::udivmod.
+     * @param o Divisor.  Cero = fallo de division del hardware, igual que con
+     *          un entero nativo; usa @ref checked_div para comprobarlo antes.
      * @return `this / o`.
      */
     public u128 __div__(u128 o) {
@@ -442,13 +468,42 @@ public struct u128 : Wide128 {
 
     /**
      * @brief Resto entero sin signo.
-     * @param o Divisor. Si es cero, LANZA (`panic`) via @ref Wide128::udivmod.
+     * @param o Divisor.  Cero = fallo de division del hardware, igual que con
+     *          un entero nativo; usa @ref checked_rem para comprobarlo antes.
      * @return `this % o`.
      */
     public u128 __mod__(u128 o) {
         u128 rem;
         this.udivmod(o, &rem);
         return rem;
+    }
+
+    /**
+     * @brief Cociente que no aborta nunca.
+     * @param o Divisor.
+     * @return El cociente, o `None` si el divisor es cero.
+     */
+    public Optional<u128> checked_div(u128 o) {
+        if (o.is_zero()) {
+            return None();
+        }
+        u128 rem;
+        u128 q = this.udivmod(o, &rem);
+        return Some(q);
+    }
+
+    /**
+     * @brief Resto que no aborta nunca.
+     * @param o Divisor.
+     * @return El resto, o `None` si el divisor es cero.
+     */
+    public Optional<u128> checked_rem(u128 o) {
+        if (o.is_zero()) {
+            return None();
+        }
+        u128 rem;
+        this.udivmod(o, &rem);
+        return Some(rem);
     }
 
     /**

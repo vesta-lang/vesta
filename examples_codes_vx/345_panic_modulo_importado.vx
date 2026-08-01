@@ -1,0 +1,36 @@
+/**
+ * @file 345_panic_modulo_importado.vx
+ * @brief Regresion de enlace: modulo IMPORTADO que contiene `panic()`, mas una
+ *        variable global en el consumidor.
+ *
+ * El mensaje de un `panic()` vive en el pool de datos estaticos del modulo que
+ * lo escribe.  Al fusionar modulos ese pool se concatena y se deduplica, y los
+ * indices se renumeran; el `panic` referenciaba su mensaje por el NOMBRE
+ * textual del slot (`s_<idx>`) con el indice local, que ningun pase de
+ * renumeracion tocaba.  Bastaba una global en el consumidor -- ocupa el slot 0
+ * y ademas vive en `gdata`, no en `code` -- para que el indice del modulo
+ * importado apuntase al sitio equivocado y el programa ni siquiera enlazase:
+ * "RelocationError: simbolo no resuelto: code.s_0".
+ *
+ * El caso no divide por cero: lo que se comprueba es que un consumidor con
+ * global enlaza y corre contra un modulo que contiene `panic`, y que las
+ * operaciones normales dan el resultado correcto.
+ */
+import std.wideint only u128;
+
+/** Global del consumidor: es la que ocupa el slot que provocaba la colision. */
+u64 g_marca = 5;
+
+i32 main() {
+    u128 a;
+    a.lo64 = g_marca * 20;      // 100
+    a.hi64 = 0;
+    u128 b;
+    b.lo64 = 7;
+    b.hi64 = 0;
+
+    i32 acc = 0;
+    if ((a / b).lo64 == 14) { acc = acc + 30; }
+    if ((a % b).lo64 == 2)  { acc = acc + 12; }
+    return acc;   // 42
+}

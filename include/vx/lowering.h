@@ -1106,6 +1106,21 @@ class Lowering {
     size_t size_of_type(const Type &t) const;
 
     /**
+     * @brief Bytes del buffer de un `Optional<T>` / `Result<V,E>`.
+     *
+     * El layout es `[+0 i64 flag][+8 payload]`.  Con un payload escalar el
+     * total son los 16 bytes de siempre; con un `struct` por valor el payload
+     * ocupa su propio tamano (redondeado a 8) en vez de las 8 de un escalar.
+     * Sin esto, un `Some(struct)` escribia fuera del payload o guardaba la
+     * direccion de un temporal ya muerto.
+     *
+     * @param t Tipo `OPTIONAL` (o `RESULT`) del que se quiere el buffer.
+     * @param base Bytes de cabecera antes del payload (8 en Optional).
+     * @return Tamano total del buffer, nunca menor que el clasico de 16.
+     */
+    size_t optional_buf_bytes(const Type &t, size_t base = 8) const;
+
+    /**
      * @brief ¿@p t es un `@overlay struct` (una VISTA sobre memoria ajena)?
      *
      * Un overlay comparte @c PrimitiveKind::STRUCT con los structs value-type,

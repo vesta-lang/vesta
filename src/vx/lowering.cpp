@@ -3476,7 +3476,9 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
             ~7ULL;
     } else if (sret) {
         sret_buf_size_ =
-            (sem_ret.kind == PrimitiveKind::OPTIONAL ? 16ULL : 24ULL);
+            (sem_ret.kind == PrimitiveKind::OPTIONAL
+                 ? (uint64_t)optional_buf_bytes(sem_ret)
+                 : 24ULL);
     } else {
         sret_buf_size_ = 0ULL;
     }
@@ -14916,6 +14918,20 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
 // Helpers: tamano de tipo y aritmetica de punteros.
 // ---------------------------------------------------------------------
 
+size_t Lowering::optional_buf_bytes(const Type &t, size_t base) const {
+    // Payload escalar: 8 bytes, como toda la vida.  Struct por valor: su
+    // tamano real alineado a 8, para que quepa entero dentro del buffer.
+    size_t payload = 8;
+    if (t.pointee) {
+        const Type &p = *t.pointee;
+        if (p.kind == PrimitiveKind::STRUCT) {
+            const size_t sz = size_of_type(p);
+            if (sz > payload) payload = (sz + 7u) & ~static_cast<size_t>(7);
+        }
+    }
+    return base + payload;
+}
+
 size_t Lowering::size_of_type(const Type &t) const {
     if (t.kind == PrimitiveKind::STRUCT) {
         const auto &layouts = tc_.struct_layouts();
@@ -20026,7 +20042,15 @@ skip_comptime_eval_for_macro_to_macro:
          callee_is_str_value_sret || callee_is_struct_sret);
     ir::IrValueId v_call_retbuf = ir::IR_NO_VALUE;
     if (callee_is_sret) {
-        uint64_t buf_bytes = 16ULL; // default Optional
+        // El retbuf del caller debe medir EXACTAMENTE lo que la callee copia
+        // (`sret_buf_size_/8` qwords).  Con un `Optional<struct>` el payload ya
+        // no son 8 bytes, asi que reservar 16 a ciegas dejaba a la callee
+        // escribiendo fuera y al caller leyendo un campo sin inicializar.
+        uint64_t buf_bytes =
+            (callee_kind == PrimitiveKind::OPTIONAL &&
+             e->result_type.kind == PrimitiveKind::OPTIONAL)
+                ? static_cast<uint64_t>(optional_buf_bytes(e->result_type))
+                : 16ULL;
         if (callee_is_enum_sret) {
             const auto &elays = tc_.enum_layouts();
             auto it_e = elays.find(it_enum_ret->second);
@@ -25694,14 +25718,24 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         auto *slit = static_cast<ast::StringLitExpr *>(e->args[0].get());
         const uint64_t msg_idx = intern_class_name(*out_mod_, slit->value);
         const uint32_t msg_len = static_cast<uint32_t>(slit->value.size());
-        // Sprint 6.D: panic via IR op puro (LABEL_ADDR + CONST + PANIC).
-        // AOT.2.d: en native, el mensaje se referencia con STR_LIT_ADDR
-        // (el msg vive en static_data, idx = msg_idx) -> el HOST_LEAF lo
-        // baja a una ref .rodata; LABEL_ADDR no esta soportado alli.
-        ir::IrValueId v_addr;
-        if (native_poo_) {
-            v_addr = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_addr].is_host_ptr = true;
+        // Sprint 6.D: panic via IR op puro (STR_LIT_ADDR + CONST + PANIC).
+        // AOT.2.d: en native el msg vive en static_data y el HOST_LEAF lo baja
+        // a una ref .rodata.
+        //
+        // El indice viaja como NUMERO (`imm`), nunca como el nombre textual
+        // "s_<idx>" de un LABEL_ADDR: al mergear modulos, el pool de
+        // static_data se concatena y se deduplica, y los dos pases que
+        // renumeran (compiler_project.cpp) reescriben `STR_LIT_ADDR.imm` --
+        // no el `func_name` de un LABEL_ADDR.  Un `panic()` dentro de un
+        // modulo IMPORTADO conservaba su indice local y acababa apuntando al
+        // slot que ese indice ocupa en el modulo consumidor (p.ej. el storage
+        // de una variable global, que ademas vive en `gdata` y no en `code`)
+        // -> "RelocationError: simbolo no resuelto: code.s_0".
+        ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
+        // Solo en native el literal es memoria del host; en la VM el mensaje
+        // vive en su espacio de direcciones y PANIC lo lee de ahi.
+        if (native_poo_) fn_->values[v_addr].is_host_ptr = true;
+        {
             ir::IrInstr sa{};
             sa.op = ir::IrOp::STR_LIT_ADDR;
             sa.type = ir::IrType::PTR;
@@ -25709,9 +25743,6 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             sa.imm = msg_idx;
             sa.source_line = e->loc.line;
             fn_->append(current_block_, std::move(sa));
-        } else {
-            v_addr =
-                emit_label_addr("s_" + std::to_string(msg_idx), e->loc.line);
         }
         const ir::IrValueId v_len = emit_const(
             ir::IrType::I64, static_cast<uint64_t>(msg_len), e->loc.line);
@@ -27066,8 +27097,20 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
+        // Un payload STRUCT viaja por DIRECCION, no por valor: hay que copiar
+        // sus bytes al buffer y dimensionarlo para que quepan.  Guardando el
+        // puntero (lo que se hacia antes) el `Some` sobrevivia al ALLOCA que
+        // apuntaba y `unwrap` leia memoria muerta -> devolvia 0 en silencio.
+        const Type &arg_t = e->args[0]->result_type;
+        const bool payload_is_struct =
+            (arg_t.kind == PrimitiveKind::STRUCT) && !arg_t.struct_name.empty();
+        const size_t payload_sz =
+            payload_is_struct ? size_of_type(arg_t) : 8u;
+        const size_t buf_sz =
+            payload_is_struct ? (8u + ((payload_sz + 7u) & ~static_cast<size_t>(7)))
+                              : 16u;
         const ir::IrValueId v_buf =
-            stack_alloc_buf(16, e->loc.line, /*for_optres=*/true);
+            stack_alloc_buf(buf_sz, e->loc.line, /*for_optres=*/true);
         // Store flag = 1 at +0.
         const ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, e->loc.line);
         ir::IrInstr st0{};
@@ -27094,13 +27137,28 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         // (unwrap devuelve 0).  Funcionaba por SUERTE cuando la direccion del
         // alloc caia en rango VM.  Ok/Err ya tenian esta propagacion; Some no.
         fn_->values[v_buf8].is_host_ptr = fn_->values[v_buf].is_host_ptr;
-        const ir::IrType payload_t = fn_->values[v_payload].type;
-        ir::IrInstr st1{};
-        st1.op = ir::IrOp::STORE;
-        st1.type = payload_t;
-        st1.operands = {v_payload, v_buf8};
-        st1.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(st1));
+        if (payload_is_struct) {
+            // Copia de los bytes del struct al payload.  `v_payload` es la
+            // direccion del agregado (asi viajan los structs por valor aqui).
+            const ir::IrValueId v_len = emit_const(
+                ir::IrType::I64, static_cast<uint64_t>(payload_sz),
+                e->loc.line);
+            ir::IrInstr mc{};
+            mc.op = ir::IrOp::MEMCPY;
+            mc.type = ir::IrType::I8;
+            mc.dst = ir::IR_NO_VALUE;
+            mc.operands = {v_buf8, v_payload, v_len};
+            mc.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(mc));
+        } else {
+            const ir::IrType payload_t = fn_->values[v_payload].type;
+            ir::IrInstr st1{};
+            st1.op = ir::IrOp::STORE;
+            st1.type = payload_t;
+            st1.operands = {v_payload, v_buf8};
+            st1.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(st1));
+        }
         out_value = v_buf;
         return true;
     }
@@ -27381,6 +27439,14 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             // se leia con `loadz` (VM) sobre direccion host -> unwrap daba 0.
             // value/error ya lo hacian; unwrap no.
             fn_->values[v_at].is_host_ptr = fn_->values[v_arg].is_host_ptr;
+            // Un payload STRUCT no se carga en un registro: el valor de un
+            // agregado ES su direccion.  Se devuelve `buf+8` y quien lo
+            // consuma copiara los bytes que necesite.
+            if (payload_st.kind == PrimitiveKind::STRUCT &&
+                !payload_st.struct_name.empty()) {
+                out_value = v_at;
+                return true;
+            }
             const ir::IrValueId v_dst = fn_->new_value(payload_t);
             ir::IrInstr ldp{};
             ldp.op = ir::IrOp::LOAD;
@@ -29704,7 +29770,8 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
             : m_ret_slay != nullptr
                 ? ((static_cast<uint64_t>(m_ret_slay->size_bytes) + 7ULL) &
                    ~7ULL)
-            : (sem_ret_m.kind == PrimitiveKind::OPTIONAL) ? 16ULL
+            : (sem_ret_m.kind == PrimitiveKind::OPTIONAL)
+                ? (uint64_t)optional_buf_bytes(sem_ret_m)
                                                           : 24ULL;
 
         lower_block(m->body.get());
@@ -30217,7 +30284,8 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
             : m_ret_slay != nullptr
                 ? ((static_cast<uint64_t>(m_ret_slay->size_bytes) + 7ULL) &
                    ~7ULL)
-            : (sem_ret_m.kind == PrimitiveKind::OPTIONAL) ? 16ULL
+            : (sem_ret_m.kind == PrimitiveKind::OPTIONAL)
+                ? (uint64_t)optional_buf_bytes(sem_ret_m)
                                                           : 24ULL;
 
         lower_block(m->body.get());
@@ -33485,7 +33553,9 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
     ir::IrValueId v_method_call_retbuf = ir::IR_NO_VALUE;
     if (method_call_sret) {
         uint64_t buf_bytes =
-            (mtd->return_type.kind == PrimitiveKind::OPTIONAL) ? 16ULL : 24ULL;
+            (mtd->return_type.kind == PrimitiveKind::OPTIONAL)
+                ? (uint64_t)optional_buf_bytes(mtd->return_type)
+                : 24ULL;
         v_method_call_retbuf = fn_->new_value(ir::IrType::PTR);
         ir::IrInstr al{};
         al.op = ir::IrOp::ALLOCA;
@@ -34274,7 +34344,8 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
         const uint64_t buf_bytes =
             ret_slay != nullptr
                 ? ((static_cast<uint64_t>(ret_slay->size_bytes) + 7ULL) & ~7ULL)
-            : (mtd->return_type.kind == PrimitiveKind::OPTIONAL) ? 16ULL
+            : (mtd->return_type.kind == PrimitiveKind::OPTIONAL)
+                ? (uint64_t)optional_buf_bytes(mtd->return_type)
                                                                  : 24ULL;
         v_retbuf = fn_->new_value(ir::IrType::PTR);
         ir::IrInstr al{};

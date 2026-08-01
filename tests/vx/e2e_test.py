@@ -2755,6 +2755,13 @@ r0_case("cec297", "captura expr: comptime fn (valor) vs @Macro (codigo inyectado
 r0_case("oip298", "only-import de namespace parcial (uintptr por @Target)", "298_only_import_partial_ns.vx", 42, line=3708)
 r0_case("syscalls_os", "syscalls del SO por std.syscall, seleccionadas con @Target", "342_syscalls_os.vx", 42)
 r0_case("array_local_reduccion", "recorrer un array sumando: local (pila VM) y de malloc (host)", "343_array_local_reduccion.vx", 42)
+r0_case("wideint_mul_fuzz", "u128.__mul__ contra oraculo externo (20000 productos aleatorios)", "344_wideint_mul_fuzz.vx", 42)
+r0_case("panic_modulo_importado", "enlace: modulo importado con panic() + global en el consumidor", "345_panic_modulo_importado.vx", 42)
+# Sin AOT: `unwrap` referencia el hook __vx_panic_null, que el backend pide
+# como simbolo externo y acaba en la tabla de imports del PE -- el binario no
+# carga (STATUS_ENTRYPOINT_NOT_FOUND).  Es previo a Optional<struct> y afecta
+# igual a Optional<i64>; se reactivara en los 3 modos al cerrarlo.
+r0_case("optional_struct", "Optional<T> con T = struct por valor (payload dimensionado + copia)", "346_optional_struct.vx", 42)
 r0_case("cme299", "captura expr CROSS-MODULO (src(expr) en otro modulo, DSL crudo)", "299_cross_module_expr.vx", 42, line=3709)
 r0_case("scs300", "source(expr) de std.comptime (re-export + siembra transitiva)", "300_stdlib_comptime_source.vx", 42, line=3710)
 r0_case("mch301", "@Macro genera codigo con helper comptime expr (CALLVM no fold-vacio)", "301_macro_codegen_helper.vx", 42, line=3711)
