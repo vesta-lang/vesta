@@ -100,11 +100,39 @@ Parser::Parser(Lexer &lex, Diagnostics &diags)
 // Consume tokens hasta el final natural de la decl: para decls con
 // cuerpo `{ ... }`, hasta cerrar el `}` matching; para decls simples
 // (typedef, using, global var), hasta el siguiente `;` top-level.
-void Parser::skip_target_skipped_decl() {
+void Parser::skip_target_skipped_decl(const std::string &spec) {
     int brace_depth = 0;
     bool entered_body = false;
+    // Nombre de lo que se esta descartando.  No se parsea la decl, asi que se
+    // deduce del flujo de tokens con las mismas reglas de siempre: el
+    // identificador que precede al primer `(` es el de una funcion; el que
+    // sigue a class/struct/enum es el del tipo; y para un typedef vale el
+    // ultimo identificador antes del `;`, que es donde va el nombre en las
+    // tres formas.  Sirve para que quien luego use ese simbolo reciba "existe
+    // pero para otro objetivo" en vez de "no declarado".
+    std::string nombre;
+    std::string ult_ident;
+    bool esperando_tipo = false;
+    bool cerrado = false;
     while (current_.kind != TokenKind::END_OF_FILE) {
         const auto k = current_.kind;
+        if (!cerrado && brace_depth == 0) {
+            if (esperando_tipo) {
+                if (k == TokenKind::IDENTIFIER) {
+                    nombre = current_.lexeme;
+                    cerrado = true;
+                }
+                esperando_tipo = false;
+            } else if (k == TokenKind::KW_CLASS || k == TokenKind::KW_STRUCT ||
+                       k == TokenKind::KW_ENUM) {
+                esperando_tipo = true;
+            } else if (k == TokenKind::IDENTIFIER) {
+                ult_ident = current_.lexeme;
+            } else if (k == TokenKind::LPAREN && !ult_ident.empty()) {
+                nombre = ult_ident; // funcion: el ident antes del '('
+                cerrado = true;
+            }
+        }
         if (k == TokenKind::LBRACE) {
             ++brace_depth;
             entered_body = true;
@@ -120,6 +148,13 @@ void Parser::skip_target_skipped_decl() {
         } else {
             (void)consume();
         }
+    }
+    // Sin `(` ni keyword de tipo (typedef, using, global): el nombre es el
+    // ultimo identificador que se vio.
+    if (!cerrado) nombre = ult_ident;
+    if (!nombre.empty()) {
+        auto &v = target_skipped_[nombre];
+        if (std::find(v.begin(), v.end(), spec) == v.end()) v.push_back(spec);
     }
 }
 
@@ -768,6 +803,7 @@ std::unique_ptr<ast::ModuleNode> Parser::parse_program() {
     // @NoExceptions (sticky) se aplica a todo el modulo.
     mod->no_exceptions = module_no_exceptions_;
     mod->uses_conditional_target = module_uses_target_;
+    mod->target_skipped = target_skipped_;
     return mod;
 }
 
@@ -1404,6 +1440,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     bool top_is_macro = false;    /* A.43.16: @Macro */
     bool top_is_pure = false;     /* A.43.20: @Pure -- memoizable */
     bool top_target_skip = false; /* L.24: @Target no matchea */
+    std::string top_target_spec;  /* la condicion que no se cumplio */
     // Subsistema de coste (modo --analyze): @complexity(O(...)[, n=...]).
     std::string top_complexity_expr;          // expr de coste normalizada
     std::vector<std::string> top_complexity_vars; // bindings `n = <expr>`
@@ -1808,6 +1845,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                 }
                 if (!target_matches_(spec)) {
                     top_target_skip = true;
+                    top_target_spec = spec;
                 }
             } else if (current_.kind == TokenKind::LPAREN) {
                 int depth = 0;
@@ -1833,7 +1871,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         // ejecute synchronize() (que descartaria tokens validos de la
         // siguiente decl).
         last_decl_was_target_skip_ = true;
-        skip_target_skipped_decl();
+        skip_target_skipped_decl(top_target_spec);
         return nullptr;
     }
     last_decl_was_target_skip_ = false;

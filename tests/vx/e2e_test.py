@@ -1616,6 +1616,75 @@ def _(ctx):
            "-> R0 = 42")
 
 
+@case("target_diag")
+def _(ctx):
+    """Usar un simbolo que solo existe para OTRO objetivo lo dice.
+
+    Una decl con `@Target` que no se cumple se descarta sin parsear, asi que
+    quien la use recibia "funcion no declarada" -- que es falso: la funcion
+    esta declarada, solo que para otra plataforma.  Y encima el tipo vacio del
+    fallo arrastraba un segundo error sobre el retorno.
+
+    Se comprueban las dos formas del diagnostico (una variante y varias) por su
+    CODIGO del catalogo, no por el texto, que depende del idioma.  Y que sea el
+    UNICO error: la cascada tambien era parte del problema.
+    """
+    def w(name, txt):
+        with open(ctx.path(name), "w", encoding="utf-8") as f:
+            f.write(txt)
+
+    # Una sola variante, de otro objetivo -> VX4001.
+    w("tlib.vx",
+      "namespace t.lib;\n"
+      "@Target(\"os:linux\")\n"
+      "public i32 solo_linux() { return 1; }\n"
+      "@Target(\"os:windows\")\n"
+      "public i32 solo_win() { return 2; }\n")
+    w("tmain.vx",
+      "namespace t.main;\n"
+      "import t.lib only *;\n"
+      "i32 main() { return solo_linux(); }\n")
+
+    _, log = ctx.compile_vx(ctx.path("tmain.vx"), "tdiag1", must_succeed=False)
+    if "VX4001" not in log:
+        ctx.fail("simbolo de otro objetivo: se esperaba VX4001", log)
+        return
+    if "no declarada" in log:
+        ctx.fail("simbolo de otro objetivo: sigue diciendo 'no declarada'", log)
+        return
+    if log.count("error:") != 1:
+        ctx.fail("simbolo de otro objetivo: %d errores, se esperaba 1 (cascada)"
+                 % log.count("error:"), log)
+        return
+    ctx.ok("simbolo de otro objetivo -> VX4001, sin cascada")
+
+    # Varias variantes, ninguna de este objetivo -> VX4002.
+    w("tlib2.vx",
+      "namespace t.lib2;\n"
+      "@Target(\"os:linux\")\n"
+      "public i32 solo_otros() { return 1; }\n"
+      "@Target(\"os:macos\")\n"
+      "public i32 solo_otros() { return 2; }\n")
+    w("tmain2.vx",
+      "namespace t.main2;\n"
+      "import t.lib2 only *;\n"
+      "i32 main() { return solo_otros(); }\n")
+
+    _, log2 = ctx.compile_vx(ctx.path("tmain2.vx"), "tdiag2", must_succeed=False)
+    if "VX4002" not in log2:
+        ctx.fail("varias variantes de otros objetivos: se esperaba VX4002", log2)
+        return
+    ctx.ok("varias variantes de otros objetivos -> VX4002")
+
+    # El mensaje sale en el idioma pedido: es el catalogo quien lo produce.
+    _, log3 = ctx.compile_vx(ctx.path("tmain.vx"), "tdiag3", must_succeed=False,
+                             env={"VESTA_LANG": "es"})
+    if "esta declarado con @Target" not in log3:
+        ctx.fail("VX4001 no salio en espanol con VESTA_LANG=es", log3)
+        return
+    ctx.ok("VX4001 sale por catalogo multi-idioma (es)")
+
+
 @case("reexport_chain")
 def _(ctx):
     """Re-export encadenado: la identidad de un tipo no puede acumular prefijos.

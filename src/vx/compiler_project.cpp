@@ -1006,6 +1006,24 @@ CompileResult compile_vx_project(
         }
     }
 
+    // Simbolos que el parser dejo fuera por @Target, agregados de TODOS los
+    // modulos del build.  Usar uno de ellos no es "no existe": existe para
+    // otro objetivo, y el diagnostico tiene que distinguirlo.  Se agrega a
+    // nivel de proyecto porque el simbolo puede estar descartado en un dep y
+    // usarse desde el modulo raiz.
+    std::unordered_map<std::string, std::vector<std::string>>
+        target_skipped_proyecto;
+    for (const auto &w : work) {
+        if (!w.ast) continue;
+        for (const auto &kv : w.ast->target_skipped) {
+            auto &dst = target_skipped_proyecto[kv.first];
+            for (const auto &spec : kv.second) {
+                if (std::find(dst.begin(), dst.end(), spec) == dst.end())
+                    dst.push_back(spec);
+            }
+        }
+    }
+
     //  NS.2-full: mapa namespace -> module_name para traducir los
     // imports por-namespace (`import a.b.c;`) al module_name del dep.
     const NsToModname ns_to_modname = build_ns_to_modname_(work);
@@ -1552,6 +1570,11 @@ CompileResult compile_vx_project(
         auto inline_namespaces = flatten_namespaces(*pm.ast);
 
         pm.tc = std::make_unique<TypeChecker>(*pm.ast, pm.diags);
+
+        for (const auto &kv : target_skipped_proyecto) {
+            for (const auto &spec : kv.second)
+                pm.tc->register_target_skipped(kv.first, spec);
+        }
 
         for (const auto &ins : inline_namespaces) {
             const uint32_t ns_idx =

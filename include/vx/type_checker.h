@@ -38,6 +38,7 @@
 #ifndef VX_TYPE_CHECKER_H
 #define VX_TYPE_CHECKER_H
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -1865,6 +1866,31 @@ private:
     declared_ns_symbols() const {
         return declared_ns_symbols_;
     }
+
+    /// Registra que @p nombre existe, pero solo bajo la condicion @Target
+    /// @p spec, que no se cumple en esta compilacion.  Lo alimenta el driver
+    /// con lo que el parser descarto en este modulo y en sus dependencias.
+    /// Se consulta cuando una busqueda de nombre falla, para poder decir
+    /// "declarado para otro objetivo" en vez del enganoso "no declarado".
+    void register_target_skipped(const std::string &nombre,
+                                 const std::string &spec) {
+        auto &v = target_skipped_[nombre];
+        if (std::find(v.begin(), v.end(), spec) == v.end()) v.push_back(spec);
+    }
+
+    /// Condiciones @Target bajo las que @p nombre si existe, o nullptr si el
+    /// nombre no lo descarto ningun @Target.
+    const std::vector<std::string> *
+    target_skipped_for(const std::string &nombre) const {
+        auto it = target_skipped_.find(nombre);
+        return it == target_skipped_.end() ? nullptr : &it->second;
+    }
+
+  private:
+    /// Nombre -> condicion(es) @Target que lo dejaron fuera de esta build.
+    std::unordered_map<std::string, std::vector<std::string>> target_skipped_;
+
+  public:
 
   private:
   public:

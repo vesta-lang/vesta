@@ -46,6 +46,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -2607,6 +2608,11 @@ struct ModuleNode : Node {
     /// `.vxi` al objetivo y cambiar de target recompilaria la stdlib entera,
     /// cuando en realidad la inmensa mayoria de modulos no depende de el.
     bool uses_conditional_target = false;
+    /// Simbolos que este modulo declara SOLO para otros objetivos, con la(s)
+    /// condicion(es) @Target bajo la(s) que si existen.  Quien resuelve
+    /// nombres lo consulta cuando una busqueda falla, para poder decir
+    /// "declarado para otro objetivo" en vez de "no declarado".
+    std::unordered_map<std::string, std::vector<std::string>> target_skipped;
     ModuleNode() : Node(NodeKind::Module) {}
 };
 

@@ -61,3 +61,13 @@ es = "asm: operando '{0}' pineado a '{1}' -- ese registro esta reservado por el 
 [VXA010]
 en = "asm: reassigns the stack pointer ('{0}') in a normal function; its epilogue manages the stack, so a persistent stack switch (coroutines/fibers) will not survive the return -- mark the function @Naked to own the stack, or balance the change (restore '{0}') before the block ends"
 es = "asm: reasigna el puntero de pila ('{0}') en una funcion normal; su epilogue gestiona la pila, asi que un cambio de pila persistente (corrutinas/fibras) no sobrevivira al retorno -- marca la funcion @Naked para ser dueno de la pila, o equilibra el cambio (restaura '{0}') antes de cerrar el bloque"
+
+# --- modulos / namespaces (VX4xxx) ---
+
+[VX4001]
+en = "'{0}' is declared with @Target(\"{1}\"), which does not hold for this target -- that declaration is not available here"
+es = "'{0}' esta declarado con @Target(\"{1}\"), que no se cumple en este objetivo -- esa declaracion no esta disponible aqui"
+
+[VX4002]
+en = "'{0}' is only declared for other targets ({1}) -- no variant matches the target being compiled"
+es = "'{0}' solo esta declarado para otros objetivos ({1}) -- ninguna variante encaja con el objetivo que se esta compilando"

@@ -744,7 +744,23 @@ class Parser {
 
     ///  M.L24: descarta una decl top-level cuya @Target no matcheo.
     /// Consume tokens hasta el final natural de la decl ({ ... } o ;).
-    void skip_target_skipped_decl();
+    /// @param spec Condicion @Target que no se cumplio; se anota junto al
+    ///             nombre descartado en @c target_skipped_ para poder decir
+    ///             despues "existe, pero para otro objetivo".
+    void skip_target_skipped_decl(const std::string &spec = std::string());
+
+    /// Nombre descartado por @Target -> condicion(es) bajo las que si existe.
+    /// Un mismo nombre puede tener varias variantes (una por plataforma).
+    std::unordered_map<std::string, std::vector<std::string>> target_skipped_;
+
+public:
+    /// Simbolos que este fichero declara SOLO para otros objetivos.  Quien
+    /// resuelve nombres lo consulta cuando una busqueda falla, para distinguir
+    /// "no existe" de "existe pero no para este target".
+    const std::unordered_map<std::string, std::vector<std::string>> &
+    target_skipped() const noexcept {
+        return target_skipped_;
+    }
 };
 
 } // namespace vx

@@ -15689,6 +15689,25 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 return rt;
             }
         }
+        // Antes de decir "no declarada", comprobar si el nombre existe pero
+        // bajo una @Target que no se cumple aqui: es una situacion muy
+        // distinta y merece un mensaje que lo diga.
+        if (const auto *specs = target_skipped_for(id->name)) {
+            std::string lista;
+            for (size_t i = 0; i < specs->size(); ++i) {
+                if (i) lista += ", ";
+                lista += (*specs)[i];
+            }
+            diags_.diag(e->loc, DiagLevel::ERR,
+                        specs->size() == 1 ? "VX4001" : "VX4002",
+                        {id->name, lista});
+            for (auto &a : e->args)
+                (void)check_expr(a.get());
+            // COUNT = "tipo desconocido": el problema es el simbolo, no lo que
+            // se hace con su resultado, asi que no se encadenan quejas sobre
+            // un tipo de retorno que nunca se llego a conocer.
+            return Type{PrimitiveKind::COUNT};
+        }
         diags_.error(e->loc, "funcion no declarada: '" + id->name + "'");
         for (auto &a : e->args)
             (void)check_expr(a.get());
