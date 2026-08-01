@@ -2,7 +2,7 @@
 // no buscar terminator.
 i32 main() {
     string s = "ab\0cd";
-    u64 n = str_bytes(s);
+    u64 n = s.bytes();
     if (n == 5) return 42;
     return 1;
 }

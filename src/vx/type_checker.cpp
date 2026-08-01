@@ -2528,20 +2528,27 @@ Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
                         // El mangled_label es el nombre interno
                         // (e.g. `ui__Button`).  Buscamos el layout
                         // en struct/class/enum layouts.
+                        // Bug M: identidad = nombre del LAYOUT, no la clave.
                         auto it_cls = class_layouts_.find(sym.mangled_label);
                         if (it_cls != class_layouts_.end()) {
                             return Type{PrimitiveKind::CLASS,
-                                        sym.mangled_label};
+                                        it_cls->second.name.empty()
+                                            ? sym.mangled_label
+                                            : it_cls->second.name};
                         }
                         auto it_st = struct_layouts_.find(sym.mangled_label);
                         if (it_st != struct_layouts_.end()) {
                             return Type{PrimitiveKind::STRUCT,
-                                        sym.mangled_label};
+                                        it_st->second.name.empty()
+                                            ? sym.mangled_label
+                                            : it_st->second.name};
                         }
                         auto it_en = enum_layouts_.find(sym.mangled_label);
                         if (it_en != enum_layouts_.end()) {
                             return Type{PrimitiveKind::STRUCT,
-                                        sym.mangled_label};
+                                        it_en->second.name.empty()
+                                            ? sym.mangled_label
+                                            : it_en->second.name};
                         }
                         auto it_ta = type_aliases_.find(sym.mangled_label);
                         if (it_ta != type_aliases_.end()) {
@@ -2624,7 +2631,12 @@ Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
         auto it_s = struct_layouts_.find(lookup);
         if (it_s != struct_layouts_.end()) {
             referenced_names_.insert(lookup); // L.26: struct usado
-            return Type{PrimitiveKind::STRUCT, lookup};
+            // Bug M: la identidad es el NOMBRE DEL LAYOUT, no la clave por la
+            // que se busco.  Un tipo importado esta registrado bajo su nombre
+            // publico Y bajo el canonico (mangled); devolver la clave daba dos
+            // identidades para un mismo tipo segun por donde se llegara.
+            return Type{PrimitiveKind::STRUCT,
+                        it_s->second.name.empty() ? lookup : it_s->second.name};
         }
         // enum registrado.  Reusamos PrimitiveKind::STRUCT
         // con struct_name = nombre del enum: el lowering distingue
@@ -2649,11 +2661,13 @@ Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
                 // Backing entero/float/string: el enum ES su tipo base,
                 // etiquetado con el nombre del enum (is_valued_enum).
                 Type vt{it_e->second.backing};
-                vt.struct_name = lookup;
+                vt.struct_name =
+                    it_e->second.name.empty() ? lookup : it_e->second.name;
                 vt.is_valued_enum = true;
                 return vt;
             }
-            return Type{PrimitiveKind::STRUCT, lookup};
+            return Type{PrimitiveKind::STRUCT,
+                        it_e->second.name.empty() ? lookup : it_e->second.name};
         }
         // 3) Clase registrada: devolvemos Type{CLASS, name}.  CLASS
         //    es reference type: variables del tipo son punteros al
@@ -2661,7 +2675,8 @@ Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
         auto it_c = class_layouts_.find(lookup);
         if (it_c != class_layouts_.end()) {
             referenced_names_.insert(lookup); // L.26: class usada
-            return Type{PrimitiveKind::CLASS, lookup};
+            return Type{PrimitiveKind::CLASS,
+                        it_c->second.name.empty() ? lookup : it_c->second.name};
         }
         // 4) Si el original (no mangled) ESTA en class_layouts, lo
         //    devolvemos: probablemente es uso de una clase concreta
@@ -2670,7 +2685,9 @@ Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
         if (!nt->type_args.empty()) {
             auto it_cb = class_layouts_.find(nt->name);
             if (it_cb != class_layouts_.end()) {
-                return Type{PrimitiveKind::CLASS, nt->name};
+                return Type{PrimitiveKind::CLASS, it_cb->second.name.empty()
+                                                      ? nt->name
+                                                      : it_cb->second.name};
             }
         }
         // 5) Tipo desconocido.
@@ -2728,6 +2745,16 @@ Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
         Type ret = type_from_node(fn->return_type.get());
         Type ft = Type::make_function(std::move(params), std::move(ret));
         ft.fn_is_raw = fn->is_raw; // cfn(...) -> puntero a funcion crudo (8B)
+        // ABI custom por-parametro: forma parte de la identidad del tipo (dos cfn
+        // con abi_regs distintos son tipos incompatibles).  El operator== de Type
+        // ya lo distingue; aqui se valida el nombre del registro y se propaga.
+        for (const auto &r : fn->param_abi_regs)
+            if (!r.empty() && asm_canonical_reg(r).empty())
+                diags_.error(fn->loc,
+                             "register(\"" + r +
+                                 "\") en el tipo funcion: '" + r +
+                                 "' no es un registro reconocido");
+        ft.fn_param_abi_regs = fn->param_abi_regs;
         return ft;
     }
     return Type{};
@@ -3402,6 +3429,19 @@ void TypeChecker::collect_globals() {
                     layout.static_fields.push_back(std::move(sfi));
                     continue;
                 }
+                // Campo `comptime`: existe SOLO en compile-time (lo consume el
+                // codigo comptime, p.ej. un `comptime char* name` para un hash).
+                // EXCLUIDO del layout de instancia; se registra aparte para que
+                // un constructor/metodo comptime resuelva `this.campo`.
+                if (f.is_comptime) {
+                    StructFieldInfo cfi;
+                    cfi.name = f.name;
+                    cfi.type = type_from_node(f.type.get());
+                    cfi.is_comptime = true;
+                    if (f.default_init) cfi.default_init = f.default_init.get();
+                    layout.comptime_fields.push_back(std::move(cfi));
+                    continue;
+                }
                 // Miembro ANONIMO C11 (`union { ... };` sin nombre): aplanar sus
                 // campos en ESTE struct (accesibles como `parent.inner`).  El
                 // agregado ocupa espacio como un campo normal; sus campos se
@@ -3780,6 +3820,42 @@ void TypeChecker::collect_globals() {
             } else {
                 layout.size_bytes = offset;
                 layout.align_bytes = max_align;
+            }
+            // Campos `comptime`: se apilan DESPUES del tamano runtime para que la
+            // ComptimeVM les de un slot temporal al evaluar el ctor/metodo
+            // comptime (leer/escribir `this.<campo_comptime>`).  Cada uno recibe
+            // un @c offset alineado a su tipo; @c comptime_size_bytes cubre la
+            // instancia runtime + la cola comptime.  La materializacion solo
+            // copia @c size_bytes (la cola comptime se descarta).
+            {
+                uint32_t coff = layout.size_bytes;
+                for (auto &cf : layout.comptime_fields) {
+                    uint32_t csize = 8; // punteros/enteros anchos por defecto
+                    uint32_t calign = 8;
+                    if (cf.type.kind == PrimitiveKind::PTR ||
+                        cf.type.kind == PrimitiveKind::ARRAY) {
+                        csize = 8;
+                        calign = 8;
+                    } else if (cf.type.kind == PrimitiveKind::STRUCT) {
+                        auto it2 = struct_layouts_.find(cf.type.struct_name);
+                        if (it2 != struct_layouts_.end()) {
+                            csize = it2->second.size_bytes;
+                            calign = it2->second.align_bytes;
+                        }
+                    } else {
+                        uint32_t ps = (uint32_t)primitive_size_bytes(cf.type.kind);
+                        if (ps > 0) {
+                            csize = ps;
+                            calign = ps;
+                        }
+                    }
+                    if (calign > 1 && (coff % calign) != 0)
+                        coff += calign - (coff % calign);
+                    cf.offset = coff;
+                    cf.size = csize;
+                    coff += csize;
+                }
+                layout.comptime_size_bytes = coff;
             }
             // `@align(N)` a nivel de struct (C __declspec(align(N))/_Alignas):
             // fuerza la alineacion a max(natural, N) y padea el tamano a un
@@ -4912,6 +4988,27 @@ void TypeChecker::collect_globals() {
                     continue;  // no anñade param_type.
                 }
                 Type pt = type_from_node(p->type.get());
+                // ABI custom (register("rXX") en el param): validar que el
+                // registro sea reconocido -> error temprano y claro.
+                if (!p->abi_reg.empty() &&
+                    asm_canonical_reg(p->abi_reg).empty())
+                    diags_.error(
+                        p->loc,
+                        "register(\"" + p->abi_reg + "\") en el parametro '" +
+                            p->name + "': '" + p->abi_reg +
+                            "' no es un registro reconocido (x86-64: rax..r15;"
+                            " x86-32: eax/ecx/edx/ebx/esi/edi; xmm/ymm/zmm)");
+                // Guardar el registro del ABI custom en forma CANONICA de 64
+                // bits (eax/ax/al -> rax): asi el .vxi y todos los consumidores
+                // del codegen (canon_gp_to_mreg del CALLIND, del prologo del
+                // callee) lo reconocen igual en x86-64 y x86-32.  Sin esto, un
+                // `register("eax")` del `int 0x80` x86-32 quedaba como "eax",
+                // canon_gp_to_mreg("eax")=-1 -> el ABI custom se ignoraba en el
+                // CALLIND cross-modulo y los args iban a los registros/pila
+                // equivocados.  Vacio (param sin register) queda vacio.
+                const std::string p_abi = p->abi_reg.empty()
+                                              ? std::string()
+                                              : asm_canonical_reg(p->abi_reg);
                 if (p->is_variadic) {
                     // Variadico (`T... name`, ultimo param): el callee lo
                     // recibe como `T*` (puntero al array empaquetado por el
@@ -4923,9 +5020,22 @@ void TypeChecker::collect_globals() {
                     sig.is_variadic = true;
                     sig.variadic_elem = pt;
                     sig.param_types.push_back(Type::make_ptr(pt));
+                    sig.param_abi_regs.push_back(p_abi);
                 } else {
                     sig.param_types.push_back(pt);
+                    sig.param_abi_regs.push_back(p_abi);
                 }
+            }
+            // Normalizar: si ningun param declaro ABI custom, dejar el vector
+            // vacio (== ABI estandar; consistente con el operator== de Type).
+            {
+                bool any_abi = false;
+                for (const auto &r : sig.param_abi_regs)
+                    if (!r.empty()) {
+                        any_abi = true;
+                        break;
+                    }
+                if (!any_abi) sig.param_abi_regs.clear();
             }
 
             // Bug/feature 198: propagar @Naked a la firma para que el lowering
@@ -5121,6 +5231,22 @@ void TypeChecker::compute_struct_categories() {
 // ---------------------------------------------------------------------
 
 void TypeChecker::check_functions() {
+    // Defaults de campos de tipo funcion (`fnptr method = invoke;`): promover
+    // AHORA que todas las firmas de funcion estan registradas (collect_globals
+    // ya paso; al construir el layout aun no lo estaban -> "nombre no
+    // declarado").  check_expr marca is_func_ref (via check_ident) y
+    // maybe_promote_func_ref fija el result_type FUNCTION con la ABI de la
+    // firma -> el lowering emite LABEL_ADDR (no "nombre no resuelto") y el cast
+    // del campo hereda esa ABI (base de la devirtualizacion del ctx pattern).
+    for (auto &kv : struct_layouts_) {
+        for (auto &fi : kv.second.fields) {
+            if (fi.default_init && fi.type.kind == PrimitiveKind::FUNCTION) {
+                (void)check_expr(fi.default_init);
+                (void)maybe_promote_func_ref(fi.default_init, fi.type, Type{});
+            }
+        }
+    }
+
     // Fix (generic-fn inference): las monomorphizaciones por INFERENCIA
     // (`usa(p)` sin type-arg explicito) se crean DURANTE este check (en
     // check_call) y se anyaden al FINAL de mod_.decls.  Iteramos por INDICE
@@ -7881,6 +8007,21 @@ Type TypeChecker::check_expr(ast::Expr *e) {
         if (ce->operand) {
             Type to = check_expr(ce->operand.get());
             ce->operand->result_type = to;
+            // ABI custom via CALLIND: si el operando lleva una ABI a medida
+            // (una funcion, o un campo-funcion cuyo default es una funcion con
+            // register en params) y el target es un cfn, el cast HEREDA esa ABI
+            // truncada a la aridad del target -- toma los N primeros registros.
+            // El cast solo fija aridad/tipos/orden; los REGISTROS vienen de la
+            // funcion apuntada (contrato del ctx pattern).  El lowering del
+            // CALLIND consume t.fn_param_abi_regs (multi-ABI como un CALL).
+            if (t.kind == PrimitiveKind::FUNCTION &&
+                to.kind == PrimitiveKind::FUNCTION &&
+                !to.fn_param_abi_regs.empty()) {
+                std::vector<std::string> abi = to.fn_param_abi_regs;
+                if (abi.size() > t.fn_params.size())
+                    abi.resize(t.fn_params.size());
+                t.fn_param_abi_regs = std::move(abi);
+            }
             // Function pointer: `(u64) foo` / `(fn(...)->R) foo` -- foo es una
             // funcion (check_ident la marca is_func_ref y devuelve void).  El
             // cast es valido: el resultado es la direccion del codigo.
@@ -8362,8 +8503,16 @@ Type TypeChecker::check_index(ast::IndexExpr *e) {
         return Type{PrimitiveKind::CHAR};
     }
 
+    // Los smart pointers (unique/shared) y borrows transparentan la
+    // indexacion al puntero gestionado: `u[i]` == `(gestionado)[i]` sin
+    // extraer el raw a mano (ptr_of es redundante).  Todos son un host_ptr
+    // de 8 bytes con `pointee` = el tipo apuntado, igual que un PTR normal.
     const bool is_ptr_like =
-        (bt.kind == PrimitiveKind::PTR || bt.kind == PrimitiveKind::ARRAY) &&
+        (bt.kind == PrimitiveKind::PTR || bt.kind == PrimitiveKind::ARRAY ||
+         bt.kind == PrimitiveKind::UNIQUE_PTR ||
+         bt.kind == PrimitiveKind::SHARED_PTR ||
+         bt.kind == PrimitiveKind::BORROW ||
+         bt.kind == PrimitiveKind::BORROW_MUT) &&
         static_cast<bool>(bt.pointee);
     if (!is_ptr_like) {
         diags_.error(
@@ -8864,6 +9013,24 @@ static bool collect_dotted_path(const ast::Expr *e, std::string &out) {
     return false;
 }
 
+Type TypeChecker::field_type_with_abi(const StructFieldInfo &f) const {
+    Type t = f.type;
+    // Campo de tipo funcion con default = una funcion (promovido en
+    // check_functions con maybe_promote_func_ref): la ABI de una llamada
+    // INDIRECTA (CALLIND) a traves de este campo viene del DEFAULT (p.ej.
+    // `invoke`), no del tipo nominal del campo -- ese es el contrato del ctx
+    // pattern (una reasignacion runtime debe respetar la MISMA ABI).  Se
+    // propaga la ABI COMPLETA del default; el cast del campo la trunca a la
+    // aridad real (toma los N primeros registros).  Asi el CALLIND via campo
+    // usa multi-ABI igual que un CALL directo.
+    if (t.kind == PrimitiveKind::FUNCTION && f.default_init &&
+        f.default_init->result_type.kind == PrimitiveKind::FUNCTION &&
+        !f.default_init->result_type.fn_param_abi_regs.empty()) {
+        t.fn_param_abi_regs = f.default_init->result_type.fn_param_abi_regs;
+    }
+    return t;
+}
+
 Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
     //  NS.1b: acceso qualified MULTI-segmento a namespace
     // (`ui.widgets.button`): la base es una CADENA de field-access de
@@ -9249,7 +9416,19 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
         }
         const StructLayout &lay = it->second;
         for (const auto &f : lay.fields) {
-            if (f.name == e->field_name) return f.type;
+            if (f.name == e->field_name) return field_type_with_abi(f);
+        }
+        // Campo `comptime` (solo-compile-time, p.ej. `comptime char* name`
+        // para calcular un hash): no vive en el layout de instancia pero SI
+        // se resuelve para el codigo comptime (constructores/metodos comptime
+        // que lo leen/escriben).  Marca el acceso con property_kind=97 para
+        // que el lowering sepa que NO debe emitir un STORE/LOAD a un offset de
+        // instancia (el campo lo consume la ComptimeVM, no el runtime).
+        for (const auto &f : lay.comptime_fields) {
+            if (f.name == e->field_name) {
+                e->property_kind = 97; // campo comptime (sin storage runtime)
+                return field_type_with_abi(f);
+            }
         }
         diags_.error(e->loc, "el struct '" + bt.struct_name +
                                  "' no tiene un campo llamado '" +
@@ -10479,6 +10658,11 @@ Type TypeChecker::maybe_promote_func_ref(ast::Expr *val, const Type &target,
     if (!fsig) return fallback;
     Type ft = Type::make_function(fsig->param_types, fsig->return_type);
     ft.fn_is_raw = target.fn_is_raw; // cfn o lambda segun el destino
+    // La ABI custom viaja con el TIPO: `&funcion` hereda los abi_regs de la
+    // firma de la funcion.  types_assignable (via operator==) exige que el tipo
+    // destino declare la MISMA ABI -> asignar &f_abiA a un cfn-de-abiB (o a un
+    // cfn sin ABI) es un error de tipos claro.
+    ft.fn_param_abi_regs = fsig->param_abi_regs;
     val->result_type = ft;
     return ft;
 }
@@ -11545,6 +11729,34 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         return Type{};
     }
 
+    // Las operaciones de cadena son METODOS, no funciones libres: una sola
+    // forma de escribir cada cosa.  Los nombres `str_*` siguen REGISTRADOS
+    // porque el despacho de metodos los reescribe internamente
+    // (`s.length()` -> `str_length(s)`), pero esa reescritura ocurre en el
+    // lowering, despues del type check: aqui solo llega codigo del usuario.
+    if (e->callee->kind == ast::NodeKind::IdentExpr) {
+        static const char *RETIRADOS[][2] = {
+            {"str_length", "length"}, {"str_bytes", "bytes"},
+            {"str_cstr", "cstr"},     {"str_wstr", "wstr"},
+            {"str_hash", "hash"},     {"str_intern", "intern"},
+            {"str_concat", "concat"}, {"str_equals", "equals"},
+        };
+        const std::string &nlibre =
+            static_cast<ast::IdentExpr *>(e->callee.get())->name;
+        for (const auto &r : RETIRADOS) {
+            if (nlibre != r[0]) continue;
+            std::string sug = "s." + std::string(r[1]) + "(";
+            if (!e->args.empty()) sug = "<cadena>." + std::string(r[1]) + "(";
+            diags_.error(e->loc,
+                         nlibre + " no existe como funcion libre: las " +
+                             "operaciones de cadena son metodos.  Usa `" +
+                             sug + "...)` sobre la propia cadena");
+            for (auto &a : e->args)
+                (void)check_expr(a.get());
+            return Type{};
+        }
+    }
+
     // Overlay F1: construccion `PEB(ptr)` donde PEB es un `@overlay struct`.  El
     // valor resultante ES un puntero (la vista sobre esa memoria base); el tipo
     // resultado es el propio overlay.  1 argumento: el puntero base.
@@ -12049,6 +12261,15 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         }
         if (!base_is_enum_id) {
             Type base_t = check_expr(fa->base.get());
+            // Un literal en posicion de RECEPTOR es una cadena: `"x".length()`.
+            // check_expr lo tipa PTR porque en la mayoria de contextos un
+            // literal es el buffer crudo de static_data; el `.metodo()` obliga
+            // a verlo como `string`, igual que la promocion que ya ocurre al
+            // pasarlo a un parametro `string`.
+            if (fa->base->kind == ast::NodeKind::StringLitExpr &&
+                !static_cast<ast::StringLitExpr *>(fa->base.get())
+                     ->is_interpolated())
+                base_t = Type{PrimitiveKind::STRING};
             fa->base->result_type = base_t;
             if (base_t.kind == PrimitiveKind::STRING) {
                 static const struct {
@@ -15456,8 +15677,17 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 e->result_type = rt;
                 return rt;
             }
-            // Struct sin constructores declarados: cae al error normal (para
-            // construir por defecto se usa `Struct{...}` o `Struct.default()`).
+            // Struct SIN constructores declarados + 0 args: `Struct()` es el
+            // constructor por defecto (equivalente a `Struct{}`): cada campo
+            // toma su valor por defecto (o cero).  El lowering lo trata como un
+            // init con defaults.  Con args, cae al error (no hay ctor que los
+            // acepte).
+            if (arg_types.empty()) {
+                Type rt{PrimitiveKind::STRUCT, id->name};
+                e->result_type = rt;
+                e->is_default_struct_ctor = true;
+                return rt;
+            }
         }
         diags_.error(e->loc, "funcion no declarada: '" + id->name + "'");
         for (auto &a : e->args)

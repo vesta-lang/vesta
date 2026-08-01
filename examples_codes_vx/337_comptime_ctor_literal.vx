@@ -43,7 +43,7 @@ struct Tok {
      * @param t Texto del literal del call site (parametro `expr`).
      */
     comptime Tok(expr t) {
-        this.len = str_length(t);
+        this.len = t.length();
     }
 }
 

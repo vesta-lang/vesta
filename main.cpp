@@ -3557,6 +3557,26 @@ int main(int argc, char *argv[]) {
         // cr.ir_section_bytes (mismo @ir que consume el JIT); se deserializa
         // y se pasa al analizador AOT.1.
         // ------------------------------------------------------------------
+        // --vx-emit-ir: escribir el dump del SSA IR ANTES del codegen.  El
+        // bloque `if (aot_mode)` de abajo RETORNA tras el emit nativo, asi que
+        // el punto de escritura de mas abajo nunca se alcanza en AOT.  Ubicarlo
+        // aqui cubre TODOS los modos (aot/vm/velb) de forma uniforme y hace que
+        // `--vx-emit-ir` respete el TARGET (los @Target de los deps se resuelven
+        // segun --format/--aot-arch, no segun el host).
+        if (emit_ir) {
+            std::string ir_path = out_prefix.empty()
+                                      ? (copts.module_name + ".ir")
+                                      : (out_prefix + ".ir");
+            std::ofstream ofs_ir(ir_path);
+            if (!ofs_ir.is_open()) {
+                std::cerr << "[vx] No se puede escribir: " << ir_path << "\n";
+                return EXIT_FAILURE;
+            }
+            ofs_ir << cr.ir_text;
+            vesta::scout() << "[vx] .ir generado: " << ir_path << "\n";
+            return EXIT_SUCCESS;
+        }
+
         if (aot_mode) {
             // Emision AOT nativa: delegada a vesta::tc::compile_aot
             // (src/toolchain/aot_build.cpp) para no monolitizar main.cpp.  Los
@@ -3916,23 +3936,8 @@ int main(int argc, char *argv[]) {
                 return EXIT_FAILURE;
         }
 
-        // Si --vx-emit-ir esta activo, escribir el dump del SSA IR
-        // (pre y post optimizacion) en <out>.ir y salir.  Util para
-        // debug del frontend sin tocar el .vel ni el linker.  No se
-        // compila a .velb en este modo.
-        if (emit_ir) {
-            std::string ir_path = out_prefix.empty()
-                                      ? (copts.module_name + ".ir")
-                                      : (out_prefix + ".ir");
-            std::ofstream ofs_ir(ir_path);
-            if (!ofs_ir.is_open()) {
-                std::cerr << "[vx] No se puede escribir: " << ir_path << "\n";
-                return EXIT_FAILURE;
-            }
-            ofs_ir << cr.ir_text;
-            vesta::scout() << "[vx] .ir generado: " << ir_path << "\n";
-            return EXIT_SUCCESS;
-        }
+        // (El dump --vx-emit-ir se escribe mas arriba, antes del bloque
+        // `if (aot_mode)`, para cubrir tambien el AOT que retorna antes.)
 
         // Fase 4 interop C: escribir el header C publico (<output>.h) si
         // --emit-header esta activo.  Se hace ANTES del bloque --port (que

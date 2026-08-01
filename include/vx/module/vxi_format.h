@@ -54,7 +54,7 @@ inline constexpr uint32_t VXI_MAGIC = 0x49584556u;
 /// v9: ns_path en templates genericas (NS.2 cross-module).
 /// v10: package_id en el header (NS.3, offsets 72/76 del pad v6).
 /// v11: ext_methods (NS.6-ext) -- header crece a 88 (ext_off 80 + ext_count 84).
-inline constexpr uint16_t VXI_FORMAT_VERSION = 11; // NS.6-ext: ext_methods
+inline constexpr uint16_t VXI_FORMAT_VERSION = 12; // param_abi_regs (ABI custom)
 
 /// Kind del payload dentro de un BlobHeader (.vxi v4).  Asignaciones
 /// estables (persisten en disco).  Cualquier kind desconocido = saltar.
@@ -268,6 +268,13 @@ struct VxiSymbol {
     std::string return_type;              ///< typename canonico del retorno
     std::vector<std::string> param_types; ///< typenames canonicos en orden
     std::vector<std::string> param_names; ///< paralelo a param_types
+    /// ABI custom por-parametro (`register("rax")` en params): registro fisico
+    /// canonico de cada param, paralelo a @c param_types.  Vacio = ABI estandar.
+    /// Sin esto, un CALLIND cross-modulo a traves de un campo cuyo default es
+    /// una funcion con ABI custom (p.ej. `invoke` de std.syscall) no conocia los
+    /// registros y colocaba los args mal.  Se serializa como una lista de
+    /// strings (idx u32 + reg) tras @c param_names.
+    std::vector<std::string> param_abi_regs;
     bool is_extern = false;               ///< extern "lib.dll"
     std::string extern_lib;               ///< si is_extern
     ///  M.5: label internal usado en el .vel del modulo origen.

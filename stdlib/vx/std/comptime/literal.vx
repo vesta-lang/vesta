@@ -1,0 +1,155 @@
+namespace std.comptime.literal;
+
+/**
+ * @file literal.vx
+ * @brief Parser de literales enteros de ANCHO ARBITRARIO en tiempo de
+ *        compilacion (base de u128/u256/u512/BigInt).
+ *
+ * El constructor `comptime T(expr)` de un tipo de usuario captura el TEXTO crudo
+ * del literal y lo pasa a @ref parse_int_lit, que ejecuta aritmetica multi-word
+ * real en la ComptimeVM (acumula digito a digito con acarreo) y devuelve un
+ * @ref IntLit.  El helper es NEUTRO respecto al tipo destino: acumula en un
+ * buffer de words de ancho arbitrario (malloc envuelto en `unique`, RAII) y
+ * expone accessors semanticos.  El ctor del tipo (que conoce su representacion)
+ * mapea `word(i)` a sus campos; los words fuera de su ancho zero-extienden.
+ */
+
+/**
+ * @brief Resultado del parser: un entero de ancho arbitrario en words de 64 bits.
+ *
+ * Los words se guardan en little-endian (word 0 = los 64 bits menos
+ * significativos) en un buffer gestionado por RAII.  El signo se guarda como
+ * MAGNITUD + flag; el ctor del tipo decide la representacion (complemento a 2
+ * si es signed y negativo).
+ */
+public struct IntLit {
+    /// Buffer de words (little-endian).  `unique` -> se libera al salir del
+    /// scope comptime; sin fugas.
+    unique<u64> words;
+    /// Numero de words significativos (>= 1).
+    i64 n_words;
+    /// True si el literal llevaba un signo '-' (magnitud en @ref words).
+    bool negative;
+
+    /**
+     * @brief Word i-esimo, zero-extendiendo mas alla del ancho representado.
+     * @param i Indice del word.
+     * @return El word i-esimo (0 si @p i esta fuera de @ref n_words).
+     */
+    u64 word(i64 i) {
+        if (i >= 0 && i < this.n_words) {
+            return this.words[i];
+        }
+        return 0;
+    }
+
+    /** @brief Numero de words significativos. */
+    i64 word_count() {
+        return this.n_words;
+    }
+
+    /** @brief True si el literal era negativo. */
+    bool is_negative() {
+        return this.negative;
+    }
+
+    /**
+     * @brief Bits significativos (posicion del bit 1 mas alto + 1).
+     * @return El ancho en bits de la magnitud (0 para el valor 0).
+     */
+    u64 bit_width() {
+        if (this.n_words == 0) {
+            return 0;
+        }
+        i64 hi = this.n_words - 1;
+        u64 w = this.words[hi];
+        u64 bits = (u64) hi * 64;
+        while (w != 0) {
+            bits = bits + 1;
+            w = w >> 1;
+        }
+        return bits;
+    }
+}
+
+/**
+ * @brief Parsea un literal entero (decimal, `0x`-hex, con `-` opcional) a un
+ *        @ref IntLit de ancho arbitrario.
+ *
+ * Ejecucion comptime real: recorre el texto acumulando `buf = buf * base + d`
+ * con acarreo multi-word (split de 32 bits para evitar el overflow de
+ * `word * base`).  Neutro respecto al tipo destino.
+ *
+ * @param src Texto del literal.
+ * @return El valor parseado.
+ */
+public comptime IntLit parse_int_lit(string src) {
+    i64 n = src.length();
+    i64 base = 10;
+    i64 i = 0;
+    bool neg = false;
+    // Signo opcional.
+    if (n >= 1) {
+        i64 c0 = ord(substr(src, 0, 1));
+        if (c0 == 45) {  // '-'
+            neg = true;
+            i = 1;
+        }
+    }
+    // Prefijo hexadecimal opcional.
+    if (n - i >= 2) {
+        string pfx = substr(src, i, 2);
+        if (pfx == "0x") {
+            base = 16;
+            i = i + 2;
+        }
+    }
+    // Buffer de words: `n` words siempre sobra para `n` digitos.
+    i64 cap = n;
+    if (cap < 1) {
+        cap = 1;
+    }
+    unique<u64> buf = unique_with(malloc(cap * 8), free);
+    i64 z = 0;
+    while (z < cap) {
+        buf[z] = 0;
+        z = z + 1;
+    }
+    i64 nw = 1;
+    // Acumular digito a digito: buf = buf * base + d, con acarreo multi-word.
+    while (i < n) {
+        i64 c = ord(substr(src, i, 1));
+        i64 d = -1;
+        if (c >= 48 && c <= 57) {
+            d = c - 48;         // '0'..'9'
+        } else if (c >= 97 && c <= 102) {
+            d = c - 87;         // 'a'..'f'
+        } else if (c >= 65 && c <= 70) {
+            d = c - 55;         // 'A'..'F'
+        }
+        if (d >= 0) {
+            u64 carry = (u64) d;
+            i64 k = 0;
+            while (k < nw) {
+                // w * base + carry sin overflow: split en mitades de 32 bits.
+                u64 w = buf[k];
+                u64 lo = (w & 0xFFFFFFFF) * (u64) base + (carry & 0xFFFFFFFF);
+                u64 hi = (w >> 32) * (u64) base + (lo >> 32) + (carry >> 32);
+                buf[k] = (lo & 0xFFFFFFFF) | (hi << 32);
+                carry = hi >> 32;
+                k = k + 1;
+            }
+            // El acarreo abre un word nuevo mientras quepa.
+            if (carry != 0 && nw < cap) {
+                buf[nw] = carry;
+                nw = nw + 1;
+            }
+        }
+        i = i + 1;
+    }
+    IntLit r;
+    r.words = move(buf);
+    r.n_words = nw;
+    r.negative = neg;
+    return r;
+}

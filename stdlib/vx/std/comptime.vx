@@ -1,3 +1,6 @@
 namespace std.comptime;
 
 public import std.comptime.basics;
+// TODO: re-exportar std.comptime.literal cuando el IntLit (struct con campo
+// `unique` devuelto por SRET desde una comptime fn) deje de crashear el
+// pipeline.  Hoy std.comptime.literal se importa por path directo.

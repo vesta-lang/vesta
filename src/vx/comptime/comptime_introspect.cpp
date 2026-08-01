@@ -2566,12 +2566,17 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                  * DIFERIDO (ok=true para que consts/exprs no den error, pero
                  * static_assert no debe dispararse -- se resuelve en pass 2).
                  *
-                 * EXCEPCION: las comptime fns IMPORTADAS de otro modulo NO se
-                 * re-bajan a IR en el importer (is_imported_comptime -> no hay
-                 * `__macro_<fn>` que invocar en la ComptimeVM local).  Deben
-                 * evaluarse por el TREE-WALKER (comptime_call_fn abajo).  Sin
-                 * este skip, un `source(expr)` importado caia al path VM,
-                 * fallaba el invoke y devolvia vacio. */
+                 * Las comptime fns IMPORTADAS de otro modulo TAMBIEN van por la
+                 * VM: su IR (`__macro_<fn>`) se mergea al .velb del importer
+                 * (compiler_project.cpp) y la ComptimeVM lo carga
+                 * (load_macros_from_bytes filtra `code.__macro_` de TODO el
+                 * symbol_table, sin distinguir local/importado).  Asi cualquier
+                 * funcion es invocable en comptime venga de donde venga (malloc,
+                 * bucles, etc.), no solo las locales.  Antes se forzaban al
+                 * TREE-WALKER legacy (que no ejecuta builtins nativos como
+                 * malloc), asumiendo -- falsamente ya -- que no habia `__macro_`
+                 * que invocar.  El unico caso que sigue en el tree-walker es el
+                 * expr-capture forwardeado (abajo), que el path VM no marshaliza. */
                 /* Forwarding de expr-capture anidado: si la fn tiene un param
                  * `expr` cuyo argumento NO es un StringLit crudo (es un IdentExpr
                  * forwardeado desde un `expr` param del macro/comptime fn
@@ -2591,8 +2596,25 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                         }
                     }
                 }
+                /* Una comptime fn IMPORTADA con un param `expr` (expr-capture) NO
+                 * baja a un `__macro_<fn>` propio: el importer la expande INLINE
+                 * (fast-path del lowering) porque su valor es el TEXTO capturado
+                 * del call site.  No hay simbolo que invocar en la ComptimeVM ->
+                 * debe evaluarse por el tree-walker (que devuelve `code`).  El
+                 * `forwarded_expr_arg` de arriba no la captura cuando el arg ya
+                 * llega como StringLit (p.ej. `source( p++; )`).  Sin
+                 * expr-capture (p.ej. `parse_int_lit(string)`), la importada SI
+                 * tiene `__macro_` mergeado y va por la VM. */
+                bool imported_expr_capture = false;
+                if (fn_it->second->is_imported_comptime) {
+                    for (const auto &p : fn_it->second->params)
+                        if (p && p->is_expr_capture) {
+                            imported_expr_capture = true;
+                            break;
+                        }
+                }
                 if (comptime_fn_needs_vm(tc, fn_it->second) &&
-                    !fn_it->second->is_imported_comptime && !forwarded_expr_arg) {
+                    !forwarded_expr_arg && !imported_expr_capture) {
                     bool ret_is_str = false;
                     bool ret_is_struct = false;
                     const StructLayout *ret_slay = nullptr;
@@ -2648,12 +2670,24 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                         vr.deferred = true;
                         return vr;
                     }
+                    /* Nombre del macro: para las LOCALES el call site
+                     * (`cid->name`) es la clave correcta (comportamiento previo;
+                     * puede diferir del decl en casos como lambdas/monomorfiza-
+                     * cion).  Para las IMPORTADAS el call usa el nombre desnudo
+                     * (`buf_sum`) pero el `__macro_` mergeado del dep lleva el
+                     * nombre mangled del namespace
+                     * (`std__comptime__literal__buf_sum`), que es justamente el
+                     * `decl->name` fijado por module_interop; solo ese coincide
+                     * con el simbolo cargado en la ComptimeVM. */
+                    const std::string macro_nm =
+                        "__macro_" + (fn_it->second->is_imported_comptime
+                                          ? fn_it->second->name
+                                          : cid->name);
                     if (ret_is_str) {
                         std::string out;
                         const bool inv =
                             const_cast<TypeChecker &>(tc).comptime_runtime()
-                                .invoke_string_macro("__macro_" + cid->name,
-                                                     vm_args, out);
+                                .invoke_string_macro(macro_nm, vm_args, out);
                         vr.is_str = true;
                         if (inv) vr.str = std::move(out);
                         else vr.deferred = true;
@@ -2664,8 +2698,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                         std::vector<uint8_t> sbytes;
                         const bool inv =
                             const_cast<TypeChecker &>(tc).comptime_runtime()
-                                .invoke_struct_macro("__macro_" + cid->name,
-                                                     vm_args,
+                                .invoke_struct_macro(macro_nm, vm_args,
                                                      ret_slay->size_bytes,
                                                      sbytes);
                         if (inv)
@@ -2676,8 +2709,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                         uint64_t r0 = 0;
                         const bool inv =
                             const_cast<TypeChecker &>(tc).comptime_runtime()
-                                .invoke_simple_macro("__macro_" + cid->name,
-                                                     vm_args, r0);
+                                .invoke_simple_macro(macro_nm, vm_args, r0);
                         if (inv) vr.value = static_cast<int64_t>(r0);
                         else { vr.value = 0; vr.deferred = true; }
                     }

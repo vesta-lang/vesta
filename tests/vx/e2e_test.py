@@ -372,6 +372,47 @@ def h_diff3(ctx, label, src, out=None, aot=True):
         ctx.ok("%s (aot == interp)" % label)
 
 
+def h_diff3_stdout(ctx, label, src, out=None, aot=True):
+    """Como h_diff3 pero comparando la SALIDA byte a byte, no R0.
+
+    Hace falta para las cadenas: una divergencia de codificacion o de
+    representacion no cambia el valor de retorno, asi que h_diff3 no la ve.
+    El interprete es el oraculo; JIT y AOT deben producir el mismo texto.
+    """
+    out = out or label
+    ctx.compile_vx(ctx.src(src), out)
+    import os as _os
+    if not _os.path.exists(ctx.path(out + ".velb")):
+        return
+
+    _, salida_vm = ctx.run_velb(out, mode="vm", stats=False)
+    if not salida_vm.strip():
+        ctx.fail("%s (-m vm): sin salida" % label)
+        return
+    ctx.ok("%s (-m vm) -> %d lineas" % (label, len(salida_vm.splitlines())))
+
+    _, salida_jit = ctx.run_velb(out, mode="jit", stats=False)
+    if salida_jit != salida_vm:
+        ctx.fail("%s DIVERGE jit != interp" % label,
+                 "--- interp ---\n%s\n--- jit ---\n%s"
+                 % (salida_vm, salida_jit))
+        return
+    ctx.ok("%s (jit == interp)" % label)
+
+    if not aot:
+        return
+    exe = aot_build(ctx, ctx.src(src), out + "_aot", label + " (-m aot)")
+    if not exe:
+        return
+    _, salida_aot = ctx.run([exe])
+    if salida_aot != salida_vm:
+        ctx.fail("%s DIVERGE aot != interp" % label,
+                 "--- interp ---\n%s\n--- aot ---\n%s"
+                 % (salida_vm, salida_aot))
+        return
+    ctx.ok("%s (aot == interp)" % label)
+
+
 def aot_build(ctx, src_abs, out, label, cwd=None, fmt=None):
     """Compila un .vx (ruta absoluta) a ejecutable nativo y devuelve su ruta.
 
@@ -491,6 +532,14 @@ def const_reject_case(tag, label, body, line=None):
 def modes3_case(tag, label, src, expected, line=None):
     def fn(ctx):
         h_verify_3modes(ctx, label, src, expected, out=tag)
+    fn.__name__ = "case_" + tag
+    _register(tag, fn, False, line)
+
+
+def diff3_stdout_case(tag, label, src, line=None, aot=True):
+    """Red diferencial sobre la SALIDA: interp = oraculo, jit y aot iguales."""
+    def fn(ctx):
+        h_diff3_stdout(ctx, label, src, out=tag, aot=aot)
     fn.__name__ = "case_" + tag
     _register(tag, fn, False, line)
 
@@ -2198,7 +2247,7 @@ r0_case("sd206", "destructor de struct ~Struct() + move-on-return (RAII)", "206_
 r0_case("sds207", "clase-contenedor con campo struct destructible + move-on-store", "207_struct_dtor_store_err.vx", 42, line=3652)
 r0_case("sc208", "composicion de structs con RAII recursivo + acceso campo struct", "208_struct_composition.vx", 42, line=3653)
 fails_case("scs209", "struct con closure capturador almacenado en campo (escape no soportado)", "209_struct_closure_store_err.vx", "se almacena en un campo que le sobrevive", line=3654)
-fails_case("asmpin", "asm: pin de VALOR a rsp/rbp rechazado (guia al cuerpo)", "asm_pin_rsp_err.vx", "VXA008", line=3654)
+warns_r0_case("asmpin", "asm: pin de VALOR a rsp/rbp avisa (VXA008) y compila (permitido, responsabilidad del programador; @Naked)", "asm_pin_rbp_warn.vx", "VXA008", 42, line=3654)
 r0_case("asmstk", "asm: manipular la pila desde el asm (mov rsp/push/pop)", "asm_stack_manip.vx", 42, line=3654)
 r0_case("asmnss", "asm: stack switch @Naked compilado nativo por el JIT", "asm_naked_stack_switch.vx", 42, line=3654)
 warns_r0_case("asmnsw", "asm: reasignar rsp en funcion normal avisa (VXA010) y compila en JIT", "asm_normal_stack_warn.vx", "VXA010", 42, line=3654)
@@ -2355,6 +2404,9 @@ diff3_case("wideint_signed", "i128 con signo: div/mod truncados, neg, comparador
 diff3_case("struct_constructors", "constructores de struct value-type con overload por aridad", "335_struct_constructors.vx")
 diff3_case("comptime_ctor_literal", "constructor comptime de struct (i64 + param expr): literales de tipo usuario", "337_comptime_ctor_literal.vx")
 diff3_case("comptime_parse_literal", "parseo de literal entero en comptime (ctor expr -> helper de parseo -> IntLit)", "338_comptime_parse_literal.vx")
+diff3_stdout_case("string_conformance", "matriz de conformidad de cadenas: misma salida en interp, JIT y AOT", "339_string_conformance.vx")
+diff3_stdout_case("spill_opcodes", "opcodes con operando derramado: misma salida en interp, JIT y AOT", "340_spill_opcodes.vx")
+diff3_stdout_case("spill_reflexion", "reflexion con operando derramado (jit == interp; AOT la rechaza por diseno)", "341_spill_reflexion.vx", aot=False)
 
 
 # --- stdlib: ejemplos y tests de la biblioteca estandar de Vesta -----------
@@ -3019,12 +3071,12 @@ READ_EXTERN_PE = ('extern "kernel32.dll" { fn CreateFileA(u8* n, u32 a, u32 s, '
                   'u64 se, u32 d, u32 f, u64 t) -> u64; fn GetFileSizeEx(u64 h, '
                   'i64* sz) -> i32; fn ReadFile(u64 h, u8* b, u32 nn, u32* nr, '
                   'u64 o) -> i32; fn CloseHandle(u64 h) -> i32; }')
-READ_SIZE_PE = ('u8* pcz=str_cstr(path); u64 hz=CreateFileA(pcz,(u32)0x80000000,'
+READ_SIZE_PE = ('u8* pcz=path.cstr(); u64 hz=CreateFileA(pcz,(u32)0x80000000,'
                 '(u32)1,(u64)0,(u32)3,(u32)0x80,(u64)0); '
                 'if(hz==0xFFFFFFFFFFFFFFFF){return 0;} i64 size=0; '
                 'i32 gsz=GetFileSizeEx(hz,&size); CloseHandle(hz); '
                 'if(gsz==0){return 0;}')
-READ_INTO_PE = ('u8* pcr=str_cstr(path); u64 hr=CreateFileA(pcr,(u32)0x80000000,'
+READ_INTO_PE = ('u8* pcr=path.cstr(); u64 hr=CreateFileA(pcr,(u32)0x80000000,'
                 '(u32)1,(u64)0,(u32)3,(u32)0x80,(u64)0); '
                 'if(hr==0xFFFFFFFFFFFFFFFF){free(buf);return 0;} u32 nrd=0; '
                 'i32 okr=ReadFile(hr,buf,(u32)size,&nrd,(u64)0); CloseHandle(hr); '
@@ -3033,10 +3085,10 @@ READ_EXTERN_ELF = ('extern "libc.so.6" { fn open(u8* p, i32 f, i32 m) -> i32; '
                    'fn read(i32 fd, u8* b, u64 c) -> i64; '
                    'fn lseek(i32 fd, i64 o, i32 w) -> i64; '
                    'fn close(i32 fd) -> i32; }')
-READ_SIZE_ELF = ('u8* pcz=str_cstr(path); i32 fdz=open(pcz,(i32)0,(i32)0); '
+READ_SIZE_ELF = ('u8* pcz=path.cstr(); i32 fdz=open(pcz,(i32)0,(i32)0); '
                  'if(fdz<0){return 0;} i64 size=lseek(fdz,(i64)0,(i32)2); '
                  'lseek(fdz,(i64)0,(i32)0);')
-READ_INTO_ELF = ('u8* pcr=str_cstr(path); i32 fdr=open(pcr,(i32)0,(i32)0); '
+READ_INTO_ELF = ('u8* pcr=path.cstr(); i32 fdr=open(pcr,(i32)0,(i32)0); '
                  'if(fdr<0){free(buf);return 0;} i64 n=read(fdr,buf,(u64)size); '
                  'close(fdr);')
 

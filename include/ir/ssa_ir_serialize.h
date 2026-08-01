@@ -108,7 +108,7 @@ static constexpr uint32_t IR_SECTION_MAGIC = 0x52494556U; /* 'V''E''I''R' */
  * @brief Version del formato @ir.  Bump cuando cambia el layout.
  */
 static constexpr uint16_t IR_SECTION_VERSION =
-    6; // v6: + jump_targets por instr (SWITCH_DENSE jump table)
+    7; // v7: + param_abi_regs (ABI custom por funcion: register en params)
 
 /**
  * @brief Emit del bytes de la seccion @c @ir lista para append a
@@ -154,8 +154,7 @@ bool parse_ir_section(const std::vector<uint8_t> &data, size_t offset,
 static constexpr uint32_t IR_MODULE_CACHE_MAGIC =
     0x434D5856U; /* 'V''X''M''C' */
 static constexpr uint16_t IR_MODULE_CACHE_VERSION =
-    9; // v9: + native_imports (lib,name) -> el AOT mapea cada simbolo FFI a su
-       // DLL real (kernel32/user32/...) en vez de asumir msvcrt
+    10; // v10: + param_abi_regs (ABI custom por funcion: register en params)
 
 /**
  * @brief Serializa el IR de UN modulo COMPLETO para el cache `.vxir`.

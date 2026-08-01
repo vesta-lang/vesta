@@ -21,4 +21,11 @@ public typedef u8 byte new;
  */
 public typedef usize size_t;
 
-public uintptr nullptr = 0;
+/**
+ * POSIX ssize_t: tamano CON signo (o -1 = error), alias del `ssize` del arch.
+ * Igual que size_t es alias de usize -- tipo de compatibilidad, no un tipo
+ * fuerte.  Lo usan las APIs estilo POSIX (read/write devuelven ssize_t).
+ */
+public typedef ssize ssize_t;
+
+public const uintptr nullptr = 0;

@@ -492,6 +492,16 @@ class Parser {
     [[nodiscard]] bool looks_like_register_storage() const noexcept;
 
     /**
+     * @brief Consume una anotacion opcional `register("rXX")` al inicio de un
+     *        parametro (o de un tipo de parametro en `cfn(...)`), devolviendo el
+     *        nombre del registro o "" si no hay.  Habilita la ABI custom por
+     *        funcion: el parametro se recibe (y el caller lo coloca) en ese
+     *        registro fisico.  Solo consume si el patron exacto
+     *        `register ( "reg" )` aparece; deja intacto cualquier otro caso.
+     */
+    std::string parse_opt_param_reg();
+
+    /**
      * @brief Decide si el `(` actual inicia un cast C-style `(T) expr`.
      *
      * El parser reconoce el patron `(<type>) <unary>` solo cuando el

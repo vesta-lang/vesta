@@ -126,8 +126,38 @@ Lowering::try_lower_comptime_ctor_call(ast::CallExpr *e,
     res.is_struct = true;
     if (args_ok) {
         std::vector<uint8_t> bytes;
+        // El buffer de eval incluye la cola de campos `comptime` (si los hay):
+        // el cuerpo del ctor puede escribir/leer `this.<campo_comptime>` en su
+        // slot temporal.  fill_struct_fields_from_bytes solo lee los campos
+        // runtime (primeros @c size_bytes); la cola comptime se descarta.
+        const uint32_t buf_sz = slay.comptime_size_bytes > slay.size_bytes
+                                    ? slay.comptime_size_bytes
+                                    : slay.size_bytes;
+        // Sembrar el buffer con los defaults de los campos ANTES de correr el
+        // ctor: la semantica es "defaults primero, cuerpo del ctor encima".
+        // Sin esto, un campo que el ctor no toca salia a cero en vez de con su
+        // valor declarado (`struct S { u64 n = 3; comptime S(...) {} }` daba
+        // n=0).  Solo se siembran los defaults ESCALARES comptime-evaluables;
+        // los que no lo son (una referencia a funcion, un string) quedan a cero
+        // aqui y los emite el lowering en runtime.
+        bytes.assign(buf_sz, 0);
+        for (const auto &fi : slay.fields) {
+            if (!fi.default_init) continue;
+            if (fi.bit_width != 0) continue; // bit field: fuera de alcance
+            if (fi.size == 0 || fi.size > 8) continue;
+            if (static_cast<size_t>(fi.offset) + fi.size > bytes.size())
+                continue;
+            const ComptimeEvalResult dv = comptime_eval_expr(tc_, fi.default_init);
+            if (!dv.ok || dv.deferred || dv.is_str || dv.is_array ||
+                dv.is_struct || dv.is_type)
+                continue;
+            const uint64_t raw = static_cast<uint64_t>(dv.value);
+            for (uint32_t b = 0; b < fi.size; ++b)
+                bytes[fi.offset + b] =
+                    static_cast<uint8_t>((raw >> (8 * b)) & 0xFF);
+        }
         if (cr.invoke_struct_macro(comptime_ctor_ir_name(slay.name, arity),
-                                   vm_args, slay.size_bytes, bytes))
+                                   vm_args, buf_sz, bytes))
             fill_struct_fields_from_bytes(tc_, slay, bytes, 0, res);
     }
 

@@ -41,5 +41,5 @@ i32 main() {
     println(dinamico);
 
     // len("aaabbb") = 6;  6 + 36 = 42
-    return (i32)(str_length(c) + 36);
+    return (i32)(c.length() + 36);
 }

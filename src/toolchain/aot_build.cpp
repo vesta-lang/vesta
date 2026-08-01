@@ -1120,7 +1120,12 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
 
             // Referencias a datos: PIC (RIP-relativo, default) vs absoluto
             // (--no-pie, requiere base de imagen fija).  Analogo gcc/clang.
-            const bool aot_pic = !opt.no_pie;
+            // x86-32 NO tiene RIP-relative -> el PIC clasico exige GOT/PLT (no
+            // implementado); forzamos no-PIE (ABS32/R_386_32 con base fija), que
+            // es lo que un `gcc -m32` sin -fPIC produce por defecto.  Sin esto,
+            // los STR_LIT_ADDR/LABEL_ADDR (static ctx, punteros a funcion en
+            // memoria) tomaban direcciones RIP-relativas inconsistentes.
+            const bool aot_pic = !opt.no_pie && !aot_mode32;
 
             // --emit exe|obj|shared.
             //   EXEC   : ejecutable standalone con _start (requiere main).
@@ -1442,6 +1447,24 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                         work.push_back(fn.name);
                     }
                 }
+            }
+            // ABI custom por funcion: el CALL directo resuelve los param_abi_regs
+            // del callee por nombre (register() en su firma).  Copiamos SOLO las
+            // funciones con ABI custom a un mapa respaldado por shared_ptr (el
+            // resolver lo captura por valor -> sin referencia colgante y sin
+            // limpieza manual; el 99% de programas no tiene ninguna entrada).
+            {
+                auto abi_map = std::make_shared<
+                    std::unordered_map<std::string, std::vector<std::string>>>();
+                for (const auto &f : aot_mod.functions)
+                    if (!f.param_abi_regs.empty())
+                        (*abi_map)[f.name] = f.param_abi_regs;
+                jit::vreg_set_abi_resolver(
+                    [abi_map](const std::string &name)
+                        -> const std::vector<std::string> * {
+                        auto it = abi_map->find(name);
+                        return it == abi_map->end() ? nullptr : &it->second;
+                    });
             }
             while (!work.empty()) {
                 const std::string nm = work.back();
@@ -2150,6 +2173,8 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                         const aot::RelocKind k =
                             (r.kind == jit::NativeReloc::Kind::DATA_REL32)
                                 ? aot::RelocKind::REL32
+                            : (r.kind == jit::NativeReloc::Kind::ABS32)
+                                ? aot::RelocKind::IMM32
                                 : aot::RelocKind::ABS64;
                         w.add_reloc(fl.sec, site,
                                     aot::RelocTarget::addr(fit->second.sec,
@@ -2193,9 +2218,14 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                         const uint32_t N = static_cast<uint32_t>(
                             std::strtoul(r.symbol.c_str() + 7, nullptr, 10));
                         const std::pair<int, uint64_t> loc = place_data(N);
+                        /* ABS32 (x86-32): IMM32 -> el emisor ELF32 lo emite como
+                         * R_386_32 (VA absoluta de 32 bits).  DATA_REL32 (x86-64
+                         * PIC): REL32.  Resto (--no-pie x64): ABS64. */
                         const aot::RelocKind k =
                             (r.kind == jit::NativeReloc::Kind::DATA_REL32)
                                 ? aot::RelocKind::REL32
+                            : (r.kind == jit::NativeReloc::Kind::ABS32)
+                                ? aot::RelocKind::IMM32
                                 : aot::RelocKind::ABS64;
                         w.add_reloc(
                             fl.sec, site,

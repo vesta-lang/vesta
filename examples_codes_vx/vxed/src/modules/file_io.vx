@@ -147,8 +147,8 @@ public class FileReader {
             this.data   = null;
             this.length = 0;
         }
-        u8* path_c = str_cstr(path);
-        u8* mode_c = str_cstr(MODE_READ);
+        u8* path_c = path.cstr();
+        u8* mode_c = MODE_READ.cstr();
         if (path_c == null || mode_c == null) return Err(FE_READ_FAIL);
         i64 fp = ffi_call(g_fopen, path_c, mode_c);
         if (fp == 0) return Err(FE_NOT_FOUND);
@@ -184,8 +184,8 @@ public class FileReader {
 @hot
 public Result<i64, i32> open_file(string path, string mode_str) {
     ensure_loaded();
-    u8* path_c = str_cstr(path);
-    u8* mode_c = str_cstr(mode_str);
+    u8* path_c = path.cstr();
+    u8* mode_c = mode_str.cstr();
     if (path_c == null) return Err(FE_NOT_FOUND);
     if (mode_c == null) return Err(FE_NOT_FOUND);
     i64 fp = ffi_call(g_fopen, path_c, mode_c);
@@ -214,8 +214,8 @@ public i64 write_bytes(i64 fp, u8* buf, i32 n) {
 @hot
 public Result<i64, i32> save_buffer(string path, buffer.Buffer buf) {
     ensure_loaded();
-    u8* path_c = str_cstr(path);
-    u8* mode_c = str_cstr(MODE_WRITE);
+    u8* path_c = path.cstr();
+    u8* mode_c = MODE_WRITE.cstr();
     i64 fp = ffi_call(g_fopen, path_c, mode_c);
     if (fp == 0) {
         return Err(FE_NOT_FOUND);

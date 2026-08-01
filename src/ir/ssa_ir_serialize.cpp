@@ -76,6 +76,8 @@ constexpr uint8_t INSTR_FLAG_HOST_ALLOCA =
     1 << 2; ///< ALLOCA auto-promovida a host stack ( D.jit-mem-model)
 constexpr uint8_t INSTR_FLAG_HOST_ALLOCA_EXPLICIT_FREE =
     1 << 3; ///< Sprint mem-loop-fix: RAW_FREE preservado para liberar in-loop
+constexpr uint8_t INSTR_FLAG_RET_IMPLICIT =
+    1 << 4; ///< @Naked: RET sintetico de caida-al-final (no `return` explicito)
 
 // Bits del byte flags por IrFunction.
 constexpr uint8_t FN_FLAG_NATIVE =
@@ -175,6 +177,7 @@ void write_instr(std::vector<uint8_t> &o, const IrInstr &i) {
     uint8_t flags = 0;
     if (i.preserve) flags |= INSTR_FLAG_PRESERVE;
     if (i.is_call_site) flags |= INSTR_FLAG_IS_CALL_SITE;
+    if (i.ret_implicit) flags |= INSTR_FLAG_RET_IMPLICIT;
     if (i.host_alloca) flags |= INSTR_FLAG_HOST_ALLOCA;
     if (i.host_alloca_explicit_free)
         flags |= INSTR_FLAG_HOST_ALLOCA_EXPLICIT_FREE;
@@ -219,6 +222,12 @@ void write_instr(std::vector<uint8_t> &o, const IrInstr &i) {
     write_u32(o, static_cast<uint32_t>(jtc));
     for (size_t k = 0; k < jtc; ++k)
         write_u32(o, i.jump_targets[k]);
+    // call_abi_regs: ABI custom del CALLIND (registro por arg desde el tipo del
+    // puntero).  Count 0 = ABI estandar (todas las ops no-CALLIND).  (Formato v7.)
+    const size_t abc = i.call_abi_regs.size();
+    write_u32(o, static_cast<uint32_t>(abc));
+    for (size_t k = 0; k < abc; ++k)
+        write_str(o, i.call_abi_regs[k]);
 }
 
 /**
@@ -253,6 +262,7 @@ bool read_instr(const std::vector<uint8_t> &in, size_t &off, IrInstr &i) {
     i.dst = static_cast<IrValueId>(dst_v);
     i.preserve = (flags & INSTR_FLAG_PRESERVE) != 0;
     i.is_call_site = (flags & INSTR_FLAG_IS_CALL_SITE) != 0;
+    i.ret_implicit = (flags & INSTR_FLAG_RET_IMPLICIT) != 0;
     i.host_alloca = (flags & INSTR_FLAG_HOST_ALLOCA) != 0;
     i.host_alloca_explicit_free =
         (flags & INSTR_FLAG_HOST_ALLOCA_EXPLICIT_FREE) != 0;
@@ -299,6 +309,16 @@ bool read_instr(const std::vector<uint8_t> &in, size_t &off, IrInstr &i) {
         uint32_t t = 0;
         if (!read_u32(in, off, t)) return false;
         i.jump_targets.push_back(t);
+    }
+    /* call_abi_regs (ABI custom del CALLIND) -- formato v7. */
+    uint32_t abc = 0;
+    if (!read_u32(in, off, abc)) return false;
+    i.call_abi_regs.clear();
+    i.call_abi_regs.reserve(abc);
+    for (uint32_t k = 0; k < abc; ++k) {
+        std::string r;
+        if (!read_str(in, off, r)) return false;
+        i.call_abi_regs.push_back(std::move(r));
     }
     return true;
 }
@@ -389,6 +409,13 @@ size_t serialize_function(const IrFunction &fn, std::vector<uint8_t> &out) {
     write_u32(out, static_cast<uint32_t>(fn.params.size()));
     for (auto p : fn.params)
         write_u32(out, static_cast<uint32_t>(p));
+
+    // ABI custom por funcion (register("rXX") en params): registro fisico de
+    // entrada por parametro, alineado con params[].  Count 0 = ABI estandar (el
+    // caso comun; no ocupa mas que el u32 del count).
+    write_u32(out, static_cast<uint32_t>(fn.param_abi_regs.size()));
+    for (const auto &r : fn.param_abi_regs)
+        write_str(out, r);
 
     // Values: TODOS los SSA values de la funcion.  El indice en este
     // array ES el IrValueId (los ids son densos 0..N-1).
@@ -502,6 +529,17 @@ bool deserialize_function(const std::vector<uint8_t> &in, size_t &off,
         uint32_t v = 0;
         if (!read_u32(in, off, v)) return false;
         out.params.push_back(static_cast<IrValueId>(v));
+    }
+
+    /* ABI custom por funcion (register en params): registro por parametro. */
+    uint32_t n_abi = 0;
+    if (!read_u32(in, off, n_abi)) return false;
+    out.param_abi_regs.clear();
+    out.param_abi_regs.reserve(n_abi);
+    for (uint32_t k = 0; k < n_abi; ++k) {
+        std::string r;
+        if (!read_str(in, off, r)) return false;
+        out.param_abi_regs.push_back(std::move(r));
     }
 
     /* values */

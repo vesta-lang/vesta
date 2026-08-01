@@ -111,6 +111,12 @@ enum class SymbolKind : uint8_t {
 struct FunctionSig {
     Type return_type;
     std::vector<Type> param_types;
+    /// ABI custom por-parametro (`register("rXX") T name`): registro fisico de
+    /// entrada por parametro, alineado con @c param_types.  Vacio = ABI estandar.
+    /// Lo consume: (a) el codegen del CALL directo (via IrFunction), y (b) el
+    /// tipado de `&funcion`, que construye un @c cfn cuyo @c fn_param_abi_regs
+    /// hereda esta lista -> el tipo del puntero LLEVA la ABI.
+    std::vector<std::string> param_abi_regs;
     ///  FFI extern: si no esta vacio, esta funcion es un import
     /// de una libreria nativa (ej. "user32.dll", "kernel32.dll" o
     /// "stdlib/native/io/vesta_io").  El lowering al ver una llamada a
@@ -170,6 +176,9 @@ struct StructFieldInfo {
     /// y @c size pero con distintos @c bit_offset.
     uint8_t bit_offset = 0;
     uint8_t bit_width = 0;
+    /// `comptime T campo`: campo solo-compile-time (en @c comptime_fields, no en
+    /// @c fields).  @c offset/@c size no aplican (no vive en la instancia).
+    bool is_comptime = false;
     /// Valor por defecto del campo (`u8 a = 0x10;`), no-owning al AST (vive
     /// durante toda la compilacion).  null = sin default (zero-init).  Lo usa
     /// el lowering para `= {}`, campos no listados en el init y `default()`.
@@ -300,6 +309,18 @@ struct StructLayout {
     /// sintetica `<Struct>__<campo>` (una sola por tipo).  Se listan aparte para
     /// que `Struct.campo` los resuelva (lectura/escritura) sin inflar el layout.
     std::vector<StructFieldInfo> static_fields;
+    /// Campos `comptime`: existen SOLO en tiempo de compilacion (los consume el
+    /// codigo comptime, p.ej. un `comptime char* name` para un hash).  NO
+    /// ocupan espacio en la instancia runtime; se listan aparte para que un
+    /// constructor/metodo comptime pueda resolver `this.campo`.
+    std::vector<StructFieldInfo> comptime_fields;
+    /// Tamano del buffer usado por la ComptimeVM al evaluar un constructor/metodo
+    /// comptime: incluye los campos runtime (@c size_bytes) MAS los campos
+    /// @c comptime apilados al final (cada uno con su @c offset asignado dentro
+    /// de @c comptime_fields).  La materializacion del struct solo copia los
+    /// primeros @c size_bytes (descarta la cola comptime).  == @c size_bytes si
+    /// el struct no tiene campos comptime.
+    uint32_t comptime_size_bytes = 0;
     /// Metodos del struct (value-type, dispatch estatico).  Reusa
     /// @c ClassMethodInfo; @c vtable_index/@c is_constructor no se usan
     /// (los structs no tienen vtable ni constructores con this(...)).
@@ -1192,6 +1213,10 @@ class TypeChecker {
     Type check_call(ast::CallExpr *e);
     Type check_ident(ast::IdentExpr *e);
     Type check_field_access(ast::FieldAccessExpr *e);
+    /// Tipo de un campo de struct propagando la ABI custom cuando el campo es
+    /// de tipo funcion con default = una funcion (ctx pattern): la ABI del
+    /// CALLIND via el campo viene del DEFAULT.  El cast del campo la trunca.
+    Type field_type_with_abi(const StructFieldInfo &f) const;
     Type check_index(ast::IndexExpr *e);
     Type check_this(ast::ThisExpr *e);
     Type check_new(ast::NewExpr *e);

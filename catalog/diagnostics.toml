@@ -51,8 +51,8 @@ en = "asm: flags are modified but clobbers(\"flags\") is not declared with 'noin
 es = "asm: las flags se modifican pero no se declara clobbers(\"flags\") con 'noinfer'"
 
 [VXA008]
-en = "asm: cannot pin operand '{0}' to '{1}' (the stack/frame pointer): a Vesta value cannot live there without breaking the stack. Manipulate the stack directly in the asm body instead (push/pop, sub rsp, mov rax rsp), or use @Naked for a stack switch"
-es = "asm: no se puede pinear el operando '{0}' a '{1}' (el puntero de pila/marco): un valor Vesta no puede vivir ahi sin romper la pila. Manipula la pila directamente en el cuerpo del asm (push/pop, sub rsp, mov rax rsp), o usa @Naked para un cambio de pila"
+en = "asm: pinning operand '{0}' to '{1}' (the stack/frame pointer) may break the stack. Allowed under your responsibility (some ABIs require it, e.g. Linux x86-32 passes the 6th syscall arg in ebp): save/restore the register yourself or use @Naked to own the stack"
+es = "asm: pinear el operando '{0}' a '{1}' (el puntero de pila/marco) puede romper la pila. Permitido bajo tu responsabilidad (algunos ABIs lo exigen, p.ej. Linux x86-32 pasa el 6o arg de syscall en ebp): salva/restaura el registro tu mismo o usa @Naked para ser dueno de la pila"
 
 [VXA009]
 en = "asm: operand '{0}' pinned to '{1}' -- that register is reserved by the runtime in VM mode; this asm block cannot be JIT-compiled (runs in the interpreter)"

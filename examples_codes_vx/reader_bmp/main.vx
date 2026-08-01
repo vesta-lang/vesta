@@ -35,11 +35,11 @@ void print_help() {
 // Parsea "WxH" (p.ej. "32x24") en dos i32 via vio_parse_int.  Devuelve 1 si
 // ambos lados son enteros validos, 0 si el formato es invalido.
 i32 parse_wxh(string spec, i32* out_w, i32* out_h) {
-    u8* pc = str_cstr(spec);
+    u8* pc = spec.cstr();
     if (pc == null) {
         return 0;
     }
-    i32 total = (i32) str_bytes(spec);
+    i32 total = (i32) spec.bytes();
     // Buscar el separador 'x' (o 'X').
     i32 xpos = -1;
     i32 i = 0;
@@ -77,7 +77,7 @@ i32 main(string[] args) {
     }
 
     string path = args_get(0);
-    if (str_equals(path, "-h") || str_equals(path, "--help")) {
+    if (path.equals("-h") || path.equals("--help")) {
         print_help();
         return 0;
     }
@@ -86,7 +86,7 @@ i32 main(string[] args) {
     i32 a = 1;
     while (a < argc) {
         string flag = args_get(a);
-        if (str_equals(flag, "-r") && a + 1 < argc) {
+        if (flag.equals("-r") && a + 1 < argc) {
             string spec = args_get(a + 1);
             i32 rw = 0;
             i32 rh = 0;

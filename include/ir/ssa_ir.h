@@ -934,6 +934,15 @@ struct IrInstr {
     IrValueId
         func_ptr; ///< para CALLIND: id del valor con el puntero de funcion
 
+    /// ABI custom del CALLIND: registro fisico por argumento, tomado del TIPO
+    /// del puntero (cfn con abi_regs).  Vacio = ABI estandar.  Necesario porque
+    /// un CALLIND no tiene nombre resoluble -> la ABI no puede buscarse por
+    /// IrFunction; viaja aqui, fijada en compile-time desde el tipo (aunque el
+    /// valor del puntero cambie en runtime).  Para CALL directo NO se usa (el
+    /// codegen resuelve la ABI por nombre via IrFunction::param_abi_regs).
+    /// Se serializa (cross-module).
+    std::vector<std::string> call_abi_regs;
+
     IrBlockId target_block; ///< destino de BR o rama true de BR_COND
     IrBlockId false_block;  ///< rama false de BR_COND
 
@@ -955,6 +964,17 @@ struct IrInstr {
     /// proteger los SSA values de loop-carry contra el "live hole"
     /// del linear scan (ver lower_for / lower_while).
     bool preserve = false;
+
+    /// @Naked: si true en un IrOp::RET, este RET es el SINTETICO de caida-al-final
+    /// (fallthrough) que el lowering inserta cuando la funcion no termina en un
+    /// `return` explicito -- NO proviene de un `return` del usuario.  El codegen
+    /// nativo lo usa para @Naked: una funcion @Naked NO emite el `ret` implicito
+    /// (para no pisar el `iretq`/`ret` que el propio asm provee en un ISR o
+    /// bootloader), pero SI materializa un `return` explicito (read-back + `ret`,
+    /// sin epilogo de frame).  Mirar solo si el RET porta operando NO basta: el
+    /// implicito de una fn con retorno no-void lleva un `0` sintetico.  Se
+    /// serializa (el AOT consume el @ir del .velb/.vxir).
+    bool ret_implicit = false;
 
     /// @fp(strict) bajo inlining: cuando el inliner copia el cuerpo de un callee
     /// STRICT (fp_contract=false) dentro de un caller FAST, marca las ops float
@@ -1176,6 +1196,15 @@ struct IrFunction {
     std::string name;              ///< nombre calificado ("com.pkg.Foo.add")
     IrType ret_type = IrType::VOID; ///< tipo de retorno
     std::vector<IrValueId> params; ///< IDs de los valores parametro
+    /// ABI custom por funcion: registro fisico de entrada por parametro,
+    /// indexado igual que @c params.  Cadena vacia = ABI estandar del target
+    /// (i-esimo arg-reg SysV/Win64).  "rax".."r15".  Lo llena el lowering desde
+    /// @c ParamDecl::abi_reg; lo consumen el codegen del CALLEE (el param llega
+    /// en ese registro, sin el load estandar) y del CALLER (coloca el arg ahi).
+    /// Se serializa (cross-module via .vxir/.velb @ir) y viaja en el .vxi.
+    /// Vacio TAMBIEN cuando NINGUN param tiene ABI custom (caso comun -> no
+    /// ocupa espacio en el 99% de funciones).
+    std::vector<std::string> param_abi_regs;
     std::vector<IrValue> values;   ///< pool de todos los valores SSA
     std::vector<IrBlock> blocks;   ///< bloques basicos (bloques[0] = entry)
     bool is_native = false;        ///< true si es stub para funcion nativa

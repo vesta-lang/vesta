@@ -5,8 +5,8 @@ i32 main() {
     string b = "hello";
     string c = a + b;
     string d = b + a;
-    u64 lc = str_length(c);
-    u64 ld = str_length(d);
+    u64 lc = c.length();
+    u64 ld = d.length();
     if (lc == 5 && ld == 5) return 42;
     return 1;
 }

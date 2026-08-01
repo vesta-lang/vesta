@@ -7,21 +7,26 @@ i32 main() {
     string b = " mundo";
     string c = a + b;          // operator + nativo
 
-    print_cstr(str_cstr(c)); print("\n");
-    if (str_length(c) != 10) return 1;
+    print_cstr(c.cstr()); print("\n");
+    if (c.length() != 10) return 1;
 
     string d = "hola";
     if (a != d) return 2;
     if (a == b) return 3;
 
-    cstring p = str_cstr(c);
+    cstring p = c.cstr();
     print("via cstring: "); print_cstr(p); print("\n");
 
-    // encoding explicito.  Note: strings ASCII puros se compactan
-    // automaticamente; str_convert NO los re-expande.  Validamos solo
-    // que la conversion no rompa nada (length se preserva).
-    string utf16 = str_convert(c, ENC_UTF16);
-    if (str_length(utf16) != 10) return 4;
+    // La codificacion vive en la FRONTERA, no en el tipo: un `string` es
+    // siempre una secuencia de code points (UTF-8 por dentro).  Para hablar
+    // con una API nativa se pide el buffer en la codificacion que esa API
+    // espera -- cstr() para UTF-8, wstr() para UTF-16.
+    u8* w = (u8*) c.wstr();
+    // "hola mundo" en UTF-16LE: 'h' = 0x68 seguido de un byte alto 0.
+    if (w[0] != 104) return 4;
+    if (w[1] != 0) return 5;
+    // El numero de code points es del string, no de su codificacion.
+    if (c.length() != 10) return 6;
 
     flush();
     return 42;

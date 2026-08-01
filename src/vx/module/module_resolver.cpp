@@ -16,6 +16,7 @@
 #include "vx/module/module_resolver.h"
 
 #include "vx/lexer.h"
+#include "vx/parser.h"
 #include "vx/token.h"
 
 #include <algorithm>
@@ -328,8 +329,45 @@ scan_import_paths_(const std::string &source) {
     Diagnostics tmp; // sumidero desechable: no reportamos errores de lex aqui
     Lexer lex(source, "<import-scan>", tmp);
     Token t = lex.next();
+    // `@Target("...")` que precede a un import: si la condicion NO aplica al
+    // target activo, ese import no es una dependencia.  El parser completo ya
+    // lo descarta, pero este escaneo (solo-lex) alimenta el GRAFO de deps, asi
+    // que sin esto el modulo se compilaba y se mezclaba igualmente -- p.ej. la
+    // variante x86-32 de un modulo por-arch acababa en un binario x86-64.
+    bool skip_next_import = false;
     while (t.kind != TokenKind::END_OF_FILE) {
+        if (t.kind == TokenKind::AT) {
+            Token name = lex.next();
+            if (name.kind != TokenKind::IDENTIFIER || name.lexeme != "Target") {
+                t = name;
+                continue;
+            }
+            Token lp = lex.next();
+            if (lp.kind != TokenKind::LPAREN) {
+                t = lp;
+                continue;
+            }
+            const Token sp = lex.next();
+            std::string spec;
+            if (sp.kind == TokenKind::STRING_LIT ||
+                sp.kind == TokenKind::RAW_STRING_LIT)
+                spec = sp.str_val;
+            if (sp.kind != TokenKind::RPAREN) (void)lex.next(); // ')'
+            if (!spec.empty() && !target_expr_matches(spec))
+                skip_next_import = true;
+            t = lex.next();
+            continue;
+        }
         if (t.kind == TokenKind::KW_IMPORT) {
+            if (skip_next_import) {
+                // Descartar la sentencia entera (hasta el `;`).
+                while (t.kind != TokenKind::SEMICOLON &&
+                       t.kind != TokenKind::END_OF_FILE)
+                    t = lex.next();
+                skip_next_import = false;
+                if (t.kind != TokenKind::END_OF_FILE) t = lex.next();
+                continue;
+            }
             Token nxt = lex.next();
             if (nxt.kind == TokenKind::STRING_LIT ||
                 nxt.kind == TokenKind::RAW_STRING_LIT) {
@@ -357,6 +395,9 @@ scan_import_paths_(const std::string &source) {
             t = nxt;
             continue;
         }
+        // Cualquier token que no sea `public` rompe la adyacencia
+        // `@Target(...) [public] import` -> el pendiente caduca.
+        if (t.kind != TokenKind::KW_PUBLIC) skip_next_import = false;
         t = lex.next();
     }
     return out;

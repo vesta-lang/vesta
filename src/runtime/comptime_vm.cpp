@@ -585,7 +585,12 @@ bool ComptimeRuntime::invoke_struct_macro(const std::string &macro_name,
      * funcion -- que se libera al retornar --, lo anteponemos a los argumentos
      * reales y ejecutamos.  Al ser out_bytes memoria ajena al GcHeap, el barrido
      * de invoke_simple_macro no la toca. */
-    out_bytes.assign(struct_size, 0);
+    /* El caller puede PRE-SEMBRAR out_bytes con los valores por defecto de los
+     * campos: la semantica de un ctor es "defaults primero, cuerpo del ctor
+     * encima" (igual que C++), asi que un campo que el ctor no toca debe
+     * conservar su default.  Si el caller no siembra (tamano distinto), se
+     * arranca a ceros como antes. */
+    if (out_bytes.size() != struct_size) out_bytes.assign(struct_size, 0);
     /* El buffer de retorno mas los argumentos reales no pueden exceder los 12
      * registros de la convencion de llamada. */
     if (args.size() + 1 > 12) return false;

@@ -1112,8 +1112,6 @@ void exec_instr_callsuper(ProcessVM *vm, const DecodedInstr &instr) {
 void exec_instr_throw(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t r_obj = instr.data_instruction.reg_data.reg1;
     uint64_t exception_ptr = vm->registers.regs[r_obj].qword();
-    std::fprintf(stderr, "[throw] r_obj=%u exc_ptr=0x%llx\n", (unsigned)r_obj,
-                 (unsigned long long)exception_ptr);
     do_throw(vm, exception_ptr);
 }
 

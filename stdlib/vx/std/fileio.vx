@@ -52,7 +52,7 @@ extern "libc.so.6" {
 // Devuelve el tamano en bytes de `path`, o -1 si no existe / no se pudo abrir.
 @Target("os:windows")
 public i64 file_size(string path) {
-    u8* pc = str_cstr(path);
+    u8* pc = path.cstr();
     if (pc == null) {
         return -1;
     }
@@ -76,7 +76,7 @@ public i64 file_size(string path) {
 // caller).  Devuelve el numero de bytes leidos, o -1 si error.
 @Target("os:windows")
 public i64 file_read_into(string path, u8* buf, i64 size) {
-    u8* pc = str_cstr(path);
+    u8* pc = path.cstr();
     if (pc == null) {
         return -1;
     }
@@ -103,7 +103,7 @@ public i64 file_read_into(string path, u8* buf, i64 size) {
 // bytes reales aterrizaron en disco via el out-param `nwritten`.
 @Target("os:windows")
 public i64 file_write_from(string path, u8* buf, i64 size) {
-    u8* pc = str_cstr(path);
+    u8* pc = path.cstr();
     if (pc == null) {
         return -1;
     }
@@ -130,7 +130,7 @@ public i64 file_write_from(string path, u8* buf, i64 size) {
 // O_RDONLY=0, SEEK_END=2.  lseek al final devuelve el tamano.
 @Target("!os:windows")
 public i64 file_size(string path) {
-    u8* pc = str_cstr(path);
+    u8* pc = path.cstr();
     if (pc == null) {
         return -1;
     }
@@ -148,7 +148,7 @@ public i64 file_size(string path) {
 
 @Target("!os:windows")
 public i64 file_read_into(string path, u8* buf, i64 size) {
-    u8* pc = str_cstr(path);
+    u8* pc = path.cstr();
     if (pc == null) {
         return -1;
     }
@@ -169,7 +169,7 @@ public i64 file_read_into(string path, u8* buf, i64 size) {
 // El modo 0644 (0x1A4) fija los permisos del fichero recien creado.
 @Target("!os:windows")
 public i64 file_write_from(string path, u8* buf, i64 size) {
-    u8* pc = str_cstr(path);
+    u8* pc = path.cstr();
     if (pc == null) {
         return -1;
     }

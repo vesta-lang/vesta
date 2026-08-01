@@ -50,6 +50,7 @@
 #ifndef VX_LOWERING_H
 #define VX_LOWERING_H
 
+#include <map>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -363,6 +364,11 @@ class Lowering {
     void lower_block(ast::BlockStmt *b);
     void lower_stmt(ast::Stmt *s);
     void lower_var_decl(ast::VarDeclStmt *vd);
+    /// Baja un `static T x = init;` local: registra el slot global (gdata)
+    /// mangleado por funcion, lo apunta desde @c static_local_slots_ y emite
+    /// el init-once (horneado en gdata si el init es constante, o guardado con
+    /// un booleano global si es dinamico).
+    void lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type);
     void lower_if(ast::IfStmt *s);
     void lower_return(ast::ReturnStmt *s);
     void lower_while(ast::WhileStmt *s);
@@ -882,8 +888,38 @@ class Lowering {
     /// sobre el struct ya alocado y zero-inicializado en @p base_addr.  Recurre
     /// en campos struct anidados que tengan defaults propios.  Se llama tras el
     /// zero-fill y ANTES del init-list explicito (que sobrescribe lo que toque).
+    /// @p only_non_comptime: emitir SOLO los defaults que NO son
+    /// comptime-evaluables (una referencia a funcion, un string).  Se usa
+    /// cuando el struct ya se inicializo copiando una imagen construida en
+    /// comptime -- que ya lleva los defaults escalares -- y solo faltan los
+    /// que necesitan una direccion resuelta en tiempo de enlace.
+    /// Transcodifica @p utf8 (la forma canonica de un literal) a @p enc y deja
+    /// los bytes en @p out, NUL-terminados en el ancho de la codificacion.
+    /// Devuelve false si la codificacion no es plegable en compile-time
+    /// (ANSI: depende de la codepage de la maquina donde se EJECUTA) o si el
+    /// texto no es representable (un no-ASCII en ENC_ASCII).
+    static bool transcode_literal(const std::string &utf8, int enc,
+                                  std::vector<uint8_t> &out);
+
+    /// Interna un literal YA transcodificado como blob en memoria HOST y
+    /// devuelve un SSA value con su direccion.  Cero coste en runtime: no hay
+    /// STRMAKE, ni STRCONV, ni objeto GC.  Deduplica por (texto, encoding).
+    ir::IrValueId emit_folded_string_blob(const std::string &utf8, int enc,
+                                          uint32_t line);
+
+    /// Literales alcanzables por nombre: `const string p = "x";` deja aqui
+    /// (p -> "x") para que `str_cstr(p)` / `str_wstr(p)` se plieguen igual que
+    /// con el literal directo.  SOLO `const`: el type checker garantiza que no
+    /// se reasigna, asi que no hace falta analisis de mutacion.  Una `string`
+    /// mutable no entra: haria falta saber que no se le asigna en ningun punto.
+    std::unordered_map<std::string, std::string> const_str_locals_;
+
+    /// Cache del plegado: (texto, encoding) -> indice de slot en static_data.
+    std::map<std::pair<std::string, int>, uint64_t> folded_str_blobs_;
+
     void emit_struct_field_defaults(ir::IrValueId base_addr,
-                                    const StructLayout &lay, uint32_t line);
+                                    const StructLayout &lay, uint32_t line,
+                                    bool only_non_comptime = false);
     /// Rellena los campos de un struct YA alocado en @p base_addr desde el
     /// init-list @p il segun el layout @p lay.  RECURSIVO: un campo de tipo
     /// struct inicializado con un init-list ANIDADO (`{.min = {.x=..,.y=..}}`)
@@ -1427,6 +1463,18 @@ class Lowering {
     std::unordered_map<std::string, uint64_t> comptime_global_slots_;
     /// L2.2: slots para globales runtime no-const (string/int/etc.)
     std::unordered_map<std::string, uint64_t> runtime_global_slots_;
+    /// `static T x = init;` local: duracion estatica (una instancia en gdata,
+    /// mangled por funcion) con acceso via el nombre LOCAL.  Se limpia al
+    /// empezar cada funcion.  @c lower_ident / @c lower_assign consultan este
+    /// mapa ANTES del scope para emitir STR_LIT_ADDR(slot) + LOAD/STORE (o solo
+    /// la direccion si es agregado).  El init-once se materializa con un guard
+    /// booleano global (otro slot) cuando el init no es un cero constante.
+    struct StaticLocalSlot {
+        uint64_t slot = 0;           ///< indice en static_data (gdata)
+        ir::IrType ld_type = ir::IrType::I64; ///< ancho del LOAD/STORE
+        bool aggregate = false;      ///< struct/array -> el valor ES la direccion
+    };
+    std::unordered_map<std::string, StaticLocalSlot> static_local_slots_;
     /// Nombres (ya mangled) de los globals declarados en ESTE modulo.  Sirve
     /// para no confundir un simbolo de un namespace propio con uno importado:
     /// el storage de los locales lo decide el pre-pase con el tipo delante, y

@@ -24,7 +24,7 @@ public class Tab {
 
 i32 stringify_count(Tab t) {
     string s = "tab-${t.id}-${t.title}";
-    return (i32) str_bytes(s);
+    return (i32) s.bytes();
 }
 
 public i32 run() {

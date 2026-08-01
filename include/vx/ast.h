@@ -473,6 +473,14 @@ struct FunctionTypeNode : TypeNode {
     /// false = lambda/closure (@c fn(...) -> R): fat-pointer de 16 bytes
     /// {fn_addr, env}.  Conceptos distintos: lambda != puntero a funcion.
     bool is_raw = false;
+    /// ABI custom por-parametro (`cfn(register("rax") T, register("rdi") T, ...)`):
+    /// registro fisico de entrada por parametro, alineado con @c param_types.
+    /// Cadena vacia = ABI estandar.  La ABI forma parte del TIPO: dos @c cfn con
+    /// abi_regs distintos son tipos INCOMPATIBLES (el type checker rechaza
+    /// mezclarlos), de modo que una CALLIND siempre conoce la ABI en compile-time
+    /// desde el tipo del puntero (aunque el VALOR del puntero cambie en runtime).
+    /// Vacio TAMBIEN cuando ningun parametro declara ABI custom (caso comun).
+    std::vector<std::string> param_abi_regs;
     FunctionTypeNode() : TypeNode(NodeKind::FunctionTypeNode) {}
 };
 
@@ -786,6 +794,11 @@ struct CallExpr : Expr {
     /// definir uno, el otro o los dos.  No confundir con @c `T a = {2,3,3}`
     /// (init-list de campos), que es un InitListExpr y no pasa por aqui.
     bool is_braces_call = false;
+    /// `Struct()` sin constructores declarados y 0 args: constructor por
+    /// defecto, equivalente a `Struct{}`.  El type checker lo marca; el
+    /// lowering emite los valores por defecto de los campos (o cero) en vez
+    /// de una llamada.
+    bool is_default_struct_ctor = false;
     CallExpr() : Expr(NodeKind::CallExpr) {}
 };
 
@@ -1241,6 +1254,13 @@ struct VarDeclStmt : Stmt {
     /// nombre Vesta.  Vacio = sin storage register (var-decl normal).  Lo
     /// consumen el backend port-C (inc.3) y el JIT (inc.5).
     std::string reg_binding;
+    /// storage-class `static T name = init;` local -- la variable tiene
+    /// DURACION ESTATICA (una sola instancia, no en el stack) y su init corre
+    /// UNA VEZ (init-once).  El lowering la emite como global (gdata) con el
+    /// nombre mangleado por funcion; si el init es constante lo hornea en el
+    /// dato, si es dinamico envuelve el init con un guard booleano global.
+    /// Estado persistente entre llamadas (mismo contrato que `static` de C).
+    bool is_static = false;
     VarDeclStmt() : Stmt(NodeKind::VarDeclStmt) {}
 };
 
@@ -1555,6 +1575,14 @@ struct ParamDecl : Node {
      * @c vacount()/array: es para funciones @c @Naked, donde el cuerpo asm lee
      * los registros ABI directamente.  Implica @c is_variadic. */
     bool is_raw_variadic = false;
+    /** ABI custom por funcion: registro fisico en el que este parametro se
+     * RECIBE (y en el que el caller lo COLOCA), declarado con
+     * `register("rXX") T name`.  Vacio = ABI estandar del target (el i-esimo
+     * arg-reg SysV/Win64).  Habilita wrappers de syscall/FFI de coste minimo:
+     * `register("rax") i64 id, register("rdi") i64 a1, ...` -> el call site pone
+     * cada valor directo en su registro (cero shift) y el cuerpo asm los lee tal
+     * cual.  Nombre en minusculas ("rax".."r15"); validado por el type checker. */
+    std::string abi_reg;
     ParamDecl() : Node(NodeKind::ParamDecl) {}
 };
 
@@ -2025,6 +2053,11 @@ struct ImportDecl : Node {
         std::string rename; // nombre local (vacio = sin rename)
     };
     std::vector<OnlySymbol> only_symbols;
+    /// `import ns only *;` -- glob: trae TODOS los simbolos publicos del modulo
+    /// al scope (estilo Rust `use ns::*;`).  Con @c is_public_reexport ademas
+    /// los re-exporta (`pub use ns::*;`).  Cuando es @c true, @c only_symbols
+    /// esta vacio (no hay lista explicita).
+    bool only_all = false;
     /// Si el import es @c "public import "x";" (re-export).  Sin esa
     /// marca, los simbolos importados son privados al modulo actual.
     bool is_public_reexport = false;
@@ -2140,6 +2173,12 @@ struct StructFieldDecl {
     /// `= {}` o cuando el campo NO aparece en el init-list, y por el `init()`
     /// sintetizado.  Debe ser una expresion comptime-constante.
     std::unique_ptr<Expr> default_init;
+    /// `comptime T campo`: el campo existe SOLO en tiempo de compilacion (p.ej.
+    /// `comptime char* name` para calcular un hash en compile-time).  NO ocupa
+    /// espacio en el layout runtime del struct ni se serializa; el type checker
+    /// lo excluye del calculo de offsets/tamano.  Su valor lo consume el codigo
+    /// comptime (constructores/metodos comptime).
+    bool is_comptime = false;
 };
 
 /**

@@ -8563,9 +8563,50 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
     };
 
     /* Pre-classify cada function: es inlineable? */
+    // ¿El cuerpo de una funcion tiene una SALIDA MANUAL en su inline asm
+    // (`ret`/`iret`/`iretq`)?  Esas instrucciones retornan al caller por si
+    // mismas, asi que inlinar el cuerpo cambiaria la semantica (retornaria en
+    // medio del caller).  Una funcion asi NO se inlina; si por lo demas seria
+    // inlinable, el usuario debe QUITAR el `ret` (se avisa con un warning en el
+    // frontend).  Los args con register() SI se inlinan cuando no hay salida
+    // manual: cada arg del cast va a su registro y los params no pasados se
+    // eliminan (ver aridad reducida arriba) -> se emite solo el asm justo.
+    auto asm_has_manual_return = [](const IrFunction &fn) -> bool {
+        for (const auto &blk : fn.blocks)
+            for (const auto &in : blk.instrs) {
+                if (in.op != IrOp::INLINE_ASM) continue;
+                const std::string &body = in.func_name;
+                size_t p = 0;
+                while (p <= body.size()) {
+                    size_t nl = body.find('\n', p);
+                    std::string ln = body.substr(
+                        p, nl == std::string::npos ? std::string::npos : nl - p);
+                    size_t cm = ln.find(';');
+                    if (cm != std::string::npos) ln.resize(cm);
+                    cm = ln.find("//");
+                    if (cm != std::string::npos) ln.resize(cm);
+                    size_t a = ln.find_first_not_of(" \t");
+                    if (a != std::string::npos) {
+                        size_t e = ln.find_first_of(" \t", a);
+                        std::string tok =
+                            ln.substr(a, e == std::string::npos
+                                             ? std::string::npos
+                                             : e - a);
+                        if (tok == "ret" || tok == "iret" || tok == "iretq" ||
+                            tok == "retf" || tok == "sysret")
+                            return true;
+                    }
+                    if (nl == std::string::npos) break;
+                    p = nl + 1;
+                }
+            }
+        return false;
+    };
     auto is_inlineable = [&](const IrFunction &fn) -> bool {
         if (fn.is_native) return false;
         if (fn.is_naked) return false; // @Naked: standalone, no inlinable
+        // Salida manual (`ret`/`iret`) en el asm -> no inlinable (ver helper).
+        if (asm_has_manual_return(fn)) return false;
         if (is_blacklisted(fn.name)) return false;
         /* AOT 2b (dev OS): una funcion con @section explicito debe permanecer
          * como funcion REAL en esa seccion (el usuario la quiere fisicamente
@@ -8610,7 +8651,15 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
                 eff_threshold = INLINE_THRESHOLD * 3 + 8; // holgura p/ factoria
                 break;
             }
-        if (fn.blocks[0].instrs.size() > eff_threshold) return false;
+        // El desugar de register() (un ALLOCA + un STORE por binding) es
+        // boilerplate: al inlinar se coalesce (mov reg,reg no-op) o se elimina
+        // (aridad reducida).  No debe contar para el limite de tamano, o un
+        // wrapper de asm minimo (`{ syscall }`) con 6 params-register pareceria
+        // "grande" (14 instrs de puro boilerplate) y no se inlinaria.
+        size_t body_size = fn.blocks[0].instrs.size();
+        const size_t desugar = 2 * fn.asm_reg_bindings.size();
+        body_size -= (desugar < body_size ? desugar : 0);
+        if (body_size > eff_threshold) return false;
         /* No inlinear funciones que contengan CALLs recursivas a si mismas. */
         for (const auto &ins : fn.blocks[0].instrs) {
             if ((ins.op == IrOp::CALL || ins.op == IrOp::TAILCALL) &&
@@ -8686,16 +8735,41 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
                 }
                 const IrFunction &callee = mod.functions[it->second];
                 const IrBlock &cbody = callee.blocks[0];
-                /* Aridad must match: params.size() == operands.size(). */
-                if (callee.params.size() != ins.operands.size()) {
+                /* Aridad: el CALL puede pasar MENOS args que params del callee
+                 * (un cast a un cfn de menor aridad sobre una funcion con
+                 * register() por-argumento -- p.ej. un `invoke` de syscall de 6
+                 * args llamado con solo 3).  Los params NO pasados y su desugar
+                 * de register() (ALLOCA + STORE + binding) se ELIMINAN al inlinar
+                 * -> el asm inlinado emite SOLO los movs de los args que si
+                 * llegaron.  Mas args que params (variadico) no se inlina aqui. */
+                if (callee.params.size() < ins.operands.size()) {
                     new_instrs.push_back(std::move(ins));
                     continue;
                 }
 
+                /* Params NO pasados por el cast: indices [operands, params). */
+                std::unordered_set<IrValueId> dropped_params;
+                for (size_t pi = ins.operands.size();
+                     pi < callee.params.size(); ++pi)
+                    dropped_params.insert(callee.params[pi]);
+                /* Variables register() de esos params (su ALLOCA): el desugar
+                 * emite `STORE(param, addr)` (operands[0]=param, operands[1]=addr).
+                 * Si el param se elimina, su variable/ALLOCA/binding tambien.  El
+                 * INLINE_ASM que las tuviera como operando las pierde -> el asm no
+                 * toca esos registros. */
+                std::unordered_set<IrValueId> dropped_vars;
+                if (!dropped_params.empty())
+                    for (const auto &c_ins : cbody.instrs)
+                        if (c_ins.op == IrOp::STORE &&
+                            c_ins.operands.size() == 2 &&
+                            dropped_params.count(c_ins.operands[0]))
+                            dropped_vars.insert(c_ins.operands[1]);
+
                 /* Mapeo callee_vid -> caller_vid. */
                 std::unordered_map<IrValueId, IrValueId> vmap;
-                /* Params del callee se mapean a operandos del CALL. */
-                for (size_t pi = 0; pi < callee.params.size(); ++pi) {
+                /* Params del callee se mapean a operandos del CALL (solo los
+                 * pasados; los dropped quedan sin mapeo -> se eliminan). */
+                for (size_t pi = 0; pi < ins.operands.size(); ++pi) {
                     vmap[callee.params[pi]] = ins.operands[pi];
                 }
 
@@ -8748,8 +8822,28 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
                         }
                         continue; /* skip RET; ret value resolved */
                     }
+                    /* Desugar de un param NO pasado por el cast: eliminarlo.
+                     * ALLOCA de su variable register() + STORE inicial que la
+                     * carga con el param ausente.  Asi el asm inlinado no
+                     * referencia -- ni el codegen genera movs para -- ese
+                     * registro (arg no usado por esta syscall). */
+                    if (c_ins.op == IrOp::ALLOCA &&
+                        dropped_vars.count(c_ins.dst))
+                        continue;
+                    if (c_ins.op == IrOp::STORE && c_ins.operands.size() == 2 &&
+                        dropped_params.count(c_ins.operands[0]))
+                        continue;
                     /* Clonar c_ins y remap operandos + dst. */
                     IrInstr ni = c_ins;
+                    /* INLINE_ASM: quitar de sus operandos las variables register()
+                     * de params dropped (el asm ya no las usa). */
+                    if (ni.op == IrOp::INLINE_ASM && !dropped_vars.empty()) {
+                        std::vector<IrValueId> kept;
+                        kept.reserve(ni.operands.size());
+                        for (IrValueId op : ni.operands)
+                            if (!dropped_vars.count(op)) kept.push_back(op);
+                        ni.operands = std::move(kept);
+                    }
                     /* @fp(strict) sound bajo inlining: si el callee es STRICT,
                      * marcar sus ops copiadas para que el fuse del caller (fast)
                      * NO las contraiga a FMA -- preserva los 2 redondeos IEEE del
@@ -8848,6 +8942,9 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
                  * puntos NO solapados -> sin conflicto. */
                 if (inlined_inline_asm) {
                     for (const auto &b : callee.asm_reg_bindings) {
+                        // Binding de la variable register() de un param dropped:
+                        // no copiar (su ALLOCA/STORE ya se eliminaron).
+                        if (dropped_vars.count(b.alloca_value)) continue;
                         ir::AsmRegBinding nb = b;
                         nb.alloca_value = remap_op(b.alloca_value);
                         if (nb.alloca_value != IR_NO_VALUE)

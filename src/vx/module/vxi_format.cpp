@@ -309,8 +309,9 @@ static void emit_payload_for_function(std::vector<uint8_t> &payload,
     write_u32(payload, nsp_off);
     write_u32(payload, static_cast<uint32_t>(sym.ns_path.size()));
     // ParamSlot: type_off (u32) + type_len (u32) + name_off (u32) + name_len
-    // (u32). 16 bytes c/u en lugar de 8 (preferimos claridad; el coste es
-    // despreciable).
+    // (u32) + abi_off (u32) + abi_len (u32). 24 bytes c/u.  El abi_reg es el
+    // registro fisico canonico del ABI custom (`register("rax")` en params);
+    // vacio = ABI estandar.
     const size_t n = sym.param_types.size();
     for (size_t i = 0; i < n; ++i) {
         const uint32_t t_off = pool.intern(sym.param_types[i]);
@@ -321,6 +322,12 @@ static void emit_payload_for_function(std::vector<uint8_t> &payload,
         const uint32_t n_off = pool.intern(nm);
         write_u32(payload, n_off);
         write_u32(payload, static_cast<uint32_t>(nm.size()));
+        std::string ab =
+            (i < sym.param_abi_regs.size()) ? sym.param_abi_regs[i]
+                                            : std::string();
+        const uint32_t a_off = pool.intern(ab);
+        write_u32(payload, a_off);
+        write_u32(payload, static_cast<uint32_t>(ab.size()));
     }
 }
 
@@ -880,18 +887,25 @@ static bool parse_payload_function(const uint8_t *data, size_t size,
     }
     out.param_types.reserve(pc);
     out.param_names.reserve(pc);
+    out.param_abi_regs.reserve(pc);
     for (uint32_t i = 0; i < pc; ++i) {
-        uint32_t t_off = 0, t_len = 0, n_off = 0, n_len = 0;
+        uint32_t t_off = 0, t_len = 0, n_off = 0, n_len = 0, a_off = 0,
+                 a_len = 0;
         if (!read_u32(data, size, off, t_off)) return false;
         if (!read_u32(data, size, off, t_len)) return false;
         if (!read_u32(data, size, off, n_off)) return false;
         if (!read_u32(data, size, off, n_len)) return false;
+        if (!read_u32(data, size, off, a_off)) return false;
+        if (!read_u32(data, size, off, a_len)) return false;
         std::string tnm;
         if (!read_name(data, size, t_off, t_len, pool_start, tnm)) return false;
         std::string nnm;
         if (!read_name(data, size, n_off, n_len, pool_start, nnm)) return false;
+        std::string anm;
+        if (!read_name(data, size, a_off, a_len, pool_start, anm)) return false;
         out.param_types.push_back(std::move(tnm));
         out.param_names.push_back(std::move(nnm));
+        out.param_abi_regs.push_back(std::move(anm));
     }
     return true;
 }

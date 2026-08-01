@@ -7,8 +7,8 @@ import "modules/buffer";
 // Busca `needle` (string) en el buffer empezando desde `from_offset`.
 // Devuelve el offset (byte) de la primera ocurrencia, o -1.
 public i64 find_from(buffer.Buffer b, string needle, i32 from_offset) {
-    u8* nbuf = str_cstr(needle);
-    i32 nlen = (i32) str_bytes(needle);
+    u8* nbuf = needle.cstr();
+    i32 nlen = (i32) needle.bytes();
     if (nlen == 0) return (i64) from_offset;
     if (nlen > b.length - from_offset) return -1;
     i32 last = b.length - nlen + 1;

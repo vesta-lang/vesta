@@ -40,8 +40,8 @@ i32 main() {
 
     // Comprobacion de igualdad exacta de los textos capturados.
     i32 ok = 0;
-    if (str_equals(s1, "x + y + 1")) { ok = ok + 10; }
-    if (str_equals(s2, "[x * y]"))   { ok = ok + 15; }
-    if (str_equals(s3, "hola mundo")) { ok = ok + 17; }
+    if (s1.equals("x + y + 1")) { ok = ok + 10; }
+    if (s2.equals("[x * y]"))   { ok = ok + 15; }
+    if (s3.equals("hola mundo")) { ok = ok + 17; }
     return ok;   // 10 + 15 + 17 = 42
 }

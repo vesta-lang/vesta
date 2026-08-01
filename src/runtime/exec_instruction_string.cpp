@@ -1107,80 +1107,135 @@ gc::GcHandle strconv_public(ProcessVM *vm, gc::GcHandle src_h,
     if (src_enc == new_enc) return hs; // sin cambio
 
     const uint8_t *src_data = loader::str_data(src_str);
-    uint32_t src_len = src_str->byte_len;
-    gc::GcHandle result;
+    const uint32_t src_len = src_str->byte_len;
 
-    if (src_enc == loader::StringEncoding::UTF8 &&
-        new_enc == loader::StringEncoding::UTF16) {
-        // UTF-8 -> UTF-16LE
-        std::vector<uint16_t> out;
-        out.reserve(src_len);
-        uint32_t i = 0;
-        while (i < src_len) {
-            uint32_t cp = 0;
-            uint8_t b = src_data[i];
-            if ((b & 0x80) == 0) {
-                cp = b;
-                i += 1;
-            } else if ((b & 0xE0) == 0xC0) {
-                cp = (b & 0x1F) << 6 | (src_data[i + 1] & 0x3F);
-                i += 2;
-            } else if ((b & 0xF0) == 0xE0) {
-                cp = (b & 0x0F) << 12 | (src_data[i + 1] & 0x3F) << 6 |
-                     (src_data[i + 2] & 0x3F);
-                i += 3;
-            } else {
-                cp = (b & 0x07) << 18 | (src_data[i + 1] & 0x3F) << 12 |
-                     (src_data[i + 2] & 0x3F) << 6 | (src_data[i + 3] & 0x3F);
-                i += 4;
+    /* Conversion GENERICA: se decodifica a code points y se recodifica.  Antes
+     * solo existian las ramas UTF8->UTF16 y UTF16->UTF8, y cualquier otro par
+     * caia en un `else` que se limitaba a RE-ETIQUETAR los mismos bytes: por
+     * eso UTF-32 no convertia y una cadena ASCII (que es como se etiqueta todo
+     * literal sin bytes altos) salia de aqui en UTF-8 marcado como UTF-16. */
+    std::vector<uint32_t> cps;
+    cps.reserve(src_len);
+    switch (src_enc) {
+    case loader::StringEncoding::UTF16:
+        for (uint32_t i = 0; i + 1 < src_len; i += 2) {
+            uint32_t u = static_cast<uint32_t>(src_data[i]) |
+                         (static_cast<uint32_t>(src_data[i + 1]) << 8);
+            if (u >= 0xD800u && u <= 0xDBFFu && i + 3 < src_len) {
+                const uint32_t lo =
+                    static_cast<uint32_t>(src_data[i + 2]) |
+                    (static_cast<uint32_t>(src_data[i + 3]) << 8);
+                if (lo >= 0xDC00u && lo <= 0xDFFFu) {
+                    u = 0x10000u + ((u - 0xD800u) << 10) + (lo - 0xDC00u);
+                    i += 2;
+                }
             }
-            if (cp < 0x10000) {
-                out.push_back(static_cast<uint16_t>(cp));
-            } else {
-                cp -= 0x10000;
-                out.push_back(static_cast<uint16_t>(0xD800 | (cp >> 10)));
-                out.push_back(static_cast<uint16_t>(0xDC00 | (cp & 0x3FF)));
-            }
+            cps.push_back(u);
         }
-        uint32_t nb = static_cast<uint32_t>(out.size() * 2);
-        result = alloc_flat(vm, reinterpret_cast<const uint8_t *>(out.data()),
-                            nb, src_str->length, loader::StringEncoding::UTF16);
-    } else if (src_enc == loader::StringEncoding::UTF16 &&
-               new_enc == loader::StringEncoding::UTF8) {
-        // UTF-16LE -> UTF-8
-        std::vector<uint8_t> out;
-        out.reserve(src_len);
-        const uint16_t *units = reinterpret_cast<const uint16_t *>(src_data);
-        uint32_t count = src_len / 2;
-        for (uint32_t i = 0; i < count; ++i) {
-            uint32_t cp = units[i];
-            if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < count) {
-                uint32_t lo = units[++i];
-                cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
-            }
-            if (cp < 0x80) {
-                out.push_back(static_cast<uint8_t>(cp));
-            } else if (cp < 0x800) {
-                out.push_back(static_cast<uint8_t>(0xC0 | (cp >> 6)));
-                out.push_back(static_cast<uint8_t>(0x80 | (cp & 0x3F)));
-            } else if (cp < 0x10000) {
-                out.push_back(static_cast<uint8_t>(0xE0 | (cp >> 12)));
-                out.push_back(static_cast<uint8_t>(0x80 | ((cp >> 6) & 0x3F)));
-                out.push_back(static_cast<uint8_t>(0x80 | (cp & 0x3F)));
+        break;
+    case loader::StringEncoding::UTF32:
+        for (uint32_t i = 0; i + 3 < src_len; i += 4)
+            cps.push_back(static_cast<uint32_t>(src_data[i]) |
+                          (static_cast<uint32_t>(src_data[i + 1]) << 8) |
+                          (static_cast<uint32_t>(src_data[i + 2]) << 16) |
+                          (static_cast<uint32_t>(src_data[i + 3]) << 24));
+        break;
+    case loader::StringEncoding::ANSI:
+        /* Sin tabla de codepage: se trata como Latin-1, que coincide con
+         * CP1252 en el rango bajo.  La conversion FIEL de ANSI necesita la
+         * codepage del sistema y no se hace aqui. */
+        for (uint32_t i = 0; i < src_len; ++i) cps.push_back(src_data[i]);
+        break;
+    default: /* ASCII y UTF8: ASCII es un subconjunto de UTF-8. */
+        for (uint32_t i = 0; i < src_len;) {
+            const uint8_t bb = src_data[i];
+            uint32_t cp;
+            uint32_t n;
+            if ((bb & 0x80u) == 0) {
+                cp = bb;
+                n = 1;
+            } else if ((bb & 0xE0u) == 0xC0u) {
+                cp = bb & 0x1Fu;
+                n = 2;
+            } else if ((bb & 0xF0u) == 0xE0u) {
+                cp = bb & 0x0Fu;
+                n = 3;
             } else {
-                out.push_back(static_cast<uint8_t>(0xF0 | (cp >> 18)));
-                out.push_back(static_cast<uint8_t>(0x80 | ((cp >> 12) & 0x3F)));
-                out.push_back(static_cast<uint8_t>(0x80 | ((cp >> 6) & 0x3F)));
-                out.push_back(static_cast<uint8_t>(0x80 | (cp & 0x3F)));
+                cp = bb & 0x07u;
+                n = 4;
             }
+            if (i + n > src_len) break;
+            for (uint32_t k = 1; k < n; ++k)
+                cp = (cp << 6) | (src_data[i + k] & 0x3Fu);
+            cps.push_back(cp);
+            i += n;
         }
-        uint32_t nb = static_cast<uint32_t>(out.size());
-        result = alloc_flat(vm, out.data(), nb, src_str->length,
-                            loader::StringEncoding::UTF8);
-    } else {
-        // conversion generica: mismos bytes, nueva etiqueta
-        result = alloc_flat(vm, src_data, src_len, src_str->length, new_enc);
+        break;
     }
+
+    std::vector<uint8_t> out;
+    switch (new_enc) {
+    case loader::StringEncoding::UTF16:
+        for (uint32_t cp : cps) {
+            if (cp < 0x10000u) {
+                out.push_back(static_cast<uint8_t>(cp & 0xFFu));
+                out.push_back(static_cast<uint8_t>((cp >> 8) & 0xFFu));
+            } else {
+                const uint32_t v = cp - 0x10000u;
+                const uint32_t hi = 0xD800u + (v >> 10);
+                const uint32_t lo = 0xDC00u + (v & 0x3FFu);
+                out.push_back(static_cast<uint8_t>(hi & 0xFFu));
+                out.push_back(static_cast<uint8_t>((hi >> 8) & 0xFFu));
+                out.push_back(static_cast<uint8_t>(lo & 0xFFu));
+                out.push_back(static_cast<uint8_t>((lo >> 8) & 0xFFu));
+            }
+        }
+        break;
+    case loader::StringEncoding::UTF32:
+        for (uint32_t cp : cps) {
+            out.push_back(static_cast<uint8_t>(cp & 0xFFu));
+            out.push_back(static_cast<uint8_t>((cp >> 8) & 0xFFu));
+            out.push_back(static_cast<uint8_t>((cp >> 16) & 0xFFu));
+            out.push_back(static_cast<uint8_t>((cp >> 24) & 0xFFu));
+        }
+        break;
+    case loader::StringEncoding::ASCII:
+        /* Lo no representable se sustituye por '?', como hacen las APIs de
+         * conversion con perdida. */
+        for (uint32_t cp : cps)
+            out.push_back(static_cast<uint8_t>(cp < 0x80u ? cp : '?'));
+        break;
+    case loader::StringEncoding::ANSI:
+        for (uint32_t cp : cps)
+            out.push_back(static_cast<uint8_t>(cp < 0x100u ? cp : '?'));
+        break;
+    default: /* UTF8 */
+        for (uint32_t cp : cps) {
+            if (cp < 0x80u) {
+                out.push_back(static_cast<uint8_t>(cp));
+            } else if (cp < 0x800u) {
+                out.push_back(static_cast<uint8_t>(0xC0u | (cp >> 6)));
+                out.push_back(static_cast<uint8_t>(0x80u | (cp & 0x3Fu)));
+            } else if (cp < 0x10000u) {
+                out.push_back(static_cast<uint8_t>(0xE0u | (cp >> 12)));
+                out.push_back(
+                    static_cast<uint8_t>(0x80u | ((cp >> 6) & 0x3Fu)));
+                out.push_back(static_cast<uint8_t>(0x80u | (cp & 0x3Fu)));
+            } else {
+                out.push_back(static_cast<uint8_t>(0xF0u | (cp >> 18)));
+                out.push_back(
+                    static_cast<uint8_t>(0x80u | ((cp >> 12) & 0x3Fu)));
+                out.push_back(
+                    static_cast<uint8_t>(0x80u | ((cp >> 6) & 0x3Fu)));
+                out.push_back(static_cast<uint8_t>(0x80u | (cp & 0x3Fu)));
+            }
+        }
+        break;
+    }
+
+    gc::GcHandle result =
+        alloc_flat(vm, out.data(), static_cast<uint32_t>(out.size()),
+                   static_cast<uint32_t>(cps.size()), new_enc);
 
     if (result != gc::GC_NULL_HANDLE) {
         uint8_t *rp = vm->gc_heap.deref(result);

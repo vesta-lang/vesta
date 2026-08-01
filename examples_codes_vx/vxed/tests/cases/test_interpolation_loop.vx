@@ -53,7 +53,7 @@ public i32 run() {
         while (idx <= c.count) {
             string mark = "";
             string label = " ${idx} ${cur.title}${mark} ";
-            i32 lblen = (i32) str_bytes(label);
+            i32 lblen = (i32) label.bytes();
             if (lblen <= 0) return 100 + frame;
             sum_ids = sum_ids + cur.id;
             // Crucial: acceso a cur.next DESPUES de interpolacion + str_bytes call.

@@ -82,6 +82,12 @@ struct AsmEffects {
     /// escribe rax:rdx, @c cmpxchg escribe rax implicito).  Canonicos.
     std::vector<std::string> implicit_write;
 
+    /// Registros LEIDOS que NO aparecen como operandos (p.ej. @c syscall lee el
+    /// numero de servicio en RAX y los argumentos en RDI/RSI/RDX/R10/R8/R9).
+    /// Sin esto el regalloc no sabe que un `register("rdi")` vive HASTA el asm y
+    /// lo elimina (DCE) o no coloca el arg en su registro.  Canonicos.
+    std::vector<std::string> implicit_read;
+
     /// Que OPERANDOS escribe la instruccion, como bitmask: bit0=1er operando,
     /// bit1=2o, bit2=3o, ...  Un mask generaliza casos que un solo bool no
     /// cubre: @c xchg escribe los dos (0b011), @c casp/@c ldxp escriben pares,

@@ -378,6 +378,7 @@ struct ImportRequest {
     std::string local_name; // alias o module_name
     std::vector<TypeChecker::VxiOnlyEntry> only_symbols;
     bool is_plain = false;           // sin only -> registra namespace
+    bool only_all = false;           // `only *` -> inyecta TODOS los publicos
     bool is_public_reexport = false; // L.23: public import
     bool by_namespace = false;       // NS.2-full: import a.b.c; (por-namespace)
     std::string ns_path;             // namespace original (por-namespace): para
@@ -702,8 +703,10 @@ collect_imports_(const ast::ModuleNode &mod,
         for (const auto &os : im->only_symbols) {
             req.only_symbols.push_back({os.name, os.rename});
         }
-        // Plain import = sin only.  Registra namespace en lugar de inyectar.
-        req.is_plain = im->only_symbols.empty();
+        // Plain import = sin only Y sin glob.  Registra namespace en lugar de
+        // inyectar.  `only *` (glob) inyecta TODOS los publicos -> NO es plain.
+        req.only_all = im->only_all;
+        req.is_plain = im->only_symbols.empty() && !im->only_all;
         req.is_public_reexport = im->is_public_reexport;
         req.loc = im->loc;
         out.push_back(std::move(req));
@@ -846,6 +849,7 @@ std::string derive_package_id_(const std::string &root_path) {
 std::vector<int>
 compute_module_levels_(const std::vector<ProjectModuleWork> &work,
                        const std::unordered_map<std::string, size_t> &by_name,
+                       const std::unordered_map<std::string, size_t> &by_ns,
                        const NsToModname &ns_to_modname) {
     std::vector<int> levels(work.size(), 0);
     // Procesamos en orden topologico (work ya esta en topo).  Para cada
@@ -857,11 +861,25 @@ compute_module_levels_(const std::vector<ProjectModuleWork> &work,
         int max_dep_level = -1;
         auto imports = collect_imports_(*pm.ast, &ns_to_modname);
         for (const auto &req : imports) {
-            auto itd = by_name.find(req.module_name);
-            if (itd == by_name.end()) continue;
-            if (itd->second >= work.size()) continue;
-            if (static_cast<int>(levels[itd->second]) > max_dep_level) {
-                max_dep_level = levels[itd->second];
+            // Resolver el dep por NAMESPACE COMPLETO (by_ns) cuando el import es
+            // por-namespace: `by_name` colisiona cuando dos modulos comparten el
+            // ultimo segmento (std.syscall.linux.x86_64 y ...windows.x86_64 son
+            // ambos "x86_64") -> un import de linux.x86_64 podia resolver al idx
+            // de windows.x86_64 (o a ninguno) y el nivel topo quedaba mal ->
+            // race en el compile paralelo (el consumidor compila antes que su
+            // dep real).  Igual que la resolucion de deps del propio compilador.
+            size_t dep_idx = SIZE_MAX;
+            if (req.by_namespace && !req.ns_path.empty()) {
+                auto itn = by_ns.find(req.ns_path);
+                if (itn != by_ns.end()) dep_idx = itn->second;
+            }
+            if (dep_idx == SIZE_MAX) {
+                auto itd = by_name.find(req.module_name);
+                if (itd != by_name.end()) dep_idx = itd->second;
+            }
+            if (dep_idx >= work.size()) continue;
+            if (static_cast<int>(levels[dep_idx]) > max_dep_level) {
+                max_dep_level = levels[dep_idx];
             }
         }
         levels[i] = max_dep_level + 1; // -1 + 1 = 0 si no hay deps
@@ -948,6 +966,22 @@ CompileResult compile_vx_project(
         // diagnostics: queremos preservar locs).
         work[i].source = read_source_(rm_mut->canonical_path);
         by_name.emplace(rm_mut->module_name, i);
+    }
+    // Colision de module_name (filename): dos modulos con el mismo ultimo
+    // segmento (p.ej. std.syscall.linux.x86_64 y std.syscall.windows.x86_64,
+    // ambos "x86_64") colapsan en by_name (emplace conserva el primero).  by_ns
+    // mapea el NAMESPACE COMPLETO (unico) -> idx, para resolver sin ambiguedad
+    // los imports por-namespace (`import a.b.c;`).
+    std::unordered_map<std::string, size_t> by_ns;
+    for (size_t i = 0; i < work.size(); ++i) {
+        if (!work[i].ast) continue;
+        for (const auto &d : work[i].ast->decls) {
+            if (d && d->kind == ast::NodeKind::NamespaceDecl) {
+                auto *nd = static_cast<ast::NamespaceDecl *>(d.get());
+                by_ns.emplace(nd->name, i);
+                break;
+            }
+        }
     }
 
     //  NS.2-full: mapa namespace -> module_name para traducir los
@@ -1066,7 +1100,7 @@ CompileResult compile_vx_project(
     // safety review del TypeChecker compartido + file lock cache que
     // M5.A ya cubre via atomic write.
     const std::vector<int> module_levels =
-        compute_module_levels_(work, by_name, ns_to_modname);
+        compute_module_levels_(work, by_name, by_ns, ns_to_modname);
     int max_level = 0;
     for (int L : module_levels) {
         if (L > max_level) max_level = L;
@@ -1577,13 +1611,43 @@ CompileResult compile_vx_project(
             }
         }
 
-        for (const auto &req : imports) {
-            auto itd = by_name.find(req.module_name);
-            if (itd == by_name.end()) continue;
-            const ProjectModuleWork &dep = work[itd->second];
+        for (auto &req : imports) {
+            // Resolver el dep por NAMESPACE completo (unico) cuando el import es
+            // por-namespace: evita la colision de module_name corto (dos
+            // "x86_64" de linux vs windows).  Fallback a by_name (por-path).
+            size_t dep_idx = 0;
+            bool dep_found = false;
+            if (req.by_namespace && !req.ns_path.empty()) {
+                auto itns = by_ns.find(req.ns_path);
+                if (itns != by_ns.end()) {
+                    dep_idx = itns->second;
+                    dep_found = true;
+                }
+            }
+            if (!dep_found) {
+                auto itd = by_name.find(req.module_name);
+                if (itd == by_name.end()) continue;
+                dep_idx = itd->second;
+            }
+            const ProjectModuleWork &dep = work[dep_idx];
             VxiModule dep_filtered_storage;
             const VxiModule &dep_vxi =
                 filter_internal_(dep.vxi, dep_filtered_storage);
+            // `only *` (glob): expandir a TODOS los simbolos publicos del dep,
+            // como si el usuario hubiera listado cada uno (nombre directo, sin
+            // rename).  Se hace aqui -- no en el mapeo AST -- porque necesita el
+            // .vxi del dep (la lista de sus simbolos).  Con `public import` los
+            // re-exporta (req.is_public_reexport se propaga a mark_imported).
+            if (req.only_all && req.only_symbols.empty()) {
+                // Inyectar TODOS los simbolos publicos del dep.  El .vxi ya
+                // filtro los sinteticos del compilador, asi que NO descartamos
+                // por prefijo `_`: un `public __NR_write` (convencion POSIX) es
+                // legitimo y debe entrar al scope.
+                for (const auto &sym : dep_vxi.symbols) {
+                    if (sym.name.empty()) continue;
+                    req.only_symbols.push_back({sym.name, ""});
+                }
+            }
             if (req.is_plain) {
                 // M.7: registrar namespace.
                 register_namespace_for_import(*pm.tc, req.local_name,
@@ -1631,7 +1695,7 @@ CompileResult compile_vx_project(
                         synth_only.push_back({sym.name, ""});
                     }
                     auto missing = import_vxi_into_typechecker_with_missing(
-                        *pm.tc, dep_vxi, synth_only);
+                        *pm.tc, dep_vxi, synth_only, req.module_name);
                     (void)missing; // best-effort; los privados ya fueron
                                    //              filtrados al construir el
                                    //              .vxi.
@@ -1686,7 +1750,7 @@ CompileResult compile_vx_project(
                 // M2.d: inyeccion directa via only.  M6.a.3: usar la variante
                 // que devuelve los missing para emitir diagnostico claro.
                 auto missing = import_vxi_into_typechecker_with_missing(
-                    *pm.tc, dep_vxi, req.only_symbols);
+                    *pm.tc, dep_vxi, req.only_symbols, req.module_name);
                 // Namespace PARCIAL: un `import std.types only uintptr` resuelve
                 // `req.module_name` al PRIMER fichero del namespace (p.ej.
                 // arm64), donde el simbolo puede estar @Target-inactivo -> queda
@@ -1718,7 +1782,7 @@ CompileResult compile_vx_project(
                                 work[ito->second].vxi, other_store);
                             auto still =
                                 import_vxi_into_typechecker_with_missing(
-                                    *pm.tc, other_vxi, retry);
+                                    *pm.tc, other_vxi, retry, other_mn);
                             // reducir retry a los que aun faltan tras este fichero
                             std::vector<TypeChecker::VxiOnlyEntry> next_retry;
                             for (const auto &os : retry) {
