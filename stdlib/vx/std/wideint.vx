@@ -756,4 +756,31 @@ public struct i128 : Wide128 {
         }
         return this.lo64 >= o.lo64;
     }
+
+    /**
+     * @brief Cociente con signo que no aborta nunca.
+     * @param o Divisor.
+     * @return El cociente truncado hacia cero, o `None` si el divisor es cero.
+     */
+    public Optional<i128> checked_div(i128 o) {
+        if (o.is_zero()) {
+            return None();
+        }
+        i128 q = this.__div__(o);
+        return Some(q);
+    }
+
+    /**
+     * @brief Resto con signo que no aborta nunca.
+     * @param o Divisor.
+     * @return El resto, con el signo del dividendo, o `None` si el divisor es
+     *         cero.
+     */
+    public Optional<i128> checked_rem(i128 o) {
+        if (o.is_zero()) {
+            return None();
+        }
+        i128 r = this.__mod__(o);
+        return Some(r);
+    }
 }

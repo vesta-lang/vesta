@@ -12848,6 +12848,19 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                 // HOST alloca -> aqui el LOAD emite `movh`/`loadzh` correctamente.
                 fn_->values[addr_i].is_host_ptr =
                     fn_->values[scrut_addr].is_host_ptr;
+                // Payload STRUCT por valor: no se carga en un registro -- el
+                // valor de un agregado ES su direccion.  Se liga `scrut+off`
+                // directamente, igual que hace `unwrap`.  Con el LOAD escalar
+                // de abajo, `case Some(p)` sobre un struct ligaba sus primeros
+                // 8 bytes interpretados como un entero, y el codigo del brazo
+                // leia campos en direcciones inventadas.
+                if (elay.is_optlike && arm_var &&
+                    bi < arm_var->field_types.size() &&
+                    arm_var->field_types[bi].kind == PrimitiveKind::STRUCT &&
+                    !arm_var->field_types[bi].struct_name.empty()) {
+                    bind(arm.bindings[bi], addr_i);
+                    continue;
+                }
                 ir::IrValueId v = fn_->new_value(load_t);
                 {
                     ir::IrInstr ld{};

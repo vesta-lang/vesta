@@ -67,5 +67,12 @@ i32 main() {
     Par q = unwrap(o);
     if (q.a == 3 && q.b == 4) { acc = acc + 12; }
 
-    return acc;   // 42
+    // Y ligado por `match`, no solo por `unwrap`: el brazo recibe el struct
+    // entero, no sus primeros ocho bytes leidos como un entero.
+    match mk_par(7) {
+        case Some(m) => { if (m.a == 7 && m.b == 14) { acc = acc + 10; } }
+        case None    => { acc = acc + 1; }
+    }
+
+    return acc;   // 52
 }
