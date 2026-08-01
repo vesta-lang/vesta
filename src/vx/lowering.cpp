@@ -4859,6 +4859,12 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         al.dst = addr;
         al.imm = (uint64_t)arr_size * elem_sz;
         al.source_line = vd->loc.line;
+        /* Buffer en memoria HOST, como en las demas rutas de array local:
+         * todo lo que lo consume (`a` decaido a `T*`, `&a[i]`, la funcion que
+         * lo recibe) emite accesos de host, asi que dejarlo en la pila de la
+         * VM mata el proceso en cuanto se recorre. */
+        al.host_alloca = true;
+        fn_->values[addr].is_host_ptr = true;
         fn_->append(current_block_, std::move(al));
         const ir::IrType ir_elem = ir_type_from_primitive(elem_t.kind);
         for (size_t i = 0; i < il->elements.size(); ++i) {
@@ -5471,6 +5477,9 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
             al.dst = addr;
             al.imm = (uint64_t)arr_n * elem_sz;
             al.source_line = vd->loc.line;
+            /* Buffer HOST: ver la nota de las otras rutas de array local. */
+            al.host_alloca = true;
+            fn_->values[addr].is_host_ptr = true;
             fn_->append(current_block_, std::move(al));
         }
         // STORE byte-a-byte del string.
@@ -5556,6 +5565,16 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         al.dst = addr;
         al.imm = (uint64_t)arr_size * elem_sz;
         al.source_line = vd->loc.line;
+        /* El buffer va a memoria HOST, igual que el de un array local SIN
+         * inicializador (ver la otra rama y su nota de 2026-07-15).  Este
+         * camino -- el de `T[N] a = {...}` -- se quedo sin marcar, asi que el
+         * array acababa en la pila de la VM mientras todo lo que lo consume
+         * (`a` decaido a `T*`, `&a[i]`, la funcion que lo recibe) emitia
+         * accesos de HOST.  Leer una direccion VM como si fuera host mata el
+         * proceso, y solo se notaba al RECORRERLO con indice variable: con
+         * indices constantes el optimizador resolvia los accesos antes. */
+        al.host_alloca = true;
+        fn_->values[addr].is_host_ptr = true;
         fn_->append(current_block_, std::move(al));
         // STORE de cada elemento.
         const ir::IrType ir_elem = ir_type_from_primitive(elem_t.kind);

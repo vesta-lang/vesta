@@ -665,7 +665,14 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
     current_block_ = mbody;
     auto ptr_at = [&](ir::IrValueId base, ir::IrValueId i64off) -> ir::IrValueId {
         const ir::IrValueId d = fn_->new_value(ir::IrType::PTR);
-        fn_->values[d].is_host_ptr = true;
+        /* La aritmetica de punteros HEREDA la naturaleza de la base: un array
+         * de `malloc` vive en memoria host, pero uno local (`T[N]`, que baja a
+         * ALLOCA) vive en la pila de la VM.  Marcarlo host a ciegas hacia que
+         * el acceso saliera con la instruccion equivocada -- leer memoria VM
+         * como si fuera host -- y el proceso moria al recorrer un array local
+         * vectorizado. */
+        fn_->values[d].is_host_ptr =
+            (base < fn_->values.size()) && fn_->values[base].is_host_ptr;
         ir::IrInstr in{}; in.op = ir::IrOp::ADD; in.type = ir::IrType::PTR;
         in.dst = d; in.operands = {base, i64off}; in.source_line = ln;
         fn_->append(current_block_, std::move(in));
@@ -1086,7 +1093,14 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
     current_block_ = mbody;
     auto ptr_at = [&](ir::IrValueId base, ir::IrValueId i64off) -> ir::IrValueId {
         const ir::IrValueId d = fn_->new_value(ir::IrType::PTR);
-        fn_->values[d].is_host_ptr = true;
+        /* La aritmetica de punteros HEREDA la naturaleza de la base: un array
+         * de `malloc` vive en memoria host, pero uno local (`T[N]`, que baja a
+         * ALLOCA) vive en la pila de la VM.  Marcarlo host a ciegas hacia que
+         * el acceso saliera con la instruccion equivocada -- leer memoria VM
+         * como si fuera host -- y el proceso moria al recorrer un array local
+         * vectorizado. */
+        fn_->values[d].is_host_ptr =
+            (base < fn_->values.size()) && fn_->values[base].is_host_ptr;
         ir::IrInstr in{}; in.op = ir::IrOp::ADD; in.type = ir::IrType::PTR;
         in.dst = d; in.operands = {base, i64off}; in.source_line = ln;
         fn_->append(current_block_, std::move(in));
@@ -1494,7 +1508,14 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
     current_block_ = mbody;
     auto ptr_at = [&](ir::IrValueId base, ir::IrValueId i64off) -> ir::IrValueId {
         const ir::IrValueId d = fn_->new_value(ir::IrType::PTR);
-        fn_->values[d].is_host_ptr = true;
+        /* La aritmetica de punteros HEREDA la naturaleza de la base: un array
+         * de `malloc` vive en memoria host, pero uno local (`T[N]`, que baja a
+         * ALLOCA) vive en la pila de la VM.  Marcarlo host a ciegas hacia que
+         * el acceso saliera con la instruccion equivocada -- leer memoria VM
+         * como si fuera host -- y el proceso moria al recorrer un array local
+         * vectorizado. */
+        fn_->values[d].is_host_ptr =
+            (base < fn_->values.size()) && fn_->values[base].is_host_ptr;
         ir::IrInstr in{}; in.op = ir::IrOp::ADD; in.type = ir::IrType::PTR;
         in.dst = d; in.operands = {base, i64off}; in.source_line = ln;
         fn_->append(current_block_, std::move(in));
@@ -1696,7 +1717,14 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
     };
     auto ptr_at = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
         const ir::IrValueId d = fn_->new_value(ir::IrType::PTR);
-        fn_->values[d].is_host_ptr = true;
+        /* La aritmetica de punteros HEREDA la naturaleza de la base: un array
+         * de `malloc` vive en memoria host, pero uno local (`T[N]`, que baja a
+         * ALLOCA) vive en la pila de la VM.  Marcarlo host a ciegas hacia que
+         * el acceso saliera con la instruccion equivocada -- leer memoria VM
+         * como si fuera host -- y el proceso moria al recorrer un array local
+         * vectorizado. */
+        fn_->values[d].is_host_ptr =
+            (base < fn_->values.size()) && fn_->values[base].is_host_ptr;
         ir::IrInstr in{}; in.op = ir::IrOp::ADD; in.type = ir::IrType::PTR;
         in.dst = d; in.operands = {base, off}; in.source_line = ln;
         fn_->append(current_block_, std::move(in));
@@ -2016,7 +2044,14 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     };
     auto ptr_at = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
         const ir::IrValueId d = fn_->new_value(ir::IrType::PTR);
-        fn_->values[d].is_host_ptr = true;
+        /* La aritmetica de punteros HEREDA la naturaleza de la base: un array
+         * de `malloc` vive en memoria host, pero uno local (`T[N]`, que baja a
+         * ALLOCA) vive en la pila de la VM.  Marcarlo host a ciegas hacia que
+         * el acceso saliera con la instruccion equivocada -- leer memoria VM
+         * como si fuera host -- y el proceso moria al recorrer un array local
+         * vectorizado. */
+        fn_->values[d].is_host_ptr =
+            (base < fn_->values.size()) && fn_->values[base].is_host_ptr;
         ir::IrInstr in{}; in.op = ir::IrOp::ADD; in.type = ir::IrType::PTR;
         in.dst = d; in.operands = {base, off}; in.source_line = ln;
         fn_->append(current_block_, std::move(in));

@@ -2193,6 +2193,20 @@ static bool can_fuse_cmp_brcond(const IrFunction &fn, const IrBlock &bb,
     return uses == 1;
 }
 
+/* Las operaciones vectoriales trabajan sobre PUNTEROS, y la instruccion de
+ * acceso depende de DONDE viva cada uno: `movh` para memoria del host (un
+ * bloque de `malloc`) y `mov` para la de la VM (un array local `T[N]`, que
+ * baja a ALLOCA).  Se emitia `movh` fijo, asi que recorrer un array local
+ * vectorizado leia memoria VM como si fuera host y mataba el proceso.  Decide
+ * por operando, con el mismo criterio que ya usan LOAD, STORE y MEMSET. */
+static const char *vec_mv(const EmitCtx &ctx, const ir::IrInstr &ins,
+                          size_t idx) {
+    if (idx >= ins.operands.size()) return "movh";
+    const ir::IrValueId v = ins.operands[idx];
+    return (v < ctx.fn.values.size() && ctx.fn.values[v].is_host_ptr) ? "movh"
+                                                                     : "mov";
+}
+
 static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                        int &skip_count) {
     skip_count = 0;
@@ -3967,13 +3981,13 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 ctx.out << "    addu r10, " << esz << "\n";
                 ctx.out << "    addu r11, " << esz << "\n";
             }
-            ctx.out << "    movh r14, [r11]\n";        // a[k] bits
+            ctx.out << "    " << vec_mv(ctx, ins, 1) << " r14, [r11]\n";        // a[k] bits
             if (uop) {
                 ctx.out << "    bitg2z f0, r14\n";
                 ctx.out << "    " << uop << " f0, f0\n";
                 ctx.out << "    bitz2g r14, f0\n";
             }
-            ctx.out << "    movh [r10], r14\n";        // dst[k]
+            ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14\n";        // dst[k]
         }
         ctx.out << "    pop r11\n    pop r10\n";
         ctx.r13_cache = -1;
@@ -4029,13 +4043,13 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             if (is_fp) {
                 // carga esz bytes (f64=8 -> r14; f32=4 -> r14d) y opera con el
                 // sufijo .ps cuando es f32 (low 32 del banco ZMM).
-                ctx.out << "    movh r14" << rsz << ", [r11]\n"; // a[k] bits
-                ctx.out << "    movh r13" << rsz << ", [r12]\n"; // b[k] bits
+                ctx.out << "    " << vec_mv(ctx, ins, 1) << " r14" << rsz << ", [r11]\n"; // a[k] bits
+                ctx.out << "    " << vec_mv(ctx, ins, 2) << " r13" << rsz << ", [r12]\n"; // b[k] bits
                 ctx.out << "    bitg2z f0, r14\n";
                 ctx.out << "    bitg2z f1, r13\n";
                 ctx.out << "    " << fop << suf << " f0, f1\n";
                 ctx.out << "    bitz2g r14, f0\n";
-                ctx.out << "    movh [r10], r14" << rsz << "\n"; // dst[k]
+                ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz << "\n"; // dst[k]
             } else {
                 // entero: cargar esz bytes ZERO-EXTENDIDO (loadzh, no movh: el
                 // movh-load parcial de 16/8b deja bits altos basura que rompen
@@ -4045,7 +4059,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 ctx.out << "    loadzh r14" << rsz << ", r11\n"; // a[k]
                 ctx.out << "    loadzh r13" << rsz << ", r12\n"; // b[k]
                 ctx.out << "    " << iop << " r14, r13\n";       // a OP b (64b)
-                ctx.out << "    movh [r10], r14" << rsz << "\n"; // dst[k]
+                ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz << "\n"; // dst[k]
             }
         }
         ctx.out << "    pop r12\n    pop r11\n    pop r10\n";
@@ -4094,15 +4108,15 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             }
             if (is_fp) {
                 // f64=8 bytes -> r14; f32=4 -> r14d; op con sufijo .ps si f32.
-                ctx.out << "    movh r14" << rsz << ", [r11]\n"; // a[k]
+                ctx.out << "    " << vec_mv(ctx, ins, 1) << " r14" << rsz << ", [r11]\n"; // a[k]
                 ctx.out << "    bitg2z f0, r14\n";
                 ctx.out << "    " << fop << suf << " f0, f2\n";
                 ctx.out << "    bitz2g r14, f0\n";
-                ctx.out << "    movh [r10], r14" << rsz << "\n"; // dst[k]
+                ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz << "\n"; // dst[k]
             } else {
                 ctx.out << "    loadzh r14" << rsz << ", r11\n"; // a[k]
                 ctx.out << "    " << iop << " r14, r13\n";        // a OP scalar
-                ctx.out << "    movh [r10], r14" << rsz << "\n";  // dst[k]
+                ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz << "\n";  // dst[k]
             }
         }
         ctx.out << "    pop r11\n    pop r10\n";
@@ -4135,13 +4149,13 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 ctx.out << "    addu r10, " << esz << "\n";
                 ctx.out << "    addu r11, " << esz << "\n";
             }
-            ctx.out << "    movh r14" << rsz << ", [r11]\n"; // a[k]
+            ctx.out << "    " << vec_mv(ctx, ins, 1) << " r14" << rsz << ", [r11]\n"; // a[k]
             ctx.out << "    bitg2z f0, r14\n";
-            ctx.out << "    movh r14" << rsz << ", [r10]\n"; // c[k]
+            ctx.out << "    " << vec_mv(ctx, ins, 0) << " r14" << rsz << ", [r10]\n"; // c[k]
             ctx.out << "    bitg2z f1, r14\n";
             ctx.out << "    fmadd" << suf << " f1, f0, f2\n"; // f1 = a*esc + c
             ctx.out << "    bitz2g r14, f1\n";
-            ctx.out << "    movh [r10], r14" << rsz << "\n"; // c[k]
+            ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz << "\n"; // c[k]
         }
         ctx.out << "    pop r11\n    pop r10\n";
         ctx.r13_cache = -1;
@@ -4194,16 +4208,16 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 ctx.out << "    addu r11, " << esz << "\n";
                 ctx.out << "    addu r12, " << esz << "\n";
             }
-            ctx.out << "    movh r14" << rsz << ", [r9]\n"; // sumando[k]
+            ctx.out << "    " << vec_mv(ctx, ins, 0) << " r14" << rsz << ", [r9]\n"; // sumando[k]
             ctx.out << "    bitg2z f0, r14\n";
             if (fma_sub) ctx.out << "    fneg" << suf << " f0, f0\n"; // -d
-            ctx.out << "    movh r13" << rsz << ", [r11]\n"; // a[k]
+            ctx.out << "    " << vec_mv(ctx, ins, 1) << " r13" << rsz << ", [r11]\n"; // a[k]
             ctx.out << "    bitg2z f1, r13\n";
-            ctx.out << "    movh r14" << rsz << ", [r12]\n"; // b[k]
+            ctx.out << "    " << vec_mv(ctx, ins, 2) << " r14" << rsz << ", [r12]\n"; // b[k]
             ctx.out << "    bitg2z f2, r14\n";
             ctx.out << "    fmadd" << suf << " f0, f1, f2\n"; // f0 = a*b + sumando
             ctx.out << "    bitz2g r14, f0\n";
-            ctx.out << "    movh [r10], r14" << rsz << "\n"; // dst[k]
+            ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz << "\n"; // dst[k]
         }
         ctx.out << "    pop r12\n    pop r11\n    pop r10\n    pop r9\n";
         ctx.r13_cache = -1;
@@ -4228,7 +4242,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         ctx.out << "    mov r14, 0\n";
         for (uint64_t q = 0; q < width; q += 8) {
             if (q > 0) ctx.out << "    addu r10, 8\n";
-            ctx.out << "    movh [r10], r14\n";
+            ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14\n";
         }
         ctx.out << "    pop r10\n";
         ctx.r14_cache = -1;
@@ -4274,25 +4288,25 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 if (is_fma) ctx.out << "    addu r12, " << esz << "\n";
             }
             if (is_fp) {
-                ctx.out << "    movh r14" << rsz << ", [r10]\n"; // acc[k]
+                ctx.out << "    " << vec_mv(ctx, ins, 0) << " r14" << rsz << ", [r10]\n"; // acc[k]
                 ctx.out << "    bitg2z f0, r14\n";
-                ctx.out << "    movh r13" << rsz << ", [r11]\n"; // a[k]
+                ctx.out << "    " << vec_mv(ctx, ins, 1) << " r13" << rsz << ", [r11]\n"; // a[k]
                 ctx.out << "    bitg2z f1, r13\n";
                 if (is_fma) {
-                    ctx.out << "    movh r14" << rsz << ", [r12]\n"; // b[k]
+                    ctx.out << "    " << vec_mv(ctx, ins, 2) << " r14" << rsz << ", [r12]\n"; // b[k]
                     ctx.out << "    bitg2z f2, r14\n";
                     ctx.out << "    fmadd" << suf << " f0, f1, f2\n"; // += a*b
                 } else {
                     ctx.out << "    fadd" << suf << " f0, f1\n"; // += a
                 }
                 ctx.out << "    bitz2g r14, f0\n";
-                ctx.out << "    movh [r10], r14" << rsz << "\n"; // acc[k]
+                ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz << "\n"; // acc[k]
             } else {
                 // entero (solo ADD; FMA es float-only): acc[k] += a[k].
-                ctx.out << "    movh r14" << rsz << ", [r10]\n"; // acc[k]
-                ctx.out << "    movh r13" << rsz << ", [r11]\n"; // a[k]
+                ctx.out << "    " << vec_mv(ctx, ins, 0) << " r14" << rsz << ", [r10]\n"; // acc[k]
+                ctx.out << "    " << vec_mv(ctx, ins, 1) << " r13" << rsz << ", [r11]\n"; // a[k]
                 ctx.out << "    adds r14, r13\n";                // 64b add
-                ctx.out << "    movh [r10], r14" << rsz << "\n"; // acc[k]
+                ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz << "\n"; // acc[k]
             }
         }
         ctx.out << "    pop r12\n    pop r11\n    pop r10\n";
@@ -4325,18 +4339,18 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 ctx.out << "    addu r11, " << esz << "\n";
             }
             if (is_fp) {
-                ctx.out << "    movh r14" << rsz << ", [r10]\n";
+                ctx.out << "    " << vec_mv(ctx, ins, 0) << " r14" << rsz << ", [r10]\n";
                 ctx.out << "    bitg2z f0, r14\n";
-                ctx.out << "    movh r13" << rsz << ", [r11]\n";
+                ctx.out << "    " << vec_mv(ctx, ins, 1) << " r13" << rsz << ", [r11]\n";
                 ctx.out << "    bitg2z f1, r13\n";
                 ctx.out << "    fadd" << suf << " f0, f1\n";
                 ctx.out << "    bitz2g r14, f0\n";
-                ctx.out << "    movh [r10], r14" << rsz << "\n";
+                ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz << "\n";
             } else {
-                ctx.out << "    movh r14" << rsz << ", [r10]\n";
-                ctx.out << "    movh r13" << rsz << ", [r11]\n";
+                ctx.out << "    " << vec_mv(ctx, ins, 0) << " r14" << rsz << ", [r10]\n";
+                ctx.out << "    " << vec_mv(ctx, ins, 1) << " r13" << rsz << ", [r11]\n";
                 ctx.out << "    adds r14, r13\n";
-                ctx.out << "    movh [r10], r14" << rsz << "\n";
+                ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz << "\n";
             }
         }
         ctx.out << "    pop r11\n    pop r10\n";

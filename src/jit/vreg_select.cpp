@@ -3855,6 +3855,19 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::VEC_ACC_STORE: {
                 flush_pending();
                 if (!fp_ok) return false;
+                /* Estas operaciones acceden a la memoria DIRECTAMENTE con la
+                 * direccion del puntero.  Eso solo vale si el puntero es del
+                 * HOST: un array local (`T[N]` -> ALLOCA) vive en la pila de la
+                 * VM y su direccion no significa nada aqui -- antes se emitia
+                 * igual y el proceso moria.  Si algun operando no es host, se
+                 * rechaza la funcion y la ejecuta el interprete, que si sabe
+                 * leer las dos memorias. */
+                for (const ir::IrValueId opv : in.operands) {
+                    if (opv >= fn.values.size() || !fn.values[opv].is_host_ptr) {
+                        vreg_dbg(fn.name.c_str(), "vec(puntero-no-host)");
+                        return false;
+                    }
+                }
                 const uint64_t chunk_w = in.imm & 0xFF;
                 if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
                     return false;

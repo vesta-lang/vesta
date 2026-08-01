@@ -2754,6 +2754,7 @@ r0_case("ccr296", "const-correctness C por nivel (usos validos)", "296_const_cor
 r0_case("cec297", "captura expr: comptime fn (valor) vs @Macro (codigo inyectado)", "297_comptime_expr_capture.vx", 42, line=3707)
 r0_case("oip298", "only-import de namespace parcial (uintptr por @Target)", "298_only_import_partial_ns.vx", 42, line=3708)
 r0_case("syscalls_os", "syscalls del SO por std.syscall, seleccionadas con @Target", "342_syscalls_os.vx", 42)
+r0_case("array_local_reduccion", "recorrer un array sumando: local (pila VM) y de malloc (host)", "343_array_local_reduccion.vx", 42)
 r0_case("cme299", "captura expr CROSS-MODULO (src(expr) en otro modulo, DSL crudo)", "299_cross_module_expr.vx", 42, line=3709)
 r0_case("scs300", "source(expr) de std.comptime (re-export + siembra transitiva)", "300_stdlib_comptime_source.vx", 42, line=3710)
 r0_case("mch301", "@Macro genera codigo con helper comptime expr (CALLVM no fold-vacio)", "301_macro_codegen_helper.vx", 42, line=3711)

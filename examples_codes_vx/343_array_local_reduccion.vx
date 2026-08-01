@@ -1,0 +1,49 @@
+/**
+ * @file 343_array_local_reduccion.vx
+ * @brief Recorrer un array sumando sus elementos, este donde este.
+ *
+ * Lo mas basico que puede hacerse con un array, y tiene que dar lo mismo en el
+ * interprete, en el JIT y en un binario nativo.
+ *
+ * El bucle es una REDUCCION (`a = a + d[i]`), asi que el compilador lo
+ * vectoriza.  Esa transformacion tiene que respetar DONDE vive cada bloque: un
+ * array local vive en la pila de la VM y uno de `malloc` en memoria del host, y
+ * cada una se lee con una instruccion distinta.  Cuando eso se daba por sentado
+ * -- se emitia siempre el acceso de host -- recorrer un array local mataba el
+ * proceso; y como el precomputo ejecuta `main` al compilar, se llevaba por
+ * delante al propio compilador, sin un mensaje de error.
+ *
+ * Suma de 10+20+30+40 = 100 por las dos vias -> 42 si ambas coinciden.
+ */
+namespace ejemplos.array_local_reduccion;
+
+/// Suma los `n` primeros elementos de un bloque cualquiera.
+i64 suma(i64* d, i64 n)
+{
+    i64 a = 0;
+    i64 i = 0;
+    while (i < n) { a += d[i]; i++; }
+    return a;
+}
+
+i32 main()
+{
+    // (1) Array LOCAL con lista de inicializacion: vive en la pila de la VM.
+    i64[4] local = {10, 20, 30, 40};
+    i64 sl = 0;
+    i64 i = 0;
+    while (i < 4) { sl += local[i]; i++; }
+
+    // (2) El mismo contenido en memoria del HOST.
+    i64* heap = malloc(32);
+    heap[0] = 10;
+    heap[1] = 20;
+    heap[2] = 30;
+    heap[3] = 40;
+    i64 sh = suma(heap, 4);
+    free(heap);
+
+    if (sl != 100) { return 1; }
+    if (sh != 100) { return 2; }
+    return 42;
+}
