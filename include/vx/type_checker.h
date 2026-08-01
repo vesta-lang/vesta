@@ -2031,10 +2031,58 @@ private:
     struct NewtypeInfo {
         std::vector<ExplicitConv> from_conversions;
         std::vector<ExplicitConv> to_conversions;
+        /// Conversiones que NO necesitan cast (`implicit from/to T;`).  La
+        /// barrera nominal sigue cerrada para el resto: el typedef declara las
+        /// que forman parte de su contrato.
+        std::vector<ExplicitConv> implicit_from_conversions;
+        std::vector<ExplicitConv> implicit_to_conversions;
         std::string source_file;
     };
 
+  public:
+    /**
+     * @brief Asignabilidad, incluyendo las conversiones @c implicit que un
+     *        newtype declare en su bloque.
+     *
+     * SOMBREA a proposito la funcion libre @c vx::types_assignable: todos los
+     * sitios del checker que preguntan "¿cabe este valor aqui?" resuelven a
+     * este metodo sin tener que enumerarlos uno a uno, y la respuesta es la
+     * misma en todos ellos (declaracion, retorno, argumento, asignacion).
+     *
+     * @param target Tipo de destino.
+     * @param value  Tipo del valor que se quiere poner en el.
+     * @return @c true si el valor se puede usar como @p target sin cast.
+     */
+    bool types_assignable(const Type &target, const Type &value) const {
+        if (vx::types_assignable(target, value)) return true;
+        return newtype_implicit_conv_ok_(target, value);
+    }
+
   private:
+    /// ¿Hay una conversion `implicit` declarada que lleve @p value hasta
+    /// @p target?  Se mira en los dos sentidos: las `implicit to` del newtype
+    /// de origen y las `implicit from` del de destino.
+    bool newtype_implicit_conv_ok_(const Type &target,
+                                   const Type &value) const {
+        if (value.nominal_id != 0 && !value.nominal_name.empty()) {
+            auto it = newtype_info_.find(value.nominal_name);
+            if (it != newtype_info_.end()) {
+                for (const auto &c : it->second.implicit_to_conversions) {
+                    if (vx::types_assignable(target, c.type)) return true;
+                }
+            }
+        }
+        if (target.nominal_id != 0 && !target.nominal_name.empty()) {
+            auto it = newtype_info_.find(target.nominal_name);
+            if (it != newtype_info_.end()) {
+                for (const auto &c : it->second.implicit_from_conversions) {
+                    if (vx::types_assignable(c.type, value)) return true;
+                }
+            }
+        }
+        return false;
+    }
+
     // Mapa de metadata por nombre de newtype.  Vacio para newtypes
     // sin bloque @c {explicit from/to T;} declarado.
     std::unordered_map<std::string, NewtypeInfo> newtype_info_;

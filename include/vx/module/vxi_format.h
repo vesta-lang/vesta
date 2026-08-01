@@ -54,7 +54,7 @@ inline constexpr uint32_t VXI_MAGIC = 0x49584556u;
 /// v9: ns_path en templates genericas (NS.2 cross-module).
 /// v10: package_id en el header (NS.3, offsets 72/76 del pad v6).
 /// v11: ext_methods (NS.6-ext) -- header crece a 88 (ext_off 80 + ext_count 84).
-inline constexpr uint16_t VXI_FORMAT_VERSION = 13; // target_offset (@Target)
+inline constexpr uint16_t VXI_FORMAT_VERSION = 14; // conversiones `implicit`
 
 /// Nombre del SO del HOST de compilacion, en el mismo vocabulario que usan los
 /// atomos `os:` de @Target.  Es el valor por defecto del objetivo cuando no hay
@@ -238,6 +238,12 @@ struct VxiSymbol {
     };
     std::vector<ExplicitConvEntry> from_conversions;
     std::vector<ExplicitConvEntry> to_conversions;
+    /// Bloque @c {implicit from/to T;}: conversiones que no piden cast.  Viajan
+    /// igual que las explicitas porque el consumidor necesita saberlas para
+    /// aceptar la asignacion; sin ellas un `uintptr` importado volvia a exigir
+    /// el cast que su propio modulo declara innecesario.
+    std::vector<ExplicitConvEntry> implicit_from_conversions;
+    std::vector<ExplicitConvEntry> implicit_to_conversions;
 
     // === STRUCT / CLASS ===
     struct FieldInfo {

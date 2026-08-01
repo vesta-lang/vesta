@@ -2011,6 +2011,19 @@ struct TypeAliasDecl : Node {
     };
     std::vector<ExplicitConv> explicit_from;
     std::vector<ExplicitConv> explicit_to;
+    /// Tipos que convierten a/desde este newtype SIN cast, declarados con
+    /// @c "implicit from T;" / @c "implicit to T;".  La barrera nominal sigue
+    /// en pie para todo lo demas: el typedef enumera las conversiones que
+    /// forman parte de su contrato en lugar de abrirse entero.
+    ///
+    /// El caso que lo motivo: @c uintptr es el tipo del lenguaje para una
+    /// DIRECCION, asi que pasarla donde se espera un @c T* no es una
+    /// conversion entero->puntero que haya que justificar con un cast, es su
+    /// razon de ser.  Declararlo en la stdlib -- en vez de cablear el nombre
+    /// @c uintptr en el compilador -- deja el mecanismo disponible para
+    /// cualquier newtype (handles, offsets, identificadores).
+    std::vector<ExplicitConv> implicit_from;
+    std::vector<ExplicitConv> implicit_to;
     TypeAliasDecl() : Node(NodeKind::TypeAliasDecl) {}
 };
 

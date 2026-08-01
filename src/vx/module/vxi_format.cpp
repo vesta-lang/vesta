@@ -225,6 +225,10 @@ static void emit_payload_for_typedef(std::vector<uint8_t> &payload,
     // orden (cada entry: type_off u32 + type_len u32 + is_public u8 + 3 pad).
     write_u32(payload, static_cast<uint32_t>(sym.from_conversions.size()));
     write_u32(payload, static_cast<uint32_t>(sym.to_conversions.size()));
+    write_u32(payload,
+              static_cast<uint32_t>(sym.implicit_from_conversions.size()));
+    write_u32(payload,
+              static_cast<uint32_t>(sym.implicit_to_conversions.size()));
     auto emit_conv = [&](const VxiSymbol::ExplicitConvEntry &c) {
         const uint32_t t_off = pool.intern(c.type_str);
         write_u32(payload, t_off);
@@ -237,6 +241,10 @@ static void emit_payload_for_typedef(std::vector<uint8_t> &payload,
     for (const auto &c : sym.from_conversions)
         emit_conv(c);
     for (const auto &c : sym.to_conversions)
+        emit_conv(c);
+    for (const auto &c : sym.implicit_from_conversions)
+        emit_conv(c);
+    for (const auto &c : sym.implicit_to_conversions)
         emit_conv(c);
 }
 
@@ -759,9 +767,14 @@ static bool parse_payload_typedef(const uint8_t *data, size_t size,
         return true;
     }
     uint32_t from_count = 0, to_count = 0;
+    uint32_t imp_from_count = 0, imp_to_count = 0;
     if (!read_u32(data, size, off, from_count)) return false;
     if (!read_u32(data, size, off, to_count)) return false;
-    if (from_count > 1000 || to_count > 1000) return false; // sanity
+    if (!read_u32(data, size, off, imp_from_count)) return false;
+    if (!read_u32(data, size, off, imp_to_count)) return false;
+    if (from_count > 1000 || to_count > 1000 || imp_from_count > 1000 ||
+        imp_to_count > 1000)
+        return false; // sanity
     auto read_conv = [&](VxiSymbol::ExplicitConvEntry &c) -> bool {
         uint32_t t_off = 0, t_len = 0;
         if (!read_u32(data, size, off, t_off)) return false;
@@ -780,6 +793,14 @@ static bool parse_payload_typedef(const uint8_t *data, size_t size,
     out.to_conversions.resize(to_count);
     for (uint32_t i = 0; i < to_count; ++i) {
         if (!read_conv(out.to_conversions[i])) return false;
+    }
+    out.implicit_from_conversions.resize(imp_from_count);
+    for (uint32_t i = 0; i < imp_from_count; ++i) {
+        if (!read_conv(out.implicit_from_conversions[i])) return false;
+    }
+    out.implicit_to_conversions.resize(imp_to_count);
+    for (uint32_t i = 0; i < imp_to_count; ++i) {
+        if (!read_conv(out.implicit_to_conversions[i])) return false;
     }
     return true;
 }

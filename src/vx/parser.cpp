@@ -140,7 +140,15 @@ void Parser::skip_target_skipped_decl(const std::string &spec) {
         } else if (k == TokenKind::RBRACE) {
             if (brace_depth > 0) --brace_depth;
             (void)consume();
-            if (entered_body && brace_depth == 0) break;
+            if (entered_body && brace_depth == 0) {
+                // Hay declaraciones que cierran con cuerpo Y punto y coma
+                // (`typedef X Y new { ... };`, `struct S { ... };` al estilo
+                // C).  Sin consumirlo aqui, ese `;` quedaba suelto y el
+                // siguiente parse fallaba con un "se esperaba un tipo al
+                // inicio de la declaracion" que no tenia nada que ver.
+                if (current_.kind == TokenKind::SEMICOLON) (void)consume();
+                break;
+            }
         } else if (k == TokenKind::SEMICOLON && brace_depth == 0 &&
                    !entered_body) {
             (void)consume();
@@ -3900,15 +3908,18 @@ std::unique_ptr<ast::TypeAliasDecl> Parser::parse_typedef_decl() {
                     is_public = true;
                 }
                 if (current_.kind != TokenKind::IDENTIFIER ||
-                    current_.lexeme != "explicit") {
-                    error_here("se esperaba 'explicit' [from|to] T;"
+                    (current_.lexeme != "explicit" &&
+                     current_.lexeme != "implicit")) {
+                    error_here("se esperaba 'explicit' o 'implicit' [from|to] T;"
                                " dentro del bloque de typedef");
                     break;
                 }
-                (void)consume(); // 'explicit'
+                const bool es_implicita = (current_.lexeme == "implicit");
+                (void)consume(); // 'explicit' | 'implicit'
                 if (current_.kind != TokenKind::IDENTIFIER ||
                     (current_.lexeme != "from" && current_.lexeme != "to")) {
-                    error_here("se esperaba 'from' o 'to' tras 'explicit'");
+                    error_here("se esperaba 'from' o 'to' tras "
+                               "'explicit'/'implicit'");
                     break;
                 }
                 const bool is_from = (current_.lexeme == "from");
@@ -3924,10 +3935,16 @@ std::unique_ptr<ast::TypeAliasDecl> Parser::parse_typedef_decl() {
                 ast::TypeAliasDecl::ExplicitConv ec;
                 ec.type = std::move(tn);
                 ec.is_public = is_public;
-                if (is_from)
+                if (es_implicita) {
+                    if (is_from)
+                        a->implicit_from.push_back(std::move(ec));
+                    else
+                        a->implicit_to.push_back(std::move(ec));
+                } else if (is_from) {
                     a->explicit_from.push_back(std::move(ec));
-                else
+                } else {
                     a->explicit_to.push_back(std::move(ec));
+                }
             }
             (void)expect(TokenKind::RBRACE,
                          "se esperaba '}' tras el bloque del typedef");

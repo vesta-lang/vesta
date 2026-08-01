@@ -775,6 +775,20 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
                     e.is_public = true;
                     s.to_conversions.push_back(std::move(e));
                 }
+                for (const auto &conv : ni->implicit_from_conversions) {
+                    if (!conv.is_public) continue;
+                    VxiSymbol::ExplicitConvEntry e;
+                    e.type_str = canonical_typename_of(conv.type);
+                    e.is_public = true;
+                    s.implicit_from_conversions.push_back(std::move(e));
+                }
+                for (const auto &conv : ni->implicit_to_conversions) {
+                    if (!conv.is_public) continue;
+                    VxiSymbol::ExplicitConvEntry e;
+                    e.type_str = canonical_typename_of(conv.type);
+                    e.is_public = true;
+                    s.implicit_to_conversions.push_back(std::move(e));
+                }
             }
         } else {
             s.kind = VxiSymbolKind::TYPEDEF_ALIAS;
@@ -1832,7 +1846,9 @@ void import_vxi_into_typechecker(
                 // si el .vxi lo trae.  Las entries no-public ya fueron
                 // filtradas por el lado emit.  Las que llegan aqui son
                 // siempre is_public=true.
-                if (!s.from_conversions.empty() || !s.to_conversions.empty()) {
+                if (!s.from_conversions.empty() || !s.to_conversions.empty() ||
+                    !s.implicit_from_conversions.empty() ||
+                    !s.implicit_to_conversions.empty()) {
                     TypeChecker::NewtypeInfo ni;
                     ni.from_conversions.reserve(s.from_conversions.size());
                     for (const auto &c : s.from_conversions) {
@@ -1847,6 +1863,31 @@ void import_vxi_into_typechecker(
                         ec.type = tc.resolve_type_string(c.type_str);
                         ec.is_public = c.is_public;
                         ni.to_conversions.push_back(std::move(ec));
+                    }
+                    ni.implicit_from_conversions.reserve(
+                        s.implicit_from_conversions.size());
+                    for (const auto &c : s.implicit_from_conversions) {
+                        TypeChecker::ExplicitConv ec;
+                        ec.type = tc.resolve_type_string(c.type_str);
+                        ec.is_public = c.is_public;
+                        ni.implicit_from_conversions.push_back(std::move(ec));
+                    }
+                    ni.implicit_to_conversions.reserve(
+                        s.implicit_to_conversions.size());
+                    for (const auto &c : s.implicit_to_conversions) {
+                        TypeChecker::ExplicitConv ec;
+                        ec.type = tc.resolve_type_string(c.type_str);
+                        ec.is_public = c.is_public;
+                        ni.implicit_to_conversions.push_back(std::move(ec));
+                    }
+                    // El newtype importado responde a su nombre local Y al
+                    // canonico (mangled): las firmas de otros .vxi lo
+                    // referencian por el segundo, y si solo estuviera el
+                    // primero la conversion no se encontraria desde ahi.
+                    if (canon != local_name) {
+                        TypeChecker::NewtypeInfo copia = ni;
+                        tc.register_imported_newtype_info(canon,
+                                                          std::move(copia));
                     }
                     tc.register_imported_newtype_info(local_name,
                                                       std::move(ni));

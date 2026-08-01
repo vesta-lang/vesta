@@ -3332,6 +3332,34 @@ void TypeChecker::collect_globals() {
                     }
                     info.to_conversions.push_back({std::move(t), ec.is_public});
                 }
+                // Las implicitas siguen el mismo camino; lo unico que cambia
+                // es que no exigen cast en el punto de uso.
+                for (auto &ec : a->implicit_from) {
+                    if (!ec.type) continue;
+                    Type t = type_from_node(ec.type.get());
+                    if (t.kind == PrimitiveKind::COUNT ||
+                        t.kind == PrimitiveKind::VOID) {
+                        diags_.error(
+                            a->loc, "tipo no resuelto en 'implicit from' de '" +
+                                        a->name + "'");
+                        continue;
+                    }
+                    info.implicit_from_conversions.push_back(
+                        {std::move(t), ec.is_public});
+                }
+                for (auto &ec : a->implicit_to) {
+                    if (!ec.type) continue;
+                    Type t = type_from_node(ec.type.get());
+                    if (t.kind == PrimitiveKind::COUNT ||
+                        t.kind == PrimitiveKind::VOID) {
+                        diags_.error(a->loc,
+                                     "tipo no resuelto en 'implicit to' de '" +
+                                         a->name + "'");
+                        continue;
+                    }
+                    info.implicit_to_conversions.push_back(
+                        {std::move(t), ec.is_public});
+                }
                 newtype_info_.emplace(a->name, std::move(info));
             }
             if (!type_aliases_.emplace(a->name, resolved).second) {
