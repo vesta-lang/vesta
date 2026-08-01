@@ -1,6 +1,6 @@
 namespace std.ntwindows;
 
-import std.types only nullptr, size_t;
+import std.types only nullptr, size_t, uintptr;
 
 /**
  * Tipos base de la NT API (Windows).  Alias transparentes estilo C: en Windows
@@ -28,7 +28,7 @@ public typedef u16 USHORT;
 public typedef u8 UCHAR;
 /// Puntero generico (void *).
 public typedef void* PVOID;
-/// Handle opaco del kernel (void *).
+/// Handle opaco del kernel (`void *`).
 public typedef void* HANDLE;
 
 /**
@@ -54,8 +54,13 @@ public typedef PROCESSOR_NUMBER* PPROCESSOR_NUMBER;
 public typedef size_t SIZE_T;
 /// Puntero a SIZE_T (parametro in/out de las syscalls de memoria).
 public typedef SIZE_T* PSIZE_T;
-/// Puntero a un puntero generico (parametro in/out `PVOID *`).
-public typedef PVOID* PPVOID;
+/// Direccion de entrada/salida (`PVOID *` del API): el kernel la lee como
+/// sugerencia y la reescribe con la que concede.  Es una DIRECCION, no un
+/// puntero a datos, asi que se expresa con el tipo de direcciones del
+/// lenguaje.  Los headers de C no distinguen los dos usos porque solo tienen
+/// UN tipo de puntero; Vesta si, y la stdlib absorbe la diferencia para que el
+/// codigo de usuario no tenga que castear en cada llamada.
+public typedef uintptr* PPVOID;
 /// Puntero a HANDLE (parametro [out] de las syscalls que abren objetos).
 public typedef HANDLE* PHANDLE;
 /// Puntero a ULONG (p.ej. el `OldProtect` de NtProtectVirtualMemory).

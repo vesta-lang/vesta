@@ -35,6 +35,34 @@
 
 namespace vx {
 
+/// Cualifica @p name con @p ns_path (`a.b` + `T` -> `a__b__T`), pero SOLO si
+/// no lo estaba ya.
+///
+/// La cualificacion tiene que ser IDEMPOTENTE: por una cadena de re-exports el
+/// mismo nombre pasa por varios modulos, y prefijarlo en cada salto produce
+/// `std__syscall__std__syscall__windows__std__ntwindows__std__types__uintptr`
+/// -- un prefijo por eslabon -- con lo que el tipo deja de unificar consigo
+/// mismo.
+///
+/// El criterio es el propio invariante del formato: un nombre PUBLICO corto
+/// nunca lleva `__`, porque el exportador siempre lo parte en (ns_path, nombre
+/// corto).  Asi que si ya lo lleva, es que viene cualificado y se respeta.
+static std::string qualify_once_(const std::string &ns_path,
+                                 const std::string &name) {
+    if (name.find("__") != std::string::npos) return name; // ya cualificado
+    std::string out;
+    out.reserve(ns_path.size() + name.size() + 4);
+    for (const char c : ns_path) {
+        if (c == '.')
+            out += "__";
+        else
+            out.push_back(c);
+    }
+    out += "__";
+    out += name;
+    return out;
+}
+
 // ---------------------------------------------------------------------------
 // Convertir un @c Type del checker a un typename canonico.  Usado para
 // serializar tipos de fields, returns, params, etc.
@@ -1652,11 +1680,9 @@ void import_vxi_into_typechecker(
         // `namespace` declarado la clave es `<modulo>__<nombre>`.
         std::string mangled;
         {
-            std::string nsm;
-            for (char c : s.ns_path)
-                nsm += (c == '.') ? std::string("__") : std::string(1, c);
-            mangled = s.ns_path.empty() ? (module_name + "__" + s.name)
-                                        : (nsm + "__" + s.name);
+            mangled = s.ns_path.empty()
+                          ? qualify_once_(module_name, s.name)
+                          : qualify_once_(s.ns_path, s.name);
         }
         // Type base local ya construido: se usa DIRECTO (sin resolve_type_string)
         // porque el struct que porta el metodo todavia no esta registrado cuando
@@ -1729,15 +1755,12 @@ void import_vxi_into_typechecker(
         // justo lo que TYPEDEF_NEW ya hace via stable_nominal_id.
         std::string canon;
         {
-            std::string nsm;
-            for (char c : s.ns_path)
-                nsm += (c == '.') ? std::string("__") : std::string(1, c);
             // MISMA regla que la ruta namespaced (PASE 1b): sin `namespace`
             // declarado, la clave es `<modulo>__<nombre>`.  Si aqui se usara el
             // nombre pelado, un newtype importado con `only` obtendria un
             // stable_nominal_id distinto al de las firmas -> dos identidades.
-            canon = s.ns_path.empty() ? (module_name + "__" + s.name)
-                                      : (nsm + "__" + s.name);
+            canon = s.ns_path.empty() ? qualify_once_(module_name, s.name)
+                                      : qualify_once_(s.ns_path, s.name);
         }
 
         // Recordar el ORIGEN del simbolo importado (namespace donde se declara
@@ -2125,20 +2148,9 @@ void register_namespace_for_import(TypeChecker &tc,
         // Depende de que `ns_path` sobreviva a los re-exports (lo garantiza el
         // registro del origen al importar): sin eso, los nombres ya venian
         // cualificados y volver a prefijarlos daba `ch__top__ch__base__handle`.
-        std::string mangled_pre;
-        if (s.ns_path.empty()) {
-            mangled_pre = module_name + "__" + s.name;
-        } else {
-            mangled_pre.reserve(s.ns_path.size() + s.name.size() + 4);
-            for (const char c : s.ns_path) {
-                if (c == '.')
-                    mangled_pre += "__";
-                else
-                    mangled_pre.push_back(c);
-            }
-            mangled_pre += "__";
-            mangled_pre += s.name;
-        }
+        const std::string mangled_pre =
+            s.ns_path.empty() ? qualify_once_(module_name, s.name)
+                              : qualify_once_(s.ns_path, s.name);
         switch (s.kind) {
         case VxiSymbolKind::STRUCT: {
             StructLayout L;
