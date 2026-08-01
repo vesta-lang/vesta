@@ -725,7 +725,16 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
                 }
             }
         }
-        if (t.nominal_id != 0) {
+        // Un typedef es NEWTYPE si se declaro con `new`, no si su tipo lleva
+        // identidad nominal: un alias PLANO de un newtype la hereda -- porque
+        // es transparente, que es justo lo que un alias significa -- y con el
+        // criterio antiguo se exportaba como si fuera un tipo fuerte propio.
+        // Al importarlo se le fabricaba identidad, y `typedef uintptr HANDLE;`
+        // dejaba de unificar con `uintptr` en cuanto cruzaba de modulo.
+        //
+        // `newtype_underlying` solo tiene entrada para los declarados con
+        // `new`, asi que responde exactamente a la pregunta correcta.
+        if (t.nominal_id != 0 && tc.newtype_underlying(kv.first) != nullptr) {
             s.kind = VxiSymbolKind::TYPEDEF_NEW;
             s.is_opaque = t.is_opaque;
             s.align_override = t.align_override;

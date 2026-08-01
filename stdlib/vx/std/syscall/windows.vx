@@ -127,7 +127,10 @@ public ULONG NtGetCurrentProcessorNumberEx(PPROCESSOR_NUMBER ProcNumber) {
  * @return Handle valido para las syscalls de memoria de este proceso.
  */
 public HANDLE NtCurrentProcess() {
-    return (void*) 0xFFFFFFFFFFFFFFFF;
+    // -1 como valor centinela que el kernel reconoce, no como direccion que
+    // nadie vaya a dereferenciar.  Sin cast: un literal entero no tiene tipo
+    // propio y toma el del contexto.
+    return 0xFFFFFFFFFFFFFFFF;
 }
 
 // ===================================================================

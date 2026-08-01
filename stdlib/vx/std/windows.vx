@@ -10,7 +10,7 @@ import std.ctypes only int, short_int, long_int, long_long,
 // tambien los re-exporta) recibe el mismo simbolo, sin error de redefinicion.
 public import std.ntwindows only ULONG, LONG, USHORT, UCHAR, PVOID, HANDLE,
                                  SIZE_T, PHANDLE, PULONG, ACCESS_MASK,
-                                 PWSTR;
+                                 PWSTR, PROCESSOR_NUMBER, PPROCESSOR_NUMBER;
 
 public const u16 PATH_MAX = 260;
 
@@ -1398,12 +1398,11 @@ typedef struct _MEMORYSTATUSEX {
     DWORDLONG ullAvailExtendedVirtual;
 } MEMORYSTATUSEX, *LPMEMORYSTATUSEX;
 
-/* Processor: */
-typedef struct _PROCESSOR_NUMBER {
-    WORD Group;
-    BYTE Number;
-    BYTE Reserved;
-} PROCESSOR_NUMBER, *PPROCESSOR_NUMBER;
+/* Processor: PROCESSOR_NUMBER y PPROCESSOR_NUMBER se re-exportan de
+ * std.ntwindows (arriba).  Declararlos tambien aqui creaba DOS tipos con el
+ * mismo nombre, y un consumidor que importase ambos modulos recibia
+ * "std__windows__PROCESSOR_NUMBER* incompatible con
+ * std__ntwindows__PROCESSOR_NUMBER*" al pasar uno donde se espera el otro. */
 
 
 public const u16 ALL_PROCESSOR_GROUPS      = 0xffff;

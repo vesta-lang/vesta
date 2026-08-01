@@ -28,8 +28,12 @@ public typedef u16 USHORT;
 public typedef u8 UCHAR;
 /// Puntero generico (void *).
 public typedef void* PVOID;
-/// Handle opaco del kernel (`void *`).
-public typedef void* HANDLE;
+/// Handle opaco del kernel.  No es un puntero a datos que nadie vaya a
+/// dereferenciar: es un valor que solo el kernel interpreta, y
+/// `NtCurrentProcess` devuelve un pseudo-handle (-1) que ni siquiera es una
+/// direccion valida.  Se expresa con el tipo de direcciones del lenguaje para
+/// poder compararlo con `nullptr` sin conversiones.
+public typedef uintptr HANDLE;
 
 /**
  * Numero de procesador logico (winnt.h): grupo del procesador + numero

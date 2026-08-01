@@ -1,0 +1,239 @@
+/**
+ * @file 342_syscalls_os.vx
+ * @brief Syscalls del SO por la capa `std.syscall`, seleccionadas con @Target.
+ *
+ * Ejercita la capa de syscalls de VERDAD -- sin pasar por kernel32 ni por libc
+ * -- en las dos plataformas, eligiendo la implementacion al compilar:
+ *
+ *   Windows (>= 5 syscalls NT):  NtCurrentProcess, NtAllocateVirtualMemory,
+ *                                NtProtectVirtualMemory, NtFreeVirtualMemory,
+ *                                NtGetCurrentProcessorNumberEx.
+ *   Linux   (>= 5 syscalls):     getpid, mmap, open, write, close, munmap.
+ *
+ * Un solo `import std.syscall`: elegir el modulo segun el sistema es cosa de la
+ * libreria, no de quien la usa.  Las constantes tampoco se declaran aqui --
+ * vienen de `std.windows` y de `std.unix` -- porque un numero magico repetido
+ * en cada programa deja de estar bajo el control de la libreria.
+ *
+ * Escrito SIN un solo cast y usando `nullptr`/`uintptr` en lugar de `void*` y
+ * de ceros crudos, a proposito: si algo de esto no compilase, la conclusion es
+ * que hay una limitacion que arreglar en el lenguaje o en la stdlib, no que el
+ * ejemplo deba maquillarse con conversiones.
+ *
+ * Ninguna rama usa rutas absolutas: la de Windows trabaja solo con memoria
+ * virtual y con el proceso actual, y la de Linux escribe en /dev/null.  Asi el
+ * test no depende de permisos ni de que exista un directorio concreto.
+ *
+ * Cada paso incrementa el acumulador SOLO si la syscall dijo que fue bien, de
+ * modo que un fallo silencioso (un NTSTATUS negativo que nadie mira) cambia el
+ * resultado en vez de pasar desapercibido.  R0 == 42 significa que salieron
+ * todas; cualquier otro valor dice cuantas llegaron a completarse.
+ */
+namespace ejemplos.syscalls_os;
+
+// `only *` trae los simbolos al scope.  Un import PLANO (`import std.syscall;`)
+// solo registraria el namespace para acceso cualificado, que es la forma
+// deliberada de la libreria: quien la usa decide si quiere las syscalls del
+// sistema sueltas en su scope o cualificadas.
+import std.syscall only *;
+import std.types only nullptr, uintptr;
+
+// Las constantes de memoria (MEM_*, PAGE_*) son de la API Win32, no de la capa
+// NT, asi que viven en std.windows y se piden aparte.
+@Target("os:windows")
+import std.windows only *;
+
+@Target("os:linux")
+import std.unix only *;
+
+/// Pasos que debe completar cada rama para considerarse correcta.
+const i32 PASOS_ESPERADOS = 6;
+
+/// Valor que devuelve el programa cuando todos los pasos salieron bien.
+const i32 EXITO = 42;
+
+/// Patron reconocible que se escribe y se relee en la pagina reservada.
+const u64 PATRON = 0xCAFEBABE;
+
+/// Tamano de la region de memoria que se reserva en ambas ramas.
+const u64 TAM_PAGINA = 4096;
+
+// ---------------------------------------------------------------------------
+// Windows: memoria virtual y consulta del proceso, todo por la capa NT.
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Ejercita cinco syscalls NT sobre memoria virtual y proceso actual.
+ * @return @c EXITO si los seis pasos salieron bien; si no, cuantos lo hicieron.
+ */
+@Target("os:windows")
+i32 corre()
+{
+    i32 puntos = 0;
+
+    // (1) Pseudo-handle del proceso actual.
+    HANDLE proc = NtCurrentProcess();
+
+    if (proc != nullptr)
+    {
+        puntos++;
+    }
+
+    // (2) Reservar y confirmar una pagina.  `base` entra a nullptr (que elija
+    //     el kernel) y sale con la direccion concedida; `tam` sale redondeado
+    //     al tamano de pagina real.
+    uintptr base = nullptr;
+    SIZE_T  tam  = TAM_PAGINA;
+
+    NTSTATUS st = NtAllocateVirtualMemory(proc,
+                                          &base,
+                                          0,
+                                          &tam,
+                                          MEM_COMMIT | MEM_RESERVE,
+                                          PAGE_READWRITE);
+
+    if (st == STATUS_SUCCESS && base != nullptr)
+    {
+        puntos++;
+    }
+
+    // Escribir y releer comprueba que la pagina es utilizable de verdad, no
+    // solo que la syscall devolvio cero.
+    // La conversion direccion -> puntero es EXPLICITA a proposito: a partir de
+    // aqui se va a dereferenciar, y eso merece verse en el codigo.
+    u64* celda = (u64*) base;
+    *celda = PATRON;
+
+    if (*celda == PATRON)
+    {
+        puntos++;
+    }
+
+    // (3) Cambiar la proteccion a solo-lectura.  OldProtect es obligatorio:
+    //     la syscall no admite null ahi.
+    ULONG anterior = 0;
+
+    st = NtProtectVirtualMemory(proc, &base, &tam, PAGE_READONLY, &anterior);
+
+    if (st == STATUS_SUCCESS)
+    {
+        puntos++;
+    }
+
+    // (4) Liberar.  Con MEM_RELEASE el tamano DEBE ser cero y la direccion la
+    //     que concedio la reserva.
+    SIZE_T cero = 0;
+
+    st = NtFreeVirtualMemory(proc, &base, &cero, MEM_RELEASE);
+
+    if (st == STATUS_SUCCESS)
+    {
+        puntos++;
+    }
+
+    // (5) Procesador logico actual: basta con que la syscall responda.
+    PROCESSOR_NUMBER cpu;
+
+    NtGetCurrentProcessorNumberEx(&cpu);
+    puntos++;
+
+    println("windows: ${puntos}/${PASOS_ESPERADOS} pasos NT OK");
+
+    if (puntos != PASOS_ESPERADOS)
+    {
+        return puntos;
+    }
+
+    return EXITO;
+}
+
+// ---------------------------------------------------------------------------
+// Linux: memoria anonima y E/S contra /dev/null, todo por syscall directa.
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Ejercita seis syscalls Linux sobre memoria anonima y descriptores.
+ * @return @c EXITO si los seis pasos salieron bien; si no, cuantos lo hicieron.
+ */
+@Target("os:linux")
+i32 corre()
+{
+    i32 puntos = 0;
+
+    // (1) PID del proceso actual.
+    i32 pid = getpid();
+
+    if (pid > 0)
+    {
+        puntos++;
+    }
+
+    // (2) Mapear una pagina anonima.  mmap NO devuelve nullptr al fallar, sino
+    //     MAP_FAILED (-1 como puntero), asi que se compara contra eso.
+    uintptr pag = mmap(nullptr,
+                       TAM_PAGINA,
+                       PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS,
+                       -1,
+                       0);
+
+    if (pag != MAP_FAILED)
+    {
+        puntos++;
+    }
+
+    // Escribir y releer, igual que en la rama de Windows.
+    u64* celda = pag;
+    *celda = PATRON;
+
+    if (*celda == PATRON)
+    {
+        puntos++;
+    }
+
+    // (3) Abrir /dev/null.
+    string ruta = "/dev/null";
+    i32 fd = open(ruta.cstr(), O_WRONLY, 0);
+
+    if (fd >= 0)
+    {
+        puntos++;
+    }
+
+    // (4) Escribir en el: se comprueba el numero de bytes, no solo que no diera
+    //     error, porque una escritura parcial tambien devuelve exito.
+    string  texto = "vx";
+    ssize_t n     = write(fd, texto.cstr(), texto.bytes());
+
+    if (n == texto.bytes())
+    {
+        puntos++;
+    }
+
+    // (5) Cerrar el descriptor.
+    if (close(fd) == 0)
+    {
+        puntos++;
+    }
+
+    // (6) Devolver la pagina al sistema.
+    munmap(pag, TAM_PAGINA);
+
+    println("linux: ${puntos}/${PASOS_ESPERADOS} pasos de syscall OK");
+
+    if (puntos != PASOS_ESPERADOS)
+    {
+        return puntos;
+    }
+
+    return EXITO;
+}
+
+/**
+ * @brief Punto de entrada: delega en la rama del sistema en que se compilo.
+ * @return @c EXITO (42) si todas las syscalls de esa plataforma salieron bien.
+ */
+i32 main()
+{
+    return corre();
+}
