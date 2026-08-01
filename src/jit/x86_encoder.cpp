@@ -1809,6 +1809,19 @@ void X86Encoder::emit_mov(MFunction &fn, const MInstr &mi,
         const uint32_t idx = static_cast<uint32_t>(src.value);
         const uint64_t v64 =
             (idx < fn.imm64_pool.size()) ? fn.imm64_pool[idx] : 0;
+        /* x86-32 NO tiene esta forma: no hay REX ni inmediatos de 64 bits en un
+         * registro que solo tiene 32.  Se emitia igualmente `B8+r` con OCHO
+         * bytes detras, asi que el desensamblado se descarrilaba a mitad -- el
+         * procesador leia los 4 bytes sobrantes COMO CODIGO.  Sintoma tipico:
+         * cargar un literal de texto acababa ejecutando el propio texto.
+         * Aqui solo cabe la mitad baja; el emisor que necesite los 64 bits
+         * completos debe partirlos en dos mitades ANTES de llegar a este punto
+         * (en 32 bits un valor de 64 vive en un PAR de registros). */
+        if (mode32_) {
+            put8(out, 0xB8 + (dst.reg & 7));
+            put32(out, static_cast<uint32_t>(v64));
+            return;
+        }
         /* MOV r64, imm64: REX.W + B8+r + imm64 */
         put_rex(out, true, 0, dst.reg);
         put8(out, 0xB8 + (dst.reg & 7));

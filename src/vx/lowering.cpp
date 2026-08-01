@@ -34776,9 +34776,15 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
                             const std::vector<uint8_t> &data) {
         uint64_t pos = 0;
         const uint64_t total_w = data.size();
-        for (; pos + 8 <= total_w; pos += 8)
-            buf_store_at(v_base, base_off + pos, pack(data, pos, 8),
-                         ir::IrType::I64);
+        // En un target de 32 bits un inmediato de 64 no existe: agrupar de
+        // ocho en ocho producia una constante que no cabe en un registro, el
+        // encoder la truncaba y el literal salia recortado.  Alli se agrupa de
+        // cuatro en cuatro.
+        const uint64_t paso = (asm_target_bits_ == 32) ? 4u : 8u;
+        for (; pos + paso <= total_w; pos += paso)
+            buf_store_at(v_base, base_off + pos,
+                         pack(data, pos, static_cast<int>(paso)),
+                         paso == 8 ? ir::IrType::I64 : ir::IrType::I32);
         if (pos + 4 <= total_w) {
             buf_store_at(v_base, base_off + pos, pack(data, pos, 4),
                          ir::IrType::I32);
@@ -34879,9 +34885,12 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
 
         uint64_t pos = 0;
         const uint64_t total_w = data.size(); // = cap
-        // Qwords (8B).
-        for (; pos + 8 <= total_w; pos += 8)
-            store_chunk(pos, pack(pos, 8), ir::IrType::I64);
+        // Qwords (8B) -- dwords si el target es de 32 bits, donde un inmediato
+        // de 64 no cabe en un registro (ver la nota del otro empaquetador).
+        const uint64_t paso = (asm_target_bits_ == 32) ? 4u : 8u;
+        for (; pos + paso <= total_w; pos += paso)
+            store_chunk(pos, pack(pos, static_cast<int>(paso)),
+                        paso == 8 ? ir::IrType::I64 : ir::IrType::I32);
         // Dword (4B).
         if (pos + 4 <= total_w) {
             store_chunk(pos, pack(pos, 4), ir::IrType::I32);
@@ -36342,8 +36351,15 @@ uint64_t Lowering::ensure_cpu_features_global() {
         al.source_line = ln;
         fn_->append(current_block_, std::move(al));
     }
-    fn_->asm_reg_bindings.push_back(
-        ir::AsmRegBinding{rax_slot, "rax", ir::IrType::U64, false, "__cpu_feat"});
+    // En modo protegido los registros son de 32 bits y `rax` no existe: el
+    // binding, y todo el cuerpo de abajo, se nombran segun el ANCHO DEL TARGET.
+    // Antes se emitia siempre en 64 bits, asi que en x86-32 el ensamblado
+    // fallaba ("xor rsi, rsi") y con el se caia la funcion ENTERA que hubiera
+    // disparado la deteccion -- normalmente `main`.
+    const bool bits32 = (asm_target_bits_ == 32);
+    fn_->asm_reg_bindings.push_back(ir::AsmRegBinding{
+        rax_slot, bits32 ? "eax" : "rax", ir::IrType::U64, false,
+        "__cpu_feat"});
 
     // --- bloque INLINE_ASM: deteccion + empaquetado completo, bitmask en rax ---
     // bit0=SSE2(L1.EDX.26) bit1=SSE4.2(L1.ECX.20) bit2=POPCNT(L1.ECX.23)
@@ -36415,13 +36431,31 @@ uint64_t Lowering::ensure_cpu_features_global() {
         // resultado -> rax (binding de salida)
         "mov rax, rsi\n";
 
+    // El cuerpo se escribe una sola vez, en 64 bits, y se reescribe a los
+    // nombres de 32 cuando toca: `cpuid` y todo lo que hace aqui (mascaras de
+    // 9 bits, desplazamientos) existe igual en modo protegido, lo unico que no
+    // existe alli son los registros anchos.
+    std::string asm_body_t = asm_body;
+    if (bits32) {
+        static const char *const kRegs[][2] = {
+            {"rax", "eax"}, {"rbx", "ebx"}, {"rcx", "ecx"},
+            {"rdx", "edx"}, {"rsi", "esi"}, {"rdi", "edi"}};
+        for (const auto &par : kRegs) {
+            size_t pos = 0;
+            while ((pos = asm_body_t.find(par[0], pos)) != std::string::npos) {
+                asm_body_t.replace(pos, 3, par[1]);
+                pos += 3;
+            }
+        }
+    }
+
     {
         ir::IrInstr ia{};
         ia.op = ir::IrOp::INLINE_ASM;
         ia.type = ir::IrType::VOID;
         ia.dst = ir::IR_NO_VALUE;
         ia.source_line = ln;
-        ia.func_name = asm_body;
+        ia.func_name = asm_body_t;
         ia.preserve = true; // volatile: nunca eliminar/reordenar.
 
         // Listar el slot del binding como operando (lo mantiene vivo + lo

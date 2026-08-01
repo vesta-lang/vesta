@@ -3974,6 +3974,13 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         in.func_name,
                         mode32 ? vx::AsmArch::X86_32 : vx::AsmArch::X86_64);
                     if (!ar.ok || ar.bytes.empty()) {
+                        if (std::getenv("VESTA_JIT_VREGS_DEBUG"))
+                            std::fprintf(stderr,
+                                         "[vreg-sel] asm que no ensambla (%s):"
+                                         " <<%s>> error: %s\n",
+                                         mode32 ? "x86-32" : "x86-64",
+                                         in.func_name.c_str(),
+                                         ar.error.c_str());
                         vreg_dbg(fn.name.c_str(), "inline-asm(assemble-fail)");
                         return false;
                     }

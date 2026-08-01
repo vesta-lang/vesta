@@ -64,7 +64,7 @@
 namespace std.atomic;
 
 // ===========================================================================
-//  x86-64: lock cmpxchg / lock xadd / xchg / mfence / pause.
+//  x86 (64 y 32 bits): lock cmpxchg / lock xadd / xchg / mfence / pause.
 // ===========================================================================
 
 // Los primitivos de 64 bits (cas/add/load/store) usan los BUILTINS del lenguaje
@@ -73,10 +73,17 @@ namespace std.atomic;
 // lock xadd / mov) con el regalloc gestionando los registros -> SIN inline-asm
 // (que en Win64 corrompia un valor vivo del caller: rsi/rdi/r8... como scratch
 // del asm no se modelaban como clobber).  Interfaz amigable + composable encima.
+//
+// Valen IGUAL en 32 bits: el backend ya sabe operar 64 bits ahi (verificado con
+// valores cuya mitad ALTA no se conoce al compilar, que es lo unico que
+// distingue un i64 de verdad de uno que cabe en 32).  `mfence` y `pause` existen
+// en modo protegido, asi que la seccion entera sirve para las dos.  Antes solo
+// estaba declarada para x86_64, y eso dejaba el slab allocator sin compilar en
+// 32 bits -- con el, cualquier programa que usara malloc.
 
 /// CAS de 64 bits: si `*addr == expected` escribe `desired`.  Devuelve el valor
 /// ANTIGUO (== expected si triunfo).  Barrera completa (lock cmpxchg).
-@Target("arch:x86_64")
+@Target("arch:x86_64 || arch:x86")
 @nothrow
 @nopanic
 @alloc(partial: 0, total: 0)
@@ -88,7 +95,7 @@ public i64 atomic_cas64(i64* addr, i64 expected, i64 desired) {
 }
 
 /// fetch-and-add de 64 bits.  Devuelve el valor ANTIGUO (lock xadd).
-@Target("arch:x86_64")
+@Target("arch:x86_64 || arch:x86")
 @nothrow
 @nopanic
 @alloc(partial: 0, total: 0)
@@ -102,7 +109,7 @@ public i64 atomic_add64(i64* addr, i64 delta) {
 /// exchange atomico.  Devuelve el valor ANTIGUO.  COMPUESTO sobre CAS (no hay
 /// builtin de swap): bucle CAS hasta triunfar.  La n son los REINTENTOS: sin
 /// contencion el CAS triunfa a la primera (O(1) amortizado).
-@Target("arch:x86_64")
+@Target("arch:x86_64 || arch:x86")
 @nothrow
 @nopanic
 @alloc(partial: 0, total: 0)
@@ -118,7 +125,7 @@ public i64 atomic_swap64(i64* addr, i64 v) {
 }
 
 /// Load atomico de 64 bits (mov alineado ya es atomico; acquire gratis en TSO).
-@Target("arch:x86_64")
+@Target("arch:x86_64 || arch:x86")
 @nothrow
 @nopanic
 @alloc(partial: 0, total: 0)
@@ -130,7 +137,7 @@ public i64 atomic_load64(i64* addr) {
 }
 
 /// Store atomico de 64 bits (mov alineado; release en x86-TSO).
-@Target("arch:x86_64")
+@Target("arch:x86_64 || arch:x86")
 @nothrow
 @nopanic
 @alloc(partial: 0, total: 0)
@@ -142,7 +149,7 @@ public void atomic_store64(i64* addr, i64 v) {
 }
 
 /// Barrera de memoria COMPLETA (StoreLoad; x86 solo reordena Store->Load).
-@Target("arch:x86_64")
+@Target("arch:x86_64 || arch:x86")
 @nothrow
 @nopanic
 @alloc(partial: 0, total: 0)
@@ -154,7 +161,7 @@ public void atomic_fence() {
 }
 
 /// Hint de spin para un bucle de espera activa (`pause`).
-@Target("arch:x86_64")
+@Target("arch:x86_64 || arch:x86")
 @nothrow
 @nopanic
 @alloc(partial: 0, total: 0)

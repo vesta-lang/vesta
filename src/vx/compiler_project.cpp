@@ -2013,6 +2013,12 @@ CompileResult compile_vx_project(
         // modulos del proyecto (no solo al single-file).  Sin esto los deps
         // se bajaban en modo Full (GC) y el IR mergeado no era AOT-compatible.
         lo.set_native_poo(opts.native_poo);
+        // Ancho del target para el inline-asm que GENERA el lowering (el
+        // detector de features de CPU, los helpers @Naked...).  El camino de
+        // fichero suelto ya lo propagaba; este no, asi que al compilar un
+        // proyecto para x86-32 se emitian registros de 64 bits y el ensamblado
+        // fallaba, tumbando la funcion entera al interprete.
+        lo.set_asm_target_bits(opts.asm_target_bits);
         // CPU dispatch Inc 5b: aplicar los @HelperOverride agregados (root +
         // imports, ya resueltos por precedencia en el pre-pase) SOLO al
         // modulo ROOT, que es quien emite __vx_memcpy_init / __vx_strdisp_init.
