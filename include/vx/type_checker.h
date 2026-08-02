@@ -2078,7 +2078,8 @@ private:
         // lados son el mismo tipo.  Se exige que coincida el ancho y el signo,
         // asi que no abre la puerta a mezclar enteros de cualquier tipo.
         if (target.is_valued_enum && target.kind == value.kind &&
-            (value.struct_name.empty() || value.struct_name == target.struct_name))
+            (value.struct_name.empty() ||
+             value.struct_name == target.struct_name))
             return true;
         return newtype_implicit_conv_ok_(target, value);
     }
@@ -2371,6 +2372,15 @@ private:
         class_layouts_[name] = std::move(L);
     }
     void register_imported_enum(const std::string &name, EnumLayout L) {
+        if (getenv("VX_DBG_REG"))
+        {
+            fprintf(stderr, "[REG] %s is_valued=%d nvars=%d:", name.c_str(),
+                    (int)L.is_valued, (int)L.variants.size());
+            for (const auto &v : L.variants)
+                fprintf(stderr, " %s=%lld", v.name.c_str(),
+                        (long long)v.int_value);
+            fprintf(stderr, "\n");
+        }
         enum_layouts_[name] = std::move(L);
     }
     /**
