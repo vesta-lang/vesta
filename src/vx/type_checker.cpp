@@ -11977,7 +11977,18 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                             s.sig_index = (uint32_t)function_sigs_.size();
                             sig_by_name_[mangled] = s.sig_index;
                             function_sigs_.push_back(std::move(sig));
-                            (void)declare(mangled, s);
+                            // La instancia es una funcion GLOBAL, asi que va al
+                            // scope global y no al que este abierto ahora.  Con
+                            // `declare` acababa en el scope de quien la llamo:
+                            // desde `main` daba igual, pero desde el cuerpo de
+                            // un metodo moria al cerrarse ese scope, y cuando el
+                            // aplanado de la herencia vuelve a revisar el metodo
+                            // -- ya con el nombre reescrito al de la instancia --
+                            // nadie la reconocia: "funcion no declarada:
+                            // 'copia_u64'".  Una generica solo se podia llamar
+                            // desde una funcion libre.
+                            if (!scopes_.empty())
+                                scopes_.front().emplace(mangled, s);
                             break;
                         }
                     }
