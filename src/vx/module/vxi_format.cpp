@@ -424,6 +424,9 @@ static void emit_payload_for_enum(std::vector<uint8_t> &payload,
             write_u32(payload, to);
             write_u32(payload, static_cast<uint32_t>(pt.size()));
         }
+        // v15: valor de la variante (enums C-style, `Less = -1`).  Sin esto
+        // un enum con valor importado llegaba con sus variantes sin valor.
+        write_u64(payload, static_cast<uint64_t>(v.int_value));
     }
     // NS.2 (v8): ns_path del enum al final del payload (off+len).
     const uint32_t nsp_off = pool.intern(sym.ns_path);
@@ -1074,6 +1077,10 @@ static bool parse_payload_enum(const uint8_t *data, size_t size,
                 return false;
             v.payload_types.push_back(std::move(tnm));
         }
+        // v15: valor de la variante (enums C-style).
+        uint64_t raw_val = 0;
+        if (!read_u64(data, size, off, raw_val)) return false;
+        v.int_value = static_cast<int64_t>(raw_val);
         out.variants.push_back(std::move(v));
     }
     // NS.2 (v8): ns_path del enum al final (off+len; guardado defensivo).

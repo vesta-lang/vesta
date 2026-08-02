@@ -2654,7 +2654,7 @@ Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
                 // Backing struct/clase: el enum ES ese tipo (un valor de Color
                 // es un Rgb) -> devolver el tipo base con su nombre.
                 if (!it_e->second.backing_type_name.empty()) {
-                    Type vt{it_e->second.backing};
+                                        Type vt{it_e->second.backing};
                     vt.struct_name = it_e->second.backing_type_name;
                     return vt;
                 }

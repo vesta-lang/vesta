@@ -76,6 +76,15 @@ static std::string canonical_typename_of(const Type &t) {
     if (t.nominal_id != 0 && !t.nominal_name.empty() && is_integral(t.kind)) {
         return t.nominal_name + "#" + type_to_string(Type{t.kind});
     }
+    // Enum con valor: su `kind` es el del entero que lo respalda, asi que sin
+    // el nombre viajaba como ese entero a secas.  Un metodo que devolvia
+    // `Ordering` llegaba al consumidor devolviendo `i8`, y comparar el
+    // resultado con `Ordering.Less` no compilaba: el enum perdia su identidad
+    // al cruzar el modulo.  El marcador `enum:` lo distingue de un newtype, que
+    // se reconstruye de otra forma.
+    if (t.is_valued_enum && !t.struct_name.empty()) {
+        return t.struct_name + "#enum:" + type_to_string(Type{t.kind});
+    }
     // Tipos COMPUESTOS: recursar en cada sub-tipo con canonical_typename_of (no
     // con type_to_string) para que los newtypes ANIDADOS -- Optional<fiber>,
     // fiber*, Result<fiber, i32>, fn(fiber) -> ... -- tambien lleven su
@@ -243,6 +252,15 @@ Type TypeChecker::resolve_type_string(const std::string &type_str) const {
         const size_t hp = type_str.find('#');
         const std::string name = type_str.substr(0, hp);
         const std::string under = type_str.substr(hp + 1);
+        // Enum con valor: se reconstruye COMO ENUM (entero de respaldo + marca
+        // + nombre), no como newtype, para que unifique con el mismo enum del
+        // consumidor.
+        if (under.rfind("enum:", 0) == 0) {
+            Type ev = resolve_type_string(under.substr(5));
+            ev.is_valued_enum = true;
+            ev.struct_name = name;
+            return ev;
+        }
         auto it_local = type_aliases_.find(name);
         if (it_local != type_aliases_.end()) return it_local->second;
         Type u = resolve_type_string(under); // primitivo subyacente
@@ -950,11 +968,20 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         // memoria adjacente.
         s.size_bytes = layout.size_bytes;
         s.align_bytes = 8;
+        // Enum con VALOR (`enum Ordering : i8 { Less = -1, ... }`): hay que
+        // llevarse tambien el tipo que lo respalda y el valor de cada
+        // variante.  Sin ellos, el consumidor recibia un enum "a secas": sus
+        // variantes no valian -1/0/1 sino basura, y comparar dos de ellas
+        // daba falso.
+        if (layout.is_valued) {
+            s.underlying_type = type_to_string(Type{layout.backing});
+        }
         s.variants.reserve(layout.variants.size());
         for (const auto &v : layout.variants) {
             VxiSymbol::EnumVariant ev;
             ev.name = v.name;
             ev.tag = v.tag;
+            ev.int_value = v.int_value;
             ev.payload_types.reserve(v.field_types.size());
             for (const auto &ft : v.field_types) {
                 ev.payload_types.push_back(canonical_typename_of(ft));
@@ -2014,10 +2041,19 @@ void import_vxi_into_typechecker(
             // (`lib.Op.Nop` con size=0 -> el siguiente alloca pisa
             // el tag de Nop).
             L.size_bytes = static_cast<uint32_t>(s.size_bytes);
+            // Enum con valor: recuperar el tipo de respaldo y los valores.
+            if (!s.underlying_type.empty()) {
+                const Type bt = tc.resolve_type_string(s.underlying_type);
+                if (bt.kind != PrimitiveKind::VOID) {
+                    L.is_valued = true;
+                    L.backing = bt.kind;
+                }
+            }
             for (const auto &v : s.variants) {
                 EnumVariantInfo ev;
                 ev.name = v.name;
                 ev.tag = v.tag;
+                ev.int_value = v.int_value;
                 ev.field_types.reserve(v.payload_types.size());
                 for (const auto &pt : v.payload_types) {
                     ev.field_types.push_back(tc.resolve_type_string(pt));
@@ -2224,6 +2260,25 @@ void register_namespace_for_import(TypeChecker &tc,
             EnumLayout L;
             L.name = mangled_pre;
             L.size_bytes = static_cast<uint32_t>(s.size_bytes);
+            // El esqueleto tambien lleva si el enum es CON VALOR y su tipo de
+            // respaldo: de lo contrario, entre este registro y el definitivo,
+            // cualquier uso lo tomaba por un enum de variantes y bajaba a un
+            // `make_variant` -- las variantes acababan siendo direcciones de
+            // buffers en vez de -1/0/1.
+            if (!s.underlying_type.empty()) {
+                const Type bt = tc.resolve_type_string(s.underlying_type);
+                if (bt.kind != PrimitiveKind::VOID) {
+                    L.is_valued = true;
+                    L.backing = bt.kind;
+                }
+            }
+            for (const auto &v : s.variants) {
+                EnumVariantInfo ev;
+                ev.name = v.name;
+                ev.tag = v.tag;
+                ev.int_value = v.int_value;
+                L.variants.push_back(std::move(ev));
+            }
             tc.register_imported_enum(mangled_pre, std::move(L));
             tc.mark_imported(mangled_pre, /*is_reexport=*/false);
             break;
@@ -2350,10 +2405,19 @@ void register_namespace_for_import(TypeChecker &tc,
             L.name = mangled;
             L.variants.reserve(s.variants.size());
             L.size_bytes = static_cast<uint32_t>(s.size_bytes);
+            // Enum con valor: recuperar el tipo de respaldo y los valores.
+            if (!s.underlying_type.empty()) {
+                const Type bt = tc.resolve_type_string(s.underlying_type);
+                if (bt.kind != PrimitiveKind::VOID) {
+                    L.is_valued = true;
+                    L.backing = bt.kind;
+                }
+            }
             for (const auto &v : s.variants) {
                 EnumVariantInfo ev;
                 ev.name = v.name;
                 ev.tag = v.tag;
+                ev.int_value = v.int_value;
                 ev.field_types.reserve(v.payload_types.size());
                 for (const auto &pt : v.payload_types) {
                     ev.field_types.push_back(resolve_with_mangled_fallback(pt));

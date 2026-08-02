@@ -2071,6 +2071,15 @@ private:
      */
     bool types_assignable(const Type &target, const Type &value) const {
         if (vx::types_assignable(target, value)) return true;
+        // Un enum con VALOR es su tipo base: `enum Ordering : i8` ES un `i8`
+        // etiquetado.  Asignarle un valor de ese mismo entero -- p.ej. el que
+        // devuelve un metodo importado de otro modulo -- es legitimo, y sin
+        // esto un `Ordering o = a.ucmp(b);` se rechazaba pese a que ambos
+        // lados son el mismo tipo.  Se exige que coincida el ancho y el signo,
+        // asi que no abre la puerta a mezclar enteros de cualquier tipo.
+        if (target.is_valued_enum && target.kind == value.kind &&
+            (value.struct_name.empty() || value.struct_name == target.struct_name))
+            return true;
         return newtype_implicit_conv_ok_(target, value);
     }
 
