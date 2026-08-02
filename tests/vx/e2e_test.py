@@ -2760,6 +2760,7 @@ r0_case("panic_modulo_importado", "enlace: modulo importado con panic() + global
 # Sin AOT: capturar con try/catch exige el desenrollado nativo de
 # excepciones, que sigue pendiente (el binario nativo aborta en vez de
 # entrar al handler).  En interprete y JIT el FatalError si se captura.
+r0_case("wideint_512", "u512: tercer piso, acarreo entre mitades de 256 y division contrastada con la mul", "354_wideint_512.vx", 42)
 r0_case("wideint_256_div", "u256/i256: division shift-resta, contrastada con la multiplicacion", "353_wideint_256_div.vx", 42)
 r0_case("wideint_256_mul", "u256: multiplicacion modular y producto completo de 128x128", "352_wideint_256_mul.vx", 42)
 r0_case("wideint_carry", "acarreo y prestamo como primitivas de u128, propagados por Wide256", "351_wideint_carry.vx", 42)

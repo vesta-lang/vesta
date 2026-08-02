@@ -967,6 +967,33 @@ public struct Wide256 {
     }
 
     /**
+     * @brief Suma indicando si se desbordo.
+     *
+     * Igual que en el piso de abajo: el acarreo lo produce esta suma y lo
+     * devuelve ella, para que quien componga 512 no tenga que deducirlo.
+     *
+     * @param rhs Segundo sumando.
+     * @param carry_out Recibe `true` si la suma desbordo los 256 bits.
+     * @return `this + rhs` truncado a 256 bits.
+     */
+    public Self add_with_carry(Self rhs, bool* carry_out) {
+        Self r = this + rhs;
+        (*carry_out) = (r.ucmp(this) == Ordering.Less);
+        return r;
+    }
+
+    /**
+     * @brief Resta indicando si hubo que pedir prestado.
+     * @param rhs Sustraendo.
+     * @param borrow_out Recibe `true` si la resta pidio prestado.
+     * @return `this - rhs` truncado a 256 bits.
+     */
+    public Self sub_with_borrow(Self rhs, bool* borrow_out) {
+        (*borrow_out) = (this.ucmp(rhs) == Ordering.Less);
+        return this - rhs;
+    }
+
+    /**
      * @brief AND bit a bit.
      * @param o Segundo operando.
      * @return `this & o`.
@@ -1589,5 +1616,481 @@ public struct i256 : Wide256 {
      */
     public bool __ge__(i256 o) {
         return !(this < o);
+    }
+}
+
+// ===========================================================================
+//  Wide512 -- base abstracta de 512 bits, compuesta de dos mitades de 256.
+// ===========================================================================
+
+/**
+ * @brief Base abstracta con la logica comun de 512 bits (no instanciable).
+ *
+ * Tercer piso de la misma construccion: dos mitades de @ref u256, siempre sin
+ * signo, con el acarreo llegando ya resuelto desde abajo.  Al haber puesto las
+ * primitivas en su sitio, este nivel no compara nada para propagarlo: solo lo
+ * recibe.
+ */
+@Abstract
+public struct Wide512 {
+    union {
+        struct {
+            u256 lo256;
+            u256 hi256;
+        };
+        u8 bytes[64];
+    };
+
+    /**
+     * @brief Construye el valor cero.
+     * @return Un valor con todos los bits a 0.
+     */
+    public static Self zero() {
+        Self r;
+        r.lo256 = u256.zero();
+        r.hi256 = u256.zero();
+        return r;
+    }
+
+    /**
+     * @brief Construye el valor uno.
+     * @return Un valor cuya mitad baja es 1 y la alta 0.
+     */
+    public static Self one() {
+        Self r;
+        r.lo256 = u256.one();
+        r.hi256 = u256.zero();
+        return r;
+    }
+
+    /**
+     * @brief Extiende un `u64` al ancho completo.
+     * @param x Valor de 64 bits a promover.
+     * @return El valor de 512 bits cuya parte baja es @p x.
+     */
+    public static Self from_u64(u64 x) {
+        Self r;
+        r.lo256 = u256.from_u64(x);
+        r.hi256 = u256.zero();
+        return r;
+    }
+
+    /**
+     * @brief Extiende un `u256` al ancho completo.
+     * @param x Valor de 256 bits a promover.
+     * @return El valor de 512 bits cuya mitad baja es @p x.
+     */
+    public static Self from_u256(u256 x) {
+        Self r;
+        r.lo256 = x;
+        r.hi256 = u256.zero();
+        return r;
+    }
+
+    /**
+     * @brief Trunca el valor a sus 64 bits menos significativos.
+     * @return El limb mas bajo.
+     */
+    public u64 to_u64() {
+        return this.lo256.to_u64();
+    }
+
+    /**
+     * @brief Trunca el valor a sus 256 bits menos significativos.
+     * @return La mitad baja.
+     */
+    public u256 to_u256() {
+        return this.lo256;
+    }
+
+    /**
+     * @brief Suma modular de 512 bits.
+     * @param o Segundo sumando.
+     * @return `this + o` truncado a 512 bits.
+     */
+    public Self __add__(Self o) {
+        Self r;
+        bool carry = false;
+        r.lo256 = this.lo256.add_with_carry(o.lo256, &carry);
+        r.hi256 = this.hi256 + o.hi256;
+        if (carry) {
+            r.hi256 = r.hi256 + u256.one();
+        }
+        return r;
+    }
+
+    /**
+     * @brief Resta modular de 512 bits.
+     * @param o Sustraendo.
+     * @return `this - o` truncado a 512 bits.
+     */
+    public Self __sub__(Self o) {
+        Self r;
+        bool borrowed = false;
+        r.lo256 = this.lo256.sub_with_borrow(o.lo256, &borrowed);
+        r.hi256 = this.hi256 - o.hi256;
+        if (borrowed) {
+            r.hi256 = r.hi256 - u256.one();
+        }
+        return r;
+    }
+
+    /**
+     * @brief AND bit a bit.
+     * @param o Segundo operando.
+     * @return `this & o`.
+     */
+    public Self __and__(Self o) {
+        Self r;
+        r.lo256 = this.lo256 & o.lo256;
+        r.hi256 = this.hi256 & o.hi256;
+        return r;
+    }
+
+    /**
+     * @brief OR bit a bit.
+     * @param o Segundo operando.
+     * @return `this | o`.
+     */
+    public Self __or__(Self o) {
+        Self r;
+        r.lo256 = this.lo256 | o.lo256;
+        r.hi256 = this.hi256 | o.hi256;
+        return r;
+    }
+
+    /**
+     * @brief XOR bit a bit.
+     * @param o Segundo operando.
+     * @return `this ^ o`.
+     */
+    public Self __xor__(Self o) {
+        Self r;
+        r.lo256 = this.lo256 ^ o.lo256;
+        r.hi256 = this.hi256 ^ o.hi256;
+        return r;
+    }
+
+    /**
+     * @brief Complemento a uno (NOT bit a bit).
+     * @return `~this`.
+     */
+    public Self __invert__() {
+        Self r;
+        r.lo256 = ~this.lo256;
+        r.hi256 = ~this.hi256;
+        return r;
+    }
+
+    /**
+     * @brief Desplazamiento logico a la izquierda.
+     * @param n Numero de bits. `n >= 512` produce cero.
+     * @return `this << n` truncado a 512 bits.
+     */
+    public Self __lshift__(u64 n) {
+        Self r;
+        if (n == 0) {
+            r.lo256 = this.lo256;
+            r.hi256 = this.hi256;
+        } else if (n >= 512) {
+            r.lo256 = u256.zero();
+            r.hi256 = u256.zero();
+        } else if (n >= 256) {
+            r.hi256 = this.lo256 << (n - 256);
+            r.lo256 = u256.zero();
+        } else {
+            r.hi256 = (this.hi256 << n) | (this.lo256 >> (256 - n));
+            r.lo256 = this.lo256 << n;
+        }
+        return r;
+    }
+
+    /**
+     * @brief Producto modular de 512 bits.
+     *
+     * Mismo reparto que un piso mas abajo: el producto de las mitades bajas se
+     * toma COMPLETO, y de los cruzados basta con su parte baja porque solo
+     * alcanzan la mitad alta del resultado.
+     *
+     * @param o Segundo factor.
+     * @return `this * o` truncado a 512 bits.
+     */
+    public Self __mul__(Self o) {
+        Self full;
+        full.lo256 = u256.zero();
+        full.hi256 = u256.zero();
+
+        // Producto completo de las mitades bajas, armado con los productos
+        // exactos de 128x128 colocados por peso.
+        u256 a_lo = this.lo256;
+        u256 b_lo = o.lo256;
+        u256 p00 = u256.mul128_full(a_lo.lo128, b_lo.lo128);
+        u256 p11 = u256.mul128_full(a_lo.hi128, b_lo.hi128);
+        u256 p01 = u256.mul128_full(a_lo.lo128, b_lo.hi128);
+        u256 p10 = u256.mul128_full(a_lo.hi128, b_lo.lo128);
+
+        full.lo256 = p00;
+        full.hi256 = p11;
+        Self m1;
+        m1.lo256 = p01;
+        m1.hi256 = u256.zero();
+        Self m2;
+        m2.lo256 = p10;
+        m2.hi256 = u256.zero();
+        full = full + (m1 << 128) + (m2 << 128);
+
+        full.hi256 = full.hi256 + this.lo256 * o.hi256 + this.hi256 * o.lo256;
+        return full;
+    }
+
+    /**
+     * @brief Igualdad bit a bit.
+     * @param o Valor a comparar.
+     * @return `true` si ambas mitades coinciden.
+     */
+    public bool __eq__(Self o) {
+        return this.lo256 == o.lo256 && this.hi256 == o.hi256;
+    }
+
+    /**
+     * @brief Desigualdad bit a bit.
+     * @param o Valor a comparar.
+     * @return `true` si alguna mitad difiere.
+     */
+    public bool __ne__(Self o) {
+        return !(this == o);
+    }
+
+    /**
+     * @brief Comprueba si el valor es cero.
+     * @return `true` si todos los bits estan a 0.
+     */
+    public bool is_zero() {
+        return this.lo256.is_zero() && this.hi256.is_zero();
+    }
+
+    /**
+     * @brief Conversion a booleano.
+     * @return `true` si el valor no es cero.
+     */
+    public bool __bool__() {
+        return !this.is_zero();
+    }
+
+    /**
+     * @brief Intercambia el valor con el de otro.
+     * @param o Puntero al valor con el que intercambiar.
+     */
+    public void swap(Self* o) {
+        Self tmp = this;
+        this.lo256 = o->lo256;
+        this.hi256 = o->hi256;
+        o->lo256 = tmp.lo256;
+        o->hi256 = tmp.hi256;
+    }
+
+    /**
+     * @brief Comparacion de tres vias SIN signo.
+     * @param o Valor a comparar.
+     * @return `Less`, `Equal` o `Greater`.
+     */
+    public Ordering ucmp(Self o) {
+        if (this.hi256 != o.hi256) {
+            if (this.hi256 < o.hi256) {
+                return Ordering.Less;
+            }
+            return Ordering.Greater;
+        }
+        if (this.lo256 != o.lo256) {
+            if (this.lo256 < o.lo256) {
+                return Ordering.Less;
+            }
+            return Ordering.Greater;
+        }
+        return Ordering.Equal;
+    }
+
+    /**
+     * @brief Division entera SIN signo por el metodo binario shift-resta.
+     *
+     * 512 vueltas fijas, sin dependencia de los valores.  Dividir por cero es
+     * responsabilidad de quien llama, igual que con un entero nativo.
+     *
+     * @param divisor Divisor sin signo.  Cero = fallo de division del hardware.
+     * @param rem_out Puntero de salida donde se deja el resto.
+     * @return El cociente entero sin signo.
+     */
+    public Self udivmod(Self divisor, Self* rem_out) {
+        if (divisor.is_zero()) {
+            u64 boom = 1 / divisor.lo256.lo128.lo64;
+            g_wideint_sink = boom;
+        }
+        Self q;
+        q.lo256 = u256.zero();
+        q.hi256 = u256.zero();
+        Self rem;
+        rem.lo256 = u256.zero();
+        rem.hi256 = u256.zero();
+
+        i64 i = 511;
+        while (i >= 0) {
+            rem = rem << 1;
+            u64 bit = 0;
+            if (i >= 256) {
+                bit = (this.hi256 >> ((u64) (i - 256))).lo128.lo64 & 1;
+            } else {
+                bit = (this.lo256 >> ((u64) i)).lo128.lo64 & 1;
+            }
+            if (bit != 0) {
+                rem.lo256 = rem.lo256 | u256.one();
+            }
+            if (rem.ucmp(divisor) != Ordering.Less) {
+                rem = rem - divisor;
+                if (i >= 256) {
+                    q.hi256 = q.hi256 | (u256.one() << ((u64) (i - 256)));
+                } else {
+                    q.lo256 = q.lo256 | (u256.one() << ((u64) i));
+                }
+            }
+            i = i - 1;
+        }
+        rem_out->lo256 = rem.lo256;
+        rem_out->hi256 = rem.hi256;
+        return q;
+    }
+}
+
+// ===========================================================================
+//  u512 -- entero de 512 bits sin signo.
+// ===========================================================================
+
+/**
+ * @brief Entero de 512 bits sin signo.
+ */
+public struct u512 : Wide512 {
+
+    /**
+     * @brief Mayor valor representable.
+     * @return `2^512 - 1`.
+     */
+    public static u512 max() {
+        u512 r;
+        r.lo256 = u256.max();
+        r.hi256 = u256.max();
+        return r;
+    }
+
+    /**
+     * @brief Menor valor representable.
+     * @return Cero.
+     */
+    public static u512 min() {
+        return u512.zero();
+    }
+
+    /**
+     * @brief Desplazamiento logico a la derecha.
+     * @param n Numero de bits. `n >= 512` produce cero.
+     * @return `this >> n`.
+     */
+    public u512 __rshift__(u64 n) {
+        u512 r;
+        if (n == 0) {
+            r.lo256 = this.lo256;
+            r.hi256 = this.hi256;
+        } else if (n >= 512) {
+            r.lo256 = u256.zero();
+            r.hi256 = u256.zero();
+        } else if (n >= 256) {
+            r.lo256 = this.hi256 >> (n - 256);
+            r.hi256 = u256.zero();
+        } else {
+            r.lo256 = (this.lo256 >> n) | (this.hi256 << (256 - n));
+            r.hi256 = this.hi256 >> n;
+        }
+        return r;
+    }
+
+    /**
+     * @brief Cociente entero sin signo.
+     * @param o Divisor.  Cero = fallo de division del hardware.
+     * @return `this / o`.
+     */
+    public u512 __div__(u512 o) {
+        u512 rem;
+        return this.udivmod(o, &rem);
+    }
+
+    /**
+     * @brief Resto entero sin signo.
+     * @param o Divisor.  Cero = fallo de division del hardware.
+     * @return `this % o`.
+     */
+    public u512 __mod__(u512 o) {
+        u512 rem;
+        this.udivmod(o, &rem);
+        return rem;
+    }
+
+    /**
+     * @brief Cociente que no aborta nunca.
+     * @param o Divisor.
+     * @return El cociente, o `None` si el divisor es cero.
+     */
+    public Optional<u512> checked_div(u512 o) {
+        if (o.is_zero()) {
+            return None();
+        }
+        u512 q = this / o;
+        return Some(q);
+    }
+
+    /**
+     * @brief Resto que no aborta nunca.
+     * @param o Divisor.
+     * @return El resto, o `None` si el divisor es cero.
+     */
+    public Optional<u512> checked_rem(u512 o) {
+        if (o.is_zero()) {
+            return None();
+        }
+        u512 r = this % o;
+        return Some(r);
+    }
+
+    /**
+     * @brief Menor que (sin signo).
+     * @param o Valor a comparar.
+     * @return `true` si `this < o`.
+     */
+    public bool __lt__(u512 o) {
+        return this.ucmp(o) == Ordering.Less;
+    }
+
+    /**
+     * @brief Mayor que (sin signo).
+     * @param o Valor a comparar.
+     * @return `true` si `this > o`.
+     */
+    public bool __gt__(u512 o) {
+        return this.ucmp(o) == Ordering.Greater;
+    }
+
+    /**
+     * @brief Menor o igual (sin signo).
+     * @param o Valor a comparar.
+     * @return `true` si `this <= o`.
+     */
+    public bool __le__(u512 o) {
+        return this.ucmp(o) != Ordering.Greater;
+    }
+
+    /**
+     * @brief Mayor o igual (sin signo).
+     * @param o Valor a comparar.
+     * @return `true` si `this >= o`.
+     */
+    public bool __ge__(u512 o) {
+        return this.ucmp(o) != Ordering.Less;
     }
 }
