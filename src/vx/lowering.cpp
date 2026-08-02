@@ -21657,15 +21657,29 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
             // generico emite un solo STORE de 8 bytes (ptr value), lo
             // que SOLO copia el primer qword del struct.  Para structs
             // reales necesitamos memcpy del payload completo.
-            if ((un->result_type.kind == PrimitiveKind::STRUCT ||
-                 un->result_type.kind == PrimitiveKind::ARRAY) &&
-                e->op == ast::AssignOp::Assign) {
+            // El tipo que manda es el de lo que se ASIGNA.  Mirar solo el del
+            // deref se queda corto en una instancia monomorfizada: alli el
+            // parametro llega como puntero generico y el deref no dice STRUCT,
+            // asi que `(*out) = valor` guardaba LA DIRECCION del struct en vez
+            // de sus bytes -- una generica con `T` struct devolvia punteros
+            // como si fueran valores.  Si cualquiera de los dos lados es un
+            // agregado, se copia.
+            const Type &deref_t = un->result_type;
+            const Type &value_t = e->value->result_type;
+            const bool deref_agg =
+                (deref_t.kind == PrimitiveKind::STRUCT ||
+                 deref_t.kind == PrimitiveKind::ARRAY);
+            const bool value_agg =
+                (value_t.kind == PrimitiveKind::STRUCT ||
+                 value_t.kind == PrimitiveKind::ARRAY);
+            if ((deref_agg || value_agg) && e->op == ast::AssignOp::Assign) {
                 // Calcular sizeof.  STRUCT: lookup en struct_layouts_;
                 // ARRAY: type.array_size * sizeof(elt) si conocido.
                 uint64_t struct_size = 0;
-                if (un->result_type.kind == PrimitiveKind::STRUCT) {
+                const Type &agg_t = deref_agg ? deref_t : value_t;
+                if (agg_t.kind == PrimitiveKind::STRUCT) {
                     const auto &layouts = tc_.struct_layouts();
-                    auto it = layouts.find(un->result_type.struct_name);
+                    auto it = layouts.find(agg_t.struct_name);
                     if (it != layouts.end()) {
                         struct_size =
                             static_cast<uint64_t>(it->second.size_bytes);
@@ -21673,7 +21687,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                     // Tambien enum (encoded como STRUCT con struct_name).
                     if (struct_size == 0) {
                         const auto &elays = tc_.enum_layouts();
-                        auto ite = elays.find(un->result_type.struct_name);
+                        auto ite = elays.find(agg_t.struct_name);
                         if (ite != elays.end()) {
                             struct_size =
                                 static_cast<uint64_t>(ite->second.size_bytes);

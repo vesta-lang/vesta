@@ -1093,6 +1093,19 @@ class TypeChecker {
      */
     void check_functions();
 
+    /**
+     * @brief Chequea los cuerpos de las funciones libres del modulo.
+     *
+     * Idempotente: se llama dos veces, antes y despues de los cuerpos de
+     * metodos, porque una generica instanciada al chequear un metodo nace
+     * cuando la primera pasada ya termino.  El set @c checked_fn_bodies_
+     * evita repetir trabajo (y diagnosticos duplicados).
+     */
+    void check_free_function_bodies();
+
+    /// Cuerpos de funcion ya chequeados, para que la pasada sea idempotente.
+    std::unordered_set<const ast::FunctionDecl *> checked_fn_bodies_;
+
     // -----------------------------------------------------------------
     // Visit de statements.
     // -----------------------------------------------------------------

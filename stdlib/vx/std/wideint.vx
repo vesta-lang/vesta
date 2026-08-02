@@ -38,6 +38,40 @@ u64 g_wideint_sink = 0;
  * Los valores subyacentes -1/0/1 hacen que el orden natural del entero coincida
  * con el sentido de la comparacion.
  */
+void shl_halves<T>(T lo, T hi, u64 n, u64 half, T zero, T* out_lo,
+                   T* out_hi) {
+    if (n == 0) {
+        (*out_lo) = lo;
+        (*out_hi) = hi;
+    } else if (n >= half + half) {
+        (*out_lo) = zero;
+        (*out_hi) = zero;
+    } else if (n >= half) {
+        (*out_hi) = lo << (n - half);
+        (*out_lo) = zero;
+    } else {
+        (*out_hi) = (hi << n) | (lo >> (half - n));
+        (*out_lo) = lo << n;
+    }
+}
+
+void shr_halves<T>(T lo, T hi, u64 n, u64 half, T zero, T* out_lo,
+                   T* out_hi) {
+    if (n == 0) {
+        (*out_lo) = lo;
+        (*out_hi) = hi;
+    } else if (n >= half + half) {
+        (*out_lo) = zero;
+        (*out_hi) = zero;
+    } else if (n >= half) {
+        (*out_lo) = hi >> (n - half);
+        (*out_hi) = zero;
+    } else {
+        (*out_lo) = (lo >> n) | (hi << (half - n));
+        (*out_hi) = hi >> n;
+    }
+}
+
 public enum Ordering : i8 {
     Less    = -1,
     Equal   =  0,
@@ -1047,19 +1081,8 @@ public struct Wide256 {
      */
     public Self __lshift__(u64 n) {
         Self r;
-        if (n == 0) {
-            r.lo128 = this.lo128;
-            r.hi128 = this.hi128;
-        } else if (n >= 256) {
-            r.lo128 = u128.zero();
-            r.hi128 = u128.zero();
-        } else if (n >= 128) {
-            r.hi128 = this.lo128 << (n - 128);
-            r.lo128 = u128.zero();
-        } else {
-            r.hi128 = (this.hi128 << n) | (this.lo128 >> (128 - n));
-            r.lo128 = this.lo128 << n;
-        }
+        shl_halves(this.lo128, this.hi128, n, 128, u128.zero(), &r.lo128,
+                   &r.hi128);
         return r;
     }
 
@@ -1280,19 +1303,8 @@ public struct u256 : Wide256 {
      */
     public u256 __rshift__(u64 n) {
         u256 r;
-        if (n == 0) {
-            r.lo128 = this.lo128;
-            r.hi128 = this.hi128;
-        } else if (n >= 256) {
-            r.lo128 = u128.zero();
-            r.hi128 = u128.zero();
-        } else if (n >= 128) {
-            r.lo128 = this.hi128 >> (n - 128);
-            r.hi128 = u128.zero();
-        } else {
-            r.lo128 = (this.lo128 >> n) | (this.hi128 << (128 - n));
-            r.hi128 = this.hi128 >> n;
-        }
+        shr_halves(this.lo128, this.hi128, n, 128, u128.zero(), &r.lo128,
+                   &r.hi128);
         return r;
     }
 
@@ -1789,19 +1801,8 @@ public struct Wide512 {
      */
     public Self __lshift__(u64 n) {
         Self r;
-        if (n == 0) {
-            r.lo256 = this.lo256;
-            r.hi256 = this.hi256;
-        } else if (n >= 512) {
-            r.lo256 = u256.zero();
-            r.hi256 = u256.zero();
-        } else if (n >= 256) {
-            r.hi256 = this.lo256 << (n - 256);
-            r.lo256 = u256.zero();
-        } else {
-            r.hi256 = (this.hi256 << n) | (this.lo256 >> (256 - n));
-            r.lo256 = this.lo256 << n;
-        }
+        shl_halves(this.lo256, this.hi256, n, 256, u256.zero(), &r.lo256,
+                   &r.hi256);
         return r;
     }
 
@@ -1995,19 +1996,8 @@ public struct u512 : Wide512 {
      */
     public u512 __rshift__(u64 n) {
         u512 r;
-        if (n == 0) {
-            r.lo256 = this.lo256;
-            r.hi256 = this.hi256;
-        } else if (n >= 512) {
-            r.lo256 = u256.zero();
-            r.hi256 = u256.zero();
-        } else if (n >= 256) {
-            r.lo256 = this.hi256 >> (n - 256);
-            r.hi256 = u256.zero();
-        } else {
-            r.lo256 = (this.lo256 >> n) | (this.hi256 << (256 - n));
-            r.hi256 = this.hi256 >> n;
-        }
+        shr_halves(this.lo256, this.hi256, n, 256, u256.zero(), &r.lo256,
+                   &r.hi256);
         return r;
     }
 

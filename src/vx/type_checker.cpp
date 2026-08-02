@@ -5258,31 +5258,7 @@ void TypeChecker::compute_struct_categories() {
 // Pase 2: cuerpos de funciones.
 // ---------------------------------------------------------------------
 
-void TypeChecker::check_functions() {
-    // Defaults de campos de tipo funcion (`fnptr method = invoke;`): promover
-    // AHORA que todas las firmas de funcion estan registradas (collect_globals
-    // ya paso; al construir el layout aun no lo estaban -> "nombre no
-    // declarado").  check_expr marca is_func_ref (via check_ident) y
-    // maybe_promote_func_ref fija el result_type FUNCTION con la ABI de la
-    // firma -> el lowering emite LABEL_ADDR (no "nombre no resuelto") y el cast
-    // del campo hereda esa ABI (base de la devirtualizacion del ctx pattern).
-    for (auto &kv : struct_layouts_) {
-        for (auto &fi : kv.second.fields) {
-            if (fi.default_init && fi.type.kind == PrimitiveKind::FUNCTION) {
-                (void)check_expr(fi.default_init);
-                (void)maybe_promote_func_ref(fi.default_init, fi.type, Type{});
-            }
-        }
-    }
-
-    // Fix (generic-fn inference): las monomorphizaciones por INFERENCIA
-    // (`usa(p)` sin type-arg explicito) se crean DURANTE este check (en
-    // check_call) y se anyaden al FINAL de mod_.decls.  Iteramos por INDICE
-    // re-evaluando size() cada vuelta para que esos clones nuevos tambien se
-    // chequeen (sin esto su body queda sin result_types -> el lowering falla
-    // con "callee no es identificador" al bajar `v.metodo()`).  El puntero al
-    // objeto es estable ante realloc del vector (los unique_ptr mueven de slot
-    // pero el objeto apuntado no), asi que `fn`/`gv` siguen validos.
+void TypeChecker::check_free_function_bodies() {
     for (size_t di_ = 0; di_ < mod_.decls.size(); ++di_) {
         ast::Node *decl = mod_.decls[di_].get();
         if (!decl || decl->kind != ast::NodeKind::FunctionDecl) {
@@ -5398,6 +5374,9 @@ void TypeChecker::check_functions() {
             continue;
         }
         auto *fn = static_cast<ast::FunctionDecl *>(decl);
+        // Idempotente: esta pasada corre dos veces (antes y despues de los
+        // cuerpos de metodos), y un cuerpo no debe chequearse dos veces.
+        if (!checked_fn_bodies_.insert(fn).second) continue;
         if (!fn->body) continue;
         // Templates genericos RUNTIME: NO se type-checkea el body del template
         // (su `T` no esta resuelto -> resolveria a void).  Solo se chequean sus
@@ -5552,6 +5531,34 @@ void TypeChecker::check_functions() {
         current_fn_return_type_ = saved_ret;
         pop_scope();
     }
+}
+
+void TypeChecker::check_functions() {
+    // Defaults de campos de tipo funcion (`fnptr method = invoke;`): promover
+    // AHORA que todas las firmas de funcion estan registradas (collect_globals
+    // ya paso; al construir el layout aun no lo estaban -> "nombre no
+    // declarado").  check_expr marca is_func_ref (via check_ident) y
+    // maybe_promote_func_ref fija el result_type FUNCTION con la ABI de la
+    // firma -> el lowering emite LABEL_ADDR (no "nombre no resuelto") y el cast
+    // del campo hereda esa ABI (base de la devirtualizacion del ctx pattern).
+    for (auto &kv : struct_layouts_) {
+        for (auto &fi : kv.second.fields) {
+            if (fi.default_init && fi.type.kind == PrimitiveKind::FUNCTION) {
+                (void)check_expr(fi.default_init);
+                (void)maybe_promote_func_ref(fi.default_init, fi.type, Type{});
+            }
+        }
+    }
+
+    // Fix (generic-fn inference): las monomorphizaciones por INFERENCIA
+    // (`usa(p)` sin type-arg explicito) se crean DURANTE este check (en
+    // check_call) y se anyaden al FINAL de mod_.decls.  Iteramos por INDICE
+    // re-evaluando size() cada vuelta para que esos clones nuevos tambien se
+    // chequeen (sin esto su body queda sin result_types -> el lowering falla
+    // con "callee no es identificador" al bajar `v.metodo()`).  El puntero al
+    // objeto es estable ante realloc del vector (los unique_ptr mueven de slot
+    // pero el objeto apuntado no), asi que `fn`/`gv` siguen validos.
+    check_free_function_bodies();
 
     // Chequeo de cuerpos de metodos de clase.  Para cada ClassDecl
     // recorremos sus metodos: el scope local incluye 'this' y los
@@ -5668,6 +5675,19 @@ void TypeChecker::check_functions() {
     // contenedor + chequear su body, a punto fijo).  Debe ir DESPUES de
     // los bucles de metodos para no invalidar sus iteradores.
     drain_pending_method_monos();
+
+    // Instancias de funciones genericas creadas al chequear un CUERPO DE
+    // METODO.  El bucle de funciones libres de mas arriba ya re-evalua
+    // `size()` para recoger las que nacen mientras el mismo corre, pero los
+    // metodos se chequean DESPUES de el: sus instancias llegaban a
+    // `mod_.decls` con ese bucle terminado y nadie las chequeaba nunca.  Se
+    // quedaban sin `result_type` en todo el cuerpo, y entonces el lowering
+    // decidia a ciegas -- `(*out) = valor` con un struct guardaba la DIRECCION
+    // en lugar de copiar los bytes, asi que una generica con `T` struct
+    // llamada desde un metodo devolvia punteros como si fueran valores.
+    // La pasada es idempotente, asi que basta con repetirla: salta lo ya
+    // chequeado y recoge lo nuevo.
+    check_free_function_bodies();
 
     // #6: verificar los bounds encolados durante check_functions (metodos
     // genericos con `<U: Concepto>`, y cualquier monomorphizacion on-demand).
