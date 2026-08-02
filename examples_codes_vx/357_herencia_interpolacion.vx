@@ -1,0 +1,29 @@
+/**
+ * @file 357_herencia_interpolacion.vx
+ * @brief Un metodo HEREDADO que devuelve un texto interpolado.
+ *
+ * Al aplanar la herencia, los metodos de la base se clonan en cada derivado.
+ * El clonador copiaba el contenido de un literal de cadena, pero un literal
+ * INTERPOLADO no guarda ahi nada: su contenido vive en las partes literales,
+ * las expresiones y sus formatos.  Se clonaba, por tanto, una cadena VACIA, y
+ * el metodo heredado devolvia "" sin que nada avisara -- mientras que el mismo
+ * codigo en el propio derivado funcionaba.
+ *
+ * Es lo que impedia dar un `toString()` a una familia de tipos escribiendolo
+ * una sola vez en la base.
+ */
+@Abstract
+struct Base {
+    u64 v;
+    public string texto() { u64 x = this.v; return "val=${x:hex}"; }
+}
+struct Der : Base {
+    public u64 doble() { return this.v * 2; }
+}
+i32 main() {
+    Der d;
+    d.v = 42;
+    println("heredado: ${d.texto()}");
+    println("propio  : ${d.doble()}");
+    return 42;
+}

@@ -2760,6 +2760,7 @@ r0_case("panic_modulo_importado", "enlace: modulo importado con panic() + global
 # Sin AOT: capturar con try/catch exige el desenrollado nativo de
 # excepciones, que sigue pendiente (el binario nativo aborta en vez de
 # entrar al handler).  En interprete y JIT el FatalError si se captura.
+r0_case("herencia_interpolacion", "metodo heredado que devuelve texto interpolado (el clon perdia la interpolacion)", "357_herencia_interpolacion.vx", 42)
 r0_case("generica_desde_metodo", "funcion generica monomorfizada desde el cuerpo de un metodo", "356_generica_desde_metodo.vx", 42)
 r0_case("wideint_512_signed", "i512: signo, negacion, desplazamiento aritmetico y division con signo", "355_wideint_512_signed.vx", 42)
 r0_case("wideint_512", "u512: tercer piso, acarreo entre mitades de 256 y division contrastada con la mul", "354_wideint_512.vx", 42)
