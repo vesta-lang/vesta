@@ -1103,6 +1103,9 @@ class TypeChecker {
      */
     void check_free_function_bodies();
 
+    /// @brief true si el tipo (o un ancestro) declara `toString()`.
+    bool type_declares_to_string(const Type &t) const;
+
     /// Cuerpos de funcion ya chequeados, para que la pasada sea idempotente.
     std::unordered_set<const ast::FunctionDecl *> checked_fn_bodies_;
 

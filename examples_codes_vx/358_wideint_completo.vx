@@ -1,0 +1,232 @@
+/**
+ * @file 358_wideint_completo.vx
+ * @brief Recorrido completo de los enteros anchos: 128, 256 y 512 juntos.
+ *
+ * Ejercita toda la superficie de los seis tipos -- construccion, conversiones,
+ * aritmetica, division, logica, desplazamientos, comparacion y las primitivas
+ * de acarreo -- y vuelca cada resultado, de modo que la salida sirve a la vez
+ * de comprobacion y de muestra de uso.  Al final los tres anchos participan en
+ * la misma cuenta, subiendo de 128 a 512 y bajando de vuelta.
+ *
+ * Dos cosas que se ven de un vistazo en el codigo:
+ *   - todo se escribe con OPERADORES (`+`, `-`, `*`, `/`, `%`, `&`, `|`, `^`,
+ *     `~`, `<<`, `>>`, comparadores): un entero ancho se usa igual que uno
+ *     nativo;
+ *   - se imprimen con `${valor}` a secas, porque `toString()` esta escrito una
+ *     sola vez en cada base y la interpolacion lo invoca sola.
+ *
+ * Cada comprobacion suma a `acc` solo si el resultado es el esperado, asi que
+ * el valor devuelto vale por si mismo como veredicto.
+ */
+import std.wideint only u128, i128, u256, i256, u512, i512;
+
+i32 main() {
+    i32 acc = 0;
+
+    // =====================================================================
+    //  128 bits sin signo
+    // =====================================================================
+    println("== u128 ==");
+    u128 a = u128.from_u64(1000);
+    u128 b = u128.from_u64(7);
+    println("a           = ${a}");
+    println("b           = ${b}");
+    println("a + b       = ${a + b}");
+    println("a - b       = ${a - b}");
+    println("a * b       = ${a * b}");
+    println("a / b       = ${a / b}");
+    println("a % b       = ${a % b}");
+    if ((a + b).to_u64() == 1007) { acc = acc + 1; }
+    if ((a - b).to_u64() == 993)  { acc = acc + 1; }
+    if ((a * b).to_u64() == 7000) { acc = acc + 1; }
+    if ((a / b).to_u64() == 142)  { acc = acc + 1; }
+    if ((a % b).to_u64() == 6)    { acc = acc + 1; }
+
+    println("a & b       = ${a & b}");
+    println("a | b       = ${a | b}");
+    println("a ^ b       = ${a ^ b}");
+    println("~b          = ${~b}");
+    println("b << 70     = ${b << 70}");
+    println("(b<<70)>>70 = ${(b << 70) >> 70}");
+    if ((a & b).to_u64() == (1000 & 7)) { acc = acc + 1; }
+    if ((a | b).to_u64() == (1000 | 7)) { acc = acc + 1; }
+    if ((a ^ b).to_u64() == (1000 ^ 7)) { acc = acc + 1; }
+    if ((~b).lo64 == 0xFFFFFFFFFFFFFFF8) { acc = acc + 1; }
+    if ((b << 70).hi64 == (7 << 6))      { acc = acc + 1; }
+    if (((b << 70) >> 70) == b)          { acc = acc + 1; }
+
+    println("comparadores: ${a == a} ${a != b} ${b < a} ${a > b} ${a <= a} ${a >= b}");
+    println("max         = ${u128.max()}");
+    println("min         = ${u128.min()}");
+    if (a == a && a != b && b < a && a > b && a <= a && a >= b) { acc = acc + 1; }
+    if (u128.zero().is_zero() && !u128.zero() && u128.one())    { acc = acc + 1; }
+
+    // El acarreo se DEVUELVE, no se deduce comparando resultados.
+    bool carry = false;
+    u128 tope = u128.max().add_with_carry(u128.one(), &carry);
+    println("max + 1     = ${tope}  (desborda: ${carry})");
+    if (carry && tope.is_zero()) { acc = acc + 1; }
+
+    bool presta = false;
+    u128 bajo = u128.zero().sub_with_borrow(u128.one(), &presta);
+    println("0 - 1       = ${bajo}  (presta: ${presta})");
+    if (presta && bajo == u128.max()) { acc = acc + 1; }
+
+    // Producto completo de 64x64 en su peor caso, y division con resto.
+    u128 pleno = u128.mul64_full(0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF);
+    println("64x64 pleno = ${pleno}");
+    if (pleno.lo64 == 1 && pleno.hi64 == 0xFFFFFFFFFFFFFFFE) { acc = acc + 1; }
+
+    u128 resto;
+    u128 coc = a.udivmod(b, &resto);
+    println("udivmod     = ${coc} resto ${resto}");
+    if (coc.to_u64() == 142 && resto.to_u64() == 6) { acc = acc + 1; }
+
+    u128 s1 = u128.from_u64(11);
+    u128 s2 = u128.from_u64(22);
+    s1.swap(&s2);
+    println("swap        = ${s1} ${s2}");
+    if (s1.to_u64() == 22 && s2.to_u64() == 11) { acc = acc + 1; }
+
+    // Division comprobada: ante un divisor cero no aborta, devuelve None.
+    match a.checked_div(u128.zero()) {
+        case Some(q) => { println("checked_div(0) devolvio ${q}"); }
+        case None    => { println("checked_div(0) -> None"); acc = acc + 1; }
+    }
+    match a.checked_rem(b) {
+        case Some(r) => { println("checked_rem = ${r}"); if (r.to_u64() == 6) { acc = acc + 1; } }
+        case None    => { println("checked_rem -> None"); }
+    }
+
+    // =====================================================================
+    //  128 bits con signo
+    // =====================================================================
+    println("== i128 ==");
+    i128 n = i128.from_i64(-1000);
+    i128 m = i128.from_i64(7);
+    println("n           = ${n}  (negativo: ${n.is_negative()})");
+    println("-n          = ${-n}");
+    println("n / m       = ${n / m}");
+    println("n % m       = ${n % m}");
+    println("-1 >> 5     = ${i128.from_i64(-1) >> 5}");
+    if (n.is_negative() && !m.is_negative())    { acc = acc + 1; }
+    if (-n == i128.from_i64(1000))              { acc = acc + 1; }
+    if ((n / m) == i128.from_i64(-142))         { acc = acc + 1; }
+    if ((n % m) == i128.from_i64(-6))           { acc = acc + 1; }
+    if (n < m && m > n)                         { acc = acc + 1; }
+    if ((i128.from_i64(-1) >> 5) == i128.from_i64(-1)) { acc = acc + 1; }
+    if (i128.min().is_negative() && !i128.max().is_negative()) { acc = acc + 1; }
+
+    // =====================================================================
+    //  256 bits
+    // =====================================================================
+    println("== u256 ==");
+    u256 A = u256.from_u64(1000);
+    u256 B = u256.from_u64(7);
+    println("A           = ${A}");
+    println("A + B       = ${A + B}");
+    println("A * B       = ${A * B}");
+    println("A / B       = ${A / B}");
+    println("A % B       = ${A % B}");
+    println("~0          = ${~u256.zero()}");
+    if ((A + B).to_u64() == 1007) { acc = acc + 1; }
+    if ((A - B).to_u64() == 993)  { acc = acc + 1; }
+    if ((A * B).to_u64() == 7000) { acc = acc + 1; }
+    if ((A / B).to_u64() == 142)  { acc = acc + 1; }
+    if ((A % B).to_u64() == 6)    { acc = acc + 1; }
+    if ((A & B).to_u64() == (1000 & 7)) { acc = acc + 1; }
+    if ((A | B).to_u64() == (1000 | 7)) { acc = acc + 1; }
+    if ((A ^ B).to_u64() == (1000 ^ 7)) { acc = acc + 1; }
+    if ((~u256.zero()) == u256.max())   { acc = acc + 1; }
+
+    // El paso entre mitades de 128, que es lo unico que 256 anade de suyo.
+    u256 frontera = u256.from_u128(u128.max());
+    u256 cruza = frontera + u256.one();
+    println("mitad baja al maximo = ${frontera}");
+    println("y sumandole uno      = ${cruza}");
+    println("1 << 128             = ${u256.one() << 128}");
+    if (cruza.lo128.is_zero() && cruza.hi128 == u128.one()) { acc = acc + 1; }
+    if ((cruza - u256.one()) == frontera)                   { acc = acc + 1; }
+    if (((u256.one() << 128) >> 128) == u256.one())         { acc = acc + 1; }
+
+    u256 pleno256 = u256.mul128_full(u128.max(), u128.max());
+    println("128x128 pleno        = ${pleno256}");
+    if (pleno256.lo128 == u128.one() &&
+        pleno256.hi128 == (u128.max() - u128.one())) { acc = acc + 1; }
+
+    println("== i256 ==");
+    i256 N = i256.from_i64(-1000);
+    i256 M = i256.from_i64(7);
+    println("N           = ${N}");
+    println("N / M       = ${N / M}");
+    println("-1 >> 9     = ${i256.from_i64(-1) >> 9}");
+    if (N.is_negative() && (N / M) == i256.from_i64(-142)) { acc = acc + 1; }
+    if ((N % M) == i256.from_i64(-6) && N < M)             { acc = acc + 1; }
+    if ((-N) == i256.from_i64(1000))                       { acc = acc + 1; }
+    if ((i256.from_i64(-1) >> 9) == i256.from_i64(-1))     { acc = acc + 1; }
+
+    // =====================================================================
+    //  512 bits
+    // =====================================================================
+    println("== u512 ==");
+    u512 X = u512.from_u64(1000);
+    u512 Y = u512.from_u64(7);
+    println("X           = ${X}");
+    println("X * Y       = ${X * Y}");
+    println("X / Y       = ${X / Y}");
+    println("X % Y       = ${X % Y}");
+    if ((X + Y).to_u64() == 1007) { acc = acc + 1; }
+    if ((X - Y).to_u64() == 993)  { acc = acc + 1; }
+    if ((X * Y).to_u64() == 7000) { acc = acc + 1; }
+    if ((X / Y).to_u64() == 142)  { acc = acc + 1; }
+    if ((X % Y).to_u64() == 6)    { acc = acc + 1; }
+    if ((X & Y).to_u64() == (1000 & 7)) { acc = acc + 1; }
+    if ((X | Y).to_u64() == (1000 | 7)) { acc = acc + 1; }
+    if ((X ^ Y).to_u64() == (1000 ^ 7)) { acc = acc + 1; }
+    if ((~u512.zero()) == u512.max())   { acc = acc + 1; }
+
+    u512 frontera512 = u512.from_u256(u256.max());
+    u512 cruza512 = frontera512 + u512.one();
+    println("cruzando los 256     = ${cruza512}");
+    println("1 << 256             = ${u512.one() << 256}");
+    if (cruza512.lo256.is_zero() && cruza512.hi256 == u256.one()) { acc = acc + 1; }
+    if ((cruza512 - u512.one()) == frontera512)                   { acc = acc + 1; }
+    if (((u512.one() << 256) >> 256) == u512.one())               { acc = acc + 1; }
+
+    println("== i512 ==");
+    i512 P = i512.from_i64(-1000);
+    i512 Q = i512.from_i64(7);
+    println("P           = ${P}");
+    println("P / Q       = ${P / Q}");
+    if (P.is_negative() && (P / Q) == i512.from_i64(-142)) { acc = acc + 1; }
+    if ((P % Q) == i512.from_i64(-6) && P < Q)             { acc = acc + 1; }
+    if ((-P) == i512.from_i64(1000))                       { acc = acc + 1; }
+    if ((i512.from_i64(-1) >> 13) == i512.from_i64(-1))    { acc = acc + 1; }
+
+    // =====================================================================
+    //  Los tres anchos en la misma cuenta
+    // =====================================================================
+    println("== 128 -> 256 -> 512 -> 128 ==");
+    u128 semilla = u128.from_u64(0xCAFEBABE);
+    u256 subido = u256.from_u128(semilla);
+    u512 arriba = u512.from_u256(subido);
+    println("semilla en 128 = ${semilla}");
+    println("subida a 512   = ${arriba}");
+
+    u512 operado = (arriba * u512.from_u64(3)) + u512.from_u64(6);
+    u512 devuelto = (operado - u512.from_u64(6)) / u512.from_u64(3);
+    println("ida y vuelta   = ${devuelto}");
+
+    u256 bajado256 = devuelto.to_u256();
+    u128 bajado128 = bajado256.to_u128();
+    println("de vuelta a128 = ${bajado128}");
+    if (devuelto == arriba)   { acc = acc + 1; }
+    if (bajado256 == subido)  { acc = acc + 1; }
+    if (bajado128 == semilla) { acc = acc + 1; }
+
+    println("comprobaciones superadas: ${acc}");
+    if (acc != 63) {
+        return acc;
+    }
+    return 42;
+}

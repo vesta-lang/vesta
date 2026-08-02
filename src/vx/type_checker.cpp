@@ -5258,6 +5258,39 @@ void TypeChecker::compute_struct_categories() {
 // Pase 2: cuerpos de funciones.
 // ---------------------------------------------------------------------
 
+/**
+ * @brief Indica si un tipo compuesto declara `toString()`.
+ *
+ * Se busca tambien en la cadena de bases: un `toString()` escrito una sola vez
+ * en la base sirve a toda la familia, que es como debe escribirse.
+ *
+ * @param t Tipo a consultar (STRUCT o CLASS).
+ * @return true si el tipo, o alguno de sus ancestros, tiene el metodo.
+ */
+bool TypeChecker::type_declares_to_string(const Type &t) const {
+    if (t.struct_name.empty()) return false;
+    if (t.kind == PrimitiveKind::STRUCT) {
+        std::string cur = t.struct_name;
+        for (int depth = 0; depth < 64 && !cur.empty(); ++depth) {
+            auto it = struct_layouts_.find(cur);
+            if (it == struct_layouts_.end()) return false;
+            for (const auto &m : it->second.methods)
+                if (m.name == "toString") return true;
+            cur = it->second.super_name;
+        }
+        return false;
+    }
+    std::string cur = t.struct_name;
+    for (int depth = 0; depth < 64 && !cur.empty(); ++depth) {
+        auto it = class_layouts_.find(cur);
+        if (it == class_layouts_.end()) return false;
+        for (const auto &m : it->second.methods)
+            if (m.name == "toString") return true;
+        cur = it->second.super_name;
+    }
+    return false;
+}
+
 void TypeChecker::check_free_function_bodies() {
     for (size_t di_ = 0; di_ < mod_.decls.size(); ++di_) {
         ast::Node *decl = mod_.decls[di_].get();
@@ -7744,6 +7777,25 @@ Type TypeChecker::check_expr(ast::Expr *e) {
             for (auto &ex : sl->interp_exprs) {
                 Type tx = check_expr(ex.get());
                 ex->result_type = tx;
+                // `${obj}` sobre un tipo que declara `toString()` se reescribe
+                // a `${obj.toString()}`.  Es lo que hace util tener el metodo:
+                // sin esto habia que llamarlo a mano en cada sitio, y un tipo
+                // compuesto se imprimia destripando sus campos uno a uno.
+                if (tx.kind == PrimitiveKind::STRUCT ||
+                    tx.kind == PrimitiveKind::CLASS) {
+                    if (type_declares_to_string(tx)) {
+                        auto fa = std::make_unique<ast::FieldAccessExpr>();
+                        fa->loc = ex->loc;
+                        fa->field_name = "toString";
+                        fa->base = std::move(ex);
+                        auto call = std::make_unique<ast::CallExpr>();
+                        call->loc = fa->loc;
+                        call->callee = std::move(fa);
+                        ex = std::move(call);
+                        tx = check_expr(ex.get());
+                        ex->result_type = tx;
+                    }
+                }
                 if (tx.kind == PrimitiveKind::VOID ||
                     tx.kind == PrimitiveKind::COUNT) {
                     diags_.error(ex->loc,

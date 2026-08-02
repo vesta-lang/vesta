@@ -149,6 +149,25 @@ public struct Wide128 {
         return this.lo64;
     }
 
+    /**
+     * @brief Representacion legible, en hexadecimal.
+     *
+     * Los dos limbs de 64 bits del mas significativo al menos, separados por
+     * dos puntos: al depurar un valor ancho lo que se quiere ver es donde cae
+     * cada bit, no un decimal imposible de cotejar.
+     *
+     * Escrito UNA vez en la base, lo heredan los dos tipos concretos.  Como
+     * `${x}` invoca `toString()` cuando el tipo lo declara, un entero ancho se
+     * imprime igual que uno nativo: `println("${valor}")`.
+     *
+     * @return El valor como texto, p.ej. `0x0:0x2a`.
+     */
+    public string toString() {
+        u64 h = this.hi64;
+        u64 l = this.lo64;
+        return "${h:hex}:${l:hex}";
+    }
+
     // -----------------------------------------------------------------------
     //  Aritmetica y logica
     // -----------------------------------------------------------------------
@@ -955,6 +974,19 @@ public struct Wide256 {
     }
 
     /**
+     * @brief Representacion legible, en hexadecimal.
+     *
+     * Delega en las dos mitades, de la alta a la baja, de modo que el formato
+     * es identico en todos los anchos.
+     *
+     * @return El valor como texto, con sus cuatro limbs separados por dos
+     *         puntos.
+     */
+    public string toString() {
+        return "${this.hi128}:${this.lo128}";
+    }
+
+    /**
      * @brief Trunca el valor a sus 128 bits menos significativos.
      * @return La mitad baja.
      */
@@ -1705,6 +1737,14 @@ public struct Wide512 {
      */
     public u64 to_u64() {
         return this.lo256.to_u64();
+    }
+
+    /**
+     * @brief Representacion legible, en hexadecimal.
+     * @return El valor como texto, con sus ocho limbs separados por dos puntos.
+     */
+    public string toString() {
+        return "${this.hi256}:${this.lo256}";
     }
 
     /**
