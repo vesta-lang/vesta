@@ -2094,3 +2094,231 @@ public struct u512 : Wide512 {
         return this.ucmp(o) != Ordering.Less;
     }
 }
+
+// ===========================================================================
+//  i512 -- entero de 512 bits con signo (complemento a dos).
+// ===========================================================================
+
+/**
+ * @brief Entero de 512 bits con signo.
+ *
+ * Como en los pisos anteriores, comparte con su hermano sin signo todo lo que
+ * en complemento a dos es bit-identico y solo redefine lo que mira el signo:
+ * el desplazamiento a la derecha, los comparadores, la negacion y la division.
+ * Las mitades heredadas siguen siendo sin signo; el signo es del valor completo
+ * y vive en el bit mas alto.
+ */
+public struct i512 : Wide512 {
+
+    /**
+     * @brief Mayor valor representable.
+     * @return `2^511 - 1`.
+     */
+    public static i512 max() {
+        i512 r;
+        r.lo256 = u256.max();
+        r.hi256 = u256.max() >> 1;
+        return r;
+    }
+
+    /**
+     * @brief Menor valor representable.
+     * @return `-2^511`.
+     */
+    public static i512 min() {
+        i512 r;
+        r.lo256 = u256.zero();
+        r.hi256 = u256.one() << 255;
+        return r;
+    }
+
+    /**
+     * @brief Extiende un `i64` a 512 bits conservando el signo.
+     * @param x Valor de 64 bits con signo.
+     * @return El mismo valor en 512 bits; si @p x es negativo, las partes altas
+     *         se rellenan con unos.
+     */
+    public static i512 from_i64(i64 x) {
+        i512 r;
+        if (x < 0) {
+            // -1 en todo lo alto, y el valor en el limb mas bajo.
+            r.lo256 = ~u256.zero();
+            r.lo256.lo128.lo64 = (u64) x;
+            r.hi256 = u256.max();
+        } else {
+            r.lo256 = u256.from_u64((u64) x);
+            r.hi256 = u256.zero();
+        }
+        return r;
+    }
+
+    /**
+     * @brief Indica si el valor es negativo.
+     * @return `true` si el bit mas alto esta a 1.
+     */
+    public bool is_negative() {
+        return (this.hi256.hi128.hi64 >> 63) != 0;
+    }
+
+    /**
+     * @brief Negacion en complemento a dos.
+     * @return `-this`.
+     */
+    public i512 __neg__() {
+        return (~this) + i512.one();
+    }
+
+    /**
+     * @brief Desplazamiento ARITMETICO a la derecha.
+     *
+     * Replica el bit de signo: un valor negativo sigue siendolo.
+     *
+     * @param n Numero de bits a desplazar.
+     * @return `this >> n` con extension de signo.
+     */
+    public i512 __rshift__(u64 n) {
+        i512 r;
+        if (n == 0) {
+            r.lo256 = this.lo256;
+            r.hi256 = this.hi256;
+            return r;
+        }
+        // La mitad alta reinterpretada CON signo: su desplazamiento aritmetico
+        // ya lo resuelve `i256`.
+        i256 hi_s;
+        hi_s.lo128 = this.hi256.lo128;
+        hi_s.hi128 = this.hi256.hi128;
+
+        u256 fill = u256.zero();
+        if (this.is_negative()) {
+            fill = u256.max();
+        }
+        if (n >= 512) {
+            r.lo256 = fill;
+            r.hi256 = fill;
+        } else if (n >= 256) {
+            i256 sh = hi_s >> (n - 256);
+            r.lo256.lo128 = sh.lo128;
+            r.lo256.hi128 = sh.hi128;
+            r.hi256 = fill;
+        } else {
+            r.lo256 = (this.lo256 >> n) | (this.hi256 << (256 - n));
+            i256 sh = hi_s >> n;
+            r.hi256.lo128 = sh.lo128;
+            r.hi256.hi128 = sh.hi128;
+        }
+        return r;
+    }
+
+    /**
+     * @brief Cociente con signo, truncado hacia cero.
+     * @param o Divisor.  Cero = fallo de division del hardware.
+     * @return `this / o`.
+     */
+    public i512 __div__(i512 o) {
+        bool negative_result = this.is_negative() != o.is_negative();
+        i512 a = this;
+        if (a.is_negative()) {
+            a = -a;
+        }
+        i512 b = o;
+        if (b.is_negative()) {
+            b = -b;
+        }
+        i512 rem;
+        i512 q = a.udivmod(b, &rem);
+        if (negative_result) {
+            q = -q;
+        }
+        return q;
+    }
+
+    /**
+     * @brief Resto con signo (el del dividendo, convencion de C).
+     * @param o Divisor.  Cero = fallo de division del hardware.
+     * @return `this % o`.
+     */
+    public i512 __mod__(i512 o) {
+        i512 a = this;
+        if (a.is_negative()) {
+            a = -a;
+        }
+        i512 b = o;
+        if (b.is_negative()) {
+            b = -b;
+        }
+        i512 rem;
+        a.udivmod(b, &rem);
+        if (this.is_negative()) {
+            rem = -rem;
+        }
+        return rem;
+    }
+
+    /**
+     * @brief Cociente que no aborta nunca.
+     * @param o Divisor.
+     * @return El cociente, o `None` si el divisor es cero.
+     */
+    public Optional<i512> checked_div(i512 o) {
+        if (o.is_zero()) {
+            return None();
+        }
+        i512 q = this / o;
+        return Some(q);
+    }
+
+    /**
+     * @brief Resto que no aborta nunca.
+     * @param o Divisor.
+     * @return El resto, o `None` si el divisor es cero.
+     */
+    public Optional<i512> checked_rem(i512 o) {
+        if (o.is_zero()) {
+            return None();
+        }
+        i512 r = this % o;
+        return Some(r);
+    }
+
+    /**
+     * @brief Menor que (con signo).
+     * @param o Valor a comparar.
+     * @return `true` si `this < o`.
+     */
+    public bool __lt__(i512 o) {
+        bool a_neg = this.is_negative();
+        bool b_neg = o.is_negative();
+        if (a_neg != b_neg) {
+            return a_neg;
+        }
+        return this.ucmp(o) == Ordering.Less;
+    }
+
+    /**
+     * @brief Mayor que (con signo).
+     * @param o Valor a comparar.
+     * @return `true` si `this > o`.
+     */
+    public bool __gt__(i512 o) {
+        return o < this;
+    }
+
+    /**
+     * @brief Menor o igual (con signo).
+     * @param o Valor a comparar.
+     * @return `true` si `this <= o`.
+     */
+    public bool __le__(i512 o) {
+        return !(o < this);
+    }
+
+    /**
+     * @brief Mayor o igual (con signo).
+     * @param o Valor a comparar.
+     * @return `true` si `this >= o`.
+     */
+    public bool __ge__(i512 o) {
+        return !(this < o);
+    }
+}
