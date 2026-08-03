@@ -877,8 +877,23 @@ bool ComptimeRuntime::load_macros_from_bytes(
                         if (res.fn) {
                             impl_->jit_code_by_pc[entry_pc] =
                                 reinterpret_cast<void *>(res.fn);
+                        } else {
+                            // El codigo comptime va compilado.  Que una
+                            // funcion no se pueda compilar no es un modo de
+                            // funcionamiento alternativo: es un fallo a
+                            // corregir, y callarselo lo deja corriendo
+                            // interpretado sin que nadie se entere.
+                            std::fprintf(stderr,
+                                         "[comptime] aviso: no se pudo "
+                                         "compilar '%s'; se ejecutara "
+                                         "interpretado\n",
+                                         kv.first.c_str());
                         }
                     } catch (...) {
+                        std::fprintf(stderr,
+                                     "[comptime] aviso: fallo al compilar "
+                                     "'%s'\n",
+                                     kv.first.c_str());
                     }
                 }
             } catch (...) {
