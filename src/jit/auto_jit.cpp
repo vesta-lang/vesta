@@ -316,6 +316,8 @@ VregEntries make_vreg_entries() {
             reinterpret_cast<uint64_t>(g_runtime_entries->str_make_h);
         e.str_len = reinterpret_cast<uint64_t>(g_runtime_entries->str_len);
         e.str_cat = reinterpret_cast<uint64_t>(g_runtime_entries->str_cat);
+        e.str_slice =
+            reinterpret_cast<uint64_t>(g_runtime_entries->str_slice);
         e.str_cmp = reinterpret_cast<uint64_t>(g_runtime_entries->str_cmp);
         e.str_raw = reinterpret_cast<uint64_t>(g_runtime_entries->str_raw);
         e.str_get_bytes =
@@ -1678,12 +1680,12 @@ CompileResult eager_compile_function(
          * programa muere al invocarlo.  No damos por hecho la causa -- el
          * mensaje anterior afirmaba "SIMD>8B o argc>12", y cuando la causa era
          * otra (una op sin cubrir, un simbolo sin resolver) mandaba a
-         * investigar al sitio equivocado.  `VESTA_VREG_DEBUG=1` imprime el
+         * investigar al sitio equivocado.  `VESTA_JIT_VREGS_DEBUG=1` imprime el
          * motivo real que decidio el selector. */
         std::fprintf(stderr,
                      "[jit] callback '%s': el selector vreg no lo compila -> "
                      "sin codigo nativo (as_native_callback devolvera 0).\n"
-                     "  motivo exacto: ejecuta con VESTA_VREG_DEBUG=1\n",
+                     "  motivo exacto: ejecuta con VESTA_JIT_VREGS_DEBUG=1\n",
                      ir_fn.name.c_str());
     }
 

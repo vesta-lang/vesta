@@ -139,6 +139,7 @@ struct VregEntries {
         0; ///< vrt_str_make_h(proc, host_addr, byte_len) -> handle (buf host)
     uint64_t str_len = 0; ///< vrt_str_len(proc, handle) -> i64 (code points)
     uint64_t str_cat = 0;  ///< vrt_str_cat(proc, a, b) -> handle (ROPE)
+    uint64_t str_slice = 0; ///< vrt_str_slice(proc, src, range) -> handle
     uint64_t str_cmp = 0;  ///< vrt_str_cmp(proc, a, b) -> i64 (-1/0/1)
     uint64_t str_raw = 0;  ///< vrt_str_raw(proc, handle) -> host_ptr a data[]
     uint64_t str_get_bytes =

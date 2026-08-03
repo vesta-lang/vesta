@@ -638,7 +638,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
         out.vreg_is_gc[i] = static_cast<uint8_t>(static_cast<uint8_t>(k) + 1u);
     }
 
-    /* String ops que devuelven un GcHandle (STRMAKE/STRCAT).  El IR NO los
+    /* String ops que devuelven un GcHandle (STRMAKE/STRCAT/STRSLICE).  El IR
+     * NO los
      * marca @c is_gc_object (el handle es indice estable que no se mueve;
      * marcarlo romperia el save_live_regs del interp, que aplicaria
      * gchandle sobre un valor que YA es handle -- ver lowering emit_strmake).
@@ -650,7 +651,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
      * Coste cero si no cruza ninguno (no hay spill). */
     for (const auto &blk : fn.blocks)
         for (const auto &ins2 : blk.instrs)
-            if ((ins2.op == ir::IrOp::STRMAKE || ins2.op == ir::IrOp::STRCAT) &&
+            if ((ins2.op == ir::IrOp::STRMAKE || ins2.op == ir::IrOp::STRCAT ||
+                 ins2.op == ir::IrOp::STRSLICE) &&
                 ins2.dst != ir::IR_NO_VALUE &&
                 ins2.dst < out.vreg_is_gc.size() &&
                 out.vreg_is_gc[ins2.dst] == 0)
@@ -4790,6 +4792,47 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 O.push_back(MInstr::make_unary(MOp::MOV,
                                                MOperand::make_reg(MReg::R11, 8),
                                                vr(in.operands[1]))); // b
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(sc1, 8),
+                                       MOperand::make_reg(MReg::R10, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(sc2, 8),
+                                       MOperand::make_reg(MReg::R11, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(sc0, 8),
+                                       MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(MInstr::make_call_abs(out.intern_imm64(addr)));
+                if (in.dst != ir::IR_NO_VALUE)
+                    O.push_back(
+                        MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                           MOperand::make_reg(MReg::RAX, 8)));
+                break;
+            }
+
+            /* STRSLICE(src, range) -> handle de la vista.  Mismo molde que
+             * STRCAT (3 host args: proc=A0, src=A1, range=A2) salvo que el
+             * segundo operando es un VALOR empaquetado (cp_start<<32|cp_len),
+             * no un handle.  Puede alocar el SLICE -> call-position para el
+             * GC, igual que STRCAT. */
+            case ir::IrOp::STRSLICE: {
+                flush_pending();
+                const uint64_t addr = ent.str_slice;
+                if (!vm || addr == 0) {
+                    vreg_dbg(fn.name.c_str(), "strslice");
+                    return false;
+                }
+                if (in.operands.size() != 2) return false;
+#if defined(_WIN32)
+                const MReg sc0 = MReg::RCX, sc1 = MReg::RDX, sc2 = MReg::R8;
+#else
+                const MReg sc0 = MReg::RDI, sc1 = MReg::RSI, sc2 = MReg::RDX;
+#endif
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(MReg::R10, 8),
+                                               vr(in.operands[0]))); // src
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(MReg::R11, 8),
+                                               vr(in.operands[1]))); // range
                 O.push_back(
                     MInstr::make_unary(MOp::MOV, MOperand::make_reg(sc1, 8),
                                        MOperand::make_reg(MReg::R10, 8)));

@@ -164,6 +164,8 @@ struct RuntimeEntries {
     uint64_t (*str_get_bytes)(vrt_proc *, vrt_handle) = nullptr;
     uint64_t (*str_raw)(vrt_proc *, vrt_handle) = nullptr;
     vrt_handle (*str_cat)(vrt_proc *, vrt_handle, vrt_handle) = nullptr;
+    /// vrt_str_slice(proc, src, range) -> handle del SLICE
+    vrt_handle (*str_slice)(vrt_proc *, vrt_handle, uint64_t) = nullptr;
     int64_t (*str_cmp)(vrt_proc *, vrt_handle, vrt_handle) = nullptr;
 
     /* ----- Panic + GC alloc payload (Sprint JIT-cobertura) ----- */

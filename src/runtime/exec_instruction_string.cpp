@@ -1299,25 +1299,31 @@ void exec_instr_strraw(ProcessVM *vm, const DecodedInstr &instr) {
  * Si el padre es ROPE, se materializa primero (el slice solo puede apuntar a
  * FLAT). Si r_start + r_len > length del padre, se recorta al maximo valido.
  */
-void exec_instr_strslice(ProcessVM *vm, const DecodedInstr &instr) {
-    const uint8_t r_dst = (instr.data_instruction.reg_data.reg1 >> 4) & 0xF;
-    const uint8_t r_src = instr.data_instruction.reg_data.reg1 & 0xF;
-    const uint8_t r_range = (instr.data_instruction.reg_data.reg2 >> 4) &
-                            0xF; // nibble alto (emit_instr_three_reg)
-
-    gc::GcHandle parent_h = flatten_string(
-        vm, static_cast<gc::GcHandle>(vm->registers.regs[r_src].qword()));
+/**
+ * @brief Calcula el SLICE de una cadena.  Cuerpo compartido por el interprete
+ *        (@c exec_instr_strslice) y el JIT (@c vrt_str_slice).
+ *
+ * Se factorizo al anadir la op al selector vreg: mantener dos copias de la
+ * aritmetica de puntos de codigo (que para UTF-8 recorre bytes) era garantia
+ * de que interprete y JIT acabasen discrepando.
+ *
+ * @param vm    Proceso propietario del heap.
+ * @param src_h Cadena de la que se toma la vista.
+ * @param range (cp_start << 32) | cp_len, empaquetado como en el bytecode.
+ * @return Handle del SLICE, o el propio padre si la vista lo abarca entero.
+ */
+gc::GcHandle strslice_public(ProcessVM *vm, gc::GcHandle src_h,
+                             uint64_t range) noexcept {
+    gc::GcHandle parent_h = flatten_string(vm, src_h);
 
     uint8_t *payload = vm->gc_heap.deref(parent_h);
     if (!payload) {
-        vm->registers.regs[r_dst].qword(gc::GC_NULL_HANDLE);
-        return;
+        return gc::GC_NULL_HANDLE;
     }
 
     auto *parent = reinterpret_cast<loader::StringObject *>(payload);
     auto enc = loader::str_encoding(parent);
 
-    uint64_t range = vm->registers.regs[r_range].qword();
     uint32_t cp_start = static_cast<uint32_t>(range >> 32);
     uint32_t cp_len = static_cast<uint32_t>(range & 0xFFFFFFFFu);
 
@@ -1383,12 +1389,24 @@ void exec_instr_strslice(ProcessVM *vm, const DecodedInstr &instr) {
 
     // si el slice es todo el padre, devolver el padre directamente
     if (byte_offset == 0 && byte_len == parent->byte_len) {
-        vm->registers.regs[r_dst].qword(static_cast<uint64_t>(parent_h));
-        return;
+        return parent_h;
     }
 
-    gc::GcHandle h =
-        alloc_slice(vm, parent_h, byte_offset, byte_len, cp_len, enc);
+    return alloc_slice(vm, parent_h, byte_offset, byte_len, cp_len, enc);
+}
+
+/**
+ * @brief Ejecuta STRSLICE: vista de una subcadena por puntos de codigo.
+ */
+void exec_instr_strslice(ProcessVM *vm, const DecodedInstr &instr) {
+    const uint8_t r_dst = (instr.data_instruction.reg_data.reg1 >> 4) & 0xF;
+    const uint8_t r_src = instr.data_instruction.reg_data.reg1 & 0xF;
+    const uint8_t r_range = (instr.data_instruction.reg_data.reg2 >> 4) &
+                            0xF; // nibble alto (emit_instr_three_reg)
+
+    const gc::GcHandle h = strslice_public(
+        vm, static_cast<gc::GcHandle>(vm->registers.regs[r_src].qword()),
+        vm->registers.regs[r_range].qword());
     vm->registers.regs[r_dst].qword(static_cast<uint64_t>(h));
 }
 

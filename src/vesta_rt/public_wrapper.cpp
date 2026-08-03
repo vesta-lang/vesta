@@ -1746,6 +1746,16 @@ VRT_FORCE_FP vrt_handle vrt_str_cat(vrt_proc *proc, vrt_handle a, vrt_handle b) 
         p, static_cast<gc::GcHandle>(a), static_cast<gc::GcHandle>(b)));
 }
 
+/* STRSLICE: vista de una subcadena.  Puede alocar (SLICE) -> captura frame. */
+VRT_FORCE_FP vrt_handle vrt_str_slice(vrt_proc *proc, vrt_handle src,
+                                      uint64_t range) {
+    if (!proc) return VRT_NULL_HANDLE;
+    runtime::ProcessVM *p = as_proc(proc);
+    VRT_CAPTURE_JIT_FRAME(p);
+    return static_cast<vrt_handle>(
+        runtime::strslice_public(p, static_cast<gc::GcHandle>(src), range));
+}
+
 /* STRCMP: comparacion lexicografica.  Returns -1, 0 o 1. */
 int64_t vrt_str_cmp(vrt_proc *proc, vrt_handle a, vrt_handle b) {
     if (!proc) return -1;
