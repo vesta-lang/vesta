@@ -287,6 +287,40 @@ static std::string global_cache_dir_() {
     return (v && v[0]) ? std::string(v) : std::string();
 }
 
+/**
+ * @brief Huella del compilador que esta generando los artefactos.
+ *
+ * Se toma del propio ejecutable (tamano y fecha de modificacion): cambia en
+ * cuanto se recompila el compilador, que es justo cuando los artefactos
+ * cacheados dejan de ser validos.  Se calcula una sola vez.
+ *
+ * @return Valor que identifica esta version del compilador.
+ */
+static uint64_t compiler_fingerprint_() {
+    static const uint64_t fp = []() -> uint64_t {
+        std::error_code ec;
+        const std::string self = ::fs::get_executable_path();
+        uint64_t h = 0xcbf29ce484222325ULL;
+        auto mix = [&h](uint64_t v) {
+            h ^= v;
+            h *= 0x100000001b3ULL;
+        };
+        if (!self.empty()) {
+            const std::filesystem::path p(self);
+            const auto sz = std::filesystem::file_size(p, ec);
+            if (!ec) mix(static_cast<uint64_t>(sz));
+            const auto tm = std::filesystem::last_write_time(p, ec);
+            if (!ec)
+                mix(static_cast<uint64_t>(tm.time_since_epoch().count()));
+        }
+        // Respaldo por si no se pudo mirar el ejecutable: al menos el formato
+        // de interfaz, que ya cambia con las modificaciones de fondo.
+        mix(VXI_FORMAT_VERSION);
+        return h;
+    }();
+    return fp;
+}
+
 static std::string global_cache_path_(const std::string &source_path,
                                       const std::string &ext) {
     namespace fs = std::filesystem;
@@ -1328,6 +1362,14 @@ CompileResult compile_vx_project(
         // `.vel` con relocations sin resolver -> SEGV silente en runtime
         // (limitacion MC.12 documentada).
         uint64_t source_hash = vxi_fnv1a(pm.source);
+        // El COMPILADOR forma parte de lo que produjo el artefacto: un mismo
+        // fuente compilado por dos versiones distintas da IR distinto.  Sin
+        // esto, arreglar un bug de codegen no invalidaba nada y se seguian
+        // sirviendo artefactos generados por la version anterior -- el fallo
+        // parecia seguir vivo, o revivia al repoblarse la cache, y no habia
+        // forma de distinguirlo de un bug real.
+        source_hash ^= compiler_fingerprint_() + 0x9E3779B97F4A7C15ULL +
+                       (source_hash << 6) + (source_hash >> 2);
         if (!opts.instrument_mode.empty() && opts.instrument_mode != "none") {
             const uint64_t instrument_hash = vxi_fnv1a(opts.instrument_mode);
             source_hash ^= instrument_hash + 0x9E3779B97F4A7C15ULL +

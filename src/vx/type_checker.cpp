@@ -744,7 +744,7 @@ std::string TypeChecker::monomorphize_enum(const std::string &template_name,
     }
     elay.max_payload_fields = max_pl;
     elay.size_bytes = 8 + 8 * max_pl;
-    enum_layouts_[mangled] = std::move(elay);
+        enum_layouts_[mangled] = std::move(elay);
 
     mod_.decls.push_back(std::move(cloned));
     return mangled;
@@ -2577,17 +2577,23 @@ Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
                                             ? sym.mangled_label
                                             : it_cls->second.name};
                         }
+                        // El enum va ANTES que el struct: un enum tambien
+                        // queda registrado entre los agregados (comparte el
+                        // camino de los value-types), asi que preguntar por
+                        // struct primero se lo lleva y un enum CON VALOR
+                        // pierde su representacion -- sus variantes dejan de
+                        // ser el entero que son para volverse buffers.
+                        auto it_en = enum_layouts_.find(sym.mangled_label);
+                        if (it_en != enum_layouts_.end()) {
+                            return enum_type_of(it_en->second,
+                                                sym.mangled_label);
+                        }
                         auto it_st = struct_layouts_.find(sym.mangled_label);
                         if (it_st != struct_layouts_.end()) {
                             return Type{PrimitiveKind::STRUCT,
                                         it_st->second.name.empty()
                                             ? sym.mangled_label
                                             : it_st->second.name};
-                        }
-                        auto it_en = enum_layouts_.find(sym.mangled_label);
-                        if (it_en != enum_layouts_.end()) {
-                            return enum_type_of(it_en->second,
-                                                sym.mangled_label);
                         }
                         auto it_ta = type_aliases_.find(sym.mangled_label);
                         if (it_ta != type_aliases_.end()) {
@@ -2664,6 +2670,22 @@ Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
         auto it_a = type_aliases_.find(lookup);
         if (it_a != type_aliases_.end()) {
             referenced_names_.insert(lookup); // L.26: type alias usado
+            // Un enum importado se ve por su nombre local (`Ordering`) y por
+            // el canonico (`std__wideint__Ordering`), y el local llega como
+            // alias.  El tipo guardado en el alias se construyo sin consultar
+            // el layout, asi que un enum CON VALOR volvia aqui convertido en
+            // agregado: sus variantes dejaban de ser -1/0/1 para ser
+            // direcciones de buffers, y compararlas comparaba direcciones.
+            // Reconstruirlo desde el layout devuelve la representacion real.
+            // Un newtype queda fuera: es un tipo NUEVO que solo comparte
+            // representacion con el de origen, y devolver el de origen le
+            // quitaria la identidad que es su razon de ser.
+            if (!it_a->second.struct_name.empty() &&
+                !newtype_underlying_.count(lookup)) {
+                auto it_ae = enum_layouts_.find(it_a->second.struct_name);
+                if (it_ae != enum_layouts_.end() && it_ae->second.is_valued)
+                    return enum_type_of(it_ae->second, it_a->second.struct_name);
+            }
             return it_a->second;
         }
         // 2) Struct registrado: devolvemos Type{STRUCT, name}.
@@ -4218,7 +4240,7 @@ void TypeChecker::collect_globals() {
             //  M6.a L.3.
             elay.is_public = en->is_public;
             // Sobrescribir entrada vacia pre-registrada.
-            enum_layouts_[en->name] = std::move(elay);
+                        enum_layouts_[en->name] = std::move(elay);
         } else if (decl->kind == ast::NodeKind::ClassDecl) {
             auto *c = static_cast<ast::ClassDecl *>(decl.get());
             // generics: templates (con type_params) y especializaciones (#7)
@@ -14540,46 +14562,6 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     //                      emite chequeo (baja a identidad).  UB si x es
     //                      null -- es el opt-out per-sitio (estilo Rust
     //                      unwrap_unchecked); nombre greppable para audits.
-    // Aritmetica multiprecision.  `addc`/`subb` suman o restan dejando el
-    // acarreo, y `carryof` lo lee de la operacion que produjo su argumento.
-    // Existen porque el acarreo es un dato que la maquina calcula gratis y el
-    // lenguaje no tenia como pedirlo: sin ellos habia que deducirlo comparando
-    // el resultado con un sumando, seis instrucciones donde la CPU necesita
-    // dos.  Quien compone enteros mas anchos que la palabra los usa; el resto
-    // del lenguaje no los necesita.
-    if (id->name == "addc" || id->name == "subb") {
-        if (e->args.size() != 2) {
-            diags_.error(e->loc, id->name +
-                                     ": se esperaban 2 argumentos, recibidos " +
-                                     std::to_string(e->args.size()));
-            return Type{PrimitiveKind::COUNT};
-        }
-        const Type a = check_expr(e->args[0].get());
-        const Type b = check_expr(e->args[1].get());
-        if (!is_integer_kind(a.kind) || !is_integer_kind(b.kind)) {
-            diags_.error(e->loc, id->name + ": ambos operandos deben ser "
-                                            "enteros");
-            return Type{PrimitiveKind::COUNT};
-        }
-        e->result_type = a;
-        return a;
-    }
-    if (id->name == "carryof") {
-        if (e->args.size() != 1) {
-            diags_.error(e->loc, "carryof: se esperaba 1 argumento, recibidos " +
-                                     std::to_string(e->args.size()));
-            return Type{PrimitiveKind::COUNT};
-        }
-        const Type a = check_expr(e->args[0].get());
-        if (!is_integer_kind(a.kind)) {
-            diags_.error(e->loc, "carryof: el argumento debe ser el resultado "
-                                 "de un `addc` o un `subb`");
-            return Type{PrimitiveKind::COUNT};
-        }
-        Type rt{PrimitiveKind::BOOL};
-        e->result_type = rt;
-        return rt;
-    }
     if (id->name == "unwrap" || id->name == "unwrap_unchecked") {
         const char *bn = id->name.c_str();
         if (e->args.size() != 1) {

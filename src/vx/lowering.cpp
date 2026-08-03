@@ -11673,6 +11673,29 @@ ir::IrValueId Lowering::lower_enum_constructor(
         return ir::IR_NO_VALUE;
     }
 
+    // Un enum CON VALOR no es un agregado: es su entero base, y la variante ES
+    // ese numero.  Construirle un buffer con tag y campos lo convierte en una
+    // direccion, y a partir de ahi comparar dos variantes compara direcciones
+    // -- dos `Less` distintos dejan de ser iguales.
+    //
+    // La comprobacion va AQUI, por donde pasan todas las formas de nombrar una
+    // variante, y no en cada llamante: con el enum importado alguno de ellos
+    // no lo detectaba y caia al camino de agregado.
+    if (elay.is_valued && elay.backing_type_name.empty()) {
+        const ir::IrType t = ir_type_from_primitive(elay.backing);
+        const ir::IrValueId c = fn_->new_value(t);
+        fn_->values[c].is_const = true;
+        fn_->values[c].const_val = static_cast<uint64_t>(var->int_value);
+        ir::IrInstr ci{};
+        ci.op = ir::IrOp::CONST;
+        ci.type = t;
+        ci.dst = c;
+        ci.imm = static_cast<uint64_t>(var->int_value);
+        ci.source_line = loc.line;
+        fn_->append(current_block_, std::move(ci));
+        return c;
+    }
+
     // marker: MAKE_VARIANT identifica la construccion completa de
     // un valor ADT.  Emitido ANTES de la secuencia ALLOCA + STOREs para
     // que el C2 JIT ( D.8) pueda reconocer el patron y aplicar
@@ -23530,10 +23553,6 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     const bool is_invoke = (name == "invoke");
     const bool is_proceed = (name == "proceed");
     // Optional via instrucciones VM isnull/unwrap (referencias).
-    // Aritmetica multiprecision: suma/resta que dejan acarreo y su lectura.
-    const bool is_addc = (name == "addc");
-    const bool is_subb = (name == "subb");
-    const bool is_carryof = (name == "carryof");
     const bool is_isPresent = (name == "isPresent");
     const bool is_unwrap = (name == "unwrap");
     // unwrap_unchecked: opt-out per-sitio.  Misma forma que unwrap pero
@@ -23839,8 +23858,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         || is_z8_atomic_load || is_z8_atomic_store                        // Z.8
         || is_z8_atomic_cas || is_z8_atomic_add || is_z8_shared_malloc ||
         is_z8_shared_free || is_z10_live_count || is_z10_bytes // Z.10
-        || is_z10_gc_collect
-        || is_addc || is_subb || is_carryof; // multiprecision
+        || is_z10_gc_collect;
     if (!is_any_builtin) return false;
 
     // Helper interno para registrar un literal de string en static_data
@@ -27350,54 +27368,6 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     // Para Optional<T> builtin: LOAD i64 al offset 0 del buffer.
     // Para referencias (CLASS/PTR) legacy: usa la instruccion VM
     // @c isnull (0x25) invertida con XOR.
-    // `addc(a, b)` / `subb(a, b)`: la operacion normal sin signo, marcada
-    // para que su acarreo se pueda leer despues.  `carryof(x)` lee el acarreo
-    // de la operacion que produjo `x`.  El par se mantiene junto hasta el
-    // generador de codigo, que lo baja a la instruccion de la maquina.
-    if (is_addc || is_subb) {
-        if (e->args.size() != 2) {
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        const ir::IrValueId a = lower_expr(e->args[0].get());
-        const ir::IrValueId b = lower_expr(e->args[1].get());
-        if (a == ir::IR_NO_VALUE || b == ir::IR_NO_VALUE) {
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        const ir::IrType t = fn_->values[a].type;
-        const ir::IrValueId dst = fn_->new_value(t);
-        ir::IrInstr op{};
-        op.op = is_addc ? ir::IrOp::ADDC : ir::IrOp::SUBB;
-        op.type = t;
-        op.dst = dst;
-        op.operands = {a, b};
-        op.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(op));
-        out_value = dst;
-        return true;
-    }
-    if (is_carryof) {
-        if (e->args.size() != 1) {
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        const ir::IrValueId src = lower_expr(e->args[0].get());
-        if (src == ir::IR_NO_VALUE) {
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        const ir::IrValueId dst = fn_->new_value(ir::IrType::I64);
-        ir::IrInstr op{};
-        op.op = ir::IrOp::CARRYOF;
-        op.type = fn_->values[src].type;
-        op.dst = dst;
-        op.operands = {src};
-        op.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(op));
-        out_value = dst;
-        return true;
-    }
     if (is_isPresent) {
         if (e->args.size() != 1) {
             error_at(e->loc, "isPresent: requiere exactamente 1 argumento");

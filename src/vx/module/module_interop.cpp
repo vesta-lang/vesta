@@ -1649,6 +1649,61 @@ void inject_generic_templates_from_vxi(
         tc.inject_decl(std::move(decl));
     }
 }
+/**
+ * @brief Reconstruye el layout de un enum a partir de su simbolo de interfaz.
+ *
+ * Un enum puede ser dos cosas y cada una tiene su representacion: uno de
+ * VARIANTES es un agregado -- tag mas campos, en memoria --, mientras que uno
+ * CON VALOR (`enum Ordering : i8 { Less = -1 }`) es su entero base etiquetado,
+ * que cabe en un registro y se compara como un numero.  Perder esa distincion
+ * al cruzar el modulo convierte las variantes en direcciones de buffers, y
+ * comparar dos de ellas pasa a comparar direcciones.
+ *
+ * Esta funcion es el UNICO sitio donde se toma esa decision al importar.  Habia
+ * cuatro copias de esta logica repartidas por las distintas rutas de
+ * importacion, y cada una se equivocaba a su manera: el bug reaparecia por un
+ * camino distinto cada vez que se cerraba por otro.
+ *
+ * @param tc TypeChecker destino (resuelve los nombres de tipo del .vxi).
+ * @param s Simbolo de la interfaz, con su tipo de respaldo y sus variantes.
+ * @param name Nombre con el que registrar el layout.
+ * @param with_payloads Si false, omite los tipos de payload (pre-registro de
+ *        esqueleto, cuando los tipos referidos aun no estan todos resueltos).
+ * @return El layout listo para registrar.
+ */
+static EnumLayout enum_layout_from_vxi_(TypeChecker &tc, const VxiSymbol &s,
+                                        const std::string &name,
+                                        bool with_payloads) {
+    EnumLayout L;
+    L.name = name;
+    // Sin el tamano, el consumidor reserva slots de cero bytes y al construir
+    // una variante pisa la memoria de al lado.
+    L.size_bytes = static_cast<uint32_t>(s.size_bytes);
+    // Enum CON VALOR: hay que llevarse el tipo que lo respalda; sin el, sus
+    // variantes no valen -1/0/1 sino basura.
+    if (!s.underlying_type.empty()) {
+        const Type bt = tc.resolve_type_string(s.underlying_type);
+        if (bt.kind != PrimitiveKind::VOID) {
+            L.is_valued = true;
+            L.backing = bt.kind;
+        }
+    }
+    L.variants.reserve(s.variants.size());
+    for (const auto &v : s.variants) {
+        EnumVariantInfo ev;
+        ev.name = v.name;
+        ev.tag = v.tag;
+        ev.int_value = v.int_value;
+        if (with_payloads) {
+            ev.field_types.reserve(v.payload_types.size());
+            for (const auto &pt : v.payload_types)
+                ev.field_types.push_back(tc.resolve_type_string(pt));
+        }
+        L.variants.push_back(std::move(ev));
+    }
+    return L;
+}
+
 
 // ---------------------------------------------------------------------------
 // import: VxiModule -> TypeChecker (inyeccion selectiva via only_symbols).
@@ -2032,34 +2087,8 @@ void import_vxi_into_typechecker(
             break;
         }
         case VxiSymbolKind::ENUM: {
-            EnumLayout L;
-            L.name = canon;
-            L.variants.reserve(s.variants.size());
-            // Preservar size_bytes del enum (= 8 + 8*max_payload).
-            // Sin esto el consumidor allocaria slots cero-byte y
-            // sobreescribiria memoria adjacente al construir variantes
-            // (`lib.Op.Nop` con size=0 -> el siguiente alloca pisa
-            // el tag de Nop).
-            L.size_bytes = static_cast<uint32_t>(s.size_bytes);
-            // Enum con valor: recuperar el tipo de respaldo y los valores.
-            if (!s.underlying_type.empty()) {
-                const Type bt = tc.resolve_type_string(s.underlying_type);
-                if (bt.kind != PrimitiveKind::VOID) {
-                    L.is_valued = true;
-                    L.backing = bt.kind;
-                }
-            }
-            for (const auto &v : s.variants) {
-                EnumVariantInfo ev;
-                ev.name = v.name;
-                ev.tag = v.tag;
-                ev.int_value = v.int_value;
-                ev.field_types.reserve(v.payload_types.size());
-                for (const auto &pt : v.payload_types) {
-                    ev.field_types.push_back(tc.resolve_type_string(pt));
-                }
-                L.variants.push_back(std::move(ev));
-            }
+            EnumLayout L =
+                enum_layout_from_vxi_(tc, s, canon, /*with_payloads=*/true);
             if (canon != local_name) tc.register_imported_enum(local_name, L);
             tc.register_imported_enum(canon, std::move(L));
             break;
@@ -2257,28 +2286,16 @@ void register_namespace_for_import(TypeChecker &tc,
             break;
         }
         case VxiSymbolKind::ENUM: {
-            EnumLayout L;
-            L.name = mangled_pre;
-            L.size_bytes = static_cast<uint32_t>(s.size_bytes);
-            // El esqueleto tambien lleva si el enum es CON VALOR y su tipo de
-            // respaldo: de lo contrario, entre este registro y el definitivo,
-            // cualquier uso lo tomaba por un enum de variantes y bajaba a un
-            // `make_variant` -- las variantes acababan siendo direcciones de
-            // buffers en vez de -1/0/1.
-            if (!s.underlying_type.empty()) {
-                const Type bt = tc.resolve_type_string(s.underlying_type);
-                if (bt.kind != PrimitiveKind::VOID) {
-                    L.is_valued = true;
-                    L.backing = bt.kind;
-                }
-            }
-            for (const auto &v : s.variants) {
-                EnumVariantInfo ev;
-                ev.name = v.name;
-                ev.tag = v.tag;
-                ev.int_value = v.int_value;
-                L.variants.push_back(std::move(ev));
-            }
+            // Esqueleto: reserva el nombre para que los tipos que se resuelvan
+            // entre medias lo encuentren.  Lleva ya el tipo de respaldo, o
+            // entre este registro y el definitivo cualquier uso tomaria el
+            // enum por uno de variantes.
+            EnumLayout L = enum_layout_from_vxi_(tc, s, mangled_pre,
+                                                 /*with_payloads=*/false);
+            // Si el enum ya entro COMPLETO por la inyeccion selectiva, este
+            // esqueleto no debe pisarlo: es mas pobre, y sobrescribirlo le
+            // quita al enum con valor su tipo base -- sus variantes dejan de
+            // ser el entero que son para volverse direcciones de buffers.
             tc.register_imported_enum(mangled_pre, std::move(L));
             tc.mark_imported(mangled_pre, /*is_reexport=*/false);
             break;

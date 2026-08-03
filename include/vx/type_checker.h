@@ -2424,6 +2424,20 @@ private:
     void register_imported_class(const std::string &name, ClassLayout L) {
         class_layouts_[name] = std::move(L);
     }
+    /**
+     * @brief True si ya hay un layout de enum con ese nombre y viene entero.
+     *
+     * Lo usa el pre-registro de la importacion, que solo reserva el nombre:
+     * si el enum ya entro completo no debe sobrescribirlo, porque el esqueleto
+     * no lleva ni el tipo de respaldo ni los payloads.
+     *
+     * @param name Nombre (canonico o local) bajo el que se busca.
+     * @return true si existe y tiene variantes.
+     */
+    bool enum_layout_is_complete(const std::string &name) const {
+        auto it = enum_layouts_.find(name);
+        return it != enum_layouts_.end() && !it->second.variants.empty();
+    }
     void register_imported_enum(const std::string &name, EnumLayout L) {
         if (getenv("VX_DBG_REG"))
         {
