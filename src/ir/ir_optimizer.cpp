@@ -10792,14 +10792,6 @@ bool ir_pass_schedule(IrFunction &fn, const analysis::PointsTo *pt,
         // con desactivar el modo alias-aware: hay que dejar el bloque como
         // esta.  Son bloques de aritmetica multiprecision, donde conservar el
         // orden importa mas que el paralelismo que se pierde.
-        bool blk_has_carry = false;
-        for (const auto &ins : bb.instrs)
-            if (ins.op == IrOp::ADDC || ins.op == IrOp::SUBB ||
-                ins.op == IrOp::CARRYOF) {
-                blk_has_carry = true;
-                break;
-            }
-        if (blk_has_carry) continue;
 
         bool blk_has_asm = false;
         for (const auto &ins : bb.instrs)
@@ -11142,6 +11134,130 @@ bool ir_pass_schedule(IrFunction &fn, const analysis::PointsTo *pt,
 // la siguiente iteracion el cond falla porque body cambio el flow.
 // Mas correcto: el body NO retorna a header (br exit directo), asi
 // el loop nunca itera.
+/**
+ * @brief True si la operacion deja su propio resultado en los flags de la CPU.
+ *
+ * El acarreo de una suma sobrevive solo hasta la siguiente operacion que
+ * escriba flags.  Sirve para saber hasta donde se puede mirar cuando se busca
+ * la comparacion que lo deduce.
+ *
+ * @param op Operacion SSA.
+ * @return true si al bajar a codigo escribe flags.
+ */
+static bool ir_op_touches_flags(IrOp op) noexcept {
+    switch (op) {
+    case IrOp::ADD:
+    case IrOp::SUB:
+    case IrOp::MUL:
+    case IrOp::DIV:
+    case IrOp::AND:
+    case IrOp::OR:
+    case IrOp::XOR:
+    case IrOp::SHL:
+    case IrOp::SHR:
+    case IrOp::SAR:
+    case IrOp::NEG:
+    case IrOp::NOT:
+    case IrOp::ADDC:
+    case IrOp::SUBB:
+    case IrOp::CMP_EQ:
+    case IrOp::CMP_NE:
+    case IrOp::CMP_LT:
+    case IrOp::CMP_LE:
+    case IrOp::CMP_GT:
+    case IrOp::CMP_GE:
+    case IrOp::CMP_ULT:
+    case IrOp::CMP_ULE:
+    case IrOp::CMP_UGT:
+    case IrOp::CMP_UGE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/**
+ * @brief Reconoce la suma o resta cuyo acarreo se deduce comparando, y la
+ *        marca para que el generador de codigo lea el acarreo que la maquina
+ *        ya calcula.
+ *
+ * Quien compone enteros mas anchos que la palabra arrastra el acarreo de un
+ * limb al siguiente, y como el lenguaje no expone el flag lo deduce asi:
+ *
+ * @code
+ *   lo = a + b;
+ *   if (lo < a) { carry = 1; }      // sin signo
+ * @endcode
+ *
+ * La comparacion es redundante: la suma ya dejo esa respuesta en un flag.  El
+ * patron se reescribe a la forma que lo aprovecha (@c ADDC mas @c CARRYOF),
+ * que los tres emisores bajan a una suma seguida de leer el flag.
+ *
+ * Para la resta el patron equivalente es @c a-b junto a @c a<b (pidio prestado
+ * si el minuendo era menor).
+ *
+ * Se exige que la comparacion este en el MISMO bloque que la operacion y que
+ * entre ambas no haya nada que toque los flags, porque el acarreo se pisa con
+ * cualquier otra operacion aritmetica.  Cuando no se cumple, no se toca nada y
+ * el codigo sigue deduciendolo como hasta ahora -- correcto, solo mas largo.
+ *
+ * @param fn Funcion SSA a examinar.
+ * @return true si se reescribio algun patron.
+ */
+bool ir_pass_carry_idiom(IrFunction &fn) {
+    bool changed = false;
+    if (fn.is_native) return false;
+
+    for (IrBlock &bb : fn.blocks) {
+        for (size_t i = 0; i + 1 < bb.instrs.size(); ++i) {
+            IrInstr &op = bb.instrs[i];
+            if (op.op != IrOp::ADD && op.op != IrOp::SUB) continue;
+            if (op.dst == IR_NO_VALUE || op.operands.size() != 2) continue;
+            // Solo enteros de la anchura de la palabra: por debajo, el acarreo
+            // de la maquina es el del registro entero y no el del tipo.
+            if (op.type != IrType::I64 && op.type != IrType::U64) continue;
+            const IrValueId a = op.operands[0];
+            const IrValueId b = op.operands[1];
+
+            // Buscar la comparacion sin signo que deduce el acarreo, sin
+            // saltarse nada que pueda pisar los flags por el camino.
+            size_t k = i + 1;
+            size_t cmp_at = 0;
+            bool hallada = false;
+            for (; k < bb.instrs.size(); ++k) {
+                const IrInstr &c = bb.instrs[k];
+                if (c.op == IrOp::CMP_ULT && c.operands.size() == 2) {
+                    const bool suma_ok = (op.op == IrOp::ADD) &&
+                                         c.operands[0] == op.dst &&
+                                         (c.operands[1] == a || c.operands[1] == b);
+                    const bool resta_ok = (op.op == IrOp::SUB) &&
+                                          c.operands[0] == a && c.operands[1] == b;
+                    if (suma_ok || resta_ok) { cmp_at = k; hallada = true; break; }
+                }
+                // Lo que haya en medio no impide reconocer el patron: la
+                // relacion entre la suma y su comparacion es de DATOS, no de
+                // posicion.  Que el acarreo siga vivo al leerlo es cosa del
+                // emisor, que materializa la lectura pegada a la suma y, si no
+                // puede, la recalcula con una comparacion equivalente.  Solo
+                // se corta si algo REDEFINE uno de los tres valores en juego,
+                // porque entonces ya no se hablaria de la misma suma.
+                if (c.dst != IR_NO_VALUE &&
+                    (c.dst == op.dst || c.dst == a || c.dst == b))
+                    break;
+            }
+            if (!hallada) continue;
+
+            op.op = (op.op == IrOp::ADD) ? IrOp::ADDC : IrOp::SUBB;
+            IrInstr &c = bb.instrs[cmp_at];
+            c.op = IrOp::CARRYOF;
+            c.type = op.type;
+            c.operands = {op.dst};
+            changed = true;
+        }
+    }
+    return changed;
+}
+
 bool ir_pass_loop_memcpy_idiom(IrFunction &fn) {
     bool changed = false;
     if (fn.is_native) return false;
@@ -11810,6 +11926,13 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
                 // tras const-prop/SLF) el UNWRAP se vuelve MOV -> copy_prop/DCE
                 // lo borran -> cero overhead.  Beneficia VM/JIT/AOT.
                 any |= ir_pass_elide_unwrap(fn);
+                // Suma/resta cuyo acarreo se deduce comparando el resultado
+                // con un sumando: la maquina ya dejo esa respuesta en un flag,
+                // asi que se marca el par para leerla en vez de recalcularla.
+                // Va despues del CSE porque este unifica los operandos y deja
+                // la comparacion pegada a su suma, que es lo que el patron
+                // necesita.
+                any |= ir_pass_carry_idiom(fn);
                 // Segunda ronda de DCE tras plegado/TCO/loop header inline/CSE.
                 any |= ir_pass_dce(fn);
             }
