@@ -12,6 +12,7 @@
 
 #include "ir/ir_optimizer.h"
 #include "ir/ir_facts.h"
+#include "ir/ir_pattern.h"
 #include "ctpe/evaluable.h"
 #include "ir/passes/if_conversion.h"     // diamante/if-anidado -> SELECT (Capa 1)
 #include "ir/passes/unroll.h"            // desenrollado de bucles (factor automatico)
@@ -11205,60 +11206,102 @@ static bool ir_op_touches_flags(IrOp op) noexcept {
  * @param fn Funcion SSA a examinar.
  * @return true si se reescribio algun patron.
  */
-bool ir_pass_carry_idiom(IrFunction &fn) {
-    bool changed = false;
-    if (fn.is_native) return false;
+/**
+ * @brief El patron de la suma cuyo acarreo se deduce comparando.
+ *
+ * Quien compone enteros mas anchos que la palabra arrastra el acarreo de un
+ * limb al siguiente, y como el lenguaje no expone el flag lo deduce asi:
+ *
+ * @code
+ *   lo = a + b;
+ *   if (lo < a) { carry = 1; }      // sin signo
+ * @endcode
+ *
+ * La comparacion es redundante: la suma ya dejo esa respuesta en un flag.  Para
+ * la resta el patron equivalente es @c a-b junto a @c a<b (pidio prestado si el
+ * minuendo era menor).
+ *
+ * @return El patron listo para registrar.
+ */
+static Pattern carry_idiom_pattern() {
+    Pattern p;
+    p.name = "acarreo";
 
-    for (IrBlock &bb : fn.blocks) {
-        for (size_t i = 0; i + 1 < bb.instrs.size(); ++i) {
-            IrInstr &op = bb.instrs[i];
-            if (op.op != IrOp::ADD && op.op != IrOp::SUB) continue;
-            if (op.dst == IR_NO_VALUE || op.operands.size() != 2) continue;
-            // Solo enteros de la anchura de la palabra: por debajo, el acarreo
-            // de la maquina es el del registro entero y no el del tipo.
-            if (op.type != IrType::I64 && op.type != IrType::U64) continue;
-            const IrValueId a = op.operands[0];
-            const IrValueId b = op.operands[1];
+    // QUE busca.  Los operandos se comparan por HECHOS (ir_same_value), no por
+    // identidad de valor SSA: leer un campo dos veces produce dos valores que
+    // valen lo mismo, y exigir el mismo valor dejaba el patron sin reconocer
+    // casos que solo se diferencian en como se escribieron.
+    p.match = [](const IrFunction &fn, IrBlockId b, size_t i) -> PatternMatch {
+        PatternMatch m{};
+        const IrBlock &bb = fn.blocks[b];
+        const IrInstr &op = bb.instrs[i];
+        if (op.op != IrOp::ADD && op.op != IrOp::SUB) return m;
+        if (op.dst == IR_NO_VALUE || op.operands.size() != 2) return m;
+        // Solo enteros de la anchura de la palabra: por debajo, el acarreo de
+        // la maquina es el del registro entero y no el del tipo.
+        if (op.type != IrType::I64 && op.type != IrType::U64) return m;
+        const IrValueId a = op.operands[0];
+        const IrValueId bb_op = op.operands[1];
 
-            // Buscar la comparacion sin signo que deduce el acarreo, sin
-            // saltarse nada que pueda pisar los flags por el camino.
-            size_t k = i + 1;
-            size_t cmp_at = 0;
-            bool hallada = false;
-            for (; k < bb.instrs.size(); ++k) {
-                const IrInstr &c = bb.instrs[k];
-                if (c.op == IrOp::CMP_ULT && c.operands.size() == 2) {
-                    const bool suma_ok = (op.op == IrOp::ADD) &&
-                                         c.operands[0] == op.dst &&
-                                         (ir_same_value(fn, c.operands[1], a) ||
-                                          ir_same_value(fn, c.operands[1], b));
-                    const bool resta_ok = (op.op == IrOp::SUB) &&
-                                          ir_same_value(fn, c.operands[0], a) &&
-                                          ir_same_value(fn, c.operands[1], b);
-                    if (suma_ok || resta_ok) { cmp_at = k; hallada = true; break; }
+        for (size_t k = i + 1; k < bb.instrs.size(); ++k) {
+            const IrInstr &c = bb.instrs[k];
+            if (c.op == IrOp::CMP_ULT && c.operands.size() == 2) {
+                const bool suma_ok = (op.op == IrOp::ADD) &&
+                                     c.operands[0] == op.dst &&
+                                     (ir_same_value(fn, c.operands[1], a) ||
+                                      ir_same_value(fn, c.operands[1], bb_op));
+                const bool resta_ok = (op.op == IrOp::SUB) &&
+                                      ir_same_value(fn, c.operands[0], a) &&
+                                      ir_same_value(fn, c.operands[1], bb_op);
+                if (suma_ok || resta_ok) {
+                    m.block = b;
+                    m.index = i;
+                    m.aux_index = k;
+                    m.valid = true;
+                    return m;
                 }
-                // Lo que haya en medio no impide reconocer el patron: la
-                // relacion entre la suma y su comparacion es de DATOS, no de
-                // posicion.  Que el acarreo siga vivo al leerlo es cosa del
-                // emisor, que materializa la lectura pegada a la suma y, si no
-                // puede, la recalcula con una comparacion equivalente.  Solo
-                // se corta si algo REDEFINE uno de los tres valores en juego,
-                // porque entonces ya no se hablaria de la misma suma.
-                if (c.dst != IR_NO_VALUE &&
-                    (c.dst == op.dst || c.dst == a || c.dst == b))
-                    break;
             }
-            if (!hallada) continue;
-
-            op.op = (op.op == IrOp::ADD) ? IrOp::ADDC : IrOp::SUBB;
-            IrInstr &c = bb.instrs[cmp_at];
-            c.op = IrOp::CARRYOF;
-            c.type = op.type;
-            c.operands = {op.dst};
-            changed = true;
+            // Lo que haya en medio no impide reconocerlo: la relacion es de
+            // DATOS.  Solo corta que algo REDEFINA uno de los tres valores en
+            // juego, porque entonces ya no se hablaria de la misma suma.
+            if (c.dst != IR_NO_VALUE &&
+                (c.dst == op.dst || c.dst == a || c.dst == bb_op))
+                break;
         }
-    }
-    return changed;
+        return m;
+    };
+
+    // Que el acarreo siga vivo al leerlo NO se comprueba aqui: es cosa del
+    // emisor, que materializa la lectura pegada a la suma y, si no puede, la
+    // recalcula con una comparacion equivalente.  Atar ambas cosas fue lo que
+    // dejo este patron reconociendo uno de cada siete casos.
+    p.legal = [](const IrFunction &, const PatternMatch &) { return true; };
+
+    // La comparacion desaparece: una instruccion menos.
+    p.benefit = [](const IrFunction &, const PatternMatch &) {
+        PatternBenefit pb;
+        pb.instructions_saved = 1;
+        return pb;
+    };
+
+    p.rewrite = [](IrFunction &fn, const PatternMatch &m) {
+        IrBlock &bb = fn.blocks[m.block];
+        IrInstr &op = bb.instrs[m.index];
+        IrInstr &c = bb.instrs[m.aux_index];
+        op.op = (op.op == IrOp::ADD) ? IrOp::ADDC : IrOp::SUBB;
+        c.op = IrOp::CARRYOF;
+        c.type = op.type;
+        c.operands = {op.dst};
+        return true;
+    };
+    return p;
+}
+
+bool ir_pass_carry_idiom(IrFunction &fn) {
+    // Valvula para aislar el pase al depurar.
+    if (std::getenv("VESTA_NO_CARRY_IDIOM")) return false;
+    static const std::vector<Pattern> pats = {carry_idiom_pattern()};
+    return ir_apply_patterns(fn, pats);
 }
 
 bool ir_pass_loop_memcpy_idiom(IrFunction &fn) {

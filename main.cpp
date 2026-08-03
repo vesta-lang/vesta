@@ -3418,9 +3418,17 @@ int main(int argc, char *argv[]) {
         // IR (--vx-emit-ir) y transpile (--port).  Si el usuario los pide,
         // saltamos el hit del project-cache para forzar la compilacion y que
         // se generen; de lo contrario el cache hit los omitiria en silencio.
+        // `--vx-emit-only` pide precisamente el `.vel`, que tampoco esta en el
+        // `.velb` cacheado.  Faltaba en esta lista, asi que con un programa
+        // que importa modulos el acierto de cache devolvia el binario y el
+        // `.vel` no aparecia: el mismo comando hacia dos cosas distintas segun
+        // el programa tuviera imports o no.  Peor que la molestia es lo que
+        // implicaba: los volcados de diagnostico dejaban de venir del mismo
+        // recorrido que produce el binario, y compararlos llevaba a
+        // conclusiones que no significaban nada.
         const bool wants_pipeline_artifacts =
             diag_vx || diag_ir_pre || diag_ir_post || diag_vel || emit_ir ||
-            !copts.port_target.empty();
+            emit_only || !copts.port_target.empty();
 
         //  AOT multi-modulo (fix): el project-cache SOLO almacena un
         // `.velb` (bytecode VM).  En modo `-m aot` el output es un binario
