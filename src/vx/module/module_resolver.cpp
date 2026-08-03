@@ -304,7 +304,14 @@ collect_expr_param_fns_(const std::vector<std::unique_ptr<ast::Node>> &decls,
                         pos.push_back(static_cast<int>(i));
                 }
                 if (!pos.empty()) {
-                    out[sd->name] = std::move(pos);
+                    // Se registra por los DOS nombres: el consumidor escribe
+                    // el local (`U`) y el declarado puede venir ya cualificado
+                    // (`test__uu__U`).  El parser busca por lo que se escribio,
+                    // asi que registrar solo uno deja el otro sin capturar.
+                    out[sd->name] = pos;
+                    const size_t sep = sd->name.rfind("__");
+                    if (sep != std::string::npos && sep + 2 < sd->name.size())
+                        out[sd->name.substr(sep + 2)] = pos;
                     break;
                 }
             }
