@@ -61,6 +61,11 @@ namespace disasm {
 // sufijos de modo de tamano (indice = modo 0-3)
 static const char *mode_sfx[] = {"b", "w", "d", "q"};
 // multiplicadores de escala SIB
+// nombres de las condiciones de salto (indice 16 = salto incondicional).
+// Vive a nivel de fichero porque la usan los dos formateadores de operandos.
+static const char *cc[] = {"je", "jne", "jl",  "jle", "jg",  "jge",
+                           "jb", "jbe", "ja",  "jae", "jc",  "jnc",
+                           "jo", "jno", "js",  "jns", "jmp"};
 static const int scale_val[] = {1, 2, 4, 8};
 
 /**
@@ -188,11 +193,80 @@ static std::string fmt_ext_operands(uint8_t opc,
                              8); // reinterpretar como double IEEE 754
             snprintf(buf, sizeof(buf), "f%u, 0x%016llx  ; %.17g", zmm_dst,
                      (unsigned long long)bits, dval);
+        } else if (opc == 0x55 && isz >= 10) {
+            // calln <addr_nativa>: el inmediato de 64 bits empieza en raw[2].
+            uint64_t fn = 0;
+            memcpy(&fn, raw + 2, 8);
+            snprintf(buf, sizeof(buf), "0x%016llx", (unsigned long long)fn);
+        } else if ((opc == 0x70 || opc == 0x71) && isz >= 4) {
+            // fastpush/fastpop <mask16>: se listan los registros marcados, que
+            // es lo que hace falta para seguir un valor a traves de una
+            // llamada.  Sin esto la instruccion salia sin operando alguno.
+            const uint16_t mask =
+                static_cast<uint16_t>(raw[2] | (raw[3] << 8));
+            char regs[96];
+            size_t n = 0;
+            regs[0] = '\0';
+            for (int r = 0; r < 16; ++r) {
+                if (!(mask & (1u << r))) continue;
+                n += static_cast<size_t>(snprintf(regs + n, sizeof(regs) - n,
+                                                  "%sr%d", (n ? " " : ""), r));
+                if (n >= sizeof(regs) - 8) break;
+            }
+            snprintf(buf, sizeof(buf), "0x%04x {%s}", mask, regs);
         }
         break;
 
     case AddressingMode::REG:
-        if (opc == 0x1F || opc == 0x1E) {
+        if ((opc == 0x68 || opc == 0x69) && isz >= 8) {
+            // cmpjmp/cmpjmpu: comparacion y salto fusionados.  Se leen igual
+            // que decode_instr_cmpjmp: registros en b2, condicion en b3 y el
+            // destino en los cuatro bytes siguientes.
+            const unsigned ra = (raw[2] >> 4) & 0x0F;
+            const unsigned rb = raw[2] & 0x0F;
+            const unsigned cond = raw[3];
+            uint32_t target = 0;
+            memcpy(&target, raw + 4, 4);
+            const int ci = (cond < 0x10) ? (int)cond : 16;
+            snprintf(buf, sizeof(buf), "r%u, r%u, %s 0x%08x", ra, rb, cc[ci],
+                     (unsigned)target);
+        } else if ((opc == 0x90 || opc == 0x91) && isz >= 8) {
+            // mld/mst: se leen los campos IGUAL que decode_instr_mem_full, en
+            // vez de reinterpretar los bytes por cuenta propia.
+            const uint8_t ctrl = raw[2];
+            const uint8_t basef = raw[3];
+            const uint8_t regs = raw[4];
+            const int16_t disp =
+                static_cast<int16_t>(raw[5] | (raw[6] << 8));
+            const unsigned width = 1u << ((ctrl >> 4) & 0x07);
+            const unsigned scale = ctrl & 0x07;
+            const unsigned base = basef & 0x1F;
+            const unsigned index = regs & 0x0F;
+            const unsigned reg = (regs >> 4) & 0x0F;
+            const bool host = (ctrl & 0x80) != 0;
+            const bool has_index = (ctrl & 0x08) != 0;
+            const bool sign_ext = (basef & 0x20) != 0;
+            char bs[8];
+            if (base == 16) snprintf(bs, sizeof(bs), "rbp");
+            else if (base == 17) snprintf(bs, sizeof(bs), "rsp");
+            else snprintf(bs, sizeof(bs), "r%u", base);
+            char addr[64];
+            int n = snprintf(addr, sizeof(addr), "%s", bs);
+            if (has_index)
+                n += snprintf(addr + n, sizeof(addr) - n, " + r%u*%u", index,
+                              1u << scale);
+            if (disp)
+                n += snprintf(addr + n, sizeof(addr) - n, " %c %d",
+                              (disp < 0 ? '-' : '+'),
+                              (disp < 0 ? -(int)disp : (int)disp));
+            const char *mark = host ? "h" : "";
+            if (opc == 0x90)
+                snprintf(buf, sizeof(buf), "r%u, %s[%s] (%u bytes%s)", reg,
+                         mark, addr, width, sign_ext ? ", con signo" : "");
+            else
+                snprintf(buf, sizeof(buf), "%s[%s], r%u (%u bytes)", mark,
+                         addr, reg, width);
+        } else if (opc == 0x1F || opc == 0x1E) {
             // MOVC/MOVCH: ctrl[2], datos[3]
             uint8_t ctrl = raw[2], b4 = raw[3];
             uint8_t dir = (ctrl >> 5) & 0x1; // direccion del movimiento
@@ -343,10 +417,6 @@ static std::string fmt_primary_operands(uint8_t opc,
     char buf[128] = {};
 
     // tabla de mnemoticos de condicion de salto (indice = byte de condicion)
-    static const char *cc[] = {"je", "jne", "jl", "jle", "jg", "jge",
-                               "jb", "jbe", "ja", "jae", "jc", "jnc",
-                               "jo", "jno", "js", "jns", "jmp"};
-
     switch (fmt->mode) {
     case AddressingMode::NONE: break;
 
@@ -381,7 +451,32 @@ static std::string fmt_primary_operands(uint8_t opc,
         uint8_t cond = raw[1];
         uint64_t addr = 0;
         memcpy(&addr, raw + 2, 8);
-        if (opc == 0x10) {
+        // No todo lo que va con inmediato es un salto.  `enter` lleva el
+        // tamano del marco y `fastpush`/`fastpop` una mascara de registros;
+        // leerlos como salto imprimia una condicion inexistente en el primero
+        // y nada en los otros dos.
+        if (opc == 0x28 || opc == 0x29) {
+            // enter/leave <frame_size>: el inmediato empieza en raw[1].
+            uint64_t fsz = 0;
+            memcpy(&fsz, raw + 1, 8);
+            snprintf(buf, sizeof(buf), "%llu", (unsigned long long)fsz);
+        } else if (opc == 0x70 || opc == 0x71) {
+            // fastpush/fastpop <mask16>: los registros marcados, uno a uno,
+            // que es lo que interesa al seguir un valor entre llamadas.
+            const uint16_t mask =
+                static_cast<uint16_t>(raw[2] | (raw[3] << 8));
+            char regs[96];
+            size_t n = 0;
+            regs[0] = '\0';
+            for (int r = 0; r < 16; ++r) {
+                if (!(mask & (1u << r))) continue;
+                n += static_cast<size_t>(
+                    snprintf(regs + n, sizeof(regs) - n, "%sr%d",
+                             (n ? " " : ""), r));
+                if (n >= sizeof(regs) - 8) break;
+            }
+            snprintf(buf, sizeof(buf), "0x%04x {%s}", mask, regs);
+        } else if (opc == 0x10) {
             // callvm: salto incondicional con direccion absoluta
             snprintf(buf, sizeof(buf), "0x%016llx", (unsigned long long)addr);
         } else {

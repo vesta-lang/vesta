@@ -15,6 +15,8 @@
 #include <iomanip>
 #include <cstring>
 #include <fstream>
+
+#include "disasm/disasm.h"
 #include <sstream>
 #include <thread>
 #include <atomic>
@@ -1804,6 +1806,30 @@ int main(int argc, char *argv[]) {
     }
 
     if (result.count("disasm-file")) {
+        // Un `.velb` lleva bytecode de la VM, no codigo del anfitrion:
+        // desensamblarlo con el desensamblador nativo devuelve basura con
+        // aspecto de instrucciones x86.  Se reconoce por su firma, asi que el
+        // desensamblador se elige por el CONTENIDO del fichero y no por lo que
+        // el usuario acierte a escribir -- y `--arch`, que ahi no significa
+        // nada, deja de exigirse.
+        const std::string dfile = result["disasm-file"].as<std::string>();
+        {
+            std::ifstream probe(dfile, std::ios::binary);
+            char sig[4] = {0, 0, 0, 0};
+            if (probe.read(sig, 4) &&
+                (std::memcmp(sig, "VELB", 4) == 0 ||
+                 std::memcmp(sig, "BLEV", 4) == 0)) {
+                probe.close();
+                // Volcar el fichero ENTERO: el `hlt` termina una funcion, no
+                // el codigo, y pararse en el primero deja fuera todo lo demas
+                // -- justo lo que hace falta cuando se compara el resultado de
+                // enlazar varios modulos.
+                disasm::DisasmOptions dopts;
+                dopts.stop_at_hlt = false;
+                disasm::disasm_velb(dfile, std::cout, dopts);
+                return EXIT_SUCCESS;
+            }
+        }
         if (!result.count("arch")) {
             std::cerr << "--arch es requerido para desensamblar\n";
             return EXIT_FAILURE;
