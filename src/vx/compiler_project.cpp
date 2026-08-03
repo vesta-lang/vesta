@@ -3078,7 +3078,13 @@ CompileResult compile_vx_project(
      * vacio).  Sin esto, un proyecto CON imports que use comptime fns nunca
      * disparaba el segundo pase. */
     for (const auto &fn : merged.functions) {
-        if (fn.is_macro_compiled) {
+        // Un constructor comptime tambien es codigo que hay que compilar y
+        // cargar antes de poder invocarlo.  Se reconoce por el nombre porque
+        // es lo que sobrevive al merge; sin esto la fase no se disparaba y el
+        // constructor acababa resolviendose por el evaluador de AST -- que
+        // solo funciona dentro del mismo fichero.
+        if (fn.is_macro_compiled ||
+            fn.name.compare(0, 8, "__macro_") == 0) {
             res.has_lowerable_macros = true;
             break;
         }
