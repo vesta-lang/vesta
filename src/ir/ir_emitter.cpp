@@ -110,6 +110,17 @@ struct EmitCtx {
     // por ret en metodos hoja (tipicos: getters, setters, ops aritmeticas
     // pequenas).
     bool has_frame;
+    // Multiprecision: CARRYOF cuyo `setcc` ya se emitio pegado a su ADDC/SUBB.
+    // El acarreo vive en un flag, y cualquier operacion aritmetica que se
+    // cuele entre la suma y su lectura lo pisa -- cosa que pasa en cuanto la
+    // suma se inlinea dentro de otra, porque el orden del IR deja de ser el
+    // orden de emision.  Materializarlo en el acto y anotarlo aqui evita
+    // depender de esa distancia.
+    std::unordered_set<IrValueId> carry_done;
+    // Primer operando de cada ADDC/SUBB, y si era resta.  Sirve de respaldo
+    // cuando la lectura del acarreo cae en un bloque distinto que su suma:
+    // alli el flag ya no es el suyo, asi que se recalcula comparando.
+    std::unordered_map<IrValueId, std::pair<IrValueId, bool>> carry_src;
 
     // true si la funcion contiene alguna ALLOCA (subsp rsp dinamico entre el
     // area de spill y el area de push).  Cuando lo hay, la aritmetica
@@ -2358,9 +2369,25 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     // par no debe separarse (nada puede tocar los flags entre medias).
     case IrOp::ADDC:
     case IrOp::SUBB:
-        if (ins.operands.size() >= 2)
+        if (ins.operands.size() >= 2) {
             emit_binop(ctx, arith_mnemonic(ins.op, ins.type), ins.dst,
                        ins.operands[0], ins.operands[1]);
+            ctx.carry_src[ins.dst] = {ins.operands[0],
+                                      ins.op == IrOp::SUBB};
+            // El acarreo se lee AQUI, no donde aparezca el CARRYOF: es un
+            // flag, y basta una operacion aritmetica en medio para pisarlo.
+            for (size_t k = idx + 1; k < bb.instrs.size(); ++k) {
+                const IrInstr &later = bb.instrs[k];
+                if (later.op != IrOp::CARRYOF) continue;
+                if (later.operands.empty() || later.operands[0] != ins.dst)
+                    continue;
+                if (later.dst == IR_NO_VALUE) continue;
+                ctx.out << "    setcc " << ctx.dst_of(later.dst) << ", 2\n";
+                ctx.store_spilled(later.dst);
+                ctx.carry_done.insert(later.dst);
+                break;
+            }
+        }
         break;
     // Acarreo de la ADDC/SUBB que produjo el operando: se lee del flag que
     // esa suma acaba de dejar.  La condicion 2 es "acarreo activo", y va en
@@ -2368,7 +2395,26 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     // lo tomaria por 0, que es otra condicion -- el acarreo salia siempre
     // falso sin que nada avisara.
     case IrOp::CARRYOF:
-        if (ins.dst != IR_NO_VALUE) {
+        // Lo normal es que ya se emitiera pegado a su suma (ver ADDC/SUBB).
+        // Si no se encontro alli -- suma y lectura en bloques distintos --,
+        // el flag ya no es el suyo, asi que se recalcula con una comparacion
+        // equivalente.
+        if (ins.dst != IR_NO_VALUE && !ctx.carry_done.count(ins.dst)) {
+            auto it_cs = ctx.carry_src.find(
+                ins.operands.empty() ? IR_NO_VALUE : ins.operands[0]);
+            if (it_cs != ctx.carry_src.end()) {
+                // La suma desborda si el resultado quedo por debajo del primer
+                // sumando; la resta pide prestado si el minuendo era menor que
+                // el resultado.  En ambos casos el acarreo es "menor que".
+                ctx.load_src(it_cs->second.first, 0);
+                ctx.load_src(ins.operands[0], 1);
+                const std::string a = ctx.reg_at(it_cs->second.first, 0);
+                const std::string b = ctx.reg_at(ins.operands[0], 1);
+                if (it_cs->second.second)
+                    ctx.out << "    cmpu " << a << ", " << b << "\n";
+                else
+                    ctx.out << "    cmpu " << b << ", " << a << "\n";
+            }
             ctx.out << "    setcc " << ctx.dst_of(ins.dst) << ", 2\n";
             ctx.store_spilled(ins.dst);
         }
@@ -2741,7 +2787,12 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                     // en el loop_body (back-edge target).
                     const bool has_phi_false =
                         has_phi_copies_to(ctx, bid, next.false_block);
-                    const bool fusion_safe = !has_phi_false;
+                    // Valvula para medir lo que aporta la fusion: sin poder
+                    // apagarla no hay con que comparar, y sin comparacion
+                    // cualquier cifra sobre su rendimiento seria inventada.
+                    static const bool fusion_off =
+                        std::getenv("VESTA_NO_CMPJMP") != nullptr;
+                    const bool fusion_safe = !has_phi_false && !fusion_off;
                     const char *fused_mn = (is_fcmp_fused || !fusion_safe)
                                                ? nullptr
                                                : cmpjmp_fused_mnemonic(ins.op);
@@ -6418,6 +6469,16 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
     ctx.zmm_map = std::move(zmm_map);
     ctx.zmm_saved_regs = zmm_saved_regs;
     ctx.zmm_save_slot_base = alloc.num_spill_slots;
+
+    // Multiprecision: de que suma viene cada acarreo.  Se recoge de toda la
+    // funcion de antemano, no sobre la marcha, porque el planificador puede
+    // dejar la lectura antes que su suma -- y entonces, al llegar a ella, aun
+    // no sabriamos con que compararla.
+    for (const auto &blk : fn.blocks)
+        for (const auto &in : blk.instrs)
+            if ((in.op == IrOp::ADDC || in.op == IrOp::SUBB) &&
+                in.dst != IR_NO_VALUE && in.operands.size() >= 2)
+                ctx.carry_src[in.dst] = {in.operands[0], in.op == IrOp::SUBB};
 
     // Etiqueta de funcion (exportada si corresponde)
     if (opts.export_all) {

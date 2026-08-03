@@ -2178,13 +2178,21 @@ CompileResult compile_vx_project(
                 pm.vxi.abi_hash = h;
             }
             //  M5.A L.17: escritura atomica (rename temp file).
-            (void)write_file_atomic_(vp, vbytes);
+            // El IR va PRIMERO y la interfaz DESPUES.  Cada fichero se
+            // escribe de forma atomica, pero son dos ficheros que tienen que
+            // corresponderse, y quien los lee entra por la interfaz: si esta
+            // se publicara antes, otra compilacion simultanea podria
+            // encontrarse la interfaz nueva junto al IR viejo y quedarse con
+            // una mezcla de dos versiones.  Publicando el IR primero, ver la
+            // interfaz nueva garantiza que su IR ya esta en disco.
+            //
             // BugFix M.vxir-sd: persistir el modulo COMPLETO (functions +
             // static_data + globals) para que un dep cache-hit aporte sus
             // slots `code.s_*` al merge.  emit_ir_section (solo functions)
             // los perdia.
             auto ibytes = ir::emit_ir_module_cache(pm.ir);
             (void)write_file_atomic_(ip, ibytes);
+            (void)write_file_atomic_(vp, vbytes);
             // Poblar el CAS global (content-addressed) con el mismo par
             // (interfaz, IR).  Idempotente: la clave es el contenido.  Asi el
             // siguiente proyecto/maquina con esta misma stdlib hace hit sin
