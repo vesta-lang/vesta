@@ -19,10 +19,22 @@ struct P {
     u64 a;
     u64 b;
     /** @brief Constructor comptime: rellena this en tiempo de compilacion. */
-    public comptime P(expr e) { this.a = 7; this.b = 9; }
+    /**
+     * @brief Rellena `this` en tiempo de compilacion.
+     *
+     * `e` llega como TEXTO sin interpretar: son los digitos tal y como se
+     * escribieron.  Si el compilador lo evaluara primero, un numero de 128
+     * bits se truncaria antes de llegar aqui.
+     */
+    public comptime P(expr e) {
+        this.a = e.length();  // 39 digitos: el literal llega entero
+        this.b = 3;
+    }
 }
 i32 main() {
     P p = P(340282366920938463463374607431768211455);
-    if (p.a + p.b == 16) { return 42; }
+    println("digitos=${p.a}");
+    // 39 digitos + 3: el texto llego completo, sin truncar.
+    if (p.a == 39 && p.b == 3) { return 42; }
     return 1;
 }
