@@ -2452,6 +2452,47 @@ Type TypeChecker::type_from_node(const ast::TypeNode *tn) const {
     return t;
 }
 
+/**
+ * @brief Tipo de un enum registrado, en la representacion que le corresponde.
+ *
+ * Un `enum` puede ser dos cosas distintas, y cada una tiene la suya:
+ *
+ *   - CON VALOR (`enum Ordering : i8 { Less = -1 }`): es su entero base
+ *     etiquetado con el nombre del enum.  Cabe en un registro y se compara
+ *     como un numero.
+ *   - DE VARIANTES (con payloads): es un agregado -- tag mas campos -- que
+ *     vive en memoria, y por eso comparte @c PrimitiveKind::STRUCT con los
+ *     structs.
+ *
+ * Cual de las dos se usa depende de la DECLARACION del enum, nunca del camino
+ * por el que se llegue a resolverlo.  Antes cada ruta construia el tipo por su
+ * cuenta y una devolvia siempre el agregado: el mismo enum acababa con dos
+ * representaciones segun quien preguntara, y comparar dos de sus valores
+ * comparaba las direcciones de dos buffers en lugar de su contenido.
+ * Centralizarlo aqui es lo que impide que vuelvan a divergir.
+ *
+ * @param lay Layout del enum ya localizado.
+ * @param fallback_name Nombre a usar si el layout no lo trae.
+ * @return El tipo en la representacion que corresponde al enum.
+ */
+Type TypeChecker::enum_type_of(const EnumLayout &lay,
+                               const std::string &fallback_name) const {
+    const std::string en = lay.name.empty() ? fallback_name : lay.name;
+    if (lay.is_valued) {
+        // Respaldo de tipo de usuario (`enum Color : Rgb`): el enum ES ese tipo.
+        if (!lay.backing_type_name.empty()) {
+            Type vt{lay.backing};
+            vt.struct_name = lay.backing_type_name;
+            return vt;
+        }
+        Type vt{lay.backing};
+        vt.struct_name = en;
+        vt.is_valued_enum = true;
+        return vt;
+    }
+    return Type{PrimitiveKind::STRUCT, en};
+}
+
 Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
     if (!tn) return Type{};
     if (tn->kind == ast::NodeKind::PrimitiveTypeNode) {
@@ -2545,10 +2586,8 @@ Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
                         }
                         auto it_en = enum_layouts_.find(sym.mangled_label);
                         if (it_en != enum_layouts_.end()) {
-                            return Type{PrimitiveKind::STRUCT,
-                                        it_en->second.name.empty()
-                                            ? sym.mangled_label
-                                            : it_en->second.name};
+                            return enum_type_of(it_en->second,
+                                                sym.mangled_label);
                         }
                         auto it_ta = type_aliases_.find(sym.mangled_label);
                         if (it_ta != type_aliases_.end()) {
@@ -2650,24 +2689,7 @@ Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
             referenced_names_.insert(lookup); // L.26: enum usado
             // C-style: un enum con VALOR es su tipo base (U8/...) etiquetado
             // con el nombre del enum -> el lowering lo trata como entero.
-            if (it_e->second.is_valued) {
-                // Backing struct/clase: el enum ES ese tipo (un valor de Color
-                // es un Rgb) -> devolver el tipo base con su nombre.
-                if (!it_e->second.backing_type_name.empty()) {
-                                        Type vt{it_e->second.backing};
-                    vt.struct_name = it_e->second.backing_type_name;
-                    return vt;
-                }
-                // Backing entero/float/string: el enum ES su tipo base,
-                // etiquetado con el nombre del enum (is_valued_enum).
-                Type vt{it_e->second.backing};
-                vt.struct_name =
-                    it_e->second.name.empty() ? lookup : it_e->second.name;
-                vt.is_valued_enum = true;
-                return vt;
-            }
-            return Type{PrimitiveKind::STRUCT,
-                        it_e->second.name.empty() ? lookup : it_e->second.name};
+            return enum_type_of(it_e->second, lookup);
         }
         // 3) Clase registrada: devolvemos Type{CLASS, name}.  CLASS
         //    es reference type: variables del tipo son punteros al

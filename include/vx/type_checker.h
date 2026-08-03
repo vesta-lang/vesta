@@ -1103,8 +1103,61 @@ class TypeChecker {
      */
     void check_free_function_bodies();
 
+    /// @brief Tipo de un enum en la representacion que le corresponde:
+    /// entero etiquetado si es CON VALOR, agregado si es de variantes.
+    /// Punto UNICO de decision para que no diverjan las rutas.
+    Type enum_type_of(const EnumLayout &lay,
+                      const std::string &fallback_name) const;
+
     /// @brief true si el tipo (o un ancestro) declara `toString()`.
     bool type_declares_to_string(const Type &t) const;
+
+    /**
+     * @brief El @c Type de un enum, en la representacion que le corresponde.
+     *
+     * Un enum admite DOS representaciones, y cual toca lo decide su
+     * declaracion, nunca el camino por el que se resuelva su nombre:
+     *
+     *   - enum con VALOR (`enum Ordering : i8 { Less = -1 }`) -> el entero que
+     *     lo respalda, etiquetado con el nombre del enum.  Cabe en un registro
+     *     y se compara como un numero.
+     *   - enum de VARIANTES (con o sin payload) -> un agregado, que vive en
+     *     memoria con su tag y sus campos.
+     *
+     * Toda ruta que necesite el tipo de un enum debe pasar por aqui.  Cuando
+     * cada una lo construia por su cuenta, un mismo enum acababa siendo entero
+     * por un lado y agregado por otro: declararlo reservaba un buffer y
+     * guardaba el TAG en vez del valor, y compararlo comparaba las direcciones
+     * de dos buffers en lugar de su contenido.
+     *
+     * @param name Nombre del enum tal y como aparece en @c enum_layouts_.
+     * @param out Recibe el tipo si el enum existe.
+     * @return false si no hay ningun enum con ese nombre (el caller sigue con
+     *         su propia busqueda).
+     */
+    bool enum_type_of(const std::string &name, Type &out) const {
+        auto it = enum_layouts_.find(name);
+        if (it == enum_layouts_.end()) return false;
+        const auto &lay = it->second;
+        const std::string en = lay.name.empty() ? name : lay.name;
+        if (lay.is_valued) {
+            // Backing con nombre de usuario (`enum Color : Rgb`): el valor ES
+            // ese tipo, asi que se devuelve el suyo.
+            if (!lay.backing_type_name.empty()) {
+                Type vt{lay.backing};
+                vt.struct_name = lay.backing_type_name;
+                out = vt;
+                return true;
+            }
+            Type vt{lay.backing};
+            vt.struct_name = en;
+            vt.is_valued_enum = true;
+            out = vt;
+            return true;
+        }
+        out = Type{PrimitiveKind::STRUCT, en};
+        return true;
+    }
 
     /// Cuerpos de funcion ya chequeados, para que la pasada sea idempotente.
     std::unordered_set<const ast::FunctionDecl *> checked_fn_bodies_;
