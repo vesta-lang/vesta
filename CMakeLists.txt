@@ -1328,6 +1328,7 @@ set(VESTA_RT_SOURCES
         # Opcion W Fase 3b: serializer IR.  Necesario para que el Loader
         # (en vesta_rt) deserialize la seccion @ir del .velb v3.
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ir/ir_facts.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/ir/ir_pattern.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ir/ssa_ir.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ir/ssa_ir_serialize.cpp
 )
