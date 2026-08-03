@@ -9441,6 +9441,26 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
                 !real.empty())
                 it_en = enum_layouts_.find(real);
         }
+        if (it_en == enum_layouts_.end()) {
+            // Un enum importado se conoce por su nombre local (`Ordering`) y
+            // por el canonico (`std__wideint__Ordering`).  Cuando el modulo
+            // viene de su interfaz y no de compilarlo, puede estar registrado
+            // solo bajo el canonico; buscar unicamente por el local lo daba
+            // por desconocido y el acceso caia al camino de los enums de
+            // VARIANTES -- sus valores pasaban a ser buffers en memoria y
+            // compararlos comparaba direcciones.
+            const std::string sufijo = "__" + base_id->name;
+            for (auto it = enum_layouts_.begin(); it != enum_layouts_.end();
+                 ++it) {
+                const std::string &k = it->first;
+                if (k.size() > sufijo.size() &&
+                    k.compare(k.size() - sufijo.size(), sufijo.size(),
+                              sufijo) == 0) {
+                    it_en = it;
+                    break;
+                }
+            }
+        }
         if (it_en != enum_layouts_.end()) {
             const EnumLayout &elay = it_en->second;
             for (const auto &v : elay.variants) {
