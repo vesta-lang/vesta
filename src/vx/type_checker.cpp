@@ -2682,9 +2682,10 @@ Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
             // quitaria la identidad que es su razon de ser.
             if (!it_a->second.struct_name.empty() &&
                 !newtype_underlying_.count(lookup)) {
-                auto it_ae = enum_layouts_.find(it_a->second.struct_name);
-                if (it_ae != enum_layouts_.end() && it_ae->second.is_valued)
-                    return enum_type_of(it_ae->second, it_a->second.struct_name);
+                const EnumLayout *lay_al =
+                    find_enum_layout(it_a->second.struct_name);
+                if (lay_al != nullptr && lay_al->is_valued)
+                    return enum_type_of(*lay_al, it_a->second.struct_name);
             }
             return it_a->second;
         }
@@ -3588,8 +3589,9 @@ void TypeChecker::collect_globals() {
                     if (it != struct_layouts_.end()) {
                         fsize = it->second.size_bytes;
                         falign = it->second.align_bytes;
-                    } else if (auto ie = enum_layouts_.find(ft.struct_name);
-                               ie != enum_layouts_.end()) {
+                    } else if (const EnumLayout *ie =
+                                   find_enum_layout(ft.struct_name);
+                               ie != nullptr) {
                         // enum ADT como campo: usa su layout de tagged-union
                         // (tag i64, 8 bytes), alineado a 8.  Un enum con backing
                         // (`: u8`) NO llega aqui: resuelve a su primitivo antes
@@ -3598,7 +3600,7 @@ void TypeChecker::collect_globals() {
                         // que la asignacion/lectura del campo es una copia escalar.
                         // Un enum con payload requeriria copiar N qwords en el
                         // store/load del campo (lowering pendiente).
-                        if (ie->second.max_payload_fields > 0) {
+                        if (ie->max_payload_fields > 0) {
                             diags_.error(
                                 f.loc,
                                 "un enum con payload ('" + ft.struct_name +
@@ -3607,7 +3609,7 @@ void TypeChecker::collect_globals() {
                                     "backing entero (': u32')");
                             continue;
                         }
-                        fsize = ie->second.size_bytes;
+                        fsize = ie->size_bytes;
                         falign = 8;
                     } else {
                         diags_.error(
@@ -8401,8 +8403,7 @@ Type TypeChecker::check_new(ast::NewExpr *e) {
                        struct_layouts_.end()) {
                 elem_t = Type{PrimitiveKind::STRUCT};
                 elem_t.struct_name = e->class_name;
-            } else if (enum_layouts_.find(e->class_name) !=
-                       enum_layouts_.end()) {
+            } else if (find_enum_layout(e->class_name) != nullptr) {
                 elem_t = Type{PrimitiveKind::STRUCT};
                 elem_t.struct_name = e->class_name;
             } else {
@@ -8896,7 +8897,12 @@ Type TypeChecker::check_match(ast::MatchExpr *e) {
                     type_to_string(st));
             return Type{};
         }
-        auto it = enum_layouts_.find(st.struct_name);
+        const EnumLayout *lay_sc = find_enum_layout(st.struct_name);
+        auto it = enum_layouts_.end();
+        if (lay_sc != nullptr)
+            for (auto i2 = enum_layouts_.begin(); i2 != enum_layouts_.end();
+                 ++i2)
+                if (&i2->second == lay_sc) { it = i2; break; }
         if (it == enum_layouts_.end()) {
             diags_.error(e->scrutinee->loc, std::string("match: '") +
                                                 st.struct_name +
@@ -9510,9 +9516,9 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
         // Resolver el tipo del base primero.
         const Type bt_ns = check_expr(e->base.get());
         if (bt_ns.kind == PrimitiveKind::STRUCT) {
-            auto it_en_ns = enum_layouts_.find(bt_ns.struct_name);
-            if (it_en_ns != enum_layouts_.end()) {
-                const EnumLayout &elay = it_en_ns->second;
+            const EnumLayout *lay_ns = find_enum_layout(bt_ns.struct_name);
+            if (lay_ns != nullptr) {
+                const EnumLayout &elay = *lay_ns;
                 for (const auto &v : elay.variants) {
                     if (v.name == e->field_name) {
                         // Valued enum via namespace (`ns.Op.MOV`): la variante
@@ -12644,9 +12650,9 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             // Forzar el check del base para que poblee result_type.
             Type bt = check_expr(fa->base.get());
             if (bt.kind == PrimitiveKind::STRUCT && !bt.struct_name.empty()) {
-                auto it_en = enum_layouts_.find(bt.struct_name);
-                if (it_en != enum_layouts_.end()) {
-                    const EnumLayout &elay = it_en->second;
+                const EnumLayout *lay_bt = find_enum_layout(bt.struct_name);
+                if (lay_bt != nullptr) {
+                    const EnumLayout &elay = *lay_bt;
                     const EnumVariantInfo *var = nullptr;
                     for (const auto &v : elay.variants) {
                         if (v.name == fa->field_name) {

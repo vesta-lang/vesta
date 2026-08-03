@@ -29606,8 +29606,7 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
         const StructLayout *m_ret_slay = nullptr;
         if (sem_ret_m.kind == PrimitiveKind::STRUCT &&
             !sem_ret_m.struct_name.empty() &&
-            tc_.enum_layouts().find(sem_ret_m.struct_name) ==
-                tc_.enum_layouts().end()) {
+            tc_.find_enum_layout(sem_ret_m.struct_name) == nullptr) {
             auto it_ms = tc_.struct_layouts().find(sem_ret_m.struct_name);
             if (it_ms != tc_.struct_layouts().end() && !it_ms->second.is_overlay)
                 m_ret_slay = &it_ms->second;
@@ -30161,8 +30160,7 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         const StructLayout *m_ret_slay = nullptr;
         if (sem_ret_m.kind == PrimitiveKind::STRUCT &&
             !sem_ret_m.struct_name.empty() &&
-            tc_.enum_layouts().find(sem_ret_m.struct_name) ==
-                tc_.enum_layouts().end()) {
+            tc_.find_enum_layout(sem_ret_m.struct_name) == nullptr) {
             auto it_ms = tc_.struct_layouts().find(sem_ret_m.struct_name);
             if (it_ms != tc_.struct_layouts().end() && !it_ms->second.is_overlay)
                 m_ret_slay = &it_ms->second;
@@ -32480,10 +32478,10 @@ ir::IrValueId Lowering::lower_new_expr(ast::NewExpr *e) {
                 if (it_st != tc_.struct_layouts().end()) {
                     elem_size = static_cast<uint64_t>(it_st->second.size_bytes);
                 } else {
-                    auto it_en = tc_.enum_layouts().find(e->class_name);
-                    if (it_en != tc_.enum_layouts().end()) {
+                    const EnumLayout *lay_cn = tc_.find_enum_layout(e->class_name);
+                    if (lay_cn != nullptr) {
                         elem_size =
-                            static_cast<uint64_t>(it_en->second.size_bytes);
+                            static_cast<uint64_t>(lay_cn->size_bytes);
                     }
                 }
             }
