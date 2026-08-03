@@ -2778,6 +2778,7 @@ r0_case("45_string_op_override", "45 string op override", "45_string_op_override
 r0_case("53_enum_simple", "53 enum simple", "53_enum_simple.vx", 42)
 r0_case("59_arraylist", "59 arraylist", "59_arraylist.vx", 42)
 r0_case("60_stack_iface", "60 stack iface", "60_stack_iface.vx", 42)
+r0_case("ctor_importado", "construir un struct declarado en otro modulo", "362_ctor_importado.vx", 42)
 r0_case("ctor_comptime", "constructor comptime: recoge la llamada cuando ninguna sobrecarga encaja", "361_ctor_comptime.vx", 42)
 r0_case("enum_valor_importado", "enum con valor importado: conserva valores y compara por contenido", "359_enum_valor_importado.vx", 42)
 r0_case("wideint_completo", "recorrido completo de u128/i128/u256/i256/u512/i512 con toString", "358_wideint_completo.vx", 42)

@@ -18734,8 +18734,15 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
         e->result_type.kind == PrimitiveKind::STRUCT) {
         auto *cid = static_cast<ast::IdentExpr *>(e->callee.get());
         auto it_sc = tc_.struct_layouts().find(cid->name);
+        // El tipo resuelto se compara con el del LAYOUT, no con el nombre
+        // escrito: uno importado se usa por su nombre local (`P`) y su
+        // layout se llama con el cualificado (`t__p__P`).  Exigir que
+        // coincidieran hacia que construir un tipo importado no se
+        // reconociera como construccion, y acabara emitido como una
+        // llamada a una funcion con el nombre del tipo.
         if (it_sc != tc_.struct_layouts().end() &&
-            cid->name == e->result_type.struct_name) {
+            (it_sc->second.name.empty() ? cid->name : it_sc->second.name) ==
+                e->result_type.struct_name) {
             const StructLayout &slay = it_sc->second;
             // F1b: si el struct tiene un ctor `comptime` para esta aridad, se
             // ejecuta en compile-time y el struct se materializa como datos
@@ -18777,7 +18784,8 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                 ins.type = ir::IrType::VOID;
                 ins.dst = ir::IR_NO_VALUE;
                 ins.func_name =
-                    cid->name + "__ctor_" + std::to_string(e->args.size());
+                    (slay.name.empty() ? cid->name : slay.name) +
+                    "__ctor_" + std::to_string(e->args.size());
                 ins.operands = std::move(operands);
                 ins.source_line = e->loc.line;
                 fn_->append(current_block_, std::move(ins));
