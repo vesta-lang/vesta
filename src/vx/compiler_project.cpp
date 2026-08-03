@@ -1772,7 +1772,22 @@ CompileResult compile_vx_project(
             }
             if (!dep_found) {
                 auto itd = by_name.find(req.module_name);
-                if (itd == by_name.end()) continue;
+                if (itd == by_name.end()) {
+                    // Un import que no resuelve se saltaba en silencio: no se
+                    // inyectaba ninguno de sus simbolos y la compilacion
+                    // seguia como si nada, fallando mucho mas tarde y en otro
+                    // sitio -- o peor, dando un resultado equivocado.  Quien
+                    // escribio el import merece enterarse aqui.
+                    SourceLoc iloc;
+                    iloc.file = pm.canonical_path;
+                    res.diagnostics.error(
+                        std::move(iloc),
+                        "no se encuentra el modulo '" + req.module_name +
+                            "' que pide un import; sus simbolos no se han "
+                            "importado");
+                    res.ok = false;
+                    continue;
+                }
                 dep_idx = itd->second;
             }
             const ProjectModuleWork &dep = work[dep_idx];
