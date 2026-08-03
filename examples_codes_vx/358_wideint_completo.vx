@@ -18,7 +18,7 @@
  * Cada comprobacion suma a `acc` solo si el resultado es el esperado, asi que
  * el valor devuelto vale por si mismo como veredicto.
  */
-import std.wideint only u128, i128, u256, i256, u512, i512;
+import std.wideint only u128, i128, u256, i256, u512, i512, Ordering;
 
 i32 main() {
     i32 acc = 0;
@@ -87,6 +87,11 @@ i32 main() {
     s1.swap(&s2);
     println("swap        = ${s1} ${s2}");
     if (s1.to_u64() == 22 && s2.to_u64() == 11) { acc = acc + 1; }
+    // Comparacion de tres vias: devuelve un `Ordering`, que cruza el modulo
+    // conservando sus valores.
+    println("ucmp(b,a)=${b.ucmp(a) == Ordering.Less} ucmp(a,a)=${a.ucmp(a) == Ordering.Equal}");
+    if (b.ucmp(a) == Ordering.Less && a.ucmp(a) == Ordering.Equal &&
+        a.ucmp(b) == Ordering.Greater) { acc = acc + 1; }
 
     // Division comprobada: ante un divisor cero no aborta, devuelve None.
     match a.checked_div(u128.zero()) {
@@ -225,7 +230,7 @@ i32 main() {
     if (bajado128 == semilla) { acc = acc + 1; }
 
     println("comprobaciones superadas: ${acc}");
-    if (acc != 63) {
+    if (acc != 64) {
         return acc;
     }
     return 42;
