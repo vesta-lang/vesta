@@ -54,7 +54,7 @@ inline constexpr uint32_t VXI_MAGIC = 0x49584556u;
 /// v9: ns_path en templates genericas (NS.2 cross-module).
 /// v10: package_id en el header (NS.3, offsets 72/76 del pad v6).
 /// v11: ext_methods (NS.6-ext) -- header crece a 88 (ext_off 80 + ext_count 84).
-inline constexpr uint16_t VXI_FORMAT_VERSION = 15; // enums con valor
+inline constexpr uint16_t VXI_FORMAT_VERSION = 16; // tipo base del enum
 
 /// Nombre del SO del HOST de compilacion, en el mismo vocabulario que usan los
 /// atomos `os:` de @Target.  Es el valor por defecto del objetivo cuando no hay

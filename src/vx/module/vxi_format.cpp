@@ -1050,11 +1050,20 @@ static bool parse_payload_struct_or_class(const uint8_t *data, size_t size,
 static bool parse_payload_enum(const uint8_t *data, size_t size,
                                uint32_t payload_off, uint32_t payload_len,
                                uint32_t pool_start, VxiSymbol &out) {
-    if (payload_len < 12) return false; // v5: size+align+variants
+    if (payload_len < 20) return false; // size+align+base+variants
     size_t off = payload_off;
     // v5: size_bytes + align_bytes al inicio.
     if (!read_u32(data, size, off, out.size_bytes)) return false;
     if (!read_u32(data, size, off, out.align_bytes)) return false;
+    // Tipo base del enum (ver emit_payload_for_enum).
+    {
+        uint32_t und_off = 0, und_len = 0;
+        if (!read_u32(data, size, off, und_off)) return false;
+        if (!read_u32(data, size, off, und_len)) return false;
+        if (!read_name(data, size, und_off, und_len, pool_start,
+                       out.underlying_type))
+            return false;
+    }
     uint32_t vc = 0;
     if (!read_u32(data, size, off, vc)) return false;
     out.variants.reserve(vc);

@@ -1552,7 +1552,28 @@ CompileResult compile_vx_project(
                             // `.velb` con cache caliente.  Un `.vxir` viejo
                             // falla el magic y cae a recompilar.
                             ir::IrModule dep_mod;
-                            if (ir::parse_ir_module_cache(ibytes, dep_mod)) {
+                            // La interfaz y el IR son dos ficheros que tienen
+                            // que corresponderse.  Entre validar la primera y
+                            // leer el segundo, otra compilacion simultanea del
+                            // mismo modulo puede publicar una version nueva de
+                            // ambos: se acabaria mezclando la interfaz que se
+                            // valido con un IR que no es el suyo.  Releerla
+                            // despues y comprobar que sigue siendo la misma lo
+                            // descarta; ante la duda, se recompila.
+                            bool par_coherente = true;
+                            {
+                                std::vector<uint8_t> vb2;
+                                if (!read_file_bytes_(vp, vb2)) {
+                                    par_coherente = false;
+                                } else {
+                                    auto pr2 = vxi_parse(vb2.data(), vb2.size());
+                                    if (!pr2.ok ||
+                                        pr2.module_.source_hash != source_hash)
+                                        par_coherente = false;
+                                }
+                            }
+                            if (par_coherente &&
+                                ir::parse_ir_module_cache(ibytes, dep_mod)) {
                                 pm.vxi = std::move(pr.module_);
                                 pm.ir.functions = std::move(dep_mod.functions);
                                 pm.ir.static_data =

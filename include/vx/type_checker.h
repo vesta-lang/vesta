@@ -2438,6 +2438,46 @@ private:
         auto it = enum_layouts_.find(name);
         return it != enum_layouts_.end() && !it->second.variants.empty();
     }
+    /**
+     * @brief Busca el layout de un enum por cualquiera de sus nombres.
+     *
+     * Un enum se conoce por varios nombres a la vez: el local con el que se
+     * escribe (`Ordering`), el canonico del modulo que lo define
+     * (`std__wideint__Ordering`) y, si hay un newtype de por medio, el del
+     * tipo de debajo.  Cada sitio que necesitaba el layout hacia su propia
+     * busqueda y cubria unos nombres si y otros no, de modo que el mismo enum
+     * se reconocia por un camino y no por otro -- y un enum CON VALOR que no
+     * se reconoce se trata como agregado, con lo que sus variantes dejan de
+     * ser numeros para volverse buffers en memoria.
+     *
+     * Este es el UNICO sitio donde se decide.  Al ser uno solo, tambien es el
+     * unico que hay que mirar cuando algo no se reconoce.
+     *
+     * @param name Nombre tal y como aparece en el codigo.
+     * @return El layout, o nullptr si no hay ningun enum con ese nombre.
+     */
+    const EnumLayout *find_enum_layout(const std::string &name) const {
+        if (name.empty()) return nullptr;
+        auto it = enum_layouts_.find(name);
+        if (it != enum_layouts_.end()) return &it->second;
+        // Newtype: `typedef Color Tinta new;` -- Tinta comparte las variantes
+        // del enum de debajo.
+        if (const std::string real = underlying_layout_name(name);
+            !real.empty()) {
+            it = enum_layouts_.find(real);
+            if (it != enum_layouts_.end()) return &it->second;
+        }
+        // Importado: registrado solo bajo su nombre canonico.
+        const std::string sufijo = "__" + name;
+        for (const auto &kv : enum_layouts_) {
+            const std::string &k = kv.first;
+            if (k.size() > sufijo.size() &&
+                k.compare(k.size() - sufijo.size(), sufijo.size(), sufijo) == 0)
+                return &kv.second;
+        }
+        return nullptr;
+    }
+
     void register_imported_enum(const std::string &name, EnumLayout L) {
         if (getenv("VX_DBG_REG"))
         {

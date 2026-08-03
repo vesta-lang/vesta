@@ -1686,6 +1686,18 @@ static EnumLayout enum_layout_from_vxi_(TypeChecker &tc, const VxiSymbol &s,
         if (bt.kind != PrimitiveKind::VOID) {
             L.is_valued = true;
             L.backing = bt.kind;
+        } else {
+            // La interfaz dice que el enum tiene tipo base, pero ese nombre no
+            // resuelve en el consumidor.  Callarse aqui es lo que convertia un
+            // enum CON VALOR en un agregado: sus variantes dejaban de ser
+            // numeros para volverse buffers, y compararlas comparaba
+            // direcciones.  Se avisa en vez de seguir con un tipo por defecto
+            // que no es el suyo.
+            std::fprintf(stderr,
+                         "[vxi] aviso: el enum '%s' declara el tipo base '%s' "
+                         "y no se ha podido resolver; sus valores no se "
+                         "conservaran\n",
+                         name.c_str(), s.underlying_type.c_str());
         }
     }
     L.variants.reserve(s.variants.size());

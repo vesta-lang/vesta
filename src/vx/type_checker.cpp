@@ -2706,12 +2706,12 @@ Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
         // ubicuo del IR / lowering, manteniendo la semantica
         // value-type igual que un struct (alocado en stack del scope
         // que lo crea, copia por valor).
-        auto it_e = enum_layouts_.find(lookup);
-        if (it_e != enum_layouts_.end()) {
+        const EnumLayout *lay_ty = find_enum_layout(lookup);
+        if (lay_ty != nullptr) {
             referenced_names_.insert(lookup); // L.26: enum usado
             // C-style: un enum con VALOR es su tipo base (U8/...) etiquetado
             // con el nombre del enum -> el lowering lo trata como entero.
-            return enum_type_of(it_e->second, lookup);
+            return enum_type_of(*lay_ty, lookup);
         }
         // 3) Clase registrada: devolvemos Type{CLASS, name}.  CLASS
         //    es reference type: variables del tipo son punteros al
@@ -9432,34 +9432,20 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
                              "'; usa anotacion explicita en var-decl o param");
             return Type{};
         }
-        auto it_en = enum_layouts_.find(base_id->name);
-        if (it_en == enum_layouts_.end()) {
-            // `typedef Color Tinta new;` -> `Tinta.Verde` es la variante del
-            // enum de debajo.  El newtype comparte su representacion y sus
-            // variantes; lo unico que anade es ser nominalmente distinto.
-            if (const std::string real = underlying_layout_name(base_id->name);
-                !real.empty())
-                it_en = enum_layouts_.find(real);
-        }
-        if (it_en == enum_layouts_.end()) {
-            // Un enum importado se conoce por su nombre local (`Ordering`) y
-            // por el canonico (`std__wideint__Ordering`).  Cuando el modulo
-            // viene de su interfaz y no de compilarlo, puede estar registrado
-            // solo bajo el canonico; buscar unicamente por el local lo daba
-            // por desconocido y el acceso caia al camino de los enums de
-            // VARIANTES -- sus valores pasaban a ser buffers en memoria y
-            // compararlos comparaba direcciones.
-            const std::string sufijo = "__" + base_id->name;
-            for (auto it = enum_layouts_.begin(); it != enum_layouts_.end();
-                 ++it) {
-                const std::string &k = it->first;
-                if (k.size() > sufijo.size() &&
-                    k.compare(k.size() - sufijo.size(), sufijo.size(),
-                              sufijo) == 0) {
-                    it_en = it;
-                    break;
-                }
-            }
+        // Un solo sitio decide que enum es este nombre (ver
+        // find_enum_layout): antes se buscaba a mano aqui y en otros veinte
+        // puntos, cada uno cubriendo unos nombres si y otros no.
+        const EnumLayout *lay_p = find_enum_layout(base_id->name);
+        auto it_en = lay_p ? enum_layouts_.find(lay_p->name.empty()
+                                                    ? base_id->name
+                                                    : lay_p->name)
+                           : enum_layouts_.end();
+        if (it_en == enum_layouts_.end() && lay_p) {
+            // El layout existe pero su clave no es su propio nombre: se busca
+            // por identidad para quedarse con el iterador correcto.
+            for (auto it2 = enum_layouts_.begin(); it2 != enum_layouts_.end();
+                 ++it2)
+                if (&it2->second == lay_p) { it_en = it2; break; }
         }
         if (it_en != enum_layouts_.end()) {
             const EnumLayout &elay = it_en->second;
@@ -12426,7 +12412,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         bool base_is_enum_id = false;
         if (fa->base && fa->base->kind == ast::NodeKind::IdentExpr) {
             auto *id_b = static_cast<ast::IdentExpr *>(fa->base.get());
-            if (enum_layouts_.find(id_b->name) != enum_layouts_.end()) {
+            if (find_enum_layout(id_b->name) != nullptr) {
                 base_is_enum_id = true;
             }
             // L2.3: enums genericos templates.
@@ -12822,9 +12808,10 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 base_id->name = elay.name;
                 return rt;
             }
-            auto it_en = enum_layouts_.find(base_id->name);
-            if (it_en != enum_layouts_.end()) {
-                const EnumLayout &elay = it_en->second;
+            // Un solo sitio resuelve que enum es este nombre.
+            const EnumLayout *lay_ce = find_enum_layout(base_id->name);
+            if (lay_ce != nullptr) {
+                const EnumLayout &elay = *lay_ce;
                 const EnumVariantInfo *var = nullptr;
                 for (const auto &v : elay.variants) {
                     if (v.name == fa->field_name) {
