@@ -1,0 +1,36 @@
+/**
+ * @file 360_acarreo.vx
+ * @brief Suma y resta que devuelven el acarreo, sin deducirlo.
+ *
+ * Al componer enteros mas anchos que la palabra hay que arrastrar el acarreo de
+ * un limb al siguiente.  La maquina lo calcula gratis -- queda en un flag --
+ * pero el lenguaje no tenia como pedirlo, asi que habia que deducirlo
+ * comparando el resultado con un sumando: seis instrucciones donde la CPU
+ * necesita dos.
+ *
+ * `addc` y `subb` son la suma y la resta de siempre, y `carryof` lee el acarreo
+ * de la operacion que produjo su argumento.  La dependencia es explicita -- el
+ * argumento ES el resultado de la suma --, de modo que el generador de codigo
+ * no tiene que reconocer ningun patron: le basta con seguir el uso.
+ *
+ * Ojo al escribirlo: `carryof` tiene que recibir el valor que la suma produjo.
+ * Si ese valor pasa antes por un campo o por memoria, lo que llega es una
+ * lectura distinta y el vinculo se pierde.
+ */
+u64 g_max = 0xFFFFFFFFFFFFFFFF;
+u64 g_one = 1;
+u64 g_ten = 10;
+i32 main() {
+    u64 s1 = addc(g_max, g_one);
+    bool c1 = carryof(s1);
+    u64 s2 = addc(g_ten, g_one);
+    bool c2 = carryof(s2);
+    u64 d1 = subb(0, g_one);
+    bool b1 = carryof(d1);
+    println("max+1=${s1} c=${c1} | 10+1=${s2} c=${c2} | 0-1 borrow=${b1}");
+    i32 acc = 0;
+    if (s1 == 0 && c1)   { acc = acc + 10; }
+    if (s2 == 11 && !c2) { acc = acc + 10; }
+    if (b1)              { acc = acc + 22; }
+    return acc;   // 42
+}

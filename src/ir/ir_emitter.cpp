@@ -1734,6 +1734,10 @@ static const char *arith_mnemonic(IrOp op, IrType type) {
                       type == IrType::I32 || type == IrType::I64);
     switch (op) {
     case IrOp::ADD: return is_signed ? "adds" : "addu";
+    // Multiprecision: siempre SIN signo -- el acarreo es un hecho
+    // sobre los bits, no sobre el valor.
+    case IrOp::ADDC: return "addu";
+    case IrOp::SUBB: return "subu";
     case IrOp::SUB: return is_signed ? "subs" : "subu";
     case IrOp::MUL: return is_signed ? "muls" : "mulu";
     case IrOp::DIV: return is_signed ? "divs" : "divu";
@@ -2349,9 +2353,25 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     case IrOp::SHL:
     case IrOp::SHR:
     case IrOp::SAR:
+    // Multiprecision: la suma/resta es la normal sin signo -- lo que las
+    // distingue es que su acarreo se consulta despues con CARRYOF, y que el
+    // par no debe separarse (nada puede tocar los flags entre medias).
+    case IrOp::ADDC:
+    case IrOp::SUBB:
         if (ins.operands.size() >= 2)
             emit_binop(ctx, arith_mnemonic(ins.op, ins.type), ins.dst,
                        ins.operands[0], ins.operands[1]);
+        break;
+    // Acarreo de la ADDC/SUBB que produjo el operando: se lee del flag que
+    // esa suma acaba de dejar.  La condicion 2 es "acarreo activo", y va en
+    // DECIMAL: el ensamblador no interpreta el hexadecimal en ese operando y
+    // lo tomaria por 0, que es otra condicion -- el acarreo salia siempre
+    // falso sin que nada avisara.
+    case IrOp::CARRYOF:
+        if (ins.dst != IR_NO_VALUE) {
+            ctx.out << "    setcc " << ctx.dst_of(ins.dst) << ", 2\n";
+            ctx.store_spilled(ins.dst);
+        }
         break;
     // --- Seleccion sin salto (cond ? a : b) ---
     case IrOp::SELECT:

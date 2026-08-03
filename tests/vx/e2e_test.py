@@ -2760,6 +2760,7 @@ r0_case("panic_modulo_importado", "enlace: modulo importado con panic() + global
 # Sin AOT: capturar con try/catch exige el desenrollado nativo de
 # excepciones, que sigue pendiente (el binario nativo aborta en vez de
 # entrar al handler).  En interprete y JIT el FatalError si se captura.
+r0_case("acarreo", "addc/subb/carryof: el acarreo se devuelve, no se deduce", "360_acarreo.vx", 42)
 r0_case("enum_valor_importado", "enum con valor importado: conserva valores y compara por contenido", "359_enum_valor_importado.vx", 42)
 r0_case("wideint_completo", "recorrido completo de u128/i128/u256/i256/u512/i512 con toString", "358_wideint_completo.vx", 42)
 r0_case("herencia_interpolacion", "metodo heredado que devuelve texto interpolado (el clon perdia la interpolacion)", "357_herencia_interpolacion.vx", 42)

@@ -196,6 +196,28 @@ enum class IrOp : uint16_t {
     // el resultado alimenta una suma (acc+select(c,1,0) -> acc+zext(c)).
     SELECT = 0x1C, ///< %dst = select.T %cond, %a, %b   (%cond ? %a : %b)
 
+    // ADDC / SUBB + CARRYOF: aritmetica multiprecision.
+    //
+    // Una suma de anchura mayor que la palabra se construye sumando limbs y
+    // arrastrando el acarreo.  El acarreo lo produce la CPU en un flag y lo
+    // consume la suma siguiente con @c adc, pero el IR es SSA y no tiene donde
+    // guardar DOS resultados, asi que se parte en dos nodos ligados por el
+    // grafo: @c ADDC produce la suma y @c CARRYOF lee el acarreo DE esa suma
+    // concreta (su operando es el valor que ADDC produjo).
+    //
+    // Que la dependencia sea explicita es justo lo que lo hace robusto: el
+    // backend no tiene que RECONOCER un patron -- que cualquier pase podria
+    // reordenar sin avisar --, solo seguir el uso.  Cuando el acarreo alimenta
+    // otra suma, la pareja baja a @c add + @c adc; si nadie lo usa, ADDC es una
+    // suma normal y CARRYOF se elimina como codigo muerto.
+    //
+    // Sin ellos, el acarreo se calculaba comparando el resultado con un sumando
+    // (`suma < a`), lo que cuesta seis instrucciones donde la maquina necesita
+    // dos.
+    ADDC = 0x1D,    ///< %dst = addc.T   %a, %b   (suma; acarreo via CARRYOF)
+    SUBB = 0x1E,    ///< %dst = subb.T   %a, %b   (resta; prestamo via CARRYOF)
+    CARRYOF = 0x1F, ///< %dst = carryof.T %suma   (0/1 de la ADDC/SUBB dada)
+
     // ---- aritmetica flotante (0x20-0x2F) ----
     FADD = 0x20,   ///< %dst = fadd.fN  %a, %b
     FSUB = 0x21,   ///< %dst = fsub.fN  %a, %b

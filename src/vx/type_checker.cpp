@@ -14540,6 +14540,46 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     //                      emite chequeo (baja a identidad).  UB si x es
     //                      null -- es el opt-out per-sitio (estilo Rust
     //                      unwrap_unchecked); nombre greppable para audits.
+    // Aritmetica multiprecision.  `addc`/`subb` suman o restan dejando el
+    // acarreo, y `carryof` lo lee de la operacion que produjo su argumento.
+    // Existen porque el acarreo es un dato que la maquina calcula gratis y el
+    // lenguaje no tenia como pedirlo: sin ellos habia que deducirlo comparando
+    // el resultado con un sumando, seis instrucciones donde la CPU necesita
+    // dos.  Quien compone enteros mas anchos que la palabra los usa; el resto
+    // del lenguaje no los necesita.
+    if (id->name == "addc" || id->name == "subb") {
+        if (e->args.size() != 2) {
+            diags_.error(e->loc, id->name +
+                                     ": se esperaban 2 argumentos, recibidos " +
+                                     std::to_string(e->args.size()));
+            return Type{PrimitiveKind::COUNT};
+        }
+        const Type a = check_expr(e->args[0].get());
+        const Type b = check_expr(e->args[1].get());
+        if (!is_integer_kind(a.kind) || !is_integer_kind(b.kind)) {
+            diags_.error(e->loc, id->name + ": ambos operandos deben ser "
+                                            "enteros");
+            return Type{PrimitiveKind::COUNT};
+        }
+        e->result_type = a;
+        return a;
+    }
+    if (id->name == "carryof") {
+        if (e->args.size() != 1) {
+            diags_.error(e->loc, "carryof: se esperaba 1 argumento, recibidos " +
+                                     std::to_string(e->args.size()));
+            return Type{PrimitiveKind::COUNT};
+        }
+        const Type a = check_expr(e->args[0].get());
+        if (!is_integer_kind(a.kind)) {
+            diags_.error(e->loc, "carryof: el argumento debe ser el resultado "
+                                 "de un `addc` o un `subb`");
+            return Type{PrimitiveKind::COUNT};
+        }
+        Type rt{PrimitiveKind::BOOL};
+        e->result_type = rt;
+        return rt;
+    }
     if (id->name == "unwrap" || id->name == "unwrap_unchecked") {
         const char *bn = id->name.c_str();
         if (e->args.size() != 1) {

@@ -139,6 +139,10 @@ static const OpEntry OP_TABLE[] = {
     {"imaxu", IrOp::IMAXU},
     {"ilog2", IrOp::ILOG2},
     {"select", IrOp::SELECT},
+    // multiprecision: suma/resta que dejan acarreo, y su lectura
+    {"addc", IrOp::ADDC},
+    {"subb", IrOp::SUBB},
+    {"carryof", IrOp::CARRYOF},
     // logica y desplazamientos
     {"and", IrOp::AND},
     {"or", IrOp::OR},

@@ -10780,6 +10780,27 @@ bool ir_pass_schedule(IrFunction &fn, const analysis::PointsTo *pt,
         // -> el modelo de memoria no la ve.  En esos bloques se usa el orden
         // total conservador (asm es raro; el win alias-aware es para bloques
         // de memoria normales).
+        // El acarreo entra en la misma categoria: `carryof` lee el flag que
+        // dejo su `addc`/`subb`, y ese flag no vive en el grafo -- cualquier
+        // operacion aritmetica que se cuele entre los dos lo pisa.  Reordenar
+        // un bloque asi daba el acarreo de OTRA suma, en silencio.  Son
+        // bloques de aritmetica multiprecision, donde conservar el orden
+        // importa mas que el paralelismo que se pierde.
+        // El acarreo viaja por un flag que el grafo no modela: entre una
+        // `addc`/`subb` y su `carryof` no puede colarse NADA que toque los
+        // flags, o se acaba leyendo el acarreo de otra operacion.  No basta
+        // con desactivar el modo alias-aware: hay que dejar el bloque como
+        // esta.  Son bloques de aritmetica multiprecision, donde conservar el
+        // orden importa mas que el paralelismo que se pierde.
+        bool blk_has_carry = false;
+        for (const auto &ins : bb.instrs)
+            if (ins.op == IrOp::ADDC || ins.op == IrOp::SUBB ||
+                ins.op == IrOp::CARRYOF) {
+                blk_has_carry = true;
+                break;
+            }
+        if (blk_has_carry) continue;
+
         bool blk_has_asm = false;
         for (const auto &ins : bb.instrs)
             if (ins.op == IrOp::INLINE_ASM || ins.op == IrOp::ASM_MICRO ||

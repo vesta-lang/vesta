@@ -132,6 +132,10 @@ AotOpClass aot_classify_op(IrOp op) noexcept {
     case IrOp::BITCAST:
     // -- seleccion sin salto (baja a cmov/csel en nativo) --
     case IrOp::SELECT:
+    // -- multiprecision: bajan a la suma/resta y el setcc de la maquina --
+    case IrOp::ADDC:
+    case IrOp::SUBB:
+    case IrOp::CARRYOF:
     // -- flujo de control / SSA --
     case IrOp::BR:
     case IrOp::BR_COND:

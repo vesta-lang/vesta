@@ -170,6 +170,9 @@ inline MOperand vm_reg_mem(int j) {
 inline bool bin_mop(ir::IrOp op, MOp &out) {
     switch (op) {
     case ir::IrOp::ADD: out = MOp::ADD; return true;
+    // El acarreo lo deja la propia instruccion de la maquina.
+    case ir::IrOp::ADDC: out = MOp::ADD; return true;
+    case ir::IrOp::SUBB: out = MOp::SUB; return true;
     case ir::IrOp::SUB: out = MOp::SUB; return true;
     case ir::IrOp::MUL: out = MOp::IMUL; return true;
     case ir::IrOp::AND: out = MOp::AND; return true;
@@ -1428,6 +1431,13 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                     // de tabla); el resto del bloque (BST que
                                     // el frontend emite como path interp) es
                                     // dead code en JIT -> saltar.
+        // Multiprecision: para cada `addc`/`subb` se recuerda su primer
+        // operando, porque `carryof` lo necesita.  Depender del flag que dejo
+        // la instruccion obligaria a que nada se colara entre las dos, y el
+        // asignador de registros puede insertar movimientos; recalcularlo con
+        // una comparacion cuesta lo mismo y no depende del orden.
+        std::unordered_map<ir::IrValueId, std::pair<ir::IrValueId, bool>>
+            carry_src;
         for (const ir::IrInstr &in : ib.instrs) {
             MOp mop;
             MCond cc;
@@ -1646,6 +1656,14 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
 
             case ir::IrOp::ADD:
             case ir::IrOp::SUB:
+            // Multiprecision: la operacion es la misma suma o resta -- lo que
+            // las distingue es que dejan el acarreo para que `carryof` lo lea.
+            case ir::IrOp::ADDC:
+            case ir::IrOp::SUBB:
+                if (in.dst != ir::IR_NO_VALUE && in.operands.size() == 2)
+                    carry_src[in.dst] = {in.operands[0],
+                                         in.op == ir::IrOp::SUBB};
+                [[fallthrough]];
             case ir::IrOp::MUL:
             case ir::IrOp::AND:
             case ir::IrOp::OR:
@@ -2288,6 +2306,26 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * test src,src (ZF<=>src==0) ; mov dst,0 (no toca flags) ;
              * setcc-E dst (byte bajo).  Mismo idiom que flush_pending para
              * materializar un bool. */
+            // Acarreo de la `addc`/`subb` anterior: se lee del flag que esa
+            // instruccion acaba de dejar.  `setb` materializa el 0/1 sin
+            // ramas.  El planificador tiene prohibido meter nada entre las
+            // dos, asi que el flag sigue siendo el suyo.
+            case ir::IrOp::CARRYOF: {
+                flush_pending();
+                if (in.dst == ir::IR_NO_VALUE || in.operands.empty())
+                    return false;
+                auto it_cs = carry_src.find(in.operands[0]);
+                if (it_cs == carry_src.end()) return false;
+                // Suma: desbordo si el resultado quedo por debajo del primer
+                // sumando.  Resta: pidio prestado si el minuendo era menor que
+                // el resultado.  En ambos casos, `setb` tras la comparacion.
+                if (it_cs->second.second)
+                    O.push_back(mk_cmp(it_cs->second.first, in.operands[0]));
+                else
+                    O.push_back(mk_cmp(in.operands[0], it_cs->second.first));
+                O.push_back(mk_setcc(in.dst, MCond::B));
+                break;
+            }
             case ir::IrOp::ISNULL: {
                 flush_pending();
                 if (in.operands.empty() || in.dst == ir::IR_NO_VALUE) {
