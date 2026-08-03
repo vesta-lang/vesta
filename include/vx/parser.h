@@ -109,6 +109,27 @@ class Parser {
     }
 
     /**
+     * @brief Declara un tipo cuyo constructor recibe la expresion sin evaluar.
+     *
+     * Al ver `T(algo)`, el parser captura el TEXTO de lo que se escribio en
+     * lugar de interpretarlo, pero solo si sabe que `T` tiene un constructor
+     * de parametro `expr`.  Cuando el tipo se declara en el mismo fichero lo
+     * averigua al parsearlo; cuando viene de otro modulo no, porque el
+     * parseo ocurre antes de importar nada -- y entonces un numero mas ancho
+     * que la palabra se truncaba antes de que nadie pudiera usarlo.
+     *
+     * El pipeline compila los modulos de los que se depende ANTES, asi que
+     * ese dato ya se conoce y basta con darselo aqui.
+     *
+     * @param name Nombre del tipo.
+     * @param positions Indices de los parametros declarados `expr`.
+     */
+    void add_expr_ctor_type(const std::string &name,
+                            std::vector<int> positions) {
+        macro_expr_params_[name] = std::move(positions);
+    }
+
+    /**
      * @brief Siembra las posiciones de params @c expr de funciones IMPORTADAS
      * de otros modulos, ANTES de parsear.
      *

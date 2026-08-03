@@ -287,6 +287,27 @@ collect_expr_param_fns_(const std::vector<std::unique_ptr<ast::Node>> &decls,
                     pos.push_back(static_cast<int>(i));
             }
             if (!pos.empty()) out[fd->name] = std::move(pos);
+        } else if (d->kind == ast::NodeKind::StructDecl) {
+            // Un struct cuyo constructor recibe la expresion sin evaluar
+            // cuenta igual que una funcion: al ver `T(algo)` el parser tiene
+            // que capturar el TEXTO en vez de interpretarlo.  Faltaba, asi
+            // que con el tipo importado se interpretaba -- y un numero mas
+            // ancho que la palabra se truncaba antes de llegar al
+            // constructor.
+            auto *sd = static_cast<ast::StructDecl *>(d.get());
+            for (const auto &m_up : sd->methods) {
+                const auto *m = m_up.get();
+                if (!m || !m->is_constructor) continue;
+                std::vector<int> pos;
+                for (size_t i = 0; i < m->params.size(); ++i) {
+                    if (m->params[i] && m->params[i]->is_expr_capture)
+                        pos.push_back(static_cast<int>(i));
+                }
+                if (!pos.empty()) {
+                    out[sd->name] = std::move(pos);
+                    break;
+                }
+            }
         } else if (d->kind == ast::NodeKind::NamespaceDecl) {
             collect_expr_param_fns_(
                 static_cast<ast::NamespaceDecl *>(d.get())->decls, out);

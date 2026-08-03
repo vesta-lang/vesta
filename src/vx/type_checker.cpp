@@ -15862,7 +15862,13 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                                      "' coincide con los argumentos dados");
                     return Type{};
                 }
-                Type rt{PrimitiveKind::STRUCT, id->name};
+                // La identidad es el nombre del LAYOUT, no la clave por la
+                // que se busco: un tipo importado se conoce por su nombre
+                // local y por el canonico, y devolver el local da dos
+                // identidades para el mismo tipo.
+                Type rt{PrimitiveKind::STRUCT, it_sc->second.name.empty()
+                                                   ? id->name
+                                                   : it_sc->second.name};
                 e->result_type = rt;
                 return rt;
             }
