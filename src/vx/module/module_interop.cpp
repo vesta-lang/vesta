@@ -867,6 +867,11 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
             mi.flags = 0;
             if (m.is_static) mi.flags |= 0x01;
             if (m.is_constructor) mi.flags |= 0x02;
+            // Un constructor `comptime` se resuelve de otra manera que uno
+            // normal: si la marca no cruza el modulo, al importarlo parece un
+            // constructor corriente y la llamada se rechaza con "ninguna
+            // sobrecarga coincide".
+            if (m.is_comptime) mi.flags |= 0x08;
             mi.mangled_label = name + "__" + m.name;
             mi.param_types.reserve(m.param_types.size());
             for (const auto &pt : m.param_types)
@@ -926,6 +931,11 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
             mi.flags = 0;
             if (m.is_static) mi.flags |= 0x01;
             if (m.is_constructor) mi.flags |= 0x02;
+            // Un constructor `comptime` se resuelve de otra manera que uno
+            // normal: si la marca no cruza el modulo, al importarlo parece un
+            // constructor corriente y la llamada se rechaza con "ninguna
+            // sobrecarga coincide".
+            if (m.is_comptime) mi.flags |= 0x08;
             // Todos los metodos de instancia son virtuales por defecto
             // en Vesta (mismo despacho que Java).
             if (!m.is_static) mi.flags |= 0x04;
@@ -2030,6 +2040,7 @@ void import_vxi_into_typechecker(
                 cmi.vtable_index = mi.vtable_index;
                 cmi.is_static = (mi.flags & 0x01) != 0;
                 cmi.is_constructor = (mi.flags & 0x02) != 0;
+                cmi.is_comptime = (mi.flags & 0x08) != 0;
                 cmi.defining_class = canon;
                 cmi.link_name = mi.mangled_label;
                 cmi.param_types.reserve(mi.param_types.size());
@@ -2085,6 +2096,7 @@ void import_vxi_into_typechecker(
                 cmi.vtable_index = mi.vtable_index;
                 cmi.is_static = (mi.flags & 0x01) != 0;
                 cmi.is_constructor = (mi.flags & 0x02) != 0;
+                cmi.is_comptime = (mi.flags & 0x08) != 0;
                 cmi.defining_class = canon;
                 cmi.link_name = mi.mangled_label;
                 cmi.param_types.reserve(mi.param_types.size());
@@ -2418,6 +2430,7 @@ void register_namespace_for_import(TypeChecker &tc,
                 cmi.vtable_index = mi.vtable_index;
                 cmi.is_static = (mi.flags & 0x01) != 0;
                 cmi.is_constructor = (mi.flags & 0x02) != 0;
+                cmi.is_comptime = (mi.flags & 0x08) != 0;
                 cmi.defining_class = mangled;
                 cmi.param_types.reserve(mi.param_types.size());
                 for (const auto &pt : mi.param_types) {

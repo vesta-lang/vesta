@@ -15836,6 +15836,27 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             }
             if (any_ctor) {
                 if (!ctor) {
+                    // Antes de rendirse: un constructor `comptime T(expr)`
+                    // recoge la llamada precisamente cuando ninguna sobrecarga
+                    // encaja.  Recibe la expresion sin evaluar, asi que sirve
+                    // para lo que el lenguaje no sabe construir por sus medios
+                    // -- un numero mas ancho que la palabra, por ejemplo.
+                    for (const auto &m : it_sc->second.methods) {
+                        if (!m.is_constructor || !m.is_comptime) continue;
+                        for (auto &a : e->args)
+                            (void)check_expr(a.get());
+                        // La identidad es el nombre del LAYOUT, no la clave
+                        // por la que se busco: un tipo importado se conoce por
+                        // su nombre local y por el canonico, y devolver el
+                        // local da dos identidades para el mismo tipo.
+                        const std::string &tn_ct =
+                            it_sc->second.name.empty() ? id->name
+                                                       : it_sc->second.name;
+                        e->comptime_ctor_type = tn_ct;
+                        Type rtc{PrimitiveKind::STRUCT, tn_ct};
+                        e->result_type = rtc;
+                        return rtc;
+                    }
                     diags_.error(e->loc,
                                  "ningun constructor de '" + id->name +
                                      "' coincide con los argumentos dados");
