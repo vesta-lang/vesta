@@ -63,9 +63,21 @@ static const char *mode_sfx[] = {"b", "w", "d", "q"};
 // multiplicadores de escala SIB
 // nombres de las condiciones de salto (indice 16 = salto incondicional).
 // Vive a nivel de fichero porque la usan los dos formateadores de operandos.
-static const char *cc[] = {"je", "jne", "jl",  "jle", "jg",  "jge",
-                           "jb", "jbe", "ja",  "jae", "jc",  "jnc",
-                           "jo", "jno", "js",  "jns", "jmp"};
+// Los nombres SALEN del orden real que evalua la VM (eval_jmp_cond, en
+// exec_instruction_alu.cpp).  La tabla anterior estaba en otro orden, asi que
+// el desensamblador atribuia a cada salto una condicion que no era la suya --
+// leer un volcado llevaba a conclusiones equivocadas.
+// `setcc` NO comparte la tabla de los saltos: tiene la suya, al estilo x86
+// (ver exec_instr_setcc).  Interpretar una con la otra hace que el volcado
+// atribuya a cada comparacion una condicion que no es la suya -- basta para
+// dar por bueno un bug que no existe.
+static const char *cc_setcc[] = {"jo", "jno", "jb",  "jae", "je",  "jne",
+                                 "jbe", "ja", "js",  "jns", "jp",  "jne",
+                                 "jl", "jge", "jle", "jg"};
+
+static const char *cc[] = {"je",  "jne", "jcs", "jcc", "jmi", "jpl",
+                           "jvs", "jvc", "jhi", "jls", "jge", "jlt",
+                           "jgt", "jle", "j?e", "j?f", "jmp"};
 static const int scale_val[] = {1, 2, 4, 8};
 
 /**
@@ -218,7 +230,14 @@ static std::string fmt_ext_operands(uint8_t opc,
         break;
 
     case AddressingMode::REG:
-        if ((opc == 0x68 || opc == 0x69) && isz >= 8) {
+        if (opc == 0x43 && isz >= 4) {
+            // setcc r_dst, cond: byte2 = (cond << 4) | registro.  La condicion
+            // es justo el dato que interesa al leer una comparacion, y salia
+            // sin mostrar.
+            const unsigned cond = (raw[2] >> 4) & 0x0F;
+            const unsigned reg = raw[2] & 0x0F;
+            snprintf(buf, sizeof(buf), "r%u, %s", reg, cc_setcc[cond]);
+        } else if ((opc == 0x68 || opc == 0x69) && isz >= 8) {
             // cmpjmp/cmpjmpu: comparacion y salto fusionados.  Se leen igual
             // que decode_instr_cmpjmp: registros en b2, condicion en b3 y el
             // destino en los cuatro bytes siguientes.
