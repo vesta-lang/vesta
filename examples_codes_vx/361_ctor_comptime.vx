@@ -8,33 +8,49 @@
  * tipo puede recoger la llamada con un constructor `comptime T(expr)`.
  *
  * Recibe la expresion SIN evaluar -- por eso su parametro se declara `expr` --
- * y rellena `this` en tiempo de compilacion, igual que si el valor se hubiera
- * escrito a mano con la sintaxis de siempre.  En el binario solo quedan las
- * constantes.
+ * asi que llegan los digitos tal y como se escribieron.  Si el compilador la
+ * evaluara primero, el numero se truncaria antes de llegar aqui, que es justo
+ * lo que hay que evitar.
+ *
+ * El cuerpo rellena `this` en tiempo de compilacion, igual que si el valor se
+ * hubiera escrito a mano.  En el binario solo quedan las dos constantes: no
+ * queda ni rastro del parseo.
  *
  * No compite con las sobrecargas ni las ensombrece: actua solo cuando el
  * lenguaje no sabe construir el valor por sus medios.
  */
-struct P {
-    u64 a;
-    u64 b;
-    /** @brief Constructor comptime: rellena this en tiempo de compilacion. */
+import std.comptime.literal only IntLit, parse_int_lit;
+
+/** @brief Entero de 128 bits guardado en dos palabras de 64. */
+struct U128 {
+    u64 lo;
+    u64 hi;
+
     /**
-     * @brief Rellena `this` en tiempo de compilacion.
-     *
-     * `e` llega como TEXTO sin interpretar: son los digitos tal y como se
-     * escribieron.  Si el compilador lo evaluara primero, un numero de 128
-     * bits se truncaria antes de llegar aqui.
+     * @brief Construye el valor a partir de como se escribio.
+     * @param e Los digitos, tal cual, sin interpretar.
      */
-    public comptime P(expr e) {
-        this.a = e.length();  // 39 digitos: el literal llega entero
-        this.b = 3;
+    public comptime U128(expr e) {
+        IntLit v = parse_int_lit(e);
+        this.lo = v.word(0);
+        this.hi = v.word(1);
     }
 }
+
 i32 main() {
-    P p = P(340282366920938463463374607431768211455);
-    println("digitos=${p.a}");
-    // 39 digitos + 3: el texto llego completo, sin truncar.
-    if (p.a == 39 && p.b == 3) { return 42; }
-    return 1;
+    // 2^128 - 1: los 128 bits a uno.  No cabe en ningun tipo nativo.
+    U128 m = U128(340282366920938463463374607431768211455);
+    println("lo=${m.lo} hi=${m.hi}");
+
+    // 2^64: solo el bit mas bajo del limb alto.
+    U128 p = U128(18446744073709551616);
+    println("lo=${p.lo} hi=${p.hi}");
+
+    i32 acc = 0;
+    if (m.lo == 0xFFFFFFFFFFFFFFFF) { acc = acc + 1; }
+    if (m.hi == 0xFFFFFFFFFFFFFFFF) { acc = acc + 1; }
+    if (p.lo == 0)                  { acc = acc + 1; }
+    if (p.hi == 1)                  { acc = acc + 1; }
+    if (acc == 4) { return 42; }
+    return acc;
 }
