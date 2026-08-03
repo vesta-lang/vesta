@@ -2323,6 +2323,14 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     O.push_back(mk_cmp(it_cs->second.first, in.operands[0]));
                 else
                     O.push_back(mk_cmp(in.operands[0], it_cs->second.first));
+                // `setcc` solo escribe el byte bajo: sin poner a cero el resto,
+                // el acarreo arrastra lo que hubiera en el registro.  Como
+                // aqui vale tanto de condicion como de sumando (el clasico
+                // `hi + hi + acarreo`), esa basura se cuela en el resultado.
+                // El MOV no toca los flags, asi que va entre medias sin
+                // estropear la comparacion.
+                O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                               MOperand::make_imm32(0)));
                 O.push_back(mk_setcc(in.dst, MCond::B));
                 break;
             }

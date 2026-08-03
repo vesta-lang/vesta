@@ -230,7 +230,18 @@ static std::string fmt_ext_operands(uint8_t opc,
         break;
 
     case AddressingMode::REG:
-        if (opc == 0x43 && isz >= 4) {
+        if (opc == 0x8F && isz >= 4) {
+            // csel r_dst, r_cond, r_a, r_b: cuatro registros repartidos en dos
+            // bytes (ver decode_instr_four_reg).  Salia mostrando solo dos, y
+            // se perdia justo lo que decide la seleccion -- que es lo que hace
+            // falta para seguir de donde sale un valor.
+            const unsigned rd = (raw[2] >> 4) & 0x0F;
+            const unsigned rc = raw[2] & 0x0F;
+            const unsigned ra2 = (raw[3] >> 4) & 0x0F;
+            const unsigned rb2 = raw[3] & 0x0F;
+            snprintf(buf, sizeof(buf), "r%u, r%u ? r%u : r%u", rd, rc, ra2,
+                     rb2);
+        } else if (opc == 0x43 && isz >= 4) {
             // setcc r_dst, cond: byte2 = (cond << 4) | registro.  La condicion
             // es justo el dato que interesa al leer una comparacion, y salia
             // sin mostrar.
