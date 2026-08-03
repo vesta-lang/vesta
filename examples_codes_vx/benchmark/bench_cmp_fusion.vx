@@ -12,7 +12,7 @@ class C {
         i64 acc = 0;
         i32 i = 0;
         while (i < n) {
-            acc = acc + 1;
+            acc++;
             i = i + 1;
         }
         return acc;

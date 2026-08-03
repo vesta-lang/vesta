@@ -16,7 +16,7 @@ i32 main() {
         seed = seed >> 7;
         seed = seed | 1;  // ensure odd
         if ((seed & 7) == 0) {
-            acc = acc + 1;
+            acc++;
         }
         i = i + 1;
     }

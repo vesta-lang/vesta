@@ -272,6 +272,31 @@ class ComptimeRuntime {
      *   - R0 es 0 (handle nulo).
      *   - El handle no corresponde a un @c StringObject vivo.
      */
+    /**
+     * @brief Invoca en la VM de compilacion y devuelve el resultado EN BRUTO.
+     *
+     * Hasta ahora habia una forma de invocar por cada tipo de retorno: una
+     * para enteros y otra para cadenas.  Cada una cubre lo suyo y deja fuera
+     * el resto, asi que un valor compuesto -- un struct, por ejemplo -- no
+     * habia manera de recuperarlo.  Esta es la forma general: se ejecuta el
+     * codigo y se copian los bytes del resultado tal cual, sea lo que sea.
+     * Las variantes por tipo se apoyan en ella.
+     *
+     * El codigo SIEMPRE se ejecuta en la VM (JIT, con el interprete solo como
+     * respaldo); no hay evaluacion sobre el AST.
+     *
+     * @param macro_name Nombre canonico del codigo comptime a ejecutar.
+     * @param args Argumentos, en orden.
+     * @param n_bytes Cuantos bytes ocupa el resultado.
+     * @param addr_reg Registro que, al terminar, contiene la direccion del
+     *        resultado (0 = R0).
+     * @param out_bytes Recibe una copia de esos bytes.
+     * @return true si la ejecucion termino y se pudieron leer.
+     */
+    bool invoke_raw(const std::string &macro_name,
+                    const std::vector<uint64_t> &args, size_t n_bytes,
+                    unsigned addr_reg, std::vector<uint8_t> &out_bytes) noexcept;
+
     bool invoke_string_macro(const std::string &macro_name,
                              const std::vector<uint64_t> &args,
                              std::string &out_str) noexcept;

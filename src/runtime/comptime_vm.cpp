@@ -553,6 +553,51 @@ bool ComptimeRuntime::invoke_string_macro_memoized(
     }
 }
 
+bool ComptimeRuntime::invoke_raw(const std::string &macro_name,
+                                 const std::vector<uint64_t> &args,
+                                 size_t n_bytes, unsigned addr_reg,
+                                 std::vector<uint8_t> &out_bytes) noexcept {
+    out_bytes.clear();
+    if (n_bytes == 0 || n_bytes > (16u << 20)) return false; // tope defensivo
+    if (addr_reg > 15) return false;
+
+    // Ejecuta en la VM de compilacion, como todo lo comptime.
+    uint64_t r0 = 0;
+    if (!invoke_simple_macro(macro_name, args, r0)) return false;
+    if (!impl_ || !impl_->proc) return false;
+
+    try {
+        // Direccion del resultado: R0 salvo que se pida otro registro (un
+        // constructor, por ejemplo, deja el valor donde apuntaba su `this`).
+        const uint64_t addr =
+            (addr_reg == 0) ? r0
+                            : impl_->proc->registers.regs[addr_reg].qword();
+        if (addr == 0) return false;
+
+        // La direccion puede ser de la VM o del anfitrion (un buffer
+        // reservado por quien invoca).  Se intenta primero como direccion de
+        // la VM, que valida el rango; si no lo es, se lee como puntero.
+        out_bytes.resize(n_bytes);
+        bool leido = false;
+        try {
+            impl_->proc->vm_mem.read_bytes(addr, out_bytes.data(), n_bytes);
+            leido = true;
+        } catch (...) {
+            leido = false;
+        }
+        if (!leido) {
+            const uint8_t *src = reinterpret_cast<const uint8_t *>(addr);
+            if (src == nullptr) return false;
+            std::memcpy(out_bytes.data(), src, n_bytes);
+        }
+
+        for (int i = 0; i < 16; ++i) impl_->proc->registers.regs[i].qword(0);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 bool ComptimeRuntime::invoke_string_macro(const std::string &macro_name,
                                           const std::vector<uint64_t> &args,
                                           std::string &out_str) noexcept {

@@ -16,8 +16,8 @@ i32 main() {
     i32 acc = 0;
 
     // Built-in Enum / ValuedEnum como predicado.
-    if (Enum<Shape>())       { acc = acc + 1; }   // 1
-    if (Enum<Op>())          { acc = acc + 1; }   // 2
+    if (Enum<Shape>())       { acc++; }   // 1
+    if (Enum<Op>())          { acc++; }   // 2
     if (ValuedEnum<Op>())    { acc = acc + 2; }   // 4
     if (ValuedEnum<Shape>()) { acc = acc + 99; }  // NO (ADT) -> 4
 

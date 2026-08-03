@@ -71,7 +71,7 @@ i32 main() {
     // entero, no sus primeros ocho bytes leidos como un entero.
     match mk_par(7) {
         case Some(m) => { if (m.a == 7 && m.b == 14) { acc = acc + 10; } }
-        case None    => { acc = acc + 1; }
+        case None    => { acc++; }
     }
 
     return acc;   // 52

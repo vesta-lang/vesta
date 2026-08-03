@@ -47,10 +47,10 @@ i32 main() {
     println("lo=${p.lo} hi=${p.hi}");
 
     i32 acc = 0;
-    if (m.lo == 0xFFFFFFFFFFFFFFFF) { acc = acc + 1; }
-    if (m.hi == 0xFFFFFFFFFFFFFFFF) { acc = acc + 1; }
-    if (p.lo == 0)                  { acc = acc + 1; }
-    if (p.hi == 1)                  { acc = acc + 1; }
+    if (m.lo == 0xFFFFFFFFFFFFFFFF) { acc++; }
+    if (m.hi == 0xFFFFFFFFFFFFFFFF) { acc++; }
+    if (p.lo == 0)                  { acc++; }
+    if (p.hi == 1)                  { acc++; }
     if (acc == 4) { return 42; }
     return acc;
 }
