@@ -561,7 +561,7 @@ bool ComptimeRuntime::invoke_raw(const std::string &macro_name,
     if (n_bytes == 0 || n_bytes > (16u << 20)) return false; // tope defensivo
     if (addr_reg > 15) return false;
 
-    // Ejecuta en la VM de compilacion, como todo lo comptime.
+    // Ejecuta el codigo comptime, que va compilado (JIT).
     uint64_t r0 = 0;
     if (!invoke_simple_macro(macro_name, args, r0)) return false;
     if (!impl_ || !impl_->proc) return false;

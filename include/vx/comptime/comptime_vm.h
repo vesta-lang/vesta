@@ -282,8 +282,10 @@ class ComptimeRuntime {
      * codigo y se copian los bytes del resultado tal cual, sea lo que sea.
      * Las variantes por tipo se apoyan en ella.
      *
-     * El codigo SIEMPRE se ejecuta en la VM (JIT, con el interprete solo como
-     * respaldo); no hay evaluacion sobre el AST.
+     * El codigo comptime se ejecuta SIEMPRE compilado (JIT): se compila por
+     * adelantado al cargarlo.  Nada de evaluacion sobre el AST, y nada de
+     * interpretarlo: si la compilacion de una funcion comptime fallara, eso es
+     * un fallo a corregir en el compilador, no un modo de funcionamiento.
      *
      * @param macro_name Nombre canonico del codigo comptime a ejecutar.
      * @param args Argumentos, en orden.
