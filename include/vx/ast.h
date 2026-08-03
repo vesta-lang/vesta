@@ -776,6 +776,12 @@ struct CallExpr : Expr {
     /// va seguido de @c <...>.  El type checker valida que el numero
     /// de type args coincida con la aridad esperada del builtin.
     std::vector<std::unique_ptr<TypeNode>> type_args;
+    /** Nombre del tipo cuyo constructor `comptime T(expr)` resuelve esta
+     * llamada.  Vacio en el caso normal.  Se rellena cuando ninguna
+     * sobrecarga encajaba y el tipo declara ese constructor: el lowering
+     * lo usa para invocarlo en tiempo de compilacion y materializar el
+     * valor donde estaba la llamada. */
+    std::string comptime_ctor_type;
     /// A.43.10: macros Lisp con quote/emit/splicing.  Cuando el type
     /// checker detecta @c comptime_emit_expr("texto"), parsea el
     /// texto como una expresion Vesta, lo type-checa en el contexto

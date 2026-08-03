@@ -1,0 +1,28 @@
+/**
+ * @file 361_ctor_comptime.vx
+ * @brief Constructor comptime: construir un valor que el lenguaje no sabe leer.
+ *
+ * Un numero de 128 bits no cabe en ningun tipo nativo, asi que ninguna
+ * sobrecarga de constructor puede aceptarlo.  Antes eso era el final del
+ * camino ("funcion no declarada"); ahora, cuando ninguna sobrecarga encaja, el
+ * tipo puede recoger la llamada con un constructor `comptime T(expr)`.
+ *
+ * Recibe la expresion SIN evaluar -- por eso su parametro se declara `expr` --
+ * y rellena `this` en tiempo de compilacion, igual que si el valor se hubiera
+ * escrito a mano con la sintaxis de siempre.  En el binario solo quedan las
+ * constantes.
+ *
+ * No compite con las sobrecargas ni las ensombrece: actua solo cuando el
+ * lenguaje no sabe construir el valor por sus medios.
+ */
+struct P {
+    u64 a;
+    u64 b;
+    /** @brief Constructor comptime: rellena this en tiempo de compilacion. */
+    public comptime P(expr e) { this.a = 7; this.b = 9; }
+}
+i32 main() {
+    P p = P(340282366920938463463374607431768211455);
+    if (p.a + p.b == 16) { return 42; }
+    return 1;
+}

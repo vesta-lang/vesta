@@ -15876,6 +15876,32 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             // un tipo de retorno que nunca se llego a conocer.
             return Type{PrimitiveKind::COUNT};
         }
+        // Constructor comptime: `T(expr)` donde ninguna sobrecarga encaja.
+        //
+        // Se llega aqui cuando la resolucion normal ya ha fallado, que es
+        // justo lo que se pretende: el constructor comptime NO compite con las
+        // sobrecargas ni las ensombrece, actua cuando el lenguaje no sabe
+        // construir el valor por sus medios.  Recibe la expresion SIN evaluar
+        // -- por eso su parametro se declara `expr` -- de modo que sirve para
+        // un literal mas ancho que la palabra igual que para cualquier otra
+        // cosa que el tipo quiera interpretar por su cuenta.
+        {
+            const StructLayout *sl_ct = nullptr;
+            auto it_sl = struct_layouts_.find(id->name);
+            if (it_sl != struct_layouts_.end()) sl_ct = &it_sl->second;
+            if (sl_ct != nullptr) {
+                for (const auto &m : sl_ct->methods) {
+                    if (!m.is_constructor || !m.is_comptime) continue;
+                    // El tipo del valor es el propio struct; el constructor
+                    // rellena `this` en tiempo de compilacion y su resultado
+                    // se materializa donde estaba la llamada.
+                    for (auto &a : e->args)
+                        (void)check_expr(a.get());
+                    e->comptime_ctor_type = id->name;
+                    return Type{PrimitiveKind::STRUCT, id->name};
+                }
+            }
+        }
         diags_.error(e->loc, "funcion no declarada: '" + id->name + "'");
         for (auto &a : e->args)
             (void)check_expr(a.get());
