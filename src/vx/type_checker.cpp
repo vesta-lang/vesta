@@ -15869,6 +15869,12 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 Type rt{PrimitiveKind::STRUCT, it_sc->second.name.empty()
                                                    ? id->name
                                                    : it_sc->second.name};
+                // Si el constructor elegido es comptime, se deja anotado: el
+                // lowering lo EJECUTA al compilar en vez de emitir la llamada,
+                // y necesita saberlo aqui porque un tipo importado no llega
+                // por el mismo camino que uno declarado en el fichero.
+                if (ctor != nullptr && ctor->is_comptime)
+                    e->comptime_ctor_type = rt.struct_name;
                 e->result_type = rt;
                 return rt;
             }

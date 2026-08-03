@@ -18707,6 +18707,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
 }
 
 ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
+
     /* A.43.10: macros Lisp con splice/emit.  Si el type checker
      * sustituyo la llamada por un AST expandido (campo macro_expanded
      * no-null), bajamos directamente el AST sustituido en lugar de
@@ -18763,37 +18764,6 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                 fn_->append(current_block_, std::move(al));
                 fn_->values[v_buf].is_host_ptr = true;
 
-                // Constructor comptime: se EJECUTA al compilar y en el binario
-                // quedan los valores, no la llamada.  Recibe la expresion tal
-                // y como se escribio -- texto sin interpretar -- que es lo que
-                // permite construir lo que el lenguaje no sabe leer, como un
-                // numero mas ancho que la palabra.
-                if (e->args.size() == 1 && e->args[0] &&
-                    e->args[0]->kind == ast::NodeKind::StringLitExpr) {
-                    bool ctor_es_comptime = false;
-                    for (const auto &m : slay.methods)
-                        if (m.is_constructor && m.is_comptime) {
-                            ctor_es_comptime = true;
-                            break;
-                        }
-                    if (ctor_es_comptime) {
-                        const std::string &txt =
-                            static_cast<ast::StringLitExpr *>(e->args[0].get())
-                                ->value;
-                        auto &rt =
-                            const_cast<TypeChecker &>(tc_).comptime_runtime();
-                        uint64_t h = 0;
-                        std::vector<uint8_t> raw;
-                        if (rt.marshal_string(txt, h) &&
-                            rt.invoke_raw("__macro_" + slay.name + "__ctor_1",
-                                          {0, h},
-                                          static_cast<size_t>(slay.size_bytes),
-                                          1, raw) &&
-                            materialize_comptime_bytes(raw, slay, v_buf,
-                                                       e->loc.line))
-                            return v_buf;
-                    }
-                }
                 std::vector<ir::IrValueId> operands;
                 operands.reserve(e->args.size() + 1);
                 operands.push_back(v_buf); // this = buffer a inicializar
