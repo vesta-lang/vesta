@@ -209,20 +209,25 @@ class Lowering {
     /**
      * @brief Vuelca el resultado de una ejecucion comptime como constantes.
      *
-     * Lo que devuelve la VM de compilacion son bytes.  Aqui se reparten entre
-     * los campos del tipo -- cada uno sabe su desplazamiento y su tamano -- y
-     * se escriben en el buffer destino como CONSTANTES.  En el binario no
-     * queda ni la llamada ni el codigo que la calculo: solo los valores.
+     * El valor ES el bloque de memoria que dejo la ejecucion, asi que se copia
+     * entero, por palabras, y se escribe en el buffer destino como
+     * CONSTANTES.  En el binario no queda ni la llamada ni el codigo que la
+     * calculo: solo los valores.
+     *
+     * NO se recorren los campos a proposito: mirar la estructura obliga a
+     * resolver uniones (varias vistas de los mismos bytes), anidamiento y
+     * relleno, y nada de eso cambia lo que hay que copiar.
      *
      * Es el unico sitio que hace esta conversion, para que no acabe repartida
      * entre cada llamante con sus propias reglas.
      *
      * @param bytes Resultado en bruto de la ejecucion.
      * @param layout Tipo al que corresponden esos bytes.
-     * @param v_dst Buffer destino donde escribir los campos.
+     * @param v_dst Buffer destino.
      * @param source_line Linea a la que atribuir las instrucciones.
-     * @return false si algun campo no se puede representar (el llamante
-     *         decide entonces si emitir la llamada normal).
+     * @return false si el tipo contiene una direccion: un puntero calculado al
+     *         compilar apunta a memoria del compilador y no se puede
+     *         trasladar.
      */
     bool materialize_comptime_bytes(const std::vector<uint8_t> &bytes,
                                     const StructLayout &layout,

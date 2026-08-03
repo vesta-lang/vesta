@@ -34582,37 +34582,49 @@ bool Lowering::materialize_comptime_bytes(const std::vector<uint8_t> &bytes,
                                           const StructLayout &layout,
                                           ir::IrValueId v_dst,
                                           uint32_t source_line) {
-    if (v_dst == ir::IR_NO_VALUE) return false;
+    if (v_dst == ir::IR_NO_VALUE || bytes.empty()) return false;
 
-    for (const auto &f : layout.fields) {
-        // Solo se materializa lo que cabe en un entero: un campo que sea a su
-        // vez un agregado o una referencia necesitaria reconstruir lo que
-        // apunta, y eso no se puede sacar de un volcado de bytes.
-        if (f.size == 0 || f.size > 8) return false;
-        if (static_cast<size_t>(f.offset) + f.size > bytes.size()) return false;
-        const ir::IrType ft = ir_type_from_primitive(f.type.kind);
-        if (ft == ir::IrType::PTR) return false;
+    // El valor ES el bloque de memoria que dejo la ejecucion, asi que se copia
+    // entero, por palabras.  No se recorren los campos a proposito: mirar la
+    // estructura obliga a resolver uniones (varias vistas de los mismos
+    // bytes), anidamiento y relleno, y nada de eso cambia lo que hay que
+    // copiar.  Un `u256` son cuatro palabras seguidas, se llame como se llame
+    // cada trozo por dentro.
+    //
+    // Lo que si descalifica al tipo es que contenga una direccion: un puntero
+    // calculado al compilar apunta a memoria del compilador, que no existe
+    // cuando el programa corre.  Eso no se puede trasladar y se dice, en vez
+    // de dejar una direccion invalida en el binario.
+    for (const auto &f : layout.fields)
+        if (f.type.kind == PrimitiveKind::PTR) return false;
 
+    const size_t n = bytes.size();
+    for (size_t off = 0; off < n; off += 8) {
+        const size_t chunk = (n - off >= 8) ? 8 : (n - off);
         uint64_t raw = 0;
-        std::memcpy(&raw, bytes.data() + f.offset, f.size);
+        std::memcpy(&raw, bytes.data() + off, chunk);
 
-        const ir::IrValueId v_val = emit_const(ft, raw, source_line);
+        const ir::IrType wt =
+            (chunk == 8) ? ir::IrType::I64
+                         : (chunk >= 4 ? ir::IrType::I32
+                                       : (chunk >= 2 ? ir::IrType::I16
+                                                     : ir::IrType::I8));
+        const ir::IrValueId v_val = emit_const(wt, raw, source_line);
         const ir::IrValueId v_off =
-            emit_const(ir::IrType::I64, f.offset, source_line);
+            emit_const(ir::IrType::I64, off, source_line);
         const ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-        {
-            ir::IrInstr add{};
-            add.op = ir::IrOp::ADD;
-            add.type = ir::IrType::PTR;
-            add.dst = v_addr;
-            add.operands = {v_dst, v_off};
-            add.source_line = source_line;
-            fn_->append(current_block_, std::move(add));
-            fn_->values[v_addr].is_host_ptr = fn_->values[v_dst].is_host_ptr;
-        }
+        ir::IrInstr add{};
+        add.op = ir::IrOp::ADD;
+        add.type = ir::IrType::PTR;
+        add.dst = v_addr;
+        add.operands = {v_dst, v_off};
+        add.source_line = source_line;
+        fn_->append(current_block_, std::move(add));
+        fn_->values[v_addr].is_host_ptr = fn_->values[v_dst].is_host_ptr;
+
         ir::IrInstr st{};
         st.op = ir::IrOp::STORE;
-        st.type = ft;
+        st.type = wt;
         st.operands = {v_val, v_addr};
         st.source_line = source_line;
         fn_->append(current_block_, std::move(st));
