@@ -207,6 +207,29 @@ class Lowering {
     ir::IrValueId emit_const(ir::IrType t, uint64_t imm, uint32_t source_line);
 
     /**
+     * @brief Vuelca el resultado de una ejecucion comptime como constantes.
+     *
+     * Lo que devuelve la VM de compilacion son bytes.  Aqui se reparten entre
+     * los campos del tipo -- cada uno sabe su desplazamiento y su tamano -- y
+     * se escriben en el buffer destino como CONSTANTES.  En el binario no
+     * queda ni la llamada ni el codigo que la calculo: solo los valores.
+     *
+     * Es el unico sitio que hace esta conversion, para que no acabe repartida
+     * entre cada llamante con sus propias reglas.
+     *
+     * @param bytes Resultado en bruto de la ejecucion.
+     * @param layout Tipo al que corresponden esos bytes.
+     * @param v_dst Buffer destino donde escribir los campos.
+     * @param source_line Linea a la que atribuir las instrucciones.
+     * @return false si algun campo no se puede representar (el llamante
+     *         decide entonces si emitir la llamada normal).
+     */
+    bool materialize_comptime_bytes(const std::vector<uint8_t> &bytes,
+                                    const StructLayout &layout,
+                                    ir::IrValueId v_dst,
+                                    uint32_t source_line);
+
+    /**
      * @brief Emite GETPROC y devuelve el SSA value (PTR al ProcessVM).
      *        Usado por las variantes GC-aware de las colecciones (cada
      *        variante @c *_gc del plugin recibe @c proc como primer arg

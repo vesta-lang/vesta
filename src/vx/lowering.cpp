@@ -34578,6 +34578,48 @@ void Lowering::emit_struct_vptr_init(ir::IrValueId struct_addr,
 // Helpers de constantes y casts.
 // ---------------------------------------------------------------------
 
+bool Lowering::materialize_comptime_bytes(const std::vector<uint8_t> &bytes,
+                                          const StructLayout &layout,
+                                          ir::IrValueId v_dst,
+                                          uint32_t source_line) {
+    if (v_dst == ir::IR_NO_VALUE) return false;
+
+    for (const auto &f : layout.fields) {
+        // Solo se materializa lo que cabe en un entero: un campo que sea a su
+        // vez un agregado o una referencia necesitaria reconstruir lo que
+        // apunta, y eso no se puede sacar de un volcado de bytes.
+        if (f.size == 0 || f.size > 8) return false;
+        if (static_cast<size_t>(f.offset) + f.size > bytes.size()) return false;
+        const ir::IrType ft = ir_type_from_primitive(f.type.kind);
+        if (ft == ir::IrType::PTR) return false;
+
+        uint64_t raw = 0;
+        std::memcpy(&raw, bytes.data() + f.offset, f.size);
+
+        const ir::IrValueId v_val = emit_const(ft, raw, source_line);
+        const ir::IrValueId v_off =
+            emit_const(ir::IrType::I64, f.offset, source_line);
+        const ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
+        {
+            ir::IrInstr add{};
+            add.op = ir::IrOp::ADD;
+            add.type = ir::IrType::PTR;
+            add.dst = v_addr;
+            add.operands = {v_dst, v_off};
+            add.source_line = source_line;
+            fn_->append(current_block_, std::move(add));
+            fn_->values[v_addr].is_host_ptr = fn_->values[v_dst].is_host_ptr;
+        }
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ft;
+        st.operands = {v_val, v_addr};
+        st.source_line = source_line;
+        fn_->append(current_block_, std::move(st));
+    }
+    return true;
+}
+
 ir::IrValueId Lowering::emit_const(ir::IrType t, uint64_t imm,
                                    uint32_t source_line) {
     const ir::IrValueId dst = fn_->new_value(t);
