@@ -298,6 +298,15 @@ static std::string global_cache_dir_() {
  */
 static uint64_t compiler_fingerprint_() {
     static const uint64_t fp = []() -> uint64_t {
+        // Valvula para depurar: al recompilar el compilador (p.ej. para
+        // anadir una traza) la huella cambia, los artefactos se invalidan y
+        // se regeneran limpios -- con lo que el escenario que se queria
+        // observar desaparece justo al ir a mirarlo.  Con VX_CACHE_FINGERPRINT
+        // la huella queda fija en el valor que se le pase, asi que se puede
+        // instrumentar sin perder la cache que reproduce el fallo.
+        if (const char *fixed = std::getenv("VX_CACHE_FINGERPRINT")) {
+            if (fixed[0]) return vxi_fnv1a(std::string(fixed));
+        }
         std::error_code ec;
         const std::string self = ::fs::get_executable_path();
         uint64_t h = 0xcbf29ce484222325ULL;

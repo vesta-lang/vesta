@@ -1159,6 +1159,12 @@ int main(int argc, char *argv[]) {
     VX_PARALLEL_COMPILE=N    Threads de compilacion (0 = auto, 1 = secuencial).
     VX_NO_CACHE              Ignora el cache incremental de modulos.
     VX_CACHE_DIR=ruta        Directorio del cache (default .cache/vex).
+    VX_CACHE_FINGERPRINT=x   Fija la huella del compilador que entra en la
+                             clave del cache.  Por defecto se toma del propio
+                             ejecutable, de modo que recompilarlo invalida los
+                             artefactos.  Fijarla permite instrumentar el
+                             compilador sin perder el cache que reproduce un
+                             fallo que se esta investigando.
     VX_TREE_SHAKE=1          Elimina simbolos no usados entre modulos.
     VX_VERBOSE_COMPILE=1     Muestra el progreso de compilacion por modulo.
     VESTA_LINKER_PROFILE=1   Perfila las fases del linker.
