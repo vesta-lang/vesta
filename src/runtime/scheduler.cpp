@@ -484,7 +484,19 @@ void Scheduler::run_loop() {
             // no-null y armará el recovery.  Asi cubrimos toda la
             // ventana de vulnerabilidad sin overhead permanente.
             set_current_executing_process(instance);
-            const bool armed_fast = (instance->exc_frame_stack != nullptr);
+            /* La recuperacion se arma SIEMPRE, haya o no un `try` alrededor.
+             *
+             * Antes solo se armaba con un `try` activo, con lo que un deref de
+             * un puntero nulo sin `try` no se convertia en fallo del programa:
+             * se lo llevaba por delante el proceso ENTERO de la maquina
+             * virtual, sin mensaje, sin traza y sin decir en que linea.  La
+             * maquina no puede morirse porque el programa que ejecuta tenga un
+             * error, igual que un navegador no se cierra porque una pagina
+             * falle.
+             *
+             * Cuesta un `setjmp` por lote -- decenas de instrucciones, no una
+             * -- y el camino compilado ya lo pagaba sin discutirlo. */
+            const bool armed_fast = true;
             if (armed_fast) {
                 instance->pending_av_kind = 0xFFFFFFFFu;
                 instance->av_recovery_active = true;
@@ -512,6 +524,14 @@ void Scheduler::run_loop() {
                         runtime::throw_fatal(
                             instance, runtime::FATAL_SEGMENTATION_FAULT, msg);
                     }
+                    /* Y se acaba el lote.  Sin `try`, `throw_fatal` deja el
+                     * proceso muerto y RETORNA -- no salta a ningun sitio --,
+                     * asi que seguir aqui significaba volver a ejecutar la
+                     * instruccion que acaba de reventar, fallar otra vez, y
+                     * repetirlo sin fin: el mismo fallo impreso hasta llenar el
+                     * disco.  Se cae al bloque de HALT, que es el que suelta el
+                     * proceso. */
+                    instance->reductions_remaining = 0;
                 }
             }
 
