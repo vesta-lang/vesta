@@ -1522,9 +1522,11 @@ CompileResult eager_compile_function(
      * implementa. */
     if (g_jit_use_vregs && !callback_entry) {
         size_t vcode_size = 0;
+        std::vector<LineMapEntry> vcode_lines;
         uint8_t *vcode =
             vreg_compile(ir_fn, *g_code_cache, resolver, make_vreg_entries(),
-                         resolve_native_fn, sym_resolver, &vcode_size);
+                         resolve_native_fn, sym_resolver, &vcode_size,
+                         &vcode_lines);
         if (vcode != nullptr) {
             if (!ir_fn.name.empty())
                 g_eager_cache[ir_fn.name] = reinterpret_cast<uint64_t>(vcode);
@@ -1657,7 +1659,7 @@ CompileResult eager_compile_function(
                 if (sit != symbol_table->end())
                     register_jit_region(sit->second,
                                         reinterpret_cast<void *>(vcode),
-                                        vcode_size);
+                                        vcode_size, &vcode_lines);
             }
             if (g_jit_warn_unsupported)
                 std::fprintf(stderr, "[jit-vreg] eager compilado '%s'\n",
@@ -1896,11 +1898,17 @@ std::unordered_map<uint64_t, void *> g_pc_to_jit_code;
 struct RegionNativa {
     uint64_t inicio;
     uint64_t tamano;
+    /// Donde cambia la linea del fuente dentro del codigo: pares
+    /// (desplazamiento, linea) ORDENADOS y sin repetir la linea anterior.
+    /// Guardar una entrada por instruccion maquina seria varias veces mas
+    /// grande sin decir nada nuevo; asi son unas pocas decenas por funcion.
+    std::vector<std::pair<uint32_t, uint32_t>> lineas;
 };
 std::unordered_map<uint64_t, RegionNativa> g_pc_to_region;
 } // namespace
 
-void register_jit_region(uint64_t vaddr, void *fn, size_t code_size) noexcept {
+void register_jit_region(uint64_t vaddr, void *fn, size_t code_size,
+                         const std::vector<LineMapEntry> *line_map) noexcept {
     /* SOLO la extension, sin tocar a donde despacha una llamada.
      *
      * Son dos cosas distintas y hay sitios donde solo se puede apuntar una: el
@@ -1912,9 +1920,40 @@ void register_jit_region(uint64_t vaddr, void *fn, size_t code_size) noexcept {
      * La direccion 0 se apunta igual: el codigo empieza ahi, asi que es la
      * direccion legitima del punto de entrada. */
     if (!fn || code_size == 0) return;
+    RegionNativa r{reinterpret_cast<uint64_t>(fn), (uint64_t)code_size, {}};
+    if (line_map != nullptr) {
+        uint32_t ultima = 0;
+        for (const LineMapEntry &e : *line_map) {
+            if (e.source_line == 0 || e.source_line == ultima) continue;
+            r.lineas.emplace_back(e.byte_offset, e.source_line);
+            ultima = e.source_line;
+        }
+    }
     std::lock_guard<std::mutex> lk(g_pc_jit_mtx);
-    g_pc_to_region[vaddr] =
-        RegionNativa{reinterpret_cast<uint64_t>(fn), (uint64_t)code_size};
+    g_pc_to_region[vaddr] = std::move(r);
+}
+
+bool lookup_line_by_native_pc(uint64_t native_pc, uint32_t &out_line) noexcept {
+    /* En que linea del fuente estaba el codigo nativo que fallo.
+     *
+     * Se busca el ultimo cambio de linea que quede en o antes del punto del
+     * fallo: entre dos cambios, la linea es la del primero. */
+    if (native_pc == 0) return false;
+    std::lock_guard<std::mutex> lk(g_pc_jit_mtx);
+    for (const auto &kv : g_pc_to_region) {
+        if (native_pc < kv.second.inicio) continue;
+        const uint64_t off = native_pc - kv.second.inicio;
+        if (off >= kv.second.tamano) continue;
+        uint32_t linea = 0;
+        for (const auto &p : kv.second.lineas) {
+            if (p.first > off) break;
+            linea = p.second;
+        }
+        if (linea == 0) return false;
+        out_line = linea;
+        return true;
+    }
+    return false;
 }
 
 void register_jit_code_at_pc(uint64_t vaddr, void *fn,

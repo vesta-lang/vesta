@@ -1645,6 +1645,17 @@ void vrt_panic_str(vrt_proc *proc, uint64_t msg_vaddr, uint32_t msg_len) {
         p->vm_mem.read_bytes(msg_vaddr, msg, msg_len);
     }
     msg[msg_len] = '\0';
+    /* De donde vino la llamada.  Un `panic` no lo avisa el sistema -- lo lanza
+     * el propio programa --, asi que aqui no hay ninguna direccion de fallo
+     * que capturar; pero este ayudante SI sabe quien le llamo, y esa es
+     * exactamente la instruccion que reventó.  Sin esto, un panic en codigo
+     * compilado se contaba con el PC de la maquina virtual, que ahi no se va
+     * actualizando, y senalaba una sentencia cualquiera de mas arriba. */
+#if defined(__GNUC__) || defined(__clang__)
+    if (p->pending_fault_native_pc == 0)
+        p->pending_fault_native_pc =
+            reinterpret_cast<uint64_t>(__builtin_return_address(0));
+#endif
     /* throw_fatal(proc, FATAL_USER_ABORT, msg) -- nunca retorna.  El
      * handler del JIT (run_jit -> longjmp) propaga la excepcion al
      * frame de tryenter mas cercano o termina el proceso si no hay

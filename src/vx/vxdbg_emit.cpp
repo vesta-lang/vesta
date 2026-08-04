@@ -497,8 +497,8 @@ vxdbg::FileId emit_file(vxdbg::NodeStore &store, const std::string &path,
                              std::istreambuf_iterator<char>());
     }
     const std::string &resumir = del_disco.empty() ? content : del_disco;
-    if (!content.empty())
-        f.checksum = vxdbg::hash_bytes(content.data(), content.size());
+    if (!resumir.empty())
+        f.checksum = vxdbg::hash_bytes(resumir.data(), resumir.size());
     vxdbg::ContentHash h;
     if (!vxdbg::store_node(store, f, h)) return {};
     return vxdbg::FileId{h};

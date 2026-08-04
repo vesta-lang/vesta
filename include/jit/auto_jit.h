@@ -44,6 +44,10 @@ struct IrFunction;
 }
 
 namespace jit {
+struct LineMapEntry; ///< correlacion codigo-nativo <-> linea (machine_ir.h)
+}
+
+namespace jit {
 
 /**
  * @brief Threshold global de invocaciones para auto-JIT.
@@ -339,7 +343,17 @@ bool lookup_vaddr_by_native_pc(uint64_t native_pc,
  * @param fn Inicio de su codigo nativo.
  * @param code_size Cuanto ocupa.
  */
-void register_jit_region(uint64_t vaddr, void *fn, size_t code_size) noexcept;
+void register_jit_region(uint64_t vaddr, void *fn, size_t code_size,
+                         const std::vector<LineMapEntry> *line_map = nullptr) noexcept;
+
+/**
+ * @brief En que linea del fuente estaba el codigo NATIVO que fallo.
+ *
+ * @param native_pc Direccion del fallo.
+ * @param[out] out_line Linea del fuente.
+ * @return true si se pudo determinar.
+ */
+bool lookup_line_by_native_pc(uint64_t native_pc, uint32_t &out_line) noexcept;
 
 /**
  * @brief Limpia el mapa @c pc -> jit_code (no libera el code cache).

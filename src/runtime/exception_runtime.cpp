@@ -846,6 +846,9 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
      * direccion NATIVA del fallo, que lleva a la funcion que la contiene y de
      * ahi a su direccion en la maquina virtual. */
     uint64_t cur_pc = vm->registers.rip.raw();
+    /// Linea que dice el propio codigo nativo, cuando el fallo fue ahi.  0 =
+    /// se sigue el camino normal (la tabla del bytecode).
+    uint32_t linea_forzada = 0;
     bool desde_compilado = false;
     if (vm->pending_fault_native_pc != 0) {
         uint64_t va = 0;
@@ -855,9 +858,12 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
             /* Es el PRINCIPIO de la funcion, no la instruccion exacta: no hay
              * que mirar el byte anterior como con un PC que ya avanzo. */
             vm->fatal_pc_exact = true;
+            // Y la linea, que dentro de la funcion solo la sabe el propio
+            // codigo nativo.
+            (void)jit::lookup_line_by_native_pc(vm->pending_fault_native_pc,
+                                                linea_forzada);
         }
     }
-    (void)desde_compilado;
 
     // Helper: append "(file.vx:line)" usando primero DebugInfo del
     // .velb cargado (precision pc_offset -> line); fallback a
@@ -888,6 +894,11 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
      * append_pos: el PC de un fallo ya avanzo y el de un marco es una
      * direccion de retorno. */
     auto linea_de_pc = [&](uint64_t pc, uint64_t atras) -> uint32_t {
+        /* Si el fallo fue en codigo compilado, la linea la dice el propio
+         * codigo nativo y no la tabla del bytecode: alli el PC de la maquina
+         * virtual no se va actualizando, y preguntar por el devuelve la linea
+         * de otra sentencia. */
+        if (linea_forzada != 0 && pc == cur_pc) return linea_forzada;
         for (const auto &exe_ptr :
              vm->scheduler.vm_reference.loader_public.executables) {
             if (!exe_ptr || !exe_ptr->debug_info) continue;
@@ -913,7 +924,11 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
                  * desenrollador. */
                 exe_ptr->debug_info->lookup_line(
                     static_cast<uint32_t>(pc > atras ? pc - atras : 0));
-            if (info.found && info.line > 0) {
+            /* Si el fallo fue en codigo compilado, manda la linea que dice el
+             * propio codigo nativo: el PC de la maquina virtual no vale ahi. */
+            const uint32_t forzada =
+                (linea_forzada != 0 && pc == cur_pc) ? linea_forzada : 0;
+            if (forzada != 0 || (info.found && info.line > 0)) {
                 append_str(" (");
                 if (!tiene_modulo && info.file && info.file[0] != ' ') {
                     append_str(info.file);
@@ -921,7 +936,7 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
                 } else {
                     append_str("linea ");
                 }
-                append_dec((uint64_t)info.line);
+                append_dec((uint64_t)(forzada != 0 ? forzada : info.line));
                 append_str(")");
                 return;
             }
@@ -964,6 +979,13 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
                 col_pc = info.column;
                 break;
             }
+        }
+        /* En codigo compilado manda la linea que dice el propio codigo nativo.
+         * La COLUMNA no la sabe -- el codigo nativo se correlaciona por lineas
+         * --, asi que se deja sin fijar y se subraya la sentencia entera. */
+        if (linea_forzada != 0 && pc == cur_pc) {
+            linea = linea_forzada;
+            col_pc = 0;
         }
         if (linea == 0) return;
         std::ifstream f(archivo, std::ios::binary);
@@ -1168,8 +1190,13 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
                 /* La ventana de codigo maquina.  Se descodifica desde el
                  * principio de la funcion porque las instrucciones son de
                  * tamano variable y no se puede retroceder. */
+                /* En codigo compilado NO se ensena esto: son instrucciones
+                 * de la maquina virtual, y lo que corrio fue codigo nativo.
+                 * Ensenarlas seria dar por ejecutado algo que no lo fue. */
                 const std::vector<std::string> maq =
-                    bytecode_window(vm, cur_pc - off_top, cur_pc, 3, 4);
+                    desde_compilado
+                        ? std::vector<std::string>{}
+                        : bytecode_window(vm, cur_pc - off_top, cur_pc, 3, 4);
                 if (!maq.empty()) {
                     append_str("      maquina:\n");
                     for (const std::string &t : maq) {
@@ -1177,7 +1204,8 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
                         append(t.c_str(), t.size());
                         append_str("\n");
                     }
-                } else if (vm->decoded_ptr && vm->decoded_ptr->metadata &&
+                } else if (!desde_compilado && vm->decoded_ptr &&
+                           vm->decoded_ptr->metadata &&
                            vm->decoded_ptr->metadata->name) {
                     append_str("      maquina: ");
                     append_str(vm->decoded_ptr->metadata->name);

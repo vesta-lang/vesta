@@ -426,7 +426,8 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
                       const CallResolver &resolve_call, const VregEntries &ent,
                       const CallResolver &resolve_native,
                       const CallResolver &resolve_symbol,
-                      size_t *out_code_size) {
+                      size_t *out_code_size,
+                      std::vector<LineMapEntry> *out_line_map) {
     /* Watchdog CTPE: propagar el handler de safepoint de la CodeCache al
      * thread_local que lee vreg_select.  Se hace AQUI (mismo hilo que
      * vreg_select) porque el eager-compile de CTPE puede correr en un hilo
@@ -446,8 +447,20 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
     /* 1. Seleccionar MachineIR de vregs (VM_ABI).  Si la funcion usa un
      *    op fuera del subset soportado, abortar -> fallback. */
     MFunction mf;
+    /* Se pide la correlacion codigo-nativo <-> linea del fuente solo cuando
+     * alguien la va a guardar.  Es lo que permite decir DONDE fallo un
+     * programa compilado: ahi el PC de la maquina virtual no se va
+     * actualizando -- ese es el punto de compilar --, de modo que sin esta
+     * tabla se llega a la funcion pero no a la linea. */
     if (!vreg_select(fn, mf, AbiKind::VM, resolve_call, ent, resolve_native,
-                     resolve_symbol))
+                     resolve_symbol, /*pic=*/true,
+#if defined(_WIN32)
+                     /*target_sysv=*/false,
+#else
+                     /*target_sysv=*/true,
+#endif
+                     /*mode32=*/false, FloatIsa::SSE2,
+                     /*emit_line_map=*/out_line_map != nullptr))
         return nullptr;
 
     /* Reserva VEC_ACC demand-driven: XMM10-13 asignables si la funcion NO usa
@@ -509,6 +522,11 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
     X86Encoder enc;
     std::vector<uint8_t> bytes;
     if (enc.encode(pf, bytes) == 0 || bytes.empty()) return nullptr;
+
+    /* La correlacion codigo-nativo <-> linea que el codificador acaba de
+     * construir.  Es lo unico que permite decir en que linea estaba un
+     * programa compilado al fallar. */
+    if (out_line_map) *out_line_map = std::move(pf.line_map);
 
     /* 4. Alojar en el code cache + commit (flush icache). */
     _jt.set_code_bytes(static_cast<uint32_t>(bytes.size())); // telemetria.
