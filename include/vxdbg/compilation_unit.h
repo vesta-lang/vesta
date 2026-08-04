@@ -55,8 +55,6 @@ struct TargetSpec {
     std::string abi;                   ///< "msvc", "gnu", "sysv"
     std::string vendor;                ///< "pc", "apple", ""
     std::vector<std::string> features; ///< "avx512", "fma", "neon"
-
-    ContentHash compute_hash() const;
 };
 
 /**
@@ -71,8 +69,6 @@ struct CompilerIdentity {
     std::string version;      ///< que version
     std::string git_revision; ///< y exactamente que revision
     std::vector<std::string> flags; ///< con que ajustes se construyo
-
-    ContentHash compute_hash() const;
 };
 
 /// Que papel juega una dependencia en una compilacion.

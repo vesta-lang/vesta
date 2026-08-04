@@ -60,13 +60,14 @@ static constexpr uint32_t SOURCE_SCHEMA_VERSION = 1;
  * se compilo, que es lo que evita ensenar la linea equivocada.
  */
 struct FileNode {
-    uint32_t schema_version = SOURCE_SCHEMA_VERSION;
+    /// Version de ESTE nodo.  Cada uno lleva la suya para poder cambiar de
+    /// forma sin arrastrar a los demas, y el codec la exige al leer.
+    static constexpr uint32_t kSchemaVersion = 1;
+    DebugNodeHeader header{NodeKind::File, kSchemaVersion, {}};
     std::string path;
     ContentHash checksum; ///< del contenido, para detectar que ya no coincide
     std::string language; ///< lenguaje del fichero
     std::string encoding; ///< codificacion del texto
-
-    ContentHash compute_hash() const;
 };
 
 /**
@@ -159,7 +160,8 @@ struct Attribute {
  * sin saber que significa "clase" en ese lenguaje.
  */
 struct LanguageEntity {
-    uint32_t schema_version = SOURCE_SCHEMA_VERSION;
+    static constexpr uint32_t kSchemaVersion = 1;
+    DebugNodeHeader header{NodeKind::Entity, kSchemaVersion, {}};
 
     std::string name;      ///< como se llama
     std::string qualified; ///< con su camino completo, si lo tiene
@@ -178,8 +180,6 @@ struct LanguageEntity {
     /// Tamano y alineamiento de una instancia, si el concepto aplica.
     uint32_t byte_size = 0;
     uint32_t alignment = 0;
-
-    ContentHash compute_hash() const;
 };
 
 /**
@@ -191,12 +191,11 @@ struct LanguageEntity {
  * indice, como con cualquier otra relacion inversa.
  */
 struct ScopeNode {
-    uint32_t schema_version = SOURCE_SCHEMA_VERSION;
+    static constexpr uint32_t kSchemaVersion = 1;
+    DebugNodeHeader header{NodeKind::Scope, kSchemaVersion, {}};
     ScopeId parent;
     LanguageEntityId owner; ///< entidad a la que pertenece
     SourceSpan span;
-
-    ContentHash compute_hash() const;
 };
 
 /**
@@ -208,14 +207,13 @@ struct ScopeNode {
  * optimizacion mientras que la variable sigue siendo la misma.
  */
 struct VariableNode {
-    uint32_t schema_version = SOURCE_SCHEMA_VERSION;
+    static constexpr uint32_t kSchemaVersion = 1;
+    DebugNodeHeader header{NodeKind::Variable, kSchemaVersion, {}};
     std::string name;
     LanguageEntityId type;
     ScopeId scope;
     bool is_parameter = false;
     SourceSpan declared_at;
-
-    ContentHash compute_hash() const;
 };
 
 /**
@@ -227,15 +225,14 @@ struct VariableNode {
  * separan el nodo de su correspondencia.
  */
 struct StatementNode {
-    uint32_t schema_version = SOURCE_SCHEMA_VERSION;
+    static constexpr uint32_t kSchemaVersion = 1;
+    DebugNodeHeader header{NodeKind::Statement, kSchemaVersion, {}};
     SourceSpan span;
     ScopeId scope;
     /// Como lo llama el frontend (`"if"`, `"call"`, `"assign"`...).  Permite
     /// explicar el fallo con la palabra correcta sin que el formato tenga que
     /// conocer la gramatica de nadie.
     std::string lang_kind;
-
-    ContentHash compute_hash() const;
 };
 
 } // namespace vxdbg

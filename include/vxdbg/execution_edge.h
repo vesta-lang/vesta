@@ -89,7 +89,8 @@ enum class TransferForm : uint8_t {
  * donde se llego -- y para explicar por que se ejecuto algo que nadie escribio.
  */
 struct ExecutionEdge {
-    DebugNodeHeader header{NodeKind::ExecutionEdge, EDGE_SCHEMA_VERSION, {}};
+    static constexpr uint32_t kSchemaVersion = 1;
+    DebugNodeHeader header{NodeKind::ExecutionEdge, kSchemaVersion, {}};
 
     IrInstrId source;  ///< instruccion desde la que se transfiere
     IrFunctionId from; ///< funcion en la que estabamos
@@ -108,8 +109,6 @@ struct ExecutionEdge {
     /// `if (a && b)` puede acabar en una sola transferencia que viene de dos,
     /// y guardar una sola obligaria a elegir cual de las dos contar.
     std::vector<StatementId> statements;
-
-    ContentHash compute_hash() const;
 };
 
 /**
@@ -124,14 +123,13 @@ struct ExecutionEdge {
  * pila fisica en la que quien programa reconoce.
  */
 struct InlineSite {
-    DebugNodeHeader header{NodeKind::InlineSite, EDGE_SCHEMA_VERSION, {}};
+    static constexpr uint32_t kSchemaVersion = 1;
+    DebugNodeHeader header{NodeKind::InlineSite, kSchemaVersion, {}};
 
     IrInstrId at;                 ///< instruccion del cuerpo incorporado
     IrFunctionId inlined_function;///< la funcion que hay que ensenar
     EdgeId edge;                  ///< la transferencia que lo provoco
     InlineSiteId parent;          ///< si esta dentro de otra incorporacion
-
-    ContentHash compute_hash() const;
 };
 
 /**

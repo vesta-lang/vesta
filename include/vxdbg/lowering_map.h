@@ -31,6 +31,7 @@
 #define VXDBG_LOWERING_MAP_H
 
 #include "vxdbg/ids.h"
+#include "vxdbg/node.h"
 
 #include <cstdint>
 #include <unordered_map>
@@ -98,7 +99,8 @@ struct LoweringEntry {
  * que instrucciones quedo" al poner un punto de parada.
  */
 struct LoweringMap {
-    uint32_t schema_version = LOWERING_SCHEMA_VERSION;
+    static constexpr uint32_t kSchemaVersion = 1;
+    DebugNodeHeader header{NodeKind::Lowering, kSchemaVersion, {}};
     std::vector<LoweringEntry> entries;
 
     /**
@@ -117,8 +119,6 @@ struct LoweringMap {
 
     /// Prepara los indices de consulta.  Se llama tras rellenar @c entries.
     void build_index();
-
-    ContentHash compute_hash() const;
 
   private:
     /// Indice inverso, construido aparte y no guardado: es reconstruible, y

@@ -40,6 +40,7 @@
 #define VXDBG_BACKEND_META_H
 
 #include "vxdbg/ids.h"
+#include "vxdbg/node.h"
 
 #include <cstdint>
 #include <string>
@@ -81,7 +82,8 @@ enum class BackendKind : uint16_t {
  * separacion que permite mover el codigo sin invalidar su descripcion.
  */
 struct CodeNode {
-    uint32_t schema_version = BACKEND_SCHEMA_VERSION;
+    static constexpr uint32_t kSchemaVersion = 1;
+    DebugNodeHeader header{NodeKind::Code, kSchemaVersion, {}};
 
     IrFunctionId ir_function; ///< que intermedio se compilo
     BackendKind backend = BackendKind::Velb;
@@ -112,7 +114,6 @@ struct CodeNode {
     std::vector<ContentHash> dependencies;
 
     /// @return La huella del nodo, derivada de todo lo anterior.
-    ContentHash compute_hash() const;
 };
 
 /**
@@ -157,7 +158,8 @@ struct CodeRange {
  * el codigo.
  */
 struct CodeDebug {
-    uint32_t schema_version = BACKEND_SCHEMA_VERSION;
+    static constexpr uint32_t kSchemaVersion = 1;
+    DebugNodeHeader header{NodeKind::CodeDebug, kSchemaVersion, {}};
 
     CodeId code; ///< a que cuerpo describe
 
@@ -171,8 +173,6 @@ struct CodeDebug {
      * @return Las instrucciones; vacio si no cae en ningun tramo.
      */
     std::vector<IrInstrId> ir_at(uint32_t offset) const;
-
-    ContentHash compute_hash() const;
 };
 
 /* El indice inverso (de una instruccion intermedia a los tramos que genero)
@@ -300,7 +300,8 @@ struct LocationRange {
  * compilarla, y el nodo se comparte.
  */
 struct VariableMap {
-    uint32_t schema_version = BACKEND_SCHEMA_VERSION;
+    static constexpr uint32_t kSchemaVersion = 1;
+    DebugNodeHeader header{NodeKind::VariableMap, kSchemaVersion, {}};
     VariableId variable;
     std::vector<LocationRange> locations;
 
@@ -311,8 +312,6 @@ struct VariableMap {
      *         si en ese punto no esta en ningun sitio.
      */
     LocationRange at(IrInstrId at) const;
-
-    ContentHash compute_hash() const;
 };
 
 } // namespace vxdbg

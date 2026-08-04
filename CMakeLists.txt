@@ -826,6 +826,19 @@ add_executable(test_vxdbg_store tests/vxdbg/test_vxdbg_store.cpp
                                 src/vxdbg/store.cpp)
 target_include_directories(test_vxdbg_store PRIVATE ${VM_INCLUDES})
 
+# Serializacion de cada nodo.  Comprueba, sobre todo, que la identidad de un
+# nodo ES su serializacion: si dos iguales dieran huellas distintas no se
+# reutilizaria nada, y si dos distintos dieran la misma el almacen serviria uno
+# por otro.
+add_executable(test_vxdbg_codec tests/vxdbg/test_vxdbg_codec.cpp
+                                src/vxdbg/ids.cpp
+                                src/vxdbg/serialize.cpp
+                                src/vxdbg/store.cpp
+                                src/vxdbg/lowering_map.cpp
+                                src/vxdbg/codec_source.cpp
+                                src/vxdbg/codec_backend.cpp)
+target_include_directories(test_vxdbg_codec PRIVATE ${VM_INCLUDES} src/vxdbg)
+
 add_executable(test_rbank_physical tests/jit/test_rbank_physical.cpp)
 target_include_directories(test_rbank_physical PRIVATE ${VM_INCLUDES})
 target_link_libraries(test_rbank_physical PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
