@@ -1035,6 +1035,7 @@ exit_error:
     // se usa luego por el bytecode emitter para registrar el par
     // (byte_offset, source_line) en la tabla debug del linker.
     instr->source_line = lexer.last_src_line;
+    instr->source_column = lexer.last_src_column;
     // Captura el stackmap preciso ( E.1) del marcador `// @sm <hex>`
     // mas reciente.  A diferencia de @line (que persiste hasta el proximo
     // marcador), el stackmap aplica SOLO a la instruccion inmediatamente

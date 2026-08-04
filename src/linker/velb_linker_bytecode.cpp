@@ -1318,7 +1318,10 @@ std::vector<uint8_t> Linker::build_executable() {
         // Mismo loop que apply_relocations: module_base_offset se
         // incrementa por mod.bytecode.size() en orden.
         uint64_t bc_base = 0;
-        std::vector<debug::DebugLineEntry> all_entries;
+        /* Entradas de nivel 3: llevan la COLUMNA ademas de la linea.  Cuestan
+         * cuatro bytes mas por instruccion y son lo que permite senalar cual de
+         * las cosas que caben en una linea fallo, en vez de solo en cual. */
+        std::vector<debug::DebugLineEntry3> all_entries;
         // Strings blob + interning de paths.  Cada path unico aparece
         // 1 sola vez; los DebugLineEntry referencian su offset.
         std::vector<uint8_t> strings_blob;
@@ -1340,7 +1343,7 @@ std::vector<uint8_t> Linker::build_executable() {
                                               : mod.ctx.debug_source_file;
                 const uint32_t file_off = intern_string(fname);
                 for (const auto &rec : mod.ctx.debug_lines) {
-                    debug::DebugLineEntry e{};
+                    debug::DebugLineEntry3 e{};
                     // offset ABSOLUTO dentro del .velb: hay que
                     // sumar el offset del code section dentro del
                     // file (offset_real_bytecode), no solo el
@@ -1362,8 +1365,8 @@ std::vector<uint8_t> Linker::build_executable() {
             // Ordenar por bytecode_offset para que lookup_line use
             // busqueda binaria correctamente.
             std::sort(all_entries.begin(), all_entries.end(),
-                      [](const debug::DebugLineEntry &a,
-                         const debug::DebugLineEntry &b) {
+                      [](const debug::DebugLineEntry3 &a,
+                         const debug::DebugLineEntry3 &b) {
                           return a.bytecode_offset < b.bytecode_offset;
                       });
 
@@ -1377,7 +1380,7 @@ std::vector<uint8_t> Linker::build_executable() {
             debug::DebugSectionHeader hdr{};
             hdr.magic = debug::DEBUG_SECTION_MAGIC;
             hdr.version = debug::DEBUG_FORMAT_VERSION;
-            hdr.level = debug::DEBUG_LEVEL_LINES;
+            hdr.level = debug::DEBUG_LEVEL_FULL;
             hdr._pad = 0;
             hdr.line_count = static_cast<uint32_t>(all_entries.size());
             hdr.var_count = 0;

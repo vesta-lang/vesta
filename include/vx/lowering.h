@@ -1364,6 +1364,9 @@ class Lowering {
   private:
     /// Los tramos de todas las sentencias bajadas, en orden.
     std::vector<StmtSpan> emitted_spans_;
+    /// Columna de la sentencia que se esta bajando, para sellarla en las
+    /// instrucciones que emita.  0 = ninguna.
+    uint32_t pend_stmt_column_ = 0;
 
     /**
      * @brief Anota el vinculo entre un simbolo y la declaracion que lo produjo.
@@ -1371,6 +1374,17 @@ class Lowering {
      * @param owner Tipo que declara el miembro.
      * @param member Nombre del miembro tal como se escribio.
      */
+    /**
+     * @brief Anota el vinculo de una funcion libre, que no tiene propietario.
+     * @param symbol Nombre con el que se emite el codigo.
+     * @param decl Nombre declarado.
+     */
+    void note_emitted_function(const std::string &symbol,
+                               const std::string &decl) {
+        if (symbol.empty() || decl.empty()) return;
+        emitted_symbols_.emplace_back(symbol, decl);
+    }
+
     void note_emitted_symbol(const std::string &symbol,
                              const std::string &owner,
                              const std::string &member) {

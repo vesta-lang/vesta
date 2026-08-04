@@ -116,6 +116,9 @@ struct Instruction : ASTNode {
     // por el linker para construir la seccion DebugLineEntry[] del
     // .velb que el debugger usa para resolver `b file.vx:42`.
     int source_line = 0;
+    /// Columna del fuente, o 0 si no consta.  Con la linea sola no se puede
+    /// senalar cual de las cosas que caben en ella fallo.
+    int source_column = 0;
 
     // Stackmap PRECISO ( E.1) para esta instruccion de safepoint,
     // capturado del marcador `// @sm <hex>` previo en el .vel.  Vacio =

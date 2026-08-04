@@ -355,6 +355,18 @@ static std::string entity_note_for_symbol(ProcessVM *vm,
      * a un `struct` y no a una `class` cambia como se pasa, quien lo posee y
      * donde vive su memoria: al explicar un fallo eso importa tanto como el
      * nombre.  Es justo lo que el grafo sabe y una tabla de simbolos no. */
+    /* Una funcion libre no tiene propietario, pero SI tiene fichero.  Sin esto
+     * solo se ensenaba el fuente de lo que pertenecia a un tipo, que es la
+     * mitad de los sitios donde puede fallar algo. */
+    if (!hay_duenyo && out_file && !e.declared_at.file.hash.empty()) {
+
+        vxdbg::FileNode propio;
+        if (vxdbg::load_node(*g.store, e.declared_at.file.hash, propio) &&
+            !propio.path.empty()) {
+            *out_file = propio.path;
+            if (out_sum) *out_sum = propio.checksum;
+        }
+    }
     if (hay_duenyo && !duenyo.lang_kind.empty()) {
         nota += ", de " + duenyo.lang_kind + " " + duenyo.name;
         vxdbg::FileNode f;
@@ -587,6 +599,7 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
                              const std::string &simbolo) {
         if (archivo.empty()) return;
         uint32_t linea = 0;
+        uint32_t col_pc = 0;
         for (const auto &exe_ptr :
              vm->scheduler.vm_reference.loader_public.executables) {
             if (!exe_ptr || !exe_ptr->debug_info) continue;
@@ -594,6 +607,7 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
                 exe_ptr->debug_info->lookup_line(static_cast<uint32_t>(pc));
             if (info.found && info.line > 0) {
                 linea = info.line;
+                col_pc = info.column;
                 break;
             }
         }
@@ -631,7 +645,11 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
          * distingue cual de las tres llamadas que caben en ella fallo; el tramo
          * lo dice.  Se descuenta la sangria que se quito arriba para que el
          * subrayado caiga donde debe. */
-        const vxdbg::SourceExtent ext = span_for(vm, simbolo, linea);
+        /* La columna la trae el propio PC: es la de la instruccion que fallo,
+         * no la de la primera sentencia de la linea.  Con ella se subraya lo
+         * que se estaba evaluando aunque en la linea haya varias cosas. */
+        vxdbg::SourceExtent ext = span_for(vm, simbolo, linea);
+        if (col_pc > 0) ext.column = col_pc;
         if (ext.length == 0 || ext.column == 0) return;
         if (ext.column - 1 < ini) return; // el tramo empieza en otra linea
         const size_t col = ext.column - 1 - ini;

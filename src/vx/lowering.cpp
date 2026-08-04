@@ -3150,6 +3150,10 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     } else {
         fn.name = fd->name;
     }
+    // Igual que con los metodos: el vinculo se anota donde se crea el nombre.
+    // Sin esto, un fallo dentro de una funcion libre salia con el nombre a secas
+    // -- sin firma, sin fichero -- porque el mapa del artefacto no la tenia.
+    note_emitted_function(fn.name, fd->name);
 
     // @fp(strict|fast): politica de contraccion FMA de la funcion.  El pase
     // ir_pass_fuse_fma solo contrae si fn.fp_contract; @fp(strict) -> false.
@@ -3837,7 +3841,30 @@ void Lowering::lower_stmt(ast::Stmt *s) {
         sp.column = loc.column;
         sp.length = loc.length;
         emitted_spans_.push_back(std::move(sp));
+        pend_stmt_column_ = loc.column;
     }
+    /* Y se sella esa columna en lo que la sentencia emita.  Se hace al TERMINAR
+     * y no en cada uno de los mil sitios que ponen la linea: bastaria olvidar
+     * uno para que ese caso concreto perdiera la columna en silencio, que es la
+     * forma en que estas cosas se rompen. */
+    struct SellarColumna {
+        ir::IrFunction *fn;
+        uint32_t bloque;
+        size_t desde;
+        uint32_t columna;
+        ~SellarColumna() {
+            if (!fn || columna == 0) return;
+            if (bloque >= fn->blocks.size()) return;
+            auto &ins = fn->blocks[bloque].instrs;
+            for (size_t i = desde; i < ins.size(); ++i)
+                if (ins[i].source_column == 0) ins[i].source_column = columna;
+        }
+    } sellar{fn_, current_block_,
+             (fn_ && current_block_ < fn_->blocks.size())
+                 ? fn_->blocks[current_block_].instrs.size()
+                 : 0,
+             pend_stmt_column_};
+
     switch (s->kind) {
     case ast::NodeKind::BlockStmt:
         lower_block(static_cast<ast::BlockStmt *>(s));

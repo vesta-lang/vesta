@@ -261,8 +261,10 @@ void Assembler::emit_instruction(const vm::Instruction *instr) {
     // del modulo.  El linker convierte mas tarde a offset absoluto
     // dentro del .velb sumando module_base_offset.
     if (instr->source_line > 0) {
-        ctx.debug_lines.push_back({static_cast<uint32_t>(output.offset),
-                                   static_cast<uint32_t>(instr->source_line)});
+        ctx.debug_lines.push_back(
+            {static_cast<uint32_t>(output.offset),
+             static_cast<uint32_t>(instr->source_line),
+             static_cast<uint32_t>(instr->source_column)});
     }
 
     // Stackmap PRECISO ( E.1): si la instruccion lleva un marcador

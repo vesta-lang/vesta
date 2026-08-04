@@ -28,6 +28,7 @@
 
 #include "vx/vxdbg_emit.h"
 
+#include "vx/ast.h"
 #include "vx/type_checker.h"
 #include "vxdbg/codec.h"
 #include "vxdbg/store.h"
@@ -95,6 +96,8 @@ constexpr KindPair K_CONSTRUCTOR{vxdbg::EntityKind::Function, "constructor"};
 constexpr KindPair K_DESTRUCTOR{vxdbg::EntityKind::Function, "destructor"};
 constexpr KindPair K_VARIANT{vxdbg::EntityKind::Constant, "variant"};
 constexpr KindPair K_NAMESPACE{vxdbg::EntityKind::Module, "namespace"};
+/// Funcion libre: no pertenece a ningun tipo.
+constexpr KindPair K_FUNCTION{vxdbg::EntityKind::Function, "function"};
 /// @}
 
 /**
@@ -130,6 +133,7 @@ class Collector {
     void collect_classes();
     void collect_enums();
     void collect_concepts();
+    void collect_functions();
     /// @}
 
     /**
@@ -432,11 +436,29 @@ void Collector::collect_concepts() {
     }
 }
 
+void Collector::collect_functions() {
+    /* Las funciones libres tambien son declaraciones del programa.  Sin ellas,
+     * un fallo dentro de una salia con el nombre a secas y sin fichero: el
+     * grafo no sabia nada de ella y no habia de donde sacar ni la firma ni
+     * donde estaba escrita. */
+    for (const auto &d : tc_.ast_module().decls) {
+        if (!d || d->kind != ast::NodeKind::FunctionDecl) continue;
+        const auto *fd = static_cast<const ast::FunctionDecl *>(d.get());
+        if (fd->name.empty()) continue;
+        vxdbg::SemanticNode s = begin(fd->name, K_FUNCTION);
+        s.declared_at.begin_line = fd->loc.line;
+        s.declared_at.begin_column = static_cast<uint16_t>(fd->loc.column);
+        relate_namespace(s, fd->name);
+        out_.push_back(std::move(s));
+    }
+}
+
 void Collector::collect() {
     collect_structs();
     collect_classes();
     collect_enums();
     collect_concepts();
+    collect_functions();
 }
 
 /**

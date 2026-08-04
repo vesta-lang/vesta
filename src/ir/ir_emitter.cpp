@@ -2228,7 +2228,11 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     const IrInstr &ins = bb.instrs[idx];
 
     if (ctx.emit_debug && ins.source_line > 0) {
-        ctx.out << "    // @line " << ins.source_line << "\n";
+        ctx.out << "    // @line " << ins.source_line;
+        // La columna va detras, y solo si se sabe: sin ella el marcador queda
+        // igual que antes y quien lo lea no nota diferencia.
+        if (ins.source_column > 0) ctx.out << " " << ins.source_column;
+        ctx.out << "\n";
     }
 
     //  E.1: el marcador `// @sm <hex>` se emite DENTRO de cada case de

@@ -979,6 +979,9 @@ struct IrInstr {
 
     uint32_t
         source_line; ///< numero de linea del fuente original (0 = desconocido)
+    /// Columna del fuente (0 = desconocida).  Con la linea sola no se puede
+    /// senalar cual de las cosas que caben en ella fallo.
+    uint32_t source_column;
 
     /// Si true, esta instruccion NO debe ser eliminada por copy_prop
     /// ni DCE.  Util para barreras de codegen como los MOVs que el
@@ -1045,7 +1048,7 @@ struct IrInstr {
     IrInstr()
         : op(IrOp::NOP), type(IrType::VOID), dst(IR_NO_VALUE), imm(0),
           func_ptr(IR_NO_VALUE), target_block(IR_NO_BLOCK),
-          false_block(IR_NO_BLOCK), source_line(0) {}
+          false_block(IR_NO_BLOCK), source_line(0), source_column(0) {}
 };
 
 // =========================================================================
