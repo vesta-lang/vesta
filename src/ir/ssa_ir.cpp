@@ -534,10 +534,17 @@ static void print_val(std::ostream &o, const IrFunction &fn, IrValueId id) {
         o << "<void>";
         return;
     }
-    if (id < static_cast<IrValueId>(fn.values.size()))
+    if (id < static_cast<IrValueId>(fn.values.size()) &&
+        !fn.values[id].name.empty()) {
         o << fn.values[id].name;
-    else
-        o << "%?" << id;
+        return;
+    }
+    /* Sin nombre, el identificador.  Los nombres NO viajan dentro del
+     * artefacto -- son para leer, no para ejecutar -- asi que al explicar un
+     * fallo con el intermedio que va en el `.velb` salia `= load.i64` sin
+     * destino y las llamadas sin argumentos, como si no tuvieran.  Un valor
+     * siempre tiene identificador, y con el se sigue el flujo igual. */
+    o << "%" << id;
 }
 
 /**
