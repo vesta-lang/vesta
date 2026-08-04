@@ -31,7 +31,10 @@
 #include "vx/type_checker.h"
 #include "vxdbg/codec.h"
 #include "vxdbg/store.h"
+#include "vxdbg/roots.h"
 #include "vxdbg/semantic.h"
+
+#include "ir/ssa_ir.h"
 
 #include <cstdlib>
 #include <unordered_set>
@@ -425,6 +428,61 @@ vxdbg::FileId emit_file(vxdbg::NodeStore &store, const std::string &path,
     return vxdbg::FileId{h};
 }
 
+/**
+ * @brief Simbolo con el que se emite un miembro de un tipo.
+ *
+ * El lowering de Vesta nombra el codigo de un metodo `<Tipo>__<metodo>`.  Esa
+ * correspondencia se escribe AQUI, en el lado que conoce Vesta, y no se adivina
+ * en ningun otro sitio; ademas se COMPRUEBA, porque el resultado de ligar
+ * simbolos se cuenta y un cambio de convencion se nota en vez de quedarse en un
+ * mapa medio vacio.
+ *
+ * @param member_key Clave del miembro (`Tipo::metodo`).
+ * @return El simbolo, o vacio si la clave no es de un miembro.
+ */
+std::string symbol_for_member(const std::string &member_key) {
+    const size_t p = member_key.find("::");
+    if (p == std::string::npos) return {};
+    return member_key.substr(0, p) + "__" + member_key.substr(p + 2);
+}
+
+/**
+ * @brief Liga los simbolos del modulo intermedio con las entidades emitidas.
+ *
+ * @param irmod Modulo ya bajado.
+ * @param ids Entidades emitidas, por clave.
+ * @param stats Recibe cuantos simbolos se ligaron y cuantos no.
+ * @return El mapa.
+ */
+vxdbg::ArtifactMap link_symbols(
+    const ir::IrModule &irmod,
+    const std::vector<std::pair<std::string, vxdbg::LanguageEntityId>> &ids,
+    VxdbgEmitStats &stats) {
+    // Del simbolo que TENDRA el codigo a la entidad, que es la direccion en que
+    // se consulta: una traza da un simbolo y hay que llegar a la declaracion.
+    std::unordered_map<std::string, vxdbg::LanguageEntityId> by_symbol;
+    by_symbol.reserve(ids.size());
+    for (const auto &kv : ids) {
+        if (const std::string sym = symbol_for_member(kv.first); !sym.empty())
+            by_symbol.emplace(sym, kv.second);
+        // Un tipo tambien puede dar nombre a codigo (los ayudantes de
+        // construccion), asi que su propia clave se registra igual.
+        by_symbol.emplace(kv.first, kv.second);
+    }
+
+    vxdbg::ArtifactMap map;
+    for (const auto &fn : irmod.functions) {
+        auto it = by_symbol.find(fn.name);
+        if (it == by_symbol.end()) {
+            ++stats.unlinked;
+            continue;
+        }
+        map.add(fn.name, it->second);
+        ++stats.linked;
+    }
+    return map;
+}
+
 } // namespace
 
 std::string default_vxdbg_dir() {
@@ -436,7 +494,8 @@ std::string default_vxdbg_dir() {
     return ".cache/vxdbg";
 }
 
-bool emit_vxdbg_source(const TypeChecker &tc, const std::string &source_path,
+bool emit_vxdbg_source(const TypeChecker &tc, const ir::IrModule *irmod,
+                       const std::string &source_path,
                        const std::string &source_text,
                        const std::string &out_dir, VxdbgEmitStats &stats,
                        std::string &err) {
@@ -457,6 +516,14 @@ bool emit_vxdbg_source(const TypeChecker &tc, const std::string &source_path,
             s.kind == vxdbg::EntityKind::Function ||
             s.kind == vxdbg::EntityKind::Constant)
             ++stats.members;
+
+    // Sin modulo intermedio no hay simbolos todavia: el grafo queda emitido,
+    // pero sin la forma de entrar en el desde una direccion.
+    if (irmod) {
+        const vxdbg::ArtifactMap map = link_symbols(*irmod, res.ids, stats);
+        vxdbg::ContentHash h;
+        if (vxdbg::store_node(store, map, h)) stats.artifact_map = h;
+    }
     return true;
 }
 

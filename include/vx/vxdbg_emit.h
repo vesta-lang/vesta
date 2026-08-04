@@ -31,6 +31,10 @@
 #include <utility>
 #include <vector>
 
+namespace ir {
+struct IrModule;
+}
+
 namespace vx {
 
 class TypeChecker;
@@ -55,6 +59,16 @@ struct VxdbgEmitStats {
     /// esta es la lista que despues acaba en la unidad de compilacion como sus
     /// raices.
     std::vector<std::pair<std::string, vxdbg::LanguageEntityId>> roots;
+
+    /// Simbolos del artefacto que se pudieron ligar a una entidad.
+    size_t linked = 0;
+    /// Y los que no.  Un simbolo sin entidad no es un fallo por si mismo -- hay
+    /// codigo generado que no viene de ninguna declaracion, como los ayudantes
+    /// que fabrica el compilador -- pero que crezca de golpe si lo es.
+    size_t unlinked = 0;
+    /// Huella del mapa de simbolos.  Con ella y el identificador de la
+    /// compilacion se entra al grafo desde una direccion de ejecucion.
+    vxdbg::ContentHash artifact_map;
 };
 
 /**
@@ -78,6 +92,10 @@ std::string default_vxdbg_dir();
  * quien deriva algo.
  *
  * @param tc Checker ya ejecutado.
+ * @param irmod Modulo intermedio ya bajado, o @c nullptr si aun no lo hay.  De
+ *        el salen los SIMBOLOS que llevara el artefacto, que es lo unico a lo
+ *        que una direccion de ejecucion puede llegar; sin el se emite el grafo
+ *        pero no la forma de entrar en el.
  * @param source_path Ruta del fuente principal.
  * @param source_text Su contenido, para resumirlo y poder detectar despues que
  *        el fichero de disco ya no es el que se compilo.  Vacio = sin resumen.
@@ -86,7 +104,8 @@ std::string default_vxdbg_dir();
  * @param err Recibe el motivo si algo fallo.
  * @return @c true si se escribio todo.
  */
-bool emit_vxdbg_source(const TypeChecker &tc, const std::string &source_path,
+bool emit_vxdbg_source(const TypeChecker &tc, const ir::IrModule *irmod,
+                       const std::string &source_path,
                        const std::string &source_text,
                        const std::string &out_dir, VxdbgEmitStats &stats,
                        std::string &err);

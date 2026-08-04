@@ -231,4 +231,38 @@ bool decode(const StoredNode &s, InlineSite &out) {
     return r.ok();
 }
 
+// ---------------------------------------------------------------------------
+// Entrada al grafo
+// ---------------------------------------------------------------------------
+
+StoredNode encode(const ArtifactMap &n) {
+    ByteWriter w;
+    w.u32(static_cast<uint32_t>(n.symbols.size()));
+    for (const auto &kv : n.symbols) {
+        w.str(kv.first);
+        w.id(kv.second);
+    }
+    return make(n.header, w);
+}
+
+bool decode(const StoredNode &s, ArtifactMap &out) {
+    if (!expect<ArtifactMap>(s, NodeKind::ArtifactMap)) return false;
+    ByteReader r(s.payload);
+    out.header = s.header;
+    const uint32_t n = r.u32();
+    if (!r.ok()) return false;
+    out.symbols.clear();
+    out.symbols.reserve(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        std::string sym = r.str();
+        // Se conserva el orden con el que venia en vez de reordenar al leer: se
+        // escribio ya ordenado, y confiar en eso permite leer un mapa grande sin
+        // pagar una ordenacion que casi siempre sobra.  Si viniera desordenado,
+        // la busqueda binaria no encontraria algun simbolo -- fallo de omision,
+        // nunca de dar el equivocado.
+        out.symbols.emplace_back(std::move(sym), r.id<LanguageEntityTag>());
+    }
+    return r.ok();
+}
+
 } // namespace vxdbg

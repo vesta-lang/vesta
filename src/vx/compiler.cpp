@@ -492,21 +492,6 @@ CompileResult compile_vx_source(const std::string &source,
     // Diagrama de tipos (classDiagram): clases/herencia/interfaces/structs/
     // enums/conceptos.  Vista de alto nivel de la POO, independiente del AST
     // detallado.  Cada formato se llena solo si su flag esta activo.
-    // Base de conocimiento de depuracion: los tipos del programa y como se
-    // relacionan.  Se emite AQUI, con el checker recien terminado, porque es el
-    // unico momento en que la tabla de tipos esta completa y todavia no la ha
-    // tocado el lowering.  No participa en la generacion de codigo: si falla,
-    // se avisa y la compilacion sigue -- perder la informacion de depuracion no
-    // es motivo para no producir el programa.
-    {
-        VxdbgEmitStats st;
-        std::string dbg_err;
-        if (!emit_vxdbg_source(tc, filename, source, opts.vxdbg_dir, st,
-                               dbg_err)) {
-            std::cerr << "[vxdbg] no se pudo emitir: " << dbg_err << "\n";
-        }
-    }
-
     if (opts.dump_mermaid_types) {
         res.mermaid_types = mermaid_types_from_ast(*mod);
     }
@@ -715,6 +700,25 @@ CompileResult compile_vx_source(const std::string &source,
     if (!lo.run(irmod, mod_name)) {
         res.ok = false;
         return res;
+    }
+
+    // Grafo de conocimiento del programa: los tipos, sus miembros y como se
+    // relacionan, mas el mapa que liga los simbolos del artefacto con ellos.
+    // Se emite AQUI y no antes porque los SIMBOLOS solo existen tras el
+    // lowering, y sin ellos el grafo se queda sin puerta de entrada: una
+    // direccion de ejecucion no podria llegar hasta el.
+    //
+    // No participa en la generacion de codigo: si falla, se avisa y la
+    // compilacion sigue -- perder informacion de depuracion no es motivo para
+    // no producir el programa.
+    {
+        VxdbgEmitStats st;
+        std::string dbg_err;
+        if (!emit_vxdbg_source(tc, &irmod, filename, source, opts.vxdbg_dir, st,
+                               dbg_err)) {
+            std::cerr << "[vxdbg] no se pudo emitir: " << dbg_err << "\n";
+        }
+        res.vxdbg_artifact_map = st.artifact_map;
     }
 
     // -ffp-contract=off (CLI, per-modulo): fuerza IEEE estricto (sin contraccion

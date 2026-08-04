@@ -31,6 +31,7 @@
 #include "vxdbg/backend_meta.h"
 #include "vxdbg/execution_edge.h"
 #include "vxdbg/lowering_map.h"
+#include "vxdbg/roots.h"
 #include "vxdbg/serialize.h"
 #include "vxdbg/source_meta.h"
 #include "vxdbg/store.h"
@@ -74,6 +75,12 @@ bool decode(const StoredNode &s, CodeDebug &out);
 
 StoredNode encode(const VariableMap &n);
 bool decode(const StoredNode &s, VariableMap &out);
+/// @}
+
+/// @name Entrada al grafo
+/// @{
+StoredNode encode(const ArtifactMap &n);
+bool decode(const StoredNode &s, ArtifactMap &out);
 /// @}
 
 /// @name Transferencias de control

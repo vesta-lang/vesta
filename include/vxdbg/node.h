@@ -58,6 +58,12 @@ enum class NodeKind : uint16_t {
     InlineSite = 15,  ///< un marco que el optimizador se llevo
     Diagnostic = 16,  ///< la explicacion de un fallo
     RuntimeObject = 17, ///< un valor del runtime citado por un diagnostico
+    /// Por donde se ENTRA al grafo: que simbolos de un artefacto corresponden
+    /// a que entidades.  Un almacen direccionado por contenido no se puede
+    /// recorrer, y quien depura nunca empieza preguntando por una huella:
+    /// empieza por una direccion, que resuelve a un simbolo.  Este nodo lo
+    /// convierte en una entidad y abre el grafo entero.
+    ArtifactMap = 18,
 };
 
 /**

@@ -21,6 +21,9 @@
 #include "vxdbg/store.h"
 
 #include "vx/lexer.h"
+#include "vx/lowering.h"
+#include "vxdbg/roots.h"
+#include "ir/ssa_ir.h"
 #include "vx/parser.h"
 
 #include <cstdio>
@@ -130,9 +133,18 @@ int main() {
         return 1;
     }
 
+    // El grafo se emite tras bajar a intermedio: es cuando existen los SIMBOLOS,
+    // y sin ellos no habria por donde entrar desde una direccion de ejecucion.
+    ir::IrModule irmod;
+    vx::Lowering lo(*mod, tc, diags);
+    if (!lo.run(irmod, "prueba")) {
+        std::printf("  FALLA el fuente de prueba no baja a intermedio\n");
+        return 1;
+    }
+
     vx::VxdbgEmitStats stats;
     std::string err;
-    comprobar(vx::emit_vxdbg_source(tc, "prueba.vx", FUENTE, dir, stats, err),
+    comprobar(vx::emit_vxdbg_source(tc, &irmod, "prueba.vx", FUENTE, dir, stats, err),
               "se emite el grafo");
     comprobar(stats.entities > 0, "y no sale vacio");
 
@@ -178,12 +190,43 @@ int main() {
     comprobar(stats.unresolved == 0,
               "y no queda ninguna relacion sin destino");
 
+    std::printf("La puerta de entrada\n");
+    comprobar(!stats.artifact_map.empty(), "se emite el mapa de simbolos");
+    comprobar(stats.linked > 0, "con simbolos ligados a su entidad");
+
+    // Una compilacion cualquiera, identificada por su CONTENIDO y no por como se
+    // llame el fichero: es lo unico que sobrevive a renombrarlo o moverlo.
+    const vxdbg::BuildId build{vxdbg::hash_bytes("artefacto-de-prueba", 19)};
+    vxdbg::CacheRootRepository repo(dir, store);
+    comprobar(repo.publish(build, stats.artifact_map),
+              "y se publica bajo su identificador de construccion");
+
+    vxdbg::ArtifactMap mapa;
+    comprobar(repo.lookup(build, mapa), "que es por donde se entra despues");
+    comprobar(!mapa.symbols.empty(), "  y trae los simbolos");
+
+    // El recorrido que motiva todo esto: de un simbolo -- lo unico a lo que
+    // llega una direccion -- a la declaracion que lo origino.
+    const auto id_metodo = mapa.find("Lector__cerrar");
+    comprobar(!id_metodo.hash.empty(), "  un simbolo lleva a su entidad");
+    comprobar(leer(store, id_metodo, e), "  que se puede leer");
+    comprobar(e.name == "cerrar" && e.kind == vxdbg::EntityKind::Function,
+              "  y resulta ser el metodo que se escribio");
+
+    comprobar(mapa.find("NoExisteTalSimbolo").hash.empty(),
+              "un simbolo desconocido no lleva a ningun sitio");
+
+    const vxdbg::BuildId otra{vxdbg::hash_bytes("otra-compilacion", 16)};
+    vxdbg::ArtifactMap vacio;
+    comprobar(!repo.lookup(otra, vacio),
+              "y otra compilacion no hereda el mapa de esta");
+
     std::printf("Se puede volver a emitir\n");
     // Emitir dos veces lo mismo tiene que dar exactamente los mismos nodos: es
     // la propiedad que hace incremental al sistema, y si se rompiera aqui el
     // cache creceria sin parar sin que nadie lo notara.
     vx::VxdbgEmitStats stats2;
-    comprobar(vx::emit_vxdbg_source(tc, "prueba.vx", FUENTE, dir, stats2, err),
+    comprobar(vx::emit_vxdbg_source(tc, &irmod, "prueba.vx", FUENTE, dir, stats2, err),
               "la segunda vez tambien va");
     comprobar(stats2.roots.size() == stats.roots.size(),
               "con los mismos tipos");

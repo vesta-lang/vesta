@@ -840,7 +840,8 @@ add_executable(test_vxdbg_codec tests/vxdbg/test_vxdbg_codec.cpp
                                 src/vxdbg/lowering_map.cpp
                                 src/vxdbg/codec_source.cpp
                                 src/vxdbg/codec_backend.cpp
-                                src/vxdbg/semantic_resolve.cpp)
+                                src/vxdbg/semantic_resolve.cpp
+                                src/vxdbg/roots.cpp)
 target_include_directories(test_vxdbg_codec PRIVATE ${VM_INCLUDES} src/vxdbg)
 
 # El recorrido completo: de una direccion a una explicacion.  Cada capa esta

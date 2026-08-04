@@ -35,6 +35,7 @@
 #include "vx/diagnostic.h"
 #include "port/port_options.h"
 #include "analyze/fingerprint.h" // FunctionContracts
+#include "vxdbg/ids.h"           // huella del mapa de simbolos
 
 namespace vx {
 
@@ -231,6 +232,11 @@ struct CompileOptions {
  */
 struct CompileResult {
     bool ok = false;      ///< Exito global.
+    /// Huella del mapa que liga los simbolos del artefacto con las entidades
+    /// del grafo de depuracion.  Quien produzca el artefacto final la publica
+    /// bajo su identificador de construccion: es lo que permite, desde una
+    /// direccion de ejecucion, llegar a la declaracion que la origino.
+    vxdbg::ContentHash vxdbg_artifact_map;
     std::string vel_text; ///< Texto .vel generado a partir del IR.
     std::string
         ir_text; ///< dump del IrModule (solo si CompileOptions::dump_ir).
