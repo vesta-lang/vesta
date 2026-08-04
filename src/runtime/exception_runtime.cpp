@@ -571,7 +571,15 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
 
     // Primer frame: usar metodo del top de la pila si existe.
     append_str("  at ");
-    if (fr && fr->method) {
+    /* El nombre del marco de arriba sale del PC, no del metodo del marco.  El
+     * marco solo conoce METODOS registrados, y el codigo que falla a menudo no
+     * lo es -- una funcion libre, o un metodo de struct, que al bajarse se
+     * vuelven un simbolo suelto.  Cuando eso pasa, `fr->method` sigue apuntando
+     * al metodo de QUIEN LLAMO, con lo que se ensenaba un nombre que no
+     * corresponde a la linea de al lado. */
+    uint64_t off_top = 0;
+    const std::string *sym_top = symbol_for_pc(vm, cur_pc, off_top);
+    if (sym_top == nullptr && fr && fr->method) {
         const auto &mname = fr->method->name;
         if (mname.data && mname.size > 0) {
             append((const char *)mname.data, mname.size);
@@ -590,8 +598,7 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
         append_dbg(fr->method, cur_pc, "pc");
         append_str("\n");
     } else {
-        uint64_t off = 0;
-        if (const std::string *sym = symbol_for_pc(vm, cur_pc, off)) {
+        if (const std::string *sym = sym_top) {
             const std::string legible = demangle_symbol(*sym);
             append(legible.c_str(), legible.size());
             // Que ES lo que fallo, no solo como se llama: si el grafo lo sabe,
@@ -616,8 +623,11 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
     // Frames intermedios: recorrer frame_stack hasta el origen.
     // Limitamos a 64 frames para evitar runaway en casos degenerados.
     int depth = 0;
-    for (loader::FrameHeader *p = fr; p != nullptr && depth < 64;
-         p = p->prev, ++depth) {
+    /* Se empieza en el marco SIGUIENTE: el de arriba ya se conto.  Empezando en
+     * `fr` salia repetido, y una pila cuyo primer marco aparece dos veces hace
+     * dudar de todo lo demas que diga. */
+    for (loader::FrameHeader *p = (fr ? fr->prev : nullptr);
+         p != nullptr && depth < 64; p = p->prev, ++depth) {
         append_str("  at ");
         if (p->method) {
             const auto &mname = p->method->name;
