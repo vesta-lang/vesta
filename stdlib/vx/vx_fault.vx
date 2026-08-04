@@ -302,7 +302,7 @@ void __vxf_donde(u64 addr) {
     if (__vxf_u32(base, 0) != 0x42445856) {   // 'VXDB'
         return;
     }
-    if (__vxf_u32(base, 4) != 2) {   // version que se sabe leer
+    if (__vxf_u32(base, 4) != 3) {   // version que se sabe leer
         return;
     }
     u64 texto = (u64) section_start(".text");
@@ -312,7 +312,8 @@ void __vxf_donde(u64 addr) {
     u64 off = addr - texto;
 
     u32 n_fn = __vxf_u32(base, 8);
-    u64 c = 12;
+    u64 tabla = (u64) __vxf_u32(base, 12);   // nombres de lo aplanado
+    u64 c = 16;
     u32 k = 0;
     while (k < n_fn) {
         u32 f_off = __vxf_u32(base, c);
@@ -331,20 +332,44 @@ void __vxf_donde(u64 addr) {
             u64 rel = off - (u64) f_off;
             u32 linea = 0;
             u32 col = 0;
+            u32 venia = 0xFFFFFFFF;   // de que funcion vino este tramo
             u32 i = 0;
             while (i < n_pts) {
-                u32 p_off = __vxf_u32(base, c + (u64) i * 16);
+                u32 p_off = __vxf_u32(base, c + (u64) i * 20);
                 if ((u64) p_off > rel) {
                     i = n_pts;
                 } else {
-                    linea = __vxf_u32(base, c + (u64) i * 16 + 4);
-                    col = __vxf_u32(base, c + (u64) i * 16 + 8);
+                    linea = __vxf_u32(base, c + (u64) i * 20 + 4);
+                    col = __vxf_u32(base, c + (u64) i * 20 + 8);
+                    venia = __vxf_u32(base, c + (u64) i * 20 + 16);
                     i = i + 1;
                 }
             }
             if (linea > 0) {
                 __vxf_say("  en ", 5);
-                __vxf_say((u8*) (base + nom), (u64) n_nom);
+                if (venia != 0xFFFFFFFF) {
+                    /* El codigo se escribio en OTRA funcion y llego aqui al
+                     * inlinar: se nombra esa, que es donde esta la linea, y se
+                     * dice dentro de cual acabo.  Poner solo la fisica manda a
+                     * mirar una funcion que no tiene que ver. */
+                    u64 e = tabla + 4;
+                    u32 k2 = 0;
+                    while (k2 < venia) {
+                        u32 l = __vxf_u32(base, e);
+                        e = e + 4 + (u64) l;
+                        while ((e % 4) != 0) {
+                            e = e + 1;
+                        }
+                        k2 = k2 + 1;
+                    }
+                    u32 l2 = __vxf_u32(base, e);
+                    __vxf_say((u8*) (base + e + 4), (u64) l2);
+                    __vxf_say(" [aplanado en ", 14);
+                    __vxf_say((u8*) (base + nom), (u64) n_nom);
+                    __vxf_say("]", 1);
+                } else {
+                    __vxf_say((u8*) (base + nom), (u64) n_nom);
+                }
                 __vxf_say(", linea ", 8);
                 __vxf_num((u64) linea);
                 if (col > 0) {
@@ -355,7 +380,7 @@ void __vxf_donde(u64 addr) {
             }
             return;
         }
-        c = c + (u64) n_pts * 16;
+        c = c + (u64) n_pts * 20;
         k = k + 1;
     }
 }

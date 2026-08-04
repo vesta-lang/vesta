@@ -1582,6 +1582,11 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     uint32_t line; ///< linea del fuente
                     uint32_t col;  ///< columna (0 = no consta)
                     uint32_t len;  ///< cuanto ocupa el tramo (0 = no consta)
+                    /// De que funcion vino ESTE tramo si no se escribio aqui,
+                    /// sino que llego al inlinar.  Vacio = de esta misma.
+                    /// Sin ello el informe manda a la funcion FISICA cuando el
+                    /// codigo que fallo se escribio en otra.
+                    std::string venia_de;
                 };
                 std::vector<PuntoFuente> puntos;
             };
@@ -1738,7 +1743,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                                 continue;
                             ultima = e.source_line;
                             AotFn::PuntoFuente pf{e.byte_offset, e.source_line,
-                                                  0u, 0u};
+                                                  0u, 0u, std::string()};
                             if (e.ir_id != 0xFFFFFFFFu) {
                                 const uint32_t bi = e.ir_id >> 16;
                                 const uint32_t pos = e.ir_id & 0xFFFFu;
@@ -1748,6 +1753,14 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                                         irf.blocks[bi].instrs[pos];
                                     pf.col = in.source_column;
                                     pf.len = in.source_len;
+                                    /* Y de donde vino: la instruccion sabe si
+                                     * llego aqui al inlinar y desde que
+                                     * funcion. */
+                                    if (in.inline_site != ir::IR_NO_INLINE_SITE &&
+                                        in.inline_site < irf.inline_sites.size())
+                                        pf.venia_de =
+                                            irf.inline_sites[in.inline_site]
+                                                .callee;
                                 }
                             }
                             af.puntos.push_back(pf);
@@ -2223,8 +2236,32 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 for (const AotFn &af : compiled)
                     if (!af.puntos.empty() && fn_loc.count(af.name)) ++n_fn;
                 db32(0x42445856u); // 'VXDB'
-                db32(2u);          // v2: cada funcion lleva su NOMBRE
+                db32(3u);          // v3: + de que funcion vino cada tramo
+                /* Los nombres de las funciones que el inlinado se comio van en
+                 * UNA tabla al final y los puntos la indexan: la misma funcion
+                 * aparece en muchos tramos y repetir la cadena engordaria la
+                 * seccion sin decir nada nuevo. */
+                /* Como se lee: `Clase__metodo` es como se llama el simbolo,
+                 * pero quien lee un fallo espera `Clase.metodo`.  Se traduce
+                 * AQUI y no en el manejador: es trabajo que se puede hacer una
+                 * vez al compilar en vez de con el proceso ya roto.  Los
+                 * helpers internos empiezan por `_` y se dejan tal cual. */
+                auto legible = [](const std::string &n) -> std::string {
+                    if (n.empty() || n[0] == '_') return n;
+                    const size_t p2 = n.find("__");
+                    if (p2 == std::string::npos) return n;
+                    return n.substr(0, p2) + "." + n.substr(p2 + 2);
+                };
+                std::vector<std::string> tabla;
+                auto idx_de = [&tabla](const std::string &n) -> uint32_t {
+                    if (n.empty()) return 0xFFFFFFFFu;
+                    for (size_t i = 0; i < tabla.size(); ++i)
+                        if (tabla[i] == n) return static_cast<uint32_t>(i);
+                    tabla.push_back(n);
+                    return static_cast<uint32_t>(tabla.size() - 1);
+                };
                 db32(n_fn);
+                db32(0u);   // hueco: desplazamiento de la tabla de nombres
                 for (const AotFn &af : compiled) {
                     if (af.puntos.empty()) continue;
                     auto it = fn_loc.find(af.name);
@@ -2236,8 +2273,9 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                      * que linea.  Se rellena hasta multiplo de 4 para que lo
                      * que viene detras siga alineado: x86 lo toleraria, pero
                      * otras arquitecturas no. */
-                    db32(static_cast<uint32_t>(af.name.size()));
-                    for (char c : af.name)
+                    const std::string nm_leg = legible(af.name);
+                    db32(static_cast<uint32_t>(nm_leg.size()));
+                    for (char c : nm_leg)
                         db.push_back(static_cast<uint8_t>(c));
                     while ((db.size() % 4u) != 0u) db.push_back(0);
                     for (const auto &q : af.puntos) {
@@ -2245,8 +2283,23 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                         db32(q.line);
                         db32(q.col);
                         db32(q.len);
+                        db32(idx_de(legible(q.venia_de)));
                     }
                 }
+                /* La tabla de nombres, al final: los puntos la indexan.  Su
+                 * desplazamiento se apunta en la cabecera para que el lector no
+                 * tenga que recorrer todas las funciones para llegar. */
+                const uint32_t off_tabla = static_cast<uint32_t>(db.size());
+                db32(static_cast<uint32_t>(tabla.size()));
+                for (const std::string &n : tabla) {
+                    db32(static_cast<uint32_t>(n.size()));
+                    for (char c : n) db.push_back(static_cast<uint8_t>(c));
+                    while ((db.size() % 4u) != 0u) db.push_back(0);
+                }
+                // El hueco reservado en la cabecera (offset 12).
+                for (int i = 0; i < 4; ++i)
+                    db[12 + i] = static_cast<uint8_t>((off_tabla >> (i * 8)) & 0xFF);
+
                 const int dbg_si = get_sec(".vxdbg", /*is_code=*/false, "r");
                 secs[dbg_si].bytes = std::move(db);
             }
