@@ -797,6 +797,17 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
                        atras_top);
             append_str("\n");
             append_source(cur_pc, archivo_top, resumen_top, *sym, atras_top);
+            /* Y en que se convirtio: la instruccion de la maquina que reventó.
+             * El fuente dice que se pedia; esta dice que se estaba haciendo, y
+             * cuando no coinciden es justo lo que hay que ver.  Solo la del
+             * marco de arriba: los de la cadena estan parados en una llamada y
+             * no anaden nada. */
+            if (vm->decoded_ptr && vm->decoded_ptr->metadata &&
+                vm->decoded_ptr->metadata->name) {
+                append_str("      maquina: ");
+                append_str(vm->decoded_ptr->metadata->name);
+                append_str("\n");
+            }
         } else {
             append_str("<top> (pc=");
             append_hex(cur_pc);
