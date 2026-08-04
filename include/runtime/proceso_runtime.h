@@ -852,6 +852,20 @@ class ProcessVM {
     /// atribuye a la ultima de la anterior -- que es otra funcion.
     bool fatal_pc_exact = false;
 
+    /// Direccion por la que ARRANCO este proceso.
+    ///
+    /// Es el fondo de su cadena de llamadas y no tiene direccion de retorno
+    /// en ninguna parte: nadie lo llamo, lo puso a correr el cargador (el
+    /// proceso principal) o un @c spawn (los hijos).  Al reconstruir una
+    /// traza a partir de la pila, ese ultimo escalon no se puede deducir --
+    /// hay que saberlo --, y sin el la traza no dice de donde venia todo.
+    /// Cada proceso guarda el suyo: el de un hijo es su cuerpo, no @c main.
+    ///
+    /// El valor "sin fijar" es @c UINT64_MAX, no 0: el codigo empieza en la
+    /// direccion 0, asi que 0 es una entrada perfectamente valida y usarlo
+    /// como vacio descartaba justo el caso normal.
+    uint64_t entry_pc = UINT64_MAX;
+
     StringInternPool *str_intern_pool =
         nullptr; ///< Pool de strings internados (creado bajo demanda)
 

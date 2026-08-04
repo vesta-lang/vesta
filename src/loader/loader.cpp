@@ -757,6 +757,8 @@ Loader::load_executable(runtime::VM &vm,
 
     // configuramos RIP (PC tambien llamado)
     proccess->registers.rip.qword(exe->init_pc);
+    // Fondo de su cadena de llamadas: por aqui arranco (ver entry_pc).
+    proccess->entry_pc = exe->init_pc;
 
     // Inicializar RSP/RBP del proceso main al stack base convencional
     // (mismo esquema que exec_instr_spawn para procesos hijo: 0x10000000

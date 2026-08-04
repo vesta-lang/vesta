@@ -1048,6 +1048,8 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
      * parezca una direccion de retorno.  Preferible a no decir nada, que es lo
      * que habia.  Se van saltando las repeticiones seguidas del mismo simbolo
      * y se corta a 32 entradas. */
+    /// Ultimo simbolo que conto el barrido, para no repetirlo como origen.
+    const std::string *prev_origen = nullptr;
     {
         const uint64_t rsp = vm->registers.stack_pointer.qword();
         const uint64_t top = vm->stack_high;
@@ -1067,6 +1069,7 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
             if (sym->rfind("gdata.", 0) == 0) continue;
             if (prev && *prev == *sym) continue;
             prev = sym;
+            prev_origen = sym;
             append_str("  llamada desde ");
             const std::string legible = demangle_symbol(*sym);
             append(legible.c_str(), legible.size());
@@ -1086,6 +1089,34 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
             append_str("\n");
             append_source(v, archivo2, resumen2, *sym);
             ++shown;
+        }
+    }
+
+    /* El ORIGEN de la ejecucion, si no salio ya.
+     *
+     * La cadena se reconstruye con las direcciones de retorno que hay en la
+     * pila, y el punto de entrada no tiene ninguna: nadie lo llamo.  Cuando
+     * por medio hay llamadas que no dejan su retorno donde el barrido mira
+     * -- los metodos --, la cadena se corta antes de llegar y la traza acaba
+     * sin decir de donde venia todo.  El proceso si lo sabe, y lo dice. */
+    if (vm->entry_pc != UINT64_MAX) {
+        uint64_t off_e = 0;
+        const std::string *sym_e = symbol_for_pc(vm, vm->entry_pc, off_e);
+        // Si el barrido ya lo conto, no repetirlo.
+        if (sym_e && !(prev_origen && *prev_origen == *sym_e)) {
+            append_str("  origen ");
+            const std::string legible_e = demangle_symbol(*sym_e);
+            append(legible_e.c_str(), legible_e.size());
+            std::string archivo_e;
+            vxdbg::ContentHash resumen_e;
+            const std::string nota_e =
+                entity_note_for_symbol(vm, *sym_e, &archivo_e, &resumen_e);
+            if (!nota_e.empty()) {
+                append_str(" [");
+                append(nota_e.c_str(), nota_e.size());
+                append_str("]");
+            }
+            append_str("\n");
         }
     }
 
