@@ -2778,6 +2778,7 @@ r0_case("45_string_op_override", "45 string op override", "45_string_op_override
 r0_case("53_enum_simple", "53 enum simple", "53_enum_simple.vx", 42)
 r0_case("59_arraylist", "59 arraylist", "59_arraylist.vx", 42)
 r0_case("60_stack_iface", "60 stack iface", "60_stack_iface.vx", 42)
+r0_case("static_assert_capturado", "una asercion incumplida se captura con try/catch en comptime", "368_static_assert_capturado.vx", 42)
 fails_case("literal_base_invalida", "un 2 en un literal binario se rechaza al compilar", "366_literal_base_invalida.vx", "digito que no pertenece a la base")
 fails_case("literal_sin_digitos", "un prefijo de base sin digitos se rechaza al compilar", "367_literal_sin_digitos.vx", "literal entero sin digitos")
 r0_case("wideint_literales", "literales mas anchos que la palabra en los seis tipos", "364_wideint_literales.vx", 42)

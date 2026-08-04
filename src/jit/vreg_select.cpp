@@ -2570,6 +2570,14 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                                MOperand::make_reg(MReg::RBX, 8)));
                 O.push_back(
                     MInstr::make_call_abs(out.intern_imm64(ent.panic_str)));
+                /* `panic` no vuelve: o lo captura un `try` (y el helper salta
+                 * al manejador) o mata el proceso.  Pero cuando NO hay `try`,
+                 * el helper marca el error y RETORNA -- el interprete lo mira
+                 * en su bucle, el codigo compilado no tiene donde mirarlo y
+                 * seguia ejecutando lo que hubiera detras sobre un proceso ya
+                 * muerto, hasta reventar.  Un `ret` detras cierra el hueco: la
+                 * funcion termina y el error queda marcado. */
+                O.push_back(MInstr::make_ret());
                 break;
             }
             /* LANDINGPAD: primera op del bloque catch in-JIT.  do_throw deja

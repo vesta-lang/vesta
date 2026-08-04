@@ -413,6 +413,13 @@ void throw_fatal(ProcessVM *vm, uint32_t kind, const char *message) {
                 vm->fatal_msg_buf[0] = '\0';
             }
         }
+        /* La traza se construye AQUI, con el proceso todavia coherente.
+         * Hacerlo despues, cuando alguien recoge el cadaver, significa
+         * recorrer una cadena de marcos que ya no tiene por que ser valida --
+         * y eso se lleva por delante a quien lo intente. */
+        if (vm->fatal_trace_buf) {
+            build_stack_trace(vm, vm->fatal_trace_buf, 4096);
+        }
         vm->err_thread = fatal_to_thread_err(kind);
         vm->scheduler.on_event(EVT_ERROR);
         return;

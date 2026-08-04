@@ -26054,6 +26054,39 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         cl.operands = {v_proc, v_cond, v_msg, v_len};
         cl.source_line = e->loc.line;
         fn_->append(current_block_, std::move(cl));
+        /* Una asercion incumplida CORTA la ejecucion aqui mismo.
+         *
+         * El helper devuelve el veredicto y antes se ignoraba, con lo que el
+         * cuerpo seguia corriendo sobre datos que ya se sabian invalidos.  El
+         * corte es un `panic` y no un `hlt`: lleva el mensaje, construye la
+         * traza de llamadas y -- lo que de verdad importa -- se puede capturar
+         * con `try`/`catch` desde el propio codigo comptime, que un `hlt` no
+         * permitiria. */
+        const ir::IrBlockId sa_fail = fn_->new_block("assert_fail");
+        const ir::IrBlockId sa_cont = fn_->new_block("assert_ok");
+        {
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR_COND;
+            br.operands.push_back(v_dst);
+            br.target_block = sa_fail; // != 0 -> incumplida
+            br.false_block = sa_cont;  // == 0 -> sigue
+            br.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(br));
+        }
+        fn_->blocks[current_block_].succs.push_back(sa_fail);
+        fn_->blocks[current_block_].succs.push_back(sa_cont);
+        {
+            /* PANIC lee el mensaje de la memoria de la VM, igual que el helper:
+             * se reusan las mismas direccion y longitud. */
+            ir::IrInstr p{};
+            p.op = ir::IrOp::PANIC;
+            p.type = ir::IrType::VOID;
+            p.dst = ir::IR_NO_VALUE;
+            p.operands = {v_msg, v_len};
+            p.source_line = e->loc.line;
+            fn_->append(sa_fail, std::move(p));
+        }
+        current_block_ = sa_cont;
         out_value = v_dst;
         return true;
     }

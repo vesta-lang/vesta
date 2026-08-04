@@ -638,6 +638,17 @@ struct Symbol {
 void register_comptime_virtual_fns();
 
 /**
+ * @brief Registra como error de compilacion un fallo del codigo comptime.
+ *
+ * La llama quien ejecuta ese codigo cuando el proceso muere sin que nadie
+ * capture el fallo.  Con un `try` que lo capture, el proceso no muere y esto
+ * no se invoca.
+ *
+ * @param msg Mensaje del fallo, ya formado.
+ */
+void report_comptime_fatal(const std::string &msg);
+
+/**
  * @brief Guarda el texto de un `static_assert` y devuelve su indice.
  *
  * El mensaje no viaja por la maquina virtual: por ella solo va el indice.  La

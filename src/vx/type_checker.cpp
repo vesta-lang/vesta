@@ -187,6 +187,26 @@ extern "C" uint64_t vx_comptime_type_kind(const char *name) {
 }
 
 /**
+ * @brief Registra como error de compilacion un fallo del codigo comptime.
+ *
+ * La llama quien ejecuta ese codigo cuando el proceso muere sin que nadie
+ * capture el fallo.  Si el propio codigo comptime lo envuelve en un `try`, el
+ * proceso NO muere y esto no se invoca: el programa sigue siendo valido.
+ *
+ * @param msg Mensaje del fallo, ya formado.
+ */
+void report_comptime_fatal(const std::string &msg) {
+    if (g_active_typechecker) {
+        SourceLoc loc;
+        loc.file = "<comptime>";
+        g_active_typechecker->diagnostics().error(loc, msg);
+    } else {
+        std::fprintf(stderr, "[vx] %s (sin TypeChecker activo)\n",
+                     msg.c_str());
+    }
+}
+
+/**
  * @brief Helper de `static_assert` invocado desde codigo comptime.
  *
  * Recibe la direccion y la longitud del mensaje en el espacio de la MAQUINA
@@ -205,17 +225,17 @@ extern "C" uint64_t vx_comptime_type_kind(const char *name) {
 extern "C" uint64_t vx_static_assert(uint64_t proc_ptr, int64_t cond,
                                      uint64_t msg_addr, uint64_t msg_len) {
     if (cond) return 0; /* Se cumple: nada que hacer. */
-    std::string text = "static_assert";
-    const std::string m = comptime_read_vm_string(proc_ptr, msg_addr, msg_len);
-    if (!m.empty()) text = "static_assert: " + m;
-    if (g_active_typechecker) {
-        SourceLoc loc;
-        loc.file = "<comptime>";
-        g_active_typechecker->diagnostics().error(loc, text);
-    } else {
-        std::fprintf(stderr, "[vx] %s (sin TypeChecker activo)\n",
-                     text.c_str());
-    }
+    /* Solo el veredicto: NO se reporta nada aqui.
+     *
+     * Quien decide si la asercion rompe la compilacion es el `panic` que el
+     * lowering emite justo detras.  Si el codigo comptime la envuelve en un
+     * `try`, ese panic se captura y el programa sigue siendo valido -- y
+     * reportar desde aqui lo habria tumbado igualmente, haciendo inutil el
+     * `catch`.  Sin `try`, el proceso muere y quien lo recoge imprime el
+     * mensaje y la traza. */
+    (void)proc_ptr;
+    (void)msg_addr;
+    (void)msg_len;
     return 1; /* Incumplida. */
 }
 

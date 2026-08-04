@@ -19,6 +19,7 @@
  */
 
 #include "vx/comptime/comptime_vm.h"
+#include "vx/type_checker.h" // report_comptime_fatal
 
 /* Headers runtime full: estos pueden cascade-incluir openssl/capstone
  * pero solo se compilan en este TU (no se filtran al header publico
@@ -300,10 +301,14 @@ bool ComptimeRuntime::invoke_simple_macro(const std::string &macro_name,
                                   : "la ejecucion en tiempo de compilacion "
                                     "termino con un error";
             std::fprintf(stderr, "error: %s\n", msg);
-            std::vector<char> trace(8192);
-            const size_t n =
-                runtime::build_stack_trace(proc, trace.data(), trace.size());
-            if (n > 0) std::fprintf(stderr, "%s\n", trace.data());
+            /* Y que la compilacion falle: el valor que se hubiera horneado
+             * viene de un calculo que no llego a terminar. */
+            report_comptime_fatal(msg);
+            /* La traza la dejo escrita el propio fallo, cuando el proceso
+             * aun estaba coherente.  Reconstruirla ahora seria recorrer
+             * marcos que ya no son de fiar. */
+            if (proc->fatal_trace_buf && proc->fatal_trace_buf[0])
+                std::fprintf(stderr, "%s\n", proc->fatal_trace_buf);
             std::fflush(stderr);
             return false;
         }
