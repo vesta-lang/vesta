@@ -3685,6 +3685,7 @@ int main(int argc, char *argv[]) {
             if (result.count("sysroot"))
                 aopt.sysroot = result["sysroot"].as<std::string>();
             aopt.argv0 = argv[0];
+            aopt.source_path = vx_path;
             return vesta::tc::compile_aot(cr, copts, out_prefix, aopt);
         }
 

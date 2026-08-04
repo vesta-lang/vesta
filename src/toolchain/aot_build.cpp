@@ -56,6 +56,66 @@
 namespace vesta {
 namespace tc {
 
+/**
+ * @brief Escribe el fichero acompanante que explica despues un fallo.
+ *
+ * NO toca el binario.  Ni una seccion, ni un byte: el programa emitido es
+ * exactamente el mismo con esta informacion y sin ella.  Es deliberado --
+ * meterle un manejador o un trap para que se explique solo cambiaria el
+ * programa que despues se depura, y lo que veria un depurador externo o un
+ * desensamblador ya no seria lo que se compilo.  Por eso va aparte, al modo de
+ * un `.pdb` o un `.dSYM`.
+ *
+ * Los desplazamientos son RELATIVOS a cada funcion, no direcciones absolutas.
+ * Asi se apoya en el otro mecanismo en lugar de duplicarlo: el `.symtab` que
+ * ya emite `--aot-debug=1` hace que un depurador diga `main+0x3a`, y esto
+ * explica que hay ahi.
+ *
+ * @param ruta Fichero destino.
+ * @param fuente Ruta del `.vx` que se compilo.
+ * @param funcs Nombres de funcion en el mismo orden que @p mapas.
+ * @param mapas Correlacion desplazamiento -> linea de cada funcion.
+ * @return true si se pudo escribir.
+ */
+static bool escribir_acompanante(
+    const std::string &ruta, const std::string &fuente,
+    const std::vector<std::string> &funcs,
+    const std::vector<std::vector<jit::LineMapEntry>> &mapas) {
+    std::ofstream f(ruta, std::ios::binary);
+    if (!f) return false;
+    auto u32 = [&](uint32_t v) { f.write((const char *)&v, 4); };
+    auto str = [&](const std::string &t) {
+        u32((uint32_t)t.size());
+        if (!t.empty()) f.write(t.data(), (std::streamsize)t.size());
+    };
+    f.write("VXDG", 4);
+    u32(1u); // version del formato
+    str(fuente);
+    uint32_t n_con_mapa = 0;
+    for (const auto &m : mapas)
+        if (!m.empty()) ++n_con_mapa;
+    u32(n_con_mapa);
+    for (size_t i = 0; i < funcs.size() && i < mapas.size(); ++i) {
+        if (mapas[i].empty()) continue;
+        str(funcs[i]);
+        /* Solo donde la linea CAMBIA: una entrada por instruccion seria varias
+         * veces mas grande sin decir nada nuevo. */
+        std::vector<std::pair<uint32_t, uint32_t>> cambios;
+        uint32_t ultima = 0;
+        for (const jit::LineMapEntry &e : mapas[i]) {
+            if (e.source_line == 0 || e.source_line == ultima) continue;
+            cambios.emplace_back(e.byte_offset, e.source_line);
+            ultima = e.source_line;
+        }
+        u32((uint32_t)cambios.size());
+        for (const auto &c : cambios) {
+            u32(c.first);
+            u32(c.second);
+        }
+    }
+    return true;
+}
+
 int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 std::string out_prefix, const AotOptions &opt) {
             // Alias locales de las opciones para no alterar el cuerpo movido.
@@ -1419,6 +1479,9 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 //  AOT-GC (Inc 1): stackmaps de raices GC por safepoint
                 // (pc_offset relativo a esta funcion).  Vacios salvo gc<T>.
                 std::vector<jit::Stackmap> stackmaps;
+                /// Donde cambia la linea del fuente dentro de @c bytes.  Es un
+                /// DATO: no cambia lo emitido.  Vacio salvo que se pidiera.
+                std::vector<jit::LineMapEntry> line_map;
             };
             std::vector<AotFn> compiled;
             std::unordered_map<std::string, size_t>
@@ -1551,11 +1614,15 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     nopts.target_sysv = (fmt == aot::ObjFormat::ELF);
                     nopts.mode32 = aot_mode32;
                     nopts.fisa = aot_fisa;
+                    // Con info de depuracion, tambien la correlacion con el
+                    // fuente.  No cambia ni un byte de lo emitido.
+                    nopts.want_line_map = (opt.debug_level >= 1);
                     aot::NativeCompileResult ncr =
                         native_backend->compile_function(*itf->second, nopts);
                     af.bytes = std::move(ncr.bytes);
                     af.relocs = std::move(ncr.relocs);
                     af.stackmaps = std::move(ncr.stackmaps);
+                    af.line_map = std::move(ncr.line_map);
                 }
                 if (af.bytes.empty()) {
                     std::cerr
@@ -2353,6 +2420,31 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     aot::ImportCall{ti.dll, ti.func, text_sec, ti.off});
             }
 
+            /* El acompanante de depuracion del LENGUAJE.  Se escribe con el
+             * binario ya emitido y NO lo modifica: ni una seccion, ni un byte.
+             * El programa es exactamente el mismo con esta informacion y sin
+             * ella, que es la razon de que vaya aparte -- meterle un manejador
+             * para que se explique solo cambiaria el programa que despues se
+             * depura, y lo que veria un depurador externo o un desensamblador
+             * ya no seria lo que se compilo. */
+            auto soltar_acompanante = [&](const std::string &destino) {
+                if (opt.debug_level < 1) return;
+                std::vector<std::string> nombres;
+                std::vector<std::vector<jit::LineMapEntry>> mapas;
+                nombres.reserve(compiled.size());
+                mapas.reserve(compiled.size());
+                for (const AotFn &af : compiled) {
+                    nombres.push_back(af.name);
+                    mapas.push_back(af.line_map);
+                }
+                const std::string ruta = destino + ".vxdbg";
+                if (escribir_acompanante(ruta, opt.source_path, nombres, mapas))
+                    std::cout << "[aot] info de depuracion del lenguaje en '"
+                              << ruta
+                              << "' (fichero aparte; el codigo emitido es el "
+                                 "mismo byte a byte).\n";
+            };
+
             std::string werr;
             if (!w.write(out_prefix, werr)) {
                 std::cerr << "[aot] error al escribir '" << out_prefix
@@ -2386,6 +2478,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                           << autolink_libs.size()
                           << " lib(s) estatica(s) de la stdlib auto-enlazada(s), "
                              "sin DLLs ni g++).\n";
+                soltar_acompanante(link_real_out);
                 return EXIT_SUCCESS;
             }
 
@@ -2417,6 +2510,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                           << " escrito en '" << out_prefix
                           << "' (entry _start -> main -> exit, return "
                              "de main como exit-code).\n";
+            soltar_acompanante(out_prefix);
             return EXIT_SUCCESS;
 }
 
