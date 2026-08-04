@@ -29,6 +29,8 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include "vx/vxdbg_emit.h"
+
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -2481,6 +2483,21 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                         ps.push_back({q.off, q.line, q.col, q.len});
                     puntos.push_back(std::move(ps));
                 }
+                /* Y el grafo semantico queda pedible A PARTIR DEL BINARIO.
+                 * Se publica bajo la huella del fichero, igual que ya se hace
+                 * con el `.velb`: quien lo tenga delante la calcula sobre los
+                 * mismos bytes y llega a las entidades -- de que tipo es cada
+                 * funcion, con que firma --, que es lo que convierte un nombre
+                 * suelto en algo que se entiende sin ir al fuente.
+                 *
+                 * Se hace aqui y no al compilar porque la huella no existe
+                 * hasta que existe el fichero. */
+                if (!cr.vxdbg_artifact_map.empty()) {
+                    vx::publish_vxdbg_artifact(destino, cr.vxdbg_artifact_map,
+                                               cr.vxdbg_span_map,
+                                               copts.vxdbg_dir);
+                }
+
                 const std::string ruta = destino + ".vxdbg";
                 if (escribir_acompanante(ruta, opt.source_path, nombres, puntos))
                     std::cout << "[aot] info de depuracion del lenguaje en '"
