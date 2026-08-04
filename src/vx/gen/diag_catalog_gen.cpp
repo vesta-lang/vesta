@@ -35,6 +35,7 @@ const CatEntry kEntries[] = {
     {"VX7011", {"fatal error: aborted by the program", "error fatal: abortado por el programa"}},
     {"VX7012", {"fatal error", "error fatal"}},
     {"VX7013", {"at address {0}", "en la direccion {0}"}},
+    {"VX7014", {"source unavailable (file modified since build)", "fuente no disponible (el fichero cambio desde que se compilo)"}},
     {"VXA001", {"asm: dead code: unreachable instruction in the asm block", "asm: codigo muerto: instruccion inalcanzable en el bloque asm"}},
     {"VXA002", {"asm: jump to label '{0}' not defined in the asm block", "asm: salto a etiqueta '{0}' no definida en el bloque asm"}},
     {"VXA003", {"asm: infinite loop: control cannot leave the asm block", "asm: bucle sin salida: el flujo no puede abandonar el bloque asm"}},
@@ -46,7 +47,7 @@ const CatEntry kEntries[] = {
     {"VXA009", {"asm: operand '{0}' pinned to '{1}' -- that register is reserved by the runtime in VM mode; this asm block cannot be JIT-compiled (runs in the interpreter)", "asm: operando '{0}' pineado a '{1}' -- ese registro esta reservado por el runtime en modo VM; este bloque asm no se puede compilar en JIT (corre en el interprete)"}},
     {"VXA010", {"asm: reassigns the stack pointer ('{0}') in a normal function; its epilogue manages the stack, so a persistent stack switch (coroutines/fibers) will not survive the return -- mark the function @Naked to own the stack, or balance the change (restore '{0}') before the block ends", "asm: reasigna el puntero de pila ('{0}') en una funcion normal; su epilogue gestiona la pila, asi que un cambio de pila persistente (corrutinas/fibras) no sobrevivira al retorno -- marca la funcion @Naked para ser dueno de la pila, o equilibra el cambio (restaura '{0}') antes de cerrar el bloque"}},
 };
-const int kEntryCount = 25;
+const int kEntryCount = 26;
 
 } // namespace
 

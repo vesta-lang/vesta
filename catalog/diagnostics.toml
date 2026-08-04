@@ -129,3 +129,7 @@ es = "error fatal"
 [VX7013]
 en = "at address {0}"
 es = "en la direccion {0}"
+
+[VX7014]
+en = "source unavailable (file modified since build)"
+es = "fuente no disponible (el fichero cambio desde que se compilo)"
