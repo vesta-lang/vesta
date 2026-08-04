@@ -933,10 +933,11 @@ void maybe_compile_method(runtime::ProcessVM *vm,
                     ++g_jit_compiled_count;
                     if (st_ptr2) {
                         auto sit = st_ptr2->find("code." + n);
-                        if (sit != st_ptr2->end() && sit->second != 0)
+                        if (sit != st_ptr2->end() && sit->second != 0) {
                             register_jit_code_at_pc(
                                 sit->second, reinterpret_cast<void *>(vc),
                                 vc_size, &vc_lines);
+                        }
                     }
                     if (g_jit_warn_unsupported)
                         std::fprintf(stderr,
@@ -1407,9 +1408,12 @@ CompileResult eager_compile_function(
              * Pasamos el PROPIO resolver (recursivo) para que los CALLs
              * del callee se resuelvan a sus direcciones. */
             if (g_jit_use_vregs) {
+                size_t vc_size2 = 0;
+                std::vector<LineMapEntry> vc_lines2;
                 uint8_t *vc = vreg_compile(
                     child_ir, *g_code_cache, *resolver_holder,
-                    make_vreg_entries(), resolve_native_fn, sym_resolver);
+                    make_vreg_entries(), resolve_native_fn, sym_resolver,
+                    &vc_size2, &vc_lines2);
                 if (vc != nullptr) {
                     const uint64_t va = reinterpret_cast<uint64_t>(vc);
                     g_eager_cache[name] = va;
@@ -1418,7 +1422,8 @@ CompileResult eager_compile_function(
                         const uint64_t pc = sym_resolver("code." + name);
                         if (pc != 0)
                             register_jit_code_at_pc(
-                                pc, reinterpret_cast<void *>(vc));
+                                pc, reinterpret_cast<void *>(vc), vc_size2,
+                                &vc_lines2);
                     }
                     if (g_jit_warn_unsupported)
                         std::fprintf(stderr,
@@ -1447,7 +1452,8 @@ CompileResult eager_compile_function(
                 const uint64_t pc = sym_resolver("code." + name);
                 if (pc != 0) {
                     register_jit_code_at_pc(pc,
-                                            reinterpret_cast<void *>(cres.fn));
+                                            reinterpret_cast<void *>(cres.fn),
+                                            cres.code_size);
                 }
             }
             if (g_jit_warn_unsupported) {
