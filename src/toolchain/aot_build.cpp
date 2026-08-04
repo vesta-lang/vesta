@@ -57,30 +57,39 @@ namespace vesta {
 namespace tc {
 
 /**
+ * @brief Un punto del fuente al que corresponde un tramo de codigo nativo.
+ */
+struct PuntoAcompanante {
+    uint32_t off;  ///< desplazamiento dentro de la funcion
+    uint32_t line; ///< linea del fuente
+    uint32_t col;  ///< columna (0 = no consta)
+    uint32_t len;  ///< cuanto ocupa el tramo (0 = no consta)
+};
+
+/**
  * @brief Escribe el fichero acompanante que explica despues un fallo.
  *
  * NO toca el binario.  Ni una seccion, ni un byte: el programa emitido es
- * exactamente el mismo con esta informacion y sin ella.  Es deliberado --
- * meterle un manejador o un trap para que se explique solo cambiaria el
- * programa que despues se depura, y lo que veria un depurador externo o un
- * desensamblador ya no seria lo que se compilo.  Por eso va aparte, al modo de
- * un `.pdb` o un `.dSYM`.
+ * exactamente el mismo con esta informacion y sin ella.  Meterle un manejador
+ * o un trap para que se explique solo cambiaria el programa que despues se
+ * depura, y lo que veria un depurador externo o un desensamblador ya no seria
+ * lo que se compilo.  Por eso va aparte, al modo de un `.pdb` o un `.dSYM`.
  *
- * Los desplazamientos son RELATIVOS a cada funcion, no direcciones absolutas.
- * Asi se apoya en el otro mecanismo en lugar de duplicarlo: el `.symtab` que
- * ya emite `--aot-debug=1` hace que un depurador diga `main+0x3a`, y esto
- * explica que hay ahi.
+ * Los desplazamientos son RELATIVOS a cada funcion, no direcciones absolutas:
+ * asi se apoya en el otro mecanismo en lugar de duplicarlo -- el `.symtab` que
+ * emite `--debug-info=1` hace que un depurador diga `main+0x3a`, y esto explica
+ * que hay ahi.
  *
  * @param ruta Fichero destino.
  * @param fuente Ruta del `.vx` que se compilo.
- * @param funcs Nombres de funcion en el mismo orden que @p mapas.
- * @param mapas Correlacion desplazamiento -> linea de cada funcion.
+ * @param funcs Nombres de funcion, en el mismo orden que @p puntos.
+ * @param puntos Puntos de fuente de cada funcion.
  * @return true si se pudo escribir.
  */
 static bool escribir_acompanante(
     const std::string &ruta, const std::string &fuente,
     const std::vector<std::string> &funcs,
-    const std::vector<std::vector<jit::LineMapEntry>> &mapas) {
+    const std::vector<std::vector<PuntoAcompanante>> &puntos) {
     std::ofstream f(ruta, std::ios::binary);
     if (!f) return false;
     auto u32 = [&](uint32_t v) { f.write((const char *)&v, 4); };
@@ -89,28 +98,21 @@ static bool escribir_acompanante(
         if (!t.empty()) f.write(t.data(), (std::streamsize)t.size());
     };
     f.write("VXDG", 4);
-    u32(1u); // version del formato
+    u32(2u); // v2: cada punto lleva linea, columna y tramo
     str(fuente);
     uint32_t n_con_mapa = 0;
-    for (const auto &m : mapas)
+    for (const auto &m : puntos)
         if (!m.empty()) ++n_con_mapa;
     u32(n_con_mapa);
-    for (size_t i = 0; i < funcs.size() && i < mapas.size(); ++i) {
-        if (mapas[i].empty()) continue;
+    for (size_t i = 0; i < funcs.size() && i < puntos.size(); ++i) {
+        if (puntos[i].empty()) continue;
         str(funcs[i]);
-        /* Solo donde la linea CAMBIA: una entrada por instruccion seria varias
-         * veces mas grande sin decir nada nuevo. */
-        std::vector<std::pair<uint32_t, uint32_t>> cambios;
-        uint32_t ultima = 0;
-        for (const jit::LineMapEntry &e : mapas[i]) {
-            if (e.source_line == 0 || e.source_line == ultima) continue;
-            cambios.emplace_back(e.byte_offset, e.source_line);
-            ultima = e.source_line;
-        }
-        u32((uint32_t)cambios.size());
-        for (const auto &c : cambios) {
-            u32(c.first);
-            u32(c.second);
+        u32((uint32_t)puntos[i].size());
+        for (const PuntoAcompanante &p : puntos[i]) {
+            u32(p.off);
+            u32(p.line);
+            u32(p.col);
+            u32(p.len);
         }
     }
     return true;
@@ -1479,9 +1481,19 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 //  AOT-GC (Inc 1): stackmaps de raices GC por safepoint
                 // (pc_offset relativo a esta funcion).  Vacios salvo gc<T>.
                 std::vector<jit::Stackmap> stackmaps;
-                /// Donde cambia la linea del fuente dentro de @c bytes.  Es un
-                /// DATO: no cambia lo emitido.  Vacio salvo que se pidiera.
-                std::vector<jit::LineMapEntry> line_map;
+                /// Donde cambia el punto del fuente dentro de @c bytes: es un
+                /// DATO, no cambia lo emitido.  Vacio salvo que se pidiera.
+                ///
+                /// Lleva COLUMNA ademas de linea porque con la linea sola no se
+                /// puede subrayar QUE de ella fallo, que es la diferencia entre
+                /// senalar una sentencia y senalar la operacion.
+                struct PuntoFuente {
+                    uint32_t off;  ///< desplazamiento dentro de la funcion
+                    uint32_t line; ///< linea del fuente
+                    uint32_t col;  ///< columna (0 = no consta)
+                    uint32_t len;  ///< cuanto ocupa el tramo (0 = no consta)
+                };
+                std::vector<PuntoFuente> puntos;
             };
             std::vector<AotFn> compiled;
             std::unordered_map<std::string, size_t>
@@ -1622,7 +1634,35 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     af.bytes = std::move(ncr.bytes);
                     af.relocs = std::move(ncr.relocs);
                     af.stackmaps = std::move(ncr.stackmaps);
-                    af.line_map = std::move(ncr.line_map);
+                    /* El punto de fuente de cada tramo de codigo.  La linea
+                     * la da el mapa; la COLUMNA y el tramo salen de la propia
+                     * instruccion del intermedio, que el mapa identifica por
+                     * @c ir_id (bloque*65536 + posicion).  Se resuelve aqui,
+                     * al compilar, para que el fichero acompanante se baste
+                     * solo y quien lo lea no necesite el intermedio. */
+                    {
+                        const ir::IrFunction &irf = *itf->second;
+                        uint32_t ultima = 0;
+                        for (const jit::LineMapEntry &e : ncr.line_map) {
+                            if (e.source_line == 0 || e.source_line == ultima)
+                                continue;
+                            ultima = e.source_line;
+                            AotFn::PuntoFuente pf{e.byte_offset, e.source_line,
+                                                  0u, 0u};
+                            if (e.ir_id != 0xFFFFFFFFu) {
+                                const uint32_t bi = e.ir_id >> 16;
+                                const uint32_t pos = e.ir_id & 0xFFFFu;
+                                if (bi < irf.blocks.size() &&
+                                    pos < irf.blocks[bi].instrs.size()) {
+                                    const ir::IrInstr &in =
+                                        irf.blocks[bi].instrs[pos];
+                                    pf.col = in.source_column;
+                                    pf.len = in.source_len;
+                                }
+                            }
+                            af.puntos.push_back(pf);
+                        }
+                    }
                 }
                 if (af.bytes.empty()) {
                     std::cerr
@@ -2430,15 +2470,19 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
             auto soltar_acompanante = [&](const std::string &destino) {
                 if (opt.debug_level < 1) return;
                 std::vector<std::string> nombres;
-                std::vector<std::vector<jit::LineMapEntry>> mapas;
+                std::vector<std::vector<PuntoAcompanante>> puntos;
                 nombres.reserve(compiled.size());
-                mapas.reserve(compiled.size());
+                puntos.reserve(compiled.size());
                 for (const AotFn &af : compiled) {
                     nombres.push_back(af.name);
-                    mapas.push_back(af.line_map);
+                    std::vector<PuntoAcompanante> ps;
+                    ps.reserve(af.puntos.size());
+                    for (const auto &q : af.puntos)
+                        ps.push_back({q.off, q.line, q.col, q.len});
+                    puntos.push_back(std::move(ps));
                 }
                 const std::string ruta = destino + ".vxdbg";
-                if (escribir_acompanante(ruta, opt.source_path, nombres, mapas))
+                if (escribir_acompanante(ruta, opt.source_path, nombres, puntos))
                     std::cout << "[aot] info de depuracion del lenguaje en '"
                               << ruta
                               << "' (fichero aparte; el codigo emitido es el "
