@@ -255,48 +255,39 @@ u32 __vxf_u32(u64 base, u64 off) {
     return p[0];
 }
 
-// Escribe un numero en decimal.  Propio y sobre la pila: un manejador de fallo
-// no debe pasar por el I/O con buffer del programa que acaba de reventar.
+// Escribe un numero en decimal, sin pasar por el I/O con buffer del programa
+// que acaba de reventar.
 // Buffer GLOBAL, no local: tomarle la direccion a un array de la pila puede
 // hacer que el compilador lo lleve al monton, y dentro de un manejador de fallo
-// no se puede confiar en el asignador -- puede ser justo lo que reventó, o
+// no se puede confiar en el asignador -- puede ser justo lo que revento, o
 // estar a medias.  Un global vive en datos estaticos y no aloca nada.
 u8[24] __vxf_digitos;
 
-// Decimal SIN dividir: se resta la potencia de diez que toca.
+// Escribe un numero en decimal.
 //
-// Medido: una division dentro del manejador hace que el proceso muera con
-// acceso invalido, mientras que la misma funcion a base de desplazamientos y
-// restas funciona.  La sospecha es la alineacion de la pila con la que el
-// sistema entra al manejador -- una operacion que derrame a registro ancho
-// exige 16 bytes y falla si no los tiene --, no la division en si.  Queda
-// anotado: aqui se rodea, pero conviene mirarlo aparte porque afectaria a
-// cualquier funcion algo compleja llamada desde un manejador.
+// Buffer GLOBAL y no local: tomarle la direccion a un array de la pila puede
+// hacer que el compilador lo lleve al monton, y dentro de un manejador de
+// fallo no se puede confiar en el asignador -- puede ser justo lo que revento,
+// o estar a medias.  Un global vive en datos estaticos y no aloca nada.
 void __vxf_num(u64 v) {
-    u64 pot = 10000000000000000000;
     u64 n = 0;
-    while (pot > 0) {
-        u64 dig = 0;
-        while (v >= pot) {
-            v = v - pot;
-            dig = dig + 1;
-        }
-        // No se emiten los ceros de delante, salvo que sea el unico digito.
-        if (dig > 0 || n > 0 || pot == 1) {
-            __vxf_digitos[n] = (u8) (48 + dig);
-            n = n + 1;
-        }
-        if (pot == 1) {
-            pot = 0;
-        } else {
-            // pot / 10 sin dividir: la siguiente potencia se lleva aparte.
-            u64 sig = 1;
-            u64 lim = pot;
-            while (sig * 10 < lim) {
-                sig = sig * 10;
-            }
-            pot = sig;
-        }
+    if (v == 0) {
+        __vxf_digitos[0] = 48;
+        n = 1;
+    }
+    // Con v == 0 el bucle no entra, asi que no hace falta un `else`.
+    while (v > 0) {
+        __vxf_digitos[n] = (u8) (48 + (v % 10));
+        v = v / 10;
+        n = n + 1;
+    }
+    // Los digitos salieron al reves; se le da la vuelta.
+    u64 i = 0;
+    while (i < n / 2) {
+        u8 t = __vxf_digitos[i];
+        __vxf_digitos[i] = __vxf_digitos[n - 1 - i];
+        __vxf_digitos[n - 1 - i] = t;
+        i = i + 1;
     }
     __vxf_say(&__vxf_digitos[0], n);
 }
