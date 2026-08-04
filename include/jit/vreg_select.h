@@ -60,6 +60,23 @@ enum class FloatIsa : uint8_t {
 using CallResolver = std::function<uint64_t(const std::string &)>;
 
 /**
+ * @brief Resuelve la ABI custom (param_abi_regs) de un callee por NOMBRE, para
+ *        el CALL directo.  Devuelve puntero al vector de registros por parametro
+ *        (alineado con los args), o nullptr si el callee usa la ABI estandar.
+ *        El puntero debe seguir vivo durante la compilacion (el driver lo
+ *        respalda con su indice de IrFunctions).
+ */
+using AbiResolver =
+    std::function<const std::vector<std::string> *(const std::string &)>;
+
+/**
+ * @brief Registra (thread-local) el resolver de ABI custom para el CALL directo.
+ *        Lo llama el driver AOT antes de compilar cada funcion.  Pasar {} lo
+ *        limpia.  El CALLIND no lo usa (su ABI viaja en la instruccion).
+ */
+void vreg_set_abi_resolver(AbiResolver resolver) noexcept;
+
+/**
  * @struct VregEntries
  * @brief Direcciones de runtime entries que el selector vreg necesita para
  *        bajar ops que llaman al runtime.  0 = no disponible (esos ops caen
@@ -122,6 +139,7 @@ struct VregEntries {
         0; ///< vrt_str_make_h(proc, host_addr, byte_len) -> handle (buf host)
     uint64_t str_len = 0; ///< vrt_str_len(proc, handle) -> i64 (code points)
     uint64_t str_cat = 0;  ///< vrt_str_cat(proc, a, b) -> handle (ROPE)
+    uint64_t str_slice = 0; ///< vrt_str_slice(proc, src, range) -> handle
     uint64_t str_cmp = 0;  ///< vrt_str_cmp(proc, a, b) -> i64 (-1/0/1)
     uint64_t str_raw = 0;  ///< vrt_str_raw(proc, handle) -> host_ptr a data[]
     uint64_t str_get_bytes =

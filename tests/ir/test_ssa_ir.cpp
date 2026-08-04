@@ -932,21 +932,33 @@ static void test_asm_micro() {
 
     ir::IrBlockId entry = fn.new_block("entry");
 
-    // Side-table: forma de la DB + plantilla + operandos + salidas.
+    // Side-table: forma de la DB + plantilla + operandos.  La lista es PLANA y
+    // en orden textual; el rol (lee/escribe) va en los flags de cada operando,
+    // no en dos vectores ins/outs separados.
     ir::AsmMicro am;
     am.isa = 0;        // x86_64 (== instr_db::Isa)
     am.form_id = 4242; // indice de forma en la DB (identidad -> efectos)
     am.tmpl = "cpuid";
     am.eff = 0; // cpuid: sin mem, no flags; barrera se consulta por form_id
     {
+        // eax: entrada Y salida (READ|WRITE), fijada al reg fisico 0.
         ir::AsmMicroOperand op;
-        op.role = 2;          // lee-escribe (eax es entrada Y salida)
-        op.regclass = 0;      // GP
-        op.fixed_phys = 0;    // eax fijo
+        op.kind = ir::AsmOperandKind::REG;
+        op.flags = ir::ASM_OP_READ | ir::ASM_OP_WRITE;
+        op.regclass = 0;   // GP
+        op.fixed_phys = 0; // eax fijo
         op.value = in_eax;
-        am.ins.push_back(op);
+        am.operands.push_back(op);
     }
-    am.outs = {o_a, o_b, o_c, o_d};
+    // ebx/ecx/edx: solo salidas (WRITE).
+    for (ir::IrValueId out : {o_b, o_c, o_d}) {
+        ir::AsmMicroOperand op;
+        op.kind = ir::AsmOperandKind::REG;
+        op.flags = ir::ASM_OP_WRITE;
+        op.regclass = 0;
+        op.value = out;
+        am.operands.push_back(op);
+    }
 
     ir::IrInstr ins;
     ins.op = ir::IrOp::ASM_MICRO;
@@ -967,11 +979,19 @@ static void test_asm_micro() {
 
     check(mod.functions[0].asm_micros.size() == 1,
           "side-table asm_micros tiene 1 entrada");
-    check(mod.functions[0].asm_micros[0].outs.size() == 4,
-          "ASM_MICRO modela 4 salidas (cpuid eax/ebx/ecx/edx)");
-    check(mod.functions[0].asm_micros[0].ins.size() == 1 &&
-              mod.functions[0].asm_micros[0].ins[0].fixed_phys == 0,
-          "operando de entrada fijado a reg fisico (eax)");
+    {
+        const ir::AsmMicro &am2 = mod.functions[0].asm_micros[0];
+        // 4 operandos: eax (in/out) + ebx/ecx/edx (out).
+        check(am2.operands.size() == 4,
+              "ASM_MICRO modela 4 operandos (cpuid eax/ebx/ecx/edx)");
+        size_t n_write = 0;
+        for (const auto &op : am2.operands)
+            if (op.writes()) ++n_write;
+        check(n_write == 4, "las 4 salidas se ESCRIBEN");
+        check(am2.operands[0].reads() && am2.operands[0].writes() &&
+                  am2.operands[0].fixed_phys == 0,
+              "eax es lee-escribe y esta fijado a reg fisico (0)");
+    }
 
     std::ostringstream oss;
     ir::ir_print(mod, oss);
@@ -983,8 +1003,12 @@ static void test_asm_micro() {
           "printer emite form=4242");
     check(text.find("cpuid") != std::string::npos,
           "printer emite la plantilla");
-    check(text.find("outs=[") != std::string::npos,
-          "printer lista las salidas");
+    // El printer lista los operandos en una sola lista (ops=[...]) con el rol
+    // en flags legibles: 'W' marca cada salida, 'R'/'W' el eax lee-escribe.
+    check(text.find("ops=[") != std::string::npos,
+          "printer lista los operandos");
+    check(text.find("$0:RW") != std::string::npos,
+          "printer marca eax como lee-escribe (RW)");
 }
 
 int main() {

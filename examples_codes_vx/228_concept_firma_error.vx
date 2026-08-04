@@ -20,3 +20,4 @@ i32 main() {
     i64 r = medir<Mala>(m);        // ERROR: Mala no satisface Figura
     return 0;
 }
+// @expect-compile-fail

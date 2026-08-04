@@ -83,6 +83,16 @@ void Lexer::skip_whitespace() {
                     advance();
                 }
                 if (ln_val > 0) last_src_line = ln_val;
+                // Segundo numero opcional: la COLUMNA.  Sin ella la traza
+                // solo puede senalar la linea, y en una linea con varias
+                // cosas eso no distingue cual fallo.
+                while (peek() == 32 || peek() == 9) advance();
+                int col_val = 0;
+                while (peek() >= 48 && peek() <= 57) {
+                    col_val = col_val * 10 + (peek() - 48);
+                    advance();
+                }
+                last_src_column = col_val;
                 // consumir el resto del comentario hasta '\n'
                 while (peek() != '\n' && peek() != '\0')
                     advance();

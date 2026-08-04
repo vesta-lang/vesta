@@ -51,7 +51,8 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
  */
 void import_vxi_into_typechecker(
     TypeChecker &tc, const VxiModule &mod,
-    const std::vector<TypeChecker::VxiOnlyEntry> &only_symbols);
+    const std::vector<TypeChecker::VxiOnlyEntry> &only_symbols,
+    const std::string &module_name);
 
 /**
  * @brief Variante que devuelve la lista de simbolos solicitados pero
@@ -61,7 +62,8 @@ void import_vxi_into_typechecker(
  */
 std::vector<std::string> import_vxi_into_typechecker_with_missing(
     TypeChecker &tc, const VxiModule &mod,
-    const std::vector<TypeChecker::VxiOnlyEntry> &only_symbols);
+    const std::vector<TypeChecker::VxiOnlyEntry> &only_symbols,
+    const std::string &module_name);
 
 /**
  * @brief  M.7: registra un namespace para un @c "import \"lib\";"

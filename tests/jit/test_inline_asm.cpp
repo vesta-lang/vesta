@@ -25,9 +25,11 @@
 #include "ir/ssa_ir.h"
 #include "jit/code_cache.h"
 #include "jit/interval.h"
-#include "jit/linear_scan.h"
+#include "codegen/regalloc.h"
+#include "codegen/rbank/allocate.h"
 #include "jit/machine_ir.h"
 #include "jit/regalloc_rewrite.h"
+#include "codegen/timeline_builder.h"
 #include "jit/target_reginfo.h"
 #include "jit/vreg_select.h"
 #include "jit/x86_encoder.h"
@@ -135,8 +137,8 @@ static bool run_vm(const ir::IrFunction &fn, Proxy &px) {
         return false;
     }
     const TargetRegInfo &tri = target_x86_64_vm_abi();
-    RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
-    MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM);
+    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(build_intervals(mf, tri), mf.vreg_count, tri, false);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM);
     X86Encoder enc;
     std::vector<uint8_t> bytes;
     if (enc.encode(pf, bytes) == 0 || bytes.empty()) {

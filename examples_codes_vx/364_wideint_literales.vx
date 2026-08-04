@@ -1,0 +1,49 @@
+/**
+ * @file 364_wideint_literales.vx
+ * @brief Literales mas anchos que la palabra, escritos tal cual.
+ *
+ * Los seis tipos de `std.wideint` declaran un constructor `comptime` que recibe
+ * el TEXTO del literal y lo parsea al compilar.  Antes no habia forma de darles
+ * un valor de mas de 64 bits: ninguna sobrecarga puede aceptarlo, porque no hay
+ * tipo nativo capaz de transportarlo sin truncarlo.
+ *
+ * En el binario solo quedan los limbs ya calculados; el parseo no existe en
+ * tiempo de ejecucion.
+ */
+import std.wideint only u128, i128, u256, i256, u512, i512;
+
+i32 main() {
+    // 2^128 - 1: los 128 bits a uno.
+    u128 maximo = u128(340282366920938463463374607431768211455);
+    if (maximo.lo64 != 18446744073709551615) { return 1; }
+    if (maximo.hi64 != 18446744073709551615) { return 2; }
+
+    // 10^30, que no cabe en 64 bits pero tampoco llena los 128.
+    u128 mil_cuatrillones = u128(1000000000000000000000000000000);
+    if (mil_cuatrillones.lo64 != 0x4674EDEA40000000) { return 3; }
+    if (mil_cuatrillones.hi64 != 0xC9F2C9CD0)        { return 4; }
+
+    // Negativo: el literal llega como magnitud y el constructor lo pasa a
+    // complemento a dos.
+    i128 menos_uno = i128(-1);
+    if (menos_uno.lo64 != 18446744073709551615) { return 5; }
+    if (menos_uno.hi64 != 18446744073709551615) { return 6; }
+
+    i256 menos_tres = i256(-3);
+    if (menos_tres.lo128.lo64 != 18446744073709551613) { return 7; }
+    if (menos_tres.hi128.hi64 != 18446744073709551615) { return 8; }
+
+    // 2^256 - 1 y 2^512 - 1.
+    u256 max256 = u256(115792089237316195423570985008687907853269984665640564039457584007913129639935);
+    if (max256.hi128.hi64 != 18446744073709551615) { return 9; }
+
+    u512 max512 = u512(13407807929942597099574024998205846127479365820592393377723561443721764030073546976801874298166903427690031858186486050853753882811946569946433649006084095);
+    if (max512.hi256.hi128.hi64 != 18446744073709551615) { return 10; }
+    if (max512.lo256.lo128.lo64 != 18446744073709551615) { return 11; }
+
+    i512 pequeno = i512(255);
+    if (pequeno.lo256.lo128.lo64 != 255) { return 12; }
+    if (pequeno.hi256.hi128.hi64 != 0)   { return 13; }
+
+    return 42;
+}

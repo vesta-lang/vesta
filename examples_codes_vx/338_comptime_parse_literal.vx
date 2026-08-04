@@ -1,0 +1,104 @@
+/**
+ * @file 338_comptime_parse_literal.vx
+ * @brief Parseo de un literal entero en tiempo de compilacion (F3 + F1b).
+ *
+ * Demuestra la cadena completa de los literales de tipo usuario:
+ *
+ *   1. Un tipo de usuario declara un constructor `comptime T(expr)` que captura
+ *      el TEXTO CRUDO del literal en el call site.
+ *   2. Ese constructor llama a un helper `comptime` de parseo -- encadenamiento
+ *      comptime -> comptime -- que ejecuta un bucle real (recorre los digitos,
+ *      `ord`/`substr`, aritmetica) para convertir el texto a un valor.
+ *   3. El helper devuelve un `IntLit` (struct por valor); el constructor lo lee
+ *      y rellena su representacion.
+ *   4. Todo ocurre en la ComptimeVM: en el binario aparece el struct ya
+ *      construido, sin ninguna llamada en tiempo de ejecucion.
+ *
+ * Es la base sobre la que se construyen los enteros de ancho arbitrario
+ * (u128, u256, ...): el helper es neutro (no conoce la representacion del tipo)
+ * y el constructor del tipo mapea el resultado a sus campos.  Este MVP parsea
+ * hasta 64 bits (un word); el bignum multi-word es la extension natural.
+ *
+ * Se valida con la red diferencial (interp = oraculo; jit y aot coinciden).
+ */
+namespace ctpl;
+
+/** @brief Resultado del parser (MVP: un word de 64 bits). */
+struct IntLit {
+    u64 w0;
+
+    /**
+     * @brief Devuelve el word i-esimo, zero-extendiendo mas alla del ancho.
+     * @param i Indice del word.
+     * @return El word i-esimo (0 si i esta fuera del rango representado).
+     */
+    u64 word(i64 i) {
+        if (i == 0) {
+            return this.w0;
+        }
+        return 0;
+    }
+}
+
+/**
+ * @brief Parsea un literal entero (decimal o `0x`-hex) a @ref IntLit.
+ *
+ * Ejecucion comptime real: recorre el texto digito a digito acumulando el
+ * valor.  Neutro respecto al tipo destino (no conoce su representacion).
+ *
+ * @param src Texto del literal.
+ * @return El valor parseado en un @ref IntLit.
+ */
+comptime IntLit parse_int_lit(string src) {
+    IntLit r;
+    r.w0 = 0;
+    i64 n = src.length();
+    i64 base = 10;
+    i64 i = 0;
+    // Prefijo hexadecimal opcional.
+    if (n >= 2) {
+        string pfx = substr(src, 0, 2);
+        if (pfx == "0x") {
+            base = 16;
+            i = 2;
+        }
+    }
+    u64 acc = 0;
+    while (i < n) {
+        i64 c = ord(substr(src, i, 1));
+        i64 d = 0;
+        if (c >= 48 && c <= 57) {
+            d = c - 48; // '0'..'9'
+        } else if (c >= 97 && c <= 102) {
+            d = c - 87; // 'a'..'f'
+        } else if (c >= 65 && c <= 70) {
+            d = c - 55; // 'A'..'F'
+        }
+        acc = acc * (u64) base + (u64) d;
+        i = i + 1;
+    }
+    r.w0 = acc;
+    return r;
+}
+
+/** @brief Tipo de usuario construido desde un literal via el helper de parseo. */
+struct MyInt {
+    u64 v;
+
+    /**
+     * @brief Constructor comptime desde el texto del literal.
+     * @param t Texto del literal (parametro `expr`).
+     */
+    comptime MyInt(expr t) {
+        IntLit lit = parse_int_lit(t);
+        this.v = lit.word(0);
+    }
+}
+
+i32 main() {
+    MyInt a = MyInt(0x2a);   // hex     -> 42
+    MyInt b = MyInt(100);    // decimal -> 100
+
+    // 42 + 100 - 100 = 42
+    return (i32) (a.v + b.v - 100);
+}

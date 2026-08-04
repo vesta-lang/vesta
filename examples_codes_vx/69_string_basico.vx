@@ -20,27 +20,27 @@ i32 main() {
     println("=== test strings ===");
 
     // length() en code points (4 ASCII = 4).
-    i64 n = str_length(s);
+    i64 n = s.length();
     print("length: "); print_int(n); print("\n");
     if (n != 4) return 1;
 
     // bytes() raw (4 bytes para ASCII puro).
-    i64 b = str_bytes(s);
+    i64 b = s.bytes();
     print("bytes:  "); print_int(b); print("\n");
     if (b != 4) return 2;
 
     // cstr() host pointer + print_cstr.
-    print("cstr:   "); print_cstr(str_cstr(s)); print("\n");
+    print("cstr:   "); print_cstr(s.cstr()); print("\n");
 
     // concat: "hola" + " mundo" = "hola mundo" (10 bytes).
-    string u = str_concat(s, t);
-    print("concat: "); print_cstr(str_cstr(u)); print("\n");
-    if (str_length(u) != 10) return 3;
+    string u = s.concat(t);
+    print("concat: "); print_cstr(u.cstr()); print("\n");
+    if (u.length() != 10) return 3;
 
     // equals: "hola" == "hola" via str_make recreando el buffer.
     string s2 = "hola";
-    if (!str_equals(s, s2)) return 4;
-    if (str_equals(s, t)) return 5;
+    if (!s.equals(s2)) return 4;
+    if (s.equals(t)) return 5;
 
     flush();
     return 42;

@@ -7,3 +7,4 @@ i32 main() {
     borrow<i32>     r  = lend(owner);     // ERROR esperado
     return 0;
 }
+// @expect-compile-fail

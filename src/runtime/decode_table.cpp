@@ -2266,10 +2266,11 @@ InstrFormat decode_table_extended[0X100] = {
      Assembly::Bytecode::InstrSizeMode::FIXED_8, exec_instr_mst,
      decode_instr_mem_full},
 
-    /* 0x92 */
-    {//
-     "", Assembly::Bytecode::AddressingMode::COUNT,
-     Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
+    /* 0x92  sext r_dst, N (FIXED_4): sign-extiende r_dst desde N bits
+       (8/16/32) a 64.  b2=r_dst, b3=N.  1 instr vs mov+shl+sar. */
+    {"sext", Assembly::Bytecode::AddressingMode::REG,
+     Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_sext,
+     decode_instr_raw_bytes},
 
     /* 0x93 */
     {//
@@ -2396,30 +2397,28 @@ InstrFormat decode_table_extended[0X100] = {
      decode_instr_two_op_reg},
 
     /* 0xA9 */
-    {// ATOMICLD reg_dst, reg_addr - r_dst = atomic_load_i64(*r_addr).
+    {// ATOMICLD reg_dst_sized, reg_addr - width-aware (ctrl-byte mode).
      "atomicld", Assembly::Bytecode::AddressingMode::REG,
      Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_atomicld,
-     decode_instr_two_op_reg},
+     decode_instr_simple_mov},
 
     /* 0xAA */
-    {// ATOMICST reg_addr, reg_val - atomic_store_i64(*r_addr, r_val).
+    {// ATOMICST reg_addr, reg_val_sized - width-aware (ctrl-byte mode).
      "atomicst", Assembly::Bytecode::AddressingMode::REG,
      Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_atomicst,
-     decode_instr_two_op_reg},
+     decode_instr_simple_mov},
 
     /* 0xAB */
-    {// ATOMICCAS reg_dst, reg_addr, reg_exp, reg_des - 4 regs FIXED_4.
-     // r_dst = compare_exchange_i64(*r_addr, r_exp, r_des) - valor previo.
+    {// ATOMICCAS reg_dst_sized, reg_addr, reg_exp, reg_des - FIXED_6 (ctrl+regs).
      "atomiccas", Assembly::Bytecode::AddressingMode::REG,
-     Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_atomiccas,
-     decode_instr_four_reg},
+     Assembly::Bytecode::InstrSizeMode::FIXED_6, exec_instr_atomiccas,
+     decode_instr_atomic_rmw},
 
     /* 0xAC */
-    {// ATOMICADD reg_dst, reg_addr, reg_delta - 3 regs FIXED_4.
-     // r_dst = atomic_fetch_add_i64(*r_addr, r_delta) - valor previo.
+    {// ATOMICADD reg_dst_sized, reg_addr, reg_delta - FIXED_6 (ctrl+regs).
      "atomicadd", Assembly::Bytecode::AddressingMode::REG,
-     Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_atomicadd,
-     decode_instr_three_reg},
+     Assembly::Bytecode::InstrSizeMode::FIXED_6, exec_instr_atomicadd,
+     decode_instr_atomic_rmw},
 
     /* 0xAD */
     {// SHAREDSTAT reg_dst, reg_op - introspeccion SharedHeap.
@@ -2471,25 +2470,33 @@ InstrFormat decode_table_extended[0X100] = {
      "", Assembly::Bytecode::AddressingMode::COUNT,
      Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
 
-    /* 0xB6 */
-    {//
-     "", Assembly::Bytecode::AddressingMode::COUNT,
-     Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
+    /* 0xB6  memset r_dst, r_val, r_len: relleno en memoria VIRTUAL
+       Convention B (raw bytes): byte2 = (rB << 4) | rA, byte3 = (rC << 4),
+       el MISMO layout de 3 registros que alu3 -- por eso comparten emisor. */
+    {"memset", Assembly::Bytecode::AddressingMode::REG,
+     Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_memset,
+     decode_instr_raw_bytes},
 
-    /* 0xB7 */
-    {//
-     "", Assembly::Bytecode::AddressingMode::COUNT,
-     Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
+    /* 0xB7  memseth r_dst, r_val, r_len: relleno en memoria del HOST
+       Convention B (raw bytes): byte2 = (rB << 4) | rA, byte3 = (rC << 4),
+       el MISMO layout de 3 registros que alu3 -- por eso comparten emisor. */
+    {"memseth", Assembly::Bytecode::AddressingMode::REG,
+     Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_memseth,
+     decode_instr_raw_bytes},
 
-    /* 0xB8 */
-    {//
-     "", Assembly::Bytecode::AddressingMode::COUNT,
-     Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
+    /* 0xB8  memcpy r_dst, r_src, r_len: copia en memoria VIRTUAL
+       Convention B (raw bytes): byte2 = (rB << 4) | rA, byte3 = (rC << 4),
+       el MISMO layout de 3 registros que alu3 -- por eso comparten emisor. */
+    {"memcpy", Assembly::Bytecode::AddressingMode::REG,
+     Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_memcpy,
+     decode_instr_raw_bytes},
 
-    /* 0xB9 */
-    {//
-     "", Assembly::Bytecode::AddressingMode::COUNT,
-     Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
+    /* 0xB9  memcpyh r_dst, r_src, r_len: copia en memoria del HOST
+       Convention B (raw bytes): byte2 = (rB << 4) | rA, byte3 = (rC << 4),
+       el MISMO layout de 3 registros que alu3 -- por eso comparten emisor. */
+    {"memcpyh", Assembly::Bytecode::AddressingMode::REG,
+     Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_memcpyh,
+     decode_instr_raw_bytes},
 
     /* 0xBA */
     {//

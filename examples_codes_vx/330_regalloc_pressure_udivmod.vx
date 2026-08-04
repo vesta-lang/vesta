@@ -1,0 +1,77 @@
+/**
+ * @file 330_regalloc_pressure_udivmod.vx
+ * @brief Caso de PRESION DE REGISTROS para la red de seguridad diferencial.
+ *
+ * Reproduce el nucleo del `udivmod` de los wide-ints (division binaria shift-
+ * resta) en un metodo que RETORNA STRUCT (SRET) con: early return, loop con
+ * metodos SRET heredados (sub/cmp) sobre un local mutado in-place, branches
+ * anidados y self-assign de struct en el cuerpo.  La combinacion satura los
+ * registros y expone divergencias entre el codegen del interprete (regalloc
+ * sobre el IR) y el del JIT/AOT (regalloc sobre MachineIR).
+ *
+ * Se valida con `diff3_case`: el interprete es el ORACULO; jit y aot deben dar
+ * el MISMO resultado.  Cualquier divergencia rompe el build (falla todo o nada).
+ */
+namespace regpress;
+
+@Abstract
+struct Base {
+    union {
+        struct { u64 lo64; u64 hi64; };
+        u8 bytes[16];
+    };
+    public Self sub(Self o) {
+        Self r;
+        r.lo64 = this.lo64 - o.lo64;
+        u64 bw = 0;
+        if (this.lo64 < o.lo64) { bw = 1; }
+        r.hi64 = this.hi64 - o.hi64 - bw;
+        return r;
+    }
+    public i64 cmp(Self o) {
+        if (this.hi64 != o.hi64) {
+            if (this.hi64 < o.hi64) { return -1; }
+            return 1;
+        }
+        if (this.lo64 != o.lo64) {
+            if (this.lo64 < o.lo64) { return -1; }
+            return 1;
+        }
+        return 0;
+    }
+    public bool zero() { return (this.lo64 == 0) && (this.hi64 == 0); }
+    public Self udm(Self divisor, Self* rem_out) {
+        Self q; q.lo64 = 0; q.hi64 = 0;
+        Self rem; rem.lo64 = 0; rem.hi64 = 0;
+        if (divisor.zero()) { (*rem_out).lo64 = 0; (*rem_out).hi64 = 0; return q; }
+        i64 i = 63;
+        while (i >= 0) {
+            rem.hi64 = (rem.hi64 << 1) | (rem.lo64 >> 63);
+            rem.lo64 = rem.lo64 << 1;
+            u64 bit;
+            if (i >= 64) { bit = (this.hi64 >> (i - 64)) & 1; }
+            else { bit = (this.lo64 >> i) & 1; }
+            rem.lo64 = rem.lo64 | bit;
+            if (rem.cmp(divisor) >= 0) {
+                rem = rem.sub(divisor);
+                if (i >= 64) { q.hi64 = q.hi64 | (((u64) 1) << (i - 64)); }
+                else { q.lo64 = q.lo64 | (((u64) 1) << i); }
+            }
+            i = i - 1;
+        }
+        (*rem_out).lo64 = rem.lo64;
+        (*rem_out).hi64 = rem.hi64;
+        return q;
+    }
+}
+
+struct U : Base { }
+
+U mk(u64 lo) { U r; r.lo64 = lo; r.hi64 = 0; return r; }
+
+i32 main() {
+    U rem;
+    U q = mk(1000).udm(mk(7), &rem);   // 1000 / 7 = 142, resto 6
+    // checksum: q*10 + rem  = 142*10 + 6 = 1426 (interp); el JIT debe coincidir.
+    return (i32) (q.lo64 * 10 + rem.lo64);
+}

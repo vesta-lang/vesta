@@ -24,9 +24,10 @@
 #include "jit/code_cache.h"
 #include "jit/interval.h"
 #include "jit/jit_registry.h"
-#include "jit/linear_scan.h"
+#include "codegen/regalloc.h"
 #include "jit/machine_ir.h"
 #include "jit/regalloc_rewrite.h"
+#include "codegen/timeline_builder.h"
 #include "jit/stack_scan.h"
 #include "jit/target_reginfo.h"
 #include "jit/vreg_pipeline.h" //  AOT-GC Inc 1: vreg_compile_native + stackmaps_out
@@ -120,9 +121,9 @@ static void test_gc_root_found_by_scan() {
     CHECK(vreg_select(fn, mf, AbiKind::VM, resolver), "vreg_select ok");
     const TargetRegInfo &tri = target_x86_64_vm_abi();
     IntervalResult ivs = build_intervals(mf, tri);
-    RegAlloc ra = linear_scan(ivs, tri);
+    codegen::RegAlloc ra = linear_scan(ivs, tri);
     CHECK(ra.spilled(thisp), "this (GC root) spilled");
-    MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM, &ivs);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM, &ivs);
 
     /* 3. Encode -> bytes (rellena pc_offset en pf.stackmaps). */
     X86Encoder enc;

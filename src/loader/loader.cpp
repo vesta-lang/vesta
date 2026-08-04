@@ -733,7 +733,14 @@ runtime::ProcessVM *Loader::load_executable(runtime::VM &vm, std::string path) {
                                   std::istreambuf_iterator<char>());
 
     // Delegar en la version bytecode
-    return load_executable(vm, bytecode);
+    runtime::ProcessVM *proc = load_executable(vm, bytecode);
+    // Se recuerda de que fichero salio.  Antes se dejaba vacio para el
+    // ejecutable principal -- solo lo rellenaban los modulos cargados sobre la
+    // marcha -- y sin el, al fallar algo, no habia forma de saber que programa
+    // se estaba ejecutando ni de pedir la informacion que lo explica.
+    if (!executables.empty() && executables.back()->source_path.empty())
+        executables.back()->source_path = path;
+    return proc;
 }
 
 runtime::ProcessVM *
@@ -750,6 +757,8 @@ Loader::load_executable(runtime::VM &vm,
 
     // configuramos RIP (PC tambien llamado)
     proccess->registers.rip.qword(exe->init_pc);
+    // Fondo de su cadena de llamadas: por aqui arranco (ver entry_pc).
+    proccess->entry_pc = exe->init_pc;
 
     // Inicializar RSP/RBP del proceso main al stack base convencional
     // (mismo esquema que exec_instr_spawn para procesos hijo: 0x10000000

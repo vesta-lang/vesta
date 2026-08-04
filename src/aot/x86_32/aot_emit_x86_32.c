@@ -508,7 +508,12 @@ int aot_emit_elf32(const char *path, const AotLayoutCfg *cfg,
     wr32(ph + 12, base);   /* p_paddr */
     wr32(ph + 16, total);  /* p_filesz */
     wr32(ph + 20, total);  /* p_memsz */
-    wr32(ph + 24, 5);      /* p_flags = R+X */
+    wr32(ph + 24, 7);      /* p_flags = R+W+X (freestanding: el gdata mutable
+                            * -- guards de static locals, campos de un static
+                            * ctx -- vive en este mismo segmento y el
+                            * __module_init lo ESCRIBE; sin W el store crashea.
+                            * MEJORA: dos PT_LOAD (R+X code, R+W data) para
+                            * respetar W^X, como el emisor ELF64). */
     wr32(ph + 28, 0x1000); /* p_align */
 
     /* Datos de las secciones. */

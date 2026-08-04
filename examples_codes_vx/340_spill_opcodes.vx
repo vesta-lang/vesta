@@ -1,0 +1,121 @@
+namespace ejemplos.spill_opcodes;
+
+// Cobertura de opcodes con operandos DERRAMADOS.
+//
+// Varios opcodes leian su operando con `reg_of`, que es una CONSULTA: si el
+// valor esta derramado devuelve el registro scratch SIN emitir la recarga, asi
+// que el opcode operaba sobre basura.  Solo se manifestaba con presion de
+// registros suficiente para que el asignador derramara, por eso ningun test lo
+// veia: `bytes()` devolvia 0 sobre una cadena perfectamente valida.
+//
+// Cada bloque mantiene MAS valores vivos que registros tiene la maquina y usa
+// todos al final, de modo que el operando del opcode bajo prueba tenga que
+// derramarse y recargarse.  Si la recarga falta, el resultado cambia.
+
+class Animal {
+    public i32 edad = 0;
+    public Animal(i32 e) { this.edad = e; }
+    public i32 get() { return this.edad; }
+}
+
+class Perro : Animal {
+    public Perro(i32 e) { super(e); }
+}
+
+class Contador {
+    public static i64 total = 0;
+}
+
+// Presion: 18 valores vivos a traves de la operacion bajo prueba.
+i64 presion(i64 s) {
+    i64 a0 = s + 1;   i64 a1 = s + 2;   i64 a2 = s + 3;
+    i64 a3 = s + 4;   i64 a4 = s + 5;   i64 a5 = s + 6;
+    i64 a6 = s + 7;   i64 a7 = s + 8;   i64 a8 = s + 9;
+    i64 a9 = s + 10;  i64 b0 = s + 11;  i64 b1 = s + 12;
+    i64 b2 = s + 13;  i64 b3 = s + 14;  i64 b4 = s + 15;
+    i64 b5 = s + 16;  i64 b6 = s + 17;  i64 b7 = s + 18;
+    return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 +
+           b0 + b1 + b2 + b3 + b4 + b5 + b6 + b7;
+}
+
+i32 main() {
+    i32 fallos = 0;
+
+    // --- STRGETBYTES / STRLEN con la cadena derramada --------------------
+    {
+        const string s = "Hola";
+        i64 v0 = 1;  i64 v1 = 2;  i64 v2 = 3;  i64 v3 = 4;
+        i64 v4 = 5;  i64 v5 = 6;  i64 v6 = 7;  i64 v7 = 8;
+        i64 v8 = 9;  i64 v9 = 10; i64 w0 = 11; i64 w1 = 12;
+        i64 w2 = 13; i64 w3 = 14; i64 w4 = 15; i64 w5 = 16;
+        i64 w6 = 17; i64 w7 = 18;
+        // `s` queda vivo a traves de todo esto -> se derrama.
+        i64 suma = v0+v1+v2+v3+v4+v5+v6+v7+v8+v9+w0+w1+w2+w3+w4+w5+w6+w7;
+        i64 nb = s.bytes();
+        i64 nl = s.length();
+        println("bytes=${nb} length=${nl} suma=${suma}");
+        if (nb != 4) { fallos = fallos + 1; }
+        if (nl != 4) { fallos = fallos + 1; }
+        if (suma != 171) { fallos = fallos + 1; }
+    }
+
+    // --- NEWOBJ con el objeto derramado ----------------------------------
+    {
+        Animal an = new Perro(7);
+        i64 p = presion(100);
+        i32 ed = an.get();
+        println("newobj_edad=${ed} presion=${p}");
+        if (ed != 7) { fallos = fallos + 1; }
+    }
+
+    // --- ISNULL con el puntero derramado ---------------------------------
+    {
+        Animal nulo = null;
+        Animal vivo = new Animal(3);
+        i64 p = presion(200);
+        bool n1 = nulo == null;
+        bool n2 = vivo == null;
+        println("isnull=${n1},${n2} presion=${p}");
+        if (!n1) { fallos = fallos + 1; }
+        if (n2) { fallos = fallos + 1; }
+    }
+
+    // --- GETSTATIC / SETSTATIC con el valor derramado --------------------
+    {
+        Contador.total = 41;
+        i64 p = presion(300);
+        i64 t = Contador.total;
+        Contador.total = t + 1;
+        println("static=${Contador.total} presion=${p}");
+        if (Contador.total != 42) { fallos = fallos + 1; }
+    }
+
+    // --- TRYENTER / THROW con presion ------------------------------------
+    {
+        i64 p = presion(400);
+        i32 cap = 0;
+        try {
+            if (p > 0) { throw new Animal(1); }
+        } catch (Animal a) {
+            cap = a.get();
+        }
+        println("throw_capturado=${cap} presion=${p}");
+        if (cap != 1) { fallos = fallos + 1; }
+    }
+
+    // --- MONENTER / MONEXIT con el objeto derramado ----------------------
+    {
+        Animal lock = new Animal(9);
+        i64 p = presion(500);
+        i32 dentro = 0;
+        synchronized (lock) {
+            dentro = lock.get();
+        }
+        println("synchronized=${dentro} presion=${p}");
+        if (dentro != 9) { fallos = fallos + 1; }
+    }
+
+    println("");
+    println("fallos=${fallos}");
+    return fallos;
+}

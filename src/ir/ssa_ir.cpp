@@ -129,6 +129,7 @@ static const OpEntry OP_TABLE[] = {
     {"vec_acc_store", IrOp::VEC_ACC_STORE},
     {"vec_acc_combine", IrOp::VEC_ACC_COMBINE},
     {"vec_binop_s", IrOp::VEC_BINOP_S},
+    {"vec_fma_s", IrOp::VEC_FMA_S},
     {"vec_bcast", IrOp::VEC_BCAST},
     // aritmetica entera extendida (Math-IR-promote wave 4)
     {"iabs", IrOp::IABS},
@@ -138,6 +139,10 @@ static const OpEntry OP_TABLE[] = {
     {"imaxu", IrOp::IMAXU},
     {"ilog2", IrOp::ILOG2},
     {"select", IrOp::SELECT},
+    // multiprecision: suma/resta que dejan acarreo, y su lectura
+    {"addc", IrOp::ADDC},
+    {"subb", IrOp::SUBB},
+    {"carryof", IrOp::CARRYOF},
     // logica y desplazamientos
     {"and", IrOp::AND},
     {"or", IrOp::OR},
@@ -208,6 +213,7 @@ static const OpEntry OP_TABLE[] = {
     {"load", IrOp::LOAD},
     {"store", IrOp::STORE},
     {"memcpy", IrOp::MEMCPY},
+    {"memset", IrOp::MEMSET},
     {"raw_alloc", IrOp::RAW_ALLOC},
     {"raw_free", IrOp::RAW_FREE},
     {"gc_alloc", IrOp::GC_ALLOC},
@@ -296,10 +302,10 @@ static const OpEntry OP_TABLE[] = {
     {"gc_allocp", IrOp::GC_ALLOCP},
     {"getstatic", IrOp::GETSTATIC},
     {"setstatic", IrOp::SETSTATIC},
-    {"atomic_ld_i64", IrOp::ATOMIC_LD_I64},
-    {"atomic_st_i64", IrOp::ATOMIC_ST_I64},
-    {"atomic_cas_i64", IrOp::ATOMIC_CAS_I64},
-    {"atomic_add_i64", IrOp::ATOMIC_ADD_I64},
+    {"atomic_ld_i64", IrOp::ATOMIC_LD},
+    {"atomic_st_i64", IrOp::ATOMIC_ST},
+    {"atomic_cas_i64", IrOp::ATOMIC_CAS},
+    {"atomic_add_i64", IrOp::ATOMIC_ADD},
     // async fusion + string extra
     {"fulfill_hlt", IrOp::FULFILL_HLT},
     {"strgetbytes", IrOp::STRGETBYTES},
@@ -528,10 +534,17 @@ static void print_val(std::ostream &o, const IrFunction &fn, IrValueId id) {
         o << "<void>";
         return;
     }
-    if (id < static_cast<IrValueId>(fn.values.size()))
+    if (id < static_cast<IrValueId>(fn.values.size()) &&
+        !fn.values[id].name.empty()) {
         o << fn.values[id].name;
-    else
-        o << "%?" << id;
+        return;
+    }
+    /* Sin nombre, el identificador.  Los nombres NO viajan dentro del
+     * artefacto -- son para leer, no para ejecutar -- asi que al explicar un
+     * fallo con el intermedio que va en el `.velb` salia `= load.i64` sin
+     * destino y las llamadas sin argumentos, como si no tuvieran.  Un valor
+     * siempre tiene identificador, y con el se sigue el flujo igual. */
+    o << "%" << id;
 }
 
 /**
@@ -548,8 +561,7 @@ static void print_block_name(std::ostream &o, const IrFunction &fn,
 /**
  * @brief Imprime una instruccion en formato texto.
  */
-static void print_instr(std::ostream &o, const IrFunction &fn,
-                        const IrInstr &ins) {
+void print_instr(std::ostream &o, const IrFunction &fn, const IrInstr &ins) {
     o << "    "; // indentacion de 4 espacios
 
     // prefijo de asignacion: %dst = op[.type] ...
@@ -573,6 +585,7 @@ static void print_instr(std::ostream &o, const IrFunction &fn,
         ins.op == IrOp::REJECT || ins.op == IrOp::STORE ||
         ins.op == IrOp::SETFIELD || ins.op == IrOp::RESUME ||
         ins.op == IrOp::SWAPCTX || ins.op == IrOp::MEMCPY ||
+        ins.op == IrOp::MEMSET ||
         ins.op == IrOp::TRYENTER || ins.op == IrOp::GCWB_IR ||
         ins.op == IrOp::GCDEREF_IR || ins.op == IrOp::ARRAY_STORE ||
         ins.op == IrOp::RETHROW || ins.op == IrOp::RSPAWN_RETURN ||
@@ -581,7 +594,8 @@ static void print_instr(std::ostream &o, const IrFunction &fn,
         ins.op == IrOp::VEC_ACC_ZERO || ins.op == IrOp::VEC_ACC_ADD ||
         ins.op == IrOp::VEC_ACC_FMA || ins.op == IrOp::VEC_ACC_STORE ||
         ins.op == IrOp::VEC_ACC_COMBINE ||
-        ins.op == IrOp::VEC_BINOP_S || ins.op == IrOp::VEC_BCAST) {
+        ins.op == IrOp::VEC_BINOP_S || ins.op == IrOp::VEC_FMA_S ||
+        ins.op == IrOp::VEC_BCAST) {
         print_type = false;
     }
     if (print_type) o << "." << ir_type_name(ins.type);
@@ -778,6 +792,7 @@ static void print_instr(std::ostream &o, const IrFunction &fn,
         print_val(o, fn, ins.operands[1]);
         break;
 
+    case IrOp::MEMSET: // memset %dst, %val, %len (mismo formato)
     case IrOp::MEMCPY:
         // memcpy %dst, %src, %len
         o << " ";
@@ -804,6 +819,7 @@ static void print_instr(std::ostream &o, const IrFunction &fn,
     case IrOp::VEC_ACC_FMA:
     case IrOp::VEC_ACC_STORE:
     case IrOp::VEC_ACC_COMBINE:
+    case IrOp::VEC_FMA_S:
     case IrOp::VEC_BINOP_S:
         // vec_binop.fN %dst_ptr, %a_ptr[, %b_ptr]   imm=(subop<<8)|ancho.
         // La aridad varia entre estos ops (VEC_ACC_ZERO/COMBINE/STORE tienen 1

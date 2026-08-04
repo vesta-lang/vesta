@@ -95,11 +95,11 @@ bool asm_lift_emit(
             return false;
         const ir::IrValueId exp_v = load_slot(fn, block, *exp, false, line);
         const ir::IrValueId des_v = load_slot(fn, block, *des, false, line);
-        old = emit_atomic(fn, block, ir::IrOp::ATOMIC_CAS_I64,
+        old = emit_atomic(fn, block, ir::IrOp::ATOMIC_CAS,
                           {addr_v, exp_v, des_v}, line);
     } else { // AtomicAdd
         const ir::IrValueId delta_v = load_slot(fn, block, *des, false, line);
-        old = emit_atomic(fn, block, ir::IrOp::ATOMIC_ADD_I64,
+        old = emit_atomic(fn, block, ir::IrOp::ATOMIC_ADD,
                           {addr_v, delta_v}, line);
     }
     store_slot(fn, block, *result, old, line);

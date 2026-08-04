@@ -22,7 +22,7 @@ DEF""";
     string q = """contiene "comillas" y otras 'simples'""";
     println(q);
 
-    if (str_length(s) < 18) return 1;
-    if (str_length(t) < 8) return 2;
+    if (s.length() < 18) return 1;
+    if (t.length() < 8) return 2;
     return 42;
 }

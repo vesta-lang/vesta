@@ -46,6 +46,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -473,6 +474,14 @@ struct FunctionTypeNode : TypeNode {
     /// false = lambda/closure (@c fn(...) -> R): fat-pointer de 16 bytes
     /// {fn_addr, env}.  Conceptos distintos: lambda != puntero a funcion.
     bool is_raw = false;
+    /// ABI custom por-parametro (`cfn(register("rax") T, register("rdi") T, ...)`):
+    /// registro fisico de entrada por parametro, alineado con @c param_types.
+    /// Cadena vacia = ABI estandar.  La ABI forma parte del TIPO: dos @c cfn con
+    /// abi_regs distintos son tipos INCOMPATIBLES (el type checker rechaza
+    /// mezclarlos), de modo que una CALLIND siempre conoce la ABI en compile-time
+    /// desde el tipo del puntero (aunque el VALOR del puntero cambie en runtime).
+    /// Vacio TAMBIEN cuando ningun parametro declara ABI custom (caso comun).
+    std::vector<std::string> param_abi_regs;
     FunctionTypeNode() : TypeNode(NodeKind::FunctionTypeNode) {}
 };
 
@@ -767,6 +776,12 @@ struct CallExpr : Expr {
     /// va seguido de @c <...>.  El type checker valida que el numero
     /// de type args coincida con la aridad esperada del builtin.
     std::vector<std::unique_ptr<TypeNode>> type_args;
+    /** Nombre del tipo cuyo constructor `comptime T(expr)` resuelve esta
+     * llamada.  Vacio en el caso normal.  Se rellena cuando ninguna
+     * sobrecarga encajaba y el tipo declara ese constructor: el lowering
+     * lo usa para invocarlo en tiempo de compilacion y materializar el
+     * valor donde estaba la llamada. */
+    std::string comptime_ctor_type;
     /// A.43.10: macros Lisp con quote/emit/splicing.  Cuando el type
     /// checker detecta @c comptime_emit_expr("texto"), parsea el
     /// texto como una expresion Vesta, lo type-checa en el contexto
@@ -786,6 +801,11 @@ struct CallExpr : Expr {
     /// definir uno, el otro o los dos.  No confundir con @c `T a = {2,3,3}`
     /// (init-list de campos), que es un InitListExpr y no pasa por aqui.
     bool is_braces_call = false;
+    /// `Struct()` sin constructores declarados y 0 args: constructor por
+    /// defecto, equivalente a `Struct{}`.  El type checker lo marca; el
+    /// lowering emite los valores por defecto de los campos (o cero) en vez
+    /// de una llamada.
+    bool is_default_struct_ctor = false;
     CallExpr() : Expr(NodeKind::CallExpr) {}
 };
 
@@ -1241,6 +1261,13 @@ struct VarDeclStmt : Stmt {
     /// nombre Vesta.  Vacio = sin storage register (var-decl normal).  Lo
     /// consumen el backend port-C (inc.3) y el JIT (inc.5).
     std::string reg_binding;
+    /// storage-class `static T name = init;` local -- la variable tiene
+    /// DURACION ESTATICA (una sola instancia, no en el stack) y su init corre
+    /// UNA VEZ (init-once).  El lowering la emite como global (gdata) con el
+    /// nombre mangleado por funcion; si el init es constante lo hornea en el
+    /// dato, si es dinamico envuelve el init con un guard booleano global.
+    /// Estado persistente entre llamadas (mismo contrato que `static` de C).
+    bool is_static = false;
     VarDeclStmt() : Stmt(NodeKind::VarDeclStmt) {}
 };
 
@@ -1555,6 +1582,14 @@ struct ParamDecl : Node {
      * @c vacount()/array: es para funciones @c @Naked, donde el cuerpo asm lee
      * los registros ABI directamente.  Implica @c is_variadic. */
     bool is_raw_variadic = false;
+    /** ABI custom por funcion: registro fisico en el que este parametro se
+     * RECIBE (y en el que el caller lo COLOCA), declarado con
+     * `register("rXX") T name`.  Vacio = ABI estandar del target (el i-esimo
+     * arg-reg SysV/Win64).  Habilita wrappers de syscall/FFI de coste minimo:
+     * `register("rax") i64 id, register("rdi") i64 a1, ...` -> el call site pone
+     * cada valor directo en su registro (cero shift) y el cuerpo asm los lee tal
+     * cual.  Nombre en minusculas ("rax".."r15"); validado por el type checker. */
+    std::string abi_reg;
     ParamDecl() : Node(NodeKind::ParamDecl) {}
 };
 
@@ -1982,6 +2017,19 @@ struct TypeAliasDecl : Node {
     };
     std::vector<ExplicitConv> explicit_from;
     std::vector<ExplicitConv> explicit_to;
+    /// Tipos que convierten a/desde este newtype SIN cast, declarados con
+    /// @c "implicit from T;" / @c "implicit to T;".  La barrera nominal sigue
+    /// en pie para todo lo demas: el typedef enumera las conversiones que
+    /// forman parte de su contrato en lugar de abrirse entero.
+    ///
+    /// El caso que lo motivo: @c uintptr es el tipo del lenguaje para una
+    /// DIRECCION, asi que pasarla donde se espera un @c T* no es una
+    /// conversion entero->puntero que haya que justificar con un cast, es su
+    /// razon de ser.  Declararlo en la stdlib -- en vez de cablear el nombre
+    /// @c uintptr en el compilador -- deja el mecanismo disponible para
+    /// cualquier newtype (handles, offsets, identificadores).
+    std::vector<ExplicitConv> implicit_from;
+    std::vector<ExplicitConv> implicit_to;
     TypeAliasDecl() : Node(NodeKind::TypeAliasDecl) {}
 };
 
@@ -2025,6 +2073,11 @@ struct ImportDecl : Node {
         std::string rename; // nombre local (vacio = sin rename)
     };
     std::vector<OnlySymbol> only_symbols;
+    /// `import ns only *;` -- glob: trae TODOS los simbolos publicos del modulo
+    /// al scope (estilo Rust `use ns::*;`).  Con @c is_public_reexport ademas
+    /// los re-exporta (`pub use ns::*;`).  Cuando es @c true, @c only_symbols
+    /// esta vacio (no hay lista explicita).
+    bool only_all = false;
     /// Si el import es @c "public import "x";" (re-export).  Sin esa
     /// marca, los simbolos importados son privados al modulo actual.
     bool is_public_reexport = false;
@@ -2080,6 +2133,10 @@ struct StructFieldDecl {
     std::unique_ptr<TypeNode> type;
     std::string name;
     SourceLoc loc;
+    /// `static`: el campo NO vive en cada instancia sino una sola vez (storage
+    /// global `<Struct>__<campo>`); habilita singletons y contadores por-tipo.
+    /// Se accede via `Struct.campo` (lectura/escritura), no `instancia.campo`.
+    bool is_static = false;
     /// Miembro ANONIMO C11: `struct { ... };` / `union { ... };` sin nombre de
     /// campo.  Sus campos se APLANAN en el struct contenedor (se accede a
     /// `parent.inner_field` directamente).  @c type apunta al agregado sintetico
@@ -2136,11 +2193,17 @@ struct StructFieldDecl {
     /// `= {}` o cuando el campo NO aparece en el init-list, y por el `init()`
     /// sintetizado.  Debe ser una expresion comptime-constante.
     std::unique_ptr<Expr> default_init;
+    /// `comptime T campo`: el campo existe SOLO en tiempo de compilacion (p.ej.
+    /// `comptime char* name` para calcular un hash en compile-time).  NO ocupa
+    /// espacio en el layout runtime del struct ni se serializa; el type checker
+    /// lo excluye del calculo de offsets/tamano.  Su valor lo consume el codigo
+    /// comptime (constructores/metodos comptime).
+    bool is_comptime = false;
 };
 
 /**
  * @struct StructDecl
- * @brief Declaracion de un @c struct (value type sin herencia).
+ * @brief Declaracion de un @c struct (value type con herencia ESTATICA opcional).
  *
  * Solo cubre campos; los metodos opcionales llegan en hitos posteriores.
  * El type checker
@@ -2149,6 +2212,17 @@ struct StructFieldDecl {
  */
 struct StructDecl : Node {
     std::string name;
+    /// Herencia ESTATICA de structs (value-type, sin vtable): el derivado
+    /// `struct D : Base` embebe los campos del base al INICIO de su layout
+    /// (layout-compatible, upcast trivial) y hereda sus metodos con dispatch
+    /// estatico.  El tipo `Self` en los metodos del base se reinstancia al tipo
+    /// concreto del derivado (covarianza estilo CRTP / Rust `Self`), asi los
+    /// operadores comunes viven una sola vez y devuelven el tipo correcto en
+    /// cada derivado.  Vacio = sin base.
+    std::string super_name;
+    /// Interfaces / conceptos que el struct declara satisfacer
+    /// (`struct S : Base, IWide`).  Verificado en compile-time; cero coste.
+    std::vector<std::string> interface_names;
     std::vector<StructFieldDecl> fields;
     /// Metodos del struct (value-type, dispatch estatico).  Reusa
     /// @c ClassMethodDecl pero los structs NO tienen vtable, herencia
@@ -2175,6 +2249,11 @@ struct StructDecl : Node {
     /// del campo mayor y el alineamiento el maximo.  Reusa toda la maquinaria
     /// de struct salvo el calculo de layout (offsets/size).
     bool is_union = false;
+    /// `@Abstract` -- el struct NO es instanciable por si mismo; solo sirve como
+    /// base de otros (`struct D : Base`).  Independiente de `Self`: un struct con
+    /// `Self` es instanciable por defecto (Self = el propio tipo si no hay
+    /// derivado).  Ver [[proj_struct_self_inheritance]].
+    bool is_abstract = false;
     /// Parametros de tipo opcionales (templates).  `struct Box<T> { T v; }`
     /// produce type_params = ["T"].  Vacio para structs no genericos.  Si no
     /// esta vacio, el struct es una plantilla: NO se procesa como concreto;
@@ -2336,7 +2415,18 @@ struct ClassMethodDecl : Node {
     bool is_static = false;
     bool is_final = false;
     bool is_override = false;
+    /// `@Virtual` (structs): el metodo se despacha dinamicamente por vtable
+    /// (modelo AOT: vtable estatica + devirtualizacion a llamada directa cuando
+    /// el tipo concreto se conoce).  Opt-in por metodo; el resto es estatico.
+    /// Prohibido combinar con `Self` (mecanismos opuestos) o con `static`.
+    bool is_virtual = false;
     bool is_constructor = false;
+    /// F1b: constructor `comptime T(expr)` de un struct value-type.  Se ejecuta
+    /// en compile-time (ComptimeVM) y materializa el struct; base de los
+    /// literales de tipo usuario (modelo Swift ExpressibleByIntegerLiteral).
+    /// Solo valido en constructores; el lowering lo baja a `__macro_<T>__ctor_N`
+    /// y el call site `T(literal)` lo invoca via `invoke_struct_macro`.
+    bool is_comptime = false;
     /// true si es destructor `~ClassName()` declarado dentro
     /// del cuerpo de la clase.  Sin parametros (validado en parser).
     /// Body lowereado como un metodo void normal; el frontend invoca
@@ -2528,6 +2618,20 @@ struct ModuleNode : Node {
     /// texto fuente para exportarlos cross-module via `.vxi`.  Lo rellena
     /// el parser; lo consume el emitter del `.vxi`.
     std::vector<GenericTemplateExport> generic_template_exports;
+    /// El modulo contiene alguna anotacion @Target, asi que lo que declara
+    /// DEPENDE del objetivo de compilacion.  Lo marca el parser en cuanto ve
+    /// una; lo consume el emisor del `.vxi` para atar el artefacto a su
+    /// objetivo (@c VxiHeader::target_offset).
+    ///
+    /// Es una distincion de eficiencia: sin ella habria que atar TODOS los
+    /// `.vxi` al objetivo y cambiar de target recompilaria la stdlib entera,
+    /// cuando en realidad la inmensa mayoria de modulos no depende de el.
+    bool uses_conditional_target = false;
+    /// Simbolos que este modulo declara SOLO para otros objetivos, con la(s)
+    /// condicion(es) @Target bajo la(s) que si existen.  Quien resuelve
+    /// nombres lo consulta cuando una busqueda falla, para poder decir
+    /// "declarado para otro objetivo" en vez de "no declarado".
+    std::unordered_map<std::string, std::vector<std::string>> target_skipped;
     ModuleNode() : Node(NodeKind::Module) {}
 };
 

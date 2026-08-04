@@ -1,0 +1,22 @@
+/**
+ * @file 362_ctor_importado.vx
+ * @brief Construir un struct declarado en otro modulo.
+ *
+ * Un tipo se usa por su nombre local (`P`) pero su layout y su constructor
+ * llevan el nombre cualificado del modulo que lo declara (`t__p__P`).  Al
+ * construirlo se comparaba el nombre escrito con el resuelto, no coincidian, y
+ * la construccion dejaba de reconocerse como tal: acababa emitida como una
+ * llamada a una funcion con el nombre del tipo, que no existe.
+ *
+ * El caso no estaba cubierto -- el corpus solo construia tipos importados que
+ * eran CLASES, con `new`, que va por otro camino -- asi que el hueco no lo
+ * detectaba nadie.
+ */
+import t.p only P;
+
+i32 main() {
+    P p = P(35);
+    P q = P(7);
+    if (p.a + q.a == 42) { return 42; }
+    return 1;
+}

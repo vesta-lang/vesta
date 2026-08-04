@@ -18,6 +18,7 @@
  * principal de planificacion con balance de carga, ganchos de temporalizacion \
  * y transiciones de estado de proceso (READY -> RUNNING -> BLOCKED/DEAD).     \
  */                                                                            \
+#include "vx/diag/diag_catalog.h"
 #include "runtime/scheduler.h"
 
 #include "runtime/decode_instruction.h"
@@ -33,6 +34,32 @@
 #include <cstdio>
 
 namespace runtime {
+
+/**
+ * @brief Convierte en fallo del programa lo que capturo el sistema.
+ *
+ * Estaba escrito dos veces, palabra por palabra, en los dos sitios que arman la
+ * recuperacion.  Duplicado asi, arreglar uno y olvidar el otro es cuestion de
+ * tiempo -- y el segundo solo se nota cuando alguien falla por ese camino.
+ *
+ * El mensaje no se escribe aqui: el TIPO de fallo ya lo cuenta el catalogo en el
+ * idioma de quien lee.  Lo unico que se anade es la direccion del acceso, que si
+ * aporta, y tambien por catalogo.
+ *
+ * @param p Proceso que fallo.
+ */
+static void lanzar_fallo_del_sistema(runtime::ProcessVM *p) {
+    if (p->pending_av_kind == 1 || p->pending_av_kind == 2) {
+        runtime::throw_fatal(p, runtime::FATAL_DIVISION_BY_ZERO, nullptr);
+        return;
+    }
+    char dir[32];
+    std::snprintf(dir, sizeof(dir), "0x%llx",
+                  (unsigned long long)p->pending_av_addr);
+    const std::string detalle = vx::diag::format("VX7013", {dir});
+    runtime::throw_fatal(p, runtime::FATAL_SEGMENTATION_FAULT, detalle.c_str());
+}
+
 
 /**
  * @brief Construye el scheduler, lo asocia a la VM indicada e inicializa la
@@ -374,7 +401,49 @@ void Scheduler::run_loop() {
              * El JIT-eated main puede invocar metodos via CALLVIRT
              * (que en el selector baja a vrt_callvirt -> enter_jit). */
             jit::JitFn jf = reinterpret_cast<jit::JitFn>(fn_ptr);
-            (void)jit::enter_jit(jf, reinterpret_cast<vrt_proc *>(instance));
+            /* Armar el setjmp de recuperacion tambien alrededor del jit_entry_fn
+             * (no solo del batch interp de mas abajo): asi el watchdog CTPE puede
+             * abortar main via longjmp desde el poll de safepoint, y ademas un
+             * SIGSEGV dentro de main compilado se recupera igual que en el batch.
+             * setjmp==0: ejecucion normal; !=0: se hizo longjmp (aborto) -> saltar
+             * la ejecucion y dejar el proceso HALT. */
+            instance->pending_av_kind = 0xFFFFFFFFu;
+            instance->av_recovery_active = true;
+            if (setjmp(instance->av_recovery_jmpbuf) == 0) {
+                (void)jit::enter_jit(jf,
+                                     reinterpret_cast<vrt_proc *>(instance));
+            } else {
+                /* Se volvio aqui por un fallo del procesador dentro del codigo
+                 * compilado: division entre cero, desbordamiento entero o un
+                 * acceso invalido.  El codigo nativo no comprueba el divisor
+                 * antes de dividir -- lo hace el procesador -- asi que el fallo
+                 * llega por aqui y no por `throw_fatal`.
+                 *
+                 * Sin mirarlo, el proceso pasaba a HALT y el programa terminaba
+                 * en silencio: la division entre cero no decia nada en JIT
+                 * mientras que en el interprete si.  El mismo programa fallando
+                 * de dos maneras distintas segun como se ejecute es peor que
+                 * cualquiera de las dos. */
+                /* Sin mensaje propio: el tipo de fallo YA lo cuenta el catalogo
+                 * en el idioma de quien lee, y repetirlo aqui en una cadena
+                 * fija seria decir lo mismo dos veces y solo en un idioma.  La
+                 * direccion si aporta, asi que va -- tambien por catalogo. */
+                if (instance->pending_av_kind == 1 ||
+                    instance->pending_av_kind == 2) {
+                    runtime::throw_fatal(
+                        instance, runtime::FATAL_DIVISION_BY_ZERO, nullptr);
+                } else {
+                    char addr[32];
+                    std::snprintf(addr, sizeof(addr), "0x%llx",
+                                  (unsigned long long)instance->pending_av_addr);
+                    const std::string detalle =
+                        vx::diag::format("VX7013", {addr});
+                    runtime::throw_fatal(instance,
+                                         runtime::FATAL_SEGMENTATION_FAULT,
+                                         detalle.c_str());
+                }
+            }
+            instance->av_recovery_active = false;
             /* Marcar el proceso como HALT.  No hay mas ejecucion interp. */
             instance->state.store(HALT, std::memory_order_release);
             instance->tsc = 1; /* marcar que ya ejecuto algo */
@@ -441,33 +510,43 @@ void Scheduler::run_loop() {
             // no-null y armará el recovery.  Asi cubrimos toda la
             // ventana de vulnerabilidad sin overhead permanente.
             set_current_executing_process(instance);
-            const bool armed_fast = (instance->exc_frame_stack != nullptr);
+            /* La recuperacion se arma SIEMPRE, haya o no un `try` alrededor.
+             *
+             * Antes solo se armaba con un `try` activo, con lo que un deref de
+             * un puntero nulo sin `try` no se convertia en fallo del programa:
+             * se lo llevaba por delante el proceso ENTERO de la maquina
+             * virtual, sin mensaje, sin traza y sin decir en que linea.  La
+             * maquina no puede morirse porque el programa que ejecuta tenga un
+             * error, igual que un navegador no se cierra porque una pagina
+             * falle.
+             *
+             * Cuesta un `setjmp` por lote -- decenas de instrucciones, no una
+             * -- y el camino compilado ya lo pagaba sin discutirlo. */
+            const bool armed_fast = true;
             if (armed_fast) {
+                instance->pending_av_kind = 0xFFFFFFFFu;
                 instance->av_recovery_active = true;
                 if (setjmp(instance->av_recovery_jmpbuf) != 0) {
-                    char msg[128];
-                    // Bug fix 2026-05-23: distinguir AV vs div0 / overflow.
-                    if (instance->pending_av_kind == 1) {
-                        std::snprintf(
-                            msg, sizeof(msg),
-                            "host division by zero (operacion entera ilegal)");
-                        runtime::throw_fatal(
-                            instance, runtime::FATAL_DIVISION_BY_ZERO, msg);
-                    } else if (instance->pending_av_kind == 2) {
-                        std::snprintf(
-                            msg, sizeof(msg),
-                            "host integer overflow (operacion entera ilegal)");
-                        runtime::throw_fatal(
-                            instance, runtime::FATAL_DIVISION_BY_ZERO, msg);
-                    } else {
-                        std::snprintf(
-                            msg, sizeof(msg),
-                            "host access violation at 0x%llx (deref de puntero "
-                            "invalido)",
-                            (unsigned long long)instance->pending_av_addr);
-                        runtime::throw_fatal(
-                            instance, runtime::FATAL_SEGMENTATION_FAULT, msg);
-                    }
+                    /* Lo captura el sistema a mitad de instruccion: el PC
+                     * apunta a la que fallo, no a la siguiente. */
+                    instance->fatal_pc_exact = true;
+                    lanzar_fallo_del_sistema(instance);
+                    /* Y se cierra el proceso AQUI, con el mismo cierre que usa
+                     * la entrada al codigo compilado.
+                     *
+                     * Sin `try`, `throw_fatal` deja el proceso muerto y RETORNA
+                     * -- no salta a ningun sitio --, asi que seguir el lote
+                     * significaba volver a ejecutar la instruccion que acaba de
+                     * reventar y repetirlo sin fin.  Pero cortar el lote a secas
+                     * tampoco vale: el descuento de procesos vivos esta DENTRO
+                     * del despacho, asi que saltarselo deja el contador en alto,
+                     * los planificadores esperando a alguien que ya no existe y
+                     * la maquina colgada.  Hay que marcar HALT y soltarlo. */
+                    instance->av_recovery_active = false;
+                    instance->state.store(HALT, std::memory_order_release);
+                    instance->tsc = 1;
+                    alive_count--;
+                    continue; /* a por otro proceso */
                 }
             }
 
@@ -511,6 +590,15 @@ void Scheduler::run_loop() {
                     dispatch_table[0x100 | 0x79] = &&L_ALU3;
                     dispatch_table[0x100 | 0x7A] = &&L_ALU3;
                     dispatch_table[0x100 | 0x7B] = &&L_ALU3;
+                    /* Shifts (mode=3) + setcc: hot en loops FNV/hash. */
+                    dispatch_table[0x100 | 0x1B] = &&L_SHL;
+                    dispatch_table[0x100 | 0x1C] = &&L_SHR;
+                    dispatch_table[0x100 | 0x1D] = &&L_SAR;
+                    dispatch_table[0x100 | 0x43] = &&L_SETCC;
+                    dispatch_table[0x100 | 0x92] = &&L_SEXT;
+                    /* Carga/almacen universal: las mem-ops mas frecuentes. */
+                    dispatch_table[0x100 | 0x90] = &&L_MLD;
+                    dispatch_table[0x100 | 0x91] = &&L_MST;
                     /* loadz / loadzh (0x7C / 0x7D) caen al SLOW path:
                      * el inlining provoca icache/BTB pressure que regresa
                      * benches con muchos opcodes (poly, callvirt_hot).
@@ -944,6 +1032,233 @@ void Scheduler::run_loop() {
                 NEXT_DISPATCH();
             }
 
+            /* SHL/SHR/SAR reg,reg (mode=3, 64-bit): compute inline + flags
+             * IDENTICAS al path generico (ShlOp/ShrOp/SarOp): solo CF/OF, ZF/SF
+             * quedan intactos.  Modos parciales caen a L_SLOW.  Ataca los loops
+             * FNV/hash/shift-heavy (hash_lookup: 5 shifts/iter iban a L_SLOW). */
+            L_SHL: {
+                if (fl_inl.mode != 3) goto L_SLOW;
+                auto &regs = instance->registers.regs;
+                auto &fl = instance->registers.flags.bits;
+                const uint8_t rdst = d->data_instruction.reg_data.reg1;
+                const uint8_t rsrc = d->data_instruction.reg_data.reg2;
+                const uint64_t a = regs[rdst].qword();
+                const uint32_t sh = static_cast<uint32_t>(regs[rsrc].qword()) & 63u;
+                const uint64_t res = a << sh;
+                regs[rdst].qword(res);
+                if (sh == 0) {
+                    fl.CF = 0;
+                    fl.OF = 0;
+                } else {
+                    const uint64_t cf = (a >> (64 - sh)) & 1;
+                    fl.CF = cf;
+                    fl.OF = cf ^ (res >> 63);
+                }
+                instance->registers.rip.qword(instance->registers.rip.raw() +
+                                              fl_inl.size_instr);
+                ++profiler_instr_counter;
+                NEXT_DISPATCH();
+            }
+
+            L_SHR: {
+                if (fl_inl.mode != 3) goto L_SLOW;
+                auto &regs = instance->registers.regs;
+                auto &fl = instance->registers.flags.bits;
+                const uint8_t rdst = d->data_instruction.reg_data.reg1;
+                const uint8_t rsrc = d->data_instruction.reg_data.reg2;
+                const uint64_t a = regs[rdst].qword();
+                const uint32_t sh = static_cast<uint32_t>(regs[rsrc].qword()) & 63u;
+                regs[rdst].qword(a >> sh);
+                if (sh == 0) {
+                    fl.CF = 0;
+                } else {
+                    fl.CF = (a >> (sh - 1)) & 1;
+                }
+                fl.OF = 0;
+                instance->registers.rip.qword(instance->registers.rip.raw() +
+                                              fl_inl.size_instr);
+                ++profiler_instr_counter;
+                NEXT_DISPATCH();
+            }
+
+            L_SAR: {
+                if (fl_inl.mode != 3) goto L_SLOW;
+                auto &regs = instance->registers.regs;
+                auto &fl = instance->registers.flags.bits;
+                const uint8_t rdst = d->data_instruction.reg_data.reg1;
+                const uint8_t rsrc = d->data_instruction.reg_data.reg2;
+                const uint64_t a = regs[rdst].qword();
+                const uint32_t sh = static_cast<uint32_t>(regs[rsrc].qword()) & 63u;
+                regs[rdst].qword(
+                    static_cast<uint64_t>(static_cast<int64_t>(a) >> sh));
+                if (sh == 0) {
+                    fl.CF = 0;
+                } else {
+                    fl.CF = (a >> (sh - 1)) & 1;
+                }
+                fl.OF = 0;
+                instance->registers.rip.qword(instance->registers.rip.raw() +
+                                              fl_inl.size_instr);
+                ++profiler_instr_counter;
+                NEXT_DISPATCH();
+            }
+
+            /* SETCC r_dst, cond: escribe 0/1 segun la condicion.  reg1 empaqueta
+             * (cond<<4)|dst.  No toca flags (identico a exec_instr_setcc). */
+            L_SETCC: {
+                auto &regs = instance->registers.regs;
+                const auto &fl = instance->registers.flags.bits;
+                const uint8_t packed = d->data_instruction.reg_data.reg1;
+                const uint8_t cond = (packed >> 4) & 0xF;
+                const uint8_t rdst = packed & 0xF;
+                bool taken;
+                switch (cond) {
+                case 0x00: taken = fl.OF; break;
+                case 0x01: taken = !fl.OF; break;
+                case 0x02: taken = fl.CF; break;
+                case 0x03: taken = !fl.CF; break;
+                case 0x04: taken = fl.ZF; break;
+                case 0x05: taken = !fl.ZF; break;
+                case 0x06: taken = fl.CF || fl.ZF; break;
+                case 0x07: taken = !fl.CF && !fl.ZF; break;
+                case 0x08: taken = fl.SF; break;
+                case 0x09: taken = !fl.SF; break;
+                case 0x0A: taken = fl.ZF && !(fl.SF ^ fl.OF); break;
+                case 0x0B: taken = !fl.ZF; break;
+                case 0x0C: taken = (fl.SF ^ fl.OF); break;
+                case 0x0D: taken = !(fl.SF ^ fl.OF); break;
+                case 0x0E: taken = fl.ZF || (fl.SF ^ fl.OF); break;
+                case 0x0F: taken = true; break;
+                default: taken = false; break;
+                }
+                regs[rdst].qword(taken ? 1 : 0);
+                instance->registers.rip.qword(instance->registers.rip.raw() +
+                                              fl_inl.size_instr);
+                ++profiler_instr_counter;
+                NEXT_DISPATCH();
+            }
+
+            /* SEXT r_dst, N: sign-extiende r_dst desde N bits (8/16/32) a 64.
+             * b2=r_dst (nibble bajo), b3=N.  Hot en casts de enteros con signo
+             * (loop counters `(u64)i`, etc.); replica exec_instr_sext. */
+            L_SEXT: {
+                auto &regs = instance->registers.regs;
+                const uint8_t rdst =
+                    d->data_instruction.reg_data.reg1 & 0xF;
+                const uint8_t width = d->data_instruction.reg_data.reg2;
+                const uint64_t v = regs[rdst].qword();
+                uint64_t res;
+                switch (width) {
+                case 8:
+                    res = static_cast<uint64_t>(
+                        static_cast<int64_t>(static_cast<int8_t>(v)));
+                    break;
+                case 16:
+                    res = static_cast<uint64_t>(
+                        static_cast<int64_t>(static_cast<int16_t>(v)));
+                    break;
+                case 32:
+                    res = static_cast<uint64_t>(
+                        static_cast<int64_t>(static_cast<int32_t>(v)));
+                    break;
+                default: {
+                    const uint32_t sh =
+                        (64u - (static_cast<uint32_t>(width) & 63u)) & 63u;
+                    res = static_cast<uint64_t>(
+                        static_cast<int64_t>(v << sh) >> sh);
+                    break;
+                }
+                }
+                regs[rdst].qword(res);
+                instance->registers.rip.qword(instance->registers.rip.raw() +
+                                              fl_inl.size_instr);
+                ++profiler_instr_counter;
+                NEXT_DISPATCH();
+            }
+
+            /* MLD/MST: carga/almacen UNIVERSAL (arrays, locales, campos).  Son
+             * las instrucciones de memoria mas frecuentes del hot loop; iban a
+             * L_SLOW (decode + call por puntero) aunque el acceso interno ya
+             * usaba el page-cache.  Handler inline: replica exec_instr_mld/mst
+             * (base +/- index*scale +/- disp, host/VM, sign-ext, anchos 1/2/4/8).
+             * El banco FP (flags b4) y anchos >8 (SIMD) caen a L_SLOW (raros en
+             * codigo entero). */
+            L_MLD: {
+                const auto &m = d->data_instruction.mem_full;
+                if ((m.flags & 0x10) || m.width > 8) goto L_SLOW;
+                auto &regs = instance->registers.regs;
+                uint64_t addr = m.base < 16
+                                    ? regs[m.base].qword()
+                                    : (m.base == 16
+                                           ? instance->registers.base_pointer.raw()
+                                           : instance->registers.stack_pointer.raw());
+                addr += static_cast<uint64_t>(static_cast<int64_t>(m.disp));
+                if (m.flags & 0x02) {
+                    const uint64_t idx = regs[m.index].qword() << m.scale;
+                    if (m.flags & 0x04) addr -= idx; else addr += idx;
+                }
+                uint64_t val;
+                if (m.flags & 0x01) { // host
+                    val = 0;
+                    std::memcpy(&val, reinterpret_cast<const void *>(addr),
+                                m.width);
+                } else {
+                    switch (m.width) {
+                    case 1: val = instance->vm_mem.read_u8(addr); break;
+                    case 2: val = instance->vm_mem.read_u16(addr); break;
+                    case 4: val = instance->vm_mem.read_u32(addr); break;
+                    default: val = instance->vm_mem.read_u64_fast(addr); break;
+                    }
+                }
+                if (m.flags & 0x08) { // sign-extend anchos < 8
+                    switch (m.width) {
+                    case 1: val = static_cast<uint64_t>(
+                                static_cast<int64_t>(static_cast<int8_t>(val))); break;
+                    case 2: val = static_cast<uint64_t>(
+                                static_cast<int64_t>(static_cast<int16_t>(val))); break;
+                    case 4: val = static_cast<uint64_t>(
+                                static_cast<int64_t>(static_cast<int32_t>(val))); break;
+                    default: break;
+                    }
+                }
+                regs[m.reg].qword(val);
+                instance->registers.rip.qword(instance->registers.rip.raw() +
+                                              fl_inl.size_instr);
+                ++profiler_instr_counter;
+                NEXT_DISPATCH();
+            }
+
+            L_MST: {
+                const auto &m = d->data_instruction.mem_full;
+                if ((m.flags & 0x10) || m.width > 8) goto L_SLOW;
+                auto &regs = instance->registers.regs;
+                uint64_t addr = m.base < 16
+                                    ? regs[m.base].qword()
+                                    : (m.base == 16
+                                           ? instance->registers.base_pointer.raw()
+                                           : instance->registers.stack_pointer.raw());
+                addr += static_cast<uint64_t>(static_cast<int64_t>(m.disp));
+                if (m.flags & 0x02) {
+                    const uint64_t idx = regs[m.index].qword() << m.scale;
+                    if (m.flags & 0x04) addr -= idx; else addr += idx;
+                }
+                const uint64_t val = regs[m.reg].qword();
+                if (m.flags & 0x01) { // host
+                    std::memcpy(reinterpret_cast<void *>(addr), &val, m.width);
+                } else {
+                    switch (m.width) {
+                    case 1: instance->vm_mem.write_u8(addr, static_cast<uint8_t>(val)); break;
+                    case 2: instance->vm_mem.write_u16(addr, static_cast<uint16_t>(val)); break;
+                    case 4: instance->vm_mem.write_u32(addr, static_cast<uint32_t>(val)); break;
+                    default: instance->vm_mem.write_u64_fast(addr, val); break;
+                    }
+                }
+                instance->registers.rip.qword(instance->registers.rip.raw() +
+                                              fl_inl.size_instr);
+                ++profiler_instr_counter;
+                NEXT_DISPATCH();
+            }
+
             /* ===================== SLOW PATH ===================== */
             L_SLOW: {
                 vm_event evt;
@@ -968,7 +1283,29 @@ void Scheduler::run_loop() {
                 }
                 instance->reductions_remaining--;
 
-                if (__builtin_expect(evt == EVT_EXEC_DONE, 1)) {
+                // La instruccion puede haber lanzado un FatalError SIN handler
+                // (division por cero, unwrap de null, panic...).  En ese caso
+                // `throw_fatal` deja el proceso en HALT y RETORNA -- no salta
+                // a ningun sitio --, asi que sin este corte el lote seguia
+                // ejecutando instrucciones de un programa ya muerto: la
+                // division por cero imprimia su resultado y el proceso acababa
+                // con codigo 0, como si nada hubiera pasado.
+                // La instruccion puede haber lanzado un FatalError SIN handler
+                // (division por cero, unwrap de null, panic...).  `throw_fatal`
+                // deja el proceso en HALT y RETORNA -- no salta a ningun sitio
+                // --, asi que sin mirar el estado aqui el lote seguia
+                // ejecutando instrucciones de un programa ya muerto: la
+                // division por cero imprimia su resultado y el proceso
+                // terminaba con codigo 0, como si nada.  No se puede saltar
+                // directamente al final del lote: hay que caer al bloque
+                // HALT/DEAD de abajo, que es el que descuenta `alive_count` y
+                // suelta el proceso (si no, vuelve a la cola y repite la
+                // instruccion que lo mato, en bucle).
+                const vm_state st_after =
+                    instance->state.load(std::memory_order_relaxed);
+                const bool died_now = (st_after == HALT || st_after == DEAD);
+
+                if (__builtin_expect(evt == EVT_EXEC_DONE && !died_now, 1)) {
                     if (instance->reductions_remaining == 0) goto BATCH_END;
                     {
                         const uint64_t _pc = instance->registers.rip.raw();
@@ -1455,31 +1792,13 @@ void Scheduler::run_loop() {
             set_current_executing_process(instance);
             const bool armed_slow = (instance->exc_frame_stack != nullptr);
             if (armed_slow) {
+                instance->pending_av_kind = 0xFFFFFFFFu;
                 instance->av_recovery_active = true;
                 if (setjmp(instance->av_recovery_jmpbuf) != 0) {
-                    char msg[128];
-                    // Bug fix 2026-05-23: distinguir AV vs div0 / overflow.
-                    if (instance->pending_av_kind == 1) {
-                        std::snprintf(
-                            msg, sizeof(msg),
-                            "host division by zero (operacion entera ilegal)");
-                        runtime::throw_fatal(
-                            instance, runtime::FATAL_DIVISION_BY_ZERO, msg);
-                    } else if (instance->pending_av_kind == 2) {
-                        std::snprintf(
-                            msg, sizeof(msg),
-                            "host integer overflow (operacion entera ilegal)");
-                        runtime::throw_fatal(
-                            instance, runtime::FATAL_DIVISION_BY_ZERO, msg);
-                    } else {
-                        std::snprintf(
-                            msg, sizeof(msg),
-                            "host access violation at 0x%llx (deref de puntero "
-                            "invalido)",
-                            (unsigned long long)instance->pending_av_addr);
-                        runtime::throw_fatal(
-                            instance, runtime::FATAL_SEGMENTATION_FAULT, msg);
-                    }
+                    /* Lo captura el sistema a mitad de instruccion: el PC
+                     * apunta a la que fallo, no a la siguiente. */
+                    instance->fatal_pc_exact = true;
+                    lanzar_fallo_del_sistema(instance);
                 }
             }
             while (instance->reductions_remaining > 0) {

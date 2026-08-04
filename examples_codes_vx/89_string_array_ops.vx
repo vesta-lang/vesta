@@ -39,17 +39,17 @@ i32 main() {
     string ndl_xy    = "xy";
 
     // indexof("World") = 6.
-    if (vstr_indexof(str_cstr(s), str_bytes(s),
-                     str_cstr(ndl_world), str_bytes(ndl_world)) == 6) { acc = acc + 5; }
+    if (vstr_indexof(s.cstr(), s.bytes(),
+                     ndl_world.cstr(), ndl_world.bytes()) == 6) { acc = acc + 5; }
     // starts_with("Hello") = 1.
-    if (vstr_starts_with(str_cstr(s), str_bytes(s),
-                         str_cstr(ndl_hi), str_bytes(ndl_hi)) == 1) { acc = acc + 3; }
+    if (vstr_starts_with(s.cstr(), s.bytes(),
+                         ndl_hi.cstr(), ndl_hi.bytes()) == 1) { acc = acc + 3; }
     // ends_with("!") = 1.
-    if (vstr_ends_with(str_cstr(s), str_bytes(s),
-                       str_cstr(ndl_bang), str_bytes(ndl_bang)) == 1) { acc = acc + 3; }
+    if (vstr_ends_with(s.cstr(), s.bytes(),
+                       ndl_bang.cstr(), ndl_bang.bytes()) == 1) { acc = acc + 3; }
     // contains("xy") = 0.
-    if (vstr_contains(str_cstr(s), str_bytes(s),
-                      str_cstr(ndl_xy), str_bytes(ndl_xy)) == 0) { acc = acc + 3; }
+    if (vstr_contains(s.cstr(), s.bytes(),
+                      ndl_xy.cstr(), ndl_xy.bytes()) == 0) { acc = acc + 3; }
 
     // lower_inplace en un buffer host (12 bytes "ABCDEFabc012\0").
     i32* upbuf = malloc(13);

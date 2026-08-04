@@ -27,7 +27,7 @@ i32 main() {
     string c = s + t;
 
     // Builtin str_concat tambien ruteado a my_concat -> len 3.
-    string c2 = str_concat(s, t);
+    string c2 = s.concat(t);
 
     // 3 + 3 - 3 = 3 (validamos ambos rutas; el resultado final es 3).
     return (i32)(c.length() + c2.length() - 3);

@@ -19,9 +19,11 @@
 #include "ir/ssa_ir.h"
 #include "jit/code_cache.h"
 #include "jit/interval.h"
-#include "jit/linear_scan.h"
+#include "codegen/regalloc.h"
+#include "codegen/rbank/allocate.h"
 #include "jit/machine_ir.h"
 #include "jit/regalloc_rewrite.h"
+#include "codegen/timeline_builder.h"
 #include "jit/target_reginfo.h"
 #include "jit/vreg_select.h"
 #include "jit/x86_encoder.h"
@@ -133,8 +135,8 @@ static bool jit_vm(const ir::IrFunction &fn, Proxy &px,
                      resolve_symbol))
         return false;
     const TargetRegInfo &tri = target_x86_64_vm_abi();
-    RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
-    MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM);
+    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(build_intervals(mf, tri), mf.vreg_count, tri, false);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM);
     X86Encoder enc;
     std::vector<uint8_t> bytes;
     if (enc.encode(pf, bytes) == 0 || bytes.empty()) return false;
@@ -154,8 +156,8 @@ static bool jit_vm_ent(const ir::IrFunction &fn, Proxy &px,
     MFunction mf;
     if (!vreg_select(fn, mf, AbiKind::VM, {}, ent, {}, {})) return false;
     const TargetRegInfo &tri = target_x86_64_vm_abi();
-    RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
-    MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM);
+    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(build_intervals(mf, tri), mf.vreg_count, tri, false);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM);
     X86Encoder enc;
     std::vector<uint8_t> bytes;
     if (enc.encode(pf, bytes) == 0 || bytes.empty()) return false;
@@ -441,8 +443,8 @@ static void test_vm_strmake() {
     CHECK(ok, "vreg_select strmake ok");
     if (!ok) return;
     const TargetRegInfo &tri = target_x86_64_vm_abi();
-    RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
-    MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM);
+    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(build_intervals(mf, tri), mf.vreg_count, tri, false);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM);
     X86Encoder enc;
     std::vector<uint8_t> bytes;
     CHECK(enc.encode(pf, bytes) != 0 && !bytes.empty(), "encode strmake");
@@ -826,8 +828,8 @@ static bool jit_vm_mem(const ir::IrFunction &fn, void *proc, VregEntries &ent) {
     MFunction mf;
     if (!vreg_select(fn, mf, AbiKind::VM, {}, ent, {}, {})) return false;
     const TargetRegInfo &tri = target_x86_64_vm_abi();
-    RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
-    MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM);
+    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(build_intervals(mf, tri), mf.vreg_count, tri, false);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM);
     X86Encoder enc;
     std::vector<uint8_t> bytes;
     if (enc.encode(pf, bytes) == 0 || bytes.empty()) return false;
@@ -1117,9 +1119,9 @@ static void test_vm_gc_stackmap() {
     CHECK(vreg_select(fn, mf, AbiKind::VM, resolver), "vreg_select ok (gcf)");
     const TargetRegInfo &tri = target_x86_64_vm_abi();
     IntervalResult ivs = build_intervals(mf, tri);
-    RegAlloc ra = linear_scan(ivs, tri);
+    codegen::RegAlloc ra = linear_scan(ivs, tri);
     CHECK(ra.spilled(thisp), "this (GC root vivo a traves) spilled a slot");
-    MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM, &ivs);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM, &ivs);
     CHECK(pf.stackmaps.size() == 1, "1 stackmap (1 call)");
     if (pf.stackmaps.size() == 1) {
         CHECK(pf.stackmaps[0].slots.size() == 1, "stackmap describe 1 GC root");
@@ -1509,8 +1511,8 @@ static uint64_t run_gc_deref(ProcGc &px, uint32_t handle) {
     ent.gc_deref = 0x1000; // !=0 (path shared nunca se ejecuta aqui)
     if (!vreg_select(fn, mf, AbiKind::VM, {}, ent, {})) return UINT64_MAX;
     const TargetRegInfo &tri = target_x86_64_vm_abi();
-    RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
-    MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM);
+    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(build_intervals(mf, tri), mf.vreg_count, tri, false);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM);
     X86Encoder enc;
     std::vector<uint8_t> bytes;
     if (enc.encode(pf, bytes) == 0 || bytes.empty()) return UINT64_MAX;

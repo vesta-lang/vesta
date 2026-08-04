@@ -1,0 +1,32 @@
+namespace ejemplos.vectorize_two_scaled;
+
+// =============================================================================
+// 204_vectorize_two_scaled.vx
+//
+// Auto-vectorizacion de DOS vectores escalados combinados:
+//   for (i)  c[i] = a[i]*k1 + b[i]*k2;      (o  a[i]*k1 - b[i]*k2)
+// (a/b/c punteros f32|f64 HOST, k1/k2 escalares loop-invariantes).
+//
+// Antes bailaba (el compound matcher no aceptaba una hoja `array*escalar`).
+// Ahora `a[i]*k1` se aplana solo (start=a, paso MUL k1) y `b[i]*k2` se reconoce
+// como hoja "array escalado" -> paso VEC_FMA_S (c += b*k2, 1 redondeo, VFMADD231
+// con el escalar difundido).  EN UNA SOLA PASADA (no 3): c = a*k1; c += b*k2.
+// El SUB se maneja negando el escalar (c - b*k2 = c + b*(-k2)) -> siempre VFMADD.
+//
+// Requiere AVX (VFMADD); sin el, el jit cae a interp (correcto) y el aot solo
+// vectoriza con --float-isa avx/avx512.
+//
+//   vm --vx examples_codes_vx/204_vectorize_two_scaled.vx -o ax2
+//   vm --run ax2.velb --stats                 # R00 == 4100
+// =============================================================================
+
+i64 main() {
+    f64* c = malloc(400); f64* a = malloc(400); f64* b = malloc(400);
+    f64 k1 = 2.0; f64 k2 = 3.0;
+    for (i32 i = 0; i < 40; i++) { a[i] = (f64)(i + 1); b[i] = (f64)(i + 1); }
+    for (i32 i = 0; i < 40; i++) { c[i] = a[i] * k1 + b[i] * k2; } // -> VEC_FMA_S
+    f64 s = 0.0;
+    for (i32 i = 0; i < 40; i++) { s = s + c[i]; }
+    free(c); free(a); free(b);
+    return (i64) s;   // (2+3) * sum(1..40) = 5 * 820 = 4100
+}

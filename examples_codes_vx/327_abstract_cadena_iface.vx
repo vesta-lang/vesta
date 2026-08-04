@@ -1,0 +1,55 @@
+/**
+ * @file 327_abstract_cadena_iface.vx
+ * @brief Un @Abstract puede heredar de OTRO @Abstract y declarar interfaces.
+ *
+ * Modelo (estilo Java): un @Abstract puede declarar una interfaz sin
+ * implementarla del todo; la obligacion pasa al derivado CONCRETO.  Y un
+ * @Abstract puede a su vez heredar de otro @Abstract (cadena de bases).
+ *
+ *   concept Medible   { i64 medida(); }        // interfaz (contrato)
+ *
+ *   @Abstract Entidad          : Medible       // abstracto declara la interfaz
+ *   @Abstract Poligono : Entidad               // abstracto hereda de abstracto
+ *   struct     Triangulo : Poligono            // concreto: cierra el contrato
+ *
+ * Triangulo es el unico instanciable; hereda campos+impl de la cadena y debe
+ * satisfacer `Medible` (heredada del abstracto raiz).
+ */
+namespace abs_chain;
+
+concept Medible {
+    i64 medida();
+}
+
+// Abstracto raiz: declara la interfaz Medible pero NO implementa medida().
+// Valido: la obligacion se transfiere al derivado concreto.
+@Abstract
+struct Entidad : Medible {
+    i64 id;
+    public i64 get_id() { return this.id; }
+}
+
+// Abstracto intermedio: hereda de otro abstracto (Entidad).
+@Abstract
+struct Poligono : Entidad {
+    i64 lados;
+    public i64 num_lados() { return this.lados; }
+}
+
+// Concreto: cierra la cadena.  Implementa medida() para cumplir Medible
+// (heredada de Entidad, dos niveles arriba).  Recibe id/lados + sus metodos.
+struct Triangulo : Poligono {
+    i64 base;
+    i64 altura;
+    public i64 medida() { return (this.base * this.altura) / 2; }
+}
+
+i32 main() {
+    Triangulo t;
+    t.id = 7;
+    t.lados = 3;
+    t.base = 10;
+    t.altura = 8;
+    // get_id() de Entidad, num_lados() de Poligono, medida() propio.
+    return (i32) (t.get_id() + t.num_lados() + t.medida());  // 7 + 3 + 40 = 50
+}

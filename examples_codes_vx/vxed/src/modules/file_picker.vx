@@ -147,8 +147,8 @@ public class FilePicker {
 
     // Inicializa la lista de ficheros enumerando desde cwd recursivo.
     public void populate() {
-        i32 cwd_n = (i32) str_bytes(this.cwd);
-        u8* cwd_c = str_cstr(this.cwd);
+        i32 cwd_n = (i32) this.cwd.bytes();
+        u8* cwd_c = this.cwd.cstr();
         u8* empty = malloc(1);
         empty[0] = 0;
         this.enumerate_dir(cwd_c, cwd_n, empty, 0, 0);
@@ -200,8 +200,8 @@ public class FilePicker {
         i32 idx = this.filtered[this.sel];
         i32 rn  = this.lens[idx];
         u8* rp  = this.names + this.offsets[idx];
-        i32 cn  = (i32) str_bytes(this.cwd);
-        u8* cp  = str_cstr(this.cwd);
+        i32 cn  = (i32) this.cwd.bytes();
+        u8* cp  = this.cwd.cstr();
         u8* buf = malloc(cn + rn + 2);
         i32 k = 0;
         while (k < cn) { buf[k] = cp[k]; k = k + 1; }
@@ -252,7 +252,7 @@ public class FilePicker {
         print(col_bord);
         print("+");
         string title = " Abrir fichero (Ctrl-P) ";
-        i32 tlen = (i32) str_bytes(title);
+        i32 tlen = (i32) title.bytes();
         i32 lpad = (inner_w - tlen) / 2;
         if (lpad < 0) lpad = 0;
         i32 z = 0;

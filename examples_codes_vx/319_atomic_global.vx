@@ -6,7 +6,7 @@
 // en el bloque de datos y su nombre vale por su direccion.
 namespace atomic_global;
 
-import "vx_atomic" only atomic;
+import std.atomic only atomic;
 
 // El contador que ven todas las funciones del modulo.
 atomic<i64> peticiones;

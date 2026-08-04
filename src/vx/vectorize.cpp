@@ -665,7 +665,14 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
     current_block_ = mbody;
     auto ptr_at = [&](ir::IrValueId base, ir::IrValueId i64off) -> ir::IrValueId {
         const ir::IrValueId d = fn_->new_value(ir::IrType::PTR);
-        fn_->values[d].is_host_ptr = true;
+        /* La aritmetica de punteros HEREDA la naturaleza de la base: un array
+         * de `malloc` vive en memoria host, pero uno local (`T[N]`, que baja a
+         * ALLOCA) vive en la pila de la VM.  Marcarlo host a ciegas hacia que
+         * el acceso saliera con la instruccion equivocada -- leer memoria VM
+         * como si fuera host -- y el proceso moria al recorrer un array local
+         * vectorizado. */
+        fn_->values[d].is_host_ptr =
+            (base < fn_->values.size()) && fn_->values[base].is_host_ptr;
         ir::IrInstr in{}; in.op = ir::IrOp::ADD; in.type = ir::IrType::PTR;
         in.dst = d; in.operands = {base, i64off}; in.source_line = ln;
         fn_->append(current_block_, std::move(in));
@@ -852,6 +859,23 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         bool is_scalar;
         IdentExpr *arr;
         ast::Expr *scal;
+        bool is_scaled_arr = false; // c OP (arr[i]*scal) -> VEC_FMA_S
+    };
+    // Hoja "array escalado": arr[i]*escalar o escalar*arr[i] (escalar
+    // invariante).  Es el segundo termino de a[i]*k1 + b[i]*k2.
+    auto as_scaled_arr = [&](ast::Expr *e, IdentExpr **base,
+                             ast::Expr **scal) -> bool {
+        if (!e || e->kind != NodeKind::BinaryExpr) return false;
+        auto *be = static_cast<BinaryExpr *>(e);
+        if (be->op != BinOp::Mul) return false;
+        IdentExpr *b = nullptr;
+        if (as_arr_c(be->lhs.get(), &b) && is_scalar_leaf(be->rhs.get())) {
+            *base = b; *scal = be->rhs.get(); return true;
+        }
+        if (as_arr_c(be->rhs.get(), &b) && is_scalar_leaf(be->lhs.get())) {
+            *base = b; *scal = be->lhs.get(); return true;
+        }
+        return false;
     };
     // Aplanado RECURSIVO con normalizacion de nodos CONMUTATIVOS: para Add/Mul
     // se puede intercambiar operandos (a OP b == b OP a, bit-exacto en IEEE)
@@ -875,7 +899,11 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
             IdentExpr *lb = nullptr;
             const bool arr = as_arr_c(leaf, &lb);
             const bool scal = !arr && is_scalar_leaf(leaf);
-            if (!arr && !scal) return false; // hoja no vectorizable
+            IdentExpr *sab = nullptr;
+            ast::Expr *sscal = nullptr;
+            const bool scaled =
+                !arr && !scal && as_scaled_arr(leaf, &sab, &sscal);
+            if (!arr && !scal && !scaled) return false; // hoja no vectorizable
             const size_t save = S.size();
             IdentExpr *save_start = start_base;
             if (!flatten(prefix)) { // prefijo no es cadena -> restaurar
@@ -883,7 +911,11 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
                 start_base = save_start;
                 return false;
             }
-            S.push_back({so, scal, arr ? lb : nullptr, scal ? leaf : nullptr});
+            if (scaled)
+                S.push_back({so, false, sab, sscal, true}); // arr[i]*scal
+            else
+                S.push_back({so, scal, arr ? lb : nullptr,
+                             scal ? leaf : nullptr, false});
             return true;
         };
         if (try_chain(be->lhs.get(), be->rhs.get())) return true;
@@ -896,11 +928,9 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
     int n_scalar = 0;
     for (auto &st : S)
         if (st.is_scalar && ++n_scalar > 4) return false; // <=4 escalares (XMM10-13)
-    // f32 con escalar: el broadcast escalar (VEC_BINOP_S/VEC_BCAST) es f64 en el
-    // codegen -> para f32 solo cadenas array-only (a[i]*b[i]+d[i]).  El axpy f32
-    // con escalar (a[i]*k+b[i]) bail hasta tener VBROADCASTSS.
-    if (c_kind == PrimitiveKind::F32 && n_scalar > 0) return false;
-
+    // f32 con escalar YA soportado: VEC_BCAST/VEC_BINOP_S difunden el f32 via
+    // SHUFPS(0) (SSE2 128b) o VBROADCASTSS (AVX/AVX512), y operan packed-single
+    // (ADDPS/MULPS/...).  El escalar se castea a elem_ty (F32) mas abajo.
     const bool is_f32 = (c_kind == PrimitiveKind::F32);
     const ir::IrType elem_ty = is_f32 ? ir::IrType::F32 : ir::IrType::F64;
     const uint64_t esz = is_f32 ? 4u : 8u;
@@ -916,9 +946,25 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         can_fma = (!aot_auto_vec_ && aot_vec_width_ >= 32);
     else
         can_fma = true;
+    // FMA element-wise: c = a*b + d  (subop Add)  o  c = a*b - d  (subop Sub).
+    // Ambos array-only (2 pasos, sin escalares); Sub -> VFMSUB231.
     const bool is_fma = can_fma && S.size() == 2 && !S[0].is_scalar &&
                         S[0].subop == 2 /*Mul*/ && !S[1].is_scalar &&
-                        S[1].subop == 0 /*Add*/;
+                        (S[1].subop == 0 /*Add*/ || S[1].subop == 1 /*Sub*/);
+    const bool fma_sub = is_fma && S[1].subop == 1;
+
+    // Pasos "array escalado" (c OP a[i]*k, p.ej. el 2o termino de a*k1 + b*k2):
+    // se bajan a VEC_FMA_S (c += a*k), que requiere VFMADD (AVX).  Solo subop
+    // Add/Sub (el Sub se maneja negando el escalar).  Mul/Div de un array
+    // escalado no encaja -> bail.
+    bool has_scaled = false;
+    for (const auto &st : S) {
+        if (st.is_scaled_arr) {
+            has_scaled = true;
+            if (st.subop != 0 && st.subop != 1) return false;
+        }
+    }
+    if (has_scaled && !can_fma) return false; // VFMADD requiere AVX
 
     if (MC_DBG)
         std::fprintf(stderr,
@@ -949,11 +995,31 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
     std::vector<int> step_sidx(S.size(), -1);
     int next_sidx = 0;
     for (size_t k = 0; k < S.size(); ++k) {
-        if (S[k].is_scalar) {
+        if (S[k].is_scaled_arr) {
+            // array base + escalar difundido; c += arr*k (VEC_FMA_S).  Sub ->
+            // c - arr*k = c + arr*(-k): negamos el escalar aqui.
+            const ir::IrValueId vb = lower_expr(S[k].arr);
+            if (vb == ir::IR_NO_VALUE) return false;
+            step_base[k] = vb;
+            ir::IrValueId raw = lower_expr(S[k].scal);
+            if (raw == ir::IR_NO_VALUE) return false;
+            raw = cast_if_needed(raw, fn_->values[raw].type, elem_ty, ln);
+            if (S[k].subop == 1) { // Sub -> negar el escalar
+                const ir::IrValueId neg = fn_->new_value(elem_ty);
+                ir::IrInstr fn{}; fn.op = ir::IrOp::FNEG; fn.type = elem_ty;
+                fn.dst = neg; fn.operands = {raw}; fn.source_line = ln;
+                fn_->append(current_block_, std::move(fn));
+                raw = neg;
+            }
+            step_scalar[k] = raw;
+            step_sidx[k] = next_sidx++;
+        } else if (S[k].is_scalar) {
             const ir::IrValueId raw = lower_expr(S[k].scal);
             if (raw == ir::IR_NO_VALUE) return false;
+            // Escalar al tipo del elemento (F32 o F64) para que el broadcast y
+            // la op packed sean del ancho de lane correcto.
             step_scalar[k] = cast_if_needed(raw, fn_->values[raw].type,
-                                            ir::IrType::F64, ln);
+                                            elem_ty, ln);
             step_sidx[k] = next_sidx++;
         } else {
             const ir::IrValueId vb = lower_expr(S[k].arr);
@@ -961,6 +1027,9 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
             step_base[k] = vb;
         }
     }
+    // Los broadcasts (escalares + escalados) viven en XMM10-13 (4 regs, sidx
+    // 0-3).  Mas de 4 colisionaria con regs allocatables -> bail.
+    if (next_sidx > 4) return false;
     const ir::IrType idx_ty = fn_->values[i_init].type;
 
     auto bin = [&](ir::IrOp op, ir::IrType ty, ir::IrValueId a,
@@ -985,7 +1054,7 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
     const ir::IrValueId v_W = emit_const(idx_ty, (uint64_t)W, ln);
     const ir::IrValueId v_esz = emit_const(ir::IrType::I64, esz, ln);
     for (size_t k = 0; k < S.size(); ++k) {
-        if (!S[k].is_scalar) continue;
+        if (!S[k].is_scalar && !S[k].is_scaled_arr) continue;
         ir::IrInstr bc{};
         bc.op = ir::IrOp::VEC_BCAST; bc.type = elem_ty;
         bc.dst = ir::IR_NO_VALUE; bc.operands = {step_scalar[k]};
@@ -1024,7 +1093,14 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
     current_block_ = mbody;
     auto ptr_at = [&](ir::IrValueId base, ir::IrValueId i64off) -> ir::IrValueId {
         const ir::IrValueId d = fn_->new_value(ir::IrType::PTR);
-        fn_->values[d].is_host_ptr = true;
+        /* La aritmetica de punteros HEREDA la naturaleza de la base: un array
+         * de `malloc` vive en memoria host, pero uno local (`T[N]`, que baja a
+         * ALLOCA) vive en la pila de la VM.  Marcarlo host a ciegas hacia que
+         * el acceso saliera con la instruccion equivocada -- leer memoria VM
+         * como si fuera host -- y el proceso moria al recorrer un array local
+         * vectorizado. */
+        fn_->values[d].is_host_ptr =
+            (base < fn_->values.size()) && fn_->values[base].is_host_ptr;
         ir::IrInstr in{}; in.op = ir::IrOp::ADD; in.type = ir::IrType::PTR;
         in.dst = d; in.operands = {base, i64off}; in.source_line = ln;
         fn_->append(current_block_, std::move(in));
@@ -1037,25 +1113,46 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         const ir::IrValueId c_at = ptr_at(v_c, off);
         const ir::IrValueId start_at = ptr_at(v_start, off);
         if (is_fma) {
-            // c = a*b + d  ->  VEC_FMA (4 ops: {c, d, a, b}, 1 redondeo).
+            // c = a*b +/- d  ->  VEC_FMA (4 ops: {c, d, a, b}, 1 redondeo).
+            // bit 8 del imm = SUB (VFMSUB231: a*b - d).
             const ir::IrValueId b_at = ptr_at(step_base[0], off); // S[0]=Mul b
-            const ir::IrValueId d_at = ptr_at(step_base[1], off); // S[1]=Add d
+            const ir::IrValueId d_at = ptr_at(step_base[1], off); // S[1]=Add/Sub
             ir::IrInstr vf{}; vf.op = ir::IrOp::VEC_FMA; vf.type = elem_ty;
             vf.dst = ir::IR_NO_VALUE;
             vf.operands = {c_at, d_at, start_at, b_at};
-            vf.imm = width;
+            vf.imm = width | (fma_sub ? (1ull << 8) : 0ull);
             vf.source_line = ln;
             fn_->append(current_block_, std::move(vf));
         } else
         for (size_t k = 0; k < S.size(); ++k) {
             const ir::IrValueId src0 = (k == 0) ? start_at : c_at; // acumulador
-            if (S[k].is_scalar) {
+            // Cadena register-resident: el acumulador c del chunk vive en un XMM
+            // (fp0) ENTRE pasos, en vez de round-trip a memoria.  bit 20 =
+            // SRC0_IN_REG (c ya en reg; salta la carga); bit 21 = DST_IN_REG
+            // (deja c en reg; salta el store).  El PRIMER paso carga start de
+            // memoria; el ULTIMO escribe c a memoria.  El interp los IGNORA
+            // (memoria siempre = mismo valor); solo JIT/AOT los honran cuando
+            // n_pieces==1.  Reduce ~2x el trafico de memoria del element-wise.
+            const uint64_t rr = ((k > 0) ? (1ull << 20) : 0ull) |
+                                ((k + 1 < S.size()) ? (1ull << 21) : 0ull);
+            if (S[k].is_scaled_arr) {
+                // c += arr[i]*escalar (VEC_FMA_S lee/escribe c_at; escalar
+                // hoisted, ya negado si Sub).  Siempre k>=1 -> src0 == c_at.
+                const ir::IrValueId leaf_at = ptr_at(step_base[k], off);
+                ir::IrInstr vf{}; vf.op = ir::IrOp::VEC_FMA_S; vf.type = elem_ty;
+                vf.dst = ir::IR_NO_VALUE;
+                vf.operands = {c_at, leaf_at, step_scalar[k]};
+                vf.imm = width | (1ull << 16) |
+                         ((uint64_t)(step_sidx[k] & 0x7) << 17) | rr;
+                vf.source_line = ln;
+                fn_->append(current_block_, std::move(vf));
+            } else if (S[k].is_scalar) {
                 ir::IrInstr vb{}; vb.op = ir::IrOp::VEC_BINOP_S; vb.type = elem_ty;
                 vb.dst = ir::IR_NO_VALUE;
                 vb.operands = {c_at, src0, step_scalar[k]};
                 // imm: subop(8-15) | ancho(0-7) | hoisted(16) | sidx(17-19).
                 vb.imm = ((uint64_t)S[k].subop << 8) | width | (1ull << 16) |
-                         ((uint64_t)(step_sidx[k] & 0x7) << 17);
+                         ((uint64_t)(step_sidx[k] & 0x7) << 17) | rr;
                 vb.source_line = ln;
                 fn_->append(current_block_, std::move(vb));
             } else {
@@ -1063,7 +1160,7 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
                 ir::IrInstr vb{}; vb.op = ir::IrOp::VEC_BINOP; vb.type = elem_ty;
                 vb.dst = ir::IR_NO_VALUE;
                 vb.operands = {c_at, src0, leaf_at};
-                vb.imm = ((uint64_t)S[k].subop << 8) | width;
+                vb.imm = ((uint64_t)S[k].subop << 8) | width | rr;
                 vb.source_line = ln;
                 fn_->append(current_block_, std::move(vb));
             }
@@ -1121,9 +1218,17 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         };
         ir::IrValueId acc = load_el(v_start);
         for (size_t k = 0; k < S.size(); ++k) {
-            const ir::IrValueId rhs =
-                S[k].is_scalar ? step_scalar[k] : load_el(step_base[k]);
-            acc = bin(fop_of(S[k].subop), elem_ty, acc, rhs);
+            if (S[k].is_scaled_arr) {
+                // acc += arr[i]*escalar (escalar ya negado si Sub -> FADD).
+                const ir::IrValueId ai = load_el(step_base[k]);
+                const ir::IrValueId prod =
+                    bin(ir::IrOp::FMUL, elem_ty, ai, step_scalar[k]);
+                acc = bin(ir::IrOp::FADD, elem_ty, acc, prod);
+            } else {
+                const ir::IrValueId rhs =
+                    S[k].is_scalar ? step_scalar[k] : load_el(step_base[k]);
+                acc = bin(fop_of(S[k].subop), elem_ty, acc, rhs);
+            }
         }
         const ir::IrValueId c_at = ptr_at(v_c, off);
         ir::IrInstr st{}; st.op = ir::IrOp::STORE; st.type = elem_ty;
@@ -1403,7 +1508,14 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
     current_block_ = mbody;
     auto ptr_at = [&](ir::IrValueId base, ir::IrValueId i64off) -> ir::IrValueId {
         const ir::IrValueId d = fn_->new_value(ir::IrType::PTR);
-        fn_->values[d].is_host_ptr = true;
+        /* La aritmetica de punteros HEREDA la naturaleza de la base: un array
+         * de `malloc` vive en memoria host, pero uno local (`T[N]`, que baja a
+         * ALLOCA) vive en la pila de la VM.  Marcarlo host a ciegas hacia que
+         * el acceso saliera con la instruccion equivocada -- leer memoria VM
+         * como si fuera host -- y el proceso moria al recorrer un array local
+         * vectorizado. */
+        fn_->values[d].is_host_ptr =
+            (base < fn_->values.size()) && fn_->values[base].is_host_ptr;
         ir::IrInstr in{}; in.op = ir::IrOp::ADD; in.type = ir::IrType::PTR;
         in.dst = d; in.operands = {base, i64off}; in.source_line = ln;
         fn_->append(current_block_, std::move(in));
@@ -1605,7 +1717,14 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
     };
     auto ptr_at = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
         const ir::IrValueId d = fn_->new_value(ir::IrType::PTR);
-        fn_->values[d].is_host_ptr = true;
+        /* La aritmetica de punteros HEREDA la naturaleza de la base: un array
+         * de `malloc` vive en memoria host, pero uno local (`T[N]`, que baja a
+         * ALLOCA) vive en la pila de la VM.  Marcarlo host a ciegas hacia que
+         * el acceso saliera con la instruccion equivocada -- leer memoria VM
+         * como si fuera host -- y el proceso moria al recorrer un array local
+         * vectorizado. */
+        fn_->values[d].is_host_ptr =
+            (base < fn_->values.size()) && fn_->values[base].is_host_ptr;
         ir::IrInstr in{}; in.op = ir::IrOp::ADD; in.type = ir::IrType::PTR;
         in.dst = d; in.operands = {base, off}; in.source_line = ln;
         fn_->append(current_block_, std::move(in));
@@ -1793,6 +1912,8 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     };
     ast::IdentExpr *a_base = nullptr, *b_base = nullptr;
     bool is_fma = false;
+    bool is_scalar_fma = false; // acc += a[i]*c (c invariante) -> FMA con bcast
+    ast::Expr *c_expr = nullptr;
     if (rhs->rhs && rhs->rhs->kind == NodeKind::IndexExpr) {
         // reduccion simple: acc += a[i]
         a_base = check_idx_base(rhs->rhs.get());
@@ -1803,8 +1924,27 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
         if (mul->op != BinOp::Mul || !elem_fp) return false;
         a_base = check_idx_base(mul->lhs.get());
         b_base = check_idx_base(mul->rhs.get());
-        if (!a_base || !b_base) return false;
-        is_fma = true;
+        if (a_base && b_base) {
+            is_fma = true; // a[i]*b[i]
+        } else {
+            // scalar-factor: acc += a[i]*c  o  c*a[i]  (c loop-invariante).
+            // El array queda en a_base; el escalar (invariante) en c_expr.  Se
+            // difunde a un buffer host y se reusa la maquinaria VFMADD.
+            ast::Expr *scal_e = nullptr;
+            if (a_base) {
+                scal_e = mul->rhs.get(); // a[i] * c
+            } else if (b_base) {
+                a_base = b_base;         // c * a[i]  -> array a la izquierda
+                b_base = nullptr;
+                scal_e = mul->lhs.get();
+            } else {
+                return false;
+            }
+            if (!scal_e || mc_expr_refs_ident(scal_e, idx_name)) return false;
+            c_expr = scal_e;
+            is_fma = true;
+            is_scalar_fma = true;
+        }
     } else {
         return false;
     }
@@ -1855,11 +1995,23 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     const ir::IrValueId i_init =
         vl.for_init ? lower_expr(vl.for_init) : lookup(idx_name);
     const ir::IrValueId v_a = lower_expr(a_base);
-    const ir::IrValueId v_b = is_fma ? lower_expr(b_base) : ir::IR_NO_VALUE;
+    // v_b: el array b (dot-product) o el buffer host difundido (scalar-factor,
+    // se llena mas abajo en el entry).  v_c: el escalar (scalar-factor), usado
+    // por la cola directamente.
+    ir::IrValueId v_b = ir::IR_NO_VALUE;
+    ir::IrValueId v_c = ir::IR_NO_VALUE;
+    if (is_scalar_fma) {
+        const ir::IrValueId raw = lower_expr(c_expr);
+        if (raw == ir::IR_NO_VALUE) return false;
+        v_c = cast_if_needed(raw, fn_->values[raw].type, elem_ty, ln);
+    } else if (is_fma) {
+        v_b = lower_expr(b_base);
+    }
     const ir::IrValueId v_N = lower_expr(vl.limit);
     if (acc_binding == ir::IR_NO_VALUE || i_init == ir::IR_NO_VALUE ||
         v_a == ir::IR_NO_VALUE || v_N == ir::IR_NO_VALUE ||
-        (is_fma && v_b == ir::IR_NO_VALUE))
+        (is_fma && !is_scalar_fma && v_b == ir::IR_NO_VALUE) ||
+        (is_scalar_fma && v_c == ir::IR_NO_VALUE))
         return false;
     // Resolver el valor inicial (acc_init) y, si es memory-based, el slot
     // externo (acc_slot_ext) al que escribir el resultado final.
@@ -1892,7 +2044,14 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     };
     auto ptr_at = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
         const ir::IrValueId d = fn_->new_value(ir::IrType::PTR);
-        fn_->values[d].is_host_ptr = true;
+        /* La aritmetica de punteros HEREDA la naturaleza de la base: un array
+         * de `malloc` vive en memoria host, pero uno local (`T[N]`, que baja a
+         * ALLOCA) vive en la pila de la VM.  Marcarlo host a ciegas hacia que
+         * el acceso saliera con la instruccion equivocada -- leer memoria VM
+         * como si fuera host -- y el proceso moria al recorrer un array local
+         * vectorizado. */
+        fn_->values[d].is_host_ptr =
+            (base < fn_->values.size()) && fn_->values[base].is_host_ptr;
         ir::IrInstr in{}; in.op = ir::IrOp::ADD; in.type = ir::IrType::PTR;
         in.dst = d; in.operands = {base, off}; in.source_line = ln;
         fn_->append(current_block_, std::move(in));
@@ -1942,6 +2101,27 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
         az.imm = acc_imm(u, 0); az.source_line = ln;
         fn_->append(entry, std::move(az));
     }
+    // Scalar-factor (acc += a[i]*c): difundir el escalar c a un buffer host de
+    // U*width bytes (U*W elementos) UNA vez.  El VFMADD del cuerpo lo lee como
+    // el "array b" (cada lane = c); la cola escalar usa v_c directamente.  El
+    // buffer cubre el rango de disp del unroll (0..(U-1)*width).
+    if (is_scalar_fma) {
+        v_b = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_b].is_host_ptr = true;
+        ir::IrInstr al{}; al.op = ir::IrOp::ALLOCA; al.type = ir::IrType::I8;
+        al.dst = v_b; al.imm = static_cast<int64_t>(U * width);
+        al.host_alloca = true; al.source_line = ln;
+        fn_->append(entry, std::move(al));
+        for (uint64_t e = 0; e < U * W; ++e) {
+            ir::IrValueId at = v_b;
+            if (e > 0)
+                at = ptr_at(v_b, emit_const(ir::IrType::I64, e * esz, ln));
+            ir::IrInstr st{}; st.op = ir::IrOp::STORE; st.type = elem_ty;
+            st.dst = ir::IR_NO_VALUE; st.operands = {v_c, at};
+            st.source_line = ln;
+            fn_->append(entry, std::move(st));
+        }
+    }
     const ir::IrValueId v_W = emit_const(idx_ty, (uint64_t)W, ln);
     const ir::IrValueId v_UW = emit_const(idx_ty, (uint64_t)(U * W), ln);
     const ir::IrValueId v_esz = emit_const(ir::IrType::I64, esz, ln);
@@ -1986,7 +2166,11 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     const ir::IrValueId off_base =
         bin(ir::IrOp::MUL, ir::IrType::I64, iu64, v_esz);
     const ir::IrValueId a_at0 = ptr_at(v_a, off_base);
-    const ir::IrValueId b_at0 = is_fma ? ptr_at(v_b, off_base) : ir::IR_NO_VALUE;
+    // scalar-factor: b = c_buf FIJO (no avanza con el loop; el VEC_ACC_FMA ya
+    // suma el disp de pieza, que cabe en los U*W elementos del buffer).
+    const ir::IrValueId b_at0 = is_scalar_fma ? v_b
+                                : is_fma ? ptr_at(v_b, off_base)
+                                         : ir::IR_NO_VALUE;
     for (uint8_t u = 0; u < U; ++u) {
         const uint64_t disp = (uint64_t)u * W * esz; // constante de pieza
         ir::IrInstr v{}; v.type = elem_ty; v.dst = ir::IR_NO_VALUE;
@@ -2052,7 +2236,8 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
         const ir::IrValueId off = bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
         const ir::IrValueId a_at = ptr_at(v_a, off);
         if (is_fma) {
-            const ir::IrValueId b_at = ptr_at(v_b, off);
+            // scalar-factor: b = c_buf FIJO (imm=width -> disp 0, dentro de W).
+            const ir::IrValueId b_at = is_scalar_fma ? v_b : ptr_at(v_b, off);
             ir::IrInstr vf{}; vf.op = ir::IrOp::VEC_ACC_FMA; vf.type = elem_ty;
             vf.dst = ir::IR_NO_VALUE;
             vf.operands = {acc_slot, a_at, b_at}; // acc += a*b
@@ -2136,7 +2321,11 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
         const ir::IrValueId off = bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
         const ir::IrValueId ai = load_el(ptr_at(v_a, off));
         ir::IrValueId addend = ai;
-        if (is_fma) {
+        if (is_scalar_fma) {
+            // a[i]*c: el escalar directo (el buffer solo tiene U*W elementos;
+            // en la cola i puede exceder ese rango).
+            addend = bin(ir::IrOp::FMUL, elem_ty, ai, v_c);
+        } else if (is_fma) {
             const ir::IrValueId bi = load_el(ptr_at(v_b, off));
             addend = bin(ir::IrOp::FMUL, elem_ty, ai, bi); // a[i]*b[i]
         }

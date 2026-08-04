@@ -1,12 +1,12 @@
 // select de ENVIO (reparto de carga): un emisor multiplexa el envio de M valores
-// sobre dos canales-worker con vx_chan_select_send_block (envia cada valor a "el
+// sobre dos canales-worker con chan_select_send_block (envia cada valor a "el
 // que acepte primero"); dos receptores acumulan lo que les llega.  El reparto por
 // canal NO es determinista (depende del scheduler) pero la SUMA total y el CONTEO
 // total SI -> verificacion estable.  Termina cerrando los canales: los receptores
 // salen cuando su canal esta cerrado y drenado (recv devuelve 0).
-import "vx_pool" only vx_pool_start, vx_pool_submit, vx_pool_join;
-import "vx_chan" only Chan, vx_chan_new, vx_chan_recv, vx_chan_close,
-                     vx_chan_is_closed, vx_chan_free, vx_chan_select_send_block;
+import std.pool only pool_start, pool_submit, pool_join;
+import std.chan only Chan, chan_new, chan_recv, chan_close,
+                     chan_is_closed, chan_free, chan_select_send_block;
 
 Chan c0;
 Chan c1;
@@ -24,15 +24,15 @@ void sender(i64 a) {
     for (i64 k = 0; k < M; k++) {
         vals[0] = k + 1;
         vals[1] = k + 1;               // mismo valor, va a uno u otro canal
-        vx_chan_select_send_block(&chans[0], &vals[0], 2);
+        chan_select_send_block(&chans[0], &vals[0], 2);
     }
-    vx_chan_close(c0);
-    vx_chan_close(c1);
+    chan_close(c0);
+    chan_close(c1);
 }
 void recv0(i64 a) {
     while (true) {
-        i64 v = vx_chan_recv(c0);
-        if (v == 0 && vx_chan_is_closed(c0)) {
+        i64 v = chan_recv(c0);
+        if (v == 0 && chan_is_closed(c0)) {
             break;                     // cerrado y drenado
         }
         g_s0 += v;
@@ -41,8 +41,8 @@ void recv0(i64 a) {
 }
 void recv1(i64 a) {
     while (true) {
-        i64 v = vx_chan_recv(c1);
-        if (v == 0 && vx_chan_is_closed(c1)) {
+        i64 v = chan_recv(c1);
+        if (v == 0 && chan_is_closed(c1)) {
             break;
         }
         g_s1 += v;
@@ -50,15 +50,15 @@ void recv1(i64 a) {
     }
 }
 i32 main() {
-    c0 = vx_chan_new(1);
-    c1 = vx_chan_new(1);
-    vx_pool_start(3);
-    vx_pool_submit((i64)(cfn(i64) -> void) recv0, 0);
-    vx_pool_submit((i64)(cfn(i64) -> void) recv1, 0);
-    vx_pool_submit((i64)(cfn(i64) -> void) sender, 0);
-    vx_pool_join();
-    vx_chan_free(c0);
-    vx_chan_free(c1);
+    c0 = chan_new(1);
+    c1 = chan_new(1);
+    pool_start(3);
+    pool_submit((i64)(cfn(i64) -> void) recv0, 0);
+    pool_submit((i64)(cfn(i64) -> void) recv1, 0);
+    pool_submit((i64)(cfn(i64) -> void) sender, 0);
+    pool_join();
+    chan_free(c0);
+    chan_free(c1);
     // suma total = 1+2+...+M = M*(M+1)/2; conteo total = M.
     i64 want_sum = M * (M + 1) / 2;
     if ((g_s0 + g_s1) == want_sum && (g_n0 + g_n1) == M) {

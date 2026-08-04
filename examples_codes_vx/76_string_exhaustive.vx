@@ -117,10 +117,10 @@ i32 main() {
     // -----------------------------------------------------------------
     println("--- 4. metricas multi-byte ---");
 
-    println("latin: bytes=${str_bytes(latin)} cps=${str_length(latin)}");
-    println("griego: bytes=${str_bytes(griego)} cps=${str_length(griego)}");
-    println("cjk: bytes=${str_bytes(cjk)} cps=${str_length(cjk)}");
-    println("emoji: bytes=${str_bytes(emoji)} cps=${str_length(emoji)}");
+    println("latin: bytes=${latin.bytes()} cps=${latin.length()}");
+    println("griego: bytes=${griego.bytes()} cps=${griego.length()}");
+    println("cjk: bytes=${cjk.bytes()} cps=${cjk.length()}");
+    println("emoji: bytes=${emoji.bytes()} cps=${emoji.length()}");
 
     // -----------------------------------------------------------------
     // 5. Concatenacion heterogenea.
@@ -129,7 +129,7 @@ i32 main() {
 
     string mix = "ASCII " + griego + " " + emoji;
     println("mix=${mix}");
-    println("mix.bytes=${str_bytes(mix)}");
+    println("mix.bytes=${mix.bytes()}");
 
     // -----------------------------------------------------------------
     // 6. Comparaciones == / != entre strings.
@@ -160,8 +160,8 @@ i32 main() {
     string empty = "";
     string one   = "Z";
 
-    println("empty[${empty}] bytes=${str_bytes(empty)} cps=${str_length(empty)}");
-    println("one[${one}] bytes=${str_bytes(one)} cps=${str_length(one)}");
+    println("empty[${empty}] bytes=${empty.bytes()} cps=${empty.length()}");
+    println("one[${one}] bytes=${one.bytes()} cps=${one.length()}");
 
     // -----------------------------------------------------------------
     // 9. Expresiones complejas dentro de ${}.

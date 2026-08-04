@@ -178,6 +178,7 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
     // que solo hace stores vectoriales como "pura" -> unsound en las
     // relajaciones pure-call).  opaco -> top; VEC_BCAST no toca memoria.
     case IrOp::MEMCPY:
+    case IrOp::MEMSET:
     case IrOp::VEC_UNOP: case IrOp::VEC_BINOP: case IrOp::VEC_BINOP_S:
     case IrOp::VEC_FMA: case IrOp::VEC_BCAST:
     case IrOp::VEC_ACC_ZERO: case IrOp::VEC_ACC_ADD: case IrOp::VEC_ACC_FMA:

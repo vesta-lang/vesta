@@ -100,11 +100,39 @@ Parser::Parser(Lexer &lex, Diagnostics &diags)
 // Consume tokens hasta el final natural de la decl: para decls con
 // cuerpo `{ ... }`, hasta cerrar el `}` matching; para decls simples
 // (typedef, using, global var), hasta el siguiente `;` top-level.
-void Parser::skip_target_skipped_decl() {
+void Parser::skip_target_skipped_decl(const std::string &spec) {
     int brace_depth = 0;
     bool entered_body = false;
+    // Nombre de lo que se esta descartando.  No se parsea la decl, asi que se
+    // deduce del flujo de tokens con las mismas reglas de siempre: el
+    // identificador que precede al primer `(` es el de una funcion; el que
+    // sigue a class/struct/enum es el del tipo; y para un typedef vale el
+    // ultimo identificador antes del `;`, que es donde va el nombre en las
+    // tres formas.  Sirve para que quien luego use ese simbolo reciba "existe
+    // pero para otro objetivo" en vez de "no declarado".
+    std::string nombre;
+    std::string ult_ident;
+    bool esperando_tipo = false;
+    bool cerrado = false;
     while (current_.kind != TokenKind::END_OF_FILE) {
         const auto k = current_.kind;
+        if (!cerrado && brace_depth == 0) {
+            if (esperando_tipo) {
+                if (k == TokenKind::IDENTIFIER) {
+                    nombre = current_.lexeme;
+                    cerrado = true;
+                }
+                esperando_tipo = false;
+            } else if (k == TokenKind::KW_CLASS || k == TokenKind::KW_STRUCT ||
+                       k == TokenKind::KW_ENUM) {
+                esperando_tipo = true;
+            } else if (k == TokenKind::IDENTIFIER) {
+                ult_ident = current_.lexeme;
+            } else if (k == TokenKind::LPAREN && !ult_ident.empty()) {
+                nombre = ult_ident; // funcion: el ident antes del '('
+                cerrado = true;
+            }
+        }
         if (k == TokenKind::LBRACE) {
             ++brace_depth;
             entered_body = true;
@@ -112,7 +140,15 @@ void Parser::skip_target_skipped_decl() {
         } else if (k == TokenKind::RBRACE) {
             if (brace_depth > 0) --brace_depth;
             (void)consume();
-            if (entered_body && brace_depth == 0) break;
+            if (entered_body && brace_depth == 0) {
+                // Hay declaraciones que cierran con cuerpo Y punto y coma
+                // (`typedef X Y new { ... };`, `struct S { ... };` al estilo
+                // C).  Sin consumirlo aqui, ese `;` quedaba suelto y el
+                // siguiente parse fallaba con un "se esperaba un tipo al
+                // inicio de la declaracion" que no tenia nada que ver.
+                if (current_.kind == TokenKind::SEMICOLON) (void)consume();
+                break;
+            }
         } else if (k == TokenKind::SEMICOLON && brace_depth == 0 &&
                    !entered_body) {
             (void)consume();
@@ -120,6 +156,13 @@ void Parser::skip_target_skipped_decl() {
         } else {
             (void)consume();
         }
+    }
+    // Sin `(` ni keyword de tipo (typedef, using, global): el nombre es el
+    // ultimo identificador que se vio.
+    if (!cerrado) nombre = ult_ident;
+    if (!nombre.empty()) {
+        auto &v = target_skipped_[nombre];
+        if (std::find(v.begin(), v.end(), spec) == v.end()) v.push_back(spec);
     }
 }
 
@@ -767,6 +810,8 @@ std::unique_ptr<ast::ModuleNode> Parser::parse_program() {
     }
     // @NoExceptions (sticky) se aplica a todo el modulo.
     mod->no_exceptions = module_no_exceptions_;
+    mod->uses_conditional_target = module_uses_target_;
+    mod->target_skipped = target_skipped_;
     return mod;
 }
 
@@ -1009,7 +1054,7 @@ void Parser::apply_member_contracts_(const MemberContracts &mc,
 //
 //  Campo `when: <expr>` -- contrato CONDICIONAL.  El coste TOTAL de una
 //  funcion depende del target cuando algun callee tiene cuerpos por-arch de
-//  coste distinto: `atomic<T>::exchange` llama a `vx_atomic_swap64`, que en
+//  coste distinto: `atomic<T>::exchange` llama a `atomic_swap64`, que en
 //  x86-64 es un bucle CAS escrito en Vesta (O(n)) y en arm64 el LL/SC nativo
 //  (O(1)).  Sin `when:` no habria ningun valor declarable correcto en las dos.
 //  La expresion es la MISMA de @Target (os/arch/cpu/semver/mode con &&/||/! y
@@ -1398,10 +1443,12 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
        helper objetivo (hoy "memcpy"); vacio => no es override. */
     std::string top_helper_override_target;
     bool top_is_introspect = false;
+    bool top_is_abstract = false; /* @Abstract struct: no instanciable, solo base */
     bool top_is_overlay = false;  /* overlay F1: @overlay struct (vista) */
     bool top_is_macro = false;    /* A.43.16: @Macro */
     bool top_is_pure = false;     /* A.43.20: @Pure -- memoizable */
     bool top_target_skip = false; /* L.24: @Target no matchea */
+    std::string top_target_spec;  /* la condicion que no se cumplio */
     // Subsistema de coste (modo --analyze): @complexity(O(...)[, n=...]).
     std::string top_complexity_expr;          // expr de coste normalizada
     std::vector<std::string> top_complexity_vars; // bindings `n = <expr>`
@@ -1460,6 +1507,8 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                 top_is_async = true;
             else if (current_.lexeme == "Introspect")
                 top_is_introspect = true;
+            else if (current_.lexeme == "Abstract")
+                top_is_abstract = true;
             else if (current_.lexeme == "overlay")
                 top_is_overlay = true;
             else if (current_.lexeme == "Macro")
@@ -1764,6 +1813,12 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                 continue;
             }
             if (is_target) {
+                // Lo que este modulo declara depende del objetivo, asi que su
+                // `.vxi` no puede compartirse entre targets (lo ata el emisor
+                // via VxiHeader::target_offset).  Se marca ANTES de evaluar la
+                // condicion a proposito: el modulo depende del objetivo tanto
+                // si la variante casa como si no.
+                module_uses_target_ = true;
                 // L.24: @Target("os:linux"|"arch:x86_64"|...).  Si la
                 // condicion NO matchea con los build tags actuales,
                 // marcamos top_target_skip para descartar la decl.
@@ -1798,6 +1853,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                 }
                 if (!target_matches_(spec)) {
                     top_target_skip = true;
+                    top_target_spec = spec;
                 }
             } else if (current_.kind == TokenKind::LPAREN) {
                 int depth = 0;
@@ -1823,7 +1879,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         // ejecute synchronize() (que descartaria tokens validos de la
         // siguiente decl).
         last_decl_was_target_skip_ = true;
-        skip_target_skipped_decl();
+        skip_target_skipped_decl(top_target_spec);
         return nullptr;
     }
     last_decl_was_target_skip_ = false;
@@ -1927,6 +1983,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     if (current_.kind == TokenKind::KW_STRUCT) {
         auto sd = parse_struct_decl(top_is_overlay);
         if (sd && top_is_introspect) sd->is_introspect = true;
+        if (sd && top_is_abstract) sd->is_abstract = true;
         if (sd && top_is_overlay) sd->is_overlay = true;
         if (sd) {
             sd->contract_pod = top_t_pod;
@@ -2465,6 +2522,12 @@ std::unique_ptr<ast::ParamDecl> Parser::parse_param() {
         // funcion sea @Naked.
         return p;
     }
+    // ABI custom por funcion: `register("rXX") T name` fija el registro fisico
+    // en el que este parametro se recibe (y donde el caller lo coloca).  Mismo
+    // patron que la storage-class de var-decls; aqui el nombre se guarda en
+    // ParamDecl::abi_reg y lo valida el type checker.  Cero shift para wrappers
+    // de syscall/FFI (`register("rax") id, register("rdi") a1, ...`).
+    std::string param_abi_reg = parse_opt_param_reg();
     // Z.6: aceptar `shared T name` en params (con disambiguation vs
     // `shared<T>` smart pointer).  Hoy es sugar documental; el type
     // system trata `T` y `shared T` como mismo tipo en parametros
@@ -2482,6 +2545,7 @@ std::unique_ptr<ast::ParamDecl> Parser::parse_param() {
     }
     auto p = std::make_unique<ast::ParamDecl>();
     p->loc = current_.loc;
+    p->abi_reg = std::move(param_abi_reg);
     p->type = parse_type_node();
     // Parametro puntero a funcion estilo C: `R (*name)(params)`.
     {
@@ -2565,6 +2629,15 @@ bool Parser::looks_like_cast() const noexcept {
 
     const Token &first = mut_lex.peek_at(off);
     const TokenKind first_kind = first.kind;
+    // Tipo CUALIFICADO `ns.Tipo` donde `ns` es un namespace importado
+    // (p.ej. `(types.size_t) 40`).  Simetrico con `looks_like_var_decl`,
+    // que ya acepta `ns.Tipo name`.  El resto de la validacion (cierre `)`
+    // + expr-starter tras el `)`) desambigua de `(obj.field) - x`.
+    const bool is_qualified_ns =
+        first_kind == TokenKind::IDENTIFIER &&
+        imported_namespaces_.count(first.lexeme) > 0 &&
+        mut_lex.peek_at(off + 1).kind == TokenKind::DOT &&
+        mut_lex.peek_at(off + 2).kind == TokenKind::IDENTIFIER;
     const bool is_type_starter =
         primitive_kind_from_token(first_kind) != PrimitiveKind::COUNT ||
         first_kind == TokenKind::KW_FN || first_kind == TokenKind::KW_CFN ||
@@ -2574,9 +2647,16 @@ bool Parser::looks_like_cast() const noexcept {
         // Single-pass: el alias debe estar declarado antes
         // del cast en el archivo.
         || (first_kind == TokenKind::IDENTIFIER &&
-            declared_aliases_.count(first.lexeme) > 0);
+            declared_aliases_.count(first.lexeme) > 0)
+        || is_qualified_ns;
     if (!is_type_starter) return false;
     ++off;
+    // Tipo cualificado: saltar los pares `DOT IDENT` (`.Tipo`, `.Sub.Tipo`).
+    if (is_qualified_ns) {
+        while (mut_lex.peek_at(off).kind == TokenKind::DOT &&
+               mut_lex.peek_at(off + 1).kind == TokenKind::IDENTIFIER)
+            off += 2;
+    }
 
     // Tipo funcion `fn(params) -> ret`: saltar `(...)` balanceado + el
     // `-> tipo_retorno` para reconocer `(fn(...)->R) expr` como cast.
@@ -2721,6 +2801,24 @@ bool Parser::looks_like_compound_literal() const noexcept {
     if (mut_lex.peek_at(off).kind != TokenKind::RPAREN) return false;
     ++off;
     return mut_lex.peek_at(off).kind == TokenKind::LBRACE;
+}
+
+std::string Parser::parse_opt_param_reg() {
+    // Patron exacto `register ( "reg" )`; cualquier otra cosa se deja intacta.
+    if (current_.kind == TokenKind::IDENTIFIER &&
+        current_.lexeme == "register" &&
+        lex_.peek_at(0).kind == TokenKind::LPAREN &&
+        lex_.peek_at(1).kind == TokenKind::STRING_LIT &&
+        lex_.peek_at(2).kind == TokenKind::RPAREN) {
+        (void)consume();                    // 'register'
+        (void)consume();                    // '('
+        std::string reg = current_.str_val; // nombre del registro
+        (void)consume();                    // STRING_LIT
+        (void)expect(TokenKind::RPAREN,
+                     "se esperaba ')' tras register(\"reg\")");
+        return reg;
+    }
+    return std::string();
 }
 
 bool Parser::looks_like_register_storage() const noexcept {
@@ -2933,14 +3031,23 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
         fn->is_raw = is_raw; // cfn(...) -> puntero a funcion crudo (8 bytes)
         // Parametros: lista de tipos separados por coma.  Vacio para
         // `fn() -> R`.  No se admiten nombres aqui (un type-node solo
-        // describe la firma, no introduce parametros con nombre).
+        // describe la firma, no introduce parametros con nombre).  Cada tipo
+        // puede llevar `register("rXX")` delante: la ABI custom forma parte del
+        // tipo (dos cfn con ABIs distintas son tipos incompatibles).
+        bool any_abi = false;
         while (current_.kind != TokenKind::RPAREN &&
                current_.kind != TokenKind::END_OF_FILE) {
+            std::string abi = parse_opt_param_reg();
+            if (!abi.empty()) any_abi = true;
             auto pt = parse_type_node();
             if (!pt) break;
             fn->param_types.push_back(std::move(pt));
+            fn->param_abi_regs.push_back(std::move(abi));
             if (!match(TokenKind::COMMA)) break;
         }
+        // Normalizar: si ningun param declaro ABI custom, dejar el vector vacio
+        // (== ABI estandar; el operator== de Type ya trata vacio == todo-"").
+        if (!any_abi) fn->param_abi_regs.clear();
         (void)expect(
             TokenKind::RPAREN,
             "se esperaba ')' al cerrar los parametros del tipo funcion");
@@ -3216,15 +3323,20 @@ bool Parser::try_parse_c_func_ptr_(std::unique_ptr<ast::TypeNode> &ret,
     // (estilo C `R (*f)(int a, int b)`) se ignoran.
     if (!(current_.kind == TokenKind::KW_VOID &&
           ml.peek_at(0).kind == TokenKind::RPAREN)) {
+        bool any_abi = false;
         while (current_.kind != TokenKind::RPAREN &&
                current_.kind != TokenKind::END_OF_FILE) {
+            std::string abi = parse_opt_param_reg();
+            if (!abi.empty()) any_abi = true;
             auto pt = parse_type_node();
             if (!pt) break;
             // Nombre de parametro opcional (se descarta).
             if (current_.kind == TokenKind::IDENTIFIER) (void)consume();
             fn->param_types.push_back(std::move(pt));
+            fn->param_abi_regs.push_back(std::move(abi));
             if (!match(TokenKind::COMMA)) break;
         }
+        if (!any_abi) fn->param_abi_regs.clear();
     } else {
         (void)consume(); // 'void'
     }
@@ -3796,15 +3908,18 @@ std::unique_ptr<ast::TypeAliasDecl> Parser::parse_typedef_decl() {
                     is_public = true;
                 }
                 if (current_.kind != TokenKind::IDENTIFIER ||
-                    current_.lexeme != "explicit") {
-                    error_here("se esperaba 'explicit' [from|to] T;"
+                    (current_.lexeme != "explicit" &&
+                     current_.lexeme != "implicit")) {
+                    error_here("se esperaba 'explicit' o 'implicit' [from|to] T;"
                                " dentro del bloque de typedef");
                     break;
                 }
-                (void)consume(); // 'explicit'
+                const bool es_implicita = (current_.lexeme == "implicit");
+                (void)consume(); // 'explicit' | 'implicit'
                 if (current_.kind != TokenKind::IDENTIFIER ||
                     (current_.lexeme != "from" && current_.lexeme != "to")) {
-                    error_here("se esperaba 'from' o 'to' tras 'explicit'");
+                    error_here("se esperaba 'from' o 'to' tras "
+                               "'explicit'/'implicit'");
                     break;
                 }
                 const bool is_from = (current_.lexeme == "from");
@@ -3820,10 +3935,16 @@ std::unique_ptr<ast::TypeAliasDecl> Parser::parse_typedef_decl() {
                 ast::TypeAliasDecl::ExplicitConv ec;
                 ec.type = std::move(tn);
                 ec.is_public = is_public;
-                if (is_from)
+                if (es_implicita) {
+                    if (is_from)
+                        a->implicit_from.push_back(std::move(ec));
+                    else
+                        a->implicit_to.push_back(std::move(ec));
+                } else if (is_from) {
                     a->explicit_from.push_back(std::move(ec));
-                else
+                } else {
                     a->explicit_to.push_back(std::move(ec));
+                }
             }
             (void)expect(TokenKind::RBRACE,
                          "se esperaba '}' tras el bloque del typedef");
@@ -3989,9 +4110,18 @@ Parser::parse_import_decl(bool is_public_reexport) {
     // Opcional: only A [as A2], B [as B2], ...  (contextual 'only').
     if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "only") {
         (void)consume(); // 'only'
+        // `only *` -- glob import: trae TODOS los simbolos publicos del modulo
+        // al scope (estilo Rust `use ns::*;`).  Con `public import` ademas los
+        // re-exporta (`pub use ns::*;`).  Evita listar decenas de simbolos (p.ej.
+        // los 400+ __NR_* de una tabla de syscalls).
+        if (current_.kind == TokenKind::STAR) {
+            (void)consume(); // '*'
+            im->only_all = true;
+        } else
         for (;;) {
             if (current_.kind != TokenKind::IDENTIFIER) {
-                error_here("se esperaba un identificador en la lista 'only'");
+                error_here("se esperaba un identificador o '*' en la lista "
+                           "'only'");
                 return nullptr;
             }
             ast::ImportDecl::OnlySymbol os;
@@ -4020,6 +4150,23 @@ Parser::parse_import_decl(bool is_public_reexport) {
     }
 
     (void)expect(TokenKind::SEMICOLON, "se esperaba ';' al final de 'import'");
+
+    // Registrar el segmento accesor del namespace para que `looks_like_cast`
+    // reconozca un cast al tipo cualificado `(ns.Tipo) x`.  El accesor es el
+    // alias (`import a.b.c as x;` -> `x`) o el ultimo segmento del path
+    // (`import a.b.c;` -> `c`; forma por-path `import "a/b/c";` -> `c`).  Se
+    // registra para AMBAS formas (with/without `only`): el acceso cualificado
+    // `ns.Tipo` es valido aunque el import traiga tambien simbolos desnudos.
+    {
+        std::string accessor = im->alias;
+        if (accessor.empty()) {
+            const std::string &p = im->path;
+            // Ultimo segmento tras '.' (namespace) o '/' (path).
+            size_t cut = p.find_last_of("./");
+            accessor = (cut == std::string::npos) ? p : p.substr(cut + 1);
+        }
+        if (!accessor.empty()) imported_namespaces_.insert(accessor);
+    }
     return im;
 }
 
@@ -4828,6 +4975,24 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
     if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "where") {
         parse_where_clause(s->type_bounds);
     }
+    // Herencia estatica opcional via ':' (mismo patron que parse_class_decl):
+    // `struct D : Base` (base) + lista opcional de interfaces `, IFoo, IBar`.
+    // El type checker distingue cual es el struct base y cuales interfaces.
+    if (current_.kind == TokenKind::COLON) {
+        (void)consume();
+        if (current_.kind != TokenKind::IDENTIFIER) {
+            error_here("se esperaba un nombre de struct base o interface tras ':'");
+            return nullptr;
+        }
+        s->super_name = consume().lexeme;
+        while (current_.kind == TokenKind::COMMA) {
+            (void)consume();
+            if (current_.kind == TokenKind::IDENTIFIER)
+                s->interface_names.push_back(consume().lexeme);
+            else
+                break;
+        }
+    }
     (void)expect(TokenKind::LBRACE,
                  "se esperaba '{' al abrir el cuerpo del struct");
 
@@ -4844,17 +5009,49 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
         // libreria estandar que no declara los contratos que el lenguaje ofrece
         // esta diciendo lo contrario de lo que hace.
         MemberContracts mc;
-        parse_member_contracts_(mc);
+        // Anotaciones de metodo en cualquier orden: contratos de huella
+        // (@pure/@nothrow/...) mezclables con `@Virtual` (dispatch dinamico
+        // opt-in por metodo).  parse_member_contracts_ hace return al ver una
+        // anotacion que no es contrato, asi que alternamos hasta agotar ambos.
+        bool annot_virtual = false;
+        bool annot_override = false;
+        for (;;) {
+            parse_member_contracts_(mc);
+            if (current_.kind == TokenKind::AT &&
+                lex_.peek_at(0).kind == TokenKind::IDENTIFIER &&
+                (lex_.peek_at(0).lexeme == "Virtual" ||
+                 lex_.peek_at(0).lexeme == "Override")) {
+                (void)consume(); // '@'
+                const std::string an = consume().lexeme;
+                if (an == "Virtual") annot_virtual = true;
+                else annot_override = true; // @Override en un metodo de struct
+                continue;
+            }
+            break;
+        }
         // Modificadores de acceso opcionales en el miembro.  Los
-        // structs son flat: aceptamos public/private (informativo;
-        // sin enforcement por ahora) pero NO static/final/virtual.
+        // structs son flat: aceptamos public/private (informativo; sin
+        // enforcement por ahora) y `static` en METODOS (constructores/factorias
+        // tipo `Box.zero()`: no toman `this`, se llaman via `Struct.metodo(...)`).
         uint8_t access = 0; // 0 = public/default, 1 = private
+        bool is_static = false;
+        bool is_comptime_member = false;
         for (;;) {
             if (current_.kind == TokenKind::KW_PUBLIC) {
                 access = 0;
                 (void)consume();
             } else if (current_.kind == TokenKind::KW_PRIVATE) {
                 access = 1;
+                (void)consume();
+            } else if (current_.kind == TokenKind::KW_STATIC) {
+                is_static = true;
+                (void)consume();
+            } else if (current_.kind == TokenKind::IDENTIFIER &&
+                       current_.lexeme == "comptime") {
+                // `comptime` miembro: campo solo-compile-time o
+                // constructor/metodo comptime.  IDENTIFIER contextual (no
+                // keyword global) para no reservar el nombre.
+                is_comptime_member = true;
                 (void)consume();
             } else {
                 break;
@@ -4883,6 +5080,72 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
                 continue;
             }
             (void)expect(TokenKind::RPAREN, "se esperaba ')' tras destructor");
+            m->body = parse_method_body(/*is_void=*/true);
+            s->methods.push_back(std::move(m));
+            continue;
+        }
+
+        // Constructor del struct: el nombre del miembro coincide con el del
+        // struct y va inmediatamente seguido de '('.  Mismo patron que en clase
+        // (parser.cpp caso 1 de parse_class_decl); baja a `<Struct>__ctor(this,
+        // args...)` con SRET (value-type: `this` es un PTR al buffer del struct,
+        // sin GC ni calloc).  Debe detectarse ANTES del caso campo/metodo porque
+        // `u128(...)` empieza por el propio nombre de tipo.
+        // F1b: constructor `comptime T(expr e) { ... }` -- se ejecuta en
+        // compile-time (ComptimeVM) y materializa el struct; base de los
+        // literales de tipo usuario.  El `comptime` es opcional y precede al
+        // nombre del ctor.  Se detecta con peek para no consumirlo si lo que
+        // sigue no es realmente un ctor de este struct.
+        bool ctor_is_comptime = false;
+        if (current_.kind == TokenKind::IDENTIFIER &&
+            current_.lexeme == "comptime" &&
+            lex_.peek_at(0).kind == TokenKind::IDENTIFIER &&
+            lex_.peek_at(0).lexeme == s->name &&
+            lex_.peek_at(1).kind == TokenKind::LPAREN) {
+            (void)consume(); // 'comptime'
+            ctor_is_comptime = true;
+        }
+        if (current_.kind == TokenKind::IDENTIFIER &&
+            current_.lexeme == s->name &&
+            lex_.peek_at(0).kind == TokenKind::LPAREN) {
+            auto m = std::make_unique<ast::ClassMethodDecl>();
+            m->loc = current_.loc;
+            m->name = consume().lexeme;
+            m->is_constructor = true;
+            // El `comptime` puede venir inline (`comptime T(`) o como
+            // modificador consumido por el loop de arriba (`public comptime T(`).
+            m->is_comptime = ctor_is_comptime || is_comptime_member;
+            m->return_type = nullptr; // void implicito
+            m->access = access;
+            (void)expect(TokenKind::LPAREN,
+                         "se esperaba '(' tras nombre del constructor");
+            // Usar parse_param() (no parse_type_node directo) para reconocer un
+            // parametro `expr` (captura el texto crudo del literal en el call
+            // site), necesario para el ctor comptime de literales.
+            while (current_.kind != TokenKind::RPAREN &&
+                   current_.kind != TokenKind::END_OF_FILE) {
+                auto p = parse_param();
+                if (!p) {
+                    synchronize();
+                    break;
+                }
+                m->params.push_back(std::move(p));
+                if (!match(TokenKind::COMMA)) break;
+            }
+            (void)expect(
+                TokenKind::RPAREN,
+                "se esperaba ')' al cerrar parametros del constructor");
+            // F1b: registrar las posiciones de los params `expr` bajo el nombre
+            // del struct, para que el call site `T(literal)` capture el texto
+            // crudo del literal (misma tabla que usan los @Macro con `expr`).
+            {
+                std::vector<int> positions;
+                for (size_t i = 0; i < m->params.size(); ++i)
+                    if (m->params[i] && m->params[i]->is_expr_capture)
+                        positions.push_back((int)i);
+                if (!positions.empty())
+                    macro_expr_params_[s->name] = std::move(positions);
+            }
             m->body = parse_method_body(/*is_void=*/true);
             s->methods.push_back(std::move(m));
             continue;
@@ -4981,6 +5244,10 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
             m->name = std::move(member_name);
             m->return_type = std::move(type_node);
             m->access = access;
+            m->is_static = is_static; // `static`: factoria/constructor sin this
+            m->is_comptime = is_comptime_member; // `comptime` metodo
+            m->is_virtual = annot_virtual; // `@Virtual`: dispatch dinamico
+            m->is_override = annot_override;
             m->method_type_params = method_tparams;
             m->type_bounds = method_tbounds;
             (void)consume(); // '('
@@ -5026,6 +5293,8 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
         // Campo.  Reusa el manejo de bit fields del codigo previo.
         ast::StructFieldDecl f;
         f.loc = mloc;
+        f.is_static = is_static; // `static <T> nombre;` -> storage por-tipo
+        f.is_comptime = is_comptime_member; // `comptime T campo` -> solo compile-time
         // Clon del tipo BASE (sin dims de array) para el multi-declarador C
         // `T a, b, c;`: cada declarador extra reutiliza el mismo tipo base.
         auto base_type_clone = clone_type_node_td_(type_node.get());
@@ -5147,6 +5416,18 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
             (void)consume(); // '='
             f.default_init = parse_expr();
         }
+        // Campo `static`: sintetizar su storage como global `<Struct>__<campo>`
+        // (una sola por tipo).  El campo queda en s->fields con is_static para que
+        // el type checker lo registre en static_fields y NO lo cuente en el layout
+        // de instancia; `Struct.campo` resuelve a esta global.
+        if (f.is_static) {
+            auto gvar = std::make_unique<ast::GlobalVarDecl>();
+            gvar->loc = f.loc;
+            gvar->name = s->name + "__" + f.name;
+            gvar->type = clone_type_node_td_(f.type.get());
+            gvar->is_public = s->is_public;
+            pending_before_decls_.push_back(std::move(gvar));
+        }
         s->fields.push_back(std::move(f));
         // Multi-declarador C `T a, b, c;`: cada declarador extra reutiliza el
         // tipo BASE (clon), con sus propias dims de array y bit-width opcionales.
@@ -5182,6 +5463,16 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
             if (current_.kind == TokenKind::ASSIGN) {
                 (void)consume();
                 g.default_init = parse_expr();
+            }
+            // `static` aplica a toda la linea del declarador.
+            g.is_static = is_static;
+            if (g.is_static) {
+                auto gvar = std::make_unique<ast::GlobalVarDecl>();
+                gvar->loc = g.loc;
+                gvar->name = s->name + "__" + g.name;
+                gvar->type = clone_type_node_td_(g.type.get());
+                gvar->is_public = s->is_public;
+                pending_before_decls_.push_back(std::move(gvar));
             }
             s->fields.push_back(std::move(g));
         }
@@ -6301,7 +6592,32 @@ std::unique_ptr<ast::BlockStmt> Parser::parse_block() {
     return b;
 }
 
+/**
+ * @brief Parsea una sentencia y le pone su EXTENSION real.
+ *
+ * El nodo se queda con la posicion de su primer token, cuya longitud es la de
+ * ESE TOKEN y no la de la sentencia: una que empiece por `return` media seis
+ * caracteres, los de la palabra clave.  Al subrayar un fallo se marcaba la
+ * palabra clave en vez de lo que se estaba evaluando.
+ *
+ * Aqui se mide de verdad: del primer byte de la sentencia al ultimo consumido.
+ * Se hace en el envoltorio y no en cada rama porque son decenas y bastaria
+ * olvidar una para que volviera a mentir en ese caso concreto.
+ *
+ * @return La sentencia.
+ */
 std::unique_ptr<ast::Stmt> Parser::parse_statement() {
+    const uint32_t ini = current_.loc.offset;
+    auto st = parse_statement_inner();
+    if (st && st->loc.offset >= ini) {
+        // El final es donde empieza el token que YA no es de la sentencia.
+        const uint32_t fin = current_.loc.offset;
+        if (fin > st->loc.offset) st->loc.length = fin - st->loc.offset;
+    }
+    return st;
+}
+
+std::unique_ptr<ast::Stmt> Parser::parse_statement_inner() {
     // `label:` -- declaracion de etiqueta para `goto`.  Detectada
     // como IDENT seguido inmediatamente de COLON (sin espacio
     // semantico en medio).  La etiqueta se modela como un statement
@@ -6541,6 +6857,20 @@ std::unique_ptr<ast::Stmt> Parser::parse_statement() {
     case TokenKind::KW_CONST: {
         (void)consume();
         return parse_var_decl_stmt(true);
+    }
+    case TokenKind::KW_STATIC: {
+        // `static [const]? <T> <n> = init;` local: var-decl con duracion
+        // ESTATICA (una instancia, init-once).  Persiste entre llamadas.
+        (void)consume(); // 'static'
+        bool sc = false;
+        if (current_.kind == TokenKind::KW_CONST) {
+            (void)consume();
+            sc = true;
+        }
+        auto vd = parse_var_decl_stmt(sc);
+        if (vd && vd->kind == ast::NodeKind::VarDeclStmt)
+            static_cast<ast::VarDeclStmt *>(vd.get())->is_static = true;
+        return vd;
     }
     case TokenKind::KW_BREAK: {
         auto s = std::make_unique<ast::BreakStmt>();
@@ -7203,7 +7533,27 @@ std::unique_ptr<ast::Stmt> Parser::parse_asm_stmt() {
 // ---------------------------------------------------------------------
 
 std::unique_ptr<ast::Expr> Parser::parse_expr() {
-    return parse_assignment();
+    /* Misma medida que en las sentencias: el nodo se queda con la posicion de su
+     * primer token y la longitud de ESE token, no la de la expresion.  Aqui se
+     * mide lo que de verdad ocupa, que es lo que permite subrayar `x / y` y no
+     * solo la `x`.  En el envoltorio para que valga para todas las formas de
+     * expresion sin tener que acordarse en cada una. */
+    const vx::SourceLoc ini = current_.loc;
+    auto e = parse_assignment();
+    if (e && e->loc.offset >= ini.offset) {
+        /* Una expresion EMPIEZA donde empieza su primer token.  El nodo de una
+         * operacion binaria se situa donde se creo -- en el operando derecho --
+         * asi que tomar su posicion dejaba fuera todo lo de la izquierda:
+         * `x / this.valor` se subrayaba desde `this`. */
+        const uint32_t fin = current_.loc.offset;
+        if (fin > ini.offset) {
+            e->loc.line = ini.line;
+            e->loc.column = ini.column;
+            e->loc.offset = ini.offset;
+            e->loc.length = fin - ini.offset;
+        }
+    }
+    return e;
 }
 
 std::unique_ptr<ast::Expr> Parser::parse_assignment() {
@@ -7255,6 +7605,30 @@ std::unique_ptr<ast::Expr> Parser::parse_ternary() {
     return t;
 }
 
+/**
+ * @brief Hace que un tramo abarque desde donde empieza @c ini hasta donde
+ *        acaba el token @c fin.
+ *
+ * Los postfijos (`a.b`, `a->b`) guardaban como posicion la del OPERADOR, que
+ * dice donde esta el punto pero no donde empieza ni acaba la expresion.  Sin
+ * eso no se puede recortar el fuente para nombrarla, y al intentarlo salia el
+ * propio punto.  Como cada nivel vuelve a construir sobre el anterior, el
+ * tramo crece solo y una cadena `a.b.c` acaba sabiendo lo que ocupa.
+ *
+ * @param dst Tramo a corregir (se modifica).
+ * @param ini Tramo del operando por el que empieza la expresion.
+ * @param fin Ultimo token que forma parte de ella.
+ */
+static void extender_tramo(SourceLoc &dst, const SourceLoc &ini,
+                           const Token &fin) {
+    if (ini.offset == 0 || ini.offset > dst.offset) return;
+    const uint32_t final_ = fin.loc.offset + (uint32_t)fin.lexeme.size();
+    dst.line = ini.line;
+    dst.column = ini.column;
+    dst.offset = ini.offset;
+    if (final_ > dst.offset) dst.length = final_ - dst.offset;
+}
+
 // Helper: macro-like factory para los niveles binarios izquierda-asociativos.
 // Lo escribimos a mano en cada nivel en lugar de via macro/template para que
 // el optimizador inlinee con visibilidad completa.
@@ -7265,6 +7639,22 @@ static std::unique_ptr<ast::Expr> make_binop(ast::BinOp op,
     auto b = std::make_unique<ast::BinaryExpr>();
     b->loc = loc;
     b->op = op;
+    /* Una operacion binaria EMPIEZA donde empieza su operando izquierdo y
+     * ACABA donde acaba el derecho.  Se le pasaba la posicion del OPERADOR, con
+     * lo que al subrayar un fallo se marcaba desde el signo -- o desde el
+     * operando derecho -- en vez de la operacion entera.  Como el nivel de
+     * arriba vuelve a construir con el resultado de este, la extension crece
+     * sola y cada subexpresion acaba sabiendo lo que ocupa. */
+    if (lhs && lhs->loc.offset > 0 && lhs->loc.offset <= b->loc.offset) {
+        const uint32_t fin =
+            (rhs && rhs->loc.offset >= lhs->loc.offset)
+                ? (rhs->loc.offset + rhs->loc.length)
+                : (b->loc.offset + b->loc.length);
+        b->loc.line = lhs->loc.line;
+        b->loc.column = lhs->loc.column;
+        b->loc.offset = lhs->loc.offset;
+        if (fin > b->loc.offset) b->loc.length = fin - b->loc.offset;
+    }
     b->lhs = std::move(lhs);
     b->rhs = std::move(rhs);
     return b;
@@ -7937,8 +8327,14 @@ std::unique_ptr<ast::Expr> Parser::parse_postfix() {
             }
             auto fa = std::make_unique<ast::FieldAccessExpr>();
             fa->loc = loc;
+            const SourceLoc ini_fa = expr ? expr->loc : loc;
             fa->base = std::move(expr);
-            fa->field_name = consume().lexeme;
+            const Token tk_campo = consume();
+            fa->field_name = tk_campo.lexeme;
+            /* El tramo de `a.b` es `a.b` entero, no el punto.  Guardar solo
+             * el operador dejaba la expresion sin donde empieza ni cuanto
+             * ocupa, y al recortar el fuente para nombrarla salia ".". */
+            extender_tramo(fa->loc, ini_fa, tk_campo);
             expr = std::move(fa);
             break;
         }
@@ -7958,11 +8354,15 @@ std::unique_ptr<ast::Expr> Parser::parse_postfix() {
             auto deref = std::make_unique<ast::UnaryExpr>();
             deref->loc = loc;
             deref->op = ast::UnOp::Deref;
+            const SourceLoc ini_fa = expr ? expr->loc : loc;
             deref->operand = std::move(expr);
             auto fa = std::make_unique<ast::FieldAccessExpr>();
             fa->loc = loc;
             fa->base = std::move(deref);
-            fa->field_name = consume().lexeme;
+            const Token tk_campo = consume();
+            fa->field_name = tk_campo.lexeme;
+            // Igual que `a.b`: el tramo es `a->b` entero (ver arriba).
+            extender_tramo(fa->loc, ini_fa, tk_campo);
             expr = std::move(fa);
             break;
         }

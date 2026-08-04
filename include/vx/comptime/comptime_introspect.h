@@ -252,8 +252,37 @@ inline ComptimeEvalResult result_from_value(const ComptimeValue &v) {
     r.type_val = v.type_val;
     return r;
 }
+/**
+ * @brief evalua una expresion en compile-time (tree-walker LEGACY).
+ *
+ * @note LEGACY.  Este evaluador de AST NO es el mecanismo de ejecucion de
+ *       codigo comptime del lenguaje: todo cuerpo comptime se baja a IR y se
+ *       ejecuta en la ComptimeVM (interprete o JIT, JIT preferido).  Queda solo
+ *       para resolucion de metadata literal simple; NO usar como base para
+ *       features nuevas de ejecucion comptime.
+ */
 ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                                       const ast::Expr *expr);
+
+/**
+ * @brief reconstruye los campos de un @c ComptimeEvalResult (is_struct) a partir
+ *        de los bytes crudos de un struct value-type devuelto por la ComptimeVM.
+ *
+ * Recorre el layout campo a campo leyendo su valor desde @p bytes en el offset
+ * correspondiente; los campos struct anidados se reconstruyen recursivamente.
+ * Lo usa tanto la rama de retorno-struct de una comptime fn como el constructor
+ * @c comptime @c T(expr) (F1b), que comparten el mecanismo de SRET + reificacion.
+ *
+ * @param tc    TypeChecker (resuelve los layouts de los structs anidados).
+ * @param lay   Layout del struct cuyos campos se reconstruyen.
+ * @param bytes Bytes crudos del struct (los que escribio el callee via SRET).
+ * @param base  Offset base dentro de @p bytes (0 en la llamada raiz).
+ * @param out   Receptor: se rellena @c out.struct_fields y @c out.is_struct.
+ */
+void fill_struct_fields_from_bytes(const TypeChecker &tc,
+                                   const StructLayout &lay,
+                                   const std::vector<uint8_t> &bytes,
+                                   uint32_t base, ComptimeEvalResult &out);
 
 /**
  * @brief estado de control de flujo para el interprete

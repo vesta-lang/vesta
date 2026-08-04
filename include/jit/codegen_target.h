@@ -26,7 +26,7 @@
 #define VESTA_JIT_CODEGEN_TARGET_H
 
 #include "jit/interval.h"        // IntervalResult
-#include "jit/linear_scan.h"     // RegAlloc
+#include "codegen/regalloc.h"
 #include "jit/machine_ir.h"      // MFunction
 #include "jit/sched/machine_effects.h" // sched::EffIsa
 #include "jit/target_reginfo.h"  // TargetRegInfo
@@ -64,7 +64,7 @@ class CodegenTarget {
      * @brief REWRITE: convierte el MachineIR de vregs @p vf en fisico usando la
      *        asignacion @p ra, insertando prologo/epilogo y spills de la ABI.
      */
-    virtual MFunction rewrite(const MFunction &vf, const RegAlloc &ra,
+    virtual MFunction rewrite(const MFunction &vf, const codegen::RegAlloc &ra,
                               const IntervalResult &ivs) const = 0;
 
     /**

@@ -647,6 +647,12 @@ enum class MOp : uint8_t {
      * clobbea vregs porque la save/restore preserva RSI/RDI/RCX). */
     REP_MOVSB = 104,
 
+    /* REP STOSB: gemelo de REP_MOVSB para IrOp::MEMSET -- escribe AL en [RDI]
+     * RCX veces.  Misma disciplina: opera sobre fisicos FIJOS (RDI/RCX/RAX) que
+     * el selector carga y salva/restaura con PUSH/POP, asi que es independiente
+     * del regalloc.  El encoder emite los 2 bytes F3 AA. */
+    REP_STOSB = 105,
+
     /* Packed FP SSE2 (auto-vectorizacion, 2026-06-25): operan sobre 2x f64
      * (128-bit XMM).  Prefijo 66 (packed-double).  Reg-reg (arith) o reg-mem
      * (MOVUPD/MOVAPD).  Base de la vectorizacion de loops float y, a futuro,
@@ -722,6 +728,9 @@ enum class MOp : uint8_t {
      * Solo AVX (VX.256.66.0F38.W0 19 / EVEX.512.66.0F38.W1 19); para 128b se
      * usa UNPCKLPD.  Construye la mascara de signo wide de fneg/fabs. */
     VBROADCASTSD = 132, ///< VBROADCASTSD ymm/zmm, xmm
+    VBROADCASTSS = 242, ///< VBROADCASTSS xmm/ymm/zmm, xmm (66 0F38 W0 18) f32
+    SHUFPS = 243, ///< SHUFPS dst, src, imm8 (NP 0F C6 /r ib) -- broadcast f32
+                  ///<   lane 0 con imm8=0 (SSE, 128b) cuando no hay AVX
 
     /* Packed SINGLE (f32): mismos opcodes 0F 58/5C/59/5E/51/57/54 que los PD
      * pero SIN el prefijo 66 (pp=00 en VX/EVEX; EVEX W0).  4x f32 (XMM),
@@ -736,6 +745,11 @@ enum class MOp : uint8_t {
      * (66 0F38 W0 B8) -> f32.  Solo AVX/AVX512 (no hay FMA en SSE2 base). */
     VFMADD231PD = 141,  ///< VFMADD231PD dst, src1, src2/mem (f64)
     VFMADD231PS = 142,  ///< VFMADD231PS dst, src1, src2/mem (f32)
+    /* VFMSUB231P{D,S} dst = src1*src2 - dst (1 redondeo).  66 0F38 BA; W1=PD,
+     * W0=PS.  Baja el patron element-wise c[i]=a[i]*b[i]-d[i] (VEC_FMA con el
+     * bit sub).  Mismo encoding que VFMADD231 pero opcode BA en vez de B8. */
+    VFMSUB231PD = 240,  ///< VFMSUB231PD dst, src1, src2/mem (f64)
+    VFMSUB231PS = 241,  ///< VFMSUB231PS dst, src1, src2/mem (f32)
     /* FMA ESCALAR (round(a*b+c), 1 redondeo): dst = src1*src2 + dst.  Baja el
      * IrOp::FMA.  VFMADD231SD (66 0F38 W1 B9) -> f64; VFMADD231SS (66 0F38 W0
      * B9) -> f32.  Requiere FMA3 (caps.fma); si no, el vreg cae a interp. */
@@ -822,6 +836,18 @@ enum class MOp : uint8_t {
  * guardan en flags (esas no son ops float). */
 static constexpr uint16_t MI_FLAG_VX_SCALAR = 0x8000u;
 
+/* Bit de @c MInstr::flags para @c MOp::RET: marca un RET que proviene de un
+ * `return` EXPLICITO del usuario, a diferencia del RET sintetico de caida-al-final
+ * (fallthrough) que el lowering inserta.  NO basta con mirar si el RET porta un
+ * operando: el RET implicito de una funcion con tipo de retorno no-void tambien
+ * lleva un valor (un `0` sintetico), asi que "tiene operando" clasificaria mal un
+ * implicito.  El origen fiable es el lowering (`IrInstr::ret_implicit`).  Lo usa
+ * el rewrite en @Naked: una @Naked NO emite el `ret` implicito (para no pisar el
+ * `iretq`/`ret` que el propio asm provee en un ISR/bootloader), pero un `return`
+ * explicito SI se materializa (read-back a RAX + `ret`) sin el epilogo de frame.
+ * Bit alto -> no colisiona con el stackmap-idx que CALL/SAFEPOINT guardan. */
+static constexpr uint16_t MI_FLAG_RET_EXPLICIT = 0x4000u;
+
 struct MInstr {
     MOp op = MOp::NOP;
     uint8_t variant = 0;
@@ -870,6 +896,14 @@ struct MInstr {
     static MInstr make_rep_movsb() noexcept {
         MInstr i;
         i.op = MOp::REP_MOVSB;
+        return i;
+    }
+
+    /** @brief REP STOSB: escribe AL en [RDI] RCX veces.  Sin operandos vreg
+     *  (opera sobre fisicos fijos; el selector los carga/restaura). */
+    static MInstr make_rep_stosb() noexcept {
+        MInstr i;
+        i.op = MOp::REP_STOSB;
         return i;
     }
 
@@ -1291,6 +1325,13 @@ enum class MRelocKind : uint8_t {
     ARM64_CALL26 =
         5, ///< AArch64 bl/b a una FUNCION (R_AARCH64_CALL26): el campo imm26
            ///< del bl = (sym - site) >> 2.  El driver lo encola como callee.
+    ABS32 =
+        6, ///< direccion absoluta 32-bit (mov r32,imm32): *(u32*)@ = sym +
+           ///< addend.  x86-32 no-PIE: la VA cabe en 32 bits (base fija).
+           ///< Equivalente 32-bit de ABS64; el emisor ELF32 lo traduce a
+           ///< R_386_32.  x86-32 NO tiene RIP-relative -> DATA_REL32 daria
+           ///< direcciones inconsistentes; esta es la ref correcta a DATO/
+           ///< FUNCION en 32-bit.
 };
 
 /**
@@ -1547,6 +1588,13 @@ struct MFunction {
     /// rewrite-to-physical.  El cuerpo (asm) provee su propia salida
     /// (ret/iretq).  Propagado desde @c IrFunction::is_naked por vreg-select.
     bool naked = false;
+    /// FPO (frame-pointer omission): la funcion LIGA rbp/rsp a un parametro por
+    /// ABI custom (`register("rbp")`, p.ej. el 6o arg del `int 0x80` x86-32 que
+    /// va en EBP).  Ese registro NO puede ser a la vez el frame pointer -> el
+    /// prologo NO emite `mov rbp,rsp` y el frame se direcciona por RSP.  Se
+    /// preserva `push rbp`/`pop rbp` (callee-saved) alrededor del cuerpo.  Solo
+    /// para funciones hoja (sin CALLs): con RSP variable no habria base estable.
+    bool binds_frame_reg = false;
     /// Callback-ABI (jubilacion de slots): si true, el rewrite reserva 128B
     /// en el frame (save-area de proc->registers[0..15]) para que las
     /// pseudo-ops @c CB_SAVE_REGS / @c CB_RESTORE_REGS del prologo/epilogo del

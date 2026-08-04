@@ -15,3 +15,4 @@ i32 main() {
     borrow<i32> r = bad_make();
     return read_borrow(r);
 }
+// @expect-compile-fail

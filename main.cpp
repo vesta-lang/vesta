@@ -15,6 +15,8 @@
 #include <iomanip>
 #include <cstring>
 #include <fstream>
+
+#include "disasm/disasm.h"
 #include <sstream>
 #include <thread>
 #include <atomic>
@@ -42,6 +44,7 @@
 #include "jit/vec_isa.h" // ancho SIMD del target (--float-isa)
 #include "jit/backend_caps.h" // caps del target para el gate FMA (AOT)
 #include "jit/auto_jit.h"
+#include "jit/jit_timing.h"
 #include "jit/jit_branch_prof.h"
 #include "jit/sched/cost_model.h" // --cpu: microarquitectura objetivo del scheduler
 #include "jit/keystone_asm_backend.h" //  AS inc.4b: registrar backend asm
@@ -54,6 +57,9 @@
 #include "toolchain/aot_build.h" // AOT nativo extraido (vesta::tc::compile_aot)
 #include "util/assembler_multiprocess.h"
 #include "vx/compiler.h"
+#include "runtime/exception_runtime.h" // codigo de salida tras un fallo
+#include "vx/vxdbg_emit.h" // publicar el grafo del artefacto
+#include "vx/type_checker.h" // register_comptime_virtual_fns
 #include "vx/diag/diag_format.h" // renderizado de diagnosticos (texto/JSON/SARIF)
 #include "vx/lexer.h"
 #include "vx/parser.h"
@@ -475,6 +481,14 @@ int main(int argc, char *argv[]) {
     // para punteros a funcion que fluyen a codigo nativo).
     jit::register_naked_dispatch_runner();
     jit::register_naked_fnaddr_runner();
+
+    // Las funciones virtuales del compilador (`vesta_comptime`) tambien tienen
+    // que estar registradas al EJECUTAR: un `.velb` puede llevar un cuerpo
+    // comptime como codigo muerto -- el de un constructor comptime, por
+    // ejemplo -- cuyo import se resuelve al cargar, antes de saber que nadie
+    // lo va a llamar.  Sin esto el FFI buscaba una DLL que no existe y el
+    // programa moria al arrancar.
+    vx::register_comptime_virtual_fns();
     // FN.3: registrar vrt:jit_active (modo interp vs JIT) y vrt:getproc
     // (ProcessVM* actual), que `fiber_init` usa para elegir el modelo de
     // fibra en JIT (pila/ctx host + trampolin + proc).
@@ -677,12 +691,20 @@ int main(int argc, char *argv[]) {
             "32-bit).",
             cxxopts::value<std::string>()->default_value("x86-64"))(
             "debug-info",
-            "Nivel de info de depuracion (flag UNIVERSAL, todos los targets): "
-            "0=ninguna (default, cero coste) | 1=simbolos de funcion (AOT: "
-            ".symtab/COFF en ELF/PE/.o/.so/.dll -> backtraces con nombres en "
-            "gdb/WinDbg/lldb/valgrind) | 2=+lineas (futuro) | 3=+variables "
-            "(futuro).",
-            cxxopts::value<int>()->default_value("0"))(
+            "Nivel de info de depuracion (flag UNIVERSAL, todos los targets).  "
+            "Un eje por MECANISMO, separados por punto: <dwarf>[.<lenguaje>].  "
+            "Son cosas distintas y se piden por separado -- el primero lo "
+            "consumen depuradores y desensambladores AJENOS (gdb, WinDbg, "
+            "lldb, valgrind), el segundo es el nuestro.  "
+            "DWARF: 0=ninguna (default, cero coste) | 1=simbolos de funcion "
+            "(.symtab/COFF en ELF/PE/.o/.so/.dll) | 2=+lineas (futuro) | "
+            "3=+variables (futuro).  "
+            "LENGUAJE: 0=ninguna (default) | 1=fichero acompanante .vxdbg con "
+            "funcion, linea, columna y tramo (NO toca el binario: el codigo "
+            "emitido es el mismo byte a byte).  "
+            "Ejemplos: 1 (=1.0, solo DWARF, como siempre) | 0.1 (solo el "
+            "nuestro) | 1.1 (los dos).",
+            cxxopts::value<std::string>()->default_value("0"))(
             "float-isa",
             "AOT: backend de punto flotante / ancho SIMD del vectorizador: "
             "sse2 (default, 128b, corre en CUALQUIER x86-64) | x87 (legacy) | "
@@ -818,6 +840,14 @@ int main(int argc, char *argv[]) {
             "frontend NO genera datos extra.  Con el flag, el cliente del "
             "debugger puede setear breakpoints por linea Vesta (`b file.vx:42`) "
             "en lugar de solo por addr.")(
+            "vxdbg-dir",
+            "Carpeta donde volcar la base de conocimiento de depuracion: los "
+            "tipos del programa, sus miembros y como se relacionan, cada uno "
+            "identificado por su contenido.  Es informacion APARTE del "
+            "ejecutable -- no cambia ni un byte de lo que se genera -- y sirve "
+            "para explicar un fallo en terminos del fuente en lugar de "
+            "direcciones.  Sin este flag no se emite nada.",
+            cxxopts::value<std::string>()->default_value(""))(
             "no-debug-info",
             "Desactivar la emision del mapa PC -> linea (seccion DVBG) en el "
             ".velb.  Por defecto el mapa SE EMITE (barato en tamano, no cambia "
@@ -1131,6 +1161,44 @@ int main(int argc, char *argv[]) {
 
     if (result.count("help")) {
         vesta::scout() << options.help() << std::endl;
+        vesta::scout() <<
+            R"(Variables de entorno:
+
+  CTPE (precomputo del programa completo en tiempo de compilacion):
+    Ejecuta el main puro (sin I/O, FFI ni memoria cross-proceso) durante la
+    compilacion e inyecta su resultado como constante.  Activo por defecto.
+    VESTA_NO_CTPE            Desactiva CTPE.
+    VESTA_CTPE_MS=N          Presupuesto del watchdog en ms (default 3000); si
+                             el main tarda mas, se aborta y corre en runtime.
+    VESTA_CTPE_DEBUG=1       Traza el analisis (funciones evaluables + candidato).
+
+  JIT:
+    VESTA_JIT_THRESHOLD=N    Invocaciones para disparar auto-JIT en runtime
+                             (UINT32_MAX = desactivado; equivale a -m vm).
+    VESTA_JIT_WARN_UNSUPPORTED=1  Avisa de ops IR que el selector no compila.
+    VESTA_JIT_DISASM=1       Vuelca el codigo nativo JIT-eado (hex + disasm).
+
+  Optimizacion:
+    VESTA_NO_ESCAPE_SCALAR=1 Desactiva el scalar-replacement de objetos GC.
+    VESTA_ESCAPE_DEBUG=1     Traza los veredictos del escape analysis.
+
+  Compilacion modular / cache:
+    VX_PARALLEL_COMPILE=N    Threads de compilacion (0 = auto, 1 = secuencial).
+    VX_NO_CACHE              Ignora el cache incremental de modulos.
+    VX_CACHE_DIR=ruta        Directorio del cache (default .cache/vex).
+    VX_CACHE_FINGERPRINT=x   Fija la huella del compilador que entra en la
+                             clave del cache.  Por defecto se toma del propio
+                             ejecutable, de modo que recompilarlo invalida los
+                             artefactos.  Fijarla permite instrumentar el
+                             compilador sin perder el cache que reproduce un
+                             fallo que se esta investigando.
+    VX_TREE_SHAKE=1          Elimina simbolos no usados entre modulos.
+    VX_VERBOSE_COMPILE=1     Muestra el progreso de compilacion por modulo.
+    VESTA_LINKER_PROFILE=1   Perfila las fases del linker.
+
+  Perfilado (PGO):
+    VESTA_PROFILE_DUMP=ruta  Ruta del .vprof (o usa --profile).
+)" << std::endl;
         return 0;
     }
 
@@ -1771,6 +1839,30 @@ int main(int argc, char *argv[]) {
     }
 
     if (result.count("disasm-file")) {
+        // Un `.velb` lleva bytecode de la VM, no codigo del anfitrion:
+        // desensamblarlo con el desensamblador nativo devuelve basura con
+        // aspecto de instrucciones x86.  Se reconoce por su firma, asi que el
+        // desensamblador se elige por el CONTENIDO del fichero y no por lo que
+        // el usuario acierte a escribir -- y `--arch`, que ahi no significa
+        // nada, deja de exigirse.
+        const std::string dfile = result["disasm-file"].as<std::string>();
+        {
+            std::ifstream probe(dfile, std::ios::binary);
+            char sig[4] = {0, 0, 0, 0};
+            if (probe.read(sig, 4) &&
+                (std::memcmp(sig, "VELB", 4) == 0 ||
+                 std::memcmp(sig, "BLEV", 4) == 0)) {
+                probe.close();
+                // Volcar el fichero ENTERO: el `hlt` termina una funcion, no
+                // el codigo, y pararse en el primero deja fuera todo lo demas
+                // -- justo lo que hace falta cuando se compara el resultado de
+                // enlazar varios modulos.
+                disasm::DisasmOptions dopts;
+                dopts.stop_at_hlt = false;
+                disasm::disasm_velb(dfile, std::cout, dopts);
+                return EXIT_SUCCESS;
+            }
+        }
         if (!result.count("arch")) {
             std::cerr << "--arch es requerido para desensamblar\n";
             return EXIT_FAILURE;
@@ -2937,6 +3029,11 @@ int main(int argc, char *argv[]) {
         copts.emit_debug =
             (result.count("no-debug-info") == 0) ||
             (result.count("vx-debug") > 0) || (result.count("profile") > 0);
+        // Base de conocimiento de depuracion: solo si se pide una carpeta.  No
+        // se activa con --vx-debug porque son cosas distintas -- aquella emite
+        // el mapa de lineas DENTRO del ejecutable, esta escribe un grafo
+        // aparte -- y encadenarlas obligaria a pagar una para tener la otra.
+        copts.vxdbg_dir = result["vxdbg-dir"].as<std::string>();
         // Flags de diagramas: cada uno habilita la generacion del diagrama
         // correspondiente en CompileResult, segun el formato elegido por
         // --diagram-format.  Se escriben a archivos al final del bloque.
@@ -3253,6 +3350,21 @@ int main(int argc, char *argv[]) {
             constexpr uint64_t FNV_OFFSET = 14695981039346656037ULL;
             constexpr uint64_t FNV_PRIME = 1099511628211ULL;
             uint64_t h = FNV_OFFSET;
+            /* La VERSION del formato del intermedio entra en la clave.
+             *
+             * Sin esto, un  precompilado de antes de un cambio de
+             * formato se seguia usando y se leia con el layout viejo: los
+             * campos salen corridos y el codigo comptime devuelve basura sin
+             * que nada avise.  Se vio como cuatro casos devolviendo 0 donde
+             * esperaban 42, y desde fuera parecia un fallo del compilador.
+             *
+             * Un artefacto cacheado tiene que dejar de valer cuando cambia
+             * como se lee, no solo cuando cambia lo que se compilo. */
+            for (unsigned i = 0; i < 2; ++i) {
+                h ^= static_cast<uint8_t>(
+                    (ir::IR_SECTION_VERSION >> (i * 8)) & 0xFF);
+                h *= FNV_PRIME;
+            }
             h ^= cache_format_version;
             h *= FNV_PRIME;
             for (char c : vx_path) {
@@ -3353,9 +3465,17 @@ int main(int argc, char *argv[]) {
         // IR (--vx-emit-ir) y transpile (--port).  Si el usuario los pide,
         // saltamos el hit del project-cache para forzar la compilacion y que
         // se generen; de lo contrario el cache hit los omitiria en silencio.
+        // `--vx-emit-only` pide precisamente el `.vel`, que tampoco esta en el
+        // `.velb` cacheado.  Faltaba en esta lista, asi que con un programa
+        // que importa modulos el acierto de cache devolvia el binario y el
+        // `.vel` no aparecia: el mismo comando hacia dos cosas distintas segun
+        // el programa tuviera imports o no.  Peor que la molestia es lo que
+        // implicaba: los volcados de diagnostico dejaban de venir del mismo
+        // recorrido que produce el binario, y compararlos llevaba a
+        // conclusiones que no significaban nada.
         const bool wants_pipeline_artifacts =
             diag_vx || diag_ir_pre || diag_ir_post || diag_vel || emit_ir ||
-            !copts.port_target.empty();
+            emit_only || !copts.port_target.empty();
 
         //  AOT multi-modulo (fix): el project-cache SOLO almacena un
         // `.velb` (bytecode VM).  En modo `-m aot` el output es un binario
@@ -3463,6 +3583,11 @@ int main(int argc, char *argv[]) {
              * native_poo. */
             vx::CompileOptions copts_vm = copts;
             copts_vm.native_poo = false;
+            /* Y CON info de linea, siempre.  Este `.velb` es el que ejecuta el
+             * compilador, no el programa: no lastra al usuario y es lo que
+             * permite que un fallo en tiempo de compilacion diga el fichero y
+             * la linea en vez de una direccion. */
+            copts_vm.emit_debug = true;
             vx::CompileResult cr_vm =
                 vx::vx_source_has_imports(vx_source)
                     ? vx::compile_vx_project(vx_path, copts_vm)
@@ -3524,6 +3649,26 @@ int main(int argc, char *argv[]) {
         // cr.ir_section_bytes (mismo @ir que consume el JIT); se deserializa
         // y se pasa al analizador AOT.1.
         // ------------------------------------------------------------------
+        // --vx-emit-ir: escribir el dump del SSA IR ANTES del codegen.  El
+        // bloque `if (aot_mode)` de abajo RETORNA tras el emit nativo, asi que
+        // el punto de escritura de mas abajo nunca se alcanza en AOT.  Ubicarlo
+        // aqui cubre TODOS los modos (aot/vm/velb) de forma uniforme y hace que
+        // `--vx-emit-ir` respete el TARGET (los @Target de los deps se resuelven
+        // segun --format/--aot-arch, no segun el host).
+        if (emit_ir) {
+            std::string ir_path = out_prefix.empty()
+                                      ? (copts.module_name + ".ir")
+                                      : (out_prefix + ".ir");
+            std::ofstream ofs_ir(ir_path);
+            if (!ofs_ir.is_open()) {
+                std::cerr << "[vx] No se puede escribir: " << ir_path << "\n";
+                return EXIT_FAILURE;
+            }
+            ofs_ir << cr.ir_text;
+            vesta::scout() << "[vx] .ir generado: " << ir_path << "\n";
+            return EXIT_SUCCESS;
+        }
+
         if (aot_mode) {
             // Emision AOT nativa: delegada a vesta::tc::compile_aot
             // (src/toolchain/aot_build.cpp) para no monolitizar main.cpp.  Los
@@ -3537,7 +3682,36 @@ int main(int argc, char *argv[]) {
             aopt.no_mem = aot_no_mem;
             aopt.arch = result["aot-arch"].as<std::string>();
             aopt.float_isa = result["float-isa"].as<std::string>();
-            aopt.debug_level = result["debug-info"].as<int>();
+            {
+                /* Un eje por MECANISMO, separados por punto.  Se parte la
+                 * CADENA y no se lee como numero en coma flotante: 0.1 y 2.1
+                 * no son exactos en binario -- 2.1 es 2.0999999... -- y
+                 * extraer el digito de ahi da sustos.  Ademas asi se puede
+                 * anadir un tercer eje manana (`1.2.3`), que como flotante ni
+                 * siquiera seria expresable.
+                 *
+                 * Un entero suelto sigue siendo lo de siempre: nivel DWARF, y
+                 * el resto de ejes a cero. */
+                const std::string niveles =
+                    result["debug-info"].as<std::string>();
+                size_t desde = 0;
+                int eje = 0;
+                while (desde <= niveles.size() && eje < 2) {
+                    const size_t punto = niveles.find('.', desde);
+                    const std::string parte =
+                        niveles.substr(desde, punto == std::string::npos
+                                                  ? std::string::npos
+                                                  : punto - desde);
+                    const int v = parte.empty() ? 0 : std::atoi(parte.c_str());
+                    if (eje == 0)
+                        aopt.debug_level = v;      // DWARF / symtab
+                    else
+                        aopt.lang_debug_level = v; // el nuestro
+                    ++eje;
+                    if (punto == std::string::npos) break;
+                    desde = punto + 1;
+                }
+            }
             if (result.count("format"))
                 aopt.format = result["format"].as<std::string>();
             if (result.count("emit"))
@@ -3548,6 +3722,7 @@ int main(int argc, char *argv[]) {
             if (result.count("sysroot"))
                 aopt.sysroot = result["sysroot"].as<std::string>();
             aopt.argv0 = argv[0];
+            aopt.source_path = vx_path;
             return vesta::tc::compile_aot(cr, copts, out_prefix, aopt);
         }
 
@@ -3883,23 +4058,8 @@ int main(int argc, char *argv[]) {
                 return EXIT_FAILURE;
         }
 
-        // Si --vx-emit-ir esta activo, escribir el dump del SSA IR
-        // (pre y post optimizacion) en <out>.ir y salir.  Util para
-        // debug del frontend sin tocar el .vel ni el linker.  No se
-        // compila a .velb en este modo.
-        if (emit_ir) {
-            std::string ir_path = out_prefix.empty()
-                                      ? (copts.module_name + ".ir")
-                                      : (out_prefix + ".ir");
-            std::ofstream ofs_ir(ir_path);
-            if (!ofs_ir.is_open()) {
-                std::cerr << "[vx] No se puede escribir: " << ir_path << "\n";
-                return EXIT_FAILURE;
-            }
-            ofs_ir << cr.ir_text;
-            vesta::scout() << "[vx] .ir generado: " << ir_path << "\n";
-            return EXIT_SUCCESS;
-        }
+        // (El dump --vx-emit-ir se escribe mas arriba, antes del bloque
+        // `if (aot_mode)`, para cubrir tambien el AOT que retorna antes.)
 
         // Fase 4 interop C: escribir el header C publico (<output>.h) si
         // --emit-header esta activo.  Se hace ANTES del bloque --port (que
@@ -3976,6 +4136,17 @@ int main(int argc, char *argv[]) {
             /*keep_labels=*/(result.count("keep-labels") > 0),
             /*ir_section_bytes=*/&cr.ir_section_bytes,
             /*emit_map=*/(result.count("emit-map") > 0));
+
+        // Se deja constancia de que grafo explica ESTE artefacto, bajo un
+        // identificador sacado de su contenido.  Es el ultimo eslabon: sin el,
+        // el grafo esta emitido pero nadie puede pedirlo a partir del programa
+        // que se esta ejecutando.  Se hace aqui y no al compilar porque el
+        // identificador no existe hasta que el fichero existe.
+        if (rc == EXIT_SUCCESS && !cr.vxdbg_artifact_map.empty()) {
+            vx::publish_vxdbg_artifact(out_prefix + ".velb",
+                                       cr.vxdbg_artifact_map,
+                                       cr.vxdbg_span_map, copts.vxdbg_dir);
+        }
 
         //  M5.B: persistir el .velb final al project cache si
         // (a) el compile usa imports (compile_vx_project tiene
@@ -4369,6 +4540,27 @@ int main(int argc, char *argv[]) {
                 long long elapsed_ms = elapsed_ns / 1'000'000;
                 long long elapsed_us = elapsed_ns / 1'000;
 
+                /* Tiempo de COMPILACION del JIT.  Se imprime junto al resto porque el
+                 * reloj de pared los mezcla: el JIT compila mientras el programa corre.
+                 * Sin este desglose no se puede distinguir "el codigo generado es mejor"
+                 * de "la compilacion tardo menos", que es justo lo que hace falta para
+                 * juzgar una optimizacion del backend. */
+                jit::print_jit_timing(jit::JitTiming::detail_enabled());
+                if (jit::JitTiming::instance().count() && elapsed_ns > 0) {
+                    /* El reparto se hace contra (compilar + ejecutar), NO contra
+                     * @c elapsed_ns: ese reloj mide la EJECUCION, y la compilacion
+                     * queda fuera -- dividir por el daba porcentajes de miles por
+                     * ciento.  Un ratio solo significa algo si numerador y denominador
+                     * miden lo mismo. */
+                    const double comp_ms = jit::JitTiming::instance().total_ns() / 1e6;
+                    const double run_ms = elapsed_ns / 1e6;
+                    vesta::scout()
+                        << "[jit] reparto: compilar " << comp_ms << " ms + ejecutar "
+                        << run_ms << " ms  -> compilar = "
+                        << (100.0 * comp_ms / (comp_ms + run_ms)) << "% del trabajo"
+                        << std::endl;
+                }
+
                 uint64_t total_instrs = 0;
                 uint64_t total_jit_instrs = 0;
                 uint64_t active_time_ns = 0;
@@ -4473,6 +4665,12 @@ int main(int argc, char *argv[]) {
                       << "\n";
             return EXIT_FAILURE;
         }
+        /* Si el programa murio por un fallo que nadie capturo, el proceso sale
+         * con el codigo que le corresponde y no con cero.  Salir con cero tras
+         * reventar es mentirle a quien lo llamo -- y quien lo llama suele ser un
+         * guion o una integracion continua que se lo cree. */
+        if (const int fatal_rc = runtime::last_fatal_exit_code())
+            return fatal_rc;
         return EXIT_SUCCESS;
     }
 

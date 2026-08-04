@@ -16,11 +16,11 @@
 //   - bmp_dump_terminal        : vuelcan los pixeles en truecolor ANSI.
 //
 // La lectura/escritura binaria del fichero viene de la STDLIB (import
-// "vx_fileio"): file_size + file_read_into + file_write_from (Windows kernel32,
+// "fileio"): file_size + file_read_into + file_write_from (Windows kernel32,
 // POSIX libc, libc-free).  El truecolor 24-bit usa los builtins bg_rgb/RESET.
 // =============================================================================
 
-import "vx_fileio";
+import std.fileio;
 
 // ---------------------------------------------------------------------------
 // Vistas tipadas del formato BMP (@overlay struct).  Un overlay ES un puntero:
@@ -292,7 +292,7 @@ i32 bmp_save(u8* buf, string path) {
     if (total <= 0) {
         return 0;
     }
-    i64 n = vx_fileio.file_write_from(path, buf, total);
+    i64 n = fileio.file_write_from(path, buf, total);
     if (n != total) {
         return 0;
     }
@@ -302,7 +302,7 @@ i32 bmp_save(u8* buf, string path) {
 // Tamano en bytes del fichero `path` (-1 si no existe).  Thin wrapper de la
 // stdlib para que el caller solo dependa de "bmp".
 i64 bmp_file_size(string path) {
-    return vx_fileio.file_size(path);
+    return fileio.file_size(path);
 }
 
 // Lee hasta `size` bytes de `path` al buffer host `buf` (provisto por el
@@ -313,7 +313,7 @@ i64 bmp_file_size(string path) {
 // memoria VM al parsear (ver LIM-10 en BUGS_LIMITACIONES.md).  El malloc LOCAL
 // del caller SI conserva la naturaleza host.
 i64 bmp_read_into(string path, u8* buf, i64 size) {
-    return vx_fileio.file_read_into(path, buf, size);
+    return fileio.file_read_into(path, buf, size);
 }
 
 // ---------------------------------------------------------------------------

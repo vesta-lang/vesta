@@ -279,7 +279,16 @@ void exec_instr_push(ProcessVM *vm, const DecodedInstr &instr) {
     // decrementar la pila y escribir el valor
     vm->registers.stack_pointer.qword(vm->registers.stack_pointer.qword() -
                                       size);
-    vm->vm_mem.write_bytes(vm->registers.stack_pointer.raw(), &value, size);
+    // Caso comun (spill de un registro de 8 bytes bajo presion, p.ej. el
+    // unroll de un VEC_BINOP): el slot cae en la pagina del frame que el
+    // page-cache ya tiene mapeada -> write_u64_fast evita el TLB/page walk
+    // completo de write_bytes (~50x).  Semanticamente identico (write_u64_fast
+    // cae a write_bytes si la pagina no esta cacheada).
+    if (size == 8) {
+        vm->vm_mem.write_u64_fast(vm->registers.stack_pointer.raw(), value);
+    } else {
+        vm->vm_mem.write_bytes(vm->registers.stack_pointer.raw(), &value, size);
+    }
 }
 
 /**
@@ -342,8 +351,13 @@ void exec_instr_pop(ProcessVM *vm, const DecodedInstr &instr) {
         reg_ext ? 8 : Assembly::Bytecode::mode_to_bytes(instr.flags_info.mode);
 
     uint64_t value = 0;
-    vm->vm_mem.read_bytes(vm->registers.stack_pointer.raw(), &value,
-                          size); // leer de la pila
+    // Caso comun (restaurar un registro de 8 bytes): mismo page-cache que push.
+    if (size == 8) {
+        value = vm->vm_mem.read_u64_fast(vm->registers.stack_pointer.raw());
+    } else {
+        vm->vm_mem.read_bytes(vm->registers.stack_pointer.raw(), &value,
+                              size); // leer de la pila
+    }
     vm->registers.stack_pointer.qword(vm->registers.stack_pointer.qword() +
                                       size); // avanzar RSP
 

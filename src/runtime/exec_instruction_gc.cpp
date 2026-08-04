@@ -859,9 +859,29 @@ void exec_instr_atomicld(ProcessVM *vm, const DecodedInstr &instr) {
         vm->registers.regs[rdst].qword(0);
         return;
     }
-    int64_t val =
-        __atomic_load_n(reinterpret_cast<int64_t *>(addr), __ATOMIC_SEQ_CST);
-    vm->registers.regs[rdst].qword(static_cast<uint64_t>(val));
+    // Ancho del atomico (flags_info.mode: 0=8b 1=16b 2=32b 3=64b).  El load
+    // alineado ya es atomico; se zero-extiende al registro de 64b (el frontend
+    // sign-extiende si el tipo lo requiere, como loadz).
+    uint64_t val = 0;
+    switch (instr.flags_info.mode) {
+    case 0:
+        val = __atomic_load_n(reinterpret_cast<uint8_t *>(addr),
+                              __ATOMIC_SEQ_CST);
+        break;
+    case 1:
+        val = __atomic_load_n(reinterpret_cast<uint16_t *>(addr),
+                              __ATOMIC_SEQ_CST);
+        break;
+    case 2:
+        val = __atomic_load_n(reinterpret_cast<uint32_t *>(addr),
+                              __ATOMIC_SEQ_CST);
+        break;
+    default:
+        val = __atomic_load_n(reinterpret_cast<uint64_t *>(addr),
+                              __ATOMIC_SEQ_CST);
+        break;
+    }
+    vm->registers.regs[rdst].qword(val);
 }
 
 // ATOMICST r_addr, r_val : atomic_store_i64(*r_addr, r_val).
@@ -870,8 +890,25 @@ void exec_instr_atomicst(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t rval = instr.data_instruction.reg_data.reg2;
     const uint64_t addr = vm->registers.regs[raddr].qword();
     if (addr == 0) return;
-    const int64_t val = static_cast<int64_t>(vm->registers.regs[rval].qword());
-    __atomic_store_n(reinterpret_cast<int64_t *>(addr), val, __ATOMIC_SEQ_CST);
+    const uint64_t val = vm->registers.regs[rval].qword();
+    switch (instr.flags_info.mode) { // ancho 8/16/32/64
+    case 0:
+        __atomic_store_n(reinterpret_cast<uint8_t *>(addr),
+                         static_cast<uint8_t>(val), __ATOMIC_SEQ_CST);
+        break;
+    case 1:
+        __atomic_store_n(reinterpret_cast<uint16_t *>(addr),
+                         static_cast<uint16_t>(val), __ATOMIC_SEQ_CST);
+        break;
+    case 2:
+        __atomic_store_n(reinterpret_cast<uint32_t *>(addr),
+                         static_cast<uint32_t>(val), __ATOMIC_SEQ_CST);
+        break;
+    default:
+        __atomic_store_n(reinterpret_cast<uint64_t *>(addr), val,
+                         __ATOMIC_SEQ_CST);
+        break;
+    }
 }
 
 // ATOMICADD r_dst, r_addr, r_delta : r_dst = atomic_fetch_add_i64.
@@ -898,11 +935,27 @@ void exec_instr_atomicadd(ProcessVM *vm, const DecodedInstr &instr) {
         vm->registers.regs[rdst].qword(0);
         return;
     }
-    const int64_t delta =
-        static_cast<int64_t>(vm->registers.regs[rdelta].qword());
-    int64_t old = __atomic_fetch_add(reinterpret_cast<int64_t *>(addr), delta,
-                                     __ATOMIC_SEQ_CST);
-    vm->registers.regs[rdst].qword(static_cast<uint64_t>(old));
+    const uint64_t delta = vm->registers.regs[rdelta].qword();
+    uint64_t old = 0; // valor ANTERIOR (zero-extendido al reg de 64b)
+    switch (instr.flags_info.mode) { // ancho 8/16/32/64
+    case 0:
+        old = __atomic_fetch_add(reinterpret_cast<uint8_t *>(addr),
+                                 static_cast<uint8_t>(delta), __ATOMIC_SEQ_CST);
+        break;
+    case 1:
+        old = __atomic_fetch_add(reinterpret_cast<uint16_t *>(addr),
+                                 static_cast<uint16_t>(delta), __ATOMIC_SEQ_CST);
+        break;
+    case 2:
+        old = __atomic_fetch_add(reinterpret_cast<uint32_t *>(addr),
+                                 static_cast<uint32_t>(delta), __ATOMIC_SEQ_CST);
+        break;
+    default:
+        old = __atomic_fetch_add(reinterpret_cast<uint64_t *>(addr), delta,
+                                 __ATOMIC_SEQ_CST);
+        break;
+    }
+    vm->registers.regs[rdst].qword(old);
 }
 
 // ATOMICCAS r_dst, r_addr, r_exp, r_des :
@@ -919,13 +972,44 @@ void exec_instr_atomiccas(ProcessVM *vm, const DecodedInstr &instr) {
         vm->registers.regs[rdst].qword(0);
         return;
     }
-    int64_t expected = static_cast<int64_t>(vm->registers.regs[rexp].qword());
-    const int64_t desired =
-        static_cast<int64_t>(vm->registers.regs[rdes].qword());
-    __atomic_compare_exchange_n(
-        reinterpret_cast<int64_t *>(addr), &expected, desired,
-        /*weak=*/false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
-    vm->registers.regs[rdst].qword(static_cast<uint64_t>(expected));
+    const uint64_t expected = vm->registers.regs[rexp].qword();
+    const uint64_t desired = vm->registers.regs[rdes].qword();
+    uint64_t prev = 0; // valor que estaba en *addr ANTES (zero-extendido)
+    switch (instr.flags_info.mode) { // ancho 8/16/32/64
+    case 0: {
+        uint8_t e = static_cast<uint8_t>(expected);
+        __atomic_compare_exchange_n(reinterpret_cast<uint8_t *>(addr), &e,
+                                    static_cast<uint8_t>(desired), false,
+                                    __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+        prev = e;
+        break;
+    }
+    case 1: {
+        uint16_t e = static_cast<uint16_t>(expected);
+        __atomic_compare_exchange_n(reinterpret_cast<uint16_t *>(addr), &e,
+                                    static_cast<uint16_t>(desired), false,
+                                    __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+        prev = e;
+        break;
+    }
+    case 2: {
+        uint32_t e = static_cast<uint32_t>(expected);
+        __atomic_compare_exchange_n(reinterpret_cast<uint32_t *>(addr), &e,
+                                    static_cast<uint32_t>(desired), false,
+                                    __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+        prev = e;
+        break;
+    }
+    default: {
+        uint64_t e = expected;
+        __atomic_compare_exchange_n(reinterpret_cast<uint64_t *>(addr), &e,
+                                    desired, false, __ATOMIC_SEQ_CST,
+                                    __ATOMIC_SEQ_CST);
+        prev = e;
+        break;
+    }
+    }
+    vm->registers.regs[rdst].qword(prev);
 }
 
 // SHAREDSTAT r_dst, r_op : introspeccion del SharedHeap.

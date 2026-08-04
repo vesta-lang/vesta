@@ -21,3 +21,4 @@ static_assert(V == 99, "V debe ser 99");
 i32 main() {
     return (i32) V;
 }
+// @expect-compile-fail

@@ -20,7 +20,7 @@
 // llegara cuando los sub-overlays puedan alcanzar las secciones del contenedor
 // (`parent<T>()`).  interp/JIT/AOT.  Harness tests/vx/pe_parser_test.py.
 
-import "vx_fileio";
+import std.fileio;
 
 // IMAGE_SECTION_HEADER (40 bytes).  El nombre son 8 bytes inline en +0.
 @overlay struct Section {
@@ -139,14 +139,14 @@ i64 g_faults = 0;
 
 i32 main() {
     string path = "pe_target.bin";
-    i64 fsize = vx_fileio.file_size(path);
+    i64 fsize = fileio.file_size(path);
     if (fsize < 64) {
         println("uso: coloca un PE en 'pe_target.bin' en el dir actual");
         return 2;
     }
     u64 size = (u64) fsize;
     u8* buf = (u8*) malloc(fsize);
-    i64 n = vx_fileio.file_read_into(path, buf, fsize);
+    i64 n = fileio.file_read_into(path, buf, fsize);
     if (n != fsize) { println("error de lectura"); free(buf); return 3; }
 
     PeImage pe = PeImage(buf);

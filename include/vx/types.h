@@ -336,6 +336,14 @@ struct Type {
     /// aridad y tipos en compile time.
     std::vector<Type> fn_params;
 
+    /// ABI custom por-parametro cuando @c kind == FUNCTION: registro fisico de
+    /// entrada por parametro, alineado con @c fn_params.  Cadena vacia = ABI
+    /// estandar.  Forma parte de la IDENTIDAD del tipo (ver operator==): dos
+    /// @c cfn con abi_regs distintos son tipos DISTINTOS, asi una CALLIND
+    /// conoce la ABI en compile-time desde el tipo del puntero.  Vacio cuando
+    /// ningun parametro tiene ABI custom (caso comun; no aloca heap).
+    std::vector<std::string> fn_param_abi_regs;
+
     /// Solo para @c kind == FUNCTION: distingue el LAMBDA/closure (false,
     /// @c fn(...) -> R, fat-pointer de 16 bytes {fn_addr, env}) del PUNTERO
     /// A FUNCION crudo estilo C (true, @c cfn(...) -> R, 8 bytes = solo la
@@ -452,6 +460,22 @@ struct Type {
             if (fn_params.size() != o.fn_params.size()) return false;
             for (size_t i = 0; i < fn_params.size(); ++i) {
                 if (!(fn_params[i] == o.fn_params[i])) return false;
+            }
+            // La ABI custom por-parametro forma parte de la identidad del tipo:
+            // dos cfn con abi_regs distintos son tipos INCOMPATIBLES (asi una
+            // CALLIND conoce la ABI en compile-time desde el tipo del puntero, y
+            // asignar &f_abiA a un campo cfn-de-abiB es un error de tipos).  Se
+            // comparan posicionalmente, normalizando "vector vacio" == "todo ABI
+            // estandar" para que un tipo sin ABI custom (vector vacio) iguale a
+            // uno con la lista de "" explicita.
+            for (size_t i = 0; i < fn_params.size(); ++i) {
+                const std::string a =
+                    i < fn_param_abi_regs.size() ? fn_param_abi_regs[i]
+                                                 : std::string();
+                const std::string b =
+                    i < o.fn_param_abi_regs.size() ? o.fn_param_abi_regs[i]
+                                                   : std::string();
+                if (a != b) return false;
             }
         }
         return true;
@@ -813,10 +837,16 @@ inline std::string type_to_string(const Type &t) {
                (t.pointee ? type_to_string(*t.pointee) : "?") + ">";
     }
     if (t.kind == PrimitiveKind::FUNCTION) {
-        // fn(P1, P2, ...) -> R con cada Pi formateado recursivamente.
-        std::string s = "fn(";
+        // cfn/fn(P1, P2, ...) -> R con cada Pi formateado recursivamente.  Si un
+        // parametro declara ABI custom (register("rXX")), se muestra delante del
+        // tipo -> el mensaje de error distingue dos cfn con ABIs distintas (que
+        // de otro modo se veian identicos: "fn(i64) -> i64" en ambos lados).
+        std::string s = t.fn_is_raw ? "cfn(" : "fn(";
         for (size_t i = 0; i < t.fn_params.size(); ++i) {
             if (i) s += ", ";
+            if (i < t.fn_param_abi_regs.size() &&
+                !t.fn_param_abi_regs[i].empty())
+                s += "register(\"" + t.fn_param_abi_regs[i] + "\") ";
             s += type_to_string(t.fn_params[i]);
         }
         s += ") -> ";
@@ -942,6 +972,26 @@ inline bool types_assignable(const Type &target, const Type &value) noexcept {
         }
     }
     if (target == value) return true;
+    // Smart pointer con pointee void: `unique<void*>` / `unique<void>` (y su
+    // variante shared) es el resultado de adoptar un puntero crudo generico,
+    // p.ej. `unique_with(malloc(n*8), free)` cuyo value es `void*`.  Se adopta
+    // a cualquier `unique<T>`: como en C, `void*` es universal y el pointee
+    // concreto lo fija el destino (`unique<u64>` gestiona el bloque como buffer
+    // de u64).  Solo el pointee void generaliza; `unique<i64>` (handle opaco,
+    // 105/106) NO -> conserva su tipo.
+    if ((target.kind == PrimitiveKind::UNIQUE_PTR &&
+         value.kind == PrimitiveKind::UNIQUE_PTR) ||
+        (target.kind == PrimitiveKind::SHARED_PTR &&
+         value.kind == PrimitiveKind::SHARED_PTR)) {
+        if (value.pointee) {
+            const Type &vp = *value.pointee;
+            const bool vp_is_void =
+                vp.kind == PrimitiveKind::VOID ||
+                (vp.kind == PrimitiveKind::PTR && vp.pointee &&
+                 vp.pointee->kind == PrimitiveKind::VOID);
+            if (vp_is_void) return true;
+        }
+    }
     // Valued enum (`enum Op : u8 {..}`, `enum M : string {..}`): ES su tipo
     // base.  El @c struct_name solo distingue el enum para resolver variantes,
     // no para asignabilidad.  Assignable a/desde su tipo base y a otro valued

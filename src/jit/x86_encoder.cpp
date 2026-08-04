@@ -746,11 +746,17 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
     }
 
     case MOp::VFMADD231PD:
-    case MOp::VFMADD231PS: {
-        /* VFMADD231P{D,S} dst, src1(vvvv), src2(rm reg|mem): dst = src1*src2 +
-         * dst (1 redondeo).  66 0F38 B8; W1 para PD, W0 para PS.  Solo AVX/512
-         * (vec_w 32/64); 128b tambien valido pero el vectorizador usa >=256. */
-        const bool ps = (mi.op == MOp::VFMADD231PS);
+    case MOp::VFMADD231PS:
+    case MOp::VFMSUB231PD:
+    case MOp::VFMSUB231PS: {
+        /* VFMADD231P{D,S} dst = src1*src2 + dst;  VFMSUB231P{D,S} dst =
+         * src1*src2 - dst (1 redondeo).  66 0F38; ADD=B8, SUB=BA; W1 para PD,
+         * W0 para PS.  Solo AVX/512 (vec_w 32/64). */
+        const bool ps =
+            (mi.op == MOp::VFMADD231PS || mi.op == MOp::VFMSUB231PS);
+        const bool sub =
+            (mi.op == MOp::VFMSUB231PD || mi.op == MOp::VFMSUB231PS);
+        const uint8_t opbyte = sub ? 0xBA : 0xB8;
         const uint8_t wbit = ps ? 0 : 1;
         const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
         const uint8_t xv = static_cast<uint8_t>(mi.src1.reg) - 16;
@@ -765,7 +771,7 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
             else
                 emit_vx3(xd, xs, xv, wbit, l256, 0, false, out, /*map=*/2,
                           /*pp=*/1);
-            put8(out, 0xB8);
+            put8(out, opbyte);
             put8(out, modrm(3, xd & 7, xs & 7));
         } else if (mi.src2.kind == MOperandKind::MEM) {
             const MReg base = mi.src2.mem_base();
@@ -779,7 +785,7 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
             else
                 emit_vx3(xd, bid, xv, wbit, l256, iid, has_index, out,
                           /*map=*/2, /*pp=*/1);
-            put8(out, 0xB8);
+            put8(out, opbyte);
             emit_modrm_mem(mi.src2, xd & 7, out);
         } else {
             put8(out, 0xCC);
@@ -827,6 +833,51 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
             emit_vx3(xd, xs, VX_NO_VVVV, /*w=*/0, /*l256=*/true, 0, false, out,
                       /*map=*/2);
         put8(out, 0x19);
+        put8(out, modrm(3, xd & 7, xs & 7));
+        return true;
+    }
+
+    case MOp::SHUFPS: {
+        /* SHUFPS dst, src, imm8: NP 0F C6 /r ib.  imm8=0 con dst==src difunde
+         * el lane 0 (f32) a los 4 lanes de un XMM (128b, SSE, sin AVX).  El
+         * imm8 viaja en mi.variant (como ROUNDSS). */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        const uint8_t rex_R = (xd >= 8) ? 1 : 0;
+        const uint8_t rex_B = (xs >= 8) ? 1 : 0;
+        if (rex_R || rex_B) put8(out, 0x40 | (rex_R << 2) | rex_B);
+        put8(out, 0x0F);
+        put8(out, 0xC6);
+        put8(out, modrm(3, xd & 7, xs & 7));
+        put8(out, static_cast<uint8_t>(mi.variant)); // imm8
+        return true;
+    }
+
+    case MOp::VBROADCASTSS: {
+        /* VBROADCASTSS xmm/ymm/zmm, xmm: difunde el f32 bajo a todos los lanes.
+         * VX.128/256.66.0F38.W0 18 /r ; EVEX.512.66.0F38.W0 18 /r.  W0 SIEMPRE
+         * (f32), a diferencia de VBROADCASTSD (W0 VEX / W1 EVEX).  Op de 2
+         * operandos (vvvv no usado).  Valido tambien a 128b (util para f32). */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        const uint8_t vec_w = mi.dst.width ? mi.dst.width : 32;
+        if (vec_w >= 64)
+            emit_evex(xd, xs, VX_NO_VVVV, /*w=*/0, /*ll=*/2, 0, false, out,
+                      /*map=*/2);
+        else
+            emit_vx3(xd, xs, VX_NO_VVVV, /*w=*/0, /*l256=*/(vec_w == 32), 0,
+                     false, out, /*map=*/2);
+        put8(out, 0x18);
         put8(out, modrm(3, xd & 7, xs & 7));
         return true;
     }
@@ -1439,6 +1490,21 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
             put8(out, 0xCC);
             return true;
         }
+        if (mode32_) {
+            /* x86-32: mov r32, imm32 (B8+rd + imm32) + MReloc{ABS32}.  x86-32 no
+             * tiene REX ni imm64; la VA de un no-PIE cabe en 32 bits.  El emisor
+             * ELF32 lo traduce a R_386_32. */
+            if (mi.dst.reg >= 8) put8(out, 0x41); /* REX.B para r8d..r15d (raro) */
+            put8(out, 0xB8 + (mi.dst.reg & 7));
+            MReloc r;
+            r.kind = MRelocKind::ABS32;
+            r.patch_at = static_cast<uint32_t>(out.size());
+            r.sym_idx = static_cast<uint32_t>(mi.src1.value);
+            r.addend = 0;
+            fn.relocs.push_back(r);
+            put32(out, 0); /* placeholder imm32 */
+            return true;
+        }
         put_rex(out, true, 0, mi.dst.reg);
         put8(out, 0xB8 + (mi.dst.reg & 7));
         MReloc r;
@@ -1680,6 +1746,15 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         put8(out, 0xF3); /* prefijo REP */
         put8(out, 0xA4); /* MOVSB */
         return true;
+    case MOp::REP_STOSB:
+        /* REP STOSB: escribe AL en [RDI] RCX veces (DF=0 por la ABI host).
+         * Encoding: F3 (prefijo REP) + AA (STOSB).  Sin REX: stosb usa el
+         * puntero completo RDI de 64 bits en modo long y el operando es el
+         * byte AL.  Es la via rapida del hardware (fast-string-ops/ERMSB)
+         * para rellenar una region -- lo que IrOp::MEMSET describe. */
+        put8(out, 0xF3); /* prefijo REP */
+        put8(out, 0xAA); /* STOSB */
+        return true;
     default:
         /* Opcode no implementado en este encoder. */
         return false;
@@ -1734,6 +1809,19 @@ void X86Encoder::emit_mov(MFunction &fn, const MInstr &mi,
         const uint32_t idx = static_cast<uint32_t>(src.value);
         const uint64_t v64 =
             (idx < fn.imm64_pool.size()) ? fn.imm64_pool[idx] : 0;
+        /* x86-32 NO tiene esta forma: no hay REX ni inmediatos de 64 bits en un
+         * registro que solo tiene 32.  Se emitia igualmente `B8+r` con OCHO
+         * bytes detras, asi que el desensamblado se descarrilaba a mitad -- el
+         * procesador leia los 4 bytes sobrantes COMO CODIGO.  Sintoma tipico:
+         * cargar un literal de texto acababa ejecutando el propio texto.
+         * Aqui solo cabe la mitad baja; el emisor que necesite los 64 bits
+         * completos debe partirlos en dos mitades ANTES de llegar a este punto
+         * (en 32 bits un valor de 64 vive en un PAR de registros). */
+        if (mode32_) {
+            put8(out, 0xB8 + (dst.reg & 7));
+            put32(out, static_cast<uint32_t>(v64));
+            return;
+        }
         /* MOV r64, imm64: REX.W + B8+r + imm64 */
         put_rex(out, true, 0, dst.reg);
         put8(out, 0xB8 + (dst.reg & 7));

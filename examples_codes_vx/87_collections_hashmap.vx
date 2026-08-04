@@ -56,8 +56,8 @@ i32 main() {
     if (vcol_map_size(m) == 50) { acc = acc + 5; }
 
     // Remove: borrar k=50 (el viejo retornado es el ultimo escrito = 42).
-    if (vcol_map_remove(m, 50) == 42) { acc = acc + 1; }
-    if (vcol_map_contains(m, 50) == 0) { acc = acc + 1; }
+    if (vcol_map_remove(m, 50) == 42) { acc++; }
+    if (vcol_map_contains(m, 50) == 0) { acc++; }
 
     vcol_map_free(m);
     return acc;   // 10+10+5+5+5+5+1+1 = 42

@@ -38,7 +38,14 @@ extern "kernel32.dll" {
 // Linux: syscalls RAW (sin libc) via asm volatile.  El binario no depende de
 // libc.so.6 -> freestanding-capable (kernels/initramfs).  SysV: arg4 va a r10
 // (no rcx); nr y resultado comparten rax (un solo register binding in/out).
-@Target("!os:windows")
+//
+// La convencion es POR ARQUITECTURA, no solo por sistema: cambian la
+// instruccion (`syscall` vs `int 0x80`), los registros y hasta los NUMEROS de
+// syscall.  Antes solo estaba la version de 64 bits bajo un `!os:windows` a
+// secas, asi que un binario de 32 bits salia con un `syscall` dentro -- que en
+// modo protegido es una instruccion ilegal: cualquier `println` mataba el
+// proceso con SIGILL.
+@Target("!os:windows && arch:x86_64")
 i64 __vio_sys_write(i64 fd, u8* buf, i64 len) {
     register("rdi") i64 a1 = fd;
     register("rsi") u8* a2 = buf;
@@ -47,11 +54,29 @@ i64 __vio_sys_write(i64 fd, u8* buf, i64 len) {
     asm volatile { syscall };
     return rax_io;
 }
-@Target("!os:windows")
+@Target("!os:windows && arch:x86_64")
 void __vio_sys_exit(i64 code) {
     register("rdi") i64 a1 = code;
     register("rax") i64 rax_io = 231; // SYS_exit_group
     asm volatile { syscall };
+}
+
+// x86-32: `int 0x80`, argumentos en ebx/ecx/edx y otra tabla de numeros
+// (write = 4, exit_group = 252).
+@Target("!os:windows && arch:x86")
+i64 __vio_sys_write(i64 fd, u8* buf, i64 len) {
+    register("ebx") i32 a1 = (i32) fd;
+    register("ecx") u8* a2 = buf;
+    register("edx") i32 a3 = (i32) len;
+    register("eax") i32 eax_io = 4; // SYS_write en x86-32
+    asm volatile { int 0x80 };
+    return (i64) eax_io;
+}
+@Target("!os:windows && arch:x86")
+void __vio_sys_exit(i64 code) {
+    register("ebx") i32 a1 = (i32) code;
+    register("eax") i32 eax_io = 252; // SYS_exit_group en x86-32
+    asm volatile { int 0x80 };
 }
 
 // --- Sink de stdout con block-buffering -------------------------------------

@@ -16,7 +16,7 @@ i32 main() {
     string h = "WW" + b;         // "WWcde" -> length 5
 
     // Caso 4: str_concat builtin (mismo lowering que `+`).
-    string f = str_concat(b, "Z"); // "cdeZ" -> length 4
+    string f = b.concat("Z"); // "cdeZ" -> length 4
 
     // Suma de longitudes: 5 + 5 + 5 + 4 = 19.
     return (i32)(c.length() + e.length() + h.length() + f.length());

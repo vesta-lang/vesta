@@ -16,6 +16,7 @@
 #include "vx/module/module_resolver.h"
 
 #include "vx/lexer.h"
+#include "vx/parser.h"
 #include "vx/token.h"
 
 #include <algorithm>
@@ -286,9 +287,79 @@ collect_expr_param_fns_(const std::vector<std::unique_ptr<ast::Node>> &decls,
                     pos.push_back(static_cast<int>(i));
             }
             if (!pos.empty()) out[fd->name] = std::move(pos);
+        } else if (d->kind == ast::NodeKind::StructDecl) {
+            // Un struct cuyo constructor recibe la expresion sin evaluar
+            // cuenta igual que una funcion: al ver `T(algo)` el parser tiene
+            // que capturar el TEXTO en vez de interpretarlo.  Faltaba, asi
+            // que con el tipo importado se interpretaba -- y un numero mas
+            // ancho que la palabra se truncaba antes de llegar al
+            // constructor.
+            auto *sd = static_cast<ast::StructDecl *>(d.get());
+            for (const auto &m_up : sd->methods) {
+                const auto *m = m_up.get();
+                if (!m || !m->is_constructor) continue;
+                std::vector<int> pos;
+                for (size_t i = 0; i < m->params.size(); ++i) {
+                    if (m->params[i] && m->params[i]->is_expr_capture)
+                        pos.push_back(static_cast<int>(i));
+                }
+                if (!pos.empty()) {
+                    // Se registra por los DOS nombres: el consumidor escribe
+                    // el local (`U`) y el declarado puede venir ya cualificado
+                    // (`test__uu__U`).  El parser busca por lo que se escribio,
+                    // asi que registrar solo uno deja el otro sin capturar.
+                    out[sd->name] = pos;
+                    const size_t sep = sd->name.rfind("__");
+                    if (sep != std::string::npos && sep + 2 < sd->name.size())
+                        out[sd->name.substr(sep + 2)] = pos;
+                    break;
+                }
+            }
         } else if (d->kind == ast::NodeKind::NamespaceDecl) {
             collect_expr_param_fns_(
                 static_cast<ast::NamespaceDecl *>(d.get())->decls, out);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// collect_type_names_: recorre las decls de un modulo ya parseado (recursivo
+// dentro de NamespaceDecl) y anota el NOMBRE de cada tipo que declara.
+//
+// El parser necesita saber que nombres son tipos para reconocer `(T) x` como un
+// CAST y no como una expresion entre parentesis, y por si solo unicamente
+// conoce los declarados en el fichero que esta parseando.  Sin esto, un cast a
+// un tipo de otro fichero --incluso del MISMO namespace, partido en varios--
+// no parseaba y el usuario recibia un error de sintaxis que no apuntaba a nada
+// ("se esperaba ';'").
+//
+// Reusa el AST YA parseado del dep, igual que collect_expr_param_fns_: no
+// re-parsea nada.
+// ---------------------------------------------------------------------------
+static void
+collect_type_names_(const std::vector<std::unique_ptr<ast::Node>> &decls,
+                    std::unordered_set<std::string> &out) {
+    for (const auto &d : decls) {
+        if (!d) continue;
+        switch (d->kind) {
+        case ast::NodeKind::TypeAliasDecl:
+            out.insert(static_cast<ast::TypeAliasDecl *>(d.get())->name);
+            break;
+        case ast::NodeKind::StructDecl:
+            out.insert(static_cast<ast::StructDecl *>(d.get())->name);
+            break;
+        case ast::NodeKind::ClassDecl:
+            out.insert(static_cast<ast::ClassDecl *>(d.get())->name);
+            break;
+        case ast::NodeKind::EnumDecl:
+            out.insert(static_cast<ast::EnumDecl *>(d.get())->name);
+            break;
+        case ast::NodeKind::NamespaceDecl:
+            collect_type_names_(
+                static_cast<ast::NamespaceDecl *>(d.get())->decls, out);
+            break;
+        default:
+            break;
         }
     }
 }
@@ -328,8 +399,45 @@ scan_import_paths_(const std::string &source) {
     Diagnostics tmp; // sumidero desechable: no reportamos errores de lex aqui
     Lexer lex(source, "<import-scan>", tmp);
     Token t = lex.next();
+    // `@Target("...")` que precede a un import: si la condicion NO aplica al
+    // target activo, ese import no es una dependencia.  El parser completo ya
+    // lo descarta, pero este escaneo (solo-lex) alimenta el GRAFO de deps, asi
+    // que sin esto el modulo se compilaba y se mezclaba igualmente -- p.ej. la
+    // variante x86-32 de un modulo por-arch acababa en un binario x86-64.
+    bool skip_next_import = false;
     while (t.kind != TokenKind::END_OF_FILE) {
+        if (t.kind == TokenKind::AT) {
+            Token name = lex.next();
+            if (name.kind != TokenKind::IDENTIFIER || name.lexeme != "Target") {
+                t = name;
+                continue;
+            }
+            Token lp = lex.next();
+            if (lp.kind != TokenKind::LPAREN) {
+                t = lp;
+                continue;
+            }
+            const Token sp = lex.next();
+            std::string spec;
+            if (sp.kind == TokenKind::STRING_LIT ||
+                sp.kind == TokenKind::RAW_STRING_LIT)
+                spec = sp.str_val;
+            if (sp.kind != TokenKind::RPAREN) (void)lex.next(); // ')'
+            if (!spec.empty() && !target_expr_matches(spec))
+                skip_next_import = true;
+            t = lex.next();
+            continue;
+        }
         if (t.kind == TokenKind::KW_IMPORT) {
+            if (skip_next_import) {
+                // Descartar la sentencia entera (hasta el `;`).
+                while (t.kind != TokenKind::SEMICOLON &&
+                       t.kind != TokenKind::END_OF_FILE)
+                    t = lex.next();
+                skip_next_import = false;
+                if (t.kind != TokenKind::END_OF_FILE) t = lex.next();
+                continue;
+            }
             Token nxt = lex.next();
             if (nxt.kind == TokenKind::STRING_LIT ||
                 nxt.kind == TokenKind::RAW_STRING_LIT) {
@@ -357,6 +465,9 @@ scan_import_paths_(const std::string &source) {
             t = nxt;
             continue;
         }
+        // Cualquier token que no sea `public` rompe la adyacencia
+        // `@Target(...) [public] import` -> el pendiente caduca.
+        if (t.kind != TokenKind::KW_PUBLIC) skip_next_import = false;
         t = lex.next();
     }
     return out;
@@ -440,6 +551,13 @@ uint32_t ModuleGraph::load_and_parse_(const std::string &canonical_path) {
     // por dep.  La entrada de ESTE modulo ya esta reservada (id arriba), asi
     // que un ciclo de imports se corta por el dedup.
     std::unordered_map<std::string, std::vector<int>> imported_expr_params;
+    // Nombres de TIPO visibles desde este modulo (typedefs, structs, clases,
+    // enums de los deps).  El parser los necesita para reconocer `(T) x` como
+    // un cast: sin ellos solo conoce los tipos declarados en el FICHERO
+    // actual, asi que un `(tag) 10` con `tag` declarado en otro fichero --del
+    // mismo namespace, incluso-- no parseaba y daba un error de sintaxis
+    // desconcertante ("se esperaba ';'").
+    std::unordered_set<std::string> imported_type_names;
     {
         // Worklist de module_ids a inspeccionar: los imports directos + la
         // cadena de `public import` (re-exports) transitiva.  Asi una fn `expr`
@@ -468,6 +586,7 @@ uint32_t ModuleGraph::load_and_parse_(const std::string &canonical_path) {
             if (!dep || !dep->parsed_ast) continue;
             collect_expr_param_fns_(dep->parsed_ast->decls,
                                     imported_expr_params);
+            collect_type_names_(dep->parsed_ast->decls, imported_type_names);
             // Seguir los `public import` del dep (re-export transitivo).
             std::vector<std::pair<std::string, bool>> reexp;
             gather_public_reexports_(dep->parsed_ast->decls, reexp);
@@ -479,12 +598,32 @@ uint32_t ModuleGraph::load_and_parse_(const std::string &canonical_path) {
         }
     }
 
+    // Namespaces parciales: los tipos que declaran los ficheros HERMANOS --los
+    // que contribuyen al mismo namespace que este-- son visibles aqui sin
+    // ningun import, asi que el parser tambien tiene que conocerlos.
+    {
+        std::vector<std::string> mis_ns;
+        extract_namespaces_(source, mis_ns);
+        if (!mis_ns.empty()) {
+            build_namespace_index_();
+            for (const auto &ns : mis_ns) {
+                auto itt = ns_types_.find(ns);
+                if (itt == ns_types_.end()) continue;
+                for (const auto &n : itt->second)
+                    imported_type_names.insert(n);
+            }
+        }
+    }
+
     // Lex + parse.  Cada modulo reusa el mismo Diagnostics del graph para
     // que los errores aparezcan agregados al final del build.
     Lexer lexer(source, canonical_path, diags_);
     Parser parser(lexer, diags_);
     if (!imported_expr_params.empty())
         parser.seed_imported_expr_params(imported_expr_params);
+    // Los tipos visibles desde los deps: sin esto `(T) x` con T de otro
+    // fichero no se reconoce como cast.
+    for (const auto &tn : imported_type_names) parser.add_known_alias(tn);
     auto ast = parser.parse_program();
     if (!ast) {
         SourceLoc l;
@@ -586,8 +725,18 @@ ResolveResult ModuleGraph::resolve(const std::string &raw_path,
 // Cubre la forma statement `namespace a.b.c;` y la forma bloque
 // `namespace a.b.c { ... }`.  Un mismo fichero puede declarar varios.
 // ---------------------------------------------------------------------------
-void ModuleGraph::extract_namespaces_(const std::string &source,
-                                      std::vector<std::string> &out) {
+void ModuleGraph::extract_namespaces_(
+    const std::string &source, std::vector<std::string> &out,
+    std::unordered_map<std::string, std::vector<std::string>> *types_by_ns) {
+    // Namespace en curso mientras recorremos el fichero: los tipos se atribuyen
+    // al que este vigente, no a todos los del fichero.
+    std::string cur_ns;
+    auto anota_tipo = [&](const std::string &nombre) {
+        if (!types_by_ns || nombre.empty() || cur_ns.empty()) return;
+        auto &v = (*types_by_ns)[cur_ns];
+        if (std::find(v.begin(), v.end(), nombre) == v.end())
+            v.push_back(nombre);
+    };
     // Diagnostics throwaway: el lex no debe emitir errores relevantes aqui;
     // si los hay, los ignoramos (el parse real reportara).
     Diagnostics scratch;
@@ -614,8 +763,44 @@ void ModuleGraph::extract_namespaces_(const std::string &source,
             if (std::find(out.begin(), out.end(), ns) == out.end()) {
                 out.push_back(ns);
             }
+            cur_ns = ns;
             t = nxt;
             continue;
+        }
+        if (types_by_ns) {
+            if (t.kind == TokenKind::KW_TYPEDEF) {
+                // El nombre es el ultimo identificador a nivel 0 antes del
+                // `;`.  Saltar el interior de las llaves cubre de una vez las
+                // tres formas: alias plano (`typedef u64 size_t;`), newtype con
+                // bloque (`typedef X Y new { ... };`) y el typedef C-style
+                // (`typedef struct { ... } Nombre;`), cuyo nombre va al final.
+                int prof = 0;
+                std::string ultimo;
+                Token c = lex.next();
+                while (c.kind != TokenKind::END_OF_FILE) {
+                    if (c.kind == TokenKind::LBRACE) {
+                        ++prof;
+                    } else if (c.kind == TokenKind::RBRACE) {
+                        if (prof > 0) --prof;
+                    } else if (prof == 0) {
+                        if (c.kind == TokenKind::SEMICOLON) break;
+                        if (c.kind == TokenKind::IDENTIFIER)
+                            ultimo = c.lexeme;
+                    }
+                    c = lex.next();
+                }
+                anota_tipo(ultimo);
+                t = lex.next();
+                continue;
+            }
+            if (t.kind == TokenKind::KW_STRUCT ||
+                t.kind == TokenKind::KW_CLASS ||
+                t.kind == TokenKind::KW_ENUM) {
+                Token id = lex.next();
+                if (id.kind == TokenKind::IDENTIFIER) anota_tipo(id.lexeme);
+                t = id;
+                continue;
+            }
         }
         t = lex.next();
     }
@@ -660,7 +845,15 @@ void ModuleGraph::build_namespace_index_() {
             std::string source;
             if (!read_file_(canonical, source)) continue;
             std::vector<std::string> namespaces;
-            extract_namespaces_(source, namespaces);
+            std::unordered_map<std::string, std::vector<std::string>> tipos;
+            extract_namespaces_(source, namespaces, &tipos);
+            for (auto &kv : tipos) {
+                auto &dst = ns_types_[kv.first];
+                for (const auto &n : kv.second) {
+                    if (std::find(dst.begin(), dst.end(), n) == dst.end())
+                        dst.push_back(n);
+                }
+            }
             for (const auto &ns : namespaces) {
                 auto &files = ns_index_[ns];
                 if (std::find(files.begin(), files.end(), canonical) ==
@@ -789,6 +982,15 @@ uint32_t ModuleGraph::build_from_root(const std::string &root_file) {
         size_t slash = canonical.find_last_of('/');
         if (slash != std::string::npos) {
             root_dir_ = canonical.substr(0, slash);
+        } else {
+            // Sin separador el root es un nombre SUELTO (`vx main.vx`), asi que
+            // vive en el directorio actual.  Dejarlo vacio hacia que
+            // `add_root("")` saliera de inmediato y el indice de namespaces NO
+            // escaneara el directorio del propio fichero raiz: el mismo
+            // proyecto compilaba con ruta absoluta y fallaba con relativa,
+            // diciendo "ningun .vx bajo las source roots lo declara" con el
+            // fichero justo al lado.
+            root_dir_ = ".";
         }
     }
     const uint32_t id = load_and_parse_(canonical);

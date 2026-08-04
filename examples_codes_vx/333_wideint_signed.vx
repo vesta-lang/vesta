@@ -1,0 +1,21 @@
+/**
+ * @file 333_wideint_signed.vx
+ * @brief `i128` con signo: division/resto truncados, negacion, comparadores.
+ *
+ * Ejercita el stdlib `std.wideint`: `i128.from_i64` (sign-extend), division con
+ * signo (trunca a cero), resto con el signo del dividendo, `__neg__`,
+ * `is_negative` y comparadores con signo.  Red diferencial (interp = oraculo).
+ */
+import std.wideint only i128;
+
+i32 main() {
+    i128 a = i128.from_i64(-100);
+    i128 b = i128.from_i64(7);
+    i32 acc = 0;
+    if ((a / b) == i128.from_i64(-14)) { acc = acc + 10; }   // trunca a cero
+    if ((a % b) == i128.from_i64(-2))  { acc = acc + 20; }   // signo del dividendo
+    if (a.__neg__() == i128.from_i64(100)) { acc = acc + 12; }
+    if (a.is_negative()) { acc = acc + 100; }
+    if (a < b) { acc = acc + 500; }
+    return acc;   // 642
+}

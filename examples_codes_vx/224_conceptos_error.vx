@@ -15,3 +15,4 @@ i32 main() {
     Punto r = sumar<Punto>(p, q);   // ERROR: Punto no es Numeric
     return 0;
 }
+// @expect-compile-fail

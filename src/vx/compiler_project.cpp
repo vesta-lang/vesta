@@ -26,6 +26,9 @@
  */
 
 #include "vx/compiler.h"
+#include "vx/vxdbg_emit.h" // grafo de conocimiento del programa
+#include "vxdbg/codec.h"
+#include "vxdbg/roots.h"
 #include "analyze/fingerprint.h" // verificacion de contratos
 #include "vx/incremental.h" // CAS global direccionado por contenido (cross-proyecto)
 #include <algorithm> // UCRT64: no transitivo
@@ -287,6 +290,49 @@ static std::string global_cache_dir_() {
     return (v && v[0]) ? std::string(v) : std::string();
 }
 
+/**
+ * @brief Huella del compilador que esta generando los artefactos.
+ *
+ * Se toma del propio ejecutable (tamano y fecha de modificacion): cambia en
+ * cuanto se recompila el compilador, que es justo cuando los artefactos
+ * cacheados dejan de ser validos.  Se calcula una sola vez.
+ *
+ * @return Valor que identifica esta version del compilador.
+ */
+static uint64_t compiler_fingerprint_() {
+    static const uint64_t fp = []() -> uint64_t {
+        // Valvula para depurar: al recompilar el compilador (p.ej. para
+        // anadir una traza) la huella cambia, los artefactos se invalidan y
+        // se regeneran limpios -- con lo que el escenario que se queria
+        // observar desaparece justo al ir a mirarlo.  Con VX_CACHE_FINGERPRINT
+        // la huella queda fija en el valor que se le pase, asi que se puede
+        // instrumentar sin perder la cache que reproduce el fallo.
+        if (const char *fixed = std::getenv("VX_CACHE_FINGERPRINT")) {
+            if (fixed[0]) return vxi_fnv1a(std::string(fixed));
+        }
+        std::error_code ec;
+        const std::string self = ::fs::get_executable_path();
+        uint64_t h = 0xcbf29ce484222325ULL;
+        auto mix = [&h](uint64_t v) {
+            h ^= v;
+            h *= 0x100000001b3ULL;
+        };
+        if (!self.empty()) {
+            const std::filesystem::path p(self);
+            const auto sz = std::filesystem::file_size(p, ec);
+            if (!ec) mix(static_cast<uint64_t>(sz));
+            const auto tm = std::filesystem::last_write_time(p, ec);
+            if (!ec)
+                mix(static_cast<uint64_t>(tm.time_since_epoch().count()));
+        }
+        // Respaldo por si no se pudo mirar el ejecutable: al menos el formato
+        // de interfaz, que ya cambia con las modificaciones de fondo.
+        mix(VXI_FORMAT_VERSION);
+        return h;
+    }();
+    return fp;
+}
+
 static std::string global_cache_path_(const std::string &source_path,
                                       const std::string &ext) {
     namespace fs = std::filesystem;
@@ -364,6 +410,12 @@ struct ProjectModuleWork {
     ir::IrModule ir;
     VxiModule vxi;
     bool ok = false;
+    /// Los pares (simbolo, entidad) del grafo de depuracion de ESTE modulo.  Se
+    /// juntan al final: el ejecutable contiene todos los modulos, asi que su
+    /// mapa tiene que cubrirlos a todos.
+    std::vector<std::pair<std::string, vxdbg::LanguageEntityId>> vxdbg_symbols;
+    /// Y sus tramos de fuente, que se juntan igual.
+    std::vector<vxdbg::SourceExtent> vxdbg_spans;
     ///  M.L20-full: Diagnostics local del modulo.  Cuando se
     /// paraleliza el compile (VX_PARALLEL_COMPILE=1), cada thread
     /// usa este diags propio en lugar del res.diagnostics compartido,
@@ -378,6 +430,7 @@ struct ImportRequest {
     std::string local_name; // alias o module_name
     std::vector<TypeChecker::VxiOnlyEntry> only_symbols;
     bool is_plain = false;           // sin only -> registra namespace
+    bool only_all = false;           // `only *` -> inyecta TODOS los publicos
     bool is_public_reexport = false; // L.23: public import
     bool by_namespace = false;       // NS.2-full: import a.b.c; (por-namespace)
     std::string ns_path;             // namespace original (por-namespace): para
@@ -392,6 +445,28 @@ struct ImportRequest {
 /// module_name del dep resuelto, para reusar toda la maquinaria de imports
 /// por-path (que ya soporta acceso cualificado multi-segmento via ns_path).
 using NsToModname = std::unordered_map<std::string, std::string>;
+
+/// `a.b.c` -> `a__b__c`: el mismo aplanado que usa el mangling de namespaces.
+///
+/// Sirve para CUALIFICAR los simbolos que entran por un import por-namespace.
+/// Hacerlo con el nombre de FICHERO era el origen de que un mismo tipo tuviera
+/// varias identidades: `std.types` lo declaran `types.vx`, `types/arm64.vx` y
+/// `types/x86_64.vx`, y el resolver devuelve el PRIMERO que encuentra el
+/// escaneo del disco.  Segun cual ganase, el mismo `uintptr` entraba como
+/// `arm64__uintptr` o como `std__types__uintptr` y luego no unificaba consigo
+/// mismo.  El namespace es el mismo para todos los ficheros que lo declaran,
+/// asi que cualificar por el da UNA identidad estable.
+inline std::string flatten_ns_(const std::string &dotted) {
+    std::string out;
+    out.reserve(dotted.size() + 8);
+    for (const char c : dotted) {
+        if (c == '.')
+            out += "__";
+        else
+            out.push_back(c);
+    }
+    return out;
+}
 
 ///  M.5: renombrar las top-level FunctionDecl y GlobalVarDecl del
 /// modulo con un prefijo `<modname>__`.  Esto evita colisiones de
@@ -702,8 +777,10 @@ collect_imports_(const ast::ModuleNode &mod,
         for (const auto &os : im->only_symbols) {
             req.only_symbols.push_back({os.name, os.rename});
         }
-        // Plain import = sin only.  Registra namespace en lugar de inyectar.
-        req.is_plain = im->only_symbols.empty();
+        // Plain import = sin only Y sin glob.  Registra namespace en lugar de
+        // inyectar.  `only *` (glob) inyecta TODOS los publicos -> NO es plain.
+        req.only_all = im->only_all;
+        req.is_plain = im->only_symbols.empty() && !im->only_all;
         req.is_public_reexport = im->is_public_reexport;
         req.loc = im->loc;
         out.push_back(std::move(req));
@@ -846,6 +923,7 @@ std::string derive_package_id_(const std::string &root_path) {
 std::vector<int>
 compute_module_levels_(const std::vector<ProjectModuleWork> &work,
                        const std::unordered_map<std::string, size_t> &by_name,
+                       const std::unordered_map<std::string, size_t> &by_ns,
                        const NsToModname &ns_to_modname) {
     std::vector<int> levels(work.size(), 0);
     // Procesamos en orden topologico (work ya esta en topo).  Para cada
@@ -857,11 +935,25 @@ compute_module_levels_(const std::vector<ProjectModuleWork> &work,
         int max_dep_level = -1;
         auto imports = collect_imports_(*pm.ast, &ns_to_modname);
         for (const auto &req : imports) {
-            auto itd = by_name.find(req.module_name);
-            if (itd == by_name.end()) continue;
-            if (itd->second >= work.size()) continue;
-            if (static_cast<int>(levels[itd->second]) > max_dep_level) {
-                max_dep_level = levels[itd->second];
+            // Resolver el dep por NAMESPACE COMPLETO (by_ns) cuando el import es
+            // por-namespace: `by_name` colisiona cuando dos modulos comparten el
+            // ultimo segmento (std.syscall.linux.x86_64 y ...windows.x86_64 son
+            // ambos "x86_64") -> un import de linux.x86_64 podia resolver al idx
+            // de windows.x86_64 (o a ninguno) y el nivel topo quedaba mal ->
+            // race en el compile paralelo (el consumidor compila antes que su
+            // dep real).  Igual que la resolucion de deps del propio compilador.
+            size_t dep_idx = SIZE_MAX;
+            if (req.by_namespace && !req.ns_path.empty()) {
+                auto itn = by_ns.find(req.ns_path);
+                if (itn != by_ns.end()) dep_idx = itn->second;
+            }
+            if (dep_idx == SIZE_MAX) {
+                auto itd = by_name.find(req.module_name);
+                if (itd != by_name.end()) dep_idx = itd->second;
+            }
+            if (dep_idx >= work.size()) continue;
+            if (static_cast<int>(levels[dep_idx]) > max_dep_level) {
+                max_dep_level = levels[dep_idx];
             }
         }
         levels[i] = max_dep_level + 1; // -1 + 1 = 0 si no hay deps
@@ -949,6 +1041,40 @@ CompileResult compile_vx_project(
         work[i].source = read_source_(rm_mut->canonical_path);
         by_name.emplace(rm_mut->module_name, i);
     }
+    // Colision de module_name (filename): dos modulos con el mismo ultimo
+    // segmento (p.ej. std.syscall.linux.x86_64 y std.syscall.windows.x86_64,
+    // ambos "x86_64") colapsan en by_name (emplace conserva el primero).  by_ns
+    // mapea el NAMESPACE COMPLETO (unico) -> idx, para resolver sin ambiguedad
+    // los imports por-namespace (`import a.b.c;`).
+    std::unordered_map<std::string, size_t> by_ns;
+    for (size_t i = 0; i < work.size(); ++i) {
+        if (!work[i].ast) continue;
+        for (const auto &d : work[i].ast->decls) {
+            if (d && d->kind == ast::NodeKind::NamespaceDecl) {
+                auto *nd = static_cast<ast::NamespaceDecl *>(d.get());
+                by_ns.emplace(nd->name, i);
+                break;
+            }
+        }
+    }
+
+    // Simbolos que el parser dejo fuera por @Target, agregados de TODOS los
+    // modulos del build.  Usar uno de ellos no es "no existe": existe para
+    // otro objetivo, y el diagnostico tiene que distinguirlo.  Se agrega a
+    // nivel de proyecto porque el simbolo puede estar descartado en un dep y
+    // usarse desde el modulo raiz.
+    std::unordered_map<std::string, std::vector<std::string>>
+        target_skipped_proyecto;
+    for (const auto &w : work) {
+        if (!w.ast) continue;
+        for (const auto &kv : w.ast->target_skipped) {
+            auto &dst = target_skipped_proyecto[kv.first];
+            for (const auto &spec : kv.second) {
+                if (std::find(dst.begin(), dst.end(), spec) == dst.end())
+                    dst.push_back(spec);
+            }
+        }
+    }
 
     //  NS.2-full: mapa namespace -> module_name para traducir los
     // imports por-namespace (`import a.b.c;`) al module_name del dep.
@@ -956,6 +1082,67 @@ CompileResult compile_vx_project(
     // Namespace parcial: todos los module_name por namespace (para registrar
     // los simbolos de TODOS los ficheros de un `namespace X;` compartido).
     const NsToAllModnames ns_to_all_modnames = build_ns_to_all_modnames_(work);
+
+    // NS.parcial fix: un mismo `namespace X;` declarado por VARIOS ficheros
+    // (p.ej. std.types = types.vx base + types/<arch>.vx) se parsea como
+    // modulos SEPARADOS, cada uno con su propio TypeChecker.  Una ref
+    // CROSS-FICHERO -- `typedef usize size_t` en la base, con `usize` (newtype)
+    // definido en el fichero del arch -- NO resolvia: el TC de la base no ve
+    // los simbolos del arch, y el flatten (por-modulo) no manglea la ref.
+    // Fix: fusionar las decls de los ficheros SECUNDARIOS en el NamespaceDecl
+    // del PRINCIPAL antes de compilar.  Asi el flatten usa un rename_map COMuN
+    // (manglea `usize` -> `std__types__usize`) y el TC ve todas las decls en
+    // el mismo modulo.  Los secundarios quedan con el NamespaceDecl vacio (se
+    // compilan a un .vxi vacio, sin romper el registro del importador).
+    {
+        auto find_ns_decl = [](ast::ModuleNode *m,
+                               const std::string &ns) -> ast::NamespaceDecl * {
+            if (!m) return nullptr;
+            for (auto &d : m->decls)
+                if (d && d->kind == ast::NodeKind::NamespaceDecl) {
+                    auto *nd = static_cast<ast::NamespaceDecl *>(d.get());
+                    if (nd->name == ns) return nd;
+                }
+            return nullptr;
+        };
+        for (const auto &kv : ns_to_all_modnames) {
+            if (kv.second.size() < 2) continue; // no es namespace parcial
+            const std::string &ns = kv.first;
+            auto it0 = by_name.find(kv.second[0]);
+            if (it0 == by_name.end()) continue;
+            const size_t pidx = it0->second;
+            ast::NamespaceDecl *pns = find_ns_decl(work[pidx].ast.get(), ns);
+            if (!pns) continue;
+            for (size_t k = 1; k < kv.second.size(); ++k) {
+                auto itk = by_name.find(kv.second[k]);
+                if (itk == by_name.end()) continue;
+                ProjectModuleWork &sec = work[itk->second];
+                ast::NamespaceDecl *sns = find_ns_decl(sec.ast.get(), ns);
+                if (!sns) continue;
+                for (auto &d : sns->decls)
+                    pns->decls.push_back(std::move(d));
+                sns->decls.clear();
+                // El source del secundario entra en el hash del principal para
+                // que el cache del .vxi se invalide si cualquier fichero del
+                // namespace parcial cambia.
+                work[pidx].source += "\n";
+                work[pidx].source += sec.source;
+            }
+            // El check de aliases (type_checker) es un SOLO pase ordenado: un
+            // `typedef usize size_t` (alias puro) exige que `usize` (newtype)
+            // ya este procesado.  Tras la fusion las decls quedan intercaladas;
+            // mover los alias PUROS (no-newtype) al final garantiza que sus
+            // underlying (newtypes del mismo ns) ya esten registrados.
+            std::stable_partition(
+                pns->decls.begin(), pns->decls.end(),
+                [](const std::unique_ptr<ast::Node> &d) {
+                    if (d && d->kind == ast::NodeKind::TypeAliasDecl)
+                        return static_cast<ast::TypeAliasDecl *>(d.get())
+                            ->is_newtype; // alias puro (false) -> al final
+                    return true;          // resto -> mantiene delante
+                });
+        }
+    }
 
     //  NS.3: PackageId del proyecto (derivado de vx.toml o anonimo).
     // Compartido por todos los modulos del proyecto salvo override @id.
@@ -1005,7 +1192,7 @@ CompileResult compile_vx_project(
     // safety review del TypeChecker compartido + file lock cache que
     // M5.A ya cubre via atomic write.
     const std::vector<int> module_levels =
-        compute_module_levels_(work, by_name, ns_to_modname);
+        compute_module_levels_(work, by_name, by_ns, ns_to_modname);
     int max_level = 0;
     for (int L : module_levels) {
         if (L > max_level) max_level = L;
@@ -1193,6 +1380,14 @@ CompileResult compile_vx_project(
         // `.vel` con relocations sin resolver -> SEGV silente en runtime
         // (limitacion MC.12 documentada).
         uint64_t source_hash = vxi_fnv1a(pm.source);
+        // El COMPILADOR forma parte de lo que produjo el artefacto: un mismo
+        // fuente compilado por dos versiones distintas da IR distinto.  Sin
+        // esto, arreglar un bug de codegen no invalidaba nada y se seguian
+        // sirviendo artefactos generados por la version anterior -- el fallo
+        // parecia seguir vivo, o revivia al repoblarse la cache, y no habia
+        // forma de distinguirlo de un bug real.
+        source_hash ^= compiler_fingerprint_() + 0x9E3779B97F4A7C15ULL +
+                       (source_hash << 6) + (source_hash >> 2);
         if (!opts.instrument_mode.empty() && opts.instrument_mode != "none") {
             const uint64_t instrument_hash = vxi_fnv1a(opts.instrument_mode);
             source_hash ^= instrument_hash + 0x9E3779B97F4A7C15ULL +
@@ -1289,6 +1484,35 @@ CompileResult compile_vx_project(
             std::vector<uint8_t> vbytes;
             if (read_file_bytes_(vp, vbytes)) {
                 auto pr = vxi_parse(vbytes.data(), vbytes.size());
+                // v13: un artefacto atado a OTRO objetivo no sirve.  Solo los
+                // modulos que usan @Target llevan objetivo (el resto va con el
+                // campo vacio y vale para todos), asi que esto no invalida nada
+                // que no dependa de verdad del target.
+                //
+                // Sin esta comprobacion, un .vxi generado compilando para arm64
+                // se servia tal cual en un build x86-64 y metia sus tipos en la
+                // resolucion: el mismo `uintptr` acababa con dos identidades
+                // (`arm64__uintptr` y `std__types__uintptr`) segun la ruta de
+                // importacion, con un error de tipos incomprensible.
+                if (pr.ok && !pr.module_.target.empty()) {
+                    std::string tos;
+                    std::string tarch;
+                    vx::get_aot_condcomp_target(tos, tarch);
+                    if (tos.empty()) tos = vxi_host_os_name();
+                    if (tarch.empty()) tarch = vxi_host_arch_name();
+                    const std::string actual = tos + "|" + tarch;
+                    if (pr.module_.target != actual) {
+                        if (verbose_cache) {
+                            std::ostringstream tmp;
+                            tmp << "[vx-cache] miss (objetivo): '"
+                                << pm.module_name << "' se genero para "
+                                << pr.module_.target << " y se compila para "
+                                << actual << "\n";
+                            std::cerr << tmp.str();
+                        }
+                        pr.ok = false; // fuerza recompilar con este objetivo
+                    }
+                }
                 if (pr.ok && pr.module_.source_hash == source_hash) {
                     //  M4.ext L.13: cache transitivo.  El source_hash
                     // del modulo coincide, pero alguno de sus deps directos
@@ -1337,7 +1561,28 @@ CompileResult compile_vx_project(
                             // `.velb` con cache caliente.  Un `.vxir` viejo
                             // falla el magic y cae a recompilar.
                             ir::IrModule dep_mod;
-                            if (ir::parse_ir_module_cache(ibytes, dep_mod)) {
+                            // La interfaz y el IR son dos ficheros que tienen
+                            // que corresponderse.  Entre validar la primera y
+                            // leer el segundo, otra compilacion simultanea del
+                            // mismo modulo puede publicar una version nueva de
+                            // ambos: se acabaria mezclando la interfaz que se
+                            // valido con un IR que no es el suyo.  Releerla
+                            // despues y comprobar que sigue siendo la misma lo
+                            // descarta; ante la duda, se recompila.
+                            bool par_coherente = true;
+                            {
+                                std::vector<uint8_t> vb2;
+                                if (!read_file_bytes_(vp, vb2)) {
+                                    par_coherente = false;
+                                } else {
+                                    auto pr2 = vxi_parse(vb2.data(), vb2.size());
+                                    if (!pr2.ok ||
+                                        pr2.module_.source_hash != source_hash)
+                                        par_coherente = false;
+                                }
+                            }
+                            if (par_coherente &&
+                                ir::parse_ir_module_cache(ibytes, dep_mod)) {
                                 pm.vxi = std::move(pr.module_);
                                 pm.ir.functions = std::move(dep_mod.functions);
                                 pm.ir.static_data =
@@ -1406,6 +1651,11 @@ CompileResult compile_vx_project(
         auto inline_namespaces = flatten_namespaces(*pm.ast);
 
         pm.tc = std::make_unique<TypeChecker>(*pm.ast, pm.diags);
+
+        for (const auto &kv : target_skipped_proyecto) {
+            for (const auto &spec : kv.second)
+                pm.tc->register_target_skipped(kv.first, spec);
+        }
 
         for (const auto &ins : inline_namespaces) {
             const uint32_t ns_idx =
@@ -1516,13 +1766,58 @@ CompileResult compile_vx_project(
             }
         }
 
-        for (const auto &req : imports) {
-            auto itd = by_name.find(req.module_name);
-            if (itd == by_name.end()) continue;
-            const ProjectModuleWork &dep = work[itd->second];
+        for (auto &req : imports) {
+            // Resolver el dep por NAMESPACE completo (unico) cuando el import es
+            // por-namespace: evita la colision de module_name corto (dos
+            // "x86_64" de linux vs windows).  Fallback a by_name (por-path).
+            size_t dep_idx = 0;
+            bool dep_found = false;
+            if (req.by_namespace && !req.ns_path.empty()) {
+                auto itns = by_ns.find(req.ns_path);
+                if (itns != by_ns.end()) {
+                    dep_idx = itns->second;
+                    dep_found = true;
+                }
+            }
+            if (!dep_found) {
+                auto itd = by_name.find(req.module_name);
+                if (itd == by_name.end()) {
+                    // Un import que no resuelve se saltaba en silencio: no se
+                    // inyectaba ninguno de sus simbolos y la compilacion
+                    // seguia como si nada, fallando mucho mas tarde y en otro
+                    // sitio -- o peor, dando un resultado equivocado.  Quien
+                    // escribio el import merece enterarse aqui.
+                    SourceLoc iloc;
+                    iloc.file = pm.canonical_path;
+                    res.diagnostics.error(
+                        std::move(iloc),
+                        "no se encuentra el modulo '" + req.module_name +
+                            "' que pide un import; sus simbolos no se han "
+                            "importado");
+                    res.ok = false;
+                    continue;
+                }
+                dep_idx = itd->second;
+            }
+            const ProjectModuleWork &dep = work[dep_idx];
             VxiModule dep_filtered_storage;
             const VxiModule &dep_vxi =
                 filter_internal_(dep.vxi, dep_filtered_storage);
+            // `only *` (glob): expandir a TODOS los simbolos publicos del dep,
+            // como si el usuario hubiera listado cada uno (nombre directo, sin
+            // rename).  Se hace aqui -- no en el mapeo AST -- porque necesita el
+            // .vxi del dep (la lista de sus simbolos).  Con `public import` los
+            // re-exporta (req.is_public_reexport se propaga a mark_imported).
+            if (req.only_all && req.only_symbols.empty()) {
+                // Inyectar TODOS los simbolos publicos del dep.  El .vxi ya
+                // filtro los sinteticos del compilador, asi que NO descartamos
+                // por prefijo `_`: un `public __NR_write` (convencion POSIX) es
+                // legitimo y debe entrar al scope.
+                for (const auto &sym : dep_vxi.symbols) {
+                    if (sym.name.empty()) continue;
+                    req.only_symbols.push_back({sym.name, ""});
+                }
+            }
             if (req.is_plain) {
                 // M.7: registrar namespace.
                 register_namespace_for_import(*pm.tc, req.local_name,
@@ -1569,8 +1864,14 @@ CompileResult compile_vx_project(
                         if (sym.name[0] == '_') continue;
                         synth_only.push_back({sym.name, ""});
                     }
+                    // Cualificar por NAMESPACE, no por fichero: en un namespace
+                    // parcial todos sus ficheros deben dar la MISMA identidad.
+                    const std::string qual =
+                        (req.by_namespace && !req.ns_path.empty())
+                            ? flatten_ns_(req.ns_path)
+                            : req.module_name;
                     auto missing = import_vxi_into_typechecker_with_missing(
-                        *pm.tc, dep_vxi, synth_only);
+                        *pm.tc, dep_vxi, synth_only, qual);
                     (void)missing; // best-effort; los privados ya fueron
                                    //              filtrados al construir el
                                    //              .vxi.
@@ -1624,8 +1925,13 @@ CompileResult compile_vx_project(
                                                    /*ns_prefix=*/"", only_alias);
                 // M2.d: inyeccion directa via only.  M6.a.3: usar la variante
                 // que devuelve los missing para emitir diagnostico claro.
+                // Cualificar por NAMESPACE, no por fichero (ver flatten_ns_).
+                const std::string qual =
+                    (req.by_namespace && !req.ns_path.empty())
+                        ? flatten_ns_(req.ns_path)
+                        : req.module_name;
                 auto missing = import_vxi_into_typechecker_with_missing(
-                    *pm.tc, dep_vxi, req.only_symbols);
+                    *pm.tc, dep_vxi, req.only_symbols, qual);
                 // Namespace PARCIAL: un `import std.types only uintptr` resuelve
                 // `req.module_name` al PRIMER fichero del namespace (p.ej.
                 // arm64), donde el simbolo puede estar @Target-inactivo -> queda
@@ -1655,9 +1961,12 @@ CompileResult compile_vx_project(
                             VxiModule other_store;
                             const VxiModule &other_vxi = filter_internal_(
                                 work[ito->second].vxi, other_store);
+                            // Mismo cualificador que arriba: los ficheros
+                            // restantes del namespace parcial NO pueden dar una
+                            // identidad distinta a la del primero.
                             auto still =
                                 import_vxi_into_typechecker_with_missing(
-                                    *pm.tc, other_vxi, retry);
+                                    *pm.tc, other_vxi, retry, qual);
                             // reducir retry a los que aun faltan tras este fichero
                             std::vector<TypeChecker::VxiOnlyEntry> next_retry;
                             for (const auto &os : retry) {
@@ -1800,6 +2109,12 @@ CompileResult compile_vx_project(
         // modulos del proyecto (no solo al single-file).  Sin esto los deps
         // se bajaban en modo Full (GC) y el IR mergeado no era AOT-compatible.
         lo.set_native_poo(opts.native_poo);
+        // Ancho del target para el inline-asm que GENERA el lowering (el
+        // detector de features de CPU, los helpers @Naked...).  El camino de
+        // fichero suelto ya lo propagaba; este no, asi que al compilar un
+        // proyecto para x86-32 se emitian registros de 64 bits y el ensamblado
+        // fallaba, tumbando la funcion entera al interprete.
+        lo.set_asm_target_bits(opts.asm_target_bits);
         // CPU dispatch Inc 5b: aplicar los @HelperOverride agregados (root +
         // imports, ya resueltos por precedencia en el pre-pase) SOLO al
         // modulo ROOT, que es quien emite __vx_memcpy_init / __vx_strdisp_init.
@@ -1824,6 +2139,28 @@ CompileResult compile_vx_project(
         if (!lo.run(pm.ir, mod_name)) {
             pm.ok = false;
             return;
+        }
+
+        // Grafo de conocimiento del programa, por modulo.  Cada uno aporta sus
+        // tipos y los simbolos que emitio; el mapa del artefacto se compone
+        // despues con lo de todos, porque el ejecutable final los contiene a
+        // todos y una direccion suya puede caer en cualquiera.
+        {
+            VxdbgEmitStats st;
+            std::string dbg_err;
+            std::vector<vxdbg::SourceExtent> spans;
+            spans.reserve(lo.emitted_spans().size());
+            for (const auto &e : lo.emitted_spans())
+                spans.push_back({e.symbol, e.line, e.column, e.length});
+            if (!emit_vxdbg_source(*pm.tc, lo.emitted_symbols(), spans,
+                                   pm.canonical_path,
+                                   pm.source, opts.vxdbg_dir, st, dbg_err)) {
+                std::cerr << "[vxdbg] no se pudo emitir " << pm.canonical_path
+                          << ": "
+                          << dbg_err << "\n";
+            }
+            pm.vxdbg_symbols = st.symbol_links;
+            pm.vxdbg_spans = st.spans;
         }
 
         // -ffp-contract=off (CLI, per-modulo): fuerza IEEE estricto (sin FMA)
@@ -1851,6 +2188,27 @@ CompileResult compile_vx_project(
                              !module_pkgid_override[i].empty())
                                 ? module_pkgid_override[i]
                                 : project_package_id;
+
+        // v13: atar el .vxi al OBJETIVO, pero solo si el modulo usa @Target --
+        // lo que declara depende entonces del target y su artefacto no vale
+        // para otro.  Los demas (la inmensa mayoria) siguen con un unico .vxi
+        // compartido, de modo que cambiar de objetivo no recompila la stdlib
+        // entera.
+        //
+        // Sin esto, un .vxi generado compilando para arm64 se seguia sirviendo
+        // en un build x86-64 y metia sus tipos en la resolucion: el mismo
+        // `uintptr` acababa con dos identidades segun la ruta de importacion.
+        if (pm.ast && pm.ast->uses_conditional_target) {
+            // Misma fuente de verdad que @Target: el override de cross-target
+            // si lo hay, y el host si no.  Dos lecturas distintas del objetivo
+            // volverian a desincronizar artefacto y compilacion.
+            std::string tos;
+            std::string tarch;
+            vx::get_aot_condcomp_target(tos, tarch);
+            if (tos.empty()) tos = vxi_host_os_name();
+            if (tarch.empty()) tarch = vxi_host_arch_name();
+            pm.vxi.target = tos + "|" + tarch;
+        }
 
         //  M4.ext L.13: poblar dep table con los (name, abi_hash) de
         // los deps directos del modulo.  El loader del cache verifica
@@ -1887,13 +2245,21 @@ CompileResult compile_vx_project(
                 pm.vxi.abi_hash = h;
             }
             //  M5.A L.17: escritura atomica (rename temp file).
-            (void)write_file_atomic_(vp, vbytes);
+            // El IR va PRIMERO y la interfaz DESPUES.  Cada fichero se
+            // escribe de forma atomica, pero son dos ficheros que tienen que
+            // corresponderse, y quien los lee entra por la interfaz: si esta
+            // se publicara antes, otra compilacion simultanea podria
+            // encontrarse la interfaz nueva junto al IR viejo y quedarse con
+            // una mezcla de dos versiones.  Publicando el IR primero, ver la
+            // interfaz nueva garantiza que su IR ya esta en disco.
+            //
             // BugFix M.vxir-sd: persistir el modulo COMPLETO (functions +
             // static_data + globals) para que un dep cache-hit aporte sus
             // slots `code.s_*` al merge.  emit_ir_section (solo functions)
             // los perdia.
             auto ibytes = ir::emit_ir_module_cache(pm.ir);
             (void)write_file_atomic_(ip, ibytes);
+            (void)write_file_atomic_(vp, vbytes);
             // Poblar el CAS global (content-addressed) con el mismo par
             // (interfaz, IR).  Idempotente: la clave es el contenido.  Asi el
             // siguiente proyecto/maquina con esta misma stdlib hace hit sin
@@ -2696,6 +3062,32 @@ CompileResult compile_vx_project(
         return res;
     }
     res.vel_text = std::move(eres.vel_text);
+
+    // Mapa del artefacto: uno solo con los simbolos de TODOS los modulos.  El
+    // ejecutable los contiene a todos, asi que una direccion suya puede caer en
+    // cualquiera; un mapa por modulo dejaria sin explicar todo lo que no fuera
+    // el modulo raiz.
+    {
+        vxdbg::ArtifactMap map;
+        for (const auto &pm : work)
+            for (const auto &kv : pm.vxdbg_symbols) map.add(kv.first, kv.second);
+        vxdbg::FileNodeStore store(opts.vxdbg_dir.empty()
+                                       ? default_vxdbg_dir()
+                                       : opts.vxdbg_dir);
+        vxdbg::ContentHash h;
+        if (!map.symbols.empty() && vxdbg::store_node(store, map, h))
+            res.vxdbg_artifact_map = h;
+    }
+    /* Donde dejo el asignador cada valor, antes de guardar el intermedio: es
+     * lo que permite decir que `%8` es el `r1` de la instruccion maquina.  Se
+     * estampa aqui, entre emitir y serializar, porque el emisor recibe el
+     * modulo como solo-lectura y este es el punto en que ya se sabe. */
+    for (auto &fn : merged.functions) {
+        auto it = eres.value_regs.find(fn.name);
+        if (it == eres.value_regs.end()) continue;
+        const size_t n = std::min(fn.values.size(), it->second.size());
+        for (size_t v = 0; v < n; ++v) fn.values[v].reg = it->second[v];
+    }
     res.ir_section_bytes = ir::emit_ir_section(merged.functions);
     //  AOT multi-modulo: exponer el IR mergeado (functions + static_data
     // + globals) como module_cache para que el path -m aot lo consuma.  El
@@ -2743,7 +3135,13 @@ CompileResult compile_vx_project(
      * vacio).  Sin esto, un proyecto CON imports que use comptime fns nunca
      * disparaba el segundo pase. */
     for (const auto &fn : merged.functions) {
-        if (fn.is_macro_compiled) {
+        // Un constructor comptime tambien es codigo que hay que compilar y
+        // cargar antes de poder invocarlo.  Se reconoce por el nombre porque
+        // es lo que sobrevive al merge; sin esto la fase no se disparaba y el
+        // constructor acababa resolviendose por el evaluador de AST -- que
+        // solo funciona dentro del mismo fichero.
+        if (fn.is_macro_compiled ||
+            fn.name.compare(0, 8, "__macro_") == 0) {
             res.has_lowerable_macros = true;
             break;
         }

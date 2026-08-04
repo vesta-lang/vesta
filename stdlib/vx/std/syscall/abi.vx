@@ -1,0 +1,38 @@
+namespace std.syscall.abi;
+
+import std.types only size_t, usize;
+
+/**
+ * Tipos base del subsistema de syscalls, en un modulo que NO depende de las
+ * implementaciones por-OS (linux/windows) ni del modulo publico exec_syscall.
+ *
+ * Vive aparte para ROMPER el ciclo de imports: exec_syscall re-exporta las
+ * implementaciones (linux/windows via @Target) y esas necesitan los tipos base
+ * -- si los tipos vivieran en exec_syscall habria un ciclo
+ * exec_syscall -> linux -> exec_syscall.  Es el patron estandar de un
+ * compilador con compilacion incremental por modulo (mismo enfoque que Go: un
+ * paquete base con las interfaces/tipos compartidos).
+ */
+
+/**
+ * ID de una syscall del sistema.  Su tamano depende del ancho de registro de la
+ * CPU y de la convencion de la ISA (size_t = palabra de la CPU).
+ */
+public typedef size_t syscall_id new;
+
+/**
+ * Metodo de invocacion de una syscall.  El envoltorio castea la funcion
+ * `invoke` de cada arch/ISA a este tipo (o a un cfn de mas argumentos); la
+ * convencion (que registro lleva cada argumento) vive en la firma de `invoke`.
+ */
+public typedef cfn(syscall_id) -> usize invoke_syscall;
+
+/**
+ * Resolutor perezoso del objetivo de una syscall (Windows: nada es estable
+ * entre versiones del SO).  Funcion PURA: recibe el nombre del export y
+ * devuelve su DIRECCION.  Devolver un puntero (y no un
+ * entero) no es cosmetico: la naturaleza host del valor viaja en el tipo, y es
+ * lo que hace que la llamada indirecta posterior se despache por la via NATIVA
+ * en lugar de la de la VM.  Quien lo invoca se encarga de cachear el resultado.
+ */
+public typedef cfn(string) -> void* resolve_syscall;

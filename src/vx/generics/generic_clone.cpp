@@ -241,6 +241,17 @@ std::unique_ptr<ast::Expr> clone_expr(const ast::Expr *e,
         auto x = std::make_unique<ast::StringLitExpr>();
         x->loc = s->loc;
         x->value = s->value;
+        x->is_raw = s->is_raw;
+        // Un string INTERPOLADO deja `value` vacio y guarda su contenido en
+        // las partes literales, las expresiones y sus formatos.  Copiar solo
+        // `value` clonaba una cadena VACIA: un metodo heredado de una base
+        // abstracta que devolviera `"algo ${x}"` acababa emitiendo un string
+        // de longitud cero, sin que nada avisara.
+        x->interp_parts = s->interp_parts;
+        x->interp_formats = s->interp_formats;
+        x->interp_exprs.reserve(s->interp_exprs.size());
+        for (const auto &ie : s->interp_exprs)
+            x->interp_exprs.push_back(clone_expr(ie.get(), g));
         return x;
     }
     case ast::NodeKind::IdentExpr: {

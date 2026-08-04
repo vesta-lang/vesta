@@ -202,6 +202,12 @@ static const std::unordered_map<std::string, InstructionPattern>
         // pudo coalescer) en una sola instruccion VM.  Reduce dispatch +
         // tiempo de decode.  Encoding FIXED_4 con un opcode extendido por
         // variante (signed/unsigned x 6 ops).
+        // Memoria masiva: (r_dst, r_val|r_src, r_len).  Variante sin sufijo =
+        // memoria VIRTUAL; sufijo 'h' = memoria del HOST (igual que loadz/loadzh).
+        {"memset", {"memset", OpArity::THREE}},
+        {"memseth", {"memseth", OpArity::THREE}},
+        {"memcpy", {"memcpy", OpArity::THREE}},
+        {"memcpyh", {"memcpyh", OpArity::THREE}},
         {"adds3", {"adds3", OpArity::THREE}},
         {"subs3", {"subs3", OpArity::THREE}},
         {"muls3", {"muls3", OpArity::THREE}},
@@ -221,6 +227,9 @@ static const std::unordered_map<std::string, InstructionPattern>
         {"loadzh", {"loadzh", OpArity::TWO}},
 
         {"setcc", {"setcc", OpArity::TWO}},
+        // sext r_dst, N: sign-extiende r_dst desde N bits (8/16/32) a 64, en
+        // 1 instr (vs mov+shl+sar).  N es un literal.
+        {"sext", {"sext", OpArity::TWO}},
         {"tryenter", {"tryenter", OpArity::TWO}},
         {"tryleave", {"tryleave", OpArity::ZERO}},
         {"strmake", {"strmake", OpArity::THREE}},
@@ -885,6 +894,32 @@ std::unique_ptr<ASTNode> Parser::parse_data_directive() {
             values.push_back(parse_expression());
             break;
 
+        case TokenType::AT: {
+            // `dq @Absolute("code.<sym>")`: referencia absoluta a un simbolo
+            // (reloc datos->codigo).  La usa la vtable de los structs @Virtual.
+            advance(); // consumir '@'
+            if (current.type != TokenType::IDENTIFIER ||
+                current.lexeme != "Absolute") {
+                error(current, "en datos solo se admite @Absolute(\"sym\")");
+                advance();
+                continue;
+            }
+            advance(); // 'Absolute'
+            expectToken(TokenType::LPAREN, "se esperaba '(' tras @Absolute");
+            advance();
+            if (current.type != TokenType::STRING) {
+                error(current, "@Absolute espera una cadena con el simbolo");
+                advance();
+                continue;
+            }
+            std::string sym = current.lexeme;
+            advance(); // la cadena
+            expectToken(TokenType::RPAREN, "se esperaba ')' tras @Absolute(...)");
+            advance();
+            values.push_back(std::make_unique<AbsRefExpr>(std::move(sym)));
+            break;
+        }
+
         default:
             error(current, "Invalid data value");
             advance();
@@ -1000,6 +1035,7 @@ exit_error:
     // se usa luego por el bytecode emitter para registrar el par
     // (byte_offset, source_line) en la tabla debug del linker.
     instr->source_line = lexer.last_src_line;
+    instr->source_column = lexer.last_src_column;
     // Captura el stackmap preciso ( E.1) del marcador `// @sm <hex>`
     // mas reciente.  A diferencia de @line (que persiste hasta el proximo
     // marcador), el stackmap aplica SOLO a la instruccion inmediatamente

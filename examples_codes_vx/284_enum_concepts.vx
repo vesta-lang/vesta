@@ -28,7 +28,7 @@ i32 main() {
     i32 acc = 0;
 
     // is_enum<T>() en compile-time sobre cada categoria de enum + un no-enum.
-    if (is_enum<Dir>())   { acc = acc + 1; }   // valued int  -> 1
+    if (is_enum<Dir>())   { acc++; }   // valued int  -> 1
     if (is_enum<Verb>())  { acc = acc + 2; }   // valued str  -> 3
     if (is_enum<Shape>()) { acc = acc + 4; }   // ADT         -> 7
     if (is_enum<i32>())   { acc = acc + 99; }  // no-enum     -> no suma

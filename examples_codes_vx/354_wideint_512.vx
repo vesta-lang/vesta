@@ -1,0 +1,48 @@
+/**
+ * @file 354_wideint_512.vx
+ * @brief Entero de 512 bits: el tercer piso de la misma construccion.
+ *
+ * `u512` no aporta algoritmos nuevos.  Es dos `u256` con el acarreo llegando ya
+ * resuelto desde abajo -- por `add_with_carry` / `sub_with_borrow` --, la misma
+ * multiplicacion repartida entre mitad baja completa y cruzados truncados, y la
+ * misma division shift-resta, ahora a 512 vueltas.  Que se escriba practicamente
+ * igual que el piso anterior es la prueba de que las primitivas estan en el
+ * nivel correcto: ningun piso deduce el acarreo comparando resultados.
+ *
+ * El caso ataca lo que puede romperse al componer: el paso entre mitades en
+ * suma, resta y desplazamiento, y la division contrastada con la
+ * multiplicacion, que es mejor oraculo que uno externo cuando no existe tipo
+ * nativo de este ancho.
+ */
+import std.wideint only u512, u256, u128;
+i32 main() {
+    u512 a = u512.from_u64(100);
+    u512 b = u512.from_u64(58);
+    if ((a + b).to_u64() != 158)  { return 1; }
+    if ((a - b).to_u64() != 42)   { return 2; }
+    if (!(b < a))                 { return 3; }
+    if ((u512.from_u64(6) * u512.from_u64(7)) != u512.from_u64(42)) { return 4; }
+    if ((u512.from_u64(100) / u512.from_u64(7)) != u512.from_u64(14)) { return 5; }
+    if ((u512.from_u64(100) % u512.from_u64(7)) != u512.from_u64(2))  { return 6; }
+    // Acarreo cruzando la frontera de los 256 bits.
+    u512 casi;
+    casi.lo256 = u256.max();
+    casi.hi256 = u256.zero();
+    u512 desb = casi + u512.one();
+    if (desb.lo256)                    { return 7; }
+    if (desb.hi256 != u256.one())      { return 8; }
+    if ((desb - u512.one()) != casi)   { return 9; }
+    // Desplazamientos cruzando esa frontera.
+    u512 sh = u512.one() << 256;
+    if (sh.lo256)                      { return 10; }
+    if (sh.hi256 != u256.one())        { return 11; }
+    if ((sh >> 256) != u512.one())     { return 12; }
+    // Division contrastada con la multiplicacion, con valores grandes.
+    u512 x = u512.from_u64(0xDEADBEEF) << 130;
+    u512 y = u512.from_u64(0x1234567);
+    u512 pr = x * y;
+    if ((pr / y) != x)                 { return 13; }
+    if (pr % y)                        { return 14; }
+    if ((~u512.zero()) != u512.max())  { return 15; }
+    return 42;
+}

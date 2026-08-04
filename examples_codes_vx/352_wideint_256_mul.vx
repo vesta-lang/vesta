@@ -1,0 +1,41 @@
+/**
+ * @file 352_wideint_256_mul.vx
+ * @brief Multiplicacion de 256 bits, y el producto completo de 128x128.
+ *
+ * Multiplicar no sale por composicion directa como la suma.  El `*` de 128
+ * trunca -- que es lo correcto para un `u128 * u128` -- y tira justo los bits
+ * altos que en 256 ocupan la mitad superior del resultado, asi que hace falta
+ * el producto COMPLETO: cuatro productos de 64x64 sin truncar, colocados por
+ * peso.  Los terminos cruzados solo alcanzan la mitad alta, y de ellos si basta
+ * con los bits bajos.
+ *
+ * El caso comprueba lo pequeno (6*7), los neutros, el cruce de frontera
+ * (2^64 * 2^64 = 2^128), el producto completo en su peor caso
+ * ((2^128-1)^2 = 2^256 - 2^129 + 1) y dos propiedades sobre valores grandes:
+ * conmutatividad y distributividad.
+ */
+import std.wideint only u256, u128;
+i32 main() {
+    // Producto pequeno.
+    if ((u256.from_u64(6) * u256.from_u64(7)) != u256.from_u64(42)) { return 1; }
+    // Identidad y cero.
+    u256 a = u256.from_u64(123456789);
+    if ((a * u256.one()) != a)      { return 2; }
+    if (a * u256.zero())            { return 3; }
+    // 2^64 * 2^64 = 2^128 (cruza a la mitad alta).
+    u256 p64 = u256.one() << 64;
+    u256 p128 = p64 * p64;
+    if (!p128.lo128.is_zero())      { return 4; }
+    if (p128.hi128 != u128.one())   { return 5; }
+    // Producto completo de 128x128 sin truncar: MAX128 * MAX128.
+    u256 f = u256.mul128_full(u128.max(), u128.max());
+    // (2^128-1)^2 = 2^256 - 2^129 + 1  ->  lo = 1, hi = 2^128 - 2
+    if (f.lo128 != u128.one())              { return 6; }
+    if (f.hi128 != (u128.max() - u128.one())) { return 7; }
+    // Conmutatividad y distributividad sobre valores grandes.
+    u256 x = u256.from_u64(0xDEADBEEF) << 61;
+    u256 y = u256.from_u64(0xCAFEBABE) << 37;
+    if ((x * y) != (y * x))                 { return 8; }
+    if ((x * (y + u256.one())) != (x * y + x)) { return 9; }
+    return 42;
+}

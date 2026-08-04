@@ -50,6 +50,7 @@ code_carga_pruebas.vel
 # Archivos de bytecode compilados
 *.velb
 *.velb-map
+*.pdb
 *.exe
 *.o
 *.elf
@@ -418,3 +419,5 @@ timings/x86/*.vxarch
 timings/x86/instr_form_ids.h
 tools/import/__pycache__/
 ANAMNESIS.txt
+examples_codes_vx/benchmark/vec_axpy/vec_axpy_rs.pdb
+filosofia-del-lenguaje.txt

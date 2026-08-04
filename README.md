@@ -7,8 +7,9 @@
 
 [![Licencia](https://img.shields.io/badge/licencia-VMProject-blue.svg)](./LICENSE.md)
 [![Estado](https://img.shields.io/badge/estado-interp%20%2B%20JIT%20%2B%20AOT%20nativo-brightgreen.svg)](./doc/ROADMAP.md)
-[![Tests](https://img.shields.io/badge/tests-314%2F314%20PASS-brightgreen.svg)](./tests/vx/)
-[![JIT](https://img.shields.io/badge/JIT-C1%20geomean%2017.73×%20%2F%20peak%20301×-orange.svg)](./doc/BENCHMARKS.md)
+[![Tests](https://img.shields.io/badge/tests-793%2F793%20PASS-brightgreen.svg)](./tests/vx/)
+[![AOT](https://img.shields.io/badge/AOT%20nativo-1.65×%20vs%20C%20(geomean)-orange.svg)](./doc/BENCHMARKS.md)
+[![JIT](https://img.shields.io/badge/JIT-12×%20vs%20interp%20%2F%20peak%20251×-orange.svg)](./doc/BENCHMARKS.md)
 [![Plataformas](https://img.shields.io/badge/plataformas-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#inicio-r%C3%A1pido)
 
 [**Inicio rápido**](./doc/QUICKSTART.md) · [**El lenguaje Vesta**](./doc/LANGUAGE.md) · [**Arquitectura**](./doc/ARCHITECTURE.md) · [**Benchmarks**](./doc/BENCHMARKS.md) · [**Roadmap**](./doc/ROADMAP.md)
@@ -31,11 +32,11 @@ componentes diseñados desde cero para trabajar juntos:
 
 2. **Compilador y runtime** — pipeline `Vesta -> SSA IR -> bytecode .velb -> VM`. Más
    de 15 pasadas de optimización SSA, dispatcher threaded computed-goto
-   (~340 MIPS sostenidos), GC generacional **preciso y movible** (young+old,
+   (~313 MIPS sostenidos), GC generacional **preciso y movible** (young+old,
    scan por stackmaps + mark-compact deslizante del OldGen + nursery preciso
-   + write-barrier old->young), y JIT C1 template-based con **hasta 301× speedup**
-   sobre el intérprete en métodos hot (throughput efectivo ~7-20 GIPS de
-   instr-VM equivalentes). Además, un **compilador AOT** que produce
+   + write-barrier old->young), y un JIT con **asignador de registros real**
+   (banco de vregs, spilling, coalescing) que da **12× speedup geomean y hasta
+   251×** sobre el intérprete. Además, un **compilador AOT** que produce
    ejecutables nativos **standalone** (PE en Windows y ELF en Linux) sin
    runtime de la VM, con **linker y archivador propios** (`vm --link` /
    `vm --ar`, sin depender de `ld`/`gcc`/`ar` del sistema).
@@ -54,36 +55,44 @@ en el propio Vesta.
 ## Ejemplo: cómo se ve Vesta
 
 ```vx
-// Pattern matching, genéricos, smart pointers y borrow checker en 20 líneas.
+// Pattern matching, smart pointers y borrow checker en 25 lineas.
 
-enum Result<V, E> {
-    Ok(V),
-    Err(E)
+// Un resultado con dos formas: el valor, o el motivo del fallo.
+enum Reparto {
+    Ok(i64),
+    Err(string)
 }
 
-unique<HashMap> safe_divide(i32[] nums, i32 divisor) -> Result<unique<HashMap>, string> {
-    if (divisor == 0) return Err("division by zero");
-    
-    unique<HashMap> result = unique_box(hashmap(16));
-    borrow_mut<HashMap> view = lend_mut(result);
-    
-    for (i32 n in nums) {
-        write_borrow(view).put(n, n / divisor);
+Reparto reparte(i64[] nums, i64 n, i64 divisor)
+{
+    if (divisor == 0) { return Reparto.Err("division por cero"); }
+
+    // El total vive en el heap: `unique` lo libera al salir del ambito y el
+    // borrow checker garantiza que nadie mas lo toca mientras esta prestado.
+    unique<i64> total = unique_box(0);
+    borrow_mut<i64> vista = lend_mut(total);
+
+    i64 i = 0;
+    while (i < n) {
+        write_borrow(vista, read_borrow(vista) + nums[i] / divisor);
+        i = i + 1;
     }
-    return Ok(move(result));
+    return Reparto.Ok(read_borrow(vista));
 }
 
-i32 main() {
-    i32[] data = {10, 20, 30, 40};
-    match safe_divide(data, 2) {
-        case Ok(map)  => println("Got ${map.size()} entries");
-        case Err(msg) => println("Error: ${msg}");
+i32 main()
+{
+    i64[4] datos = {10, 20, 30, 40};
+
+    match reparte(datos, 4, 2) {
+        case Ok(suma) => println("suma = ${suma}");
+        case Err(msg) => println("error: ${msg}");
     }
     return 0;
 }
 ```
 
-Más ejemplos completos en [`examples_codes_vx/`](./examples_codes_vx/) (180+
+Más ejemplos completos en [`examples_codes_vx/`](./examples_codes_vx/) (420+
 programas) y showcase curado en [doc/EXAMPLES.md](./doc/EXAMPLES.md).
 
 ---
@@ -142,13 +151,17 @@ programas) y showcase curado en [doc/EXAMPLES.md](./doc/EXAMPLES.md).
 
 - **Pipeline SSA completo**: ~15 pasadas (DCE, CSE, copy-prop, const-fold, TCO,
   LICM, DSE+SLF, devirt+inline, load_narrow, list scheduling para ILP).
-- **Asignador de registros linear scan** con register hinting / coalesce
-  (steal-from-active).
+- **Asignador de registros con banco de vregs** (spilling, coalescing,
+  hinting, splitting con recuperación de fragmentación), compartido por JIT
+  y AOT.
 - **Dispatcher threaded computed-goto** + inline del icache hit path
-  (intérprete ~340 MIPS promedio).
-- **JIT C1** baseline (template-based, sin regalloc real) con stackmaps
-  precisos para GC. Throughput efectivo **~7-20 GIPS** (instr-VM equivalentes
-  por segundo), **17.73× speedup geomean** (hasta 301×) sobre intérprete en métodos hot.
+  (intérprete ~313 MIPS promedio).
+- **JIT** con regalloc real y stackmaps precisos para GC: **12× speedup
+  geomean** sobre intérprete (mediana 13×, pico **251×** en `vec_axpy`), y
+  **6.0× de slowdown geomean frente a C nativo**.
+- **AOT nativo**: **43× geomean** sobre intérprete (pico 416×) y solo
+  **1.65× más lento que C** en media geométrica — por delante de Go (2.52×)
+  y a la par de Rust (1.55×).
 - **Super-instrucciones**: `cmpjmp`/`cmpjmpu`, `decjnz`, `alu3` (9 variantes
   fusionando `mov+OP`), `loadz`/`loadzh` (zero-extend LOAD), `mvtake`,
   `gcallocp`, `spawnargs`, `fulfillhlt`.
@@ -229,9 +242,9 @@ Guía completa: [**doc/QUICKSTART.md**](./doc/QUICKSTART.md) (5 minutos).
 
 ## Estado del proyecto
 
-VestaVM tiene el frontend Vesta + intérprete + GC + distribuido completos, JIT C1
-(libvesta_rt + selector con el path vreg de producción cubriendo el corpus
-completo sin divergencia) y un **compilador AOT nativo funcional**: `-m aot`
+VestaVM tiene el frontend Vesta + intérprete + GC + distribuido completos, un
+JIT con asignador de registros real (banco de vregs, sin divergencia frente al
+intérprete en todo el corpus) y un **compilador AOT nativo funcional**: `-m aot`
 produce ejecutables **standalone** (PE en Windows y ELF en Linux, este último
 validado corriendo en WSL) sin runtime de la VM, con linker y archivador
 propios (`vm --link`/`vm --ar`, sin `ld`/`gcc`/`ar` del sistema). Los tres
@@ -244,160 +257,142 @@ Los macros bajan al IR y se ejecutan vía VM con cache persistente y JIT opciona
 **PGO foundation** disponible vía `--profile <path>` que genera `.vprof`
 consumible por el JIT (warm-start) y el compilador AOT.
 
-**Suite de tests E2E**: **314/314 PASS** (`tests/vx/test_vx_e2e.sh`), cubriendo
-los 180+ ejemplos del repo + 6 tests negativos del borrow checker + 11 tests
-positivos realistas del borrow checker.
+**Suite de tests E2E**: **793 pasos OK / 0 fallidos** sobre 391 casos
+(`python tests/vx/e2e_test.py <build-dir>`), cubriendo los 420+ ejemplos del
+repo en los tres modos (intérprete, JIT y AOT nativo) más los tests negativos
+y positivos del borrow checker.
 
 ### Estadísticas clave
 
 La suite de benchmarks abarca **29 workloads multi-lenguaje** con `main.vx`,
-`main.c`, `main.cpp`, `main.py`, `Main.java` y `main.go` cada uno; el runner
-`tools/bench/run_all_benches.py` incluye **Go (gc)** con su propio color en las
-gráficas. Las cifras publicadas abajo provienen de la última corrida completa
-multi-lenguaje (10 lenguajes, 29 workloads) en hardware Intel Core i7-13700KF
-(16P/24L, 3.4 GHz base) + 63.8 GB RAM, Windows 10, 3 runs + 1 warmup por bench,
-AV desactivado durante el bench, todos los benches completados sin timeouts.
-`cmp_fusion` no tiene medición JIT, así que las métricas intérprete→JIT y las
-comparativas con JIT se calculan sobre 28 workloads:
+`main.c`, `main.cpp`, `main.py`, `Main.java`, `main.go` y `main.rs` cada uno; el
+runner es `tools/bench/run_all_benches.py`. Las cifras de abajo provienen de la
+corrida completa del **2026-07-25** (11 lenguajes/modos, 29 workloads, 10 runs +
+1 warmup por bench, 3 runs en los lentos), sobre Intel Core i7-13700KF (16P/24L,
+3.4 GHz base) + 63.8 GB RAM, Windows 10, antivirus desactivado durante la
+medicion y sin timeouts. El modo AOT se mide en tres variantes (`sse2`, `avx`,
+`auto` con multiversion por CPUID); la columna publicada es `auto`.
 
-| Métrica | Valor |
+| Metrica | Valor |
 |---|:---:|
-| **Suite e2e Vesta** | 314/314 PASS (0 FAIL) |
-| **Intérprete: MIPS promedio** | ~340 (threaded computed-goto + super-instr) |
-| **JIT C1: cobertura del selector** | path vreg de producción sin divergencia en el corpus |
-| **JIT vs intérprete: speedup geomean** | **17.73×** sobre 28 benchmarks |
-| **JIT vs intérprete: speedup median** | **23.3×** |
-| **JIT vs intérprete: peak speedup** | **301×** (`vec_axpy`) |
-| **JIT vs intérprete: ≥100×** | 1/28 benches |
-| **JIT vs intérprete: ≥50×** | 4/28 benches |
-| **JIT vs intérprete: ≥25×** | 14/28 benches |
-| **JIT vs intérprete: ≥10×** | 20/28 benches (71%) |
-| **JIT geomean slowdown vs C nativo** | **6.50×** |
-| **HotSpot C2 (Java) geomean slowdown vs C** | 10.80× |
-| **Go (gc) geomean slowdown vs C** | 2.42× |
-| **C++ geomean slowdown vs C** | 0.97× (paridad) |
-| **CPython 3.11 geomean slowdown vs C** | 141.26× |
-| **Vesta JIT vs HotSpot (geomean global)** | **JIT ~40% más rápido que Java** (6.50× vs 10.80×) |
-| **JIT vs HotSpot: vence en** | **26/28** benches |
-| **JIT vs HotSpot: Java vence en** | 2/28 benches (`fp_jit`, `string_workout`) |
-| **JIT vs Go (gc): Go vence en** | 26/28 benches |
-| **JIT vs CPython 3.11: supera en** | 27/28 benches (96%) |
+| **Suite e2e Vesta** | 793/793 pasos OK (391 casos, 3 modos) |
+| **Interprete: MIPS promedio** | ~313 (threaded computed-goto + super-instr) |
+| **AOT vs interprete: geomean / mediana / pico** | **43.4x** / 52.8x / **416x** (`vec_axpy`) |
+| **JIT vs interprete: geomean / mediana / pico** | **12.0x** / 13.0x / **251x** (`vec_axpy`) |
+| **JIT vs interprete: >=25x / >=10x** | 7/29 / 18/29 benches |
+| **AOT vs interprete: >=50x / >=10x** | 16/29 / 26/29 benches |
+| **AOT: slowdown geomean vs C nativo** | **1.65x** (mediana 1.48x) |
+| **JIT: slowdown geomean vs C nativo** | **5.99x** (mediana 6.33x) |
+| **Rust (rustc -O) vs C** | 1.55x |
+| **Go (gc) vs C** | 2.52x |
+| **C++ (g++ -O2) vs C** | 1.00x (paridad) |
+| **HotSpot C2 (Java) vs C** | 10.59x |
+| **CPython 3.11 vs C** | 139.95x |
+| **AOT: benches ganados** | 29/29 vs Java y Python, 18/29 vs Go, 10/29 vs Rust, 3/29 vs C++ |
+| **JIT: benches ganados** | 27/29 vs Java, 28/29 vs Python |
 
-**Top speedups intérprete → JIT** (mediana de 3 runs):
+**Top aceleraciones interprete -> AOT nativo** (mediana de 10 runs):
 
-| Benchmark | Intérp. | JIT | Speedup |
+| Benchmark | Interp. | AOT | Aceleracion |
 |---|---:|---:|---:|
-| `vec_axpy` (SAXPY float 128M) | 24 540 ms | **81 ms** | **301×** |
-| `obj_accum` (acumulador OOP) | 3 976 ms | **72 ms** | **55×** |
-| `int_mixed` (10 int ops/iter × 20M) | 2 872 ms | **57 ms** | **51×** |
-| `memcpy_loop` (1MB × 100 iter) | 1 854 ms | **37 ms** | **50×** |
-| `bitops` (popcnt/clz/ctz heavy) | 3 320 ms | **68 ms** | **49×** |
-| `hash_lookup` (FNV-style 50M iter) | 4 342 ms | **93 ms** | **47×** |
-| `tight_loop` (50M iter ALU) | 2 183 ms | **48 ms** | **45×** |
-| `state_machine` (FSM 10M tokens) | 3 193 ms | **74 ms** | **43×** |
-| `nested_loops` (1000×1000) | 2 227 ms | **51 ms** | **43×** |
-| `intops_jit` (int ops mixtas) | 1 589 ms | **40 ms** | **39×** |
-| `array_sum` (10M loads + ADD) | 1 632 ms | **43 ms** | **38×** |
-| `rotops_jit` (rotaciones bitwise) | 1 048 ms | **36 ms** | **29×** |
+| `vec_axpy` | 18327 ms | **44.1 ms** | **416x** |
+| `intops_jit` | 1208 ms | **5.8 ms** | **207x** |
+| `mem_malloc_free` | 647 ms | **4.7 ms** | **139x** |
+| `rotops_jit` | 649 ms | **5.2 ms** | **126x** |
+| `branch_unpredict` | 3201 ms | **26.2 ms** | **122x** |
+| `int_mixed` | 2113 ms | **22.5 ms** | **94x** |
+| `state_machine` | 2751 ms | **37.6 ms** | **73x** |
+| `mem_struct` | 320 ms | **4.4 ms** | **73x** |
 
-**Intérprete promedio**: ~340 MIPS sobre la suite completa. Dispatcher
-threaded computed-goto, super-instrucciones (alu3, loadz, cmpjmp, decjnz),
-regalloc coalescing, IR pass schedule, load_narrow elision.
+**Top aceleraciones interprete -> JIT**:
 
-**JIT C1**: el path vreg de producción cubre el corpus completo sin divergencia
-(`diff_harness` reporta interp==vreg siempre); los pocos casos no cubiertos caen
-a un path legacy en jubilación. Hot loops aritméticos consiguen **29-301×
-speedup** (`vec_axpy` vectorizable llega a 301×). La recursión profunda — caso histórico difícil para JITs C1 — pasa de
-1.0× a **13× speedup** gracias a TAILCALL emitido nativamente
-(`call + ret` fusionados sin FrameHeader pool) + self-recursive call
-patcheado directo a `code_start` (sin trampoline JIT→intérprete). Los
-no-soportados restantes (excepciones polimórficas, spawn/distrib,
-futures) caen al intérprete graciosamente.
+| Benchmark | Interp. | JIT | Aceleracion |
+|---|---:|---:|---:|
+| `vec_axpy` | 18327 ms | **73.0 ms** | **251x** |
+| `branch_unpredict` | 3201 ms | **55.0 ms** | **58x** |
+| `int_mixed` | 2113 ms | **47.3 ms** | **45x** |
+| `state_machine` | 2751 ms | **62.7 ms** | **44x** |
+| `intops_jit` | 1208 ms | **32.9 ms** | **37x** |
+| `bitops` | 2301 ms | **66.9 ms** | **34x** |
+| `obj_accum` | 1754 ms | **67.7 ms** | **26x** |
+| `struct_field` | 1220 ms | **49.7 ms** | **25x** |
 
-### Comparativa multi-lenguaje (workloads idénticos)
+**Interprete**: ~313 MIPS de media sobre la suite. Dispatcher threaded
+computed-goto, super-instrucciones (`alu3`, `loadz`, `cmpjmp`, `decjnz`),
+coalescing en el regalloc, `schedule` para ILP y elision por `load_narrow`.
 
-Tiempos wall en ms (mediana de 3 runs; hardware i7-13700KF). Para cada
-fila, el **valor más rápido marcado en negrita** (entre C, C++, Vesta JIT,
-Java, Python y Go):
+**JIT**: el camino de produccion es el banco de vregs con asignador de
+registros real; el selector de slots legacy esta jubilado y una operacion no
+cubierta cae al interprete de forma transparente. Los bucles aritmeticos
+calientes rinden **25-251x**; la recursion profunda -- caso historicamente
+duro para un JIT -- llega a 13x gracias a TAILCALL nativo (`call + ret`
+fusionados, sin pool de FrameHeader) y a la llamada auto-recursiva parcheada
+directamente a `code_start`, sin trampolin JIT->interprete.
 
-| Bench | C | C++ | Vesta JIT | Java HotSpot 25 | Python 3.11 | Go (gc) |
-|---|---:|---:|---:|---:|---:|---:|
-| `alloc` | 4.2 | **3.7** | 34.8 | 84.4 | 643.2 | 49.8 |
-| `array_sum` | 5.4 | **5.2** | 42.6 | 84.3 | 516.1 | 13.1 |
-| `bitops` | **26.9** | 27.5 | 67.9 | 100.2 | 8321.0 | 33.2 |
-| `branch_unpredict` | **19.7** | 20.2 | 165.4 | 187.3 | 3399.2 | 21.5 |
-| `callvirt` | **3.6** | 3.8 | 43.3 | 77.9 | 2028.7 | 31.0 |
-| `callvirt_hot` | 11.3 | **5.7** | 37.0 | 77.3 | 802.2 | 14.9 |
-| `cmp_fusion` | **3.6** | 3.6 | — | 79.5 | 2021.2 | 15.9 |
-| `fib_recursive` | 6.9 | **6.6** | 41.7 | 86.7 | 289.3 | 13.5 |
-| `fp_jit` | 14.2 | **10.9** | 814.0 | 95.0 | 1462.8 | 23.2 |
-| `hash_lookup` | **13.1** | 14.6 | 92.6 | 139.3 | 7184.9 | 68.0 |
-| `int_mixed` | 20.5 | **19.9** | 56.7 | 95.4 | 11710.6 | 22.0 |
-| `intops_jit` | **3.7** | 3.9 | 40.3 | 82.7 | 1185.7 | 8.9 |
-| `jit_method` | 4.8 | **4.6** | 39.3 | 86.3 | 1305.5 | 15.2 |
-| `mem_class` | **3.6** | 3.8 | 32.1 | 81.1 | 199.0 | 14.9 |
-| `mem_malloc_free` | **4.4** | 4.6 | 35.9 | 77.8 | 644.8 | 96.3 |
-| `mem_struct` | 3.9 | **3.6** | 34.9 | 83.5 | 464.3 | 21.1 |
-| `memcpy_loop` | 8.5 | **6.7** | 37.0 | 109.5 | 3701.9 | 23.0 |
-| `nested_loops` | 14.3 | **14.2** | 51.3 | 102.2 | 1827.1 | 25.2 |
-| `obj_accum` | **29.1** | 31.3 | 72.3 | 107.6 | 4520.1 | 34.0 |
-| `pic_real` | **6.0** | 8.3 | 40.9 | 85.3 | 338.3 | 8.4 |
-| `polymorphic` | **10.0** | 10.2 | 60.0 | 89.0 | 1143.5 | 14.5 |
-| `quicksort` | **8.0** | 8.5 | 38.0 | 86.3 | 176.6 | 10.9 |
-| `rotops_jit` | 4.9 | **4.8** | 35.7 | 85.3 | 1497.8 | 7.6 |
-| `state_machine` | 21.6 | **20.8** | 73.6 | 101.4 | 1701.0 | 25.1 |
-| `string_hot` | 9.0 | **6.2** | 33.1 | 102.5 | 76.2 | 22.7 |
-| `string_workout` | 31.7 | 42.3 | 647.5 | 197.8 | 574.7 | **22.0** |
-| `struct_field` | **6.3** | 6.3 | 77.3 | 87.7 | 5488.8 | 20.5 |
-| `tight_loop` | 14.3 | **14.0** | 48.4 | 89.4 | 1110.2 | 23.1 |
-| `vec_axpy` | **17.8** | 19.1 | 81.4 | 135.5 | 6552.2 | 73.2 |
+**AOT**: el mismo IR y el mismo asignador que el JIT, pero emitiendo un
+ejecutable nativo autonomo. Sin el coste de arranque del JIT ni el del
+interprete, el geomean sube a **43x** sobre el interprete y el slowdown
+frente a C baja a **1.65x**.
 
-**Vesta JIT C1 vence a HotSpot C2 (Java) en 26 de 28 benches**; Java solo
-gana en `fp_jit` y `string_workout`. En geomean global de slowdown vs C,
-**Vesta JIT está en 6.50× mientras HotSpot está en 10.80×** — VestaVM es
-~40% más rápido que Java en promedio y **bate a HotSpot en casi toda la
-tabla** para un JIT C1 template-based (sin C2 optimizador todavía).
+### Comparativa multi-lenguaje (workloads identicos)
 
-**Go (gc) es el nuevo referente rápido** de la tabla junto a C/C++: Go
-compilado nativo alcanza **2.42× slowdown vs C** y supera al JIT C1 de
-Vesta en 26 de 28 benches (Vesta gana en `alloc` y `mem_malloc_free`). Es
-honesto reconocerlo — un compilador AOT maduro como el `gc` de Go queda
-por delante de nuestro JIT C1; cerrar ese hueco es trabajo del C2
-optimizador y del backend AOT nativo de Vesta, ambos en desarrollo.
+Tiempos wall en ms (mediana de 10 runs; i7-13700KF, Windows 10). En cada
+fila, **el mas rapido en negrita**:
 
-Casos donde el JIT queda detrás (targets de optimizaciones futuras):
+| Bench | C | C++ | Rust | Go | **Vesta AOT** | Vesta JIT | Java | Python |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `alloc` | 2.8 | **2.8** | 127.3 | 48.5 | 3.1 | 30.6 | 71.6 | 569.4 |
+| `array_sum` | 4.5 | 4.8 | **4.0** | 12.1 | 9.2 | 35.4 | 77.8 | 465.0 |
+| `bitops` | 26.4 | 26.4 | **21.4** | 33.7 | 38.9 | 66.9 | 94.3 | 7128.3 |
+| `branch_unpredict` | **17.7** | 18.0 | 19.9 | 20.5 | 26.2 | 55.0 | 171.9 | 3193.1 |
+| `callvirt` | **2.9** | 3.9 | 3.2 | 29.2 | 6.6 | 34.3 | 75.7 | 1771.3 |
+| `callvirt_hot` | 10.8 | **4.5** | 11.4 | 12.8 | 4.6 | 32.6 | 70.5 | 724.1 |
+| `cmp_fusion` | **2.6** | 2.6 | 3.2 | 14.6 | 12.8 | 52.2 | 74.3 | 1847.4 |
+| `fib_recursive` | 6.1 | **6.0** | 7.4 | 12.6 | 13.0 | 38.5 | 77.4 | 244.7 |
+| `fp_jit` | 10.7 | 10.8 | **10.0** | 21.6 | 42.6 | 68.7 | 93.0 | 1354.5 |
+| `hash_lookup` | **13.3** | 13.6 | 67.2 | 65.3 | 63.4 | 89.3 | 129.1 | 6454.9 |
+| `int_mixed` | 47.0 | **18.3** | 18.9 | 20.5 | 22.5 | 47.3 | 86.2 | 10663.8 |
+| `intops_jit` | **2.9** | 3.2 | 5.2 | 7.5 | 5.8 | 32.9 | 75.5 | 1068.9 |
+| `jit_method` | 3.6 | 3.6 | **3.2** | 11.5 | 8.6 | 35.0 | 75.2 | 1176.9 |
+| `mem_class` | **7.7** | 8.4 | 27.9 | 12.3 | 11.1 | 27.8 | 69.7 | 180.3 |
+| `mem_malloc_free` | 3.6 | **3.6** | 126.2 | 88.5 | 4.7 | 28.5 | 69.3 | 581.1 |
+| `mem_struct` | 3.8 | **2.6** | 53.1 | 19.8 | 4.4 | 29.6 | 71.3 | 438.1 |
+| `memcpy_loop` | 5.1 | 5.5 | 5.2 | 21.2 | **4.9** | 30.6 | 97.2 | 3315.1 |
+| `nested_loops` | 13.3 | 13.5 | 29.4 | 88.3 | **12.5** | 36.7 | 79.0 | 1567.3 |
+| `obj_accum` | 28.2 | 28.2 | **18.2** | 31.8 | 41.5 | 67.7 | 96.0 | 4172.9 |
+| `pic_real` | 5.4 | 5.6 | **5.2** | 7.1 | 10.5 | 481.9 | 73.5 | 304.6 |
+| `polymorphic` | 8.1 | 8.2 | **8.0** | 12.6 | 22.4 | 50.6 | 77.7 | 1047.3 |
+| `quicksort` | **6.9** | 7.4 | 7.9 | 9.1 | 8.4 | 33.5 | 76.7 | 149.5 |
+| `rotops_jit` | **3.6** | 4.1 | 15.2 | 6.7 | 5.2 | 30.5 | 73.3 | 1362.2 |
+| `state_machine` | 19.0 | 18.6 | **17.2** | 23.6 | 37.6 | 62.7 | 86.5 | 1553.0 |
+| `string_hot` | 8.4 | 21.9 | 12.8 | 18.4 | **7.9** | 27.5 | 80.2 | 61.0 |
+| `string_workout` | 29.8 | 38.1 | **12.3** | 19.4 | 55.5 | 257.5 | 181.9 | 517.6 |
+| `struct_field` | 4.9 | 5.4 | **3.9** | 17.6 | 20.4 | 49.7 | 77.0 | 5060.2 |
+| `tight_loop` | 12.6 | 12.4 | **3.0** | 20.9 | 12.8 | 38.2 | 78.7 | 1024.9 |
+| `vec_axpy` | **17.5** | 17.5 | 24.6 | 64.5 | 44.1 | 73.0 | 120.6 | 5918.6 |
 
-- `fp_jit` (JIT 814 ms == intérprete) — el path float **escalar** no se
-  acelera en el JIT actual; la auto-vectorización SSE2/AVX en curso lo cierra.
-- `string_workout` (648 ms vs Java 198 ms) — HotSpot tiene
-  small-string-optimization; mejora con SSO en StringObject.
-- `branch_unpredict` (165 ms vs C 20 ms) — branches genuinamente
-  impredecibles; mejora con branch hints del perfil PGO ya recolectado.
-- `pic_real` (JIT 41 ms vs C 6 ms) — el JIT C1 no devirtualiza el
-  patrón PIC con clases dispersas; el inliner futuro lo cerrará.
+Vesta AOT gana **29/29** benches a Java y a Python, **18/29** a Go y
+**10/29** a Rust; empata o gana a C en 6 (`callvirt_hot`, `int_mixed`,
+`memcpy_loop`, `nested_loops`, `string_hot`, `tight_loop`).
 
-**Vesta JIT supera a CPython 3.11 en 27 de 28 benches (96%)**. La única
-excepción es `string_hot` (CPython tiene refcount + SSO nativos). El
-peor caso de Vesta sigue siendo dramáticamente mejor que el mejor caso de
-Python en hot loops puros (geomean Python: 141× más lento que C).
-
-Detalles + metodología + cómo correr los benchmarks en
-[doc/BENCHMARKS.md](./doc/BENCHMARKS.md). Los **29 workloads** multi-lenguaje
-viven en `examples_codes_vx/benchmark/<bench>/` con `main.vx`, `main.c`,
-`main.cpp`, `main.py`, `Main.java` y `main.go` cada uno. Runner orquestador:
-`python tools/bench/run_all_benches.py` (incluye **Go (gc)** con su propio
-color; genera `bench_results.json` con `runs_individual`, `stats`
-p50/p95/min/max/stddev por lenguaje, y 9 gráficas matplotlib en
-`bench_plots/` + reporte HTML navegable).
+Los peores casos del AOT frente a C son `cmp_fusion` (4.9x),
+`hash_lookup` (4.8x), `struct_field` (4.1x), `fp_jit` (4.0x) y
+`vec_axpy` (2.5x), y apuntan a dos huecos distintos del pipeline: la
+**desambiguacion de memoria** (sin ella no se pueden hoistear ni fusionar
+accesos a campos y tablas hash) y la **auto-vectorizacion**, que es lo que
+separa a `fp_jit` y `vec_axpy` del codigo que emite gcc. El JIT tiene
+ademas su propio pendiente -- devirtualizacion especulativa guiada por
+perfil, que es de lo que vive `pic_real` -- pero eso es un optimizador de
+runtime y no afecta a estos numeros de AOT.
 
 ### Visualización gráfica de resultados
 
 El runner genera un dashboard completo en `bench_plots/index.html` con
 9 vistas distintas. Las más representativas:
 
-**Resumen geomean vs C** (`08_geomean_summary.png`): media geométrica
-del slowdown vs C nativo por lenguaje. Vesta JIT compite directamente
-con HotSpot C2 y los supera ligeramente en promedio:
+**Resumen geomean vs C** (`08_geomean_summary.png`): media geometrica
+del slowdown frente a C nativo por lenguaje. El AOT de Vesta se situa entre
+C++/Rust y Go; el JIT queda por delante de HotSpot C2:
 
 ![Geomean vs C](./bench_plots/08_geomean_summary.png)
 
@@ -426,8 +421,9 @@ genera una gráfica dedicada por cada bench en
 `bench_plots/per_bench/` (no commiteadas, regenerar localmente con
 `python tools/bench/run_all_benches.py`).
 
-**Roadmap completo** (hasta JIT C2 con regalloc real + AOT con ejecutables
-`.exe` nativos en 3 tiers): [doc/ROADMAP.md](./doc/ROADMAP.md).
+**Roadmap completo** (JIT C2 optimizador con devirtualizacion especulativa
+y deoptimizacion, auto-vectorizacion, AOT en 3 tiers de deployment):
+[doc/ROADMAP.md](./doc/ROADMAP.md).
 
 ---
 
@@ -482,16 +478,18 @@ distribución y herramientas se diseñan juntos. Comparativa de features clave:
 ### Donde NO brilla (todavía)
 
 - **Madurez del ecosistema**: 0 paquetes públicos vs millones en npm/cargo/maven.
-- **Velocidad bruta**: el JIT C1 está al 5-10% de la velocidad de C nativo
-  optimizado en hot loops (C2 cerrará la brecha cuando llegue).
+- **Velocidad bruta**: el AOT queda a 1.65× de C en geomean y el JIT a 6.0×;
+  el optimizador C2 (devirtualización especulativa, deopt, vectorización)
+  cerrará la brecha restante.
 - **Documentación en inglés**: toda la doc del proyecto está en español ASCII.
-- **Plataformas ARM/AArch64**: el JIT solo soporta x86-64 hoy; ARM más adelante.
+- **Plataformas ARM/AArch64**: JIT y AOT emiten x86-64 (y x86-32); el backend
+  arm64 está en curso.
 - **AOT nativo en construcción**: el path core (int/float/structs/POO
   no-virtual/FFI/inline-asm) ya produce ejecutables PE/ELF standalone, pero
   los tres tiers (Full/Embed/Bare) y features managed sobre AOT siguen en
-  desarrollo activo. El JIT C1 cubre el corpus por el path vreg de producción;
-  las pocas features no cubiertas (excepciones polimórficas, spawn/distrib,
-  futures) caen a un path legacy o al intérprete graciosamente.
+  desarrollo activo. El JIT cubre el corpus completo; las pocas operaciones no
+  soportadas (excepciones polimórficas, spawn/distrib, futures) caen al
+  intérprete de forma transparente.
 
 ---
 
@@ -652,7 +650,7 @@ donde lenguaje, runtime, distribución y herramientas se diseñan juntos:
 - **Documentación binding**: cada feature del lenguaje y cada opcode del
   bytecode tienen doc autoritativa en español. 
   referencia para futuras decisiones).
-- **Tests no negociables**: 314/314 e2e antes de cada commit. Cada nueva feature
+- **Tests no negociables**: 793/793 pasos e2e antes de cada commit. Cada nueva feature
   ships con su test en `tests/vx/`.
 
 ---

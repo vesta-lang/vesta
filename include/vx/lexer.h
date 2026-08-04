@@ -73,7 +73,8 @@ class Lexer {
      * @param diags    Sumidero de errores y warnings.  Vivo durante toda
      *                 la vida del lexer.
      */
-    Lexer(std::string source, std::string filename, Diagnostics &diags);
+    Lexer(std::string source, std::string filename, Diagnostics &diags,
+          const ExpansionInfo *expansion = nullptr);
 
     /**
      * @brief Produce y consume el siguiente token.
@@ -206,6 +207,8 @@ class Lexer {
      * permite evitar recursion accidental entre los buffers internos.
      */
     Token lex_one_raw();
+    /// Cuerpo real; @ref lex_one_raw lo envuelve para estampar la procedencia.
+    Token lex_one_raw_inner();
 
     /**
      * @brief Reporta un error de lexer en la posicion actual.
@@ -217,6 +220,9 @@ class Lexer {
     Diagnostics &diags_;   ///< Sumidero de diagnosticos (no-owner).
 
     size_t pos_ = 0;      ///< Indice de byte en source_.
+    /// De que expansion viene lo que se esta leyendo, o @c nullptr si es
+    /// codigo que alguien escribio.  No propietario.
+    const ExpansionInfo *expansion_ = nullptr;
     uint32_t line_ = 1;   ///< Linea actual (1-based).
     uint32_t column_ = 1; ///< Columna actual (1-based, en bytes).
 

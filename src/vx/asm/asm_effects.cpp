@@ -305,10 +305,13 @@ const EffTable &x86_effects_table() {
         // (bit0=op1, bit1=op2, ...); un `true`/`false` viejo cuenta como 0x1/0x0
         // (escribe/no el 1er operando).
         auto E = [](std::initializer_list<const char *> wr, uint8_t wmask,
-                    bool mem, bool flags, bool call = false) {
+                    bool mem, bool flags, bool call = false,
+                    std::initializer_list<const char *> rd = {}) {
             AsmEffects e;
             for (const char *w : wr)
                 e.implicit_write.emplace_back(w);
+            for (const char *r : rd)
+                e.implicit_read.emplace_back(r);
             e.operand_write_mask = wmask;
             e.touches_mem = mem;
             e.touches_flags = flags;
@@ -330,9 +333,24 @@ const EffTable &x86_effects_table() {
         add("idiv", E({"rax", "rdx"}, false, false, true));
         add("cqo", E({"rdx"}, false, false, false));
         add("cdq", E({"rdx"}, false, false, false));
-        // syscall (Linux): clobber rcx, r11 + caller-saved via is_call.
-        add("syscall", E({"rcx", "r11"}, false, true, true, /*call=*/true));
-        add("sysenter", E({}, false, true, true, true));
+        // syscall (Linux x64 + Windows x64 NT): escribe RAX (valor de retorno) +
+        // clobber rcx, r11 + caller-saved via is_call.  RAX en implicit_write
+        // hace que un param `register("rax")` leido tras el asm (read-back del
+        // resultado) se clasifique INOUT (el asm lo define).  La MISMA
+        // instruccion cubre Linux y Windows x64 (el numero de servicio y los
+        // arg-regs son convencion del usuario via register(), no del opcode).
+        // LEE el numero de servicio (RAX) + los args.  Conservador: la union de
+        // las convenciones Linux (RDI/RSI/RDX/R10/R8/R9) y Windows NT (R10/RDX/
+        // R8/R9) -- asi un `register("rdi")`/`register("r10")` vive HASTA el
+        // syscall y el arg se coloca en su registro (sin esto el DCE lo borraba).
+        add("syscall", E({"rax", "rcx", "r11"}, false, true, true, /*call=*/true,
+                         {"rax", "rdi", "rsi", "rdx", "r10", "r8", "r9"}));
+        add("sysenter", E({"rax"}, false, true, true, true,
+                          {"rax", "rdi", "rsi", "rdx", "r10", "r8", "r9"}));
+        // int (Linux x86-32 `int 0x80`): escribe EAX con el valor de retorno y
+        // LEE EAX (num) + EBX/ECX/EDX/ESI/EDI/EBP (args).  Canonicos (rax/rbx/...).
+        add("int", E({"rax"}, false, true, true, /*call=*/true,
+                     {"rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp"}));
         // call/ret: call clobbera caller-saved (is_call).
         add("call", E({}, false, true, true, /*call=*/true));
         // --- Aritmetica/bitwise que escribe el 1er operando + flags ---
@@ -413,10 +431,13 @@ const EffTable &arm64_effects_table() {
         // wr=implicit_write, wmask=bitmask de operandos escritos, mem, flags,
         // call (un `true`/`false` viejo = 0x1/0x0, escribe/no el 1er operando).
         auto E = [](std::initializer_list<const char *> wr, uint8_t wmask,
-                    bool mem, bool flags, bool call = false) {
+                    bool mem, bool flags, bool call = false,
+                    std::initializer_list<const char *> rd = {}) {
             AsmEffects e;
             for (const char *w : wr)
                 e.implicit_write.emplace_back(w);
+            for (const char *r : rd)
+                e.implicit_read.emplace_back(r);
             e.operand_write_mask = wmask;
             e.touches_mem = mem;
             e.touches_flags = flags;
@@ -496,6 +517,12 @@ const EffTable &arm64_effects_table() {
         for (const char *m : {"nop", "yield", "wfe", "wfi", "sev", "sevl",
                               "hint"})
             add(m, E({}, false, false, false));
+        // svc #0 (ARM64/Linux syscall): LEE el numero de servicio en X8 y los
+        // argumentos en X0..X7; ESCRIBE el resultado en X0.  Sin declarar los
+        // reads, un `register("x0")` no viviria hasta el svc y el arg no se
+        // colocaria en su registro (mismo analisis que `syscall`/`int` en x86).
+        add("svc", E({"x0"}, false, true, true, /*call=*/true,
+                     {"x8", "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"}));
         return t;
     }();
     return table;

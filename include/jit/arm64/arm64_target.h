@@ -30,7 +30,7 @@ class Arm64Target final : public CodegenTarget {
     const TargetRegInfo &reg_info() const override { return target_arm64(); }
     sched::EffIsa sched_isa() const override { return sched::EffIsa::ARM64; }
     bool select(const ir::IrFunction &fn, MFunction &out) const override;
-    MFunction rewrite(const MFunction &vf, const RegAlloc &ra,
+    MFunction rewrite(const MFunction &vf, const codegen::RegAlloc &ra,
                       const IntervalResult &ivs) const override;
     int encode(MFunction &pf, std::vector<uint8_t> &out) const override;
 };

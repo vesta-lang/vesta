@@ -1,0 +1,58 @@
+namespace ejemplos.string_conformance;
+
+// Matriz de conformidad de cadenas.
+//
+// Cada operacion debe producir EXACTAMENTE la misma salida en interprete, JIT
+// y AOT.  Se vuelcan BYTES, no texto, para que cualquier diferencia de
+// representacion o de codificacion salte a la vista en vez de esconderse.
+//
+// Nacio de tres divergencias reales que ningun test cubria: `bytes()` devolvia
+// 0 en el interprete sobre una cadena valida (un operando derramado que se
+// leia sin recargar), UTF-32 no transcodificaba en ningun modo, y `str_convert`
+// era un no-op en AOT.  Escrita con METODOS, que es la API vigente.
+
+void dump(string etiqueta, u8* p, i64 n) {
+    print("${etiqueta}:");
+    i64 i = 0;
+    while (i < n) {
+        print(" ${(u32) p[i]}");
+        i = i + 1;
+    }
+    println("");
+}
+
+i32 main() {
+    // ASCII, 2 bytes en UTF-8 y 3 bytes en UTF-8.
+    const string a = "Hola";
+    const string b = "café";
+    const string c = "€";
+
+    println("len  ${a.length()} ${b.length()} ${c.length()}");
+    println("byte ${a.bytes()} ${b.bytes()} ${c.bytes()}");
+
+    // Frontera con codigo nativo: la codificacion se elige aqui, no en el tipo.
+    dump("cstr_a", a.cstr(), 5);
+    dump("wstr_a", (u8*) a.wstr(), 10);
+    dump("cstr_b", b.cstr(), 6);
+    dump("wstr_b", (u8*) b.wstr(), 10);
+    dump("wstr_c", (u8*) c.wstr(), 4);
+
+    // Concatenacion e igualdad.
+    string j = a.concat("!");
+    println("cat  ${j.bytes()} ${j.length()}");
+    dump("cat_b", j.cstr(), 6);
+    println("eq   ${a.equals("Hola")} ${a.equals("hola")}");
+    println("op   ${a == "Hola"} ${a != "x"}");
+
+    // Interpolacion.
+    i64 n = 42;
+    string s = "n=${n};${a}";
+    println("intp ${s.bytes()} ${s.length()}");
+    dump("intp_b", s.cstr(), 11);
+
+    // Cadena vacia.
+    const string e = "";
+    println("vaci ${e.length()} ${e.bytes()}");
+
+    return 0;
+}

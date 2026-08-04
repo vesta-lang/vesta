@@ -19,6 +19,7 @@
 #ifndef VESTA_JIT_X86_64_X86_TARGET_H
 #define VESTA_JIT_X86_64_X86_TARGET_H
 
+#include "codegen/timeline_builder.h" // build_allocation_result (RegAlloc -> timeline)
 #include "jit/codegen_target.h"
 #include "jit/peephole.h"
 #include "jit/regalloc_rewrite.h"
@@ -33,14 +34,18 @@ class X86Target final : public CodegenTarget {
     X86Target(const CallResolver &resolve_call, const VregEntries &ent,
               const CallResolver &resolve_native,
               const CallResolver &resolve_symbol, bool pic, bool target_sysv,
-              bool mode32, FloatIsa fisa, bool emit_line_map)
+              bool mode32, FloatIsa fisa, bool emit_line_map,
+              bool reserve_vec_acc = true)
         : resolve_call_(resolve_call), ent_(ent),
           resolve_native_(resolve_native), resolve_symbol_(resolve_symbol),
           pic_(pic), sysv_(target_sysv), mode32_(mode32), fisa_(fisa),
-          emit_line_map_(emit_line_map) {}
+          emit_line_map_(emit_line_map), reserve_vec_acc_(reserve_vec_acc) {}
 
     const TargetRegInfo &reg_info() const override {
-        return mode32_ ? target_x86_32() : target_x86_64_abi(sysv_);
+        // Reserva VEC_ACC demand-driven: XMM10-13 solo se reservan en funciones
+        // que usan el path vectorial; las escalares obtienen 14 lanes FP.
+        return mode32_ ? target_x86_32()
+                       : target_x86_64_abi(sysv_, reserve_vec_acc_);
     }
 
     sched::EffIsa sched_isa() const override { return sched::EffIsa::X86; }
@@ -51,10 +56,11 @@ class X86Target final : public CodegenTarget {
                            mode32_, fisa_, emit_line_map_);
     }
 
-    MFunction rewrite(const MFunction &vf, const RegAlloc &ra,
+    MFunction rewrite(const MFunction &vf, const codegen::RegAlloc &ra,
                       const IntervalResult &ivs) const override {
-        return rewrite_to_physical(vf, ra, reg_info(), AbiKind::HOST_LEAF,
-                                   &ivs);
+        return rewrite_to_physical(
+            vf, codegen::build_allocation_result(ra, &ivs, codegen::AssignmentPlan{}),
+            reg_info(), AbiKind::HOST_LEAF, &ivs);
     }
 
     int encode(MFunction &pf, std::vector<uint8_t> &out) const override {
@@ -76,6 +82,7 @@ class X86Target final : public CodegenTarget {
     bool mode32_;
     FloatIsa fisa_;
     bool emit_line_map_;
+    bool reserve_vec_acc_; ///< reservar XMM10-13 para VEC_ACC (demand-driven).
 };
 
 } // namespace jit

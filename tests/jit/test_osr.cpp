@@ -33,9 +33,10 @@
 #include "ir/ssa_ir.h"
 #include "jit/code_cache.h"
 #include "jit/interval.h"
-#include "jit/linear_scan.h"
+#include "codegen/regalloc.h"
 #include "jit/machine_ir.h"
 #include "jit/regalloc_rewrite.h"
+#include "codegen/timeline_builder.h"
 #include "jit/target_reginfo.h"
 #include "jit/vreg_select.h"
 #include "jit/x86_encoder.h"
@@ -204,12 +205,12 @@ int main() {
     }
     const TargetRegInfo &tri = target_x86_64_vm_abi();
     IntervalResult ivs = build_intervals(mf, tri);
-    RegAlloc ra = linear_scan(ivs, tri);
+    codegen::RegAlloc ra = linear_scan(ivs, tri);
 
     OsrEmit osr;
     osr.mode = OsrEmit::C2_ENTRY;
     osr.header_block = 1; // el loop header
-    MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM, &ivs, &osr);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM, &ivs, &osr);
 
     CHECK(osr.osr_entry_valid, "se emitio el bloque OSR-entry");
 

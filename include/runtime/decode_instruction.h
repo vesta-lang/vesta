@@ -440,6 +440,7 @@ void decode_instr_three_reg(ProcessVM *vm, DecodedInstr &instr);
  * Util para @c atomiccas (dst, addr, exp, des).
  */
 void decode_instr_four_reg(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_atomic_rmw(ProcessVM *vm, DecodedInstr &instr);
 
 /**
  * @brief Descodifica una instruccion de acceso a static field (getstatic /
@@ -576,6 +577,23 @@ vm_event execute_instruction(ProcessVM *process);
  * @param process Proceso virtual cuyo RIP apunta a la instruccion a
  * descodificar.
  */
+/**
+ * @brief Descodifica la instruccion de una direccion SIN tocar el proceso.
+ *
+ * La descodificacion normal escribe en la cache de instrucciones y deja el
+ * proceso apuntando al resultado, asi que no sirve para MIRAR: recorrer un
+ * rango con ella alteraria la ejecucion.  Esta solo lee.
+ *
+ * Hace falta para poder ensenar el codigo maquina de alrededor de un fallo, y
+ * la necesitan igual el desensamblador y el depurador.
+ *
+ * @param process Proceso de cuya memoria se lee.
+ * @param pc Direccion de la instruccion.
+ * @param out Recibe la instruccion descodificada.
+ * @return @c false si en esa direccion no hay una instruccion utilizable.
+ */
+bool decode_peek(ProcessVM *process, uint64_t pc, DecodedInstr &out);
+
 void decode_instruction(ProcessVM *process);
 
 } // namespace runtime

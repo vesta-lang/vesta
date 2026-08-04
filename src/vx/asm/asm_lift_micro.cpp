@@ -17,6 +17,7 @@
 #include "vx/asm/asm_lift_micro.h"
 
 #include "ir/ssa_ir.h"
+#include "vx/asm/asm_effects.h"
 #include "vx/asm/asm_phys_reg.h"
 
 #include <cctype>
@@ -177,11 +178,44 @@ bool asm_lift_micro(
     sems.reserve(insns.size());
     ops_per.reserve(insns.size());
     tmpl_per.reserve(insns.size());
+    // ASA: arch string para consultar los efectos IMPLICITOS (asm_effects).  La
+    // DB de instrucciones (instr_db) modela la SEMANTICA de la forma (operandos
+    // explicitos), pero NO los registros que una instruccion lee/escribe por
+    // convencion de ABI: `syscall` lee el numero en RAX y los args en
+    // RDI/RSI/RDX/R10/R8/R9; `int` lee EAX+args; `svc` lee X8+X0..X7.
+    const std::string arch_s =
+        (isa == instr_db::Isa::ARM64) ? "arm64" : "x86_64";
     for (const std::string &insn : insns) {
         instr_db::AsmInsnSem sem =
             instr_db::asm_insn_sem(isa, insn, (uint32_t)ua);
         if (sem.form_id < 0)          // desconocida por la DB
             return false;
+        // Si la instruccion LEE/ESCRIBE implicitamente un registro que esta
+        // LIGADO a una variable Vesta (register(): p.ej. `syscall` con
+        // register("rax") id + register("rdi") a1 en los params del invoke), el
+        // asm_micro NO puede modelar esos operandos implicitos (solo trocea los
+        // textuales) -> los args no se threadean, el RA no los coloca y el DCE
+        // elimina sus stores.  Lo dejamos al INLINE_ASM, que SI marca los
+        // bindings como in/out vregs y respeta el pin al registro fisico.
+        {
+            std::string mnem;
+            size_t sp = insn.find_first_of(" \t");
+            mnem = (sp == std::string::npos) ? insn : insn.substr(0, sp);
+            vx::AsmEffects ef = vx::asm_effects_for(mnem, arch_s);
+            bool binds_implicit = false;
+            for (const std::string &r : ef.implicit_read)
+                if (slot_of.find(lower(r)) != slot_of.end()) {
+                    binds_implicit = true;
+                    break;
+                }
+            if (!binds_implicit)
+                for (const std::string &r : ef.implicit_write)
+                    if (slot_of.find(lower(r)) != slot_of.end()) {
+                        binds_implicit = true;
+                        break;
+                    }
+            if (binds_implicit) return false; // -> INLINE_ASM con bindings
+        }
         std::vector<ir::AsmMicroOperand> operands;
         std::string tmpl;
         if (sem.reads.empty() && sem.writes.empty()) {

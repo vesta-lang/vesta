@@ -196,6 +196,28 @@ enum class IrOp : uint16_t {
     // el resultado alimenta una suma (acc+select(c,1,0) -> acc+zext(c)).
     SELECT = 0x1C, ///< %dst = select.T %cond, %a, %b   (%cond ? %a : %b)
 
+    // ADDC / SUBB + CARRYOF: aritmetica multiprecision.
+    //
+    // Una suma de anchura mayor que la palabra se construye sumando limbs y
+    // arrastrando el acarreo.  El acarreo lo produce la CPU en un flag y lo
+    // consume la suma siguiente con @c adc, pero el IR es SSA y no tiene donde
+    // guardar DOS resultados, asi que se parte en dos nodos ligados por el
+    // grafo: @c ADDC produce la suma y @c CARRYOF lee el acarreo DE esa suma
+    // concreta (su operando es el valor que ADDC produjo).
+    //
+    // Que la dependencia sea explicita es justo lo que lo hace robusto: el
+    // backend no tiene que RECONOCER un patron -- que cualquier pase podria
+    // reordenar sin avisar --, solo seguir el uso.  Cuando el acarreo alimenta
+    // otra suma, la pareja baja a @c add + @c adc; si nadie lo usa, ADDC es una
+    // suma normal y CARRYOF se elimina como codigo muerto.
+    //
+    // Sin ellos, el acarreo se calculaba comparando el resultado con un sumando
+    // (`suma < a`), lo que cuesta seis instrucciones donde la maquina necesita
+    // dos.
+    ADDC = 0x1D,    ///< %dst = addc.T   %a, %b   (suma; acarreo via CARRYOF)
+    SUBB = 0x1E,    ///< %dst = subb.T   %a, %b   (resta; prestamo via CARRYOF)
+    CARRYOF = 0x1F, ///< %dst = carryof.T %suma   (0/1 de la ADDC/SUBB dada)
+
     // ---- aritmetica flotante (0x20-0x2F) ----
     FADD = 0x20,   ///< %dst = fadd.fN  %a, %b
     FSUB = 0x21,   ///< %dst = fsub.fN  %a, %b
@@ -414,6 +436,26 @@ enum class IrOp : uint16_t {
                    ///< mov si no)
     STORE = 0x92,  ///< store.T  %val, %ptr         (escribir; idem LOAD)
     MEMCPY = 0x93, ///< memcpy %dst_ptr, %src_ptr, %len
+    /**
+     * memset %dst_ptr, %val, %len  -- rellena @c len bytes desde @c dst con el byte
+     * bajo de @c val.  Gemelo de @c MEMCPY.
+     *
+     * POR QUE ES UN OP DEL IR Y NO UNA CADENA DE STORES.  "Esta region se pone a un
+     * valor" es un HECHO SEMANTICO, y desplegarlo en el lowering lo DESTRUYE: ningun
+     * nivel inferior puede reconstruirlo a partir de N stores sueltos.  Es la regla del
+     * optimizer -- cada cosa en el nivel MAS ALTO donde la informacion aun existe.
+     * Medido antes de existir este op: `i32[8192] arr;` (una DECLARACION) generaba
+     * 16397 instrucciones, 86 KB de codigo y 1,7 s de compilacion, porque el zero-fill
+     * se desplegaba a un STORE por cada 8 bytes sin limite.
+     *
+     * Cada backend lo MATERIALIZA segun su contexto, que es justo lo que un op
+     * semantico permite: el interprete un bucle, el JIT/AOT `rep stosb` o SIMD, y un
+     * programa sin runtime la rutina que el usuario haya puesto en su lugar (el
+     * mecanismo de sobrecarga ya existe: @c vx_memset es Vesta puro, sin libc, y el
+     * vectorizador del AOT puede promover su bucle de qwords).  Un tamano pequeno y
+     * constante lo desenrolla el BACKEND -- ahi la decision ya no pierde nada.
+     */
+    MEMSET = 0x9F,
     RAW_ALLOC =
         0x94, ///< %dst = raw_alloc.ptr %size  (rawalloc; dst es puntero host)
     RAW_FREE = 0x95,  ///< raw_free %ptr               (rawfree)
@@ -439,11 +481,11 @@ enum class IrOp : uint16_t {
                       ///< estatico)
     SETSTATIC = 0x9A, ///< setstatic.i64 %cls, %val, imm=offset    (almacena
                       ///< campo estatico)
-    ATOMIC_LD_I64 = 0x9B, ///< %dst = atomic_ld.i64 [%addr]   (atomic load i64)
-    ATOMIC_ST_I64 = 0x9C, ///< atomic_st.i64 [%addr], %val
-    ATOMIC_CAS_I64 =
+    ATOMIC_LD = 0x9B, ///< %dst = atomic_ld.i64 [%addr]   (atomic load i64)
+    ATOMIC_ST = 0x9C, ///< atomic_st.i64 [%addr], %val
+    ATOMIC_CAS =
         0x9D, ///< %dst = atomic_cas.i64 [%addr], %expected, %desired
-    ATOMIC_ADD_I64 =
+    ATOMIC_ADD =
         0x9E, ///< %dst = atomic_add.i64 [%addr], %delta (fetch-and-add)
               ///< El bloque queda en HandleTable y participa del mark/sweep.
     ///< Si nada lo referencia (stack/regs/external_refs), se libera en
@@ -665,6 +707,14 @@ enum class IrOp : uint16_t {
     // No-op en el interprete (su VEC_BINOP_S re-lee el escalar por lane).
     // imm=ancho del chunk.  XMM13 = acc0; scalar-bcast y reduccion no coexisten
     // en un matcher de 1 sentencia, asi que reusar XMM13 es seguro.
+    // VEC_FMA_S dst[i] += a[i] * escalar  (element-wise, escalar difundido).
+    // Paso "array escalado" de un compound (c[i]=a[i]*k1 + b[i]*k2): c = c +
+    // b*k2 en 1 pasada, 1 redondeo (VFMADD231 reg-reg-reg).  El escalar esta
+    // pre-difundido en XMM(13-sidx) por un VEC_BCAST (hoisted).  El SUB se
+    // maneja negando el escalar en el matcher (c - b*k = c + b*(-k)).  Solo
+    // float.  operands = {dst_ptr, a_ptr, scalar_value}; imm = ancho |
+    // hoisted<<16 | sidx<<17.
+    VEC_FMA_S = 0xEC, ///< vec_fma_s.fN %dst, %a, %scalar  (dst += a*scalar)
     VEC_BCAST = 0xEB, ///< vec_bcast.fN %scalar
 
     // ---- intrinsics VM (0xF0-0xFF) ----
@@ -718,6 +768,8 @@ enum class IrOp : uint16_t {
  */
 const char *ir_op_name(IrOp op);
 
+
+
 /**
  * @brief Parsea el nombre de un opcode del formato de texto.
  * @param name Nombre del opcode (p.ej. "add", "calln", "monenter").
@@ -745,6 +797,29 @@ static constexpr IrValueId IR_NO_VALUE = 0xFFFFFFFFu;
 using IrBlockId = uint32_t;
 static constexpr IrBlockId IR_NO_BLOCK = 0xFFFFFFFFu;
 
+/// El valor no vive en ningun registro fisico (murio o se derramo).
+static constexpr uint8_t IR_NO_REG = 0xFFu;
+
+/// La instruccion se escribio en la funcion donde esta, no vino de otra.
+static constexpr uint32_t IR_NO_INLINE_SITE = 0xFFFFFFFFu;
+
+/**
+ * @struct InlineSite
+ * @brief Un trozo de funcion que se metio dentro de otra al inlinar.
+ *
+ * Guarda lo que hace falta para volver a contar la llamada que se aplano: de
+ * que funcion vino el codigo y desde donde se la llamaba.  @c parent encadena
+ * los inlinados anidados (A inlino a B, que ya tenia dentro a C), asi que una
+ * instruccion referencia UN sitio y la cadena entera se recorre desde el.
+ */
+struct InlineSite {
+    std::string callee;  ///< Funcion de la que vino el codigo.
+    uint32_t line = 0;   ///< Linea de la llamada, en quien inlino.
+    uint32_t column = 0; ///< Columna de la llamada.
+    /// Sitio de fuera si la propia llamada tambien venia inlinada.
+    uint32_t parent = IR_NO_INLINE_SITE;
+};
+
 /**
  * @brief Descriptor de un valor SSA.
  *
@@ -758,6 +833,12 @@ struct IrValue {
     std::string name;          ///< nombre legible ("%0", "%result", "%a", ...)
     bool is_param = false;     ///< true si es un parametro de funcion
     bool is_const = false;     ///< true si es una constante literal
+    /// Registro fisico donde el asignador dejo el valor, o @c IR_NO_REG si no
+    /// vive en uno (murio, o se derramo a la pila).  Lo estampa quien orquesta
+    /// la compilacion a partir de @c EmitResult::value_regs, porque hasta
+    /// entonces esta informacion se tiraba: al explicar un fallo salia `%8`
+    /// por un lado y `r1=0x2a` por otro sin decir que son lo mismo.
+    uint8_t reg = 0xFFu;
     /// true si el valor (debe ser PTR) apunta a memoria HOST (e.g. retorno
     /// de @c rawalloc).  Los LOAD/STORE consultan este bit para decidir
     /// entre @c mov [rp] (s=0, memoria VM) y @c movh [rp] (s=1, memoria
@@ -906,6 +987,15 @@ struct IrInstr {
     IrValueId
         func_ptr; ///< para CALLIND: id del valor con el puntero de funcion
 
+    /// ABI custom del CALLIND: registro fisico por argumento, tomado del TIPO
+    /// del puntero (cfn con abi_regs).  Vacio = ABI estandar.  Necesario porque
+    /// un CALLIND no tiene nombre resoluble -> la ABI no puede buscarse por
+    /// IrFunction; viaja aqui, fijada en compile-time desde el tipo (aunque el
+    /// valor del puntero cambie en runtime).  Para CALL directo NO se usa (el
+    /// codegen resuelve la ABI por nombre via IrFunction::param_abi_regs).
+    /// Se serializa (cross-module).
+    std::vector<std::string> call_abi_regs;
+
     IrBlockId target_block; ///< destino de BR o rama true de BR_COND
     IrBlockId false_block;  ///< rama false de BR_COND
 
@@ -920,6 +1010,23 @@ struct IrInstr {
 
     uint32_t
         source_line; ///< numero de linea del fuente original (0 = desconocido)
+    /// Columna del fuente (0 = desconocida).  Con la linea sola no se puede
+    /// senalar cual de las cosas que caben en ella fallo.
+    uint32_t source_column;
+
+    /// De donde vino esta instruccion si NO se escribio aqui: indice en
+    /// @c IrFunction::inline_sites, o @c IR_NO_INLINE_SITE si es de la propia
+    /// funcion.  Al inlinar, el codigo del llamado pasa a vivir dentro del que
+    /// llama pero conserva las lineas de SU fuente, con lo que la traza
+    /// atribuia a `main` una linea que es de otro sitio -- no perdia marcos,
+    /// mentia.  Con esto se pueden reconstruir los que se aplanaron.
+    uint32_t inline_site = IR_NO_INLINE_SITE;
+
+    /// Longitud en caracteres del trozo de fuente que produjo la instruccion
+    /// (0 = desconocida).  Con la columna sola se sabe donde empieza pero no
+    /// donde acaba, y sin eso no se puede recortar el texto para NOMBRAR un
+    /// operando: decir "el divisor es this.valor" en vez de "%2".
+    uint32_t source_len = 0;
 
     /// Si true, esta instruccion NO debe ser eliminada por copy_prop
     /// ni DCE.  Util para barreras de codegen como los MOVs que el
@@ -927,6 +1034,17 @@ struct IrInstr {
     /// proteger los SSA values de loop-carry contra el "live hole"
     /// del linear scan (ver lower_for / lower_while).
     bool preserve = false;
+
+    /// @Naked: si true en un IrOp::RET, este RET es el SINTETICO de caida-al-final
+    /// (fallthrough) que el lowering inserta cuando la funcion no termina en un
+    /// `return` explicito -- NO proviene de un `return` del usuario.  El codegen
+    /// nativo lo usa para @Naked: una funcion @Naked NO emite el `ret` implicito
+    /// (para no pisar el `iretq`/`ret` que el propio asm provee en un ISR o
+    /// bootloader), pero SI materializa un `return` explicito (read-back + `ret`,
+    /// sin epilogo de frame).  Mirar solo si el RET porta operando NO basta: el
+    /// implicito de una fn con retorno no-void lleva un `0` sintetico.  Se
+    /// serializa (el AOT consume el @ir del .velb/.vxir).
+    bool ret_implicit = false;
 
     /// @fp(strict) bajo inlining: cuando el inliner copia el cuerpo de un callee
     /// STRICT (fp_contract=false) dentro de un caller FAST, marca las ops float
@@ -975,7 +1093,7 @@ struct IrInstr {
     IrInstr()
         : op(IrOp::NOP), type(IrType::VOID), dst(IR_NO_VALUE), imm(0),
           func_ptr(IR_NO_VALUE), target_block(IR_NO_BLOCK),
-          false_block(IR_NO_BLOCK), source_line(0) {}
+          false_block(IR_NO_BLOCK), source_line(0), source_column(0) {}
 };
 
 // =========================================================================
@@ -996,6 +1114,9 @@ struct IrBlock {
     std::vector<IrBlockId>
         preds; ///< bloques predecesores (para consistencia de Phi)
     std::vector<IrBlockId> succs; ///< bloques sucesores
+    /// Marcador transitorio (no serializado): el unroller lo pone en el header
+    /// del REMAINDER y del bucle unrollado para no re-desenrollarlos.
+    bool no_unroll = false;
 };
 
 // =========================================================================
@@ -1145,8 +1266,21 @@ struct IrFunction {
     std::string name;              ///< nombre calificado ("com.pkg.Foo.add")
     IrType ret_type = IrType::VOID; ///< tipo de retorno
     std::vector<IrValueId> params; ///< IDs de los valores parametro
+    /// ABI custom por funcion: registro fisico de entrada por parametro,
+    /// indexado igual que @c params.  Cadena vacia = ABI estandar del target
+    /// (i-esimo arg-reg SysV/Win64).  "rax".."r15".  Lo llena el lowering desde
+    /// @c ParamDecl::abi_reg; lo consumen el codegen del CALLEE (el param llega
+    /// en ese registro, sin el load estandar) y del CALLER (coloca el arg ahi).
+    /// Se serializa (cross-module via .vxir/.velb @ir) y viaja en el .vxi.
+    /// Vacio TAMBIEN cuando NINGUN param tiene ABI custom (caso comun -> no
+    /// ocupa espacio en el 99% de funciones).
+    std::vector<std::string> param_abi_regs;
     std::vector<IrValue> values;   ///< pool de todos los valores SSA
     std::vector<IrBlock> blocks;   ///< bloques basicos (bloques[0] = entry)
+    /// Llamadas que se aplanaron aqui al inlinar.  Las instrucciones apuntan a
+    /// una entrada por indice (@c IrInstr::inline_site); vacio si no se inlino
+    /// nada, que es lo comun.
+    std::vector<InlineSite> inline_sites;
     bool is_native = false;        ///< true si es stub para funcion nativa
     bool is_variadic = false;      ///< true si acepta argc variable
 
@@ -1763,6 +1897,19 @@ bool ir_parse(const std::string &text, IrModule &out, std::string &error);
  */
 bool ir_verify(const IrModule &mod, std::vector<std::string> &errors);
 
+/**
+ * @brief Escribe UNA instruccion en el mismo formato que el volcado completo.
+ *
+ * Se expone para que quien explique un fallo ensene la instruccion ENTERA --
+ * destino, operandos, tipos -- y no solo el nombre de la operacion, que por si
+ * solo no dice nada.  Es la MISMA funcion que usa el volcado: escribir una
+ * segunda daria dos formatos que se irian separando en cuanto uno cambiara.
+ *
+ * @param o Donde escribir.
+ * @param fn Funcion a la que pertenece (hace falta para nombrar los valores).
+ * @param ins La instruccion.
+ */
+void print_instr(std::ostream &o, const IrFunction &fn, const IrInstr &ins);
 } // namespace ir
 
 // Restaurar las macros de Windows que anulamos al principio del header.

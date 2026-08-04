@@ -19,19 +19,24 @@
  */
 
 #include "vx/comptime/comptime_vm.h"
+#include "vx/type_checker.h" // report_comptime_fatal
 
 /* Headers runtime full: estos pueden cascade-incluir openssl/capstone
  * pero solo se compilan en este TU (no se filtran al header publico
  * de @c ComptimeRuntime gracias al pimpl). */
 #include "runtime/manager_runtime.h"
 #include "runtime/runtime.h"
+#include "runtime/exception_runtime.h" // build_stack_trace del fallo
 #include "runtime/string_runtime.h" /*   : make_string_flat */
 #include "loader/loader.h"
 #include "distrib/dist_runtime.h" /* dtor de VM destruye DistRuntime via unique_ptr */
 #include "jit/auto_jit.h"         /*   : eager-compile macros */
 #include "ffi/virtual_lib_registry.h" /* #3: resolver vrt:* en el JIT del CV */
+#include "jit/interp_jit_bridge.h" /* CTPE: enter_jit (invocacion directa) */
 #include "jit/jit_compiler.h" /* CompileResult */
+#include "jit/vreg_pipeline.h" /* CTPE: vreg_set_ctpe_safepoint_handler */
 
+#include <atomic>
 #include <chrono>
 #include <cstdio> //   : snprintf para hex-encode del hash
 #include <cstring>
@@ -39,6 +44,16 @@
 #include <vector>
 
 namespace vx {
+
+std::string comptime_read_vm_string(uint64_t proc_ptr, uint64_t addr,
+                                    uint64_t len) {
+    auto *proc = reinterpret_cast<runtime::ProcessVM *>(proc_ptr);
+    if (!proc || len == 0 || len > 4096) return std::string();
+    std::vector<char> buf(len + 1, 0);
+    proc->vm_mem.read_bytes(addr, buf.data(), len);
+    return std::string(buf.data(), len);
+}
+
 
 /**
  * @brief Pimpl interno de @c ComptimeRuntime.  Contiene todo el
@@ -269,9 +284,34 @@ bool ComptimeRuntime::invoke_simple_macro(const std::string &macro_name,
              * ejecuta ESTE macro por interp, que es correcto. */
             proc->jit_entry_fn = nullptr;
         }
+        proc->err_thread = runtime::THREAD_NO_ERROR;
         impl_->vm.make_ready(impl_->proc_pid);
         impl_->vm.start();
         impl_->vm_started = true;
+
+        /* Si el codigo comptime murio -- un `panic`, una asercion incumplida,
+         * una division por cero -- hay que DECIRLO.  Sin esto el proceso
+         * quedaba muerto en silencio y se leia R0 igual, con lo que el valor
+         * que se horneaba en el binario era basura de un calculo que nunca
+         * termino.  Se imprime el mensaje y el curso de llamadas que llevo
+         * hasta el fallo, que es lo que permite localizarlo. */
+        if (proc->err_thread != runtime::THREAD_NO_ERROR) {
+            const char *msg = (proc->fatal_msg_buf && proc->fatal_msg_buf[0])
+                                  ? proc->fatal_msg_buf
+                                  : "la ejecucion en tiempo de compilacion "
+                                    "termino con un error";
+            std::fprintf(stderr, "error: %s\n", msg);
+            /* Y que la compilacion falle: el valor que se hubiera horneado
+             * viene de un calculo que no llego a terminar. */
+            report_comptime_fatal(msg);
+            /* La traza la dejo escrita el propio fallo, cuando el proceso
+             * aun estaba coherente.  Reconstruirla ahora seria recorrer
+             * marcos que ya no son de fiar. */
+            if (proc->fatal_trace_buf && proc->fatal_trace_buf[0])
+                std::fprintf(stderr, "%s\n", proc->fatal_trace_buf);
+            std::fflush(stderr);
+            return false;
+        }
 
         /* Lee R0 del proceso completado. */
         out_r0 = proc->registers.regs[0].qword();
@@ -280,6 +320,188 @@ bool ComptimeRuntime::invoke_simple_macro(const std::string &macro_name,
     } catch (...) {
         return false;
     }
+}
+
+// ---------------------------------------------------------------------------
+//  CTPE (Compile-Time Program Execution) -- modo RESTRINGIDO.
+//
+//  A diferencia de la invocacion de @Macro (sin restriccion, responsabilidad
+//  del programador), el CTPE inferido corre en SANDBOX: capacidades externas
+//  DENEGADAS.  Reusa el MISMO ComptimeRuntime (motor global) pero con caps
+//  restringidas SOLO durante esta invocacion; se restauran al salir para no
+//  afectar a los @Macro.  El trap del sandbox + el catch(...) de
+//  invoke_simple_macro garantizan el fallback si la ejecucion real toca algo
+//  prohibido.
+//
+//  Pendiente (siguiente incremento): watchdog de TIEMPO (safepoint_flag +
+//  throw_fatal/longjmp) y tope de HEAP (GcHeap max_bytes).  El presupuesto ya
+//  se recibe; hoy solo se aplican las caps.
+// ---------------------------------------------------------------------------
+bool ComptimeRuntime::try_invoke_ctpe(const std::string &fn_name,
+                                      const std::vector<uint64_t> &args,
+                                      const CtpeBudget &budget,
+                                      uint64_t &out_r0) noexcept {
+    if (!impl_ || !impl_->proc) return false;
+    auto &execs = impl_->mgr.loader.executables;
+    if (execs.empty()) return false;
+    auto &exe = execs.back();
+
+    // 1) Registrar + eager-compilar la funcion regular on-demand (una vez).  El
+    //    Executable ya esta en memoria (cero ficheros): su entry_pc sale del
+    //    symbol_table (`code.<fn>`) y su IR del ir_lookup/ir_functions.
+    if (!macro_entry_pc_.count(fn_name)) {
+        auto sit = exe->symbol_table.find("code." + fn_name);
+        if (sit == exe->symbol_table.end()) return false;
+        register_macro(fn_name, sit->second);
+        auto fnit = exe->ir_lookup.find(fn_name);
+        if (fnit != exe->ir_lookup.end() &&
+            fnit->second < exe->ir_functions.size()) {
+            const uint32_t saved_th = jit::g_jit_threshold;
+            if (saved_th == UINT32_MAX) jit::g_jit_threshold = 1;
+            // El handler de safepoint (watchdog) lo activa el orquestador CTPE
+            // (compiler.cpp) ANTES de load_macros_from_bytes -- porque main se
+            // JIT-compila al cargar el .velb, antes de este eager_compile.  Aqui
+            // solo compilamos; el codigo ya lleva los polls.
+            try {
+                jit::CompileResult res = jit::eager_compile_function(
+                    exe->ir_functions[fnit->second], &exe->ir_lookup,
+                    &exe->ir_functions, &exe->symbol_table);
+                if (res.fn)
+                    impl_->jit_code_by_pc[sit->second] =
+                        reinterpret_cast<void *>(res.fn);
+            } catch (...) {
+            }
+            jit::g_jit_threshold = saved_th;
+        }
+    }
+
+    // 1.5) Requerir JIT: CTPE solo ejecuta el programa si su entry (main)
+    //      JIT-compilo.  El watchdog de tiempo vive en el poll de safepoint que
+    //      emite el JIT en cada back-edge; el interprete no lo tiene, asi que un
+    //      main NO-JIT-able podria colgar la compilacion sin abortar.  Si no hay
+    //      codigo nativo -> no plegar (fallback: corre en runtime normal).
+    auto pcit = macro_entry_pc_.find(fn_name);
+    if (pcit == macro_entry_pc_.end()) return false;
+    if (!impl_->jit_code_by_pc.count(pcit->second)) return false;
+
+    // 2) Sandbox CTPE: DENEGAR las capacidades externas.  Cualquier op que las
+    //    use (CALLN/dlopen/spawn/msgsend-remoto/loadmod/...) trapea -> FatalError
+    //    -> el catch(...) de invoke_simple_macro devuelve false -> fallback.  Se
+    //    conserva MEM_HOST (acceso normal a objetos) y CLASSREG (inofensivo: el
+    //    pre-filtro ya excluye la metaprogramacion).
+    const uint32_t deny =
+        loader::Caps::FS_READ | loader::Caps::FS_WRITE | loader::Caps::NET |
+        loader::Caps::FFI_CALL | loader::Caps::FFI_OPEN | loader::Caps::SPAWN |
+        loader::Caps::DISTRIB | loader::Caps::LOADMOD;
+    const uint32_t saved_bits = exe->caps.bits;
+    exe->caps.bits = saved_bits & ~deny;
+
+    // 3) Watchdog de tiempo: hilo temporizador que, al vencer el presupuesto,
+    //    pide abortar (vrt_ctpe_request_abort) y patea el safepoint_flag.  El
+    //    poll del JIT lo consulta en el proximo back-edge -> throw_fatal ->
+    //    invoke_simple_macro devuelve false -> no se pliega.  Configurable por
+    //    VESTA_CTPE_MS (default = budget.millis, o 3000).
+    uint32_t ms = budget.millis ? budget.millis : 3000;
+    if (const char *env = std::getenv("VESTA_CTPE_MS")) {
+        char *end = nullptr;
+        const unsigned long v = std::strtoul(env, &end, 10);
+        if (end != env) ms = static_cast<uint32_t>(v);
+    }
+    std::atomic<bool> done{false};
+    runtime::ProcessVM *proc_ptr = impl_->proc;
+    proc_ptr->ctpe_abort = 0;
+    proc_ptr->ctpe_did_abort = 0;
+    std::thread watch([&done, ms, proc_ptr]() {
+        uint32_t waited = 0;
+        while (waited < ms) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            if (done.load(std::memory_order_relaxed)) return;
+            waited += 5;
+        }
+        // Deadline: marcar aborto ANTES de patear el flag (evita la carrera en
+        // que el poll ve el flag pero aun no el aborto).  Ambos viven en el
+        // ProcessVM -> el handler (en vesta_rt) ve la misma instancia.
+        proc_ptr->ctpe_abort = 1;
+        proc_ptr->safepoint_flag = 1;
+    });
+
+    // Invocacion DIRECTA del codigo JIT: sin make_ready, sin scheduler y sin el
+    // run-loop de la VM.  CTPE es JIT; el interprete solo es fallback.
+    //
+    // Hay que replicar la red de recuperacion que el scheduler arma alrededor de
+    // `jit_entry_fn` (scheduler.cpp): sin ella, un throw del propio programa --o
+    // el longjmp con que el watchdog aborta desde el poll de safepoint-- escapa
+    // y se lleva por delante la compilacion entera.  Quitar el envoltorio de VM
+    // no puede significar quitar tambien esa red.
+    //
+    // `ok` es volatile: lo escribe la rama normal y lo lee codigo alcanzable por
+    // longjmp, donde una local no-volatile queda indeterminada.
+    volatile bool ok = false;
+    out_r0 = 0;
+    {
+        runtime::ProcessVM *proc = impl_->proc;
+        // Estado inicial de pila: lo consume el bajado de VM para sus ALLOCA.
+        proc->registers.stack_pointer.qword(impl_->initial_rsp);
+        proc->registers.base_pointer.qword(impl_->initial_rsp);
+        proc->vm_mem.vm_to_host_memcpy(impl_->initial_rsp,
+                                       &impl_->hlt_sentinel_va,
+                                       sizeof(impl_->hlt_sentinel_va));
+        proc->stack_high = impl_->initial_rsp;
+        proc->stack_low_water = impl_->initial_rsp;
+
+        proc->registers.rip.qword(pcit->second);
+        for (size_t i = 0; i < args.size(); ++i)
+            proc->registers.regs[i + 1].qword(args[i]);
+        proc->registers.regs[15].qword(args.size());
+        proc->jit_entry_fn = nullptr; // no se pasa por el scheduler.
+
+        jit::JitFn jf = reinterpret_cast<jit::JitFn>(
+            impl_->jit_code_by_pc[pcit->second]);
+        proc->state.store(runtime::EXECUTE, std::memory_order_relaxed);
+        proc->av_recovery_active = true;
+        // setjmp == 0: ejecucion normal.  != 0: hubo longjmp (aborto del
+        // watchdog o fallo recuperado) -> no hay resultado fiable, no se pliega.
+        if (setjmp(proc->av_recovery_jmpbuf) == 0) {
+            try {
+                (void)jit::enter_jit(jf, reinterpret_cast<vrt_proc *>(proc));
+                out_r0 = proc->registers.regs[0].qword();
+                ok = true;
+            } catch (...) {
+                ok = false;
+            }
+        }
+        proc->av_recovery_active = false;
+        proc->state.store(runtime::HALT, std::memory_order_release);
+    }
+
+    done.store(true, std::memory_order_relaxed);
+    watch.join();
+    const bool aborted = proc_ptr->ctpe_did_abort != 0;
+    proc_ptr->ctpe_abort = 0;
+    proc_ptr->safepoint_flag = 0;
+    proc_ptr->ctpe_did_abort = 0;
+    // Restaurar SIEMPRE, tambien en los caminos de fallo: antes se salia por el
+    // `return false` del aborto sin restaurarlas y el ejecutable se quedaba con
+    // las capacidades denegadas durante el resto de la compilacion, afectando a
+    // los @Macro posteriores.
+    exe->caps.bits = saved_bits;
+
+    // El watchdog aborto la ejecucion (longjmp): el resultado seria parcial ->
+    // NO plegar (fallback: main corre en runtime).
+    if (aborted) return false;
+
+    // El proceso murio por error FATAL (una capacidad denegada por el sandbox,
+    // un deref invalido, cualquier trap).  @c invoke_simple_macro NO se entera:
+    // la VM AISLA el fallo -- mata el proceso y retorna con normalidad, sin
+    // lanzar ninguna excepcion que su `catch (...)` pueda ver -- asi que
+    // devuelve true y R0 conserva un valor RESIDUAL.  Plegar eso hornea un
+    // numero inventado en el binario, y el sintoma aparece lejisimos: en el
+    // resultado del programa ya compilado.  Regla: si el programa no termino
+    // LIMPIO no se pliega nada; esa funcion se compila con normalidad.
+    if (impl_->proc->state.load(std::memory_order_relaxed) == runtime::DEAD)
+        return false;
+
+    return ok;
 }
 
 /**
@@ -368,6 +590,51 @@ bool ComptimeRuntime::invoke_string_macro_memoized(
     }
 }
 
+bool ComptimeRuntime::invoke_raw(const std::string &macro_name,
+                                 const std::vector<uint64_t> &args,
+                                 size_t n_bytes, unsigned addr_reg,
+                                 std::vector<uint8_t> &out_bytes) noexcept {
+    out_bytes.clear();
+    if (n_bytes == 0 || n_bytes > (16u << 20)) return false; // tope defensivo
+    if (addr_reg > 15) return false;
+
+    // Ejecuta el codigo comptime, que va compilado (JIT).
+    uint64_t r0 = 0;
+    if (!invoke_simple_macro(macro_name, args, r0)) return false;
+    if (!impl_ || !impl_->proc) return false;
+
+    try {
+        // Direccion del resultado: R0 salvo que se pida otro registro (un
+        // constructor, por ejemplo, deja el valor donde apuntaba su `this`).
+        const uint64_t addr =
+            (addr_reg == 0) ? r0
+                            : impl_->proc->registers.regs[addr_reg].qword();
+        if (addr == 0) return false;
+
+        // La direccion puede ser de la VM o del anfitrion (un buffer
+        // reservado por quien invoca).  Se intenta primero como direccion de
+        // la VM, que valida el rango; si no lo es, se lee como puntero.
+        out_bytes.resize(n_bytes);
+        bool leido = false;
+        try {
+            impl_->proc->vm_mem.read_bytes(addr, out_bytes.data(), n_bytes);
+            leido = true;
+        } catch (...) {
+            leido = false;
+        }
+        if (!leido) {
+            const uint8_t *src = reinterpret_cast<const uint8_t *>(addr);
+            if (src == nullptr) return false;
+            std::memcpy(out_bytes.data(), src, n_bytes);
+        }
+
+        for (int i = 0; i < 16; ++i) impl_->proc->registers.regs[i].qword(0);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 bool ComptimeRuntime::invoke_string_macro(const std::string &macro_name,
                                           const std::vector<uint64_t> &args,
                                           std::string &out_str) noexcept {
@@ -451,6 +718,42 @@ bool ComptimeRuntime::invoke_string_macro(const std::string &macro_name,
     } catch (...) {
         return false;
     }
+}
+
+bool ComptimeRuntime::invoke_struct_macro(const std::string &macro_name,
+                                          const std::vector<uint64_t> &args,
+                                          size_t struct_size,
+                                          std::vector<uint8_t> &out_bytes) noexcept {
+    /* Una funcion que devuelve un struct por valor lo hace por SRET: el llamante
+     * aloca el buffer del resultado y lo pasa como primer parametro oculto
+     * (host_ptr), y la funcion lo rellena con `movh`.  Aqui hacemos de llamante:
+     * alocamos el buffer en memoria del proceso (out_bytes), no en la pila de la
+     * funcion -- que se libera al retornar --, lo anteponemos a los argumentos
+     * reales y ejecutamos.  Al ser out_bytes memoria ajena al GcHeap, el barrido
+     * de invoke_simple_macro no la toca. */
+    /* El caller puede PRE-SEMBRAR out_bytes con los valores por defecto de los
+     * campos: la semantica de un ctor es "defaults primero, cuerpo del ctor
+     * encima" (igual que C++), asi que un campo que el ctor no toca debe
+     * conservar su default.  Si el caller no siembra (tamano distinto), se
+     * arranca a ceros como antes. */
+    if (out_bytes.size() != struct_size) out_bytes.assign(struct_size, 0);
+    /* El buffer de retorno mas los argumentos reales no pueden exceder los 12
+     * registros de la convencion de llamada. */
+    if (args.size() + 1 > 12) return false;
+    std::vector<uint64_t> vm_args;
+    vm_args.reserve(args.size() + 1);
+    vm_args.push_back(static_cast<uint64_t>(
+        reinterpret_cast<uintptr_t>(out_bytes.data())));
+    for (uint64_t a : args) {
+        vm_args.push_back(a);
+    }
+    uint64_t r0 = 0;
+    /* Tras la invocacion, out_bytes ya contiene los bytes del struct escritos
+     * por la funcion a traves del buffer.  R0 (el propio buffer) se ignora. */
+    if (!invoke_simple_macro(macro_name, vm_args, r0)) {
+        return false;
+    }
+    return true;
 }
 
 void ComptimeRuntime::record_expectation(const std::string &macro_name,
@@ -611,8 +914,23 @@ bool ComptimeRuntime::load_macros_from_bytes(
                         if (res.fn) {
                             impl_->jit_code_by_pc[entry_pc] =
                                 reinterpret_cast<void *>(res.fn);
+                        } else {
+                            // El codigo comptime va compilado.  Que una
+                            // funcion no se pueda compilar no es un modo de
+                            // funcionamiento alternativo: es un fallo a
+                            // corregir, y callarselo lo deja corriendo
+                            // interpretado sin que nadie se entere.
+                            std::fprintf(stderr,
+                                         "[comptime] aviso: no se pudo "
+                                         "compilar '%s'; se ejecutara "
+                                         "interpretado\n",
+                                         kv.first.c_str());
                         }
                     } catch (...) {
+                        std::fprintf(stderr,
+                                     "[comptime] aviso: fallo al compilar "
+                                     "'%s'\n",
+                                     kv.first.c_str());
                     }
                 }
             } catch (...) {

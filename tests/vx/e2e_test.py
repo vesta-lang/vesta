@@ -118,13 +118,22 @@ class Ctx:
         return p.returncode, (p.stdout or "") + (p.stderr or "")
 
     # -- pasos de alto nivel --------------------------------------------
-    def compile_vx(self, src, out, extra=None, must_succeed=True, cwd=None):
-        """Compila un .vx a .velb.  Devuelve (rc, log).  `src` es absoluto."""
+    def compile_vx(self, src, out, extra=None, must_succeed=True, cwd=None,
+                   env=None):
+        """Compila un .vx a .velb.  Devuelve (rc, log).  `src` es absoluto.
+
+        `env` permite pasar variables de entorno (p.ej. {"VESTA_NO_CTPE": "1"}
+        para verificar codegen que el precomputo CTPE optimizaria al plegar main).
+        """
         args = [VM_EXE, "--vesta", src]
         if extra:
             args += [str(a) for a in extra]
         args += ["-o", self.path(out)]
-        rc, log = self.run(args, cwd=cwd)
+        full_env = None
+        if env:
+            full_env = os.environ.copy()
+            full_env.update({k: str(v) for k, v in env.items()})
+        rc, log = self.run(args, cwd=cwd, env=full_env)
         if must_succeed and not os.path.exists(self.path(out + ".velb")):
             self.fail("compilacion de %s no produjo .velb" % os.path.basename(src),
                       log)
@@ -321,7 +330,216 @@ def h_verify_3modes(ctx, label, src, expected, out=None):
     ctx.ok("%s (-m aot) -> exit = %d" % (label, expected))
 
 
-def aot_build(ctx, src_abs, out, label, cwd=None, fmt=None):
+def h_diff3(ctx, label, src, out=None, aot=True):
+    """Red de seguridad diferencial (Pilar 1): el INTERP es el ORACULO; jit y aot
+    deben COINCIDIR con el.  No hay valor esperado fijo -- basta con que los tres
+    modos den el MISMO R0.  Cualquier divergencia (un backend distinto de otro)
+    ROMPE el build: es la garantia 'falla todo o nada' contra desincronizacion de
+    backends.  Usar para casos de presion de registros / control de flujo complejo
+    donde el codegen del JIT/AOT podria divergir del interprete.
+    """
+    out = out or ctx.tag
+    # SIN CTPE: el precomputo CTPE usa el JIT y HORNEA su resultado en el .velb;
+    # si el JIT tiene un bug, contaminaria tambien al interprete -> el oraculo
+    # dejaria de ser fiable.  Compilar sin CTPE da un oraculo (interp) limpio.
+    ctx.compile_vx(ctx.src(src), out, env={"VESTA_NO_CTPE": "1"})
+
+    _, log = ctx.run_velb(out, schedulers=1, mode="vm")
+    oracle = get_r00(log)  # el interprete (sin CTPE) define la verdad
+    if oracle is None:
+        ctx.fail("%s: el interprete (oraculo) no produjo R0" % label, log)
+        return
+    ctx.ok("%s (interp oraculo) -> R0 = 0x%x" % (label, oracle))
+
+    _, log = ctx.run_velb(out, schedulers=1, mode="jit")
+    got = get_r00(log)
+    if got != oracle:
+        ctx.fail("%s DIVERGE: jit R0 == %s != interp 0x%x" % (label, got, oracle),
+                 log)
+        return
+    ctx.ok("%s (jit == interp)" % label)
+
+    if aot:
+        # El AOT se construye con la configuracion POR DEFECTO a proposito: el
+        # precomputo CTPE corre en los TRES modos, asi que forzar aqui
+        # VESTA_NO_CTPE taparia justo los fallos que solo aparecen al plegar.
+        exe = aot_build(ctx, ctx.src(src), out + "_aot", label + " (-m aot)")
+        rc_raw, _ = ctx.run([exe])
+        # Un binario que CASCA no "devuelve" un valor: Windows entrega el
+        # NTSTATUS (0xC0000005 = access violation, 0xC00000FD = desbordamiento
+        # de pila) y POSIX un negativo con la senal.  Enmascarar a 8 bits
+        # convierte 0xC0000005 en un inocente "exit == 5" y manda a buscar un
+        # error de CALCULO donde lo que hay es un CUELGUE.  Se detecta ANTES de
+        # truncar, y se adjunta el log de la construccion.
+        if rc_raw < 0 or (rc_raw & 0xC0000000) == 0xC0000000:
+            ctx.fail("%s: el binario AOT CASCO (codigo 0x%X)" %
+                     (label, rc_raw & 0xFFFFFFFF),
+                     getattr(ctx, "last_aot_log", ""))
+            return
+        rc = exit_code(rc_raw)
+        # el oraculo es un R0 completo; el exit-code AOT son 8 bits -> comparar
+        # el byte bajo (misma convencion que h_verify_3modes con exit-codes).
+        if (oracle & 0xFF) != (rc & 0xFF):
+            ctx.fail("%s DIVERGE: aot exit == %d != interp 0x%x (byte bajo)" %
+                     (label, rc, oracle),
+                     getattr(ctx, "last_aot_log", ""))
+            return
+        ctx.ok("%s (aot == interp)" % label)
+
+
+def h_ctpe_conformance(ctx, label, src, out=None):
+    """El precomputo CTPE no puede cambiar el resultado observable del programa.
+
+    CTPE ejecuta `main` al compilar y hornea su resultado como constante.  Si
+    esa constante no coincide con lo que el programa produce de verdad, el
+    compilador emite un binario incorrecto -- y como el precomputo esta ACTIVO
+    POR DEFECTO, eso afecta a cualquier compilacion, no solo al AOT.
+
+    Se compila el MISMO fuente dos veces, con y sin precomputo, y se exige el
+    mismo R0.  La version con CTPE se compila dentro del directorio temporal
+    del caso a proposito: su cache vive en `.cache/ctpe` RELATIVO al cwd, asi
+    que compilando ahi esta siempre FRIO.  Con un cache caliente el pliegue se
+    leeria ya hecho y un error de calculo pasaria inadvertido, que es
+    exactamente como este fallo llego a parecer intermitente.
+    """
+    out = out or ctx.tag
+    ctx.compile_vx(ctx.src(src), out + "_noctpe",
+                   env=dict(os.environ, VESTA_NO_CTPE="1"))
+    _, log = ctx.run_velb(out + "_noctpe", schedulers=1, mode="vm")
+    ref = get_r00(log)
+    if ref is None:
+        ctx.fail("%s: la version sin precomputo no produjo R0" % label, log)
+        return
+    ctx.ok("%s (sin CTPE) -> R0 = 0x%x" % (label, ref))
+
+    ctx.compile_vx(ctx.src(src), out + "_ctpe", cwd=ctx.dir)
+    _, log = ctx.run_velb(out + "_ctpe", schedulers=1, mode="vm")
+    got = get_r00(log)
+    if got != ref:
+        ctx.fail("%s: el precomputo CAMBIA el resultado: R0 == %s, sin "
+                 "precomputo 0x%x" % (label, got, ref), log)
+        return
+    ctx.ok("%s (con CTPE == sin CTPE)" % label)
+
+    # Y en AOT, que es donde el precomputo tiene MAS formas de estropear el
+    # binario: comparte el pipeline vreg con el JIT pero su salida se EJECUTA
+    # EN OTRO PROCESO, asi que cualquier cosa que el precomputo deje puesta en
+    # el codegen (p.ej. los polls de safepoint del watchdog, cuya direccion de
+    # handler solo vive en el compilador) se convierte en un binario que casca.
+    # Sin esta pata la comprobacion no vale: el mismo bug que la motivo pasaba
+    # el camino del interprete sin despeinarse.
+    # Directorio PROPIO para esta pata: el cache de CTPE es relativo al cwd, y
+    # la pata anterior ya lo calento en `ctx.dir`.  Con el cache caliente el
+    # pliegue se LEE en vez de ejecutarse, y entonces el precomputo no llega a
+    # compilar nada por JIT -- que es justo la condicion que destapa el fallo.
+    # Sin este detalle la comprobacion pasa siempre y no vale para nada.
+    aot_dir = ctx.path(out + "_ctpe_aotdir")
+    os.makedirs(aot_dir, exist_ok=True)
+    exe = aot_build(ctx, ctx.src(src), out + "_ctpe_aot",
+                    label + " (-m aot con CTPE)", cwd=aot_dir)
+    if not exe:
+        return
+    rc_raw, _ = ctx.run([exe])
+    if rc_raw < 0 or (rc_raw & 0xC0000000) == 0xC0000000:
+        ctx.fail("%s: con precomputo el binario AOT CASCO (codigo 0x%X)" %
+                 (label, rc_raw & 0xFFFFFFFF),
+                 getattr(ctx, "last_aot_log", ""))
+        return
+    if exit_code(rc_raw) != (ref & 0xFF):
+        ctx.fail("%s: con precomputo el AOT devuelve %d, sin precomputo 0x%x "
+                 "(byte bajo)" % (label, exit_code(rc_raw), ref),
+                 getattr(ctx, "last_aot_log", ""))
+        return
+    ctx.ok("%s (aot con CTPE == sin CTPE)" % label)
+
+
+def h_diff3_stdout(ctx, label, src, out=None, aot=True):
+    """Como h_diff3 pero comparando la SALIDA byte a byte, no R0.
+
+    Hace falta para las cadenas: una divergencia de codificacion o de
+    representacion no cambia el valor de retorno, asi que h_diff3 no la ve.
+    El interprete es el oraculo; JIT y AOT deben producir el mismo texto.
+    """
+    out = out or label
+    ctx.compile_vx(ctx.src(src), out)
+    import os as _os
+    if not _os.path.exists(ctx.path(out + ".velb")):
+        return
+
+    _, salida_vm = ctx.run_velb(out, mode="vm", stats=False)
+    if not salida_vm.strip():
+        ctx.fail("%s (-m vm): sin salida" % label)
+        return
+    ctx.ok("%s (-m vm) -> %d lineas" % (label, len(salida_vm.splitlines())))
+
+    _, salida_jit = ctx.run_velb(out, mode="jit", stats=False)
+    if salida_jit != salida_vm:
+        ctx.fail("%s DIVERGE jit != interp" % label,
+                 "--- interp ---\n%s\n--- jit ---\n%s"
+                 % (salida_vm, salida_jit))
+        return
+    ctx.ok("%s (jit == interp)" % label)
+
+    if not aot:
+        return
+    exe = aot_build(ctx, ctx.src(src), out + "_aot", label + " (-m aot)")
+    if not exe:
+        return
+    _, salida_aot = ctx.run([exe])
+    if salida_aot != salida_vm:
+        ctx.fail("%s DIVERGE aot != interp" % label,
+                 "--- interp ---\n%s\n--- aot ---\n%s"
+                 % (salida_vm, salida_aot))
+        return
+    ctx.ok("%s (aot == interp)" % label)
+
+
+def wsl_disponible():
+    """True si se puede ejecutar un ELF de Linux desde aqui (WSL en marcha).
+
+    Los binarios ELF que emite el AOT solo se pueden PROBAR en Linux; en
+    Windows se comprueba que compilan, pero eso no dice si funcionan.  WSL
+    cierra ese hueco cuando esta disponible.
+    """
+    if not sys.platform.startswith("win"):
+        return False
+    try:
+        r = subprocess.run(["wsl.exe", "-e", "sh", "-c", "echo ok"],
+                           capture_output=True, timeout=60)
+        return r.returncode == 0 and b"ok" in r.stdout
+    except Exception:
+        return False
+
+
+def wsl_run_elf(elf_path, timeout=120):
+    """Ejecuta un ELF en WSL.  Devuelve (rc, salida) o (None, motivo).
+
+    El binario se copia a /tmp porque en /mnt/... el bit de ejecucion depende
+    de como este montado el volumen.
+    """
+    linux_src = "/mnt/" + elf_path[0].lower() + elf_path[2:].replace("\\", "/")
+    guion = ("cp '%s' /tmp/vx_e2e_bin && chmod +x /tmp/vx_e2e_bin && "
+             "/tmp/vx_e2e_bin; echo __RC=$?" % linux_src)
+    try:
+        r = subprocess.run(["wsl.exe", "-e", "sh", "-c", guion],
+                           capture_output=True, timeout=timeout)
+    except Exception as exc:
+        return None, "no se pudo ejecutar en WSL: %s" % exc
+    salida = (r.stdout + r.stderr).decode("utf-8", "replace")
+    salida = salida.replace("\x00", "")
+    rc = None
+    for linea in salida.splitlines():
+        if linea.startswith("__RC="):
+            try:
+                rc = int(linea[5:].strip())
+            except ValueError:
+                pass
+    if rc is None:
+        return None, "no se obtuvo codigo de salida:\n" + salida
+    return rc, salida
+
+
+def aot_build(ctx, src_abs, out, label, cwd=None, fmt=None, env=None):
     """Compila un .vx (ruta absoluta) a ejecutable nativo y devuelve su ruta.
 
     El emisor PE escribe el fichero SIN extension .exe; el .sh probaba ambos
@@ -330,7 +548,10 @@ def aot_build(ctx, src_abs, out, label, cwd=None, fmt=None):
     """
     _, log = ctx.run([VM_EXE, "-m", "aot", "--vesta", src_abs,
                       "--format", fmt or AOT_FMT, "--emit", "exe",
-                      "-o", ctx.path(out)], cwd=cwd)
+                      "-o", ctx.path(out)], cwd=cwd, env=env)
+    # Se guarda el log de la construccion para poder adjuntarlo si luego el
+    # binario diverge: sin el, un "aot exit == N" no dice NADA de por que.
+    ctx.last_aot_log = log
     base = ctx.path(out)
     if os.path.exists(base + ".exe"):
         return base + ".exe"
@@ -440,6 +661,54 @@ def const_reject_case(tag, label, body, line=None):
 def modes3_case(tag, label, src, expected, line=None):
     def fn(ctx):
         h_verify_3modes(ctx, label, src, expected, out=tag)
+    fn.__name__ = "case_" + tag
+    _register(tag, fn, False, line)
+
+
+def diff3_stdout_case(tag, label, src, line=None, aot=True):
+    """Red diferencial sobre la SALIDA: interp = oraculo, jit y aot iguales."""
+    def fn(ctx):
+        h_diff3_stdout(ctx, label, src, out=tag, aot=aot)
+    fn.__name__ = "case_" + tag
+    _register(tag, fn, False, line)
+
+
+def fault3_case(tag, label, src, code, exit_want, line=None):
+    """Un fallo sin capturar, en los tres modos.
+
+    Interprete y JIT tienen que contarlo igual: el codigo del catalogo, la
+    cadena de llamadas con el fuente subrayado, y el codigo de salida.  El AOT
+    a nivel 0 NO reporta a proposito -- el nativo tiene que ser ligero -- asi
+    que ahi solo se exige que NO salga con cero: reventar y decir que todo fue
+    bien es lo unico inaceptable en los tres.
+    """
+    def fn(ctx):
+        ctx.compile_vx(ctx.src(src), tag)
+        for modo in ("vm", "jit"):
+            rc, log = ctx.run_velb(tag, schedulers=1, mode=modo)
+            if code not in log:
+                ctx.fail("%s (-m %s): no aparece %s" % (label, modo, code), log)
+            if "Stack trace" not in log:
+                ctx.fail("%s (-m %s): sin cadena de llamadas" % (label, modo), log)
+            got = exit_code(rc)
+            if got != exit_want:
+                ctx.fail("%s (-m %s): sale %d, se esperaba %d"
+                         % (label, modo, got, exit_want), log)
+            ctx.ok("%s (-m %s) -> %s, sale %d" % (label, modo, code, exit_want))
+        exe = aot_build(ctx, ctx.src(src), tag + "_aot", label + " (-m aot)")
+        rc, _ = ctx.run([exe])
+        if exit_code(rc) == 0:
+            ctx.fail("%s (-m aot): salio con cero tras reventar" % label)
+        ctx.ok("%s (-m aot) -> muere sin decir nada, como debe" % label)
+    fn.__name__ = "case_" + tag
+    _register(tag, fn, False, line)
+
+
+def diff3_case(tag, label, src, line=None, aot=True):
+    """Red de seguridad diferencial: interp=oraculo, jit y aot deben COINCIDIR.
+    Sin valor esperado; cualquier divergencia entre backends rompe el build."""
+    def fn(ctx):
+        h_diff3(ctx, label, src, out=tag, aot=aot)
     fn.__name__ = "case_" + tag
     _register(tag, fn, False, line)
 
@@ -675,8 +944,14 @@ def _(ctx):
 
 @case("tco")
 def _(ctx):
-    """20. TCO: el optimizador debe emitir `tailcall` + R0 = 42."""
-    ctx.compile_vx(ctx.src("19_tco_basico.vx"), "tco")
+    """20. TCO: el optimizador debe emitir `tailcall` + R0 = 42.
+
+    Se compila con VESTA_NO_CTPE para verificar el CODEGEN del tailcall: con CTPE
+    activo (default), main = `return wrapper(20)` se PRECOMPUTA a la constante 42
+    y el tailcall de wrapper se elimina por DCE (correcto: el resultado es el
+    mismo).  La funcionalidad se valida por el R0 = 42 de abajo (en modo normal).
+    """
+    ctx.compile_vx(ctx.src("19_tco_basico.vx"), "tco", env={"VESTA_NO_CTPE": "1"})
     n = grep_c(read_text(ctx.path("tco.vel")), "tailcall")
     if n < 1:
         ctx.fail("TCO no se aplico (esperado >= 1 tailcall en .vel)")
@@ -1314,6 +1589,293 @@ def _(ctx):
 # ---  M: bateria sobre tests/bugs/*.  Todos comparten directorios FIJOS
 #     del repo, por lo que van SERIAL (el .sh los corria en secuencia y varios
 #     reutilizan el mismo directorio, p.ej. m6_test lo usan M6, M5.B y M5.C).
+
+@case("ns_partial_id")
+def _(ctx):
+    """Namespace PARCIAL: un tipo debe tener UNA identidad, venga del fichero
+    que venga.
+
+    `namespace pt.core;` lo declaran DOS ficheros.  El resolver devuelve el
+    primero que encuentra escaneando el disco, y los simbolos importados se
+    cualificaban con el nombre de ESE FICHERO -- asi que el mismo typedef
+    entraba como `base__handle` o como `extra__handle` segun quien ganase, y
+    luego no unificaba consigo mismo.  Se veia en la stdlib: `std.types` lo
+    declaran types.vx + types/arm64.vx + types/x86_64.vx, y `uintptr` resolvia
+    unas veces a `arm64__uintptr` y otras a `std__types__uintptr`.
+
+    Aqui el tipo se DECLARA en un fichero y se CONSUME en el otro: si las dos
+    identidades no coinciden, `to_raw(mk())` no pasa el chequeo de tipos.
+    """
+    def w(name, txt):
+        with open(ctx.path(name), "w", encoding="utf-8") as f:
+            f.write(txt)
+
+    w("base.vx",
+      "namespace pt.core;\n"
+      "public typedef u64 handle new;\n"
+      "public handle mk() { return (handle) 20; }\n")
+    # SEGUNDO fichero del MISMO namespace, que usa el tipo del primero.
+    w("extra.vx",
+      "namespace pt.core;\n"
+      "public u64 to_raw(handle h) { return (u64) h; }\n")
+    w("main.vx",
+      "namespace pt.app;\n"
+      "import pt.core only *;\n"
+      "i32 main() { return (i32) (to_raw(mk()) + 22); }\n")
+
+    if not ctx.compile_vx(ctx.path("main.vx"), "nspid"):
+        return
+    _, log = ctx.run_velb("nspid", schedulers=1, mode="vm")
+    got = get_r00(log)
+    if got != 42:
+        ctx.fail("namespace parcial: R00 == %s, se esperaba 42 (el tipo del "
+                 "namespace tiene identidades distintas segun el fichero)" %
+                 got, log)
+        return
+    ctx.ok("namespace parcial: identidad unica del tipo -> R0 = 42")
+
+
+@case("ns_cobertura")
+def _(ctx):
+    """Cobertura de namespaces: declaracion, acceso cualificado y parciales.
+
+    Tres cosas que deben convivir sin pisarse:
+
+      1. DOS namespaces distintos declaran un simbolo con el MISMO nombre
+         corto (`value`).  No es una colision: el namespace forma parte de la
+         identidad, y el acceso cualificado los distingue.
+      2. Acceso CUALIFICADO via alias (`import ... as A` -> `A.value()`), que
+         es la forma en que un import plano expone lo que trae.
+      3. Namespace PARCIAL: `app.alpha` esta declarado en DOS ficheros y los
+         simbolos de ambos deben verse como del mismo namespace, incluido un
+         tipo declarado en un fichero y usado en el otro.
+
+    10 (alpha) + 20 (beta) + 12 (la parte partida de alpha) = 42.
+    """
+    def w(name, txt):
+        with open(ctx.path(name), "w", encoding="utf-8") as f:
+            f.write(txt)
+
+    w("nalpha.vx",
+      "namespace app.alpha;\n"
+      "public typedef u64 tag new;\n"
+      "public i32 value() { return 10; }\n")
+    # SEGUNDO fichero del MISMO namespace: usa el tipo declarado en el primero
+    # tanto en la firma como en un CAST (`(tag) 10`).  El cast es la parte
+    # delicada: el parser tiene que saber que `tag` es un tipo para no leer
+    # `(tag)` como una expresion entre parentesis, y ese nombre vive en el
+    # fichero de al lado, no en este.
+    w("nalpha2.vx",
+      "namespace app.alpha;\n"
+      "public i32 extra(tag t) { return (i32) ((u64) t + 2); }\n"
+      "public tag mktag() { return (tag) 10; }\n")
+    # Namespace DISTINTO con un simbolo del mismo nombre corto.
+    w("nbeta.vx",
+      "namespace app.beta;\n"
+      "public i32 value() { return 20; }\n")
+    w("main.vx",
+      "namespace app.main;\n"
+      "import app.alpha as A;\n"
+      "import app.beta as B;\n"
+      "i32 main() {\n"
+      "    return A.value() + B.value() + A.extra(A.mktag());\n"
+      "}\n")
+
+    if not ctx.compile_vx(ctx.path("main.vx"), "nscov"):
+        return
+    _, log = ctx.run_velb("nscov", schedulers=1, mode="vm")
+    got = get_r00(log)
+    if got != 42:
+        ctx.fail("cobertura de namespaces: R00 == %s, se esperaba 42" % got, log)
+        return
+    ctx.ok("namespaces: mismo nombre en ns distintos + cualificado + parcial "
+           "-> R0 = 42")
+
+
+@case("syscalls_linux_wsl")
+def _(ctx):
+    """La rama LINUX de las syscalls, compilada a ELF y EJECUTADA en WSL.
+
+    En Windows solo se ejercita la mitad NT del ejemplo; la de Linux se elegia
+    con @Target y nunca llegaba a correr, asi que podia estar rota sin que
+    nadie se enterase -- y lo estaba: `mmap` recibia los argumentos en los
+    registros equivocados y el proceso moria.
+
+    El AOT evalua @Target contra el TARGET, no contra el host, asi que desde
+    aqui se puede generar el ELF de Linux; WSL lo ejecuta.  Sin WSL el caso se
+    salta (dejando constancia), pero NUNCA da un falso OK.
+    """
+    src = os.path.join(VX_DIR, "342_syscalls_os.vx")
+    elf = aot_build(ctx, src, "s342_elf", "syscalls linux", fmt="elf")
+    if not elf:
+        ctx.fail("no se genero el ELF de la rama linux", ctx.last_aot_log)
+        return
+    if not wsl_disponible():
+        ctx.skip("rama linux de syscalls: WSL no disponible, no se ejecuta")
+        return
+    rc, salida = wsl_run_elf(elf)
+    if rc is None:
+        ctx.fail("rama linux de syscalls: %s" % salida, ctx.last_aot_log)
+        return
+    if rc != 42:
+        ctx.fail("rama linux de syscalls: exit %s, se esperaba 42\n%s"
+                 % (rc, salida), ctx.last_aot_log)
+        return
+    if "7/7" not in salida:
+        ctx.fail("rama linux de syscalls: no se completaron los 7 pasos\n%s"
+                 % salida, ctx.last_aot_log)
+        return
+    ctx.ok("rama linux: 7 syscalls reales (getpid/mmap/open/write/close/"
+           "munmap) en WSL -> 42")
+
+
+@case("syscalls_linux_wsl_x86_32")
+def _(ctx):
+    """Lo mismo que el caso anterior pero en x86-32, ejecutado en WSL.
+
+    Esta arquitectura no se ejecutaba NUNCA -- ni siquiera producia binario --,
+    asi que acumulaba fallos que solo se ven corriendo: un `mov reg, imm64` que
+    en modo protegido no existe, literales empaquetados de ocho en ocho, el
+    detector de CPU emitido con registros de 64, y los argumentos que no caben
+    en registro leidos con el paso equivocado.
+
+    Que pase aqui prueba de una vez la convencion `int 0x80`, `old_mmap` (la
+    entrada que i386 usa porque no tiene registros para seis argumentos) y el
+    paso de argumentos por pila.
+    """
+    src = os.path.join(VX_DIR, "342_syscalls_os.vx")
+    rc, log = ctx.run([VM_EXE, "-m", "aot", "--vesta", src,
+                       "--aot-arch", "x86-32", "--format", "elf",
+                       "--emit", "exe", "-o", ctx.path("s342_x32")])
+    elf = ctx.path("s342_x32")
+    if not os.path.exists(elf):
+        ctx.fail("no se genero el ELF de 32 bits", log)
+        return
+    if not wsl_disponible():
+        ctx.skip("syscalls x86-32: WSL no disponible, no se ejecuta")
+        return
+    rc2, salida = wsl_run_elf(elf)
+    if rc2 is None:
+        ctx.fail("syscalls x86-32: %s" % salida, log)
+        return
+    if rc2 != 42 or "7/7" not in salida:
+        ctx.fail("syscalls x86-32: exit %s\n%s" % (rc2, salida), log)
+        return
+    ctx.ok("x86-32: 7 syscalls reales por int 0x80 (con old_mmap) en WSL -> 42")
+
+
+@case("target_diag")
+def _(ctx):
+    """Usar un simbolo que solo existe para OTRO objetivo lo dice.
+
+    Una decl con `@Target` que no se cumple se descarta sin parsear, asi que
+    quien la use recibia "funcion no declarada" -- que es falso: la funcion
+    esta declarada, solo que para otra plataforma.  Y encima el tipo vacio del
+    fallo arrastraba un segundo error sobre el retorno.
+
+    Se comprueban las dos formas del diagnostico (una variante y varias) por su
+    CODIGO del catalogo, no por el texto, que depende del idioma.  Y que sea el
+    UNICO error: la cascada tambien era parte del problema.
+    """
+    def w(name, txt):
+        with open(ctx.path(name), "w", encoding="utf-8") as f:
+            f.write(txt)
+
+    # Una sola variante, de otro objetivo -> VX4001.
+    w("tlib.vx",
+      "namespace t.lib;\n"
+      "@Target(\"os:linux\")\n"
+      "public i32 solo_linux() { return 1; }\n"
+      "@Target(\"os:windows\")\n"
+      "public i32 solo_win() { return 2; }\n")
+    w("tmain.vx",
+      "namespace t.main;\n"
+      "import t.lib only *;\n"
+      "i32 main() { return solo_linux(); }\n")
+
+    _, log = ctx.compile_vx(ctx.path("tmain.vx"), "tdiag1", must_succeed=False)
+    if "VX4001" not in log:
+        ctx.fail("simbolo de otro objetivo: se esperaba VX4001", log)
+        return
+    if "no declarada" in log:
+        ctx.fail("simbolo de otro objetivo: sigue diciendo 'no declarada'", log)
+        return
+    if log.count("error:") != 1:
+        ctx.fail("simbolo de otro objetivo: %d errores, se esperaba 1 (cascada)"
+                 % log.count("error:"), log)
+        return
+    ctx.ok("simbolo de otro objetivo -> VX4001, sin cascada")
+
+    # Varias variantes, ninguna de este objetivo -> VX4002.
+    w("tlib2.vx",
+      "namespace t.lib2;\n"
+      "@Target(\"os:linux\")\n"
+      "public i32 solo_otros() { return 1; }\n"
+      "@Target(\"os:macos\")\n"
+      "public i32 solo_otros() { return 2; }\n")
+    w("tmain2.vx",
+      "namespace t.main2;\n"
+      "import t.lib2 only *;\n"
+      "i32 main() { return solo_otros(); }\n")
+
+    _, log2 = ctx.compile_vx(ctx.path("tmain2.vx"), "tdiag2", must_succeed=False)
+    if "VX4002" not in log2:
+        ctx.fail("varias variantes de otros objetivos: se esperaba VX4002", log2)
+        return
+    ctx.ok("varias variantes de otros objetivos -> VX4002")
+
+    # El mensaje sale en el idioma pedido: es el catalogo quien lo produce.
+    _, log3 = ctx.compile_vx(ctx.path("tmain.vx"), "tdiag3", must_succeed=False,
+                             env={"VESTA_LANG": "es"})
+    if "esta declarado con @Target" not in log3:
+        ctx.fail("VX4001 no salio en espanol con VESTA_LANG=es", log3)
+        return
+    ctx.ok("VX4001 sale por catalogo multi-idioma (es)")
+
+
+@case("reexport_chain")
+def _(ctx):
+    """Re-export encadenado: la identidad de un tipo no puede acumular prefijos.
+
+    `main` importa `ch.top`, que re-exporta `ch.mid`, que re-exporta `ch.base`.
+    El tipo se declara en `ch.base` y se consume en `main`, tres saltos mas
+    arriba.
+
+    Si en cada salto se vuelve a cualificar el nombre en vez de transportar la
+    identidad original, el tipo termina como
+    `ch__top__ch__mid__ch__base__handle` y deja de unificar consigo mismo.  La
+    suite NO tenia ningun caso con cadena de re-exports, asi que un cambio que
+    introducia justo ese doble prefijado pasaba los 782 pasos sin enterarse.
+    """
+    def w(name, txt):
+        with open(ctx.path(name), "w", encoding="utf-8") as f:
+            f.write(txt)
+
+    w("cbase.vx",
+      "namespace ch.base;\n"
+      "public typedef u64 handle new;\n"
+      "public handle mk() { return (handle) 20; }\n")
+    w("cmid.vx",
+      "namespace ch.mid;\n"
+      "public import ch.base;\n")
+    w("ctop.vx",
+      "namespace ch.top;\n"
+      "public import ch.mid;\n")
+    w("main.vx",
+      "namespace ch.app;\n"
+      "import ch.top only *;\n"
+      "i32 main() { handle h = mk(); return (i32) ((u64) h + 22); }\n")
+
+    if not ctx.compile_vx(ctx.path("main.vx"), "rxch"):
+        return
+    _, log = ctx.run_velb("rxch", schedulers=1, mode="vm")
+    got = get_r00(log)
+    if got != 42:
+        ctx.fail("re-export encadenado: R00 == %s, se esperaba 42 (la identidad "
+                 "del tipo acumula prefijos por cada salto)" % got, log)
+        return
+    ctx.ok("re-export encadenado (3 saltos): identidad estable -> R0 = 42")
+
 
 @case("m6", serial=True, line=2407)
 def _(ctx):
@@ -2132,7 +2694,7 @@ r0_case("sd206", "destructor de struct ~Struct() + move-on-return (RAII)", "206_
 r0_case("sds207", "clase-contenedor con campo struct destructible + move-on-store", "207_struct_dtor_store_err.vx", 42, line=3652)
 r0_case("sc208", "composicion de structs con RAII recursivo + acceso campo struct", "208_struct_composition.vx", 42, line=3653)
 fails_case("scs209", "struct con closure capturador almacenado en campo (escape no soportado)", "209_struct_closure_store_err.vx", "se almacena en un campo que le sobrevive", line=3654)
-fails_case("asmpin", "asm: pin de VALOR a rsp/rbp rechazado (guia al cuerpo)", "asm_pin_rsp_err.vx", "VXA008", line=3654)
+warns_r0_case("asmpin", "asm: pin de VALOR a rsp/rbp avisa (VXA008) y compila (permitido, responsabilidad del programador; @Naked)", "asm_pin_rbp_warn.vx", "VXA008", 42, line=3654)
 r0_case("asmstk", "asm: manipular la pila desde el asm (mov rsp/push/pop)", "asm_stack_manip.vx", 42, line=3654)
 r0_case("asmnss", "asm: stack switch @Naked compilado nativo por el JIT", "asm_naked_stack_switch.vx", 42, line=3654)
 warns_r0_case("asmnsw", "asm: reasignar rsp en funcion normal avisa (VXA010) y compila en JIT", "asm_normal_stack_warn.vx", "VXA010", 42, line=3654)
@@ -2222,6 +2784,53 @@ r0_case("cfp295", "punteros a funcion C (campo/typedef/param/var/promocion cfn)"
 r0_case("ccr296", "const-correctness C por nivel (usos validos)", "296_const_correct.vx", 42, line=3706)
 r0_case("cec297", "captura expr: comptime fn (valor) vs @Macro (codigo inyectado)", "297_comptime_expr_capture.vx", 42, line=3707)
 r0_case("oip298", "only-import de namespace parcial (uintptr por @Target)", "298_only_import_partial_ns.vx", 42, line=3708)
+r0_case("syscalls_os", "syscalls del SO por std.syscall, seleccionadas con @Target", "342_syscalls_os.vx", 42)
+r0_case("array_local_reduccion", "recorrer un array sumando: local (pila VM) y de malloc (host)", "343_array_local_reduccion.vx", 42)
+r0_case("wideint_mul_fuzz", "u128.__mul__ contra oraculo externo (20000 productos aleatorios)", "344_wideint_mul_fuzz.vx", 42)
+r0_case("panic_modulo_importado", "enlace: modulo importado con panic() + global en el consumidor", "345_panic_modulo_importado.vx", 42)
+# Sin AOT: capturar con try/catch exige el desenrollado nativo de
+# excepciones, que sigue pendiente (el binario nativo aborta en vez de
+# entrar al handler).  En interprete y JIT el FatalError si se captura.
+# Ejemplos que ya eran tests (verifican R0 = 42) y no estaban registrados:
+# se ejecutaban a mano o no se ejecutaban.  Un cuarto del corpus quedaba
+# fuera de la suite, que podia marcar todo en verde con ejemplos rotos.
+r0_case("105_decjnz_bench", "105 decjnz bench", "105_decjnz_bench.vx", 42)
+r0_case("105b_decjnz_simple", "105b decjnz simple", "105b_decjnz_simple.vx", 42)
+r0_case("159_macro_expr_capture", "159 macro expr capture", "159_macro_expr_capture.vx", 42)
+r0_case("161_macro_ffi_compile_time", "161 macro ffi compile time", "161_macro_ffi_compile_time.vx", 42)
+r0_case("162_macro_comptime_data", "162 macro comptime data", "162_macro_comptime_data.vx", 42)
+r0_case("243_atomics", "243 atomics", "243_atomics.vx", 42)
+r0_case("245_atomic_builtins", "245 atomic builtins", "245_atomic_builtins.vx", 42)
+r0_case("40_operator_overload", "40 operator overload", "40_operator_overload.vx", 42)
+r0_case("41_struct_methods", "41 struct methods", "41_struct_methods.vx", 42)
+r0_case("42_struct_operator", "42 struct operator", "42_struct_operator.vx", 42)
+r0_case("44_operator_overload2", "44 operator overload2", "44_operator_overload2.vx", 42)
+r0_case("45_string_op_override", "45 string op override", "45_string_op_override.vx", 42)
+r0_case("53_enum_simple", "53 enum simple", "53_enum_simple.vx", 42)
+r0_case("59_arraylist", "59 arraylist", "59_arraylist.vx", 42)
+r0_case("60_stack_iface", "60 stack iface", "60_stack_iface.vx", 42)
+r0_case("static_assert_capturado", "una asercion incumplida se captura con try/catch en comptime", "368_static_assert_capturado.vx", 42)
+fails_case("literal_base_invalida", "un 2 en un literal binario se rechaza al compilar", "366_literal_base_invalida.vx", "digito que no pertenece a la base")
+fails_case("literal_sin_digitos", "un prefijo de base sin digitos se rechaza al compilar", "367_literal_sin_digitos.vx", "literal entero sin digitos")
+r0_case("wideint_literales", "literales mas anchos que la palabra en los seis tipos", "364_wideint_literales.vx", 42)
+r0_case("literal_bases", "literal ancho en binario, octal, hexadecimal y decimal", "365_literal_bases.vx", 42)
+r0_case("ctor_comptime_modulo", "constructor comptime de un tipo de otro modulo", "363_ctor_comptime_modulo.vx", 42)
+r0_case("ctor_importado", "construir un struct declarado en otro modulo", "362_ctor_importado.vx", 42)
+r0_case("ctor_comptime", "constructor comptime: recoge la llamada cuando ninguna sobrecarga encaja", "361_ctor_comptime.vx", 42)
+r0_case("enum_valor_importado", "enum con valor importado: conserva valores y compara por contenido", "359_enum_valor_importado.vx", 42)
+r0_case("wideint_completo", "recorrido completo de u128/i128/u256/i256/u512/i512 con toString", "358_wideint_completo.vx", 42)
+r0_case("herencia_interpolacion", "metodo heredado que devuelve texto interpolado (el clon perdia la interpolacion)", "357_herencia_interpolacion.vx", 42)
+r0_case("generica_desde_metodo", "funcion generica monomorfizada desde el cuerpo de un metodo", "356_generica_desde_metodo.vx", 42)
+r0_case("wideint_512_signed", "i512: signo, negacion, desplazamiento aritmetico y division con signo", "355_wideint_512_signed.vx", 42)
+r0_case("wideint_512", "u512: tercer piso, acarreo entre mitades de 256 y division contrastada con la mul", "354_wideint_512.vx", 42)
+r0_case("wideint_256_div", "u256/i256: division shift-resta, contrastada con la multiplicacion", "353_wideint_256_div.vx", 42)
+r0_case("wideint_256_mul", "u256: multiplicacion modular y producto completo de 128x128", "352_wideint_256_mul.vx", 42)
+r0_case("wideint_carry", "acarreo y prestamo como primitivas de u128, propagados por Wide256", "351_wideint_carry.vx", 42)
+r0_case("wideint_256_signed", "i256: negacion, comparadores con signo y desplazamiento aritmetico", "350_wideint_256_signed.vx", 42)
+r0_case("wideint_256", "u256: acarreo y prestamo entre mitades de 128, desplazamientos que cruzan la frontera", "349_wideint_256.vx", 42)
+r0_case("comptime_literal_import", "std.comptime.literal cross-module: parse de un entero en compile-time", "348_comptime_literal_import.vx", 42)
+r0_case("div_cero_detiene", "una division por cero detiene el proceso; capturada es un FatalError", "347_div_cero_detiene.vx", 42)
+modes3_case("optional_struct", "Optional<T> con T = struct por valor (payload dimensionado + copia)", "346_optional_struct.vx", 52)
 r0_case("cme299", "captura expr CROSS-MODULO (src(expr) en otro modulo, DSL crudo)", "299_cross_module_expr.vx", 42, line=3709)
 r0_case("scs300", "source(expr) de std.comptime (re-export + siembra transitiva)", "300_stdlib_comptime_source.vx", 42, line=3710)
 r0_case("mch301", "@Macro genera codigo con helper comptime expr (CALLVM no fold-vacio)", "301_macro_codegen_helper.vx", 42, line=3711)
@@ -2270,6 +2879,39 @@ modes3_case("cmb245", "combo memoria: gc<T> generico anidado (gc_box) + cero fug
 modes3_case("gc249", "gc AOT: scan preciso de raices (walk por tamano de frame) preserva la raiz viva", "249_gc_aot_precise_scan.vx", 42, line=4028)
 modes3_case("gc250", "gc: compactacion mark-compact del OldGen (sliding in-place, opt-in)", "250_gc_compact.vx", 42, line=4039)
 modes3_case("gc252", "gc: campo-referencia gc<Clase> tras major_gc (read encadenado seguro)", "252_gc_ref_field.vx", 42, line=4097)
+
+
+# --- herencia estatica de structs + Self ----------------------------------
+modes3_case("herencia_self", "herencia estatica de structs + Self (campos/metodos heredados, Self covariante, fluent)", "322_herencia_self.vx", 84, line=4210)
+modes3_case("struct_copy_return", "regresion SROA: copiar this a local + modificar campo + return (struct 1 campo)", "323_struct_copy_return.vx", 147, line=4211)
+fails_case("abstract_neg", "struct @Abstract no instanciable por valor", "324_abstract_negativo.vx", "es @Abstract")
+modes3_case("iface_abstract", "interfaz (concept, contrato) vs @Abstract (base con impl); struct usa ambos", "325_interfaz_vs_abstract.vx", 67)
+fails_case("iface_no_sat", "struct declara ': IConcepto' pero no lo satisface", "326_interfaz_no_satisface_err.vx", "no satisface el concepto")
+modes3_case("abs_chain_iface", "@Abstract hereda de @Abstract + interfaz heredada verificada en el concreto", "327_abstract_cadena_iface.vx", 50)
+modes3_case("virtual_dispatch", "@Virtual: dispatch dinamico por vtable (Figura*->area() del tipo real), interp=jit=aot", "328_virtual_dispatch.vx", 42)
+fails_case("virtual_self_err", "Self prohibido en metodo @Virtual (mecanismos opuestos)", "329_virtual_self_err.vx", "no puede usarse en un metodo @Virtual")
+diff3_case("regpress_udivmod", "presion de registros (udivmod): interp=oraculo, jit y aot deben coincidir", "330_regalloc_pressure_udivmod.vx")
+
+
+@case("ctpe_udivmod")
+def case_ctpe_udivmod(ctx):
+    """El precomputo no puede alterar el resultado del udivmod bajo presion."""
+    h_ctpe_conformance(ctx, "CTPE conforme (udivmod bajo presion)",
+                       "330_regalloc_pressure_udivmod.vx")
+diff3_case("wideint_import", "import cross-module de struct con metodos+herencia+operadores (u128 de std.wideint)", "331_wideint_import.vx")
+diff3_case("struct_static", "metodos static en struct (factorias sin this, SRET + escalar)", "332_struct_static_methods.vx")
+diff3_case("struct_static_fields", "campos static en struct (contador/singleton por-tipo)", "334_struct_static_fields.vx")
+diff3_case("wideint_signed", "i128 con signo: div/mod truncados, neg, comparadores (std.wideint)", "333_wideint_signed.vx")
+diff3_case("struct_constructors", "constructores de struct value-type con overload por aridad", "335_struct_constructors.vx")
+diff3_case("comptime_ctor_literal", "constructor comptime de struct (i64 + param expr): literales de tipo usuario", "337_comptime_ctor_literal.vx")
+diff3_case("comptime_parse_literal", "parseo de literal entero en comptime (ctor expr -> helper de parseo -> IntLit)", "338_comptime_parse_literal.vx")
+diff3_stdout_case("string_conformance", "matriz de conformidad de cadenas: misma salida en interp, JIT y AOT", "339_string_conformance.vx")
+diff3_stdout_case("spill_opcodes", "opcodes con operando derramado: misma salida en interp, JIT y AOT", "340_spill_opcodes.vx")
+diff3_stdout_case("spill_reflexion", "reflexion con operando derramado (jit == interp; AOT la rechaza por diseno)", "341_spill_reflexion.vx", aot=False)
+
+
+# --- stdlib: ejemplos y tests de la biblioteca estandar de Vesta -----------
+modes3_case("stdlib_atomic", "stdlib atomic<T>: anchos 1/2/4/8 + f32/f64 + bool + disponibilidad por where", "stdlib/atomic.vx", 161, line=4200)
 
 
 # ---  AS: inline asm ---------------------------------------------------
@@ -2930,12 +3572,12 @@ READ_EXTERN_PE = ('extern "kernel32.dll" { fn CreateFileA(u8* n, u32 a, u32 s, '
                   'u64 se, u32 d, u32 f, u64 t) -> u64; fn GetFileSizeEx(u64 h, '
                   'i64* sz) -> i32; fn ReadFile(u64 h, u8* b, u32 nn, u32* nr, '
                   'u64 o) -> i32; fn CloseHandle(u64 h) -> i32; }')
-READ_SIZE_PE = ('u8* pcz=str_cstr(path); u64 hz=CreateFileA(pcz,(u32)0x80000000,'
+READ_SIZE_PE = ('u8* pcz=path.cstr(); u64 hz=CreateFileA(pcz,(u32)0x80000000,'
                 '(u32)1,(u64)0,(u32)3,(u32)0x80,(u64)0); '
                 'if(hz==0xFFFFFFFFFFFFFFFF){return 0;} i64 size=0; '
                 'i32 gsz=GetFileSizeEx(hz,&size); CloseHandle(hz); '
                 'if(gsz==0){return 0;}')
-READ_INTO_PE = ('u8* pcr=str_cstr(path); u64 hr=CreateFileA(pcr,(u32)0x80000000,'
+READ_INTO_PE = ('u8* pcr=path.cstr(); u64 hr=CreateFileA(pcr,(u32)0x80000000,'
                 '(u32)1,(u64)0,(u32)3,(u32)0x80,(u64)0); '
                 'if(hr==0xFFFFFFFFFFFFFFFF){free(buf);return 0;} u32 nrd=0; '
                 'i32 okr=ReadFile(hr,buf,(u32)size,&nrd,(u64)0); CloseHandle(hr); '
@@ -2944,10 +3586,10 @@ READ_EXTERN_ELF = ('extern "libc.so.6" { fn open(u8* p, i32 f, i32 m) -> i32; '
                    'fn read(i32 fd, u8* b, u64 c) -> i64; '
                    'fn lseek(i32 fd, i64 o, i32 w) -> i64; '
                    'fn close(i32 fd) -> i32; }')
-READ_SIZE_ELF = ('u8* pcz=str_cstr(path); i32 fdz=open(pcz,(i32)0,(i32)0); '
+READ_SIZE_ELF = ('u8* pcz=path.cstr(); i32 fdz=open(pcz,(i32)0,(i32)0); '
                  'if(fdz<0){return 0;} i64 size=lseek(fdz,(i64)0,(i32)2); '
                  'lseek(fdz,(i64)0,(i32)0);')
-READ_INTO_ELF = ('u8* pcr=str_cstr(path); i32 fdr=open(pcr,(i32)0,(i32)0); '
+READ_INTO_ELF = ('u8* pcr=path.cstr(); i32 fdr=open(pcr,(i32)0,(i32)0); '
                  'if(fdr<0){free(buf);return 0;} i64 n=read(fdr,buf,(u64)size); '
                  'close(fdr);')
 
@@ -3084,6 +3726,14 @@ def run_case(entry):
         ctx.lines.append(("FAIL", "%s: excepcion del harness: %s" % (tag, e)))
         ctx.lines.append(("DETAIL", traceback.format_exc()))
         return (tag, ctx.lines, ctx.n_ok, False)
+
+
+# --- Fallos sin capturar: se cuentan igual en interprete y JIT ---
+fault3_case("fallo_division_cero",
+            "division entre cero con cadena de tres marcos",
+            "369_fallo_division_cero.vx", "VX7002", 136)
+fault3_case("fallo_panic", "panic sin capturar",
+            "370_fallo_panic.vx", "VX7011", 134)
 
 
 def main():

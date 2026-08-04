@@ -1,0 +1,43 @@
+/**
+ * @file 347_div_cero_detiene.vx
+ * @brief Una division por cero DETIENE el proceso; no devuelve cero y sigue.
+ *
+ * `throw_fatal` marca el proceso como muerto y RETORNA -- no salta a ningun
+ * sitio --, asi que el lote de instrucciones seguia ejecutando el programa ya
+ * muerto: una division por cero entregaba un cociente de 0, el codigo de
+ * despues corria igual y el proceso terminaba con exito.  El error se perdia en
+ * silencio, que es la peor forma de fallar.
+ *
+ * Aqui se comprueba lo contrario: capturada, la division por cero es un
+ * `FatalError` como cualquier otro; y sin capturar detiene el proceso, de modo
+ * que las lineas siguientes no llegan a ejecutarse.
+ *
+ * El divisor vive en una global para que no se pliegue en tiempo de
+ * compilacion: con una constante literal el optimizador resuelve la division
+ * antes de que exista proceso alguno.
+ */
+
+/** Divisor opaco al optimizador. */
+u64 g_cero = 0;
+
+i32 main() {
+    i32 acc = 0;
+
+    // Capturada: el FatalError llega al handler.
+    try {
+        u64 q = 100 / g_cero;
+        acc++;              // inalcanzable
+    } catch (FatalError e) {
+        acc = acc + 30;
+    }
+
+    // Y el modulo tambien.
+    try {
+        u64 r = 100 % g_cero;
+        acc++;              // inalcanzable
+    } catch (FatalError e) {
+        acc = acc + 12;
+    }
+
+    return acc;   // 42
+}

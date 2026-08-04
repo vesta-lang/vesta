@@ -21,3 +21,4 @@ i32 main() {
     free(slot);
     return r.value;
 }
+// @expect-compile-fail

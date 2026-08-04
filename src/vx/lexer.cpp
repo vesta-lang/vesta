@@ -370,9 +370,10 @@ TokenKind classify_identifier(const std::string &lexeme) noexcept {
 // Lexer: implementacion.
 // -----------------------------------------------------------------------
 
-Lexer::Lexer(std::string source, std::string filename, Diagnostics &diags)
+Lexer::Lexer(std::string source, std::string filename, Diagnostics &diags,
+             const ExpansionInfo *expansion)
     : source_(std::move(source)), filename_(std::move(filename)),
-      diags_(diags) {
+      diags_(diags), expansion_(expansion) {
     // Reservar capacidad del lexema cacheado para evitar relocaciones
     // tipicas (la mayoria de los identificadores caben en SSO).
     peeked_.lexeme.reserve(16);
@@ -1466,6 +1467,20 @@ Token Lexer::lex_symbol() {
  * recursividad accidental entre los caches y la lectura cruda.
  */
 Token Lexer::lex_one_raw() {
+    /* Todo token nacido en este lexer lleva DE DONDE viene.  Se estampa aqui,
+     * que es por donde salen todos, y no en los veinte sitios que construyen
+     * una posicion: si hubiera que acordarse en cada uno, el dia que se anada
+     * el veintiuno ese caso se quedaria sin procedencia y nadie lo notaria.
+     *
+     * Vale @c nullptr salvo cuando se parsea codigo GENERADO -- lo que devuelve
+     * una @Macro -- que es cuando la posicion por si sola no lleva a ningun
+     * sitio, porque apunta a un fichero que no existe. */
+    Token t = lex_one_raw_inner();
+    if (expansion_) t.loc.expansion = expansion_;
+    return t;
+}
+
+Token Lexer::lex_one_raw_inner() {
     // Interpolacion: si @c lex_string emitio una cadena de tokens
     // @c ISTR_* en una pasada anterior, drenar el buffer antes de
     // tocar @c source_.  Cero overhead cuando esta vacio (caso comun).

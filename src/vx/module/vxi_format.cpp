@@ -225,6 +225,10 @@ static void emit_payload_for_typedef(std::vector<uint8_t> &payload,
     // orden (cada entry: type_off u32 + type_len u32 + is_public u8 + 3 pad).
     write_u32(payload, static_cast<uint32_t>(sym.from_conversions.size()));
     write_u32(payload, static_cast<uint32_t>(sym.to_conversions.size()));
+    write_u32(payload,
+              static_cast<uint32_t>(sym.implicit_from_conversions.size()));
+    write_u32(payload,
+              static_cast<uint32_t>(sym.implicit_to_conversions.size()));
     auto emit_conv = [&](const VxiSymbol::ExplicitConvEntry &c) {
         const uint32_t t_off = pool.intern(c.type_str);
         write_u32(payload, t_off);
@@ -237,6 +241,10 @@ static void emit_payload_for_typedef(std::vector<uint8_t> &payload,
     for (const auto &c : sym.from_conversions)
         emit_conv(c);
     for (const auto &c : sym.to_conversions)
+        emit_conv(c);
+    for (const auto &c : sym.implicit_from_conversions)
+        emit_conv(c);
+    for (const auto &c : sym.implicit_to_conversions)
         emit_conv(c);
 }
 
@@ -309,8 +317,9 @@ static void emit_payload_for_function(std::vector<uint8_t> &payload,
     write_u32(payload, nsp_off);
     write_u32(payload, static_cast<uint32_t>(sym.ns_path.size()));
     // ParamSlot: type_off (u32) + type_len (u32) + name_off (u32) + name_len
-    // (u32). 16 bytes c/u en lugar de 8 (preferimos claridad; el coste es
-    // despreciable).
+    // (u32) + abi_off (u32) + abi_len (u32). 24 bytes c/u.  El abi_reg es el
+    // registro fisico canonico del ABI custom (`register("rax")` en params);
+    // vacio = ABI estandar.
     const size_t n = sym.param_types.size();
     for (size_t i = 0; i < n; ++i) {
         const uint32_t t_off = pool.intern(sym.param_types[i]);
@@ -321,6 +330,12 @@ static void emit_payload_for_function(std::vector<uint8_t> &payload,
         const uint32_t n_off = pool.intern(nm);
         write_u32(payload, n_off);
         write_u32(payload, static_cast<uint32_t>(nm.size()));
+        std::string ab =
+            (i < sym.param_abi_regs.size()) ? sym.param_abi_regs[i]
+                                            : std::string();
+        const uint32_t a_off = pool.intern(ab);
+        write_u32(payload, a_off);
+        write_u32(payload, static_cast<uint32_t>(ab.size()));
     }
 }
 
@@ -409,6 +424,9 @@ static void emit_payload_for_enum(std::vector<uint8_t> &payload,
             write_u32(payload, to);
             write_u32(payload, static_cast<uint32_t>(pt.size()));
         }
+        // v15: valor de la variante (enums C-style, `Less = -1`).  Sin esto
+        // un enum con valor importado llegaba con sus variantes sin valor.
+        write_u64(payload, static_cast<uint64_t>(v.int_value));
     }
     // NS.2 (v8): ns_path del enum al final del payload (off+len).
     const uint32_t nsp_off = pool.intern(sym.ns_path);
@@ -515,6 +533,10 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
         go.ns_len = static_cast<uint32_t>(g.ns_path.size());
         gen_offs.push_back(go);
     }
+    // v13: internar el OBJETIVO con el que se genera este .vxi, pero SOLO si el
+    // modulo usa @Target.  Vacio -> offset 0 -> artefacto valido para cualquier
+    // objetivo, que es el caso de casi todos los modulos.
+    const uint32_t target_off = mod.target.empty() ? 0u : pool.intern(mod.target);
     // NS.3 (v10): internar el package_id (vacio = paquete anonimo).
     const uint32_t pkgid_off = pool.intern(mod.package_id);
     const uint32_t pkgid_len = static_cast<uint32_t>(mod.package_id.size());
@@ -673,10 +695,11 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
     out[57] = 0;
     out[58] = 0;
     out[59] = 0;
-    out[60] = 0;
-    out[61] = 0;
-    out[62] = 0;
-    out[63] = 0;
+    // v13: target_offset (60).  0 = el modulo no usa @Target -> su contenido
+    // no depende del objetivo y el artefacto vale para todos.  Solo los que si
+    // lo usan quedan atados, para no invalidar la stdlib entera al cambiar de
+    // target.
+    patch_u32(60, target_off);
     // v6: gen_templates_offset (64) + gen_templates_count (68).
     patch_u32(64, gen_start);
     patch_u32(68, static_cast<uint32_t>(mod.generic_templates.size()));
@@ -747,9 +770,14 @@ static bool parse_payload_typedef(const uint8_t *data, size_t size,
         return true;
     }
     uint32_t from_count = 0, to_count = 0;
+    uint32_t imp_from_count = 0, imp_to_count = 0;
     if (!read_u32(data, size, off, from_count)) return false;
     if (!read_u32(data, size, off, to_count)) return false;
-    if (from_count > 1000 || to_count > 1000) return false; // sanity
+    if (!read_u32(data, size, off, imp_from_count)) return false;
+    if (!read_u32(data, size, off, imp_to_count)) return false;
+    if (from_count > 1000 || to_count > 1000 || imp_from_count > 1000 ||
+        imp_to_count > 1000)
+        return false; // sanity
     auto read_conv = [&](VxiSymbol::ExplicitConvEntry &c) -> bool {
         uint32_t t_off = 0, t_len = 0;
         if (!read_u32(data, size, off, t_off)) return false;
@@ -768,6 +796,14 @@ static bool parse_payload_typedef(const uint8_t *data, size_t size,
     out.to_conversions.resize(to_count);
     for (uint32_t i = 0; i < to_count; ++i) {
         if (!read_conv(out.to_conversions[i])) return false;
+    }
+    out.implicit_from_conversions.resize(imp_from_count);
+    for (uint32_t i = 0; i < imp_from_count; ++i) {
+        if (!read_conv(out.implicit_from_conversions[i])) return false;
+    }
+    out.implicit_to_conversions.resize(imp_to_count);
+    for (uint32_t i = 0; i < imp_to_count; ++i) {
+        if (!read_conv(out.implicit_to_conversions[i])) return false;
     }
     return true;
 }
@@ -880,18 +916,25 @@ static bool parse_payload_function(const uint8_t *data, size_t size,
     }
     out.param_types.reserve(pc);
     out.param_names.reserve(pc);
+    out.param_abi_regs.reserve(pc);
     for (uint32_t i = 0; i < pc; ++i) {
-        uint32_t t_off = 0, t_len = 0, n_off = 0, n_len = 0;
+        uint32_t t_off = 0, t_len = 0, n_off = 0, n_len = 0, a_off = 0,
+                 a_len = 0;
         if (!read_u32(data, size, off, t_off)) return false;
         if (!read_u32(data, size, off, t_len)) return false;
         if (!read_u32(data, size, off, n_off)) return false;
         if (!read_u32(data, size, off, n_len)) return false;
+        if (!read_u32(data, size, off, a_off)) return false;
+        if (!read_u32(data, size, off, a_len)) return false;
         std::string tnm;
         if (!read_name(data, size, t_off, t_len, pool_start, tnm)) return false;
         std::string nnm;
         if (!read_name(data, size, n_off, n_len, pool_start, nnm)) return false;
+        std::string anm;
+        if (!read_name(data, size, a_off, a_len, pool_start, anm)) return false;
         out.param_types.push_back(std::move(tnm));
         out.param_names.push_back(std::move(nnm));
+        out.param_abi_regs.push_back(std::move(anm));
     }
     return true;
 }
@@ -1007,11 +1050,20 @@ static bool parse_payload_struct_or_class(const uint8_t *data, size_t size,
 static bool parse_payload_enum(const uint8_t *data, size_t size,
                                uint32_t payload_off, uint32_t payload_len,
                                uint32_t pool_start, VxiSymbol &out) {
-    if (payload_len < 12) return false; // v5: size+align+variants
+    if (payload_len < 20) return false; // size+align+base+variants
     size_t off = payload_off;
     // v5: size_bytes + align_bytes al inicio.
     if (!read_u32(data, size, off, out.size_bytes)) return false;
     if (!read_u32(data, size, off, out.align_bytes)) return false;
+    // Tipo base del enum (ver emit_payload_for_enum).
+    {
+        uint32_t und_off = 0, und_len = 0;
+        if (!read_u32(data, size, off, und_off)) return false;
+        if (!read_u32(data, size, off, und_len)) return false;
+        if (!read_name(data, size, und_off, und_len, pool_start,
+                       out.underlying_type))
+            return false;
+    }
     uint32_t vc = 0;
     if (!read_u32(data, size, off, vc)) return false;
     out.variants.reserve(vc);
@@ -1034,6 +1086,10 @@ static bool parse_payload_enum(const uint8_t *data, size_t size,
                 return false;
             v.payload_types.push_back(std::move(tnm));
         }
+        // v15: valor de la variante (enums C-style).
+        uint64_t raw_val = 0;
+        if (!read_u64(data, size, off, raw_val)) return false;
+        v.int_value = static_cast<int64_t>(raw_val);
         out.variants.push_back(std::move(v));
     }
     // NS.2 (v8): ns_path del enum al final (off+len; guardado defensivo).
@@ -1081,7 +1137,9 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
     read_u32(data, size, off, blob_pool_offset_hdr);   // v4
     read_u32(data, size, off, blob_pool_size_hdr);     // v4
     read_u8(data, size, off, blob_pool_alignment_hdr); // v4
-    off += 7;                                          // pad (offsets 57..63)
+    off += 3;                                          // pad (offsets 57..59)
+    uint32_t target_off_hdr = 0; // v13 (offset 60, rel al pool; 0 = sin @Target)
+    read_u32(data, size, off, target_off_hdr);
     uint32_t gen_offset_hdr = 0;                        // v6
     uint32_t gen_count_hdr = 0;                         // v6
     read_u32(data, size, off, gen_offset_hdr);
@@ -1370,6 +1428,15 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
                   r.module_.package_id);
     }
 
+    // v13: objetivo del artefacto.  El pool guarda cadenas NUL-terminadas, asi
+    // que se lee hasta el terminador (no hay campo de longitud aparte: el
+    // offset 0 ya distingue "sin @Target").
+    if (target_off_hdr != 0) {
+        const size_t abs = static_cast<size_t>(pool_start) + target_off_hdr;
+        for (size_t i = abs; i < size && data[i] != 0; ++i)
+            r.module_.target.push_back(static_cast<char>(data[i]));
+    }
+
     r.ok = true;
     return r;
 }
@@ -1385,6 +1452,34 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
 // Si dos compiladores producen .vxi con el mismo hash, son
 // ABI-compatibles a nivel cache.  Si difieren, el .vxi se descarta y
 // regenera al siguiente compile.
+// Vocabulario IDENTICO al de los atomos `os:`/`arch:` de @Target (ver
+// target_matches_ en parser.cpp).  Si divergieran, un .vxi quedaria atado a un
+// nombre que la evaluacion de @Target no reconoce y la comparacion fallaria
+// siempre -- cache inutil en vez de cache correcto.
+const char *vxi_host_os_name() noexcept {
+#if defined(_WIN32)
+    return "windows";
+#elif defined(__APPLE__)
+    return "macos";
+#elif defined(__linux__)
+    return "linux";
+#else
+    return "unknown";
+#endif
+}
+
+const char *vxi_host_arch_name() noexcept {
+#if defined(__x86_64__) || defined(_M_X64)
+    return "x86_64";
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    return "arm64";
+#elif defined(__i386__) || defined(_M_IX86)
+    return "x86";
+#else
+    return "unknown";
+#endif
+}
+
 uint64_t vxi_compiler_version_hash() noexcept {
     // String de identidad: includes una etiqueta ABI ('vx-1.0') + el
     // build time del compilador binario para detectar rebuilds del

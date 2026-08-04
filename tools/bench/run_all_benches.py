@@ -54,7 +54,16 @@ LEGACY_SKIP_PATTERN = re.compile(
     r"100_reflection|get_time|test_vptr_loop)"
 )
 
-RUNS_PER_MODE = 3
+# Numero de runs medidos.  Los lenguajes NO interpretados (nativos / JIT) son
+# rapidos y muy sensibles al ruido del scheduler del SO -> se miden muchas veces
+# y se toma la mediana.  Los INTERPRETADOS (Python, interprete Vesta puro) son
+# lentos: 10 runs dispararian el tiempo total del harness sin ganar precision
+# relativa -> se miden pocas veces.
+RUNS_FAST = 10  # c/cpp/go/rust/java/vx_jit/vx_aot_* (no interpretados)
+RUNS_SLOW = 3   # python, vx_interp (interpretados/lentos)
+RUNS_PER_MODE = RUNS_FAST  # default de --runs (compat)
+# Lenguajes interpretados/lentos: se miden con RUNS_SLOW.
+INTERPRETED_LANGS = frozenset({"python", "vx_interp"})
 BENCH_TIMEOUT = 120.0  # algunos benches Python tardan minutos
 
 
@@ -83,6 +92,9 @@ class C:
     # CYAN (36, python), BLUE (34, c) y GREEN (32, jit): tira a verde-cian pero
     # con hue propio y brillante, inequivoco frente al resto de la paleta.
     TEAL = "\033[38;5;43m" if _enabled else ""
+    # Naranja-rojizo (202, ~#ff5f00) para Rust, cercano al naranja de marca
+    # #CE422B.  Distinto del ORANGE (208, aot_sse2) y del rojo (31, java).
+    RUST = "\033[38;5;202m" if _enabled else ""
 
     @classmethod
     def enable_windows_ansi(cls):
@@ -392,6 +404,15 @@ def capture_system_info(vm_bin: Path, tc: dict) -> dict:
         }
     else:
         tooling["Go (gc)"] = {"available": False}
+    # rust (usa `rustc --version`).
+    if tc.get("rust") and tc["rust"].available:
+        tooling["Rust (rustc -O)"] = {
+            "available": True,
+            "version": get_tool_version([tc["rust"].path, "--version"]),
+            "path": tc["rust"].path,
+        }
+    else:
+        tooling["Rust (rustc -O)"] = {"available": False}
     info_d["tooling"] = tooling
 
     # ---- Fecha del reporte ----
@@ -642,6 +663,17 @@ def detect_toolchains(vm_bin: Path) -> dict[str, Toolchain]:
     )
     tc["go"].path = go if go else ""
 
+    # Rust (rustc directo, sin cargo): compila cada bench a un exe nativo con
+    # optimizacion agresiva (-O -C target-cpu=native), analogo a C/C++/Go.  Es
+    # la referencia de "codigo optimo" de LLVM: mismo backend que Clang -O3.
+    rustc = shutil.which("rustc")
+    tc["rust"] = Toolchain(
+        "rust", "Rust (rustc -O)", C.RUST,
+        available=rustc is not None,
+        why_unavailable="" if rustc else "rustc not in PATH"
+    )
+    tc["rust"].path = rustc if rustc else ""
+
     return tc
 
 
@@ -680,6 +712,7 @@ def discover_benches(bench_dir: Path) -> list[Bench]:
             "python": d / "main.py",
             "java":   d / "Main.java",
             "go":     d / "main.go",
+            "rust":   d / "main.rs",
         }
         for lang, p in candidates.items():
             if p.is_file():
@@ -940,6 +973,24 @@ def compile_go(variant: BenchVariant, work_dir: Path,
         [tc.path, "build", "-o", str(out), str(variant.src_path)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120.0,
         cwd=str(variant.src_path.parent),
+    )
+    if r.returncode != 0 or not out.is_file():
+        return None
+    return ([str(out)], work_dir, 1.0)
+
+
+def compile_rust(variant: BenchVariant, work_dir: Path,
+                 tc: Toolchain) -> Optional[tuple[list[str], Path, float]]:
+    # Rust compila a un exe nativo con optimizacion agresiva: -O (opt-level 2)
+    # + target-cpu=native (habilita AVX/SSE del host, igual que gcc -march=native).
+    # Es la referencia de codigo optimo de LLVM.  Se ejecuta como binario nativo
+    # (su exit-code es el return de main), midiendo su wall time igual que C/Go.
+    suffix = ".exe" if sys.platform == "win32" else ""
+    out = work_dir / f"{variant.bench_name}_rust{suffix}"
+    r = subprocess.run(
+        [tc.path, "-O", "-C", "target-cpu=native", "-C", "opt-level=3",
+         str(variant.src_path), "-o", str(out)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120.0,
     )
     if r.returncode != 0 or not out.is_file():
         return None
@@ -1261,6 +1312,7 @@ LANG_LABELS_PLAIN = {
     "python":       "Python",
     "java":         "Java",
     "go":           "Go (gc)",
+    "rust":         "Rust (rustc -O)",
 }
 
 
@@ -1342,6 +1394,7 @@ def save_matplotlib(rows: list[dict], active_langs: list[str],
         "python":       "#17becf",
         "java":         "#d62728",
         "go":           "#007d9c",
+        "rust":         "#CE422B",
     }
 
     n_benches = len(valid_rows)
@@ -1697,6 +1750,7 @@ def rerender_from_json(json_path: Path, project_root: Path,
         "python":       ("Python (CPython)", C.CYAN),
         "java":         ("Java (HotSpot)", C.RED),
         "go":           ("Go (gc)", C.TEAL),
+        "rust":         ("Rust (rustc -O)", C.RUST),
     }
     tc = {ln: _MockTc(ln, *LABELS.get(ln, (ln, C.RESET))) for ln in active_langs}
 
@@ -1763,16 +1817,24 @@ def main() -> int:
     parser.add_argument(
         "--langs", type=str,
         default="vx_interp,vx_jit,vx_aot_sse2,vx_aot_avx,vx_aot_auto,"
-                "c,cpp,python,java,go",
+                "c,cpp,python,java,go,rust",
         help=("lista CSV de lenguajes/modos a ejecutar.  Validos: "
               "vx_interp (interp puro), vx_jit (JIT), "
               "vx_aot_sse2 (AOT nativo 128b), vx_aot_avx (AOT AVX2 256b), "
               "vx_aot_auto (AOT multiversion cpuid), "
-              "c (gcc -O3), cpp (g++ -O3), python, java, go (Go gc).  "
-              "Ej: --langs vx_jit,vx_aot_auto,c,go"))
+              "c (gcc -O3), cpp (g++ -O3), python, java, go (Go gc), "
+              "rust (rustc -O -C target-cpu=native).  "
+              "Ej: --langs vx_jit,vx_aot_auto,c,rust"))
     parser.add_argument("--filter", type=str, default="",
                         help="Regex para filtrar benches por nombre")
-    parser.add_argument("--runs", type=int, default=RUNS_PER_MODE)
+    parser.add_argument("--runs", type=int, default=RUNS_FAST,
+                        help=("Runs medidos para lenguajes NO interpretados "
+                              "(nativos/JIT), rapidos y ruidosos (default %d)."
+                              % RUNS_FAST))
+    parser.add_argument("--runs-slow", type=int, default=RUNS_SLOW,
+                        help=("Runs medidos para lenguajes INTERPRETADOS "
+                              "(python, vx_interp), lentos (default %d)."
+                              % RUNS_SLOW))
     parser.add_argument("--timeout", type=float, default=BENCH_TIMEOUT)
     parser.add_argument("--no-plot", action="store_true")
     parser.add_argument("--out-json", type=str, default="bench_results.json")
@@ -1959,6 +2021,8 @@ def main() -> int:
                 return (idx, b.name, ln, compile_java(variant, work_dir, tc["java"]), None)
             elif ln == "go":
                 return (idx, b.name, ln, compile_go(variant, work_dir, tc["go"]), None)
+            elif ln == "rust":
+                return (idx, b.name, ln, compile_rust(variant, work_dir, tc["rust"]), None)
             else:
                 return (idx, b.name, ln, None, "unknown lang")
         except Exception as e:  # noqa: BLE001
@@ -2026,9 +2090,12 @@ def main() -> int:
                 env["VESTA_JIT_THRESHOLD"] = "4294967295"
 
             # Run + capturar TODOS los runs individuales (no solo mediana).
+            # Los no interpretados se miden mas veces (rapidos + ruidosos); los
+            # interpretados pocas (lentos).  --runs / --runs-slow lo overridean.
             warm = args.warmup
+            n_runs = args.runs_slow if ln in INTERPRETED_LANGS else args.runs
             label_run = (f"[{idx}/{len(benches)}] {b.name} | "
-                         f"{tc[ln].label} run ({args.runs}x"
+                         f"{tc[ln].label} run ({n_runs}x"
                          + (f"+{warm}W" if warm > 0 else "")
                          + ")")
             # Sprint bench-fair (2026-06-03): por default mode FAIR usa
@@ -2037,7 +2104,7 @@ def main() -> int:
             # (Vesta-lang usa --stats interno, otros wall externo).
             use_vx_wt = (not args.fair) and ln in ("vx_interp", "vx_jit")
             with Spinner(label_run, color=tc[ln].color):
-                runs_ms = all_runs(cmd, env=env, runs=args.runs,
+                runs_ms = all_runs(cmd, env=env, runs=n_runs,
                                     timeout=args.timeout, cwd=cwd,
                                     warmup=warm,
                                     use_vx_walltime=use_vx_wt)
@@ -2118,7 +2185,8 @@ def main() -> int:
     json_data = {
         "vm_binary": str(vm),
         "project_root": str(project_root),
-        "runs_per_mode": args.runs,
+        "runs_per_mode": args.runs,       # no interpretados
+        "runs_per_mode_slow": args.runs_slow,  # interpretados (python, vx_interp)
         "warmup_runs": args.warmup,
         "active_langs": active_langs,
         "elapsed_total_s": elapsed,

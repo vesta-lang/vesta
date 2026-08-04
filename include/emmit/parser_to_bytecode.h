@@ -669,13 +669,13 @@ static const std::unordered_map<std::string, std::vector<InstrInfo>>
            emit_instr_reg}}},
         {"atomicld",
          {{0x00, 0xA9, InstrSizeMode::FIXED_4, AddressingMode::REG,
-           emit_instr_reg}}},
+           emit_instr_atomic_ld}}},
         {"atomicst",
          {{0x00, 0xAA, InstrSizeMode::FIXED_4, AddressingMode::REG,
-           emit_instr_reg}}},
+           emit_instr_atomic_st}}},
         {"atomiccas",
-         {{0x00, 0xAB, InstrSizeMode::FIXED_4, AddressingMode::REG,
-           emit_instr_four_reg}}},
+         {{0x00, 0xAB, InstrSizeMode::FIXED_6, AddressingMode::REG,
+           emit_instr_atomic_cas}}},
         {"csel", // dst=cond?a:b (super-instruccion del IrOp::SELECT, interp)
          {{0x00, 0x8F, InstrSizeMode::FIXED_4, AddressingMode::REG,
            emit_instr_four_reg}}},
@@ -686,8 +686,8 @@ static const std::unordered_map<std::string, std::vector<InstrInfo>>
          {{0x00, 0x91, InstrSizeMode::FIXED_8, AddressingMode::REG,
            emit_instr_mem_full}}},
         {"atomicadd",
-         {{0x00, 0xAC, InstrSizeMode::FIXED_4, AddressingMode::REG,
-           emit_instr_three_reg}}},
+         {{0x00, 0xAC, InstrSizeMode::FIXED_6, AddressingMode::REG,
+           emit_instr_atomic_add}}},
         {"sharedstat",
          {{0x00, 0xAD, InstrSizeMode::FIXED_4, AddressingMode::REG,
            emit_instr_reg}}},
@@ -705,6 +705,21 @@ static const std::unordered_map<std::string, std::vector<InstrInfo>>
          *  Opcodes 0x76-0x78: unsigned (addu3, subu3, mulu3).
          *  Opcodes 0x79-0x7B: bitwise (and3, or3, xor3) -- sin signo.
          */
+        // Memoria masiva (0xB6-0xB9).  Reusan emit_instr_alu3: su formato
+        // fisico ES "3 registros" con el layout de nibbles estandar
+        // (byte2=(rB<<4)|rA, byte3=(rC<<4)), identico al que necesitan.
+        {"memset",
+         {{0x00, 0xB6, InstrSizeMode::FIXED_4, AddressingMode::REG,
+           emit_instr_alu3}}},
+        {"memseth",
+         {{0x00, 0xB7, InstrSizeMode::FIXED_4, AddressingMode::REG,
+           emit_instr_alu3}}},
+        {"memcpy",
+         {{0x00, 0xB8, InstrSizeMode::FIXED_4, AddressingMode::REG,
+           emit_instr_alu3}}},
+        {"memcpyh",
+         {{0x00, 0xB9, InstrSizeMode::FIXED_4, AddressingMode::REG,
+           emit_instr_alu3}}},
         {"adds3",
          {{0x00, 0x73, InstrSizeMode::FIXED_4, AddressingMode::REG,
            emit_instr_alu3}}},
@@ -1095,6 +1110,12 @@ static const std::unordered_map<std::string, std::vector<InstrInfo>>
         {"setcc",
          {{0x00, 0x43, InstrSizeMode::FIXED_4, AddressingMode::INMED,
            emit_setcc}}},
+
+        /* --- SEXT r_dst, N: sign-extiende r_dst desde N bits (8/16/32) a 64.
+           1 instr en vez de mov+shl+sar.  b2=r_dst, b3=N. --- */
+        {"sext",
+         {{0x00, 0x92, InstrSizeMode::FIXED_4, AddressingMode::INMED,
+           emit_sext}}},
 
         /* --- TRYENTER / TRYLEAVE: frames de excepcion dinamicos --- */
         {"tryenter",

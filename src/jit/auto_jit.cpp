@@ -15,6 +15,8 @@
  * el JIT subsystem (10-50 KB de VM reservada para code cache).
  */
 
+#include <thread>
+#include <functional>
 #include "jit/auto_jit.h"
 #include "jit/jit_compiler.h"
 #include "jit/code_cache.h"
@@ -314,6 +316,8 @@ VregEntries make_vreg_entries() {
             reinterpret_cast<uint64_t>(g_runtime_entries->str_make_h);
         e.str_len = reinterpret_cast<uint64_t>(g_runtime_entries->str_len);
         e.str_cat = reinterpret_cast<uint64_t>(g_runtime_entries->str_cat);
+        e.str_slice =
+            reinterpret_cast<uint64_t>(g_runtime_entries->str_slice);
         e.str_cmp = reinterpret_cast<uint64_t>(g_runtime_entries->str_cmp);
         e.str_raw = reinterpret_cast<uint64_t>(g_runtime_entries->str_raw);
         e.str_get_bytes =
@@ -537,6 +541,22 @@ uint64_t reserve_tier_counter(uint64_t fn_pc) {
     return addr;
 }
 } // namespace
+
+// CTPE: inicializa el subsistema JIT (idempotente) y devuelve la direccion del
+// handler de safepoint.  Fuera del namespace anonimo -> linkage externo (la usa
+// comptime_vm.cpp).  Puede llamar a init_jit_subsystem/g_jit_init_flag del
+// namespace anonimo porque son visibles en el namespace jit envolvente (mismo TU).
+uint64_t jit_safepoint_handler_addr() noexcept {
+    std::call_once(g_jit_init_flag, init_jit_subsystem);
+    return g_runtime_entries
+               ? reinterpret_cast<uint64_t>(g_runtime_entries->safepoint_handler)
+               : 0;
+}
+
+void jit_set_ctpe_safepoint(uint64_t handler_addr) noexcept {
+    std::call_once(g_jit_init_flag, init_jit_subsystem);
+    if (g_code_cache) g_code_cache->ctpe_safepoint_handler = handler_addr;
+}
 
 /* Sprint B.1: expose el CodeCache global al runtime (native_callback.cpp).
  * Bypass el namespace anonimo de los singletons; el caller solo recibe
@@ -901,18 +921,23 @@ void maybe_compile_method(runtime::ProcessVM *vm,
             /*  D.7 (opt-in): callee por el path de registros
              * virtuales si esta soportada; si no, slots. */
             if (g_jit_use_vregs) {
+                size_t vc_size = 0;
+                std::vector<LineMapEntry> vc_lines;
                 uint8_t *vc = vreg_compile(child_ir, *g_code_cache, {},
                                            make_vreg_entries(), native_resolver,
-                                           child_opts.resolve_symbol);
+                                           child_opts.resolve_symbol, &vc_size,
+                                           &vc_lines);
                 if (vc != nullptr) {
                     const uint64_t a = reinterpret_cast<uint64_t>(vc);
                     g_eager_cache[n] = a;
                     ++g_jit_compiled_count;
                     if (st_ptr2) {
                         auto sit = st_ptr2->find("code." + n);
-                        if (sit != st_ptr2->end() && sit->second != 0)
+                        if (sit != st_ptr2->end() && sit->second != 0) {
                             register_jit_code_at_pc(
-                                sit->second, reinterpret_cast<void *>(vc));
+                                sit->second, reinterpret_cast<void *>(vc),
+                                vc_size, &vc_lines);
+                        }
                     }
                     if (g_jit_warn_unsupported)
                         std::fprintf(stderr,
@@ -947,7 +972,8 @@ void maybe_compile_method(runtime::ProcessVM *vm,
                 auto sit = st_ptr2->find("code." + n);
                 if (sit != st_ptr2->end() && sit->second != 0) {
                     register_jit_code_at_pc(sit->second,
-                                            reinterpret_cast<void *>(cres.fn));
+                                            reinterpret_cast<void *>(cres.fn),
+                                            cres.code_size);
                 }
             }
             if (g_jit_warn_unsupported) {
@@ -1040,15 +1066,19 @@ void maybe_compile_method(runtime::ProcessVM *vm,
             vent.tier2_method_ptr = reinterpret_cast<uint64_t>(method);
             vent.tier2_threshold = static_cast<uint32_t>(thr);
         }
+        size_t vcode_size = 0;
+        std::vector<LineMapEntry> vcode_lines;
         uint8_t *vcode =
             vreg_compile(*compile_ir, *g_code_cache, mc_opts.resolve_user_fn,
-                         vent, mc_opts.resolve_native_fn, mc_sym_res);
+                         vent, mc_opts.resolve_native_fn, mc_sym_res,
+                         &vcode_size, &vcode_lines);
         g_vreg_compiling_method = nullptr;
         if (vcode != nullptr) {
             method->jit_code = reinterpret_cast<void *>(vcode);
             if (method->code_vaddr != 0)
                 register_jit_code_at_pc(method->code_vaddr,
-                                        reinterpret_cast<void *>(vcode));
+                                        reinterpret_cast<void *>(vcode),
+                                        vcode_size, &vcode_lines);
             ++g_jit_compiled_count;
             if (g_jit_warn_unsupported)
                 std::fprintf(stderr, "[jit-vreg] compilado '%s'\n", key.c_str());
@@ -1079,7 +1109,8 @@ void maybe_compile_method(runtime::ProcessVM *vm,
          * codigo interp con label resuelto al @c code_vaddr). */
         if (method->code_vaddr != 0) {
             register_jit_code_at_pc(method->code_vaddr,
-                                    reinterpret_cast<void *>(res.fn));
+                                    reinterpret_cast<void *>(res.fn),
+                                    res.code_size);
         }
         /* C2 tier-up: mapear fn_pc (symbol "code.<name>", el mismo que el
          * contador on-entry pasa al handler) -> method + region del codigo
@@ -1377,9 +1408,12 @@ CompileResult eager_compile_function(
              * Pasamos el PROPIO resolver (recursivo) para que los CALLs
              * del callee se resuelvan a sus direcciones. */
             if (g_jit_use_vregs) {
+                size_t vc_size2 = 0;
+                std::vector<LineMapEntry> vc_lines2;
                 uint8_t *vc = vreg_compile(
                     child_ir, *g_code_cache, *resolver_holder,
-                    make_vreg_entries(), resolve_native_fn, sym_resolver);
+                    make_vreg_entries(), resolve_native_fn, sym_resolver,
+                    &vc_size2, &vc_lines2);
                 if (vc != nullptr) {
                     const uint64_t va = reinterpret_cast<uint64_t>(vc);
                     g_eager_cache[name] = va;
@@ -1388,7 +1422,8 @@ CompileResult eager_compile_function(
                         const uint64_t pc = sym_resolver("code." + name);
                         if (pc != 0)
                             register_jit_code_at_pc(
-                                pc, reinterpret_cast<void *>(vc));
+                                pc, reinterpret_cast<void *>(vc), vc_size2,
+                                &vc_lines2);
                     }
                     if (g_jit_warn_unsupported)
                         std::fprintf(stderr,
@@ -1417,7 +1452,8 @@ CompileResult eager_compile_function(
                 const uint64_t pc = sym_resolver("code." + name);
                 if (pc != 0) {
                     register_jit_code_at_pc(pc,
-                                            reinterpret_cast<void *>(cres.fn));
+                                            reinterpret_cast<void *>(cres.fn),
+                                            cres.code_size);
                 }
             }
             if (g_jit_warn_unsupported) {
@@ -1494,9 +1530,12 @@ CompileResult eager_compile_function(
      * forzamos el path del Selector (slots + regalloc rewrite) que SI lo
      * implementa. */
     if (g_jit_use_vregs && !callback_entry) {
+        size_t vcode_size = 0;
+        std::vector<LineMapEntry> vcode_lines;
         uint8_t *vcode =
             vreg_compile(ir_fn, *g_code_cache, resolver, make_vreg_entries(),
-                         resolve_native_fn, sym_resolver);
+                         resolve_native_fn, sym_resolver, &vcode_size,
+                         &vcode_lines);
         if (vcode != nullptr) {
             if (!ir_fn.name.empty())
                 g_eager_cache[ir_fn.name] = reinterpret_cast<uint64_t>(vcode);
@@ -1611,6 +1650,26 @@ CompileResult eager_compile_function(
             CompileResult r{};
             r.fn = reinterpret_cast<JitFn>(vcode);
             r.code_start = vcode;
+            /* OJO: no se rellena @c r.code_size.  Quien recibe este resultado
+             * lo usa como senal de que hay una region C1 que puede reciclar al
+             * subir de nivel, y darsela aqui hacia que reciclara codigo que
+             * seguia en uso.  La extension se apunta abajo, directamente, que
+             * es para lo que hace falta.
+             *
+             * Y queda registrada su extension nativa.  Hasta ahora esto solo
+             * lo hacia quien compila por una llamada; una funcion compilada de
+             * antemano -- `main`, sin ir mas lejos -- no entraba en el mapa, y
+             * un fallo dentro de ella no se podia atribuir a nadie. */
+            if (symbol_table != nullptr && !ir_fn.name.empty()) {
+                auto sit = symbol_table->find("code." + ir_fn.name);
+                // El punto de entrada puede figurar sin el prefijo de seccion.
+                if (sit == symbol_table->end())
+                    sit = symbol_table->find(ir_fn.name);
+                if (sit != symbol_table->end())
+                    register_jit_region(sit->second,
+                                        reinterpret_cast<void *>(vcode),
+                                        vcode_size, &vcode_lines);
+            }
             if (g_jit_warn_unsupported)
                 std::fprintf(stderr, "[jit-vreg] eager compilado '%s'\n",
                              ir_fn.name.c_str());
@@ -1660,12 +1719,12 @@ CompileResult eager_compile_function(
          * programa muere al invocarlo.  No damos por hecho la causa -- el
          * mensaje anterior afirmaba "SIMD>8B o argc>12", y cuando la causa era
          * otra (una op sin cubrir, un simbolo sin resolver) mandaba a
-         * investigar al sitio equivocado.  `VESTA_VREG_DEBUG=1` imprime el
+         * investigar al sitio equivocado.  `VESTA_JIT_VREGS_DEBUG=1` imprime el
          * motivo real que decidio el selector. */
         std::fprintf(stderr,
                      "[jit] callback '%s': el selector vreg no lo compila -> "
                      "sin codigo nativo (as_native_callback devolvera 0).\n"
-                     "  motivo exacto: ejecuta con VESTA_VREG_DEBUG=1\n",
+                     "  motivo exacto: ejecuta con VESTA_JIT_VREGS_DEBUG=1\n",
                      ir_fn.name.c_str());
     }
 
@@ -1842,10 +1901,89 @@ bool g_pc_jit_active = false;
 namespace {
 std::mutex g_pc_jit_mtx;
 std::unordered_map<uint64_t, void *> g_pc_to_jit_code;
+/// Extension del codigo nativo de cada funcion registrada: direccion virtual
+/// -> [inicio, inicio+tamano).  Solo se rellena cuando el tamano consta; sirve
+/// para saber, ante un fallo en codigo nativo, en que funcion cayo.
+struct RegionNativa {
+    uint64_t inicio;
+    uint64_t tamano;
+    /// Donde cambia la linea del fuente dentro del codigo: pares
+    /// (desplazamiento, linea) ORDENADOS y sin repetir la linea anterior.
+    /// Guardar una entrada por instruccion maquina seria varias veces mas
+    /// grande sin decir nada nuevo; asi son unas pocas decenas por funcion.
+    std::vector<std::pair<uint32_t, uint32_t>> lineas;
+};
+std::unordered_map<uint64_t, RegionNativa> g_pc_to_region;
 } // namespace
 
-void register_jit_code_at_pc(uint64_t vaddr, void *fn) noexcept {
-    if (!fn || vaddr == 0) return;
+void register_jit_region(uint64_t vaddr, void *fn, size_t code_size,
+                         const std::vector<LineMapEntry> *line_map) noexcept {
+    /* SOLO la extension, sin tocar a donde despacha una llamada.
+     *
+     * Son dos cosas distintas y hay sitios donde solo se puede apuntar una: el
+     * compilado por adelantado deja codigo que el llamante decide si usar, de
+     * modo que meterlo en el mapa de despacho cambia a donde va una llamada --
+     * y eso rompio un programa.  Para explicar un fallo basta con saber que
+     * trozo de memoria ocupa cada funcion.
+     *
+     * La direccion 0 se apunta igual: el codigo empieza ahi, asi que es la
+     * direccion legitima del punto de entrada. */
+    if (!fn || code_size == 0) return;
+    RegionNativa r{reinterpret_cast<uint64_t>(fn), (uint64_t)code_size, {}};
+    if (line_map != nullptr) {
+        uint32_t ultima = 0;
+        for (const LineMapEntry &e : *line_map) {
+            if (e.source_line == 0 || e.source_line == ultima) continue;
+            r.lineas.emplace_back(e.byte_offset, e.source_line);
+            ultima = e.source_line;
+        }
+    }
+    std::lock_guard<std::mutex> lk(g_pc_jit_mtx);
+    g_pc_to_region[vaddr] = std::move(r);
+}
+
+bool lookup_region_by_native_pc(uint64_t native_pc, uint64_t &out_inicio,
+                                uint64_t &out_tam) noexcept {
+    if (native_pc == 0) return false;
+    std::lock_guard<std::mutex> lk(g_pc_jit_mtx);
+    for (const auto &kv : g_pc_to_region) {
+        if (native_pc < kv.second.inicio) continue;
+        if (native_pc - kv.second.inicio >= kv.second.tamano) continue;
+        out_inicio = kv.second.inicio;
+        out_tam = kv.second.tamano;
+        return true;
+    }
+    return false;
+}
+
+bool lookup_line_by_native_pc(uint64_t native_pc, uint32_t &out_line) noexcept {
+    /* En que linea del fuente estaba el codigo nativo que fallo.
+     *
+     * Se busca el ultimo cambio de linea que quede en o antes del punto del
+     * fallo: entre dos cambios, la linea es la del primero. */
+    if (native_pc == 0) return false;
+    std::lock_guard<std::mutex> lk(g_pc_jit_mtx);
+    for (const auto &kv : g_pc_to_region) {
+        if (native_pc < kv.second.inicio) continue;
+        const uint64_t off = native_pc - kv.second.inicio;
+        if (off >= kv.second.tamano) continue;
+        uint32_t linea = 0;
+        for (const auto &p : kv.second.lineas) {
+            if (p.first > off) break;
+            linea = p.second;
+        }
+        if (linea == 0) return false;
+        out_line = linea;
+        return true;
+    }
+    return false;
+}
+
+void register_jit_code_at_pc(uint64_t vaddr, void *fn, size_t code_size,
+                             const std::vector<LineMapEntry> *line_map) noexcept {
+    if (!fn) return;
+    if (code_size != 0) register_jit_region(vaddr, fn, code_size, line_map);
+    if (vaddr == 0) return;
     std::lock_guard<std::mutex> lk(g_pc_jit_mtx);
     g_pc_to_jit_code[vaddr] = fn;
     g_pc_jit_active = true;
@@ -1853,6 +1991,43 @@ void register_jit_code_at_pc(uint64_t vaddr, void *fn) noexcept {
         std::fprintf(stderr, "[jit] pc-map register: 0x%llx -> %p\n",
                      static_cast<unsigned long long>(vaddr), fn);
     }
+}
+
+bool lookup_vaddr_by_native_pc(uint64_t native_pc,
+                               uint64_t &out_vaddr) noexcept {
+    /* La busqueda al reves: de una direccion de codigo NATIVO a la funcion
+     * que la contiene.
+     *
+     * Hace falta para explicar un fallo ocurrido dentro de codigo compilado.
+     * El codigo nativo no va actualizando el PC de la maquina virtual -- ese
+     * es justamente el punto de compilarlo --, asi que al fallar el PC que se
+     * conserva es viejo y la traza senalaba la funcion equivocada.  Lo unico
+     * fiable es la direccion nativa del fallo, y de ella se llega a la funcion
+     * quedandose con la mas alta que no la pase.
+     *
+     * Se recorre el mapa entero (decenas de entradas) porque esto ocurre una
+     * vez, al morir el programa: no compensa mantener una estructura ordenada
+     * viva para un caso que no se repite.
+     *
+     * @param native_pc Direccion donde fallo el codigo nativo.
+     * @param[out] out_vaddr Direccion virtual de la funcion que la contiene.
+     * @return true si cae dentro de alguna.  Se devuelve aparte del valor
+     *         porque 0 es una direccion valida -- el codigo empieza ahi -- y
+     *         no puede hacer de "no encontrado".
+     */
+    if (native_pc == 0) return false;
+    std::lock_guard<std::mutex> lk(g_pc_jit_mtx);
+    for (const auto &kv : g_pc_to_region) {
+        if (native_pc < kv.second.inicio) continue;
+        if (native_pc - kv.second.inicio >= kv.second.tamano) continue;
+        out_vaddr = kv.first;
+        return true;
+    }
+    /* Si la direccion no cae dentro de ninguna funcion de tamano conocido, NO
+     * se adivina por proximidad: atribuir el fallo a la funcion mas cercana
+     * por debajo senala una que no tiene nada que ver, que es peor que no
+     * decir nada -- quien lee se va a mirar donde no toca. */
+    return false;
 }
 
 void *lookup_jit_code_at_pc(uint64_t vaddr) noexcept {

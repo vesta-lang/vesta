@@ -1,0 +1,173 @@
+namespace std.ntwindows;
+
+import std.types only nullptr, size_t, uintptr;
+
+/**
+ * Tipos base de la NT API (Windows).  Alias transparentes estilo C: en Windows
+ * ULONG es 32-bit incluso en x86-64 (a diferencia de Linux, donde `long` es
+ * 64-bit).
+ *
+ * Vive al nivel de std (junto a std.windows), NO dentro de std.syscall, porque
+ * son tipos de la API de Windows/NT en general, no propios del subsistema de
+ * syscalls.  Colocarlos aqui ademas rompe el ciclo de imports del subsistema:
+ * las implementaciones por-arch (std.syscall.windows.x86_64/x86_32) necesitan
+ * estos tipos NT (p.ej. el resolutor recorre estructuras del PEB con
+ * HANDLE/PVOID) y pueden importarlos sin depender de std.syscall.windows -- que
+ * re-exporta esas mismas implementaciones via @Target y crearia un ciclo.
+ */
+
+/// Entero sin signo de 32 bits (Windows LONG/ULONG son 32-bit siempre).
+public typedef u32 ULONG;
+/// Entero con signo de 32 bits.
+public typedef i32 LONG;
+/// Codigo de estado NT (LONG): >= 0 exito, < 0 error (STATUS_*).
+public typedef i32 NTSTATUS;
+/// Entero sin signo de 16 bits.
+public typedef u16 USHORT;
+/// Octeto sin signo.
+public typedef u8 UCHAR;
+/// Puntero generico (void *).
+public typedef void* PVOID;
+/// Handle opaco del kernel.  No es un puntero a datos que nadie vaya a
+/// dereferenciar: es un valor que solo el kernel interpreta, y
+/// `NtCurrentProcess` devuelve un pseudo-handle (-1) que ni siquiera es una
+/// direccion valida.  Se expresa con el tipo de direcciones del lenguaje para
+/// poder compararlo con `nullptr` sin conversiones.
+public typedef uintptr HANDLE;
+
+/**
+ * Numero de procesador logico (winnt.h): grupo del procesador + numero
+ * dentro del grupo.  Lo rellena NtGetCurrentProcessorNumberEx.
+ */
+public struct PROCESSOR_NUMBER {
+    USHORT Group;
+    UCHAR  Number;
+    UCHAR  Reserved;
+};
+
+/// Puntero a PROCESSOR_NUMBER (parametro [out] de las syscalls).
+public typedef PROCESSOR_NUMBER* PPROCESSOR_NUMBER;
+
+/**
+ * Entero sin signo del ancho de un puntero (SIZE_T de winnt.h).
+ *
+ * Vive aqui, y no en std.windows, por el mismo motivo que ULONG y compania:
+ * lo necesitan las syscalls de memoria de la NT API, y std.windows lo
+ * re-exporta para que exista UNA sola definicion.
+ */
+public typedef size_t SIZE_T;
+/// Puntero a SIZE_T (parametro in/out de las syscalls de memoria).
+public typedef SIZE_T* PSIZE_T;
+/// Direccion de entrada/salida (`PVOID *` del API): el kernel la lee como
+/// sugerencia y la reescribe con la que concede.  Es una DIRECCION, no un
+/// puntero a datos, asi que se expresa con el tipo de direcciones del
+/// lenguaje.  Los headers de C no distinguen los dos usos porque solo tienen
+/// UN tipo de puntero; Vesta si, y la stdlib absorbe la diferencia para que el
+/// codigo de usuario no tenga que castear en cada llamada.
+public typedef uintptr* PPVOID;
+/// Puntero a HANDLE (parametro [out] de las syscalls que abren objetos).
+public typedef HANDLE* PHANDLE;
+/// Puntero a ULONG (p.ej. el `OldProtect` de NtProtectVirtualMemory).
+public typedef ULONG* PULONG;
+/// Entero con signo de 64 bits (LARGE_INTEGER: offsets de fichero).
+public typedef i64 LARGE_INTEGER;
+/// Puntero a LARGE_INTEGER.  Opcional en las syscalls de I/O (null = posicion
+/// actual del fichero).
+public typedef LARGE_INTEGER* PLARGE_INTEGER;
+
+/**
+ * Resultado de una operacion de I/O de la NT API.
+ *
+ * El primer campo es la union `{ NTSTATUS Status; PVOID Pointer; }` de
+ * ntddk.h; se declara del ancho de un puntero para respetar el layout real
+ * (16 bytes en x86-64).  El codigo de estado son sus 32 bits bajos.
+ */
+public struct IO_STATUS_BLOCK {
+    PVOID  Status;
+    SIZE_T Information;   ///< Bytes transferidos por la operacion.
+};
+
+/// Puntero a IO_STATUS_BLOCK (parametro [out] de las syscalls de I/O).
+public typedef IO_STATUS_BLOCK* PIO_STATUS_BLOCK;
+
+/// Codigo de exito de la NT API.  Un NTSTATUS < 0 es error.
+public const NTSTATUS STATUS_SUCCESS = 0;
+
+// Las constantes MEM_* y PAGE_* que usan estas syscalls NO se declaran aqui:
+// ya viven en std.windows (son constantes de winnt.h, no propias de la NT
+// API).  El consumidor las importa de alli.
+
+/**
+ * Mascara de derechos de acceso (ACCESS_MASK de ntdef.h).
+ *
+ * Vive aqui, no en std.windows, por el mismo motivo que ULONG y compania: la
+ * necesitan las syscalls que abren objetos.  std.windows la re-exporta para
+ * que exista UNA sola definicion.
+ */
+public typedef u32 ACCESS_MASK;
+
+/// Puntero a cadena UTF-16 (PWSTR de ntdef.h).
+public typedef u16* PWSTR;
+
+/**
+ * Cadena CONTADA UTF-16 de la NT API.
+ *
+ * A diferencia de una cstring, lleva la longitud explicita, asi que admite
+ * NUL interiores.  Atencion: `Length` y `MaximumLength` estan en BYTES, no en
+ * caracteres, y `Length` NO incluye el terminador.
+ */
+public struct UNICODE_STRING {
+    USHORT Length;
+    USHORT MaximumLength;
+    PWSTR  Buffer;
+};
+
+/// Puntero a UNICODE_STRING.
+public typedef UNICODE_STRING* PUNICODE_STRING;
+
+/**
+ * Descriptor del objeto sobre el que actua una syscall que abre o crea
+ * (OBJECT_ATTRIBUTES de ntdef.h).  `Length` debe valer sizeof(OBJECT_ATTRIBUTES)
+ * -- lo rellena InitializeObjectAttributes.
+ */
+public struct OBJECT_ATTRIBUTES {
+    ULONG           Length;
+    HANDLE          RootDirectory;
+    PUNICODE_STRING ObjectName;
+    ULONG           Attributes;
+    PVOID           SecurityDescriptor;
+    PVOID           SecurityQualityOfService;
+};
+
+/// Puntero a OBJECT_ATTRIBUTES.
+public typedef OBJECT_ATTRIBUTES* POBJECT_ATTRIBUTES;
+
+// -------------------------------------------------------------------
+// Constantes propias de la NT API (ntifs.h).  Las de winnt.h que estas
+// syscalls tambien usan -- GENERIC_*, SYNCHRONIZE, FILE_SHARE_*,
+// FILE_ATTRIBUTE_NORMAL -- ya viven en std.windows y no se duplican.
+// -------------------------------------------------------------------
+
+/// Comparar el nombre del objeto sin distinguir mayusculas.
+public const ULONG OBJ_CASE_INSENSITIVE = 0x40;
+
+/// CreateDisposition: reemplazar si existe, crear si no.
+public const ULONG FILE_SUPERSEDE = 0;
+/// CreateDisposition: abrir; falla si no existe.
+public const ULONG FILE_OPEN = 1;
+/// CreateDisposition: crear; falla si ya existe.
+public const ULONG FILE_CREATE = 2;
+/// CreateDisposition: abrir si existe, crear si no.
+public const ULONG FILE_OPEN_IF = 3;
+/// CreateDisposition: abrir y truncar; falla si no existe.
+public const ULONG FILE_OVERWRITE = 4;
+/// CreateDisposition: abrir y truncar si existe, crear si no.
+public const ULONG FILE_OVERWRITE_IF = 5;
+
+/// CreateOptions: el objeto es un directorio.
+public const ULONG FILE_DIRECTORY_FILE = 0x00000001;
+/// CreateOptions: I/O sincrona.  Con ella, NtReadFile/NtWriteFile admiten
+/// ByteOffset null (usan la posicion del fichero) y no hay que esperar evento.
+public const ULONG FILE_SYNCHRONOUS_IO_NONALERT = 0x00000020;
+/// CreateOptions: el objeto NO es un directorio.
+public const ULONG FILE_NON_DIRECTORY_FILE = 0x00000040;

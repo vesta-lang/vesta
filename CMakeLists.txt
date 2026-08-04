@@ -96,6 +96,15 @@ project(VMProject
         DESCRIPTION "VestaVM: register-based VM + Vex frontend"
         LANGUAGES C CXX)
 
+# Nivel minimo de API de Windows.  Algunas funciones que usa el runtime
+# (p.ej. GetCurrentThreadStackLimits, Win8+) exigen _WIN32_WINNT>=0x0602.
+# msys/ucrt64 lo trae alto por defecto; TDM-GCC (mingw-w64 mas antiguo) lo
+# deja bajo y oculta el simbolo -> se define aqui a Win10 (0x0A00) para que
+# el proyecto compile con AMBOS toolchains. 
+if (WIN32 AND NOT DEFINED VESTA_WIN32_WINNT)
+    add_compile_definitions(_WIN32_WINNT=0x0A00 WINVER=0x0A00)
+endif ()
+
 # versiones del compilador y la VM expuestas al @Target.
 # Permite que usuarios escriban @Target("compiler>=1.0") y obtengan
 # resolucion en compile-time sin hardcodear los numeros en C++.  Se
@@ -184,73 +193,44 @@ endif()
 # vx_lib, vmcore, vesta_lsp, vesta_ffi, vesta_rt, tests) enlaza `vesta_openssl`
 # y nada mas.  Se define AQUI, antes del primer add_subdirectory que lo use.
 #
-# Windows: se PREFIERE el enlace ESTATICO (libssl.a + libcrypto.a del sysroot
-# UCRT64/MinGW) para que el binario sea STANDALONE -- OpenSSL embebido, sin
-# acompanar libssl-3-x64.dll / libcrypto-3-x64.dll.  Si no hay .a, se cae a
-# FireDaemon (import libs + DLLs que el empaquetado incluye en ese caso).
+# OpenSSL SIEMPRE ESTATICO -- el binario final es standalone, sin depender de
+# libssl-3-x64.dll / libcrypto-3-x64.dll.  Dos vias, en orden:
+#   1. las .a del sysroot del compilador, si el toolchain las trae (MSYS2 si;
+#      gratis e instantaneo).
+#   2. si no (p.ej. TDM-GCC no las trae), COMPILAR OpenSSL desde el tarball
+#      OFICIAL con el MISMO compilador (BuildOpenSSLStatic.cmake): portable,
+#      multi-compilador, auto-descarga con SHA-256 fijado.  NUNCA se cae a DLLs.
 add_library(vesta_openssl INTERFACE)
 
 if (WIN32)
-    set(OPENSSL_ROOT_DIR "${CMAKE_SOURCE_DIR}/libs/Windows/OpenSSL-Win64")
-    set(OPENSSL_INCLUDE_DIR "${OPENSSL_ROOT_DIR}/include")
-    set(OPENSSL_LIB_DIR "${OPENSSL_ROOT_DIR}/lib/VC/x64/MD")
-
-    get_filename_component(_cc_bin    "${CMAKE_C_COMPILER}" DIRECTORY)  # .../ucrt64/bin
-    get_filename_component(_ucrt_root "${_cc_bin}"          DIRECTORY)  # .../ucrt64
+    get_filename_component(_cc_bin    "${CMAKE_C_COMPILER}" DIRECTORY)
+    get_filename_component(_ucrt_root "${_cc_bin}"          DIRECTORY)
     set(_ossl_a_ssl    "${_ucrt_root}/lib/libssl.a")
     set(_ossl_a_crypto "${_ucrt_root}/lib/libcrypto.a")
 
-    if (MINGW AND EXISTS "${_ossl_a_ssl}" AND EXISTS "${_ossl_a_crypto}")
-        message(STATUS "[OpenSSL] enlace ESTATICO (standalone, sin DLLs): ${_ossl_a_ssl}")
+    if (EXISTS "${_ossl_a_ssl}" AND EXISTS "${_ossl_a_crypto}")
+        # Via 1: .a del sysroot (el toolchain ya las trae).
+        message(STATUS "[OpenSSL] enlace ESTATICO desde el sysroot: ${_ossl_a_ssl}")
         target_include_directories(vesta_openssl INTERFACE "${_ucrt_root}/include")
-        # Orden: ssl antes que crypto; dependencias Win32 de OpenSSL al final
-        # (crypt32: almacen de certificados; gdi32/ws2_32: RNG y sockets).
         target_link_libraries(vesta_openssl INTERFACE
                 "${_ossl_a_ssl}" "${_ossl_a_crypto}" crypt32 gdi32 ws2_32)
-        set(VESTA_OPENSSL_STATIC ON  CACHE INTERNAL "OpenSSL embebido en el binario")
     else ()
-        set(VESTA_OPENSSL_STATIC OFF CACHE INTERNAL "OpenSSL embebido en el binario")
-        # --- Fallback: OpenSSL precompilado (FireDaemon) ---------------------
-        # Las .lib/.dll NO se versionan en git (solo headers + applink.c).  En un
-        # clone limpio se descargan aqui.  Idempotente + hash SHA-256 fijado.
-        if (NOT EXISTS "${OPENSSL_LIB_DIR}/libssl.lib")
-            set(_ossl_ver "3.6.1")
-            set(_ossl_url "https://download.firedaemon.com/FireDaemon-OpenSSL/openssl-${_ossl_ver}.zip")
-            set(_ossl_sha "48f53e49fda1ac9600f6356ef7a88cf9a3a1a4f69abf8e4918453f167884ddf8")
-            set(_ossl_zip "${CMAKE_BINARY_DIR}/openssl-${_ossl_ver}.zip")
-            set(_ossl_dir "${CMAKE_BINARY_DIR}/openssl-${_ossl_ver}-extract")
-            message(STATUS "[OpenSSL] ${OPENSSL_LIB_DIR}/libssl.lib no encontrado; descargando FireDaemon OpenSSL ${_ossl_ver}...")
-            if (NOT EXISTS "${_ossl_zip}")
-                file(DOWNLOAD "${_ossl_url}" "${_ossl_zip}"
-                        SHOW_PROGRESS
-                        EXPECTED_HASH SHA256=${_ossl_sha}
-                        STATUS _ossl_st)
-                list(GET _ossl_st 0 _ossl_code)
-                if (NOT _ossl_code EQUAL 0)
-                    list(GET _ossl_st 1 _ossl_msg)
-                    message(FATAL_ERROR "[OpenSSL] descarga fallo (${_ossl_code}): ${_ossl_msg}\n  URL: ${_ossl_url}\n  Alternativa: descarga el zip a mano y copia x64/lib/{libssl,libcrypto}.lib en ${OPENSSL_LIB_DIR} y x64/bin/*-x64.dll junto al ejecutable.")
-                endif()
-            endif()
-            file(ARCHIVE_EXTRACT INPUT "${_ossl_zip}" DESTINATION "${_ossl_dir}")
-            file(MAKE_DIRECTORY "${OPENSSL_LIB_DIR}")
-            file(COPY "${_ossl_dir}/x64/lib/libssl.lib" "${_ossl_dir}/x64/lib/libcrypto.lib"
-                    DESTINATION "${OPENSSL_LIB_DIR}")
-            file(COPY "${_ossl_dir}/x64/bin/libssl-3-x64.dll" "${_ossl_dir}/x64/bin/libcrypto-3-x64.dll"
-                    DESTINATION "${OPENSSL_ROOT_DIR}/bin")
-            if (NOT EXISTS "${OPENSSL_INCLUDE_DIR}/openssl/ssl.h")
-                file(COPY "${_ossl_dir}/x64/include/openssl" DESTINATION "${OPENSSL_INCLUDE_DIR}")
-            endif()
-            file(COPY "${_ossl_dir}/x64/bin/libssl-3-x64.dll" "${_ossl_dir}/x64/bin/libcrypto-3-x64.dll"
-                    DESTINATION "${CMAKE_BINARY_DIR}")
-            message(STATUS "[OpenSSL] instalado en ${OPENSSL_ROOT_DIR} (lib/VC/x64/MD + bin)")
+        # Via 2: compilar desde fuente con el compilador del build.  Ruta
+        # absoluta: CMAKE_MODULE_PATH todavia no incluye cmake/ en este punto.
+        include("${CMAKE_SOURCE_DIR}/cmake/BuildOpenSSLStatic.cmake")
+        vesta_build_openssl_static()
+        if (NOT VESTA_OSSL_STATIC_OK)
+            message(FATAL_ERROR "[OpenSSL] no se pudo obtener OpenSSL estatico.")
         endif()
-        # applink solo es necesario al mezclar OpenSSL-DLL con el CRT del .exe.
-        add_library(applink STATIC
-                libs/Windows/OpenSSL-Win64/include/openssl/applink.c)
-        target_include_directories(vesta_openssl INTERFACE ${OPENSSL_INCLUDE_DIR})
-        target_link_directories(vesta_openssl INTERFACE ${OPENSSL_LIB_DIR})
-        target_link_libraries(vesta_openssl INTERFACE libssl libcrypto ws2_32 applink)
+        target_include_directories(vesta_openssl INTERFACE "${VESTA_OSSL_STATIC_INCLUDE}")
+        # ssl antes que crypto; luego las deps Win32 de OpenSSL (crypt32 =
+        # almacen de certificados; gdi32/ws2_32 = RNG y sockets).
+        target_link_libraries(vesta_openssl INTERFACE
+                "${VESTA_OSSL_STATIC_SSL}" "${VESTA_OSSL_STATIC_CRYPTO}"
+                crypt32 gdi32 ws2_32)
     endif ()
+    # Siempre estatico -> el empaquetado NO envia DLLs (VestaPackaging.cmake).
+    set(VESTA_OPENSSL_STATIC ON CACHE INTERNAL "OpenSSL embebido en el binario")
 else ()
     find_package(OpenSSL REQUIRED)
     target_link_libraries(vesta_openssl INTERFACE OpenSSL::SSL OpenSSL::Crypto)
@@ -261,6 +241,48 @@ endif ()
 # Decision arquitectonica: el frontend del HLL se compila
 # fuera del GLOB principal y se enlaza al ejecutable como dependencia
 # explicita, prefigurando la futura libvesta_rt.
+# ---------------------------------------------------------------------------
+# vxdbg: el grafo de conocimiento del programa.
+#
+# Libreria propia y no parte del frontend porque no es de ningun lenguaje NI de
+# ninguna maquina: lo producen los compiladores y lo consume quien depura, y los
+# dos tienen que poder enlazarlo sin arrastrarse el uno al otro.  Mientras vivio
+# dentro del frontend, el runtime no podia usarlo -- no puede depender de el --
+# y la traza de un fallo se quedaba sin poder explicar nada.
+# ---------------------------------------------------------------------------
+add_library(vxdbg_lib STATIC
+    src/vxdbg/ids.cpp
+    src/vxdbg/serialize.cpp
+    src/vxdbg/store.cpp
+    src/vxdbg/lowering_map.cpp
+    src/vxdbg/backend_meta.cpp
+    src/vxdbg/codec_source.cpp
+    src/vxdbg/codec_backend.cpp
+    src/vxdbg/semantic_resolve.cpp
+    src/vxdbg/roots.cpp
+    src/vxdbg/store_source.cpp
+    src/vxdbg/resolver.cpp
+    src/vxdbg/capabilities.cpp
+)
+target_include_directories(vxdbg_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+# Los codecs comparten un header interno que no es parte de su API publica.
+target_include_directories(vxdbg_lib PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/vxdbg)
+target_compile_features(vxdbg_lib PUBLIC cxx_std_17)
+
+# ---------------------------------------------------------------------------
+# diag_lib: el catalogo de diagnosticos, en todos los idiomas.
+#
+# Libreria propia por el mismo motivo que vxdbg: no es del frontend.  Los
+# fallos en EJECUCION tambien son diagnosticos y tambien se cuentan en el
+# idioma de quien los lee, y el runtime no puede depender del compilador.
+# ---------------------------------------------------------------------------
+add_library(diag_lib STATIC
+    src/vx/diag/diag_catalog.cpp
+    src/vx/gen/diag_catalog_gen.cpp
+)
+target_include_directories(diag_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_features(diag_lib PUBLIC cxx_std_17)
+
 add_subdirectory(src/vx)
 
 # Sources del ejecutable principal.  Se EXCLUYEN los .cpp de src/vx/
@@ -279,6 +301,9 @@ list(FILTER VM_SOURCES EXCLUDE REGEX "/src/port/")
 # de diagramas (tambien en vx_lib) puedan anotar el coste por funcion.  Solo
 # depende de ir::IrModule.  Excluir aqui para evitar definicion duplicada.
 list(FILTER VM_SOURCES EXCLUDE REGEX "/src/analyze/")
+# El subsistema de depuracion (vxdbg) se compila dentro de vx_lib, que es quien
+# lo puebla desde el frontend.  Excluirlo aqui para no definirlo dos veces.
+list(FILTER VM_SOURCES EXCLUDE REGEX "/src/vxdbg/")
 # La API C embebible (src/capi/) solo forma parte de la libreria compartida
 # vesta_ffi (con VESTA_BUILD_DLL); excluirla del ejecutable `vm` y de vmcore
 # para no compilar sus definiciones dllexport/dllimport fuera de contexto.
@@ -495,6 +520,8 @@ target_compile_options(vm PRIVATE
 add_library(vmcore STATIC ${VM_SOURCES})
 target_include_directories(vmcore PRIVATE ${VM_INCLUDES})
 target_link_libraries(vmcore
+        PUBLIC vxdbg_lib
+        PUBLIC diag_lib
         PRIVATE sqlite3
         PRIVATE capstone
         PRIVATE keystone
@@ -825,6 +852,404 @@ else ()
     target_link_libraries(test_arm64_select PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# Banco de registros fisico unico (allocator de banco ancho, Fase 0):
+# consolidacion de TargetRegInfo + BackendCaps en un modelo comun (Lane/View/
+# SavePolicy/AliasSet/Reserve).  Test de round-trip contra los targets.
+# Subsistema de depuracion (vxdbg): identidad por contenido y capacidades.
+# No enlaza con el resto del compilador a proposito -- el subsistema esta
+# pensado para ser reutilizable por cualquier frontend, y si su test necesitara
+# media maquina virtual para arrancar es que esa independencia no seria cierta.
+add_executable(test_vxdbg_core tests/vxdbg/test_vxdbg_core.cpp
+                               src/vxdbg/ids.cpp
+                               src/vxdbg/capabilities.cpp)
+target_include_directories(test_vxdbg_core PRIVATE ${VM_INCLUDES})
+
+# Serializacion y almacen por contenido: el mismo juego de pruebas se pasa al
+# almacen de memoria y al de disco, porque si no se comportaran igual, probar
+# contra uno no diria nada del otro.
+add_executable(test_vxdbg_store tests/vxdbg/test_vxdbg_store.cpp
+                                src/vxdbg/ids.cpp
+                                src/vxdbg/serialize.cpp
+                                src/vxdbg/store.cpp)
+target_include_directories(test_vxdbg_store PRIVATE ${VM_INCLUDES})
+
+# Serializacion de cada nodo.  Comprueba, sobre todo, que la identidad de un
+# nodo ES su serializacion: si dos iguales dieran huellas distintas no se
+# reutilizaria nada, y si dos distintos dieran la misma el almacen serviria uno
+# por otro.
+add_executable(test_vxdbg_codec tests/vxdbg/test_vxdbg_codec.cpp
+                                src/vxdbg/ids.cpp
+                                src/vxdbg/serialize.cpp
+                                src/vxdbg/store.cpp
+                                src/vxdbg/lowering_map.cpp
+                                src/vxdbg/codec_source.cpp
+                                src/vxdbg/codec_backend.cpp
+                                src/vxdbg/semantic_resolve.cpp
+                                src/vxdbg/roots.cpp)
+target_include_directories(test_vxdbg_codec PRIVATE ${VM_INCLUDES} src/vxdbg)
+
+# El recorrido completo: de una direccion a una explicacion.  Cada capa esta
+# probada por su cuenta, pero eso no dice si el camino entero funciona -- es
+# justo donde se ven los desajustes entre piezas que por separado estan bien.
+# El unico que enlaza con el frontend: comprueba que lo que el compilador SABE
+# cabe en el modelo, cosa que un grafo escrito a mano nunca puede demostrar.
+add_executable(test_vxdbg_frontend tests/vxdbg/test_vxdbg_frontend.cpp)
+target_include_directories(test_vxdbg_frontend PRIVATE ${VM_INCLUDES})
+# Enlaza tambien vmcore porque el checker puede ejecutar codigo comptime, y eso
+# necesita la maquina virtual entera.  Los otros tests del subsistema NO enlazan
+# nada de esto: son la prueba de que vxdbg no depende del compilador.
+# vx_lib aparece dos veces a proposito: las dos librerias se necesitan
+# mutuamente y el enlazador recorre la lista una sola vez.
+target_link_libraries(test_vxdbg_frontend PRIVATE vx_lib vmcore vx_lib
+        vesta_openssl)
+set_target_properties(test_vxdbg_frontend PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_executable(test_vxdbg_resolve tests/vxdbg/test_vxdbg_resolve.cpp
+                                  src/vxdbg/ids.cpp
+                                  src/vxdbg/serialize.cpp
+                                  src/vxdbg/store.cpp
+                                  src/vxdbg/lowering_map.cpp
+                                  src/vxdbg/backend_meta.cpp
+                                  src/vxdbg/codec_source.cpp
+                                  src/vxdbg/codec_backend.cpp
+                                  src/vxdbg/store_source.cpp
+                                  src/vxdbg/resolver.cpp)
+target_include_directories(test_vxdbg_resolve PRIVATE ${VM_INCLUDES} src/vxdbg)
+
+add_executable(test_rbank_physical tests/jit/test_rbank_physical.cpp)
+target_include_directories(test_rbank_physical PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_physical PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_physical PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_physical PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_physical PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# ValueRequirements (banco ancho, Fase 0 nivel 1): que necesita un valor +
+# satisfacibilidad contra el banco fisico (motivos como DATO i18n-ready).
+add_executable(test_rbank_value_req tests/jit/test_rbank_value_req.cpp)
+target_include_directories(test_rbank_value_req PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_value_req PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_value_req PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_value_req PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_value_req PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# Constraints (banco ancho, Fase 0 nivel 2): feasibilidad DURA + verificador de
+# soluciones (validate_assignment), con violaciones como DATO i18n-ready.
+add_executable(test_rbank_constraints tests/jit/test_rbank_constraints.cpp)
+target_include_directories(test_rbank_constraints PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_constraints PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_constraints PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_constraints PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_constraints PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# Objective (banco ancho, Fase 0 nivel 3): framework de scoring SUAVE +
+# estimadores (spill/callsave/move) que interpretan los hechos como preferencias.
+add_executable(test_rbank_objective tests/jit/test_rbank_objective.cpp)
+target_include_directories(test_rbank_objective PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_objective PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_objective PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_objective PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_objective PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# OptimizationContext + DecisionPolicy (banco ancho, Fase 0 cuspide): firma
+# estable + seleccion determinista (Predictor hook), con explicacion como DATO.
+add_executable(test_rbank_decision tests/jit/test_rbank_decision.cpp)
+target_include_directories(test_rbank_decision PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_decision PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_decision PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_decision PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_decision PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# TypeAdapter (banco ancho, Fase 0.25): IrType -> clase + width.  Primer
+# adaptador (solo traduce, no inventa logica); reusa memory_access_size.
+add_executable(test_rbank_type_adapter tests/jit/test_rbank_type_adapter.cpp)
+target_include_directories(test_rbank_type_adapter PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_type_adapter PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_type_adapter PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_type_adapter PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_type_adapter PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# LivenessAdapter (Fase 0.25): liveness + call positions -> crosses_call.
+# Integracion con compute_liveness real (valida linealizacion consistente).
+add_executable(test_rbank_liveness_adapter tests/jit/test_rbank_liveness_adapter.cpp)
+target_include_directories(test_rbank_liveness_adapter PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_liveness_adapter PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_liveness_adapter PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_liveness_adapter PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_liveness_adapter PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# ConstAdapter (Fase 0.25): is_const -> rematerializable.
+add_executable(test_rbank_const_adapter tests/jit/test_rbank_const_adapter.cpp)
+target_include_directories(test_rbank_const_adapter PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_const_adapter PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_const_adapter PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_const_adapter PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_const_adapter PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# LoopFacts (analysis) + LoopAdapter (banco ancho, Fase 0.25.4): deteccion de
+# bucles unificada (profundidad/header/parent) + adaptador loop_depth.
+add_executable(test_loop_facts tests/analysis/test_loop_facts.cpp)
+target_include_directories(test_loop_facts PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_loop_facts PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_loop_facts PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_loop_facts PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_loop_facts PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+add_executable(test_rbank_loop_adapter tests/jit/test_rbank_loop_adapter.cpp)
+target_include_directories(test_rbank_loop_adapter PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_loop_adapter PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_loop_adapter PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_loop_adapter PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_loop_adapter PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# ProfileFacts (analysis/derived, fact Tipo B) + ProfileAdapter (banco ancho):
+# perfil centralizado -> trip-count/peso por bloque + adaptador execution_weight.
+add_executable(test_profile_facts tests/analysis/test_profile_facts.cpp)
+target_include_directories(test_profile_facts PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_profile_facts PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_profile_facts PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_profile_facts PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_profile_facts PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+add_executable(test_rbank_profile_adapter tests/jit/test_rbank_profile_adapter.cpp)
+target_include_directories(test_rbank_profile_adapter PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_profile_adapter PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_profile_adapter PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_profile_adapter PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_profile_adapter PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# build_value_requirements (snapshot vivo) + auditor: corre los adaptadores sobre
+# una funcion real y detecta valores imposibles.
+add_executable(test_rbank_build tests/jit/test_rbank_build.cpp)
+target_include_directories(test_rbank_build PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_build PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_build PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_build PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_build PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# FunctionSnapshot (codegen/rbank): fotografia del conocimiento del compilador
+# sobre una funcion (Facts + ValueRequirements) + autocertificacion agregada.
+add_executable(test_rbank_snapshot tests/jit/test_rbank_snapshot.cpp)
+target_include_directories(test_rbank_snapshot PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_snapshot PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_snapshot PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_snapshot PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_snapshot PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+add_executable(test_rbank_roundtrip tests/jit/test_rbank_roundtrip.cpp)
+target_include_directories(test_rbank_roundtrip PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_roundtrip PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_roundtrip PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_roundtrip PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_roundtrip PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+add_executable(test_rbank_canonical tests/jit/test_rbank_canonical.cpp)
+target_include_directories(test_rbank_canonical PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_canonical PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_canonical PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_canonical PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_canonical PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+add_executable(test_rbank_shadow tests/jit/test_rbank_shadow.cpp)
+target_include_directories(test_rbank_shadow PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_shadow PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_shadow PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_shadow PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_shadow PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+add_executable(test_rbank_smart_spill tests/jit/test_rbank_smart_spill.cpp)
+target_include_directories(test_rbank_smart_spill PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_smart_spill PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_smart_spill PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_smart_spill PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_smart_spill PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+add_executable(test_rbank_crosscall tests/jit/test_rbank_crosscall.cpp)
+target_include_directories(test_rbank_crosscall PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_crosscall PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_crosscall PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_crosscall PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_crosscall PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+add_executable(test_rbank_bridge tests/jit/test_rbank_bridge.cpp)
+target_include_directories(test_rbank_bridge PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_bridge PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_bridge PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_bridge PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_bridge PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+add_executable(test_remat_facts tests/jit/test_remat_facts.cpp)
+target_include_directories(test_remat_facts PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_remat_facts PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_remat_facts PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_remat_facts PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_remat_facts PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+add_executable(test_use_def_facts tests/jit/test_use_def_facts.cpp)
+target_include_directories(test_use_def_facts PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_use_def_facts PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_use_def_facts PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_use_def_facts PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_use_def_facts PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+add_executable(test_next_use tests/jit/test_next_use.cpp)
+target_include_directories(test_next_use PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_next_use PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_next_use PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_next_use PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_next_use PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+add_executable(test_rbank_coalesce tests/jit/test_rbank_coalesce.cpp)
+target_include_directories(test_rbank_coalesce PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_rbank_coalesce PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_rbank_coalesce PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_rbank_coalesce PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_rbank_coalesce PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+add_executable(test_vec_acc_demand tests/jit/test_vec_acc_demand.cpp)
+target_include_directories(test_vec_acc_demand PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_vec_acc_demand PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_vec_acc_demand PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_vec_acc_demand PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_vec_acc_demand PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+add_executable(test_machine_cost_facts tests/jit/test_machine_cost_facts.cpp)
+target_include_directories(test_machine_cost_facts PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_machine_cost_facts PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_machine_cost_facts PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_machine_cost_facts PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_machine_cost_facts PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 # ---------------------------------------------------------------------------
 # libvesta: DLL/.so con C-ABI estable para embeber VestaVM en cualquier
 # lenguaje (Python via ctypes, Rust FFI, C#, C, ...).  Expone
@@ -890,10 +1315,14 @@ if (VESTA_BUILD_FFI)
         target_link_libraries(vesta_ffi PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
     endif ()
 
-    # Auto-build: construir el ejecutable `vm` arrastra la construccion de
-    # libvesta.  Asi `cmake --build . --target vm` produce SIEMPRE el DLL/.so
-    # junto al .exe sin que el usuario tenga que pedir el target explicito.
-    add_dependencies(vm vesta_ffi)
+    # Auto-build opt-in: por defecto `cmake --build . --target vm` produce SOLO
+    # el ejecutable (iteracion rapida: un solo enlace).  Con -DVESTA_VM_BUILDS_FFI=ON
+    # tambien arrastra libvesta.dll/.so.  Para construir la DLL a demanda:
+    # `cmake --build . --target vesta_ffi`.
+    option(VESTA_VM_BUILDS_FFI "Construir libvesta junto al ejecutable vm" OFF)
+    if (VESTA_VM_BUILDS_FFI)
+        add_dependencies(vm vesta_ffi)
+    endif ()
 endif ()
 
 # ---------------------------------------------------------------------------
@@ -1007,6 +1436,8 @@ set(VESTA_RT_SOURCES
 
         # Opcion W Fase 3b: serializer IR.  Necesario para que el Loader
         # (en vesta_rt) deserialize la seccion @ir del .velb v3.
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/ir/ir_facts.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/ir/ir_pattern.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ir/ssa_ir.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ir/ssa_ir_serialize.cpp
 )

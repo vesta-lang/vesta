@@ -83,9 +83,9 @@ void settings_save(EditorSettings s) {
     string ln1 = "line_numbers=${s.show_line_numbers}\n";
     string ln2 = "whitespace=${s.show_whitespace}\n";
     string ln3 = "sidebar=${s.show_sidebar}\n";
-    file_io.write_bytes(fp, str_cstr(ln1), (i32) str_bytes(ln1));
-    file_io.write_bytes(fp, str_cstr(ln2), (i32) str_bytes(ln2));
-    file_io.write_bytes(fp, str_cstr(ln3), (i32) str_bytes(ln3));
+    file_io.write_bytes(fp, ln1.cstr(), (i32) ln1.bytes());
+    file_io.write_bytes(fp, ln2.cstr(), (i32) ln2.bytes());
+    file_io.write_bytes(fp, ln3.cstr(), (i32) ln3.bytes());
     file_io.close_file(fp);
 }
 
@@ -185,9 +185,9 @@ class Sidebar {
         if (this.is_dirs[idx] != 1) return;
         if (this.is_expanded[idx] == 1) return;
         // Construir el path absoluto del dir: cwd + "\\" + relname.
-        i32 cwd_n = (i32) str_bytes(this.cwd);
+        i32 cwd_n = (i32) this.cwd.bytes();
         i32 rel_n = this.lens[idx];
-        u8* cwd_c = str_cstr(this.cwd);
+        u8* cwd_c = this.cwd.cstr();
         u8* rel_c = this.names + this.offsets[idx];
         u8* spec = malloc(cwd_n + rel_n + 5);
         i32 z = 0;
@@ -326,8 +326,8 @@ class Sidebar {
         this.count      = 0;
         this.names_used = 0;
         // Construir el spec "<cwd>\*" en un buffer host.
-        u8* cwd_c = str_cstr(this.cwd);
-        i32 cwd_n = (i32) str_bytes(this.cwd);
+        u8* cwd_c = this.cwd.cstr();
+        i32 cwd_n = (i32) this.cwd.bytes();
         u8* spec = malloc(cwd_n + 8);
         i32 i = 0;
         while (i < cwd_n) { spec[i] = cwd_c[i]; i = i + 1; }
@@ -396,9 +396,9 @@ class Sidebar {
     // Construye el path absoluto cwd + "\\" + entry_name(i).
     public string entry_path(i32 i) {
         if (i < 0 || i >= this.count) return this.cwd;
-        i32 cwd_n = (i32) str_bytes(this.cwd);
+        i32 cwd_n = (i32) this.cwd.bytes();
         i32 en    = this.lens[i];
-        u8* cwd_c = str_cstr(this.cwd);
+        u8* cwd_c = this.cwd.cstr();
         u64 total = (u64)(cwd_n + en + 2);
         u8* buf   = malloc(total);
         i32 k = 0;
@@ -458,7 +458,7 @@ void render_tab_bar(tabs.Workspace ws, screen.Screen sc) {
         diag_log("RTB:6 pre-label cur_id=${cur.id}");
         string label = " ${idx} ${cur.title}${mark} ";
         diag_log("RTB:7 post-label");
-        i32 lblen = (i32) str_bytes(label);
+        i32 lblen = (i32) label.bytes();
         if (col_used + lblen > max_col) break;
         if (cur.id == active_id) print(screen.ATTR_INVERT);
         else                     print(screen.ATTR_DIM);
@@ -851,7 +851,7 @@ void show_help_line(i32 row, i32 left, i32 inner_w, string label, string desc,
     print(label);
     print(screen.ATTR_RESET);
     // Padding entre label y desc: alinear desc a columna 22 del interior.
-    i32 lblen = (i32) str_bytes(label);
+    i32 lblen = (i32) label.bytes();
     i32 pad = 22 - lblen;
     if (pad < 1) pad = 1;
     i32 k = 0;
@@ -860,7 +860,7 @@ void show_help_line(i32 row, i32 left, i32 inner_w, string label, string desc,
     print(desc);
     print(screen.ATTR_RESET);
     // Padding final hasta el borde derecho.
-    i32 used = 1 + 1 + lblen + pad + (i32) str_bytes(desc);
+    i32 used = 1 + 1 + lblen + pad + (i32) desc.bytes();
     while (used < inner_w + 1) { print(" "); used = used + 1; }
     print("\x1b[38;2;189;147;249m");
     print("|");
@@ -876,20 +876,20 @@ void show_help_render_entry(i32 row, i32 left, i32 inner_w, HelpEntry e,
     if (e.kind == 1) {
         print(" "); print(col_sec); print(screen.ATTR_BOLD);
         print(e.label); print(screen.ATTR_RESET);
-        i32 used = 1 + (i32) str_bytes(e.label) + 1;
+        i32 used = 1 + (i32) e.label.bytes() + 1;
         while (used < inner_w + 1) { print(" "); used = used + 1; }
     } else if (e.kind == 2) {
         i32 j = 0;
         while (j < inner_w) { print(" "); j = j + 1; }
     } else {
         print("   "); print(col_kw); print(e.label); print(screen.ATTR_RESET);
-        i32 lblen = (i32) str_bytes(e.label);
+        i32 lblen = (i32) e.label.bytes();
         i32 pad = 22 - lblen;
         if (pad < 1) pad = 1;
         i32 k = 0;
         while (k < pad) { print(" "); k = k + 1; }
         print("\x1b[38;2;248;248;242m"); print(e.desc); print(screen.ATTR_RESET);
-        i32 used = 3 + lblen + pad + (i32) str_bytes(e.desc);
+        i32 used = 3 + lblen + pad + (i32) e.desc.bytes();
         while (used < inner_w + 1) { print(" "); used = used + 1; }
     }
     print(col_bord); print("|"); print(screen.ATTR_RESET);
@@ -977,7 +977,7 @@ void show_help_overlay(screen.Screen sc) {
         print(col_bord);
         print("+");
         string title = " vxed - ayuda ";
-        i32 tlen = (i32) str_bytes(title);
+        i32 tlen = (i32) title.bytes();
         i32 lpad = (inner_w - tlen) / 2;
         if (lpad < 0) lpad = 0;
         i32 i2 = 0;
@@ -1018,7 +1018,7 @@ void show_help_overlay(screen.Screen sc) {
         i32 last_visible = scroll_off + content_h;
         if (last_visible > entry_count) last_visible = entry_count;
         string foot = " ${last_visible}/${entry_count}  Up/Down/PgUp/PgDn  Esc=cerrar ";
-        i32 flen = (i32) str_bytes(foot);
+        i32 flen = (i32) foot.bytes();
         i32 fpad = (inner_w - flen) / 2;
         if (fpad < 0) fpad = 0;
         i32 j2 = 0;
@@ -1094,11 +1094,11 @@ i32 g_diag_sink = 0;
 void diag_log(string msg) {
     // DIAGNOSTICO FORZADO (bug C): siempre escribe + flush para que el log
     // tenga el ultimo entry antes del crash.  Sin el gate DEBUG_LOG.
-    g_diag_sink = (i32) str_bytes(msg);
+    g_diag_sink = (i32) msg.bytes();
     Result<i64, i32> rfp = file_io.open_file("vxed_diag.log", "ab");
     if (!isOk(rfp)) return;
     i64 fp = value(rfp);
-    file_io.write_bytes(fp, str_cstr(msg), (i32) str_bytes(msg));
+    file_io.write_bytes(fp, msg.cstr(), (i32) msg.bytes());
     u8* nl = malloc(1);
     nl[0] = 10;
     file_io.write_bytes(fp, nl, 1);
@@ -1107,9 +1107,9 @@ void diag_log(string msg) {
 }
 
 tabs.EditorTab make_tab(string path, string display_title) {
-    diag_log("make_tab ENTRY title='${display_title}' path_bytes=${str_bytes(path)}");
+    diag_log("make_tab ENTRY title='${display_title}' path_bytes=${path.bytes()}");
     tabs.EditorTab t = new tabs.EditorTab(display_title);
-    if (str_bytes(path) <= 0) {
+    if (path.bytes() <= 0) {
         make_tab_last_status = -1;
         make_tab_last_err    = 0;
         diag_log("make_tab EARLY_RETURN path vacio");
@@ -1235,8 +1235,8 @@ i32 main() {
     tabs.Workspace ws = new tabs.Workspace();
     if (lr.mode == launcher.LR_FILE) {
         // Extraer el basename para el titulo de la pestana.
-        u8* pc = str_cstr(lr.path);
-        i32 pn = (i32) str_bytes(lr.path);
+        u8* pc = lr.path.cstr();
+        i32 pn = (i32) lr.path.bytes();
         i32 cut = pn;
         while (cut > 0 && pc[cut - 1] != (u8) 92 && pc[cut - 1] != (u8) 47) {
             cut = cut - 1;
@@ -1245,8 +1245,8 @@ i32 main() {
         ws.open_tab(make_tab(lr.path, title));
     } else if (lr.mode == launcher.LR_NEW) {
         // Nuevo: titulo = nombre del fichero (basename), buffer vacio.
-        u8* pc = str_cstr(lr.path);
-        i32 pn = (i32) str_bytes(lr.path);
+        u8* pc = lr.path.cstr();
+        i32 pn = (i32) lr.path.bytes();
         i32 cut = pn;
         while (cut > 0 && pc[cut - 1] != (u8) 92 && pc[cut - 1] != (u8) 47) {
             cut = cut - 1;
@@ -1363,9 +1363,9 @@ i32 main() {
                         string nm = sb.entry_name(sb.sel);
                         // ".." sigue siendo cd-up (replace cwd).  Otros dirs:
                         // F3 toggle expand/collapse en lugar de cd.
-                        if (str_equals(nm, "..")) {
-                            u8* c = str_cstr(sb.cwd);
-                            i32 nL = (i32) str_bytes(sb.cwd);
+                        if (nm.equals("..")) {
+                            u8* c = sb.cwd.cstr();
+                            i32 nL = (i32) sb.cwd.bytes();
                             i32 cut = nL;
                             while (cut > 0 && c[cut - 1] != (u8) 92) cut = cut - 1;
                             if (cut > 0) cut = cut - 1;
@@ -1383,7 +1383,7 @@ i32 main() {
                     } else {
                         string p = sb.entry_path(sb.sel);
                         string nm = sb.entry_name(sb.sel);
-                        i32 plen = (i32) str_bytes(p);
+                        i32 plen = (i32) p.bytes();
                         tabs.EditorTab new_t = make_tab(p, nm);
                         ws.open_tab(new_t);
                         tabs.EditorTab chk = ws.active;
@@ -1619,7 +1619,7 @@ i32 main() {
             }
         } else if (key == keys.KEY_CTRL_O) {
             string newname = prompt(sc, "Guardar como");
-            if (str_bytes(newname) > 0) {
+            if (newname.bytes() > 0) {
                 Result<i64, i32> rsave = file_io.save_buffer(newname, b);
                 if (isOk(rsave)) {
                     tab.title = newname;
@@ -1632,7 +1632,7 @@ i32 main() {
             sc.clear();
         } else if (key == keys.KEY_CTRL_F) {
             string needle = prompt(sc, "Buscar");
-            if (str_bytes(needle) > 0) {
+            if (needle.bytes() > 0) {
                 tab.last_needle = needle;
                 i64 idx = search.find_from(b, needle, b.cursor + 1);
                 if (idx < 0) idx = search.find(b, needle);  // wrap
@@ -1647,7 +1647,7 @@ i32 main() {
             sc.clear();
         } else if (key == keys.VK_F3) {
             // F3 = repetir ultima busqueda (sin pedir patron).
-            if (str_bytes(tab.last_needle) == 0) {
+            if (tab.last_needle.bytes() == 0) {
                 status_msg = "sin patron previo; usa Ctrl-F primero";
             } else {
                 string nd = tab.last_needle;
@@ -1664,10 +1664,10 @@ i32 main() {
         } else if (key == keys.KEY_CTRL_G) {
             // Goto line: pide numero (1-based).
             string ln_str = prompt(sc, "Ir a linea");
-            if (str_bytes(ln_str) > 0) {
+            if (ln_str.bytes() > 0) {
                 // Parseo decimal manual desde el StringObject.
-                u8* p = str_cstr(ln_str);
-                i32 n_bytes = (i32) str_bytes(ln_str);
+                u8* p = ln_str.cstr();
+                i32 n_bytes = (i32) ln_str.bytes();
                 i32 v = 0;
                 i32 j = 0;
                 while (j < n_bytes) {
@@ -1767,7 +1767,7 @@ i32 main() {
             // Ctrl-P: fuzzy file picker.  Lista recursiva desde sb.cwd (o
             // cwd de proceso si no hay sidebar Project).  Modal interactivo.
             string picker_cwd = sb.cwd;
-            if (str_bytes(picker_cwd) == 0) picker_cwd = ".";
+            if (picker_cwd.bytes() == 0) picker_cwd = ".";
             file_picker.FilePicker fp = new file_picker.FilePicker(picker_cwd);
             fp.populate();
             sc.hide_cursor();
@@ -1780,7 +1780,7 @@ i32 main() {
                     // Seleccionado: abrir el fichero.
                     string p = fp.selected_path();
                     string nm = fp.selected_name();
-                    if (str_bytes(p) > 0) {
+                    if (p.bytes() > 0) {
                         ws.open_tab(make_tab(p, nm));
                         sc.clear();
                         status_msg = "abierto via Ctrl-P: ${nm}";

@@ -44,6 +44,10 @@ struct IrFunction;
 }
 
 namespace jit {
+struct LineMapEntry; ///< correlacion codigo-nativo <-> linea (machine_ir.h)
+}
+
+namespace jit {
 
 /**
  * @brief Threshold global de invocaciones para auto-JIT.
@@ -152,6 +156,22 @@ extern uint64_t g_vx_swapctx_native;
  * @return la direccion nativa de __vx_swapctx, o 0 si no se pudo compilar.
  */
 uint64_t ensure_vx_swapctx_native(runtime::ProcessVM *vm) noexcept;
+
+/**
+ * @brief Inicializa el subsistema JIT (idempotente) y devuelve la direccion del
+ *        handler de safepoint (@c vrt_safepoint_handler).  La usa el modo CTPE
+ *        para activar los polls de watchdog en el codigo precomputado.  0 si el
+ *        subsistema no pudo inicializarse.
+ */
+uint64_t jit_safepoint_handler_addr() noexcept;
+
+/**
+ * @brief Activa/desactiva el watchdog CTPE: setea la direccion del handler de
+ *        safepoint en la CodeCache global.  Con != 0, el codegen vreg emite un
+ *        poll en cada back-edge de las funciones compiladas.  0 = off.  Debe
+ *        restaurarse a 0 tras compilar el programa a precomputar.
+ */
+void jit_set_ctpe_safepoint(uint64_t handler_addr) noexcept;
 
 /**
  * @brief Devuelve un snapshot legible del estado del JIT
@@ -279,7 +299,9 @@ extern bool g_pc_jit_active;
  * @param fn    Puntero al codigo nativo (calling convention
  *              @c JitFn(vrt_proc*) -> uint64_t).
  */
-void register_jit_code_at_pc(uint64_t vaddr, void *fn) noexcept;
+void register_jit_code_at_pc(uint64_t vaddr, void *fn, size_t code_size = 0,
+                             const std::vector<LineMapEntry> *line_map =
+                                 nullptr) noexcept;
 
 /**
  * @brief Lookup O(1) amortizado: devuelve el ptr nativo si la funcion
@@ -292,6 +314,62 @@ void register_jit_code_at_pc(uint64_t vaddr, void *fn) noexcept;
  * @return      Codigo JIT o @c nullptr.
  */
 void *lookup_jit_code_at_pc(uint64_t vaddr) noexcept;
+
+/**
+ * @brief De una direccion de codigo NATIVO a la funcion que la contiene.
+ *
+ * La busqueda al reves de @c lookup_jit_code_at_pc.  Sirve para explicar un
+ * fallo ocurrido dentro de codigo compilado: ahi el PC de la maquina virtual
+ * no se va actualizando -- ese es el punto de compilar --, de modo que lo
+ * unico fiable es la direccion nativa del fallo.
+ *
+ * @param native_pc Direccion donde fallo el codigo nativo.
+ * @param[out] out_vaddr Direccion virtual de la funcion que la contiene.
+ * @return true si cae dentro de alguna.  El hallazgo va aparte del valor
+ *         porque 0 es una direccion valida y no puede hacer de "no
+ *         encontrado".
+ */
+bool lookup_vaddr_by_native_pc(uint64_t native_pc,
+                               uint64_t &out_vaddr) noexcept;
+
+/**
+ * @brief Apunta SOLO que trozo de memoria ocupa el codigo de una funcion.
+ *
+ * Sin tocar a donde despacha una llamada, que es cosa distinta y no siempre se
+ * decide en el mismo sitio.  Lo necesita @c lookup_vaddr_by_native_pc para
+ * poder atribuir un fallo ocurrido en codigo nativo.
+ *
+ * @param vaddr Direccion virtual de la funcion (0 es valida: el codigo
+ *              empieza ahi).
+ * @param fn Inicio de su codigo nativo.
+ * @param code_size Cuanto ocupa.
+ */
+void register_jit_region(uint64_t vaddr, void *fn, size_t code_size,
+                         const std::vector<LineMapEntry> *line_map = nullptr) noexcept;
+
+/**
+ * @brief En que linea del fuente estaba el codigo NATIVO que fallo.
+ *
+ * @param native_pc Direccion del fallo.
+ * @param[out] out_line Linea del fuente.
+ * @return true si se pudo determinar.
+ */
+bool lookup_line_by_native_pc(uint64_t native_pc, uint32_t &out_line) noexcept;
+
+/**
+ * @brief El trozo de codigo NATIVO que contiene una direccion.
+ *
+ * Para poder ensenar que se estaba ejecutando de verdad cuando lo que corrio
+ * fue codigo compilado: ahi las instrucciones de la maquina virtual no son las
+ * que se ejecutaron.
+ *
+ * @param native_pc Direccion dentro del codigo.
+ * @param[out] out_inicio Primer byte del codigo de esa funcion.
+ * @param[out] out_tam Cuanto ocupa.
+ * @return true si la direccion cae dentro de alguna funcion compilada.
+ */
+bool lookup_region_by_native_pc(uint64_t native_pc, uint64_t &out_inicio,
+                                uint64_t &out_tam) noexcept;
 
 /**
  * @brief Limpia el mapa @c pc -> jit_code (no libera el code cache).

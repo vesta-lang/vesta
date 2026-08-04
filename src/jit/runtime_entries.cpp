@@ -159,6 +159,7 @@ void RuntimeEntries::resolve() {
     str_get_bytes = &vrt_str_get_bytes;
     str_raw = &vrt_str_raw;
     str_cat = &vrt_str_cat;
+    str_slice = &vrt_str_slice;
     str_cmp = &vrt_str_cmp;
     // ----- Panic + GC alloc payload -----
     panic_str = &vrt_panic_str;
@@ -197,6 +198,7 @@ bool RuntimeEntries::all_resolved() const noexcept {
            defmethod && addadvice && findmethod && findfield && setmethdbg &&
            str_make && str_make_h && str_len && str_get_bytes && str_raw &&
            str_cat &&
+           str_slice &&
            str_cmp && panic_str && gc_alloc_payload && safepoint_poll &&
            safepoint_handler;
 }

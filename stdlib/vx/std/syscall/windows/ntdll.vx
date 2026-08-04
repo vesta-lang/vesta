@@ -1,0 +1,54 @@
+namespace std.syscall.windows.ntdll;
+
+
+/**
+ * Resolucion de exports de ntdll a traves del CARGADOR de Windows.
+ *
+ * Modulo HOJA: solo depende de std.types, de modo que tanto std.syscall.windows
+ * como las implementaciones por-arch pueden importarlo sin recrear el ciclo
+ * windows -> arch -> windows.
+ *
+ * Vive fuera de los modulos por-arch porque la resolucion POR NOMBRE no depende
+ * de la arquitectura: es identica en x86-64 y x86-32.  Los modulos por-arch
+ * quedan reservados a esquemas que si dependan de la ISA.
+ */
+
+extern "kernel32.dll" {
+    fn LoadLibraryA(u8* path) -> u64;
+    fn GetProcAddress(u64 hModule, u8* name) -> u64;
+}
+
+/**
+ * Localiza un export de ntdll por nombre.
+ *
+ * Es una funcion PURA nombre -> direccion: no toca el contexto de la syscall,
+ * asi que no se acopla a su layout (mismo criterio que std.syscall.abi) y se
+ * puede sustituir o probar de forma aislada.  El cacheo corre a cargo de quien
+ * la invoca, que guarda el resultado en el contexto.
+ *
+ * Se resuelve por el cargador y no por la tabla de exports en crudo porque el
+ * nombre exportado es lo UNICO estable entre versiones de Windows: la
+ * convencion NT, la forma de los stubs y el entorno (WOW64, Arm64EC) han
+ * variado entre builds.
+ *
+ * El coste se paga una sola vez por contexto; despues, el envoltorio hace una
+ * unica llamada indirecta al nivel NT, sin atravesar la capa Win32 (kernel32),
+ * que es el sobrecoste que se quiere evitar.
+ *
+ * Devuelve un `void*` (puntero HOST) y no un entero a proposito: asi la
+ * naturaleza host de la direccion viaja en el tipo y la llamada indirecta que
+ * haga el envoltorio se despacha por la via nativa.
+ *
+ * @param name Nombre del export.
+ * @return Direccion del export, o null si no se pudo resolver.
+ */
+public void* resolve_ntdll_export(string name) {
+    // str_cstr y no un cast crudo del literal: `(u8*) "..."` entrega el puntero
+    // a static_data, que ni esta NUL-terminado ni es una direccion host valida.
+    u64 ntdll = LoadLibraryA("ntdll.dll".cstr());
+    if (ntdll == 0) {
+        return (void*) 0;               // ntdll no disponible: decide el caller.
+    }
+    // null si el simbolo no existe en esta version de Windows.
+    return (void*) GetProcAddress(ntdll, name.cstr());
+}

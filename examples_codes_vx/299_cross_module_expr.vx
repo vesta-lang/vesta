@@ -17,7 +17,7 @@ i32 main() {
     println("s2=[${s2}]");   // ptr -> 0x90 -> 0x10
 
     i32 ok = 0;
-    if (str_equals(s1, "a * b + 1"))        { ok = ok + 20; }
-    if (str_equals(s2, "ptr -> 0x90 -> 0x10")) { ok = ok + 22; }
+    if (s1.equals("a * b + 1"))        { ok = ok + 20; }
+    if (s2.equals("ptr -> 0x90 -> 0x10")) { ok = ok + 22; }
     return ok;   // 42
 }

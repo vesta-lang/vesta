@@ -213,14 +213,82 @@ int schedule_region(std::vector<MInstr> &ins, int lo, int hi,
     if (n <= 1) return 0;
 
     // DAG: succ[i] = dependientes de i; indeg[i] = num. de predecesores.
+    //
+    // Se construye por LAST-WRITER / READERS-SINCE en una sola pasada, no
+    // comparando los O(n^2) pares.  La clave: solo hacen falta las dependencias
+    // DIRECTAS (predecesor inmediato).  Una arista transitiva a->c (con a->b->c
+    // ya presente) es redundante -- c no esta "ready" hasta que toda la cadena
+    // a..c este colocada, asi que quitarla no cambia ni las alturas (el camino
+    // critico pasa por el mismo b) ni el orden que elige el list scheduling.
+    // El resultado es identico al DAG completo, verificable con
+    // VESTA_SCHED_VERIFY=1 (compara el ORDEN final contra depends() de TODO par,
+    // incluidas las transitivas) -> mismo schedule, de O(n^2) a O(n*k + m^2).
+    //
+    // Para cada clave de registro se guarda quien la escribio por ultima vez
+    // (RAW/WAW dependen de el) y quien la ha leido DESDE esa escritura (WAR).
+    // Flags igual, con una sola "clave" implicita.  Memoria: comparacion
+    // acotada solo entre las instrucciones que TOCAN memoria (m << n), porque
+    // el alias parcial (a y c aliasan, b no) rompe el last-writer unico.
     std::vector<std::vector<int>> succ(n);
     std::vector<int> indeg(n, 0);
-    for (int i = 0; i < n; ++i)
-        for (int j = i + 1; j < n; ++j)
-            if (depends(eff[lo + i], eff[lo + j], refs[lo + i], refs[lo + j])) {
-                succ[i].push_back(j);
-                ++indeg[j];
+
+    std::unordered_map<uint32_t, int> last_write;             // reg -> ultimo def
+    std::unordered_map<uint32_t, std::vector<int>> readers;   // reg -> lectores
+    int last_flag_write = -1;
+    std::vector<int> flag_readers;
+    std::vector<int> mem_ops; // indices (locales) que tocan memoria, en orden
+
+    // Dedup de aristas por-destino: pred_epoch[a]==j si a ya es predecesor de j.
+    std::vector<int> pred_epoch(n, -1);
+    auto add_pred = [&](int a, int j) {
+        if (a < 0 || a == j || pred_epoch[a] == j) return;
+        pred_epoch[a] = j;
+        succ[a].push_back(j);
+        ++indeg[j];
+    };
+
+    for (int j = 0; j < n; ++j) {
+        const MEffects &e = eff[lo + j];
+        // --- recoger predecesores DIRECTOS de j ---
+        for (uint32_t r : e.reads) { // RAW: leo lo ultimo escrito
+            auto it = last_write.find(r);
+            if (it != last_write.end()) add_pred(it->second, j);
+        }
+        for (uint32_t r : e.writes) { // WAW con el ultimo def + WAR con lectores
+            auto it = last_write.find(r);
+            if (it != last_write.end()) add_pred(it->second, j);
+            auto rd = readers.find(r);
+            if (rd != readers.end())
+                for (int reader : rd->second) add_pred(reader, j);
+        }
+        if (e.reads_flags && last_flag_write >= 0) add_pred(last_flag_write, j);
+        if (e.writes_flags) {
+            if (last_flag_write >= 0) add_pred(last_flag_write, j);
+            for (int reader : flag_readers) add_pred(reader, j);
+        }
+        if (refs[lo + j].touches) { // memoria: comparacion acotada a las mem-ops
+            const MemRef &mj = refs[lo + j];
+            for (int k : mem_ops) {
+                const MemRef &mk = refs[lo + k];
+                // SOLO el hazard de memoria (los de reg/flags ya salieron por su
+                // via); al menos uno escribe y las referencias pueden solapar.
+                if ((mk.writes || mj.writes) && may_alias(mk, mj)) add_pred(k, j);
             }
+        }
+
+        // --- actualizar el estado con j ---
+        for (uint32_t r : e.writes) { // una escritura CORTA los lectores previos
+            last_write[r] = j;
+            readers[r].clear();
+        }
+        for (uint32_t r : e.reads) readers[r].push_back(j);
+        if (e.writes_flags) {
+            last_flag_write = j;
+            flag_readers.clear();
+        }
+        if (e.reads_flags) flag_readers.push_back(j);
+        if (refs[lo + j].touches) mem_ops.push_back(j);
+    }
 
     // Coste COMPLETO por nodo (latencia + throughput reciproco + uops + grupos
     // de puertos) del modelo de coste (generico o de la microarquitectura).
@@ -319,31 +387,44 @@ int schedule_region(std::vector<MInstr> &ins, int lo, int hi,
         if (ready_cycle[i] != ready_cycle[b]) return ready_cycle[i] < ready_cycle[b];
         return i < b;
     };
+    // Conjunto READY = nodos con indeg==0 aun sin colocar.  Antes cada iteracion
+    // reescaneaba las n instrucciones para hallar las listas -> O(n^2) aunque
+    // solo una lo estuviera (una cadena de dependencias es el peor caso: 1 sola
+    // ready por vuelta, pero se escanean n).  Mantener el ready-set explicito
+    // hace que cada vuelta mire solo lo que puede colocar.  La SELECCION no
+    // cambia: @c better desempata por id (determinista), asi que el nodo elegido
+    // es el mismo sea cual sea el orden del set -> schedule identico.
+    std::vector<int> ready;
+    ready.reserve(n);
+    for (int i = 0; i < n; ++i)
+        if (indeg[i] == 0) ready.push_back(i);
+
     while (placed < n) {
-        int best = -1;       // mejor ready-ya que CABE en cur_cycle
-        int best_now = -1;   // mejor ready-ya (ignora recursos: garantia progreso)
-        bool any_ready = false;
-        for (int i = 0; i < n; ++i) {
-            if (done[i] || indeg[i] != 0) continue;
-            any_ready = true;
+        if (ready.empty()) break; // ciclo en el DAG (no deberia): salvaguarda
+        int best = -1, best_now = -1;   // mejor que cabe / mejor ignorando recursos
+        int best_pos = -1, best_now_pos = -1;
+        for (int p = 0; p < static_cast<int>(ready.size()); ++p) {
+            const int i = ready[p];
             if (ready_cycle[i] > cur_cycle) continue; // operandos no listos aun
-            if (best_now < 0 || better(i, best_now)) best_now = i;
-            if (fits(i, cur_cycle) && (best < 0 || better(i, best))) best = i;
+            if (best_now < 0 || better(i, best_now)) { best_now = i; best_now_pos = p; }
+            if (fits(i, cur_cycle) && (best < 0 || better(i, best))) { best = i; best_pos = p; }
         }
         if (best < 0 && best_now < 0) {
-            if (!any_ready) break; // ciclo en el DAG (no deberia): salvaguarda
-            ++cur_cycle;           // nada listo este ciclo -> avanzar
+            ++cur_cycle; // nada listo este ciclo -> avanzar
             continue;
         }
         const int pick = (best >= 0) ? best : best_now; // fuerza si nada cabe
+        const int pick_pos = (best >= 0) ? best_pos : best_now_pos;
         done[pick] = 1;
         ++placed;
         order.push_back(pick);
         place(pick, cur_cycle);
+        ready[pick_pos] = ready.back(); // swap-remove: sale del ready-set
+        ready.pop_back();
         const int finish = cur_cycle + static_cast<int>(ic[pick].latency + 0.5f);
         for (int s : succ[pick]) {
             ready_cycle[s] = std::max(ready_cycle[s], finish);
-            --indeg[s];
+            if (--indeg[s] == 0) ready.push_back(s); // ya colocadas sus deps
         }
     }
     // Salvaguarda (solo si un ciclo del DAG dejo nodos sin colocar): completar
@@ -388,6 +469,33 @@ int schedule_region(std::vector<MInstr> &ins, int lo, int hi,
 
 int schedule_function(MFunction &mf, const SchedCostModel &cm, EffIsa isa) {
     int total_moved = 0;
+    /* TELEMETRIA DE FORMA (opt-in, VESTA_SCHED_SHAPE=1): tamano de los bloques.
+     *
+     * El coste del list scheduling crece con el CUADRADO del tamano del bloque, asi que
+     * "el scheduler tarda mucho" tiene DOS causas posibles y muy distintas:
+     *   (a) el algoritmo no escala, o
+     *   (b) el backend esta metiendo miles de instrucciones en UN bloque, y el CFG
+     *       deberia haberlo partido antes.
+     * Son problemas de dueno distinto -- uno es del scheduler, el otro del generador de
+     * bloques -- y arreglar el equivocado no mueve nada.  @c sum_n2 es el predictor
+     * directo del coste: si un solo bloque lo domina, el problema es (b). */
+    static const bool shape = std::getenv("VESTA_SCHED_SHAPE") != nullptr;
+    if (shape) {
+        size_t nb = 0, maxn = 0, sum = 0;
+        unsigned long long sum_n2 = 0;
+        for (const MBlock &b : mf.blocks) {
+            const size_t k = b.instrs.size();
+            ++nb;
+            sum += k;
+            sum_n2 += 1ull * k * k;
+            if (k > maxn) maxn = k;
+        }
+        std::fprintf(stderr,
+                     "[sched-shape] %-34s bloques=%-5zu instrs=%-7zu mayor=%-7zu"
+                     " sum(n^2)=%llu  (el mayor aporta %.1f%%)\n",
+                     mf.name.c_str(), nb, sum, maxn, sum_n2,
+                     sum_n2 ? 100.0 * (1.0 * maxn * maxn) / sum_n2 : 0.0);
+    }
     // Objetos ALLOCA unicos a traves de TODA la funcion (dos allocas siempre
     // distintos, aunque esten en bloques distintos).
     uint32_t next_alloca = OBJ_FIRST_ALLOCA;

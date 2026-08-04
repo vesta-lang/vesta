@@ -556,8 +556,10 @@ inline T compute_with_flags(ProcessVM *vm, T a, T b, bool is_signed) {
             // division (o modulo) por cero: lanzar FatalError capturable.
             // throw_fatal hace longjmp al frame mas cercano con tryenter; si
             // no hay handler activo, deja vm en estado HALT con err_thread.
-            throw_fatal(vm, FATAL_DIVISION_BY_ZERO,
-                        "division (o modulo) por cero");
+            // Sin mensaje propio: el tipo de fallo ya lo cuenta el catalogo,
+            // en el idioma de quien lee.  Repetirlo aqui en una cadena fija
+            // seria decir lo mismo dos veces y solo en castellano.
+            throw_fatal(vm, FATAL_DIVISION_BY_ZERO, nullptr);
             return T(0); // unreachable; setea defensivo
         }
         if (is_signed) {
@@ -566,8 +568,7 @@ inline T compute_with_flags(ProcessVM *vm, T a, T b, bool is_signed) {
             ST sb = (ST)b;
             if (sa == std::numeric_limits<ST>::min() && sb == -1) {
                 // IDIV INT_MIN / -1: desbordamiento; tratar como FATAL.
-                throw_fatal(vm, FATAL_DIVISION_BY_ZERO,
-                            "desbordamiento en division signed (INT_MIN / -1)");
+                throw_fatal(vm, FATAL_DIVISION_BY_ZERO, nullptr);
                 return T(0);
             }
             // Sprint edge-bugs (2026-06-02): bug de signo en MOD/DIV.  Las
@@ -1527,6 +1528,44 @@ void exec_instr_setcc(ProcessVM *vm, const DecodedInstr &instr) {
         taken ? 1 : 0); // escribir resultado booleano en el registro
 }
 
+/**
+ * @brief SEXT r_dst, N: sign-extiende r_dst desde N bits (8/16/32) a 64.
+ *
+ * b2 (reg1) = r_dst en el nibble bajo; b3 (reg2) = N (ancho fuente en bits).
+ * Equivale a `shl r_dst, 64-N; sar r_dst, 64-N` (replica el bit de signo) pero
+ * en una sola instruccion, sin quemar un scratch para el conteo de shift.  El
+ * IR emitter lo emite donde antes ponia mov+shl+sar para el ensanchamiento con
+ * signo de i8/i16/i32 a i64.
+ */
+void exec_instr_sext(ProcessVM *vm, const DecodedInstr &instr) {
+    const uint8_t dst_reg =
+        instr.data_instruction.reg_data.reg1 & 0xF;        // r_dst (nibble bajo)
+    const uint8_t width = instr.data_instruction.reg_data.reg2; // N bits
+    const uint64_t v = vm->registers.regs[dst_reg].qword();
+    uint64_t res;
+    switch (width) {
+    case 8:
+        res = static_cast<uint64_t>(
+            static_cast<int64_t>(static_cast<int8_t>(v)));
+        break;
+    case 16:
+        res = static_cast<uint64_t>(
+            static_cast<int64_t>(static_cast<int16_t>(v)));
+        break;
+    case 32:
+        res = static_cast<uint64_t>(
+            static_cast<int64_t>(static_cast<int32_t>(v)));
+        break;
+    default: {
+        // Ancho arbitrario < 64: shl + sar aritmetico (enmascara el shift).
+        const uint32_t sh = (64u - (static_cast<uint32_t>(width) & 63u)) & 63u;
+        res = static_cast<uint64_t>(static_cast<int64_t>(v << sh) >> sh);
+        break;
+    }
+    }
+    vm->registers.regs[dst_reg].qword(res);
+}
+
 // =========================================================================
 // CMPJMP / CMPJMPU / DECJNZ -- fusion de cmp+jcc / dec+jnz (mejora hot loops)
 // =========================================================================
@@ -1696,7 +1735,13 @@ void exec_instr_fastpush(ProcessVM *vm, const DecodedInstr &instr) {
     while (mask) {
         const int r = __builtin_ctz(static_cast<unsigned int>(mask));
         const uint64_t val = vm->registers.regs[r].qword();
-        vm->vm_mem.write_u64(slot, val);
+        // write_u64_fast: los slots del frame caen todos en la MISMA pagina
+        // (el stack es contiguo), asi que el page-cache acierta tras el primer
+        // acceso -> memcpy directo (~1 ns) en vez de un TLB walk completo por
+        // registro (~50 ns).  fastpush/pop envuelven CADA calln (save/restore
+        // de regs vivos), asi que este era el grueso del coste de las llamadas
+        // nativas en el interp.
+        vm->vm_mem.write_u64_fast(slot, val);
         slot -= 8;
         mask &= static_cast<uint16_t>(mask - 1); // limpiar bit mas bajo
     }
@@ -1724,7 +1769,8 @@ void exec_instr_fastpop(ProcessVM *vm, const DecodedInstr &instr) {
     uint64_t slot = rsp + static_cast<uint64_t>(count - 1) * 8ULL;
     while (mask) {
         const int r = __builtin_ctz(static_cast<unsigned int>(mask));
-        const uint64_t val = vm->vm_mem.read_u64(slot);
+        // read_u64_fast: mismo page-cache que fastpush (frame contiguo).
+        const uint64_t val = vm->vm_mem.read_u64_fast(slot);
         vm->registers.regs[r].qword(val);
         slot -= 8;
         mask &= static_cast<uint16_t>(mask - 1);

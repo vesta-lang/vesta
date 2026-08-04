@@ -43,8 +43,9 @@ class X86Backend : public NativeBackend {
         NativeCompileResult r;
         r.bytes = jit::vreg_compile_native(
             fn, {}, {}, {}, {}, &r.relocs, opts.pic, opts.target_sysv,
-            opts.mode32, opts.fisa, /*emit_line_map=*/false,
-            /*line_map_out=*/nullptr, /*asm_labels_out=*/nullptr,
+            opts.mode32, opts.fisa, opts.want_line_map,
+            opts.want_line_map ? &r.line_map : nullptr,
+            /*asm_labels_out=*/nullptr,
             /*stackmaps_out=*/&r.stackmaps);
         return r;
     }
