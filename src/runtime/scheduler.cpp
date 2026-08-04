@@ -36,6 +36,32 @@
 namespace runtime {
 
 /**
+ * @brief Convierte en fallo del programa lo que capturo el sistema.
+ *
+ * Estaba escrito dos veces, palabra por palabra, en los dos sitios que arman la
+ * recuperacion.  Duplicado asi, arreglar uno y olvidar el otro es cuestion de
+ * tiempo -- y el segundo solo se nota cuando alguien falla por ese camino.
+ *
+ * El mensaje no se escribe aqui: el TIPO de fallo ya lo cuenta el catalogo en el
+ * idioma de quien lee.  Lo unico que se anade es la direccion del acceso, que si
+ * aporta, y tambien por catalogo.
+ *
+ * @param p Proceso que fallo.
+ */
+static void lanzar_fallo_del_sistema(runtime::ProcessVM *p) {
+    if (p->pending_av_kind == 1 || p->pending_av_kind == 2) {
+        runtime::throw_fatal(p, runtime::FATAL_DIVISION_BY_ZERO, nullptr);
+        return;
+    }
+    char dir[32];
+    std::snprintf(dir, sizeof(dir), "0x%llx",
+                  (unsigned long long)p->pending_av_addr);
+    const std::string detalle = vx::diag::format("VX7013", {dir});
+    runtime::throw_fatal(p, runtime::FATAL_SEGMENTATION_FAULT, detalle.c_str());
+}
+
+
+/**
  * @brief Construye el scheduler, lo asocia a la VM indicada e inicializa la
  * FSM.
  *
@@ -504,29 +530,7 @@ void Scheduler::run_loop() {
                     /* Lo captura el sistema a mitad de instruccion: el PC
                      * apunta a la que fallo, no a la siguiente. */
                     instance->fatal_pc_exact = true;
-                    char msg[128];
-                    // Bug fix 2026-05-23: distinguir AV vs div0 / overflow.
-                    if (instance->pending_av_kind == 1) {
-                        std::snprintf(
-                            msg, sizeof(msg),
-                            "host division by zero (operacion entera ilegal)");
-                        runtime::throw_fatal(
-                            instance, runtime::FATAL_DIVISION_BY_ZERO, msg);
-                    } else if (instance->pending_av_kind == 2) {
-                        std::snprintf(
-                            msg, sizeof(msg),
-                            "host integer overflow (operacion entera ilegal)");
-                        runtime::throw_fatal(
-                            instance, runtime::FATAL_DIVISION_BY_ZERO, msg);
-                    } else {
-                        std::snprintf(
-                            msg, sizeof(msg),
-                            "host access violation at 0x%llx (deref de puntero "
-                            "invalido)",
-                            (unsigned long long)instance->pending_av_addr);
-                        runtime::throw_fatal(
-                            instance, runtime::FATAL_SEGMENTATION_FAULT, msg);
-                    }
+                    lanzar_fallo_del_sistema(instance);
                     /* Y se cierra el proceso AQUI, con el mismo cierre que usa
                      * la entrada al codigo compilado.
                      *
@@ -1794,29 +1798,7 @@ void Scheduler::run_loop() {
                     /* Lo captura el sistema a mitad de instruccion: el PC
                      * apunta a la que fallo, no a la siguiente. */
                     instance->fatal_pc_exact = true;
-                    char msg[128];
-                    // Bug fix 2026-05-23: distinguir AV vs div0 / overflow.
-                    if (instance->pending_av_kind == 1) {
-                        std::snprintf(
-                            msg, sizeof(msg),
-                            "host division by zero (operacion entera ilegal)");
-                        runtime::throw_fatal(
-                            instance, runtime::FATAL_DIVISION_BY_ZERO, msg);
-                    } else if (instance->pending_av_kind == 2) {
-                        std::snprintf(
-                            msg, sizeof(msg),
-                            "host integer overflow (operacion entera ilegal)");
-                        runtime::throw_fatal(
-                            instance, runtime::FATAL_DIVISION_BY_ZERO, msg);
-                    } else {
-                        std::snprintf(
-                            msg, sizeof(msg),
-                            "host access violation at 0x%llx (deref de puntero "
-                            "invalido)",
-                            (unsigned long long)instance->pending_av_addr);
-                        runtime::throw_fatal(
-                            instance, runtime::FATAL_SEGMENTATION_FAULT, msg);
-                    }
+                    lanzar_fallo_del_sistema(instance);
                 }
             }
             while (instance->reductions_remaining > 0) {
