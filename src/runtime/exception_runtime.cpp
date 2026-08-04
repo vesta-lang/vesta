@@ -501,10 +501,11 @@ static vxdbg::SourceExtent span_for(ProcessVM *vm, const std::string &symbol,
  * @param column Columna, o 0 para no afinar.
  * @return Los nombres de las operaciones, en orden.
  */
-static std::vector<const char *> ir_ops_at(ProcessVM *vm,
-                                           const std::string &symbol,
-                                           uint32_t line, uint32_t column) {
-    std::vector<const char *> out;
+static std::vector<std::string> ir_window_at(ProcessVM *vm,
+                                             const std::string &symbol,
+                                             uint32_t line, uint32_t column,
+                                             size_t antes, size_t despues) {
+    std::vector<std::string> out;
     if (line == 0) return out;
     const std::string limpio =
         (symbol.rfind("code.", 0) == 0) ? symbol.substr(5) : symbol;
@@ -513,15 +514,34 @@ static std::vector<const char *> ir_ops_at(ProcessVM *vm,
         if (!exe_ptr) continue;
         for (const auto &fn : exe_ptr->ir_functions) {
             if (fn.name != limpio) continue;
-            for (const auto &bl : fn.blocks) {
-                for (const auto &ins : bl.instrs) {
-                    if (ins.source_line != line) continue;
-                    if (column != 0 && ins.source_column != 0 &&
-                        ins.source_column != column)
-                        continue;
-                    if (out.size() >= 8) return out;
-                    out.push_back(ir::ir_op_name(ins.op));
+            /* Se aplana la funcion en orden para poder mirar alrededor: el
+             * vecindario de una instruccion puede estar en otro bloque. */
+            std::vector<const ir::IrInstr *> planas;
+            for (const auto &bl : fn.blocks)
+                for (const auto &ins : bl.instrs) planas.push_back(&ins);
+
+            size_t culpable = planas.size();
+            for (size_t i = 0; i < planas.size(); ++i) {
+                if (planas[i]->source_line != line) continue;
+                if (column != 0 && planas[i]->source_column != 0 &&
+                    planas[i]->source_column != column)
+                    continue;
+                culpable = i;
+                break;
+            }
+            if (culpable == planas.size()) return out;
+
+            const size_t desde = (culpable > antes) ? (culpable - antes) : 0;
+            const size_t hasta =
+                std::min(planas.size(), culpable + despues + 1);
+            for (size_t i = desde; i < hasta; ++i) {
+                std::string t = (i == culpable) ? "  > " : "    ";
+                t += ir::ir_op_name(planas[i]->op);
+                if (planas[i]->source_line > 0) {
+                    t += "   (linea " +
+                         std::to_string(planas[i]->source_line) + ")";
                 }
+                out.push_back(std::move(t));
             }
             return out;
         }
@@ -739,15 +759,15 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
          * de la maquina hay un paso que a veces es el que explica el fallo: lo
          * que se pidio, en que se tradujo, y con que acabo.  Se ensena solo si
          * consta; si el intermedio no viaja en el artefacto, no se dice nada. */
-        const std::vector<const char *> ops =
-            ir_ops_at(vm, simbolo, linea, ext.column);
+        const std::vector<std::string> ops =
+            ir_window_at(vm, simbolo, linea, ext.column, 3, 4);
         if (ops.empty()) return;
-        append_str("      intermedio:");
-        for (const char *op : ops) {
-            append_str(" ");
-            append_str(op);
+        append_str("      intermedio:\n");
+        for (const std::string &t : ops) {
+            append_str("      ");
+            append(t.c_str(), t.size());
+            append_str("\n");
         }
-        append_str("\n");
     };
 
     auto append_dbg = [&](loader::MethodInfo *m, uint64_t pc,
