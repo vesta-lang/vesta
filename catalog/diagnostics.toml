@@ -71,3 +71,57 @@ es = "'{0}' esta declarado con @Target(\"{1}\"), que no se cumple en este objeti
 [VX4002]
 en = "'{0}' is only declared for other targets ({1}) -- no variant matches the target being compiled"
 es = "'{0}' solo esta declarado para otros objetivos ({1}) -- ninguna variante encaja con el objetivo que se esta compilando"
+
+# --- fallos en ejecucion (VX7xxx) ---
+#
+# Un fallo que nadie captura acaba con el programa, asi que se cuenta igual que
+# cualquier otro diagnostico: por codigo y en el idioma de quien lo lee.  El
+# texto describe QUE paso, no la constante interna del runtime.
+
+[VX7001]
+en = "fatal error: null pointer"
+es = "error fatal: puntero nulo"
+
+[VX7002]
+en = "fatal error: division by zero"
+es = "error fatal: division entre cero"
+
+[VX7003]
+en = "fatal error: stack overflow"
+es = "error fatal: desbordamiento de pila"
+
+[VX7004]
+en = "fatal error: stack underflow"
+es = "error fatal: pila vacia"
+
+[VX7005]
+en = "fatal error: invalid instruction"
+es = "error fatal: instruccion invalida"
+
+[VX7006]
+en = "fatal error: unresolved symbol"
+es = "error fatal: simbolo sin resolver"
+
+[VX7007]
+en = "fatal error: invalid memory access"
+es = "error fatal: acceso a memoria invalido"
+
+[VX7008]
+en = "fatal error: crash in native code"
+es = "error fatal: fallo en codigo nativo"
+
+[VX7009]
+en = "fatal error: exception from native code"
+es = "error fatal: excepcion de codigo nativo"
+
+[VX7010]
+en = "fatal error: out of memory"
+es = "error fatal: memoria agotada"
+
+[VX7011]
+en = "fatal error: aborted by the program"
+es = "error fatal: abortado por el programa"
+
+[VX7012]
+en = "fatal error"
+es = "error fatal"

@@ -269,6 +269,20 @@ target_include_directories(vxdbg_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_include_directories(vxdbg_lib PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/vxdbg)
 target_compile_features(vxdbg_lib PUBLIC cxx_std_17)
 
+# ---------------------------------------------------------------------------
+# diag_lib: el catalogo de diagnosticos, en todos los idiomas.
+#
+# Libreria propia por el mismo motivo que vxdbg: no es del frontend.  Los
+# fallos en EJECUCION tambien son diagnosticos y tambien se cuentan en el
+# idioma de quien los lee, y el runtime no puede depender del compilador.
+# ---------------------------------------------------------------------------
+add_library(diag_lib STATIC
+    src/vx/diag/diag_catalog.cpp
+    src/vx/gen/diag_catalog_gen.cpp
+)
+target_include_directories(diag_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_features(diag_lib PUBLIC cxx_std_17)
+
 add_subdirectory(src/vx)
 
 # Sources del ejecutable principal.  Se EXCLUYEN los .cpp de src/vx/
@@ -507,6 +521,7 @@ add_library(vmcore STATIC ${VM_SOURCES})
 target_include_directories(vmcore PRIVATE ${VM_INCLUDES})
 target_link_libraries(vmcore
         PUBLIC vxdbg_lib
+        PUBLIC diag_lib
         PRIVATE sqlite3
         PRIVATE capstone
         PRIVATE keystone

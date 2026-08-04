@@ -11,6 +11,7 @@
 #include "loader/class_registry.h"
 #include "debug/debugger.h"
 
+#include "vx/diag/diag_catalog.h"
 #include "vxdbg/codec.h"
 #include "vxdbg/roots.h"
 
@@ -332,6 +333,55 @@ static std::string entity_note_for_symbol(ProcessVM *vm,
             break;
         }
     return nota;
+}
+
+/**
+ * @brief Codigo de catalogo de un tipo de fallo.
+ *
+ * El texto NO se escribe aqui: vive en el catalogo, con su codigo estable y en
+ * todos los idiomas.  Un fallo en ejecucion es un diagnostico como cualquier
+ * otro, y quien lo lee tiene el mismo derecho a leerlo en su idioma que quien
+ * lee un error de compilacion.
+ *
+ * @param kind Tipo de fallo.
+ * @return Su codigo.
+ */
+static const char *fatal_kind_code(uint32_t kind) {
+    switch (kind) {
+    case FATAL_NULL_POINTER: return "VX7001";
+    case FATAL_DIVISION_BY_ZERO: return "VX7002";
+    case FATAL_STACK_OVERFLOW: return "VX7003";
+    case FATAL_STACK_UNDERFLOW: return "VX7004";
+    case FATAL_ILLEGAL_INSTRUCTION: return "VX7005";
+    case FATAL_INVALID_SYSCALL: return "VX7006";
+    case FATAL_SEGMENTATION_FAULT: return "VX7007";
+    case FATAL_NATIVE_CRASH: return "VX7008";
+    case FATAL_NATIVE_EXCEPTION: return "VX7009";
+    case FATAL_OUT_OF_MEMORY: return "VX7010";
+    case FATAL_USER_ABORT: return "VX7011";
+    default: return "VX7012";
+    }
+}
+
+/**
+ * @brief Ensena un fallo que nadie capturo.
+ *
+ * Va a la salida de error y no a la estandar: es un fallo, y quien encadene la
+ * salida del programa con otra cosa no debe tragarselo mezclado con los datos.
+ *
+ * @param vm Proceso que fallo.
+ * @param kind Tipo de fallo.
+ */
+static void report_uncaught_fatal(ProcessVM *vm, uint32_t kind) {
+    const char *code = fatal_kind_code(kind);
+    const std::string texto = vx::diag::format(code, {});
+    std::fprintf(stderr, "\n%s [%s]", texto.c_str(), code);
+    if (vm->fatal_msg_buf && vm->fatal_msg_buf[0] != '\0')
+        std::fprintf(stderr, ": %s", vm->fatal_msg_buf);
+    std::fprintf(stderr, "\n");
+    if (vm->fatal_trace_buf && vm->fatal_trace_buf[0] != '\0')
+        std::fprintf(stderr, "%s", vm->fatal_trace_buf);
+    std::fflush(stderr);
 }
 
 static const std::string *symbol_for_pc(ProcessVM *vm, uint64_t pc,
@@ -698,6 +748,12 @@ void throw_fatal(ProcessVM *vm, uint32_t kind, const char *message) {
         if (vm->fatal_trace_buf) {
             build_stack_trace(vm, vm->fatal_trace_buf, 4096);
         }
+        /* Y se ENSEÑA.  Guardarlo sin decir nada dejaba al programa parandose
+         * en seco: sin mensaje, sin traza y con codigo de salida cero, o sea
+         * afirmando que todo fue bien.  Cualquier guion o integracion continua
+         * que lo llamara se lo creia.  Un fallo que nadie captura es lo mas
+         * parecido a un error de verdad que hay, y tiene que verse. */
+        report_uncaught_fatal(vm, kind);
         vm->err_thread = fatal_to_thread_err(kind);
         vm->scheduler.on_event(EVT_ERROR);
         return;

@@ -125,8 +125,6 @@ add_library(vx_lib STATIC
     # Catalogo multi-idioma de diagnosticos (codigo estable VXNNNN -> mensaje por
     # idioma).  La tabla se genera desde catalog/diagnostics.toml con
     # tools/import/gen_diag_catalog.py.  Seleccion de idioma por entorno.
-    diag/diag_catalog.cpp
-    gen/diag_catalog_gen.cpp
     # Renderizado de diagnosticos en formato maquina (JSON/SARIF) para IDEs/CI.
     diag/diag_format.cpp
     # DB de instrucciones EMBEBIDA (matcher texto->FormID) + tablas generadas
@@ -242,7 +240,7 @@ target_compile_features(vx_lib PUBLIC cxx_std_17)
 target_link_libraries(vx_lib PRIVATE vesta_openssl)
 # El grafo de conocimiento del programa es una libreria aparte: ni es de Vesta
 # ni de la maquina, y el runtime tambien lo necesita.
-target_link_libraries(vx_lib PUBLIC vxdbg_lib)
+target_link_libraries(vx_lib PUBLIC vxdbg_lib diag_lib)
 
 # Avisos estrictos en builds nuestros para mantener la regla de "no warnings".
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
