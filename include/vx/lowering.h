@@ -1380,13 +1380,21 @@ class Lowering {
         if (!fn_) return;
         // La columna de lo que se esta bajando, si quien la puso no traia ya
         // una mas precisa.
-        if (ins.source_column == 0) ins.source_column = pend_stmt_column_;
+        if (ins.source_column == 0) {
+            ins.source_column = pend_stmt_column_;
+            // La longitud acompana a la columna: solo vale para el mismo
+            // trozo de fuente, y por separado darian un recorte falso.
+            if (ins.source_len == 0) ins.source_len = pend_stmt_len_;
+        }
         fn_->append(block, std::move(ins));
     }
 
     /// Columna de la sentencia que se esta bajando, para sellarla en las
     /// instrucciones que emita.  0 = ninguna.
     uint32_t pend_stmt_column_ = 0;
+
+    /// Longitud del mismo trozo de fuente que @c pend_stmt_column_.
+    uint32_t pend_stmt_len_ = 0;
 
     /**
      * @brief Anota el vinculo entre un simbolo y la declaracion que lo produjo.

@@ -3842,6 +3842,7 @@ void Lowering::lower_stmt(ast::Stmt *s) {
         sp.length = loc.length;
         emitted_spans_.push_back(std::move(sp));
         pend_stmt_column_ = loc.column;
+        pend_stmt_len_ = loc.length;
     }
     /* Y se sella esa columna en lo que la sentencia emita.  Se hace al TERMINAR
      * y no en cada uno de los mil sitios que ponen la linea: bastaria olvidar
@@ -3852,18 +3853,22 @@ void Lowering::lower_stmt(ast::Stmt *s) {
         uint32_t bloque;
         size_t desde;
         uint32_t columna;
+        uint32_t longitud;
         ~SellarColumna() {
             if (!fn || columna == 0) return;
             if (bloque >= fn->blocks.size()) return;
             auto &ins = fn->blocks[bloque].instrs;
             for (size_t i = desde; i < ins.size(); ++i)
-                if (ins[i].source_column == 0) ins[i].source_column = columna;
+                if (ins[i].source_column == 0) {
+                    ins[i].source_column = columna;
+                    if (ins[i].source_len == 0) ins[i].source_len = longitud;
+                }
         }
     } sellar{fn_, current_block_,
              (fn_ && current_block_ < fn_->blocks.size())
                  ? fn_->blocks[current_block_].instrs.size()
                  : 0,
-             pend_stmt_column_};
+             pend_stmt_column_, pend_stmt_len_};
 
     switch (s->kind) {
     case ast::NodeKind::BlockStmt:
@@ -14574,9 +14579,20 @@ ir::IrValueId Lowering::lower_expr(ast::Expr *e) {
     struct ColumnaVigente {
         uint32_t *slot;
         uint32_t previa;
-        ~ColumnaVigente() { *slot = previa; }
-    } col_vigente{&pend_stmt_column_, pend_stmt_column_};
-    if (e->loc.column > 0) pend_stmt_column_ = e->loc.column;
+        uint32_t *slot_len;
+        uint32_t previa_len;
+        ~ColumnaVigente() {
+            *slot = previa;
+            *slot_len = previa_len;
+        }
+    } col_vigente{&pend_stmt_column_, pend_stmt_column_, &pend_stmt_len_,
+                  pend_stmt_len_};
+    if (e->loc.column > 0) {
+        pend_stmt_column_ = e->loc.column;
+        // La longitud va con su columna; si no se sabe, mejor ninguna que
+        // la de la expresion de fuera, que recortaria otro trozo.
+        pend_stmt_len_ = e->loc.length;
+    }
     switch (e->kind) {
     case ast::NodeKind::IntLitExpr: {
         auto *ie = static_cast<ast::IntLitExpr *>(e);

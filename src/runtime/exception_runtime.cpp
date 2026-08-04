@@ -505,7 +505,8 @@ static vxdbg::SourceExtent span_for(ProcessVM *vm, const std::string &symbol,
 static std::vector<std::string> ir_window_at(ProcessVM *vm,
                                              const std::string &symbol,
                                              uint32_t line, uint32_t column,
-                                             size_t antes, size_t despues) {
+                                             size_t antes, size_t despues,
+                                             const std::string &linea_texto) {
     std::vector<std::string> out;
     if (line == 0) return out;
     const std::string limpio =
@@ -531,6 +532,32 @@ static std::vector<std::string> ir_window_at(ProcessVM *vm,
                 break;
             }
             if (culpable == planas.size()) return out;
+
+            /* De donde sale cada valor: para poder decir "el divisor es
+             * this.valor" en vez de "%2".  Un operando es un valor que
+             * DEFINIO otra instruccion, y esa instruccion sabe que trozo de
+             * fuente la produjo; con el trozo se recorta el texto y el
+             * operando tiene nombre.  Solo se mira dentro de la misma linea,
+             * que es la que se tiene delante. */
+            std::unordered_map<ir::IrValueId, std::string> nombre_de;
+            if (!linea_texto.empty()) {
+                for (const ir::IrInstr *p : planas) {
+                    if (p->dst == ir::IR_NO_VALUE) continue;
+                    if (p->source_line != line) continue;
+                    if (p->source_column == 0 || p->source_len == 0) continue;
+                    const size_t c = p->source_column - 1;
+                    if (c >= linea_texto.size()) continue;
+                    const size_t n =
+                        std::min<size_t>(p->source_len, linea_texto.size() - c);
+                    std::string txt = linea_texto.substr(c, n);
+                    // Sin espacios en los bordes: el trozo puede traerlos y
+                    // como nombre estorban.
+                    while (!txt.empty() && (txt.back() == ' ' || txt.back() == 9))
+                        txt.pop_back();
+                    if (txt.empty()) continue;
+                    nombre_de[p->dst] = std::move(txt);
+                }
+            }
 
             const size_t desde = (culpable > antes) ? (culpable - antes) : 0;
             const size_t hasta =
@@ -558,6 +585,18 @@ static std::vector<std::string> ir_window_at(ProcessVM *vm,
                     if (planas[i]->source_column > 0)
                         t += ":" + std::to_string(planas[i]->source_column);
                     t += ")";
+                }
+                /* Y en la culpable, de donde sale cada operando.  Es lo que
+                 * convierte "%1 entre %2" en algo que se puede leer. */
+                if (i == culpable) {
+                    std::string ops;
+                    for (ir::IrValueId v : planas[i]->operands) {
+                        auto it = nombre_de.find(v);
+                        if (it == nombre_de.end()) continue;
+                        if (!ops.empty()) ops += ", ";
+                        ops += "%" + std::to_string(v) + " = " + it->second;
+                    }
+                    if (!ops.empty()) t += "   [" + ops + "]";
                 }
                 out.push_back(std::move(t));
             }
@@ -854,7 +893,7 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
          * que se pidio, en que se tradujo, y con que acabo.  Se ensena solo si
          * consta; si el intermedio no viaja en el artefacto, no se dice nada. */
         const std::vector<std::string> ops =
-            ir_window_at(vm, simbolo, linea, ext.column, 3, 4);
+            ir_window_at(vm, simbolo, linea, ext.column, 3, 4, texto);
         if (ops.empty()) return;
         append_str("      intermedio:\n");
         for (const std::string &t : ops) {

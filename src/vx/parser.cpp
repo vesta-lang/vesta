@@ -7605,6 +7605,30 @@ std::unique_ptr<ast::Expr> Parser::parse_ternary() {
     return t;
 }
 
+/**
+ * @brief Hace que un tramo abarque desde donde empieza @c ini hasta donde
+ *        acaba el token @c fin.
+ *
+ * Los postfijos (`a.b`, `a->b`) guardaban como posicion la del OPERADOR, que
+ * dice donde esta el punto pero no donde empieza ni acaba la expresion.  Sin
+ * eso no se puede recortar el fuente para nombrarla, y al intentarlo salia el
+ * propio punto.  Como cada nivel vuelve a construir sobre el anterior, el
+ * tramo crece solo y una cadena `a.b.c` acaba sabiendo lo que ocupa.
+ *
+ * @param dst Tramo a corregir (se modifica).
+ * @param ini Tramo del operando por el que empieza la expresion.
+ * @param fin Ultimo token que forma parte de ella.
+ */
+static void extender_tramo(SourceLoc &dst, const SourceLoc &ini,
+                           const Token &fin) {
+    if (ini.offset == 0 || ini.offset > dst.offset) return;
+    const uint32_t final_ = fin.loc.offset + (uint32_t)fin.lexeme.size();
+    dst.line = ini.line;
+    dst.column = ini.column;
+    dst.offset = ini.offset;
+    if (final_ > dst.offset) dst.length = final_ - dst.offset;
+}
+
 // Helper: macro-like factory para los niveles binarios izquierda-asociativos.
 // Lo escribimos a mano en cada nivel en lugar de via macro/template para que
 // el optimizador inlinee con visibilidad completa.
@@ -8303,8 +8327,14 @@ std::unique_ptr<ast::Expr> Parser::parse_postfix() {
             }
             auto fa = std::make_unique<ast::FieldAccessExpr>();
             fa->loc = loc;
+            const SourceLoc ini_fa = expr ? expr->loc : loc;
             fa->base = std::move(expr);
-            fa->field_name = consume().lexeme;
+            const Token tk_campo = consume();
+            fa->field_name = tk_campo.lexeme;
+            /* El tramo de `a.b` es `a.b` entero, no el punto.  Guardar solo
+             * el operador dejaba la expresion sin donde empieza ni cuanto
+             * ocupa, y al recortar el fuente para nombrarla salia ".". */
+            extender_tramo(fa->loc, ini_fa, tk_campo);
             expr = std::move(fa);
             break;
         }
@@ -8324,11 +8354,15 @@ std::unique_ptr<ast::Expr> Parser::parse_postfix() {
             auto deref = std::make_unique<ast::UnaryExpr>();
             deref->loc = loc;
             deref->op = ast::UnOp::Deref;
+            const SourceLoc ini_fa = expr ? expr->loc : loc;
             deref->operand = std::move(expr);
             auto fa = std::make_unique<ast::FieldAccessExpr>();
             fa->loc = loc;
             fa->base = std::move(deref);
-            fa->field_name = consume().lexeme;
+            const Token tk_campo = consume();
+            fa->field_name = tk_campo.lexeme;
+            // Igual que `a.b`: el tramo es `a->b` entero (ver arriba).
+            extender_tramo(fa->loc, ini_fa, tk_campo);
             expr = std::move(fa);
             break;
         }

@@ -108,7 +108,7 @@ static constexpr uint32_t IR_SECTION_MAGIC = 0x52494556U; /* 'V''E''I''R' */
  * @brief Version del formato @ir.  Bump cuando cambia el layout.
  */
 static constexpr uint16_t IR_SECTION_VERSION =
-    8; // v8: + source_column por instruccion (para senalar QUE de la linea)
+    9; // v9: + source_len (donde ACABA el trozo, para poder nombrarlo)
 
 /**
  * @brief Emit del bytes de la seccion @c @ir lista para append a

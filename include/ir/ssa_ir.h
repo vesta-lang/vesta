@@ -985,6 +985,12 @@ struct IrInstr {
     /// senalar cual de las cosas que caben en ella fallo.
     uint32_t source_column;
 
+    /// Longitud en caracteres del trozo de fuente que produjo la instruccion
+    /// (0 = desconocida).  Con la columna sola se sabe donde empieza pero no
+    /// donde acaba, y sin eso no se puede recortar el texto para NOMBRAR un
+    /// operando: decir "el divisor es this.valor" en vez de "%2".
+    uint32_t source_len = 0;
+
     /// Si true, esta instruccion NO debe ser eliminada por copy_prop
     /// ni DCE.  Util para barreras de codegen como los MOVs que el
     /// lower_for/lower_while inserta antes del back-edge para

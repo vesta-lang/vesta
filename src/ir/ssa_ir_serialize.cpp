@@ -188,6 +188,10 @@ void write_instr(std::vector<uint8_t> &o, const IrInstr &i) {
     // source_column: sin ella no se puede senalar CUAL de las cosas que caben
     // en una linea fallo, solo en cual.  Viaja desde v8.
     write_u32(o, i.source_column);
+    // source_len: donde ACABA el trozo de fuente.  Con la columna sola se
+    // sabe donde empieza, y sin el final no se puede recortar el texto para
+    // nombrar un operando.  Viaja desde v9.
+    write_u32(o, i.source_len);
     // imm: campo polivalente.  Para CONST contiene el valor; para
     // CALL contiene flags/args adicionales; para ops sin imm es 0.
     write_u64(o, i.imm);
@@ -261,6 +265,8 @@ bool read_instr(const std::vector<uint8_t> &in, size_t &off, IrInstr &i) {
     if (!read_u32(in, off, source_line)) return false;
     uint32_t source_column = 0;
     if (!read_u32(in, off, source_column)) return false;
+    uint32_t source_len = 0;
+    if (!read_u32(in, off, source_len)) return false;
     if (!read_u64(in, off, imm)) return false;
     i.op = static_cast<IrOp>(op_v);
     i.type = static_cast<IrType>(type_v);
@@ -273,6 +279,7 @@ bool read_instr(const std::vector<uint8_t> &in, size_t &off, IrInstr &i) {
         (flags & INSTR_FLAG_HOST_ALLOCA_EXPLICIT_FREE) != 0;
     i.source_line = source_line;
     i.source_column = source_column;
+    i.source_len = source_len;
     i.imm = imm;
     /* operands */
     uint8_t opc = 0;
