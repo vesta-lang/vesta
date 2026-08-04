@@ -7615,6 +7615,22 @@ static std::unique_ptr<ast::Expr> make_binop(ast::BinOp op,
     auto b = std::make_unique<ast::BinaryExpr>();
     b->loc = loc;
     b->op = op;
+    /* Una operacion binaria EMPIEZA donde empieza su operando izquierdo y
+     * ACABA donde acaba el derecho.  Se le pasaba la posicion del OPERADOR, con
+     * lo que al subrayar un fallo se marcaba desde el signo -- o desde el
+     * operando derecho -- en vez de la operacion entera.  Como el nivel de
+     * arriba vuelve a construir con el resultado de este, la extension crece
+     * sola y cada subexpresion acaba sabiendo lo que ocupa. */
+    if (lhs && lhs->loc.offset > 0 && lhs->loc.offset <= b->loc.offset) {
+        const uint32_t fin =
+            (rhs && rhs->loc.offset >= lhs->loc.offset)
+                ? (rhs->loc.offset + rhs->loc.length)
+                : (b->loc.offset + b->loc.length);
+        b->loc.line = lhs->loc.line;
+        b->loc.column = lhs->loc.column;
+        b->loc.offset = lhs->loc.offset;
+        if (fin > b->loc.offset) b->loc.length = fin - b->loc.offset;
+    }
     b->lhs = std::move(lhs);
     b->rhs = std::move(rhs);
     return b;
