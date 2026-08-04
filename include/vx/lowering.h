@@ -1346,6 +1346,25 @@ class Lowering {
      */
     std::vector<std::pair<std::string, std::string>> emitted_symbols_;
 
+  public:
+    /**
+     * @brief El tramo de fuente de una sentencia, dentro de su funcion.
+     *
+     * Una LINEA no basta: en `return foo(a) / bar(b);` hay tres cosas que pueden
+     * fallar y las tres estan en la misma.  Con la columna y la longitud se
+     * puede senalar cual.
+     */
+    struct StmtSpan {
+        std::string symbol; ///< funcion en la que esta
+        uint32_t line = 0;
+        uint32_t column = 0;
+        uint32_t length = 0;
+    };
+
+  private:
+    /// Los tramos de todas las sentencias bajadas, en orden.
+    std::vector<StmtSpan> emitted_spans_;
+
     /**
      * @brief Anota el vinculo entre un simbolo y la declaracion que lo produjo.
      * @param symbol Nombre con el que se emite el codigo.
@@ -1364,6 +1383,11 @@ class Lowering {
     const std::vector<std::pair<std::string, std::string>> &
     emitted_symbols() const noexcept {
         return emitted_symbols_;
+    }
+
+    /// @return El tramo de fuente de cada sentencia bajada.
+    const std::vector<StmtSpan> &emitted_spans() const noexcept {
+        return emitted_spans_;
     }
 
     uint32_t macro_lowered_count() const noexcept {

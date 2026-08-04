@@ -414,6 +414,8 @@ struct ProjectModuleWork {
     /// juntan al final: el ejecutable contiene todos los modulos, asi que su
     /// mapa tiene que cubrirlos a todos.
     std::vector<std::pair<std::string, vxdbg::LanguageEntityId>> vxdbg_symbols;
+    /// Y sus tramos de fuente, que se juntan igual.
+    std::vector<vxdbg::SourceExtent> vxdbg_spans;
     ///  M.L20-full: Diagnostics local del modulo.  Cuando se
     /// paraleliza el compile (VX_PARALLEL_COMPILE=1), cada thread
     /// usa este diags propio en lugar del res.diagnostics compartido,
@@ -2146,7 +2148,11 @@ CompileResult compile_vx_project(
         {
             VxdbgEmitStats st;
             std::string dbg_err;
-            if (!emit_vxdbg_source(*pm.tc, lo.emitted_symbols(),
+            std::vector<vxdbg::SourceExtent> spans;
+            spans.reserve(lo.emitted_spans().size());
+            for (const auto &e : lo.emitted_spans())
+                spans.push_back({e.symbol, e.line, e.column, e.length});
+            if (!emit_vxdbg_source(*pm.tc, lo.emitted_symbols(), spans,
                                    pm.canonical_path,
                                    pm.source, opts.vxdbg_dir, st, dbg_err)) {
                 std::cerr << "[vxdbg] no se pudo emitir " << pm.canonical_path
@@ -2154,6 +2160,7 @@ CompileResult compile_vx_project(
                           << dbg_err << "\n";
             }
             pm.vxdbg_symbols = st.symbol_links;
+            pm.vxdbg_spans = st.spans;
         }
 
         // -ffp-contract=off (CLI, per-modulo): fuerza IEEE estricto (sin FMA)

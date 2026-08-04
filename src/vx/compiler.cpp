@@ -714,11 +714,16 @@ CompileResult compile_vx_source(const std::string &source,
     {
         VxdbgEmitStats st;
         std::string dbg_err;
-        if (!emit_vxdbg_source(tc, lo.emitted_symbols(), filename, source,
+        std::vector<vxdbg::SourceExtent> spans;
+        spans.reserve(lo.emitted_spans().size());
+        for (const auto &e : lo.emitted_spans())
+            spans.push_back({e.symbol, e.line, e.column, e.length});
+        if (!emit_vxdbg_source(tc, lo.emitted_symbols(), spans, filename, source,
                                opts.vxdbg_dir, st, dbg_err)) {
             std::cerr << "[vxdbg] no se pudo emitir: " << dbg_err << "\n";
         }
         res.vxdbg_artifact_map = st.artifact_map;
+        res.vxdbg_span_map = st.span_map;
     }
 
     // -ffp-contract=off (CLI, per-modulo): fuerza IEEE estricto (sin contraccion

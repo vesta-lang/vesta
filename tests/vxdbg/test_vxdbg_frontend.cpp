@@ -146,9 +146,15 @@ int main() {
         return 1;
     }
 
+    // Los tramos de fuente, tal como los anoto el lowering al bajar cada
+    // sentencia: son los que permiten subrayar lo que fallo y no solo la linea.
+    std::vector<vxdbg::SourceExtent> tramos;
+    for (const auto &e : lo.emitted_spans())
+        tramos.push_back({e.symbol, e.line, e.column, e.length});
+
     vx::VxdbgEmitStats stats;
     std::string err;
-    comprobar(vx::emit_vxdbg_source(tc, lo.emitted_symbols(), "prueba.vx", FUENTE, dir, stats, err),
+    comprobar(vx::emit_vxdbg_source(tc, lo.emitted_symbols(), tramos, "prueba.vx", FUENTE, dir, stats, err),
               "se emite el grafo");
     comprobar(stats.entities > 0, "y no sale vacio");
 
@@ -193,6 +199,27 @@ int main() {
               "un tipo que no existe no aparece");
     comprobar(stats.unresolved == 0,
               "y no queda ninguna relacion sin destino");
+
+    std::printf("Los tramos de fuente\n");
+    comprobar(!stats.span_map.empty(), "se emite el mapa de tramos");
+    comprobar(!stats.spans.empty(), "con tramos dentro");
+    {
+        // Un tramo sirve de algo solo si trae columna: con la linea sola no se
+        // distingue cual de las cosas que caben en ella fallo.
+        bool con_columna = false;
+        for (const auto &sp : stats.spans)
+            if (sp.column > 0 && sp.length > 0) con_columna = true;
+        comprobar(con_columna, "  y al menos uno dice columna y longitud");
+
+        vxdbg::SpanMap sm;
+        for (const auto &sp : stats.spans) sm.add(sp);
+        const auto encontrado = sm.find(stats.spans[0].symbol,
+                                        stats.spans[0].line);
+        comprobar(encontrado.line == stats.spans[0].line,
+                  "  y se encuentran por funcion y linea");
+        comprobar(sm.find("NoExisteTalFuncion", 1).line == 0,
+                  "  sin inventarse los que no estan");
+    }
 
     std::printf("La puerta de entrada\n");
     comprobar(!stats.artifact_map.empty(), "se emite el mapa de simbolos");
@@ -244,7 +271,7 @@ int main() {
     // la propiedad que hace incremental al sistema, y si se rompiera aqui el
     // cache creceria sin parar sin que nadie lo notara.
     vx::VxdbgEmitStats stats2;
-    comprobar(vx::emit_vxdbg_source(tc, lo.emitted_symbols(), "prueba.vx", FUENTE, dir, stats2, err),
+    comprobar(vx::emit_vxdbg_source(tc, lo.emitted_symbols(), tramos, "prueba.vx", FUENTE, dir, stats2, err),
               "la segunda vez tambien va");
     comprobar(stats2.roots.size() == stats.roots.size(),
               "con los mismos tipos");

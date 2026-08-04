@@ -111,6 +111,48 @@ struct ArtifactMap {
 };
 
 /**
+ * @brief Un tramo de fuente: donde empieza y cuanto ocupa.
+ */
+struct SourceExtent {
+    std::string symbol; ///< funcion a la que pertenece
+    uint32_t line = 0;
+    uint32_t column = 0; ///< base 1
+    uint32_t length = 0; ///< en bytes
+};
+
+/**
+ * @brief Los tramos de fuente de un artefacto.
+ *
+ * Con la linea sola no se puede senalar QUE fallo: en
+ * `return foo(a) / bar(b);` hay tres candidatos y comparten linea.  Con la
+ * columna y la longitud se subraya el culpable.
+ *
+ * El tramo lo produce quien compila -- el arbol ya lo tiene -- y viaja hasta
+ * aqui: reconstruirlo al fallar seria adivinar.
+ */
+struct SpanMap {
+    static constexpr uint32_t kSchemaVersion = 1;
+    DebugNodeHeader header{NodeKind::SpanMap, kSchemaVersion, {}};
+
+    /// Ordenados por (simbolo, linea), para buscar sin construir nada al leer.
+    std::vector<SourceExtent> extents;
+
+    /**
+     * @brief Busca el tramo de una linea dentro de una funcion.
+     * @param symbol Funcion.
+     * @param line Linea.
+     * @return El tramo, o uno vacio si no consta.
+     */
+    SourceExtent find(const std::string &symbol, uint32_t line) const;
+
+    /**
+     * @brief Anade un tramo manteniendo el orden.
+     * @param e Tramo.
+     */
+    void add(SourceExtent e);
+};
+
+/**
  * @brief De donde se saca el mapa de un artefacto.
  *
  * Se declara como interfaz porque el mismo grafo se va a alcanzar de maneras muy
@@ -139,6 +181,14 @@ class RootProvider {
      * @return @c true si se encontro.
      */
     virtual bool lookup(BuildId build, ArtifactMap &out_map) const = 0;
+
+    /**
+     * @brief Da los tramos de fuente de una compilacion.
+     * @param build De que compilacion.
+     * @param out_spans Recibe los tramos.
+     * @return @c true si constaban.
+     */
+    virtual bool lookup_spans(BuildId build, SpanMap &out_spans) const = 0;
 };
 
 /**
@@ -161,6 +211,7 @@ class CacheRootRepository : public RootProvider {
         : dir_(std::move(dir)), store_(store) {}
 
     bool lookup(BuildId build, ArtifactMap &out_map) const override;
+    bool lookup_spans(BuildId build, SpanMap &out_spans) const override;
 
     /**
      * @brief Deja constancia de que mapa corresponde a una compilacion.
@@ -173,7 +224,8 @@ class CacheRootRepository : public RootProvider {
      * @param map Huella de su mapa.
      * @return @c true si se escribio.
      */
-    bool publish(BuildId build, ContentHash map) const;
+    bool publish(BuildId build, ContentHash map,
+                 ContentHash spans = ContentHash{}) const;
 
   private:
     /// @return Ruta del apuntador de una compilacion.

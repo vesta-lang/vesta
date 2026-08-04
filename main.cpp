@@ -4091,7 +4091,8 @@ int main(int argc, char *argv[]) {
         // identificador no existe hasta que el fichero existe.
         if (rc == EXIT_SUCCESS && !cr.vxdbg_artifact_map.empty()) {
             vx::publish_vxdbg_artifact(out_prefix + ".velb",
-                                       cr.vxdbg_artifact_map, copts.vxdbg_dir);
+                                       cr.vxdbg_artifact_map,
+                                       cr.vxdbg_span_map, copts.vxdbg_dir);
         }
 
         //  M5.B: persistir el .velb final al project cache si

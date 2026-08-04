@@ -25,6 +25,7 @@
 #define VX_VXDBG_EMIT_H
 
 #include "vxdbg/ids.h"
+#include "vxdbg/roots.h"
 
 #include <cstddef>
 #include <string>
@@ -69,6 +70,11 @@ struct VxdbgEmitStats {
     /// Huella del mapa de simbolos.  Con ella y el identificador de la
     /// compilacion se entra al grafo desde una direccion de ejecucion.
     vxdbg::ContentHash artifact_map;
+    /// Huella del mapa de TRAMOS de fuente.  Va aparte del de simbolos porque
+    /// cambia con cualquier reformateo del fuente mientras que el otro no.
+    vxdbg::ContentHash span_map;
+    /// Los tramos, para que quien junte varios modulos pueda componer el suyo.
+    std::vector<vxdbg::SourceExtent> spans;
 };
 
 /**
@@ -99,6 +105,7 @@ std::string default_vxdbg_dir();
  */
 bool publish_vxdbg_artifact(const std::string &artifact_path,
                             vxdbg::ContentHash map,
+                            vxdbg::ContentHash spans = vxdbg::ContentHash{},
                             const std::string &out_dir = std::string());
 
 /**
@@ -125,6 +132,7 @@ bool publish_vxdbg_artifact(const std::string &artifact_path,
 bool emit_vxdbg_source(const TypeChecker &tc,
                        const std::vector<std::pair<std::string, std::string>>
                            &symbol_links,
+                       const std::vector<vxdbg::SourceExtent> &spans,
                        const std::string &source_path,
                        const std::string &source_text,
                        const std::string &out_dir, VxdbgEmitStats &stats,

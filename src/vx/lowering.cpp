@@ -3813,6 +3813,19 @@ void Lowering::lower_block(ast::BlockStmt *b) {
 
 void Lowering::lower_stmt(ast::Stmt *s) {
     if (!s) return;
+    /* Se anota el TRAMO de la sentencia -- fichero, linea, columna y longitud --
+     * en el punto por el que pasan todas.  La posicion ya la traia el arbol; lo
+     * que faltaba era hacerla viajar, porque una linea no basta: en
+     * `return foo(a) / bar(b);` hay tres cosas que pueden fallar y todas estan
+     * en la misma.  Reconstruirlo despues seria adivinar. */
+    if (fn_ && !fn_->name.empty() && s->loc.line > 0) {
+        StmtSpan sp;
+        sp.symbol = fn_->name;
+        sp.line = s->loc.line;
+        sp.column = s->loc.column;
+        sp.length = s->loc.length;
+        emitted_spans_.push_back(std::move(sp));
+    }
     switch (s->kind) {
     case ast::NodeKind::BlockStmt:
         lower_block(static_cast<ast::BlockStmt *>(s));

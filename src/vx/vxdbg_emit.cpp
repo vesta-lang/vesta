@@ -502,7 +502,8 @@ vxdbg::ArtifactMap link_symbols(
 } // namespace
 
 bool publish_vxdbg_artifact(const std::string &artifact_path,
-                            vxdbg::ContentHash map, const std::string &out_dir) {
+                            vxdbg::ContentHash map, vxdbg::ContentHash spans,
+                            const std::string &out_dir) {
     if (map.empty()) return false;
     std::FILE *f = std::fopen(artifact_path.c_str(), "rb");
     if (!f) return false;
@@ -520,9 +521,8 @@ bool publish_vxdbg_artifact(const std::string &artifact_path,
     const std::string dir = out_dir.empty() ? default_vxdbg_dir() : out_dir;
     vxdbg::FileNodeStore store(dir);
     const vxdbg::CacheRootRepository repo(dir, store);
-    return repo.publish(vxdbg::BuildId{vxdbg::hash_bytes(bytes.data(),
-                                                         bytes.size())},
-                        map);
+    const vxdbg::BuildId build{vxdbg::hash_bytes(bytes.data(), bytes.size())};
+    return repo.publish(build, map, spans);
 }
 
 std::string default_vxdbg_dir() {
@@ -537,6 +537,7 @@ std::string default_vxdbg_dir() {
 bool emit_vxdbg_source(const TypeChecker &tc,
                        const std::vector<std::pair<std::string, std::string>>
                            &symbol_links,
+                       const std::vector<vxdbg::SourceExtent> &spans,
                        const std::string &source_path,
                        const std::string &source_text,
                        const std::string &out_dir, VxdbgEmitStats &stats,
@@ -566,6 +567,16 @@ bool emit_vxdbg_source(const TypeChecker &tc,
         stats.symbol_links = map.symbols;
         vxdbg::ContentHash h;
         if (vxdbg::store_node(store, map, h)) stats.artifact_map = h;
+    }
+    // Los tramos de fuente: van en su propio nodo porque cambian con cualquier
+    // reformateo mientras que los simbolos no, y compartir nodo obligaria a
+    // reescribir los dos por mover una llave de sitio.
+    if (!spans.empty()) {
+        vxdbg::SpanMap sm;
+        for (const auto &e : spans) sm.add(e);
+        stats.spans = sm.extents;
+        vxdbg::ContentHash hs;
+        if (vxdbg::store_node(store, sm, hs)) stats.span_map = hs;
     }
     return true;
 }

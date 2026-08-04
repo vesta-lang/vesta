@@ -265,4 +265,35 @@ bool decode(const StoredNode &s, ArtifactMap &out) {
     return r.ok();
 }
 
+StoredNode encode(const SpanMap &n) {
+    ByteWriter w;
+    w.u32(static_cast<uint32_t>(n.extents.size()));
+    for (const auto &e : n.extents) {
+        w.str(e.symbol);
+        w.u32(e.line);
+        w.u32(e.column);
+        w.u32(e.length);
+    }
+    return make(n.header, w);
+}
+
+bool decode(const StoredNode &s, SpanMap &out) {
+    if (!expect<SpanMap>(s, NodeKind::SpanMap)) return false;
+    ByteReader r(s.payload);
+    out.header = s.header;
+    const uint32_t n = r.u32();
+    if (!r.ok()) return false;
+    out.extents.clear();
+    out.extents.reserve(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        SourceExtent e;
+        e.symbol = r.str();
+        e.line = r.u32();
+        e.column = r.u32();
+        e.length = r.u32();
+        out.extents.push_back(std::move(e));
+    }
+    return r.ok();
+}
+
 } // namespace vxdbg

@@ -81,6 +81,9 @@ bool decode(const StoredNode &s, VariableMap &out);
 /// @{
 StoredNode encode(const ArtifactMap &n);
 bool decode(const StoredNode &s, ArtifactMap &out);
+
+StoredNode encode(const SpanMap &n);
+bool decode(const StoredNode &s, SpanMap &out);
 /// @}
 
 /// @name Transferencias de control

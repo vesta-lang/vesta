@@ -64,6 +64,10 @@ enum class NodeKind : uint16_t {
     /// empieza por una direccion, que resuelve a un simbolo.  Este nodo lo
     /// convierte en una entidad y abre el grafo entero.
     ArtifactMap = 18,
+    /// Los tramos de fuente de un artefacto, por simbolo y linea.  Con la
+    /// linea sola no se distingue cual de las tres llamadas que caben en ella
+    /// fallo; con la columna y la longitud, si.
+    SpanMap = 19,
 };
 
 /**

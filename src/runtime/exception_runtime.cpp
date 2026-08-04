@@ -17,6 +17,7 @@
 
 #include <fstream>
 #include <sstream>
+#include <algorithm>
 #include <memory>
 
 
@@ -267,11 +268,13 @@ static std::string demangle_symbol(const std::string &raw) {
 static std::string entity_note_for_symbol(ProcessVM *vm,
                                           const std::string &symbol,
                                           std::string *out_file = nullptr,
-                                          vxdbg::ContentHash *out_sum = nullptr) {
+                                          vxdbg::ContentHash *out_sum = nullptr,
+                                          const vxdbg::SpanMap **out_spans = nullptr) {
     struct Grafo {
         bool intentado = false;
         bool hay = false;
         vxdbg::ArtifactMap map;
+        vxdbg::SpanMap spans;
         std::unique_ptr<vxdbg::FileNodeStore> store;
     };
     static Grafo g;
@@ -301,14 +304,17 @@ static std::string entity_note_for_symbol(ProcessVM *vm,
                     const std::string dir = vxdbg_cache_dir();
                     g.store = std::make_unique<vxdbg::FileNodeStore>(dir);
                     const vxdbg::CacheRootRepository repo(dir, *g.store);
-                    g.hay = repo.lookup(
-                        vxdbg::BuildId{
-                            vxdbg::hash_bytes(bytes.data(), bytes.size())},
-                        g.map);
+                    const vxdbg::BuildId build{
+                        vxdbg::hash_bytes(bytes.data(), bytes.size())};
+                    g.hay = repo.lookup(build, g.map);
+                    // Los tramos son opcionales: si no estan, la traza sale
+                    // igual, solo que sin subrayar.
+                    repo.lookup_spans(build, g.spans);
                 }
             }
         }
     }
+    if (out_spans) *out_spans = &g.spans;
     if (!g.hay) return {};
 
     /* La tabla del ejecutable nombra el codigo `code.<funcion>`; el grafo lo
@@ -445,6 +451,26 @@ static void report_uncaught_fatal(ProcessVM *vm, uint32_t kind) {
     std::fflush(stderr);
 }
 
+/**
+ * @brief El tramo de fuente de una linea dentro de una funcion.
+ *
+ * Lo produjo quien compilo; aqui solo se consulta.  Vacio = no consta, y
+ * entonces no se subraya nada en vez de subrayar a ojo.
+ *
+ * @param vm Proceso.
+ * @param symbol Simbolo de la funcion.
+ * @param line Linea.
+ * @return El tramo.
+ */
+static vxdbg::SourceExtent span_for(ProcessVM *vm, const std::string &symbol,
+                                    uint32_t line) {
+    const vxdbg::SpanMap *sp = nullptr;
+    (void)entity_note_for_symbol(vm, symbol, nullptr, nullptr, &sp);
+    if (!sp) return {};
+    return sp->find(
+        (symbol.rfind("code.", 0) == 0) ? symbol.substr(5) : symbol, line);
+}
+
 static const std::string *symbol_for_pc(ProcessVM *vm, uint64_t pc,
                                         uint64_t &out_off) {
     const std::string *best = nullptr;
@@ -557,7 +583,8 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
      * resolvia.  Si el fuente no esta o ya no coincide, simplemente no se
      * ensena. */
     auto append_source = [&](uint64_t pc, const std::string &archivo,
-                             vxdbg::ContentHash resumen) {
+                             vxdbg::ContentHash resumen,
+                             const std::string &simbolo) {
         if (archivo.empty()) return;
         uint32_t linea = 0;
         for (const auto &exe_ptr :
@@ -598,6 +625,21 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
         const std::string limpio = texto.substr(ini);
         append_str("      ");
         append(limpio.c_str(), limpio.size());
+        append_str("\n");
+
+        /* Y el subrayado del tramo exacto, si consta.  Con la linea sola no se
+         * distingue cual de las tres llamadas que caben en ella fallo; el tramo
+         * lo dice.  Se descuenta la sangria que se quito arriba para que el
+         * subrayado caiga donde debe. */
+        const vxdbg::SourceExtent ext = span_for(vm, simbolo, linea);
+        if (ext.length == 0 || ext.column == 0) return;
+        if (ext.column - 1 < ini) return; // el tramo empieza en otra linea
+        const size_t col = ext.column - 1 - ini;
+        if (col >= limpio.size()) return;
+        const size_t largo = std::min<size_t>(ext.length, limpio.size() - col);
+        append_str("      ");
+        for (size_t i = 0; i < col; ++i) append_str(" ");
+        for (size_t i = 0; i < largo; ++i) append_str("^");
         append_str("\n");
     };
 
@@ -697,7 +739,7 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
             append_pos(cur_pc,
                        legible.find('.') != std::string::npos);
             append_str("\n");
-            append_source(cur_pc, archivo_top, resumen_top);
+            append_source(cur_pc, archivo_top, resumen_top, *sym);
         } else {
             append_str("<top> (pc=");
             append_hex(cur_pc);
@@ -787,7 +829,7 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
             }
             append_pos(v, legible.find('.') != std::string::npos);
             append_str("\n");
-            append_source(v, archivo2, resumen2);
+            append_source(v, archivo2, resumen2, *sym);
             ++shown;
         }
     }

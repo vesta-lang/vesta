@@ -237,6 +237,9 @@ struct CompileResult {
     /// bajo su identificador de construccion: es lo que permite, desde una
     /// direccion de ejecucion, llegar a la declaracion que la origino.
     vxdbg::ContentHash vxdbg_artifact_map;
+    /// Y la del mapa de TRAMOS de fuente, que va aparte porque cambia con
+    /// cualquier reformateo mientras que el de simbolos no.
+    vxdbg::ContentHash vxdbg_span_map;
     std::string vel_text; ///< Texto .vel generado a partir del IR.
     std::string
         ir_text; ///< dump del IrModule (solo si CompileOptions::dump_ir).
