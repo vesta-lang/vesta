@@ -11,6 +11,7 @@
 #include "loader/loader.h"
 #include "loader/class_registry.h"
 #include "debug/debugger.h"
+#include "disasm/disasm.h"
 #include "jit/auto_jit.h"
 
 #include <capstone/capstone.h>
@@ -772,40 +773,6 @@ static std::vector<std::string> ir_window_at(ProcessVM *vm,
  * @return Las lineas de texto, con la culpable marcada.
  */
 /**
- * @brief Los BYTES de una instruccion, en hexadecimal.
- *
- * El nombre a secas no dice nada: `mov` no distingue de donde a donde ni con
- * que.  Se intento escribir los operandos segun el modo de direccionamiento y
- * salio mal en la tabla extendida -- `sext r0, r32` cuando 32 es un ancho en
- * bits, `pop r4, r0` cuando `pop` tiene uno solo --, porque ahi cada
- * instruccion coloca sus campos a su manera y el modo no basta para saber que
- * es cada uno.  Escribir un operando equivocado es peor que no escribirlo:
- * manda a mirar un registro que no interviene.
- *
- * Los bytes, en cambio, siempre son ciertos y no ocultan nada.  Cuando exista
- * una tabla que diga, por instruccion, que significa cada campo, se podra
- * escribir ademas la forma legible.
- *
- * @param vm Proceso del que leer.
- * @param pc Direccion de la instruccion.
- * @param n Cuantos bytes ocupa.
- * @return Los bytes separados por espacios.
- */
-static std::string bytes_de(ProcessVM *vm, uint64_t pc, uint32_t n) {
-    std::string out;
-    if (n == 0 || n > 16) return out;
-    char buf[4];
-    for (uint32_t k = 0; k < n; ++k) {
-        uint8_t b = 0;
-        vm->vm_mem.read_bytes(pc + k, &b, 1);
-        std::snprintf(buf, sizeof(buf), "%02x", (unsigned)b);
-        if (k) out += ' ';
-        out += buf;
-    }
-    return out;
-}
-
-/**
  * @brief Una VENTANA del codigo NATIVO alrededor de donde fallo.
  *
  * Cuando lo que corrio fue codigo compilado, las instrucciones de la maquina
@@ -873,60 +840,65 @@ static std::vector<std::string> bytecode_window(ProcessVM *vm, uint64_t inicio,
     std::vector<std::string> out;
     if (inicio > pc_fallo) return out;
 
-    struct Paso {
-        uint64_t pc;
-        const char *nombre;
-        std::string bytes; ///< los bytes de la instruccion, en hexadecimal
-        uint8_t r1;
-        uint8_t r2;
-    };
-    std::vector<Paso> pasos;
-    uint64_t pc = inicio;
-    /* Tope de seguridad: si el tamano viniera a cero se quedaria dando vueltas
-     * aqui, y esto corre justo cuando el programa ya ha fallado. */
-    for (int n = 0; n < 4096 && pc <= pc_fallo + 64; ++n) {
-        DecodedInstr d{};
-        if (!decode_peek(vm, pc, d)) break;
-        if (!d.metadata || !d.metadata->name) break;
-        pasos.push_back({pc, d.metadata->name,
-                         bytes_de(vm, pc, d.flags_info.size_instr),
-                         d.data_instruction.reg_data.reg1,
-                         d.data_instruction.reg_data.reg2});
-        const uint32_t tam = d.flags_info.size_instr;
-        if (tam == 0) break;
-        pc += tam;
-    }
+    /* Se desensambla con el DESENSAMBLADOR del proyecto, no con un formateo
+     * propio.  Ya sabe escribir los operandos de cada instruccion, que es lo
+     * que un renderizado por modo de direccionamiento no puede saber: en la
+     * tabla extendida cada una coloca sus campos a su manera.  Ademas, si
+     * manana cambia una instruccion, cambia en un solo sitio. */
+    const uint64_t tope = pc_fallo + 64;
+    const size_t largo = (size_t)(tope - inicio);
+    if (largo == 0 || largo > 8192) return out;
+    std::vector<uint8_t> bytes(largo, 0);
+    vm->vm_mem.read_bytes(inicio, bytes.data(), largo);
 
-    size_t culpable = pasos.size();
-    for (size_t i = 0; i < pasos.size(); ++i)
-        if (pasos[i].pc == pc_fallo) {
+    disasm::DisasmOptions opts;
+    opts.show_hex = true;
+    opts.use_color = false;
+    opts.stop_at_hlt = false;
+    opts.max_bytes = largo;
+    const std::vector<disasm::DisasmResult> instrs =
+        disasm::disasm_bytes(bytes.data(), largo, inicio, opts);
+
+    size_t culpable = instrs.size();
+    for (size_t i = 0; i < instrs.size(); ++i)
+        if (instrs[i].address == pc_fallo) {
             culpable = i;
             break;
         }
-    if (culpable == pasos.size()) return out;
+    if (culpable == instrs.size()) return out;
 
     const size_t desde = (culpable > antes) ? (culpable - antes) : 0;
-    const size_t hasta = std::min(pasos.size(), culpable + despues + 1);
+    const size_t hasta = std::min(instrs.size(), culpable + despues + 1);
     for (size_t i = desde; i < hasta; ++i) {
-        char buf[160];
+        const disasm::DisasmResult &d = instrs[i];
+        char buf[256];
         if (i == culpable) {
             /* De la que fallo se ensena tambien QUE VALIAN sus registros.  Es
-             * la diferencia entre saber que reventó un `mov` y saber que
-             * reventó porque el registro del que leia valia cero.  Solo de
-             * esa: los valores de las de al lado ya han cambiado o aun no se
-             * han calculado, y ensenarlos seria mentir. */
-            std::snprintf(
-                buf, sizeof(buf), "> 0x%llx  %-34s %-8s r%u=0x%llx r%u=0x%llx",
-                (unsigned long long)pasos[i].pc, pasos[i].bytes.c_str(),
-                pasos[i].nombre, pasos[i].r1,
-                (unsigned long long)vm->registers.regs[pasos[i].r1 & 0xF].qword(),
-                pasos[i].r2,
-                (unsigned long long)vm->registers.regs[pasos[i].r2 & 0xF]
-                    .qword());
+             * la diferencia entre saber que reventó un `div` y saber que
+             * reventó porque el divisor valia cero.  Solo de esa: los valores
+             * de las de al lado ya han cambiado o aun no se han calculado, y
+             * ensenarlos seria mentir. */
+            DecodedInstr dec{};
+            std::string vals;
+            if (decode_peek(vm, d.address, dec)) {
+                const uint8_t r1 = dec.data_instruction.reg_data.reg1 & 0xF;
+                const uint8_t r2 = dec.data_instruction.reg_data.reg2 & 0xF;
+                char vb[80];
+                std::snprintf(vb, sizeof(vb), "  r%u=0x%llx r%u=0x%llx",
+                              (unsigned)r1,
+                              (unsigned long long)vm->registers.regs[r1].qword(),
+                              (unsigned)r2,
+                              (unsigned long long)vm->registers.regs[r2].qword());
+                vals = vb;
+            }
+            std::snprintf(buf, sizeof(buf), "> 0x%llx  %-34s %-8s %-16s%s",
+                          (unsigned long long)d.address, d.hex.c_str(),
+                          d.mnemonic.c_str(), d.operands.c_str(),
+                          vals.c_str());
         } else {
-            std::snprintf(buf, sizeof(buf), "  0x%llx  %-34s %s",
-                          (unsigned long long)pasos[i].pc,
-                          pasos[i].bytes.c_str(), pasos[i].nombre);
+            std::snprintf(buf, sizeof(buf), "  0x%llx  %-34s %-8s %s",
+                          (unsigned long long)d.address, d.hex.c_str(),
+                          d.mnemonic.c_str(), d.operands.c_str());
         }
         out.push_back(buf);
     }

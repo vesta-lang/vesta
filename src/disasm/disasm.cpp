@@ -241,6 +241,13 @@ static std::string fmt_ext_operands(uint8_t opc,
             const unsigned rb2 = raw[3] & 0x0F;
             snprintf(buf, sizeof(buf), "r%u, r%u ? r%u : r%u", rd, rc, ra2,
                      rb2);
+        } else if (opc == 0x92 && isz >= 4) {
+            // sext r_dst, N: el segundo campo NO es un registro, es el ancho
+            // en bits desde el que se extiende el signo (8/16/32).  Salia como
+            // `r2` -- un registro que no interviene --, que manda a mirar donde
+            // no toca.
+            snprintf(buf, sizeof(buf), "r%u, %u", (unsigned)(raw[2] & 0x0F),
+                     (unsigned)raw[3]);
         } else if (opc == 0x43 && isz >= 4) {
             // setcc r_dst, cond: byte2 = (cond << 4) | registro.  La condicion
             // es justo el dato que interesa al leer una comparacion, y salia
@@ -540,7 +547,12 @@ static std::string fmt_primary_operands(uint8_t opc,
 static std::string build_hex_string(const uint8_t *raw, size_t isz,
                                     bool color) {
     std::ostringstream hs;
-    size_t shown = (isz < 10) ? isz : 10; // mostrar hasta 10 bytes
+    /* Se ensenan TODOS los bytes que ocupa la instruccion.  Estaban cortados a
+     * 10 y las hay de 11 -- un `mov reg, imm64` son 3 + 8 --, con lo que el
+     * ultimo byte desaparecia sin decirlo: quien leia el volcado creia estar
+     * viendo la instruccion entera y le faltaba un trozo del inmediato.  El
+     * tope es el del buffer de bytes crudos. */
+    size_t shown = (isz < 12) ? isz : 12;
     for (size_t i = 0; i < shown; ++i) {
         if (i) hs << " ";
         char hb[4];
