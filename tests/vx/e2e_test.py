@@ -673,6 +673,37 @@ def diff3_stdout_case(tag, label, src, line=None, aot=True):
     _register(tag, fn, False, line)
 
 
+def fault3_case(tag, label, src, code, exit_want, line=None):
+    """Un fallo sin capturar, en los tres modos.
+
+    Interprete y JIT tienen que contarlo igual: el codigo del catalogo, la
+    cadena de llamadas con el fuente subrayado, y el codigo de salida.  El AOT
+    a nivel 0 NO reporta a proposito -- el nativo tiene que ser ligero -- asi
+    que ahi solo se exige que NO salga con cero: reventar y decir que todo fue
+    bien es lo unico inaceptable en los tres.
+    """
+    def fn(ctx):
+        ctx.compile_vx(ctx.src(src), tag)
+        for modo in ("vm", "jit"):
+            rc, log = ctx.run_velb(tag, schedulers=1, mode=modo)
+            if code not in log:
+                ctx.fail("%s (-m %s): no aparece %s" % (label, modo, code), log)
+            if "Stack trace" not in log:
+                ctx.fail("%s (-m %s): sin cadena de llamadas" % (label, modo), log)
+            got = exit_code(rc)
+            if got != exit_want:
+                ctx.fail("%s (-m %s): sale %d, se esperaba %d"
+                         % (label, modo, got, exit_want), log)
+            ctx.ok("%s (-m %s) -> %s, sale %d" % (label, modo, code, exit_want))
+        exe = aot_build(ctx, ctx.src(src), tag + "_aot", label + " (-m aot)")
+        rc, _ = ctx.run([exe])
+        if exit_code(rc) == 0:
+            ctx.fail("%s (-m aot): salio con cero tras reventar" % label)
+        ctx.ok("%s (-m aot) -> muere sin decir nada, como debe" % label)
+    fn.__name__ = "case_" + tag
+    _register(tag, fn, False, line)
+
+
 def diff3_case(tag, label, src, line=None, aot=True):
     """Red de seguridad diferencial: interp=oraculo, jit y aot deben COINCIDIR.
     Sin valor esperado; cualquier divergencia entre backends rompe el build."""
@@ -3695,6 +3726,14 @@ def run_case(entry):
         ctx.lines.append(("FAIL", "%s: excepcion del harness: %s" % (tag, e)))
         ctx.lines.append(("DETAIL", traceback.format_exc()))
         return (tag, ctx.lines, ctx.n_ok, False)
+
+
+# --- Fallos sin capturar: se cuentan igual en interprete y JIT ---
+fault3_case("fallo_division_cero",
+            "division entre cero con cadena de tres marcos",
+            "369_fallo_division_cero.vx", "VX7002", 136)
+fault3_case("fallo_panic", "panic sin capturar",
+            "370_fallo_panic.vx", "VX7011", 134)
 
 
 def main():

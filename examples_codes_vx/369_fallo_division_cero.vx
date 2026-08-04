@@ -1,0 +1,82 @@
+/**
+ * @file 369_fallo_division_cero.vx
+ * @brief Division entre cero: el fallo tiene que decir DONDE y DE QUE.
+ *
+ * Se pasa por una funcion libre, un metodo de struct y uno de clase para que la
+ * traza tenga que recorrer las tres formas.  Lo que se comprueba no es que
+ * falle -- eso es facil -- sino que al fallar quede constancia de que se estaba
+ * evaluando, en que funcion, de que tipo es miembro y en que linea.
+ *
+ * El divisor sale de una funcion opaca para que el optimizador no pueda plegar
+ * la division al compilar y dejar el fallo sin ocurrir.
+ */
+
+/**
+ * @struct Divisor
+ * @brief Guarda un divisor y lo aplica.  Value-type: su metodo baja a funcion
+ *        libre, que es un caso distinto en la traza.
+ */
+struct Divisor {
+    i64 valor;
+
+    /**
+     * @brief Divide lo que le den entre lo que guarda.
+     * @param x Dividendo.
+     * @return El cociente, si el divisor no es cero.
+     */
+    i64 aplicar(i64 x) {
+        return x / this.valor;
+    }
+}
+
+/**
+ * @class Calculadora
+ * @brief Tipo por referencia que delega en el struct.  Anade a la cadena un
+ *        marco de otra especie.
+ */
+class Calculadora {
+    i64 usos;
+
+    /**
+     * @brief Constructor.
+     */
+    public Calculadora() {
+        this.usos = 0;
+    }
+
+    /**
+     * @brief Delega en el struct.
+     * @param x Dividendo.
+     * @param d Divisor a usar.
+     * @return El cociente.
+     */
+    public i64 calcular(i64 x, Divisor d) {
+        this.usos = this.usos + 1;
+        return d.aplicar(x);
+    }
+}
+
+/**
+ * @brief Devuelve cero sin que se pueda deducir al compilar.
+ * @param n Valor de entrada.
+ * @return Siempre 0 para las entradas de este programa.
+ */
+i64 cero_opaco(i64 n) {
+    if (n > 1000) {
+        return 1;
+    }
+    return 0;
+}
+
+/**
+ * @brief Punto de entrada.
+ * @return No llega a devolver nada.
+ */
+i32 main() {
+    Divisor d;
+    d.valor = cero_opaco(7);
+
+    Calculadora c = new Calculadora();
+    println("antes de dividir");
+    return (i32) c.calcular(42, d);
+}
