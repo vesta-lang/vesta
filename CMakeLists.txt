@@ -808,6 +808,15 @@ endif ()
 # Banco de registros fisico unico (allocator de banco ancho, Fase 0):
 # consolidacion de TargetRegInfo + BackendCaps en un modelo comun (Lane/View/
 # SavePolicy/AliasSet/Reserve).  Test de round-trip contra los targets.
+# Subsistema de depuracion (vxdbg): identidad por contenido y capacidades.
+# No enlaza con el resto del compilador a proposito -- el subsistema esta
+# pensado para ser reutilizable por cualquier frontend, y si su test necesitara
+# media maquina virtual para arrancar es que esa independencia no seria cierta.
+add_executable(test_vxdbg_core tests/vxdbg/test_vxdbg_core.cpp
+                               src/vxdbg/ids.cpp
+                               src/vxdbg/capabilities.cpp)
+target_include_directories(test_vxdbg_core PRIVATE ${VM_INCLUDES})
+
 add_executable(test_rbank_physical tests/jit/test_rbank_physical.cpp)
 target_include_directories(test_rbank_physical PRIVATE ${VM_INCLUDES})
 target_link_libraries(test_rbank_physical PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)

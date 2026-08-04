@@ -16,22 +16,18 @@
 
 #include <cstdint>
 
+#include "util/fnv.h"
+
 namespace codegen {
 namespace rbank {
 
-/** @brief Semilla y primo FNV-1a de 64 bits. */
-static constexpr uint64_t kFnvOffset = 1469598103934665603ull;
-static constexpr uint64_t kFnvPrime  = 1099511628211ull;
-
-/** @brief Mezcla un entero de 64 bits (byte a byte) en un acumulador FNV-1a. */
-inline uint64_t fnv_mix(uint64_t h, uint64_t v) noexcept {
-    for (int i = 0; i < 8; ++i) {
-        h ^= (v & 0xff);
-        h *= kFnvPrime;
-        v >>= 8;
-    }
-    return h;
-}
+/* El algoritmo vive ahora en `util/fnv.h`: tambien lo necesita el subsistema de
+ * depuracion, y ni tenia sentido que dependiera del asignador de registros ni
+ * copiar el codigo.  Estos nombres siguen aqui para que nada de lo que ya lo
+ * usaba tenga que cambiar. */
+using util::kFnvOffset;
+using util::kFnvPrime;
+using util::fnv_mix;
 
 } // namespace rbank
 } // namespace codegen
