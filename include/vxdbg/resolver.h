@@ -53,7 +53,8 @@ struct EntityView {
     bool found = false;
     std::string name;
     std::string qualified;
-    std::string kind; ///< como lo llama SU lenguaje
+    EntityKind kind = EntityKind::Unknown; ///< especie comun a todo lenguaje
+    std::string lang_kind;                 ///< como lo llama SU lenguaje
     std::vector<std::string> derives;    ///< cadena completa, de cerca a lejos
     std::vector<std::string> implements;
     std::string declared_in;             ///< modulo o espacio de nombres

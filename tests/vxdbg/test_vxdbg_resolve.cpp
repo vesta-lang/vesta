@@ -78,25 +78,29 @@ struct Programa {
 
         LanguageEntity flujo;
         flujo.name = "Flujo";
-        flujo.kind = "class";
+        flujo.kind = EntityKind::Type;
+        flujo.lang_kind = "class";
         store_node(store, flujo, h);
         base = LanguageEntityId{h};
 
         LanguageEntity cerrable;
         cerrable.name = "Cerrable";
-        cerrable.kind = "interface";
+        cerrable.kind = EntityKind::Contract;
+        cerrable.lang_kind = "interface";
         store_node(store, cerrable, h);
         contrato = LanguageEntityId{h};
 
         LanguageEntity i32;
         i32.name = "i32";
-        i32.kind = "primitive";
+        i32.kind = EntityKind::Type;
+        i32.lang_kind = "primitive";
         store_node(store, i32, h);
         tipo_i32 = LanguageEntityId{h};
 
         LanguageEntity lector;
         lector.name = "Lector";
-        lector.kind = "class"; // lo pone el frontend; el formato no lo juzga
+        lector.kind = EntityKind::Type;
+        lector.lang_kind = "class"; // lo pone el frontend; el formato no lo juzga
         {
             Relation d;
             d.kind = RelationKind::Derives;
@@ -112,7 +116,8 @@ struct Programa {
 
         LanguageEntity parse;
         parse.name = "parse";
-        parse.kind = "method";
+        parse.kind = EntityKind::Function;
+        parse.lang_kind = "method";
         parse.declared_at.file = fichero;
         parse.declared_at.begin_line = 31;
         {
@@ -242,8 +247,10 @@ int main() {
 
     comprobar(s.entity.found, "4. se sabe a quien pertenece el codigo");
     comprobar(s.entity.name == "parse", "   el metodo");
-    comprobar(s.entity.kind == "method",
-              "   con el genero que le puso su lenguaje");
+    comprobar(s.entity.kind == vxdbg::EntityKind::Function,
+              "   de que especie es, sin conocer el lenguaje");
+    comprobar(s.entity.lang_kind == "method",
+              "   y con el genero que le puso su lenguaje");
     comprobar(s.entity.declared_in == "Lector", "   y la clase que lo contiene");
 
     // La jerarquia de la CLASE, que es lo que pedia el usuario ver en un fallo.
@@ -280,7 +287,8 @@ int main() {
         vxdbg::ContentHash h;
         LanguageEntity a;
         a.name = "A";
-        a.kind = "class";
+        a.kind = EntityKind::Type;
+        a.lang_kind = "class";
         // Se declara derivando de si misma: es un fallo de quien genero los
         // datos, y el resolutor tiene que pararse y decirlo.
         StoredNode tmp = encode(a);

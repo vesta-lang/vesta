@@ -152,22 +152,64 @@ struct Attribute {
 };
 
 /**
+ * @brief De que ESPECIE es una entidad, en terminos que cualquier lenguaje
+ *        comparte.
+ *
+ * El conjunto es cerrado y corto por el mismo motivo que @ref RelationKind: es
+ * lo que permite a quien lee decidir sin conocer el lenguaje -- si algo es una
+ * funcion, se puede llamar; si es un contrato, se cumple, no se instancia.
+ *
+ * Como nombra cada lenguaje a los suyos va aparte, en @c lang_kind.  Tenerlo
+ * todo en una cadena parecia mas flexible, pero el precio es que "field",
+ * "Field" y "static_field" acaban conviviendo y nadie puede comparar nada:
+ * quien consume tendria que conocer las variantes de cada frontend, que es
+ * justo lo contrario de lo que se busca.
+ */
+enum class EntityKind : uint8_t {
+    Unknown = 0,
+    /// Tipo con instancias: clase, struct, registro, union.
+    Type = 1,
+    /// Algo que se cumple y no se instancia: interfaz, trait, protocolo,
+    /// concepto.
+    Contract = 2,
+    /// Tipo por enumeracion de casos, con o sin datos asociados.
+    Enumeration = 3,
+    /// Algo que se ejecuta: funcion, metodo, constructor, destructor.
+    Function = 4,
+    /// Miembro con almacenamiento.
+    Field = 5,
+    /// Valor fijo: constante, variante sin datos.
+    Constant = 6,
+    /// Agrupacion: modulo, espacio de nombres, paquete.
+    Module = 7,
+    /// Otro nombre para algo que ya existe.
+    Alias = 8,
+};
+
+/**
  * @brief Cualquier cosa que el frontend declare.
  *
- * El @c kind lo pone el frontend y el formato no lo interpreta.  Lo que si
- * entiende son las relaciones, que es lo que permite a un diagnostico decir
- * "en el metodo `parse` de `Lector`, que deriva de `Flujo` y cumple `Cerrable`"
- * sin saber que significa "clase" en ese lenguaje.
+ * El @c kind dice de que especie es, en terminos comunes; el @c lang_kind, como
+ * lo llama su lenguaje.  Lo que el formato entiende ademas son las relaciones,
+ * que es lo que permite a un diagnostico decir "en el metodo `parse` de
+ * `Lector`, que deriva de `Flujo` y cumple `Cerrable`" sin saber que significa
+ * "clase" en ese lenguaje.
  */
 struct LanguageEntity {
-    static constexpr uint32_t kSchemaVersion = 1;
+    static constexpr uint32_t kSchemaVersion = 2;
     DebugNodeHeader header{NodeKind::Entity, kSchemaVersion, {}};
 
     std::string name;      ///< como se llama
-    std::string qualified; ///< con su camino completo, si lo tiene
+    /// Identidad SEMANTICA, la que decide si dos entidades son la misma.  El
+    /// nombre visible no sirve: `Vector` de dos espacios de nombres distintos, o
+    /// dos instanciaciones de la misma plantilla, se llaman igual y no lo son.
+    /// Quien emite pone aqui la clave con la que el propio compilador las
+    /// distingue.
+    std::string qualified;
+    EntityKind kind = EntityKind::Unknown;
     /// Genero SEGUN SU LENGUAJE: "class", "struct", "trait", "macro",
     /// "template", "property"...  El formato lo transporta, no lo juzga.
-    std::string kind;
+    std::string lang_kind;
 
     std::vector<Relation> relations;
     std::vector<Attribute> attributes;

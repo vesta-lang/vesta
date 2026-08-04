@@ -46,6 +46,15 @@ struct CompileOptions {
     std::string module_name; ///< Nombre logico del modulo (por defecto "main").
     bool emit_debug =
         false;         ///< Emitir comentarios @line N en el .vel generado.
+    /// Carpeta donde volcar la base de conocimiento de depuracion (@c vxdbg).
+    /// Vacia = la de por defecto, dentro del cache del compilador.
+    ///
+    /// NO es opcional: se emite siempre.  Es informacion APARTE del ejecutable
+    /// -- no cambia ni un byte de lo que se genera -- y su valor esta en estar
+    /// ahi cuando algo falla, que es precisamente cuando nadie penso en
+    /// pedirla.  Un programa compilado "sin depuracion" es el que despues no
+    /// se puede explicar.
+    std::string vxdbg_dir;
     /// Solo-LSP: si true, las funciones @c comptime (no-macro) tambien se
     /// bajan a IR como funciones normales para poder inspeccionar su codegen
     /// (JIT/AOT/bytecode del hover).  En compilacion normal estas funciones se

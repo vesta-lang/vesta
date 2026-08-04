@@ -259,6 +259,9 @@ list(FILTER VM_SOURCES EXCLUDE REGEX "/src/port/")
 # de diagramas (tambien en vx_lib) puedan anotar el coste por funcion.  Solo
 # depende de ir::IrModule.  Excluir aqui para evitar definicion duplicada.
 list(FILTER VM_SOURCES EXCLUDE REGEX "/src/analyze/")
+# El subsistema de depuracion (vxdbg) se compila dentro de vx_lib, que es quien
+# lo puebla desde el frontend.  Excluirlo aqui para no definirlo dos veces.
+list(FILTER VM_SOURCES EXCLUDE REGEX "/src/vxdbg/")
 # La API C embebible (src/capi/) solo forma parte de la libreria compartida
 # vesta_ffi (con VESTA_BUILD_DLL); excluirla del ejecutable `vm` y de vmcore
 # para no compilar sus definiciones dllexport/dllimport fuera de contexto.
@@ -842,6 +845,20 @@ target_include_directories(test_vxdbg_codec PRIVATE ${VM_INCLUDES} src/vxdbg)
 # El recorrido completo: de una direccion a una explicacion.  Cada capa esta
 # probada por su cuenta, pero eso no dice si el camino entero funciona -- es
 # justo donde se ven los desajustes entre piezas que por separado estan bien.
+# El unico que enlaza con el frontend: comprueba que lo que el compilador SABE
+# cabe en el modelo, cosa que un grafo escrito a mano nunca puede demostrar.
+add_executable(test_vxdbg_frontend tests/vxdbg/test_vxdbg_frontend.cpp)
+target_include_directories(test_vxdbg_frontend PRIVATE ${VM_INCLUDES})
+# Enlaza tambien vmcore porque el checker puede ejecutar codigo comptime, y eso
+# necesita la maquina virtual entera.  Los otros tests del subsistema NO enlazan
+# nada de esto: son la prueba de que vxdbg no depende del compilador.
+# vx_lib aparece dos veces a proposito: las dos librerias se necesitan
+# mutuamente y el enlazador recorre la lista una sola vez.
+target_link_libraries(test_vxdbg_frontend PRIVATE vx_lib vmcore vx_lib
+        vesta_openssl)
+set_target_properties(test_vxdbg_frontend PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_executable(test_vxdbg_resolve tests/vxdbg/test_vxdbg_resolve.cpp
                                   src/vxdbg/ids.cpp
                                   src/vxdbg/serialize.cpp

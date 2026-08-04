@@ -73,7 +73,8 @@ StoredNode encode(const LanguageEntity &n) {
     ByteWriter w;
     w.str(n.name);
     w.str(n.qualified);
-    w.str(n.kind);
+    w.u8(static_cast<uint8_t>(n.kind));
+    w.str(n.lang_kind);
 
     w.u32(static_cast<uint32_t>(n.relations.size()));
     for (const auto &rel : n.relations) {
@@ -104,7 +105,8 @@ bool decode(const StoredNode &s, LanguageEntity &out) {
     out.header = s.header;
     out.name = r.str();
     out.qualified = r.str();
-    out.kind = r.str();
+    out.kind = static_cast<EntityKind>(r.u8());
+    out.lang_kind = r.str();
 
     const uint32_t n_rel = r.u32();
     if (!r.ok()) return false;

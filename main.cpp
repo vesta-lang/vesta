@@ -830,6 +830,14 @@ int main(int argc, char *argv[]) {
             "frontend NO genera datos extra.  Con el flag, el cliente del "
             "debugger puede setear breakpoints por linea Vesta (`b file.vx:42`) "
             "en lugar de solo por addr.")(
+            "vxdbg-dir",
+            "Carpeta donde volcar la base de conocimiento de depuracion: los "
+            "tipos del programa, sus miembros y como se relacionan, cada uno "
+            "identificado por su contenido.  Es informacion APARTE del "
+            "ejecutable -- no cambia ni un byte de lo que se genera -- y sirve "
+            "para explicar un fallo en terminos del fuente en lugar de "
+            "direcciones.  Sin este flag no se emite nada.",
+            cxxopts::value<std::string>()->default_value(""))(
             "no-debug-info",
             "Desactivar la emision del mapa PC -> linea (seccion DVBG) en el "
             ".velb.  Por defecto el mapa SE EMITE (barato en tamano, no cambia "
@@ -3011,6 +3019,11 @@ int main(int argc, char *argv[]) {
         copts.emit_debug =
             (result.count("no-debug-info") == 0) ||
             (result.count("vx-debug") > 0) || (result.count("profile") > 0);
+        // Base de conocimiento de depuracion: solo si se pide una carpeta.  No
+        // se activa con --vx-debug porque son cosas distintas -- aquella emite
+        // el mapa de lineas DENTRO del ejecutable, esta escribe un grafo
+        // aparte -- y encadenarlas obligaria a pagar una para tener la otra.
+        copts.vxdbg_dir = result["vxdbg-dir"].as<std::string>();
         // Flags de diagramas: cada uno habilita la generacion del diagrama
         // correspondiente en CompileResult, segun el formato elegido por
         // --diagram-format.  Se escriben a archivos al final del bloque.

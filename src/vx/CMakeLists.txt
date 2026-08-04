@@ -172,6 +172,17 @@ add_library(vx_lib STATIC
     borrow_checker.cpp
     compiler.cpp
     compiler_project.cpp
+    # Traductor de los tipos de Vesta a entidades de la base de conocimiento de
+    # depuracion (vxdbg).  Vive en el frontend porque la correspondencia entre
+    # el vocabulario de Vesta y el modelo generico solo la conoce quien declara
+    # los tipos; vxdbg no sabe de ningun lenguaje.
+    vxdbg_emit.cpp
+    ${CMAKE_SOURCE_DIR}/src/vxdbg/ids.cpp
+    ${CMAKE_SOURCE_DIR}/src/vxdbg/serialize.cpp
+    ${CMAKE_SOURCE_DIR}/src/vxdbg/store.cpp
+    ${CMAKE_SOURCE_DIR}/src/vxdbg/lowering_map.cpp
+    ${CMAKE_SOURCE_DIR}/src/vxdbg/codec_source.cpp
+    ${CMAKE_SOURCE_DIR}/src/vxdbg/codec_backend.cpp
     diagram/mermaid_diagrams.cpp
     diagram/graphviz_diagrams.cpp
     diagram/html_diagrams.cpp
@@ -220,6 +231,9 @@ target_include_directories(vx_lib PUBLIC
 # vxi_format.cpp).  Dependencia explicita para que CMake genere el header
 # antes de compilar ese TU y lo recompile cuando el header cambie.
 target_include_directories(vx_lib PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+# Los codecs de vxdbg comparten un header interno que no forma parte de su API
+# publica: se ve desde su propia carpeta y de ningun otro sitio.
+target_include_directories(vx_lib PRIVATE ${CMAKE_SOURCE_DIR}/src/vxdbg)
 set_source_files_properties(module/vxi_format.cpp PROPERTIES
     OBJECT_DEPENDS ${VX_CODEGEN_VERSION_HDR})
 

@@ -54,7 +54,8 @@ static void probar_entidad() {
     vxdbg::LanguageEntity e;
     e.name = "parse";
     e.qualified = "std.io.Lector.parse";
-    e.kind = "method"; // lo pone el frontend; el formato no lo interpreta
+    e.kind = vxdbg::EntityKind::Function;
+    e.lang_kind = "method"; // lo pone el frontend; el formato no lo interpreta
     e.byte_size = 0;
     e.declared_at.file = fid;
     e.declared_at.begin_line = 31;
@@ -84,7 +85,9 @@ static void probar_entidad() {
     comprobar(vxdbg::decode(s, v), "se lee lo que se escribio");
     comprobar(v.name == e.name && v.qualified == e.qualified,
               "conserva los nombres");
-    comprobar(v.kind == "method", "conserva el genero que puso el frontend");
+    comprobar(v.kind == vxdbg::EntityKind::Function, "conserva la especie");
+    comprobar(v.lang_kind == "method",
+              "y el genero que puso el frontend");
     comprobar(v.relations.size() == 2, "conserva las relaciones");
     comprobar(v.relations[0].kind == vxdbg::RelationKind::Derives &&
                   v.relations[0].target == rel.target &&
@@ -233,7 +236,8 @@ static void probar_ida_y_vuelta_por_el_almacen() {
 
     vxdbg::LanguageEntity e;
     e.name = "Lector";
-    e.kind = "class";
+    e.kind = vxdbg::EntityKind::Type;
+    e.lang_kind = "class";
 
     vxdbg::ContentHash h;
     comprobar(vxdbg::store_node(store, e, h), "se guarda");
@@ -241,7 +245,7 @@ static void probar_ida_y_vuelta_por_el_almacen() {
 
     vxdbg::LanguageEntity v;
     comprobar(vxdbg::load_node(store, h, v), "se recupera");
-    comprobar(v.name == "Lector" && v.kind == "class", "intacto");
+    comprobar(v.name == "Lector" && v.lang_kind == "class", "intacto");
     comprobar(v.header.hash == h, "y sabiendo cual es su propia huella");
 
     // Guardar dos veces lo mismo: la propiedad que hace incremental al sistema.

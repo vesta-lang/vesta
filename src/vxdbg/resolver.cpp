@@ -25,7 +25,8 @@ EntityView DebugResolver::describe_entity(LanguageEntityId id) const {
     v.found = true;
     v.name = e->name;
     v.qualified = e->qualified;
-    v.kind = e->kind; // como lo llama SU lenguaje; aqui no se interpreta
+    v.kind = e->kind;           // especie comun; se puede comparar
+    v.lang_kind = e->lang_kind; // como lo llama SU lenguaje; no se interpreta
     v.declared_at = e->declared_at;
 
     // Cadena de derivacion completa: quien lee un error quiere ver de donde

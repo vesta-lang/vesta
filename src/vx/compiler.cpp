@@ -17,6 +17,7 @@
 
 #include "vx/compiler.h"
 #include "vx/c_header_gen.h" // Fase 4 interop C: vx --emit-header
+#include "vx/vxdbg_emit.h"   // base de conocimiento de depuracion
 
 #include "analyze/bigo.h"
 #include "analyze/fingerprint.h" // verificacion de contratos de huella
@@ -491,6 +492,21 @@ CompileResult compile_vx_source(const std::string &source,
     // Diagrama de tipos (classDiagram): clases/herencia/interfaces/structs/
     // enums/conceptos.  Vista de alto nivel de la POO, independiente del AST
     // detallado.  Cada formato se llena solo si su flag esta activo.
+    // Base de conocimiento de depuracion: los tipos del programa y como se
+    // relacionan.  Se emite AQUI, con el checker recien terminado, porque es el
+    // unico momento en que la tabla de tipos esta completa y todavia no la ha
+    // tocado el lowering.  No participa en la generacion de codigo: si falla,
+    // se avisa y la compilacion sigue -- perder la informacion de depuracion no
+    // es motivo para no producir el programa.
+    {
+        VxdbgEmitStats st;
+        std::string dbg_err;
+        if (!emit_vxdbg_source(tc, filename, source, opts.vxdbg_dir, st,
+                               dbg_err)) {
+            std::cerr << "[vxdbg] no se pudo emitir: " << dbg_err << "\n";
+        }
+    }
+
     if (opts.dump_mermaid_types) {
         res.mermaid_types = mermaid_types_from_ast(*mod);
     }
