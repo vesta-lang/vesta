@@ -590,6 +590,8 @@ static std::vector<std::string> bytecode_window(ProcessVM *vm, uint64_t inicio,
     struct Paso {
         uint64_t pc;
         const char *nombre;
+        uint8_t r1;
+        uint8_t r2;
     };
     std::vector<Paso> pasos;
     uint64_t pc = inicio;
@@ -599,7 +601,8 @@ static std::vector<std::string> bytecode_window(ProcessVM *vm, uint64_t inicio,
         DecodedInstr d{};
         if (!decode_peek(vm, pc, d)) break;
         if (!d.metadata || !d.metadata->name) break;
-        pasos.push_back({pc, d.metadata->name});
+        pasos.push_back({pc, d.metadata->name, d.data_instruction.reg_data.reg1,
+                         d.data_instruction.reg_data.reg2});
         const uint32_t tam = d.flags_info.size_instr;
         if (tam == 0) break;
         pc += tam;
@@ -616,10 +619,25 @@ static std::vector<std::string> bytecode_window(ProcessVM *vm, uint64_t inicio,
     const size_t desde = (culpable > antes) ? (culpable - antes) : 0;
     const size_t hasta = std::min(pasos.size(), culpable + despues + 1);
     for (size_t i = desde; i < hasta; ++i) {
-        char buf[64];
-        std::snprintf(buf, sizeof(buf), "%s0x%llx  %s",
-                      (i == culpable) ? "> " : "  ",
-                      (unsigned long long)pasos[i].pc, pasos[i].nombre);
+        char buf[160];
+        if (i == culpable) {
+            /* De la que fallo se ensena tambien QUE VALIAN sus registros.  Es
+             * la diferencia entre saber que reventó un `mov` y saber que
+             * reventó porque el registro del que leia valia cero.  Solo de
+             * esa: los valores de las de al lado ya han cambiado o aun no se
+             * han calculado, y ensenarlos seria mentir. */
+            std::snprintf(buf, sizeof(buf), "> 0x%llx  %-8s r%u=0x%llx r%u=0x%llx",
+                          (unsigned long long)pasos[i].pc, pasos[i].nombre,
+                          pasos[i].r1,
+                          (unsigned long long)vm->registers.regs[pasos[i].r1 & 0xF]
+                              .qword(),
+                          pasos[i].r2,
+                          (unsigned long long)vm->registers.regs[pasos[i].r2 & 0xF]
+                              .qword());
+        } else {
+            std::snprintf(buf, sizeof(buf), "  0x%llx  %s",
+                          (unsigned long long)pasos[i].pc, pasos[i].nombre);
+        }
         out.push_back(buf);
     }
     return out;
