@@ -3545,6 +3545,11 @@ int main(int argc, char *argv[]) {
              * native_poo. */
             vx::CompileOptions copts_vm = copts;
             copts_vm.native_poo = false;
+            /* Y CON info de linea, siempre.  Este `.velb` es el que ejecuta el
+             * compilador, no el programa: no lastra al usuario y es lo que
+             * permite que un fallo en tiempo de compilacion diga el fichero y
+             * la linea en vez de una direccion. */
+            copts_vm.emit_debug = true;
             vx::CompileResult cr_vm =
                 vx::vx_source_has_imports(vx_source)
                     ? vx::compile_vx_project(vx_path, copts_vm)

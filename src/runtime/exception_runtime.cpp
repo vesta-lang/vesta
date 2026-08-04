@@ -179,6 +179,89 @@ void init_exception_classes(loader::Loader &loader_ref) {
 // Stack trace builder estilo Java
 // ---------------------------------------------------------------------
 
+/**
+ * @brief Nombre de la funcion que contiene una direccion de codigo.
+ *
+ * La cadena de marcos solo conoce METODOS registrados, asi que para todo lo
+ * demas -- una funcion libre, o un metodo comptime, que al bajarse se
+ * convierte en un simbolo generado sin `MethodInfo` detras -- la traza se
+ * quedaba en un `<top>` con una direccion en crudo, que no dice nada.
+ *
+ * La tabla de simbolos del ejecutable si sabe donde empieza cada funcion, asi
+ * que basta con quedarse con la de direccion mas alta que no pase del PC.
+ *
+ * @param vm     Proceso, para llegar a los ejecutables cargados.
+ * @param pc     Direccion a resolver.
+ * @param out_off Desplazamiento dentro de la funcion, si se encuentra.
+ * @return El nombre, o nullptr si ninguna tabla lo cubre.
+ */
+/**
+ * @brief Pasa un simbolo interno a algo que se pueda leer.
+ *
+ * Un nombre como `code.__macro_std__comptime__literal__parse_int_lit` no le
+ * dice nada a nadie.  Se le quita el prefijo de seccion, la marca de cuerpo
+ * comptime y se devuelven los puntos al camino del modulo, que es como lo
+ * escribio quien programo: `std.comptime.literal.parse_int_lit`.
+ *
+ * @param raw Nombre tal como esta en la tabla de simbolos.
+ * @return El nombre legible.
+ */
+static std::string demangle_symbol(const std::string &raw) {
+    std::string s = raw;
+    if (s.rfind("code.", 0) == 0) s.erase(0, 5);
+    if (s.rfind("__macro_", 0) == 0) s.erase(0, 8);
+    /* Los separadores del mangling vuelven a ser puntos de modulo. */
+    std::string out;
+    out.reserve(s.size());
+    for (size_t k = 0; k < s.size();) {
+        if (k + 1 < s.size() && s[k] == '_' && s[k + 1] == '_') {
+            out.push_back('.');
+            k += 2;
+        } else {
+            out.push_back(s[k]);
+            ++k;
+        }
+    }
+    return out;
+}
+
+static const std::string *symbol_for_pc(ProcessVM *vm, uint64_t pc,
+                                        uint64_t &out_off) {
+    const std::string *best = nullptr;
+    uint64_t best_addr = 0;
+    for (const auto &exe_ptr :
+         vm->scheduler.vm_reference.loader_public.executables) {
+        if (!exe_ptr) continue;
+        for (const auto &kv : exe_ptr->symbol_table) {
+            if (kv.second <= pc && kv.second >= best_addr) {
+                best_addr = kv.second;
+                best = &kv.first;
+            }
+        }
+    }
+    /* La tabla trae tanto la funcion como sus bloques internos, y el bloque
+     * suele ganar por estar mas cerca del PC.  Pero `..._entry_0` o
+     * `..._assert_fail_58` son detalles de como se genero el codigo, no algo
+     * que quien programa reconozca; si existe un simbolo que es PREFIJO del
+     * encontrado, ese es la funcion y es el que hay que ensenar. */
+    if (best) {
+        const std::string *fn = best;
+        for (const auto &exe_ptr :
+             vm->scheduler.vm_reference.loader_public.executables) {
+            if (!exe_ptr) continue;
+            for (const auto &kv : exe_ptr->symbol_table) {
+                if (kv.first.size() < fn->size() &&
+                    best->rfind(kv.first, 0) == 0) {
+                    fn = &kv.first;
+                }
+            }
+        }
+        out_off = pc - best_addr;
+        return fn;
+    }
+    return best;
+}
+
 size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
     if (!out || out_size < 2) return 0;
     size_t pos = 0;
@@ -217,6 +300,36 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
     // MethodDebug (start_line del metodo).  Item 4: ahora el stack
     // trace muestra la linea EXACTA de la instruccion fallida en
     // lugar de la linea del inicio del metodo.
+    /* Posicion en el fuente para un simbolo resuelto por direccion.
+     *
+     * La seccion de depuracion guarda UN solo fichero por unidad ensamblada,
+     * asi que para el codigo que viene de otro modulo el nombre de fichero que
+     * hay registrado es el del modulo raiz -- la LINEA es correcta, el fichero
+     * no.  Ensenar un fichero equivocado es peor que no ensenarlo: manda a
+     * mirar donde no es.  Cuando el simbolo lleva modulo en el nombre (que ya
+     * dice donde vive) se muestra solo la linea; si es del propio fichero, se
+     * muestran los dos. */
+    auto append_pos = [&](uint64_t pc, bool tiene_modulo) {
+        for (const auto &exe_ptr :
+             vm->scheduler.vm_reference.loader_public.executables) {
+            if (!exe_ptr || !exe_ptr->debug_info) continue;
+            auto info =
+                exe_ptr->debug_info->lookup_line(static_cast<uint32_t>(pc));
+            if (info.found && info.line > 0) {
+                append_str(" (");
+                if (!tiene_modulo && info.file && info.file[0] != ' ') {
+                    append_str(info.file);
+                    append_str(":");
+                } else {
+                    append_str("linea ");
+                }
+                append_dec((uint64_t)info.line);
+                append_str(")");
+                return;
+            }
+        }
+    };
+
     auto append_dbg = [&](loader::MethodInfo *m, uint64_t pc,
                           const char *pc_label) {
         // Buscar DebugInfo precise via los Executables cargados.
@@ -287,9 +400,18 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
         append_dbg(fr->method, cur_pc, "pc");
         append_str("\n");
     } else {
-        append_str("<top> (pc=");
-        append_hex(cur_pc);
-        append_str(")\n");
+        uint64_t off = 0;
+        if (const std::string *sym = symbol_for_pc(vm, cur_pc, off)) {
+            const std::string legible = demangle_symbol(*sym);
+            append(legible.c_str(), legible.size());
+            append_pos(cur_pc,
+                       legible.find('.') != std::string::npos);
+        } else {
+            append_str("<top> (pc=");
+            append_hex(cur_pc);
+            append_str(")");
+        }
+        append_str("\n");
     }
 
     // Frames intermedios: recorrer frame_stack hasta el origen.
@@ -323,6 +445,44 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
     }
     if (depth >= 64) {
         append_str("  ... (truncated, depth >= 64)\n");
+    }
+
+    /* Cadena de llamadas por la PILA.  Los marcos de arriba solo cubren
+     * METODOS registrados; el resto del camino -- una funcion libre, o un
+     * metodo comptime, que al bajarse se vuelve un simbolo generado sin
+     * `MethodInfo` detras -- se reconstruye mirando que direcciones guardadas
+     * en la pila caen dentro de una funcion conocida.
+     *
+     * Es una lectura conservadora: puede colarse algun dato que por casualidad
+     * parezca una direccion de retorno.  Preferible a no decir nada, que es lo
+     * que habia.  Se van saltando las repeticiones seguidas del mismo simbolo
+     * y se corta a 32 entradas. */
+    {
+        const uint64_t rsp = vm->registers.stack_pointer.qword();
+        const uint64_t top = vm->stack_high;
+        const std::string *prev = nullptr;
+        int shown = 0;
+        for (uint64_t a2 = rsp; a2 + 8 <= top && shown < 32; a2 += 8) {
+            uint64_t v = 0;
+            vm->vm_mem.read_bytes(a2, &v, sizeof(v));
+            if (v == 0) continue;
+            uint64_t off = 0;
+            const std::string *sym = symbol_for_pc(vm, v, off);
+            if (!sym || off > 0x10000) continue; /* fuera de toda funcion */
+            /* `code.s_N` son literales de datos, no codigo: un valor que cae
+             * ahi es un dato que se parece a una direccion, no una llamada. */
+            if (sym->rfind("code.s_", 0) == 0) continue;
+            /* `gdata.*` es el area de variables globales, tampoco codigo. */
+            if (sym->rfind("gdata.", 0) == 0) continue;
+            if (prev && *prev == *sym) continue;
+            prev = sym;
+            append_str("  llamada desde ");
+            const std::string legible = demangle_symbol(*sym);
+            append(legible.c_str(), legible.size());
+            append_pos(v, legible.find('.') != std::string::npos);
+            append_str("\n");
+            ++shown;
+        }
     }
 
     // Pid del proceso para diagnostico cross-process.
