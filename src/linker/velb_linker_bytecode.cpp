@@ -1355,6 +1355,12 @@ std::vector<uint8_t> Linker::build_executable() {
                         static_cast<uint32_t>(bc_base + rec.byte_offset);
                     e.line_number = rec.source_line;
                     e.file_offset = file_off;
+                    // La COLUMNA, que es lo que distingue cual de las cosas de
+                    // la linea fallo.  Viajaba desde el compilador hasta aqui y
+                    // se perdia en el ultimo paso: la entrada se escribia con
+                    // sitio para ella y en blanco.
+                    e.column = static_cast<uint16_t>(rec.source_column);
+                    e._pad = 0;
                     all_entries.push_back(e);
                 }
             }
