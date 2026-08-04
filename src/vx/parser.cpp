@@ -7533,7 +7533,27 @@ std::unique_ptr<ast::Stmt> Parser::parse_asm_stmt() {
 // ---------------------------------------------------------------------
 
 std::unique_ptr<ast::Expr> Parser::parse_expr() {
-    return parse_assignment();
+    /* Misma medida que en las sentencias: el nodo se queda con la posicion de su
+     * primer token y la longitud de ESE token, no la de la expresion.  Aqui se
+     * mide lo que de verdad ocupa, que es lo que permite subrayar `x / y` y no
+     * solo la `x`.  En el envoltorio para que valga para todas las formas de
+     * expresion sin tener que acordarse en cada una. */
+    const vx::SourceLoc ini = current_.loc;
+    auto e = parse_assignment();
+    if (e && e->loc.offset >= ini.offset) {
+        /* Una expresion EMPIEZA donde empieza su primer token.  El nodo de una
+         * operacion binaria se situa donde se creo -- en el operando derecho --
+         * asi que tomar su posicion dejaba fuera todo lo de la izquierda:
+         * `x / this.valor` se subrayaba desde `this`. */
+        const uint32_t fin = current_.loc.offset;
+        if (fin > ini.offset) {
+            e->loc.line = ini.line;
+            e->loc.column = ini.column;
+            e->loc.offset = ini.offset;
+            e->loc.length = fin - ini.offset;
+        }
+    }
+    return e;
 }
 
 std::unique_ptr<ast::Expr> Parser::parse_assignment() {

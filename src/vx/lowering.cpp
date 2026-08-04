@@ -3819,11 +3819,23 @@ void Lowering::lower_stmt(ast::Stmt *s) {
      * `return foo(a) / bar(b);` hay tres cosas que pueden fallar y todas estan
      * en la misma.  Reconstruirlo despues seria adivinar. */
     if (fn_ && !fn_->name.empty() && s->loc.line > 0) {
+        /* Si la sentencia es una expresion, se apunta la EXPRESION y no la
+         * sentencia: en `return x / this.valor;` lo que se evalua -- y por tanto
+         * lo que puede fallar -- es `x / this.valor`; el `return` no falla
+         * nunca.  Subrayarlo entero mandaria a mirar una palabra clave. */
+        const ast::Expr *e = nullptr;
+        if (s->kind == ast::NodeKind::ReturnStmt)
+            e = static_cast<const ast::ReturnStmt *>(s)->value.get();
+        else if (s->kind == ast::NodeKind::ExprStmt)
+            e = static_cast<const ast::ExprStmt *>(s)->expr.get();
+        const vx::SourceLoc &loc =
+            (e && e->loc.line == s->loc.line && e->loc.length > 0) ? e->loc
+                                                                   : s->loc;
         StmtSpan sp;
         sp.symbol = fn_->name;
-        sp.line = s->loc.line;
-        sp.column = s->loc.column;
-        sp.length = s->loc.length;
+        sp.line = loc.line;
+        sp.column = loc.column;
+        sp.length = loc.length;
         emitted_spans_.push_back(std::move(sp));
     }
     switch (s->kind) {
