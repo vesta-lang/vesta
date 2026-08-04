@@ -302,6 +302,9 @@ void __vxf_donde(u64 addr) {
     if (__vxf_u32(base, 0) != 0x42445856) {   // 'VXDB'
         return;
     }
+    if (__vxf_u32(base, 4) != 2) {   // version que se sabe leer
+        return;
+    }
     u64 texto = (u64) section_start(".text");
     if (texto == 0 || addr < texto) {
         return;
@@ -315,7 +318,14 @@ void __vxf_donde(u64 addr) {
         u32 f_off = __vxf_u32(base, c);
         u32 f_tam = __vxf_u32(base, c + 4);
         u32 n_pts = __vxf_u32(base, c + 8);
-        c = c + 12;
+        u32 n_nom = __vxf_u32(base, c + 12);
+        u64 nom = c + 16;
+        // El nombre viene relleno hasta multiplo de 4 (ver el emisor).
+        u64 tras_nom = nom + (u64) n_nom;
+        while ((tras_nom % 4) != 0) {
+            tras_nom = tras_nom + 1;
+        }
+        c = tras_nom;
         if (off >= (u64) f_off && off < (u64) f_off + (u64) f_tam) {
             // Dentro de esta funcion: el ultimo punto en o antes del fallo.
             u64 rel = off - (u64) f_off;
@@ -333,7 +343,9 @@ void __vxf_donde(u64 addr) {
                 }
             }
             if (linea > 0) {
-                __vxf_say("  en la linea ", 14);
+                __vxf_say("  en ", 5);
+                __vxf_say((u8*) (base + nom), (u64) n_nom);
+                __vxf_say(", linea ", 8);
                 __vxf_num((u64) linea);
                 if (col > 0) {
                     __vxf_say(", columna ", 10);

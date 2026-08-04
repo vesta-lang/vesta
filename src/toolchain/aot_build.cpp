@@ -2208,7 +2208,8 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
              * pasar.  Medido: creandola antes, `.text` sale distinto.
              *
              * Formato: ['VXDB'][version][n_fn] y por funcion
-             * [off_en_texto][tam][n_puntos] + n_puntos x [off][linea][col][len].
+             * [off_en_texto][tam][n_puntos][largo_nombre] + el nombre (relleno
+             * a multiplo de 4) + n_puntos x [off][linea][col][tramo].
              * Los desplazamientos son relativos a la seccion de codigo, que es
              * lo que el manejador puede calcular restando su propia direccion.
              */
@@ -2222,7 +2223,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 for (const AotFn &af : compiled)
                     if (!af.puntos.empty() && fn_loc.count(af.name)) ++n_fn;
                 db32(0x42445856u); // 'VXDB'
-                db32(1u);          // version
+                db32(2u);          // v2: cada funcion lleva su NOMBRE
                 db32(n_fn);
                 for (const AotFn &af : compiled) {
                     if (af.puntos.empty()) continue;
@@ -2231,6 +2232,14 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     db32(static_cast<uint32_t>(it->second.off));
                     db32(static_cast<uint32_t>(af.bytes.size()));
                     db32(static_cast<uint32_t>(af.puntos.size()));
+                    /* El nombre, para poder decir EN QUE funcion y no solo en
+                     * que linea.  Se rellena hasta multiplo de 4 para que lo
+                     * que viene detras siga alineado: x86 lo toleraria, pero
+                     * otras arquitecturas no. */
+                    db32(static_cast<uint32_t>(af.name.size()));
+                    for (char c : af.name)
+                        db.push_back(static_cast<uint8_t>(c));
+                    while ((db.size() % 4u) != 0u) db.push_back(0);
                     for (const auto &q : af.puntos) {
                         db32(q.off);
                         db32(q.line);
