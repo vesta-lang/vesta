@@ -484,6 +484,51 @@ static vxdbg::SourceExtent span_for(ProcessVM *vm, const std::string &symbol,
 }
 
 
+/**
+ * @brief Las instrucciones INTERMEDIAS de una posicion del fuente.
+ *
+ * El `.velb` lleva dentro el intermedio de sus funciones y el cargador ya lo
+ * tiene parseado: no hay que ir a buscarlo a ningun sitio ni volver a compilar.
+ *
+ * Se devuelven solo las de ESA linea y columna -- el fragmento responsable -- y
+ * no la funcion entera: en un metodo de verdad son cientos y no dicen nada.  Con
+ * un tope corto, porque esto acompana a un fallo; quien quiera el volcado tiene
+ * una herramienta para eso.
+ *
+ * @param vm Proceso.
+ * @param symbol Simbolo de la funcion tal como aparece en el artefacto.
+ * @param line Linea del fuente.
+ * @param column Columna, o 0 para no afinar.
+ * @return Los nombres de las operaciones, en orden.
+ */
+static std::vector<const char *> ir_ops_at(ProcessVM *vm,
+                                           const std::string &symbol,
+                                           uint32_t line, uint32_t column) {
+    std::vector<const char *> out;
+    if (line == 0) return out;
+    const std::string limpio =
+        (symbol.rfind("code.", 0) == 0) ? symbol.substr(5) : symbol;
+    for (const auto &exe_ptr :
+         vm->scheduler.vm_reference.loader_public.executables) {
+        if (!exe_ptr) continue;
+        for (const auto &fn : exe_ptr->ir_functions) {
+            if (fn.name != limpio) continue;
+            for (const auto &bl : fn.blocks) {
+                for (const auto &ins : bl.instrs) {
+                    if (ins.source_line != line) continue;
+                    if (column != 0 && ins.source_column != 0 &&
+                        ins.source_column != column)
+                        continue;
+                    if (out.size() >= 8) return out;
+                    out.push_back(ir::ir_op_name(ins.op));
+                }
+            }
+            return out;
+        }
+    }
+    return out;
+}
+
 static const std::string *symbol_for_pc(ProcessVM *vm, uint64_t pc,
                                         uint64_t &out_off) {
     const std::string *best = nullptr;
@@ -688,6 +733,20 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
         append_str("      ");
         for (size_t i = 0; i < col; ++i) append_str(" ");
         for (size_t i = 0; i < largo; ++i) append_str("^");
+        append_str("\n");
+
+        /* Y el INTERMEDIO de ese mismo tramo.  Entre el fuente y la instruccion
+         * de la maquina hay un paso que a veces es el que explica el fallo: lo
+         * que se pidio, en que se tradujo, y con que acabo.  Se ensena solo si
+         * consta; si el intermedio no viaja en el artefacto, no se dice nada. */
+        const std::vector<const char *> ops =
+            ir_ops_at(vm, simbolo, linea, ext.column);
+        if (ops.empty()) return;
+        append_str("      intermedio:");
+        for (const char *op : ops) {
+            append_str(" ");
+            append_str(op);
+        }
         append_str("\n");
     };
 
