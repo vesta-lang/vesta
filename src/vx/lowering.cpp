@@ -24449,6 +24449,10 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 case PrimitiveKind::PTR:
                 case PrimitiveKind::ARRAY:
                 case PrimitiveKind::CLASS: sym = "__vx_print_ptr"; break;
+                // Un caracter se imprime como CARACTER.  Faltaba el caso, asi
+                // que caia en el de por defecto y salia su punto de codigo:
+                // `print("${c}")` con c='D' escribia 68.
+                case PrimitiveKind::CHAR: sym = "__vx_print_char"; break;
                 default:
                     if (is_unsigned_t)
                         sym = "__vx_print_u64";

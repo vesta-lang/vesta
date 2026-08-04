@@ -803,22 +803,24 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                               << "\n";
                     return EXIT_FAILURE;
                 }
-                std::ifstream ff(fpath);
-                std::string fsrc((std::istreambuf_iterator<char>(ff)),
-                                 std::istreambuf_iterator<char>());
                 vx::CompileOptions fopts;
                 fopts.module_name = "vx_fault";
                 fopts.opt_level = copts.opt_level;
                 fopts.native_poo = true;
                 fopts.asm_target_bits = copts.asm_target_bits;
-                vx::CompileResult fcr =
-                    vx::compile_vx_source(fsrc, fpath, fopts);
+                /* Por PROYECTO y no por fuente suelto: el modulo importa
+                 * `std.types` (uintptr / nullptr) y solo esa ruta resuelve los
+                 * imports.  Mismo criterio que vx_thread y vx_async. */
+                vx::CompileResult fcr = vx::compile_vx_project(fpath, fopts);
                 ir::IrModule fmod;
                 if (!fcr.ok || fcr.ir_module_cache_bytes.empty() ||
                     !ir::parse_ir_module_cache(fcr.ir_module_cache_bytes,
                                                fmod)) {
-                    std::cerr << "[aot] no pude compilar vx_fault.vx."
-                              << "\n";
+                    std::cerr << "[aot] no pude compilar vx_fault.vx.\n";
+                    // Sin el motivo el mensaje no sirve de nada: volcamos los
+                    // diagnosticos del modulo tal cual los dio el frontend.
+                    for (const auto &d : fcr.diagnostics.all())
+                        vx::print_diagnostic(std::cerr, d);
                     return EXIT_FAILURE;
                 }
                 // Mismo merge que el runtime de I/O: remap de literales por el
@@ -841,8 +843,34 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     std::move(fmod.static_data));
                 for (auto &gv : fmod.globals)
                     aot_mod.globals.emplace(gv.first, gv.second);
-                for (auto &ni : fmod.native_imports)
+                for (auto &ni : fmod.native_imports) {
+                    /* Las primitivas de I/O NO son un import: viven en el
+                     * mismo objeto (las trae vx_io) y sus llamadas se
+                     * reescriben a internas ahi abajo.  Copiar el import haria
+                     * que el ejecutable arrancara pidiendo una `vx_bare_io.dll`
+                     * que no existe. */
+                    if (ni.lib == "vx_bare_io") continue;
                     aot_mod.register_native_import(ni.lib, ni.name);
+                }
+                /* Sus llamadas al I/O tienen que resolverse DENTRO de la
+                 * imagen, igual que las del resto: el modulo usa `print` y al
+                 * compilarse suelto eso queda como una importacion externa.
+                 * La reescritura del bundle de I/O ya paso cuando este modulo
+                 * aun no estaba, asi que hay que repetirla aqui -- si no, el
+                 * ejecutable arranca pidiendo una DLL que no existe. */
+                {
+                    const std::string io_pfx2 = "vx_bare_io:";
+                    for (auto &af : aot_mod.functions)
+                        for (auto &b : af.blocks)
+                            for (auto &ins : b.instrs)
+                                if (ins.op == ir::IrOp::CALLN &&
+                                    ins.func_name.rfind(io_pfx2, 0) == 0) {
+                                    ins.op = ir::IrOp::CALL;
+                                    ins.func_name =
+                                        ins.func_name.substr(io_pfx2.size());
+                                }
+                }
+
                 // Y que `main` lo instale antes que nada.
                 for (auto &af : aot_mod.functions) {
                     if (af.name != "main" || af.blocks.empty()) continue;
@@ -1587,6 +1615,11 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     /// Sin ello el informe manda a la funcion FISICA cuando el
                     /// codigo que fallo se escribio en otra.
                     std::string venia_de;
+                    /// La instruccion del INTERMEDIO que produjo este tramo, ya
+                    /// escrita.  Se renderiza AL COMPILAR: hacerlo dentro de un
+                    /// manejador de fallo exigiria un impresor de intermedio
+                    /// entero corriendo con el proceso ya roto.
+                    std::string ir_txt;
                 };
                 std::vector<PuntoFuente> puntos;
             };
@@ -1743,7 +1776,8 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                                 continue;
                             ultima = e.source_line;
                             AotFn::PuntoFuente pf{e.byte_offset, e.source_line,
-                                                  0u, 0u, std::string()};
+                                                  0u, 0u, std::string(),
+                                                  std::string()};
                             if (e.ir_id != 0xFFFFFFFFu) {
                                 const uint32_t bi = e.ir_id >> 16;
                                 const uint32_t pos = e.ir_id & 0xFFFFu;
@@ -1761,6 +1795,20 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                                         pf.venia_de =
                                             irf.inline_sites[in.inline_site]
                                                 .callee;
+                                    // Y la instruccion, ya escrita.
+                                    {
+                                        std::ostringstream os;
+                                        ir::print_instr(os, irf, in);
+                                        std::string t = os.str();
+                                        while (!t.empty() &&
+                                               (t.back() == 10 || t.back() == 13))
+                                            t.pop_back();
+                                        const size_t ini2 =
+                                            t.find_first_not_of(' ');
+                                        if (ini2 != std::string::npos)
+                                            t = t.substr(ini2);
+                                        pf.ir_txt = std::move(t);
+                                    }
                                 }
                             }
                             af.puntos.push_back(pf);
@@ -2236,7 +2284,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 for (const AotFn &af : compiled)
                     if (!af.puntos.empty() && fn_loc.count(af.name)) ++n_fn;
                 db32(0x42445856u); // 'VXDB'
-                db32(4u);          // v4: + de que FICHERO son las lineas
+                db32(5u);          // v5: + la instruccion del intermedio
                 /* Los nombres de las funciones que el inlinado se comio van en
                  * UNA tabla al final y los puntos la indexan: la misma funcion
                  * aparece en muchos tramos y repetir la cadena engordaria la
@@ -2291,6 +2339,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                         db32(q.col);
                         db32(q.len);
                         db32(idx_de(legible(q.venia_de)));
+                        db32(idx_de(q.ir_txt));
                     }
                 }
                 /* La tabla de nombres, al final: los puntos la indexan.  Su

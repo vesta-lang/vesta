@@ -11914,8 +11914,19 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
             e->value->result_type = s->type; // el literal es del newtype
         }
     }
+    // Newtype entero CERRADO bajo aritmetica tambien en el COMPUESTO: `a += 8`
+    // es `a = a + 8`, y check_binary ya conserva el newtype en esa suma
+    // (preserve_int_newtype).  Aqui el `tv` es el del OPERANDO DERECHO en
+    // crudo (i64 para el literal), asi que sin esta regla `a = a + 8` compila
+    // y `a += 8` no -- la misma operacion escrita de dos formas.  Se admite el
+    // entero plano o el MISMO newtype, igual criterio que en el binario.
+    const bool newtype_compound_ok =
+        e->op != ast::AssignOp::Assign && s->type.nominal_id != 0 &&
+        is_integral(s->type.kind) && is_integral(tv.kind) &&
+        (tv.nominal_id == 0 || tv.nominal_id == s->type.nominal_id);
     if (tv.kind != PrimitiveKind::COUNT && !string_append_ok &&
-        !num_const_to_newtype && !types_assignable(s->type, tv) &&
+        !num_const_to_newtype && !newtype_compound_ok &&
+        !types_assignable(s->type, tv) &&
         !value_assignable_to_interface(s->type, tv)) {
         diags_.error(e->loc, std::string("tipo del valor (") +
                                  type_to_string(tv) +
