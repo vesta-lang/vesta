@@ -921,9 +921,10 @@ void maybe_compile_method(runtime::ProcessVM *vm,
             /*  D.7 (opt-in): callee por el path de registros
              * virtuales si esta soportada; si no, slots. */
             if (g_jit_use_vregs) {
+                size_t vc_size = 0;
                 uint8_t *vc = vreg_compile(child_ir, *g_code_cache, {},
                                            make_vreg_entries(), native_resolver,
-                                           child_opts.resolve_symbol);
+                                           child_opts.resolve_symbol, &vc_size);
                 if (vc != nullptr) {
                     const uint64_t a = reinterpret_cast<uint64_t>(vc);
                     g_eager_cache[n] = a;
@@ -932,7 +933,8 @@ void maybe_compile_method(runtime::ProcessVM *vm,
                         auto sit = st_ptr2->find("code." + n);
                         if (sit != st_ptr2->end() && sit->second != 0)
                             register_jit_code_at_pc(
-                                sit->second, reinterpret_cast<void *>(vc));
+                                sit->second, reinterpret_cast<void *>(vc),
+                                vc_size);
                     }
                     if (g_jit_warn_unsupported)
                         std::fprintf(stderr,
@@ -967,7 +969,8 @@ void maybe_compile_method(runtime::ProcessVM *vm,
                 auto sit = st_ptr2->find("code." + n);
                 if (sit != st_ptr2->end() && sit->second != 0) {
                     register_jit_code_at_pc(sit->second,
-                                            reinterpret_cast<void *>(cres.fn));
+                                            reinterpret_cast<void *>(cres.fn),
+                                            cres.code_size);
                 }
             }
             if (g_jit_warn_unsupported) {
@@ -1060,15 +1063,18 @@ void maybe_compile_method(runtime::ProcessVM *vm,
             vent.tier2_method_ptr = reinterpret_cast<uint64_t>(method);
             vent.tier2_threshold = static_cast<uint32_t>(thr);
         }
+        size_t vcode_size = 0;
         uint8_t *vcode =
             vreg_compile(*compile_ir, *g_code_cache, mc_opts.resolve_user_fn,
-                         vent, mc_opts.resolve_native_fn, mc_sym_res);
+                         vent, mc_opts.resolve_native_fn, mc_sym_res,
+                         &vcode_size);
         g_vreg_compiling_method = nullptr;
         if (vcode != nullptr) {
             method->jit_code = reinterpret_cast<void *>(vcode);
             if (method->code_vaddr != 0)
                 register_jit_code_at_pc(method->code_vaddr,
-                                        reinterpret_cast<void *>(vcode));
+                                        reinterpret_cast<void *>(vcode),
+                                        vcode_size);
             ++g_jit_compiled_count;
             if (g_jit_warn_unsupported)
                 std::fprintf(stderr, "[jit-vreg] compilado '%s'\n", key.c_str());
@@ -1099,7 +1105,8 @@ void maybe_compile_method(runtime::ProcessVM *vm,
          * codigo interp con label resuelto al @c code_vaddr). */
         if (method->code_vaddr != 0) {
             register_jit_code_at_pc(method->code_vaddr,
-                                    reinterpret_cast<void *>(res.fn));
+                                    reinterpret_cast<void *>(res.fn),
+                                    res.code_size);
         }
         /* C2 tier-up: mapear fn_pc (symbol "code.<name>", el mismo que el
          * contador on-entry pasa al handler) -> method + region del codigo
@@ -1514,9 +1521,10 @@ CompileResult eager_compile_function(
      * forzamos el path del Selector (slots + regalloc rewrite) que SI lo
      * implementa. */
     if (g_jit_use_vregs && !callback_entry) {
+        size_t vcode_size = 0;
         uint8_t *vcode =
             vreg_compile(ir_fn, *g_code_cache, resolver, make_vreg_entries(),
-                         resolve_native_fn, sym_resolver);
+                         resolve_native_fn, sym_resolver, &vcode_size);
         if (vcode != nullptr) {
             if (!ir_fn.name.empty())
                 g_eager_cache[ir_fn.name] = reinterpret_cast<uint64_t>(vcode);
@@ -1631,6 +1639,26 @@ CompileResult eager_compile_function(
             CompileResult r{};
             r.fn = reinterpret_cast<JitFn>(vcode);
             r.code_start = vcode;
+            /* OJO: no se rellena @c r.code_size.  Quien recibe este resultado
+             * lo usa como senal de que hay una region C1 que puede reciclar al
+             * subir de nivel, y darsela aqui hacia que reciclara codigo que
+             * seguia en uso.  La extension se apunta abajo, directamente, que
+             * es para lo que hace falta.
+             *
+             * Y queda registrada su extension nativa.  Hasta ahora esto solo
+             * lo hacia quien compila por una llamada; una funcion compilada de
+             * antemano -- `main`, sin ir mas lejos -- no entraba en el mapa, y
+             * un fallo dentro de ella no se podia atribuir a nadie. */
+            if (symbol_table != nullptr && !ir_fn.name.empty()) {
+                auto sit = symbol_table->find("code." + ir_fn.name);
+                // El punto de entrada puede figurar sin el prefijo de seccion.
+                if (sit == symbol_table->end())
+                    sit = symbol_table->find(ir_fn.name);
+                if (sit != symbol_table->end())
+                    register_jit_region(sit->second,
+                                        reinterpret_cast<void *>(vcode),
+                                        vcode_size);
+            }
             if (g_jit_warn_unsupported)
                 std::fprintf(stderr, "[jit-vreg] eager compilado '%s'\n",
                              ir_fn.name.c_str());
@@ -1862,10 +1890,38 @@ bool g_pc_jit_active = false;
 namespace {
 std::mutex g_pc_jit_mtx;
 std::unordered_map<uint64_t, void *> g_pc_to_jit_code;
+/// Extension del codigo nativo de cada funcion registrada: direccion virtual
+/// -> [inicio, inicio+tamano).  Solo se rellena cuando el tamano consta; sirve
+/// para saber, ante un fallo en codigo nativo, en que funcion cayo.
+struct RegionNativa {
+    uint64_t inicio;
+    uint64_t tamano;
+};
+std::unordered_map<uint64_t, RegionNativa> g_pc_to_region;
 } // namespace
 
-void register_jit_code_at_pc(uint64_t vaddr, void *fn) noexcept {
-    if (!fn || vaddr == 0) return;
+void register_jit_region(uint64_t vaddr, void *fn, size_t code_size) noexcept {
+    /* SOLO la extension, sin tocar a donde despacha una llamada.
+     *
+     * Son dos cosas distintas y hay sitios donde solo se puede apuntar una: el
+     * compilado por adelantado deja codigo que el llamante decide si usar, de
+     * modo que meterlo en el mapa de despacho cambia a donde va una llamada --
+     * y eso rompio un programa.  Para explicar un fallo basta con saber que
+     * trozo de memoria ocupa cada funcion.
+     *
+     * La direccion 0 se apunta igual: el codigo empieza ahi, asi que es la
+     * direccion legitima del punto de entrada. */
+    if (!fn || code_size == 0) return;
+    std::lock_guard<std::mutex> lk(g_pc_jit_mtx);
+    g_pc_to_region[vaddr] =
+        RegionNativa{reinterpret_cast<uint64_t>(fn), (uint64_t)code_size};
+}
+
+void register_jit_code_at_pc(uint64_t vaddr, void *fn,
+                             size_t code_size) noexcept {
+    if (!fn) return;
+    if (code_size != 0) register_jit_region(vaddr, fn, code_size);
+    if (vaddr == 0) return;
     std::lock_guard<std::mutex> lk(g_pc_jit_mtx);
     g_pc_to_jit_code[vaddr] = fn;
     g_pc_jit_active = true;
@@ -1873,6 +1929,43 @@ void register_jit_code_at_pc(uint64_t vaddr, void *fn) noexcept {
         std::fprintf(stderr, "[jit] pc-map register: 0x%llx -> %p\n",
                      static_cast<unsigned long long>(vaddr), fn);
     }
+}
+
+bool lookup_vaddr_by_native_pc(uint64_t native_pc,
+                               uint64_t &out_vaddr) noexcept {
+    /* La busqueda al reves: de una direccion de codigo NATIVO a la funcion
+     * que la contiene.
+     *
+     * Hace falta para explicar un fallo ocurrido dentro de codigo compilado.
+     * El codigo nativo no va actualizando el PC de la maquina virtual -- ese
+     * es justamente el punto de compilarlo --, asi que al fallar el PC que se
+     * conserva es viejo y la traza senalaba la funcion equivocada.  Lo unico
+     * fiable es la direccion nativa del fallo, y de ella se llega a la funcion
+     * quedandose con la mas alta que no la pase.
+     *
+     * Se recorre el mapa entero (decenas de entradas) porque esto ocurre una
+     * vez, al morir el programa: no compensa mantener una estructura ordenada
+     * viva para un caso que no se repite.
+     *
+     * @param native_pc Direccion donde fallo el codigo nativo.
+     * @param[out] out_vaddr Direccion virtual de la funcion que la contiene.
+     * @return true si cae dentro de alguna.  Se devuelve aparte del valor
+     *         porque 0 es una direccion valida -- el codigo empieza ahi -- y
+     *         no puede hacer de "no encontrado".
+     */
+    if (native_pc == 0) return false;
+    std::lock_guard<std::mutex> lk(g_pc_jit_mtx);
+    for (const auto &kv : g_pc_to_region) {
+        if (native_pc < kv.second.inicio) continue;
+        if (native_pc - kv.second.inicio >= kv.second.tamano) continue;
+        out_vaddr = kv.first;
+        return true;
+    }
+    /* Si la direccion no cae dentro de ninguna funcion de tamano conocido, NO
+     * se adivina por proximidad: atribuir el fallo a la funcion mas cercana
+     * por debajo senala una que no tiene nada que ver, que es peor que no
+     * decir nada -- quien lee se va a mirar donde no toca. */
+    return false;
 }
 
 void *lookup_jit_code_at_pc(uint64_t vaddr) noexcept {

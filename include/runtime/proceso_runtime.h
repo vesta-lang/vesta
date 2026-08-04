@@ -852,6 +852,15 @@ class ProcessVM {
     /// atribuye a la ultima de la anterior -- que es otra funcion.
     bool fatal_pc_exact = false;
 
+    /// Direccion del codigo NATIVO donde ocurrio el fallo, o 0.
+    ///
+    /// El codigo compilado no va actualizando el PC de la maquina virtual --
+    /// ese es el punto de compilarlo --, asi que al fallar el PC que se
+    /// conserva es de la ultima vez que se sincronizo y la traza senalaba una
+    /// funcion que no era.  Lo unico fiable es esta, que el sistema entrega al
+    /// avisar del fallo y que hay que guardar ANTES de desviar la ejecucion.
+    uint64_t pending_fault_native_pc = 0;
+
     /// Direccion por la que ARRANCO este proceso.
     ///
     /// Es el fondo de su cadena de llamadas y no tiene direccion de retorno

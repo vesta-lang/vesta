@@ -88,7 +88,8 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
                       const CallResolver &resolve_call = {},
                       const VregEntries &ent = {},
                       const CallResolver &resolve_native = {},
-                      const CallResolver &resolve_symbol = {});
+                      const CallResolver &resolve_symbol = {},
+                      size_t *out_code_size = nullptr);
 
 /**
  * @brief Watchdog CTPE: activa/desactiva la emision de polls de safepoint en

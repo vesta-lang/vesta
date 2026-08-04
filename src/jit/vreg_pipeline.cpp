@@ -425,7 +425,8 @@ void maybe_schedule(MFunction &pf, sched::EffIsa isa, sched::SchedMode mode) {
 uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
                       const CallResolver &resolve_call, const VregEntries &ent,
                       const CallResolver &resolve_native,
-                      const CallResolver &resolve_symbol) {
+                      const CallResolver &resolve_symbol,
+                      size_t *out_code_size) {
     /* Watchdog CTPE: propagar el handler de safepoint de la CodeCache al
      * thread_local que lee vreg_select.  Se hace AQUI (mismo hilo que
      * vreg_select) porque el eager-compile de CTPE puede correr en un hilo
@@ -513,6 +514,11 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
     _jt.set_code_bytes(static_cast<uint32_t>(bytes.size())); // telemetria.
     uint8_t *code = cc.alloc(bytes.size(), 16);
     if (!code) return nullptr;
+    /* Cuanto ocupa.  Quien registra la funcion lo necesita para poder decir,
+     * ante un fallo en codigo nativo, si una direccion cae DENTRO de ella;
+     * sin el tamano solo se puede adivinar por proximidad y se acaba
+     * senalando la funcion equivocada. */
+    if (out_code_size) *out_code_size = bytes.size();
     std::memcpy(code, bytes.data(), bytes.size());
     /* Jump table densa (SWITCH_DENSE): parchear cada entrada de 8 bytes con la
      * direccion nativa absoluta del brazo (base + label_offset).  POST-memcpy

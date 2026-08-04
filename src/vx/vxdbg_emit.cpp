@@ -38,6 +38,8 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
+#include <iterator>
 #include <unordered_set>
 
 namespace vx {
@@ -476,18 +478,25 @@ vxdbg::FileId emit_file(vxdbg::NodeStore &store, const std::string &path,
     f.encoding = "utf-8";
     // El resumen del contenido es lo que permite luego detectar que el fuente
     // ya no es el que se compilo, y no ensenar la linea equivocada.
-    /* Se resume lo que se COMPILO, que es el texto ya preprocesado.
-     * Resumir el fichero de disco seria lo natural -- es lo que se ensena --
-     * pero sus lineas NO son las mismas: el preprocesador quita comentarios y
-     * expande macros, y los numeros que viajan son los del texto resultante.
-     * Con el resumen del fichero, uno con documentacion pasa la comprobacion y
-     * despues se ensena la linea equivocada.
+    /* Se resume el FICHERO DEL DISCO, que es lo que se ensena al explicar un
+     * fallo.  Durante un tiempo se resumia el texto ya preprocesado porque sus
+     * lineas no coincidian con las del fichero -- el preprocesador se comia
+     * los comentarios de bloque sin reponer su sitio -- y asi al menos no se
+     * ensenaba una linea equivocada.  Ya no hace falta: el preprocesador
+     * mantiene la numeracion, de modo que resumir el fichero vuelve a decir lo
+     * que debe (si cambio de verdad) en lugar de fallar siempre.
      *
-     * Esto NO es la solucion: lo correcto es que cada linea lleve su
-     * PROCEDENCIA -- de que fichero y linea salio, y de que expansion de macro
-     * si vino de una -- porque con codigo expandido ni siquiera existe una
-     * linea del fichero que ensenar.  Hasta entonces, esto al menos no
-     * miente. */
+     * Queda pendiente el codigo EXPANDIDO: cuando una macro genera lineas no
+     * existe ninguna del fichero que ensenar, y para eso hace falta que cada
+     * linea lleve su procedencia. */
+    std::string del_disco;
+    {
+        std::ifstream fh(path, std::ios::binary);
+        if (fh)
+            del_disco.assign((std::istreambuf_iterator<char>(fh)),
+                             std::istreambuf_iterator<char>());
+    }
+    const std::string &resumir = del_disco.empty() ? content : del_disco;
     if (!content.empty())
         f.checksum = vxdbg::hash_bytes(content.data(), content.size());
     vxdbg::ContentHash h;

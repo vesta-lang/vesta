@@ -11,6 +11,7 @@
 #include "loader/loader.h"
 #include "loader/class_registry.h"
 #include "debug/debugger.h"
+#include "jit/auto_jit.h"
 
 #include "vx/diag/diag_catalog.h"
 #include "vxdbg/codec.h"
@@ -836,7 +837,27 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
     // Frame 0: el PC actual (donde ocurrio el error).  Si hay
     // method en frame_stack lo usamos; si no, solo PC.
     loader::FrameHeader *fr = vm->frame_stack;
-    const uint64_t cur_pc = vm->registers.rip.raw();
+    /* Donde estaba el programa al fallar.
+     *
+     * En codigo compilado no vale el PC de la maquina virtual: ahi no se va
+     * actualizando -- ese es el punto de compilar --, de modo que conserva el
+     * de la ultima vez que se sincronizo y la traza acababa senalando la
+     * primera funcion en vez de la que reventó.  Lo que si vale es la
+     * direccion NATIVA del fallo, que lleva a la funcion que la contiene y de
+     * ahi a su direccion en la maquina virtual. */
+    uint64_t cur_pc = vm->registers.rip.raw();
+    bool desde_compilado = false;
+    if (vm->pending_fault_native_pc != 0) {
+        uint64_t va = 0;
+        if (jit::lookup_vaddr_by_native_pc(vm->pending_fault_native_pc, va)) {
+            cur_pc = va;
+            desde_compilado = true;
+            /* Es el PRINCIPIO de la funcion, no la instruccion exacta: no hay
+             * que mirar el byte anterior como con un PC que ya avanzo. */
+            vm->fatal_pc_exact = true;
+        }
+    }
+    (void)desde_compilado;
 
     // Helper: append "(file.vx:line)" usando primero DebugInfo del
     // .velb cargado (precision pc_offset -> line); fallback a
@@ -1267,16 +1288,31 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
             if (prev && *prev == *sym) continue;
             prev = sym;
             prev_origen = sym;
+            /* Aqui tambien puede haber llamadas aplanadas: la direccion de
+             * retorno cae en una funcion, pero la linea a la que corresponde
+             * puede ser de otra que se inlino dentro.  Sin mirarlo, el marco
+             * lleva un nombre y debajo una linea que no es suya. */
+            const std::vector<EscalonInline> apl2 =
+                inline_chain_at(vm, *sym, linea_de_pc(v, 1), 0);
             append_str("  llamada desde ");
-            const std::string legible = demangle_symbol(*sym);
+            const std::string legible =
+                apl2.empty() ? demangle_symbol(*sym)
+                             : demangle_symbol(apl2.front().funcion);
             append(legible.c_str(), legible.size());
+            if (!apl2.empty()) {
+                append_str(" [aplanado en ");
+                const std::string fis2 = demangle_symbol(*sym);
+                append(fis2.c_str(), fis2.size());
+                append_str("]");
+            }
             /* Cada marco de la cadena tambien dice QUE es y con que firma: sin
              * ella, dos sobrecargas del mismo nombre son indistinguibles justo
              * cuando hay que saber por cual se paso. */
             std::string archivo2;
             vxdbg::ContentHash resumen2;
-            const std::string nota2 =
-                entity_note_for_symbol(vm, *sym, &archivo2, &resumen2);
+            const std::string nota2 = entity_note_for_symbol(
+                vm, apl2.empty() ? *sym : apl2.front().funcion, &archivo2,
+                &resumen2);
             if (!nota2.empty()) {
                 append_str(" [");
                 append(nota2.c_str(), nota2.size());
@@ -1284,7 +1320,39 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
             }
             append_pos(v, legible.find('.') != std::string::npos);
             append_str("\n");
-            append_source(v, archivo2, resumen2, *sym);
+            append_source(v, archivo2, resumen2,
+                          apl2.empty() ? *sym : apl2.front().funcion, 1, &*sym);
+            /* Y las llamadas que el inlinado se comio por debajo de este
+             * marco, igual que en el de arriba. */
+            for (size_t k = 1; k < apl2.size(); ++k) {
+                append_str("  llamada desde ");
+                const std::string nk = demangle_symbol(apl2[k].funcion);
+                append(nk.c_str(), nk.size());
+                append_str(" [aplanado] (linea ");
+                append_dec((uint64_t)apl2[k - 1].linea);
+                append_str(")\n");
+            }
+            if (!apl2.empty()) {
+                append_str("  llamada desde ");
+                const std::string nf2 = demangle_symbol(*sym);
+                append(nf2.c_str(), nf2.size());
+                if (!nota2.empty()) {
+                    /* La nota de arriba describe a la funcion aplanada; esta
+                     * es la fisica y hay que preguntarla aparte. */
+                    std::string arch_g;
+                    vxdbg::ContentHash res_g;
+                    const std::string nota_g =
+                        entity_note_for_symbol(vm, *sym, &arch_g, &res_g);
+                    if (!nota_g.empty()) {
+                        append_str(" [");
+                        append(nota_g.c_str(), nota_g.size());
+                        append_str("]");
+                    }
+                }
+                append_str(" (linea ");
+                append_dec((uint64_t)apl2.back().linea);
+                append_str(")\n");
+            }
             ++shown;
         }
     }
@@ -1622,6 +1690,16 @@ static LONG WINAPI vx_av_veh(EXCEPTION_POINTERS *info) {
      * exactamente lo que pasaba en JIT.  El que hay que explicar es el que
      * rompio el programa, no el que provoco el intento de recuperarlo. */
     const bool primero = (proc->pending_av_kind == 0xFFFFFFFFu);
+    /* La direccion NATIVA del fallo, antes de tocarla mas abajo para desviar
+     * la ejecucion.  En codigo compilado es el unico dato fiable de donde
+     * ocurrio: el PC de la maquina virtual no se va actualizando ahi. */
+    if (primero && info->ContextRecord) {
+#if defined(_M_X64) || defined(__x86_64__)
+        proc->pending_fault_native_pc = (uint64_t)info->ContextRecord->Rip;
+#elif defined(_M_IX86) || defined(__i386__)
+        proc->pending_fault_native_pc = (uint64_t)info->ContextRecord->Eip;
+#endif
+    }
     if (primero) proc->pending_av_kind = kind_local;
     // Capturar la direccion del fault (segundo elemento de
     // ExceptionInformation: 0=read/write flag, 1=virtual addr) -- solo

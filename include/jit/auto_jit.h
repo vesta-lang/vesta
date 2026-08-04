@@ -295,7 +295,8 @@ extern bool g_pc_jit_active;
  * @param fn    Puntero al codigo nativo (calling convention
  *              @c JitFn(vrt_proc*) -> uint64_t).
  */
-void register_jit_code_at_pc(uint64_t vaddr, void *fn) noexcept;
+void register_jit_code_at_pc(uint64_t vaddr, void *fn,
+                             size_t code_size = 0) noexcept;
 
 /**
  * @brief Lookup O(1) amortizado: devuelve el ptr nativo si la funcion
@@ -308,6 +309,37 @@ void register_jit_code_at_pc(uint64_t vaddr, void *fn) noexcept;
  * @return      Codigo JIT o @c nullptr.
  */
 void *lookup_jit_code_at_pc(uint64_t vaddr) noexcept;
+
+/**
+ * @brief De una direccion de codigo NATIVO a la funcion que la contiene.
+ *
+ * La busqueda al reves de @c lookup_jit_code_at_pc.  Sirve para explicar un
+ * fallo ocurrido dentro de codigo compilado: ahi el PC de la maquina virtual
+ * no se va actualizando -- ese es el punto de compilar --, de modo que lo
+ * unico fiable es la direccion nativa del fallo.
+ *
+ * @param native_pc Direccion donde fallo el codigo nativo.
+ * @param[out] out_vaddr Direccion virtual de la funcion que la contiene.
+ * @return true si cae dentro de alguna.  El hallazgo va aparte del valor
+ *         porque 0 es una direccion valida y no puede hacer de "no
+ *         encontrado".
+ */
+bool lookup_vaddr_by_native_pc(uint64_t native_pc,
+                               uint64_t &out_vaddr) noexcept;
+
+/**
+ * @brief Apunta SOLO que trozo de memoria ocupa el codigo de una funcion.
+ *
+ * Sin tocar a donde despacha una llamada, que es cosa distinta y no siempre se
+ * decide en el mismo sitio.  Lo necesita @c lookup_vaddr_by_native_pc para
+ * poder atribuir un fallo ocurrido en codigo nativo.
+ *
+ * @param vaddr Direccion virtual de la funcion (0 es valida: el codigo
+ *              empieza ahi).
+ * @param fn Inicio de su codigo nativo.
+ * @param code_size Cuanto ocupa.
+ */
+void register_jit_region(uint64_t vaddr, void *fn, size_t code_size) noexcept;
 
 /**
  * @brief Limpia el mapa @c pc -> jit_code (no libera el code cache).
