@@ -19,6 +19,46 @@
 
 namespace vxdbg {
 
+ContentHash seal(StoredNode &node) {
+    // La huella sale SOLO del contenido, no del encabezado: el genero y la
+    // version describen como leerlo, no que es.  Dos nodos con el mismo
+    // contenido son el mismo nodo.
+    node.header.hash = hash_bytes(node.payload.data(), node.payload.size());
+    return node.header.hash;
+}
+
+namespace {
+
+/**
+ * @brief Escribe el encabezado del fichero.
+ * @param w Donde escribir.
+ * @param h Encabezado.
+ */
+void write_file_header(ByteWriter &w, const NodeFileHeader &h) {
+    w.u32(h.magic);
+    w.u16(h.kind);
+    w.u16(h.reserved);
+    w.u32(h.schema_version);
+    w.u32(h.payload_size);
+}
+
+/**
+ * @brief Lee el encabezado del fichero.
+ * @param r De donde leer.
+ * @param out Recibe el encabezado.
+ * @return @c true si se leyo entero y el magic cuadra.
+ */
+bool read_file_header(ByteReader &r, NodeFileHeader &out) {
+    out.magic = r.u32();
+    out.kind = r.u16();
+    out.reserved = r.u16();
+    out.schema_version = r.u32();
+    out.payload_size = r.u32();
+    return r.ok() && out.magic == VXDBG_NODE_MAGIC;
+}
+
+} // namespace
+
 // ---------------------------------------------------------------------------
 //  En memoria
 // ---------------------------------------------------------------------------
@@ -80,18 +120,26 @@ bool FileNodeStore::put(const StoredNode &node) {
     fs::create_directories(fs::path(path).parent_path(), ec);
     if (ec) return false;
 
+    NodeFileHeader fh;
+    fh.magic = VXDBG_NODE_MAGIC;
+    fh.kind = static_cast<uint16_t>(node.header.kind);
+    fh.schema_version = node.header.schema_version;
+    fh.payload_size = static_cast<uint32_t>(node.payload.size());
+
     ByteWriter w;
-    w.u32(VXDBG_NODE_MAGIC);
-    w.u16(static_cast<uint16_t>(node.header.kind));
-    w.u16(0); // relleno, para que el encabezado quede alineado a 4
-    w.u32(node.header.schema_version);
-    w.u32(static_cast<uint32_t>(node.payload.size()));
+    w.reserve(VXDBG_NODE_HEADER_SIZE + node.payload.size());
+    write_file_header(w, fh);
     w.raw(node.payload.data(), node.payload.size());
 
     // Se escribe a un temporal y se renombra: si el proceso muere a mitad, el
     // almacen no se queda con un fichero a medias que luego pasaria por bueno
     // -- y como el nombre es la huella, un fichero truncado seria un nodo que
     // miente sobre su propio contenido.
+    //
+    // El renombrado es atomico en POSIX; en Windows tiene matices cuando el
+    // destino ya existe.  Aqui no llega a darse porque justo antes se comprueba
+    // que no esta, y si otro proceso se adelanta se trata mas abajo: con el
+    // mismo contenido, da igual quien gane.
     const std::string tmp = path + ".tmp";
     {
         std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
@@ -121,21 +169,31 @@ bool FileNodeStore::get(ContentHash hash, StoredNode &out) const {
     if (!f) return false;
 
     ByteReader r(bytes);
-    if (r.u32() != VXDBG_NODE_MAGIC) return false;
-    const uint16_t kind = r.u16();
-    (void)r.u16(); // relleno
-    const uint32_t schema = r.u32();
-    const uint32_t len = r.u32();
-    if (!r.ok()) return false;
+    NodeFileHeader fh;
+    if (!read_file_header(r, fh)) return false;
 
-    out.header.kind = static_cast<NodeKind>(kind);
-    out.header.schema_version = schema;
+    out.header.kind = static_cast<NodeKind>(fh.kind);
+    out.header.schema_version = fh.schema_version;
     // La huella no se guarda dentro del fichero: ES su nombre.  Escribirla
     // ademas dentro seria repetir el dato y abrir la puerta a que discrepen.
     out.header.hash = hash;
-    out.payload.resize(len);
-    if (len > 0 && !r.raw(out.payload.data(), len)) return false;
-    return r.ok();
+    out.payload.resize(fh.payload_size);
+    if (fh.payload_size > 0 &&
+        !r.raw(out.payload.data(), fh.payload_size)) {
+        return false;
+    }
+    if (!r.ok()) return false;
+
+    if (verify_) {
+        // El contenido tiene que corresponder al nombre.  Un fichero alterado
+        // -- por un disco que falla o por alguien que lo toco -- se serviria
+        // como si fuera el nodo que se pedia, y a partir de ahi todo lo que se
+        // explique con el seria falso.
+        const auto real =
+            hash_bytes(out.payload.data(), out.payload.size());
+        if (!(real == hash)) return false;
+    }
+    return true;
 }
 
 bool FileNodeStore::contains(ContentHash hash) const {

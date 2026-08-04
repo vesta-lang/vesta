@@ -125,8 +125,7 @@ static void probar_almacen(vxdbg::NodeStore &s, const char *nombre) {
     n.header.kind = vxdbg::NodeKind::Statement;
     n.header.schema_version = 1;
     n.payload = {1, 2, 3, 4, 5};
-    const auto h = vxdbg::hash_bytes(n.payload.data(), n.payload.size());
-    n.header.hash = h;
+    const auto h = vxdbg::seal(n); // serializar -> sellar -> guardar
 
     comprobar(!s.contains(h), "al principio no esta");
     comprobar(s.put(n), "se guarda");
@@ -155,8 +154,7 @@ static void probar_almacen(vxdbg::NodeStore &s, const char *nombre) {
     vxdbg::StoredNode vacio;
     vacio.header.kind = vxdbg::NodeKind::Scope;
     vacio.header.schema_version = 1;
-    vacio.header.hash = vxdbg::hash_bytes("scope vacio", 11);
-    const auto hv = vacio.header.hash;
+    const auto hv = vxdbg::seal(vacio);
     comprobar(s.put(vacio), "se guarda un nodo sin contenido");
 
     // Un nodo sin huella no tiene donde ir: rechazarlo es mejor que guardarlo
@@ -190,15 +188,40 @@ static void probar_disco() {
     // Un fichero a medias NO debe pasar por bueno.
     vxdbg::StoredNode n;
     n.header.kind = vxdbg::NodeKind::Code;
-    n.header.hash = h;
     n.payload = {9, 9, 9, 9, 9, 9, 9, 9};
+    vxdbg::seal(n);
+    const auto h2 = n.header.hash;
     s.put(n);
     {
-        std::ofstream f(s.path_for(h), std::ios::binary | std::ios::trunc);
+        std::ofstream f(s.path_for(h2), std::ios::binary | std::ios::trunc);
         f << "roto";
     }
     vxdbg::StoredNode leido;
-    comprobar(!s.get(h, leido), "un fichero truncado no se da por bueno");
+    comprobar(!s.get(h2, leido), "un fichero truncado no se da por bueno");
+
+    // Con verificacion, un fichero MANIPULADO -- entero y bien formado, pero
+    // con otro contenido -- tampoco pasa: si no, se serviria como si fuera el
+    // nodo que se pedia.
+    vxdbg::FileNodeStore sv(raiz, /*verify=*/true);
+    vxdbg::StoredNode bueno;
+    bueno.header.kind = vxdbg::NodeKind::Code;
+    bueno.payload = {1, 2, 3};
+    const auto hb = vxdbg::seal(bueno);
+    sv.put(bueno);
+    comprobar(sv.get(hb, leido), "con verificacion, lo intacto se lee igual");
+    {
+        // Se reescribe el fichero con otro contenido, bien formado.
+        vxdbg::StoredNode falso;
+        falso.header.kind = vxdbg::NodeKind::Code;
+        falso.payload = {9, 9, 9};
+        falso.header.hash = hb; // nombre de otro
+        vxdbg::FileNodeStore sin_verificar(raiz);
+        std::error_code e2;
+        std::filesystem::remove(sv.path_for(hb), e2);
+        sin_verificar.put(falso);
+    }
+    comprobar(!sv.get(hb, leido),
+              "y un fichero manipulado se detecta en vez de servirse");
 
     fs::remove_all(raiz, ec);
 }
@@ -214,9 +237,12 @@ int main() {
     // La misma clave con OTRO contenido no deberia poder ocurrir; si ocurre,
     // es un fallo de quien calculo la huella y hay que verlo aqui y no tres
     // capas mas arriba sirviendo un nodo por otro.
+    vxdbg::StoredNode vacio_ref;
+    vacio_ref.header.kind = vxdbg::NodeKind::Scope;
+    const auto hv_ajena = vxdbg::seal(vacio_ref);
     vxdbg::StoredNode impostor;
     impostor.header.kind = vxdbg::NodeKind::Statement;
-    impostor.header.hash = vxdbg::hash_bytes("scope vacio", 11); // clave ajena
+    impostor.header.hash = hv_ajena; // se le pone la clave de otro
     impostor.payload = {7, 7, 7};
     comprobar(!mem.put(impostor),
               "misma clave con otro contenido se rechaza en vez de pisarlo");

@@ -53,6 +53,20 @@ struct StoredNode {
 };
 
 /**
+ * @brief Calcula la huella del contenido y la sella en el encabezado.
+ *
+ * El unico sitio donde se pone una huella.  Que el encabezado sea un campo
+ * mutable significa que alguien puede rellenarlo a mano con lo que sea, y en un
+ * almacen donde el nombre ES el contenido eso deja un nodo que miente sobre si
+ * mismo.  Con esto, la secuencia es siempre la misma: serializar, sellar,
+ * guardar; y a partir del sellado el encabezado no se vuelve a tocar.
+ *
+ * @param node Nodo a sellar; se le rellena @c header.hash.
+ * @return La huella calculada.
+ */
+ContentHash seal(StoredNode &node);
+
+/**
  * @brief Donde se guardan y de donde se leen los nodos.
  *
  * Interfaz y no una clase concreta: hoy los objetos viven en ficheros cacheados
@@ -153,8 +167,16 @@ class FileNodeStore : public NodeStore {
   public:
     /**
      * @param root Carpeta raiz del almacen.
+     * @param verify Si comprobar, al leer, que el contenido corresponde de
+     *        verdad a la huella con la que esta nombrado.  Apagado por defecto
+     *        porque cuesta releer y rehacer la huella en cada lectura; se
+     *        enciende cuando hay motivo para desconfiar del medio -- un disco
+     *        que da errores, un cache compartido, algo que alguien pudo tocar
+     *        -- y entonces un fichero alterado se detecta en vez de servirse
+     *        como si fuera el nodo que pedia.
      */
-    explicit FileNodeStore(std::string root) : root_(std::move(root)) {}
+    explicit FileNodeStore(std::string root, bool verify = false)
+        : root_(std::move(root)), verify_(verify) {}
 
     bool put(const StoredNode &node) override;
     bool get(ContentHash hash, StoredNode &out) const override;
@@ -169,10 +191,34 @@ class FileNodeStore : public NodeStore {
 
   private:
     std::string root_;
+    bool verify_ = false;
+};
+
+/**
+ * @brief El encabezado que precede al contenido en el fichero.
+ *
+ * Descrito aqui y en ningun otro sitio.  El relleno y el orden de los campos
+ * son cosa del FICHERO, no del nodo, y tenerlos escritos sueltos en el lector y
+ * en el escritor obligaba a mantener dos sitios sincronizados a mano: cambiar
+ * uno y olvidar el otro no da error de compilacion, da ficheros que no se leen.
+ *
+ * NO se escribe de golpe con su tamano en memoria: eso arrastraria el relleno
+ * que meta el compilador y el orden de bytes de la maquina.  Campo a campo, en
+ * el orden en que estan aqui.
+ */
+struct NodeFileHeader {
+    uint32_t magic = 0;         ///< @ref VXDBG_NODE_MAGIC
+    uint16_t kind = 0;          ///< genero del nodo
+    uint16_t reserved = 0;      ///< a cero; deja el encabezado alineado a 4
+    uint32_t schema_version = 0;
+    uint32_t payload_size = 0;
 };
 
 /// Magic del fichero de un nodo: "VXDN" en little-endian.
 static constexpr uint32_t VXDBG_NODE_MAGIC = 0x4E445856u;
+
+/// Cuanto ocupa el encabezado en el fichero.
+static constexpr size_t VXDBG_NODE_HEADER_SIZE = 16;
 
 } // namespace vxdbg
 
