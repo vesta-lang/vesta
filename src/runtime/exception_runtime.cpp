@@ -4,6 +4,7 @@
  */
 
 #include "runtime/exception_runtime.h"
+#include "runtime/decode_instruction.h"
 #include "runtime/proceso_runtime.h"
 #include "runtime/scheduler.h"
 #include "runtime/runtime.h"
@@ -566,6 +567,64 @@ static std::vector<std::string> ir_window_at(ProcessVM *vm,
     return out;
 }
 
+/**
+ * @brief Una VENTANA del codigo maquina alrededor de donde fallo.
+ *
+ * Las instrucciones son de tamano variable, asi que no se puede retroceder
+ * desde el fallo: hay que descodificar hacia adelante desde el principio de la
+ * funcion, que es la unica frontera conocida, quedandose con las ultimas.
+ *
+ * @param vm Proceso.
+ * @param inicio Direccion donde empieza la funcion.
+ * @param pc_fallo Direccion de la instruccion que fallo.
+ * @param antes Cuantas ensenar antes.
+ * @param despues Cuantas despues.
+ * @return Las lineas de texto, con la culpable marcada.
+ */
+static std::vector<std::string> bytecode_window(ProcessVM *vm, uint64_t inicio,
+                                                uint64_t pc_fallo, size_t antes,
+                                                size_t despues) {
+    std::vector<std::string> out;
+    if (inicio > pc_fallo) return out;
+
+    struct Paso {
+        uint64_t pc;
+        const char *nombre;
+    };
+    std::vector<Paso> pasos;
+    uint64_t pc = inicio;
+    /* Tope de seguridad: si el tamano viniera a cero se quedaria dando vueltas
+     * aqui, y esto corre justo cuando el programa ya ha fallado. */
+    for (int n = 0; n < 4096 && pc <= pc_fallo + 64; ++n) {
+        DecodedInstr d{};
+        if (!decode_peek(vm, pc, d)) break;
+        if (!d.metadata || !d.metadata->name) break;
+        pasos.push_back({pc, d.metadata->name});
+        const uint32_t tam = d.flags_info.size_instr;
+        if (tam == 0) break;
+        pc += tam;
+    }
+
+    size_t culpable = pasos.size();
+    for (size_t i = 0; i < pasos.size(); ++i)
+        if (pasos[i].pc == pc_fallo) {
+            culpable = i;
+            break;
+        }
+    if (culpable == pasos.size()) return out;
+
+    const size_t desde = (culpable > antes) ? (culpable - antes) : 0;
+    const size_t hasta = std::min(pasos.size(), culpable + despues + 1);
+    for (size_t i = desde; i < hasta; ++i) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%s0x%llx  %s",
+                      (i == culpable) ? "> " : "  ",
+                      (unsigned long long)pasos[i].pc, pasos[i].nombre);
+        out.push_back(buf);
+    }
+    return out;
+}
+
 static const std::string *symbol_for_pc(ProcessVM *vm, uint64_t pc,
                                         uint64_t &out_off) {
     const std::string *best = nullptr;
@@ -898,11 +957,25 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
              * cuando no coinciden es justo lo que hay que ver.  Solo la del
              * marco de arriba: los de la cadena estan parados en una llamada y
              * no anaden nada. */
-            if (vm->decoded_ptr && vm->decoded_ptr->metadata &&
-                vm->decoded_ptr->metadata->name) {
-                append_str("      maquina: ");
-                append_str(vm->decoded_ptr->metadata->name);
-                append_str("\n");
+            {
+                /* La ventana de codigo maquina.  Se descodifica desde el
+                 * principio de la funcion porque las instrucciones son de
+                 * tamano variable y no se puede retroceder. */
+                const std::vector<std::string> maq =
+                    bytecode_window(vm, cur_pc - off_top, cur_pc, 3, 4);
+                if (!maq.empty()) {
+                    append_str("      maquina:\n");
+                    for (const std::string &t : maq) {
+                        append_str("      ");
+                        append(t.c_str(), t.size());
+                        append_str("\n");
+                    }
+                } else if (vm->decoded_ptr && vm->decoded_ptr->metadata &&
+                           vm->decoded_ptr->metadata->name) {
+                    append_str("      maquina: ");
+                    append_str(vm->decoded_ptr->metadata->name);
+                    append_str("\n");
+                }
             }
         } else {
             append_str("<top> (pc=");

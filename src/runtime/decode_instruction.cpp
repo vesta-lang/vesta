@@ -1171,6 +1171,55 @@ void decode_instr_calln(ProcessVM *vm, DecodedInstr &instr) {
  * @param process Proceso virtual cuyo RIP apunta a la instruccion a
  * descodificar.
  */
+/**
+ * @brief Elige los metadatos de una instruccion por sus dos primeros bytes.
+ *
+ * Lo comparten la descodificacion normal y la que solo MIRA: sin compartirlo,
+ * el dia que se anada una tabla o cambie el prefijo, una de las dos se queda
+ * atras -- y seria la de mirar, que es la que casi nadie ejecuta.
+ *
+ * @param b0 Primer byte (0x00 = tabla extendida).
+ * @param b1 Segundo byte, solo si el primero es 0x00.
+ * @return Los metadatos, o @c nullptr si la instruccion no es utilizable.
+ */
+static InstrFormat *select_metadata(uint8_t b0, uint8_t b1) {
+    InstrFormat *table = decode_table_primary;
+    uint8_t index = b0;
+    if (b0 == 0x00) {
+        table = decode_table_extended;
+        index = b1;
+    }
+    InstrFormat &m = table[index];
+    if (m.exec == nullptr || m.decode == nullptr ||
+        m.mode >= Assembly::Bytecode::AddressingMode::COUNT)
+        return nullptr;
+    return &m;
+}
+
+bool decode_peek(ProcessVM *process, uint64_t pc, DecodedInstr &out) {
+    if (process == nullptr) return false;
+    out = DecodedInstr{};
+    out.pc = pc;
+    out.flags_info.is_not_extended = process->vm_mem[pc];
+    if (out.flags_info.is_not_extended == 0x00)
+        out.flags_info.opcode_index = process->vm_mem[pc + 1];
+
+    InstrFormat *m = select_metadata(out.flags_info.is_not_extended,
+                                     out.flags_info.opcode_index);
+    if (m == nullptr) return false;
+    out.metadata = m;
+    out.exec_cached = m->exec;
+
+    /* Las funciones de descodificacion leen el PC del proceso, no el que se
+     * les pasa.  Se le pone el que interesa y se le devuelve el suyo: es lo
+     * unico que se toca, y queda como estaba pase lo que pase. */
+    const uint64_t rip_previo = process->registers.rip.raw();
+    process->registers.rip.qword(pc);
+    m->decode(process, out);
+    process->registers.rip.qword(rip_previo);
+    return true;
+}
+
 void decode_instruction(ProcessVM *process) {
     const bool measuring =
         process->scheduler.has_hooks; // activar medicion solo si hay hooks
