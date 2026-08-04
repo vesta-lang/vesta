@@ -15,7 +15,7 @@ namespace ejemplos.pool_fibers_yield;
 //
 //   vm -m aot --vx 242_pool_fibers_yield.vx --format pe -o p.exe && ./p.exe  (exit 42)
 
-import "vx_pool" only vx_pool_start, vx_pool_submit, vx_pool_join, vx_yield;
+import std.pool only pool_start, pool_submit, pool_join, vx_yield;
 import "vx_sync" only vx_lock, vx_unlock;
 
 i64 g_lock = 0;
@@ -49,20 +49,20 @@ i32 main() {
     i64* lo = (i64*)g_lock; lo[0] = 0; lo[1] = 0; lo[2] = 0; lo[3] = 0;
     g_counter = 0;
 
-    vx_pool_start(4);
+    pool_start(4);
 
     i64 k = 0;
     while (k < 40) {
-        vx_pool_submit((i64)(cfn(i64) -> void) coop_fiber, 0);  // ceden
+        pool_submit((i64)(cfn(i64) -> void) coop_fiber, 0);  // ceden
         k = k + 1;
     }
     k = 0;
     while (k < 60) {
-        vx_pool_submit((i64)(cfn(i64) -> void) plain_task, 0);  // no ceden
+        pool_submit((i64)(cfn(i64) -> void) plain_task, 0);  // no ceden
         k = k + 1;
     }
 
-    vx_pool_join();
+    pool_join();
 
     return (g_counter == 1000) ? 42 : (i32)(g_counter % 1000);
 }

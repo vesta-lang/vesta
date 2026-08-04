@@ -44,9 +44,11 @@
 #ifndef VESTA_JIT_INTERVAL_H
 #define VESTA_JIT_INTERVAL_H
 
+#include "codegen/linear_pos.h"
 #include "jit/machine_ir.h"
 #include "jit/target_reginfo.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <vector>
 
@@ -185,6 +187,14 @@ struct IntervalResult {
     /// reg y el legalizado 2-address elide el `mov dst, src1`.  Solo es una
     /// PREFERENCIA: si el reg no esta libre, cae al greedy normal (correcto).
     std::vector<int32_t> coalesce_hint;
+    /// Posicion lineal de inicio de cada bloque (@c 2*first_gi[b]), ascendente.
+    /// Es un HECHO de la ESTRUCTURA del programa, no del allocator: delimita los
+    /// tramos de codigo RECTILINEO (sin bifurcaciones ni confluencias).  Lo necesita
+    /// cualquier transformacion que inserte codigo en un punto y deba garantizar que
+    /// ese punto se ejecuta en el MISMO camino que otro (el splitting: cargar un valor
+    /// a registro y devolverlo a memoria deben ocurrir siempre juntos).  El bloque de
+    /// una posicion @c pos es el ultimo @c b con @c block_starts[b] <= pos.
+    std::vector<uint32_t> block_starts;
 };
 
 /**
@@ -223,6 +233,89 @@ InstrRoles operand_roles(MOp op) noexcept;
  * @return     Intervals por vreg + posiciones de CALL.
  */
 IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri);
+
+/**
+ * @struct MachineNextUseFacts
+ * @brief Hecho del nivel MACHINEIR: por cada vreg, las posiciones de sus USOS en
+ *        la numeracion de @c build_intervals (2 por instr, uso en @c 2*gi) -- de
+ *        donde sale el NEXT-USE que consume el allocator (@c smart_spill) para
+ *        elegir victima estilo Belady.
+ *
+ * Es el HOMOLOGO MachineIR de @c analysis::UseDefFacts (nivel IR): MISMA interfaz
+ * (@c next_use_after / @c distance_to_next_use) pero en el dominio @c codegen::LinearPos.
+ * El allocator trabaja en ESTE espacio (su @c now es el @c start de un intervalo,
+ * una posicion de @c build_intervals); consultar el UseDefFacts IR con ese @c now
+ * mezclaria dominios -- el tipo fuerte @c codegen::LinearPos lo impide en compilacion.
+ *
+ * FORMA CSR (contigua): @c use_pos son todas las posiciones concatenadas por vreg;
+ * @c off[v]..off[v+1] delimita las de @p v.  @c next_use_after es busqueda binaria.
+ * Lo produce @c compute_next_use reusando el criterio de operandos de
+ * @c build_intervals (roles USE/USEDEF, mismo INLINE_ASM_RAW).
+ *
+ * DOS BELADY, NO DUPLICACION.  El "next-use" existe en DOS niveles porque el
+ * concepto pertenece a un DOMINIO (ver @c analysis/manager/analysis_manager.h):
+ *   - Belady IR      = @c analysis::UseDefFacts   (IrValueId + @c ir::LinearPos).
+ *   - Belady Machine = este Fact                   (vreg + @c codegen::LinearPos).
+ * Mismo concepto, dos dominios de posicion no intercambiables (el tipo fuerte lo
+ * impide).  El allocator es MachineIR-level -> consume ESTE, no el IR.
+ *
+ * FACTORIZACION PENDIENTE (cuando pague; no urgente).  Este Fact y
+ * @c analysis::UseDefFacts comparten el MOLDE de ALMACENAR + CONSULTAR (CSR
+ * @c off/@c use_pos + @c next_use_after con busqueda binaria + sentinela
+ * @c invalid()).  SOLO eso se factorizaria a un @c NextUseTable<ValueId, Position>
+ * del que ambos deriven (@c UseDefFacts = NextUseTable<IrValueId, ir::LinearPos>,
+ * @c MachineNextUseFacts = NextUseTable<vreg, codegen::LinearPos>).  Los PRODUCTORES
+ * NO se factorizan: @c compute_use_def (recorre IR, PHI-args en @c block_end) y
+ * @c compute_next_use (recorre MachineIR, roles USE/USEDEF) son especificos del
+ * nivel.  La semantica sigue en dos Facts distintos y dos dominios; solo se
+ * comparte la estructura de datos.
+ */
+struct MachineNextUseFacts {
+    std::vector<uint32_t> off;     ///< off[v]..off[v+1] = rango de v en use_pos.
+    std::vector<uint32_t> use_pos; ///< posiciones de uso (2*gi), por vreg, ascendente.
+    uint32_t max_pos = 0;          ///< 2 * total_instrs (= IntervalResult.max_pos).
+
+    /// Sentinela: el vreg no tiene ningun uso posterior (muerto tras @c pos).
+    /// Es el ESTADO invalido de la posicion, no una posicion real.
+    static constexpr codegen::LinearPos NO_NEXT_USE = codegen::LinearPos::invalid();
+
+    /** @brief Numero de vregs cubiertos (off tiene un extra al final). */
+    uint32_t num_vregs() const noexcept {
+        return off.empty() ? 0u : static_cast<uint32_t>(off.size() - 1);
+    }
+    /** @brief ¿El vreg @p v se usa en algun sitio? */
+    bool has_uses(uint32_t v) const noexcept {
+        return v < num_vregs() && off[v + 1] > off[v];
+    }
+    /**
+     * @brief Posicion MachineIR del PROXIMO uso de @p v estrictamente despues de
+     *        @p pos, o @c NO_NEXT_USE si no hay ninguno (vreg muerto -> victima
+     *        ideal para Belady).  @c codegen::LinearPos garantiza el dominio MachineIR.
+     */
+    codegen::LinearPos next_use_after(uint32_t v, codegen::LinearPos pos) const noexcept {
+        if (v >= num_vregs()) return NO_NEXT_USE;
+        const uint32_t *b = use_pos.data() + off[v];
+        const uint32_t *e = use_pos.data() + off[v + 1];
+        const uint32_t *it = std::upper_bound(b, e, pos.value); // primer uso > pos
+        return it == e ? NO_NEXT_USE : codegen::LinearPos{*it};
+    }
+    /**
+     * @brief Distancia al proximo uso desde @p pos (mayor = mejor victima Belady).
+     *        @c 0xFFFFFFFF si no hay proximo uso (distancia infinita).
+     */
+    uint32_t distance_to_next_use(uint32_t v, codegen::LinearPos pos) const noexcept {
+        const codegen::LinearPos nu = next_use_after(v, pos);
+        return nu.is_valid() ? (nu - pos) : UINT32_MAX; // UINT32_MAX = distancia infinita.
+    }
+};
+
+/**
+ * @brief Produce @c MachineNextUseFacts de @p mf: por cada vreg, las posiciones de
+ *        sus usos en la numeracion de @c build_intervals (uso en @c 2*gi).  Reusa
+ *        el criterio de operandos de @c build_intervals (roles USE/USEDEF +
+ *        inline-asm).  Funcion PURA; no mira el IR (solo el MachineIR asignado).
+ */
+MachineNextUseFacts compute_next_use(const MFunction &mf);
 
 } // namespace jit
 

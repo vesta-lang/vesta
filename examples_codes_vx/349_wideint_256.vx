@@ -1,0 +1,52 @@
+/**
+ * @file 349_wideint_256.vx
+ * @brief Entero de 256 bits sin signo, compuesto por dos mitades de 128.
+ *
+ * `u256` no se escribe desde cero: hereda de `Wide256`, que a su vez se apoya
+ * en `u128`.  Lo que hay que vigilar en esa composicion es el paso entre
+ * mitades, asi que el caso ejercita justo eso: el acarreo cuando la mitad baja
+ * esta al maximo y se le suma uno, el prestamo en sentido contrario, y los
+ * desplazamientos que cruzan la frontera de los 128 bits.
+ *
+ */
+import std.wideint only u256, u128;
+
+i32 main() {
+    u256 a = u256.from_u64(100);
+    u256 b = u256.from_u64(58);
+
+    if ((a + b).to_u64() != 158) { return 1; }
+    if ((a - b).to_u64() != 42)  { return 2; }
+    if (!(b < a))                { return 3; }
+    if (a <= b)                  { return 4; }
+    if (u256.zero())             { return 5; }
+    if (!a)                      { return 6; }
+
+    // Acarreo real entre mitades: MAX de 128 bits en la mitad baja, +1 debe
+    // desbordar a la mitad alta.
+    u256 casi;
+    casi.lo128 = u128.max();
+    casi.hi128 = u128.zero();
+    u256 uno = u256.one();
+    u256 desb = casi + uno;
+    if (!desb.lo128.is_zero())          { return 7; }
+    if (desb.hi128 != u128.one())       { return 8; }
+
+    // Y el prestamo en sentido contrario.
+    u256 atras = desb - uno;
+    if (atras != casi)                  { return 9; }
+
+    // Desplazamientos cruzando la frontera de los 128 bits.
+    u256 sh = u256.one() << 128;
+    if (!sh.lo128.is_zero())            { return 10; }
+    if (sh.hi128 != u128.one())         { return 11; }
+    if ((sh >> 128) != u256.one()) { return 12; }
+
+    // Logica bit a bit contra el maximo.
+    if ((~u256.zero()) != u256.max())          { return 13; }
+    if (a & u256.zero())                       { return 14; }
+    if ((a | u256.zero()) != a)                { return 15; }
+    if (a ^ a)                                 { return 16; }
+
+    return (i32) (a - b).to_u64();   // 42
+}

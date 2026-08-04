@@ -1,0 +1,62 @@
+/**
+ * @file 328_virtual_dispatch.vx
+ * @brief Metodos @Virtual en structs: dispatch dinamico por vtable (modelo AOT).
+ *
+ * Un metodo marcado `@Virtual` se resuelve en RUNTIME segun el tipo real del
+ * objeto, no el tipo estatico.  Modelo (igual que el AOT / C++):
+ *
+ *   - Un struct con >=1 metodo @Virtual (propio o heredado) es "polimorfico":
+ *     lleva un puntero-a-vtable (vptr) en el offset 0; sus campos empiezan en 8.
+ *   - La vtable es ESTATICA (una por tipo), un blob en datos con la direccion de
+ *     cada metodo virtual por slot.  Coste: una indireccion en la llamada.
+ *   - El dispatch dinamico ocurre a traves de un puntero `Base*`: el objeto real
+ *     puede ser cualquier derivado, y `p.metodo()` salta al metodo del derivado.
+ *   - `@Override @Virtual` redefine un metodo virtual heredado (mismo slot).
+ *
+ * Es opt-in por metodo: los metodos NO marcados @Virtual usan dispatch estatico
+ * (llamada directa, coste cero).  `@Virtual` es incompatible con `Self`.
+ */
+namespace virtual_dispatch;
+
+struct Figura {
+    i64 lado;
+    // Metodo virtual base: el default para cualquier Figura.
+    @Virtual public i64 area() { return 0; }
+    public i64 get_lado() { return this.lado; }   // NO virtual: dispatch estatico
+}
+
+struct Cuadrado : Figura {
+    // Redefine area() -- mismo slot de vtable que Figura.area().
+    @Override @Virtual public i64 area() { return this.lado * this.lado; }
+}
+
+struct Triangulo : Figura {
+    i64 altura;
+    @Override @Virtual public i64 area() { return (this.lado * this.altura) / 2; }
+}
+
+// Recibe cualquier Figura por puntero: el dispatch de area() es DINAMICO.
+// El mismo codigo llama al area() del tipo real en cada caso.
+i64 area_de(Figura* f) {
+    return f.area();
+}
+
+i32 main() {
+    Cuadrado c;
+    c.lado = 5;              // area = 25
+
+    Triangulo t;
+    t.lado = 6;
+    t.altura = 4;            // area = 12
+
+    Figura base;
+    base.lado = 99;          // area = 0 (default virtual)
+
+    // Un unico Figura* apunta a tres tipos distintos; cada llamada resuelve al
+    // area() del tipo real en runtime.
+    i64 total = area_de(&c) + area_de(&t) + area_de(&base);  // 25 + 12 + 0 = 37
+
+    // get_lado() (no virtual) sobre el Cuadrado: dispatch estatico, hereda de
+    // Figura -> 5.
+    return (i32) (total + c.get_lado());   // 37 + 5 = 42
+}

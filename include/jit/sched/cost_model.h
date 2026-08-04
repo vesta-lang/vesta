@@ -33,6 +33,7 @@
 #define VESTA_JIT_SCHED_COST_MODEL_H
 
 #include "jit/machine_ir.h"
+#include "jit/sched/instr_cost.h" // ExecKind / SchedPortUse / InstrCost (DATO abstracto)
 
 #include <cstdint>
 #include <memory>
@@ -41,58 +42,10 @@
 namespace jit {
 namespace sched {
 
-/**
- * @brief Familia de ejecucion de una operacion (grupo de puertos idealizado).
- *
- * El modelo de recursos del scheduler reparte las instrucciones "listas" entre
- * estas familias respetando el ancho de emision y los puertos disponibles del
- * core, para modelar la ejecucion superescalar/paralela.
- */
-enum class ExecKind : uint8_t {
-    ALU = 0,    ///< aritmetica/logica entera simple (add/sub/and/mov/cmp...).
-    MUL,        ///< multiplicacion entera.
-    DIV,        ///< division entera (no totalmente pipelined).
-    LOAD,       ///< lectura de memoria.
-    STORE,      ///< escritura de memoria.
-    BRANCH,     ///< salto/condicional.
-    FP_ADD,     ///< suma/mov/convert de coma flotante.
-    FP_MUL,     ///< multiplicacion de coma flotante.
-    FP_DIV,     ///< division/raiz de coma flotante.
-    OTHER,      ///< pseudo-ops / barreras (call/ret) / sin coste.
-    COUNT
-};
-
-/// Numero maximo de grupos de puertos que una instruccion puede usar.
-constexpr int kMaxSchedPorts = 8;
-
-/// Uso de UN grupo de puertos por una instruccion (para el modelo de recursos).
-/// @c port indexa el legado de puertos de la microarquitectura (0..port_count-1);
-/// @c uops = uops que la instruccion despacha a ese grupo.
-struct SchedPortUse {
-    uint8_t port = 0;
-    float uops = 1.0f;
-};
-
-/**
- * @brief Coste de una instruccion para el scheduler (latencia + throughput +
- *        PUERTOS de ejecucion).
- */
-struct InstrCost {
-    float latency = 1.0f;   ///< ciclos desde emision hasta que el resultado
-                            ///< esta disponible para un dependiente.
-    float recip_tp = 1.0f;  ///< throughput reciproco (ciclos entre dos emisiones
-                            ///< back-to-back de la misma clase; 1/IPC).
-    ExecKind kind = ExecKind::ALU; ///< familia de ejecucion (grupo de puertos).
-    bool is_barrier = false; ///< CALL/RET/SAFEPOINT: no se reordena a traves.
-    float uops = 1.0f;       ///< uops totales (limite de emision del core).
-    /// Grupos de puertos que la instruccion ocupa (del modelo de la microarq o
-    /// sintetizados de @c kind).  El scheduler lleva ocupacion por grupo y evita
-    /// programar en el mismo ciclo dos instrucciones que compiten por el mismo
-    /// puerto -> modela la contencion superescalar real.  @c nports==0 = derivar
-    /// de @c kind (el modelo generico siempre rellena esto).
-    SchedPortUse ports[kMaxSchedPorts];
-    uint8_t nports = 0;
-};
+// ExecKind / kMaxSchedPorts / SchedPortUse / InstrCost viven ahora en
+// jit/sched/instr_cost.h (POD abstracto, sin dependencia del MachineIR) para
+// que un consumidor ISA-neutral (codegen/rbank) los lea sin arrastrar el
+// backend.  Aqui queda la INTERFAZ SchedCostModel, que SI conoce el MInstr.
 
 /**
  * @brief Interfaz del modelo de coste (consumida por el scheduler).

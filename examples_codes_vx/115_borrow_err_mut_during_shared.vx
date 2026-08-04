@@ -7,3 +7,4 @@ i32 main() {
     borrow_mut<i32> m  = lend_mut(owner); // ERROR esperado
     return 0;
 }
+// @expect-compile-fail

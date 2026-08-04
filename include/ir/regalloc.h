@@ -10,15 +10,37 @@
  * @brief Asignador de registros VM por barrido lineal (linear scan).
  *
  * Asigna los 16 registros VM (r0-r15) a los valores SSA de una funcion.
- * Los registros r14 y r15 estan reservados para el emisor (scratch y argc).
- * Los registros r0-r13 estan disponibles para asignacion general.
  *
  * Convencion de llamada pre-asignada:
  *   - param[0] -> r1, param[1] -> r2, ..., param[11] -> r12
  *   - r0: valor de retorno (se asigna antes del ret)
- *   - r13: disponible para el asignador
- *   - r14: scratch del emisor (NO asignado)
- *   - r15: argc para llamadas (NO asignado)
+ *   - r13: scratch SECUNDARIO del emisor  (NO asignado -- @c SCRATCH2_REG)
+ *   - r14: scratch PRIMARIO del emisor    (NO asignado -- @c SCRATCH_REG)
+ *   - r15: argc para llamadas             (NO asignado -- @c ARGC_REG)
+ *
+ * Es decir, el pool asignable es r0-r12 (@c ALLOC_REGS = 13).
+ *
+ * (Esta cabecera afirmaba antes que "r0-r13 estan disponibles" y que "r13:
+ * disponible para el asignador".  Era FALSO desde que r13 paso a ser el
+ * scratch secundario: tres afirmaciones -- las dos del texto y las constantes
+ * -- se contradecian entre si.  Corregido.)
+ *
+ * POR QUE HAY DOS SCRATCH.  El emisor necesita registros propios para
+ * materializar valores DERRAMADOS al construir una instruccion: @c load_src usa
+ * r14 para el primer operando y r13 para el segundo.  Con instrucciones de TRES
+ * operandos derramados esos dos no bastan y hay que pasar por la pila (ver
+ * @c emit_three_reg_op en ir_emitter.cpp) -- limitacion conocida, no descuido.
+ *
+ * SOBRE LA RESERVA DEMAND-DRIVEN (medido, NO es una pasada optimista).  La idea
+ * de liberar r13/r14/r15 al pool cuando la funcion no los necesita choca con la
+ * realidad del emisor: los usa HARDCODEADOS en ~42 sitios -- r15 como argc en
+ * cada llamada y como rsp en el bitcast float GP<->ZMM, r14/r13 como scratch de
+ * derrames y de calculo de direcciones.  Liberar uno al pool corromperia
+ * cualquier funcion que lo pise.  Ademas solo se podrian liberar en funciones
+ * HOJA sin floats ni derrames -- justo las que NO tienen presion de registros;
+ * las complejas (donde +registros valdria) usan calls/scratch y no liberarian
+ * nada.  Prerrequisito real: retirar antes esos usos hardcodeados del emisor
+ * (deuda documentada), no una pasada mas.
  *
  * Cuando el numero de valores vivos simultaneamente supera ALLOC_REGS,
  * el asignador derrama (spill) los valores menos prioritarios a slots
@@ -28,11 +50,10 @@
 #ifndef REGALLOC_H
 #define REGALLOC_H
 
+#include "codegen/regalloc.h"
 #include "ir/liveness.h"
-#include <unordered_map>
-#include <string>
-#include <vector>
 #include <cstdint>
+#include <vector>
 
 namespace ir {
 
@@ -48,46 +69,6 @@ static constexpr int SCRATCH2_REG = 13; // r13 (reservado junto con r14)
 
 /** @brief Registro reservado para argc en llamadas. */
 static constexpr int ARGC_REG = 15; // r15
-
-/**
- * @brief Resultado de la asignacion de registros para una funcion.
- *
- * Cada valor SSA queda asignado a un registro VM (reg_map) o a un slot
- * de pila (spill_map).  El campo spill_count indica cuantos slots de pila
- * reservar en el prologo de la funcion (cada slot = 8 bytes).
- */
-struct AllocResult {
-    std::unordered_map<IrValueId, int> reg_map; ///< valor -> registro VM (0-13)
-    std::unordered_map<IrValueId, uint32_t>
-        spill_map;        ///< valor -> indice de slot pila
-    uint32_t spill_count; ///< numero de slots usados
-    bool ok;              ///< false si hay error irrecuperable
-    std::string error;    ///< descripcion del error si !ok
-};
-
-/**
- * @brief Asigna registros VM a los valores SSA mediante barrido lineal.
- *
- * Implementa el algoritmo de Poletto & Sarkar (1999).
- * Pre-asigna parametros a r1-r12 siguiendo la convencion de llamada.
- * Derrama valores cuando se agotan los ALLOC_REGS registros disponibles.
- *
- * Coalescencia de congruencias de PHI (consumo del remap, sin tocar el SSA):
- * si @p coalesce_remap no es nulo ni vacio, los valores de la misma clase de
- * congruencia (remap[v] == root) comparten un registro VM.  El allocator opera
- * sobre valores CANONICOS (el root de cada clase, con los intervalos unidos) y
- * luego expande @c reg_map / @c spill_map a todos los miembros.  Asi las copias
- * PHI intra-clase quedan como no-op (mismo reg origen y destino) SIN reescribir
- * el IR a multi-def.  @p coalesce_remap debe garantizar que cada parametro sea
- * el root de su propia clase (el caller lo fuerza).
- *
- * @param fn             Funcion SSA con sus valores y bloques.
- * @param liveness       Resultado del analisis de vivacidad.
- * @param coalesce_remap Remap de congruencia (indexado por IrValueId) o nullptr.
- * @return Resultado con la asignacion de registros y slots de pila.
- */
-AllocResult allocate_regs(const IrFunction &fn, const LivenessResult &liveness,
-                          const std::vector<uint32_t> *coalesce_remap = nullptr);
 
 /**
  * @brief Obtiene el nombre de texto de un registro VM (p.ej. "r0", "r14").

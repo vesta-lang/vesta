@@ -16,8 +16,8 @@
  *        operacion tipada del IR (atomicos).
  *
  * Detecta secuencias de asm cuya semantica corresponde EXACTAMENTE a un op del
- * IR neutro (p.ej. @c lock @c cmpxchg -> @c ATOMIC_CAS_I64, @c lock @c xadd ->
- * @c ATOMIC_ADD_I64).  Cuando el patron encaja, el lowering puede emitir el op
+ * IR neutro (p.ej. @c lock @c cmpxchg -> @c ATOMIC_CAS, @c lock @c xadd ->
+ * @c ATOMIC_ADD).  Cuando el patron encaja, el lowering puede emitir el op
  * tipado en lugar de una caja opaca @c INLINE_ASM: el interprete lo ejecuta como
  * opcode (sin trampolin), el JIT/AOT lo emiten con la instruccion atomica nativa
  * y el analizador lo entiende (contratos/coste).  Multi-arch: x86 y arm64 liftan

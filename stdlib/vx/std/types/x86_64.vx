@@ -4,17 +4,51 @@
  * intercambiable con un u64 plano SIN un cast explicito -> seguridad de tipos
  * para direcciones/tamanos, cerrados bajo aritmetica y bitwise.  El `new`
  * "pelado" (sin bloque {from/to}) permite el cast explicito a/desde CUALQUIER
- * numerico ((uintptr)x, (i64)p, ...); declarar from/to lo restringiria.
+ * numerico ((uintptr)x, (i64)p, ...); declarar `explicit from/to` lo
+ * restringiria a lo listado.
+ *
+ * uintptr/intptr SI declaran conversiones, pero `implicit` y solo con
+ * punteros: una direccion se usa donde se espera un `T*` sin cast, porque es
+ * exactamente para lo que existe el tipo.  Al no haber ninguna `explicit`, el
+ * cast libre a/desde cualquier numerico sigue disponible.
  */
 namespace std.types;
 
 @Target("arch:x86_64")
-public typedef u64 uintptr new;   // entero SIN signo del ancho de un puntero
+public typedef u64 uintptr new {
+    // Una direccion ES lo que un puntero guarda, asi que pasarla donde se
+    // espera un `T*` (o al reves) no es una conversion entero<->puntero que
+    // haya que justificar: es la razon de ser del tipo.  La barrera nominal
+    // sigue cerrada para todo lo demas -- un `u64` suelto NO es un uintptr.
+    public implicit from void*;
+    public implicit to   void*;
+};  // entero SIN signo del ancho de un puntero
 @Target("arch:x86_64")
-public typedef i64 intptr  new;   // entero CON signo del ancho de un puntero
+public typedef i64 intptr  new {
+    // Una direccion ES lo que un puntero guarda, asi que pasarla donde se
+    // espera un `T*` (o al reves) no es una conversion entero<->puntero que
+    // haya que justificar: es la razon de ser del tipo.  La barrera nominal
+    // sigue cerrada para todo lo demas -- un entero suelto NO es un intptr.
+    public implicit from void*;
+    public implicit to   void*;
+};  // entero CON signo del ancho de un puntero
 @Target("arch:x86_64")
 public typedef u64 usize   new;   // tamano/cuenta de objetos (C size_t)
 @Target("arch:x86_64")
 public typedef i64 isize   new;   // tamano/diferencia CON signo (Rust isize / ptrdiff)
 @Target("arch:x86_64")
 public typedef i64 ssize   new;   // POSIX ssize_t: tamano con signo (o -1 = error)
+
+// Tipos de COMPATIBILIDAD con C.  DEBILES a proposito (sin `new`): en C
+// `size_t` no es un tipo distinto sino un typedef de un entero sin signo, y
+// pasarle un entero normal es legal.  Quien quiera la seguridad de tipos del
+// lenguaje usa `usize`/`ssize`, que si son fuertes.
+//
+// Se declaran POR ARQUITECTURA, como sus equivalentes fuertes, para conservar
+// el ancho del objetivo (64 bits aqui, 32 en x86, 16 en x86_16).  Declararlos
+// como alias de `usize`/`ssize` les contagiaba la identidad FUERTE, que es
+// justo lo contrario de lo que un tipo de compatibilidad debe hacer.
+@Target("arch:x86_64")
+public typedef u64 size_t;
+@Target("arch:x86_64")
+public typedef i64 ssize_t;

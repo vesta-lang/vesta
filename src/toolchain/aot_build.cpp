@@ -29,6 +29,8 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include "vx/vxdbg_emit.h"
+
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -55,6 +57,68 @@
 
 namespace vesta {
 namespace tc {
+
+/**
+ * @brief Un punto del fuente al que corresponde un tramo de codigo nativo.
+ */
+struct PuntoAcompanante {
+    uint32_t off;  ///< desplazamiento dentro de la funcion
+    uint32_t line; ///< linea del fuente
+    uint32_t col;  ///< columna (0 = no consta)
+    uint32_t len;  ///< cuanto ocupa el tramo (0 = no consta)
+};
+
+/**
+ * @brief Escribe el fichero acompanante que explica despues un fallo.
+ *
+ * NO toca el binario.  Ni una seccion, ni un byte: el programa emitido es
+ * exactamente el mismo con esta informacion y sin ella.  Meterle un manejador
+ * o un trap para que se explique solo cambiaria el programa que despues se
+ * depura, y lo que veria un depurador externo o un desensamblador ya no seria
+ * lo que se compilo.  Por eso va aparte, al modo de un `.pdb` o un `.dSYM`.
+ *
+ * Los desplazamientos son RELATIVOS a cada funcion, no direcciones absolutas:
+ * asi se apoya en el otro mecanismo en lugar de duplicarlo -- el `.symtab` que
+ * emite `--debug-info=1` hace que un depurador diga `main+0x3a`, y esto explica
+ * que hay ahi.
+ *
+ * @param ruta Fichero destino.
+ * @param fuente Ruta del `.vx` que se compilo.
+ * @param funcs Nombres de funcion, en el mismo orden que @p puntos.
+ * @param puntos Puntos de fuente de cada funcion.
+ * @return true si se pudo escribir.
+ */
+static bool escribir_acompanante(
+    const std::string &ruta, const std::string &fuente,
+    const std::vector<std::string> &funcs,
+    const std::vector<std::vector<PuntoAcompanante>> &puntos) {
+    std::ofstream f(ruta, std::ios::binary);
+    if (!f) return false;
+    auto u32 = [&](uint32_t v) { f.write((const char *)&v, 4); };
+    auto str = [&](const std::string &t) {
+        u32((uint32_t)t.size());
+        if (!t.empty()) f.write(t.data(), (std::streamsize)t.size());
+    };
+    f.write("VXDG", 4);
+    u32(2u); // v2: cada punto lleva linea, columna y tramo
+    str(fuente);
+    uint32_t n_con_mapa = 0;
+    for (const auto &m : puntos)
+        if (!m.empty()) ++n_con_mapa;
+    u32(n_con_mapa);
+    for (size_t i = 0; i < funcs.size() && i < puntos.size(); ++i) {
+        if (puntos[i].empty()) continue;
+        str(funcs[i]);
+        u32((uint32_t)puntos[i].size());
+        for (const PuntoAcompanante &p : puntos[i]) {
+            u32(p.off);
+            u32(p.line);
+            u32(p.col);
+            u32(p.len);
+        }
+    }
+    return true;
+}
 
 int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 std::string out_prefix, const AotOptions &opt) {
@@ -554,15 +618,25 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
             if (!aot_no_io && !aot_freestanding) {
                 const std::string io_pfx = "vx_bare_io:";
                 bool uses_io = false, defines_io = false;
+                // Un `unwrap` necesita el hook __vx_panic_null, que vive en el
+                // mismo vx_io.vx.  Un programa que use Optional pero no imprima
+                // nada no arrastraba el runtime, asi que el hook no existia y
+                // el backend acababa pidiendolo como import externo.
+                bool needs_panic_null = false, defines_panic_null = false;
                 for (const auto &af : aot_mod.functions) {
                     if (af.name == "__vx_write") defines_io = true;
+                    if (af.name == "__vx_panic_null") defines_panic_null = true;
                     for (const auto &b : af.blocks)
-                        for (const auto &ins : b.instrs)
+                        for (const auto &ins : b.instrs) {
                             if (ins.op == ir::IrOp::CALLN &&
                                 ins.func_name.rfind(io_pfx, 0) == 0)
                                 uses_io = true;
+                            if (ins.op == ir::IrOp::UNWRAP)
+                                needs_panic_null = true;
+                        }
                 }
-                if (uses_io && !defines_io) {
+                if ((uses_io || (needs_panic_null && !defines_panic_null)) &&
+                    !defines_io) {
                     const std::string exe_dir =
                         std::filesystem::path(fs::get_executable_path())
                             .parent_path()
@@ -643,6 +717,37 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     // (1 syscall por 4 KiB en vez de 1 por write).
                     for (auto &af : aot_mod.functions) {
                         if (af.name != "main") continue;
+                        // Una llamada de COLA en main no deja donde volcar: el
+                        // tail-call salta sin volver, asi que no hay RET ante el
+                        // que inyectar el flush y todo lo impreso se quedaba en
+                        // el buffer (un `i32 main() { return corre(); }` no
+                        // sacaba una sola linea).  Se deshace la optimizacion
+                        // SOLO en main -- CALL + RET del resultado -- que ahi no
+                        // cuesta nada: es la ultima llamada del programa.
+                        for (auto &b : af.blocks) {
+                            for (size_t i = 0; i < b.instrs.size(); ++i) {
+                                if (b.instrs[i].op != ir::IrOp::TAILCALL)
+                                    continue;
+                                ir::IrInstr &tc = b.instrs[i];
+                                tc.op = ir::IrOp::CALL;
+                                // El tail-call no guardaba el resultado en
+                                // ningun valor (saltaba y ya); ahora hay que
+                                // retornarlo, asi que se le da uno.
+                                if (tc.dst == ir::IR_NO_VALUE &&
+                                    tc.type != ir::IrType::VOID)
+                                    tc.dst = af.new_value(tc.type, "%tc_ret");
+                                ir::IrInstr rt{};
+                                rt.op = ir::IrOp::RET;
+                                rt.type = tc.type;
+                                rt.source_line = tc.source_line;
+                                if (tc.dst != ir::IR_NO_VALUE)
+                                    rt.operands.push_back(tc.dst);
+                                b.instrs.insert(b.instrs.begin() +
+                                                    static_cast<long>(i) + 1,
+                                                std::move(rt));
+                                ++i; // saltar el RET recien insertado
+                            }
+                        }
                         for (auto &b : af.blocks) {
                             std::vector<ir::IrInstr> ni;
                             ni.reserve(b.instrs.size() + 1);
@@ -666,6 +771,122 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     std::cout << "[aot] runtime de I/O (stdlib/vx/vx_io.vx) "
                                  "incluido en el objeto.\n";
                 }
+            }
+
+            /* Info de depuracion del LENGUAJE nivel 2: el binario se explica
+             * solo al fallar.  Se enlaza el manejador (stdlib/vx/vx_fault.vx) y
+             * se antepone su instalacion a `main`.
+             *
+             * A partir de aqui el ejecutable YA NO es identico al de no pedir
+             * nada: lleva codigo dentro.  Es deliberado y por eso tiene nivel
+             * propio -- el nivel 1 son solo datos, en un fichero aparte, y deja
+             * el binario intacto.  Meter codigo cambia el programa que despues
+             * se depura, asi que se pide a proposito o no se pide. */
+            if (opt.lang_debug_level >= 2 && !aot_freestanding) {
+                const std::string exe_dir =
+                    std::filesystem::path(fs::get_executable_path())
+                        .parent_path()
+                        .string();
+                const std::vector<std::string> cands = {
+                    exe_dir + "/stdlib/vx/vx_fault.vx",
+                    exe_dir + "/../stdlib/vx/vx_fault.vx",
+                    "stdlib/vx/vx_fault.vx"};
+                std::string fpath;
+                for (const auto &c : cands)
+                    if (std::filesystem::exists(c)) {
+                        fpath = c;
+                        break;
+                    }
+                if (fpath.empty()) {
+                    std::cerr << "[aot] no encuentro stdlib/vx/vx_fault.vx; "
+                                 "sin el, el binario no puede explicarse solo."
+                              << "\n";
+                    return EXIT_FAILURE;
+                }
+                vx::CompileOptions fopts;
+                fopts.module_name = "vx_fault";
+                fopts.opt_level = copts.opt_level;
+                fopts.native_poo = true;
+                fopts.asm_target_bits = copts.asm_target_bits;
+                /* Por PROYECTO y no por fuente suelto: el modulo importa
+                 * `std.types` (uintptr / nullptr) y solo esa ruta resuelve los
+                 * imports.  Mismo criterio que vx_thread y vx_async. */
+                vx::CompileResult fcr = vx::compile_vx_project(fpath, fopts);
+                ir::IrModule fmod;
+                if (!fcr.ok || fcr.ir_module_cache_bytes.empty() ||
+                    !ir::parse_ir_module_cache(fcr.ir_module_cache_bytes,
+                                               fmod)) {
+                    std::cerr << "[aot] no pude compilar vx_fault.vx.\n";
+                    // Sin el motivo el mensaje no sirve de nada: volcamos los
+                    // diagnosticos del modulo tal cual los dio el frontend.
+                    for (const auto &d : fcr.diagnostics.all())
+                        vx::print_diagnostic(std::cerr, d);
+                    return EXIT_FAILURE;
+                }
+                // Mismo merge que el runtime de I/O: remap de literales por el
+                // offset del static_data, funciones nuevas, datos e imports.
+                const uint64_t sd_off2 =
+                    static_cast<uint64_t>(aot_mod.static_data.size());
+                std::unordered_set<std::string> have2;
+                for (const auto &af : aot_mod.functions)
+                    have2.insert(af.name);
+                for (auto &fn : fmod.functions) {
+                    if (sd_off2 != 0)
+                        for (auto &bb : fn.blocks)
+                            for (auto &ins : bb.instrs)
+                                if (ins.op == ir::IrOp::STR_LIT_ADDR)
+                                    ins.imm += sd_off2;
+                    if (!have2.count(fn.name))
+                        aot_mod.functions.push_back(std::move(fn));
+                }
+                aot_mod.static_data.append_raw_entries(
+                    std::move(fmod.static_data));
+                for (auto &gv : fmod.globals)
+                    aot_mod.globals.emplace(gv.first, gv.second);
+                for (auto &ni : fmod.native_imports) {
+                    /* Las primitivas de I/O NO son un import: viven en el
+                     * mismo objeto (las trae vx_io) y sus llamadas se
+                     * reescriben a internas ahi abajo.  Copiar el import haria
+                     * que el ejecutable arrancara pidiendo una `vx_bare_io.dll`
+                     * que no existe. */
+                    if (ni.lib == "vx_bare_io") continue;
+                    aot_mod.register_native_import(ni.lib, ni.name);
+                }
+                /* Sus llamadas al I/O tienen que resolverse DENTRO de la
+                 * imagen, igual que las del resto: el modulo usa `print` y al
+                 * compilarse suelto eso queda como una importacion externa.
+                 * La reescritura del bundle de I/O ya paso cuando este modulo
+                 * aun no estaba, asi que hay que repetirla aqui -- si no, el
+                 * ejecutable arranca pidiendo una DLL que no existe. */
+                {
+                    const std::string io_pfx2 = "vx_bare_io:";
+                    for (auto &af : aot_mod.functions)
+                        for (auto &b : af.blocks)
+                            for (auto &ins : b.instrs)
+                                if (ins.op == ir::IrOp::CALLN &&
+                                    ins.func_name.rfind(io_pfx2, 0) == 0) {
+                                    ins.op = ir::IrOp::CALL;
+                                    ins.func_name =
+                                        ins.func_name.substr(io_pfx2.size());
+                                }
+                }
+
+                // Y que `main` lo instale antes que nada.
+                for (auto &af : aot_mod.functions) {
+                    if (af.name != "main" || af.blocks.empty()) continue;
+                    ir::IrInstr call_f{};
+                    call_f.op = ir::IrOp::CALL;
+                    call_f.type = ir::IrType::VOID;
+                    call_f.dst = ir::IR_NO_VALUE;
+                    call_f.func_name = "__vx_fault_init";
+                    af.blocks[0].instrs.insert(af.blocks[0].instrs.begin(),
+                                               std::move(call_f));
+                    break;
+                }
+                std::cout << "[aot] el binario se explicara solo al fallar "
+                             "(stdlib/vx/vx_fault.vx incluido; YA NO es "
+                             "identico al de no pedir depuracion)."
+                          << "\n";
             }
 
             // AOT: eliminar funciones MUERTAS (no alcanzables) antes de
@@ -723,6 +944,27 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     if (!f.section.empty() || f.is_naked || is_library ||
                         (auto_keep_vec && has_vec(f)))
                         add_live(f.name);
+                }
+                // `unwrap` no llama a su hook en el IR: la llamada a
+                // __vx_panic_null la EMITE el backend (vreg_select) al bajar
+                // IrOp::UNWRAP, o sea despues de esta poda.  Sin sembrarlo
+                // aqui, el hook se elimina por "no alcanzable" y el codegen
+                // acaba pidiendolo como simbolo externo -> queda en la tabla de
+                // imports del PE y Windows rechaza el binario al cargarlo
+                // (STATUS_ENTRYPOINT_NOT_FOUND).  Mismo caso que las variantes
+                // vectoriales de arriba: referencia creada fuera del IR.
+                for (const auto &f : aot_mod.functions) {
+                    bool has_unwrap = false;
+                    for (const auto &b : f.blocks)
+                        for (const auto &in : b.instrs)
+                            if (in.op == ir::IrOp::UNWRAP) {
+                                has_unwrap = true;
+                                break;
+                            }
+                    if (has_unwrap) {
+                        add_live("__vx_panic_null");
+                        break;
+                    }
                 }
                 // Raices por vtablas/datos: nombres referenciados en sym_refs.
                 for (size_t si = 0; si < aot_mod.static_data.size(); ++si)
@@ -880,7 +1122,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 mem_opts.asm_target_bits = copts.asm_target_bits;
                 // Como PROYECTO, no como fichero suelto: la stdlib es codigo
                 // Vesta normal y sus modulos se importan entre si (vx_mem usa
-                // los atomicos de vx_atomic en vez de reimplementarlos).
+                // los atomicos de atomic en vez de reimplementarlos).
                 vx::CompileResult mem_cr =
                     vx::compile_vx_project(mem_path, mem_opts);
                 if (!mem_cr.ok || mem_cr.ir_module_cache_bytes.empty() ||
@@ -1120,7 +1362,12 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
 
             // Referencias a datos: PIC (RIP-relativo, default) vs absoluto
             // (--no-pie, requiere base de imagen fija).  Analogo gcc/clang.
-            const bool aot_pic = !opt.no_pie;
+            // x86-32 NO tiene RIP-relative -> el PIC clasico exige GOT/PLT (no
+            // implementado); forzamos no-PIE (ABS32/R_386_32 con base fija), que
+            // es lo que un `gcc -m32` sin -fPIC produce por defecto.  Sin esto,
+            // los STR_LIT_ADDR/LABEL_ADDR (static ctx, punteros a funcion en
+            // memoria) tomaban direcciones RIP-relativas inconsistentes.
+            const bool aot_pic = !opt.no_pie && !aot_mode32;
 
             // --emit exe|obj|shared.
             //   EXEC   : ejecutable standalone con _start (requiere main).
@@ -1352,6 +1599,29 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 //  AOT-GC (Inc 1): stackmaps de raices GC por safepoint
                 // (pc_offset relativo a esta funcion).  Vacios salvo gc<T>.
                 std::vector<jit::Stackmap> stackmaps;
+                /// Donde cambia el punto del fuente dentro de @c bytes: es un
+                /// DATO, no cambia lo emitido.  Vacio salvo que se pidiera.
+                ///
+                /// Lleva COLUMNA ademas de linea porque con la linea sola no se
+                /// puede subrayar QUE de ella fallo, que es la diferencia entre
+                /// senalar una sentencia y senalar la operacion.
+                struct PuntoFuente {
+                    uint32_t off;  ///< desplazamiento dentro de la funcion
+                    uint32_t line; ///< linea del fuente
+                    uint32_t col;  ///< columna (0 = no consta)
+                    uint32_t len;  ///< cuanto ocupa el tramo (0 = no consta)
+                    /// De que funcion vino ESTE tramo si no se escribio aqui,
+                    /// sino que llego al inlinar.  Vacio = de esta misma.
+                    /// Sin ello el informe manda a la funcion FISICA cuando el
+                    /// codigo que fallo se escribio en otra.
+                    std::string venia_de;
+                    /// La instruccion del INTERMEDIO que produjo este tramo, ya
+                    /// escrita.  Se renderiza AL COMPILAR: hacerlo dentro de un
+                    /// manejador de fallo exigiria un impresor de intermedio
+                    /// entero corriendo con el proceso ya roto.
+                    std::string ir_txt;
+                };
+                std::vector<PuntoFuente> puntos;
             };
             std::vector<AotFn> compiled;
             std::unordered_map<std::string, size_t>
@@ -1443,6 +1713,24 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     }
                 }
             }
+            // ABI custom por funcion: el CALL directo resuelve los param_abi_regs
+            // del callee por nombre (register() en su firma).  Copiamos SOLO las
+            // funciones con ABI custom a un mapa respaldado por shared_ptr (el
+            // resolver lo captura por valor -> sin referencia colgante y sin
+            // limpieza manual; el 99% de programas no tiene ninguna entrada).
+            {
+                auto abi_map = std::make_shared<
+                    std::unordered_map<std::string, std::vector<std::string>>>();
+                for (const auto &f : aot_mod.functions)
+                    if (!f.param_abi_regs.empty())
+                        (*abi_map)[f.name] = f.param_abi_regs;
+                jit::vreg_set_abi_resolver(
+                    [abi_map](const std::string &name)
+                        -> const std::vector<std::string> * {
+                        auto it = abi_map->find(name);
+                        return it == abi_map->end() ? nullptr : &it->second;
+                    });
+            }
             while (!work.empty()) {
                 const std::string nm = work.back();
                 work.pop_back();
@@ -1466,11 +1754,66 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     nopts.target_sysv = (fmt == aot::ObjFormat::ELF);
                     nopts.mode32 = aot_mode32;
                     nopts.fisa = aot_fisa;
+                    // Con info de depuracion, tambien la correlacion con el
+                    // fuente.  No cambia ni un byte de lo emitido.
+                    nopts.want_line_map = (opt.lang_debug_level >= 1);
                     aot::NativeCompileResult ncr =
                         native_backend->compile_function(*itf->second, nopts);
                     af.bytes = std::move(ncr.bytes);
                     af.relocs = std::move(ncr.relocs);
                     af.stackmaps = std::move(ncr.stackmaps);
+                    /* El punto de fuente de cada tramo de codigo.  La linea
+                     * la da el mapa; la COLUMNA y el tramo salen de la propia
+                     * instruccion del intermedio, que el mapa identifica por
+                     * @c ir_id (bloque*65536 + posicion).  Se resuelve aqui,
+                     * al compilar, para que el fichero acompanante se baste
+                     * solo y quien lo lea no necesite el intermedio. */
+                    {
+                        const ir::IrFunction &irf = *itf->second;
+                        uint32_t ultima = 0;
+                        for (const jit::LineMapEntry &e : ncr.line_map) {
+                            if (e.source_line == 0 || e.source_line == ultima)
+                                continue;
+                            ultima = e.source_line;
+                            AotFn::PuntoFuente pf{e.byte_offset, e.source_line,
+                                                  0u, 0u, std::string(),
+                                                  std::string()};
+                            if (e.ir_id != 0xFFFFFFFFu) {
+                                const uint32_t bi = e.ir_id >> 16;
+                                const uint32_t pos = e.ir_id & 0xFFFFu;
+                                if (bi < irf.blocks.size() &&
+                                    pos < irf.blocks[bi].instrs.size()) {
+                                    const ir::IrInstr &in =
+                                        irf.blocks[bi].instrs[pos];
+                                    pf.col = in.source_column;
+                                    pf.len = in.source_len;
+                                    /* Y de donde vino: la instruccion sabe si
+                                     * llego aqui al inlinar y desde que
+                                     * funcion. */
+                                    if (in.inline_site != ir::IR_NO_INLINE_SITE &&
+                                        in.inline_site < irf.inline_sites.size())
+                                        pf.venia_de =
+                                            irf.inline_sites[in.inline_site]
+                                                .callee;
+                                    // Y la instruccion, ya escrita.
+                                    {
+                                        std::ostringstream os;
+                                        ir::print_instr(os, irf, in);
+                                        std::string t = os.str();
+                                        while (!t.empty() &&
+                                               (t.back() == 10 || t.back() == 13))
+                                            t.pop_back();
+                                        const size_t ini2 =
+                                            t.find_first_not_of(' ');
+                                        if (ini2 != std::string::npos)
+                                            t = t.substr(ini2);
+                                        pf.ir_txt = std::move(t);
+                                    }
+                                }
+                            }
+                            af.puntos.push_back(pf);
+                        }
+                    }
                 }
                 if (af.bytes.empty()) {
                     std::cerr
@@ -1904,6 +2247,119 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 data_sym_loc[snm] = place_data(N);
             }
 
+            /* Info de depuracion del LENGUAJE: la seccion `.vxdbg` con la
+             * correlacion codigo-nativo <-> fuente, EMBEBIDA en el ejecutable.
+             *
+             * Va dentro y no en un fichero aparte porque es lo que permite que
+             * el binario se explique solo, sin depender de que alguien haya
+             * conservado un fichero al lado -- que es justo lo que no pasa
+             * cuando algo falla en produccion.  Es lo que hacen DWARF (dentro
+             * del ELF) y Go (su tabla embebida); el fichero suelto es para el
+             * flujo de distribuir el binario pelado, no la norma.
+             *
+             * Es una seccion de DATOS: no cambia ni una instruccion, asi que lo
+             * que ve un depurador o un desensamblador del CODIGO sigue siendo
+             * exactamente lo que se compilo.  Lo que no puede colarse es
+             * CODIGO, y por eso el manejador tiene su propio nivel.
+             *
+             * Se crea al FINAL de la pasada 1, cuando el resto de secciones ya
+             * existen: si se creara antes, se colaria delante de `.rodata` y
+             * `.data` y les moveria la direccion -- con lo que cambiarian las
+             * direcciones absolutas del CODIGO, que es justo lo que no puede
+             * pasar.  Medido: creandola antes, `.text` sale distinto.
+             *
+             * Formato: ['VXDB'][version][n_fn] y por funcion
+             * [off_en_texto][tam][n_puntos][largo_nombre] + el nombre (relleno
+             * a multiplo de 4) + n_puntos x [off][linea][col][tramo].
+             * Los desplazamientos son relativos a la seccion de codigo, que es
+             * lo que el manejador puede calcular restando su propia direccion.
+             */
+            if (opt.lang_debug_level >= 1) {
+                std::vector<uint8_t> db;
+                auto db32 = [&db](uint32_t v) {
+                    for (int i = 0; i < 4; ++i)
+                        db.push_back(static_cast<uint8_t>((v >> (i * 8)) & 0xFF));
+                };
+                uint32_t n_fn = 0;
+                for (const AotFn &af : compiled)
+                    if (!af.puntos.empty() && fn_loc.count(af.name)) ++n_fn;
+                db32(0x42445856u); // 'VXDB'
+                db32(5u);          // v5: + la instruccion del intermedio
+                /* Los nombres de las funciones que el inlinado se comio van en
+                 * UNA tabla al final y los puntos la indexan: la misma funcion
+                 * aparece en muchos tramos y repetir la cadena engordaria la
+                 * seccion sin decir nada nuevo. */
+                /* Como se lee: `Clase__metodo` es como se llama el simbolo,
+                 * pero quien lee un fallo espera `Clase.metodo`.  Se traduce
+                 * AQUI y no en el manejador: es trabajo que se puede hacer una
+                 * vez al compilar en vez de con el proceso ya roto.  Los
+                 * helpers internos empiezan por `_` y se dejan tal cual. */
+                auto legible = [](const std::string &n) -> std::string {
+                    if (n.empty() || n[0] == '_') return n;
+                    const size_t p2 = n.find("__");
+                    if (p2 == std::string::npos) return n;
+                    return n.substr(0, p2) + "." + n.substr(p2 + 2);
+                };
+                std::vector<std::string> tabla;
+                auto idx_de = [&tabla](const std::string &n) -> uint32_t {
+                    if (n.empty()) return 0xFFFFFFFFu;
+                    for (size_t i = 0; i < tabla.size(); ++i)
+                        if (tabla[i] == n) return static_cast<uint32_t>(i);
+                    tabla.push_back(n);
+                    return static_cast<uint32_t>(tabla.size() - 1);
+                };
+                db32(n_fn);
+                db32(0u);   // hueco: desplazamiento de la tabla de nombres
+                /* La ruta del fuente.  Sin ella el informe dice "linea 27" sin
+                 * decir de que fichero, que en un programa de varios modulos no
+                 * sirve de nada. */
+                db32(static_cast<uint32_t>(opt.source_path.size()));
+                for (char c : opt.source_path)
+                    db.push_back(static_cast<uint8_t>(c));
+                while ((db.size() % 4u) != 0u) db.push_back(0);
+                for (const AotFn &af : compiled) {
+                    if (af.puntos.empty()) continue;
+                    auto it = fn_loc.find(af.name);
+                    if (it == fn_loc.end()) continue;
+                    db32(static_cast<uint32_t>(it->second.off));
+                    db32(static_cast<uint32_t>(af.bytes.size()));
+                    db32(static_cast<uint32_t>(af.puntos.size()));
+                    /* El nombre, para poder decir EN QUE funcion y no solo en
+                     * que linea.  Se rellena hasta multiplo de 4 para que lo
+                     * que viene detras siga alineado: x86 lo toleraria, pero
+                     * otras arquitecturas no. */
+                    const std::string nm_leg = legible(af.name);
+                    db32(static_cast<uint32_t>(nm_leg.size()));
+                    for (char c : nm_leg)
+                        db.push_back(static_cast<uint8_t>(c));
+                    while ((db.size() % 4u) != 0u) db.push_back(0);
+                    for (const auto &q : af.puntos) {
+                        db32(q.off);
+                        db32(q.line);
+                        db32(q.col);
+                        db32(q.len);
+                        db32(idx_de(legible(q.venia_de)));
+                        db32(idx_de(q.ir_txt));
+                    }
+                }
+                /* La tabla de nombres, al final: los puntos la indexan.  Su
+                 * desplazamiento se apunta en la cabecera para que el lector no
+                 * tenga que recorrer todas las funciones para llegar. */
+                const uint32_t off_tabla = static_cast<uint32_t>(db.size());
+                db32(static_cast<uint32_t>(tabla.size()));
+                for (const std::string &n : tabla) {
+                    db32(static_cast<uint32_t>(n.size()));
+                    for (char c : n) db.push_back(static_cast<uint8_t>(c));
+                    while ((db.size() % 4u) != 0u) db.push_back(0);
+                }
+                // El hueco reservado en la cabecera (offset 12).
+                for (int i = 0; i < 4; ++i)
+                    db[12 + i] = static_cast<uint8_t>((off_tabla >> (i * 8)) & 0xFF);
+
+                const int dbg_si = get_sec(".vxdbg", /*is_code=*/false, "r");
+                secs[dbg_si].bytes = std::move(db);
+            }
+
             // Crear el writer + TODAS las secciones (writer idx == secs idx,
             // mismo orden; `secs` ya esta completa tras la pasada 1).
             aot::ObjectWriter w(fmt);
@@ -2150,6 +2606,8 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                         const aot::RelocKind k =
                             (r.kind == jit::NativeReloc::Kind::DATA_REL32)
                                 ? aot::RelocKind::REL32
+                            : (r.kind == jit::NativeReloc::Kind::ABS32)
+                                ? aot::RelocKind::IMM32
                                 : aot::RelocKind::ABS64;
                         w.add_reloc(fl.sec, site,
                                     aot::RelocTarget::addr(fit->second.sec,
@@ -2193,9 +2651,14 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                         const uint32_t N = static_cast<uint32_t>(
                             std::strtoul(r.symbol.c_str() + 7, nullptr, 10));
                         const std::pair<int, uint64_t> loc = place_data(N);
+                        /* ABS32 (x86-32): IMM32 -> el emisor ELF32 lo emite como
+                         * R_386_32 (VA absoluta de 32 bits).  DATA_REL32 (x86-64
+                         * PIC): REL32.  Resto (--no-pie x64): ABS64. */
                         const aot::RelocKind k =
                             (r.kind == jit::NativeReloc::Kind::DATA_REL32)
                                 ? aot::RelocKind::REL32
+                            : (r.kind == jit::NativeReloc::Kind::ABS32)
+                                ? aot::RelocKind::IMM32
                                 : aot::RelocKind::ABS64;
                         w.add_reloc(
                             fl.sec, site,
@@ -2261,6 +2724,50 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     aot::ImportCall{ti.dll, ti.func, text_sec, ti.off});
             }
 
+            /* El acompanante de depuracion del LENGUAJE.  Se escribe con el
+             * binario ya emitido y NO lo modifica: ni una seccion, ni un byte.
+             * El programa es exactamente el mismo con esta informacion y sin
+             * ella, que es la razon de que vaya aparte -- meterle un manejador
+             * para que se explique solo cambiaria el programa que despues se
+             * depura, y lo que veria un depurador externo o un desensamblador
+             * ya no seria lo que se compilo. */
+            auto soltar_acompanante = [&](const std::string &destino) {
+                if (opt.lang_debug_level < 1) return;
+                std::vector<std::string> nombres;
+                std::vector<std::vector<PuntoAcompanante>> puntos;
+                nombres.reserve(compiled.size());
+                puntos.reserve(compiled.size());
+                for (const AotFn &af : compiled) {
+                    nombres.push_back(af.name);
+                    std::vector<PuntoAcompanante> ps;
+                    ps.reserve(af.puntos.size());
+                    for (const auto &q : af.puntos)
+                        ps.push_back({q.off, q.line, q.col, q.len});
+                    puntos.push_back(std::move(ps));
+                }
+                /* Y el grafo semantico queda pedible A PARTIR DEL BINARIO.
+                 * Se publica bajo la huella del fichero, igual que ya se hace
+                 * con el `.velb`: quien lo tenga delante la calcula sobre los
+                 * mismos bytes y llega a las entidades -- de que tipo es cada
+                 * funcion, con que firma --, que es lo que convierte un nombre
+                 * suelto en algo que se entiende sin ir al fuente.
+                 *
+                 * Se hace aqui y no al compilar porque la huella no existe
+                 * hasta que existe el fichero. */
+                if (!cr.vxdbg_artifact_map.empty()) {
+                    vx::publish_vxdbg_artifact(destino, cr.vxdbg_artifact_map,
+                                               cr.vxdbg_span_map,
+                                               copts.vxdbg_dir);
+                }
+
+                const std::string ruta = destino + ".vxdbg";
+                if (escribir_acompanante(ruta, opt.source_path, nombres, puntos))
+                    std::cout << "[aot] info de depuracion del lenguaje en '"
+                              << ruta
+                              << "' (fichero aparte; el codigo emitido es el "
+                                 "mismo byte a byte).\n";
+            };
+
             std::string werr;
             if (!w.write(out_prefix, werr)) {
                 std::cerr << "[aot] error al escribir '" << out_prefix
@@ -2294,6 +2801,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                           << autolink_libs.size()
                           << " lib(s) estatica(s) de la stdlib auto-enlazada(s), "
                              "sin DLLs ni g++).\n";
+                soltar_acompanante(link_real_out);
                 return EXIT_SUCCESS;
             }
 
@@ -2325,6 +2833,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                           << " escrito en '" << out_prefix
                           << "' (entry _start -> main -> exit, return "
                              "de main como exit-code).\n";
+            soltar_acompanante(out_prefix);
             return EXIT_SUCCESS;
 }
 

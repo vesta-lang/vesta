@@ -1,0 +1,22 @@
+/**
+ * @file 363_ctor_comptime_modulo.vx
+ * @brief Constructor comptime de un tipo declarado en OTRO modulo.
+ *
+ * El literal de 128 bits se parsea al compilar, con el constructor viviendo en
+ * `tipos_u128.vx`.  En el binario solo quedan las dos constantes.
+ *
+ * Dos cosas tenian que funcionar a la vez: que el constructor cruce la frontera
+ * del modulo, y que lo que ejecuta el compilador para resolverlo sea codigo
+ * COMPILADO -- el parseo usa `strslice`, que el selector no soportaba, asi que
+ * el constructor caia al camino interpretado sin que nadie se enterase.
+ */
+import t.uu only U;
+
+i32 main() {
+    // 2^128 - 1: los 128 bits a uno.  No cabe en ningun tipo nativo.
+    U m = U(340282366920938463463374607431768211455);
+    if (m.lo == 18446744073709551615 && m.hi == 18446744073709551615) {
+        return 42;
+    }
+    return 1;
+}

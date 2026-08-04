@@ -51,7 +51,7 @@ i32 main() {
     if (vcol_queue_size(q) == 5) { acc = acc + 5; }
     if (vcol_queue_pop(q) == 1)  { acc = acc + 2; }
     if (vcol_queue_pop(q) == 2)  { acc = acc + 2; }
-    if (vcol_queue_size(q) == 3) { acc = acc + 1; }
+    if (vcol_queue_size(q) == 3) { acc++; }
     vcol_queue_free(q);
 
     // ========= Deque =========

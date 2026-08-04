@@ -1,0 +1,53 @@
+/**
+ * @file 351_wideint_carry.vx
+ * @brief Acarreo y prestamo como PRIMITIVAS, no como deduccion.
+ *
+ * Al componer un entero ancho con dos mitades, el nivel de arriba necesita
+ * saber si la suma de la mitad baja desbordo.  Deducirlo comparando el
+ * resultado con los sumandos funciona, pero obliga a repetir el mismo truco en
+ * cada piso -- y a que cada piso conozca los detalles del de abajo.
+ *
+ * El acarreo lo produce la suma, asi que lo devuelve ella: `add_with_carry` y
+ * `sub_with_borrow` viven en el nivel de 128, y `Wide256` solo los recibe y
+ * los propaga.  Cuando llegue el piso de 512 se escribira igual, sin volver a
+ * comparar nada.
+ *
+ * Aqui se comprueban los cuatro casos limite de las primitivas (desborda y no
+ * desborda, pide prestado y no) y que el acarreo llega de verdad al piso de
+ * arriba.
+ */
+import std.wideint only u128, u256;
+i32 main() {
+    // add_with_carry: MAX + 1 desborda y lo dice.
+    bool c1 = false;
+    u128 r1 = u128.max().add_with_carry(u128.one(), &c1);
+    if (!c1)            { return 1; }
+    if (!r1.is_zero())  { return 2; }
+
+    // Sin desbordar: no hay acarreo.
+    bool c2 = true;
+    u128 r2 = u128.from_u64(10).add_with_carry(u128.from_u64(5), &c2);
+    if (c2)                          { return 3; }
+    if (r2 != u128.from_u64(15))     { return 4; }
+
+    // sub_with_borrow: 0 - 1 pide prestado.
+    bool b1 = false;
+    u128 r3 = u128.zero().sub_with_borrow(u128.one(), &b1);
+    if (!b1)                { return 5; }
+    if (r3 != u128.max())   { return 6; }
+
+    // Sin pedir prestado.
+    bool b2 = true;
+    u128 r4 = u128.from_u64(10).sub_with_borrow(u128.from_u64(4), &b2);
+    if (b2)                        { return 7; }
+    if (r4 != u128.from_u64(6))    { return 8; }
+
+    // Y el acarreo llega de verdad al piso de arriba.
+    u256 casi;
+    casi.lo128 = u128.max();
+    casi.hi128 = u128.zero();
+    u256 sum = casi + u256.one();
+    if (!sum.lo128.is_zero())      { return 9; }
+    if (sum.hi128 != u128.one())   { return 10; }
+    return 42;
+}

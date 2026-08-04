@@ -1,0 +1,17 @@
+/**
+ * @file 367_literal_sin_digitos.vx
+ * @brief Test negativo: un prefijo de base sin digitos detras.
+ *
+ * El parser de literales anchos rechaza lo que no encaja con la base declarada.
+ * Antes lo ignoraba en silencio y construia un numero distinto del escrito, que
+ * es la peor forma de fallar: el programa compila y da un resultado equivocado.
+ *
+ * La comprobacion es un `static_assert` dentro de codigo comptime, asi que el
+ * rechazo ocurre al compilar y no cuesta nada en ejecucion.
+ */
+import std.wideint only u128;
+
+i32 main() {
+    u128 v = u128(0x);
+    return (i32) v.lo64;
+}

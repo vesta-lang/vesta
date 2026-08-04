@@ -45,12 +45,12 @@ i32 main() {
         string c = a + b;
 
         // OP2: length (verificar siempre 6).
-        u64 ln = str_length(c);
+        u64 ln = c.length();
         sum = sum + (i64)ln;
 
         // OP3: equals contra patron fijo (rara vez match).
         string pat1 = "AAAA00";
-        if (str_equals(c, pat1)) {
+        if (c.equals(pat1)) {
             hits1 = hits1 + 1;
         }
 
@@ -70,13 +70,13 @@ i32 main() {
         bufQ[2] = (u8)(65 + ((i / 6400) & 7));
         bufQ[3] = 0;
         string q = str_make(&bufQ[0], 3);
-        if (str_equals(sub, q)) {
+        if (sub.equals(q)) {
             hits2 = hits2 + 1;
         }
 
         // Encoderar el length del concat de sub+B en el sum.
         string c2 = sub + b;
-        u64 ln2 = str_length(c2);
+        u64 ln2 = c2.length();
         sum = sum + (i64)ln2;
 
         i = i + 1;

@@ -64,6 +64,21 @@ void Assembler::emit_data(const vm::DataDecl *data) {
             continue;
         }
 
+        // `dq @Absolute("code.<sym>")`: referencia absoluta a un simbolo (reloc
+        // datos->codigo).  La usa la vtable de los structs @Virtual.  Registra
+        // una relocacion @c Absolute64 que el linker rebasa a la direccion VM
+        // final del simbolo y emite 8 bytes placeholder (el linker los parchea).
+        if (auto ar = dynamic_cast<vm::AbsRefExpr *>(expr.get())) {
+            Relocation rel;
+            rel.symbol = ar->symbol;
+            rel.section = current_section ? current_section->name : "";
+            rel.offset = static_cast<uint64_t>(output.offset);
+            rel.type = Type::Absolute64;
+            ctx.add_relocation(rel);
+            for (int i = 0; i < 8; ++i) output.emit8(0x00); // placeholder
+            continue;
+        }
+
         // Para numeros, labels, expresiones:
         uint64_t v = eval_expr(expr.get());
         emit_directive(data->directive, v);
@@ -246,8 +261,10 @@ void Assembler::emit_instruction(const vm::Instruction *instr) {
     // del modulo.  El linker convierte mas tarde a offset absoluto
     // dentro del .velb sumando module_base_offset.
     if (instr->source_line > 0) {
-        ctx.debug_lines.push_back({static_cast<uint32_t>(output.offset),
-                                   static_cast<uint32_t>(instr->source_line)});
+        ctx.debug_lines.push_back(
+            {static_cast<uint32_t>(output.offset),
+             static_cast<uint32_t>(instr->source_line),
+             static_cast<uint32_t>(instr->source_column)});
     }
 
     // Stackmap PRECISO ( E.1): si la instruccion lleva un marcador

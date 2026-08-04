@@ -50,6 +50,7 @@
 #ifndef VX_LOWERING_H
 #define VX_LOWERING_H
 
+#include <map>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -61,6 +62,10 @@
 #include "vx/type_checker.h"
 
 namespace vx {
+
+// Definido en vx/comptime/comptime_introspect.h.  Se usa por referencia en las
+// firmas de materializacion de structs comptime, asi que basta declararlo.
+struct ComptimeEvalResult;
 
 /**
  * @class Lowering
@@ -200,6 +205,34 @@ class Lowering {
      * @brief Genera una instruccion CONST en el bloque actual.
      */
     ir::IrValueId emit_const(ir::IrType t, uint64_t imm, uint32_t source_line);
+
+    /**
+     * @brief Vuelca el resultado de una ejecucion comptime como constantes.
+     *
+     * El valor ES el bloque de memoria que dejo la ejecucion, asi que se copia
+     * entero, por palabras, y se escribe en el buffer destino como
+     * CONSTANTES.  En el binario no queda ni la llamada ni el codigo que la
+     * calculo: solo los valores.
+     *
+     * NO se recorren los campos a proposito: mirar la estructura obliga a
+     * resolver uniones (varias vistas de los mismos bytes), anidamiento y
+     * relleno, y nada de eso cambia lo que hay que copiar.
+     *
+     * Es el unico sitio que hace esta conversion, para que no acabe repartida
+     * entre cada llamante con sus propias reglas.
+     *
+     * @param bytes Resultado en bruto de la ejecucion.
+     * @param layout Tipo al que corresponden esos bytes.
+     * @param v_dst Buffer destino.
+     * @param source_line Linea a la que atribuir las instrucciones.
+     * @return false si el tipo contiene una direccion: un puntero calculado al
+     *         compilar apunta a memoria del compilador y no se puede
+     *         trasladar.
+     */
+    bool materialize_comptime_bytes(const std::vector<uint8_t> &bytes,
+                                    const StructLayout &layout,
+                                    ir::IrValueId v_dst,
+                                    uint32_t source_line);
 
     /**
      * @brief Emite GETPROC y devuelve el SSA value (PTR al ProcessVM).
@@ -359,6 +392,11 @@ class Lowering {
     void lower_block(ast::BlockStmt *b);
     void lower_stmt(ast::Stmt *s);
     void lower_var_decl(ast::VarDeclStmt *vd);
+    /// Baja un `static T x = init;` local: registra el slot global (gdata)
+    /// mangleado por funcion, lo apunta desde @c static_local_slots_ y emite
+    /// el init-once (horneado en gdata si el init es constante, o guardado con
+    /// un booleano global si es dinamico).
+    void lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type);
     void lower_if(ast::IfStmt *s);
     void lower_return(ast::ReturnStmt *s);
     void lower_while(ast::WhileStmt *s);
@@ -878,8 +916,38 @@ class Lowering {
     /// sobre el struct ya alocado y zero-inicializado en @p base_addr.  Recurre
     /// en campos struct anidados que tengan defaults propios.  Se llama tras el
     /// zero-fill y ANTES del init-list explicito (que sobrescribe lo que toque).
+    /// @p only_non_comptime: emitir SOLO los defaults que NO son
+    /// comptime-evaluables (una referencia a funcion, un string).  Se usa
+    /// cuando el struct ya se inicializo copiando una imagen construida en
+    /// comptime -- que ya lleva los defaults escalares -- y solo faltan los
+    /// que necesitan una direccion resuelta en tiempo de enlace.
+    /// Transcodifica @p utf8 (la forma canonica de un literal) a @p enc y deja
+    /// los bytes en @p out, NUL-terminados en el ancho de la codificacion.
+    /// Devuelve false si la codificacion no es plegable en compile-time
+    /// (ANSI: depende de la codepage de la maquina donde se EJECUTA) o si el
+    /// texto no es representable (un no-ASCII en ENC_ASCII).
+    static bool transcode_literal(const std::string &utf8, int enc,
+                                  std::vector<uint8_t> &out);
+
+    /// Interna un literal YA transcodificado como blob en memoria HOST y
+    /// devuelve un SSA value con su direccion.  Cero coste en runtime: no hay
+    /// STRMAKE, ni STRCONV, ni objeto GC.  Deduplica por (texto, encoding).
+    ir::IrValueId emit_folded_string_blob(const std::string &utf8, int enc,
+                                          uint32_t line);
+
+    /// Literales alcanzables por nombre: `const string p = "x";` deja aqui
+    /// (p -> "x") para que `str_cstr(p)` / `str_wstr(p)` se plieguen igual que
+    /// con el literal directo.  SOLO `const`: el type checker garantiza que no
+    /// se reasigna, asi que no hace falta analisis de mutacion.  Una `string`
+    /// mutable no entra: haria falta saber que no se le asigna en ningun punto.
+    std::unordered_map<std::string, std::string> const_str_locals_;
+
+    /// Cache del plegado: (texto, encoding) -> indice de slot en static_data.
+    std::map<std::pair<std::string, int>, uint64_t> folded_str_blobs_;
+
     void emit_struct_field_defaults(ir::IrValueId base_addr,
-                                    const StructLayout &lay, uint32_t line);
+                                    const StructLayout &lay, uint32_t line,
+                                    bool only_non_comptime = false);
     /// Rellena los campos de un struct YA alocado en @p base_addr desde el
     /// init-list @p il segun el layout @p lay.  RECURSIVO: un campo de tipo
     /// struct inicializado con un init-list ANIDADO (`{.min = {.x=..,.y=..}}`)
@@ -891,6 +959,54 @@ class Lowering {
     void emit_struct_init_fields(ir::IrValueId base_addr,
                                  const StructLayout &lay, ast::InitListExpr *il,
                                  uint32_t line);
+    /// Materializa un struct cuyo valor fue calculado en compile-time.
+    /// Cuando una funcion @c comptime devuelve un struct por valor, el resultado
+    /// llega como un valor de compile-time con un campo por cada miembro
+    /// (@c ComptimeEvalResult::struct_fields).  Este metodo aloca el buffer del
+    /// struct y escribe cada campo con su valor constante (STORE), de forma que
+    /// en el binario aparece el struct ya construido, sin llamada en tiempo de
+    /// ejecucion.  Los campos de tipo struct se rellenan recursivamente.
+    /// Devuelve la direccion del struct materializado.
+    ir::IrValueId materialize_comptime_struct(const ComptimeEvalResult &r,
+                                              const StructLayout &lay,
+                                              uint32_t line);
+    /// Rellena, sin alocar, los campos de un struct comptime en @p base_addr.
+    /// Auxiliar recursivo de @c materialize_comptime_struct.
+    void fill_comptime_struct_into(ir::IrValueId base_addr,
+                                   const ComptimeEvalResult &r,
+                                   const StructLayout &lay, uint32_t line);
+
+    // --- F1b: constructor `comptime T(expr)` de un struct (literales de tipo
+    // usuario).  Definidos en comptime/literal_ctor.cpp para no inflar
+    // lowering.cpp (mismo patron que vectorize.cpp). ---
+
+    /// @brief Nombre de la IrFunction de un ctor `comptime` de struct.
+    ///
+    /// Un ctor comptime se ejecuta en la ComptimeVM, asi que baja con el prefijo
+    /// @c __macro_ (lo identifica como codigo comptime) sobre el mismo esquema de
+    /// aridad que el ctor runtime: `__macro_<Struct>__ctor_<aridad>`.
+    ///
+    /// @param struct_name Nombre del struct.
+    /// @param arity       Numero de parametros del constructor.
+    /// @return El nombre mangled de la IrFunction del ctor comptime.
+    std::string comptime_ctor_ir_name(const std::string &struct_name,
+                                      size_t arity) const;
+
+    /// @brief Intenta bajar `T(args)` como constructor `comptime` (F1b).
+    ///
+    /// Si @p slay tiene un ctor @c comptime cuya aridad casa con @p e, ejecuta el
+    /// ctor en la ComptimeVM (@c invoke_struct_macro, convencion SRET donde el
+    /// buffer de retorno ES el @c this del ctor) y materializa el struct como
+    /// datos constantes (@c materialize_comptime_struct), sin llamada en runtime.
+    /// Los tres modos (interp/JIT/AOT) ven el struct ya construido.
+    ///
+    /// @param e    La expresion de llamada `T(args)`.
+    /// @param slay El layout del struct @c T.
+    /// @return La direccion del struct materializado, o @c ir::IR_NO_VALUE si el
+    ///         struct no tiene ctor comptime o los argumentos no son
+    ///         comptime-evaluables (el caller sigue con el ctor runtime).
+    ir::IrValueId try_lower_comptime_ctor_call(ast::CallExpr *e,
+                                               const StructLayout &slay);
     /// Ruta B (H1 paso por valor): copia un struct con copy-hook para pasarlo
     /// por valor a una funcion.  Aloca una copia, memcpy del origen, invoca
     /// `copia.__clone__()` y devuelve la direccion de la copia.  El caller debe
@@ -984,6 +1100,24 @@ class Lowering {
     ir::IrValueId lower_struct_method_call(ast::CallExpr *e);
 
     /**
+     * @brief @Virtual: emite (una vez, cacheada) la vtable estatica de un struct
+     * polimorfico como blob en @c static_data con @c sym_refs a
+     * @c <owner>__<metodo> por slot (reloc datos->codigo).  Devuelve el indice
+     * del blob en @c static_data.  Modelo AOT: la vtable vive en @c .data.rel.ro.
+     */
+    uint64_t get_or_emit_struct_vtable(const StructLayout &lay);
+
+    /**
+     * @brief @Virtual: inicializa el vptr (offset 0) de un struct polimorfico
+     * recien construido en @p struct_addr apuntandolo a su vtable estatica.
+     */
+    void emit_struct_vptr_init(ir::IrValueId struct_addr,
+                               const StructLayout &lay, uint32_t line);
+
+    /// Cache nombre-de-struct -> indice del blob de su vtable en static_data.
+    std::unordered_map<std::string, uint64_t> struct_vtable_didx_;
+
+    /**
      * @brief Calcula el puntero al elemento indexado (base + i*sizeof(*base)).
      *
      * Helper compartido por @c lower_index (lectura) y la rama IndexExpr
@@ -998,6 +1132,21 @@ class Lowering {
      *         o struct desconocido).
      */
     size_t size_of_type(const Type &t) const;
+
+    /**
+     * @brief Bytes del buffer de un `Optional<T>` / `Result<V,E>`.
+     *
+     * El layout es `[+0 i64 flag][+8 payload]`.  Con un payload escalar el
+     * total son los 16 bytes de siempre; con un `struct` por valor el payload
+     * ocupa su propio tamano (redondeado a 8) en vez de las 8 de un escalar.
+     * Sin esto, un `Some(struct)` escribia fuera del payload o guardaba la
+     * direccion de un temporal ya muerto.
+     *
+     * @param t Tipo `OPTIONAL` (o `RESULT`) del que se quiere el buffer.
+     * @param base Bytes de cabecera antes del payload (8 en Optional).
+     * @return Tamano total del buffer, nunca menor que el clasico de 16.
+     */
+    size_t optional_buf_bytes(const Type &t, size_t base = 8) const;
 
     /**
      * @brief ¿@p t es un `@overlay struct` (una VISTA sobre memoria ajena)?
@@ -1181,7 +1330,108 @@ class Lowering {
     /// ciertos macros no se benefician del path VM.
     std::vector<std::pair<std::string, std::string>> macro_skip_reasons_;
 
+    /**
+     * @brief Que declaracion produjo cada simbolo emitido.
+     *
+     * Se anota EN el momento de crear el nombre, no despues.  El mangling tiene
+     * mas formas de las que parece -- `Clase__metodo`, `Clase__ctor`,
+     * `Struct__ctor_<aridad>`, `Struct____dtor`, con prefijo `__macro_` si es
+     * comptime -- y quien intente reconstruirlo desde fuera acertara con unas y
+     * fallara con otras EN SILENCIO, que es la peor forma de fallar: el mapa
+     * sale medio vacio y nadie se entera hasta que hace falta.
+     *
+     * Cada entrada es `(simbolo, "Tipo::miembro")`.  Lo consume quien vuelca el
+     * conocimiento del programa para poder ir de una direccion de ejecucion a la
+     * declaracion que la origino.
+     */
+    std::vector<std::pair<std::string, std::string>> emitted_symbols_;
+
   public:
+    /**
+     * @brief El tramo de fuente de una sentencia, dentro de su funcion.
+     *
+     * Una LINEA no basta: en `return foo(a) / bar(b);` hay tres cosas que pueden
+     * fallar y las tres estan en la misma.  Con la columna y la longitud se
+     * puede senalar cual.
+     */
+    struct StmtSpan {
+        std::string symbol; ///< funcion en la que esta
+        uint32_t line = 0;
+        uint32_t column = 0;
+        uint32_t length = 0;
+    };
+
+  private:
+    /// Los tramos de todas las sentencias bajadas, en orden.
+    std::vector<StmtSpan> emitted_spans_;
+    /**
+     * @brief UNICO sitio por el que la bajada emite una instruccion.
+     *
+     * Antes se llamaba a `append` desde mil sitios y cada uno ponia la linea
+     * por su cuenta.  Con eso, cualquier dato nuevo que hubiera que adjuntar a
+     * lo emitido -- la columna, de que expresion vino, que ambito estaba vivo
+     * -- habia que anadirlo mil veces, y olvidarse en uno dejaba ese caso sin
+     * el dato, en silencio.  Pasando todo por aqui, se anade una vez.
+     *
+     * @param block Bloque destino.
+     * @param ins Instruccion.
+     */
+    void emit(uint32_t block, ir::IrInstr ins) {
+        if (!fn_) return;
+        // La columna de lo que se esta bajando, si quien la puso no traia ya
+        // una mas precisa.
+        if (ins.source_column == 0) {
+            ins.source_column = pend_stmt_column_;
+            // La longitud acompana a la columna: solo vale para el mismo
+            // trozo de fuente, y por separado darian un recorte falso.
+            if (ins.source_len == 0) ins.source_len = pend_stmt_len_;
+        }
+        fn_->append(block, std::move(ins));
+    }
+
+    /// Columna de la sentencia que se esta bajando, para sellarla en las
+    /// instrucciones que emita.  0 = ninguna.
+    uint32_t pend_stmt_column_ = 0;
+
+    /// Longitud del mismo trozo de fuente que @c pend_stmt_column_.
+    uint32_t pend_stmt_len_ = 0;
+
+    /**
+     * @brief Anota el vinculo entre un simbolo y la declaracion que lo produjo.
+     * @param symbol Nombre con el que se emite el codigo.
+     * @param owner Tipo que declara el miembro.
+     * @param member Nombre del miembro tal como se escribio.
+     */
+    /**
+     * @brief Anota el vinculo de una funcion libre, que no tiene propietario.
+     * @param symbol Nombre con el que se emite el codigo.
+     * @param decl Nombre declarado.
+     */
+    void note_emitted_function(const std::string &symbol,
+                               const std::string &decl) {
+        if (symbol.empty() || decl.empty()) return;
+        emitted_symbols_.emplace_back(symbol, decl);
+    }
+
+    void note_emitted_symbol(const std::string &symbol,
+                             const std::string &owner,
+                             const std::string &member) {
+        if (symbol.empty() || owner.empty() || member.empty()) return;
+        emitted_symbols_.emplace_back(symbol, owner + "::" + member);
+    }
+
+  public:
+    /// @return Que declaracion produjo cada simbolo emitido.
+    const std::vector<std::pair<std::string, std::string>> &
+    emitted_symbols() const noexcept {
+        return emitted_symbols_;
+    }
+
+    /// @return El tramo de fuente de cada sentencia bajada.
+    const std::vector<StmtSpan> &emitted_spans() const noexcept {
+        return emitted_spans_;
+    }
+
     uint32_t macro_lowered_count() const noexcept {
         return macro_lowered_count_;
     }
@@ -1357,6 +1607,18 @@ class Lowering {
     std::unordered_map<std::string, uint64_t> comptime_global_slots_;
     /// L2.2: slots para globales runtime no-const (string/int/etc.)
     std::unordered_map<std::string, uint64_t> runtime_global_slots_;
+    /// `static T x = init;` local: duracion estatica (una instancia en gdata,
+    /// mangled por funcion) con acceso via el nombre LOCAL.  Se limpia al
+    /// empezar cada funcion.  @c lower_ident / @c lower_assign consultan este
+    /// mapa ANTES del scope para emitir STR_LIT_ADDR(slot) + LOAD/STORE (o solo
+    /// la direccion si es agregado).  El init-once se materializa con un guard
+    /// booleano global (otro slot) cuando el init no es un cero constante.
+    struct StaticLocalSlot {
+        uint64_t slot = 0;           ///< indice en static_data (gdata)
+        ir::IrType ld_type = ir::IrType::I64; ///< ancho del LOAD/STORE
+        bool aggregate = false;      ///< struct/array -> el valor ES la direccion
+    };
+    std::unordered_map<std::string, StaticLocalSlot> static_local_slots_;
     /// Nombres (ya mangled) de los globals declarados en ESTE modulo.  Sirve
     /// para no confundir un simbolo de un namespace propio con uno importado:
     /// el storage de los locales lo decide el pre-pase con el tipo delante, y
@@ -1927,13 +2189,18 @@ class Lowering {
     ir::IrValueId emit_gc_allocp(ir::IrValueId v_size, uint32_t line);
     ir::IrValueId emit_gc_promote(ir::IrValueId v_src, uint32_t line);
     ir::IrValueId emit_gc_demote(ir::IrValueId v_src, uint32_t line);
-    ir::IrValueId emit_atomic_ld_i64(ir::IrValueId v_addr, uint32_t line);
+    // wt = ancho del atomico (1/2/4/8 bytes via IrType).  Default I64 (8 bytes)
+    // para los builtins Z.8 originales; los genericos pasan el tipo del pointee.
+    ir::IrValueId emit_atomic_ld_i64(ir::IrValueId v_addr, uint32_t line,
+                                     ir::IrType wt = ir::IrType::I64);
     void emit_atomic_st_i64(ir::IrValueId v_addr, ir::IrValueId v_val,
-                            uint32_t line);
+                            uint32_t line, ir::IrType wt = ir::IrType::I64);
     ir::IrValueId emit_atomic_cas_i64(ir::IrValueId v_addr, ir::IrValueId v_exp,
-                                      ir::IrValueId v_des, uint32_t line);
+                                      ir::IrValueId v_des, uint32_t line,
+                                      ir::IrType wt = ir::IrType::I64);
     ir::IrValueId emit_atomic_add_i64(ir::IrValueId v_addr,
-                                      ir::IrValueId v_delta, uint32_t line);
+                                      ir::IrValueId v_delta, uint32_t line,
+                                      ir::IrType wt = ir::IrType::I64);
 
     // --- Static fields + AOP proceed + Async fusion + Intrinsics ---
     ir::IrValueId emit_getstatic(ir::IrValueId v_cls, uint64_t offset,

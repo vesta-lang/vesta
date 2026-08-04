@@ -1,0 +1,56 @@
+/**
+ * @file 361_ctor_comptime.vx
+ * @brief Constructor comptime: construir un valor que el lenguaje no sabe leer.
+ *
+ * Un numero de 128 bits no cabe en ningun tipo nativo, asi que ninguna
+ * sobrecarga de constructor puede aceptarlo.  Antes eso era el final del
+ * camino ("funcion no declarada"); ahora, cuando ninguna sobrecarga encaja, el
+ * tipo puede recoger la llamada con un constructor `comptime T(expr)`.
+ *
+ * Recibe la expresion SIN evaluar -- por eso su parametro se declara `expr` --
+ * asi que llegan los digitos tal y como se escribieron.  Si el compilador la
+ * evaluara primero, el numero se truncaria antes de llegar aqui, que es justo
+ * lo que hay que evitar.
+ *
+ * El cuerpo rellena `this` en tiempo de compilacion, igual que si el valor se
+ * hubiera escrito a mano.  En el binario solo quedan las dos constantes: no
+ * queda ni rastro del parseo.
+ *
+ * No compite con las sobrecargas ni las ensombrece: actua solo cuando el
+ * lenguaje no sabe construir el valor por sus medios.
+ */
+import std.comptime.literal only IntLit, parse_int_lit;
+
+/** @brief Entero de 128 bits guardado en dos palabras de 64. */
+struct U128 {
+    u64 lo;
+    u64 hi;
+
+    /**
+     * @brief Construye el valor a partir de como se escribio.
+     * @param e Los digitos, tal cual, sin interpretar.
+     */
+    public comptime U128(expr e) {
+        IntLit v = parse_int_lit(e);
+        this.lo = v.word(0);
+        this.hi = v.word(1);
+    }
+}
+
+i32 main() {
+    // 2^128 - 1: los 128 bits a uno.  No cabe en ningun tipo nativo.
+    U128 m = U128(340282366920938463463374607431768211455);
+    println("lo=${m.lo} hi=${m.hi}");
+
+    // 2^64: solo el bit mas bajo del limb alto.
+    U128 p = U128(18446744073709551616);
+    println("lo=${p.lo} hi=${p.hi}");
+
+    i32 acc = 0;
+    if (m.lo == 0xFFFFFFFFFFFFFFFF) { acc++; }
+    if (m.hi == 0xFFFFFFFFFFFFFFFF) { acc++; }
+    if (p.lo == 0)                  { acc++; }
+    if (p.hi == 1)                  { acc++; }
+    if (acc == 4) { return 42; }
+    return acc;
+}

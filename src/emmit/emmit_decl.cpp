@@ -1991,6 +1991,78 @@ void emit_instr_loadz(const vm::Instruction *instruction_parser,
                 encode_reg_general(reg_src->name.c_str()));
 }
 
+// =========================================================================
+//  Atomicos width-aware (0xA9-0xAC).  El ANCHO (mode 8/16/32/64) va en el
+//  ctrl-byte, leido del sufijo de tamano (.b/.w/.d) del registro de VALOR.  La
+//  direccion es siempre un puntero de 64 bits (registro sin sufijo).
+//  ld/st: FIXED_4 [0x00][op][ctrl][regs] (reusa decode_instr_simple_mov).
+//  add/cas: FIXED_6 [0x00][op][ctrl][b2][b3][pad] (decode_instr_atomic_rmw).
+// =========================================================================
+
+/// ATOMICLD dst_sized, addr  ->  [ctrl=mode][regs=(addr<<4)|dst].
+void emit_instr_atomic_ld(const vm::Instruction *ip, ByteWriter &code,
+                          const InstrInfo *, Assembler *) {
+    auto *dst = dynamic_cast<vm::RegisterOperand *>(ip->operands[0].get());
+    auto *addr = dynamic_cast<vm::RegisterOperand *>(ip->operands[1].get());
+    if (!dst || !addr)
+        throw std::runtime_error("atomicld: requiere (reg_dst, reg_addr)");
+    emit_ctrl_byte(code, encode_mode(dst->size_bits), 0, 0, 0);
+    code.emit8(static_cast<uint8_t>(
+        (encode_reg_general(addr->name.c_str()) << 4) |
+        (encode_reg_general(dst->name.c_str()) & 0x0F)));
+}
+
+/// ATOMICST addr, val_sized  ->  [ctrl=mode][regs=(val<<4)|addr].
+void emit_instr_atomic_st(const vm::Instruction *ip, ByteWriter &code,
+                          const InstrInfo *, Assembler *) {
+    auto *addr = dynamic_cast<vm::RegisterOperand *>(ip->operands[0].get());
+    auto *val = dynamic_cast<vm::RegisterOperand *>(ip->operands[1].get());
+    if (!addr || !val)
+        throw std::runtime_error("atomicst: requiere (reg_addr, reg_val)");
+    emit_ctrl_byte(code, encode_mode(val->size_bits), 0, 0, 0);
+    code.emit8(static_cast<uint8_t>(
+        (encode_reg_general(val->name.c_str()) << 4) |
+        (encode_reg_general(addr->name.c_str()) & 0x0F)));
+}
+
+/// ATOMICADD dst_sized, addr, delta_sized
+///   -> [ctrl=mode][b2=(dst<<4)|addr][b3=(delta<<4)|0][pad].
+void emit_instr_atomic_add(const vm::Instruction *ip, ByteWriter &code,
+                           const InstrInfo *, Assembler *) {
+    auto *dst = dynamic_cast<vm::RegisterOperand *>(ip->operands[0].get());
+    auto *addr = dynamic_cast<vm::RegisterOperand *>(ip->operands[1].get());
+    auto *delta = dynamic_cast<vm::RegisterOperand *>(ip->operands[2].get());
+    if (!dst || !addr || !delta)
+        throw std::runtime_error("atomicadd: requiere (dst, addr, delta)");
+    emit_ctrl_byte(code, encode_mode(dst->size_bits), 0, 0, 0);
+    code.emit8(static_cast<uint8_t>(
+        (encode_reg_general(dst->name.c_str()) << 4) |
+        (encode_reg_general(addr->name.c_str()) & 0x0F)));
+    code.emit8(
+        static_cast<uint8_t>(encode_reg_general(delta->name.c_str()) << 4));
+    code.emit8(0); // pad (FIXED_6)
+}
+
+/// ATOMICCAS dst_sized, addr, exp_sized, des_sized
+///   -> [ctrl=mode][b2=(dst<<4)|addr][b3=(exp<<4)|des][pad].
+void emit_instr_atomic_cas(const vm::Instruction *ip, ByteWriter &code,
+                           const InstrInfo *, Assembler *) {
+    auto *dst = dynamic_cast<vm::RegisterOperand *>(ip->operands[0].get());
+    auto *addr = dynamic_cast<vm::RegisterOperand *>(ip->operands[1].get());
+    auto *exp = dynamic_cast<vm::RegisterOperand *>(ip->operands[2].get());
+    auto *des = dynamic_cast<vm::RegisterOperand *>(ip->operands[3].get());
+    if (!dst || !addr || !exp || !des)
+        throw std::runtime_error("atomiccas: requiere (dst, addr, exp, des)");
+    emit_ctrl_byte(code, encode_mode(dst->size_bits), 0, 0, 0);
+    code.emit8(static_cast<uint8_t>(
+        (encode_reg_general(dst->name.c_str()) << 4) |
+        (encode_reg_general(addr->name.c_str()) & 0x0F)));
+    code.emit8(static_cast<uint8_t>(
+        (encode_reg_general(exp->name.c_str()) << 4) |
+        (encode_reg_general(des->name.c_str()) & 0x0F)));
+    code.emit8(0); // pad (FIXED_6)
+}
+
 /**
  * @brief Emite super-instrucciones ALU 3-operandos.
  *
@@ -3100,6 +3172,34 @@ void emit_setcc(const vm::Instruction *instruction_parser,
     code_final.emit8(
         static_cast<uint8_t>((cond_val << 4) | (idx1 & 0x0F))); // b2
     code_final.emit8(0x00);                                     // b3
+}
+
+// =========================================================================
+// emit_sext: Convention B, 1 registro + ancho literal (8/16/32)
+// =========================================================================
+
+/**
+ * @brief Emite b2=r_dst (nibble bajo), b3=N (ancho fuente en bits).
+ *
+ * `sext r_dst, N` sign-extiende r_dst desde N bits (8/16/32) a 64.  El ancho
+ * va en el byte3 completo (no cabe en un nibble como el cond de setcc).
+ */
+void emit_sext(const vm::Instruction *instruction_parser,
+               ByteWriter &code_final, const InstrInfo *now_instr,
+               Assembler *assembly_ctx) {
+    (void)now_instr;
+    (void)assembly_ctx;
+    auto r1 = dynamic_cast<vm::RegisterOperand *>(
+        instruction_parser->operands[0].get());
+    auto width = dynamic_cast<vm::NumberOperand *>(
+        instruction_parser->operands[1].get());
+    if (!r1 || !width)
+        throw std::runtime_error(instruction_parser->opcode +
+                                 ": requiere r_dst, N_literal (8/16/32)");
+    uint8_t idx1 = encode_reg_general(r1->name.c_str());
+    uint8_t width_val = static_cast<uint8_t>(std::stoull(width->value) & 0xFF);
+    code_final.emit8(static_cast<uint8_t>(idx1 & 0x0F)); // b2 = r_dst
+    code_final.emit8(width_val);                         // b3 = N (bits)
 }
 
 // emit_gcfinal: gcfinal r_box, kind.  byte2=0, byte3=(kind<<4)|r_box.

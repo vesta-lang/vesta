@@ -1,0 +1,33 @@
+/**
+ * @file 350_wideint_256_signed.vx
+ * @brief `i256` con signo: negacion, comparadores y desplazamiento aritmetico.
+ *
+ * `i256` comparte con `u256` toda la aritmetica -- en complemento a dos la
+ * suma y la resta son bit-identicas con signo y sin el -- y solo cambia lo que
+ * depende del signo.  Eso es lo que se comprueba aqui: que el orden pone los
+ * negativos por debajo aunque su representacion sin signo sea mayor, que
+ * negar y volver a sumar cuadra, y que el desplazamiento a la derecha replica
+ * el bit de signo en vez de meter ceros (`-1 >> n` sigue siendo `-1`).
+ *
+ * Las dos mitades heredadas siguen siendo SIN signo: el signo es del valor
+ * completo y vive en el bit mas alto de la mitad alta.
+ */
+import std.wideint only i256, u128;
+i32 main() {
+    i256 a = i256.from_i64(-100);
+    i256 b = i256.from_i64(7);
+    if (!a.is_negative())            { return 1; }
+    if (b.is_negative())             { return 2; }
+    if (!(a < b))                    { return 3; }
+    if (!(b > a))                    { return 4; }
+    if ((-a) != i256.from_i64(100)) { return 5; }
+    if ((a + b) != i256.from_i64(-93))     { return 6; }
+    if ((b - a) != i256.from_i64(107))     { return 7; }
+    i256 mu = i256.from_i64(-1);
+    if ((mu >> 5) != mu)         { return 8; }
+    if ((i256.from_i64(-64) >> 3) != i256.from_i64(-8)) { return 9; }
+    if (!i256.min().is_negative())   { return 10; }
+    if (i256.max().is_negative())    { return 11; }
+    if (!(i256.min() < i256.max()))  { return 12; }
+    return 42;
+}

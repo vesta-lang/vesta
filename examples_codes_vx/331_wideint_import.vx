@@ -1,0 +1,24 @@
+/**
+ * @file 331_wideint_import.vx
+ * @brief Import cross-module de `std.wideint`: u128 con metodos, herencia,
+ *        operadores, constructores static y conversiones.
+ *
+ * Ejercita el stdlib: `u128.from_u64`, operadores /, %, comparadores, `__bool__`
+ * (`if (x)` / `!x`), `to_u64`.  Se valida con la red diferencial (interp =
+ * oraculo; jit y aot deben coincidir).  checksum: 1000/7 = 142 resto 6.
+ */
+import std.wideint only u128;
+
+i32 main() {
+    u128 a = u128.from_u64(1000);
+    u128 b = u128.from_u64(7);
+    u128 q = a / b;               // 142
+    u128 r = a % b;               // 6
+    bool ord = (a > b) && (b < a) && (a != b) && (a >= b);
+    u128 z = u128.min();          // 0
+    i32 acc = (i32) (q.to_u64() * 10 + r.to_u64());   // 1426
+    if (!ord) { acc = acc + 1000; }
+    if (z)    { acc = acc + 1000; }   // __bool__ de cero -> false: no suma
+    if (!a)   { acc = acc + 1000; }   // __bool__ de no-cero -> !true: no suma
+    return acc;                        // 1426
+}

@@ -19,18 +19,18 @@
 // primitivos siguen su camino de siempre.
 namespace rmw_fusion;
 
-import "vx_atomic" only vx_atomic_load64, vx_atomic_store64, vx_atomic_add64;
+import std.atomic only atomic_load64, atomic_store64, atomic_add64;
 
 // Contador atomico: lectura, escritura e incremento indivisibles.
 struct Atomic {
     i64 v;
 
-    public i64 __deref__()       { return vx_atomic_load64(&this.v); }
-    public i64 __assign__(i64 n) { vx_atomic_store64(&this.v, n); return n; }
+    public i64 __deref__()       { return atomic_load64(&this.v); }
+    public i64 __assign__(i64 n) { atomic_store64(&this.v, n); return n; }
 
     // El incremento es UNA instruccion (lock xadd): ningun hilo cabe en medio.
-    public i64 __iadd__(i64 d)   { return vx_atomic_add64(&this.v, d) + d; }
-    public i64 __isub__(i64 d)   { return vx_atomic_add64(&this.v, 0 - d) - d; }
+    public i64 __iadd__(i64 d)   { return atomic_add64(&this.v, d) + d; }
+    public i64 __isub__(i64 d)   { return atomic_add64(&this.v, 0 - d) - d; }
 }
 
 // Tipo no atomico que solo declara operaciones in-place, para ver la fusion en

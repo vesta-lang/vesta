@@ -1,0 +1,2 @@
+namespace t.p;
+public struct P { u64 a; public P(u64 x) { this.a = x; } }

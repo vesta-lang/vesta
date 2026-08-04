@@ -41,7 +41,7 @@ bool is_builtin_concept(const std::string &name) {
         "String",   "Comparable", "Ordered", "Eq",       "Sized",
         "Copyable", "Hashable", "Stringable", "Default",  "Primitive",
         "Class",    "Struct",   "Callable",  "Destructible", "Iterable",
-        "Shareable", "Enum",    "ValuedEnum",
+        "Shareable", "Enum",    "ValuedEnum", "Scalar",
     };
     return set.count(name) > 0;
 }
@@ -65,6 +65,11 @@ static bool eval_builtin_concept(const TypeChecker &tc, const std::string &name,
     const bool is_prim = comptime_is_primitive(t);
 
     if (name == "Numeric" || name == "Number") return is_num;
+    // Scalar: valor escalar de maquina (int|float|bool|puntero).  Base de los
+    // tipos atomizables / bitcasteables; NO incluye string/struct/clase/enum.
+    if (name == "Scalar")
+        return is_int || is_flt || k == PrimitiveKind::BOOL ||
+               k == PrimitiveKind::PTR;
     if (name == "Integer" || name == "Int") return is_int;
     if (name == "Float") return is_flt;
     if (name == "Signed") return is_signed;
@@ -295,6 +300,65 @@ void TypeChecker::check_type_bounds(const std::vector<ast::TypeBound> &bounds,
             pending_bound_checks_.push_back(std::move(pc));
         }
     }
+}
+
+bool TypeChecker::method_available_for_subst(
+    const ast::ClassMethodDecl *m,
+    const std::vector<std::string> &container_params,
+    const std::vector<Type> &container_args,
+    std::vector<ast::TypeBound> &method_only) {
+    bool available = true;
+    for (const auto &b : m->type_bounds) {
+        // ¿El bound habla de un type-param del PROPIO metodo (`m<U: C>`)?  Esos
+        // se verifican al monomorphizar el metodo, no filtran su existencia.
+        bool is_method_param = false;
+        for (const auto &mp : m->method_type_params)
+            if (mp == b.type_param) {
+                is_method_param = true;
+                break;
+            }
+        if (is_method_param) {
+            method_only.push_back(b);
+            continue;
+        }
+        // Bound sobre un type-param del CONTENEDOR: localizar su arg concreto.
+        size_t idx = container_params.size();
+        for (size_t i = 0; i < container_params.size(); ++i)
+            if (container_params[i] == b.type_param) {
+                idx = i;
+                break;
+            }
+        if (idx >= container_args.size()) {
+            // Ni del metodo ni del contenedor: bound anomalo; preservarlo sin
+            // filtrar (podria referirse a un alias externo).
+            method_only.push_back(b);
+            continue;
+        }
+        const Type &arg = container_args[idx];
+        for (const auto &cname : b.concepts) {
+            const ConceptEval ev = comptime_eval_concept(*this, cname, arg);
+            if (!ev.found) {
+                diags_.error(b.loc, "concepto desconocido '" + cname +
+                                        "' en la clausula where del metodo '" +
+                                        m->name + "'");
+                continue; // no filtrar por un concepto invalido
+            }
+            if (!ev.satisfied) available = false;
+        }
+    }
+    return available;
+}
+
+void TypeChecker::record_unavailable_method(
+    const std::string &container_mangled, const ast::ClassMethodDecl *m) {
+    std::string reqs;
+    for (const auto &b : m->type_bounds) {
+        for (const auto &c : b.concepts) {
+            if (!reqs.empty()) reqs += ", ";
+            reqs += b.type_param + ": " + c;
+        }
+    }
+    unavailable_methods_[container_mangled].push_back({m->name, reqs});
 }
 
 void TypeChecker::verify_pending_type_bounds() {

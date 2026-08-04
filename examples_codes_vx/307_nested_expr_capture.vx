@@ -23,7 +23,7 @@ i32 main() {
     string s2 = wrapped(x * 2);              // "[x * 2]"
 
     i32 r = 0;
-    if (str_equals(s1, "hola + mundo")) { r = r + 21; }
-    if (str_equals(s2, "[x * 2]"))      { r = r + 21; }
+    if (s1.equals("hola + mundo")) { r = r + 21; }
+    if (s2.equals("[x * 2]"))      { r = r + 21; }
     return r;   // 42
 }

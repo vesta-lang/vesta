@@ -252,8 +252,8 @@ void compose_fingerprints(
     auto frame_para_total = [&](uint32_t v) -> uint64_t {
         const auto &f = fps[v];
         if (f.frame_opaque && contracts) {
-            // El contrato se declara con el nombre SIMPLE (`vx_atomic_cas64`)
-            // pero el IR trae la fn mangled por modulo (`vx_atomic__vx_atomic_
+            // El contrato se declara con el nombre SIMPLE (`atomic_cas64`)
+            // pero el IR trae la fn mangled por modulo (`atomic__atomic_
             // cas64`).  Se prueba el completo y luego el simple (ultimo `__`).
             const FunctionContracts *c = nullptr;
             auto it = contracts->find(f.function);

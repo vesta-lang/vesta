@@ -109,6 +109,27 @@ class Parser {
     }
 
     /**
+     * @brief Declara un tipo cuyo constructor recibe la expresion sin evaluar.
+     *
+     * Al ver `T(algo)`, el parser captura el TEXTO de lo que se escribio en
+     * lugar de interpretarlo, pero solo si sabe que `T` tiene un constructor
+     * de parametro `expr`.  Cuando el tipo se declara en el mismo fichero lo
+     * averigua al parsearlo; cuando viene de otro modulo no, porque el
+     * parseo ocurre antes de importar nada -- y entonces un numero mas ancho
+     * que la palabra se truncaba antes de que nadie pudiera usarlo.
+     *
+     * El pipeline compila los modulos de los que se depende ANTES, asi que
+     * ese dato ya se conoce y basta con darselo aqui.
+     *
+     * @param name Nombre del tipo.
+     * @param positions Indices de los parametros declarados `expr`.
+     */
+    void add_expr_ctor_type(const std::string &name,
+                            std::vector<int> positions) {
+        macro_expr_params_[name] = std::move(positions);
+    }
+
+    /**
      * @brief Siembra las posiciones de params @c expr de funciones IMPORTADAS
      * de otros modulos, ANTES de parsear.
      *
@@ -405,6 +426,8 @@ class Parser {
 
     std::unique_ptr<ast::BlockStmt> parse_block();
     std::unique_ptr<ast::Stmt> parse_statement();
+    /// Cuerpo real; @ref parse_statement lo envuelve para medir la extension.
+    std::unique_ptr<ast::Stmt> parse_statement_inner();
     std::unique_ptr<ast::Stmt> parse_var_decl_stmt(bool is_const,
                                                    bool from_comptime = false);
     std::unique_ptr<ast::Stmt> parse_if_stmt();
@@ -490,6 +513,16 @@ class Parser {
      * lookahead es preciso para no robar sintaxis a expresiones legitimas.
      */
     [[nodiscard]] bool looks_like_register_storage() const noexcept;
+
+    /**
+     * @brief Consume una anotacion opcional `register("rXX")` al inicio de un
+     *        parametro (o de un tipo de parametro en `cfn(...)`), devolviendo el
+     *        nombre del registro o "" si no hay.  Habilita la ABI custom por
+     *        funcion: el parametro se recibe (y el caller lo coloca) en ese
+     *        registro fisico.  Solo consume si el patron exacto
+     *        `register ( "reg" )` aparece; deja intacto cualquier otro caso.
+     */
+    std::string parse_opt_param_reg();
 
     /**
      * @brief Decide si el `(` actual inicia un cast C-style `(T) expr`.
@@ -629,6 +662,14 @@ class Parser {
     /// single-pass: el typedef debe declararse ANTES del uso (igual
     /// que cualquier forward decl en C/Vesta).
     std::unordered_set<std::string> declared_aliases_;
+    /// Segmentos accesores de los namespaces importados (`import a.b.c;` ->
+    /// `c`, o el alias si hay `as`).  Poblado por @c parse_import.  Consultado
+    /// por @c looks_like_cast para reconocer un cast a un tipo CUALIFICADO
+    /// `(ns.Tipo) x` (p.ej. `(types.size_t) 40`), igual que
+    /// @c looks_like_var_decl ya acepta `ns.Tipo name`.  Sin esto la deteccion
+    /// del cast solo veria el primer identifier (`types`, un namespace, no un
+    /// alias) y rechazaria la secuencia como agrupacion.
+    std::unordered_set<std::string> imported_namespaces_;
     /// Nombres de los parametros `expr` de la funcion cuyo CUERPO se esta
     /// parseando ahora mismo.  Sirve para el forwarding de expr-capture anidado:
     /// si el argumento de una llamada a otra fn expr-capture es exactamente uno
@@ -703,6 +744,11 @@ class Parser {
     /// ModuleNode::no_exceptions -> todas las funciones lo heredan.
     bool module_no_exceptions_ = false;
 
+    /// El modulo usa @Target en alguna declaracion (sticky): se propaga a
+    /// @c ModuleNode::uses_conditional_target para que su `.vxi` quede atado
+    /// al objetivo con que se genero.
+    bool module_uses_target_ = false;
+
     ///  M6.a L.3: visibilidad pendiente capturada en
     /// @c parse_top_level_decl.  Los sub-parsers que produzcan un
     /// nodo top-level llaman @c apply_pending_visibility_ al final
@@ -721,7 +767,23 @@ class Parser {
 
     ///  M.L24: descarta una decl top-level cuya @Target no matcheo.
     /// Consume tokens hasta el final natural de la decl ({ ... } o ;).
-    void skip_target_skipped_decl();
+    /// @param spec Condicion @Target que no se cumplio; se anota junto al
+    ///             nombre descartado en @c target_skipped_ para poder decir
+    ///             despues "existe, pero para otro objetivo".
+    void skip_target_skipped_decl(const std::string &spec = std::string());
+
+    /// Nombre descartado por @Target -> condicion(es) bajo las que si existe.
+    /// Un mismo nombre puede tener varias variantes (una por plataforma).
+    std::unordered_map<std::string, std::vector<std::string>> target_skipped_;
+
+public:
+    /// Simbolos que este fichero declara SOLO para otros objetivos.  Quien
+    /// resuelve nombres lo consulta cuando una busqueda falla, para distinguir
+    /// "no existe" de "existe pero no para este target".
+    const std::unordered_map<std::string, std::vector<std::string>> &
+    target_skipped() const noexcept {
+        return target_skipped_;
+    }
 };
 
 } // namespace vx

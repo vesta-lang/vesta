@@ -52,7 +52,7 @@ i64 count_list(Node h) {
     i64 acc = 0;
     Node c = h;
     while (c != null) {
-        acc = acc + 1;
+        acc++;
         c = c.next;
     }
     return acc;

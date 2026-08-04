@@ -132,6 +132,8 @@ void exec_instr_spawn(ProcessVM *vm, const DecodedInstr &instr) {
 
     // establecer PC del proceso hijo a la direccion solicitada
     child->registers.rip.qword(fn_addr);
+    // Fondo de la cadena del hijo: su cuerpo, no el main (ver entry_pc).
+    child->entry_pc = fn_addr;
 
     // Inicializar RSP/RBP del hijo para que pueda ejecutar `enter N` y
     // operaciones de pila.  Cada hijo recibe una region unica derivada
@@ -228,6 +230,8 @@ void exec_instr_spawn_on(ProcessVM *vm, const DecodedInstr &instr) {
 
     // PC, stack, code copy: idem exec_instr_spawn.
     child->registers.rip.qword(fn_addr);
+    // Fondo de la cadena del hijo: su cuerpo, no el main (ver entry_pc).
+    child->entry_pc = fn_addr;
     const uint64_t stack_base =
         0x10000000ULL + (new_pid.local_pid % 0x1000ULL) * 0x100000ULL;
     child->registers.stack_pointer.qword(stack_base);
@@ -290,6 +294,8 @@ void exec_instr_spawnargs(ProcessVM *vm, const DecodedInstr &instr) {
 
     // PC, stack, code copy: idem spawn.
     child->registers.rip.qword(fn_addr);
+    // Fondo de la cadena del hijo: su cuerpo, no el main (ver entry_pc).
+    child->entry_pc = fn_addr;
     const uint64_t stack_base =
         0x10000000ULL + (new_pid.local_pid % 0x1000ULL) * 0x100000ULL;
     child->registers.stack_pointer.qword(stack_base);

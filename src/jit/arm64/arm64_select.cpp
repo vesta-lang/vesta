@@ -311,7 +311,7 @@ std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported,
                 os << "    b " << lbl << "b" << in.target_block << "\n";
                 break;
             }
-            case ir::IrOp::ATOMIC_CAS_I64: {
+            case ir::IrOp::ATOMIC_CAS: {
                 // compare-and-swap via bucle load-linked/store-conditional.
                 // operands: addr, exp, des -> dst = valor viejo.
                 if (in.operands.size() != 3 || in.dst == ir::IR_NO_VALUE) {
@@ -332,7 +332,7 @@ std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported,
                 emit_st(os, "x12", in.dst); // valor viejo (== o != exp)
                 break;
             }
-            case ir::IrOp::ATOMIC_ADD_I64: {
+            case ir::IrOp::ATOMIC_ADD: {
                 // fetch-and-add via bucle LL/SC.  operands: addr, delta -> dst =
                 // valor viejo.
                 if (in.operands.size() != 2 || in.dst == ir::IR_NO_VALUE) {

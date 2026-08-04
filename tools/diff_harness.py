@@ -159,7 +159,7 @@ def main() -> int:
           f"timeout {args.timeout:.0f}s\n")
 
     cats = {k: [] for k in
-            ("OK", "VREG_HANG", "DIVERGE", "CRASH", "SLOTS_BUG",
+            ("OK", "XFAIL", "VREG_HANG", "DIVERGE", "CRASH", "XPASS", "SLOTS_BUG",
              "NO_ORACLE", "NOCOMPILA", "NODET", "SKIP")}
     detail = []
     t0 = time.time()
@@ -170,6 +170,16 @@ def main() -> int:
     def process_one(name: str, path: Path) -> dict:
         if name in SKIP:
             return {"name": name, "cat": "SKIP"}
+        # Tests negativos (compile-must-fail): marcados con `@expect-compile-fail`.
+        # NO deben producir .velb -- el fallo de compilacion es el resultado
+        # ESPERADO (XFAIL, verde).  Si compilan (producen .velb) es una regresion
+        # del checker (XPASS, bug).  Sin el marcador, un fallo de compilacion sigue
+        # siendo NOCOMPILA (problema real a investigar).
+        try:
+            src = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            src = ""
+        expect_fail = "@expect-compile-fail" in src
         velb = tmp / (name + ".velb")
         try:
             cr = subprocess.run([str(vm), "--vx", str(path), "-o", str(tmp / name)],
@@ -177,7 +187,13 @@ def main() -> int:
         except subprocess.TimeoutExpired:
             return {"name": name, "cat": "NOCOMPILA", "note": "compile timeout"}
         if cr.returncode != 0 or not velb.is_file():
+            if expect_fail:
+                return {"name": name, "cat": "XFAIL"}  # fallo de compilacion esperado
             return {"name": name, "cat": "NOCOMPILA"}
+        if expect_fail:
+            # El negativo COMPILO -> el checker dejo de atrapar el error.
+            return {"name": name, "cat": "XPASS",
+                    "note": "negativo marcado @expect-compile-fail pero compilo"}
 
         res = {}
         for mode in ("interp", "jit-vreg", "jit-slots"):
@@ -238,8 +254,9 @@ def main() -> int:
 
     # Resumen.
     print(f"{C.BOLD}=== diff_harness: baseline ({elapsed:.0f}s) ==={C.R}")
-    order = [("OK", C.GRN), ("VREG_HANG", C.RED), ("DIVERGE", C.RED),
-             ("CRASH", C.RED), ("SLOTS_BUG", C.YEL), ("NO_ORACLE", C.DIM),
+    order = [("OK", C.GRN), ("XFAIL", C.GRN), ("VREG_HANG", C.RED),
+             ("DIVERGE", C.RED), ("CRASH", C.RED), ("XPASS", C.RED),
+             ("SLOTS_BUG", C.YEL), ("NO_ORACLE", C.DIM),
              ("NOCOMPILA", C.DIM), ("NODET", C.DIM), ("SKIP", C.DIM)]
     for k, col in order:
         print(f"  {col}{k:10s}{C.R} {len(cats[k]):3d}")
@@ -260,15 +277,24 @@ def main() -> int:
     if cats["SLOTS_BUG"]:
         print(f"{C.YEL}[nota]{C.R} SLOTS_BUG (legacy en jubilacion): "
               f"{', '.join(cats['SLOTS_BUG'])}")
+    if cats["XPASS"]:
+        # Regresion del CHECKER: un test negativo (@expect-compile-fail) compilo.
+        print(f"\n{C.RED}{C.BOLD}XPASS (regresion del checker -- negativos que "
+              f"YA NO fallan):{C.R}")
+        for n in cats["XPASS"]:
+            print(f"  {C.RED}XPASS{C.R} {n}")
+    if cats["XFAIL"]:
+        print(f"{C.GRN}[ok]{C.R} XFAIL ({len(cats['XFAIL'])} negativos que fallan "
+              f"la compilacion como se espera).")
 
     out = root / args.out
     out.write_text(json.dumps({"vm": str(vm), "elapsed_s": elapsed,
         "summary": {k: len(v) for k, v in cats.items()},
         "categories": cats, "detail": detail}, indent=2), encoding="utf-8")
     print(f"\n{C.CYN}[ok]{C.R} baseline: {out}")
-    # Exit code = numero de bugs del path de produccion (0 = limpio) -> usable
-    # como gate de CI / bisect.  Antes SIEMPRE retornaba 0 (nunca fallaba).
-    return 1 if bugs else 0
+    # Exit code = bugs del path de produccion + XPASS (negativos que regresaron)
+    # -> usable como gate de CI / bisect.  Antes SIEMPRE retornaba 0.
+    return 1 if (bugs or cats["XPASS"]) else 0
 
 
 if __name__ == "__main__":

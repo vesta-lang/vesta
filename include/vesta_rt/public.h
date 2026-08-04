@@ -759,6 +759,15 @@ uint64_t vrt_str_raw(vrt_proc *proc, vrt_handle h);
 /** @brief Concatena dos StringObjects en un ROPE O(1). */
 vrt_handle vrt_str_cat(vrt_proc *proc, vrt_handle a, vrt_handle b);
 
+/**
+ * @brief STRSLICE: vista de una subcadena por puntos de codigo.
+ * @param proc  Proceso propietario del heap.
+ * @param src   Cadena de la que se toma la vista.
+ * @param range (cp_start << 32) | cp_len.
+ * @return Handle del SLICE (el padre si la vista lo abarca entero).
+ */
+vrt_handle vrt_str_slice(vrt_proc *proc, vrt_handle src, uint64_t range);
+
 /** @brief Comparacion lexicografica.  Returns -1/0/1. */
 int64_t vrt_str_cmp(vrt_proc *proc, vrt_handle a, vrt_handle b);
 

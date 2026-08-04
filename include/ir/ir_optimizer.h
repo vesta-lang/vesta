@@ -399,6 +399,33 @@ bool ir_fma_contract_allowed();
 bool ir_pass_strength_reduction(IrFunction &fn);
 
 /**
+ * @brief Elimina SEXT redundante de variables de induccion no-negativas
+ *        acotadas por el test de salida de su loop (ver ir_optimizer.cpp).
+ */
+bool ir_pass_elim_redundant_casts(IrFunction &fn);
+
+/**
+ * @brief Pliega un CMP a CONST 0/1 cuando el RANGE (ValueFacts) prueba el
+ *        resultado (siempre true/false).  Habilita poda de ramas muertas.
+ */
+bool ir_pass_fold_compares(IrFunction &fn);
+
+/**
+ * @brief Pliega un CMP a CONST cuando una GUARDA DOMINANTE ya establece una
+ *        relacion sobre el mismo par de valores SSA (rango relacional
+ *        simbolico / predicate propagation).  Cierra los bounds-checks de
+ *        longitud VARIABLE (`if (i >= len) panic` dentro de `for i in 0..len`).
+ */
+bool ir_pass_fold_guarded_compares(IrFunction &fn);
+
+/**
+ * @brief Runner de los consumidores de ValueFacts: computa el analisis UNA vez
+ *        y lo comparte entre todos (elim casts + fold compares), recomputando
+ *        solo si un consumidor muto el IR.  AnalysisCache minimo.
+ */
+bool ir_pass_valuefacts_consumers(IrFunction &fn);
+
+/**
  * @brief Pase Reassociation.
  *
  * Reasocia operaciones binarias asociativas para combinar constantes:

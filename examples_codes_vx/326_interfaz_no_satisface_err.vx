@@ -1,0 +1,27 @@
+/**
+ * @file 326_interfaz_no_satisface_err.vx
+ * @brief Negativo: un struct que declara `: IConcepto` pero NO cumple el contrato.
+ *
+ * `Dibujable` exige `i64 area()`.  El struct `Vacio` declara satisfacerlo pero
+ * no expone ese metodo -> la compilacion debe FALLAR con
+ * "no satisface el concepto 'Dibujable'".
+ *
+ * Contraste con @Abstract: heredar de un @Abstract te DA la implementacion;
+ * declarar una interfaz solo te OBLIGA a proveerla tu mismo.
+ */
+namespace iface_err;
+
+concept Dibujable {
+    i64 area();
+}
+
+// No implementa `area()` -> incumple el contrato Dibujable.
+struct Vacio : Dibujable {
+    i64 x;
+}
+
+i32 main() {
+    Vacio v;
+    v.x = 1;
+    return (i32) v.x;
+}

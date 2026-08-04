@@ -17,6 +17,7 @@
 
 #include "vx/compiler.h"
 #include "vx/c_header_gen.h" // Fase 4 interop C: vx --emit-header
+#include "vx/vxdbg_emit.h"   // base de conocimiento de depuracion
 
 #include "analyze/bigo.h"
 #include "analyze/fingerprint.h" // verificacion de contratos de huella
@@ -34,6 +35,18 @@
 #include <iostream>
 
 #include "vx/comptime/comptime_collect.h"
+#include "vx/comptime/comptime_vm.h"
+#include "ctpe/evaluable.h"
+#include "jit/auto_jit.h"
+#include <memory>
+
+// Fwd-decl de run_worker (evita arrastrar assembler_multiprocess.h -> json.hpp,
+// que no esta en el include path del frontend).  Firma exacta del header.
+namespace asm_multi_process {
+int run_worker(const std::string &file_name, const std::string &output_prefix,
+                bool skip_preprocessor, bool keep_labels,
+                const std::vector<uint8_t> *ir_section_bytes, bool emit_map);
+}
 #include "vx/type_checker.h"
 
 #include "port/transpiler_base.h"
@@ -689,6 +702,30 @@ CompileResult compile_vx_source(const std::string &source,
         return res;
     }
 
+    // Grafo de conocimiento del programa: los tipos, sus miembros y como se
+    // relacionan, mas el mapa que liga los simbolos del artefacto con ellos.
+    // Se emite AQUI y no antes porque los SIMBOLOS solo existen tras el
+    // lowering, y sin ellos el grafo se queda sin puerta de entrada: una
+    // direccion de ejecucion no podria llegar hasta el.
+    //
+    // No participa en la generacion de codigo: si falla, se avisa y la
+    // compilacion sigue -- perder informacion de depuracion no es motivo para
+    // no producir el programa.
+    {
+        VxdbgEmitStats st;
+        std::string dbg_err;
+        std::vector<vxdbg::SourceExtent> spans;
+        spans.reserve(lo.emitted_spans().size());
+        for (const auto &e : lo.emitted_spans())
+            spans.push_back({e.symbol, e.line, e.column, e.length});
+        if (!emit_vxdbg_source(tc, lo.emitted_symbols(), spans, filename, source,
+                               opts.vxdbg_dir, st, dbg_err)) {
+            std::cerr << "[vxdbg] no se pudo emitir: " << dbg_err << "\n";
+        }
+        res.vxdbg_artifact_map = st.artifact_map;
+        res.vxdbg_span_map = st.span_map;
+    }
+
     // -ffp-contract=off (CLI, per-modulo): fuerza IEEE estricto (sin contraccion
     // FMA) AND-eando la politica del modulo con el fp_contract por-funcion que ya
     // puso el lowering (@fp(strict) -> false).  Se aplica aqui, en la misma unidad
@@ -1029,6 +1066,11 @@ CompileResult compile_vx_source(const std::string &source,
      * Genera @c irmod_opt aplicando el mismo opt_level que el .vel
      * pipeline para mantener consistencia entre @c .velb (JIT
      * source) y @c .vel (interp source). */
+    /// Modulo optimizado del que sale el intermedio del artefacto.  Se guarda
+    /// para serializarlo DESPUES de emitir, cuando ya se sabe en que registro
+    /// vive cada valor (ver mas abajo).
+    ir::IrModule mod_para_seccion;
+    bool hay_seccion = false;
     {
         /* Modo --analyze: serializar el IR PRE-optimizacion (irmod tal cual
          * lo emite el lowering) antes de tocar nada.  Captura la complejidad
@@ -1121,13 +1163,76 @@ CompileResult compile_vx_source(const std::string &source,
         // --analyze, inline normal (no se genera .velb en --analyze).
         ir::ir_optimize(irmod_for_section, opt_level_from_int(opts.opt_level),
                         /*allow_inline=*/!opts.emit_ir_preopt);
-        res.ir_section_bytes = ir::emit_ir_section(irmod_for_section.functions);
-        /*  AOT: modulo completo (functions + static_data + globals) para
-         * que el driver -m aot materialice los literales en .rodata. */
-        res.ir_module_cache_bytes = ir::emit_ir_module_cache(irmod_for_section);
+        /* No se serializa todavia: falta saber en que registro dejo el
+         * asignador cada valor, y eso solo se sabe tras emitir.  Se guarda y
+         * se serializa mas abajo, ya con esa informacion dentro. */
+        mod_para_seccion = std::move(irmod_for_section);
+        hay_seccion = true;
+    }
+
+    // --- CTPE (on por defecto; VESTA_NO_CTPE desactiva): precomputo del
+    //     programa completo. ---
+    // Si el modulo tiene candidatos (fn evaluable zero-param con retorno escalar,
+    // p.ej. un `main` puro), se construye un ComptimeRuntime a partir del .velb
+    // del modulo y el emisor pliega el resultado como CONST.  Es un dos-fases
+    // AUTOCONTENIDO: emit sin plegar -> ensamblar a .velb temporal -> cargar el
+    // runtime -> re-emitir con el runtime activo (el fold vive dentro del emisor).
+    // Solo actua si hay candidato (main puro): el 99% de programas con I/O no lo
+    // son -> sin coste.  Watchdog de 3s (VESTA_CTPE_MS) evita colgar el compile.
+    std::unique_ptr<vx::ComptimeRuntime> ctpe_rt;
+    // No en modulos con @Macro: el precomputo ya lo hace la maquinaria de macros
+    // (comptime) y su two-phase (VESTA_MC_PREBUILT) choca con el two-phase de
+    // CTPE.  Ademas los macros dejan un runtime comptime propio que conflictua.
+    if (!std::getenv("VESTA_NO_CTPE") && opts.opt_level >= 2 &&
+        !res.ir_section_bytes.empty() && !res.has_lowerable_macros) {
+        ctpe::Evaluability ev = ctpe::compute_evaluability(irmod);
+        std::vector<ctpe::Candidate> cands = ctpe::find_candidates(irmod, ev);
+        res.has_ctpe_candidates = !cands.empty();
+        if (res.has_ctpe_candidates) {
+            // 1) Emit UNFOLDED -> temp .vel -> temp .velb (ensamblado).
+            ir::EmitResult e1 = ir::ir_emit_module(irmod, emit_opts);
+            if (e1.ok) {
+                std::error_code ec;
+                std::filesystem::create_directories(".cache/ctpe/tmp", ec);
+                std::string base =
+                    ".cache/ctpe/tmp/ctpe_" +
+                    std::to_string(std::hash<std::string>{}(e1.vel_text));
+                std::string tvel = base + ".vel";
+                {
+                    std::ofstream o(tvel, std::ios::binary);
+                    o << e1.vel_text;
+                }
+                // Ensamblar el .vel a un .velb con su seccion @ir (para que el
+                // runtime pueda compilar main en JIT y ejecutarlo).
+                int rc = asm_multi_process::run_worker(
+                    tvel, base, /*skip_preprocessor=*/true,
+                    /*keep_labels=*/false, &res.ir_section_bytes,
+                    /*emit_map=*/false);
+                if (rc == 0) {
+                    std::ifstream vf(base + ".velb", std::ios::binary);
+                    std::vector<uint8_t> velb(
+                        (std::istreambuf_iterator<char>(vf)),
+                        std::istreambuf_iterator<char>());
+                    if (!velb.empty()) {
+                        // 2) Cargar el runtime; el re-emit de abajo pliega.  El
+                        // handler de safepoint se activa AQUI (no en
+                        // try_invoke_ctpe) porque main se JIT-compila durante
+                        // load_macros_from_bytes -- antes de invocarlo.  Asi su
+                        // codigo lleva los polls del watchdog.  Reset tras el emit.
+                        jit::jit_set_ctpe_safepoint(jit::jit_safepoint_handler_addr());
+                        ctpe_rt = std::make_unique<vx::ComptimeRuntime>();
+                        if (ctpe_rt->load_macros_from_bytes(std::move(velb)))
+                            emit_opts.ctpe_runtime = ctpe_rt.get();
+                    }
+                }
+            }
+        }
     }
 
     ir::EmitResult eres = ir::ir_emit_module(irmod, emit_opts);
+    // Fin del modo CTPE: apagar los polls de safepoint para no afectar a los
+    // compiles del JIT en runtime ni a los @Macro del lenguaje.
+    jit::jit_set_ctpe_safepoint(0);
     if (!eres.ok) {
         // Volcar el error del emisor al sumidero unificado.
         SourceLoc loc;
@@ -1136,6 +1241,22 @@ CompileResult compile_vx_source(const std::string &source,
                               std::string("emisor IR fallo: ") + eres.error);
         res.ok = false;
         return res;
+    }
+
+    /* Ahora si: el asignador ya dijo donde vive cada valor, asi que el
+     * intermedio del artefacto puede llevarlo.  Es lo que permite decir, al
+     * explicar un fallo, que `%8` es el `r1` de la instruccion maquina. */
+    if (hay_seccion) {
+        for (auto &fn : mod_para_seccion.functions) {
+            auto it = eres.value_regs.find(fn.name);
+            if (it == eres.value_regs.end()) continue;
+            const size_t n = std::min(fn.values.size(), it->second.size());
+            for (size_t v = 0; v < n; ++v) fn.values[v].reg = it->second[v];
+        }
+        res.ir_section_bytes = ir::emit_ir_section(mod_para_seccion.functions);
+        /*  AOT: modulo completo (functions + static_data + globals) para
+         * que el driver -m aot materialice los literales en .rodata. */
+        res.ir_module_cache_bytes = ir::emit_ir_module_cache(mod_para_seccion);
     }
 
     res.vel_text = std::move(eres.vel_text);

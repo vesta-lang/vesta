@@ -1,0 +1,23 @@
+// Pinear un VALOR a rsp/rbp emite VXA008 como WARNING (ya no ERROR): esta
+// permitido bajo la responsabilidad del programador.  Algunos ABIs lo EXIGEN
+// -- Linux x86-32 pasa el 6o argumento de syscall en ebp.  El programa debe
+// COMPILAR y avisar con VXA008.
+//
+// El pin a rbp solo es seguro sin prologo/epilogo (que usarian rbp como puntero
+// de marco): por eso el helper es @Naked, igual que un stub de arranque o el
+// patron del `invoke` que se INLINA.  El cuerpo asm toma el control de la pila.
+//
+// @expect-warn: VXA008
+@Naked
+u64 get_val() {
+    register("rbp") u64 x = 5;   // pin a rbp -> VXA008 WARN (permitido)
+    asm volatile {
+        mov rax, 42              // valor de retorno independiente de rbp
+        ret                      // @Naked: el cuerpo retorna
+    };
+    return x;
+}
+
+u64 main() {
+    return get_val();
+}

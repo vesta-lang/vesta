@@ -1,0 +1,60 @@
+/**
+ * @file atomic.vx
+ * @brief Ejemplo/test de `atomic<T>` de la stdlib (atomic).
+ *
+ * Ejercita:
+ *   - los cuatro anchos enteros (i8..i64 / u8..u64) via i32 y u8,
+ *   - floats f32 y f64 (fetch_add sobre float baja a un bucle CAS de bits),
+ *   - `bool` (solo load/store/cas/swap: no tiene aritmetica ni bit-ops),
+ *   - la disponibilidad condicional por `where`: `fetch_or` existe para los
+ *     enteros (`where T: Integer`), `fetch_add` para los numericos
+ *     (`where T: Numeric`); en un `atomic<bool>` ninguno de los dos existe.
+ *
+ * main() devuelve 161 (0xA1): la suma de todas las comprobaciones.  Un cambio
+ * en el resultado delata una regresion en los atomicos width-aware o en el
+ * mecanismo `where`.
+ */
+namespace stdlib.atomic_demo;
+
+import std.atomic only atomic;
+
+i32 main() {
+    // --- Enteros: fetch_add (lock xadd) + bit-ops (where T: Integer). ---
+    atomic<i32> a;
+    a.store(100);
+    a.fetch_add(20);              // 120
+    a.fetch_or(7);               // 120 | 7 = 127
+    i32 ra = a.load();            // 127
+
+    // --- Ancho estrecho: u8 (la instruccion atomica es de 1 byte). ---
+    atomic<u8> b;
+    b.store(4);
+    b.fetch_add(2);              // 6
+    i32 rb = (i32) b.load();      // 6
+
+    // --- Float f32: fetch_add via bucle CAS sobre los BITS (where Numeric). ---
+    atomic<f32> c;
+    c.store(1.5);
+    c.fetch_add(0.5);            // 2.0
+    i32 rc = (i32) c.load();      // 2
+
+    // --- Float f64. ---
+    atomic<f64> d;
+    d.store(10.0);
+    d.fetch_add(2.5);            // 12.5
+    i32 rd = (i32) d.load();      // 12
+
+    // --- bool: solo load/store/cas/swap (sin fetch_add ni bit-ops). ---
+    atomic<bool> flag;
+    flag.store(true);
+    i32 rf = flag.load() ? 1 : 0; // 1
+
+    // --- CAS + swap sobre un entero. ---
+    atomic<i32> g;
+    g.store(5);
+    bool ok = g.compare_exchange(5, 9);    // true, g = 9
+    i32 old = g.swap(3);                     // old = 9, g = 3
+    i32 rg = (ok ? 1 : 0) + old + g.load();  // 1 + 9 + 3 = 13
+
+    return ra + rb + rc + rd + rf + rg;      // 127+6+2+12+1+13 = 161
+}

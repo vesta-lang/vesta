@@ -35,6 +35,7 @@
 #include "vx/diagnostic.h"
 #include "port/port_options.h"
 #include "analyze/fingerprint.h" // FunctionContracts
+#include "vxdbg/ids.h"           // huella del mapa de simbolos
 
 namespace vx {
 
@@ -46,6 +47,15 @@ struct CompileOptions {
     std::string module_name; ///< Nombre logico del modulo (por defecto "main").
     bool emit_debug =
         false;         ///< Emitir comentarios @line N en el .vel generado.
+    /// Carpeta donde volcar la base de conocimiento de depuracion (@c vxdbg).
+    /// Vacia = la de por defecto, dentro del cache del compilador.
+    ///
+    /// NO es opcional: se emite siempre.  Es informacion APARTE del ejecutable
+    /// -- no cambia ni un byte de lo que se genera -- y su valor esta en estar
+    /// ahi cuando algo falla, que es precisamente cuando nadie penso en
+    /// pedirla.  Un programa compilado "sin depuracion" es el que despues no
+    /// se puede explicar.
+    std::string vxdbg_dir;
     /// Solo-LSP: si true, las funciones @c comptime (no-macro) tambien se
     /// bajan a IR como funciones normales para poder inspeccionar su codegen
     /// (JIT/AOT/bytecode del hover).  En compilacion normal estas funciones se
@@ -222,6 +232,14 @@ struct CompileOptions {
  */
 struct CompileResult {
     bool ok = false;      ///< Exito global.
+    /// Huella del mapa que liga los simbolos del artefacto con las entidades
+    /// del grafo de depuracion.  Quien produzca el artefacto final la publica
+    /// bajo su identificador de construccion: es lo que permite, desde una
+    /// direccion de ejecucion, llegar a la declaracion que la origino.
+    vxdbg::ContentHash vxdbg_artifact_map;
+    /// Y la del mapa de TRAMOS de fuente, que va aparte porque cambia con
+    /// cualquier reformateo mientras que el de simbolos no.
+    vxdbg::ContentHash vxdbg_span_map;
     std::string vel_text; ///< Texto .vel generado a partir del IR.
     std::string
         ir_text; ///< dump del IrModule (solo si CompileOptions::dump_ir).
@@ -392,6 +410,10 @@ struct CompileResult {
      * structs/arrays (futuros) tambien se beneficien del path VM.
      */
     bool has_lowerable_macros = false;
+    /// true si el modulo tiene candidatos de precomputo CTPE (fn evaluable
+    /// zero-param con retorno escalar).  Informativo; el plegado ocurre dentro
+    /// del emisor cuando VESTA_CTPE esta activo.
+    bool has_ctpe_candidates = false;
 
     /**
      * @brief por cada @Macro que el lowering rechazo

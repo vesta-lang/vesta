@@ -35,6 +35,7 @@
 #include <cstring>
 #include <new> // placement-new (vrt_newobjs)
 #include <string>
+#include <csetjmp> // longjmp del watchdog CTPE
 
 /* FFI runtime (vrt_dlopen): API de carga dinamica del SO. */
 #if defined(_WIN32)
@@ -1102,6 +1103,22 @@ void vrt_safepoint_handler(vrt_proc *proc) {
     if (!proc) return;
     runtime::ProcessVM *p = as_proc(proc);
     p->safepoint_flag = 0;
+    /* Watchdog CTPE: si el presupuesto de tiempo vencio (el hilo temporizador
+     * puso proc->ctpe_abort=1), abortar la ejecucion del programa precomputado.
+     * El throw_fatal hace longjmp al scheduler -> el proceso muere ->
+     * invoke_simple_macro devuelve false -> el pase de plegado NO pliega
+     * (fallback: la funcion corre en runtime).  El flag vive en el ProcessVM
+     * (una instancia) -> sin el problema de globales duplicados cross-modulo. */
+    // Watchdog CTPE: si el presupuesto vencio, ABORTAR la ejecucion del programa
+    // precomputado via longjmp al setjmp que el scheduler armo alrededor del
+    // jit_entry_fn (mismo mecanismo que la recuperacion de SIGSEGV).  throw_fatal
+    // NO sirve aqui: solo marca err_thread y RETORNA -> el codigo JIT de main
+    // continuaria hasta terminar.  El longjmp desenrolla el frame JIT y devuelve
+    // el control al scheduler, que marca el proceso HALT sin ejecutar main.
+    if (p->ctpe_abort && p->av_recovery_active) {
+        p->ctpe_did_abort = 1;
+        std::longjmp(p->av_recovery_jmpbuf, 2); // 2 = aborto CTPE (1 = AV/div0)
+    }
     /* TODO D.2-integration:
      *   - Capturar RBP del caller (necesita assembly inline o
      *     llamada con __builtin_frame_address).
@@ -1628,6 +1645,24 @@ void vrt_panic_str(vrt_proc *proc, uint64_t msg_vaddr, uint32_t msg_len) {
         p->vm_mem.read_bytes(msg_vaddr, msg, msg_len);
     }
     msg[msg_len] = '\0';
+    /* De donde vino la llamada.  Un `panic` no lo avisa el sistema -- lo lanza
+     * el propio programa --, asi que aqui no hay ninguna direccion de fallo
+     * que capturar; pero este ayudante SI sabe quien le llamo, y esa es
+     * exactamente la instruccion que revento.  Sin esto, un panic en codigo
+     * compilado se contaba con el PC de la maquina virtual, que ahi no se va
+     * actualizando, y senalaba una sentencia cualquiera de mas arriba. */
+#if defined(__GNUC__) || defined(__clang__)
+    if (p->pending_fault_native_pc == 0) {
+        p->pending_fault_native_pc =
+            reinterpret_cast<uint64_t>(__builtin_return_address(0));
+        // Y por donde iba la pila nativa, para recorrer la cadena.
+        p->pending_fault_native_sp =
+            reinterpret_cast<uint64_t>(__builtin_frame_address(0));
+        // Es una direccion de RETORNO: apunta al byte de despues de la
+        // llamada, no a ella (ver pending_fault_native_is_return).
+        p->pending_fault_native_is_return = true;
+    }
+#endif
     /* throw_fatal(proc, FATAL_USER_ABORT, msg) -- nunca retorna.  El
      * handler del JIT (run_jit -> longjmp) propaga la excepcion al
      * frame de tryenter mas cercano o termina el proceso si no hay
@@ -1727,6 +1762,16 @@ VRT_FORCE_FP vrt_handle vrt_str_cat(vrt_proc *proc, vrt_handle a, vrt_handle b) 
     VRT_CAPTURE_JIT_FRAME(p);
     return static_cast<vrt_handle>(runtime::strcat_public(
         p, static_cast<gc::GcHandle>(a), static_cast<gc::GcHandle>(b)));
+}
+
+/* STRSLICE: vista de una subcadena.  Puede alocar (SLICE) -> captura frame. */
+VRT_FORCE_FP vrt_handle vrt_str_slice(vrt_proc *proc, vrt_handle src,
+                                      uint64_t range) {
+    if (!proc) return VRT_NULL_HANDLE;
+    runtime::ProcessVM *p = as_proc(proc);
+    VRT_CAPTURE_JIT_FRAME(p);
+    return static_cast<vrt_handle>(
+        runtime::strslice_public(p, static_cast<gc::GcHandle>(src), range));
 }
 
 /* STRCMP: comparacion lexicografica.  Returns -1, 0 o 1. */

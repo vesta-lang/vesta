@@ -4,9 +4,9 @@ i32 main() {
     string b = "hola";
     string c = a + b;
     string d = b + a;
-    if (str_length(a) == 0
-     && str_length(c) == 4
-     && str_length(d) == 4
-     && str_equals(c, d)) return 42;
+    if (a.length() == 0
+     && c.length() == 4
+     && d.length() == 4
+     && c.equals(d)) return 42;
     return 1;
 }

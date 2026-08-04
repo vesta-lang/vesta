@@ -1,1 +1,18 @@
 namespace std.syscall;
+
+// Punto de entrada UNICO a la capa de syscalls: quien la use escribe
+// `import std.syscall;` y recibe la superficie del sistema en el que se esta
+// compilando.  La seleccion por SO es responsabilidad de la libreria, no del
+// codigo que la consume: obligar a cada usuario a escribir sus propios
+// `@Target` sobre los imports reparte una decision de plataforma por todo el
+// arbol y deja de ser una libreria para ser un manual de instrucciones.
+//
+// Los nombres SI difieren entre plataformas (NtAllocateVirtualMemory frente a
+// mmap), porque son las APIs reales de cada sistema y no se inventa una capa
+// de compatibilidad por encima.  Lo que se unifica es de donde vienen.
+
+@Target("os:windows")
+public import std.syscall.windows;
+
+@Target("os:linux")
+public import std.syscall.linux;

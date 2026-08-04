@@ -132,6 +132,10 @@ AotOpClass aot_classify_op(IrOp op) noexcept {
     case IrOp::BITCAST:
     // -- seleccion sin salto (baja a cmov/csel en nativo) --
     case IrOp::SELECT:
+    // -- multiprecision: bajan a la suma/resta y el setcc de la maquina --
+    case IrOp::ADDC:
+    case IrOp::SUBB:
+    case IrOp::CARRYOF:
     // -- flujo de control / SSA --
     case IrOp::BR:
     case IrOp::BR_COND:
@@ -165,6 +169,7 @@ AotOpClass aot_classify_op(IrOp op) noexcept {
     // cualquier extern); en freestanding el usuario provee __vx_panic_null.
     case IrOp::UNWRAP:
     case IrOp::MEMCPY:
+    case IrOp::MEMSET:
     // -- ops vectoriales fusionadas (SIMD nativo / packed) --
     case IrOp::VEC_UNOP:
     case IrOp::VEC_BINOP:
@@ -175,12 +180,13 @@ AotOpClass aot_classify_op(IrOp op) noexcept {
     case IrOp::VEC_ACC_STORE:
     case IrOp::VEC_ACC_COMBINE:
     case IrOp::VEC_BINOP_S:
+    case IrOp::VEC_FMA_S:
     case IrOp::VEC_BCAST:
     // -- atomicos enteros (lock-prefixed nativos) --
-    case IrOp::ATOMIC_LD_I64:
-    case IrOp::ATOMIC_ST_I64:
-    case IrOp::ATOMIC_CAS_I64:
-    case IrOp::ATOMIC_ADD_I64:
+    case IrOp::ATOMIC_LD:
+    case IrOp::ATOMIC_ST:
+    case IrOp::ATOMIC_CAS:
+    case IrOp::ATOMIC_ADD:
     // -- ensamblador host incrustado ( AS) --
     case IrOp::INLINE_ASM:
     // -- asm opaco liftado: emite bytes nativos (ensamblados de su plantilla) --

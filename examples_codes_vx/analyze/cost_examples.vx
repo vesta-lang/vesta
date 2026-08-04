@@ -87,7 +87,7 @@ i64 anotada_mal(i64 n) {
     while (i < n) {
         i64 j = 0;
         while (j < n) {
-            acc = acc + 1;
+            acc++;
             j = j + 1;
         }
         i = i + 1;

@@ -41,6 +41,7 @@ bool is_address_operand(IrOp op, size_t idx) {
     case IrOp::STRGETBYTES:
     case IrOp::STRHASH: return idx == 0;
     case IrOp::MEMCPY: return idx == 0 || idx == 1; // dst, src (contenido)
+    case IrOp::MEMSET: return idx == 0;             // dst (contenido); val es escalar
     // Ops VECTORIALES: todos sus operandos-puntero son DIRECCIONES (leen/
     // escriben memoria, no capturan el puntero).
     case IrOp::VEC_UNOP:

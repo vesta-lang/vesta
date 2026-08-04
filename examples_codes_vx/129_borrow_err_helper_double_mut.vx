@@ -25,3 +25,4 @@ i32 main() {
 
     return read_borrow(m1);
 }
+// @expect-compile-fail

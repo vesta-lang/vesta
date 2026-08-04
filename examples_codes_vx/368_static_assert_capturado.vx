@@ -1,0 +1,33 @@
+/**
+ * @file 368_static_assert_capturado.vx
+ * @brief Una asercion incumplida se puede capturar en el propio comptime.
+ *
+ * `static_assert` corta la ejecucion en tiempo de compilacion con un `panic`, y
+ * un `panic` es capturable: quien quiera tratar el incumplimiento como un caso
+ * mas -- probar una via y recurrir a otra si no encaja -- puede envolverlo en un
+ * `try`.  Por eso el corte es un `panic` y no una parada seca, que no dejaria
+ * elegir.
+ *
+ * Sin el `try`, el fallo llega hasta el compilador y el programa se rechaza; con
+ * el, el programa es valido y el `catch` decide que devolver.
+ */
+
+/** @brief Comprueba el rango; incumplirlo aborta la ejecucion comptime. */
+comptime u64 comprueba(u64 n) {
+    static_assert(n < 10, "n se paso del rango admitido");
+    return n;
+}
+
+/** @brief Envuelve la comprobacion y se queda con un valor de reserva. */
+comptime u64 tolerante(u64 n) {
+    try {
+        return comprueba(n);
+    } catch (FatalError e) {
+        return 42;
+    }
+}
+
+i32 main() {
+    // 99 incumple la asercion; el `catch` la recoge y devuelve el de reserva.
+    return (i32) tolerante(99);
+}

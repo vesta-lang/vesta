@@ -11,6 +11,8 @@
  *        Ver vreg_pipeline.h y doc/REGALLOC.md.
  */
 
+#include <thread>
+#include <functional>
 #include "jit/vreg_pipeline.h"
 
 #include "ir/ssa_ir.h"
@@ -19,25 +21,330 @@
 #include "jit/codegen_target.h"
 #include "jit/interval.h"
 #include "jit/jit_registry.h"
-#include "jit/linear_scan.h"
+#include "codegen/regalloc.h"
 #include "jit/machine_ir.h"
 #include "jit/peephole.h"
 #include "jit/regalloc_rewrite.h"
 #include "jit/sched/machine_sched.h"
 #include "jit/ssa_coalesce.h"
 #include "jit/target_reginfo.h"
+#include "jit/jit_timing.h"                   // telemetria de tiempo de compilacion
 #include "jit/vreg_select.h"
 #include "jit/x86_64/x86_target.h"
 #include "jit/x86_encoder.h"
 
+#include "codegen/timeline_builder.h"         // build_allocation_result (RegAlloc->timeline)
+#include "codegen/rbank/allocate.h"           // rbank_allocate (allocator UNICO)
+#include "codegen/rbank/allocator_diagnostics.h" // AllocatorDiagnostics (3er nivel)
+#include "codegen/rbank/function_snapshot.h"  // query<RematFacts> (instrumento)
+#include "codegen/rbank/measure.h"            // instrumento de medicion (diagnostico)
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <vector>
 
 namespace jit {
 
 namespace {
+/**
+ * @brief Reserva VEC_ACC DEMAND-DRIVEN (Fase 2): ¿la funcion @p fn necesita
+ *        reservar XMM10-13?  True si usa CUALQUIER op vectorial (VEC_*): esas
+ *        pueden ocupar XMM10-13 (los 4 acumuladores de reduccion + el broadcast
+ *        en XMM13).  Las funciones PURAMENTE ESCALARES FP no tocan esos registros
+ *        -> el allocator puede asignarselos (14 lanes FP en vez de 10).  La MISMA
+ *        condicion decide la reserva Y el uso (el selector solo fija XMM13-idx si
+ *        hay ops VEC_*), asi que nadie pisa un acumulador vivo.
+ *        Gate VESTA_NO_WIDE_HOME=1 fuerza la reserva SIEMPRE (A/B = comportamiento
+ *        anterior: 10 lanes para toda funcion).
+ */
+bool fn_needs_vec_reserve(const ir::IrFunction &fn) {
+    static const bool gate_force = [] {
+        const char *e = std::getenv("VESTA_NO_WIDE_HOME");
+        return e && e[0] && e[0] != '0';
+    }();
+    if (gate_force) return true;
+    for (const auto &b : fn.blocks)
+        for (const auto &in : b.instrs)
+            switch (in.op) {
+            case ir::IrOp::VEC_UNOP:
+            case ir::IrOp::VEC_BINOP:
+            case ir::IrOp::VEC_FMA:
+            case ir::IrOp::VEC_BINOP_S:
+            case ir::IrOp::VEC_BCAST:
+            case ir::IrOp::VEC_ACC_ZERO:
+            case ir::IrOp::VEC_ACC_ADD:
+            case ir::IrOp::VEC_ACC_FMA:
+            case ir::IrOp::VEC_ACC_STORE:
+            case ir::IrOp::VEC_ACC_COMBINE:
+                return true;
+            default:
+                break;
+            }
+    return false;
+}
+
+// El SHADOW MODE (comparar rbank vs linear_scan en paralelo) fue el andamio que
+// valido el switch a rbank; cumplido su proposito, su infraestructura (ShadowStats/
+// ShadowReport/validate_coloring) vive en codegen/rbank/shadow.h para los TESTS.  En
+// produccion rbank es el allocator UNICO -- no hay con que comparar en el hot path.
+
+// --- INSTRUMENTO DE MEDICION (gated VESTA_REMAT_MEASURE=1; diagnostico, no cambia
+//     el codigo emitido).  Mide el POTENCIAL de dos mejoras para decidir cual paga
+//     primero: (a) spills recomputables (RematFacts) y (b) falsas interferencias del
+//     envolvente.  El numero decide el peldano real. ---
+codegen::rbank::RematMeasure    g_remat_agg;
+codegen::rbank::RematDetail     g_remat_detail;
+codegen::rbank::EnvelopeMeasure g_env_agg;
+codegen::rbank::PressureMeasure g_pressure_agg;
+codegen::rbank::SpillTrace      g_spill_trace_agg;
+codegen::rbank::AllocatorDiagnostics g_alloc_diag_agg;
+uint32_t                        g_measure_funcs = 0;
+std::mutex                      g_measure_mtx;
+
+bool measure_enabled() {
+    static const bool on = [] {
+        const char *e = std::getenv("VESTA_REMAT_MEASURE");
+        return e && e[0] && e[0] != '0';
+    }();
+    return on;
+}
+
+// Politica de spill de rbank.  DOS politicas, seleccionables (no escondidas):
+//   - Belady (DEFAULT): victima por next-use (MachineNextUseFacts) / coste.
+//   - Lifetime (A/B, VESTA_BELADY=0): victima por duracion restante / coste.
+// Medido (A/B): en el bench de presion SIMETRICO (16 acumuladores loop-carried) Belady
+// no baja spills porque todos los valores tienen next-use casi igual (poca info
+// temporal).  El cuello REAL es el GREEDY: derrama ~14 cuando el minimo teorico
+// (overflow_exact) es 6.  Belady queda DEFAULT (correcto por diff_harness; es la
+// eleccion de victima informada por el conocimiento), y la palanca pendiente para que
+// el allocator sea rentable es CERRAR ESE GAP del greedy (instrumentar con la
+// maquinaria de Facts por que derrama de mas, luego reconsiderar la politica).
+bool belady_enabled() {
+    static const bool on = [] {
+        const char *e = std::getenv("VESTA_BELADY");
+        return !e || e[0] != '0'; // default ON (Belady); VESTA_BELADY=0 -> Lifetime.
+    }();
+    return on;
+}
+
+// Recovery Pass (2a pasada) on/off para A/B.  Default ON; VESTA_RECOVERY=0 -> greedy
+// sin recuperacion (baseline con la asignacion incompleta).  Permite medir el
+// diagnostico (spills / candidate / wasted_area) con y sin la pasada, mismo binario.
+bool recovery_enabled() {
+    static const bool on = [] {
+        const char *e = std::getenv("VESTA_RECOVERY");
+        return !e || e[0] != '0';
+    }();
+    return on;
+}
+
+// Fragmentation Recovery (splitting, 3a pasada) on/off para A/B.  Devuelve a REGISTRO
+// POR TRAMOS los spills que no caben enteros en ninguna lane -- la clase `partially` de
+// la taxonomia (62,5% de los spills del corpus).  Cuando esta OFF el plan ni se calcula
+// y el codigo emitido es identico al de antes (coste cero).
+bool splitting_enabled() {
+    static const bool on = [] {
+        const char *e = std::getenv("VESTA_SPLITTING");
+        return e && e[0] && e[0] != '0'; // default OFF mientras se mide.
+    }();
+    return on;
+}
+
+void print_measure_summary() {
+    std::lock_guard<std::mutex> lk(g_measure_mtx);
+    if (g_measure_funcs == 0) return;
+    const codegen::rbank::RematMeasure &r = g_remat_agg;
+    const codegen::rbank::EnvelopeMeasure &e = g_env_agg;
+    const uint32_t kGpLanes = 14; // GP allocatable x86-64 (r0..r15 menos rsp/rbp).
+    const double pct_remat = r.spills_total
+        ? 100.0 * r.spills_rematerializable / r.spills_total : 0.0;
+    const double pct_false = e.pairs_envelope
+        ? 100.0 * e.false_interfere / e.pairs_envelope : 0.0;
+    std::fprintf(stderr,
+        "\n=== [measure] potencial de mejoras del asignador (%u funciones) ===\n"
+        "  (a) REMAT:     spills=%u  recomputables=%u (%.1f%%)  de los cuales HOJA"
+        " (CONST/dir, remat casi garantizado)=%u (%.1f%%)\n"
+        "      META spills: en_loop(HOT)=%u  frios=%u   |   recomputables en_loop=%u"
+        " frios=%u   |   CONST imm32(fusionable ARRIBA)=%u imm64=%u\n"
+        "  (b) ENVOLVENTE: interferencias env=%llu exactas=%llu falsas=%llu"
+        " (%.1f%% inventadas por el envolvente)\n"
+        "  (c) PRESION GP: pico env=%u exact=%u | overflow(%u lanes) env=%u"
+        " exact=%u | avoidable(envolvente)=%u  [exact = minimo teorico de spills]\n"
+        "  (d) VICTIMA (Belady): muerta(sin next-use)=%.1f%%  uso-lejano=%.1f%%"
+        "  de %llu spills  [si casi todo es muerta, Belady ~= duracion]\n"
+        "  (e) GREEDY: spills=%u vs minimo(overflow_exact)=%u | pico@%u vivos=%u"
+        " ocupadas=%u LIBRES=%u en-spill=%u -> idle_cap=%u | max_lanes_ociosas=%u"
+        " en %llu puntos | AREA_ociosa=%llu lane-pos  [idle_cap = cap. ociosa del pico]\n"
+        "  (f) TAXONOMIA spills: structural(inevitable)=%llu  fully(grafo)=%llu"
+        "  partially(Splitting)=%llu | RECUPERACION fully: Fully=%llu Recovered=%llu"
+        " Potential=%llu\n"
+        "  (g) SPLITTING techo: splitting_potential=%llu de wasted_lane_area=%llu"
+        " (%.1f%% del area recuperable por una Fragmentation Recovery ideal)\n"
+        "  (h) SPLITTING real: valores=%llu tramos=%llu usos=%llu | AREA Potential=%llu"
+        " Recovered=%llu (%.1f%%) Remaining=%llu | descartados forma=%llu coste=%llu\n"
+        "  (i) SPLITTING perfil: ACEPTADO len=%.1f usos=%.1f ganancia=%.1f | RECHAZADO"
+        " len=%.1f usos=%.1f ganancia=%.1f  [medias por tramo; guia el tuning del modelo]\n",
+        g_measure_funcs,
+        r.spills_total, r.spills_rematerializable, pct_remat, r.spills_remat_leaf,
+        r.spills_total ? 100.0 * r.spills_remat_leaf / r.spills_total : 0.0,
+        g_remat_detail.spills_in_loop, g_remat_detail.spills_cold,
+        g_remat_detail.remat_in_loop, g_remat_detail.remat_cold,
+        g_remat_detail.const_imm32, g_remat_detail.const_imm64,
+        (unsigned long long)e.pairs_envelope, (unsigned long long)e.pairs_exact,
+        (unsigned long long)e.false_interfere, pct_false,
+        g_pressure_agg.peak_env_gp, g_pressure_agg.peak_exact_gp, kGpLanes,
+        codegen::rbank::PressureMeasure::overflow(g_pressure_agg.peak_env_gp, kGpLanes),
+        codegen::rbank::PressureMeasure::overflow(g_pressure_agg.peak_exact_gp, kGpLanes),
+        g_pressure_agg.avoidable_gp(kGpLanes),
+        g_spill_trace_agg.spills_total
+            ? 100.0 * g_spill_trace_agg.victims_dead / g_spill_trace_agg.spills_total : 0.0,
+        g_spill_trace_agg.spills_total
+            ? 100.0 * g_spill_trace_agg.victims_alive / g_spill_trace_agg.spills_total : 0.0,
+        (unsigned long long)g_spill_trace_agg.spills_total,
+        g_alloc_diag_agg.spilled_total,
+        codegen::rbank::PressureMeasure::overflow(g_pressure_agg.peak_exact_gp, kGpLanes),
+        g_alloc_diag_agg.peak_position, g_alloc_diag_agg.live_values,
+        g_alloc_diag_agg.occupied_lanes, g_alloc_diag_agg.free_lanes,
+        g_alloc_diag_agg.spilled_in_peak, g_alloc_diag_agg.peak_idle_capacity,
+        g_alloc_diag_agg.max_wasted_lanes,
+        (unsigned long long)g_alloc_diag_agg.points_wasting,
+        (unsigned long long)g_alloc_diag_agg.wasted_lane_area,
+        (unsigned long long)g_spill_trace_agg.tax_structural,
+        (unsigned long long)g_spill_trace_agg.tax_fully,
+        (unsigned long long)g_spill_trace_agg.tax_partially,
+        (unsigned long long)g_spill_trace_agg.tax_fully,
+        (unsigned long long)g_spill_trace_agg.rec_greedy,
+        (unsigned long long)(g_spill_trace_agg.tax_fully >= g_spill_trace_agg.rec_greedy
+                                 ? g_spill_trace_agg.tax_fully - g_spill_trace_agg.rec_greedy
+                                 : 0),
+        (unsigned long long)g_spill_trace_agg.tax_splitting_potential,
+        (unsigned long long)g_alloc_diag_agg.wasted_lane_area,
+        g_alloc_diag_agg.wasted_lane_area
+            ? 100.0 * g_spill_trace_agg.tax_splitting_potential / g_alloc_diag_agg.wasted_lane_area
+            : 0.0,
+        // (h) Potential -> Recovered -> Remaining: la metodologia aplicada al splitting.
+        // Potential = techo medido ANTES (area libre de los partially); Recovered = lo
+        // que la transformacion consigue de verdad; Remaining = margen para el siguiente
+        // sprint (edge splitting, rangos exactos, pesos de frecuencia...).
+        (unsigned long long)g_spill_trace_agg.split_values,
+        (unsigned long long)g_spill_trace_agg.split_intervals,
+        (unsigned long long)g_spill_trace_agg.split_uses,
+        (unsigned long long)g_spill_trace_agg.tax_splitting_potential,
+        (unsigned long long)g_spill_trace_agg.split_area,
+        g_spill_trace_agg.tax_splitting_potential
+            ? 100.0 * g_spill_trace_agg.split_area / g_spill_trace_agg.tax_splitting_potential
+            : 0.0,
+        (unsigned long long)(g_spill_trace_agg.tax_splitting_potential >=
+                                     g_spill_trace_agg.split_area
+                                 ? g_spill_trace_agg.tax_splitting_potential -
+                                       g_spill_trace_agg.split_area
+                                 : 0),
+        (unsigned long long)g_spill_trace_agg.split_rej_shape,
+        (unsigned long long)g_spill_trace_agg.split_rej_cost,
+        // (i) Medias: sin ellas, tocar los parametros del cost model seria a ciegas --
+        // se sabria que el numero sube, no POR QUE.  Comparar "lo aceptado" con "lo
+        // rechazado por poco" es lo que permite afirmar donde esta el umbral.
+        g_spill_trace_agg.split_intervals
+            ? 1.0 * g_spill_trace_agg.split_area / g_spill_trace_agg.split_intervals : 0.0,
+        g_spill_trace_agg.split_intervals
+            ? 1.0 * g_spill_trace_agg.split_uses / g_spill_trace_agg.split_intervals : 0.0,
+        g_spill_trace_agg.split_intervals
+            ? 1.0 * g_spill_trace_agg.split_acc_gain / g_spill_trace_agg.split_intervals : 0.0,
+        g_spill_trace_agg.split_rej_cost
+            ? 1.0 * g_spill_trace_agg.split_rej_area / g_spill_trace_agg.split_rej_cost : 0.0,
+        g_spill_trace_agg.split_rej_cost
+            ? 1.0 * g_spill_trace_agg.split_rej_uses / g_spill_trace_agg.split_rej_cost : 0.0,
+        g_spill_trace_agg.split_rej_cost
+            ? 1.0 * g_spill_trace_agg.split_rej_gain / g_spill_trace_agg.split_rej_cost : 0.0);
+}
+
+/** @brief Corre el instrumento (gated) sobre una funcion tras la asignacion. */
+void run_measure(const ir::IrFunction &fn, const IntervalResult &ivs,
+                 const codegen::RegAlloc &ra) {
+    if (!measure_enabled()) return;
+    static std::once_flag atexit_once;
+    std::call_once(atexit_once, [] { std::atexit(print_measure_summary); });
+    codegen::rbank::FunctionSnapshot snap;
+    snap.fn = &fn;
+    const codegen::rbank::RematMeasure rm =
+        codegen::rbank::measure_remat(ra, snap.remat_facts());
+    const codegen::rbank::RematDetail rd =
+        codegen::rbank::measure_remat_detail(ra, snap.remat_facts(), snap.value_reqs());
+    const codegen::rbank::EnvelopeMeasure em = codegen::rbank::measure_envelope(ivs);
+    const codegen::rbank::PressureMeasure pm = codegen::rbank::measure_pressure(ivs);
+    const codegen::rbank::AllocatorDiagnostics ad =
+        codegen::rbank::compute_allocator_diagnostics(ivs, ra, 14u); // 14 = GP allocatable.
+    std::lock_guard<std::mutex> lk(g_measure_mtx);
+    g_remat_agg.add(rm);
+    g_remat_detail.add(rd);
+    g_env_agg.add(em);
+    g_pressure_agg.add(pm);
+    g_alloc_diag_agg.add(ad);
+    ++g_measure_funcs;
+}
+
+/** @brief Envuelve rbank_allocate con el Fact de next-use (Belady): computa
+ *         @c MachineNextUseFacts(mf) y lo cablea al allocator (salvo VESTA_BELADY=0),
+ *         y le pasa el @c SpillTrace de razon-de-victima solo cuando el instrumento
+ *         esta activo.  compute_next_use es barato (2 pasadas sobre mf). */
+codegen::RegAlloc rbank_allocate_belady(const IntervalResult &ivs, const MFunction &mf,
+                                    const TargetRegInfo &tri, bool vec,
+                                    codegen::AssignmentPlan *plan_out) {
+    jit::MachineNextUseFacts nu;
+    const jit::MachineNextUseFacts *nup = nullptr;
+    if (belady_enabled()) { nu = jit::compute_next_use(mf); nup = &nu; }
+    codegen::rbank::SpillTrace st;
+    codegen::rbank::SpillTrace *stp = measure_enabled() ? &st : nullptr;
+    const uint32_t nvregs = mf.vreg_count;
+    // El plan solo se calcula si el caller lo consume Y el splitting esta activo.
+    codegen::AssignmentPlan *pp = splitting_enabled() ? plan_out : nullptr;
+    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(ivs, nvregs, tri, vec, nup, stp,
+                                                      recovery_enabled(), pp);
+    if (stp) {
+        std::lock_guard<std::mutex> lk(g_measure_mtx);
+        g_spill_trace_agg.add(st);
+    }
+    // DEBUG Pilar 2: dump de la asignacion si VESTA_VREG_DUMP es substring del
+    // nombre de la funcion.  Muestra vregs totales, spills, y por vreg su Loc.
+    if (const char *want = std::getenv("VESTA_VREG_DUMP")) {
+        if (mf.name.find(want) != std::string::npos) {
+            uint32_t n_reg = 0, n_spill = 0, n_none = 0;
+            for (uint32_t v = 0; v < nvregs && v < ra.assign.size(); ++v) {
+                switch (ra.assign[v].loc) {
+                case codegen::RegAlloc::Loc::REG: n_reg++; break;
+                case codegen::RegAlloc::Loc::SPILL: n_spill++; break;
+                default: n_none++; break;
+                }
+            }
+            fprintf(stderr,
+                    "[vreg-dump] %s: vregs=%u reg=%u SPILL=%u none=%u slots=%u\n",
+                    mf.name.c_str(), nvregs, n_reg, n_spill, n_none,
+                    ra.num_spill_slots);
+            for (uint32_t v = 0; v < nvregs && v < ra.assign.size(); ++v)
+                if (ra.assign[v].loc == codegen::RegAlloc::Loc::SPILL)
+                    fprintf(stderr, "  [vreg-dump]   v%u -> SPILL slot %u\n", v,
+                            ra.assign[v].slot);
+            // ADDs con inmediato en el MachineIR PRE-rewrite (mf): localiza el
+            // `add d_at, 8` de la copia struct y si el rewrite lo elimina.
+            for (size_t b = 0; b < mf.blocks.size(); ++b)
+                for (const auto &in : mf.blocks[b].instrs)
+                    if (in.op == MOp::ADD &&
+                        (in.src2.kind == MOperandKind::IMM32 ||
+                         in.src1.kind == MOperandKind::IMM32)) {
+                        const MOperand &imm = in.src2.kind == MOperandKind::IMM32
+                                                  ? in.src2 : in.src1;
+                        fprintf(stderr,
+                                "  [vreg-dump]   ADD b%zu dst(k=%d v=%d) += %d\n",
+                                b, (int)in.dst.kind, in.dst.value, imm.value);
+                    }
+        }
+    }
+    return ra;
+}
+
+
 /**
  * @brief Scheduler machine-level (C2.15) sobre el MFunction fisico, tras el
  *        regalloc y antes de encodear.  Default ON; @c VESTA_SCHED=0 lo desactiva
@@ -118,15 +425,47 @@ void maybe_schedule(MFunction &pf, sched::EffIsa isa, sched::SchedMode mode) {
 uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
                       const CallResolver &resolve_call, const VregEntries &ent,
                       const CallResolver &resolve_native,
-                      const CallResolver &resolve_symbol) {
+                      const CallResolver &resolve_symbol,
+                      size_t *out_code_size,
+                      std::vector<LineMapEntry> *out_line_map) {
+    /* Watchdog CTPE: propagar el handler de safepoint de la CodeCache al
+     * thread_local que lee vreg_select.  Se hace AQUI (mismo hilo que
+     * vreg_select) porque el eager-compile de CTPE puede correr en un hilo
+     * distinto al que activo el modo; la CodeCache es el objeto compartido.
+     * Fuera de CTPE, cc.ctpe_safepoint_handler == 0 -> sin polls. */
+    vreg_set_ctpe_safepoint_handler(cc.ctpe_safepoint_handler);
+    /* Telemetria de compilacion (RAII: cuenta tambien los abandonos por fallback).
+     * El JIT compila DURANTE la ejecucion, asi que el reloj de pared mezcla compilar y
+     * ejecutar; separarlos es lo que permite saber si una optimizacion del codigo
+     * generado se esta comiendo su propia ganancia en tiempo de compilacion. */
+    ScopedJitTimer _jt(fn.name.c_str());
+    if (JitTiming::detail_enabled()) { // desglose por funcion: volcado al terminar.
+        static std::once_flag once;
+        std::call_once(once, [] { std::atexit([] { print_jit_timing(true); }); });
+    }
+
     /* 1. Seleccionar MachineIR de vregs (VM_ABI).  Si la funcion usa un
      *    op fuera del subset soportado, abortar -> fallback. */
     MFunction mf;
+    /* Se pide la correlacion codigo-nativo <-> linea del fuente solo cuando
+     * alguien la va a guardar.  Es lo que permite decir DONDE fallo un
+     * programa compilado: ahi el PC de la maquina virtual no se va
+     * actualizando -- ese es el punto de compilar --, de modo que sin esta
+     * tabla se llega a la funcion pero no a la linea. */
     if (!vreg_select(fn, mf, AbiKind::VM, resolve_call, ent, resolve_native,
-                     resolve_symbol))
+                     resolve_symbol, /*pic=*/true,
+#if defined(_WIN32)
+                     /*target_sysv=*/false,
+#else
+                     /*target_sysv=*/true,
+#endif
+                     /*mode32=*/false, FloatIsa::SSE2,
+                     /*emit_line_map=*/out_line_map != nullptr))
         return nullptr;
 
-    const TargetRegInfo &tri = target_x86_64_vm_abi();
+    /* Reserva VEC_ACC demand-driven: XMM10-13 asignables si la funcion NO usa
+     * el path vectorial (14 lanes FP escalares en vez de 10). */
+    const TargetRegInfo &tri = target_x86_64_vm_abi(fn_needs_vec_reserve(fn));
 
     /* 2. Intervalos + P1 coalescing + 3. asignacion (commit 6: el linear_scan
      *    FUERZA a slot los GC roots vivos a traves de un call).
@@ -135,7 +474,16 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
      *    reconstruye los intervalos sobre la forma coalescida. */
     IntervalResult ivs = build_intervals(mf, tri);
     if (apply_ssa_coalesce(mf, fn)) ivs = build_intervals(mf, tri);
-    RegAlloc ra = linear_scan(ivs, tri);
+
+    /* Allocator UNICO: rbank (linear_scan jubilado).  El verificador adversarial de
+     * GC roots de abajo + diff_harness (0 bugs) + e2e (724/0) son su oraculo. */
+    codegen::AssignmentPlan plan; // Fragmentation Recovery (vacio si el splitting esta OFF).
+    codegen::RegAlloc ra = rbank_allocate_belady(ivs, mf, tri,
+                                             fn_needs_vec_reserve(fn), &plan);
+
+    /* Instrumento de medicion (gated VESTA_REMAT_MEASURE; diagnostico, no cambia
+     * el codigo): potencial de remat + falsas interferencias del envolvente. */
+    run_measure(fn, ivs, ra);
 
     /* 3b. Verificador adversarial (commit 6): TODO GC root vivo a traves
      *     de un call DEBE estar en un slot, para que su stackmap lo
@@ -163,7 +511,7 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
     }
 
     /* 4. Rewrite a fisico (VM_ABI) + stackmaps de GC roots en cada CALL. */
-    MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM, &ivs);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, &ivs, plan), tri, AbiKind::VM, &ivs);
 
     /* 4b. P1 peephole: borrar los self-moves (`mov rX, rX`) que el coalescing
      *     dejo al asignar el mismo fisico a los dos extremos de una copia. */
@@ -175,9 +523,20 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
     std::vector<uint8_t> bytes;
     if (enc.encode(pf, bytes) == 0 || bytes.empty()) return nullptr;
 
+    /* La correlacion codigo-nativo <-> linea que el codificador acaba de
+     * construir.  Es lo unico que permite decir en que linea estaba un
+     * programa compilado al fallar. */
+    if (out_line_map) *out_line_map = std::move(pf.line_map);
+
     /* 4. Alojar en el code cache + commit (flush icache). */
+    _jt.set_code_bytes(static_cast<uint32_t>(bytes.size())); // telemetria.
     uint8_t *code = cc.alloc(bytes.size(), 16);
     if (!code) return nullptr;
+    /* Cuanto ocupa.  Quien registra la funcion lo necesita para poder decir,
+     * ante un fallo en codigo nativo, si una direccion cae DENTRO de ella;
+     * sin el tamano solo se puede adivinar por proximidad y se acaba
+     * senalando la funcion equivocada. */
+    if (out_code_size) *out_code_size = bytes.size();
     std::memcpy(code, bytes.data(), bytes.size());
     /* Jump table densa (SWITCH_DENSE): parchear cada entrada de 8 bytes con la
      * direccion nativa absoluta del brazo (base + label_offset).  POST-memcpy
@@ -244,7 +603,9 @@ uint8_t *vreg_compile_callback(const ir::IrFunction &fn, CodeCache &cc,
 
     IntervalResult ivs = build_intervals(mf, tri);
     if (apply_ssa_coalesce(mf, fn)) ivs = build_intervals(mf, tri);
-    RegAlloc ra = linear_scan(ivs, tri);
+    codegen::AssignmentPlan plan; // Fragmentation Recovery (vacio si el splitting esta OFF).
+    codegen::RegAlloc ra = rbank_allocate_belady(ivs, mf, tri,
+                                             fn_needs_vec_reserve(fn), &plan); // allocator UNICO.
 
     /* Verificador adversarial de GC roots (igual que vreg_compile). */
     if (!ivs.call_positions.empty()) {
@@ -257,7 +618,7 @@ uint8_t *vreg_compile_callback(const ir::IrFunction &fn, CodeCache &cc,
         }
     }
 
-    MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM, &ivs);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, &ivs, plan), tri, AbiKind::VM, &ivs);
     peephole_physical(pf);
     maybe_schedule(pf, sched::EffIsa::X86, sched::SchedMode::JIT_AUTO);
 
@@ -310,6 +671,19 @@ std::vector<uint8_t> vreg_compile_native_target(
     if (asm_labels_out) asm_labels_out->clear();
     if (stackmaps_out) stackmaps_out->clear();
 
+    /* El codigo NATIVO no lleva NUNCA polls de safepoint del watchdog CTPE.
+     *
+     * Ese poll llama al handler del watchdog, cuya direccion solo es valida
+     * DENTRO del proceso del compilador: en el binario emitido es una llamada a
+     * memoria muerta -> access violation al primer back-edge.  El gate vive en
+     * un thread_local que solo escribe @c vreg_compile (camino JIT), asi que
+     * tras un precomputo CTPE quedaba RANCIO -- @c jit_set_ctpe_safepoint(0)
+     * limpia el campo de la CodeCache, pero nada re-propagaba el 0 al
+     * thread_local -- y la emision nativa posterior en ese mismo hilo heredaba
+     * el handler.  Se pone a 0 aqui: la distincion correcta no es "¿hay CTPE en
+     * esta compilacion?" sino "¿este codigo se ejecuta AQUI o se ENVIA?". */
+    vreg_set_ctpe_safepoint_handler(0);
+
     /* 1. SELECCION: IR (SSA) -> MachineIR de vregs (ABI HOST_LEAF). */
     MFunction mf;
     if (!target.select(fn, mf)) return {};
@@ -319,7 +693,12 @@ std::vector<uint8_t> vreg_compile_native_target(
      *    target: toman el TargetRegInfo). */
     IntervalResult ivs = build_intervals(mf, tri);
     if (apply_ssa_coalesce(mf, fn)) ivs = build_intervals(mf, tri);
-    RegAlloc ra = linear_scan(ivs, tri);
+    /* El path AOT baja por @c CodegenTarget::rewrite, que aun consume la @c RegAlloc
+     * plana (no el @c AllocationResult) -> no puede materializar un plan.  Se le pasa
+     * nullptr explicitamente: no es que no haya splitting, es que este path todavia no
+     * sabe consumirlo. */
+    codegen::RegAlloc ra = rbank_allocate_belady(ivs, mf, tri,
+                                             fn_needs_vec_reserve(fn), nullptr);
 
     /* 4. REWRITE a fisico (prologo/epilogo + spills de la ABI del target). */
     MFunction pf = target.rewrite(mf, ra, ivs);
@@ -354,6 +733,7 @@ std::vector<uint8_t> vreg_compile_native_target(
                 nr.kind = NativeReloc::Kind::DATA_REL32;
                 break;
             case MRelocKind::ABS64: nr.kind = NativeReloc::Kind::ABS64; break;
+            case MRelocKind::ABS32: nr.kind = NativeReloc::Kind::ABS32; break;
             case MRelocKind::TPOFF32:
                 nr.kind = NativeReloc::Kind::TPOFF32;
                 break;
@@ -396,9 +776,11 @@ vreg_compile_native(const ir::IrFunction &fn, const CallResolver &resolve_call,
                     std::vector<std::pair<uint32_t, std::string>>
                         *asm_labels_out,
                     std::vector<Stackmap> *stackmaps_out) {
-    /* Ruta AOT x86: construye el X86Target y delega en el orquestador comun. */
+    /* Ruta AOT x86: construye el X86Target y delega en el orquestador comun.
+     * Reserva VEC_ACC demand-driven (misma politica que el JIT). */
     const X86Target target(resolve_call, ent, resolve_native, resolve_symbol,
-                           pic, target_sysv, mode32, fisa, emit_line_map);
+                           pic, target_sysv, mode32, fisa, emit_line_map,
+                           fn_needs_vec_reserve(fn));
     return vreg_compile_native_target(fn, target, relocs_out, line_map_out,
                                       asm_labels_out, stackmaps_out);
 }
@@ -420,7 +802,9 @@ uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,
         return nullptr;
     const TargetRegInfo &tri = target_x86_64_vm_abi();
     IntervalResult ivs = build_intervals(mf, tri);
-    RegAlloc ra = linear_scan(ivs, tri);
+    codegen::AssignmentPlan plan; // Fragmentation Recovery (vacio si el splitting esta OFF).
+    codegen::RegAlloc ra = rbank_allocate_belady(ivs, mf, tri,
+                                             fn_needs_vec_reserve(fn), &plan); // allocator UNICO.
     if (!ivs.call_positions.empty()) {
         for (uint32_t vv = 0; vv < mf.vreg_count; ++vv) {
             const LiveInterval &lv = ivs.intervals[vv];
@@ -437,7 +821,7 @@ uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,
     osr.mode = OsrEmit::C2_ENTRY;
     osr.header_block = static_cast<MBlockId>(header_block);
     osr.required_captures = required_captures; // red de seguridad live-in
-    MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM, &ivs, &osr);
+    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, &ivs, plan), tri, AbiKind::VM, &ivs, &osr);
     maybe_schedule(pf, sched::EffIsa::X86, sched::SchedMode::JIT_AUTO);
     if (!osr.osr_entry_valid) return nullptr; // no se pudo emitir el entry
 

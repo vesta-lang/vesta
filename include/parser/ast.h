@@ -116,6 +116,9 @@ struct Instruction : ASTNode {
     // por el linker para construir la seccion DebugLineEntry[] del
     // .velb que el debugger usa para resolver `b file.vx:42`.
     int source_line = 0;
+    /// Columna del fuente, o 0 si no consta.  Con la linea sola no se puede
+    /// senalar cual de las cosas que caben en ella fallo.
+    int source_column = 0;
 
     // Stackmap PRECISO ( E.1) para esta instruccion de safepoint,
     // capturado del marcador `// @sm <hex>` previo en el .vel.  Vacio =
@@ -225,6 +228,25 @@ struct LabelExpr : ExprNode {
 
     void print(int indent) const override {
         std::cout << std::string(indent, ' ') << "LABEL_EXPR: " << name
+                  << std::endl;
+    }
+};
+
+/**
+ * @struct AbsRefExpr
+ * @brief Referencia absoluta a un simbolo (`@Absolute("code.<sym>")`) usada como
+ * VALOR de una directiva de datos (`dq @Absolute("code.Tipo__m")`).  A diferencia
+ * de @c LabelExpr (que @c eval_expr resuelve al offset local sin reloc), esta
+ * registra una relocacion @c Absolute64 que el linker rebasa a la direccion VM
+ * final del simbolo.  La usa la vtable de los structs @Virtual (reloc datos->codigo).
+ */
+struct AbsRefExpr : ExprNode {
+    std::string symbol; ///< nombre completo del simbolo, p.ej. "code.Tipo__m".
+
+    explicit AbsRefExpr(std::string s) : symbol(std::move(s)) {}
+
+    void print(int indent) const override {
+        std::cout << std::string(indent, ' ') << "ABSREF_EXPR: " << symbol
                   << std::endl;
     }
 };

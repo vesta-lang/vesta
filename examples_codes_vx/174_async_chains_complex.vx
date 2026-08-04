@@ -105,7 +105,7 @@ i32 main() {
 
     i32 acc = 0;
     if (total == 780) { acc = acc + (i32)total; }   // +780
-    if (ok)           { acc = acc + 1; }             // +1
+    if (ok)           { acc++; }             // +1
     acc = acc + deco;                                  // -739
     return acc;  // 780 + 1 - 739 = 42
 }

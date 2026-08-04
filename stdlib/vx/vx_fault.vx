@@ -1,0 +1,552 @@
+/**
+ * @file vx_fault.vx
+ * @brief El binario nativo se explica solo cuando el procesador lo detiene.
+ *
+ * Un ejecutable AOT moria con el codigo del sistema y sin decir nada: quien lo
+ * ejecutaba veia un `0xC0000094` y ya.  Esto deja instalado un manejador que,
+ * al ocurrir un fallo, dice QUE paso -- con su codigo del catalogo del
+ * lenguaje --, DONDE, y termina con el codigo de salida POSIX correspondiente
+ * (128 + senal), que es lo que espera cualquier guion que compruebe como murio
+ * un programa.
+ *
+ * Auto-bundle: el driver `-m aot` lo fusiona SOLO cuando se pide info de
+ * depuracion del LENGUAJE de nivel 2 o mas (`--debug-info=x.2`).  Por debajo,
+ * el ejecutable no lleva ni un byte de esto: los datos de depuracion (nivel 1)
+ * van en una seccion que no cambia el codigo, y meter CODIGO si lo cambia -- lo
+ * que veria un depurador ajeno o un desensamblador ya no seria lo que se
+ * compilo --, asi que se pide a proposito o no se pide.
+ *
+ * La correlacion codigo <-> fuente se lee de la seccion `.vxdbg` EMBEBIDA: nada
+ * de abrir ficheros ni descubrir la ruta propia con el proceso ya roto.
+ */
+
+import std.types only uintptr, nullptr;
+
+// --- FFI del SO.  Solo kernel32; ni msvcrt ni CRT (igual que vx_io). --------
+// Lo que la API espera como PUNTERO o ASA se declara `uintptr` -- ancho de
+// puntero, portable -- y no `u64`.
+extern "kernel32.dll" {
+    fn AddVectoredExceptionHandler(u32 first, cfn(uintptr) -> i32) -> uintptr;
+    fn ExitProcess(u32 code) -> void;
+}
+
+// =========================================================================
+//  Lo que entrega el sistema
+// =========================================================================
+// Cero aritmetica de punteros a mano: un overlay ES el puntero y cada campo
+// dice su desplazamiento.  Los huecos son relleno implicito: solo se declara lo
+// que se mira.
+
+/// EXCEPTION_POINTERS: lo que recibe el manejador de Windows.
+@overlay struct ExcPointers {
+    uintptr record  @0x00;   // -> EXCEPTION_RECORD
+    uintptr context @0x08;   // -> CONTEXT
+}
+
+/// EXCEPTION_RECORD: de el interesan el codigo y donde revento.
+@overlay struct ExcRecord {
+    u32 code    @0x00;   // EXCEPTION_* del SO
+    uintptr address @0x10;   // instruccion que fallo
+}
+
+/// CONTEXT de x86-64: solo se mira el puntero de pila, para la cadena.
+@overlay struct CtxX64 {
+    uintptr rsp @0x98;
+}
+
+/// `struct sigaction` del NUCLEO (no la de libc, que lleva otro orden).
+@overlay struct KSigAction {
+    uintptr handler  @0x00;
+    u64 flags    @0x08;
+    uintptr restorer @0x10;
+    u64 mask     @0x18;
+}
+
+/// `ucontext_t` de x86-64: los registros generales empiezan en el
+/// desplazamiento 40, y ahi RSP ocupa la posicion 15 y RIP la 16.
+@overlay struct UCtxX64 {
+    uintptr rsp @0xA0;   // 40 + 15*8
+    uintptr rip @0xA8;   // 40 + 16*8
+}
+
+/// Codigos de excepcion de Windows que sabemos contar.
+enum Exc : u32 {
+    DIVISION_CERO = 0xC0000094,
+    DESBORDE_ARIT = 0xC0000095,
+    ACCESO_INVALIDO = 0xC0000005,
+    PILA_DESBORDADA = 0xC00000FD,
+    INSTRUCCION_MALA = 0xC000001D
+}
+
+/// Numeros de senal de Linux que sabemos contar.
+enum Senal : i32 {
+    ILL = 4,
+    ABRT = 6,
+    BUS = 7,
+    FPE = 8,
+    SEGV = 11
+}
+
+/// Codigo de salida POSIX: 128 + la senal equivalente.  Es lo que espera
+/// cualquier guion que compruebe como murio un programa.
+enum Salida : u32 {
+    ILL = 132,
+    FPE = 136,
+    SEGV = 139
+}
+
+/// Lo que el manejador de Windows devuelve para no tratar una excepcion.
+const i32 SEGUIR_BUSCANDO = 0;
+
+// =========================================================================
+//  La seccion .vxdbg, tal y como la escribe el driver AOT
+// =========================================================================
+// Tambien con overlays: es un formato binario propio con desplazamientos fijos,
+// que es justo para lo que sirven.  Leerlo a base de sumar numeros sueltos lo
+// deja indescifrable y hace que cualquier cambio del formato haya que
+// perseguirlo por todo el fichero.
+
+const u32 DBG_MAGIC = 0x42445856;    // 'VXDB'
+const u32 DBG_VERSION = 5;
+/// Un campo de indice vacio: no hay entrada en la tabla de textos.
+const u32 SIN_INDICE = 0xFFFFFFFF;
+
+/// Cabecera.  La ruta del fuente va justo detras, rellena a multiplo de 4.
+@overlay struct DbgCabecera {
+    u32 magic     @0x00;
+    u32 version   @0x04;
+    u32 n_fn      @0x08;
+    u32 off_tabla @0x0C;   // desplazamiento de la tabla de textos
+    u32 ruta_len  @0x10;
+}
+const uintptr DBG_RUTA = 20;   // donde empieza la ruta, tras la cabecera
+
+/// Una funcion.  Su nombre va detras, relleno a multiplo de 4, y tras el sus
+/// puntos.
+@overlay struct DbgFuncion {
+    u32 off     @0x00;   // desplazamiento en la seccion de codigo
+    u32 tam     @0x04;
+    u32 n_pts   @0x08;
+    u32 nom_len @0x0C;
+}
+const uintptr DBG_FN_NOMBRE = 16;   // donde empieza el nombre, dentro de la entrada
+
+/// Un punto: donde cambia el sitio del fuente dentro de una funcion.
+@overlay struct DbgPunto {
+    u32 off   @0x00;   // desplazamiento dentro de la funcion
+    u32 linea @0x04;
+    u32 col   @0x08;
+    u32 tramo @0x0C;   // cuanto ocupa la expresion (hoy no se usa aqui)
+    u32 venia @0x10;   // texto: funcion de la que vino al inlinar
+    u32 ir    @0x14;   // texto: la instruccion del intermedio
+}
+const uintptr DBG_PUNTO_TAM = 24;
+
+/// Una entrada de la tabla de textos: longitud y detras los bytes.
+@overlay struct DbgTexto {
+    u32 len @0x00;
+}
+
+// =========================================================================
+//  Estado del manejador
+// =========================================================================
+
+/// Un manejador de fallo NO puede reentrar: si algo de lo que hace el propio
+/// manejador falla, el sistema lo vuelve a llamar y se entra en un bucle que
+/// solo acaba desbordando la pila -- miles de lineas en vez de una.  Con la
+/// guarda, el segundo fallo se deja pasar y el proceso muere como habria
+/// muerto sin nosotros.
+i64 __vxf_dentro = 0;
+
+/// Un tramo de texto dentro del ejecutable: donde empieza y cuanto ocupa.
+///
+/// No es un `string` del lenguaje porque construirlo alocaria, y en un
+/// manejador de fallo no se puede confiar en el asignador: puede ser justo lo
+/// que revento.
+struct Tramo {
+    char* dir;
+    u32 len;
+}
+
+/// Lo que se sabe del punto donde ocurrio algo.
+struct Hallazgo {
+    i32 ok;         ///< 0 = no se pudo averiguar
+    Tramo funcion;  ///< nombre de la funcion fisica
+    Tramo venia;    ///< de que funcion vino al inlinar (len 0 = de esta misma)
+    Tramo ir;       ///< la instruccion del intermedio (len 0 = no consta)
+    Tramo fichero;
+    u32 linea;
+    u32 col;
+}
+
+// =========================================================================
+//  Lectura de la seccion
+// =========================================================================
+
+/// Redondea al alza a multiplo de 4.  Los campos de la seccion se rellenan para
+/// que las lecturas de 4 bytes queden alineadas: x86 toleraria leerlas sin
+/// alinear, pero otras arquitecturas no.
+uintptr __vxf_alinea4(uintptr v) {
+    return (v + 3) & ~3;
+}
+
+/// Localiza la entrada @p idx de la tabla de textos.  Nombres e instrucciones
+/// comparten tabla: la misma cadena aparece en muchos tramos y repetirla
+/// engordaria la seccion sin decir nada nuevo.
+Tramo __vxf_texto(uintptr tabla, u32 idx) {
+    uintptr e = tabla + 4;   // tras la cuenta de entradas
+    for (u32 k = 0; k < idx; k++) {
+        DbgTexto t = DbgTexto((u8*) e);
+        e = __vxf_alinea4(e + 4 + t.len);
+    }
+    DbgTexto cab = DbgTexto((u8*) e);
+    Tramo t;
+    t.dir = (char*) (e + 4);
+    t.len = cab.len;
+    return t;
+}
+
+/// Escribe un numero en decimal.
+///
+/// Se saca digito a digito y no con `${v}` porque la interpolacion de enteros
+/// tira del plugin nativo de I/O, y este binario no lo tiene: su runtime de
+/// salida es el propio (vx_io), que solo aporta las primitivas.  Recursiva
+/// porque los digitos salen del reves y asi se emiten en orden sin invertir
+/// nada.
+void __vxf_num(u64 v) {
+    if (v >= 10) {
+        __vxf_num(v / 10);
+    }
+    char* digitos = "0123456789";
+    print("${digitos[v % 10]}");
+}
+
+/// Escribe un tramo de bytes de la seccion, caracter a caracter con el `print`
+/// de siempre.
+void __vxf_escribe(Tramo t) {
+    for (u32 i = 0; i < t.len; i++) {
+        print("${t.dir[i]}");
+    }
+}
+
+/// Busca a que funcion, fichero y linea corresponde un desplazamiento dentro de
+/// la seccion de codigo.
+Hallazgo __vxf_buscar(uintptr off) {
+    Hallazgo h;
+    h.ok = 0;
+
+    uintptr base = (uintptr) section_start(".vxdbg");
+    uintptr fin = (uintptr) section_end(".vxdbg");
+    if (base == 0 || fin <= base + DBG_RUTA) {
+        return h;
+    }
+    DbgCabecera cab = DbgCabecera((u8*) base);
+    if (cab.magic != DBG_MAGIC) {
+        return h;   // no es nuestra seccion
+    }
+    if (cab.version != DBG_VERSION) {
+        return h;   // formato que no se sabe leer: mejor callarse
+    }
+    h.fichero.dir = (char*) (base + DBG_RUTA);
+    h.fichero.len = cab.ruta_len;
+    uintptr tabla = base + cab.off_tabla;
+
+    uintptr c = base + __vxf_alinea4(DBG_RUTA + cab.ruta_len);
+    for (u32 k = 0; k < cab.n_fn; k++) {
+        DbgFuncion ent = DbgFuncion((u8*) c);
+        uintptr nombre = c + DBG_FN_NOMBRE;
+        uintptr puntos = __vxf_alinea4(nombre + ent.nom_len);
+
+        if (off < ent.off || off >= ent.off + ent.tam) {
+            c = puntos + ent.n_pts * DBG_PUNTO_TAM;   // a la siguiente
+            continue;
+        }
+
+        // Dentro de esta funcion vale el ULTIMO punto en o antes del fallo:
+        // entre dos puntos sigue rigiendo el primero.
+        uintptr rel = off - ent.off;
+        u32 linea = 0;
+        u32 col = 0;
+        u32 venia = SIN_INDICE;
+        u32 ir = SIN_INDICE;
+        for (u32 i = 0; i < ent.n_pts; i++) {
+            DbgPunto pt = DbgPunto((u8*) (puntos + i * DBG_PUNTO_TAM));
+            if (pt.off > rel) {
+                break;
+            }
+            linea = pt.linea;
+            col = pt.col;
+            venia = pt.venia;
+            ir = pt.ir;
+        }
+        if (linea == 0) {
+            return h;   // el prologo no viene de ninguna linea escrita
+        }
+
+        h.funcion.dir = (char*) nombre;
+        h.funcion.len = ent.nom_len;
+        h.linea = linea;
+        h.col = col;
+        h.venia.dir = nullptr;
+        h.venia.len = 0;
+        h.ir.dir = nullptr;
+        h.ir.len = 0;
+        if (venia != SIN_INDICE) {
+            h.venia = __vxf_texto(tabla, venia);
+        }
+        if (ir != SIN_INDICE) {
+            h.ir = __vxf_texto(tabla, ir);
+        }
+        h.ok = 1;
+        return h;
+    }
+    return h;
+}
+
+// =========================================================================
+//  Informe
+// =========================================================================
+
+/// Escribe el nombre de la funcion, diciendo -- si toca -- dentro de cual acabo
+/// al inlinar.  Nombrar solo la funcion fisica manda a mirar una que no tiene
+/// que ver con el codigo que fallo.
+void __vxf_nombre(Hallazgo h) {
+    if (h.venia.len > 0) {
+        __vxf_escribe(h.venia);
+        print(" [aplanado en ");
+        __vxf_escribe(h.funcion);
+        print("]");
+    } else {
+        __vxf_escribe(h.funcion);
+    }
+}
+
+/// Escribe " (fichero:linea)".
+void __vxf_sitio(Hallazgo h) {
+    print(" (");
+    __vxf_escribe(h.fichero);
+    print(":");
+    __vxf_num(h.linea);
+    print(")");
+}
+
+/// Cuenta donde ocurrio el fallo.
+void __vxf_donde(uintptr addr) {
+    uintptr texto = (uintptr) section_start(".text");
+    if (texto == 0 || addr < texto) {
+        return;
+    }
+    Hallazgo h = __vxf_buscar(addr - texto);
+    if (h.ok == 0) {
+        return;
+    }
+    print("  en ");
+    __vxf_nombre(h);
+    __vxf_sitio(h);
+    if (h.col > 0) {
+        print(", columna ");
+        __vxf_num(h.col);
+    }
+    println("");
+    // Y la instruccion del intermedio que lo produjo: entre el fuente y lo que
+    // de verdad se ejecuto hay un paso que a veces es el que lo explica.
+    if (h.ir.len > 0) {
+        print("      intermedio: ");
+        __vxf_escribe(h.ir);
+        println("");
+    }
+}
+
+/// Cuantos marcos como mucho, y hasta donde mirar en la pila.  Recorrerla
+/// entera desde un manejador de fallo es pedir otro fallo, y lo que interesa
+/// esta cerca.
+const u32 CADENA_MAX_MARCOS = 16;
+const uintptr CADENA_MAX_BYTES = 2048;
+
+/// La cadena de llamadas: se recorre la pila NATIVA quedandose con los valores
+/// que caen dentro del codigo de alguna funcion conocida -- una direccion de
+/// retorno es exactamente eso.
+///
+/// Es una lectura conservadora, la misma que hace el interprete con su pila:
+/// puede colar algun marco de mas (restos de marcos ya muertos), nunca uno
+/// falso, porque se exige que la direccion caiga DENTRO de una funcion.
+void __vxf_cadena(uintptr sp) {
+    uintptr texto = (uintptr) section_start(".text");
+    uintptr fin_texto = (uintptr) section_end(".text");
+    if (sp == 0 || texto == 0) {
+        return;
+    }
+    char* previo = nullptr;
+    u32 vistos = 0;
+    uintptr tope = sp + CADENA_MAX_BYTES;
+    for (uintptr a = sp; a < tope && vistos < CADENA_MAX_MARCOS; a += 8) {
+        uintptr* ranura = (uintptr*) a;
+        uintptr v = ranura[0];
+        if (v < texto || v >= fin_texto) {
+            continue;
+        }
+        Hallazgo h = __vxf_buscar(v - texto);
+        if (h.ok == 0 || h.funcion.dir == previo) {
+            continue;   // la misma funcion seguida es el mismo marco
+        }
+        previo = h.funcion.dir;
+        vistos++;
+        print("  llamada desde ");
+        __vxf_nombre(h);
+        __vxf_sitio(h);
+        println("");
+    }
+}
+
+// =========================================================================
+//  Windows
+// =========================================================================
+
+/// Devuelve SEGUIR_BUSCANDO en lo que no es nuestro: tragarse un fallo ajeno
+/// para contarlo como propio es peor que no decir nada.
+@Target("os:windows")
+i32 __vx_fault_handler(uintptr info) {
+    if (info == 0 || __vxf_dentro != 0) {
+        return SEGUIR_BUSCANDO;
+    }
+    __vxf_dentro = 1;
+    ExcPointers p = ExcPointers((u8*) info);
+    if (p.record == 0) {
+        return SEGUIR_BUSCANDO;
+    }
+    ExcRecord r = ExcRecord((u8*) p.record);
+
+    u32 salida = 0;
+    if (r.code == Exc.DIVISION_CERO) {
+        println("error fatal: division entre cero [VX7002]");
+        salida = Salida.FPE;
+    } else if (r.code == Exc.DESBORDE_ARIT) {
+        println("error fatal: desbordamiento aritmetico [VX7003]");
+        salida = Salida.FPE;
+    } else if (r.code == Exc.ACCESO_INVALIDO) {
+        println("error fatal: acceso a memoria invalido [VX7007]");
+        salida = Salida.SEGV;
+    } else if (r.code == Exc.PILA_DESBORDADA) {
+        println("error fatal: desbordamiento de pila [VX7008]");
+        salida = Salida.SEGV;
+    } else if (r.code == Exc.INSTRUCCION_MALA) {
+        println("error fatal: instruccion no valida [VX7009]");
+        salida = Salida.ILL;
+    } else {
+        return SEGUIR_BUSCANDO;
+    }
+
+    __vxf_donde(r.address);
+    if (p.context != 0) {
+        CtxX64 ctx = CtxX64((u8*) p.context);
+        __vxf_cadena(ctx.rsp);
+    }
+    flush();   // el proceso muere aqui: nadie vaciara el buffer despues
+    ExitProcess(salida);
+    return SEGUIR_BUSCANDO;
+}
+
+/// Lo instala `main` antes que nada: el driver AOT le prepende esta llamada.
+/// 1 = al principio de la cadena, para llegar antes que el manejador del SO.
+@Target("os:windows")
+void __vx_fault_init() {
+    AddVectoredExceptionHandler(1, &__vx_fault_handler);
+}
+
+// =========================================================================
+//  Linux: senales por syscall RAW, sin libc
+// =========================================================================
+// El equivalente de la cadena de excepciones son las SENALES.  Se registran con
+// `rt_sigaction` y el binario no depende de libc.so.6, igual que vx_io.
+
+const i64 SYS_RT_SIGACTION = 13;
+const i64 SYS_EXIT_GROUP = 231;
+/// SA_SIGINFO para recibir el contexto -- sin el no hay puntero de instruccion
+/// y no se puede decir DONDE.  SA_RESTORER es obligatorio en x86-64.
+/// SA_NODEFER evita que un segundo fallo dentro del manejador se quede
+/// bloqueado en vez de matar el proceso.
+const u64 SA_FLAGS = 0x44000004;
+/// El nucleo comprueba el tamano del conjunto de senales: con otro valor
+/// devuelve EINVAL.
+const i64 SIGSET_TAM = 8;
+
+/// Trampolin de retorno de senal.  Nunca se ejecuta -- el manejador termina el
+/// proceso --, pero x86-64 EXIGE un `sa_restorer` propio: sin libc no hay quien
+/// lo aporte, y sin el el nucleo ni siquiera llega a entregar la senal.  Tiene
+/// que ser asm puro porque `rt_sigreturn` lee el marco a un desplazamiento fijo
+/// de rsp, y el prologo de una funcion normal lo habria movido.
+@Target("!os:windows && arch:x86_64")
+@Naked void __vxf_restorer() {
+    asm volatile noinfer {
+        mov eax, 15
+        syscall
+    };
+}
+
+/// exit_group, que termina TODOS los hilos y no solo el que fallo.
+@Target("!os:windows && arch:x86_64")
+void __vxf_exit(i64 code) {
+    register("rdi") i64 a1 = code;
+    register("rax") i64 nr = SYS_EXIT_GROUP;
+    asm volatile { syscall };
+}
+
+/// Con SA_SIGINFO el manejador recibe la senal, la informacion del fallo y el
+/// CONTEXTO.  El puntero de instruccion se toma del contexto y NO de `si_addr`
+/// porque no significan lo mismo: para un acceso invalido `si_addr` es la
+/// direccion a la que se intento acceder -- el dato --, no la instruccion que
+/// lo intento.
+@Target("!os:windows && arch:x86_64")
+void __vx_fault_signal(i32 sig, uintptr info, uintptr uc) {
+    if (__vxf_dentro != 0) {
+        __vxf_exit(128 + (i64) sig);   // el fallo viene de nosotros
+    }
+    __vxf_dentro = 1;
+
+    if (sig == Senal.FPE) {
+        println("error fatal: division entre cero [VX7002]");
+    } else if (sig == Senal.SEGV) {
+        println("error fatal: acceso a memoria invalido [VX7007]");
+    } else if (sig == Senal.ILL) {
+        println("error fatal: instruccion no valida [VX7009]");
+    } else if (sig == Senal.BUS) {
+        println("error fatal: acceso a memoria invalido [VX7007]");
+    } else if (sig == Senal.ABRT) {
+        println("error fatal: abortado por el programa [VX7011]");
+    }
+    if (uc != 0) {
+        UCtxX64 ctx = UCtxX64((u8*) uc);
+        __vxf_donde(ctx.rip);
+        __vxf_cadena(ctx.rsp);
+    }
+    flush();   // el proceso muere aqui: nadie vaciara el buffer despues
+    __vxf_exit(128 + (i64) sig);
+}
+
+/// rt_sigaction(sig, act, oact, tam_del_conjunto).
+@Target("!os:windows && arch:x86_64")
+void __vxf_hook(i32 sig, uintptr act) {
+    register("rdi") i64 a1 = (i64) sig;
+    register("rsi") uintptr a2 = act;
+    register("rdx") i64 a3 = 0;
+    register("r10") i64 a4 = SIGSET_TAM;
+    register("rax") i64 nr = SYS_RT_SIGACTION;
+    asm volatile { syscall };
+}
+
+@Target("!os:windows && arch:x86_64")
+void __vx_fault_init() {
+    u8[32] act;
+    KSigAction sa = KSigAction(&act[0]);
+    sa.handler = (uintptr) &__vx_fault_signal;
+    sa.flags = SA_FLAGS;
+    sa.restorer = (uintptr) &__vxf_restorer;
+    sa.mask = 0;
+
+    uintptr dir = (uintptr) &act[0];
+    __vxf_hook(Senal.FPE, dir);
+    __vxf_hook(Senal.SEGV, dir);
+    __vxf_hook(Senal.ILL, dir);
+    __vxf_hook(Senal.BUS, dir);
+    __vxf_hook(Senal.ABRT, dir);
+}

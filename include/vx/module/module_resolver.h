@@ -230,8 +230,16 @@ class ModuleGraph {
 
     ///  NS.2-full: extrae los namespaces declarados (formas statement y
     /// bloque, path punteado) de un source .vx via un lex ligero.  No parsea.
-    static void extract_namespaces_(const std::string &source,
-                                    std::vector<std::string> &out);
+    ///
+    /// Si @p types_by_ns no es nulo, anota ademas el NOMBRE de cada tipo que
+    /// declara el fichero (typedef / struct / class / enum), agrupado por el
+    /// namespace en que aparece.  El parser lo necesita para reconocer
+    /// @c "(T) x" como un cast cuando @c T se declaro en OTRO fichero del mismo
+    /// namespace.
+    static void extract_namespaces_(
+        const std::string &source, std::vector<std::string> &out,
+        std::unordered_map<std::string, std::vector<std::string>>
+            *types_by_ns = nullptr);
 
     /// Normaliza un path: separadores -> `/`, resuelve `..`, expande
     /// relativos contra @c base_dir si no es absoluto.  Devuelve la
@@ -271,6 +279,12 @@ class ModuleGraph {
     /// (namespaces parciales).  Lazy: se construye en el primer import
     /// por-namespace.
     std::unordered_map<std::string, std::vector<std::string>> ns_index_;
+    /// Indice namespace -> nombres de TIPO que declaran sus ficheros.  Se
+    /// llena en la misma pasada que @c ns_index_ y sirve para sembrar el
+    /// parser de los ficheros HERMANOS de un namespace parcial: sin el, un
+    /// cast a un tipo declarado en otro fichero del mismo namespace no se
+    /// reconoce como cast y el error resultante no apunta a nada util.
+    std::unordered_map<std::string, std::vector<std::string>> ns_types_;
     /// @c true una vez construido @c ns_index_ (idempotente).
     bool ns_index_built_ = false;
 };

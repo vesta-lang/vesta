@@ -64,7 +64,11 @@ constexpr uint8_t IRVAL_FLAG_HOST_PTR =
 constexpr uint8_t IRVAL_FLAG_POINTEE_HOST_PTR =
     1 << 3; ///< Puntero VM cuyo contenido apunta a host
 constexpr uint8_t IRVAL_FLAG_GC_OBJECT = 1
-                                         << 4; ///< Host_ptr a objeto GC-managed
+                                         << 4;
+/// v11: el valor lleva el registro fisico donde lo dejo el asignador.  Es un
+/// bit y no un byte fijo porque la mayoria de valores no lo tienen (murieron o
+/// se derramaron) y el intermedio se llevaria un byte por cada uno.
+constexpr uint8_t IRVAL_FLAG_HAS_REG = 1 << 5; ///< Host_ptr a objeto GC-managed
 
 // Bits del byte flags por IrInstr.  Solo 2 bits usados: el resto
 // queda para extensiones futuras sin cambio de formato.
@@ -76,6 +80,8 @@ constexpr uint8_t INSTR_FLAG_HOST_ALLOCA =
     1 << 2; ///< ALLOCA auto-promovida a host stack ( D.jit-mem-model)
 constexpr uint8_t INSTR_FLAG_HOST_ALLOCA_EXPLICIT_FREE =
     1 << 3; ///< Sprint mem-loop-fix: RAW_FREE preservado para liberar in-loop
+constexpr uint8_t INSTR_FLAG_RET_IMPLICIT =
+    1 << 4; ///< @Naked: RET sintetico de caida-al-final (no `return` explicito)
 
 // Bits del byte flags por IrFunction.
 constexpr uint8_t FN_FLAG_NATIVE =
@@ -109,7 +115,10 @@ void write_value(std::vector<uint8_t> &o, const IrValue &v) {
     if (v.is_host_ptr) flags |= IRVAL_FLAG_HOST_PTR;
     if (v.pointee_is_host_ptr) flags |= IRVAL_FLAG_POINTEE_HOST_PTR;
     if (v.is_gc_object) flags |= IRVAL_FLAG_GC_OBJECT;
+    if (v.reg != IR_NO_REG) flags |= IRVAL_FLAG_HAS_REG;
     write_u8(o, flags);
+    // Solo paga el byte quien vive en un registro (ver IRVAL_FLAG_HAS_REG).
+    if (v.reg != IR_NO_REG) write_u8(o, v.reg);
     // Optimizacion: const_val solo ocupa espacio si el value es
     // realmente una constante.  Una funcion tipica tiene ~30%
     // constantes, el resto son SSA values normales que no necesitan
@@ -141,6 +150,12 @@ bool read_value(const std::vector<uint8_t> &in, size_t &off, IrValue &v) {
     v.is_host_ptr = (flags & IRVAL_FLAG_HOST_PTR) != 0;
     v.pointee_is_host_ptr = (flags & IRVAL_FLAG_POINTEE_HOST_PTR) != 0;
     v.is_gc_object = (flags & IRVAL_FLAG_GC_OBJECT) != 0;
+    // v11: el registro solo viaja si el valor tenia uno.
+    if (flags & IRVAL_FLAG_HAS_REG) {
+        if (!read_u8(in, off, v.reg)) return false;
+    } else {
+        v.reg = IR_NO_REG;
+    }
     // const_val solo se leyo si el writer la emitio; sin el flag
     // queda en su valor default (0).  Mismo principio que write_value.
     if (v.is_const) {
@@ -175,6 +190,7 @@ void write_instr(std::vector<uint8_t> &o, const IrInstr &i) {
     uint8_t flags = 0;
     if (i.preserve) flags |= INSTR_FLAG_PRESERVE;
     if (i.is_call_site) flags |= INSTR_FLAG_IS_CALL_SITE;
+    if (i.ret_implicit) flags |= INSTR_FLAG_RET_IMPLICIT;
     if (i.host_alloca) flags |= INSTR_FLAG_HOST_ALLOCA;
     if (i.host_alloca_explicit_free)
         flags |= INSTR_FLAG_HOST_ALLOCA_EXPLICIT_FREE;
@@ -182,6 +198,15 @@ void write_instr(std::vector<uint8_t> &o, const IrInstr &i) {
     // source_line: util para diagnosticos y stack traces.  0 si
     // el frontend no aporto info de linea.
     write_u32(o, i.source_line);
+    // source_column: sin ella no se puede senalar CUAL de las cosas que caben
+    // en una linea fallo, solo en cual.  Viaja desde v8.
+    write_u32(o, i.source_column);
+    // source_len: donde ACABA el trozo de fuente.  Con la columna sola se
+    // sabe donde empieza, y sin el final no se puede recortar el texto para
+    // nombrar un operando.  Viaja desde v9.
+    write_u32(o, i.source_len);
+    // inline_site: de que llamada aplanada vino la instruccion (v10).
+    write_u32(o, i.inline_site);
     // imm: campo polivalente.  Para CONST contiene el valor; para
     // CALL contiene flags/args adicionales; para ops sin imm es 0.
     write_u64(o, i.imm);
@@ -219,6 +244,12 @@ void write_instr(std::vector<uint8_t> &o, const IrInstr &i) {
     write_u32(o, static_cast<uint32_t>(jtc));
     for (size_t k = 0; k < jtc; ++k)
         write_u32(o, i.jump_targets[k]);
+    // call_abi_regs: ABI custom del CALLIND (registro por arg desde el tipo del
+    // puntero).  Count 0 = ABI estandar (todas las ops no-CALLIND).  (Formato v7.)
+    const size_t abc = i.call_abi_regs.size();
+    write_u32(o, static_cast<uint32_t>(abc));
+    for (size_t k = 0; k < abc; ++k)
+        write_str(o, i.call_abi_regs[k]);
 }
 
 /**
@@ -247,16 +278,26 @@ bool read_instr(const std::vector<uint8_t> &in, size_t &off, IrInstr &i) {
     if (!read_u32(in, off, dst_v)) return false;
     if (!read_u8(in, off, flags)) return false;
     if (!read_u32(in, off, source_line)) return false;
+    uint32_t source_column = 0;
+    if (!read_u32(in, off, source_column)) return false;
+    uint32_t source_len = 0;
+    if (!read_u32(in, off, source_len)) return false;
+    uint32_t inline_site = IR_NO_INLINE_SITE;
+    if (!read_u32(in, off, inline_site)) return false;
     if (!read_u64(in, off, imm)) return false;
     i.op = static_cast<IrOp>(op_v);
     i.type = static_cast<IrType>(type_v);
     i.dst = static_cast<IrValueId>(dst_v);
     i.preserve = (flags & INSTR_FLAG_PRESERVE) != 0;
     i.is_call_site = (flags & INSTR_FLAG_IS_CALL_SITE) != 0;
+    i.ret_implicit = (flags & INSTR_FLAG_RET_IMPLICIT) != 0;
     i.host_alloca = (flags & INSTR_FLAG_HOST_ALLOCA) != 0;
     i.host_alloca_explicit_free =
         (flags & INSTR_FLAG_HOST_ALLOCA_EXPLICIT_FREE) != 0;
     i.source_line = source_line;
+    i.source_column = source_column;
+    i.source_len = source_len;
+    i.inline_site = inline_site;
     i.imm = imm;
     /* operands */
     uint8_t opc = 0;
@@ -299,6 +340,16 @@ bool read_instr(const std::vector<uint8_t> &in, size_t &off, IrInstr &i) {
         uint32_t t = 0;
         if (!read_u32(in, off, t)) return false;
         i.jump_targets.push_back(t);
+    }
+    /* call_abi_regs (ABI custom del CALLIND) -- formato v7. */
+    uint32_t abc = 0;
+    if (!read_u32(in, off, abc)) return false;
+    i.call_abi_regs.clear();
+    i.call_abi_regs.reserve(abc);
+    for (uint32_t k = 0; k < abc; ++k) {
+        std::string r;
+        if (!read_str(in, off, r)) return false;
+        i.call_abi_regs.push_back(std::move(r));
     }
     return true;
 }
@@ -390,6 +441,13 @@ size_t serialize_function(const IrFunction &fn, std::vector<uint8_t> &out) {
     for (auto p : fn.params)
         write_u32(out, static_cast<uint32_t>(p));
 
+    // ABI custom por funcion (register("rXX") en params): registro fisico de
+    // entrada por parametro, alineado con params[].  Count 0 = ABI estandar (el
+    // caso comun; no ocupa mas que el u32 del count).
+    write_u32(out, static_cast<uint32_t>(fn.param_abi_regs.size()));
+    for (const auto &r : fn.param_abi_regs)
+        write_str(out, r);
+
     // Values: TODOS los SSA values de la funcion.  El indice en este
     // array ES el IrValueId (los ids son densos 0..N-1).
     write_u32(out, static_cast<uint32_t>(fn.values.size()));
@@ -476,6 +534,17 @@ size_t serialize_function(const IrFunction &fn, std::vector<uint8_t> &out) {
     write_str(out, fn.complexity_total_pre);
     write_str(out, fn.complexity_total_post);
 
+    // v10: llamadas que se aplanaron aqui al inlinar.  Sin ellas, el codigo
+    // que vino de otra funcion conserva SUS lineas pero se atribuye a esta, y
+    // la traza senala un sitio que no es.  Casi siempre vacio (4 bytes).
+    write_u32(out, static_cast<uint32_t>(fn.inline_sites.size()));
+    for (const auto &s : fn.inline_sites) {
+        write_str(out, s.callee);
+        write_u32(out, s.line);
+        write_u32(out, s.column);
+        write_u32(out, s.parent);
+    }
+
     return out.size() - start;
 }
 
@@ -502,6 +571,17 @@ bool deserialize_function(const std::vector<uint8_t> &in, size_t &off,
         uint32_t v = 0;
         if (!read_u32(in, off, v)) return false;
         out.params.push_back(static_cast<IrValueId>(v));
+    }
+
+    /* ABI custom por funcion (register en params): registro por parametro. */
+    uint32_t n_abi = 0;
+    if (!read_u32(in, off, n_abi)) return false;
+    out.param_abi_regs.clear();
+    out.param_abi_regs.reserve(n_abi);
+    for (uint32_t k = 0; k < n_abi; ++k) {
+        std::string r;
+        if (!read_str(in, off, r)) return false;
+        out.param_abi_regs.push_back(std::move(r));
     }
 
     /* values */
@@ -648,6 +728,19 @@ bool deserialize_function(const std::vector<uint8_t> &in, size_t &off,
     if (!read_str(in, off, out.complexity_partial_post)) return false;
     if (!read_str(in, off, out.complexity_total_pre)) return false;
     if (!read_str(in, off, out.complexity_total_post)) return false;
+    // v10: llamadas aplanadas al inlinar (ver el lado de escritura).
+    uint32_t n_sites = 0;
+    if (!read_u32(in, off, n_sites)) return false;
+    out.inline_sites.clear();
+    out.inline_sites.reserve(n_sites);
+    for (uint32_t k = 0; k < n_sites; ++k) {
+        InlineSite s;
+        if (!read_str(in, off, s.callee)) return false;
+        if (!read_u32(in, off, s.line)) return false;
+        if (!read_u32(in, off, s.column)) return false;
+        if (!read_u32(in, off, s.parent)) return false;
+        out.inline_sites.push_back(std::move(s));
+    }
     return true;
 }
 

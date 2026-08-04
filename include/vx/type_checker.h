@@ -38,6 +38,7 @@
 #ifndef VX_TYPE_CHECKER_H
 #define VX_TYPE_CHECKER_H
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -111,6 +112,12 @@ enum class SymbolKind : uint8_t {
 struct FunctionSig {
     Type return_type;
     std::vector<Type> param_types;
+    /// ABI custom por-parametro (`register("rXX") T name`): registro fisico de
+    /// entrada por parametro, alineado con @c param_types.  Vacio = ABI estandar.
+    /// Lo consume: (a) el codegen del CALL directo (via IrFunction), y (b) el
+    /// tipado de `&funcion`, que construye un @c cfn cuyo @c fn_param_abi_regs
+    /// hereda esta lista -> el tipo del puntero LLEVA la ABI.
+    std::vector<std::string> param_abi_regs;
     ///  FFI extern: si no esta vacio, esta funcion es un import
     /// de una libreria nativa (ej. "user32.dll", "kernel32.dll" o
     /// "stdlib/native/io/vesta_io").  El lowering al ver una llamada a
@@ -170,6 +177,9 @@ struct StructFieldInfo {
     /// y @c size pero con distintos @c bit_offset.
     uint8_t bit_offset = 0;
     uint8_t bit_width = 0;
+    /// `comptime T campo`: campo solo-compile-time (en @c comptime_fields, no en
+    /// @c fields).  @c offset/@c size no aplican (no vive en la instancia).
+    bool is_comptime = false;
     /// Valor por defecto del campo (`u8 a = 0x10;`), no-owning al AST (vive
     /// durante toda la compilacion).  null = sin default (zero-init).  Lo usa
     /// el lowering para `= {}`, campos no listados en el init y `default()`.
@@ -234,7 +244,15 @@ struct ClassMethodInfo {
     Type return_type;
     std::vector<Type> param_types;
     uint32_t vtable_index = 0;
+    /// `@Virtual` (structs polimorficos): el metodo se despacha por vtable.
+    /// En un struct polimorfico `vtable_index` es el slot dentro de la vtable
+    /// estatica (blob en static_data); en los no-virtuales no aplica.
+    bool is_virtual = false;
     bool is_constructor = false;
+    /// F1b: constructor `comptime T(expr)` de un struct value-type.  Se ejecuta
+    /// en compile-time (ComptimeVM) y materializa el struct como datos; no emite
+    /// llamada en runtime.  Propagado desde @c ClassMethodDecl::is_comptime.
+    bool is_comptime = false;
     /// destructor `~ClassName()`.  Sin params, void retorno.
     /// El lowering lo invoca via CALLVIRT al exit del scope para
     /// instancias locales que NO escapan
@@ -263,6 +281,12 @@ struct ClassMethodInfo {
     /// lo liste).  El lowering usa este nombre para construir el
     /// label del code_vaddr (@c <defining_class>__<name>).
     std::string defining_class;
+    /// Nombre del SIMBOLO real de la funcion en el .velb para metodos
+    /// IMPORTADOS cross-module (p.ej. "std__wideint__u128____div__").  El
+    /// lowering emite el CALL a este simbolo en vez de reconstruir
+    /// "<struct_local>__<metodo>" (que llevaria el mangling del consumidor y no
+    /// resolveria en el linker).  Vacio para metodos del propio modulo.
+    std::string link_name;
     /// Debug info para stack traces.  Llenado por el type
     /// checker al ver el ClassMethodDecl original.  El lowering lo
     /// emite en __module_init via @c setmethdbg.
@@ -282,6 +306,22 @@ struct ClassMethodInfo {
 struct StructLayout {
     std::string name;
     std::vector<StructFieldInfo> fields;
+    /// Campos `static`: NO viven en cada instancia; su storage es una global
+    /// sintetica `<Struct>__<campo>` (una sola por tipo).  Se listan aparte para
+    /// que `Struct.campo` los resuelva (lectura/escritura) sin inflar el layout.
+    std::vector<StructFieldInfo> static_fields;
+    /// Campos `comptime`: existen SOLO en tiempo de compilacion (los consume el
+    /// codigo comptime, p.ej. un `comptime char* name` para un hash).  NO
+    /// ocupan espacio en la instancia runtime; se listan aparte para que un
+    /// constructor/metodo comptime pueda resolver `this.campo`.
+    std::vector<StructFieldInfo> comptime_fields;
+    /// Tamano del buffer usado por la ComptimeVM al evaluar un constructor/metodo
+    /// comptime: incluye los campos runtime (@c size_bytes) MAS los campos
+    /// @c comptime apilados al final (cada uno con su @c offset asignado dentro
+    /// de @c comptime_fields).  La materializacion del struct solo copia los
+    /// primeros @c size_bytes (descarta la cola comptime).  == @c size_bytes si
+    /// el struct no tiene campos comptime.
+    uint32_t comptime_size_bytes = 0;
     /// Metodos del struct (value-type, dispatch estatico).  Reusa
     /// @c ClassMethodInfo; @c vtable_index/@c is_constructor no se usan
     /// (los structs no tienen vtable ni constructores con this(...)).
@@ -294,6 +334,16 @@ struct StructLayout {
     /// de este tipo ES un puntero (host) de 8 bytes; no se aloca buffer ni se
     /// zero-inicializa.  Los @c fields usan sus @c offset EXPLICITOS (@offset).
     bool is_union = false; ///< union C-style: campos en offset 0, size=max.
+    bool is_abstract = false; ///< `@Abstract`: no instanciable, solo base.
+    /// true si el struct tiene >=1 metodo `@Virtual` (propio o heredado): es
+    /// "polimorfico" y lleva un vptr en offset 0 (los campos empiezan en 8).
+    /// El dispatch de sus metodos virtuales va por vtable estatica.
+    bool is_polymorphic = false;
+    /// Nombre del struct base (herencia estatica), o vacio.  Preservado del AST
+    /// aunque el flatten ya haya aplanado los campos/metodos; lo usa el upcast
+    /// de puntero `Derivado* -> Base*`.  Si apunta a una interfaz (no struct),
+    /// el recorrido de la cadena para al no hallarlo en struct_layouts_.
+    std::string super_name;
     bool is_overlay = false;
     /// Overlay: HUELLA estatica de la vista = max(offset+size) sobre los campos
     /// de offset constante, redondeada al alineamiento.  Es lo que `sizeof(T)`
@@ -578,6 +628,39 @@ struct Symbol {
 };
 
 /**
+ * @brief Registra las funciones virtuales del compilador (`vesta_comptime`).
+ *
+ * Idempotente y segura desde cualquier hilo.  La llama el TypeChecker al
+ * construirse y tambien el arranque de la VM: un `.velb` puede llevar un
+ * cuerpo comptime como codigo muerto, y su import debe RESOLVER aunque nadie
+ * lo llame.
+ */
+void register_comptime_virtual_fns();
+
+/**
+ * @brief Registra como error de compilacion un fallo del codigo comptime.
+ *
+ * La llama quien ejecuta ese codigo cuando el proceso muere sin que nadie
+ * capture el fallo.  Con un `try` que lo capture, el proceso no muere y esto
+ * no se invoca.
+ *
+ * @param msg Mensaje del fallo, ya formado.
+ */
+void report_comptime_fatal(const std::string &msg);
+
+/**
+ * @brief Guarda el texto de un `static_assert` y devuelve su indice.
+ *
+ * El mensaje no viaja por la maquina virtual: por ella solo va el indice.  La
+ * direccion de un literal pertenece al espacio de la VM y el proceso anfitrion
+ * no puede dereferenciarla.
+ *
+ * @param text Mensaje de la asercion.
+ * @return Indice estable con el que el helper lo recupera.
+ */
+uint64_t intern_static_assert_msg(const std::string &text);
+
+/**
  * @class TypeChecker
  * @brief Pase de comprobacion sobre un ModuleNode.
  */
@@ -737,6 +820,38 @@ class TypeChecker {
                                     const std::vector<Type> &args,
                                     const SourceLoc &loc);
 
+    /**
+     * @brief Aplana la herencia ESTATICA de structs y resuelve `Self` 
+     *
+     * Corre en pre_mono (antes de @c collect_globals).  Por CADA struct concreto
+     * S (base o derivado): (a) embebe los campos de su cadena de bases al INICIO
+     * (raiz primero, layout-compatible); (b) hereda los metodos de la cadena (el
+     * mas derivado gana por nombre); (c) sustituye el marcador `Self` por el tipo
+     * concreto S en firmas y cuerpos, via @c GenSubst{["Self"],[STRUCT S]} +
+     * @c clone_type_with_subst / @c clone_stmt -- la misma maquinaria de los
+     * genericos.  Tras esto el resto del compilador solo ve structs concretos sin
+     * `Self`.  Aplica las prohibiciones: `Self` por VALOR en el layout, `Self` en
+     * un metodo `@Virtual`.  Ver [[proj_struct_self_inheritance]].
+     */
+    void flatten_struct_inheritance();
+
+    /**
+     * @brief Verifica que cada struct que declara `: IConcepto` satisface ese
+     *        concepto.  Coste cero: es una comprobacion comptime (misma via que
+     *        `where T: C`), no genera codigo ni vtables.  Distinto de heredar de
+     *        un `@Abstract` (que aporta campos + implementacion): aqui la
+     *        interfaz solo OBLIGA la forma (contrato), no da codigo.
+     */
+    void verify_struct_interface_conformance();
+
+    /**
+     * @brief @Virtual: true si `value` es asignable a `target` por upcast de
+     * puntero `Derivado* -> Base*` (herencia estatica de structs).  Recorre la
+     * cadena super_name del pointee de @p value buscando el pointee de @p target.
+     * Layout-compatible (el derivado embebe la base al inicio, vptr en offset 0).
+     */
+    bool struct_ptr_upcast_ok(const Type &target, const Type &value) const;
+
     /// @brief Resuelve los @c @complexity que el parser dejo pendientes.
     ///
     /// Su `when:` habla del parametro de tipo (`is_float<T>()`), asi que solo
@@ -844,6 +959,15 @@ class TypeChecker {
         return concepts_;
     }
 
+    /// Conformidades declaradas (`impl Concepto for Tipo`), por nombre de tipo.
+    /// Se expone porque quien vuelca el conocimiento del programa la necesita:
+    /// sin ella tendria que reevaluar los predicados que aqui ya se
+    /// comprobaron, pagando dos veces por la misma respuesta.
+    const std::unordered_map<std::string, std::unordered_set<std::string>> &
+    impl_conformances() const noexcept {
+        return impl_conformances_;
+    }
+
     /**
      * @brief Verifica los constraints (#6) de un generico al monomorphizar.
      *
@@ -868,6 +992,36 @@ class TypeChecker {
      * src/vx/concepts.cpp.
      */
     void verify_pending_type_bounds();
+
+    /**
+     * @brief Disponibilidad condicional de un metodo por su clausula `where` (#6).
+     *
+     * Modelo Rust `impl<T: Bound>` / Swift `extension where`.  Un metodo de un
+     * struct/clase generico con `where T: Concepto` (sobre un type-param del
+     * CONTENEDOR) SOLO existe en las instanciaciones cuyo type-arg satisface el
+     * concepto.  Devuelve @c false si algun bound sobre un type-param del
+     * contenedor no se cumple -> el metodo se OMITE (ni se clona ni se
+     * type-checkea), como si no estuviera declarado para ese T.  Los bounds
+     * sobre type-params del PROPIO metodo (`m<U: C>`) se copian a
+     * @p method_only para verificarse al monomorphizar el metodo.
+     *
+     * Se evalua en pre_mono (antes de collect_globals), asi que solo son
+     * fiables los conceptos evaluables SIN layouts: kind-based (Integer,
+     * Numeric, Float, Signed, Unsigned, Bool, Char, Pointer, Scalar, ...) y
+     * predicados is_x / sizeof sobre primitivos.  Un concepto estructural
+     * (has_method) sobre un type-param del contenedor se veria como no
+     * satisfecho aqui; no debe usarse para filtrar existencia.
+     */
+    bool method_available_for_subst(
+        const ast::ClassMethodDecl *m,
+        const std::vector<std::string> &container_params,
+        const std::vector<Type> &container_args,
+        std::vector<ast::TypeBound> &method_only);
+
+    /// Registra @p m como no-disponible en la instanciacion @p container_mangled
+    /// (por su `where`), para dar un mensaje claro si se intenta llamar.
+    void record_unavailable_method(const std::string &container_mangled,
+                                   const ast::ClassMethodDecl *m);
 
     /**
      * @brief Elige la especializacion de struct mas especifica para @p args (#7).
@@ -980,6 +1134,75 @@ class TypeChecker {
      * @brief Pase 2: chequea el cuerpo de cada funcion declarada.
      */
     void check_functions();
+
+    /**
+     * @brief Chequea los cuerpos de las funciones libres del modulo.
+     *
+     * Idempotente: se llama dos veces, antes y despues de los cuerpos de
+     * metodos, porque una generica instanciada al chequear un metodo nace
+     * cuando la primera pasada ya termino.  El set @c checked_fn_bodies_
+     * evita repetir trabajo (y diagnosticos duplicados).
+     */
+    void check_free_function_bodies();
+
+    /// @brief Tipo de un enum en la representacion que le corresponde:
+    /// entero etiquetado si es CON VALOR, agregado si es de variantes.
+    /// Punto UNICO de decision para que no diverjan las rutas.
+    Type enum_type_of(const EnumLayout &lay,
+                      const std::string &fallback_name) const;
+
+    /// @brief true si el tipo (o un ancestro) declara `toString()`.
+    bool type_declares_to_string(const Type &t) const;
+
+    /**
+     * @brief El @c Type de un enum, en la representacion que le corresponde.
+     *
+     * Un enum admite DOS representaciones, y cual toca lo decide su
+     * declaracion, nunca el camino por el que se resuelva su nombre:
+     *
+     *   - enum con VALOR (`enum Ordering : i8 { Less = -1 }`) -> el entero que
+     *     lo respalda, etiquetado con el nombre del enum.  Cabe en un registro
+     *     y se compara como un numero.
+     *   - enum de VARIANTES (con o sin payload) -> un agregado, que vive en
+     *     memoria con su tag y sus campos.
+     *
+     * Toda ruta que necesite el tipo de un enum debe pasar por aqui.  Cuando
+     * cada una lo construia por su cuenta, un mismo enum acababa siendo entero
+     * por un lado y agregado por otro: declararlo reservaba un buffer y
+     * guardaba el TAG en vez del valor, y compararlo comparaba las direcciones
+     * de dos buffers en lugar de su contenido.
+     *
+     * @param name Nombre del enum tal y como aparece en @c enum_layouts_.
+     * @param out Recibe el tipo si el enum existe.
+     * @return false si no hay ningun enum con ese nombre (el caller sigue con
+     *         su propia busqueda).
+     */
+    bool enum_type_of(const std::string &name, Type &out) const {
+        auto it = enum_layouts_.find(name);
+        if (it == enum_layouts_.end()) return false;
+        const auto &lay = it->second;
+        const std::string en = lay.name.empty() ? name : lay.name;
+        if (lay.is_valued) {
+            // Backing con nombre de usuario (`enum Color : Rgb`): el valor ES
+            // ese tipo, asi que se devuelve el suyo.
+            if (!lay.backing_type_name.empty()) {
+                Type vt{lay.backing};
+                vt.struct_name = lay.backing_type_name;
+                out = vt;
+                return true;
+            }
+            Type vt{lay.backing};
+            vt.struct_name = en;
+            vt.is_valued_enum = true;
+            out = vt;
+            return true;
+        }
+        out = Type{PrimitiveKind::STRUCT, en};
+        return true;
+    }
+
+    /// Cuerpos de funcion ya chequeados, para que la pasada sea idempotente.
+    std::unordered_set<const ast::FunctionDecl *> checked_fn_bodies_;
 
     // -----------------------------------------------------------------
     // Visit de statements.
@@ -1102,6 +1325,10 @@ class TypeChecker {
     Type check_call(ast::CallExpr *e);
     Type check_ident(ast::IdentExpr *e);
     Type check_field_access(ast::FieldAccessExpr *e);
+    /// Tipo de un campo de struct propagando la ABI custom cuando el campo es
+    /// de tipo funcion con default = una funcion (ctx pattern): la ABI del
+    /// CALLIND via el campo viene del DEFAULT.  El cast del campo la trunca.
+    Type field_type_with_abi(const StructFieldInfo &f) const;
     Type check_index(ast::IndexExpr *e);
     Type check_this(ast::ThisExpr *e);
     Type check_new(ast::NewExpr *e);
@@ -1601,6 +1828,13 @@ private:
     // Almacen de firmas de funciones (referenciadas por sig_index).
     std::vector<FunctionSig> function_sigs_;
 
+    /// De donde salio cada trozo de codigo generado por una @Macro.  Vive
+    /// aqui porque las posiciones lo apuntan sin poseerlo y tienen que
+    /// seguir siendo validas mientras exista el arbol.  Se reusa por sitio
+    /// de invocacion: la misma macro invocada dos veces son dos.
+    std::unordered_map<std::string, std::unique_ptr<ExpansionInfo>>
+        macro_expansions_;
+
     /// mapa nombre -> indice en function_sigs_ que sobrevive
     /// al @c pop_scope() final de @c run().  Necesario porque el lowering
     /// consulta firmas POST-check para auto-promover literales a STRING
@@ -1751,6 +1985,31 @@ private:
         return declared_ns_symbols_;
     }
 
+    /// Registra que @p nombre existe, pero solo bajo la condicion @Target
+    /// @p spec, que no se cumple en esta compilacion.  Lo alimenta el driver
+    /// con lo que el parser descarto en este modulo y en sus dependencias.
+    /// Se consulta cuando una busqueda de nombre falla, para poder decir
+    /// "declarado para otro objetivo" en vez del enganoso "no declarado".
+    void register_target_skipped(const std::string &nombre,
+                                 const std::string &spec) {
+        auto &v = target_skipped_[nombre];
+        if (std::find(v.begin(), v.end(), spec) == v.end()) v.push_back(spec);
+    }
+
+    /// Condiciones @Target bajo las que @p nombre si existe, o nullptr si el
+    /// nombre no lo descarto ningun @Target.
+    const std::vector<std::string> *
+    target_skipped_for(const std::string &nombre) const {
+        auto it = target_skipped_.find(nombre);
+        return it == target_skipped_.end() ? nullptr : &it->second;
+    }
+
+  private:
+    /// Nombre -> condicion(es) @Target que lo dejaron fuera de esta build.
+    std::unordered_map<std::string, std::vector<std::string>> target_skipped_;
+
+  public:
+
   private:
   public:
     ///  M.7: namespace de un modulo importado.  Cada entry
@@ -1890,10 +2149,68 @@ private:
     struct NewtypeInfo {
         std::vector<ExplicitConv> from_conversions;
         std::vector<ExplicitConv> to_conversions;
+        /// Conversiones que NO necesitan cast (`implicit from/to T;`).  La
+        /// barrera nominal sigue cerrada para el resto: el typedef declara las
+        /// que forman parte de su contrato.
+        std::vector<ExplicitConv> implicit_from_conversions;
+        std::vector<ExplicitConv> implicit_to_conversions;
         std::string source_file;
     };
 
+  public:
+    /**
+     * @brief Asignabilidad, incluyendo las conversiones @c implicit que un
+     *        newtype declare en su bloque.
+     *
+     * SOMBREA a proposito la funcion libre @c vx::types_assignable: todos los
+     * sitios del checker que preguntan "¿cabe este valor aqui?" resuelven a
+     * este metodo sin tener que enumerarlos uno a uno, y la respuesta es la
+     * misma en todos ellos (declaracion, retorno, argumento, asignacion).
+     *
+     * @param target Tipo de destino.
+     * @param value  Tipo del valor que se quiere poner en el.
+     * @return @c true si el valor se puede usar como @p target sin cast.
+     */
+    bool types_assignable(const Type &target, const Type &value) const {
+        if (vx::types_assignable(target, value)) return true;
+        // Un enum con VALOR es su tipo base: `enum Ordering : i8` ES un `i8`
+        // etiquetado.  Asignarle un valor de ese mismo entero -- p.ej. el que
+        // devuelve un metodo importado de otro modulo -- es legitimo, y sin
+        // esto un `Ordering o = a.ucmp(b);` se rechazaba pese a que ambos
+        // lados son el mismo tipo.  Se exige que coincida el ancho y el signo,
+        // asi que no abre la puerta a mezclar enteros de cualquier tipo.
+        if (target.is_valued_enum && target.kind == value.kind &&
+            (value.struct_name.empty() ||
+             value.struct_name == target.struct_name))
+            return true;
+        return newtype_implicit_conv_ok_(target, value);
+    }
+
   private:
+    /// ¿Hay una conversion `implicit` declarada que lleve @p value hasta
+    /// @p target?  Se mira en los dos sentidos: las `implicit to` del newtype
+    /// de origen y las `implicit from` del de destino.
+    bool newtype_implicit_conv_ok_(const Type &target,
+                                   const Type &value) const {
+        if (value.nominal_id != 0 && !value.nominal_name.empty()) {
+            auto it = newtype_info_.find(value.nominal_name);
+            if (it != newtype_info_.end()) {
+                for (const auto &c : it->second.implicit_to_conversions) {
+                    if (vx::types_assignable(target, c.type)) return true;
+                }
+            }
+        }
+        if (target.nominal_id != 0 && !target.nominal_name.empty()) {
+            auto it = newtype_info_.find(target.nominal_name);
+            if (it != newtype_info_.end()) {
+                for (const auto &c : it->second.implicit_from_conversions) {
+                    if (vx::types_assignable(c.type, value)) return true;
+                }
+            }
+        }
+        return false;
+    }
+
     // Mapa de metadata por nombre de newtype.  Vacio para newtypes
     // sin bloque @c {explicit from/to T;} declarado.
     std::unordered_map<std::string, NewtypeInfo> newtype_info_;
@@ -2014,6 +2331,12 @@ private:
         SourceLoc loc;
     };
     std::vector<PendingBoundCheck> pending_bound_checks_;
+    /// #6: metodos omitidos por su `where` en una instanciacion concreta.
+    /// Clave = contenedor mangled (`atomic_f32`); valor = [(metodo, requisitos)]
+    /// para dar un mensaje claro si se intenta llamar el metodo no disponible.
+    std::unordered_map<std::string,
+                       std::vector<std::pair<std::string, std::string>>>
+        unavailable_methods_;
     /// Cola de metodos genericos monomorphizados pendientes de anyadir al
     /// AST del contenedor + chequear su body (drenada por
     /// drain_pending_method_monos tras check_functions).
@@ -2106,6 +2429,22 @@ private:
     /// distinto.  No tiene efectos secundarios.
     uint32_t allocate_nominal_id() noexcept { return ++newtype_counter_; }
 
+    /// @brief Devuelve un nominal_id ESTABLE y DETERMINISTA derivado del
+    /// nombre canonico @p canonical (el nombre mangled del tipo, p.ej.
+    /// "std__pool__fiber").  Dos importaciones del mismo tipo (una por el
+    /// nombre corto via `only T`, otra por el mangled en las firmas de las
+    /// funciones libres del mismo modulo) obtienen ASI el mismo id -> el
+    /// type checker las unifica.  Rango alto (bit 30) para no chocar con los
+    /// ids de contador de allocate_nominal_id (que empiezan bajos).  FNV-1a 32.
+    uint32_t stable_nominal_id(const std::string &canonical) const noexcept {
+        uint32_t h = 2166136261u;
+        for (char c : canonical) {
+            h ^= static_cast<uint8_t>(c);
+            h *= 16777619u;
+        }
+        return 0x40000000u | (h & 0x3FFFFFFFu);
+    }
+
     // -- Registradores usados solo por el cargador de .vxi (M2.d).
     // Insertan en las tablas internas SIN re-validar (asumen que el
     // .vxi de origen es valido).  Si el nombre ya existe, no se
@@ -2134,7 +2473,70 @@ private:
     void register_imported_class(const std::string &name, ClassLayout L) {
         class_layouts_[name] = std::move(L);
     }
+    /**
+     * @brief True si ya hay un layout de enum con ese nombre y viene entero.
+     *
+     * Lo usa el pre-registro de la importacion, que solo reserva el nombre:
+     * si el enum ya entro completo no debe sobrescribirlo, porque el esqueleto
+     * no lleva ni el tipo de respaldo ni los payloads.
+     *
+     * @param name Nombre (canonico o local) bajo el que se busca.
+     * @return true si existe y tiene variantes.
+     */
+    bool enum_layout_is_complete(const std::string &name) const {
+        auto it = enum_layouts_.find(name);
+        return it != enum_layouts_.end() && !it->second.variants.empty();
+    }
+    /**
+     * @brief Busca el layout de un enum por cualquiera de sus nombres.
+     *
+     * Un enum se conoce por varios nombres a la vez: el local con el que se
+     * escribe (`Ordering`), el canonico del modulo que lo define
+     * (`std__wideint__Ordering`) y, si hay un newtype de por medio, el del
+     * tipo de debajo.  Cada sitio que necesitaba el layout hacia su propia
+     * busqueda y cubria unos nombres si y otros no, de modo que el mismo enum
+     * se reconocia por un camino y no por otro -- y un enum CON VALOR que no
+     * se reconoce se trata como agregado, con lo que sus variantes dejan de
+     * ser numeros para volverse buffers en memoria.
+     *
+     * Este es el UNICO sitio donde se decide.  Al ser uno solo, tambien es el
+     * unico que hay que mirar cuando algo no se reconoce.
+     *
+     * @param name Nombre tal y como aparece en el codigo.
+     * @return El layout, o nullptr si no hay ningun enum con ese nombre.
+     */
+    const EnumLayout *find_enum_layout(const std::string &name) const {
+        if (name.empty()) return nullptr;
+        auto it = enum_layouts_.find(name);
+        if (it != enum_layouts_.end()) return &it->second;
+        // Newtype: `typedef Color Tinta new;` -- Tinta comparte las variantes
+        // del enum de debajo.
+        if (const std::string real = underlying_layout_name(name);
+            !real.empty()) {
+            it = enum_layouts_.find(real);
+            if (it != enum_layouts_.end()) return &it->second;
+        }
+        // Importado: registrado solo bajo su nombre canonico.
+        const std::string sufijo = "__" + name;
+        for (const auto &kv : enum_layouts_) {
+            const std::string &k = kv.first;
+            if (k.size() > sufijo.size() &&
+                k.compare(k.size() - sufijo.size(), sufijo.size(), sufijo) == 0)
+                return &kv.second;
+        }
+        return nullptr;
+    }
+
     void register_imported_enum(const std::string &name, EnumLayout L) {
+        if (getenv("VX_DBG_REG"))
+        {
+            fprintf(stderr, "[REG] %s is_valued=%d nvars=%d:", name.c_str(),
+                    (int)L.is_valued, (int)L.variants.size());
+            for (const auto &v : L.variants)
+                fprintf(stderr, " %s=%lld", v.name.c_str(),
+                        (long long)v.int_value);
+            fprintf(stderr, "\n");
+        }
         enum_layouts_[name] = std::move(L);
     }
     /**

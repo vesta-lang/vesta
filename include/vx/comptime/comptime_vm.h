@@ -46,6 +46,22 @@
 
 namespace vx {
 
+/**
+ * @brief Lee una cadena de la memoria de un proceso de la maquina virtual.
+ *
+ * Los nativos reciben (direccion, longitud) del espacio de la VM, no punteros
+ * del anfitrion.  Esta utilidad hace la lectura para quien no puede incluir el
+ * header del runtime.
+ *
+ * @param proc_ptr Proceso (el que devuelve `getproc`).
+ * @param addr     Direccion en la memoria de la VM.
+ * @param len      Longitud en bytes.
+ * @return La cadena leida, vacia si el proceso o el rango no son validos.
+ */
+std::string comptime_read_vm_string(uint64_t proc_ptr, uint64_t addr,
+                                    uint64_t len);
+
+
 /* Pimpl interno -- la VM real se inicializa en MC.3.  En MC.2
  * la clase es solo scaffolding y el puntero queda nullptr. */
 struct ComptimeVmImpl;
@@ -223,6 +239,36 @@ class ComptimeRuntime {
                              uint64_t &out_r0) noexcept;
 
     /**
+     * @brief Presupuesto del modo CTPE (compile-time program execution).
+     *
+     * EXCLUSIVO del CTPE inferido; las `comptime`/`@Macro` del lenguaje NO
+     * tienen presupuesto (responsabilidad del programador).
+     */
+    struct CtpeBudget {
+        uint32_t millis = 3000;                          ///< tope de tiempo real.
+        uint64_t max_heap_bytes = 512ull * 1024 * 1024;  ///< tope de heap comptime.
+    };
+
+    /**
+     * @brief Invoca una funcion REGULAR (no @Macro) en modo CTPE RESTRINGIDO.
+     *
+     * A diferencia de @c invoke_simple_macro (sin restriccion, para los @Macro
+     * del lenguaje), este modo aplica el SANDBOX del CTPE: capacidades DENEGADAS
+     * (sin fs/net/ffi/spawn/dlopen/loadmod) + presupuesto (tiempo/heap).  Si la
+     * ejecucion real toca cualquier op no-contenida, el trap del sandbox aborta
+     * limpio.  Registra + eager-compila la funcion on-demand desde el Executable
+     * ya cargado en memoria (cero ficheros).
+     *
+     * @return @c true si completo dentro del presupuesto sin tocar nada
+     *         prohibido (@p out_r0 = R0); @c false si abortó (trap/timeout/oom/
+     *         no encontrada) -> el caller hace FALLBACK (deja la llamada en
+     *         runtime).  NUNCA afecta a las invocaciones de @Macro.
+     */
+    bool try_invoke_ctpe(const std::string &fn_name,
+                         const std::vector<uint64_t> &args,
+                         const CtpeBudget &budget, uint64_t &out_r0) noexcept;
+
+    /**
      * @brief invoca un @Macro que retorna @c string y
      * extrae el contenido como @c std::string host.
      *
@@ -242,6 +288,33 @@ class ComptimeRuntime {
      *   - R0 es 0 (handle nulo).
      *   - El handle no corresponde a un @c StringObject vivo.
      */
+    /**
+     * @brief Invoca en la VM de compilacion y devuelve el resultado EN BRUTO.
+     *
+     * Hasta ahora habia una forma de invocar por cada tipo de retorno: una
+     * para enteros y otra para cadenas.  Cada una cubre lo suyo y deja fuera
+     * el resto, asi que un valor compuesto -- un struct, por ejemplo -- no
+     * habia manera de recuperarlo.  Esta es la forma general: se ejecuta el
+     * codigo y se copian los bytes del resultado tal cual, sea lo que sea.
+     * Las variantes por tipo se apoyan en ella.
+     *
+     * El codigo comptime se ejecuta SIEMPRE compilado (JIT): se compila por
+     * adelantado al cargarlo.  Nada de evaluacion sobre el AST, y nada de
+     * interpretarlo: si la compilacion de una funcion comptime fallara, eso es
+     * un fallo a corregir en el compilador, no un modo de funcionamiento.
+     *
+     * @param macro_name Nombre canonico del codigo comptime a ejecutar.
+     * @param args Argumentos, en orden.
+     * @param n_bytes Cuantos bytes ocupa el resultado.
+     * @param addr_reg Registro que, al terminar, contiene la direccion del
+     *        resultado (0 = R0).
+     * @param out_bytes Recibe una copia de esos bytes.
+     * @return true si la ejecucion termino y se pudieron leer.
+     */
+    bool invoke_raw(const std::string &macro_name,
+                    const std::vector<uint64_t> &args, size_t n_bytes,
+                    unsigned addr_reg, std::vector<uint8_t> &out_bytes) noexcept;
+
     bool invoke_string_macro(const std::string &macro_name,
                              const std::vector<uint64_t> &args,
                              std::string &out_str) noexcept;
@@ -264,6 +337,32 @@ class ComptimeRuntime {
     bool invoke_string_macro_memoized(const std::string &macro_name,
                                       const std::vector<uint64_t> &args,
                                       std::string &out_str, bool pure) noexcept;
+
+    /**
+     * @brief invoca una funcion @c comptime que devuelve un struct por valor y
+     *        copia los @c struct_size bytes del resultado a @c out_bytes.
+     *
+     * Una funcion que devuelve un struct por valor lo hace por SRET: el valor no
+     * viaja en un registro; el llamante aloca el buffer del resultado y lo pasa
+     * como primer parametro oculto (un @c host_ptr), y la funcion lo rellena.
+     * Este metodo hace de llamante: aloca @c out_bytes en memoria del proceso
+     * (no en la pila de la funcion, que se libera al retornar), lo antepone a
+     * @c args como ese buffer, ejecuta la funcion en la VM de compile-time y
+     * devuelve los bytes escritos.  Como la VM se ejecuta dentro del propio
+     * compilador, el puntero al buffer es una direccion valida que la funcion
+     * escribe con @c movh.
+     *
+     * @param macro_name  Nombre canonico (`__macro_<original>`).
+     * @param args        Argumentos reales (el buffer de retorno se antepone).
+     * @param struct_size Tamano del struct en bytes.
+     * @param out_bytes   Recibe los bytes del struct construido.
+     * @return @c true si la invocacion fue exitosa; @c false si fallo o si el
+     *         total de argumentos (buffer de retorno + reales) excede 12.
+     */
+    bool invoke_struct_macro(const std::string &macro_name,
+                             const std::vector<uint64_t> &args,
+                             size_t struct_size,
+                             std::vector<uint8_t> &out_bytes) noexcept;
 
     /**hits del cache (no toca VM). */
     uint64_t memo_hit_count() const noexcept { return memo_hit_count_; }

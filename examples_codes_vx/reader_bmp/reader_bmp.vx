@@ -71,8 +71,8 @@ void ensure_loaded() {
 // leidos o -1.
 i64 read_file_into(string path, u8* buf, i64 size) {
     ensure_loaded();
-    u8* path_c = str_cstr(path);
-    u8* mode_c = str_cstr("rb");
+    u8* path_c = path.cstr();
+    u8* mode_c = "rb".cstr();
     if (path_c == null || mode_c == null) {
         return -1;
     }
@@ -88,8 +88,8 @@ i64 read_file_into(string path, u8* buf, i64 size) {
 // Devuelve el tamano en bytes de `path`, o -1 si no se pudo abrir.
 i64 file_size(string path) {
     ensure_loaded();
-    u8* path_c = str_cstr(path);
-    u8* mode_c = str_cstr("rb");
+    u8* path_c = path.cstr();
+    u8* mode_c = "rb".cstr();
     if (path_c == null || mode_c == null) {
         return -1;
     }

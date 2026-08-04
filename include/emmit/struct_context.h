@@ -711,6 +711,9 @@ typedef struct Context {
     struct DebugLineRec {
         uint32_t byte_offset; ///< offset dentro del bytecode del modulo
         uint32_t source_line; ///< linea fuente Vesta (1-based)
+        /// Columna (1-based; 0 = no consta).  Con la linea sola no se puede
+        /// senalar cual de las cosas que caben en ella fallo.
+        uint32_t source_column = 0;
     };
     std::vector<DebugLineRec> debug_lines;
 

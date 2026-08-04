@@ -1,0 +1,48 @@
+/**
+ * @file 370_fallo_panic.vx
+ * @brief Un `panic` que nadie captura: mismo trato que un fallo del procesador.
+ *
+ * Es el caso de control del mecanismo: `panic` lo lanza el propio programa, no
+ * el procesador, y aun asi tiene que contarse igual -- codigo del catalogo,
+ * cadena de llamadas, fuente y codigo de salida.  Si hiciera falta tratarlo
+ * aparte, el mecanismo estaria mal planteado.
+ *
+ * La cadena tiene tres niveles para que la traza tenga que recorrerla entera.
+ */
+
+/**
+ * @brief Donde revienta.
+ * @param x Valor que no llega a devolverse.
+ * @return Nada: no vuelve.
+ */
+i64 nivel3(i64 x) {
+    panic("no se puede seguir");
+    return x;
+}
+
+/**
+ * @brief Nivel intermedio.
+ * @param x Valor.
+ * @return Lo que devuelva el de abajo.
+ */
+i64 nivel2(i64 x) {
+    return nivel3(x + 1);
+}
+
+/**
+ * @brief Primer nivel.
+ * @param x Valor.
+ * @return Lo que devuelva el de abajo.
+ */
+i64 nivel1(i64 x) {
+    return nivel2(x + 1);
+}
+
+/**
+ * @brief Punto de entrada.
+ * @return No llega a devolver nada.
+ */
+i32 main() {
+    println("antes del panic");
+    return (i32) nivel1(1);
+}

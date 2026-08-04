@@ -13,7 +13,7 @@ i32 helper_strings(i32 n) {
     // Forza muchos strings intermedios via interpolacion.
     string a = "value-${n}";
     string b = "${n}-other";
-    return (i32) (str_bytes(a) + str_bytes(b));
+    return (i32) (a.bytes() + b.bytes());
 }
 
 public i32 run() {

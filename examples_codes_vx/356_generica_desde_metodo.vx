@@ -1,0 +1,33 @@
+/**
+ * @file 356_generica_desde_metodo.vx
+ * @brief Una funcion generica llamada desde el cuerpo de un metodo.
+ *
+ * La instancia monomorfizada de una generica es una funcion GLOBAL, pero se
+ * registraba en el ambito que estuviera abierto al resolver la llamada.  Desde
+ * una funcion libre daba igual; desde el cuerpo de un metodo moria al cerrarse
+ * ese ambito, y cuando el aplanado de la herencia volvia a revisar el metodo
+ * -- ya con el nombre reescrito al de la instancia -- nadie la reconocia:
+ * "funcion no declarada: copia_u64".  En la practica, una generica solo se
+ * podia llamar desde una funcion libre.
+ *
+ * El caso comprueba la misma llamada por los dos caminos: desde `main` y desde
+ * un metodo.
+ */
+void copia<T>(T x, T* out) { (*out) = x; }
+struct Caja {
+    u64 v;
+    public u64 desde_metodo() {
+        u64 r = 0;
+        copia(this.v, &r);          // generica llamada DESDE UN METODO
+        return r;
+    }
+}
+i32 main() {
+    u64 src = 7;
+    u64 z = 0;
+    copia(src, &z);                  // generica llamada desde main
+    if (z != 7) { return 1; }
+    Caja c;
+    c.v = 35;
+    return (i32)(z + c.desde_metodo());   // 42
+}

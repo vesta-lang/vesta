@@ -33,7 +33,7 @@ i32 main() {
     i32 tick = GetTickCount();
 
     i32 acc = 40;
-    if (pid != 0)  { acc = acc + 1; }
-    if (tick != 0) { acc = acc + 1; }
+    if (pid != 0)  { acc++; }
+    if (tick != 0) { acc++; }
     return acc;
 }

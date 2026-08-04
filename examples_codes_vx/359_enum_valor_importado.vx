@@ -1,0 +1,30 @@
+/**
+ * @file 359_enum_valor_importado.vx
+ * @brief Un enum CON VALOR importado de otro modulo conserva sus valores.
+ *
+ * Un `enum` puede ser dos cosas y cada una tiene su representacion: uno de
+ * variantes es un agregado -- tag mas campos, en memoria --, mientras que uno
+ * con valor (`enum Ordering : i8 { Less = -1 }`) es su entero base etiquetado,
+ * que cabe en un registro y se compara como un numero.
+ *
+ * Al cruzar el modulo se perdian las dos cosas: la interfaz no guardaba ni el
+ * tipo de respaldo ni el valor de cada variante, asi que `Ordering.Less` no
+ * valia -1 sino la direccion de un buffer; y como cada ruta de resolucion
+ * construia el tipo por su cuenta, el mismo enum llegaba unas veces como
+ * entero y otras como agregado, con lo que comparar dos de sus valores
+ * comparaba direcciones.
+ *
+ * El caso comprueba lo minimo que debe cumplirse: dos valores de la misma
+ * variante son iguales, y de variantes distintas no.
+ */
+import std.wideint only Ordering;
+i32 main() {
+    Ordering x = Ordering.Less;
+    Ordering y = Ordering.Less;
+    Ordering z = Ordering.Greater;
+    i32 acc = 0;
+    if (x == y) { acc = acc + 20; }
+    if (x != z) { acc = acc + 22; }
+    println("sin cast: iguales=${x == y} distintos=${x != z}");
+    return acc;   // 42
+}

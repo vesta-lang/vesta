@@ -1,10 +1,28 @@
 namespace std.syscall;
 
-private comptime string source(expr code) {
-    return "\"" + code + "\"";
-}
+/**
+ * Modulo publico del subsistema de syscalls.  Re-exporta la implementacion del
+ * OS activo (linux/windows via @Target) y los tipos base (std.syscall.abi).
+ *
+ * Para realizar una syscall se ejecuta la instruccion de cada ISA:
+ *      - x86_64     -> syscall
+ *      - x86        -> sysenter / int 0x80
+ *      - ARM64      -> svc #0
+ *      - RISC-V     -> ecall
+ *
+ * Los tipos base (syscall_id, invoke_syscall, resolve_syscall) viven en
+ * std.syscall.abi -- un modulo que NO importa a las implementaciones -- para
+ * romper el ciclo exec_syscall -> linux -> exec_syscall.  Es el patron estandar
+ * de un compilador con compilacion incremental por modulo (como Go: paquete
+ * base con los tipos compartidos).
+ */
 
-@Macro
-public comptime string syscall_asm(i64 x_unused) {
-    return source(x_unused);
-}
+// Re-exporta los tipos base para que `import std.syscall only syscall_id`
+// siga funcionando desde el modulo publico.
+public import std.syscall.abi;
+
+@Target("!os:windows")
+import std.syscall.linux;
+
+@Target("os:windows")
+import std.syscall.windows;

@@ -415,6 +415,7 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
             block_end[b] = 2u * gi;
         }
         out.max_pos = 2u * gi;
+        out.block_starts = block_start; // Fact de estructura (tramos rectilineos).
     }
 
     /* Helper: invoca @p fn(vreg_id, role) por cada operando VREG de la
@@ -480,7 +481,20 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
     /* Posiciones de CALL (para clobbers del allocator, commit 4). */
     for (size_t b = 0; b < NB; ++b) {
         uint32_t gi = first_gi[b];
+        /* ABI custom en un CALL/CALLIND: los pseudo-ARG con destino FIJO
+         * (register() del cfn callee, p.ej. ebx=arg1 de un syscall) colocan su
+         * operando en un registro fisico concreto.  El caller los sobreescribe
+         * con el parallel-move ANTES del call -> esos regs son clobbers para los
+         * vregs vivos A TRAVES del call.  crosses_call solo cubre los
+         * caller-saved; un arg-dst CALLEE-SAVED (ebx/esi/edi en x86-32) NO lo
+         * cubre -> un valor vivo (p.ej. la direccion de un buffer reusado en dos
+         * syscalls) se colocaba en ebx y el mov ebx,arg1 lo destruia.  Se
+         * acumulan los arg-dst hasta el CALL y se registran como clobbers de esa
+         * posicion (mismo mecanismo que asm_clobbers -> forbidden_lanes). */
+        std::vector<uint8_t> pending_arg_regs;
         for (const MInstr &in : mf.blocks[b].instrs) {
+            if (in.op == MOp::ARG && in.dst.is_reg())
+                pending_arg_regs.push_back(in.dst.reg);
             /* DIVMOD_V clobbea RAX/RDX (idiv) -> tratarlo como call-position
              * para que los vregs vivos a traves vayan a callee-saved.
              * LOAD_VM/STORE_VM: su page-miss hace CALL a vrt_vm_read/write
@@ -496,8 +510,15 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
                  * conservador: cualquiera) -> los vregs vivos a traves van a
                  * callee-saved/spill.  Los binding precoloreados son EXENTOS:
                  * el linear_scan les asigna su fixed_reg incondicionalmente. */
-                || in.op == MOp::INLINE_ASM_RAW)
+                || in.op == MOp::INLINE_ASM_RAW) {
                 out.call_positions.push_back(2u * gi);
+                /* Los arg-dst custom de este CALL son clobbers de su posicion
+                 * (incluye callee-saved que crosses_call no protege). */
+                if (!pending_arg_regs.empty()) {
+                    out.asm_clobbers.push_back({2u * gi, pending_arg_regs});
+                    pending_arg_regs.clear();
+                }
+            }
             /*  AS inc.5e: registrar los clobbers EXPLICITOS del asm
              * (callee-saved que el call-position no cubre) por posicion. */
             if (in.op == MOp::INLINE_ASM_RAW) {
@@ -629,7 +650,7 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
      * completo) sin que un def en un bloque corte el rango de otro -- a
      * diferencia del set_from ingenuo, que asumia SSA single-def. */
     std::vector<uint32_t> b_first(NV, UINT32_MAX), b_first_def(NV, UINT32_MAX),
-        b_last_use(NV, 0);
+        b_last_use(NV, 0), b_last_def(NV, 0);
     std::vector<uint8_t> b_used(NV, 0), b_def(NV, 0);
     std::vector<uint32_t> touched;
     touched.reserve(64);
@@ -643,6 +664,7 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
             b_first[v] = UINT32_MAX;
             b_first_def[v] = UINT32_MAX;
             b_last_use[v] = 0;
+            b_last_def[v] = 0;
             b_used[v] = 0;
             b_def[v] = 0;
         }
@@ -667,6 +689,7 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
                 if (role == OperandRole::DEF || role == OperandRole::USEDEF) {
                     b_def[v] = 1;
                     if (def_pos < b_first_def[v]) b_first_def[v] = def_pos;
+                    if (def_pos > b_last_def[v]) b_last_def[v] = def_pos;
                     if (def_pos < b_first[v]) b_first[v] = def_pos;
                 }
             });
@@ -680,19 +703,97 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
             if (!in && !out_ && !appears) continue;
             const uint32_t start =
                 in ? bstart : (appears ? b_first[v] : bstart);
+            /* El intervalo debe cubrir TODO punto donde el valor se toca -- lo lean
+             * o lo escriban.  Ultimo uso y ultima definicion son MAXIMOS, no ramas
+             * excluyentes: un operando @c USEDEF (xadd, CMOVcc, atomicas) hace las
+             * dos cosas en la MISMA instruccion, y la escritura cae DESPUES de la
+             * lectura (@c def_pos = use_pos+1).
+             *
+             * Quedarse con el ultimo uso dejaba fuera esa escritura cuando el
+             * resultado moria en el acto.  Un valor que muere no deja de necesitar un
+             * SITIO donde escribirse: preguntar por su ubicacion en su propia
+             * definicion devolvia "en ningun sitio", y esa respuesta viajaba hasta el
+             * codigo emitido.  Solo se veia en el AOT (el unico que construye el
+             * timeline con rangos); sobre una base plana el fallo era invisible. */
             uint32_t end;
-            if (out_)
+            if (out_) {
                 end = bend; // vivo al salir
-            else if (b_used[v])
-                end = b_last_use[v] + 1u; // muere en su ultimo uso
-            else if (b_def[v])
-                end = b_first_def[v] + 1u; // def muerto
-            else
+            } else if (b_used[v] || b_def[v]) {
+                end = bstart;
+                if (b_used[v] && b_last_use[v] + 1u > end) end = b_last_use[v] + 1u;
+                if (b_def[v] && b_last_def[v] + 1u > end) end = b_last_def[v] + 1u;
+            } else {
                 end = bend; // live-in raro: conservador
+            }
             out.intervals[v].add_range(start, end);
         }
     }
     return out;
+}
+
+/*
+ * @brief Produce MachineNextUseFacts: por cada vreg, las posiciones de sus USOS
+ *        (uso en 2*gi) en la MISMA numeracion que build_intervals.  Replica el
+ *        criterio de operandos de build_intervals::each_vreg (roles USE/USEDEF +
+ *        INLINE_ASM_RAW) pero recolecta SOLO los usos (el def no es uso).  Dos
+ *        pasadas -> CSR contiguo.  No mira el IR: solo el MachineIR asignado.
+ */
+MachineNextUseFacts compute_next_use(const MFunction &mf) {
+    MachineNextUseFacts f;
+    const uint32_t NV = mf.vreg_count;
+    const size_t   NB = mf.blocks.size();
+
+    uint32_t total = 0;
+    for (size_t b = 0; b < NB; ++b)
+        total += static_cast<uint32_t>(mf.blocks[b].instrs.size());
+    f.max_pos = 2u * total;
+
+    if (NV == 0) {
+        f.off.assign(1, 0);
+        return f;
+    }
+
+    /* Vregs USADOS de una instr -- mismo criterio que build_intervals::each_vreg,
+     * pero solo USE/USEDEF (para next-use el def no cuenta como uso). */
+    auto each_use = [&mf](const MInstr &in, auto &&fn) {
+        if (in.op == MOp::INLINE_ASM_RAW) {
+            const uint32_t idx = static_cast<uint32_t>(in.src1.value);
+            if (idx < mf.asm_blobs.size())
+                for (uint32_t v : mf.asm_blobs[idx].in_vregs)
+                    fn(v);
+            return;
+        }
+        const InstrRoles roles = operand_roles(in.op);
+        auto is_use = [](OperandRole r) {
+            return r == OperandRole::USE || r == OperandRole::USEDEF;
+        };
+        if (in.dst.is_vreg() && is_use(roles.dst)) fn(in.dst.vreg_id());
+        if (in.src1.is_vreg() && is_use(roles.src1)) fn(in.src1.vreg_id());
+        if (in.src2.is_vreg() && is_use(roles.src2)) fn(in.src2.vreg_id());
+    };
+
+    /* Pasada 1: contar usos por vreg (para dimensionar el CSR). */
+    std::vector<uint32_t> count(NV, 0);
+    for (size_t b = 0; b < NB; ++b)
+        for (const MInstr &in : mf.blocks[b].instrs)
+            each_use(in, [&](uint32_t v) { if (v < NV) ++count[v]; });
+
+    f.off.resize(NV + 1, 0);
+    for (uint32_t v = 0; v < NV; ++v) f.off[v + 1] = f.off[v] + count[v];
+    f.use_pos.resize(f.off[NV]);
+
+    /* Pasada 2: llenar (gi global -> pos de uso 2*gi).  El recorrido lineal es
+     * monotono (2*gi creciente) y el MachineIR ya no tiene PHI (resueltos a
+     * copies), asi que los usos de cada vreg quedan ORDENADOS sin sort. */
+    std::vector<uint32_t> cur(f.off.begin(), f.off.end() - 1);
+    uint32_t gi = 0;
+    for (size_t b = 0; b < NB; ++b)
+        for (const MInstr &in : mf.blocks[b].instrs) {
+            const uint32_t pos = 2u * gi;
+            each_use(in, [&](uint32_t v) { if (v < NV) f.use_pos[cur[v]++] = pos; });
+            ++gi;
+        }
+    return f;
 }
 
 } // namespace jit

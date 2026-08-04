@@ -2,7 +2,7 @@
 i32 main() {
     string s = "hola";
     string n = "";
-    if (str_equals(s, n)) return 1;
-    if (str_equals(n, n)) return 42;  // dos vacios iguales
+    if (s.equals(n)) return 1;
+    if (n.equals(n)) return 42;  // dos vacios iguales
     return 2;
 }

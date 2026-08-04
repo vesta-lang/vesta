@@ -64,6 +64,9 @@ struct NativeReloc {
         ARM64_CALL26 =
             5, ///< AArch64 BL a una FUNCION: parchea imm26 = (target-site)>>2.
                ///< Como CALL_REL32, el driver encola el callee (BFS).
+        ABS32 =
+            6, ///< direccion absoluta 32-bit a un DATO/FUNCION (x86-32 no-PIE):
+               ///< *(u32*)site = VA.  El emisor ELF32 -> R_386_32.
     };
     Kind kind = Kind::CALL_REL32;
     uint32_t offset = 0; ///< byte offset dentro de los bytes de la funcion
@@ -85,7 +88,21 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
                       const CallResolver &resolve_call = {},
                       const VregEntries &ent = {},
                       const CallResolver &resolve_native = {},
-                      const CallResolver &resolve_symbol = {});
+                      const CallResolver &resolve_symbol = {},
+                      size_t *out_code_size = nullptr,
+                      std::vector<LineMapEntry> *out_line_map = nullptr);
+
+/**
+ * @brief Watchdog CTPE: activa/desactiva la emision de polls de safepoint en
+ *        los back-edges de las funciones compiladas por vreg en ESTE hilo.
+ *
+ * Con @p handler_addr != 0, cada loop back-edge emite un poll que consulta
+ * @c ProcessVM::ctpe_abort; el temporizador del modo CTPE lo activa al vencer
+ * el presupuesto -> throw_fatal -> se aborta el precomputo.  0 = desactivado
+ * (comportamiento normal del JIT de produccion, cero polls).  Debe restaurarse
+ * a 0 tras compilar el programa a precomputar.
+ */
+void vreg_set_ctpe_safepoint_handler(uint64_t handler_addr) noexcept;
 
 /**
  * @brief Compila @p fn como un ENTRY de callback de ABI C nativo por el path

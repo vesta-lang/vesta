@@ -68,8 +68,8 @@ i32 main() {
     // underlying_of<T>() devuelve el typename del underlying.
     string un_user = underlying_of<user_id>();
     string un_u64  = underlying_of<u64>();
-    if (str_length(un_user) != 3) return 800;   // "u64" -> 3 bytes
-    if (str_length(un_u64)  != 3) return 900;
+    if (un_user.length() != 3) return 800;   // "u64" -> 3 bytes
+    if (un_u64.length()  != 3) return 900;
 
     // Verificacion rapida: dos newtypes con el MISMO underlying son
     // tipos DIFERENTES (porque tienen nominal_id distinto).

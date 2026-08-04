@@ -60,7 +60,7 @@ i32 main() {
     f64 half = Angle.HALF;                   // 3.1415926
 
     // String: ==, +, interpolacion.
-    if (Verb.PUT == "PUT") { acc = acc + 1; }        // 141
+    if (Verb.PUT == "PUT") { acc++; }        // 141
     string msg = "verb=" + Verb.GET;                  // "verb=GET"
 
     // Struct: acceso a campos del valor de la variante.

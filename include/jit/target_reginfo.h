@@ -122,7 +122,7 @@ struct TargetRegInfo {
  * difieren.  El JIT en proceso usa el ABI del host (ver
  * @c target_x86_64_vm_abi).
  */
-inline TargetRegInfo build_x86_64_target(bool sysv) {
+inline TargetRegInfo build_x86_64_target(bool sysv, bool reserve_vec_acc = true) {
     TargetRegInfo t;
     t.pointer_size = 8;
     t.is_two_address = true;
@@ -164,12 +164,17 @@ inline TargetRegInfo build_x86_64_target(bool sysv) {
      * traves de un CALL todavia (cuando lo hagan, habra que salvarlos -- TODO
      * cross-call FP). */
     t.scratch[FP] = {id(MReg::XMM14), id(MReg::XMM15)};
-    /* XMM10..XMM13 (ids 26..29) RESERVADOS como los U=4 acumuladores vectoriales
-     * de las reducciones/FMA (VEC_ACC_*): deben sobrevivir TODO el bucle en
-     * registros, no en memoria, y son INDEPENDIENTES (unroll -> oculta la
-     * latencia de la cadena vaddpd).  Excluidos de allocatable -> ningun otro
-     * valor los pisa.  acc_idx 0..3 -> XMM13,12,11,10.  Asignables: XMM0..XMM9. */
-    for (int i = 16; i <= 25; ++i) { /* XMM0..XMM9 asignables */
+    /* XMM10..XMM13 (ids 26..29): los U=4 acumuladores vectoriales de las
+     * reducciones/FMA (VEC_ACC_*), que deben sobrevivir TODO el bucle en
+     * registros (no en memoria) y ser INDEPENDIENTES (unroll -> oculta la
+     * latencia de la cadena vaddpd).  Reserva DEMAND-DRIVEN: solo se excluyen de
+     * allocatable en funciones que USAN el path de reduccion (@p reserve_vec_acc
+     * = true); en las que NO lo usan (la gran mayoria) XMM10-13 son asignables
+     * para FP escalar -> 14 lanes en vez de 10.  El selector solo fija XMM13-idx
+     * cuando hay ops VEC_ACC_*, asi que la MISMA condicion decide reserva Y uso
+     * -> coherente (nadie pisa un acumulador vivo).  acc_idx 0..3 -> XMM13..10. */
+    const int fp_hi = reserve_vec_acc ? 25 : 29; /* XMM0..9 (reserva) o XMM0..13. */
+    for (int i = 16; i <= fp_hi; ++i) {
         t.allocatable[FP].push_back(static_cast<uint8_t>(i));
         t.caller_saved[FP].push_back(static_cast<uint8_t>(i));
     }
@@ -242,19 +247,30 @@ inline const TargetRegInfo &target_x86_32() {
     return info;
 }
 
-/** @brief @c TargetRegInfo x86-64 para el ABI @p sysv (cacheado por ABI). */
-inline const TargetRegInfo &target_x86_64_abi(bool sysv) {
-    static const TargetRegInfo sysv_info = build_x86_64_target(true);
-    static const TargetRegInfo win_info = build_x86_64_target(false);
-    return sysv ? sysv_info : win_info;
+/**
+ * @brief @c TargetRegInfo x86-64 para el ABI @p sysv (cacheado por ABI x reserva).
+ * @param reserve_vec_acc  true (defecto) = XMM10-13 reservados para VEC_ACC
+ *        (funciones con reduccion vectorial); false = XMM10-13 asignables para FP
+ *        escalar (funciones sin reduccion).  La reserva es DEMAND-DRIVEN.
+ */
+inline const TargetRegInfo &target_x86_64_abi(bool sysv, bool reserve_vec_acc = true) {
+    static const TargetRegInfo sysv_res  = build_x86_64_target(true, true);
+    static const TargetRegInfo win_res   = build_x86_64_target(false, true);
+    static const TargetRegInfo sysv_free = build_x86_64_target(true, false);
+    static const TargetRegInfo win_free  = build_x86_64_target(false, false);
+    if (reserve_vec_acc) return sysv ? sysv_res : win_res;
+    return sysv ? sysv_free : win_free;
 }
 
-/** @brief @c TargetRegInfo del ABI del HOST (para el JIT en proceso). */
-inline const TargetRegInfo &target_x86_64_vm_abi() {
+/**
+ * @brief @c TargetRegInfo del ABI del HOST (para el JIT en proceso).
+ * @param reserve_vec_acc  ver @c target_x86_64_abi.
+ */
+inline const TargetRegInfo &target_x86_64_vm_abi(bool reserve_vec_acc = true) {
 #if defined(_WIN32)
-    return target_x86_64_abi(/*sysv=*/false);
+    return target_x86_64_abi(/*sysv=*/false, reserve_vec_acc);
 #else
-    return target_x86_64_abi(/*sysv=*/true);
+    return target_x86_64_abi(/*sysv=*/true, reserve_vec_acc);
 #endif
 }
 

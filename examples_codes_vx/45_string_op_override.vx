@@ -38,11 +38,11 @@ string my_concat(string a, string b) {
 bool my_eq(string a, string b) {
     // Comparamos byte a byte sin usar `==` de strings (que se rutearia
     // de vuelta a este override -- aunque el lowering ya lo protege).
-    i64 la = str_length(a);
-    i64 lb = str_length(b);
+    i64 la = a.length();
+    i64 lb = b.length();
     if (la != lb) return true;          // longitudes distintas -> difieren.
     // Mismo length: comparar bytes via str_bytes + cstr.
-    bool same = (str_bytes(a) == str_bytes(b));
+    bool same = (a.bytes() == b.bytes());
     if (!same) return true;
     return false;                       // (aprox.) iguales -> NO difieren.
 }
@@ -53,11 +53,11 @@ i32 main() {
 
     // 1. Operador `+` ruteado a my_concat -> resultado fijo "OVR" (len 3).
     string c = s + t;
-    if (str_length(c) != 3) return 1;
+    if (c.length() != 3) return 1;
 
     // 2. Builtin str_concat tambien ruteado a my_concat -> len 3.
-    string c2 = str_concat(s, t);
-    if (str_length(c2) != 3) return 2;
+    string c2 = s.concat(t);
+    if (c2.length() != 3) return 2;
 
     // 3. Operador `==` ruteado a my_eq (invertido):
     //    "hola" == "hola" -> my_eq devuelve false (NO difieren).
@@ -73,8 +73,8 @@ i32 main() {
     if (!(s != s2)) return 5;
 
     // 5. Builtin str_equals tambien ruteado a my_eq (invertido):
-    //    str_equals("hola","hola") -> false (NO difieren).
-    if (str_equals(s, s2)) return 6;
+    //    "hola".equals("hola") -> false (NO difieren).
+    if (s.equals(s2)) return 6;
 
     flush();
     return 42;

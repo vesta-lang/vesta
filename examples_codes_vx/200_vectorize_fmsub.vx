@@ -1,0 +1,36 @@
+namespace ejemplos.vectorize_fmsub;
+
+// =============================================================================
+// 200_vectorize_fmsub.vx
+//
+// Auto-vectorizacion del patron element-wise FMSUB:
+//   for (i)  c[i] = a[i] * b[i] - d[i];
+// (a/b/c/d punteros f64|f32 HOST) -> UN VFMSUB231P{D,S} por chunk (mul-resta
+// fusionado, 1 solo redondeo), en vez de mul+sub separados (2 redondeos).
+//
+// Es el simetrico del FMA (a*b + d -> VFMADD231): el matcher compound detecta
+// que el segundo paso es una RESTA de array y pone el bit SUB en el VEC_FMA.
+// El interp (oraculo) lo emula con fma(a,b,-d) = round(a*b - d), BIT-EXACTO con
+// el VFMSUB231 del JIT (el -d es exacto).  Necesita AVX (sin el, cae a interp).
+//
+//   vm --vx examples_codes_vx/200_vectorize_fmsub.vx -o fms
+//   vm --run fms.velb --stats                  # R00 == 675
+//   vm -m aot --float-isa avx --vx ...          # exit = 675 & 0xff = 163
+// =============================================================================
+
+f64 run(f64* c, f64* a, f64* b, f64* d, i32 n) {
+    for (i32 i = 0; i < n; i++) { c[i] = a[i] * b[i] - d[i]; } // -> VFMSUB231
+    f64 s = 0.0;
+    for (i32 i = 0; i < n; i++) { s = s + c[i]; }
+    return s;
+}
+
+i64 main() {
+    f64* c = malloc(200); f64* a = malloc(200);
+    f64* b = malloc(200); f64* d = malloc(200);
+    // a[i]=i+1, b[i]=3, d[i]=i -> c[i] = (i+1)*3 - i = 2i+3 (exacto en f64).
+    for (i32 i = 0; i < 25; i++) { a[i] = (f64)(i + 1); b[i] = 3.0; d[i] = (f64)i; }
+    f64 s = run(c, a, b, d, 25);   // sum_{i=0..24}(2i+3) = 2*300 + 75 = 675
+    free(c); free(a); free(b); free(d);
+    return (i64) s;
+}

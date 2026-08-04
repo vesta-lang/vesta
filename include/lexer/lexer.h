@@ -286,6 +286,9 @@ class Lexer {
      * 0 = no hay info de linea para el siguiente token.
      */
     int last_src_line = 0;
+    /// Columna capturada del marcador, o 0 si no venia.  Es lo que permite
+    /// senalar QUE de la linea fallo y no solo en cual.
+    int last_src_column = 0;
 
     /**
      * @brief Path del archivo fuente Vesta marcado por el comentario

@@ -428,7 +428,16 @@ class ProcessVM {
      * @c std::atomic<bool> @c safepoint_acked posteriormente.
      */
     uint8_t safepoint_flag = 0;
-    uint8_t _safepoint_pad[7] = {0}; ///< Alineacion a 8 bytes
+    /// Watchdog CTPE: el hilo temporizador lo pone a 1 al vencer el
+    /// presupuesto; @c vrt_safepoint_handler lo consulta en el proximo poll y
+    /// aborta (throw_fatal).  Vive en el ProcessVM (una sola instancia) para
+    /// evitar el problema de globales duplicados cross-modulo (vm/DLL/vmcore).
+    uint8_t ctpe_abort = 0;
+    /// Watchdog CTPE (resultado): 1 = el safepoint hizo longjmp para abortar
+    /// la ejecucion precomputada.  Lo lee try_invoke_ctpe: si es 1, NO se pliega
+    /// (el resultado seria parcial/incorrecto).  Distinto de ctpe_abort (peticion).
+    uint8_t ctpe_did_abort = 0;
+    uint8_t _safepoint_pad[5] = {0}; ///< Alineacion a 8 bytes
 
     GlobalPID
         pid; ///< Identificador global del proceso (scheduler_id + local_pid)
@@ -830,7 +839,70 @@ class ProcessVM {
     ///   0 = AV (segfault, default), 1 = DIVIDE_BY_ZERO, 2 = INT_OVERFLOW.
     /// El scheduler lo consulta tras el @c longjmp para emitir el
     /// @c FatalError adecuado.
-    uint32_t pending_av_kind = 0;
+    /// Que fallo del procesador quedo pendiente de contar.  0xFFFFFFFF = no
+    /// hay ninguno; 0 = acceso invalido, 1 = division entre cero, 2 =
+    /// desbordamiento.  El centinela hace falta porque 0 es un fallo REAL: sin
+    /// el no habia forma de distinguir un acceso invalido de no haber fallado.
+    uint32_t pending_av_kind = 0xFFFFFFFFu;
+    /// El PC del fallo apunta a la instruccion que fallo, sin haber
+    /// avanzado.  Pasa con los fallos que captura el sistema (acceso
+    /// invalido, division del procesador): la interrumpen a medias.  En el
+    /// resto, el PC ya avanzo y hay que mirar el byte anterior.  Sin
+    /// distinguirlo, un fallo en la PRIMERA instruccion de una funcion se
+    /// atribuye a la ultima de la anterior -- que es otra funcion.
+    bool fatal_pc_exact = false;
+
+    /// Direccion del codigo NATIVO donde ocurrio el fallo, o 0.
+    ///
+    /// El codigo compilado no va actualizando el PC de la maquina virtual --
+    /// ese es el punto de compilarlo --, asi que al fallar el PC que se
+    /// conserva es de la ultima vez que se sincronizo y la traza senalaba una
+    /// funcion que no era.  Lo unico fiable es esta, que el sistema entrega al
+    /// avisar del fallo y que hay que guardar ANTES de desviar la ejecucion.
+    uint64_t pending_fault_native_pc = 0;
+
+    /// Puntero de pila NATIVO en el momento del fallo, o 0.
+    ///
+    /// Con el codigo compilado los marcos de la cadena de llamadas viven en la
+    /// pila del anfitrion y no en la de la maquina virtual, que es donde mira
+    /// el barrido normal; por eso la traza en JIT solo ensenaba el marco de
+    /// arriba.  Guardando por donde iba esa pila se puede recorrer igual.
+    uint64_t pending_fault_native_sp = 0;
+
+    /// Registros generales del anfitrion en el momento del fallo, en el orden
+    /// de la codificacion x86-64 (rax, rcx, rdx, rbx, rsp, rbp, rsi, rdi,
+    /// r8..r15).  Solo valen si @c pending_fault_native_regs_ok.
+    ///
+    /// El sistema entrega el contexto entero al avisar del fallo y se estaba
+    /// tirando todo menos el PC: sin ellos, el desensamblado del codigo nativo
+    /// dice QUE instruccion revento pero no CON QUE, que es justo lo que
+    /// explica el fallo.
+    uint64_t pending_fault_native_regs[16] = {};
+    bool pending_fault_native_regs_ok = false;
+
+    /// La direccion nativa guardada es una de RETORNO, no la del fallo.
+    ///
+    /// Pasa con lo que lanza el propio programa -- un `panic` --: ahi no hay
+    /// aviso del sistema y lo unico que se sabe es desde donde se llamo al
+    /// ayudante, que apunta al byte SIGUIENTE a la llamada.  Al informar hay
+    /// que retroceder uno para caer dentro de la instruccion que de verdad
+    /// interviene, que es lo que hace cualquier desenrollador; si no, se marca
+    /// la de despues y quien lee no reconoce su propio codigo.
+    bool pending_fault_native_is_return = false;
+
+    /// Direccion por la que ARRANCO este proceso.
+    ///
+    /// Es el fondo de su cadena de llamadas y no tiene direccion de retorno
+    /// en ninguna parte: nadie lo llamo, lo puso a correr el cargador (el
+    /// proceso principal) o un @c spawn (los hijos).  Al reconstruir una
+    /// traza a partir de la pila, ese ultimo escalon no se puede deducir --
+    /// hay que saberlo --, y sin el la traza no dice de donde venia todo.
+    /// Cada proceso guarda el suyo: el de un hijo es su cuerpo, no @c main.
+    ///
+    /// El valor "sin fijar" es @c UINT64_MAX, no 0: el codigo empieza en la
+    /// direccion 0, asi que 0 es una entrada perfectamente valida y usarlo
+    /// como vacio descartaba justo el caso normal.
+    uint64_t entry_pc = UINT64_MAX;
 
     StringInternPool *str_intern_pool =
         nullptr; ///< Pool de strings internados (creado bajo demanda)

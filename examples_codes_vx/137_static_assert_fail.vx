@@ -7,3 +7,4 @@ static_assert(sizeof<i32>() == 8, "i32 debe ser 8 bytes (test deliberadamente fa
 i32 main() {
     return 0;
 }
+// @expect-compile-fail

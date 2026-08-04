@@ -1,0 +1,58 @@
+/**
+ * @file 344_wideint_mul_fuzz.vx
+ * @brief Comprobacion aleatoria de `u128.__mul__` contra un oraculo externo.
+ *
+ * La multiplicacion de 128 bits se construye con el clasico splitting de 32
+ * bits (`mulhi`) mas los cross-terms `al*bh + ah*bl`.  Ahi es facil perder un
+ * acarreo sin que ningun caso "bonito" lo delate, asi que se valida con
+ * entradas pseudoaleatorias: 20000 productos encadenados en un checksum FNV.
+ * Si UN solo producto difiere en un bit, el checksum no cuadra.
+ *
+ * La constante esperada la produce `tools/fuzz/wideint_mul_oracle.c`, que hace
+ * lo mismo con el `unsigned __int128` nativo de gcc.  El mismo fichero admite
+ * un numero de iteraciones por argumento para regenerarla o para barridos
+ * largos (200000 productos tambien coinciden; aqui se usa un N corto para no
+ * penalizar la suite).
+ */
+import std.wideint only u128;
+
+/** Estado del xorshift64; misma semilla y secuencia que el oraculo. */
+u64 g_state = 0x243F6A8885A308D3;
+
+/**
+ * @brief xorshift64.
+ * @return Siguiente valor de la secuencia.
+ */
+u64 next_rand() {
+    u64 s = g_state;
+    s = s ^ (s << 13);
+    s = s ^ (s >> 7);
+    s = s ^ (s << 17);
+    g_state = s;
+    return s;
+}
+
+i32 main() {
+    u64 h = 0xCBF29CE484222325;
+    u64 i = 0;
+    while (i < 20000) {
+        u128 a;
+        a.lo64 = next_rand();
+        a.hi64 = next_rand();
+        u128 b;
+        b.lo64 = next_rand();
+        b.hi64 = next_rand();
+
+        u128 p = a * b;
+
+        h = h ^ p.lo64;
+        h = h * 1099511628211;
+        h = h ^ p.hi64;
+        h = h * 1099511628211;
+        i = i + 1;
+    }
+    if (h != 0xE5F4C02E8920B25A) {
+        return 1;
+    }
+    return 42;
+}

@@ -100,6 +100,16 @@ gc::GcHandle flatten_string_public(ProcessVM *vm, gc::GcHandle h) noexcept;
  * @return GcHandle del nuevo string concatenado (ROPE) o
  *         @c GC_NULL_HANDLE si alguno de los operandos no es valido.
  */
+/**
+ * @brief Calcula el SLICE de una cadena (cuerpo compartido interprete/JIT).
+ * @param vm    Proceso propietario del heap.
+ * @param src_h Cadena de la que se toma la vista.
+ * @param range (cp_start << 32) | cp_len.
+ * @return Handle del SLICE, o el padre si la vista lo abarca entero.
+ */
+gc::GcHandle strslice_public(ProcessVM *vm, gc::GcHandle src_h,
+                             uint64_t range) noexcept;
+
 gc::GcHandle strcat_public(ProcessVM *vm, gc::GcHandle a,
                            gc::GcHandle b) noexcept;
 

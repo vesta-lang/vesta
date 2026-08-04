@@ -46,6 +46,9 @@ struct AotOptions {
     std::string bin_base;             ///< --bin-base (hex; solo .bin).
     std::string sysroot;              ///< --sysroot (para el auto-link).
     std::string argv0;                ///< Ruta del ejecutable (localizar stdlib).
+    /// Ruta del `.vx` compilado.  Se anota en el fichero acompanante de
+    /// depuracion para poder ensenar despues la linea de fuente.
+    std::string source_path;
     /// Nivel de informacion de depuracion embebida en el artefacto nativo:
     ///   0 = ninguna (default; cero coste, binario mas pequeno).
     ///   1 = simbolos de FUNCION (.symtab / COFF symtab) -> backtraces con
@@ -53,7 +56,13 @@ struct AotOptions {
     ///   2 = + tabla de lineas (fuente<->PC)  [futuro: DWARF .debug_line].
     ///   3 = + variables locales/tipos        [futuro: DWARF .debug_info].
     /// Los niveles 2-3 se construyen sobre el mismo mapa nombre->VA del nivel 1.
-    int debug_level = 0;              ///< --aot-debug=N (0..3).
+    /// Eje DWARF de `--debug-info`: symtab y (manana) `.debug_line`.  Lo
+    /// consumen depuradores y desensambladores AJENOS.
+    int debug_level = 0;
+    /// Eje del LENGUAJE de `--debug-info` (la parte tras el punto): el fichero
+    /// acompanante `.vxdbg`.  Va aparte porque son mecanismos distintos y el
+    /// nuestro no puede contaminar al otro: no toca el binario.
+    int lang_debug_level = 0;
 };
 
 /**

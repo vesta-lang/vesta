@@ -47,6 +47,14 @@ struct NativeCompileOpts {
     bool target_sysv = true; ///< ABI x86: true=SysV(ELF), false=Win64(PE).
     bool mode32 = false;     ///< x86-32 (modo protegido).
     jit::FloatIsa fisa = jit::FloatIsa::SSE2; ///< ISA de float x86.
+    /// Pedir la correlacion codigo-nativo <-> linea del fuente.
+    ///
+    /// Es un DATO: no cambia ni un byte de lo emitido (el codificador solo
+    /// apunta, en paralelo, en que desplazamiento empieza cada linea).  Sirve
+    /// para que un consumidor EXTERNO pueda explicar despues un fallo a partir
+    /// de su direccion, sin que el binario lleve nada que lo explique por si
+    /// mismo -- meterle codigo cambiaria el programa que se depura.
+    bool want_line_map = false;
 };
 
 /// Resultado del codegen de UNA funcion.  @c bytes vacio => no soportada.
@@ -54,6 +62,9 @@ struct NativeCompileResult {
     std::vector<uint8_t> bytes;
     std::vector<jit::NativeReloc> relocs;
     std::vector<jit::Stackmap> stackmaps;
+    /// Donde cambia la linea del fuente dentro de @c bytes.  Vacio salvo que
+    /// se pidiera con @c NativeCompileOpts::want_line_map.
+    std::vector<jit::LineMapEntry> line_map;
 };
 
 /// Backend de codegen nativo de una arquitectura.

@@ -1,6 +1,6 @@
 // `atomic<T>`: un valor atomico con la sintaxis de una variable normal.
 //
-// Vive en la stdlib (`vx_atomic`), no en el compilador: es un struct de un solo
+// Vive en la stdlib (`atomic`), no en el compilador: es un struct de un solo
 // campo que sobrecarga los operadores para que CADA uno sea una operacion
 // atomica.  Nada de esto es un caso especial del lenguaje.
 //
@@ -12,7 +12,7 @@
 // [[Sincronizacion]].
 namespace atomic_tipo;
 
-import "vx_atomic" only atomic;
+import std.atomic only atomic;
 
 i32 main() {
     atomic<i64> g;

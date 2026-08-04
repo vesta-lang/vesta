@@ -1,0 +1,26 @@
+/**
+ * @file 334_struct_static_fields.vx
+ * @brief Campos `static` en structs: estado por-tipo (contadores, singletons).
+ *
+ * Un `struct` puede declarar campos `static`: no viven en cada instancia sino una
+ * sola vez (storage global `<Struct>__<campo>`), accesibles via `Struct.campo`
+ * (lectura/escritura).  Habilita contadores por-tipo y singletons.  Se valida con
+ * la red diferencial (interp = oraculo; jit y aot coinciden).
+ */
+namespace ssf;
+
+struct Counter {
+    static u64 count;
+    u64 id;
+    public static void inc()  { Counter.count = Counter.count + 1; }
+    public static u64  get()  { return Counter.count; }
+}
+
+i32 main() {
+    Counter.count = 0;
+    Counter.inc();
+    Counter.inc();
+    Counter.inc();
+    Counter.count = Counter.count + 39;   // 3 + 39 = 42
+    return (i32) Counter.get();
+}

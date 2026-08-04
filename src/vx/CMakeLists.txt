@@ -43,6 +43,10 @@ file(GLOB_RECURSE VX_CODEGEN_SRCS
     ${CMAKE_SOURCE_DIR}/src/aot/*.c       ${CMAKE_SOURCE_DIR}/src/aot/*.cpp
     ${CMAKE_SOURCE_DIR}/include/aot/*.h
     ${CMAKE_SOURCE_DIR}/src/jit/*.cpp     ${CMAKE_SOURCE_DIR}/include/jit/*.h
+    # El allocator central (rbank) + estructuras generales del codegen (RegAlloc,
+    # LinearPos, AllocationTimeline...): cambiarlos cambia el codigo emitido -> deben
+    # entrar al hash que invalida el cache de codegen.
+    ${CMAKE_SOURCE_DIR}/include/codegen/*.h  ${CMAKE_SOURCE_DIR}/src/codegen/*.cpp
     ${CMAKE_SOURCE_DIR}/src/port/transpiler_base.cpp
     ${CMAKE_SOURCE_DIR}/src/port/c/c_backend.cpp
     ${CMAKE_SOURCE_DIR}/src/port/snippet_loader.cpp
@@ -121,8 +125,6 @@ add_library(vx_lib STATIC
     # Catalogo multi-idioma de diagnosticos (codigo estable VXNNNN -> mensaje por
     # idioma).  La tabla se genera desde catalog/diagnostics.toml con
     # tools/import/gen_diag_catalog.py.  Seleccion de idioma por entorno.
-    diag/diag_catalog.cpp
-    gen/diag_catalog_gen.cpp
     # Renderizado de diagnosticos en formato maquina (JSON/SARIF) para IDEs/CI.
     diag/diag_format.cpp
     # DB de instrucciones EMBEBIDA (matcher texto->FormID) + tablas generadas
@@ -168,6 +170,11 @@ add_library(vx_lib STATIC
     borrow_checker.cpp
     compiler.cpp
     compiler_project.cpp
+    # Traductor de los tipos de Vesta a entidades de la base de conocimiento de
+    # depuracion (vxdbg).  Vive en el frontend porque la correspondencia entre
+    # el vocabulario de Vesta y el modelo generico solo la conoce quien declara
+    # los tipos; vxdbg no sabe de ningun lenguaje.
+    vxdbg_emit.cpp
     diagram/mermaid_diagrams.cpp
     diagram/graphviz_diagrams.cpp
     diagram/html_diagrams.cpp
@@ -182,6 +189,8 @@ add_library(vx_lib STATIC
     # Recolector del conjunto comptime (P1 fase 1: base del artefacto comptime
     # separado que compilara/ejecutara todo el comptime en la ComptimeVM).
     comptime/comptime_collect.cpp
+    # Constructor `comptime T(expr)` de structs: literales de tipo usuario (F1b).
+    comptime/literal_ctor.cpp
     # Sistema de modulos.
     module/module_resolver.cpp
     module/module_interop.cpp
@@ -214,6 +223,9 @@ target_include_directories(vx_lib PUBLIC
 # vxi_format.cpp).  Dependencia explicita para que CMake genere el header
 # antes de compilar ese TU y lo recompile cuando el header cambie.
 target_include_directories(vx_lib PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+# Los codecs de vxdbg comparten un header interno que no forma parte de su API
+# publica: se ve desde su propia carpeta y de ningun otro sitio.
+target_include_directories(vx_lib PRIVATE ${CMAKE_SOURCE_DIR}/src/vxdbg)
 set_source_files_properties(module/vxi_format.cpp PROPERTIES
     OBJECT_DEPENDS ${VX_CODEGEN_VERSION_HDR})
 
@@ -226,6 +238,9 @@ target_compile_features(vx_lib PUBLIC cxx_std_17)
 # velb_signature.cpp usa OpenSSL EVP_DigestSign / EVP_DigestVerify.
 # Enlace centralizado en `vesta_openssl` (estatico/standalone o FireDaemon).
 target_link_libraries(vx_lib PRIVATE vesta_openssl)
+# El grafo de conocimiento del programa es una libreria aparte: ni es de Vesta
+# ni de la maquina, y el runtime tambien lo necesita.
+target_link_libraries(vx_lib PUBLIC vxdbg_lib diag_lib)
 
 # Avisos estrictos en builds nuestros para mantener la regla de "no warnings".
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

@@ -812,6 +812,18 @@ void emit_instr_loadz(const vm::Instruction *instruction_parser,
                       ByteWriter &code_final, const InstrInfo *now_instr,
                       Assembler *assembly_ctx);
 
+/// @brief Atomicos width-aware: el ancho (8/16/32/64) va en el ctrl-byte, leido
+///        del sufijo de tamano del registro de valor.  ld/st FIXED_4, add/cas
+///        FIXED_6.  Ver la definicion en emmit_decl.cpp.
+void emit_instr_atomic_ld(const vm::Instruction *ip, ByteWriter &code,
+                          const InstrInfo *now_instr, Assembler *assembly_ctx);
+void emit_instr_atomic_st(const vm::Instruction *ip, ByteWriter &code,
+                          const InstrInfo *now_instr, Assembler *assembly_ctx);
+void emit_instr_atomic_add(const vm::Instruction *ip, ByteWriter &code,
+                           const InstrInfo *now_instr, Assembler *assembly_ctx);
+void emit_instr_atomic_cas(const vm::Instruction *ip, ByteWriter &code,
+                           const InstrInfo *now_instr, Assembler *assembly_ctx);
+
 /**
  * @brief Emite los operandos de @c getstatic / @c setstatic (FIXED_8).
  *
@@ -1186,6 +1198,14 @@ void emit_strconv(const vm::Instruction *instruction_parser,
 void emit_setcc(const vm::Instruction *instruction_parser,
                 ByteWriter &code_final, const InstrInfo *now_instr,
                 Assembler *assembly_ctx);
+
+/**
+ * @brief Emite SEXT r_dst, N: b2=r_dst (nibble bajo), b3=N (ancho fuente
+ *        8/16/32).  Sign-extiende r_dst desde N bits a 64 en una instruccion.
+ */
+void emit_sext(const vm::Instruction *instruction_parser,
+               ByteWriter &code_final, const InstrInfo *now_instr,
+               Assembler *assembly_ctx);
 
 /**
  * @brief Emite GCFINAL r_box, kind (0x7F): registra/desregistra finalizador GC.
