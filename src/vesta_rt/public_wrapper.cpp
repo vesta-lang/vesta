@@ -1652,9 +1652,13 @@ void vrt_panic_str(vrt_proc *proc, uint64_t msg_vaddr, uint32_t msg_len) {
      * compilado se contaba con el PC de la maquina virtual, que ahi no se va
      * actualizando, y senalaba una sentencia cualquiera de mas arriba. */
 #if defined(__GNUC__) || defined(__clang__)
-    if (p->pending_fault_native_pc == 0)
+    if (p->pending_fault_native_pc == 0) {
         p->pending_fault_native_pc =
             reinterpret_cast<uint64_t>(__builtin_return_address(0));
+        // Y por donde iba la pila nativa, para recorrer la cadena.
+        p->pending_fault_native_sp =
+            reinterpret_cast<uint64_t>(__builtin_frame_address(0));
+    }
 #endif
     /* throw_fatal(proc, FATAL_USER_ABORT, msg) -- nunca retorna.  El
      * handler del JIT (run_jit -> longjmp) propaga la excepcion al

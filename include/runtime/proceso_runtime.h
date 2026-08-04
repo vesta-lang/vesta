@@ -861,6 +861,14 @@ class ProcessVM {
     /// avisar del fallo y que hay que guardar ANTES de desviar la ejecucion.
     uint64_t pending_fault_native_pc = 0;
 
+    /// Puntero de pila NATIVO en el momento del fallo, o 0.
+    ///
+    /// Con el codigo compilado los marcos de la cadena de llamadas viven en la
+    /// pila del anfitrion y no en la de la maquina virtual, que es donde mira
+    /// el barrido normal; por eso la traza en JIT solo ensenaba el marco de
+    /// arriba.  Guardando por donde iba esa pila se puede recorrer igual.
+    uint64_t pending_fault_native_sp = 0;
+
     /// Direccion por la que ARRANCO este proceso.
     ///
     /// Es el fondo de su cadena de llamadas y no tiene direccion de retorno

@@ -526,6 +526,68 @@ struct EscalonInline {
  * @param column Columna, para distinguir dentro de la linea.
  * @return Los escalones de dentro a fuera; vacio si no se inlino nada.
  */
+/**
+ * @brief Hasta donde llega la pila del hilo actual hacia arriba.
+ *
+ * Recorrerla mas alla de su final leeria memoria que no es suya.  Se pregunta
+ * al sistema cuando sabe decirlo; si no, se acota a un tramo prudente.
+ *
+ * @param sp Por donde va la pila ahora.
+ * @return Direccion tras el ultimo byte que se puede leer.
+ */
+static uint64_t limite_pila_nativa(uint64_t sp) {
+    /// Tramo maximo a recorrer cuando no consta el final real de la pila.
+    constexpr uint64_t kTramo = 64u * 1024u;
+#if defined(_WIN32)
+    ULONG_PTR bajo = 0, alto = 0;
+    GetCurrentThreadStackLimits(&bajo, &alto);
+    if (alto != 0 && (uint64_t)alto > sp) return (uint64_t)alto;
+#endif
+    return sp + kTramo;
+}
+
+/**
+ * @brief La cadena de llamadas cuando lo que corrio fue codigo NATIVO.
+ *
+ * Con el codigo compilado los marcos no estan en la pila de la maquina
+ * virtual, que es donde mira el barrido normal, sino en la del anfitrion; por
+ * eso en JIT solo salia el marco de arriba.  Se recorre esa pila quedandose
+ * con los valores que caen DENTRO del codigo de alguna funcion compilada: una
+ * direccion de retorno es exactamente eso.
+ *
+ * Es un barrido conservador, igual que el de la pila de la maquina virtual: un
+ * valor que se parezca a una direccion de retorno cuenta como marco.  Puede
+ * colar alguno de mas -- restos de marcos ya muertos --, nunca uno falso: la
+ * contencion garantiza que la funcion que se nombra es la que contiene esa
+ * direccion.
+ *
+ * @param vm Proceso.
+ * @param sp Por donde iba la pila nativa al fallar.
+ * @param max Cuantos marcos como mucho.
+ * @return Las direcciones virtuales de las funciones, de dentro a fuera.
+ */
+static std::vector<uint64_t> cadena_nativa(ProcessVM *vm, uint64_t sp,
+                                           size_t max) {
+    std::vector<uint64_t> out;
+    if (sp == 0) return out;
+    const uint64_t tope = limite_pila_nativa(sp);
+    uint64_t previo = UINT64_MAX;
+    for (uint64_t a = (sp + 7u) & ~7ull; a + 8 <= tope && out.size() < max;
+         a += 8) {
+        uint64_t v = 0;
+        std::memcpy(&v, reinterpret_cast<const void *>(a), sizeof(v));
+        if (v == 0) continue;
+        uint64_t va = 0;
+        if (!jit::lookup_vaddr_by_native_pc(v, va)) continue;
+        // La misma funcion seguida es la misma llamada, no una nueva.
+        if (previo != UINT64_MAX && va == previo) continue;
+        previo = va;
+        out.push_back(va);
+    }
+    (void)vm;
+    return out;
+}
+
 static std::vector<EscalonInline> inline_chain_at(ProcessVM *vm,
                                                   const std::string &symbol,
                                                   uint32_t line,
@@ -1296,6 +1358,42 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
      * parezca una direccion de retorno.  Preferible a no decir nada, que es lo
      * que habia.  Se van saltando las repeticiones seguidas del mismo simbolo
      * y se corta a 32 entradas. */
+    /* Si lo que corrio fue codigo NATIVO, los marcos estan en la pila del
+     * anfitrion y no en la de la maquina virtual: se recorre aquella. */
+    if (desde_compilado) {
+        uint64_t previo_va = UINT64_MAX;
+        bool primero_n = true;
+        for (uint64_t va : cadena_nativa(vm, vm->pending_fault_native_sp, 32)) {
+            if (va == previo_va) continue;
+            previo_va = va;
+            uint64_t off_n = 0;
+            const std::string *sym_n = symbol_for_pc(vm, va, off_n);
+            if (!sym_n) continue;
+            /* La primera direccion de la pila es la de retorno de la llamada
+             * en la que se esta: apunta a la MISMA funcion del marco de
+             * arriba, que ya se conto.  Contarla otra vez la duplica. */
+            if (primero_n) {
+                primero_n = false;
+                if (sym_top && *sym_top == *sym_n) continue;
+            }
+            if (prev_origen && *prev_origen == *sym_n) continue;
+            prev_origen = sym_n;
+            append_str("  llamada desde ");
+            const std::string leg_n = demangle_symbol(*sym_n);
+            append(leg_n.c_str(), leg_n.size());
+            std::string arch_n;
+            vxdbg::ContentHash res_n;
+            const std::string nota_n =
+                entity_note_for_symbol(vm, *sym_n, &arch_n, &res_n);
+            if (!nota_n.empty()) {
+                append_str(" [");
+                append(nota_n.c_str(), nota_n.size());
+                append_str("]");
+            }
+            append_str("\n");
+        }
+    }
+
     {
         const uint64_t rsp = vm->registers.stack_pointer.qword();
         const uint64_t top = vm->stack_high;
@@ -1724,8 +1822,11 @@ static LONG WINAPI vx_av_veh(EXCEPTION_POINTERS *info) {
     if (primero && info->ContextRecord) {
 #if defined(_M_X64) || defined(__x86_64__)
         proc->pending_fault_native_pc = (uint64_t)info->ContextRecord->Rip;
+        // Y por donde iba la pila NATIVA: los marcos de la cadena viven ahi.
+        proc->pending_fault_native_sp = (uint64_t)info->ContextRecord->Rsp;
 #elif defined(_M_IX86) || defined(__i386__)
         proc->pending_fault_native_pc = (uint64_t)info->ContextRecord->Eip;
+        proc->pending_fault_native_sp = (uint64_t)info->ContextRecord->Esp;
 #endif
     }
     if (primero) proc->pending_av_kind = kind_local;
