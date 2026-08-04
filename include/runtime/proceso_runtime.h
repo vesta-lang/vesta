@@ -839,7 +839,11 @@ class ProcessVM {
     ///   0 = AV (segfault, default), 1 = DIVIDE_BY_ZERO, 2 = INT_OVERFLOW.
     /// El scheduler lo consulta tras el @c longjmp para emitir el
     /// @c FatalError adecuado.
-    uint32_t pending_av_kind = 0;
+    /// Que fallo del procesador quedo pendiente de contar.  0xFFFFFFFF = no
+    /// hay ninguno; 0 = acceso invalido, 1 = division entre cero, 2 =
+    /// desbordamiento.  El centinela hace falta porque 0 es un fallo REAL: sin
+    /// el no habia forma de distinguir un acceso invalido de no haber fallado.
+    uint32_t pending_av_kind = 0xFFFFFFFFu;
 
     StringInternPool *str_intern_pool =
         nullptr; ///< Pool de strings internados (creado bajo demanda)

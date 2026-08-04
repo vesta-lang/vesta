@@ -951,14 +951,22 @@ static LONG WINAPI vx_av_veh(EXCEPTION_POINTERS *info) {
         // setjmp: la VM crashea como antes (comportamiento legado).
         return EXCEPTION_CONTINUE_SEARCH;
     }
-    proc->pending_av_kind = kind_local;
+    /* Gana el PRIMER fallo, no el ultimo.  Al desviar la ejecucion al stub de
+     * recuperacion desde codigo compilado, el desvio puede provocar un segundo
+     * fallo antes de que nadie haya leido el primero; si se sobrescribiera, una
+     * division entre cero acabaria contandose como acceso invalido -- que es
+     * exactamente lo que pasaba en JIT.  El que hay que explicar es el que
+     * rompio el programa, no el que provoco el intento de recuperarlo. */
+    const bool primero = (proc->pending_av_kind == 0xFFFFFFFFu);
+    if (primero) proc->pending_av_kind = kind_local;
     // Capturar la direccion del fault (segundo elemento de
     // ExceptionInformation: 0=read/write flag, 1=virtual addr) -- solo
     // para AV; para div0 / overflow no aplica.
-    if (kind_local == 0 && info->ExceptionRecord->NumberParameters >= 2) {
+    if (primero && kind_local == 0 &&
+        info->ExceptionRecord->NumberParameters >= 2) {
         proc->pending_av_addr =
             (uint64_t)info->ExceptionRecord->ExceptionInformation[1];
-    } else {
+    } else if (primero) {
         proc->pending_av_addr = 0;
     }
     // Redirigir RIP al stub que hara longjmp en contexto normal.

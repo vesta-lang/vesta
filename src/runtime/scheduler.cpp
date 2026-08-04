@@ -381,6 +381,7 @@ void Scheduler::run_loop() {
              * SIGSEGV dentro de main compilado se recupera igual que en el batch.
              * setjmp==0: ejecucion normal; !=0: se hizo longjmp (aborto) -> saltar
              * la ejecucion y dejar el proceso HALT. */
+            instance->pending_av_kind = 0xFFFFFFFFu;
             instance->av_recovery_active = true;
             if (setjmp(instance->av_recovery_jmpbuf) == 0) {
                 (void)jit::enter_jit(jf,
@@ -485,6 +486,7 @@ void Scheduler::run_loop() {
             set_current_executing_process(instance);
             const bool armed_fast = (instance->exc_frame_stack != nullptr);
             if (armed_fast) {
+                instance->pending_av_kind = 0xFFFFFFFFu;
                 instance->av_recovery_active = true;
                 if (setjmp(instance->av_recovery_jmpbuf) != 0) {
                     char msg[128];
@@ -1755,6 +1757,7 @@ void Scheduler::run_loop() {
             set_current_executing_process(instance);
             const bool armed_slow = (instance->exc_frame_stack != nullptr);
             if (armed_slow) {
+                instance->pending_av_kind = 0xFFFFFFFFu;
                 instance->av_recovery_active = true;
                 if (setjmp(instance->av_recovery_jmpbuf) != 0) {
                     char msg[128];
