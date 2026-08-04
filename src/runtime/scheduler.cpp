@@ -18,6 +18,7 @@
  * principal de planificacion con balance de carga, ganchos de temporalizacion \
  * y transiciones de estado de proceso (READY -> RUNNING -> BLOCKED/DEAD).     \
  */                                                                            \
+#include "vx/diag/diag_catalog.h"
 #include "runtime/scheduler.h"
 
 #include "runtime/decode_instruction.h"
@@ -384,6 +385,36 @@ void Scheduler::run_loop() {
             if (setjmp(instance->av_recovery_jmpbuf) == 0) {
                 (void)jit::enter_jit(jf,
                                      reinterpret_cast<vrt_proc *>(instance));
+            } else {
+                /* Se volvio aqui por un fallo del procesador dentro del codigo
+                 * compilado: division entre cero, desbordamiento entero o un
+                 * acceso invalido.  El codigo nativo no comprueba el divisor
+                 * antes de dividir -- lo hace el procesador -- asi que el fallo
+                 * llega por aqui y no por `throw_fatal`.
+                 *
+                 * Sin mirarlo, el proceso pasaba a HALT y el programa terminaba
+                 * en silencio: la division entre cero no decia nada en JIT
+                 * mientras que en el interprete si.  El mismo programa fallando
+                 * de dos maneras distintas segun como se ejecute es peor que
+                 * cualquiera de las dos. */
+                /* Sin mensaje propio: el tipo de fallo YA lo cuenta el catalogo
+                 * en el idioma de quien lee, y repetirlo aqui en una cadena
+                 * fija seria decir lo mismo dos veces y solo en un idioma.  La
+                 * direccion si aporta, asi que va -- tambien por catalogo. */
+                if (instance->pending_av_kind == 1 ||
+                    instance->pending_av_kind == 2) {
+                    runtime::throw_fatal(
+                        instance, runtime::FATAL_DIVISION_BY_ZERO, nullptr);
+                } else {
+                    char addr[32];
+                    std::snprintf(addr, sizeof(addr), "0x%llx",
+                                  (unsigned long long)instance->pending_av_addr);
+                    const std::string detalle =
+                        vx::diag::format("VX7013", {addr});
+                    runtime::throw_fatal(instance,
+                                         runtime::FATAL_SEGMENTATION_FAULT,
+                                         detalle.c_str());
+                }
             }
             instance->av_recovery_active = false;
             /* Marcar el proceso como HALT.  No hay mas ejecucion interp. */

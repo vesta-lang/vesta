@@ -556,8 +556,10 @@ inline T compute_with_flags(ProcessVM *vm, T a, T b, bool is_signed) {
             // division (o modulo) por cero: lanzar FatalError capturable.
             // throw_fatal hace longjmp al frame mas cercano con tryenter; si
             // no hay handler activo, deja vm en estado HALT con err_thread.
-            throw_fatal(vm, FATAL_DIVISION_BY_ZERO,
-                        "division (o modulo) por cero");
+            // Sin mensaje propio: el tipo de fallo ya lo cuenta el catalogo,
+            // en el idioma de quien lee.  Repetirlo aqui en una cadena fija
+            // seria decir lo mismo dos veces y solo en castellano.
+            throw_fatal(vm, FATAL_DIVISION_BY_ZERO, nullptr);
             return T(0); // unreachable; setea defensivo
         }
         if (is_signed) {
@@ -566,8 +568,7 @@ inline T compute_with_flags(ProcessVM *vm, T a, T b, bool is_signed) {
             ST sb = (ST)b;
             if (sa == std::numeric_limits<ST>::min() && sb == -1) {
                 // IDIV INT_MIN / -1: desbordamiento; tratar como FATAL.
-                throw_fatal(vm, FATAL_DIVISION_BY_ZERO,
-                            "desbordamiento en division signed (INT_MIN / -1)");
+                throw_fatal(vm, FATAL_DIVISION_BY_ZERO, nullptr);
                 return T(0);
             }
             // Sprint edge-bugs (2026-06-02): bug de signo en MOD/DIV.  Las

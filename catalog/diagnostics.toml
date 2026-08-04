@@ -125,3 +125,7 @@ es = "error fatal: abortado por el programa"
 [VX7012]
 en = "fatal error"
 es = "error fatal"
+
+[VX7013]
+en = "at address {0}"
+es = "en la direccion {0}"
