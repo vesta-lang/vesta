@@ -502,6 +502,72 @@ static vxdbg::SourceExtent span_for(ProcessVM *vm, const std::string &symbol,
  * @param column Columna, o 0 para no afinar.
  * @return Los nombres de las operaciones, en orden.
  */
+/**
+ * @brief Un escalon de la cadena de llamadas que el inlinado aplano.
+ */
+struct EscalonInline {
+    std::string funcion; ///< De donde vino el codigo.
+    uint32_t linea = 0;  ///< Linea de la llamada, en quien la absorbio.
+};
+
+/**
+ * @brief Reconstruye las llamadas que se aplanaron en el punto del fallo.
+ *
+ * Al inlinar, el codigo de otra funcion pasa a vivir aqui conservando las
+ * lineas de SU fuente.  La traza entonces atribuye a esta funcion una linea
+ * que es de otra -- no es que falten marcos: es que el que sale es falso.  El
+ * inlinado dejo constancia de cada llamada que absorbio, y con ella se vuelven
+ * a contar.
+ *
+ * @param vm Proceso.
+ * @param symbol Simbolo de la funcion fisica donde ocurrio el fallo.
+ * @param line Linea de la instruccion que fallo.
+ * @param column Columna, para distinguir dentro de la linea.
+ * @return Los escalones de dentro a fuera; vacio si no se inlino nada.
+ */
+static std::vector<EscalonInline> inline_chain_at(ProcessVM *vm,
+                                                  const std::string &symbol,
+                                                  uint32_t line,
+                                                  uint32_t column) {
+    std::vector<EscalonInline> out;
+    if (line == 0) return out;
+    const std::string limpio =
+        (symbol.rfind("code.", 0) == 0) ? symbol.substr(5) : symbol;
+    for (const auto &exe_ptr :
+         vm->scheduler.vm_reference.loader_public.executables) {
+        if (!exe_ptr) continue;
+        for (const auto &fn : exe_ptr->ir_functions) {
+            if (fn.name != limpio) continue;
+            if (fn.inline_sites.empty()) return out;
+            uint32_t sitio = ir::IR_NO_INLINE_SITE;
+            for (const auto &bl : fn.blocks) {
+                for (const auto &ins : bl.instrs) {
+                    if (ins.source_line != line) continue;
+                    if (column != 0 && ins.source_column != 0 &&
+                        ins.source_column != column)
+                        continue;
+                    sitio = ins.inline_site;
+                    break;
+                }
+                if (sitio != ir::IR_NO_INLINE_SITE) break;
+            }
+            /* De dentro a fuera.  Cada escalon dice de que funcion vino el
+             * codigo y en que linea de la de fuera se la llamaba; el tope de
+             * la cadena es ya la funcion fisica. */
+            size_t guarda = 0;
+            while (sitio != ir::IR_NO_INLINE_SITE &&
+                   sitio < fn.inline_sites.size() &&
+                   guarda++ < fn.inline_sites.size()) {
+                const ir::InlineSite &s = fn.inline_sites[sitio];
+                out.push_back(EscalonInline{s.callee, s.line});
+                sitio = s.parent;
+            }
+            return out;
+        }
+    }
+    return out;
+}
+
 static std::vector<std::string> ir_window_at(ProcessVM *vm,
                                              const std::string &symbol,
                                              uint32_t line, uint32_t column,
@@ -777,6 +843,20 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
      * fue exactamente lo que pasaba. */
     const uint64_t atras_top = vm->fatal_pc_exact ? 0u : 1u;
 
+    /* La linea de fuente de un PC.  Misma correccion de `atras` que
+     * append_pos: el PC de un fallo ya avanzo y el de un marco es una
+     * direccion de retorno. */
+    auto linea_de_pc = [&](uint64_t pc, uint64_t atras) -> uint32_t {
+        for (const auto &exe_ptr :
+             vm->scheduler.vm_reference.loader_public.executables) {
+            if (!exe_ptr || !exe_ptr->debug_info) continue;
+            auto info = exe_ptr->debug_info->lookup_line(
+                static_cast<uint32_t>(pc > atras ? pc - atras : 0));
+            if (info.found && info.line > 0) return info.line;
+        }
+        return 0;
+    };
+
     auto append_pos = [&](uint64_t pc, bool tiene_modulo, uint64_t atras = 1) {
         for (const auto &exe_ptr :
              vm->scheduler.vm_reference.loader_public.executables) {
@@ -815,7 +895,12 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
      * ensena. */
     auto append_source = [&](uint64_t pc, const std::string &archivo,
                              vxdbg::ContentHash resumen,
-                             const std::string &simbolo, uint64_t atras = 1) {
+                             const std::string &simbolo, uint64_t atras = 1,
+                             const std::string *simbolo_ir = nullptr) {
+        /* El tramo de fuente lo guarda la funcion en la que se ESCRIBIO el
+         * codigo, pero el intermedio vive en la que lo ABSORBIO al inlinar.
+         * Cuando no coinciden hay que preguntar a cada una por lo suyo. */
+        const std::string &sim_ir = simbolo_ir ? *simbolo_ir : simbolo;
         if (archivo.empty()) return;
         uint32_t linea = 0;
         uint32_t col_pc = 0;
@@ -893,7 +978,7 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
          * que se pidio, en que se tradujo, y con que acabo.  Se ensena solo si
          * consta; si el intermedio no viaja en el artefacto, no se dice nada. */
         const std::vector<std::string> ops =
-            ir_window_at(vm, simbolo, linea, ext.column, 3, 4, texto);
+            ir_window_at(vm, sim_ir, linea, ext.column, 3, 4, texto);
         if (ops.empty()) return;
         append_str("      intermedio:\n");
         for (const std::string &t : ops) {
@@ -961,6 +1046,9 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
         }
     };
 
+    /// Ultimo simbolo contado, para que el origen no lo repita.
+    const std::string *prev_origen = nullptr;
+
     // Primer frame: usar metodo del top de la pila si existe.
     append_str("  at ");
     /* El nombre del marco de arriba sale del PC, no del metodo del marco.  El
@@ -991,15 +1079,32 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
         append_str("\n");
     } else {
         if (const std::string *sym = sym_top) {
-            const std::string legible = demangle_symbol(*sym);
+            /* Si esta linea no es de esta funcion -- vino de otra al inlinar
+             * --, se dice de quien es.  Poner el nombre de la funcion fisica
+             * junto a una linea ajena no es perder informacion: es dar una
+             * falsa. */
+            const std::vector<EscalonInline> aplanado = inline_chain_at(
+                vm, *sym, linea_de_pc(cur_pc, atras_top), 0);
+            const std::string legible =
+                aplanado.empty() ? demangle_symbol(*sym)
+                                 : demangle_symbol(aplanado.front().funcion);
             append(legible.c_str(), legible.size());
+            if (!aplanado.empty()) {
+                append_str(" [aplanado en ");
+                const std::string fis = demangle_symbol(*sym);
+                append(fis.c_str(), fis.size());
+                append_str("]");
+            }
             // Que ES lo que fallo, no solo como se llama: si el grafo lo sabe,
             // se dice ("constructor de Lector") en vez de dejar un nombre suelto
             // que quien lee tiene que ir a buscar al fuente.
             std::string archivo_top;
             vxdbg::ContentHash resumen_top;
+            // La nota describe a QUIEN pertenece la linea, que si hubo
+            // inlinado no es la funcion fisica.
             const std::string nota = entity_note_for_symbol(
-                vm, *sym, &archivo_top, &resumen_top);
+                vm, aplanado.empty() ? *sym : aplanado.front().funcion,
+                &archivo_top, &resumen_top);
             if (!nota.empty()) {
                 append_str(" [");
                 append(nota.c_str(), nota.size());
@@ -1008,7 +1113,11 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
             append_pos(cur_pc, legible.find('.') != std::string::npos,
                        atras_top);
             append_str("\n");
-            append_source(cur_pc, archivo_top, resumen_top, *sym, atras_top);
+            /* El tramo de fuente es de quien escribio la linea; el intermedio,
+             * de quien acabo conteniendola tras el inlinado. */
+            append_source(cur_pc, archivo_top, resumen_top,
+                          aplanado.empty() ? *sym : aplanado.front().funcion,
+                          atras_top, &*sym);
             /* Y en que se convirtio: la instruccion de la maquina que reventó.
              * El fuente dice que se pedia; esta dice que se estaba haciendo, y
              * cuando no coinciden es justo lo que hay que ver.  Solo la del
@@ -1033,6 +1142,37 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
                     append_str(vm->decoded_ptr->metadata->name);
                     append_str("\n");
                 }
+            }
+            /* Y las llamadas que el inlinado se comio.  No estan en la pila
+             * -- por eso se aplanaron --, pero se hicieron, y sin ellas la
+             * cadena salta de la funcion de dentro a la de fuera como si una
+             * hubiera llamado a la otra directamente. */
+            for (size_t k = 1; k < aplanado.size(); ++k) {
+                append_str("  llamada desde ");
+                const std::string nk = demangle_symbol(aplanado[k].funcion);
+                append(nk.c_str(), nk.size());
+                append_str(" [aplanado] (linea ");
+                append_dec((uint64_t)aplanado[k - 1].linea);
+                append_str(")\n");
+            }
+            if (!aplanado.empty()) {
+                append_str("  llamada desde ");
+                const std::string nf = demangle_symbol(*sym);
+                append(nf.c_str(), nf.size());
+                std::string arch_f;
+                vxdbg::ContentHash res_f;
+                const std::string nota_f =
+                    entity_note_for_symbol(vm, *sym, &arch_f, &res_f);
+                if (!nota_f.empty()) {
+                    append_str(" [");
+                    append(nota_f.c_str(), nota_f.size());
+                    append_str("]");
+                }
+                append_str(" (linea ");
+                append_dec((uint64_t)aplanado.back().linea);
+                append_str(")\n");
+                // Ya se conto: que el origen no lo repita.
+                prev_origen = sym;
             }
         } else {
             append_str("<top> (pc=");
@@ -1087,8 +1227,6 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
      * parezca una direccion de retorno.  Preferible a no decir nada, que es lo
      * que habia.  Se van saltando las repeticiones seguidas del mismo simbolo
      * y se corta a 32 entradas. */
-    /// Ultimo simbolo que conto el barrido, para no repetirlo como origen.
-    const std::string *prev_origen = nullptr;
     {
         const uint64_t rsp = vm->registers.stack_pointer.qword();
         const uint64_t top = vm->stack_high;

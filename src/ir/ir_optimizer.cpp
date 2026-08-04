@@ -8505,6 +8505,57 @@ bool ir_pass_inline_loop_header(IrFunction &fn) {
 // port-C: codigo destino mas legible, sin auxiliary functions ni
 // goto-style returns.
 
+/**
+ * @brief Registra en @p caller la llamada que se va a aplanar y devuelve por
+ *        donde traducir los sitios que el llamado ya traia dentro.
+ *
+ * Al inlinar, el codigo del llamado pasa a vivir en quien llama pero conserva
+ * las lineas de SU fuente; sin dejar constancia, la traza atribuye esas lineas
+ * a la funcion equivocada.  Se apunta un sitio para esta llamada y, si el
+ * llamado ya tenia inlinados dentro, se copian sus sitios colgando del nuevo,
+ * de modo que las cadenas anidadas siguen encajando.
+ *
+ * @param caller Funcion que absorbe el codigo.
+ * @param callee Funcion cuyo codigo se copia.
+ * @param call Instruccion CALL que se sustituye.
+ * @param[out] base Indice donde empiezan los sitios trasladados del llamado.
+ * @return Indice del sitio de esta llamada.
+ */
+static uint32_t inline_note_site(IrFunction &caller, const IrFunction &callee,
+                                 const IrInstr &call, uint32_t &base) {
+    const uint32_t site = static_cast<uint32_t>(caller.inline_sites.size());
+    InlineSite s;
+    s.callee = callee.name;
+    s.line = call.source_line;
+    s.column = call.source_column;
+    // Si la propia llamada venia ya inlinada, cuelga de aquella.
+    s.parent = call.inline_site;
+    caller.inline_sites.push_back(std::move(s));
+
+    base = static_cast<uint32_t>(caller.inline_sites.size());
+    for (const InlineSite &cs : callee.inline_sites) {
+        InlineSite n = cs;
+        // Los de mas afuera del llamado pasan a colgar de esta llamada.
+        n.parent =
+            (cs.parent == IR_NO_INLINE_SITE) ? site : (base + cs.parent);
+        caller.inline_sites.push_back(std::move(n));
+    }
+    return site;
+}
+
+/**
+ * @brief Traduce el sitio de una instruccion copiada al espacio del llamador.
+ *
+ * @param original Sitio que traia en el llamado.
+ * @param site Sitio de la llamada que se aplana.
+ * @param base Origen de los sitios trasladados (ver @c inline_note_site).
+ * @return Sitio equivalente ya en el llamador.
+ */
+static inline uint32_t inline_map_site(uint32_t original, uint32_t site,
+                                       uint32_t base) {
+    return (original == IR_NO_INLINE_SITE) ? site : (base + original);
+}
+
 bool ir_pass_inline(IrModule &mod, size_t threshold) {
     /* Threshold de tamano del body del callee para inlinar.
      *
@@ -8813,6 +8864,12 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
                     return IR_NO_VALUE;
                 };
 
+                /* Constancia de la llamada que se aplana, para que la traza
+                 * pueda volver a contarla (ver inline_note_site). */
+                uint32_t sitio_base = 0;
+                const uint32_t sitio =
+                    inline_note_site(caller, callee, ins, sitio_base);
+
                 /* Replicar todas las instrs del callee EXCEPTO el RET final. */
                 IrValueId ret_value = IR_NO_VALUE;
                 bool inline_ok = true;
@@ -8837,6 +8894,8 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
                         continue;
                     /* Clonar c_ins y remap operandos + dst. */
                     IrInstr ni = c_ins;
+                    ni.inline_site =
+                        inline_map_site(c_ins.inline_site, sitio, sitio_base);
                     /* INLINE_ASM: quitar de sus operandos las variables register()
                      * de params dropped (el asm ya no las usa). */
                     if (ni.op == IrOp::INLINE_ASM && !dropped_vars.empty()) {
@@ -9938,6 +9997,9 @@ static void inline_one_multiblock(IrFunction &caller, size_t bi, size_t ii,
     const IrValueId call_dst = call.dst;
     const IrType ret_type = call.type;
     const uint32_t srcline = call.source_line;
+    /* Constancia de la llamada que se aplana (ver inline_note_site). */
+    uint32_t sitio_base = 0;
+    const uint32_t sitio = inline_note_site(caller, callee, call, sitio_base);
 
     // --- remap de valores: params -> args; resto -> fresh (copia atributos) ---
     std::unordered_map<IrValueId, IrValueId> vmap;
@@ -9994,6 +10056,7 @@ static void inline_one_multiblock(IrFunction &caller, size_t bi, size_t ii,
         const IrBlock &cb = callee.blocks[k];
         const IrBlockId nbid = copy_ids[k];
         for (IrInstr in : cb.instrs) { // copia por valor
+            in.inline_site = inline_map_site(in.inline_site, sitio, sitio_base);
             if (in.op == IrOp::RET) {
                 if (call_dst != IR_NO_VALUE && !in.operands.empty())
                     ret_args.push_back(IrPhiArg{rv(in.operands[0]), nbid});
@@ -11661,6 +11724,12 @@ bool ir_pass_inline_closures(IrModule &mod) {
             return (vit != vmap.end()) ? vit->second : IR_NO_VALUE;
         };
 
+        /* Constancia de la llamada que se aplana (ver inline_note_site).  El
+         * cuerpo de la lambda es codigo de otro sitio igual que cualquier otro
+         * inlinado; sin esto su linea se atribuye a quien la invoca. */
+        uint32_t sitio_base = 0;
+        const uint32_t sitio = inline_note_site(caller, h, cc, sitio_base);
+
         IrValueId ret_value = IR_NO_VALUE;
         for (size_t k = 0; k < hb.instrs.size() && ok; ++k) {
             if (skip.count(k)) continue;
@@ -11674,6 +11743,7 @@ bool ir_pass_inline_closures(IrModule &mod) {
             }
             if (!ci.phi_args.empty()) { ok = false; break; }
             IrInstr ni = ci;
+            ni.inline_site = inline_map_site(ci.inline_site, sitio, sitio_base);
             if (ni.dst != IR_NO_VALUE) {
                 const IrType dt = (ni.dst < h.values.size())
                                       ? h.values[ni.dst].type

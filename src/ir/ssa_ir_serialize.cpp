@@ -192,6 +192,8 @@ void write_instr(std::vector<uint8_t> &o, const IrInstr &i) {
     // sabe donde empieza, y sin el final no se puede recortar el texto para
     // nombrar un operando.  Viaja desde v9.
     write_u32(o, i.source_len);
+    // inline_site: de que llamada aplanada vino la instruccion (v10).
+    write_u32(o, i.inline_site);
     // imm: campo polivalente.  Para CONST contiene el valor; para
     // CALL contiene flags/args adicionales; para ops sin imm es 0.
     write_u64(o, i.imm);
@@ -267,6 +269,8 @@ bool read_instr(const std::vector<uint8_t> &in, size_t &off, IrInstr &i) {
     if (!read_u32(in, off, source_column)) return false;
     uint32_t source_len = 0;
     if (!read_u32(in, off, source_len)) return false;
+    uint32_t inline_site = IR_NO_INLINE_SITE;
+    if (!read_u32(in, off, inline_site)) return false;
     if (!read_u64(in, off, imm)) return false;
     i.op = static_cast<IrOp>(op_v);
     i.type = static_cast<IrType>(type_v);
@@ -280,6 +284,7 @@ bool read_instr(const std::vector<uint8_t> &in, size_t &off, IrInstr &i) {
     i.source_line = source_line;
     i.source_column = source_column;
     i.source_len = source_len;
+    i.inline_site = inline_site;
     i.imm = imm;
     /* operands */
     uint8_t opc = 0;
@@ -516,6 +521,17 @@ size_t serialize_function(const IrFunction &fn, std::vector<uint8_t> &out) {
     write_str(out, fn.complexity_total_pre);
     write_str(out, fn.complexity_total_post);
 
+    // v10: llamadas que se aplanaron aqui al inlinar.  Sin ellas, el codigo
+    // que vino de otra funcion conserva SUS lineas pero se atribuye a esta, y
+    // la traza senala un sitio que no es.  Casi siempre vacio (4 bytes).
+    write_u32(out, static_cast<uint32_t>(fn.inline_sites.size()));
+    for (const auto &s : fn.inline_sites) {
+        write_str(out, s.callee);
+        write_u32(out, s.line);
+        write_u32(out, s.column);
+        write_u32(out, s.parent);
+    }
+
     return out.size() - start;
 }
 
@@ -699,6 +715,19 @@ bool deserialize_function(const std::vector<uint8_t> &in, size_t &off,
     if (!read_str(in, off, out.complexity_partial_post)) return false;
     if (!read_str(in, off, out.complexity_total_pre)) return false;
     if (!read_str(in, off, out.complexity_total_post)) return false;
+    // v10: llamadas aplanadas al inlinar (ver el lado de escritura).
+    uint32_t n_sites = 0;
+    if (!read_u32(in, off, n_sites)) return false;
+    out.inline_sites.clear();
+    out.inline_sites.reserve(n_sites);
+    for (uint32_t k = 0; k < n_sites; ++k) {
+        InlineSite s;
+        if (!read_str(in, off, s.callee)) return false;
+        if (!read_u32(in, off, s.line)) return false;
+        if (!read_u32(in, off, s.column)) return false;
+        if (!read_u32(in, off, s.parent)) return false;
+        out.inline_sites.push_back(std::move(s));
+    }
     return true;
 }
 

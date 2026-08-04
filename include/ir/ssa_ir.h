@@ -797,6 +797,26 @@ static constexpr IrValueId IR_NO_VALUE = 0xFFFFFFFFu;
 using IrBlockId = uint32_t;
 static constexpr IrBlockId IR_NO_BLOCK = 0xFFFFFFFFu;
 
+/// La instruccion se escribio en la funcion donde esta, no vino de otra.
+static constexpr uint32_t IR_NO_INLINE_SITE = 0xFFFFFFFFu;
+
+/**
+ * @struct InlineSite
+ * @brief Un trozo de funcion que se metio dentro de otra al inlinar.
+ *
+ * Guarda lo que hace falta para volver a contar la llamada que se aplano: de
+ * que funcion vino el codigo y desde donde se la llamaba.  @c parent encadena
+ * los inlinados anidados (A inlino a B, que ya tenia dentro a C), asi que una
+ * instruccion referencia UN sitio y la cadena entera se recorre desde el.
+ */
+struct InlineSite {
+    std::string callee;  ///< Funcion de la que vino el codigo.
+    uint32_t line = 0;   ///< Linea de la llamada, en quien inlino.
+    uint32_t column = 0; ///< Columna de la llamada.
+    /// Sitio de fuera si la propia llamada tambien venia inlinada.
+    uint32_t parent = IR_NO_INLINE_SITE;
+};
+
 /**
  * @brief Descriptor de un valor SSA.
  *
@@ -984,6 +1004,14 @@ struct IrInstr {
     /// Columna del fuente (0 = desconocida).  Con la linea sola no se puede
     /// senalar cual de las cosas que caben en ella fallo.
     uint32_t source_column;
+
+    /// De donde vino esta instruccion si NO se escribio aqui: indice en
+    /// @c IrFunction::inline_sites, o @c IR_NO_INLINE_SITE si es de la propia
+    /// funcion.  Al inlinar, el codigo del llamado pasa a vivir dentro del que
+    /// llama pero conserva las lineas de SU fuente, con lo que la traza
+    /// atribuia a `main` una linea que es de otro sitio -- no perdia marcos,
+    /// mentia.  Con esto se pueden reconstruir los que se aplanaron.
+    uint32_t inline_site = IR_NO_INLINE_SITE;
 
     /// Longitud en caracteres del trozo de fuente que produjo la instruccion
     /// (0 = desconocida).  Con la columna sola se sabe donde empieza pero no
@@ -1240,6 +1268,10 @@ struct IrFunction {
     std::vector<std::string> param_abi_regs;
     std::vector<IrValue> values;   ///< pool de todos los valores SSA
     std::vector<IrBlock> blocks;   ///< bloques basicos (bloques[0] = entry)
+    /// Llamadas que se aplanaron aqui al inlinar.  Las instrucciones apuntan a
+    /// una entrada por indice (@c IrInstr::inline_site); vacio si no se inlino
+    /// nada, que es lo comun.
+    std::vector<InlineSite> inline_sites;
     bool is_native = false;        ///< true si es stub para funcion nativa
     bool is_variadic = false;      ///< true si acepta argc variable
 
