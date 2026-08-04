@@ -108,7 +108,7 @@ static constexpr uint32_t IR_SECTION_MAGIC = 0x52494556U; /* 'V''E''I''R' */
  * @brief Version del formato @ir.  Bump cuando cambia el layout.
  */
 static constexpr uint16_t IR_SECTION_VERSION =
-    7; // v7: + param_abi_regs (ABI custom por funcion: register en params)
+    8; // v8: + source_column por instruccion (para senalar QUE de la linea)
 
 /**
  * @brief Emit del bytes de la seccion @c @ir lista para append a
