@@ -638,6 +638,18 @@ struct Symbol {
 void register_comptime_virtual_fns();
 
 /**
+ * @brief Guarda el texto de un `static_assert` y devuelve su indice.
+ *
+ * El mensaje no viaja por la maquina virtual: por ella solo va el indice.  La
+ * direccion de un literal pertenece al espacio de la VM y el proceso anfitrion
+ * no puede dereferenciarla.
+ *
+ * @param text Mensaje de la asercion.
+ * @return Indice estable con el que el helper lo recupera.
+ */
+uint64_t intern_static_assert_msg(const std::string &text);
+
+/**
  * @class TypeChecker
  * @brief Pase de comprobacion sobre un ModuleNode.
  */

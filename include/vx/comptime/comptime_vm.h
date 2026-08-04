@@ -46,6 +46,22 @@
 
 namespace vx {
 
+/**
+ * @brief Lee una cadena de la memoria de un proceso de la maquina virtual.
+ *
+ * Los nativos reciben (direccion, longitud) del espacio de la VM, no punteros
+ * del anfitrion.  Esta utilidad hace la lectura para quien no puede incluir el
+ * header del runtime.
+ *
+ * @param proc_ptr Proceso (el que devuelve `getproc`).
+ * @param addr     Direccion en la memoria de la VM.
+ * @param len      Longitud en bytes.
+ * @return La cadena leida, vacia si el proceso o el rango no son validos.
+ */
+std::string comptime_read_vm_string(uint64_t proc_ptr, uint64_t addr,
+                                    uint64_t len);
+
+
 /* Pimpl interno -- la VM real se inicializa en MC.3.  En MC.2
  * la clase es solo scaffolding y el puntero queda nullptr. */
 struct ComptimeVmImpl;

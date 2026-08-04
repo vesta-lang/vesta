@@ -26020,13 +26020,17 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
-        /* Intern el msg como bytes + NUL terminator (asi c_str
-         * funciona sobre el host_ptr exportado por STR_LIT_ADDR). */
+        /* El mensaje viaja como (direccion, longitud) del espacio de la VM y
+         * el helper lo lee con la API del proceso, igual que cualquier otro
+         * nativo (`vio_print` y companyia).  Antes se le pasaba la direccion a
+         * secas y el helper la trataba como puntero del anfitrion: un numero
+         * como 0x27050 que al leerse se llevaba el proceso por delante.  Nunca
+         * se habia notado porque esta ruta no llegaba a ejecutarse -- la
+         * asercion se descartaba siempre. */
         std::vector<uint8_t> bytes(msg_text.begin(), msg_text.end());
-        bytes.push_back('\0');
         const uint64_t idx = out_mod_->intern_static_data(std::move(bytes));
         ir::IrValueId v_msg = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_msg].is_host_ptr = true;
+        if (native_poo_) fn_->values[v_msg].is_host_ptr = true;
         {
             ir::IrInstr is{};
             is.op = ir::IrOp::STR_LIT_ADDR;
@@ -26036,7 +26040,10 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             is.source_line = e->loc.line;
             fn_->append(current_block_, std::move(is));
         }
-        /* CALLN @Method("vesta_comptime:static_assert") con (cond, msg). */
+        const ir::IrValueId v_len = emit_const(
+            ir::IrType::I64, static_cast<uint64_t>(msg_text.size()),
+            e->loc.line);
+        const ir::IrValueId v_proc = emit_getproc(e->loc.line);
         out_mod_->register_native_import("vesta_comptime", "static_assert");
         ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
         ir::IrInstr cl{};
@@ -26044,15 +26051,9 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         cl.type = ir::IrType::I64;
         cl.dst = v_dst;
         cl.func_name = "vesta_comptime:static_assert";
-        cl.operands = {v_cond, v_msg};
+        cl.operands = {v_proc, v_cond, v_msg, v_len};
         cl.source_line = e->loc.line;
         fn_->append(current_block_, std::move(cl));
-        /* Sin corte tras la llamada: la asercion registra el fallo y la
-         * compilacion termina rechazando el programa, pero la ejecucion
-         * comptime CONTINUA.  Cortarla aqui con un `panic` seria lo suyo --
-         * y ademas capturable con `try`/`catch` desde el propio codigo
-         * comptime -- pero hoy revienta el proceso sin dejar rastro; queda
-         * pendiente junto al cuelgue descrito en `std.comptime.literal`. */
         out_value = v_dst;
         return true;
     }

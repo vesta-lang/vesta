@@ -84,6 +84,10 @@ public struct IntLit {
  * @return El valor parseado.
  */
 /// Mensaje del digito que no pertenece a la base declarada.
+/// Mensaje del literal sin digitos (`0x` a secas, o cadena vacia).
+const string VX_LITERAL_VACIO =
+    "literal entero sin digitos: falta el numero tras el prefijo de base";
+/// Mensaje del digito que no pertenece a la base declarada.
 const string VX_LITERAL_DIGITO =
     "digito que no pertenece a la base del literal (0b binario, 0o octal, "
     "0x hexadecimal, sin prefijo decimal)";
@@ -120,7 +124,8 @@ public comptime IntLit parse_int_lit(string src) {
             }
         }
     }
-    // PENDIENTE (mismo motivo): rechazar `0x` a secas, sin digitos.
+    // Un prefijo sin digitos detras (`0x` a secas) no es un numero.
+    static_assert(i < n, VX_LITERAL_VACIO);
     // Buffer de words: `n` words siempre sobra para `n` digitos.
     i64 cap = n;
     if (cap < 1) {
@@ -148,6 +153,9 @@ public comptime IntLit parse_int_lit(string src) {
         // caracter, o un digito que no pertenece a la base (un 9 en octal, una
         // 'f' en decimal), es un error: aceptarlo callando daria un numero
         // distinto del escrito sin que nadie se entere.
+        if (c != 95) {
+            static_assert(d >= 0 && d < base, VX_LITERAL_DIGITO);
+        }
         if (c != 95) {
             static_assert(d >= 0 && d < base, VX_LITERAL_DIGITO);
         }

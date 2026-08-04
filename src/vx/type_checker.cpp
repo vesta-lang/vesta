@@ -186,10 +186,28 @@ extern "C" uint64_t vx_comptime_type_kind(const char *name) {
     return static_cast<uint64_t>(comptime_type_kind(t));
 }
 
-extern "C" uint64_t vx_static_assert(int64_t cond, const char *msg) {
-    if (cond) return 0; /* OK -- no-op. */
-    const std::string text = msg ? std::string("static_assert: ") + msg
-                                 : std::string("static_assert fallo");
+/**
+ * @brief Helper de `static_assert` invocado desde codigo comptime.
+ *
+ * Recibe la direccion y la longitud del mensaje en el espacio de la MAQUINA
+ * VIRTUAL, y lo lee con la API del proceso -- la misma convencion que el resto
+ * de nativos.  Antes tomaba un `const char *` y se le pasaba la direccion tal
+ * cual: un numero del espacio de la VM que el anfitrion no puede dereferenciar,
+ * asi que leerlo mataba el proceso.  No se habia notado nunca porque la ruta no
+ * llegaba a ejecutarse: la asercion se descartaba siempre al bajarla.
+ *
+ * @param proc_ptr Proceso que ejecuta el codigo comptime (via `getproc`).
+ * @param cond     Resultado de la condicion; 0 = incumplida.
+ * @param msg_addr Direccion del mensaje en la memoria de la VM.
+ * @param msg_len  Longitud del mensaje en bytes.
+ * @return 0 si se cumple, 1 si no.
+ */
+extern "C" uint64_t vx_static_assert(uint64_t proc_ptr, int64_t cond,
+                                     uint64_t msg_addr, uint64_t msg_len) {
+    if (cond) return 0; /* Se cumple: nada que hacer. */
+    std::string text = "static_assert";
+    const std::string m = comptime_read_vm_string(proc_ptr, msg_addr, msg_len);
+    if (!m.empty()) text = "static_assert: " + m;
     if (g_active_typechecker) {
         SourceLoc loc;
         loc.file = "<comptime>";
@@ -198,7 +216,7 @@ extern "C" uint64_t vx_static_assert(int64_t cond, const char *msg) {
         std::fprintf(stderr, "[vx] %s (sin TypeChecker activo)\n",
                      text.c_str());
     }
-    return 1; /* status fail (para el caller si lo lee). */
+    return 1; /* Incumplida. */
 }
 
 /**

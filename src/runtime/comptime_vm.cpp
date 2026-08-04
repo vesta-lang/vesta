@@ -44,6 +44,16 @@
 
 namespace vx {
 
+std::string comptime_read_vm_string(uint64_t proc_ptr, uint64_t addr,
+                                    uint64_t len) {
+    auto *proc = reinterpret_cast<runtime::ProcessVM *>(proc_ptr);
+    if (!proc || len == 0 || len > 4096) return std::string();
+    std::vector<char> buf(len + 1, 0);
+    proc->vm_mem.read_bytes(addr, buf.data(), len);
+    return std::string(buf.data(), len);
+}
+
+
 /**
  * @brief Pimpl interno de @c ComptimeRuntime.  Contiene todo el
  * estado runtime necesario para ejecutar @Macros lowered al IR.
