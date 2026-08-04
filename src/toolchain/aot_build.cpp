@@ -2236,7 +2236,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 for (const AotFn &af : compiled)
                     if (!af.puntos.empty() && fn_loc.count(af.name)) ++n_fn;
                 db32(0x42445856u); // 'VXDB'
-                db32(3u);          // v3: + de que funcion vino cada tramo
+                db32(4u);          // v4: + de que FICHERO son las lineas
                 /* Los nombres de las funciones que el inlinado se comio van en
                  * UNA tabla al final y los puntos la indexan: la misma funcion
                  * aparece en muchos tramos y repetir la cadena engordaria la
@@ -2262,6 +2262,13 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 };
                 db32(n_fn);
                 db32(0u);   // hueco: desplazamiento de la tabla de nombres
+                /* La ruta del fuente.  Sin ella el informe dice "linea 27" sin
+                 * decir de que fichero, que en un programa de varios modulos no
+                 * sirve de nada. */
+                db32(static_cast<uint32_t>(opt.source_path.size()));
+                for (char c : opt.source_path)
+                    db.push_back(static_cast<uint8_t>(c));
+                while ((db.size() % 4u) != 0u) db.push_back(0);
                 for (const AotFn &af : compiled) {
                     if (af.puntos.empty()) continue;
                     auto it = fn_loc.find(af.name);

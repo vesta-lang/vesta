@@ -309,6 +309,8 @@ u32 __vxf_r_linea = 0;
 u32 __vxf_r_col = 0;
 u64 __vxf_r_venia = 0;  // -> nombre de la que se aplano ahi, o 0
 u32 __vxf_r_vlen = 0;
+u64 __vxf_r_fich = 0;   // -> ruta del fuente
+u32 __vxf_r_flen = 0;
 
 // Busca a que funcion y linea corresponde un desplazamiento dentro del codigo.
 // Deja el resultado en los globales de arriba.  Devuelve 1 si lo encontro.
@@ -321,12 +323,18 @@ i32 __vxf_buscar(u64 off) {
     if (__vxf_u32(base, 0) != 0x42445856) {
         return 0;   // no es nuestra seccion
     }
-    if (__vxf_u32(base, 4) != 3) {
+    if (__vxf_u32(base, 4) != 4) {
         return 0;   // formato que no se sabe leer: mejor callarse
     }
     u32 n_fn = __vxf_u32(base, 8);
     u64 tabla = (u64) __vxf_u32(base, 12);
-    u64 c = 16;
+    // La ruta del fuente va tras la cabecera, rellena a multiplo de 4.
+    __vxf_r_flen = __vxf_u32(base, 16);
+    __vxf_r_fich = base + 20;
+    u64 c = 20 + (u64) __vxf_r_flen;
+    while ((c % 4) != 0) {
+        c = c + 1;
+    }
     u32 k = 0;
     while (k < n_fn) {
         u32 f_off = __vxf_u32(base, c);
@@ -415,8 +423,11 @@ void __vxf_donde(u64 addr) {
     }
     __vxf_say("  en ", 5);
     __vxf_nombre();
-    __vxf_say(", linea ", 8);
+    __vxf_say(" (", 2);
+    __vxf_say((u8*) __vxf_r_fich, (u64) __vxf_r_flen);
+    __vxf_say(":", 1);
     __vxf_num((u64) __vxf_r_linea);
+    __vxf_say(")", 1);
     if (__vxf_r_col > 0) {
         __vxf_say(", columna ", 10);
         __vxf_num((u64) __vxf_r_col);
@@ -455,8 +466,11 @@ void __vxf_cadena(u64 sp) {
                     vistos = vistos + 1;
                     __vxf_say("  llamada desde ", 16);
                     __vxf_nombre();
-                    __vxf_say(", linea ", 8);
+                    __vxf_say(" (", 2);
+                    __vxf_say((u8*) __vxf_r_fich, (u64) __vxf_r_flen);
+                    __vxf_say(":", 1);
                     __vxf_num((u64) __vxf_r_linea);
+                    __vxf_say(")", 1);
                     __vxf_say("\n", 1);
                 }
             }
