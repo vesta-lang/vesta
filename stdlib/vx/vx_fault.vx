@@ -1,0 +1,205 @@
+/**
+ * @file vx_fault.vx
+ * @brief El binario nativo se explica solo cuando el procesador lo detiene.
+ *
+ * Un ejecutable AOT moria con el codigo del sistema y sin decir nada: quien lo
+ * ejecutaba veia un `0xC0000094` y ya.  Esto deja instalado un manejador que,
+ * al ocurrir un fallo, dice QUE paso -- con su codigo del catalogo del
+ * lenguaje -- y termina con el codigo de salida POSIX correspondiente
+ * (128 + senal), que es lo que espera cualquier guion que compruebe como murio
+ * un programa.
+ *
+ * Auto-bundle: el driver `-m aot` lo fusiona SOLO cuando se pide info de
+ * depuracion del LENGUAJE de nivel 2 o mas (`--debug-info=x.2`).  Por debajo,
+ * el ejecutable no lleva ni un byte de esto y es identico al de no pedir nada:
+ * los datos de depuracion (nivel 1) van en un fichero aparte precisamente para
+ * no tocarlo.  Meter codigo cambia el programa que despues se depura -- lo que
+ * veria un depurador ajeno o un desensamblador ya no seria lo que se compilo
+ * --, asi que se pide a proposito o no se pide.
+ *
+ * NO se apoya en el I/O con buffer del runtime (`__vx_write`/`__vx_flush`):
+ * escribe directo al descriptor.  Un manejador de fallo no puede depender del
+ * estado de un buffer del programa que acaba de reventar -- puede estar a
+ * medias, o el fallo puede venir justamente de ahi.
+ */
+
+// --- FFI del SO.  Solo kernel32; ni msvcrt ni CRT (igual que vx_io). --------
+extern "kernel32.dll" {
+    fn AddVectoredExceptionHandler(u32 first, cfn(u64) -> i32) -> u64;
+    fn GetStdHandle(u32 nStdHandle) -> u64;
+    fn WriteFile(u64 hFile, u8* buf, u32 n, u32* nwritten, u64 overlapped)
+        -> i32;
+    fn ExitProcess(u32 code) -> void;
+}
+
+// --- Vistas tipadas sobre lo que entrega el SO -----------------------------
+// Cero aritmetica de punteros a mano: un overlay ES el puntero, y cada campo
+// dice su offset.  Los huecos son padding implicito -- solo se declara lo que
+// se mira.
+
+// EXCEPTION_POINTERS: lo que recibe el manejador.
+@overlay struct ExcPointers {
+    u64 record  @0x00;   // -> EXCEPTION_RECORD
+    u64 context @0x08;   // -> CONTEXT (aqui no se usa)
+}
+
+// EXCEPTION_RECORD: de el solo interesa el codigo y donde revento.
+@overlay struct ExcRecord {
+    u32 code    @0x00;   // EXCEPTION_* del SO
+    u32 flags   @0x04;
+    u64 next    @0x08;
+    u64 address @0x10;   // instruccion que fallo
+}
+
+// --- Escritura directa, sin buffer -----------------------------------------
+// Un manejador de fallo escribe y sale; no acumula.
+@Target("os:windows")
+void __vxf_say(u8* buf, u64 len) {
+    u32 escritos = 0;
+    // -12 = STD_ERROR_HANDLE.  Los diagnosticos van al canal de error, no
+    // mezclados con la salida del programa.
+    WriteFile(GetStdHandle(0xFFFFFFF4), buf, (u32) len, &escritos, 0);
+}
+
+// --- Manejador --------------------------------------------------------------
+// Devuelve 0 (EXCEPTION_CONTINUE_SEARCH) en lo que no es nuestro: tragarse un
+// fallo ajeno para contarlo como propio es peor que no decir nada.
+@Target("os:windows")
+i32 __vx_fault_handler(u64 info) {
+    if (info == 0) {
+        return 0;
+    }
+    ExcPointers p = ExcPointers((u8*) info);
+    if (p.record == 0) {
+        return 0;
+    }
+    ExcRecord r = ExcRecord((u8*) p.record);
+
+    u32 salida = 0;
+    if (r.code == 0xC0000094) {          // INT_DIVIDE_BY_ZERO
+        __vxf_say("error fatal: division entre cero [VX7002]\n", 42);
+        salida = 136;                     // 128 + SIGFPE
+    } else if (r.code == 0xC0000095) {   // INT_OVERFLOW
+        __vxf_say("error fatal: desbordamiento aritmetico [VX7003]\n", 48);
+        salida = 136;
+    } else if (r.code == 0xC0000005) {   // ACCESS_VIOLATION
+        __vxf_say("error fatal: acceso a memoria invalido [VX7007]\n", 48);
+        salida = 139;                     // 128 + SIGSEGV
+    } else if (r.code == 0xC00000FD) {   // STACK_OVERFLOW
+        __vxf_say("error fatal: desbordamiento de pila [VX7008]\n", 45);
+        salida = 139;
+    } else if (r.code == 0xC000001D) {   // ILLEGAL_INSTRUCTION
+        __vxf_say("error fatal: instruccion no valida [VX7009]\n", 44);
+        salida = 132;                     // 128 + SIGILL
+    } else {
+        return 0;
+    }
+
+    ExitProcess(salida);
+    return 0;
+}
+
+// Lo instala `main` antes que nada: el driver AOT le prepende esta llamada.
+// 1 = al principio de la cadena, para llegar antes que el manejador del SO.
+@Target("os:windows")
+void __vx_fault_init() {
+    AddVectoredExceptionHandler(1, &__vx_fault_handler);
+}
+
+// =========================================================================
+//  Linux: senales por syscall RAW, sin libc
+// =========================================================================
+// El equivalente de la cadena de excepciones son las SENALES.  Se registran
+// con `rt_sigaction` (13), y el binario no depende de libc.so.6 -- igual que
+// las de vx_io.
+//
+// x86-64 EXIGE un `sa_restorer` propio: sin libc no hay quien lo aporte, y sin
+// el, el nucleo ni siquiera llega a entregar la senal (no puede montar el marco
+// y mata el proceso).  De ahi la funcion @Naked de abajo: tiene que ser asm
+// puro porque `rt_sigreturn` lee el marco a un desplazamiento fijo de rsp, y el
+// prologo de una funcion normal lo habria movido.
+
+// Trampolin de retorno de senal.  Nunca se ejecuta -- el manejador termina el
+// proceso --, pero el nucleo exige su direccion para aceptar el registro.
+@Target("!os:windows && arch:x86_64")
+@Naked void __vxf_restorer() {
+    asm volatile noinfer {
+        mov eax, 15
+        syscall
+    };
+}
+
+// write(2) directo al descriptor de error (fd 2).
+@Target("!os:windows && arch:x86_64")
+void __vxf_say(u8* buf, u64 len) {
+    register("rdi") i64 a1 = 2;
+    register("rsi") u8* a2 = buf;
+    register("rdx") i64 a3 = (i64) len;
+    register("rax") i64 nr = 1;   // SYS_write
+    asm volatile { syscall };
+}
+
+// exit_group(2), que termina TODOS los hilos y no solo el que fallo.
+@Target("!os:windows && arch:x86_64")
+void __vxf_exit(i64 code) {
+    register("rdi") i64 a1 = code;
+    register("rax") i64 nr = 231; // SYS_exit_group
+    asm volatile { syscall };
+}
+
+// El manejador recibe el numero de senal en el primer argumento.  El codigo de
+// salida es 128 + senal, el mismo criterio que en Windows.
+@Target("!os:windows && arch:x86_64")
+void __vx_fault_signal(i32 sig) {
+    if (sig == 8) {          // SIGFPE
+        __vxf_say("error fatal: division entre cero [VX7002]\n", 42);
+    } else if (sig == 11) {  // SIGSEGV
+        __vxf_say("error fatal: acceso a memoria invalido [VX7007]\n", 48);
+    } else if (sig == 4) {   // SIGILL
+        __vxf_say("error fatal: instruccion no valida [VX7009]\n", 44);
+    } else if (sig == 7) {   // SIGBUS
+        __vxf_say("error fatal: acceso a memoria invalido [VX7007]\n", 48);
+    } else if (sig == 6) {   // SIGABRT
+        __vxf_say("error fatal: abortado por el programa [VX7011]\n", 45);
+    }
+    __vxf_exit(128 + (i64) sig);
+}
+
+// struct sigaction del NUCLEO (no la de libc, que lleva otro orden).
+@overlay struct KSigAction {
+    u64 handler  @0x00;
+    u64 flags    @0x08;
+    u64 restorer @0x10;
+    u64 mask     @0x18;
+}
+
+// rt_sigaction(sig, act, oact, sizeof(sigset_t)).  El cuarto argumento es 8 en
+// 64 bits y el nucleo lo comprueba: con otro valor devuelve EINVAL.
+@Target("!os:windows && arch:x86_64")
+void __vxf_hook(i32 sig, u64 act) {
+    register("rdi") i64 a1 = (i64) sig;
+    register("rsi") u64 a2 = act;
+    register("rdx") i64 a3 = 0;
+    register("r10") i64 a4 = 8;
+    register("rax") i64 nr = 13;  // SYS_rt_sigaction
+    asm volatile { syscall };
+}
+
+@Target("!os:windows && arch:x86_64")
+void __vx_fault_init() {
+    u8[32] act;
+    KSigAction sa = KSigAction(&act[0]);
+    sa.handler = (u64) &__vx_fault_signal;
+    // SA_RESTORER (0x04000000) | SA_NODEFER (0x40000000): lo primero es
+    // obligatorio en x86-64; lo segundo evita que un segundo fallo dentro del
+    // manejador se quede bloqueado en vez de matar el proceso.
+    sa.flags = 0x44000000;
+    sa.restorer = (u64) &__vxf_restorer;
+    sa.mask = 0;
+    u64 dir = (u64) &act[0];
+    __vxf_hook(8, dir);   // SIGFPE
+    __vxf_hook(11, dir);  // SIGSEGV
+    __vxf_hook(4, dir);   // SIGILL
+    __vxf_hook(7, dir);   // SIGBUS
+    __vxf_hook(6, dir);   // SIGABRT
+}

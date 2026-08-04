@@ -773,6 +773,94 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 }
             }
 
+            /* Info de depuracion del LENGUAJE nivel 2: el binario se explica
+             * solo al fallar.  Se enlaza el manejador (stdlib/vx/vx_fault.vx) y
+             * se antepone su instalacion a `main`.
+             *
+             * A partir de aqui el ejecutable YA NO es identico al de no pedir
+             * nada: lleva codigo dentro.  Es deliberado y por eso tiene nivel
+             * propio -- el nivel 1 son solo datos, en un fichero aparte, y deja
+             * el binario intacto.  Meter codigo cambia el programa que despues
+             * se depura, asi que se pide a proposito o no se pide. */
+            if (opt.lang_debug_level >= 2 && !aot_freestanding) {
+                const std::string exe_dir =
+                    std::filesystem::path(fs::get_executable_path())
+                        .parent_path()
+                        .string();
+                const std::vector<std::string> cands = {
+                    exe_dir + "/stdlib/vx/vx_fault.vx",
+                    exe_dir + "/../stdlib/vx/vx_fault.vx",
+                    "stdlib/vx/vx_fault.vx"};
+                std::string fpath;
+                for (const auto &c : cands)
+                    if (std::filesystem::exists(c)) {
+                        fpath = c;
+                        break;
+                    }
+                if (fpath.empty()) {
+                    std::cerr << "[aot] no encuentro stdlib/vx/vx_fault.vx; "
+                                 "sin el, el binario no puede explicarse solo."
+                              << "\n";
+                    return EXIT_FAILURE;
+                }
+                std::ifstream ff(fpath);
+                std::string fsrc((std::istreambuf_iterator<char>(ff)),
+                                 std::istreambuf_iterator<char>());
+                vx::CompileOptions fopts;
+                fopts.module_name = "vx_fault";
+                fopts.opt_level = copts.opt_level;
+                fopts.native_poo = true;
+                fopts.asm_target_bits = copts.asm_target_bits;
+                vx::CompileResult fcr =
+                    vx::compile_vx_source(fsrc, fpath, fopts);
+                ir::IrModule fmod;
+                if (!fcr.ok || fcr.ir_module_cache_bytes.empty() ||
+                    !ir::parse_ir_module_cache(fcr.ir_module_cache_bytes,
+                                               fmod)) {
+                    std::cerr << "[aot] no pude compilar vx_fault.vx."
+                              << "\n";
+                    return EXIT_FAILURE;
+                }
+                // Mismo merge que el runtime de I/O: remap de literales por el
+                // offset del static_data, funciones nuevas, datos e imports.
+                const uint64_t sd_off2 =
+                    static_cast<uint64_t>(aot_mod.static_data.size());
+                std::unordered_set<std::string> have2;
+                for (const auto &af : aot_mod.functions)
+                    have2.insert(af.name);
+                for (auto &fn : fmod.functions) {
+                    if (sd_off2 != 0)
+                        for (auto &bb : fn.blocks)
+                            for (auto &ins : bb.instrs)
+                                if (ins.op == ir::IrOp::STR_LIT_ADDR)
+                                    ins.imm += sd_off2;
+                    if (!have2.count(fn.name))
+                        aot_mod.functions.push_back(std::move(fn));
+                }
+                aot_mod.static_data.append_raw_entries(
+                    std::move(fmod.static_data));
+                for (auto &gv : fmod.globals)
+                    aot_mod.globals.emplace(gv.first, gv.second);
+                for (auto &ni : fmod.native_imports)
+                    aot_mod.register_native_import(ni.lib, ni.name);
+                // Y que `main` lo instale antes que nada.
+                for (auto &af : aot_mod.functions) {
+                    if (af.name != "main" || af.blocks.empty()) continue;
+                    ir::IrInstr call_f{};
+                    call_f.op = ir::IrOp::CALL;
+                    call_f.type = ir::IrType::VOID;
+                    call_f.dst = ir::IR_NO_VALUE;
+                    call_f.func_name = "__vx_fault_init";
+                    af.blocks[0].instrs.insert(af.blocks[0].instrs.begin(),
+                                               std::move(call_f));
+                    break;
+                }
+                std::cout << "[aot] el binario se explicara solo al fallar "
+                             "(stdlib/vx/vx_fault.vx incluido; YA NO es "
+                             "identico al de no pedir depuracion)."
+                          << "\n";
+            }
+
             // AOT: eliminar funciones MUERTAS (no alcanzables) antes de
             // analizar/compilar.  Sin esto, una factoria-de-closure inlineada
             // en su caller queda como copia standalone no usada y su GC_ALLOC
