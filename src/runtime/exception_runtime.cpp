@@ -568,7 +568,18 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
      * mirar donde no es.  Cuando el simbolo lleva modulo en el nombre (que ya
      * dice donde vive) se muestra solo la linea; si es del propio fichero, se
      * muestran los dos. */
-    auto append_pos = [&](uint64_t pc, bool tiene_modulo) {
+    /* Cuanto retroceder para preguntar por la instruccion que interesa.
+     *
+     * Una direccion de RETORNO apunta justo despues de la llamada, y el PC de un
+     * fallo normal ya avanzo: en los dos hay que mirar el byte anterior.  Pero
+     * cuando el fallo lo captura el sistema a mitad de instruccion -- un acceso
+     * invalido -- el PC apunta a la que fallo, y restar uno se sale a la
+     * instruccion de antes: si la que fallo era la PRIMERA de una funcion, la de
+     * antes es de OTRA, y la traza acaba enseñando la linea de otro sitio.  Que
+     * fue exactamente lo que pasaba. */
+    const uint64_t atras_top = vm->fatal_pc_exact ? 0u : 1u;
+
+    auto append_pos = [&](uint64_t pc, bool tiene_modulo, uint64_t atras = 1) {
         for (const auto &exe_ptr :
              vm->scheduler.vm_reference.loader_public.executables) {
             if (!exe_ptr || !exe_ptr->debug_info) continue;
@@ -582,7 +593,7 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
                  * instruccion que interesa; es lo que hace cualquier
                  * desenrollador. */
                 exe_ptr->debug_info->lookup_line(
-                    static_cast<uint32_t>(pc ? pc - 1 : 0));
+                    static_cast<uint32_t>(pc > atras ? pc - atras : 0));
             if (info.found && info.line > 0) {
                 append_str(" (");
                 if (!tiene_modulo && info.file && info.file[0] != ' ') {
@@ -606,7 +617,7 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
      * ensena. */
     auto append_source = [&](uint64_t pc, const std::string &archivo,
                              vxdbg::ContentHash resumen,
-                             const std::string &simbolo) {
+                             const std::string &simbolo, uint64_t atras = 1) {
         if (archivo.empty()) return;
         uint32_t linea = 0;
         uint32_t col_pc = 0;
@@ -623,7 +634,7 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
                  * instruccion que interesa; es lo que hace cualquier
                  * desenrollador. */
                 exe_ptr->debug_info->lookup_line(
-                    static_cast<uint32_t>(pc ? pc - 1 : 0));
+                    static_cast<uint32_t>(pc > atras ? pc - atras : 0));
             if (info.found && info.line > 0) {
                 linea = info.line;
                 col_pc = info.column;
@@ -782,10 +793,10 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
                 append(nota.c_str(), nota.size());
                 append_str("]");
             }
-            append_pos(cur_pc,
-                       legible.find('.') != std::string::npos);
+            append_pos(cur_pc, legible.find('.') != std::string::npos,
+                       atras_top);
             append_str("\n");
-            append_source(cur_pc, archivo_top, resumen_top, *sym);
+            append_source(cur_pc, archivo_top, resumen_top, *sym, atras_top);
         } else {
             append_str("<top> (pc=");
             append_hex(cur_pc);

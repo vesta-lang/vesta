@@ -501,6 +501,9 @@ void Scheduler::run_loop() {
                 instance->pending_av_kind = 0xFFFFFFFFu;
                 instance->av_recovery_active = true;
                 if (setjmp(instance->av_recovery_jmpbuf) != 0) {
+                    /* Lo captura el sistema a mitad de instruccion: el PC
+                     * apunta a la que fallo, no a la siguiente. */
+                    instance->fatal_pc_exact = true;
                     char msg[128];
                     // Bug fix 2026-05-23: distinguir AV vs div0 / overflow.
                     if (instance->pending_av_kind == 1) {
@@ -1788,6 +1791,9 @@ void Scheduler::run_loop() {
                 instance->pending_av_kind = 0xFFFFFFFFu;
                 instance->av_recovery_active = true;
                 if (setjmp(instance->av_recovery_jmpbuf) != 0) {
+                    /* Lo captura el sistema a mitad de instruccion: el PC
+                     * apunta a la que fallo, no a la siguiente. */
+                    instance->fatal_pc_exact = true;
                     char msg[128];
                     // Bug fix 2026-05-23: distinguir AV vs div0 / overflow.
                     if (instance->pending_av_kind == 1) {

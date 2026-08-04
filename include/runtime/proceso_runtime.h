@@ -844,6 +844,13 @@ class ProcessVM {
     /// desbordamiento.  El centinela hace falta porque 0 es un fallo REAL: sin
     /// el no habia forma de distinguir un acceso invalido de no haber fallado.
     uint32_t pending_av_kind = 0xFFFFFFFFu;
+    /// El PC del fallo apunta a la instruccion que fallo, sin haber
+    /// avanzado.  Pasa con los fallos que captura el sistema (acceso
+    /// invalido, division del procesador): la interrumpen a medias.  En el
+    /// resto, el PC ya avanzo y hay que mirar el byte anterior.  Sin
+    /// distinguirlo, un fallo en la PRIMERA instruccion de una funcion se
+    /// atribuye a la ultima de la anterior -- que es otra funcion.
+    bool fatal_pc_exact = false;
 
     StringInternPool *str_intern_pool =
         nullptr; ///< Pool de strings internados (creado bajo demanda)
