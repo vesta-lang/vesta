@@ -263,6 +263,7 @@ add_library(vxdbg_lib STATIC
     src/vxdbg/store_source.cpp
     src/vxdbg/resolver.cpp
     src/vxdbg/capabilities.cpp
+    src/vxdbg/explain.cpp
 )
 target_include_directories(vxdbg_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # Los codecs comparten un header interno que no es parte de su API publica.

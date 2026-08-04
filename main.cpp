@@ -17,6 +17,7 @@
 #include <fstream>
 
 #include "disasm/disasm.h"
+#include "vxdbg/explain.h"
 #include <sstream>
 #include <thread>
 #include <atomic>
@@ -541,6 +542,15 @@ int main(int argc, char *argv[]) {
         "list-arch", "Imprimir arquitecturas soportadas")(
         "asm-file", "Archivo ASM a ensamblar", cxxopts::value<std::string>())(
         "disasm-file", "Archivo binario a desensamblar",
+        cxxopts::value<std::string>())(
+        "explain",
+        "Binario nativo cuyo punto de codigo se quiere explicar (usa su "
+        ".vxdbg, que el AOT deja al compilar con --debug-info=1).  El punto se "
+        "da con --at.",
+        cxxopts::value<std::string>())(
+        "at",
+        "Punto a explicar, como lo nombra un depurador o un desensamblador: "
+        "funcion+0xNN (p.ej. main+0x4a).",
         cxxopts::value<std::string>())(
         "arch", "Arquitectura para ensamblar/desensamblar",
         cxxopts::value<std::string>())(
@@ -1828,6 +1838,23 @@ int main(int argc, char *argv[]) {
                              out_prefix)
                    ? EXIT_SUCCESS
                    : EXIT_FAILURE;
+    }
+
+    // vm --explain <binario> --at <funcion+0xNN>
+    if (result.count("explain")) {
+        const std::string bin = result["explain"].as<std::string>();
+        const std::string donde =
+            result.count("at") ? result["at"].as<std::string>() : std::string();
+        if (donde.empty()) {
+            std::cerr << "error: --explain necesita --at funcion+0xNN\n";
+            return EXIT_FAILURE;
+        }
+        std::string err;
+        if (!vxdbg::explain_location(bin, donde, err)) {
+            std::cerr << "error: " << err << "\n";
+            return EXIT_FAILURE;
+        }
+        return EXIT_SUCCESS;
     }
 
     if (result.count("disasm-file")) {
