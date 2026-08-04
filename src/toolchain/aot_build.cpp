@@ -2186,6 +2186,62 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 data_sym_loc[snm] = place_data(N);
             }
 
+            /* Info de depuracion del LENGUAJE: la seccion `.vxdbg` con la
+             * correlacion codigo-nativo <-> fuente, EMBEBIDA en el ejecutable.
+             *
+             * Va dentro y no en un fichero aparte porque es lo que permite que
+             * el binario se explique solo, sin depender de que alguien haya
+             * conservado un fichero al lado -- que es justo lo que no pasa
+             * cuando algo falla en produccion.  Es lo que hacen DWARF (dentro
+             * del ELF) y Go (su tabla embebida); el fichero suelto es para el
+             * flujo de distribuir el binario pelado, no la norma.
+             *
+             * Es una seccion de DATOS: no cambia ni una instruccion, asi que lo
+             * que ve un depurador o un desensamblador del CODIGO sigue siendo
+             * exactamente lo que se compilo.  Lo que no puede colarse es
+             * CODIGO, y por eso el manejador tiene su propio nivel.
+             *
+             * Se crea al FINAL de la pasada 1, cuando el resto de secciones ya
+             * existen: si se creara antes, se colaria delante de `.rodata` y
+             * `.data` y les moveria la direccion -- con lo que cambiarian las
+             * direcciones absolutas del CODIGO, que es justo lo que no puede
+             * pasar.  Medido: creandola antes, `.text` sale distinto.
+             *
+             * Formato: ['VXDB'][version][n_fn] y por funcion
+             * [off_en_texto][tam][n_puntos] + n_puntos x [off][linea][col][len].
+             * Los desplazamientos son relativos a la seccion de codigo, que es
+             * lo que el manejador puede calcular restando su propia direccion.
+             */
+            if (opt.lang_debug_level >= 1) {
+                std::vector<uint8_t> db;
+                auto db32 = [&db](uint32_t v) {
+                    for (int i = 0; i < 4; ++i)
+                        db.push_back(static_cast<uint8_t>((v >> (i * 8)) & 0xFF));
+                };
+                uint32_t n_fn = 0;
+                for (const AotFn &af : compiled)
+                    if (!af.puntos.empty() && fn_loc.count(af.name)) ++n_fn;
+                db32(0x42445856u); // 'VXDB'
+                db32(1u);          // version
+                db32(n_fn);
+                for (const AotFn &af : compiled) {
+                    if (af.puntos.empty()) continue;
+                    auto it = fn_loc.find(af.name);
+                    if (it == fn_loc.end()) continue;
+                    db32(static_cast<uint32_t>(it->second.off));
+                    db32(static_cast<uint32_t>(af.bytes.size()));
+                    db32(static_cast<uint32_t>(af.puntos.size()));
+                    for (const auto &q : af.puntos) {
+                        db32(q.off);
+                        db32(q.line);
+                        db32(q.col);
+                        db32(q.len);
+                    }
+                }
+                const int dbg_si = get_sec(".vxdbg", /*is_code=*/false, "r");
+                secs[dbg_si].bytes = std::move(db);
+            }
+
             // Crear el writer + TODAS las secciones (writer idx == secs idx,
             // mismo orden; `secs` ya esta completa tras la pasada 1).
             aot::ObjectWriter w(fmt);

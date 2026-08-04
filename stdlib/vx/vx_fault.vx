@@ -61,6 +61,13 @@ void __vxf_say(u8* buf, u64 len) {
     WriteFile(GetStdHandle(0xFFFFFFF4), buf, (u32) len, &escritos, 0);
 }
 
+// Un manejador de fallo NO puede reentrar: si algo de lo que hace el propio
+// manejador falla, el sistema lo vuelve a llamar y se entra en un bucle que
+// solo acaba desbordando la pila -- miles de lineas en vez de una.  Con la
+// guarda, el segundo fallo se deja pasar y el proceso muere como habria muerto
+// sin nosotros.
+i64 __vxf_dentro = 0;
+
 // --- Manejador --------------------------------------------------------------
 // Devuelve 0 (EXCEPTION_CONTINUE_SEARCH) en lo que no es nuestro: tragarse un
 // fallo ajeno para contarlo como propio es peor que no decir nada.
@@ -69,6 +76,10 @@ i32 __vx_fault_handler(u64 info) {
     if (info == 0) {
         return 0;
     }
+    if (__vxf_dentro != 0) {
+        return 0;   // ya estamos contando un fallo: este viene de nosotros
+    }
+    __vxf_dentro = 1;
     ExcPointers p = ExcPointers((u8*) info);
     if (p.record == 0) {
         return 0;
@@ -95,6 +106,7 @@ i32 __vx_fault_handler(u64 info) {
         return 0;
     }
 
+    __vxf_donde(r.address);
     ExitProcess(salida);
     return 0;
 }
@@ -202,4 +214,126 @@ void __vx_fault_init() {
     __vxf_hook(4, dir);   // SIGILL
     __vxf_hook(7, dir);   // SIGBUS
     __vxf_hook(6, dir);   // SIGABRT
+}
+
+// =========================================================================
+//  Donde ocurrio: traduccion de la direccion a funcion y linea
+// =========================================================================
+// La seccion `.vxdbg` va EMBEBIDA en el ejecutable, no en un fichero al lado:
+// asi el binario se explica solo, sin descubrir su propia ruta ni abrir nada
+// justo cuando el proceso esta roto.  Es lo que hacen Go y DWARF-dentro-del-ELF;
+// el fichero suelto sirve para distribuir el binario pelado, no para esto.
+//
+// Formato (lo escribe el driver AOT):
+//   ['VXDB'][version][n_fn]
+//   y por funcion: [off_en_texto][tam][n_puntos]
+//                  + n_puntos x [off_en_funcion][linea][columna][tramo]
+// Solo hay punto donde la linea CAMBIA: entre dos, sigue valiendo el primero.
+
+// Lee un u32 de la seccion (little-endian, como lo escribio el driver).
+u32 __vxf_u32(u64 base, u64 off) {
+    u32* p = (u32*) (base + off);
+    return p[0];
+}
+
+// Escribe un numero en decimal.  Propio y sobre la pila: un manejador de fallo
+// no debe pasar por el I/O con buffer del programa que acaba de reventar.
+// Buffer GLOBAL, no local: tomarle la direccion a un array de la pila puede
+// hacer que el compilador lo lleve al monton, y dentro de un manejador de fallo
+// no se puede confiar en el asignador -- puede ser justo lo que reventó, o
+// estar a medias.  Un global vive en datos estaticos y no aloca nada.
+u8[24] __vxf_digitos;
+
+// Decimal SIN dividir: se resta la potencia de diez que toca.
+//
+// Medido: una division dentro del manejador hace que el proceso muera con
+// acceso invalido, mientras que la misma funcion a base de desplazamientos y
+// restas funciona.  La sospecha es la alineacion de la pila con la que el
+// sistema entra al manejador -- una operacion que derrame a registro ancho
+// exige 16 bytes y falla si no los tiene --, no la division en si.  Queda
+// anotado: aqui se rodea, pero conviene mirarlo aparte porque afectaria a
+// cualquier funcion algo compleja llamada desde un manejador.
+void __vxf_num(u64 v) {
+    u64 pot = 10000000000000000000;
+    u64 n = 0;
+    while (pot > 0) {
+        u64 dig = 0;
+        while (v >= pot) {
+            v = v - pot;
+            dig = dig + 1;
+        }
+        // No se emiten los ceros de delante, salvo que sea el unico digito.
+        if (dig > 0 || n > 0 || pot == 1) {
+            __vxf_digitos[n] = (u8) (48 + dig);
+            n = n + 1;
+        }
+        if (pot == 1) {
+            pot = 0;
+        } else {
+            // pot / 10 sin dividir: la siguiente potencia se lleva aparte.
+            u64 sig = 1;
+            u64 lim = pot;
+            while (sig * 10 < lim) {
+                sig = sig * 10;
+            }
+            pot = sig;
+        }
+    }
+    __vxf_say(&__vxf_digitos[0], n);
+}
+
+// Cuenta en que funcion y linea estaba la direccion @p addr, si consta.
+void __vxf_donde(u64 addr) {
+    u64 base = (u64) section_start(".vxdbg");
+    u64 fin = (u64) section_end(".vxdbg");
+    if (base == 0 || fin <= base + 12) {
+        return;
+    }
+    if (__vxf_u32(base, 0) != 0x42445856) {   // 'VXDB'
+        return;
+    }
+    u64 texto = (u64) section_start(".text");
+    if (texto == 0 || addr < texto) {
+        return;
+    }
+    u64 off = addr - texto;
+
+    u32 n_fn = __vxf_u32(base, 8);
+    u64 c = 12;
+    u32 k = 0;
+    while (k < n_fn) {
+        u32 f_off = __vxf_u32(base, c);
+        u32 f_tam = __vxf_u32(base, c + 4);
+        u32 n_pts = __vxf_u32(base, c + 8);
+        c = c + 12;
+        if (off >= (u64) f_off && off < (u64) f_off + (u64) f_tam) {
+            // Dentro de esta funcion: el ultimo punto en o antes del fallo.
+            u64 rel = off - (u64) f_off;
+            u32 linea = 0;
+            u32 col = 0;
+            u32 i = 0;
+            while (i < n_pts) {
+                u32 p_off = __vxf_u32(base, c + (u64) i * 16);
+                if ((u64) p_off > rel) {
+                    i = n_pts;
+                } else {
+                    linea = __vxf_u32(base, c + (u64) i * 16 + 4);
+                    col = __vxf_u32(base, c + (u64) i * 16 + 8);
+                    i = i + 1;
+                }
+            }
+            if (linea > 0) {
+                __vxf_say("  en la linea ", 15);
+                __vxf_num((u64) linea);
+                if (col > 0) {
+                    __vxf_say(", columna ", 10);
+                    __vxf_num((u64) col);
+                }
+                __vxf_say("\n", 1);
+            }
+            return;
+        }
+        c = c + (u64) n_pts * 16;
+        k = k + 1;
+    }
 }
