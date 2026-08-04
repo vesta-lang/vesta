@@ -839,6 +839,21 @@ add_executable(test_vxdbg_codec tests/vxdbg/test_vxdbg_codec.cpp
                                 src/vxdbg/codec_backend.cpp)
 target_include_directories(test_vxdbg_codec PRIVATE ${VM_INCLUDES} src/vxdbg)
 
+# El recorrido completo: de una direccion a una explicacion.  Cada capa esta
+# probada por su cuenta, pero eso no dice si el camino entero funciona -- es
+# justo donde se ven los desajustes entre piezas que por separado estan bien.
+add_executable(test_vxdbg_resolve tests/vxdbg/test_vxdbg_resolve.cpp
+                                  src/vxdbg/ids.cpp
+                                  src/vxdbg/serialize.cpp
+                                  src/vxdbg/store.cpp
+                                  src/vxdbg/lowering_map.cpp
+                                  src/vxdbg/backend_meta.cpp
+                                  src/vxdbg/codec_source.cpp
+                                  src/vxdbg/codec_backend.cpp
+                                  src/vxdbg/store_source.cpp
+                                  src/vxdbg/resolver.cpp)
+target_include_directories(test_vxdbg_resolve PRIVATE ${VM_INCLUDES} src/vxdbg)
+
 add_executable(test_rbank_physical tests/jit/test_rbank_physical.cpp)
 target_include_directories(test_rbank_physical PRIVATE ${VM_INCLUDES})
 target_link_libraries(test_rbank_physical PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)

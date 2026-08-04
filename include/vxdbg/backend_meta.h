@@ -279,13 +279,24 @@ enum class LocationKind : uint8_t {
 /**
  * @brief Donde esta un valor entre dos puntos del intermedio.
  *
- * Los limites se expresan en instrucciones INTERMEDIAS, no en direcciones: asi
- * la misma lista vale para el interpretado, el compilado al vuelo y el
- * compilado por adelantado, que comparten intermedio pero no direcciones.
+ * Los limites se expresan en el intermedio y no en direcciones: asi la misma
+ * lista vale para el interpretado, el compilado al vuelo y el compilado por
+ * adelantado, que comparten intermedio pero no direcciones.
+ *
+ * **Por POSICION, no por identificador.**  Un @ref IrInstrId es una huella, y
+ * las huellas no se ordenan: preguntar "esta esta instruccion entre estas dos"
+ * no tiene respuesta si los extremos son hashes.  La primera version guardaba
+ * identificadores y comparaba los extremos por igualdad, con lo que una
+ * variable parecia existir solo EXACTAMENTE al principio y al final de su
+ * rango, y en medio -- que es donde de verdad se pregunta -- no constaba.
+ *
+ * La posicion es el numero de orden de la instruccion dentro de su funcion
+ * intermedia.  Sigue siendo independiente del backend, que es lo que se
+ * buscaba, y ademas se puede comparar.
  */
 struct LocationRange {
-    IrInstrId from; ///< desde esta instruccion (incluida)
-    IrInstrId to;   ///< hasta esta (excluida)
+    uint32_t from = 0; ///< desde esta posicion (incluida)
+    uint32_t to = 0;   ///< hasta esta (excluida)
     LocationKind kind = LocationKind::OptimizedOut;
     int64_t value = 0; ///< registro, desplazamiento, direccion o constante
 };
@@ -307,11 +318,11 @@ struct VariableMap {
 
     /**
      * @brief Donde esta la variable en un punto del intermedio.
-     * @param at Instruccion intermedia.
+     * @param position Numero de orden de la instruccion dentro de su funcion.
      * @return El tramo que la cubre, o uno con @ref LocationKind::OptimizedOut
      *         si en ese punto no esta en ningun sitio.
      */
-    LocationRange at(IrInstrId at) const;
+    LocationRange at(uint32_t position) const;
 };
 
 } // namespace vxdbg

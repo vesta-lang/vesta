@@ -58,6 +58,10 @@ struct EntityView {
     std::vector<std::string> implements;
     std::string declared_in;             ///< modulo o espacio de nombres
     SourceSpan declared_at;
+    /// La cadena de derivacion se cerraba sobre si misma.  Es un fallo de quien
+    /// genero los datos, y callarlo dejaria una jerarquia recortada sin que
+    /// nadie supiera por que.
+    bool cyclic = false;
 };
 
 /**
@@ -150,6 +154,22 @@ class NodeSource {
     /// Instrucciones intermedias de una funcion, para relacionar sentencias.
     virtual IrFunctionId function_of(IrInstrId instr) const = 0;
 
+    /**
+     * @brief Numero de orden de una instruccion dentro de su funcion.
+     *
+     * Hace falta para consultar los tramos de vida de las variables, que se
+     * expresan por posicion y no por identificador: una huella no se ordena, y
+     * un rango con extremos que no se ordenan no se puede consultar.
+     *
+     * Lo sabe quien produjo el intermedio; la capa de codigo, que solo conoce
+     * instrucciones sueltas, no tiene por que.
+     *
+     * @param instr Instruccion.
+     * @param out_position Recibe su posicion.
+     * @return @c true si consta.
+     */
+    virtual bool position_of(IrInstrId instr, uint32_t &out_position) const = 0;
+
     /// Variables declaradas en un ambito.  Es una relacion inversa: el nodo de
     /// ambito no las lleva, se indexan aparte.
     virtual std::vector<VariableId> variables_in(ScopeId scope) const = 0;
@@ -202,7 +222,38 @@ class DebugResolver {
     std::vector<uint64_t> addresses_for(const std::string &file,
                                         uint32_t line) const;
 
+    /**
+     * @brief Describe una entidad con su jerarquia ya resuelta.
+     *
+     * Publico porque hace falta por si solo: un diagnostico que cita un tipo
+     * quiere contarlo entero -- de quien deriva, que cumple -- sin tener que
+     * partir de una direccion.
+     *
+     * @param id Entidad.
+     * @return La vista; @c found es @c false si no esta.
+     */
+    EntityView describe_entity(LanguageEntityId id) const;
+
   private:
+    /* El recorrido va por fases, una por capa que atraviesa, y cada una decide
+     * si se puede seguir.  Escrito de corrido cabia, pero el camino tiene cinco
+     * saltos y no para de crecer: partido, cada salto se lee y se prueba solo. */
+
+    /// Fase 1: de la direccion al cuerpo de codigo.  @return si se pudo.
+    bool resolve_code(uint64_t address, ResolvedSite &s) const;
+
+    /// Fase 2: del codigo a las instrucciones intermedias.  @return si se pudo.
+    bool resolve_ir(ResolvedSite &s) const;
+
+    /// Fase 3: del intermedio a la sentencia del fuente.  @return si se pudo.
+    bool resolve_statement(ResolvedSite &s) const;
+
+    /// Fase 4: a quien pertenece el codigo, con su jerarquia.
+    void resolve_owner(const StatementNode &st, ResolvedSite &s) const;
+
+    /// Fase 5: las variables con valor en ese punto.
+    void resolve_variables(const StatementNode &st, ResolvedSite &s) const;
+
     const NodeSource &nodes_;
     const SessionMap &session_;
 };

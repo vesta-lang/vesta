@@ -144,8 +144,8 @@ StoredNode encode(const VariableMap &n) {
     w.id(n.variable);
     w.u32(static_cast<uint32_t>(n.locations.size()));
     for (const auto &l : n.locations) {
-        w.id(l.from);
-        w.id(l.to);
+        w.u32(l.from);
+        w.u32(l.to);
         w.u8(static_cast<uint8_t>(l.kind));
         w.i64(l.value);
     }
@@ -163,8 +163,8 @@ bool decode(const StoredNode &s, VariableMap &out) {
     out.locations.reserve(n_l);
     for (uint32_t i = 0; i < n_l && r.ok(); ++i) {
         LocationRange l;
-        l.from = r.id<IrInstrTag>();
-        l.to = r.id<IrInstrTag>();
+        l.from = r.u32();
+        l.to = r.u32();
         l.kind = static_cast<LocationKind>(r.u8());
         l.value = r.i64();
         out.locations.push_back(l);
