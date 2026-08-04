@@ -62,6 +62,10 @@ struct VxdbgEmitStats {
     /// codigo generado que no viene de ninguna declaracion, como los ayudantes
     /// que fabrica el compilador -- pero que crezca de golpe si lo es.
     size_t unlinked = 0;
+    /// Los pares (simbolo, entidad) que se ligaron.  Los expone porque un
+    /// ejecutable puede juntar varios modulos y su mapa tiene que cubrirlos a
+    /// todos: una direccion suya puede caer en cualquiera.
+    std::vector<std::pair<std::string, vxdbg::LanguageEntityId>> symbol_links;
     /// Huella del mapa de simbolos.  Con ella y el identificador de la
     /// compilacion se entra al grafo desde una direccion de ejecucion.
     vxdbg::ContentHash artifact_map;
@@ -78,6 +82,24 @@ struct VxdbgEmitStats {
  * @return La ruta, respetando @c VX_CACHE_DIR si esta puesta.
  */
 std::string default_vxdbg_dir();
+
+/**
+ * @brief Publica el mapa de un artefacto bajo su identificador de construccion.
+ *
+ * El identificador sale del CONTENIDO del fichero producido, no de como se
+ * llame: es lo unico que sobrevive a renombrarlo, moverlo o mandarlo a otra
+ * maquina, y por tanto lo unico con lo que tiene sentido pedir despues su
+ * informacion.  Un binario viejo que siga por ahi se sigue explicando con SUS
+ * simbolos y no con los de la ultima compilacion.
+ *
+ * @param artifact_path Fichero producido.
+ * @param map Huella del mapa (@c VxdbgEmitStats::artifact_map).
+ * @param out_dir Carpeta del almacen; vacia = la de por defecto.
+ * @return @c true si quedo publicado.
+ */
+bool publish_vxdbg_artifact(const std::string &artifact_path,
+                            vxdbg::ContentHash map,
+                            const std::string &out_dir = std::string());
 
 /**
  * @brief Vuelca la capa semantica del modulo al almacen de depuracion.

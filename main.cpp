@@ -57,6 +57,7 @@
 #include "toolchain/aot_build.h" // AOT nativo extraido (vesta::tc::compile_aot)
 #include "util/assembler_multiprocess.h"
 #include "vx/compiler.h"
+#include "vx/vxdbg_emit.h" // publicar el grafo del artefacto
 #include "vx/type_checker.h" // register_comptime_virtual_fns
 #include "vx/diag/diag_format.h" // renderizado de diagnosticos (texto/JSON/SARIF)
 #include "vx/lexer.h"
@@ -4081,6 +4082,16 @@ int main(int argc, char *argv[]) {
             /*keep_labels=*/(result.count("keep-labels") > 0),
             /*ir_section_bytes=*/&cr.ir_section_bytes,
             /*emit_map=*/(result.count("emit-map") > 0));
+
+        // Se deja constancia de que grafo explica ESTE artefacto, bajo un
+        // identificador sacado de su contenido.  Es el ultimo eslabon: sin el,
+        // el grafo esta emitido pero nadie puede pedirlo a partir del programa
+        // que se esta ejecutando.  Se hace aqui y no al compilar porque el
+        // identificador no existe hasta que el fichero existe.
+        if (rc == EXIT_SUCCESS && !cr.vxdbg_artifact_map.empty()) {
+            vx::publish_vxdbg_artifact(out_prefix + ".velb",
+                                       cr.vxdbg_artifact_map, copts.vxdbg_dir);
+        }
 
         //  M5.B: persistir el .velb final al project cache si
         // (a) el compile usa imports (compile_vx_project tiene

@@ -26,6 +26,9 @@
  */
 
 #include "vx/compiler.h"
+#include "vx/vxdbg_emit.h" // grafo de conocimiento del programa
+#include "vxdbg/codec.h"
+#include "vxdbg/roots.h"
 #include "analyze/fingerprint.h" // verificacion de contratos
 #include "vx/incremental.h" // CAS global direccionado por contenido (cross-proyecto)
 #include <algorithm> // UCRT64: no transitivo
@@ -407,6 +410,10 @@ struct ProjectModuleWork {
     ir::IrModule ir;
     VxiModule vxi;
     bool ok = false;
+    /// Los pares (simbolo, entidad) del grafo de depuracion de ESTE modulo.  Se
+    /// juntan al final: el ejecutable contiene todos los modulos, asi que su
+    /// mapa tiene que cubrirlos a todos.
+    std::vector<std::pair<std::string, vxdbg::LanguageEntityId>> vxdbg_symbols;
     ///  M.L20-full: Diagnostics local del modulo.  Cuando se
     /// paraleliza el compile (VX_PARALLEL_COMPILE=1), cada thread
     /// usa este diags propio en lugar del res.diagnostics compartido,
@@ -2132,6 +2139,23 @@ CompileResult compile_vx_project(
             return;
         }
 
+        // Grafo de conocimiento del programa, por modulo.  Cada uno aporta sus
+        // tipos y los simbolos que emitio; el mapa del artefacto se compone
+        // despues con lo de todos, porque el ejecutable final los contiene a
+        // todos y una direccion suya puede caer en cualquiera.
+        {
+            VxdbgEmitStats st;
+            std::string dbg_err;
+            if (!emit_vxdbg_source(*pm.tc, lo.emitted_symbols(),
+                                   pm.canonical_path,
+                                   pm.source, opts.vxdbg_dir, st, dbg_err)) {
+                std::cerr << "[vxdbg] no se pudo emitir " << pm.canonical_path
+                          << ": "
+                          << dbg_err << "\n";
+            }
+            pm.vxdbg_symbols = st.symbol_links;
+        }
+
         // -ffp-contract=off (CLI, per-modulo): fuerza IEEE estricto (sin FMA)
         // en cada funcion del modulo.  Mismo criterio que compile_vx_source; se
         // aplica aqui (misma TU que el optimizer del proyecto) para no depender
@@ -3031,6 +3055,22 @@ CompileResult compile_vx_project(
         return res;
     }
     res.vel_text = std::move(eres.vel_text);
+
+    // Mapa del artefacto: uno solo con los simbolos de TODOS los modulos.  El
+    // ejecutable los contiene a todos, asi que una direccion suya puede caer en
+    // cualquiera; un mapa por modulo dejaria sin explicar todo lo que no fuera
+    // el modulo raiz.
+    {
+        vxdbg::ArtifactMap map;
+        for (const auto &pm : work)
+            for (const auto &kv : pm.vxdbg_symbols) map.add(kv.first, kv.second);
+        vxdbg::FileNodeStore store(opts.vxdbg_dir.empty()
+                                       ? default_vxdbg_dir()
+                                       : opts.vxdbg_dir);
+        vxdbg::ContentHash h;
+        if (!map.symbols.empty() && vxdbg::store_node(store, map, h))
+            res.vxdbg_artifact_map = h;
+    }
     res.ir_section_bytes = ir::emit_ir_section(merged.functions);
     //  AOT multi-modulo: exponer el IR mergeado (functions + static_data
     // + globals) como module_cache para que el path -m aot lo consuma.  El

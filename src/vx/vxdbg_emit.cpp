@@ -35,6 +35,7 @@
 #include "vxdbg/semantic.h"
 
 
+#include <cstdio>
 #include <cstdlib>
 #include <unordered_set>
 
@@ -467,6 +468,30 @@ vxdbg::ArtifactMap link_symbols(
 
 } // namespace
 
+bool publish_vxdbg_artifact(const std::string &artifact_path,
+                            vxdbg::ContentHash map, const std::string &out_dir) {
+    if (map.empty()) return false;
+    std::FILE *f = std::fopen(artifact_path.c_str(), "rb");
+    if (!f) return false;
+    // El identificador se calcula sobre el fichero entero.  Es lo mismo que
+    // hara quien lo ejecute para preguntar por el, asi que tiene que salir de
+    // los mismos bytes y de nada mas: ni la fecha, ni la ruta, ni quien lo
+    // compilo.
+    std::string bytes;
+    char buf[64 * 1024];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) bytes.append(buf, n);
+    std::fclose(f);
+    if (bytes.empty()) return false;
+
+    const std::string dir = out_dir.empty() ? default_vxdbg_dir() : out_dir;
+    vxdbg::FileNodeStore store(dir);
+    const vxdbg::CacheRootRepository repo(dir, store);
+    return repo.publish(vxdbg::BuildId{vxdbg::hash_bytes(bytes.data(),
+                                                         bytes.size())},
+                        map);
+}
+
 std::string default_vxdbg_dir() {
     // La misma valvula que el resto de caches del compilador: si el proyecto
     // los redirige a un sitio comun, este va con ellos y no se queda suelto en
@@ -505,6 +530,7 @@ bool emit_vxdbg_source(const TypeChecker &tc,
     // desde una direccion de ejecucion.
     if (!symbol_links.empty()) {
         const vxdbg::ArtifactMap map = link_symbols(symbol_links, res.ids, stats);
+        stats.symbol_links = map.symbols;
         vxdbg::ContentHash h;
         if (vxdbg::store_node(store, map, h)) stats.artifact_map = h;
     }
