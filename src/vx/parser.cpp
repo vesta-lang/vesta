@@ -6592,7 +6592,32 @@ std::unique_ptr<ast::BlockStmt> Parser::parse_block() {
     return b;
 }
 
+/**
+ * @brief Parsea una sentencia y le pone su EXTENSION real.
+ *
+ * El nodo se queda con la posicion de su primer token, cuya longitud es la de
+ * ESE TOKEN y no la de la sentencia: una que empiece por `return` medía seis
+ * caracteres, los de la palabra clave.  Al subrayar un fallo se marcaba la
+ * palabra clave en vez de lo que se estaba evaluando.
+ *
+ * Aqui se mide de verdad: del primer byte de la sentencia al ultimo consumido.
+ * Se hace en el envoltorio y no en cada rama porque son decenas y bastaria
+ * olvidar una para que volviera a mentir en ese caso concreto.
+ *
+ * @return La sentencia.
+ */
 std::unique_ptr<ast::Stmt> Parser::parse_statement() {
+    const uint32_t ini = current_.loc.offset;
+    auto st = parse_statement_inner();
+    if (st && st->loc.offset >= ini) {
+        // El final es donde empieza el token que YA no es de la sentencia.
+        const uint32_t fin = current_.loc.offset;
+        if (fin > st->loc.offset) st->loc.length = fin - st->loc.offset;
+    }
+    return st;
+}
+
+std::unique_ptr<ast::Stmt> Parser::parse_statement_inner() {
     // `label:` -- declaracion de etiqueta para `goto`.  Detectada
     // como IDENT seguido inmediatamente de COLON (sin espacio
     // semantico en medio).  La etiqueta se modela como un statement

@@ -426,6 +426,8 @@ class Parser {
 
     std::unique_ptr<ast::BlockStmt> parse_block();
     std::unique_ptr<ast::Stmt> parse_statement();
+    /// Cuerpo real; @ref parse_statement lo envuelve para medir la extension.
+    std::unique_ptr<ast::Stmt> parse_statement_inner();
     std::unique_ptr<ast::Stmt> parse_var_decl_stmt(bool is_const,
                                                    bool from_comptime = false);
     std::unique_ptr<ast::Stmt> parse_if_stmt();
