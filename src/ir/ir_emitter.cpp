@@ -7043,8 +7043,38 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
         out << "@Module(" << EmitCtx::sanitize(mod_name) << ")\n\n";
     }
 
+    /* Los cuerpos comptime (`__macro_*`) no pintan nada en el binario del
+     * programa: los ejecuta el COMPILADOR, no el programa.  Se quedaban dentro
+     * como codigo muerto -- en un fuente que solo usa literales anchos son 325
+     * funciones y cerca de un mega -- y ademas arrastraban el import de la
+     * libreria virtual del compilador, que el cargador tenia que resolver al
+     * arrancar para un simbolo que nadie iba a llamar.
+     *
+     * Solo se omiten cuando hay un prebuilt: ese `.velb` aparte es de donde el
+     * ComptimeVM los saca, y se compila SIN esta variable puesta, asi que
+     * conserva todo lo que necesita.  Sin prebuilt (la compilacion que genera
+     * justamente ese cache) se emiten como siempre.
+     *
+     * CUIDADO al distribuir librerias PRECOMPILADAS por separado.  Que un
+     * `__macro_` no lo use su propio modulo no significa que no lo use nadie:
+     * `std.comptime.literal` exporta su parser y lo consume `std.wideint`.
+     * Hoy eso funciona porque el `.velb` del ComptimeVM se compila aparte con
+     * el proyecto ENTERO -- root y dependencias -- asi que lleva los cuerpos
+     * de todos.  El dia que se enlacen `.velb` sueltos sin fusionar el IR,
+     * este filtro tendra que mirar si el modulo es un ejecutable o una
+     * libreria, porque una libreria SI tiene que conservarlos. */
+    const bool omit_comptime_bodies = []() {
+        const char *v = std::getenv("VESTA_MC_PREBUILT");
+        return v != nullptr && v[0] != '\0';
+    }();
+
     // Declaraciones de librerias nativas
     for (const auto &lib : mod.native_libs) {
+        /* La libreria virtual del compilador se va con los cuerpos que la
+         * usaban: sin ellos nadie la llama, pero su DECLARACION seguia ahi y
+         * el cargador la resolvia al arrancar, buscando una DLL que no existe
+         * porque vive dentro del propio compilador. */
+        if (omit_comptime_bodies && lib == "vesta_comptime") continue;
         out << "@Lib(\"" << lib << "\")\n";
     }
     if (!mod.native_libs.empty()) out << "\n";
@@ -7061,6 +7091,8 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
     if (!mod.native_imports.empty()) {
         out << "@Import {\n";
         for (const auto &ni : mod.native_imports) {
+            if (omit_comptime_bodies && ni.lib == "vesta_comptime")
+                continue;
             out << "    @Method { @Lib(\"" << ni.lib << "\")"
                 << " @Name(\"" << ni.name << "\") }\n";
         }
@@ -7071,6 +7103,9 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
     // entrada
     bool first_func = true;
     for (const auto &fn : mod.functions) {
+        if (omit_comptime_bodies && fn.name.rfind("__macro_", 0) == 0) {
+            continue;
+        }
         if (fn.is_native) {
             // Stub nativo: solo comentario de importacion
             out << "// funcion nativa: " << fn.name
