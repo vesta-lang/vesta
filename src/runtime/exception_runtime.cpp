@@ -567,11 +567,15 @@ static uint64_t limite_pila_nativa(uint64_t sp) {
  * @param vm Proceso.
  * @param sp Por donde iba la pila nativa al fallar.
  * @param max Cuantos marcos como mucho.
- * @return Las direcciones virtuales de las funciones, de dentro a fuera.
+ * @return Por cada marco, su direccion de retorno NATIVA y la direccion
+ *         virtual de la funcion que la contiene, de dentro a fuera.  Hacen
+ *         falta las dos: la virtual nombra la funcion, y la nativa es la unica
+ *         que permite saber en QUE LINEA estaba -- y con ella, que llamadas se
+ *         aplanaron ahi al inlinar.
  */
-static std::vector<uint64_t> cadena_nativa(ProcessVM *vm, uint64_t sp,
-                                           size_t max) {
-    std::vector<uint64_t> out;
+static std::vector<std::pair<uint64_t, uint64_t>>
+cadena_nativa(ProcessVM *vm, uint64_t sp, size_t max) {
+    std::vector<std::pair<uint64_t, uint64_t>> out;
     if (sp == 0) return out;
     const uint64_t tope = limite_pila_nativa(sp);
     uint64_t previo = UINT64_MAX;
@@ -585,7 +589,7 @@ static std::vector<uint64_t> cadena_nativa(ProcessVM *vm, uint64_t sp,
         // La misma funcion seguida es la misma llamada, no una nueva.
         if (previo != UINT64_MAX && va == previo) continue;
         previo = va;
-        out.push_back(va);
+        out.emplace_back(v, va);
     }
     (void)vm;
     return out;
@@ -1534,7 +1538,10 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
     if (desde_compilado) {
         uint64_t previo_va = UINT64_MAX;
         bool primero_n = true;
-        for (uint64_t va : cadena_nativa(vm, vm->pending_fault_native_sp, 32)) {
+        for (const auto &marco :
+             cadena_nativa(vm, vm->pending_fault_native_sp, 32)) {
+            const uint64_t nat_n = marco.first;
+            const uint64_t va = marco.second;
             if (va == previo_va) continue;
             previo_va = va;
             uint64_t off_n = 0;
@@ -1549,19 +1556,76 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
             }
             if (prev_origen && *prev_origen == *sym_n) continue;
             prev_origen = sym_n;
+
+            /* En que linea estaba este marco.  Se pregunta por el byte
+             * ANTERIOR a la direccion de retorno, para caer dentro de la
+             * llamada y no en lo que viene despues. */
+            uint32_t linea_n = 0;
+            (void)jit::lookup_line_by_native_pc(nat_n > 0 ? nat_n - 1 : 0,
+                                                linea_n);
+            /* Y que llamadas se aplanaron ahi.  Sin esto el marco lleva el
+             * nombre de la funcion FISICA y una linea que puede ser de otra,
+             * que es lo mismo que ya se corrigio para el marco de arriba y
+             * para la cadena del interprete. */
+            const std::vector<EscalonInline> apl_n =
+                inline_chain_at(vm, *sym_n, linea_n, 0);
+
             append_str("  llamada desde ");
-            const std::string leg_n = demangle_symbol(*sym_n);
+            const std::string leg_n =
+                apl_n.empty() ? demangle_symbol(*sym_n)
+                              : demangle_symbol(apl_n.front().funcion);
             append(leg_n.c_str(), leg_n.size());
+            if (!apl_n.empty()) {
+                append_str(" [aplanado en ");
+                const std::string fis_n = demangle_symbol(*sym_n);
+                append(fis_n.c_str(), fis_n.size());
+                append_str("]");
+            }
             std::string arch_n;
             vxdbg::ContentHash res_n;
-            const std::string nota_n =
-                entity_note_for_symbol(vm, *sym_n, &arch_n, &res_n);
+            const std::string nota_n = entity_note_for_symbol(
+                vm, apl_n.empty() ? *sym_n : apl_n.front().funcion, &arch_n,
+                &res_n);
             if (!nota_n.empty()) {
                 append_str(" [");
                 append(nota_n.c_str(), nota_n.size());
                 append_str("]");
             }
+            if (linea_n > 0) {
+                append_str(" (linea ");
+                append_dec((uint64_t)linea_n);
+                append_str(")");
+            }
             append_str("\n");
+
+            /* Las llamadas que el inlinado se comio por debajo de este marco. */
+            for (size_t k = 1; k < apl_n.size(); ++k) {
+                append_str("  llamada desde ");
+                const std::string nk = demangle_symbol(apl_n[k].funcion);
+                append(nk.c_str(), nk.size());
+                append_str(" [aplanado] (linea ");
+                append_dec((uint64_t)apl_n[k - 1].linea);
+                append_str(")\n");
+            }
+            if (!apl_n.empty()) {
+                append_str("  llamada desde ");
+                const std::string nf_n = demangle_symbol(*sym_n);
+                append(nf_n.c_str(), nf_n.size());
+                /* La nota de arriba describe a la funcion aplanada; esta es la
+                 * FISICA y hay que preguntarla aparte. */
+                std::string arch_g;
+                vxdbg::ContentHash res_g;
+                const std::string nota_g =
+                    entity_note_for_symbol(vm, *sym_n, &arch_g, &res_g);
+                if (!nota_g.empty()) {
+                    append_str(" [");
+                    append(nota_g.c_str(), nota_g.size());
+                    append_str("]");
+                }
+                append_str(" (linea ");
+                append_dec((uint64_t)apl_n.back().linea);
+                append_str(")\n");
+            }
         }
     }
 
