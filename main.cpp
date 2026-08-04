@@ -3342,6 +3342,21 @@ int main(int argc, char *argv[]) {
             constexpr uint64_t FNV_OFFSET = 14695981039346656037ULL;
             constexpr uint64_t FNV_PRIME = 1099511628211ULL;
             uint64_t h = FNV_OFFSET;
+            /* La VERSION del formato del intermedio entra en la clave.
+             *
+             * Sin esto, un  precompilado de antes de un cambio de
+             * formato se seguia usando y se leia con el layout viejo: los
+             * campos salen corridos y el codigo comptime devuelve basura sin
+             * que nada avise.  Se vio como cuatro casos devolviendo 0 donde
+             * esperaban 42, y desde fuera parecia un fallo del compilador.
+             *
+             * Un artefacto cacheado tiene que dejar de valer cuando cambia
+             * como se lee, no solo cuando cambia lo que se compilo. */
+            for (unsigned i = 0; i < 2; ++i) {
+                h ^= static_cast<uint8_t>(
+                    (ir::IR_SECTION_VERSION >> (i * 8)) & 0xFF);
+                h *= FNV_PRIME;
+            }
             h ^= cache_format_version;
             h *= FNV_PRIME;
             for (char c : vx_path) {
