@@ -308,7 +308,14 @@ static std::string entity_note_for_symbol(ProcessVM *vm,
     }
     if (!g.hay) return {};
 
-    const auto id = g.map.find(symbol);
+    /* La tabla del ejecutable nombra el codigo `code.<funcion>`; el grafo lo
+     * guarda por el nombre de la funcion a secas, que es como lo conoce quien
+     * lo genero.  Sin quitar el prefijo no casaba NINGUNO, y el grafo entero --
+     * firmas, entidades, de quien deriva -- no llegaba a verse aunque estuviera
+     * emitido y publicado. */
+    const std::string limpio =
+        (symbol.rfind("code.", 0) == 0) ? symbol.substr(5) : symbol;
+    const auto id = g.map.find(limpio);
     if (id.hash.empty()) return {};
     vxdbg::LanguageEntity e;
     if (!vxdbg::load_node(*g.store, id.hash, e)) return {};
@@ -688,6 +695,15 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
             append_str("  llamada desde ");
             const std::string legible = demangle_symbol(*sym);
             append(legible.c_str(), legible.size());
+            /* Cada marco de la cadena tambien dice QUE es y con que firma: sin
+             * ella, dos sobrecargas del mismo nombre son indistinguibles justo
+             * cuando hay que saber por cual se paso. */
+            const std::string nota2 = entity_note_for_symbol(vm, *sym);
+            if (!nota2.empty()) {
+                append_str(" [");
+                append(nota2.c_str(), nota2.size());
+                append_str("]");
+            }
             append_pos(v, legible.find('.') != std::string::npos);
             append_str("\n");
             ++shown;
