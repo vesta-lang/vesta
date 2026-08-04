@@ -159,10 +159,24 @@ void __vxf_exit(i64 code) {
     asm volatile { syscall };
 }
 
-// El manejador recibe el numero de senal en el primer argumento.  El codigo de
-// salida es 128 + senal, el mismo criterio que en Windows.
+// Con SA_SIGINFO el manejador recibe tres argumentos: la senal, la informacion
+// del fallo y el CONTEXTO.  De ahi sale el puntero de instruccion, que es lo
+// que permite decir en que linea estaba.
+//
+// Se toma del contexto y no de `si_addr` porque no significan lo mismo: para un
+// acceso invalido `si_addr` es la direccion a la que se intento acceder -- el
+// dato --, no la instruccion que lo intento.  El contexto da siempre la
+// instruccion, que es lo que se busca.
+//
+// Distribucion en x86-64: ucontext_t lleva uc_mcontext en el desplazamiento 40,
+// y dentro, los registros generales empiezan en 0 con RIP en la posicion 16
+// -> 40 + 16*8 = 168.
 @Target("!os:windows && arch:x86_64")
-void __vx_fault_signal(i32 sig) {
+void __vx_fault_signal(i32 sig, u64 info, u64 uc) {
+    if (__vxf_dentro != 0) {
+        __vxf_exit(128 + (i64) sig);   // el fallo viene de nosotros
+    }
+    __vxf_dentro = 1;
     if (sig == 8) {          // SIGFPE
         __vxf_say("error fatal: division entre cero [VX7002]\n", 42);
     } else if (sig == 11) {  // SIGSEGV
@@ -172,7 +186,11 @@ void __vx_fault_signal(i32 sig) {
     } else if (sig == 7) {   // SIGBUS
         __vxf_say("error fatal: acceso a memoria invalido [VX7007]\n", 48);
     } else if (sig == 6) {   // SIGABRT
-        __vxf_say("error fatal: abortado por el programa [VX7011]\n", 45);
+        __vxf_say("error fatal: abortado por el programa [VX7011]\n", 47);
+    }
+    if (uc != 0) {
+        u64* p = (u64*) (uc + 168);
+        __vxf_donde(p[0]);
     }
     __vxf_exit(128 + (i64) sig);
 }
@@ -202,10 +220,11 @@ void __vx_fault_init() {
     u8[32] act;
     KSigAction sa = KSigAction(&act[0]);
     sa.handler = (u64) &__vx_fault_signal;
-    // SA_RESTORER (0x04000000) | SA_NODEFER (0x40000000): lo primero es
-    // obligatorio en x86-64; lo segundo evita que un segundo fallo dentro del
-    // manejador se quede bloqueado en vez de matar el proceso.
-    sa.flags = 0x44000000;
+    // SA_SIGINFO (0x04) para recibir el contexto -- sin el no hay puntero de
+    // instruccion y no se puede decir DONDE.  SA_RESTORER (0x04000000) es
+    // obligatorio en x86-64.  SA_NODEFER (0x40000000) evita que un segundo
+    // fallo dentro del manejador se quede bloqueado en vez de matar el proceso.
+    sa.flags = 0x44000004;
     sa.restorer = (u64) &__vxf_restorer;
     sa.mask = 0;
     u64 dir = (u64) &act[0];
@@ -323,7 +342,7 @@ void __vxf_donde(u64 addr) {
                 }
             }
             if (linea > 0) {
-                __vxf_say("  en la linea ", 15);
+                __vxf_say("  en la linea ", 14);
                 __vxf_num((u64) linea);
                 if (col > 0) {
                     __vxf_say(", columna ", 10);
