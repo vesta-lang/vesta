@@ -524,14 +524,22 @@ void Scheduler::run_loop() {
                         runtime::throw_fatal(
                             instance, runtime::FATAL_SEGMENTATION_FAULT, msg);
                     }
-                    /* Y se acaba el lote.  Sin `try`, `throw_fatal` deja el
-                     * proceso muerto y RETORNA -- no salta a ningun sitio --,
-                     * asi que seguir aqui significaba volver a ejecutar la
-                     * instruccion que acaba de reventar, fallar otra vez, y
-                     * repetirlo sin fin: el mismo fallo impreso hasta llenar el
-                     * disco.  Se cae al bloque de HALT, que es el que suelta el
-                     * proceso. */
-                    instance->reductions_remaining = 0;
+                    /* Y se cierra el proceso AQUI, con el mismo cierre que usa
+                     * la entrada al codigo compilado.
+                     *
+                     * Sin `try`, `throw_fatal` deja el proceso muerto y RETORNA
+                     * -- no salta a ningun sitio --, asi que seguir el lote
+                     * significaba volver a ejecutar la instruccion que acaba de
+                     * reventar y repetirlo sin fin.  Pero cortar el lote a secas
+                     * tampoco vale: el descuento de procesos vivos esta DENTRO
+                     * del despacho, asi que saltarselo deja el contador en alto,
+                     * los planificadores esperando a alguien que ya no existe y
+                     * la maquina colgada.  Hay que marcar HALT y soltarlo. */
+                    instance->av_recovery_active = false;
+                    instance->state.store(HALT, std::memory_order_release);
+                    instance->tsc = 1;
+                    alive_count--;
+                    continue; /* a por otro proceso */
                 }
             }
 
