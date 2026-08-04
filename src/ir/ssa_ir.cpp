@@ -554,8 +554,7 @@ static void print_block_name(std::ostream &o, const IrFunction &fn,
 /**
  * @brief Imprime una instruccion en formato texto.
  */
-static void print_instr(std::ostream &o, const IrFunction &fn,
-                        const IrInstr &ins) {
+void print_instr(std::ostream &o, const IrFunction &fn, const IrInstr &ins) {
     o << "    "; // indentacion de 4 espacios
 
     // prefijo de asignacion: %dst = op[.type] ...

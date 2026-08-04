@@ -535,11 +535,28 @@ static std::vector<std::string> ir_window_at(ProcessVM *vm,
             const size_t hasta =
                 std::min(planas.size(), culpable + despues + 1);
             for (size_t i = desde; i < hasta; ++i) {
-                std::string t = (i == culpable) ? "  > " : "    ";
-                t += ir::ir_op_name(planas[i]->op);
+                /* La instruccion ENTERA -- destino, operandos, tipos --
+                 * con el MISMO formateador que el volcado del intermedio.  El
+                 * nombre de la operacion a secas no dice nada: `load` no
+                 * distingue de donde carga ni a donde va. */
+                std::ostringstream os;
+                ir::print_instr(os, fn, *planas[i]);
+                std::string cuerpo = os.str();
+                while (!cuerpo.empty() &&
+                       (cuerpo.back() == 10 || cuerpo.back() == 13))
+                    cuerpo.pop_back();
+                // El formateador ya sangra; se le quita para poner la marca.
+                const size_t ini_txt = cuerpo.find_first_not_of(' ');
+                if (ini_txt != std::string::npos) cuerpo = cuerpo.substr(ini_txt);
+
+                std::string t = (i == culpable) ? "> " : "  ";
+                t += cuerpo;
                 if (planas[i]->source_line > 0) {
                     t += "   (linea " +
-                         std::to_string(planas[i]->source_line) + ")";
+                         std::to_string(planas[i]->source_line);
+                    if (planas[i]->source_column > 0)
+                        t += ":" + std::to_string(planas[i]->source_column);
+                    t += ")";
                 }
                 out.push_back(std::move(t));
             }

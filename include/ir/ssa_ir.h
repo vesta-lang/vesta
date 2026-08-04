@@ -768,6 +768,8 @@ enum class IrOp : uint16_t {
  */
 const char *ir_op_name(IrOp op);
 
+
+
 /**
  * @brief Parsea el nombre de un opcode del formato de texto.
  * @param name Nombre del opcode (p.ej. "add", "calln", "monenter").
@@ -1848,6 +1850,19 @@ bool ir_parse(const std::string &text, IrModule &out, std::string &error);
  */
 bool ir_verify(const IrModule &mod, std::vector<std::string> &errors);
 
+/**
+ * @brief Escribe UNA instruccion en el mismo formato que el volcado completo.
+ *
+ * Se expone para que quien explique un fallo ensene la instruccion ENTERA --
+ * destino, operandos, tipos -- y no solo el nombre de la operacion, que por si
+ * solo no dice nada.  Es la MISMA funcion que usa el volcado: escribir una
+ * segunda daria dos formatos que se irian separando en cuanto uno cambiara.
+ *
+ * @param o Donde escribir.
+ * @param fn Funcion a la que pertenece (hace falta para nombrar los valores).
+ * @param ins La instruccion.
+ */
+void print_instr(std::ostream &o, const IrFunction &fn, const IrInstr &ins);
 } // namespace ir
 
 // Restaurar las macros de Windows que anulamos al principio del header.
