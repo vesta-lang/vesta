@@ -107,6 +107,11 @@ i32 __vx_fault_handler(u64 info) {
     }
 
     __vxf_donde(r.address);
+    if (p.context != 0) {
+        // CONTEXT.Rsp esta en el desplazamiento 0x98 en x86-64.
+        u64* rsp = (u64*) (p.context + 0x98);
+        __vxf_cadena(rsp[0]);
+    }
     ExitProcess(salida);
     return 0;
 }
@@ -189,8 +194,10 @@ void __vx_fault_signal(i32 sig, u64 info, u64 uc) {
         __vxf_say("error fatal: abortado por el programa [VX7011]\n", 47);
     }
     if (uc != 0) {
-        u64* p = (u64*) (uc + 168);
+        u64* p = (u64*) (uc + 168);   // RIP: registro 16
         __vxf_donde(p[0]);
+        u64* q = (u64*) (uc + 160);   // RSP: registro 15
+        __vxf_cadena(q[0]);
     }
     __vxf_exit(128 + (i64) sig);
 }
@@ -293,26 +300,32 @@ void __vxf_num(u64 v) {
 }
 
 // Cuenta en que funcion y linea estaba la direccion @p addr, si consta.
-void __vxf_donde(u64 addr) {
+// Resultado de la ultima busqueda.  En globales y no devuelto porque hacen
+// falta varios datos y un manejador de fallo es de un solo hilo: no hay con
+// quien competir por ellos.
+u64 __vxf_r_nom = 0;    // -> nombre de la funcion fisica
+u32 __vxf_r_nlen = 0;
+u32 __vxf_r_linea = 0;
+u32 __vxf_r_col = 0;
+u64 __vxf_r_venia = 0;  // -> nombre de la que se aplano ahi, o 0
+u32 __vxf_r_vlen = 0;
+
+// Busca a que funcion y linea corresponde un desplazamiento dentro del codigo.
+// Deja el resultado en los globales de arriba.  Devuelve 1 si lo encontro.
+i32 __vxf_buscar(u64 off) {
     u64 base = (u64) section_start(".vxdbg");
     u64 fin = (u64) section_end(".vxdbg");
-    if (base == 0 || fin <= base + 12) {
-        return;
+    if (base == 0 || fin <= base + 16) {
+        return 0;
     }
-    if (__vxf_u32(base, 0) != 0x42445856) {   // 'VXDB'
-        return;
+    if (__vxf_u32(base, 0) != 0x42445856) {
+        return 0;   // no es nuestra seccion
     }
-    if (__vxf_u32(base, 4) != 3) {   // version que se sabe leer
-        return;
+    if (__vxf_u32(base, 4) != 3) {
+        return 0;   // formato que no se sabe leer: mejor callarse
     }
-    u64 texto = (u64) section_start(".text");
-    if (texto == 0 || addr < texto) {
-        return;
-    }
-    u64 off = addr - texto;
-
     u32 n_fn = __vxf_u32(base, 8);
-    u64 tabla = (u64) __vxf_u32(base, 12);   // nombres de lo aplanado
+    u64 tabla = (u64) __vxf_u32(base, 12);
     u64 c = 16;
     u32 k = 0;
     while (k < n_fn) {
@@ -322,17 +335,17 @@ void __vxf_donde(u64 addr) {
         u32 n_nom = __vxf_u32(base, c + 12);
         u64 nom = c + 16;
         // El nombre viene relleno hasta multiplo de 4 (ver el emisor).
-        u64 tras_nom = nom + (u64) n_nom;
-        while ((tras_nom % 4) != 0) {
-            tras_nom = tras_nom + 1;
+        u64 tras = nom + (u64) n_nom;
+        while ((tras % 4) != 0) {
+            tras = tras + 1;
         }
-        c = tras_nom;
+        c = tras;
         if (off >= (u64) f_off && off < (u64) f_off + (u64) f_tam) {
-            // Dentro de esta funcion: el ultimo punto en o antes del fallo.
+            // El ULTIMO punto en o antes: entre dos, sigue valiendo el primero.
             u64 rel = off - (u64) f_off;
             u32 linea = 0;
             u32 col = 0;
-            u32 venia = 0xFFFFFFFF;   // de que funcion vino este tramo
+            u32 venia = 0xFFFFFFFF;
             u32 i = 0;
             while (i < n_pts) {
                 u32 p_off = __vxf_u32(base, c + (u64) i * 20);
@@ -345,42 +358,110 @@ void __vxf_donde(u64 addr) {
                     i = i + 1;
                 }
             }
-            if (linea > 0) {
-                __vxf_say("  en ", 5);
-                if (venia != 0xFFFFFFFF) {
-                    /* El codigo se escribio en OTRA funcion y llego aqui al
-                     * inlinar: se nombra esa, que es donde esta la linea, y se
-                     * dice dentro de cual acabo.  Poner solo la fisica manda a
-                     * mirar una funcion que no tiene que ver. */
-                    u64 e = tabla + 4;
-                    u32 k2 = 0;
-                    while (k2 < venia) {
-                        u32 l = __vxf_u32(base, e);
-                        e = e + 4 + (u64) l;
-                        while ((e % 4) != 0) {
-                            e = e + 1;
-                        }
-                        k2 = k2 + 1;
-                    }
-                    u32 l2 = __vxf_u32(base, e);
-                    __vxf_say((u8*) (base + e + 4), (u64) l2);
-                    __vxf_say(" [aplanado en ", 14);
-                    __vxf_say((u8*) (base + nom), (u64) n_nom);
-                    __vxf_say("]", 1);
-                } else {
-                    __vxf_say((u8*) (base + nom), (u64) n_nom);
-                }
-                __vxf_say(", linea ", 8);
-                __vxf_num((u64) linea);
-                if (col > 0) {
-                    __vxf_say(", columna ", 10);
-                    __vxf_num((u64) col);
-                }
-                __vxf_say("\n", 1);
+            if (linea == 0) {
+                return 0;
             }
-            return;
+            __vxf_r_nom = base + nom;
+            __vxf_r_nlen = n_nom;
+            __vxf_r_linea = linea;
+            __vxf_r_col = col;
+            __vxf_r_venia = 0;
+            __vxf_r_vlen = 0;
+            if (venia != 0xFFFFFFFF) {
+                // Recorrer la tabla de nombres hasta la entrada que toca.
+                u64 e = tabla + 4;
+                u32 k2 = 0;
+                while (k2 < venia) {
+                    u32 l = __vxf_u32(base, e);
+                    e = e + 4 + (u64) l;
+                    while ((e % 4) != 0) {
+                        e = e + 1;
+                    }
+                    k2 = k2 + 1;
+                }
+                __vxf_r_vlen = __vxf_u32(base, e);
+                __vxf_r_venia = base + e + 4;
+            }
+            return 1;
         }
         c = c + (u64) n_pts * 20;
         k = k + 1;
+    }
+    return 0;
+}
+
+// Escribe el nombre hallado, diciendo -- si toca -- dentro de cual acabo al
+// inlinar.  Nombrar solo la funcion fisica manda a mirar una que no tiene que
+// ver con el codigo que fallo.
+void __vxf_nombre() {
+    if (__vxf_r_vlen > 0) {
+        __vxf_say((u8*) __vxf_r_venia, (u64) __vxf_r_vlen);
+        __vxf_say(" [aplanado en ", 14);
+        __vxf_say((u8*) __vxf_r_nom, (u64) __vxf_r_nlen);
+        __vxf_say("]", 1);
+    } else {
+        __vxf_say((u8*) __vxf_r_nom, (u64) __vxf_r_nlen);
+    }
+}
+
+// Cuenta donde ocurrio el fallo.
+void __vxf_donde(u64 addr) {
+    u64 texto = (u64) section_start(".text");
+    if (texto == 0 || addr < texto) {
+        return;
+    }
+    if (__vxf_buscar(addr - texto) == 0) {
+        return;
+    }
+    __vxf_say("  en ", 5);
+    __vxf_nombre();
+    __vxf_say(", linea ", 8);
+    __vxf_num((u64) __vxf_r_linea);
+    if (__vxf_r_col > 0) {
+        __vxf_say(", columna ", 10);
+        __vxf_num((u64) __vxf_r_col);
+    }
+    __vxf_say("\n", 1);
+}
+
+// La cadena de llamadas: se recorre la pila NATIVA quedandose con los valores
+// que caen dentro del codigo de alguna funcion conocida -- una direccion de
+// retorno es exactamente eso.
+//
+// Es una lectura conservadora, la misma que hace el interprete con su pila:
+// puede colar algun marco de mas (restos de marcos ya muertos), nunca uno
+// falso, porque se exige que la direccion caiga DENTRO de una funcion.
+//
+// Se acota a un tramo y a unos pocos marcos: recorrer la pila entera desde un
+// manejador de fallo es pedir otro fallo, y lo que interesa esta cerca.
+void __vxf_cadena(u64 sp) {
+    u64 texto = (u64) section_start(".text");
+    u64 fin_texto = (u64) section_end(".text");
+    if (sp == 0 || texto == 0) {
+        return;
+    }
+    u64 a = sp;
+    u64 pasos = 0;
+    u64 vistos = 0;
+    u64 prev = 0;
+    while (pasos < 256 && vistos < 16) {
+        u64* q = (u64*) a;
+        u64 v = q[0];
+        if (v >= texto && v < fin_texto) {
+            if (__vxf_buscar(v - texto) == 1) {
+                // La misma funcion seguida es el mismo marco, no otro.
+                if (__vxf_r_nom != prev) {
+                    prev = __vxf_r_nom;
+                    vistos = vistos + 1;
+                    __vxf_say("  llamada desde ", 16);
+                    __vxf_nombre();
+                    __vxf_say(", linea ", 8);
+                    __vxf_num((u64) __vxf_r_linea);
+                    __vxf_say("\n", 1);
+                }
+            }
+        }
+        a = a + 8;
+        pasos = pasos + 1;
     }
 }
