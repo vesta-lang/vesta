@@ -582,6 +582,10 @@ std::string TypeChecker::monomorphize_class(const std::string &template_name,
         nm->name = m->is_constructor ? mangled : m->name;
         nm->access = m->access;
         nm->is_static = m->is_static;
+        // Un constructor `comptime` que se hereda o se monomorphiza sigue
+        // siendolo: sin copiar el flag, el clon dejaba de ser comptime y su
+        // cuerpo se trataba como codigo normal.
+        nm->is_comptime = m->is_comptime;
         nm->is_final = m->is_final;
         nm->is_override = m->is_override;
         nm->is_virtual = m->is_virtual;
@@ -836,6 +840,13 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
         nm->name = m->name;
         nm->access = m->access;
         nm->is_static = m->is_static;
+        // Un constructor `comptime` que se hereda o se monomorphiza sigue
+        // siendolo: sin copiar el flag, el clon dejaba de ser comptime y su
+        // cuerpo se trataba como codigo normal.
+        nm->is_comptime = m->is_comptime;
+        // Y sigue siendo un CONSTRUCTOR: el aplanado de la herencia tampoco
+        // copiaba el flag, con lo que el clon dejaba de reconocerse como tal.
+        nm->is_constructor = m->is_constructor;
         nm->is_final = m->is_final;
         nm->is_virtual = m->is_virtual;
         nm->is_inline = m->is_inline;
@@ -1015,6 +1026,13 @@ clone_method_subst(const ast::ClassMethodDecl *m, const GenSubst &g) {
     nm->name = m->name;
     nm->access = m->access;
     nm->is_static = m->is_static;
+    // Un constructor `comptime` que se hereda o se monomorphiza sigue
+    // siendolo: sin copiar el flag, el clon dejaba de ser comptime y su
+    // cuerpo se trataba como codigo normal.
+    nm->is_comptime = m->is_comptime;
+    // Y sigue siendo un CONSTRUCTOR: el aplanado de la herencia tampoco
+    // copiaba el flag, con lo que el clon dejaba de reconocerse como tal.
+    nm->is_constructor = m->is_constructor;
     nm->is_final = m->is_final;
     nm->is_virtual = m->is_virtual;
     nm->is_inline = m->is_inline;

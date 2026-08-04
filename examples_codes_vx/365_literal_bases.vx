@@ -1,0 +1,34 @@
+/**
+ * @file 365_literal_bases.vx
+ * @brief Un literal ancho se escribe en cualquier base.
+ *
+ * El constructor comptime recibe el texto sin interpretar, asi que el prefijo
+ * de base lo resuelve el parser de `std.comptime.literal`: `0b` binario, `0o`
+ * octal, `0x` hexadecimal (en minuscula o mayuscula) y sin prefijo decimal.  El
+ * `_` separa grupos de digitos y no cuenta como valor -- util justo aqui, donde
+ * un numero de 128 bits en hexadecimal son treinta y dos digitos seguidos.
+ */
+import std.wideint only u128;
+
+i32 main() {
+    // Hexadecimal con los dos limbs separados a ojo.
+    u128 h = u128(0xFFFFFFFFFFFFFFFF_FFFFFFFFFFFFFFFF);
+    if (h.lo64 != 18446744073709551615) { return 1; }
+    if (h.hi64 != 18446744073709551615) { return 2; }
+
+    // El prefijo tambien vale en mayuscula, y aqui el valor cruza los 64 bits.
+    u128 cruce = u128(0X10000000000000000);
+    if (cruce.lo64 != 0 || cruce.hi64 != 1) { return 3; }
+
+    u128 binario = u128(0b1010);
+    if (binario.lo64 != 10 || binario.hi64 != 0) { return 4; }
+
+    u128 octal = u128(0o777);
+    if (octal.lo64 != 511) { return 5; }
+
+    // Sin prefijo, decimal; el separador tampoco estorba aqui.
+    u128 decimal = u128(1_000_000);
+    if (decimal.lo64 != 1000000) { return 6; }
+
+    return 42;
+}

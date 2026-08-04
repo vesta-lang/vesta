@@ -1595,6 +1595,26 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                 // ser referenciados por otro macro lowereable.
             }
         }
+        /* Los METODOS comptime (un constructor comptime, por ejemplo) tambien
+         * llaman a helpers, y sin recorrerlos el helper no entra al set: su
+         * llamada acababa rechazada como "no es comptime-evaluable" pese a
+         * estar dentro de un cuerpo que se ejecuta al compilar. */
+        auto scan_methods = [&](const auto &methods) {
+            for (const auto &m : methods) {
+                if (!m || !m->body || !m->is_comptime) continue;
+                visiting.clear();
+                (void)macro_body_unsupported_reason(tc_, m->body.get());
+            }
+        };
+        for (auto &decl : mod_.decls) {
+            if (!decl) continue;
+            if (decl->kind == ast::NodeKind::StructDecl)
+                scan_methods(
+                    static_cast<ast::StructDecl *>(decl.get())->methods);
+            else if (decl->kind == ast::NodeKind::ClassDecl)
+                scan_methods(
+                    static_cast<ast::ClassDecl *>(decl.get())->methods);
+        }
         g_macro_force_lower = nullptr;
         g_macro_visiting = nullptr;
     }

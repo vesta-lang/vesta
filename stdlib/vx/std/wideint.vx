@@ -23,6 +23,8 @@
  */
 namespace std.wideint;
 
+import std.comptime.literal only IntLit, parse_int_lit;
+
 /**
  * @brief Sumidero para efectos que no deben eliminarse.
  *
@@ -491,6 +493,24 @@ public struct Wide128 {
  */
 public struct u128 : Wide128 {
     /**
+     * @brief Construye el valor a partir de como se escribio el literal.
+     *
+     * Recoge la llamada cuando ninguna otra forma de construir encaja, que es
+     * siempre el caso de un literal mas ancho que la palabra: no hay tipo
+     * nativo capaz de transportarlo hasta aqui sin truncarlo.  Por eso el
+     * parametro es `expr` -- llega el TEXTO de lo que se escribio, sin
+     * interpretar -- y por eso el parseo ocurre al compilar.  En el binario
+     * solo quedan los dos limbs ya calculados.
+     *
+     * @param e Los digitos, tal cual se escribieron.
+     */
+    public comptime u128(expr e) {
+        IntLit v = parse_int_lit(e);
+        this.lo64 = v.word(0);
+        this.hi64 = v.word(1);
+    }
+
+    /**
      * @brief Valor maximo representable.
      * @return El valor con todos los bits a 1 (2^128 - 1).
      */
@@ -665,6 +685,36 @@ public struct u128 : Wide128 {
  * reduce a la sin signo sobre las magnitudes) y los comparadores con signo.
  */
 public struct i128 : Wide128 {
+    /**
+     * @brief Construye el valor a partir de como se escribio el literal.
+     *
+     * Recoge la llamada cuando ninguna otra forma de construir encaja, que
+     * es siempre el caso de un literal de 128 bits: no hay tipo nativo
+     * capaz de transportarlo hasta aqui sin truncarlo.  Por eso el parametro
+     * es `expr` -- llega el TEXTO de lo que se escribio, sin interpretar --
+     * y por eso el parseo ocurre al compilar.  En el binario solo quedan los
+     * 2 limbs ya calculados.
+     *
+     * @param e Los digitos, tal cual se escribieron.
+     */
+    public comptime i128(expr e) {
+        IntLit v = parse_int_lit(e);
+        u64 w0 = v.word(0);
+        u64 w1 = v.word(1);
+        // `parse_int_lit` devuelve MAGNITUD y signo por separado; la
+        // representacion del tipo es complemento a dos, asi que un literal
+        // negativo se niega aqui: invertir todos los limbs y sumar uno,
+        // propagando el acarreo mientras un limb desborde a cero.
+        if (v.is_negative()) {
+            w0 = ~w0;
+            w1 = ~w1;
+            w0 = w0 + 1;
+            if (w0 == 0) { w1 = w1 + 1; }
+        }
+        this.lo64 = w0;
+        this.hi64 = w1;
+    }
+
     /**
      * @brief Valor maximo positivo.
      * @return `2^127 - 1` (0x7FFF...FFFF).
@@ -1287,6 +1337,26 @@ public struct Wide256 {
  * logico a la derecha y los comparadores sin signo.
  */
 public struct u256 : Wide256 {
+    /**
+     * @brief Construye el valor a partir de como se escribio el literal.
+     *
+     * Recoge la llamada cuando ninguna otra forma de construir encaja, que
+     * es siempre el caso de un literal de 256 bits: no hay tipo nativo
+     * capaz de transportarlo hasta aqui sin truncarlo.  Por eso el parametro
+     * es `expr` -- llega el TEXTO de lo que se escribio, sin interpretar --
+     * y por eso el parseo ocurre al compilar.  En el binario solo quedan los
+     * 4 limbs ya calculados.
+     *
+     * @param e Los digitos, tal cual se escribieron.
+     */
+    public comptime u256(expr e) {
+        IntLit v = parse_int_lit(e);
+        this.lo128.lo64 = v.word(0);
+        this.lo128.hi64 = v.word(1);
+        this.hi128.lo64 = v.word(2);
+        this.hi128.hi64 = v.word(3);
+    }
+
 
     /**
      * @brief Mayor valor representable (todos los bits a 1).
@@ -1440,6 +1510,44 @@ public struct u256 : Wide256 {
  * es del valor completo, y se lee en el bit mas alto de la mitad alta.
  */
 public struct i256 : Wide256 {
+    /**
+     * @brief Construye el valor a partir de como se escribio el literal.
+     *
+     * Recoge la llamada cuando ninguna otra forma de construir encaja, que
+     * es siempre el caso de un literal de 256 bits: no hay tipo nativo
+     * capaz de transportarlo hasta aqui sin truncarlo.  Por eso el parametro
+     * es `expr` -- llega el TEXTO de lo que se escribio, sin interpretar --
+     * y por eso el parseo ocurre al compilar.  En el binario solo quedan los
+     * 4 limbs ya calculados.
+     *
+     * @param e Los digitos, tal cual se escribieron.
+     */
+    public comptime i256(expr e) {
+        IntLit v = parse_int_lit(e);
+        u64 w0 = v.word(0);
+        u64 w1 = v.word(1);
+        u64 w2 = v.word(2);
+        u64 w3 = v.word(3);
+        // `parse_int_lit` devuelve MAGNITUD y signo por separado; la
+        // representacion del tipo es complemento a dos, asi que un literal
+        // negativo se niega aqui: invertir todos los limbs y sumar uno,
+        // propagando el acarreo mientras un limb desborde a cero.
+        if (v.is_negative()) {
+            w0 = ~w0;
+            w1 = ~w1;
+            w2 = ~w2;
+            w3 = ~w3;
+            w0 = w0 + 1;
+            if (w0 == 0) { w1 = w1 + 1; }
+            if (w0 == 0 && w1 == 0) { w2 = w2 + 1; }
+            if (w0 == 0 && w1 == 0 && w2 == 0) { w3 = w3 + 1; }
+        }
+        this.lo128.lo64 = w0;
+        this.lo128.hi64 = w1;
+        this.hi128.lo64 = w2;
+        this.hi128.hi64 = w3;
+    }
+
 
     /**
      * @brief Mayor valor representable.
@@ -2009,6 +2117,30 @@ public struct Wide512 {
  * @brief Entero de 512 bits sin signo.
  */
 public struct u512 : Wide512 {
+    /**
+     * @brief Construye el valor a partir de como se escribio el literal.
+     *
+     * Recoge la llamada cuando ninguna otra forma de construir encaja, que
+     * es siempre el caso de un literal de 512 bits: no hay tipo nativo
+     * capaz de transportarlo hasta aqui sin truncarlo.  Por eso el parametro
+     * es `expr` -- llega el TEXTO de lo que se escribio, sin interpretar --
+     * y por eso el parseo ocurre al compilar.  En el binario solo quedan los
+     * 8 limbs ya calculados.
+     *
+     * @param e Los digitos, tal cual se escribieron.
+     */
+    public comptime u512(expr e) {
+        IntLit v = parse_int_lit(e);
+        this.lo256.lo128.lo64 = v.word(0);
+        this.lo256.lo128.hi64 = v.word(1);
+        this.lo256.hi128.lo64 = v.word(2);
+        this.lo256.hi128.hi64 = v.word(3);
+        this.hi256.lo128.lo64 = v.word(4);
+        this.hi256.lo128.hi64 = v.word(5);
+        this.hi256.hi128.lo64 = v.word(6);
+        this.hi256.hi128.hi64 = v.word(7);
+    }
+
 
     /**
      * @brief Mayor valor representable.
@@ -2139,6 +2271,60 @@ public struct u512 : Wide512 {
  * y vive en el bit mas alto.
  */
 public struct i512 : Wide512 {
+    /**
+     * @brief Construye el valor a partir de como se escribio el literal.
+     *
+     * Recoge la llamada cuando ninguna otra forma de construir encaja, que
+     * es siempre el caso de un literal de 512 bits: no hay tipo nativo
+     * capaz de transportarlo hasta aqui sin truncarlo.  Por eso el parametro
+     * es `expr` -- llega el TEXTO de lo que se escribio, sin interpretar --
+     * y por eso el parseo ocurre al compilar.  En el binario solo quedan los
+     * 8 limbs ya calculados.
+     *
+     * @param e Los digitos, tal cual se escribieron.
+     */
+    public comptime i512(expr e) {
+        IntLit v = parse_int_lit(e);
+        u64 w0 = v.word(0);
+        u64 w1 = v.word(1);
+        u64 w2 = v.word(2);
+        u64 w3 = v.word(3);
+        u64 w4 = v.word(4);
+        u64 w5 = v.word(5);
+        u64 w6 = v.word(6);
+        u64 w7 = v.word(7);
+        // `parse_int_lit` devuelve MAGNITUD y signo por separado; la
+        // representacion del tipo es complemento a dos, asi que un literal
+        // negativo se niega aqui: invertir todos los limbs y sumar uno,
+        // propagando el acarreo mientras un limb desborde a cero.
+        if (v.is_negative()) {
+            w0 = ~w0;
+            w1 = ~w1;
+            w2 = ~w2;
+            w3 = ~w3;
+            w4 = ~w4;
+            w5 = ~w5;
+            w6 = ~w6;
+            w7 = ~w7;
+            w0 = w0 + 1;
+            if (w0 == 0) { w1 = w1 + 1; }
+            if (w0 == 0 && w1 == 0) { w2 = w2 + 1; }
+            if (w0 == 0 && w1 == 0 && w2 == 0) { w3 = w3 + 1; }
+            if (w0 == 0 && w1 == 0 && w2 == 0 && w3 == 0) { w4 = w4 + 1; }
+            if (w0 == 0 && w1 == 0 && w2 == 0 && w3 == 0 && w4 == 0) { w5 = w5 + 1; }
+            if (w0 == 0 && w1 == 0 && w2 == 0 && w3 == 0 && w4 == 0 && w5 == 0) { w6 = w6 + 1; }
+            if (w0 == 0 && w1 == 0 && w2 == 0 && w3 == 0 && w4 == 0 && w5 == 0 && w6 == 0) { w7 = w7 + 1; }
+        }
+        this.lo256.lo128.lo64 = w0;
+        this.lo256.lo128.hi64 = w1;
+        this.lo256.hi128.lo64 = w2;
+        this.lo256.hi128.hi64 = w3;
+        this.hi256.lo128.lo64 = w4;
+        this.hi256.lo128.hi64 = w5;
+        this.hi256.hi128.lo64 = w6;
+        this.hi256.hi128.hi64 = w7;
+    }
+
 
     /**
      * @brief Mayor valor representable.

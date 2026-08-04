@@ -96,14 +96,26 @@ public comptime IntLit parse_int_lit(string src) {
             i = 1;
         }
     }
-    // Prefijo hexadecimal opcional.
+    // Prefijo de base opcional, en minuscula o mayuscula: 0b/0o/0x.  Sin
+    // prefijo la base es 10.  El `0` suelto (sin letra detras) es el numero
+    // cero en decimal, no un prefijo trunco.
     if (n - i >= 2) {
-        string pfx = substr(src, i, 2);
-        if (pfx == "0x") {
-            base = 16;
-            i = i + 2;
+        i64 p0 = ord(substr(src, i, 1));
+        i64 p1 = ord(substr(src, i + 1, 1));
+        if (p0 == 48) {                       // '0'
+            if (p1 == 98 || p1 == 66) {       // 'b' / 'B'
+                base = 2;
+                i = i + 2;
+            } else if (p1 == 111 || p1 == 79) { // 'o' / 'O'
+                base = 8;
+                i = i + 2;
+            } else if (p1 == 120 || p1 == 88) { // 'x' / 'X'
+                base = 16;
+                i = i + 2;
+            }
         }
     }
+    // PENDIENTE (mismo motivo): rechazar `0x` a secas, sin digitos.
     // Buffer de words: `n` words siempre sobra para `n` digitos.
     i64 cap = n;
     if (cap < 1) {
@@ -127,7 +139,14 @@ public comptime IntLit parse_int_lit(string src) {
         } else if (c >= 65 && c <= 70) {
             d = c - 55;         // 'A'..'F'
         }
-        if (d >= 0) {
+        // El `_` separa grupos de digitos y no aporta valor.
+        //
+        // PENDIENTE: rechazar el digito que no pertenece a la base (un 9 en
+        // octal, una 'f' en decimal).  Hoy se ignora, que da un numero
+        // distinto del escrito sin avisar.  Falta antes que un fallo comptime
+        // sepa reportarse con su mensaje y su traza de llamadas: sin eso, la
+        // asercion corta la ejecucion y el compilador muere sin decir nada.
+        if (d >= 0 && c != 95) {
             u64 carry = (u64) d;
             i64 k = 0;
             while (k < nw) {
