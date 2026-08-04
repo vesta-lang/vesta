@@ -39,6 +39,7 @@
 #define VXDBG_SOURCE_META_H
 
 #include "vxdbg/ids.h"
+#include "vxdbg/node.h" // la cabecera con la que se guarda cada nodo
 
 #include <cstdint>
 #include <string>
@@ -117,17 +118,31 @@ enum class RelationKind : uint8_t {
 };
 
 /**
- * @brief Una relacion con otra entidad.
+ * @brief Una relacion con otra entidad, referida como sea que se refieran.
+ *
+ * @tparam Ref Como se nombra al destino.  Quien acaba de declarar algo solo
+ *         tiene una clave; quien ya lo emitio tiene su identificador.  Es la
+ *         UNICA diferencia entre ambos mundos, asi que es lo unico que se
+ *         parametriza.
  */
-struct Relation {
+template <typename Ref> struct RelationT {
     RelationKind kind = RelationKind::Contains;
-    LanguageEntityId target;
+    Ref target{};
     /// Como lo llama el frontend, si le da un nombre propio (`"mixin"`,
     /// `"companion"`...).  Vacio = el generico basta.
     std::string lang_role;
 };
 
+/// Una relacion ya resuelta, que es como viven en el almacen.
+using Relation = RelationT<LanguageEntityId>;
+
 /// De que es un valor de atributo.
+///
+/// Conjunto ABIERTO, al contrario que @ref RelationKind o @ref EntityKind: esos
+/// dicen lo que el formato entiende y crecer los cambia; este solo dice como
+/// interpretar unos bytes que el formato no mira.  Anadir un genero -- decimal,
+/// lista, anidado -- es esperable segun los lenguajes traigan cosas suyas, y no
+/// obliga a revisar nada de lo que ya funciona.
 enum class AttributeKind : uint8_t {
     String = 0,
     Integer = 1,
@@ -187,31 +202,43 @@ enum class EntityKind : uint8_t {
 };
 
 /**
- * @brief Cualquier cosa que el frontend declare.
+ * @brief Cualquier cosa que alguien declare.
  *
  * El @c kind dice de que especie es, en terminos comunes; el @c lang_kind, como
  * lo llama su lenguaje.  Lo que el formato entiende ademas son las relaciones,
  * que es lo que permite a un diagnostico decir "en el metodo `parse` de
  * `Lector`, que deriva de `Flujo` y cumple `Cerrable`" sin saber que significa
  * "clase" en ese lenguaje.
+ *
+ * Vive en dos mundos -- recien declarada, nombrando a las demas por su clave, y
+ * ya emitida, con identificadores -- y son la MISMA descripcion: los mismos
+ * nombres, la misma especie, los mismos atributos.  Por eso hay una sola
+ * definicion parametrizada y no dos parecidas: con dos, cada campo nuevo habria
+ * que anadirlo en los dos sitios, y el dia que se olvide uno el dato se pierde
+ * en silencio al cruzar de un mundo al otro.
+ *
+ * @tparam Ref Como se nombra a las demas entidades.
  */
-struct LanguageEntity {
-    static constexpr uint32_t kSchemaVersion = 2;
-    DebugNodeHeader header{NodeKind::Entity, kSchemaVersion, {}};
-
-    std::string name;      ///< como se llama
-    /// Identidad SEMANTICA, la que decide si dos entidades son la misma.  El
-    /// nombre visible no sirve: `Vector` de dos espacios de nombres distintos, o
-    /// dos instanciaciones de la misma plantilla, se llaman igual y no lo son.
-    /// Quien emite pone aqui la clave con la que el propio compilador las
-    /// distingue.
-    std::string qualified;
+template <typename Ref> struct EntityBase {
+    std::string name; ///< como se llama
+    /// Identidad SEMANTICA: lo que decide si dos entidades son la misma.  El
+    /// nombre visible no sirve -- `Vector` de dos espacios de nombres
+    /// distintos, o dos instanciaciones de la misma plantilla, se llaman igual
+    /// y no lo son -- asi que quien declara pone aqui la clave con la que el
+    /// propio compilador las distingue, y es tambien por la que la nombran las
+    /// demas.
+    ///
+    /// Se llama clave y no nombre cualificado porque muchas veces no es un
+    /// nombre: `core::io::File` lo parece, pero `Vector<int>` o
+    /// `mod__Vector<T=int>` no lo son y valen igual.  Lo unico que se le exige
+    /// es distinguir.
+    std::string key;
     EntityKind kind = EntityKind::Unknown;
     /// Genero SEGUN SU LENGUAJE: "class", "struct", "trait", "macro",
     /// "template", "property"...  El formato lo transporta, no lo juzga.
     std::string lang_kind;
 
-    std::vector<Relation> relations;
+    std::vector<RelationT<Ref>> relations;
     std::vector<Attribute> attributes;
     SourceSpan declared_at;
 
@@ -222,6 +249,29 @@ struct LanguageEntity {
     /// Tamano y alineamiento de una instancia, si el concepto aplica.
     uint32_t byte_size = 0;
     uint32_t alignment = 0;
+};
+
+/**
+ * @brief Una entidad con las referencias ya resueltas, todavia en memoria.
+ *
+ * Es el resultado de resolver un nodo semantico: lo mismo que se declaro, pero
+ * nombrando a los demas por su identificador.  Aun no es algo del almacen --
+ * puede que nunca se guarde -- y por eso no lleva cabecera.
+ */
+using ResolvedEntity = EntityBase<LanguageEntityId>;
+
+/**
+ * @brief Una entidad tal como vive en el almacen.
+ *
+ * Anade lo unico que la distingue de la resuelta: la cabecera con la que se
+ * guarda.  La separacion no es tecnica sino de significado -- una cosa es haber
+ * resuelto las referencias y otra haberla guardado -- y tenerlas con el mismo
+ * nombre hacia parecer que una entidad recien construida ya estaba en el
+ * almacen.
+ */
+struct LanguageEntity : ResolvedEntity {
+    static constexpr uint32_t kSchemaVersion = 2;
+    DebugNodeHeader header{NodeKind::Entity, kSchemaVersion, {}};
 };
 
 /**

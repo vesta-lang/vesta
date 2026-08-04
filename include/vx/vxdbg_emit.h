@@ -46,6 +46,9 @@ struct VxdbgEmitStats {
     /// nada a decir algo falso.  Que este contador no sea cero es informacion
     /// util, no necesariamente un fallo.
     size_t unresolved = 0;
+    /// Claves declaradas dos veces.  No es un dato repetido: la clave es la
+    /// identidad, asi que es una incoherencia de quien construyo el grafo.
+    size_t duplicates = 0;
     /// Los tipos emitidos, por su clave.  Un almacen direccionado por contenido
     /// no se puede recorrer: no hay listado, solo se llega a un nodo si ya se
     /// sabe su huella.  Quien acaba de emitir es el unico que las conoce, y

@@ -42,7 +42,10 @@ namespace vxdbg {
 StoredNode encode(const FileNode &n);
 bool decode(const StoredNode &s, FileNode &out);
 
-StoredNode encode(const LanguageEntity &n);
+/// Toma la entidad RESUELTA y no la almacenable: la cabecera la pone el
+/// codec, que es de quien es.  Una @ref LanguageEntity vale igual, por ser
+/// una de ellas con cabecera.
+StoredNode encode(const ResolvedEntity &n);
 bool decode(const StoredNode &s, LanguageEntity &out);
 
 StoredNode encode(const ScopeNode &n);

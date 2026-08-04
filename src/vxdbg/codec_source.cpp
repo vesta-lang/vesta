@@ -69,10 +69,10 @@ bool decode(const StoredNode &s, FileNode &out) {
 //  Entidad del lenguaje
 // ---------------------------------------------------------------------------
 
-StoredNode encode(const LanguageEntity &n) {
+StoredNode encode(const ResolvedEntity &n) {
     ByteWriter w;
     w.str(n.name);
-    w.str(n.qualified);
+    w.str(n.key);
     w.u8(static_cast<uint8_t>(n.kind));
     w.str(n.lang_kind);
 
@@ -96,7 +96,12 @@ StoredNode encode(const LanguageEntity &n) {
     w.id(n.body);
     w.u32(n.byte_size);
     w.u32(n.alignment);
-    return make(n.header, w);
+    // La cabecera no sale del objeto: una entidad resuelta no tiene ninguna.
+    // Genero y version son propiedades del FORMATO, y ponerlas aqui es lo que
+    // permite calcular una identidad sin construir antes algo del almacen.
+    return make(DebugNodeHeader{NodeKind::Entity, LanguageEntity::kSchemaVersion,
+                                {}},
+                w);
 }
 
 bool decode(const StoredNode &s, LanguageEntity &out) {
@@ -104,7 +109,7 @@ bool decode(const StoredNode &s, LanguageEntity &out) {
     ByteReader r(s.payload);
     out.header = s.header;
     out.name = r.str();
-    out.qualified = r.str();
+    out.key = r.str();
     out.kind = static_cast<EntityKind>(r.u8());
     out.lang_kind = r.str();
 

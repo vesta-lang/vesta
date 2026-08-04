@@ -52,7 +52,7 @@ namespace vxdbg {
 struct EntityView {
     bool found = false;
     std::string name;
-    std::string qualified;
+    std::string key; ///< identidad semantica, no necesariamente un nombre
     EntityKind kind = EntityKind::Unknown; ///< especie comun a todo lenguaje
     std::string lang_kind;                 ///< como lo llama SU lenguaje
     std::vector<std::string> derives;    ///< cadena completa, de cerca a lejos

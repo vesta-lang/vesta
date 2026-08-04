@@ -16,9 +16,11 @@
  */
 
 #include "vxdbg/codec.h"
+#include "vxdbg/semantic.h"
 
 #include <cstdio>
 #include <string>
+#include <vector>
 
 static int fallos = 0;
 
@@ -53,7 +55,7 @@ static void probar_entidad() {
 
     vxdbg::LanguageEntity e;
     e.name = "parse";
-    e.qualified = "std.io.Lector.parse";
+    e.key = "std.io.Lector.parse";
     e.kind = vxdbg::EntityKind::Function;
     e.lang_kind = "method"; // lo pone el frontend; el formato no lo interpreta
     e.byte_size = 0;
@@ -83,7 +85,7 @@ static void probar_entidad() {
     auto s = vxdbg::encode(e);
     vxdbg::LanguageEntity v;
     comprobar(vxdbg::decode(s, v), "se lee lo que se escribio");
-    comprobar(v.name == e.name && v.qualified == e.qualified,
+    comprobar(v.name == e.name && v.key == e.key,
               "conserva los nombres");
     comprobar(v.kind == vxdbg::EntityKind::Function, "conserva la especie");
     comprobar(v.lang_kind == "method",
@@ -260,6 +262,80 @@ static void probar_ida_y_vuelta_por_el_almacen() {
               "pedirlo como otro genero falla");
 }
 
+/**
+ * @brief El grafo semantico: claves fuera, identidades dentro.
+ *
+ * Que el orden lo decida el resolutor y no quien declara es lo que permite
+ * anadir generos de declaracion sin revisar ningun orden, asi que se comprueba
+ * dando los nodos AL REVES de como habria que emitirlos.
+ */
+static void grafo_semantico() {
+    std::printf("Grafo semantico\n");
+
+    vxdbg::MemoryNodeStore store;
+    std::vector<vxdbg::SemanticNode> nodos;
+
+    // El derivado PRIMERO: si el orden importara, esto no resolveria.
+    vxdbg::SemanticNode derivado;
+    derivado.key = "mod__Lector";
+    derivado.name = "Lector";
+    derivado.kind = vxdbg::EntityKind::Type;
+    derivado.lang_kind = "class";
+    {
+        vxdbg::SemanticRelation r;
+        r.kind = vxdbg::RelationKind::Derives;
+        r.target = "mod__Flujo";
+        derivado.relations.push_back(r);
+        vxdbg::SemanticRelation f;
+        f.kind = vxdbg::RelationKind::Uses;
+        f.target = "no.existe";
+        derivado.relations.push_back(f);
+    }
+    nodos.push_back(derivado);
+
+    vxdbg::SemanticNode base;
+    base.key = "mod__Flujo";
+    base.name = "Flujo";
+    base.kind = vxdbg::EntityKind::Type;
+    base.lang_kind = "class";
+    nodos.push_back(base);
+
+    // Y uno con la clave de otro: no es un dato repetido, es una incoherencia.
+    vxdbg::SemanticNode repetido;
+    repetido.key = "mod__Flujo";
+    repetido.name = "OtroFlujo";
+    repetido.kind = vxdbg::EntityKind::Type;
+    nodos.push_back(repetido);
+
+    const auto rep = vxdbg::emit_semantic_graph(store, nodos);
+    comprobar(rep.emitted == 2, "se emite un nodo por clave distinta");
+    comprobar(rep.duplicates == 1, "y la clave repetida se cuenta, no se calla");
+    comprobar(rep.unresolved == 1, "igual que la arista sin destino");
+
+    // La base tiene que estar ANTES que el derivado: su identidad forma parte
+    // de la de el, asi que no habria podido emitirse despues.
+    size_t pos_base = 0, pos_der = 0;
+    for (size_t i = 0; i < rep.ids.size(); ++i) {
+        if (rep.ids[i].first == "mod__Flujo") pos_base = i;
+        if (rep.ids[i].first == "mod__Lector") pos_der = i;
+    }
+    comprobar(pos_base < pos_der, "lo referenciado sale antes que quien lo usa");
+
+    vxdbg::LanguageEntity leido;
+    vxdbg::LanguageEntityId id_der, id_base;
+    for (const auto &kv : rep.ids) {
+        if (kv.first == "mod__Lector") id_der = kv.second;
+        if (kv.first == "mod__Flujo") id_base = kv.second;
+    }
+    comprobar(vxdbg::load_node(store, id_der.hash, leido), "el derivado se lee");
+    comprobar(leido.relations.size() == 1,
+              "  con la arista buena y sin la rota");
+    comprobar(leido.relations[0].target == id_base,
+              "  apuntando de verdad a su base");
+    comprobar(leido.name == "Lector" && leido.key == "mod__Lector",
+              "  distinguiendo como se llama de como se le identifica");
+}
+
 int main() {
     std::printf("=== vxdbg: serializacion de los nodos ===\n");
     probar_entidad();
@@ -267,6 +343,7 @@ int main() {
     probar_bajada_y_codigo();
     probar_transferencias();
     probar_ida_y_vuelta_por_el_almacen();
+    grafo_semantico();
 
     if (fallos == 0) {
         std::printf("=== todo correcto ===\n");

@@ -959,6 +959,15 @@ class TypeChecker {
         return concepts_;
     }
 
+    /// Conformidades declaradas (`impl Concepto for Tipo`), por nombre de tipo.
+    /// Se expone porque quien vuelca el conocimiento del programa la necesita:
+    /// sin ella tendria que reevaluar los predicados que aqui ya se
+    /// comprobaron, pagando dos veces por la misma respuesta.
+    const std::unordered_map<std::string, std::unordered_set<std::string>> &
+    impl_conformances() const noexcept {
+        return impl_conformances_;
+    }
+
     /**
      * @brief Verifica los constraints (#6) de un generico al monomorphizar.
      *

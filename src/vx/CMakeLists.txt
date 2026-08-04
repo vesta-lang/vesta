@@ -183,6 +183,7 @@ add_library(vx_lib STATIC
     ${CMAKE_SOURCE_DIR}/src/vxdbg/lowering_map.cpp
     ${CMAKE_SOURCE_DIR}/src/vxdbg/codec_source.cpp
     ${CMAKE_SOURCE_DIR}/src/vxdbg/codec_backend.cpp
+    ${CMAKE_SOURCE_DIR}/src/vxdbg/semantic_resolve.cpp
     diagram/mermaid_diagrams.cpp
     diagram/graphviz_diagrams.cpp
     diagram/html_diagrams.cpp

@@ -7,23 +7,23 @@
 
 /**
  * @file vxdbg_emit.cpp
- * @brief Implementacion del traductor de tipos Vesta a entidades de depuracion.
+ * @brief Traduce las tablas del checker de Vesta a simbolos.
  *
- * El orden de emision no es libre: una entidad se identifica por su contenido,
- * y su contenido incluye a quien referencia.  Para poder decir que `Lector`
- * deriva de `Flujo` hay que haber emitido `Flujo` antes, porque su huella es
- * parte de la de `Lector`.  De ahi el recorrido en profundidad por la cadena de
- * derivacion, con memoria de lo ya emitido.
+ * Aqui SOLO se dice que existe: los tipos del programa, sus miembros y como se
+ * relacionan, nombrando a los demas por su clave.  Ordenarlos, resolver esas
+ * claves a huellas y guardarlos es trabajo de @ref vxdbg::emit_semantic_graph, que no
+ * sabe -- ni debe saber -- que es un `struct`.
+ *
+ * Esa separacion es lo que permite que el subsistema sirva a otro lenguaje: un
+ * frontend de C o de Lisp escribe su propio traductor contra sus propias
+ * tablas y reutiliza todo lo demas.  Si el emisor conociera `StructLayout`,
+ * anadir un lenguaje obligaria a tocarlo.
  *
  * Las relaciones van de abajo a arriba: un metodo declara pertenecer a su clase
  * y la clase no lista sus metodos.  Al reves seria un ciclo -- la huella de la
  * clase dependeria de la del metodo y la del metodo de la de la clase -- y
  * ademas ya es la regla del subsistema: la relacion inversa es un indice, no un
  * dato.
- *
- * La CLAVE con la que se identifica un tipo es la del compilador, no su nombre
- * visible: es la que ya distingue `a.Vector` de `b.Vector` y una instanciacion
- * de plantilla de otra.  El nombre bonito se guarda aparte, para ensenarlo.
  */
 
 #include "vx/vxdbg_emit.h"
@@ -31,9 +31,9 @@
 #include "vx/type_checker.h"
 #include "vxdbg/codec.h"
 #include "vxdbg/store.h"
+#include "vxdbg/semantic.h"
 
 #include <cstdlib>
-#include <unordered_map>
 #include <unordered_set>
 
 namespace vx {
@@ -95,120 +95,323 @@ constexpr KindPair K_NAMESPACE{vxdbg::EntityKind::Module, "namespace"};
 /// @}
 
 /**
- * @brief Estado del recorrido: quien ya se emitio y con que huella.
+ * @brief Recolecta los simbolos de un modulo Vesta.
+ *
+ * Lo unico que hace es LEER las tablas del checker y describir lo que hay.  No
+ * guarda nada, no calcula huellas y no decide ordenes: asi se puede anadir un
+ * genero de declaracion sin tocar nada de la parte que emite.
  */
-class Emitter {
+class Collector {
   public:
     /**
-     * @param tc Checker con las tablas de tipos.
-     * @param store Almacen destino.
-     * @param stats Cuenta de lo emitido.
+     * @param tc Checker con las tablas.
+     * @param file Fichero al que atribuir las declaraciones.
      */
-    Emitter(const TypeChecker &tc, vxdbg::NodeStore &store,
-            VxdbgEmitStats &stats)
-        : tc_(tc), store_(store), stats_(stats) {}
+    Collector(const TypeChecker &tc, vxdbg::FileId file)
+        : tc_(tc), file_(file) {}
 
-    /// @brief Emite el nodo del fichero y lo deja como fichero en curso.
-    void set_file(const std::string &path, const std::string &content);
+    /// @brief Recorre todo lo declarado.
+    void collect();
 
-    /// @brief Emite todos los tipos conocidos y sus miembros.
-    void emit_all();
+    /// @return Los simbolos recolectados.
+    std::vector<vxdbg::SemanticNode> take() { return std::move(out_); }
 
   private:
+    /// @name Un recolector por genero de declaracion
+    ///
+    /// Cada uno sabe leer UNA tabla del checker.  Anadir un genero nuevo -- un
+    /// alias, una global, un trait -- es anadir uno mas y llamarlo desde
+    /// @ref collect, sin tocar los demas ni la parte que emite.
+    /// @{
+    void collect_structs();
+    void collect_classes();
+    void collect_enums();
+    void collect_concepts();
+    /// @}
+
     /**
-     * @brief Huella de un tipo por su clave, emitiendolo si hace falta.
-     *
+     * @brief Empieza un simbolo con lo comun a todos.
      * @param key Clave del compilador.
-     * @return Su identificador, o uno vacio si la clave no corresponde a
-     *         ningun tipo conocido.
-     */
-    vxdbg::LanguageEntityId entity_for(const std::string &key);
-
-    /**
-     * @brief Construye la entidad de un tipo, sin guardarla.
-     *
-     * Separado de la emision a proposito: es donde va a crecer todo lo que
-     * queda por anadir -- posiciones, anotaciones, parametros de plantilla,
-     * restricciones -- y mezclarlo con guardar y con llevar la memoria de lo ya
-     * hecho convertiria una funcion en cuatro cosas a la vez.
-     *
-     * @param key Clave del compilador.
-     * @param out Recibe la entidad.
-     * @return @c false si la clave no es de ningun tipo conocido.
-     */
-    bool build_type(const std::string &key, vxdbg::LanguageEntity &out);
-
-    /// @brief Igual, pero para un tipo escrito en el sitio (sin declaracion).
-    vxdbg::LanguageEntityId builtin_for(const std::string &name);
-
-    /// @brief Entidad de un espacio de nombres, por su camino.
-    vxdbg::LanguageEntityId module_for(const std::string &path);
-
-    /// @brief Emite los miembros de un struct.
-    void emit_struct_members(const StructLayout &lay,
-                             vxdbg::LanguageEntityId owner,
-                             const std::string &owner_key);
-    /// @brief Emite los miembros de una clase.
-    void emit_class_members(const ClassLayout &lay,
-                            vxdbg::LanguageEntityId owner,
-                            const std::string &owner_key);
-    /// @brief Emite las variantes de un enum.
-    void emit_enum_members(const EnumLayout &lay, vxdbg::LanguageEntityId owner,
-                           const std::string &owner_key);
-
-    /**
-     * @brief Emite un miembro: campo, metodo o variante.
-     * @param name Nombre del miembro.
      * @param kp Genero.
-     * @param owner Entidad que lo declara.
-     * @param owner_key Clave de esa entidad, para componer la del miembro.
+     * @return El simbolo, aun sin relaciones.
+     */
+    vxdbg::SemanticNode begin(const std::string &key, const KindPair &kp);
+
+    /**
+     * @brief Anade una relacion por clave.
+     * @param s Simbolo.
+     * @param kind Genero de la relacion.
+     * @param target Clave del destino; se ignora si esta vacia.
+     */
+    static void relate(vxdbg::SemanticNode &s, vxdbg::RelationKind kind,
+                       const std::string &target);
+
+    /**
+     * @brief Declara la pertenencia a un espacio de nombres, si lo hay.
+     * @param s Simbolo.
+     * @param key Su clave.
+     */
+    void relate_namespace(vxdbg::SemanticNode &s, const std::string &key);
+
+    /**
+     * @brief Describe un miembro: campo, metodo o variante.
+     * @param name Nombre.
+     * @param kp Genero.
+     * @param owner_key Clave de quien lo declara.
      * @param type_name Tipo al que se refiere, si tiene uno.
      */
-    void emit_member(const std::string &name, const KindPair &kp,
-                     vxdbg::LanguageEntityId owner,
-                     const std::string &owner_key,
-                     const std::string &type_name);
+    void add_member(const std::string &name, const KindPair &kp,
+                    const std::string &owner_key,
+                    const std::string &type_name);
 
-    /// @brief Guarda una entidad y devuelve su huella.
-    vxdbg::LanguageEntityId put(const vxdbg::LanguageEntity &e);
+    /**
+     * @brief Asegura que existe el simbolo de un tipo escrito en el sitio.
+     *
+     * `i32`, `u8*`, `Array<i64>`: nadie los declara, pero un campo se refiere a
+     * ellos y sin simbolo la relacion se perderia.  Salen con la misma huella
+     * en todos los modulos que los usen, que es justo lo que se quiere.
+     *
+     * @param name Texto del tipo.
+     */
+    void ensure_builtin(const std::string &name);
+
+    /// @brief Asegura que existe el simbolo de un espacio de nombres.
+    /// @param path Camino.
+    /// @return La clave con la que se le nombra.
+    std::string ensure_namespace(const std::string &path);
 
     /**
      * @brief Nombre visible de una clave del compilador.
      *
-     * Lo dice el checker, que es quien manglea: el emisor no puede deducirlo
-     * partiendo la clave por un separador, porque el separador es una
-     * convencion que cambia -- hoy `lib__Caja`, manana podria ser otra cosa --
-     * y quedaria un nombre roto sin que nadie se enterara.
+     * Lo dice el checker, que es quien manglea: no se puede deducir partiendo
+     * la clave por un separador, porque el separador es una convencion que
+     * cambia -- hoy `lib__Caja`, manana otra cosa -- y quedaria un nombre roto
+     * sin que nadie se enterara.
      *
      * @param key Clave.
      * @return El nombre a ensenar; la clave entera si nadie la registro.
      */
     const std::string &display_name(const std::string &key) const;
 
-    /**
-     * @brief Anade una relacion, o cuenta un destino no resuelto.
-     * @param e Entidad en construccion.
-     * @param kind Genero de la relacion.
-     * @param target_key Clave del destino.
-     */
-    void relate(vxdbg::LanguageEntity &e, vxdbg::RelationKind kind,
-                const std::string &target_key);
+    /// @return @c true si la clave no se habia visto todavia.
+    bool first_time(const std::string &key) { return seen_.insert(key).second; }
 
     const TypeChecker &tc_;
-    vxdbg::NodeStore &store_;
-    VxdbgEmitStats &stats_;
     vxdbg::FileId file_;
-    /// Tipos ya emitidos, por CLAVE del compilador.  Sin esto, una jerarquia en
-    /// forma de rombo emitiria la base tantas veces como caminos lleguen a ella.
-    std::unordered_map<std::string, vxdbg::LanguageEntityId> done_;
-    /// Tipos en curso de emision, para cortar si los datos traen un ciclo.  El
-    /// checker rechaza la herencia circular, pero este recorrido no puede dar
-    /// por hecho que lo que le llega esta bien formado: si lo estuviera
-    /// siempre, no haria falta comprobarlo en ningun sitio.
-    std::unordered_set<std::string> in_progress_;
+    std::vector<vxdbg::SemanticNode> out_;
+    /// Claves ya descritas, para no repetir un tipo escrito en el sitio que
+    /// aparezca en veinte campos.
+    std::unordered_set<std::string> seen_;
 };
 
-void Emitter::set_file(const std::string &path, const std::string &content) {
+const std::string &Collector::display_name(const std::string &key) const {
+    const auto &decl = tc_.declared_ns_symbols();
+    auto it = decl.find(key);
+    // Lo que no se declaro dentro de un espacio de nombres no lleva prefijo:
+    // su clave YA es su nombre.
+    if (it == decl.end()) return key;
+    return it->second.second;
+}
+
+vxdbg::SemanticNode Collector::begin(const std::string &key, const KindPair &kp) {
+    vxdbg::SemanticNode s;
+    s.key = key;
+    s.name = display_name(key);
+    s.kind = kp.kind;
+    s.lang_kind = kp.lang;
+    s.declared_at.file = file_;
+    return s;
+}
+
+void Collector::relate(vxdbg::SemanticNode &s, vxdbg::RelationKind kind,
+                       const std::string &target) {
+    if (target.empty()) return;
+    vxdbg::SemanticRelation r;
+    r.kind = kind;
+    r.target = target;
+    s.relations.push_back(std::move(r));
+}
+
+std::string Collector::ensure_namespace(const std::string &path) {
+    // La clave lleva delante de que es para que un espacio de nombres llamado
+    // igual que un tipo no se confunda con el.
+    std::string key = "namespace " + path;
+    if (first_time(key)) {
+        vxdbg::SemanticNode s;
+        s.key = key;
+        s.name = path;
+        s.kind = K_NAMESPACE.kind;
+        s.lang_kind = K_NAMESPACE.lang;
+        out_.push_back(std::move(s));
+    }
+    return key;
+}
+
+void Collector::relate_namespace(vxdbg::SemanticNode &s, const std::string &key) {
+    const auto &decl = tc_.declared_ns_symbols();
+    auto it = decl.find(key);
+    if (it == decl.end() || it->second.first.empty()) return;
+    // La pertenencia se dice como relacion y no reconstruyendo el prefijo del
+    // nombre, que es lo que la hace consultable.
+    relate(s, vxdbg::RelationKind::DeclaredIn,
+           ensure_namespace(it->second.first));
+}
+
+void Collector::ensure_builtin(const std::string &name) {
+    if (name.empty() || !first_time(name)) return;
+    vxdbg::SemanticNode s;
+    s.key = name; // el texto del tipo ya es su identidad
+    s.name = name;
+    s.kind = K_BUILTIN.kind;
+    s.lang_kind = K_BUILTIN.lang;
+    // No se declara en ningun fichero, asi que no lleva posicion.
+    out_.push_back(std::move(s));
+}
+
+void Collector::add_member(const std::string &name, const KindPair &kp,
+                           const std::string &owner_key,
+                           const std::string &type_name) {
+    vxdbg::SemanticNode s;
+    // Un miembro se identifica por su propietario mas su nombre: dos campos
+    // `size` de dos structs distintos no son el mismo campo.
+    s.key = owner_key + "::" + name;
+    s.name = name;
+    s.kind = kp.kind;
+    s.lang_kind = kp.lang;
+    s.declared_at.file = file_;
+    relate(s, vxdbg::RelationKind::DeclaredIn, owner_key);
+    if (!type_name.empty()) {
+        // Si el tipo no es uno declarado, se describe como escrito en el sitio;
+        // la clave es la misma en ambos casos, asi que el emisor la resuelve
+        // sin distinguirlos.
+        if (tc_.struct_layouts().count(type_name) == 0 &&
+            tc_.class_layouts().count(type_name) == 0 &&
+            tc_.enum_layouts().count(type_name) == 0)
+            ensure_builtin(type_name);
+        relate(s, vxdbg::RelationKind::Uses, type_name);
+    }
+    out_.push_back(std::move(s));
+}
+
+void Collector::collect_structs() {
+    for (const auto &kv : tc_.struct_layouts()) {
+        const StructLayout &lay = kv.second;
+        // El orden importa: una vista sobre memoria ajena no es un struct
+        // abstracto aunque lleve la marca, y no poder instanciarlo pesa mas
+        // que tener metodos virtuales.
+        const KindPair &kp = lay.is_overlay       ? K_OVERLAY
+                             : lay.is_union       ? K_UNION
+                             : lay.is_abstract    ? K_ABSTRACT_STRUCT
+                             : lay.is_polymorphic ? K_POLY_STRUCT
+                                                  : K_STRUCT;
+        vxdbg::SemanticNode s = begin(kv.first, kp);
+        s.byte_size = lay.size_bytes;
+        s.alignment = lay.align_bytes;
+        relate_namespace(s, kv.first);
+        relate(s, vxdbg::RelationKind::Derives, lay.super_name);
+        // Los conceptos que satisface los sabe el checker de cuando los
+        // comprobo; se leen de ahi en lugar de reevaluar los predicados, que
+        // seria pagar dos veces por la misma respuesta.
+        if (auto it = tc_.impl_conformances().find(kv.first);
+            it != tc_.impl_conformances().end())
+            for (const auto &c : it->second)
+                relate(s, vxdbg::RelationKind::Implements, c);
+        out_.push_back(std::move(s));
+
+        for (const auto &f : lay.fields)
+            add_member(f.name, K_FIELD, kv.first, type_to_string(f.type));
+        for (const auto &f : lay.static_fields)
+            add_member(f.name, K_STATIC_FIELD, kv.first,
+                       type_to_string(f.type));
+        for (const auto &f : lay.comptime_fields)
+            add_member(f.name, K_COMPTIME_FIELD, kv.first,
+                       type_to_string(f.type));
+        for (const auto &m : lay.methods)
+            add_member(m.name, m.is_constructor ? K_CONSTRUCTOR : K_METHOD,
+                       kv.first, type_to_string(m.return_type));
+    }
+}
+
+void Collector::collect_classes() {
+    for (const auto &kv : tc_.class_layouts()) {
+        const ClassLayout &lay = kv.second;
+        const KindPair &kp = lay.is_interface ? K_INTERFACE
+                             : lay.is_aspect  ? K_ASPECT
+                                              : K_CLASS;
+        vxdbg::SemanticNode s = begin(kv.first, kp);
+        s.byte_size = lay.size_bytes;
+        relate_namespace(s, kv.first);
+        relate(s, vxdbg::RelationKind::Derives, lay.super_name);
+        for (const auto &iface : lay.interface_names)
+            relate(s, vxdbg::RelationKind::Implements, iface);
+        if (auto it = tc_.impl_conformances().find(kv.first);
+            it != tc_.impl_conformances().end())
+            for (const auto &c : it->second)
+                relate(s, vxdbg::RelationKind::Implements, c);
+        out_.push_back(std::move(s));
+
+        for (const auto &f : lay.fields)
+            add_member(f.name, K_FIELD, kv.first, type_to_string(f.type));
+        for (const auto &f : lay.static_fields)
+            add_member(f.name, K_STATIC_FIELD, kv.first,
+                       type_to_string(f.type));
+        for (const auto &m : lay.methods) {
+            const KindPair &mk = m.is_constructor  ? K_CONSTRUCTOR
+                                 : m.is_destructor ? K_DESTRUCTOR
+                                                   : K_METHOD;
+            add_member(m.name, mk, kv.first, type_to_string(m.return_type));
+        }
+    }
+}
+
+void Collector::collect_enums() {
+    for (const auto &kv : tc_.enum_layouts()) {
+        const EnumLayout &lay = kv.second;
+        vxdbg::SemanticNode s =
+            begin(kv.first, lay.is_valued ? K_VALUED_ENUM : K_ENUM);
+        s.byte_size = lay.size_bytes;
+        relate_namespace(s, kv.first);
+        // Un enum con tipo base ES un valor de ese tipo: la relacion lo dice
+        // sin que quien lea tenga que saber como se representa.
+        if (!lay.backing_type_name.empty()) {
+            if (tc_.struct_layouts().count(lay.backing_type_name) == 0 &&
+                tc_.class_layouts().count(lay.backing_type_name) == 0)
+                ensure_builtin(lay.backing_type_name);
+            relate(s, vxdbg::RelationKind::Uses, lay.backing_type_name);
+        }
+        out_.push_back(std::move(s));
+
+        for (const auto &v : lay.variants)
+            add_member(v.name, K_VARIANT, kv.first, "");
+    }
+}
+
+void Collector::collect_concepts() {
+    for (const auto &kv : tc_.concepts()) {
+        // Un concepto no tiene tamano ni instancias: es una condicion sobre
+        // tipos que se comprueba al compilar.
+        vxdbg::SemanticNode s = begin(kv.first, K_CONCEPT);
+        relate_namespace(s, kv.first);
+        out_.push_back(std::move(s));
+    }
+}
+
+void Collector::collect() {
+    collect_structs();
+    collect_classes();
+    collect_enums();
+    collect_concepts();
+}
+
+/**
+ * @brief Emite el nodo del fichero.
+ * @param store Destino.
+ * @param path Ruta del fuente.
+ * @param content Su contenido, para resumirlo.
+ * @return El identificador del fichero.
+ */
+vxdbg::FileId emit_file(vxdbg::NodeStore &store, const std::string &path,
+                        const std::string &content) {
     vxdbg::FileNode f;
     f.path = path;
     f.language = "vesta";
@@ -218,265 +421,8 @@ void Emitter::set_file(const std::string &path, const std::string &content) {
     if (!content.empty())
         f.checksum = vxdbg::hash_bytes(content.data(), content.size());
     vxdbg::ContentHash h;
-    if (vxdbg::store_node(store_, f, h)) file_ = vxdbg::FileId{h};
-}
-
-vxdbg::LanguageEntityId Emitter::put(const vxdbg::LanguageEntity &e) {
-    vxdbg::ContentHash h;
-    if (!vxdbg::store_node(store_, e, h)) return {};
-    ++stats_.entities;
-    return vxdbg::LanguageEntityId{h};
-}
-
-const std::string &Emitter::display_name(const std::string &key) const {
-    const auto &decl = tc_.declared_ns_symbols();
-    auto it = decl.find(key);
-    // Lo que no se declaro dentro de un espacio de nombres no lleva prefijo:
-    // su clave YA es su nombre.
-    if (it == decl.end()) return key;
-    return it->second.second;
-}
-
-void Emitter::relate(vxdbg::LanguageEntity &e, vxdbg::RelationKind kind,
-                     const std::string &target_key) {
-    if (target_key.empty()) return;
-    const auto id = entity_for(target_key);
-    if (id.hash.empty()) {
-        // Se omite la relacion en vez de apuntar a un destino inventado: en un
-        // diagnostico, un nombre equivocado es peor que un dato de menos.
-        ++stats_.unresolved;
-        return;
-    }
-    vxdbg::Relation r;
-    r.kind = kind;
-    r.target = id;
-    e.relations.push_back(r);
-}
-
-vxdbg::LanguageEntityId Emitter::builtin_for(const std::string &name) {
-    auto it = done_.find(name);
-    if (it != done_.end()) return it->second;
-    vxdbg::LanguageEntity e;
-    e.name = name;
-    e.qualified = name; // el texto del tipo ya es su identidad
-    e.kind = K_BUILTIN.kind;
-    e.lang_kind = K_BUILTIN.lang;
-    // No se declara en ningun fichero, asi que no lleva posicion.  Sale con la
-    // misma huella en todos los modulos que lo usen, que es justo lo que se
-    // quiere de `i32`.
-    const auto id = put(e);
-    done_.emplace(name, id);
-    return id;
-}
-
-vxdbg::LanguageEntityId Emitter::module_for(const std::string &path) {
-    // La clave lleva delante de que es para que un espacio de nombres llamado
-    // igual que un tipo no se confunda con el.
-    const std::string key = "namespace " + path;
-    auto it = done_.find(key);
-    if (it != done_.end()) return it->second;
-    vxdbg::LanguageEntity e;
-    e.name = path;
-    e.qualified = path;
-    e.kind = K_NAMESPACE.kind;
-    e.lang_kind = K_NAMESPACE.lang;
-    const auto id = put(e);
-    done_.emplace(key, id);
-    return id;
-}
-
-bool Emitter::build_type(const std::string &key, vxdbg::LanguageEntity &e) {
-    e.name = display_name(key);
-    e.qualified = key;
-    e.declared_at.file = file_;
-    // Si se declaro dentro de un espacio de nombres, la pertenencia se dice
-    // como relacion y no reconstruyendo el prefijo del nombre.
-    if (auto it = tc_.declared_ns_symbols().find(key);
-        it != tc_.declared_ns_symbols().end() && !it->second.first.empty()) {
-        vxdbg::Relation r;
-        r.kind = vxdbg::RelationKind::DeclaredIn;
-        r.target = module_for(it->second.first);
-        if (!r.target.hash.empty()) e.relations.push_back(r);
-    }
-
-    const auto &structs = tc_.struct_layouts();
-    const auto &classes = tc_.class_layouts();
-    const auto &enums = tc_.enum_layouts();
-
-    if (auto s = structs.find(key); s != structs.end()) {
-        const StructLayout &lay = s->second;
-        // El orden importa: una vista sobre memoria ajena no es un struct
-        // abstracto aunque lleve la marca, y no poder instanciarlo pesa mas
-        // que tener metodos virtuales.
-        const KindPair &kp = lay.is_overlay      ? K_OVERLAY
-                             : lay.is_union      ? K_UNION
-                             : lay.is_abstract   ? K_ABSTRACT_STRUCT
-                             : lay.is_polymorphic ? K_POLY_STRUCT
-                                                  : K_STRUCT;
-        e.kind = kp.kind;
-        e.lang_kind = kp.lang;
-        e.byte_size = lay.size_bytes;
-        e.alignment = lay.align_bytes;
-        // Los conceptos que satisface un struct no estan en su layout: la
-        // conformidad la lleva el checker en su propia tabla y no la expone.
-        // Se anadira cuando lo haga; inventarla aqui recorriendo conceptos y
-        // reevaluando predicados seria recomputar lo que ya se comprobo.
-        relate(e, vxdbg::RelationKind::Derives, lay.super_name);
-        return true;
-    }
-    if (auto c = classes.find(key); c != classes.end()) {
-        const ClassLayout &lay = c->second;
-        const KindPair &kp = lay.is_interface ? K_INTERFACE
-                             : lay.is_aspect  ? K_ASPECT
-                                              : K_CLASS;
-        e.kind = kp.kind;
-        e.lang_kind = kp.lang;
-        e.byte_size = lay.size_bytes;
-        relate(e, vxdbg::RelationKind::Derives, lay.super_name);
-        for (const auto &iface : lay.interface_names)
-            relate(e, vxdbg::RelationKind::Implements, iface);
-        return true;
-    }
-    if (auto en = enums.find(key); en != enums.end()) {
-        const EnumLayout &lay = en->second;
-        const KindPair &kp = lay.is_valued ? K_VALUED_ENUM : K_ENUM;
-        e.kind = kp.kind;
-        e.lang_kind = kp.lang;
-        e.byte_size = lay.size_bytes;
-        // Un enum con tipo base ES un valor de ese tipo: la relacion lo dice
-        // sin que quien lea tenga que saber como se representa.
-        relate(e, vxdbg::RelationKind::Uses, lay.backing_type_name);
-        return true;
-    }
-    if (auto cp = tc_.concepts().find(key); cp != tc_.concepts().end()) {
-        // Un concepto no tiene tamano ni instancias: es una condicion sobre
-        // tipos que se comprueba al compilar.
-        e.kind = K_CONCEPT.kind;
-        e.lang_kind = K_CONCEPT.lang;
-        return true;
-    }
-    return false;
-}
-
-vxdbg::LanguageEntityId Emitter::entity_for(const std::string &key) {
-    if (key.empty()) return {};
-    auto it = done_.find(key);
-    if (it != done_.end()) return it->second;
-    // Un ciclo en la derivacion no se puede representar: la huella de cada uno
-    // dependeria de la del otro.  Se corta devolviendo vacio, con lo que la
-    // relacion se omite y el contador de no resueltos lo deja ver.
-    if (!in_progress_.insert(key).second) return {};
-
-    vxdbg::LanguageEntity e;
-    const bool known = build_type(key, e);
-    in_progress_.erase(key);
-    if (!known) return {}; // no es un tipo declarado
-
-    const auto id = put(e);
-    done_.emplace(key, id);
-    // Solo los TIPOS son raices: desde uno se llega a sus miembros por el
-    // indice inverso, y listar tambien los miembros seria repetir el grafo
-    // entero en una lista plana.
-    stats_.roots.emplace_back(key, id);
-    return id;
-}
-
-void Emitter::emit_member(const std::string &name, const KindPair &kp,
-                          vxdbg::LanguageEntityId owner,
-                          const std::string &owner_key,
-                          const std::string &type_name) {
-    vxdbg::LanguageEntity m;
-    m.name = name;
-    // Un miembro se identifica por su propietario mas su nombre: dos campos
-    // `size` de dos structs distintos no son el mismo campo.
-    m.qualified = owner_key + "::" + name;
-    m.kind = kp.kind;
-    m.lang_kind = kp.lang;
-    m.declared_at.file = file_;
-    {
-        vxdbg::Relation r;
-        r.kind = vxdbg::RelationKind::DeclaredIn;
-        r.target = owner;
-        m.relations.push_back(r);
-    }
-    if (!type_name.empty()) {
-        // El tipo puede ser uno declarado o cualquier otra cosa escrita en el
-        // sitio (`i32`, `u8*`, `Array<i64>`).  Los segundos se emiten como
-        // entidad sin declaracion: sirven igual para decir de que es el campo.
-        auto id = entity_for(type_name);
-        if (id.hash.empty()) id = builtin_for(type_name);
-        if (!id.hash.empty()) {
-            vxdbg::Relation r;
-            r.kind = vxdbg::RelationKind::Uses;
-            r.target = id;
-            m.relations.push_back(r);
-        }
-    }
-    if (!put(m).hash.empty()) ++stats_.members;
-}
-
-void Emitter::emit_struct_members(const StructLayout &lay,
-                                  vxdbg::LanguageEntityId owner,
-                                  const std::string &owner_key) {
-    for (const auto &f : lay.fields)
-        emit_member(f.name, K_FIELD, owner, owner_key, type_to_string(f.type));
-    for (const auto &f : lay.static_fields)
-        emit_member(f.name, K_STATIC_FIELD, owner, owner_key,
-                    type_to_string(f.type));
-    for (const auto &f : lay.comptime_fields)
-        emit_member(f.name, K_COMPTIME_FIELD, owner, owner_key,
-                    type_to_string(f.type));
-    for (const auto &m : lay.methods)
-        emit_member(m.name, m.is_constructor ? K_CONSTRUCTOR : K_METHOD, owner,
-                    owner_key, type_to_string(m.return_type));
-}
-
-void Emitter::emit_class_members(const ClassLayout &lay,
-                                 vxdbg::LanguageEntityId owner,
-                                 const std::string &owner_key) {
-    for (const auto &f : lay.fields)
-        emit_member(f.name, K_FIELD, owner, owner_key, type_to_string(f.type));
-    for (const auto &f : lay.static_fields)
-        emit_member(f.name, K_STATIC_FIELD, owner, owner_key,
-                    type_to_string(f.type));
-    for (const auto &m : lay.methods) {
-        const KindPair &kp = m.is_constructor  ? K_CONSTRUCTOR
-                             : m.is_destructor ? K_DESTRUCTOR
-                                               : K_METHOD;
-        emit_member(m.name, kp, owner, owner_key, type_to_string(m.return_type));
-    }
-}
-
-void Emitter::emit_enum_members(const EnumLayout &lay,
-                                vxdbg::LanguageEntityId owner,
-                                const std::string &owner_key) {
-    for (const auto &v : lay.variants)
-        emit_member(v.name, K_VARIANT, owner, owner_key, "");
-}
-
-void Emitter::emit_all() {
-    // Primero los tipos, porque los miembros apuntan a ellos y hay que tener la
-    // huella del propietario antes de poder escribir un miembro.
-    for (const auto &kv : tc_.struct_layouts()) entity_for(kv.first);
-    for (const auto &kv : tc_.class_layouts()) entity_for(kv.first);
-    for (const auto &kv : tc_.enum_layouts()) entity_for(kv.first);
-    // Los conceptos van despues porque no referencian a nadie: emitirlos antes
-    // no cambia nada, pero asi el recorrido queda en el orden de la tabla.
-    for (const auto &kv : tc_.concepts()) entity_for(kv.first);
-
-    for (const auto &kv : tc_.struct_layouts()) {
-        const auto owner = entity_for(kv.first);
-        if (!owner.hash.empty())
-            emit_struct_members(kv.second, owner, kv.first);
-    }
-    for (const auto &kv : tc_.class_layouts()) {
-        const auto owner = entity_for(kv.first);
-        if (!owner.hash.empty()) emit_class_members(kv.second, owner, kv.first);
-    }
-    for (const auto &kv : tc_.enum_layouts()) {
-        const auto owner = entity_for(kv.first);
-        if (!owner.hash.empty()) emit_enum_members(kv.second, owner, kv.first);
-    }
+    if (!vxdbg::store_node(store, f, h)) return {};
+    return vxdbg::FileId{h};
 }
 
 } // namespace
@@ -496,9 +442,21 @@ bool emit_vxdbg_source(const TypeChecker &tc, const std::string &source_path,
                        std::string &err) {
     (void)err;
     vxdbg::FileNodeStore store(out_dir.empty() ? default_vxdbg_dir() : out_dir);
-    Emitter em(tc, store, stats);
-    em.set_file(source_path, source_text);
-    em.emit_all();
+
+    Collector col(tc, emit_file(store, source_path, source_text));
+    col.collect();
+    const auto graph = col.take();
+
+    const auto res = vxdbg::emit_semantic_graph(store, graph);
+    stats.entities = res.emitted;
+    stats.unresolved = res.unresolved;
+    stats.duplicates = res.duplicates;
+    stats.roots = res.ids;
+    for (const auto &s : graph)
+        if (s.kind == vxdbg::EntityKind::Field ||
+            s.kind == vxdbg::EntityKind::Function ||
+            s.kind == vxdbg::EntityKind::Constant)
+            ++stats.members;
     return true;
 }
 

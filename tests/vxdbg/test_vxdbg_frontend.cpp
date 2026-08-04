@@ -172,6 +172,7 @@ int main() {
               "  sabiendo que sus casos SON valores de otro tipo");
 
     std::printf("Nada se inventa\n");
+    comprobar(stats.duplicates == 0, "ninguna clave se declaro dos veces");
     comprobar(buscar(stats, "NoExiste").hash.empty(),
               "un tipo que no existe no aparece");
     comprobar(stats.unresolved == 0,
