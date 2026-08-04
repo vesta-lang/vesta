@@ -572,7 +572,16 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
              vm->scheduler.vm_reference.loader_public.executables) {
             if (!exe_ptr || !exe_ptr->debug_info) continue;
             auto info =
-                exe_ptr->debug_info->lookup_line(static_cast<uint32_t>(pc));
+                /* Se pregunta por el byte ANTERIOR, no por el PC.  El PC
+                 * de un fallo apunta ya a la instruccion siguiente, y el de un
+                 * marco de la cadena es una direccion de RETORNO -- justo
+                 * despues de la llamada.  Preguntando por el PC tal cual la
+                 * respuesta es la sentencia de al lado: una division de la
+                 * linea 8 salia como linea 9.  Restar uno cae dentro de la
+                 * instruccion que interesa; es lo que hace cualquier
+                 * desenrollador. */
+                exe_ptr->debug_info->lookup_line(
+                    static_cast<uint32_t>(pc ? pc - 1 : 0));
             if (info.found && info.line > 0) {
                 append_str(" (");
                 if (!tiene_modulo && info.file && info.file[0] != ' ') {
@@ -604,7 +613,16 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
              vm->scheduler.vm_reference.loader_public.executables) {
             if (!exe_ptr || !exe_ptr->debug_info) continue;
             auto info =
-                exe_ptr->debug_info->lookup_line(static_cast<uint32_t>(pc));
+                /* Se pregunta por el byte ANTERIOR, no por el PC.  El PC
+                 * de un fallo apunta ya a la instruccion siguiente, y el de un
+                 * marco de la cadena es una direccion de RETORNO -- justo
+                 * despues de la llamada.  Preguntando por el PC tal cual la
+                 * respuesta es la sentencia de al lado: una division de la
+                 * linea 8 salia como linea 9.  Restar uno cae dentro de la
+                 * instruccion que interesa; es lo que hace cualquier
+                 * desenrollador. */
+                exe_ptr->debug_info->lookup_line(
+                    static_cast<uint32_t>(pc ? pc - 1 : 0));
             if (info.found && info.line > 0) {
                 linea = info.line;
                 col_pc = info.column;
@@ -673,7 +691,16 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
             // code section del executable.  Asumimos un solo executable
             // (caso comun); para multi-velb el primero que matchee.
             auto info =
-                exe_ptr->debug_info->lookup_line(static_cast<uint32_t>(pc));
+                /* Se pregunta por el byte ANTERIOR, no por el PC.  El PC
+                 * de un fallo apunta ya a la instruccion siguiente, y el de un
+                 * marco de la cadena es una direccion de RETORNO -- justo
+                 * despues de la llamada.  Preguntando por el PC tal cual la
+                 * respuesta es la sentencia de al lado: una division de la
+                 * linea 8 salia como linea 9.  Restar uno cae dentro de la
+                 * instruccion que interesa; es lo que hace cualquier
+                 * desenrollador. */
+                exe_ptr->debug_info->lookup_line(
+                    static_cast<uint32_t>(pc ? pc - 1 : 0));
             if (info.found && info.line > 0) {
                 append_str(" (");
                 if (info.file && info.file[0] != '\0') {
