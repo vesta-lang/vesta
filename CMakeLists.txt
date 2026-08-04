@@ -817,6 +817,15 @@ add_executable(test_vxdbg_core tests/vxdbg/test_vxdbg_core.cpp
                                src/vxdbg/capabilities.cpp)
 target_include_directories(test_vxdbg_core PRIVATE ${VM_INCLUDES})
 
+# Serializacion y almacen por contenido: el mismo juego de pruebas se pasa al
+# almacen de memoria y al de disco, porque si no se comportaran igual, probar
+# contra uno no diria nada del otro.
+add_executable(test_vxdbg_store tests/vxdbg/test_vxdbg_store.cpp
+                                src/vxdbg/ids.cpp
+                                src/vxdbg/serialize.cpp
+                                src/vxdbg/store.cpp)
+target_include_directories(test_vxdbg_store PRIVATE ${VM_INCLUDES})
+
 add_executable(test_rbank_physical tests/jit/test_rbank_physical.cpp)
 target_include_directories(test_rbank_physical PRIVATE ${VM_INCLUDES})
 target_link_libraries(test_rbank_physical PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
