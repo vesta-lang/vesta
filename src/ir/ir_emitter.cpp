@@ -6333,7 +6333,8 @@ compute_zmm_alloc(const IrFunction &fn, const LivenessResult &liveness) {
 static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
                                  std::ostringstream &out,
                                  bool is_entry_point = false,
-                                 const IrModule *mod = nullptr) {
+                                 const IrModule *mod = nullptr,
+                                 std::vector<uint8_t> *value_regs = nullptr) {
     // Liveness + asignacion de registros.
     //
     // Coalescencia de congruencias de PHI: se computa la MISMA decision de
@@ -6378,6 +6379,18 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
      * puerta desaparece con el asignador que comparaba. */
     codegen::RegAlloc alloc = codegen::vm_allocate(
         fn, liveness, coal_remap.empty() ? nullptr : &coal_remap);
+
+    /* Donde acabo cada valor.  Es lo unico que el asignador sabe y nadie mas
+     * puede reconstruir; se publica para poder decir, al explicar un fallo,
+     * que `%8` es el `r1` que aparece en la instruccion de la maquina.  Los
+     * valores coalescidos comparten registro: se pregunta por el canonico. */
+    if (value_regs) {
+        value_regs->assign(fn.values.size(), IR_NO_REG);
+        for (IrValueId v = 0; v < fn.values.size(); ++v) {
+            const IrValueId root = (v < coal_remap.size()) ? coal_remap[v] : v;
+            if (alloc.in_reg(root)) (*value_regs)[v] = alloc.reg_of(root);
+        }
+    }
 
     // fix14: solo emitir enter/leave si hay slots de spill O si la funcion
     // contiene ALLOCA (que genera subsp rsp, N sin un addsp correspondiente
@@ -7128,7 +7141,10 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
         // emite las copias de PHI en las aristas; el interp inline), no
         // duplicacion gratuita.  El pase compartido `split_critical_edges` lo
         // consume solo el vreg.
-        std::string err = emit_function(fn, opts, out, first_func, &mod);
+        std::vector<uint8_t> regs_fn;
+        std::string err =
+            emit_function(fn, opts, out, first_func, &mod, &regs_fn);
+        if (!regs_fn.empty()) result.value_regs[fn.name] = std::move(regs_fn);
         first_func = false;
         if (!err.empty()) {
             result.ok = false;

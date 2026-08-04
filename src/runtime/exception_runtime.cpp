@@ -656,11 +656,31 @@ static std::vector<std::string> ir_window_at(ProcessVM *vm,
                  * convierte "%1 entre %2" en algo que se puede leer. */
                 if (i == culpable) {
                     std::string ops;
-                    for (ir::IrValueId v : planas[i]->operands) {
+                    /* El destino tambien: la maquina es de dos direcciones, de
+                     * modo que su PRIMER registro es el del destino y no el
+                     * del primer operando.  Sin decirlo, quien lee empareja
+                     * mal las dos vistas. */
+                    std::vector<ir::IrValueId> vals;
+                    if (planas[i]->dst != ir::IR_NO_VALUE)
+                        vals.push_back(planas[i]->dst);
+                    for (ir::IrValueId v : planas[i]->operands)
+                        vals.push_back(v);
+                    for (ir::IrValueId v : vals) {
                         auto it = nombre_de.find(v);
-                        if (it == nombre_de.end()) continue;
+                        /* En que registro vive, que es lo que une el
+                         * intermedio con la instruccion de la maquina: sin
+                         * esto se ve `%8` por un lado y `r1=0x2a` por otro sin
+                         * que nada diga que son lo mismo. */
+                        const uint8_t rg = (v < fn.values.size())
+                                               ? fn.values[v].reg
+                                               : ir::IR_NO_REG;
+                        if (it == nombre_de.end() && rg == ir::IR_NO_REG)
+                            continue;
                         if (!ops.empty()) ops += ", ";
-                        ops += "%" + std::to_string(v) + " = " + it->second;
+                        ops += "%" + std::to_string(v);
+                        if (rg != ir::IR_NO_REG)
+                            ops += "=r" + std::to_string((unsigned)rg);
+                        if (it != nombre_de.end()) ops += " (" + it->second + ")";
                     }
                     if (!ops.empty()) t += "   [" + ops + "]";
                 }

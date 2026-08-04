@@ -64,7 +64,11 @@ constexpr uint8_t IRVAL_FLAG_HOST_PTR =
 constexpr uint8_t IRVAL_FLAG_POINTEE_HOST_PTR =
     1 << 3; ///< Puntero VM cuyo contenido apunta a host
 constexpr uint8_t IRVAL_FLAG_GC_OBJECT = 1
-                                         << 4; ///< Host_ptr a objeto GC-managed
+                                         << 4;
+/// v11: el valor lleva el registro fisico donde lo dejo el asignador.  Es un
+/// bit y no un byte fijo porque la mayoria de valores no lo tienen (murieron o
+/// se derramaron) y el intermedio se llevaria un byte por cada uno.
+constexpr uint8_t IRVAL_FLAG_HAS_REG = 1 << 5; ///< Host_ptr a objeto GC-managed
 
 // Bits del byte flags por IrInstr.  Solo 2 bits usados: el resto
 // queda para extensiones futuras sin cambio de formato.
@@ -111,7 +115,10 @@ void write_value(std::vector<uint8_t> &o, const IrValue &v) {
     if (v.is_host_ptr) flags |= IRVAL_FLAG_HOST_PTR;
     if (v.pointee_is_host_ptr) flags |= IRVAL_FLAG_POINTEE_HOST_PTR;
     if (v.is_gc_object) flags |= IRVAL_FLAG_GC_OBJECT;
+    if (v.reg != IR_NO_REG) flags |= IRVAL_FLAG_HAS_REG;
     write_u8(o, flags);
+    // Solo paga el byte quien vive en un registro (ver IRVAL_FLAG_HAS_REG).
+    if (v.reg != IR_NO_REG) write_u8(o, v.reg);
     // Optimizacion: const_val solo ocupa espacio si el value es
     // realmente una constante.  Una funcion tipica tiene ~30%
     // constantes, el resto son SSA values normales que no necesitan
@@ -143,6 +150,12 @@ bool read_value(const std::vector<uint8_t> &in, size_t &off, IrValue &v) {
     v.is_host_ptr = (flags & IRVAL_FLAG_HOST_PTR) != 0;
     v.pointee_is_host_ptr = (flags & IRVAL_FLAG_POINTEE_HOST_PTR) != 0;
     v.is_gc_object = (flags & IRVAL_FLAG_GC_OBJECT) != 0;
+    // v11: el registro solo viaja si el valor tenia uno.
+    if (flags & IRVAL_FLAG_HAS_REG) {
+        if (!read_u8(in, off, v.reg)) return false;
+    } else {
+        v.reg = IR_NO_REG;
+    }
     // const_val solo se leyo si el writer la emitio; sin el flag
     // queda en su valor default (0).  Mismo principio que write_value.
     if (v.is_const) {

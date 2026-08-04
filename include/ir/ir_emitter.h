@@ -43,6 +43,8 @@
 #include "ir/ssa_ir.h"
 #include "ir/ir_optimizer.h"
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace ir {
 
@@ -75,6 +77,16 @@ struct EmitResult {
     bool ok;              ///< true si la emision fue exitosa
     std::string vel_text; ///< texto .vel generado (valido si ok)
     std::string error;    ///< mensaje de error si !ok
+    /// En que registro fisico dejo el asignador cada valor SSA, por funcion:
+    /// @c value_regs[nombre][id] = registro, o 0xFF si el valor no vive en
+    /// uno (murio, o se derramo a la pila).
+    ///
+    /// El asignador es el UNICO que sabe esto y hasta ahora lo tiraba al
+    /// terminar, de modo que al explicar un fallo se ensenaba `%8` por un lado
+    /// y `r1=0x2a` por otro sin que nada dijera que son la misma cosa.  Quien
+    /// orquesta lo estampa en @c IrValue::reg antes de guardar el intermedio,
+    /// que es donde tiene sentido: un registro es propiedad del VALOR.
+    std::unordered_map<std::string, std::vector<uint8_t>> value_regs;
 };
 
 /**

@@ -3078,6 +3078,16 @@ CompileResult compile_vx_project(
         if (!map.symbols.empty() && vxdbg::store_node(store, map, h))
             res.vxdbg_artifact_map = h;
     }
+    /* Donde dejo el asignador cada valor, antes de guardar el intermedio: es
+     * lo que permite decir que `%8` es el `r1` de la instruccion maquina.  Se
+     * estampa aqui, entre emitir y serializar, porque el emisor recibe el
+     * modulo como solo-lectura y este es el punto en que ya se sabe. */
+    for (auto &fn : merged.functions) {
+        auto it = eres.value_regs.find(fn.name);
+        if (it == eres.value_regs.end()) continue;
+        const size_t n = std::min(fn.values.size(), it->second.size());
+        for (size_t v = 0; v < n; ++v) fn.values[v].reg = it->second[v];
+    }
     res.ir_section_bytes = ir::emit_ir_section(merged.functions);
     //  AOT multi-modulo: exponer el IR mergeado (functions + static_data
     // + globals) como module_cache para que el path -m aot lo consuma.  El

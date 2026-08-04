@@ -1066,6 +1066,11 @@ CompileResult compile_vx_source(const std::string &source,
      * Genera @c irmod_opt aplicando el mismo opt_level que el .vel
      * pipeline para mantener consistencia entre @c .velb (JIT
      * source) y @c .vel (interp source). */
+    /// Modulo optimizado del que sale el intermedio del artefacto.  Se guarda
+    /// para serializarlo DESPUES de emitir, cuando ya se sabe en que registro
+    /// vive cada valor (ver mas abajo).
+    ir::IrModule mod_para_seccion;
+    bool hay_seccion = false;
     {
         /* Modo --analyze: serializar el IR PRE-optimizacion (irmod tal cual
          * lo emite el lowering) antes de tocar nada.  Captura la complejidad
@@ -1158,10 +1163,11 @@ CompileResult compile_vx_source(const std::string &source,
         // --analyze, inline normal (no se genera .velb en --analyze).
         ir::ir_optimize(irmod_for_section, opt_level_from_int(opts.opt_level),
                         /*allow_inline=*/!opts.emit_ir_preopt);
-        res.ir_section_bytes = ir::emit_ir_section(irmod_for_section.functions);
-        /*  AOT: modulo completo (functions + static_data + globals) para
-         * que el driver -m aot materialice los literales en .rodata. */
-        res.ir_module_cache_bytes = ir::emit_ir_module_cache(irmod_for_section);
+        /* No se serializa todavia: falta saber en que registro dejo el
+         * asignador cada valor, y eso solo se sabe tras emitir.  Se guarda y
+         * se serializa mas abajo, ya con esa informacion dentro. */
+        mod_para_seccion = std::move(irmod_for_section);
+        hay_seccion = true;
     }
 
     // --- CTPE (on por defecto; VESTA_NO_CTPE desactiva): precomputo del
@@ -1235,6 +1241,22 @@ CompileResult compile_vx_source(const std::string &source,
                               std::string("emisor IR fallo: ") + eres.error);
         res.ok = false;
         return res;
+    }
+
+    /* Ahora si: el asignador ya dijo donde vive cada valor, asi que el
+     * intermedio del artefacto puede llevarlo.  Es lo que permite decir, al
+     * explicar un fallo, que `%8` es el `r1` de la instruccion maquina. */
+    if (hay_seccion) {
+        for (auto &fn : mod_para_seccion.functions) {
+            auto it = eres.value_regs.find(fn.name);
+            if (it == eres.value_regs.end()) continue;
+            const size_t n = std::min(fn.values.size(), it->second.size());
+            for (size_t v = 0; v < n; ++v) fn.values[v].reg = it->second[v];
+        }
+        res.ir_section_bytes = ir::emit_ir_section(mod_para_seccion.functions);
+        /*  AOT: modulo completo (functions + static_data + globals) para
+         * que el driver -m aot materialice los literales en .rodata. */
+        res.ir_module_cache_bytes = ir::emit_ir_module_cache(mod_para_seccion);
     }
 
     res.vel_text = std::move(eres.vel_text);

@@ -108,7 +108,7 @@ static constexpr uint32_t IR_SECTION_MAGIC = 0x52494556U; /* 'V''E''I''R' */
  * @brief Version del formato @ir.  Bump cuando cambia el layout.
  */
 static constexpr uint16_t IR_SECTION_VERSION =
-    10; // v10: + inline_site (de que llamada aplanada vino cada instruccion)
+    11; // v11: + IrValue::reg (en que registro vive cada valor)
 
 /**
  * @brief Emit del bytes de la seccion @c @ir lista para append a

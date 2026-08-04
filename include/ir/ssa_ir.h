@@ -797,6 +797,9 @@ static constexpr IrValueId IR_NO_VALUE = 0xFFFFFFFFu;
 using IrBlockId = uint32_t;
 static constexpr IrBlockId IR_NO_BLOCK = 0xFFFFFFFFu;
 
+/// El valor no vive en ningun registro fisico (murio o se derramo).
+static constexpr uint8_t IR_NO_REG = 0xFFu;
+
 /// La instruccion se escribio en la funcion donde esta, no vino de otra.
 static constexpr uint32_t IR_NO_INLINE_SITE = 0xFFFFFFFFu;
 
@@ -830,6 +833,12 @@ struct IrValue {
     std::string name;          ///< nombre legible ("%0", "%result", "%a", ...)
     bool is_param = false;     ///< true si es un parametro de funcion
     bool is_const = false;     ///< true si es una constante literal
+    /// Registro fisico donde el asignador dejo el valor, o @c IR_NO_REG si no
+    /// vive en uno (murio, o se derramo a la pila).  Lo estampa quien orquesta
+    /// la compilacion a partir de @c EmitResult::value_regs, porque hasta
+    /// entonces esta informacion se tiraba: al explicar un fallo salia `%8`
+    /// por un lado y `r1=0x2a` por otro sin decir que son lo mismo.
+    uint8_t reg = 0xFFu;
     /// true si el valor (debe ser PTR) apunta a memoria HOST (e.g. retorno
     /// de @c rawalloc).  Los LOAD/STORE consultan este bit para decidir
     /// entre @c mov [rp] (s=0, memoria VM) y @c movh [rp] (s=1, memoria
