@@ -1828,6 +1828,13 @@ private:
     // Almacen de firmas de funciones (referenciadas por sig_index).
     std::vector<FunctionSig> function_sigs_;
 
+    /// De donde salio cada trozo de codigo generado por una @Macro.  Vive
+    /// aqui porque las posiciones lo apuntan sin poseerlo y tienen que
+    /// seguir siendo validas mientras exista el arbol.  Se reusa por sitio
+    /// de invocacion: la misma macro invocada dos veces son dos.
+    std::unordered_map<std::string, std::unique_ptr<ExpansionInfo>>
+        macro_expansions_;
+
     /// mapa nombre -> indice en function_sigs_ que sobrevive
     /// al @c pop_scope() final de @c run().  Necesario porque el lowering
     /// consulta firmas POST-check para auto-promover literales a STRING

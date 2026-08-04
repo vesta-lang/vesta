@@ -15718,7 +15718,22 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 return Type{};
             }
             /* Parsear el string como expresion Vesta. */
-            Lexer fragment_lex(r.str, "<macro:" + id->name + ">", diags_);
+            /* El fragmento se parsea diciendo DE DONDE viene.  Sin esto, todo
+             * lo que nace aqui lleva una posicion en un fichero que no existe
+             * -- `<macro:X>` linea 3 -- y un fallo dentro del codigo generado no
+             * se puede explicar: no hay fuente que enseñar ni sitio al que
+             * mandar a mirar.  Con la procedencia se puede contar el camino:
+             * esto lo genero tal macro, invocada aqui. */
+            auto &exp = macro_expansions_[id->name + "@" +
+                                          std::to_string(e->loc.line) + ":" +
+                                          std::to_string(e->loc.column)];
+            if (!exp) {
+                exp = std::make_unique<ExpansionInfo>();
+                exp->macro = id->name;
+                exp->site = std::make_shared<SourceLoc>(e->loc);
+            }
+            Lexer fragment_lex(r.str, "<macro:" + id->name + ">", diags_,
+                               exp.get());
             Parser fragment_par(fragment_lex, diags_);
             std::unique_ptr<ast::Expr> parsed = fragment_par.parse_one_expr();
             if (!parsed) {

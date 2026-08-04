@@ -38,6 +38,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <ostream>
 #include <string>
 #include <utility>
@@ -75,6 +76,29 @@ enum class DiagLevel : uint8_t {
  * del fichero (comenzando en 0).  Se almacena ademas la longitud en
  * bytes para que el reportador pueda subrayar el span exacto.
  */
+struct SourceLoc;
+
+/**
+ * @brief De donde salio un trozo de codigo que nadie escribio.
+ *
+ * Una `@Macro` genera texto y ese texto se parsea: lo que sale de ahi no esta
+ * en ningun fichero, asi que su posicion -- linea 3 de `<macro:X>` -- no lleva a
+ * ninguna parte.  Lo que hace falta saber es DE QUE expansion vino y DESDE
+ * DONDE se invoco, y contarlo encadenado:
+ *
+ *     ... en el codigo generado
+ *       expandido por la macro FOO
+ *       invocada en prog.vx:12
+ *
+ * Se apunta con puntero no-propietario porque una posicion se copia
+ * constantemente y esto es raro: la inmensa mayoria valen @c nullptr y no pagan
+ * nada.  Lo posee quien hizo la expansion, que vive mas que el arbol.
+ */
+struct ExpansionInfo {
+    std::string macro;               ///< Que la genero.
+    std::shared_ptr<SourceLoc> site; ///< Donde se invoco.
+};
+
 struct SourceLoc {
     std::string
         file; ///< Ruta o nombre logico del fichero (puede ser "<stdin>").
@@ -83,6 +107,9 @@ struct SourceLoc {
     uint32_t offset =
         0; ///< Offset absoluto en bytes desde el inicio del fichero.
     uint32_t length = 1; ///< Longitud del span en bytes.
+    /// De que expansion vino, o @c nullptr si se escribio tal cual.  No
+    /// propietario: lo posee quien expandio.
+    const ExpansionInfo *expansion = nullptr;
 };
 
 /**
@@ -277,6 +304,19 @@ inline void print_diagnostic(std::ostream &os, const Diagnostic &d) {
     // Si hay codigo de error estable, incluirlo entre corchetes al final.
     if (!d.code.empty()) os << " [" << d.code << "]";
     os << "\n";
+    /* Y de donde salio el codigo, si no lo escribio nadie.  Una posicion dentro
+     * de lo que genero una macro no lleva a ningun sitio por si sola: el
+     * fichero no existe.  Lo que hace falta es el camino hasta el sitio que si
+     * esta escrito.  Se recorre la cadena entera porque una macro puede haber
+     * salido de otra. */
+    for (const ExpansionInfo *ex = d.loc.expansion; ex != nullptr;) {
+        std::string sitio = "?";
+        if (ex->site)
+            sitio = ex->site->file + ":" + std::to_string(ex->site->line) + ":" +
+                    std::to_string(ex->site->column);
+        os << "  " << diag::format("VX7015", {ex->macro, sitio}) << "\n";
+        ex = ex->site ? ex->site->expansion : nullptr;
+    }
 }
 
 /**
