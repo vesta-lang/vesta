@@ -264,7 +264,8 @@ static std::string demangle_symbol(const std::string &raw) {
  * @return Descripcion breve ("metodo de Lector"), o vacio.
  */
 static std::string entity_note_for_symbol(ProcessVM *vm,
-                                          const std::string &symbol) {
+                                          const std::string &symbol,
+                                          std::string *out_file = nullptr) {
     struct Grafo {
         bool intentado = false;
         bool hay = false;
@@ -352,6 +353,7 @@ static std::string entity_note_for_symbol(ProcessVM *vm,
         if (!duenyo.declared_at.file.hash.empty() &&
             vxdbg::load_node(*g.store, duenyo.declared_at.file.hash, f) &&
             !f.path.empty()) {
+            if (out_file) *out_file = f.path;
             nota += " (" + f.path;
             if (duenyo.declared_at.begin_line > 0)
                 nota += ":" + std::to_string(duenyo.declared_at.begin_line);
@@ -545,6 +547,40 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
         }
     };
 
+    /* La linea del FUENTE, debajo del marco.  Un numero de linea obliga a abrir
+     * el fichero para entender el fallo; el texto lo cuenta solo.  No hace falta
+     * nada nuevo: el fichero lo dice el grafo (cada entidad lleva el suyo, sin
+     * la mentira de la seccion de depuracion cross-module) y la linea ya se
+     * resolvia.  Si el fuente no esta o ya no coincide, simplemente no se
+     * ensena. */
+    auto append_source = [&](uint64_t pc, const std::string &archivo) {
+        if (archivo.empty()) return;
+        uint32_t linea = 0;
+        for (const auto &exe_ptr :
+             vm->scheduler.vm_reference.loader_public.executables) {
+            if (!exe_ptr || !exe_ptr->debug_info) continue;
+            auto info =
+                exe_ptr->debug_info->lookup_line(static_cast<uint32_t>(pc));
+            if (info.found && info.line > 0) {
+                linea = info.line;
+                break;
+            }
+        }
+        if (linea == 0) return;
+        std::ifstream f(archivo);
+        if (!f) return;
+        std::string texto;
+        for (uint32_t i = 0; i < linea && std::getline(f, texto); ++i) {
+        }
+        // Sin la sangria de la izquierda: aqui estorba y descoloca la traza.
+        const size_t ini = texto.find_first_not_of(" \t");
+        if (ini == std::string::npos) return;
+        const std::string limpio = texto.substr(ini);
+        append_str("      ");
+        append(limpio.c_str(), limpio.size());
+        append_str("\n");
+    };
+
     auto append_dbg = [&](loader::MethodInfo *m, uint64_t pc,
                           const char *pc_label) {
         // Buscar DebugInfo precise via los Executables cargados.
@@ -629,7 +665,9 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
             // Que ES lo que fallo, no solo como se llama: si el grafo lo sabe,
             // se dice ("constructor de Lector") en vez de dejar un nombre suelto
             // que quien lee tiene que ir a buscar al fuente.
-            const std::string nota = entity_note_for_symbol(vm, *sym);
+            std::string archivo_top;
+            const std::string nota =
+                entity_note_for_symbol(vm, *sym, &archivo_top);
             if (!nota.empty()) {
                 append_str(" [");
                 append(nota.c_str(), nota.size());
@@ -637,12 +675,13 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
             }
             append_pos(cur_pc,
                        legible.find('.') != std::string::npos);
+            append_str("\n");
+            append_source(cur_pc, archivo_top);
         } else {
             append_str("<top> (pc=");
             append_hex(cur_pc);
-            append_str(")");
+            append_str(")\n");
         }
-        append_str("\n");
     }
 
     // Frames intermedios: recorrer frame_stack hasta el origen.
@@ -716,7 +755,9 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
             /* Cada marco de la cadena tambien dice QUE es y con que firma: sin
              * ella, dos sobrecargas del mismo nombre son indistinguibles justo
              * cuando hay que saber por cual se paso. */
-            const std::string nota2 = entity_note_for_symbol(vm, *sym);
+            std::string archivo2;
+            const std::string nota2 =
+                entity_note_for_symbol(vm, *sym, &archivo2);
             if (!nota2.empty()) {
                 append_str(" [");
                 append(nota2.c_str(), nota2.size());
@@ -724,6 +765,7 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
             }
             append_pos(v, legible.find('.') != std::string::npos);
             append_str("\n");
+            append_source(v, archivo2);
             ++shown;
         }
     }
