@@ -880,6 +880,16 @@ class ProcessVM {
     uint64_t pending_fault_native_regs[16] = {};
     bool pending_fault_native_regs_ok = false;
 
+    /// La direccion nativa guardada es una de RETORNO, no la del fallo.
+    ///
+    /// Pasa con lo que lanza el propio programa -- un `panic` --: ahi no hay
+    /// aviso del sistema y lo unico que se sabe es desde donde se llamo al
+    /// ayudante, que apunta al byte SIGUIENTE a la llamada.  Al informar hay
+    /// que retroceder uno para caer dentro de la instruccion que de verdad
+    /// interviene, que es lo que hace cualquier desenrollador; si no, se marca
+    /// la de despues y quien lee no reconoce su propio codigo.
+    bool pending_fault_native_is_return = false;
+
     /// Direccion por la que ARRANCO este proceso.
     ///
     /// Es el fondo de su cadena de llamadas y no tiene direccion de retorno

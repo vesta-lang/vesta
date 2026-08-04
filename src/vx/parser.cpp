@@ -6596,7 +6596,7 @@ std::unique_ptr<ast::BlockStmt> Parser::parse_block() {
  * @brief Parsea una sentencia y le pone su EXTENSION real.
  *
  * El nodo se queda con la posicion de su primer token, cuya longitud es la de
- * ESE TOKEN y no la de la sentencia: una que empiece por `return` medía seis
+ * ESE TOKEN y no la de la sentencia: una que empiece por `return` media seis
  * caracteres, los de la palabra clave.  Al subrayar un fallo se marcaba la
  * palabra clave en vez de lo que se estaba evaluando.
  *

@@ -137,3 +137,15 @@ es = "fuente no disponible (el fichero cambio desde que se compilo)"
 [VX7015]
 en = "expanded by the macro {0}, invoked at {1}"
 es = "expandido por la macro {0}, invocada en {1}"
+
+[VX7016]
+en = "source"
+es = "fuente"
+
+[VX7017]
+en = "intermediate (SSA)"
+es = "intermedio (SSA)"
+
+[VX7018]
+en = "machine"
+es = "maquina"

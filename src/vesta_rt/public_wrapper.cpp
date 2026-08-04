@@ -1648,7 +1648,7 @@ void vrt_panic_str(vrt_proc *proc, uint64_t msg_vaddr, uint32_t msg_len) {
     /* De donde vino la llamada.  Un `panic` no lo avisa el sistema -- lo lanza
      * el propio programa --, asi que aqui no hay ninguna direccion de fallo
      * que capturar; pero este ayudante SI sabe quien le llamo, y esa es
-     * exactamente la instruccion que reventó.  Sin esto, un panic en codigo
+     * exactamente la instruccion que revento.  Sin esto, un panic en codigo
      * compilado se contaba con el PC de la maquina virtual, que ahi no se va
      * actualizando, y senalaba una sentencia cualquiera de mas arriba. */
 #if defined(__GNUC__) || defined(__clang__)
@@ -1658,6 +1658,9 @@ void vrt_panic_str(vrt_proc *proc, uint64_t msg_vaddr, uint32_t msg_len) {
         // Y por donde iba la pila nativa, para recorrer la cadena.
         p->pending_fault_native_sp =
             reinterpret_cast<uint64_t>(__builtin_frame_address(0));
+        // Es una direccion de RETORNO: apunta al byte de despues de la
+        // llamada, no a ella (ver pending_fault_native_is_return).
+        p->pending_fault_native_is_return = true;
     }
 #endif
     /* throw_fatal(proc, FATAL_USER_ABORT, msg) -- nunca retorna.  El

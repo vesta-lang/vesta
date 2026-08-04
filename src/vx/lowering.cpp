@@ -17605,7 +17605,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
     }
 
     // Short-circuit evaluation para `&&` y `||`.  Sin esto, ambos
-    // operandos se evalúan siempre, lo que es incorrecto para patrones
+    // operandos se evaluan siempre, lo que es incorrecto para patrones
     // como `i > 0 && this.data[i - 1] != 10` (con i==0, el rhs leeria
     // data[-1] y crashearia).  Ademas se evita evaluar efectos
     // colaterales innecesarios (CALLs en el rhs, dereferencias etc).
@@ -19592,11 +19592,11 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                 return ir::IR_NO_VALUE;
             }
             const uint32_t src_line = e->loc.line;
-            /* A.43.16: para @Macro fns, el type checker ya parseó +
-             * type-checó la expresion generada y la guardó en
+            /* A.43.16: para @Macro fns, el type checker ya parseo +
+             * type-checo la expresion generada y la guardo en
              * `e->macro_expanded`.  La rama temprana al inicio de
              * lower_call (A.43.10) ya hizo lower_expr del AST
-             * sustituido y retornó antes de llegar aqui.  Asi que
+             * sustituido y retorno antes de llegar aqui.  Asi que
              * en este punto NO esperamos un @Macro -- todos los
              * callees con string return son los comptime fns
              * regulares que materializan StringObject. */
@@ -27002,7 +27002,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         //
         // Para forzar v_buf en r12 antes del findfield, agregamos
         // una IR_op especial... no la tengo.  Hagamos: usar el RAW_ASM
-        // pero referirlo a memoria via dirección absoluta.  Imposible
+        // pero referirlo a memoria via direccion absoluta.  Imposible
         // sin acceso al reg.
         //
         // SOLUCION SIMPLE: usar un CALL falso a una funcion sintetica

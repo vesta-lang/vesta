@@ -839,12 +839,15 @@ static std::vector<std::string> native_window(ProcessVM *vm, uint64_t pc_fallo,
         cs_close(&h);
         return out;
     }
+    /* La que CONTIENE la direccion, no la que empieza justo ahi: cuando lo
+     * guardado es un retorno se pregunta por un byte de en medio. */
     size_t culpable = n;
-    for (size_t i = 0; i < n; ++i)
-        if (ins[i].address == pc_fallo) {
-            culpable = i;
-            break;
-        }
+    for (size_t i = 0; i < n; ++i) {
+        if (ins[i].address > pc_fallo) break;
+        culpable = i;
+    }
+    if (culpable < n && pc_fallo >= ins[culpable].address + ins[culpable].size)
+        culpable = n;
     if (culpable == n) {
         cs_free(ins, n);
         cs_close(&h);
@@ -933,8 +936,8 @@ static std::vector<std::string> bytecode_window(ProcessVM *vm, uint64_t inicio,
         char buf[256];
         if (i == culpable) {
             /* De la que fallo se ensena tambien QUE VALIAN sus registros.  Es
-             * la diferencia entre saber que reventó un `div` y saber que
-             * reventó porque el divisor valia cero.  Solo de esa: los valores
+             * la diferencia entre saber que revento un `div` y saber que
+             * revento porque el divisor valia cero.  Solo de esa: los valores
              * de las de al lado ya han cambiado o aun no se han calculado, y
              * ensenarlos seria mentir. */
             DecodedInstr dec{};
@@ -1037,7 +1040,7 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
      * En codigo compilado no vale el PC de la maquina virtual: ahi no se va
      * actualizando -- ese es el punto de compilar --, de modo que conserva el
      * de la ultima vez que se sincronizo y la traza acababa senalando la
-     * primera funcion en vez de la que reventó.  Lo que si vale es la
+     * primera funcion en vez de la que revento.  Lo que si vale es la
      * direccion NATIVA del fallo, que lleva a la funcion que la contiene y de
      * ahi a su direccion en la maquina virtual. */
     uint64_t cur_pc = vm->registers.rip.raw();
@@ -1045,9 +1048,18 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
     /// se sigue el camino normal (la tabla del bytecode).
     uint32_t linea_forzada = 0;
     bool desde_compilado = false;
+    /* Si lo guardado es una direccion de RETORNO, se retrocede uno para caer
+     * DENTRO de la instruccion que interviene: la llamada, no lo que va
+     * despues.  Es lo que hace cualquier desenrollador, y sin ello se marca la
+     * siguiente y quien lee no reconoce su propio codigo. */
+    const uint64_t nat_pc =
+        vm->pending_fault_native_pc -
+        (vm->pending_fault_native_is_return && vm->pending_fault_native_pc != 0
+             ? 1u
+             : 0u);
     if (vm->pending_fault_native_pc != 0) {
         uint64_t va = 0;
-        if (jit::lookup_vaddr_by_native_pc(vm->pending_fault_native_pc, va)) {
+        if (jit::lookup_vaddr_by_native_pc(nat_pc, va)) {
             cur_pc = va;
             desde_compilado = true;
             /* Es el PRINCIPIO de la funcion, no la instruccion exacta: no hay
@@ -1055,8 +1067,7 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
             vm->fatal_pc_exact = true;
             // Y la linea, que dentro de la funcion solo la sabe el propio
             // codigo nativo.
-            (void)jit::lookup_line_by_native_pc(vm->pending_fault_native_pc,
-                                                linea_forzada);
+            (void)jit::lookup_line_by_native_pc(nat_pc, linea_forzada);
         }
     }
 
@@ -1144,6 +1155,29 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
      * la mentira de la seccion de depuracion cross-module) y la linea ya se
      * resolvia.  Si el fuente no esta o ya no coincide, simplemente no se
      * ensena. */
+    /* Un rotulo con su raya para separar las tres vistas del mismo fallo.
+     * Puestas una detras de otra sin nada en medio se leen como un bloque
+     * unico y cuesta ver donde acaba el fuente y empieza lo que se ejecuto.
+     *
+     * El rotulo sale del catalogo -- es texto que lee una persona --, y la
+     * raya se escribe con los BYTES de su caracter para que el fuente siga
+     * siendo ASCII. */
+    static const char kSaltoLinea[] = {(char)10, 0};
+    auto append_titulo = [&](const char *codigo) {
+        const std::string t = vx::diag::format(codigo, {});
+        append_str("      ");
+        append(t.c_str(), t.size());
+        append_str(" ");
+        // U+2500 (raya horizontal).  Se escriben sus BYTES en UTF-8, no el
+        // caracter, para que este fuente siga siendo ASCII.
+        static const char kRaya[] = {(char)0xE2, (char)0x94, (char)0x80, 0};
+        const size_t ancho = (t.size() < 40) ? (40 - t.size()) : 4;
+        for (size_t i = 0; i < ancho; ++i) append_str(kRaya);
+        append_str(kSaltoLinea);
+    };
+
+
+
     auto append_source = [&](uint64_t pc, const std::string &archivo,
                              vxdbg::ContentHash resumen,
                              const std::string &simbolo, uint64_t atras = 1,
@@ -1208,6 +1242,7 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
         const size_t ini = texto.find_first_not_of(" \t");
         if (ini == std::string::npos) return;
         const std::string limpio = texto.substr(ini);
+        append_titulo("VX7016");
         append_str("      ");
         append(limpio.c_str(), limpio.size());
         append_str("\n");
@@ -1238,7 +1273,7 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
         const std::vector<std::string> ops =
             ir_window_at(vm, sim_ir, linea, ext.column, 3, 4, texto);
         if (ops.empty()) return;
-        append_str("      intermedio:\n");
+        append_titulo("VX7017");
         for (const std::string &t : ops) {
             append_str("      ");
             append(t.c_str(), t.size());
@@ -1376,7 +1411,7 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
             append_source(cur_pc, archivo_top, resumen_top,
                           aplanado.empty() ? *sym : aplanado.front().funcion,
                           atras_top, &*sym);
-            /* Y en que se convirtio: la instruccion de la maquina que reventó.
+            /* Y en que se convirtio: la instruccion de la maquina que revento.
              * El fuente dice que se pedia; esta dice que se estaba haciendo, y
              * cuando no coinciden es justo lo que hay que ver.  Solo la del
              * marco de arriba: los de la cadena estan parados en una llamada y
@@ -1393,10 +1428,10 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
                  * maquina virtual seria darlas por ejecutadas. */
                 const std::vector<std::string> maq =
                     desde_compilado
-                        ? native_window(vm, vm->pending_fault_native_pc, 3, 4)
+                        ? native_window(vm, nat_pc, 3, 4)
                         : bytecode_window(vm, cur_pc - off_top, cur_pc, 3, 4);
                 if (!maq.empty()) {
-                    append_str("      maquina:\n");
+                    append_titulo("VX7018");
                     for (const std::string &t : maq) {
                         append_str("      ");
                         append(t.c_str(), t.size());
