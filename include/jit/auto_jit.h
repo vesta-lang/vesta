@@ -299,8 +299,9 @@ extern bool g_pc_jit_active;
  * @param fn    Puntero al codigo nativo (calling convention
  *              @c JitFn(vrt_proc*) -> uint64_t).
  */
-void register_jit_code_at_pc(uint64_t vaddr, void *fn,
-                             size_t code_size = 0) noexcept;
+void register_jit_code_at_pc(uint64_t vaddr, void *fn, size_t code_size = 0,
+                             const std::vector<LineMapEntry> *line_map =
+                                 nullptr) noexcept;
 
 /**
  * @brief Lookup O(1) amortizado: devuelve el ptr nativo si la funcion

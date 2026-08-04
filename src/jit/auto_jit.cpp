@@ -922,9 +922,11 @@ void maybe_compile_method(runtime::ProcessVM *vm,
              * virtuales si esta soportada; si no, slots. */
             if (g_jit_use_vregs) {
                 size_t vc_size = 0;
+                std::vector<LineMapEntry> vc_lines;
                 uint8_t *vc = vreg_compile(child_ir, *g_code_cache, {},
                                            make_vreg_entries(), native_resolver,
-                                           child_opts.resolve_symbol, &vc_size);
+                                           child_opts.resolve_symbol, &vc_size,
+                                           &vc_lines);
                 if (vc != nullptr) {
                     const uint64_t a = reinterpret_cast<uint64_t>(vc);
                     g_eager_cache[n] = a;
@@ -934,7 +936,7 @@ void maybe_compile_method(runtime::ProcessVM *vm,
                         if (sit != st_ptr2->end() && sit->second != 0)
                             register_jit_code_at_pc(
                                 sit->second, reinterpret_cast<void *>(vc),
-                                vc_size);
+                                vc_size, &vc_lines);
                     }
                     if (g_jit_warn_unsupported)
                         std::fprintf(stderr,
@@ -1064,17 +1066,18 @@ void maybe_compile_method(runtime::ProcessVM *vm,
             vent.tier2_threshold = static_cast<uint32_t>(thr);
         }
         size_t vcode_size = 0;
+        std::vector<LineMapEntry> vcode_lines;
         uint8_t *vcode =
             vreg_compile(*compile_ir, *g_code_cache, mc_opts.resolve_user_fn,
                          vent, mc_opts.resolve_native_fn, mc_sym_res,
-                         &vcode_size);
+                         &vcode_size, &vcode_lines);
         g_vreg_compiling_method = nullptr;
         if (vcode != nullptr) {
             method->jit_code = reinterpret_cast<void *>(vcode);
             if (method->code_vaddr != 0)
                 register_jit_code_at_pc(method->code_vaddr,
                                         reinterpret_cast<void *>(vcode),
-                                        vcode_size);
+                                        vcode_size, &vcode_lines);
             ++g_jit_compiled_count;
             if (g_jit_warn_unsupported)
                 std::fprintf(stderr, "[jit-vreg] compilado '%s'\n", key.c_str());
@@ -1956,10 +1959,10 @@ bool lookup_line_by_native_pc(uint64_t native_pc, uint32_t &out_line) noexcept {
     return false;
 }
 
-void register_jit_code_at_pc(uint64_t vaddr, void *fn,
-                             size_t code_size) noexcept {
+void register_jit_code_at_pc(uint64_t vaddr, void *fn, size_t code_size,
+                             const std::vector<LineMapEntry> *line_map) noexcept {
     if (!fn) return;
-    if (code_size != 0) register_jit_region(vaddr, fn, code_size);
+    if (code_size != 0) register_jit_region(vaddr, fn, code_size, line_map);
     if (vaddr == 0) return;
     std::lock_guard<std::mutex> lk(g_pc_jit_mtx);
     g_pc_to_jit_code[vaddr] = fn;
