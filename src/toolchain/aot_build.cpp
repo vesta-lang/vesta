@@ -1628,7 +1628,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     nopts.fisa = aot_fisa;
                     // Con info de depuracion, tambien la correlacion con el
                     // fuente.  No cambia ni un byte de lo emitido.
-                    nopts.want_line_map = (opt.debug_level >= 1);
+                    nopts.want_line_map = (opt.lang_debug_level >= 1);
                     aot::NativeCompileResult ncr =
                         native_backend->compile_function(*itf->second, nopts);
                     af.bytes = std::move(ncr.bytes);
@@ -2468,7 +2468,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
              * depura, y lo que veria un depurador externo o un desensamblador
              * ya no seria lo que se compilo. */
             auto soltar_acompanante = [&](const std::string &destino) {
-                if (opt.debug_level < 1) return;
+                if (opt.lang_debug_level < 1) return;
                 std::vector<std::string> nombres;
                 std::vector<std::vector<PuntoAcompanante>> puntos;
                 nombres.reserve(compiled.size());

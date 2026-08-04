@@ -56,7 +56,13 @@ struct AotOptions {
     ///   2 = + tabla de lineas (fuente<->PC)  [futuro: DWARF .debug_line].
     ///   3 = + variables locales/tipos        [futuro: DWARF .debug_info].
     /// Los niveles 2-3 se construyen sobre el mismo mapa nombre->VA del nivel 1.
-    int debug_level = 0;              ///< --aot-debug=N (0..3).
+    /// Eje DWARF de `--debug-info`: symtab y (manana) `.debug_line`.  Lo
+    /// consumen depuradores y desensambladores AJENOS.
+    int debug_level = 0;
+    /// Eje del LENGUAJE de `--debug-info` (la parte tras el punto): el fichero
+    /// acompanante `.vxdbg`.  Va aparte porque son mecanismos distintos y el
+    /// nuestro no puede contaminar al otro: no toca el binario.
+    int lang_debug_level = 0;
 };
 
 /**

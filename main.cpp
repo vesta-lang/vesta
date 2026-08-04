@@ -691,12 +691,20 @@ int main(int argc, char *argv[]) {
             "32-bit).",
             cxxopts::value<std::string>()->default_value("x86-64"))(
             "debug-info",
-            "Nivel de info de depuracion (flag UNIVERSAL, todos los targets): "
-            "0=ninguna (default, cero coste) | 1=simbolos de funcion (AOT: "
-            ".symtab/COFF en ELF/PE/.o/.so/.dll -> backtraces con nombres en "
-            "gdb/WinDbg/lldb/valgrind) | 2=+lineas (futuro) | 3=+variables "
-            "(futuro).",
-            cxxopts::value<int>()->default_value("0"))(
+            "Nivel de info de depuracion (flag UNIVERSAL, todos los targets).  "
+            "Un eje por MECANISMO, separados por punto: <dwarf>[.<lenguaje>].  "
+            "Son cosas distintas y se piden por separado -- el primero lo "
+            "consumen depuradores y desensambladores AJENOS (gdb, WinDbg, "
+            "lldb, valgrind), el segundo es el nuestro.  "
+            "DWARF: 0=ninguna (default, cero coste) | 1=simbolos de funcion "
+            "(.symtab/COFF en ELF/PE/.o/.so/.dll) | 2=+lineas (futuro) | "
+            "3=+variables (futuro).  "
+            "LENGUAJE: 0=ninguna (default) | 1=fichero acompanante .vxdbg con "
+            "funcion, linea, columna y tramo (NO toca el binario: el codigo "
+            "emitido es el mismo byte a byte).  "
+            "Ejemplos: 1 (=1.0, solo DWARF, como siempre) | 0.1 (solo el "
+            "nuestro) | 1.1 (los dos).",
+            cxxopts::value<std::string>()->default_value("0"))(
             "float-isa",
             "AOT: backend de punto flotante / ancho SIMD del vectorizador: "
             "sse2 (default, 128b, corre en CUALQUIER x86-64) | x87 (legacy) | "
@@ -3674,7 +3682,36 @@ int main(int argc, char *argv[]) {
             aopt.no_mem = aot_no_mem;
             aopt.arch = result["aot-arch"].as<std::string>();
             aopt.float_isa = result["float-isa"].as<std::string>();
-            aopt.debug_level = result["debug-info"].as<int>();
+            {
+                /* Un eje por MECANISMO, separados por punto.  Se parte la
+                 * CADENA y no se lee como numero en coma flotante: 0.1 y 2.1
+                 * no son exactos en binario -- 2.1 es 2.0999999... -- y
+                 * extraer el digito de ahi da sustos.  Ademas asi se puede
+                 * anadir un tercer eje manana (`1.2.3`), que como flotante ni
+                 * siquiera seria expresable.
+                 *
+                 * Un entero suelto sigue siendo lo de siempre: nivel DWARF, y
+                 * el resto de ejes a cero. */
+                const std::string niveles =
+                    result["debug-info"].as<std::string>();
+                size_t desde = 0;
+                int eje = 0;
+                while (desde <= niveles.size() && eje < 2) {
+                    const size_t punto = niveles.find('.', desde);
+                    const std::string parte =
+                        niveles.substr(desde, punto == std::string::npos
+                                                  ? std::string::npos
+                                                  : punto - desde);
+                    const int v = parte.empty() ? 0 : std::atoi(parte.c_str());
+                    if (eje == 0)
+                        aopt.debug_level = v;      // DWARF / symtab
+                    else
+                        aopt.lang_debug_level = v; // el nuestro
+                    ++eje;
+                    if (punto == std::string::npos) break;
+                    desde = punto + 1;
+                }
+            }
             if (result.count("format"))
                 aopt.format = result["format"].as<std::string>();
             if (result.count("emit"))
