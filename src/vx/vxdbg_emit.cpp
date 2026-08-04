@@ -476,6 +476,18 @@ vxdbg::FileId emit_file(vxdbg::NodeStore &store, const std::string &path,
     f.encoding = "utf-8";
     // El resumen del contenido es lo que permite luego detectar que el fuente
     // ya no es el que se compilo, y no ensenar la linea equivocada.
+    /* Se resume lo que se COMPILO, que es el texto ya preprocesado.
+     * Resumir el fichero de disco seria lo natural -- es lo que se ensena --
+     * pero sus lineas NO son las mismas: el preprocesador quita comentarios y
+     * expande macros, y los numeros que viajan son los del texto resultante.
+     * Con el resumen del fichero, uno con documentacion pasa la comprobacion y
+     * despues se ensena la linea equivocada.
+     *
+     * Esto NO es la solucion: lo correcto es que cada linea lleve su
+     * PROCEDENCIA -- de que fichero y linea salio, y de que expansion de macro
+     * si vino de una -- porque con codigo expandido ni siquiera existe una
+     * linea del fichero que ensenar.  Hasta entonces, esto al menos no
+     * miente. */
     if (!content.empty())
         f.checksum = vxdbg::hash_bytes(content.data(), content.size());
     vxdbg::ContentHash h;

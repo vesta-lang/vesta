@@ -483,6 +483,7 @@ static vxdbg::SourceExtent span_for(ProcessVM *vm, const std::string &symbol,
         (symbol.rfind("code.", 0) == 0) ? symbol.substr(5) : symbol, line);
 }
 
+
 static const std::string *symbol_for_pc(ProcessVM *vm, uint64_t pc,
                                         uint64_t &out_off) {
     const std::string *best = nullptr;
