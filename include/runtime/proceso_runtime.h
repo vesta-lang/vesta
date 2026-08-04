@@ -869,6 +869,17 @@ class ProcessVM {
     /// arriba.  Guardando por donde iba esa pila se puede recorrer igual.
     uint64_t pending_fault_native_sp = 0;
 
+    /// Registros generales del anfitrion en el momento del fallo, en el orden
+    /// de la codificacion x86-64 (rax, rcx, rdx, rbx, rsp, rbp, rsi, rdi,
+    /// r8..r15).  Solo valen si @c pending_fault_native_regs_ok.
+    ///
+    /// El sistema entrega el contexto entero al avisar del fallo y se estaba
+    /// tirando todo menos el PC: sin ellos, el desensamblado del codigo nativo
+    /// dice QUE instruccion revento pero no CON QUE, que es justo lo que
+    /// explica el fallo.
+    uint64_t pending_fault_native_regs[16] = {};
+    bool pending_fault_native_regs_ok = false;
+
     /// Direccion por la que ARRANCO este proceso.
     ///
     /// Es el fondo de su cadena de llamadas y no tiene direccion de retorno

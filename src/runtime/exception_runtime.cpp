@@ -789,15 +789,48 @@ static std::vector<std::string> ir_window_at(ProcessVM *vm,
  * @param despues Cuantas despues.
  * @return Las lineas de texto, con la culpable marcada.
  */
-static std::vector<std::string> native_window(uint64_t pc_fallo, size_t antes,
-                                              size_t despues) {
+/**
+ * @brief Indice del banco (orden x86-64) de un registro de Capstone.
+ *
+ * Capstone nombra tambien las mitades (`eax`, `r11d`, `al`): todas viven en el
+ * mismo registro de 64 bits, que es el que se guardo.
+ *
+ * @param r Identificador de Capstone.
+ * @return 0..15, o -1 si no es un registro general.
+ */
+static int indice_de_reg_x86(unsigned r) {
+    switch (r) {
+    case X86_REG_RAX: case X86_REG_EAX: case X86_REG_AX: case X86_REG_AL: return 0;
+    case X86_REG_RCX: case X86_REG_ECX: case X86_REG_CX: case X86_REG_CL: return 1;
+    case X86_REG_RDX: case X86_REG_EDX: case X86_REG_DX: case X86_REG_DL: return 2;
+    case X86_REG_RBX: case X86_REG_EBX: case X86_REG_BX: case X86_REG_BL: return 3;
+    case X86_REG_RSP: case X86_REG_ESP: return 4;
+    case X86_REG_RBP: case X86_REG_EBP: return 5;
+    case X86_REG_RSI: case X86_REG_ESI: case X86_REG_SI: return 6;
+    case X86_REG_RDI: case X86_REG_EDI: case X86_REG_DI: return 7;
+    case X86_REG_R8: case X86_REG_R8D: return 8;
+    case X86_REG_R9: case X86_REG_R9D: return 9;
+    case X86_REG_R10: case X86_REG_R10D: return 10;
+    case X86_REG_R11: case X86_REG_R11D: return 11;
+    case X86_REG_R12: case X86_REG_R12D: return 12;
+    case X86_REG_R13: case X86_REG_R13D: return 13;
+    case X86_REG_R14: case X86_REG_R14D: return 14;
+    case X86_REG_R15: case X86_REG_R15D: return 15;
+    default: return -1;
+    }
+}
+
+static std::vector<std::string> native_window(ProcessVM *vm, uint64_t pc_fallo,
+                                              size_t antes, size_t despues) {
     std::vector<std::string> out;
     uint64_t inicio = 0, tam = 0;
     if (!jit::lookup_region_by_native_pc(pc_fallo, inicio, tam)) return out;
 
     csh h;
     if (cs_open(CS_ARCH_X86, CS_MODE_64, &h) != CS_ERR_OK) return out;
-    cs_option(h, CS_OPT_DETAIL, CS_OPT_OFF);
+    // Con detalle: hace falta para saber que registros LEE la que fallo y
+    // poder decir cuanto valian.
+    cs_option(h, CS_OPT_DETAIL, CS_OPT_ON);
     cs_insn *ins = nullptr;
     const size_t n =
         cs_disasm(h, reinterpret_cast<const uint8_t *>(inicio), (size_t)tam,
@@ -823,10 +856,36 @@ static std::vector<std::string> native_window(uint64_t pc_fallo, size_t antes,
     for (size_t i = desde; i < hasta; ++i) {
         // Relativo al principio de la funcion: la direccion absoluta cambia en
         // cada ejecucion y no dice nada.
-        std::snprintf(buf, sizeof(buf), "%s +0x%llx  %-8s %s",
-                      (i == culpable) ? ">" : " ",
-                      (unsigned long long)(ins[i].address - inicio),
-                      ins[i].mnemonic, ins[i].op_str);
+        std::string vals;
+        /* De la que fallo, QUE VALIAN los registros que lee.  Solo de esa: los
+         * de las de al lado ya han cambiado o aun no se han calculado. */
+        if (i == culpable && vm->pending_fault_native_regs_ok && ins[i].detail) {
+            cs_regs leidos, escritos;
+            uint8_t n_l = 0, n_e = 0;
+            if (cs_regs_access(h, &ins[i], leidos, &n_l, escritos, &n_e) == 0) {
+                for (uint8_t k = 0; k < n_l; ++k) {
+                    const int idx = indice_de_reg_x86(leidos[k]);
+                    if (idx < 0) continue;
+                    char vb[48];
+                    std::snprintf(
+                        vb, sizeof(vb), "%s%s=0x%llx", vals.empty() ? "" : " ",
+                        cs_reg_name(h, leidos[k]),
+                        (unsigned long long)vm->pending_fault_native_regs[idx]);
+                    vals += vb;
+                }
+            }
+        }
+        if (vals.empty()) {
+            std::snprintf(buf, sizeof(buf), "%s +0x%llx  %-8s %s",
+                          (i == culpable) ? ">" : " ",
+                          (unsigned long long)(ins[i].address - inicio),
+                          ins[i].mnemonic, ins[i].op_str);
+        } else {
+            std::snprintf(buf, sizeof(buf), "%s +0x%llx  %-8s %-24s%s",
+                          (i == culpable) ? ">" : " ",
+                          (unsigned long long)(ins[i].address - inicio),
+                          ins[i].mnemonic, ins[i].op_str, vals.c_str());
+        }
         out.push_back(buf);
     }
     cs_free(ins, n);
@@ -1334,7 +1393,7 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
                  * maquina virtual seria darlas por ejecutadas. */
                 const std::vector<std::string> maq =
                     desde_compilado
-                        ? native_window(vm->pending_fault_native_pc, 3, 4)
+                        ? native_window(vm, vm->pending_fault_native_pc, 3, 4)
                         : bytecode_window(vm, cur_pc - off_top, cur_pc, 3, 4);
                 if (!maq.empty()) {
                     append_str("      maquina:\n");
@@ -1901,6 +1960,16 @@ static LONG WINAPI vx_av_veh(EXCEPTION_POINTERS *info) {
         proc->pending_fault_native_pc = (uint64_t)info->ContextRecord->Rip;
         // Y por donde iba la pila NATIVA: los marcos de la cadena viven ahi.
         proc->pending_fault_native_sp = (uint64_t)info->ContextRecord->Rsp;
+        /* Y el resto del banco, en el orden de la codificacion x86-64.  El
+         * sistema lo entrega entero; quedarse solo con el PC obliga despues a
+         * ensenar que instruccion revento sin poder decir con que valores. */
+        const CONTEXT *c = info->ContextRecord;
+        const uint64_t banco[16] = {c->Rax, c->Rcx, c->Rdx, c->Rbx,
+                                    c->Rsp, c->Rbp, c->Rsi, c->Rdi,
+                                    c->R8,  c->R9,  c->R10, c->R11,
+                                    c->R12, c->R13, c->R14, c->R15};
+        for (int k = 0; k < 16; ++k) proc->pending_fault_native_regs[k] = banco[k];
+        proc->pending_fault_native_regs_ok = true;
 #elif defined(_M_IX86) || defined(__i386__)
         proc->pending_fault_native_pc = (uint64_t)info->ContextRecord->Eip;
         proc->pending_fault_native_sp = (uint64_t)info->ContextRecord->Esp;
