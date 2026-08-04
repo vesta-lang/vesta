@@ -1413,13 +1413,13 @@ std::vector<uint8_t> Linker::build_executable() {
             // Escribir debug_level (1 byte) directamente en el buffer.
             if (header_pos_debug_level < result->output.size()) {
                 result->output[header_pos_debug_level] =
-                    static_cast<uint8_t>(debug::DEBUG_LEVEL_LINES);
+                    static_cast<uint8_t>(debug::DEBUG_LEVEL_FULL);
             }
 
             final_header.offset_debug_section = debug_section_offset;
             final_header.size_debug_section =
                 static_cast<uint32_t>(debug_section_total);
-            final_header.debug_level = debug::DEBUG_LEVEL_LINES;
+            final_header.debug_level = debug::DEBUG_LEVEL_FULL;
         }
     }
 

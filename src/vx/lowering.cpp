@@ -3542,7 +3542,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         uw.dst = v_new;
         uw.operands = {v_old};
         uw.source_line = p->loc.line;
-        fn_->append(current_block_, std::move(uw));
+        emit(current_block_, std::move(uw));
         // Re-bind: futuros usos de p->name resuelven al valor unwrapped.
         if (fn_->values[v_old].is_host_ptr) {
             fn_->values[v_new].is_host_ptr = true;
@@ -3968,7 +3968,7 @@ void Lowering::lower_stmt(ast::Stmt *s) {
         br.op = ir::IrOp::BR;
         br.target_block = lt.break_bb;
         br.source_line = s->loc.line;
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
         fn_->blocks[current_block_].succs.push_back(lt.break_bb);
         fn_->blocks[lt.break_bb].preds.push_back(current_block_);
         block_terminated_ = true;
@@ -3989,7 +3989,7 @@ void Lowering::lower_stmt(ast::Stmt *s) {
         br.op = ir::IrOp::BR;
         br.target_block = lt.continue_bb;
         br.source_line = s->loc.line;
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
         fn_->blocks[current_block_].succs.push_back(lt.continue_bb);
         fn_->blocks[lt.continue_bb].preds.push_back(current_block_);
         block_terminated_ = true;
@@ -4028,7 +4028,7 @@ void Lowering::lower_stmt(ast::Stmt *s) {
             br.op = ir::IrOp::BR;
             br.target_block = lab_bb;
             br.source_line = ls->loc.line;
-            fn_->append(current_block_, std::move(br));
+            emit(current_block_, std::move(br));
             fn_->blocks[current_block_].succs.push_back(lab_bb);
             fn_->blocks[lab_bb].preds.push_back(current_block_);
         }
@@ -4056,7 +4056,7 @@ void Lowering::lower_stmt(ast::Stmt *s) {
         br.op = ir::IrOp::BR;
         br.target_block = lab_bb;
         br.source_line = gs->loc.line;
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
         fn_->blocks[current_block_].succs.push_back(lab_bb);
         fn_->blocks[lab_bb].preds.push_back(current_block_);
         block_terminated_ = true;
@@ -4100,7 +4100,7 @@ void Lowering::emit_zero_fill(ir::IrValueId addr, uint64_t size_bytes,
             ad.dst = v_addr;
             ad.operands = {addr, v_off};
             ad.source_line = line;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
         }
         ir::IrValueId v_zero = emit_const(ty, 0, line);
         ir::IrInstr st{};
@@ -4109,7 +4109,7 @@ void Lowering::emit_zero_fill(ir::IrValueId addr, uint64_t size_bytes,
         st.dst = ir::IR_NO_VALUE;
         st.operands = {v_zero, v_addr};
         st.source_line = line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     };
     /* A partir de cierto tamano se EMITE EL HECHO (`memset`) en vez de
      * desplegarlo.  Desplegar destruye la semantica "esta region se pone a
@@ -4134,7 +4134,7 @@ void Lowering::emit_zero_fill(ir::IrValueId addr, uint64_t size_bytes,
         ms.dst = ir::IR_NO_VALUE;
         ms.operands = {addr, v_val, v_len};
         ms.source_line = line;
-        fn_->append(current_block_, std::move(ms));
+        emit(current_block_, std::move(ms));
         return;
     }
 
@@ -4280,7 +4280,7 @@ ir::IrValueId Lowering::emit_folded_string_blob(const std::string &utf8,
     is.dst = v;
     is.imm = slot;
     is.source_line = line;
-    fn_->append(current_block_, std::move(is));
+    emit(current_block_, std::move(is));
     fn_->values[v].is_host_ptr = true; // gdata vive en memoria host
     return v;
 }
@@ -4311,7 +4311,7 @@ void Lowering::emit_struct_field_defaults(ir::IrValueId base_addr,
             ad.dst = v_a;
             ad.operands = {base_addr, v_off};
             ad.source_line = line;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
             return v_a;
         };
         if (!fi.default_init) {
@@ -4351,7 +4351,7 @@ void Lowering::emit_struct_field_defaults(ir::IrValueId base_addr,
         st.dst = ir::IR_NO_VALUE;
         st.operands = {v_val, v_addr};
         st.source_line = line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     }
 }
 
@@ -4369,7 +4369,7 @@ ir::IrValueId Lowering::materialize_comptime_struct(const ComptimeEvalResult &r,
     al.dst = v_buf;
     al.host_alloca = true;
     al.source_line = line;
-    fn_->append(current_block_, std::move(al));
+    emit(current_block_, std::move(al));
     fn_->values[v_buf].is_host_ptr = true;
     fill_comptime_struct_into(v_buf, r, lay, line);
     return v_buf;
@@ -4395,7 +4395,7 @@ void Lowering::fill_comptime_struct_into(ir::IrValueId base_addr,
             ad.dst = v_addr;
             ad.operands = {base_addr, v_off};
             ad.source_line = line;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
         }
         if (fi.type.kind == PrimitiveKind::STRUCT && cv.is_struct) {
             // Campo struct anidado: rellenar recursivamente en su direccion.
@@ -4415,7 +4415,7 @@ void Lowering::fill_comptime_struct_into(ir::IrValueId base_addr,
         st.dst = ir::IR_NO_VALUE;
         st.operands = {v_val, v_addr};
         st.source_line = line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     }
 }
 
@@ -4464,7 +4464,7 @@ void Lowering::emit_struct_init_fields(ir::IrValueId base_addr,
             ad.dst = v_addr;
             ad.operands = {base_addr, v_off};
             ad.source_line = line;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
         }
         ast::Expr *elem = il->elements[i].get();
         // Campo de tipo STRUCT inicializado con un init-list ANIDADO
@@ -4531,7 +4531,7 @@ void Lowering::emit_struct_init_fields(ir::IrValueId base_addr,
         st.dst = ir::IR_NO_VALUE;
         st.operands = {v_val, v_addr};
         st.source_line = line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     }
 }
 
@@ -4582,7 +4582,7 @@ void Lowering::lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type) {
         is.dst = a;
         is.imm = s;
         is.source_line = ln;
-        fn_->append(current_block_, std::move(is));
+        emit(current_block_, std::move(is));
         fn_->values[a].is_host_ptr = true; // gdata vive en memoria host
         return a;
     };
@@ -4597,7 +4597,7 @@ void Lowering::lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type) {
         l.dst = done_val;
         l.operands = {addr_done};
         l.source_line = ln;
-        fn_->append(current_block_, std::move(l));
+        emit(current_block_, std::move(l));
     }
     // cond = (done_val == 0)
     const ir::IrValueId zero = emit_const(ir::IrType::I64, 0, ln);
@@ -4609,7 +4609,7 @@ void Lowering::lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type) {
         c.dst = cond;
         c.operands = {done_val, zero};
         c.source_line = ln;
-        fn_->append(current_block_, std::move(c));
+        emit(current_block_, std::move(c));
     }
     const ir::IrBlockId init_bb = fn_->new_block("static_init");
     const ir::IrBlockId cont_bb = fn_->new_block("static_cont");
@@ -4620,7 +4620,7 @@ void Lowering::lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type) {
         br.target_block = init_bb;
         br.false_block = cont_bb;
         br.source_line = ln;
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
     }
     fn_->blocks[current_block_].succs.push_back(init_bb);
     fn_->blocks[current_block_].succs.push_back(cont_bb);
@@ -4678,7 +4678,7 @@ void Lowering::lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type) {
                     ad.dst = v_s;
                     ad.operands = {v_src, v_off};
                     ad.source_line = ln;
-                    fn_->append(current_block_, std::move(ad));
+                    emit(current_block_, std::move(ad));
                 }
                 const ir::IrValueId v_w = fn_->new_value(ir::IrType::I64);
                 {
@@ -4688,7 +4688,7 @@ void Lowering::lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type) {
                     l2.dst = v_w;
                     l2.operands = {v_s};
                     l2.source_line = ln;
-                    fn_->append(current_block_, std::move(l2));
+                    emit(current_block_, std::move(l2));
                 }
                 const ir::IrValueId v_d = fn_->new_value(ir::IrType::PTR);
                 fn_->values[v_d].is_host_ptr = true; // gdata = memoria host
@@ -4699,7 +4699,7 @@ void Lowering::lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type) {
                     ad.dst = v_d;
                     ad.operands = {var_addr, v_off};
                     ad.source_line = ln;
-                    fn_->append(current_block_, std::move(ad));
+                    emit(current_block_, std::move(ad));
                 }
                 {
                     ir::IrInstr st2{};
@@ -4707,7 +4707,7 @@ void Lowering::lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type) {
                     st2.type = ir::IrType::I64;
                     st2.operands = {v_w, v_d};
                     st2.source_line = ln;
-                    fn_->append(current_block_, std::move(st2));
+                    emit(current_block_, std::move(st2));
                 }
             }
             emit_struct_field_defaults(var_addr, *agg_lay, ln,
@@ -4726,7 +4726,7 @@ void Lowering::lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type) {
             st.type = ld;
             st.operands = {iv, var_addr};
             st.source_line = ln;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
     }
     {
@@ -4737,14 +4737,14 @@ void Lowering::lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type) {
         st.type = ir::IrType::I64;
         st.operands = {one, addr_done2};
         st.source_line = ln;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     }
     {
         ir::IrInstr br{};
         br.op = ir::IrOp::BR;
         br.target_block = cont_bb;
         br.source_line = ln;
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
     }
     fn_->blocks[init_bb].succs.push_back(cont_bb);
     fn_->blocks[cont_bb].preds.push_back(init_bb);
@@ -4939,7 +4939,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
          * VM mata el proceso en cuanto se recorre. */
         al.host_alloca = true;
         fn_->values[addr].is_host_ptr = true;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
         const ir::IrType ir_elem = ir_type_from_primitive(elem_t.kind);
         for (size_t i = 0; i < il->elements.size(); ++i) {
             ir::IrValueId v_val = lower_expr(il->elements[i].get());
@@ -4968,7 +4968,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 ad.dst = v_addr_i;
                 ad.operands = {addr, v_off};
                 ad.source_line = vd->loc.line;
-                fn_->append(current_block_, std::move(ad));
+                emit(current_block_, std::move(ad));
             }
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
@@ -4976,7 +4976,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
             st.dst = ir::IR_NO_VALUE;
             st.operands = {v_val, v_addr_i};
             st.source_line = vd->loc.line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
         bind(vd->name, addr);
         return;
@@ -5005,7 +5005,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         al.host_alloca = true;
         fn_->values[addr].is_host_ptr = true;
         al.source_line = vd->loc.line;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
         // Seguridad: zero-inicializar TODO el struct antes de escribir los
         // campos listados.  Asi los campos NO presentes en el init-list quedan
         // a 0 (no basura de la pila).  Subsume el zero de los bit fields.
@@ -5039,7 +5039,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 ad.dst = v_addr_w;
                 ad.operands = {addr, v_off};
                 ad.source_line = vd->loc.line;
-                fn_->append(current_block_, std::move(ad));
+                emit(current_block_, std::move(ad));
             }
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
@@ -5047,7 +5047,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
             st.dst = ir::IR_NO_VALUE;
             st.operands = {v_zero, v_addr_w};
             st.source_line = vd->loc.line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
         for (size_t i = 0; i < il->elements.size(); ++i) {
             const StructFieldInfo *fi = nullptr;
@@ -5088,7 +5088,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                     ad.dst = v_faddr;
                     ad.operands = {addr, v_off};
                     ad.source_line = vd->loc.line;
-                    fn_->append(current_block_, std::move(ad));
+                    emit(current_block_, std::move(ad));
                 }
                 auto it_sl = tc_.struct_layouts().find(fi->type.struct_name);
                 if (it_sl == tc_.struct_layouts().end()) {
@@ -5126,7 +5126,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 ad.dst = v_addr;
                 ad.operands = {addr, v_off};
                 ad.source_line = vd->loc.line;
-                fn_->append(current_block_, std::move(ad));
+                emit(current_block_, std::move(ad));
             }
             // Campo AGREGADO inline (struct/array value-type): @c v_val es la
             // DIRECCION del agregado origen -> copia memberwise (qword a
@@ -5173,7 +5173,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 ld.dst = v_old;
                 ld.operands = {v_addr};
                 ld.source_line = vd->loc.line;
-                fn_->append(current_block_, std::move(ld));
+                emit(current_block_, std::move(ld));
                 const uint64_t mask =
                     (fi->bit_width == 64)
                         ? UINT64_MAX
@@ -5188,7 +5188,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                     an.dst = v_clr;
                     an.operands = {v_old, v_inv};
                     an.source_line = vd->loc.line;
-                    fn_->append(current_block_, std::move(an));
+                    emit(current_block_, std::move(an));
                 }
                 ir::IrValueId v_msk = emit_const(ir_ft, mask, vd->loc.line);
                 ir::IrValueId v_tr = fn_->new_value(ir_ft);
@@ -5199,7 +5199,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                     an.dst = v_tr;
                     an.operands = {v_val, v_msk};
                     an.source_line = vd->loc.line;
-                    fn_->append(current_block_, std::move(an));
+                    emit(current_block_, std::move(an));
                 }
                 ir::IrValueId v_sh = v_tr;
                 if (fi->bit_offset > 0) {
@@ -5212,7 +5212,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                     sh.dst = v_sh;
                     sh.operands = {v_tr, v_amt};
                     sh.source_line = vd->loc.line;
-                    fn_->append(current_block_, std::move(sh));
+                    emit(current_block_, std::move(sh));
                 }
                 ir::IrValueId v_new = fn_->new_value(ir_ft);
                 {
@@ -5222,7 +5222,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                     or_.dst = v_new;
                     or_.operands = {v_clr, v_sh};
                     or_.source_line = vd->loc.line;
-                    fn_->append(current_block_, std::move(or_));
+                    emit(current_block_, std::move(or_));
                 }
                 ir::IrInstr st{};
                 st.op = ir::IrOp::STORE;
@@ -5230,7 +5230,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 st.dst = ir::IR_NO_VALUE;
                 st.operands = {v_new, v_addr};
                 st.source_line = vd->loc.line;
-                fn_->append(current_block_, std::move(st));
+                emit(current_block_, std::move(st));
                 continue;
             }
             ir::IrInstr st{};
@@ -5239,7 +5239,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
             st.dst = ir::IR_NO_VALUE;
             st.operands = {v_val, v_addr};
             st.source_line = vd->loc.line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
         bind(vd->name, addr);
         return;
@@ -5274,7 +5274,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 // direccion -- lee unos u otros como basura.
                 eal.host_alloca = true;
                 eal.source_line = vd->loc.line;
-                fn_->append(current_block_, std::move(eal));
+                emit(current_block_, std::move(eal));
                 fn_->values[eaddr].is_host_ptr = true;
                 // La variable es un value-type: se bindea a un SLOT ESTABLE
                 // (@c eaddr, ALLOCA en VM stack) y el inicializador se COPIA
@@ -5339,7 +5339,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         // callee coinciden siempre.  Memoria VM explicita = `VirtualPtr<T>`.
         ins.host_alloca = true;
         const bool struct_is_host = ins.host_alloca;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         if (struct_is_host) fn_->values[addr].is_host_ptr = true;
         bind(vd->name, addr);
         // Seguridad + RAII: zero-inicializar SIEMPRE el buffer del struct.  Un
@@ -5405,7 +5405,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                         ad.dst = v_src_at;
                         ad.operands = {v_src, v_off};
                         ad.source_line = vd->loc.line;
-                        fn_->append(current_block_, std::move(ad));
+                        emit(current_block_, std::move(ad));
                     }
                     // LOAD i64 from src+off
                     const ir::IrValueId v_word =
@@ -5417,7 +5417,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                         ld.dst = v_word;
                         ld.operands = {v_src_at};
                         ld.source_line = vd->loc.line;
-                        fn_->append(current_block_, std::move(ld));
+                        emit(current_block_, std::move(ld));
                     }
                     // dst slot + off.  Su naturaleza se HEREDA del slot: dar
                     // por hecho que es VM hacia que la copia escribiera con
@@ -5434,7 +5434,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                         ad.dst = v_dst_at;
                         ad.operands = {addr, v_off};
                         ad.source_line = vd->loc.line;
-                        fn_->append(current_block_, std::move(ad));
+                        emit(current_block_, std::move(ad));
                     }
                     // STORE i64 [dst+off] = word
                     {
@@ -5443,7 +5443,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                         st.type = ir::IrType::I64;
                         st.operands = {v_word, v_dst_at};
                         st.source_line = vd->loc.line;
-                        fn_->append(current_block_, std::move(st));
+                        emit(current_block_, std::move(st));
                     }
                 }
             }
@@ -5458,7 +5458,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
             cc.operands = {addr}; // this = b (la copia)
             cc.func_name = sem_type.struct_name + "__" + "__clone__";
             cc.source_line = vd->loc.line;
-            fn_->append(current_block_, std::move(cc));
+            emit(current_block_, std::move(cc));
         }
         // Fase 2a interop C / ownership: destructor automatico (RAII) del
         // struct value-type local con `~Struct()` declarado y que NO escapa.
@@ -5554,7 +5554,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
             /* Buffer HOST: ver la nota de las otras rutas de array local. */
             al.host_alloca = true;
             fn_->values[addr].is_host_ptr = true;
-            fn_->append(current_block_, std::move(al));
+            emit(current_block_, std::move(al));
         }
         // STORE byte-a-byte del string.
         for (uint32_t i = 0; i < str_n; ++i) {
@@ -5571,14 +5571,14 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 ad.dst = v_addr_i;
                 ad.operands = {addr, v_off};
                 ad.source_line = vd->loc.line;
-                fn_->append(current_block_, std::move(ad));
+                emit(current_block_, std::move(ad));
             }
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
             st.type = ir_elem;
             st.operands = {v_val, v_addr_i};
             st.source_line = vd->loc.line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
         // Zerificar el resto (semantica C: padding a cero).
         for (uint32_t i = str_n; i < arr_n; ++i) {
@@ -5592,13 +5592,13 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
             ad.dst = v_addr_i;
             ad.operands = {addr, v_off};
             ad.source_line = vd->loc.line;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
             st.type = ir_elem;
             st.operands = {v_zero, v_addr_i};
             st.source_line = vd->loc.line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
         bind(vd->name, addr);
         return;
@@ -5649,7 +5649,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
          * indices constantes el optimizador resolvia los accesos antes. */
         al.host_alloca = true;
         fn_->values[addr].is_host_ptr = true;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
         // STORE de cada elemento.
         const ir::IrType ir_elem = ir_type_from_primitive(elem_t.kind);
         for (size_t i = 0; i < il->elements.size(); ++i) {
@@ -5679,7 +5679,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 ad.dst = v_addr_i;
                 ad.operands = {addr, v_off};
                 ad.source_line = vd->loc.line;
-                fn_->append(current_block_, std::move(ad));
+                emit(current_block_, std::move(ad));
             }
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
@@ -5687,7 +5687,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
             st.dst = ir::IR_NO_VALUE;
             st.operands = {v_val, v_addr_i};
             st.source_line = vd->loc.line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
         bind(vd->name, addr);
         return;
@@ -5721,7 +5721,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         al.host_alloca = true;
         fn_->values[addr].is_host_ptr = true;
         al.source_line = vd->loc.line;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
         // STORE cada campo en su offset (recursivo para structs anidados).
         emit_struct_init_fields(addr, lay, il, vd->loc.line);
         bind(vd->name, addr);
@@ -5774,7 +5774,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         // discrepaban: `sum_array(arr, n)` leia el array con movh sobre una
         // direccion VM.  Un array VM explicito se nombra con `VirtualPtr<T>`.
         ins.host_alloca = true;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         fn_->values[addr].is_host_ptr = true;
         bind(vd->name, addr);
         // Zero-inicializar SIEMPRE el buffer del array local (mismo motivo que
@@ -5842,7 +5842,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         ai.host_alloca = true;
         fn_->values[addr].is_host_ptr = true;
         ai.source_line = vd->loc.line;
-        fn_->append(current_block_, std::move(ai));
+        emit(current_block_, std::move(ai));
         bind(vd->name, addr);
 
         //  AS inc.3: registrar el binding register("reg") -> slot.
@@ -5888,7 +5888,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         st.dst = ir::IR_NO_VALUE;
         st.operands = {v0, addr};
         st.source_line = vd->loc.line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
         return;
     }
 
@@ -5934,7 +5934,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                             al.dst = v_dst;
                             al.imm = slot_bytes;
                             al.source_line = vd->loc.line;
-                            fn_->append(current_block_, std::move(al));
+                            emit(current_block_, std::move(al));
                         }
                         // Emit mvtake [v_dst+0], [v_src+0] (ptr).
                         // Para unique<T> tambien emit mvtake [v_dst+8],
@@ -5956,7 +5956,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                                 add.dst = v_dst8;
                                 add.operands = {v_dst, v_eight};
                                 add.source_line = vd->loc.line;
-                                fn_->append(current_block_, std::move(add));
+                                emit(current_block_, std::move(add));
                             }
                             {
                                 ir::IrInstr add{};
@@ -5965,7 +5965,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                                 add.dst = v_src8;
                                 add.operands = {v_src, v_eight};
                                 add.source_line = vd->loc.line;
-                                fn_->append(current_block_, std::move(add));
+                                emit(current_block_, std::move(add));
                             }
                             emit_mvtake(v_dst8, v_src8, vd->loc.line);
                         }
@@ -6025,7 +6025,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                         al.imm = 24;
                         al.host_alloca = native_poo_;
                         al.source_line = vd->loc.line;
-                        fn_->append(current_block_, std::move(al));
+                        emit(current_block_, std::move(al));
                     }
                     // String Inc 5 (SSO): copiar los 24 bytes via MEMCPY
                     // (no 3 LOAD/STORE i64) -> evita el store-forwarding
@@ -6526,7 +6526,7 @@ bind_and_cleanup:
             ur.operands = {v};
             ur.is_call_site = true;
             ur.source_line = vd->loc.line;
-            fn_->append(current_block_, std::move(ur));
+            emit(current_block_, std::move(ur));
         }
     }
     // Limpiar pending_smartptr_deleter_ tras consumirlo (o si el
@@ -6613,7 +6613,7 @@ void Lowering::lower_if(ast::IfStmt *s) {
     br.target_block = then_bb;
     br.false_block = has_else ? else_bb : merge_bb;
     br.source_line = s->loc.line;
-    fn_->append(current_block_, std::move(br));
+    emit(current_block_, std::move(br));
     // Mantener la CFG explicita para validacion del IR.
     fn_->blocks[current_block_].succs.push_back(then_bb);
     fn_->blocks[current_block_].succs.push_back(has_else ? else_bb : merge_bb);
@@ -6639,7 +6639,7 @@ void Lowering::lower_if(ast::IfStmt *s) {
         brm.op = ir::IrOp::BR;
         brm.target_block = merge_bb;
         brm.source_line = s->loc.line;
-        fn_->append(current_block_, std::move(brm));
+        emit(current_block_, std::move(brm));
         fn_->blocks[current_block_].succs.push_back(merge_bb);
         fn_->blocks[merge_bb].preds.push_back(current_block_);
         block_terminated_ = true;
@@ -6665,7 +6665,7 @@ void Lowering::lower_if(ast::IfStmt *s) {
             brm.op = ir::IrOp::BR;
             brm.target_block = merge_bb;
             brm.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(brm));
+            emit(current_block_, std::move(brm));
             fn_->blocks[current_block_].succs.push_back(merge_bb);
             fn_->blocks[merge_bb].preds.push_back(current_block_);
             block_terminated_ = true;
@@ -6864,7 +6864,7 @@ void Lowering::lower_while(ast::WhileStmt *s) {
         br.op = ir::IrOp::BR;
         br.target_block = header_id;
         br.source_line = s->loc.line;
-        fn_->append(entry_block, std::move(br));
+        emit(entry_block, std::move(br));
     }
     fn_->blocks[entry_block].succs.push_back(header_id);
     fn_->blocks[header_id].preds.push_back(entry_block);
@@ -6880,7 +6880,7 @@ void Lowering::lower_while(ast::WhileStmt *s) {
         phi.dst = vi.phi_value;
         phi.phi_args.push_back({vi.pre_loop, entry_block});
         phi.source_line = s->loc.line;
-        fn_->append(header_id, std::move(phi));
+        emit(header_id, std::move(phi));
         vi.phi_idx = fn_->blocks[header_id].instrs.size() - 1;
         // Dentro del loop, las lecturas de `name` deben ver el valor del PHI.
         update_scope(vi.name, vi.phi_value);
@@ -6909,7 +6909,7 @@ void Lowering::lower_while(ast::WhileStmt *s) {
         brc.target_block = body_id;
         brc.false_block = exit_id;
         brc.source_line = s->loc.line;
-        fn_->append(cond_end_block, std::move(brc));
+        emit(cond_end_block, std::move(brc));
     }
     fn_->blocks[cond_end_block].succs.push_back(body_id);
     fn_->blocks[cond_end_block].succs.push_back(exit_id);
@@ -6963,7 +6963,7 @@ void Lowering::lower_while(ast::WhileStmt *s) {
             br.op = ir::IrOp::BR;
             br.target_block = header_id;
             br.source_line = s->loc.line;
-            fn_->append(body_end_id, std::move(br));
+            emit(body_end_id, std::move(br));
         }
         fn_->blocks[body_end_id].succs.push_back(header_id);
         fn_->blocks[header_id].preds.push_back(body_end_id);
@@ -7148,7 +7148,7 @@ void Lowering::lower_do_while(ast::DoWhileStmt *s) {
         br.op = ir::IrOp::BR;
         br.target_block = body_id;
         br.source_line = s->loc.line;
-        fn_->append(entry_block, std::move(br));
+        emit(entry_block, std::move(br));
     }
     fn_->blocks[entry_block].succs.push_back(body_id);
     fn_->blocks[body_id].preds.push_back(entry_block);
@@ -7163,7 +7163,7 @@ void Lowering::lower_do_while(ast::DoWhileStmt *s) {
         phi.dst = vi.phi_value;
         phi.phi_args.push_back({vi.pre_loop, entry_block});
         phi.source_line = s->loc.line;
-        fn_->append(body_id, std::move(phi));
+        emit(body_id, std::move(phi));
         vi.phi_idx = fn_->blocks[body_id].instrs.size() - 1;
         update_scope(vi.name, vi.phi_value);
     }
@@ -7185,7 +7185,7 @@ void Lowering::lower_do_while(ast::DoWhileStmt *s) {
             br.op = ir::IrOp::BR;
             br.target_block = header_id;
             br.source_line = s->loc.line;
-            fn_->append(body_end_id, std::move(br));
+            emit(body_end_id, std::move(br));
         }
         fn_->blocks[body_end_id].succs.push_back(header_id);
         fn_->blocks[header_id].preds.push_back(body_end_id);
@@ -7220,7 +7220,7 @@ void Lowering::lower_do_while(ast::DoWhileStmt *s) {
         brc.target_block = body_id; // back-edge
         brc.false_block = exit_id;
         brc.source_line = s->loc.line;
-        fn_->append(cond_end_block, std::move(brc));
+        emit(cond_end_block, std::move(brc));
     }
     fn_->blocks[cond_end_block].succs.push_back(body_id);
     fn_->blocks[cond_end_block].succs.push_back(exit_id);
@@ -7354,7 +7354,7 @@ void Lowering::lower_for(ast::ForStmt *s) {
         al.dst = addr;
         al.imm = 8;
         al.source_line = s->loc.line;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
 
         // STORE pre_loop (el VALOR original SSA) al slot.
         ir::IrInstr st{};
@@ -7362,7 +7362,7 @@ void Lowering::lower_for(ast::ForStmt *s) {
         st.type = vi.type;
         st.operands = {pre, addr};
         st.source_line = s->loc.line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
 
         vi.addr = addr;
         vars.push_back(vi);
@@ -7385,7 +7385,7 @@ void Lowering::lower_for(ast::ForStmt *s) {
         br.op = ir::IrOp::BR;
         br.target_block = header_id;
         br.source_line = s->loc.line;
-        fn_->append(entry_block, std::move(br));
+        emit(entry_block, std::move(br));
     }
     fn_->blocks[entry_block].succs.push_back(header_id);
     fn_->blocks[header_id].preds.push_back(entry_block);
@@ -7411,7 +7411,7 @@ void Lowering::lower_for(ast::ForStmt *s) {
         brc.target_block = body_id;
         brc.false_block = exit_id;
         brc.source_line = s->loc.line;
-        fn_->append(cond_end_block, std::move(brc));
+        emit(cond_end_block, std::move(brc));
     }
     fn_->blocks[cond_end_block].succs.push_back(body_id);
     fn_->blocks[cond_end_block].succs.push_back(exit_id);
@@ -7433,7 +7433,7 @@ void Lowering::lower_for(ast::ForStmt *s) {
         brm.op = ir::IrOp::BR;
         brm.target_block = step_id;
         brm.source_line = s->loc.line;
-        fn_->append(body_end_id, std::move(brm));
+        emit(body_end_id, std::move(brm));
         fn_->blocks[body_end_id].succs.push_back(step_id);
         fn_->blocks[step_id].preds.push_back(body_end_id);
     }
@@ -7449,7 +7449,7 @@ void Lowering::lower_for(ast::ForStmt *s) {
         brm.op = ir::IrOp::BR;
         brm.target_block = header_id;
         brm.source_line = s->loc.line;
-        fn_->append(step_end_id, std::move(brm));
+        emit(step_end_id, std::move(brm));
         fn_->blocks[step_end_id].succs.push_back(header_id);
         fn_->blocks[header_id].preds.push_back(step_end_id);
     }
@@ -7483,7 +7483,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
         jc.func_name = "__vx_thread_join_all";
         jc.is_call_site = true;
         jc.source_line = s->loc.line;
-        fn_->append(current_block_, std::move(jc));
+        emit(current_block_, std::move(jc));
     }
     // sret: si la funcion declara devolver Optional/Result, no
     // emitimos un RET con valor; en cambio:
@@ -7558,7 +7558,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
             ret.op = ir::IrOp::RET;
             ret.type = ir::IrType::VOID;
             ret.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(ret));
+            emit(current_block_, std::move(ret));
             block_terminated_ = true;
             return;
         }
@@ -7598,7 +7598,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
                     add.dst = v_src_at;
                     add.operands = {v_local, v_off};
                     add.source_line = s->loc.line;
-                    fn_->append(current_block_, std::move(add));
+                    emit(current_block_, std::move(add));
                 }
                 // Vesta Embed (native_poo_): el value-string fuente vive en
                 // host stack (ALLOCA host) -> propagar is_host_ptr del
@@ -7616,7 +7616,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
                     ld.dst = v_tmp;
                     ld.operands = {v_src_at};
                     ld.source_line = s->loc.line;
-                    fn_->append(current_block_, std::move(ld));
+                    emit(current_block_, std::move(ld));
                 }
                 // dst+off
                 const ir::IrValueId v_off2 =
@@ -7629,7 +7629,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
                     add.dst = v_dst_at;
                     add.operands = {sret_retbuf_, v_off2};
                     add.source_line = s->loc.line;
-                    fn_->append(current_block_, std::move(add));
+                    emit(current_block_, std::move(add));
                 }
                 // BugFix sret-cross-mem (2026-06-04): propagar
                 // is_host_ptr de sret_retbuf_ al v_dst_at para que el
@@ -7647,7 +7647,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
                     st.type = ir::IrType::I64;
                     st.operands = {v_tmp, v_dst_at};
                     st.source_line = s->loc.line;
-                    fn_->append(current_block_, std::move(st));
+                    emit(current_block_, std::move(st));
                 }
             }
             // Vesta Embed (native_poo_): `return <ident_string>` (devolver
@@ -7691,7 +7691,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
         ret.op = ir::IrOp::RET;
         ret.type = ir::IrType::VOID;
         ret.source_line = s->loc.line;
-        fn_->append(current_block_, std::move(ret));
+        emit(current_block_, std::move(ret));
         block_terminated_ = true;
         return;
     }
@@ -7758,7 +7758,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
                 bc.dst = v_bits;
                 bc.operands = {v_payload};
                 bc.source_line = s->loc.line;
-                fn_->append(current_block_, std::move(bc));
+                emit(current_block_, std::move(bc));
                 v_payload = v_bits;
             } else if (pt == ir::IrType::F32) {
                 // f32 -> bits i32 -> zero-extend a i64.
@@ -7769,7 +7769,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
                 bc.dst = v_i32;
                 bc.operands = {v_payload};
                 bc.source_line = s->loc.line;
-                fn_->append(current_block_, std::move(bc));
+                emit(current_block_, std::move(bc));
                 v_payload = cast_if_needed(v_i32, ir::IrType::I32,
                                            ir::IrType::I64, s->loc.line);
             } else if (pt != ir::IrType::I64 && pt != ir::IrType::U64 &&
@@ -7791,13 +7791,13 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
             fu.dst = ir::IR_NO_VALUE;
             fu.operands = {async_fut_id_, v_payload};
             fu.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(fu));
+            emit(current_block_, std::move(fu));
             ir::IrInstr ret{};
             ret.op = ir::IrOp::RET;
             ret.type = ir::IrType::VOID;
             ret.dst = ir::IR_NO_VALUE;
             ret.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(ret));
+            emit(current_block_, std::move(ret));
             block_terminated_ = true;
             return;
         }
@@ -7807,7 +7807,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
         fh.dst = ir::IR_NO_VALUE;
         fh.operands = {async_fut_id_, v_payload};
         fh.source_line = s->loc.line;
-        fn_->append(current_block_, std::move(fh));
+        emit(current_block_, std::move(fh));
         block_terminated_ = true;
         return;
     }
@@ -7829,7 +7829,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
         rr.dst = ir::IR_NO_VALUE;
         rr.operands = {v_payload};
         rr.source_line = s->loc.line;
-        fn_->append(current_block_, std::move(rr));
+        emit(current_block_, std::move(rr));
         block_terminated_ = true;
         return;
     }
@@ -7858,7 +7858,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
     if (v_ret != ir::IR_NO_VALUE) {
         ret.operands.push_back(v_ret);
     }
-    fn_->append(current_block_, std::move(ret));
+    emit(current_block_, std::move(ret));
     block_terminated_ = true;
 }
 
@@ -7894,7 +7894,7 @@ void Lowering::emit_instrument_enter(const std::string &fn_name,
         sa.dst = v_name;
         sa.imm = name_idx;
         sa.source_line = line;
-        fn_->append(current_block_, std::move(sa));
+        emit(current_block_, std::move(sa));
     }
 
     // 3. CALLN void a "vx_trace:enter"(proc_ptr, name_ptr).
@@ -7912,7 +7912,7 @@ void Lowering::emit_instrument_enter(const std::string &fn_name,
     call.func_name = "stdlib/native/runtime/vx_trace:enter";
     call.operands = {v_proc, v_name};
     call.source_line = line;
-    fn_->append(current_block_, std::move(call));
+    emit(current_block_, std::move(call));
 
     // 4. Registrar el import nativo para que el linker .velb
     //    incluya la libreria.
@@ -7935,7 +7935,7 @@ void Lowering::emit_instrument_exit(const std::string &fn_name,
         sa.dst = v_name;
         sa.imm = name_idx;
         sa.source_line = line;
-        fn_->append(current_block_, std::move(sa));
+        emit(current_block_, std::move(sa));
     }
 
     // Si la funcion es void, pasar 0 como return value placeholder.
@@ -7954,7 +7954,7 @@ void Lowering::emit_instrument_exit(const std::string &fn_name,
     call.func_name = "stdlib/native/runtime/vx_trace:leave";
     call.operands = {v_proc, v_name, v_val};
     call.source_line = line;
-    fn_->append(current_block_, std::move(call));
+    emit(current_block_, std::move(call));
 
     out_mod_->register_native_import("stdlib/native/runtime/vx_trace",
                                      "leave");
@@ -8319,7 +8319,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
         al.dst = v_slot;
         al.imm = 8;
         al.source_line = s->loc.line;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
         // STORE entry binding al slot (sera visible en catch via LOAD).
         auto it_e = entry_bindings.find(name);
         if (it_e != entry_bindings.end() && it_e->second != ir::IR_NO_VALUE) {
@@ -8336,7 +8336,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
             st.dst = ir::IR_NO_VALUE;
             st.operands = {it_e->second, v_slot};
             st.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
         try_spill_slots_[name] = v_slot;
     }
@@ -8379,7 +8379,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
             al.imm = 96;
             al.host_alloca = true;
             al.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(al));
+            emit(current_block_, std::move(al));
         }
         // type = 0 (catch-all).  v2: findclass del tipo del catch.
         const ir::IrValueId v_type = emit_const(ir::IrType::I64, 0, s->loc.line);
@@ -8391,7 +8391,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
             cp.func_name = "__vx_push_frame";
             cp.operands = {v_buf, v_type};
             cp.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(cp));
+            emit(current_block_, std::move(cp));
         }
         const ir::IrValueId v_r = fn_->new_value(ir::IrType::I64);
         {
@@ -8402,7 +8402,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
             cs.func_name = "__vx_setjmp";
             cs.operands = {v_buf};
             cs.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(cs));
+            emit(current_block_, std::move(cs));
         }
         // Bloques del dispatch por tipo (type matching v2): tras el setjmp,
         // si el longjmp reanudo (r!=0) saltamos a dispatch_bb que popea el
@@ -8417,7 +8417,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
             br.target_block = dispatch_bb;
             br.false_block = body_bb;
             br.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(br));
+            emit(current_block_, std::move(br));
         }
         fn_->blocks[current_block_].succs.push_back(dispatch_bb);
         fn_->blocks[current_block_].succs.push_back(body_bb);
@@ -8432,7 +8432,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
             c.dst = ir::IR_NO_VALUE;
             c.func_name = name;
             c.source_line = s->loc.line;
-            fn_->append(blk, std::move(c));
+            emit(blk, std::move(c));
         };
         auto emit_i64_call = [&](ir::IrBlockId blk,
                                  const char *name) -> ir::IrValueId {
@@ -8443,7 +8443,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
             c.dst = d;
             c.func_name = name;
             c.source_line = s->loc.line;
-            fn_->append(blk, std::move(c));
+            emit(blk, std::move(c));
             return d;
         };
 
@@ -8470,7 +8470,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
                 br.op = ir::IrOp::BR;
                 br.target_block = handler_bbs[ci];
                 br.source_line = cc.loc.line;
-                fn_->append(cur_check, std::move(br));
+                emit(cur_check, std::move(br));
                 fn_->blocks[cur_check].succs.push_back(handler_bbs[ci]);
                 fn_->blocks[handler_bbs[ci]].preds.push_back(cur_check);
                 cur_check = ir::IR_NO_BLOCK;
@@ -8489,7 +8489,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
                 cm.dst = v_ge;
                 cm.operands = {v_t, v_lo};
                 cm.source_line = cc.loc.line;
-                fn_->append(cur_check, std::move(cm));
+                emit(cur_check, std::move(cm));
             }
             const ir::IrValueId v_le = fn_->new_value(ir::IrType::BOOL);
             {
@@ -8499,7 +8499,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
                 cm.dst = v_le;
                 cm.operands = {v_t, v_hi};
                 cm.source_line = cc.loc.line;
-                fn_->append(cur_check, std::move(cm));
+                emit(cur_check, std::move(cm));
             }
             const ir::IrValueId v_and = fn_->new_value(ir::IrType::BOOL);
             {
@@ -8509,7 +8509,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
                 an.dst = v_and;
                 an.operands = {v_ge, v_le};
                 an.source_line = cc.loc.line;
-                fn_->append(cur_check, std::move(an));
+                emit(cur_check, std::move(an));
             }
             const ir::IrBlockId next_check =
                 (ci + 1 < n_catches) ? fn_->new_block("try_check") : rethrow_bb;
@@ -8519,7 +8519,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
             br.target_block = handler_bbs[ci];
             br.false_block = next_check;
             br.source_line = cc.loc.line;
-            fn_->append(cur_check, std::move(br));
+            emit(cur_check, std::move(br));
             fn_->blocks[cur_check].succs.push_back(handler_bbs[ci]);
             fn_->blocks[cur_check].succs.push_back(next_check);
             fn_->blocks[handler_bbs[ci]].preds.push_back(cur_check);
@@ -8542,7 +8542,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
             th.dst = ir::IR_NO_VALUE;
             th.operands = {v_v, v_ty};
             th.source_line = s->loc.line;
-            fn_->append(rethrow_bb, std::move(th));
+            emit(rethrow_bb, std::move(th));
         }
         goto try_after_entry; // saltar la emision TRYENTER del path VM
     }
@@ -8606,7 +8606,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
                          ? 1u
                          : 0u;
             ra.source_line = cc.loc.line;
-            fn_->append(current_block_, std::move(ra));
+            emit(current_block_, std::move(ra));
         }
     }
 
@@ -8615,7 +8615,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
     br_to_body.op = ir::IrOp::BR;
     br_to_body.target_block = body_bb;
     br_to_body.source_line = s->loc.line;
-    fn_->append(current_block_, std::move(br_to_body));
+    emit(current_block_, std::move(br_to_body));
     fn_->blocks[current_block_].succs.push_back(body_bb);
     fn_->blocks[body_bb].preds.push_back(current_block_);
     // Edges fantasmas a cada handler (alcanzables via excepcion).
@@ -8641,7 +8641,7 @@ try_after_entry:; // destino del salto del path native_poo_ (setjmp ya emitido)
         brm.op = ir::IrOp::BR;
         brm.target_block = merge_bb;
         brm.source_line = line;
-        fn_->append(current_block_, std::move(brm));
+        emit(current_block_, std::move(brm));
         fn_->blocks[current_block_].succs.push_back(merge_bb);
         fn_->blocks[merge_bb].preds.push_back(current_block_);
         block_terminated_ = true;
@@ -8671,7 +8671,7 @@ try_after_entry:; // destino del salto del path native_poo_ (setjmp ya emitido)
             cp.dst = ir::IR_NO_VALUE;
             cp.func_name = "__vx_pop_frame";
             cp.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(cp));
+            emit(current_block_, std::move(cp));
         } else {
             // Sprint 6.D: tryleave por cada catch via IR ops puros.
             for (size_t i = 0; i < n_catches; ++i) {
@@ -8680,7 +8680,7 @@ try_after_entry:; // destino del salto del path native_poo_ (setjmp ya emitido)
                 tl.type = ir::IrType::VOID;
                 tl.dst = ir::IR_NO_VALUE;
                 tl.source_line = s->loc.line;
-                fn_->append(current_block_, std::move(tl));
+                emit(current_block_, std::move(tl));
             }
         }
         emit_finally_then_merge(current_block_, s->loc.line);
@@ -8756,7 +8756,7 @@ try_after_entry:; // destino del salto del path native_poo_ (setjmp ya emitido)
                 tl.type = ir::IrType::VOID;
                 tl.dst = ir::IR_NO_VALUE;
                 tl.source_line = cc.loc.line;
-                fn_->append(current_block_, std::move(tl));
+                emit(current_block_, std::move(tl));
             }
         }
         push_scope();
@@ -8779,7 +8779,7 @@ try_after_entry:; // destino del salto del path native_poo_ (setjmp ya emitido)
                 cg.dst = v_exc;
                 cg.func_name = "__vx_get_value";
                 cg.source_line = cc.loc.line;
-                fn_->append(current_block_, std::move(cg));
+                emit(current_block_, std::move(cg));
                 bind(cc.var_name, v_exc);
             } else {
                 const ir::IrValueId v_exc = fn_->new_value(ir::IrType::PTR);
@@ -8790,7 +8790,7 @@ try_after_entry:; // destino del salto del path native_poo_ (setjmp ya emitido)
                 lp.type = ir::IrType::PTR;
                 lp.dst = v_exc;
                 lp.source_line = cc.loc.line;
-                fn_->append(current_block_, std::move(lp));
+                emit(current_block_, std::move(lp));
                 bind(cc.var_name, v_exc);
             }
         }
@@ -8834,7 +8834,7 @@ try_after_entry:; // destino del salto del path native_poo_ (setjmp ya emitido)
             ld.dst = v_load;
             ld.operands = {v_slot};
             ld.source_line = cc.loc.line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
             // Propagar is_host_ptr / is_gc_object del entry_value
             // si lo tenia, para que el catch maneje host pointers
             // y GC objects correctamente sin perder los flags.
@@ -9009,7 +9009,7 @@ try_after_entry:; // destino del salto del path native_poo_ (setjmp ya emitido)
         ld.dst = v_load;
         ld.operands = {v_slot};
         ld.source_line = s->loc.line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
         // Propagar flags is_host_ptr/is_gc_object del entry value.
         if (it_e != entry_bindings.end() && it_e->second != ir::IR_NO_VALUE &&
             it_e->second < fn_->values.size()) {
@@ -9233,7 +9233,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 cd.operands = std::move(opnds);
                 cd.func_name = it->func_name;
                 cd.source_line = it->source_line;
-                fn_->append(current_block_, std::move(cd));
+                emit(current_block_, std::move(cd));
                 break;
             }
             // Dtor polimorfico (herencia/interfaz): emitir CALLVIRT real
@@ -9247,7 +9247,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             cv.operands = std::move(opnds);
             cv.imm = static_cast<uint64_t>(it->dtor_vtable_index);
             cv.source_line = it->source_line;
-            fn_->append(current_block_, std::move(cv));
+            emit(current_block_, std::move(cv));
             break;
         }
         case CleanupAction::Kind::STRUCT_DTOR: {
@@ -9263,7 +9263,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             cd.operands = std::move(opnds);
             cd.func_name = it->func_name;
             cd.source_line = it->source_line;
-            fn_->append(current_block_, std::move(cd));
+            emit(current_block_, std::move(cd));
             break;
         }
         case CleanupAction::Kind::CLOSURE_ENV_FREE: {
@@ -9303,7 +9303,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                     ld.dst = v_vt;
                     ld.operands = {obj};
                     ld.source_line = it->source_line;
-                    fn_->append(current_block_, std::move(ld));
+                    emit(current_block_, std::move(ld));
                 }
                 ir::IrValueId v_slot = v_vt;
                 if (idx != 0) {
@@ -9319,7 +9319,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                         ad.dst = v_slot;
                         ad.operands = {v_vt, v_off};
                         ad.source_line = it->source_line;
-                        fn_->append(current_block_, std::move(ad));
+                        emit(current_block_, std::move(ad));
                     }
                 }
                 ir::IrValueId v_fn = fn_->new_value(ir::IrType::PTR);
@@ -9331,7 +9331,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                     ld2.dst = v_fn;
                     ld2.operands = {v_slot};
                     ld2.source_line = it->source_line;
-                    fn_->append(current_block_, std::move(ld2));
+                    emit(current_block_, std::move(ld2));
                 }
                 ir::IrInstr ci{};
                 ci.op = ir::IrOp::CALLIND;
@@ -9340,7 +9340,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 ci.func_ptr = v_fn;
                 ci.operands = {obj};
                 ci.source_line = it->source_line;
-                fn_->append(current_block_, std::move(ci));
+                emit(current_block_, std::move(ci));
             } else if (!it->func_name.empty()) {
                 ir::IrInstr dc{};
                 dc.op = ir::IrOp::CALL;
@@ -9349,7 +9349,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 dc.func_name = it->func_name;
                 dc.operands = opnds; // this
                 dc.source_line = it->source_line;
-                fn_->append(current_block_, std::move(dc));
+                emit(current_block_, std::move(dc));
             }
             ir::IrInstr rf{};
             rf.op = ir::IrOp::RAW_FREE;
@@ -9357,7 +9357,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             rf.dst = ir::IR_NO_VALUE;
             rf.operands = std::move(opnds);
             rf.source_line = it->source_line;
-            fn_->append(current_block_, std::move(rf));
+            emit(current_block_, std::move(rf));
             break;
         }
         case CleanupAction::Kind::STRING_FREE: {
@@ -9395,14 +9395,14 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 cp.dst = ir::IR_NO_VALUE;
                 cp.func_name = "__vx_pop_frame";
                 cp.source_line = it->source_line;
-                fn_->append(current_block_, std::move(cp));
+                emit(current_block_, std::move(cp));
             } else {
                 ir::IrInstr tl{};
                 tl.op = ir::IrOp::TRYLEAVE;
                 tl.type = ir::IrType::VOID;
                 tl.dst = ir::IR_NO_VALUE;
                 tl.source_line = it->source_line;
-                fn_->append(current_block_, std::move(tl));
+                emit(current_block_, std::move(tl));
             }
             if (!opnds.empty()) {
                 emit_monitor_op(opnds[0], /*enter=*/false, it->source_line);
@@ -9431,7 +9431,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             cf.func_name = it->func_name;
             cf.operands = std::move(args);
             cf.source_line = it->source_line;
-            fn_->append(current_block_, std::move(cf));
+            emit(current_block_, std::move(cf));
             break;
         }
         case CleanupAction::Kind::SMARTPTR_FREE: {
@@ -9459,7 +9459,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 ld.dst = v_ptr;
                 ld.operands = opnds; // [v_slot]
                 ld.source_line = it->source_line;
-                fn_->append(current_block_, std::move(ld));
+                emit(current_block_, std::move(ld));
             }
 
             // Bug fix bug2: si el inner T es una CLASS Vesta con
@@ -9490,7 +9490,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                     cd.operands = {v_ptr};
                     cd.func_name = it->inner_dtor_func_name; // <Class>____dtor
                     cd.source_line = it->source_line;
-                    fn_->append(current_block_, std::move(cd));
+                    emit(current_block_, std::move(cd));
                 } else {
                     ir::IrInstr cv{};
                     cv.op = ir::IrOp::CALLVIRT;
@@ -9499,7 +9499,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                     cv.operands = {v_ptr};
                     cv.imm = static_cast<uint64_t>(it->inner_dtor_vtable_index);
                     cv.source_line = it->source_line;
-                    fn_->append(current_block_, std::move(cv));
+                    emit(current_block_, std::move(cv));
                 }
             }
             if (it->inner_is_gc_class) {
@@ -9533,7 +9533,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                     fr.dst = ir::IR_NO_VALUE;
                     fr.operands = {v_ptr};
                     fr.source_line = ln;
-                    fn_->append(current_block_, std::move(fr));
+                    emit(current_block_, std::move(fr));
                     break;
                 }
                 // Resto (deleter custom/extern/SRET): guard `if (ptr != 0)`.
@@ -9548,7 +9548,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                     cm.dst = v_cond;
                     cm.operands = {v_ptr, v_z};
                     cm.source_line = ln;
-                    fn_->append(current_block_, std::move(cm));
+                    emit(current_block_, std::move(cm));
                 }
                 {
                     ir::IrInstr br{};
@@ -9559,7 +9559,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                     br.target_block = bb_do;
                     br.false_block = bb_skip;
                     br.source_line = ln;
-                    fn_->append(current_block_, std::move(br));
+                    emit(current_block_, std::move(br));
                     fn_->blocks[current_block_].succs.push_back(bb_do);
                     fn_->blocks[current_block_].succs.push_back(bb_skip);
                     fn_->blocks[bb_do].preds.push_back(current_block_);
@@ -9578,7 +9578,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                     cn.operands = {v_ptr};
                     cn.source_line = ln;
                     cn.is_call_site = true;
-                    fn_->append(current_block_, std::move(cn));
+                    emit(current_block_, std::move(cn));
                 } else if (it->literal_deleter.empty()) {
                     // SRET: deleter dinamico en slot+8.  Si !=0 -> CALLIND;
                     // si ==0 -> RAW_FREE.  Nested guard.
@@ -9594,7 +9594,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                         ad.dst = v_slot8;
                         ad.operands = {opnds[0], v_eight};
                         ad.source_line = ln;
-                        fn_->append(current_block_, std::move(ad));
+                        emit(current_block_, std::move(ad));
                     }
                     const ir::IrValueId v_del =
                         fn_->new_value(ir::IrType::PTR);
@@ -9606,7 +9606,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                         ld.dst = v_del;
                         ld.operands = {v_slot8};
                         ld.source_line = ln;
-                        fn_->append(current_block_, std::move(ld));
+                        emit(current_block_, std::move(ld));
                     }
                     const ir::IrBlockId bb_call = fn_->new_block("sp_call");
                     const ir::IrBlockId bb_free = fn_->new_block("sp_free");
@@ -9620,7 +9620,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                         cm.dst = v_c2;
                         cm.operands = {v_del, v_z2};
                         cm.source_line = ln;
-                        fn_->append(current_block_, std::move(cm));
+                        emit(current_block_, std::move(cm));
                     }
                     {
                         ir::IrInstr br{};
@@ -9631,7 +9631,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                         br.target_block = bb_call;
                         br.false_block = bb_free;
                         br.source_line = ln;
-                        fn_->append(current_block_, std::move(br));
+                        emit(current_block_, std::move(br));
                         fn_->blocks[current_block_].succs.push_back(bb_call);
                         fn_->blocks[current_block_].succs.push_back(bb_free);
                         fn_->blocks[bb_call].preds.push_back(current_block_);
@@ -9648,13 +9648,13 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                         ci.operands = {v_ptr};
                         ci.source_line = ln;
                         ci.is_call_site = true;
-                        fn_->append(current_block_, std::move(ci));
+                        emit(current_block_, std::move(ci));
                         ir::IrInstr br{};
                         br.op = ir::IrOp::BR;
                         br.type = ir::IrType::VOID;
                         br.target_block = bb_skip;
                         br.source_line = ln;
-                        fn_->append(current_block_, std::move(br));
+                        emit(current_block_, std::move(br));
                         fn_->blocks[bb_call].succs.push_back(bb_skip);
                         fn_->blocks[bb_skip].preds.push_back(bb_call);
                     }
@@ -9667,13 +9667,13 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                         fr.dst = ir::IR_NO_VALUE;
                         fr.operands = {v_ptr};
                         fr.source_line = ln;
-                        fn_->append(current_block_, std::move(fr));
+                        emit(current_block_, std::move(fr));
                         ir::IrInstr br{};
                         br.op = ir::IrOp::BR;
                         br.type = ir::IrType::VOID;
                         br.target_block = bb_skip;
                         br.source_line = ln;
-                        fn_->append(current_block_, std::move(br));
+                        emit(current_block_, std::move(br));
                         fn_->blocks[bb_free].succs.push_back(bb_skip);
                         fn_->blocks[bb_skip].preds.push_back(bb_free);
                     }
@@ -9689,7 +9689,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                     ca.operands = {v_ptr};
                     ca.source_line = ln;
                     ca.is_call_site = true;
-                    fn_->append(current_block_, std::move(ca));
+                    emit(current_block_, std::move(ca));
                 }
                 // bb_do -> bb_skip (para extern/vesta; SRET ya retorno).
                 {
@@ -9698,7 +9698,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                     br.type = ir::IrType::VOID;
                     br.target_block = bb_skip;
                     br.source_line = ln;
-                    fn_->append(current_block_, std::move(br));
+                    emit(current_block_, std::move(br));
                     fn_->blocks[bb_do].succs.push_back(bb_skip);
                     fn_->blocks[bb_skip].preds.push_back(bb_do);
                 }
@@ -9722,7 +9722,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                     add.dst = v_slot8;
                     add.operands = {opnds[0], v_eight};
                     add.source_line = it->source_line;
-                    fn_->append(current_block_, std::move(add));
+                    emit(current_block_, std::move(add));
                 }
                 const ir::IrValueId v_del = fn_->new_value(ir::IrType::I64);
                 {
@@ -9732,7 +9732,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                     ldd.dst = v_del;
                     ldd.operands = {v_slot8};
                     ldd.source_line = it->source_line;
-                    fn_->append(current_block_, std::move(ldd));
+                    emit(current_block_, std::move(ldd));
                 }
                 const uint32_t lbl = ++cleanup_label_seq_;
                 const std::string default_lbl =
@@ -9756,7 +9756,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 sf.imm = 0; /* SRET_DISPATCH */
                 sf.source_line = it->source_line;
                 sf.is_call_site = true;
-                fn_->append(current_block_, std::move(sf));
+                emit(current_block_, std::move(sf));
                 (void)done_lbl;
                 (void)default_lbl; /* labels no usadas (emitter las genera) */
             } else if (it->literal_deleter == "free") {
@@ -9767,7 +9767,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 fr.dst = ir::IR_NO_VALUE;
                 fr.operands = {v_ptr};
                 fr.source_line = it->source_line;
-                fn_->append(current_block_, std::move(fr));
+                emit(current_block_, std::move(fr));
             } else if (it->literal_deleter.rfind("@extern:", 0) == 0) {
                 // raw_asm-elim wave 2: SMARTPTR_FREE kind=1 (EXTERN_CALLN).
                 const std::string fn_label =
@@ -9781,7 +9781,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 sf.func_name = fn_label; /* "<lib>:<fn>" */
                 sf.source_line = it->source_line;
                 sf.is_call_site = true;
-                fn_->append(current_block_, std::move(sf));
+                emit(current_block_, std::move(sf));
             } else {
                 // raw_asm-elim wave 2: SMARTPTR_FREE kind=2 (VESTA_CALLVM).
                 ir::IrInstr sf{};
@@ -9793,7 +9793,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 sf.func_name = it->literal_deleter; /* "<fn_label>" */
                 sf.source_line = it->source_line;
                 sf.is_call_site = true;
-                fn_->append(current_block_, std::move(sf));
+                emit(current_block_, std::move(sf));
             }
             break;
         }
@@ -9819,7 +9819,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 ld.dst = v_ctrl;
                 ld.operands = {v_slot};
                 ld.source_line = it->source_line;
-                fn_->append(current_block_, std::move(ld));
+                emit(current_block_, std::move(ld));
             }
             // cmp ctrl, 0  -- si moved/null, skip.
             const ir::IrValueId v_zero =
@@ -9832,7 +9832,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 cmp.dst = v_cmp;
                 cmp.operands = {v_ctrl, v_zero};
                 cmp.source_line = it->source_line;
-                fn_->append(current_block_, std::move(cmp));
+                emit(current_block_, std::move(cmp));
             }
             // br.cond v_cmp, dec_bb, skip_bb.
             const ir::IrBlockId dec_bb = fn_->new_block("sh_dec");
@@ -9844,7 +9844,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 br.target_block = dec_bb;
                 br.false_block = skip_bb;
                 br.source_line = it->source_line;
-                fn_->append(current_block_, std::move(br));
+                emit(current_block_, std::move(br));
                 fn_->blocks[current_block_].succs.push_back(dec_bb);
                 fn_->blocks[current_block_].succs.push_back(skip_bb);
                 fn_->blocks[dec_bb].preds.push_back(current_block_);
@@ -9860,7 +9860,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 ld.dst = v_rc;
                 ld.operands = {v_ctrl};
                 ld.source_line = it->source_line;
-                fn_->append(current_block_, std::move(ld));
+                emit(current_block_, std::move(ld));
             }
             const ir::IrValueId v_one =
                 emit_const(ir::IrType::I64, 1, it->source_line);
@@ -9872,7 +9872,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 sub.dst = v_rc_dec;
                 sub.operands = {v_rc, v_one};
                 sub.source_line = it->source_line;
-                fn_->append(current_block_, std::move(sub));
+                emit(current_block_, std::move(sub));
             }
             {
                 ir::IrInstr st{};
@@ -9880,7 +9880,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 st.type = ir::IrType::I64;
                 st.operands = {v_rc_dec, v_ctrl};
                 st.source_line = it->source_line;
-                fn_->append(current_block_, std::move(st));
+                emit(current_block_, std::move(st));
             }
             // H3 no-GC: si el refcount cayo a 0, liberar el bloque de control
             // (RAW_FREE).  Refcount puro determinista -> sin GC.  cmp rc==0.
@@ -9894,7 +9894,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 cmp.dst = v_is0;
                 cmp.operands = {v_rc_dec, v_zero2};
                 cmp.source_line = it->source_line;
-                fn_->append(current_block_, std::move(cmp));
+                emit(current_block_, std::move(cmp));
             }
             const ir::IrBlockId free_bb = fn_->new_block("sh_free");
             {
@@ -9904,7 +9904,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 br.target_block = free_bb;
                 br.false_block = skip_bb;
                 br.source_line = it->source_line;
-                fn_->append(current_block_, std::move(br));
+                emit(current_block_, std::move(br));
                 fn_->blocks[dec_bb].succs.push_back(free_bb);
                 fn_->blocks[dec_bb].succs.push_back(skip_bb);
                 fn_->blocks[free_bb].preds.push_back(dec_bb);
@@ -9918,14 +9918,14 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 fr.type = ir::IrType::VOID;
                 fr.operands = {v_ctrl};
                 fr.source_line = it->source_line;
-                fn_->append(current_block_, std::move(fr));
+                emit(current_block_, std::move(fr));
             }
             {
                 ir::IrInstr br{};
                 br.op = ir::IrOp::BR;
                 br.target_block = skip_bb;
                 br.source_line = it->source_line;
-                fn_->append(current_block_, std::move(br));
+                emit(current_block_, std::move(br));
                 fn_->blocks[free_bb].succs.push_back(skip_bb);
                 fn_->blocks[skip_bb].preds.push_back(free_bb);
             }
@@ -9953,7 +9953,7 @@ void Lowering::emit_shared_refcount_inc(ir::IrValueId v_slot, uint32_t line) {
         ld.dst = v_ctrl;
         ld.operands = {v_slot};
         ld.source_line = line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
     }
     const ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, line);
     const ir::IrValueId v_cmp = fn_->new_value(ir::IrType::BOOL);
@@ -9964,7 +9964,7 @@ void Lowering::emit_shared_refcount_inc(ir::IrValueId v_slot, uint32_t line) {
         cmp.dst = v_cmp;
         cmp.operands = {v_ctrl, v_zero};
         cmp.source_line = line;
-        fn_->append(current_block_, std::move(cmp));
+        emit(current_block_, std::move(cmp));
     }
     const ir::IrBlockId inc_bb = fn_->new_block("sh_inc");
     const ir::IrBlockId skip_bb = fn_->new_block("sh_inc_skip");
@@ -9975,7 +9975,7 @@ void Lowering::emit_shared_refcount_inc(ir::IrValueId v_slot, uint32_t line) {
         br.target_block = inc_bb;
         br.false_block = skip_bb;
         br.source_line = line;
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
         fn_->blocks[current_block_].succs.push_back(inc_bb);
         fn_->blocks[current_block_].succs.push_back(skip_bb);
         fn_->blocks[inc_bb].preds.push_back(current_block_);
@@ -9990,7 +9990,7 @@ void Lowering::emit_shared_refcount_inc(ir::IrValueId v_slot, uint32_t line) {
         ld.dst = v_rc;
         ld.operands = {v_ctrl};
         ld.source_line = line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
     }
     const ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, line);
     const ir::IrValueId v_rc_inc = fn_->new_value(ir::IrType::I64);
@@ -10001,7 +10001,7 @@ void Lowering::emit_shared_refcount_inc(ir::IrValueId v_slot, uint32_t line) {
         add.dst = v_rc_inc;
         add.operands = {v_rc, v_one};
         add.source_line = line;
-        fn_->append(current_block_, std::move(add));
+        emit(current_block_, std::move(add));
     }
     {
         ir::IrInstr st{};
@@ -10009,14 +10009,14 @@ void Lowering::emit_shared_refcount_inc(ir::IrValueId v_slot, uint32_t line) {
         st.type = ir::IrType::I64;
         st.operands = {v_rc_inc, v_ctrl};
         st.source_line = line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     }
     {
         ir::IrInstr br{};
         br.op = ir::IrOp::BR;
         br.target_block = skip_bb;
         br.source_line = line;
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
         fn_->blocks[inc_bb].succs.push_back(skip_bb);
         fn_->blocks[skip_bb].preds.push_back(inc_bb);
     }
@@ -10039,7 +10039,7 @@ void Lowering::emit_shared_refcount_dec(ir::IrValueId v_slot, uint32_t line) {
         ld.dst = v_ctrl;
         ld.operands = {v_slot};
         ld.source_line = line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
     }
     const ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, line);
     const ir::IrValueId v_cmp = fn_->new_value(ir::IrType::BOOL);
@@ -10050,7 +10050,7 @@ void Lowering::emit_shared_refcount_dec(ir::IrValueId v_slot, uint32_t line) {
         cmp.dst = v_cmp;
         cmp.operands = {v_ctrl, v_zero};
         cmp.source_line = line;
-        fn_->append(current_block_, std::move(cmp));
+        emit(current_block_, std::move(cmp));
     }
     const ir::IrBlockId dec_bb = fn_->new_block("shf_dec");
     const ir::IrBlockId skip_bb = fn_->new_block("shf_skip");
@@ -10061,7 +10061,7 @@ void Lowering::emit_shared_refcount_dec(ir::IrValueId v_slot, uint32_t line) {
         br.target_block = dec_bb;
         br.false_block = skip_bb;
         br.source_line = line;
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
         fn_->blocks[current_block_].succs.push_back(dec_bb);
         fn_->blocks[current_block_].succs.push_back(skip_bb);
         fn_->blocks[dec_bb].preds.push_back(current_block_);
@@ -10076,7 +10076,7 @@ void Lowering::emit_shared_refcount_dec(ir::IrValueId v_slot, uint32_t line) {
         ld.dst = v_rc;
         ld.operands = {v_ctrl};
         ld.source_line = line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
     }
     const ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, line);
     const ir::IrValueId v_rc_dec = fn_->new_value(ir::IrType::I64);
@@ -10087,7 +10087,7 @@ void Lowering::emit_shared_refcount_dec(ir::IrValueId v_slot, uint32_t line) {
         sub.dst = v_rc_dec;
         sub.operands = {v_rc, v_one};
         sub.source_line = line;
-        fn_->append(current_block_, std::move(sub));
+        emit(current_block_, std::move(sub));
     }
     {
         ir::IrInstr st{};
@@ -10095,7 +10095,7 @@ void Lowering::emit_shared_refcount_dec(ir::IrValueId v_slot, uint32_t line) {
         st.type = ir::IrType::I64;
         st.operands = {v_rc_dec, v_ctrl};
         st.source_line = line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     }
     const ir::IrValueId v_is0 = fn_->new_value(ir::IrType::BOOL);
     {
@@ -10105,7 +10105,7 @@ void Lowering::emit_shared_refcount_dec(ir::IrValueId v_slot, uint32_t line) {
         cmp.dst = v_is0;
         cmp.operands = {v_rc_dec, v_zero};
         cmp.source_line = line;
-        fn_->append(current_block_, std::move(cmp));
+        emit(current_block_, std::move(cmp));
     }
     const ir::IrBlockId free_bb = fn_->new_block("shf_free");
     {
@@ -10115,7 +10115,7 @@ void Lowering::emit_shared_refcount_dec(ir::IrValueId v_slot, uint32_t line) {
         br.target_block = free_bb;
         br.false_block = skip_bb;
         br.source_line = line;
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
         fn_->blocks[dec_bb].succs.push_back(free_bb);
         fn_->blocks[dec_bb].succs.push_back(skip_bb);
         fn_->blocks[free_bb].preds.push_back(dec_bb);
@@ -10128,14 +10128,14 @@ void Lowering::emit_shared_refcount_dec(ir::IrValueId v_slot, uint32_t line) {
         fr.type = ir::IrType::VOID;
         fr.operands = {v_ctrl};
         fr.source_line = line;
-        fn_->append(current_block_, std::move(fr));
+        emit(current_block_, std::move(fr));
     }
     {
         ir::IrInstr br{};
         br.op = ir::IrOp::BR;
         br.target_block = skip_bb;
         br.source_line = line;
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
         fn_->blocks[free_bb].succs.push_back(skip_bb);
         fn_->blocks[skip_bb].preds.push_back(free_bb);
     }
@@ -10202,7 +10202,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
             c.func_name = name;
             c.operands = std::move(args);
             c.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(c));
+            emit(current_block_, std::move(c));
         };
 
         // monenter(obj).
@@ -10219,7 +10219,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
             al.imm = 96;
             al.host_alloca = true;
             al.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(al));
+            emit(current_block_, std::move(al));
         }
         const ir::IrValueId v_type0 =
             emit_const(ir::IrType::I64, 0, s->loc.line);
@@ -10233,7 +10233,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
             cs.func_name = "__vx_setjmp";
             cs.operands = {v_buf};
             cs.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(cs));
+            emit(current_block_, std::move(cs));
         }
         {
             ir::IrInstr br{};
@@ -10242,7 +10242,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
             br.target_block = nhandler;
             br.false_block = nbody;
             br.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(br));
+            emit(current_block_, std::move(br));
         }
         fn_->blocks[current_block_].succs.push_back(nhandler);
         fn_->blocks[current_block_].succs.push_back(nbody);
@@ -10272,7 +10272,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
             brm.op = ir::IrOp::BR;
             brm.target_block = nmerge;
             brm.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(brm));
+            emit(current_block_, std::move(brm));
             fn_->blocks[current_block_].succs.push_back(nmerge);
             fn_->blocks[nmerge].preds.push_back(current_block_);
             block_terminated_ = true;
@@ -10295,7 +10295,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
                 c.dst = v_v;
                 c.func_name = "__vx_get_value";
                 c.source_line = s->loc.line;
-                fn_->append(current_block_, std::move(c));
+                emit(current_block_, std::move(c));
             }
             const ir::IrValueId v_ty = fn_->new_value(ir::IrType::I64);
             {
@@ -10305,7 +10305,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
                 c.dst = v_ty;
                 c.func_name = "__vx_get_type";
                 c.source_line = s->loc.line;
-                fn_->append(current_block_, std::move(c));
+                emit(current_block_, std::move(c));
             }
             ir::IrInstr th{};
             th.op = ir::IrOp::THROW;
@@ -10313,7 +10313,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
             th.dst = ir::IR_NO_VALUE;
             th.operands = {v_v, v_ty};
             th.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(th));
+            emit(current_block_, std::move(th));
         }
         block_terminated_ = true;
 
@@ -10365,7 +10365,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
          * capturar un AV -> in-JIT inseguro -> imm=1 (baila a interp). */
         ra.imm = 1u;
         ra.source_line = s->loc.line;
-        fn_->append(current_block_, std::move(ra));
+        emit(current_block_, std::move(ra));
     }
 
     // br body_bb.  Edges fantasmas a handler_bb (alcanzable via excepcion).
@@ -10374,7 +10374,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
         br.op = ir::IrOp::BR;
         br.target_block = body_bb;
         br.source_line = s->loc.line;
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
         fn_->blocks[current_block_].succs.push_back(body_bb);
         fn_->blocks[current_block_].succs.push_back(handler_bb);
         fn_->blocks[body_bb].preds.push_back(current_block_);
@@ -10408,7 +10408,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
             tl.type = ir::IrType::VOID;
             tl.dst = ir::IR_NO_VALUE;
             tl.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(tl));
+            emit(current_block_, std::move(tl));
         }
         emit_monitor_op(v_handle, /*enter=*/false, s->loc.line);
 
@@ -10416,7 +10416,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
         brm.op = ir::IrOp::BR;
         brm.target_block = merge_bb;
         brm.source_line = s->loc.line;
-        fn_->append(current_block_, std::move(brm));
+        emit(current_block_, std::move(brm));
         fn_->blocks[current_block_].succs.push_back(merge_bb);
         fn_->blocks[merge_bb].preds.push_back(current_block_);
         block_terminated_ = true;
@@ -10438,7 +10438,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
         rt.type = ir::IrType::VOID;
         rt.dst = ir::IR_NO_VALUE;
         rt.source_line = s->loc.line;
-        fn_->append(current_block_, std::move(rt));
+        emit(current_block_, std::move(rt));
     }
     block_terminated_ = true; // rethrow es terminador del bloque
 
@@ -10801,7 +10801,7 @@ std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
                 ad.dst = addr;
                 ad.operands = {cap_ptr, off};
                 ad.source_line = loc.line;
-                fn_->append(current_block_, std::move(ad));
+                emit(current_block_, std::move(ad));
             }
             // val = LOAD [addr] (host, qword).
             ir::IrValueId val =
@@ -10821,7 +10821,7 @@ std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
             ld.dst = val;
             ld.operands = {addr};
             ld.source_line = loc.line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
             scopes_.back()[captures[i]] = val;
         }
         // Liberar el struct de capturas (ya leidas a locales).
@@ -10831,7 +10831,7 @@ std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
         fr.dst = ir::IR_NO_VALUE;
         fr.operands = {cap_ptr};
         fr.source_line = loc.line;
-        fn_->append(current_block_, std::move(fr));
+        emit(current_block_, std::move(fr));
     } else {
         // BugFix R3: capturas como params (R1..R12) via spawnargs (ruta VM).
         for (size_t i = 0; i < captures.size(); ++i) {
@@ -10871,7 +10871,7 @@ std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
         h.type = ir::IrType::VOID;
         h.dst = ir::IR_NO_VALUE;
         h.source_line = loc.line;
-        fn_->append(current_block_, std::move(h));
+        emit(current_block_, std::move(h));
         block_terminated_ = true;
     }
 
@@ -10941,7 +10941,7 @@ std::string Lowering::generate_rspawn_helper(ast::BlockStmt *body,
         h.dst = ir::IR_NO_VALUE;
         h.operands = {v_zero};
         h.source_line = loc.line;
-        fn_->append(current_block_, std::move(h));
+        emit(current_block_, std::move(h));
         block_terminated_ = true;
     }
 
@@ -10989,7 +10989,7 @@ ir::IrValueId Lowering::lower_rspawn_expr(ast::RSpawnExpr *e) {
         rs.operands = {v_node, v_pc};
         rs.is_call_site = true;
         rs.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(rs));
+        emit(current_block_, std::move(rs));
     }
     return v_fut;
 }
@@ -11266,7 +11266,7 @@ std::string Lowering::generate_lambda_helper(ast::LambdaExpr *e) {
         rt.op = ir::IrOp::RET;
         rt.type = ir::IrType::VOID;
         rt.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(rt));
+        emit(current_block_, std::move(rt));
         block_terminated_ = true;
     }
 
@@ -11405,7 +11405,7 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
         mc.imm = (e->env_in_heap ? 1ULL : 0ULL) // bit 0: env_kind
                  | (mutable_mask << 1);         // bits 1..16: mutable mask
         mc.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(mc));
+        emit(current_block_, std::move(mc));
     }
 
     // -------------------------------------------------------------
@@ -11470,7 +11470,7 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
         ins.dst = env_addr;
         ins.operands = {v_size};
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
     } else {
         // Stack via ALLOCA (cero overhead, valido si la closure no
         // escapa al scope donde nace).
@@ -11481,7 +11481,7 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
         al.dst = env_addr;
         al.imm = static_cast<uint64_t>(N * 8);
         al.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
     }
 
     // Escribir cada capture en su slot del env (ambos casos: stack y
@@ -11503,7 +11503,7 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
                 ad.dst = addr_i;
                 ad.operands = {env_addr, off};
                 ad.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ad));
+                emit(current_block_, std::move(ad));
             }
             // Si el capture es de un tipo mas estrecho que i64,
             // primero promocionamos a i64 para que el slot sea
@@ -11522,7 +11522,7 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
             st.type = ir::IrType::I64;
             st.operands = {v, addr_i};
             st.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
     }
 
@@ -11547,7 +11547,7 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
         al.dst = fv_addr;
         al.operands = {v_size};
         al.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
     } else {
         ir::IrInstr al{};
         al.op = ir::IrOp::ALLOCA;
@@ -11555,7 +11555,7 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
         al.dst = fv_addr;
         al.imm = 16;
         al.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
     }
 
     // -------------------------------------------------------------
@@ -11572,7 +11572,7 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
         st.type = ir::IrType::I64;
         st.operands = {fn_addr, fv_addr};
         st.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     }
     {
         ir::IrValueId fv_plus_8 = fn_->new_value(ir::IrType::PTR);
@@ -11586,14 +11586,14 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
         ad.dst = fv_plus_8;
         ad.operands = {fv_addr, off8};
         ad.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
 
         ir::IrInstr st{};
         st.op = ir::IrOp::STORE;
         st.type = ir::IrType::I64;
         st.operands = {env_addr, fv_plus_8};
         st.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     }
 
     // El SSA value de la lambda es la direccion del slot de 16 bytes.
@@ -11678,7 +11678,7 @@ void Lowering::emit_enum_copy(ir::IrValueId dst_addr, ir::IrValueId src_addr,
             ad.dst = v_src_at;
             ad.operands = {src_addr, v_off};
             ad.source_line = line;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
         }
         const ir::IrValueId v_word = fn_->new_value(ir::IrType::I64);
         {
@@ -11688,7 +11688,7 @@ void Lowering::emit_enum_copy(ir::IrValueId dst_addr, ir::IrValueId src_addr,
             ld.dst = v_word;
             ld.operands = {v_src_at};
             ld.source_line = line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
         }
         // dst + off (naturaleza del slot destino, tipicamente VM ALLOCA).
         const ir::IrValueId v_dst_at = fn_->new_value(ir::IrType::PTR);
@@ -11700,7 +11700,7 @@ void Lowering::emit_enum_copy(ir::IrValueId dst_addr, ir::IrValueId src_addr,
             ad.dst = v_dst_at;
             ad.operands = {dst_addr, v_off};
             ad.source_line = line;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
         }
         {
             ir::IrInstr st{};
@@ -11708,7 +11708,7 @@ void Lowering::emit_enum_copy(ir::IrValueId dst_addr, ir::IrValueId src_addr,
             st.type = ir::IrType::I64;
             st.operands = {v_word, v_dst_at};
             st.source_line = line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
     }
 }
@@ -11764,7 +11764,7 @@ ir::IrValueId Lowering::lower_enum_constructor(
         ci.dst = c;
         ci.imm = static_cast<uint64_t>(var->int_value);
         ci.source_line = loc.line;
-        fn_->append(current_block_, std::move(ci));
+        emit(current_block_, std::move(ci));
         return c;
     }
 
@@ -11813,7 +11813,7 @@ ir::IrValueId Lowering::lower_enum_constructor(
             bc.dst = v2;
             bc.operands = {v};
             bc.source_line = loc.line;
-            fn_->append(current_block_, std::move(bc));
+            emit(current_block_, std::move(bc));
             v = v2;
         } else if (vt == ir::IrType::F32) {
             // f32: primero ampliar a f64 (preserva el valor), luego
@@ -11826,7 +11826,7 @@ ir::IrValueId Lowering::lower_enum_constructor(
                 ext.dst = vw;
                 ext.operands = {v};
                 ext.source_line = loc.line;
-                fn_->append(current_block_, std::move(ext));
+                emit(current_block_, std::move(ext));
             }
             ir::IrValueId v2 = fn_->new_value(ir::IrType::I64);
             {
@@ -11836,7 +11836,7 @@ ir::IrValueId Lowering::lower_enum_constructor(
                 bc.dst = v2;
                 bc.operands = {vw};
                 bc.source_line = loc.line;
-                fn_->append(current_block_, std::move(bc));
+                emit(current_block_, std::move(bc));
             }
             v = v2;
         } else if (vt != ir::IrType::I64 && vt != ir::IrType::PTR) {
@@ -11855,7 +11855,7 @@ ir::IrValueId Lowering::lower_enum_constructor(
         mv.func_name = enum_name + "." + variant_name;
         mv.imm = static_cast<uint64_t>(var->tag);
         mv.source_line = loc.line;
-        fn_->append(current_block_, std::move(mv));
+        emit(current_block_, std::move(mv));
     }
 
     // 1. ALLOCA slot del enum (size_bytes = 8 + 8*max_payload_fields).
@@ -11869,7 +11869,7 @@ ir::IrValueId Lowering::lower_enum_constructor(
         // Host, como todo agregado (ver lower_var_decl).
         al.host_alloca = true;
         al.source_line = loc.line;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
         fn_->values[addr].is_host_ptr = true;
     }
 
@@ -11882,7 +11882,7 @@ ir::IrValueId Lowering::lower_enum_constructor(
         st.type = ir::IrType::I64;
         st.operands = {tag_v, addr};
         st.source_line = loc.line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     }
 
     // 3. STORE de cada payload arg en offset 8 + 8*i (promovido a i64).
@@ -11902,7 +11902,7 @@ ir::IrValueId Lowering::lower_enum_constructor(
         ad.dst = addr_i;
         ad.operands = {addr, off_v};
         ad.source_line = loc.line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
         // Propagar is_host_ptr del buffer al puntero buf+off (patron
         // is_host_ptr-en-add): el STORE del payload usa la naturaleza del
         // buffer.  No-op hoy (el buffer del constructor es VM stack) pero
@@ -11914,7 +11914,7 @@ ir::IrValueId Lowering::lower_enum_constructor(
         st.type = ir::IrType::I64;
         st.operands = {v, addr_i};
         st.source_line = loc.line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     }
 
     // El SSA value de la expresion es la direccion del slot.
@@ -12046,7 +12046,7 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
             sd.target_block = default_bb;
             sd.jump_targets = std::move(table);
             sd.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(sd));
+            emit(current_block_, std::move(sd));
         }
     }
 
@@ -12068,7 +12068,7 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
                         cm.dst = cmp;
                         cm.operands = {tag_v, tc};
                         cm.source_line = e->loc.line;
-                        fn_->append(current_block_, std::move(cm));
+                        emit(current_block_, std::move(cm));
                         ir::IrBlockId nb = fn_->new_block("s_next");
                         ir::IrInstr br{};
                         br.op = ir::IrOp::BR_COND;
@@ -12076,7 +12076,7 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
                         br.target_block = sw_cases[k].second;
                         br.false_block = nb;
                         br.source_line = e->loc.line;
-                        fn_->append(current_block_, std::move(br));
+                        emit(current_block_, std::move(br));
                         sw_edge(current_block_, sw_cases[k].second);
                         sw_edge(current_block_, nb);
                         current_block_ = nb;
@@ -12085,7 +12085,7 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
                     br.op = ir::IrOp::BR;
                     br.target_block = default_bb;
                     br.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(br));
+                    emit(current_block_, std::move(br));
                     sw_edge(current_block_, default_bb);
                     return;
                 }
@@ -12099,7 +12099,7 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
                 cm.dst = cmp;
                 cm.operands = {tag_v, tc};
                 cm.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(cm));
+                emit(current_block_, std::move(cm));
                 ir::IrBlockId lb = fn_->new_block("s_lt");
                 ir::IrBlockId rb = fn_->new_block("s_ge");
                 ir::IrInstr br{};
@@ -12108,7 +12108,7 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
                 br.target_block = lb;
                 br.false_block = rb;
                 br.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(br));
+                emit(current_block_, std::move(br));
                 sw_edge(current_block_, lb);
                 sw_edge(current_block_, rb);
                 emit_bst(lo, mid, lb);
@@ -12129,14 +12129,14 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
             cm.dst = cmp;
             cm.operands = {a, tc};
             cm.source_line = line;
-            fn_->append(current_block_, std::move(cm));
+            emit(current_block_, std::move(cm));
             ir::IrInstr br{};
             br.op = ir::IrOp::BR_COND;
             br.operands.push_back(cmp);
             br.target_block = target;
             br.false_block = fall;
             br.source_line = line;
-            fn_->append(current_block_, std::move(br));
+            emit(current_block_, std::move(br));
             sw_edge(current_block_, target);
             sw_edge(current_block_, fall);
         };
@@ -12170,7 +12170,7 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
         br.op = ir::IrOp::BR;
         br.target_block = default_bb;
         br.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
         sw_edge(current_block_, default_bb);
     }
 
@@ -12205,7 +12205,7 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
             br.target_block = body_bb;
             br.false_block = gfall;
             br.source_line = arm.loc.line;
-            fn_->append(current_block_, std::move(br));
+            emit(current_block_, std::move(br));
             sw_edge(current_block_, body_bb);
             sw_edge(current_block_, gfall);
             current_block_ = body_bb;
@@ -12220,7 +12220,7 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
             br.op = ir::IrOp::BR;
             br.target_block = merge_bb;
             br.source_line = arm.loc.line;
-            fn_->append(current_block_, std::move(br));
+            emit(current_block_, std::move(br));
             sw_edge(current_block_, merge_bb);
         }
         pop_scope();
@@ -12260,7 +12260,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
         gb.dst = L_v;
         gb.operands = {s_h};
         gb.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(gb));
+        emit(current_block_, std::move(gb));
     }
 
     ssize_t default_arm_idx = -1;
@@ -12321,7 +12321,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
             sd.target_block = default_bb;
             sd.jump_targets = std::move(table);
             sd.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(sd));
+            emit(current_block_, std::move(sd));
         }
     }
     const bool use_bst = sw_cases.size() >= 5;
@@ -12341,7 +12341,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
                         cm.dst = cmp;
                         cm.operands = {h_v, tc};
                         cm.source_line = e->loc.line;
-                        fn_->append(current_block_, std::move(cm));
+                        emit(current_block_, std::move(cm));
                         ir::IrBlockId nb = fn_->new_block("h_next");
                         ir::IrInstr br{};
                         br.op = ir::IrOp::BR_COND;
@@ -12349,7 +12349,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
                         br.target_block = sw_cases[k].second;
                         br.false_block = nb;
                         br.source_line = e->loc.line;
-                        fn_->append(current_block_, std::move(br));
+                        emit(current_block_, std::move(br));
                         sw_edge(current_block_, sw_cases[k].second);
                         sw_edge(current_block_, nb);
                         current_block_ = nb;
@@ -12358,7 +12358,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
                     br.op = ir::IrOp::BR;
                     br.target_block = default_bb;
                     br.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(br));
+                    emit(current_block_, std::move(br));
                     sw_edge(current_block_, default_bb);
                     return;
                 }
@@ -12372,7 +12372,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
                 cm.dst = cmp;
                 cm.operands = {h_v, tc};
                 cm.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(cm));
+                emit(current_block_, std::move(cm));
                 ir::IrBlockId lb = fn_->new_block("h_lt");
                 ir::IrBlockId rb = fn_->new_block("h_ge");
                 ir::IrInstr br{};
@@ -12381,7 +12381,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
                 br.target_block = lb;
                 br.false_block = rb;
                 br.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(br));
+                emit(current_block_, std::move(br));
                 sw_edge(current_block_, lb);
                 sw_edge(current_block_, rb);
                 emit_bst(lo, mid, lb);
@@ -12399,7 +12399,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
             cm.dst = cmp;
             cm.operands = {h_v, tc};
             cm.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(cm));
+            emit(current_block_, std::move(cm));
             ir::IrBlockId nb = fn_->new_block("h_next");
             ir::IrInstr br{};
             br.op = ir::IrOp::BR_COND;
@@ -12407,7 +12407,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
             br.target_block = c.second;
             br.false_block = nb;
             br.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(br));
+            emit(current_block_, std::move(br));
             sw_edge(current_block_, c.second);
             sw_edge(current_block_, nb);
             current_block_ = nb;
@@ -12416,7 +12416,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
         br.op = ir::IrOp::BR;
         br.target_block = default_bb;
         br.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
         sw_edge(current_block_, default_bb);
     }
 
@@ -12444,7 +12444,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
                 sa.dst = lit_ptr;
                 sa.imm = li;
                 sa.source_line = aln;
-                fn_->append(current_block_, std::move(sa));
+                emit(current_block_, std::move(sa));
                 ir::IrValueId lit_len =
                     emit_const(ir::IrType::I64, (uint64_t)sl->value.size(), aln);
                 scmp = emit_strcmp_dispatched(s_ptr, L_v, lit_ptr, lit_len, aln);
@@ -12457,7 +12457,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
                 sc.dst = scmp;
                 sc.operands = {s_h, case_h};
                 sc.source_line = aln;
-                fn_->append(current_block_, std::move(sc));
+                emit(current_block_, std::move(sc));
             }
             ir::IrValueId zero =
                 emit_const(ir::IrType::I64, 0, e->arms[idx].loc.line);
@@ -12469,7 +12469,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
                 cm.dst = eqb;
                 cm.operands = {scmp, zero};
                 cm.source_line = e->arms[idx].loc.line;
-                fn_->append(current_block_, std::move(cm));
+                emit(current_block_, std::move(cm));
             }
             ir::IrBlockId vnext = fn_->new_block("strmatch_vnext");
             ir::IrInstr br{};
@@ -12478,7 +12478,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
             br.target_block = arm_blocks[idx];
             br.false_block = vnext;
             br.source_line = e->arms[idx].loc.line;
-            fn_->append(current_block_, std::move(br));
+            emit(current_block_, std::move(br));
             sw_edge(current_block_, arm_blocks[idx]);
             sw_edge(current_block_, vnext);
             current_block_ = vnext;
@@ -12488,7 +12488,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
         br.op = ir::IrOp::BR;
         br.target_block = default_bb;
         br.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
         sw_edge(current_block_, default_bb);
     }
 
@@ -12517,7 +12517,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
             br.target_block = body_bb;
             br.false_block = default_bb;
             br.source_line = arm.loc.line;
-            fn_->append(current_block_, std::move(br));
+            emit(current_block_, std::move(br));
             sw_edge(current_block_, body_bb);
             sw_edge(current_block_, default_bb);
             current_block_ = body_bb;
@@ -12532,7 +12532,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
             br.op = ir::IrOp::BR;
             br.target_block = merge_bb;
             br.source_line = arm.loc.line;
-            fn_->append(current_block_, std::move(br));
+            emit(current_block_, std::move(br));
             sw_edge(current_block_, merge_bb);
         }
         pop_scope();
@@ -12603,7 +12603,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
         mt.func_name = elay.name; // nombre del enum (o Optional/Result)
         mt.imm = static_cast<uint64_t>(n_concrete);
         mt.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(mt));
+        emit(current_block_, std::move(mt));
     }
 
     // 2. LOAD i64 del tag en offset 0.
@@ -12615,7 +12615,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
         ld.dst = tag_v;
         ld.operands = {scrut_addr};
         ld.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
     }
 
     // 3. Construir bloques: uno por arm + uno default + uno merge.
@@ -12712,7 +12712,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
             sd.target_block = default_bb;
             sd.jump_targets = std::move(table);
             sd.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(sd));
+            emit(current_block_, std::move(sd));
         }
     }
 
@@ -12743,7 +12743,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                         cm.dst = cmp_v;
                         cm.operands = {tag_v, tc};
                         cm.source_line = e->loc.line;
-                        fn_->append(current_block_, std::move(cm));
+                        emit(current_block_, std::move(cm));
                         ir::IrBlockId nb = fn_->new_block("sw_next");
                         ir::IrInstr br{};
                         br.op = ir::IrOp::BR_COND;
@@ -12751,7 +12751,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                         br.target_block = sw_cases[k].second;
                         br.false_block = nb;
                         br.source_line = e->loc.line;
-                        fn_->append(current_block_, std::move(br));
+                        emit(current_block_, std::move(br));
                         sw_edge(current_block_, sw_cases[k].second);
                         sw_edge(current_block_, nb);
                         current_block_ = nb;
@@ -12760,7 +12760,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                     br.op = ir::IrOp::BR;
                     br.target_block = default_bb;
                     br.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(br));
+                    emit(current_block_, std::move(br));
                     sw_edge(current_block_, default_bb);
                     return;
                 }
@@ -12775,7 +12775,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                 cm.dst = cmp_v;
                 cm.operands = {tag_v, tc};
                 cm.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(cm));
+                emit(current_block_, std::move(cm));
                 ir::IrBlockId lb = fn_->new_block("sw_lt");
                 ir::IrBlockId rb = fn_->new_block("sw_ge");
                 ir::IrInstr br{};
@@ -12784,7 +12784,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                 br.target_block = lb; // tag < mid
                 br.false_block = rb;  // tag >= mid
                 br.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(br));
+                emit(current_block_, std::move(br));
                 sw_edge(current_block_, lb);
                 sw_edge(current_block_, rb);
                 emit_bst(lo, mid, lb);
@@ -12815,7 +12815,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                 cm.dst = cmp_v;
                 cm.operands = {tag_v, tag_const};
                 cm.source_line = e->arms[i].loc.line;
-                fn_->append(current_block_, std::move(cm));
+                emit(current_block_, std::move(cm));
             }
 
             const ir::IrBlockId fall_bb = fn_->new_block("match_next");
@@ -12826,7 +12826,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
             br.target_block = arm_blocks[i];
             br.false_block = fall_bb;
             br.source_line = e->arms[i].loc.line;
-            fn_->append(current_block_, std::move(br));
+            emit(current_block_, std::move(br));
             sw_edge(current_block_, arm_blocks[i]);
             sw_edge(current_block_, fall_bb);
 
@@ -12839,7 +12839,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
             br.op = ir::IrOp::BR;
             br.target_block = default_bb;
             br.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(br));
+            emit(current_block_, std::move(br));
             sw_edge(current_block_, default_bb);
         }
     }
@@ -12934,7 +12934,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                     ad.dst = addr_i;
                     ad.operands = {scrut_addr, off_v};
                     ad.source_line = arm.loc.line;
-                    fn_->append(current_block_, std::move(ad));
+                    emit(current_block_, std::move(ad));
                 }
                 // Propagar is_host_ptr del scrutinee al puntero scrut+off (patron
                 // is_host_ptr-en-add: el LOAD del payload debe usar la misma
@@ -12964,7 +12964,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                     ld.dst = v;
                     ld.operands = {addr_i};
                     ld.source_line = arm.loc.line;
-                    fn_->append(current_block_, std::move(ld));
+                    emit(current_block_, std::move(ld));
                 }
                 // optlike: el valor cargado ya es del tipo nativo del payload;
                 // sin recuperacion de bits (Some/Ok/Err guardan native).
@@ -12984,7 +12984,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                         bc.dst = v2;
                         bc.operands = {v};
                         bc.source_line = arm.loc.line;
-                        fn_->append(current_block_, std::move(bc));
+                        emit(current_block_, std::move(bc));
                         v = v2;
                     } else if (ft.kind == PrimitiveKind::F32) {
                         // Recuperar f32: el slot guardo BITCAST(F32TOF64(x))
@@ -12998,7 +12998,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                             bc.dst = vd;
                             bc.operands = {v};
                             bc.source_line = arm.loc.line;
-                            fn_->append(current_block_, std::move(bc));
+                            emit(current_block_, std::move(bc));
                         }
                         ir::IrValueId v2 = fn_->new_value(ir::IrType::F32);
                         {
@@ -13008,7 +13008,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                             nr.dst = v2;
                             nr.operands = {vd};
                             nr.source_line = arm.loc.line;
-                            fn_->append(current_block_, std::move(nr));
+                            emit(current_block_, std::move(nr));
                         }
                         v = v2;
                     }
@@ -13033,7 +13033,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                 br.target_block = body_bb;
                 br.false_block = arm_fall_bbs[i];
                 br.source_line = arm.loc.line;
-                fn_->append(current_block_, std::move(br));
+                emit(current_block_, std::move(br));
                 fn_->blocks[current_block_].succs.push_back(body_bb);
                 fn_->blocks[current_block_].succs.push_back(arm_fall_bbs[i]);
                 fn_->blocks[body_bb].preds.push_back(current_block_);
@@ -13072,7 +13072,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
             br.op = ir::IrOp::BR;
             br.target_block = merge_bb;
             br.source_line = arm.loc.line;
-            fn_->append(current_block_, std::move(br));
+            emit(current_block_, std::move(br));
             fn_->blocks[current_block_].succs.push_back(merge_bb);
             fn_->blocks[merge_bb].preds.push_back(current_block_);
             block_terminated_ = true;
@@ -13216,7 +13216,7 @@ ir::IrValueId Lowering::lower_spawn_expr(ast::SpawnExpr *e) {
         c.operands = {v_pc};
         c.is_call_site = true;
         c.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(c));
+        emit(current_block_, std::move(c));
         // NO marca vx_thread_used_: no es hilo real; el await bombea la cola.
         return v_pid;
     }
@@ -13237,7 +13237,7 @@ ir::IrValueId Lowering::lower_spawn_expr(ast::SpawnExpr *e) {
             al.dst = cap_ptr;
             al.operands = {v_size};
             al.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(al));
+            emit(current_block_, std::move(al));
             for (size_t i = 0; i < caps.size(); ++i) {
                 ir::IrValueId addr = cap_ptr;
                 if (i != 0) {
@@ -13252,7 +13252,7 @@ ir::IrValueId Lowering::lower_spawn_expr(ast::SpawnExpr *e) {
                     ad.dst = addr;
                     ad.operands = {cap_ptr, off};
                     ad.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(ad));
+                    emit(current_block_, std::move(ad));
                 }
                 ir::IrInstr st{};
                 st.op = ir::IrOp::STORE;
@@ -13260,7 +13260,7 @@ ir::IrValueId Lowering::lower_spawn_expr(ast::SpawnExpr *e) {
                 st.dst = ir::IR_NO_VALUE;
                 st.operands = {caps[i], addr};
                 st.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(st));
+                emit(current_block_, std::move(st));
             }
             v_arg = cap_ptr;
         }
@@ -13273,7 +13273,7 @@ ir::IrValueId Lowering::lower_spawn_expr(ast::SpawnExpr *e) {
         c.operands = {v_pc, v_arg};
         c.is_call_site = true;
         c.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(c));
+        emit(current_block_, std::move(c));
         return v_pid;
     }
 
@@ -13294,7 +13294,7 @@ ir::IrValueId Lowering::lower_spawn_expr(ast::SpawnExpr *e) {
         sa.operands = std::move(ops);
         sa.source_line = e->loc.line;
         sa.is_call_site = true;
-        fn_->append(current_block_, std::move(sa));
+        emit(current_block_, std::move(sa));
         return v_pid;
     }
 
@@ -13313,7 +13313,7 @@ ir::IrValueId Lowering::lower_spawn_expr(ast::SpawnExpr *e) {
         sp.operands = {v_pc};
         sp.is_call_site = true;
         sp.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(sp));
+        emit(current_block_, std::move(sp));
         return v_pid;
     }
 
@@ -13345,7 +13345,7 @@ ir::IrValueId Lowering::lower_spawn_expr(ast::SpawnExpr *e) {
     sp.operands = {v_pc, v_hint};
     sp.is_call_site = true;
     sp.source_line = e->loc.line;
-    fn_->append(current_block_, std::move(sp));
+    emit(current_block_, std::move(sp));
     return v_pid;
 }
 
@@ -13588,7 +13588,7 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         fu.dst = v_fut;
         fu.is_call_site = true;
         fu.source_line = fd->loc.line;
-        fn_->append(current_block_, std::move(fu));
+        emit(current_block_, std::move(fu));
     }
 
     // Mejora II optimizada: el wrapper usa IrOp::SPAWN_ARGS que aprovecha
@@ -13619,7 +13619,7 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
             bc.dst = v_qword;
             bc.operands = {v_param};
             bc.source_line = fd->loc.line;
-            fn_->append(current_block_, std::move(bc));
+            emit(current_block_, std::move(bc));
         } else if (pt_ir == ir::IrType::F32) {
             ir::IrValueId v_i32 = fn_->new_value(ir::IrType::I32);
             ir::IrInstr bc{};
@@ -13628,7 +13628,7 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
             bc.dst = v_i32;
             bc.operands = {v_param};
             bc.source_line = fd->loc.line;
-            fn_->append(current_block_, std::move(bc));
+            emit(current_block_, std::move(bc));
             v_qword = cast_if_needed(v_i32, ir::IrType::I32, ir::IrType::I64,
                                      fd->loc.line);
         } else if (pt_ir != ir::IrType::I64 && pt_ir != ir::IrType::U64 &&
@@ -13667,7 +13667,7 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
             al.imm = argc * 8;
             al.host_alloca = true;
             al.source_line = fd->loc.line;
-            fn_->append(current_block_, std::move(al));
+            emit(current_block_, std::move(al));
             fn_->values[v_buf].is_host_ptr = true;
         }
         // STORE cada arg en argbuf[i].
@@ -13683,7 +13683,7 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
                 ad.dst = slot;
                 ad.operands = {v_buf, off};
                 ad.source_line = fd->loc.line;
-                fn_->append(current_block_, std::move(ad));
+                emit(current_block_, std::move(ad));
                 fn_->values[slot].is_host_ptr = true;
             }
             ir::IrInstr st{};
@@ -13691,7 +13691,7 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
             st.type = ir::IrType::I64;
             st.operands = {real_args[k], slot};
             st.source_line = fd->loc.line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
         const ir::IrValueId v_argc =
             emit_const(ir::IrType::I64, argc, fd->loc.line);
@@ -13703,7 +13703,7 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         ins.operands = {v_pc, v_argc, v_buf};
         ins.is_call_site = true;
         ins.source_line = fd->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
     } else {
         ir::IrInstr ins{};
         ins.op = ir::IrOp::SPAWN_ARGS;
@@ -13715,7 +13715,7 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         for (auto v : qword_args)      // R2..R[N+1] = args
             ins.operands.push_back(v);
         ins.source_line = fd->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
     }
     (void)v_child; // no usado mas; el child ya esta ejecutando
 
@@ -13726,7 +13726,7 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         ret.type = ir::IrType::I64;
         ret.operands = {v_fut};
         ret.source_line = fd->loc.line;
-        fn_->append(current_block_, std::move(ret));
+        emit(current_block_, std::move(ret));
         block_terminated_ = true;
     }
 
@@ -13774,7 +13774,7 @@ void Lowering::lower_throw(ast::ThrowStmt *s) {
         ra.operands.push_back(v_type);
     }
     ra.source_line = s->loc.line;
-    fn_->append(current_block_, std::move(ra));
+    emit(current_block_, std::move(ra));
     // throw es un terminador del flujo: marcamos el bloque para que
     // el emisor no intente continuar tras el throw.  El IR optimizer
     // reportara unreachable code si lo hay despues.
@@ -13984,7 +13984,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         ai.dst = addr;
         ai.imm = (uint64_t)bytes;
         ai.source_line = s->loc.line;
-        fn_->append(current_block_, std::move(ai));
+        emit(current_block_, std::move(ai));
         bind(op.name, addr);
         address_taken_locals_.insert(op.name);
         const bool is_vec = reg.rfind("xmm", 0) == 0 ||
@@ -14000,7 +14000,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         st.dst = ir::IR_NO_VALUE;
         st.operands = {v0, addr};
         st.source_line = s->loc.line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
         // Placeholder en el cuerpo: reg concreto -> su nombre; reg AUTO -> $N
         // (lo rellena el backend post-regalloc con el fisico que elija el RA).
         ph_subst.emplace_back(op.name,
@@ -14551,7 +14551,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     // volatile por defecto: el bloque nunca debe eliminarse ni
     // reordenarse por el optimizer del IR.
     ia.preserve = true;
-    fn_->append(current_block_, std::move(ia));
+    emit(current_block_, std::move(ia));
 
     //  AS inc.6: registrar el import nativo del helper runner para que
     // el linker resuelva el `calln @Method("vrt:inline_asm_exec")` que
@@ -14566,6 +14566,17 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
 
 ir::IrValueId Lowering::lower_expr(ast::Expr *e) {
     if (!e) return ir::IR_NO_VALUE;
+    /* Mientras se baja esta expresion, lo que se emita lleva SU columna.  Al
+     * anidarse, la de dentro tapa a la de fuera y se restaura al salir, con lo
+     * que cada instruccion acaba con la de la expresion mas ajustada que la
+     * produjo.  Ahora es posible porque todo pasa por un solo sitio al
+     * emitir. */
+    struct ColumnaVigente {
+        uint32_t *slot;
+        uint32_t previa;
+        ~ColumnaVigente() { *slot = previa; }
+    } col_vigente{&pend_stmt_column_, pend_stmt_column_};
+    if (e->loc.column > 0) pend_stmt_column_ = e->loc.column;
     switch (e->kind) {
     case ast::NodeKind::IntLitExpr: {
         auto *ie = static_cast<ast::IntLitExpr *>(e);
@@ -14678,7 +14689,7 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
                 // como cualquier otro -> host en los tres modos (ver
                 // lower_var_decl), no solo en AOT.
                 al.host_alloca = true;
-                fn_->append(current_block_, std::move(al));
+                emit(current_block_, std::move(al));
                 fn_->values[addr].is_host_ptr = true;
                 emit_zero_fill(addr, (uint64_t)lay.size_bytes, e->loc.line);
                 emit_struct_init_fields(
@@ -14741,7 +14752,7 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
                 ins.func_name = "vrt:naked_fnaddr";
                 ins.operands = std::move(args);
                 ins.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ins));
+                emit(current_block_, std::move(ins));
                 return dst;
             }
             const ir::IrValueId code = fn_->new_value(ir::IrType::PTR);
@@ -14751,7 +14762,7 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
             ins.dst = code;
             ins.func_name = func_ref_label(id->name, id->func_ref_mangled);
             ins.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ins));
+            emit(current_block_, std::move(ins));
             // `(fn(...)) nombre` (LAMBDA): SIEMPRE un fat-pointer de 16 bytes
             // {fn_addr, env=0}, como TODO valor lambda -> el call lo trata por
             // CALLCLOSURE uniforme y se puede guardar en variables/campos fn.
@@ -14767,14 +14778,14 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
                 al.op = ir::IrOp::ALLOCA; al.type = ir::IrType::I8;
                 al.dst = fv; al.imm = 16; al.host_alloca = native_poo_;
                 al.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(al));
+                emit(current_block_, std::move(al));
             }
             if (native_poo_) fn_->values[fv].is_host_ptr = true;
             { // [fv+0] = fn_addr
                 ir::IrInstr st{};
                 st.op = ir::IrOp::STORE; st.type = ir::IrType::I64;
                 st.operands = {code, fv}; st.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(st));
+                emit(current_block_, std::move(st));
             }
             { // [fv+8] = 0 (env vacio)
                 const ir::IrValueId fv8 = fn_->new_value(ir::IrType::PTR);
@@ -14783,14 +14794,14 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
                 ir::IrInstr ad{};
                 ad.op = ir::IrOp::ADD; ad.type = ir::IrType::I64;
                 ad.dst = fv8; ad.operands = {fv, o8}; ad.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ad));
+                emit(current_block_, std::move(ad));
                 if (native_poo_) fn_->values[fv8].is_host_ptr = true;
                 const ir::IrValueId z =
                     emit_const(ir::IrType::I64, 0, e->loc.line);
                 ir::IrInstr st{};
                 st.op = ir::IrOp::STORE; st.type = ir::IrType::I64;
                 st.operands = {z, fv8}; st.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(st));
+                emit(current_block_, std::move(st));
             }
             return fv;
         }
@@ -14858,7 +14869,7 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
             al.imm = 16;
             al.host_alloca = native_poo_;
             al.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(al));
+            emit(current_block_, std::move(al));
         }
         if (native_poo_) fn_->values[fv_addr].is_host_ptr = true;
         // [fv_addr + 0] = fn_addr (la direccion cruda).
@@ -14868,7 +14879,7 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
             st.type = ir::IrType::I64;
             st.operands = {v_op, fv_addr};
             st.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
         // [fv_addr + 8] = 0 (env vacio).
         {
@@ -14880,7 +14891,7 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
             ad.dst = fv8;
             ad.operands = {fv_addr, off8};
             ad.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
             if (native_poo_) fn_->values[fv8].is_host_ptr = true;
             const ir::IrValueId z = emit_const(ir::IrType::I64, 0, e->loc.line);
             ir::IrInstr st{};
@@ -14888,7 +14899,7 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
             st.type = ir::IrType::I64;
             st.operands = {z, fv8};
             st.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
         return fv_addr;
     }
@@ -14931,7 +14942,7 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
         ld.dst = fa;
         ld.operands = {v_op};
         ld.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
         if (native_poo_) fn_->values[fa].is_host_ptr = true;
         return fa;
     }
@@ -14964,7 +14975,7 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
         ins.dst = dst;
         ins.operands = {v_op};
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         // Propagar flags segun el tipo destino.
         fn_->values[dst].is_host_ptr = !dst_type.is_virtual;
         // pointee_is_host_ptr: si el destino apunta a otro puntero
@@ -14991,7 +15002,7 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
         ins.dst = dst;
         ins.operands = {v_op};
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         if (dst_ptr) {
             fn_->values[dst].is_host_ptr = !dst_type.is_virtual;
         } else if (dst_type.kind == PrimitiveKind::FUNCTION && src_ptr) {
@@ -15133,7 +15144,7 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
             }
             ins.is_call_site = true;
             ins.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ins));
+            emit(current_block_, std::move(ins));
             return addr;
         }
         // Ligar `base` + hermanos para las exprs de pos/stride.  Helper: LOAD
@@ -15149,7 +15160,7 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
             l.dst = sv;
             l.operands = {addr};
             l.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(l));
+            emit(current_block_, std::move(l));
             bind(sib.name, sv);
         };
         auto add_off = [&](ir::IrValueId off_v) -> ir::IrValueId {
@@ -15161,7 +15172,7 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
             ins.dst = a;
             ins.operands = {ov_base, off_v};
             ins.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ins));
+            emit(current_block_, std::move(ins));
             return a;
         };
         // Pass 1: hermanos de offset CONSTANTE.
@@ -15264,7 +15275,7 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
             }
             ins.is_call_site = true;
             ins.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ins));
+            emit(current_block_, std::move(ins));
         } else if (table_base == ir::IR_NO_VALUE) {
             return ir::IR_NO_VALUE;
         }
@@ -15281,7 +15292,7 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
             mul.dst = scaled;
             mul.operands = {i_v, stride_v};
             mul.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(mul));
+            emit(current_block_, std::move(mul));
         }
         // addr = (base_absolute ? table_base : ov_base + pos) + scaled
         ir::IrValueId t1;
@@ -15296,7 +15307,7 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
             a.dst = t1;
             a.operands = {ov_base, table_base};
             a.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(a));
+            emit(current_block_, std::move(a));
         }
         ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
         fn_->values[addr].is_host_ptr = fn_->values[ov_base].is_host_ptr;
@@ -15307,7 +15318,7 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
             a.dst = addr;
             a.operands = {t1, scaled};
             a.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(a));
+            emit(current_block_, std::move(a));
         }
         return addr;
     }
@@ -15353,7 +15364,7 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
         mul.dst = scaled;
         mul.operands = {idx_v, sz_v};
         mul.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(mul));
+        emit(current_block_, std::move(mul));
         offset = scaled;
     }
     // unique<T>/shared<T>: el valor SSA de `base` es la DIRECCION del slot
@@ -15374,7 +15385,7 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
             ld.dst = v_data;
             ld.operands = {base_v};
             ld.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
         }
         base_eff = v_data;
         if (bt.kind == PrimitiveKind::SHARED_PTR) {
@@ -15388,7 +15399,7 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
             add16.dst = v_pay;
             add16.operands = {v_data, v16};
             add16.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(add16));
+            emit(current_block_, std::move(add16));
             base_eff = v_pay;
         }
     }
@@ -15402,7 +15413,7 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
     add.dst = addr;
     add.operands = {base_eff, offset};
     add.source_line = e->loc.line;
-    fn_->append(current_block_, std::move(add));
+    emit(current_block_, std::move(add));
     return addr;
 }
 
@@ -15445,7 +15456,7 @@ ir::IrValueId Lowering::lower_index(ast::IndexExpr *e) {
                 ad.dst = v_at;
                 ad.operands = {v_raw, v_idx};
                 ad.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ad));
+                emit(current_block_, std::move(ad));
             }
             // LOAD u8 (host) -> byte, zero-extendido al ancho del char.
             const ir::IrType rt = (e->result_type.kind == PrimitiveKind::COUNT)
@@ -15460,7 +15471,7 @@ ir::IrValueId Lowering::lower_index(ast::IndexExpr *e) {
                 ld.dst = v_byte;
                 ld.operands = {v_at};
                 ld.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ld));
+                emit(current_block_, std::move(ld));
             }
             return v_byte;
         }
@@ -15574,7 +15585,7 @@ ir::IrValueId Lowering::lower_index(ast::IndexExpr *e) {
     ld.dst = dst;
     ld.operands = {addr};
     ld.source_line = e->loc.line;
-    fn_->append(current_block_, std::move(ld));
+    emit(current_block_, std::move(ld));
     return dst;
 }
 
@@ -15595,7 +15606,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
             ins.dst = code;
             ins.func_name = func_ref_label(e->name, e->func_ref_mangled);
             ins.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ins));
+            emit(current_block_, std::move(ins));
         }
         if (e->result_type.fn_is_raw) return code; // cfn: 8 bytes crudos
         // Lambda: fat-pointer de 16 bytes {fn_addr, env=0}.
@@ -15608,7 +15619,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
             al.imm = 16;
             al.host_alloca = native_poo_;
             al.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(al));
+            emit(current_block_, std::move(al));
         }
         if (native_poo_) fn_->values[fv].is_host_ptr = true;
         { // [fv+0] = fn_addr
@@ -15617,7 +15628,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
             st.type = ir::IrType::I64;
             st.operands = {code, fv};
             st.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
         { // [fv+8] = 0 (env vacio)
             const ir::IrValueId fv8 = fn_->new_value(ir::IrType::PTR);
@@ -15628,7 +15639,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
             ad.dst = fv8;
             ad.operands = {fv, o8};
             ad.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
             if (native_poo_) fn_->values[fv8].is_host_ptr = true;
             const ir::IrValueId z = emit_const(ir::IrType::I64, 0, e->loc.line);
             ir::IrInstr st{};
@@ -15636,7 +15647,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
             st.type = ir::IrType::I64;
             st.operands = {z, fv8};
             st.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
         return fv;
     }
@@ -15657,7 +15668,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                 is.dst = addr;
                 is.imm = sit->second.slot;
                 is.source_line = ln;
-                fn_->append(current_block_, std::move(is));
+                emit(current_block_, std::move(is));
                 fn_->values[addr].is_host_ptr = true;
             }
             if (sit->second.aggregate) return addr; // el valor ES la direccion
@@ -15668,7 +15679,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
             ld.dst = v;
             ld.operands = {addr};
             ld.source_line = ln;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
             return v;
         }
     }
@@ -15705,7 +15716,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                         is.dst = v_addr;
                         is.imm = slot_idx;
                         is.source_line = ln;
-                        fn_->append(current_block_, std::move(is));
+                        emit(current_block_, std::move(is));
                     }
                     ir::IrValueId v_val = fn_->new_value(ir::IrType::I64);
                     {
@@ -15715,7 +15726,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                         ld.dst = v_val;
                         ld.operands = {v_addr};
                         ld.source_line = ln;
-                        fn_->append(current_block_, std::move(ld));
+                        emit(current_block_, std::move(ld));
                     }
                     return v_val;
                 }
@@ -15744,7 +15755,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                     is.dst = v_addr;
                     is.imm = idx;
                     is.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(is));
+                    emit(current_block_, std::move(is));
                 }
                 ir::IrValueId v_len = emit_const(
                     ir::IrType::I64,
@@ -15800,7 +15811,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                 is.dst = v_addr;
                 is.imm = idx;
                 is.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(is));
+                emit(current_block_, std::move(is));
             }
             ir::IrValueId v_len =
                 emit_const(ir::IrType::I64,
@@ -15836,7 +15847,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                     is.dst = v_addr;
                     is.imm = p_idx;
                     is.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(is));
+                    emit(current_block_, std::move(is));
                 }
                 ir::IrValueId v_len =
                     emit_const(ir::IrType::I64,
@@ -15925,7 +15936,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                 is.dst = v_a;
                 is.imm = slot_idx;
                 is.source_line = ln_a;
-                fn_->append(current_block_, std::move(is));
+                emit(current_block_, std::move(is));
                 return v_a;
             }
             const int ln = e->loc.line;
@@ -15937,7 +15948,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                 is.dst = v_addr;
                 is.imm = slot_idx;
                 is.source_line = ln;
-                fn_->append(current_block_, std::move(is));
+                emit(current_block_, std::move(is));
                 // El slot vive en memoria host (seccion `gdata`) -> el LOAD de
                 // abajo es un acceso host directo, sin traducir.
                 fn_->values[v_addr].is_host_ptr = true;
@@ -15953,7 +15964,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                 ld.dst = v_val;
                 ld.operands = {v_addr};
                 ld.source_line = ln;
-                fn_->append(current_block_, std::move(ld));
+                emit(current_block_, std::move(ld));
             }
             return v_val;
         }
@@ -16072,7 +16083,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                 is.dst = v;
                 is.imm = lit_idx;
                 is.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(is));
+                emit(current_block_, std::move(is));
                 return v;
             }
         }
@@ -16136,7 +16147,7 @@ Lowering::lower_string_literal_to_string_object(ast::StringLitExpr *slit) {
             is.dst = v_addr;
             is.imm = p_idx;
             is.source_line = line;
-            fn_->append(current_block_, std::move(is));
+            emit(current_block_, std::move(is));
         }
         ir::IrValueId v_len = emit_const(ir::IrType::I64, p_len, line);
         ir::IrValueId v_handle = emit_string_literal_repr(v_addr, v_len, -1, line);
@@ -16177,7 +16188,7 @@ Lowering::lower_string_literal_to_string_object(ast::StringLitExpr *slit) {
             al.dst = v_buf;
             al.imm = 32;
             al.source_line = ln;
-            fn_->append(current_block_, std::move(al));
+            emit(current_block_, std::move(al));
         }
         // 2. proc_ptr via getproc.
         ir::IrValueId v_proc = fn_->new_value(ir::IrType::PTR);
@@ -16187,7 +16198,7 @@ Lowering::lower_string_literal_to_string_object(ast::StringLitExpr *slit) {
             gp.type = ir::IrType::PTR;
             gp.dst = v_proc;
             gp.source_line = ln;
-            fn_->append(current_block_, std::move(gp));
+            emit(current_block_, std::move(gp));
         }
         // 3. CALLN al stringify nativo: returns length escrita en buf.
         //    Registramos el import con el linker para que la
@@ -16204,7 +16215,7 @@ Lowering::lower_string_literal_to_string_object(ast::StringLitExpr *slit) {
                 std::string("stdlib/native/io/vesta_io:") + native_fn;
             cl.operands = {v_proc, v_buf, v_val};
             cl.source_line = ln;
-            fn_->append(current_block_, std::move(cl));
+            emit(current_block_, std::move(cl));
         }
         // 4. STRMAKE desde el buffer VM.  El opcode strmake (no _h)
         //    lee de vm_mem que es exactamente donde el helper escribio.
@@ -16321,7 +16332,7 @@ Lowering::lower_string_literal_to_string_object(ast::StringLitExpr *slit) {
             bc.dst = v_bits;
             bc.operands = {v};
             bc.source_line = ln;
-            fn_->append(current_block_, std::move(bc));
+            emit(current_block_, std::move(bc));
             return stringify_primitive(v_bits, "vio_float_to_vmbuf", ln);
         }
         case PrimitiveKind::F32: {
@@ -16333,7 +16344,7 @@ Lowering::lower_string_literal_to_string_object(ast::StringLitExpr *slit) {
             ext.dst = v_f64;
             ext.operands = {v};
             ext.source_line = ln;
-            fn_->append(current_block_, std::move(ext));
+            emit(current_block_, std::move(ext));
             ir::IrValueId v_bits = fn_->new_value(ir::IrType::I64);
             ir::IrInstr bc{};
             bc.op = ir::IrOp::BITCAST;
@@ -16341,7 +16352,7 @@ Lowering::lower_string_literal_to_string_object(ast::StringLitExpr *slit) {
             bc.dst = v_bits;
             bc.operands = {v_f64};
             bc.source_line = ln;
-            fn_->append(current_block_, std::move(bc));
+            emit(current_block_, std::move(bc));
             return stringify_primitive(v_bits, "vio_float_to_vmbuf", ln);
         }
         case PrimitiveKind::CLASS: {
@@ -16412,7 +16423,7 @@ ir::IrValueId Lowering::emit_topfn_value(const std::string &fn_name, int line) {
         al.dst = fv_addr;
         al.imm = 16;
         al.source_line = line;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
     }
     // 2. fn_addr via LABEL_ADDR IR op (Sprint 3).
     ir::IrValueId fn_addr = emit_label_addr(fn_name, line);
@@ -16425,7 +16436,7 @@ ir::IrValueId Lowering::emit_topfn_value(const std::string &fn_name, int line) {
         st.type = ir::IrType::I64;
         st.operands = {fn_addr, fv_addr};
         st.source_line = line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     }
     // 5. STORE env_addr en [fv_addr+8].
     {
@@ -16437,14 +16448,14 @@ ir::IrValueId Lowering::emit_topfn_value(const std::string &fn_name, int line) {
         ad.dst = fv_plus_8;
         ad.operands = {fv_addr, off8};
         ad.source_line = line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
 
         ir::IrInstr st{};
         st.op = ir::IrOp::STORE;
         st.type = ir::IrType::I64;
         st.operands = {env_addr, fv_plus_8};
         st.source_line = line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     }
     return fv_addr;
 }
@@ -16602,7 +16613,7 @@ std::string Lowering::generate_overlay_resolver(const StructLayout &lay,
         rt.op = ir::IrOp::RET;
         rt.type = ir::IrType::PTR;
         rt.operands = {self_pv};
-        fn_->append(current_block_, std::move(rt));
+        emit(current_block_, std::move(rt));
         block_terminated_ = true;
     }
 
@@ -16704,7 +16715,7 @@ std::string Lowering::generate_overlay_extent(const StructLayout &lay) {
         in.type = t;
         in.dst = d;
         in.operands = {a, b};
-        fn_->append(current_block_, std::move(in));
+        emit(current_block_, std::move(in));
         return d;
     };
     // max sin ramas: max(a,b) = b ^ ((a^b) & -(a>b)).
@@ -16717,7 +16728,7 @@ std::string Lowering::generate_overlay_extent(const StructLayout &lay) {
             n.type = ir::IrType::U64;
             n.dst = mask;
             n.operands = {gt};
-            fn_->append(current_block_, std::move(n));
+            emit(current_block_, std::move(n));
         }
         ir::IrValueId axb = bin(ir::IrOp::XOR, a, b, ir::IrType::U64);
         ir::IrValueId tmp = bin(ir::IrOp::AND, axb, mask, ir::IrType::U64);
@@ -16745,7 +16756,7 @@ std::string Lowering::generate_overlay_extent(const StructLayout &lay) {
             in.dst = addr;
             in.operands = {self_pv};
             in.is_call_site = true;
-            fn_->append(current_block_, std::move(in));
+            emit(current_block_, std::move(in));
             base_off = bin(ir::IrOp::SUB, addr, self_pv, ir::IrType::U64);
         } else if (fi.offset_expr) {
             base_off = lower_expr(fi.offset_expr);
@@ -16771,7 +16782,7 @@ std::string Lowering::generate_overlay_extent(const StructLayout &lay) {
         rt.op = ir::IrOp::RET;
         rt.type = ir::IrType::U64;
         rt.operands = {maxv};
-        fn_->append(current_block_, std::move(rt));
+        emit(current_block_, std::move(rt));
         block_terminated_ = true;
     }
 
@@ -16807,7 +16818,7 @@ ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
         is.dst = v;
         is.imm = ns_slot;
         is.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(is));
+        emit(current_block_, std::move(is));
         return v;
     }
     const ir::IrValueId base = lower_expr(e->base.get());
@@ -16861,7 +16872,7 @@ ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
             ci.dst = ca;
             ci.operands = {base, off_c};
             ci.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ci));
+            emit(current_block_, std::move(ci));
             return ca;
         }
     }
@@ -16893,7 +16904,7 @@ ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
         }
         ins.is_call_site = true;
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         return addr;
     }
 
@@ -16918,7 +16929,7 @@ ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
                 a.dst = saddr;
                 a.operands = {base, so};
                 a.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(a));
+                emit(current_block_, std::move(a));
             }
             const ir::IrType st = ir_type_from_primitive(sib.type.kind);
             ir::IrValueId sv = fn_->new_value(st);
@@ -16928,7 +16939,7 @@ ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
             l.dst = sv;
             l.operands = {saddr};
             l.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(l));
+            emit(current_block_, std::move(l));
             bind(sib.name, sv);
         }
         const ir::IrValueId off_val = lower_expr(fifound->offset_expr);
@@ -16942,7 +16953,7 @@ ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
         ins.dst = fld_addr;
         ins.operands = {base, off_val};
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         return fld_addr;
     }
 
@@ -16966,7 +16977,7 @@ ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
     ins.dst = fld_addr;
     ins.operands = {base, off_val};
     ins.source_line = e->loc.line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return fld_addr;
 }
 
@@ -16998,7 +17009,7 @@ ir::IrValueId Lowering::emit_overlay_endian_swap(ast::Expr *base_expr,
             a.dst = saddr;
             a.operands = {ov_base, so};
             a.source_line = line;
-            fn_->append(current_block_, std::move(a));
+            emit(current_block_, std::move(a));
         }
         const ir::IrType st = ir_type_from_primitive(sib.type.kind);
         ir::IrValueId sv = fn_->new_value(st);
@@ -17008,7 +17019,7 @@ ir::IrValueId Lowering::emit_overlay_endian_swap(ast::Expr *base_expr,
         l.dst = sv;
         l.operands = {saddr};
         l.source_line = line;
-        fn_->append(current_block_, std::move(l));
+        emit(current_block_, std::move(l));
         bind(sib.name, sv);
     }
     const ir::IrValueId big = lower_expr(fi.endian_expr);
@@ -17023,7 +17034,7 @@ ir::IrValueId Lowering::emit_overlay_endian_swap(ast::Expr *base_expr,
         in.dst = d;
         in.operands = {a, b};
         in.source_line = line;
-        fn_->append(current_block_, std::move(in));
+        emit(current_block_, std::move(in));
         return d;
     };
     // 2. sw = bswap64(value) >> (8-w)*8  (BYTESWAP swapea los 8 bytes).
@@ -17035,7 +17046,7 @@ ir::IrValueId Lowering::emit_overlay_endian_swap(ast::Expr *base_expr,
         b.dst = sw64;
         b.operands = {value};
         b.source_line = line;
-        fn_->append(current_block_, std::move(b));
+        emit(current_block_, std::move(b));
     }
     ir::IrValueId sw = sw64;
     if (fi.size < 8) {
@@ -17053,7 +17064,7 @@ ir::IrValueId Lowering::emit_overlay_endian_swap(ast::Expr *base_expr,
         c.dst = nz;
         c.operands = {big, zero};
         c.source_line = line;
-        fn_->append(current_block_, std::move(c));
+        emit(current_block_, std::move(c));
     }
     ir::IrValueId mask = fn_->new_value(ir::IrType::U64);
     {
@@ -17063,7 +17074,7 @@ ir::IrValueId Lowering::emit_overlay_endian_swap(ast::Expr *base_expr,
         n.dst = mask;
         n.operands = {nz};
         n.source_line = line;
-        fn_->append(current_block_, std::move(n));
+        emit(current_block_, std::move(n));
     }
     ir::IrValueId vxs = bin(ir::IrOp::XOR, value, sw);
     ir::IrValueId tmp = bin(ir::IrOp::AND, vxs, mask);
@@ -17087,7 +17098,7 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
                 is.dst = v_addr;
                 is.imm = idx;
                 is.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(is));
+                emit(current_block_, std::move(is));
             }
             ir::IrValueId v_len = emit_const(
                 ir::IrType::I64,
@@ -17248,7 +17259,7 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
                             is.dst = v_addr;
                             is.imm = p_idx;
                             is.source_line = e->loc.line;
-                            fn_->append(current_block_, std::move(is));
+                            emit(current_block_, std::move(is));
                         }
                         ir::IrValueId v_len = emit_const(
                             ir::IrType::I64, static_cast<uint64_t>(sv.size()),
@@ -17301,7 +17312,7 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
     ins.dst = dst;
     ins.operands = {addr};
     ins.source_line = e->loc.line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
 
     // F5: campo `@endian(expr)` -> swap CONDICIONAL segun la expr (nonzero =
     // big-endian).  Comptime -> se pliega (cero coste); runtime -> select sin
@@ -17375,7 +17386,7 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
                         sh.dst = v_shifted;
                         sh.operands = {dst, v_shamt};
                         sh.source_line = e->loc.line;
-                        fn_->append(current_block_, std::move(sh));
+                        emit(current_block_, std::move(sh));
                     }
                     // mask = (1 << bit_width) - 1.
                     const uint64_t mask =
@@ -17390,7 +17401,7 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
                     an.dst = v_masked;
                     an.operands = {v_shifted, v_mask};
                     an.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(an));
+                    emit(current_block_, std::move(an));
                     return v_masked;
                 }
             }
@@ -17454,7 +17465,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
         cmp.dst = v_neg;
         cmp.operands = {v_call, zero};
         cmp.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(cmp));
+        emit(current_block_, std::move(cmp));
         return v_neg;
     }
 
@@ -17500,7 +17511,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
                     add.dst = v_lhs_at;
                     add.operands = {lhs_addr, v_off};
                     add.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(add));
+                    emit(current_block_, std::move(add));
                 }
                 ir::IrValueId v_off2 = emit_const(
                     ir::IrType::I64, (uint64_t)f.offset, e->loc.line);
@@ -17512,7 +17523,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
                     add.dst = v_rhs_at;
                     add.operands = {rhs_addr, v_off2};
                     add.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(add));
+                    emit(current_block_, std::move(add));
                 }
                 // LOAD a y b
                 ir::IrValueId v_a = fn_->new_value(field_ir);
@@ -17523,7 +17534,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
                     ld.dst = v_a;
                     ld.operands = {v_lhs_at};
                     ld.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(ld));
+                    emit(current_block_, std::move(ld));
                 }
                 ir::IrValueId v_b = fn_->new_value(field_ir);
                 {
@@ -17533,7 +17544,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
                     ld.dst = v_b;
                     ld.operands = {v_rhs_at};
                     ld.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(ld));
+                    emit(current_block_, std::move(ld));
                 }
                 // cmp_eq a, b -> v_field_eq
                 ir::IrValueId v_field_eq = fn_->new_value(ir::IrType::BOOL);
@@ -17544,7 +17555,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
                     cmp.dst = v_field_eq;
                     cmp.operands = {v_a, v_b};
                     cmp.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(cmp));
+                    emit(current_block_, std::move(cmp));
                 }
                 // v_acc = v_acc & v_field_eq
                 ir::IrValueId v_new_acc = fn_->new_value(ir::IrType::I64);
@@ -17555,7 +17566,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
                     an.dst = v_new_acc;
                     an.operands = {v_acc, v_field_eq};
                     an.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(an));
+                    emit(current_block_, std::move(an));
                 }
                 v_acc = v_new_acc;
             }
@@ -17570,7 +17581,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
                 xo.dst = v_neg;
                 xo.operands = {v_acc, v_one};
                 xo.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(xo));
+                emit(current_block_, std::move(xo));
                 v_acc = v_neg;
             }
             return v_acc;
@@ -17613,7 +17624,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
             br.target_block = is_and ? rhs_bb : default_bb;
             br.false_block = is_and ? default_bb : rhs_bb;
             br.source_line = e->loc.line;
-            fn_->append(lhs_end_bb, std::move(br));
+            emit(lhs_end_bb, std::move(br));
         }
         // CFG: lhs_end_bb -> {rhs_bb, default_bb}.  CRITICO: sin esto el
         // dataflow de liveness no puede propagar valores back-edge a
@@ -17634,7 +17645,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
             brd.type = ir::IrType::VOID;
             brd.target_block = merge_bb;
             brd.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(brd));
+            emit(current_block_, std::move(brd));
         }
         fn_->blocks[default_bb].succs.push_back(merge_bb);
         fn_->blocks[merge_bb].preds.push_back(default_bb);
@@ -17655,7 +17666,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
             brm.type = ir::IrType::VOID;
             brm.target_block = merge_bb;
             brm.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(brm));
+            emit(current_block_, std::move(brm));
             fn_->blocks[rhs_pred].succs.push_back(merge_bb);
             fn_->blocks[merge_bb].preds.push_back(rhs_pred);
         }
@@ -17670,7 +17681,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
         phi.phi_args.push_back({v_default, default_pred});
         phi.phi_args.push_back({v_rhs_b, rhs_pred});
         phi.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(phi));
+        emit(current_block_, std::move(phi));
         return v_res;
     }
 
@@ -17898,7 +17909,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
                     sa.dst = r.ptr;
                     sa.imm = idx;
                     sa.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(sa));
+                    emit(current_block_, std::move(sa));
                     r.len = emit_const(ir::IrType::I64,
                                        static_cast<uint64_t>(lit.size()),
                                        e->loc.line);
@@ -17962,7 +17973,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
             cm.dst = v_bool;
             cm.operands = {v_cmp, v_zero};
             cm.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(cm));
+            emit(current_block_, std::move(cm));
             return v_bool;
         }
         ir::IrValueId v_a = coerce_string_operand(e->lhs.get());
@@ -17984,7 +17995,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
             ra.dst = v_cmp;
             ra.operands = {v_a, v_b};
             ra.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ra));
+            emit(current_block_, std::move(ra));
             ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, e->loc.line);
             ir::IrValueId v_bool = fn_->new_value(ir::IrType::BOOL);
             ir::IrOp map_op;
@@ -18002,7 +18013,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
             cmp.dst = v_bool;
             cmp.operands = {v_cmp, v_zero};
             cmp.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(cmp));
+            emit(current_block_, std::move(cmp));
             return v_bool;
         }
         error_at(e->loc, "operador no soportado entre strings");
@@ -18044,7 +18055,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
             mul.dst = scaled;
             mul.operands = {idx_v, sz_v};
             mul.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(mul));
+            emit(current_block_, std::move(mul));
             offset = scaled;
         }
         const ir::IrValueId dst = fn_->new_value(ir::IrType::PTR);
@@ -18058,7 +18069,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
         ins.dst = dst;
         ins.operands = {base_v, offset};
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         return dst;
     }
 
@@ -18082,7 +18093,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
         sub.dst = diff;
         sub.operands = {la, lb};
         sub.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(sub));
+        emit(current_block_, std::move(sub));
         if (esz == 1) return diff;
         const ir::IrValueId sz_v =
             emit_const(ir::IrType::I64, (uint64_t)esz, e->loc.line);
@@ -18093,7 +18104,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
         div.dst = q;
         div.operands = {diff, sz_v};
         div.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(div));
+        emit(current_block_, std::move(div));
         return q;
     }
 
@@ -18128,7 +18139,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
         ins.dst = dst;
         ins.operands = {l, r};
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         return dst;
     }
 
@@ -18221,7 +18232,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
     ins.dst = dst;
     ins.operands = {l, r};
     ins.source_line = e->loc.line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return dst;
 }
 
@@ -18285,7 +18296,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
             o.dst = nv;
             o.operands = {old_val, one};
             o.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(o));
+            emit(current_block_, std::move(o));
             return nv;
         };
         // IdentExpr: si es un LOCAL del scope, ruta SSA original via
@@ -18354,7 +18365,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
                 st.type = vt;
                 st.operands = {new_val, addr};
                 st.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(st));
+                emit(current_block_, std::move(st));
                 return is_pre ? new_val : old_val;
             }
             // CLASS field: usar setfield via lower_class_field_store.
@@ -18381,14 +18392,14 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
             ld.dst = old_val;
             ld.operands = {addr};
             ld.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
             const ir::IrValueId new_val = compute_new(old_val);
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
             st.type = vt;
             st.operands = {new_val, addr};
             st.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
             return is_pre ? new_val : old_val;
         }
         // UnaryExpr Deref (*p++).
@@ -18404,14 +18415,14 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
                 ld.dst = old_val;
                 ld.operands = {addr};
                 ld.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ld));
+                emit(current_block_, std::move(ld));
                 const ir::IrValueId new_val = compute_new(old_val);
                 ir::IrInstr st{};
                 st.op = ir::IrOp::STORE;
                 st.type = vt;
                 st.operands = {new_val, addr};
                 st.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(st));
+                emit(current_block_, std::move(st));
                 return is_pre ? new_val : old_val;
             }
         }
@@ -18453,7 +18464,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
                 ins.dst = dst;
                 ins.func_name = fa->func_ref_mangled;
                 ins.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ins));
+                emit(current_block_, std::move(ins));
                 return dst;
             }
         }
@@ -18471,7 +18482,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
                 ins.dst = dst;
                 ins.func_name = func_ref_label(id->name, id->func_ref_mangled);
                 ins.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ins));
+                emit(current_block_, std::move(ins));
                 return dst;
             }
             // & sobre un `static` local: su storage vive en gdata (slot
@@ -18492,7 +18503,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
                     is.dst = va;
                     is.imm = sit->second.slot;
                     is.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(is));
+                    emit(current_block_, std::move(is));
                     // El slot vive en memoria host (gdata en interp/JIT, `.data`
                     // en AOT): la direccion sobrevive a viajar por memoria.
                     fn_->values[va].is_host_ptr = true;
@@ -18512,7 +18523,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
                 is.dst = va;
                 is.imm = git->second;
                 is.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(is));
+                emit(current_block_, std::move(is));
                 // `&global` es un `T*`: el storage vive en memoria host (en
                 // `.data` en AOT; en el bloque host de la seccion `gdata` en
                 // interp/JIT).  Asi la direccion sobrevive a viajar por memoria
@@ -18606,7 +18617,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
         ins.dst = dst;
         ins.operands = {p};
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         // Limitacion A (cerrada) parte 2: si el puntero p apunta a un
         // slot VM cuyo CONTENIDO es un host_ptr (caso indirecto via
         // address-of: @c i32** pp = &p; *pp), propagar @c is_host_ptr
@@ -18686,7 +18697,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
         ra.dst = dst;
         ra.operands = {v};
         ra.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ra));
+        emit(current_block_, std::move(ra));
         if (fn_->values[v].is_host_ptr) {
             fn_->values[dst].is_host_ptr = true;
         }
@@ -18714,7 +18725,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
             aw.operands = {v};
             aw.is_call_site = true; // bloquea -> save/restore live regs
             aw.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(aw));
+            emit(current_block_, std::move(aw));
         }
         // Mejora II: si el operando del await es Future<T>, el frontend
         // sabe el tipo T y puede convertir el i64 raw al tipo logico
@@ -18733,7 +18744,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
                 bc.dst = v_dst;
                 bc.operands = {v_raw};
                 bc.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(bc));
+                emit(current_block_, std::move(bc));
                 return v_dst;
             }
             if (tk == PrimitiveKind::F32) {
@@ -18746,7 +18757,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
                     tr.dst = v_i32;
                     tr.operands = {v_raw};
                     tr.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(tr));
+                    emit(current_block_, std::move(tr));
                 }
                 ir::IrValueId v_dst = fn_->new_value(ir::IrType::F32);
                 ir::IrInstr bc{};
@@ -18755,7 +18766,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
                 bc.dst = v_dst;
                 bc.operands = {v_i32};
                 bc.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(bc));
+                emit(current_block_, std::move(bc));
                 return v_dst;
             }
             // Tipos enteros mas estrechos (i8..i32, u8..u32, bool, char):
@@ -18774,7 +18785,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
         return ir::IR_NO_VALUE;
     }
 
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return dst;
 }
 
@@ -18840,7 +18851,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                 al.dst = v_buf;
                 al.host_alloca = true;
                 al.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(al));
+                emit(current_block_, std::move(al));
                 fn_->values[v_buf].is_host_ptr = true;
 
                 std::vector<ir::IrValueId> operands;
@@ -18860,7 +18871,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                     "__ctor_" + std::to_string(e->args.size());
                 ins.operands = std::move(operands);
                 ins.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ins));
+                emit(current_block_, std::move(ins));
                 return v_buf;
             }
         }
@@ -18943,7 +18954,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                     al.source_line = e->loc.line;
                     // Agregado -> host en los tres modos, no solo en AOT.
                     al.host_alloca = true;
-                    fn_->append(current_block_, std::move(al));
+                    emit(current_block_, std::move(al));
                     fn_->values[addr].is_host_ptr = true;
                 } else {
                     addr = lower_expr(fa->base.get());
@@ -19019,7 +19030,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                     di.call_abi_regs =
                         e->callee->result_type.fn_param_abi_regs;
                     di.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(di));
+                    emit(current_block_, std::move(di));
                     return ddst;
                 }
             }
@@ -19069,7 +19080,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                 ld.op = ir::IrOp::LOAD; ld.type = ir::IrType::I64;
                 ld.dst = fn_addr; ld.operands = {fnp};
                 ld.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ld));
+                emit(current_block_, std::move(ld));
             }
             const ir::IrValueId fnp8 = fn_->new_value(ir::IrType::PTR);
             {
@@ -19079,7 +19090,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                 ad.op = ir::IrOp::ADD; ad.type = ir::IrType::I64;
                 ad.dst = fnp8; ad.operands = {fnp, off8};
                 ad.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ad));
+                emit(current_block_, std::move(ad));
                 // El slot {fn_addr, env} puede ser host (closure-en-campo de
                 // clase, RAW_ALLOC) o VM (lambda local en stack, ALLOCA).  La
                 // host-ness del slot+8 debe HEREDAR la del slot en TODOS los
@@ -19094,7 +19105,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                 ld.op = ir::IrOp::LOAD; ld.type = ir::IrType::I64;
                 ld.dst = env; ld.operands = {fnp8};
                 ld.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ld));
+                emit(current_block_, std::move(ld));
             }
             std::vector<ir::IrValueId> cargs;
             cargs.reserve(1 + args.size());
@@ -19105,7 +19116,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
             ins.type = rt; ins.dst = dst;
             ins.func_ptr = fn_addr; ins.operands = std::move(cargs);
             ins.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ins));
+            emit(current_block_, std::move(ins));
             return dst;
         }
         // Naturaleza HOST vs VM del puntero: un cfn cuyo valor es una direccion
@@ -19126,7 +19137,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
             ni.operands.push_back(fnp); // operando 0 = puntero a la funcion
             for (const auto &a : args) ni.operands.push_back(a);
             ni.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ni));
+            emit(current_block_, std::move(ni));
             return dst;
         }
         ir::IrInstr ins{};
@@ -19141,7 +19152,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
         // funciones asignables comparten esta ABI (garantia del type checker).
         ins.call_abi_regs = e->callee->result_type.fn_param_abi_regs;
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         return dst;
     }
 
@@ -19292,7 +19303,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                     ins.func_name = "vrt:naked_dispatch";
                     ins.operands = std::move(arg_ids);
                     ins.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(ins));
+                    emit(current_block_, std::move(ins));
                     return dst;
                 }
             }
@@ -19374,7 +19385,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                     fn_->values[v_call_retbuf_ns].is_host_ptr = true;
                 }
                 al.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(al));
+                emit(current_block_, std::move(al));
             }
             // Lower args.  Si es sret, el retbuf va PRIMERO.
             std::vector<ir::IrValueId> arg_vals;
@@ -19448,7 +19459,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
             ins.operands = std::move(arg_vals);
             ins.func_name = mangled_label;
             ins.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ins));
+            emit(current_block_, std::move(ins));
             // Liberar los value-strings temporales (literales promovidos):
             // el callee ya copio/uso sus bytes; libera el buffer HEAP si lo
             // hubo (SSO corto = no-op).  Evita la fuga cross-module.
@@ -19586,7 +19597,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                     is.dst = v_addr;
                     is.imm = idx;
                     is.source_line = src_line;
-                    fn_->append(current_block_, std::move(is));
+                    emit(current_block_, std::move(is));
                 }
                 ir::IrValueId v_len = emit_const(
                     ir::IrType::I64, (uint64_t)r.str.size(), src_line);
@@ -19850,7 +19861,7 @@ skip_comptime_eval_for_macro_to_macro:
                 ins.func_name = std::string(COL_NATIVE_LIB) + ":" + fn_name;
                 ins.operands = std::move(arg_ids);
                 ins.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ins));
+                emit(current_block_, std::move(ins));
                 return v_dst;
             }
         }
@@ -19908,7 +19919,7 @@ skip_comptime_eval_for_macro_to_macro:
             ins.func_name = lib + ":" + id->name;
             ins.operands = std::move(arg_ids);
             ins.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ins));
+            emit(current_block_, std::move(ins));
             return dst;
         }
     }
@@ -19965,7 +19976,7 @@ skip_comptime_eval_for_macro_to_macro:
             ins.func_name = "vrt:naked_dispatch";
             ins.operands = std::move(arg_ids);
             ins.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ins));
+            emit(current_block_, std::move(ins));
             return dst;
         }
     }
@@ -20039,7 +20050,7 @@ skip_comptime_eval_for_macro_to_macro:
             ins.func_ptr = fnp;
             ins.operands = std::move(args);
             ins.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ins));
+            emit(current_block_, std::move(ins));
             return dst;
         }
         // Direccion del function value (16 bytes en stack).  Si es
@@ -20062,7 +20073,7 @@ skip_comptime_eval_for_macro_to_macro:
             ld.dst = fn_addr;
             ld.operands = {fv_addr};
             ld.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
         }
 
         // LOAD env_addr de [fv_addr + 8].
@@ -20076,7 +20087,7 @@ skip_comptime_eval_for_macro_to_macro:
             ad.dst = fv_plus_8;
             ad.operands = {fv_addr, off8};
             ad.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
 
             env_addr = fn_->new_value(ir::IrType::I64);
             ir::IrInstr ld{};
@@ -20085,7 +20096,7 @@ skip_comptime_eval_for_macro_to_macro:
             ld.dst = env_addr;
             ld.operands = {fv_plus_8};
             ld.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
         }
 
         // Bajar args.  El primer operando de CALLCLOSURE es env_addr
@@ -20114,7 +20125,7 @@ skip_comptime_eval_for_macro_to_macro:
         ins.func_ptr = fn_addr;
         ins.operands = std::move(arg_ids);
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         return dst;
     }
 
@@ -20220,7 +20231,7 @@ skip_comptime_eval_for_macro_to_macro:
         if (is_optres_retbuf) {
             al.host_alloca = true;
         }
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
         if (is_optres_retbuf) {
             fn_->values[v_call_retbuf].is_host_ptr = true;
         }
@@ -20323,7 +20334,7 @@ skip_comptime_eval_for_macro_to_macro:
                         al.imm = sret_sz;
                         al.host_alloca = fresh_is_host;
                         al.source_line = e->loc.line;
-                        fn_->append(current_block_, std::move(al));
+                        emit(current_block_, std::move(al));
                         if (fresh_is_host)
                             fn_->values[fresh].is_host_ptr = true;
                         emit_enum_copy(fresh, v_arg,
@@ -20416,7 +20427,7 @@ skip_comptime_eval_for_macro_to_macro:
                 al.imm = vcount * esz;
                 al.host_alloca = true;
                 al.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(al));
+                emit(current_block_, std::move(al));
             }
             for (size_t i = 0; i < vcount; ++i) {
                 ir::IrValueId slot = v_arr;
@@ -20430,7 +20441,7 @@ skip_comptime_eval_for_macro_to_macro:
                     ad.dst = slot;
                     ad.operands = {v_arr, off};
                     ad.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(ad));
+                    emit(current_block_, std::move(ad));
                     fn_->values[slot].is_host_ptr = true;
                 }
                 ir::IrInstr st{};
@@ -20438,7 +20449,7 @@ skip_comptime_eval_for_macro_to_macro:
                 st.type = et;
                 st.operands = {arg_ids[fixed + i], slot};
                 st.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(st));
+                emit(current_block_, std::move(st));
             }
         } else {
             v_arr = emit_const(ir::IrType::PTR, 0, e->loc.line); // array vacio
@@ -20489,7 +20500,7 @@ skip_comptime_eval_for_macro_to_macro:
     ins.func_name = std::move(callee_name);
     ins.operands = std::move(arg_ids);
     ins.source_line = e->loc.line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     // Marcar el resultado del CALL como raiz GC cuando el callee devuelve una
     // CLASS (host_ptr a objeto gestionado por el GC).  CRITICO para el scan
     // preciso de raices: sin esto, un `Node keep = build(...)` que vive a
@@ -20637,7 +20648,7 @@ ir::IrValueId Lowering::emit_binop_ir(ast::BinOp op, ir::IrValueId lhs_val,
     ins.dst = dst;
     ins.operands = {lhs_val, rhs_val};
     ins.source_line = loc.line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return dst;
 }
 
@@ -20760,7 +20771,7 @@ ir::IrValueId Lowering::lower_ternary(ast::TernaryExpr *e) {
         br.target_block = then_bb;
         br.false_block = else_bb;
         br.source_line = src_line;
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
         fn_->blocks[current_block_].succs.push_back(then_bb);
         fn_->blocks[current_block_].succs.push_back(else_bb);
         fn_->blocks[then_bb].preds.push_back(current_block_);
@@ -20778,7 +20789,7 @@ ir::IrValueId Lowering::lower_ternary(ast::TernaryExpr *e) {
         brm.op = ir::IrOp::BR;
         brm.target_block = merge_bb;
         brm.source_line = src_line;
-        fn_->append(then_end, std::move(brm));
+        emit(then_end, std::move(brm));
         fn_->blocks[then_end].succs.push_back(merge_bb);
         fn_->blocks[merge_bb].preds.push_back(then_end);
     }
@@ -20798,7 +20809,7 @@ ir::IrValueId Lowering::lower_ternary(ast::TernaryExpr *e) {
         brm.op = ir::IrOp::BR;
         brm.target_block = merge_bb;
         brm.source_line = src_line;
-        fn_->append(else_end, std::move(brm));
+        emit(else_end, std::move(brm));
         fn_->blocks[else_end].succs.push_back(merge_bb);
         fn_->blocks[merge_bb].preds.push_back(else_end);
     }
@@ -20816,7 +20827,7 @@ ir::IrValueId Lowering::lower_ternary(ast::TernaryExpr *e) {
     phi.phi_args.push_back({then_val, then_end});
     phi.phi_args.push_back({else_val, else_end});
     phi.source_line = src_line;
-    fn_->append(merge_bb, std::move(phi));
+    emit(merge_bb, std::move(phi));
     return result;
 }
 
@@ -20862,7 +20873,7 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
         ld.dst = tag_v;
         ld.operands = {v_buf};
         ld.source_line = src_line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
     }
 
     // 3. Comparacion tag == 0 (=Err).
@@ -20875,7 +20886,7 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
         cm.dst = cond_v;
         cm.operands = {tag_v, zero_v};
         cm.source_line = src_line;
-        fn_->append(current_block_, std::move(cm));
+        emit(current_block_, std::move(cm));
     }
 
     // 4. Crear bloques: err_bb (early-return), ok_bb (extract value).
@@ -20893,7 +20904,7 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
         br.target_block = err_bb;
         br.false_block = ok_bb;
         br.source_line = src_line;
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
         fn_->blocks[current_block_].succs.push_back(err_bb);
         fn_->blocks[current_block_].succs.push_back(ok_bb);
         fn_->blocks[err_bb].preds.push_back(current_block_);
@@ -20918,7 +20929,7 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
                 add.dst = v_src_at;
                 add.operands = {v_buf, v_off};
                 add.source_line = src_line;
-                fn_->append(current_block_, std::move(add));
+                emit(current_block_, std::move(add));
             }
             // BugFix 163 (2026-06-05): propagar is_host_ptr de v_buf al LOAD
             // side (igual que el STORE side abajo).  Sin esto el LOAD del
@@ -20933,7 +20944,7 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
                 ld.dst = v_tmp;
                 ld.operands = {v_src_at};
                 ld.source_line = src_line;
-                fn_->append(current_block_, std::move(ld));
+                emit(current_block_, std::move(ld));
             }
             const ir::IrValueId v_off2 =
                 emit_const(ir::IrType::I64, off, src_line);
@@ -20945,7 +20956,7 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
                 add.dst = v_dst_at;
                 add.operands = {sret_retbuf_, v_off2};
                 add.source_line = src_line;
-                fn_->append(current_block_, std::move(add));
+                emit(current_block_, std::move(add));
             }
             // BugFix sret-cross-mem (2026-06-04): propagar is_host_ptr.
             fn_->values[v_dst_at].is_host_ptr =
@@ -20956,7 +20967,7 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
                 st.type = ir::IrType::I64;
                 st.operands = {v_tmp, v_dst_at};
                 st.source_line = src_line;
-                fn_->append(current_block_, std::move(st));
+                emit(current_block_, std::move(st));
             }
         }
     }
@@ -20967,7 +20978,7 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
         ret.op = ir::IrOp::RET;
         ret.type = ir::IrType::VOID;
         ret.source_line = src_line;
-        fn_->append(current_block_, std::move(ret));
+        emit(current_block_, std::move(ret));
         block_terminated_ = true;
     }
 
@@ -20989,7 +21000,7 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
         add.dst = v_at8;
         add.operands = {v_buf, v_off8};
         add.source_line = src_line;
-        fn_->append(current_block_, std::move(add));
+        emit(current_block_, std::move(add));
     }
     // BugFix 163 (2026-06-05): propagar is_host_ptr de v_buf a v_at8.  El
     // buffer del Result temporal del operando es un host_ptr; sin esta
@@ -21005,7 +21016,7 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
         ld.dst = v_dst;
         ld.operands = {v_at8};
         ld.source_line = src_line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
     }
     return v_dst;
 }
@@ -21329,7 +21340,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                             ld.dst = v_old;
                             ld.operands = {addr};
                             ld.source_line = e->loc.line;
-                            fn_->append(current_block_, std::move(ld));
+                            emit(current_block_, std::move(ld));
                         }
                         // 2. mask = (1 << bit_width) - 1 (en el tipo
                         //    del storage; truncar a tamano del LOAD).
@@ -21349,7 +21360,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                             an.dst = v_clr;
                             an.operands = {v_old, v_inv};
                             an.source_line = e->loc.line;
-                            fn_->append(current_block_, std::move(an));
+                            emit(current_block_, std::move(an));
                         }
                         // 4. trimmed = rhs & mask  (clamp a rango).
                         ir::IrValueId v_msk = emit_const(ft, mask, e->loc.line);
@@ -21361,7 +21372,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                             an.dst = v_tr;
                             an.operands = {rhs, v_msk};
                             an.source_line = e->loc.line;
-                            fn_->append(current_block_, std::move(an));
+                            emit(current_block_, std::move(an));
                         }
                         // 5. shifted = trimmed << bit_offset
                         ir::IrValueId v_sh = v_tr;
@@ -21375,7 +21386,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                             sh.dst = v_sh;
                             sh.operands = {v_tr, v_amt};
                             sh.source_line = e->loc.line;
-                            fn_->append(current_block_, std::move(sh));
+                            emit(current_block_, std::move(sh));
                         }
                         // 6. new = cleared | shifted
                         ir::IrValueId v_new = fn_->new_value(ft);
@@ -21386,7 +21397,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                             or_.dst = v_new;
                             or_.operands = {v_clr, v_sh};
                             or_.source_line = e->loc.line;
-                            fn_->append(current_block_, std::move(or_));
+                            emit(current_block_, std::move(or_));
                         }
                         // 7. STORE new -> addr
                         ir::IrInstr st{};
@@ -21395,7 +21406,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                         st.dst = ir::IR_NO_VALUE;
                         st.operands = {v_new, addr};
                         st.source_line = e->loc.line;
-                        fn_->append(current_block_, std::move(st));
+                        emit(current_block_, std::move(st));
                         return rhs;
                     }
                 }
@@ -21433,7 +21444,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                     ad.dst = s_at;
                     ad.operands = {rhs, v_off};
                     ad.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(ad));
+                    emit(current_block_, std::move(ad));
                 }
                 const ir::IrValueId w = fn_->new_value(ir::IrType::I64);
                 {
@@ -21443,7 +21454,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                     ld.dst = w;
                     ld.operands = {s_at};
                     ld.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(ld));
+                    emit(current_block_, std::move(ld));
                 }
                 const ir::IrValueId d_at = fn_->new_value(ir::IrType::PTR);
                 fn_->values[d_at].is_host_ptr = dst_host;
@@ -21454,7 +21465,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                     ad.dst = d_at;
                     ad.operands = {addr, v_off};
                     ad.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(ad));
+                    emit(current_block_, std::move(ad));
                 }
                 {
                     ir::IrInstr st{};
@@ -21462,7 +21473,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                     st.type = ir::IrType::I64;
                     st.operands = {w, d_at};
                     st.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(st));
+                    emit(current_block_, std::move(st));
                 }
             }
             if (it_sl != tc_.struct_layouts().end() &&
@@ -21488,7 +21499,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                 ld.dst = v_ctrl;
                 ld.operands = {rhs};
                 ld.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ld));
+                emit(current_block_, std::move(ld));
             }
             {
                 ir::IrInstr st{};
@@ -21496,7 +21507,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                 st.type = ir::IrType::I64;
                 st.operands = {v_ctrl, addr};
                 st.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(st));
+                emit(current_block_, std::move(st));
             }
             emit_shared_refcount_inc(addr, e->loc.line);
             return rhs;
@@ -21508,7 +21519,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         st.dst = ir::IR_NO_VALUE;
         st.operands = {rhs, addr}; // STORE: operands[0]=val, operands[1]=ptr
         st.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
         return rhs;
     }
     // Caso IndexExpr: 'p[i] = v' equivale a *(p + i*sizeof(*p)) = v.
@@ -21593,7 +21604,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                 ad.dst = v_addr;
                 ad.operands = {v_ptr, v_idx};
                 ad.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ad));
+                emit(current_block_, std::move(ad));
             }
             // STORE u8: el char rhs se guarda truncado a 1 byte.
             v_val = cast_if_needed(v_val, fn_->values[v_val].type,
@@ -21605,7 +21616,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                 st.dst = ir::IR_NO_VALUE;
                 st.operands = {v_val, v_addr};
                 st.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(st));
+                emit(current_block_, std::move(st));
             }
             return v_val;
         }
@@ -21668,7 +21679,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                             ad.dst = v_new;
                             ad.operands = {src, v_off};
                             ad.source_line = e->loc.line;
-                            fn_->append(current_block_, std::move(ad));
+                            emit(current_block_, std::move(ad));
                             off_src = v_new;
                         }
                         {
@@ -21681,7 +21692,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                             ad.dst = v_new;
                             ad.operands = {addr, v_off};
                             ad.source_line = e->loc.line;
-                            fn_->append(current_block_, std::move(ad));
+                            emit(current_block_, std::move(ad));
                             off_dst = v_new;
                         }
                     }
@@ -21693,7 +21704,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                         ld.dst = v_qw;
                         ld.operands = {off_src};
                         ld.source_line = e->loc.line;
-                        fn_->append(current_block_, std::move(ld));
+                        emit(current_block_, std::move(ld));
                     }
                     {
                         ir::IrInstr st{};
@@ -21702,7 +21713,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                         st.dst = ir::IR_NO_VALUE;
                         st.operands = {v_qw, off_dst};
                         st.source_line = e->loc.line;
-                        fn_->append(current_block_, std::move(st));
+                        emit(current_block_, std::move(st));
                     }
                 }
                 return addr;
@@ -21733,7 +21744,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
             ld.dst = v_old;
             ld.operands = {addr};
             ld.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
             const ast::BinOp bop = compound_assign_op_to_binop(e->op);
             rhs = emit_binop_ir(bop, v_old, rhs, ix->result_type.kind, e->loc);
         }
@@ -21745,7 +21756,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         st.dst = ir::IR_NO_VALUE;
         st.operands = {rhs, addr};
         st.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
         return rhs;
     }
     // Caso UnaryExpr(Deref, p): '*p = v' escribe a traves del puntero.
@@ -21833,7 +21844,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                                 ad.dst = v_new;
                                 ad.operands = {src, v_off};
                                 ad.source_line = e->loc.line;
-                                fn_->append(current_block_, std::move(ad));
+                                emit(current_block_, std::move(ad));
                                 off_src = v_new;
                             }
                             {
@@ -21847,7 +21858,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                                 ad.dst = v_new;
                                 ad.operands = {addr, v_off};
                                 ad.source_line = e->loc.line;
-                                fn_->append(current_block_, std::move(ad));
+                                emit(current_block_, std::move(ad));
                                 off_dst = v_new;
                             }
                         }
@@ -21860,7 +21871,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                             ld.dst = v_qw;
                             ld.operands = {off_src};
                             ld.source_line = e->loc.line;
-                            fn_->append(current_block_, std::move(ld));
+                            emit(current_block_, std::move(ld));
                         }
                         // STORE al dst + q*8
                         {
@@ -21870,7 +21881,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                             st.dst = ir::IR_NO_VALUE;
                             st.operands = {v_qw, off_dst};
                             st.source_line = e->loc.line;
-                            fn_->append(current_block_, std::move(st));
+                            emit(current_block_, std::move(st));
                         }
                     }
                     return addr;
@@ -21900,7 +21911,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                 ld.dst = v_old;
                 ld.operands = {addr};
                 ld.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ld));
+                emit(current_block_, std::move(ld));
                 const ast::BinOp bop = compound_assign_op_to_binop(e->op);
                 rhs = emit_binop_ir(bop, v_old, rhs, un->result_type.kind,
                                     e->loc);
@@ -21912,7 +21923,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
             st.dst = ir::IR_NO_VALUE;
             st.operands = {rhs, addr};
             st.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
             return rhs;
         }
     }
@@ -21954,7 +21965,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                 al.imm = 1;
                 al.host_alloca = native_poo_;
                 al.source_line = ln;
-                fn_->append(current_block_, std::move(al));
+                emit(current_block_, std::move(al));
             }
             if (native_poo_) fn_->values[v_scr].is_host_ptr = true;
             {
@@ -21964,7 +21975,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                 st.dst = ir::IR_NO_VALUE;
                 st.operands = {v_ch, v_scr};
                 st.source_line = ln;
-                fn_->append(current_block_, std::move(st));
+                emit(current_block_, std::move(st));
             }
             build_native_string_append_inplace(
                 v_slot, v_scr, emit_const(ir::IrType::I64, 1, ln), ln);
@@ -22060,7 +22071,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                 is.dst = v_addr;
                 is.imm = slot_idx;
                 is.source_line = ln;
-                fn_->append(current_block_, std::move(is));
+                emit(current_block_, std::move(is));
                 // El slot vive en memoria host (seccion `gdata`) -> el
                 // load-modify-store de abajo es acceso host directo.
                 fn_->values[v_addr].is_host_ptr = true;
@@ -22108,7 +22119,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                     ld.dst = v_cur;
                     ld.operands = {v_addr};
                     ld.source_line = ln;
-                    fn_->append(current_block_, std::move(ld));
+                    emit(current_block_, std::move(ld));
                 }
                 const ast::BinOp bop = compound_assign_op_to_binop(e->op);
                 rhs = emit_binop_ir(bop, v_cur, rhs,
@@ -22119,7 +22130,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
             st.type = gty;
             st.operands = {rhs, v_addr};
             st.source_line = ln;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
             return rhs;
         }
     }
@@ -22151,7 +22162,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                         is.dst = v_addr_load;
                         is.imm = slot_idx;
                         is.source_line = ln;
-                        fn_->append(current_block_, std::move(is));
+                        emit(current_block_, std::move(is));
                     }
                     ir::IrValueId v_cur = fn_->new_value(ir::IrType::I64);
                     {
@@ -22161,7 +22172,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                         ld.dst = v_cur;
                         ld.operands = {v_addr_load};
                         ld.source_line = ln;
-                        fn_->append(current_block_, std::move(ld));
+                        emit(current_block_, std::move(ld));
                     }
                     /* Combine via emit_binop equivalent.  Mapeamos
                      * AssignOp -> BinOp y emitimos.  Para simplicidad
@@ -22206,14 +22217,14 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                     is.dst = v_addr;
                     is.imm = slot_idx;
                     is.source_line = ln;
-                    fn_->append(current_block_, std::move(is));
+                    emit(current_block_, std::move(is));
                 }
                 ir::IrInstr st{};
                 st.op = ir::IrOp::STORE;
                 st.type = ir::IrType::I64;
                 st.operands = {rhs, v_addr};
                 st.source_line = ln;
-                fn_->append(current_block_, std::move(st));
+                emit(current_block_, std::move(st));
                 return rhs;
             }
         }
@@ -22348,7 +22359,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                         ad.dst = s_at;
                         ad.operands = {rhs, v_off};
                         ad.source_line = e->loc.line;
-                        fn_->append(current_block_, std::move(ad));
+                        emit(current_block_, std::move(ad));
                     }
                     const ir::IrValueId w = fn_->new_value(ir::IrType::I64);
                     {
@@ -22358,7 +22369,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                         ld.dst = w;
                         ld.operands = {s_at};
                         ld.source_line = e->loc.line;
-                        fn_->append(current_block_, std::move(ld));
+                        emit(current_block_, std::move(ld));
                     }
                     const ir::IrValueId d_at = fn_->new_value(ir::IrType::PTR);
                     fn_->values[d_at].is_host_ptr = dst_host;
@@ -22369,7 +22380,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                         ad.dst = d_at;
                         ad.operands = {dst_addr, v_off};
                         ad.source_line = e->loc.line;
-                        fn_->append(current_block_, std::move(ad));
+                        emit(current_block_, std::move(ad));
                     }
                     {
                         ir::IrInstr st{};
@@ -22377,7 +22388,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                         st.type = ir::IrType::I64;
                         st.operands = {w, d_at};
                         st.source_line = e->loc.line;
-                        fn_->append(current_block_, std::move(st));
+                        emit(current_block_, std::move(st));
                     }
                 }
                 return dst_addr;
@@ -22435,7 +22446,7 @@ ir::IrValueId Lowering::lower_string_lit(ast::StringLitExpr *e) {
     ins.dst = dst;
     ins.imm = idx;
     ins.source_line = e->loc.line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return dst;
 }
 
@@ -22484,7 +22495,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         is.func_name = lit->value; // nombre de la seccion
         is.imm = kind;
         is.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(is));
+        emit(current_block_, std::move(is));
         out_value = dst;
         return true;
     }
@@ -22541,7 +22552,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         cl.func_name = "vesta_runtime:vx_get_native_thunk";
         cl.operands = {v_fn_pc, v_argc};
         cl.source_line = src_line;
-        fn_->append(current_block_, std::move(cl));
+        emit(current_block_, std::move(cl));
         out_value = v_dst;
         return true;
     }
@@ -22595,7 +22606,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         in.operands = {base};
         in.is_call_site = true;
         in.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(in));
+        emit(current_block_, std::move(in));
         out_value = d;
         return true;
     }
@@ -22670,7 +22681,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             s.dst = off;
             s.operands = {field_addr, base_ptr};
             s.source_line = ln;
-            fn_->append(current_block_, std::move(s));
+            emit(current_block_, std::move(s));
         }
         if (name == "offsetof") {
             out_value = off;
@@ -22688,7 +22699,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             a.dst = endv;
             a.operands = {off, fc};
             a.source_line = ln;
-            fn_->append(current_block_, std::move(a));
+            emit(current_block_, std::move(a));
         }
         ir::IrValueId lenv = lower_expr(e->args[1].get());
         if (lenv == ir::IR_NO_VALUE) {
@@ -22706,7 +22717,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         c.dst = res;
         c.operands = {endv, lenv};
         c.source_line = ln;
-        fn_->append(current_block_, std::move(c));
+        emit(current_block_, std::move(c));
         out_value = res;
         return true;
     }
@@ -22759,7 +22770,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         bc.dst = v_dst;
         bc.operands = {v_src};
         bc.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(bc));
+        emit(current_block_, std::move(bc));
         out_value = v_dst;
         return true;
     }
@@ -22826,7 +22837,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 ins.dst = v_addr;
                 ins.imm = idx;
                 ins.source_line = src_line;
-                fn_->append(current_block_, std::move(ins));
+                emit(current_block_, std::move(ins));
             }
             ir::IrValueId v_len = emit_const(
                 ir::IrType::I64, static_cast<uint64_t>(nm.size()), src_line);
@@ -22875,7 +22886,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     is.dst = v_addr;
                     is.imm = idx;
                     is.source_line = src_line;
-                    fn_->append(current_block_, std::move(is));
+                    emit(current_block_, std::move(is));
                 }
                 ir::IrValueId v_len = emit_const(
                     ir::IrType::I64, (uint64_t)r.str.size(), src_line);
@@ -22956,7 +22967,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     sl.dst = dst;
                     sl.imm = static_cast<uint64_t>(it->second);
                     sl.source_line = src_line;
-                    fn_->append(current_block_, std::move(sl));
+                    emit(current_block_, std::move(sl));
                     out_value = dst;
                     return true;
                 }
@@ -22993,7 +23004,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     ad.dst = addr;
                     ad.operands = {info_ptr, off_val};
                     ad.source_line = src_line;
-                    fn_->append(current_block_, std::move(ad));
+                    emit(current_block_, std::move(ad));
                 }
                 ir::IrValueId dst = fn_->new_value(ir::IrType::U32);
                 ir::IrInstr ld{};
@@ -23002,7 +23013,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 ld.dst = dst;
                 ld.operands = {addr};
                 ld.source_line = src_line;
-                fn_->append(current_block_, std::move(ld));
+                emit(current_block_, std::move(ld));
                 return dst;
             };
             if (is_kind_i32) {
@@ -23038,7 +23049,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 ad.dst = addr;
                 ad.operands = {info_ptr, name_off};
                 ad.source_line = src_line;
-                fn_->append(current_block_, std::move(ad));
+                emit(current_block_, std::move(ad));
                 /* STRMAKE necesita addr y len.  Para name_len que es u32
                  * lo usamos como i64 directamente; en la VM ambos caben
                  * en qword. */
@@ -23063,7 +23074,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 mu.dst = idx_x16;
                 mu.operands = {idx_val, v16};
                 mu.source_line = src_line;
-                fn_->append(current_block_, std::move(mu));
+                emit(current_block_, std::move(mu));
             }
             ir::IrValueId v24 = emit_const(ir::IrType::I64, 24, src_line);
             ir::IrValueId field_off = fn_->new_value(ir::IrType::I64);
@@ -23074,7 +23085,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 ad.dst = field_off;
                 ad.operands = {idx_x16, v24};
                 ad.source_line = src_line;
-                fn_->append(current_block_, std::move(ad));
+                emit(current_block_, std::move(ad));
             }
             ir::IrValueId field_addr = fn_->new_value(ir::IrType::PTR);
             {
@@ -23084,7 +23095,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 ad.dst = field_addr;
                 ad.operands = {info_ptr, field_off};
                 ad.source_line = src_line;
-                fn_->append(current_block_, std::move(ad));
+                emit(current_block_, std::move(ad));
             }
             /* Helper interno LOAD u32 at field_addr + offset. */
             auto load_u32_field = [&](uint32_t off) -> ir::IrValueId {
@@ -23098,7 +23109,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     ad.dst = addr;
                     ad.operands = {field_addr, off_val};
                     ad.source_line = src_line;
-                    fn_->append(current_block_, std::move(ad));
+                    emit(current_block_, std::move(ad));
                 }
                 ir::IrValueId dst = fn_->new_value(ir::IrType::U32);
                 ir::IrInstr ld{};
@@ -23107,7 +23118,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 ld.dst = dst;
                 ld.operands = {addr};
                 ld.source_line = src_line;
-                fn_->append(current_block_, std::move(ld));
+                emit(current_block_, std::move(ld));
                 return dst;
             };
             if (name == "type_info_field_offset") {
@@ -23130,7 +23141,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     ad.dst = addr;
                     ad.operands = {info_ptr, fname_off};
                     ad.source_line = src_line;
-                    fn_->append(current_block_, std::move(ad));
+                    emit(current_block_, std::move(ad));
                 }
                 ir::IrValueId v_str =
                     emit_string_literal_repr(addr, fname_len, -1, src_line);
@@ -23170,7 +23181,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ld.dst = fn_addr;
             ld.operands = {fv_addr};
             ld.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
         }
         ir::IrValueId env_addr = fn_->new_value(ir::IrType::I64);
         {
@@ -23183,7 +23194,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 ad.dst = fv_plus_8;
                 ad.operands = {fv_addr, off8};
                 ad.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ad));
+                emit(current_block_, std::move(ad));
             }
             ir::IrInstr ld{};
             ld.op = ir::IrOp::LOAD;
@@ -23191,7 +23202,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ld.dst = env_addr;
             ld.operands = {fv_plus_8};
             ld.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
         }
         /* Iterar fields/methods y emitir una CALLCLOSURE por cada uno. */
         const uint32_t n = is_fields ? comptime_field_count(tc_, t)
@@ -23225,7 +23236,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 is.dst = v_addr;
                 is.imm = idx;
                 is.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(is));
+                emit(current_block_, std::move(is));
             }
             ir::IrValueId v_len = emit_const(
                 ir::IrType::I64, static_cast<uint64_t>(nm.size()), e->loc.line);
@@ -23238,7 +23249,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             cl.func_ptr = fn_addr;
             cl.operands = {env_addr, v_str};
             cl.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(cl));
+            emit(current_block_, std::move(cl));
         }
         out_value = ir::IR_NO_VALUE;
         return true;
@@ -23303,7 +23314,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 c.dst = off_val;
                 c.imm = static_cast<uint64_t>(off);
                 c.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(c));
+                emit(current_block_, std::move(c));
             }
             addr = fn_->new_value(ir::IrType::PTR);
             fn_->values[addr].is_host_ptr = t_is_class;
@@ -23313,7 +23324,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ad.dst = addr;
             ad.operands = {obj, off_val};
             ad.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
         }
         /* Si offset==0 y T es CLASS, el obj YA debe tener is_host_ptr.
          * Si T es STRUCT con offset==0, el slot VM se mantiene sin
@@ -23327,7 +23338,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ld.dst = dst;
             ld.operands = {addr};
             ld.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
             /* Propagar is_host_ptr para campos PTR no virtuales (mismo
              * tratamiento que lower_class_field_load). */
             if (ftype.kind == PrimitiveKind::PTR && !ftype.is_virtual) {
@@ -23347,7 +23358,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 deref.dst = v_host;
                 deref.operands = {dst};
                 deref.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(deref));
+                emit(current_block_, std::move(deref));
                 out_value = v_host;
                 return true;
             }
@@ -23377,7 +23388,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         /* Convencion IR: operands = {value, addr} (no al reves). */
         st.operands = {val, addr};
         st.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
         out_value = ir::IR_NO_VALUE;
         return true;
     }
@@ -23438,7 +23449,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     is.dst = v_addr;
                     is.imm = idx;
                     is.source_line = src_line;
-                    fn_->append(current_block_, std::move(is));
+                    emit(current_block_, std::move(is));
                 }
                 ir::IrValueId v_len =
                     emit_const(ir::IrType::I64,
@@ -23808,7 +23819,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             bc.dst = d;
             bc.operands = {src};
             bc.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(bc));
+            emit(current_block_, std::move(bc));
             return d;
         };
         if (is_atomic_load_g) {
@@ -23968,7 +23979,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         is.dst = v_str;
         is.imm = lit_idx;
         is.source_line = slit->loc.line;
-        fn_->append(current_block_, std::move(is));
+        emit(current_block_, std::move(is));
         const ir::IrValueId v_len =
             emit_const(ir::IrType::I64, lit_len, slit->loc.line);
         return {v_str, v_len};
@@ -23982,7 +23993,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ip.type = ir::IrType::PTR;
         ip.dst = v_proc;
         ip.source_line = line;
-        fn_->append(current_block_, std::move(ip));
+        emit(current_block_, std::move(ip));
         return v_proc;
     };
 
@@ -24031,7 +24042,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ins.op = ir::IrOp::CALLN;
             ins.func_name = "vx_bare_io:" + prim;
         }
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
     };
 
     auto emit_print_string_literal = [&](const std::string &text,
@@ -24047,7 +24058,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         is.dst = v_str;
         is.imm = lit_idx;
         is.source_line = line;
-        fn_->append(current_block_, std::move(is));
+        emit(current_block_, std::move(is));
         const ir::IrValueId v_len = emit_const(ir::IrType::I64, lit_len, line);
         if (native_poo_) {
             // AOT/bare: sin proc -> escribir los bytes via __vx_write (el
@@ -24065,7 +24076,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ins.func_name = lib + ":vio_print";
         ins.operands = {v_proc, v_str, v_len};
         ins.source_line = line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
     };
 
     auto emit_print_newline = [&](uint32_t line) {
@@ -24080,7 +24091,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ins.dst = ir::IR_NO_VALUE;
         ins.func_name = lib + ":vio_print_newline";
         ins.source_line = line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
     };
 
     // Tabla de ANSI codes (duplicada con lower_ident por simplicidad).
@@ -24324,7 +24335,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     cv.dst = vp;
                     cv.operands = {v};
                     cv.source_line = ex->loc.line;
-                    fn_->append(current_block_, std::move(cv));
+                    emit(current_block_, std::move(cv));
                     vf = vp;
                 }
                 emit_io_prim("__vx_print_float", {vf}, ex->loc.line);
@@ -24350,7 +24361,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     s.dst = v_sub;
                     s.operands = {v_width, slen};
                     s.source_line = ex->loc.line;
-                    fn_->append(current_block_, std::move(s));
+                    emit(current_block_, std::move(s));
                     ir::IrValueId v_zero =
                         emit_const(ir::IrType::I64, 0, ex->loc.line);
                     ir::IrValueId v_pos = fn_->new_value(ir::IrType::BOOL);
@@ -24360,7 +24371,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     cgt.dst = v_pos;
                     cgt.operands = {v_sub, v_zero};
                     cgt.source_line = ex->loc.line;
-                    fn_->append(current_block_, std::move(cgt));
+                    emit(current_block_, std::move(cgt));
                     ir::IrValueId v_mask = cast_if_needed(
                         v_pos, ir::IrType::BOOL, ir::IrType::I64, ex->loc.line,
                         /*is_explicit=*/true);
@@ -24371,7 +24382,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     m.dst = v_cl;
                     m.operands = {v_sub, v_mask};
                     m.source_line = ex->loc.line;
-                    fn_->append(current_block_, std::move(m));
+                    emit(current_block_, std::move(m));
                     return v_cl;
                 };
                 auto emit_pad = [&](ir::IrValueId v_count) {
@@ -24443,7 +24454,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 ext.dst = arg;
                 ext.operands = {v};
                 ext.source_line = ex->loc.line;
-                fn_->append(current_block_, std::move(ext));
+                emit(current_block_, std::move(ext));
             }
             emit_io_prim(sym, {arg}, ex->loc.line);
             return;
@@ -24515,7 +24526,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 ext.dst = f64v;
                 ext.operands = {v_arg};
                 ext.source_line = ex->loc.line;
-                fn_->append(current_block_, std::move(ext));
+                emit(current_block_, std::move(ext));
                 ir::IrValueId bits = fn_->new_value(ir::IrType::I64);
                 ir::IrInstr bc{};
                 bc.op = ir::IrOp::BITCAST;
@@ -24523,7 +24534,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 bc.dst = bits;
                 bc.operands = {f64v};
                 bc.source_line = ex->loc.line;
-                fn_->append(current_block_, std::move(bc));
+                emit(current_block_, std::move(bc));
                 v_arg = bits;
             } else if (t.kind == PrimitiveKind::F64 && vt != ir::IrType::I64) {
                 ir::IrValueId bits = fn_->new_value(ir::IrType::I64);
@@ -24533,7 +24544,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 bc.dst = bits;
                 bc.operands = {v_arg};
                 bc.source_line = ex->loc.line;
-                fn_->append(current_block_, std::move(bc));
+                emit(current_block_, std::move(bc));
                 v_arg = bits;
             } else if (t.kind == PrimitiveKind::CLASS) {
                 // CLASS -> GcHandle via instruccion `gchandle`.
@@ -24563,7 +24574,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ins.func_name = lib + ":vio_print_fmt";
             ins.operands = {v_arg, v_kind, v_width, v_fill, v_align};
             ins.source_line = ex->loc.line;
-            fn_->append(current_block_, std::move(ins));
+            emit(current_block_, std::move(ins));
             return;
         }
 
@@ -24603,7 +24614,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 s.dst = v_sub;
                 s.operands = {v_width, v_len};
                 s.source_line = ex->loc.line;
-                fn_->append(current_block_, std::move(s));
+                emit(current_block_, std::move(s));
                 // Clamp a 0: si v_sub < 0, usar 0.  Patron:
                 // cmps v_sub, 0 -> SF; setcc gt -> 1 si positivo;
                 // mul v_sub * mask = clamp.  Mas simple: usar
@@ -24618,7 +24629,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 cgt.dst = v_pos;
                 cgt.operands = {v_sub, v_zero};
                 cgt.source_line = ex->loc.line;
-                fn_->append(current_block_, std::move(cgt));
+                emit(current_block_, std::move(cgt));
                 ir::IrValueId v_mask =
                     cast_if_needed(v_pos, ir::IrType::BOOL, ir::IrType::I64,
                                    ex->loc.line, /*is_explicit=*/true);
@@ -24629,7 +24640,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 m.dst = v_clamped;
                 m.operands = {v_sub, v_mask};
                 m.source_line = ex->loc.line;
-                fn_->append(current_block_, std::move(m));
+                emit(current_block_, std::move(m));
                 v_pad = v_clamped;
             }
             // Emit padding LEADING si align==RIGHT.
@@ -24650,7 +24661,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 pc.func_name = lib + ":vio_print_pad";
                 pc.operands = {v_fill, v_count};
                 pc.source_line = ex->loc.line;
-                fn_->append(current_block_, std::move(pc));
+                emit(current_block_, std::move(pc));
             };
             if (need_pad && fs.align == FmtSpec::Align::RIGHT) {
                 emit_pad_call(v_pad);
@@ -24667,7 +24678,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 ins.func_name = lib + ":vio_print_buf";
                 ins.operands = {v_ptr, v_len};
                 ins.source_line = ex->loc.line;
-                fn_->append(current_block_, std::move(ins));
+                emit(current_block_, std::move(ins));
             }
             if (need_pad && fs.align == FmtSpec::Align::LEFT) {
                 emit_pad_call(v_pad);
@@ -24723,7 +24734,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ext.dst = f64v;
             ext.operands = {v};
             ext.source_line = ex->loc.line;
-            fn_->append(current_block_, std::move(ext));
+            emit(current_block_, std::move(ext));
             ir::IrValueId bits = fn_->new_value(ir::IrType::I64);
             ir::IrInstr bc{};
             bc.op = ir::IrOp::BITCAST;
@@ -24731,7 +24742,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             bc.dst = bits;
             bc.operands = {f64v};
             bc.source_line = ex->loc.line;
-            fn_->append(current_block_, std::move(bc));
+            emit(current_block_, std::move(bc));
             v = bits;
         } else if (t.kind == PrimitiveKind::F64) {
             if (vt != ir::IrType::I64) {
@@ -24742,7 +24753,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 bc.dst = bits;
                 bc.operands = {v};
                 bc.source_line = ex->loc.line;
-                fn_->append(current_block_, std::move(bc));
+                emit(current_block_, std::move(bc));
                 v = bits;
             }
         } else if (t.kind == PrimitiveKind::CLASS) {
@@ -24768,7 +24779,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ins.func_name = lib + ":" + func;
         ins.operands = {v};
         ins.source_line = ex->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
     };
 
     auto emit_print_arg = [&](ast::Expr *ex) {
@@ -24842,7 +24853,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ins.func_name = "vx_gc_collect";
             ins.is_call_site = true;
             ins.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ins));
+            emit(current_block_, std::move(ins));
             out_value = ir::IR_NO_VALUE;
             return true;
         }
@@ -24851,7 +24862,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ins.type = ir::IrType::VOID;
         ins.dst = ir::IR_NO_VALUE;
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         out_value = ir::IR_NO_VALUE;
         return true;
     }
@@ -24875,7 +24886,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ins.func_name = "vx_gc_finalize_all";
             ins.is_call_site = true;
             ins.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ins));
+            emit(current_block_, std::move(ins));
             out_value = ir::IR_NO_VALUE;
             return true;
         }
@@ -24885,7 +24896,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ins.type = ir::IrType::VOID;
         ins.dst = ir::IR_NO_VALUE;
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         out_value = ir::IR_NO_VALUE;
         return true;
     }
@@ -24908,7 +24919,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ins.dst = ir::IR_NO_VALUE;
         ins.func_name = lib + ":vio_flush";
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         out_value = ir::IR_NO_VALUE;
         return true;
     }
@@ -24995,7 +25006,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ins.func_name = lib + ":" + func;
         ins.operands = {v};
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         out_value = ir::IR_NO_VALUE;
         return true;
     }
@@ -25026,7 +25037,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ins.func_name = lib + ":vio_print_pad";
         ins.operands = {v_fill, v_w};
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         out_value = ir::IR_NO_VALUE;
         return true;
     }
@@ -25062,7 +25073,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ins.func_name = lib + ":vio_print_int";
         ins.operands = {v};
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         out_value = ir::IR_NO_VALUE;
         return true;
     }
@@ -25095,7 +25106,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ins.func_name = lib + ":vio_fopen";
         ins.operands = {v_proc, v_path, v_path_len, v_mode, v_mode_len};
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         out_value = dst;
         return true;
     }
@@ -25134,7 +25145,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         // Orden de args segun signature C: (proc, vm_addr, size, handle).
         ins.operands = {v_proc, v_buf, v_buf_len, v_fp};
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         out_value = dst;
         return true;
     }
@@ -25163,7 +25174,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ins.func_name = lib + ":vio_fclose";
         ins.operands = {v_fp};
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         out_value = dst;
         return true;
     }
@@ -25196,7 +25207,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ins.dst = dst;
         ins.operands = {v_size};
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         out_value = dst;
         return true;
     }
@@ -25219,7 +25230,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ins.dst = ir::IR_NO_VALUE;
         ins.operands = {v_ptr};
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         out_value = ir::IR_NO_VALUE;
         return true;
     }
@@ -25267,7 +25278,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             call.is_call_site = true;
             call.operands = {v_to, v_from}; // arg0=to_ctx, arg1=from_ctx
             call.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(call));
+            emit(current_block_, std::move(call));
             out_value = ir::IR_NO_VALUE;
             return true;
         }
@@ -25277,7 +25288,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ins.dst = ir::IR_NO_VALUE;
         ins.operands = {v_to, v_from}; // operands[0]=dst_ctx, operands[1]=src_ctx
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         out_value = ir::IR_NO_VALUE;
         return true;
     }
@@ -25315,7 +25326,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             sl.dst = v_path_addr;
             sl.imm = path_idx;
             sl.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(sl));
+            emit(current_block_, std::move(sl));
         }
         const ir::IrValueId v_path_len =
             emit_const(ir::IrType::I64, path_len, e->loc.line);
@@ -25328,7 +25339,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ml.imm = 0; /* loadmod */
         ml.source_line = e->loc.line;
         ml.is_call_site = true;
-        fn_->append(current_block_, std::move(ml));
+        emit(current_block_, std::move(ml));
         out_value = v_dst;
         return true;
     }
@@ -25357,7 +25368,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             sl.dst = v_path_addr;
             sl.imm = path_idx;
             sl.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(sl));
+            emit(current_block_, std::move(sl));
         }
         const ir::IrValueId v_path_len =
             emit_const(ir::IrType::I64, path_len, e->loc.line);
@@ -25369,7 +25380,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ml.operands = {v_path_addr, v_path_len};
         ml.imm = 1; /* unloadmod */
         ml.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ml));
+        emit(current_block_, std::move(ml));
         out_value = v_dst;
         return true;
     }
@@ -25434,7 +25445,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ins.func_name = std::string(COL_NATIVE_LIB) + ":" + fn_name;
         ins.operands = std::move(args);
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         // 3. Reescribir el binding local a 0 (handle invalido).  El
         // cleanup al exit del scope vera este 0 (via refresh_name) y
         // sera no-op.  Evita double-free.
@@ -25474,7 +25485,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             std::string(COL_NATIVE_LIB) + ":" + col_ctor->native_new_fn;
         ins.operands = std::move(arg_ids);
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         out_value = v_dst;
         return true;
     }
@@ -25508,7 +25519,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             sl.dst = v_path_addr;
             sl.imm = path_idx;
             sl.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(sl));
+            emit(current_block_, std::move(sl));
         }
         const ir::IrValueId v_path_len =
             emit_const(ir::IrType::I64, path_len, e->loc.line);
@@ -25519,7 +25530,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         dl.dst = v_dst;
         dl.operands = {v_path_addr, v_path_len};
         dl.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(dl));
+        emit(current_block_, std::move(dl));
         out_value = v_dst;
         return true;
     }
@@ -25554,7 +25565,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             sl.dst = v_name_addr;
             sl.imm = name_idx;
             sl.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(sl));
+            emit(current_block_, std::move(sl));
         }
         const ir::IrValueId v_name_len =
             emit_const(ir::IrType::I64, name_len, e->loc.line);
@@ -25565,7 +25576,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ds.dst = v_dst;
         ds.operands = {v_handle, v_name_addr, v_name_len};
         ds.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ds));
+        emit(current_block_, std::move(ds));
         out_value = v_dst;
         return true;
     }
@@ -25605,7 +25616,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ins.func_name = "__callni__:"; // prefix detectado en emitter
         ins.operands = std::move(arg_ids);
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         out_value = v_dst;
         return true;
     }
@@ -25658,7 +25669,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     ext.dst = f64v;
                     ext.operands = {v};
                     ext.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(ext));
+                    emit(current_block_, std::move(ext));
                     v = f64v;
                 } else if (vt != ir::IrType::F64) {
                     // Si el arg no es float, lo dejamos como esta (el
@@ -25673,7 +25684,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             in.dst = v_dst;
             in.operands = std::move(ops);
             in.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(in));
+            emit(current_block_, std::move(in));
             out_value = v_dst;
             return true;
         };
@@ -25723,7 +25734,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             in.dst = v_dst;
             in.operands = std::move(ops);
             in.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(in));
+            emit(current_block_, std::move(in));
             out_value = v_dst;
             return true;
         };
@@ -25817,7 +25828,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     ext.dst = f64v;
                     ext.operands = {v};
                     ext.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(ext));
+                    emit(current_block_, std::move(ext));
                     v = f64v;
                 }
                 ir::IrValueId bits = fn_->new_value(ir::IrType::I64);
@@ -25827,7 +25838,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 bc.dst = bits;
                 bc.operands = {v};
                 bc.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(bc));
+                emit(current_block_, std::move(bc));
                 v = bits;
             } else {
                 v = cast_if_needed(v, vt, arg_ir, e->loc.line);
@@ -25843,7 +25854,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ins.func_name = lib_math + ":" + func_name;
         ins.operands = std::move(ops);
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         (void)dst_is_float;
         out_value = dst;
         return true;
@@ -25884,7 +25895,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             sa.dst = v_addr;
             sa.imm = msg_idx;
             sa.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(sa));
+            emit(current_block_, std::move(sa));
         }
         const ir::IrValueId v_len = emit_const(
             ir::IrType::I64, static_cast<uint64_t>(msg_len), e->loc.line);
@@ -25894,7 +25905,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         p.dst = ir::IR_NO_VALUE;
         p.operands = {v_addr, v_len};
         p.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(p));
+        emit(current_block_, std::move(p));
         block_terminated_ =
             true; // panic es terminador (no retorna salvo via catch)
         out_value = ir::IR_NO_VALUE;
@@ -25968,7 +25979,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ld.dst = v_byte;
             ld.operands = {v_raw};
             ld.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
         }
         out_value = v_byte;
         return true;
@@ -26001,7 +26012,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             sh.operands = {v_start,
                            emit_const(ir::IrType::U64, 32, e->loc.line)};
             sh.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(sh));
+            emit(current_block_, std::move(sh));
         }
         ir::IrValueId v_range = fn_->new_value(ir::IrType::U64);
         {
@@ -26011,7 +26022,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             orop.dst = v_range;
             orop.operands = {v_shifted, v_len};
             orop.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(orop));
+            emit(current_block_, std::move(orop));
         }
         ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
         {
@@ -26022,7 +26033,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             sl.operands = {v_str, v_range};
             sl.source_line = e->loc.line;
             sl.is_call_site = true;
-            fn_->append(current_block_, std::move(sl));
+            emit(current_block_, std::move(sl));
         }
         out_value = v_dst;
         return true;
@@ -26090,7 +26101,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             is.dst = v_msg;
             is.imm = idx;
             is.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(is));
+            emit(current_block_, std::move(is));
         }
         const ir::IrValueId v_len = emit_const(
             ir::IrType::I64, static_cast<uint64_t>(msg_text.size()),
@@ -26105,7 +26116,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         cl.func_name = "vesta_comptime:static_assert";
         cl.operands = {v_proc, v_cond, v_msg, v_len};
         cl.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(cl));
+        emit(current_block_, std::move(cl));
         /* Una asercion incumplida CORTA la ejecucion aqui mismo.
          *
          * El helper devuelve el veredicto y antes se ignoraba, con lo que el
@@ -26123,7 +26134,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             br.target_block = sa_fail; // != 0 -> incumplida
             br.false_block = sa_cont;  // == 0 -> sigue
             br.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(br));
+            emit(current_block_, std::move(br));
         }
         fn_->blocks[current_block_].succs.push_back(sa_fail);
         fn_->blocks[current_block_].succs.push_back(sa_cont);
@@ -26136,7 +26147,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             p.dst = ir::IR_NO_VALUE;
             p.operands = {v_msg, v_len};
             p.source_line = e->loc.line;
-            fn_->append(sa_fail, std::move(p));
+            emit(sa_fail, std::move(p));
         }
         current_block_ = sa_cont;
         out_value = v_dst;
@@ -26162,7 +26173,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         cl.func_name = "stdlib/native/io/vesta_io:vio_gensym";
         cl.operands = {};
         cl.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(cl));
+        emit(current_block_, std::move(cl));
         out_value = v_dst;
         return true;
     }
@@ -26258,7 +26269,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 al.dst = v_dst_buf;
                 al.imm = 65536;
                 al.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(al));
+                emit(current_block_, std::move(al));
             }
             const ir::IrValueId v_proc = emit_getproc(e->loc.line);
             out_mod_->register_native_import("stdlib/native/io/vesta_io",
@@ -26272,7 +26283,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 cl.func_name = "stdlib/native/io/vesta_io:vstr_repeat_to_vmbuf";
                 cl.operands = {v_proc, v_dst_buf, v_src_addr, v_src_len, v_n};
                 cl.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(cl));
+                emit(current_block_, std::move(cl));
             }
             /* STRMAKE desde el buffer dst. */
             ir::IrValueId v_h = emit_strmake(v_dst_buf, v_len, e->loc.line);
@@ -26310,7 +26321,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 cl.func_name = "stdlib/native/io/vesta_io:vstr_contains";
                 cl.operands = {v_proc, v_h_addr, v_h_len, v_n_addr, v_n_len};
                 cl.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(cl));
+                emit(current_block_, std::move(cl));
             }
             out_value = v_dst;
             return true;
@@ -26350,7 +26361,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 al.dst = v_dst_buf;
                 al.imm = 65536;
                 al.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(al));
+                emit(current_block_, std::move(al));
             }
             const ir::IrValueId v_proc = emit_getproc(e->loc.line);
             out_mod_->register_native_import("stdlib/native/io/vesta_io",
@@ -26366,7 +26377,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 cl.operands = {v_proc,      v_dst_buf,  v_src_addr, v_src_len,
                                v_from_addr, v_from_len, v_to_addr,  v_to_len};
                 cl.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(cl));
+                emit(current_block_, std::move(cl));
             }
             ir::IrValueId v_h = emit_strmake(v_dst_buf, v_len, e->loc.line);
             out_value = v_h;
@@ -26501,7 +26512,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ins.dst = v_dst;
             ins.operands = {v_str};
             ins.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ins));
+            emit(current_block_, std::move(ins));
             out_value = v_dst;
         } else if (is_str_bytes) {
             out_value = emit_strgetbytes(v_str, e->loc.line);
@@ -26515,7 +26526,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ins.dst = v_dst;
             ins.operands = {v_str};
             ins.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ins));
+            emit(current_block_, std::move(ins));
             out_value = v_dst;
         } else {
             // str_intern: aloca nuevo StringObject canonical o reusa pool.
@@ -26528,7 +26539,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ins.operands = {v_str};
             ins.is_call_site = true;
             ins.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ins));
+            emit(current_block_, std::move(ins));
             out_value = v_dst;
         }
         return true;
@@ -26633,7 +26644,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     ir::IrInstr sa{};
                     sa.op = ir::IrOp::STR_LIT_ADDR; sa.type = ir::IrType::PTR;
                     sa.dst = r.ptr; sa.imm = idx; sa.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(sa));
+                    emit(current_block_, std::move(sa));
                     r.len = emit_const(ir::IrType::I64,
                                        static_cast<uint64_t>(lit.size()),
                                        e->loc.line);
@@ -26673,7 +26684,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             cmp.op = ir::IrOp::CMP_EQ; cmp.type = ir::IrType::BOOL;
             cmp.dst = v_eq; cmp.operands = {v_cmp, v_zero};
             cmp.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(cmp));
+            emit(current_block_, std::move(cmp));
             out_value = v_eq;
             return true;
         }
@@ -26708,7 +26719,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             cmp.dst = v_dst;
             cmp.operands = {v_a, v_b};
             cmp.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(cmp));
+            emit(current_block_, std::move(cmp));
         }
         // str_equals returns -1/0/1 (strcmp).  Convertir a bool: 0 == equal.
         if (is_str_equals) {
@@ -26720,7 +26731,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             cmp.dst = v_eq;
             cmp.operands = {v_dst, v_zero};
             cmp.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(cmp));
+            emit(current_block_, std::move(cmp));
             out_value = v_eq;
         } else {
             out_value = v_dst;
@@ -26904,7 +26915,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         al.imm = 24;
         al.dst = v_buf;
         al.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
         // STORE v_cls en buf+0 (8 bytes).
         ir::IrInstr st0{};
         st0.op = ir::IrOp::STORE;
@@ -26912,7 +26923,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         st0.dst = ir::IR_NO_VALUE;
         st0.operands = {v_cls, v_buf};
         st0.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(st0));
+        emit(current_block_, std::move(st0));
         // STORE name_addr en buf+8.  Para esto necesitamos un puntero
         // a buf+8 -- usamos ADD.
         const ir::IrValueId v_eight =
@@ -26924,7 +26935,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         add_8.dst = v_buf8;
         add_8.operands = {v_buf, v_eight};
         add_8.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(add_8));
+        emit(current_block_, std::move(add_8));
         // Cargar name_addr via STR_LIT_ADDR.
         const ir::IrValueId v_name = fn_->new_value(ir::IrType::PTR);
         ir::IrInstr ns{};
@@ -26933,14 +26944,14 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ns.dst = v_name;
         ns.imm = name_idx;
         ns.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ns));
+        emit(current_block_, std::move(ns));
         ir::IrInstr st8{};
         st8.op = ir::IrOp::STORE;
         st8.type = ir::IrType::I64;
         st8.dst = ir::IR_NO_VALUE;
         st8.operands = {v_name, v_buf8};
         st8.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(st8));
+        emit(current_block_, std::move(st8));
         // STORE name_len en buf+16.
         const ir::IrValueId v_sixteen =
             emit_const(ir::IrType::I64, 16, e->loc.line);
@@ -26951,7 +26962,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         add_16.dst = v_buf16;
         add_16.operands = {v_buf, v_sixteen};
         add_16.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(add_16));
+        emit(current_block_, std::move(add_16));
         const ir::IrValueId v_len = emit_const(
             ir::IrType::I64, static_cast<uint64_t>(name_len), e->loc.line);
         ir::IrInstr st16{};
@@ -26960,7 +26971,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         st16.dst = ir::IR_NO_VALUE;
         st16.operands = {v_len, v_buf16};
         st16.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(st16));
+        emit(current_block_, std::move(st16));
         // findfield via RAW_ASM: r12 = buf, dst = SSA capturado con {dst}.
         // El reg de v_buf debe ir a r12; lo movemos via patron MOV.
         // Mas simple: emitimos `mov r12, <reg_v_buf>` mediante MOV IR
@@ -27029,7 +27040,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             al.imm = 24;
             al.dst = v_buf;
             al.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(al));
+            emit(current_block_, std::move(al));
         }
         // [+0] class_ptr.
         {
@@ -27038,7 +27049,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             st0.type = ir::IrType::I64;
             st0.operands = {v_cls, v_buf};
             st0.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(st0));
+            emit(current_block_, std::move(st0));
         }
         // [+8] name_addr.
         const ir::IrValueId v_eight =
@@ -27051,7 +27062,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             add_8.dst = v_buf8;
             add_8.operands = {v_buf, v_eight};
             add_8.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(add_8));
+            emit(current_block_, std::move(add_8));
         }
         const ir::IrValueId v_name = fn_->new_value(ir::IrType::PTR);
         {
@@ -27061,7 +27072,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ns.dst = v_name;
             ns.imm = name_idx;
             ns.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ns));
+            emit(current_block_, std::move(ns));
         }
         {
             ir::IrInstr st8{};
@@ -27069,7 +27080,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             st8.type = ir::IrType::I64;
             st8.operands = {v_name, v_buf8};
             st8.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(st8));
+            emit(current_block_, std::move(st8));
         }
         // [+16] name_len.
         const ir::IrValueId v_sixteen =
@@ -27082,7 +27093,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             add_16.dst = v_buf16;
             add_16.operands = {v_buf, v_sixteen};
             add_16.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(add_16));
+            emit(current_block_, std::move(add_16));
         }
         const ir::IrValueId v_len = emit_const(
             ir::IrType::I64, static_cast<uint64_t>(name_len), e->loc.line);
@@ -27092,7 +27103,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             st16.type = ir::IrType::I64;
             st16.operands = {v_len, v_buf16};
             st16.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(st16));
+            emit(current_block_, std::move(st16));
         }
         out_value = emit_findmethod(v_buf, e->loc.line);
         return true;
@@ -27155,7 +27166,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             no.dst = v_handle;
             no.operands = {v_cls};
             no.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(no));
+            emit(current_block_, std::move(no));
         }
         // Convertir handle a host_ptr (igual que __new_<X> antes del
         // ctor).  El resultado es un host_ptr GC-managed.
@@ -27170,7 +27181,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ra.dst = v_host;
             ra.operands = {v_handle};
             ra.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ra));
+            emit(current_block_, std::move(ra));
         }
         out_value = v_host;
         return true;
@@ -27223,7 +27234,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         for (auto av : v_args)
             cm.operands.push_back(av);
         cm.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(cm));
+        emit(current_block_, std::move(cm));
         out_value = v_dst;
         return true;
     }
@@ -27252,7 +27263,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         if (for_optres) {
             al.host_alloca = true;
         }
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
         if (for_optres) {
             fn_->values[v_buf].is_host_ptr = true;
         }
@@ -27274,7 +27285,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         al.dst = v_buf;
         al.operands = {v_size};
         al.source_line = line;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
         return v_buf;
     };
 
@@ -27312,7 +27323,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         st0.type = ir::IrType::I64;
         st0.operands = {v_one, v_buf};
         st0.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(st0));
+        emit(current_block_, std::move(st0));
         // Compute buf+8 and store payload there.
         const ir::IrValueId v_eight =
             emit_const(ir::IrType::I64, 8, e->loc.line);
@@ -27323,7 +27334,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         add.dst = v_buf8;
         add.operands = {v_buf, v_eight};
         add.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(add));
+        emit(current_block_, std::move(add));
         // BugFix sret-cross-mem: propagar is_host_ptr del buffer al puntero
         // buf+8.  Sin esto, el STORE del payload usa acceso VM (`mov`) sobre un
         // buffer HOST (stack_alloc_buf con host_alloca) -> el valor se escribe a
@@ -27343,7 +27354,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             mc.dst = ir::IR_NO_VALUE;
             mc.operands = {v_buf8, v_payload, v_len};
             mc.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(mc));
+            emit(current_block_, std::move(mc));
         } else {
             const ir::IrType payload_t = fn_->values[v_payload].type;
             ir::IrInstr st1{};
@@ -27351,7 +27362,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             st1.type = payload_t;
             st1.operands = {v_payload, v_buf8};
             st1.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(st1));
+            emit(current_block_, std::move(st1));
         }
         out_value = v_buf;
         return true;
@@ -27367,7 +27378,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         st0.type = ir::IrType::I64;
         st0.operands = {v_zero, v_buf};
         st0.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(st0));
+        emit(current_block_, std::move(st0));
         out_value = v_buf;
         return true;
     }
@@ -27415,7 +27426,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         st0.type = ir::IrType::I64;
         st0.operands = {v_tag, v_buf};
         st0.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(st0));
+        emit(current_block_, std::move(st0));
         // Payload offset: V en +8 (Ok), E en +16 (Err).
         const uint64_t off = is_Ok ? 8 : 16;
         const ir::IrValueId v_off =
@@ -27427,7 +27438,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         add.dst = v_at;
         add.operands = {v_buf, v_off};
         add.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(add));
+        emit(current_block_, std::move(add));
         // BugFix sret-cross-mem (2026-06-04): propagar is_host_ptr.
         fn_->values[v_at].is_host_ptr = fn_->values[v_buf].is_host_ptr;
         const ir::IrType payload_t = fn_->values[v_payload].type;
@@ -27436,7 +27447,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         st1.type = payload_t;
         st1.operands = {v_payload, v_at};
         st1.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(st1));
+        emit(current_block_, std::move(st1));
         out_value = v_buf;
         return true;
     }
@@ -27459,7 +27470,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ld.dst = v_dst;
         ld.operands = {v_buf};
         ld.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
         out_value = v_dst;
         return true;
     }
@@ -27492,7 +27503,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         add.dst = v_at;
         add.operands = {v_buf, v_off};
         add.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(add));
+        emit(current_block_, std::move(add));
         // BugFix sret-cross-mem (2026-06-04): propagar is_host_ptr de
         // v_buf al v_at para que el LOAD downstream emita `movh`/`loadzh`.
         fn_->values[v_at].is_host_ptr = fn_->values[v_buf].is_host_ptr;
@@ -27503,7 +27514,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ld.dst = v_dst;
         ld.operands = {v_at};
         ld.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
         out_value = v_dst;
         return true;
     }
@@ -27532,7 +27543,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ld.dst = v_dst;
             ld.operands = {v_arg};
             ld.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
             out_value = v_dst;
             return true;
         }
@@ -27552,7 +27563,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             in.dst = v_is_null;
             in.operands = {v_arg};
             in.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(in));
+            emit(current_block_, std::move(in));
         }
         const ir::IrValueId v_one = emit_const(ir::IrType::I32, 1, e->loc.line);
         const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I32);
@@ -27563,7 +27574,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             xr.dst = v_dst;
             xr.operands = {v_is_null, v_one};
             xr.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(xr));
+            emit(current_block_, std::move(xr));
         }
         out_value = v_dst;
         return true;
@@ -27605,7 +27616,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 ldf.dst = v_flag;
                 ldf.operands = {v_arg};
                 ldf.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ldf));
+                emit(current_block_, std::move(ldf));
                 // VM unwrap on flag: throws NPE if 0, returns 1 otherwise.
                 const ir::IrValueId v_chk = fn_->new_value(ir::IrType::I64);
                 ir::IrInstr uw{};
@@ -27614,7 +27625,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 uw.dst = v_chk;
                 uw.operands = {v_flag};
                 uw.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(uw));
+                emit(current_block_, std::move(uw));
             }
             // Load payload from buf+8.
             const ir::IrValueId v_eight =
@@ -27626,7 +27637,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             add.dst = v_at;
             add.operands = {v_arg, v_eight};
             add.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(add));
+            emit(current_block_, std::move(add));
             // BugFix sret-cross-mem: propagar is_host_ptr del buffer al puntero
             // buf+8 para que el LOAD del payload emita `loadzh`/`movh` (host).
             // Sin esto, un Optional en buffer host (retornado por una fn SRET)
@@ -27648,7 +27659,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ldp.dst = v_dst;
             ldp.operands = {v_at};
             ldp.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ldp));
+            emit(current_block_, std::move(ldp));
             out_value = v_dst;
             return true;
         }
@@ -27668,7 +27679,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ra.dst = v_dst;
         ra.operands = {v_arg};
         ra.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ra));
+        emit(current_block_, std::move(ra));
         if (fn_->values[v_arg].is_host_ptr) {
             fn_->values[v_dst].is_host_ptr = true;
         }
@@ -27715,7 +27726,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ld.dst = v_dst;
         ld.operands = {v_obj};
         ld.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
         out_value = v_dst;
         return true;
     }
@@ -27758,7 +27769,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             mi.dst = ir::IR_NO_VALUE;
             mi.operands = {v_handle};
             mi.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(mi));
+            emit(current_block_, std::move(mi));
         }
         if (is_wait) {
             // Re-adquirir el monitor tras wake.
@@ -27768,7 +27779,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             me.dst = ir::IR_NO_VALUE;
             me.operands = {v_handle};
             me.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(me));
+            emit(current_block_, std::move(me));
         }
         out_value = ir::IR_NO_VALUE;
         return true;
@@ -27860,7 +27871,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     ad.dst = v_src_p;
                     ad.operands = {v_payload, v_off};
                     ad.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(ad));
+                    emit(current_block_, std::move(ad));
                 }
                 const ir::IrValueId v_word = fn_->new_value(ir::IrType::I64);
                 {
@@ -27870,7 +27881,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     ld.dst = v_word;
                     ld.operands = {v_src_p};
                     ld.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(ld));
+                    emit(current_block_, std::move(ld));
                 }
                 const ir::IrValueId v_dst_p = fn_->new_value(ir::IrType::PTR);
                 fn_->values[v_dst_p].is_host_ptr = true;
@@ -27881,7 +27892,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     ad.dst = v_dst_p;
                     ad.operands = {v_box, v_off};
                     ad.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(ad));
+                    emit(current_block_, std::move(ad));
                 }
                 {
                     ir::IrInstr st{};
@@ -27889,7 +27900,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     st.type = ir::IrType::I64;
                     st.operands = {v_word, v_dst_p};
                     st.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(st));
+                    emit(current_block_, std::move(st));
                 }
             }
             // Refcount inc-on-copy: si el payload es un shared<T> que viene de
@@ -27923,7 +27934,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             st.type = payload_t;
             st.operands = {v_payload, v_box};
             st.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
         out_value = v_box;
         return true;
@@ -27978,7 +27989,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                         ins.dst = v_host;
                         ins.operands = {v_size};
                         ins.source_line = e->loc.line;
-                        fn_->append(current_block_, std::move(ins));
+                        emit(current_block_, std::move(ins));
                     }
                     // 3. STOREs por campo directo al host_ptr.  Soporta
                     //    designated (.x=10) y posicional ({10, 20}).
@@ -28037,7 +28048,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                             ad.dst = v_addr;
                             ad.operands = {v_host, v_off};
                             ad.source_line = e->loc.line;
-                            fn_->append(current_block_, std::move(ad));
+                            emit(current_block_, std::move(ad));
                             v_dst = v_addr;
                         }
                         // STORE val at [v_dst].
@@ -28046,7 +28057,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                         st.type = ft;
                         st.operands = {v_casted, v_dst};
                         st.source_line = il->elements[i]->loc.line;
-                        fn_->append(current_block_, std::move(st));
+                        emit(current_block_, std::move(st));
                     }
                     // 4. STORE host_ptr al slot+0 del unique<T>.
                     {
@@ -28055,7 +28066,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                         st.type = ir::IrType::I64;
                         st.operands = {v_host, v_slot};
                         st.source_line = e->loc.line;
-                        fn_->append(current_block_, std::move(st));
+                        emit(current_block_, std::move(st));
                     }
                     // 5. STORE deleter=0 (sentinel RAW_FREE) al slot+8.
                     {
@@ -28069,7 +28080,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                         ad.dst = v_slot8;
                         ad.operands = {v_slot, v_eight};
                         ad.source_line = e->loc.line;
-                        fn_->append(current_block_, std::move(ad));
+                        emit(current_block_, std::move(ad));
                         const ir::IrValueId v_zero =
                             emit_const(ir::IrType::I64, 0, e->loc.line);
                         ir::IrInstr st{};
@@ -28077,7 +28088,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                         st.type = ir::IrType::I64;
                         st.operands = {v_zero, v_slot8};
                         st.source_line = e->loc.line;
-                        fn_->append(current_block_, std::move(st));
+                        emit(current_block_, std::move(st));
                     }
                     out_value = v_slot;
                     return true;
@@ -28194,7 +28205,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     ins.dst = v_payload_ptr;
                     ins.operands = {v_size};
                     ins.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(ins));
+                    emit(current_block_, std::move(ins));
                 }
                 // Copy qword-by-qword (size redondeado hacia arriba a
                 // multiplos de 8 bytes; el ultimo qword puede tener
@@ -28215,7 +28226,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                         ad.dst = v_src_p;
                         ad.operands = {v_payload, v_off};
                         ad.source_line = e->loc.line;
-                        fn_->append(current_block_, std::move(ad));
+                        emit(current_block_, std::move(ad));
                     }
                     const ir::IrValueId v_word =
                         fn_->new_value(ir::IrType::I64);
@@ -28226,7 +28237,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                         ld.dst = v_word;
                         ld.operands = {v_src_p};
                         ld.source_line = e->loc.line;
-                        fn_->append(current_block_, std::move(ld));
+                        emit(current_block_, std::move(ld));
                     }
                     const ir::IrValueId v_dst_p =
                         fn_->new_value(ir::IrType::PTR);
@@ -28238,7 +28249,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                         ad.dst = v_dst_p;
                         ad.operands = {v_payload_ptr, v_off};
                         ad.source_line = e->loc.line;
-                        fn_->append(current_block_, std::move(ad));
+                        emit(current_block_, std::move(ad));
                     }
                     {
                         ir::IrInstr st{};
@@ -28246,7 +28257,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                         st.type = ir::IrType::I64;
                         st.operands = {v_word, v_dst_p};
                         st.source_line = e->loc.line;
-                        fn_->append(current_block_, std::move(st));
+                        emit(current_block_, std::move(st));
                     }
                 }
                 v_to_store = v_payload_ptr;
@@ -28268,7 +28279,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     ins.dst = v_payload_ptr;
                     ins.operands = {v_size};
                     ins.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(ins));
+                    emit(current_block_, std::move(ins));
                 }
                 // STORE payload at [v_payload_ptr] (host memory).
                 {
@@ -28277,7 +28288,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     st.type = payload_t;
                     st.operands = {v_payload, v_payload_ptr};
                     st.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(st));
+                    emit(current_block_, std::move(st));
                 }
                 v_to_store = v_payload_ptr;
             }
@@ -28292,7 +28303,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 st.type = ir::IrType::I64;
                 st.operands = {v_to_store, v_slot};
                 st.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(st));
+                emit(current_block_, std::move(st));
             }
             // STORE deleter=0 at [v_slot+8] (sentinel = RAW_FREE).
             {
@@ -28305,7 +28316,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 add.dst = v_slot8;
                 add.operands = {v_slot, v_eight};
                 add.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(add));
+                emit(current_block_, std::move(add));
                 const ir::IrValueId v_zero =
                     emit_const(ir::IrType::I64, 0, e->loc.line);
                 ir::IrInstr st{};
@@ -28313,7 +28324,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 st.type = ir::IrType::I64;
                 st.operands = {v_zero, v_slot8};
                 st.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(st));
+                emit(current_block_, std::move(st));
             }
             fn_->values[v_slot].pointee_is_host_ptr = true;
             out_value = v_slot;
@@ -28337,7 +28348,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 ins.dst = v_ctrl;
                 ins.operands = {v_ctrl_size};
                 ins.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ins));
+                emit(current_block_, std::move(ins));
             }
             // STORE refcount=1 at [v_ctrl + 0].
             {
@@ -28348,7 +28359,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 st.type = ir::IrType::I64;
                 st.operands = {v_one, v_ctrl};
                 st.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(st));
+                emit(current_block_, std::move(st));
             }
             // STORE deleter=0 at [v_ctrl + 8] (placeholder; cleanup usa free
             // literal).
@@ -28363,7 +28374,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 add.dst = v_ctrl8;
                 add.operands = {v_ctrl, v_eight};
                 add.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(add));
+                emit(current_block_, std::move(add));
                 const ir::IrValueId v_zero =
                     emit_const(ir::IrType::I64, 0, e->loc.line);
                 ir::IrInstr st{};
@@ -28371,7 +28382,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 st.type = ir::IrType::I64;
                 st.operands = {v_zero, v_ctrl8};
                 st.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(st));
+                emit(current_block_, std::move(st));
             }
             // STORE payload at [v_ctrl + 16].
             {
@@ -28385,13 +28396,13 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 add.dst = v_ctrl16;
                 add.operands = {v_ctrl, v_sixteen};
                 add.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(add));
+                emit(current_block_, std::move(add));
                 ir::IrInstr st{};
                 st.op = ir::IrOp::STORE;
                 st.type = payload_t;
                 st.operands = {v_payload, v_ctrl16};
                 st.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(st));
+                emit(current_block_, std::move(st));
             }
             // STORE v_ctrl at [v_slot] (VM memory).
             {
@@ -28400,7 +28411,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 st.type = ir::IrType::I64;
                 st.operands = {v_ctrl, v_slot};
                 st.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(st));
+                emit(current_block_, std::move(st));
             }
             fn_->values[v_slot].pointee_is_host_ptr = true;
             out_value = v_slot;
@@ -28458,7 +28469,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             st.type = ir::IrType::I64;
             st.operands = {v_payload, v_slot};
             st.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
         // STORE deleter address en slot+8.  Materializamos la
         // direccion via RAW_ASM: `mov {dst}, @Absolute("code.<fn>")`.
@@ -28488,7 +28499,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             mov.dst = v_deleter_addr;
             mov.operands = {v_zero};
             mov.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(mov));
+            emit(current_block_, std::move(mov));
         } else {
             // Vesta: emitir LABEL_ADDR -> v_deleter_addr.
             ir::IrValueId v_label = emit_label_addr(deleter_label, e->loc.line);
@@ -28498,7 +28509,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             mov.dst = v_deleter_addr;
             mov.operands = {v_label};
             mov.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(mov));
+            emit(current_block_, std::move(mov));
         }
         // STORE deleter_addr en slot+8.  v_slot8 HEREDA la host-ness de v_slot
         // (heap -> movh, stack -> mov) para que sea consistente con la store de
@@ -28516,13 +28527,13 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             add.dst = v_slot8;
             add.operands = {v_slot, v_eight};
             add.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(add));
+            emit(current_block_, std::move(add));
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
             st.type = ir::IrType::I64;
             st.operands = {v_deleter_addr, v_slot8};
             st.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
         // El slot contiene un valor con semantica de host_ptr / handle.
         fn_->values[v_slot].pointee_is_host_ptr = true;
@@ -28581,7 +28592,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             al.dst = v_tmp;
             al.operands = {v_size};
             al.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(al));
+            emit(current_block_, std::move(al));
         } else {
             ir::IrInstr al{};
             al.op = ir::IrOp::ALLOCA;
@@ -28589,7 +28600,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             al.dst = v_tmp;
             al.imm = slot_bytes;
             al.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(al));
+            emit(current_block_, std::move(al));
         }
         if (move_to_heap) {
             // bug3: destino en HEAP (host_ptr).  `mvtake` (opcode 0x72) opera
@@ -28613,7 +28624,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     a1.dst = v_src_p;
                     a1.operands = {v_src, v_off};
                     a1.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(a1));
+                    emit(current_block_, std::move(a1));
                     v_dst_p = fn_->new_value(ir::IrType::PTR);
                     fn_->values[v_dst_p].is_host_ptr = true;
                     ir::IrInstr a2{};
@@ -28622,7 +28633,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     a2.dst = v_dst_p;
                     a2.operands = {v_tmp, v_off};
                     a2.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(a2));
+                    emit(current_block_, std::move(a2));
                 }
                 // word = LOAD [src_p]  (vm_mem).
                 const ir::IrValueId v_word = fn_->new_value(ir::IrType::I64);
@@ -28633,7 +28644,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     ld.dst = v_word;
                     ld.operands = {v_src_p};
                     ld.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(ld));
+                    emit(current_block_, std::move(ld));
                 }
                 // STORE word -> [dst_p]  (host, movh por is_host_ptr).
                 {
@@ -28642,7 +28653,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     st.type = ir::IrType::I64;
                     st.operands = {v_word, v_dst_p};
                     st.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(st));
+                    emit(current_block_, std::move(st));
                 }
                 // STORE 0 -> [src_p]  (zerifica origen, vm_mem).
                 {
@@ -28653,7 +28664,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     st.type = ir::IrType::I64;
                     st.operands = {v_zero, v_src_p};
                     st.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(st));
+                    emit(current_block_, std::move(st));
                 }
             }
             fn_->values[v_tmp].pointee_is_host_ptr = true;
@@ -28675,7 +28686,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 add.dst = v_tmp8;
                 add.operands = {v_tmp, v_eight};
                 add.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(add));
+                emit(current_block_, std::move(add));
             }
             {
                 ir::IrInstr add{};
@@ -28684,7 +28695,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 add.dst = v_src8;
                 add.operands = {v_src, v_eight};
                 add.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(add));
+                emit(current_block_, std::move(add));
             }
             emit_mvtake(v_tmp8, v_src8, e->loc.line);
         }
@@ -28725,7 +28736,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ins.dst = v_and;
             ins.operands = {v_h, v_mask};
             ins.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ins));
+            emit(current_block_, std::move(ins));
         }
         // 4) shr 31 -> bit 0 = 0|1
         const ir::IrValueId v_shift =
@@ -28738,7 +28749,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ins.dst = v_bit;
             ins.operands = {v_and, v_shift};
             ins.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ins));
+            emit(current_block_, std::move(ins));
         }
         // 5) cast a bool
         const ir::IrValueId v_bool =
@@ -28879,7 +28890,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ins.dst = v_ptr;
         ins.operands = {v_size};
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         out_value = v_ptr;
         return true;
     }
@@ -28898,7 +28909,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ins.dst = ir::IR_NO_VALUE;
         ins.operands = {v_ptr};
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         out_value = ir::IR_NO_VALUE;
         return true;
     }
@@ -28925,7 +28936,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ss.dst = v_dst;
         ss.operands = {v_op};
         ss.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ss));
+        emit(current_block_, std::move(ss));
         out_value = v_dst;
         return true;
     }
@@ -28964,7 +28975,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ld.dst = v_ptr;
             ld.operands = {v_slot};
             ld.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
         }
         if (arg_t.kind == PrimitiveKind::SHARED_PTR) {
             // shared<T>: payload esta en +16 del control block.
@@ -28978,7 +28989,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             add.dst = v_pay;
             add.operands = {v_ptr, v_sixteen};
             add.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(add));
+            emit(current_block_, std::move(add));
             // BugFix R2: si inner es CLASS, el slot @+16 guarda el
             // host_ptr al objeto.  Hacer otro LOAD para obtenerlo y
             // marcarlo como is_gc_object para CALLVIRT.  Sin esto,
@@ -28994,7 +29005,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 ld2.dst = v_obj;
                 ld2.operands = {v_pay};
                 ld2.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ld2));
+                emit(current_block_, std::move(ld2));
                 out_value = v_obj;
                 return true;
             }
@@ -29028,7 +29039,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ld.dst = v_ctrl;
             ld.operands = {v_slot};
             ld.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
         }
         // LOAD refcount from [ctrl + 0] (host memory).
         const ir::IrValueId v_rc = fn_->new_value(ir::IrType::I64);
@@ -29039,7 +29050,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ld.dst = v_rc;
             ld.operands = {v_ctrl};
             ld.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
         }
         out_value = v_rc;
         return true;
@@ -29132,7 +29143,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ld.dst = v_ptr;
             ld.operands = {v_arg};
             ld.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
             if (owner_t.kind == PrimitiveKind::SHARED_PTR) {
                 // Para shared, sumar 16 (offset del payload inline en
                 // ctrl_block: refcount@0 + deleter@8 + payload@16).
@@ -29146,7 +29157,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 add.dst = v_pay;
                 add.operands = {v_ptr, v_sixteen};
                 add.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(add));
+                emit(current_block_, std::move(add));
                 out_value = v_pay;
                 return true;
             }
@@ -29203,7 +29214,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ld.dst = v_dst;
         ld.operands = {v_b};
         ld.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
         out_value = v_dst;
         return true;
     }
@@ -29230,7 +29241,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         st.type = payload_t;
         st.operands = {v_v, v_b};
         st.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
         out_value = ir::IR_NO_VALUE;
         return true;
     }
@@ -29275,7 +29286,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             cl.func_name = "vesta_runtime:cpu_features";
             cl.operands = {};
             cl.source_line = ln;
-            fn_->append(current_block_, std::move(cl));
+            emit(current_block_, std::move(cl));
             out_value = v_feat;
             return true;
         }
@@ -29290,7 +29301,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             is.dst = v_addr;
             is.imm = slot;
             is.source_line = ln;
-            fn_->append(current_block_, std::move(is));
+            emit(current_block_, std::move(is));
         }
         ir::IrValueId v_feat = fn_->new_value(ir::IrType::U64);
         {
@@ -29300,7 +29311,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ld.dst = v_feat;
             ld.operands = {v_addr};
             ld.source_line = ln;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
         }
         out_value = v_feat;
         return true;
@@ -29402,7 +29413,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ins.func_name = "stdlib/native/io/vesta_io:vio_print_int";
             ins.operands.push_back(v);
             ins.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ins));
+            emit(current_block_, std::move(ins));
             if (i == 0) {
                 emit_print_string_literal(";", e->loc.line);
             }
@@ -29438,7 +29449,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         rc.operands = {v_cls};
         rc.imm = is_getMethods ? 0 : 1;
         rc.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(rc));
+        emit(current_block_, std::move(rc));
         out_value = v_dst;
         return true;
     }
@@ -29471,7 +29482,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ra.operands = {v_cls, v_idx};
         ra.imm = is_getMethodAt ? 0 : 1;
         ra.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ra));
+        emit(current_block_, std::move(ra));
         out_value = v_dst;
         return true;
     }
@@ -29525,7 +29536,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ms.operands = {v_pid, v_val};
             ms.is_call_site = true;
             ms.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ms));
+            emit(current_block_, std::move(ms));
             out_value = v_dst;
             return true;
         }
@@ -29538,7 +29549,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             al.dst = v_buf;
             al.imm = 8;
             al.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(al));
+            emit(current_block_, std::move(al));
         }
         // STORE i64 v_val en v_buf.
         {
@@ -29547,7 +29558,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             st.type = ir::IrType::I64;
             st.operands = {v_val, v_buf};
             st.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
         // msgsend r_pid, r_addr, r_len  -- usar IR op MSGSEND (0xD0) en lugar
         // de RAW_ASM.  Devuelve bool en R0 (1=ok, 0=error).
@@ -29560,7 +29571,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ms.operands = {v_pid, v_buf, v_len};
         ms.is_call_site = true;
         ms.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ms));
+        emit(current_block_, std::move(ms));
         out_value = v_dst;
         return true;
     }
@@ -29587,7 +29598,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             mr.dst = v_val;
             mr.is_call_site = true;
             mr.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(mr));
+            emit(current_block_, std::move(mr));
             out_value = v_val;
             return true;
         }
@@ -29600,7 +29611,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             al.dst = v_buf;
             al.imm = 8;
             al.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(al));
+            emit(current_block_, std::move(al));
         }
         // msgrecv r_buf, r_max  -- primer reg = buffer dest, segundo = max len.
         // Convencion del decoder/exec: reg1=r_buf, reg2=r_max (ver
@@ -29614,7 +29625,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             mr.operands = {v_buf, v_max};
             mr.is_call_site = true; // bloquea -> save/restore live regs
             mr.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(mr));
+            emit(current_block_, std::move(mr));
         }
         // LOAD i64 desde v_buf -> v_val (resultado).
         const ir::IrValueId v_val = fn_->new_value(ir::IrType::I64);
@@ -29625,7 +29636,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ld.dst = v_val;
             ld.operands = {v_buf};
             ld.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
         }
         out_value = v_val;
         return true;
@@ -29652,7 +29663,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         fu.dst = v_fut;
         fu.is_call_site = true; // GC alloc
         fu.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(fu));
+        emit(current_block_, std::move(fu));
         out_value = v_fut;
         return true;
     }
@@ -29681,7 +29692,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         fu.dst = ir::IR_NO_VALUE;
         fu.operands = {v_fut, v_val};
         fu.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(fu));
+        emit(current_block_, std::move(fu));
         out_value = ir::IR_NO_VALUE;
         return true;
     }
@@ -30105,7 +30116,7 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                     ld.dst = v_handle;
                     ld.operands = {addr};
                     ld.source_line = m->loc.line;
-                    fn_->append(current_block_, std::move(ld));
+                    emit(current_block_, std::move(ld));
                     // raw_asm-elim 2026-05-28: 2b) host_ptr fresco via
                     // IrOp::GC_DEREF_HOST.
                     const ir::IrValueId field_val =
@@ -30118,7 +30129,7 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                     deref.dst = field_val;
                     deref.operands = {v_handle};
                     deref.source_line = m->loc.line;
-                    fn_->append(current_block_, std::move(deref));
+                    emit(current_block_, std::move(deref));
                     // 3) is_null = (field_val == 0)
                     const ir::IrValueId zero =
                         emit_const(ir::IrType::I64, 0, m->loc.line);
@@ -30130,7 +30141,7 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                     cmp.dst = is_null;
                     cmp.operands = {field_val, zero};
                     cmp.source_line = m->loc.line;
-                    fn_->append(current_block_, std::move(cmp));
+                    emit(current_block_, std::move(cmp));
                     // 4) br_cond is_null skip do_dtor
                     const ir::IrBlockId do_bb = fn_->new_block("dtor_field");
                     const ir::IrBlockId skip_bb = fn_->new_block("dtor_skip");
@@ -30140,7 +30151,7 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                     br.target_block = skip_bb; // true (null) -> skip
                     br.false_block = do_bb;    // false -> do_dtor
                     br.source_line = m->loc.line;
-                    fn_->append(current_block_, std::move(br));
+                    emit(current_block_, std::move(br));
                     // 5) do_bb: dtor del field; br skip.  CALL directo en
                     //    native_poo no-polimorfico; CALLVIRT en otro caso.
                     current_block_ = do_bb;
@@ -30156,12 +30167,12 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                     cv.dst = ir::IR_NO_VALUE;
                     cv.operands = {field_val};
                     cv.source_line = m->loc.line;
-                    fn_->append(current_block_, std::move(cv));
+                    emit(current_block_, std::move(cv));
                     ir::IrInstr brj{};
                     brj.op = ir::IrOp::BR;
                     brj.target_block = skip_bb;
                     brj.source_line = m->loc.line;
-                    fn_->append(current_block_, std::move(brj));
+                    emit(current_block_, std::move(brj));
                     // 6) merge en skip_bb -> continuar con el siguiente field.
                     current_block_ = skip_bb;
                     block_terminated_ = false;
@@ -30530,7 +30541,7 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
                             ad.dst = saddr;
                             ad.operands = {this_dtor, off};
                             ad.source_line = m->loc.line;
-                            fn_->append(current_block_, std::move(ad));
+                            emit(current_block_, std::move(ad));
                         }
                         emit_shared_refcount_dec(saddr, m->loc.line);
                         continue;
@@ -30717,7 +30728,7 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
         ld.dst = slot;
         ld.operands = {slot_addr};
         ld.source_line = line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
     }
     // if (slot == 0) -> skip  (campo nunca asignado / closure null).
     const ir::IrBlockId slot_ok = fn_->new_block("free_clo_slot_ok");
@@ -30729,7 +30740,7 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
         cmp.dst = is_null;
         cmp.operands = {slot, zero};
         cmp.source_line = line;
-        fn_->append(current_block_, std::move(cmp));
+        emit(current_block_, std::move(cmp));
         ir::IrInstr br{};
         br.op = ir::IrOp::BR_COND;
         br.operands = {is_null};
@@ -30745,7 +30756,7 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
         fn_->blocks[current_block_].succs.push_back(slot_ok);
         fn_->blocks[skip_bb].preds.push_back(current_block_);
         fn_->blocks[slot_ok].preds.push_back(current_block_);
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
         current_block_ = slot_ok;
     }
     // env = LOAD [slot + 8]
@@ -30759,7 +30770,7 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
         ad.dst = env_addr;
         ad.operands = {slot, eight};
         ad.source_line = line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
     }
     const ir::IrValueId env = fn_->new_value(ir::IrType::I64);
     fn_->values[env].is_host_ptr = true;
@@ -30770,7 +30781,7 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
         ld.dst = env;
         ld.operands = {env_addr};
         ld.source_line = line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
     }
     // Bloque que SIEMPRE libera el slot (heap owned), tras (quiza) liberar env.
     const ir::IrBlockId free_slot_bb = fn_->new_block("free_clo_slot");
@@ -30783,7 +30794,7 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
         cmp.dst = is_null;
         cmp.operands = {env, zero};
         cmp.source_line = line;
-        fn_->append(current_block_, std::move(cmp));
+        emit(current_block_, std::move(cmp));
         const ir::IrBlockId free_env_bb = fn_->new_block("free_clo_env");
         ir::IrInstr br{};
         br.op = ir::IrOp::BR_COND;
@@ -30795,7 +30806,7 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
         fn_->blocks[current_block_].succs.push_back(free_env_bb);
         fn_->blocks[free_slot_bb].preds.push_back(current_block_);
         fn_->blocks[free_env_bb].preds.push_back(current_block_);
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
         current_block_ = free_env_bb;
     }
     {
@@ -30805,14 +30816,14 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
         rf.dst = ir::IR_NO_VALUE;
         rf.operands = {env};
         rf.source_line = line;
-        fn_->append(current_block_, std::move(rf));
+        emit(current_block_, std::move(rf));
         ir::IrInstr brj{};
         brj.op = ir::IrOp::BR;
         brj.target_block = free_slot_bb;
         brj.source_line = line;
         fn_->blocks[current_block_].succs.push_back(free_slot_bb);
         fn_->blocks[free_slot_bb].preds.push_back(current_block_);
-        fn_->append(current_block_, std::move(brj));
+        emit(current_block_, std::move(brj));
     }
     // free_slot_bb: RAW_FREE(slot); br skip.
     current_block_ = free_slot_bb;
@@ -30823,14 +30834,14 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
         rf.dst = ir::IR_NO_VALUE;
         rf.operands = {slot};
         rf.source_line = line;
-        fn_->append(current_block_, std::move(rf));
+        emit(current_block_, std::move(rf));
         ir::IrInstr brj{};
         brj.op = ir::IrOp::BR;
         brj.target_block = skip_bb;
         brj.source_line = line;
         fn_->blocks[current_block_].succs.push_back(skip_bb);
         fn_->blocks[skip_bb].preds.push_back(current_block_);
-        fn_->append(current_block_, std::move(brj));
+        emit(current_block_, std::move(brj));
     }
     current_block_ = skip_bb;
     block_terminated_ = false;
@@ -30856,7 +30867,7 @@ void Lowering::emit_free_unique_field(ir::IrValueId this_vid,
         ad.dst = slot_addr;
         ad.operands = {this_vid, off};
         ad.source_line = line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
     }
     // slot = LOAD [this + field_offset]  (mov/movh segun el contenedor).
     const ir::IrValueId slot = fn_->new_value(ir::IrType::I64);
@@ -30868,7 +30879,7 @@ void Lowering::emit_free_unique_field(ir::IrValueId this_vid,
         ld.dst = slot;
         ld.operands = {slot_addr};
         ld.source_line = line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
     }
     emit_free_unique_slot(slot, line);
 }
@@ -30891,7 +30902,7 @@ void Lowering::emit_memberwise_copy(ir::IrValueId dst_addr,
             ad.dst = s_at;
             ad.operands = {src_addr, v_off};
             ad.source_line = line;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
         }
         const ir::IrValueId w = fn_->new_value(ir::IrType::I64);
         {
@@ -30901,7 +30912,7 @@ void Lowering::emit_memberwise_copy(ir::IrValueId dst_addr,
             ld.dst = w;
             ld.operands = {s_at};
             ld.source_line = line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
         }
         const ir::IrValueId d_at = fn_->new_value(ir::IrType::PTR);
         fn_->values[d_at].is_host_ptr = dst_host;
@@ -30912,7 +30923,7 @@ void Lowering::emit_memberwise_copy(ir::IrValueId dst_addr,
             ad.dst = d_at;
             ad.operands = {dst_addr, v_off};
             ad.source_line = line;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
         }
         {
             ir::IrInstr st{};
@@ -30920,7 +30931,7 @@ void Lowering::emit_memberwise_copy(ir::IrValueId dst_addr,
             st.type = ir::IrType::I64;
             st.operands = {w, d_at};
             st.source_line = line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
     }
 }
@@ -30944,7 +30955,7 @@ void Lowering::emit_struct_method_on_host_field(
         cd.operands = {field_addr};
         cd.func_name = method_label;
         cd.source_line = line;
-        fn_->append(current_block_, std::move(cd));
+        emit(current_block_, std::move(cd));
         return;
     }
     // interp/JIT: copiar el campo (host) a un temporal VM-stack y llamar el
@@ -30963,7 +30974,7 @@ void Lowering::emit_struct_method_on_host_field(
         al.imm = sz;
         al.dst = tmp;
         al.source_line = line;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
     }
     // memcpy field_addr (host) -> tmp (VM): qword por qword.
     const uint64_t qwords = (sz + 7) / 8;
@@ -30979,7 +30990,7 @@ void Lowering::emit_struct_method_on_host_field(
             ad.dst = src_at;
             ad.operands = {field_addr, v_off};
             ad.source_line = line;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
         }
         const ir::IrValueId word = fn_->new_value(ir::IrType::I64);
         {
@@ -30989,7 +31000,7 @@ void Lowering::emit_struct_method_on_host_field(
             ld.dst = word;
             ld.operands = {src_at};
             ld.source_line = line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
         }
         const ir::IrValueId dst_at = fn_->new_value(ir::IrType::PTR);
         // tmp es VM (is_host_ptr = false por defecto).
@@ -31000,7 +31011,7 @@ void Lowering::emit_struct_method_on_host_field(
             ad.dst = dst_at;
             ad.operands = {tmp, v_off};
             ad.source_line = line;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
         }
         {
             ir::IrInstr st{};
@@ -31008,7 +31019,7 @@ void Lowering::emit_struct_method_on_host_field(
             st.type = ir::IrType::I64;
             st.operands = {word, dst_at};
             st.source_line = line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
     }
     // CALL method_label(tmp).
@@ -31020,7 +31031,7 @@ void Lowering::emit_struct_method_on_host_field(
         cd.operands = {tmp};
         cd.func_name = method_label;
         cd.source_line = line;
-        fn_->append(current_block_, std::move(cd));
+        emit(current_block_, std::move(cd));
     }
 }
 
@@ -31053,7 +31064,7 @@ ir::IrValueId Lowering::emit_struct_arg_copy_clone(ir::IrValueId v_src,
         al.dst = copy;
         al.host_alloca = true;
         al.source_line = line;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
     }
     fn_->values[copy].is_host_ptr = true;
     // memcpy v_src -> copy (respetando host-ness de origen y destino).
@@ -31072,7 +31083,7 @@ ir::IrValueId Lowering::emit_struct_arg_copy_clone(ir::IrValueId v_src,
             ad.dst = src_at;
             ad.operands = {v_src, v_off};
             ad.source_line = line;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
         }
         const ir::IrValueId word = fn_->new_value(ir::IrType::I64);
         {
@@ -31082,7 +31093,7 @@ ir::IrValueId Lowering::emit_struct_arg_copy_clone(ir::IrValueId v_src,
             ld.dst = word;
             ld.operands = {src_at};
             ld.source_line = line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
         }
         const ir::IrValueId dst_at = fn_->new_value(ir::IrType::PTR);
         fn_->values[dst_at].is_host_ptr = dst_is_host;
@@ -31093,7 +31104,7 @@ ir::IrValueId Lowering::emit_struct_arg_copy_clone(ir::IrValueId v_src,
             ad.dst = dst_at;
             ad.operands = {copy, v_off};
             ad.source_line = line;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
         }
         {
             ir::IrInstr st{};
@@ -31101,7 +31112,7 @@ ir::IrValueId Lowering::emit_struct_arg_copy_clone(ir::IrValueId v_src,
             st.type = ir::IrType::I64;
             st.operands = {word, dst_at};
             st.source_line = line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
     }
     // copia.__clone__()  (this = copy, misma memory class -> sin mismatch).
@@ -31123,7 +31134,7 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
         cmp.dst = is_null;
         cmp.operands = {slot, zero};
         cmp.source_line = line;
-        fn_->append(current_block_, std::move(cmp));
+        emit(current_block_, std::move(cmp));
         ir::IrInstr br{};
         br.op = ir::IrOp::BR_COND;
         br.operands = {is_null};
@@ -31134,7 +31145,7 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
         fn_->blocks[current_block_].succs.push_back(slot_ok);
         fn_->blocks[skip_bb].preds.push_back(current_block_);
         fn_->blocks[slot_ok].preds.push_back(current_block_);
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
         current_block_ = slot_ok;
     }
     // ptr = LOAD [slot + 0]  (el valor/host_ptr a liberar).
@@ -31147,7 +31158,7 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
         ld.dst = ptr;
         ld.operands = {slot};
         ld.source_line = line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
     }
     // deleter = LOAD [slot + 8].
     const ir::IrValueId del_addr = fn_->new_value(ir::IrType::PTR);
@@ -31160,7 +31171,7 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
         ad.dst = del_addr;
         ad.operands = {slot, eight};
         ad.source_line = line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
     }
     const ir::IrValueId deleter = fn_->new_value(ir::IrType::I64);
     fn_->values[deleter].is_host_ptr = true;
@@ -31171,7 +31182,7 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
         ld.dst = deleter;
         ld.operands = {del_addr};
         ld.source_line = line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
     }
     // if (deleter != 0) -> CALLIND deleter(ptr); else RAW_FREE(ptr).
     const ir::IrBlockId call_bb = fn_->new_block("free_uniq_call");
@@ -31184,7 +31195,7 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
         cmp.dst = has_del;
         cmp.operands = {deleter, zero};
         cmp.source_line = line;
-        fn_->append(current_block_, std::move(cmp));
+        emit(current_block_, std::move(cmp));
         ir::IrInstr br{};
         br.op = ir::IrOp::BR_COND;
         br.operands = {has_del};
@@ -31195,7 +31206,7 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
         fn_->blocks[current_block_].succs.push_back(free_bb);
         fn_->blocks[call_bb].preds.push_back(current_block_);
         fn_->blocks[free_bb].preds.push_back(current_block_);
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
     }
     // Bloque que SIEMPRE libera el slot heap (16B), tras liberar el inner.
     const ir::IrBlockId free_slot_bb = fn_->new_block("free_uniq_slot");
@@ -31210,14 +31221,14 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
         ci.operands = {ptr};
         ci.source_line = line;
         ci.is_call_site = true;
-        fn_->append(current_block_, std::move(ci));
+        emit(current_block_, std::move(ci));
         ir::IrInstr brj{};
         brj.op = ir::IrOp::BR;
         brj.target_block = free_slot_bb;
         brj.source_line = line;
         fn_->blocks[current_block_].succs.push_back(free_slot_bb);
         fn_->blocks[free_slot_bb].preds.push_back(current_block_);
-        fn_->append(current_block_, std::move(brj));
+        emit(current_block_, std::move(brj));
     }
     // free_bb: RAW_FREE(ptr) -> free_slot  (deleter por defecto; null-safe).
     current_block_ = free_bb;
@@ -31228,14 +31239,14 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
         rf.dst = ir::IR_NO_VALUE;
         rf.operands = {ptr};
         rf.source_line = line;
-        fn_->append(current_block_, std::move(rf));
+        emit(current_block_, std::move(rf));
         ir::IrInstr brj{};
         brj.op = ir::IrOp::BR;
         brj.target_block = free_slot_bb;
         brj.source_line = line;
         fn_->blocks[current_block_].succs.push_back(free_slot_bb);
         fn_->blocks[free_slot_bb].preds.push_back(current_block_);
-        fn_->append(current_block_, std::move(brj));
+        emit(current_block_, std::move(brj));
     }
     // free_slot_bb: RAW_FREE(slot heap) -> skip.
     current_block_ = free_slot_bb;
@@ -31246,14 +31257,14 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
         rf.dst = ir::IR_NO_VALUE;
         rf.operands = {slot};
         rf.source_line = line;
-        fn_->append(current_block_, std::move(rf));
+        emit(current_block_, std::move(rf));
         ir::IrInstr brj{};
         brj.op = ir::IrOp::BR;
         brj.target_block = skip_bb;
         brj.source_line = line;
         fn_->blocks[current_block_].succs.push_back(skip_bb);
         fn_->blocks[skip_bb].preds.push_back(current_block_);
-        fn_->append(current_block_, std::move(brj));
+        emit(current_block_, std::move(brj));
     }
     current_block_ = skip_bb;
     block_terminated_ = false;
@@ -32569,7 +32580,7 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
                 is.dst = v_addr;
                 is.imm = slot_idx;
                 is.source_line = ln;
-                fn_->append(current_block_, std::move(is));
+                emit(current_block_, std::move(is));
                 // El slot vive en memoria host (seccion `gdata`).
                 fn_->values[v_addr].is_host_ptr = true;
             }
@@ -32578,7 +32589,7 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
             st.type = sty;
             st.operands = {v_init, v_addr};
             st.source_line = ln;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
         fn_ = saved_fn;
         current_block_ = saved_block;
@@ -32665,7 +32676,7 @@ ir::IrValueId Lowering::lower_new_expr(ast::NewExpr *e) {
             mul.dst = v_total;
             mul.operands = {v_count_i64, v_es};
             mul.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(mul));
+            emit(current_block_, std::move(mul));
         }
         // RAW_ALLOC(total) -> host_ptr.
         const ir::IrValueId v_ptr = fn_->new_value(ir::IrType::PTR);
@@ -32676,7 +32687,7 @@ ir::IrValueId Lowering::lower_new_expr(ast::NewExpr *e) {
         ra.dst = v_ptr;
         ra.operands = {v_total};
         ra.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ra));
+        emit(current_block_, std::move(ra));
         return v_ptr;
     }
     // BugFix R4: `new ExceptionClass(msg)` para predefined exceptions
@@ -32722,7 +32733,7 @@ ir::IrValueId Lowering::lower_new_expr(ast::NewExpr *e) {
                 no.dst = v_handle;
                 no.operands = {v_cls};
                 no.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(no));
+                emit(current_block_, std::move(no));
             }
             // raw_asm-elim 2026-05-28: handle -> host_ptr via
             // IrOp::GC_DEREF_HOST. El IR op produce dst sin clobber del src;
@@ -32738,7 +32749,7 @@ ir::IrValueId Lowering::lower_new_expr(ast::NewExpr *e) {
                 ra.dst = v_obj;
                 ra.operands = {v_handle};
                 ra.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ra));
+                emit(current_block_, std::move(ra));
             }
             // store v_msg at v_obj + 24 (message field offset, after
             // ObjectHeader).  is_host_ptr=true for v_obj => emite movh.
@@ -32753,7 +32764,7 @@ ir::IrValueId Lowering::lower_new_expr(ast::NewExpr *e) {
                 ad.dst = v_addr;
                 ad.operands = {v_obj, v_off};
                 ad.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ad));
+                emit(current_block_, std::move(ad));
             }
             {
                 ir::IrInstr st{};
@@ -32762,7 +32773,7 @@ ir::IrValueId Lowering::lower_new_expr(ast::NewExpr *e) {
                 st.dst = ir::IR_NO_VALUE;
                 st.operands = {v_msg, v_addr};
                 st.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(st));
+                emit(current_block_, std::move(st));
             }
             ssa_concrete_class_[v_obj] = e->class_name;
             return v_obj;
@@ -32853,7 +32864,7 @@ ir::IrValueId Lowering::lower_new_expr(ast::NewExpr *e) {
                                  : ("__new_" + helper_class_name);
     ins.operands = std::move(arg_vals);
     ins.source_line = e->loc.line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     // Trackear tipo concreto del resultado para devirtualizacion
     // de calls via interface receiver en compile time.
     ssa_concrete_class_[dst] = e->class_name;
@@ -32965,7 +32976,7 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
                 is.dst = v_addr;
                 is.imm = slot;
                 is.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(is));
+                emit(current_block_, std::move(is));
             }
             ir::IrValueId v_val = fn_->new_value(ir_t == ir::IrType::VOID
                                                      ? ir::IrType::I64
@@ -32977,7 +32988,7 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
                 ld.dst = v_val;
                 ld.operands = {v_addr};
                 ld.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ld));
+                emit(current_block_, std::move(ld));
             }
             return v_val;
         }
@@ -33073,7 +33084,7 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
         ins.operands.push_back(obj);
         ins.imm = static_cast<uint64_t>(mtd->vtable_index);
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         return dst;
     }
     uint32_t off = 0;
@@ -33126,7 +33137,7 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
     ld.dst = dst;
     ld.operands = {addr};
     ld.source_line = e->loc.line;
-    fn_->append(current_block_, std::move(ld));
+    emit(current_block_, std::move(ld));
     // fix: si el TIPO del campo es PTR (host pointer obtenido
     // via malloc o similar), propagar @c is_host_ptr=true al SSA value
     // resultante para que indexaciones / derefs posteriores emitan
@@ -33192,7 +33203,7 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
         deref.dst = v_host;
         deref.operands = {dst};
         deref.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(deref));
+        emit(current_block_, std::move(deref));
         return v_host;
     }
     return dst;
@@ -33255,14 +33266,14 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
                 is.dst = v_addr;
                 is.imm = slot;
                 is.source_line = loc.line;
-                fn_->append(current_block_, std::move(is));
+                emit(current_block_, std::move(is));
             }
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
             st.type = field_ir;
             st.operands = {rhs_cast, v_addr};
             st.source_line = loc.line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
             return rhs_cast;
         }
         // 1) Sprint 5: findclass via IR ops.
@@ -33331,7 +33342,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
         ins.operands.push_back(rhs_cast);
         ins.imm = static_cast<uint64_t>(mtd->vtable_index);
         ins.source_line = loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         return rhs_cast;
     }
     uint32_t off = 0;
@@ -33379,7 +33390,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
         ld.dst = uniq_old_slot;
         ld.operands = {addr};
         ld.source_line = loc.line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
     }
     // Campo STRUCT value-type (Fase 2b/3): el campo es un struct inline; @c rhs
     // es la DIRECCION del struct origen.  Copiamos memberwise (qword-by-qword)
@@ -33408,7 +33419,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
                 ad.dst = v_src_at;
                 ad.operands = {rhs, v_off};
                 ad.source_line = loc.line;
-                fn_->append(current_block_, std::move(ad));
+                emit(current_block_, std::move(ad));
             }
             const ir::IrValueId v_word = fn_->new_value(ir::IrType::I64);
             {
@@ -33418,7 +33429,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
                 ld.dst = v_word;
                 ld.operands = {v_src_at};
                 ld.source_line = loc.line;
-                fn_->append(current_block_, std::move(ld));
+                emit(current_block_, std::move(ld));
             }
             const ir::IrValueId v_dst_at = fn_->new_value(ir::IrType::PTR);
             fn_->values[v_dst_at].is_host_ptr = dst_host;
@@ -33429,7 +33440,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
                 ad.dst = v_dst_at;
                 ad.operands = {addr, v_off};
                 ad.source_line = loc.line;
-                fn_->append(current_block_, std::move(ad));
+                emit(current_block_, std::move(ad));
             }
             {
                 ir::IrInstr st{};
@@ -33437,7 +33448,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
                 st.type = ir::IrType::I64;
                 st.operands = {v_word, v_dst_at};
                 st.source_line = loc.line;
-                fn_->append(current_block_, std::move(st));
+                emit(current_block_, std::move(st));
             }
         }
         // Copy-hook (ruta B): si el campo struct declara `__clone__`, este store
@@ -33475,7 +33486,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
             ld.dst = v_ctrl;
             ld.operands = {rhs};
             ld.source_line = loc.line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
         }
         // 3. STORE ctrl al campo.
         {
@@ -33484,7 +33495,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
             st.type = ir::IrType::I64;
             st.operands = {v_ctrl, addr};
             st.source_line = loc.line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
         // 4. inc del refcount (el campo es un dueno mas).
         emit_shared_refcount_inc(addr, loc.line);
@@ -33508,7 +33519,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
     st.dst = ir::IR_NO_VALUE;
     st.operands = {v_to_store, addr};
     st.source_line = loc.line;
-    fn_->append(current_block_, std::move(st));
+    emit(current_block_, std::move(st));
     // Write-barrier generacional old->young.  Al guardar una referencia GC
     // (campo CLASS) en el campo de un objeto que puede ser OLD, registrar el
     // CONTENEDOR en el remembered_set del GC para que el minor_gc encuentre el
@@ -33530,7 +33541,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
         wb.dst = ir::IR_NO_VALUE;
         wb.operands = {v_cont_handle};
         wb.source_line = loc.line;
-        fn_->append(current_block_, std::move(wb));
+        emit(current_block_, std::move(wb));
     }
     // Reassign-free del campo unique<T> via CALL al helper (1 instr, sin
     // diamante en el call site).  El helper hace null-guard internamente -> el
@@ -33545,7 +33556,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
         ci.operands = {uniq_old_slot};
         ci.source_line = loc.line;
         ci.is_call_site = true;
-        fn_->append(current_block_, std::move(ci));
+        emit(current_block_, std::move(ci));
     }
     return rhs_cast;
 }
@@ -33638,7 +33649,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
             al.dst = v_retbuf;
             al.host_alloca = true;
             al.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(al));
+            emit(current_block_, std::move(al));
             fn_->values[v_retbuf].is_host_ptr = true;
         }
         // Bajar args (retbuf primero si SRET).
@@ -33677,7 +33688,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
                             : static_mtd->link_name;
         ins.operands = arg_vals;
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         // El resultado de una factoria SRET es el retbuf (ptr al struct).
         return sret ? v_retbuf : dst;
     }
@@ -33770,7 +33781,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         // el retbuf de metodos Optional/Result.  Asi el callee escribe
         // con `movh` y el caller lee con `movh` consistentemente.
         al.host_alloca = true;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
         fn_->values[v_method_call_retbuf].is_host_ptr = true;
     }
     const ir::IrType ret_ir = method_call_sret ? ir::IrType::VOID : ret_ir_decl;
@@ -33856,7 +33867,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         if (method_call_sret) ca.operands.push_back(v_method_call_retbuf);
         for (const ir::IrValueId av : arg_vals) ca.operands.push_back(av);
         ca.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ca));
+        emit(current_block_, std::move(ca));
         return visible_dst;
     }
 
@@ -33930,7 +33941,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
                             for (auto av : arg_vals)
                                 ca.operands.push_back(av);
                             ca.source_line = e->loc.line;
-                            fn_->append(current_block_, std::move(ca));
+                            emit(current_block_, std::move(ca));
                             return visible_dst;
                         }
                         // CALLVIRT directo con el vtable_idx de la
@@ -33947,7 +33958,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
                         for (auto av : arg_vals)
                             cv.operands.push_back(av);
                         cv.source_line = e->loc.line;
-                        fn_->append(current_block_, std::move(cv));
+                        emit(current_block_, std::move(cv));
                         // Propagar tipo concreto del retorno si es
                         // tambien tipo class conocido.
                         return visible_dst;
@@ -33974,7 +33985,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
             ld.dst = v_vt;
             ld.operands = {obj};
             ld.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
         }
         ir::IrValueId v_slot = v_vt;
         if (idx != 0) {
@@ -33989,7 +34000,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
                 ad.dst = v_slot;
                 ad.operands = {v_vt, v_off};
                 ad.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ad));
+                emit(current_block_, std::move(ad));
             }
         }
         ir::IrValueId v_fn = fn_->new_value(ir::IrType::PTR);
@@ -34001,7 +34012,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
             ld2.dst = v_fn;
             ld2.operands = {v_slot};
             ld2.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ld2));
+            emit(current_block_, std::move(ld2));
         }
         ir::IrInstr ci{};
         ci.op = ir::IrOp::CALLIND;
@@ -34013,7 +34024,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         for (auto av : arg_vals)
             ci.operands.push_back(av);
         ci.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ci));
+        emit(current_block_, std::move(ci));
         if (dst != ir::IR_NO_VALUE &&
             mtd->return_type.kind == PrimitiveKind::CLASS) {
             fn_->values[dst].is_host_ptr = true;
@@ -34311,7 +34322,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         for (auto av : arg_vals)
             ci.operands.push_back(av);
         ci.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ci));
+        emit(current_block_, std::move(ci));
         // registrar el site especulativo (keyed por el dst del
         // CALLITF).  El pase ir_pass_spec_devirt lo consume @O2.
         if (!spec_cands.empty())
@@ -34348,7 +34359,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
             for (auto av : arg_vals)
                 dc.operands.push_back(av);
             dc.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(dc));
+            emit(current_block_, std::move(dc));
             if (dst != ir::IR_NO_VALUE &&
                 mtd->return_type.kind == PrimitiveKind::CLASS) {
                 fn_->values[dst].is_host_ptr = true;
@@ -34373,7 +34384,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
                 ld.dst = v_vt;
                 ld.operands = {obj};
                 ld.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ld));
+                emit(current_block_, std::move(ld));
             }
             ir::IrValueId v_slot = v_vt;
             if (idx != 0) {
@@ -34389,7 +34400,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
                     ad.dst = v_slot;
                     ad.operands = {v_vt, v_off};
                     ad.source_line = e->loc.line;
-                    fn_->append(current_block_, std::move(ad));
+                    emit(current_block_, std::move(ad));
                 }
             }
             ir::IrValueId v_fn = fn_->new_value(ir::IrType::PTR);
@@ -34401,7 +34412,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
                 ld2.dst = v_fn;
                 ld2.operands = {v_slot};
                 ld2.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ld2));
+                emit(current_block_, std::move(ld2));
             }
             ir::IrInstr ci{};
             ci.op = ir::IrOp::CALLIND;
@@ -34413,7 +34424,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
             for (auto av : arg_vals)
                 ci.operands.push_back(av);
             ci.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ci));
+            emit(current_block_, std::move(ci));
             if (dst != ir::IR_NO_VALUE &&
                 mtd->return_type.kind == PrimitiveKind::CLASS) {
                 fn_->values[dst].is_host_ptr = true;
@@ -34436,7 +34447,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         ins.operands.push_back(av);
     ins.imm = static_cast<uint64_t>(mtd->vtable_index);
     ins.source_line = e->loc.line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     // Sprint edge-bugs (2026-06-03): marcar dst con flags GC.  Critico
     // para que el regalloc trate el value como host_ptr GC-managed
     // (save/restore convierte a GcHandle).  Esto es la correccion
@@ -34558,7 +34569,7 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
         al.dst = v_retbuf;
         al.host_alloca = true;
         al.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
         fn_->values[v_retbuf].is_host_ptr = true;
     }
 
@@ -34604,7 +34615,7 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
             ld.dst = v_vptr;
             ld.operands = {this_addr};
             ld.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
         }
         // %fnaddr = %vptr + slot*8  (%vptr es VM -> load de la entrada es mov VM)
         ir::IrValueId v_fnaddr = v_vptr;
@@ -34618,7 +34629,7 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
             ad.dst = v_fnaddr;
             ad.operands = {v_vptr, v_off};
             ad.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
         }
         // %fn = LOAD [%fnaddr]  (cfn: direccion del metodo; slot host -> movh)
         const ir::IrValueId v_fn = fn_->new_value(ir::IrType::PTR);
@@ -34629,7 +34640,7 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
             ld.dst = v_fn;
             ld.operands = {v_fnaddr};
             ld.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
         }
         // CALLIND %fn(this_addr, [retbuf], args...)
         ir::IrInstr ins{};
@@ -34639,7 +34650,7 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
         ins.func_ptr = v_fn;
         ins.operands = std::move(operands);
         ins.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         return method_sret ? v_retbuf : dst;
     }
 
@@ -34657,7 +34668,7 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
                         : mtd->link_name;
     ins.operands = std::move(operands);
     ins.source_line = e->loc.line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
 
     return method_sret ? v_retbuf : dst;
 }
@@ -34718,7 +34729,7 @@ void Lowering::emit_struct_vptr_init(ir::IrValueId struct_addr,
     sa.dst = v_vt;
     sa.imm = vt_idx;
     sa.source_line = line;
-    fn_->append(current_block_, std::move(sa));
+    emit(current_block_, std::move(sa));
     // STORE %vt -> [struct_addr + 0]  (el vptr).
     ir::IrInstr st{};
     st.op = ir::IrOp::STORE;
@@ -34726,7 +34737,7 @@ void Lowering::emit_struct_vptr_init(ir::IrValueId struct_addr,
     st.dst = ir::IR_NO_VALUE;
     st.operands = {v_vt, struct_addr};
     st.source_line = line;
-    fn_->append(current_block_, std::move(st));
+    emit(current_block_, std::move(st));
 }
 
 // ---------------------------------------------------------------------
@@ -34774,7 +34785,7 @@ bool Lowering::materialize_comptime_bytes(const std::vector<uint8_t> &bytes,
         add.dst = v_addr;
         add.operands = {v_dst, v_off};
         add.source_line = source_line;
-        fn_->append(current_block_, std::move(add));
+        emit(current_block_, std::move(add));
         fn_->values[v_addr].is_host_ptr = fn_->values[v_dst].is_host_ptr;
 
         ir::IrInstr st{};
@@ -34782,7 +34793,7 @@ bool Lowering::materialize_comptime_bytes(const std::vector<uint8_t> &bytes,
         st.type = wt;
         st.operands = {v_val, v_addr};
         st.source_line = source_line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     }
     return true;
 }
@@ -34798,7 +34809,7 @@ ir::IrValueId Lowering::emit_const(ir::IrType t, uint64_t imm,
     c.dst = dst;
     c.imm = imm;
     c.source_line = source_line;
-    fn_->append(current_block_, std::move(c));
+    emit(current_block_, std::move(c));
     return dst;
 }
 
@@ -34820,7 +34831,7 @@ ir::IrValueId Lowering::emit_strmake(ir::IrValueId v_buf, ir::IrValueId v_len,
     ins.operands = {v_buf, v_len};
     ins.is_call_site = true;
     ins.source_line = source_line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return v_str;
 }
 
@@ -34920,7 +34931,7 @@ ir::IrValueId Lowering::emit_string_override_call(const std::string &fn_name,
         al.imm = 24; // value-string {ptr,len,cap}
         al.host_alloca = true;
         al.source_line = source_line;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
         ir::IrInstr ins{};
         ins.op = ir::IrOp::CALL;
         ins.type = ir::IrType::VOID;
@@ -34928,7 +34939,7 @@ ir::IrValueId Lowering::emit_string_override_call(const std::string &fn_name,
         ins.func_name = std::move(callee_name);
         ins.operands = {v_retbuf, v_a, v_b};
         ins.source_line = source_line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         // Liberar operandos temporales (bytes ya copiados por la callee).
         // Inc 5 (SSO): solo libera si estaba en HEAP.
         if (a_temp) emit_native_str_free_if_heap(v_a, source_line);
@@ -34945,7 +34956,7 @@ ir::IrValueId Lowering::emit_string_override_call(const std::string &fn_name,
     ins.func_name = std::move(callee_name);
     ins.operands = {v_a, v_b};
     ins.source_line = source_line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
 
     // Liberar los operandos LITERAL/expr-temporales en native (sus bytes
     // ya estan copiados por la callee).  Inc 5 (SSO): solo libera si
@@ -34966,7 +34977,7 @@ ir::IrValueId Lowering::emit_string_override_call(const std::string &fn_name,
         cmp.dst = v_neg;
         cmp.operands = {v_ret, v_zero};
         cmp.source_line = source_line;
-        fn_->append(current_block_, std::move(cmp));
+        emit(current_block_, std::move(cmp));
         return v_neg;
     }
     return v_ret;
@@ -34982,7 +34993,7 @@ ir::IrValueId Lowering::emit_strcat(ir::IrValueId v_a, ir::IrValueId v_b,
     ins.operands = {v_a, v_b};
     ins.is_call_site = true;
     ins.source_line = source_line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return v_str;
 }
 
@@ -34998,7 +35009,7 @@ ir::IrValueId Lowering::emit_strraw(ir::IrValueId v_str, uint32_t source_line) {
     ins.dst = v_ptr;
     ins.operands = {v_str};
     ins.source_line = source_line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return v_ptr;
 }
 
@@ -35028,7 +35039,7 @@ ir::IrValueId Lowering::emit_strconv(ir::IrValueId v_str, uint64_t enc_imm,
     ins.imm = enc_imm;
     ins.is_call_site = true;
     ins.source_line = source_line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return v_dst;
 }
 
@@ -35041,7 +35052,7 @@ ir::IrValueId Lowering::emit_strgetbytes(ir::IrValueId v_str,
     ins.dst = v_n;
     ins.operands = {v_str};
     ins.source_line = source_line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return v_n;
 }
 
@@ -35080,7 +35091,7 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
         al.imm = 24;
         al.host_alloca = native_poo_;
         al.source_line = source_line;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
     }
     // String Inc 5 (SSO): zero-init el slot (bytes no usados definidos).
     emit_zero_native_str_slot(v_slot, source_line);
@@ -35099,7 +35110,7 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
             ad.dst = v_dst;
             ad.operands = {v_base, v_off};
             ad.source_line = source_line;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
         }
         ir::IrValueId v_val = emit_const(ty, val, source_line);
         ir::IrInstr st{};
@@ -35108,7 +35119,7 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
         st.dst = ir::IR_NO_VALUE;
         st.operands = {v_val, v_dst};
         st.source_line = source_line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     };
     auto pack = [&](const std::vector<uint8_t> &data, uint64_t pos,
                     int n) -> uint64_t {
@@ -35176,7 +35187,7 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
         ra.dst = v_buf;
         ra.operands = {v_cap};
         ra.source_line = source_line;
-        fn_->append(current_block_, std::move(ra));
+        emit(current_block_, std::move(ra));
     }
 
     // 3 + 4. Escribir el contenido del literal + nul final al buffer.
@@ -35206,7 +35217,7 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
             ad.dst = v_dst;
             ad.operands = {v_buf, v_off};
             ad.source_line = source_line;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
             return v_dst;
         };
         // Helper: STORE de un valor empaquetado de `w` bytes (1/2/4/8) en
@@ -35220,7 +35231,7 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
             st.dst = ir::IR_NO_VALUE;
             st.operands = {v_val, v_dst};
             st.source_line = source_line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         };
         // Empaquetar `n` bytes de data[pos..] en un entero little-endian.
         auto pack = [&](uint64_t pos, int n) -> uint64_t {
@@ -35267,7 +35278,7 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
             ad.dst = v_addr;
             ad.operands = {v_slot, v_off};
             ad.source_line = source_line;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
         }
         ir::IrInstr st{};
         st.op = ir::IrOp::STORE;
@@ -35275,7 +35286,7 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
         st.dst = ir::IR_NO_VALUE;
         st.operands = {v_val, v_addr};
         st.source_line = source_line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     };
     store_field(0, v_buf);
     store_field(8, emit_const(ir::IrType::I64, len, source_line));
@@ -35304,7 +35315,7 @@ ir::IrValueId Lowering::build_native_string_from_char(ir::IrValueId v_char,
         al.imm = 24;
         al.host_alloca = native_poo_;
         al.source_line = source_line;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
     }
     emit_zero_native_str_slot(v_slot, source_line);
 
@@ -35319,7 +35330,7 @@ ir::IrValueId Lowering::build_native_string_from_char(ir::IrValueId v_char,
         ad.dst = v_dst;
         ad.operands = {v_slot, v_off};
         ad.source_line = source_line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
         return v_dst;
     };
     auto store_u8 = [&](ir::IrValueId v_addr, ir::IrValueId v_val) {
@@ -35329,7 +35340,7 @@ ir::IrValueId Lowering::build_native_string_from_char(ir::IrValueId v_char,
         st.dst = ir::IR_NO_VALUE;
         st.operands = {v_val, v_addr};
         st.source_line = source_line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     };
 
     // byte[0] = char.
@@ -35361,7 +35372,7 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
         ad.dst = v_addr;
         ad.operands = {base, off};
         ad.source_line = source_line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
         return v_addr;
     };
     auto emit_memcpy = [&](ir::IrValueId dst, ir::IrValueId src,
@@ -35379,7 +35390,7 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
         mc.dst = ir::IR_NO_VALUE;
         mc.operands = {dst, src, len};
         mc.source_line = source_line;
-        fn_->append(current_block_, std::move(mc));
+        emit(current_block_, std::move(mc));
     };
     auto store_at = [&](ir::IrValueId addr, ir::IrValueId val, ir::IrType ty) {
         ir::IrInstr st{};
@@ -35388,7 +35399,7 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
         st.dst = ir::IR_NO_VALUE;
         st.operands = {val, addr};
         st.source_line = source_line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     };
 
     // 1. (ptr, len) de ambos operandos via accesores flag-aware.
@@ -35406,7 +35417,7 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
         ad.dst = v_total;
         ad.operands = {v_a_len, v_b_len};
         ad.source_line = source_line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
     }
 
     // 3. Slot de 24 bytes del resultado.
@@ -35420,7 +35431,7 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
         al.imm = 24;
         al.host_alloca = native_poo_;
         al.source_line = source_line;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
     }
     emit_zero_native_str_slot(v_slot, source_line);
 
@@ -35434,7 +35445,7 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
         c.dst = v_cond;
         c.operands = {v_total, v_22};
         c.source_line = source_line;
-        fn_->append(current_block_, std::move(c));
+        emit(current_block_, std::move(c));
     }
     const ir::IrBlockId heap_bb = fn_->new_block("concat_heap");
     const ir::IrBlockId sso_bb = fn_->new_block("concat_sso");
@@ -35446,7 +35457,7 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
         br.target_block = heap_bb;
         br.false_block = sso_bb;
         br.source_line = source_line;
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
         fn_->blocks[current_block_].succs.push_back(heap_bb);
         fn_->blocks[current_block_].succs.push_back(sso_bb);
         fn_->blocks[heap_bb].preds.push_back(current_block_);
@@ -35465,7 +35476,7 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
             ad.dst = v_cap;
             ad.operands = {v_total, v_one};
             ad.source_line = source_line;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
         }
         ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
         fn_->values[v_buf].is_host_ptr = true;
@@ -35476,7 +35487,7 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
             ra.dst = v_buf;
             ra.operands = {v_cap};
             ra.source_line = source_line;
-            fn_->append(current_block_, std::move(ra));
+            emit(current_block_, std::move(ra));
         }
         emit_memcpy(v_buf, v_a_ptr, v_a_len);
         emit_memcpy(ptr_add(v_buf, v_a_len), v_b_ptr, v_b_len);
@@ -35491,7 +35502,7 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
         br.op = ir::IrOp::BR;
         br.target_block = merge_bb;
         br.source_line = source_line;
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
         fn_->blocks[current_block_].succs.push_back(merge_bb);
         fn_->blocks[merge_bb].preds.push_back(current_block_);
     }
@@ -35509,7 +35520,7 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
         br.op = ir::IrOp::BR;
         br.target_block = merge_bb;
         br.source_line = source_line;
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
         fn_->blocks[current_block_].succs.push_back(merge_bb);
         fn_->blocks[merge_bb].preds.push_back(current_block_);
     }
@@ -35539,7 +35550,7 @@ ir::IrValueId Lowering::build_native_string_slice(ir::IrValueId v_src,
         ad.dst = v_addr;
         ad.operands = {base, off};
         ad.source_line = source_line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
         return v_addr;
     };
     auto emit_sub = [&](ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
@@ -35550,7 +35561,7 @@ ir::IrValueId Lowering::build_native_string_slice(ir::IrValueId v_src,
         s.dst = v;
         s.operands = {a, b};
         s.source_line = source_line;
-        fn_->append(current_block_, std::move(s));
+        emit(current_block_, std::move(s));
         return v;
     };
     auto emit_add = [&](ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
@@ -35561,7 +35572,7 @@ ir::IrValueId Lowering::build_native_string_slice(ir::IrValueId v_src,
         ad.dst = v;
         ad.operands = {a, b};
         ad.source_line = source_line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
         return v;
     };
 
@@ -35587,7 +35598,7 @@ ir::IrValueId Lowering::build_native_string_slice(ir::IrValueId v_src,
         al.imm = 24;
         al.host_alloca = native_poo_;
         al.source_line = source_line;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
     }
     emit_zero_native_str_slot(v_slot, source_line);
 
@@ -35617,7 +35628,7 @@ ir::IrValueId Lowering::build_native_string_index_char(ir::IrValueId v_src,
         ad.dst = v_addr;
         ad.operands = {v_ptr, v_idx};
         ad.source_line = source_line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
     }
     // LOAD u8: el codegen zero-extiende el byte a un registro completo.
     ir::IrValueId v_byte = fn_->new_value(ir::IrType::U8);
@@ -35628,7 +35639,7 @@ ir::IrValueId Lowering::build_native_string_index_char(ir::IrValueId v_src,
         ld.dst = v_byte;
         ld.operands = {v_addr};
         ld.source_line = source_line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
     }
     return v_byte;
 }
@@ -35653,7 +35664,7 @@ void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
         ad.dst = v;
         ad.operands = {base, off};
         ad.source_line = source_line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
         return v;
     };
     auto emit_memcpy = [&](ir::IrValueId dst, ir::IrValueId src,
@@ -35670,7 +35681,7 @@ void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
         mc.dst = ir::IR_NO_VALUE;
         mc.operands = {dst, src, len};
         mc.source_line = source_line;
-        fn_->append(current_block_, std::move(mc));
+        emit(current_block_, std::move(mc));
     };
     auto store_at = [&](ir::IrValueId addr, ir::IrValueId val, ir::IrType ty) {
         ir::IrInstr st{};
@@ -35679,7 +35690,7 @@ void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
         st.dst = ir::IR_NO_VALUE;
         st.operands = {val, addr};
         st.source_line = source_line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     };
 
     // Cuerpos SSO/HEAP como lambdas (emiten en current_block_, SIN el BR final
@@ -35696,7 +35707,7 @@ void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
             ad.dst = v_cap;
             ad.operands = {v_len, v_one};
             ad.source_line = source_line;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
         }
         // buf = RAW_ALLOC(cap).
         ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
@@ -35708,7 +35719,7 @@ void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
             ra.dst = v_buf;
             ra.operands = {v_cap};
             ra.source_line = source_line;
-            fn_->append(current_block_, std::move(ra));
+            emit(current_block_, std::move(ra));
         }
         // MEMCPY buf <- src (len bytes).
         emit_memcpy(v_buf, v_src_ptr, v_len);
@@ -35749,7 +35760,7 @@ void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
         c.dst = v_cond;
         c.operands = {v_len, v_22};
         c.source_line = source_line;
-        fn_->append(current_block_, std::move(c));
+        emit(current_block_, std::move(c));
     }
 
     const ir::IrBlockId heap_bb = fn_->new_block("strfin_heap");
@@ -35762,7 +35773,7 @@ void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
         br.target_block = heap_bb;
         br.false_block = sso_bb;
         br.source_line = source_line;
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
         fn_->blocks[current_block_].succs.push_back(heap_bb);
         fn_->blocks[current_block_].succs.push_back(sso_bb);
         fn_->blocks[heap_bb].preds.push_back(current_block_);
@@ -35773,7 +35784,7 @@ void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
         br.op = ir::IrOp::BR;
         br.target_block = merge_bb;
         br.source_line = source_line;
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
         fn_->blocks[current_block_].succs.push_back(merge_bb);
         fn_->blocks[merge_bb].preds.push_back(current_block_);
     };
@@ -35798,7 +35809,7 @@ ir::IrValueId Lowering::build_native_string_from_buffer(ir::IrValueId v_ptr,
         al.imm = 24;
         al.host_alloca = native_poo_;
         al.source_line = source_line;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
     }
     emit_zero_native_str_slot(v_slot, source_line);
     build_native_string_finalize(v_slot, v_ptr, v_len, source_line, known_len);
@@ -35826,7 +35837,7 @@ void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
         ad.dst = v_addr;
         ad.operands = {base, off};
         ad.source_line = source_line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
         return v_addr;
     };
     auto emit_memcpy = [&](ir::IrValueId dst, ir::IrValueId src,
@@ -35843,7 +35854,7 @@ void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
         mc.dst = ir::IR_NO_VALUE;
         mc.operands = {dst, src, len};
         mc.source_line = source_line;
-        fn_->append(current_block_, std::move(mc));
+        emit(current_block_, std::move(mc));
     };
     auto store_at = [&](ir::IrValueId addr, ir::IrValueId val, ir::IrType ty) {
         ir::IrInstr st{};
@@ -35852,7 +35863,7 @@ void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
         st.dst = ir::IR_NO_VALUE;
         st.operands = {val, addr};
         st.source_line = source_line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     };
 
     // 1. Estado actual del slot via accesores flag-aware.  v_old_data es
@@ -35868,7 +35879,7 @@ void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
         ad.dst = v_new_len;
         ad.operands = {v_old_len, v_app_len};
         ad.source_line = source_line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
     }
     ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, source_line);
     ir::IrValueId v_new_cap = fn_->new_value(ir::IrType::I64);
@@ -35879,7 +35890,7 @@ void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
         ad.dst = v_new_cap;
         ad.operands = {v_new_len, v_one};
         ad.source_line = source_line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
     }
 
     // 3. Branch new_len > 22.  HEAP nunca decrece (new_len >= old_len) ->
@@ -35895,7 +35906,7 @@ void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
         c.dst = v_cond;
         c.operands = {v_new_len, v_22};
         c.source_line = source_line;
-        fn_->append(current_block_, std::move(c));
+        emit(current_block_, std::move(c));
     }
     const ir::IrBlockId heap_bb = fn_->new_block("append_heap");
     const ir::IrBlockId sso_bb = fn_->new_block("append_sso");
@@ -35907,7 +35918,7 @@ void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
         br.target_block = heap_bb;
         br.false_block = sso_bb;
         br.source_line = source_line;
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
         fn_->blocks[current_block_].succs.push_back(heap_bb);
         fn_->blocks[current_block_].succs.push_back(sso_bb);
         fn_->blocks[heap_bb].preds.push_back(current_block_);
@@ -35926,7 +35937,7 @@ void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
             ra.dst = v_new_buf;
             ra.operands = {v_new_cap};
             ra.source_line = source_line;
-            fn_->append(current_block_, std::move(ra));
+            emit(current_block_, std::move(ra));
         }
         // Copiar lo viejo (old_data: inline o heap) + lo nuevo ANTES de
         // liberar y de tocar los campos.
@@ -35948,7 +35959,7 @@ void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
         br.op = ir::IrOp::BR;
         br.target_block = merge_bb;
         br.source_line = source_line;
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
         fn_->blocks[current_block_].succs.push_back(merge_bb);
         fn_->blocks[merge_bb].preds.push_back(current_block_);
     }
@@ -35968,7 +35979,7 @@ void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
         br.op = ir::IrOp::BR;
         br.target_block = merge_bb;
         br.source_line = source_line;
-        fn_->append(current_block_, std::move(br));
+        emit(current_block_, std::move(br));
         fn_->blocks[current_block_].succs.push_back(merge_bb);
         fn_->blocks[merge_bb].preds.push_back(current_block_);
     }
@@ -36006,7 +36017,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
         ad.dst = v;
         ad.operands = {base, off};
         ad.source_line = source_line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
         return v;
     };
     auto new_slot = [&](uint64_t bytes) -> ir::IrValueId {
@@ -36023,7 +36034,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
         al.imm = bytes;
         al.host_alloca = native_poo_;
         al.source_line = source_line;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
         return v;
     };
     auto load_i64 = [&](ir::IrValueId addr) -> ir::IrValueId {
@@ -36034,7 +36045,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
         ld.dst = v;
         ld.operands = {addr};
         ld.source_line = source_line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
         return v;
     };
     auto store_i64 = [&](ir::IrValueId addr, ir::IrValueId val) {
@@ -36044,7 +36055,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
         st.dst = ir::IR_NO_VALUE;
         st.operands = {val, addr};
         st.source_line = source_line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     };
     auto store_byte = [&](ir::IrValueId addr, ir::IrValueId val) {
         ir::IrInstr st{};
@@ -36053,7 +36064,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
         st.dst = ir::IR_NO_VALUE;
         st.operands = {val, addr};
         st.source_line = source_line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     };
     auto bin = [&](ir::IrOp op, ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
         ir::IrValueId v = fn_->new_value(ir::IrType::I64);
@@ -36063,7 +36074,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
         in.dst = v;
         in.operands = {a, b};
         in.source_line = source_line;
-        fn_->append(current_block_, std::move(in));
+        emit(current_block_, std::move(in));
         return v;
     };
     auto new_block = [&]() -> ir::IrBlockId {
@@ -36076,7 +36087,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
         b.dst = ir::IR_NO_VALUE;
         b.target_block = target;
         b.source_line = source_line;
-        fn_->append(current_block_, std::move(b));
+        emit(current_block_, std::move(b));
         fn_->blocks[current_block_].succs.push_back(target);
         fn_->blocks[target].preds.push_back(current_block_);
     };
@@ -36090,7 +36101,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
         b.target_block = t_true;
         b.false_block = t_false;
         b.source_line = source_line;
-        fn_->append(current_block_, std::move(b));
+        emit(current_block_, std::move(b));
         fn_->blocks[current_block_].succs.push_back(t_true);
         fn_->blocks[current_block_].succs.push_back(t_false);
         fn_->blocks[t_true].preds.push_back(current_block_);
@@ -36107,7 +36118,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
         in.dst = v;
         in.operands = {a, b};
         in.source_line = source_line;
-        fn_->append(current_block_, std::move(in));
+        emit(current_block_, std::move(in));
         return v;
     };
 
@@ -36195,7 +36206,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
                 in.dst = v_rem;
                 in.operands = {v_m, v_ten};
                 in.source_line = source_line;
-                fn_->append(current_block_, std::move(in));
+                emit(current_block_, std::move(in));
             }
             ir::IrValueId v_digit = bin(ir::IrOp::ADD, v_rem, v_z48);
             ir::IrValueId v_di = load_i64(s_di);
@@ -36212,7 +36223,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
                 in.dst = v_div;
                 in.operands = {v_m, v_ten};
                 in.source_line = source_line;
-                fn_->append(current_block_, std::move(in));
+                emit(current_block_, std::move(in));
             }
             store_i64(s_mag, v_div);
         }
@@ -36256,7 +36267,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
                     ld.dst = v_d;
                     ld.operands = {v_tmp_at};
                     ld.source_line = source_line;
-                    fn_->append(current_block_, std::move(ld));
+                    emit(current_block_, std::move(ld));
                 }
                 ir::IrValueId v_pos = load_i64(s_pos);
                 ir::IrValueId v_dst_at = ptr_add(v_buf, v_pos);
@@ -36326,7 +36337,7 @@ std::string Lowering::ensure_itoa_helper(bool is_signed) {
         rt.dst = ir::IR_NO_VALUE;
         rt.operands = {v_len};
         rt.source_line = 0;
-        fn_->append(current_block_, std::move(rt));
+        emit(current_block_, std::move(rt));
     }
 
     // Restaurar el contexto del padre antes de mover el helper al modulo.
@@ -36381,7 +36392,7 @@ std::string Lowering::ensure_btoa_helper() {
             ad.dst = v;
             ad.operands = {base, emit_const(ir::IrType::I64, off, 0)};
             ad.source_line = 0;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
             return v;
         };
         auto store_chunk = [&](uint64_t off, uint64_t val, ir::IrType ty) {
@@ -36392,7 +36403,7 @@ std::string Lowering::ensure_btoa_helper() {
             st.dst = ir::IR_NO_VALUE;
             st.operands = {emit_const(ty, val, 0), v_dst};
             st.source_line = 0;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         };
         auto pack = [&](uint64_t pos, int n) -> uint64_t {
             uint64_t v = 0;
@@ -36414,7 +36425,7 @@ std::string Lowering::ensure_btoa_helper() {
         rt.dst = ir::IR_NO_VALUE;
         rt.operands = {emit_const(ir::IrType::I64, len, 0)};
         rt.source_line = 0;
-        fn_->append(current_block_, std::move(rt));
+        emit(current_block_, std::move(rt));
     };
 
     // if (b != 0) -> bb_true ; else -> bb_false.
@@ -36427,7 +36438,7 @@ std::string Lowering::ensure_btoa_helper() {
         in.dst = v_cond;
         in.operands = {p_b, v_zero};
         in.source_line = 0;
-        fn_->append(current_block_, std::move(in));
+        emit(current_block_, std::move(in));
     }
     ir::IrBlockId bb_true = fn_->new_block("btoa_true");
     ir::IrBlockId bb_false = fn_->new_block("btoa_false");
@@ -36440,7 +36451,7 @@ std::string Lowering::ensure_btoa_helper() {
         b.target_block = bb_true;
         b.false_block = bb_false;
         b.source_line = 0;
-        fn_->append(current_block_, std::move(b));
+        emit(current_block_, std::move(b));
         fn_->blocks[current_block_].succs.push_back(bb_true);
         fn_->blocks[current_block_].succs.push_back(bb_false);
         fn_->blocks[bb_true].preds.push_back(current_block_);
@@ -36501,7 +36512,7 @@ std::string Lowering::ensure_ctoa_helper() {
         in.dst = v;
         in.operands = {a, b};
         in.source_line = 0;
-        fn_->append(current_block_, std::move(in));
+        emit(current_block_, std::move(in));
         return v;
     };
     auto shr = [&](ir::IrValueId a, uint64_t k) -> ir::IrValueId {
@@ -36524,7 +36535,7 @@ std::string Lowering::ensure_ctoa_helper() {
             ad.dst = v_dst;
             ad.operands = {p_buf, emit_const(ir::IrType::I64, off, 0)};
             ad.source_line = 0;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
         }
         ir::IrInstr st{};
         st.op = ir::IrOp::STORE;
@@ -36532,7 +36543,7 @@ std::string Lowering::ensure_ctoa_helper() {
         st.dst = ir::IR_NO_VALUE;
         st.operands = {v_val, v_dst};
         st.source_line = 0;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     };
     auto ret_len = [&](uint64_t len) {
         ir::IrInstr rt{};
@@ -36541,7 +36552,7 @@ std::string Lowering::ensure_ctoa_helper() {
         rt.dst = ir::IR_NO_VALUE;
         rt.operands = {emit_const(ir::IrType::I64, len, 0)};
         rt.source_line = 0;
-        fn_->append(current_block_, std::move(rt));
+        emit(current_block_, std::move(rt));
     };
     // cond = (cp u< limit) -> branch a bb_then, si no a bb_else.
     auto branch_ult = [&](uint64_t limit, ir::IrBlockId bb_then,
@@ -36554,7 +36565,7 @@ std::string Lowering::ensure_ctoa_helper() {
             in.dst = v_cond;
             in.operands = {p_cp, emit_const(ir::IrType::I64, limit, 0)};
             in.source_line = 0;
-            fn_->append(current_block_, std::move(in));
+            emit(current_block_, std::move(in));
         }
         ir::IrInstr b{};
         b.op = ir::IrOp::BR_COND;
@@ -36564,7 +36575,7 @@ std::string Lowering::ensure_ctoa_helper() {
         b.target_block = bb_then;
         b.false_block = bb_else;
         b.source_line = 0;
-        fn_->append(current_block_, std::move(b));
+        emit(current_block_, std::move(b));
         fn_->blocks[current_block_].succs.push_back(bb_then);
         fn_->blocks[current_block_].succs.push_back(bb_else);
         fn_->blocks[bb_then].preds.push_back(current_block_);
@@ -36696,7 +36707,7 @@ uint64_t Lowering::ensure_cpu_features_global() {
         al.imm = 8;
         al.host_alloca = true;
         al.source_line = ln;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
     }
     // En modo protegido los registros son de 32 bits y `rax` no existe: el
     // binding, y todo el cuerpo de abajo, se nombran segun el ANCHO DEL TARGET.
@@ -36822,7 +36833,7 @@ uint64_t Lowering::ensure_cpu_features_global() {
         fn_->asm_clobber_lists.push_back(std::move(clob));
         q |= (asm_id & 0xFFFFFFull) << 8;
         ia.imm = q;
-        fn_->append(current_block_, std::move(ia));
+        emit(current_block_, std::move(ia));
     }
 
     // --- LOAD del binding (lee rax) -> bitmask u64 ---
@@ -36834,7 +36845,7 @@ uint64_t Lowering::ensure_cpu_features_global() {
         ld.dst = v_feat;
         ld.operands = {rax_slot};
         ld.source_line = ln;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
     }
 
     // --- STORE del bitmask al slot global __vx_cpu_features ---
@@ -36846,7 +36857,7 @@ uint64_t Lowering::ensure_cpu_features_global() {
         is.dst = v_gaddr;
         is.imm = slot;
         is.source_line = ln;
-        fn_->append(current_block_, std::move(is));
+        emit(current_block_, std::move(is));
     }
     {
         ir::IrInstr st{};
@@ -36855,7 +36866,7 @@ uint64_t Lowering::ensure_cpu_features_global() {
         st.dst = ir::IR_NO_VALUE;
         st.operands = {v_feat, v_gaddr};
         st.source_line = ln;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     }
 
     // --- RET void ---
@@ -36865,7 +36876,7 @@ uint64_t Lowering::ensure_cpu_features_global() {
         ret.type = ir::IrType::VOID;
         ret.dst = ir::IR_NO_VALUE;
         ret.source_line = ln;
-        fn_->append(current_block_, std::move(ret));
+        emit(current_block_, std::move(ret));
     }
     block_terminated_ = true;
 
@@ -36971,13 +36982,13 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
         mc.dst = ir::IR_NO_VALUE;
         mc.operands = {dst, src, n};
         mc.source_line = ln;
-        fn_->append(current_block_, std::move(mc));
+        emit(current_block_, std::move(mc));
         ir::IrInstr ret{};
         ret.op = ir::IrOp::RET;
         ret.type = ir::IrType::VOID;
         ret.dst = ir::IR_NO_VALUE;
         ret.source_line = ln;
-        fn_->append(current_block_, std::move(ret));
+        emit(current_block_, std::move(ret));
     };
 
     build_variant("__vx_memcpy_base", emit_base_body);
@@ -37029,7 +37040,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
                 al.imm = 8;
                 al.host_alloca = true;
                 al.source_line = ln;
-                fn_->append(current_block_, std::move(al));
+                emit(current_block_, std::move(al));
             }
             fn_->asm_reg_bindings.push_back(
                 ir::AsmRegBinding{slot, reg, ty, false, dbg});
@@ -37040,7 +37051,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
             st.dst = ir::IR_NO_VALUE;
             st.operands = {param, slot};
             st.source_line = ln;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
             return slot;
         };
         const ir::IrValueId s_dst =
@@ -37098,7 +37109,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
             fn_->asm_clobber_lists.push_back(std::move(clob));
             q |= (asm_id & 0xFFFFFFull) << 8;
             ia.imm = q;
-            fn_->append(current_block_, std::move(ia));
+            emit(current_block_, std::move(ia));
         }
 
         // RET void.
@@ -37108,7 +37119,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
             ret.type = ir::IrType::VOID;
             ret.dst = ir::IR_NO_VALUE;
             ret.source_line = ln;
-            fn_->append(current_block_, std::move(ret));
+            emit(current_block_, std::move(ret));
         }
         block_terminated_ = true;
         out_mod_->add_function(std::move(hf));
@@ -37139,7 +37150,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
                 la.dst = v_gaddr;
                 la.imm = fp_slot;
                 la.source_line = ln;
-                fn_->append(current_block_, std::move(la));
+                emit(current_block_, std::move(la));
             }
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
@@ -37147,7 +37158,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
             st.dst = ir::IR_NO_VALUE;
             st.operands = {v_addr, v_gaddr};
             st.source_line = ln;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         };
 
         // CPU dispatch Inc 4: si el usuario declaro @HelperOverride(memcpy),
@@ -37160,7 +37171,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
             ret.type = ir::IrType::VOID;
             ret.dst = ir::IR_NO_VALUE;
             ret.source_line = ln;
-            fn_->append(current_block_, std::move(ret));
+            emit(current_block_, std::move(ret));
             block_terminated_ = true;
             out_mod_->add_function(std::move(hf));
             fn_ = saved_fn;
@@ -37180,7 +37191,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
             la.dst = v_faddr;
             la.imm = feat_slot;
             la.source_line = ln;
-            fn_->append(current_block_, std::move(la));
+            emit(current_block_, std::move(la));
         }
         ir::IrValueId v_feat = fn_->new_value(ir::IrType::I64);
         {
@@ -37190,7 +37201,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
             ld.dst = v_feat;
             ld.operands = {v_faddr};
             ld.source_line = ln;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
         }
         // has_avx2 = (feat >> 4) & 1.  (bit4 = AVX2.)
         ir::IrValueId v_sh = fn_->new_value(ir::IrType::I64);
@@ -37202,7 +37213,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
             sh.dst = v_sh;
             sh.operands = {v_feat, v4};
             sh.source_line = ln;
-            fn_->append(current_block_, std::move(sh));
+            emit(current_block_, std::move(sh));
         }
         ir::IrValueId v_bit = fn_->new_value(ir::IrType::I64);
         {
@@ -37213,7 +37224,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
             an.dst = v_bit;
             an.operands = {v_sh, v1};
             an.source_line = ln;
-            fn_->append(current_block_, std::move(an));
+            emit(current_block_, std::move(an));
         }
         ir::IrValueId v_has = fn_->new_value(ir::IrType::BOOL);
         {
@@ -37224,7 +37235,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
             cm.dst = v_has;
             cm.operands = {v_bit, v0};
             cm.source_line = ln;
-            fn_->append(current_block_, std::move(cm));
+            emit(current_block_, std::move(cm));
         }
 
         // Ramas: avx2 -> fp=&avx2 ; base -> fp=&base ; join -> RET.
@@ -37240,7 +37251,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
             br.target_block = bb_avx2;
             br.false_block = bb_base;
             br.source_line = ln;
-            fn_->append(current_block_, std::move(br));
+            emit(current_block_, std::move(br));
             fn_->blocks[current_block_].succs.push_back(bb_avx2);
             fn_->blocks[current_block_].succs.push_back(bb_base);
             fn_->blocks[bb_avx2].preds.push_back(current_block_);
@@ -37256,7 +37267,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
             br.dst = ir::IR_NO_VALUE;
             br.target_block = bb_join;
             br.source_line = ln;
-            fn_->append(current_block_, std::move(br));
+            emit(current_block_, std::move(br));
             fn_->blocks[current_block_].succs.push_back(bb_join);
             fn_->blocks[bb_join].preds.push_back(current_block_);
         };
@@ -37273,7 +37284,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
             ret.type = ir::IrType::VOID;
             ret.dst = ir::IR_NO_VALUE;
             ret.source_line = ln;
-            fn_->append(current_block_, std::move(ret));
+            emit(current_block_, std::move(ret));
         }
         block_terminated_ = true;
         out_mod_->add_function(std::move(hf));
@@ -37473,7 +37484,7 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
                 la.dst = v_gaddr;
                 la.imm = fp_slot;
                 la.source_line = ln;
-                fn_->append(current_block_, std::move(la));
+                emit(current_block_, std::move(la));
             }
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
@@ -37481,7 +37492,7 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
             st.dst = ir::IR_NO_VALUE;
             st.operands = {v_addr, v_gaddr};
             st.source_line = ln;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         };
 
         // feat = LOAD i64 [__vx_cpu_features].
@@ -37495,7 +37506,7 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
             la.dst = v_faddr;
             la.imm = feat_slot;
             la.source_line = ln;
-            fn_->append(current_block_, std::move(la));
+            emit(current_block_, std::move(la));
         }
         ir::IrValueId v_feat = fn_->new_value(ir::IrType::I64);
         {
@@ -37505,7 +37516,7 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
             ld.dst = v_feat;
             ld.operands = {v_faddr};
             ld.source_line = ln;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
         }
         // bit_set(n): has = ((feat >> n) & 1) != 0.
         auto bit_set = [&](int n) -> ir::IrValueId {
@@ -37518,7 +37529,7 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
                 sh.dst = v_sh;
                 sh.operands = {v_feat, vn};
                 sh.source_line = ln;
-                fn_->append(current_block_, std::move(sh));
+                emit(current_block_, std::move(sh));
             }
             ir::IrValueId v_bit = fn_->new_value(ir::IrType::I64);
             {
@@ -37529,7 +37540,7 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
                 an.dst = v_bit;
                 an.operands = {v_sh, v1};
                 an.source_line = ln;
-                fn_->append(current_block_, std::move(an));
+                emit(current_block_, std::move(an));
             }
             ir::IrValueId v_has = fn_->new_value(ir::IrType::BOOL);
             {
@@ -37540,7 +37551,7 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
                 cm.dst = v_has;
                 cm.operands = {v_bit, v0};
                 cm.source_line = ln;
-                fn_->append(current_block_, std::move(cm));
+                emit(current_block_, std::move(cm));
             }
             return v_has;
         };
@@ -37561,7 +37572,7 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
             br.target_block = t;
             br.false_block = f;
             br.source_line = ln;
-            fn_->append(current_block_, std::move(br));
+            emit(current_block_, std::move(br));
             fn_->blocks[current_block_].succs.push_back(t);
             fn_->blocks[current_block_].succs.push_back(f);
             fn_->blocks[t].preds.push_back(current_block_);
@@ -37578,7 +37589,7 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
             br.dst = ir::IR_NO_VALUE;
             br.target_block = bb_join;
             br.source_line = ln;
-            fn_->append(current_block_, std::move(br));
+            emit(current_block_, std::move(br));
             fn_->blocks[current_block_].succs.push_back(bb_join);
             fn_->blocks[bb_join].preds.push_back(current_block_);
         };
@@ -37603,7 +37614,7 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
             ret.type = ir::IrType::VOID;
             ret.dst = ir::IR_NO_VALUE;
             ret.source_line = ln;
-            fn_->append(current_block_, std::move(ret));
+            emit(current_block_, std::move(ret));
         }
         block_terminated_ = true;
         out_module.add_function(std::move(hf));
@@ -37630,7 +37641,7 @@ void Lowering::emit_memcpy_dispatched(ir::IrValueId dst, ir::IrValueId src,
         la.dst = v_fpaddr;
         la.imm = fp_slot;
         la.source_line = line;
-        fn_->append(current_block_, std::move(la));
+        emit(current_block_, std::move(la));
     }
     ir::IrValueId v_fp = fn_->new_value(ir::IrType::PTR);
     fn_->values[v_fp].is_host_ptr = true;
@@ -37641,7 +37652,7 @@ void Lowering::emit_memcpy_dispatched(ir::IrValueId dst, ir::IrValueId src,
         ld.dst = v_fp;
         ld.operands = {v_fpaddr};
         ld.source_line = line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
     }
     // CALLIND v_fp(dst, src, len) -> void.
     ir::IrInstr ci{};
@@ -37651,7 +37662,7 @@ void Lowering::emit_memcpy_dispatched(ir::IrValueId dst, ir::IrValueId src,
     ci.func_ptr = v_fp;
     ci.operands = {dst, src, len};
     ci.source_line = line;
-    fn_->append(current_block_, std::move(ci));
+    emit(current_block_, std::move(ci));
 }
 
 // ---------------------------------------------------------------------
@@ -37726,7 +37737,7 @@ void Lowering::ensure_strdisp() {
             la.dst = v_gaddr;
             la.imm = fp_slot;
             la.source_line = ln;
-            fn_->append(current_block_, std::move(la));
+            emit(current_block_, std::move(la));
         }
         ir::IrInstr st{};
         st.op = ir::IrOp::STORE;
@@ -37734,7 +37745,7 @@ void Lowering::ensure_strdisp() {
         st.dst = ir::IR_NO_VALUE;
         st.operands = {v_addr, v_gaddr};
         st.source_line = ln;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     };
 
     // fp = override del usuario si lo hay; si no, el baseline.
@@ -37751,7 +37762,7 @@ void Lowering::ensure_strdisp() {
         ret.type = ir::IrType::VOID;
         ret.dst = ir::IR_NO_VALUE;
         ret.source_line = ln;
-        fn_->append(current_block_, std::move(ret));
+        emit(current_block_, std::move(ret));
     }
     block_terminated_ = true;
     out_mod_->add_function(std::move(hf));
@@ -37824,7 +37835,7 @@ std::string Lowering::ensure_strcmp_helper() {
         ad.dst = v;
         ad.operands = {base, off};
         ad.source_line = ln;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
         return v;
     };
     auto new_slot = [&]() -> ir::IrValueId {
@@ -37837,7 +37848,7 @@ std::string Lowering::ensure_strcmp_helper() {
         al.imm = 8;
         al.host_alloca = true;
         al.source_line = ln;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
         return v;
     };
     auto load_i64 = [&](ir::IrValueId addr) -> ir::IrValueId {
@@ -37848,7 +37859,7 @@ std::string Lowering::ensure_strcmp_helper() {
         ld.dst = v;
         ld.operands = {addr};
         ld.source_line = ln;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
         return v;
     };
     auto store_i64 = [&](ir::IrValueId addr, ir::IrValueId val) {
@@ -37858,7 +37869,7 @@ std::string Lowering::ensure_strcmp_helper() {
         st.dst = ir::IR_NO_VALUE;
         st.operands = {val, addr};
         st.source_line = ln;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     };
     auto load_byte = [&](ir::IrValueId addr) -> ir::IrValueId {
         // LOAD U8 -> zero-extend a i64 (byte unsigned 0..255).
@@ -37869,7 +37880,7 @@ std::string Lowering::ensure_strcmp_helper() {
         ld.dst = v;
         ld.operands = {addr};
         ld.source_line = ln;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
         return v;
     };
     auto bin = [&](ir::IrOp op, ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
@@ -37880,7 +37891,7 @@ std::string Lowering::ensure_strcmp_helper() {
         in.dst = v;
         in.operands = {a, b};
         in.source_line = ln;
-        fn_->append(current_block_, std::move(in));
+        emit(current_block_, std::move(in));
         return v;
     };
     auto cmp = [&](ir::IrOp op, ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
@@ -37891,7 +37902,7 @@ std::string Lowering::ensure_strcmp_helper() {
         in.dst = v;
         in.operands = {a, b};
         in.source_line = ln;
-        fn_->append(current_block_, std::move(in));
+        emit(current_block_, std::move(in));
         return v;
     };
     auto new_block = [&]() -> ir::IrBlockId { return fn_->new_block(); };
@@ -37902,7 +37913,7 @@ std::string Lowering::ensure_strcmp_helper() {
         b.dst = ir::IR_NO_VALUE;
         b.target_block = target;
         b.source_line = ln;
-        fn_->append(current_block_, std::move(b));
+        emit(current_block_, std::move(b));
         fn_->blocks[current_block_].succs.push_back(target);
         fn_->blocks[target].preds.push_back(current_block_);
     };
@@ -37916,7 +37927,7 @@ std::string Lowering::ensure_strcmp_helper() {
         b.target_block = t_true;
         b.false_block = t_false;
         b.source_line = ln;
-        fn_->append(current_block_, std::move(b));
+        emit(current_block_, std::move(b));
         fn_->blocks[current_block_].succs.push_back(t_true);
         fn_->blocks[current_block_].succs.push_back(t_false);
         fn_->blocks[t_true].preds.push_back(current_block_);
@@ -37929,7 +37940,7 @@ std::string Lowering::ensure_strcmp_helper() {
         rt.dst = ir::IR_NO_VALUE;
         rt.operands = {v};
         rt.source_line = ln;
-        fn_->append(current_block_, std::move(rt));
+        emit(current_block_, std::move(rt));
     };
 
     ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, ln);
@@ -38055,7 +38066,7 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
         ad.dst = v;
         ad.operands = {base, off};
         ad.source_line = ln;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
         return v;
     };
 
@@ -38073,7 +38084,7 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
         al.imm = 24;
         al.host_alloca = native_poo_;
         al.source_line = ln;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
     }
     // String Inc 5 (SSO): zero-init qword0/1 + qword2 = (0 << 56) -> SSO
     // vacio (len 0, flag bit alto 0, data inline definida).  Los appends
@@ -38098,7 +38109,7 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
             al.imm = plen;
             al.host_alloca = native_poo_;
             al.source_line = ln;
-            fn_->append(current_block_, std::move(al));
+            emit(current_block_, std::move(al));
         }
         if (native_poo_) fn_->values[v_scratch].is_host_ptr = true;
         // STOREs empaquetados (qword/dword/word/byte) de los bytes.
@@ -38114,7 +38125,7 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
             st.dst = ir::IR_NO_VALUE;
             st.operands = {v_val, v_dst};
             st.source_line = ln;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         };
         auto pack = [&](uint64_t pos, int n) -> uint64_t {
             uint64_t v = 0;
@@ -38190,7 +38201,7 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
                 ext.dst = v64;
                 ext.operands = {v_cp};
                 ext.source_line = ln;
-                fn_->append(current_block_, std::move(ext));
+                emit(current_block_, std::move(ext));
                 v_cp = v64;
             }
             // scratch de 4 bytes (max UTF-8).
@@ -38203,7 +38214,7 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
                 al.imm = 4;
                 al.host_alloca = native_poo_;
                 al.source_line = ln;
-                fn_->append(current_block_, std::move(al));
+                emit(current_block_, std::move(al));
             }
             if (native_poo_) fn_->values[v_scr].is_host_ptr = true;
             const std::string ctoa_fn = ensure_ctoa_helper();
@@ -38216,7 +38227,7 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
                 ca.func_name = ctoa_fn;
                 ca.operands = {v_scr, v_cp};
                 ca.source_line = ln;
-                fn_->append(current_block_, std::move(ca));
+                emit(current_block_, std::move(ca));
             }
             build_native_string_append_inplace(v_slot, v_scr, v_len, ln);
             return true;
@@ -38244,7 +38255,7 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
                 al.imm = 1;
                 al.host_alloca = native_poo_;
                 al.source_line = ln;
-                fn_->append(current_block_, std::move(al));
+                emit(current_block_, std::move(al));
             }
             if (native_poo_) fn_->values[v_scr].is_host_ptr = true;
             {
@@ -38254,7 +38265,7 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
                 st.dst = ir::IR_NO_VALUE;
                 st.operands = {v_ch, v_scr};
                 st.source_line = ln;
-                fn_->append(current_block_, std::move(st));
+                emit(current_block_, std::move(st));
             }
             build_native_string_append_inplace(v_slot, v_scr,
                                                 emit_const(ir::IrType::I64, 1, ln),
@@ -38275,7 +38286,7 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
                 ext.dst = v64;
                 ext.operands = {v_int};
                 ext.source_line = ln;
-                fn_->append(current_block_, std::move(ext));
+                emit(current_block_, std::move(ext));
                 v_int = v64;
             }
             // scratch de 24 bytes (suficiente para i64 con signo).
@@ -38288,7 +38299,7 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
                 al.imm = 24;
                 al.host_alloca = native_poo_;
                 al.source_line = ln;
-                fn_->append(current_block_, std::move(al));
+                emit(current_block_, std::move(al));
             }
             if (native_poo_) fn_->values[v_scr].is_host_ptr = true;
             // CALL al helper itoa (no inline): evita el const-fold
@@ -38305,7 +38316,7 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
                 ca.func_name = itoa_fn;
                 ca.operands = {v_scr, v_int};
                 ca.source_line = ln;
-                fn_->append(current_block_, std::move(ca));
+                emit(current_block_, std::move(ca));
             }
             build_native_string_append_inplace(v_slot, v_scr, v_len, ln);
             return true;
@@ -38324,7 +38335,7 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
                 ext.dst = v_b64;
                 ext.operands = {v_b};
                 ext.source_line = ln;
-                fn_->append(current_block_, std::move(ext));
+                emit(current_block_, std::move(ext));
             }
             // scratch de 8 bytes (cabe "false" + margen).
             ir::IrValueId v_scr = fn_->new_value(ir::IrType::PTR);
@@ -38336,7 +38347,7 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
                 al.imm = 8;
                 al.host_alloca = native_poo_;
                 al.source_line = ln;
-                fn_->append(current_block_, std::move(al));
+                emit(current_block_, std::move(al));
             }
             if (native_poo_) fn_->values[v_scr].is_host_ptr = true;
             const std::string btoa_fn = ensure_btoa_helper();
@@ -38349,7 +38360,7 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
                 ca.func_name = btoa_fn;
                 ca.operands = {v_scr, v_b64};
                 ca.source_line = ln;
-                fn_->append(current_block_, std::move(ca));
+                emit(current_block_, std::move(ca));
             }
             build_native_string_append_inplace(v_slot, v_scr, v_len, ln);
             return true;
@@ -38405,7 +38416,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
         ad.dst = v_addr;
         ad.operands = {base, off};
         ad.source_line = source_line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
         return v_addr;
     };
 
@@ -38418,7 +38429,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
         al.dst = v_i_slot;
         al.imm = 8;
         al.source_line = source_line;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
     }
     {
         ir::IrValueId v_z = emit_const(ir::IrType::I64, 0, source_line);
@@ -38428,7 +38439,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
         st.dst = ir::IR_NO_VALUE;
         st.operands = {v_z, v_i_slot};
         st.source_line = source_line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     }
 
     // limit8 = len - 7 (el qword corre mientras i < limit8, i.e. i+8 <= len).
@@ -38443,7 +38454,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
         su.dst = v_limit8;
         su.operands = {v_len, v_seven};
         su.source_line = source_line;
-        fn_->append(current_block_, std::move(su));
+        emit(current_block_, std::move(su));
     }
 
     // ---- Loop 1: copia de palabra (8 bytes/iter). ----
@@ -38457,7 +38468,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
             br.op = ir::IrOp::BR;
             br.target_block = hdr;
             br.source_line = source_line;
-            fn_->append(current_block_, std::move(br));
+            emit(current_block_, std::move(br));
         }
         fn_->blocks[current_block_].succs.push_back(hdr);
         fn_->blocks[hdr].preds.push_back(current_block_);
@@ -38472,7 +38483,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
             ld.dst = v_i;
             ld.operands = {v_i_slot};
             ld.source_line = source_line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
         }
         ir::IrValueId v_cond = fn_->new_value(ir::IrType::BOOL);
         {
@@ -38482,7 +38493,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
             cmp.dst = v_cond;
             cmp.operands = {v_i, v_limit8};
             cmp.source_line = source_line;
-            fn_->append(current_block_, std::move(cmp));
+            emit(current_block_, std::move(cmp));
         }
         {
             ir::IrInstr brc{};
@@ -38491,7 +38502,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
             brc.target_block = body;
             brc.false_block = done;
             brc.source_line = source_line;
-            fn_->append(current_block_, std::move(brc));
+            emit(current_block_, std::move(brc));
         }
         fn_->blocks[hdr].succs.push_back(body);
         fn_->blocks[hdr].succs.push_back(done);
@@ -38510,7 +38521,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
             ld.dst = v_w;
             ld.operands = {v_src};
             ld.source_line = source_line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
         }
         {
             ir::IrInstr st{};
@@ -38519,7 +38530,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
             st.dst = ir::IR_NO_VALUE;
             st.operands = {v_w, v_dst};
             st.source_line = source_line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
         ir::IrValueId v_i8 = fn_->new_value(ir::IrType::I64);
         {
@@ -38530,7 +38541,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
             ad.dst = v_i8;
             ad.operands = {v_i, v_8};
             ad.source_line = source_line;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
         }
         {
             ir::IrInstr st{};
@@ -38539,14 +38550,14 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
             st.dst = ir::IR_NO_VALUE;
             st.operands = {v_i8, v_i_slot};
             st.source_line = source_line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
         {
             ir::IrInstr br{};
             br.op = ir::IrOp::BR;
             br.target_block = hdr;
             br.source_line = source_line;
-            fn_->append(current_block_, std::move(br));
+            emit(current_block_, std::move(br));
         }
         fn_->blocks[body].succs.push_back(hdr);
         fn_->blocks[hdr].preds.push_back(body);
@@ -38566,7 +38577,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
             br.op = ir::IrOp::BR;
             br.target_block = hdr;
             br.source_line = source_line;
-            fn_->append(current_block_, std::move(br));
+            emit(current_block_, std::move(br));
         }
         fn_->blocks[current_block_].succs.push_back(hdr);
         fn_->blocks[hdr].preds.push_back(current_block_);
@@ -38581,7 +38592,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
             ld.dst = v_i;
             ld.operands = {v_i_slot};
             ld.source_line = source_line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
         }
         ir::IrValueId v_cond = fn_->new_value(ir::IrType::BOOL);
         {
@@ -38591,7 +38602,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
             cmp.dst = v_cond;
             cmp.operands = {v_i, v_len};
             cmp.source_line = source_line;
-            fn_->append(current_block_, std::move(cmp));
+            emit(current_block_, std::move(cmp));
         }
         {
             ir::IrInstr brc{};
@@ -38600,7 +38611,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
             brc.target_block = body;
             brc.false_block = done;
             brc.source_line = source_line;
-            fn_->append(current_block_, std::move(brc));
+            emit(current_block_, std::move(brc));
         }
         fn_->blocks[hdr].succs.push_back(body);
         fn_->blocks[hdr].succs.push_back(done);
@@ -38619,7 +38630,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
             ld.dst = v_byte;
             ld.operands = {v_src};
             ld.source_line = source_line;
-            fn_->append(current_block_, std::move(ld));
+            emit(current_block_, std::move(ld));
         }
         {
             ir::IrInstr st{};
@@ -38628,7 +38639,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
             st.dst = ir::IR_NO_VALUE;
             st.operands = {v_byte, v_dst};
             st.source_line = source_line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
         ir::IrValueId v_i1 = fn_->new_value(ir::IrType::I64);
         {
@@ -38639,7 +38650,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
             ad.dst = v_i1;
             ad.operands = {v_i, v_1};
             ad.source_line = source_line;
-            fn_->append(current_block_, std::move(ad));
+            emit(current_block_, std::move(ad));
         }
         {
             ir::IrInstr st{};
@@ -38648,14 +38659,14 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
             st.dst = ir::IR_NO_VALUE;
             st.operands = {v_i1, v_i_slot};
             st.source_line = source_line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
         {
             ir::IrInstr br{};
             br.op = ir::IrOp::BR;
             br.target_block = hdr;
             br.source_line = source_line;
-            fn_->append(current_block_, std::move(br));
+            emit(current_block_, std::move(br));
         }
         fn_->blocks[body].succs.push_back(hdr);
         fn_->blocks[hdr].preds.push_back(body);
@@ -38680,7 +38691,7 @@ ir::IrValueId Lowering::load_native_string_field(ir::IrValueId v_slot,
         ad.dst = v_addr;
         ad.operands = {v_slot, v_off};
         ad.source_line = source_line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
     }
     const ir::IrType rt = as_host ? ir::IrType::PTR : ir::IrType::I64;
     ir::IrValueId v_val = fn_->new_value(rt);
@@ -38691,7 +38702,7 @@ ir::IrValueId Lowering::load_native_string_field(ir::IrValueId v_slot,
     ld.dst = v_val;
     ld.operands = {v_addr};
     ld.source_line = source_line;
-    fn_->append(current_block_, std::move(ld));
+    emit(current_block_, std::move(ld));
     return v_val;
 }
 
@@ -38720,7 +38731,7 @@ ir::IrValueId Lowering::emit_native_str_is_heap(ir::IrValueId v_slot,
         ad.dst = v_addr;
         ad.operands = {v_slot, v_off};
         ad.source_line = source_line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
     }
     ir::IrValueId v_b23 = fn_->new_value(ir::IrType::U8);
     {
@@ -38730,7 +38741,7 @@ ir::IrValueId Lowering::emit_native_str_is_heap(ir::IrValueId v_slot,
         ld.dst = v_b23;
         ld.operands = {v_addr};
         ld.source_line = source_line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
     }
     // is_heap = b23 >> 7  (logico; b23 es 0..255 zero-extended).
     ir::IrValueId v_seven = emit_const(ir::IrType::I64, 7, source_line);
@@ -38742,7 +38753,7 @@ ir::IrValueId Lowering::emit_native_str_is_heap(ir::IrValueId v_slot,
         sh.dst = v_is_heap;
         sh.operands = {v_b23, v_seven};
         sh.source_line = source_line;
-        fn_->append(current_block_, std::move(sh));
+        emit(current_block_, std::move(sh));
     }
     return v_is_heap;
 }
@@ -38765,7 +38776,7 @@ ir::IrValueId Lowering::emit_native_str_data_ptr_inline(ir::IrValueId v_slot,
         ld.dst = v_ptr0;
         ld.operands = {v_slot};
         ld.source_line = source_line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
     }
     // slot como I64 (la direccion del slot).  BITCAST PTR->I64.
     ir::IrValueId v_slot_i = fn_->new_value(ir::IrType::I64);
@@ -38776,7 +38787,7 @@ ir::IrValueId Lowering::emit_native_str_data_ptr_inline(ir::IrValueId v_slot,
         bc.dst = v_slot_i;
         bc.operands = {v_slot};
         bc.source_line = source_line;
-        fn_->append(current_block_, std::move(bc));
+        emit(current_block_, std::move(bc));
     }
     // diff = ptr0 - slot.
     ir::IrValueId v_diff = fn_->new_value(ir::IrType::I64);
@@ -38787,7 +38798,7 @@ ir::IrValueId Lowering::emit_native_str_data_ptr_inline(ir::IrValueId v_slot,
         s.dst = v_diff;
         s.operands = {v_ptr0, v_slot_i};
         s.source_line = source_line;
-        fn_->append(current_block_, std::move(s));
+        emit(current_block_, std::move(s));
     }
     // masked = diff & (-is_heap)  (AND, no MUL: valgrind sabe x&0=0 es
     // definido aunque diff use ptr0 con bits de data inline SSO).
@@ -38799,7 +38810,7 @@ ir::IrValueId Lowering::emit_native_str_data_ptr_inline(ir::IrValueId v_slot,
         ng.dst = v_mask;
         ng.operands = {v_is_heap};
         ng.source_line = source_line;
-        fn_->append(current_block_, std::move(ng));
+        emit(current_block_, std::move(ng));
     }
     ir::IrValueId v_masked = fn_->new_value(ir::IrType::I64);
     {
@@ -38809,7 +38820,7 @@ ir::IrValueId Lowering::emit_native_str_data_ptr_inline(ir::IrValueId v_slot,
         an.dst = v_masked;
         an.operands = {v_diff, v_mask};
         an.source_line = source_line;
-        fn_->append(current_block_, std::move(an));
+        emit(current_block_, std::move(an));
     }
     // data = slot + masked.
     ir::IrValueId v_data = fn_->new_value(ir::IrType::PTR);
@@ -38821,7 +38832,7 @@ ir::IrValueId Lowering::emit_native_str_data_ptr_inline(ir::IrValueId v_slot,
         ad.dst = v_data;
         ad.operands = {v_slot_i, v_masked};
         ad.source_line = source_line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
     }
     return v_data;
 }
@@ -38843,7 +38854,7 @@ ir::IrValueId Lowering::emit_native_str_len_inline(ir::IrValueId v_slot,
         ad.dst = v_addr23;
         ad.operands = {v_slot, v_off23};
         ad.source_line = source_line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
     }
     ir::IrValueId v_b23 = fn_->new_value(ir::IrType::U8);
     {
@@ -38853,7 +38864,7 @@ ir::IrValueId Lowering::emit_native_str_len_inline(ir::IrValueId v_slot,
         ld.dst = v_b23;
         ld.operands = {v_addr23};
         ld.source_line = source_line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
     }
     ir::IrValueId v_mask7f = emit_const(ir::IrType::I64, 0x7F, source_line);
     ir::IrValueId v_sso_len = fn_->new_value(ir::IrType::I64);
@@ -38864,7 +38875,7 @@ ir::IrValueId Lowering::emit_native_str_len_inline(ir::IrValueId v_slot,
         an.dst = v_sso_len;
         an.operands = {v_b23, v_mask7f};
         an.source_line = source_line;
-        fn_->append(current_block_, std::move(an));
+        emit(current_block_, std::move(an));
     }
     // heap_len = LOAD len@8.
     ir::IrValueId v_heap_len =
@@ -38878,7 +38889,7 @@ ir::IrValueId Lowering::emit_native_str_len_inline(ir::IrValueId v_slot,
         s.dst = v_diff;
         s.operands = {v_heap_len, v_sso_len};
         s.source_line = source_line;
-        fn_->append(current_block_, std::move(s));
+        emit(current_block_, std::move(s));
     }
     // masked = diff & (-is_heap)  (AND, no MUL: heap_len puede ser un
     // LOAD de bytes no inicializados en modo SSO; x&0=0 es definido).
@@ -38890,7 +38901,7 @@ ir::IrValueId Lowering::emit_native_str_len_inline(ir::IrValueId v_slot,
         ng.dst = v_mask;
         ng.operands = {v_is_heap};
         ng.source_line = source_line;
-        fn_->append(current_block_, std::move(ng));
+        emit(current_block_, std::move(ng));
     }
     ir::IrValueId v_masked = fn_->new_value(ir::IrType::I64);
     {
@@ -38900,7 +38911,7 @@ ir::IrValueId Lowering::emit_native_str_len_inline(ir::IrValueId v_slot,
         an.dst = v_masked;
         an.operands = {v_diff, v_mask};
         an.source_line = source_line;
-        fn_->append(current_block_, std::move(an));
+        emit(current_block_, std::move(an));
     }
     // len = sso_len + masked.
     ir::IrValueId v_len = fn_->new_value(ir::IrType::I64);
@@ -38911,7 +38922,7 @@ ir::IrValueId Lowering::emit_native_str_len_inline(ir::IrValueId v_slot,
         ad.dst = v_len;
         ad.operands = {v_sso_len, v_masked};
         ad.source_line = source_line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
     }
     return v_len;
 }
@@ -38930,7 +38941,7 @@ ir::IrValueId Lowering::emit_native_str_data_ptr(ir::IrValueId v_slot,
     ca.func_name = name;
     ca.operands = {v_slot};
     ca.source_line = source_line;
-    fn_->append(current_block_, std::move(ca));
+    emit(current_block_, std::move(ca));
     return v;
 }
 
@@ -38949,7 +38960,7 @@ ir::IrValueId Lowering::emit_native_str_len(ir::IrValueId v_slot,
         ca.func_name = name;
         ca.operands = {v_slot};
         ca.source_line = source_line;
-        fn_->append(current_block_, std::move(ca));
+        emit(current_block_, std::move(ca));
         return v;
     }
     // CPU dispatch Inc 5a: strlen(s) -> i64 DESPACHADO por tabla de punteros:
@@ -38968,7 +38979,7 @@ ir::IrValueId Lowering::emit_native_str_len(ir::IrValueId v_slot,
         la.dst = v_fpaddr;
         la.imm = fp_slot;
         la.source_line = source_line;
-        fn_->append(current_block_, std::move(la));
+        emit(current_block_, std::move(la));
     }
     ir::IrValueId v_fp = fn_->new_value(ir::IrType::PTR);
     fn_->values[v_fp].is_host_ptr = true;
@@ -38979,7 +38990,7 @@ ir::IrValueId Lowering::emit_native_str_len(ir::IrValueId v_slot,
         ld.dst = v_fp;
         ld.operands = {v_fpaddr};
         ld.source_line = source_line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
     }
     // CALLIND v_fp(s) -> i64.
     ir::IrValueId v = fn_->new_value(ir::IrType::I64);
@@ -38990,7 +39001,7 @@ ir::IrValueId Lowering::emit_native_str_len(ir::IrValueId v_slot,
     ci.func_ptr = v_fp;
     ci.operands = {v_slot};
     ci.source_line = source_line;
-    fn_->append(current_block_, std::move(ci));
+    emit(current_block_, std::move(ci));
     return v;
 }
 
@@ -39042,7 +39053,7 @@ std::string Lowering::ensure_str_cplen_helper() {
         ad.dst = v;
         ad.operands = {base, off};
         ad.source_line = ln;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
         return v;
     };
     auto new_slot = [&]() -> ir::IrValueId {
@@ -39055,7 +39066,7 @@ std::string Lowering::ensure_str_cplen_helper() {
         al.imm = 8;
         al.host_alloca = true;
         al.source_line = ln;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
         return v;
     };
     auto load_i64 = [&](ir::IrValueId addr) -> ir::IrValueId {
@@ -39066,7 +39077,7 @@ std::string Lowering::ensure_str_cplen_helper() {
         ld.dst = v;
         ld.operands = {addr};
         ld.source_line = ln;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
         return v;
     };
     auto store_i64 = [&](ir::IrValueId addr, ir::IrValueId val) {
@@ -39076,7 +39087,7 @@ std::string Lowering::ensure_str_cplen_helper() {
         st.dst = ir::IR_NO_VALUE;
         st.operands = {val, addr};
         st.source_line = ln;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     };
     auto load_byte = [&](ir::IrValueId addr) -> ir::IrValueId {
         ir::IrValueId v = fn_->new_value(ir::IrType::I64);
@@ -39086,7 +39097,7 @@ std::string Lowering::ensure_str_cplen_helper() {
         ld.dst = v;
         ld.operands = {addr};
         ld.source_line = ln;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
         return v;
     };
     auto bin = [&](ir::IrOp op, ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
@@ -39097,7 +39108,7 @@ std::string Lowering::ensure_str_cplen_helper() {
         in.dst = v;
         in.operands = {a, b};
         in.source_line = ln;
-        fn_->append(current_block_, std::move(in));
+        emit(current_block_, std::move(in));
         return v;
     };
     auto br = [&](ir::IrBlockId target) {
@@ -39107,7 +39118,7 @@ std::string Lowering::ensure_str_cplen_helper() {
         b.dst = ir::IR_NO_VALUE;
         b.target_block = target;
         b.source_line = ln;
-        fn_->append(current_block_, std::move(b));
+        emit(current_block_, std::move(b));
         fn_->blocks[current_block_].succs.push_back(target);
         fn_->blocks[target].preds.push_back(current_block_);
     };
@@ -39121,7 +39132,7 @@ std::string Lowering::ensure_str_cplen_helper() {
         b.target_block = t_true;
         b.false_block = t_false;
         b.source_line = ln;
-        fn_->append(current_block_, std::move(b));
+        emit(current_block_, std::move(b));
         fn_->blocks[current_block_].succs.push_back(t_true);
         fn_->blocks[current_block_].succs.push_back(t_false);
         fn_->blocks[t_true].preds.push_back(current_block_);
@@ -39183,7 +39194,7 @@ std::string Lowering::ensure_str_cplen_helper() {
         rt.dst = ir::IR_NO_VALUE;
         rt.operands = {v_cnt};
         rt.source_line = ln;
-        fn_->append(current_block_, std::move(rt));
+        emit(current_block_, std::move(rt));
     }
     block_terminated_ = true;
 
@@ -39206,7 +39217,7 @@ ir::IrValueId Lowering::emit_native_str_cplen(ir::IrValueId v_ptr,
     ca.func_name = name;
     ca.operands = {v_ptr, v_blen};
     ca.source_line = source_line;
-    fn_->append(current_block_, std::move(ca));
+    emit(current_block_, std::move(ca));
     return v;
 }
 
@@ -39262,7 +39273,7 @@ std::string Lowering::ensure_str_to_utf16_helper() {
         ad.dst = v;
         ad.operands = {base, off};
         ad.source_line = ln;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
         return v;
     };
     auto new_slot = [&]() -> ir::IrValueId {
@@ -39275,7 +39286,7 @@ std::string Lowering::ensure_str_to_utf16_helper() {
         al.imm = 8;
         al.host_alloca = true;
         al.source_line = ln;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
         return v;
     };
     auto load_i64 = [&](ir::IrValueId addr) -> ir::IrValueId {
@@ -39286,7 +39297,7 @@ std::string Lowering::ensure_str_to_utf16_helper() {
         ld.dst = v;
         ld.operands = {addr};
         ld.source_line = ln;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
         return v;
     };
     auto store_i64 = [&](ir::IrValueId addr, ir::IrValueId val) {
@@ -39296,7 +39307,7 @@ std::string Lowering::ensure_str_to_utf16_helper() {
         st.dst = ir::IR_NO_VALUE;
         st.operands = {val, addr};
         st.source_line = ln;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     };
     auto load_byte_at = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
         ir::IrValueId a = ptr_add(base, off);
@@ -39307,7 +39318,7 @@ std::string Lowering::ensure_str_to_utf16_helper() {
         ld.dst = v;
         ld.operands = {a};
         ld.source_line = ln;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
         return v;
     };
     auto store_u16 = [&](ir::IrValueId addr, ir::IrValueId val) {
@@ -39317,7 +39328,7 @@ std::string Lowering::ensure_str_to_utf16_helper() {
         st.dst = ir::IR_NO_VALUE;
         st.operands = {val, addr};
         st.source_line = ln;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     };
     auto bin = [&](ir::IrOp op, ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
         ir::IrValueId v = fn_->new_value(ir::IrType::I64);
@@ -39327,7 +39338,7 @@ std::string Lowering::ensure_str_to_utf16_helper() {
         in.dst = v;
         in.operands = {a, b};
         in.source_line = ln;
-        fn_->append(current_block_, std::move(in));
+        emit(current_block_, std::move(in));
         return v;
     };
     auto cst = [&](uint64_t k) -> ir::IrValueId {
@@ -39340,7 +39351,7 @@ std::string Lowering::ensure_str_to_utf16_helper() {
         b.dst = ir::IR_NO_VALUE;
         b.target_block = target;
         b.source_line = ln;
-        fn_->append(current_block_, std::move(b));
+        emit(current_block_, std::move(b));
         fn_->blocks[current_block_].succs.push_back(target);
         fn_->blocks[target].preds.push_back(current_block_);
     };
@@ -39354,7 +39365,7 @@ std::string Lowering::ensure_str_to_utf16_helper() {
         b.target_block = t_true;
         b.false_block = t_false;
         b.source_line = ln;
-        fn_->append(current_block_, std::move(b));
+        emit(current_block_, std::move(b));
         fn_->blocks[current_block_].succs.push_back(t_true);
         fn_->blocks[current_block_].succs.push_back(t_false);
         fn_->blocks[t_true].preds.push_back(current_block_);
@@ -39373,7 +39384,7 @@ std::string Lowering::ensure_str_to_utf16_helper() {
         al.dst = v_out;
         al.operands = {v_bytes};
         al.source_line = ln;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
     }
 
     // i = 0 ; ob = 0 ; cp slot.
@@ -39499,7 +39510,7 @@ std::string Lowering::ensure_str_to_utf16_helper() {
         rt.dst = ir::IR_NO_VALUE;
         rt.operands = {v_out};
         rt.source_line = ln;
-        fn_->append(current_block_, std::move(rt));
+        emit(current_block_, std::move(rt));
     }
     block_terminated_ = true;
 
@@ -39523,7 +39534,7 @@ ir::IrValueId Lowering::emit_native_str_to_utf16(ir::IrValueId v_ptr,
     ca.func_name = name;
     ca.operands = {v_ptr, v_blen};
     ca.source_line = source_line;
-    fn_->append(current_block_, std::move(ca));
+    emit(current_block_, std::move(ca));
     return v;
 }
 
@@ -39549,7 +39560,7 @@ ir::IrValueId Lowering::emit_strcmp_dispatched(ir::IrValueId pa,
         la_i.dst = v_fpaddr;
         la_i.imm = fp_slot;
         la_i.source_line = source_line;
-        fn_->append(current_block_, std::move(la_i));
+        emit(current_block_, std::move(la_i));
     }
     ir::IrValueId v_fp = fn_->new_value(ir::IrType::PTR);
     fn_->values[v_fp].is_host_ptr = true;
@@ -39560,7 +39571,7 @@ ir::IrValueId Lowering::emit_strcmp_dispatched(ir::IrValueId pa,
         ld.dst = v_fp;
         ld.operands = {v_fpaddr};
         ld.source_line = source_line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
     }
     // CALLIND v_fp(pa, la, pb, lb) -> i64.
     ir::IrValueId v = fn_->new_value(ir::IrType::I64);
@@ -39571,7 +39582,7 @@ ir::IrValueId Lowering::emit_strcmp_dispatched(ir::IrValueId pa,
     ci.func_ptr = v_fp;
     ci.operands = {pa, la, pb, lb};
     ci.source_line = source_line;
-    fn_->append(current_block_, std::move(ci));
+    emit(current_block_, std::move(ci));
     return v;
 }
 
@@ -39607,7 +39618,7 @@ std::string Lowering::ensure_strdata_helper() {
         rt.type = ir::IrType::PTR;
         rt.operands.push_back(v_data);
         rt.source_line = 0;
-        fn_->append(current_block_, std::move(rt));
+        emit(current_block_, std::move(rt));
     }
 
     fn_ = saved_fn;
@@ -39651,7 +39662,7 @@ std::string Lowering::ensure_strlen_helper() {
         rt.type = ir::IrType::I64;
         rt.operands.push_back(v_len);
         rt.source_line = 0;
-        fn_->append(current_block_, std::move(rt));
+        emit(current_block_, std::move(rt));
     }
 
     fn_ = saved_fn;
@@ -39680,7 +39691,7 @@ void Lowering::emit_native_str_free_if_heap(ir::IrValueId v_slot,
         ld.dst = v_ptr0;
         ld.operands = {v_slot};
         ld.source_line = source_line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
     }
     // mask = -is_heap  (0 - is_heap): 0 -> 0 ; 1 -> ~0.
     ir::IrValueId v_mask = fn_->new_value(ir::IrType::I64);
@@ -39691,7 +39702,7 @@ void Lowering::emit_native_str_free_if_heap(ir::IrValueId v_slot,
         ng.dst = v_mask;
         ng.operands = {v_is_heap};
         ng.source_line = source_line;
-        fn_->append(current_block_, std::move(ng));
+        emit(current_block_, std::move(ng));
     }
     ir::IrValueId v_to_free_i = fn_->new_value(ir::IrType::I64);
     {
@@ -39701,7 +39712,7 @@ void Lowering::emit_native_str_free_if_heap(ir::IrValueId v_slot,
         an.dst = v_to_free_i;
         an.operands = {v_ptr0, v_mask};
         an.source_line = source_line;
-        fn_->append(current_block_, std::move(an));
+        emit(current_block_, std::move(an));
     }
     ir::IrValueId v_to_free = fn_->new_value(ir::IrType::PTR);
     fn_->values[v_to_free].is_host_ptr = true;
@@ -39712,7 +39723,7 @@ void Lowering::emit_native_str_free_if_heap(ir::IrValueId v_slot,
         bc.dst = v_to_free;
         bc.operands = {v_to_free_i};
         bc.source_line = source_line;
-        fn_->append(current_block_, std::move(bc));
+        emit(current_block_, std::move(bc));
     }
     ir::IrInstr rf{};
     rf.op = ir::IrOp::RAW_FREE;
@@ -39720,7 +39731,7 @@ void Lowering::emit_native_str_free_if_heap(ir::IrValueId v_slot,
     rf.dst = ir::IR_NO_VALUE;
     rf.operands = {v_to_free};
     rf.source_line = source_line;
-    fn_->append(current_block_, std::move(rf));
+    emit(current_block_, std::move(rf));
 }
 
 void Lowering::emit_zero_native_str_slot(ir::IrValueId v_slot,
@@ -39749,7 +39760,7 @@ void Lowering::emit_zero_native_str_slot(ir::IrValueId v_slot,
         ad.dst = v;
         ad.operands = {v_slot, v_off};
         ad.source_line = source_line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
         return v;
     };
     auto store0 = [&](uint64_t off, ir::IrType ty) {
@@ -39760,7 +39771,7 @@ void Lowering::emit_zero_native_str_slot(ir::IrValueId v_slot,
         st.dst = ir::IR_NO_VALUE;
         st.operands = {v_z, ptr_add(off)};
         st.source_line = source_line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     };
     store0(0, ir::IrType::I64);  // bytes 0..7   (ptr@0 / data)
     store0(8, ir::IrType::I64);  // bytes 8..15  (len@8 / data)
@@ -39788,7 +39799,7 @@ void Lowering::emit_str_meta_sso(ir::IrValueId v_slot, ir::IrValueId v_len,
         ad.dst = v_addr23;
         ad.operands = {v_slot, v_off};
         ad.source_line = source_line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
     }
     ir::IrInstr st{};
     st.op = ir::IrOp::STORE;
@@ -39796,7 +39807,7 @@ void Lowering::emit_str_meta_sso(ir::IrValueId v_slot, ir::IrValueId v_len,
     st.dst = ir::IR_NO_VALUE;
     st.operands = {v_len, v_addr23};
     st.source_line = source_line;
-    fn_->append(current_block_, std::move(st));
+    emit(current_block_, std::move(st));
 }
 
 void Lowering::emit_str_meta_heap(ir::IrValueId v_slot, ir::IrValueId v_cap,
@@ -39815,7 +39826,7 @@ void Lowering::emit_str_meta_heap(ir::IrValueId v_slot, ir::IrValueId v_cap,
         ad.dst = v;
         ad.operands = {v_slot, v_off};
         ad.source_line = source_line;
-        fn_->append(current_block_, std::move(ad));
+        emit(current_block_, std::move(ad));
         return v;
     };
     auto store = [&](ir::IrValueId addr, ir::IrValueId val, ir::IrType ty) {
@@ -39825,7 +39836,7 @@ void Lowering::emit_str_meta_heap(ir::IrValueId v_slot, ir::IrValueId v_cap,
         st.dst = ir::IR_NO_VALUE;
         st.operands = {val, addr};
         st.source_line = source_line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     };
     store(ptr_add(16), v_cap, ir::IrType::I64);
     store(ptr_add(23), emit_const(ir::IrType::U8, 0x80, source_line),
@@ -39847,7 +39858,7 @@ void Lowering::emit_native_str_move_copy(ir::IrValueId v_dst_slot,
     mc.dst = ir::IR_NO_VALUE;
     mc.operands = {v_dst_slot, v_src_slot, v_24};
     mc.source_line = source_line;
-    fn_->append(current_block_, std::move(mc));
+    emit(current_block_, std::move(mc));
 }
 
 void Lowering::emit_native_str_invalidate_moved(ir::IrValueId v_slot,
@@ -39864,7 +39875,7 @@ void Lowering::emit_native_str_invalidate_moved(ir::IrValueId v_slot,
         ld.dst = v_old_ptr0;
         ld.operands = {v_slot};
         ld.source_line = source_line;
-        fn_->append(current_block_, std::move(ld));
+        emit(current_block_, std::move(ld));
     }
     // mask = is_heap - 1.
     ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, source_line);
@@ -39876,7 +39887,7 @@ void Lowering::emit_native_str_invalidate_moved(ir::IrValueId v_slot,
         s.dst = v_mask;
         s.operands = {v_is_heap, v_one};
         s.source_line = source_line;
-        fn_->append(current_block_, std::move(s));
+        emit(current_block_, std::move(s));
     }
     // new_ptr0 = old_ptr0 & mask.
     ir::IrValueId v_new = fn_->new_value(ir::IrType::I64);
@@ -39887,7 +39898,7 @@ void Lowering::emit_native_str_invalidate_moved(ir::IrValueId v_slot,
         an.dst = v_new;
         an.operands = {v_old_ptr0, v_mask};
         an.source_line = source_line;
-        fn_->append(current_block_, std::move(an));
+        emit(current_block_, std::move(an));
     }
     ir::IrInstr st{};
     st.op = ir::IrOp::STORE;
@@ -39895,7 +39906,7 @@ void Lowering::emit_native_str_invalidate_moved(ir::IrValueId v_slot,
     st.dst = ir::IR_NO_VALUE;
     st.operands = {v_new, v_slot};
     st.source_line = source_line;
-    fn_->append(current_block_, std::move(st));
+    emit(current_block_, std::move(st));
 }
 
 ir::IrValueId Lowering::emit_gc_handle_for_ptr(ir::IrValueId v_host_ptr,
@@ -39910,7 +39921,7 @@ ir::IrValueId Lowering::emit_gc_handle_for_ptr(ir::IrValueId v_host_ptr,
     ins.dst = v_h;
     ins.operands = {v_host_ptr};
     ins.source_line = source_line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return v_h;
 }
 
@@ -39932,7 +39943,7 @@ void Lowering::emit_monitor_op(ir::IrValueId v_obj_or_handle, bool enter,
         ins.operands = {v_obj_or_handle};
         ins.is_call_site = true;
         ins.source_line = source_line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         return;
     }
     if (native_poo_) {
@@ -39947,7 +39958,7 @@ void Lowering::emit_monitor_op(ir::IrValueId v_obj_or_handle, bool enter,
         ins.dst = ir::IR_NO_VALUE;
         ins.operands = {v_obj_or_handle};
         ins.source_line = source_line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         return;
     }
     // Resto de tiers (Full/JIT/interp): IR op MONENTER/MONEXIT sobre el handle.
@@ -39957,7 +39968,7 @@ void Lowering::emit_monitor_op(ir::IrValueId v_obj_or_handle, bool enter,
     ins.dst = ir::IR_NO_VALUE;
     ins.operands = {v_obj_or_handle};
     ins.source_line = source_line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
 }
 
 void Lowering::emit_mvtake(ir::IrValueId v_dst_addr, ir::IrValueId v_src_addr,
@@ -39968,7 +39979,7 @@ void Lowering::emit_mvtake(ir::IrValueId v_dst_addr, ir::IrValueId v_src_addr,
     ins.dst = ir::IR_NO_VALUE;
     ins.operands = {v_dst_addr, v_src_addr};
     ins.source_line = source_line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
 }
 
 void Lowering::emit_gc_set_finalizer(ir::IrValueId v_box, uint32_t kind,
@@ -39997,7 +40008,7 @@ void Lowering::emit_gc_set_finalizer(ir::IrValueId v_box, uint32_t kind,
         ins.operands = {v_box, v_kind, v_aux};
         ins.is_call_site = true;
         ins.source_line = source_line;
-        fn_->append(current_block_, std::move(ins));
+        emit(current_block_, std::move(ins));
         return;
     }
     // interp/JIT: opcode gcfinal (1/2) o gcfinalc (3 = CLASS_DTOR).
@@ -40011,7 +40022,7 @@ void Lowering::emit_gc_set_finalizer(ir::IrValueId v_box, uint32_t kind,
         ins.operands = {v_box};
     ins.imm = kind;
     ins.source_line = source_line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
 }
 
 // ---- Sprint 2:  Z + reflexion + static + AOP ----
@@ -40026,7 +40037,7 @@ ir::IrValueId Lowering::emit_findmethod(ir::IrValueId v_params, uint32_t line) {
     ins.operands = {v_params};
     ins.is_call_site = true;
     ins.source_line = line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return v;
 }
 
@@ -40040,7 +40051,7 @@ ir::IrValueId Lowering::emit_findfield(ir::IrValueId v_params, uint32_t line) {
     ins.operands = {v_params};
     ins.is_call_site = true;
     ins.source_line = line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return v;
 }
 
@@ -40063,7 +40074,7 @@ ir::IrValueId Lowering::emit_gc_allocp(ir::IrValueId v_size, uint32_t line) {
     ins.operands = {v_size};
     ins.is_call_site = true;
     ins.source_line = line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return v;
 }
 
@@ -40077,7 +40088,7 @@ ir::IrValueId Lowering::emit_gc_promote(ir::IrValueId v_src, uint32_t line) {
     ins.operands = {v_src};
     ins.is_call_site = true;
     ins.source_line = line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return v;
 }
 
@@ -40091,7 +40102,7 @@ ir::IrValueId Lowering::emit_gc_demote(ir::IrValueId v_src, uint32_t line) {
     ins.operands = {v_src};
     ins.is_call_site = true;
     ins.source_line = line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return v;
 }
 
@@ -40104,7 +40115,7 @@ ir::IrValueId Lowering::emit_atomic_ld_i64(ir::IrValueId v_addr, uint32_t line,
     ins.dst = v;
     ins.operands = {v_addr};
     ins.source_line = line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return v;
 }
 
@@ -40118,7 +40129,7 @@ void Lowering::emit_atomic_st_i64(ir::IrValueId v_addr, ir::IrValueId v_val,
     ins.dst = ir::IR_NO_VALUE;
     ins.operands = {v_addr, v_val};
     ins.source_line = line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
 }
 
 ir::IrValueId Lowering::emit_atomic_cas_i64(ir::IrValueId v_addr,
@@ -40132,7 +40143,7 @@ ir::IrValueId Lowering::emit_atomic_cas_i64(ir::IrValueId v_addr,
     ins.dst = v;
     ins.operands = {v_addr, v_exp, v_des};
     ins.source_line = line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return v;
 }
 
@@ -40146,7 +40157,7 @@ ir::IrValueId Lowering::emit_atomic_add_i64(ir::IrValueId v_addr,
     ins.dst = v;
     ins.operands = {v_addr, v_delta};
     ins.source_line = line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return v;
 }
 
@@ -40160,7 +40171,7 @@ ir::IrValueId Lowering::emit_getstatic(ir::IrValueId v_cls, uint64_t offset,
     ins.operands = {v_cls};
     ins.imm = offset;
     ins.source_line = line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return v;
 }
 
@@ -40173,7 +40184,7 @@ void Lowering::emit_setstatic(ir::IrValueId v_cls, ir::IrValueId v_val,
     ins.operands = {v_cls, v_val};
     ins.imm = offset;
     ins.source_line = line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
 }
 
 ir::IrValueId Lowering::emit_proceed(uint32_t line) {
@@ -40184,7 +40195,7 @@ ir::IrValueId Lowering::emit_proceed(uint32_t line) {
     ins.dst = v;
     ins.is_call_site = true;
     ins.source_line = line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return v;
 }
 
@@ -40199,7 +40210,7 @@ ir::IrValueId Lowering::emit_label_addr(const std::string &label_name,
     ins.dst = v;
     ins.func_name = label_name; // se interpreta como @Absolute("code.<name>")
     ins.source_line = line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return v;
 }
 
@@ -40218,7 +40229,7 @@ ir::IrValueId Lowering::emit_getpid(uint32_t line) {
     ins.type = ir::IrType::I64;
     ins.dst = v;
     ins.source_line = line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return v;
 }
 
@@ -40229,7 +40240,7 @@ ir::IrValueId Lowering::emit_getargc(uint32_t line) {
     ins.type = ir::IrType::I64;
     ins.dst = v;
     ins.source_line = line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return v;
 }
 
@@ -40242,7 +40253,7 @@ ir::IrValueId Lowering::emit_getarg(ir::IrValueId v_idx, uint32_t line) {
     ins.dst = v;
     ins.operands = {v_idx};
     ins.source_line = line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return v;
 }
 
@@ -40254,7 +40265,7 @@ void Lowering::emit_fulfill_hlt(ir::IrValueId v_fut, ir::IrValueId v_val,
     ins.dst = ir::IR_NO_VALUE;
     ins.operands = {v_fut, v_val};
     ins.source_line = line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
 }
 
 // ---- Sprint 4: meta-OOP ----
@@ -40269,7 +40280,7 @@ ir::IrValueId Lowering::emit_findclass(ir::IrValueId v_params, uint32_t line) {
     ins.operands = {v_params};
     ins.is_call_site = true;
     ins.source_line = line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return v;
 }
 
@@ -40283,7 +40294,7 @@ ir::IrValueId Lowering::emit_defclass(ir::IrValueId v_params, uint32_t line) {
     ins.operands = {v_params};
     ins.is_call_site = true;
     ins.source_line = line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return v;
 }
 
@@ -40295,7 +40306,7 @@ void Lowering::emit_deffield(ir::IrValueId v_cls, ir::IrValueId v_params,
     ins.dst = ir::IR_NO_VALUE;
     ins.operands = {v_cls, v_params};
     ins.source_line = line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
 }
 
 void Lowering::emit_defmethod(ir::IrValueId v_cls, ir::IrValueId v_params,
@@ -40306,7 +40317,7 @@ void Lowering::emit_defmethod(ir::IrValueId v_cls, ir::IrValueId v_params,
     ins.dst = ir::IR_NO_VALUE;
     ins.operands = {v_cls, v_params};
     ins.source_line = line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
 }
 
 void Lowering::emit_addadvice(ir::IrValueId v_target, ir::IrValueId v_advice,
@@ -40318,7 +40329,7 @@ void Lowering::emit_addadvice(ir::IrValueId v_target, ir::IrValueId v_advice,
     ins.operands = {v_target, v_advice};
     ins.imm = kind;
     ins.source_line = line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
 }
 
 ir::IrValueId Lowering::emit_findclass_by_name(uint64_t name_idx,
@@ -40333,7 +40344,7 @@ ir::IrValueId Lowering::emit_findclass_by_name(uint64_t name_idx,
         al.dst = v_params;
         al.imm = 16;
         al.source_line = line;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
     }
     // 2. LABEL_ADDR @Absolute("code.s_<idx>") -> name_addr.
     ir::IrValueId v_name_addr =
@@ -40345,7 +40356,7 @@ ir::IrValueId Lowering::emit_findclass_by_name(uint64_t name_idx,
         st.type = ir::IrType::I64;
         st.operands = {v_name_addr, v_params};
         st.source_line = line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     }
     // 4. STORE name_len at [v_params + 8].
     ir::IrValueId v_name_len =
@@ -40359,7 +40370,7 @@ ir::IrValueId Lowering::emit_findclass_by_name(uint64_t name_idx,
         add.dst = v_params8;
         add.operands = {v_params, v_off8};
         add.source_line = line;
-        fn_->append(current_block_, std::move(add));
+        emit(current_block_, std::move(add));
     }
     {
         ir::IrInstr st{};
@@ -40367,7 +40378,7 @@ ir::IrValueId Lowering::emit_findclass_by_name(uint64_t name_idx,
         st.type = ir::IrType::I64;
         st.operands = {v_name_len, v_params8};
         st.source_line = line;
-        fn_->append(current_block_, std::move(st));
+        emit(current_block_, std::move(st));
     }
     // 5. FINDCLASS -> ClassInfo*.
     return emit_findclass(v_params, line);
@@ -40380,7 +40391,7 @@ ir::IrValueId Lowering::emit_getproc(uint32_t source_line) {
     ip.type = ir::IrType::PTR;
     ip.dst = v;
     ip.source_line = source_line;
-    fn_->append(current_block_, std::move(ip));
+    emit(current_block_, std::move(ip));
     return v;
 }
 
@@ -40551,7 +40562,7 @@ ir::IrValueId Lowering::stringify_primitive_via_native(ir::IrValueId v_val,
         al.dst = v_buf;
         al.imm = 32;
         al.source_line = ln;
-        fn_->append(current_block_, std::move(al));
+        emit(current_block_, std::move(al));
     }
     /* 2. proc_ptr via getproc. */
     const ir::IrValueId v_proc = emit_getproc(ln);
@@ -40567,7 +40578,7 @@ ir::IrValueId Lowering::stringify_primitive_via_native(ir::IrValueId v_val,
         cl.func_name = std::string("stdlib/native/io/vesta_io:") + native_fn;
         cl.operands = {v_proc, v_buf, v_val};
         cl.source_line = ln;
-        fn_->append(current_block_, std::move(cl));
+        emit(current_block_, std::move(cl));
     }
     /* 4. STRMAKE desde buf vm_mem. */
     ir::IrValueId v_h = emit_strmake(v_buf, v_len, ln);
@@ -40740,7 +40751,7 @@ ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v, ir::IrType from,
             ext.dst = v_ext;
             ext.operands.push_back(v);
             ext.source_line = loc.line;
-            fn_->append(current_block_, std::move(ext));
+            emit(current_block_, std::move(ext));
             v = v_ext;
         }
         op = from_signed ? ir::IrOp::ITOF : ir::IrOp::UITOF;
@@ -40787,7 +40798,7 @@ ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v, ir::IrType from,
     ins.dst = dst;
     ins.operands = {v};
     ins.source_line = loc.line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     return dst;
 }
 
@@ -41535,7 +41546,7 @@ ir::IrValueId Lowering::read_local(const std::string &name, ir::IrType ir_ty,
     ins.dst = dst;
     ins.operands = {v};
     ins.source_line = source_line;
-    fn_->append(current_block_, std::move(ins));
+    emit(current_block_, std::move(ins));
     // Limitacion (cerrada): si el local fue marcado como host-bearing
     // (al menos un write_local le grabo un valor con is_host_ptr=true),
     // el LOAD reconstruye el bit en el SSA value resultante.  Sin esto
@@ -41563,7 +41574,7 @@ void Lowering::write_local(const std::string &name, ir::IrValueId v,
                 is.dst = addr;
                 is.imm = sit->second.slot;
                 is.source_line = source_line;
-                fn_->append(current_block_, std::move(is));
+                emit(current_block_, std::move(is));
                 fn_->values[addr].is_host_ptr = true;
             }
             ir::IrInstr st{};
@@ -41572,7 +41583,7 @@ void Lowering::write_local(const std::string &name, ir::IrValueId v,
             st.dst = ir::IR_NO_VALUE;
             st.operands = {v, addr};
             st.source_line = source_line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
             return;
         }
     }
@@ -41600,7 +41611,7 @@ void Lowering::write_local(const std::string &name, ir::IrValueId v,
             st.dst = ir::IR_NO_VALUE;
             st.operands = {v, it_slot->second};
             st.source_line = source_line;
-            fn_->append(current_block_, std::move(st));
+            emit(current_block_, std::move(st));
         }
         return;
     }
@@ -41616,7 +41627,7 @@ void Lowering::write_local(const std::string &name, ir::IrValueId v,
     st.dst = ir::IR_NO_VALUE;
     st.operands = {v, addr}; // STORE: operands[0]=val, operands[1]=ptr
     st.source_line = source_line;
-    fn_->append(current_block_, std::move(st));
+    emit(current_block_, std::move(st));
     // Limitacion (cerrada): registrar host-bearing si el valor escrito
     // proviene de heap host (malloc o aritmetica derivada).  read_local
     // consulta este set para propagar is_host_ptr al LOAD del slot.
@@ -41855,7 +41866,7 @@ ir::IrValueId Lowering::lower_super_call_expr(ast::SuperCallExpr *e) {
         for (auto av : arg_vals)
             ca.operands.push_back(av);
         ca.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ca));
+        emit(current_block_, std::move(ca));
         return ir::IR_NO_VALUE;
     }
     // Resolver ClassInfo* del super via findclass inline (mismo patron
@@ -41879,7 +41890,7 @@ ir::IrValueId Lowering::lower_super_call_expr(ast::SuperCallExpr *e) {
         cs.operands.push_back(av);
     cs.imm = static_cast<uint64_t>(super_ctor->vtable_index);
     cs.source_line = e->loc.line;
-    fn_->append(current_block_, std::move(cs));
+    emit(current_block_, std::move(cs));
     return ir::IR_NO_VALUE;
 }
 
@@ -41946,7 +41957,7 @@ Lowering::lower_super_method_call_expr(ast::SuperMethodCallExpr *e) {
         for (auto av : arg_vals)
             ca.operands.push_back(av);
         ca.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(ca));
+        emit(current_block_, std::move(ca));
         return dst;
     }
     // Resolver ClassInfo* del super via findclass inline.
@@ -41967,7 +41978,7 @@ Lowering::lower_super_method_call_expr(ast::SuperMethodCallExpr *e) {
         cs.operands.push_back(av);
     cs.imm = static_cast<uint64_t>(found->vtable_index);
     cs.source_line = e->loc.line;
-    fn_->append(current_block_, std::move(cs));
+    emit(current_block_, std::move(cs));
     return dst;
 }
 } // namespace vx

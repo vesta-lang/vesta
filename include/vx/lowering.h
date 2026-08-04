@@ -1364,6 +1364,26 @@ class Lowering {
   private:
     /// Los tramos de todas las sentencias bajadas, en orden.
     std::vector<StmtSpan> emitted_spans_;
+    /**
+     * @brief UNICO sitio por el que la bajada emite una instruccion.
+     *
+     * Antes se llamaba a `append` desde mil sitios y cada uno ponia la linea
+     * por su cuenta.  Con eso, cualquier dato nuevo que hubiera que adjuntar a
+     * lo emitido -- la columna, de que expresion vino, que ambito estaba vivo
+     * -- habia que anadirlo mil veces, y olvidarse en uno dejaba ese caso sin
+     * el dato, en silencio.  Pasando todo por aqui, se anade una vez.
+     *
+     * @param block Bloque destino.
+     * @param ins Instruccion.
+     */
+    void emit(uint32_t block, ir::IrInstr ins) {
+        if (!fn_) return;
+        // La columna de lo que se esta bajando, si quien la puso no traia ya
+        // una mas precisa.
+        if (ins.source_column == 0) ins.source_column = pend_stmt_column_;
+        fn_->append(block, std::move(ins));
+    }
+
     /// Columna de la sentencia que se esta bajando, para sellarla en las
     /// instrucciones que emita.  0 = ninguna.
     uint32_t pend_stmt_column_ = 0;
