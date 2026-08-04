@@ -24,6 +24,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <atomic>
 #include <mutex>
 #include <unordered_map>
 
@@ -372,7 +373,37 @@ static const char *fatal_kind_code(uint32_t kind) {
  * @param vm Proceso que fallo.
  * @param kind Tipo de fallo.
  */
+/// Que fallo acabo con el proceso.  0 = ninguno.  Lo lee quien decide con
+/// que codigo sale el programa; ponerlo aqui evita que cada sitio que arranca
+/// una VM tenga que ir a buscarlo por su cuenta.
+static std::atomic<uint32_t> g_last_fatal_kind{0};
+
+int last_fatal_exit_code() {
+    switch (g_last_fatal_kind.load(std::memory_order_relaxed)) {
+    case 0: return 0;
+    /* SIGFPE: operacion aritmetica invalida. */
+    case FATAL_DIVISION_BY_ZERO: return 128 + 8;
+    /* SIGSEGV: la memoria no era suya.  El desbordamiento de pila entra aqui
+     * porque es exactamente eso: pasarse del final. */
+    case FATAL_NULL_POINTER:
+    case FATAL_SEGMENTATION_FAULT:
+    case FATAL_STACK_OVERFLOW:
+    case FATAL_STACK_UNDERFLOW:
+    case FATAL_NATIVE_CRASH: return 128 + 11;
+    /* SIGILL: el codigo no era ejecutable. */
+    case FATAL_ILLEGAL_INSTRUCTION: return 128 + 4;
+    /* SIGABRT: el programa se rindio -- panic, memoria agotada, una excepcion
+     * nativa que nadie recogio. */
+    case FATAL_USER_ABORT:
+    case FATAL_OUT_OF_MEMORY:
+    case FATAL_NATIVE_EXCEPTION: return 128 + 6;
+    /* Lo que no encaja en ninguna senal sale con el fallo generico de siempre. */
+    default: return 1;
+    }
+}
+
 static void report_uncaught_fatal(ProcessVM *vm, uint32_t kind) {
+    g_last_fatal_kind.store(kind, std::memory_order_relaxed);
     const char *code = fatal_kind_code(kind);
     const std::string texto = vx::diag::format(code, {});
     std::fprintf(stderr, "\n%s [%s]", texto.c_str(), code);

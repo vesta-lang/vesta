@@ -57,6 +57,7 @@
 #include "toolchain/aot_build.h" // AOT nativo extraido (vesta::tc::compile_aot)
 #include "util/assembler_multiprocess.h"
 #include "vx/compiler.h"
+#include "runtime/exception_runtime.h" // codigo de salida tras un fallo
 #include "vx/vxdbg_emit.h" // publicar el grafo del artefacto
 #include "vx/type_checker.h" // register_comptime_virtual_fns
 #include "vx/diag/diag_format.h" // renderizado de diagnosticos (texto/JSON/SARIF)
@@ -4610,6 +4611,12 @@ int main(int argc, char *argv[]) {
                       << "\n";
             return EXIT_FAILURE;
         }
+        /* Si el programa murio por un fallo que nadie capturo, el proceso sale
+         * con el codigo que le corresponde y no con cero.  Salir con cero tras
+         * reventar es mentirle a quien lo llamo -- y quien lo llama suele ser un
+         * guion o una integracion continua que se lo cree. */
+        if (const int fatal_rc = runtime::last_fatal_exit_code())
+            return fatal_rc;
         return EXIT_SUCCESS;
     }
 
