@@ -22840,12 +22840,22 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     }
 
     // -----------------------------------------------------------------
-    // A.38 - static_assert(cond, "msg") -- compile-time only.
-    // El type checker ya valido la cond (emite error si es false o no
-    // evaluable).  Aqui simplemente no emitimos codigo: la asercion es
-    // un no-op en runtime, su efecto fue rechazar la compilacion.
+    // static_assert(cond, "msg").
+    //
+    // Con la condicion comptime-constante la resuelve el type checker y aqui
+    // no se emite nada, como siempre.  Cuando NO lo es -- porque depende de un
+    // parametro de la propia comptime fn, que es el caso interesante -- el
+    // type checker calla a proposito y cuenta con que se baje a
+    // `vesta_comptime:static_assert`, para que la evalue la ComptimeVM al
+    // ejecutar el cuerpo (que sigue siendo tiempo de compilacion).  Esa
+    // segunda ruta ya estaba escrita mas abajo pero un descarte incondicional
+    // se la comia, dejando a una comptime fn sin forma de rechazar su entrada.
+    //
+    // Fuera de un cuerpo comptime se sigue descartando: emitir la llamada solo
+    // meteria trabajo en el programa final (la stdlib declara decenas de
+    // guards por tipo generico, y cada uno se volvia un CALLN de verdad).
     // -----------------------------------------------------------------
-    if (name == "static_assert") {
+    if (name == "static_assert" && !current_fn_is_macro_) {
         out_value = ir::IR_NO_VALUE;
         return true;
     }
@@ -25983,24 +25993,36 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
-        /* msg: solo soportamos string literal no interpolado.  Lo
-         * pasamos como host_ptr al buffer estable de static_data
-         * (NUL-terminated por construccion). */
+        /* msg: cualquier string comptime-evaluable, no solo un literal.  El
+         * type checker ya lo admite explicitamente -- una `const string` con el
+         * mensaje, o una concatenacion -- porque exigir el literal obliga a
+         * repetir el mismo texto en cada assert.  Exigirlo AQUI contradecia esa
+         * regla: el mismo assert pasaba el chequeo y luego se rechazaba al
+         * bajarlo.  Va como host_ptr al buffer estable de static_data,
+         * NUL-terminado por construccion. */
         const ast::Expr *msg_e = e->args[1].get();
-        if (!msg_e || msg_e->kind != ast::NodeKind::StringLitExpr) {
-            error_at(e->loc, "static_assert: el msg debe ser string literal");
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        const auto *slit = static_cast<const ast::StringLitExpr *>(msg_e);
-        if (slit->is_interpolated()) {
-            error_at(e->loc, "static_assert: msg no puede ser interpolado");
+        std::string msg_text;
+        const auto *slit =
+            (msg_e && msg_e->kind == ast::NodeKind::StringLitExpr)
+                ? static_cast<const ast::StringLitExpr *>(msg_e)
+                : nullptr;
+        if (slit && !slit->is_interpolated()) {
+            msg_text = slit->value;
+        } else if (ComptimeEvalResult mv =
+                       comptime_eval_expr(tc_, const_cast<ast::Expr *>(msg_e));
+                   mv.ok && mv.is_str) {
+            msg_text = mv.str;
+        } else {
+            error_at(e->loc,
+                     "static_assert: el msg debe ser un string "
+                     "comptime-evaluable (un literal, una 'const string' o una "
+                     "concatenacion de ambos)");
             out_value = ir::IR_NO_VALUE;
             return true;
         }
         /* Intern el msg como bytes + NUL terminator (asi c_str
          * funciona sobre el host_ptr exportado por STR_LIT_ADDR). */
-        std::vector<uint8_t> bytes(slit->value.begin(), slit->value.end());
+        std::vector<uint8_t> bytes(msg_text.begin(), msg_text.end());
         bytes.push_back('\0');
         const uint64_t idx = out_mod_->intern_static_data(std::move(bytes));
         ir::IrValueId v_msg = fn_->new_value(ir::IrType::PTR);
@@ -26025,6 +26047,12 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         cl.operands = {v_cond, v_msg};
         cl.source_line = e->loc.line;
         fn_->append(current_block_, std::move(cl));
+        /* Sin corte tras la llamada: la asercion registra el fallo y la
+         * compilacion termina rechazando el programa, pero la ejecucion
+         * comptime CONTINUA.  Cortarla aqui con un `panic` seria lo suyo --
+         * y ademas capturable con `try`/`catch` desde el propio codigo
+         * comptime -- pero hoy revienta el proceso sin dejar rastro; queda
+         * pendiente junto al cuelgue descrito en `std.comptime.literal`. */
         out_value = v_dst;
         return true;
     }

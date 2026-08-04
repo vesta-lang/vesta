@@ -57,6 +57,7 @@
 #include "toolchain/aot_build.h" // AOT nativo extraido (vesta::tc::compile_aot)
 #include "util/assembler_multiprocess.h"
 #include "vx/compiler.h"
+#include "vx/type_checker.h" // register_comptime_virtual_fns
 #include "vx/diag/diag_format.h" // renderizado de diagnosticos (texto/JSON/SARIF)
 #include "vx/lexer.h"
 #include "vx/parser.h"
@@ -478,6 +479,14 @@ int main(int argc, char *argv[]) {
     // para punteros a funcion que fluyen a codigo nativo).
     jit::register_naked_dispatch_runner();
     jit::register_naked_fnaddr_runner();
+
+    // Las funciones virtuales del compilador (`vesta_comptime`) tambien tienen
+    // que estar registradas al EJECUTAR: un `.velb` puede llevar un cuerpo
+    // comptime como codigo muerto -- el de un constructor comptime, por
+    // ejemplo -- cuyo import se resuelve al cargar, antes de saber que nadie
+    // lo va a llamar.  Sin esto el FFI buscaba una DLL que no existe y el
+    // programa moria al arrancar.
+    vx::register_comptime_virtual_fns();
     // FN.3: registrar vrt:jit_active (modo interp vs JIT) y vrt:getproc
     // (ProcessVM* actual), que `fiber_init` usa para elegir el modelo de
     // fibra en JIT (pila/ctx host + trampolin + proc).

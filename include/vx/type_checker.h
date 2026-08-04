@@ -628,6 +628,16 @@ struct Symbol {
 };
 
 /**
+ * @brief Registra las funciones virtuales del compilador (`vesta_comptime`).
+ *
+ * Idempotente y segura desde cualquier hilo.  La llama el TypeChecker al
+ * construirse y tambien el arranque de la VM: un `.velb` puede llevar un
+ * cuerpo comptime como codigo muerto, y su import debe RESOLVER aunque nadie
+ * lo llame.
+ */
+void register_comptime_virtual_fns();
+
+/**
  * @class TypeChecker
  * @brief Pase de comprobacion sobre un ModuleNode.
  */

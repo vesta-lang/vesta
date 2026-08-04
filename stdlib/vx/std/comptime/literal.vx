@@ -83,6 +83,11 @@ public struct IntLit {
  * @param src Texto del literal.
  * @return El valor parseado.
  */
+/// Mensaje del digito que no pertenece a la base declarada.
+const string VX_LITERAL_DIGITO =
+    "digito que no pertenece a la base del literal (0b binario, 0o octal, "
+    "0x hexadecimal, sin prefijo decimal)";
+
 public comptime IntLit parse_int_lit(string src) {
     i64 n = src.length();
     i64 base = 10;
@@ -139,13 +144,13 @@ public comptime IntLit parse_int_lit(string src) {
         } else if (c >= 65 && c <= 70) {
             d = c - 55;         // 'A'..'F'
         }
-        // El `_` separa grupos de digitos y no aporta valor.
-        //
-        // PENDIENTE: rechazar el digito que no pertenece a la base (un 9 en
-        // octal, una 'f' en decimal).  Hoy se ignora, que da un numero
-        // distinto del escrito sin avisar.  Falta antes que un fallo comptime
-        // sepa reportarse con su mensaje y su traza de llamadas: sin eso, la
-        // asercion corta la ejecucion y el compilador muere sin decir nada.
+        // El `_` separa grupos de digitos y no aporta valor.  Cualquier OTRO
+        // caracter, o un digito que no pertenece a la base (un 9 en octal, una
+        // 'f' en decimal), es un error: aceptarlo callando daria un numero
+        // distinto del escrito sin que nadie se entere.
+        if (c != 95) {
+            static_assert(d >= 0 && d < base, VX_LITERAL_DIGITO);
+        }
         if (d >= 0 && c != 95) {
             u64 carry = (u64) d;
             i64 k = 0;

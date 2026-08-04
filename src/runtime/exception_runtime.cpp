@@ -399,6 +399,20 @@ void throw_fatal(ProcessVM *vm, uint32_t kind, const char *message) {
     // el caso comun (programas sin try/catch envolvente).  Cero
     // overhead anadido: 1 lectura + 1 branch.
     if (vm->exc_frame_stack == nullptr) {
+        /* Guardar el mensaje aunque no haya quien lo capture.  Antes solo se
+         * conservaba en la ruta CON handler, asi que un fallo sin `try` se
+         * llevaba consigo la unica pista de que habia pasado.  Quien recoja
+         * el cadaver del proceso -- el compilador, cuando esto ocurre durante
+         * una ejecucion comptime -- necesita poder decirlo. */
+        ensure_fatal_buffers(vm);
+        if (vm->fatal_msg_buf) {
+            if (message) {
+                std::strncpy(vm->fatal_msg_buf, message, 255);
+                vm->fatal_msg_buf[255] = '\0';
+            } else {
+                vm->fatal_msg_buf[0] = '\0';
+            }
+        }
         vm->err_thread = fatal_to_thread_err(kind);
         vm->scheduler.on_event(EVT_ERROR);
         return;

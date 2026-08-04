@@ -201,18 +201,17 @@ extern "C" uint64_t vx_static_assert(int64_t cond, const char *msg) {
     return 1; /* status fail (para el caller si lo lee). */
 }
 
-TypeChecker::TypeChecker(ast::ModuleNode &mod, Diagnostics &diags)
-    : mod_(mod), diags_(diags) {
-    // Reservar espacio razonable para evitar realocaciones en programas
-    // tipicos.
-    scopes_.reserve(8);
-    function_sigs_.reserve(16);
-    /* marcar este TypeChecker como el activo + registrar
-     * los virtual fns una vez por proceso (registration idempotent).
-     * NOTA: g_active_typechecker se mantiene apuntando aqui hasta el
-     * destructor.  Multi-instancia en paralelo no soportado todavia
-     * (single-thread compile por diseno). */
-    g_active_typechecker = this;
+/**
+ * @brief Registra las funciones virtuales del compilador (`vesta_comptime`).
+ *
+ * Viven en el propio ejecutable: `vesta_comptime` es una libreria VIRTUAL.
+ * El registro estaba dentro del constructor del TypeChecker, asi que solo
+ * existia al COMPILAR; un `.velb` que lleve un cuerpo comptime como codigo
+ * muerto importa `vesta_comptime`, y al cargarlo el FFI no lo encontraba en
+ * el registro, intentaba LoadLibrary y el programa moria antes de arrancar
+ * por un simbolo que nadie iba a llamar.
+ */
+void register_comptime_virtual_fns() {
     static std::once_flag once_reg;
     std::call_once(once_reg, []() {
         ffi::register_virtual_fn("vesta_comptime", "static_assert",
@@ -242,6 +241,21 @@ TypeChecker::TypeChecker(ast::ModuleNode &mod, Diagnostics &diags)
             "vesta_runtime", "vx_get_native_thunk",
             reinterpret_cast<void *>(&::vx_get_native_thunk));
     });
+}
+
+TypeChecker::TypeChecker(ast::ModuleNode &mod, Diagnostics &diags)
+    : mod_(mod), diags_(diags) {
+    // Reservar espacio razonable para evitar realocaciones en programas
+    // tipicos.
+    scopes_.reserve(8);
+    function_sigs_.reserve(16);
+    /* marcar este TypeChecker como el activo + registrar
+     * los virtual fns una vez por proceso (registration idempotent).
+     * NOTA: g_active_typechecker se mantiene apuntando aqui hasta el
+     * destructor.  Multi-instancia en paralelo no soportado todavia
+     * (single-thread compile por diseno). */
+    g_active_typechecker = this;
+    register_comptime_virtual_fns();
 }
 
 TypeChecker::~TypeChecker() {

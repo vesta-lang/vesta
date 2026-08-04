@@ -25,6 +25,7 @@
  * de @c ComptimeRuntime gracias al pimpl). */
 #include "runtime/manager_runtime.h"
 #include "runtime/runtime.h"
+#include "runtime/exception_runtime.h" // build_stack_trace del fallo
 #include "runtime/string_runtime.h" /*   : make_string_flat */
 #include "loader/loader.h"
 #include "distrib/dist_runtime.h" /* dtor de VM destruye DistRuntime via unique_ptr */
@@ -272,9 +273,30 @@ bool ComptimeRuntime::invoke_simple_macro(const std::string &macro_name,
              * ejecuta ESTE macro por interp, que es correcto. */
             proc->jit_entry_fn = nullptr;
         }
+        proc->err_thread = runtime::THREAD_NO_ERROR;
         impl_->vm.make_ready(impl_->proc_pid);
         impl_->vm.start();
         impl_->vm_started = true;
+
+        /* Si el codigo comptime murio -- un `panic`, una asercion incumplida,
+         * una division por cero -- hay que DECIRLO.  Sin esto el proceso
+         * quedaba muerto en silencio y se leia R0 igual, con lo que el valor
+         * que se horneaba en el binario era basura de un calculo que nunca
+         * termino.  Se imprime el mensaje y el curso de llamadas que llevo
+         * hasta el fallo, que es lo que permite localizarlo. */
+        if (proc->err_thread != runtime::THREAD_NO_ERROR) {
+            const char *msg = (proc->fatal_msg_buf && proc->fatal_msg_buf[0])
+                                  ? proc->fatal_msg_buf
+                                  : "la ejecucion en tiempo de compilacion "
+                                    "termino con un error";
+            std::fprintf(stderr, "error: %s\n", msg);
+            std::vector<char> trace(8192);
+            const size_t n =
+                runtime::build_stack_trace(proc, trace.data(), trace.size());
+            if (n > 0) std::fprintf(stderr, "%s\n", trace.data());
+            std::fflush(stderr);
+            return false;
+        }
 
         /* Lee R0 del proceso completado. */
         out_r0 = proc->registers.regs[0].qword();
