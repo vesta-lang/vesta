@@ -714,8 +714,8 @@ CompileResult compile_vx_source(const std::string &source,
     {
         VxdbgEmitStats st;
         std::string dbg_err;
-        if (!emit_vxdbg_source(tc, &irmod, filename, source, opts.vxdbg_dir, st,
-                               dbg_err)) {
+        if (!emit_vxdbg_source(tc, lo.emitted_symbols(), filename, source,
+                               opts.vxdbg_dir, st, dbg_err)) {
             std::cerr << "[vxdbg] no se pudo emitir: " << dbg_err << "\n";
         }
         res.vxdbg_artifact_map = st.artifact_map;

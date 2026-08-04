@@ -31,10 +31,6 @@
 #include <utility>
 #include <vector>
 
-namespace ir {
-struct IrModule;
-}
-
 namespace vx {
 
 class TypeChecker;
@@ -92,10 +88,10 @@ std::string default_vxdbg_dir();
  * quien deriva algo.
  *
  * @param tc Checker ya ejecutado.
- * @param irmod Modulo intermedio ya bajado, o @c nullptr si aun no lo hay.  De
- *        el salen los SIMBOLOS que llevara el artefacto, que es lo unico a lo
- *        que una direccion de ejecucion puede llegar; sin el se emite el grafo
- *        pero no la forma de entrar en el.
+ * @param symbol_links Que declaracion produjo cada simbolo, tal como lo anoto
+ *        el lowering al crear los nombres (@c Lowering::emitted_symbols).  Es lo
+ *        que permite ir de una direccion de ejecucion a una declaracion; vacio
+ *        emite el grafo pero sin forma de entrar en el.
  * @param source_path Ruta del fuente principal.
  * @param source_text Su contenido, para resumirlo y poder detectar despues que
  *        el fichero de disco ya no es el que se compilo.  Vacio = sin resumen.
@@ -104,7 +100,9 @@ std::string default_vxdbg_dir();
  * @param err Recibe el motivo si algo fallo.
  * @return @c true si se escribio todo.
  */
-bool emit_vxdbg_source(const TypeChecker &tc, const ir::IrModule *irmod,
+bool emit_vxdbg_source(const TypeChecker &tc,
+                       const std::vector<std::pair<std::string, std::string>>
+                           &symbol_links,
                        const std::string &source_path,
                        const std::string &source_text,
                        const std::string &out_dir, VxdbgEmitStats &stats,

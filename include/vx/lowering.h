@@ -1330,7 +1330,42 @@ class Lowering {
     /// ciertos macros no se benefician del path VM.
     std::vector<std::pair<std::string, std::string>> macro_skip_reasons_;
 
+    /**
+     * @brief Que declaracion produjo cada simbolo emitido.
+     *
+     * Se anota EN el momento de crear el nombre, no despues.  El mangling tiene
+     * mas formas de las que parece -- `Clase__metodo`, `Clase__ctor`,
+     * `Struct__ctor_<aridad>`, `Struct____dtor`, con prefijo `__macro_` si es
+     * comptime -- y quien intente reconstruirlo desde fuera acertara con unas y
+     * fallara con otras EN SILENCIO, que es la peor forma de fallar: el mapa
+     * sale medio vacio y nadie se entera hasta que hace falta.
+     *
+     * Cada entrada es `(simbolo, "Tipo::miembro")`.  Lo consume quien vuelca el
+     * conocimiento del programa para poder ir de una direccion de ejecucion a la
+     * declaracion que la origino.
+     */
+    std::vector<std::pair<std::string, std::string>> emitted_symbols_;
+
+    /**
+     * @brief Anota el vinculo entre un simbolo y la declaracion que lo produjo.
+     * @param symbol Nombre con el que se emite el codigo.
+     * @param owner Tipo que declara el miembro.
+     * @param member Nombre del miembro tal como se escribio.
+     */
+    void note_emitted_symbol(const std::string &symbol,
+                             const std::string &owner,
+                             const std::string &member) {
+        if (symbol.empty() || owner.empty() || member.empty()) return;
+        emitted_symbols_.emplace_back(symbol, owner + "::" + member);
+    }
+
   public:
+    /// @return Que declaracion produjo cada simbolo emitido.
+    const std::vector<std::pair<std::string, std::string>> &
+    emitted_symbols() const noexcept {
+        return emitted_symbols_;
+    }
+
     uint32_t macro_lowered_count() const noexcept {
         return macro_lowered_count_;
     }

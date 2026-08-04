@@ -30154,6 +30154,12 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
             fn.generic_type_args = mi->type_args;
         }
 
+        // Se deja constancia de que declaracion produjo este simbolo, AQUI, que
+        // es donde el nombre queda fijado.  Reconstruirlo despues obligaria a
+        // replicar el mangling, y esa copia se queda atras en cuanto cambie: un
+        // constructor no es `Clase__nombre` sino `Clase__ctor`, y quien lo
+        // adivinara desde fuera dejaria justo esos sin ligar sin decir nada.
+        note_emitted_symbol(fn.name, cd->name, m->name);
         out.add_function(std::move(fn));
         fn_ = nullptr;
     }
@@ -30526,6 +30532,11 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
 
         pop_scope();
         propagate_is_gc_object_through_phis(fn);
+        // Igual que en los metodos de clase: el vinculo se anota donde se crea
+        // el nombre.  Aqui las formas son aun mas: `Struct__ctor_<aridad>`,
+        // `Struct____dtor`, y con prefijo `__macro_` si el constructor es
+        // comptime.  Ninguna se puede deducir del nombre del metodo.
+        note_emitted_symbol(fn.name, sd->name, m->name);
         out.add_function(std::move(fn));
         fn_ = nullptr;
     }

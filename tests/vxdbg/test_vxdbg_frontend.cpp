@@ -59,12 +59,16 @@ class Flujo {
 
 class Lector : Flujo, Cerrable {
     i64 total;
+    public Lector() { this.total = 0; }
     void cerrar() { this.total = 0; }
 }
 
 struct Punto {
     f64 x;
     f64 y;
+    Punto(f64 a, f64 b) { this.x = a; this.y = b; }
+    f64 suma() { return this.x + this.y; }
+    ~Punto() { }
 }
 
 union Palabra {
@@ -144,7 +148,7 @@ int main() {
 
     vx::VxdbgEmitStats stats;
     std::string err;
-    comprobar(vx::emit_vxdbg_source(tc, &irmod, "prueba.vx", FUENTE, dir, stats, err),
+    comprobar(vx::emit_vxdbg_source(tc, lo.emitted_symbols(), "prueba.vx", FUENTE, dir, stats, err),
               "se emite el grafo");
     comprobar(stats.entities > 0, "y no sale vacio");
 
@@ -213,6 +217,20 @@ int main() {
     comprobar(e.name == "cerrar" && e.kind == vxdbg::EntityKind::Function,
               "  y resulta ser el metodo que se escribio");
 
+    // Lo que ninguna convencion adivinada acertaria: un constructor de clase se
+    // emite como `Clase__ctor` y el de un struct como `Struct__ctor_<aridad>`,
+    // formas que no salen del nombre del metodo.  Como el vinculo lo anota el
+    // lowering al crear el nombre, estos se ligan igual que los demas.
+    comprobar(!mapa.find("Lector__ctor").hash.empty(),
+              "  un constructor de clase, que no se llama como su metodo");
+    comprobar(!mapa.find("Punto__ctor_2").hash.empty(),
+              "  uno de struct, que ademas lleva la aridad");
+    comprobar(!mapa.find("Punto____dtor").hash.empty(),
+              "  y un destructor");
+    comprobar(!mapa.find("Punto__suma").hash.empty(), "  ademas del metodo");
+    comprobar(stats.unlinked == 0,
+              "  sin dejar ningun simbolo del lowering sin ligar");
+
     comprobar(mapa.find("NoExisteTalSimbolo").hash.empty(),
               "un simbolo desconocido no lleva a ningun sitio");
 
@@ -226,7 +244,7 @@ int main() {
     // la propiedad que hace incremental al sistema, y si se rompiera aqui el
     // cache creceria sin parar sin que nadie lo notara.
     vx::VxdbgEmitStats stats2;
-    comprobar(vx::emit_vxdbg_source(tc, &irmod, "prueba.vx", FUENTE, dir, stats2, err),
+    comprobar(vx::emit_vxdbg_source(tc, lo.emitted_symbols(), "prueba.vx", FUENTE, dir, stats2, err),
               "la segunda vez tambien va");
     comprobar(stats2.roots.size() == stats.roots.size(),
               "con los mismos tipos");
