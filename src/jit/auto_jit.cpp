@@ -1942,6 +1942,20 @@ void register_jit_region(uint64_t vaddr, void *fn, size_t code_size,
     g_pc_to_region[vaddr] = std::move(r);
 }
 
+bool lookup_region_by_native_pc(uint64_t native_pc, uint64_t &out_inicio,
+                                uint64_t &out_tam) noexcept {
+    if (native_pc == 0) return false;
+    std::lock_guard<std::mutex> lk(g_pc_jit_mtx);
+    for (const auto &kv : g_pc_to_region) {
+        if (native_pc < kv.second.inicio) continue;
+        if (native_pc - kv.second.inicio >= kv.second.tamano) continue;
+        out_inicio = kv.second.inicio;
+        out_tam = kv.second.tamano;
+        return true;
+    }
+    return false;
+}
+
 bool lookup_line_by_native_pc(uint64_t native_pc, uint32_t &out_line) noexcept {
     /* En que linea del fuente estaba el codigo nativo que fallo.
      *

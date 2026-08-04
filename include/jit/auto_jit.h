@@ -357,6 +357,21 @@ void register_jit_region(uint64_t vaddr, void *fn, size_t code_size,
 bool lookup_line_by_native_pc(uint64_t native_pc, uint32_t &out_line) noexcept;
 
 /**
+ * @brief El trozo de codigo NATIVO que contiene una direccion.
+ *
+ * Para poder ensenar que se estaba ejecutando de verdad cuando lo que corrio
+ * fue codigo compilado: ahi las instrucciones de la maquina virtual no son las
+ * que se ejecutaron.
+ *
+ * @param native_pc Direccion dentro del codigo.
+ * @param[out] out_inicio Primer byte del codigo de esa funcion.
+ * @param[out] out_tam Cuanto ocupa.
+ * @return true si la direccion cae dentro de alguna funcion compilada.
+ */
+bool lookup_region_by_native_pc(uint64_t native_pc, uint64_t &out_inicio,
+                                uint64_t &out_tam) noexcept;
+
+/**
  * @brief Limpia el mapa @c pc -> jit_code (no libera el code cache).
  *        Util para tests; en produccion no se usa.
  */

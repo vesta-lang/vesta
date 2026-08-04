@@ -13,6 +13,8 @@
 #include "debug/debugger.h"
 #include "jit/auto_jit.h"
 
+#include <capstone/capstone.h>
+
 #include "vx/diag/diag_catalog.h"
 #include "vxdbg/codec.h"
 #include "vxdbg/roots.h"
@@ -769,6 +771,102 @@ static std::vector<std::string> ir_window_at(ProcessVM *vm,
  * @param despues Cuantas despues.
  * @return Las lineas de texto, con la culpable marcada.
  */
+/**
+ * @brief Los BYTES de una instruccion, en hexadecimal.
+ *
+ * El nombre a secas no dice nada: `mov` no distingue de donde a donde ni con
+ * que.  Se intento escribir los operandos segun el modo de direccionamiento y
+ * salio mal en la tabla extendida -- `sext r0, r32` cuando 32 es un ancho en
+ * bits, `pop r4, r0` cuando `pop` tiene uno solo --, porque ahi cada
+ * instruccion coloca sus campos a su manera y el modo no basta para saber que
+ * es cada uno.  Escribir un operando equivocado es peor que no escribirlo:
+ * manda a mirar un registro que no interviene.
+ *
+ * Los bytes, en cambio, siempre son ciertos y no ocultan nada.  Cuando exista
+ * una tabla que diga, por instruccion, que significa cada campo, se podra
+ * escribir ademas la forma legible.
+ *
+ * @param vm Proceso del que leer.
+ * @param pc Direccion de la instruccion.
+ * @param n Cuantos bytes ocupa.
+ * @return Los bytes separados por espacios.
+ */
+static std::string bytes_de(ProcessVM *vm, uint64_t pc, uint32_t n) {
+    std::string out;
+    if (n == 0 || n > 16) return out;
+    char buf[4];
+    for (uint32_t k = 0; k < n; ++k) {
+        uint8_t b = 0;
+        vm->vm_mem.read_bytes(pc + k, &b, 1);
+        std::snprintf(buf, sizeof(buf), "%02x", (unsigned)b);
+        if (k) out += ' ';
+        out += buf;
+    }
+    return out;
+}
+
+/**
+ * @brief Una VENTANA del codigo NATIVO alrededor de donde fallo.
+ *
+ * Cuando lo que corrio fue codigo compilado, las instrucciones de la maquina
+ * virtual NO son las que se ejecutaron: ensenarlas seria dar por ejecutado algo
+ * que no lo fue.  Lo que se ejecuto esta en la pagina nativa, y para leerlo hay
+ * que desensamblarla.
+ *
+ * Se descodifica desde el principio de la funcion -- las instrucciones son de
+ * tamano variable y no se puede retroceder -- y se recorta alrededor de la que
+ * fallo.
+ *
+ * @param pc_fallo Direccion nativa del fallo.
+ * @param antes Cuantas ensenar antes.
+ * @param despues Cuantas despues.
+ * @return Las lineas de texto, con la culpable marcada.
+ */
+static std::vector<std::string> native_window(uint64_t pc_fallo, size_t antes,
+                                              size_t despues) {
+    std::vector<std::string> out;
+    uint64_t inicio = 0, tam = 0;
+    if (!jit::lookup_region_by_native_pc(pc_fallo, inicio, tam)) return out;
+
+    csh h;
+    if (cs_open(CS_ARCH_X86, CS_MODE_64, &h) != CS_ERR_OK) return out;
+    cs_option(h, CS_OPT_DETAIL, CS_OPT_OFF);
+    cs_insn *ins = nullptr;
+    const size_t n =
+        cs_disasm(h, reinterpret_cast<const uint8_t *>(inicio), (size_t)tam,
+                  inicio, 0, &ins);
+    if (n == 0) {
+        cs_close(&h);
+        return out;
+    }
+    size_t culpable = n;
+    for (size_t i = 0; i < n; ++i)
+        if (ins[i].address == pc_fallo) {
+            culpable = i;
+            break;
+        }
+    if (culpable == n) {
+        cs_free(ins, n);
+        cs_close(&h);
+        return out;
+    }
+    const size_t desde = (culpable > antes) ? (culpable - antes) : 0;
+    const size_t hasta = std::min(n, culpable + despues + 1);
+    char buf[192];
+    for (size_t i = desde; i < hasta; ++i) {
+        // Relativo al principio de la funcion: la direccion absoluta cambia en
+        // cada ejecucion y no dice nada.
+        std::snprintf(buf, sizeof(buf), "%s +0x%llx  %-8s %s",
+                      (i == culpable) ? ">" : " ",
+                      (unsigned long long)(ins[i].address - inicio),
+                      ins[i].mnemonic, ins[i].op_str);
+        out.push_back(buf);
+    }
+    cs_free(ins, n);
+    cs_close(&h);
+    return out;
+}
+
 static std::vector<std::string> bytecode_window(ProcessVM *vm, uint64_t inicio,
                                                 uint64_t pc_fallo, size_t antes,
                                                 size_t despues) {
@@ -778,6 +876,7 @@ static std::vector<std::string> bytecode_window(ProcessVM *vm, uint64_t inicio,
     struct Paso {
         uint64_t pc;
         const char *nombre;
+        std::string bytes; ///< los bytes de la instruccion, en hexadecimal
         uint8_t r1;
         uint8_t r2;
     };
@@ -789,7 +888,9 @@ static std::vector<std::string> bytecode_window(ProcessVM *vm, uint64_t inicio,
         DecodedInstr d{};
         if (!decode_peek(vm, pc, d)) break;
         if (!d.metadata || !d.metadata->name) break;
-        pasos.push_back({pc, d.metadata->name, d.data_instruction.reg_data.reg1,
+        pasos.push_back({pc, d.metadata->name,
+                         bytes_de(vm, pc, d.flags_info.size_instr),
+                         d.data_instruction.reg_data.reg1,
                          d.data_instruction.reg_data.reg2});
         const uint32_t tam = d.flags_info.size_instr;
         if (tam == 0) break;
@@ -814,17 +915,18 @@ static std::vector<std::string> bytecode_window(ProcessVM *vm, uint64_t inicio,
              * reventó porque el registro del que leia valia cero.  Solo de
              * esa: los valores de las de al lado ya han cambiado o aun no se
              * han calculado, y ensenarlos seria mentir. */
-            std::snprintf(buf, sizeof(buf), "> 0x%llx  %-8s r%u=0x%llx r%u=0x%llx",
-                          (unsigned long long)pasos[i].pc, pasos[i].nombre,
-                          pasos[i].r1,
-                          (unsigned long long)vm->registers.regs[pasos[i].r1 & 0xF]
-                              .qword(),
-                          pasos[i].r2,
-                          (unsigned long long)vm->registers.regs[pasos[i].r2 & 0xF]
-                              .qword());
+            std::snprintf(
+                buf, sizeof(buf), "> 0x%llx  %-34s %-8s r%u=0x%llx r%u=0x%llx",
+                (unsigned long long)pasos[i].pc, pasos[i].bytes.c_str(),
+                pasos[i].nombre, pasos[i].r1,
+                (unsigned long long)vm->registers.regs[pasos[i].r1 & 0xF].qword(),
+                pasos[i].r2,
+                (unsigned long long)vm->registers.regs[pasos[i].r2 & 0xF]
+                    .qword());
         } else {
-            std::snprintf(buf, sizeof(buf), "  0x%llx  %s",
-                          (unsigned long long)pasos[i].pc, pasos[i].nombre);
+            std::snprintf(buf, sizeof(buf), "  0x%llx  %-34s %s",
+                          (unsigned long long)pasos[i].pc,
+                          pasos[i].bytes.c_str(), pasos[i].nombre);
         }
         out.push_back(buf);
     }
@@ -1255,9 +1357,12 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
                 /* En codigo compilado NO se ensena esto: son instrucciones
                  * de la maquina virtual, y lo que corrio fue codigo nativo.
                  * Ensenarlas seria dar por ejecutado algo que no lo fue. */
+                /* Si lo que corrio fue codigo NATIVO se desensambla ESE, no
+                 * el bytecode: son instrucciones distintas y ensenar las de la
+                 * maquina virtual seria darlas por ejecutadas. */
                 const std::vector<std::string> maq =
                     desde_compilado
-                        ? std::vector<std::string>{}
+                        ? native_window(vm->pending_fault_native_pc, 3, 4)
                         : bytecode_window(vm, cur_pc - off_top, cur_pc, 3, 4);
                 if (!maq.empty()) {
                     append_str("      maquina:\n");
