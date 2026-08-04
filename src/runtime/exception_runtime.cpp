@@ -323,14 +323,16 @@ static std::string entity_note_for_symbol(ProcessVM *vm,
     // reconoce "metodo" o "constructor", no "Function".
     std::string nota = e.lang_kind.empty() ? std::string("declarado") : e.lang_kind;
     nota += " ";
+    // Quien lo declara, para poder decir despues QUE es y DONDE vive.
+    vxdbg::LanguageEntity duenyo;
+    bool hay_duenyo = false;
     for (const auto &rel : e.relations) {
         if (rel.kind != vxdbg::RelationKind::DeclaredIn) continue;
-        vxdbg::LanguageEntity duenyo;
-        if (vxdbg::load_node(*g.store, rel.target.hash, duenyo) &&
-            !duenyo.name.empty())
-            nota += duenyo.name + ".";
+        hay_duenyo = vxdbg::load_node(*g.store, rel.target.hash, duenyo) &&
+                     !duenyo.name.empty();
         break;
     }
+    if (hay_duenyo) nota += duenyo.name + ".";
     nota += e.name;
     // Con la firma, porque es lo que distingue un metodo de sus sobrecargas y
     // lo que se parece a lo que hay escrito en el fuente.  El nombre con el que
@@ -340,6 +342,22 @@ static std::string entity_note_for_symbol(ProcessVM *vm,
             nota += a.text;
             break;
         }
+    /* Y de QUE es miembro, con su genero y su fichero.  Que un metodo pertenezca
+     * a un `struct` y no a una `class` cambia como se pasa, quien lo posee y
+     * donde vive su memoria: al explicar un fallo eso importa tanto como el
+     * nombre.  Es justo lo que el grafo sabe y una tabla de simbolos no. */
+    if (hay_duenyo && !duenyo.lang_kind.empty()) {
+        nota += ", de " + duenyo.lang_kind + " " + duenyo.name;
+        vxdbg::FileNode f;
+        if (!duenyo.declared_at.file.hash.empty() &&
+            vxdbg::load_node(*g.store, duenyo.declared_at.file.hash, f) &&
+            !f.path.empty()) {
+            nota += " (" + f.path;
+            if (duenyo.declared_at.begin_line > 0)
+                nota += ":" + std::to_string(duenyo.declared_at.begin_line);
+            nota += ")";
+        }
+    }
     return nota;
 }
 
