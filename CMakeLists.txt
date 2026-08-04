@@ -241,6 +241,34 @@ endif ()
 # Decision arquitectonica: el frontend del HLL se compila
 # fuera del GLOB principal y se enlaza al ejecutable como dependencia
 # explicita, prefigurando la futura libvesta_rt.
+# ---------------------------------------------------------------------------
+# vxdbg: el grafo de conocimiento del programa.
+#
+# Libreria propia y no parte del frontend porque no es de ningun lenguaje NI de
+# ninguna maquina: lo producen los compiladores y lo consume quien depura, y los
+# dos tienen que poder enlazarlo sin arrastrarse el uno al otro.  Mientras vivio
+# dentro del frontend, el runtime no podia usarlo -- no puede depender de el --
+# y la traza de un fallo se quedaba sin poder explicar nada.
+# ---------------------------------------------------------------------------
+add_library(vxdbg_lib STATIC
+    src/vxdbg/ids.cpp
+    src/vxdbg/serialize.cpp
+    src/vxdbg/store.cpp
+    src/vxdbg/lowering_map.cpp
+    src/vxdbg/backend_meta.cpp
+    src/vxdbg/codec_source.cpp
+    src/vxdbg/codec_backend.cpp
+    src/vxdbg/semantic_resolve.cpp
+    src/vxdbg/roots.cpp
+    src/vxdbg/store_source.cpp
+    src/vxdbg/resolver.cpp
+    src/vxdbg/capabilities.cpp
+)
+target_include_directories(vxdbg_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+# Los codecs comparten un header interno que no es parte de su API publica.
+target_include_directories(vxdbg_lib PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/vxdbg)
+target_compile_features(vxdbg_lib PUBLIC cxx_std_17)
+
 add_subdirectory(src/vx)
 
 # Sources del ejecutable principal.  Se EXCLUYEN los .cpp de src/vx/
@@ -478,6 +506,7 @@ target_compile_options(vm PRIVATE
 add_library(vmcore STATIC ${VM_SOURCES})
 target_include_directories(vmcore PRIVATE ${VM_INCLUDES})
 target_link_libraries(vmcore
+        PUBLIC vxdbg_lib
         PRIVATE sqlite3
         PRIVATE capstone
         PRIVATE keystone

@@ -177,14 +177,6 @@ add_library(vx_lib STATIC
     # el vocabulario de Vesta y el modelo generico solo la conoce quien declara
     # los tipos; vxdbg no sabe de ningun lenguaje.
     vxdbg_emit.cpp
-    ${CMAKE_SOURCE_DIR}/src/vxdbg/ids.cpp
-    ${CMAKE_SOURCE_DIR}/src/vxdbg/serialize.cpp
-    ${CMAKE_SOURCE_DIR}/src/vxdbg/store.cpp
-    ${CMAKE_SOURCE_DIR}/src/vxdbg/lowering_map.cpp
-    ${CMAKE_SOURCE_DIR}/src/vxdbg/codec_source.cpp
-    ${CMAKE_SOURCE_DIR}/src/vxdbg/codec_backend.cpp
-    ${CMAKE_SOURCE_DIR}/src/vxdbg/semantic_resolve.cpp
-    ${CMAKE_SOURCE_DIR}/src/vxdbg/roots.cpp
     diagram/mermaid_diagrams.cpp
     diagram/graphviz_diagrams.cpp
     diagram/html_diagrams.cpp
@@ -248,6 +240,9 @@ target_compile_features(vx_lib PUBLIC cxx_std_17)
 # velb_signature.cpp usa OpenSSL EVP_DigestSign / EVP_DigestVerify.
 # Enlace centralizado en `vesta_openssl` (estatico/standalone o FireDaemon).
 target_link_libraries(vx_lib PRIVATE vesta_openssl)
+# El grafo de conocimiento del programa es una libreria aparte: ni es de Vesta
+# ni de la maquina, y el runtime tambien lo necesita.
+target_link_libraries(vx_lib PUBLIC vxdbg_lib)
 
 # Avisos estrictos en builds nuestros para mantener la regla de "no warnings".
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

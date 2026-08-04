@@ -11,6 +11,13 @@
 #include "loader/class_registry.h"
 #include "debug/debugger.h"
 
+#include "vxdbg/codec.h"
+#include "vxdbg/roots.h"
+
+#include <fstream>
+#include <memory>
+
+
 #include <csetjmp>
 #include <cstdarg>
 #include <cstdio>
@@ -30,6 +37,20 @@
 #endif
 
 namespace runtime {
+
+/**
+ * @brief Carpeta del grafo de conocimiento del programa.
+ *
+ * La misma que usa el compilador al emitirlo.  Se repite aqui en vez de
+ * incluir el frontend: el runtime no depende de el, y el dia que dejaran de
+ * coincidir lo unico que pasaria es que la traza sale mas escueta.
+ */
+static std::string vxdbg_cache_dir() {
+    if (const char *v = std::getenv("VX_CACHE_DIR"); v && v[0])
+        return std::string(v) + "/vxdbg";
+    return ".cache/vxdbg";
+}
+
 
 // ---------------------------------------------------------------------
 // Estado global de la clase FatalError
@@ -225,6 +246,94 @@ static std::string demangle_symbol(const std::string &raw) {
     return out;
 }
 
+/**
+ * @brief Que declaro un simbolo, segun el grafo de conocimiento del programa.
+ *
+ * El grafo se localiza por el CONTENIDO del artefacto que se esta ejecutando,
+ * no por su nombre: asi un binario que se renombro o se movio sigue
+ * explicandose con el suyo y nunca con el de otra compilacion.
+ *
+ * Se carga una sola vez.  Si no hay nada -- porque el programa se compilo en
+ * otra maquina, o porque se borro la cache -- se sigue sin decir nada extra: la
+ * traza vale igual, solo que mas escueta.
+ *
+ * @param vm Proceso que fallo.
+ * @param symbol Simbolo ya resuelto.
+ * @return Descripcion breve ("metodo de Lector"), o vacio.
+ */
+static std::string entity_note_for_symbol(ProcessVM *vm,
+                                          const std::string &symbol) {
+    struct Grafo {
+        bool intentado = false;
+        bool hay = false;
+        vxdbg::ArtifactMap map;
+        std::unique_ptr<vxdbg::FileNodeStore> store;
+    };
+    static Grafo g;
+    // El grafo se carga una vez y se comparte.  Hace falta candado porque el
+    // compilador puede compilar varios modulos a la vez, y un fallo en dos de
+    // ellos entraria aqui desde dos hilos: sin el, uno leeria el mapa mientras
+    // el otro lo esta construyendo.
+    static std::mutex g_mtx;
+    std::lock_guard<std::mutex> lk(g_mtx);
+
+    if (!g.intentado) {
+        g.intentado = true;
+        std::string path;
+        for (const auto &exe :
+             vm->scheduler.vm_reference.loader_public.executables)
+            if (exe && !exe->source_path.empty()) {
+                path = exe->source_path;
+                break;
+            }
+        if (!path.empty()) {
+            std::ifstream f(path, std::ios::binary);
+            if (f) {
+                const std::string bytes(
+                    (std::istreambuf_iterator<char>(f)),
+                    std::istreambuf_iterator<char>());
+                if (!bytes.empty()) {
+                    const std::string dir = vxdbg_cache_dir();
+                    g.store = std::make_unique<vxdbg::FileNodeStore>(dir);
+                    const vxdbg::CacheRootRepository repo(dir, *g.store);
+                    g.hay = repo.lookup(
+                        vxdbg::BuildId{
+                            vxdbg::hash_bytes(bytes.data(), bytes.size())},
+                        g.map);
+                }
+            }
+        }
+    }
+    if (!g.hay) return {};
+
+    const auto id = g.map.find(symbol);
+    if (id.hash.empty()) return {};
+    vxdbg::LanguageEntity e;
+    if (!vxdbg::load_node(*g.store, id.hash, e)) return {};
+    // Se dice como lo llama SU lenguaje, no la especie generica: quien lee
+    // reconoce "metodo" o "constructor", no "Function".
+    std::string nota = e.lang_kind.empty() ? std::string("declarado") : e.lang_kind;
+    nota += " ";
+    for (const auto &rel : e.relations) {
+        if (rel.kind != vxdbg::RelationKind::DeclaredIn) continue;
+        vxdbg::LanguageEntity duenyo;
+        if (vxdbg::load_node(*g.store, rel.target.hash, duenyo) &&
+            !duenyo.name.empty())
+            nota += duenyo.name + ".";
+        break;
+    }
+    nota += e.name;
+    // Con la firma, porque es lo que distingue un metodo de sus sobrecargas y
+    // lo que se parece a lo que hay escrito en el fuente.  El nombre con el que
+    // se emitio -- `ctor_1` -- no se parece a nada.
+    for (const auto &a : e.attributes)
+        if (a.name == "signature") {
+            nota += a.text;
+            break;
+        }
+    return nota;
+}
+
 static const std::string *symbol_for_pc(ProcessVM *vm, uint64_t pc,
                                         uint64_t &out_off) {
     const std::string *best = nullptr;
@@ -404,6 +513,15 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
         if (const std::string *sym = symbol_for_pc(vm, cur_pc, off)) {
             const std::string legible = demangle_symbol(*sym);
             append(legible.c_str(), legible.size());
+            // Que ES lo que fallo, no solo como se llama: si el grafo lo sabe,
+            // se dice ("constructor de Lector") en vez de dejar un nombre suelto
+            // que quien lee tiene que ir a buscar al fuente.
+            const std::string nota = entity_note_for_symbol(vm, *sym);
+            if (!nota.empty()) {
+                append_str(" [");
+                append(nota.c_str(), nota.size());
+                append_str("]");
+            }
             append_pos(cur_pc,
                        legible.find('.') != std::string::npos);
         } else {

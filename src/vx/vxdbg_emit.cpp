@@ -165,7 +165,8 @@ class Collector {
      */
     void add_member(const std::string &name, const KindPair &kp,
                     const std::string &owner_key,
-                    const std::string &type_name);
+                    const std::string &type_name,
+                    const std::string &signature = std::string());
 
     /**
      * @brief Asegura que existe el simbolo de un tipo escrito en el sitio.
@@ -273,7 +274,8 @@ void Collector::ensure_builtin(const std::string &name) {
 
 void Collector::add_member(const std::string &name, const KindPair &kp,
                            const std::string &owner_key,
-                           const std::string &type_name) {
+                           const std::string &type_name,
+                           const std::string &signature) {
     vxdbg::SemanticNode s;
     // Un miembro se identifica por su propietario mas su nombre: dos campos
     // `size` de dos structs distintos no son el mismo campo.
@@ -293,7 +295,36 @@ void Collector::add_member(const std::string &name, const KindPair &kp,
             ensure_builtin(type_name);
         relate(s, vxdbg::RelationKind::Uses, type_name);
     }
+    if (!signature.empty()) {
+        // La firma va como atributo y no como relaciones a cada tipo: lo que
+        // hace falta al explicar un fallo es LEERLA de un tirón, y un metodo se
+        // distingue de sus sobrecargas justo por ella.  Sin esto, una traza
+        // dice `ctor_1` -- el nombre con el que se emitio -- que no se parece a
+        // nada de lo que hay escrito en el fuente.
+        vxdbg::Attribute a;
+        a.name = "signature";
+        a.kind = vxdbg::AttributeKind::String;
+        a.text = signature;
+        s.attributes.push_back(std::move(a));
+    }
     out_.push_back(std::move(s));
+}
+
+/**
+ * @brief Firma legible de un metodo, tal como se escribio.
+ * @param m Metodo.
+ * @return Algo como `(string) -> u128`.
+ */
+std::string signature_of(const ClassMethodInfo &m) {
+    std::string out = "(";
+    for (size_t i = 0; i < m.param_types.size(); ++i) {
+        if (i) out += ", ";
+        out += type_to_string(m.param_types[i]);
+    }
+    out += ")";
+    const std::string ret = type_to_string(m.return_type);
+    if (!ret.empty() && ret != "void") out += " -> " + ret;
+    return out;
 }
 
 void Collector::collect_structs() {
@@ -331,7 +362,8 @@ void Collector::collect_structs() {
                        type_to_string(f.type));
         for (const auto &m : lay.methods)
             add_member(m.name, m.is_constructor ? K_CONSTRUCTOR : K_METHOD,
-                       kv.first, type_to_string(m.return_type));
+                       kv.first, type_to_string(m.return_type),
+                       signature_of(m));
     }
 }
 
@@ -362,7 +394,8 @@ void Collector::collect_classes() {
             const KindPair &mk = m.is_constructor  ? K_CONSTRUCTOR
                                  : m.is_destructor ? K_DESTRUCTOR
                                                    : K_METHOD;
-            add_member(m.name, mk, kv.first, type_to_string(m.return_type));
+            add_member(m.name, mk, kv.first, type_to_string(m.return_type),
+                       signature_of(m));
         }
     }
 }
