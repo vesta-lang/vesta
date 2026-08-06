@@ -151,6 +151,27 @@ struct Resolver {
                     const_val_of(fn, d->operands[0], c))
                     return with_offset(b, c);
             }
+            /* Desplazamiento NO constante (`buf + i*8`: indexar con una
+             * variable).  Se conserva la RAIZ y se marca el offset como no
+             * probado -- exactamente lo que hace @c GEP justo debajo.
+             *
+             * Antes se devolvia "desconocido", que tira la raiz, y con ella
+             * toda posibilidad de distinguir dos objetos DISTINTOS.  Como
+             * recorrer un buffer con un indice es el caso normal de cualquier
+             * bucle, eso dejaba ciega la desambiguacion justo donde mas falta
+             * hace: una escritura en un array volvia opaco el bucle entero.
+             *
+             * Solo cuando UNO de los dos lados tiene raiz conocida: si la
+             * tienen los dos (sumar dos punteros) no hay forma de decir cual
+             * manda, y si no la tiene ninguno no hay nada que conservar. */
+            {
+                const PointsToEntry a = resolve(d->operands[0]);
+                const PointsToEntry b = resolve(d->operands[1]);
+                const bool a_raiz = a.kind != K::Unknown && a.kind != K::None;
+                const bool b_raiz = b.kind != K::Unknown && b.kind != K::None;
+                if (a_raiz && !b_raiz) return inexact(a);
+                if (b_raiz && !a_raiz) return inexact(b);
+            }
             return unknown();
         }
 
