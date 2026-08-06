@@ -6813,12 +6813,12 @@ bool ir_pass_elide_unwrap(IrFunction &fn) {
                         }
                     }
                 }
-                // merged = merged ∩ out
+                // merged = merged  interseccion  out
                 if (!any) {
                     merged = std::move(out);
                     any = true;
                 } else if (out.top) {
-                    // ∩ TOP = merged (sin cambio)
+                    //  interseccion  TOP = merged (sin cambio)
                 } else if (merged.top) {
                     merged = std::move(out);
                 } else {
@@ -6881,16 +6881,25 @@ static bool g_dce_effects = [] {
 // (cobertura, barreras, forwarding, heap/stack) queda IGUAL.  A/B via
 // VESTA_DSE_UNIFIED=1; default OFF hasta validar e2e 3 modos + patrones de
 // regresion (copy-alias, STRMAKE, mvtake, buffer meta-OOP).
+// ENCENDIDO por defecto (2026-08-06).  Medido: no cambia el codigo generado en
+// NINGUNO de los 29 programas del corpus -- toma las mismas decisiones que la
+// resolucion propia que tenia el DSE --, y la suite pasa 878/0 en los tres
+// modos.  Encenderlo no es una apuesta de rendimiento: es que deje de haber dos
+// resoluciones de direcciones distintas.  `VESTA_DSE_UNIFIED=0` vuelve atras.
 static bool g_dse_unified = [] {
     const char *e = std::getenv("VESTA_DSE_UNIFIED");
-    return e && e[0] == '1';
+    return !(e && e[0] == '0');
 }();
 
 // Fase 4 (valor INTERPROCEDURAL del modelo de efectos): cuando esta activo, una
 // CALL a un callee TOTALMENTE PURO (segun EffectAnalysis: sin mem, sin may_*,
 // sin tags, Complete) deja de ser barrera de memoria en el DSE.  Es informacion
 // que el DSE por si solo NO puede tener (requiere el cierre interprocedural).
-// A/B via VESTA_DSE_PURE_CALLS=1; default OFF hasta validar e2e 3 modos.
+// A/B via VESTA_DSE_PURE_CALLS=1.  Se queda APAGADO, y no por dudas de
+// correccion -- la suite pasa 878/0 con el encendido -- sino porque MEDIDO no
+// cambia el codigo generado en ninguno de los 29 programas del corpus: no hay
+// ninguna llamada totalmente pura que hoy este haciendo de barrera.  Cuando la
+// haya, el mecanismo ya esta.
 static bool g_dse_pure_calls = [] {
     const char *e = std::getenv("VESTA_DSE_PURE_CALLS");
     return e && e[0] == '1';
@@ -6902,9 +6911,16 @@ static bool g_dse_pure_calls = [] {
 // del orden total conservador.  El scheduler CONSERVA su DAG/critical-path;
 // solo AFINA las aristas de memoria con la alias compartida.  A/B via
 // VESTA_SCHED_ALIAS=1; default OFF hasta validar e2e 3 modos + bench.
+// ENCENDIDO por defecto (2026-08-06), una vez arreglado el acarreo (ver la
+// guarda de `blk_has_carry` mas abajo, que era lo que lo tenia parado: con mas
+// libertad para reordenar se colaba algo entre una suma y su acarreo).
+// Medido: cambia el codigo en 16 de los 29 programas del corpus -- es el unico
+// consumidor del modelo de memoria con alcance real -- y sale mejor en 6 de 8
+// benches, ~2% en los dos largos, que son donde el arranque diluye menos.
+// Suite 878/0 en los tres modos.  `VESTA_SCHED_ALIAS=0` vuelve atras.
 static bool g_sched_alias = [] {
     const char *e = std::getenv("VESTA_SCHED_ALIAS");
-    return e && e[0] == '1';
+    return !(e && e[0] == '0');
 }();
 
 // Load-to-load CSE (nuevo consumidor del alias): el DSE ya forwardea store->load
@@ -6912,7 +6928,10 @@ static bool g_sched_alias = [] {
 // disponible para su direccion -> un LOAD POSTERIOR de la MISMA direccion
 // (must-alias, sin store aliasante entre medias) reusa el primero (LOAD -> MOV).
 // Reusa la invalidacion probada del DSE (stores/barreras limpian last_store_val).
-// A/B via VESTA_LOAD_CSE=1; default OFF hasta validar e2e 3 modos.
+// A/B via VESTA_LOAD_CSE=1.  APAGADO por lo mismo: la suite pasa con el, pero
+// medido solo cambia el codigo en 1 de los 29 programas del corpus y no quita
+// ni una instruccion ejecutada.  La condicion que exige -- misma direccion, sin
+// ningun store en medio, y se invalida en CUALQUIER store -- casi no se da.
 static bool g_load_cse = [] {
     const char *e = std::getenv("VESTA_LOAD_CSE");
     return e && e[0] == '1';
@@ -6922,7 +6941,9 @@ static bool g_load_cse = [] {
 // invariante aunque el loop tenga escrituras, si NINGUN store del loop puede
 // aliasar su localizacion Y toda call del loop es pura.  Hoy LICM bloquea TODOS
 // los loads si hay CUALQUIER escritura/call ("sin alias analysis").  A/B via
-// VESTA_LICM_ALIAS=1; default OFF hasta validar e2e 3 modos.
+// VESTA_LICM_ALIAS=1.  APAGADO: suite en verde con el, pero medido no cambia
+// el codigo en ninguno de los 29 programas -- los loads invariantes que quedan
+// dentro de un loop con escrituras no aparecen en el corpus.
 static bool g_licm_alias = [] {
     const char *e = std::getenv("VESTA_LICM_ALIAS");
     return e && e[0] == '1';
@@ -10931,26 +10952,33 @@ bool ir_pass_schedule(IrFunction &fn, const analysis::PointsTo *pt,
         // -> el modelo de memoria no la ve.  En esos bloques se usa el orden
         // total conservador (asm es raro; el win alias-aware es para bloques
         // de memoria normales).
-        // El acarreo entra en la misma categoria: `carryof` lee el flag que
-        // dejo su `addc`/`subb`, y ese flag no vive en el grafo -- cualquier
-        // operacion aritmetica que se cuele entre los dos lo pisa.  Reordenar
-        // un bloque asi daba el acarreo de OTRA suma, en silencio.  Son
-        // bloques de aritmetica multiprecision, donde conservar el orden
-        // importa mas que el paralelismo que se pierde.
-        // El acarreo viaja por un flag que el grafo no modela: entre una
-        // `addc`/`subb` y su `carryof` no puede colarse NADA que toque los
-        // flags, o se acaba leyendo el acarreo de otra operacion.  No basta
-        // con desactivar el modo alias-aware: hay que dejar el bloque como
-        // esta.  Son bloques de aritmetica multiprecision, donde conservar el
-        // orden importa mas que el paralelismo que se pierde.
+        // El ACARREO entra en la misma categoria y es MAS estricto.  `carryof`
+        // lee el flag que dejo su `addc`/`subb`; el grafo de valores liga los
+        // dos nodos -- el operando de `carryof` ES lo que produjo `addc` --, y
+        // eso garantiza que va DESPUES, pero no que no se cuele nada en medio:
+        // el flag no vive en el grafo, asi que cualquier operacion que lo pise
+        // entre los dos hace leer el acarreo de OTRA suma, en silencio.
+        //
+        // Por eso aqui no basta con quitar el modo alias-aware: hay que dejar
+        // el bloque COMO ESTA.  Son bloques de aritmetica multiprecision, donde
+        // conservar el orden importa mas que el paralelismo que se pierde.
+        //
+        // Esto ya estaba escrito arriba y NO estaba hecho -- solo se miraba el
+        // asm --, y por eso el modo alias-aware daba mal `wideint_signed`: con
+        // menos aristas de memoria el planificador tenia mas libertad y acababa
+        // colando algo entre la suma y su acarreo.
 
         bool blk_has_asm = false;
-        for (const auto &ins : bb.instrs)
+        bool blk_has_carry = false;
+        for (const auto &ins : bb.instrs) {
             if (ins.op == IrOp::INLINE_ASM || ins.op == IrOp::ASM_MICRO ||
-                ins.op == IrOp::RAW_ASM) {
+                ins.op == IrOp::RAW_ASM)
                 blk_has_asm = true;
-                break;
-            }
+            if (ins.op == IrOp::ADDC || ins.op == IrOp::SUBB ||
+                ins.op == IrOp::CARRYOF)
+                blk_has_carry = true;
+        }
+        if (blk_has_carry) continue; // el orden ES la semantica; no se toca
         const bool use_alias = g_sched_alias && !blk_has_asm;
 
         /* Identificar prefijo de PHIs (fijo al inicio) y terminador. */
