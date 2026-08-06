@@ -644,9 +644,36 @@ struct Lowerer {
         }
         for (uint8_t r : ar.frame.callee_saved_used)
             out.push_back(push(static_cast<MReg>(r)));
-        if (spill_bytes > 0)
+        if (spill_bytes > 0) {
+            /* Un marco mas grande que una pagina no se puede reservar de un
+             * salto: el sistema operativo deja una pagina de GUARDA justo
+             * debajo de la pila y solo baja ese limite cuando esa pagina
+             * concreta se toca.  Un `sub rsp` grande la salta, asi que el
+             * primer acceso al marco cae mas alla del limite y el sistema lo
+             * toma por un acceso invalido -- el programa muere en el prologo,
+             * antes de ejecutar nada suyo.
+             *
+             * Por eso se toca una pagina cada vez, de arriba abajo, antes de
+             * bajar el puntero: asi cada toque cae o en memoria ya valida o
+             * justo en la guarda, que es lo que la hace bajar.  El marco es de
+             * tamano conocido al compilar, asi que los toques van escritos uno
+             * a uno y no hacen falta ni bucle ni contador.
+             *
+             * Se escribe el propio puntero de pila porque hace falta ESCRIBIR
+             * (leer no siempre basta) y ese hueco es del marco que se esta
+             * reservando: lo que se deje ahi lo pisa el propio marco. */
+            constexpr uint32_t kPagina = 4096;
+            for (uint32_t bajada = kPagina; bajada < spill_bytes;
+                 bajada += kPagina) {
+                out.push_back(MInstr::make_unary(
+                    MOp::MOV,
+                    MOperand::make_mem(MReg::RSP,
+                                       -static_cast<int32_t>(bajada)),
+                    reg(MReg::RSP)));
+            }
             out.push_back(MInstr::make_unary(
                 MOp::SUB, reg(MReg::RSP), MOperand::make_imm32(spill_bytes)));
+        }
         /*   salvar el VM-RSP original al slot del frame.  Los
          * ALLOCA_VM mas adelante decrementan proc->stack_pointer; el
          * epilogue lo restaura desde aqui (si no, el VM stack hace
@@ -2384,20 +2411,74 @@ MFunction rewrite_to_physical(const MFunction &vf, const codegen::AllocationResu
                     continue;
                 }
                 const AsmBlob::DeferredOp &d = b.deferred_ops[idx];
-                int phys = d.fixed_phys >= 0
-                               ? d.fixed_phys
-                               : static_cast<int>(
-                                     alloc.timeline.first_location(d.vreg).register_id());
+                int phys = d.fixed_phys;
+                if (phys < 0) {
+                    const auto loc = alloc.timeline.first_location(d.vreg);
+                    if (!loc.is_register()) {
+                        /* Sin registro no hay bloque: un operando de asm NO se
+                         * puede leer de la pila, porque el cuerpo lo nombra
+                         * como registro.  Pasa cuando se piden mas operandos
+                         * de los que tiene el banco del objetivo. */
+                        std::fprintf(
+                            stderr,
+                            "[asm] al operando $%u no le ha tocado registro "
+                            "(clase %u, vreg %u, memoria=%d, exige-registro=%d, "
+                            "clase-vreg=%d): el banco del objetivo no da para "
+                            "tantos operandos a la vez\n",
+                            idx, (unsigned)d.regclass, d.vreg,
+                            loc.is_memory() ? 1 : 0,
+                            vf.reg_required_of(d.vreg) ? 1 : 0,
+                            (int)(d.vreg < vf.vreg_class.size()
+                                      ? (int)vf.vreg_class[d.vreg]
+                                      : -1));
+                        ok = false;
+                        break;
+                    }
+                    phys = static_cast<int>(loc.register_id());
+                }
+                /* El asignador numera las ranuras de forma CORRIDA sobre todo
+                 * el banco: las del banco ancho empiezan en XMM0 = 16.  El
+                 * nombre, en cambio, lleva el numero DENTRO de su banco:
+                 * `ymm3`, no `ymm19`.  Sin restar la base salian nombres de
+                 * registros que en esta maquina no existen. */
+                if (d.fixed_phys < 0 && d.regclass != vx::ASM_RC_GP)
+                    phys -= static_cast<int>(MReg::XMM0);
                 std::string nm = vx::asm_phys_reg_name(b.deferred_isa,
                                                        d.regclass, phys, d.width);
-                if (nm.empty()) { ok = false; break; }
+                if (nm.empty()) {
+                    std::fprintf(stderr,
+                                 "[asm] no se puede nombrar el registro del "
+                                 "operando $%u (clase %u, ancho %u, fisico %d) "
+                                 "-- el bloque asm se quedaria VACIO\n",
+                                 idx, (unsigned)d.regclass, (unsigned)d.width,
+                                 phys);
+                    ok = false;
+                    break;
+                }
                 nasm += nm;
                 i = j;
             }
             if (ok) {
                 vx::AsmAssembleResult ar =
                     vx::g_asm_backend->assemble(nasm, vx::AsmArch::X86_64);
-                if (ar.ok && !ar.bytes.empty()) b.bytes = std::move(ar.bytes);
+                if (ar.ok) {
+                    /* Cero bytes con `ok` es legitimo: un bloque que solo
+                     * lleva comentarios no emite nada. */
+                    b.bytes = std::move(ar.bytes);
+                } else {
+                    std::fprintf(stderr,
+                                 "[asm] no se pudo ensamblar el bloque tras "
+                                 "poner los registros: %s\ncuerpo:\n%s\n",
+                                 ar.error.c_str(), nasm.c_str());
+                }
+            }
+            if (std::getenv("VESTA_ASM_TRAMP_DEBUG")) {
+                std::fprintf(stderr,
+                             "=== plantilla (%zu ops) ===\n%s\n"
+                             "=== asm con registros puestos (%zu bytes) ===\n"
+                             "%s\n",
+                             b.deferred_ops.size(), t.c_str(), nasm.size(),
+                             nasm.c_str());
             }
             b.deferred = false; // ensamblado (o fallo -> bytes vacio, no emite)
         }
