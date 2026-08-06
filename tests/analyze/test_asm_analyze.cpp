@@ -110,6 +110,48 @@ int main() {
               "desconocido: nombra el mnemonico exacto");
     }
 
+    // --- leer memoria NO es escribirla -----------------------------------
+    // Decirlo de menos convertiria el bloque en una barrera para todo lo que
+    // lo rodea; decirlo de mas dejaria reordenar algo que no se puede.  Por
+    // eso ante cualquier duda se marcan las dos.
+    {
+        AsmBlockEffects e = asm_analyze_block("  mov rax, [rdi]\n", "x86_64");
+        CHECK(e.reads_mem, "carga: lee memoria");
+        CHECK(!e.writes_mem, "carga: NO escribe memoria");
+        CHECK(e.touches_mem, "carga: toca memoria (compatibilidad)");
+    }
+    {
+        AsmBlockEffects e = asm_analyze_block("  mov [rdi], rax\n", "x86_64");
+        CHECK(e.writes_mem, "almacen: escribe memoria");
+    }
+    {
+        AsmBlockEffects e = asm_analyze_block("  cmp rax, [rdi]\n", "x86_64");
+        CHECK(e.reads_mem && !e.writes_mem, "comparar: solo lee");
+    }
+    {
+        // Modo de direccionamiento con coma: la coma de dentro de los
+        // corchetes no separa operandos.
+        AsmBlockEffects e =
+            asm_analyze_block("  mov rax, [rbx + rcx*8]\n", "x86_64");
+        CHECK(e.reads_mem && !e.writes_mem,
+              "modo [base+indice*escala]: sigue siendo solo lectura");
+    }
+    {
+        AsmBlockEffects e = asm_analyze_block("  add [rdi], rax\n", "x86_64");
+        CHECK(e.reads_mem && e.writes_mem,
+              "acumular en memoria: lee Y escribe");
+    }
+    {
+        AsmBlockEffects e =
+            asm_analyze_block("  lock xadd [rdi], rax\n", "x86_64");
+        CHECK(e.reads_mem && e.writes_mem, "atomica: lee Y escribe");
+    }
+    {
+        AsmBlockEffects e = asm_analyze_block("  add rax, rbx\n", "x86_64");
+        CHECK(!e.reads_mem && !e.writes_mem && !e.touches_mem,
+              "aritmetica de registros: no toca memoria");
+    }
+
     if (g_fail == 0)
         std::printf("=== test_asm_analyze: %d checks OK, 0 fallidos ===\n",
                     g_checks);

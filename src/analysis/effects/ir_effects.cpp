@@ -51,10 +51,17 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrInstr &ins) {
     // func_name lleva el cuerpo NASM (lo pone el lowering de asm).  El analisis
     // de bloque del asm opaco vive en el modulo asm (namespace vx).
     const vx::AsmBlockEffects e = vx::asm_analyze_block(ins.func_name, "x86_64");
-    if (e.touches_mem) {
+    /* Se declara SOLO lo que el bloque hace.  Antes, cualquier asm que tocara
+     * memoria se anotaba como lectura Y escritura de todo, y eso lo convierte
+     * en una barrera para cuanto haya alrededor: un `mov rax, [rdi]` impedia
+     * mover una escritura, subir una lectura fuera de un bucle o eliminar una
+     * escritura muerta.  El analisis del asm ya distingue las dos cosas -- la
+     * tabla dice que operandos escribe cada instruccion -- y ante cualquier
+     * duda marca las dos, asi que esto no afloja nada. */
+    if (e.reads_mem)
         r.effects.mem.reads.add({AbstractLoc::Kind::Unknown, LOC_GENERIC});
+    if (e.writes_mem)
         r.effects.mem.writes.add({AbstractLoc::Kind::Unknown, LOC_GENERIC});
-    }
     if (e.is_call) {
         r.effects.control.kind = ControlKind::Call;
         r.effects.may_io = true; // un call opaco puede hacer cualquier cosa

@@ -41,6 +41,32 @@ static bool p_pure(const FunctionSummary &s, ContractProfile profile) {
     return true; // Default/Relaxed/Embedded
 }
 
+/**
+ * @brief mem_free: la funcion NO TOCA memoria en absoluto, ni para leer.
+ *
+ * Es mas fuerte que @c pure -- que si admite lecturas -- y es justo la
+ * condicion que permite que una LLAMADA deje de ser una barrera de memoria: si
+ * no lee ni escribe nada, ni atrapa, ni aloca, ni tiene atomicas, lo que hubiera
+ * antes y despues de ella se puede mover libremente.
+ *
+ * El optimizador ya usaba esta condicion, escrita a mano dentro de el.  Al ser
+ * una fila mas de esta tabla, la usan LOS DOS y ademas sale en el informe de
+ * `--analyze`: se puede ver que funciones cumplen y por que una llamada sigue
+ * siendo una barrera, en vez de tener que adivinarlo.
+ *
+ * Exige @c Complete (no basta con "no Unknown"): una funcion analizada solo en
+ * parte podria tocar memoria en el trozo que no se miro.
+ */
+static bool p_mem_free(const FunctionSummary &s, ContractProfile profile) {
+    (void)profile; // no es opinable: o toca memoria o no
+    if (s.completeness != AnalysisCompleteness::Complete) return false;
+    const SemanticEffects &c = s.semantic.closure;
+    return c.mem.reads.empty() && c.mem.writes.empty() && !c.may_trap &&
+           !c.may_throw && !c.may_allocate && !c.may_block && !c.may_io &&
+           c.tags.empty() && c.atomic.order == MemOrder::None &&
+           !c.atomic.is_fence;
+}
+
 /// readonly: no escribe memoria en el cierre (puede leer).
 static bool p_readonly(const FunctionSummary &s, ContractProfile profile) {
     return s.completeness != AnalysisCompleteness::Unknown &&
@@ -95,6 +121,7 @@ static bool p_freestanding(const FunctionSummary &s, ContractProfile profile) {
 const std::vector<ContractRule> &contract_rules() {
     static const std::vector<ContractRule> rules = {
         {"pure", p_pure},
+        {"mem_free", p_mem_free},
         {"readonly", p_readonly},
         {"leaf", p_leaf},
         {"nothrow", p_nothrow},

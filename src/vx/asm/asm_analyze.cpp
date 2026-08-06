@@ -59,6 +59,51 @@ std::vector<std::string> tokenize_line(const std::string &line) {
     return out;
 }
 
+/**
+ * @brief Trocea los OPERANDOS de una linea, respetando los corchetes.
+ *
+ * Hace falta para saber QUE operando es el de memoria, y con ello si la
+ * instruccion lo lee o lo escribe.  No vale trocear por comas a secas: la coma
+ * de `[rbx + rcx*8]` pertenece al modo de direccionamiento, no separa
+ * operandos.
+ *
+ * @param linea Linea completa, ya sin comentarios.
+ * @param mnem  Mnemonico en minusculas, tal como se reconocio.
+ * @return Los operandos en orden textual, sin espacios alrededor.
+ */
+std::vector<std::string> operandos_de(const std::string &linea,
+                                      const std::string &mnem) {
+    std::vector<std::string> out;
+    // Situarse justo detras del mnemonico (comparando en minusculas).
+    std::string baja;
+    baja.reserve(linea.size());
+    for (char c : linea) baja.push_back((char)std::tolower((unsigned char)c));
+    const size_t p = baja.find(mnem);
+    if (p == std::string::npos) return out;
+    size_t i = p + mnem.size();
+
+    std::string cur;
+    int prof = 0; // profundidad de corchetes
+    auto cerrar = [&] {
+        size_t a = cur.find_first_not_of(" \t");
+        size_t b = cur.find_last_not_of(" \t");
+        if (a != std::string::npos) out.push_back(cur.substr(a, b - a + 1));
+        cur.clear();
+    };
+    for (; i < linea.size(); ++i) {
+        const char c = linea[i];
+        if (c == '[') ++prof;
+        if (c == ']' && prof > 0) --prof;
+        if (c == ',' && prof == 0) {
+            cerrar();
+            continue;
+        }
+        cur.push_back(c);
+    }
+    cerrar();
+    return out;
+}
+
 /// @c true si @p mnem es una rama/salto (para @c has_branch).  Cubre x86
 /// (jmp/jCC/loop) y arm64 (b/b.CC/cbz/cbnz/tbz/tbnz).
 bool es_rama(const std::string &mnem) {
@@ -219,6 +264,38 @@ AsmBlockEffects asm_analyze_block(const std::string &nasm_body,
         if (eff.touches_mem) res.touches_mem = true;
         if (eff.touches_flags) res.touches_flags = true;
         if (eff.is_call) res.is_call = true;
+
+        /* Leer y escribir memoria no es lo mismo, y la tabla ya sabe cual de
+         * las dos: @c operand_write_mask dice QUE operandos escribe la
+         * instruccion, asi que basta con mirar en que posicion esta el de
+         * memoria.  Se apunta lo justo, y ante cualquier duda las dos cosas --
+         * decir de menos aqui seria dejar reordenar algo que no se puede. */
+        if (lock_prefix || line_has_mem || eff.touches_mem) {
+            bool lee = true, escribe = true; // por defecto, lo conservador
+            if (!lock_prefix && !eff.touches_mem && line_has_mem) {
+                // Memoria EXPLICITA (`[...]` en un operando) y sin prefijo
+                // atomico: se puede precisar si se identifica cual es.
+                const std::vector<std::string> ops = operandos_de(line, mnem);
+                int idx_mem = -1;
+                bool varios = false;
+                for (size_t k = 0; k < ops.size(); ++k)
+                    if (ops[k].find('[') != std::string::npos) {
+                        if (idx_mem >= 0) varios = true;
+                        else idx_mem = static_cast<int>(k);
+                    }
+                if (idx_mem >= 0 && !varios && idx_mem < 8) {
+                    escribe = ((eff.operand_write_mask >> idx_mem) & 1u) != 0u;
+                    lee = !escribe || (eff.operand_write_mask == 0u);
+                    /* Un operando que se escribe puede ademas leerse (`add
+                     * [rdi], rax` acumula).  Solo un destino PURO -- el `mov`
+                     * -- no lee lo que pisa, y distinguirlo no compensa el
+                     * riesgo: si escribe, se cuenta tambien como lectura. */
+                    if (escribe) lee = true;
+                }
+            }
+            if (lee) res.reads_mem = true;
+            if (escribe) res.writes_mem = true;
+        }
     }
 
     res.explicit_stack_bytes = max_frame;

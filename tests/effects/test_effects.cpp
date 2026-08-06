@@ -185,6 +185,42 @@ int main() {
         check(heapfree, "funcion vacia es heap_free");
     }
     {
+        /* mem_free es MAS fuerte que pure: pure admite lecturas, mem_free no.
+         * La distincion importa porque es lo que decide si una LLAMADA sigue
+         * siendo una barrera de memoria para lo que hay a su alrededor. */
+        FunctionSummary s;
+        s.completeness = AnalysisCompleteness::Complete;
+        s.semantic.closure.mem.reads.add(L(K::Global, 1)); // solo LEE
+        auto cs = derive_contracts(s);
+        bool pure = false, memfree = true, readonly = false;
+        for (const auto &c : cs) {
+            if (std::string(c.name) == "pure") pure = c.holds;
+            if (std::string(c.name) == "mem_free") memfree = c.holds;
+            if (std::string(c.name) == "readonly") readonly = c.holds;
+        }
+        check(pure, "una funcion que solo LEE sigue siendo pure");
+        check(readonly, "una funcion que solo LEE es readonly");
+        check(!memfree, "pero NO es mem_free: toca memoria");
+    }
+    {
+        // Sin tocar memoria de ninguna forma: mem_free.
+        FunctionSummary s;
+        s.completeness = AnalysisCompleteness::Complete;
+        bool memfree = false;
+        for (const auto &c : derive_contracts(s))
+            if (std::string(c.name) == "mem_free") memfree = c.holds;
+        check(memfree, "funcion vacia es mem_free");
+    }
+    {
+        // Analisis INCOMPLETO: no se puede afirmar que no toca memoria.
+        FunctionSummary s;
+        s.completeness = AnalysisCompleteness::Conservative;
+        bool memfree = true;
+        for (const auto &c : derive_contracts(s))
+            if (std::string(c.name) == "mem_free") memfree = c.holds;
+        check(!memfree, "analisis incompleto: mem_free NO se afirma");
+    }
+    {
         // Funcion que escribe memoria y aloca: NO pura, NO heap_free.
         FunctionSummary s;
         s.completeness = AnalysisCompleteness::Complete;

@@ -12017,16 +12017,20 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
     if (g_dse_pure_calls || g_sched_alias || g_licm_alias) {
         analysis::effects::EffectAnalysis ea;
         const analysis::effects::ModuleSummary &ms = ea.module_summary(mod);
+        /* La condicion -- "no toca memoria en absoluto" -- es el contrato
+         * `mem_free` del catalogo, no una regla de aqui.  Estaba escrita a mano
+         * en este sitio, con lo que el informe de `--analyze` no podia decir
+         * que funciones la cumplen: quien miraba por que una llamada seguia
+         * siendo una barrera no tenia donde verlo.  Ahora es la misma fila para
+         * los dos. */
         for (const auto &kv : ms.fns) {
-            const analysis::effects::FunctionSummary &s = kv.second;
-            const analysis::effects::SemanticEffects &c = s.semantic.closure;
-            if (s.completeness == analysis::effects::AnalysisCompleteness::Complete &&
-                c.mem.reads.empty() && c.mem.writes.empty() && !c.may_trap &&
-                !c.may_throw && !c.may_allocate && !c.may_block && !c.may_io &&
-                c.tags.empty() &&
-                c.atomic.order == analysis::effects::MemOrder::None &&
-                !c.atomic.is_fence)
-                pure_callees.insert(kv.first);
+            for (const auto &c :
+                 analysis::effects::derive_contracts(
+                     kv.second, analysis::effects::ContractProfile::Default))
+                if (c.name == "mem_free" && c.holds) {
+                    pure_callees.insert(kv.first);
+                    break;
+                }
         }
     }
 

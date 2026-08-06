@@ -58,6 +58,21 @@ namespace vx {
  */
 struct AsmBlockEffects {
     bool touches_mem = false;   ///< algun operando @c [...] o instr que toca mem.
+    /// El bloque LEE memoria.
+    ///
+    /// Se separa de @c writes_mem porque no es lo mismo: un `mov rax, [rdi]`
+    /// solo lee, y decir que tambien escribe convierte el bloque en una barrera
+    /// para todo lo que haya alrededor -- deja de poder moverse una escritura,
+    /// de poder subir una lectura fuera de un bucle, de poder eliminar una
+    /// escritura muerta.  La tabla ya dice QUE operandos escribe cada
+    /// instruccion (@c AsmEffects::operand_write_mask), asi que la informacion
+    /// estaba y se tiraba.
+    ///
+    /// Ante cualquier duda -- mnemonico desconocido, operandos no reconocibles,
+    /// prefijo @c lock (lee y escribe) -- se marcan LAS DOS.
+    bool reads_mem = false;
+    /// El bloque ESCRIBE memoria.  Ver @c reads_mem.
+    bool writes_mem = false;
     bool has_atomic = false;    ///< prefijo @c lock o instr atomica (barrera).
     bool is_call = false;       ///< @c call / @c syscall alcanzable en el bloque.
     bool touches_flags = false; ///< modifica RFLAGS/condition codes.
