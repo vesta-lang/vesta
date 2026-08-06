@@ -51,10 +51,20 @@ public import std.os.linux only exit, Stream;
 import std.windows only DWORD, HANDLE, LPOVERLAPPED, STD_INPUT_HANDLE;
 
 // Los tres manejadores estandar no cambian en toda la vida del proceso, y
-// pedirlos es una llamada al sistema.  Se piden una vez y se guardan; un cero
-// significa "aun no se ha pedido".  Sin @Target: en un binario que no sea de
-// Windows nadie lo toca y el dead-strip se lo lleva.
+// obtenerlos requiere llamar a la API de Windows.  Se piden una vez y se
+// guardan.
+//
+// Que esta pedido y que no se lleva APARTE, en vez de deducirlo del propio
+// manejador: NULL es un valor que GetStdHandle puede devolver legitimamente
+// (un proceso sin ese flujo asociado), e INVALID_HANDLE_VALUE es (HANDLE)-1,
+// asi que ningun valor concreto sirve de centinela.  Usar el cero como "aun
+// no pedido" haria repetir la llamada en cada escritura justo en el caso en
+// que no hay nada que obtener.
+//
+// Sin @Target: en un binario que no sea de Windows nadie los toca y el
+// dead-strip se los lleva.
 u64[3] __os_manejador;
+u8[3] __os_manejador_pedido;
 
 /**
  * @brief Escribe bytes en uno de los flujos estandar.  Sin buffer ni
@@ -74,11 +84,12 @@ public ssize_t write(Stream cual, const char* buf, size_t count) {
     // El indice sale de la propia constante, sin ramas: los tres valores son
     // consecutivos (-10, -11, -12), asi que restarlos del primero da 0, 1 y 2.
     DWORD idx = ((DWORD) STD_INPUT_HANDLE) - ((DWORD) cual);
-    HANDLE h = (HANDLE) __os_manejador[idx];
-    if (h == 0) {
-        h = std.os.windows.get_std_handle((DWORD) cual);
-        __os_manejador[idx] = (u64) h;
+    if (__os_manejador_pedido[idx] == 0) {
+        __os_manejador[idx] =
+            (u64) std.os.windows.get_std_handle((DWORD) cual);
+        __os_manejador_pedido[idx] = 1;
     }
+    HANDLE h = (HANDLE) __os_manejador[idx];
     DWORD escritos = 0;
     if (std.os.windows.write(h, buf, (DWORD) count, &escritos,
                              (LPOVERLAPPED) nullptr) == 0) {
