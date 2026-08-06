@@ -225,7 +225,11 @@ void __panic(u8* msg, u64 len) {
 /// Hook de fallo de `unwrap` sobre null (Optional/nonnull vacios).  Es un
 /// panic como cualquier otro, solo que el mensaje lo pone el lenguaje.
 void __vx_panic_null() {
-    __vio_panic_di("unwrap de un valor null (Optional/nonnull vacio)", 48);
+    // La longitud la cuenta el compilador (se pliega a una constante), no yo:
+    // este mismo mensaje llevaba 54 escrito a mano donde mide 56, asi que
+    // salia cortado y sin el salto de linea.
+    __vio_panic_di("unwrap de un valor null (Optional/nonnull vacio)",
+                   "unwrap de un valor null (Optional/nonnull vacio)".bytes());
     exit(134);
 }
 

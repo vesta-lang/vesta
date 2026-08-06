@@ -26449,6 +26449,36 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         }
     }
 
+    // La longitud de un LITERAL se sabe al compilar, asi que se pliega: es una
+    // constante, no algo que haya que averiguar.  Sin esto se construia un
+    // StringObject en ejecucion solo para leerle la longitud y tirarlo -- una
+    // alocacion por cada `"lit".bytes()`, y en un modulo freestanding (vx_io)
+    // eso no se puede pagar, de modo que la unica salida era contar los bytes a
+    // mano al escribir el codigo.  Contarlos a mano ya habia fallado: el
+    // mensaje de unwrap-null pasaba 54 donde el literal mide 56.
+    //
+    // Vale para los tres modos: el numero es el mismo se ejecute donde se
+    // ejecute.
+    if ((is_str_length || is_str_bytes) && e->args.size() == 1) {
+        const ast::Expr *ae0 = e->args[0].get();
+        if (ae0 && ae0->kind == ast::NodeKind::StringLitExpr &&
+            !static_cast<const ast::StringLitExpr *>(ae0)->is_interpolated()) {
+            const std::string &lit =
+                static_cast<const ast::StringLitExpr *>(ae0)->value;
+            uint64_t n = 0;
+            if (is_str_bytes) {
+                n = static_cast<uint64_t>(lit.size());
+            } else {
+                // Puntos de codigo: los bytes de continuacion de UTF-8
+                // (10xxxxxx) no cuentan, son la cola del anterior.
+                for (unsigned char b : lit)
+                    if ((b & 0xC0) != 0x80) ++n;
+            }
+            out_value = emit_const(ir::IrType::I64, n, e->loc.line);
+            return true;
+        }
+    }
+
     if (native_poo_ &&
         (is_str_length || is_str_bytes || is_str_cstr || is_str_wstr) &&
         e->args.size() == 1) {
