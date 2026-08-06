@@ -2,23 +2,27 @@ namespace std.os.linux;
 
 /**
  * @file linux.vx
- * @brief Operaciones del proceso, implementadas con las llamadas de Linux.
+ * @brief Llamadas de Linux para las operaciones del proceso.
  *
  * La mitad de Linux de `std.os`.  Las llamadas no se escriben aqui a mano:
  * vienen de `std.syscall`, que es donde vive la tabla y donde ya esta resuelto
  * el reparto por arquitectura.
+ *
+ * Cuando el nombre que se ofrece coincide con el de la llamada, no hay
+ * envoltorio: se re-exporta y ya esta.  Es el caso de `write`.
  */
 
-import std.syscall.linux only exit_group;
+public import std.syscall.linux only write, exit_group;
 
 /**
  * @brief Termina el proceso.  No vuelve.
  *
  * Es `exit_group` y no `exit`: la segunda termina solo el hilo que la llama, y
- * lo que se promete aqui es que se acaba el proceso entero.
+ * lo que se promete aqui es que se acaba el proceso entero.  Ese es el unico
+ * motivo de que esta si lleve envoltorio: el nombre no coincide.
  *
  * @param code Codigo de salida.
  */
-public void exit(i32 code) { 
-    exit_group(code); 
+public void exit(i32 code) {
+    exit_group(code);
 }

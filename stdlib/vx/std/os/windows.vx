@@ -2,24 +2,70 @@ namespace std.os.windows;
 
 /**
  * @file windows.vx
- * @brief Operaciones del proceso, implementadas con la API de Windows.
+ * @brief Llamadas de Windows para las operaciones del proceso.
  *
- * La mitad de Windows de `std.os`.  Aqui viven las llamadas reales; el modulo
- * de arriba solo elige cual de las dos mitades se compila y ofrece por encima
- * lo que no depende del sistema.
+ * La mitad de Windows de `std.os`.  Aqui NO se abstrae nada: cada funcion es
+ * un envoltorio de nombre sobre la llamada real, con sus mismos parametros, en
+ * el mismo orden y con los tipos de Windows.  Lo que haya que igualar entre
+ * sistemas se hace en `std.os`, no aqui, para que esto siga siendo una lista
+ * de lo que ofrece Windows y no un sitio donde se esconden diferencias.
+ *
+ * Es kernel32, NUNCA msvcrt: el lenguaje no depende del runtime de C.  Y no
+ * entra en `std.syscall.windows` porque ese modulo es la capa NT (ntdll), y
+ * estas son las APIs de usuario que hay por encima.
+ *
+ * Los envoltorios existen porque un bloque `extern` no se puede exportar: sin
+ * ellos, cada modulo que necesitara estas llamadas volveria a declararlas.
  */
 
-// Es kernel32, NUNCA msvcrt: el lenguaje no depende del runtime de C.  Y no
-// entra en std.syscall.windows porque ese modulo es la capa NT (ntdll), y
-// ExitProcess no es una syscall sino la API de usuario que hay por encima.
+import std.windows only BOOL, DWORD, UINT, HANDLE, LPCVOID, LPDWORD,
+                        LPOVERLAPPED;
+
 extern "kernel32.dll" {
-    fn ExitProcess(u32 code) -> void;
+    fn ExitProcess(UINT uExitCode) -> VOID;
+    fn GetStdHandle(DWORD nStdHandle) -> HANDLE;
+    fn WriteFile(HANDLE hFile, LPCVOID lpBuffer,
+                 DWORD nNumberOfBytesToWrite,
+                 LPDWORD lpNumberOfBytesWritten,
+                 LPOVERLAPPED lpOverlapped) -> BOOL;
 }
 
 /**
  * @brief Termina el proceso.  No vuelve.
- * @param code Codigo de salida.
+ * @param uExitCode Codigo de salida.
  */
-public void exit(i32 code) { 
-    ExitProcess((u32) code); 
+public void exit(UINT uExitCode) {
+    ExitProcess(uExitCode);
+}
+
+/**
+ * @brief Manejador de uno de los dispositivos estandar.
+ * @param nStdHandle Cual se pide (STD_OUTPUT_HANDLE y companeros).
+ * @return El manejador.
+ */
+public HANDLE get_std_handle(DWORD nStdHandle) {
+    return GetStdHandle(nStdHandle);
+}
+
+/**
+ * @brief Escribe bytes.  Sin buffer y sin conversiones.
+ *
+ * Los parametros son los de Windows, sin tocar: aqui lo unico que cambia es
+ * el nombre, que es el mismo con el que se pide en el otro sistema.  Igualar
+ * tambien las formas -- descriptor frente a manejador -- es abstraer, y eso se
+ * hace en `std.os`.
+ *
+ * @param hFile Manejador de destino.
+ * @param lpBuffer Bytes a escribir.
+ * @param nNumberOfBytesToWrite Cuantos bytes.
+ * @param lpNumberOfBytesWritten Donde deja cuantos escribio.
+ * @param lpOverlapped Estructura de E/S solapada, o nulo.
+ * @return Distinto de cero si fue bien.
+ */
+public BOOL write(HANDLE hFile, LPCVOID lpBuffer,
+                  DWORD nNumberOfBytesToWrite,
+                  LPDWORD lpNumberOfBytesWritten,
+                  LPOVERLAPPED lpOverlapped) {
+    return WriteFile(hFile, lpBuffer, nNumberOfBytesToWrite,
+                     lpNumberOfBytesWritten, lpOverlapped);
 }

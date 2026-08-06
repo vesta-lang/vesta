@@ -25,6 +25,7 @@
 #include <cassert>
 #include <cstring>
 
+#include "vx/comptime/comptime_introspect.h" // evaluar el init de una const publica
 #include "vx/type_checker.h"
 #include "vx/types.h"
 #include "vx/module/vxi_format.h"
@@ -1288,19 +1289,27 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
                     s.blob_kind_hint =
                         static_cast<uint8_t>(VxiBlobKind::STRING);
                 }
-            } else if (gv->init->kind == ast::NodeKind::IntLitExpr) {
-                auto *lit = static_cast<ast::IntLitExpr *>(gv->init.get());
-                s.has_init_value = true;
-                s.init_value = static_cast<uint64_t>(lit->value);
-            } else if (gv->init->kind == ast::NodeKind::UnaryExpr) {
-                auto *u = static_cast<ast::UnaryExpr *>(gv->init.get());
-                if (u->op == ast::UnOp::Neg && u->operand &&
-                    u->operand->kind == ast::NodeKind::IntLitExpr) {
-                    auto *lit =
-                        static_cast<ast::IntLitExpr *>(u->operand.get());
+            } else {
+                // El valor se EVALUA, no se reconoce por la forma que tenga
+                // escrita.  Antes solo se admitian dos: un literal entero y un
+                // literal con signo delante; cualquier otra cosa se exportaba
+                // SIN valor y en silencio, asi que el consumidor leia 0.  Un
+                // `const i32 STD_OUTPUT_HANDLE = ((DWORD)-11);` -- un cast, que
+                // es lo normal al declarar constantes del sistema -- llegaba
+                // como 0 al otro modulo y todo lo que dependiera de el fallaba
+                // sin decir por que.
+                const ComptimeEvalResult ev =
+                    comptime_eval_expr(tc, gv->init.get());
+                if (ev.ok && !ev.is_str && !ev.is_array && !ev.is_struct &&
+                    !ev.is_type) {
                     s.has_init_value = true;
-                    s.init_value = static_cast<uint64_t>(
-                        -static_cast<int64_t>(lit->value));
+                    s.init_value = static_cast<uint64_t>(ev.value);
+                } else if (!ev.deferred) {
+                    // No se pudo evaluar: NO se exporta el simbolo.  Aqui no
+                    // hay por donde emitir un diagnostico, y de las dos formas
+                    // de fallar -- que el uso no resuelva el nombre, o que lea
+                    // un 0 que nadie escribio -- la primera al menos se ve.
+                    continue;
                 }
             }
         }
