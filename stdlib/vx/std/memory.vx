@@ -192,7 +192,7 @@ public void memcpy(u8* dst, u8* src, usize n) {
 ///
 /// En binario nativo no hay VM debajo ni instruccion que aprovechar, asi que
 /// vale el mismo reparto que con JIT.
-@Target("mode:aot & mode:jit")
+@Target("mode:aot || mode:jit")
 @NoIdiom
 public void memcpy(u8* dst, u8* src, usize n) {
     usize total = n;

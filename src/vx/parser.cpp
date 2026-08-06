@@ -1944,11 +1944,25 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                     // tal eleccion -- ahi la variante que vale es `mode:aot` --
                     // asi que estas se descartan; si se emitieran, la de `vm`
                     // conserva el nombre desnudo y chocaria con la nativa.
+                    //
+                    // Salvo que la expresion mencione `mode:aot`: entonces esa
+                    // misma version vale tambien para nativo, y se queda como
+                    // funcion normal (sin sufijo).  Asi una implementacion que
+                    // sirve a JIT y a nativo se escribe UNA vez.
                     std::string modo_compilacion;
                     get_aot_condcomp_mode(modo_compilacion);
                     if (modo_compilacion == "aot") {
-                        top_target_skip = true;
-                        top_target_spec = spec;
+                        std::vector<std::string> ats_modo;
+                        cwhen::atoms(spec, ats_modo);
+                        bool vale_en_nativo = false;
+                        for (const auto &a : ats_modo)
+                            if (a == "mode:aot") vale_en_nativo = true;
+                        if (vale_en_nativo) {
+                            top_mode_variant = 0; // sin sufijo: es LA funcion
+                        } else {
+                            top_target_skip = true;
+                            top_target_spec = spec;
+                        }
                     }
                 }
                 if (!spec_eval.empty() && !target_matches_(spec_eval)) {
