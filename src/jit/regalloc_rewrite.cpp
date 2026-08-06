@@ -812,47 +812,22 @@ struct Lowerer {
     }
 
     /** @brief Reescribe una instr vreg a 0+ instrs fisicas. */
-    void lower(const MInstr &in, std::vector<MInstr> &out) {
+
+    /* --- Familias de la bajada.  Cada una trata SUS operaciones y dice si
+     * la ha tratado; asi el despachador no tiene que saber de antemano a
+     * quien le toca cada una, que es justo lo que se equivocaria en
+     * silencio cuando se anadiera una operacion nueva. --- */
+
+    /**
+     * @brief Coma flotante: movimientos, aritmetica escalar, comparacion y
+     *        conversiones entre bancos.
+     *
+     * @param in  Instruccion con registros virtuales.
+     * @param out Donde se acumula lo emitido.
+     * @return true si la instruccion era suya y ya esta tratada.
+     */
+    bool lower_flotante(const MInstr &in, std::vector<MInstr> &out) {
         const MOp op = in.op;
-
-        if (op == MOp::ARG) {
-            /* Acumular: (indice-de-clase, ubicacion fisica, es_fp).  El
-             * selector ya numera el indice por clase; la clase se toma del
-             * operando vreg (in.src1.vreg_class) o, si ya es un reg fisico,
-             * de si es XMM.  ABI custom: si el selector puso un reg fisico en
-             * @c dst, ese es el destino del arg (register() en el param/cfn). */
-            const int custom = in.dst.is_reg()
-                                   ? static_cast<int>(in.dst.reg)
-                                   : -1;
-            pending_args.push_back({in.variant, resolve_use(in.src1),
-                                    is_fp_operand(in.src1), custom});
-            return;
-        }
-
-        /* ===== Callback save-set (jubilacion de slots) ===== */
-        if (op == MOp::CB_SAVE_REGS || op == MOp::CB_RESTORE_REGS) {
-            /* Expandir con R11 (scratch): copiar los 16 qwords entre
-             * proc->registers[r] ([rbx + REGISTERS_OFFSET + r*8]) y la
-             * work-area del frame ([rbp + cb_save_base_off - r*8]).  RBX =
-             * ProcessVM* (VM_ABI), cargado por LOAD_PROC antes del SAVE. */
-            const bool save = (op == MOp::CB_SAVE_REGS);
-            for (uint32_t r = 0; r < 16u; ++r) {
-                const MOperand vmreg = MOperand::make_mem(
-                    MReg::RBX, VESTA_PROC_REGISTERS_OFFSET +
-                                   static_cast<int32_t>(r) * VESTA_REGISTER_SIZE);
-                const MOperand frame = MOperand::make_mem(
-                    MReg::RBP, cb_save_base_off - static_cast<int32_t>(r) * 8);
-                if (save) {
-                    out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1()), vmreg));
-                    out.push_back(MInstr::make_unary(MOp::MOV, frame, reg(scr1())));
-                } else {
-                    out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1()), frame));
-                    out.push_back(MInstr::make_unary(MOp::MOV, vmreg, reg(scr1())));
-                }
-            }
-            return;
-        }
-
         /* ===== FP-regalloc ( AOT C1 float) ===== */
 
         /* FP MOV (dst/src de clase float): movimiento de un escalar f64/f32.
@@ -887,7 +862,7 @@ struct Lowerer {
             } else {
                 out.push_back(MInstr::make_unary(mv, d, s));
             }
-            return;
+            return true;
         }
 
         /* AVX escalar 3-OPERANDOS (VADDSD/VSUBSD/VMULSD/VDIVSD + SS): VX nativo
@@ -917,7 +892,7 @@ struct Lowerer {
             out.push_back(MInstr::make_binary(op, dreg, s1, s2));
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(mv, resolve_def(in.dst), dreg));
-            return;
+            return true;
         }
 
         /* FP arith binaria (3-op pre-legalization): ADDSD/SUBSD/MULSD/DIVSD
@@ -987,7 +962,7 @@ struct Lowerer {
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     mv, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), acc));
-            return;
+            return true;
         }
 
         /* FP unaria con dst XMM (SQRTSD/SQRTSS + ROUNDSD): dst = f(src).  src
@@ -1013,7 +988,7 @@ struct Lowerer {
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     mv, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
-            return;
+            return true;
         }
 
         /* UCOMISD/UCOMISS: comparacion FP (setea flags).  Ambos operandos
@@ -1039,7 +1014,7 @@ struct Lowerer {
             }
             out.push_back(MInstr::make_unary(op, a, b));
             out.back().flags = in.flags; // propagar MI_FLAG_VX_SCALAR
-            return;
+            return true;
         }
 
         /* Conversiones int<->float.  CVTSI2SD/CVTSI2SS: dst XMM <- src GP.
@@ -1060,7 +1035,7 @@ struct Lowerer {
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     mv, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
-            return;
+            return true;
         }
         if (op == MOp::CVTTSD2SI || op == MOp::CVTTSS2SI) {
             const MOp mv = (op == MOp::CVTTSS2SI) ? MOp::MOVSS : MOp::MOVSD;
@@ -1077,7 +1052,7 @@ struct Lowerer {
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     MOp::MOV, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
-            return;
+            return true;
         }
         if (op == MOp::CVTSS2SD || op == MOp::CVTSD2SS) {
             const bool dst_spilled =
@@ -1093,7 +1068,7 @@ struct Lowerer {
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     MOp::MOVSD, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
-            return;
+            return true;
         }
 
         /* MOVQ_GP_XMM (dst XMM <- src GP) / MOVQ_XMM_GP (dst GP <- src XMM):
@@ -1112,7 +1087,7 @@ struct Lowerer {
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     MOp::MOVSD, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
-            return;
+            return true;
         }
         if (op == MOp::MOVQ_XMM_GP) {
             const bool dst_spilled =
@@ -1127,7 +1102,56 @@ struct Lowerer {
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     MOp::MOV, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
-            return;
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * @brief Llamadas y retorno: directa, por direccion, por simbolo, cola y RET.
+     *
+     * @param in  Instruccion con registros virtuales.
+     * @param out Donde se acumula lo emitido.
+     * @return true si la instruccion era suya y ya esta tratada.
+     */
+    bool lower_llamada(const MInstr &in, std::vector<MInstr> &out) {
+        const MOp op = in.op;
+        if (op == MOp::ARG) {
+            /* Acumular: (indice-de-clase, ubicacion fisica, es_fp).  El
+             * selector ya numera el indice por clase; la clase se toma del
+             * operando vreg (in.src1.vreg_class) o, si ya es un reg fisico,
+             * de si es XMM.  ABI custom: si el selector puso un reg fisico en
+             * @c dst, ese es el destino del arg (register() en el param/cfn). */
+            const int custom = in.dst.is_reg()
+                                   ? static_cast<int>(in.dst.reg)
+                                   : -1;
+            pending_args.push_back({in.variant, resolve_use(in.src1),
+                                    is_fp_operand(in.src1), custom});
+            return true;
+        }
+
+        /* ===== Callback save-set (jubilacion de slots) ===== */
+        if (op == MOp::CB_SAVE_REGS || op == MOp::CB_RESTORE_REGS) {
+            /* Expandir con R11 (scratch): copiar los 16 qwords entre
+             * proc->registers[r] ([rbx + REGISTERS_OFFSET + r*8]) y la
+             * work-area del frame ([rbp + cb_save_base_off - r*8]).  RBX =
+             * ProcessVM* (VM_ABI), cargado por LOAD_PROC antes del SAVE. */
+            const bool save = (op == MOp::CB_SAVE_REGS);
+            for (uint32_t r = 0; r < 16u; ++r) {
+                const MOperand vmreg = MOperand::make_mem(
+                    MReg::RBX, VESTA_PROC_REGISTERS_OFFSET +
+                                   static_cast<int32_t>(r) * VESTA_REGISTER_SIZE);
+                const MOperand frame = MOperand::make_mem(
+                    MReg::RBP, cb_save_base_off - static_cast<int32_t>(r) * 8);
+                if (save) {
+                    out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1()), vmreg));
+                    out.push_back(MInstr::make_unary(MOp::MOV, frame, reg(scr1())));
+                } else {
+                    out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1()), frame));
+                    out.push_back(MInstr::make_unary(MOp::MOV, vmreg, reg(scr1())));
+                }
+            }
+            return true;
         }
 
         if (op == MOp::CALL_ABS) {
@@ -1165,7 +1189,7 @@ struct Lowerer {
                 stackmaps.push_back(std::move(sm));
             }
             out.push_back(call);
-            return;
+            return true;
         }
 
         if (op == MOp::CALL_SYM) {
@@ -1203,7 +1227,7 @@ struct Lowerer {
                 stackmaps.push_back(std::move(sm));
             }
             out.push_back(call);
-            return;
+            return true;
         }
 
         if (op == MOp::MOV_SYM || op == MOp::LEA_RIP_SYM ||
@@ -1233,7 +1257,7 @@ struct Lowerer {
                 out.push_back(m);
                 out.push_back(MInstr::make_unary(MOp::MOV, d, reg(scr0())));
             }
-            return;
+            return true;
         }
 
         if (op == MOp::CALL) {
@@ -1311,7 +1335,7 @@ struct Lowerer {
                 stackmaps.push_back(std::move(sm));
             }
             out.push_back(call);
-            return;
+            return true;
         }
 
         if (op == MOp::TAILCALL) {
@@ -1329,7 +1353,7 @@ struct Lowerer {
                 j.op = MOp::JMP_SYM;
                 j.src1 = in.src2;
                 out.push_back(j);
-                return;
+                return true;
             }
             /* TCO con reuso de frame (mismo patron que el frame-swap del
              * OSR 2c): proc -> A0 (sobrevive el teardown por ser
@@ -1358,7 +1382,7 @@ struct Lowerer {
                 j.src1 = reg(scr0());
                 out.push_back(j);
             }
-            return;
+            return true;
         }
 
         if (op == MOp::RET) {
@@ -1371,12 +1395,24 @@ struct Lowerer {
              * emitido antes) + `ret`, SIN epilogo de frame (emit_epilogue es
              * no-op en naked).  Sin esto, un `@Naked i64 f(){ asm{}; return r; }`
              * cae a basura tras el cuerpo por falta de ret. */
-            if (naked && !(in.flags & MI_FLAG_RET_EXPLICIT)) return;
+            if (naked && !(in.flags & MI_FLAG_RET_EXPLICIT)) return true;
             emit_epilogue(out);
             out.push_back(MInstr::make_ret());
-            return;
+            return true;
         }
+        return false;
+    }
 
+    /**
+     * @brief Secuencias de forma fija: division, desplazamiento variable y
+     *        atomicas.  Llevan registros impuestos por la ISA.
+     *
+     * @param in  Instruccion con registros virtuales.
+     * @param out Donde se acumula lo emitido.
+     * @return true si la instruccion era suya y ya esta tratada.
+     */
+    bool lower_forma_fija(const MInstr &in, std::vector<MInstr> &out) {
+        const MOp op = in.op;
         if (op == MOp::DIVMOD_V) {
             /* dst = src1 / src2 (variant 0) o src1 % src2 (variant 1),
              * signed.  Secuencia x86 con RAX:RDX fijos.  El divisor va a
@@ -1414,7 +1450,7 @@ struct Lowerer {
             const MReg res = (in.variant & 1u) ? MReg::RDX : MReg::RAX;
             out.push_back(
                 MInstr::make_unary(MOp::MOV, resolve_def(in.dst), reg(res)));
-            return;
+            return true;
         }
 
         if (op == MOp::SHIFT_V) {
@@ -1454,7 +1490,7 @@ struct Lowerer {
             out.push_back(sh);
             out.push_back(MInstr::make_unary(MOp::MOV, resolve_def(in.dst),
                                              reg(scr1())));
-            return;
+            return true;
         }
 
         if (op == MOp::ATOMICADD_V) {
@@ -1488,7 +1524,7 @@ struct Lowerer {
             if (val_spilled) {
                 out.push_back(MInstr::make_unary(MOp::MOV, d, reg(valreg)));
             }
-            return;
+            return true;
         }
 
         if (op == MOp::ATOMICCAS_V) {
@@ -1520,10 +1556,23 @@ struct Lowerer {
             out.push_back(cx);
             /* El viejo queda en RAX = resolve_def(in.dst) (precoloreado); el selector
              * ya emitio el MOV final dst_ir <- rax_v.  Nada mas que hacer. */
-            return;
+            return true;
         }
 
         /* LOAD float HOST: dst es un vreg FP -> MOVSD/MOVSS xmm, [addr]. */
+        return false;
+    }
+
+    /**
+     * @brief Acceso a memoria: cargas y almacenes (host y de la VM) y reserva de
+     *        pila.
+     *
+     * @param in  Instruccion con registros virtuales.
+     * @param out Donde se acumula lo emitido.
+     * @return true si la instruccion era suya y ya esta tratada.
+     */
+    bool lower_memoria(const MInstr &in, std::vector<MInstr> &out) {
+        const MOp op = in.op;
         if (op == MOp::LOAD && is_fp_operand(in.dst)) {
             const uint8_t width = static_cast<uint8_t>(in.flags >> 1);
             MOperand a = resolve_use(in.src1);
@@ -1550,7 +1599,7 @@ struct Lowerer {
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     mv, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), xmm(fscr0())));
-            return;
+            return true;
         }
 
         /* STORE float HOST: el valor (src2) es un vreg FP -> MOVSD/MOVSS. */
@@ -1572,7 +1621,7 @@ struct Lowerer {
             }
             const MOperand mem = MOperand::make_mem(addr_reg, 0);
             out.push_back(MInstr::make_unary(mv, mem, v));
-            return;
+            return true;
         }
 
         if (op == MOp::LOAD) {
@@ -1615,7 +1664,7 @@ struct Lowerer {
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     MOp::MOV, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
-            return;
+            return true;
         }
 
         if (op == MOp::STORE) {
@@ -1639,7 +1688,7 @@ struct Lowerer {
             /* NO tocar mem.width (index packing). */
             MOperand mem = MOperand::make_mem(addr_reg, 0);
             out.push_back(MInstr::make_unary(MOp::MOV, mem, v));
-            return;
+            return true;
         }
 
         if (op == MOp::LOAD_VM || op == MOp::STORE_VM) {
@@ -1789,7 +1838,7 @@ struct Lowerer {
                 out.push_back(MInstr::make_unary(
                     MOp::MOV, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()),
                     reg(scr0())));
-            return;
+            return true;
         }
 
         if (op == MOp::ALLOCA) {
@@ -1808,7 +1857,7 @@ struct Lowerer {
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     MOp::MOV, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
-            return;
+            return true;
         }
 
         if (op == MOp::ALLOCA_VM) {
@@ -1837,9 +1886,25 @@ struct Lowerer {
             else
                 out.push_back(
                     MInstr::make_unary(MOp::MOV, resolve_def(in.dst), reg(scr0())));
-            return;
+            return true;
         }
+        return false;
+    }
 
+    /**
+     * @brief Aritmetica, logica, movimientos y comparacion enteros.
+     *
+     * Aqui vive la legalizacion a dos operandos: la ISA escribe el
+     * resultado ENCIMA de una fuente, asi que un `dst = a OP b` con tres
+     * nombres distintos hay que reescribirlo, y cuidando de no pisar `b`
+     * al copiar `a`.
+     *
+     * @param in  Instruccion con registros virtuales.
+     * @param out Donde se acumula lo emitido.
+     * @return true si la instruccion era suya y ya esta tratada.
+     */
+    bool lower_alu(const MInstr &in, std::vector<MInstr> &out) {
+        const MOp op = in.op;
         if (op == MOp::MOV) {
             const MOperand rs = resolve_use(in.src1);
             if (in.dst.is_vreg() && resolver.resolve_def(in.dst.vreg_id()).is_memory()) {
@@ -1867,7 +1932,7 @@ struct Lowerer {
                     out.push_back(MInstr::make_unary(MOp::MOV, d, rs));
                 }
             }
-            return;
+            return true;
         }
 
         if (op == MOp::MOVZX || op == MOp::MOVSX) {
@@ -1891,7 +1956,7 @@ struct Lowerer {
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     MOp::MOV, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
-            return;
+            return true;
         }
 
         if (op == MOp::SHL || op == MOp::SHR || op == MOp::SAR ||
@@ -1914,7 +1979,7 @@ struct Lowerer {
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     MOp::MOV, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
-            return;
+            return true;
         }
 
         if (op == MOp::LZCNT || op == MOp::TZCNT || op == MOp::POPCNT) {
@@ -1928,7 +1993,7 @@ struct Lowerer {
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     MOp::MOV, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
-            return;
+            return true;
         }
 
         if (op == MOp::BSWAP) {
@@ -1946,7 +2011,7 @@ struct Lowerer {
                 const MOperand pdst = resolve_def(in.dst);
                 out.push_back(MInstr::make_unary(MOp::BSWAP, pdst, pdst));
             }
-            return;
+            return true;
         }
 
         if (op == MOp::CMOVCC) {
@@ -1975,7 +2040,7 @@ struct Lowerer {
                 c.src1 = rsrc;
                 out.push_back(c);
             }
-            return;
+            return true;
         }
 
         if (is_bin_alu(op)) {
@@ -1999,7 +2064,7 @@ struct Lowerer {
                 if (dst_spilled)
                     out.push_back(MInstr::make_unary(
                         MOp::MOV, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
-                return;
+                return true;
             }
 
             const bool anti =
@@ -2044,7 +2109,7 @@ struct Lowerer {
                 if (dst_spilled)
                     out.push_back(MInstr::make_unary(
                         MOp::MOV, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
-                return;
+                return true;
             }
             if (anti) {
                 if (is_commutative(op)) {
@@ -2073,7 +2138,7 @@ struct Lowerer {
                 out.push_back(MInstr::make_unary(
                     MOp::MOV, slot_mem(resolver.resolve_def(in.dst.vreg_id()).stack_slot()), pdst));
             }
-            return;
+            return true;
         }
 
         if (op == MOp::CMP || op == MOp::TEST) {
@@ -2084,8 +2149,31 @@ struct Lowerer {
                 a = reg(scr0());
             }
             out.push_back(MInstr::make_unary(op, a, b)); // dst=a, src1=b
-            return;
+            return true;
         }
+        return false;
+    }
+
+    /**
+     * @brief Baja UNA instruccion con registros virtuales a instrucciones de
+     *        la maquina, preguntando a cada familia si es suya.
+     *
+     * Cada familia dice si ha tratado la instruccion en vez de decidirlo aqui
+     * por adelantado: si el despachador tuviera que saber a quien le toca cada
+     * operacion, anadir una nueva se equivocaria en silencio -- caeria al
+     * final, se le sustituirian los registros y saldria codigo que parece
+     * bueno.  Lo que no es de nadie llega al final a proposito, que es donde
+     * viven las que solo necesitan eso (saltos, etiquetas).
+     *
+     * @param in  Instruccion con registros virtuales.
+     * @param out Donde se acumula lo emitido.
+     */
+    void lower(const MInstr &in, std::vector<MInstr> &out) {
+        if (lower_llamada(in, out)) return;
+        if (lower_flotante(in, out)) return;
+        if (lower_forma_fija(in, out)) return;
+        if (lower_memoria(in, out)) return;
+        if (lower_alu(in, out)) return;
 
         /* Resto (JMP/JCC/LABEL_DEF/NOP/...): sustituir vregs en sitio. */
         MInstr m = in;
