@@ -7511,7 +7511,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
     // Esto es la convencion sret estandar: sin heap allocation, sin
     // leaks; el caller decide donde vive el resultado.
     if (sret_active_ && s->value) {
-        // M7 — in-place SRET para `return unique_box(...)`: si la
+        // M7 -- in-place SRET para `return unique_box(...)`: si la
         // funcion devuelve un smart pointer (sret_buf_size_=16) y el
         // value retornado es un CallExpr a `unique_box`/`shared_box`,
         // construimos el smart pointer DIRECTAMENTE en el retbuf del
@@ -18514,6 +18514,14 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
                 st.operands = {new_val, addr};
                 st.source_line = e->loc.line;
                 emit(current_block_, std::move(st));
+                return is_pre ? new_val : old_val;
+            }
+            /* Campo ESTATICO (`Clase.campo++`): la base no es una instancia
+             * sino el NOMBRE de la clase, asi que no tiene tipo struct ni
+             * clase y caia al error.  Escribirlo ya se sabia hacer -- es el
+             * mismo camino que `Clase.campo = v`, que mira @c property_kind. */
+            if (fa->property_kind == 3) {
+                lower_class_field_store(fa, new_val, e->loc);
                 return is_pre ? new_val : old_val;
             }
             // CLASS field: usar setfield via lower_class_field_store.

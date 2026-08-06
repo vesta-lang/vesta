@@ -1,0 +1,75 @@
+/**
+ * @file 371_campo_por_puntero.vx
+ * @brief El '.' atraviesa un puntero: `q.x` es `(*q).x`.
+ *
+ * Un puntero a struct se recorre con el mismo punto que el struct.  No hace
+ * falta escribir la desreferencia -- ni un operador aparte estilo `->` --:
+ * cuando el operando de la izquierda es un puntero a struct o clase, el punto
+ * lo atraviesa.  Un solo nivel, como en C: para un puntero a puntero la
+ * intencion ya no es evidente y hay que decirlo a mano.
+ *
+ * Antes solo valian las formas explicitas (`(*q).x`, `q[0].x`), y escribir
+ * `q.x` daba tres errores por uso: uno cierto pero inutil -- "el operando de
+ * '.' debe ser un struct o clase" -- y dos derivados de que el acceso se
+ * quedaba sin tipo.
+ *
+ * El caso recorre las formas que tienen que funcionar todas: leer, escribir,
+ * incrementar, llamar a un metodo, encadenar campos, tomar la direccion de un
+ * campo y recorrer una lista reasignando el propio puntero.
+ */
+struct Inner {
+    i32 v;
+}
+
+struct Punto {
+    i32 x;
+    Inner dentro;
+    i32 doble() { return this.x * 2; }
+}
+
+struct Nodo {
+    i32 valor;
+    Nodo* siguiente;
+}
+
+/**
+ * @brief Suma una lista enlazada recorriendola por punteros.
+ *
+ * @param n Primer nodo, o null.
+ * @return La suma de los valores.
+ */
+i32 suma(Nodo* n) {
+    i32 acc = 0;
+    while (n != null) {
+        acc = acc + n.valor;
+        n = n.siguiente;
+    }
+    return acc;
+}
+
+i32 main() {
+    Punto p;
+    p.x = 5;
+    p.dentro.v = 3;
+    Punto* q = &p;
+
+    i32 acc = 0;
+    acc = acc + q.x;         // leer                      5
+    q.x = q.x + 1;           // escribir
+    acc = acc + q.x;         //                          11
+    q.x++;                   // incrementar
+    acc = acc + q.x;         //                          18
+    acc = acc + q.doble();   // metodo por puntero       32
+    acc = acc + q.dentro.v;  // campo encadenado         35
+    i32* dir = &q.x;         // direccion de un campo
+    acc = acc + *dir;        //                          42
+
+    Nodo a;
+    Nodo b;
+    a.valor = 20;
+    a.siguiente = &b;
+    b.valor = 22;
+    b.siguiente = null;
+    // La lista suma 42; se resta para que el total siga siendo 42.
+    return acc + suma(&a) - 42;
+}

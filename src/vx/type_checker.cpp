@@ -9735,7 +9735,26 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
     }
 
     // Bajar el tipo del lado izquierdo: debe ser STRUCT o CLASS.
-    const Type bt = check_expr(e->base.get());
+    Type bt = check_expr(e->base.get());
+    /* Un PUNTERO a struct o clase se atraviesa solo: `q.x` es `(*q).x`.  En vez
+     * de ensenar a cada sitio de aguas abajo -- leer, asignar, `++`, `&`,
+     * llamar a un metodo -- lo que significa un punto sobre un puntero, se
+     * REESCRIBE el arbol aqui, metiendo la desreferencia que el programador no
+     * escribio.  A partir de este punto no hay ningun caso nuevo: es la forma
+     * que ya funcionaba.
+     *
+     * Un solo nivel, como el `->` de C: para `Punto**` sigue haciendo falta
+     * decirlo a mano, porque ahi la intencion ya no es evidente. */
+    if (bt.kind == PrimitiveKind::PTR && bt.pointee &&
+        (bt.pointee->kind == PrimitiveKind::STRUCT ||
+         bt.pointee->kind == PrimitiveKind::CLASS)) {
+        auto deref = std::make_unique<ast::UnaryExpr>();
+        deref->op = ast::UnOp::Deref;
+        deref->loc = e->base->loc;
+        deref->operand = std::move(e->base);
+        e->base = std::move(deref);
+        bt = check_expr(e->base.get());
+    }
     if (bt.kind == PrimitiveKind::STRUCT) {
         auto it = struct_layouts_.find(bt.struct_name);
         if (it == struct_layouts_.end()) {
