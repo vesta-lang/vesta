@@ -12,6 +12,7 @@
  */
 
 #include "jit/asm_deferred.h"
+#include "jit/frame_addr.h"
 #include "jit/frame_emit.h"
 #include "jit/regalloc_rewrite.h"
 
@@ -460,39 +461,30 @@ struct Lowerer {
     }
 
     /** @brief Offset desde RBP del spill slot @p slot. */
+    /** @brief Geometria del marco: quien sabe situar una ranura. */
+    FrameGeom geom() const noexcept {
+        FrameGeom g;
+        g.fpo = fpo;
+        g.below = frame_below;
+        g.slot_size = SZ;
+        g.total_saved = total_saved;
+        return g;
+    }
+
     int32_t slot_off(uint32_t slot) const noexcept {
-        return -static_cast<int32_t>(SZ * total_saved + SZ * (slot + 1u));
+        return geom().slot_off(slot);
     }
 
-    /** @brief Direccion de memoria de un slot del frame dado su offset
-     *  RBP-relativo @p off (negativo).  En modo normal es @c [rbp+off]; en FPO
-     *  (sin frame pointer) es @c [rsp + frame_below + off], donde RBP no existe
-     *  como base.  Centraliza la conversion para que TODO acceso al frame la
-     *  respete. */
-    MOperand frame_mem(int32_t off) const noexcept {
-        if (fpo) return MOperand::make_mem(MReg::RSP, frame_below + off);
-        return MOperand::make_mem(MReg::RBP, off);
-    }
+    MOperand frame_mem(int32_t off) const noexcept { return geom().mem(off); }
 
-    /**
-     * @brief Tamano del frame en un safepoint call: RBP - RSP.
-     *
-     * El prologo hace @c push rbp; mov rbp,rsp; (push callee-saved)*total_saved;
-     * sub rsp,spill_bytes -> en cualquier CALL interno RSP = RBP - (SZ*total_saved
-     * + spill_bytes).  Lo consume el WALK POR TAMANO DE FRAME del GC de AOT para
-     * reconstruir RBP desde el RSP del llamador sin leer la cadena RBP.  Los
-     * slots GC (slot_off) son RBP-relativos, asi que rbp = sp_llamador + este
-     * valor + 16 en la iteracion; ver @c scan_aot_frames.
-     */
+    /** @copydoc FrameGeom::size_for_scan */
     uint32_t frame_size_for_scan() const noexcept {
-        return SZ * total_saved +
-               (spill_bytes > 0 ? static_cast<uint32_t>(spill_bytes) : 0u);
+        return geom().size_for_scan(spill_bytes > 0 ?
+                                    static_cast<uint32_t>(spill_bytes) : 0u);
     }
 
-    /** @brief Operando de memoria del spill slot @p slot: [rbp+off] (o RSP en
-     *  FPO, via @ref frame_mem). */
     MOperand slot_mem(uint32_t slot) const noexcept {
-        return frame_mem(slot_off(slot));
+        return geom().slot_mem(slot);
     }
 
     /**
