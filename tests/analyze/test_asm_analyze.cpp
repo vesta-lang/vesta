@@ -152,6 +152,44 @@ int main() {
               "aritmetica de registros: no toca memoria");
     }
 
+    // --- por que registro se llega a la memoria ---------------------------
+    // Sirve para decir QUE memoria toca el bloque en vez de "cualquiera".
+    {
+        AsmBlockEffects e = asm_analyze_block("  mov [rdi], rax\n", "x86_64");
+        CHECK(e.accesos.size() == 1 && !e.accesos_incompletos,
+              "un acceso, atribuido");
+        CHECK(!e.accesos.empty() && e.accesos[0].base == "rdi",
+              "la base es rdi");
+        CHECK(!e.accesos.empty() && e.accesos[0].escribe, "y se escribe");
+    }
+    {
+        // El nombre se canonicaliza: el registro es el mismo aunque se nombre
+        // por su mitad baja.
+        AsmBlockEffects e = asm_analyze_block("  mov eax, [ebx]\n", "x86_64");
+        CHECK(!e.accesos.empty() && e.accesos[0].base == "rbx",
+              "ebx canonicaliza a rbx");
+        CHECK(!e.accesos.empty() && !e.accesos[0].escribe, "y solo se lee");
+    }
+    {
+        AsmBlockEffects e =
+            asm_analyze_block("  mov rax, [rbx + rcx*8]\n", "x86_64");
+        CHECK(!e.accesos.empty() && e.accesos[0].base == "rbx",
+              "la base de [base+indice*escala] es la base");
+    }
+    {
+        /* Si el bloque REESCRIBE el registro base antes de usarlo, el acceso ya
+         * no va a donde apuntaba la variable ligada: no se puede atribuir. */
+        AsmBlockEffects e =
+            asm_analyze_block("  mov rdi, rsi\n  mov [rdi], rax\n", "x86_64");
+        CHECK(e.accesos_incompletos,
+              "base reescrita por el propio bloque: no se atribuye");
+    }
+    {
+        // Direccion absoluta: no hay registro base que seguir.
+        AsmBlockEffects e = asm_analyze_block("  mov rax, [0x1000]\n", "x86_64");
+        CHECK(e.accesos_incompletos, "direccion absoluta: sin base");
+    }
+
     if (g_fail == 0)
         std::printf("=== test_asm_analyze: %d checks OK, 0 fallidos ===\n",
                     g_checks);

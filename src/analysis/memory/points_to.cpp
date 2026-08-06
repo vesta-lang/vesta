@@ -211,4 +211,20 @@ AbstractLoc loc_of(const PointsTo &pt, ir::IrValueId ptr, int32_t width) {
     return AbstractLoc{e.kind, e.root, e.off, width};
 }
 
+ir::IrValueId valor_unico_del_hueco(const ir::IrFunction &fn,
+                                    ir::IrValueId slot) {
+    if (slot == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+    ir::IrValueId guardado = ir::IR_NO_VALUE;
+    for (const ir::IrBlock &bb : fn.blocks) {
+        for (const ir::IrInstr &in : bb.instrs) {
+            if (in.op != ir::IrOp::STORE || in.operands.size() < 2) continue;
+            if (in.operands[1] != slot) continue;
+            // Una segunda escritura: el contenido ya depende del camino.
+            if (guardado != ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+            guardado = in.operands[0];
+        }
+    }
+    return guardado;
+}
+
 } // namespace analysis

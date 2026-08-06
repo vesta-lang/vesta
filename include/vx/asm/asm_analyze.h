@@ -73,6 +73,25 @@ struct AsmBlockEffects {
     bool reads_mem = false;
     /// El bloque ESCRIBE memoria.  Ver @c reads_mem.
     bool writes_mem = false;
+
+    /**
+     * @struct Acceso
+     * @brief Un acceso a memoria del bloque: por que registro se llega y si se
+     *        escribe.
+     */
+    struct Acceso {
+        std::string base;    ///< registro base, CANONICO (vacio = no se supo).
+        bool        escribe; ///< true si el acceso escribe.
+    };
+    /// Los accesos a memoria, en orden.  Sirven para decir QUE memoria toca el
+    /// bloque en vez de "cualquiera": quien tenga las ligaduras puede llevar el
+    /// registro base hasta el valor que contiene.
+    std::vector<Acceso> accesos;
+    /// Algun acceso no se pudo atribuir a un registro base (direccion absoluta,
+    /// expresion rara, memoria implicita de la instruccion).  Con esto puesto,
+    /// los @c accesos NO describen todo lo que el bloque toca y hay que
+    /// suponer lo peor.
+    bool accesos_incompletos = false;
     bool has_atomic = false;    ///< prefijo @c lock o instr atomica (barrera).
     bool is_call = false;       ///< @c call / @c syscall alcanzable en el bloque.
     bool touches_flags = false; ///< modifica RFLAGS/condition codes.

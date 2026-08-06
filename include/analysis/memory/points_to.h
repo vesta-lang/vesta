@@ -70,6 +70,25 @@ struct PointsToAnalysis {
 /// whole-root (width 0) para no afirmar bytes concretos que no se probaron.
 effects::AbstractLoc loc_of(const PointsTo &pt, ir::IrValueId ptr, int32_t width);
 
+/**
+ * @brief Valor que contiene el hueco @p slot, si se puede afirmar cual es.
+ *
+ * Responde a "¿que hay guardado aqui?" cuando la respuesta es UNA sola y
+ * segura: exactamente una escritura al hueco en toda la funcion.  Con dos o
+ * mas, el contenido depende de por donde se haya pasado y no se afirma nada.
+ *
+ * Hace falta para llegar de una variable a lo que apunta.  Un `register("rdi")
+ * i64* q` deja el PUNTERO en el registro, pero lo que el compilador tiene a
+ * mano es el hueco de la variable; sin esta consulta, un `asm` que escribe en
+ * `[rdi]` solo puede decir "escribe en algun sitio".
+ *
+ * @param fn    Funcion.
+ * @param slot  Valor del @c ALLOCA.
+ * @return El valor guardado, o @c ir::IR_NO_VALUE si no es unico o no se sabe.
+ */
+ir::IrValueId valor_unico_del_hueco(const ir::IrFunction &fn,
+                                    ir::IrValueId slot);
+
 } // namespace analysis
 
 #endif // ANALYSIS_MEMORY_POINTS_TO_H

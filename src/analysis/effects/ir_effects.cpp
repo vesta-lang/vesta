@@ -16,6 +16,7 @@
 
 #include "ir/ssa_ir.h"
 #include "vx/asm/asm_analyze.h"
+#include "vx/asm/asm_effects.h" // canonicalizar el registro base (por arch)
 
 #include <algorithm>
 
@@ -46,7 +47,9 @@ static int32_t access_bytes(ir::IrType t) {
 // --------------------------------------------------------------------------
 // Efecto local de una instruccion opaca de asm (INLINE_ASM / ASM_MICRO).
 // --------------------------------------------------------------------------
-static EffectAnalysisResult opaque_asm_effects(const ir::IrInstr &ins) {
+static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
+                                              const analysis::PointsTo &pt,
+                                              const ir::IrInstr &ins) {
     EffectAnalysisResult r;
     // func_name lleva el cuerpo NASM (lo pone el lowering de asm).  El analisis
     // de bloque del asm opaco vive en el modulo asm (namespace vx).
@@ -58,10 +61,56 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrInstr &ins) {
      * escritura muerta.  El analisis del asm ya distingue las dos cosas -- la
      * tabla dice que operandos escribe cada instruccion -- y ante cualquier
      * duda marca las dos, asi que esto no afloja nada. */
-    if (e.reads_mem)
-        r.effects.mem.reads.add({AbstractLoc::Kind::Unknown, LOC_GENERIC});
-    if (e.writes_mem)
-        r.effects.mem.writes.add({AbstractLoc::Kind::Unknown, LOC_GENERIC});
+    /* Y se dice QUE memoria cuando se puede.  El bloque llega a ella por un
+     * registro, y ese registro esta LIGADO a una variable del programa, asi que
+     * hay camino: registro -> ligadura -> hueco de la variable -> lo que se
+     * guardo en el.  Con eso, un `asm` que escribe en `[rdi]` afirma la
+     * localizacion de `*q` en vez de "cualquier sitio", y deja de estorbar a lo
+     * que toca OTRA memoria.
+     *
+     * Solo si se pueden atribuir TODOS los accesos: uno sin atribuir significa
+     * que el bloque toca algo que no sabemos nombrar, y entonces la lista no
+     * describe el total.  Igual con las ligaduras que aun no tienen registro
+     * (lo elige el asignador despues): no se pueden emparejar por nombre. */
+    bool localizado = !e.accesos.empty() && !e.accesos_incompletos;
+    std::vector<AbstractLoc> locs_lee, locs_escribe;
+    if (localizado) {
+        for (const vx::AsmBlockEffects::Acceso &a : e.accesos) {
+            /* La lista de ligaduras es de TODA la funcion, no del ambito de
+             * este bloque: si dos variables de ambitos distintos usan el mismo
+             * registro, quedarse con la primera seria elegir a ciegas.  Con mas
+             * de una candidata no se afirma nada. */
+            ir::IrValueId hueco = ir::IR_NO_VALUE;
+            unsigned candidatas = 0;
+            for (const ir::AsmRegBinding &b : fn.asm_reg_bindings)
+                if (!b.reg.empty() && vx::asm_canonical_reg(b.reg) == a.base) {
+                    hueco = b.alloca_value;
+                    ++candidatas;
+                }
+            if (candidatas != 1) { localizado = false; break; }
+            const ir::IrValueId valor =
+                analysis::valor_unico_del_hueco(fn, hueco);
+            if (valor == ir::IR_NO_VALUE) { localizado = false; break; }
+            // Ancho 0: el bloque puede tocar todo el objeto, no un campo.
+            const AbstractLoc l = analysis::loc_of(pt, valor, 0);
+            if (l.kind == AbstractLoc::Kind::Unknown) { localizado = false; break; }
+            if (a.escribe) locs_escribe.push_back(l);
+            else locs_lee.push_back(l);
+        }
+    }
+    if (localizado) {
+        for (const AbstractLoc &l : locs_lee) r.effects.mem.reads.add(l);
+        for (const AbstractLoc &l : locs_escribe) {
+            r.effects.mem.writes.add(l);
+            // Escribir por un puntero es tambien leer por el (ver el analisis).
+            r.effects.mem.reads.add(l);
+        }
+    } else {
+        if (e.reads_mem)
+            r.effects.mem.reads.add({AbstractLoc::Kind::Unknown, LOC_GENERIC});
+        if (e.writes_mem)
+            r.effects.mem.writes.add({AbstractLoc::Kind::Unknown, LOC_GENERIC});
+    }
     if (e.is_call) {
         r.effects.control.kind = ControlKind::Call;
         r.effects.may_io = true; // un call opaco puede hacer cualquier cosa
@@ -306,7 +355,7 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
 
     // ---- Residuo de asm OPACO ----
     case IrOp::INLINE_ASM: case IrOp::ASM_MICRO:
-        return opaque_asm_effects(ins);
+        return opaque_asm_effects(fn, pt, ins);
 
     default:
         // Op no clasificada -> efecto MAXIMO (top): robusto y completo, cubre

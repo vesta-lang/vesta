@@ -19,6 +19,7 @@
 
 #include <cctype>
 #include <cstdlib>
+#include <set>
 
 #include "vx/asm/asm_effects.h"
 
@@ -104,6 +105,33 @@ std::vector<std::string> operandos_de(const std::string &linea,
     return out;
 }
 
+/**
+ * @brief Registro BASE de un operando de memoria, en forma canonica.
+ *
+ * Es el primer identificador dentro de los corchetes, y eso vale igual en las
+ * dos sintaxis: `[rdi]`, `[rbx + rcx*8]` en x86 y `[x0]`, `[x0, #8]`,
+ * `[x0, x1, lsl #3]` en arm64.  La canonicalizacion la hace
+ * @c asm_canonical_reg, que ya despacha por la arquitectura del OBJETIVO.
+ *
+ * @param operando Texto del operando, con sus corchetes.
+ * @return El registro canonico, o cadena vacia si no se pudo determinar
+ *         (direccion absoluta, simbolo, expresion no reconocida).
+ */
+std::string base_de_memoria(const std::string &operando) {
+    const size_t a = operando.find('[');
+    if (a == std::string::npos) return std::string();
+    size_t i = a + 1;
+    while (i < operando.size() && std::isspace((unsigned char)operando[i])) ++i;
+    std::string ident;
+    for (; i < operando.size(); ++i) {
+        const char c = operando[i];
+        if (std::isalnum((unsigned char)c) || c == '_') ident.push_back(c);
+        else break;
+    }
+    if (ident.empty()) return std::string();
+    return asm_canonical_reg(ident);
+}
+
 /// @c true si @p mnem es una rama/salto (para @c has_branch).  Cubre x86
 /// (jmp/jCC/loop) y arm64 (b/b.CC/cbz/cbnz/tbz/tbnz).
 bool es_rama(const std::string &mnem) {
@@ -187,6 +215,7 @@ AsmBlockEffects asm_analyze_block(const std::string &nasm_body,
     AsmBlockEffects res;
     // Marco de pila: seguimos el maximo alcanzado (peor caso), no el neto: un
     // `sub rsp,32; ...; add rsp,32` reserva 32 aunque acabe en 0.
+    std::set<std::string> escritos; // registros que el bloque reescribe
     int64_t cur_frame = 0;
     int64_t max_frame = 0;
 
@@ -291,12 +320,53 @@ AsmBlockEffects asm_analyze_block(const std::string &nasm_body,
                      * -- no lee lo que pisa, y distinguirlo no compensa el
                      * riesgo: si escribe, se cuenta tambien como lectura. */
                     if (escribe) lee = true;
+                    /* Por que registro se llega.  Si no se sabe, el bloque toca
+                     * memoria que no se puede nombrar y hay que decirlo. */
+                    const std::string base =
+                        base_de_memoria(ops[static_cast<size_t>(idx_mem)]);
+                    if (base.empty()) res.accesos_incompletos = true;
+                    else res.accesos.push_back({base, escribe});
+                    /* El registro base tiene que seguir valiendo lo que la
+                     * ligadura dice.  Si el propio bloque lo reescribe antes
+                     * -- `mov rdi, rsi` y luego `[rdi]` --, el acceso ya no va
+                     * a donde apuntaba la variable, y atribuirselo seria
+                     * mentir.  Se anota que registros escribe el bloque y al
+                     * final se descartan los accesos que dependan de ellos. */
+                } else {
+                    res.accesos_incompletos = true;
                 }
+            } else {
+                // Atomica, memoria implicita o mnemonico opaco: no se puede
+                // atribuir a un registro base.
+                res.accesos_incompletos = true;
             }
             if (lee) res.reads_mem = true;
             if (escribe) res.writes_mem = true;
         }
+
+        /* Registros que el bloque ESCRIBE: los que la tabla marca como
+         * implicitos y los operandos que su mascara senala.  Se acumulan para
+         * invalidar despues los accesos cuya base pise el propio bloque. */
+        for (const std::string &w : eff.implicit_write) escritos.insert(w);
+        {
+            const std::vector<std::string> ops = operandos_de(line, mnem);
+            for (size_t k = 0; k < ops.size() && k < 8; ++k)
+                if (((eff.operand_write_mask >> k) & 1u) != 0u &&
+                    ops[k].find('[') == std::string::npos) {
+                    const std::string c = asm_canonical_reg(ops[k]);
+                    if (!c.empty()) escritos.insert(c);
+                }
+        }
     }
+
+    /* Un acceso cuya base la reescribe el propio bloque ya no apunta a donde
+     * decia la ligadura: se descarta la lista entera (no se sabe cuanto de lo
+     * que toca queda sin describir). */
+    for (const AsmBlockEffects::Acceso &a : res.accesos)
+        if (escritos.count(a.base)) {
+            res.accesos_incompletos = true;
+            break;
+        }
 
     res.explicit_stack_bytes = max_frame;
     return res;
