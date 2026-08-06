@@ -6512,8 +6512,14 @@ void TypeChecker::check_stmt(ast::Stmt *s, const Type &fn_return_type) {
             // Clase de registro: `reg` = el compilador elige; concreta =
             // canonica x86; `mem` diferido.
             std::string canon;
-            if (op.reg_class == "reg") {
-                canon = "reg"; // allocator-chosen (backend lo asigna)
+            if (op.reg_class == "reg" || op.reg_class == "xmm" ||
+                op.reg_class == "ymm" || op.reg_class == "zmm") {
+                // Clases sin numero: las asigna el compilador.  `reg` para
+                // enteros y `xmm`/`ymm`/`zmm` para vectoriales -- nombrar el
+                // registro fisico a mano le quita al asignador la posibilidad
+                // de usar los que estan libres, y obliga a mover valores que
+                // ya estaban donde tocaba.
+                canon = op.reg_class;
             } else if (op.reg_class == "mem") {
                 diags_.error(op.loc,
                              "asm: la clase 'mem' aun no esta soportada; usa "

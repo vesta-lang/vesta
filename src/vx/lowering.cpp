@@ -13937,8 +13937,15 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     // Registros YA reservados: los operandos con clase CONCRETA + los clobbers
     // explicitos.  Los operandos `reg` (allocator) eligen entre los libres.
     std::set<std::string> used_regs;
+    /// Clases sin numero: el compilador elige el registro.  Ademas de `reg`
+    /// (enteros) estan las vectoriales, que antes obligaban a escribir el
+    /// registro fisico -- y con el escrito a mano el asignador no puede usar
+    /// los que estan libres.
+    auto clase_automatica = [](const std::string &c) -> bool {
+        return c == "reg" || c == "xmm" || c == "ymm" || c == "zmm";
+    };
     for (const auto &op : s->operands) {
-        if (op.reg_class != "reg" && op.reg_class != "mem") {
+        if (!clase_automatica(op.reg_class) && op.reg_class != "mem") {
             const std::string c = vx::asm_canonical_reg(op.reg_class);
             if (!c.empty()) used_regs.insert(c);
         }
@@ -13958,7 +13965,28 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         std::string reg;
         bool reg_auto = false;
         int ph_index = -1;
-        if (op.reg_class == "reg") {
+        if (op.reg_class == "xmm" || op.reg_class == "ymm" ||
+            op.reg_class == "zmm") {
+            /* Vectorial AUTO: mismo trato que `reg` pero eligiendo del banco
+             * ancho.  El ancho lo da la clase (xmm/ymm/zmm) y el numero lo
+             * pone el compilador, cogiendo el primero que nadie use. */
+            static const int kNumVec = 16;
+            for (int i = 0; i < kNumVec; ++i) {
+                const std::string cand = op.reg_class + std::to_string(i);
+                if (used_regs.count(cand) == 0) {
+                    reg = cand;
+                    break;
+                }
+            }
+            if (reg.empty()) {
+                diags_.error(op.loc,
+                             "asm: sin registros vectoriales libres para el "
+                             "operando '" + op.reg_class +
+                                 "' (demasiados operandos/clobbers)");
+                continue;
+            }
+            used_regs.insert(reg);
+        } else if (op.reg_class == "reg") {
             // operando `reg` AUTO.  El cuerpo lo referencia por el
             // placeholder $N; el JIT/AOT lo rellenan POST-regalloc con el
             // registro OPTIMO que elige el RA (constraint register-required,

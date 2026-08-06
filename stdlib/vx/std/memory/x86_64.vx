@@ -1,0 +1,270 @@
+namespace std.memory.x86_64;
+
+/**
+ * @file x86_64.vx
+ * @brief Copias anchas para x86-64.
+ *
+ * La mitad de x86-64 de `std.memory`: el fichero de arriba tiene lo portable y
+ * este aporta lo que solo existe aqui.  `std.memory` re-exporta el de la
+ * arquitectura que toque, asi que quien escribe `import std.memory` recibe lo
+ * suyo sin mencionarlo -- mismo reparto que en `std.syscall`.
+ *
+ * Cada version es LINEAL: sin preguntar por el procesador y sin ramas.  Quien
+ * elige entre ellas es `memcpy`, que ya reparte por tamano y aprovecha para
+ * repartir tambien por juego de instrucciones.  Asi cada una se puede medir
+ * por separado, el compilador puede inlinearlas, y el cuerpo queda diminuto.
+ *
+ * Las tres hacen EXACTAMENTE lo mismo y solo cambia el ancho del registro y el
+ * nombre de la instruccion:
+ *
+ *     SSE2     16 B   movdqu
+ *     AVX2     32 B   vmovdqu
+ *     AVX-512  64 B   vmovdqu64
+ *
+ * Que se parezcan tanto es buena senal: el algoritmo es uno solo.
+ *
+ * Estas funciones usan `asm`, que el INTERPRETE ignora en silencio.  No hace
+ * falta condicionarlas por motor: solo se llaman desde la variante de `memcpy`
+ * que ya eligio motor, y bajo el interprete esa variante ni las menciona.
+ */
+
+import std.types only usize;
+
+/// Bits del bitmask que devuelve `cpu_features()`.  Los consulta `memcpy` una
+/// vez por copia; la rama la predice el procesador sin fallar, porque en una
+/// misma maquina siempre sale la misma.
+public const u64 BIT_AVX2 = 1 << 4;
+/// @copydoc BIT_AVX2
+public const u64 BIT_AVX512F = 1 << 7;
+
+/**
+ * @brief Copia entre 65 y 128 bytes con registros de 128 bits (SSE2).
+ *
+ * El rango se cubre con dos mitades que se SOLAPAN por el medio -- una desde
+ * el principio y otra que termina en el final -- sin bucle y sin cola.  Los
+ * bytes del solape se escriben dos veces con el mismo valor, lo que no cuesta
+ * nada y ahorra la cola, que en una copia corta es lo caro: una prediccion de
+ * salto fallada vale mas que la copia entera.
+ *
+ * Se carga y se guarda de uno en uno en vez de tener varios registros vivos a
+ * la vez: menos presion para el asignador y menos dependencias, y en la
+ * practica el procesador solapa los accesos igual.
+ *
+ * Se usa la forma NO alineada.  La alineada exige que las dos direcciones sean
+ * multiplo del ancho y en su dia era bastante mas rapida; hoy la diferencia
+ * casi ha desaparecido, y comprobar la alineacion cuesta ramas que en una
+ * copia corta no se amortizan.
+ *
+ * Los registros los elige el COMPILADOR (`reg` y `xmm`, sin numero): escribir
+ * el registro fisico le quitaria al asignador la posibilidad de usar los que
+ * estan libres.
+ *
+ * SSE2 es BASE en x86-64, asi que esta version vale siempre.
+ *
+ * Los rangos NO pueden solaparse.  PRECONDICION: @p n entre 65 y 128; no se
+ * comprueba a proposito -- quien enruta por tamano es `memcpy`, y repetir la
+ * comprobacion aqui anadiria a cada copia ramas que el llamante ya resolvio.
+ *
+ * @param dst Destino.
+ * @param src Origen.
+ * @param n Numero de bytes, entre 65 y 128.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memcpy_small_sse2(u8* dst, u8* src, usize n) {
+    u8* fin_d = dst + n - 64;
+    u8* fin_s = src + n - 64;
+    asm (
+        reg d = dst,
+        reg s = src,
+        reg fd = fin_d,
+        reg fs = fin_s,
+        xmm v,
+    ) {
+        movdqu v, [s + 0x00]
+        movdqu [d + 0x00], v
+        movdqu v, [s + 0x10]
+        movdqu [d + 0x10], v
+        movdqu v, [s + 0x20]
+        movdqu [d + 0x20], v
+        movdqu v, [s + 0x30]
+        movdqu [d + 0x30], v
+        movdqu v, [fs + 0x00]
+        movdqu [fd + 0x00], v
+        movdqu v, [fs + 0x10]
+        movdqu [fd + 0x10], v
+        movdqu v, [fs + 0x20]
+        movdqu [fd + 0x20], v
+        movdqu v, [fs + 0x30]
+        movdqu [fd + 0x30], v
+    }
+}
+
+/**
+ * @brief Lo mismo con registros de 256 bits (AVX2): cuatro accesos.
+ *
+ * Misma estructura que @ref memcpy_small_sse2 -- dos mitades que se solapan,
+ * cargando y guardando de uno en uno -- con el doble de ancho.
+ *
+ * PRECONDICION: @p n entre 65 y 128, y el procesador con AVX2.
+ *
+ * @param dst Destino.
+ * @param src Origen.
+ * @param n Numero de bytes, entre 65 y 128.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memcpy_small_avx2(u8* dst, u8* src, usize n) {
+    u8* fin_d = dst + n - 64;
+    u8* fin_s = src + n - 64;
+    asm (
+        reg d = dst,
+        reg s = src,
+        reg fd = fin_d,
+        reg fs = fin_s,
+        ymm v,
+    ) {
+        vmovdqu v, [s + 0x00]
+        vmovdqu [d + 0x00], v
+        vmovdqu v, [s + 0x20]
+        vmovdqu [d + 0x20], v
+        vmovdqu v, [fs + 0x00]
+        vmovdqu [fd + 0x00], v
+        vmovdqu v, [fs + 0x20]
+        vmovdqu [fd + 0x20], v
+    }
+}
+
+/**
+ * @brief Lo mismo con registros de 512 bits (AVX-512): dos accesos bastan.
+ *
+ * Con 64 bytes por acceso, las dos mitades que se solapan cubren el tramo
+ * entero sin mas.  Misma estructura que @ref memcpy_small_sse2.
+ *
+ * PRECONDICION: @p n entre 65 y 128, y el procesador con AVX-512F.
+ *
+ * @param dst Destino.
+ * @param src Origen.
+ * @param n Numero de bytes, entre 65 y 128.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memcpy_small_avx512(u8* dst, u8* src, usize n) {
+    u8* fin_d = dst + n - 64;
+    u8* fin_s = src + n - 64;
+    asm (
+        reg d = dst,
+        reg s = src,
+        reg fd = fin_d,
+        reg fs = fin_s,
+        zmm v,
+    ) {
+        vmovdqu64 v, [s]
+        vmovdqu64 [d], v
+        vmovdqu64 v, [fs]
+        vmovdqu64 [fd], v
+    }
+}
+
+/**
+ * @brief Igual que @ref memcpy_small_sse2 pero con accesos ALINEADOS.
+ *
+ * La forma alineada (`movdqa`) exige que la direccion sea multiplo del ancho
+ * del registro.  En su dia era bastante mas rapida que la no alineada; hoy la
+ * diferencia casi ha desaparecido en copias cortas, pero sigue contando cuando
+ * el bloque es grande o el bus va justo -- y en un objetivo antiguo cuenta
+ * bastante.
+ *
+ * OJO con la segunda mitad: el truco del solapamiento la coloca en
+ * `n - 64`, que NO es multiplo del ancho aunque los punteros si lo sean.  Esa
+ * parte va con la forma no alineada a proposito; forzar ahi la alineada seria
+ * una excepcion del procesador, no un fallo silencioso.
+ *
+ * PRECONDICION: @p dst y @p src multiplos de 16, y @p n entre 65 y 128.  No se
+ * comprueba: quien llama sabe si sus buffers lo estan, y comprobarlo aqui
+ * costaria las ramas que esta version quiere ahorrar.
+ *
+ * @param dst Destino, alineado a 16.
+ * @param src Origen, alineado a 16.
+ * @param n Numero de bytes, entre 65 y 128.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void align_memcpy_small_sse2(u8* dst, u8* src, usize n) {
+    u8* fin_d = dst + n - 64;
+    u8* fin_s = src + n - 64;
+    asm (
+        reg d = dst,
+        reg s = src,
+        reg fd = fin_d,
+        reg fs = fin_s,
+        xmm v,
+    ) {
+        movdqa v, [s + 0x00]
+        movdqa [d + 0x00], v
+        movdqa v, [s + 0x10]
+        movdqa [d + 0x10], v
+        movdqa v, [s + 0x20]
+        movdqa [d + 0x20], v
+        movdqa v, [s + 0x30]
+        movdqa [d + 0x30], v
+        movdqu v, [fs + 0x00]
+        movdqu [fd + 0x00], v
+        movdqu v, [fs + 0x10]
+        movdqu [fd + 0x10], v
+        movdqu v, [fs + 0x20]
+        movdqu [fd + 0x20], v
+        movdqu v, [fs + 0x30]
+        movdqu [fd + 0x30], v
+    }
+}
+
+/**
+ * @brief Igual que @ref memcpy_small_avx2 con accesos alineados a 32.
+ * @copydetails align_memcpy_small_sse2
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void align_memcpy_small_avx2(u8* dst, u8* src, usize n) {
+    u8* fin_d = dst + n - 64;
+    u8* fin_s = src + n - 64;
+    asm (
+        reg d = dst,
+        reg s = src,
+        reg fd = fin_d,
+        reg fs = fin_s,
+        ymm v,
+    ) {
+        vmovdqa v, [s + 0x00]
+        vmovdqa [d + 0x00], v
+        vmovdqa v, [s + 0x20]
+        vmovdqa [d + 0x20], v
+        vmovdqu v, [fs + 0x00]
+        vmovdqu [fd + 0x00], v
+        vmovdqu v, [fs + 0x20]
+        vmovdqu [fd + 0x20], v
+    }
+}
+
+/**
+ * @brief Igual que @ref memcpy_small_avx512 con accesos alineados a 64.
+ * @copydetails align_memcpy_small_sse2
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void align_memcpy_small_avx512(u8* dst, u8* src, usize n) {
+    u8* fin_d = dst + n - 64;
+    u8* fin_s = src + n - 64;
+    asm (
+        reg d = dst,
+        reg s = src,
+        reg fd = fin_d,
+        reg fs = fin_s,
+        zmm v,
+    ) {
+        vmovdqa64 v, [s]
+        vmovdqa64 [d], v
+        vmovdqu64 v, [fs]
+        vmovdqu64 [fd], v
+    }
+}

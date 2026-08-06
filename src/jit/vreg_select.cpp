@@ -730,7 +730,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * como host-slot corriente; el lift ya emitio sus LOAD/STORE). */
             if (!alloca_in_real_asm[b.alloca_value])
                 continue;
-            if (b.is_vector) { /* banco FP no asignable en regalloc v1 */
+            if (b.is_vector) { /* banco ancho: lo reparte rbank, no este RA */
                 vreg_dbg(fn.name.c_str(), "inline-asm(vector-bind)");
                 return false;
             }
