@@ -37,6 +37,40 @@ import std.comptime only inject;
 public const u64 BIT_AVX2 = 1 << 4;
 /// @copydoc BIT_AVX2
 public const u64 BIT_AVX512F = 1 << 7;
+/// @copydoc BIT_AVX2
+///
+/// ERMS: el procesador declara que su `rep movsb` va por lineas de cache.  Sin
+/// este bit, `rep movsb` sigue estando -- es de siempre -- pero es lento en los
+/// tamanos que no son enormes, asi que la diferencia importa.
+public const u64 BIT_ERMS = 1 << 8;
+
+/// Lo que el procesador ha dicho que sabe hacer, o 0 si aun no se le ha
+/// preguntado.  Ese 0 no significa "no sabe nada": significa "sin averiguar".
+u64 __rasgos = 0;
+/// Si ya se le pregunto.  Va aparte del valor porque un procesador podria
+/// contestar 0 legitimamente, y entonces el valor no distinguiria los dos
+/// casos.
+bool __rasgos_sabidos = false;
+
+/**
+ * @brief Averigua que sabe hacer el procesador, una sola vez.
+ *
+ * Nada de dar por sentado el juego de instrucciones: se le pregunta y se
+ * guarda la respuesta.  Preguntar es caro -- CPUID serializa la ejecucion --
+ * asi que las copias no lo hacen cada vez, llaman aqui.
+ *
+ * Es idempotente y no hace falta llamarla antes de nada: la primera copia que
+ * necesite saberlo la llama por su cuenta.
+ *
+ * @return El bitmask con los BIT_* de arriba.
+ */
+public u64 init_cpuid() {
+    if (!__rasgos_sabidos) {
+        __rasgos = cpu_features();
+        __rasgos_sabidos = true;
+    }
+    return __rasgos;
+}
 
 /**
  * @brief Genera el cuerpo de una copia SOLAPADA de @p bytes + @p bytes.
@@ -292,5 +326,619 @@ public void memcpy_small_avx512_aligned(u8* dst, u8* src, usize n) {
         zmm v,
     ) {
         inject(gen_solapada("vmovdqa64", 64, 64))
+    }
+}
+
+/**
+ * @brief Genera el cuerpo de una copia RECTA de @p bytes de @p s a @p d.
+ *
+ * Es el bloque que repite el bucle de las copias grandes.  Emite, para
+ * `bytes / ancho` accesos:
+ *
+ *     <mn> v0, [s + 0]           ; TODAS las cargas primero
+ *     <mn> v1, [s + ancho]
+ *     ...
+ *     <mn> vN, [s + N*ancho]
+ *     <mn> [d + 0], v0           ; y DESPUES todas las escrituras
+ *     <mn> [d + ancho], v1
+ *     ...
+ *     <mn> [d + N*ancho], vN
+ *
+ * Mismo criterio que @ref gen_solapada -- emite exactamente las instrucciones
+ * que se escribirian, solo evita repetirlas -- pero sin la segunda mitad,
+ * porque aqui el que avanza es el puntero y no el desplazamiento.
+ *
+ * @param mn Mnemonico.
+ * @param ancho Bytes por acceso: 16, 32 o 64.
+ * @param bytes Bytes del bloque.  Multiplo de @p ancho.
+ * @param d Nombre del operando con la direccion de destino.
+ * @param s Nombre del operando con la direccion de origen.
+ * @return El cuerpo del bloque asm, listo para empalmar.
+ */
+comptime string gen_bloque(string mnl, string mne, i64 ancho, i64 bytes,
+                           string d, string s) {
+    static_assert(ancho == 16 || ancho == 32 || ancho == 64,
+                  "el ancho tiene que ser el de un registro real: 16, 32 o 64");
+    static_assert(bytes % ancho == 0,
+                  "el bloque tiene que ser multiplo del ancho del registro");
+    i64 bloques = bytes / ancho;
+    static_assert(bloques <= 16,
+                  "no hay tantos registros vectoriales: el bloque necesita uno "
+                  "por acceso");
+    string out = "";
+    // TODAS las cargas primero y TODAS las escrituras despues, cada acceso en
+    // su propio registro.  Alternar carga y escritura sobre un mismo registro
+    // encadenaria cada acceso con el anterior por una dependencia que el
+    // algoritmo no tiene: la copia no necesita haber escrito el bloque 0 para
+    // leer el 1.  Separadas, el procesador puede tener las ocho lecturas en
+    // vuelo a la vez y las escrituras llegan cuando llegan.
+    for (i64 k = 0; k < bloques; k++) {
+        i64 o = k * ancho;
+        out += "${mnl} v${k}, [${s} + ${o}]\n";
+    }
+    for (i64 k = 0; k < bloques; k++) {
+        i64 o = k * ancho;
+        out += "${mne} [${d} + ${o}], v${k}\n";
+    }
+    return out;
+}
+
+/**
+ * @brief Genera el cuerpo COMPLETO de una copia grande: bucle + cola solapada.
+ *
+ * El patron es siempre el mismo y solo cambian el ancho y el mnemonico, asi
+ * que se escribe una vez:
+ *
+ *     bucle:  <BLOQUE de `bloque` bytes desde s a d>
+ *             add s, bloque ; add d, bloque
+ *             cmp s, fs ; jb bucle
+ *             <BLOQUE de `bloque` bytes desde fs a fd>   ; cola, solapando
+ *
+ * y cada BLOQUE, a su vez (@ref gen_bloque), es
+ *
+ *     <mn> v0, [s + 0]        ; TODAS las cargas
+ *     <mn> v1, [s + ancho]
+ *     ...
+ *     <mn> [d + 0], v0        ; y DESPUES todas las escrituras
+ *     <mn> [d + ancho], v1
+ *     ...
+ *
+ * No hay contador: la condicion del bucle es el propio puntero de origen
+ * contra donde empieza la cola.  Llevar la cuenta aparte obligaria a restarla
+ * y compararla cada vuelta, y esa cuenta no dice nada que el puntero no diga
+ * ya.
+ *
+ * La cola NO es un caso aparte ni un bucle byte a byte: es otro bloque igual
+ * que termina justo en el final del rango.  Reescribe unos bytes que ya
+ * estaban bien, que no cuesta nada, y a cambio no hay resto que tratar.
+ *
+ * @param mn Mnemonico.
+ * @param ancho Bytes por acceso: 16, 32 o 64.
+ * @param bloque Bytes por vuelta.  Multiplo de @p ancho.
+ * @return El cuerpo del bloque asm, listo para empalmar.
+ */
+comptime string gen_grande(string mnl, string mne, string mne_cola, i64 ancho,
+                           i64 bloque, i64 adelanto, string cierre) {
+    i64 accesos = bloque / ancho;
+    i64 mitad = accesos / 2;
+    string out = "bucle:\n";
+    // Pedir con antelacion lo de vueltas siguientes, si se pide.  Con memoria
+    // FRiA -- una copia de varios MB no cabe en cache -- el procesador va a
+    // buscar cada linea cuando la necesita y espera; pedirla antes solapa esa
+    // espera con el trabajo de esta vuelta.  Con datos ya calientes no aporta
+    // nada, de ahi que sea un parametro y no algo fijo.
+    if (adelanto > 0) {
+        out += "prefetcht0 [s + ${adelanto}]\n";
+    }
+    for (i64 k = 0; k < mitad; k++) {
+        i64 o = k * ancho;
+        out += "${mnl} v${k}, [s + ${o}]\n";
+    }
+    for (i64 k = 0; k < mitad; k++) {
+        i64 o = k * ancho;
+        out += "${mne} [d + ${o}], v${k}\n";
+    }
+    // Los punteros avanzan AQUi, a mitad del bloque, y no al final: asi el
+    // calculo de las direcciones de la vuelta siguiente arranca antes y se
+    // solapa con lo que queda de esta.  La segunda mitad compensa el avance
+    // restandolo de su desplazamiento, asi que toca exactamente los mismos
+    // bytes que si no se hubiera movido nada.
+    out += "add s, ${bloque}\n";
+    out += "add d, ${bloque}\n";
+    for (i64 k = mitad; k < accesos; k++) {
+        i64 o = k * ancho - bloque;
+        out += "${mnl} v${k}, [s + ${o}]\n";
+    }
+    for (i64 k = mitad; k < accesos; k++) {
+        i64 o = k * ancho - bloque;
+        out += "${mne} [d + ${o}], v${k}\n";
+    }
+    out += "cmp s, fs\n";
+    out += "jb bucle\n";
+    // Cola: un bloque igual que termina en el final del rango.
+    /* La cola arranca en `n - bloque`, o sea donde caiga: su alineacion
+     * depende de `n` y no la controla nadie.  Por eso lleva su propio
+     * mnemonico de escritura -- una instruccion que EXIJA alineacion no puede
+     * usarse aqui salvo que el llamante garantice tambien el tamano. */
+    out += gen_bloque(mnl, mne_cola, ancho, bloque, "fd", "fs");
+    // Cierre: `vzeroupper` cuando se han usado registros anchos, `sfence`
+    // cuando las escrituras han sido no temporales.  Va aqui y no en cada
+    // funcion porque es parte del patron, no del cuerpo.
+    if (cierre != "") {
+        out += "${cierre}\n";
+    }
+    return out;
+}
+
+/**
+ * @brief Copia grande con registros de 128 bits (SSE2): 128 bytes por vuelta.
+ *
+ * Ocho accesos por vuelta, que es donde los registros vectoriales empiezan a
+ * rendir: el bucle deja de estar dominado por su propia cuenta y salto.
+ *
+ * El cuerpo lo genera @ref gen_grande con este patron:
+ *
+ *     bucle:
+ *       movdqu v0, [s + 0]        ; las OCHO cargas primero
+ *       movdqu v1, [s + 16]
+ *       ...                       ; hasta v7, de 16 en 16
+ *       movdqu v7, [s + 112]
+ *       movdqu [d + 0], v0        ; y DESPUES las ocho escrituras
+ *       ...
+ *       movdqu [d + 112], v7
+ *       add s, 128
+ *       add d, 128
+ *       cmp s, fs                 ; el puntero ES la condicion
+ *       jb bucle
+ *       movdqu v0, [fs + 0]       ; cola: otro bloque igual que
+ *       ...                       ; termina en el final del rango
+ *       movdqu [fd + 112], v7
+ *
+ * Las cargas van TODAS antes que las escrituras, cada una a su registro:
+ * alternarlas sobre uno solo encadenaria cada acceso con el anterior por una
+ * dependencia que la copia no tiene.
+ *
+ * PRECONDICION: @p n al menos 128 (el tamano de la vuelta).  Con menos, la
+ * cola solapada arrancaria por debajo del principio.  Quien reparte por tamano
+ * es `memcpy`; comprobarlo aqui anadiria la rama que el llamante ya resolvio.
+ *
+ * @param dst Destino.
+ * @param src Origen.
+ * @param n Numero de bytes, 128 o mas.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memcpy_medium_sse2(u8* dst, u8* src, usize n) {
+    u8* fin_d = dst + n - 128;
+    u8* fin_s = src + n - 128;
+    asm (
+        reg d = dst,
+        reg s = src,
+        reg fd = fin_d,
+        reg fs = fin_s,
+        xmm v0,
+        xmm v1,
+        xmm v2,
+        xmm v3,
+        xmm v4,
+        xmm v5,
+        xmm v6,
+        xmm v7,
+    ) {
+        inject(gen_grande("movdqu", "movdqu", "movdqu", 16, 128, 0, ""))
+    }
+}
+
+/**
+ * @brief Copia grande con registros de 256 bits (AVX2): 256 bytes por vuelta.
+ *
+ * Mismo patron que @ref memcpy_medium_sse2 con el doble de ancho por acceso,
+ * asi que la misma vuelta mueve el doble.  Aqui es donde AVX2 se nota.
+ *
+ *     bucle:
+ *       vmovdqu v0, [s + 0]       ; las OCHO cargas primero
+ *       vmovdqu v1, [s + 32]
+ *       ...                       ; hasta v7, de 32 en 32
+ *       vmovdqu v7, [s + 224]
+ *       vmovdqu [d + 0], v0       ; y DESPUES las ocho escrituras
+ *       ...
+ *       vmovdqu [d + 224], v7
+ *       add s, 256
+ *       add d, 256
+ *       cmp s, fs                 ; el puntero ES la condicion
+ *       jb bucle
+ *       vmovdqu v0, [fs + 0]      ; cola: otro bloque igual que
+ *       ...                       ; termina en el final del rango
+ *       vmovdqu [fd + 224], v7
+ *
+ * PRECONDICION: @p n al menos 256, y el procesador con AVX2.
+ *
+ * @param dst Destino.
+ * @param src Origen.
+ * @param n Numero de bytes, 256 o mas.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memcpy_medium_avx2(u8* dst, u8* src, usize n) {
+    u8* fin_d = dst + n - 256;
+    u8* fin_s = src + n - 256;
+    asm (
+        reg d = dst,
+        reg s = src,
+        reg fd = fin_d,
+        reg fs = fin_s,
+        ymm v0,
+        ymm v1,
+        ymm v2,
+        ymm v3,
+        ymm v4,
+        ymm v5,
+        ymm v6,
+        ymm v7,
+    ) {
+        inject(gen_grande("vmovdqu", "vmovdqu", "vmovdqu", 32, 256, 0, "vzeroupper"))
+    }
+}
+
+/**
+ * @brief Copia grande con registros de 512 bits (AVX-512): 512 por vuelta.
+ *
+ * Mismo patron que @ref memcpy_medium_sse2 con el ancho maximo:
+ *
+ *     bucle:
+ *       vmovdqu64 v0, [s + 0]     ; las OCHO cargas primero
+ *       vmovdqu64 v1, [s + 64]
+ *       ...                       ; hasta v7, de 64 en 64
+ *       vmovdqu64 v7, [s + 448]
+ *       vmovdqu64 [d + 0], v0     ; y DESPUES las ocho escrituras
+ *       ...
+ *       vmovdqu64 [d + 448], v7
+ *       add s, 512
+ *       add d, 512
+ *       cmp s, fs                 ; el puntero ES la condicion
+ *       jb bucle
+ *       vmovdqu64 v0, [fs + 0]    ; cola: otro bloque igual que
+ *       ...                       ; termina en el final del rango
+ *       vmovdqu64 [fd + 448], v7
+ *
+ * PRECONDICION: @p n al menos 512, y el procesador con AVX-512F.
+ *
+ * @param dst Destino.
+ * @param src Origen.
+ * @param n Numero de bytes, 512 o mas.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memcpy_medium_avx512(u8* dst, u8* src, usize n) {
+    u8* fin_d = dst + n - 512;
+    u8* fin_s = src + n - 512;
+    asm (
+        reg d = dst,
+        reg s = src,
+        reg fd = fin_d,
+        reg fs = fin_s,
+        zmm v0,
+        zmm v1,
+        zmm v2,
+        zmm v3,
+        zmm v4,
+        zmm v5,
+        zmm v6,
+        zmm v7,
+    ) {
+        inject(gen_grande("vmovdqu64", "vmovdqu64", "vmovdqu64", 64, 512, 0, "vzeroupper"))
+    }
+}
+
+/**
+ * @brief Copia @p n bytes con `rep movsb`.
+ *
+ * Una sola instruccion mueve el rango entero.  No es la reliquia que parece:
+ * en los procesadores que anuncian ERMS va por lineas de cache completas y en
+ * los tamanos grandes le gana a un bucle vectorial escrito a mano, ademas de
+ * ocupar tres instrucciones en lugar de decenas.  En los que NO lo anuncian es
+ * lento para tamanos pequenos, por eso quien reparte solo la elige cuando el
+ * procesador lo dice -- de ahi que haga falta preguntarselo y no suponerlo.
+ *
+ * Los tres registros son los que la instruccion EXIGE, asi que aqui se nombran
+ * a proposito en lugar de dejar elegir: no hay eleccion que tomar.
+ *
+ * @param dst Destino.
+ * @param src Origen.
+ * @param n Numero de bytes.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memcpy_erms(u8* dst, u8* src, usize n) {
+    asm ( rdi d = dst, rsi s = src, rcx c = n, ) {
+        rep movsb
+    }
+}
+
+/**
+ * @brief Rellena @p n bytes con @p val usando `rep stosb`.
+ *
+ * La gemela de @ref memcpy_erms para el relleno, con las mismas razones.
+ *
+ * @param dst Destino.
+ * @param val Byte con el que rellenar.
+ * @param n Numero de bytes.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memset_erms(u8* dst, u8 val, usize n) {
+    u64 v = (u64) val;
+    asm ( rdi d = dst, rax a = v, rcx c = n, ) {
+        rep stosb
+    }
+}
+
+/**
+ * @brief Igual que @ref memcpy_medium_sse2 pero con accesos ALINEADOS.
+ *
+ * Se emite el MISMO patron y las mismas instrucciones; solo cambia la forma
+ * del acceso (`movdqa` en vez de `movdqu`):
+ *
+ *     bucle:
+ *       movdqa v0, [s + 0]        ; las OCHO cargas primero
+ *       ...                       ; hasta v7, de 16 en 16
+ *       movdqa [d + 0], v0        ; y DESPUES las ocho escrituras
+ *       ...
+ *       add s, 128
+ *       add d, 128
+ *       cmp s, fs
+ *       jb bucle
+ *       movdqa v0, [fs + 0]       ; cola, solapando
+ *       ...
+ *
+ * La alineacion se conserva SOLA dentro del bucle: el puntero avanza de 128 en
+ * 128 y 128 es multiplo de 16, asi que si entra alineado sigue alineado.  Lo
+ * que no se conserva solo es la COLA: arranca en `n - 128`, de modo que hace
+ * falta
+ *
+ *     (n - 128) % 16 == 0
+ *
+ * y eso equivale a pedir `n % 16 == 0` UNICAMENTE porque 128 es multiplo de
+ * 16.  Con una vuelta que no fuera multiplo del ancho las dos condiciones
+ * dejarian de ser la misma, asi que la regla buena es la de arriba.
+ *
+ * PRECONDICION: @p dst, @p src y @p n, los tres multiplos de 16, y @p n al
+ * menos 128.  No se comprueba en ejecucion: costaria las ramas que esta
+ * version viene a ahorrar, y un valor mal alineado da EXCEPCION del procesador
+ * -- se ve en el acto, no es un fallo silencioso.
+ *
+ * @param dst Destino, multiplo de 16.
+ * @param src Origen, multiplo de 16.
+ * @param n Numero de bytes, multiplo de 16 y al menos 128.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memcpy_medium_sse2_aligned(u8* dst, u8* src, usize n) {
+    u8* fin_d = dst + n - 128;
+    u8* fin_s = src + n - 128;
+    asm (
+        reg d = dst,
+        reg s = src,
+        reg fd = fin_d,
+        reg fs = fin_s,
+        xmm v0,
+        xmm v1,
+        xmm v2,
+        xmm v3,
+        xmm v4,
+        xmm v5,
+        xmm v6,
+        xmm v7,
+    ) {
+        inject(gen_grande("movdqa", "movdqa", "movdqa", 16, 128, 0, ""))
+    }
+}
+
+/**
+ * @brief Igual que @ref memcpy_medium_avx2 con accesos alineados a 32.
+ *
+ * Mismo patron con `vmovdqa`:
+ *
+ *     bucle:
+ *       vmovdqa v0, [s + 0]       ; y hasta v7, de 32 en 32
+ *       ...
+ *       vmovdqa [d + 0], v0       ; despues las ocho escrituras
+ *       ...
+ *       add s, 256 ; add d, 256 ; cmp s, fs ; jb bucle
+ *       vmovdqa v0, [fs + 0]      ; cola, solapando
+ *       ...
+ *
+ * @copydetails memcpy_medium_sse2_aligned
+ *
+ * @param dst Destino, multiplo de 32.
+ * @param src Origen, multiplo de 32.
+ * @param n Numero de bytes, multiplo de 32 y al menos 256.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memcpy_medium_avx2_aligned(u8* dst, u8* src, usize n) {
+    u8* fin_d = dst + n - 256;
+    u8* fin_s = src + n - 256;
+    asm (
+        reg d = dst,
+        reg s = src,
+        reg fd = fin_d,
+        reg fs = fin_s,
+        ymm v0,
+        ymm v1,
+        ymm v2,
+        ymm v3,
+        ymm v4,
+        ymm v5,
+        ymm v6,
+        ymm v7,
+    ) {
+        inject(gen_grande("vmovdqa", "vmovdqa", "vmovdqa", 32, 256, 0, "vzeroupper"))
+    }
+}
+
+/**
+ * @brief Igual que @ref memcpy_medium_avx512 con accesos alineados a 64.
+ *
+ * Mismo patron con `vmovdqa64`:
+ *
+ *     bucle:
+ *       vmovdqa64 v0, [s + 0]     ; y hasta v7, de 64 en 64
+ *       ...
+ *       vmovdqa64 [d + 0], v0     ; despues las ocho escrituras
+ *       ...
+ *       add s, 512 ; add d, 512 ; cmp s, fs ; jb bucle
+ *       vmovdqa64 v0, [fs + 0]    ; cola, solapando
+ *       ...
+ *
+ * @copydetails memcpy_medium_sse2_aligned
+ *
+ * @param dst Destino, multiplo de 64.
+ * @param src Origen, multiplo de 64.
+ * @param n Numero de bytes, multiplo de 64 y al menos 512.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memcpy_medium_avx512_aligned(u8* dst, u8* src, usize n) {
+    u8* fin_d = dst + n - 512;
+    u8* fin_s = src + n - 512;
+    asm (
+        reg d = dst,
+        reg s = src,
+        reg fd = fin_d,
+        reg fs = fin_s,
+        zmm v0,
+        zmm v1,
+        zmm v2,
+        zmm v3,
+        zmm v4,
+        zmm v5,
+        zmm v6,
+        zmm v7,
+    ) {
+        inject(gen_grande("vmovdqa64", "vmovdqa64", "vmovdqa64", 64, 512, 0, "vzeroupper"))
+    }
+}
+
+/**
+ * @brief Copia grande con SSE2 y DOBLE vuelta: 256 bytes, 16 registros.
+ *
+ * Misma forma que @ref memcpy_medium_sse2 con el doble de accesos por vuelta.
+ * Lo que se gana no son los accesos --son los mismos por byte-- sino el coste
+ * del bucle: `cmp` y `jb` se pagan una vez cada 256 bytes en lugar de cada
+ * 128.  Lo que se paga es el minimo: por debajo de 256 bytes esta version no
+ * aplica, y de ahi que la de 8 registros siga estando para el tramo de en
+ * medio.
+ *
+ * Usa los 16 registros del banco, que es todo lo que hay; no cabe una vuelta
+ * mayor sin volver a leer un registro antes de haberlo escrito, que es
+ * justamente la dependencia que se venia a evitar.
+ *
+ * PRECONDICION: @p n al menos 256.
+ *
+ * @param dst Destino.
+ * @param src Origen.
+ * @param n Numero de bytes, 256 o mas.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memcpy_big_sse2(u8* dst, u8* src, usize n) {
+    u8* fin_d = dst + n - 256;
+    u8* fin_s = src + n - 256;
+    asm (
+        reg d = dst, reg s = src, reg fd = fin_d, reg fs = fin_s,
+        xmm v0, xmm v1, xmm v2,  xmm v3,  xmm v4,  xmm v5,  xmm v6,  xmm v7,
+        xmm v8, xmm v9, xmm v10, xmm v11, xmm v12, xmm v13, xmm v14, xmm v15,
+    ) {
+        inject(gen_grande("movdqu", "movdqu", "movdqu", 16, 256, 0, ""))
+    }
+}
+
+/**
+ * @brief Copia grande con AVX2 y doble vuelta: 512 bytes, 16 registros.
+ * @copydetails memcpy_big_sse2
+ *
+ * PRECONDICION: @p n al menos 512, y el procesador con AVX2.
+ *
+ * @param dst Destino.
+ * @param src Origen.
+ * @param n Numero de bytes, 512 o mas.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memcpy_big_avx2(u8* dst, u8* src, usize n) {
+    u8* fin_d = dst + n - 512;
+    u8* fin_s = src + n - 512;
+    asm (
+        reg d = dst, reg s = src, reg fd = fin_d, reg fs = fin_s,
+        ymm v0, ymm v1, ymm v2,  ymm v3,  ymm v4,  ymm v5,  ymm v6,  ymm v7,
+        ymm v8, ymm v9, ymm v10, ymm v11, ymm v12, ymm v13, ymm v14, ymm v15,
+    ) {
+        inject(gen_grande("vmovdqu", "vmovdqu", "vmovdqu", 32, 512, 0,
+                          "vzeroupper"))
+    }
+}
+
+/**
+ * @brief Copia grande con AVX-512 y doble vuelta: 1024 bytes, 16 registros.
+ * @copydetails memcpy_big_sse2
+ *
+ * PRECONDICION: @p n al menos 1024, y el procesador con AVX-512F.
+ *
+ * @param dst Destino.
+ * @param src Origen.
+ * @param n Numero de bytes, 1024 o mas.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memcpy_big_avx512(u8* dst, u8* src, usize n) {
+    u8* fin_d = dst + n - 1024;
+    u8* fin_s = src + n - 1024;
+    asm (
+        reg d = dst, reg s = src, reg fd = fin_d, reg fs = fin_s,
+        zmm v0, zmm v1, zmm v2,  zmm v3,  zmm v4,  zmm v5,  zmm v6,  zmm v7,
+        zmm v8, zmm v9, zmm v10, zmm v11, zmm v12, zmm v13, zmm v14, zmm v15,
+    ) {
+        inject(gen_grande("vmovdqu64", "vmovdqu64", "vmovdqu64", 64, 1024, 0, "vzeroupper"))
+    }
+}
+
+/**
+ * @brief Copia ENORME sin pasar por la cache: escrituras no temporales.
+ *
+ * Para copias de decenas de MB el cuello no es el procesador sino la cache:
+ * una copia normal mete el destino entero en ella y expulsa todo lo demas, que
+ * es trabajo tirado -- ese destino no se va a volver a leer inmediatamente.
+ * `vmovntdq` escribe DIRECTO a memoria sin ocupar cache, con lo que el ancho
+ * de banda sube y, sobre todo, no se destroza lo que habia dentro.
+ *
+ * Va con dos acompanantes que no son opcionales:
+ *
+ *   - `prefetcht0` sobre el origen, porque las lecturas SI pasan por cache y
+ *     con memoria fria el procesador se pasaria la vuelta esperandolas.
+ *   - `sfence` al final, porque las escrituras no temporales NO respetan el
+ *     orden que el resto del programa da por hecho: sin la barrera, quien lea
+ *     el destino despues podria no ver lo escrito.
+ *
+ * PRECONDICION: @p dst multiplo de 32 -- `vmovntdq` lo EXIGE, un destino mal
+ * alineado da excepcion del procesador -- , @p n al menos 512, y AVX2.  El
+ * origen puede estar como sea: las lecturas son de las que no exigen nada.
+ *
+ * @param dst Destino, multiplo de 32.
+ * @param src Origen.
+ * @param n Numero de bytes, 512 o mas.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memcpy_streaming_avx2(u8* dst, u8* src, usize n) {
+    u8* fin_d = dst + n - 512;
+    u8* fin_s = src + n - 512;
+    asm (
+        reg d = dst, reg s = src, reg fd = fin_d, reg fs = fin_s,
+        ymm v0, ymm v1, ymm v2,  ymm v3,  ymm v4,  ymm v5,  ymm v6,  ymm v7,
+        ymm v8, ymm v9, ymm v10, ymm v11, ymm v12, ymm v13, ymm v14, ymm v15,
+    ) {
+        inject(gen_grande("vmovdqu", "vmovntdq", "vmovdqu", 32, 512, 1024,
+                          "sfence\nvzeroupper"))
     }
 }

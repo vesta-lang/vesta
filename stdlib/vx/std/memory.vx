@@ -49,7 +49,15 @@ public import std.memory.x86_64;
 /// Bytes de la palabra de la maquina.  Sale del propio tipo, no de un numero
 /// escrito a mano: en un objetivo de 32 bits vale 4 y en uno de 64 vale 8, sin
 /// que este fichero tenga que saber en cual esta.
-const usize ANCHO = (usize) sizeof<usize>();
+const usize ANCHO = sizeof<usize>();
+
+/// A partir de cuantos bytes conviene `rep movsb` en un procesador que anuncia
+/// ERMS.  Por debajo, poner en marcha la instruccion cuesta mas que la copia
+/// entera; por encima, gana al bucle vectorial.  El valor exacto depende del
+/// procesador -- este es el punto en el que empieza a ganar en los que se han
+/// medido; que este aqui y con nombre es justamente para poder moverlo cuando
+/// se mida en otro.
+const usize UMBRAL_ERMS = 2048;
 
 /**
  * @brief Copia @p n bytes con un bucle portable.  La version de referencia.
@@ -207,11 +215,12 @@ public void memcpy(u8* dst, u8* src, usize n) {
         memcpy_tiny(dst, src, n);
         return;
     }
+    // Ya que se reparte por tamano, se reparte tambien por juego de
+    // instrucciones: asi cada implementacion queda LINEAL -- sin preguntar por
+    // el procesador y sin ramas -- y se puede medir por separado.  Lo que sabe
+    // el procesador se pregunta UNA vez y se guarda; suponerlo seria adivinar.
+    u64 rasgos = init_cpuid();
     if (total <= 128) {
-        // Ya que se reparte por tamano, se reparte tambien por juego de
-        // instrucciones: asi cada implementacion queda LINEAL -- sin preguntar
-        // por el procesador y sin ramas -- y se puede medir por separado.
-        u64 rasgos = cpu_features();
         if ((rasgos & BIT_AVX512F) != 0) {
             memcpy_small_avx512(dst, src, n);
             return;
@@ -221,6 +230,30 @@ public void memcpy(u8* dst, u8* src, usize n) {
             return;
         }
         memcpy_small_sse2(dst, src, n);
+        return;
+    }
+    // De aqui en adelante manda `rep movsb` cuando el procesador dice que va
+    // por lineas de cache: en esos tamanos le gana al bucle vectorial escrito
+    // a mano y ocupa tres instrucciones en vez de decenas.  El umbral no es
+    // 128 sino UMBRAL_ERMS porque justo por encima de 128 la puesta en marcha
+    // de `rep` todavia pesa mas que la copia.
+    if (total >= UMBRAL_ERMS && (rasgos & BIT_ERMS) != 0) {
+        memcpy_erms(dst, src, n);
+        return;
+    }
+    // Bucle vectorial.  Cada version pide su vuelta entera de margen, asi que
+    // se elige la mas ancha que quepa; por debajo de una vuelta no hay bucle
+    // que valga y la copia corta ya cubre el rango.
+    if ((rasgos & BIT_AVX512F) != 0 && total >= (usize) 512) {
+        memcpy_medium_avx512(dst, src, n);
+        return;
+    }
+    if ((rasgos & BIT_AVX2) != 0 && total >= (usize) 256) {
+        memcpy_medium_avx2(dst, src, n);
+        return;
+    }
+    if (total >= (usize) 128) {
+        memcpy_medium_sse2(dst, src, n);
         return;
     }
     memcpy_c(dst, src, n);
