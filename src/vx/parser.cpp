@@ -1939,6 +1939,17 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                 std::string spec_eval = spec;
                 if (top_mode_variant != 0) {
                     spec_eval = strip_mode_atoms_(spec);
+                    // `mode:vm` y `mode:jit` distinguen dos motores que solo
+                    // existen ejecutando bytecode.  Compilando a nativo no hay
+                    // tal eleccion -- ahi la variante que vale es `mode:aot` --
+                    // asi que estas se descartan; si se emitieran, la de `vm`
+                    // conserva el nombre desnudo y chocaria con la nativa.
+                    std::string modo_compilacion;
+                    get_aot_condcomp_mode(modo_compilacion);
+                    if (modo_compilacion == "aot") {
+                        top_target_skip = true;
+                        top_target_spec = spec;
+                    }
                 }
                 if (!spec_eval.empty() && !target_matches_(spec_eval)) {
                     top_target_skip = true;
