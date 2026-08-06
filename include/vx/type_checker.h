@@ -1209,6 +1209,20 @@ class TypeChecker {
     // -----------------------------------------------------------------
 
     void check_stmt(ast::Stmt *s, const Type &fn_return_type);
+    /**
+     * @brief Expande los `inject(expr)` del cuerpo de un bloque `asm`.
+     *
+     * Sustituye cada `inject(expr)` por el texto que la expresion produce en
+     * compilacion, dejando el cuerpo ya listo en el propio nodo.
+     *
+     * Se hace en el CHEQUEO y no en el lowering por dos motivos: la expresion
+     * hay que chequearla antes de poder evaluarla -- si no, una llamada a una
+     * funcion comptime no resuelve -- y el cuerpo pasa por el lowering mas de
+     * una vez, con lo que expandirlo alli dejaba pasadas sin expandir.
+     *
+     * @param as Nodo del bloque asm; se modifica su cuerpo.
+     */
+    void expandir_inject_en_asm(ast::AsmStmt *as);
     void check_block(ast::BlockStmt *b, const Type &fn_return_type);
     void check_var_decl(ast::VarDeclStmt *vd);
     void check_if(ast::IfStmt *s, const Type &fn_return_type);

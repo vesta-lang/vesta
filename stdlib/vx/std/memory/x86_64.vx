@@ -29,6 +29,7 @@ namespace std.memory.x86_64;
  */
 
 import std.types only usize;
+import std.comptime only inject;
 
 /// Bits del bitmask que devuelve `cpu_features()`.  Los consulta `memcpy` una
 /// vez por copia; la rama la predice el procesador sin fallar, porque en una
@@ -38,32 +39,86 @@ public const u64 BIT_AVX2 = 1 << 4;
 public const u64 BIT_AVX512F = 1 << 7;
 
 /**
+ * @brief Genera el cuerpo de una copia SOLAPADA de @p bytes + @p bytes.
+ *
+ * El algoritmo es: @p bytes desde el principio y otros tantos que terminan en
+ * el final, solapandose por el medio.  Que con 64 sirva para el tramo 65..128
+ * es una consecuencia del tamano elegido, no la definicion -- por eso el
+ * tamano es un parametro y no un numero incrustado.
+ *
+ * Asi el mismo generador vale para los tramos que vengan:
+ *
+ *     gen_solapada("movdqu",  16,  64)   4 + 4 accesos   (small, SSE2)
+ *     gen_solapada("vmovdqu", 32, 128)   4 + 4 accesos   (un tramo mayor)
+ *     gen_solapada("vmovdqu64", 64, 256) 4 + 4 accesos
+ *
+ * Las seis versiones de este fichero son ese mismo algoritmo, cargando y
+ * guardando de uno en uno.  Lo unico que cambia entre ellas es el ancho del
+ * registro y el nombre de la instruccion.
+ *
+ * Escribir eso seis veces a mano es pedir una errata.  El generador emite
+ * EXACTAMENTE las mismas instrucciones que se escribirian; no genera mas ni
+ * menos, solo evita repetirlas.
+ *
+ * @param mn Mnemonico (movdqu / vmovdqu / vmovdqu64 y sus formas alineadas).
+ * @param ancho Bytes por acceso: 16, 32 o 64.
+ * @param bytes Bytes que cubre cada mitad.  Multiplo de @p ancho.
+ * @return El cuerpo del bloque asm, listo para empalmar.
+ */
+comptime string gen_solapada(string mn, i64 ancho, i64 bytes) {
+    // Lo comprobable en compilacion, se comprueba en compilacion: un ancho que
+    // no sea de un registro real no tiene instruccion que lo mueva, y una
+    // mitad que no sea multiplo del ancho dejaria bytes sin copiar.
+    static_assert(ancho == 16 || ancho == 32 || ancho == 64,
+                  "el ancho tiene que ser el de un registro real: 16, 32 o 64");
+    static_assert(bytes % ancho == 0,
+                  "cada mitad tiene que ser multiplo del ancho del registro");
+    i64 bloques = bytes / ancho;
+    string out = "";
+    // Primera mitad: desde el principio.
+    for (i64 k = 0; k < bloques; k++) {
+        i64 o = k * ancho;
+        out += "${mn} v, [s + ${o}]\n";
+        out += "${mn} [d + ${o}], v\n";
+    }
+    // Segunda mitad: la que termina en el final.
+    for (i64 k = 0; k < bloques; k++) {
+        i64 o = k * ancho;
+        out += "${mn} v, [fs + ${o}]\n";
+        out += "${mn} [fd + ${o}], v\n";
+    }
+    return out;
+}
+
+/**
  * @brief Copia entre 65 y 128 bytes con registros de 128 bits (SSE2).
  *
- * El rango se cubre con dos mitades que se SOLAPAN por el medio -- una desde
- * el principio y otra que termina en el final -- sin bucle y sin cola.  Los
- * bytes del solape se escriben dos veces con el mismo valor, lo que no cuesta
- * nada y ahorra la cola, que en una copia corta es lo caro: una prediccion de
- * salto fallada vale mas que la copia entera.
+ * El rango se cubre con dos mitades que se SOLAPAN por el medio, sin bucle y
+ * sin cola.  Los bytes del solape se escriben dos veces con el mismo valor, lo
+ * que no cuesta nada y ahorra la cola -- que en una copia corta es lo caro:
+ * una prediccion de salto fallada vale mas que la copia entera.
+ *
+ * El cuerpo lo genera @ref gen_solapada con este patron, cuatro bloques de
+ * 16 bytes por mitad:
+ *
+ *     movdqu v, [s + 0x00]      ; primera mitad, desde el principio
+ *     movdqu [d + 0x00], v
+ *     ...                       ; +0x10, +0x20, +0x30
+ *     movdqu v, [fs + 0x00]     ; segunda mitad, termina en el final
+ *     movdqu [fd + 0x00], v
+ *     ...                       ; +0x10, +0x20, +0x30
  *
  * Se carga y se guarda de uno en uno en vez de tener varios registros vivos a
- * la vez: menos presion para el asignador y menos dependencias, y en la
- * practica el procesador solapa los accesos igual.
- *
- * Se usa la forma NO alineada.  La alineada exige que las dos direcciones sean
- * multiplo del ancho y en su dia era bastante mas rapida; hoy la diferencia
- * casi ha desaparecido, y comprobar la alineacion cuesta ramas que en una
- * copia corta no se amortizan.
+ * la vez: menos presion para el asignador y menos dependencias.
  *
  * Los registros los elige el COMPILADOR (`reg` y `xmm`, sin numero): escribir
- * el registro fisico le quitaria al asignador la posibilidad de usar los que
- * estan libres.
+ * el fisico le quitaria al asignador la posibilidad de usar los libres.
  *
  * SSE2 es BASE en x86-64, asi que esta version vale siempre.
  *
  * Los rangos NO pueden solaparse.  PRECONDICION: @p n entre 65 y 128; no se
- * comprueba a proposito -- quien enruta por tamano es `memcpy`, y repetir la
- * comprobacion aqui anadiria a cada copia ramas que el llamante ya resolvio.
+ * comprueba -- quien enruta por tamano es `memcpy`, y repetirlo aqui anadiria
+ * ramas que el llamante ya resolvio.
  *
  * @param dst Destino.
  * @param src Origen.
@@ -81,30 +136,20 @@ public void memcpy_small_sse2(u8* dst, u8* src, usize n) {
         reg fs = fin_s,
         xmm v,
     ) {
-        movdqu v, [s + 0x00]
-        movdqu [d + 0x00], v
-        movdqu v, [s + 0x10]
-        movdqu [d + 0x10], v
-        movdqu v, [s + 0x20]
-        movdqu [d + 0x20], v
-        movdqu v, [s + 0x30]
-        movdqu [d + 0x30], v
-        movdqu v, [fs + 0x00]
-        movdqu [fd + 0x00], v
-        movdqu v, [fs + 0x10]
-        movdqu [fd + 0x10], v
-        movdqu v, [fs + 0x20]
-        movdqu [fd + 0x20], v
-        movdqu v, [fs + 0x30]
-        movdqu [fd + 0x30], v
+        inject(gen_solapada("movdqu", 16, 64))
     }
 }
 
 /**
- * @brief Lo mismo con registros de 256 bits (AVX2): cuatro accesos.
+ * @brief Lo mismo con registros de 256 bits (AVX2).
  *
- * Misma estructura que @ref memcpy_small_sse2 -- dos mitades que se solapan,
- * cargando y guardando de uno en uno -- con el doble de ancho.
+ * Mismo patron generado que @ref memcpy_small_sse2, con la mitad de accesos
+ * porque cada uno mueve el doble: DOS bloques de 32 bytes por mitad.
+ *
+ *     vmovdqu v, [s + 0x00]     ; y +0x20
+ *     vmovdqu [d + 0x00], v
+ *     vmovdqu v, [fs + 0x00]    ; y +0x20
+ *     vmovdqu [fd + 0x00], v
  *
  * PRECONDICION: @p n entre 65 y 128, y el procesador con AVX2.
  *
@@ -124,22 +169,20 @@ public void memcpy_small_avx2(u8* dst, u8* src, usize n) {
         reg fs = fin_s,
         ymm v,
     ) {
-        vmovdqu v, [s + 0x00]
-        vmovdqu [d + 0x00], v
-        vmovdqu v, [s + 0x20]
-        vmovdqu [d + 0x20], v
-        vmovdqu v, [fs + 0x00]
-        vmovdqu [fd + 0x00], v
-        vmovdqu v, [fs + 0x20]
-        vmovdqu [fd + 0x20], v
+        inject(gen_solapada("vmovdqu", 32, 64))
     }
 }
 
 /**
- * @brief Lo mismo con registros de 512 bits (AVX-512): dos accesos bastan.
+ * @brief Lo mismo con registros de 512 bits (AVX-512).
  *
- * Con 64 bytes por acceso, las dos mitades que se solapan cubren el tramo
- * entero sin mas.  Misma estructura que @ref memcpy_small_sse2.
+ * Mismo patron generado, reducido al minimo: UN bloque de 64 bytes por mitad,
+ * porque con ese ancho cada acceso cubre media copia.
+ *
+ *     vmovdqu64 v, [s + 0x00]
+ *     vmovdqu64 [d + 0x00], v
+ *     vmovdqu64 v, [fs + 0x00]
+ *     vmovdqu64 [fd + 0x00], v
  *
  * PRECONDICION: @p n entre 65 y 128, y el procesador con AVX-512F.
  *
@@ -159,38 +202,42 @@ public void memcpy_small_avx512(u8* dst, u8* src, usize n) {
         reg fs = fin_s,
         zmm v,
     ) {
-        vmovdqu64 v, [s]
-        vmovdqu64 [d], v
-        vmovdqu64 v, [fs]
-        vmovdqu64 [fd], v
+        inject(gen_solapada("vmovdqu64", 64, 64))
     }
 }
 
 /**
  * @brief Igual que @ref memcpy_small_sse2 pero con accesos ALINEADOS.
  *
- * La forma alineada (`movdqa`) exige que la direccion sea multiplo del ancho
- * del registro.  En su dia era bastante mas rapida que la no alineada; hoy la
- * diferencia casi ha desaparecido en copias cortas, pero sigue contando cuando
- * el bloque es grande o el bus va justo -- y en un objetivo antiguo cuenta
- * bastante.
+ * Se genera el MISMO patron y las mismas instrucciones; solo cambia la forma
+ * del acceso (`movdqa` en vez de `movdqu`).
  *
- * OJO con la segunda mitad: el truco del solapamiento la coloca en
- * `n - 64`, que NO es multiplo del ancho aunque los punteros si lo sean.  Esa
- * parte va con la forma no alineada a proposito; forzar ahi la alineada seria
- * una excepcion del procesador, no un fallo silencioso.
+ * Funciona sin cola y sin bucle porque la precondicion incluye el TAMANO.  Lo
+ * que de verdad hace falta es que la segunda mitad empiece alineada, o sea:
  *
- * PRECONDICION: @p dst y @p src multiplos de 16, y @p n entre 65 y 128.  No se
- * comprueba: quien llama sabe si sus buffers lo estan, y comprobarlo aqui
- * costaria las ramas que esta version quiere ahorrar.
+ *     (n - 64) % ancho == 0
  *
- * @param dst Destino, alineado a 16.
- * @param src Origen, alineado a 16.
- * @param n Numero de bytes, entre 65 y 128.
+ * y eso equivale a pedir `n % ancho == 0` UNICAMENTE porque 64 es multiplo de
+ * los tres anchos que se usan aqui (16, 32 y 64).  Con un ancho que no
+ * dividiera a 64 las dos condiciones dejarian de ser la misma, asi que la
+ * regla buena es la de arriba.
+ *
+ * Esa es la razon de exigir el bloque entero alineado y no solo los punteros:
+ * con solo los punteros, la segunda mitad caeria sin alinear y la mitad de los
+ * accesos perderian justo lo que se venia a ganar.
+ *
+ * PRECONDICION: @p dst, @p src y @p n, los tres multiplos de 16.  No se
+ * comprueba en ejecucion: costaria las ramas que esta version viene a ahorrar,
+ * y un valor mal alineado da EXCEPCION del procesador -- se ve en el acto, no
+ * es un fallo silencioso.
+ *
+ * @param dst Destino, multiplo de 16.
+ * @param src Origen, multiplo de 16.
+ * @param n Numero de bytes, multiplo de 16, entre 80 y 128.
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void align_memcpy_small_sse2(u8* dst, u8* src, usize n) {
+public void memcpy_small_sse2_aligned(u8* dst, u8* src, usize n) {
     u8* fin_d = dst + n - 64;
     u8* fin_s = src + n - 64;
     asm (
@@ -200,32 +247,19 @@ public void align_memcpy_small_sse2(u8* dst, u8* src, usize n) {
         reg fs = fin_s,
         xmm v,
     ) {
-        movdqa v, [s + 0x00]
-        movdqa [d + 0x00], v
-        movdqa v, [s + 0x10]
-        movdqa [d + 0x10], v
-        movdqa v, [s + 0x20]
-        movdqa [d + 0x20], v
-        movdqa v, [s + 0x30]
-        movdqa [d + 0x30], v
-        movdqu v, [fs + 0x00]
-        movdqu [fd + 0x00], v
-        movdqu v, [fs + 0x10]
-        movdqu [fd + 0x10], v
-        movdqu v, [fs + 0x20]
-        movdqu [fd + 0x20], v
-        movdqu v, [fs + 0x30]
-        movdqu [fd + 0x30], v
+        inject(gen_solapada("movdqa", 16, 64))
     }
 }
 
 /**
  * @brief Igual que @ref memcpy_small_avx2 con accesos alineados a 32.
- * @copydetails align_memcpy_small_sse2
+ *
+ * Mismo patron generado que su version no alineada, con `vmovdqa`.
+ * @copydetails memcpy_small_sse2_aligned
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void align_memcpy_small_avx2(u8* dst, u8* src, usize n) {
+public void memcpy_small_avx2_aligned(u8* dst, u8* src, usize n) {
     u8* fin_d = dst + n - 64;
     u8* fin_s = src + n - 64;
     asm (
@@ -235,24 +269,19 @@ public void align_memcpy_small_avx2(u8* dst, u8* src, usize n) {
         reg fs = fin_s,
         ymm v,
     ) {
-        vmovdqa v, [s + 0x00]
-        vmovdqa [d + 0x00], v
-        vmovdqa v, [s + 0x20]
-        vmovdqa [d + 0x20], v
-        vmovdqu v, [fs + 0x00]
-        vmovdqu [fd + 0x00], v
-        vmovdqu v, [fs + 0x20]
-        vmovdqu [fd + 0x20], v
+        inject(gen_solapada("vmovdqa", 32, 64))
     }
 }
 
 /**
  * @brief Igual que @ref memcpy_small_avx512 con accesos alineados a 64.
- * @copydetails align_memcpy_small_sse2
+ *
+ * Mismo patron generado que su version no alineada, con `vmovdqa64`.
+ * @copydetails memcpy_small_sse2_aligned
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void align_memcpy_small_avx512(u8* dst, u8* src, usize n) {
+public void memcpy_small_avx512_aligned(u8* dst, u8* src, usize n) {
     u8* fin_d = dst + n - 64;
     u8* fin_s = src + n - 64;
     asm (
@@ -262,9 +291,6 @@ public void align_memcpy_small_avx512(u8* dst, u8* src, usize n) {
         reg fs = fin_s,
         zmm v,
     ) {
-        vmovdqa64 v, [s]
-        vmovdqa64 [d], v
-        vmovdqu64 v, [fs]
-        vmovdqu64 [fd], v
+        inject(gen_solapada("vmovdqa64", 64, 64))
     }
 }

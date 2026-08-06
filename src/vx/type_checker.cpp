@@ -6480,6 +6480,58 @@ std::string TypeChecker::render_comptime_value(const ComptimeValue &v) {
     return std::to_string(v.value);
 }
 
+void TypeChecker::expandir_inject_en_asm(ast::AsmStmt *as) {
+    if (as == nullptr || as->body.find("inject(") == std::string::npos) return;
+    const std::string orig = as->body;
+    std::string salida;
+    salida.reserve(orig.size());
+    size_t p = 0;
+    while (p < orig.size()) {
+        if (orig.compare(p, 7, "inject(") != 0) {
+            salida.push_back(orig[p]);
+            ++p;
+            continue;
+        }
+        // Buscar el ')' que cierra, contando anidados: el argumento puede ser
+        // una llamada con sus propios parentesis.
+        size_t cierre = p + 7;
+        int prof = 1;
+        while (cierre < orig.size() && prof > 0) {
+            if (orig[cierre] == '(') ++prof;
+            else if (orig[cierre] == ')') --prof;
+            if (prof > 0) ++cierre;
+        }
+        if (prof != 0) {
+            diags_.error(as->loc, "asm: falta ')' al cerrar un inject(...)");
+            salida += orig.substr(p);
+            break;
+        }
+        const std::string texto = orig.substr(p + 7, cierre - (p + 7));
+        Diagnostics d_tmp;
+        Lexer lex_tmp(texto, "<asm-inject>", d_tmp);
+        Parser par_tmp(lex_tmp, d_tmp);
+        auto e_tmp = par_tmp.parse_one_expr();
+        bool hecho = false;
+        if (e_tmp && !d_tmp.has_errors()) {
+            // CHEQUEAR antes de evaluar: sin esto una llamada a una funcion
+            // comptime no resuelve y la evaluacion no da nada.
+            (void)check_expr(e_tmp.get());
+            const ComptimeEvalResult r = comptime_eval_expr(*this, e_tmp.get());
+            if (r.ok && r.is_str) {
+                salida += r.str;
+                hecho = true;
+            }
+        }
+        if (!hecho) {
+            diags_.error(as->loc,
+                         "asm: el inject(...) no dio texto en compilacion; "
+                         "tiene que ser una expresion comptime de tipo string");
+        }
+        p = cierre + 1;
+    }
+    as->body = salida;
+}
+
 void TypeChecker::check_stmt(ast::Stmt *s, const Type &fn_return_type) {
     if (!s) return;
     // F1 NLL: BlockStmt no cuenta como un stmt independiente (delegamos
@@ -6502,6 +6554,18 @@ void TypeChecker::check_stmt(ast::Stmt *s, const Type &fn_return_type) {
         // init] )` declara una variable register-bound en el scope actual
         // (modelo read-back: legible tras el bloque = su valor de salida).
         auto *as = static_cast<ast::AsmStmt *>(s);
+        /* `inject(expr)` dentro del cuerpo: se expande AQUI, en el chequeo.
+         *
+         * Aqui es el sitio y no el lowering, por dos razones que se notaron
+         * intentandolo alli: la expresion hay que CHEQUEARLA antes de poder
+         * evaluarla -- si no, una llamada a una funcion comptime no resuelve y
+         * se expandia a nada -- y el cuerpo pasa por el lowering mas de una
+         * vez, con lo que un `inject` sin expandir en la primera pasada
+         * ensuciaba con errores de ensamblado codigo que si funcionaba.
+         *
+         * Expandido una sola vez y guardado en el propio nodo, el lowering ya
+         * recibe el cuerpo listo. */
+        expandir_inject_en_asm(as);
         for (auto &op : as->operands) {
             // Tipo: inferido del inicializador; sin init (scratch) -> i64.
             Type ty{PrimitiveKind::I64};

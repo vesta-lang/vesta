@@ -14062,7 +14062,65 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     std::string body_sub;
     {
         const auto &cmap = tc_.comptime_const_values();
-        const std::string &b = s->body;
+        /* Pre-pase: empalmar las constantes comptime de TEXTO antes de nada.
+         *
+         * Es lo que permite GENERAR el cuerpo en compilacion en vez de
+         * escribirlo repetido -- una copia ancha es la misma pareja
+         * carga/guardado N veces, cambiando solo el mnemonico y el
+         * desplazamiento.
+         *
+         * Va ANTES del escaneo, no dentro: el texto insertado tiene que pasar
+         * por la misma sustitucion de operandos que el escrito a mano.  Si se
+         * empalmara durante el escaneo, sus nombres (`v`, `s`, `d`) llegarian
+         * crudos al ensamblador. */
+        std::string cuerpo_expandido;
+        {
+            const std::string &orig = s->body;
+            size_t p = 0;
+            while (p < orig.size()) {
+                const char c0 = orig[p];
+                const bool ini = (c0 >= 'A' && c0 <= 'Z') ||
+                                 (c0 >= 'a' && c0 <= 'z') || c0 == '_';
+                if (!ini) {
+                    cuerpo_expandido.push_back(c0);
+                    ++p;
+                    continue;
+                }
+                size_t q = p + 1;
+                while (q < orig.size()) {
+                    const char d0 = orig[q];
+                    if ((d0 >= 'A' && d0 <= 'Z') || (d0 >= 'a' && d0 <= 'z') ||
+                        (d0 >= '0' && d0 <= '9') || d0 == '_')
+                        ++q;
+                    else
+                        break;
+                }
+                const std::string t0 = orig.substr(p, q - p);
+                /* Las locales primero (el ambito mas cercano gana), luego las
+                 * del modulo: una `comptime string` declarada dentro de la
+                 * funcion es justo el caso normal al generar el cuerpo. */
+                const std::string *texto = nullptr;
+                const auto &locales = tc_.comptime_const_locals();
+                for (auto sc = locales.rbegin(); sc != locales.rend(); ++sc) {
+                    auto hit = sc->find(t0);
+                    if (hit != sc->end()) {
+                        if (hit->second.is_str) texto = &hit->second.str_value;
+                        break;
+                    }
+                }
+                if (texto == nullptr) {
+                    auto itc = cmap.find(t0);
+                    if (itc != cmap.end() && itc->second.is_str)
+                        texto = &itc->second.str_value;
+                }
+                if (texto != nullptr)
+                    cuerpo_expandido += *texto;
+                else
+                    cuerpo_expandido += t0;
+                p = q;
+            }
+        }
+        const std::string &b = cuerpo_expandido;
         body_sub.reserve(b.size());
         // Resolucion NAMESPACE-RELATIVA de simbolos propios en el asm.  El
         // cuerpo asm es texto opaco que el aplanador de namespaces NO reescribe,
