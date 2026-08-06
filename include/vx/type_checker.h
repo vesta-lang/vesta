@@ -1180,24 +1180,12 @@ class TypeChecker {
     bool enum_type_of(const std::string &name, Type &out) const {
         auto it = enum_layouts_.find(name);
         if (it == enum_layouts_.end()) return false;
-        const auto &lay = it->second;
-        const std::string en = lay.name.empty() ? name : lay.name;
-        if (lay.is_valued) {
-            // Backing con nombre de usuario (`enum Color : Rgb`): el valor ES
-            // ese tipo, asi que se devuelve el suyo.
-            if (!lay.backing_type_name.empty()) {
-                Type vt{lay.backing};
-                vt.struct_name = lay.backing_type_name;
-                out = vt;
-                return true;
-            }
-            Type vt{lay.backing};
-            vt.struct_name = en;
-            vt.is_valued_enum = true;
-            out = vt;
-            return true;
-        }
-        out = Type{PrimitiveKind::STRUCT, en};
+        /* Busca el enum y DELEGA: la decision de que representacion le toca
+         * vive en un solo sitio.  Aqui habia una segunda copia, identica linea
+         * por linea, y dos copias de un criterio son dos criterios en cuanto
+         * una se toca -- que es precisamente como este enum acabo llegando
+         * entero por un camino y agregado por otro. */
+        out = enum_type_of(it->second, name);
         return true;
     }
 
