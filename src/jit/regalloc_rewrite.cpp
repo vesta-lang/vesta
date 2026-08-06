@@ -272,14 +272,15 @@ struct Lowerer {
             const size_t gareg_n =
                 tri.arg_regs[static_cast<size_t>(RegClass::GP)].size();
             stack_arg_base = (gareg_n == 4) ? 32 : 0;
-#if defined(_WIN32)
-            /* Win64: si hay CALLs, reservar 32 bytes de shadow/home
-             * space en el FONDO del frame (debajo de los spill slots)
-             * para que el callee no pise nuestros datos. */
-            if (has_calls) spill_bytes += 32;
-#else
-            (void)has_calls;
-#endif
+            /* La convencion de Windows exige que el llamante reserve sitio
+             * en la pila para los cuatro primeros argumentos, aunque viajen en
+             * registro: el llamado puede escribir ahi.  Se reserva al FONDO del
+             * marco (debajo de las ranuras) para que no pise nuestros datos.
+             *
+             * Se reconoce por el numero de registros de argumento del OBJETIVO
+             * -- el mismo criterio que la linea de arriba -- y no por el sistema
+             * en el que se compilo esto. */
+            if (has_calls && gareg_n == 4) spill_bytes += 32;
             /* Args ilimitados: reservar el outgoing area (slots GP por
              * pila) encima del shadow.  Stack-arg j vive en
              * [rsp + stack_arg_base + j*8] en cada call. */
@@ -364,14 +365,9 @@ struct Lowerer {
         }
     }
 
-    /** @brief Registro host que trae el @c ProcessVM* (primer arg). */
-    static MReg proc_arg_reg() noexcept {
-#if defined(_WIN32)
-        return MReg::RCX;
-#else
-        return MReg::RDI;
-#endif
-    }
+    /** @brief Registro en el que llega el @c ProcessVM*: es el primer
+     *         argumento, asi que lo dice la convencion del objetivo. */
+    MReg proc_arg_reg() const noexcept { return arg_reg(0); }
 
     /** @brief Offset desde RBP del spill slot @p slot. */
     /** @brief Geometria del marco: quien sabe situar una ranura. */
@@ -389,6 +385,23 @@ struct Lowerer {
     }
 
     MOperand frame_mem(int32_t off) const noexcept { return geom().mem(off); }
+
+    /**
+     * @brief Registro en el que viaja el argumento entero numero @p i.
+     *
+     * Lo dice el OBJETIVO.  Las secuencias que llaman al runtime (el fallo de
+     * pagina de la memoria de la VM, la captura del estado de un bucle) tienen
+     * que colocar sus argumentos donde la convencion los espera, y eso cambia
+     * entre Windows y el resto, y otra vez en 32 bits.
+     *
+     * @param i Numero de argumento (0 = el primero).
+     * @return El registro; @c MReg::RAX si la convencion no llega a tantos,
+     *         que no ocurre con los tres primeros en ninguna de las vigentes.
+     */
+    MReg arg_reg(size_t i) const noexcept {
+        const auto &a = tri.arg_regs[static_cast<size_t>(RegClass::GP)];
+        return i < a.size() ? static_cast<MReg>(a[i]) : MReg::RAX;
+    }
 
     /** @copydoc FrameGeom::size_for_scan */
     uint32_t frame_size_for_scan() const noexcept {
@@ -1280,26 +1293,35 @@ struct Lowerer {
              * argumento, asi que el marshal escribia encima del puntero y el
              * `call` saltaba al valor del argumento.) */
             if (!pending_args.empty()) {
+                /* El refugio no puede ser un registro que YA sea destino de
+                 * este mismo movimiento en paralelo: dos destinos iguales y
+                 * uno pisa al otro.  Son destinos los de ABI custom (registro
+                 * declarado) y los de argumento estandar. */
                 int refugio = static_cast<int>(scr0());
                 bool reclamado[64] = {false};
+                const auto &gareg = tri.arg_regs[static_cast<size_t>(RegClass::GP)];
                 for (const auto &pa : pending_args) {
                     if (pa.custom_reg >= 0 && pa.custom_reg < 64)
                         reclamado[pa.custom_reg] = true;
+                    else if (!pa.is_fp && pa.idx < gareg.size())
+                        reclamado[gareg[pa.idx]] = true;
                 }
                 if (reclamado[static_cast<int>(scr0())]) {
-                    /* El selector ya rechazo el caso sin ningun caller-saved
-                     * libre, asi que aqui siempre hay donde ponerlo.  scr1()
-                     * (R11) queda fuera: es el scratch con el que el propio
-                     * parallel-move rompe los ciclos. */
-                    const int cand[] = {
-                        static_cast<int>(MReg::RCX), static_cast<int>(MReg::RAX),
-                        static_cast<int>(MReg::R9),  static_cast<int>(MReg::R8),
-                        static_cast<int>(MReg::RDX), static_cast<int>(MReg::RSI),
-                        static_cast<int>(MReg::RDI)};
-                    for (int c : cand) {
-                        if (c < 0 || c >= 64 || reclamado[c]) continue;
-                        if (c == static_cast<int>(scr1())) continue;
-                        refugio = c;
+                    /* Se pregunta al OBJETIVO por sus registros de vida corta
+                     * en vez de llevar una lista escrita a mano: la lista
+                     * anterior nombraba registros de x86-64, asi que no queria
+                     * decir nada en otra arquitectura, y ademas incluia
+                     * registros de argumento -- que son destinos -- sin
+                     * esquivarlos.  El selector ya rechazo el caso en el que no
+                     * queda ninguno libre, asi que aqui siempre hay donde
+                     * ponerlo.  El segundo temporal queda fuera: es con el que
+                     * el propio movimiento en paralelo rompe los ciclos. */
+                    const auto &cortos =
+                        tri.caller_saved[static_cast<size_t>(RegClass::GP)];
+                    for (uint8_t c : cortos) {
+                        if (c >= 64 || reclamado[c]) continue;
+                        if (c == static_cast<uint8_t>(scr1())) continue;
+                        refugio = static_cast<int>(c);
                         break;
                     }
                 }
@@ -1511,7 +1533,17 @@ struct Lowerer {
             MReg valreg;
             const bool val_spilled = (d.kind == MOperandKind::MEM);
             if (val_spilled) {
-                valreg = (base != MReg::R10) ? MReg::R10 : MReg::R9;
+                /* El valor va a un TEMPORAL, que esta reservado y por tanto
+                 * nunca tiene nada vivo dentro.  Los dos casos son
+                 * excluyentes: si la direccion venia de memoria, la base es el
+                 * segundo temporal y queda libre el primero; si venia en
+                 * registro -- y solo un @c register("...") puede haberla
+                 * puesto en el primer temporal -- queda libre el segundo.
+                 *
+                 * Antes se recurria a R9 cuando la base coincidia con el
+                 * primero, y R9 SI es asignable: podia tener un valor vivo y
+                 * se le escribia encima. */
+                valreg = (base != scr0()) ? scr0() : scr1();
                 out.push_back(MInstr::make_unary(MOp::MOV, reg(valreg), d));
             } else {
                 valreg = static_cast<MReg>(d.reg);
@@ -1544,7 +1576,9 @@ struct Lowerer {
             }
             MReg srcreg;
             if (des.kind == MOperandKind::MEM) {
-                srcreg = (base != MReg::R10) ? MReg::R10 : MReg::R9;
+                /* Mismo criterio que en el sumar-atomico: al temporal libre,
+                 * que no puede tener nada vivo. */
+                srcreg = (base != scr0()) ? scr0() : scr1();
                 out.push_back(MInstr::make_unary(MOp::MOV, reg(srcreg), des));
             } else {
                 srcreg = static_cast<MReg>(des.reg);
@@ -1729,11 +1763,10 @@ struct Lowerer {
                                    vesta_rt::kVmMemCachedPageVaddrOffset;
             const int32_t page_h = vesta_rt::kProcVmMemOffset +
                                    vesta_rt::kVmMemCachedPageHostOffset;
-#if defined(_WIN32)
-            const MReg A0 = MReg::RCX, A1 = MReg::RDX, A2 = MReg::R8;
-#else
-            const MReg A0 = MReg::RDI, A1 = MReg::RSI, A2 = MReg::RDX;
-#endif
+            /* Los tres primeros registros de argumento salen del OBJETIVO, no
+             * de en que sistema se compilo esto: son distintos en cada
+             * convencion y tambien en 32 bits. */
+            const MReg A0 = arg_reg(0), A1 = arg_reg(1), A2 = arg_reg(2);
             const MLabelId Lmiss = inline_ok ? pf->new_label() : MLABEL_INVALID;
             const MLabelId Ldone = inline_ok ? pf->new_label() : MLABEL_INVALID;
 
@@ -2560,13 +2593,12 @@ MFunction rewrite_to_physical(const MFunction &vf, const codegen::AllocationResu
             for (uint8_t r : cs)
                 seq.push_back(
                     MInstr::make_unary(MOp::PUSH, {}, R(static_cast<MReg>(r))));
-#if defined(_WIN32)
-            const MReg A0 = MReg::RCX, A1 = MReg::RDX, A2 = MReg::R8;
-            const uint32_t SHADOW = 32;
-#else
-            const MReg A0 = MReg::RDI, A1 = MReg::RSI, A2 = MReg::RDX;
-            const uint32_t SHADOW = 0;
-#endif
+            /* Igual que arriba: los argumentos los dice el objetivo.  El hueco
+             * que la convencion de Windows exige reservar sobre la pila para
+             * los cuatro primeros SI depende de la convencion, y por eso se
+             * pregunta por ella y no por el sistema anfitrion. */
+            const MReg A0 = lw.arg_reg(0), A1 = lw.arg_reg(1), A2 = lw.arg_reg(2);
+            const uint32_t SHADOW = host_is_sysv() ? 0u : 32u;
             /* --- OSR 2a captura: escribir cada vid vivo en osr_buffer[vid].
              * RAX = base del buffer (proc->osr_buffer leido via RBX); RCX =
              * temp.  Ambos son caller-saved (ya salvados en la pila arriba)
