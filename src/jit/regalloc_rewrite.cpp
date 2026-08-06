@@ -11,6 +11,7 @@
  *        Ver regalloc_rewrite.h y doc/REGALLOC.md.
  */
 
+#include "jit/asm_deferred.h"
 #include "jit/regalloc_rewrite.h"
 
 #include "codegen/transition_planner.h" // que movimientos exige cada punto del programa
@@ -2389,99 +2390,56 @@ MFunction rewrite_to_physical(const MFunction &vf, const codegen::AllocationResu
      * registro real (@c ra.reg_of del vreg, o el pin @c fixed_phys) y llamamos
      * al ensamblador.  Asi el operando `reg` se integra con el regalloc de la
      * funcion (registro OPTIMO) en vez del pick greedy compile-time. */
-    if (vx::g_asm_backend != nullptr) {
-        for (AsmBlob &b : pf.asm_blobs) {
-            if (!b.deferred) continue;
-            std::string nasm;
-            bool ok = true;
-            const std::string &t = b.deferred_tmpl;
-            for (size_t i = 0; i < t.size();) {
-                if (t[i] != '$') { nasm += t[i++]; continue; }
-                size_t j = i + 1;
-                uint32_t idx = 0;
-                bool any = false;
-                while (j < t.size() &&
-                       std::isdigit(static_cast<unsigned char>(t[j]))) {
-                    idx = idx * 10 + static_cast<uint32_t>(t[j] - '0');
-                    ++j;
-                    any = true;
-                }
-                if (!any || idx >= b.deferred_ops.size()) {
-                    nasm += t[i++]; // '$' literal / fuera de rango -> verbatim
-                    continue;
-                }
-                const AsmBlob::DeferredOp &d = b.deferred_ops[idx];
-                int phys = d.fixed_phys;
-                if (phys < 0) {
-                    const auto loc = alloc.timeline.first_location(d.vreg);
-                    if (!loc.is_register()) {
-                        /* Sin registro no hay bloque: un operando de asm NO se
-                         * puede leer de la pila, porque el cuerpo lo nombra
-                         * como registro.  Pasa cuando se piden mas operandos
-                         * de los que tiene el banco del objetivo. */
-                        std::fprintf(
-                            stderr,
-                            "[asm] al operando $%u no le ha tocado registro "
-                            "(clase %u, vreg %u, memoria=%d, exige-registro=%d, "
-                            "clase-vreg=%d): el banco del objetivo no da para "
-                            "tantos operandos a la vez\n",
-                            idx, (unsigned)d.regclass, d.vreg,
-                            loc.is_memory() ? 1 : 0,
-                            vf.reg_required_of(d.vreg) ? 1 : 0,
-                            (int)(d.vreg < vf.vreg_class.size()
-                                      ? (int)vf.vreg_class[d.vreg]
-                                      : -1));
-                        ok = false;
-                        break;
-                    }
-                    phys = static_cast<int>(loc.register_id());
-                }
-                /* El asignador numera las ranuras de forma CORRIDA sobre todo
-                 * el banco: las del banco ancho empiezan en XMM0 = 16.  El
-                 * nombre, en cambio, lleva el numero DENTRO de su banco:
-                 * `ymm3`, no `ymm19`.  Sin restar la base salian nombres de
-                 * registros que en esta maquina no existen. */
-                if (d.fixed_phys < 0 && d.regclass != vx::ASM_RC_GP)
-                    phys -= static_cast<int>(MReg::XMM0);
-                std::string nm = vx::asm_phys_reg_name(b.deferred_isa,
-                                                       d.regclass, phys, d.width);
-                if (nm.empty()) {
-                    std::fprintf(stderr,
-                                 "[asm] no se puede nombrar el registro del "
-                                 "operando $%u (clase %u, ancho %u, fisico %d) "
-                                 "-- el bloque asm se quedaria VACIO\n",
-                                 idx, (unsigned)d.regclass, (unsigned)d.width,
-                                 phys);
-                    ok = false;
-                    break;
-                }
-                nasm += nm;
-                i = j;
-            }
-            if (ok) {
-                vx::AsmAssembleResult ar =
-                    vx::g_asm_backend->assemble(nasm, vx::AsmArch::X86_64);
-                if (ar.ok) {
-                    /* Cero bytes con `ok` es legitimo: un bloque que solo
-                     * lleva comentarios no emite nada. */
-                    b.bytes = std::move(ar.bytes);
-                } else {
-                    std::fprintf(stderr,
-                                 "[asm] no se pudo ensamblar el bloque tras "
-                                 "poner los registros: %s\ncuerpo:\n%s\n",
-                                 ar.error.c_str(), nasm.c_str());
-                }
-            }
-            if (std::getenv("VESTA_ASM_TRAMP_DEBUG")) {
+    for (AsmBlob &b : pf.asm_blobs) {
+        if (!b.deferred) continue;
+        const AsmDeferredResult res = asm_deferred_assemble(b, alloc, vf);
+        if (res.ok) {
+            b.bytes = std::move(res.bytes);
+        } else {
+            /* Sin bytes el bloque no emite nada, asi que se cuenta: un
+             * programa que compila y hace otra cosa es peor que uno que no
+             * compila.  El modulo devuelve DATOS; la frase se pone aqui, que
+             * es el sitio que sabe a quien se le habla.  Cuando el catalogo
+             * multi-idioma llegue a esta capa, esto pasa a ser un codigo VXNNNN
+             * con sus argumentos y el texto sale de ahi. */
+            switch (res.fallo) {
+            case AsmDeferredFallo::SIN_REGISTRO:
                 std::fprintf(stderr,
-                             "=== plantilla (%zu ops) ===\n%s\n"
-                             "=== asm con registros puestos (%zu bytes) ===\n"
-                             "%s\n",
-                             b.deferred_ops.size(), t.c_str(), nasm.size(),
-                             nasm.c_str());
+                             "[asm] en '%s': al operando $%u no le ha tocado "
+                             "registro (clase %u, vreg %u, en memoria=%d); el "
+                             "banco del objetivo no da para tantos operandos a "
+                             "la vez\n",
+                             vf.name.c_str(), res.operando, (unsigned)res.clase,
+                             res.vreg, res.en_memoria ? 1 : 0);
+                break;
+            case AsmDeferredFallo::SIN_NOMBRE:
+                std::fprintf(stderr,
+                             "[asm] en '%s': la ranura %d no se puede nombrar "
+                             "para el operando $%u (clase %u, ancho %u)\n",
+                             vf.name.c_str(), res.ranura, res.operando,
+                             (unsigned)res.clase, (unsigned)res.ancho);
+                break;
+            case AsmDeferredFallo::NO_ENSAMBLA:
+                std::fprintf(stderr,
+                             "[asm] en '%s': no ensambla tras poner los "
+                             "registros: %s\ncuerpo:\n%s\n",
+                             vf.name.c_str(), res.detalle.c_str(),
+                             res.texto.c_str());
+                break;
+            case AsmDeferredFallo::SIN_ENSAMBLADOR:
+            case AsmDeferredFallo::NINGUNO:
+            default:
+                break; // sin ensamblador no hay nada que contar
             }
-            b.deferred = false; // ensamblado (o fallo -> bytes vacio, no emite)
         }
+        if (std::getenv("VESTA_ASM_TRAMP_DEBUG")) {
+            std::fprintf(stderr,
+                         "=== plantilla (%zu ops) ===\n%s\n"
+                         "=== asm con registros puestos ===\n%s\n",
+                         b.deferred_ops.size(), b.deferred_tmpl.c_str(),
+                         res.texto.c_str());
+        }
+        b.deferred = false; // resuelto (o fallido -> sin bytes, no emite)
     }
     pf.blocks.resize(vf.blocks.size());
 
