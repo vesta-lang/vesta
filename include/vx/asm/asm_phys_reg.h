@@ -88,12 +88,47 @@ inline int asm_x86_gp_index(const std::string &tok, uint16_t *out_width) {
  * @brief Nombre de un operando REG por su (clase, indice fisico, ancho).  @c ""
  *        si la clase no esta soportada o el operando no es fisico.
  */
+/**
+ * @brief Numero de ranura de un registro del banco ancho x86 por su nombre.
+ *
+ * `xmm3`, `ymm3` y `zmm3` son la MISMA ranura vista a distinto ancho, asi que
+ * las tres formas devuelven 3.
+ *
+ * @param nombre Nombre del registro.
+ * @return La ranura (0..31), o -1 si no es del banco ancho.
+ */
+inline int asm_vec_reg_index(const std::string &nombre) {
+    if (nombre.size() < 4) return -1;
+    const std::string pref = nombre.substr(0, 3);
+    if (pref != "xmm" && pref != "ymm" && pref != "zmm") return -1;
+    int n = 0;
+    for (size_t i = 3; i < nombre.size(); ++i) {
+        if (nombre[i] < '0' || nombre[i] > '9') return -1;
+        n = n * 10 + (nombre[i] - '0');
+    }
+    return (n >= 0 && n <= 31) ? n : -1;
+}
+
 inline std::string asm_phys_reg_name(uint8_t isa, uint8_t regclass, int phys,
                                      uint16_t width_bits) {
-    // x86 (isa 0/1/2) GP.  FP/VEC/arm64 pendientes.
+    // x86 (isa 0/1/2) GP.  arm64 pendiente.
     if (regclass == ASM_RC_GP && isa <= 2) {
         const char *n = asm_x86_gp_name(phys, width_bits);
         return n ? std::string(n) : std::string();
+    }
+    /* Banco ancho de x86: el numero es el mismo y solo cambia el prefijo con
+     * el ancho, porque xmmN, ymmN y zmmN son la misma ranura vista a 128, 256
+     * o 512 bits.  Por eso basta con el ancho para nombrarla. */
+    if ((regclass == ASM_RC_VEC || regclass == ASM_RC_FP) && isa <= 2) {
+        if (phys < 0 || phys > 31) return std::string();
+        const char *pref = nullptr;
+        switch (width_bits) {
+        case 128: pref = "xmm"; break;
+        case 256: pref = "ymm"; break;
+        case 512: pref = "zmm"; break;
+        default: return std::string();
+        }
+        return std::string(pref) + std::to_string(phys);
     }
     return std::string();
 }

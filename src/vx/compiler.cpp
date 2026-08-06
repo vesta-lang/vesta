@@ -859,6 +859,11 @@ CompileResult compile_vx_source(const std::string &source,
             break;
         }
     }
+    /* Un `inject(...)` que quedo pendiente tambien obliga a repetir: su bloque
+     * asm salio VACIO.  No basta con mirar el IR -- si la unica llamada a la
+     * funcion comptime estaba dentro del inject, al no expandirse no queda ni
+     * rastro de ella y el gate de arriba no la ve. */
+    if (tc.inject_diferido()) res.has_lowerable_macros = true;
 
     /* +: copiar las razones de skip del lowering a la
      * CompileResult para que main.cpp las imprima via VESTA_VERBOSE. */
@@ -1018,30 +1023,10 @@ CompileResult compile_vx_source(const std::string &source,
     // threshold 1500); el cuerpo bytecode-trap NUNCA se ejecuta bajo JIT.
     // Sin flags: `vm --vx prog.vx -o prog && vm --run prog.velb`.
     //
-    //  AS inc.5g: PERO si el inline-asm liga un registro VECTORIAL
-    // (register("xmm0"/"ymm0"/"zmm0")), el JIT v1 no lo soporta (el regalloc
-    // solo asigna el banco GP) -> en lugar de fallar SILENCIOSAMENTE en
-    // runtime (el wrapper no compila -> trap hlt), abortamos AQUI con un
-    // error claro + sugerencia.  (En --port c si funciona: GCC lo maneja.)
-    if (opts.port_target.empty()) {
-        for (const auto &fn : irmod.functions) {
-            for (const auto &b : fn.asm_reg_bindings) {
-                if (b.is_vector) {
-                    res.diagnostics.error(
-                        SourceLoc{filename, 0, 0},
-                        "inline asm: register(\"" + b.reg +
-                            "\") liga un "
-                            "registro vectorial (xmm/ymm/zmm), no soportado en "
-                            "el backend JIT todavia.  Usa el patron de memoria "
-                            "(puntero GP + registro vectorial interno como "
-                            "scratch; ver "
-                            "examples_codes_vx/asm/06_sse2_paddd) "
-                            "o compila con --port c.");
-                }
-            }
-        }
-        if (res.diagnostics.has_errors()) return res;
-    }
+    // Ligar un registro del banco ANCHO (xmm/ymm/zmm) ya no es un caso
+    // aparte: el asignador reparte tambien ese banco, asi que el operando
+    // vectorial recibe registro igual que uno entero.  Aqui hubo un rechazo
+    // mientras el asignador solo sabia del banco entero.
 
     // 4. Emitir IR -> texto .vel.  Aqui es donde el optimizador IR
     // hace DCE / copy prop / etc segun opt_level y el regalloc lineal

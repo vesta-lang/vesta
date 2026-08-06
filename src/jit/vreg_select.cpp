@@ -730,9 +730,34 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * como host-slot corriente; el lift ya emitio sus LOAD/STORE). */
             if (!alloca_in_real_asm[b.alloca_value])
                 continue;
-            if (b.is_vector) { /* banco ancho: lo reparte rbank, no este RA */
-                vreg_dbg(fn.name.c_str(), "inline-asm(vector-bind)");
-                return false;
+            if (b.is_vector) {
+                /* Operando del banco ancho.  Se trata igual que uno entero,
+                 * solo que su valor vive en la otra clase de registro: el
+                 * asignador ya reparte ese banco (es donde van los flotantes),
+                 * asi que basta con decirle de que clase es.
+                 *
+                 * Antes se rechazaba la funcion entera, y con ella cualquier
+                 * copia ancha escrita en el lenguaje. */
+                if (b.alloca_value < out.vreg_class.size())
+                    out.vreg_class[b.alloca_value] = RegClass::FP;
+                if (b.reg_auto) {
+                    binding_phys[b.alloca_value] = 0; // "es binding", sin pin
+                    out.set_vreg_reg_required(
+                        static_cast<uint32_t>(b.alloca_value));
+                    continue;
+                }
+                /* Registro concreto escrito por el usuario: el numero ya viaja
+                 * horneado en el texto del asm, asi que aqui solo hay que
+                 * reservar la ranura para que el asignador no la use. */
+                const int lane = vx::asm_vec_reg_index(b.reg);
+                if (lane < 0) {
+                    vreg_dbg(fn.name.c_str(), "inline-asm(vector-desconocido)");
+                    return false;
+                }
+                binding_phys[b.alloca_value] = lane;
+                out.set_vreg_fixed(static_cast<uint32_t>(b.alloca_value),
+                                   static_cast<uint8_t>(lane));
+                continue;
             }
             if (b.reg_auto) {
                 // operando `reg` AUTO -> register-required (el RA elige
@@ -4218,9 +4243,20 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                             blob.deferred_ops[b.ph_index];
                         d.vreg = static_cast<uint32_t>(b.alloca_value);
                         d.fixed_phys = -1; // lo elige el RA
-                        d.width = static_cast<uint16_t>(
-                            ir_type_bytes(b.type) * 8);
-                        d.regclass = 0; // GP
+                        if (b.is_vector) {
+                            /* El ancho lo da la CLASE que escribio el usuario
+                             * (xmm/ymm/zmm), no el tipo del valor: el operando
+                             * es la ranura entera, no lo que quepa en ella. */
+                            const std::string pref = b.reg.substr(0, 3);
+                            d.width = pref == "zmm"   ? 512
+                                      : pref == "ymm" ? 256
+                                                      : 128;
+                            d.regclass = 2; // ASM_RC_VEC
+                        } else {
+                            d.width = static_cast<uint16_t>(
+                                ir_type_bytes(b.type) * 8);
+                            d.regclass = 0; // ASM_RC_GP
+                        }
                     }
                 }
                 const uint32_t bidx = out.intern_asm_blob(std::move(blob));
