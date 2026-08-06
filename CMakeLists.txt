@@ -342,16 +342,25 @@ set(CAPSTONE_BUILD_STATIC ON CACHE BOOL "" FORCE)
 set(CAPSTONE_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(CAPSTONE_USE_LTO OFF CACHE BOOL "" FORCE)
 
-# Nota: las reglas install() de estos submodulos de terceros (keystone instala
-# kstool.exe + keystone.pc, etc.) NO entran en el instalador de VestaVM porque el
-# empaquetado (cmake/VestaPackaging.cmake) usa instalacion POR-COMPONENTE: CPack
-# solo procesa los componentes de CPACK_COMPONENTS_ALL, nunca el "Unspecified"
-# donde caen los terceros.
+# Nota: las reglas install() de estos submodulos de terceros (keystone.pc y
+# demas) NO entran en el instalador de VestaVM porque el empaquetado
+# (cmake/VestaPackaging.cmake) usa instalacion POR-COMPONENTE: CPack solo
+# procesa los componentes de CPACK_COMPONENTS_ALL, nunca el "Unspecified" donde
+# caen los terceros.  Dejarlos FUERA del instalador no basta, ojo: el paso
+# previo de CPack construye el objetivo completo, asi que lo que no llega al
+# instalador igualmente hay que poder construirlo -- o no construirlo, que es
+# lo que se hace mas abajo con la herramienta de linea de comandos de keystone.
 
 # Capstone (desensamblador)
 add_subdirectory(libs/SourceCode/capstone)
 
-# Keystone (desensamblador)
+# Keystone (ensamblador).  Solo la biblioteca: su herramienta de linea de
+# comandos (kstool) no la usa nadie aqui y ademas no enlaza con MinGW, porque
+# usa getopt y esa no viene con el.  Antes se construia igualmente y se tiraba
+# -- el propio empaquetado ya deja fuera lo que instalan los submodulos de
+# terceros -- pero el paso previo de CPack construye el objetivo completo, asi
+# que generar el instalador fallaba por una herramienta que no llega a el.
+set(BUILD_LIBS_ONLY ON CACHE BOOL "" FORCE)
 add_subdirectory(libs/SourceCode/keystone)
 
 # LibPEparse (emisor/parser de PE/COFF/ELF, C puro generico) -- usado por el
