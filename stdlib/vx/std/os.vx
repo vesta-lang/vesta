@@ -11,19 +11,89 @@ namespace std.os;
  * ejecutando.
  *
  * Los nombres de `std.syscall` DIFIEREN a proposito entre plataformas, porque
- * son las APIs reales y no se inventa compatibilidad por encima.
+ * son las APIs reales y no se inventa compatibilidad por encima.  Eso deja un
+ * hueco: sin un puente, cada modulo que necesita terminar el proceso acaba
+ * escribiendo el suyo con su propio `@Target`, y aparecen cuatro maneras de
+ * hacer lo mismo -- que es justo lo que habia antes de escribir esto.
+ *
+ * Reparto de responsabilidades dentro de `std.os`:
+ *
+ *   - `std.os.linux` y `std.os.windows` ofrecen la llamada de su sistema tal
+ *     cual, con sus parametros y sus tipos.  Ahi NO se abstrae nada.
+ *   - aqui se igualan las formas cuando difieren, y se re-exporta tal cual lo
+ *     que ya coincide.
+ *
+ * Por eso `exit` solo se re-exporta -- toma un codigo y no vuelve en los dos
+ * sistemas -- mientras que `write` si lleva cuerpo: Linux escribe a un
+ * descriptor y Windows a un manejador, y esa diferencia se resuelve aqui.
  *
  * La seleccion por sistema es responsabilidad de la libreria, no de quien la
- * usa: quien necesite terminar el proceso escribe `import std.os only exit;` y
- * no vuelve a mencionar en que sistema esta.
- *
- * La primera operacion es `exit`.  Las siguientes (abortar, argumentos,
- * entorno, identificador del proceso) se anaden a la mitad de cada sistema y
- * se re-exportan aqui igual.
+ * usa: quien necesite escribir escribe `import std.os only write;` y no vuelve
+ * a mencionar en que sistema esta.
  */
 
+import std.types only size_t, ssize_t;
+
+// `only exit` y no un re-export completo: el `write` de cada mitad es el crudo
+// del sistema, y el que se ofrece desde aqui es el portable de mas abajo.  El
+// import deja ademas el modulo cargado para poder llamarlo cualificado.
 @Target("os:windows")
-public import std.os.windows;
+import std.os.windows;
+@Target("os:windows")
+public import std.os.windows only exit, Stream;
 
 @Target("os:linux")
-public import std.os.linux;
+import std.os.linux;
+@Target("os:linux")
+public import std.os.linux only exit, Stream;
+
+@Target("os:windows")
+import std.windows only DWORD, HANDLE, LPOVERLAPPED, STD_INPUT_HANDLE;
+
+// Los tres manejadores estandar no cambian en toda la vida del proceso, y
+// pedirlos es una llamada al sistema.  Se piden una vez y se guardan; un cero
+// significa "aun no se ha pedido".  Sin @Target: en un binario que no sea de
+// Windows nadie lo toca y el dead-strip se lo lleva.
+u64[3] __os_manejador;
+
+/**
+ * @brief Escribe bytes en uno de los flujos estandar.  Sin buffer ni
+ *        conversiones.
+ *
+ * Que valor tiene cada flujo lo declara la mitad de cada sistema en su propio
+ * `Stream`, asi que aqui no hay que traducir nada ni preguntar cual es cual:
+ * el valor que llega ya es el que espera la llamada de abajo.
+ *
+ * @param cual Flujo de destino.
+ * @param buf Bytes a escribir.
+ * @param count Cuantos bytes.
+ * @return Bytes escritos, o -1 si fallo.
+ */
+@Target("os:windows")
+public ssize_t write(Stream cual, const char* buf, size_t count) {
+    // El indice sale de la propia constante, sin ramas: los tres valores son
+    // consecutivos (-10, -11, -12), asi que restarlos del primero da 0, 1 y 2.
+    DWORD idx = ((DWORD) STD_INPUT_HANDLE) - ((DWORD) cual);
+    HANDLE h = (HANDLE) __os_manejador[idx];
+    if (h == 0) {
+        h = std.os.windows.get_std_handle((DWORD) cual);
+        __os_manejador[idx] = (u64) h;
+    }
+    DWORD escritos = 0;
+    if (std.os.windows.write(h, buf, (DWORD) count, &escritos,
+                             (LPOVERLAPPED) nullptr) == 0) {
+        return (ssize_t) -1;
+    }
+    return (ssize_t) escritos;
+}
+
+/**
+ * @copydoc write
+ *
+ * En Linux la llamada del sistema ya tiene esta forma, asi que no hay nada que
+ * igualar: se pasa tal cual.
+ */
+@Target("os:linux")
+public ssize_t write(Stream cual, const char* buf, size_t count) {
+    return std.os.linux.write((u32) cual, buf, count);
+}

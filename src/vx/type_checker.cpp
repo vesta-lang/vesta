@@ -4204,6 +4204,24 @@ void TypeChecker::collect_globals() {
                 }
             }
             if (valued) {
+                // Un alias vale como tipo base: `typedef u32 DWORD;` y luego
+                // `enum Stream : DWORD` es lo natural al declarar las
+                // constantes de un sistema.  Antes solo se aceptaba el nombre
+                // primitivo, asi que el alias -- que ES ese primitivo, ya
+                // aplanado en la tabla -- se rechazaba.  Se resuelve aqui, sin
+                // tocar `backing_type`, que sigue siendo el nombre que escribio
+                // el usuario para los mensajes.
+                {
+                    auto al = type_aliases_.find(en->backing_type);
+                    if (al != type_aliases_.end() &&
+                        al->second.nominal_id == 0 &&
+                        (is_integer_kind(al->second.kind) ||
+                         al->second.kind == PrimitiveKind::F32 ||
+                         al->second.kind == PrimitiveKind::F64 ||
+                         al->second.kind == PrimitiveKind::STRING)) {
+                        en->backing_type = primitive_name(al->second.kind);
+                    }
+                }
                 elay.backing = prim_kind_from_name(en->backing_type);
                 backing_is_int = is_integer_kind(elay.backing);
                 backing_is_float = (elay.backing == PrimitiveKind::F32 ||

@@ -681,6 +681,29 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
                        32;
     out.symbols.reserve(cap);
 
+    // Namespace de ESTE modulo, si declara todo bajo uno solo.  Se deduce de
+    // los simbolos que declara, que ya lo llevan anotado.  Hace falta para las
+    // RE-EXPORTACIONES: un `public import` dentro de un namespace mete el
+    // simbolo en la superficie de ese namespace, pero como el simbolo no se
+    // declara aqui no estaba en la tabla y salia sin namespace.  El efecto era
+    // que `import ns only sym;` lo encontraba y `ns.sym` no -- la misma cosa
+    // visible por un camino y no por el otro.
+    std::string module_ns;
+    {
+        bool uno_solo = true;
+        for (const auto &kv : tc.declared_ns_symbols()) {
+            const std::string &p = kv.second.first;
+            if (p.empty()) continue;
+            if (module_ns.empty()) {
+                module_ns = p;
+            } else if (module_ns != p) {
+                uno_solo = false; // varios namespaces: no se puede deducir.
+                break;
+            }
+        }
+        if (!uno_solo) module_ns.clear();
+    }
+
     // #cross-module-generics: nombres de plantillas genericas + conceptos de
     // ESTE modulo.  NO se exportan como simbolos regulares (function/struct/
     // class/enum): se exportan aparte como texto fuente (out.generic_templates)
@@ -1056,12 +1079,17 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
                 if (si && !si->mangled_label.empty()) {
                     mangled_label = si->mangled_label;
                 }
+                // Lo re-exportado pertenece al namespace de quien re-exporta:
+                // es parte de su superficie igual que lo que declara.
+                ns_path_for_sym = module_ns;
             } else {
                 continue;
             }
         } else {
             public_name = fname;
             // mangled_label = "" (mismo que name).
+            // Mismo caso que arriba cuando no hay prefijo que quitar.
+            if (tc.is_reexported(fname)) ns_path_for_sym = module_ns;
         }
         //  M6.a L.3: filtrar privadas.  La fn esta registrada con su
         // nombre mangled (post pre-pase de mangling cross-module).  Si el

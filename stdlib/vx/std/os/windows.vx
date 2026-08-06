@@ -19,7 +19,20 @@ namespace std.os.windows;
  */
 
 import std.windows only BOOL, DWORD, UINT, HANDLE, LPCVOID, LPDWORD,
-                        LPOVERLAPPED;
+                        LPOVERLAPPED, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+                        STD_ERROR_HANDLE;
+
+/**
+ * @brief Los tres flujos estandar, con el valor que les da Windows.
+ *
+ * Es lo que se le pasa a `get_std_handle`.  Cada sistema declara aqui los
+ * suyos para que la capa portable no tenga que preguntar cual es cual.
+ */
+public enum Stream : DWORD {
+    stdin  = STD_INPUT_HANDLE,
+    stdout = STD_OUTPUT_HANDLE,
+    stderr = STD_ERROR_HANDLE
+}
 
 extern "kernel32.dll" {
     fn ExitProcess(UINT uExitCode) -> VOID;

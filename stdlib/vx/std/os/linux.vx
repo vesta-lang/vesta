@@ -13,6 +13,19 @@ namespace std.os.linux;
  */
 
 public import std.syscall.linux only write, exit_group;
+import std.unix only STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO;
+
+/**
+ * @brief Los tres flujos estandar, con el valor que les da Linux.
+ *
+ * Es el descriptor que se le pasa a `write`.  Cada sistema declara aqui los
+ * suyos para que la capa portable no tenga que preguntar cual es cual.
+ */
+public enum Stream : u32 {
+    stdin  = STDIN_FILENO,
+    stdout = STDOUT_FILENO,
+    stderr = STDERR_FILENO
+}
 
 /**
  * @brief Termina el proceso.  No vuelve.

@@ -1744,7 +1744,37 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
         }
         const auto &tbl = tc.comptime_const_values();
         auto it = tbl.find(id->name);
-        if (it == tbl.end()) return r;
+        if (it == tbl.end()) {
+            /* Una `const` corriente tambien es legible al compilar: su valor
+             * esta fijado en el fuente.  Antes solo se miraban las tablas de
+             * `comptime const`, asi que `const i32 K = 5; enum E { a = K }` se
+             * rechazaba con "debe ser una constante entera" -- siendolo.  Se
+             * mira primero la importada (ya viene con el valor resuelto del
+             * .vxi) y si no, se evalua el inicializador del global local. */
+            const auto &imp = tc.imported_global_consts();
+            auto ii = imp.find(id->name);
+            if (ii != imp.end()) {
+                r.ok = true;
+                if (ii->second.is_str) {
+                    r.is_str = true;
+                    r.str = ii->second.str_value;
+                } else {
+                    r.value = static_cast<int64_t>(ii->second.value);
+                }
+                return r;
+            }
+            for (const auto &d : tc.ast_module().decls) {
+                if (!d || d->kind != ast::NodeKind::GlobalVarDecl) continue;
+                auto *gv = static_cast<const ast::GlobalVarDecl *>(d.get());
+                if (!gv->is_const || !gv->init || gv->name != id->name)
+                    continue;
+                /* Recursivo: el inicializador puede ser a su vez una
+                 * expresion sobre otras constantes.  Un ciclo no es posible
+                 * porque una const no puede referirse a si misma. */
+                return comptime_eval_expr(tc, gv->init.get());
+            }
+            return r;
+        }
         r.ok = true;
         if (it->second.is_str) {
             r.is_str = true;
