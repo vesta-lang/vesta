@@ -91,6 +91,10 @@ inline AbstractProblem intervals_to_problem(const jit::IntervalResult &ivs) {
         av.req.cls = resource_class_from_reg(iv.cls);
         av.req.width = iv.cls == jit::RegClass::FP ? ViewWidth::W16 : ViewWidth::W8;
         av.req.fixed_reg = static_cast<int16_t>(iv.fixed_reg); // -1 o el pin.
+        /* Afinidad: con quien le conviene compartir lane.  Se calculaba en cada
+         * compilacion y no la miraba nadie -- la usaba el asignador legacy. */
+        if (iv.vreg < ivs.coalesce_hint.size())
+            av.afinidad = ivs.coalesce_hint[iv.vreg];
         av.req.is_gc = iv.gc_kind != 0;
         for (uint32_t cp : ivs.call_positions) {
             for (const jit::LiveRange &r : iv.ranges)

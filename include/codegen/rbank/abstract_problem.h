@@ -57,6 +57,13 @@ struct AbstractValue {
     uint32_t          start    = 0; ///< posicion de definicion (SSA: unica).
     uint32_t          end      = 0; ///< ultima posicion de uso (>= start).
     ValueRequirements req;          ///< Facts del valor (clase/ancho/pin/...).
+    /// Con quien le CONVIENE compartir lane, o -1.  Es una PREFERENCIA, no una
+    /// exigencia: si se cumple, el movimiento que copiaria uno en otro
+    /// desaparece; si no se puede, el codigo sigue siendo correcto y solo
+    /// queda el movimiento.  Sale de la forma de dos operandos (`dst = src1 OP
+    /// src2` -> a dst le conviene la lane de src1, porque el destino se pisa
+    /// con el primer operando antes de operar).
+    int32_t afinidad = -1;
 };
 
 /**

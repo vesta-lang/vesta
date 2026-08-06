@@ -181,6 +181,22 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
                 return fid;
             return kSpilled;
         }
+        /* Antes de repartir por orden: si al valor le CONVIENE una lane
+         * concreta -- la de aquel con quien comparte el destino de una
+         * operacion de dos operandos -- y esa lane esta libre y le vale, se le
+         * da.  Eso hace desaparecer el movimiento que si no habria que emitir.
+         * Es preferencia, no exigencia: si no se puede, sigue el reparto
+         * normal y el codigo es igual de correcto. */
+        if (v->afinidad >= 0) {
+            const int lp = out.lane_of(static_cast<uint32_t>(v->afinidad));
+            if (lp != kSpilled && lp >= 0 && lp < 256) {
+                const uint8_t id = static_cast<uint8_t>(lp);
+                if (lane_admissible(r, id, bank, vec_active) && lane_free(id) &&
+                    !prohibida_por_forma(v->value_id, id) &&
+                    !lane_pinned_by_other(id, v->start, v->end, v->value_id))
+                    return id;
+            }
+        }
         for (const Lane &l : bank.lanes) {
             if (!lane_admissible(r, l, vec_active)) continue; // correctitud dura (cero by_id).
             if (!lane_free(l.id)) continue;
