@@ -12,6 +12,7 @@
  */
 
 #include "jit/asm_deferred.h"
+#include "jit/frame_emit.h"
 #include "jit/regalloc_rewrite.h"
 
 #include "codegen/transition_planner.h" // que movimientos exige cada punto del programa
@@ -622,127 +623,32 @@ struct Lowerer {
         return i;
     }
 
-    void emit_prologue(std::vector<MInstr> &out) const {
-        /*  NR @Naked: cero prologo.  El cuerpo (asm) controla todo. */
-        if (naked) return;
-        if (fpo) {
-            /* FPO: push rbp para SALVAR el rbp del caller (callee-saved), pero
-             * SIN `mov rbp,rsp` -> rbp queda disponible para el ABI custom (el
-             * 6o arg del int 0x80 x86-32 va en ebp).  El frame se direcciona por
-             * RSP (via frame_mem).  El pop rbp del epilogo lo restaura. */
-            out.push_back(push(MReg::RBP));
-        } else if (!no_frame) {
-            out.push_back(push(MReg::RBP));
-            out.push_back(
-                MInstr::make_unary(MOp::MOV, reg(MReg::RBP), reg(MReg::RSP)));
-        }
+    /** @brief Ficha del marco: lo unico que el emisor necesita saber. */
+    FrameSpec frame_spec() const {
+        FrameSpec f;
+        f.naked = naked;
+        f.fpo = fpo;
+        f.no_frame = no_frame;
+        f.spill_bytes = spill_bytes;
+        f.slot_size = SZ;
+        f.total_saved = total_saved;
+        f.callee_saved = ar.frame.callee_saved_used;
+        f.bajo_vm = vm_abi;
         if (vm_abi) {
-            /* Salvar RBX (callee-saved del host) y cargarlo con el
-             * ProcessVM* que llega en el primer arg. */
-            out.push_back(push(MReg::RBX));
-            out.push_back(MInstr::make_unary(MOp::MOV, reg(MReg::RBX),
-                                             reg(proc_arg_reg())));
+            f.vm.proc_arg = proc_arg_reg();
+            f.vm.has_alloca = has_vm_alloca;
+            f.vm.rsp_save_off = vm_rsp_save_off;
+            f.vm.scratch = scr0;
         }
-        for (uint8_t r : ar.frame.callee_saved_used)
-            out.push_back(push(static_cast<MReg>(r)));
-        if (spill_bytes > 0) {
-            /* Un marco mas grande que una pagina no se puede reservar de un
-             * salto: el sistema operativo deja una pagina de GUARDA justo
-             * debajo de la pila y solo baja ese limite cuando esa pagina
-             * concreta se toca.  Un `sub rsp` grande la salta, asi que el
-             * primer acceso al marco cae mas alla del limite y el sistema lo
-             * toma por un acceso invalido -- el programa muere en el prologo,
-             * antes de ejecutar nada suyo.
-             *
-             * Por eso se toca una pagina cada vez, de arriba abajo, antes de
-             * bajar el puntero: asi cada toque cae o en memoria ya valida o
-             * justo en la guarda, que es lo que la hace bajar.  El marco es de
-             * tamano conocido al compilar, asi que los toques van escritos uno
-             * a uno y no hacen falta ni bucle ni contador.
-             *
-             * Se escribe el propio puntero de pila porque hace falta ESCRIBIR
-             * (leer no siempre basta) y ese hueco es del marco que se esta
-             * reservando: lo que se deje ahi lo pisa el propio marco. */
-            constexpr uint32_t kPagina = 4096;
-            for (uint32_t bajada = kPagina; bajada < spill_bytes;
-                 bajada += kPagina) {
-                out.push_back(MInstr::make_unary(
-                    MOp::MOV,
-                    MOperand::make_mem(MReg::RSP,
-                                       -static_cast<int32_t>(bajada)),
-                    reg(MReg::RSP)));
-            }
-            out.push_back(MInstr::make_unary(
-                MOp::SUB, reg(MReg::RSP), MOperand::make_imm32(spill_bytes)));
-        }
-        /*   salvar el VM-RSP original al slot del frame.  Los
-         * ALLOCA_VM mas adelante decrementan proc->stack_pointer; el
-         * epilogue lo restaura desde aqui (si no, el VM stack hace
-         * leak/overflow entre llamadas).  scr0 (R10) es caller-saved y
-         * esta libre aqui; RBX ya trae el ProcessVM* (vm_abi). */
-        if (has_vm_alloca) {
-            out.push_back(MInstr::make_unary(
-                MOp::MOV, reg(scr0),
-                MOperand::make_mem(MReg::RBX,
-                                   VESTA_PROC_STACK_POINTER_OFFSET)));
-            out.push_back(MInstr::make_unary(
-                MOp::MOV, MOperand::make_mem(MReg::RBP, vm_rsp_save_off),
-                reg(scr0)));
-        }
+        return f;
+    }
+
+    void emit_prologue(std::vector<MInstr> &out) const {
+        emit_frame_prologue(frame_spec(), out);
     }
 
     void emit_epilogue(std::vector<MInstr> &out) const {
-        /*  NR @Naked: cero epilogo (el cuerpo provee ret/iretq). */
-        if (naked) return;
-        if (fpo) {
-            /* FPO: no hay frame pointer -> deshacer el `sub rsp` con `add rsp`
-             * (no `lea rsp,[rbp-..]`), luego pop callee-saved + pop rbp.  RSP es
-             * estable (fpo solo en hojas: sin CALLs ni allocas VM que lo muevan
-             * de forma no equilibrada). */
-            if (spill_bytes > 0)
-                out.push_back(MInstr::make_unary(
-                    MOp::ADD, reg(MReg::RSP), MOperand::make_imm32(spill_bytes)));
-            for (size_t i = ar.frame.callee_saved_used.size(); i-- > 0;)
-                out.push_back(
-                    pop(static_cast<MReg>(ar.frame.callee_saved_used[i])));
-            if (vm_abi) out.push_back(pop(MReg::RBX));
-            out.push_back(pop(MReg::RBP));
-            return;
-        }
-        if (no_frame) {
-            /* Frameless: rsp ya apunta justo encima de los registros
-             * salvados (no hubo push rbp ni sub rsp).  Solo se deshacen
-             * los push de callee-saved y RBX en orden inverso; el ret
-             * encuentra la return address exactamente. */
-            for (size_t i = ar.frame.callee_saved_used.size(); i-- > 0;)
-                out.push_back(pop(static_cast<MReg>(ar.frame.callee_saved_used[i])));
-            if (vm_abi) out.push_back(pop(MReg::RBX));
-            return;
-        }
-        /*   restaurar el VM-RSP original ANTES de desmontar el
-         * frame (RBP/RBX aun validos).  Sin esto los ALLOCA_VM dejarian
-         * proc->stack_pointer decrementado tras el RET -> leak/overflow
-         * del VM stack global.  scr0 (R10) es caller-saved (libre). */
-        if (has_vm_alloca) {
-            out.push_back(MInstr::make_unary(
-                MOp::MOV, reg(scr0),
-                MOperand::make_mem(MReg::RBP, vm_rsp_save_off)));
-            out.push_back(MInstr::make_unary(
-                MOp::MOV,
-                MOperand::make_mem(MReg::RBX, VESTA_PROC_STACK_POINTER_OFFSET),
-                reg(scr0)));
-        }
-        /* lea rsp, [rbp - SZ*total_saved] -> deshace el sub del frame y
-         * apunta rsp al ultimo registro salvado (SZ = 4 en x86-32). */
-        out.push_back(MInstr::make_unary(
-            MOp::LEA, reg(MReg::RSP),
-            MOperand::make_mem(MReg::RBP,
-                               -static_cast<int32_t>(SZ * total_saved))));
-        /* pop callee en orden inverso. */
-        for (size_t i = ar.frame.callee_saved_used.size(); i-- > 0;)
-            out.push_back(pop(static_cast<MReg>(ar.frame.callee_saved_used[i])));
-        if (vm_abi) out.push_back(pop(MReg::RBX));
-        out.push_back(pop(MReg::RBP));
+        emit_frame_epilogue(frame_spec(), out);
     }
 
     /**
