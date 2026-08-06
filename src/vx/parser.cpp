@@ -453,6 +453,51 @@ struct TargetExprParser {
     }
 };
 
+/**
+ * @brief Quita los atomos `mode:` de una expresion de @Target.
+ *
+ * Cuando una declaracion lleva una variante de modo, ese eje ya se ha tenido
+ * en cuenta al marcarla y no debe volver a decidir si se descarta.  El resto
+ * de la expresion (os / arch / cpu) SI sigue condicionando, asi que
+ * `@Target("mode:jit && arch:x86_64")` sigue siendo solo para x86-64.
+ *
+ * Cada atomo de modo se sustituye por `mode:auto` -- que ya evalua a cierto --
+ * en vez de borrarlo, para no romper la sintaxis de la expresion (`&&` / `||`
+ * / parentesis).
+ *
+ * @param spec Expresion original.
+ * @return La expresion con los atomos de modo neutralizados.
+ */
+static std::string strip_mode_atoms_(const std::string &spec) {
+    std::string out;
+    out.reserve(spec.size());
+    size_t i = 0;
+    while (i < spec.size()) {
+        // Un atomo empieza por letra; se lee entero para no partir nombres.
+        if (std::isalpha((unsigned char)spec[i]) != 0) {
+            size_t j = i;
+            while (j < spec.size() &&
+                   (std::isalnum((unsigned char)spec[j]) != 0 ||
+                    spec[j] == '_' || spec[j] == ':' || spec[j] == '-')) {
+                ++j;
+            }
+            const std::string atomo = spec.substr(i, j - i);
+            if (atomo.compare(0, 5, "mode:") == 0) {
+                // `mode:auto` ya evalua a cierto, asi que sirve de neutro sin
+                // inventar un atomo nuevo.
+                out += "mode:auto";
+            } else {
+                out += atomo;
+            }
+            i = j;
+            continue;
+        }
+        out += spec[i];
+        ++i;
+    }
+    return out;
+}
+
 static bool target_matches_(const std::string &spec_in) noexcept {
     if (spec_in.empty()) return true;
     TargetExprParser p(spec_in);
@@ -1471,6 +1516,9 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     bool top_is_macro = false;    /* A.43.16: @Macro */
     bool top_is_pure = false;     /* A.43.20: @Pure -- memoizable */
     bool top_target_skip = false; /* L.24: @Target no matchea */
+    /* Variante por modo de ejecucion: 0 ninguna, 1 para el JIT, 2 para el
+     * interprete.  No descarta la decl -- las dos viajan en el `.velb`. */
+    int top_mode_variant = 0;
     std::string top_target_spec;  /* la condicion que no se cumplio */
     // Subsistema de coste (modo --analyze): @complexity(O(...)[, n=...]).
     std::string top_complexity_expr;          // expr de coste normalizada
@@ -1856,11 +1904,11 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                     error_here("@Target requiere un string literal");
                 }
                 (void)expect(TokenKind::RPAREN, "se esperaba ')' tras @Target");
-                // `mode:jit` / `mode:vm` NO condicionan: el .velb es agnostico
-                // al modo de ejecucion (el mismo binario corre en JIT o
-                // interp, lo decide un flag de runtime).  Antes evaluaban a
-                // false SIEMPRE, con lo que la decl se BORRABA en silencio.
-                // Error explicito en vez del borrado invisible.
+                // `mode:jit` / `mode:vm` SI condicionan, pero no descartando:
+                // el mismo `.velb` sirve al interprete y al JIT, asi que las
+                // DOS variantes viajan dentro y se elige al ejecutar.  La de
+                // VM conserva el nombre; la de JIT sale con sufijo, y el JIT
+                // la sustituye al compilar la funcion.
                 {
                     std::vector<std::string> ats;
                     cwhen::atoms(spec, ats);
@@ -1878,18 +1926,21 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                                            .c_str());
                             break;
                         }
-                        if (a == "mode:jit" || a == "mode:vm") {
-                            error_here(
-                                "@Target: 'mode:jit'/'mode:vm' no condiciona -- "
-                                "el .velb es agnostico al modo de ejecucion (el "
-                                "mismo binario corre en JIT o interp).  Usa "
-                                "'mode:auto' para codigo agnostico o "
-                                "'mode:jit-required' para EXIGIR JIT.");
-                            break;
+                        if (a == "mode:jit") {
+                            top_mode_variant = 1; // variante para el JIT
+                        } else if (a == "mode:vm") {
+                            top_mode_variant = 2; // variante para el interprete
                         }
                     }
                 }
-                if (!target_matches_(spec)) {
+                // Con una variante de modo, los atomos `mode:` ya se han
+                // tenido en cuenta y no deben descartar nada; el resto de la
+                // expresion (os/arch/cpu) SI sigue condicionando.
+                std::string spec_eval = spec;
+                if (top_mode_variant != 0) {
+                    spec_eval = strip_mode_atoms_(spec);
+                }
+                if (!spec_eval.empty() && !target_matches_(spec_eval)) {
                     top_target_skip = true;
                     top_target_spec = spec;
                 }
@@ -2355,6 +2406,14 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         if (fd && top_is_panic_handler) fd->is_panic_handler = true;
         if (fd && top_is_naked) fd->is_naked = true;
         if (fd && top_is_no_idiom) fd->is_no_idiom = true;
+        // Variante por modo: la del interprete conserva el nombre para que los
+        // puntos de llamada no cambien; la del JIT sale con sufijo, y el JIT
+        // la sustituye al compilar.  Asi las dos conviven en el mismo `.velb`
+        // sin tocar el formato.
+        if (fd && top_mode_variant == 1) {
+            fd->name += ast::kSufijoVarianteJit;
+            fd->mode_variant_jit = true;
+        }
         if (fd && top_is_string_concat) fd->is_string_concat_override = true;
         if (fd && top_is_string_eq) fd->is_string_eq_override = true;
         if (fd && top_is_sync_impl) fd->is_sync_impl = true;

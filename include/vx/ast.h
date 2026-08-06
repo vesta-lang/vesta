@@ -55,6 +55,14 @@
 
 namespace vx::ast {
 
+/// Sufijo del nombre de la variante que usa el JIT (@Target("mode:jit")).
+///
+/// La variante del interprete conserva el nombre desnudo para que ningun punto
+/// de llamada cambie; el JIT sustituye la llamada por la del sufijo cuando
+/// compila la funcion.  Asi las dos viajan en el mismo `.velb` sin tocar el
+/// formato ni anadir tablas.
+inline constexpr const char *kSufijoVarianteJit = "__jit";
+
 // -------------------------------------------------------------------
 // Discriminadores: NodeKind, BinOp, UnOp, AssignOp.
 // -------------------------------------------------------------------
@@ -1718,6 +1726,10 @@ struct FunctionDecl : Node {
     /// la suya con @c @HelperOverride.  No cambia la semantica: solo impide
     /// que el codigo se sustituya por una llamada a lo que esta definiendo.
     bool is_no_idiom = false;
+    /// @Target("mode:jit"): esta es la variante que usa el JIT.  Su nombre
+    /// lleva el sufijo @c kSufijoVarianteJit para convivir con la del
+    /// interprete, que conserva el nombre desnudo.
+    bool mode_variant_jit = false;
     /// @NoExcept (o modulo @NoExceptions): esta funcion promete no propagar
     /// excepciones.  El frontend rechaza throw/try/catch en su cuerpo y el
     /// codegen omite el bookkeeping de excepciones (cero overhead).  Un
