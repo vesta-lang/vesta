@@ -4173,13 +4173,21 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         blob.in_vregs.push_back(static_cast<uint32_t>(opv));
                     if (binding_is_out[opv])
                         blob.out_vregs.push_back(static_cast<uint32_t>(opv));
-                    /* binding sin STORE ni LOAD (raro): tratar como in+out
-                     * para que su intervalo cubra el asm y el pin se
-                     * respete (conservador). */
-                    if (!binding_is_in[opv] && !binding_is_out[opv]) {
-                        blob.in_vregs.push_back(static_cast<uint32_t>(opv));
+                    /* Binding sin STORE ni LOAD: es un BORRADOR -- no entra
+                     * ningun valor y no sale ninguno, solo hace falta un
+                     * registro DURANTE el bloque.  Se declara como definido
+                     * aqui y nada mas: asi su intervalo es el bloque y punto.
+                     *
+                     * Declararlo tambien como leido (que es lo que se hacia
+                     * "por si acaso") lo daba por vivo desde su ALLOCA, que
+                     * esta al principio de la funcion; si por medio habia una
+                     * llamada, el asignador lo tomaba por vivo a traves de
+                     * ella y le exigia una ranura preservada.  En System V
+                     * ninguna ranura ancha lo es -> ninguna admisible -> el
+                     * operando acababa en memoria y el bloque salia con el
+                     * mismo registro repetido. */
+                    if (!binding_is_in[opv] && !binding_is_out[opv])
                         blob.out_vregs.push_back(static_cast<uint32_t>(opv));
-                    }
                 }
                 blob.clobbers_mem = ((in.imm >> 4) & 1u) != 0;
                 blob.clobbers_flags = ((in.imm >> 5) & 1u) != 0;

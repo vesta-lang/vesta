@@ -177,6 +177,14 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
     // para instrumentacion.  El coste sale del Objective; la fusion es del algoritmo.
     constexpr double kDeadHorizon = 1e18; // horizonte "infinito": victima muerta ideal.
     auto spill_score = [&](const AbstractValue *c, uint32_t now) -> double {
+        /* Un valor que TIENE que estar en registro no es candidato a nada: su
+         * uso lo nombra como registro y en memoria no existe.  Es el caso de
+         * un operando de un bloque asm -- el cuerpo dice `movdqu v0, [s]`, y
+         * `v0` no puede ser una posicion de pila.  Se le da la peor puntuacion
+         * posible para que jamas salga elegido; si aun asi no cabe ninguno, el
+         * problema es que se han pedido mas operandos de los que hay, y eso lo
+         * cuenta quien reescribe. */
+        if (c->req.residency == Residency::REGISTER) return -1.0;
         const double remaining =
             static_cast<double>(c->end >= now ? c->end - now : 0) + 1.0;
         const double cost = spill_cost_via_objective(c->req, ctx);
@@ -237,6 +245,31 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
 
         record_victim(victim, v->start); // instrumento: razon de la victima.
         if (victim == v) {
+            /* Derramar un valor que TIENE que estar en registro no es una
+             * decision, es una imposibilidad: su uso lo nombra como registro.
+             * Se cuenta en voz alta con el motivo por el que ninguna lane
+             * valia, que es lo que hace falta para arreglarlo. */
+            if (v->req.residency == Residency::REGISTER) {
+                LaneHazard razon = LaneHazard::NONE;
+                unsigned de_su_clase = 0, admisibles = 0, libres = 0;
+                for (const Lane &l : bank.lanes) {
+                    if (l.cls != v->req.cls) continue; // otra clase: no dice nada
+                    ++de_su_clase;
+                    const LaneHazard h = lane_hazard(v->req, l, vec_active);
+                    if (h != LaneHazard::NONE) {
+                        if (razon == LaneHazard::NONE) razon = h;
+                        continue;
+                    }
+                    ++admisibles;
+                    if (lane_free(l.id)) ++libres;
+                }
+                std::fprintf(stderr,
+                             "[rbank] el valor %u tiene que estar en registro "
+                             "y no lo consigue: %u lanes de su clase, %u "
+                             "admisibles, %u libres, primer impedimento %d\n",
+                             v->value_id, de_su_clase, admisibles, libres,
+                             static_cast<int>(razon));
+            }
             out.spill(v->value_id); // v es la peor de mantener -> derramar v.
         } else {
             // Derramar la victima, dar su lane a v.

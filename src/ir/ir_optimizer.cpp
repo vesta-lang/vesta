@@ -88,6 +88,41 @@ inline uint32_t f32_to_bits(float f) noexcept {
  * Deja fuera a las que MUTAN algo ajeno: @c STRFINALIZE reescribe la cabecera de
  * un FLAT existente, asi que su efecto no es solo el retorno.
  */
+/**
+ * @brief Suma @p desplazamiento a cada marcador `$N` del cuerpo @p cuerpo.
+ *
+ * Los operandos que elige el compilador se nombran en el cuerpo de un bloque
+ * asm por `$N`, donde N indexa la lista de ligaduras de la FUNCION.  Al traer
+ * el bloque a otra funcion hay que correr esos numeros para que no pisen a los
+ * que ya habia; el texto es lo unico que hay que tocar, porque el resto del
+ * bloque no menciona registros.
+ *
+ * @param cuerpo Texto del bloque asm.
+ * @param desplazamiento Cuanto sumar a cada numero.
+ * @return El cuerpo con los marcadores corridos.
+ */
+static std::string vx_desplazar_marcadores(const std::string &cuerpo,
+                                           int desplazamiento) {
+    std::string out;
+    out.reserve(cuerpo.size() + 8);
+    for (size_t i = 0; i < cuerpo.size();) {
+        if (cuerpo[i] != '$') { out += cuerpo[i++]; continue; }
+        size_t j = i + 1;
+        int n = 0;
+        bool hay = false;
+        while (j < cuerpo.size() && cuerpo[j] >= '0' && cuerpo[j] <= '9') {
+            n = n * 10 + (cuerpo[j] - '0');
+            ++j;
+            hay = true;
+        }
+        if (!hay) { out += cuerpo[i++]; continue; } // '$' suelto: verbatim
+        out += '$';
+        out += std::to_string(n + desplazamiento);
+        i = j;
+    }
+    return out;
+}
+
 static bool alloc_only_string_op(IrOp op) {
     switch (op) {
     case IrOp::STRMAKE:
@@ -8893,6 +8928,9 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
                 IrValueId ret_value = IR_NO_VALUE;
                 bool inline_ok = true;
                 bool inlined_inline_asm = false;
+                /// Cuanto se desplazaron los marcadores `$N` de los bloques
+                /// asm que se traen del callee (ver mas abajo).
+                int ph_desplazamiento = 0;
                 for (const auto &c_ins : cbody.instrs) {
                     if (c_ins.op == IrOp::RET) {
                         if (!c_ins.operands.empty()) {
@@ -8971,6 +9009,22 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
                             caller.asm_clobber_lists.emplace_back();
                         ni.imm = (ni.imm & 0xFFull) |
                                  (static_cast<uint64_t>(new_id) << 8);
+                        /* Los operandos que elige el compilador se nombran en
+                         * el cuerpo por un marcador `$N`, y ese numero indexa
+                         * la lista de ligaduras de la FUNCION.  Al traer el
+                         * bloque a otra funcion que ya tiene las suyas, los
+                         * numeros se pisarian y un bloque acabaria usando el
+                         * registro de otro -- se veia como un `movdqu zmm0`,
+                         * mezcla de dos bloques distintos.  Se desplazan aqui,
+                         * igual que el id de la lista de clobbers. */
+                        int desplazamiento = 0;
+                        for (const auto &pb : caller.asm_reg_bindings)
+                            if (pb.reg_auto && pb.ph_index >= desplazamiento)
+                                desplazamiento = pb.ph_index + 1;
+                        if (desplazamiento > 0)
+                            ni.func_name = vx_desplazar_marcadores(
+                                ni.func_name, desplazamiento);
+                        ph_desplazamiento = desplazamiento;
                         inlined_inline_asm = true;
                     }
                     /* ASM_MICRO: @c imm indexa el @c asm_micros del CALLEE.
@@ -9027,6 +9081,10 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
                         if (dropped_vars.count(b.alloca_value)) continue;
                         ir::AsmRegBinding nb = b;
                         nb.alloca_value = remap_op(b.alloca_value);
+                        // Mismo desplazamiento que se aplico a los marcadores
+                        // del cuerpo, para que sigan apuntando a su ligadura.
+                        if (nb.reg_auto && nb.ph_index >= 0)
+                            nb.ph_index += ph_desplazamiento;
                         if (nb.alloca_value != IR_NO_VALUE)
                             caller.asm_reg_bindings.push_back(std::move(nb));
                     }

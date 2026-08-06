@@ -59,6 +59,27 @@ namespace {
  *        Gate VESTA_NO_WIDE_HOME=1 fuerza la reserva SIEMPRE (A/B = comportamiento
  *        anterior: 10 lanes para toda funcion).
  */
+/**
+ * @brief ¿Necesita @p fn el scratch del banco ancho (XMM14/15)?
+ *
+ * El reescritor los usa para traer un valor derramado, para legalizar las
+ * operaciones de dos operandos y para romper ciclos al permutar registros --
+ * todo eso solo aparece si la funcion opera con FLOTANTES.  Una funcion cuyo
+ * unico uso del banco ancho son los operandos de un bloque asm no hace nada de
+ * eso, asi que reservarlos le quita dos ranuras de las dieciseis sin motivo.
+ *
+ * Se responde por el TIPO de los valores, que es lo que decide si el reescritor
+ * llegara a emitir movimientos de coma flotante.  Ante la duda, reservar.
+ *
+ * @param fn Funcion IR.
+ * @return true si hay que reservarlos.
+ */
+bool fn_needs_fp_scratch(const ir::IrFunction &fn) {
+    for (const auto &v : fn.values)
+        if (v.type == ir::IrType::F32 || v.type == ir::IrType::F64) return true;
+    return false;
+}
+
 bool fn_needs_vec_reserve(const ir::IrFunction &fn) {
     static const bool gate_force = [] {
         const char *e = std::getenv("VESTA_NO_WIDE_HOME");
@@ -454,18 +475,15 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
      * tabla se llega a la funcion pero no a la linea. */
     if (!vreg_select(fn, mf, AbiKind::VM, resolve_call, ent, resolve_native,
                      resolve_symbol, /*pic=*/true,
-#if defined(_WIN32)
-                     /*target_sysv=*/false,
-#else
-                     /*target_sysv=*/true,
-#endif
+                     /*target_sysv=*/host_is_sysv(),
                      /*mode32=*/false, FloatIsa::SSE2,
                      /*emit_line_map=*/out_line_map != nullptr))
         return nullptr;
 
     /* Reserva VEC_ACC demand-driven: XMM10-13 asignables si la funcion NO usa
      * el path vectorial (14 lanes FP escalares en vez de 10). */
-    const TargetRegInfo &tri = target_x86_64_vm_abi(fn_needs_vec_reserve(fn));
+    const TargetRegInfo &tri = target_x86_64_vm_abi(fn_needs_vec_reserve(fn),
+                                                     fn_needs_fp_scratch(fn));
 
     /* 2. Intervalos + P1 coalescing + 3. asignacion (commit 6: el linear_scan
      *    FUERZA a slot los GC roots vivos a traves de un call).
@@ -590,16 +608,13 @@ uint8_t *vreg_compile_callback(const ir::IrFunction &fn, CodeCache &cc,
     MFunction mf;
     if (!vreg_select(fn, mf, AbiKind::VM, resolve_call, ent, resolve_native,
                      resolve_symbol, /*pic=*/true,
-#if defined(_WIN32)
-                     /*target_sysv=*/false,
-#else
-                     /*target_sysv=*/true,
-#endif
+                     /*target_sysv=*/host_is_sysv(),
                      /*mode32=*/false, FloatIsa::SSE2, /*emit_line_map=*/false,
                      cb))
         return nullptr;
 
-    const TargetRegInfo &tri = target_x86_64_vm_abi();
+    const TargetRegInfo &tri = target_x86_64_vm_abi(fn_needs_vec_reserve(fn),
+                                                     fn_needs_fp_scratch(fn));
 
     IntervalResult ivs = build_intervals(mf, tri);
     if (apply_ssa_coalesce(mf, fn)) ivs = build_intervals(mf, tri);
@@ -780,7 +795,7 @@ vreg_compile_native(const ir::IrFunction &fn, const CallResolver &resolve_call,
      * Reserva VEC_ACC demand-driven (misma politica que el JIT). */
     const X86Target target(resolve_call, ent, resolve_native, resolve_symbol,
                            pic, target_sysv, mode32, fisa, emit_line_map,
-                           fn_needs_vec_reserve(fn));
+                           fn_needs_vec_reserve(fn), fn_needs_fp_scratch(fn));
     return vreg_compile_native_target(fn, target, relocs_out, line_map_out,
                                       asm_labels_out, stackmaps_out);
 }
@@ -800,7 +815,8 @@ uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,
     if (!vreg_select(fn, mf, AbiKind::VM, resolve_call, ent, resolve_native,
                      resolve_symbol))
         return nullptr;
-    const TargetRegInfo &tri = target_x86_64_vm_abi();
+    const TargetRegInfo &tri = target_x86_64_vm_abi(fn_needs_vec_reserve(fn),
+                                                     fn_needs_fp_scratch(fn));
     IntervalResult ivs = build_intervals(mf, tri);
     codegen::AssignmentPlan plan; // Fragmentation Recovery (vacio si el splitting esta OFF).
     codegen::RegAlloc ra = rbank_allocate_belady(ivs, mf, tri,

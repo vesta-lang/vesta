@@ -122,7 +122,8 @@ struct TargetRegInfo {
  * difieren.  El JIT en proceso usa el ABI del host (ver
  * @c target_x86_64_vm_abi).
  */
-inline TargetRegInfo build_x86_64_target(bool sysv, bool reserve_vec_acc = true) {
+inline TargetRegInfo build_x86_64_target(bool sysv, bool reserve_vec_acc = true,
+                                         bool reserve_fp_scratch = true) {
     TargetRegInfo t;
     t.pointer_size = 8;
     t.is_two_address = true;
@@ -173,7 +174,13 @@ inline TargetRegInfo build_x86_64_target(bool sysv, bool reserve_vec_acc = true)
      * para FP escalar -> 14 lanes en vez de 10.  El selector solo fija XMM13-idx
      * cuando hay ops VEC_ACC_*, asi que la MISMA condicion decide reserva Y uso
      * -> coherente (nadie pisa un acumulador vivo).  acc_idx 0..3 -> XMM13..10. */
-    const int fp_hi = reserve_vec_acc ? 25 : 29; /* XMM0..9 (reserva) o XMM0..13. */
+    /* XMM14/15 son el scratch del reescritor (materializar derrames FP,
+     * legalizar las operaciones de dos operandos, romper ciclos al permutar).
+     * Una funcion que NO hace nada de eso -- porque su unico uso del banco
+     * ancho son los operandos de un bloque asm -- no los necesita, y
+     * reservarlos le quita dos ranuras de las 16 sin motivo.  Misma reserva
+     * DEMAND-DRIVEN que la de los acumuladores, decidida por el llamante. */
+    const int fp_hi = reserve_vec_acc ? 25 : (reserve_fp_scratch ? 29 : 31);
     for (int i = 16; i <= fp_hi; ++i) {
         t.allocatable[FP].push_back(static_cast<uint8_t>(i));
         t.caller_saved[FP].push_back(static_cast<uint8_t>(i));
@@ -253,25 +260,43 @@ inline const TargetRegInfo &target_x86_32() {
  *        (funciones con reduccion vectorial); false = XMM10-13 asignables para FP
  *        escalar (funciones sin reduccion).  La reserva es DEMAND-DRIVEN.
  */
-inline const TargetRegInfo &target_x86_64_abi(bool sysv, bool reserve_vec_acc = true) {
-    static const TargetRegInfo sysv_res  = build_x86_64_target(true, true);
-    static const TargetRegInfo win_res   = build_x86_64_target(false, true);
-    static const TargetRegInfo sysv_free = build_x86_64_target(true, false);
-    static const TargetRegInfo win_free  = build_x86_64_target(false, false);
-    if (reserve_vec_acc) return sysv ? sysv_res : win_res;
-    return sysv ? sysv_free : win_free;
+inline const TargetRegInfo &target_x86_64_abi(bool sysv, bool reserve_vec_acc = true,
+                                              bool reserve_fp_scratch = true) {
+    static const TargetRegInfo t[8] = {
+        build_x86_64_target(true, true, true),   build_x86_64_target(false, true, true),
+        build_x86_64_target(true, false, true),  build_x86_64_target(false, false, true),
+        build_x86_64_target(true, true, false),  build_x86_64_target(false, true, false),
+        build_x86_64_target(true, false, false), build_x86_64_target(false, false, false),
+    };
+    const size_t i = (reserve_fp_scratch ? 0u : 4u) +
+                     (reserve_vec_acc ? 0u : 2u) + (sysv ? 0u : 1u);
+    return t[i];
+}
+
+/**
+ * @brief ¿El ABI de ESTA maquina es el de System V?
+ *
+ * UNICO sitio donde se mira en que sistema se esta compilando.  Solo vale para
+ * el JIT, que compila para la maquina en la que corre; el camino nativo NO
+ * puede preguntarse esto -- desde Windows se generan binarios de Linux y al
+ * reves -- y por eso recibe el ABI de su objetivo (@c target_x86_64_abi).
+ */
+inline constexpr bool host_is_sysv() noexcept {
+#if defined(_WIN32)
+    return false;
+#else
+    return true;
+#endif
 }
 
 /**
  * @brief @c TargetRegInfo del ABI del HOST (para el JIT en proceso).
  * @param reserve_vec_acc  ver @c target_x86_64_abi.
+ * @param reserve_fp_scratch  ver @c target_x86_64_abi.
  */
-inline const TargetRegInfo &target_x86_64_vm_abi(bool reserve_vec_acc = true) {
-#if defined(_WIN32)
-    return target_x86_64_abi(/*sysv=*/false, reserve_vec_acc);
-#else
-    return target_x86_64_abi(/*sysv=*/true, reserve_vec_acc);
-#endif
+inline const TargetRegInfo &target_x86_64_vm_abi(bool reserve_vec_acc = true,
+                                                 bool reserve_fp_scratch = true) {
+    return target_x86_64_abi(host_is_sysv(), reserve_vec_acc, reserve_fp_scratch);
 }
 
 /*

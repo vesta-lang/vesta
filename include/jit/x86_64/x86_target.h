@@ -35,17 +35,19 @@ class X86Target final : public CodegenTarget {
               const CallResolver &resolve_native,
               const CallResolver &resolve_symbol, bool pic, bool target_sysv,
               bool mode32, FloatIsa fisa, bool emit_line_map,
-              bool reserve_vec_acc = true)
+              bool reserve_vec_acc = true, bool reserve_fp_scratch = true)
         : resolve_call_(resolve_call), ent_(ent),
           resolve_native_(resolve_native), resolve_symbol_(resolve_symbol),
           pic_(pic), sysv_(target_sysv), mode32_(mode32), fisa_(fisa),
-          emit_line_map_(emit_line_map), reserve_vec_acc_(reserve_vec_acc) {}
+          emit_line_map_(emit_line_map), reserve_vec_acc_(reserve_vec_acc),
+          reserve_fp_scratch_(reserve_fp_scratch) {}
 
     const TargetRegInfo &reg_info() const override {
         // Reserva VEC_ACC demand-driven: XMM10-13 solo se reservan en funciones
         // que usan el path vectorial; las escalares obtienen 14 lanes FP.
         return mode32_ ? target_x86_32()
-                       : target_x86_64_abi(sysv_, reserve_vec_acc_);
+                       : target_x86_64_abi(sysv_, reserve_vec_acc_,
+                                           reserve_fp_scratch_);
     }
 
     sched::EffIsa sched_isa() const override { return sched::EffIsa::X86; }
@@ -83,6 +85,9 @@ class X86Target final : public CodegenTarget {
     FloatIsa fisa_;
     bool emit_line_map_;
     bool reserve_vec_acc_; ///< reservar XMM10-13 para VEC_ACC (demand-driven).
+    /// Reservar XMM14/15 como scratch del reescritor.  Solo hace falta si la
+    /// funcion opera con flotantes; si no, son dos ranuras mas.
+    bool reserve_fp_scratch_;
 };
 
 } // namespace jit

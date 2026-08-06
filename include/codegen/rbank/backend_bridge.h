@@ -34,6 +34,8 @@
 #ifndef VESTA_CODEGEN_RBANK_BACKEND_BRIDGE_H
 #define VESTA_CODEGEN_RBANK_BACKEND_BRIDGE_H
 
+#include <cstdio>
+#include <cstdlib>
 #include "codegen/rbank/abstract_problem.h"
 #include "codegen/rbank/constraints.h"
 #include "codegen/rbank/physical_bank.h"
@@ -101,6 +103,21 @@ inline AbstractProblem intervals_to_problem(const jit::IntervalResult &ivs) {
         if ((av.req.crosses_call && av.req.is_gc) ||
             (iv.vreg < ivs.force_spill.size() && ivs.force_spill[iv.vreg]))
             av.req.residency = Residency::MEMORY;
+        /* Lo contrario: valores que NO se pueden derramar porque su uso los
+         * nombra como registro -- los operandos de un bloque asm.  Sin esto el
+         * allocator los trataba como cualquier otro y podia dejarlos en
+         * memoria o dar la misma lane a varios, y el bloque salia con el mismo
+         * registro repetido.  Si ya hay una razon de MEMORIA, esa manda: son
+         * requisitos incompatibles y quien reescribe lo dira. */
+        if (iv.reg_required && av.req.residency == Residency::ANY)
+            av.req.residency = Residency::REGISTER;
+        if (iv.reg_required && std::getenv("VESTA_RBANK_ASM_DEBUG")) {
+            std::fprintf(stderr,
+                         "[rbank] operando asm vreg %u: rango [%u,%u], %zu "
+                         "trozos, cruza-llamada=%d, llamadas=%zu\n",
+                         iv.vreg, av.start, av.end, iv.ranges.size(),
+                         av.req.crosses_call ? 1 : 0, ivs.call_positions.size());
+        }
         // HAZARD "lanes muertas" (forbidden_lanes): las lanes que un INLINE_ASM destruye
         // en un punto que el valor atraviesa (incluye callee-saved que el CALL no protege).
         for (const jit::IntervalResult::AsmClobberSite &site : ivs.asm_clobbers) {

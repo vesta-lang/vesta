@@ -13960,16 +13960,37 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     static const char *kRegPref[] = {"r10", "r11", "r8",  "r9",  "rcx", "rdx",
                                      "rsi", "rdi", "rax", "rbx", "r12", "r13",
                                      "r14", "r15"};
-    int reg_auto_count = 0; // indice $N de cada operando `reg` (auto)
+    /* Indice $N de cada operando que elige el compilador.  Es unico por
+     * FUNCION, no por bloque: los bindings de todos los bloques de una funcion
+     * viven en una sola lista y se buscan por este numero, asi que empezar de
+     * cero en cada bloque hacia que el segundo pisara al primero.  Se nota
+     * cuando dos bloques acaban en la misma funcion, que es lo normal en
+     * cuanto el optimizador inlinea. */
+    int reg_auto_count = 0;
+    for (const ir::AsmRegBinding &prev : fn_->asm_reg_bindings)
+        if (prev.reg_auto && prev.ph_index >= reg_auto_count)
+            reg_auto_count = prev.ph_index + 1;
     for (auto &op : s->operands) {
         std::string reg;
         bool reg_auto = false;
         int ph_index = -1;
         if (op.reg_class == "xmm" || op.reg_class == "ymm" ||
             op.reg_class == "zmm") {
-            /* Vectorial AUTO: mismo trato que `reg` pero eligiendo del banco
-             * ancho.  El ancho lo da la clase (xmm/ymm/zmm) y el numero lo
-             * pone el compilador, cogiendo el primero que nadie use. */
+            /* Vectorial AUTO: mismo trato que `reg`.  El cuerpo lo referencia
+             * por el marcador $N y quien pone el registro es el ASIGNADOR.
+             *
+             * Elegirlo aqui era lo que rompia: el numero quedaba horneado en el
+             * texto y el asignador no se enteraba de que esa ranura estaba
+             * ocupada, asi que podia dejar OTRO valor vivo en ella mientras el
+             * bloque la pisaba.  Con pocos operandos rara vez coincidian; a
+             * partir de una docena, casi siempre.  Ademas el tope lo ponia este
+             * bucle (16 a secas) en vez del banco real del objetivo.
+             *
+             * Se conserva un pick GREEDY en @c binding.reg como asignacion por
+             * defecto para el INTERPRETE, que no tiene asignador: ahi el $N se
+             * sustituye por ese registro.  Mismo reparto que en `reg`. */
+            reg_auto = true;
+            ph_index = reg_auto_count++;
             static const int kNumVec = 16;
             for (int i = 0; i < kNumVec; ++i) {
                 const std::string cand = op.reg_class + std::to_string(i);
@@ -14038,14 +14059,23 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         b.reg_auto = reg_auto;
         b.ph_index = ph_index;
         fn_->asm_reg_bindings.push_back(std::move(b));
-        if (v0 == ir::IR_NO_VALUE) v0 = emit_const(vt, 0, s->loc.line);
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = vt;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {v0, addr};
-        st.source_line = s->loc.line;
-        emit(current_block_, std::move(st));
+        /* Operando SIN inicializador: es un borrador, no entra ningun valor.
+         * Meterle un cero era peor que inutil -- creaba un valor vivo desde ese
+         * punto hasta el bloque, y si por medio habia una llamada el asignador
+         * lo daba por vivo a traves de ella y exigia una ranura preservada.  En
+         * System V ninguna ranura ancha lo es, asi que no habia ninguna
+         * admisible y el operando acababa en memoria: el bloque salia con el
+         * mismo registro repetido.  Eso explicaba que fallara en Linux y no en
+         * Windows, donde xmm6-15 si se preservan. */
+        if (v0 != ir::IR_NO_VALUE) {
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = vt;
+            st.dst = ir::IR_NO_VALUE;
+            st.operands = {v0, addr};
+            st.source_line = s->loc.line;
+            emit(current_block_, std::move(st));
+        }
         // Placeholder en el cuerpo: reg concreto -> su nombre; reg AUTO -> $N
         // (lo rellena el backend post-regalloc con el fisico que elija el RA).
         ph_subst.emplace_back(op.name,
