@@ -1108,6 +1108,9 @@ int main(int argc, char *argv[]) {
                                arch_s == "i386");
             vx::set_aot_condcomp_target(fmt_s == "pe" ? "windows" : "linux",
                                          is32 ? "x86" : "x86_64");
+            // Camino de compilacion: lo que hace utilizable
+            // @Target("mode:aot") frente a @Target("mode:bytecode").
+            vx::set_aot_condcomp_mode("aot");
         }
     } else {
         /* Sin flags CLI explicitos -> consultar env var ahora.  Lo

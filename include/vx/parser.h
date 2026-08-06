@@ -69,6 +69,18 @@ void set_aot_condcomp_target(const std::string &os,
 /// modo parsearian las variantes @Target contra el host (HALLAZGO-2).
 void get_aot_condcomp_target(std::string &os, std::string &arch) noexcept;
 
+/// Fija el CAMINO DE COMPILACION activo ("aot" al generar codigo nativo, vacio
+/// en la ruta de bytecode).  Es contra esto que se evalua `@Target("mode:aot")`
+/// y `@Target("mode:bytecode")`.
+///
+/// Este eje separa AOT de bytecode, que son compilaciones distintas.  NO
+/// separa interprete de JIT: los dos ejecutan el mismo .velb y lo decide un
+/// flag de ejecucion, asi que no es una propiedad del codigo emitido.
+void set_aot_condcomp_mode(const std::string &mode) noexcept;
+/// Lee el camino de compilacion activo (para propagarlo a los workers del
+/// compile paralelo, igual que os/arch).
+void get_aot_condcomp_mode(std::string &mode) noexcept;
+
 /// Evalua una expresion de @c @Target (os/arch/cpu/mode/compiler/vm con
 /// &&/||/! y parentesis) contra el target activo.
 ///

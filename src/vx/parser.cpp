@@ -195,11 +195,27 @@ static constexpr double VX_TARGET_VM_VERSION = 1.0;
 // compile paralelo (M8).
 static thread_local std::string g_cc_target_os;   // "windows"/"linux"/"macos"
 static thread_local std::string g_cc_target_arch; // "x86_64"/"x86"/"arm64"
+/// Camino de compilacion activo: "aot" cuando se genera codigo nativo, vacio
+/// en la ruta de bytecode.  Es lo que hace utilizable `@Target("mode:aot")`.
+///
+/// OJO con lo que este eje PUEDE y NO PUEDE decir: separa AOT de bytecode,
+/// porque son compilaciones distintas.  NO separa interprete de JIT: los dos
+/// ejecutan el MISMO .velb y quien decide es un flag de ejecucion, asi que
+/// eso no es una propiedad del codigo emitido y no se puede resolver aqui.
+static thread_local std::string g_cc_target_mode;
 
 void set_aot_condcomp_target(const std::string &os,
                              const std::string &arch) noexcept {
     g_cc_target_os = os;
     g_cc_target_arch = arch;
+}
+
+void set_aot_condcomp_mode(const std::string &mode) noexcept {
+    g_cc_target_mode = mode;
+}
+
+void get_aot_condcomp_mode(std::string &mode) noexcept {
+    mode = g_cc_target_mode;
 }
 
 // Lee el override actual del target de @Target.  Necesario para propagar el
@@ -343,12 +359,18 @@ static bool target_atom_eval_(const std::string &atom) noexcept {
     }
     if (key == "cpu") return target_cpu_has_(val);
     if (key == "mode") {
-        // Durante la compilacion (--vx) el modo de ejecucion es
-        // indeterminado: el JIT decide en runtime.  Por eso `auto`
-        // (default) es true y `jit-required` (exige JIT) es false.
-        // `jit`/`vm` quedan false: no se puede garantizar el modo en
-        // compile time (usar `auto` para codigo agnostico).
-        return val == "auto";
+        // `auto` = codigo agnostico: siempre vale.
+        if (val == "auto") return true;
+        // `aot` / `bytecode`: SI se sabe al compilar, porque son caminos de
+        // compilacion distintos.  Antes `mode:aot` caia al `false` de abajo y
+        // la declaracion se borraba EN SILENCIO -- el mismo fallo que ya se
+        // habia arreglado para `jit`/`vm` con un error explicito.
+        if (val == "aot") return g_cc_target_mode == "aot";
+        if (val == "bytecode") return g_cc_target_mode != "aot";
+        // `jit`/`vm` no llegan aqui (el parser los rechaza antes): el mismo
+        // .velb corre en los dos y el modo no es propiedad del codigo emitido.
+        // `jit-required` exige JIT, que en compile time no se garantiza.
+        return false;
     }
     return false;
 }
@@ -1843,6 +1865,19 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                     std::vector<std::string> ats;
                     cwhen::atoms(spec, ats);
                     for (const auto &a : ats) {
+                        // Un valor de `mode` que nadie conoce evaluaba a false
+                        // y BORRABA la declaracion sin decir nada.  Se avisa.
+                        if (a.compare(0, 5, "mode:") == 0 &&
+                            a != "mode:auto" && a != "mode:aot" &&
+                            a != "mode:bytecode" && a != "mode:jit" &&
+                            a != "mode:vm" && a != "mode:jit-required") {
+                            error_here(("@Target: modo '" + a.substr(5) +
+                                        "' desconocido; los que hay son "
+                                        "'auto', 'aot', 'bytecode' y "
+                                        "'jit-required'")
+                                           .c_str());
+                            break;
+                        }
                         if (a == "mode:jit" || a == "mode:vm") {
                             error_here(
                                 "@Target: 'mode:jit'/'mode:vm' no condiciona -- "
