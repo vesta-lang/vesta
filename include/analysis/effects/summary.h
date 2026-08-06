@@ -79,20 +79,66 @@ enum class ContractProfile {
     Embedded  ///< orientado a Bare/freestanding (sin I/O, sin heap, sin runtime).
 };
 
+/**
+ * @enum ContractReason
+ * @brief POR QUE un contrato no se cumple.  Es un DATO, no una frase: quien
+ *        informa decide como se redacta (y en que idioma).
+ */
+enum class ContractReason : uint8_t {
+    LeeMemoria,          ///< lee memoria en el cierre.
+    EscribeMemoria,      ///< escribe memoria en el cierre.
+    PuedeAtrapar,        ///< puede provocar un fallo (division por cero, ...).
+    PuedeLanzar,         ///< puede lanzar una excepcion.
+    Aloca,               ///< pide memoria.
+    Bloquea,             ///< puede quedarse esperando.
+    HaceIO,              ///< entrada/salida observable.
+    TieneEtiquetas,      ///< capacidades declaradas (barreras del usuario...).
+    EsAtomica,           ///< operacion atomica o barrera.
+    NoDeterminista,      ///< el resultado depende de algo externo (reloj...).
+    AnalisisIncompleto,  ///< no se pudo analizar entero: no se afirma nada.
+    Llama,               ///< llama a otra funcion.
+    UsaMonton,           ///< usa el monton.
+    UsaRecolector,       ///< usa el recolector de basura.
+    NecesitaRuntime,     ///< necesita el runtime del lenguaje.
+};
+
+/**
+ * @struct ContractCheck
+ * @brief Veredicto de una regla: si se cumple y, si no, por que.
+ *
+ * Los motivos los produce EL PROPIO predicado.  Tener una funcion aparte que
+ * los "explicara" seria una segunda copia del criterio, y dos copias de un
+ * criterio son dos criterios en cuanto alguien toca una.
+ */
+struct ContractCheck {
+    std::vector<ContractReason> motivos; ///< vacio = se cumple.
+    bool holds() const { return motivos.empty(); }
+};
+
 struct ContractRule {
     const char *name;
-    bool (*predicate)(const FunctionSummary &, ContractProfile);
+    ContractCheck (*predicate)(const FunctionSummary &, ContractProfile);
 };
 
 /// Registro global de reglas (definidas en contracts.cpp).  Devuelve el vector
 /// estable de reglas registradas.
 const std::vector<ContractRule> &contract_rules();
 
-/// Contrato evaluado: nombre + si se cumple.
+/// Contrato evaluado: nombre, si se cumple y -- si no -- por que.
 struct EvaluatedContract {
-    const char *name;
-    bool        holds;
+    const char                 *name;
+    bool                        holds;
+    std::vector<ContractReason> motivos;
 };
+
+/**
+ * @brief Codigo de catalogo del motivo @p r.
+ *
+ * Devuelve el CODIGO (`VXNNNN`), no la frase: el texto vive en el catalogo
+ * multi-idioma y lo resuelve quien informa.  Asi este modulo no redacta nada y
+ * anadir un idioma no lo toca.
+ */
+const char *contract_reason_code(ContractReason r);
 
 /// Proyeccion pura: aplica TODAS las reglas al summary bajo el @p profile.
 std::vector<EvaluatedContract>

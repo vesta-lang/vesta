@@ -15,6 +15,7 @@
 
 #include "ir/ssa_ir.h"
 #include "analysis/effects/effect_analysis.h"
+#include "vx/diag/diag_format.h" // el texto de los motivos vive en el catalogo
 
 #include <string>
 
@@ -143,14 +144,33 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod) {
         const FunctionSummary &s = it->second;
 
         os << fn.name << "\n";
-        // Contratos derivados que SE CUMPLEN.
+        /* Los que SE CUMPLEN, y detras los que NO con su motivo.  Saber que un
+         * contrato falla sin saber por que obliga a ir a leer los efectos y
+         * deducirlo; el predicado ya lo sabe, asi que lo dice.  El texto sale
+         * del catalogo multi-idioma: aqui no se redacta nada. */
         std::string contracts;
-        for (const EvaluatedContract &c : derive_contracts(s))
+        std::string fallidos;
+        for (const EvaluatedContract &c : derive_contracts(s)) {
             if (c.holds) {
                 if (!contracts.empty()) contracts += " ";
                 contracts += c.name;
+                continue;
             }
+            std::string motivos;
+            for (ContractReason r : c.motivos) {
+                if (!motivos.empty()) motivos += ", ";
+                motivos += vx::diag::format(contract_reason_code(r), {});
+            }
+            if (motivos.empty()) continue;
+            fallidos += "                ";
+            fallidos += c.name;
+            fallidos += ": ";
+            fallidos += motivos;
+            fallidos += "\n";
+        }
         os << "  Contratos : " << (contracts.empty() ? "-" : contracts) << "\n";
+        if (!fallidos.empty())
+            os << "    no cumple:\n" << fallidos;
         os << "  Analisis  : " << completeness_name(s.completeness) << "\n";
         os << "  Efecto local:\n";
         print_effects(os, s.semantic.local);

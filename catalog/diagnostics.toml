@@ -68,6 +68,69 @@ es = "asm: reasigna el puntero de pila ('{0}') en una funcion normal; su epilogu
 en = "'.' does not reach through a pointer: '{0}' is of type '{1}'. Dereference it first -- (*{0}).{2} -- or index it -- {0}[0].{2}"
 es = "'.' no atraviesa un puntero: '{0}' es de tipo '{1}'. Desreferencialo primero -- (*{0}).{2} -- o indexalo -- {0}[0].{2}"
 
+# Motivos por los que una funcion NO cumple un contrato (`--analyze`).  Son
+# frases sueltas que se enumeran detras del contrato, no oraciones completas.
+
+[VX2010]
+en = "reads memory"
+es = "lee memoria"
+
+[VX2011]
+en = "writes memory"
+es = "escribe memoria"
+
+[VX2012]
+en = "may fail"
+es = "puede fallar"
+
+[VX2013]
+en = "may throw"
+es = "puede lanzar"
+
+[VX2014]
+en = "allocates"
+es = "reserva memoria"
+
+[VX2015]
+en = "may block"
+es = "puede quedarse esperando"
+
+[VX2016]
+en = "does I/O"
+es = "hace entrada/salida"
+
+[VX2017]
+en = "declares capabilities"
+es = "declara capacidades"
+
+[VX2018]
+en = "is atomic or a barrier"
+es = "es atomica o una barrera"
+
+[VX2019]
+en = "is not deterministic"
+es = "no es determinista"
+
+[VX2020]
+en = "could not be analysed in full"
+es = "no se pudo analizar entera"
+
+[VX2021]
+en = "calls another function"
+es = "llama a otra funcion"
+
+[VX2022]
+en = "uses the heap"
+es = "usa el monton"
+
+[VX2023]
+en = "uses the collector"
+es = "usa el recolector"
+
+[VX2024]
+en = "needs the runtime"
+es = "necesita el runtime"
+
 # --- modulos / namespaces (VX4xxx) ---
 
 [VX4001]

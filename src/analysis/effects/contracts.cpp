@@ -24,21 +24,33 @@ namespace effects {
 // libres (puntero de funcion, sin captura) para que la tabla sea estatica.
 // --------------------------------------------------------------------------
 
+/* Cada predicado ACUMULA sus motivos: el veredicto es "no hay motivos".  Nadie
+ * explica el criterio por segunda vez, que es como se acaba teniendo dos. */
+using R = ContractReason;
+
+/// Anade @p r si @p cond.
+static inline void si(ContractCheck &k, bool cond, R r) {
+    if (cond) k.motivos.push_back(r);
+}
+
 /// pure: sin efectos de dato observables en TODO el cierre.  La definicion
 /// depende del PERFIL (misma base de hechos, distinta opinion):
 ///   - Default : no escribe mem, no lanza/aloca/io/bloquea, sin tags.
 ///   - Strict  : ademas DETERMINISTA (sin lecturas de reloj/random/...).
 ///   - Relaxed : tolera may_trap (los traps 'no deberian pasar').
-static bool p_pure(const FunctionSummary &s, ContractProfile profile) {
-    if (s.completeness == AnalysisCompleteness::Unknown) return false;
+static ContractCheck p_pure(const FunctionSummary &s, ContractProfile profile) {
+    ContractCheck k;
+    si(k, s.completeness == AnalysisCompleteness::Unknown, R::AnalisisIncompleto);
     const SemanticEffects &c = s.semantic.closure;
-    const bool base = !c.mem.writes_memory() && !c.may_throw &&
-                      !c.may_allocate && !c.may_io && !c.may_block &&
-                      c.tags.empty();
-    if (!base) return false;
-    if (profile == ContractProfile::Strict)
-        return c.determinism.empty(); // Strict exige determinismo
-    return true; // Default/Relaxed/Embedded
+    si(k, c.mem.writes_memory(), R::EscribeMemoria);
+    si(k, c.may_throw, R::PuedeLanzar);
+    si(k, c.may_allocate, R::Aloca);
+    si(k, c.may_io, R::HaceIO);
+    si(k, c.may_block, R::Bloquea);
+    si(k, !c.tags.empty(), R::TieneEtiquetas);
+    si(k, profile == ContractProfile::Strict && !c.determinism.empty(),
+       R::NoDeterminista);
+    return k;
 }
 
 /**
@@ -57,62 +69,126 @@ static bool p_pure(const FunctionSummary &s, ContractProfile profile) {
  * Exige @c Complete (no basta con "no Unknown"): una funcion analizada solo en
  * parte podria tocar memoria en el trozo que no se miro.
  */
-static bool p_mem_free(const FunctionSummary &s, ContractProfile profile) {
+static ContractCheck p_mem_free(const FunctionSummary &s,
+                                ContractProfile profile) {
     (void)profile; // no es opinable: o toca memoria o no
-    if (s.completeness != AnalysisCompleteness::Complete) return false;
+    ContractCheck k;
+    si(k, s.completeness != AnalysisCompleteness::Complete,
+       R::AnalisisIncompleto);
     const SemanticEffects &c = s.semantic.closure;
-    return c.mem.reads.empty() && c.mem.writes.empty() && !c.may_trap &&
-           !c.may_throw && !c.may_allocate && !c.may_block && !c.may_io &&
-           c.tags.empty() && c.atomic.order == MemOrder::None &&
-           !c.atomic.is_fence;
+    si(k, !c.mem.reads.empty(), R::LeeMemoria);
+    si(k, !c.mem.writes.empty(), R::EscribeMemoria);
+    si(k, c.may_trap, R::PuedeAtrapar);
+    si(k, c.may_throw, R::PuedeLanzar);
+    si(k, c.may_allocate, R::Aloca);
+    si(k, c.may_block, R::Bloquea);
+    si(k, c.may_io, R::HaceIO);
+    si(k, !c.tags.empty(), R::TieneEtiquetas);
+    si(k, c.atomic.order != MemOrder::None || c.atomic.is_fence, R::EsAtomica);
+    return k;
 }
 
 /// readonly: no escribe memoria en el cierre (puede leer).
-static bool p_readonly(const FunctionSummary &s, ContractProfile profile) {
-    return s.completeness != AnalysisCompleteness::Unknown &&
-           !s.semantic.closure.mem.writes_memory();
+static ContractCheck p_readonly(const FunctionSummary &s,
+                                ContractProfile profile) {
+    (void)profile;
+    ContractCheck k;
+    si(k, s.completeness == AnalysisCompleteness::Unknown, R::AnalisisIncompleto);
+    si(k, s.semantic.closure.mem.writes_memory(), R::EscribeMemoria);
+    return k;
 }
 
 /// leaf: no llama a nadie (ni estatica ni dinamicamente).
-static bool p_leaf(const FunctionSummary &s, ContractProfile profile) {
-    return !s.interproc.has_calls;
+static ContractCheck p_leaf(const FunctionSummary &s, ContractProfile profile) {
+    (void)profile;
+    ContractCheck k;
+    si(k, s.interproc.has_calls, R::Llama);
+    return k;
 }
 
 /// nothrow: no lanza en el cierre.
-static bool p_nothrow(const FunctionSummary &s, ContractProfile profile) {
-    return s.completeness != AnalysisCompleteness::Unknown &&
-           !s.semantic.closure.may_throw;
+static ContractCheck p_nothrow(const FunctionSummary &s,
+                               ContractProfile profile) {
+    (void)profile;
+    ContractCheck k;
+    si(k, s.completeness == AnalysisCompleteness::Unknown, R::AnalisisIncompleto);
+    si(k, s.semantic.closure.may_throw, R::PuedeLanzar);
+    return k;
 }
 
 /// nopanic: alias de nothrow para el FatalError de usuario (misma senal hoy).
-static bool p_nopanic(const FunctionSummary &s, ContractProfile profile) { return p_nothrow(s, profile); }
+static ContractCheck p_nopanic(const FunctionSummary &s,
+                               ContractProfile profile) {
+    return p_nothrow(s, profile);
+}
 
 /// deterministic: sin lecturas de reloj/random/pid/entorno ni I/O externa.
-static bool p_deterministic(const FunctionSummary &s, ContractProfile profile) {
+static ContractCheck p_deterministic(const FunctionSummary &s,
+                                     ContractProfile profile) {
+    (void)profile;
+    ContractCheck k;
     const SemanticEffects &c = s.semantic.closure;
-    return s.completeness != AnalysisCompleteness::Unknown &&
-           c.determinism.empty() && !c.may_io;
+    si(k, s.completeness == AnalysisCompleteness::Unknown, R::AnalisisIncompleto);
+    si(k, !c.determinism.empty(), R::NoDeterminista);
+    si(k, c.may_io, R::HaceIO);
+    return k;
 }
 
 /// heap_free: no aloca heap en el cierre.
-static bool p_heap_free(const FunctionSummary &s, ContractProfile profile) {
-    return s.completeness != AnalysisCompleteness::Unknown &&
-           !s.semantic.closure.may_allocate;
+static ContractCheck p_heap_free(const FunctionSummary &s,
+                                 ContractProfile profile) {
+    (void)profile;
+    ContractCheck k;
+    si(k, s.completeness == AnalysisCompleteness::Unknown, R::AnalisisIncompleto);
+    si(k, s.semantic.closure.may_allocate, R::UsaMonton);
+    return k;
 }
 
 /// gc_free: no aloca GC (hoy = no aloca heap; se afinara cuando el MemEffect
 /// distinga GC de raw).
-static bool p_gc_free(const FunctionSummary &s, ContractProfile profile) { return p_heap_free(s, profile); }
+static ContractCheck p_gc_free(const FunctionSummary &s,
+                               ContractProfile profile) {
+    ContractCheck k = p_heap_free(s, profile);
+    for (auto &m : k.motivos)
+        if (m == R::UsaMonton) m = R::UsaRecolector;
+    return k;
+}
 
 /// freestanding: no toca estado de maquina privilegiado ni I/O (candidato a Bare).
-static bool p_freestanding(const FunctionSummary &s, ContractProfile profile) {
+static ContractCheck p_freestanding(const FunctionSummary &s,
+                                    ContractProfile profile) {
+    (void)profile;
+    ContractCheck k;
     const SemanticEffects &c = s.semantic.closure;
     const bool machine =
         c.tags.has(CapabilityTag::PortIO) || c.tags.has(CapabilityTag::MSR) ||
         c.tags.has(CapabilityTag::Privileged) ||
         c.tags.has(CapabilityTag::InterruptState);
-    return s.completeness != AnalysisCompleteness::Unknown && !machine &&
-           !c.may_io;
+    si(k, s.completeness == AnalysisCompleteness::Unknown, R::AnalisisIncompleto);
+    si(k, machine, R::NecesitaRuntime);
+    si(k, c.may_io, R::HaceIO);
+    return k;
+}
+
+const char *contract_reason_code(ContractReason r) {
+    switch (r) {
+    case R::LeeMemoria: return "VX2010";
+    case R::EscribeMemoria: return "VX2011";
+    case R::PuedeAtrapar: return "VX2012";
+    case R::PuedeLanzar: return "VX2013";
+    case R::Aloca: return "VX2014";
+    case R::Bloquea: return "VX2015";
+    case R::HaceIO: return "VX2016";
+    case R::TieneEtiquetas: return "VX2017";
+    case R::EsAtomica: return "VX2018";
+    case R::NoDeterminista: return "VX2019";
+    case R::AnalisisIncompleto: return "VX2020";
+    case R::Llama: return "VX2021";
+    case R::UsaMonton: return "VX2022";
+    case R::UsaRecolector: return "VX2023";
+    case R::NecesitaRuntime: return "VX2024";
+    }
+    return "VX2020";
 }
 
 // --------------------------------------------------------------------------
@@ -139,8 +215,11 @@ std::vector<EvaluatedContract> derive_contracts(const FunctionSummary &s,
     std::vector<EvaluatedContract> out;
     const auto &rules = contract_rules();
     out.reserve(rules.size());
-    for (const ContractRule &r : rules)
-        out.push_back({r.name, r.predicate(s, profile)});
+    for (const ContractRule &r : rules) {
+        ContractCheck k = r.predicate(s, profile);
+        const bool ok = k.holds();
+        out.push_back({r.name, ok, std::move(k.motivos)});
+    }
     return out;
 }
 
