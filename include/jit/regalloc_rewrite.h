@@ -120,42 +120,10 @@ MFunction rewrite_to_physical(const MFunction &vf, const codegen::AllocationResu
                               const IntervalResult *ivs = nullptr,
                               OsrEmit *osr = nullptr);
 
-/* ===================================================================== */
-/* OSR runtime glue ( D.8, 2c)                                       */
-/* ===================================================================== */
-
-/**
- * @brief Instala el handler del trigger OSR.  Cuando un loop C1 cruza el
- *        umbral, el codigo emitido invoca el stub interno, que delega en
- *        este handler pasandole el @p loop_id; el handler devuelve la
- *        DIRECCION del OSR-entry del C2 (o 0 si no hay swap).  Lo setea
- *        @c auto_jit con un lookup en su tabla de OSR-entries precompilados.
- */
-void set_osr_handler(uint64_t (*handler)(uint64_t loop_id));
-
-/**
- * @brief Numero de loops OSR-instrumentados hasta ahora (== loop_ids
- *        asignados).  @c auto_jit lo usa para iterar los loops de una fn
- *        recien compilada y precompilar sus variantes C2-con-OSR-entry.
- */
-uint32_t osr_loop_count();
-
-/**
- * @brief Info de un loop OSR por @p loop_id.  Rellena @p fn_name_out y
- *        @p header_block_out con el nombre de la funcion y el MBlock del
- *        header.  Devuelve false si el id esta fuera de rango o el loop se
- *        aborto (estado no capturable).
- */
-bool osr_loop_info(uint64_t loop_id, std::string &fn_name_out,
-                   uint32_t &header_block_out);
-
-/**
- * @brief Rellena @p out_vids con los IR VIDs que el C1 capturo al buffer
- *        para @p loop_id (la red de seguridad del C2: el OSR-entry del C2
- *        solo puede leer vids que esten aqui).  Devuelve false si el id esta
- *        fuera de rango o el loop se aborto.
- */
-bool osr_loop_captures(uint64_t loop_id, std::vector<uint32_t> &out_vids);
+/* El registro de bucles re-entrables (OSR) vivia aqui y se fue a
+ * jit/osr_registry.h: no tiene nada que ver con convertir registros
+ * virtuales en fisicos, y quien lo consumia tenia que incluir esta
+ * cabecera para pedir algo ajeno a ella. */
 
 } // namespace jit
 

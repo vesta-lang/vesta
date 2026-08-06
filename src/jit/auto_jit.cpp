@@ -22,7 +22,7 @@
 #include "jit/code_cache.h"
 #include "jit/runtime_entries.h"
 #include "jit/vreg_pipeline.h"
-#include "jit/regalloc_rewrite.h" // OSR glue (set_osr_handler / osr_loop_*)
+#include "jit/osr_registry.h" // registro de bucles re-entrables
 #include "jit/naked_native.h"      // FN.3: vrt_callind + compile_naked_native
 #include "vesta_rt/public.h"
 #include "ffi/virtual_lib_registry.h" // Sprint JIT-cross-fn: virtual fn lookup
