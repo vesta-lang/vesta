@@ -90,11 +90,15 @@ bool fn_needs_fp_scratch(const ir::IrFunction &fn) {
  * operandos de un bloque asm si pueden usarlos: ese texto lo ensambla otro que
  * si sabe.
  *
+ * Las capacidades vienen del OBJETIVO, no de esta maquina: el camino nativo
+ * genera binarios para otras y no puede preguntarse por la suya.
+ *
  * @param fn Funcion IR.
+ * @param caps Lo que el OBJETIVO declara saber hacer.
  * @return true si se le pueden ofrecer las 32 ranuras.
  */
-bool fn_can_use_wide512(const ir::IrFunction &fn) {
-    return backend_caps_host().avx512f && !fn_needs_fp_scratch(fn);
+bool fn_can_use_wide512(const ir::IrFunction &fn, const BackendCaps &caps) {
+    return caps.avx512f && !fn_needs_fp_scratch(fn);
 }
 
 bool fn_needs_vec_reserve(const ir::IrFunction &fn) {
@@ -501,7 +505,8 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
      * el path vectorial (14 lanes FP escalares en vez de 10). */
     const TargetRegInfo &tri = target_x86_64_vm_abi(fn_needs_vec_reserve(fn),
                                                      fn_needs_fp_scratch(fn),
-                                                     fn_can_use_wide512(fn));
+                                                     fn_can_use_wide512(
+                                                         fn, backend_caps_host()));
 
     /* 2. Intervalos + P1 coalescing + 3. asignacion (commit 6: el linear_scan
      *    FUERZA a slot los GC roots vivos a traves de un call).
@@ -633,7 +638,8 @@ uint8_t *vreg_compile_callback(const ir::IrFunction &fn, CodeCache &cc,
 
     const TargetRegInfo &tri = target_x86_64_vm_abi(fn_needs_vec_reserve(fn),
                                                      fn_needs_fp_scratch(fn),
-                                                     fn_can_use_wide512(fn));
+                                                     fn_can_use_wide512(
+                                                         fn, backend_caps_host()));
 
     IntervalResult ivs = build_intervals(mf, tri);
     if (apply_ssa_coalesce(mf, fn)) ivs = build_intervals(mf, tri);
@@ -815,7 +821,10 @@ vreg_compile_native(const ir::IrFunction &fn, const CallResolver &resolve_call,
     const X86Target target(resolve_call, ent, resolve_native, resolve_symbol,
                            pic, target_sysv, mode32, fisa, emit_line_map,
                            fn_needs_vec_reserve(fn), fn_needs_fp_scratch(fn),
-                           fn_can_use_wide512(fn));
+                           fn_can_use_wide512(
+                               fn, resolve_backend_caps(/*cpu=*/"",
+                                                        /*jit_host=*/false,
+                                                        fisa)));
     return vreg_compile_native_target(fn, target, relocs_out, line_map_out,
                                       asm_labels_out, stackmaps_out);
 }
@@ -837,7 +846,8 @@ uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,
         return nullptr;
     const TargetRegInfo &tri = target_x86_64_vm_abi(fn_needs_vec_reserve(fn),
                                                      fn_needs_fp_scratch(fn),
-                                                     fn_can_use_wide512(fn));
+                                                     fn_can_use_wide512(
+                                                         fn, backend_caps_host()));
     IntervalResult ivs = build_intervals(mf, tri);
     codegen::AssignmentPlan plan; // Fragmentation Recovery (vacio si el splitting esta OFF).
     codegen::RegAlloc ra = rbank_allocate_belady(ivs, mf, tri,
