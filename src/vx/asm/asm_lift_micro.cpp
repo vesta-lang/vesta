@@ -114,17 +114,15 @@ bool has_reg(const std::vector<std::string> &v, const std::string &name) {
  * @param motivo Por que no se pudo resolver.
  */
 void anotar_hueco_db(const std::string &insn, const char *motivo) {
-    size_t sp = insn.find_first_of(" \t");
-    const std::string mnem = (sp == std::string::npos) ? insn : insn.substr(0, sp);
     bool nuevo = false;
     {
         std::lock_guard<std::mutex> g(huecos_db_mutex());
-        nuevo = huecos_db().emplace(mnem, motivo).second;
+        nuevo = huecos_db().emplace(insn, motivo).second;
     }
     if (!nuevo) return;
     const char *v = std::getenv("VESTA_ASM_DB_GAPS");
     if (v == nullptr || v[0] != '1') return;
-    std::fprintf(stderr, "[asm-db] '%s': %s\n", mnem.c_str(), motivo);
+    std::fprintf(stderr, "[asm-db] '%s': %s\n", insn.c_str(), motivo);
 }
 
 void split_insn(const std::string &insn, std::string &mnem,
@@ -226,6 +224,27 @@ bool asm_lift_micro(
     const std::string arch_s =
         (isa == instr_db::Isa::ARM64) ? "arm64" : "x86_64";
     for (const std::string &insn : insns) {
+        /* Un operando que todavia es un MARCADOR (`$0`) es una variable del
+         * programa a la que el asignador aun no ha dado registro.  Trocear no
+         * sabe enhebrarlas, asi que el bloque se queda entero -- ahi si se
+         * resuelven.  Hay que mirarlo ANTES de preguntar a la base de datos:
+         * un marcador no es un operando que ella pueda clasificar, asi que
+         * casa una forma que no es y la instruccion acaba pareciendo que no
+         * lee ni escribe registros.  El guardia de mas abajo no lo cubre --
+         * ese busca el NOMBRE del registro, y aqui todavia no hay ninguno. */
+        {
+            std::string mnem_ph;
+            std::vector<std::string> toks_ph;
+            split_insn(insn, mnem_ph, toks_ph);
+            bool hay_marcador = false;
+            for (const std::string &t : toks_ph)
+                if (t.size() >= 2 && t[0] == '$' &&
+                    t.find_first_not_of("0123456789", 1) == std::string::npos) {
+                    hay_marcador = true;
+                    break;
+                }
+            if (hay_marcador) return false; // -> INLINE_ASM con ligaduras
+        }
         instr_db::AsmInsnSem sem =
             instr_db::asm_insn_sem(isa, insn, (uint32_t)ua);
         if (sem.form_id < 0) {        // desconocida por la DB
