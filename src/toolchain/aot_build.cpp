@@ -1103,11 +1103,8 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
             for (const auto &af : aot_mod.functions)
                 for (const auto &b : af.blocks)
                     for (const auto &in : b.instrs)
-                        // MEMCPY entra aqui porque tambien baja a la libreria
-                        // (vx_memcpy), no a una instruccion clavada.
                         if (in.op == ir::IrOp::RAW_ALLOC ||
                             in.op == ir::IrOp::RAW_FREE ||
-                            in.op == ir::IrOp::MEMCPY ||
                             ((in.op == ir::IrOp::CALL ||
                               in.op == ir::IrOp::TAILCALL) &&
                              in.func_name == "calloc"))

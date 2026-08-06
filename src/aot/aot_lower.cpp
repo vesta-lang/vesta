@@ -33,22 +33,6 @@ void aot_lower_runtime(ir::IrModule &mod, const AotLowerConfig &cfg) {
         for (auto &bb : fn.blocks) {
             for (auto &in : bb.instrs) {
                 switch (in.op) {
-                case ir::IrOp::MEMCPY:
-                    // memcpy %dst, %src, %n  ->  call <memcpy>(%dst,%src,%n).
-                    // Los operandos ya vienen en ese orden.
-                    //
-                    // VESTA_NO_MEMCPY_HOOK=1 lo deja pasar al backend, que lo
-                    // baja a una instruccion de copia por bloques.  Esta para
-                    // poder MEDIR las dos formas con el mismo binario, no como
-                    // opcion de usuario.
-                    if (std::getenv("VESTA_NO_MEMCPY_HOOK") == nullptr) {
-                        in.op = ir::IrOp::CALL;
-                        in.func_name = cfg.memcpy_sym;
-                        in.dst = ir::IR_NO_VALUE;
-                        in.is_call_site = true;
-                    }
-                    break;
-
                 case ir::IrOp::RAW_ALLOC:
                     // %dst = raw_alloc.ptr %size  ->  %dst = call
                     // <alloc>(%size) <alloc> = simbolo externo (convencion

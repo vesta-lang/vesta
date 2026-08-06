@@ -59,14 +59,6 @@ struct AotLowerConfig {
     std::string alloc_sym = "malloc"; ///< RAW_ALLOC -> call <alloc_sym>
     std::string free_sym = "free";    ///< RAW_FREE  -> call <free_sym>
     std::string panic_sym = "abort";  ///< PANIC     -> call <panic_sym>
-    /// MEMCPY -> call <memcpy_sym>.  Copiar memoria es un mecanismo mas, no
-    /// algo que el generador de codigo deba tener clavado: por defecto es el
-    /// de la libreria (`vx_memcpy`, escrito en Vesta), y quien defina ese
-    /// simbolo en su modulo lo sustituye -- mismo trato que el asignador.
-    /// Bajarlo a una instruccion fija (`rep movsb`) impedia especializarlo,
-    /// que es justo lo que hace falta: para un tamano constante y pequeno lo
-    /// que toca son unos pocos `mov`, no el arranque de una copia por bloques.
-    std::string memcpy_sym = "vx_memcpy";
     /// AOT.2.d: si true, @c PANIC pasa (msg_addr, len) al @c panic_sym
     /// (un @c @PanicHandler con esa firma).  Si false (default, abort),
     /// se descarta el mensaje (abort no toma argumentos).
