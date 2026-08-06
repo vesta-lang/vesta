@@ -33,6 +33,7 @@
 #include "ir/ssa_ir.h"
 #include "jit/code_cache.h"
 #include "jit/interval.h"
+#include "codegen/rbank/allocate.h" // el asignador vigente
 #include "codegen/regalloc.h"
 #include "jit/machine_ir.h"
 #include "jit/regalloc_rewrite.h"
@@ -205,7 +206,10 @@ int main() {
     }
     const TargetRegInfo &tri = target_x86_64_vm_abi();
     IntervalResult ivs = build_intervals(mf, tri);
-    codegen::RegAlloc ra = linear_scan(ivs, tri);
+    /* El reparto lo hace rbank: el linear_scan que habia aqui era el
+     * asignador JUBILADO y por eso este test llevaba sin compilar. */
+    codegen::RegAlloc ra =
+        codegen::rbank::rbank_allocate(ivs, mf.vreg_count, tri, /*vec=*/false);
 
     OsrEmit osr;
     osr.mode = OsrEmit::C2_ENTRY;

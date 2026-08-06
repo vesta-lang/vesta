@@ -275,15 +275,19 @@ static void test_fallback() {
     ir::IrValueId v1 = fn.new_value(ir::IrType::I64);
     ir::IrBlockId b0 = fn.new_block("entry");
     fn.append(b0, konst(v0, 1));
-    ir::IrInstr ld;
-    ld.op = ir::IrOp::LOAD;
-    ld.dst = v1;
-    ld.operands = {v0};
-    fn.append(b0, ld);
+    /* Antes se usaba LOAD, que en su dia no estaba soportado.  Hoy si lo esta,
+     * asi que el test llevaba tiempo comprobando lo contrario de lo que pasa.
+     * Con un codigo de operacion DESCONOCIDO el caso no envejece: no hay
+     * version futura del selector que lo entienda. */
+    ir::IrInstr desconocida;
+    desconocida.op = static_cast<ir::IrOp>(0xFE);
+    desconocida.dst = v1;
+    desconocida.operands = {v0};
+    fn.append(b0, desconocida);
     fn.append(b0, ret1(v1));
 
     MFunction mf;
-    CHECK(!vreg_select(fn, mf), "op LOAD -> vreg_select false (fallback)");
+    CHECK(!vreg_select(fn, mf), "operacion desconocida -> vreg_select false");
 }
 
 int main() {

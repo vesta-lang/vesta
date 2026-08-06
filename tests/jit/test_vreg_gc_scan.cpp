@@ -24,6 +24,7 @@
 #include "jit/code_cache.h"
 #include "jit/interval.h"
 #include "jit/jit_registry.h"
+#include "codegen/rbank/allocate.h" // el asignador vigente
 #include "codegen/regalloc.h"
 #include "jit/machine_ir.h"
 #include "jit/regalloc_rewrite.h"
@@ -121,7 +122,10 @@ static void test_gc_root_found_by_scan() {
     CHECK(vreg_select(fn, mf, AbiKind::VM, resolver), "vreg_select ok");
     const TargetRegInfo &tri = target_x86_64_vm_abi();
     IntervalResult ivs = build_intervals(mf, tri);
-    codegen::RegAlloc ra = linear_scan(ivs, tri);
+    /* rbank es el asignador vigente; el linear_scan que habia aqui esta
+     * JUBILADO y por eso este test llevaba sin compilar. */
+    codegen::RegAlloc ra =
+        codegen::rbank::rbank_allocate(ivs, mf.vreg_count, tri, /*vec=*/false);
     CHECK(ra.spilled(thisp), "this (GC root) spilled");
     MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM, &ivs);
 

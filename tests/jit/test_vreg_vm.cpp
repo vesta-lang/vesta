@@ -389,9 +389,31 @@ static void test_vm_callvirt() {
     const uint64_t cv =
         reinterpret_cast<uint64_t>(reinterpret_cast<void *>(&vm_callvirt_stub));
 
+    /* Receptor DE VERDAD.  Antes se ponia un puntero inventado (0xABCD), y
+     * funcionaba solo mientras el despacho de metodos se resolvia llamando al
+     * runtime.  Desde que se resuelve EN LINEA, el codigo generado lee el
+     * objeto -- clase, tabla de metodos, metodo, cadena de aspectos -- y con un
+     * puntero inventado eso es leer memoria que no es suya.  El arnes cascaba y
+     * se sorteaba con una variable de entorno; no era un fallo del compilador,
+     * era el test dandole basura.
+     *
+     * Se monta la cadena entera con ceros donde toca: la clase existe, la tabla
+     * existe, el metodo existe y no tiene aspectos, pero no esta compilado
+     * todavia -- que es la ultima comprobacion --, asi que el despacho recorre
+     * los cuatro filtros y acaba en el camino lento, que es justo lo que este
+     * test mide. */
+    alignas(8) unsigned char metodo[VESTA_METHODINFO_ADVICE_CHAIN_OFFSET + 8] = {};
+    alignas(8) unsigned char clase[VESTA_CLASSINFO_VTABLE_OFFSET + 8] = {};
+    uint64_t vtabla[8] = {};
+    vtabla[5] = reinterpret_cast<uint64_t>(metodo); // el indice que pide el IR
+    const uint64_t vtabla_ptr = reinterpret_cast<uint64_t>(vtabla);
+    std::memcpy(clase + VESTA_CLASSINFO_VTABLE_OFFSET, &vtabla_ptr,
+                sizeof(vtabla_ptr));
+    uint64_t objeto[1] = {reinterpret_cast<uint64_t>(clase)}; // class_ptr
+
     Proxy px;
     std::memset(&px, 0, sizeof(px));
-    px.regs[1] = 0xABCD;
+    px.regs[1] = reinterpret_cast<uint64_t>(objeto);
     px.regs[2] = 7;
     CHECK(jit_vm(fn, px, {}, cv), "jit_vm ok (callvirt)");
     CHECK(px.regs[0] == 75, "caller(this,7)==75 (CALLVIRT)");
@@ -1119,7 +1141,10 @@ static void test_vm_gc_stackmap() {
     CHECK(vreg_select(fn, mf, AbiKind::VM, resolver), "vreg_select ok (gcf)");
     const TargetRegInfo &tri = target_x86_64_vm_abi();
     IntervalResult ivs = build_intervals(mf, tri);
-    codegen::RegAlloc ra = linear_scan(ivs, tri);
+    /* rbank es el asignador vigente; el linear_scan que habia aqui esta
+     * JUBILADO y por eso este test llevaba sin compilar. */
+    codegen::RegAlloc ra =
+        codegen::rbank::rbank_allocate(ivs, mf.vreg_count, tri, /*vec=*/false);
     CHECK(ra.spilled(thisp), "this (GC root vivo a traves) spilled a slot");
     MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM, &ivs);
     CHECK(pf.stackmaps.size() == 1, "1 stackmap (1 call)");

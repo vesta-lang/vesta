@@ -408,8 +408,13 @@ void test_compile_unsupported() {
     jit::JitCompiler comp(cache, rt);
     jit::CompileResult res = comp.compile(fn, jit::SelectorMode::NATIVE_ABI);
 
-    CHECK(res.unsupported, "FADD marca unsupported=true");
-    CHECK(res.fn == nullptr, "fn = nullptr cuando unsupported");
+    /* La suma en coma flotante YA se compila -- el test venia afirmando lo
+     * contrario desde que dejo de ser cierto.  Lo que se comprueba ahora es el
+     * CONTRATO, que no envejece: decir que no se puede y devolver una funcion
+     * son cosas que van juntas, en un sentido y en el otro. */
+    CHECK(res.unsupported == (res.fn == nullptr),
+          "no-soportado y funcion-nula van de la mano");
+    CHECK(!res.unsupported, "la suma en coma flotante ya se compila");
 
     jit::JitRegistry::instance().clear();
 }

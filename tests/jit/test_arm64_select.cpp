@@ -192,13 +192,13 @@ static std::string emit_atomics_fn(bool &uns) {
     konst(c15, 15);
     konst(c42, 42);
     konst(c0, 0);
-    ir::IrInstr add1 = mk(ir::IrOp::ATOMIC_ADD_I64, ir::IrType::I64, a);
+    ir::IrInstr add1 = mk(ir::IrOp::ATOMIC_ADD, ir::IrType::I64, a);
     add1.operands = {p, c5};
     e.instrs.push_back(add1);
-    ir::IrInstr cas = mk(ir::IrOp::ATOMIC_CAS_I64, ir::IrType::I64, b);
+    ir::IrInstr cas = mk(ir::IrOp::ATOMIC_CAS, ir::IrType::I64, b);
     cas.operands = {p, c15, c42};
     e.instrs.push_back(cas);
-    ir::IrInstr add0 = mk(ir::IrOp::ATOMIC_ADD_I64, ir::IrType::I64, c);
+    ir::IrInstr add0 = mk(ir::IrOp::ATOMIC_ADD, ir::IrType::I64, c);
     add0.operands = {p, c0};
     e.instrs.push_back(add0);
     ir::IrInstr ret = mk(ir::IrOp::RET, ir::IrType::I64, ir::IR_NO_VALUE);
@@ -406,7 +406,10 @@ int main(int argc, char **argv) {
         bool uns = false;
         std::string a = emit_caller_fn(uns);
         CHECK(!uns, "caller: soportado (CALL)");
-        CHECK(has(a, "bl add"), "caller: bl a la funcion add");
+        /* El destino de la llamada NO va en el texto: se emite `bl 0` y el
+         * simbolo se anota aparte para que lo resuelva la reubicacion.  El
+         * test esperaba `bl add`, que era como se hacia antes. */
+        CHECK(has(a, "bl 0"), "caller: llamada emitida (destino por reubicacion)");
         CHECK(has(a, "str x30,"), "caller: salva LR (hay llamada)");
         CHECK(has(a, "ldr x30,"), "caller: restaura LR antes del ret");
         CHECK(has(a, "str x0,") && has(a, "ldr x0,"),
