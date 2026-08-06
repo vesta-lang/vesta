@@ -461,9 +461,21 @@ annotate_write_source(const std::string &path,
 }
 
 int main(int argc, char *argv[]) {
-#if defined(WIN32) || defined(_WIN32) ||                                       \
-    defined(__WIN32) && !defined(__CYGWIN__)
-    asm_multi_process::run_and_capture("chcp 65001");
+#if defined(_WIN32) && !defined(__CYGWIN__)
+    /* Consola en UTF-8, para que la salida con acentos o simbolos no salga
+     * rota en la consola de Windows.
+     *
+     * Esto es exactamente lo que hace `chcp 65001`, que es como se hacia:
+     * lanzando el comando.  Pero lanzarlo significa crear un `cmd.exe` entero
+     * con sus tuberias, y eso cuesta unos 10-20 ms EN CADA invocacion del
+     * binario -- se pagaba al compilar, al ejecutar y al pedir la version, y
+     * era la mayor parte del arranque de un programa corto.  La API hace lo
+     * mismo en microsegundos.
+     *
+     * Sin consola (salida redirigida a un fichero o a una tuberia) las dos
+     * llamadas fallan y no pasa nada: no hay pagina de codigos que ajustar. */
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
 #endif
     runtime_ensure_vx_callback_registered();
     // i18n: seleccionar el idioma de los diagnosticos desde el entorno
