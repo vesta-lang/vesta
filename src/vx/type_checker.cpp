@@ -9839,6 +9839,24 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
                                  e->field_name + "'");
         return Type{};
     }
+    /* Un PUNTERO a struct/clase merece respuesta propia.  El '.' no
+     * desreferencia solo, asi que decir "debe ser un struct o clase" es cierto
+     * pero no ayuda: lo que hace falta es como se escribe en su lugar, y va en
+     * el mensaje.
+     *
+     * Y se devuelve "tipo desconocido" en vez de void: void se propaga y hace
+     * que el resto de la expresion se queje tambien -- por un `q.x` salian
+     * TRES errores, dos de ellos ruido derivado del primero. */
+    if (bt.kind == PrimitiveKind::PTR && bt.pointee &&
+        (bt.pointee->kind == PrimitiveKind::STRUCT ||
+         bt.pointee->kind == PrimitiveKind::CLASS)) {
+        std::string base_txt = "expr";
+        if (e->base && e->base->kind == ast::NodeKind::IdentExpr)
+            base_txt = static_cast<ast::IdentExpr *>(e->base.get())->name;
+        diags_.diag(e->loc, DiagLevel::ERR, "VX2001",
+                    {base_txt, type_to_string(bt), e->field_name});
+        return Type{PrimitiveKind::COUNT};
+    }
     diags_.error(
         e->loc,
         "el operando de '.' debe ser un struct o clase (tipo recibido: " +
@@ -10653,7 +10671,11 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
         const bool overloads_inc =
             (t.kind == PrimitiveKind::CLASS || t.kind == PrimitiveKind::STRUCT) &&
             type_overloads_step(t);
-        if (!is_integral(t.kind) && !overloads_inc) {
+        /* Si el tipo del operando quedo DESCONOCIDO, el porque ya se conto
+         * donde ocurrio; quejarse aqui de "recibido <unknown>" solo anade una
+         * segunda linea derivada de la primera. */
+        if (t.kind != PrimitiveKind::COUNT && !is_integral(t.kind) &&
+            !overloads_inc) {
             diags_.error(e->loc,
                          "++/-- requieren operando entero, o un tipo que "
                          "sobrecargue la suma (`__iadd__` o `__add__`); "
@@ -11708,7 +11730,12 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
         // que en var-decl/asignacion/args.
         if (numeric_const_fits_newtype(ft, tv, e->value.get())) {
             e->value->result_type = ft;
-        } else if (tv.kind != PrimitiveKind::COUNT && !types_assignable(ft, tv) &&
+        } else if (tv.kind != PrimitiveKind::COUNT &&
+                   /* Y tampoco si el desconocido es el CAMPO: que no se sepa su
+                    * tipo ya se conto al mirar el acceso, y repetirlo aqui solo
+                    * anade ruido derivado.  Antes esto era asimetrico -- se
+                    * callaba por el valor pero no por el campo. */
+                   ft.kind != PrimitiveKind::COUNT && !types_assignable(ft, tv) &&
                    !class_is_assignable(ft, tv) && !null_to_class_field) {
             diags_.error(e->loc, std::string("tipo del valor (") +
                                      type_to_string(tv) +

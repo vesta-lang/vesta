@@ -62,6 +62,12 @@ es = "asm: operando '{0}' pineado a '{1}' -- ese registro esta reservado por el 
 en = "asm: reassigns the stack pointer ('{0}') in a normal function; its epilogue manages the stack, so a persistent stack switch (coroutines/fibers) will not survive the return -- mark the function @Naked to own the stack, or balance the change (restore '{0}') before the block ends"
 es = "asm: reasigna el puntero de pila ('{0}') en una funcion normal; su epilogue gestiona la pila, asi que un cambio de pila persistente (corrutinas/fibras) no sobrevivira al retorno -- marca la funcion @Naked para ser dueno de la pila, o equilibra el cambio (restaura '{0}') antes de cerrar el bloque"
 
+# --- type-checker (VX2xxx) ---
+
+[VX2001]
+en = "'.' does not reach through a pointer: '{0}' is of type '{1}'. Dereference it first -- (*{0}).{2} -- or index it -- {0}[0].{2}"
+es = "'.' no atraviesa un puntero: '{0}' es de tipo '{1}'. Desreferencialo primero -- (*{0}).{2} -- o indexalo -- {0}[0].{2}"
+
 # --- modulos / namespaces (VX4xxx) ---
 
 [VX4001]
