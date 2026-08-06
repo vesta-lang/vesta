@@ -22369,11 +22369,15 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
             e->target->result_type.kind == PrimitiveKind::STRING &&
             e->op == ast::AssignOp::AddAssign && e->value) {
             /* Coercion: un literal RHS debe promoverse a StringObject (STRMAKE),
-             * no dejarse como STR_LIT_ADDR crudo (STRCAT espera handles). */
+             * no dejarse como STR_LIT_ADDR crudo (STRCAT espera handles).
+             *
+             * Vale para los DOS: el literal a secas se resuelve de una pieza y
+             * el interpolado como la cadena de trozos que ya arma el mismo
+             * constructor.  Antes se excluia al interpolado, que salia por la
+             * ruta generica y devolvia cadena VACIA -- o sea que `s += "${x}"`
+             * borraba lo que se le pedia anadir. */
             ir::IrValueId v_rhs;
-            if (e->value->kind == ast::NodeKind::StringLitExpr &&
-                !static_cast<ast::StringLitExpr *>(e->value.get())
-                     ->is_interpolated()) {
+            if (e->value->kind == ast::NodeKind::StringLitExpr) {
                 v_rhs = lower_string_literal_to_string_object(
                     static_cast<ast::StringLitExpr *>(e->value.get()));
             } else {
