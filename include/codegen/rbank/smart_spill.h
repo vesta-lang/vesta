@@ -133,14 +133,26 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
     struct Active { const AbstractValue *v; int lane; };
     std::vector<Active> active;
 
-    auto lane_free = [&](uint8_t id) -> bool {
+    /* ¿Esta libre la lane @p id PARA @p v?  Un activo la ocupa de verdad solo
+     * si COINCIDE en el tiempo con @p v: si tiene un hueco justo ahi, la lane
+     * esta disponible aunque el activo siga en la lista.  Con @p v nulo la
+     * pregunta es la estricta -- "libre para cualquiera" --, que es la que hay
+     * que hacer mientras queden lanes limpias.
+     *
+     * Mirar solo el envolvente inventa ocupaciones donde hay huecos.  Medido:
+     * atenderlos baja los derrames de vec_axpy 5 -> 3 y de obj_accum 5 -> 4. */
+    auto lane_free_para = [&](uint8_t id, const AbstractValue *v) -> bool {
         const AliasSet *ca = bank.aliases_of(id);
         if (!ca) return false;
         for (const Active &a : active) {
             const AliasSet *aa = bank.aliases_of(static_cast<uint8_t>(a.lane));
-            if (aa && ca->overlaps(*aa)) return false;
+            if (!aa || !ca->overlaps(*aa)) continue;
+            if (v == nullptr || p.coinciden(*a.v, *v)) return false;
         }
         return true;
+    };
+    auto lane_free = [&](uint8_t id) -> bool {
+        return lane_free_para(id, nullptr);
     };
     /* ¿Prohibe alguna restriccion de FORMA que @p value ocupe @p lane?  Mira si
      * la lane ya se la dieron a alguien con quien no puede compartirla. */
@@ -177,7 +189,7 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
             // duras: debe-memoria, lane prohibida (clobber que el valor atraviesa),
             // clase, ancho y que la lane este libre.
             if (!r.must_be_memory() && !r.lane_forbidden(fid) && l && l->cls == r.cls &&
-                bank.supports(fid, r.width) && lane_free(fid))
+                bank.supports(fid, r.width) && lane_free_para(fid, v))
                 return fid;
             return kSpilled;
         }
@@ -191,15 +203,23 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
             const int lp = out.lane_of(static_cast<uint32_t>(v->afinidad));
             if (lp != kSpilled && lp >= 0 && lp < 256) {
                 const uint8_t id = static_cast<uint8_t>(lp);
-                if (lane_admissible(r, id, bank, vec_active) && lane_free(id) &&
+                if (lane_admissible(r, id, bank, vec_active) &&
+                    lane_free(id) &&
                     !prohibida_por_forma(v->value_id, id) &&
                     !lane_pinned_by_other(id, v->start, v->end, v->value_id))
                     return id;
             }
         }
+        /* El reparto va en DOS TIEMPOS.  Primero solo lanes enteramente libres;
+         * meterse en el hueco de otro es legitimo, pero ofrecerlo a la primera
+         * empaqueta todo en las lanes bajas y luego no queda ninguna limpia
+         * para el valor que coincide con todos.  Compartir cuando la
+         * alternativa es derramar no le quita el sitio a nadie. */
+        for (int ronda = 0; ronda < 2; ++ronda) {
+        const bool compartir = (ronda == 1);
         for (const Lane &l : bank.lanes) {
             if (!lane_admissible(r, l, vec_active)) continue; // correctitud dura (cero by_id).
-            if (!lane_free(l.id)) continue;
+            if (!lane_free_para(l.id, compartir ? v : nullptr)) continue;
             /* Lane que la FORMA de una instruccion prohibe compartir, aunque
              * los dos valores no coincidan en el tiempo.  Sin esto el
              * asignador los junta -- es legitimo por vidas -- y luego hay que
@@ -210,6 +230,7 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
             // (aunque ese pin aun no este activo): el pin la necesitara al llegar.
             if (lane_pinned_by_other(l.id, v->start, v->end, v->value_id)) continue;
             return l.id;
+        }
         }
         return kSpilled;
     };
@@ -267,15 +288,30 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
             continue;
         }
 
-        // No cabe -> elegir victima entre v y los activos de la MISMA clase que
-        // aliasarian (candidatos que liberarian una lane usable por v).  El pin de v
-        // restringe: si v esta pinado, solo su lane sirve.
-        const AbstractValue *victim = v;
-        double best = spill_score(v, v->start);
+        /* No cabe -> hay que LIBERAR una lane.  Y liberarla no es desalojar a
+         * UN valor: al poder compartirse entre valores con huecos disjuntos,
+         * una lane tiene VARIOS duenos, y no queda libre para @c v mientras
+         * siga dentro alguno de los que coinciden con el.  Desalojar a uno y
+         * darla por libre metia a @c v encima de otro vivo -- eso no es una
+         * asignacion peor, es codigo mal generado. */
+        std::vector<size_t> ocupantes, mejores_ocupantes;
+        auto ocupantes_de = [&](int lane) {
+            ocupantes.clear();
+            const AliasSet *ca = bank.aliases_of(static_cast<uint8_t>(lane));
+            if (!ca) return;
+            for (size_t i = 0; i < active.size(); ++i) {
+                const AliasSet *aa =
+                    bank.aliases_of(static_cast<uint8_t>(active[i].lane));
+                if (!aa || !ca->overlaps(*aa)) continue;
+                if (p.coinciden(*active[i].v, *v)) ocupantes.push_back(i);
+            }
+        };
+        double best = spill_score(v, v->start); // la alternativa: derramar v.
+        int lane_elegida = kSpilled;
         for (const Active &a : active) {
-            // La lane que robariamos a la victima debe ser ADMISIBLE para v: misma
-            // clase, soporta el ancho y -- si v cruza un CALL -- ser callee-saved.
-            // Asi un cross-call nunca roba una lane volatil.  Si v esta PINADO, el pin
+            // La lane que robariamos debe ser ADMISIBLE para v: misma clase,
+            // soporta el ancho y -- si v cruza un CALL -- ser callee-saved.  Asi
+            // un cross-call nunca roba una lane volatil.  Si v esta PINADO, el pin
             // (restriccion de nivel superior: ABI/asm) manda: solo su lane sirve.
             if (v->req.fixed_reg >= 0) {
                 if (a.lane != v->req.fixed_reg) continue;
@@ -283,12 +319,21 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
                                         vec_active)) {
                 continue;
             }
-            const double sc = spill_score(a.v, v->start);
-            if (sc > best) { best = sc; victim = a.v; }
+            ocupantes_de(a.lane);
+            if (ocupantes.empty()) continue;
+            /* Desalojar un conjunto cuesta lo que su miembro MAS caro de
+             * perder: con uno solo que no compense, la lane no compensa. */
+            double sc = spill_score(active[ocupantes[0]].v, v->start);
+            for (size_t k = 1; k < ocupantes.size(); ++k) {
+                const double s2 = spill_score(active[ocupantes[k]].v, v->start);
+                if (s2 < sc) sc = s2;
+            }
+            if (sc > best) { best = sc; lane_elegida = a.lane;
+                             mejores_ocupantes = ocupantes; }
         }
 
-        record_victim(victim, v->start); // instrumento: razon de la victima.
-        if (victim == v) {
+        if (lane_elegida == kSpilled) {
+            record_victim(v, v->start); // instrumento: razon de la victima.
             /* Derramar un valor que TIENE que estar en registro no es una
              * decision, es una imposibilidad: su uso lo nombra como registro.
              * Se cuenta en voz alta con el motivo por el que ninguna lane
@@ -316,14 +361,16 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
             }
             out.spill(v->value_id); // v es la peor de mantener -> derramar v.
         } else {
-            // Derramar la victima, dar su lane a v.
-            int freed_lane = kSpilled;
-            for (size_t i = 0; i < active.size(); ++i)
-                if (active[i].v == victim) { freed_lane = active[i].lane;
-                    active.erase(active.begin() + i); break; }
-            out.spill(victim->value_id);
-            out.assign(v->value_id, freed_lane);
-            active.push_back({v, freed_lane});
+            /* Desalojar a TODOS los que coinciden con v en esa lane y darsela.
+             * Se borra de atras adelante para que los indices sigan valiendo. */
+            for (size_t k = mejores_ocupantes.size(); k-- > 0;) {
+                const size_t i = mejores_ocupantes[k];
+                record_victim(active[i].v, v->start);
+                out.spill(active[i].v->value_id);
+                active.erase(active.begin() + static_cast<long>(i));
+            }
+            out.assign(v->value_id, lane_elegida);
+            active.push_back({v, lane_elegida});
         }
     }
     return out;

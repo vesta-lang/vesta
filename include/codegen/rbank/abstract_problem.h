@@ -39,6 +39,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace codegen {
@@ -64,6 +65,16 @@ struct AbstractValue {
     /// src2` -> a dst le conviene la lane de src1, porque el destino se pisa
     /// con el primer operando antes de operar).
     int32_t afinidad = -1;
+    /// Los tramos REALES en los que el valor esta vivo, como ventana
+    /// [tramos_off, tramos_off + tramos_n) del array plano del problema.
+    /// @c tramos_n == 0 -> no se sabe y vale el envolvente [start,end], que es
+    /// exacto para un valor sin huecos (el caso comun, y por eso no se guarda).
+    ///
+    /// Van en un array COMPARTIDO y no en un vector por valor: son decenas de
+    /// miles por compilacion y el JIT paga su compilacion en el reloj del
+    /// programa -- una reserva por valor se nota (~10% en los benches cortos).
+    uint32_t tramos_off = 0;
+    uint32_t tramos_n = 0;
 };
 
 /**
@@ -77,14 +88,62 @@ struct AbstractValue {
 struct AbstractProblem {
     std::vector<AbstractValue> values;
     analysis::AffinityGraphFacts affinity; ///< afinidades (Fact; lo consume F3).
+    /// Array plano con los tramos de TODOS los valores; cada uno mira su
+    /// ventana via @c tramos_off / @c tramos_n.  Una sola reserva por problema.
+    std::vector<std::pair<uint32_t, uint32_t>> tramos;
+
+    /// Cuantos tramos tiene @p v.  Un valor sin huecos no guarda ninguno, pero
+    /// TIENE uno: su envolvente.  Contarlo como "sin datos" seria contagiar la
+    /// imprecision al otro lado de la comparacion.
+    uint32_t n_tramos(const AbstractValue &v) const noexcept {
+        return v.tramos_n ? v.tramos_n : 1u;
+    }
+
+    /// El tramo @p i de @p v -- el envolvente si no guardo ninguno.
+    std::pair<uint32_t, uint32_t> tramo(const AbstractValue &v,
+                                        uint32_t i) const noexcept {
+        if (v.tramos_n == 0) return {v.start, v.end};
+        return tramos[v.tramos_off + i];
+    }
+
+    /**
+     * @brief ¿Coinciden en el tiempo @p a y @p b -- estan vivos a la vez?
+     *
+     * Compara TRAMO a tramo.  Importa frente al envolvente porque un valor con
+     * HUECOS no ocupa su registro en los huecos: tratarlo como si lo ocupara
+     * inventa interferencias y derrama de mas.
+     *
+     * @param a Un valor.
+     * @param b El otro.
+     * @return true si comparten algun instante.
+     */
+    bool coinciden(const AbstractValue &a, const AbstractValue &b) const noexcept {
+        // Descarte barato: sin solape de envolventes no hay nada que mirar, y
+        // es el caso mayoritario.
+        if (a.end < b.start || b.end < a.start) return false;
+        if (a.tramos_n == 0 && b.tramos_n == 0) return true; // dos tramos unicos
+        const uint32_t na = n_tramos(a), nb = n_tramos(b);
+        for (uint32_t i = 0; i < na; ++i) {
+            const std::pair<uint32_t, uint32_t> ra = tramo(a, i);
+            for (uint32_t j = 0; j < nb; ++j) {
+                const std::pair<uint32_t, uint32_t> rb = tramo(b, j);
+                if (ra.first <= rb.second && rb.first <= ra.second) return true;
+            }
+        }
+        return false;
+    }
 };
 
 /**
- * @brief True si los rangos de vida de @p a y @p b SE SOLAPAN (viven a la vez).
+ * @brief True si los ENVOLVENTES de @p a y @p b se solapan.
  *
- * Rangos cerrados [start,end]: NO se solapan solo si uno acaba antes de que el
- * otro empiece.  Dos valores que se solapan interfieren (no pueden compartir la
- * misma lane fisica).
+ * Rangos cerrados [start,end]: no se solapan solo si uno acaba antes de que el
+ * otro empiece.
+ *
+ * OJO: esto ignora los HUECOS.  Para saber si dos valores viven de verdad a la
+ * vez -- que es lo que decide si pueden compartir lane -- hay que preguntarle
+ * al problema (@c AbstractProblem::coinciden), que si los mira.  Esta version
+ * sirve donde solo interesa el envolvente y como descarte barato.
  */
 inline bool ranges_overlap(const AbstractValue &a, const AbstractValue &b) noexcept {
     return !(a.end < b.start || b.end < a.start);
@@ -92,9 +151,14 @@ inline bool ranges_overlap(const AbstractValue &a, const AbstractValue &b) noexc
 
 /**
  * @brief ABSTRACCION: LiveRanges -> Interference.  Emite una arista INTERFERE por
- *        cada par de valores cuyos rangos se solapan.  Funcion PURA y determinista
+ *        cada par de valores que viven A LA VEZ.  Funcion PURA y determinista
  *        (mismo problema -> mismo grafo) -> la abstraccion es reversible en el
  *        sentido del round-trip: re-abstraer da SIEMPRE lo mismo.
+ *
+ * Pregunta por los TRAMOS, no por el envolvente: si dijera que interfieren dos
+ * valores que solo se cruzan en un hueco, el verificador daria por invalido un
+ * reparto legitimo -- y el asignador y su juez tienen que medir con la misma
+ * vara.
  *
  * O(n^2) deliberado (Fase 0.5 es un prototipo de validacion; el grafo eficiente
  * por barrido/bitsets es de Fase 2).
@@ -104,7 +168,7 @@ inline ConstraintSet build_interference(const AbstractProblem &p) {
     const std::vector<AbstractValue> &v = p.values;
     for (size_t i = 0; i < v.size(); ++i)
         for (size_t j = i + 1; j < v.size(); ++j)
-            if (ranges_overlap(v[i], v[j]))
+            if (p.coinciden(v[i], v[j]))
                 cs.interfere(v[i].value_id, v[j].value_id);
     return cs;
 }

@@ -100,6 +100,8 @@ doc/BUG*
 doc/FIXES*
 tests/vx/test_vx_vxi_format.cpp
 bench_results.json
+bench_results_parcial.json
+bench_plots_parcial/
 
 doc/HISTORY.md
 examples_codes_vex/vexed/vexed.ir.post.dot

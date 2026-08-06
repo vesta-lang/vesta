@@ -88,6 +88,57 @@ int main() {
               "sin presion derramo o coloreo invalido");
     }
 
+    // --- Unit: los HUECOS dejan compartir lane (y solo cuando de verdad no
+    // coinciden) ---
+    std::printf("\n[huecos: dos valores entrelazados caben en una lane]\n");
+    {
+        /* Dos valores cuyos ENVOLVENTES se solapan del todo pero que se turnan:
+         * A vive en [0,10] y [40,50], B en [15,35].  Nadie coincide con nadie,
+         * asi que con una sola lane libre los dos deben caber sin derramar.
+         * Mirando solo el envolvente [0,50] vs [15,35] pareceria imposible. */
+        AbstractProblem p;
+        AbstractValue a = mkval(1, 0, 50, ResourceClass::GP, ViewWidth::W8);
+        AbstractValue b = mkval(2, 15, 35, ResourceClass::GP, ViewWidth::W8);
+        a.tramos_off = 0;
+        a.tramos_n = 2;
+        p.tramos.emplace_back(0u, 10u);
+        p.tramos.emplace_back(40u, 50u);
+        p.values = {a, b};
+        CHECK(!p.coinciden(p.values[0], p.values[1]),
+              "el hueco no se respeta: los da por coincidentes");
+        CHECK(ranges_overlap(p.values[0], p.values[1]),
+              "el caso de prueba no vale: los envolventes no se solapan");
+
+        // Relleno el resto del banco para que quede UNA sola lane libre.
+        for (uint32_t i = 0; i < K - 1; ++i)
+            p.values.push_back(
+                mkval(100 + i, 0, 50, ResourceClass::GP, ViewWidth::W8, 3));
+
+        LaneAssignment s = color_smart_spill(p, ctx, false);
+        CHECK(is_proper_coloring(p, s, bank, false), "huecos: coloreo invalido");
+        CHECK(spill_count(p, s) == 0, "huecos: derramo pudiendo compartir lane");
+        CHECK(s.lane_of(1) == s.lane_of(2),
+              "huecos: no llego a compartir la lane (los separo)");
+    }
+
+    std::printf("\n[sin huecos: los mismos rangos NO comparten lane]\n");
+    {
+        /* El mismo montaje pero con A vivo de corrido: ahora si coinciden con B
+         * y uno de los dos tiene que salir.  Es el control del caso anterior --
+         * sin el, "comparten lane" podria estar pasando por la razon
+         * equivocada. */
+        AbstractProblem p;
+        p.values = {mkval(1, 0, 50, ResourceClass::GP, ViewWidth::W8),
+                    mkval(2, 15, 35, ResourceClass::GP, ViewWidth::W8)};
+        for (uint32_t i = 0; i < K - 1; ++i)
+            p.values.push_back(
+                mkval(100 + i, 0, 50, ResourceClass::GP, ViewWidth::W8, 3));
+
+        LaneAssignment s = color_smart_spill(p, ctx, false);
+        CHECK(is_proper_coloring(p, s, bank, false), "sin huecos: coloreo invalido");
+        CHECK(spill_count(p, s) == 1, "sin huecos: deberia derramar exactamente 1");
+    }
+
     // --- PROPERTY-BASED: smart NUNCA peor que naive + coloreo propio ---
     std::printf("\n[property-based: 1000 problemas, smart vs naive]\n");
     {
