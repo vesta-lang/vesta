@@ -101,6 +101,28 @@ struct ConstraintSet {
         items.push_back({ConstraintKind::FIXED_LANE, a, 0, lane});
     }
 
+    /**
+     * @brief ¿Tienen @p a y @p b que ir en lanes DISTINTAS?
+     *
+     * No es lo mismo que interferir.  Dos valores que no se solapan en el
+     * tiempo pueden compartir lane sin problema, pero a veces la FORMA de la
+     * instruccion lo prohibe igual: en una operacion de dos operandos no
+     * conmutativa (`dst = dst OP src`), si al segundo operando le toca la lane
+     * del destino, hay que salvarlo antes de pisarlo -- dos movimientos y un
+     * temporal que no harian falta si el asignador no lo hubiera juntado.
+     *
+     * @param a Primer valor.
+     * @param b Segundo valor.
+     * @return true si no pueden compartir lane.
+     */
+    bool must_differ(uint32_t a, uint32_t b) const {
+        for (const Constraint &c : items)
+            if (c.kind == ConstraintKind::DIFFERENT_LANE &&
+                ((c.a == a && c.b == b) || (c.a == b && c.b == a)))
+                return true;
+        return false;
+    }
+
     /** @brief True si @p a y @p b tienen una arista INTERFERE (lineal, Fase 0). */
     bool interferes(uint32_t a, uint32_t b) const {
         for (const Constraint &c : items)

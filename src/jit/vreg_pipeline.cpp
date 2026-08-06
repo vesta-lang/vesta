@@ -26,6 +26,7 @@
 #include "jit/peephole.h"
 #include "jit/regalloc_rewrite.h"
 #include "jit/sched/machine_sched.h"
+#include "jit/shape_constraints.h"
 #include "jit/ssa_coalesce.h"
 #include "jit/target_reginfo.h"
 #include "jit/jit_timing.h"                   // telemetria de tiempo de compilacion
@@ -334,6 +335,14 @@ void run_measure(const ir::IrFunction &fn, const IntervalResult &ivs,
 codegen::RegAlloc rbank_allocate_belady(const IntervalResult &ivs, const MFunction &mf,
                                     const TargetRegInfo &tri, bool vec,
                                     codegen::AssignmentPlan *plan_out) {
+    /* Restricciones que impone la FORMA de las instrucciones (ver
+     * jit/shape_constraints.h): el asignador puede EVITAR el estorbo en vez de
+     * que el reescritor lo apane despues. */
+    const codegen::rbank::ConstraintSet forma =
+        recoger_restricciones_de_forma(mf);
+    if (!forma.items.empty() && std::getenv("VESTA_FORMA_DEBUG"))
+        std::fprintf(stderr, "[forma] %s: %zu restricciones\n",
+                     mf.name.c_str(), forma.items.size());
     jit::MachineNextUseFacts nu;
     const jit::MachineNextUseFacts *nup = nullptr;
     if (belady_enabled()) { nu = jit::compute_next_use(mf); nup = &nu; }
@@ -342,8 +351,9 @@ codegen::RegAlloc rbank_allocate_belady(const IntervalResult &ivs, const MFuncti
     const uint32_t nvregs = mf.vreg_count;
     // El plan solo se calcula si el caller lo consume Y el splitting esta activo.
     codegen::AssignmentPlan *pp = splitting_enabled() ? plan_out : nullptr;
-    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(ivs, nvregs, tri, vec, nup, stp,
-                                                      recovery_enabled(), pp);
+    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(
+        ivs, nvregs, tri, vec, nup, stp, recovery_enabled(), pp,
+        forma.items.empty() ? nullptr : &forma);
     if (stp) {
         std::lock_guard<std::mutex> lk(g_measure_mtx);
         g_spill_trace_agg.add(st);

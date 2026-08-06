@@ -74,9 +74,15 @@ inline codegen::RegAlloc rbank_solve(const AbstractProblem &p, uint32_t vreg_cou
                                      const PhysicalRegisterBank &bank, bool vec_active,
                                      const jit::MachineNextUseFacts *next_use,
                                      SpillTrace *trace, bool recover,
-                                     LaneAssignment *la_out = nullptr) {
-    ConstraintSet cs;
-    OptimizationContext ctx = make_context(const_cast<PhysicalRegisterBank &>(bank), cs);
+                                     LaneAssignment *la_out = nullptr,
+                                     const ConstraintSet *cs_in = nullptr) {
+    /* Restricciones de FORMA: las que impone la instruccion aunque las vidas
+     * permitan compartir lane.  Vacio = ninguna (comportamiento de siempre). */
+    ConstraintSet cs_vacio;
+    const ConstraintSet &cs = cs_in ? *cs_in : cs_vacio;
+    OptimizationContext ctx =
+        make_context(const_cast<PhysicalRegisterBank &>(bank),
+                     const_cast<ConstraintSet &>(cs));
     ctx.next_use = next_use;  // Fact MachineIR (Belady); nullptr = fallback duracion.
     ctx.spill_trace = trace;  // instrumento opcional (razon de victima).
     LaneAssignment la = color_smart_spill(p, ctx, vec_active);
@@ -117,13 +123,15 @@ inline codegen::RegAlloc rbank_allocate(const jit::IntervalResult &ivs, uint32_t
                                     const jit::TargetRegInfo &tri, bool vec_active,
                                     const jit::MachineNextUseFacts *next_use = nullptr,
                                     SpillTrace *trace = nullptr, bool recover = true,
-                                    codegen::AssignmentPlan *plan_out = nullptr) {
+                                    codegen::AssignmentPlan *plan_out = nullptr,
+                                    const ConstraintSet *cs_in = nullptr) {
     PhysicalRegisterBank bank =
         physical_bank_x86_64_from_reginfo(tri, jit::backend_caps_host());
     const AbstractProblem p = intervals_to_problem(ivs);
     LaneAssignment la;
     codegen::RegAlloc ra =
-        rbank_solve(p, vreg_count, bank, vec_active, next_use, trace, recover, &la);
+        rbank_solve(p, vreg_count, bank, vec_active, next_use, trace, recover, &la,
+                    cs_in);
 
     /* 3a pasada (Fragmentation Recovery / splitting): los spills que NO caben enteros en
      * una lane pueden volver a registro POR TRAMOS.  No toca @c la ni @c ra: produce un

@@ -142,6 +142,22 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
         }
         return true;
     };
+    /* ¿Prohibe alguna restriccion de FORMA que @p value ocupe @p lane?  Mira si
+     * la lane ya se la dieron a alguien con quien no puede compartirla. */
+    auto prohibida_por_forma = [&](uint32_t value, int lane) -> bool {
+        if (ctx.constraints == nullptr) return false;
+        const ConstraintSet &cs = ctx.get_constraints();
+        for (const Constraint &c : cs.items) {
+            if (c.kind != ConstraintKind::DIFFERENT_LANE) continue;
+            const uint32_t otro = (c.a == value) ? c.b
+                                : (c.b == value) ? c.a
+                                                 : UINT32_MAX;
+            if (otro == UINT32_MAX) continue;
+            if (out.lane_of(otro) == lane) return true;
+        }
+        return false;
+    };
+
     auto first_free_lane = [&](const AbstractValue *v) -> int {
         const ValueRequirements &r = v->req;
         if (r.fixed_reg >= 0) {
@@ -162,6 +178,12 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
         for (const Lane &l : bank.lanes) {
             if (!lane_admissible(r, l, vec_active)) continue; // correctitud dura (cero by_id).
             if (!lane_free(l.id)) continue;
+            /* Lane que la FORMA de una instruccion prohibe compartir, aunque
+             * los dos valores no coincidan en el tiempo.  Sin esto el
+             * asignador los junta -- es legitimo por vidas -- y luego hay que
+             * deshacerlo con dos movimientos y un temporal.  Barato de mirar:
+             * el conjunto esta vacio salvo en las funciones que lo pidan. */
+            if (prohibida_por_forma(v->value_id, l.id)) continue;
             // Un valor SIN pin no roba una lane RESERVADA por un pin que se solapa
             // (aunque ese pin aun no este activo): el pin la necesitara al llegar.
             if (lane_pinned_by_other(l.id, v->start, v->end, v->value_id)) continue;
