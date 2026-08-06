@@ -1430,6 +1430,11 @@ struct IrFunction {
      * naked con asm puro no tiene representacion en bytecode VM).
      */
     bool is_naked = false;
+    /// @NoIdiom: los pases que reconocen idiomas (un bucle de copia ->
+    /// `memcpy`) no se aplican a esta funcion.  Lo llevan las primitivas de
+    /// memoria: reescribir el bucle de `memcpy` a `memcpy` seria convertirlo
+    /// en una llamada a si mismo.
+    bool no_idiom = false;
     int64_t section_at = -1; ///< @at(N): offset/VA fijo (AOT .bin); -1 = auto
     int32_t section_order =
         0x7fffffff; ///< @order(N): orden de seccion; max = creacion

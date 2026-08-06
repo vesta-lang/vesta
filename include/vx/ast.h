@@ -1707,6 +1707,17 @@ struct FunctionDecl : Node {
     /// stubs de entry y cambio de modo en dev OS.  Semantica de
     /// `__attribute__((naked))` de GCC.  Solo lo consume el codegen.
     bool is_naked = false;
+    /// @NoIdiom: el compilador NO reconoce idiomas dentro de esta funcion.
+    ///
+    /// Hay pases que ven un bucle y lo reescriben a la operacion equivalente
+    /// (un bucle de copia -> `memcpy`).  Eso es correcto en codigo normal y
+    /// desastroso en el codigo que IMPLEMENTA esa operacion: el bucle de
+    /// `memcpy` se convertiria en una llamada a `memcpy`, o sea a si mismo.
+    ///
+    /// Lo lleva quien escribe una primitiva de memoria, incluido quien aporte
+    /// la suya con @c @HelperOverride.  No cambia la semantica: solo impide
+    /// que el codigo se sustituya por una llamada a lo que esta definiendo.
+    bool is_no_idiom = false;
     /// @NoExcept (o modulo @NoExceptions): esta funcion promete no propagar
     /// excepciones.  El frontend rechaza throw/try/catch en su cuerpo y el
     /// codegen omite el bookkeeping de excepciones (cero overhead).  Un

@@ -1435,6 +1435,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     bool top_is_alloc_override = false; /* AOT.2.d: @AllocatorOverride */
     bool top_is_panic_handler = false;  /* AOT.2.d: @PanicHandler */
     bool top_is_naked = false;          /*  NR: @Naked (ISRs/stubs) */
+    bool top_is_no_idiom = false;        /* @NoIdiom: sin reconocimiento de idiomas */
     bool top_is_noexcept = false;       /* @NoExcept: fn sin excepciones */
     bool top_is_string_concat = false;  /* C-3: @StringConcat */
     bool top_is_string_eq = false;      /* C-3: @StringEq */
@@ -1521,6 +1522,8 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                 top_is_panic_handler = true;
             else if (current_.lexeme == "Naked")
                 top_is_naked = true;
+            else if (current_.lexeme == "NoIdiom")
+                top_is_no_idiom = true;
             else if (current_.lexeme == "NoExcept")
                 top_is_noexcept = true;
             else if (current_.lexeme == "NoExceptions")
@@ -2316,6 +2319,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         if (fd && top_is_alloc_override) fd->is_alloc_override = true;
         if (fd && top_is_panic_handler) fd->is_panic_handler = true;
         if (fd && top_is_naked) fd->is_naked = true;
+        if (fd && top_is_no_idiom) fd->is_no_idiom = true;
         if (fd && top_is_string_concat) fd->is_string_concat_override = true;
         if (fd && top_is_string_eq) fd->is_string_eq_override = true;
         if (fd && top_is_sync_impl) fd->is_sync_impl = true;

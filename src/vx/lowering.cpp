@@ -3167,6 +3167,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     fn.section_order = fd->attr_order;
     //  NR: @Naked -- el codegen suprime prologo/epilogo/ret.
     fn.is_naked = fd->is_naked;
+    fn.no_idiom = fd->is_no_idiom;
 
     // Subsistema de coste (modo --analyze): propagar el contrato
     // @complexity del AST al IR.  Metadata pura -- el codegen la ignora;
@@ -3580,6 +3581,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // codigo no escaneado).
     current_fn_has_try_ = false;
     current_fn_has_loops_ = false;
+    current_fn_no_idiom_ = fd->is_no_idiom;
     // escape detection para colecciones primitivas: detectar
     //  locales cuyo handle se devuelve, asigna a campo o se almacena en
     //  memoria.  Los marcados quedan fuera del cleanup automatico.

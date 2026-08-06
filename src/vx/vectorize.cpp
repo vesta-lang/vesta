@@ -356,6 +356,9 @@ bool Lowering::mc_emit_copy(ir::IrValueId v_idx, ast::Expr *limit,
 }
 
 bool Lowering::try_lower_memcpy_idiom(ast::WhileStmt *s) {
+    // @NoIdiom: no reescribir un bucle de copia a `memcpy` dentro de quien
+    // IMPLEMENTA memcpy -- seria una llamada a si mismo.
+    if (current_fn_no_idiom_) return false;
     using namespace ast;
     static const bool MC_DBG = std::getenv("VESTA_MC_IDIOM_DEBUG") != nullptr;
     if (!s->cond || !s->body) return false;
@@ -404,6 +407,9 @@ bool Lowering::try_lower_memcpy_idiom(ast::WhileStmt *s) {
 }
 
 bool Lowering::try_lower_memcpy_idiom_for(ast::ForStmt *s) {
+    // @NoIdiom: no reescribir un bucle de copia a `memcpy` dentro de quien
+    // IMPLEMENTA memcpy -- seria una llamada a si mismo.
+    if (current_fn_no_idiom_) return false;
     using namespace ast;
     static const bool MC_DBG = std::getenv("VESTA_MC_IDIOM_DEBUG") != nullptr;
     if (!s->cond || !s->body || !s->init || !s->step) return false;

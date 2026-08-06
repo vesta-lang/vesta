@@ -11370,6 +11370,9 @@ bool ir_pass_carry_idiom(IrFunction &fn) {
 bool ir_pass_loop_memcpy_idiom(IrFunction &fn) {
     bool changed = false;
     if (fn.is_native) return false;
+    // @NoIdiom: quien IMPLEMENTA la copia no puede ver su bucle reescrito a
+    // una llamada a la copia -- seria una llamada a si mismo.
+    if (fn.no_idiom) return false;
 
     for (size_t hi = 0; hi < fn.blocks.size(); ++hi) {
         IrBlock &header = fn.blocks[hi];

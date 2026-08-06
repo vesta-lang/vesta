@@ -1566,6 +1566,11 @@ class Lowering {
     /// Para funciones SIN try el cleanup es seguro y libera handles
     /// deterministicamente al exit del scope.
     bool current_fn_has_try_ = false;
+    /// @NoIdiom en la funcion que se esta bajando: los pases que reconocen
+    /// idiomas (un bucle de copia -> memcpy) no se aplican dentro.  Sin esto,
+    /// el codigo que IMPLEMENTA memcpy se reescribiria a una llamada a si
+    /// mismo.
+    bool current_fn_no_idiom_ = false;
 
     /// true si la funcion actual contiene algun loop
     /// (while/for/do-while).  Se rellena con un pre-pase en
