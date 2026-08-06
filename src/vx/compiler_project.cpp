@@ -1736,6 +1736,22 @@ CompileResult compile_vx_project(
                        syms.end());
             return storage;
         };
+        // Si una dependencia no compilo, este modulo tampoco vale.  Sin esta
+        // comprobacion se compilaba igual -- con la superficie del dep VACIA --
+        // y, lo que es peor, se PERSISTIA su interfaz: la siguiente compilacion
+        // hacia cache hit sobre esa interfaz degradada y el fallo sobrevivia al
+        // arreglo del dep.  Solo se nota si el import no lleva `only`, porque
+        // entonces no hay ningun simbolo concreto que echar en falta.
+        for (const auto &req : imports) {
+            auto itd = by_name.find(req.module_name);
+            if (itd == by_name.end()) continue;
+            if (work[itd->second].ok) continue;
+            pm.diags.error(req.loc, "no puedo usar el modulo '" +
+                                        req.module_name +
+                                        "': no ha compilado");
+            pm.ok = false;
+            return;
+        }
         {
             std::unordered_set<std::string> seen;
             std::vector<std::string> queue;
