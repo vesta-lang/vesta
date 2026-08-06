@@ -3585,6 +3585,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     //  memoria.  Los marcados quedan fuera del cleanup automatico.
     const_str_locals_.clear();
     escaping_locals_.clear();
+    reassigned_locals_.clear();
     if (fd->body) scan_escaping_locals(fd->body.get());
     // Los deleters estaticos por-variable son por-funcion (los nombres de
     // variables se reusan entre funciones); limpiar al entrar a una nueva.
@@ -6000,10 +6001,19 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 if (!slit->is_interpolated()) {
                     v = build_native_string_from_literal(slit, vd->loc.line);
                     bind(vd->name, v);
+                    // Una cadena que sale de un literal no tiene buffer propio
+                    // -- o cabe inline, o es una vista sobre .rodata -- asi que
+                    // mientras nadie la reasigne no hay nada que liberar.
+                    // Registrar la limpieza igualmente no era gratis: emite un
+                    // `free`, y ESO es lo que hacia que cualquier programa con
+                    // una cadena constante enlazara el asignador entero.
+                    const bool puede_acabar_siendo_suyo =
+                        reassigned_locals_.count(vd->name) != 0;
                     // RAII: liberar el buffer al exit del scope, salvo
                     // que el string escape (return/asignacion a campo).
-                    if (escaping_locals_.find(vd->name) ==
-                        escaping_locals_.end()) {
+                    if (puede_acabar_siendo_suyo &&
+                        escaping_locals_.find(vd->name) ==
+                            escaping_locals_.end()) {
                         CleanupAction act;
                         act.kind = CleanupAction::Kind::STRING_FREE;
                         act.operands = {v};
@@ -30728,6 +30738,29 @@ static uint64_t intern_class_name(ir::IrModule &mod, const std::string &name) {
 }
 
 /**
+ * @brief Interna un literal de cadena en los datos estaticos CON su nul.
+ *
+ * Aparte de @c intern_class_name a proposito: aquel guarda los bytes tal cual
+ * porque sus clientes (nombres de clase, mensajes de panic) llevan siempre la
+ * longitud al lado.  Un `string` que apunta aqui, en cambio, tiene que poder
+ * dar un `cstr()` valido, y eso exige el nul en memoria -- no se puede anadir
+ * despues sobre datos de solo lectura.
+ *
+ * El nul NO cuenta para la longitud: `.bytes()` sigue dando los bytes del
+ * literal.  Solo esta para que la cadena valga en la frontera con C.
+ *
+ * @param mod Modulo donde viven los datos estaticos.
+ * @param lit Bytes del literal (UTF-8, sin nul).
+ * @return Indice del blob internado.
+ */
+static uint64_t intern_string_literal_nul(ir::IrModule &mod,
+                                          const std::string &lit) {
+    std::vector<uint8_t> bytes(lit.begin(), lit.end());
+    bytes.push_back(0);
+    return mod.intern_static_data(std::move(bytes));
+}
+
+/**
  * @brief fix11 - reserva un slot de 8 bytes en static_data para
  * cachear el `ClassInfo*` de una clase.  El slot inicia en 0 y se
  * llena en `__module_init` despues del `defclass`; cada llamada
@@ -35115,6 +35148,40 @@ ir::IrValueId Lowering::emit_strgetbytes(ir::IrValueId v_str,
 // struct value-type (ver lower_ident: STRUCT/ARRAY devuelven lookup()).
 // -----------------------------------------------------------------------
 
+void Lowering::store_slot_fields_prestado(ir::IrValueId v_slot,
+                                          ir::IrValueId v_buf, uint64_t len,
+                                          uint32_t source_line) {
+    auto store_at = [&](uint64_t off, ir::IrValueId v_val, ir::IrType ty) {
+        ir::IrValueId v_addr = v_slot;
+        if (off > 0) {
+            ir::IrValueId v_off = emit_const(ir::IrType::I64, off, source_line);
+            v_addr = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_addr].is_host_ptr = fn_->values[v_slot].is_host_ptr;
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v_addr;
+            ad.operands = {v_slot, v_off};
+            ad.source_line = source_line;
+            emit(current_block_, std::move(ad));
+        }
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ty;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_val, v_addr};
+        st.source_line = source_line;
+        emit(current_block_, std::move(st));
+    };
+    store_at(0, v_buf, ir::IrType::I64);
+    store_at(8, emit_const(ir::IrType::I64, len, source_line), ir::IrType::I64);
+    // Capacidad 0: no hay sitio libre detras, cualquier escritura tiene que
+    // copiar antes.  byte[23] = 0xC0 -> bit 7 (los datos estan detras del
+    // puntero) + bit 6 (prestado).
+    store_at(16, emit_const(ir::IrType::I64, 0, source_line), ir::IrType::I64);
+    store_at(23, emit_const(ir::IrType::U8, 0xC0, source_line), ir::IrType::U8);
+}
+
 ir::IrValueId
 Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
                                            uint32_t source_line) {
@@ -35223,22 +35290,31 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
         return v_slot;
     }
 
-    // --- Literal largo (> 22 bytes): modo HEAP ---
-    // 2. Buffer en heap: RAW_ALLOC(cap).  aot_lower lo baja a call malloc.
-    //    Resultado is_host_ptr para que los LOAD/STORE posteriores usen
-    //    memoria host.
+    // --- Literal largo (> 22 bytes): VISTA sobre .rodata ---
+    //
+    // El contenido ya esta en el binario, en datos de solo lectura; copiarlo a
+    // memoria pedida al asignador solo para poder leerlo era pagar dos veces
+    // por lo mismo -- y arrastraba el asignador entero a cualquier programa
+    // que mencionara una cadena, cosa que un modulo freestanding como vx_io no
+    // puede permitirse.  Ahora el slot APUNTA al literal y se marca prestado:
+    // nadie lo libera y nadie escribe encima (quien vaya a escribir lo copia
+    // antes, ver build_native_string_append_inplace).
+    //
+    // El literal se interna con su nul para que `cstr()` valga tal cual.
+    (void)cap;
     const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
     fn_->values[v_buf].is_host_ptr = true;
     {
-        ir::IrValueId v_cap = emit_const(ir::IrType::I64, cap, source_line);
-        ir::IrInstr ra{};
-        ra.op = ir::IrOp::RAW_ALLOC;
-        ra.type = ir::IrType::PTR;
-        ra.dst = v_buf;
-        ra.operands = {v_cap};
-        ra.source_line = source_line;
-        emit(current_block_, std::move(ra));
+        ir::IrInstr sa{};
+        sa.op = ir::IrOp::STR_LIT_ADDR;
+        sa.type = ir::IrType::PTR;
+        sa.dst = v_buf;
+        sa.imm = intern_string_literal_nul(*out_mod_, lit);
+        sa.source_line = source_line;
+        emit(current_block_, std::move(sa));
     }
+    store_slot_fields_prestado(v_slot, v_buf, len, source_line);
+    return v_slot;
 
     // 3 + 4. Escribir el contenido del literal + nul final al buffer.
     //    El contenido es CONOCIDO en compile-time -> emitimos STOREs
@@ -38808,6 +38884,63 @@ ir::IrValueId Lowering::emit_native_str_is_heap(ir::IrValueId v_slot,
     return v_is_heap;
 }
 
+ir::IrValueId Lowering::emit_native_str_is_owned(ir::IrValueId v_slot,
+                                                 uint32_t source_line) {
+    // owned = (byte[23] >> 7) & ~(byte[23] >> 6) & 1, sin ramas:
+    //   b23 >> 6 da 0b11 para un prestado (bits 7 y 6) y 0b10 para uno
+    //   propio, asi que basta comparar con 2.  Se hace con aritmetica para no
+    //   introducir un salto en el camino de salida de cada scope.
+    //
+    //   propio    -> (b23 >> 6) == 0b10 = 2 -> owned = 1
+    //   prestado  -> (b23 >> 6) == 0b11 = 3 -> owned = 0
+    //   SSO       -> (b23 >> 6) == 0b00 = 0 -> owned = 0 (no hay buffer)
+    ir::IrValueId v_off = emit_const(ir::IrType::I64, 23, source_line);
+    ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v_addr].is_host_ptr = fn_->values[v_slot].is_host_ptr;
+    {
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = v_addr;
+        ad.operands = {v_slot, v_off};
+        ad.source_line = source_line;
+        emit(current_block_, std::move(ad));
+    }
+    ir::IrValueId v_b23 = fn_->new_value(ir::IrType::U8);
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::U8;
+        ld.dst = v_b23;
+        ld.operands = {v_addr};
+        ld.source_line = source_line;
+        emit(current_block_, std::move(ld));
+    }
+    ir::IrValueId v_six = emit_const(ir::IrType::I64, 6, source_line);
+    ir::IrValueId v_top2 = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr sh{};
+        sh.op = ir::IrOp::SHR;
+        sh.type = ir::IrType::I64;
+        sh.dst = v_top2;
+        sh.operands = {v_b23, v_six};
+        sh.source_line = source_line;
+        emit(current_block_, std::move(sh));
+    }
+    ir::IrValueId v_dos = emit_const(ir::IrType::I64, 2, source_line);
+    ir::IrValueId v_owned = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr cm{};
+        cm.op = ir::IrOp::CMP_EQ;
+        cm.type = ir::IrType::I64;
+        cm.dst = v_owned;
+        cm.operands = {v_top2, v_dos};
+        cm.source_line = source_line;
+        emit(current_block_, std::move(cm));
+    }
+    return v_owned;
+}
+
 ir::IrValueId Lowering::emit_native_str_data_ptr_inline(ir::IrValueId v_slot,
                                                         uint32_t source_line) {
     // data_ptr = is_heap ? LOAD ptr@0 : &slot.
@@ -39732,7 +39865,10 @@ void Lowering::emit_native_str_free_if_heap(ir::IrValueId v_slot,
     // MUL propagaba la indefinicion a free() -> "Conditional jump depends
     // on uninitialised value".  free(0) es no-op -> seguro para SSO y
     // move-out.
-    ir::IrValueId v_is_heap = emit_native_str_is_heap(v_slot, source_line);
+    // Se pregunta por PROPIO, no por "tiene puntero": una vista sobre
+    // .rodata tambien tiene puntero, y liberarlo seria pasarle al asignador
+    // una direccion que nunca le pidio.
+    ir::IrValueId v_is_heap = emit_native_str_is_owned(v_slot, source_line);
     ir::IrValueId v_ptr0 = fn_->new_value(ir::IrType::I64);
     {
         ir::IrInstr ld{};
@@ -41413,6 +41549,12 @@ void Lowering::scan_escaping_locals(ast::Stmt *body) {
                     // Si `target` resulta escaping al final, `source`
                     // tambien lo sera.
                     auto *id_t = static_cast<ast::IdentExpr *>(a->target.get());
+                    // Una variable que se reasigna (o a la que se le anade con
+                    // `+=`) puede pasar a tener buffer propio, asi que su
+                    // limpieza al salir del ambito NO se puede omitir.  Se
+                    // apunta aqui, que es el unico sitio que ya recorre el
+                    // cuerpo entero.
+                    reassigned_locals_.insert(id_t->name);
                     if (a->value &&
                         a->value->kind == ast::NodeKind::IdentExpr) {
                         auto *id_v =

@@ -1683,6 +1683,13 @@ class Lowering {
     /// (escape detectado pero no real) producen un leak intencional
     /// que el programador debe liberar via dispose() explicito.
     std::unordered_set<std::string> escaping_locals_;
+    /// Locales que se REASIGNAN en algun punto de la funcion (`s = x`, `s +=
+    /// x`).  Lo llena el mismo pre-pase que @c escaping_locals_.  Una cadena
+    /// inicializada con un literal y que nunca se reasigna no puede llegar a
+    /// tener buffer propio, asi que no hace falta liberarla al salir del
+    /// ambito -- y sin ese `free` un programa que solo usa cadenas constantes
+    /// deja de enlazar el asignador.
+    std::unordered_set<std::string> reassigned_locals_;
 
     /// pre-pase ejecutado al inicio de @c lower_function que
     /// rellena @c escaping_locals_ recorriendo el body.  Reusable como
@@ -1869,6 +1876,30 @@ class Lowering {
     /// usan estos accesores en vez de leer ptr@0/len@8 crudos.
     ir::IrValueId emit_native_str_is_heap(ir::IrValueId v_slot,
                                           uint32_t source_line);
+    /// @brief 1 si el buffer detras del puntero es NUESTRO (hay que
+    ///        liberarlo), 0 si no.
+    ///
+    /// Tercer estado del slot: PRESTADO.  Un literal no se copia a memoria
+    /// pedida al asignador -- vive en `.rodata`, que para eso esta -- asi que
+    /// su slot apunta ahi y NO se libera.  Se marca con el bit 6 de byte[23],
+    /// que estaba libre (en modo HEAP los bits 0..6 no se usan: la capacidad
+    /// ocupa los bytes 16..22).
+    ///
+    ///   byte[23] bit 7 = los datos estan detras del puntero (no inline)
+    ///   byte[23] bit 6 = prestado: el buffer no es nuestro
+    ///
+    /// Los accesores de LECTURA siguen mirando solo el bit 7, asi que leer una
+    /// vista es exactamente igual de caro que leer un buffer propio.  Este
+    /// accesor lo usa unicamente quien libera o quien va a escribir encima.
+    ir::IrValueId emit_native_str_is_owned(ir::IrValueId v_slot,
+                                           uint32_t source_line);
+    /// @brief Rellena el slot de 24 bytes como VISTA sobre un buffer ajeno.
+    /// @param v_slot Slot destino.
+    /// @param v_buf Puntero a los bytes (tipicamente `.rodata`).
+    /// @param len Longitud en bytes, sin contar el nul.
+    /// @param source_line Linea de fuente para el diagnostico.
+    void store_slot_fields_prestado(ir::IrValueId v_slot, ir::IrValueId v_buf,
+                                    uint64_t len, uint32_t source_line);
     /// @c emit_native_str_data_ptr / @c emit_native_str_len emiten una CALL a
     /// los helpers @c __vx_strdata / @c __vx_strlen (una sola instruccion por
     /// uso).  La logica branchless (AND-mask heap/SSO) vive en el cuerpo del
