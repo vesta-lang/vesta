@@ -5905,9 +5905,19 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const std::string ibody =
             vx::asm_body_subst_greedy(ins.func_name, ctx.fn.asm_reg_bindings);
         const uint64_t hash = jit::fnv1a64_asm(ibody);
+        /* Descriptor de los huecos: 4 bits por operando con su registro
+         * (bits 0..31) y, en los bits 32..39, si ese hueco vive en memoria del
+         * HOST.  Hace falta decirlo: un hueco puede acabar en memoria del host
+         * (es lo que se busca) y entonces leerlo como direccion de la maquina
+         * virtual da basura -- el valor no entraba ni salia, y el asm quedaba
+         * desconectado de la variable sin que nadie avisara. */
         uint64_t desc = 0;
-        for (size_t i = 0; i < binds.size(); ++i)
+        for (size_t i = 0; i < binds.size(); ++i) {
             desc |= (uint64_t)(binds[i].phys & 0xF) << (i * 4);
+            if (binds[i].slot < ctx.fn.values.size() &&
+                ctx.fn.values[binds[i].slot].is_host_ptr)
+                desc |= 1ull << (32 + i);
+        }
 
         // Salvar regs vivos a traves de la llamada (el helper es un calln).
         const uint32_t call_pos = lin_pos_of(ctx, bb.id, idx);

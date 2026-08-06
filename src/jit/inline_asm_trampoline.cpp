@@ -93,16 +93,30 @@ extern "C" uint64_t vrt_inline_asm_exec(uint64_t proc, uint64_t hash,
 
     for (int i = 0; i < 16; ++i)
         ctx[i] = 0;
-    // in-marshalling: slot VM -> ctx[phys]
+    /* El hueco de cada operando puede vivir en memoria de la maquina virtual o
+     * en la del host; el bit 32+i del descriptor dice cual.  Leerlo por la via
+     * equivocada daba basura de entrada y tiraba el resultado a la salida. */
+    auto es_host = [&](int i) { return (desc >> (32 + i)) & 1ull; };
+    // in-marshalling: hueco -> ctx[phys]
     for (int i = 0; i < n && i < 8; ++i) {
         const int phys = static_cast<int>((desc >> (i * 4)) & 0xF);
-        ctx[phys] = vm->vm_mem.read_u64(slots[i]);
+        if (es_host(i)) {
+            std::memcpy(&ctx[phys], reinterpret_cast<const void *>(slots[i]),
+                        sizeof(uint64_t));
+        } else {
+            ctx[phys] = vm->vm_mem.read_u64(slots[i]);
+        }
     }
     tramp(ctx); // ejecuta el asm host
-    // out-marshalling: ctx[phys] -> slot VM
+    // out-marshalling: ctx[phys] -> hueco
     for (int i = 0; i < n && i < 8; ++i) {
         const int phys = static_cast<int>((desc >> (i * 4)) & 0xF);
-        vm->vm_mem.write_u64(slots[i], ctx[phys]);
+        if (es_host(i)) {
+            std::memcpy(reinterpret_cast<void *>(slots[i]), &ctx[phys],
+                        sizeof(uint64_t));
+        } else {
+            vm->vm_mem.write_u64(slots[i], ctx[phys]);
+        }
     }
     return 0;
 }

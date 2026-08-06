@@ -21,12 +21,27 @@
 #include "vx/asm/asm_phys_reg.h"
 
 #include <cctype>
+#include <cstdio>
+#include <cstdlib>
+#include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
 namespace vx {
 
 namespace {
+
+/// Instrucciones que la base de datos no supo resolver, con el motivo.  Se
+/// guardan por (mnemonico, motivo) para no repetir la misma cien veces.
+std::set<std::pair<std::string, std::string>> &huecos_db() {
+    static std::set<std::pair<std::string, std::string>> s;
+    return s;
+}
+std::mutex &huecos_db_mutex() {
+    static std::mutex m;
+    return m;
+}
 
 /// Recorta espacios de los extremos.
 std::string trim(const std::string &s) {
@@ -87,6 +102,31 @@ bool has_reg(const std::vector<std::string> &v, const std::string &name) {
 
 /// Trocea @p insn en (mnemonico, operandos por coma).  Los operandos van con
 /// espacios recortados.  No maneja @c [...] (= solo registros GP).
+/**
+ * @brief Deja constancia de que la base de datos no supo resolver @p insn.
+ *
+ * Que una instruccion no este en la base de datos no impide compilar -- se
+ * trata como una caja opaca -- pero casi siempre significa que falta en la
+ * base, y eso hay que poder verlo.  Con @c VESTA_ASM_DB_GAPS=1 se avisa de
+ * cada una la primera vez.
+ *
+ * @param insn Instruccion tal cual aparece en el bloque asm.
+ * @param motivo Por que no se pudo resolver.
+ */
+void anotar_hueco_db(const std::string &insn, const char *motivo) {
+    size_t sp = insn.find_first_of(" \t");
+    const std::string mnem = (sp == std::string::npos) ? insn : insn.substr(0, sp);
+    bool nuevo = false;
+    {
+        std::lock_guard<std::mutex> g(huecos_db_mutex());
+        nuevo = huecos_db().emplace(mnem, motivo).second;
+    }
+    if (!nuevo) return;
+    const char *v = std::getenv("VESTA_ASM_DB_GAPS");
+    if (v == nullptr || v[0] != '1') return;
+    std::fprintf(stderr, "[asm-db] '%s': %s\n", mnem.c_str(), motivo);
+}
+
 void split_insn(const std::string &insn, std::string &mnem,
                 std::vector<std::string> &ops) {
     ops.clear();
@@ -188,8 +228,10 @@ bool asm_lift_micro(
     for (const std::string &insn : insns) {
         instr_db::AsmInsnSem sem =
             instr_db::asm_insn_sem(isa, insn, (uint32_t)ua);
-        if (sem.form_id < 0)          // desconocida por la DB
+        if (sem.form_id < 0) {        // desconocida por la DB
+            anotar_hueco_db(insn, "la base de datos no conoce esta forma");
             return false;
+        }
         // Si la instruccion LEE/ESCRIBE implicitamente un registro que esta
         // LIGADO a una variable Vesta (register(): p.ej. `syscall` con
         // register("rax") id + register("rdi") a1 en los params del invoke), el
@@ -218,11 +260,26 @@ bool asm_lift_micro(
         }
         std::vector<ir::AsmMicroOperand> operands;
         std::string tmpl;
-        if (sem.reads.empty() && sem.writes.empty()) {
+        // Una instruccion con operandos ESCRITOS pasa siempre por el analisis
+        // de operandos, aunque la DB no describa su forma.  Copiarla verbatim
+        // por esa via -- que es lo que se hacia -- la convierte en opaca y
+        // pierde de vista que uno de esos operandos es una variable del
+        // programa: la instruccion se ejecutaba sobre un registro cualquiera y
+        // el valor no volvia.  Sin la forma en la DB no se puede saber que
+        // hace con cada uno, asi que se deja al bloque con ligaduras.
+        std::string mnem_tmp;
+        std::vector<std::string> toks_tmp;
+        split_insn(insn, mnem_tmp, toks_tmp);
+        if (toks_tmp.empty() && sem.reads.empty() && sem.writes.empty()) {
             // Sin operandos de registro: plantilla verbatim (mfence/lfence/...).
             tmpl = insn;
-        } else if (!build_operands(insn, sem, slot_of, operands, tmpl)) {
-            return false;             // operandos no soportados
+        } else {
+            if (!toks_tmp.empty() && sem.reads.empty() && sem.writes.empty()) {
+                anotar_hueco_db(insn, "la forma esta en la base de datos pero "
+                                      "no dice que registros lee o escribe");
+            }
+            if (!build_operands(insn, sem, slot_of, operands, tmpl))
+                return false;         // operandos no soportados
         }
         sems.push_back(std::move(sem));
         ops_per.push_back(std::move(operands));
@@ -248,6 +305,11 @@ bool asm_lift_micro(
         fn.append(block, std::move(in));
     }
     return true;
+}
+
+std::vector<std::pair<std::string, std::string>> asm_db_huecos() {
+    std::lock_guard<std::mutex> g(huecos_db_mutex());
+    return {huecos_db().begin(), huecos_db().end()};
 }
 
 } // namespace vx

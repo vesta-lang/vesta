@@ -34,6 +34,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace ir {
@@ -67,6 +68,19 @@ bool asm_lift_micro(
     ir::IrFunction &fn, uint32_t block, instr_db::Isa isa,
     const std::string &body, uint32_t line,
     const std::unordered_map<std::string, ir::IrValueId> &slot_of = {});
+
+/**
+ * @brief Instrucciones que la base de datos no supo resolver en lo que va de
+ *        proceso, como pares (mnemonico, motivo).
+ *
+ * Que una no este no impide compilar -- se trata como caja opaca -- pero casi
+ * siempre significa que falta en la base de datos, asi que conviene poder
+ * verlas en vez de que se pierdan en silencio.  Con @c VESTA_ASM_DB_GAPS=1 se
+ * avisa ademas de cada una la primera vez que aparece.
+ *
+ * @return La lista, ordenada y sin repetidos.
+ */
+std::vector<std::pair<std::string, std::string>> asm_db_huecos();
 
 } // namespace vx
 
