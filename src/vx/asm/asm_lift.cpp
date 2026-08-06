@@ -346,7 +346,13 @@ std::string arm_mem_reg(const std::string &op) {
 AsmLift lift_arm64(const std::string &body) {
     AsmLift r;
     const AsmCfg cfg = build_asm_cfg(instr_db::Isa::ARM64, body);
-    const auto &in = cfg.insns;
+    /* Solo las instrucciones QUE ESCRIBIO EL USUARIO: el constructor del grafo
+     * anade una de salida, y contarla hacia que este patron -- que exige cinco
+     * -- no encajara nunca. */
+    std::vector<AsmInsn> in;
+    in.reserve(cfg.insns.size());
+    for (const AsmInsn &x : cfg.insns)
+        if (!x.sintetica) in.push_back(x);
     if (in.size() != 5) {
         r.note = "arm64: solo el bucle LL/SC canonico de 5 instrucciones";
         return r;

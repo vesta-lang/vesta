@@ -51,6 +51,23 @@ namespace vx {
 std::string asm_canonical_reg(const std::string &raw);
 
 /**
+ * @brief Canonicaliza @p raw con los registros de @p arch, sin mirar el
+ *        objetivo activo.
+ *
+ * La version de un solo argumento resuelve la arquitectura por el objetivo que
+ * se este compilando, que es lo que quiere casi todo el mundo.  Esta hace falta
+ * cuando se analiza un cuerpo de una arquitectura CONCRETA que no tiene por que
+ * ser esa -- las variantes por `@Target`, o un test que comprueba las dos --:
+ * ahi el arch es un dato del analisis, no del entorno.
+ *
+ * @param raw  Nombre tal cual (case-insensitive).
+ * @param arch `"x86_64"`, `"x86"`, `"arm64"`.
+ * @return Nombre canonico, o cadena vacia si no se reconoce en esa
+ *         arquitectura.
+ */
+std::string asm_canonical_reg(const std::string &raw, const std::string &arch);
+
+/**
  * @brief Normaliza los literales numericos de un cuerpo NASM Intel a hex
  *        explicito (@c 0x...), detectando la base de entrada.
  *

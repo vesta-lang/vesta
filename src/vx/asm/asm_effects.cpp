@@ -264,12 +264,17 @@ const char *arch_host() {
 
 } // namespace
 
-std::string asm_canonical_reg(const std::string &raw) {
+std::string asm_canonical_reg(const std::string &raw, const std::string &arch) {
     std::string r;
     r.reserve(raw.size());
     for (char c : raw)
         r.push_back((char)std::tolower((unsigned char)c));
+    for (const auto &a : kArchRegs)
+        if (arch == a.arch) return a.canon(r);
+    return std::string();
+}
 
+std::string asm_canonical_reg(const std::string &raw) {
     // Se despacha por el TARGET, no por el host: una variante
     // @Target("arch:arm64") se compila con los registros de ARM aunque el build
     // corra en x86.  Sin esto, `register("x0")` era "registro no reconocido" y
@@ -277,9 +282,7 @@ std::string asm_canonical_reg(const std::string &raw) {
     std::string os, arch;
     get_aot_condcomp_target(os, arch);
     if (arch.empty()) arch = arch_host();
-    for (const auto &a : kArchRegs)
-        if (arch == a.arch) return a.canon(r);
-    return std::string();
+    return asm_canonical_reg(raw, arch);
 }
 
 // -----------------------------------------------------------------------
@@ -475,9 +478,19 @@ const EffTable &arm64_effects_table() {
         for (const char *m : {"ldr", "ldrb", "ldrh", "ldrsw", "ldrsb", "ldrsh",
                               "ldur", "ldp"})
             add(m, E({}, true, true, false));
-        // --- Almacenes: no escriben registro, tocan memoria ---
-        for (const char *m : {"str", "strb", "strh", "stur", "stp"})
-            add(m, E({}, false, true, false));
+        /* --- Almacenes: el operando ESCRITO es el de memoria ---
+         * La mascara dice "que operandos escribe", y eso incluye el de
+         * memoria: es lo mismo que ya hacia x86 (`mov [rdi], rax` marca el
+         * primero).  Tenerlo a cero aqui hacia que la misma mascara
+         * significara cosas distintas segun la tabla, y con ello un `str`
+         * parecia una LECTURA.
+         * Quien la consume para deducir clobbers solo mira los operandos que
+         * son registros -- `[x0]` no canonicaliza --, asi que esto no le
+         * afecta.  La posicion cambia con la forma: `str x1, [x0]` escribe el
+         * segundo; `stp x1, x2, [x0]`, el tercero. */
+        for (const char *m : {"str", "strb", "strh", "stur"})
+            add(m, E({}, 0x2, true, false));
+        add("stp", E({}, 0x4, true, false));
         // --- LL/SC atomicas: load-acquire escribe 1er op; store-cond escribe
         //     el registro de estado (1er op) -- ambas tocan memoria. ---
         for (const char *m : {"ldaxr", "ldxr", "ldar", "ldaxrb", "ldxrb",

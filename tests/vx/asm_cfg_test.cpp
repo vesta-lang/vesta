@@ -36,7 +36,13 @@ int main() {
                                  "mov rax, rdi\n"
                                  "add rax, rsi\n"
                                  "imul rax, rax\n");
-        CHECK(c.insns.size() == 3, "lineal: 3 instrucciones");
+        /* Tres instrucciones MAS el nodo de salida sintetico que el
+         * constructor anade a proposito: el bloque asm sale por el final -- por
+         * caida de la ultima instruccion o por la rama no tomada de un salto
+         * condicional final -- y sin un nodo que represente ese punto, esa rama
+         * se queda sin sucesor.  El test contaba solo las reales y llevaba
+         * tiempo fallando por eso. */
+        CHECK(c.insns.size() == 4, "lineal: 3 instrucciones + la salida");
         CHECK(c.blocks.size() == 1, "lineal: 1 bloque basico");
         CHECK(c.blocks[0].succs.empty(), "lineal: bloque sin sucesores");
         CHECK(!c.has_indirect, "lineal: sin saltos indirectos");
@@ -78,7 +84,9 @@ int main() {
                                  ".loop:\n"
                                  "dec rcx\n"          // B1 (destino del back-edge)
                                  "jnz .loop\n");      // B1 termina: cond -> B1
-        CHECK(c.blocks.size() == 2, "bucle: 2 bloques");
+        // Los dos del bucle mas el bloque de salida (ver arriba): por el sale
+        // la rama NO tomada del `jnz`.
+        CHECK(c.blocks.size() == 3, "bucle: 2 bloques + la salida");
         // B1 se salta a si mismo (back-edge) -> B1 en sus propios sucesores.
         CHECK(has_succ(c, 1, 1), "back-edge B1 -> B1");
         // preds de B1: B0 (fallthrough) y B1 (back-edge).

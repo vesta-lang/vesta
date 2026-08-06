@@ -114,10 +114,16 @@ std::vector<std::string> operandos_de(const std::string &linea,
  * @c asm_canonical_reg, que ya despacha por la arquitectura del OBJETIVO.
  *
  * @param operando Texto del operando, con sus corchetes.
+ * @param arch     Arquitectura del cuerpo que se analiza.  Se pasa EXPLICITA:
+ *                 el cuerpo puede ser de una arquitectura distinta de la que se
+ *                 este compilando (una variante por `@Target`), y entonces
+ *                 canonicalizar con los registros del objetivo activo daria una
+ *                 base vacia o de otro banco.
  * @return El registro canonico, o cadena vacia si no se pudo determinar
  *         (direccion absoluta, simbolo, expresion no reconocida).
  */
-std::string base_de_memoria(const std::string &operando) {
+std::string base_de_memoria(const std::string &operando,
+                            const std::string &arch) {
     const size_t a = operando.find('[');
     if (a == std::string::npos) return std::string();
     size_t i = a + 1;
@@ -129,7 +135,7 @@ std::string base_de_memoria(const std::string &operando) {
         else break;
     }
     if (ident.empty()) return std::string();
-    return asm_canonical_reg(ident);
+    return asm_canonical_reg(ident, arch);
 }
 
 /// @c true si @p mnem es una rama/salto (para @c has_branch).  Cubre x86
@@ -301,9 +307,16 @@ AsmBlockEffects asm_analyze_block(const std::string &nasm_body,
          * decir de menos aqui seria dejar reordenar algo que no se puede. */
         if (lock_prefix || line_has_mem || eff.touches_mem) {
             bool lee = true, escribe = true; // por defecto, lo conservador
-            if (!lock_prefix && !eff.touches_mem && line_has_mem) {
-                // Memoria EXPLICITA (`[...]` en un operando) y sin prefijo
-                // atomico: se puede precisar si se identifica cual es.
+            if (!lock_prefix && line_has_mem) {
+                /* Memoria EXPLICITA (`[...]` en un operando) y sin prefijo
+                 * atomico: se puede precisar si se identifica cual es.
+                 *
+                 * La condicion es tener CORCHETES, no que la instruccion toque
+                 * memoria "implicitamente": en arm64 toda carga o almacen la
+                 * toca por definicion y aun asi lleva su `[x0]` a la vista.
+                 * Exigir lo segundo dejaba fuera a arm64 entero.  Lo que si
+                 * queda fuera es la memoria SIN corchetes -- `push`, `call`,
+                 * las de cadena --, que no se puede atribuir a nada. */
                 const std::vector<std::string> ops = operandos_de(line, mnem);
                 int idx_mem = -1;
                 bool varios = false;
@@ -323,7 +336,7 @@ AsmBlockEffects asm_analyze_block(const std::string &nasm_body,
                     /* Por que registro se llega.  Si no se sabe, el bloque toca
                      * memoria que no se puede nombrar y hay que decirlo. */
                     const std::string base =
-                        base_de_memoria(ops[static_cast<size_t>(idx_mem)]);
+                        base_de_memoria(ops[static_cast<size_t>(idx_mem)], arch);
                     if (base.empty()) res.accesos_incompletos = true;
                     else res.accesos.push_back({base, escribe});
                     /* El registro base tiene que seguir valiendo lo que la
@@ -353,7 +366,7 @@ AsmBlockEffects asm_analyze_block(const std::string &nasm_body,
             for (size_t k = 0; k < ops.size() && k < 8; ++k)
                 if (((eff.operand_write_mask >> k) & 1u) != 0u &&
                     ops[k].find('[') == std::string::npos) {
-                    const std::string c = asm_canonical_reg(ops[k]);
+                    const std::string c = asm_canonical_reg(ops[k], arch);
                     if (!c.empty()) escritos.insert(c);
                 }
         }

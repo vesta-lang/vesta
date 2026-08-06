@@ -373,6 +373,7 @@ AsmCfg build_asm_cfg(instr_db::Isa isa, const std::string &body) {
         in.labels = pending_labels;
         in.line_no = line_no;
         in.term = asm_classify_term(isa, in.text, in.target);
+        in.sintetica = true; // no la escribio el usuario
         pending_labels.clear();
         cfg.insns.push_back(std::move(in));
     }

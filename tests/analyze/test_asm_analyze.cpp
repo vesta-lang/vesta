@@ -190,6 +190,37 @@ int main() {
         CHECK(e.accesos_incompletos, "direccion absoluta: sin base");
     }
 
+    // --- lo mismo en arm64, analizado desde un build de x86 ---------------
+    // El arch es un DATO del analisis, no del entorno: una variante por
+    // @Target se compila con los registros de SU arquitectura.  Si esto
+    // canonicalizara con los del objetivo activo, la base saldria vacia.
+    {
+        AsmBlockEffects e = asm_analyze_block("  str x1, [x0]\n", "arm64");
+        CHECK(e.writes_mem, "arm64: str escribe memoria");
+        CHECK(!e.accesos.empty() && e.accesos[0].base == "x0",
+              "arm64: la base es x0");
+        CHECK(!e.accesos.empty() && e.accesos[0].escribe,
+              "arm64: el acceso escribe");
+    }
+    {
+        AsmBlockEffects e = asm_analyze_block("  ldr x1, [x0, #8]\n", "arm64");
+        CHECK(e.reads_mem && !e.writes_mem, "arm64: ldr solo lee");
+        CHECK(!e.accesos.empty() && e.accesos[0].base == "x0",
+              "arm64: base de [x0, #8]");
+    }
+    {
+        AsmBlockEffects e =
+            asm_analyze_block("  ldr x2, [x0, x1, lsl #3]\n", "arm64");
+        CHECK(!e.accesos.empty() && e.accesos[0].base == "x0",
+              "arm64: base de [base, indice, desplazamiento]");
+    }
+    {
+        // El registro de 32 bits canonicaliza al mismo fisico.
+        AsmBlockEffects e = asm_analyze_block("  ldr w1, [x0]\n", "arm64");
+        CHECK(!e.accesos.empty() && e.accesos[0].base == "x0",
+              "arm64: w1/x1 comparten canonico");
+    }
+
     if (g_fail == 0)
         std::printf("=== test_asm_analyze: %d checks OK, 0 fallidos ===\n",
                     g_checks);

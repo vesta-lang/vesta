@@ -65,6 +65,16 @@ struct AsmInsn {
     AsmTerm term = AsmTerm::Fallthrough; ///< clase de control de flujo.
     std::string target;              ///< etiqueta destino (si UncondJump/CondBranch).
     uint32_t line_no = 0;            ///< indice de linea fisica (para reportes).
+    /// No estaba en el codigo del usuario: la anadio el constructor del grafo
+    /// para representar la SALIDA del bloque.
+    ///
+    /// Quien cuente instrucciones del usuario -- reconocer un patron de N
+    /// instrucciones, informar, medir -- tiene que saltarsela.  Va marcada en
+    /// vez de deducirse por "es la ultima y es un nop": eso obliga a cada
+    /// consumidor a conocer un detalle del constructor, y al anadirla se
+    /// rompieron en silencio los que contaban (el reconocedor de atomicas de
+    /// arm64 exigia 5 instrucciones y pasaron a llegarle 6).
+    bool sintetica = false;
 };
 
 /**
