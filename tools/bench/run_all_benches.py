@@ -2168,6 +2168,19 @@ def main() -> int:
     # JSON con runs individuales para post-analisis.
     json_path = (project_root / args.out_json
                  if not os.path.isabs(args.out_json) else Path(args.out_json))
+    # Una corrida PARCIAL no puede pisar la referencia: el fichero por defecto
+    # esta versionado con la tanda completa (todos los benches x todos los
+    # lenguajes), y sobreescribirlo con un subconjunto se lleva por delante el
+    # resto sin avisar -- y la siguiente comparacion se hace sobre menos casos
+    # creyendo que estan todos.  Cuando se ha filtrado, el resultado va a un
+    # fichero aparte salvo que se pida el destino a mano.
+    parcial = bool(args.filter) or bool(args.langs)
+    if parcial and args.out_json == parser.get_default("out_json"):
+        json_path = json_path.with_name(json_path.stem + "_parcial" +
+                                        json_path.suffix)
+        print(f"[info] corrida parcial: los resultados van a "
+              f"{json_path.name} para no pisar la referencia completa.  "
+              f"Usa --out-json si quieres otro destino.")
     serializable_rows = []
     for r in rows:
         new_r = {k: v for k, v in r.items() if not k.startswith("_")}
@@ -2201,8 +2214,12 @@ def main() -> int:
         warn(f"no pude escribir JSON: {e}")
 
     # Matplotlib: generar TODAS las graficas en un directorio.
+    # Con una corrida parcial las graficas van aparte por lo mismo que el JSON:
+    # `bench_plots/` esta versionado con la tanda completa y unas graficas de
+    # tres benches no la representan.
     if not args.no_plot:
-        plot_dir = project_root / "bench_plots"
+        plot_dir = project_root / ("bench_plots_parcial" if parcial
+                                   else "bench_plots")
         try:
             from . import plots  # cuando se invoca como modulo
         except (ImportError, ValueError):
@@ -2223,7 +2240,8 @@ def main() -> int:
 
     # Sprint bench-html: reporte HTML autocontenido con todo el contexto.
     if not args.no_html and not args.no_plot:
-        plot_dir = project_root / "bench_plots"
+        plot_dir = project_root / ("bench_plots_parcial" if parcial
+                                   else "bench_plots")
         try:
             html_path = generate_html_report(
                 rows, active_langs, tc, sys_info, plot_dir,
