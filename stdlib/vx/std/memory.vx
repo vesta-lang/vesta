@@ -1,0 +1,275 @@
+namespace std.memory;
+
+/**
+ * @file memory.vx
+ * @brief Operaciones sobre bloques de memoria, por niveles.
+ *
+ * Copiar memoria es un MECANISMO, no una decision del generador de codigo.
+ * Vive aqui, escrito en el lenguaje, para que se pueda leer, sustituir y --
+ * sobre todo -- ESPECIALIZAR: el optimizador ve el cuerpo, y con un tamano
+ * constante se queda con una sola rama y desenrolla lo que queda.
+ *
+ * No hay UNA copia buena: la mejor depende del tamano, y por eso estan
+ * separadas por ESTRATEGIA en vez de en una sola funcion llena de ramas.  Una
+ * llamada con `n` constante colapsa a la rama que toca y el resto desaparece:
+ *
+ *     memcpy(dst, src, 24)  ->  memcpy_tiny  ->  tres pares de mov
+ *
+ *   @ref memcpy_c      bucle portable.  La referencia: sin asm, sin registros
+ *                      anchos, valida en cualquier objetivo.  Es ademas el
+ *                      unico camino correcto en el INTERPRETE, que ignora el
+ *                      asm en silencio.
+ *   @ref memcpy_tiny   hasta 64 bytes.  Cero bucles y cero colas: cubre el
+ *                      rango con dos accesos que se SOLAPAN por el medio.
+ *   @ref memcpy_small  hasta unos cientos.  Registros vectoriales, sin bucle
+ *                      de bloques.
+ *   @ref memcpy_medium bucle vectorial con varios registros por vuelta.
+ *   @ref memcpy_huge   depende de la CPU: con ERMS la copia por bloques del
+ *                      procesador gana; sin ella, bucle vectorial.
+ *   @ref memcpy        reparte entre las anteriores por tamano.
+ *
+ * Lo que sigue es la parte PORTABLE, sin asm.  Cada `std/memory/<arch>.vx`
+ * declara el MISMO namespace y aporta las versiones anchas de su
+ * arquitectura; quien escribe `import std.memory` recibe las del objetivo sin
+ * mencionarlo, igual que en `std.types`.
+ *
+ * Ninguna de estas funciones tolera que los rangos se solapen; para eso esta
+ * @ref memmove.
+ */
+
+import std.types only usize, uintptr;
+
+/// Bytes de la palabra de la maquina.  Sale del propio tipo, no de un numero
+/// escrito a mano: en un objetivo de 32 bits vale 4 y en uno de 64 vale 8, sin
+/// que este fichero tenga que saber en cual esta.
+const usize ANCHO = (usize) sizeof<usize>();
+
+/**
+ * @brief Copia @p n bytes con un bucle portable.  La version de referencia.
+ *
+ * Sin asm, sin registros anchos y sin suposiciones de alineacion: compila en
+ * cualquier objetivo y es la unica correcta bajo el interprete.
+ *
+ * La cola baja en CASCADA BINARIA (16, 8, 4, 2, 1) en vez de byte a byte.  Con
+ * un tamano constante el compilador se queda solo con las ramas que aplican y
+ * borra el resto; copiar de uno en uno le impide esa poda y ademas paga un
+ * salto por byte.
+ *
+ * @param dst Destino.
+ * @param src Origen.
+ * @param n Numero de bytes.
+ */
+@NoIdiom
+public void memcpy_c(u8* dst, u8* src, usize n) {
+    usize total = n;
+    usize off = 0;
+    // Cuerpo: de palabra en palabra mientras quepa una entera.
+    usize palabras = total / ANCHO;
+    usize* dw = (usize*) dst;
+    usize* sw = (usize*) src;
+    for (usize i = 0; i < palabras; i++) {
+        dw[i] = sw[i];
+    }
+    off = palabras * ANCHO;
+    // Cola: menos de una palabra, en pasos descendentes.
+    if (off + 4 <= total) {
+        u32* d4 = (u32*) (dst + off);
+        u32* s4 = (u32*) (src + off);
+        d4[0] = s4[0];
+        off = off + 4;
+    }
+    if (off + 2 <= total) {
+        u16* d2 = (u16*) (dst + off);
+        u16* s2 = (u16*) (src + off);
+        d2[0] = s2[0];
+        off = off + 2;
+    }
+    if (off < total) {
+        dst[off] = src[off];
+    }
+}
+
+/**
+ * @brief Copia hasta 64 bytes sin un solo bucle.
+ *
+ * El truco es no partir @p n en trozos exactos, sino cubrir el rango con dos
+ * accesos que se SOLAPAN por el medio: para 13 bytes, uno de 8 desde el
+ * principio y otro de 8 que termina en el final.  Los bytes del solape se
+ * escriben dos veces con el mismo valor, lo que no cuesta nada y ahorra la
+ * cola -- y sobre todo el bucle, que en una copia corta es lo caro: una
+ * prediccion de salto fallada vale mas que la copia entera.
+ *
+ * No necesita instrucciones especiales, asi que vale en cualquier
+ * arquitectura y vive en el fichero comun.
+ *
+ * @param dst Destino.
+ * @param src Origen.
+ * @param n Numero de bytes.  Pensada para <= 64; por encima delega.
+ */
+@NoIdiom
+public void memcpy_tiny(u8* dst, u8* src, usize n) {
+    usize total = n;
+    if (total == 0) {
+        return;
+    }
+    if (total > 64) {
+        memcpy_c(dst, src, n);
+        return;
+    }
+    if (total >= 32) {
+        u64* d = (u64*) dst;
+        u64* s = (u64*) src;
+        d[0] = s[0];
+        d[1] = s[1];
+        d[2] = s[2];
+        d[3] = s[3];
+        u64* dz = (u64*) (dst + total - 32);
+        u64* sz = (u64*) (src + total - 32);
+        dz[0] = sz[0];
+        dz[1] = sz[1];
+        dz[2] = sz[2];
+        dz[3] = sz[3];
+        return;
+    }
+    if (total >= 16) {
+        u64* d = (u64*) dst;
+        u64* s = (u64*) src;
+        d[0] = s[0];
+        d[1] = s[1];
+        u64* dz = (u64*) (dst + total - 16);
+        u64* sz = (u64*) (src + total - 16);
+        dz[0] = sz[0];
+        dz[1] = sz[1];
+        return;
+    }
+    if (total >= 8) {
+        u64* d = (u64*) dst;
+        u64* s = (u64*) src;
+        d[0] = s[0];
+        u64* dz = (u64*) (dst + total - 8);
+        u64* sz = (u64*) (src + total - 8);
+        dz[0] = sz[0];
+        return;
+    }
+    if (total >= 4) {
+        u32* d = (u32*) dst;
+        u32* s = (u32*) src;
+        d[0] = s[0];
+        u32* dz = (u32*) (dst + total - 4);
+        u32* sz = (u32*) (src + total - 4);
+        dz[0] = sz[0];
+        return;
+    }
+    // 1..3 bytes: primero, medio y ultimo.  Con n < 3 el del medio repite uno
+    // de los otros, que es correcto y ahorra la rama.
+    dst[0] = src[0];
+    dst[total / 2] = src[total / 2];
+    dst[total - 1] = src[total - 1];
+}
+
+/**
+ * @brief Copia @p n bytes eligiendo la estrategia por el tamano.
+ *
+ * Es la que se usa por defecto.  El reparto es por tamano porque es lo unico
+ * que se conoce siempre; cuando ademas es CONSTANTE, todo esto desaparece y
+ * queda la rama elegida, ya desenrollada.
+ *
+ * Los umbrales de arriba (small/medium/huge) los aporta cada arquitectura con
+ * sus registros anchos.  Mientras una arquitectura no los tenga, cae en
+ * @ref memcpy_c, que es correcta en todas.
+ *
+ * @param dst Destino.
+ * @param src Origen.
+ * @param n Numero de bytes.
+ */
+@NoIdiom
+public void memcpy(u8* dst, u8* src, usize n) {
+    usize total = n;
+    if (total <= 64) {
+        memcpy_tiny(dst, src, n);
+        return;
+    }
+    memcpy_c(dst, src, n);
+    return;
+}
+
+/**
+ * @brief Rellena @p n bytes con @p val.
+ *
+ * Mismo criterio que la copia: cuerpo por palabras y cola en cascada.  El
+ * valor se replica a la palabra entera una sola vez.
+ *
+ * @param dst Destino.
+ * @param val Byte con el que rellenar.
+ * @param n Numero de bytes.
+ */
+@NoIdiom
+public void memset_c(u8* dst, u8 val, usize n) {
+    usize total = n;
+    // Replicar el byte a la palabra entera: 0x41 -> 0x4141414141414141.
+    usize patron = (usize) val;
+    patron = patron | (patron << 8);
+    patron = patron | (patron << 16);
+    // El ultimo doblado solo aplica si la palabra tiene 8 bytes.  ANCHO es
+    // constante, asi que en un objetivo de 32 bits esta rama no llega a
+    // existir en el codigo emitido.
+    if (ANCHO == 8) {
+        patron = patron | (patron << 32);
+    }
+    usize palabras = total / ANCHO;
+    usize* dw = (usize*) dst;
+    for (usize i = 0; i < palabras; i++) {
+        dw[i] = patron;
+    }
+    usize off = palabras * ANCHO;
+    if (off + 4 <= total) {
+        u32* d4 = (u32*) (dst + off);
+        d4[0] = (u32) patron;
+        off = off + 4;
+    }
+    if (off + 2 <= total) {
+        u16* d2 = (u16*) (dst + off);
+        d2[0] = (u16) patron;
+        off = off + 2;
+    }
+    if (off < total) {
+        dst[off] = val;
+    }
+}
+
+/**
+ * @brief Rellena @p n bytes con @p val, eligiendo estrategia por tamano.
+ * @param dst Destino.
+ * @param val Byte con el que rellenar.
+ * @param n Numero de bytes.
+ */
+@NoIdiom
+public void memset(u8* dst, u8 val, usize n) {
+    memset_c(dst, val, n);
+}
+
+/**
+ * @brief Copia @p n bytes tolerando que los rangos se solapen.
+ *
+ * Si se solapan y el destino va por delante del origen, copia hacia atras para
+ * no pisar lo que aun no ha leido.  En caso contrario delega en @ref memcpy.
+ *
+ * @param dst Destino.
+ * @param src Origen.
+ * @param n Numero de bytes.
+ */
+@NoIdiom
+public void memmove(u8* dst, u8* src, usize n) {
+    usize total = n;
+    uintptr d = (uintptr) dst;
+    uintptr s = (uintptr) src;
+    if (d > s && d < s + (uintptr) total) {
+        usize i = total;
+        while (i > 0) {
+            i = i - 1;
+            dst[i] = src[i];
+        }
+        return;
+    }
+    memcpy(dst, src, n);
+}
