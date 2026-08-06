@@ -920,6 +920,28 @@ std::string derive_package_id_(const std::string &root_path) {
 /// MISMO nivel son independientes entre si (sus interfaces solo
 /// dependen de niveles menores), por lo que pueden compilarse en
 /// paralelo.  El root siempre tiene el nivel maximo.
+/// @brief Indice del modulo al que se refiere un import, o SIZE_MAX.
+///
+/// Se resuelve por NAMESPACE COMPLETO cuando el import es por-namespace, y
+/// solo si no, por nombre de modulo.  El orden importa: el nombre de un modulo
+/// es el de su FICHERO, asi que dos ficheros homonimos en carpetas distintas
+/// (std/os/linux.vx y std/syscall/linux.vx, ambos "linux") colapsan en el mapa
+/// por nombre y quien pregunte se lleva el que no es.
+///
+/// Vive aqui, en un solo sitio, porque cualquiera que resuelva un import de
+/// otra manera reintroduce esa confusion en su rincon.
+size_t resolve_import_module_(const ImportRequest &req,
+                              const std::unordered_map<std::string, size_t> &by_name,
+                              const std::unordered_map<std::string, size_t> &by_ns) {
+    if (req.by_namespace && !req.ns_path.empty()) {
+        auto itn = by_ns.find(req.ns_path);
+        if (itn != by_ns.end()) return itn->second;
+    }
+    auto itd = by_name.find(req.module_name);
+    if (itd != by_name.end()) return itd->second;
+    return SIZE_MAX;
+}
+
 std::vector<int>
 compute_module_levels_(const std::vector<ProjectModuleWork> &work,
                        const std::unordered_map<std::string, size_t> &by_name,
@@ -942,15 +964,8 @@ compute_module_levels_(const std::vector<ProjectModuleWork> &work,
             // de windows.x86_64 (o a ninguno) y el nivel topo quedaba mal ->
             // race en el compile paralelo (el consumidor compila antes que su
             // dep real).  Igual que la resolucion de deps del propio compilador.
-            size_t dep_idx = SIZE_MAX;
-            if (req.by_namespace && !req.ns_path.empty()) {
-                auto itn = by_ns.find(req.ns_path);
-                if (itn != by_ns.end()) dep_idx = itn->second;
-            }
-            if (dep_idx == SIZE_MAX) {
-                auto itd = by_name.find(req.module_name);
-                if (itd != by_name.end()) dep_idx = itd->second;
-            }
+            const size_t dep_idx =
+                resolve_import_module_(req, by_name, by_ns);
             if (dep_idx >= work.size()) continue;
             if (static_cast<int>(levels[dep_idx]) > max_dep_level) {
                 max_dep_level = levels[dep_idx];
@@ -1743,12 +1758,14 @@ CompileResult compile_vx_project(
         // arreglo del dep.  Solo se nota si el import no lleva `only`, porque
         // entonces no hay ningun simbolo concreto que echar en falta.
         for (const auto &req : imports) {
-            auto itd = by_name.find(req.module_name);
-            if (itd == by_name.end()) continue;
-            if (work[itd->second].ok) continue;
-            pm.diags.error(req.loc, "no puedo usar el modulo '" +
-                                        req.module_name +
-                                        "': no ha compilado");
+            const size_t dep_idx =
+                resolve_import_module_(req, by_name, by_ns);
+            if (dep_idx >= work.size() || work[dep_idx].ok) continue;
+            pm.diags.error(req.loc,
+                           "no puedo usar '" +
+                               (req.ns_path.empty() ? req.module_name
+                                                    : req.ns_path) +
+                               "': no ha compilado");
             pm.ok = false;
             return;
         }
