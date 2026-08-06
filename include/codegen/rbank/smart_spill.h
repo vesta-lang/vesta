@@ -148,7 +148,13 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
         if (ctx.constraints == nullptr) return false;
         const ConstraintSet &cs = ctx.get_constraints();
         for (const Constraint &c : cs.items) {
-            if (c.kind != ConstraintKind::DIFFERENT_LANE) continue;
+            /* Las dos dicen lo mismo para elegir ranura -- "estos dos no la
+             * comparten" --; cambia de donde viene la razon: DIFFERENT_LANE la
+             * impone la forma de la instruccion, INTERFERE que esten vivos a
+             * la vez. */
+            if (c.kind != ConstraintKind::DIFFERENT_LANE &&
+                c.kind != ConstraintKind::INTERFERE)
+                continue;
             const uint32_t otro = (c.a == value) ? c.b
                                 : (c.b == value) ? c.a
                                                  : UINT32_MAX;

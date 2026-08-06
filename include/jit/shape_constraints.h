@@ -30,6 +30,9 @@
 #include "codegen/rbank/constraints.h"
 #include "jit/machine_ir.h"
 
+#include <algorithm>
+#include <vector>
+
 namespace jit {
 
 /**
@@ -64,9 +67,30 @@ inline codegen::rbank::ConstraintSet recoger_restricciones_de_forma(
     codegen::rbank::ConstraintSet cs;
     for (const auto &b : mf.blocks) {
         for (const MInstr &in : b.instrs) {
-            if (!es_dos_operandos_no_conmutativa(in.op)) continue;
-            if (!in.dst.is_vreg() || !in.src2.is_vreg()) continue;
-            cs.different_lane(in.dst.vreg_id(), in.src2.vreg_id());
+            if (es_dos_operandos_no_conmutativa(in.op) && in.dst.is_vreg() &&
+                in.src2.is_vreg()) {
+                cs.different_lane(in.dst.vreg_id(), in.src2.vreg_id());
+                continue;
+            }
+            /* Los operandos de un bloque asm estan vivos TODOS a la vez: el
+             * cuerpo los nombra por separado y espera registros distintos.
+             * Hoy eso se cumple de rebote -- sus intervalos se solapan porque
+             * el bloque los lee y los escribe en el mismo punto -- pero no
+             * porque nadie lo haya dicho.  Decirlo es barato y evita que un
+             * cambio en como se construyen esos intervalos vuelva a juntarlos:
+             * ese fallo ya costo caro una vez, y se manifestaba como un bloque
+             * usando dos veces el mismo registro. */
+            if (in.op != MOp::INLINE_ASM_RAW) continue;
+            const uint32_t idx = static_cast<uint32_t>(in.src1.value);
+            if (idx >= mf.asm_blobs.size()) continue;
+            const AsmBlob &blob = mf.asm_blobs[idx];
+            std::vector<uint32_t> vregs = blob.in_vregs;
+            for (uint32_t v : blob.out_vregs)
+                if (std::find(vregs.begin(), vregs.end(), v) == vregs.end())
+                    vregs.push_back(v);
+            for (size_t i = 0; i < vregs.size(); ++i)
+                for (size_t j = i + 1; j < vregs.size(); ++j)
+                    cs.interfere(vregs[i], vregs[j]);
         }
     }
     return cs;
