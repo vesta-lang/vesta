@@ -1,0 +1,25 @@
+namespace std.os.windows;
+
+/**
+ * @file windows.vx
+ * @brief Operaciones del proceso, implementadas con la API de Windows.
+ *
+ * La mitad de Windows de `std.os`.  Aqui viven las llamadas reales; el modulo
+ * de arriba solo elige cual de las dos mitades se compila y ofrece por encima
+ * lo que no depende del sistema.
+ */
+
+// Es kernel32, NUNCA msvcrt: el lenguaje no depende del runtime de C.  Y no
+// entra en std.syscall.windows porque ese modulo es la capa NT (ntdll), y
+// ExitProcess no es una syscall sino la API de usuario que hay por encima.
+extern "kernel32.dll" {
+    fn ExitProcess(u32 code) -> void;
+}
+
+/**
+ * @brief Termina el proceso.  No vuelve.
+ * @param code Codigo de salida.
+ */
+public void exit(i32 code) { 
+    ExitProcess((u32) code); 
+}

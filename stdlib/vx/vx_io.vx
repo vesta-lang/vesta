@@ -20,11 +20,15 @@
 // Los imports van con @Target porque en Windows estos nombres no existen: alli
 // la superficie del sistema es la de NT.
 @Target("os:linux")
-import std.syscall.linux only open, read, close, write, exit_group;
+import std.syscall.linux only open, read, close, write;
 @Target("os:linux")
 import std.unix only O_RDONLY, STDOUT_FILENO;
 @Target("os:linux")
 import std.types only ssize_t;
+
+// Terminar el proceso SI es igual en los dos sistemas, asi que no lleva
+// @Target: std.os ya elige por dentro con que llamada se hace.
+import std.os only exit;
 
 // --- FFI a la I/O de bajo nivel del SO (resuelta por IAT/GOT) ---------------
 // @Target no aplica a bloques `extern`; declaramos los de AMBAS plataformas sin
@@ -213,28 +217,16 @@ void __vio_panic_di(u8* msg, u64 len) {
 
 /// Hook por defecto de `panic(msg)`.  Sale con 134 (128+6, SIGABRT), el mismo
 /// codigo con que salen el interprete y el JIT.
-@Target("os:windows")
 void __panic(u8* msg, u64 len) {
     __vio_panic_di(msg, len);
-    ExitProcess(134);
-}
-@Target("os:linux")
-void __panic(u8* msg, u64 len) {
-    __vio_panic_di(msg, len);
-    exit_group(134);
+    exit(134);
 }
 
 /// Hook de fallo de `unwrap` sobre null (Optional/nonnull vacios).  Es un
 /// panic como cualquier otro, solo que el mensaje lo pone el lenguaje.
-@Target("os:windows")
 void __vx_panic_null() {
     __vio_panic_di("unwrap de un valor null (Optional/nonnull vacio)", 48);
-    ExitProcess(134);
-}
-@Target("os:linux")
-void __vx_panic_null() {
-    __vio_panic_di("unwrap de un valor null (Optional/nonnull vacio)", 48);
-    exit_group(134);
+    exit(134);
 }
 
 // --- Formateadores numericos ( puro sobre __vx_write) -------------------

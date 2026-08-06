@@ -1,0 +1,29 @@
+namespace std.os;
+
+/**
+ * @file os.vx
+ * @brief Operaciones del proceso que se dicen igual en todos los sistemas.
+ *
+ * Es la capa PORTABLE que faltaba sobre las que ya existen.  El reparto del
+ * arbol es este: `std.ctypes` tiene los tipos de C, `std.windows` y `std.unix`
+ * las constantes de cada sistema, `std.syscall.*` unicamente las llamadas, y
+ * aqui vive lo que un programa quiere pedir sin saber donde se esta
+ * ejecutando.
+ *
+ * Los nombres de `std.syscall` DIFIEREN a proposito entre plataformas, porque
+ * son las APIs reales y no se inventa compatibilidad por encima.
+ *
+ * La seleccion por sistema es responsabilidad de la libreria, no de quien la
+ * usa: quien necesite terminar el proceso escribe `import std.os only exit;` y
+ * no vuelve a mencionar en que sistema esta.
+ *
+ * La primera operacion es `exit`.  Las siguientes (abortar, argumentos,
+ * entorno, identificador del proceso) se anaden a la mitad de cada sistema y
+ * se re-exportan aqui igual.
+ */
+
+@Target("os:windows")
+public import std.os.windows;
+
+@Target("os:linux")
+public import std.os.linux;

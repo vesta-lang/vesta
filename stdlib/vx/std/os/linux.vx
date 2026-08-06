@@ -1,0 +1,24 @@
+namespace std.os.linux;
+
+/**
+ * @file linux.vx
+ * @brief Operaciones del proceso, implementadas con las llamadas de Linux.
+ *
+ * La mitad de Linux de `std.os`.  Las llamadas no se escriben aqui a mano:
+ * vienen de `std.syscall`, que es donde vive la tabla y donde ya esta resuelto
+ * el reparto por arquitectura.
+ */
+
+import std.syscall.linux only exit_group;
+
+/**
+ * @brief Termina el proceso.  No vuelve.
+ *
+ * Es `exit_group` y no `exit`: la segunda termina solo el hilo que la llama, y
+ * lo que se promete aqui es que se acaba el proceso entero.
+ *
+ * @param code Codigo de salida.
+ */
+public void exit(i32 code) { 
+    exit_group(code); 
+}
