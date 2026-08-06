@@ -8655,9 +8655,28 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
             }
         return false;
     };
+    /* Cierto si el modulo trae una variante para otro motor de esta funcion.
+     * Se reconoce por el nombre: la del interprete conserva el desnudo y la
+     * del JIT lleva el sufijo, que es el mismo contrato que usa el JIT al
+     * elegir.  Sin tabla ni campo nuevo. */
+    auto tiene_variante_por_motor = [&](const std::string &nombre) -> bool {
+        static constexpr const char *kSufijo = "__jit";
+        const std::string con_sufijo = nombre + kSufijo;
+        for (const auto &f : mod.functions)
+            if (f.name == con_sufijo) return true;
+        return false;
+    };
     auto is_inlineable = [&](const IrFunction &fn) -> bool {
         if (fn.is_native) return false;
         if (fn.is_naked) return false; // @Naked: standalone, no inlinable
+        /* Con variantes por motor (@Target("mode:jit")), la eleccion de cual
+         * usar la hace el JIT al compilar la funcion.  Si el inliner la expande
+         * antes, esa eleccion queda COCIDA en el llamante y ya no hay funcion
+         * que sustituir -- el codigo del interprete acaba corriendo tambien en
+         * JIT.  Por eso una funcion con variante no se inlina: se cambia una
+         * llamada por poder elegir, que es justo lo que el usuario pidio al
+         * escribir dos versiones. */
+        if (tiene_variante_por_motor(fn.name)) return false;
         // Salida manual (`ret`/`iret`) en el asm -> no inlinable (ver helper).
         if (asm_has_manual_return(fn)) return false;
         if (is_blacklisted(fn.name)) return false;
@@ -10210,9 +10229,18 @@ bool ir_pass_inline_multiblock(IrModule &mod, size_t threshold) {
     std::unordered_map<std::string, size_t> name_to_idx;
     for (size_t i = 0; i < mod.functions.size(); ++i)
         name_to_idx[mod.functions[i].name] = i;
+    /* Con variantes por motor (@Target("mode:jit")) la eleccion la hace el JIT
+     * al compilar la funcion; inlinarla la deja COCIDA en el llamante y el
+     * codigo del interprete acabaria corriendo tambien en JIT.  Se reconoce
+     * por el nombre -- la del JIT lleva sufijo -- que es el mismo contrato que
+     * usa el JIT al elegir. */
+    auto tiene_variante_por_motor = [&](const std::string &nombre) -> bool {
+        return name_to_idx.count(nombre + "__jit") != 0;
+    };
     std::vector<bool> ok(mod.functions.size(), false);
     for (size_t i = 0; i < mod.functions.size(); ++i)
-        ok[i] = is_inlineable_mb(mod.functions[i], threshold);
+        ok[i] = is_inlineable_mb(mod.functions[i], threshold) &&
+                !tiene_variante_por_motor(mod.functions[i].name);
 
     bool any = false;
     for (size_t fi = 0; fi < mod.functions.size(); ++fi) {

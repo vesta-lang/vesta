@@ -57,6 +57,14 @@
 
 namespace jit {
 
+/// Sufijo de la variante que usa el JIT (@Target("mode:jit")).
+///
+/// Es un contrato de NOMBRE con el frontend (vx::ast::kSufijoVarianteJit); se
+/// repite aqui en vez de incluir el AST entero para no atar el JIT al
+/// frontend, que es independiente por diseno.
+static constexpr const char *kSufijoVarianteJit = "__jit";
+
+
 /* ===================================================================== */
 /* Threshold global                                                       */
 /* ===================================================================== */
@@ -1287,6 +1295,24 @@ CompileResult eager_compile_function(
     int32_t exc_frame_stack_offset, int32_t exc_free_list_offset,
     uint64_t jit_instr_counter_addr, bool callback_entry,
     uint64_t callback_get_proc_addr, int32_t callback_tls_gs_disp) {
+    /* @Target("mode:jit"): si el modulo trae una variante para el JIT, se
+     * compila SU cuerpo bajo la identidad de la funcion pedida.  El interprete
+     * sigue ejecutando la del nombre desnudo y ningun punto de llamada cambia:
+     * el reemplazo ocurre al instalar el codigo nativo.
+     *
+     * La decision de que version usa cada motor vive en el CODIGO, con
+     * @Target; aqui solo se le hace caso. */
+    const ir::IrFunction *ir_elegida = &ir_fn;
+    if (ir_lookup != nullptr && ir_functions != nullptr) {
+        const std::string nombre_jit =
+            ir_fn.name + std::string(kSufijoVarianteJit);
+        auto itv = ir_lookup->find(nombre_jit);
+        if (itv != ir_lookup->end() && itv->second < ir_functions->size()) {
+            ir_elegida = &(*ir_functions)[itv->second];
+        }
+    }
+    const ir::IrFunction &ir_fn_sel = *ir_elegida;
+
     /* Init lazy de threshold desde env (1 vez por proceso). */
     std::call_once(g_env_init_flag, init_threshold_from_env);
 
@@ -1306,8 +1332,8 @@ CompileResult eager_compile_function(
      * En modo callback NO usamos g_eager_cache para el top-level: su
      * ABI (entry nativo) difiere del VM_ABI que la cache by-name asume;
      * confundirlos daria un caller VM_ABI saltando a un entry nativo. */
-    if (!callback_entry && !ir_fn.name.empty()) {
-        auto it = g_eager_cache.find(ir_fn.name);
+    if (!callback_entry && !ir_fn_sel.name.empty()) {
+        auto it = g_eager_cache.find(ir_fn_sel.name);
         if (it != g_eager_cache.end() && it->second != 0 &&
             it->second != EAGER_IN_PROGRESS) {
             CompileResult cached{};
@@ -1387,7 +1413,18 @@ CompileResult eager_compile_function(
              * callee pueda resolver SUS propias user CALLs.  Use
              * shared_ptr capturado para que la lambda inner haga ref
              * a este callback. */
-            const ir::IrFunction &child_ir = (*funcs_ptr)[lit->second];
+            /* @Target("mode:jit"): mismo criterio que arriba, tambien para los
+             * llamados.  Un callee con variante se compila desde SU version de
+             * JIT; el interprete sigue ejecutando la del nombre desnudo. */
+            const ir::IrFunction *child_sel = &(*funcs_ptr)[lit->second];
+            {
+                auto itv2 =
+                    lookup_ptr->find(name + std::string(kSufijoVarianteJit));
+                if (itv2 != lookup_ptr->end() &&
+                    itv2->second < funcs_ptr->size())
+                    child_sel = &(*funcs_ptr)[itv2->second];
+            }
+            const ir::IrFunction &child_ir = *child_sel;
             SelectorOptions opts;
             opts.mode = SelectorMode::VM_ABI;
             opts.runtime = g_runtime_entries;
@@ -1515,8 +1552,8 @@ CompileResult eager_compile_function(
 
     /* Marcar IN_PROGRESS antes de compilar para detectar self-recursion.
      * En callback NO tocamos g_eager_cache (su ABI difiere del VM_ABI). */
-    if (!callback_entry && !ir_fn.name.empty()) {
-        g_eager_cache[ir_fn.name] = EAGER_IN_PROGRESS;
+    if (!callback_entry && !ir_fn_sel.name.empty()) {
+        g_eager_cache[ir_fn_sel.name] = EAGER_IN_PROGRESS;
     }
 
     /*  D.7 perf-gaps (2026-06-06): intento vreg top-level CON el
@@ -1533,12 +1570,12 @@ CompileResult eager_compile_function(
         size_t vcode_size = 0;
         std::vector<LineMapEntry> vcode_lines;
         uint8_t *vcode =
-            vreg_compile(ir_fn, *g_code_cache, resolver, make_vreg_entries(),
+            vreg_compile(ir_fn_sel, *g_code_cache, resolver, make_vreg_entries(),
                          resolve_native_fn, sym_resolver, &vcode_size,
                          &vcode_lines);
         if (vcode != nullptr) {
-            if (!ir_fn.name.empty())
-                g_eager_cache[ir_fn.name] = reinterpret_cast<uint64_t>(vcode);
+            if (!ir_fn_sel.name.empty())
+                g_eager_cache[ir_fn_sel.name] = reinterpret_cast<uint64_t>(vcode);
             /* NOTA: el registro pc->jit lo hace el caller
              * (maybe_compile_callvm_target) desde el CompileResult; no lo
              * duplicamos aqui para no registrar compiles degenerados. */
@@ -1551,14 +1588,14 @@ CompileResult eager_compile_function(
              * runtime hace lookup -> dispara el frame-swap.  No-op si OSR
              * esta off (osr_loop_count()==0).  Plano (sin opt) en 2c; la
              * optimizacion del C2 es el paso siguiente. */
-            if (!ir_fn.name.empty()) {
+            if (!ir_fn_sel.name.empty()) {
                 const uint32_t nloops = osr_loop_count();
                 for (uint64_t lid = 0; lid < nloops; ++lid) {
                     if (g_osr_entry_map.count(lid)) continue; // ya precompilado
                     std::string fnm;
                     uint32_t hdr = 0;
                     if (!osr_loop_info(lid, fnm, hdr)) continue; // abortado/oob
-                    if (fnm != ir_fn.name) continue;             // otra funcion
+                    if (fnm != ir_fn_sel.name) continue;             // otra funcion
                     /* Red de seguridad: los vids que el C1 capturo al buffer.
                      * El OSR-entry del C2 solo puede leer estos (si su live-in
                      * pide otro, vreg_compile_osr aborta -> no swap). */
@@ -1574,11 +1611,11 @@ CompileResult eager_compile_function(
                      * preservados (el inline esplicea single-block en sitio)
                      * -> el header_block del C1 sigue valido.  Gate
                      * VESTA_OSR_OPT=0 -> recompile plano (para A/B). */
-                    const ir::IrFunction *compile_ir = &ir_fn;
+                    const ir::IrFunction *compile_ir = &ir_fn_sel;
                     ir::IrFunction opt_clone;
                     if (osr_opt_enabled() && ir_lookup != nullptr &&
                         ir_functions != nullptr) {
-                        opt_clone = ir_fn; /* clon mutable */
+                        opt_clone = ir_fn_sel; /* clon mutable */
                         ir::IrModule tmp;
                         tmp.functions.push_back(opt_clone);
                         /* Anadir las user-fns que el loop llama (para inline).
@@ -1618,7 +1655,7 @@ CompileResult eager_compile_function(
                                 "[jit-osr] C2 optimizado (inline agresivo) "
                                 "para loop %llu (fn '%s')\n",
                                 static_cast<unsigned long long>(lid),
-                                ir_fn.name.c_str());
+                                ir_fn_sel.name.c_str());
                     }
 
                     uint8_t *osr_entry = nullptr;
@@ -1635,7 +1672,7 @@ CompileResult eager_compile_function(
                                 "[jit-osr] C2-entry para loop %llu (fn '%s', "
                                 "header bb%u) @ %p\n",
                                 static_cast<unsigned long long>(lid),
-                                ir_fn.name.c_str(), hdr,
+                                ir_fn_sel.name.c_str(), hdr,
                                 static_cast<void *>(osr_entry));
                     } else if (g_jit_warn_unsupported) {
                         std::fprintf(
@@ -1643,7 +1680,7 @@ CompileResult eager_compile_function(
                             "[jit-osr] loop %llu (fn '%s') no precompilo C2 "
                             "(unsupported o live-in mismatch)\n",
                             static_cast<unsigned long long>(lid),
-                            ir_fn.name.c_str());
+                            ir_fn_sel.name.c_str());
                     }
                 }
             }
@@ -1660,11 +1697,11 @@ CompileResult eager_compile_function(
              * lo hacia quien compila por una llamada; una funcion compilada de
              * antemano -- `main`, sin ir mas lejos -- no entraba en el mapa, y
              * un fallo dentro de ella no se podia atribuir a nadie. */
-            if (symbol_table != nullptr && !ir_fn.name.empty()) {
-                auto sit = symbol_table->find("code." + ir_fn.name);
+            if (symbol_table != nullptr && !ir_fn_sel.name.empty()) {
+                auto sit = symbol_table->find("code." + ir_fn_sel.name);
                 // El punto de entrada puede figurar sin el prefijo de seccion.
                 if (sit == symbol_table->end())
-                    sit = symbol_table->find(ir_fn.name);
+                    sit = symbol_table->find(ir_fn_sel.name);
                 if (sit != symbol_table->end())
                     register_jit_region(sit->second,
                                         reinterpret_cast<void *>(vcode),
@@ -1672,13 +1709,13 @@ CompileResult eager_compile_function(
             }
             if (g_jit_warn_unsupported)
                 std::fprintf(stderr, "[jit-vreg] eager compilado '%s'\n",
-                             ir_fn.name.c_str());
+                             ir_fn_sel.name.c_str());
             return r;
         }
         if (g_jit_warn_unsupported)
             std::fprintf(stderr,
                          "[jit-vreg] '%s' no soportada (eager) -> slots\n",
-                         ir_fn.name.c_str());
+                         ir_fn_sel.name.c_str());
     }
 
     /* Jubilacion slots (A3): en el compile top-level (eager), un NO-callback que
@@ -1702,13 +1739,13 @@ CompileResult eager_compile_function(
         cbopts.get_proc_addr = callback_get_proc_addr;
         cbopts.tls_gs_disp = callback_tls_gs_disp;
         uint8_t *vcode = vreg_compile_callback(
-            ir_fn, *g_code_cache, cbopts, resolver, make_vreg_entries(),
+            ir_fn_sel, *g_code_cache, cbopts, resolver, make_vreg_entries(),
             resolve_native_fn, sym_resolver);
         if (vcode != nullptr) {
             if (g_jit_warn_unsupported)
                 std::fprintf(stderr,
                              "[jit-vreg] callback compilado '%s'\n",
-                             ir_fn.name.c_str());
+                             ir_fn_sel.name.c_str());
             CompileResult r{};
             r.fn = reinterpret_cast<JitFn>(vcode);
             r.code_start = vcode;
@@ -1725,7 +1762,7 @@ CompileResult eager_compile_function(
                      "[jit] callback '%s': el selector vreg no lo compila -> "
                      "sin codigo nativo (as_native_callback devolvera 0).\n"
                      "  motivo exacto: ejecuta con VESTA_JIT_VREGS_DEBUG=1\n",
-                     ir_fn.name.c_str());
+                     ir_fn_sel.name.c_str());
     }
 
     /* Jubilacion slots (borrado): el selector-slots esta retirado.  El
@@ -1739,24 +1776,24 @@ CompileResult eager_compile_function(
         /* callback-ABI: NO cachear by-name ni registrar en el pc-map (su
          * entry es nativo, no VM_ABI).  El caller cachea por fn_pc en su
          * propia tabla.  Los callees (VM_ABI) ya se registraron normal. */
-        if (!callback_entry && !ir_fn.name.empty()) {
-            g_eager_cache[ir_fn.name] = reinterpret_cast<uint64_t>(res.fn);
+        if (!callback_entry && !ir_fn_sel.name.empty()) {
+            g_eager_cache[ir_fn_sel.name] = reinterpret_cast<uint64_t>(res.fn);
         }
         /* D.5-callvm-hook: registrar pc -> jit en el mapa global. */
-        if (!callback_entry && sym_resolver && !ir_fn.name.empty()) {
-            const uint64_t pc = sym_resolver("code." + ir_fn.name);
+        if (!callback_entry && sym_resolver && !ir_fn_sel.name.empty()) {
+            const uint64_t pc = sym_resolver("code." + ir_fn_sel.name);
             if (pc != 0) {
                 register_jit_code_at_pc(pc, reinterpret_cast<void *>(res.fn));
             }
         }
         if (g_jit_disasm) {
-            debug_dump_jit_code(ir_fn.name.empty() ? "<anon>" : ir_fn.name,
+            debug_dump_jit_code(ir_fn_sel.name.empty() ? "<anon>" : ir_fn_sel.name,
                                 res.code_start, res.code_size);
         }
     } else {
         ++g_jit_unsupported_count;
-        if (!callback_entry && !ir_fn.name.empty()) {
-            g_eager_cache[ir_fn.name] = 0; /* cachear failure */
+        if (!callback_entry && !ir_fn_sel.name.empty()) {
+            g_eager_cache[ir_fn_sel.name] = 0; /* cachear failure */
         }
     }
     return res;
