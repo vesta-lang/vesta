@@ -1809,6 +1809,12 @@ private:
     uint32_t macro_vmonly_hits_ = 0;
     uint32_t macro_vmonly_misses_ = 0;
 
+    /// Un `inject(...)` de un bloque asm quedo sin resolver porque la maquina
+    /// de compilacion aun no podia ejecutar la funcion que lo produce.  Marca
+    /// esta pasada como PROVISIONAL: el cuerpo del asm salio vacio y hay que
+    /// repetir la compilacion con esa maquina ya cargada.
+    bool inject_diferido_ = false;
+
   public:
     uint64_t next_gensym_id() noexcept { return gensym_counter_++; }
     std::unordered_map<std::string,
@@ -1827,6 +1833,9 @@ private:
     uint32_t macro_vmonly_misses() const noexcept {
         return macro_vmonly_misses_;
     }
+
+    /// @copydoc inject_diferido_
+    bool inject_diferido() const noexcept { return inject_diferido_; }
 
   private:
     // -----------------------------------------------------------------

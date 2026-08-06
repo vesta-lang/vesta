@@ -863,6 +863,30 @@ bool ComptimeRuntime::load_macros_from_bytes(
              * descartar el prefijo "code." (5 chars). */
             const std::string clean = kv.first.substr(5);
             macro_entry_pc_[clean] = kv.second;
+            /* Un fichero con `namespace` compila sus funciones con el prefijo
+             * del modulo (`__macro_mi_modulo__gen`), pero desde su propio
+             * fichero se las llama por el nombre desnudo (`gen`).  Se registra
+             * TAMBIEN esa forma corta para que ese nombre encuentre su codigo;
+             * si no, la funcion se daba por no ejecutable y devolvia el valor
+             * VACiO sin decir nada.
+             *
+             * Si dos modulos traen el mismo nombre corto, la forma corta deja
+             * de identificar a uno solo: se retira en vez de elegir al azar,
+             * porque llamar a la funcion equivocada seria peor. */
+            const size_t sep = clean.rfind("__");
+            if (sep != std::string::npos && sep > 8) {
+                const std::string corto = "__macro_" + clean.substr(sep + 2);
+                if (corto != clean) {
+                    auto prev = macro_entry_pc_.find(corto);
+                    if (prev == macro_entry_pc_.end()) {
+                        macro_entry_pc_[corto] = kv.second;
+                        macro_corto_origen_[corto] = clean;
+                    } else if (macro_corto_origen_.count(corto) != 0 &&
+                               macro_corto_origen_[corto] != clean) {
+                        macro_entry_pc_.erase(prev); /* ambiguo */
+                    }
+                }
+            }
         }
 
         /* Eager-compile cada macro/fn comptime via JIT: es lo que acelera

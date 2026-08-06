@@ -2713,11 +2713,27 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                         "__macro_" + (fn_it->second->is_imported_comptime
                                           ? fn_it->second->name
                                           : cid->name);
+                    /* El otro nombre posible.  Una funcion comptime declarada en
+                     * un fichero CON `namespace` compila a un simbolo con el
+                     * prefijo del namespace (`__macro_mimod__gen`), pero desde
+                     * su propio fichero se la llama por el nombre desnudo
+                     * (`gen`) -- y con la clave desnuda no se encontraba, se
+                     * daba por no ejecutable y el resultado salia VACiO sin
+                     * decir nada.  Se prueba tambien la otra forma. */
+                    const std::string macro_alt =
+                        "__macro_" + (fn_it->second->is_imported_comptime
+                                          ? cid->name
+                                          : fn_it->second->name);
                     if (ret_is_str) {
                         std::string out;
-                        const bool inv =
+                        bool inv =
                             const_cast<TypeChecker &>(tc).comptime_runtime()
                                 .invoke_string_macro(macro_nm, vm_args, out);
+                        if (!inv && macro_alt != macro_nm)
+                            inv = const_cast<TypeChecker &>(tc)
+                                      .comptime_runtime()
+                                      .invoke_string_macro(macro_alt, vm_args,
+                                                           out);
                         vr.is_str = true;
                         if (inv) vr.str = std::move(out);
                         else vr.deferred = true;
@@ -2726,20 +2742,31 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                          * (SRET); recuperamos sus bytes y reconstruimos cada
                          * campo como valor de compile-time. */
                         std::vector<uint8_t> sbytes;
-                        const bool inv =
+                        bool inv =
                             const_cast<TypeChecker &>(tc).comptime_runtime()
                                 .invoke_struct_macro(macro_nm, vm_args,
                                                      ret_slay->size_bytes,
                                                      sbytes);
+                        if (!inv && macro_alt != macro_nm)
+                            inv = const_cast<TypeChecker &>(tc)
+                                      .comptime_runtime()
+                                      .invoke_struct_macro(
+                                          macro_alt, vm_args,
+                                          ret_slay->size_bytes, sbytes);
                         if (inv)
                             fill_struct_fields_from_bytes(tc, *ret_slay, sbytes,
                                                           0, vr);
                         else vr.deferred = true;
                     } else {
                         uint64_t r0 = 0;
-                        const bool inv =
+                        bool inv =
                             const_cast<TypeChecker &>(tc).comptime_runtime()
                                 .invoke_simple_macro(macro_nm, vm_args, r0);
+                        if (!inv && macro_alt != macro_nm)
+                            inv = const_cast<TypeChecker &>(tc)
+                                      .comptime_runtime()
+                                      .invoke_simple_macro(macro_alt, vm_args,
+                                                           r0);
                         if (inv) vr.value = static_cast<int64_t>(r0);
                         else { vr.value = 0; vr.deferred = true; }
                     }

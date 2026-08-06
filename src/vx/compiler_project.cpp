@@ -225,6 +225,15 @@ uint64_t module_content_key_(uint64_t source_hash,
     // asm_target_bits, native_poo, exceptions, instrument.  Cierra el hueco de
     // cross-bits AOT (@Naked/asm{} baja distinto en 32/64) con CAS compartido.
     mix(config_fp);
+    /* Si la maquina de compilacion estaba cargada o no.  Es un eje REAL del
+     * resultado: sin ella, una funcion comptime no se puede ejecutar y su
+     * valor sale vacio, asi que el modulo compilado en esa pasada es
+     * PROVISIONAL.  Sin distinguirlo, la pasada buena reutilizaba el modulo
+     * provisional de la anterior y el arreglo no llegaba nunca. */
+    {
+        const char *pre = std::getenv("VESTA_MC_PREBUILT");
+        mix((pre != nullptr && pre[0] != '\0') ? 1ull : 0ull);
+    }
     if (!tgt_suffix.empty()) mix(vxi_fnv1a(tgt_suffix)); // @Target (PE/ELF/...).
     for (uint64_t d : dep_hashes) mix(d);
     return h;
@@ -1432,6 +1441,19 @@ CompileResult compile_vx_project(
         if ((!cc_tgt_os.empty() || !cc_tgt_arch.empty()) &&
             pm.source.find("@Target") != std::string::npos) {
             cache_tgt_suffix = "." + cc_tgt_os + "-" + cc_tgt_arch;
+        }
+        /* Compilar con la maquina de compilacion cargada da un resultado
+         * DISTINTO al de compilar sin ella: sin la maquina, una funcion
+         * comptime no se puede ejecutar y su valor sale vacio.  Los dos
+         * resultados no pueden compartir artefacto, o la pasada buena se
+         * encuentra el de la provisional y lo da por valido -- que es lo que
+         * pasaba: el valor correcto se calculaba y se tiraba.
+         *
+         * Se marca la pasada CON maquina y no la de sin ella, que es la unica
+         * que existe cuando no hay codigo de compilacion de por medio: asi el
+         * caso normal conserva sus artefactos de siempre. */
+        if (const char *pre = std::getenv("VESTA_MC_PREBUILT")) {
+            if (pre[0] != '\0') cache_tgt_suffix += ".mc";
         }
 
         // ---- CAS global (content-addressed, cross-proyecto) ----
@@ -3175,6 +3197,16 @@ CompileResult compile_vx_project(
         // solo funciona dentro del mismo fichero.
         if (fn.is_macro_compiled ||
             fn.name.compare(0, 8, "__macro_") == 0) {
+            res.has_lowerable_macros = true;
+            break;
+        }
+    }
+    /* Y si a CUALQUIER modulo del camino le quedo un `inject(...)` pendiente,
+     * su bloque asm salio vacio: hay que repetir.  Mirar solo el IR no basta,
+     * porque una funcion comptime invocada UNICAMENTE desde un inject no deja
+     * rastro en el IR cuando el inject no llega a expandirse. */
+    for (const auto &pm : work) {
+        if (pm.tc && pm.tc->inject_diferido()) {
             res.has_lowerable_macros = true;
             break;
         }

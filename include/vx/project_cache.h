@@ -44,6 +44,10 @@ struct ProjectCacheKey {
     uint64_t vx_base = 0;
     std::string instrument_mode; ///< "none", "trace", "coverage", etc.
     std::string port_target;     ///< "" si no es port; "c", "java", etc.
+    /// La maquina que ejecuta el codigo de compilacion estaba cargada.  Sin
+    /// ella las funciones comptime no se ejecutan y lo compilado es
+    /// provisional, asi que no puede compartir entrada con lo definitivo.
+    bool comptime_prebuilt = false;
 };
 
 ///  M5.B: entrada por modulo en el cache file.  Tras un compile

@@ -3449,6 +3449,10 @@ int main(int argc, char *argv[]) {
         pck.vx_base = 0; // no usado por compile_vx_project; queda 0
         pck.instrument_mode = copts.instrument_mode;
         pck.port_target = copts.port_target;
+        {
+            const char *pre = std::getenv("VESTA_MC_PREBUILT");
+            pck.comptime_prebuilt = (pre != nullptr && pre[0] != '\0');
+        }
         const uint32_t opts_hash = vx::project_cache_opts_hash(pck);
 
         // Path canonico del root para el cache key.

@@ -492,6 +492,11 @@ class ComptimeRuntime {
     /// Map de macros registrados -> entry PC.
     std::unordered_map<std::string, uint64_t> macro_entry_pc_;
 
+    /// Para cada nombre CORTO registrado (el de un modulo con `namespace`,
+    /// sin su prefijo), de que nombre completo salio.  Sirve para detectar
+    /// que dos modulos distintos reclaman el mismo nombre corto y retirarlo.
+    std::unordered_map<std::string, std::string> macro_corto_origen_;
+
     uint64_t call_count_ = 0;
     uint64_t cache_hit_count_ = 0;
 

@@ -182,7 +182,11 @@ uint32_t project_cache_opts_hash(const ProjectCacheKey &key) {
     std::ostringstream os;
     os << "opt=" << key.opt_level << "|debug=" << (key.emit_debug ? 1 : 0)
        << "|base=0x" << std::hex << key.vx_base
-       << "|instr=" << key.instrument_mode << "|port=" << key.port_target;
+       << "|instr=" << key.instrument_mode << "|port=" << key.port_target
+       /* Mismo motivo que en la clave por modulo: lo compilado SIN la maquina
+        * de compilacion cargada es provisional (las funciones comptime no se
+        * pudieron ejecutar) y no vale para la pasada buena. */
+       << "|mc=" << (key.comptime_prebuilt ? 1 : 0);
     return fnv1a32_str(os.str());
 }
 

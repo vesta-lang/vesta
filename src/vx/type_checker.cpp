@@ -6517,8 +6517,23 @@ void TypeChecker::expandir_inject_en_asm(ast::AsmStmt *as) {
             // comptime no resuelve y la evaluacion no da nada.
             (void)check_expr(e_tmp.get());
             const ComptimeEvalResult r = comptime_eval_expr(*this, e_tmp.get());
-            if (r.ok && r.is_str) {
+            /* Un resultado DIFERIDO no es un resultado: llega con la cadena
+             * VACIA porque la maquina de compilacion aun no podia ejecutar la
+             * funcion.  Empalmarlo dejaria el bloque asm vacio SIN decir nada
+             * -- que es lo que hacia, y por eso una copia escrita con inject
+             * no copiaba nada.  Se deja el texto tal cual para que lo expanda
+             * quien si pueda; si no lo expanda nadie, el ensamblador se queja
+             * del `inject(` que sigue ahi, y eso se ve. */
+            if (r.ok && r.is_str && !r.deferred) {
                 salida += r.str;
+                hecho = true;
+            } else if (r.ok && r.deferred) {
+                /* Se anota que quedo pendiente para que el compilador sepa que
+                 * esta pasada NO es la buena y tenga que repetirla con la
+                 * maquina de compilacion ya cargada.  Mientras tanto se deja un
+                 * comentario: la pasada intermedia tiene que poder ensamblar. */
+                inject_diferido_ = true;
+                salida += "; inject pendiente\n";
                 hecho = true;
             }
         }
