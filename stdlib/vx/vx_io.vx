@@ -13,6 +13,19 @@
 // @AllocatorOverride): si lo define, el lowering llama a SU version y este
 // runtime no se bundle-a (o su simbolo queda sin usar y el dead-elim lo quita).
 
+// Del lado de Linux nada se escribe a mano: las llamadas vienen de
+// std.syscall, sus constantes de std.unix y sus tipos de std.types.  Escribir
+// aqui otra copia -- el numero de syscall, el valor de una bandera o un `i64`
+// donde el sistema dice `ssize_t` -- seria tener la misma verdad en dos sitios.
+// Los imports van con @Target porque en Windows estos nombres no existen: alli
+// la superficie del sistema es la de NT.
+@Target("os:linux")
+import std.syscall.linux only open, read, close, write, exit_group;
+@Target("os:linux")
+import std.unix only O_RDONLY, STDOUT_FILENO;
+@Target("os:linux")
+import std.types only ssize_t;
+
 // --- FFI a la I/O de bajo nivel del SO (resuelta por IAT/GOT) ---------------
 // @Target no aplica a bloques `extern`; declaramos los de AMBAS plataformas sin
 // condicion y el `__vio_raw` @Target'd llama solo al de su plataforma -> el
@@ -33,51 +46,16 @@ extern "kernel32.dll" {
     fn MultiByteToWideChar(u32 codePage, u32 flags, u8* mbStr, i32 cbMb,
                            u16* wStr, i32 cchWide) -> i32;
     fn ExitProcess(u32 code) -> void;
+    fn IsDebuggerPresent() -> i32;
 }
 
-// Linux: syscalls RAW (sin libc) via asm volatile.  El binario no depende de
-// libc.so.6 -> freestanding-capable (kernels/initramfs).  SysV: arg4 va a r10
-// (no rcx); nr y resultado comparten rax (un solo register binding in/out).
-//
-// La convencion es POR ARQUITECTURA, no solo por sistema: cambian la
-// instruccion (`syscall` vs `int 0x80`), los registros y hasta los NUMEROS de
-// syscall.  Antes solo estaba la version de 64 bits bajo un `!os:windows` a
-// secas, asi que un binario de 32 bits salia con un `syscall` dentro -- que en
-// modo protegido es una instruccion ilegal: cualquier `println` mataba el
-// proceso con SIGILL.
-@Target("!os:windows && arch:x86_64")
-i64 __vio_sys_write(i64 fd, u8* buf, i64 len) {
-    register("rdi") i64 a1 = fd;
-    register("rsi") u8* a2 = buf;
-    register("rdx") i64 a3 = len;
-    register("rax") i64 rax_io = 1; // SYS_write
-    asm volatile { syscall };
-    return rax_io;
-}
-@Target("!os:windows && arch:x86_64")
-void __vio_sys_exit(i64 code) {
-    register("rdi") i64 a1 = code;
-    register("rax") i64 rax_io = 231; // SYS_exit_group
-    asm volatile { syscall };
-}
-
-// x86-32: `int 0x80`, argumentos en ebx/ecx/edx y otra tabla de numeros
-// (write = 4, exit_group = 252).
-@Target("!os:windows && arch:x86")
-i64 __vio_sys_write(i64 fd, u8* buf, i64 len) {
-    register("ebx") i32 a1 = (i32) fd;
-    register("ecx") u8* a2 = buf;
-    register("edx") i32 a3 = (i32) len;
-    register("eax") i32 eax_io = 4; // SYS_write en x86-32
-    asm volatile { int 0x80 };
-    return (i64) eax_io;
-}
-@Target("!os:windows && arch:x86")
-void __vio_sys_exit(i64 code) {
-    register("ebx") i32 a1 = (i32) code;
-    register("eax") i32 eax_io = 252; // SYS_exit_group en x86-32
-    asm volatile { int 0x80 };
-}
+// Linux: las llamadas al sistema vienen de std.syscall, que es donde vive la
+// tabla.  Aqui habia dos copias escritas a mano -- una por arquitectura, con
+// los numeros y los registros a pelo -- y eso era tener la misma verdad en dos
+// sitios: el dia que un numero cambie o llegue una arquitectura nueva hay que
+// acordarse de este fichero.  std.syscall ya resuelve el reparto por
+// arquitectura (`syscall` frente a `int 0x80`, y sus tablas distintas) por su
+// cuenta, que es justo lo que aqui se estaba duplicando.
 
 // --- Sink de stdout con block-buffering -------------------------------------
 // __vio_raw: escritura cruda al SO (la unica parte platform-specific).  Recibe
@@ -118,7 +96,7 @@ void __vio_raw(u8* buf, u64 len) {
 }
 @Target("!os:windows")
 void __vio_raw(u8* buf, u64 len) {
-    if (len > 0) __vio_sys_write(1, buf, (i64)len); // syscall raw, sin libc
+    if (len > 0) write(STDOUT_FILENO, (char*) buf, len);
 }
 
 // Buffer de salida (block-buffered): acumula y vuelca en UN syscall.  Bate a
@@ -154,18 +132,109 @@ void __vx_write(u8* buf, u64 len) {
     }
 }
 
-// Hook de fallo de `unwrap` sobre null (Optional/nonnull vacios).
+// --- panic ------------------------------------------------------------------
+//
+// Lo unico que cambia entre sistemas es la llamada con la que se termina el
+// proceso: ExitProcess en Windows, exit_group en Linux.  Todo lo demas (el
+// mensaje, el vaciado del buffer y la trampa para el depurador) es comun, asi
+// que vive en un solo sitio y solo la ultima linea esta por duplicado.
+
+/**
+ * @brief Indica si un depurador esta siguiendo al proceso.
+ *
+ * Se consulta para decidir si `panic` deja una trampa.  Sin depurador la
+ * trampa mataria el proceso con SIGTRAP y el programa dejaria de salir con el
+ * mismo codigo que dan el interprete y el JIT.
+ *
+ * @return 1 si hay depurador, 0 si no o si no se pudo averiguar.
+ */
+@Target("os:windows")
+i32 __vio_trazado() { return IsDebuggerPresent(); }
+
+/**
+ * @brief Version de Linux: no hay llamada que lo diga.
+ *
+ * Se lee el campo `TracerPid` de `/proc/self/status`, que vale 0 mientras
+ * nadie siga al proceso y pasa a ser el pid del depurador cuando alguien se
+ * engancha.
+ *
+ * @return 1 si hay depurador, 0 si no o si el fichero no se pudo leer.
+ */
+@Target("os:linux")
+i32 __vio_trazado() {
+    char[512] buf;
+    i32 fd = open("/proc/self/status", O_RDONLY, 0);
+    if (fd < 0) return 0;
+    ssize_t n = read(fd, &buf[0], 512);
+    close(fd);
+    if (n <= 0) return 0;
+    // Basta con mirar el primer caracter del numero: interesa si es cero, no
+    // cuanto vale.
+    ssize_t tope = n - 10;
+    for (ssize_t i = 0; i < tope; i++) {
+        if (buf[i] != 'T') continue;
+        if (buf[i + 1] != 'r') continue;
+        if (buf[i + 6] != 'P') continue;
+        if (buf[i + 9] != ':') continue;
+        ssize_t j = i + 10;
+        while (j < n && (buf[j] == ' ' || buf[j] == '\t')) j++;
+        if (j < n && buf[j] != '0') return 1;
+        return 0;
+    }
+    return 0;
+}
+
+/// En un target sin sistema operativo no hay a quien preguntar.
+@Target("!os:windows && !os:linux")
+i32 __vio_trazado() { return 0; }
+
+/**
+ * @brief Hook por defecto de `panic(msg)`.
+ *
+ * Escribe el mensaje que puso el programador y termina.  Antes de terminar
+ * deja un `int3` si hay un depurador enganchado, para que pare EN el punto del
+ * fallo y con el mensaje ya escrito: un `panic` tambien es informacion de
+ * diagnostico, no solo una forma de morir.
+ *
+ * Un `@PanicHandler` del usuario sustituye a esta funcion por completo.
+ *
+ * @param msg Bytes del mensaje.  No termina en nul: viene con su longitud.
+ * @param len Cuantos bytes tiene el mensaje.
+ */
+void __vio_panic_di(u8* msg, u64 len) {
+    __vx_write("panic: ", 7);
+    __vx_write(msg, len);
+    __vx_write("\n", 1);
+    __vx_flush();   // el mensaje sale antes de parar o de morir.
+    if (__vio_trazado() != 0) {
+        asm volatile { int3 };
+    }
+}
+
+/// Hook por defecto de `panic(msg)`.  Sale con 134 (128+6, SIGABRT), el mismo
+/// codigo con que salen el interprete y el JIT.
+@Target("os:windows")
+void __panic(u8* msg, u64 len) {
+    __vio_panic_di(msg, len);
+    ExitProcess(134);
+}
+@Target("os:linux")
+void __panic(u8* msg, u64 len) {
+    __vio_panic_di(msg, len);
+    exit_group(134);
+}
+
+/// Hook de fallo de `unwrap` sobre null (Optional/nonnull vacios).  Es un
+/// panic como cualquier otro, solo que el mensaje lo pone el lenguaje.
 @Target("os:windows")
 void __vx_panic_null() {
-    __vx_write("panic: unwrap de un valor null (Optional/nonnull vacio)\n", 54);
-    __vx_flush();   // vuelca antes de salir.
-    ExitProcess(1);  // kernel32, no msvcrt abort.
+    __vio_panic_di("unwrap de un valor null (Optional/nonnull vacio)", 48);
+    ExitProcess(134);
 }
-@Target("!os:windows")
+@Target("os:linux")
 void __vx_panic_null() {
-    __vx_write("panic: unwrap de un valor null (Optional/nonnull vacio)\n", 54);
-    __vx_flush();
-    __vio_sys_exit(134); // exit_group(134) ~ SIGABRT (128+6), sin libc
+    __vio_panic_di("unwrap de un valor null (Optional/nonnull vacio)", 48);
+    exit_group(134);
 }
 
 // --- Formateadores numericos ( puro sobre __vx_write) -------------------

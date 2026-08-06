@@ -127,6 +127,11 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
             const bool aot_freestanding = opt.freestanding;
             const bool aot_no_exceptions = opt.no_exceptions;
             const bool aot_no_io = opt.no_io;
+            /* Cierto cuando el programa hace `panic(msg)` y no aporta un hook
+             * propio: entonces PANIC baja al __panic de vx_io, que escribe
+             * el mensaje.  Sin esto bajaba a `abort`, que no recibe
+             * argumentos, y el texto que puso el programador se perdia. */
+            bool io_default_panic = false;
             const bool aot_no_mem = opt.no_mem;
             const char *argv0 = opt.argv0.c_str();
             (void)aot_no_mem; // usado condicionalmente segun el codegen
@@ -623,9 +628,14 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 // nada no arrastraba el runtime, asi que el hook no existia y
                 // el backend acababa pidiendolo como import externo.
                 bool needs_panic_null = false, defines_panic_null = false;
+                // Un `panic(msg)` necesita __panic, que vive tambien aqui.
+                // Sin esto el mensaje que escribio el programador se perdia:
+                // PANIC bajaba a `abort`, que no recibe argumentos.
+                bool needs_panic = false, defines_panic = false;
                 for (const auto &af : aot_mod.functions) {
                     if (af.name == "__vx_write") defines_io = true;
                     if (af.name == "__vx_panic_null") defines_panic_null = true;
+                    if (af.name == "__panic") defines_panic = true;
                     for (const auto &b : af.blocks)
                         for (const auto &ins : b.instrs) {
                             if (ins.op == ir::IrOp::CALLN &&
@@ -633,9 +643,16 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                                 uses_io = true;
                             if (ins.op == ir::IrOp::UNWRAP)
                                 needs_panic_null = true;
+                            if (ins.op == ir::IrOp::PANIC)
+                                needs_panic = true;
                         }
                 }
-                if ((uses_io || (needs_panic_null && !defines_panic_null)) &&
+                // El hook por defecto solo se usa si el programa no trae uno
+                // suyo (@PanicHandler) ni redefine __panic.
+                if (needs_panic && !defines_panic && cr.aot_panic_sym.empty())
+                    io_default_panic = true;
+                if ((uses_io || (needs_panic_null && !defines_panic_null) ||
+                     io_default_panic) &&
                     !defines_io) {
                     const std::string exe_dir =
                         std::filesystem::path(fs::get_executable_path())
@@ -666,14 +683,21 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     io_opts.opt_level = copts.opt_level;
                     io_opts.native_poo = true;
                     io_opts.asm_target_bits = copts.asm_target_bits;
+                    /* Por PROYECTO: el modulo importa std.syscall / std.unix /
+                     * std.types del lado de Linux, y solo esa ruta resuelve los
+                     * imports.  Mismo criterio que vx_thread y vx_fault. */
+                    (void)io_src;
                     vx::CompileResult io_cr =
-                        vx::compile_vx_source(io_src, io_path, io_opts);
+                        vx::compile_vx_project(io_path, io_opts);
                     ir::IrModule io_mod;
                     if (!io_cr.ok || io_cr.ir_module_cache_bytes.empty() ||
                         !ir::parse_ir_module_cache(io_cr.ir_module_cache_bytes,
                                                    io_mod)) {
                         std::cerr << "[aot] no pude compilar el runtime de I/O "
                                      "vx_io.vx.\n";
+                        // Sin el motivo el mensaje no sirve de nada.
+                        for (const auto &d : io_cr.diagnostics.all())
+                            vx::print_diagnostic(std::cerr, d);
                         return EXIT_FAILURE;
                     }
                     // Merge (mismo patron que vx_exc): remap de STR_LIT_ADDR por
@@ -966,6 +990,14 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                         break;
                     }
                 }
+                // Lo mismo con `panic`: la llamada al hook no esta en el IR
+                // todavia -- la crea aot_lower al bajar IrOp::PANIC, o sea
+                // DESPUES de esta poda.  Sin sembrarlo, el hook se va por "no
+                // alcanzable" y acaba en la tabla de imports; Windows entonces
+                // rechaza el binario al cargarlo y el proceso muere con 127 sin
+                // llegar a ejecutar nada.
+                if (io_default_panic) add_live("__panic");
+                if (!cr.aot_panic_sym.empty()) add_live(cr.aot_panic_sym);
                 // Raices por vtablas/datos: nombres referenciados en sym_refs.
                 for (size_t si = 0; si < aot_mod.static_data.size(); ++si)
                     for (const auto &sr : aot_mod.static_data.meta_at(si).sym_refs)
@@ -1145,6 +1177,12 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
             if (!cr.aot_panic_sym.empty()) {
                 lcfg.panic_sym = cr.aot_panic_sym;
                 lcfg.panic_takes_msg = true; // @PanicHandler(msg_addr, len)
+            } else if (io_default_panic) {
+                /* Sin hook del usuario, el panic por defecto es el de vx_io:
+                 * escribe el mensaje y sale con 134, igual que el interprete y
+                 * el JIT.  `abort` (el defecto anterior) tiraba el mensaje. */
+                lcfg.panic_sym = "__panic";
+                lcfg.panic_takes_msg = true;
             }
 
             // FFI dinamico (ffi_open/ffi_sym -> DLOPEN/DLSYM): bundle
