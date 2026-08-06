@@ -690,9 +690,15 @@ inline TargetDescriptor descriptor_x86_64_from_reginfo(const TargetRegInfo &tri,
     TargetDescriptor d;
     d.name    = "x86-64";
     d.traits  = target_traits_from_reginfo(tri);
+    /* El tope de la clase ancha sale del OBJETIVO, no de un numero fijo: con
+     * AVX-512 y una funcion que no emite coma flotante propia son 32 ranuras
+     * (ids 16..47) en vez de 16.  Se toma del ultimo asignable que declare. */
+    uint8_t fp_top = 31;
+    for (uint8_t r : tri.allocatable[static_cast<size_t>(jit::RegClass::FP)])
+        if (r > fp_top) fp_top = r;
     d.classes = make_class_specs(
         ClassSpec{0, 15, gp_widths(8), {}},
-        ClassSpec{16, 31, x86_fp_widths(caps), {26, 27, 28, 29}}); // XMM10-13.
+        ClassSpec{16, fp_top, x86_fp_widths(caps), {26, 27, 28, 29}}); // XMM10-13.
     return d;
 }
 

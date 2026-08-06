@@ -123,7 +123,8 @@ struct TargetRegInfo {
  * @c target_x86_64_vm_abi).
  */
 inline TargetRegInfo build_x86_64_target(bool sysv, bool reserve_vec_acc = true,
-                                         bool reserve_fp_scratch = true) {
+                                         bool reserve_fp_scratch = true,
+                                         bool wide512 = false) {
     TargetRegInfo t;
     t.pointer_size = 8;
     t.is_two_address = true;
@@ -180,7 +181,14 @@ inline TargetRegInfo build_x86_64_target(bool sysv, bool reserve_vec_acc = true,
      * ancho son los operandos de un bloque asm -- no los necesita, y
      * reservarlos le quita dos ranuras de las 16 sin motivo.  Misma reserva
      * DEMAND-DRIVEN que la de los acumuladores, decidida por el llamante. */
-    const int fp_hi = reserve_vec_acc ? 25 : (reserve_fp_scratch ? 29 : 31);
+    /* Y el banco EXTENDIDO de AVX-512 (zmm16..31, ids 32..47) cuando el
+     * llamante dice que se puede: hacen falta las dos condiciones -- que el
+     * procesador los tenga y que la funcion no vaya a emitir instrucciones de
+     * coma flotante propias, porque esos registros solo se codifican con EVEX
+     * y el codificador de esas no sabe.  Los operandos de un bloque asm si
+     * pueden usarlos: ese texto lo ensambla otro que si sabe. */
+    const int fp_hi = reserve_vec_acc ? 25
+                      : (reserve_fp_scratch ? 29 : (wide512 ? 47 : 31));
     for (int i = 16; i <= fp_hi; ++i) {
         t.allocatable[FP].push_back(static_cast<uint8_t>(i));
         t.caller_saved[FP].push_back(static_cast<uint8_t>(i));
@@ -261,14 +269,27 @@ inline const TargetRegInfo &target_x86_32() {
  *        escalar (funciones sin reduccion).  La reserva es DEMAND-DRIVEN.
  */
 inline const TargetRegInfo &target_x86_64_abi(bool sysv, bool reserve_vec_acc = true,
-                                              bool reserve_fp_scratch = true) {
-    static const TargetRegInfo t[8] = {
-        build_x86_64_target(true, true, true),   build_x86_64_target(false, true, true),
-        build_x86_64_target(true, false, true),  build_x86_64_target(false, false, true),
-        build_x86_64_target(true, true, false),  build_x86_64_target(false, true, false),
-        build_x86_64_target(true, false, false), build_x86_64_target(false, false, false),
+                                              bool reserve_fp_scratch = true,
+                                              bool wide512 = false) {
+    static const TargetRegInfo t[16] = {
+        build_x86_64_target(true, true, true, false),
+        build_x86_64_target(false, true, true, false),
+        build_x86_64_target(true, false, true, false),
+        build_x86_64_target(false, false, true, false),
+        build_x86_64_target(true, true, false, false),
+        build_x86_64_target(false, true, false, false),
+        build_x86_64_target(true, false, false, false),
+        build_x86_64_target(false, false, false, false),
+        build_x86_64_target(true, true, true, true),
+        build_x86_64_target(false, true, true, true),
+        build_x86_64_target(true, false, true, true),
+        build_x86_64_target(false, false, true, true),
+        build_x86_64_target(true, true, false, true),
+        build_x86_64_target(false, true, false, true),
+        build_x86_64_target(true, false, false, true),
+        build_x86_64_target(false, false, false, true),
     };
-    const size_t i = (reserve_fp_scratch ? 0u : 4u) +
+    const size_t i = (wide512 ? 8u : 0u) + (reserve_fp_scratch ? 0u : 4u) +
                      (reserve_vec_acc ? 0u : 2u) + (sysv ? 0u : 1u);
     return t[i];
 }
@@ -295,8 +316,10 @@ inline constexpr bool host_is_sysv() noexcept {
  * @param reserve_fp_scratch  ver @c target_x86_64_abi.
  */
 inline const TargetRegInfo &target_x86_64_vm_abi(bool reserve_vec_acc = true,
-                                                 bool reserve_fp_scratch = true) {
-    return target_x86_64_abi(host_is_sysv(), reserve_vec_acc, reserve_fp_scratch);
+                                                 bool reserve_fp_scratch = true,
+                                                 bool wide512 = false) {
+    return target_x86_64_abi(host_is_sysv(), reserve_vec_acc, reserve_fp_scratch,
+                             wide512);
 }
 
 /*

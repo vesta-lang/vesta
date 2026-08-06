@@ -44,6 +44,37 @@ public const u64 BIT_AVX512F = 1 << 7;
 /// tamanos que no son enormes, asi que la diferencia importa.
 public const u64 BIT_ERMS = 1 << 8;
 
+/* --- Presupuesto de registros anchos, por ABI ---------------------------
+ *
+ * Cuantos registros del banco ancho puede gastar una copia SIN pagar por
+ * ellos.  No es una preferencia: lo marca el ABI.
+ *
+ *   System V (Linux, BSD, macOS)  todos son de usar y tirar -> se gastan.
+ *   Windows                       xmm6..xmm15 hay que devolverlos como
+ *                                 estaban, asi que cada uno por encima de
+ *                                 seis cuesta un guardado y una restauracion
+ *                                 en el prologo.  Eso solo se amortiza en
+ *                                 copias grandes, de ahi que el presupuesto
+ *                                 suba poco y solo en el tramo mayor.
+ *
+ * Poner un numero intermedio para los dos seria lo peor de ambos: gastaria en
+ * Windows lo que desaprovecha en Linux.  Por eso el presupuesto es del
+ * OBJETIVO y no del gusto de quien escribe. */
+@Target("!os:windows")
+public enum Budget : i64 {
+    small = 8,
+    medium = 10,
+    big = 14,
+}
+
+/// @copydoc Budget
+@Target("os:windows")
+public enum Budget : i64 {
+    small = 6,
+    medium = 6,
+    big = 8,
+}
+
 /// Lo que el procesador ha dicho que sabe hacer, o 0 si aun no se le ha
 /// preguntado.  Ese 0 no significa "no sabe nada": significa "sin averiguar".
 u64 __rasgos = 0;
@@ -99,29 +130,13 @@ public u64 init_cpuid() {
  * @param bytes Bytes que cubre cada mitad.  Multiplo de @p ancho.
  * @return El cuerpo del bloque asm, listo para empalmar.
  */
-comptime string gen_solapada(string mn, i64 ancho, i64 bytes) {
-    // Lo comprobable en compilacion, se comprueba en compilacion: un ancho que
-    // no sea de un registro real no tiene instruccion que lo mueva, y una
-    // mitad que no sea multiplo del ancho dejaria bytes sin copiar.
-    static_assert(ancho == 16 || ancho == 32 || ancho == 64,
-                  "el ancho tiene que ser el de un registro real: 16, 32 o 64");
-    static_assert(bytes % ancho == 0,
-                  "cada mitad tiene que ser multiplo del ancho del registro");
-    i64 bloques = bytes / ancho;
-    string out = "";
-    // Primera mitad: desde el principio.
-    for (i64 k = 0; k < bloques; k++) {
-        i64 o = k * ancho;
-        out += "${mn} v, [s + ${o}]\n";
-        out += "${mn} [d + ${o}], v\n";
-    }
-    // Segunda mitad: la que termina en el final.
-    for (i64 k = 0; k < bloques; k++) {
-        i64 o = k * ancho;
-        out += "${mn} v, [fs + ${o}]\n";
-        out += "${mn} [fd + ${o}], v\n";
-    }
-    return out;
+comptime string gen_solapada(string mn, i64 ancho, i64 bytes, i64 regs) {
+    // Un tramo desde el principio y otro que termina en el final; se solapan
+    // por el medio, que es lo que ahorra la cola.  Cada tramo reparte sus
+    // accesos como cualquier otro bloque: cargas primero, y en tandas si no
+    // caben en el presupuesto.
+    return gen_bloque(mn, mn, ancho, bytes, "d", "s", regs) +
+           gen_bloque(mn, mn, ancho, bytes, "fd", "fs", regs);
 }
 
 /**
@@ -168,9 +183,12 @@ public void memcpy_small_sse2(u8* dst, u8* src, usize n) {
         reg s = src,
         reg fd = fin_d,
         reg fs = fin_s,
-        xmm v,
+        xmm v0,
+        xmm v1,
+        xmm v2,
+        xmm v3,
     ) {
-        inject(gen_solapada("movdqu", 16, 64))
+        inject(gen_solapada("movdqu", 16, 64, 4))
     }
 }
 
@@ -201,9 +219,10 @@ public void memcpy_small_avx2(u8* dst, u8* src, usize n) {
         reg s = src,
         reg fd = fin_d,
         reg fs = fin_s,
-        ymm v,
+        ymm v0,
+        ymm v1,
     ) {
-        inject(gen_solapada("vmovdqu", 32, 64))
+        inject(gen_solapada("vmovdqu", 32, 64, 2))
     }
 }
 
@@ -234,9 +253,9 @@ public void memcpy_small_avx512(u8* dst, u8* src, usize n) {
         reg s = src,
         reg fd = fin_d,
         reg fs = fin_s,
-        zmm v,
+        zmm v0,
     ) {
-        inject(gen_solapada("vmovdqu64", 64, 64))
+        inject(gen_solapada("vmovdqu64", 64, 64, 1))
     }
 }
 
@@ -279,9 +298,12 @@ public void memcpy_small_sse2_aligned(u8* dst, u8* src, usize n) {
         reg s = src,
         reg fd = fin_d,
         reg fs = fin_s,
-        xmm v,
+        xmm v0,
+        xmm v1,
+        xmm v2,
+        xmm v3,
     ) {
-        inject(gen_solapada("movdqa", 16, 64))
+        inject(gen_solapada("movdqa", 16, 64, 4))
     }
 }
 
@@ -301,9 +323,10 @@ public void memcpy_small_avx2_aligned(u8* dst, u8* src, usize n) {
         reg s = src,
         reg fd = fin_d,
         reg fs = fin_s,
-        ymm v,
+        ymm v0,
+        ymm v1,
     ) {
-        inject(gen_solapada("vmovdqa", 32, 64))
+        inject(gen_solapada("vmovdqa", 32, 64, 2))
     }
 }
 
@@ -323,9 +346,9 @@ public void memcpy_small_avx512_aligned(u8* dst, u8* src, usize n) {
         reg s = src,
         reg fd = fin_d,
         reg fs = fin_s,
-        zmm v,
+        zmm v0,
     ) {
-        inject(gen_solapada("vmovdqa64", 64, 64))
+        inject(gen_solapada("vmovdqa64", 64, 64, 1))
     }
 }
 
@@ -356,29 +379,41 @@ public void memcpy_small_avx512_aligned(u8* dst, u8* src, usize n) {
  * @return El cuerpo del bloque asm, listo para empalmar.
  */
 comptime string gen_bloque(string mnl, string mne, i64 ancho, i64 bytes,
-                           string d, string s) {
+                           string d, string s, i64 regs) {
     static_assert(ancho == 16 || ancho == 32 || ancho == 64,
                   "el ancho tiene que ser el de un registro real: 16, 32 o 64");
     static_assert(bytes % ancho == 0,
                   "el bloque tiene que ser multiplo del ancho del registro");
-    i64 bloques = bytes / ancho;
-    static_assert(bloques <= 16,
-                  "no hay tantos registros vectoriales: el bloque necesita uno "
-                  "por acceso");
+    static_assert(regs >= 1 && regs <= 16,
+                  "el presupuesto de registros del banco ancho va de 1 a 16");
+    i64 accesos = bytes / ancho;
     string out = "";
     // TODAS las cargas primero y TODAS las escrituras despues, cada acceso en
     // su propio registro.  Alternar carga y escritura sobre un mismo registro
     // encadenaria cada acceso con el anterior por una dependencia que el
     // algoritmo no tiene: la copia no necesita haber escrito el bloque 0 para
-    // leer el 1.  Separadas, el procesador puede tener las ocho lecturas en
+    // leer el 1.  Separadas, el procesador puede tener varias lecturas en
     // vuelo a la vez y las escrituras llegan cuando llegan.
-    for (i64 k = 0; k < bloques; k++) {
-        i64 o = k * ancho;
-        out += "${mnl} v${k}, [${s} + ${o}]\n";
-    }
-    for (i64 k = 0; k < bloques; k++) {
-        i64 o = k * ancho;
-        out += "${mne} [${d} + ${o}], v${k}\n";
+    //
+    // Si el bloque pide mas accesos que registros hay de presupuesto, se parte
+    // en tandas que quepan.  Dentro de cada tanda se mantiene el reparto
+    // cargas-primero; entre tandas se vuelve a empezar por el registro 0,
+    // porque los de la anterior ya se escribieron.
+    i64 k = 0;
+    while (k < accesos) {
+        i64 n = accesos - k;
+        if (n > regs) {
+            n = regs;
+        }
+        for (i64 i = 0; i < n; i++) {
+            i64 o = (k + i) * ancho;
+            out += "${mnl} v${i}, [${s} + ${o}]\n";
+        }
+        for (i64 i = 0; i < n; i++) {
+            i64 o = (k + i) * ancho;
+            out += "${mne} [${d} + ${o}], v${i}\n";
+        }
+        k += n;
     }
     return out;
 }
@@ -418,8 +453,12 @@ comptime string gen_bloque(string mnl, string mne, i64 ancho, i64 bytes,
  * @return El cuerpo del bloque asm, listo para empalmar.
  */
 comptime string gen_grande(string mnl, string mne, string mne_cola, i64 ancho,
-                           i64 bloque, i64 adelanto, string cierre) {
-    i64 accesos = bloque / ancho;
+                           i64 regs, i64 adelanto, string cierre) {
+    // El bloque de cada vuelta es justo lo que cabe en el presupuesto: un
+    // acceso por registro.  Asi el tamano de la vuelta no es un numero suelto
+    // que haya que mantener a mano, sale de cuantos registros se pueden gastar.
+    i64 bloque = regs * ancho;
+    i64 accesos = regs;
     i64 mitad = accesos / 2;
     string out = "bucle:\n";
     // Pedir con antelacion lo de vueltas siguientes, si se pide.  Con memoria
@@ -460,7 +499,7 @@ comptime string gen_grande(string mnl, string mne, string mne_cola, i64 ancho,
      * depende de `n` y no la controla nadie.  Por eso lleva su propio
      * mnemonico de escritura -- una instruccion que EXIJA alineacion no puede
      * usarse aqui salvo que el llamante garantice tambien el tamano. */
-    out += gen_bloque(mnl, mne_cola, ancho, bloque, "fd", "fs");
+    out += gen_bloque(mnl, mne_cola, ancho, bloque, "fd", "fs", regs);
     // Cierre: `vzeroupper` cuando se han usado registros anchos, `sfence`
     // cuando las escrituras han sido no temporales.  Va aqui y no en cada
     // funcion porque es parte del patron, no del cuerpo.
@@ -525,7 +564,7 @@ public void memcpy_medium_sse2(u8* dst, u8* src, usize n) {
         xmm v6,
         xmm v7,
     ) {
-        inject(gen_grande("movdqu", "movdqu", "movdqu", 16, 128, 0, ""))
+        inject(gen_grande("movdqu", "movdqu", "movdqu", 16, 8, 0, ""))
     }
 }
 
@@ -576,7 +615,7 @@ public void memcpy_medium_avx2(u8* dst, u8* src, usize n) {
         ymm v6,
         ymm v7,
     ) {
-        inject(gen_grande("vmovdqu", "vmovdqu", "vmovdqu", 32, 256, 0, "vzeroupper"))
+        inject(gen_grande("vmovdqu", "vmovdqu", "vmovdqu", 32, 8, 0, "vzeroupper"))
     }
 }
 
@@ -626,7 +665,7 @@ public void memcpy_medium_avx512(u8* dst, u8* src, usize n) {
         zmm v6,
         zmm v7,
     ) {
-        inject(gen_grande("vmovdqu64", "vmovdqu64", "vmovdqu64", 64, 512, 0, "vzeroupper"))
+        inject(gen_grande("vmovdqu64", "vmovdqu64", "vmovdqu64", 64, 8, 0, "vzeroupper"))
     }
 }
 
@@ -730,7 +769,7 @@ public void memcpy_medium_sse2_aligned(u8* dst, u8* src, usize n) {
         xmm v6,
         xmm v7,
     ) {
-        inject(gen_grande("movdqa", "movdqa", "movdqa", 16, 128, 0, ""))
+        inject(gen_grande("movdqa", "movdqa", "movdqa", 16, 8, 0, ""))
     }
 }
 
@@ -773,7 +812,7 @@ public void memcpy_medium_avx2_aligned(u8* dst, u8* src, usize n) {
         ymm v6,
         ymm v7,
     ) {
-        inject(gen_grande("vmovdqa", "vmovdqa", "vmovdqa", 32, 256, 0, "vzeroupper"))
+        inject(gen_grande("vmovdqa", "vmovdqa", "vmovdqa", 32, 8, 0, "vzeroupper"))
     }
 }
 
@@ -816,7 +855,7 @@ public void memcpy_medium_avx512_aligned(u8* dst, u8* src, usize n) {
         zmm v6,
         zmm v7,
     ) {
-        inject(gen_grande("vmovdqa64", "vmovdqa64", "vmovdqa64", 64, 512, 0, "vzeroupper"))
+        inject(gen_grande("vmovdqa64", "vmovdqa64", "vmovdqa64", 64, 8, 0, "vzeroupper"))
     }
 }
 
@@ -850,7 +889,7 @@ public void memcpy_big_sse2(u8* dst, u8* src, usize n) {
         xmm v0, xmm v1, xmm v2,  xmm v3,  xmm v4,  xmm v5,  xmm v6,  xmm v7,
         xmm v8, xmm v9, xmm v10, xmm v11, xmm v12, xmm v13, xmm v14, xmm v15,
     ) {
-        inject(gen_grande("movdqu", "movdqu", "movdqu", 16, 256, 0, ""))
+        inject(gen_grande("movdqu", "movdqu", "movdqu", 16, 16, 0, ""))
     }
 }
 
@@ -874,7 +913,7 @@ public void memcpy_big_avx2(u8* dst, u8* src, usize n) {
         ymm v0, ymm v1, ymm v2,  ymm v3,  ymm v4,  ymm v5,  ymm v6,  ymm v7,
         ymm v8, ymm v9, ymm v10, ymm v11, ymm v12, ymm v13, ymm v14, ymm v15,
     ) {
-        inject(gen_grande("vmovdqu", "vmovdqu", "vmovdqu", 32, 512, 0,
+        inject(gen_grande("vmovdqu", "vmovdqu", "vmovdqu", 32, 16, 0,
                           "vzeroupper"))
     }
 }
@@ -899,7 +938,7 @@ public void memcpy_big_avx512(u8* dst, u8* src, usize n) {
         zmm v0, zmm v1, zmm v2,  zmm v3,  zmm v4,  zmm v5,  zmm v6,  zmm v7,
         zmm v8, zmm v9, zmm v10, zmm v11, zmm v12, zmm v13, zmm v14, zmm v15,
     ) {
-        inject(gen_grande("vmovdqu64", "vmovdqu64", "vmovdqu64", 64, 1024, 0, "vzeroupper"))
+        inject(gen_grande("vmovdqu64", "vmovdqu64", "vmovdqu64", 64, 16, 0, "vzeroupper"))
     }
 }
 
@@ -938,7 +977,7 @@ public void memcpy_streaming_avx2(u8* dst, u8* src, usize n) {
         ymm v0, ymm v1, ymm v2,  ymm v3,  ymm v4,  ymm v5,  ymm v6,  ymm v7,
         ymm v8, ymm v9, ymm v10, ymm v11, ymm v12, ymm v13, ymm v14, ymm v15,
     ) {
-        inject(gen_grande("vmovdqu", "vmovntdq", "vmovdqu", 32, 512, 1024,
+        inject(gen_grande("vmovdqu", "vmovntdq", "vmovdqu", 32, 16, 1024,
                           "sfence\nvzeroupper"))
     }
 }

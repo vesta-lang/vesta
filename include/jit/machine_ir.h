@@ -161,6 +161,28 @@ enum class MReg : uint8_t {
     XMM13 = 29,
     XMM14 = 30,
     XMM15 = 31,
+    /* Banco ancho EXTENDIDO (AVX-512): zmm16..zmm31.  No existen sin AVX-512 y
+     * solo se pueden codificar con EVEX, asi que NO son asignables salvo que el
+     * objetivo los tenga Y la funcion no vaya a emitir instrucciones de coma
+     * flotante propias -- el codificador de esas no sabe emitir EVEX.  Hoy eso
+     * son las funciones cuyo unico uso del banco ancho son operandos de un
+     * bloque asm, que se ensambla aparte y si sabe. */
+    XMM16 = 32,
+    XMM17 = 33,
+    XMM18 = 34,
+    XMM19 = 35,
+    XMM20 = 36,
+    XMM21 = 37,
+    XMM22 = 38,
+    XMM23 = 39,
+    XMM24 = 40,
+    XMM25 = 41,
+    XMM26 = 42,
+    XMM27 = 43,
+    XMM28 = 44,
+    XMM29 = 45,
+    XMM30 = 46,
+    XMM31 = 47,
     /* sentinela invalido */
     NONE = 63
 };
@@ -175,10 +197,10 @@ inline bool is_gp(MReg r) noexcept {
     return reg_id(r) < 16;
 }
 
-/** @brief True si @p r es un registro XMM (16..31). */
+/** @brief True si @p r es del banco ancho (16..47: xmm0-15 y los de AVX-512). */
 inline bool is_xmm(MReg r) noexcept {
     const uint8_t id = reg_id(r);
-    return id >= 16 && id < 32;
+    return id >= 16 && id < 48;
 }
 
 /* ===================================================================== */

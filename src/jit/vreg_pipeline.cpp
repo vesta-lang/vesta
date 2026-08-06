@@ -80,6 +80,23 @@ bool fn_needs_fp_scratch(const ir::IrFunction &fn) {
     return false;
 }
 
+/**
+ * @brief ¿Puede @p fn usar el banco ancho EXTENDIDO de AVX-512 (zmm16..31)?
+ *
+ * Hacen falta las dos cosas: que el procesador los tenga y que la funcion NO
+ * vaya a emitir instrucciones de coma flotante propias.  Lo segundo no es una
+ * precaucion sino un limite real -- esos registros solo se codifican con EVEX y
+ * el codificador de las instrucciones de coma flotante no sabe emitirlo.  Los
+ * operandos de un bloque asm si pueden usarlos: ese texto lo ensambla otro que
+ * si sabe.
+ *
+ * @param fn Funcion IR.
+ * @return true si se le pueden ofrecer las 32 ranuras.
+ */
+bool fn_can_use_wide512(const ir::IrFunction &fn) {
+    return backend_caps_host().avx512f && !fn_needs_fp_scratch(fn);
+}
+
 bool fn_needs_vec_reserve(const ir::IrFunction &fn) {
     static const bool gate_force = [] {
         const char *e = std::getenv("VESTA_NO_WIDE_HOME");
@@ -483,7 +500,8 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
     /* Reserva VEC_ACC demand-driven: XMM10-13 asignables si la funcion NO usa
      * el path vectorial (14 lanes FP escalares en vez de 10). */
     const TargetRegInfo &tri = target_x86_64_vm_abi(fn_needs_vec_reserve(fn),
-                                                     fn_needs_fp_scratch(fn));
+                                                     fn_needs_fp_scratch(fn),
+                                                     fn_can_use_wide512(fn));
 
     /* 2. Intervalos + P1 coalescing + 3. asignacion (commit 6: el linear_scan
      *    FUERZA a slot los GC roots vivos a traves de un call).
@@ -614,7 +632,8 @@ uint8_t *vreg_compile_callback(const ir::IrFunction &fn, CodeCache &cc,
         return nullptr;
 
     const TargetRegInfo &tri = target_x86_64_vm_abi(fn_needs_vec_reserve(fn),
-                                                     fn_needs_fp_scratch(fn));
+                                                     fn_needs_fp_scratch(fn),
+                                                     fn_can_use_wide512(fn));
 
     IntervalResult ivs = build_intervals(mf, tri);
     if (apply_ssa_coalesce(mf, fn)) ivs = build_intervals(mf, tri);
@@ -795,7 +814,8 @@ vreg_compile_native(const ir::IrFunction &fn, const CallResolver &resolve_call,
      * Reserva VEC_ACC demand-driven (misma politica que el JIT). */
     const X86Target target(resolve_call, ent, resolve_native, resolve_symbol,
                            pic, target_sysv, mode32, fisa, emit_line_map,
-                           fn_needs_vec_reserve(fn), fn_needs_fp_scratch(fn));
+                           fn_needs_vec_reserve(fn), fn_needs_fp_scratch(fn),
+                           fn_can_use_wide512(fn));
     return vreg_compile_native_target(fn, target, relocs_out, line_map_out,
                                       asm_labels_out, stackmaps_out);
 }
@@ -816,7 +836,8 @@ uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,
                      resolve_symbol))
         return nullptr;
     const TargetRegInfo &tri = target_x86_64_vm_abi(fn_needs_vec_reserve(fn),
-                                                     fn_needs_fp_scratch(fn));
+                                                     fn_needs_fp_scratch(fn),
+                                                     fn_can_use_wide512(fn));
     IntervalResult ivs = build_intervals(mf, tri);
     codegen::AssignmentPlan plan; // Fragmentation Recovery (vacio si el splitting esta OFF).
     codegen::RegAlloc ra = rbank_allocate_belady(ivs, mf, tri,

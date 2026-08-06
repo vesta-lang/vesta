@@ -13991,7 +13991,11 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
              * sustituye por ese registro.  Mismo reparto que en `reg`. */
             reg_auto = true;
             ph_index = reg_auto_count++;
-            static const int kNumVec = 16;
+            /* 32 y no 16: con AVX-512 el banco ancho tiene el doble.  Este
+             * pick es el que usa el INTERPRETE, que no tiene asignador; quien
+             * decide de verdad cuantos hay es el objetivo, y si se piden mas de
+             * los que tenga, lo dice al asignar. */
+            static const int kNumVec = 32;
             for (int i = 0; i < kNumVec; ++i) {
                 const std::string cand = op.reg_class + std::to_string(i);
                 if (used_regs.count(cand) == 0) {
