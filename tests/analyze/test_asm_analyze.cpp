@@ -190,6 +190,30 @@ int main() {
         CHECK(e.accesos_incompletos, "direccion absoluta: sin base");
     }
 
+    // --- la forma moderna: el operando es un marcador ---------------------
+    // `asm ( reg d = p, reg t, ) { mov t, [d] }` llega con el registro sin
+    // elegir todavia (lo elige el asignador), pero el marcador YA identifica
+    // el operando -- que es lo unico que hace falta, y ademas no depende de
+    // nombres de registro.
+    {
+        AsmBlockEffects e = asm_analyze_block("  mov $1, [$0]\n", "x86_64");
+        CHECK(e.reads_mem && !e.writes_mem, "marcador: solo lee");
+        CHECK(!e.accesos.empty() && e.accesos[0].base == "$0",
+              "marcador: la base es $0");
+    }
+    {
+        AsmBlockEffects e = asm_analyze_block("  mov [$0], $1\n", "x86_64");
+        CHECK(!e.accesos.empty() && e.accesos[0].escribe,
+              "marcador: el almacen escribe");
+    }
+    {
+        // Y la misma guarda: si el bloque pisa el marcador base, no se atribuye.
+        AsmBlockEffects e =
+            asm_analyze_block("  mov $0, $1\n  mov [$0], $2\n", "x86_64");
+        CHECK(e.accesos_incompletos,
+              "marcador base reescrito: no se atribuye");
+    }
+
     // --- lo mismo en arm64, analizado desde un build de x86 ---------------
     // El arch es un DATO del analisis, no del entorno: una variante por
     // @Target se compila con los registros de SU arquitectura.  Si esto

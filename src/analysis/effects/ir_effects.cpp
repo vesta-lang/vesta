@@ -76,17 +76,30 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
     std::vector<AbstractLoc> locs_lee, locs_escribe;
     if (localizado) {
         for (const vx::AsmBlockEffects::Acceso &a : e.accesos) {
-            /* La lista de ligaduras es de TODA la funcion, no del ambito de
-             * este bloque: si dos variables de ambitos distintos usan el mismo
-             * registro, quedarse con la primera seria elegir a ciegas.  Con mas
-             * de una candidata no se afirma nada. */
             ir::IrValueId hueco = ir::IR_NO_VALUE;
             unsigned candidatas = 0;
-            for (const ir::AsmRegBinding &b : fn.asm_reg_bindings)
-                if (!b.reg.empty() && vx::asm_canonical_reg(b.reg) == a.base) {
-                    hueco = b.alloca_value;
-                    ++candidatas;
-                }
+            if (!a.base.empty() && a.base[0] == '$') {
+                /* Marcador `$N`: identifica el operando SIN ambiguedad, asi que
+                 * basta con buscar la ligadura de ese indice.  Es el caso de la
+                 * forma moderna del asm -- la que usa la stdlib -- y ademas no
+                 * depende de nombres de registro. */
+                const int idx = std::atoi(a.base.c_str() + 1);
+                for (const ir::AsmRegBinding &b : fn.asm_reg_bindings)
+                    if (b.reg_auto && b.ph_index == idx) {
+                        hueco = b.alloca_value;
+                        ++candidatas;
+                    }
+            } else {
+                /* Por nombre de registro.  La lista de ligaduras es de TODA la
+                 * funcion, no del ambito de este bloque: si dos variables de
+                 * ambitos distintos usan el mismo registro, quedarse con la
+                 * primera seria elegir a ciegas.  Con mas de una, nada. */
+                for (const ir::AsmRegBinding &b : fn.asm_reg_bindings)
+                    if (!b.reg.empty() && vx::asm_canonical_reg(b.reg) == a.base) {
+                        hueco = b.alloca_value;
+                        ++candidatas;
+                    }
+            }
             if (candidatas != 1) { localizado = false; break; }
             const ir::IrValueId valor =
                 analysis::valor_unico_del_hueco(fn, hueco);

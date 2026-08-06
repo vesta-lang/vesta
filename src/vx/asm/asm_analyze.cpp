@@ -128,6 +128,21 @@ std::string base_de_memoria(const std::string &operando,
     if (a == std::string::npos) return std::string();
     size_t i = a + 1;
     while (i < operando.size() && std::isspace((unsigned char)operando[i])) ++i;
+    /* Marcador `$N`: el registro aun no esta elegido -- lo elige el asignador
+     * despues --, pero el marcador YA identifica de que operando se trata, que
+     * es justo lo que hace falta.  Se devuelve tal cual.
+     *
+     * Es ademas el camino MEJOR de los dos: no depende de nombres de registro,
+     * asi que vale igual en cualquier arquitectura, y no puede confundirse con
+     * otra variable que use el mismo registro.  Y es la forma que usa la
+     * stdlib, o sea que sin esto la parte que mas importa quedaba fuera. */
+    if (i < operando.size() && operando[i] == '$') {
+        std::string ph = "$";
+        for (++i; i < operando.size() && std::isdigit((unsigned char)operando[i]);
+             ++i)
+            ph.push_back(operando[i]);
+        return ph.size() > 1 ? ph : std::string();
+    }
     std::string ident;
     for (; i < operando.size(); ++i) {
         const char c = operando[i];
@@ -363,12 +378,18 @@ AsmBlockEffects asm_analyze_block(const std::string &nasm_body,
         for (const std::string &w : eff.implicit_write) escritos.insert(w);
         {
             const std::vector<std::string> ops = operandos_de(line, mnem);
-            for (size_t k = 0; k < ops.size() && k < 8; ++k)
-                if (((eff.operand_write_mask >> k) & 1u) != 0u &&
-                    ops[k].find('[') == std::string::npos) {
-                    const std::string c = asm_canonical_reg(ops[k], arch);
-                    if (!c.empty()) escritos.insert(c);
+            for (size_t k = 0; k < ops.size() && k < 8; ++k) {
+                if (((eff.operand_write_mask >> k) & 1u) == 0u) continue;
+                if (ops[k].find('[') != std::string::npos) continue;
+                // Un marcador se anota tal cual: `mov $0, $1` pisa la base $0
+                // igual que `mov rdi, rsi` pisa rdi.
+                if (!ops[k].empty() && ops[k][0] == '$') {
+                    escritos.insert(ops[k]);
+                    continue;
                 }
+                const std::string c = asm_canonical_reg(ops[k], arch);
+                if (!c.empty()) escritos.insert(c);
+            }
         }
     }
 
