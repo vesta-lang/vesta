@@ -145,6 +145,38 @@ bool ModuleGraph::file_exists_(const std::string &path) noexcept {
     return vx_file_access_ok(path.c_str());
 }
 
+namespace {
+
+/// Identidad de un fichero: donde ESTA, no como se escribio.
+///
+/// El mismo fichero se alcanza por varias rutas -- relativa desde el directorio
+/// del root, absoluta desde la stdlib -- y tomando la escritura como identidad
+/// entraba dos veces en el grafo.  Eso duplicaba cada diagnostico suyo y, en un
+/// namespace repartido entre varios ficheros, dejaba una de las dos copias sin
+/// fusionar: sus tipos no resolvian aunque el fichero hermano estuviera cargado.
+///
+/// Se usa SOLO para decidir si dos rutas son el mismo fichero; los mensajes
+/// siguen mostrando la ruta tal y como se escribio, que es la que el usuario
+/// reconoce.
+std::string identidad_fichero_(const std::string &ruta) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path p = fs::absolute(fs::path(ruta), ec);
+    if (ec) p = fs::path(ruta);
+    std::string s = p.lexically_normal().string();
+    for (char &c : s) {
+        if (c == '\\') c = '/';
+#if defined(_WIN32)
+        // El sistema de ficheros no distingue mayusculas: dos escrituras que
+        // solo difieren en eso son el mismo fichero.
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+#endif
+    }
+    return s;
+}
+
+} // namespace
+
 // ---------------------------------------------------------------------------
 // Normalizacion de paths.  Pasos:
 //   1. Si no es absoluto, prefijar con base_dir + "/".
@@ -479,7 +511,9 @@ scan_import_paths_(const std::string &source) {
 // process_dependencies_ tras añadir el modulo al graph).
 // ---------------------------------------------------------------------------
 uint32_t ModuleGraph::load_and_parse_(const std::string &canonical_path) {
-    const uint64_t path_hash = fnv1a_(canonical_path);
+    // La clave es DONDE esta el fichero, no como se escribio la ruta: la misma
+    // unidad alcanzada por dos rutas distintas tiene que ser un solo modulo.
+    const uint64_t path_hash = fnv1a_(identidad_fichero_(canonical_path));
 
     // Hit del cache: ya cargado antes (cada modulo se parsea una sola vez).
     auto it = by_path_hash_.find(path_hash);
@@ -854,12 +888,18 @@ void ModuleGraph::build_namespace_index_() {
                         dst.push_back(n);
                 }
             }
+            const std::string ident = identidad_fichero_(canonical);
             for (const auto &ns : namespaces) {
                 auto &files = ns_index_[ns];
-                if (std::find(files.begin(), files.end(), canonical) ==
-                    files.end()) {
-                    files.push_back(canonical);
+                // Dos raices que se solapan (el directorio del root y la
+                // stdlib) recorren los MISMOS ficheros con escrituras
+                // distintas.  Comparar por identidad evita que el namespace
+                // parezca repartido entre el doble de ficheros de los que hay.
+                bool ya = false;
+                for (const auto &f : files) {
+                    if (identidad_fichero_(f) == ident) { ya = true; break; }
                 }
+                if (!ya) files.push_back(canonical);
             }
         }
     }
@@ -1014,8 +1054,11 @@ uint32_t ModuleGraph::build_from_root(const std::string &root_file) {
             for (const auto &ns : mis_ns) {
                 auto itns = ns_index_.find(ns);
                 if (itns == ns_index_.end()) continue;
+                const std::string yo = identidad_fichero_(canonical);
                 for (const auto &file : itns->second) {
-                    if (file == canonical) continue; // el propio root
+                    // Comparar por identidad: el indice puede tener la misma
+                    // unidad escrita de otra forma que el root.
+                    if (identidad_fichero_(file) == yo) continue;
                     const uint32_t mid = load_and_parse_(file);
                     if (mid == UINT32_MAX) continue;
                     raiz->dependencies.push_back(mid);

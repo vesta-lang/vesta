@@ -823,6 +823,102 @@ NsToModname build_ns_to_modname_(const std::vector<ProjectModuleWork> &work) {
 /// A diferencia de @c build_ns_to_modname_ (que gana el primero), este recoge
 /// la lista completa para que `import std.types` registre los simbolos de
 /// TODOS los ficheros del namespace (base + arch-specific), no solo el primero.
+/// Recoge los nombres de tipo que menciona un nodo de tipo, a cualquier
+/// profundidad.  Un alias puede derivar de otro por debajo de un puntero, de un
+/// array o de la firma de una funcion, asi que mirar solo la raiz se dejaria
+/// fuera los casos que no son `typedef A B`.
+void nombres_de_tipo_(const ast::TypeNode *t, std::vector<std::string> &out) {
+    if (t == nullptr) return;
+    switch (t->kind) {
+    case ast::NodeKind::NamedTypeNode: {
+        const auto *n = static_cast<const ast::NamedTypeNode *>(t);
+        out.push_back(n->name);
+        for (const auto &a : n->type_args) nombres_de_tipo_(a.get(), out);
+        break;
+    }
+    case ast::NodeKind::PrimitiveTypeNode: {
+        const auto *p = static_cast<const ast::PrimitiveTypeNode *>(t);
+        for (const auto &a : p->type_args) nombres_de_tipo_(a.get(), out);
+        break;
+    }
+    case ast::NodeKind::PointerTypeNode:
+        nombres_de_tipo_(
+            static_cast<const ast::PointerTypeNode *>(t)->pointee.get(), out);
+        break;
+    case ast::NodeKind::ArrayTypeNode:
+        nombres_de_tipo_(
+            static_cast<const ast::ArrayTypeNode *>(t)->element_type.get(),
+            out);
+        break;
+    case ast::NodeKind::FunctionTypeNode: {
+        const auto *f = static_cast<const ast::FunctionTypeNode *>(t);
+        for (const auto &p : f->param_types) nombres_de_tipo_(p.get(), out);
+        nombres_de_tipo_(f->return_type.get(), out);
+        break;
+    }
+    default: break;
+    }
+}
+
+/// Reordena los @c TypeAliasDecl de un namespace fusionado para que cada uno
+/// vaya DESPUES de aquellos de los que deriva.
+///
+/// Solo se mueven los alias entre si: las posiciones que ocupaban se rellenan
+/// en el nuevo orden y el resto de decls no se toca.  Un alias que participa en
+/// un ciclo conserva su sitio -- callarlo o inventarle un orden esconderia un
+/// error que el type checker sabe nombrar.
+void ordenar_alias_por_dependencia_(
+    std::vector<std::unique_ptr<ast::Node>> &decls) {
+    std::vector<size_t> huecos; // posiciones que ocupan los alias
+    std::unordered_map<std::string, size_t> por_nombre;
+    for (size_t i = 0; i < decls.size(); ++i) {
+        if (!decls[i] || decls[i]->kind != ast::NodeKind::TypeAliasDecl)
+            continue;
+        por_nombre.emplace(
+            static_cast<ast::TypeAliasDecl *>(decls[i].get())->name,
+            huecos.size());
+        huecos.push_back(i);
+    }
+    if (huecos.size() < 2) return;
+
+    // Aristas alias -> alias del que deriva, restringidas a este namespace: un
+    // nombre de fuera ya esta resuelto cuando llega el pase.
+    const size_t n = huecos.size();
+    std::vector<std::vector<size_t>> deriva_de(n);
+    std::vector<std::string> nombres;
+    for (size_t k = 0; k < n; ++k) {
+        const auto *al =
+            static_cast<const ast::TypeAliasDecl *>(decls[huecos[k]].get());
+        nombres.clear();
+        nombres_de_tipo_(al->aliased.get(), nombres);
+        for (const auto &nm : nombres) {
+            auto it = por_nombre.find(nm);
+            if (it != por_nombre.end() && it->second != k)
+                deriva_de[k].push_back(it->second);
+        }
+    }
+
+    // DFS post-orden: cada alias se emite tras aquellos de los que deriva.  Un
+    // nodo en la pila actual (marca 1) cierra un ciclo; se deja pasar sin
+    // reordenar para que el diagnostico lo de quien sabe explicarlo.
+    std::vector<uint8_t> marca(n, 0); // 0 sin ver, 1 en pila, 2 emitido
+    std::vector<size_t> orden;
+    orden.reserve(n);
+    std::function<void(size_t)> visitar = [&](size_t k) {
+        if (marca[k] != 0) return;
+        marca[k] = 1;
+        for (size_t d : deriva_de[k]) visitar(d);
+        marca[k] = 2;
+        orden.push_back(k);
+    };
+    for (size_t k = 0; k < n; ++k) visitar(k);
+
+    std::vector<std::unique_ptr<ast::Node>> movidos(n);
+    for (size_t k = 0; k < n; ++k) movidos[k] = std::move(decls[huecos[k]]);
+    for (size_t k = 0; k < n; ++k)
+        decls[huecos[k]] = std::move(movidos[orden[k]]);
+}
+
 using NsToAllModnames =
     std::unordered_map<std::string, std::vector<std::string>>;
 NsToAllModnames
@@ -1156,18 +1252,22 @@ CompileResult compile_vx_project(
                 work[pidx].source += sec.source;
             }
             // El check de aliases (type_checker) es un SOLO pase ordenado: un
-            // `typedef usize size_t` (alias puro) exige que `usize` (newtype)
-            // ya este procesado.  Tras la fusion las decls quedan intercaladas;
-            // mover los alias PUROS (no-newtype) al final garantiza que sus
-            // underlying (newtypes del mismo ns) ya esten registrados.
-            std::stable_partition(
-                pns->decls.begin(), pns->decls.end(),
-                [](const std::unique_ptr<ast::Node> &d) {
-                    if (d && d->kind == ast::NodeKind::TypeAliasDecl)
-                        return static_cast<ast::TypeAliasDecl *>(d.get())
-                            ->is_newtype; // alias puro (false) -> al final
-                    return true;          // resto -> mantiene delante
-                });
+            // alias exige que el tipo del que se deriva ya este procesado.  El
+            // orden de las decls fusionadas no lo da el usuario -- lo da la
+            // fusion --, asi que ordenarlas es responsabilidad de aqui.
+            //
+            // Antes se movian los alias PUROS al final, dando por hecho que un
+            // newtype nunca deriva de otro newtype del mismo namespace.  Eso es
+            // falso: `typedef isize offset new` en el fichero base deriva de
+            // `typedef i64 isize new` del fichero del arch, y ambos son
+            // newtypes, asi que la particion los dejaba al reves y `std.types`
+            // -- del que depende media stdlib -- no compilaba suelto.
+            //
+            // Se ordenan por DEPENDENCIA REAL entre los alias del namespace,
+            // que es la condicion que el pase necesita, en vez de por una
+            // propiedad que se le parece.  Los ciclos se dejan en su sitio: el
+            // type checker es quien tiene que decir que un alias es circular.
+            ordenar_alias_por_dependencia_(pns->decls);
         }
     }
 

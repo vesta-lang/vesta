@@ -647,11 +647,20 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
         const bool color = hay_color(os);
         const analysis::asa::ObservacionModulo &fuente =
             mod_previo != nullptr ? modelo_previo : modelo_final;
-        uint32_t valores = 0, demostrados = 0, sin_cerrar = 0;
+        /* Tres cuentas distintas, porque responden a preguntas distintas:
+         * cuantos valores se MIRARON, de cuantos se demostro que tienen
+         * componentes, y cuantos quedaron con algo abierto.  Dar solo la
+         * primera hace creer que todos dicen algo; dar solo la segunda esconde
+         * lo que el analisis no alcanzo. */
+        uint32_t valores = 0, con_forma = 0, demostrados = 0, sin_cerrar = 0;
         {
             for (const auto &par : fuente.valores) {
                 const analysis::asa::AggregateFacts &a = par.second;
                 ++valores;
+                const analysis::asa::FormaDeValor f = a.forma();
+                if (f == analysis::asa::FormaDeValor::Agregado ||
+                    f == analysis::asa::FormaDeValor::Compuesto)
+                    ++con_forma;
                 if (a.sello.certeza == analysis::asa::Certeza::Demostrada)
                     ++demostrados;
                 if (!a.fronteras.empty() || !a.limitaciones.empty())
@@ -661,7 +670,8 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
         os << tinte(color, col::kFuerte, "Resumen") << ": "
            << mod.functions.size() << " funciones";
         if (valores > 0)
-            os << ", " << valores << " valores con componentes ("
+            os << ", " << valores << " valores observados (" << con_forma
+               << " con componentes, "
                << tinte(color, col::kVerde, std::to_string(demostrados))
                << " con forma demostrada, "
                << tinte(color, sin_cerrar ? col::kAmbar : col::kApagado,

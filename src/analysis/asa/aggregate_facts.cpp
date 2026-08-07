@@ -667,16 +667,19 @@ AggregateFactsMap observar_con_cache(const ir::IrModule &mod,
             observar(mod, fn, facts, pt, in.dst, o, kProfundidadFrontera,
                      RelacionAcceso::EnPropietario, u_raiz, cache);
 
-            /* Sin un solo acceso observado no hay evidencia de componentes: una
-             * reserva de 32 bytes que nadie toca no dice nada, y afirmar que es
-             * "un valor con componentes" por su tamano seria clasificar por la
-             * representacion -- justo lo que este dominio no hace.  Es la misma
-             * regla que ya se aplicaba a los parametros. */
-            bool hay_evidencia = false;
-            for (const AccesoComponente &ac : o.accesos)
-                if (ac.offset_sabido) { hay_evidencia = true; break; }
-            if (!hay_evidencia) continue;
-
+            /* Sin un solo acceso con desplazamiento conocido no hay evidencia de
+             * componentes: afirmarlo por el tamano seria clasificar por la
+             * representacion, justo lo que este dominio no hace.
+             *
+             * Pero eso decide la FORMA, no si el valor se observa: `a.forma()`
+             * ya devuelve "sin evidencia" en ese caso.  Descartar la
+             * observacion entera -- que es lo que se hacia -- tiraba con ella
+             * las fronteras y las limitaciones del valor, que son lo unico que
+             * explica POR QUE no hay evidencia: una reserva que se pasa a otra
+             * funcion y se pierde de vista deja de contarse como algo que el
+             * analisis no alcanzo y pasa a no existir.  Quien quiera solo los
+             * que tienen forma demostrada filtra por forma; eso es una
+             * proyeccion, no una perdida. */
             AggregateFacts a;
             a.ancla = in.dst;
             /* La identidad que cruza el pipeline: donde nace el valor en el

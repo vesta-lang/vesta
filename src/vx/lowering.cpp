@@ -22411,24 +22411,20 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         if (!native_poo_ &&
             e->target->result_type.kind == PrimitiveKind::STRING &&
             e->op == ast::AssignOp::AddAssign && e->value) {
-            /* Coercion: un literal RHS debe promoverse a StringObject (STRMAKE),
-             * no dejarse como STR_LIT_ADDR crudo (STRCAT espera handles).
+            /* El lado derecho YA esta bajado arriba, con la misma coercion que
+             * hace falta aqui: un literal se promueve a StringObject (STRMAKE)
+             * en vez de quedarse como STR_LIT_ADDR crudo, que es lo que STRCAT
+             * espera, y vale igual para el literal de una pieza y para el
+             * interpolado (la cadena de trozos la arma el mismo constructor).
              *
-             * Vale para los DOS: el literal a secas se resuelve de una pieza y
-             * el interpolado como la cadena de trozos que ya arma el mismo
-             * constructor.  Antes se excluia al interpolado, que salia por la
-             * ruta generica y devolvia cadena VACIA -- o sea que `s += "${x}"`
-             * borraba lo que se le pedia anadir. */
-            ir::IrValueId v_rhs;
-            if (e->value->kind == ast::NodeKind::StringLitExpr) {
-                v_rhs = lower_string_literal_to_string_object(
-                    static_cast<ast::StringLitExpr *>(e->value.get()));
-            } else {
-                v_rhs = lower_expr(e->value.get());
-            }
-            if (v_rhs == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+             * Volver a bajarlo aqui -- que es lo que se hacia -- emitia la
+             * expresion DOS veces y tiraba la primera.  Con un literal sale
+             * gratis, pero con `s += "${x}"` la conversion es una llamada
+             * nativa que escribe en un buffer de pila: dos reservas y dos
+             * llamadas por interpolacion, una de ellas muerta y que ningun
+             * DCE puede quitar porque la llamada tiene efectos. */
             const ir::IrValueId v_cat =
-                emit_strcat(cur, v_rhs, static_cast<uint32_t>(e->loc.line));
+                emit_strcat(cur, rhs, static_cast<uint32_t>(e->loc.line));
             write_local(id->name, v_cat, dst_ir, e->loc.line);
             return v_cat;
         }
