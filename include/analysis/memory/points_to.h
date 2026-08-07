@@ -42,6 +42,17 @@ struct PointsToEntry {
     uint32_t root = effects::LOC_GENERIC; ///< value-id de la raiz (o indice de param).
     int64_t  off = 0;                     ///< offset const desde la raiz.
     bool     off_exact = false;           ///< false = offset no probado (whole-root).
+    /**
+     * @brief Valor que aporta la parte NO CONSTANTE del desplazamiento.
+     *
+     * Un `buf[i]` no tiene offset constante, pero eso no es lo mismo que no
+     * saber nada: se sabe QUE valor lo decide.  Guardarlo permite acotarlo
+     * despues con su rango, que es la diferencia entre callarse ante cualquier
+     * acceso indexado y poder juzgarlo.
+     *
+     * @c IR_NO_VALUE (0xFFFFFFFF) = el desplazamiento no viene de un solo valor.
+     */
+    ir::IrValueId off_sym = 0xFFFFFFFFu;
 };
 
 /**

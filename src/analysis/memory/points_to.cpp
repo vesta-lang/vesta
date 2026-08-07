@@ -68,10 +68,15 @@ struct Resolver {
     }
 
     // Degrada una entrada concreta a "raiz conocida, offset inexacto".
-    static PointsToEntry inexact(PointsToEntry base) {
+    //
+    // @p sym, si se da, es el valor que aporta el desplazamiento variable: no
+    // se sabe CUANTO, pero si QUIEN, y con su rango se puede acotar despues.
+    static PointsToEntry inexact(PointsToEntry base,
+                                 ir::IrValueId sym = ir::IR_NO_VALUE) {
         if (base.kind == K::Unknown) return base;
         base.off = 0;
         base.off_exact = false;
+        base.off_sym = sym;
         return base;
     }
 
@@ -170,8 +175,8 @@ struct Resolver {
                 const PointsToEntry b = resolve(d->operands[1]);
                 const bool a_raiz = a.kind != K::Unknown && a.kind != K::None;
                 const bool b_raiz = b.kind != K::Unknown && b.kind != K::None;
-                if (a_raiz && !b_raiz) return inexact(a);
-                if (b_raiz && !a_raiz) return inexact(b);
+                if (a_raiz && !b_raiz) return inexact(a, d->operands[1]);
+                if (b_raiz && !a_raiz) return inexact(b, d->operands[0]);
             }
             return unknown();
         }

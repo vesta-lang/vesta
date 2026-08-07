@@ -2822,6 +2822,7 @@ r0_case("fuera_de_region_ok", "lo que cabe en su hueco no molesta: ultimo qword 
 fails_case("region375", "un acceso demostrablemente fuera de su region corta la compilacion", "375_fuera_de_region_mal.vx", "outside stack")
 fails_case("region376", "con tamano SIMBOLICO tambien se demuestra: el acceso se sale del mayor bloque posible", "376_rango_simbolico.vx", "outside")
 r0_case("rango_ok", "el rango tambien sirve para NO estorbar: acceso que cabe en cualquier tamano posible", "377_rango_ok.vx", 42)
+fails_case("region378", "un indice VARIABLE se juzga por su rango: el intervalo entero cae fuera del objeto", "378_indice_variable.vx", "outside")
 r0_case("ctor_importado", "construir un struct declarado en otro modulo", "362_ctor_importado.vx", 42)
 r0_case("ctor_comptime", "constructor comptime: recoge la llamada cuando ninguna sobrecarga encaja", "361_ctor_comptime.vx", 42)
 r0_case("enum_valor_importado", "enum con valor importado: conserva valores y compara por contenido", "359_enum_valor_importado.vx", 42)

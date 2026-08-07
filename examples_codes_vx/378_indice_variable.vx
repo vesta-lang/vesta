@@ -1,0 +1,22 @@
+namespace ejemplos.indice_variable;
+
+// NEGATIVO: debe FALLAR al compilar con VX3001.
+//
+// El desplazamiento NO es constante -- lo decide `n` --, y aun asi se juzga.
+// No saber CUANTO vale no es no saber nada: se sabe QUIEN lo decide, y con su
+// rango se acota.  `n & 7` no pasa de 7, luego el indice esta entre 100 y 107:
+// el intervalo ENTERO cae mas alla de los 16 bytes del objeto.
+//
+// Que se compruebe el intervalo entero, y no solo su extremo, es lo que separa
+// una prueba de una sospecha: un rango es una sobre-aproximacion, asi que con
+// que un extremo caiga fuera no basta.
+
+i64 mal(u64 n) {
+    u8[16] buf;
+    u8* p = &buf[0];
+    u64 i = 100 + (n & 7);
+    *(u64*)(p + i) = 1;
+    return (i64) buf[0];
+}
+
+i32 main() { return (i32) mal(3); }
