@@ -44,6 +44,10 @@ static ContractCheck p_pure(const FunctionSummary &s, ContractProfile profile) {
     const SemanticEffects &c = s.semantic.closure;
     si(k, c.mem.writes_memory(), R::EscribeMemoria);
     si(k, c.may_throw, R::PuedeLanzar);
+    /* Abortar tambien cuenta.  Una llamada que puede matar el proceso no se
+     * puede quitar ni mover como si no hiciera nada, y en nativo un panic ya
+     * no enciende `may_throw`: sin esto, una funcion que aborta salia pura. */
+    si(k, c.may_panic, R::PuedeAbortar);
     si(k, c.may_allocate, R::Aloca);
     si(k, c.may_io, R::HaceIO);
     si(k, c.may_block, R::Bloquea);
@@ -116,10 +120,18 @@ static ContractCheck p_nothrow(const FunctionSummary &s,
     return k;
 }
 
-/// nopanic: alias de nothrow para el FatalError de usuario (misma senal hoy).
+/// nopanic: no aborta por `panic` en el cierre.
+///
+/// Era un alias de `nothrow`, y dejo de valer al separar las dos senales: en
+/// nativo un panic no lanza nada -- llama al hook y no vuelve --, asi que con
+/// la senal de lanzar una funcion que aborta salia como `nopanic`.
 static ContractCheck p_nopanic(const FunctionSummary &s,
                                ContractProfile profile) {
-    return p_nothrow(s, profile);
+    (void)profile;
+    ContractCheck k;
+    si(k, s.completeness == AnalysisCompleteness::Unknown, R::AnalisisIncompleto);
+    si(k, s.semantic.closure.may_panic, R::PuedeAbortar);
+    return k;
 }
 
 /// deterministic: sin lecturas de reloj/random/pid/entorno ni I/O externa.
@@ -187,6 +199,7 @@ const char *contract_reason_code(ContractReason r) {
     case R::UsaMonton: return "VX2022";
     case R::UsaRecolector: return "VX2023";
     case R::NecesitaRuntime: return "VX2024";
+    case R::PuedeAbortar: return "VX2025";
     }
     return "VX2020";
 }

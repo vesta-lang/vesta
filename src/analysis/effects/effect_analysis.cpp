@@ -123,6 +123,11 @@ struct CallInfo {
     /// No es un callee desconocido -- el helper hace exactamente esa op, y su
     /// efecto ya esta modelado --, pero la funcion deja de ser hoja.
     bool                     runtime = false;
+    /// Llamadas NATIVAS por su nombre completo "lib:fn".  Van aparte porque
+    /// resuelven en DOS pasos (ver el cierre): el nombre completo y, si no
+    /// esta, el simbolo a secas -- que es como acaba llamandose cuando la
+    /// implementacion resulta ser codigo del propio lenguaje.
+    std::vector<std::string> native_callees;
 };
 CallInfo callees_of(const ir::IrFunction &fn, const EffectEnv &env) {
     CallInfo ci;
@@ -153,10 +158,8 @@ CallInfo callees_of(const ir::IrFunction &fn, const EffectEnv &env) {
                  * resuelta.  Anadirla como callee ausente la volveria a subir
                  * al efecto maximo y la declaracion no habria servido de nada. */
                 if (decls && decls->count(in.func_name)) break;
-                if (!in.func_name.empty())
-                    ci.static_callees.push_back(in.func_name);
-                else
-                    ci.dynamic = true;
+                if (!in.func_name.empty()) ci.native_callees.push_back(in.func_name);
+                else ci.dynamic = true;
                 break;
             case ir::IrOp::CALLVIRT:
             case ir::IrOp::CALLM:
@@ -171,6 +174,19 @@ CallInfo callees_of(const ir::IrFunction &fn, const EffectEnv &env) {
         }
     return ci;
 }
+/// Busca la implementacion de una nativa "lib:fn" entre las funciones del
+/// programa: primero por el nombre completo, luego por el simbolo a secas.
+/// nullptr = no esta, y entonces si es codigo ajeno.
+const FunctionSummary *resolver_nativa(const ModuleSummary &ms,
+                                       const std::string &lib_fn) {
+    auto it = ms.fns.find(lib_fn);
+    if (it != ms.fns.end()) return &it->second;
+    const size_t sep = lib_fn.rfind(':');
+    if (sep == std::string::npos || sep + 1 >= lib_fn.size()) return nullptr;
+    it = ms.fns.find(lib_fn.substr(sep + 1));
+    return it == ms.fns.end() ? nullptr : &it->second;
+}
+
 // Une el cierre del callee en el del caller (sin remapeo fino de ArgDerived:
 // v1 lo trata como Unknown -- conservador y sound).
 void merge_callee(SemanticEffects &caller, const SemanticEffects &callee) {
@@ -275,9 +291,19 @@ ModuleSummary EffectAnalysis::build_summary(
     //    otro modulo SI esta en el mapa -> se resuelve (interproc cross-modulo).
     // Reverse-callgraph: callee -> callers (para re-encolar dependientes).
     std::unordered_map<std::string, std::vector<std::string>> callers;
-    for (const auto &kv : calls)
+    for (const auto &kv : calls) {
         for (const std::string &callee : kv.second.static_callees)
             callers[callee].push_back(kv.first);
+        /* Las nativas cuentan igual: si su implementacion esta en el programa,
+         * cuando su cierre cambie hay que volver a mirar a quien la llama.  Por
+         * los DOS nombres, que no se sabe todavia cual resolvera. */
+        for (const std::string &callee : kv.second.native_callees) {
+            callers[callee].push_back(kv.first);
+            const size_t sep = callee.rfind(':');
+            if (sep != std::string::npos && sep + 1 < callee.size())
+                callers[callee.substr(sep + 1)].push_back(kv.first);
+        }
+    }
 
     // Recomputa el cierre de una funcion desde su local + los cierres de callees.
     // Devuelve true si cambio (para propagar a sus callers).
@@ -305,6 +331,22 @@ ModuleSummary EffectAnalysis::build_summary(
             merge_callee(nc, it->second.semantic.closure);
             if (uint8_t(it->second.completeness) > uint8_t(comp))
                 comp = it->second.completeness;
+        }
+        /* Las nativas, en dos pasos: "lib:fn" y, si no esta, "fn" a secas.  El
+         * segundo no es un apano: es como se llama la funcion cuando la
+         * implementacion resulta ser codigo del lenguaje -- el usuario redefine
+         * una primitiva en Vesta, o en nativo el runtime de I/O se trae de
+         * `vx_io.vx` y esas CALLN acaban siendo CALL a sus funciones.  Si esta
+         * delante hay que analizarla, no darla por ajena. */
+        for (const std::string &callee : ci.native_callees) {
+            const FunctionSummary *cs = resolver_nativa(out, callee);
+            if (!cs) {
+                nc = join(nc, SemanticEffects::top());
+                raise();
+                continue;
+            }
+            merge_callee(nc, cs->semantic.closure);
+            if (uint8_t(cs->completeness) > uint8_t(comp)) comp = cs->completeness;
         }
         if (!(nc == s.semantic.closure) || comp != s.completeness) {
             s.semantic.closure = nc;
@@ -336,10 +378,13 @@ ModuleSummary EffectAnalysis::build_summary(
     /* Ya convergido, se apunta UNA vez cada llamada a codigo que no esta en el
      * programa.  Hacerlo dentro del punto fijo contaba la misma llamada tantas
      * veces como vueltas diera. */
-    for (const auto &kv : calls)
+    for (const auto &kv : calls) {
         for (const std::string &callee : kv.second.static_callees)
             if (out.fns.find(callee) == out.fns.end())
                 gaps_.record_nativa(callee);
+        for (const std::string &callee : kv.second.native_callees)
+            if (!resolver_nativa(out, callee)) gaps_.record_nativa(callee);
+    }
     return out;
 }
 

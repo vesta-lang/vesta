@@ -152,6 +152,7 @@ CapabilityClass class_of(CapabilityTag t) {
 bool SemanticEffects::operator==(const SemanticEffects &o) const {
     return mem == o.mem && control == o.control && atomic == o.atomic &&
            may_trap == o.may_trap && may_throw == o.may_throw &&
+           may_panic == o.may_panic &&
            may_allocate == o.may_allocate && may_block == o.may_block &&
            may_io == o.may_io && determinism == o.determinism && tags == o.tags;
 }
@@ -172,6 +173,7 @@ SemanticEffects SemanticEffects::top() {
     // TODOS los efectos posibles (cubrir cada campo -- robusto).
     e.may_trap = true;
     e.may_throw = true;
+    e.may_panic = true;
     e.may_allocate = true;
     e.may_block = true;
     e.may_io = true;
@@ -219,6 +221,7 @@ SemanticEffects seq(const SemanticEffects &a, const SemanticEffects &b) {
     // may_*: OR.
     r.may_trap = a.may_trap || b.may_trap;
     r.may_throw = a.may_throw || b.may_throw;
+    r.may_panic = a.may_panic || b.may_panic;
     r.may_allocate = a.may_allocate || b.may_allocate;
     r.may_block = a.may_block || b.may_block;
     r.may_io = a.may_io || b.may_io;
@@ -243,6 +246,7 @@ SemanticEffects join(const SemanticEffects &a, const SemanticEffects &b) {
     r.atomic.is_fence = a.atomic.is_fence || b.atomic.is_fence;
     r.may_trap = a.may_trap || b.may_trap;
     r.may_throw = a.may_throw || b.may_throw;
+    r.may_panic = a.may_panic || b.may_panic;
     r.may_allocate = a.may_allocate || b.may_allocate;
     r.may_block = a.may_block || b.may_block;
     r.may_io = a.may_io || b.may_io;

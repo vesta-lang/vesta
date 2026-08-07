@@ -132,6 +132,70 @@ static void print_effects(std::ostream &os, const SemanticEffects &e) {
     if (!tags.empty()) os << "    tags       : " << tags << "\n";
 }
 
+/**
+ * @brief Los CONFLICTOS de memoria de una funcion, para que se puedan resolver.
+ *
+ * Un conflicto es lo que impide tratar dos accesos por separado: tocan memoria
+ * que puede ser la misma y al menos uno escribe.  Es lo que bloquea mover una
+ * lectura fuera de un bucle, eliminar una escritura o reordenar dos accesos, y
+ * hasta ahora se quedaba dentro del compilador: el informe decia el efecto de
+ * cada funcion pero no CONTRA QUE choca.  Sabiendolo, se puede cambiar el
+ * codigo -- separar los objetos, no aliasar, acotar un puntero -- y recuperar
+ * la optimizacion; sin saberlo solo queda adivinar.
+ *
+ * Se anclan en la LIBERACION porque es donde ademas hay un fallo que ensenar:
+ * un acceso a memoria ya liberada.  Solo se afirma dentro del mismo bloque y
+ * en orden -- ahi el "despues" es cierto, sin depender de por donde vaya el
+ * flujo --, y solo con localizaciones precisas: sobre "cualquier sitio" todo
+ * choca con todo y el aviso no diria nada.
+ */
+static void print_conflictos(std::ostream &os, EffectAnalysis &ea,
+                             const ir::IrFunction &fn) {
+    struct Acc {
+        uint32_t    line = 0;
+        bool        escribe = false;
+        AbstractLoc loc;
+    };
+    std::string out;
+    unsigned n = 0;
+    for (const ir::IrBlock &b : fn.blocks) {
+        // Accesos del bloque, en orden.  Uno por localizacion tocada.
+        std::vector<Acc> accs;
+        std::vector<size_t> libera; // indices de accs que son una liberacion
+        for (const ir::IrInstr &in : b.instrs) {
+            const EffectAnalysisResult r = ea.local(fn, in);
+            const bool es_free = (in.op == ir::IrOp::RAW_FREE ||
+                                  in.op == ir::IrOp::SMARTPTR_FREE);
+            auto anota = [&](const LocSet &ls, bool escribe) {
+                if (ls.is_top) return;
+                for (const AbstractLoc &l : ls.locs) {
+                    if (l.kind == AbstractLoc::Kind::Unknown ||
+                        l.kind == AbstractLoc::Kind::None)
+                        continue;
+                    if (es_free && escribe) libera.push_back(accs.size());
+                    accs.push_back({in.source_line, escribe, l});
+                }
+            };
+            anota(r.effects.mem.reads, false);
+            anota(r.effects.mem.writes, true);
+        }
+        for (size_t li : libera) {
+            for (size_t j = li + 1; j < accs.size() && n < 8; ++j) {
+                if (!may_alias(accs[li].loc, accs[j].loc)) continue;
+                LocSet uno;
+                uno.add(accs[li].loc);
+                out += "    " + loc_set_str(uno) + ": liberada en linea " +
+                       std::to_string(accs[li].line) + ", " +
+                       (accs[j].escribe ? "escrita" : "leida") + " despues en " +
+                       std::to_string(accs[j].line) + "\n";
+                ++n;
+            }
+        }
+    }
+    if (!out.empty())
+        os << "  Conflictos de memoria (acceso a memoria ya liberada):\n" << out;
+}
+
 void print_effects_report(std::ostream &os, const ir::IrModule &mod,
                           Backend backend) {
     EffectAnalysis ea;
@@ -186,7 +250,9 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
         print_effects(os, s.semantic.closure);
         os << "  Estructura: bloques=" << s.structural.block_count
            << " bucles=" << s.structural.loop_count
-           << (s.structural.recursive ? " recursiva" : "") << "\n\n";
+           << (s.structural.recursive ? " recursiva" : "") << "\n";
+        print_conflictos(os, ea, fn);
+        os << "\n";
     }
 
     // Reporte de LAGUNAS: hace visible que falta por modelar (cobertura) y donde

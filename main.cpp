@@ -2035,6 +2035,12 @@ int main(int argc, char *argv[]) {
         // coincidir con el binario que se generara).
         copts.fp_contract = !(result.count("ffp-contract") &&
                               result["ffp-contract"].as<std::string>() == "off");
+        /* Analizar PARA nativo es analizar el programa que va a existir alli,
+         * y ese no se parece al de la VM: el frontend baja distinto con POO
+         * nativa (sin ClassInfo, sin handles, y con las primitivas de I/O como
+         * simbolos en vez de opcodes).  Sin esto el informe describia la bajada
+         * de la VM con la etiqueta de AOT encima. */
+        copts.native_poo = (analyze_backend == analysis::effects::Backend::Aot);
         // Si el fuente tiene `import`, hay que ir por el compilador
         // multi-modulo, igual que hacen las demas rutas.  ANTES esta llamaba
         // siempre a `compile_vx_source` (un solo fichero), asi que analizar un
@@ -2071,6 +2077,59 @@ int main(int argc, char *argv[]) {
         if (!ir::parse_ir_module_cache(cr.ir_module_cache_bytes, amod_post)) {
             std::cerr << "[analyze] no se pudo deserializar el IR.\n";
             return EXIT_FAILURE;
+        }
+        /* En nativo, las primitivas de I/O no son codigo ajeno: el enlace se
+         * trae `stdlib/vx/vx_io.vx` y sus CALLN acaban llamando a esas
+         * funciones, escritas en Vesta.  Analizar sin ellas las daria por
+         * opacas -- justo lo contrario de lo que pasa alli --, asi que se
+         * traen tambien aqui.
+         *
+         * Cuando hacen falta se deduce del IR (quedan CALLN a un simbolo que
+         * ninguna funcion del modulo define), no copiando la condicion del
+         * enlazador: dos criterios para lo mismo se separan a la primera. */
+        if (analyze_backend == analysis::effects::Backend::Aot) {
+            std::unordered_set<std::string> definidas;
+            for (const auto &f : amod_post.functions) definidas.insert(f.name);
+            bool falta = false;
+            for (const auto &f : amod_post.functions)
+                for (const auto &b : f.blocks)
+                    for (const auto &in : b.instrs) {
+                        if (in.op != ir::IrOp::CALLN) continue;
+                        const size_t sep = in.func_name.rfind(':');
+                        if (sep == std::string::npos) continue;
+                        if (!definidas.count(in.func_name.substr(sep + 1)))
+                            falta = true;
+                    }
+            if (falta) {
+                const std::string exe_dir =
+                    std::filesystem::path(fs::get_executable_path())
+                        .parent_path()
+                        .string();
+                for (const std::string &c :
+                     {exe_dir + "/stdlib/vx/vx_io.vx",
+                      exe_dir + "/../stdlib/vx/vx_io.vx",
+                      std::string("stdlib/vx/vx_io.vx")}) {
+                    if (!std::filesystem::exists(c)) continue;
+                    vx::CompileOptions io_opts;
+                    io_opts.module_name = "vx_io";
+                    io_opts.opt_level = copts.opt_level;
+                    io_opts.native_poo = true;
+                    io_opts.asm_target_bits = copts.asm_target_bits;
+                    vx::CompileResult io_cr = vx::compile_vx_project(c, io_opts);
+                    ir::IrModule io_mod;
+                    if (io_cr.ok && !io_cr.ir_module_cache_bytes.empty() &&
+                        ir::parse_ir_module_cache(io_cr.ir_module_cache_bytes,
+                                                  io_mod)) {
+                        for (auto &f : io_mod.functions)
+                            if (!definidas.count(f.name))
+                                amod_post.functions.push_back(std::move(f));
+                        for (auto &ni : io_mod.native_imports)
+                            amod_post.register_native_import(ni.lib, ni.name,
+                                                             ni.efectos);
+                    }
+                    break;
+                }
+            }
         }
         analyze::ModuleCost mc_post = analyze::analyze_module(amod_post);
         analyze::compose_interproc(mc_post);

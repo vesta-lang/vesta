@@ -230,7 +230,12 @@ struct SemanticEffects {
     ControlEffect  control;
     Atomicity      atomic;
     bool           may_trap = false;     ///< fallo hw (div0, deref invalido).
-    bool           may_throw = false;    ///< lanza excepcion Vesta.
+    bool           may_throw = false;    ///< lanza excepcion Vesta (capturable).
+    /// Aborta por `panic`.  NO es lo mismo que lanzar, y por eso va aparte: en
+    /// la maquina virtual un panic es un FatalError que un `catch` recoge, y en
+    /// nativo llama al hook de panico y no vuelve.  Con una sola senal, decir
+    /// "no lanza" en nativo se leia como "no aborta".
+    bool           may_panic = false;
     bool           may_allocate = false; ///< aloca heap (GC/raw/newobj/closure-GC).
     bool           may_block = false;    ///< puede bloquear (await/monenter/msgrecv).
     bool           may_io = false;       ///< I/O observable.

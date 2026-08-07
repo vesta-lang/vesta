@@ -36,6 +36,7 @@ const CatEntry kEntries[] = {
     {"VX2022", {"uses the heap", "usa el monton"}},
     {"VX2023", {"uses the collector", "usa el recolector"}},
     {"VX2024", {"needs the runtime", "necesita el runtime"}},
+    {"VX2025", {"may abort (panic)", "puede abortar (panic)"}},
     {"VX4001", {"'{0}' is declared with @Target(\"{1}\"), which does not hold for this target -- that declaration is not available here", "'{0}' esta declarado con @Target(\"{1}\"), que no se cumple en este objetivo -- esa declaracion no esta disponible aqui"}},
     {"VX4002", {"'{0}' is only declared for other targets ({1}) -- no variant matches the target being compiled", "'{0}' solo esta declarado para otros objetivos ({1}) -- ninguna variante encaja con el objetivo que se esta compilando"}},
     {"VX7001", {"fatal error: null pointer", "error fatal: puntero nulo"}},
@@ -67,7 +68,7 @@ const CatEntry kEntries[] = {
     {"VXA009", {"asm: operand '{0}' pinned to '{1}' -- that register is reserved by the runtime in VM mode; this asm block cannot be JIT-compiled (runs in the interpreter)", "asm: operando '{0}' pineado a '{1}' -- ese registro esta reservado por el runtime en modo VM; este bloque asm no se puede compilar en JIT (corre en el interprete)"}},
     {"VXA010", {"asm: reassigns the stack pointer ('{0}') in a normal function; its epilogue manages the stack, so a persistent stack switch (coroutines/fibers) will not survive the return -- mark the function @Naked to own the stack, or balance the change (restore '{0}') before the block ends", "asm: reasigna el puntero de pila ('{0}') en una funcion normal; su epilogue gestiona la pila, asi que un cambio de pila persistente (corrutinas/fibras) no sobrevivira al retorno -- marca la funcion @Naked para ser dueno de la pila, o equilibra el cambio (restaura '{0}') antes de cerrar el bloque"}},
 };
-const int kEntryCount = 46;
+const int kEntryCount = 47;
 
 } // namespace
 

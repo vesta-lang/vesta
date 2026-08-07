@@ -131,6 +131,10 @@ es = "usa el recolector"
 en = "needs the runtime"
 es = "necesita el runtime"
 
+[VX2025]
+en = "may abort (panic)"
+es = "puede abortar (panic)"
+
 # --- modulos / namespaces (VX4xxx) ---
 
 [VX4001]

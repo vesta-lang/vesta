@@ -470,6 +470,12 @@ const EffTable &x86_effects_table() {
         add("pop", E({"rsp"}, true, true, false));
         // --- Control de flujo / no-ops: sin clobbers ---
         add("nop", E({}, false, false, false));
+        /* Trampas de depuracion: no tocan memoria ni registros; ceden el
+         * control al depurador (o abortan si no hay).  Salian como mnemonico
+         * sin tabular en cuanto se analizaba `vx_io.vx` para nativo, que usa
+         * `int3` en su ruta de fallo. */
+        add("int3", E({}, false, false, false));
+        add("ud2", E({}, false, false, false));
         add("ret", E({}, false, true, false));
         add("jmp", E({}, false, false, false));
         add("leave", E({"rsp", "rbp"}, false, true, false));

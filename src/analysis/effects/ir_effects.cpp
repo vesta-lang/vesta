@@ -212,6 +212,16 @@ const char *backend_name(Backend b) {
  */
 static void aplicar_backend(SemanticEffects &e, ir::IrOp op, Backend b) {
     if (b != Backend::Aot) return; // Vm y Jit comparten semantica.
+    /* Un `panic` nativo no lanza: llama al hook de panico (o a `exit`) y no
+     * vuelve.  No hay excepcion que capturar, asi que tampoco hay que
+     * arrastrar `may_throw` por todo el cierre -- una funcion que solo puede
+     * "fallar" por un panic es `nothrow` en nativo, y eso cambia lo que se
+     * puede hacer con ella. */
+    if (op == ir::IrOp::PANIC) {
+        e.may_throw = false;
+        e.control.kind = ControlKind::NoReturn;
+        return;
+    }
     if (aot_classify_op(op) != AotOpClass::RUNTIME_DEPENDENT) return;
     /* Solo si no cedia el control ya por si misma (una CALL sigue siendo una
      * CALL, y un RET no se convierte en llamada por pasar por el runtime). */
@@ -398,17 +408,39 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
         e.may_allocate = true;
         break;
 
-    // ---- Liberacion: invalida memoria (conservador: escribe Unknown) ----
+    /* ---- Liberacion: invalida LO QUE LIBERA, no toda la memoria ----
+     *
+     * Liberar un bloque invalida ese bloque y cuanto apunte dentro de el;
+     * lo demas sigue igual de valido que antes.  Y cual es se sabe: el
+     * operando es el puntero, y el mismo resolvedor que usan LOAD y STORE
+     * dice a que apunta.  Decir "escribe en cualquier sitio" convertia cada
+     * `free` -- y cada salida de ambito de un `unique<T>` -- en una barrera
+     * para todo lo que hubiera alrededor.
+     *
+     * Que otros punteros al MISMO objeto queden invalidos lo cubre la propia
+     * localizacion: comparten raiz, asi que cualquiera que pregunte por ellos
+     * ve el conflicto.  Y si no se puede resolver, se vuelve a lo de antes. */
     case IrOp::RAW_FREE: case IrOp::SMARTPTR_FREE:
-        add_write(e, {AbstractLoc::Kind::Unknown, LOC_GENERIC});
+        add_write(e, ops.empty() ? AbstractLoc{AbstractLoc::Kind::Unknown, LOC_GENERIC}
+                                 : loc(ops[0], 0 /*todo el objeto*/));
         break;
     case IrOp::GC_COLLECT: case IrOp::GC_FINALIZE_ALL:
         add_write(e, {AbstractLoc::Kind::Unknown, LOC_GENERIC});
         break;
 
     // ---- Excepciones ----
-    case IrOp::THROW: case IrOp::RETHROW: case IrOp::PANIC:
+    case IrOp::THROW: case IrOp::RETHROW:
         e.may_throw = true;
+        e.control.kind = ControlKind::Throw;
+        break;
+    /* `panic` no baja igual en todas partes, y la diferencia importa: en la VM
+     * lanza un FatalError, que se puede CAPTURAR con `try`/`catch`, asi que hay
+     * camino de vuelta; en nativo es el hook de panico (o `exit`) y de ahi no
+     * se vuelve.  Decir "lanza" en los dos casos hace creer que un `catch` de
+     * mas arriba lo recogera, y en nativo no hay tal.  Ver aplicar_backend. */
+    case IrOp::PANIC:
+        e.may_throw = true; // en la VM SI hay excepcion que capturar
+        e.may_panic = true;
         e.control.kind = ControlKind::Throw;
         break;
     case IrOp::UNWRAP:    // NullPointerException si null
@@ -454,6 +486,16 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
          * Antes se daba por caja negra aqui mismo, con lo que daba igual que el
          * destino estuviera delante: nadie llegaba a mirarlo. */
         e.control.kind = ControlKind::Call;
+        /* Sin nombre no hay nada que resolver ni a quien preguntar: eso si es
+         * opaco de verdad, y se dice aqui mismo con su motivo.  El caso con
+         * nombre lo resuelve el cierre, que es quien sabe si el destino esta en
+         * el programa. */
+        if (ins.func_name.empty()) {
+            e = SemanticEffects::top();
+            r.completeness = AnalysisCompleteness::Conservative;
+            r.unknown_reason = UnknownReason::UnknownFFI;
+            break;
+        }
         /* Y si el destino no esta pero alguien DIJO lo que hace, se usa.  La
          * declaracion habla de argumentos ("escribe el segundo"), y es aqui --
          * en el sitio de llamada -- donde eso se puede convertir en memoria

@@ -328,6 +328,47 @@ int main() {
               "IR: CALLN -> may_io + Conservative");
     }
     {
+        /* `panic` no baja igual en cada backend, y el efecto lo refleja: en la
+         * maquina virtual lanza un FatalError capturable con `try`; en nativo
+         * llama al hook de panico y no vuelve.  Un solo `may_throw` no podia
+         * decir las dos cosas -- en nativo daba a entender que un `catch` de
+         * mas arriba lo recogeria --, de ahi que abortar sea senal aparte. */
+        ir::IrFunction fp;
+        fp.name = "revienta";
+        uint32_t bp = fp.new_block("entry");
+        add_instr(fp, bp, ir::IrOp::PANIC, ir::IR_NO_VALUE, {});
+
+        EffectEnv vm;
+        const SemanticEffects e_vm = function_local_effects(fp, nullptr, vm).effects;
+        check(e_vm.may_throw && e_vm.may_panic &&
+                  e_vm.control.kind == ControlKind::Throw,
+              "IR: panic en la VM -> lanza (capturable) y aborta");
+
+        EffectEnv nat;
+        nat.backend = Backend::Aot;
+        const SemanticEffects e_nat = function_local_effects(fp, nullptr, nat).effects;
+        check(!e_nat.may_throw && e_nat.may_panic &&
+                  e_nat.control.kind == ControlKind::NoReturn,
+              "IR: panic en nativo -> aborta sin lanzar y no vuelve");
+    }
+    {
+        /* Liberar invalida LO QUE LIBERA, no toda la memoria.  Antes un `free`
+         * se anotaba como escritura en "cualquier sitio", asi que hacia de
+         * barrera para todo lo que hubiera alrededor. */
+        ir::IrFunction ff;
+        ff.name = "libera";
+        uint32_t bf = ff.new_block("entry");
+        ir::IrValueId h = ff.new_value(ir::IrType::PTR);
+        add_instr(ff, bf, ir::IrOp::RAW_ALLOC, h, {});
+        add_instr(ff, bf, ir::IrOp::RAW_FREE, ir::IR_NO_VALUE, {h});
+        const SemanticEffects e = function_local_effects(ff).effects;
+        bool preciso = !e.mem.writes.is_top;
+        for (const AbstractLoc &l : e.mem.writes.locs)
+            if (l.kind == AbstractLoc::Kind::Unknown) preciso = false;
+        check(preciso && e.mem.writes_memory(),
+              "IR: free invalida su bloque, no toda la memoria");
+    }
+    {
         // Dos ALLOCAs distintos NO aliasan (sites distintos).
         ir::IrFunction fn;
         fn.name = "twoslots";

@@ -89,6 +89,11 @@ enum class ContractReason : uint8_t {
     EscribeMemoria,      ///< escribe memoria en el cierre.
     PuedeAtrapar,        ///< puede provocar un fallo (division por cero, ...).
     PuedeLanzar,         ///< puede lanzar una excepcion.
+    /// Puede abortar por `panic`.  Aparte de PuedeLanzar porque no son lo
+    /// mismo: en la maquina virtual un panic se puede capturar, y en nativo
+    /// llama al hook de panico y no vuelve.  Con un solo motivo, un contrato
+    /// de nativo decia "puede lanzar" de algo que no lanza nada.
+    PuedeAbortar,
     Aloca,               ///< pide memoria.
     Bloquea,             ///< puede quedarse esperando.
     HaceIO,              ///< entrada/salida observable.

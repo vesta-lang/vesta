@@ -81,7 +81,7 @@ static void test_classify_op() {
           AotOpClass::PURE_NATIVE); // extern resuelto por linker
     CHECK(aot_classify_op(IrOp::INLINE_ASM) == AotOpClass::PURE_NATIVE);
     CHECK(aot_classify_op(IrOp::STR_LIT_ADDR) == AotOpClass::PURE_NATIVE);
-    CHECK(aot_classify_op(IrOp::ATOMIC_CAS_I64) == AotOpClass::PURE_NATIVE);
+    CHECK(aot_classify_op(IrOp::ATOMIC_CAS) == AotOpClass::PURE_NATIVE);
 
     // Libc-mapped: dependencias sintetizadas por el compilador.
     CHECK(aot_classify_op(IrOp::RAW_ALLOC) == AotOpClass::LIBC_MAPPED);
