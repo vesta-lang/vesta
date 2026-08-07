@@ -872,9 +872,29 @@ void ModuleGraph::build_namespace_index_() {
         for (; it != end; it.increment(ec)) {
             if (ec) { ec.clear(); continue; }
             const fs::directory_entry &de = *it;
-            if (!de.is_regular_file(ec)) continue;
             const fs::path &p = de.path();
+            /* No bajar a directorios ocultos.  Ahi es donde viven las caches
+             * de la propia construccion (`.cache`, `.vx_cache`), que jamas
+             * contienen fuentes y en cambio tienen miles de ficheros
+             * repartidos en subdirectorios: en un proyecto de 21 modulos, el
+             * recorrido veia 1620 entradas para encontrar 21 `.vx`.  Es la
+             * misma convencion que sigue cualquier herramienta que recorre un
+             * arbol de fuentes. */
+            {
+                const std::string nombre = p.filename().string();
+                if (nombre.size() > 1 && nombre[0] == '.' &&
+                    de.is_directory(ec)) {
+                    it.disable_recursion_pending();
+                    continue;
+                }
+            }
+            /* La extension PRIMERO: es una comparacion sobre lo que el
+             * recorrido ya trae, mientras que preguntar si es un fichero
+             * regular consulta el disco.  Al reves se pagaba una consulta por
+             * cada entrada, y junto a los fuentes conviven los .vxi/.vxir/.vel
+             * generados: en la stdlib son ~1500 entradas para 56 fuentes. */
             if (p.extension() != ".vx") continue;
+            if (!de.is_regular_file(ec)) continue;
             std::string canonical = normalize_path_(p.string(), "");
             std::string source;
             if (!read_file_(canonical, source)) continue;

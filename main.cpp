@@ -4297,18 +4297,33 @@ int main(int argc, char *argv[]) {
          * Sale de la construccion normal, sin un modo aparte que pedir. */
         {
             const auto &tf = cr.tiempos;
-            vesta::scout()
-                << "[vx] frontend: analisis " << tf.analisis_us << " us"
-                << " | tipos " << tf.tipos_us << " us"
-                << " | bajada " << tf.bajada_us << " us"
-                << " | emitir " << tf.emitir_us << " us"
-                << "   (comprobar " << tf.comprobar_us() << " us, total "
-                << tf.total_us() << " us)\n";
+            /* Un proyecto y un fichero suelto no se reparten igual: en el
+             * primero el trabajo esta en resolver el grafo y compilar cada
+             * modulo, y las fases de un unico fuente no aplican.  Se dice lo
+             * que corresponde en cada caso en vez de imprimir ceros. */
+            auto linea = vesta::scout();
+            if (tf.resolver_us > 0 || tf.modulos_us > 0) {
+                linea << "[vx] frontend: resolver " << tf.resolver_us << " us"
+                      << " | modulos " << tf.modulos_us << " us"
+                      << " | optimizar " << tf.optimizar_us << " us"
+                      << " | emitir " << tf.emitir_us << " us"
+                      << "   (total " << tf.total_us() << " us)\n";
+            } else {
+                linea << "[vx] frontend: analisis " << tf.analisis_us << " us"
+                      << " | tipos " << tf.tipos_us << " us"
+                      << " | bajada " << tf.bajada_us << " us"
+                      << " | emitir " << tf.emitir_us << " us"
+                      << "   (comprobar " << tf.comprobar_us() << " us, total "
+                      << tf.total_us() << " us)\n";
+            }
             nlohmann::json jf;
             jf["analisis_us"] = tf.analisis_us;
             jf["tipos_us"] = tf.tipos_us;
             jf["bajada_us"] = tf.bajada_us;
             jf["emitir_us"] = tf.emitir_us;
+            jf["resolver_us"] = tf.resolver_us;
+            jf["modulos_us"] = tf.modulos_us;
+            jf["optimizar_us"] = tf.optimizar_us;
             jf["comprobar_us"] = tf.comprobar_us();
             jf["frontend_total_us"] = tf.total_us();
             std::cout << "\n__VESTA_TIMES_FRONTEND__ " << jf.dump() << "\n";

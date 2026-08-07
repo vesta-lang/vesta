@@ -32,6 +32,7 @@
 #include "analyze/fingerprint.h" // verificacion de contratos
 #include "vx/incremental.h" // CAS global direccionado por contenido (cross-proyecto)
 #include <algorithm> // UCRT64: no transitivo
+#include <chrono>    // reparto del coste por fase
 #include <unordered_set>
 
 #include "ir/ir_emitter.h"
@@ -1090,6 +1091,20 @@ CompileResult compile_vx_project(
     const std::vector<std::string> *extra_search_paths) {
     CompileResult res;
 
+    /* Reparto del coste, con el mismo criterio que el camino de fichero
+     * suelto: se mide siempre, porque una medida que hay que pedir es una
+     * medida que nadie mira.  Aqui interesa sobre todo separar RESOLVER el
+     * grafo -- que crece con el numero de modulos -- de compilarlos. */
+    using RelojProyecto = std::chrono::steady_clock;
+    auto marca = RelojProyecto::now();
+    auto cerrar_fase = [&marca](long &destino) {
+        const auto ahora = RelojProyecto::now();
+        destino += (long)std::chrono::duration_cast<std::chrono::microseconds>(
+                       ahora - marca)
+                       .count();
+        marca = ahora;
+    };
+
     // 1. Construir el dep graph + topo sort.
     ModuleGraph graph(res.diagnostics);
     // LSP: overlay del buffer en memoria (root con ediciones sin guardar).  Se
@@ -1142,6 +1157,8 @@ CompileResult compile_vx_project(
         res.ok = false;
         return res;
     }
+
+    cerrar_fase(res.tiempos.resolver_us);
 
     // 2. Mover los AST parseados del graph a estructuras de trabajo.
     std::vector<ProjectModuleWork> work(topo.size());
@@ -3168,6 +3185,8 @@ CompileResult compile_vx_project(
     ir::IrModule ir_pre_dump;
     if (opts.dump_ir) ir_pre_dump = merged;
 
+    cerrar_fase(res.tiempos.modulos_us);
+
     // 5. Optimizar el IR mergeado.  En modo --analyze SIN inline: el coste
     //    PARCIAL es propiedad del cuerpo escrito -- si el inline lo alterase,
     //    dependeria del optimizador (`return this.swap(v)` es parcial O(1), no
@@ -3217,6 +3236,8 @@ CompileResult compile_vx_project(
         ir::ir_print(merged, ir_oss);
         res.ir_text = ir_oss.str();
     }
+
+    cerrar_fase(res.tiempos.optimizar_us);
 
     // 6. Emitir .vel desde el IR mergeado.
     ir::EmitOptions emit_opts;
@@ -3268,6 +3289,8 @@ CompileResult compile_vx_project(
     // single-file lo rellena en compile_vx_source; aqui lo rellenamos desde
     // el modulo mergeado de todos los .vx del proyecto.
     res.ir_module_cache_bytes = ir::emit_ir_module_cache(merged);
+
+    cerrar_fase(res.tiempos.emitir_us);
 
     // AOT.2.d: detectar @AllocatorOverride / @PanicHandler en el modulo ROOT,
     // igual que hace compile_vx_source.  Sin esto, un .vx que declara el

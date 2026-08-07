@@ -331,12 +331,25 @@ struct CompileResult {
         long bajada_us = 0;     ///< AST -> IR.
         long optimizar_us = 0;  ///< Pases sobre el IR.
         long emitir_us = 0;     ///< IR -> texto .vel.
+
+        /** Resolver el grafo de dependencias: averiguar QUE modulos entran en
+         *  la compilacion.  Solo se llena al compilar un proyecto (varios
+         *  modulos); en un fichero suelto no hay nada que resolver y vale 0.
+         *  Va aparte de @c analisis_us porque no es el mismo trabajo ni crece
+         *  igual: uno depende del tamano del fuente y este del NUMERO de
+         *  modulos y de si hay que redescubrirlos. */
+        long resolver_us = 0;
+        /** Compilar cada modulo del proyecto y fusionar su IR.  Incluye los
+         *  que se saltan por estar en cache, que es justo lo que se quiere
+         *  poder comparar. */
+        long modulos_us = 0;
+
         /// Hasta donde llega el diagnostico: analisis + tipos.  Es lo que
         /// esperaria quien solo quiere saber si su codigo esta bien.
         long comprobar_us() const { return analisis_us + tipos_us; }
         long total_us() const {
             return analisis_us + tipos_us + bajada_us + optimizar_us
-                   + emitir_us;
+                   + emitir_us + resolver_us + modulos_us;
         }
     };
     TiemposFrontend tiempos; ///< Reparto del coste del frontend.
