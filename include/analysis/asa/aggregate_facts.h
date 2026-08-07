@@ -515,12 +515,31 @@ struct IdentidadValor {
     uint32_t    linea = 0;
     uint32_t    indice = 0;    ///< columna, o numero de parametro si linea==0
     uint32_t    instancia = 0; ///< sitio de inlinado, si lo hay
+    /**
+     * @brief Cual de los que comparten sitio es, dentro de UN estado.
+     *
+     * El cuerpo de un macro se expande varias veces y cada expansion produce un
+     * valor distinto con la MISMA posicion del fuente.  Sin esto se colapsan y
+     * el informe repite la misma fila sin poder distinguirlas.
+     *
+     * Es un orden de aparicion, y por eso NO sirve para emparejar entre
+     * estados: si una transformacion se lleva uno de los del grupo, el resto se
+     * renumera.  Para eso esta la regla de multiplicidad de
+     * @c comparar_estados, que prefiere no emparejar a emparejar mal.
+     */
+    uint32_t    orden = 0;
 
+    /// Sin el @c orden: identifica el SITIO, no cual de los de ese sitio.
+    bool mismo_sitio(const IdentidadValor &o) const {
+        return funcion == o.funcion && linea == o.linea &&
+               indice == o.indice && instancia == o.instancia;
+    }
     bool operator<(const IdentidadValor &o) const {
         if (funcion != o.funcion) return funcion < o.funcion;
         if (linea != o.linea) return linea < o.linea;
         if (indice != o.indice) return indice < o.indice;
-        return instancia < o.instancia;
+        if (instancia != o.instancia) return instancia < o.instancia;
+        return orden < o.orden;
     }
 };
 
@@ -539,6 +558,16 @@ enum class TipoTransicion : uint8_t {
     CambiaForma = 2, ///< lo que hay que mirar: una transformacion no deberia
                      ///< alterar la naturaleza semantica de un valor.
     Aparece = 3,     ///< no estaba antes y esta despues.
+    /**
+     * @brief Varios valores comparten sitio y su numero cambio entre estados.
+     *
+     * Emparejarlos por orden de aparicion seria inventarse la correspondencia:
+     * si una transformacion se llevo uno del grupo, el resto se renumera y cada
+     * emparejamiento sale corrido.  Decir que no se puede es la respuesta
+     * honesta; una transicion equivocada es peor que ninguna, porque describe
+     * un cambio que no ocurrio.
+     */
+    NoEmparejable = 4,
 };
 
 const char *nombre_transicion(TipoTransicion t);

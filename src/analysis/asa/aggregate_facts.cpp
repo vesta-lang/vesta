@@ -742,12 +742,14 @@ const char *nombre_transicion(TipoTransicion t) {
     case TipoTransicion::Desaparece: return "desaparece";
     case TipoTransicion::CambiaForma: return "cambia-de-forma";
     case TipoTransicion::Aparece: return "aparece";
+    case TipoTransicion::NoEmparejable: return "no-emparejable";
     default: return "sobrevive";
     }
 }
 
 ObservacionModulo observar_modulo(const ir::IrModule &mod) {
     ObservacionModulo out;
+    std::map<IdentidadValor, uint32_t> por_sitio; // cuantos van de cada sitio
     CacheHechos cache; // una sola para todo el modulo: los hechos se consultan
     for (const ir::IrFunction &fn : mod.functions) {
         if (fn.blocks.empty()) continue;
@@ -760,6 +762,11 @@ ObservacionModulo observar_modulo(const ir::IrModule &mod) {
             id.linea = a.declaracion.linea;
             id.indice = a.declaracion.indice;
             id.instancia = a.instancia;
+            /* Varios valores pueden compartir sitio -- un macro expandido varias
+             * veces --, asi que se numeran por orden de aparicion DENTRO de este
+             * estado.  Sirve para distinguirlos aqui, no para emparejarlos con
+             * otro estado. */
+            id.orden = por_sitio[id]++;
             out.valores.emplace_back(std::move(id), std::move(a));
         }
     }
@@ -771,8 +778,34 @@ std::vector<TransicionValor> comparar_estados(const ObservacionModulo &antes,
     std::map<IdentidadValor, FormaDeValor> a_antes, a_despues;
     for (const auto &p : antes.valores) a_antes[p.first] = p.second.forma();
     for (const auto &p : despues.valores) a_despues[p.first] = p.second.forma();
+
+    /* Cuantos valores hay en cada SITIO a cada lado.  Si el numero cambio, el
+     * orden de aparicion ya no dice quien es quien: emparejar por posicion
+     * describiria cambios que no ocurrieron. */
+    auto sitio_de = [](IdentidadValor i) { i.orden = 0; return i; };
+    std::map<IdentidadValor, uint32_t> n_antes, n_despues;
+    for (const auto &kv : a_antes) ++n_antes[sitio_de(kv.first)];
+    for (const auto &kv : a_despues) ++n_despues[sitio_de(kv.first)];
+    auto emparejable = [&](const IdentidadValor &id) {
+        const IdentidadValor s = sitio_de(id);
+        auto a = n_antes.find(s);
+        auto b = n_despues.find(s);
+        const uint32_t na = a == n_antes.end() ? 0 : a->second;
+        const uint32_t nb = b == n_despues.end() ? 0 : b->second;
+        // Un solo valor en el sitio, o el mismo numero a los dos lados.
+        return (na <= 1 && nb <= 1) || na == nb;
+    };
+
     std::vector<TransicionValor> out;
     for (const auto &kv : a_antes) {
+        if (!emparejable(kv.first)) {
+            TransicionValor t;
+            t.valor = kv.first;
+            t.antes = kv.second;
+            t.tipo = TipoTransicion::NoEmparejable;
+            out.push_back(std::move(t));
+            continue;
+        }
         TransicionValor t;
         t.valor = kv.first;
         t.antes = kv.second;
@@ -788,6 +821,7 @@ std::vector<TransicionValor> comparar_estados(const ObservacionModulo &antes,
     }
     for (const auto &kv : a_despues) {
         if (a_antes.count(kv.first) != 0) continue;
+        if (!emparejable(kv.first)) continue; // ya se dijo desde el otro lado
         TransicionValor t;
         t.valor = kv.first;
         t.tipo = TipoTransicion::Aparece;

@@ -549,13 +549,15 @@ static void print_transiciones(std::ostream &os,
     const auto ts = analysis::asa::comparar_estados(antes, despues);
     if (ts.empty()) return;
     const bool color = hay_color(os);
-    uint32_t n_ido = 0, n_igual = 0, n_cambia = 0, n_nuevo = 0;
+    uint32_t n_ido = 0, n_igual = 0, n_cambia = 0, n_nuevo = 0,
+             n_sin_emparejar = 0;
     std::string detalle;
     for (const analysis::asa::TransicionValor &t : ts) {
         const std::string donde =
             t.valor.funcion +
             (t.valor.linea > 0 ? " linea " + std::to_string(t.valor.linea)
-                               : " parametro " + std::to_string(t.valor.indice));
+                               : " parametro " + std::to_string(t.valor.indice)) +
+            (t.valor.orden > 0 ? " #" + std::to_string(t.valor.orden + 1) : "");
         switch (t.tipo) {
         case analysis::asa::TipoTransicion::Sobrevive:
             ++n_igual;
@@ -578,6 +580,12 @@ static void print_transiciones(std::ostream &os,
                              "   (cambio semantico: revisar)") +
                        "\n";
             break;
+        case analysis::asa::TipoTransicion::NoEmparejable:
+            ++n_sin_emparejar;
+            detalle += "    " + tinte(color, col::kApagado, donde) +
+                       ": varios valores comparten sitio y cambio su numero; "
+                       "no se puede decir cual es cual\n";
+            break;
         case analysis::asa::TipoTransicion::Aparece:
             ++n_nuevo;
             detalle += "    " + tinte(color, col::kCian, donde) +
@@ -594,6 +602,10 @@ static void print_transiciones(std::ostream &os,
        << tinte(color, n_cambia ? col::kAmbar : col::kApagado,
                 std::to_string(n_cambia))
        << "\n";
+    if (n_sin_emparejar > 0)
+        os << "    sin poder emparejar: "
+           << tinte(color, col::kApagado, std::to_string(n_sin_emparejar))
+           << "  (varios valores en el mismo sitio del fuente)\n";
     os << detalle;
 }
 
