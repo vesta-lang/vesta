@@ -1,0 +1,21 @@
+namespace ejemplos.rango_simbolico;
+
+// NEGATIVO: debe FALLAR al compilar con VX3001.
+//
+// Aqui el tamano de la region NO es una constante: es `n`, y aun asi el acceso
+// se puede juzgar.  Basta con acotar cuanto puede valer `n`: es un `u8`, o sea
+// que el mayor bloque que puede pedir son 255 bytes.  Escribir en el 300 se
+// sale del mayor bloque posible, luego se sale siempre.
+//
+// La direccion importa: con la cota INFERIOR no se demostraria nada -- solo que
+// PODRIA salirse --, y una sospecha no es un error.  Se usa la superior.
+
+i64 mal(u8 n) {
+    u8* p = (u8*) malloc((u64) n);
+    *(i64*)(p + 300) = 1;
+    i64 v = *(i64*)(p + 300);
+    free(p);
+    return v;
+}
+
+i32 main() { return (i32) mal(200); }

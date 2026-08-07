@@ -12,6 +12,8 @@
 #include "analysis/effects/bounds.h"
 
 #include "analysis/effects/effect_analysis.h"
+#include "analysis/facts/ir_facts.h"
+#include "analysis/facts/value_range.h"
 #include "ir/ssa_ir.h"
 
 #include <cstdlib>
@@ -46,6 +48,10 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod) {
     for (const ir::IrFunction &fn : mod.functions) {
         if (fn.blocks.empty()) continue;
         const analysis::PointsTo &pt = ea.points_to_publico(fn);
+        /* Rangos de la funcion: es lo que permite juzgar una region de tamano
+         * simbolico.  Se calculan una vez por funcion, no por acceso. */
+        const analysis::IrFacts hechos = analysis::build_ir_facts(fn);
+        const analysis::RangeFacts rangos = analysis::compute_ranges(fn, hechos);
         for (const ir::IrBlock &b : fn.blocks) {
             for (const ir::IrInstr &in : b.instrs) {
                 const EffectAnalysisResult r = ea.local(fn, in);
@@ -63,8 +69,26 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod) {
                             l.kind != AbstractLoc::Kind::Heap)
                             continue;
                         const analysis::RegionExtent &ex = pt.extent_of(l.id);
-                        if (!ex.constante()) continue;
-                        const int64_t tope = ex.limite();
+                        int64_t tope = 0;
+                        int64_t objeto = 0;
+                        if (ex.constante()) {
+                            tope = ex.limite();
+                            objeto = ex.bytes;
+                        } else if (ex.simbolica()) {
+                            /* Tamano SIMBOLICO: se sabe QUE valor lo manda, y
+                             * con su rango se puede acotar.  Para AFIRMAR que
+                             * un acceso se sale hace falta pasarse del tamano
+                             * MAXIMO posible -- si el mayor `malloc` que ese
+                             * valor puede pedir no llega, ninguno llega.  Con
+                             * el minimo no se prueba nada: solo diria que
+                             * PODRIA salirse, y eso no es un error. */
+                            const ValueRange &rr = rangos.at(ex.sym);
+                            if (!rr.conocido || rr.hi < 0) continue;
+                            tope = rr.hi;
+                            objeto = rr.hi;
+                        } else {
+                            continue;
+                        }
                         const int64_t fin = l.off + l.width;
                         if (l.off >= 0 && fin <= tope) continue;
                         BoundsViolation v;
@@ -74,7 +98,7 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod) {
                         v.width = l.width;
                         v.off = l.off;
                         v.limite = tope;
-                        v.objeto = ex.bytes;
+                        v.objeto = objeto;
                         v.region = nombre_region(l.kind, l.id);
                         out.push_back(std::move(v));
                     }

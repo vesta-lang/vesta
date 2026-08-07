@@ -1,0 +1,21 @@
+namespace ejemplos.rango_ok;
+
+// Lo contrario del 376: el rango tambien sirve para NO estorbar.
+//
+// El tamano vuelve a ser simbolico, pero el acceso cabe en cualquier bloque que
+// ese valor pueda pedir, asi que no hay nada que decir.  Un comprobador que
+// avisara aqui seria el que la gente acaba apagando.
+
+u64 leer(u16 n) {
+    u8* p = (u8*) malloc(1024 + (u64) n);   // al menos 1024 bytes
+    *(u64*)(p + 8) = 41;                    // [8,16) cabe siempre
+    u64 v = *(u64*)(p + 8);
+    free(p);
+    return v;
+}
+
+i32 main() {
+    u64 r = leer(7) + 1;
+    println("r=${r}");
+    return (i32) r;
+}
