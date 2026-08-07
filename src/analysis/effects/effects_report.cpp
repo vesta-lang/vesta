@@ -374,21 +374,43 @@ static void print_conflictos(std::ostream &os, EffectAnalysis &ea,
  * Y lo que impide demostrar mas se dice tambien, con su sitio: es lo unico que
  * convierte un "no se" en algo accionable -- dice QUE habria que poder ver.
  */
-static void print_formas_de(std::ostream &os, const ir::IrModule &mod,
+/**
+ * @brief El conocimiento del modulo, observado UNA vez.
+ *
+ * Antes cada vista lo volvia a observar por su cuenta -- el resumen, las formas,
+ * la cobertura y las transiciones --, lo que ademas de repetir el trabajo
+ * impedia garantizar que dos vistas hablaran del MISMO grafo: nada obligaba a
+ * que dos recorridos independientes coincidieran.
+ *
+ * Ahora se observa una vez por estado y las vistas son proyecciones sobre eso,
+ * que es lo que el modelo pedia desde el principio: el texto es una proyeccion
+ * del conocimiento, no el conocimiento.
+ */
+struct ModeloFormas {
+    std::vector<std::pair<std::string, analysis::asa::AggregateFacts>> valores;
+};
+
+static ModeloFormas observar_modulo(const ir::IrModule &mod) {
+    ModeloFormas m;
+    for (const ir::IrFunction &fn : mod.functions) {
+        if (fn.blocks.empty()) continue;
+        const analysis::IrFacts h = analysis::build_ir_facts(fn);
+        for (const analysis::asa::AggregateFacts &a :
+             analysis::asa::observar_agregados(mod, fn, h).agregados)
+            m.valores.emplace_back(fn.name, a);
+    }
+    return m;
+}
+
+static void print_formas_de(std::ostream &os, const ModeloFormas &modelo,
                             const char *estado) {
     os << "  --- " << estado << " ---\n";
     /* Se ordena por lo que FALTA, no por orden de aparicion.  Un informe que
      * empieza por lo demostrado se lee y se cierra; uno que empieza por lo que
      * no se sabe dirige la atencion a donde hay algo que hacer.  Dentro de cada
      * grupo se conserva el orden del modulo, que es estable. */
-    std::vector<std::pair<std::string, analysis::asa::AggregateFacts>> todos;
-    for (const ir::IrFunction &fn : mod.functions) {
-        if (fn.blocks.empty()) continue;
-        const analysis::IrFacts h = analysis::build_ir_facts(fn);
-        for (const analysis::asa::AggregateFacts &a :
-             analysis::asa::observar_agregados(mod, fn, h).agregados)
-            todos.emplace_back(fn.name, a);
-    }
+    std::vector<std::pair<std::string, analysis::asa::AggregateFacts>> todos =
+        modelo.valores;
     auto urgencia = [](const analysis::asa::AggregateFacts &a) {
         // 0 = no se puede elegir, 1 = no se llego a observar, 2 = se sale o no
         // se pudo seguir, 3 = demostrado.  Menor va antes.
@@ -485,7 +507,7 @@ static void print_formas_de(std::ostream &os, const ir::IrModule &mod,
  * fronteras por las que el conocimiento se sale.  Es el mapa que dice DONDE
  * habria que mirar para saber mas.
  */
-static void print_cobertura_formas(std::ostream &os, const ir::IrModule &mod,
+static void print_cobertura_formas(std::ostream &os, const ModeloFormas &modelo,
                                    const char *estado) {
     uint32_t observados = 0, fronteras = 0, limitaciones = 0;
     uint32_t valores = 0, con_forma = 0, demostrados = 0;
@@ -493,11 +515,9 @@ static void print_cobertura_formas(std::ostream &os, const ir::IrModule &mod,
      * TRABAJO: dicen exactamente donde mirar para saber mas.  Un contador no
      * acciona nada; el nombre si. */
     std::map<std::string, uint32_t> sin_abrir;
-    for (const ir::IrFunction &fn : mod.functions) {
-        if (fn.blocks.empty()) continue;
-        const analysis::IrFacts h = analysis::build_ir_facts(fn);
-        for (const analysis::asa::AggregateFacts &a :
-             analysis::asa::observar_agregados(mod, fn, h).agregados) {
+    {
+        for (const auto &par : modelo.valores) {
+            const analysis::asa::AggregateFacts &a = par.second;
             ++valores;
             if (a.forma() != analysis::asa::FormaDeValor::SinEvidencia &&
                 a.forma() != analysis::asa::FormaDeValor::Desconocida)
@@ -556,16 +576,11 @@ struct ClaveValor {
 };
 
 static std::map<ClaveValor, analysis::asa::FormaDeValor>
-formas_del_modulo(const ir::IrModule &mod) {
+formas_del_modelo(const ModeloFormas &m) {
     std::map<ClaveValor, analysis::asa::FormaDeValor> out;
-    for (const ir::IrFunction &fn : mod.functions) {
-        if (fn.blocks.empty()) continue;
-        const analysis::IrFacts h = analysis::build_ir_facts(fn);
-        for (const analysis::asa::AggregateFacts &a :
-             analysis::asa::observar_agregados(mod, fn, h).agregados)
-            out[ClaveValor{fn.name, a.declaracion.linea, a.declaracion.indice}] =
-                a.forma();
-    }
+    for (const auto &par : m.valores)
+        out[ClaveValor{par.first, par.second.declaracion.linea,
+                       par.second.declaracion.indice}] = par.second.forma();
     return out;
 }
 
@@ -585,10 +600,10 @@ formas_del_modulo(const ir::IrModule &mod) {
  * ASA no juzga la transformacion: dice que se observo a cada lado.  Interpretar
  * si estuvo bien es del consumidor.
  */
-static void print_transiciones(std::ostream &os, const ir::IrModule &mod,
-                               const ir::IrModule &mod_previo) {
-    const auto antes = formas_del_modulo(mod_previo);
-    const auto despues = formas_del_modulo(mod);
+static void print_transiciones(std::ostream &os, const ModeloFormas &despues_m,
+                               const ModeloFormas &antes_m) {
+    const auto antes = formas_del_modelo(antes_m);
+    const auto despues = formas_del_modelo(despues_m);
     const bool color = hay_color(os);
     uint32_t n_ido = 0, n_igual = 0, n_cambia = 0;
     std::string detalle;
@@ -635,13 +650,13 @@ static void print_transiciones(std::ostream &os, const ir::IrModule &mod,
     os << detalle;
 }
 
-static void print_formas(std::ostream &os, const ir::IrModule &mod,
-                         const ir::IrModule *mod_previo) {
+static void print_formas(std::ostream &os, const ModeloFormas &final_m,
+                         const ModeloFormas *previo_m) {
     os << "=== Forma de los valores con componentes ===\n";
-    if (mod_previo != nullptr)
-        print_formas_de(os, *mod_previo, "tal como se escribio");
-    print_formas_de(os, mod, "en el codigo final");
-    if (mod_previo != nullptr) print_transiciones(os, mod, *mod_previo);
+    if (previo_m != nullptr)
+        print_formas_de(os, *previo_m, "tal como se escribio");
+    print_formas_de(os, final_m, "en el codigo final");
+    if (previo_m != nullptr) print_transiciones(os, final_m, *previo_m);
     os << "\n";
 }
 
@@ -650,6 +665,12 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
     EffectAnalysis ea;
     ea.set_backend(backend);
     const ModuleSummary &ms = ea.module_summary(mod);
+    /* El conocimiento se observa UNA vez por estado; las vistas de abajo son
+     * proyecciones sobre el.  Antes cada una lo recalculaba, y nada garantizaba
+     * que dos vistas hablaran del mismo grafo. */
+    const ModeloFormas modelo_final = observar_modulo(mod);
+    const ModeloFormas modelo_previo =
+        mod_previo != nullptr ? observar_modulo(*mod_previo) : ModeloFormas{};
 
     /* Se dice para QUIEN.  Un efecto no es una propiedad del IR a secas: las
      * ops que dependen del runtime son una instruccion en la maquina virtual y
@@ -661,13 +682,12 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
      * que mirar o no. */
     {
         const bool color = hay_color(os);
-        const ir::IrModule &fuente = mod_previo != nullptr ? *mod_previo : mod;
+        const ModeloFormas &fuente =
+            mod_previo != nullptr ? modelo_previo : modelo_final;
         uint32_t valores = 0, demostrados = 0, sin_cerrar = 0;
-        for (const ir::IrFunction &fn : fuente.functions) {
-            if (fn.blocks.empty()) continue;
-            const analysis::IrFacts h = analysis::build_ir_facts(fn);
-            for (const analysis::asa::AggregateFacts &a :
-                 analysis::asa::observar_agregados(fuente, fn, h).agregados) {
+        {
+            for (const auto &par : fuente.valores) {
+                const analysis::asa::AggregateFacts &a = par.second;
                 ++valores;
                 if (a.sello.certeza == analysis::asa::Certeza::Demostrada)
                     ++demostrados;
@@ -743,7 +763,7 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
     // La FORMA de los valores con componentes: saco de partes o unidad.  Va en
     // el informe y no detras de una variable de entorno porque es conocimiento
     // sobre el programa del usuario, no depuracion del compilador.
-    print_formas(os, mod, mod_previo);
+    print_formas(os, modelo_final, mod_previo != nullptr ? &modelo_previo : nullptr);
 
     // Reporte de LAGUNAS: hace visible que falta por modelar (cobertura) y donde
     // la opacidad es fundamental (oportunidades de opt del lado del usuario).
@@ -754,8 +774,8 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
     /* La cobertura tambien es de los DOS estados: contar solo el codigo
      * final decia "2 valores" de un programa cuyo fuente tiene ocho. */
     if (mod_previo != nullptr)
-        print_cobertura_formas(os, *mod_previo, "tal como se escribio");
-    print_cobertura_formas(os, mod, "en el codigo final");
+        print_cobertura_formas(os, modelo_previo, "tal como se escribio");
+    print_cobertura_formas(os, modelo_final, "en el codigo final");
     if (g.empty()) {
         os << "  efectos: todos se infirieron sin subir al maximo.\n";
         return;
