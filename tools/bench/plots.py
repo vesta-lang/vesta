@@ -10,6 +10,7 @@ imagen sobrecargada.
 """
 from __future__ import annotations
 import math
+import statistics
 from pathlib import Path
 from typing import Optional
 
@@ -391,8 +392,34 @@ def plot_boxplot_variability(rows: list[dict], langs: list[str],
 # Plot 5: per-bench (un PNG por bench con detalle individual)
 # =============================================================================
 
+def _resumen(runs: list[float]) -> Optional[dict]:
+    """p50 / cuartiles / MAD de una serie de medidas.
+
+    Duplica a proposito lo minimo del resumen del corredor: las graficas se
+    generan tambien desde un JSON antiguo, y depender de la version del
+    corredor para dibujar un dato que ya esta guardado seria acoplarlas sin
+    necesidad."""
+    if not runs:
+        return None
+    s = sorted(runs)
+    n = len(s)
+
+    def pct(q):
+        if n == 1:
+            return s[0]
+        i = q * (n - 1)
+        lo = int(i)
+        hi = min(lo + 1, n - 1)
+        return s[lo] + (s[hi] - s[lo]) * (i - lo)
+
+    p50 = statistics.median(s)
+    return {"p50": p50, "q1": pct(0.25), "q3": pct(0.75),
+            "mad": statistics.median([abs(x - p50) for x in s]),
+            "min": s[0], "max": s[-1]}
+
+
 def plot_per_bench(rows: list[dict], langs: list[str],
-                    out_dir: Path) -> int:
+                    out_dir: Path, suelo: Optional[dict] = None) -> int:
     """Genera 1 PNG por bench con barras horizontales + valores.
     Retorna numero de plots generados."""
     deps = _try_import()
@@ -400,6 +427,7 @@ def plot_per_bench(rows: list[dict], langs: list[str],
         return 0
     _, plt, np = deps
     out_dir.mkdir(parents=True, exist_ok=True)
+    suelo = suelo or {}
     count = 0
     for r in rows:
         valid = [(ln, r.get(ln)) for ln in langs
@@ -413,15 +441,41 @@ def plot_per_bench(rows: list[dict], langs: list[str],
         fastest = vals[0]
         ratios = [v / fastest for v in vals]
 
+        # Dispersion real de cada barra y suelo del lenguaje.  Una barra sin
+        # esto invita a leer como diferencia lo que puede ser la maquina.
+        corridas = r.get("_runs", {}) or {}
+        err_lo, err_hi, pisos = [], [], []
+        for ln, v in valid:
+            st = _resumen(corridas.get(ln) or [])
+            err_lo.append(max(0.0, v - st["q1"]) if st else 0.0)
+            err_hi.append(max(0.0, st["q3"] - v) if st else 0.0)
+            pisos.append((suelo.get(ln) or {}).get("p50") or 0.0)
+
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, max(3, len(valid) * 0.55)))
         # Panel 1: tiempo absoluto.
-        bars = ax1.barh(names, vals, color=colors, alpha=0.85)
+        bars = ax1.barh(names, vals, color=colors, alpha=0.85,
+                        xerr=[err_lo, err_hi], capsize=3,
+                        error_kw={"ecolor": "#333", "elinewidth": 1.2})
+        # El suelo, DENTRO de la barra y en gris: lo que se tarda en arrancar el
+        # proceso esta incluido en la medida, y en un bench corto puede ser casi
+        # toda la barra.  Verlo aparte es lo unico que evita atribuir al
+        # programa un tiempo que es del sistema operativo.
+        if any(p > 0 for p in pisos):
+            ax1.barh(names, [min(p, v) for p, v in zip(pisos, vals)],
+                     color="#000000", alpha=0.28,
+                     label="arranque del proceso")
+            ax1.legend(loc="lower right", fontsize=8)
         ax1.set_xscale("log")
-        ax1.set_xlabel("Wall time (ms, log)")
+        ax1.set_xlabel("Wall time (ms, log).  Barra de error = IQR de las "
+                       "muestras")
         ax1.set_title(f"{r['bench']} -- tiempo absoluto")
-        for bar, v in zip(bars, vals):
+        for bar, v, ln in zip(bars, vals, [x[0] for x in valid]):
+            st = _resumen(corridas.get(ln) or [])
+            etiqueta = f" {v:.1f} ms"
+            if st and st["p50"] > 0:
+                etiqueta += f"  +-{100.0 * st['mad'] / st['p50']:.0f}%"
             ax1.text(v, bar.get_y() + bar.get_height() / 2,
-                     f" {v:.1f} ms", va="center", fontsize=9)
+                     etiqueta, va="center", fontsize=9)
         ax1.grid(axis="x", which="both", alpha=0.3)
 
         # Panel 2: ratio vs el mas rapido (slowdown).
@@ -541,6 +595,106 @@ def plot_ranking_lines(rows: list[dict], langs: list[str],
     ax.legend(loc="lower right", fontsize=9, ncol=2)
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
+    plt.savefig(out_path, dpi=110, bbox_inches="tight")
+    plt.close(fig)
+
+    # Y ADEMAS, sin quitar nada de lo anterior, dos cosas que el puesto solo no
+    # puede decir.  Se emiten aparte porque son otra pregunta, no otra forma de
+    # dibujar la misma.
+    _plot_ranking_desglose(rows, langs, rank_data,
+                           out_path.with_name(out_path.stem + "_desglose"
+                                              + out_path.suffix))
+    return True
+
+
+def _plot_ranking_desglose(rows, langs, rank_data, out_path) -> bool:
+    """El puesto de cada lenguaje, uno por panel, y CUANTO vale ese puesto.
+
+    Once lineas superpuestas se leen mal, pero adelgazar el grafico tirando
+    lenguajes seria cambiar el problema por otro peor.  Aqui se dibuja lo mismo
+    una vez por lenguaje -- el suyo resaltado, los demas en gris de fondo -- asi
+    que no se pierde ni una medida y cada linea se puede seguir.
+
+    El color del punto anade lo que un puesto NO dice: la DISTANCIA al primero.
+    Ser segundo puede ser quedarse a un 2% o a diez veces, y en un ranking
+    ordinal las dos cosas se ven igual.
+    """
+    deps = _try_import()
+    if not deps:
+        return False
+    _, plt, _np = deps
+    n = len(rows)
+    presentes = [ln for ln in langs if any(v is not None for v in rank_data[ln])]
+    if not presentes:
+        return False
+
+    # Distancia al ganador de cada bench, por lenguaje (ratio, 1.0 = gana).
+    ratios = {ln: [] for ln in presentes}
+    for r in rows:
+        vals = [r.get(l) for l in presentes
+                if r.get(l) is not None and r.get(l, -1) > 0]
+        mejor = min(vals) if vals else None
+        for ln in presentes:
+            v = r.get(ln)
+            ratios[ln].append((v / mejor) if (v and mejor and v > 0) else None)
+
+    cols = 3
+    filas = (len(presentes) + cols - 1) // cols
+    fig, axes = plt.subplots(filas, cols, figsize=(6.2 * cols, 2.9 * filas),
+                             sharex=True, sharey=True)
+    axes = list(axes.flatten()) if hasattr(axes, "flatten") else [axes]
+    x = list(range(n))
+    for i, ln in enumerate(presentes):
+        ax = axes[i]
+        # Los demas, de fondo: el contexto no se quita, se atenua.
+        for otro in presentes:
+            if otro == ln:
+                continue
+            ys = [y if y is not None else float("nan")
+                  for y in rank_data[otro]]
+            ax.plot(x, ys, "-", linewidth=0.8, color="#cccccc", zorder=1)
+        ys = [y if y is not None else float("nan") for y in rank_data[ln]]
+        ax.plot(x, ys, "-", linewidth=2.0, zorder=2,
+                color=LANG_COLORS.get(ln, "#888"))
+        # Cada punto coloreado por su distancia al ganador.
+        for xi, (y, rt) in enumerate(zip(ys, ratios[ln])):
+            if y != y or rt is None:  # NaN
+                continue
+            if rt <= 1.05:
+                c, s = "#1a9850", 46      # empata con el mejor
+            elif rt <= 2.0:
+                c, s = "#fdae61", 38      # mismo orden de magnitud
+            elif rt <= 10.0:
+                c, s = "#d73027", 30
+            else:
+                c, s = "#7a0177", 24      # otra liga
+            ax.scatter([xi], [y], s=s, color=c, zorder=3,
+                       edgecolors="white", linewidths=0.6)
+        ax.set_title(LANG_LABELS.get(ln, ln), fontsize=10)
+        ax.grid(alpha=0.25)
+        ax.set_yticks(range(1, len(presentes) + 1))
+    for j in range(len(presentes), len(axes)):
+        axes[j].set_visible(False)
+    if axes:
+        axes[0].invert_yaxis()
+    # Los nombres de los benches van en todo panel que no tenga otro DEBAJO.
+    # Ponerlos solo en la ultima fila deja sin etiquetar los de la penultima
+    # cuando la ultima esta incompleta, y esos paneles se vuelven ilegibles.
+    for i in range(len(presentes)):
+        if i + cols < len(presentes):
+            continue
+        axes[i].set_xticks(x)
+        axes[i].set_xticklabels([r["bench"] for r in rows], rotation=90,
+                                fontsize=6)
+        axes[i].tick_params(labelbottom=True)
+
+    fig.suptitle("Ranking por lenguaje -- el MISMO dato del 06, una linea por "
+                 "panel para poder seguirla.\n"
+                 "El color del punto dice cuanto vale el puesto: "
+                 "verde = a menos del 5% del mejor,  naranja = hasta 2x,  "
+                 "rojo = hasta 10x,  morado = mas de 10x",
+                 fontsize=11)
+    plt.tight_layout(rect=(0, 0, 1, 0.94))
     plt.savefig(out_path, dpi=110, bbox_inches="tight")
     plt.close(fig)
     return True
@@ -787,8 +941,160 @@ def plot_system_info(sys_info: dict, out_path: Path) -> bool:
 # Generador maestro: produce TODAS las graficas en un directorio
 # =============================================================================
 
+def plot_ruido(rows: list[dict], langs: list[str], out_path: Path,
+               suelo: Optional[dict] = None) -> bool:
+    """Cuanto ruido tiene cada medida, y de donde sale.
+
+    Dos paneles, porque son dos preguntas:
+
+      - izquierda: de que lenguaje fiarse.  La dispersion de su MAD relativa a
+        lo largo de todos los benches, no un promedio: si un lenguaje es
+        estable en 25 benches y salvaje en 3, un solo numero lo esconde.
+      - derecha: POR QUE.  El ruido relativo contra lo que dura la medida.  Lo
+        que se ve es que las medidas cortas son las ruidosas -- y la linea del
+        suelo dice hasta donde eso es inevitable, porque por debajo de ella se
+        esta midiendo el arranque del proceso y no el programa.
+    """
+    deps = _try_import()
+    if not deps:
+        return False
+    _, plt, np = deps
+    suelo = suelo or {}
+
+    por_lang: dict[str, list[float]] = {}
+    puntos: list[tuple[float, float, str]] = []  # (p50, mad_pct, lang)
+    # Ruido de CADA celda (bench, lenguaje).  Es el dato de grano fino: un
+    # promedio por lenguaje dice de cuanto fiarse en general, pero no en cual de
+    # las 29 medidas hay que desconfiar, que es lo que hace falta para leer una
+    # fila concreta de la tabla.
+    celdas: dict[tuple[int, str], float] = {}
+    for i, r in enumerate(rows):
+        corridas = r.get("_runs", {}) or {}
+        for ln in langs:
+            st = _resumen(corridas.get(ln) or [])
+            if not st or st["p50"] <= 0:
+                continue
+            mad_pct = 100.0 * st["mad"] / st["p50"]
+            por_lang.setdefault(ln, []).append(mad_pct)
+            puntos.append((st["p50"], mad_pct, ln))
+            celdas[(i, ln)] = mad_pct
+    if not por_lang:
+        return False
+
+    presentes = [ln for ln in langs if ln in por_lang]
+    fig = plt.figure(figsize=(max(16, 0.55 * len(rows) + 8),
+                              7 + 0.42 * len(presentes)))
+    gs = fig.add_gridspec(2, 2, height_ratios=[1.15, 1.0], hspace=0.42,
+                          wspace=0.18)
+    ax0 = fig.add_subplot(gs[0, :])
+    ax1 = fig.add_subplot(gs[1, 0])
+    ax2 = fig.add_subplot(gs[1, 1])
+
+    # --- Panel de arriba: el ruido, celda a celda ---------------------------
+    matriz = [[celdas.get((i, ln), float("nan")) for i in range(len(rows))]
+              for ln in presentes]
+    im = ax0.imshow(matriz, aspect="auto", cmap="RdYlGn_r", vmin=0.0,
+                    vmax=max(10.0, min(25.0, max(
+                        (v for fila in matriz for v in fila
+                         if v == v), default=10.0))))
+    ax0.set_xticks(range(len(rows)))
+    ax0.set_xticklabels([r["bench"] for r in rows], rotation=90, fontsize=7)
+    ax0.set_yticks(range(len(presentes)))
+    ax0.set_yticklabels([LANG_LABELS.get(ln, ln) for ln in presentes],
+                        fontsize=8)
+    for y, fila in enumerate(matriz):
+        for x_, v in enumerate(fila):
+            if v != v:
+                continue
+            ax0.text(x_, y, f"{v:.0f}", ha="center", va="center", fontsize=5.5,
+                     color=("white" if v > 12.0 else "black"))
+    ax0.set_title("Ruido de CADA medida (MAD relativa, %) -- "
+                  "cuanto se mueve ese bench en ese lenguaje")
+    fig.colorbar(im, ax=ax0, fraction=0.018, pad=0.01, label="MAD relativa (%)")
+
+    orden = sorted(por_lang, key=lambda ln: statistics.median(por_lang[ln]))
+    datos = [por_lang[ln] for ln in orden]
+    bp = ax1.boxplot(datos, vert=False, patch_artist=True,
+                     labels=[LANG_LABELS.get(ln, ln) for ln in orden])
+    for caja, ln in zip(bp["boxes"], orden):
+        caja.set_facecolor(LANG_COLORS.get(ln, "#888"))
+        caja.set_alpha(0.75)
+    ax1.set_xlabel("MAD relativa (%) -- una marca por benchmark")
+    ax1.set_title("Ruido por lenguaje (mas a la izquierda = mas repetible)")
+    ax1.grid(axis="x", alpha=0.3)
+
+    for ln in orden:
+        xs = [p for p, _, l in puntos if l == ln]
+        ys = [m for _, m, l in puntos if l == ln]
+        ax2.scatter(xs, ys, s=34, alpha=0.8, label=LANG_LABELS.get(ln, ln),
+                    color=LANG_COLORS.get(ln, "#888"))
+    ax2.set_xscale("log")
+    ax2.set_xlabel("Duracion de la medida (ms, log).  "
+                   "Los triangulos marcan el suelo de cada lenguaje")
+    ax2.set_ylabel("MAD relativa (%)")
+    ax2.set_title("El ruido vive en las medidas cortas")
+    ax2.grid(alpha=0.3)
+    if suelo:
+        # El suelo de CADA lenguaje, en su color y al pie del eje.  Sombrear una
+        # franja comun diria que toda medida corta es dudosa, y eso solo vale
+        # para el lenguaje que mas tarda en arrancar: un binario nativo mide
+        # bien a 3 ms y la JVM no.  Atribuir el limite a quien es corrige eso.
+        y0 = ax2.get_ylim()[0]
+        for ln in orden:
+            piso = (suelo.get(ln) or {}).get("p50")
+            if not piso:
+                continue
+            ax2.plot([piso], [y0], marker="^", markersize=9, clip_on=False,
+                     color=LANG_COLORS.get(ln, "#888"),
+                     markeredgecolor="black", markeredgewidth=0.5)
+        minimo = min((s.get("p50") or 0.0) for s in suelo.values() if s)
+        if minimo > 0:
+            # Por debajo del suelo MAS BAJO no mide nadie: ahi no hay programa
+            # que medir, solo arranque.
+            ax2.axvspan(ax2.get_xlim()[0], minimo, color="grey", alpha=0.10)
+    ax2.legend(fontsize=7, ncol=2, loc="upper right", framealpha=0.9)
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=110, bbox_inches="tight")
+    plt.close(fig)
+    return True
+
+
+def plot_suelo(suelo: dict, langs: list[str], out_path: Path) -> bool:
+    """Lo que tarda cada lenguaje en ejecutar un programa que no hace nada.
+
+    Es el minimo por debajo del cual ninguna medida de ese lenguaje puede
+    bajar, y esta dentro de todas ellas.
+    """
+    deps = _try_import()
+    if not deps or not suelo:
+        return False
+    _, plt, _np = deps
+    orden = sorted((ln for ln in langs if ln in suelo),
+                   key=lambda ln: suelo[ln]["p50"])
+    if not orden:
+        return False
+    vals = [suelo[ln]["p50"] for ln in orden]
+    errs = [suelo[ln].get("mad", 0.0) for ln in orden]
+    fig, ax = plt.subplots(figsize=(11, max(3, len(orden) * 0.45)))
+    ax.barh([LANG_LABELS.get(ln, ln) for ln in orden], vals,
+            xerr=errs, capsize=3,
+            color=[LANG_COLORS.get(ln, "#888") for ln in orden], alpha=0.85)
+    for i, v in enumerate(vals):
+        ax.text(v, i, f" {v:.1f} ms", va="center", fontsize=9)
+    ax.set_xscale("log")
+    ax.set_xlabel("ms (log) -- arrancar el proceso y levantar su runtime")
+    ax.set_title("Suelo de cada lenguaje: esta DENTRO de cada medida")
+    ax.grid(axis="x", which="both", alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=110, bbox_inches="tight")
+    plt.close(fig)
+    return True
+
+
 def generate_all(rows: list[dict], langs: list[str], plot_dir: Path,
-                 sys_info: Optional[dict] = None) -> dict:
+                 sys_info: Optional[dict] = None,
+                 suelo: Optional[dict] = None) -> dict:
     """Genera todas las graficas en @c plot_dir .  Retorna dict con
     {nombre_plot: bool_ok} para que el caller reporte que se genero.
     """
@@ -814,8 +1120,16 @@ def generate_all(rows: list[dict], langs: list[str], plot_dir: Path,
         rows, langs, plot_dir / "07_grouped_ratio.png")
     results["08_geomean"] = plot_geomean_summary(
         rows, langs, plot_dir / "08_geomean_summary.png")
+    results["09_ruido"] = plot_ruido(
+        rows, langs, plot_dir / "09_ruido.png", suelo)
+    # El suelo solo se puede dibujar si se midio.  Un JSON anterior a que
+    # existiera no lo trae, y eso no es un fallo de la grafica: decir FAIL
+    # invitaria a buscar un error donde solo falta un dato.
+    if suelo:
+        results["10_suelo"] = plot_suelo(
+            suelo, langs, plot_dir / "10_suelo.png")
     # Per-bench: subdir.
     per_bench_dir = plot_dir / "per_bench"
-    count = plot_per_bench(rows, langs, per_bench_dir)
+    count = plot_per_bench(rows, langs, per_bench_dir, suelo)
     results[f"per_bench ({count} archivos)"] = count > 0
     return results

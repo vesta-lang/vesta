@@ -1064,41 +1064,184 @@ def colored_time(ms: float, color: str) -> str:
     return f"{color}{ms:>10.1f}{C.RESET}"
 
 
+def _percentil(ordenados: list[float], q: float) -> float:
+    """Percentil @p q (0..1) con interpolacion lineal sobre @p ordenados."""
+    n = len(ordenados)
+    if n == 1:
+        return ordenados[0]
+    idx = q * (n - 1)
+    lo = int(idx)
+    hi = min(lo + 1, n - 1)
+    return ordenados[lo] + (ordenados[hi] - ordenados[lo]) * (idx - lo)
+
+
 def _stats_summary(runs: list[float]) -> dict:
-    """min/p50/p95/max/stddev en ms para una lista de runs."""
+    """Resumen de una serie de medidas, en ms.
+
+    La ESTIMACION es la MEDIANA, no la media.  Diez ejecuciones no dan por si
+    solas un numero mas fiable: dan una muestra, y basta una interferencia del
+    sistema para que la media deje de describir lo que el programa tarda en
+    condiciones normales.  Con 10,10,11,10,10,10,11,10,10,48 la media dice 13
+    -- un tiempo que no ocurrio nunca -- y la mediana dice 10, que es lo que
+    pasa casi siempre.
+
+    Ese 48 no se esconde: es lo que miden la MAD y el IQR, que son las medidas
+    de dispersion que corresponden a una mediana (la desviacion tipica arrastra
+    el mismo problema que la media).  La media se conserva como dato
+    SECUNDARIO, porque compararla con la mediana es justo lo que delata que
+    hubo un valor atipico.
+    """
     if not runs:
         return {}
     sorted_r = sorted(runs)
     n = len(sorted_r)
     p50 = statistics.median(sorted_r)
-    # p95 con interpolacion linear simple.
-    idx = 0.95 * (n - 1)
-    lo = int(idx)
-    hi = min(lo + 1, n - 1)
-    frac = idx - lo
-    p95 = sorted_r[lo] + (sorted_r[hi] - sorted_r[lo]) * frac
+    q1 = _percentil(sorted_r, 0.25)
+    q3 = _percentil(sorted_r, 0.75)
+    # MAD: mediana de las desviaciones absolutas respecto a la mediana.  Un
+    # atipico mueve la MAD mucho menos que la desviacion tipica, que es
+    # precisamente lo que se quiere de una medida de dispersion robusta.
+    mad = statistics.median([abs(x - p50) for x in sorted_r])
+    media = statistics.fmean(sorted_r)
     return {
         "min": sorted_r[0],
+        "q1": q1,
         "p50": p50,
-        "p95": p95,
+        "q3": q3,
+        "p95": _percentil(sorted_r, 0.95),
         "max": sorted_r[-1],
+        "iqr": q3 - q1,
+        "mad": mad,
+        # Dispersion RELATIVA: lo unico comparable entre un bench de 4 ms y uno
+        # de 900 ms.  Es el "cuanto ruido tiene esto" de cada fila.
+        "mad_pct": (100.0 * mad / p50) if p50 > 0 else 0.0,
+        "iqr_pct": (100.0 * (q3 - q1) / p50) if p50 > 0 else 0.0,
+        "mean": media,
+        # Cuanto se separa la media de la mediana, en %.  Grande = hay cola.
+        "sesgo_pct": (100.0 * (media - p50) / p50) if p50 > 0 else 0.0,
         "stddev": (statistics.stdev(sorted_r) if n >= 2 else 0.0),
         "n": n,
     }
 
 
-def print_verbose_stats_table(rows: list[dict], active_langs: list[str],
-                                tc: dict[str, Toolchain]) -> None:
-    """Tabla con min/p50/p95/max/stddev por (bench, lang).
+def _color_ruido(mad_pct: float) -> str:
+    """Color segun cuanto ruido tiene una medida (no es un juicio: es una guia
+    de lectura -- por encima de cierto punto el numero ya no distingue)."""
+    if mad_pct < 2.0:
+        return C.GREEN
+    if mad_pct < 5.0:
+        return C.YELLOW
+    return C.RED
 
-    Sprint bench-stats: la mediana sola oculta la variancia.  Esta tabla
-    expone los percentiles para identificar benches inestables (stddev
-    alto -> ruido del SO, GC pauses, JIT recompile, etc.).
+
+# Programa que no hace NADA, por lenguaje.  Lo que tarda en ejecutarse es el
+# suelo de ese lenguaje en esta maquina: arrancar el proceso, cargar el binario
+# y levantar su runtime.  Ese tiempo esta DENTRO de cada medida de la tabla
+# principal, y en un bench de 4 ms puede ser la mayor parte.
+FUENTES_VACIAS: dict[str, tuple[str, str]] = {
+    # lang -> (nombre de fichero, fuente)
+    "c": ("suelo.c", "int main(void) { return 0; }\n"),
+    "cpp": ("suelo.cpp", "int main() { return 0; }\n"),
+    "python": ("suelo.py", "pass\n"),
+    "java": ("Main.java",
+             "public class Main { public static void main(String[] a) {} }\n"),
+    "go": ("suelo.go", "package main\n\nfunc main() {}\n"),
+    "rust": ("suelo.rs", "fn main() {}\n"),
+    "vx": ("suelo.vx", "i32 main(string[] args) { return 0; }\n"),
+}
+
+
+def medir_suelo(active_langs: list[str], work_dir: Path,
+                compilar_para, runs: int, timeout: float) -> dict:
+    """Cuanto tarda cada lenguaje en NO hacer nada.
+
+    Sin esto, comparar un bench de 4 ms entre lenguajes compara en buena parte
+    sus arranques.  El numero no se corrige por la espalda -- la tabla principal
+    sigue diciendo el tiempo real, que es lo que el usuario mide -- pero se
+    publica al lado, para que se vea cuanto de cada medida es el programa y
+    cuanto es el sistema operativo levantando un proceso.
+    """
+    suelo: dict[str, dict] = {}
+    base = work_dir / "_suelo"
+    base.mkdir(parents=True, exist_ok=True)
+    for ln in active_langs:
+        clave = "vx" if ln in VX_LANGS else ln
+        pareja = FUENTES_VACIAS.get(clave)
+        if pareja is None:
+            continue
+        nombre, fuente = pareja
+        # Java exige que el fichero se llame como la clase; el resto no, pero
+        # se les da un directorio propio igualmente para no pisarse.
+        dir_ln = base / ln
+        dir_ln.mkdir(exist_ok=True)
+        src = dir_ln / nombre
+        try:
+            src.write_text(fuente, encoding="utf-8")
+        except OSError:
+            continue
+        variant = BenchVariant(lang=clave, src_path=src,
+                               bench_name=f"suelo_{ln}")
+        try:
+            res = compilar_para(ln, variant)
+        except Exception:  # noqa: BLE001
+            res = None
+        if res is None:
+            continue
+        cmd, cwd, _factor = res
+        muestras = all_runs(cmd, env=None, runs=runs, timeout=timeout,
+                            cwd=cwd, warmup=1)
+        if muestras:
+            suelo[ln] = _stats_summary(muestras)
+    return suelo
+
+
+def print_suelo_table(suelo: dict, active_langs: list[str],
+                      tc: dict[str, Toolchain]) -> None:
+    """Publica el suelo medido, ordenado."""
+    if not suelo:
+        return
+    print()
+    print(f"{C.BOLD}Suelo del lenguaje (ms) -- lo que tarda un programa que "
+          f"no hace nada{C.RESET}")
+    print(f"{C.DIM}  Esta DENTRO de cada medida de la tabla principal.  En un "
+          f"bench corto puede ser casi todo el numero.{C.RESET}")
+    orden = sorted((ln for ln in active_langs if ln in suelo),
+                   key=lambda ln: suelo[ln]["p50"])
+    if not orden:
+        return
+    peor = suelo[orden[-1]]["p50"] or 1.0
+    for ln in orden:
+        s = suelo[ln]
+        barra = ascii_bar(s["p50"], peor, width=24, color=tc[ln].color)
+        print(f"  {tc[ln].color}{tc[ln].label:<22}{C.RESET}"
+              f"{s['p50']:>8.1f}  +-{s['mad']:>5.2f}  {barra}")
+
+
+def print_verbose_stats_table(rows: list[dict], active_langs: list[str],
+                                tc: dict[str, Toolchain],
+                                suelo: Optional[dict] = None) -> None:
+    """Estimacion + dispersion por (bench, lang).
+
+    La columna que manda es @c p50 (la estimacion).  A su lado va la MAD, que
+    dice cuanto se mueve; y detras la MEDIA, que solo sirve para comparar: si se
+    separa de la mediana, hubo cola.
+
+    Si se midio el suelo del lenguaje (arranque del proceso + init del runtime),
+    aparece tambien el tiempo NETO: lo que queda al descontarlo.  En un bench de
+    4 ms con 3 ms de arranque, el numero de la tabla principal habla mas del
+    sistema operativo que del programa.
     """
     print()
-    print(f"{C.BOLD}{'Stats detalladas (ms)':<22}"
-          f"{'min':>10}{'p50':>10}{'p95':>10}{'max':>10}{'sdev':>9}{C.RESET}")
-    print("-" * 90)
+    tiene_suelo = bool(suelo)
+    cab = (f"{'Estimacion y ruido (ms)':<32}{'p50':>9}{'MAD':>8}{'MAD%':>8}"
+           f"{'IQR':>8}{'media':>9}{'min':>8}{'max':>8}")
+    if tiene_suelo:
+        cab += f"{'neto':>9}"
+    print(f"{C.BOLD}{cab}{C.RESET}")
+    print(f"{C.DIM}  p50 = estimacion   MAD = dispersion robusta   "
+          f"media = dato secundario (si difiere del p50, hubo atipico)"
+          f"{C.RESET}")
+    print("-" * (len(cab) + 2))
     for row in rows:
         runs_map = row.get("_runs", {})
         for ln in active_langs:
@@ -1110,11 +1253,128 @@ def print_verbose_stats_table(rows: list[dict], active_langs: list[str],
                 continue
             label = f"  {row['bench']}/{ln}"
             color = tc[ln].color
-            sdev_pct = (100.0 * s["stddev"] / s["p50"]) if s["p50"] > 0 else 0.0
-            print(f"{color}{label:<22}{C.RESET}"
-                  f"{s['min']:>10.1f}{s['p50']:>10.1f}{s['p95']:>10.1f}"
-                  f"{s['max']:>10.1f}{sdev_pct:>8.1f}%")
-    print("-" * 90)
+            cr = _color_ruido(s["mad_pct"])
+            linea = (f"{color}{label:<32}{C.RESET}"
+                     f"{s['p50']:>9.1f}{s['mad']:>8.2f}"
+                     f"{cr}{s['mad_pct']:>7.1f}%{C.RESET}"
+                     f"{s['iqr']:>8.2f}{s['mean']:>9.1f}"
+                     f"{s['min']:>8.1f}{s['max']:>8.1f}")
+            if tiene_suelo:
+                piso = (suelo.get(ln) or {}).get("p50")
+                if piso is None:
+                    linea += f"{'-':>9}"
+                else:
+                    neto = s["p50"] - piso
+                    # Un neto <= 0 no es un error de medida que haya que
+                    # esconder: dice que el bench no se distingue del arranque.
+                    linea += (f"{C.DIM}{'~0':>9}{C.RESET}" if neto <= 0.0
+                              else f"{neto:>9.1f}")
+            print(linea)
+    print("-" * (len(cab) + 2))
+
+
+def print_samples_table(rows: list[dict], active_langs: list[str],
+                        tc: dict[str, Toolchain]) -> None:
+    """TODAS las muestras, una fila por lenguaje.
+
+    Un resumen es una interpretacion; las muestras son el dato.  Verlas en fila
+    es lo unico que deja ver de un vistazo la forma de la serie -- si es plana,
+    si sube, si hay un salto suelto --, y eso ningun estadistico lo dice.  La
+    mediana va marcada con `*` para poder situarla entre las demas.
+    """
+    print()
+    print(f"{C.BOLD}Muestras individuales (ms) -- una fila por lenguaje{C.RESET}")
+    print(f"{C.DIM}  `*` la muestra mas cercana a la mediana; "
+          f"`!` las que se apartan de ella mas de 3 sigmas estimadas "
+          f"desde la MAD{C.RESET}")
+    for row in rows:
+        runs_map = row.get("_runs", {})
+        hay = [ln for ln in active_langs if runs_map.get(ln)]
+        if not hay:
+            continue
+        print(f"\n  {C.BOLD}{row['bench']}{C.RESET}")
+        for ln in hay:
+            rs = runs_map[ln]
+            s = _stats_summary(rs)
+            # Umbral de atipico: 3 sigmas, con la sigma estimada a partir de la
+            # MAD (x1.4826, que es lo que la iguala a la desviacion tipica en
+            # una normal).  Usar la MAD cruda marcaba como atipica cualquier
+            # variacion normal de una serie apretada.  Con MAD 0 (serie
+            # constante) no se marca nada: no hay escala con la que medir.
+            umbral = 3.0 * 1.4826 * s["mad"] if s["mad"] > 0 else float("inf")
+            # La mediana de una muestra par no es ninguna de las medidas: se
+            # marca la que MENOS se aparta de ella, y solo esa.
+            i_p50 = min(range(len(rs)), key=lambda i: abs(rs[i] - s["p50"]))
+            piezas = []
+            for i, x in enumerate(rs):
+                if i == i_p50:
+                    sufijo, col = "*", C.BOLD
+                elif abs(x - s["p50"]) > umbral:
+                    sufijo, col = "!", C.RED
+                else:
+                    sufijo, col = " ", ""
+                fin = C.RESET if col else ""
+                piezas.append(f"{col}{x:8.1f}{sufijo}{fin}")
+            print(f"    {tc[ln].color}{ln:<14}{C.RESET}" + "".join(piezas))
+
+
+def print_noise_ranking(rows: list[dict], active_langs: list[str],
+                        tc: dict[str, Toolchain]) -> None:
+    """Cuanto ruido tiene cada lenguaje, y donde esta el peor.
+
+    Dos vistas, porque responden a cosas distintas: la primera dice de que
+    lenguaje se puede uno fiar en esta maquina, y la segunda senala las medidas
+    concretas que hay que mirar con lupa antes de sacar conclusiones de ellas.
+    """
+    # 1. Por lenguaje: la mediana de su ruido a lo largo de todos los benches.
+    por_lang: dict[str, list[float]] = {}
+    peores: list[tuple[float, str, str, dict]] = []
+    for row in rows:
+        runs_map = row.get("_runs", {})
+        for ln in active_langs:
+            rs = runs_map.get(ln)
+            if not rs:
+                continue
+            s = _stats_summary(rs)
+            por_lang.setdefault(ln, []).append(s["mad_pct"])
+            peores.append((s["mad_pct"], row["bench"], ln, s))
+    if not por_lang:
+        return
+
+    print()
+    print(f"{C.BOLD}Ruido por lenguaje (MAD relativa, mediana sobre los "
+          f"benches){C.RESET}")
+    print(f"{C.DIM}  mas bajo = medida mas repetible.  No dice nada de lo "
+          f"rapido que es: dice de cuanto fiarse del numero.{C.RESET}")
+    orden = sorted(por_lang.items(), key=lambda kv: statistics.median(kv[1]))
+    peor = max(statistics.median(v) for v in por_lang.values()) or 1.0
+    for pos, (ln, vals) in enumerate(orden, 1):
+        m = statistics.median(vals)
+        alto = max(vals)
+        barra = ascii_bar(m, peor, width=24, color=_color_ruido(m))
+        print(f"  {pos:>2}. {tc[ln].color}{tc[ln].label:<22}{C.RESET}"
+              f"{m:>6.1f}%  {barra}  (peor bench: {alto:.1f}%)")
+
+    # 2. Las medidas concretas mas ruidosas.
+    peores.sort(key=lambda t: -t[0])
+    con_ruido = [p for p in peores if p[0] >= 5.0]
+    print()
+    if not con_ruido:
+        print(f"{C.GREEN}  Ninguna medida pasa del 5% de MAD relativa: la "
+              f"corrida entera es estable.{C.RESET}")
+        return
+    print(f"{C.BOLD}Medidas mas ruidosas (MAD relativa >= 5%): "
+          f"{len(con_ruido)} de {len(peores)}{C.RESET}")
+    print(f"{C.DIM}  De estas, una diferencia menor que su propio ruido no es "
+          f"una diferencia.{C.RESET}")
+    for mad_pct, bench, ln, s in con_ruido[:15]:
+        print(f"    {tc[ln].color}{bench + '/' + ln:<30}{C.RESET}"
+              f"p50={s['p50']:>8.1f}  "
+              f"{_color_ruido(mad_pct)}MAD={mad_pct:>5.1f}%{C.RESET}  "
+              f"min..max = {s['min']:.1f}..{s['max']:.1f}  "
+              f"media-p50 = {s['sesgo_pct']:+.1f}%")
+    if len(con_ruido) > 15:
+        print(f"    {C.DIM}... y {len(con_ruido) - 15} mas{C.RESET}")
 
 
 def print_baseline_comparison(rows: list[dict], active_langs: list[str],
@@ -1763,14 +2023,33 @@ def rerender_from_json(json_path: Path, project_root: Path,
     print_speedup_summary(rows, active_langs, baseline="c")
     if "c" in active_langs:
         print_category_summary(rows, active_langs, tc, baseline="c")
+    suelo = data.get("suelo", {})
+    print_suelo_table(suelo, active_langs, tc)
     if verbose_stats:
-        print_verbose_stats_table(rows, active_langs, tc)
+        print_verbose_stats_table(rows, active_langs, tc, suelo)
+        print_samples_table(rows, active_langs, tc)
+    # El ruido se publica SIEMPRE, no solo con --verbose-stats: sin saber
+    # cuanto se mueve una medida, la tabla principal invita a leer como
+    # diferencia lo que puede ser la maquina.
+    print_noise_ranking(rows, active_langs, tc)
     if baseline_path:
         print_baseline_comparison(rows, active_langs, tc,
                                    baseline_path, threshold_pct)
 
-    # Plots.
-    plot_dir = project_root / "bench_plots"
+    # Plots.  Solo el JSON de REFERENCIA escribe en el directorio de
+    # referencia.  Es el mismo agujero que ya se tapo para el JSON, y aqui
+    # seguia abierto: re-renderizar una corrida de dos benches dejaba
+    # `bench_plots/` con dos benches, sin avisar, y las graficas versionadas de
+    # la tanda completa desaparecian.  La regla no es adivinar si el JSON esta
+    # completo -- eso no se puede saber mirandolo -- sino que quien no es la
+    # referencia no la toca.
+    referencia = project_root / "bench_results.json"
+    es_referencia = json_path.resolve() == referencia.resolve()
+    plot_dir = (project_root / "bench_plots" if es_referencia
+                else project_root / f"bench_plots_{json_path.stem}")
+    if not es_referencia:
+        info(f"el JSON no es la referencia: las graficas van a "
+             f"{plot_dir.name}/ para no pisar las de la tanda completa.")
     if not no_plot:
         try:
             from . import plots
@@ -1779,7 +2058,7 @@ def rerender_from_json(json_path: Path, project_root: Path,
             import plots  # type: ignore
         try:
             results = plots.generate_all(rows, active_langs, plot_dir,
-                                          sys_info=sys_info)
+                                          sys_info=sys_info, suelo=suelo)
             print()
             info(f"plots: {plot_dir}")
             for name, success in results.items():
@@ -2002,6 +2281,26 @@ def main() -> int:
                 continue
             compile_tasks.append((idx, b, ln, variant))
 
+    def compilar_para(ln: str, variant: BenchVariant):
+        """Compila @p variant para el lenguaje @p ln.
+
+        Existe para que el suelo del lenguaje (@c medir_suelo) recorra
+        EXACTAMENTE el mismo camino que un bench: mismos compiladores, mismas
+        banderas, misma forma de lanzarlo.  Un suelo medido de otra manera no
+        seria el suelo de estas medidas.
+        """
+        if ln in ("vx_interp", "vx_jit"):
+            return compile_vx(variant, work_dir, vm)
+        if ln in VX_AOT_MODES:
+            return compile_vx_aot(variant, work_dir, vm,
+                                  float_isa=VX_AOT_MODES[ln])
+        if ln in ("c", "cpp", "python", "java", "go", "rust"):
+            return {
+                "c": compile_c, "cpp": compile_cpp, "python": compile_python,
+                "java": compile_java, "go": compile_go, "rust": compile_rust,
+            }[ln](variant, work_dir, tc[ln])
+        return None
+
     def compile_one(task):
         idx, b, ln, variant = task
         try:
@@ -2153,9 +2452,18 @@ def main() -> int:
     if "c" in active_langs:
         print_category_summary(rows, active_langs, tc, baseline="c")
 
-    # Sprint bench-stats (2026-06-02): tabla verbose con min/p50/p95/max/stddev.
+    # El suelo de cada lenguaje: cuanto de las medidas es arrancar el proceso.
+    # Se mide DESPUES de los benches, con la maquina en el mismo estado.
+    with Spinner("midiendo el suelo de cada lenguaje", color=C.DIM):
+        suelo = medir_suelo(active_langs, work_dir, compilar_para,
+                            runs=max(5, args.runs), timeout=args.timeout)
+    print_suelo_table(suelo, active_langs, tc)
+
     if args.verbose_stats:
-        print_verbose_stats_table(rows, active_langs, tc)
+        print_verbose_stats_table(rows, active_langs, tc, suelo)
+        print_samples_table(rows, active_langs, tc)
+    # Siempre: cuanto ruido tiene cada medida y cada lenguaje.
+    print_noise_ranking(rows, active_langs, tc)
 
     # Sprint bench-baseline (2026-06-02): comparacion vs JSON previo.
     if args.baseline:
@@ -2204,6 +2512,10 @@ def main() -> int:
         "active_langs": active_langs,
         "elapsed_total_s": elapsed,
         "system_info": sys_info,
+        # El suelo de cada lenguaje en ESTA maquina y ESTA corrida.  Va en el
+        # JSON porque sin el los tiempos de otra maquina no son comparables:
+        # una diferencia de 2 ms entre dos equipos puede ser solo su arranque.
+        "suelo": suelo,
         "results": serializable_rows,
     }
     try:
@@ -2228,7 +2540,7 @@ def main() -> int:
             import plots  # type: ignore
         try:
             results = plots.generate_all(rows, active_langs, plot_dir,
-                                          sys_info=sys_info)
+                                          sys_info=sys_info, suelo=suelo)
             print()
             info(f"{C.BOLD}Graficas generadas en {plot_dir}/:{C.RESET}")
             for name, success in results.items():
