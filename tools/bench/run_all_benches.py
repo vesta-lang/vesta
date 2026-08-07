@@ -558,8 +558,13 @@ def print_category_summary(rows: list[dict], active_langs: list[str],
             for r in rows_in_cat:
                 v_ln = r.get(ln)
                 v_base = r.get(baseline)
+                dudosas = r.get("_bajo_suelo") or {}
+                # Fuera de la media lo que no se distingue del arranque: una
+                # media geometrica de razones inventadas es una cifra
+                # inventada, y encima con aspecto de resumen fiable.
                 if (v_ln is None or v_base is None
-                        or v_ln <= 0 or v_base <= 0):
+                        or v_ln <= 0 or v_base <= 0
+                        or ln in dudosas or baseline in dudosas):
                     continue
                 ratios.append(v_ln / v_base)
             if not ratios:
@@ -761,6 +766,19 @@ class Spinner:
         self._thread: Optional[threading.Thread] = None
         self._start = 0.0
 
+    def etiqueta(self, label: str, color: Optional[str] = None) -> None:
+        """Cambia el texto SIN parar el spinner.
+
+        Existe para no abrir y cerrar un spinner por cada ejecucion medida: el
+        hilo escribe a stdout cada 80 ms, y arrancarlo y pararlo justo antes y
+        despues de lanzar el proceso mete su propio trabajo dentro de la
+        ventana que se esta midiendo.  Uno solo por fase, y solo cambia el
+        rotulo.
+        """
+        self.label = label
+        if color is not None:
+            self.color = color
+
     def _run(self):
         i = 0
         while not self._stop.is_set():
@@ -907,6 +925,73 @@ def all_runs(cmd: list[str], env: dict | None, runs: int,
         if i >= warmup:
             times.append(ms)
     return times
+
+
+def una_medida(cmd: list[str], env: dict | None, timeout: float,
+               cwd: Optional[Path], use_vx_walltime: bool = False,
+               intentos: int = 5) -> float:
+    """UNA ejecucion medida, con reintentos ante un flake del entorno.
+
+    Misma resiliencia que @c all_runs (antivirus, contencion de handles, carga
+    puntual), pero para una sola medida: es la pieza que necesitan tanto el
+    calentamiento como la medicion por rondas.
+    """
+    espera_ms = [0, 250, 500, 1000, 2000]
+    timer = run_timed_vx if use_vx_walltime else run_timed
+    for intento in range(max(1, intentos)):
+        if intento > 0:
+            time.sleep(espera_ms[min(intento, len(espera_ms) - 1)] / 1000.0)
+        ms = timer(cmd, env=env, timeout=timeout, cwd=cwd)
+        if ms >= 0:
+            return ms
+    return -1.0
+
+
+# Topes del calentamiento.  El primero acota los casos patologicos; el segundo
+# es el que manda de verdad: en un bench que tarda segundos, la paginacion del
+# binario es ruido de fondo y seguir calentando son minutos tirados.
+CALENTAMIENTO_MAX = 12
+CALENTAMIENTO_PRESUPUESTO_MS = 20000.0
+
+
+def serie_asentada(traza: list[float]) -> bool:
+    """¿Ha dejado de BAJAR esta serie de medidas?
+
+    La primera ejecucion de un programa es sistematicamente mas lenta que las
+    siguientes, y no por el programa: el sistema tiene que paginar el binario y
+    todo lo que arrastra.  Cuanto mas grande es el runtime, mas dura la caida --
+    medido en esta maquina, un `.exe` de C se asienta en 2 ejecuciones y la JVM
+    tarda 7.  Descartar un numero FIJO falla por los dos lados: sobra para C y
+    se queda corto para Java, que entraba a la tabla con la mitad de sus
+    muestras todavia frias.
+
+    El criterio NO es que la serie sea plana.  Una medida de 2 ms nunca lo es --
+    su ruido relativo es grande de por si -- y exigirselo condenaria a los
+    benches cortos a calentar siempre hasta el tope.  Lo que se comprueba es que
+    haya dejado de DESCENDER: la mediana de las tres ultimas contra la de las
+    tres anteriores, y sigue calentando mientras caiga mas de un 10%.  Asi el
+    umbral se ajusta solo al nivel de ruido de cada medida.
+
+    Efecto lateral util: si algo perturba la maquina justo ahora, la serie no se
+    asienta y se sigue calentando; la perturbacion se queda en lo descartado.
+    """
+    if len(traza) < 6:
+        return False  # aun no hay dos ventanas que comparar
+    previas = statistics.median(traza[-6:-3])
+    ultimas = statistics.median(traza[-3:])
+    if previas <= 0:
+        return True
+    # El umbral se escala con el ruido de la PROPIA serie.  Un 10% fijo lo
+    # cruza por puro azar una medida de 2 ms -- que se mueve un 5% sin que pase
+    # nada -- y entonces un lenguaje rapido nunca se daba por asentado y
+    # arrastraba a todos los demas hasta el tope de rondas.  Pedir que la caida
+    # supere tres veces su propia dispersion distingue una tendencia de un
+    # vaiven.
+    p50 = statistics.median(traza)
+    mad_rel = (statistics.median([abs(x - p50) for x in traza]) / p50
+               if p50 > 0 else 0.0)
+    umbral = min(0.5, max(0.10, 3.0 * mad_rel))
+    return ultimas >= previas * (1.0 - umbral)
 
 
 # Compilers: cada uno devuelve (cmd_to_run, work_cwd, normalize_factor).
@@ -1155,11 +1240,14 @@ def medir_suelo(active_langs: list[str], work_dir: Path,
                 compilar_para, runs: int, timeout: float) -> dict:
     """Cuanto tarda cada lenguaje en NO hacer nada.
 
-    Sin esto, comparar un bench de 4 ms entre lenguajes compara en buena parte
-    sus arranques.  El numero no se corrige por la espalda -- la tabla principal
-    sigue diciendo el tiempo real, que es lo que el usuario mide -- pero se
-    publica al lado, para que se vea cuanto de cada medida es el programa y
-    cuanto es el sistema operativo levantando un proceso.
+    Es lo que cuesta arrancar el proceso y levantar el runtime, y esta dentro de
+    cada medida.  Va de 2 ms en C a 67 ms en Java, asi que en un bench de 4 ms
+    el numero hablaba mas del sistema operativo que del codigo generado.
+    Descontarlo es lo que convierte la tabla en una medida de la CALIDAD DEL
+    CoDIGO en vez de una carrera de arranques.
+
+    Se mide con el mismo camino de compilacion y el mismo calentamiento que un
+    bench: un suelo obtenido de otra manera no seria el suelo de estas medidas.
     """
     suelo: dict[str, dict] = {}
     base = work_dir / "_suelo"
@@ -1188,8 +1276,21 @@ def medir_suelo(active_langs: list[str], work_dir: Path,
         if res is None:
             continue
         cmd, cwd, _factor = res
-        muestras = all_runs(cmd, env=None, runs=runs, timeout=timeout,
-                            cwd=cwd, warmup=1)
+        # Mismo calentamiento adaptativo que un bench: si el suelo se midiera en
+        # frio seria mayor que el arranque que de verdad pagan las medidas, y
+        # descontarlo se comeria trabajo real del programa.
+        traza: list[float] = []
+        gastado = 0.0
+        while (len(traza) < CALENTAMIENTO_MAX
+               and not serie_asentada(traza)
+               and gastado < CALENTAMIENTO_PRESUPUESTO_MS):
+            ms = una_medida(cmd, None, timeout, cwd)
+            if ms < 0:
+                break
+            traza.append(ms)
+            gastado += ms
+        muestras = [una_medida(cmd, None, timeout, cwd) for _ in range(runs)]
+        muestras = [m for m in muestras if m >= 0]
         if muestras:
             suelo[ln] = _stats_summary(muestras)
     return suelo
@@ -1271,6 +1372,67 @@ def print_verbose_stats_table(rows: list[dict], active_langs: list[str],
                               else f"{neto:>9.1f}")
             print(linea)
     print("-" * (len(cab) + 2))
+
+
+def print_bajo_suelo_table(rows: list[dict], active_langs: list[str],
+                           tc: dict[str, Toolchain]) -> None:
+    """Medidas que no se distinguen del arranque del proceso.
+
+    No es un fallo del lenguaje ni del arnes: es que el bench hace tan poco
+    trabajo que, descontado el arranque, no queda nada por encima del ruido.
+    Sale con nombre y apellidos porque la conclusion es accionable -- ese bench
+    necesita mas trabajo por ejecucion -- y porque callarlo lo dejaria como un
+    hueco en la tabla indistinguible de "este lenguaje no lo soporta".
+    """
+    casos = []
+    for row in rows:
+        for ln, d in (row.get("_bajo_suelo") or {}).items():
+            casos.append((row["bench"], ln, d))
+    if not casos:
+        return
+    print()
+    print(f"{C.BOLD}{C.YELLOW}No medible por encima del arranque: "
+          f"{len(casos)} casos{C.RESET}")
+    print(f"{C.DIM}  El bench hace tan poco que, quitado el arranque del "
+          f"proceso, lo que queda cabe dentro del ruido.  Salen de la tabla: "
+          f"un numero casi cero produce ratios sin sentido.{C.RESET}")
+    casos.sort(key=lambda t: (t[0], t[1]))
+    for bench, ln, d in casos[:25]:
+        color = tc[ln].color if ln in tc else ""
+        print(f"    {color}{bench + '/' + ln:<30}{C.RESET}"
+              f"medido {d['bruto']:>7.2f} ms   arranque {d['suelo']:>7.2f} ms"
+              f"   queda {d['neto']:>7.2f} ms  (ruido +-{d['margen']:.2f})")
+    if len(casos) > 25:
+        print(f"    {C.DIM}... y {len(casos) - 25} mas{C.RESET}")
+
+
+def print_calentamiento_table(rows: list[dict], active_langs: list[str],
+                              tc: dict[str, Toolchain]) -> None:
+    """Cuantas ejecuciones hubo que descartar antes de que la serie se asentara.
+
+    Es una decision del arnes que cambia los numeros publicados, asi que se
+    ensena en vez de quedarse dentro.  Ademas mide algo real por si misma: lo
+    que tarda un lenguaje en entrar en regimen dice cuanto arrastra al arrancar.
+    """
+    por_lang: dict[str, list[int]] = {}
+    for row in rows:
+        for ln, n in (row.get("_calentamientos") or {}).items():
+            por_lang.setdefault(ln, []).append(n)
+    if not por_lang or all(not v or max(v) == 0 for v in por_lang.values()):
+        return
+    print()
+    print(f"{C.BOLD}Calentamiento: ejecuciones descartadas hasta que la serie "
+          f"deja de bajar{C.RESET}")
+    print(f"{C.DIM}  No es un parametro fijo: se decide midiendo, y por eso "
+          f"difiere entre lenguajes.{C.RESET}")
+    orden = sorted(por_lang, key=lambda ln: -statistics.median(por_lang[ln]))
+    for ln in orden:
+        v = por_lang[ln]
+        if ln not in tc:
+            continue
+        print(f"  {tc[ln].color}{tc[ln].label:<22}{C.RESET}"
+              f"mediana {statistics.median(v):>4.1f}   "
+              f"min..max {min(v)}..{max(v)}")
 
 
 def print_samples_table(rows: list[dict], active_langs: list[str],
@@ -1444,7 +1606,7 @@ def print_baseline_comparison(rows: list[dict], active_langs: list[str],
 
 def print_results_table(rows: list[dict], tc: dict[str, Toolchain],
                          active_langs: list[str]) -> None:
-    """Tabla: filas=benches, columnas=lenguajes con wall time ms."""
+    """Tabla: filas=benches, columnas=lenguajes con el tiempo del CODIGO."""
     # Cabecera.
     header_cols = [f"{'BENCHMARK':<22}"]
     for ln in active_langs:
@@ -1452,21 +1614,37 @@ def print_results_table(rows: list[dict], tc: dict[str, Toolchain],
         header_cols.append(f"{label:>14}")
     header = " ".join(header_cols)
     print()
+    # Decir QUE hay en la tabla, porque no es el numero obvio: es el medido
+    # menos el arranque del lenguaje.  Sin esta linea, quien compare con un
+    # cronometro por fuera vera otra cosa y pensara que el arnes miente.
+    if any(row.get("_suelo_descontado") for row in rows):
+        print(f"{C.DIM}ms de CoDIGO: al tiempo medido se le ha restado el "
+              f"arranque del lenguaje (ver 'Suelo').  Un `~` delante marca las "
+              f"medidas que no llegan a separarse de ese arranque: se ensenan, "
+              f"pero no entran en las razones ni en las medias.{C.RESET}")
     print(f"{C.BOLD}{header}{C.RESET}")
     print("-" * len(header))
 
     for row in rows:
         cols = [f"{row['bench']:<22}"]
-        # Determinar el ganador (menor tiempo > 0) para resaltar.
+        dudosas = row.get("_bajo_suelo") or {}
+        # El ganador se busca solo entre las medidas que SI se distinguen del
+        # arranque.  Sin ese filtro, ganaria el que menos se distingue.
         valid_times = {k: row[k] for k in active_langs
-                       if k in row and row[k] is not None and row[k] >= 0}
+                       if k in row and row[k] is not None and row[k] >= 0
+                       and k not in dudosas}
         min_time = min(valid_times.values()) if valid_times else None
         for ln in active_langs:
             t = row.get(ln)
             if t is None:
                 cols.append(f"{C.GREY}{'N/A':>14}{C.RESET}")
-            elif t < 0:
+            elif t < 0 and ln not in dudosas:
                 cols.append(f"{C.RED}{'TIMEOUT':>14}{C.RESET}")
+            elif ln in dudosas:
+                # Se muestra el numero -- es lo que se midio -- con la marca de
+                # que no se sostiene por si solo.
+                texto = f"~{t:.1f}" if t > 0 else "~0"
+                cols.append(f"{C.YELLOW}{texto:>14}{C.RESET}")
             else:
                 color = C.BOLD + C.GREEN if t == min_time else tc[ln].color
                 cols.append(f"{color}{t:>14.1f}{C.RESET}")
@@ -1591,10 +1769,16 @@ def print_speedup_summary(rows: list[dict], active_langs: list[str],
             continue
         header += f"{ln+' vs '+baseline:>20}"
     print(f"{C.BOLD}{header}{C.RESET}")
+    saltadas = 0
     for row in rows:
         cols = [f"{row['bench']:<22}"]
+        dudosas = row.get("_bajo_suelo") or {}
         baseline_t = row.get(baseline)
-        if baseline_t is None or baseline_t < 0 or baseline_t == 0:
+        # Una razon exige que los DOS terminos se sostengan.  Si el baseline no
+        # se distingue del arranque, dividir por el da un numero inventado.
+        if (baseline_t is None or baseline_t <= 0 or baseline in dudosas):
+            if baseline in dudosas:
+                saltadas += 1
             for ln in active_langs:
                 if ln == baseline:
                     continue
@@ -1604,7 +1788,9 @@ def print_speedup_summary(rows: list[dict], active_langs: list[str],
                 if ln == baseline:
                     continue
                 t = row.get(ln)
-                if t is None or t < 0:
+                if t is None or t < 0 or ln in dudosas:
+                    if ln in dudosas:
+                        saltadas += 1
                     cols.append(f"{'-':>20}")
                 else:
                     ratio = t / baseline_t
@@ -1620,6 +1806,11 @@ def print_speedup_summary(rows: list[dict], active_langs: list[str],
                     pad = 20 - len(text)
                     cols.append(f"{' '*pad}{clr}{text}{C.RESET}")
         print(" ".join(cols))
+    if saltadas:
+        # Decir lo que se dejo fuera.  Una tabla con huecos y sin explicacion
+        # se lee como si no hubiera pasado nada.
+        print(f"{C.DIM}  ({saltadas} razones sin calcular: alguno de los dos "
+              f"terminos no se distingue del arranque del proceso){C.RESET}")
 
 
 def save_matplotlib(rows: list[dict], active_langs: list[str],
@@ -1992,6 +2183,10 @@ def rerender_from_json(json_path: Path, project_root: Path,
         row = {k: v for k, v in r.items() if k != "runs_individual"}
         # Para reusar las funciones que usan _runs:
         row["_runs"] = r.get("runs_individual", {})
+        row["_calentamientos"] = r.get("calentamientos", {})
+        row["_bruto"] = r.get("bruto", {})
+        row["_bajo_suelo"] = r.get("bajo_suelo", {})
+        row["_suelo_descontado"] = bool(data.get("suelo"))
         rows.append(row)
 
     # Toolchains: solo necesitamos los labels.  Construir un mock minimal.
@@ -2025,6 +2220,8 @@ def rerender_from_json(json_path: Path, project_root: Path,
         print_category_summary(rows, active_langs, tc, baseline="c")
     suelo = data.get("suelo", {})
     print_suelo_table(suelo, active_langs, tc)
+    print_calentamiento_table(rows, active_langs, tc)
+    print_bajo_suelo_table(rows, active_langs, tc)
     if verbose_stats:
         print_verbose_stats_table(rows, active_langs, tc, suelo)
         print_samples_table(rows, active_langs, tc)
@@ -2125,9 +2322,11 @@ def main() -> int:
                               "Las EJECUCIONES siguen secuenciales para no contaminar "
                               "las mediciones de tiempo."))
     parser.add_argument("--warmup", type=int, default=1,
-                        help=("Runs de warmup descartados antes de medir (default 1).  "
-                              "Cubre JIT-compile fresco de Vesta-lang/Java/Python.  "
-                              "Total runs ejecutados por bench: warmup + runs."))
+                        help=("Calentamiento ADAPTATIVO (default: activo).  El "
+                              "arnes descarta ejecuciones hasta que la serie "
+                              "deja de bajar, que es distinto en cada lenguaje "
+                              "(un .exe de C se estabiliza en 2, la JVM en 7).  "
+                              "Con 0 se desactiva: se mide EN FRIO a proposito."))
     parser.add_argument("--baseline", type=str, default="",
                         help=("Path a un bench_results.json previo para comparar.  "
                               "Imprime delta porcentual por bench y marca "
@@ -2350,6 +2549,17 @@ def main() -> int:
             warn(f"compile fail {bname}/{ln}: {err}")
 
     # -------------------------------------------------------------------
+    #   SUELO de cada lenguaje.  Se mide ANTES de los benches porque es
+    #   lo que se va a descontar de cada medida: la tabla tiene que hablar del
+    #   codigo, no de cuanto tarda el sistema operativo en levantar un proceso.
+    # -------------------------------------------------------------------
+    print()
+    with Spinner("midiendo el suelo de cada lenguaje", color=C.DIM):
+        suelo = medir_suelo(active_langs, work_dir, compilar_para,
+                            runs=max(5, args.runs), timeout=args.timeout)
+    print_suelo_table(suelo, active_langs, tc)
+
+    # -------------------------------------------------------------------
     #   EJECUCIONES (secuencial; mediciones no contaminadas).
     # -------------------------------------------------------------------
     print()
@@ -2359,6 +2569,8 @@ def main() -> int:
     for idx, b in enumerate(benches, 1):
         row: dict = {"bench": b.name, "is_legacy": b.is_legacy}
 
+        # --- 1. Preparar el plan de este bench --------------------------------
+        plan: dict[str, dict] = {}
         for ln in active_langs:
             variant: Optional[BenchVariant] = None
             if ln in VX_LANGS:
@@ -2388,33 +2600,147 @@ def main() -> int:
             elif ln == "vx_interp":
                 env["VESTA_JIT_THRESHOLD"] = "4294967295"
 
-            # Run + capturar TODOS los runs individuales (no solo mediana).
             # Los no interpretados se miden mas veces (rapidos + ruidosos); los
             # interpretados pocas (lentos).  --runs / --runs-slow lo overridean.
-            warm = args.warmup
-            n_runs = args.runs_slow if ln in INTERPRETED_LANGS else args.runs
-            label_run = (f"[{idx}/{len(benches)}] {b.name} | "
-                         f"{tc[ln].label} run ({n_runs}x"
-                         + (f"+{warm}W" if warm > 0 else "")
-                         + ")")
-            # Sprint bench-fair (2026-06-03): por default mode FAIR usa
-            # wall externo para TODOS los lenguajes (incluye fork + runtime
-            # init).  Mode --unfair restaura el comportamiento legacy
-            # (Vesta-lang usa --stats interno, otros wall externo).
-            use_vx_wt = (not args.fair) and ln in ("vx_interp", "vx_jit")
-            with Spinner(label_run, color=tc[ln].color):
-                runs_ms = all_runs(cmd, env=env, runs=n_runs,
-                                    timeout=args.timeout, cwd=cwd,
-                                    warmup=warm,
-                                    use_vx_walltime=use_vx_wt)
-            if not runs_ms:
+            plan[ln] = {
+                "cmd": cmd, "cwd": cwd, "factor": factor, "env": env,
+                "n": args.runs_slow if ln in INTERPRETED_LANGS else args.runs,
+                # Sprint bench-fair (2026-06-03): por default mode FAIR usa
+                # wall externo para TODOS los lenguajes (incluye fork +
+                # runtime init).  Mode --unfair restaura el legacy (Vesta-lang
+                # usa --stats interno, otros wall externo).
+                "vx_wt": (not args.fair) and ln in ("vx_interp", "vx_jit"),
+                "muestras": [],
+            }
+
+        # --- 2. Calentar EN RONDAS, el mismo regimen en el que se va a medir --
+        #
+        # Calentar cada lenguaje por separado y medir intercalando NO funciona,
+        # y esta medido: entre dos ejecuciones de Java corren los otros diez y
+        # le desalojan las paginas, asi que llegaba a la medicion tan frio como
+        # al principio y sus muestras seguian cayendo (307 -> 86 ms dentro de
+        # las rondas ya medidas).  El estado que se alcanza calentando solo vale
+        # si se alcanza en las mismas condiciones en las que luego se mide.
+        #
+        # Por eso el calentamiento ejecuta el CICLO COMPLETO -- todos los
+        # lenguajes, aunque alguno ya se haya asentado -- y se repite hasta que
+        # ninguno sigue bajando.  Que un lenguaje asentado deje de correr
+        # cambiaria la composicion del ciclo, y con ella el regimen que los
+        # demas estan intentando alcanzar.
+        orden = list(plan.keys())
+        calentamientos: dict[str, int] = {ln: 0 for ln in orden}
+        if args.warmup != 0 and orden:
+            trazas: dict[str, list[float]] = {ln: [] for ln in orden}
+            gastado_ms = 0.0
+            with Spinner(f"[{idx}/{len(benches)}] {b.name} | calentando",
+                         color=C.DIM) as sp:
+                for ronda_w in range(CALENTAMIENTO_MAX):
+                    giro = (orden[ronda_w % len(orden):]
+                            + orden[:ronda_w % len(orden)])
+                    for ln in giro:
+                        p = plan[ln]
+                        sp.etiqueta(f"[{idx}/{len(benches)}] {b.name} | "
+                                    f"calentando ronda {ronda_w + 1} | "
+                                    f"{tc[ln].label}", tc[ln].color)
+                        ms = una_medida(p["cmd"], p["env"], args.timeout,
+                                        p["cwd"], p["vx_wt"])
+                        if ms >= 0:
+                            trazas[ln].append(ms)
+                            gastado_ms += ms
+                    if all(serie_asentada(trazas[ln]) for ln in orden):
+                        break
+                    if gastado_ms >= CALENTAMIENTO_PRESUPUESTO_MS:
+                        # En un bench que tarda segundos, la paginacion es
+                        # ruido de fondo y seguir calentando son minutos
+                        # tirados.
+                        break
+            for ln in orden:
+                calentamientos[ln] = len(trazas[ln])
+
+        # --- 3. Medir INTERCALANDO: una ejecucion de cada uno por ronda -------
+        # Las diez muestras de un lenguaje ya no se toman seguidas en el
+        # tiempo.  Antes, si la maquina se alteraba durante ese minuto -- un
+        # antivirus, el turbo decayendo, otro proceso -- la alteracion caia
+        # entera sobre el lenguaje que tocaba y se leia como que ESE lenguaje
+        # era lento.  Repartidas, una perturbacion afecta a una muestra de cada
+        # uno y la mediana se la come.
+        #
+        # El orden ROTA cada ronda para que ninguno sea siempre el primero (el
+        # primero de una ronda paga el cambio de contexto de los demas).  Se
+        # rota en vez de barajar para que la corrida siga siendo reproducible.
+        max_rondas = max((p["n"] for p in plan.values()), default=0)
+        # Los lenguajes lentos toman menos muestras (3 frente a 10).  Si las
+        # gastaran en las tres primeras rondas, el ciclo se aligeraria a partir
+        # de la cuarta y los rapidos pasarian a medirse en otro entorno a mitad
+        # de camino -- el mismo error que arreglar el calentamiento, otra vez.
+        # Sus muestras se reparten a lo largo de todas las rondas.
+        for p in plan.values():
+            n = max(1, p["n"])
+            p["rondas"] = {round(i * (max_rondas - 1) / max(1, n - 1))
+                           for i in range(n)} if n > 1 else {0}
+        with Spinner(f"[{idx}/{len(benches)}] {b.name} | midiendo",
+                     color=C.DIM) as sp:
+            for ronda in range(max_rondas):
+                giro = (orden[ronda % len(orden):] + orden[:ronda % len(orden)]
+                        if orden else [])
+                for ln in giro:
+                    p = plan[ln]
+                    if len(p["muestras"]) >= p["n"]:
+                        continue  # este ya tiene todas las suyas
+                    if ronda not in p["rondas"]:
+                        continue  # no le toca en esta vuelta
+                    sp.etiqueta(f"[{idx}/{len(benches)}] {b.name} | ronda "
+                                f"{ronda + 1}/{max_rondas} | {tc[ln].label}",
+                                tc[ln].color)
+                    ms = una_medida(p["cmd"], p["env"], args.timeout,
+                                    p["cwd"], p["vx_wt"])
+                    if ms >= 0:
+                        p["muestras"].append(ms)
+
+        for ln, p in plan.items():
+            if not p["muestras"]:
                 row[ln] = -1.0
                 row.setdefault("_runs", {})[ln] = []
-            else:
-                # Normalizar (Python memcpy_loop reduce iters).
-                normalized = [t * factor for t in runs_ms]
-                row[ln] = statistics.median(normalized)
-                row.setdefault("_runs", {})[ln] = normalized
+                continue
+            # Normalizar (Python memcpy_loop reduce iters).
+            normalized = [t * p["factor"] for t in p["muestras"]]
+            bruto = statistics.median(normalized)
+            row.setdefault("_runs", {})[ln] = normalized
+            row.setdefault("_bruto", {})[ln] = bruto
+            # Lo que se publica es el tiempo del CoDIGO: al bruto se le quita el
+            # suelo del lenguaje, que es lo que cuesta arrancar el proceso y no
+            # dice nada de lo que el compilador genero.  Sin descontarlo,
+            # `alloc/c` "tardaba" 2.2 ms de los cuales 2.3 eran el arranque: la
+            # tabla comparaba sistemas operativos.
+            s_piso = suelo.get(ln) or {}
+            piso = s_piso.get("p50")
+            if piso is None:
+                row[ln] = bruto
+                continue
+            neto = bruto - piso
+            # Un neto que no supera el ruido de las dos medidas que lo forman no
+            # es un tiempo pequeno: es que este bench NO MIDE NADA por encima
+            # del arranque en este lenguaje.  Publicarlo daria un numero
+            # minusculo del que saldrian ratios absurdos (dividir por casi cero
+            # convierte a cualquiera en infinitamente rapido).  Se retira del
+            # cuadro y se dice aparte, con su nombre: la conclusion util es que
+            # ese bench necesita mas trabajo por ejecucion, no que un lenguaje
+            # sea magico.
+            s_med = _stats_summary(normalized)
+            margen = 3.0 * (s_med.get("mad", 0.0) + s_piso.get("mad", 0.0))
+            row[ln] = neto
+            if neto <= margen:
+                # Se marca, NO se borra.  La medida existe y se ensena; lo que
+                # no se puede es meterla en una razon (dividir por casi cero
+                # convierte a cualquiera en infinitamente rapido) ni en una
+                # media geometrica.  Queda fuera de los agregados, dentro de la
+                # tabla, y con su motivo al pie.
+                row.setdefault("_bajo_suelo", {})[ln] = {
+                    "bruto": bruto, "suelo": piso, "neto": neto,
+                    "margen": margen,
+                }
+        row["_calentamientos"] = calentamientos
+        row["_suelo_descontado"] = bool(suelo)
 
         rows.append(row)
 
@@ -2452,12 +2778,8 @@ def main() -> int:
     if "c" in active_langs:
         print_category_summary(rows, active_langs, tc, baseline="c")
 
-    # El suelo de cada lenguaje: cuanto de las medidas es arrancar el proceso.
-    # Se mide DESPUES de los benches, con la maquina en el mismo estado.
-    with Spinner("midiendo el suelo de cada lenguaje", color=C.DIM):
-        suelo = medir_suelo(active_langs, work_dir, compilar_para,
-                            runs=max(5, args.runs), timeout=args.timeout)
-    print_suelo_table(suelo, active_langs, tc)
+    print_calentamiento_table(rows, active_langs, tc)
+    print_bajo_suelo_table(rows, active_langs, tc)
 
     if args.verbose_stats:
         print_verbose_stats_table(rows, active_langs, tc, suelo)
@@ -2493,6 +2815,15 @@ def main() -> int:
     for r in rows:
         new_r = {k: v for k, v in r.items() if not k.startswith("_")}
         new_r["runs_individual"] = r.get("_runs", {})
+        # Cuantas ejecuciones hizo falta descartar en cada uno.  Es parte de
+        # como se obtuvo el numero: sin esto, dos corridas con criterios de
+        # calentamiento distintos parecen comparables y no lo son.
+        new_r["calentamientos"] = r.get("_calentamientos", {})
+        # El BRUTO (con arranque) no se tira: es el dato medido, y el neto es
+        # una derivada suya.  Quien quiera comparar contra una corrida anterior
+        # -- o contra otra herramienta que no descuente nada -- lo necesita.
+        new_r["bruto"] = r.get("_bruto", {})
+        new_r["bajo_suelo"] = r.get("_bajo_suelo", {})
         # Sprint bench-categories: tag de categoria por bench.
         new_r["category"] = bench_category(r["bench"])
         # Sprint bench-stats: incluir summary por lang en el JSON para
@@ -2508,7 +2839,11 @@ def main() -> int:
         "project_root": str(project_root),
         "runs_per_mode": args.runs,       # no interpretados
         "runs_per_mode_slow": args.runs_slow,  # interpretados (python, vx_interp)
-        "warmup_runs": args.warmup,
+        # El calentamiento ya no es un numero fijo: se decide midiendo, y el
+        # que se aplico a cada par (bench, lenguaje) va en su propia fila.
+        # Aqui solo consta si estaba activo.
+        "warmup_adaptativo": args.warmup != 0,
+        "medicion": "rondas intercaladas",
         "active_langs": active_langs,
         "elapsed_total_s": elapsed,
         "system_info": sys_info,

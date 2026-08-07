@@ -1,25 +1,24 @@
-// Bench: fusion CMP+BR_COND en JIT (sprint CCC).
+// cmp_fusion: 50M comparaciones + salto, con el resultado consumido.
+// Mismo algoritmo que main.c.
 //
-// Hot loop minimo donde DOMINA el patron cmp+jmp.  Antes del sprint:
-// el selector emitia `xor rax,rax; cmp; setcc; store; load; test; jcc`
-// (8 instr).  Tras CCC: `cmp; jcc<cond>` (2 instr).
+// La version anterior era `while (i < n) { acc = acc + 1; i = i + 1; }`, que es
+// una recurrencia afin: cualquier compilador decente la resuelve en forma
+// cerrada, y en C el `main` quedaba en `return 50000000` sin ejecutar una sola
+// vuelta.  Ahora la condicion depende de un generador congruencial que nadie
+// puede resolver de antemano, asi que las 50M comparaciones se hacen.
 //
-// Bench tipico: incrementar acc en un loop donde la cond es cmp puro.
-// Esperado: ~20-40% mejora sobre el JIT pre-CCC.
-
-class C {
-    public i64 run(i32 n) {
-        i64 acc = 0;
-        i32 i = 0;
-        while (i < n) {
-            acc++;
-            i = i + 1;
-        }
-        return acc;
-    }
-}
+// Que luego cada backend las resuelva sin saltar (nuestra if-conversion emite
+// SELECT, gcc emite `adc`) es parte de lo que este banco mide: hasta donde
+// optimiza cada uno.  Lo que no vale es que el trabajo desaparezca.
 
 i32 main() {
-    C c = new C();
-    return (i32) c.run(50000000);
+    u32 s = 12345;
+    i32 acc = 0;
+    i32 i = 0;
+    while (i < 50000000) {
+        s = s * 1664525 + 1013904223;
+        if ((s >> 31) == 0) { acc = acc + 1; }
+        i = i + 1;
+    }
+    return acc & 255;
 }

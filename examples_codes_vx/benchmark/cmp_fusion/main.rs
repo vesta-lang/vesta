@@ -1,20 +1,19 @@
-// cmp_fusion: 50M loop con cmp trivial.  Equivalente 1:1 al main.c.
+// cmp_fusion: 50M comparaciones + salto, con el resultado consumido.
+// Mismo algoritmo que main.c; ver alli por que la condicion tiene que ser
+// impredecible en compilacion.
 // Compilar: rustc -O -C target-cpu=native main.rs -o cmp_fusion_rust
-use std::hint::black_box;
 use std::process::exit;
 
-// El limite se recibe via black_box para que el bucle no colapse a `n`.
-fn run_impl(n: i32) -> i64 {
-    let mut acc: i64 = 0;
-    let mut i: i32 = 0;
-    while i < n {
-        acc += 1;
-        i += 1;
-    }
-    acc
-}
+const ITERS: i32 = 50_000_000;
 
 fn main() {
-    let r = run_impl(black_box(50_000_000));
-    exit((r & 0xFFFF_FFFF) as i32);
+    let mut s: u32 = 12345;
+    let mut acc: i32 = 0;
+    for _ in 0..ITERS {
+        // `wrapping_*` porque en Rust el desbordamiento es un panico en debug;
+        // el resto de lenguajes envuelven, y aqui hay que hacer lo mismo.
+        s = s.wrapping_mul(1664525).wrapping_add(1013904223);
+        if (s >> 31) == 0 { acc += 1; }
+    }
+    exit(acc & 0xFF);
 }

@@ -1,39 +1,39 @@
-// Benchmark: crear + descartar instancias de clase (GC heap).
+// mem_class: 1M objetos en heap, con una ventana de 64 vivos.
+// Mismo algoritmo que main.c; ver alli en que se diferencia este banco de los
+// de bloque crudo (`alloc_small` y companeros) y por que la ventana.
 //
-// Cada iteracion hace `new Foo(i)` que aloca un ObjectHeader (24 bytes) +
-// fields en el GC heap.  El objeto se vuelve unreachable al final de
-// `helper()`; el GC lo colecta automaticamente en un minor_gc futuro
-// cuando el nursery se llena.
+// Aqui SI se usa `new Foo()`: este es el banco del camino de objetos, con su
+// cabecera de 24 bytes, su constructor y su registro en el recolector.  El
+// bloque crudo se mide en `alloc_small`.
 //
-// Este es el path "managed" de : cero free manual, GC se encarga.
-// Equivalente conceptual a `new MyClass()` en Java/C#.
-//
-// Comparable contra `bench_mem_malloc_free.vx` (raw malloc/free) para
-// ver el overhead relativo del GC vs allocator directo.
-//
-// Ejecuta: vm --run bench_mem_class.velb --stats [-m jit]
-// Esperado: MIPS dominado por el cost de gc_alloc (~50-100 ns) + ctor +
-// el minor_gc ocasional (cada N allocs, escanea + evacua nursery).
+// La ventana hace falta tambien para nosotros: con el objeto naciendo y
+// muriendo en la misma iteracion, nuestro pase de escape lo descompone y no
+// reserva nada -- exactamente igual que gcc borraba el malloc del main.c.
 
 class Foo {
     public i32 x;
-    public Foo(i32 v) {
-        this.x = v;
-    }
-}
-
-i32 helper(i32 i) {
-    // Instancia heap-allocated via GC.  Sale del scope -> unreachable.
-    Foo f = new Foo(i);
-    return f.x;
+    public Foo(i32 v) { this.x = v; }
 }
 
 i32 main() {
-    i64 sum = 0;
-    i64 i   = 0;
+    Foo[64] anillo;                 // potencia de 2: el indice sale con AND
+    i32 acc = 0;
+    i32 i = 0;
     while (i < 1000000) {
-        sum = sum + helper(1);
+        Foo f = new Foo(i & 255);
+        i32 k = i & 63;
+        Foo viejo = anillo[k];      // el mas viejo sale de la ventana
+        if (viejo != null) {
+            acc = acc + viejo.x;
+        }
+        anillo[k] = f;
         i = i + 1;
     }
-    return sum;
+    i32 k2 = 0;
+    while (k2 < 64) {               // vaciar la ventana
+        Foo v = anillo[k2];
+        if (v != null) { acc = acc + v.x; }
+        k2 = k2 + 1;
+    }
+    return acc & 255;
 }

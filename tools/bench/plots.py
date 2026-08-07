@@ -447,8 +447,11 @@ def plot_per_bench(rows: list[dict], langs: list[str],
         err_lo, err_hi, pisos = [], [], []
         for ln, v in valid:
             st = _resumen(corridas.get(ln) or [])
-            err_lo.append(max(0.0, v - st["q1"]) if st else 0.0)
-            err_hi.append(max(0.0, st["q3"] - v) if st else 0.0)
+            # La dispersion se calcula sobre las muestras CRUDAS y se aplica
+            # como desplazamiento: restar el suelo mueve el centro, no cambia lo
+            # que la medida se movia.
+            err_lo.append(max(0.0, st["p50"] - st["q1"]) if st else 0.0)
+            err_hi.append(max(0.0, st["q3"] - st["p50"]) if st else 0.0)
             pisos.append((suelo.get(ln) or {}).get("p50") or 0.0)
 
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, max(3, len(valid) * 0.55)))
@@ -456,18 +459,17 @@ def plot_per_bench(rows: list[dict], langs: list[str],
         bars = ax1.barh(names, vals, color=colors, alpha=0.85,
                         xerr=[err_lo, err_hi], capsize=3,
                         error_kw={"ecolor": "#333", "elinewidth": 1.2})
-        # El suelo, DENTRO de la barra y en gris: lo que se tarda en arrancar el
-        # proceso esta incluido en la medida, y en un bench corto puede ser casi
-        # toda la barra.  Verlo aparte es lo unico que evita atribuir al
-        # programa un tiempo que es del sistema operativo.
+        # La barra de color es el tiempo del CoDIGO; el arranque del lenguaje va
+        # APILADO detras, en gris.  El total es lo que marcaria un cronometro
+        # por fuera, asi que el grafico dice las dos cosas a la vez: cuanto vale
+        # el codigo, y cuanto hay que pagar solo por echar a andar el proceso.
         if any(p > 0 for p in pisos):
-            ax1.barh(names, [min(p, v) for p, v in zip(pisos, vals)],
-                     color="#000000", alpha=0.28,
-                     label="arranque del proceso")
+            ax1.barh(names, pisos, left=vals, color="#000000", alpha=0.25,
+                     label="arranque del lenguaje")
             ax1.legend(loc="lower right", fontsize=8)
         ax1.set_xscale("log")
-        ax1.set_xlabel("Wall time (ms, log).  Barra de error = IQR de las "
-                       "muestras")
+        ax1.set_xlabel("ms (log): color = codigo, gris = arranque.  "
+                       "Barra de error = IQR de las muestras")
         ax1.set_title(f"{r['bench']} -- tiempo absoluto")
         for bar, v, ln in zip(bars, vals, [x[0] for x in valid]):
             st = _resumen(corridas.get(ln) or [])
