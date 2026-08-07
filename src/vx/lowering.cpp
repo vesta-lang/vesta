@@ -16325,50 +16325,14 @@ Lowering::lower_string_literal_to_string_object(ast::StringLitExpr *slit) {
     // (proc_ptr, vm_addr, value) y devuelve la longitud escrita.
     // El buffer VM es ALLOCA de 32 bytes (suficiente para todos los
     // tipos: i64=20+signo, hex=18, "false"=5, char UTF-8=4).
+    /* Esta secuencia ya existe como @c stringify_primitive_via_native, palabra
+     * por palabra.  Era una COPIA, y una copia no es solo mas lineas: es un
+     * segundo criterio.  Al declarar lo que hace la nativa se vio enseguida --
+     * se declaro en una de las dos y la mitad de las llamadas siguieron
+     * saliendo como opacas. */
     auto stringify_primitive = [&](ir::IrValueId v_val, const char *native_fn,
                                    int ln) -> ir::IrValueId {
-        // 1. ALLOCA 32 bytes (buffer en stack VM).
-        ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
-        {
-            ir::IrInstr al{};
-            al.op = ir::IrOp::ALLOCA;
-            al.type = ir::IrType::I8;
-            al.dst = v_buf;
-            al.imm = 32;
-            al.source_line = ln;
-            emit(current_block_, std::move(al));
-        }
-        // 2. proc_ptr via getproc.
-        ir::IrValueId v_proc = fn_->new_value(ir::IrType::PTR);
-        {
-            ir::IrInstr gp{};
-            gp.op = ir::IrOp::GETPROC;
-            gp.type = ir::IrType::PTR;
-            gp.dst = v_proc;
-            gp.source_line = ln;
-            emit(current_block_, std::move(gp));
-        }
-        // 3. CALLN al stringify nativo: returns length escrita en buf.
-        //    Registramos el import con el linker para que la
-        //    relocation se resuelva contra el plugin nativo.
-        out_mod_->register_native_import(
-            std::string("stdlib/native/io/vesta_io"), native_fn);
-        ir::IrValueId v_len = fn_->new_value(ir::IrType::I64);
-        {
-            ir::IrInstr cl{};
-            cl.op = ir::IrOp::CALLN;
-            cl.type = ir::IrType::I64;
-            cl.dst = v_len;
-            cl.func_name =
-                std::string("stdlib/native/io/vesta_io:") + native_fn;
-            cl.operands = {v_proc, v_buf, v_val};
-            cl.source_line = ln;
-            emit(current_block_, std::move(cl));
-        }
-        // 4. STRMAKE desde el buffer VM.  El opcode strmake (no _h)
-        //    lee de vm_mem que es exactamente donde el helper escribio.
-        ir::IrValueId v_h = emit_strmake(v_buf, v_len, ln);
-        return v_h;
+        return stringify_primitive_via_native(v_val, native_fn, ln);
     };
 
     // BUG-3 fix: honrar el KIND del format spec `${expr:fmt}` al CONSTRUIR
@@ -26271,7 +26235,20 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             ir::IrType::I64, static_cast<uint64_t>(msg_text.size()),
             e->loc.line);
         const ir::IrValueId v_proc = emit_getproc(e->loc.line);
-        out_mod_->register_native_import("vesta_comptime", "static_assert");
+        /* Corre AL COMPILAR: comprueba la condicion y, si falla, corta la
+         * compilacion con el mensaje.  Lo unico que toca del programa es leer
+         * ese mensaje (tercer argumento), que es un literal.
+         *
+         * Lo que hace el codigo comptime son efectos sobre la COMPILACION, no
+         * sobre el programa compilado; de ahi que no haya nada mas que declarar
+         * aunque aborte. */
+        {
+            ir::IrNativeEffects fx;
+            fx.declarados = true;
+            fx.comptime = true;
+            fx.lee_apuntado = 1u << 2; // el mensaje
+            out_mod_->register_native_import("vesta_comptime", "static_assert", fx);
+        }
         ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
         ir::IrInstr cl{};
         cl.op = ir::IrOp::CALLN;
@@ -29471,7 +29448,15 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             // AOT.  Resuelve igual en interp (loader/native_ffi) y en JIT
             // (auto_jit).  0 args, retorno u64 en R0.
             const int ln = e->loc.line;
-            out_mod_->register_native_import("vesta_runtime", "cpu_features");
+            /* Un `cpuid` y devolver el bitmask: sin argumentos, sin memoria,
+             * sin E/S.  Y determinista -- la CPU no cambia a mitad de
+             * ejecucion --, que es lo que permite calcularlo UNA vez aunque se
+             * consulte en un bucle. */
+            {
+                ir::IrNativeEffects fx;
+                fx.declarados = true;
+                out_mod_->register_native_import("vesta_runtime", "cpu_features", fx);
+            }
             ir::IrValueId v_feat = fn_->new_value(ir::IrType::U64);
             ir::IrInstr cl{};
             cl.op = ir::IrOp::CALLN;
@@ -40887,8 +40872,21 @@ ir::IrValueId Lowering::stringify_primitive_via_native(ir::IrValueId v_val,
     /* 2. proc_ptr via getproc. */
     const ir::IrValueId v_proc = emit_getproc(ln);
     /* 3. CALLN al native: devuelve length escrita en buf. */
-    out_mod_->register_native_import(std::string("stdlib/native/io/vesta_io"),
-                                     native_fn);
+    /* Se dice lo que hace, porque aqui se sabe: la familia `*_to_vmbuf`
+     * formatea `value` y deja los bytes en el buffer del SEGUNDO argumento.
+     * Nada mas -- ni lee otra memoria, ni hace E/S pese al prefijo `vio_`, ni
+     * puede lanzar, y dos llamadas iguales dan lo mismo.
+     *
+     * Sin decirlo, cada `${n}` de una interpolacion era una barrera total para
+     * cuanto la rodeara (52 sitios solo en std.memory), que es lo unico honesto
+     * ante una funcion nativa de la que no se sabe nada. */
+    {
+        ir::IrNativeEffects fx;
+        fx.declarados = true;
+        fx.escribe_apuntado = 1u << 1; // el buffer destino
+        out_mod_->register_native_import(std::string("stdlib/native/io/vesta_io"),
+                                         native_fn, fx);
+    }
     ir::IrValueId v_len = fn_->new_value(ir::IrType::I64);
     {
         ir::IrInstr cl{};

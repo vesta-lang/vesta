@@ -154,7 +154,7 @@ bool parse_ir_section(const std::vector<uint8_t> &data, size_t offset,
 static constexpr uint32_t IR_MODULE_CACHE_MAGIC =
     0x434D5856U; /* 'V''X''M''C' */
 static constexpr uint16_t IR_MODULE_CACHE_VERSION =
-    10; // v10: + param_abi_regs (ABI custom por funcion: register en params)
+    11; // v11: + efectos declarados de cada import nativo
 
 /**
  * @brief Serializa el IR de UN modulo COMPLETO para el cache `.vxir`.

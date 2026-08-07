@@ -1539,10 +1539,47 @@ struct IrSectionDef {
  * IrNativeImport por cada funcion nativa que sus llamadas (CALLN) van a
  * usar.  El emisor agrupa todas en un unico bloque @Import.
  */
+/**
+ * @brief Lo que hace una funcion nativa, DICHO por quien la importa.
+ *
+ * Una nativa es codigo que no esta en el programa: no se puede analizar, asi
+ * que sin esto lo unico honesto es suponer que hace cualquier cosa -- y eso
+ * convierte cada llamada en una barrera para todo lo que la rodea.
+ *
+ * La salida no es una tabla de nativas conocidas dentro del analizador (seria
+ * dar por supuestas las capacidades de algo ajeno, y quedaria desfasada en
+ * cuanto la nativa cambiara): es una DECLARACION, y vive donde se declara la
+ * importacion.  Hoy la rellena el lowering para las nativas que el propio
+ * compilador sintetiza -- el que emite la llamada es quien sabe lo que hace --;
+ * manana la rellenara el lenguaje desde las `extern` y las syscall.
+ *
+ * Sin declarar (@c declarados == false) el comportamiento es el de siempre:
+ * efecto maximo, y el nombre sale en el informe para que se pueda cerrar.
+ */
+struct IrNativeEffects {
+    bool declarados = false; ///< false = nadie ha dicho nada -> opaca.
+    /// Operandos del CALLN cuyo APUNTADO se lee / escribe (bit i = operando i).
+    /// Es un bitmask sobre los argumentos, no sobre memoria concreta: el
+    /// analizador resuelve cada uno a su localizacion en el sitio de llamada,
+    /// con lo que "escribe su segundo argumento" acaba diciendo `stack#3` y no
+    /// "algun sitio".
+    uint32_t lee_apuntado = 0;
+    uint32_t escribe_apuntado = 0;
+    bool lee_global = false;      ///< Lee estado global (estatico del proceso).
+    bool escribe_global = false;  ///< Lo escribe.
+    bool io = false;              ///< E/S observable (consola, fichero, puerto).
+    bool puede_lanzar = false;    ///< Puede cortar el flujo (throw/abort).
+    bool no_determinista = false; ///< Dos llamadas iguales pueden diferir.
+    /// Corre AL COMPILAR, no en ejecucion.  Sus efectos son sobre la propia
+    /// compilacion, no sobre el programa compilado.
+    bool comptime = false;
+};
+
 struct IrNativeImport {
     std::string
         lib; ///< Ruta logica de la libreria (p.ej. "stdlib/native/io/vesta_io")
     std::string name; ///< Nombre de la funcion nativa (p.ej. "vio_println")
+    IrNativeEffects efectos; ///< Lo que hace, si alguien lo ha dicho.
 };
 
 // =========================================================================
@@ -1859,6 +1896,20 @@ struct IrModule {
      * punto sin preocuparse de duplicados.
      */
     void register_native_import(std::string lib, std::string name);
+
+    /**
+     * @brief Registra una importacion nativa DICIENDO lo que hace.
+     *
+     * Misma deduplicacion; si la pareja ya estaba sin declarar, la declaracion
+     * la completa (el orden en que se emiten las llamadas no deberia decidir
+     * cuanto se sabe de la funcion).
+     */
+    void register_native_import(std::string lib, std::string name,
+                                const IrNativeEffects &efectos);
+
+    /// Devuelve lo declarado para @p lib_dos_puntos_fn ("lib:fn"), o nullptr si
+    /// esa nativa no se importa aqui o nadie ha dicho lo que hace.
+    const IrNativeEffects *native_effects_of(const std::string &lib_fn) const;
 };
 
 // =========================================================================

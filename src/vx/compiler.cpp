@@ -816,7 +816,7 @@ CompileResult compile_vx_source(const std::string &source,
                     // interp ese bytecode nunca se ejecute (la fibra corre por el
                     // opcode SWAPCTX / el JIT las materializa nativas).
                     for (const auto &ni : vf_mod.native_imports)
-                        irmod.register_native_import(ni.lib, ni.name);
+                        irmod.register_native_import(ni.lib, ni.name, ni.efectos);
                 }
             }
         }

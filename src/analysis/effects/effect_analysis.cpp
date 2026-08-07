@@ -46,8 +46,8 @@ EffectAnalysisResult EffectAnalysis::local(const ir::IrFunction &fn,
     const void *key = static_cast<const void *>(&ins);
     auto it = local_cache_.find(key);
     if (it != local_cache_.end()) return it->second;
-    EffectAnalysisResult r =
-        effects_of_instr(fn, facts_of(fn), points_to_of(fn), ins);
+    EffectAnalysisResult r = effects_of_instr(fn, facts_of(fn), points_to_of(fn),
+                                              ins, &native_decls_);
     local_cache_.emplace(key, r);
     return r;
 }
@@ -119,7 +119,7 @@ struct CallInfo {
     std::vector<std::string> static_callees;
     bool                     dynamic = false; // CALLVIRT/CALLIND/CALLN/...
 };
-CallInfo callees_of(const ir::IrFunction &fn) {
+CallInfo callees_of(const ir::IrFunction &fn, const NativeDecls &decls) {
     CallInfo ci;
     for (const ir::IrBlock &b : fn.blocks)
         for (const ir::IrInstr &in : b.instrs) {
@@ -138,6 +138,11 @@ CallInfo callees_of(const ir::IrFunction &fn) {
              * Antes se marcaba dinamica SIEMPRE, asi que aunque el destino
              * estuviera delante, su resumen no se miraba nunca. */
             case ir::IrOp::CALLN:
+                /* Si alguien DIJO lo que hace, ya esta contado: el efecto
+                 * declarado se aplico en el sitio de llamada, con su memoria
+                 * resuelta.  Anadirla como callee ausente la volveria a subir
+                 * al efecto maximo y la declaracion no habria servido de nada. */
+                if (decls.count(in.func_name)) break;
                 if (!in.func_name.empty())
                     ci.static_callees.push_back(in.func_name);
                 else
@@ -218,6 +223,10 @@ ModuleSummary EffectAnalysis::build_summary(
     }
 
     // 1) Summary LOCAL de cada funcion (efecto propio, estructura) + lagunas.
+    //    Antes se recogen las declaraciones de nativas: son parte de la entrada
+    //    del analisis local (una nativa declarada aporta su efecto exacto ahi
+    //    mismo, no una laguna).
+    native_decls_ = collect_native_decls(mods);
     gaps_ = EffectGaps{};
     std::unordered_map<std::string, CallInfo> calls;
     // El efecto/completeness LOCAL se preserva aparte: el cierre (paso 2) se
@@ -225,7 +234,7 @@ ModuleSummary EffectAnalysis::build_summary(
     std::unordered_map<std::string, SemanticEffects>      local_eff;
     std::unordered_map<std::string, AnalysisCompleteness> local_comp;
     for_each_fn([&](const ir::IrFunction &fn) {
-        EffectAnalysisResult loc = function_local_effects(fn, &gaps_);
+        EffectAnalysisResult loc = function_local_effects(fn, &gaps_, &native_decls_);
         FunctionSummary s;
         s.symbol = fn.name;
         s.semantic.local = loc.effects; // CRUDO (lo muestra --analyze "local")
@@ -236,7 +245,7 @@ ModuleSummary EffectAnalysis::build_summary(
         s.semantic.closure = obs;
         s.structural = structural_of(fn);
         s.completeness = loc.completeness;
-        calls[fn.name] = callees_of(fn);
+        calls[fn.name] = callees_of(fn, native_decls_);
         s.interproc.reaches_dynamic_call = calls[fn.name].dynamic;
         s.interproc.has_calls =
             calls[fn.name].dynamic || !calls[fn.name].static_callees.empty();

@@ -28,6 +28,8 @@
 namespace ir {
 struct IrFunction;
 struct IrInstr;
+struct IrModule;
+struct IrNativeEffects;
 using IrValueId = uint32_t; // igual que la definicion en ssa_ir.h
 } // namespace ir
 
@@ -85,21 +87,35 @@ struct EffectGaps {
     bool empty() const { return total_top == 0; }
 };
 
+/// Lo declarado sobre las funciones NATIVAS del programa, por nombre "lib:fn".
+///
+/// Apunta a las declaraciones que viven en los modulos (que sobreviven al
+/// analisis), no copias: la declaracion tiene un solo sitio.
+using NativeDecls = std::map<std::string, const ir::IrNativeEffects *>;
+
+/// Recoge las declaraciones de todos los modulos del programa.
+NativeDecls collect_native_decls(const std::vector<const ir::IrModule *> &mods);
+
 /// Efecto LOCAL de UNA instruccion IR (con completeness + motivo).  El asm
 /// lifteado no es especial: llega como ADD/LOAD/STORE/... normales.  INLINE_ASM/
 /// ASM_MICRO (residuo opaco) se analizan aparte con tags.  @p pt es la tabla
 /// points-to COMPARTIDA de la funcion (resuelve punteros a su localizacion);
 /// el llamador la construye UNA vez (compute_points_to) y la reusa por instr.
+/// @p decls (si != null) son los efectos DECLARADOS de las nativas: una CALLN
+/// a una nativa declarada deja de ser opaca y aporta su efecto exacto, con la
+/// memoria resuelta en el sitio de llamada.
 EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
                                       const analysis::IrFacts &facts,
                                       const analysis::PointsTo &pt,
-                                      const ir::IrInstr &ins);
+                                      const ir::IrInstr &ins,
+                                      const NativeDecls *decls = nullptr);
 
 /// Efecto LOCAL agregado de una funcion completa (fold de sus bloques).  Es el
 /// `.local` del SemanticSummary; el `.closure` (interproc) lo anade la Fase 2.
 /// @p gaps (si != null) acumula las lagunas de precision encontradas.
 EffectAnalysisResult function_local_effects(const ir::IrFunction &fn,
-                                            EffectGaps *gaps = nullptr);
+                                            EffectGaps *gaps = nullptr,
+                                            const NativeDecls *decls = nullptr);
 
 } // namespace effects
 } // namespace analysis

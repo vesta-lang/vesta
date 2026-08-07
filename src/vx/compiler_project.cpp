@@ -2635,8 +2635,12 @@ CompileResult compile_vx_project(
         // usar @c print desde un metodo de clase) generan un simbolo no
         // resuelto en el linker.  La funcion @c register_native_import
         // ya deduplica internamente, asi que llamarla directo es seguro.
+        /* Con lo DECLARADO sobre cada nativa: si el dep dijo lo que hace, esa
+         * es la unica copia que hay de ese dato, y perderla aqui devuelve la
+         * funcion a "puede hacer cualquier cosa" en el modulo fusionado -- que
+         * es el que se analiza. */
         for (auto &ni : dep_ir.native_imports) {
-            merged.register_native_import(ni.lib, ni.name);
+            merged.register_native_import(ni.lib, ni.name, ni.efectos);
         }
     }
 

@@ -1003,10 +1003,24 @@ std::vector<uint8_t> emit_ir_module_cache(const IrModule &mod) {
     //    FFI extern a su DLL real (kernel32.dll, user32.dll, ...) en vez de
     //    asumir msvcrt.dll.  Sin esto, `extern "kernel32.dll" {...}` resolvia
     //    desde msvcrt -> fallo de carga del PE.
+    /*    Con lo DECLARADO sobre cada una (v11).  Va aqui y no se recalcula
+     *    despues porque quien lo sabe es el frontend, y a partir de este punto
+     *    -- el JIT, el AOT, `--analyze` -- todos leen el IR de la cache: una
+     *    declaracion que no cruce esta frontera no la ve nadie. */
     write_u32(out, static_cast<uint32_t>(mod.native_imports.size()));
     for (const auto &ni : mod.native_imports) {
         write_str(out, ni.lib);
         write_str(out, ni.name);
+        const IrNativeEffects &fx = ni.efectos;
+        write_u8(out, fx.declarados ? 1u : 0u);
+        write_u32(out, fx.lee_apuntado);
+        write_u32(out, fx.escribe_apuntado);
+        write_u8(out, uint8_t((fx.lee_global ? 1u : 0u) |
+                              (fx.escribe_global ? 2u : 0u) |
+                              (fx.io ? 4u : 0u) |
+                              (fx.puede_lanzar ? 8u : 0u) |
+                              (fx.no_determinista ? 16u : 0u) |
+                              (fx.comptime ? 32u : 0u)));
     }
     return out;
 }
@@ -1074,7 +1088,20 @@ bool parse_ir_module_cache(const std::vector<uint8_t> &data, IrModule &out) {
             std::string lib, name;
             if (!read_str(data, off, lib)) return false;
             if (!read_str(data, off, name)) return false;
-            out.register_native_import(std::move(lib), std::move(name));
+            IrNativeEffects fx;
+            uint8_t decl = 0, bits = 0;
+            if (!read_u8(data, off, decl)) return false;
+            if (!read_u32(data, off, fx.lee_apuntado)) return false;
+            if (!read_u32(data, off, fx.escribe_apuntado)) return false;
+            if (!read_u8(data, off, bits)) return false;
+            fx.declarados = decl != 0;
+            fx.lee_global = (bits & 1u) != 0;
+            fx.escribe_global = (bits & 2u) != 0;
+            fx.io = (bits & 4u) != 0;
+            fx.puede_lanzar = (bits & 8u) != 0;
+            fx.no_determinista = (bits & 16u) != 0;
+            fx.comptime = (bits & 32u) != 0;
+            out.register_native_import(std::move(lib), std::move(name), fx);
         }
     }
     return true;

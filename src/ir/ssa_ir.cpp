@@ -516,10 +516,44 @@ uint64_t IrModule::intern_static_data(std::vector<uint8_t> bytes) {
  * trivialmente mas barata que mantener una tabla hash auxiliar.
  */
 void IrModule::register_native_import(std::string lib, std::string name) {
-    for (const auto &ni : native_imports) {
-        if (ni.lib == lib && ni.name == name) return;
+    register_native_import(std::move(lib), std::move(name), IrNativeEffects{});
+}
+
+/**
+ * @brief Igual, pero declarando lo que la nativa hace.
+ *
+ * Si la pareja ya estaba registrada sin declaracion, esta la completa: que se
+ * sepa o no lo que hace una funcion no puede depender del orden en que se
+ * emitieron sus llamadas.
+ */
+void IrModule::register_native_import(std::string lib, std::string name,
+                                      const IrNativeEffects &efectos) {
+    for (auto &ni : native_imports) {
+        if (ni.lib == lib && ni.name == name) {
+            if (efectos.declarados && !ni.efectos.declarados) ni.efectos = efectos;
+            return;
+        }
     }
-    native_imports.push_back({std::move(lib), std::move(name)});
+    native_imports.push_back({std::move(lib), std::move(name), efectos});
+}
+
+/**
+ * @brief Busca lo declarado para una nativa por su nombre "lib:fn".
+ *
+ * Busqueda lineal, como el registro: los imports nativos de un modulo son
+ * decenas como mucho.
+ */
+const IrNativeEffects *IrModule::native_effects_of(const std::string &lib_fn) const {
+    const size_t sep = lib_fn.rfind(':');
+    if (sep == std::string::npos) return nullptr;
+    for (const auto &ni : native_imports) {
+        if (!ni.efectos.declarados) continue;
+        if (ni.name.size() == lib_fn.size() - sep - 1 &&
+            lib_fn.compare(sep + 1, std::string::npos, ni.name) == 0 &&
+            ni.lib.size() == sep && lib_fn.compare(0, sep, ni.lib) == 0)
+            return &ni.efectos;
+    }
+    return nullptr;
 }
 
 /* =====================================================================

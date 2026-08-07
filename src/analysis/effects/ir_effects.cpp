@@ -183,10 +183,59 @@ static void add_write(SemanticEffects &e, const AbstractLoc &l) {
     e.mem.writes.add(l);
 }
 
+NativeDecls collect_native_decls(const std::vector<const ir::IrModule *> &mods) {
+    NativeDecls out;
+    for (const ir::IrModule *m : mods) {
+        if (!m) continue;
+        for (const ir::IrNativeImport &ni : m->native_imports) {
+            if (!ni.efectos.declarados) continue;
+            out.emplace(ni.lib + ":" + ni.name, &ni.efectos);
+        }
+    }
+    return out;
+}
+
+// Lo declarado para una nativa, o nullptr si nadie ha dicho nada de ella.
+static const ir::IrNativeEffects *buscar_decl(const NativeDecls &d,
+                                              const std::string &lib_fn) {
+    auto it = d.find(lib_fn);
+    return it == d.end() ? nullptr : it->second;
+}
+
+/**
+ * @brief Traduce una declaracion a efectos, resolviendo la memoria en el sitio.
+ *
+ * La declaracion habla de ARGUMENTOS ("escribe el segundo"); aqui se convierte
+ * en la localizacion concreta a la que ese argumento apunta en esta llamada, con
+ * el mismo resolvedor que usan LOAD y STORE.  Por eso la declaracion se puede
+ * escribir una vez y sigue siendo precisa en cada sitio.
+ *
+ * El ancho se deja desconocido (objeto entero): una nativa escribe un buffer,
+ * no una palabra, y afinar el ancho aqui seria afirmar de mas.
+ */
+template <typename LocFn>
+static void aplicar_decl(SemanticEffects &e, const ir::IrNativeEffects &d,
+                         const std::vector<ir::IrValueId> &ops, LocFn &&loc) {
+    for (uint32_t i = 0; i < ops.size() && i < 32; ++i) {
+        const uint32_t bit = uint32_t(1) << i;
+        if (d.lee_apuntado & bit) add_read(e, loc(ops[i], 0));
+        if (d.escribe_apuntado & bit) add_write(e, loc(ops[i], 0));
+    }
+    if (d.lee_global) add_read(e, {AbstractLoc::Kind::Global, LOC_GENERIC});
+    if (d.escribe_global) add_write(e, {AbstractLoc::Kind::Global, LOC_GENERIC});
+    if (d.io) {
+        e.may_io = true;
+        e.determinism.add(DeterminismTag::ExternalObservable);
+    }
+    if (d.puede_lanzar) e.may_throw = true;
+    if (d.no_determinista) e.determinism.add(DeterminismTag::ExternalObservable);
+}
+
 EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
                                       const analysis::IrFacts &facts,
                                       const analysis::PointsTo &pt,
-                                      const ir::IrInstr &ins) {
+                                      const ir::IrInstr &ins,
+                                      const NativeDecls *decls) {
     (void)facts; // el points-to (pt) ya se construyo con los hechos.
     EffectAnalysisResult r; // neutro Complete por defecto
     SemanticEffects &e = r.effects;
@@ -360,7 +409,7 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
         r.completeness = AnalysisCompleteness::Conservative;
         r.unknown_reason = UnknownReason::Indirect;
         break;
-    case IrOp::CALLN:
+    case IrOp::CALLN: {
         /* Una llamada NATIVA no es opaca por definicion.  Su efecto LOCAL es el
          * de cualquier llamada -- ceder el control --; lo que hace el destino lo
          * pone el cierre interprocedural, que lo busca por nombre y lo ANALIZA
@@ -370,7 +419,15 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
          * Antes se daba por caja negra aqui mismo, con lo que daba igual que el
          * destino estuviera delante: nadie llegaba a mirarlo. */
         e.control.kind = ControlKind::Call;
+        /* Y si el destino no esta pero alguien DIJO lo que hace, se usa.  La
+         * declaracion habla de argumentos ("escribe el segundo"), y es aqui --
+         * en el sitio de llamada -- donde eso se puede convertir en memoria
+         * concreta: el mismo resolvedor que usan LOAD y STORE. */
+        const ir::IrNativeEffects *d = decls ? buscar_decl(*decls, ins.func_name)
+                                             : nullptr;
+        if (d) aplicar_decl(e, *d, ops, loc);
         break;
+    }
 
     // ---- Concurrencia ----
     case IrOp::AWAIT: case IrOp::MONENTER: case IrOp::MONWAIT: case IrOp::MSGRECV:
@@ -456,7 +513,8 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
 // Agregado local de una funcion: seq dentro de bloque, join entre bloques.
 // --------------------------------------------------------------------------
 EffectAnalysisResult function_local_effects(const ir::IrFunction &fn,
-                                            EffectGaps *gaps) {
+                                            EffectGaps *gaps,
+                                            const NativeDecls *decls) {
     analysis::IrFacts facts = analysis::build_ir_facts(fn);
     analysis::PointsTo pt = analysis::compute_points_to(fn, facts);
     EffectAnalysisResult acc;
@@ -467,7 +525,7 @@ EffectAnalysisResult function_local_effects(const ir::IrFunction &fn,
         SemanticEffects blk = SemanticEffects::none();
         bool first_instr = true;
         for (const ir::IrInstr &in : b.instrs) {
-            EffectAnalysisResult r = effects_of_instr(fn, facts, pt, in);
+            EffectAnalysisResult r = effects_of_instr(fn, facts, pt, in, decls);
             if (uint8_t(r.completeness) > uint8_t(worst)) worst = r.completeness;
             // Registrar la laguna (si la hubo) para el reporte de cobertura.
             if (gaps && r.completeness != AnalysisCompleteness::Complete &&

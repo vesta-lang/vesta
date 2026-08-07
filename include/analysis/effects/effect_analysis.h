@@ -102,6 +102,10 @@ private:
     ModuleSummary                                          module_cache_;
     ModuleSummary                                          program_cache_;
     EffectGaps                                             gaps_;
+    /// Lo declarado sobre las nativas del programa (lo llena build_summary con
+    /// las declaraciones de los modulos que se le pasan).  Vacio = ninguna
+    /// nativa declarada, que es como estaba antes de que se pudiera declarar.
+    NativeDecls                                            native_decls_;
     bool module_dirty_ = true;
 
     /// Nucleo interprocedural COMPARTIDO: computa el summary (local + cierre por
