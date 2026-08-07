@@ -544,7 +544,7 @@ CompileResult compile_vx_project(
 bool vx_source_has_imports(const std::string &source);
 
 /**
- * @brief ¿El fuente declara un `namespace`?
+ * @brief El fuente declara un `namespace`?
  *
  * Se pregunta para saber si hay que compilarlo como PROYECTO aunque no importe
  * nada: un namespace puede estar repartido entre varios ficheros -- el base y
@@ -552,7 +552,7 @@ bool vx_source_has_imports(const std::string &source);
  * usa tipos que declaran sus hermanos.
  *
  * Sin esto, `--analyze` sobre `std/types.vx` moria en "tipo no resuelto en
- * alias": el criterio era "¿tiene imports?", y ese fichero no importa nada.
+ * alias": el criterio era "tiene imports?", y ese fichero no importa nada.
  * O sea que la base de tipos de la que depende media stdlib era invisible para
  * el analisis.
  *

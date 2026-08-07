@@ -80,6 +80,10 @@ struct Resolver {
         return base;
     }
 
+    /// PHI que se esta resolviendo ahora mismo.  Volver a ella por un arg no es
+    /// "no se sabe": es el propio bucle, y ese arg simplemente no aporta.
+    ir::IrValueId phi_en_curso = ir::IR_NO_VALUE;
+
     const PointsToEntry &resolve(ir::IrValueId v) {
         if (v == ir::IR_NO_VALUE ||
             v >= static_cast<ir::IrValueId>(memo.size())) {
@@ -87,7 +91,19 @@ struct Resolver {
             return kUnk;
         }
         if (state[v] == 2) return memo[v];
-        if (state[v] == 1) { // ciclo (PHI): no se puede resolver -> Unknown
+        if (state[v] == 1) {
+            /* Ciclo.  Si es la PHI que estamos resolviendo, se devuelve un
+             * "no aporta" (None) SIN memoizar: memoizarlo la dejaria marcada
+             * como desconocida para siempre, que es lo que hacia que un puntero
+             * inducido -- `q = p; q += 1` en cada vuelta, en lo que el
+             * optimizador convierte `p + i` -- perdiera su raiz y con ella toda
+             * posibilidad de comprobar el acceso.  Un bucle indexado es justo
+             * donde se desborda un buffer. */
+            if (v == phi_en_curso) {
+                static const PointsToEntry kNoAporta{K::None, effects::LOC_GENERIC,
+                                                     0, false};
+                return kNoAporta;
+            }
             memo[v] = unknown();
             state[v] = 2;
             return memo[v];
@@ -186,8 +202,41 @@ struct Resolver {
             if (!d->operands.empty()) return inexact(resolve(d->operands[0]));
             return unknown();
 
+        /* PHI: si todos los caminos que APORTAN traen la misma raiz, la raiz se
+         * conserva.  El desplazamiento no -- por eso queda inexacto --, pero la
+         * raiz es lo que permite saber DE QUE objeto se habla, y sin ella no hay
+         * nada que comprobar.
+         *
+         * Es el caso de un puntero inducido: `q = buf` al entrar y `q = q + 1`
+         * al volver.  El segundo camino vuelve a la propia PHI y no aporta; el
+         * primero dice `buf`.  Antes se devolvia "desconocido" y un bucle que
+         * recorre un buffer quedaba fuera de todo analisis.
+         *
+         * Si dos caminos traen raices DISTINTAS no se afirma nada: no hay forma
+         * de decir cual manda. */
+        case Op::PHI: {
+            if (d->operands.empty()) return unknown();
+            const ir::IrValueId marca_previa = phi_en_curso;
+            phi_en_curso = v;
+            PointsToEntry acc;
+            bool primero = true, discrepan = false;
+            for (ir::IrValueId a : d->operands) {
+                const PointsToEntry e = resolve(a);
+                if (e.kind == K::None) continue;      // el propio bucle
+                if (e.kind == K::Unknown) { discrepan = true; break; }
+                if (primero) { acc = e; primero = false; continue; }
+                if (e.kind != acc.kind || e.root != acc.root) {
+                    discrepan = true;
+                    break;
+                }
+            }
+            phi_en_curso = marca_previa;
+            if (discrepan || primero) return unknown();
+            return inexact(acc);
+        }
+
         default:
-            // Cargado de memoria, PHI, const-address, calculo arbitrario...
+            // Cargado de memoria, const-address, calculo arbitrario...
             return unknown();
         }
     }
