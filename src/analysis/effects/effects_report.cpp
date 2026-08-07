@@ -512,12 +512,106 @@ static void print_cobertura_formas(std::ostream &os, const ir::IrModule &mod,
     }
 }
 
+/// Identidad de un valor a traves del pipeline: donde NACE.  Los value-id se
+/// renumeran al optimizar, asi que no sirven para emparejar dos estados.
+struct ClaveValor {
+    std::string funcion;
+    uint32_t    linea = 0;
+    uint32_t    indice = 0; // columna, o numero de parametro si linea==0
+    bool operator<(const ClaveValor &o) const {
+        if (funcion != o.funcion) return funcion < o.funcion;
+        if (linea != o.linea) return linea < o.linea;
+        return indice < o.indice;
+    }
+};
+
+static std::map<ClaveValor, analysis::asa::FormaDeValor>
+formas_del_modulo(const ir::IrModule &mod) {
+    std::map<ClaveValor, analysis::asa::FormaDeValor> out;
+    for (const ir::IrFunction &fn : mod.functions) {
+        if (fn.blocks.empty()) continue;
+        const analysis::IrFacts h = analysis::build_ir_facts(fn);
+        for (const analysis::asa::AggregateFacts &a :
+             analysis::asa::observar_agregados(mod, fn, h).agregados)
+            out[ClaveValor{fn.name, a.declaracion.linea, a.declaracion.indice}] =
+                a.forma();
+    }
+    return out;
+}
+
+/**
+ * @brief Que le paso a cada valor entre los dos estados.
+ *
+ * Es una entidad de primera clase, no una diferencia que el lector tenga que
+ * buscar comparando dos bloques.  Tres desenlaces y cada uno dice algo distinto:
+ *
+ *   desaparece      la transformacion se lo llevo -- eso CONFIRMA que ocurrio.
+ *   sobrevive       sigue ahi, y sus limitaciones dicen que se lo impidio.
+ *   cambia de forma lo que hay que mirar con lupa: una transformacion no
+ *                   deberia alterar la naturaleza semantica de un valor, asi
+ *                   que o el optimizador rompio algo, o uno de los dos
+ *                   analisis miente.  Se resalta por eso.
+ *
+ * ASA no juzga la transformacion: dice que se observo a cada lado.  Interpretar
+ * si estuvo bien es del consumidor.
+ */
+static void print_transiciones(std::ostream &os, const ir::IrModule &mod,
+                               const ir::IrModule &mod_previo) {
+    const auto antes = formas_del_modulo(mod_previo);
+    const auto despues = formas_del_modulo(mod);
+    const bool color = hay_color(os);
+    uint32_t n_ido = 0, n_igual = 0, n_cambia = 0;
+    std::string detalle;
+    for (const auto &kv : antes) {
+        auto it = despues.find(kv.first);
+        const std::string donde =
+            kv.first.funcion + (kv.first.linea > 0
+                                    ? " linea " + std::to_string(kv.first.linea)
+                                    : " parametro " +
+                                          std::to_string(kv.first.indice));
+        if (it == despues.end()) {
+            ++n_ido;
+            detalle += "    " + tinte(color, col::kRojo, donde) + ": " +
+                       analysis::asa::nombre_forma(kv.second) +
+                       " -> ya no existe (se lo llevo una transformacion)\n";
+        } else if (it->second == kv.second) {
+            ++n_igual;
+        } else {
+            ++n_cambia;
+            detalle += "    " + tinte(color, col::kFuerte, donde) + ": " +
+                       tinte(color, color_forma(kv.second),
+                             analysis::asa::nombre_forma(kv.second)) +
+                       " -> " +
+                       tinte(color, color_forma(it->second),
+                             analysis::asa::nombre_forma(it->second)) +
+                       tinte(color, col::kAmbar, "   (cambio semantico: revisar)") +
+                       "\n";
+        }
+    }
+    for (const auto &kv : despues)
+        if (antes.find(kv.first) == antes.end())
+            detalle += "    " + tinte(color, col::kCian, kv.first.funcion) +
+                       ": aparece al optimizar (" +
+                       analysis::asa::nombre_forma(kv.second) + ")\n";
+    if (antes.empty() && despues.empty()) return;
+    os << "  --- que cambio entre los dos estados ---\n";
+    os << "    sobreviven igual: " << tinte(color, col::kVerde,
+                                            std::to_string(n_igual))
+       << "   desaparecen: " << tinte(color, col::kRojo, std::to_string(n_ido))
+       << "   cambian de forma: "
+       << tinte(color, n_cambia ? col::kAmbar : col::kApagado,
+                std::to_string(n_cambia))
+       << "\n";
+    os << detalle;
+}
+
 static void print_formas(std::ostream &os, const ir::IrModule &mod,
                          const ir::IrModule *mod_previo) {
     os << "=== Forma de los valores con componentes ===\n";
     if (mod_previo != nullptr)
         print_formas_de(os, *mod_previo, "tal como se escribio");
     print_formas_de(os, mod, "en el codigo final");
+    if (mod_previo != nullptr) print_transiciones(os, mod, *mod_previo);
     os << "\n";
 }
 
