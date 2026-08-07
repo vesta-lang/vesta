@@ -19,10 +19,90 @@
 #include "analysis/effects/effect_analysis.h"
 #include "vx/diag/diag_format.h" // el texto de los motivos vive en el catalogo
 
+#include <cstdlib>
+#include <map>
+#include <iostream>
 #include <string>
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace analysis {
 namespace effects {
+
+// =========================================================================
+//  Color y graficos: solo cuando hay alguien mirando
+// =========================================================================
+
+/**
+ * @brief ¿Se puede pintar?
+ *
+ * Solo si la salida es la consola Y nadie ha pedido lo contrario.  Un informe
+ * redirigido a un fichero con secuencias de escape dentro es un informe que no
+ * se puede procesar, y `NO_COLOR` es la forma estandar de decir "sin adornos".
+ */
+static bool hay_color(std::ostream &os) {
+    if (&os != &std::cout) return false;
+    if (std::getenv("NO_COLOR") != nullptr) return false;
+#if defined(_WIN32)
+    return _isatty(_fileno(stdout)) != 0;
+#else
+    return isatty(fileno(stdout)) != 0;
+#endif
+}
+
+namespace col {
+constexpr const char *kReset = "\033[0m";
+constexpr const char *kFuerte = "\033[1m";
+constexpr const char *kApagado = "\033[90m";
+constexpr const char *kVerde = "\033[32m";
+constexpr const char *kCian = "\033[36m";
+constexpr const char *kAmbar = "\033[33m";
+constexpr const char *kRojo = "\033[31m";
+} // namespace col
+
+/// Envuelve @p txt en un color, o lo deja crudo si no se puede pintar.
+static std::string tinte(bool color, const char *c, const std::string &txt) {
+    if (!color) return txt;
+    return std::string(c) + txt + col::kReset;
+}
+
+/**
+ * @brief El color DICE algo: no es decoracion.
+ *
+ * Verde lo demostrado, cian lo que se afirma sin cerrar, ambar lo que no se
+ * puede elegir, apagado lo que no se ha llegado a observar.  Quien lea en blanco
+ * y negro pierde velocidad, no informacion: el texto sigue diciendo lo mismo.
+ */
+static const char *color_forma(analysis::asa::FormaDeValor f) {
+    switch (f) {
+    case analysis::asa::FormaDeValor::Compuesto: return col::kVerde;
+    case analysis::asa::FormaDeValor::Agregado: return col::kCian;
+    case analysis::asa::FormaDeValor::Desconocida: return col::kAmbar;
+    default: return col::kApagado;
+    }
+}
+
+/**
+ * @brief Barra de proporcion con bloques Unicode.
+ *
+ * Los caracteres van como bytes UTF-8 escapados para que el fuente siga siendo
+ * ASCII: U+2588 (bloque lleno) y U+2591 (bloque claro).  Una barra dice de un
+ * vistazo lo que una fraccion obliga a calcular.
+ */
+static std::string barra(uint32_t parte, uint32_t total, int ancho = 24) {
+    if (total == 0) return std::string();
+    const int llenos = static_cast<int>((static_cast<double>(parte) / total) *
+                                        ancho + 0.5);
+    std::string out;
+    for (int i = 0; i < ancho; ++i)
+        out += (i < llenos) ? "\xe2\x96\x88"
+                            : "\xe2\x96\x91";
+    return out;
+}
+
 
 
 
@@ -313,9 +393,19 @@ static void print_formas_de(std::ostream &os, const ir::IrModule &mod,
                    << a.declaracion.indice << "  ";
             if (a.bytes >= 0) os << a.bytes << " bytes, ";
             else os << "tamano no conocido aqui, ";
+            const bool color = hay_color(os);
+            const analysis::asa::FormaDeValor f = a.forma();
             os << a.offsets_tocados() << " desplazamientos  -> "
-               << analysis::asa::nombre_forma(a.forma()) << " / "
-               << analysis::asa::nombre_certeza(a.sello.certeza) << "\n";
+               << tinte(color, color_forma(f), analysis::asa::nombre_forma(f))
+               << " / "
+               << tinte(color,
+                        a.sello.certeza == analysis::asa::Certeza::Demostrada
+                            ? col::kVerde
+                            : (a.sello.certeza == analysis::asa::Certeza::Inferida
+                                   ? col::kCian
+                                   : col::kApagado),
+                        analysis::asa::nombre_certeza(a.sello.certeza))
+               << "\n";
             for (analysis::asa::MotivoForma mo : a.motivos_forma())
                 os << "        porque: " << analysis::asa::nombre_motivo(mo)
                    << "\n";
@@ -367,8 +457,12 @@ static void print_formas_de(std::ostream &os, const ir::IrModule &mod,
  */
 static void print_cobertura_formas(std::ostream &os, const ir::IrModule &mod,
                                    const char *estado) {
-    uint32_t observados = 0, sin_abrir = 0, fronteras = 0, limitaciones = 0;
+    uint32_t observados = 0, fronteras = 0, limitaciones = 0;
     uint32_t valores = 0, con_forma = 0, demostrados = 0;
+    /* Los ambitos que se saben nombrar y no se han abierto son una LISTA DE
+     * TRABAJO: dicen exactamente donde mirar para saber mas.  Un contador no
+     * acciona nada; el nombre si. */
+    std::map<std::string, uint32_t> sin_abrir;
     for (const ir::IrFunction &fn : mod.functions) {
         if (fn.blocks.empty()) continue;
         const analysis::IrFacts h = analysis::build_ir_facts(fn);
@@ -387,20 +481,35 @@ static void print_cobertura_formas(std::ostream &os, const ir::IrModule &mod,
                     ++observados;
                 else if (u.identidad ==
                          analysis::asa::IdentidadUniverso::Conocido)
-                    ++sin_abrir;
+                    ++sin_abrir[u.ambito];
             }
         }
     }
     if (valores == 0) return;
     os << "  forma de los valores (" << estado << "):\n";
-    os << "    valores observados            : " << valores << "\n";
-    os << "      con forma afirmable         : " << con_forma << "\n";
-    os << "      demostrados (universo cerrado): " << demostrados << "\n";
-    os << "    ambitos abiertos y mirados    : " << observados << "\n";
-    os << "    ambitos que se saben pero no se han mirado: " << sin_abrir
-       << "\n";
-    os << "    fronteras por las que se sale : " << fronteras << "\n";
-    os << "    sitios que no se pudieron seguir: " << limitaciones << "\n";
+    const bool color = hay_color(os);
+    auto linea = [&](const char *etiqueta, uint32_t n, uint32_t total,
+                     const char *c) {
+        os << "    " << etiqueta << " " << tinte(color, c, std::to_string(n));
+        if (total > 0 && n <= total)
+            os << "  " << tinte(color, c, barra(n, total)) << " "
+               << (total ? (n * 100 / total) : 0) << "%";
+        os << "\n";
+    };
+    linea("valores observados             :", valores, 0, col::kFuerte);
+    linea("  con forma afirmable          :", con_forma, valores, col::kVerde);
+    linea("  demostrados (ambito cerrado) :", demostrados, valores, col::kVerde);
+    linea("ambitos abiertos y mirados     :", observados, 0, col::kCian);
+    linea("fronteras por las que se sale  :", fronteras, 0, col::kAmbar);
+    linea("sitios que no se pudieron seguir:", limitaciones, 0, col::kAmbar);
+    if (!sin_abrir.empty()) {
+        uint32_t n = 0;
+        for (const auto &kv : sin_abrir) n += kv.second;
+        linea("ambitos que se saben y no se han mirado:", n, 0, col::kAmbar);
+        for (const auto &kv : sin_abrir)
+            os << "      " << tinte(color, col::kApagado, kv.first) << " x"
+               << kv.second << "\n";
+    }
 }
 
 static void print_formas(std::ostream &os, const ir::IrModule &mod,
