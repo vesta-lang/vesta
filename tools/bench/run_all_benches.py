@@ -215,6 +215,34 @@ def prompt_choose_vm(candidates: list[tuple[str, Path]]) -> Path:
         warn(f"opcion invalida: {choice!r}")
 
 
+def _directorios_extra() -> list[Path]:
+    """Directorios EXTRA donde buscar herramientas, dichos por quien los tiene.
+
+    Que algo este instalado y que este en el PATH son dos cosas distintas, y el
+    arnes no deberia quedarse ciego ante la primera porque falle la segunda.
+    Pero tampoco vale ponerse a adivinar rutas ni a barrer unidades: eso solo
+    funciona en el equipo donde se escribio.  Aqui se lee lo que el usuario
+    declare en VESTA_BENCH_BIN, y para un compilador concreto estan --cc y
+    --cxx.
+    """
+    dirs: list[Path] = []
+    for extra in os.environ.get("VESTA_BENCH_BIN", "").split(os.pathsep):
+        if extra.strip():
+            dirs.append(Path(extra.strip()))
+    return [d for d in dirs if d.is_dir()]
+
+
+def buscar_fuera_del_path(nombre: str) -> str:
+    """Busca @p nombre en los directorios declarados.  Ruta absoluta o ""."""
+    sufijos = [".exe", ""] if sys.platform == "win32" else [""]
+    for d in _directorios_extra():
+        for suf in sufijos:
+            cand = d / (nombre + suf)
+            if cand.is_file():
+                return str(cand)
+    return ""
+
+
 def buscar_compiladores(nombres: list[str]) -> list[tuple[str, str]]:
     """Compiladores instalados de entre @p nombres, con su ruta.
 
@@ -226,7 +254,7 @@ def buscar_compiladores(nombres: list[str]) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     vistos: set[str] = set()
     for n in nombres:
-        p = shutil.which(n)
+        p = shutil.which(n) or buscar_fuera_del_path(n)
         if not p:
             continue
         # Se descarta por VERSION, no por ruta.  En Windows `c++.exe` es una
@@ -1088,9 +1116,28 @@ def _anotar_fallo(bench: str, lang: str, r) -> None:
         txt = (getattr(r, "stderr", "") or getattr(r, "stdout", "") or "")
         if isinstance(txt, bytes):
             txt = txt.decode("utf-8", "replace")
-    lineas = [l for l in txt.strip().splitlines() if l.strip()]
+    lineas = [l.strip() for l in txt.strip().splitlines() if l.strip()]
+    if not lineas:
+        ERRORES_COMPILACION[(bench, lang)] = "sin mensaje del compilador"
+        return
+    # La primera linea suele ser generica ("linking with `link.exe` failed") y
+    # la util viene mas abajo ("could not open 'kernel32.lib'").  Se prefiere
+    # la ULTIMA que mencione un error concreto; si no hay, la primera.
+    ruido = ("aborting due to", "returned an unexpected error",
+             "some arguments are omitted", "may need to install",
+             "for more information")
+    concretas = [l for l in lineas[1:]
+                 if ("error" in l.lower() or "no such" in l.lower())
+                 and not any(r in l.lower() for r in ruido)]
+    if not concretas:
+        # Sin una linea de error concreta, la mas informativa suele ser una
+        # `note:` corta; las largas son el volcado de la orden completa, que no
+        # dice nada que no se sepa ya.
+        concretas = [l for l in lineas[1:]
+                     if l.startswith("= note:") and len(l) < 200
+                     and not any(r in l.lower() for r in ruido)]
     ERRORES_COMPILACION[(bench, lang)] = (
-        lineas[0][:160] if lineas else "sin mensaje del compilador")
+        (concretas[-1] if concretas else lineas[0])[:200])
 
 
 # Compilers: cada uno devuelve (cmd_to_run, work_cwd, normalize_factor).
