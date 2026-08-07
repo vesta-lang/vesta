@@ -513,6 +513,60 @@ static void probar_phi() {
 }
 
 /**
+ * @brief Preguntar por el PUNTO en vez de por el valor.
+ *
+ * `if (i < 10) usar(i)`: la definicion de `i` no sabe nada de la guarda, asi que
+ * preguntando por el valor no se puede demostrar nada del acceso.  Es el caso
+ * que decide si un comprobador de limites sirve o no.
+ */
+static void probar_consulta_por_punto() {
+    ir::IrFunction fn;
+    fn.name = "punto";
+    const uint32_t b0 = fn.new_block("entry");
+    const uint32_t bt = fn.new_block("si");
+    const uint32_t bf = fn.new_block("no");
+
+    const ir::IrValueId x = fn.new_value(ir::IrType::U32);
+    fn.params.push_back(x);
+    const ir::IrValueId diez = cte(fn, b0, ir::IrType::U32, 10);
+    const ir::IrValueId c = fn.new_value(ir::IrType::BOOL);
+    emitir(fn, b0, ir::IrOp::CMP_ULT, c, {x, diez});
+    {
+        ir::IrInstr &br = emitir(fn, b0, ir::IrOp::BR_COND, ir::IR_NO_VALUE, {c});
+        br.target_block = bt;
+        br.false_block = bf;
+    }
+    // Dentro de la rama NO se copia x: se pregunta por el punto directamente.
+    const ir::IrValueId uno = cte(fn, bt, ir::IrType::U32, 1);
+    const ir::IrValueId z = fn.new_value(ir::IrType::U32);
+    emitir(fn, bt, ir::IrOp::ADD, z, {x, uno});
+    emitir(fn, bt, ir::IrOp::RET, ir::IR_NO_VALUE, {z});
+    emitir(fn, bf, ir::IrOp::RET, ir::IR_NO_VALUE, {x});
+
+    const IrFacts hechos = build_ir_facts(fn);
+    const RangeFacts r = compute_ranges(fn, hechos);
+    check(es(r.at(x), kU32, 0, UINT32_MAX),
+          "punto: por VALOR, x es todo el tipo -- su definicion no sabe de guardas");
+
+    RangeWalk dentro(fn, hechos, r, bt);
+    check(dentro.alcanzable(), "punto: a la rama verdadera si se llega");
+    check(es(dentro.rango(x), kU32, 0, 9),
+          "punto: por PUNTO, dentro de la rama x esta en [0,9]");
+    RangeWalk fuera(fn, hechos, r, bf);
+    check(es(fuera.rango(x), kU32, 10, UINT32_MAX),
+          "punto: en la otra rama, x esta en [10,UINT32_MAX]");
+
+    // Avanzar reproduce la transferencia: al pasar el ADD, z ya esta en el
+    // estado, y lo que se responde coincide con lo que calculo el motor.
+    dentro.avanzar(); // CONST 1
+    dentro.avanzar(); // ADD z, x, 1
+    check(es(dentro.rango(z), kU32, 1, 10),
+          "punto: tras avanzar, z = x+1 vale [1,10] -- con la x acotada, no con el tipo");
+    check(dentro.rango(z) == r.at(z),
+          "punto: recorrer y resolver el punto fijo dicen lo mismo");
+}
+
+/**
  * @brief `switch (tag) { case min+0: ... case min+2: ... default: ... }`
  *
  * En un brazo el tag vale EXACTAMENTE uno, y eso es lo unico que ahi se sabe
@@ -623,6 +677,7 @@ int main() {
     probar_guarda();
     probar_rama_imposible();
     probar_phi();
+    probar_consulta_por_punto();
     probar_switch(0, /*defecto_acotado=*/true);
     probar_switch(10, /*defecto_acotado=*/false);
     probar_bucle(ir::IrType::U32, kU32, "u32");

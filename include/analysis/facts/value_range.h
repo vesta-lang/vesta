@@ -60,6 +60,8 @@
 
 namespace ir {
 struct IrFunction;
+/// Identificador de bloque: lo necesita @c RangeWalk, que pregunta por uno.
+using IrBlockId = uint32_t;
 }
 
 namespace analysis {
@@ -443,9 +445,26 @@ struct RangeStats {
     bool descenso_completo = true;
 };
 
+/**
+ * @brief Estado del analisis a la ENTRADA de un bloque.
+ *
+ * Guarda solo los REFINAMIENTOS sobre el suelo del tipo: lo que un camino sabe
+ * de mas son unas pocas variables acotadas por una guarda, asi que una tabla
+ * densa por bloque pagaria bloques x valores para repetir lo que ya dice el
+ * tipo.  La ausencia de una entrada significa "lo que diga el tipo".
+ *
+ * Es lo que permite preguntar por un PUNTO y no solo por una definicion.
+ */
+struct RangeBlockState {
+    bool alcanzable = false;
+    std::vector<std::pair<ir::IrValueId, ValueRange>> refinamientos;
+};
+
 /// Rango de cada valor SSA, indexado por value-id.
 struct RangeFacts {
     std::vector<ValueRange> r;
+    /// Estado a la entrada de cada bloque, para @c RangeWalk.
+    std::vector<RangeBlockState> entrada;
     /**
      * @brief Si el calculo llego a PUNTO FIJO o se paro por presupuesto.
      *
@@ -491,6 +510,50 @@ struct RangeFacts {
  */
 RangeFacts compute_ranges(const ir::IrFunction &fn, const IrFacts &facts,
                           const RangeOptions &op = RangeOptions{});
+
+/**
+ * @brief Recorre un bloque entregando el rango de un valor EN CADA PUNTO.
+ *
+ * @c RangeFacts responde por la DEFINICION de un valor, que vale en cualquier
+ * uso pero se queda corto justo donde mas falta hace:
+ *
+ *     i32 i = leer();          // aqui i es [INT32_MIN, INT32_MAX]
+ *     if (i >= 0 && i < 10)
+ *         buf[i] = 0;          // aqui i es [0,9] -- y esto es lo que decide
+ *
+ * Preguntando por el valor, el acceso indexado se juzga con el rango de la
+ * definicion y no se puede demostrar nada.  Preguntando por el PUNTO, se juzga
+ * con lo que las guardas ya afirmaron.
+ *
+ * Se recorre en vez de indexar porque guardar el estado en cada punto costaria
+ * instrucciones x valores; reproducir un bloque cuesta lo que el bloque mide, y
+ * el consumidor natural (recorrer una funcion comprobando accesos) ya va en ese
+ * orden.  La transferencia que se reproduce es LA MISMA que uso el motor: no
+ * hay dos semanticas que puedan separarse con el tiempo.
+ *
+ * El rango que devuelve es el corte del estado del punto con el de la
+ * definicion.  Los dos son ciertos ahi -- en SSA la definicion domina a todos
+ * sus usos --, y quedarse solo con uno perderia lo que sabe el otro.
+ */
+class RangeWalk {
+  public:
+    /// Se coloca al principio de @p b.  @p rf debe venir del mismo @p fn.
+    RangeWalk(const ir::IrFunction &fn, const IrFacts &facts,
+              const RangeFacts &rf, ir::IrBlockId b);
+    RangeWalk(RangeWalk &&) noexcept;
+    ~RangeWalk();
+
+    /// Si se llega a ejecutar el punto en curso.
+    bool alcanzable() const;
+    /// Rango de @p v JUSTO ANTES de la instruccion en curso.
+    ValueRange rango(ir::IrValueId v) const;
+    /// Consume la instruccion en curso y pasa a la siguiente.
+    void avanzar();
+
+  private:
+    struct Impl;
+    Impl *impl_; ///< puntero desnudo: el tipo completo vive en el .cpp
+};
 
 /// Marcador para el AnalysisManager (cachea por funcion; depende de IRFacts).
 struct RangeAnalysis {

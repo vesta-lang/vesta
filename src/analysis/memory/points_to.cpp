@@ -98,6 +98,7 @@ struct Resolver {
     PointsToEntry con_rango(PointsToEntry base, ir::IrValueId sym) {
         const int64_t base_off = base.off;
         PointsToEntry e = inexact(base, sym);
+        e.off_base = base_off; // la parte que se sabe, aparte de la que no
         if (!rangos) return e;
         const ValueRange &r = rangos->at(sym);
         if (!r.acotada()) return e; // TOP o BOTTOM: no hay intervalo que sumar

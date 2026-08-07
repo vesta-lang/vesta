@@ -66,6 +66,17 @@ struct PointsToEntry {
     int64_t off_lo = 0;
     int64_t off_hi = 0;
     bool    off_rango = false; ///< true = @c off_lo/off_hi valen.
+    /**
+     * @brief La parte CONSTANTE del desplazamiento, sin el simbolo.
+     *
+     * `(buf + 8) + i` se descompone en un 8 que se sabe y una `i` que no.  El
+     * intervalo de arriba ya suma las dos cosas, pero con el rango de `i` EN SU
+     * DEFINICION, que es lo que hay disponible cuando se resuelve la direccion.
+     * Quien pregunte mas tarde -- en el punto del acceso, donde una guarda pudo
+     * acotar `i` mucho mas -- necesita la constante aparte para rehacer la suma
+     * con el intervalo mejor.
+     */
+    int64_t off_base = 0;
 };
 
 /**

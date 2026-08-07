@@ -164,24 +164,20 @@ struct Arista {
 };
 
 // ===========================================================================
-//  Motor
+//  Contexto: el suelo de los tipos y la transferencia de una instruccion
+//
+//  Lo comparten el MOTOR (que resuelve el punto fijo) y la CONSULTA (que
+//  reproduce un bloque para responder por un punto).  Compartirlo no es un
+//  ahorro de lineas: es lo que garantiza que preguntar por un punto y calcular
+//  el punto fijo signifiquen exactamente lo mismo.
 // ===========================================================================
 
-struct Motor {
+struct Contexto {
     const ir::IrFunction &fn;
     const IrFacts        &facts;
-    const RangeOptions   &op;
-
     std::vector<ValueRange> suelo;
-    std::vector<Arista>     aristas;
-    std::vector<Estado>     out_arista;
-    std::vector<Estado>     in_bloque;
-    std::vector<std::vector<uint32_t>> entrantes, salientes;
-    std::vector<uint32_t>   vueltas_ciclo; ///< veces que el IN de un bloque cambio
-    RangeStats              stats;
 
-    Motor(const ir::IrFunction &f, const IrFacts &fc, const RangeOptions &o)
-        : fn(f), facts(fc), op(o) {
+    Contexto(const ir::IrFunction &f, const IrFacts &fc) : fn(f), facts(fc) {
         const size_t n = fc.def_of.size();
         suelo.assign(n, ValueRange::top());
         for (ir::IrValueId v = 0; v < fn.values.size() && v < n; ++v) {
@@ -190,6 +186,46 @@ struct Motor {
                 suelo[v] = suelo[v].cortar(
                     ValueRange::constante(suelo[v].t, fn.values[v].const_val));
         }
+    }
+
+    ValueRange valor(const Estado &e, ir::IrValueId v) const {
+        if (v == ir::IR_NO_VALUE || v >= suelo.size()) return ValueRange::top();
+        if (!e.alcanzable) return ValueRange::bottom(suelo[v].t);
+        if (const ValueRange *r = e.buscar(v)) return *r;
+        return suelo[v];
+    }
+
+    /// Si cabe entero, se queda; si no, lo afirmable es el tipo.  Nunca BOTTOM
+    /// por no caber (BOTTOM solo viene de un camino imposible).
+    static ValueRange encajar_en(const ValueRange &r, const ValueRange &tipo) {
+        if (r.es_bottom()) return r;
+        if (!r.acotada()) return tipo;
+        if (!tipo.acotada()) return r;
+        if (r.t != tipo.t) return tipo;
+        const ValueRange c = r.cortar(tipo);
+        return c.es_bottom() ? tipo : c;
+    }
+
+    /// Que operacion del dominio corresponde a cada op del IR.  Nada mas.
+    void transferir(const ir::IrInstr &in, Estado &e) const;
+};
+
+// ===========================================================================
+//  Motor
+// ===========================================================================
+
+struct Motor : Contexto {
+    const RangeOptions   &op;
+
+    std::vector<Arista>     aristas;
+    std::vector<Estado>     out_arista;
+    std::vector<Estado>     in_bloque;
+    std::vector<std::vector<uint32_t>> entrantes, salientes;
+    std::vector<uint32_t>   vueltas_ciclo; ///< veces que el IN de un bloque cambio
+    RangeStats              stats;
+
+    Motor(const ir::IrFunction &f, const IrFacts &fc, const RangeOptions &o)
+        : Contexto(f, fc), op(o) {
         const size_t nb = fn.blocks.size();
         in_bloque.assign(nb, Estado{});
         entrantes.assign(nb, {});
@@ -295,14 +331,7 @@ struct Motor {
         }
     }
 
-    // --- lectura del estado ------------------------------------------------
-    ValueRange valor(const Estado &e, ir::IrValueId v) const {
-        if (v == ir::IR_NO_VALUE || v >= suelo.size()) return ValueRange::top();
-        if (!e.alcanzable) return ValueRange::bottom(suelo[v].t);
-        if (const ValueRange *r = e.buscar(v)) return *r;
-        return suelo[v];
-    }
-
+    // --- confluencia --------------------------------------------------------
     Estado unir_estados(const Estado &a, const Estado &b) const {
         if (!a.alcanzable) return b;
         if (!b.alcanzable) return a;
@@ -461,69 +490,7 @@ struct Motor {
         if (!nuevo.es_top()) e.poner(a.sel, nuevo);
     }
 
-    // --- transferencia ------------------------------------------------------
-    /// Que operacion del dominio corresponde a cada op del IR.  Nada mas.
-    void transferir(const ir::IrInstr &in, Estado &e) const {
-        if (!e.alcanzable) return;
-        if (in.dst == ir::IR_NO_VALUE || in.dst >= suelo.size()) return;
-        const ValueRange piso = suelo[in.dst];
-        auto arg = [&](size_t i) {
-            return i < in.operands.size() ? valor(e, in.operands[i])
-                                          : ValueRange::top();
-        };
-        ValueRange nuevo = ValueRange::top(piso.t);
-        switch (in.op) {
-        case IrOp::CONST:
-            nuevo = piso.acotada() ? ValueRange::constante(piso.t, in.imm)
-                                   : ValueRange::top();
-            break;
-        case IrOp::MOV: nuevo = arg(0); break;
-        case IrOp::ADD: nuevo = arg(0).sumar(arg(1)); break;
-        case IrOp::SUB: nuevo = arg(0).restar(arg(1)); break;
-        case IrOp::MUL: nuevo = arg(0).multiplicar(arg(1)); break;
-        case IrOp::NEG: nuevo = arg(0).negar(); break;
-        case IrOp::DIV: nuevo = arg(0).dividir(arg(1)); break;
-        case IrOp::MOD: nuevo = arg(0).resto(arg(1)); break;
-        case IrOp::AND: nuevo = arg(0).conjuncion(arg(1)); break;
-        case IrOp::OR: nuevo = arg(0).disyuncion(arg(1)); break;
-        case IrOp::XOR: nuevo = arg(0).exclusiva(arg(1)); break;
-        case IrOp::NOT: nuevo = arg(0).complemento(); break;
-        case IrOp::SHL: nuevo = arg(0).desplazar_izq(arg(1)); break;
-        case IrOp::SHR: nuevo = arg(0).desplazar_der_logico(arg(1)); break;
-        case IrOp::SAR: nuevo = arg(0).desplazar_der_aritmetico(arg(1)); break;
-        case IrOp::SEXT:
-            if (piso.acotada()) nuevo = arg(0).extender_con_signo(piso.t);
-            break;
-        case IrOp::ZEXT:
-            if (piso.acotada()) nuevo = arg(0).extender_sin_signo(piso.t);
-            break;
-        case IrOp::TRUNC:
-            if (piso.acotada()) nuevo = arg(0).truncar(piso.t);
-            break;
-        /* BITCAST reinterpreta BITS.  Entre un float y un entero el rango del
-         * origen no dice nada del destino; entre dos enteros del mismo ancho los
-         * bits SON el valor -- que es como el IR pasa un indice `u64` a una suma
-         * de punteros, y tirarlo dejaba fuera de comprobacion justo los accesos
-         * indexados.  El dominio decide cual de los dos casos es. */
-        case IrOp::BITCAST:
-            if (piso.acotada()) nuevo = arg(0).reinterpretar(piso.t);
-            break;
-        default:
-            break; // op sin modelar: lo que diga el tipo
-        }
-        e.poner(in.dst, encajar_en(nuevo, piso));
-    }
-
-    /// Si cabe entero, se queda; si no, lo afirmable es el tipo.  Nunca BOTTOM
-    /// por no caber (BOTTOM solo viene de un camino imposible).
-    static ValueRange encajar_en(const ValueRange &r, const ValueRange &tipo) {
-        if (r.es_bottom()) return r;
-        if (!r.acotada()) return tipo;
-        if (!tipo.acotada()) return r;
-        if (r.t != tipo.t) return tipo;
-        const ValueRange c = r.cortar(tipo);
-        return c.es_bottom() ? tipo : c;
-    }
+    // --- transferencia: la pone Contexto, compartida con la consulta --------
 
     // --- ecuaciones ---------------------------------------------------------
     Estado calcular_in(ir::IrBlockId bi) const {
@@ -652,6 +619,17 @@ struct Motor {
         return true;
     }
 
+    /// El estado de entrada de cada bloque, para que se pueda preguntar por un
+    /// PUNTO despues de que el motor haya terminado.
+    std::vector<RangeBlockState> estados_de_entrada() const {
+        std::vector<RangeBlockState> out(fn.blocks.size());
+        for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
+            out[bi].alcanzable = in_bloque[bi].alcanzable;
+            out[bi].refinamientos = in_bloque[bi].ref;
+        }
+        return out;
+    }
+
     /// Proyeccion final: el rango de cada valor en SU PUNTO DE DEFINICION.
     std::vector<ValueRange> en_definicion() const {
         std::vector<ValueRange> out = suelo;
@@ -667,6 +645,57 @@ struct Motor {
         return out;
     }
 };
+
+void Contexto::transferir(const ir::IrInstr &in, Estado &e) const {
+        if (!e.alcanzable) return;
+        if (in.dst == ir::IR_NO_VALUE || in.dst >= suelo.size()) return;
+        const ValueRange piso = suelo[in.dst];
+        auto arg = [&](size_t i) {
+            return i < in.operands.size() ? valor(e, in.operands[i])
+                                          : ValueRange::top();
+        };
+        ValueRange nuevo = ValueRange::top(piso.t);
+        switch (in.op) {
+        case IrOp::CONST:
+            nuevo = piso.acotada() ? ValueRange::constante(piso.t, in.imm)
+                                   : ValueRange::top();
+            break;
+        case IrOp::MOV: nuevo = arg(0); break;
+        case IrOp::ADD: nuevo = arg(0).sumar(arg(1)); break;
+        case IrOp::SUB: nuevo = arg(0).restar(arg(1)); break;
+        case IrOp::MUL: nuevo = arg(0).multiplicar(arg(1)); break;
+        case IrOp::NEG: nuevo = arg(0).negar(); break;
+        case IrOp::DIV: nuevo = arg(0).dividir(arg(1)); break;
+        case IrOp::MOD: nuevo = arg(0).resto(arg(1)); break;
+        case IrOp::AND: nuevo = arg(0).conjuncion(arg(1)); break;
+        case IrOp::OR: nuevo = arg(0).disyuncion(arg(1)); break;
+        case IrOp::XOR: nuevo = arg(0).exclusiva(arg(1)); break;
+        case IrOp::NOT: nuevo = arg(0).complemento(); break;
+        case IrOp::SHL: nuevo = arg(0).desplazar_izq(arg(1)); break;
+        case IrOp::SHR: nuevo = arg(0).desplazar_der_logico(arg(1)); break;
+        case IrOp::SAR: nuevo = arg(0).desplazar_der_aritmetico(arg(1)); break;
+        case IrOp::SEXT:
+            if (piso.acotada()) nuevo = arg(0).extender_con_signo(piso.t);
+            break;
+        case IrOp::ZEXT:
+            if (piso.acotada()) nuevo = arg(0).extender_sin_signo(piso.t);
+            break;
+        case IrOp::TRUNC:
+            if (piso.acotada()) nuevo = arg(0).truncar(piso.t);
+            break;
+        /* BITCAST reinterpreta BITS.  Entre un float y un entero el rango del
+         * origen no dice nada del destino; entre dos enteros del mismo ancho los
+         * bits SON el valor -- que es como el IR pasa un indice `u64` a una suma
+         * de punteros, y tirarlo dejaba fuera de comprobacion justo los accesos
+         * indexados.  El dominio decide cual de los dos casos es. */
+        case IrOp::BITCAST:
+            if (piso.acotada()) nuevo = arg(0).reinterpretar(piso.t);
+            break;
+        default:
+            break; // op sin modelar: lo que diga el tipo
+        }
+        e.poner(in.dst, encajar_en(nuevo, piso));
+}
 
 } // namespace
 
@@ -700,7 +729,69 @@ RangeFacts compute_ranges(const ir::IrFunction &fn, const IrFacts &facts,
         return out;
     }
     out.r = m.en_definicion();
+    out.entrada = m.estados_de_entrada();
     return out;
+}
+
+// ===========================================================================
+//  Consulta por punto
+// ===========================================================================
+
+struct RangeWalk::Impl {
+    Contexto ctx;
+    const RangeFacts &rf;
+    const ir::IrBlock *bloque = nullptr;
+    Estado estado;
+    size_t idx = 0;
+
+    Impl(const ir::IrFunction &fn, const IrFacts &facts, const RangeFacts &r,
+         ir::IrBlockId b)
+        : ctx(fn, facts), rf(r) {
+        if (b >= fn.blocks.size()) return;
+        bloque = &fn.blocks[b];
+        if (b < rf.entrada.size()) {
+            estado.alcanzable = rf.entrada[b].alcanzable;
+            estado.ref = rf.entrada[b].refinamientos;
+        } else {
+            /* Sin estado guardado -- rangos que no convergieron, o un bloque
+             * anadido despues -- no se puede afirmar por punto, pero tampoco hay
+             * que mentir: se responde lo que diga la definicion. */
+            estado.alcanzable = true;
+        }
+    }
+};
+
+RangeWalk::RangeWalk(const ir::IrFunction &fn, const IrFacts &facts,
+                     const RangeFacts &rf, ir::IrBlockId b)
+    : impl_(new Impl(fn, facts, rf, b)) {}
+
+RangeWalk::RangeWalk(RangeWalk &&o) noexcept : impl_(o.impl_) { o.impl_ = nullptr; }
+
+RangeWalk::~RangeWalk() { delete impl_; }
+
+bool RangeWalk::alcanzable() const {
+    return impl_ != nullptr && impl_->estado.alcanzable;
+}
+
+ValueRange RangeWalk::rango(ir::IrValueId v) const {
+    if (impl_ == nullptr) return ValueRange::top();
+    const ValueRange en_def = impl_->rf.at(v);
+    const ValueRange en_punto = impl_->ctx.valor(impl_->estado, v);
+    /* Los dos son ciertos aqui: la definicion domina al uso, y el estado del
+     * punto lleva lo que las guardas afirmaron por el camino.  Si el corte
+     * quedara vacio seria una incoherencia del propio motor, y ante eso se
+     * responde lo conocido en vez de declarar el punto imposible. */
+    const ValueRange c = en_punto.cortar(en_def);
+    return c.es_bottom() ? en_def : c;
+}
+
+void RangeWalk::avanzar() {
+    if (impl_ == nullptr || impl_->bloque == nullptr) return;
+    if (impl_->idx >= impl_->bloque->instrs.size()) return;
+    const ir::IrInstr &in = impl_->bloque->instrs[impl_->idx++];
+    /* Las PHI no se reproducen: su valor lo fijo el motor leyendo el estado de
+     * cada ARISTA entrante, y eso ya viene resuelto en el estado de entrada. */
+    if (in.op != ir::IrOp::PHI) impl_->ctx.transferir(in, impl_->estado);
 }
 
 } // namespace analysis

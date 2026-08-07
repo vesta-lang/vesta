@@ -53,8 +53,23 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod) {
          * simbolico.  Se calculan una vez por funcion, no por acceso. */
         const analysis::IrFacts hechos = analysis::build_ir_facts(fn);
         const analysis::RangeFacts rangos = analysis::compute_ranges(fn, hechos);
-        for (const ir::IrBlock &b : fn.blocks) {
+        for (uint32_t bi = 0; bi < fn.blocks.size(); ++bi) {
+            const ir::IrBlock &b = fn.blocks[bi];
+            /* Se recorre el bloque con el estado del analisis, no se consulta
+             * por valor: el rango de un indice EN EL PUNTO DEL ACCESO es el que
+             * llevan las guardas -- `if (i < n) buf[i]` --, y el de su
+             * definicion no sabe nada de ellas. */
+            analysis::RangeWalk paso(fn, hechos, rangos, bi);
             for (const ir::IrInstr &in : b.instrs) {
+                // El estado del punto se consume SIEMPRE, salga la revision por
+                // donde salga: saltarselo desalinearia el recorrido.
+                struct Avance {
+                    analysis::RangeWalk &w;
+                    ~Avance() { w.avanzar(); }
+                } avance{paso};
+                /* En un punto al que no se llega no hay nada que comprobar, y
+                 * senalarlo seria acusar a codigo que no se ejecuta. */
+                if (!paso.alcanzable()) continue;
                 const EffectAnalysisResult r = ea.local(fn, in);
                 auto revisa = [&](const LocSet &ls, bool escribe) {
                     if (ls.is_top) return;
@@ -142,16 +157,31 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod) {
                                  (int)pe.kind, pe.off_exact ? 1 : 0,
                                  pe.off_rango ? 1 : 0, (long long)pe.off_lo,
                                  (long long)pe.off_hi);
+
                 if (pe.off_exact || !pe.off_rango) continue;
                 if (pe.kind != AbstractLoc::Kind::Stack &&
                     pe.kind != AbstractLoc::Kind::Heap)
                     continue;
                 const analysis::RegionExtent &ex2 = pt.extent_of(pe.root);
                 if (!ex2.constante()) continue;
-                /* El intervalo lo trae ya la propia entrada: el resolvedor lo
-                 * compuso al derivar la direccion, sumando el offset constante
-                 * que llevara la base.  Aqui solo se juzga. */
-                if (pe.off_lo > pe.off_hi) continue;
+                /* El intervalo viene de la entrada, compuesto al derivar la
+                 * direccion.  Pero ahi el indice se acoto en SU DEFINICION, y
+                 * aqui se sabe mas: entre medias pudo pasar por una guarda.  Se
+                 * rehace la suma con el rango DE ESTE PUNTO, que solo puede ser
+                 * igual o mas estrecho. */
+                int64_t off_lo = pe.off_lo, off_hi = pe.off_hi;
+                if (pe.off_sym != ir::IR_NO_VALUE) {
+                    const ValueRange rp = paso.rango(pe.off_sym);
+                    int64_t rlo = 0, rhi = 0;
+                    int64_t l = 0, h = 0;
+                    if (rp.acotada() && rp.vista_con_signo(rlo, rhi) &&
+                        !__builtin_add_overflow(pe.off_base, rlo, &l) &&
+                        !__builtin_add_overflow(pe.off_base, rhi, &h) && l <= h) {
+                        off_lo = l;
+                        off_hi = h;
+                    }
+                }
+                if (off_lo > off_hi) continue;
                 const int32_t w = analysis::memory_access_size(in.type);
                 if (w <= 0) continue;
                 /* El final del acceso mas alto.  Con freno: el intervalo puede
@@ -160,13 +190,13 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod) {
                  * vuelta, convirtiendo "no se nada" en "todo cae antes del
                  * objeto".  Un calculo que se desborda no prueba nada. */
                 int64_t fin_alto;
-                if (__builtin_add_overflow(pe.off_hi, static_cast<int64_t>(w),
+                if (__builtin_add_overflow(off_hi, static_cast<int64_t>(w),
                                            &fin_alto))
                     continue;
                 // Entero fuera: o todo el intervalo cae PASADO el final del
                 // objeto, o todo el cae ANTES del principio.  Cualquier otra
                 // cosa es una parte dentro y otra fuera: sospecha, no error.
-                const bool todo_pasado = (pe.off_lo >= ex2.limite());
+                const bool todo_pasado = (off_lo >= ex2.limite());
                 const bool todo_antes = (fin_alto <= 0);
                 if (!todo_pasado && !todo_antes) continue;
                 BoundsViolation v;
@@ -174,7 +204,7 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod) {
                 v.line = in.source_line;
                 v.write = (in.op == ir::IrOp::STORE);
                 v.width = w;
-                v.off = pe.off_lo;
+                v.off = off_lo;
                 v.limite = ex2.limite();
                 v.objeto = ex2.bytes;
                 v.region = nombre_region(pe.kind, pe.root);
