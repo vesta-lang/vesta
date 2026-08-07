@@ -56,7 +56,8 @@
 #include "util/fnv.h"                 // huella de las claves del CAS
 #include "util/fs_utils.h"
 #include "vx/incremental.h" // CasStore: artefactos por contenido
-#include "vx/module/vxi_format.h" // vxi_compiler_version_hash
+#include "vx/module/module_resolver.h" // grafo de dependencias
+#include "vx/module/vxi_format.h"     // vxi_compiler_version_hash
 #include "vx/parser.h"            // get_aot_condcomp_target
 #include "vx/compiler.h"
 
@@ -226,70 +227,333 @@ static uint64_t mezclar_str_(uint64_t h, const std::string &s) {
 }
 
 /**
- * @brief Huella del CONTENIDO de un arbol de fuentes Vesta.
+ * @struct EntradaModulo
+ * @brief Lo que se recuerda de UN modulo: su huella y de quien depende.
  *
- * Cubre el arbol ENTERO, no solo el modulo pedido: estos modulos importan
- * a otros (@c vx_mem importa @c std.atomic), asi que hashear unicamente su
- * propio fuente daria un acierto obsoleto cuando cambia una dependencia.
- * Recorrer el arbol es CONSERVADOR -- cualquier edicion de la stdlib
- * invalida todos sus artefactos -- y esa es la direccion segura del error:
- * de mas nunca corrompe, de menos si.  Para quien no edita la stdlib (todo
- * el mundo salvo nosotros) el acierto es permanente.
+ * Descubrir de quien depende un modulo exige PARSEARLO, y eso cuesta mas que
+ * la cache que se intenta aprovechar (medido: reconstruir el cierre de
+ * vx_mem son ~165 ms, frente a los ~52 de recorrer el arbol entero).  La
+ * salida no es descubrirlo mejor, es no volver a descubrirlo: se guarda la
+ * RELACION -- este modulo importa estos otros -- y la siguiente construccion
+ * se limita a comprobar si sigue siendo cierta, que es mucho mas barato que
+ * derivarla.
  *
- * Se calcula una vez por proceso y raiz: son ~56 ficheros y 745 KB, menos
- * de un milisegundo frente a los ~190 ms que evita.
+ * Se guarda por MODULO y no por programa a proposito.  Asi dos programas que
+ * compartan dependencias comparten tambien su descubrimiento, y un cambio en
+ * una hoja solo obliga a re-resolver esa hoja en vez de todo el cierre: el
+ * numero de modulos deja de importar tanto.
  *
- * @param raiz Directorio raiz del arbol (p.ej. @c stdlib/vx).
- * @return Huella del contenido, o 0 si la raiz no se puede recorrer.
+ * Todo lo que puede invalidarla va en la CLAVE, no en el valor, porque el
+ * store es direccionado por contenido: su escritura es idempotente y no
+ * reescribe lo que ya existe.  Guardar ahi un dato mutable -- la huella del
+ * fichero, por ejemplo -- deja la primera version pegada para siempre, y a
+ * partir de entonces la comprobacion falla en cada construccion sin que se
+ * note mas que en el tiempo.  Con la clave completa no hay obsolescencia
+ * posible: si algo cambio, es OTRA entrada.
+ *
+ * La clave cubre las dos maneras de quedarse obsoleto:
+ *
+ *   - que el fichero haya cambiado (si cambio, sus imports pueden ser otros);
+ *   - que haya APARECIDO o desaparecido un fichero que cambiaria la
+ *     resolucion -- un hermano nuevo de un namespace parcial se une al modulo
+ *     sin que ningun import cambie -> entran los NOMBRES @c .vx de su
+ *     directorio (sin recursion: son decenas, no las ~1500 del arbol).  El
+ *     @c mtime del directorio seria mas barato pero no sirve: el propio
+ *     compilador escribe ahi sus @c .vxi / @c .vxir con temp+rename, asi que
+ *     cambia en cada construccion aunque ningun fuente se haya tocado.
  */
-static uint64_t huella_arbol_vx_(const std::filesystem::path &raiz) {
+struct EntradaModulo {
+    /** Ruta canonica del modulo.  Va DENTRO de la entrada porque la ruta con
+     *  la que se busca no tiene por que ser la canonica: el AOT localiza sus
+     *  modulos con rutas relativas (@c stdlib/vx/vx_mem.vx) mientras que el
+     *  resolutor trabaja en absolutas normalizadas.  Guardarla aqui permite
+     *  indexar la raiz por la ruta tal como llega sin que el resto del grafo
+     *  -- que sigue en canonicas -- deje de encajar. */
+    std::string canonico;
+    std::vector<std::string> deps; ///< Rutas canonicas de lo que importa.
+};
+
+/** @brief Escribe un entero de 32 bits en little-endian al final de @p out. */
+static void poner_u32_(std::vector<uint8_t> &out, uint32_t v) {
+    for (int i = 0; i < 4; ++i) out.push_back((uint8_t)((v >> (i * 8)) & 0xFF));
+}
+
+/** @brief Escribe un entero de 64 bits en little-endian al final de @p out. */
+static void poner_u64_(std::vector<uint8_t> &out, uint64_t v) {
+    for (int i = 0; i < 8; ++i) out.push_back((uint8_t)((v >> (i * 8)) & 0xFF));
+}
+
+/** @brief Escribe una cadena con su longitud delante. */
+static void poner_str_(std::vector<uint8_t> &out, const std::string &s) {
+    poner_u32_(out, (uint32_t)s.size());
+    out.insert(out.end(), s.begin(), s.end());
+}
+
+/**
+ * @brief Serializa una @c EntradaModulo para guardarla en el store.
+ * @param e Entrada a serializar.
+ * @return Bytes del artefacto.
+ */
+static std::vector<uint8_t> escribir_entrada_(const EntradaModulo &e) {
+    std::vector<uint8_t> out;
+    poner_str_(out, e.canonico);
+    poner_u32_(out, (uint32_t)e.deps.size());
+    for (const auto &d : e.deps) poner_str_(out, d);
+    return out;
+}
+
+/**
+ * @brief Deserializa lo que escribio @c escribir_entrada_.
+ * @param b Bytes leidos del store.
+ * @param e Entrada destino.
+ * @return false si el blob esta truncado (se trata como "no hay entrada").
+ */
+static bool leer_entrada_(const std::vector<uint8_t> &b, EntradaModulo &e) {
+    size_t p = 0;
+    auto u32 = [&](uint32_t &v) -> bool {
+        if (p + 4 > b.size()) return false;
+        v = 0;
+        for (int i = 0; i < 4; ++i) v |= (uint32_t)b[p + i] << (i * 8);
+        p += 4;
+        return true;
+    };
+    auto str = [&](std::string &s) -> bool {
+        uint32_t len = 0;
+        if (!u32(len) || p + len > b.size()) return false;
+        s.assign((const char *)b.data() + p, len);
+        p += len;
+        return true;
+    };
+    uint32_t n = 0;
+    if (!str(e.canonico) || !u32(n)) return false;
+    e.deps.resize(n);
+    for (uint32_t i = 0; i < n; ++i)
+        if (!str(e.deps[i])) return false;
+    return true;
+}
+
+/**
+ * @brief Hash de los NOMBRES de los fuentes @c .vx de un directorio.
+ *
+ * Sin recursion y sin preguntar por cada entrada si es un fichero regular:
+ * basta la extension, que viene con el propio recorrido.  Son decenas de
+ * entradas por directorio (26 en @c stdlib/vx , 147 en @c stdlib/vx/std ),
+ * no las ~1500 del arbol completo, y varios modulos comparten directorio, asi
+ * que se calcula una vez por proceso.
+ *
+ * @param dir Directorio a listar.
+ * @return Hash de los nombres, o 0 si no se puede listar.
+ */
+static uint64_t huella_nombres_vx_(const std::filesystem::path &dir) {
     namespace fs = std::filesystem;
     static std::map<std::string, uint64_t> memo;
-    const std::string clave = raiz.string();
+    const std::string clave = dir.string();
     auto it = memo.find(clave);
     if (it != memo.end()) return it->second;
 
-    uint64_t h = util::kFnvOffset;
     std::error_code ec;
-    // Ordenado por ruta: el recorrido del sistema de ficheros no garantiza
-    // un orden estable, y la huella tiene que ser la misma en cada maquina.
-    std::vector<std::string> ficheros;
-    for (fs::recursive_directory_iterator it2(raiz, ec), fin; it2 != fin;
+    std::vector<std::string> nombres;
+    for (fs::directory_iterator it2(dir, ec), fin; it2 != fin;
          it2.increment(ec)) {
         if (ec) break;
-        // La extension PRIMERO: es una comparacion de cadena sobre lo que el
-        // recorrido ya trae, mientras que preguntar si es un fichero regular
-        // consulta el disco.  Al reves se pagaba una consulta por cada una de
-        // las ~1500 entradas del directorio (los .vxi/.vxir/.vel generados
-        // conviven con los fuentes), y eran 60 ms de los 85 que costaba esto.
         if (it2->path().extension() != ".vx") continue;
-        if (!it2->is_regular_file(ec)) continue;
-        ficheros.push_back(it2->path().string());
+        nombres.push_back(it2->path().filename().string());
     }
-    // La ruta relativa se calcula LEXICAMENTE: `fs::relative` canonicaliza
-    // contra el disco, y en Windows eso son cientos de llamadas al sistema
-    // para 56 ficheros -- mas caro que leerlos.  Aqui no hace falta resolver
-    // enlaces: las dos rutas vienen del mismo recorrido.
-    if (ficheros.empty()) {
+    if (ec || nombres.empty()) {
         memo[clave] = 0;
-        return 0; // 0 = "no se pudo"; el llamador desactiva la cache.
+        return 0;
     }
-    std::sort(ficheros.begin(), ficheros.end());
-    for (const std::string &f : ficheros) {
-        // La ruta RELATIVA tambien entra: renombrar un fichero cambia que
-        // modulo resuelve cada import, aunque el contenido total no varie.
-        h = mezclar_str_(h, fs::path(f).lexically_relative(raiz).string());
-        std::ifstream in(f, std::ios::binary);
-        if (!in) {
-            memo[clave] = 0;
-            return 0;
-        }
-        std::string contenido((std::istreambuf_iterator<char>(in)),
-                              std::istreambuf_iterator<char>());
-        h = mezclar_str_(h, contenido);
-    }
+    // El orden del sistema de ficheros no es estable entre maquinas.
+    std::sort(nombres.begin(), nombres.end());
+    uint64_t h = util::kFnvOffset;
+    for (const auto &n : nombres) h = mezclar_str_(h, n);
+    if (h == 0) h = 1; // 0 esta reservado para "no se pudo".
     memo[clave] = h;
     return h;
+}
+
+/** @brief Hash del contenido de un fichero, o 0 si no se puede leer. */
+static uint64_t huella_fichero_(const std::string &ruta) {
+    std::ifstream in(ruta, std::ios::binary);
+    if (!in) return 0;
+    std::string c((std::istreambuf_iterator<char>(in)),
+                  std::istreambuf_iterator<char>());
+    const uint64_t h = util::fnv_bytes(util::kFnvOffset, c.data(), c.size());
+    return h == 0 ? 1ull : h; // 0 esta reservado para "no se pudo".
+}
+
+/**
+ * @brief Clave con la que se recuerda un modulo en el store.
+ *
+ * Lleva TODO lo que puede invalidar la entrada -- el contenido del fichero y
+ * los nombres de su directorio, ademas de donde se buscan los imports -- para
+ * que el valor guardado no pueda quedarse obsoleto: si algo cambia, es otra
+ * clave.  Es lo que exige un store direccionado por contenido, cuya escritura
+ * es idempotente y jamas reescribe una clave existente.
+ *
+ * @param ruta Ruta del modulo (tal como se busca; no tiene por que ser la
+ *        canonica).
+ * @param huella_contenido Hash del contenido del fichero.
+ * @param huella_dir Hash de los nombres @c .vx de su directorio.
+ * @return Clave del store.
+ */
+static uint64_t clave_entrada_(const std::string &ruta,
+                               uint64_t huella_contenido,
+                               uint64_t huella_dir) {
+    uint64_t k = util::kFnvOffset;
+    k = util::fnv_mix(k, 0x414F544445505347ull); // dominio "AOTDEPSG".
+    /* Version del FORMATO de la entrada.  Sin esto, cambiar que se guarda
+     * dentro deja las entradas viejas bajo la misma clave y el lector nuevo
+     * las encuentra truncadas: no es un fallo visible, solo deja de acertar
+     * en silencio.  Subir este numero al tocar `EntradaModulo`. */
+    k = util::fnv_mix(k, 3ull);
+    k = util::fnv_mix(k, vx::vxi_compiler_version_hash());
+    k = mezclar_str_(k, ruta);
+    k = util::fnv_mix(k, huella_contenido);
+    k = util::fnv_mix(k, huella_dir);
+    const char *vp = std::getenv("VX_PATH");
+    k = mezclar_str_(k, vp != nullptr ? vp : "");
+    k = mezclar_str_(k, vx::detect_stdlib_vx_dir());
+    return k;
+}
+
+/**
+ * @brief Resuelve el cierre de imports PARSEANDO, y recuerda cada modulo.
+ *
+ * Lo calcula el mismo @c ModuleGraph que usa la compilacion de verdad, con la
+ * misma configuracion.  Reimplementar aqui las reglas de resolucion seria
+ * tener dos criterios para lo mismo, y dos criterios acaban dando dos
+ * respuestas distintas: el resolutor tambien arrastra los ficheros HERMANOS
+ * de un namespace parcial, y una copia se dejaria eso fuera sin avisar.
+ *
+ * Deja en el store una entrada POR MODULO, con sus dependencias directas, de
+ * modo que la proxima construccion -- de este programa o de otro que comparta
+ * dependencias -- pueda recorrer el grafo sin volver a parsear.
+ *
+ * @param path Modulo raiz.
+ * @param store Donde recordar (nullptr = no recordar).
+ * @param cierre Salida: (ruta, huella) de cada modulo alcanzado.
+ * @return false ante cualquier duda (no resuelve, ciclo, errores).
+ */
+static bool resolver_y_recordar_(
+    const std::string &path, const vx::CasStore *store,
+    std::vector<std::pair<std::string, uint64_t>> &cierre) {
+    namespace fs = std::filesystem;
+    vx::Diagnostics diags;
+    vx::ModuleGraph graph(diags);
+    // Misma configuracion que `compile_vx_project`: si difiere, el cierre
+    // podria no ser el que se compila.  (El overlay del LSP y los search paths
+    // extra no aplican al camino AOT.)
+    graph.add_vx_path_env();
+    const std::string sd = vx::detect_stdlib_vx_dir();
+    if (!sd.empty()) graph.set_stdlib_dir(sd);
+    {
+        std::string norm = path;
+        for (char &c : norm)
+            if (c == '\\') c = '/';
+        const size_t barra = norm.find_last_of('/');
+        if (barra != std::string::npos)
+            graph.add_search_path(norm.substr(0, barra));
+    }
+
+    const uint32_t raiz = graph.build_from_root(path);
+    if (raiz == UINT32_MAX || diags.has_errors() || graph.has_cycle())
+        return false;
+    if (graph.module_count() == 0) return false;
+
+    cierre.clear();
+    for (size_t i = 0; i < graph.module_count(); ++i) {
+        const vx::ResolvedModule *m = graph.module((uint32_t)i);
+        if (m == nullptr || m->canonical_path.empty()) return false;
+        const uint64_t h = huella_fichero_(m->canonical_path);
+        if (h == 0) return false; // no se pudo leer -> sin certeza.
+        cierre.emplace_back(m->canonical_path, h);
+
+        if (store == nullptr) continue;
+        EntradaModulo e;
+        e.canonico = m->canonical_path;
+        const uint64_t hd =
+            huella_nombres_vx_(fs::path(m->canonical_path).parent_path());
+        if (hd == 0) continue; // sin listado no se puede validar.
+        // La RELACION: a que ficheros resolvieron sus imports.
+        bool completa = true;
+        for (uint32_t dep : m->dependencies) {
+            const vx::ResolvedModule *d = graph.module(dep);
+            if (d == nullptr || d->canonical_path.empty()) {
+                completa = false;
+                break;
+            }
+            e.deps.push_back(d->canonical_path);
+        }
+        if (!completa) continue;
+        const std::vector<uint8_t> bytes = escribir_entrada_(e);
+        (void)store->put(clave_entrada_(m->canonical_path, h, hd), bytes);
+        // La raiz, ademas, indexada por la ruta con la que la pidieron: es
+        // por donde entrara la siguiente busqueda.  Mismo fichero y mismo
+        // directorio, asi que las otras dos partes de la clave no cambian.
+        if ((uint32_t)i == raiz && m->canonical_path != path)
+            (void)store->put(clave_entrada_(path, h, hd), bytes);
+    }
+    return true;
+}
+
+/**
+ * @brief Recorre el cierre de imports A TRAVES de lo recordado, sin parsear.
+ *
+ * Este es el camino que evita el coste constante: en vez de preguntar "que
+ * importa este arbol", se parte de "ya se que este modulo depende de estos
+ * otros" y solo se comprueba si sigue siendo cierto.  Se toca el sistema de
+ * ficheros unicamente para los nodos del cierre -- tres o cuatro -- y no para
+ * las ~1500 entradas del directorio.
+ *
+ * @param raiz Modulo de partida.
+ * @param store Store con las entradas recordadas.
+ * @param cierre Salida: (ruta, huella) de cada modulo alcanzado, ordenado.
+ * @return false si falta alguna entrada o alguna dejo de ser valida; entonces
+ *         hay que resolver de verdad.
+ */
+static bool recorrer_recordado_(const std::string &raiz,
+                                const vx::CasStore &store,
+                                std::vector<std::pair<std::string, uint64_t>>
+                                    &cierre) {
+    namespace fs = std::filesystem;
+    std::vector<std::string> pendientes{raiz};
+    std::set<std::string> vistos;
+    cierre.clear();
+
+    while (!pendientes.empty()) {
+        const std::string ruta = pendientes.back();
+        pendientes.pop_back();
+        /* La cuenta de visitados se lleva SOLO por ruta canonica, y por eso
+         * se apunta despues de leer la entrada.  Llevarla tambien por la ruta
+         * de busqueda hacia que todo nodo que no fuera la raiz -- donde ambas
+         * coinciden -- se diera por visitado antes de mirarlo, y se cayera del
+         * cierre.  Volver a consultar el store por un nodo repetido no cuesta
+         * casi nada; perderlo del cierre si. */
+        /* El contenido y el listado del directorio son PARTE de la clave, no
+         * del valor: encontrar la entrada ya demuestra que ninguno de los dos
+         * ha cambiado desde que se recordo, sin comparar nada despues.  Si
+         * algo cambio, sencillamente no hay entrada y toca resolver. */
+        const uint64_t h = huella_fichero_(ruta);
+        if (h == 0) return false;
+        const uint64_t hd = huella_nombres_vx_(fs::path(ruta).parent_path());
+        if (hd == 0) return false;
+
+        std::vector<uint8_t> blob;
+        EntradaModulo e;
+        if (!store.get(clave_entrada_(ruta, h, hd), blob) ||
+            !leer_entrada_(blob, e))
+            return false; // no esta en cache -> hay que resolver.
+        if (e.canonico.empty()) return false;
+        // A partir de aqui se trabaja con la ruta CANONICA que trae la
+        // entrada: la de busqueda puede ser relativa y no coincidiria con la
+        // que usan las dependencias.
+        if (!vistos.insert(e.canonico).second) continue;
+
+        cierre.emplace_back(e.canonico, h);
+        for (const auto &d : e.deps) pendientes.push_back(d);
+    }
+    return !cierre.empty();
 }
 
 /**
@@ -343,6 +607,46 @@ static bool desempaquetar_modulo_(const std::vector<uint8_t> &blob,
 }
 
 /**
+ * @brief Huella de los FUENTES de los que depende un modulo de stdlib.
+ *
+ * Tres vias, de la barata a la cara:
+ *
+ *   1. Modulo sin imports (se compila como fichero suelto): su cierre es el
+ *      mismo, asi que basta el hash de su contenido.  Coste nulo.
+ *   2. Grafo RECORDADO y todavia valido: se comprueban los pocos ficheros y
+ *      directorios implicados, sin parsear nada ni recorrer el arbol.
+ *   3. Reconstruirlo parseando, y recordarlo para la proxima.
+ *
+ * La via 3 cuesta ~165 ms -- por eso existen la 1 y la 2 -- y solo se paga
+ * cuando algo cambio de verdad, que es cuando ademas hay que recompilar.
+ *
+ * @param path Ruta del modulo.
+ * @param proyecto true si el modulo tiene imports.
+ * @param store Store donde se recuerda el grafo (nullptr = no recordar).
+ * @return Huella, o 0 si no se pudo determinar con certeza.
+ */
+static uint64_t huella_fuentes_(const std::string &path, bool proyecto,
+                                const vx::CasStore *store) {
+    // Via 1: sin imports, el cierre es el propio fichero.
+    if (!proyecto) return huella_fichero_(path);
+
+    std::vector<std::pair<std::string, uint64_t>> cierre;
+    // Via 2: recorrer lo recordado.  Via 3: resolver parseando.
+    if (store == nullptr || !recorrer_recordado_(path, *store, cierre))
+        if (!resolver_y_recordar_(path, store, cierre)) return 0;
+
+    // Ordenado por ruta: ni el orden de descubrimiento de los imports ni el
+    // del recorrido son estables, y la huella tiene que ser la misma siempre.
+    std::sort(cierre.begin(), cierre.end());
+    uint64_t h = util::kFnvOffset;
+    for (const auto &m : cierre) {
+        h = mezclar_str_(h, m.first);
+        h = util::fnv_mix(h, m.second);
+    }
+    return h == 0 ? 1ull : h; // 0 esta reservado para "no se pudo".
+}
+
+/**
  * @brief Trae el IR de un modulo de stdlib escrito en Vesta, del CAS si vale.
  *
  * Estos modulos se compilan igual en cada construccion aunque no cambien:
@@ -387,23 +691,21 @@ static bool traer_modulo_stdlib_(const std::string &path,
     const auto t0 = std::chrono::steady_clock::now();
     ++tel.stdlib_total_;
 
-    // Raiz del arbol: el directorio del modulo.  Los de `std/` cuelgan de el,
-    // asi que un modulo en `stdlib/vx/std/x.vx` toma `stdlib/vx/std` -- basta,
-    // porque la huella se calcula por raiz y cada una cubre lo suyo.
-    /* Se hashea el ARBOL de fuentes y no el cierre exacto de imports del
-     * modulo, aunque el cierre seria mas preciso.  Medido: pedirselo al
-     * `ModuleGraph` -- el mismo que usa la compilacion, para no tener dos
-     * criterios de resolucion -- cuesta ~165 ms frente a los ~52 del arbol,
-     * porque para saber que importa un modulo hay que PARSEARLO, y parsear es
-     * exactamente lo que esta cache evita.  El camino preciso salia tres
-     * veces mas caro que el conservador. */
-    const fs::path raiz = fs::path(path).parent_path();
-    const uint64_t huella_fuentes = huella_arbol_vx_(raiz);
+    // El store se abre una vez y sirve para las dos cosas: recordar el grafo
+    // de dependencias y guardar el modulo compilado.
+    std::unique_ptr<vx::CasStore> store;
+    try {
+        store.reset(new vx::CasStore(vx::CasStore::open_default()));
+    } catch (const std::exception &) {
+        // Un store inaccesible no debe tumbar la compilacion.
+    }
+
+    const uint64_t huella = huella_fuentes_(path, proyecto, store.get());
 
     uint64_t clave = util::kFnvOffset;
     clave = util::fnv_mix(clave, 0x414F545354444C42ull); // dominio "AOTSTDLB".
     clave = util::fnv_mix(clave, vx::vxi_compiler_version_hash());
-    clave = util::fnv_mix(clave, huella_fuentes);
+    clave = util::fnv_mix(clave, huella);
     clave = mezclar_str_(clave, opts.module_name);
     clave = util::fnv_mix(clave, (uint64_t)opts.opt_level);
     clave = util::fnv_mix(clave, opts.asm_target_bits);
@@ -424,28 +726,22 @@ static bool traer_modulo_stdlib_(const std::string &path,
                               (pre != nullptr && pre[0] != '\0') ? 1ull : 0ull);
     }
 
-    // Huella 0 = no se pudo leer el arbol -> compilar sin tocar el store, que
-    // una clave incompleta es peor que no tener cache.
-    const bool usar_cache = (huella_fuentes != 0);
+    // Huella 0 = no se pudo determinar de que depende el modulo -> compilar
+    // sin tocar el store: una clave incompleta es peor que no tener cache.
+    const bool usar_cache = (huella != 0 && store);
 
     std::vector<uint8_t> ir_bytes;
     if (usar_cache) {
-        try {
-            const vx::CasStore store = vx::CasStore::open_default();
-            std::vector<uint8_t> blob;
-            std::string a, f;
-            if (store.get(clave, blob) &&
-                desempaquetar_modulo_(blob, ir_bytes, a, f) &&
-                ir::parse_ir_module_cache(ir_bytes, out)) {
-                if (alloc_sym) *alloc_sym = a;
-                if (free_sym) *free_sym = f;
-                ++tel.stdlib_cache_;
-                tel.sumar_stdlib(t0);
-                return true;
-            }
-        } catch (const std::exception &) {
-            // Un store inaccesible no debe tumbar la compilacion: se sigue
-            // por el camino de siempre.
+        std::vector<uint8_t> blob;
+        std::string a, f;
+        if (store->get(clave, blob) &&
+            desempaquetar_modulo_(blob, ir_bytes, a, f) &&
+            ir::parse_ir_module_cache(ir_bytes, out)) {
+            if (alloc_sym) *alloc_sym = a;
+            if (free_sym) *free_sym = f;
+            ++tel.stdlib_cache_;
+            tel.sumar_stdlib(t0);
+            return true;
         }
     }
 
@@ -462,16 +758,10 @@ static bool traer_modulo_stdlib_(const std::string &path,
     if (alloc_sym) *alloc_sym = r.aot_alloc_sym;
     if (free_sym) *free_sym = r.aot_free_sym;
 
-    if (usar_cache) {
-        try {
-            const vx::CasStore store = vx::CasStore::open_default();
-            (void)store.put(clave,
-                            empaquetar_modulo_(r.ir_module_cache_bytes,
-                                               r.aot_alloc_sym, r.aot_free_sym));
-        } catch (const std::exception &) {
-            // Idem: no poder escribir el store no invalida la compilacion.
-        }
-    }
+    if (usar_cache)
+        (void)store->put(clave,
+                         empaquetar_modulo_(r.ir_module_cache_bytes,
+                                            r.aot_alloc_sym, r.aot_free_sym));
     tel.sumar_stdlib(t0);
     return true;
 }
