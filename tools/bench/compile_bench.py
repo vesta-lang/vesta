@@ -35,6 +35,7 @@ suelo de cada herramienta, igual que en el arnes de ejecucion.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -329,6 +330,167 @@ def escribir_multi(lang: str, n: int, k: int, d: Path) -> Optional[list[str]]:
     return None
 
 
+# ===========================================================================
+# TOPOLOGIA de dependencias.
+#
+# El reparto en ficheros de arriba deja a los veintiun modulos como HOJAS: el
+# principal los importa a todos y ninguno importa a otro.  Es el caso mas facil
+# que existe para invalidar una cache, y por eso no ensena nada -- cambiar
+# cualquiera de ellos no puede afectar a nadie mas.
+#
+# La pregunta que de verdad juzga una cache de interfaces es otra: si cambio el
+# CUERPO de un modulo del que dependen otros, ¿se recompilan ellos tambien?  No
+# deberian: su interfaz no ha cambiado.  Si se recompilan, la interfaz no esta
+# cortando la propagacion y ahi se pierde la mitad de su valor.  Eso solo se ve
+# con una cadena o un diamante.
+#
+#   ancha      main -> m0, m1, ... mk        (todos hojas; el caso de arriba)
+#   cadena     main -> mk -> ... -> m1 -> m0 (el cambio en m0 puede propagarse
+#                                             hasta el final)
+#   diamante   main -> cima -> medios -> base (dos niveles, y los medios
+#                                             comparten base: ¿se rehace una vez
+#                                             o una por cada uno?)
+# ===========================================================================
+
+def dependencias(k: int, forma: str) -> tuple[list[list[int]], list[int]]:
+    """Devuelve (deps por modulo, modulos que importa el principal)."""
+    if forma == "cadena":
+        deps = [[] if j == 0 else [j - 1] for j in range(k)]
+        return deps, [k - 1]
+    if forma == "diamante":
+        # m0 es la base; m1..mk-2 dependen de ella; mk-1 es la cima.
+        deps = [[] for _ in range(k)]
+        for j in range(1, k - 1):
+            deps[j] = [0]
+        deps[k - 1] = list(range(1, k - 1))
+        return deps, [k - 1]
+    return [[] for _ in range(k)], list(range(k))   # ancha
+
+
+def escribir_topologia(lang: str, n: int, k: int, forma: str,
+                       d: Path) -> Optional[list[str]]:
+    """Escribe el programa con la forma de dependencias pedida.
+
+    Cada modulo expone UNA funcion publica que llama a las de sus dependencias,
+    mas relleno hasta repartir las `n` funciones.  El relleno es lo que da peso;
+    la funcion publica es la que crea la arista.
+    """
+    d.mkdir(parents=True, exist_ok=True)
+    deps, raiz = dependencias(k, forma)
+    trozos = _trozos(n, k)
+    if len(trozos) < k:
+        return None
+    ficheros: list[str] = []
+
+    def relleno_llaves(t, tipo, decl):
+        return "".join(decl % (i, tipo, i) for i in t)
+
+    if lang in ("c", "cpp"):
+        ext = "c" if lang == "c" else "cpp"
+        for j in range(k):
+            inc = "".join('#include "m%d.h"\n' % o for o in deps[j])
+            llam = "".join(" + pub%d(x)" % o for o in deps[j])
+            filler = "".join(
+                "static long long r%d_%d(long long x) { return x * 3 + %d; }\n"
+                % (j, i, i) for i in trozos[j])
+            (d / ("m%d.h" % j)).write_text(
+                "#pragma once\nlong long pub%d(long long x);\n" % j,
+                encoding="utf-8")
+            (d / ("m%d.%s" % (j, ext))).write_text(
+                inc + '#include "m%d.h"\n' % j + filler +
+                "long long pub%d(long long x) { return x%s; }\n" % (j, llam),
+                encoding="utf-8")
+            ficheros.append("m%d.%s" % (j, ext))
+        inc = "".join('#include "m%d.h"\n' % o for o in raiz)
+        llam = "".join("    s += pub%d(%d);\n" % (o, o) for o in raiz)
+        (d / ("main.%s" % ext)).write_text(
+            inc + "int main(void) {\n    long long s = 0;\n" + llam +
+            "    return (int)(s % 251);\n}\n", encoding="utf-8")
+        ficheros.append("main.%s" % ext)
+        return ficheros
+
+    if lang in ("vesta", "vesta_aot"):
+        for j in range(k):
+            imp = "".join('import "m%d" only pub%d;\n' % (o, o) for o in deps[j])
+            llam = "".join(" + pub%d(x)" % o for o in deps[j])
+            filler = "".join(
+                "i64 r%d_%d(i64 x) { return x * 3 + %d; }\n" % (j, i, i)
+                for i in trozos[j])
+            (d / ("m%d.vx" % j)).write_text(
+                imp + "namespace top.m%d;\n\n" % j + filler +
+                "public i64 pub%d(i64 x) { return x%s; }\n" % (j, llam),
+                encoding="utf-8")
+            ficheros.append("m%d.vx" % j)
+        imp = "".join('import "m%d" only pub%d;\n' % (o, o) for o in raiz)
+        llam = "".join("    s = s + pub%d(%d);\n" % (o, o) for o in raiz)
+        (d / "main.vx").write_text(
+            imp + "\ni32 main() {\n    i64 s = 0;\n" + llam +
+            "    return (i32) (s % 251);\n}\n", encoding="utf-8")
+        ficheros.append("main.vx")
+        return ficheros
+
+    if lang == "rust":
+        for j in range(k):
+            usos = "".join("use crate::m%d::pub%d;\n" % (o, o) for o in deps[j])
+            llam = "".join(".wrapping_add(pub%d(x))" % o for o in deps[j])
+            filler = "".join(
+                "fn r%d_%d(x: i64) -> i64 { x.wrapping_mul(3).wrapping_add(%d) }\n"
+                % (j, i, i) for i in trozos[j])
+            (d / ("m%d.rs" % j)).write_text(
+                usos + filler +
+                "pub fn pub%d(x: i64) -> i64 { x%s }\n" % (j, llam),
+                encoding="utf-8")
+            ficheros.append("m%d.rs" % j)
+        mods = "".join("mod m%d;\n" % j for j in range(k))
+        llam = "".join("    s = s.wrapping_add(m%d::pub%d(%d));\n" % (o, o, o)
+                       for o in raiz)
+        (d / "main.rs").write_text(
+            mods + "fn main() {\n    let mut s: i64 = 0;\n" + llam +
+            "    std::process::exit((s % 251) as i32);\n}\n", encoding="utf-8")
+        ficheros.append("main.rs")
+        return ficheros
+
+    if lang == "go":
+        # Go no deja importar dentro del mismo paquete: la topologia se expresa
+        # con llamadas entre ficheros, que es como el lenguaje lo entiende.
+        for j in range(k):
+            llam = "".join(" + pub%d(x)" % o for o in deps[j])
+            filler = "".join(
+                "func r%d_%d(x int64) int64 { return x*3 + %d }\n" % (j, i, i)
+                for i in trozos[j])
+            (d / ("m%d.go" % j)).write_text(
+                "package main\n\n" + filler +
+                "func pub%d(x int64) int64 { return x%s }\n" % (j, llam),
+                encoding="utf-8")
+            ficheros.append("m%d.go" % j)
+        llam = "".join("\ts += pub%d(%d)\n" % (o, o) for o in raiz)
+        (d / "main.go").write_text(
+            "package main\n\nimport \"os\"\n\nfunc main() {\n\tvar s int64 = 0\n"
+            + llam + "\tos.Exit(int(s % 251))\n}\n", encoding="utf-8")
+        ficheros.append("main.go")
+        return ficheros
+
+    if lang == "java":
+        for j in range(k):
+            llam = "".join(" + M%d.pub%d(x)" % (o, o) for o in deps[j])
+            filler = "".join(
+                "    static long r%d_%d(long x) { return x * 3 + %d; }\n"
+                % (j, i, i) for i in trozos[j])
+            (d / ("M%d.java" % j)).write_text(
+                "public class M%d {\n" % j + filler +
+                "    public static long pub%d(long x) { return x%s; }\n}\n"
+                % (j, llam), encoding="utf-8")
+            ficheros.append("M%d.java" % j)
+        llam = "".join("        s += M%d.pub%d(%d);\n" % (o, o, o) for o in raiz)
+        (d / "Main.java").write_text(
+            "public class Main {\n    public static void main(String[] a) {\n"
+            "        long s = 0;\n" + llam +
+            "        System.exit((int)(s % 251));\n    }\n}\n", encoding="utf-8")
+        ficheros.append("Main.java")
+        return ficheros
+    return None
+
+
 # Como se escribe un comentario y una funcion publica nueva en cada lenguaje.
 # Hace falta para fabricar cambios de distinta PROFUNDIDAD sobre un proyecto ya
 # construido, que es lo unico que revela la granularidad de invalidacion de
@@ -388,6 +550,51 @@ def mutar(ruta: Path, lang: str, clase: str, vuelta: int) -> bool:
         ruta.write_text(texto + plantilla % (vuelta, vuelta), encoding="utf-8")
         return True
     return False
+
+
+# Que artefactos intermedios deja cada herramienta, para poder CONTAR cuales
+# rehace.  Los que no dejan ninguno observable (una sola invocacion de gcc, o
+# una cache opaca como la de Go) se quedan fuera de esa cuenta en vez de
+# rellenarse con un cero que se leeria como "no rehizo nada".
+ARTEFACTOS = {
+    "vesta": ("*.vxi", "*.vxir"),
+    "vesta_aot": ("*.vxi", "*.vxir"),
+    "java": ("clases/*.class",),
+    "rust": ("*.rmeta", "*.rlib"),
+}
+
+
+def huella_artefactos(d: Path, lang: str) -> dict[str, str]:
+    """Hash de cada artefacto intermedio que hay ahora mismo en @p d."""
+    patrones = ARTEFACTOS.get(lang)
+    if not patrones:
+        return {}
+    out: dict[str, str] = {}
+    for pat in patrones:
+        for p in d.glob(pat):
+            try:
+                out[p.name] = hashlib.sha256(p.read_bytes()).hexdigest()[:16]
+            except OSError:
+                pass
+    return out
+
+
+def contar_rehechos(antes: dict[str, str],
+                    despues: dict[str, str]) -> tuple[int, int, int]:
+    """Devuelve (rehechos, reutilizados, nuevos).
+
+    Es la medida FUERTE del asunto: el tiempo lo ensucian la cache del sistema,
+    otros procesos y la paginacion, pero que un artefacto cambie o no es un
+    hecho.  Si cambiar el CUERPO de un modulo rehace solo el suyo y cambiar su
+    INTERFAZ rehace ademas los de quien depende de el, la frontera esta
+    haciendo su trabajo -- y eso ya no depende de cuanto tardara la maquina.
+    """
+    rehechos = sum(1 for k, v in despues.items()
+                   if k in antes and antes[k] != v)
+    reutilizados = sum(1 for k, v in despues.items()
+                       if k in antes and antes[k] == v)
+    nuevos = sum(1 for k in despues if k not in antes)
+    return (rehechos, reutilizados, nuevos)
 
 
 def orden_multi(lang: str, ficheros: list[str], salida: Path,
@@ -656,6 +863,10 @@ def main() -> int:
     p.add_argument("--tamanos", type=str, default="200,2000",
                    help="numero de funciones generadas por fuente "
                         "(~5 lineas cada una).  Default: 200,2000")
+    p.add_argument("--escalado", action="store_true",
+                   help="anade las dos curvas de escalado: por tamano de "
+                        "programa y por numero de modulos.  Cuesta bastante "
+                        "mas tiempo, por eso no va por defecto.")
     p.add_argument("--ficheros", type=int, default=20,
                    help="en cuantos ficheros se reparte el programa para la "
                         "comparacion mono/multi (default 20)")
@@ -849,6 +1060,168 @@ def main() -> int:
             "tiene sigue valiendo.  Las cuatro filas siguientes van de menos a "
             "mas profundo, y la escalera entre ellas es la granularidad de "
             "invalidacion: quien no distinga dara el mismo numero en todas.")
+
+    # --- 2bis. ESCALADO.  Dos curvas, porque preguntan cosas distintas:
+    #   por tamano  -- ¿el coste crece con el programa de forma lineal, o hay
+    #                  algo superlineal escondido?  Con un solo punto esto es
+    #                  invisible, y una superlinealidad se descubre tarde y cara.
+    #   por modulos -- a tamano TOTAL constante, repartirlo en mas ficheros mide
+    #                  el coste FIJO por modulo: lo que paga un proyecto muy
+    #                  dividido solo por estarlo.
+    if args.escalado:
+        print()
+        print(f"{C.BOLD}Escalado por tamano (un fichero){C.RESET}")
+        print(f"{C.DIM}  Si el coste por linea sube con el tamano, hay algo "
+              f"superlineal.{C.RESET}")
+        cab = (f"{'lenguaje':<12}{'lineas':>9}{'ms':>10}{'ms/kloc':>10}"
+               f"{'vs el anterior':>16}")
+        print(f"{C.BOLD}{cab}{C.RESET}")
+        print("-" * len(cab))
+        escala = [200, 800, 3200]
+        for ln in langs:
+            nombre, gen = GENERADORES[ln]
+            previo = None
+            for nf in escala:
+                d = base_tmp / ("esc_%s_%d" % (ln, nf))
+                d.mkdir(parents=True, exist_ok=True)
+                texto = gen(nf)
+                (d / nombre).write_text(texto, encoding="utf-8")
+                lineas = texto.count("\n")
+                cmd = orden_compilar(ln, d / nombre, d / "out", vm)
+                env = entorno_cache(ln, dir_cache, entorno_base)
+                ok, motivo = compila_de_verdad(ln, cmd, env, d, d / "out",
+                                               args.timeout)
+                if not ok:
+                    print(f"  {C.RED}[no compila]{C.RESET} {ln} {lineas}: {motivo}")
+                    break
+                s = medir_caliente(cmd, env, d, max(3, args.repes // 2),
+                                   args.timeout)
+                if not s:
+                    break
+                piso = (suelo.get(ln) or {}).get("p50") or 0.0
+                neto = max(0.001, s["p50"] - piso)
+                por_kloc = 1000.0 * neto / max(1, lineas)
+                rel = ("%6.2fx" % (neto / previo)) if previo else "     -"
+                print(f"  {ln:<10}{lineas:>9}{s['p50']:>10.0f}"
+                      f"{por_kloc:>10.1f}{rel:>16}")
+                resultados["casos"].append({
+                    "lang": ln, "escalado": "tamano", "lineas": lineas,
+                    "stats": s, "neto": neto})
+                previo = neto
+        print("-" * len(cab))
+
+        print()
+        print(f"{C.BOLD}Escalado por numero de modulos (mismo total){C.RESET}")
+        print(f"{C.DIM}  Mismo codigo repartido en mas ficheros: lo que sube es "
+              f"el coste FIJO por modulo.{C.RESET}")
+        cab2 = f"{'lenguaje':<12}{'modulos':>9}{'ms':>10}{'ms/modulo':>12}"
+        print(f"{C.BOLD}{cab2}{C.RESET}")
+        print("-" * len(cab2))
+        for ln in langs:
+            for k in (1, 8, 32, 128):
+                d = base_tmp / ("escm_%s_%d" % (ln, k))
+                ficheros = escribir_multi(ln, 1024, k, d)
+                if not ficheros:
+                    continue
+                cmd = orden_multi(ln, ficheros, d / "out", vm)
+                env = entorno_cache(ln, dir_cache, entorno_base)
+                ok, motivo = compila_de_verdad(ln, cmd, env, d, d / "out",
+                                               args.timeout)
+                if not ok:
+                    print(f"  {C.RED}[no compila]{C.RESET} {ln} k={k}: {motivo}")
+                    continue
+                s = medir_frio(cmd, env, d, max(3, args.repes // 2),
+                               args.timeout, ln, dir_cache)
+                if not s:
+                    continue
+                print(f"  {ln:<10}{len(ficheros):>9}{s['p50']:>10.0f}"
+                      f"{s['p50'] / len(ficheros):>12.1f}")
+                resultados["casos"].append({
+                    "lang": ln, "escalado": "modulos",
+                    "ficheros": len(ficheros), "stats": s})
+        print("-" * len(cab2))
+
+    # --- 2c. TOPOLOGIA: la misma cantidad de codigo con otra forma de
+    # dependencias.  El cambio se hace SIEMPRE en el modulo del que cuelgan los
+    # demas (m0), que es el unico sitio desde donde se puede observar si la
+    # invalidacion se propaga o se corta.
+    filas_topo: list[tuple] = []
+    filas_cuenta: list[tuple] = []
+    n_topo = tamanos[-1]
+    for forma in ("ancha", "cadena", "diamante"):
+        for ln in langs:
+            d = base_tmp / ("topo_%s_%s" % (ln, forma))
+            ficheros = escribir_topologia(ln, n_topo, args.ficheros, forma, d)
+            if not ficheros:
+                continue
+            cmd = orden_multi(ln, ficheros, d / "out", vm)
+            if not cmd:
+                continue
+            env = entorno_cache(ln, dir_cache, entorno_base)
+            ok, motivo = compila_de_verdad(ln, cmd, env, d, d / "out",
+                                           args.timeout)
+            if not ok:
+                print(f"  {C.RED}[no compila]{C.RESET} topologia {forma}/{ln}: "
+                      f"{motivo}")
+                continue
+            una_medida(cmd, env, args.timeout, d)   # dejarlo construido
+            raiz_mod = [f for f in ficheros
+                        if f.startswith("m0.") or f.startswith("M0.")]
+            for clase, titulo in (("cuerpo", "cuerpo de m0"),
+                                  ("interfaz", "interfaz de m0")):
+                serie = []
+                cuenta = None
+                for v in range(args.repes):
+                    for f in raiz_mod:
+                        mutar(d / f, ln, clase, v)
+                    # La primera vuelta se observa ademas por artefactos: que
+                    # cambie o no un `.vxi` es un HECHO, mientras que el tiempo
+                    # lo ensucian la cache del sistema y la maquina entera.
+                    antes = huella_artefactos(d, ln) if v == 0 else {}
+                    t = una_medida(cmd, env, args.timeout, d)
+                    if v == 0 and antes:
+                        cuenta = contar_rehechos(antes,
+                                                 huella_artefactos(d, ln))
+                    if t >= 0:
+                        serie.append(t)
+                s_t = _stats_summary(serie) if serie else {}
+                filas_topo.append((ln, "%-9s %s  %s" % (forma, ln, titulo), s_t))
+                if cuenta is not None:
+                    filas_cuenta.append((forma, ln, titulo, cuenta))
+                resultados["casos"].append({
+                    "lang": ln, "topologia": forma, "cambio": clase,
+                    "ficheros": len(ficheros), "stats": s_t,
+                    "artefactos": ({"rehechos": cuenta[0],
+                                    "reutilizados": cuenta[1],
+                                    "nuevos": cuenta[2]} if cuenta else None),
+                })
+    if filas_topo:
+        imprimir_tabla(
+            "Topologia: donde cuelga cada modulo, y si el cambio se propaga (ms)",
+            filas_topo, suelo,
+            "El cambio va SIEMPRE en m0, del que cuelgan los demas.  Cambiar su "
+            "CUERPO no cambia lo que ofrece, asi que sus dependientes no "
+            "deberian rehacerse; cambiar su INTERFAZ obliga a revalidarlos.  La "
+            "diferencia entre esas dos filas es lo que la interfaz esta "
+            "cortando: si son iguales, no corta nada.")
+    if filas_cuenta:
+        # La medida FUERTE: no cuanto tardo, sino QUE rehizo.
+        print()
+        print(f"{C.BOLD}Que artefactos se rehacen, por tipo de cambio{C.RESET}")
+        print(f"{C.DIM}  El tiempo lo ensucian la cache del sistema y la "
+              f"maquina entera; que un artefacto cambie o no es un hecho.  "
+              f"Solo salen las herramientas que dejan artefactos observables: "
+              f"una sola invocacion de gcc no deja ninguno, y la cache de Go es "
+              f"opaca.{C.RESET}")
+        cab3 = (f"{'topologia / cambio':<40}{'rehechos':>10}"
+                f"{'reutilizados':>14}{'nuevos':>9}")
+        print(f"{C.BOLD}{cab3}{C.RESET}")
+        print("-" * len(cab3))
+        for forma, ln, titulo, (re_, reu, nue) in filas_cuenta:
+            col = C.GREEN if reu > re_ else C.YELLOW
+            print(f"  {forma + '  ' + ln + '  ' + titulo:<38}"
+                  f"{col}{re_:>10}{C.RESET}{reu:>14}{nue:>9}")
+        print("-" * len(cab3))
 
     # --- 3. Realimentacion: cuanto tarda en salir el diagnostico.
     filas_chk: list[tuple] = []
