@@ -707,6 +707,25 @@ void volcar_formas(const ir::IrModule &mod, const char *momento) {
                                         : nombre_limitacion(ef.limitacion)),
                              ef.causa.funcion.c_str(), ef.causa.bloque,
                              ef.causa.indice, ef.causa.linea);
+            /* Los accesos que DECIDEN el veredicto: el dinamico y el que no se
+             * liga a ninguna operacion.  Sin verlos, un "desconocida" obliga a
+             * reconstruir a mano por que lo es. */
+            for (const AccesoComponente &ac : a.accesos) {
+                const bool decide =
+                    !ac.offset_sabido ||
+                    (ac.relacion == RelacionAcceso::EnPropietario &&
+                     !ac.ligado_a_operacion);
+                if (!decide) continue;
+                std::fprintf(stderr,
+                             "[forma]   acceso=%s off=%lld sabido=%d escribe=%d "
+                             "ligado=%d fn=%s bloque=%u instr=%u linea=%u\n",
+                             nombre_relacion(ac.relacion),
+                             static_cast<long long>(ac.offset),
+                             ac.offset_sabido ? 1 : 0, ac.escribe ? 1 : 0,
+                             ac.ligado_a_operacion ? 1 : 0,
+                             ac.sitio.funcion.c_str(), ac.sitio.bloque,
+                             ac.sitio.indice, ac.sitio.linea);
+            }
             for (MotivoForma mo : a.motivos_forma())
                 std::fprintf(stderr, "[forma]   motivo=%s\n", nombre_motivo(mo));
             for (const Frontera &es : a.fronteras)

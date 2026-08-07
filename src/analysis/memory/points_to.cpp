@@ -42,6 +42,44 @@ bool const_val_of(const ir::IrFunction &fn, ir::IrValueId id, int64_t &out) {
     return true;
 }
 
+/**
+ * @brief Evalua un desplazamiento que es constante aunque no sea un literal.
+ *
+ * Indexar con una constante -- `xs[0]`, `xs[1]` -- no baja a un literal: baja a
+ * `base + i*8` con `i` constante.  Mirando solo el literal, el desplazamiento
+ * mas comun que existe se daba por VARIABLE, y con el se perdia la posicion
+ * exacta del acceso: el comprobador de limites veia "en algun sitio de xs" donde
+ * el programa dice "el primero".
+ *
+ * Se pliega el arbol de la expresion mientras sea aritmetica entre constantes.
+ * Profundidad acotada: una cadena mas larga es un patron no previsto, y ahi se
+ * para en vez de adivinar.
+ */
+bool const_expr_of(const ir::IrFunction &fn, const IrFacts &facts,
+                   ir::IrValueId id, int64_t &out, int hondura = 0) {
+    if (const_val_of(fn, id, out)) return true;
+    if (hondura > 4) return false;
+    const ir::IrInstr *d = facts.def(id);
+    if (d == nullptr || d->operands.size() != 2) return false;
+    int64_t a = 0, b = 0;
+    if (!const_expr_of(fn, facts, d->operands[0], a, hondura + 1) ||
+        !const_expr_of(fn, facts, d->operands[1], b, hondura + 1))
+        return false;
+    switch (d->op) {
+    case ir::IrOp::ADD:
+        return !__builtin_add_overflow(a, b, &out);
+    case ir::IrOp::SUB:
+        return !__builtin_sub_overflow(a, b, &out);
+    case ir::IrOp::MUL:
+        return !__builtin_mul_overflow(a, b, &out);
+    case ir::IrOp::SHL:
+        if (b < 0 || b > 62) return false;
+        return !__builtin_mul_overflow(a, int64_t(1) << b, &out);
+    default:
+        return false;
+    }
+}
+
 // Estado de la resolucion (memoizacion + guardia de ciclos por PHI).
 struct Resolver {
     const ir::IrFunction &fn;
@@ -280,14 +318,14 @@ struct Resolver {
             {
                 PointsToEntry b = resolve(d->operands[0]);
                 if (b.kind != K::Unknown && b.off_exact &&
-                    const_val_of(fn, d->operands[1], c))
+                    const_expr_of(fn, facts, d->operands[1], c))
                     return with_offset(b, c);
             }
             // const + base
             {
                 PointsToEntry b = resolve(d->operands[1]);
                 if (b.kind != K::Unknown && b.off_exact &&
-                    const_val_of(fn, d->operands[0], c))
+                    const_expr_of(fn, facts, d->operands[0], c))
                     return with_offset(b, c);
             }
             /* Desplazamiento NO constante (`buf + i*8`: indexar con una
