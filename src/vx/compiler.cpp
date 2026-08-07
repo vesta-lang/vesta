@@ -1154,7 +1154,8 @@ CompileResult compile_vx_source(const std::string &source,
         /* Sobre el codigo que DE VERDAD se emite, y ANTES de moverlo.  Mismo
          * comprobador que usa el camino de proyecto y que `--analyze`: un solo
          * criterio para los tres. */
-        vx_report_bounds(irmod_for_section, res.diagnostics, filename);
+        if (opts.report_bounds)
+            vx_report_bounds(irmod_for_section, res.diagnostics, filename);
         mod_para_seccion = std::move(irmod_for_section);
         hay_seccion = true;
     }

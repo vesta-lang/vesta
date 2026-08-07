@@ -168,6 +168,16 @@ struct CompileOptions {
     /// (ruta runtime historica, intacta para la VM/JIT).
     bool native_poo = false;
 
+    /**
+     * @brief Convertir en ERROR los accesos demostrablemente fuera de region.
+     *
+     * Al CONSTRUIR, si.  Al ANALIZAR, no: `--analyze` los enseña en su propia
+     * seccion con la prueba delante, y abortar ahi dejaria sin analisis justo al
+     * programa que mas falta le hace.  Mismo comprobador en los dos casos; lo
+     * que cambia es que se hace con el veredicto.
+     */
+    bool report_bounds = true;
+
     /// C3 (AOT): habilita el mecanismo de excepciones NATIVO (setjmp/longjmp,
     /// sin runtime/GC/libc).  CONFIGURABLE: el usuario puede DESACTIVARLO
     /// (--no-exceptions) para kernels/freestanding donde no se quiere ningun

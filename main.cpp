@@ -2041,6 +2041,9 @@ int main(int argc, char *argv[]) {
          * simbolos en vez de opcodes).  Sin esto el informe describia la bajada
          * de la VM con la etiqueta de AOT encima. */
         copts.native_poo = (analyze_backend == analysis::effects::Backend::Aot);
+        /* Los limites los ENSEÑA el informe, con su prueba; convertirlos en
+         * error aqui dejaria sin analisis al programa que mas lo necesita. */
+        copts.report_bounds = false;
         // Si el fuente tiene `import`, hay que ir por el compilador
         // multi-modulo, igual que hacen las demas rutas.  ANTES esta llamaba
         // siempre a `compile_vx_source` (un solo fichero), asi que analizar un
@@ -2143,12 +2146,35 @@ int main(int argc, char *argv[]) {
         // @stack DECLARADO al total de sus callers (su frame real no se ve).
         analyze::compose_fingerprints(fps_post, &cr.contracts);
 
-        // Modelo UNICO de efectos: corre EffectAnalysis sobre el IR POST-opt y
-        // proyecta contratos + efectos + reporte de lagunas como parte de
-        // --analyze (seccion propia, solo en modo texto; el JSON no la incluye
-        // todavia).  Es la exposicion del modelo de efectos al usuario.
+        /* Modelo UNICO de efectos.  Corre sobre el modulo COMO SE COMPILA, que
+         * NO es el de arriba: `--analyze` optimiza sin inline a proposito (el
+         * coste PARCIAL tiene que ser el del cuerpo escrito, no el del cuerpo
+         * mas lo que le metieron dentro), y eso vale para medir coste pero MIENTE
+         * para el resto.
+         *
+         * Se noto midiendo: el comprobador de limites daba CERO avisos aqui y
+         * DIECISIETE al compilar los mismos programas.  Una herramienta de
+         * analisis que describe un programa distinto del que se construye es
+         * peor que no tenerla, porque se le cree.
+         *
+         * Asi que se compila una segunda vez con la optimizacion de verdad y es
+         * ESE modulo el que se analiza.  Cuesta una compilacion mas; decir la
+         * verdad los vale. */
+        ir::IrModule amod_build;
+        bool hay_build = false;
+        {
+            vx::CompileOptions copts_b = copts;
+            copts_b.emit_ir_preopt = false; // con inline: el codigo final
+            vx::CompileResult cr_b =
+                como_proyecto ? vx::compile_vx_project(vx_path, copts_b)
+                              : vx::compile_vx_source(vx_source, vx_path, copts_b);
+            if (cr_b.ok && !cr_b.ir_module_cache_bytes.empty())
+                hay_build = ir::parse_ir_module_cache(cr_b.ir_module_cache_bytes,
+                                                      amod_build);
+        }
+        const ir::IrModule &amod_efectos = hay_build ? amod_build : amod_post;
         if (!want_json)
-            analysis::effects::print_effects_report(std::cout, amod_post,
+            analysis::effects::print_effects_report(std::cout, amod_efectos,
                                                    analyze_backend);
         auto find_fp = [&](const std::string &name)
             -> const analyze::FunctionFingerprint * {

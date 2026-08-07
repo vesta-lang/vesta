@@ -3094,7 +3094,7 @@ CompileResult compile_vx_project(
     /* Sobre el codigo que DE VERDAD se va a emitir: lo que el analisis puede
      * demostrar fuera de su region no puede quedarse en `--analyze`, tiene que
      * salir al compilar, que es cuando se lee. */
-    vx_report_bounds(merged, res.diagnostics, root_path);
+    if (opts.report_bounds) vx_report_bounds(merged, res.diagnostics, root_path);
 
     if (opts.dump_ir) {
         std::ostringstream ir_oss;
