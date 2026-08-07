@@ -84,7 +84,7 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod) {
                              * el minimo no se prueba nada: solo diria que
                              * PODRIA salirse, y eso no es un error. */
                             const ValueRange &rr = rangos.at(ex.sym);
-                            if (!rr.conocido || rr.hi < 0) continue;
+                            if (!rr.acotada() || rr.hi < 0) continue;
                             tope = rr.hi;
                             objeto = rr.hi;
                         } else {
@@ -131,6 +131,14 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod) {
                                                      : ir::IR_NO_VALUE);
                 if (vptr == ir::IR_NO_VALUE) continue;
                 const PointsToEntry &pe = pt.at(vptr);
+                if (std::getenv("VESTA_BOUNDS_DEBUG"))
+                    std::fprintf(stderr,
+                                 "[bounds] fn=%s linea=%u kind=%d exact=%d "
+                                 "rango=%d [%lld,%lld]\n",
+                                 fn.name.c_str(), in.source_line,
+                                 (int)pe.kind, pe.off_exact ? 1 : 0,
+                                 pe.off_rango ? 1 : 0, (long long)pe.off_lo,
+                                 (long long)pe.off_hi);
                 if (pe.off_exact || !pe.off_rango) continue;
                 if (pe.kind != AbstractLoc::Kind::Stack &&
                     pe.kind != AbstractLoc::Kind::Heap)
@@ -140,10 +148,9 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod) {
                 /* El intervalo lo trae ya la propia entrada: el resolvedor lo
                  * compuso al derivar la direccion, sumando el offset constante
                  * que llevara la base.  Aqui solo se juzga. */
-                ValueRange ri;
-                ri.conocido = true;
-                ri.lo = pe.off_lo;
-                ri.hi = pe.off_hi;
+                const ValueRange ri =
+                    ValueRange::acotado(pe.off_lo, pe.off_hi);
+                if (!ri.acotada()) continue;
                 const int32_t w = analysis::memory_access_size(in.type);
                 if (w <= 0) continue;
                 // Entero fuera: o todo el intervalo cae PASADO el final del

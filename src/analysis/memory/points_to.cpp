@@ -100,10 +100,11 @@ struct Resolver {
         PointsToEntry e = inexact(base, sym);
         if (!rangos) return e;
         const ValueRange &r = rangos->at(sym);
-        if (!r.conocido) return e;
+        if (!r.acotada()) return e; // TOP o BOTTOM: no hay intervalo que sumar
         // Con freno: si la suma se desborda, no se afirma el intervalo.
-        const int64_t lo = base_off + r.lo, hi = base_off + r.hi;
-        if ((r.lo > 0 && lo < base_off) || (r.hi > 0 && hi < base_off))
+        int64_t lo, hi;
+        if (__builtin_add_overflow(base_off, r.lo, &lo) ||
+            __builtin_add_overflow(base_off, r.hi, &hi))
             return e;
         e.off_lo = lo;
         e.off_hi = hi;
