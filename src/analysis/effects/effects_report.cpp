@@ -133,6 +133,128 @@ static void print_effects(std::ostream &os, const SemanticEffects &e) {
 }
 
 /**
+ * @brief Las REGIONES de la funcion con su extension.
+ *
+ * Hasta ahora el analisis decia DONDE toca una operacion (`heap#3+0/8`) pero no
+ * hasta donde llega el objeto, y sin eso "fuera de region" no es decidible: se
+ * puede afirmar la direccion, no si se sale.  El dato esta en el sitio de
+ * asignacion -- `malloc(64)`, `u8[16] a` -- y aqui se enseña, que es el paso
+ * previo a poder señalar un desbordamiento.
+ *
+ * Se distingue tamano CONSTANTE de SIMBOLICO: simbolico no es desconocido --
+ * se sabe que valor lo manda --, y es lo que un rango podra acotar despues.
+ */
+static void print_regiones(std::ostream &os, EffectAnalysis &ea,
+                           const ir::IrFunction &fn) {
+    const analysis::PointsTo &pt = ea.points_to_publico(fn);
+    std::string out;
+    for (uint32_t v = 0; v < pt.extent.size(); ++v) {
+        const analysis::RegionExtent &ex = pt.extent[v];
+        if (!ex.conocida()) continue;
+        const PointsToEntry &e = pt.at(v);
+        if (e.kind == AbstractLoc::Kind::Unknown) continue;
+        LocSet uno;
+        uno.add(AbstractLoc{e.kind, v, 0, 0});
+        out += "    " + loc_set_str(uno) + ": ";
+        if (ex.constante()) out += std::to_string(ex.bytes) + " bytes";
+        else out += "tamano en %" + std::to_string(ex.sym) + " (simbolico)";
+        out += "\n";
+    }
+    if (!out.empty()) os << "  Regiones:\n" << out;
+}
+
+/**
+ * @brief Accesos que se salen de su region, DEMOSTRADOS.
+ *
+ * Primer veredicto espacial: junta donde toca una operacion (raiz + offset +
+ * ancho) con hasta donde llega el objeto (la extension de su region).
+ *
+ * El limite que se compara es el HUECO RESERVADO, no el tamano logico, y esa
+ * distincion es toda la diferencia entre una herramienta y un estorbo: la
+ * primera version comparaba contra el tamano logico y avisaba en 26 de los 453
+ * programas del corpus, todos falsos -- un `Rgb g = Color.GREEN` mide 3 bytes y
+ * el compilador lo copia con un movimiento de 8, igual que SRET, los objetos,
+ * `Optional` y `Result`.  Ensanchar un acceso DENTRO del hueco es legitimo;
+ * salirse del hueco no lo es nunca.
+ *
+ * Solo habla cuando esta DEMOSTRADO: extension constante y offset exacto.  Con
+ * un tamano simbolico se calla -- se sabe que valor lo manda, pero no cuanto
+ * vale hasta que haya rangos --, porque confundir "no lo se" con "esta mal" es
+ * lo que hace que estas comprobaciones se acaben apagando.
+ *
+ * Y lleva su PRUEBA: la region, el acceso y donde acaba.  Un veredicto sin su
+ * derivacion obliga a rehacer el razonamiento a mano.
+ */
+static void print_fuera_de_region(std::ostream &os, EffectAnalysis &ea,
+                                  const ir::IrFunction &fn) {
+    /* APAGADO por defecto (`VESTA_ASA_BOUNDS=1` lo enciende) mientras se
+     * resuelve lo que encontro.
+     *
+     * Sobre los 453 programas del corpus avisa en 24.  Los de canales comparten
+     * una forma muy concreta, y NO parece un fallo del analisis: en
+     * `__vxch_wq_pop` el productor escribe 16 bytes en el retbuf -- tag en +0,
+     * handle en +8 -- y el llamador LEE en +16 y +24, que son los campos `fib` y
+     * `elem` del `Waiter` como si estuvieran EN LINEA.  Pero `Waiter` es un
+     * `@overlay` y lo que se guarda es un handle, asi que productor y consumidor
+     * no estan de acuerdo sobre `Optional<@overlay struct>`.
+     *
+     * Hasta saber si los 24 son esa misma forma -- y arreglar el origen -- esto
+     * no se enciende: un aviso que la gente no sabe si creer es peor que no
+     * tenerlo. */
+    static const bool activo = [] {
+        const char *v = std::getenv("VESTA_ASA_BOUNDS");
+        return v && v[0] == '1';
+    }();
+    if (!activo) return;
+    const analysis::PointsTo &pt = ea.points_to_publico(fn);
+    std::string out;
+    unsigned n = 0;
+    for (const ir::IrBlock &b : fn.blocks) {
+        for (const ir::IrInstr &in : b.instrs) {
+            if (n >= 8) break;
+            const EffectAnalysisResult r = ea.local(fn, in);
+            auto revisa = [&](const LocSet &ls, const char *que) {
+                if (ls.is_top) return;
+                for (const AbstractLoc &l : ls.locs) {
+                    if (l.width <= 0 || !l.concrete()) continue;
+                    /* La extension se indexa por VALUE-ID, y solo Stack y Heap
+                     * tienen ahi su raiz: en `ArgDerived` el identificador es el
+                     * INDICE DEL PARAMETRO, asi que consultarlo aqui devuelve la
+                     * extension de un valor sin ninguna relacion.  Ese cruce de
+                     * dos espacios de indices era el origen de los avisos falsos
+                     * (24 de 453 programas): acusaba a `c.campo` de salirse de
+                     * un objeto que no era el suyo.  De un parametro no se sabe
+                     * el tamano -- lo sabe quien llama --, asi que se calla. */
+                    if (l.kind != AbstractLoc::Kind::Stack &&
+                        l.kind != AbstractLoc::Kind::Heap)
+                        continue;
+                    const analysis::RegionExtent &ex = pt.extent_of(l.id);
+                    if (!ex.constante()) continue; // simbolico -> aun no se sabe
+                    const int64_t tope = ex.limite();
+                    const int64_t fin = l.off + l.width;
+                    if (l.off >= 0 && fin <= tope) continue; // dentro del hueco
+                    LocSet uno;
+                    uno.add(AbstractLoc{l.kind, l.id, 0, 0});
+                    out += "    " + std::string(que) + " de " +
+                           std::to_string(l.width) + " bytes se sale de " +
+                           loc_set_str(uno) + " (linea " +
+                           std::to_string(in.source_line) + ")\n";
+                    out += "      prueba: objeto = " + std::to_string(ex.bytes) +
+                           " bytes, hueco = [0, " + std::to_string(tope) +
+                           ") ; acceso = [" + std::to_string(l.off) + ", " +
+                           std::to_string(fin) + ")\n";
+                    ++n;
+                }
+            };
+            revisa(r.effects.mem.writes, "escritura");
+            revisa(r.effects.mem.reads, "lectura");
+        }
+    }
+    if (!out.empty())
+        os << "  Accesos fuera de region (demostrados):\n" << out;
+}
+
+/**
  * @brief Los PRESTAMOS de la funcion, tal como cruzan al IR.
  *
  * El borrow checker demuestra cosas -- sobre todo que un prestamo mutable es
@@ -281,6 +403,8 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
         os << "  Estructura: bloques=" << s.structural.block_count
            << " bucles=" << s.structural.loop_count
            << (s.structural.recursive ? " recursiva" : "") << "\n";
+        print_regiones(os, ea, fn);
+        print_fuera_de_region(os, ea, fn);
         print_prestamos(os, fn);
         print_conflictos(os, ea, fn);
         os << "\n";

@@ -14,6 +14,7 @@
  *        afirma un offset no probado).
  */
 #include "analysis/memory/points_to.h"
+#include "analysis/memory/memory_access.h" // tamano de un tipo (UNICA verdad)
 
 #include "ir/ssa_ir.h"
 
@@ -189,13 +190,59 @@ struct Resolver {
 
 } // namespace
 
+/**
+ * @brief Extension de la region que crea una instruccion de asignacion.
+ *
+ * El tamano esta escrito en el sitio de asignacion; aqui solo se lee y se dice
+ * con que grado de certeza se sabe.  `alloca.T count` da count * sizeof(T);
+ * `raw_alloc %size` da el operando, constante si lo es y simbolico si no --
+ * simbolico NO es desconocido: se sabe QUE valor manda, que es lo que permitira
+ * acotarlo con un rango.
+ */
+static RegionExtent extension_de(const ir::IrInstr &d, const IrFacts &facts) {
+    RegionExtent ex;
+    using Op = ir::IrOp;
+    // Redondeo al hueco: un objeto ocupa su slot, no su tamano.  La pila
+    // alinea a 8; el allocador del monton, a 16.  Es el limite que se puede
+    // AFIRMAR -- por debajo de el, ensanchar un acceso es legitimo.
+    auto redondear = [](int64_t n, int64_t a) {
+        return n <= 0 ? n : ((n + a - 1) / a) * a;
+    };
+    if (d.op == Op::ALLOCA) {
+        const int32_t elem = analysis::memory_access_size(d.type);
+        const int64_t n = static_cast<int64_t>(d.imm);
+        if (elem > 0 && n >= 0) {
+            ex.bytes = n * elem;
+            ex.reservado = redondear(ex.bytes, 8);
+        }
+        return ex;
+    }
+    if (d.op == Op::RAW_ALLOC || d.op == Op::GC_ALLOC || d.op == Op::GC_ALLOCP) {
+        if (d.operands.empty()) return ex;
+        const ir::IrValueId vs = d.operands[0];
+        const ir::IrInstr *ds = facts.def(vs);
+        if (ds && ds->op == Op::CONST) {
+            ex.bytes = static_cast<int64_t>(ds->imm);
+            ex.reservado = redondear(ex.bytes, 16);
+        } else {
+            ex.sym = vs;
+        }
+    }
+    return ex;
+}
+
 PointsTo compute_points_to(const ir::IrFunction &fn, const IrFacts &facts) {
     Resolver r(fn, facts);
     PointsTo out;
     const size_t n = facts.def_of.size();
     out.loc.assign(n, PointsToEntry{});
-    for (ir::IrValueId v = 0; v < static_cast<ir::IrValueId>(n); ++v)
+    out.extent.assign(n, RegionExtent{});
+    for (ir::IrValueId v = 0; v < static_cast<ir::IrValueId>(n); ++v) {
         out.loc[v] = r.resolve(v);
+        // La extension se guarda en la RAIZ, que es de quien es propiedad.
+        if (const ir::IrInstr *d = facts.def(v))
+            out.extent[v] = extension_de(*d, facts);
+    }
     return out;
 }
 

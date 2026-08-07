@@ -44,12 +44,54 @@ struct PointsToEntry {
     bool     off_exact = false;           ///< false = offset no probado (whole-root).
 };
 
+/**
+ * @brief Hasta donde llega una region: su EXTENSION desde la raiz.
+ *
+ * Sin esto se sabe DONDE escribe una operacion pero no si se SALE, que es la
+ * mitad que falta para poder decir "fuera de region".  El dato existe en el
+ * sitio de asignacion -- `malloc(64)`, `u8[16] a` -- y ahi se recoge.
+ *
+ * Tres estados a proposito, que son los mismos que la certeza del analisis:
+ * tamano constante (demostrable), simbolico (se sabe QUE valor lo da, asi que
+ * con un rango se puede acotar) y desconocido (no se afirma nada).
+ */
+struct RegionExtent {
+    int64_t       bytes = -1;            ///< >= 0: tamano LOGICO del objeto.
+    /**
+     * @brief Bytes realmente RESERVADOS para el objeto (>= @c bytes).
+     *
+     * Un objeto no ocupa lo que mide: ocupa su hueco.  Un struct de 3 bytes se
+     * reserva alineado a 8, y por eso el compilador lo copia con un movimiento
+     * de 8 sin salirse de nada -- el mismo idiom que usan SRET, los objetos,
+     * `Optional` y `Result`.
+     *
+     * La distincion no es un detalle: sin ella, tomar el tamano logico por el
+     * limite convierte cada copia de agregado en un falso desbordamiento (26 de
+     * 453 programas del corpus).  Con ella, lo que se sale del HUECO sigue
+     * siendo un fallo real en cualquier caso.
+     */
+    int64_t       reservado = -1;
+    ir::IrValueId sym = 0xFFFFFFFFu;     ///< value-id que da el tamano (IR_NO_VALUE si no).
+    bool constante() const { return bytes >= 0; }
+    bool simbolica() const { return bytes < 0 && sym != 0xFFFFFFFFu; }
+    bool conocida() const { return constante() || simbolica(); }
+    /// Limite que se puede afirmar: el hueco, no el tamano logico.
+    int64_t limite() const { return reservado > bytes ? reservado : bytes; }
+};
+
 /// Tabla points-to de una funcion: value-id -> localizacion resuelta.  O(n).
 struct PointsTo {
     std::vector<PointsToEntry> loc; ///< indexada por value-id.
+    /// Extension de cada RAIZ, indexada por su value-id (misma indexacion que
+    /// @c loc).  Solo las raices tienen entrada util; el resto queda vacia.
+    std::vector<RegionExtent> extent;
     const PointsToEntry &at(ir::IrValueId v) const {
         static const PointsToEntry kUnknown{};
         return v < loc.size() ? loc[v] : kUnknown;
+    }
+    const RegionExtent &extent_of(uint32_t root) const {
+        static const RegionExtent kNada{};
+        return root < extent.size() ? extent[root] : kNada;
     }
 };
 

@@ -97,6 +97,13 @@ public:
     }
     Backend backend() const { return env_.backend; }
 
+    /// Tabla points-to (con las extensiones de region) para quien la necesite
+    /// FUERA del motor -- hoy el informe, que enseña las regiones.  Sale de la
+    /// misma cache que usa el analisis: una sola tabla, no dos.
+    const PointsTo &points_to_publico(const ir::IrFunction &fn) {
+        return points_to_of(fn);
+    }
+
     // ---- Invalidacion ----
     /// Un nodo muto: borra su cache local + marca su funcion sucia.
     void invalidate_node(const ir::IrFunction &fn, const ir::IrInstr &ins);
