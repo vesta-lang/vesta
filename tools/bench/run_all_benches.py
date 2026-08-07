@@ -362,7 +362,8 @@ def buscar_compiladores(nombres: list[str]) -> list[tuple[str, str]]:
 
 
 def elegir_compilador(lenguaje: str, candidatos: list[tuple[str, str]],
-                      forzado: str = "") -> tuple[str, str]:
+                      forzado: str = "",
+                      preguntar: bool = True) -> tuple[str, str]:
     """Devuelve (nombre, ruta) del compilador a usar para @p lenguaje.
 
     Con uno solo, se usa sin preguntar.  Con varios y terminal interactiva, se
@@ -375,6 +376,8 @@ def elegir_compilador(lenguaje: str, candidatos: list[tuple[str, str]],
     if not candidatos:
         return ("", "")
     if len(candidatos) == 1:
+        return candidatos[0]
+    if not preguntar:
         return candidatos[0]
     if not sys.stdin.isatty():
         n, p = candidatos[0]
@@ -773,7 +776,8 @@ def print_category_summary(rows: list[dict], active_langs: list[str],
 
 
 def detect_toolchains(vm_bin: Path, cc_forzado: str = "",
-                      cxx_forzado: str = "") -> dict[str, Toolchain]:
+                      cxx_forzado: str = "",
+                      pedidos: Optional[set] = None) -> dict[str, Toolchain]:
     tc: dict[str, Toolchain] = {}
 
     tc["vx_interp"] = Toolchain(
@@ -816,8 +820,15 @@ def detect_toolchains(vm_bin: Path, cc_forzado: str = "",
 
     # La ETIQUETA lleva el compilador que se eligio de verdad.  Poner "gcc" con
     # clang por debajo daria un numero mal atribuido, que es peor que no tenerlo.
+    # Solo se pregunta por lo que se va a usar: con `--langs c` no tiene
+    # sentido interrumpir para elegir el compilador de C++, y ademas dejaba
+    # bloqueada una corrida que no lo necesitaba.
+    def _preguntar(l: str) -> bool:
+        return pedidos is None or l in pedidos
+
     nombre_c, ruta_c = elegir_compilador(
-        "C", buscar_compiladores(["gcc", "clang", "cc"]), cc_forzado)
+        "C", buscar_compiladores(["gcc", "clang", "cc"]), cc_forzado,
+        preguntar=_preguntar("c"))
     tc["c"] = Toolchain(
         "c", "C (%s -O3)" % (nombre_c or "gcc"), C.BLUE,
         available=bool(ruta_c),
@@ -826,7 +837,8 @@ def detect_toolchains(vm_bin: Path, cc_forzado: str = "",
     tc["c"].path = ruta_c
 
     nombre_cpp, ruta_cpp = elegir_compilador(
-        "C++", buscar_compiladores(["g++", "clang++", "c++"]), cxx_forzado)
+        "C++", buscar_compiladores(["g++", "clang++", "c++"]), cxx_forzado,
+        preguntar=_preguntar("cpp"))
     tc["cpp"] = Toolchain(
         "cpp", "C++ (%s -O3)" % (nombre_cpp or "g++"), C.MAGENTA,
         available=bool(ruta_cpp),
@@ -1211,10 +1223,18 @@ def _anotar_fallo(bench: str, lang: str, r) -> None:
     # la ULTIMA que mencione un error concreto; si no hay, la primera.
     ruido = ("aborting due to", "returned an unexpected error",
              "some arguments are omitted", "may need to install",
-             "for more information")
-    concretas = [l for l in lineas[1:]
+             "for more information", "error generated", "errors generated",
+             "linker command failed")
+    concretas = [l for l in lineas
                  if ("error" in l.lower() or "no such" in l.lower())
                  and not any(r in l.lower() for r in ruido)]
+    # De las concretas, la PRIMERA: en un compilador, el primer error es la
+    # causa y los siguientes suelen ser su consecuencia.  Antes se cogia la
+    # ultima y salia "1 error generated", que no dice nada -- el util era
+    # "static assertion failed: STL1000: Unexpected compiler version".
+    if concretas:
+        ERRORES_COMPILACION[(bench, lang)] = concretas[0][:200]
+        return
     if not concretas:
         # Sin una linea de error concreta, la mas informativa suele ser una
         # `note:` corta; las largas son el volcado de la orden completa, que no
@@ -1234,9 +1254,15 @@ def _anotar_fallo(bench: str, lang: str, r) -> None:
 def compile_c(variant: BenchVariant, work_dir: Path,
               tc: Toolchain) -> Optional[tuple[list[str], Path, float]]:
     out = work_dir / f"{variant.bench_name}_c.exe"
+    # `-lm` solo fuera de Windows.  Aqui la matematica va dentro del propio
+    # CRT: MinGW tolera la bandera sin mas, pero clang con objetivo MSVC se
+    # pone a buscar `m.lib`, que no existe, y muere con LNK1181.  El sintoma
+    # era desconcertante -- un fichero vacio compilaba y el benchmark no --
+    # porque la bandera no depende del codigo sino del compilador elegido.
+    extra = ["-lm"] if sys.platform != "win32" else []
     r = subprocess.run(
         [tc.path, "-O3", "-std=c11", "-march=native",
-         str(variant.src_path), "-o", str(out), "-lm"],
+         str(variant.src_path), "-o", str(out)] + extra,
         capture_output=True, text=True, timeout=60.0,
         env=entorno_para_compilar(),
     )
@@ -2655,7 +2681,8 @@ def main() -> int:
     ok(f"usando vm: {C.BOLD}{vm}{C.RESET}")
 
     # Detectar toolchains.
-    tc = detect_toolchains(vm, args.cc, args.cxx)
+    _pedidos = {l.strip() for l in args.langs.split(",") if l.strip()} or None
+    tc = detect_toolchains(vm, args.cc, args.cxx, _pedidos)
     print()
     info(f"{C.BOLD}Toolchains detectados:{C.RESET}")
     for name, t in tc.items():

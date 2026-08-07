@@ -1654,6 +1654,7 @@ def main() -> int:
     # --- 2d. QUE codigo, no cuanto.  Cada familia pega en una parte distinta
     # del compilador, y son justo las que el generador anodino no toca.
     filas_fam: list[tuple] = []
+    prep_fam = []
     for familia, porlang in FAMILIAS.items():
         # Cuentas distintas por familia: mil niveles de anidamiento no es lo
         # mismo que mil instanciaciones de una plantilla, y forzar el mismo
@@ -1673,19 +1674,29 @@ def main() -> int:
             if not cmd:
                 continue
             env = entorno_cache(ln, dir_cache, entorno_base)
+            prep_fam.append(((familia, ln), ln, cmd, env, d, d / "out",
+                             familia, cuenta, texto.count("\n")))
+    with Spinner("verificando las familias de codigo", color=C.DIM):
+        vered_fam = verificar_en_paralelo(
+            [(c[0], c[1], c[2], c[3], c[4], c[5]) for c in prep_fam],
+            jobs, args.timeout)
+
+    for clave, ln, cmd, env, d, salida, familia, cuenta, n_lineas in prep_fam:
             etiqueta = "%-12s %s" % (familia, ln)
-            ok, motivo = compila_de_verdad(ln, cmd, env, d, d / "out",
-                                           args.timeout)
+            ok, motivo = vered_fam.get(clave, (False, "no verificado"))
             if not ok:
                 print(f"  {C.RED}[no compila]{C.RESET} {etiqueta}: {motivo}")
                 resultados["casos"].append({
                     "lang": ln, "familia": familia, "error": motivo})
                 continue
-            s = medir_caliente(cmd, env, d, args.repes, args.timeout)
+            tanteo = una_medida(cmd, env, args.timeout, d)
+            s = medir_caliente(cmd, env, d,
+                               repeticiones(args, tanteo if tanteo > 0 else 0.0),
+                               args.timeout)
             filas_fam.append((ln, etiqueta, s))
             resultados["casos"].append({
                 "lang": ln, "familia": familia, "cuenta": cuenta,
-                "lineas": texto.count("\n"), "stats": s})
+                "lineas": n_lineas, "stats": s})
     if filas_fam:
         imprimir_tabla(
             "Por FAMILIA de codigo (ms)", filas_fam, suelo,
