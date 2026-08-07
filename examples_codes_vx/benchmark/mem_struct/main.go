@@ -1,46 +1,59 @@
-// mem_struct: 1M iter * 3 paths (stack, heap, malloc).  Los paths heap/malloc
-// fuerzan el escape a heap (sink global); el path stack se mantiene en pila.
+// mem_struct: 1M iteraciones x 3 caminos (pila, heap por sizeof, heap por
+// tamano explicito), con ventana de 64 vivos en los dos de heap.
+// Mismo algoritmo que main.c; ver alli que compara y por que la ventana.
+//
+// En Go los dos caminos de heap son `new(Punto)`: el lenguaje no distingue
+// entre pedir por tamano de tipo o por bytes.  El del "tamano explicito" se
+// conserva para que la carga sea la misma que en los otros seis.
 package main
 
 import "os"
 
-type Punto struct{ x, y int32 }
+const iters = 1000000
+const vivos = 64 // potencia de 2
 
-var sinkP *Punto
-
-func stackStruct(base int32) int32 {
-	var p Punto
-	p.x = base
-	p.y = base + 1
-	return p.x + p.y
-}
-
-func heapStruct(base int32) int32 {
-	p := new(Punto)
-	p.x = base
-	p.y = base + 1
-	sinkP = p
-	r := p.x + p.y
-	return r
-}
-
-func mallocStruct(base int32) int32 {
-	p := new(Punto)
-	p.x = base
-	p.y = base + 1
-	sinkP = p
-	r := p.x + p.y
-	return r
+// Punto es el struct de dos campos que se pone en los tres sitios.
+type Punto struct {
+	x int32
+	y int32
 }
 
 func main() {
-	var sum int64 = 0
-	var i int64 = 0
-	for i < 1000000 {
-		sum += int64(stackStruct(1))
-		sum += int64(heapStruct(1))
-		sum += int64(mallocStruct(1))
-		i++
+	var anilloA [vivos]*Punto
+	var anilloB [vivos]*Punto
+
+	var acc int64 = 0
+	for i := int32(0); i < iters; i++ {
+		base := int32(acc & 0xFF)
+
+		p := Punto{x: base, y: base + 1} // 1. en la pila
+		acc += int64(p.x + p.y)
+
+		k := int(i) & (vivos - 1)
+
+		h := new(Punto) // 2. en heap
+		h.x = base
+		h.y = base + 1
+		if anilloA[k] != nil {
+			acc += int64(anilloA[k].x + anilloA[k].y)
+		}
+		anilloA[k] = h
+
+		m := new(Punto) // 3. en heap
+		m.x = base
+		m.y = base + 1
+		if anilloB[k] != nil {
+			acc += int64(anilloB[k].x + anilloB[k].y)
+		}
+		anilloB[k] = m
 	}
-	os.Exit(int((sum & 0xFFFF) & 0xFF))
+	for k := 0; k < vivos; k++ {
+		if anilloA[k] != nil {
+			acc += int64(anilloA[k].x + anilloA[k].y)
+		}
+		if anilloB[k] != nil {
+			acc += int64(anilloB[k].x + anilloB[k].y)
+		}
+	}
+	os.Exit(int(acc % 251))
 }

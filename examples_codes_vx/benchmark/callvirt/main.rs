@@ -1,11 +1,11 @@
-// callvirt: 30M virtual-call trivial via puntero a funcion.  Equivalente 1:1 al main.c.
-// Compilar: rustc -O -C target-cpu=native main.rs -o callvirt_rust
+// callvirt: 30M llamadas indirectas a traves de un puntero a funcion.
+// Mismo algoritmo que main.c; ver alli donde esta la linea entre optimizar y
+// fabricar el resultado sin ejecutar.
 //
-// El main.c usa un puntero a funcion en un struct (despacho indirecto).  Aqui
-// se usa un fn-pointer en el struct para reproducir la MISMA llamada indirecta
-// (no un trait object, que anñadiria una vtable distinta; el fn-ptr es el
-// analogo exacto del `int (*inc)(Counter*)` de C).
-use std::hint::black_box;
+// Se usa un fn-pointer en el struct, que es el analogo exacto del
+// `int (*inc)(Counter*)` de C (un trait object anñadiria una vtable distinta).
+// Ya no hace falta `black_box`: la cadena congruencial impide la forma cerrada.
+// Compilar: rustc -O -C target-cpu=native main.rs -o callvirt_rust
 use std::process::exit;
 
 struct Counter {
@@ -13,15 +13,16 @@ struct Counter {
     value: i32,
 }
 
-fn inc_impl(_c: &Counter) -> i32 { 1 }
+fn inc_impl(c: &Counter) -> i32 { c.value + 1 }
 
 fn main() {
-    let c = Counter { value: black_box(0), inc: inc_impl };
-    let mut sum: i32 = 0;
-    let mut i: i32 = 0;
-    while i < 30_000_000 {
-        sum = sum.wrapping_add((c.inc)(&c));
-        i += 1;
+    let mut c = Counter { value: 0, inc: inc_impl };
+    let mut sum: i64 = 0;
+    for _ in 0..30_000_000i32 {
+        let t = (c.inc)(&c) as u32;
+        let t = t.wrapping_mul(1664525).wrapping_add(1013904223);
+        c.value = (t & 0xFF) as i32;
+        sum += c.value as i64;
     }
-    exit(sum);
+    exit((sum % 251) as i32);
 }

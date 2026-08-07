@@ -1,21 +1,24 @@
-"""Bench: hash lookup simulado (FNV-style int ops)."""
+# hash_lookup: 50M mezclas estilo FNV, con el resultado consumido.
+# Mismo algoritmo que main.c; ver alli los DOS problemas que tenia.
+#
+# En Python los enteros no tienen ancho, asi que hay que recortar a 64 bits a
+# mano para que la secuencia sea la misma que en los otros seis lenguajes.
 import sys
 
-MASK64 = (1 << 64) - 1
+ITERS = 50000000
+MASCARA = 0xFFFFFFFFFFFFFFFF
 
 
 def main():
-    seed = 0xCAFEBABE_DEADBEEF
+    seed = 0xCAFEBABEDEADBEEF
     acc = 0
-    for i in range(50_000_000):
-        seed = (seed ^ i) & MASK64
-        seed = (seed * 1099511628211) & MASK64
+    for i in range(ITERS):
+        seed ^= i
+        seed = (seed * 1099511628211) & MASCARA
         seed >>= 7
         seed |= 1
-        if (seed & 7) == 0:
-            acc += 1
-    return acc & 0xFF
+        acc += seed & 0xFF
+    sys.exit(acc % 251)
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+main()

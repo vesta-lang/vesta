@@ -1,5 +1,9 @@
-// callvirt: 30M virtual-call trivial via puntero a funcion (equivalente al
-// puntero a funcion en el struct de C).
+// callvirt: 30M llamadas indirectas a traves de un valor-funcion.
+// Mismo algoritmo que main.c; ver alli donde esta la linea entre optimizar y
+// fabricar el resultado sin ejecutar.
+//
+// Se usa un valor-funcion en el struct, que es el analogo exacto del
+// `int (*inc)(Counter*)` de C (una interfaz anñadiria una vtable distinta).
 package main
 
 import "os"
@@ -10,15 +14,15 @@ type Counter struct {
 	value int32
 }
 
-func incImpl(c *Counter) int32 { return 1 }
+func incImpl(c *Counter) int32 { return c.value + 1 }
 
 func main() {
 	c := Counter{value: 0, inc: incImpl}
-	var sum int32 = 0
-	var i int32 = 0
-	for i < 30000000 {
-		sum += c.inc(&c)
-		i++
+	var sum int64 = 0
+	for i := int32(0); i < 30000000; i++ {
+		t := uint32(c.inc(&c))*1664525 + 1013904223
+		c.value = int32(t & 0xFF)
+		sum += int64(c.value)
 	}
-	os.Exit(int(sum & 0xFF))
+	os.Exit(int(sum % 251))
 }

@@ -1,18 +1,20 @@
-// Bench: hash lookup simulado (FNV-style int ops).
+// hash_lookup: 50M mezclas estilo FNV, con el resultado consumido.
+// Mismo algoritmo que main.c; ver alli los DOS problemas que tenia: la
+// condicion que no se cumplia nunca (`seed |= 1` y luego `seed & 7 == 0`) y el
+// borrado de la mezcla que aquella provocaba.
 #include <cstdint>
+
+static const int32_t ITERS = 50000000;
 
 int main() {
     uint64_t seed = 0xCAFEBABEDEADBEEFULL;
     uint64_t acc = 0;
-    volatile int32_t bound = 50000000;
-    for (int32_t i = 0; i < bound; ++i) {
-        seed ^= static_cast<uint64_t>(i);
+    for (int32_t i = 0; i < ITERS; ++i) {
+        seed ^= (uint64_t) i;
         seed *= 1099511628211ULL;
         seed >>= 7;
         seed |= 1ULL;
-        if ((seed & 7ULL) == 0ULL) {
-            acc++;
-        }
+        acc += seed & 0xFFULL;
     }
-    return static_cast<int32_t>(acc);
+    return (int32_t)(acc % 251);
 }

@@ -1,30 +1,40 @@
-// Bench: 5M alloc + free de bloques pequenos (96 bytes).  Equivalente 1:1 al main.c.
+// mem_malloc_free: 5M bloques de 96 bytes, con una ventana de 64 vivos.
+// Mismo algoritmo que main.c; el porque de la ventana esta en
+// `alloc_small/main.c`.  Se usa el asignador CRUDO (`std::alloc`) para pedir el
+// bloque sin inicializar, igual que el `malloc` de C.
 // Compilar: rustc -O -C target-cpu=native main.rs -o mem_malloc_free_rust
-//
-// Se usa el allocator global de Rust directamente (alloc/dealloc) para replicar
-// el malloc(96)/free de C sin la sobrecarga de un Vec.  black_box impide que
-// LLVM elimine el par alloc/dealloc.
 use std::alloc::{alloc, dealloc, Layout};
-use std::hint::black_box;
 use std::process::exit;
 
-fn do_iter(i: i32) {
-    let layout = Layout::from_size_align(96, 1).unwrap();
-    unsafe {
-        let buf = alloc(layout);
-        *buf.add(0) = i as u8;
-        *buf.add(95) = (i + 95) as u8;
-        black_box(buf);
-        dealloc(buf, layout);
-    }
-}
+const TAM: usize = 96;
+const ITERS: i32 = 5_000_000;
+const VIVOS: usize = 64; // potencia de 2
 
 fn main() {
-    let bound: i32 = black_box(5_000_000);
-    let mut i: i32 = 0;
-    while i < bound {
-        do_iter(i);
-        i += 1;
+    let disposicion = Layout::from_size_align(TAM, 1).unwrap();
+    let mut anillo: Vec<*mut u8> = vec![std::ptr::null_mut(); VIVOS];
+
+    let mut acc: i32 = 0;
+    for i in 0..ITERS {
+        unsafe {
+            let buf = alloc(disposicion);
+            *buf = i as u8;
+            *buf.add(TAM - 1) = (i as usize + TAM - 1) as u8;
+            let k = (i as usize) & (VIVOS - 1);
+            if !anillo[k].is_null() {          // sale de la ventana
+                acc += *anillo[k] as i32 + *anillo[k].add(TAM - 1) as i32;
+                dealloc(anillo[k], disposicion);
+            }
+            anillo[k] = buf;
+        }
     }
-    exit(42);
+    for k in 0..VIVOS {                        // vaciar la ventana
+        unsafe {
+            if !anillo[k].is_null() {
+                acc += *anillo[k] as i32 + *anillo[k].add(TAM - 1) as i32;
+                dealloc(anillo[k], disposicion);
+            }
+        }
+    }
+    exit(acc % 251);
 }

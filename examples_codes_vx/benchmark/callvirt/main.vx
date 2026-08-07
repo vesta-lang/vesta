@@ -1,21 +1,28 @@
-// Benchmark de callvirt: 30M llamadas a metodo virtual trivial.
+// callvirt: 30M llamadas a metodo VIRTUAL.
+// Mismo algoritmo que main.c; ver alli donde esta la linea entre optimizar
+// (bien: desvirtualizar e inlinar es calidad, y nuestro pase de devirt
+// monomorfica lo hace) y fabricar el resultado sin ejecutar (mal: era lo que
+// pasaba en C, donde el `main` quedaba en `return 30000000`).
+//
+// La cadena congruencial hace que cada vuelta dependa de la anterior a traves
+// del estado del objeto, asi que ningun analisis de induccion la resuelve en
+// forma cerrada.  El destino de la llamada sigue siendo evidente.
+
 class Counter {
     public i32 value;
     public Counter() { this.value = 0; }
-    public i32 inc() { return 1; }
-}
-
-void func () {
- 
+    public i32 inc() { return this.value + 1; }
 }
 
 i32 main() {
     Counter c = new Counter();
+    i64 sum = 0;
     i32 i = 0;
-    i32 sum = 0;
     while (i < 30000000) {
-        sum = sum + c.inc();
+        u32 t = ((u32) c.inc()) * 1664525 + 1013904223;
+        c.value = (i32) (t & 255);
+        sum = sum + (i64) c.value;
         i = i + 1;
     }
-    return sum;
+    return (i32) (sum % 251);
 }

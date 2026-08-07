@@ -1,8 +1,9 @@
-// Bench: hash lookup simulado (FNV-style int ops).
-// 50M iter con 6 int ops + 1 branch por iter = 350M ops totales.
+// hash_lookup: 50M mezclas estilo FNV, con el resultado consumido.
+// Mismo algoritmo que main.c; ver alli los DOS problemas que tenia: la
+// condicion que no se cumplia nunca y el borrado de la mezcla que provocaba.
 
 i32 main() {
-    u64 seed = 0xCAFEBABE_DEADBEEF;
+    u64 seed = 0xCAFEBABEDEADBEEF;
     u64 acc = 0;
     i32 i = 0;
     while (i < 50000000) {
@@ -10,10 +11,8 @@ i32 main() {
         seed = seed * 1099511628211;
         seed = seed >> 7;
         seed = seed | 1;
-        if ((seed & 7) == 0) {
-            acc++;
-        }
+        acc = acc + (seed & 255);   // el hash se consume
         i = i + 1;
     }
-    return (i32) acc;
+    return (i32) (acc % 251);
 }
