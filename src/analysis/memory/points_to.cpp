@@ -15,6 +15,10 @@
  */
 #include "analysis/memory/points_to.h"
 #include "analysis/memory/memory_access.h" // tamano de un tipo (UNICA verdad)
+#include "analysis/facts/loop_facts.h"
+#include "analysis/facts/loop_iv.h"
+#include "analysis/facts/loop_structure.h"
+#include "analysis/facts/loop_trip_count.h"
 
 #include "ir/ssa_ir.h"
 
@@ -110,6 +114,85 @@ struct Resolver {
     /// PHI que se esta resolviendo ahora mismo.  Volver a ella por un arg no es
     /// "no se sabe": es el propio bucle, y ese arg simplemente no aporta.
     ir::IrValueId phi_en_curso = ir::IR_NO_VALUE;
+
+    // --- Hechos de bucle, calculados SOLO si aparece un puntero inducido ---
+    bool                 bucles_listos = false;
+    LoopFacts            lf;
+    std::vector<int>     def_block;
+
+    void preparar_bucles() {
+        if (bucles_listos) return;
+        bucles_listos = true;
+        lf = compute_loop_facts(fn);
+        def_block.assign(facts.def_of.size(), -1);
+        for (uint32_t bi = 0; bi < fn.blocks.size(); ++bi)
+            for (const ir::IrInstr &in : fn.blocks[bi].instrs)
+                if (in.dst != ir::IR_NO_VALUE && in.dst < def_block.size())
+                    def_block[in.dst] = static_cast<int>(bi);
+    }
+
+    /**
+     * @brief Intervalo de desplazamientos de un puntero INDUCIDO.
+     *
+     * Un `q` que entra valiendo `base` y en cada vuelta hace `q += d` recorre
+     * `base + k*d` con `k` de 0 a vueltas-1.  Se necesitan las tres cosas: de
+     * donde parte, cuanto avanza y cuantas veces.  Las dos ultimas ya las saben
+     * los hechos de bucle; aqui solo se componen.
+     *
+     * Ante cualquier duda -- no es un bucle contado, el paso no es constante,
+     * el numero de vueltas no se conoce -- no se afirma intervalo alguno.  Que
+     * el puntero conserve su raiz ya es una mejora; inventarse el intervalo
+     * seria lo contrario.
+     */
+    bool rango_de_progresion(ir::IrValueId phi, const ir::IrInstr &def,
+                             const PointsToEntry &base, int64_t &lo,
+                             int64_t &hi) {
+        if (def.operands.size() != 2) return false;
+        preparar_bucles();
+        if (phi >= def_block.size() || def_block[phi] < 0) return false;
+        const uint32_t bh = static_cast<uint32_t>(def_block[phi]);
+        if (bh >= lf.is_loop_header.size() || !lf.is_loop_header[bh]) return false;
+        const uint32_t lid = lf.loop_id[bh];
+        if (lid == LoopFacts::NO_LOOP) return false;
+        const LoopStructure ls = detect_loop_structure(fn, lf, lid);
+        if (!ls.valid) return false;
+
+        // El paso: el arg que vuelve por el latch es `phi + d` con d constante.
+        int64_t paso = 0;
+        bool hay_paso = false;
+        for (ir::IrValueId a : def.operands) {
+            const ir::IrInstr *da = facts.def(a);
+            if (!da || da->op != Op_ADD() || da->operands.size() != 2) continue;
+            int64_t c;
+            if (da->operands[0] == phi && const_val_of(fn, da->operands[1], c)) {
+                paso = c; hay_paso = true; break;
+            }
+            if (da->operands[1] == phi && const_val_of(fn, da->operands[0], c)) {
+                paso = c; hay_paso = true; break;
+            }
+        }
+        if (!hay_paso || paso == 0) return false;
+
+        // Las vueltas: del IV entero del mismo bucle.
+        LoopIV iv;
+        if (!detect_loop_iv(fn, def_block, ls.header, ls.preheader, ls.latch, iv))
+            return false;
+        const LoopTripInfo tc = compute_trip_count(fn, def_block, iv);
+        if (!tc.known() || tc.trip <= 0) return false;
+
+        const int64_t ini = base.off_exact ? base.off : 0;
+        if (!base.off_exact && !base.off_rango) return false;
+        const int64_t ini_lo = base.off_exact ? ini : base.off_lo;
+        const int64_t ini_hi = base.off_exact ? ini : base.off_hi;
+        const int64_t avance = paso * (tc.trip - 1);
+        // Freno ante desbordamiento: mejor no afirmar que afirmar de mas.
+        if (tc.trip > 1 && paso != 0 && avance / (tc.trip - 1) != paso) return false;
+        lo = paso > 0 ? ini_lo : ini_lo + avance;
+        hi = paso > 0 ? ini_hi + avance : ini_hi;
+        return true;
+    }
+
+    static ir::IrOp Op_ADD() { return ir::IrOp::ADD; }
 
     const PointsToEntry &resolve(ir::IrValueId v) {
         if (v == ir::IR_NO_VALUE ||
@@ -259,6 +342,20 @@ struct Resolver {
             }
             phi_en_curso = marca_previa;
             if (discrepan || primero) return unknown();
+            /* Puntero INDUCIDO: su desplazamiento no es un valor que acotar,
+             * es una PROGRESION -- `q = buf` al entrar y `q = q + d` al volver,
+             * en lo que el optimizador convierte `p + i`.  Se acota con las
+             * VUELTAS, que es un hecho que ya existe.  Sin esto, el bucle que
+             * recorre un buffer -- donde de verdad se desborda -- queda fuera
+             * de toda comprobacion. */
+            int64_t lo, hi;
+            if (rango_de_progresion(v, *d, acc, lo, hi)) {
+                PointsToEntry e = inexact(acc);
+                e.off_lo = lo;
+                e.off_hi = hi;
+                e.off_rango = true;
+                return e;
+            }
             return inexact(acc);
         }
 

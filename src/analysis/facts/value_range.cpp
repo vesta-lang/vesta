@@ -89,9 +89,27 @@ RangeFacts compute_ranges(const ir::IrFunction &fn, const IrFacts &facts) {
     for (ir::IrValueId v = 0; v < fn.values.size() && v < out.r.size(); ++v)
         out.r[v] = del_tipo(fn.values[v].type);
 
-    /* Recorrido en orden de bloque.  Con SSA basta una pasada para lo que se
-     * afirma aqui: todo lo que se usa esta definido antes, salvo las PHI de un
-     * bucle -- y esas las cubre el hecho de induccion, no la propagacion. */
+    /* Se ITERA hasta que deje de aprender, no una sola pasada.
+     *
+     * Con una sola vuelta un bucle ANIDADO no se resuelve: la cota del de
+     * dentro es la variable del de fuera, y cuando se mira la primera aun no se
+     * sabe nada de la segunda.  Pasa igual con lo que deja el desenrollado, que
+     * introduce una variable mas por encima de la original.
+     *
+     * Cada vuelta solo puede ESTRECHAR (nunca ensanchar: `estrechar` interseca),
+     * asi que el punto fijo se alcanza y el tope es una salvaguarda, no la
+     * politica.  El orden natural lo da la dependencia: primero se resuelve el
+     * bucle de fuera, y con el, el de dentro. */
+    /* El tope NO es la politica, es una salvaguarda: se para al llegar a punto
+     * fijo, y si se acaban las vueltas ANTES eso queda registrado
+     * (`convergio = false`).  "Despues de seis vueltas parece bien" no es una
+     * conclusion, y quien vaya a demostrar algo con estos rangos tiene derecho
+     * a distinguir las dos cosas. */
+    const int MAX_VUELTAS = 6;
+    out.convergio = false;
+    for (int vuelta = 0; vuelta < MAX_VUELTAS; ++vuelta) {
+    out.vueltas = vuelta + 1;
+    const std::vector<ValueRange> antes = out.r;
     for (const ir::IrBlock &b : fn.blocks) {
         for (const ir::IrInstr &in : b.instrs) {
             if (in.dst == ir::IR_NO_VALUE || in.dst >= out.r.size()) continue;
@@ -186,7 +204,8 @@ RangeFacts compute_ranges(const ir::IrFunction &fn, const IrFacts &facts) {
             const LoopStructure ls = detect_loop_structure(fn, lf, lid);
             if (!ls.valid) continue;
             LoopIV iv;
-            if (!detect_loop_iv(fn, def_block, ls.header, ls.preheader, ls.latch, iv))
+            if (!detect_loop_iv(fn, def_block, ls.header, ls.preheader, ls.latch,
+                                iv))
                 continue;
             if (iv.phi == ir::IR_NO_VALUE || iv.phi >= out.r.size()) continue;
             if (iv.init >= out.r.size() || iv.bound >= out.r.size()) continue;
@@ -198,12 +217,22 @@ RangeFacts compute_ranges(const ir::IrFunction &fn, const IrFacts &facts) {
             v.lo = ini.lo;
             /* `iv < N` deja el ultimo valor en N-1; `iv <= N`, en N.  Con el
              * paso el ultimo puede quedarse corto, nunca pasarse. */
-            const bool inclusiva = (iv.cmp_op == IrOp::CMP_LE || iv.cmp_op == IrOp::CMP_ULE);
-            v.hi = inclusiva ? cota.hi : (cota.hi > INT64_MIN ? cota.hi - 1 : cota.hi);
+            const bool inclusiva =
+                (iv.cmp_op == IrOp::CMP_LE || iv.cmp_op == IrOp::CMP_ULE);
+            v.hi = inclusiva ? cota.hi
+                             : (cota.hi > INT64_MIN ? cota.hi - 1 : cota.hi);
             v.hi -= iv.cmp_offset; // la guarda compara `iv + c`, no `iv`
             if (v.hi >= v.lo) out.r[iv.phi] = estrechar(out.r[iv.phi], v);
         }
     }
+
+    // Nada nuevo en esta vuelta: ya no se puede aprender mas.
+    bool cambio = false;
+    for (size_t k = 0; k < out.r.size() && !cambio; ++k)
+        cambio = !(out.r[k].conocido == antes[k].conocido &&
+                   out.r[k].lo == antes[k].lo && out.r[k].hi == antes[k].hi);
+    if (!cambio) { out.convergio = true; break; }
+    } // fin de las vueltas
 
     return out;
 }

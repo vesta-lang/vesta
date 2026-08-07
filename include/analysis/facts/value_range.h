@@ -75,6 +75,22 @@ struct ValueRange {
 /// Rango de cada valor SSA de una funcion, indexado por value-id.
 struct RangeFacts {
     std::vector<ValueRange> r;
+    /**
+     * @brief Si el calculo llego a PUNTO FIJO o se paro por el tope de vueltas.
+     *
+     * El tope no significa "analisis terminado".  Significa "hasta aqui he
+     * llegado", y la diferencia importa: un consumidor que va a DEMOSTRAR algo
+     * tiene derecho a saber si lo que lee es una conclusion o una parada.
+     *
+     * Hoy pararse antes solo cuesta PRECISION y nunca correccion -- cada vuelta
+     * unicamente estrecha, y el punto de partida (el ancho del tipo) ya es una
+     * sobre-aproximacion valida --, pero el dato viaja igual: en cuanto haya
+     * ensanchamiento o uniones, no converger dejara de ser inocuo, y para
+     * entonces el hecho ya lo dira en vez de haberlo perdido.
+     */
+    bool convergio = true;
+    int  vueltas = 0; ///< Cuantas hicieron falta (o el tope, si no convergio).
+
     const ValueRange &at(ir::IrValueId v) const {
         static const ValueRange kNada{};
         return v < r.size() ? r[v] : kNada;
