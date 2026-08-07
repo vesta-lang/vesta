@@ -389,6 +389,11 @@ struct AggregateFacts {
      * la relacion: dos agregados de 16 bytes en la misma funcion son
      * indistinguibles asi, y una correlacion equivocada es peor que ninguna
      * porque produce transiciones que no ocurrieron.
+     *
+     * La identidad COMPLETA de un valor incluye ademas su MODULO: el mismo
+     * fuente se observa una vez en su propio modulo y otra en el programa
+     * fusionado, y son dos observaciones legitimas de cadenas distintas.
+     * Colapsarlas por nombre y linea producia contradicciones que no existian.
      */
     SitioIr       declaracion;
     int64_t       bytes = -1;
@@ -493,6 +498,12 @@ AggregateFactsMap observar_agregados(const ir::IrModule &mod,
  * clasificador que mete todo en la misma casilla pasa desapercibido si primero
  * se engancha y luego se mira; medir antes es lo unico que lo destapa, y ya lo
  * destapo dos veces.  Solo se activa con `VESTA_ASA_FORMAS`.
+ *
+ * @param etapa NOMBRE de la etapa.  El estado se identifica ademas con un
+ *        contador: la misma etapa se recorre VARIAS VECES por compilacion -- el
+ *        emisor se invoca mas de una vez -- y agruparlas bajo una etiqueta hace
+ *        que el mismo valor parezca tener dos formas a la vez.  MEDIDO: 3443
+ *        observaciones incoherentes consigo mismas, todas por esto.
  *
  * @param momento ESTADO del pipeline en el que se observa.  No es una etiqueta
  *        decorativa: antes y despues de optimizar son dos contextos distintos

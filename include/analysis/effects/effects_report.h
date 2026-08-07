@@ -29,8 +29,17 @@ namespace effects {
 /// Imprime el reporte de efectos + contratos + lagunas del modulo @p mod.
 /// @p backend dice para quien se describe el programa: una misma op baja
 /// distinto en cada uno, y varias solo existen porque hay un runtime detras.
+/**
+ * @param mod_previo Estado del modulo ANTES de optimizar, si se tiene.  Un
+ *        informe que solo mira el codigo final describe una parte del
+ *        programa: la mayoria de los valores con componentes desaparecen al
+ *        optimizar, y decir 'no hay ninguno' de un programa que los tiene es
+ *        justo lo que una herramienta de analisis no puede permitirse.  Las
+ *        dos realidades son ciertas; se muestran las dos.
+ */
 void print_effects_report(std::ostream &os, const ir::IrModule &mod,
-                          Backend backend = Backend::Vm);
+                          Backend backend = Backend::Vm,
+                          const ir::IrModule *mod_previo = nullptr);
 
 /// Emite el MISMO modelo (efectos local/cierre + contratos derivados +
 /// estructura + lagunas) como un objeto JSON autocontenido para los diagramas

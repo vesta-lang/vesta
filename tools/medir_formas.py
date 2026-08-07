@@ -24,7 +24,7 @@ import re
 import subprocess
 import sys
 
-RE_AGREGADO = re.compile(r"\[forma\] (fn=.*)")
+RE_AGREGADO = re.compile(r"\[forma\] (momento=.*)")
 RE_DETALLE = re.compile(r"\[forma\]\s+(motivo|escape|limite)=(\S+)")
 
 
@@ -49,6 +49,11 @@ def main():
     )
     entorno = dict(os.environ, VESTA_ASA_FORMAS="1", TEMP="F:/vxtmp", TMP="F:/vxtmp")
 
+    # (ejemplo, funcion, sitio de declaracion) -> {momento: forma}.  Esa clave
+    # es la identidad del valor a traves del pipeline.
+    visto = collections.defaultdict(dict)
+    incoherentes = []
+    formas_por_momento = collections.defaultdict(collections.Counter)
     formas = collections.Counter()
     certezas = collections.Counter()
     perfil = collections.Counter()
@@ -80,6 +85,18 @@ def main():
                 forma_actual = c.get("forma", "?")
                 total += 1
                 formas[forma_actual] += 1
+                formas_por_momento[c.get("momento", "?")][forma_actual] += 1
+                clave = (os.path.basename(ruta), c.get("fn", "?"),
+                         c.get("decl", "?"))
+                anterior = visto[clave].get(c.get("momento", "?"))
+                if anterior is not None and anterior != forma_actual:
+                    # El mismo valor observado dos veces en el mismo momento
+                    # con formas distintas: se marca en vez de elegir una.
+                    visto[clave][c.get("momento", "?")] = "INCOHERENTE"
+                    incoherentes.append((clave, c.get("momento", "?"),
+                                         anterior, forma_actual))
+                else:
+                    visto[clave][c.get("momento", "?")] = forma_actual
                 certezas[c.get("certeza", "?")] += 1
                 ejemplos_por_forma[forma_actual].add(os.path.basename(ruta))
                 for s in ("completo", "unidad", "accprop", "accop", "dinamico",
@@ -102,10 +119,65 @@ def main():
     if total == 0:
         return 1
 
+    if incoherentes:
+        print("\n-- el MISMO valor visto dos veces en el MISMO momento (%d) --"
+              % len(incoherentes))
+        for k, mom, a1, a2 in incoherentes[:8]:
+            print("   %s %s decl=%s  %s: %s vs %s"
+                  % (k[0], k[1], k[2], mom, a1, a2))
+
     print("\n-- forma (por valor, y en cuantos ejemplos aparece) --")
     for k, v in formas.most_common():
         print("  %-14s %5d  (%4.1f%%)   en %3d ejemplos"
               % (k, v, 100.0 * v / total, len(ejemplos_por_forma[k])))
+
+    # LA TRANSICION: que le paso a cada valor entre los dos momentos.  Se
+    # correlaciona por SITIO DE DECLARACION, que es lo unico que sobrevive al
+    # pipeline (los value-id se renumeran).  Tres desenlaces y cada uno dice
+    # algo distinto; el tercero es el que hay que mirar con lupa, porque una
+    # transformacion no deberia cambiar la naturaleza semantica de un valor.
+    transicion = collections.Counter()
+    cambios = collections.Counter()
+    # Una unidad que pasa a saco: o el optimizador la rompio, o uno de los dos
+    # analisis miente.  Se listan con nombre y sitio para poder ir a mirarlas.
+    sospechosos = []
+    for clave, por_momento in visto.items():
+        pre = por_momento.get("pre-opt")
+        post = por_momento.get("post-opt")
+        if pre is None:
+            transicion["solo-despues (aparece al optimizar)"] += 1
+        elif post is None:
+            transicion["desaparece: %s" % pre] += 1
+        elif pre == post:
+            transicion["sobrevive igual: %s" % pre] += 1
+        else:
+            transicion["CAMBIA DE FORMA"] += 1
+            cambios["%s -> %s" % (pre, post)] += 1
+            if pre == "compuesto" and post == "agregado":
+                sospechosos.append(clave)
+    print("\n-- transicion pre-opt -> post-opt (%d valores distintos) --"
+          % len(visto))
+    for k, v in transicion.most_common():
+        print("  %-34s %5d" % (k, v))
+    if cambios:
+        print("\n   cambios de forma (revisar: o el optimizador rompio algo,")
+        print("   o uno de los dos analisis miente):")
+        for k, v in cambios.most_common():
+            print("     %-28s %5d" % (k, v))
+    if sospechosos:
+        print("\n   unidad -> saco (%d).  Los primeros:" % len(sospechosos))
+        for k in sospechosos[:12]:
+            print("     %s  %s  decl=%s" % k)
+
+    # Dos poblaciones, no una: antes y despues de optimizar son dos verdades del
+    # mismo programa, y mezclarlas hace creer que se ve "los agregados del
+    # programa" cuando en realidad se ve "los que sobrevivieron".
+    for mom in sorted(formas_por_momento):
+        sub = formas_por_momento[mom]
+        n = sum(sub.values())
+        print("\n-- momento=%s (%d agregados) --" % (mom, n))
+        for k, v in sub.most_common():
+            print("  %-14s %5d  (%4.1f%%)" % (k, v, 100.0 * v / n))
 
     print("\n-- certeza --")
     for k, v in certezas.most_common():

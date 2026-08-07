@@ -11,6 +11,7 @@
  *        contratos derivados + lagunas de precision, por proyeccion del
  *        SemanticSummary (misma fuente que consume el compilador).
  */
+#include "analysis/asa/aggregate_facts.h"
 #include "analysis/effects/effects_report.h"
 
 #include "ir/ssa_ir.h"
@@ -280,8 +281,80 @@ static void print_conflictos(std::ostream &os, EffectAnalysis &ea,
         os << "  Conflictos de memoria (acceso a memoria ya liberada):\n" << out;
 }
 
+/**
+ * @brief FORMA de los valores con componentes, con su alcance y sus limites.
+ *
+ * Se muestra lo que se demostro Y donde vale: un valor cuya forma global no se
+ * puede afirmar puede tener dentro ambitos cerrados donde SI esta demostrada, y
+ * ensenar solo el veredicto global tira ese conocimiento.
+ *
+ * Y lo que impide demostrar mas se dice tambien, con su sitio: es lo unico que
+ * convierte un "no se" en algo accionable -- dice QUE habria que poder ver.
+ */
+static void print_formas_de(std::ostream &os, const ir::IrModule &mod,
+                            const char *estado) {
+    os << "  --- " << estado << " ---\n";
+    bool alguno = false;
+    for (const ir::IrFunction &fn : mod.functions) {
+        if (fn.blocks.empty()) continue;
+        const analysis::IrFacts h = analysis::build_ir_facts(fn);
+        const analysis::asa::AggregateFactsMap m =
+            analysis::asa::observar_agregados(mod, fn, h);
+        if (m.agregados.empty()) continue;
+        alguno = true;
+        os << "  " << fn.name << "\n";
+        for (const analysis::asa::AggregateFacts &a : m.agregados) {
+            os << "    linea " << a.declaracion.linea << ":"
+               << a.declaracion.indice << "  " << a.bytes << " bytes, "
+               << a.offsets_tocados() << " desplazamientos  -> "
+               << analysis::asa::nombre_forma(a.forma()) << " / "
+               << analysis::asa::nombre_certeza(a.sello.certeza) << "\n";
+            for (analysis::asa::MotivoForma mo : a.motivos_forma())
+                os << "        porque: " << analysis::asa::nombre_motivo(mo)
+                   << "\n";
+            /* Las verdades LOCALES: un ambito cerrado demuestra lo suyo aunque
+             * el de fuera no.  Sin esto, un "sin evidencia" global esconderia
+             * todo lo que si se sabe por dentro. */
+            for (const analysis::asa::Universo &u : a.universos) {
+                if (!u.cerrado || u.id == 0) continue;
+                const analysis::asa::FormaDeValor f = a.forma_en(u.id);
+                if (f == analysis::asa::FormaDeValor::SinEvidencia) continue;
+                os << "        en " << u.ambito << ": "
+                   << analysis::asa::nombre_forma(f) << " (demostrado ahi)\n";
+            }
+            for (const analysis::asa::Frontera &fr : a.fronteras)
+                os << "        sale por " << analysis::asa::nombre_frontera(fr.codigo)
+                   << " en " << fr.sitio.funcion << ":" << fr.sitio.linea << "\n";
+            for (const analysis::asa::Limitacion &l : a.limitaciones)
+                os << "        no pude seguir: "
+                   << analysis::asa::nombre_limitacion(l.codigo) << " en "
+                   << l.sitio.funcion << ":" << l.sitio.linea
+                   << (l.destino.empty() ? "" : " -> " + l.destino) << "\n";
+        }
+    }
+    if (!alguno)
+        os << "    ninguno en este estado.\n";
+}
+
+/**
+ * @brief Las DOS realidades del programa, no una.
+ *
+ * Antes y despues de optimizar son dos verdades del mismo programa, y ninguna
+ * es la correcta en abstracto: la primera describe lo que se escribio, la
+ * segunda lo que de verdad queda.  Ensenar solo la segunda hace decir "no hay
+ * ningun valor con componentes" de un programa que tiene seis.
+ */
+static void print_formas(std::ostream &os, const ir::IrModule &mod,
+                         const ir::IrModule *mod_previo) {
+    os << "=== Forma de los valores con componentes ===\n";
+    if (mod_previo != nullptr)
+        print_formas_de(os, *mod_previo, "tal como se escribio");
+    print_formas_de(os, mod, "en el codigo final");
+    os << "\n";
+}
+
 void print_effects_report(std::ostream &os, const ir::IrModule &mod,
-                          Backend backend) {
+                          Backend backend, const ir::IrModule *mod_previo) {
     EffectAnalysis ea;
     ea.set_backend(backend);
     const ModuleSummary &ms = ea.module_summary(mod);
@@ -340,6 +413,11 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
         print_conflictos(os, ea, fn);
         os << "\n";
     }
+
+    // La FORMA de los valores con componentes: saco de partes o unidad.  Va en
+    // el informe y no detras de una variable de entorno porque es conocimiento
+    // sobre el programa del usuario, no depuracion del compilador.
+    print_formas(os, mod, mod_previo);
 
     // Reporte de LAGUNAS: hace visible que falta por modelar (cobertura) y donde
     // la opacidad es fundamental (oportunidades de opt del lado del usuario).

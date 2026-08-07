@@ -662,6 +662,21 @@ AggregateFactsMap observar_agregados(const ir::IrModule &mod,
 
 void volcar_formas(const ir::IrModule &mod, const char *momento) {
     if (std::getenv("VESTA_ASA_FORMAS") == nullptr) return;
+    /* Cada recorrido es un ESTADO distinto, aunque la etapa se llame igual: el
+     * emisor se invoca varias veces por compilacion y entre una y otra el modulo
+     * cambia.  Sin el contador, dos estados comparten nombre y el mismo valor
+     * aparece con dos formas a la vez. */
+    static uint32_t estado = 0;
+    const uint32_t id_estado = estado++;
+    /* Un estado se identifica ademas por el MODULO que representa: dos estados
+     * de modulos distintos no estan en la misma cadena de transformacion, y
+     * comparar hechos entre ellos no compara nada.  Antes de relacionar dos
+     * estados hay que demostrar que estan relacionados. */
+    std::fprintf(stderr,
+                 "[forma] estado=%u etapa=%s modulo=%s funciones=%u\n",
+                 id_estado, momento,
+                 mod.name.empty() ? "<anonimo>" : mod.name.c_str(),
+                 static_cast<uint32_t>(mod.functions.size()));
     CacheHechos cache; // una sola para todo el modulo
     for (const ir::IrFunction &fn : mod.functions) {
         if (fn.blocks.empty()) continue;
@@ -673,13 +688,14 @@ void volcar_formas(const ir::IrModule &mod, const char *momento) {
             // El PERFIL, no solo la forma: es lo que permite ver si el analisis
             // distingue algo antes de que nadie consuma su veredicto.
             std::fprintf(stderr,
-                         "[forma] momento=%s fn=%s decl=%u:%u ancla=%u "
+                         "[forma] momento=%s#%u fn=%s decl=%u:%u ancla=%u "
                          "bytes=%lld "
                          "offsets=%u forma=%s "
                          "certeza=%s completo=%d unidad=%d accprop=%d accop=%d "
                          "indep=%d dinamico=%d escapa=%d abi=%d dev=%d bloque=%d "
                          "frontera=%u lim=%u esc=%u\n",
-                         momento, fn.name.c_str(), a.declaracion.linea,
+                         momento, id_estado, fn.name.c_str(),
+                         a.declaracion.linea,
                          a.declaracion.indice, a.ancla,
                          static_cast<long long>(a.bytes), a.offsets_tocados(),
                          nombre_forma(a.forma()),

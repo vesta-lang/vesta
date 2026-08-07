@@ -2174,8 +2174,11 @@ int main(int argc, char *argv[]) {
         }
         const ir::IrModule &amod_efectos = hay_build ? amod_build : amod_post;
         if (!want_json)
-            analysis::effects::print_effects_report(std::cout, amod_efectos,
-                                                   analyze_backend);
+            /* Los DOS estados: antes de optimizar y el codigo final.  Mirar
+             * solo uno describe una parte del programa. */
+            analysis::effects::print_effects_report(
+                std::cout, amod_efectos, analyze_backend,
+                hay_build ? &amod_post : nullptr);
         auto find_fp = [&](const std::string &name)
             -> const analyze::FunctionFingerprint * {
             for (const auto &f : fps_post)
