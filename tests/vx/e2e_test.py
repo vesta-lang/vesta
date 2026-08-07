@@ -2817,6 +2817,7 @@ r0_case("literal_bases", "literal ancho en binario, octal, hexadecimal y decimal
 r0_case("ctor_comptime_modulo", "constructor comptime de un tipo de otro modulo", "363_ctor_comptime_modulo.vx", 42)
 r0_case("asm_dse", "un asm no es barrera, pero se respeta lo que lee, lo que cambia y lo que escribe", "372_asm_dse.vx", 42)
 r0_case("campo_por_puntero", "el '.' atraviesa un puntero: leer, escribir, ++, metodo, encadenar, &campo y recorrer una lista", "371_campo_por_puntero.vx", 42)
+r0_case("optional_overlay", "un overlay dentro de un Optional guarda el HANDLE, no una copia: la vista sigue apuntando al buffer original", "373_optional_overlay.vx", 1673)
 r0_case("ctor_importado", "construir un struct declarado en otro modulo", "362_ctor_importado.vx", 42)
 r0_case("ctor_comptime", "constructor comptime: recoge la llamada cuando ninguna sobrecarga encaja", "361_ctor_comptime.vx", 42)
 r0_case("enum_valor_importado", "enum con valor importado: conserva valores y compara por contenido", "359_enum_valor_importado.vx", 42)

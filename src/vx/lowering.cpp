@@ -12966,11 +12966,48 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                 // de abajo, `case Some(p)` sobre un struct ligaba sus primeros
                 // 8 bytes interpretados como un entero, y el codigo del brazo
                 // leia campos en direcciones inventadas.
+                /* Salvo que sea un `@overlay`, que NO esta en linea: su valor ES
+                 * un puntero de 8 bytes, y lo que el hueco guarda es ese
+                 * puntero, no los campos.  Ligar aqui la direccion del hueco
+                 * hacia que el brazo leyera sus campos como si el objeto
+                 * empezara ahi -- `v.b` iba a `hueco+8` en vez de a
+                 * `(*hueco)+8` --, o sea memoria que el productor nunca
+                 * escribio y fuera del buffer del Optional.
+                 *
+                 * Lo encontro el analisis de regiones: `__vxch_wq_pop` escribe
+                 * 16 bytes (tag + handle) y el llamador leia en +16 y +24.
+                 * Repro: un `Optional<Vista>` con tres campos daba 2451845201647
+                 * en vez de 666.  Con el LOAD de abajo se liga el HANDLE, que es
+                 * lo que un overlay es. */
                 if (elay.is_optlike && arm_var &&
                     bi < arm_var->field_types.size() &&
                     arm_var->field_types[bi].kind == PrimitiveKind::STRUCT &&
-                    !arm_var->field_types[bi].struct_name.empty()) {
+                    !arm_var->field_types[bi].struct_name.empty() &&
+                    !type_is_overlay(arm_var->field_types[bi])) {
                     bind(arm.bindings[bi], addr_i);
+                    continue;
+                }
+                /* Un overlay se carga como lo que es: un PUNTERO de 8 bytes.
+                 * No basta con dejarlo caer en la carga de abajo, porque esa se
+                 * tipa por el campo declarado -- que aqui es STRUCT -- y una
+                 * vista no tiene tipo escalar.  Y hereda la naturaleza (host o
+                 * VM) del buffer, porque la vista puede apuntar a cualquiera de
+                 * las dos memorias y de eso depende como se lea despues. */
+                if (elay.is_optlike && arm_var &&
+                    bi < arm_var->field_types.size() &&
+                    arm_var->field_types[bi].kind == PrimitiveKind::STRUCT &&
+                    type_is_overlay(arm_var->field_types[bi])) {
+                    const ir::IrValueId vh = fn_->new_value(ir::IrType::PTR);
+                    fn_->values[vh].is_host_ptr =
+                        fn_->values[scrut_addr].is_host_ptr;
+                    ir::IrInstr ld{};
+                    ld.op = ir::IrOp::LOAD;
+                    ld.type = ir::IrType::PTR;
+                    ld.dst = vh;
+                    ld.operands = {addr_i};
+                    ld.source_line = arm.loc.line;
+                    emit(current_block_, std::move(ld));
+                    bind(arm.bindings[bi], vh);
                     continue;
                 }
                 ir::IrValueId v = fn_->new_value(load_t);
@@ -27478,8 +27515,15 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         // puntero (lo que se hacia antes) el `Some` sobrevivia al ALLOCA que
         // apuntaba y `unwrap` leia memoria muerta -> devolvia 0 en silencio.
         const Type &arg_t = e->args[0]->result_type;
+        /* Un `@overlay` NO es un struct por valor: no reserva nada, es una VISTA
+         * TIPADA sobre un puntero, y su valor ES ese puntero (8 bytes).  Copiar
+         * "sus bytes" copiaba los primeros 8 bytes del OBJETO VISTO, con lo que
+         * el `Some` guardaba `*base` en vez de `base` y el consumidor leia
+         * campos en direcciones inventadas.  Se guarda el handle, como cualquier
+         * otro valor de 8 bytes; el objeto sigue viviendo donde vivia. */
         const bool payload_is_struct =
-            (arg_t.kind == PrimitiveKind::STRUCT) && !arg_t.struct_name.empty();
+            (arg_t.kind == PrimitiveKind::STRUCT) && !arg_t.struct_name.empty() &&
+            !type_is_overlay(arg_t);
         const size_t payload_sz =
             payload_is_struct ? size_of_type(arg_t) : 8u;
         const size_t buf_sz =
