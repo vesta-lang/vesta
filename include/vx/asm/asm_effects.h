@@ -114,6 +114,28 @@ struct AsmEffects {
     bool touches_mem = false;   ///< toca memoria implicitamente
     bool touches_flags = false; ///< modifica RFLAGS/condition codes
     bool is_call = false;       ///< call/syscall: clobber de caller-saved
+    /// Entrada/salida por PUERTO (`in`/`out`).  No toca memoria, pero es un
+    /// efecto observable del exterior: no se puede eliminar ni reordenar como
+    /// si fuera aritmetica, y quien la use no es codigo autonomo.  Sin
+    /// distinguirla, tabular estas instrucciones las haria parecer PURAS.
+    bool port_io = false;
+    /// BARRERA de memoria explicita (`mfence`/`lfence`/`sfence`).  No lee ni
+    /// escribe nada, pero ORDENA lo que hay a su alrededor: tratarla como una
+    /// instruccion cualquiera permitiria justo lo que existe para impedir.
+    bool barrier = false;
+
+    /// Registros por los que la instruccion LEE memoria sin decirlo en sus
+    /// operandos.  Canonicos.
+    ///
+    /// Que una instruccion no escriba los corchetes no significa que no se sepa
+    /// por donde accede: `movsb` lee por `rsi` y escribe por `rdi` porque lo
+    /// dice la arquitectura, igual de fijo que si estuviera escrito.  Ponerlo
+    /// aqui es la diferencia entre saberlo y rendirse -- rendirse seria dar por
+    /// bueno "toca memoria en algun sitio", que es rodear el analisis en vez de
+    /// hacerlo.
+    std::vector<std::string> implicit_mem_read;
+    /// Registros por los que ESCRIBE memoria implicitamente.  Ver el anterior.
+    std::vector<std::string> implicit_mem_write;
     bool known = false;         ///< false si no esta en la tabla
 };
 

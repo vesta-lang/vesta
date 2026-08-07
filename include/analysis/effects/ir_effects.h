@@ -47,15 +47,24 @@ AbstractLoc classify_ptr(const ir::IrFunction &fn, const analysis::IrFacts &fact
 /// (FFI/dinamico -> oportunidades de optimizacion que solo un cambio de codigo
 /// del usuario desbloquea).  Sin esto, un top() a secas ocultaria ambos.
 struct EffectGaps {
-    std::map<int, uint32_t>           unmodeled_ops;  ///< IrOp (int) -> nº de veces.
-    std::map<UnknownReason, uint32_t> by_reason;      ///< motivo -> nº de veces.
+    std::map<int, uint32_t>           unmodeled_ops;  ///< IrOp (int) -> numero de veces.
+    std::map<UnknownReason, uint32_t> by_reason;      ///< motivo -> numero de veces.
     uint32_t total_top = 0;                           ///< sitios que subieron a top.
+    /// Mnemonicos de asm que la tabla no sabe explicar -> numero de veces.
+    ///
+    /// Sin el nombre, una laguna no se puede cerrar: "hay 2 instrucciones
+    /// desconocidas" no dice cual anadir.  Y cerrarlas es justo la disciplina
+    /// del analizador de asm -- la tabla crece bajo demanda --, asi que el dato
+    /// tiene que llegar hasta aqui.
+    std::map<std::string, uint32_t> mnemonicos_desconocidos;
 
     void record(int op, UnknownReason why) {
         ++total_top;
         ++by_reason[why];
         if (reason_is_gap(why)) ++unmodeled_ops[op];
     }
+    /// Apunta un mnemonico que no esta en la tabla.
+    void record_mnemonico(const std::string &m) { ++mnemonicos_desconocidos[m]; }
     bool empty() const { return total_top == 0; }
 };
 

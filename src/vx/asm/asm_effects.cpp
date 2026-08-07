@@ -328,6 +328,71 @@ const EffTable &x86_effects_table() {
         add("rdpmc", E({"rax", "rdx"}, false, false, false));
         add("rdrand", E({}, true, false, true)); // escribe dest + CF
         add("rdseed", E({}, true, false, true));
+        /* --- Barreras y espera activa ---
+         * Las usa la stdlib (atomicos, canales, mutex, pool) y no estaban
+         * tabuladas: dejaban el bloque como desconocido, o sea una caja negra
+         * en el corazon de la concurrencia. */
+        for (const char *m : {"mfence", "lfence", "sfence"}) {
+            AsmEffects f = E({}, 0x0, false, false);
+            f.barrier = true; // no toca nada, pero ORDENA lo de alrededor
+            add(m, f);
+        }
+        // `pause` es una PISTA para la espera activa: no hace nada observable.
+        add("pause", E({}, 0x0, false, false));
+        /* --- Operaciones de cadena ---
+         * No llevan corchetes, pero se sabe EXACTAMENTE por donde acceden: la
+         * arquitectura fija que la fuente va por `rsi` y el destino por `rdi`.
+         * Se declara asi, con sus registros, en vez de decir "toca memoria en
+         * algun sitio": lo segundo no seria conservador sino incompleto -- el
+         * dato esta, solo habia que ponerlo --, y ademas apagaria todo lo que
+         * haya alrededor.
+         *
+         * `cmps`/`scas` ademas comparan, asi que tocan flags. */
+        auto cadena = [&](const char *m, bool lee_rsi, bool escribe_rdi,
+                          bool lee_rdi, bool flags) {
+            AsmEffects s = E({}, 0x0, /*mem=*/true, flags);
+            if (lee_rsi) s.implicit_mem_read.emplace_back("rsi");
+            if (lee_rdi) s.implicit_mem_read.emplace_back("rdi");
+            if (escribe_rdi) s.implicit_mem_write.emplace_back("rdi");
+            add(m, s);
+        };
+        for (const char *m : {"movsb", "movsw", "movsd", "movsq"})
+            cadena(m, true, true, false, false); // [rdi] <- [rsi]
+        for (const char *m : {"stosb", "stosw", "stosd", "stosq"})
+            cadena(m, false, true, false, false); // [rdi] <- al/ax/eax/rax
+        for (const char *m : {"lodsb", "lodsw", "lodsd", "lodsq"})
+            cadena(m, true, false, false, false); // al/ax/eax/rax <- [rsi]
+        for (const char *m : {"cmpsb", "cmpsw", "cmpsd", "cmpsq"})
+            cadena(m, true, false, true, true); // compara [rsi] con [rdi]
+        for (const char *m : {"scasb", "scasw", "scasd", "scasq"})
+            cadena(m, false, false, true, true); // compara al/... con [rdi]
+
+        /* --- Entrada/salida por PUERTO ---
+         * Las usa cualquier sistema operativo (teclado, reloj, consola serie) y
+         * no estaban tabuladas: un `in`/`out` dejaba el bloque entero como
+         * desconocido, o sea una caja negra en mitad del kernel.
+         *
+         * No tocan memoria, pero NO son puras: hablan con el exterior.  Van
+         * marcadas como tales para que nadie las trate como aritmetica -- ni
+         * las borre por "no hacer nada" ni las reordene -- y para que quien las
+         * use no pase por codigo autonomo.
+         *   in  dst, puerto  -> escribe el 1er operando (al/ax/eax)
+         *   out puerto, src  -> no escribe ningun registro */
+        {
+            AsmEffects in_e = E({}, 0x1, false, false);
+            in_e.port_io = true;
+            add("in", in_e);
+            AsmEffects out_e = E({}, 0x0, false, false);
+            out_e.port_io = true;
+            add("out", out_e);
+            // Variantes de cadena: mueven un bloque entre puerto y memoria.
+            for (const char *m : {"insb", "insw", "insd", "outsb", "outsw",
+                                  "outsd"}) {
+                AsmEffects s = E({}, 0x0, /*mem=*/true, false);
+                s.port_io = true;
+                add(m, s);
+            }
+        }
         // mul/imul 1-operando + div/idiv: rdx:rax.
         add("mul", E({"rax", "rdx"}, false, false, true));
         add("imul",

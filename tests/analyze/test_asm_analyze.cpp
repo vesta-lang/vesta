@@ -190,6 +190,36 @@ int main() {
         CHECK(e.accesos_incompletos, "direccion absoluta: sin base");
     }
 
+    // --- memoria IMPLICITA pero CONOCIDA ----------------------------------
+    // Una instruccion de cadena no escribe los corchetes, pero la arquitectura
+    // dice por donde accede.  Decir "toca memoria en algun sitio" seria dejar
+    // el analisis a medias, no ser prudente.
+    {
+        AsmBlockEffects e = asm_analyze_block("  movsb\n", "x86_64");
+        CHECK(e.reads_mem && e.writes_mem, "movsb: lee y escribe memoria");
+        CHECK(!e.accesos_incompletos, "movsb: sus accesos SI se atribuyen");
+        CHECK(e.accesos.size() == 2, "movsb: dos accesos (origen y destino)");
+        bool lee_rsi = false, escribe_rdi = false;
+        for (const auto &a : e.accesos) {
+            if (a.base == "rsi" && !a.escribe) lee_rsi = true;
+            if (a.base == "rdi" && a.escribe) escribe_rdi = true;
+        }
+        CHECK(lee_rsi, "movsb: lee por rsi");
+        CHECK(escribe_rdi, "movsb: escribe por rdi");
+    }
+    {
+        AsmBlockEffects e = asm_analyze_block("  stosb\n", "x86_64");
+        CHECK(e.accesos.size() == 1 && e.accesos[0].base == "rdi" &&
+                  e.accesos[0].escribe,
+              "stosb: solo escribe, por rdi");
+    }
+    {
+        AsmBlockEffects e = asm_analyze_block("  lodsb\n", "x86_64");
+        CHECK(e.accesos.size() == 1 && e.accesos[0].base == "rsi" &&
+                  !e.accesos[0].escribe,
+              "lodsb: solo lee, por rsi");
+    }
+
     // --- la forma moderna: el operando es un marcador ---------------------
     // `asm ( reg d = p, reg t, ) { mov t, [d] }` llega con el registro sin
     // elegir todavia (lo elige el asignador), pero el marcador YA identifica

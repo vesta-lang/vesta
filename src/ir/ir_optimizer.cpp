@@ -7606,17 +7606,8 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
         auto dse_asm_preciso = [&](const IrInstr &ins) -> bool {
             const vx::AsmBlockEffects e =
                 vx::asm_analyze_block(ins.func_name, dse_arch_asm());
-            if (!e.known() || e.is_call || e.has_atomic) {
-                if (dbg) std::fprintf(stderr, "[asmdse] no: known=%d call=%d atom=%d\n",
-                                      (int)e.known(), (int)e.is_call, (int)e.has_atomic);
-                return false;
-            }
-            if (e.accesos_incompletos) {
-                if (dbg) std::fprintf(stderr, "[asmdse] no: accesos incompletos\n");
-                return false;
-            }
-            if (dbg) std::fprintf(stderr, "[asmdse] SI: accesos=%zu escritos=%zu\n",
-                                  e.accesos.size(), e.escritos.size());
+            if (!e.known() || e.is_call || e.has_atomic) return false;
+            if (e.accesos_incompletos) return false;
 
             /* PRIMERO lo que no depende de los accesos: el bloque lee el VALOR
              * de cada variable ligada.  Sus huecos son los operandos. */

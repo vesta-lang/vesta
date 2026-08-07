@@ -92,6 +92,10 @@ struct AsmBlockEffects {
     /// los @c accesos NO describen todo lo que el bloque toca y hay que
     /// suponer lo peor.
     bool accesos_incompletos = false;
+    /// El bloque hace entrada/salida por PUERTO.  No es memoria, pero se ve
+    /// desde fuera: ni se elimina ni se reordena, y quien lo haga no es codigo
+    /// autonomo (deja de cumplir `freestanding`).
+    bool has_port_io = false;
     /// Operandos que el bloque ESCRIBE: registros canonicos y marcadores `$N`.
     ///
     /// Un bloque puede cambiar el valor de una variable ligada SIN tocar

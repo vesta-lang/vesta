@@ -147,6 +147,13 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
         r.effects.control.kind = ControlKind::Call;
         r.effects.may_io = true; // un call opaco puede hacer cualquier cosa
     }
+    if (e.has_port_io) {
+        /* Hablar con un puerto se ve desde fuera: no se puede eliminar por
+         * "no hacer nada" ni mover, y descalifica el codigo como autonomo (el
+         * contrato `freestanding` mira justo esta etiqueta). */
+        r.effects.may_io = true;
+        r.effects.tags.add(CapabilityTag::PortIO);
+    }
     if (e.has_atomic) {
         r.effects.atomic.order = MemOrder::SeqCst;
         r.effects.atomic.is_fence = true;
@@ -159,6 +166,7 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
         r.effects = SemanticEffects::top();
         r.completeness = AnalysisCompleteness::Unknown;
         r.unknown_reason = UnknownReason::UnknownMnemonic;
+        r.mnemonicos_desconocidos = e.unknown_mnemonics;
     } else {
         r.completeness = AnalysisCompleteness::Conservative;
     }
@@ -212,6 +220,15 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
     case IrOp::BITCAST: case IrOp::PHI: case IrOp::ALLOCA: case IrOp::GEP:
     case IrOp::STR_LIT_ADDR: case IrOp::LABEL_ADDR: case IrOp::SECTION_REF:
     case IrOp::ISNULL: case IrOp::INSTANCEOF:
+    /* Elegir entre dos valores ya calculados no hace nada observable.  Estaba
+     * sin clasificar, asi que caia al efecto MAXIMO: 12 sitios del kernel
+     * quedaban como "puede hacer cualquier cosa" por un simple ternario. */
+    case IrOp::SELECT:
+    /* Aritmetica y nada mas.  El acarreo viaja del @c ADDC a su @c CARRYOF por
+     * el grafo de valores, no por memoria, asi que aqui no hay efecto que
+     * declarar (lo que SI hay es un orden que respetar, y de eso se ocupa el
+     * planificador). */
+    case IrOp::FMA: case IrOp::ADDC: case IrOp::SUBB: case IrOp::CARRYOF:
     // Conversiones de puntero/handle: solo calculan una direccion (el load/store
     // real es una op aparte); sin efecto observable propio.
     case IrOp::GCDEREF_IR: case IrOp::GC_DEREF_HOST: case IrOp::GC_HANDLE_FOR_PTR:
@@ -252,6 +269,10 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
         break;
     case IrOp::ARRAY_LEN: case IrOp::STRLEN: case IrOp::STRGETBYTES:
     case IrOp::STRHASH:
+    /* Comparar dos cadenas LEE las dos y no escribe nada.  Estaba sin
+     * clasificar, asi que caia al efecto maximo: 25 sitios de la stdlib
+     * quedaban como "puede hacer cualquier cosa" por un `==` entre cadenas. */
+    case IrOp::STRCMP:
     // STRRAW: devuelve un host_ptr al buffer de datos del StringObject -> LEE el
     // objeto (cabecera+datos) para calcular el puntero; no escribe/aloca/lanza.
     // Una escritura POSTERIOR via el puntero devuelto es un STORE aparte
@@ -375,6 +396,29 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
         r.completeness = AnalysisCompleteness::Conservative;
         break;
 
+    /* ---- Atomicas ----
+     * Sin clasificar caian al efecto MAXIMO, lo que dejaba a `std.atomic`,
+     * `chan`, `mutex` y `pool` -- justo el nucleo de la concurrencia -- como
+     * "puede hacer cualquier cosa".  Se sabe perfectamente lo que hacen: tocan
+     * la localizacion que se les pasa, y ORDENAN (por eso son atomicas). */
+    case IrOp::ATOMIC_LD:
+        if (!ops.empty()) add_read(e, loc(ops[0], w));
+        e.atomic.order = MemOrder::SeqCst;
+        break;
+    case IrOp::ATOMIC_ST:
+        if (!ops.empty()) add_write(e, loc(ops[0], w));
+        e.atomic.order = MemOrder::SeqCst;
+        break;
+    case IrOp::ATOMIC_CAS:
+    case IrOp::ATOMIC_ADD:
+        // Leen y escriben la MISMA localizacion, en un solo paso indivisible.
+        if (!ops.empty()) {
+            add_read(e, loc(ops[0], w));
+            add_write(e, loc(ops[0], w));
+        }
+        e.atomic.order = MemOrder::SeqCst;
+        break;
+
     // ---- Reflexion / registro de clases (muta el ClassRegistry) ----
     case IrOp::DEFCLASS: case IrOp::DEFFIELD: case IrOp::DEFMETHOD:
     case IrOp::ADDADVICE:
@@ -422,7 +466,11 @@ EffectAnalysisResult function_local_effects(const ir::IrFunction &fn,
             // Registrar la laguna (si la hubo) para el reporte de cobertura.
             if (gaps && r.completeness != AnalysisCompleteness::Complete &&
                 r.unknown_reason != UnknownReason::None)
+            {
                 gaps->record(static_cast<int>(in.op), r.unknown_reason);
+                for (const std::string &m : r.mnemonicos_desconocidos)
+                    gaps->record_mnemonico(m);
+            }
             blk = first_instr ? r.effects : seq(blk, r.effects);
             first_instr = false;
         }

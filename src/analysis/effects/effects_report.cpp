@@ -202,6 +202,14 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod) {
             os << "    " << ir::ir_op_name(static_cast<ir::IrOp>(kv.first))
                << " x" << kv.second << "\n";
     }
+    /* Y CUALES son las instrucciones de asm que no se saben explicar.  Sin el
+     * nombre no se puede cerrar la laguna, y cerrarla -- anadir la instruccion a
+     * la tabla -- es la forma prevista de que el analizador crezca. */
+    if (!g.mnemonicos_desconocidos.empty()) {
+        os << "  Instrucciones de asm sin tabular (anadirlas cierra la laguna):\n";
+        for (const auto &kv : g.mnemonicos_desconocidos)
+            os << "    " << kv.first << " x" << kv.second << "\n";
+    }
 }
 
 // ---- Proyeccion JSON (misma fuente que el reporte legible) ----

@@ -309,6 +309,9 @@ struct EffectAnalysisResult {
     SemanticEffects      effects;
     AnalysisCompleteness completeness = AnalysisCompleteness::Complete;
     UnknownReason        unknown_reason = UnknownReason::None;
+    /// Mnemonicos de asm que la tabla no supo explicar, si el motivo fue ese.
+    /// Viajan hasta el informe porque una laguna sin nombre no se puede cerrar.
+    std::vector<std::string> mnemonicos_desconocidos;
 };
 
 // ===========================================================================

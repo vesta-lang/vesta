@@ -314,6 +314,8 @@ AsmBlockEffects asm_analyze_block(const std::string &nasm_body,
         if (eff.touches_mem) res.touches_mem = true;
         if (eff.touches_flags) res.touches_flags = true;
         if (eff.is_call) res.is_call = true;
+        if (eff.port_io) res.has_port_io = true;
+        if (eff.barrier) res.has_atomic = true; // ordena: misma consecuencia
 
         /* Leer y escribir memoria no es lo mismo, y la tabla ya sabe cual de
          * las dos: @c operand_write_mask dice QUE operandos escribe la
@@ -363,8 +365,21 @@ AsmBlockEffects asm_analyze_block(const std::string &nasm_body,
                 } else {
                     res.accesos_incompletos = true;
                 }
+            } else if (!eff.implicit_mem_read.empty() ||
+                       !eff.implicit_mem_write.empty()) {
+                /* Memoria IMPLICITA pero CONOCIDA: la instruccion no escribe
+                 * los corchetes, pero la arquitectura dice por que registro
+                 * accede (`movsb` va de `rsi` a `rdi`).  Se apunta igual que un
+                 * acceso escrito a mano -- saberlo y no decirlo seria dejar el
+                 * analisis a medias. */
+                lee = !eff.implicit_mem_read.empty();
+                escribe = !eff.implicit_mem_write.empty();
+                for (const std::string &r : eff.implicit_mem_read)
+                    res.accesos.push_back({r, false});
+                for (const std::string &w : eff.implicit_mem_write)
+                    res.accesos.push_back({w, true});
             } else {
-                // Atomica, memoria implicita o mnemonico opaco: no se puede
+                // Atomica o mnemonico cuya memoria no esta acotada: no se puede
                 // atribuir a un registro base.
                 res.accesos_incompletos = true;
             }
