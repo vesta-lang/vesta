@@ -53,7 +53,11 @@
 #include "jit/vec_isa.h"
 #include "jit/vreg_pipeline.h"
 #include "toolchain/native_backend.h" // backend de codegen nativo por arch (H.5)
+#include "util/fnv.h"                 // huella de las claves del CAS
 #include "util/fs_utils.h"
+#include "vx/incremental.h" // CasStore: artefactos por contenido
+#include "vx/module/vxi_format.h" // vxi_compiler_version_hash
+#include "vx/parser.h"            // get_aot_condcomp_target
 #include "vx/compiler.h"
 
 namespace vesta {
@@ -144,10 +148,17 @@ struct TelemetriaBackend {
     long objeto_us = 0;   ///< Secciones, relocalizaciones y escritura.
     long enlazar_us = 0;  ///< Enlazador propio (solo si hubo auto-link).
 
-    /** Parte de @c preparar_us que se va en compilar el runtime escrito en
-     *  Vesta (vx_exc, vx_str, vx_types, vx_atomic, vx_io, vx_mem, vx_ffi).
-     *  NO suma aparte: es un DE LOS CUALES, para no contar dos veces. */
-    long runtime_us = 0;
+    /** Parte de @c preparar_us que se va en compilar los modulos de stdlib
+     *  escritos en Vesta (vx_exc, vx_sync, vx_thread, vx_async, vx_fiber,
+     *  vx_io, vx_fault, vx_mem, vx_ffi).  NO es "runtime": no hay servicio
+     *  vivo detras -- son codigo que se compila DENTRO del programa, igual
+     *  que el del usuario.  El runtime es otra cosa (libvesta_rt: GC,
+     *  monitores, futuros).  NO suma aparte: es un DE LOS CUALES, para no
+     *  contar dos veces. */
+    long stdlib_us = 0;
+
+    int stdlib_cache_ = 0; ///< Cuantos modulos de stdlib vinieron del CAS.
+    int stdlib_total_ = 0; ///< Cuantos modulos de stdlib se necesitaron.
 
     std::chrono::steady_clock::time_point marca =
         std::chrono::steady_clock::now();
@@ -161,9 +172,9 @@ struct TelemetriaBackend {
         marca = ahora;
     }
 
-    /** @brief Suma a @c runtime_us lo transcurrido desde @p desde. */
-    void sumar_runtime(const std::chrono::steady_clock::time_point &desde) {
-        runtime_us +=
+    /** @brief Suma a @c stdlib_us lo transcurrido desde @p desde. */
+    void sumar_stdlib(const std::chrono::steady_clock::time_point &desde) {
+        stdlib_us +=
             (long)std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - desde)
                 .count();
@@ -177,8 +188,11 @@ struct TelemetriaBackend {
         if (total_us() <= 0) return;
         auto ms = [](long us) { return (double)us / 1000.0; };
         std::cout << "[aot] backend: preparar " << ms(preparar_us) << " ms";
-        if (runtime_us > 0)
-            std::cout << " (runtime en Vesta " << ms(runtime_us) << " ms)";
+        if (stdlib_us > 0)
+            std::cout << " (stdlib en Vesta " << ms(stdlib_us) << " ms";
+        if (stdlib_us > 0 && stdlib_cache_ > 0)
+            std::cout << ", " << stdlib_cache_ << " de cache";
+        if (stdlib_us > 0) std::cout << ")";
         std::cout << " | codegen " << ms(codegen_us) << " ms | objeto "
                   << ms(objeto_us) << " ms";
         if (enlazar_us > 0) std::cout << " | enlazar " << ms(enlazar_us) << " ms";
@@ -189,10 +203,271 @@ struct TelemetriaBackend {
                   << ",\"codegen_us\":" << codegen_us
                   << ",\"objeto_us\":" << objeto_us
                   << ",\"enlazar_us\":" << enlazar_us
-                  << ",\"runtime_us\":" << runtime_us
+                  << ",\"stdlib_us\":" << stdlib_us
+                  << ",\"stdlib_cache\":" << stdlib_cache_
+                  << ",\"stdlib_total\":" << stdlib_total_
                   << ",\"total_us\":" << total_us() << "}\n";
     }
 };
+
+/**
+ * @brief Mezcla una cadena (con su longitud) en una huella FNV-1a.
+ *
+ * La longitud entra aparte para que dos campos contiguos no se confundan:
+ * sin ella, ("ab","c") y ("a","bc") darian la misma huella.
+ *
+ * @param h Huella acumulada.
+ * @param s Cadena a mezclar.
+ * @return La huella actualizada.
+ */
+static uint64_t mezclar_str_(uint64_t h, const std::string &s) {
+    h = util::fnv_mix(h, s.size());
+    return util::fnv_bytes(h, s.data(), s.size());
+}
+
+/**
+ * @brief Huella del CONTENIDO de un arbol de fuentes Vesta.
+ *
+ * Cubre el arbol ENTERO, no solo el modulo pedido: estos modulos importan
+ * a otros (@c vx_mem importa @c std.atomic), asi que hashear unicamente su
+ * propio fuente daria un acierto obsoleto cuando cambia una dependencia.
+ * Recorrer el arbol es CONSERVADOR -- cualquier edicion de la stdlib
+ * invalida todos sus artefactos -- y esa es la direccion segura del error:
+ * de mas nunca corrompe, de menos si.  Para quien no edita la stdlib (todo
+ * el mundo salvo nosotros) el acierto es permanente.
+ *
+ * Se calcula una vez por proceso y raiz: son ~56 ficheros y 745 KB, menos
+ * de un milisegundo frente a los ~190 ms que evita.
+ *
+ * @param raiz Directorio raiz del arbol (p.ej. @c stdlib/vx).
+ * @return Huella del contenido, o 0 si la raiz no se puede recorrer.
+ */
+static uint64_t huella_arbol_vx_(const std::filesystem::path &raiz) {
+    namespace fs = std::filesystem;
+    static std::map<std::string, uint64_t> memo;
+    const std::string clave = raiz.string();
+    auto it = memo.find(clave);
+    if (it != memo.end()) return it->second;
+
+    uint64_t h = util::kFnvOffset;
+    std::error_code ec;
+    // Ordenado por ruta: el recorrido del sistema de ficheros no garantiza
+    // un orden estable, y la huella tiene que ser la misma en cada maquina.
+    std::vector<std::string> ficheros;
+    for (fs::recursive_directory_iterator it2(raiz, ec), fin; it2 != fin;
+         it2.increment(ec)) {
+        if (ec) break;
+        // La extension PRIMERO: es una comparacion de cadena sobre lo que el
+        // recorrido ya trae, mientras que preguntar si es un fichero regular
+        // consulta el disco.  Al reves se pagaba una consulta por cada una de
+        // las ~1500 entradas del directorio (los .vxi/.vxir/.vel generados
+        // conviven con los fuentes), y eran 60 ms de los 85 que costaba esto.
+        if (it2->path().extension() != ".vx") continue;
+        if (!it2->is_regular_file(ec)) continue;
+        ficheros.push_back(it2->path().string());
+    }
+    // La ruta relativa se calcula LEXICAMENTE: `fs::relative` canonicaliza
+    // contra el disco, y en Windows eso son cientos de llamadas al sistema
+    // para 56 ficheros -- mas caro que leerlos.  Aqui no hace falta resolver
+    // enlaces: las dos rutas vienen del mismo recorrido.
+    if (ficheros.empty()) {
+        memo[clave] = 0;
+        return 0; // 0 = "no se pudo"; el llamador desactiva la cache.
+    }
+    std::sort(ficheros.begin(), ficheros.end());
+    for (const std::string &f : ficheros) {
+        // La ruta RELATIVA tambien entra: renombrar un fichero cambia que
+        // modulo resuelve cada import, aunque el contenido total no varie.
+        h = mezclar_str_(h, fs::path(f).lexically_relative(raiz).string());
+        std::ifstream in(f, std::ios::binary);
+        if (!in) {
+            memo[clave] = 0;
+            return 0;
+        }
+        std::string contenido((std::istreambuf_iterator<char>(in)),
+                              std::istreambuf_iterator<char>());
+        h = mezclar_str_(h, contenido);
+    }
+    memo[clave] = h;
+    return h;
+}
+
+/**
+ * @brief Empaqueta el artefacto de un modulo de stdlib para el CAS.
+ *
+ * Formato: @c [u32 n_ir][ir][u32 n_alloc][alloc][u32 n_free][free].  Los dos
+ * simbolos son los que declara @c vx_mem via @c \@AllocatorOverride; el resto
+ * de modulos los deja vacios.  Sin ellos, un acierto de cache perderia la
+ * configuracion del asignador y el enlazado bajaria a otra funcion.
+ */
+static std::vector<uint8_t> empaquetar_modulo_(const std::vector<uint8_t> &ir,
+                                               const std::string &alloc_sym,
+                                               const std::string &free_sym) {
+    std::vector<uint8_t> out;
+    auto poner = [&out](const uint8_t *datos, size_t n) {
+        const uint32_t len = (uint32_t)n;
+        for (int i = 0; i < 4; ++i)
+            out.push_back((uint8_t)((len >> (i * 8)) & 0xFF));
+        out.insert(out.end(), datos, datos + n);
+    };
+    poner(ir.data(), ir.size());
+    poner((const uint8_t *)alloc_sym.data(), alloc_sym.size());
+    poner((const uint8_t *)free_sym.data(), free_sym.size());
+    return out;
+}
+
+/**
+ * @brief Desempaqueta lo que escribio @c empaquetar_modulo_.
+ * @return false si el blob esta truncado o corrupto (se trata como fallo).
+ */
+static bool desempaquetar_modulo_(const std::vector<uint8_t> &blob,
+                                  std::vector<uint8_t> &ir,
+                                  std::string &alloc_sym,
+                                  std::string &free_sym) {
+    size_t p = 0;
+    auto leer = [&](std::vector<uint8_t> &dst) -> bool {
+        if (p + 4 > blob.size()) return false;
+        uint32_t len = 0;
+        for (int i = 0; i < 4; ++i) len |= (uint32_t)blob[p + i] << (i * 8);
+        p += 4;
+        if (p + len > blob.size()) return false;
+        dst.assign(blob.begin() + (long)p, blob.begin() + (long)(p + len));
+        p += len;
+        return true;
+    };
+    std::vector<uint8_t> a, f;
+    if (!leer(ir) || !leer(a) || !leer(f)) return false;
+    alloc_sym.assign(a.begin(), a.end());
+    free_sym.assign(f.begin(), f.end());
+    return true;
+}
+
+/**
+ * @brief Trae el IR de un modulo de stdlib escrito en Vesta, del CAS si vale.
+ *
+ * Estos modulos se compilan igual en cada construccion aunque no cambien:
+ * @c vx_mem solo cuesta ~190 ms de los ~200 que tarda el backend entero.
+ * Aqui se guarda el resultado en el store direccionado por contenido -- el
+ * mismo que ya comparte la stdlib entre proyectos y maquinas -- para que la
+ * segunda construccion no lo recalcule.
+ *
+ * La clave cubre TODO lo que puede cambiar el resultado:
+ *   - la version del compilador (un cambio nuestro invalida lo guardado);
+ *   - el contenido del arbol de fuentes (incluidas las dependencias);
+ *   - el modulo pedido;
+ *   - las dimensiones que el AOT varia: @c opt_level, @c asm_target_bits,
+ *     @c native_poo y @c exceptions_enabled;
+ *   - el objetivo (os/arch), porque la stdlib tiene parciales por arquitectura
+ *     y @c asm_target_bits no distingue arm64 de x86-64 (ambos son 64);
+ *   - si la maquina de compilacion estaba disponible, que decide si un valor
+ *     comptime se pudo calcular o salio vacio.
+ *
+ * A diferencia del CAS por-modulo del camino de proyecto, lo que se guarda
+ * aqui es IR POST-optimizacion: estos modulos se compilan como unidades
+ * sueltas y el AOT no vuelve a optimizar tras fusionar.  Por eso @c opt_level
+ * SI entra en la clave -- alli no hace falta y aqui si.
+ *
+ * @param path Ruta del @c .vx.
+ * @param src Contenido ya leido (evita releerlo).
+ * @param opts Opciones con las que se compilaria.
+ * @param proyecto true si el modulo tiene imports (via @c compile_vx_project).
+ * @param tel Telemetria a la que imputar el tiempo.
+ * @param out Modulo IR resultante.
+ * @param alloc_sym Simbolo del asignador, si el modulo lo declara (opcional).
+ * @param free_sym Simbolo del liberador, si el modulo lo declara (opcional).
+ * @return false si no se pudo compilar (los diagnosticos ya van a stderr).
+ */
+static bool traer_modulo_stdlib_(const std::string &path,
+                                 const std::string &src,
+                                 const vx::CompileOptions &opts, bool proyecto,
+                                 TelemetriaBackend &tel, ir::IrModule &out,
+                                 std::string *alloc_sym = nullptr,
+                                 std::string *free_sym = nullptr) {
+    namespace fs = std::filesystem;
+    const auto t0 = std::chrono::steady_clock::now();
+    ++tel.stdlib_total_;
+
+    // Raiz del arbol: el directorio del modulo.  Los de `std/` cuelgan de el,
+    // asi que un modulo en `stdlib/vx/std/x.vx` toma `stdlib/vx/std` -- basta,
+    // porque la huella se calcula por raiz y cada una cubre lo suyo.
+    const fs::path raiz = fs::path(path).parent_path();
+    const uint64_t huella_arbol = huella_arbol_vx_(raiz);
+
+    uint64_t clave = util::kFnvOffset;
+    clave = util::fnv_mix(clave, 0x414F545354444C42ull); // dominio "AOTSTDLB".
+    clave = util::fnv_mix(clave, vx::vxi_compiler_version_hash());
+    clave = util::fnv_mix(clave, huella_arbol);
+    clave = mezclar_str_(clave, opts.module_name);
+    clave = util::fnv_mix(clave, (uint64_t)opts.opt_level);
+    clave = util::fnv_mix(clave, opts.asm_target_bits);
+    clave = util::fnv_mix(clave, opts.native_poo ? 1ull : 0ull);
+    clave = util::fnv_mix(clave, opts.exceptions_enabled ? 1ull : 0ull);
+    clave = util::fnv_mix(clave, proyecto ? 1ull : 0ull);
+    {
+        // La stdlib tiene parciales por objetivo; sin esto, compilar para
+        // aarch64 reutilizaria el artefacto de x86-64.
+        std::string tgt_os, tgt_arch;
+        vx::get_aot_condcomp_target(tgt_os, tgt_arch);
+        clave = mezclar_str_(clave, tgt_os);
+        clave = mezclar_str_(clave, tgt_arch);
+    }
+    {
+        const char *pre = std::getenv("VESTA_MC_PREBUILT");
+        clave = util::fnv_mix(clave,
+                              (pre != nullptr && pre[0] != '\0') ? 1ull : 0ull);
+    }
+
+    // Huella 0 = no se pudo leer el arbol -> compilar sin tocar el store, que
+    // una clave incompleta es peor que no tener cache.
+    const bool usar_cache = (huella_arbol != 0);
+
+    std::vector<uint8_t> ir_bytes;
+    if (usar_cache) {
+        try {
+            const vx::CasStore store = vx::CasStore::open_default();
+            std::vector<uint8_t> blob;
+            std::string a, f;
+            if (store.get(clave, blob) &&
+                desempaquetar_modulo_(blob, ir_bytes, a, f) &&
+                ir::parse_ir_module_cache(ir_bytes, out)) {
+                if (alloc_sym) *alloc_sym = a;
+                if (free_sym) *free_sym = f;
+                ++tel.stdlib_cache_;
+                tel.sumar_stdlib(t0);
+                return true;
+            }
+        } catch (const std::exception &) {
+            // Un store inaccesible no debe tumbar la compilacion: se sigue
+            // por el camino de siempre.
+        }
+    }
+
+    vx::CompileResult r = proyecto ? vx::compile_vx_project(path, opts)
+                                   : vx::compile_vx_source(src, path, opts);
+    if (!r.ok || r.ir_module_cache_bytes.empty() ||
+        !ir::parse_ir_module_cache(r.ir_module_cache_bytes, out)) {
+        // Sin el motivo el mensaje del llamador no sirve de nada.
+        for (const auto &d : r.diagnostics.all())
+            vx::print_diagnostic(std::cerr, d);
+        tel.sumar_stdlib(t0);
+        return false;
+    }
+    if (alloc_sym) *alloc_sym = r.aot_alloc_sym;
+    if (free_sym) *free_sym = r.aot_free_sym;
+
+    if (usar_cache) {
+        try {
+            const vx::CasStore store = vx::CasStore::open_default();
+            (void)store.put(clave,
+                            empaquetar_modulo_(r.ir_module_cache_bytes,
+                                               r.aot_alloc_sym, r.aot_free_sym));
+        } catch (const std::exception &) {
+            // Idem: no poder escribir el store no invalida la compilacion.
+        }
+    }
+    tel.sumar_stdlib(t0);
+    return true;
+}
 
 int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 std::string out_prefix, const AotOptions &opt) {
@@ -298,14 +573,10 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     // Mismo target bits que el modulo principal (el @Naked
                     // setjmp/longjmp x86-32 debe ensamblarse en mode32).
                     ve_opts.asm_target_bits = copts.asm_target_bits;
-                    const auto t_rt_exc = std::chrono::steady_clock::now();
-                    vx::CompileResult ve_cr =
-                        vx::compile_vx_source(ve_src, ve_path, ve_opts);
-                    tel.sumar_runtime(t_rt_exc);
                     ir::IrModule ve_mod;
-                    if (!ve_cr.ok || ve_cr.ir_module_cache_bytes.empty() ||
-                        !ir::parse_ir_module_cache(ve_cr.ir_module_cache_bytes,
-                                                   ve_mod)) {
+                    if (!traer_modulo_stdlib_(ve_path, ve_src, ve_opts,
+                                              /*proyecto=*/false, tel,
+                                              ve_mod)) {
                         std::cerr << "[aot] no pude compilar el runtime de "
                                      "excepciones vx_exc.vx.\n";
                         return EXIT_FAILURE;
@@ -392,14 +663,10 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     // con "simbolo no resuelto").  Si el programa ademas usa
                     // async directo, el bloque de vx_async de abajo ve sus fns ya
                     // presentes (dedup por `have`) y las salta.
-                    const auto t_rt_str = std::chrono::steady_clock::now();
-                    vx::CompileResult vs_cr =
-                        vx::compile_vx_project(vs_path, vs_opts);
-                    tel.sumar_runtime(t_rt_str);
                     ir::IrModule vs_mod;
-                    if (!vs_cr.ok || vs_cr.ir_module_cache_bytes.empty() ||
-                        !ir::parse_ir_module_cache(vs_cr.ir_module_cache_bytes,
-                                                   vs_mod)) {
+                    if (!traer_modulo_stdlib_(vs_path, std::string(), vs_opts,
+                                              /*proyecto=*/true, tel,
+                                              vs_mod)) {
                         std::cerr << "[aot] no pude compilar el runtime de "
                                      "monitores vx_sync.vx.\n";
                         return EXIT_FAILURE;
@@ -481,14 +748,10 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     // firmas de los extern).  std.types son typedefs (sin
                     // codigo) -> el merge no anade nada, solo resuelve tipos.
                     (void)vt_src;
-                    const auto t_rt_types = std::chrono::steady_clock::now();
-                    vx::CompileResult vt_cr =
-                        vx::compile_vx_project(vt_path, vt_opts);
-                    tel.sumar_runtime(t_rt_types);
                     ir::IrModule vt_mod;
-                    if (!vt_cr.ok || vt_cr.ir_module_cache_bytes.empty() ||
-                        !ir::parse_ir_module_cache(vt_cr.ir_module_cache_bytes,
-                                                   vt_mod)) {
+                    if (!traer_modulo_stdlib_(vt_path, vt_src, vt_opts,
+                                              /*proyecto=*/true, tel,
+                                              vt_mod)) {
                         std::cerr << "[aot] no pude compilar el runtime de "
                                      "multihilo vx_thread.vx.\n";
                         return EXIT_FAILURE;
@@ -570,14 +833,10 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     va_opts.opt_level = copts.opt_level;
                     va_opts.native_poo = true;
                     va_opts.asm_target_bits = copts.asm_target_bits;
-                    const auto t_rt_atomic = std::chrono::steady_clock::now();
-                    vx::CompileResult va_cr =
-                        vx::compile_vx_source(va_src, va_path, va_opts);
-                    tel.sumar_runtime(t_rt_atomic);
                     ir::IrModule va_mod;
-                    if (!va_cr.ok || va_cr.ir_module_cache_bytes.empty() ||
-                        !ir::parse_ir_module_cache(va_cr.ir_module_cache_bytes,
-                                                   va_mod)) {
+                    if (!traer_modulo_stdlib_(va_path, va_src, va_opts,
+                                              /*proyecto=*/false, tel,
+                                              va_mod)) {
                         std::cerr << "[aot] no pude compilar el runtime de "
                                      "asincronia vx_async.vx.\n";
                         return EXIT_FAILURE;
@@ -655,14 +914,10 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     vf_opts.opt_level = copts.opt_level;
                     vf_opts.native_poo = true;
                     vf_opts.asm_target_bits = copts.asm_target_bits;
-                    const auto t_rt_fmt = std::chrono::steady_clock::now();
-                    vx::CompileResult vf_cr =
-                        vx::compile_vx_source(vf_src, vf_path, vf_opts);
-                    tel.sumar_runtime(t_rt_fmt);
                     ir::IrModule vf_mod;
-                    if (!vf_cr.ok || vf_cr.ir_module_cache_bytes.empty() ||
-                        !ir::parse_ir_module_cache(vf_cr.ir_module_cache_bytes,
-                                                   vf_mod)) {
+                    if (!traer_modulo_stdlib_(vf_path, vf_src, vf_opts,
+                                              /*proyecto=*/false, tel,
+                                              vf_mod)) {
                         std::cerr << "[aot] no pude compilar el primitivo de "
                                      "fibras vx_fiber.vx.\n";
                         return EXIT_FAILURE;
@@ -773,20 +1028,12 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     /* Por PROYECTO: el modulo importa std.syscall / std.unix /
                      * std.types del lado de Linux, y solo esa ruta resuelve los
                      * imports.  Mismo criterio que vx_thread y vx_fault. */
-                    (void)io_src;
-                    const auto t_rt_io = std::chrono::steady_clock::now();
-                    vx::CompileResult io_cr =
-                        vx::compile_vx_project(io_path, io_opts);
-                    tel.sumar_runtime(t_rt_io);
                     ir::IrModule io_mod;
-                    if (!io_cr.ok || io_cr.ir_module_cache_bytes.empty() ||
-                        !ir::parse_ir_module_cache(io_cr.ir_module_cache_bytes,
-                                                   io_mod)) {
+                    if (!traer_modulo_stdlib_(io_path, io_src, io_opts,
+                                              /*proyecto=*/true, tel, io_mod)) {
+                        // El motivo lo volco `traer_modulo_stdlib_`.
                         std::cerr << "[aot] no pude compilar el runtime de I/O "
                                      "vx_io.vx.\n";
-                        // Sin el motivo el mensaje no sirve de nada.
-                        for (const auto &d : io_cr.diagnostics.all())
-                            vx::print_diagnostic(std::cerr, d);
                         return EXIT_FAILURE;
                     }
                     // Merge (mismo patron que vx_exc): remap de STR_LIT_ADDR por
@@ -924,18 +1171,11 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 /* Por PROYECTO y no por fuente suelto: el modulo importa
                  * `std.types` (uintptr / nullptr) y solo esa ruta resuelve los
                  * imports.  Mismo criterio que vx_thread y vx_async. */
-                const auto t_rt_fs = std::chrono::steady_clock::now();
-                vx::CompileResult fcr = vx::compile_vx_project(fpath, fopts);
-                tel.sumar_runtime(t_rt_fs);
                 ir::IrModule fmod;
-                if (!fcr.ok || fcr.ir_module_cache_bytes.empty() ||
-                    !ir::parse_ir_module_cache(fcr.ir_module_cache_bytes,
-                                               fmod)) {
+                if (!traer_modulo_stdlib_(fpath, std::string(), fopts,
+                                          /*proyecto=*/true, tel, fmod)) {
+                    // El motivo lo volco `traer_modulo_stdlib_`.
                     std::cerr << "[aot] no pude compilar vx_fault.vx.\n";
-                    // Sin el motivo el mensaje no sirve de nada: volcamos los
-                    // diagnosticos del modulo tal cual los dio el frontend.
-                    for (const auto &d : fcr.diagnostics.all())
-                        vx::print_diagnostic(std::cerr, d);
                     return EXIT_FAILURE;
                 }
                 // Mismo merge que el runtime de I/O: remap de literales por el
@@ -1246,23 +1486,19 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 // Como PROYECTO, no como fichero suelto: la stdlib es codigo
                 // Vesta normal y sus modulos se importan entre si (vx_mem usa
                 // los atomicos de atomic en vez de reimplementarlos).
-                const auto t_rt_mem = std::chrono::steady_clock::now();
-                vx::CompileResult mem_cr =
-                    vx::compile_vx_project(mem_path, mem_opts);
-                tel.sumar_runtime(t_rt_mem);
-                if (!mem_cr.ok || mem_cr.ir_module_cache_bytes.empty() ||
-                    !ir::parse_ir_module_cache(mem_cr.ir_module_cache_bytes,
-                                               mem_mod) ||
-                    mem_cr.aot_alloc_sym.empty() ||
-                    mem_cr.aot_free_sym.empty()) {
+                std::string mem_alloc_sym, mem_free_sym;
+                if (!traer_modulo_stdlib_(mem_path, mem_src, mem_opts,
+                                          /*proyecto=*/true, tel, mem_mod,
+                                          &mem_alloc_sym, &mem_free_sym) ||
+                    mem_alloc_sym.empty() || mem_free_sym.empty()) {
                     std::cerr << "[aot] no pude compilar el slab allocator "
                                  "vx_mem.vx (o no expone @AllocatorOverride).\n";
                     return EXIT_FAILURE;
                 }
                 // Override por defecto = los simbolos que vx_mem declaro con
                 // @AllocatorOverride (mismo trato que un override del usuario).
-                lcfg.alloc_sym = mem_cr.aot_alloc_sym;
-                lcfg.free_sym = mem_cr.aot_free_sym;
+                lcfg.alloc_sym = mem_alloc_sym;
+                lcfg.free_sym = mem_free_sym;
                 lcfg.has_alloc_override = true; // __new calloc -> alloc_sym(size)
                 bundle_mem = true;
             }
@@ -1323,13 +1559,9 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     ffi_opts.opt_level = copts.opt_level;
                     ffi_opts.native_poo = true;
                     ffi_opts.asm_target_bits = copts.asm_target_bits;
-                    const auto t_rt_ffi = std::chrono::steady_clock::now();
-                    vx::CompileResult ffi_cr =
-                        vx::compile_vx_source(ffi_src, ffi_path, ffi_opts);
-                    tel.sumar_runtime(t_rt_ffi);
-                    if (!ffi_cr.ok || ffi_cr.ir_module_cache_bytes.empty() ||
-                        !ir::parse_ir_module_cache(
-                            ffi_cr.ir_module_cache_bytes, ffi_mod)) {
+                    if (!traer_modulo_stdlib_(ffi_path, ffi_src, ffi_opts,
+                                              /*proyecto=*/false, tel,
+                                              ffi_mod)) {
                         std::cerr << "[aot] no pude compilar el FFI dinamico "
                                      "vx_ffi.vx.\n";
                         return EXIT_FAILURE;
