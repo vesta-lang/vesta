@@ -243,6 +243,87 @@ def buscar_fuera_del_path(nombre: str) -> str:
     return ""
 
 
+_ENTORNO_MSVC: Optional[dict] = None
+
+
+def entorno_msvc() -> dict:
+    """Variables que MSVC necesita (LIB, INCLUDE, PATH), descubiertas solas.
+
+    Tener Visual Studio instalado y tener su entorno PUESTO son dos cosas
+    distintas: `LIB` e `INCLUDE` los exporta el "Developer Command Prompt", no
+    una terminal cualquiera.  Sin ellas, el enlazador no encuentra
+    `kernel32.lib` aunque este en el disco -- y eso es lo que hacia fallar a
+    rustc aqui, no el enlazador.
+
+    Se descubre preguntando, no adivinando: `vswhere.exe` (cuya ubicacion SI la
+    fija Microsoft) dice donde esta instalado, y `vcvars64.bat` dice que
+    variables hacen falta.  Funciona con Visual en `C:` o en `U:`, que es donde
+    esta en este equipo.
+    """
+    global _ENTORNO_MSVC
+    if _ENTORNO_MSVC is not None:
+        return _ENTORNO_MSVC
+    _ENTORNO_MSVC = {}
+    if sys.platform != "win32":
+        return _ENTORNO_MSVC
+    pf = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+    vswhere = Path(pf) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"
+    if not vswhere.is_file():
+        return _ENTORNO_MSVC
+    try:
+        r = subprocess.run([str(vswhere), "-latest", "-property",
+                            "installationPath"],
+                           capture_output=True, text=True, timeout=30)
+        raiz = (r.stdout or "").strip().splitlines()
+        if not raiz:
+            return _ENTORNO_MSVC
+        vcvars = (Path(raiz[0].strip()) / "VC" / "Auxiliary" / "Build"
+                  / "vcvarsall.bat")
+        if not vcvars.is_file():
+            return _ENTORNO_MSVC
+        # Se lanza desde un .bat intermedio en vez de encadenar en la linea de
+        # `cmd`: el encadenado se come las comillas de la ruta y el script no
+        # llega a ejecutarse -- que era lo que hacia parecer que no estaba.
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".bat", delete=False,
+                                          encoding="utf-8", newline="\r\n") as f:
+            f.write('@echo off\ncall "%s" x64 >nul\nset\n' % str(vcvars))
+            puente = f.name
+        try:
+            r2 = subprocess.run(["cmd", "/c", puente], capture_output=True,
+                                text=True, timeout=180)
+            for linea in (r2.stdout or "").splitlines():
+                if "=" in linea:
+                    k, v = linea.split("=", 1)
+                    if k.upper() in ("LIB", "INCLUDE", "LIBPATH", "PATH",
+                                     "WINDOWSSDKDIR", "VCTOOLSINSTALLDIR"):
+                        _ENTORNO_MSVC[k] = v
+        finally:
+            try:
+                os.unlink(puente)
+            except OSError:
+                pass
+        # Si no salio `LIB`, el entorno no se preparo: sin ella el enlazador no
+        # encuentra `kernel32.lib` por mucho que Visual este instalado.  Se
+        # avisa una vez, porque si no el fallo aparece mas tarde disfrazado de
+        # "este lenguaje no compila" sin decir de que.
+        if "LIB" not in {k.upper() for k in _ENTORNO_MSVC}:
+            warn("Visual Studio esta instalado pero su entorno no se pudo "
+                 "preparar (vcvarsall no exporto LIB).  Lo que dependa del "
+                 "enlazador de MSVC no compilara.")
+            _ENTORNO_MSVC = {}
+    except Exception:  # noqa: BLE001
+        pass
+    return _ENTORNO_MSVC
+
+
+def entorno_para_compilar(base: Optional[dict] = None) -> dict:
+    """Entorno para lanzar un compilador, con lo de MSVC ya dentro si lo hay."""
+    e = dict(base or os.environ)
+    e.update(entorno_msvc())
+    return e
+
+
 def buscar_compiladores(nombres: list[str]) -> list[tuple[str, str]]:
     """Compiladores instalados de entre @p nombres, con su ruta.
 
@@ -1152,6 +1233,7 @@ def compile_c(variant: BenchVariant, work_dir: Path,
         [tc.path, "-O3", "-std=c11", "-march=native",
          str(variant.src_path), "-o", str(out), "-lm"],
         capture_output=True, text=True, timeout=60.0,
+        env=entorno_para_compilar(),
     )
     if r.returncode != 0 or not out.is_file():
         _anotar_fallo(variant.bench_name, variant.lang, r)
@@ -1166,6 +1248,7 @@ def compile_cpp(variant: BenchVariant, work_dir: Path,
         [tc.path, "-O3", "-std=c++17", "-march=native",
          str(variant.src_path), "-o", str(out)],
         capture_output=True, text=True, timeout=60.0,
+        env=entorno_para_compilar(),
     )
     if r.returncode != 0 or not out.is_file():
         _anotar_fallo(variant.bench_name, variant.lang, r)
@@ -1189,6 +1272,7 @@ def compile_java(variant: BenchVariant, work_dir: Path,
     r = subprocess.run(
         [tc.path_javac, "-d", str(bench_work), str(variant.src_path)],
         capture_output=True, text=True, timeout=60.0,
+        env=entorno_para_compilar(),
     )
     if r.returncode != 0:
         _anotar_fallo(variant.bench_name, variant.lang, r)
@@ -1206,6 +1290,7 @@ def compile_go(variant: BenchVariant, work_dir: Path,
     r = subprocess.run(
         [tc.path, "build", "-o", str(out), str(variant.src_path)],
         capture_output=True, text=True, timeout=120.0,
+        env=entorno_para_compilar(),
         cwd=str(variant.src_path.parent),
     )
     if r.returncode != 0 or not out.is_file():
@@ -1226,6 +1311,7 @@ def compile_rust(variant: BenchVariant, work_dir: Path,
         [tc.path, "-O", "-C", "target-cpu=native", "-C", "opt-level=3",
          str(variant.src_path), "-o", str(out)],
         capture_output=True, text=True, timeout=120.0,
+        env=entorno_para_compilar(),
     )
     if r.returncode != 0 or not out.is_file():
         _anotar_fallo(variant.bench_name, variant.lang, r)
@@ -1239,6 +1325,7 @@ def compile_vx(variant: BenchVariant, work_dir: Path,
     r = subprocess.run(
         [str(vm_bin), "--vx", str(variant.src_path), "-o", str(velb_stem)],
         capture_output=True, text=True, timeout=60.0,
+        env=entorno_para_compilar(),
     )
     velb = Path(str(velb_stem) + ".velb")
     if r.returncode != 0 or not velb.is_file():
@@ -1282,6 +1369,7 @@ def compile_vx_aot(variant: BenchVariant, work_dir: Path,
              "-o", str(out), "--emit", "exe", "--format", fmt,
              "--float-isa", float_isa],
             capture_output=True, text=True, timeout=60.0,
+        env=entorno_para_compilar(),
         )
     except subprocess.TimeoutExpired:
         return None
