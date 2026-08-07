@@ -7885,6 +7885,25 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
             case IrOp::NEWOBJS:
             case IrOp::GC_ALLOC:
             case IrOp::RAW_ALLOC:
+            /* `RAW_FREE` es barrera TOTAL a proposito, y esta MEDIDO
+             * (2026-08-07).  El modelo de efectos ya dice con precision que
+             * region invalida un `free`, asi que se probo a usarlo aqui:
+             * conservar lo que se sabe de OTRAS raices en vez de borrarlo todo.
+             *
+             * Sobre los 453 programas del corpus: 13079 sitios de `free`, 8044
+             * con el puntero resuelto, y 4340 en los que SI habia estado de
+             * otras raices que la barrera estaba tirando.  El codigo generado
+             * salio IDENTICO en los 453.  El motivo es que un `free` cae al
+             * final de su bloque -- salida de ambito --, asi que lo que se
+             * conserva ya no lo consulta nadie despues.
+             *
+             * Beneficio cero y riesgo no nulo (un `@AllocatorOverride` es
+             * codigo de usuario que puede tocar cualquier memoria alcanzable),
+             * asi que se queda como estaba.  Donde SI paga esa precision es en
+             * el consumidor de SEGURIDAD: la seccion de conflictos de
+             * `--analyze` la usa para senalar un acceso a memoria ya liberada.
+             * Si algun dia el `free` deja de estar al final del bloque (por
+             * hundimiento) o el DSE cruza bloques, hay que volver a medir. */
             case IrOp::RAW_FREE:
             case IrOp::THROW:
             case IrOp::TRYENTER:
