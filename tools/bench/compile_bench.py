@@ -1048,6 +1048,11 @@ def compila_de_verdad(lang: str, cmd: list[str], env: dict, cwd: Path,
                            env=env, timeout=timeout)
     except subprocess.TimeoutExpired:
         return (False, "se paso del tiempo limite")
+    except OSError as e:
+        # No llego ni a arrancar: ejecutable ausente o directorio invalido.  Se
+        # devuelve como caso que no compila, no como excepcion que tumba la
+        # tanda entera.
+        return (False, "no se pudo lanzar: %s" % e)
     if r.returncode != 0:
         primera = (r.stderr or r.stdout or "").strip().splitlines()
         return (False, primera[0] if primera else "codigo de salida != 0")
@@ -1221,6 +1226,8 @@ def main() -> int:
                         "(~5 lineas cada una).  Default: 200,800, que son "
                         "~1.4k y ~5.7k lineas: bastante para que haya algo que "
                         "compilar sin que la tanda dure una eternidad.")
+    p.add_argument("--sin-graficas", action="store_true",
+                   help="no generar las graficas del banco.")
     p.add_argument("--jobs", type=int, default=0,
                    help="compilaciones de VERIFICACION en paralelo "
                         "(default: nucleos - 2).  Las MEDIDAS siguen "
@@ -1792,6 +1799,22 @@ def main() -> int:
             "contra su compilacion completa no compararia lo mismo.")
         resultados["realimentacion"] = [
             {"lang": ln, "etiqueta": et, "stats": s} for ln, et, s in filas_chk]
+
+    # Graficas: las dos curvas que en tabla se leen mal.  Van al lado del
+    # JSON, no en el directorio del arnes de ejecucion: son otro banco.
+    if not args.sin_graficas:
+        try:
+            import plots  # noqa: E402
+            destino = (Path(args.out_json).parent if args.out_json
+                       else raiz) / "bench_plots_compilacion"
+            hechas = plots.plot_compilacion(resultados, destino)
+            if hechas:
+                print()
+                print(f"{C.GREEN}[ok]{C.RESET} graficas: {destino}")
+                for k in hechas:
+                    print("  ", k)
+        except Exception as e:  # noqa: BLE001
+            print(f"{C.YELLOW}[aviso]{C.RESET} no pude generar graficas: {e}")
 
     if args.out_json:
         Path(args.out_json).write_text(json.dumps(resultados, indent=2),

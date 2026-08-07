@@ -1112,6 +1112,98 @@ def plot_suelo(suelo: dict, langs: list[str], out_path: Path) -> bool:
     return True
 
 
+def plot_compilacion(datos: dict, out_dir: Path) -> dict:
+    """Graficas del banco de COMPILACION, a partir de su JSON.
+
+    Dos preguntas que en tabla se leen mal y en curva se ven de golpe:
+
+      (a) ¿el coste por linea se mantiene al crecer el programa?  Una tabla de
+          seis filas obliga a comparar numeros a ojo; la curva ensena la forma,
+          que es lo que distingue lineal de superlineal.
+
+      (b) ¿cuanto trabajo se evita segun QUE haya cambiado?  Las cuatro barras
+          juntas dicen de un vistazo si un compilador distingue un cambio de
+          cuerpo de uno de interfaz, o si le da igual.
+    """
+    deps = _try_import()
+    if not deps:
+        return {}
+    _, plt, _np = deps
+    out_dir.mkdir(parents=True, exist_ok=True)
+    hechas: dict = {}
+    casos = datos.get("casos", [])
+    suelo = datos.get("suelo", {})
+
+    # --- (a) escalado: ms por kilo-linea contra el tamano ------------------
+    escal: dict[str, list[tuple[float, float]]] = {}
+    for c in casos:
+        if c.get("escalado") != "tamano" or not c.get("stats"):
+            continue
+        lineas = c.get("lineas") or 0
+        if lineas <= 0:
+            continue
+        neto = c.get("neto")
+        if neto is None:
+            piso = (suelo.get(c["lang"]) or {}).get("p50") or 0.0
+            neto = max(0.001, c["stats"]["p50"] - piso)
+        escal.setdefault(c["lang"], []).append((lineas, 1000.0 * neto / lineas))
+    if escal:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        for ln, pares in escal.items():
+            pares.sort()
+            ax.plot([p[0] for p in pares], [p[1] for p in pares], "o-",
+                    linewidth=2, label=LANG_LABELS.get(ln, ln),
+                    color=LANG_COLORS.get(ln, "#888"))
+        ax.set_xscale("log")
+        ax.set_xlabel("lineas del programa (log)")
+        ax.set_ylabel("ms por cada mil lineas")
+        ax.set_title("Coste por linea segun el tamano\n"
+                     "(plano = lineal; si sube, hay algo superlineal)")
+        ax.grid(alpha=0.3, which="both")
+        ax.legend(fontsize=9)
+        plt.tight_layout()
+        p = out_dir / "c1_escalado.png"
+        plt.savefig(p, dpi=110, bbox_inches="tight")
+        plt.close(fig)
+        hechas["c1_escalado"] = True
+
+    # --- (b) que se evita segun que cambie ---------------------------------
+    orden_reg = ["de cero", "sin cambios", "1 comentario", "1 cuerpo",
+                 "1 interfaz", "mitad de los modulos"]
+    reg: dict[str, dict[str, float]] = {}
+    for c in casos:
+        r = c.get("regimen")
+        if not r or not c.get("stats"):
+            continue
+        reg.setdefault(c["lang"], {})[r] = c["stats"]["p50"]
+    if reg:
+        presentes = [r for r in orden_reg
+                     if any(r in v for v in reg.values())]
+        fig, ax = plt.subplots(figsize=(max(9, 1.6 * len(reg) * len(presentes)), 6))
+        ancho = 0.8 / max(1, len(presentes))
+        x = list(range(len(reg)))
+        langs_reg = list(reg.keys())
+        for i, r in enumerate(presentes):
+            vals = [reg[ln].get(r, float("nan")) for ln in langs_reg]
+            ax.bar([xi + (i - len(presentes) / 2 + 0.5) * ancho for xi in x],
+                   vals, ancho, label=r)
+        ax.set_xticks(x)
+        ax.set_xticklabels([LANG_LABELS.get(ln, ln) for ln in langs_reg],
+                           rotation=15, ha="right")
+        ax.set_ylabel("ms")
+        ax.set_yscale("log")
+        ax.set_title("Cuanto cuesta reconstruir, segun QUE haya cambiado\n"
+                     "(barras iguales = ese compilador no distingue)")
+        ax.grid(axis="y", alpha=0.3, which="both")
+        ax.legend(fontsize=9)
+        plt.tight_layout()
+        p = out_dir / "c2_regimenes.png"
+        plt.savefig(p, dpi=110, bbox_inches="tight")
+        plt.close(fig)
+        hechas["c2_regimenes"] = True
+    return hechas
+
+
 def generate_all(rows: list[dict], langs: list[str], plot_dir: Path,
                  sys_info: Optional[dict] = None,
                  suelo: Optional[dict] = None) -> dict:

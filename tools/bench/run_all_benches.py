@@ -1030,6 +1030,14 @@ def run_timed(cmd: list[str], env: dict | None = None,
         )
     except subprocess.TimeoutExpired:
         return -1.0
+    except OSError as e:
+        # El proceso no llego a arrancar: ejecutable que no esta, directorio de
+        # trabajo invalido, ruta mal formada.  Antes esto tumbaba la tanda
+        # ENTERA -- media hora de medidas perdida porque un caso de treinta no
+        # pudo lanzarse --.  Se trata como lo que es: ese caso no da medida, y
+        # se dice cual y por que.
+        warn("no se pudo lanzar %s: %s" % (" ".join(map(str, cmd[:2])), e))
+        return -1.0
     return (time.perf_counter() - t0) * 1000.0
 
 
@@ -1058,6 +1066,11 @@ def run_timed_vx(cmd: list[str], env: dict | None,
             env=env, timeout=timeout, cwd=str(cwd) if cwd else None, check=False,
         )
     except subprocess.TimeoutExpired:
+        return -1.0
+    except OSError as e:
+        # Mismo blindaje que en `run_timed`: si el proceso no arranca, ese caso
+        # se queda sin medida y el resto de la tanda sigue.
+        warn("no se pudo lanzar %s: %s" % (" ".join(map(str, cmd[:2])), e))
         return -1.0
     m = _VX_WALL_RE.search(proc.stdout or "")
     if not m:
