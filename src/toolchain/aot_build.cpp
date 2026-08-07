@@ -390,13 +390,20 @@ static bool traer_modulo_stdlib_(const std::string &path,
     // Raiz del arbol: el directorio del modulo.  Los de `std/` cuelgan de el,
     // asi que un modulo en `stdlib/vx/std/x.vx` toma `stdlib/vx/std` -- basta,
     // porque la huella se calcula por raiz y cada una cubre lo suyo.
+    /* Se hashea el ARBOL de fuentes y no el cierre exacto de imports del
+     * modulo, aunque el cierre seria mas preciso.  Medido: pedirselo al
+     * `ModuleGraph` -- el mismo que usa la compilacion, para no tener dos
+     * criterios de resolucion -- cuesta ~165 ms frente a los ~52 del arbol,
+     * porque para saber que importa un modulo hay que PARSEARLO, y parsear es
+     * exactamente lo que esta cache evita.  El camino preciso salia tres
+     * veces mas caro que el conservador. */
     const fs::path raiz = fs::path(path).parent_path();
-    const uint64_t huella_arbol = huella_arbol_vx_(raiz);
+    const uint64_t huella_fuentes = huella_arbol_vx_(raiz);
 
     uint64_t clave = util::kFnvOffset;
     clave = util::fnv_mix(clave, 0x414F545354444C42ull); // dominio "AOTSTDLB".
     clave = util::fnv_mix(clave, vx::vxi_compiler_version_hash());
-    clave = util::fnv_mix(clave, huella_arbol);
+    clave = util::fnv_mix(clave, huella_fuentes);
     clave = mezclar_str_(clave, opts.module_name);
     clave = util::fnv_mix(clave, (uint64_t)opts.opt_level);
     clave = util::fnv_mix(clave, opts.asm_target_bits);
@@ -419,7 +426,7 @@ static bool traer_modulo_stdlib_(const std::string &path,
 
     // Huella 0 = no se pudo leer el arbol -> compilar sin tocar el store, que
     // una clave incompleta es peor que no tener cache.
-    const bool usar_cache = (huella_arbol != 0);
+    const bool usar_cache = (huella_fuentes != 0);
 
     std::vector<uint8_t> ir_bytes;
     if (usar_cache) {
