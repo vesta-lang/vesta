@@ -547,17 +547,29 @@ ValueRange ValueRange::restringir_igual(const ValueRange &o) const {
     return cortar(o);
 }
 
+ValueRange ValueRange::restringir_fuera(const ValueRange &o) const {
+    if (es_bottom() || o.es_bottom()) return bottom(t);
+    if (!acotada() || !o.acotada() || t != o.t) return *this;
+    // Nos cubre entero: no queda ningun valor posible.
+    if (!t.menor(lo_c, o.lo_c) && !t.menor(o.hi_c, hi_c)) return bottom(t);
+    // Muerde por abajo: el intervalo empieza donde acaba el prohibido.
+    if (!t.menor(lo_c, o.lo_c) && !t.menor(o.hi_c, lo_c) && o.hi_c != t.max_crudo())
+        return corte(t, t.normalizar(o.hi_c + 1), hi_c);
+    // Muerde por arriba.
+    if (!t.menor(hi_c, o.lo_c) && !t.menor(o.hi_c, hi_c) && o.lo_c != t.min_crudo())
+        return corte(t, lo_c, t.normalizar(o.lo_c - 1));
+    /* Lo parte por en medio (o no lo toca): quitar un trozo interior dejaria dos
+     * intervalos -- `[0,10]` sin el 5 son `[0,4]` y `[6,10]` -- y eso no se
+     * representa.  Quedarse como estaba es correcto, solo menos preciso. */
+    return *this;
+}
+
 ValueRange ValueRange::restringir_distinto(const ValueRange &o) const {
     if (es_bottom() || o.es_bottom()) return bottom(t);
-    if (!acotada() || !o.es_constante() || t != o.t) return *this;
-    const uint64_t k = o.lo_c;
-    /* Quitar un valor solo se puede si cae en un extremo.  En medio partiria el
-     * intervalo -- `[0,10]` sin el 5 son dos trozos -- y eso no se representa;
-     * quedarse como estaba es correcto, solo menos preciso. */
-    if (lo_c == k && hi_c == k) return bottom(t);
-    if (lo_c == k) return corte(t, t.normalizar(lo_c + 1), hi_c);
-    if (hi_c == k) return corte(t, lo_c, t.normalizar(hi_c - 1));
-    return *this;
+    /* `x != y` con `y` en un rango no afirma NADA sobre x: que x pueda coincidir
+     * con algun valor de ese rango no obliga a que coincida con el que toque. */
+    if (!o.es_constante()) return *this;
+    return restringir_fuera(o);
 }
 
 } // namespace analysis

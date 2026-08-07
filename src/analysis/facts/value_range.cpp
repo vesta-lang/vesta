@@ -139,11 +139,27 @@ struct Estado {
     }
 };
 
-/// Arista del CFG.  Lleva la guarda que la justifica y si cierra un ciclo.
+/**
+ * @brief Arista del CFG, con lo que se puede AFIRMAR al pasar por ella.
+ *
+ * Dos formas de afirmar, porque hay dos formas de bifurcar:
+ *
+ *   COMPARACION  `if (x < 10)`: la condicion y por que rama se va.
+ *   CASO         el brazo de un `switch`: el selector vale exactamente esto
+ *                (o, en el brazo por defecto, cualquier cosa MENOS esto).
+ *
+ * Sin la segunda, todo el dispatch de un `match` denso entra en sus brazos sin
+ * saber el valor del tag, que es justo lo unico que ahi se sabe seguro.
+ */
 struct Arista {
     ir::IrBlockId desde = 0, hasta = 0;
+    // Afirmacion por comparacion.
     ir::IrValueId cond = ir::IR_NO_VALUE;
     bool rama = true;
+    // Afirmacion por caso de un switch.
+    ir::IrValueId sel = ir::IR_NO_VALUE;
+    bool     dentro = true; ///< true: sel esta en [caso_lo,caso_hi]; false: fuera
+    uint64_t caso_lo = 0, caso_hi = 0;
     bool retroceso = false; ///< cierra un bucle: es la que obliga a ensanchar
 };
 
@@ -189,12 +205,31 @@ struct Motor {
         for (uint32_t bi = 0; bi < nb; ++bi) {
             if (fn.blocks[bi].instrs.empty()) continue;
             const ir::IrInstr &t = fn.blocks[bi].instrs.back();
-            auto anadir = [&](ir::IrBlockId d, ir::IrValueId c, bool r) {
-                if (d == ir::IR_NO_BLOCK || d >= nb) return;
+            auto anadir_arista = [&](Arista a) {
+                if (a.hasta == ir::IR_NO_BLOCK || a.hasta >= nb) return;
                 const uint32_t id = static_cast<uint32_t>(aristas.size());
-                aristas.push_back({bi, d, c, r, false});
+                aristas.push_back(a);
                 salientes[bi].push_back(id);
-                entrantes[d].push_back(id);
+                entrantes[a.hasta].push_back(id);
+            };
+            auto anadir = [&](ir::IrBlockId d, ir::IrValueId c, bool r) {
+                Arista a;
+                a.desde = bi;
+                a.hasta = d;
+                a.cond = c;
+                a.rama = r;
+                anadir_arista(a);
+            };
+            auto anadir_caso = [&](ir::IrBlockId d, ir::IrValueId sel, bool dentro,
+                                   uint64_t lo, uint64_t hi) {
+                Arista a;
+                a.desde = bi;
+                a.hasta = d;
+                a.sel = sel;
+                a.dentro = dentro;
+                a.caso_lo = lo;
+                a.caso_hi = hi;
+                anadir_arista(a);
             };
             if (t.op == IrOp::BR) {
                 anadir(t.target_block, ir::IR_NO_VALUE, true);
@@ -203,11 +238,28 @@ struct Motor {
                     t.operands.empty() ? ir::IR_NO_VALUE : t.operands[0];
                 anadir(t.target_block, c, true);
                 anadir(t.false_block, c, false);
-            } else if (t.op == IrOp::SWITCH_DENSE || t.op == IrOp::MATCH_VARIANT) {
-                /* Cada case afirma un valor concreto del selector, pero eso
-                 * todavia no se modela: haria falta llevar ese valor en la
-                 * arista.  Mientras tanto no se afirma nada por aqui, que es
-                 * correcto aunque menos preciso. */
+            } else if (t.op == IrOp::SWITCH_DENSE) {
+                /* Tabla densa: el brazo `idx` se toma cuando el selector vale
+                 * exactamente `min + idx`, y el brazo por defecto cuando cae
+                 * FUERA de toda la tabla.  El minimo viaja en los 32 bits bajos
+                 * del inmediato (el bit 32 dice otra cosa: que la comprobacion
+                 * de rango sobra porque la tabla cubre el enum entero). */
+                const ir::IrValueId sel =
+                    t.operands.empty() ? ir::IR_NO_VALUE : t.operands[0];
+                const uint64_t min = t.imm & 0xFFFFFFFFu;
+                const size_t n = t.jump_targets.size();
+                for (size_t idx = 0; idx < n; ++idx)
+                    anadir_caso(t.jump_targets[idx], sel, true, min + idx,
+                                min + idx);
+                if (n > 0)
+                    anadir_caso(t.target_block, sel, false, min,
+                                min + n - 1);
+                else
+                    anadir(t.target_block, ir::IR_NO_VALUE, true);
+            } else if (t.op == IrOp::MATCH_VARIANT) {
+                /* Marcador: el dispatch de verdad es la cadena de comparaciones
+                 * que viene detras, y esa ya la lee la guarda.  Aqui solo hay
+                 * que no perder los sucesores si acaba cerrando el bloque. */
                 for (uint32_t d : t.jump_targets) anadir(d, ir::IR_NO_VALUE, true);
                 anadir(t.target_block, ir::IR_NO_VALUE, true);
             }
@@ -388,6 +440,27 @@ struct Motor {
         }
     }
 
+    /**
+     * @brief Lo que afirma el BRAZO de un switch sobre su selector.
+     *
+     * En un brazo concreto el tag vale exactamente uno; en el brazo por defecto,
+     * cualquier cosa menos los de la tabla.  Lo segundo solo se puede decir con
+     * un intervalo cuando la tabla toca un extremo del tipo -- si la muerde por
+     * en medio quedarian dos trozos --, y el dominio ya sabe distinguirlo.
+     */
+    void estrechar_por_caso(Estado &e, const Arista &a) const {
+        if (!e.alcanzable) return;
+        if (a.sel == ir::IR_NO_VALUE || a.sel >= suelo.size()) return;
+        const ValueRange orig = valor(e, a.sel);
+        if (!orig.acotada()) return;
+        const ValueRange caso = ValueRange::crudo(orig.t, a.caso_lo, a.caso_hi);
+        if (!caso.acotada()) return; // la tabla no cabe en el tipo del selector
+        const ValueRange nuevo =
+            a.dentro ? orig.restringir_igual(caso) : orig.restringir_fuera(caso);
+        if (nuevo.es_bottom()) { e.inalcanzable(); return; }
+        if (!nuevo.es_top()) e.poner(a.sel, nuevo);
+    }
+
     // --- transferencia ------------------------------------------------------
     /// Que operacion del dominio corresponde a cada op del IR.  Nada mas.
     void transferir(const ir::IrInstr &in, Estado &e) const {
@@ -501,6 +574,8 @@ struct Motor {
             Estado se = out;
             if (aristas[ai].cond != ir::IR_NO_VALUE)
                 estrechar_por_guarda(se, aristas[ai].cond, aristas[ai].rama);
+            if (aristas[ai].sel != ir::IR_NO_VALUE)
+                estrechar_por_caso(se, aristas[ai]);
             if (!(se == out_arista[ai])) {
                 out_arista[ai] = std::move(se);
                 cola.push_back(aristas[ai].hasta);

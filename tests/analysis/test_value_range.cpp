@@ -372,6 +372,20 @@ static void probar_restricciones() {
           "restriccion: x != 5 partiria el intervalo -> se deja como estaba");
     check(cte_de(kI64, 7).restringir_distinto(cte_de(kI64, 7)).es_bottom(),
           "restriccion: x != x es imposible -> BOTTOM");
+    check(es(diez.restringir_distinto(ValueRange::de_enteros(kI64, 0, 3)), kI64, 0, 10),
+          "restriccion: x != y con y en un RANGO no afirma nada sobre x");
+
+    // Resta de intervalos: la misma operacion que el brazo por defecto de un switch.
+    check(es(diez.restringir_fuera(ValueRange::de_enteros(kI64, 0, 3)), kI64, 4, 10),
+          "resta: [0,10] fuera de [0,3] -> [4,10]");
+    check(es(diez.restringir_fuera(ValueRange::de_enteros(kI64, 8, 20)), kI64, 0, 7),
+          "resta: [0,10] fuera de [8,20] -> [0,7]");
+    check(diez.restringir_fuera(ValueRange::de_enteros(kI64, -5, 15)).es_bottom(),
+          "resta: si lo prohibido lo cubre entero -> BOTTOM");
+    check(es(diez.restringir_fuera(ValueRange::de_enteros(kI64, 4, 6)), kI64, 0, 10),
+          "resta: un mordisco por en medio dejaria dos trozos -> se deja igual");
+    check(es(diez.restringir_fuera(ValueRange::de_enteros(kI64, 50, 60)), kI64, 0, 10),
+          "resta: lo que no toca no quita");
 }
 
 // ===========================================================================
@@ -498,6 +512,55 @@ static void probar_phi() {
     check(es(r.at(y), kI64, 1, 100), "phi: une lo que trae cada arista");
 }
 
+/**
+ * @brief `switch (tag) { case min+0: ... case min+2: ... default: ... }`
+ *
+ * En un brazo el tag vale EXACTAMENTE uno, y eso es lo unico que ahi se sabe
+ * seguro.  En el brazo por defecto se sabe que cae fuera de la tabla, que solo
+ * es un intervalo si la tabla toca un extremo del tipo.
+ */
+static void probar_switch(uint64_t min, bool defecto_acotado) {
+    ir::IrFunction fn;
+    fn.name = "sw";
+    const uint32_t b0 = fn.new_block("entry");
+    const uint32_t b1 = fn.new_block("caso0");
+    const uint32_t b2 = fn.new_block("caso1");
+    const uint32_t b3 = fn.new_block("caso2");
+    const uint32_t bd = fn.new_block("defecto");
+
+    const ir::IrValueId tag = fn.new_value(ir::IrType::U32);
+    fn.params.push_back(tag);
+    {
+        ir::IrInstr sd{};
+        sd.op = ir::IrOp::SWITCH_DENSE;
+        sd.dst = ir::IR_NO_VALUE;
+        sd.operands = {tag};
+        sd.imm = min;
+        sd.jump_targets = {b1, b2, b3};
+        sd.target_block = bd;
+        fn.append(b0, std::move(sd));
+    }
+    ir::IrValueId vistos[4];
+    const uint32_t bloques[4] = {b1, b2, b3, bd};
+    for (int i = 0; i < 4; ++i) {
+        vistos[i] = fn.new_value(ir::IrType::U32);
+        emitir(fn, bloques[i], ir::IrOp::MOV, vistos[i], {tag});
+        emitir(fn, bloques[i], ir::IrOp::RET, ir::IR_NO_VALUE, {vistos[i]});
+    }
+
+    const RangeFacts r = analizar(fn);
+    check(r.convergio, "switch: el analisis converge");
+    for (int i = 0; i < 3; ++i)
+        check(es(r.at(vistos[i]), kU32, static_cast<int64_t>(min + i)),
+              "switch: en el brazo i-esimo el tag vale exactamente min+i");
+    if (defecto_acotado)
+        check(es(r.at(vistos[3]), kU32, static_cast<int64_t>(min + 3), UINT32_MAX),
+              "switch: por defecto, si la tabla toca el minimo del tipo, se acota");
+    else
+        check(es(r.at(vistos[3]), kU32, 0, UINT32_MAX),
+              "switch: por defecto, una tabla en medio dejaria dos trozos: no se afirma");
+}
+
 /// `i = 0; while (i < 200) i = i + 1;` -- tiene que TERMINAR y dar algo util.
 /// @param tipo el mismo bucle escrito con un entero con o sin signo.
 static void probar_bucle(ir::IrType tipo, RangeType rt, const char *etiqueta) {
@@ -560,6 +623,8 @@ int main() {
     probar_guarda();
     probar_rama_imposible();
     probar_phi();
+    probar_switch(0, /*defecto_acotado=*/true);
+    probar_switch(10, /*defecto_acotado=*/false);
     probar_bucle(ir::IrType::U32, kU32, "u32");
     probar_bucle(ir::IrType::I32, kI32, "i32");
     std::printf("=== rangos de valor: %d checks, %d fallos ===\n", total, fallos);

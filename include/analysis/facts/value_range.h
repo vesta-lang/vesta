@@ -371,8 +371,20 @@ struct ValueRange {
     ValueRange restringir_mayor(const ValueRange &o) const;
     ValueRange restringir_mayor_igual(const ValueRange &o) const;
     ValueRange restringir_igual(const ValueRange &o) const;
-    /// `x != k` solo estrecha si `k` es constante y cae en un extremo: quitar un
-    /// valor de en medio partiria el intervalo en dos, y eso no se representa.
+    /**
+     * @brief El valor NO esta en @p o.  Resta de intervalos.
+     *
+     * Si @p o se come este intervalo entero, no queda nada: BOTTOM.  Si lo muerde
+     * por un extremo, se recorta.  Si lo parte por en medio quedarian dos trozos
+     * y eso no se representa, asi que se deja como estaba -- correcto, solo menos
+     * preciso.
+     *
+     * Sirve para dos cosas distintas que son la misma: `x != k` y la rama por
+     * DEFECTO de un `switch`, que afirma que el selector cae fuera de la tabla.
+     */
+    ValueRange restringir_fuera(const ValueRange &o) const;
+    /// `x != k`.  Solo afirma algo con un @p o de un unico valor: `x != y` con
+    /// `y` en un rango no dice nada de `x`.
     ValueRange restringir_distinto(const ValueRange &o) const;
 
   private:
