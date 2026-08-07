@@ -308,9 +308,40 @@ struct ValueRange {
     ValueRange restar(const ValueRange &o) const;
     ValueRange multiplicar(const ValueRange &o) const;
     ValueRange negar() const;
+    /**
+     * @brief Division entera.
+     *
+     * Con un divisor que PUEDE valer cero no se afirma nada.  Descartar el cero
+     * "porque dividir por cero corta la ejecucion" seria apoyarse en una
+     * propiedad del backend -- que la operacion atrape SIEMPRE, en interprete,
+     * JIT y nativo --, y el dominio no razona sobre backends.
+     */
+    ValueRange dividir(const ValueRange &o) const;
+    /// Resto: su valor absoluto es menor que el del divisor y su signo lo pone
+    /// el dividendo.  Mismo trato del divisor cero que @c dividir.
+    ValueRange resto(const ValueRange &o) const;
+
+    // --- bit a bit -----------------------------------------------------------
     /// `x & c` con `c` constante no negativa no pasa de `c`, venga x de donde
     /// venga.  Es lo unico afirmable sin mirar los bits del otro lado.
     ValueRange conjuncion(const ValueRange &o) const;
+    /// `x | y` solo ENCIENDE bits: no baja de ninguno de los dos, y no puede
+    /// pasar del tope de bits del mayor.  Requiere los dos no negativos.
+    ValueRange disyuncion(const ValueRange &o) const;
+    /// `x ^ y` puede apagar bits, asi que solo se acota por arriba.
+    ValueRange exclusiva(const ValueRange &o) const;
+    /// `~x` es una biyeccion que INVIERTE el orden: exacta siempre.
+    ValueRange complemento() const;
+
+    // --- desplazamientos -----------------------------------------------------
+    /// `x << k` es `x * 2^k` dentro del tipo.  Un `k` fuera de [0, bits) no
+    /// tiene significado definido y no se afirma nada.
+    ValueRange desplazar_izq(const ValueRange &o) const;
+    /// `x >> k` LOGICO: se razona en el dominio sin signo del mismo ancho.
+    ValueRange desplazar_der_logico(const ValueRange &o) const;
+    /// `x >> k` ARITMETICO: conserva el signo; es division con redondeo hacia
+    /// abajo, no hacia cero, y por eso no es lo mismo que `dividir` por 2^k.
+    ValueRange desplazar_der_aritmetico(const ValueRange &o) const;
 
     // ------------------------------------------------- conversiones del IR
     //

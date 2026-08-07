@@ -233,6 +233,77 @@ static void probar_aritmetica() {
 }
 
 // ===========================================================================
+// 3.b Division, resto, bit a bit y desplazamientos
+// ===========================================================================
+static void probar_division_y_bits() {
+    // Division: monotona en cada argumento cuando el divisor no cambia de signo.
+    check(es(ValueRange::de_enteros(kI64, 10, 20).dividir(cte_de(kI64, 3)), kI64, 3, 6),
+          "division: [10,20] / 3 = [3,6]");
+    check(es(ValueRange::de_enteros(kI64, -20, 20).dividir(ValueRange::de_enteros(kI64, 2, 4)),
+             kI64, -10, 10),
+          "division: con dividendo de los dos signos, las cuatro esquinas");
+    check(ValueRange::de_enteros(kI64, 1, 10)
+              .dividir(ValueRange::de_enteros(kI64, -2, 2))
+              .es_todo(),
+          "division: un divisor que puede ser CERO no permite afirmar nada");
+    check(es(cte_de(kI64, INT64_MIN).dividir(cte_de(kI64, -1)), kI64, INT64_MIN),
+          "division: INT64_MIN / -1 envuelve a INT64_MIN, y se calcula sin UB");
+    check(es(ValueRange::de_enteros(kU32, 100, 200).dividir(cte_de(kU32, 10)), kU32, 10, 20),
+          "division: sin signo tambien");
+
+    // Resto: menor en valor absoluto que el divisor, con el signo del dividendo.
+    check(es(ValueRange::todo(kI64).resto(cte_de(kI64, 10)), kI64, -9, 9),
+          "resto: |r| < |divisor| y el signo lo pone el dividendo");
+    check(es(ValueRange::de_enteros(kI64, 0, INT64_MAX).resto(cte_de(kI64, 8)), kI64, 0, 7),
+          "resto: un dividendo no negativo da un resto no negativo");
+    check(es(ValueRange::todo(kU32).resto(cte_de(kU32, 256)), kU32, 0, 255),
+          "resto: sin signo, [0, divisor-1]");
+    check(es(ValueRange::de_enteros(kI64, 0, 3).resto(cte_de(kI64, 100)), kI64, 0, 3),
+          "resto: si el dividendo ya es menor, el resto es el propio dividendo");
+    check(ValueRange::todo(kI64).resto(ValueRange::de_enteros(kI64, -1, 1)).es_todo(),
+          "resto: divisor que puede ser cero -> no se afirma nada");
+
+    // Bit a bit.
+    check(es(ValueRange::de_enteros(kU32, 8, 8).disyuncion(ValueRange::de_enteros(kU32, 0, 7)),
+             kU32, 8, 15),
+          "disyuncion: encender bits no baja, y no pasa del tope de bits");
+    check(es(ValueRange::de_enteros(kU32, 0, 7).exclusiva(ValueRange::de_enteros(kU32, 0, 7)),
+             kU32, 0, 7),
+          "exclusiva: solo se acota por arriba (puede apagar bits)");
+    check(ValueRange::de_enteros(kI32, -1, 1)
+              .disyuncion(ValueRange::de_enteros(kI32, 0, 1))
+              .es_top(),
+          "disyuncion: con un operando negativo no hay cota por bits");
+    check(es(ValueRange::de_enteros(kU8, 0, 15).complemento(), kU8, 240, 255),
+          "complemento: ~[0,15] en u8 = [240,255], exacto e invirtiendo el orden");
+    check(es(ValueRange::de_enteros(kI8, 0, 15).complemento(), kI8, -16, -1),
+          "complemento: ~[0,15] en i8 = [-16,-1]");
+
+    // Desplazamientos.
+    check(es(ValueRange::de_enteros(kU32, 1, 3).desplazar_izq(cte_de(kU32, 4)), kU32, 16, 48),
+          "desplazamiento: [1,3] << 4 = [16,48]");
+    check(es(ValueRange::de_enteros(kU32, 1, 1)
+                 .desplazar_izq(ValueRange::de_enteros(kU32, 0, 3)),
+             kU32, 1, 8),
+          "desplazamiento: con la cuenta en un rango, las esquinas");
+    check(ValueRange::de_enteros(kU32, 1, 1).desplazar_izq(cte_de(kU32, 40)).es_todo(),
+          "desplazamiento: una cuenta fuera de [0,bits) no tiene significado");
+    check(es(ValueRange::de_enteros(kU32, 16, 48).desplazar_der_logico(cte_de(kU32, 4)),
+             kU32, 1, 3),
+          "desplazamiento: logico, [16,48] >> 4 = [1,3]");
+    check(es(cte_de(kI32, -1).desplazar_der_logico(cte_de(kI32, 1)), kI32, INT32_MAX),
+          "desplazamiento: logico de -1 mete un cero arriba -> INT32_MAX");
+    check(es(cte_de(kI32, -1).desplazar_der_aritmetico(cte_de(kI32, 1)), kI32, -1),
+          "desplazamiento: aritmetico de -1 sigue siendo -1 (redondea HACIA ABAJO)");
+    check(es(ValueRange::de_enteros(kI32, -8, 8).desplazar_der_aritmetico(cte_de(kI32, 2)),
+             kI32, -2, 2),
+          "desplazamiento: aritmetico conserva el signo");
+    check(es(cte_de(kI64, INT64_MIN).desplazar_der_aritmetico(cte_de(kI64, 1)), kI64,
+             INT64_MIN / 2),
+          "desplazamiento: aritmetico del minimo, sin negarlo por el camino");
+}
+
+// ===========================================================================
 // 4. Conversiones entre anchos: cuatro operaciones, no una
 // ===========================================================================
 static void probar_conversiones() {
@@ -482,6 +553,7 @@ int main() {
     probar_reticulo();
     probar_tipos();
     probar_aritmetica();
+    probar_division_y_bits();
     probar_conversiones();
     probar_restricciones();
     probar_ensanchamiento();

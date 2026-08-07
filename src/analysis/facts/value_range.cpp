@@ -409,7 +409,15 @@ struct Motor {
         case IrOp::SUB: nuevo = arg(0).restar(arg(1)); break;
         case IrOp::MUL: nuevo = arg(0).multiplicar(arg(1)); break;
         case IrOp::NEG: nuevo = arg(0).negar(); break;
+        case IrOp::DIV: nuevo = arg(0).dividir(arg(1)); break;
+        case IrOp::MOD: nuevo = arg(0).resto(arg(1)); break;
         case IrOp::AND: nuevo = arg(0).conjuncion(arg(1)); break;
+        case IrOp::OR: nuevo = arg(0).disyuncion(arg(1)); break;
+        case IrOp::XOR: nuevo = arg(0).exclusiva(arg(1)); break;
+        case IrOp::NOT: nuevo = arg(0).complemento(); break;
+        case IrOp::SHL: nuevo = arg(0).desplazar_izq(arg(1)); break;
+        case IrOp::SHR: nuevo = arg(0).desplazar_der_logico(arg(1)); break;
+        case IrOp::SAR: nuevo = arg(0).desplazar_der_aritmetico(arg(1)); break;
         case IrOp::SEXT:
             if (piso.acotada()) nuevo = arg(0).extender_con_signo(piso.t);
             break;

@@ -89,6 +89,31 @@ inline bool mul_ancha(Ancho a, Ancho b, Ancho &o) {
 }
 #endif
 
+/**
+ * @brief Division en el entero ancho, sin caer en comportamiento indefinido.
+ *
+ * Dos casos que hay que apartar ANTES de dividir, no despues: el divisor cero y
+ * el minimo entre menos uno (cuyo cociente no cabe en el tipo con signo).  Con
+ * enteros de 128 bits el segundo si cabe y da el resultado envuelto correcto;
+ * sin ellos, no hay nada que calcular.
+ */
+inline bool div_ancha(Ancho a, Ancho b, Ancho &o) {
+    if (b == 0) return false;
+    if (sizeof(Ancho) == 8 && b == -1 && a == static_cast<Ancho>(INT64_MIN))
+        return false;
+    o = a / b;
+    return true;
+}
+
+/// Valor absoluto sin desbordar: el minimo con signo no tiene opuesto en su
+/// propio ancho, asi que ese caso se declara no calculable en vez de negarlo.
+inline bool valor_absoluto(Ancho v, Ancho &o) {
+    if (v >= 0) { o = v; return true; }
+    if (sizeof(Ancho) == 8 && v == static_cast<Ancho>(INT64_MIN)) return false;
+    o = -v;
+    return true;
+}
+
 /// Conjunto exacto de una operacion, antes de plegarlo al tipo.
 struct Exacto {
     bool  ok = false; ///< false = no cabe ni en el entero ancho: no se afirma
@@ -216,6 +241,57 @@ ValueRange ValueRange::negar() const {
     return plegar(t, e);
 }
 
+/// Un intervalo que contiene el cero.  Es lo que impide dividir.
+static bool contiene_cero(const ValueRange &r) {
+    const uint64_t z = r.t.desde_signo(0);
+    return !r.t.menor(z, r.lo_c) && !r.t.menor(r.hi_c, z);
+}
+
+ValueRange ValueRange::dividir(const ValueRange &o) const {
+    if (es_bottom() || o.es_bottom()) return bottom(t);
+    if (!operables(*this, o)) return top(t);
+    /* Un divisor que puede ser cero no permite afirmar nada.  Y ademas hay que
+     * apartarlo aqui: calcular primero y mirar despues seria dividir por cero de
+     * verdad, en el propio analizador. */
+    if (contiene_cero(o)) return todo(t);
+    /* Un intervalo que no contiene el cero es entero positivo o entero
+     * negativo, asi que la division es monotona en cada argumento y las cuatro
+     * esquinas bastan. */
+    const Ancho al = desplegar(t, lo_c), ah = desplegar(t, hi_c);
+    const Ancho bl = desplegar(t, o.lo_c), bh = desplegar(t, o.hi_c);
+    Ancho p[4];
+    if (!div_ancha(al, bl, p[0]) || !div_ancha(al, bh, p[1]) ||
+        !div_ancha(ah, bl, p[2]) || !div_ancha(ah, bh, p[3]))
+        return todo(t);
+    Exacto e;
+    e.ok = true;
+    e.lo = *std::min_element(p, p + 4);
+    e.hi = *std::max_element(p, p + 4);
+    return plegar(t, e);
+}
+
+ValueRange ValueRange::resto(const ValueRange &o) const {
+    if (es_bottom() || o.es_bottom()) return bottom(t);
+    if (!operables(*this, o)) return top(t);
+    if (contiene_cero(o)) return todo(t);
+    /* El resto no puede llegar al valor absoluto del divisor, y su signo es el
+     * del dividendo.  De ahi salen las dos cotas sin dividir nada. */
+    const Ancho bl = desplegar(t, o.lo_c), bh = desplegar(t, o.hi_c);
+    /* El valor absoluto del minimo con signo no cabe en su propio tipo: negarlo
+     * ahi seria el desbordamiento de siempre.  Con enteros de 128 bits si cabe;
+     * sin ellos, no se afirma. */
+    Ancho abs_bl = 0, abs_bh = 0;
+    if (!valor_absoluto(bl, abs_bl) || !valor_absoluto(bh, abs_bh))
+        return todo(t);
+    const Ancho tope = (abs_bl > abs_bh ? abs_bl : abs_bh) - 1;
+    const Ancho al = desplegar(t, lo_c), ah = desplegar(t, hi_c);
+    Exacto e;
+    e.ok = true;
+    e.lo = (al >= 0) ? 0 : (al > -tope ? al : -tope);
+    e.hi = (ah <= 0) ? 0 : (ah < tope ? ah : tope);
+    return plegar(t, e);
+}
+
 ValueRange ValueRange::conjuncion(const ValueRange &o) const {
     if (es_bottom() || o.es_bottom()) return bottom(t);
     if (!acotada() || !o.acotada() || t != o.t) return top(t);
@@ -236,6 +312,139 @@ ValueRange ValueRange::conjuncion(const ValueRange &o) const {
      * pasa del menor de los dos.  Es poco, pero es cierto. */
     if (!t.sin_signo && (lo() < 0 || o.lo() < 0)) return top(t);
     return corte(t, 0, t.menor_de(hi_c, o.hi_c));
+}
+
+/// Tope de bits: el menor `2^n - 1` que llega a @p v.  Es la cota de cualquier
+/// operacion bit a bit entre valores no negativos: no se pueden encender bits
+/// mas altos que los que ya habia.
+static uint64_t tope_por_bits(uint64_t v) {
+    uint64_t m = 0;
+    while (m < v) {
+        if (m == UINT64_MAX) return UINT64_MAX;
+        m = (m << 1) | 1;
+    }
+    return m;
+}
+
+/// Las dos operandas son no negativas en el orden de su tipo.
+static bool ambas_no_negativas(const ValueRange &a, const ValueRange &b) {
+    if (a.t.sin_signo) return true;
+    return a.lo() >= 0 && b.lo() >= 0;
+}
+
+ValueRange ValueRange::disyuncion(const ValueRange &o) const {
+    if (es_bottom() || o.es_bottom()) return bottom(t);
+    if (!operables(*this, o)) return top(t);
+    if (!ambas_no_negativas(*this, o)) return top(t);
+    // Encender bits no baja de ninguno de los dos, y no puede pasar del tope.
+    const uint64_t suelo = t.mayor_de(lo_c, o.lo_c);
+    const uint64_t techo = tope_por_bits(t.mayor_de(hi_c, o.hi_c));
+    // Aqui todo es natural, asi que la comparacion con el tope del tipo tambien.
+    if (techo > t.max_crudo()) return todo(t);
+    return corte(t, suelo, techo);
+}
+
+ValueRange ValueRange::exclusiva(const ValueRange &o) const {
+    if (es_bottom() || o.es_bottom()) return bottom(t);
+    if (!operables(*this, o)) return top(t);
+    if (!ambas_no_negativas(*this, o)) return top(t);
+    // El `o exclusivo` tambien APAGA bits, asi que por abajo no se afirma nada.
+    const uint64_t techo = tope_por_bits(t.mayor_de(hi_c, o.hi_c));
+    if (techo > t.max_crudo()) return todo(t);
+    return corte(t, 0, techo);
+}
+
+ValueRange ValueRange::complemento() const {
+    if (es_bottom()) return bottom(t);
+    if (!acotada()) return top(t);
+    /* `~x` es una biyeccion del tipo en si mismo que invierte el orden (para un
+     * `u8`, 255-x; para un `i8`, -x-1).  Por eso el resultado es exacto y basta
+     * con cruzar los extremos. */
+    return armar(t, t.normalizar(~hi_c), t.normalizar(~lo_c));
+}
+
+/// Un desplazamiento util: constante o no, pero siempre dentro de [0, bits).
+/// Fuera de ahi el IR no define el resultado y no hay nada que afirmar.
+static bool cuenta_valida(const ValueRange &k, uint8_t bits, uint32_t &lo,
+                          uint32_t &hi) {
+    if (!k.acotada()) return false;
+    const int64_t l = k.t.sin_signo ? static_cast<int64_t>(k.lo_c) : k.lo();
+    const int64_t h = k.t.sin_signo ? static_cast<int64_t>(k.hi_c) : k.hi();
+    if (l < 0 || h >= static_cast<int64_t>(bits)) return false;
+    lo = static_cast<uint32_t>(l);
+    hi = static_cast<uint32_t>(h);
+    return true;
+}
+
+ValueRange ValueRange::desplazar_izq(const ValueRange &o) const {
+    if (es_bottom() || o.es_bottom()) return bottom(t);
+    if (!acotada() || !o.acotada()) return top(t);
+    uint32_t kl = 0, kh = 0;
+    if (!cuenta_valida(o, t.bits, kl, kh)) return todo(t);
+    /* `x << k` es `x * 2^k`: multiplicar por una potencia positiva es monotono
+     * en `x`, y para un `x` fijo subir `k` aleja del cero conservando el signo.
+     * Las cuatro esquinas bastan, y el producto detecta lo que no cabe. */
+    const Ancho a[2] = {desplegar(t, lo_c), desplegar(t, hi_c)};
+    const uint32_t k[2] = {kl, kh};
+    Ancho p[4];
+    for (int i = 0; i < 2; ++i)
+        for (int j = 0; j < 2; ++j) {
+            if (k[j] >= 63 && sizeof(Ancho) == 8) return todo(t);
+            const Ancho factor = static_cast<Ancho>(1) << k[j];
+            if (!mul_ancha(a[i], factor, p[i * 2 + j])) return todo(t);
+        }
+    Exacto e;
+    e.ok = true;
+    e.lo = *std::min_element(p, p + 4);
+    e.hi = *std::max_element(p, p + 4);
+    return plegar(t, e);
+}
+
+ValueRange ValueRange::desplazar_der_logico(const ValueRange &o) const {
+    if (es_bottom() || o.es_bottom()) return bottom(t);
+    if (!acotada() || !o.acotada()) return top(t);
+    uint32_t kl = 0, kh = 0;
+    if (!cuenta_valida(o, t.bits, kl, kh)) return todo(t);
+    /* El desplazamiento LOGICO trata los bits como un natural, asi que se razona
+     * en el dominio sin signo del mismo ancho y se vuelve al tipo al final.  Ahi
+     * la operacion es monotona en los dos argumentos y los extremos bastan. */
+    const RangeType tu = RangeType::de(t.bits, true);
+    const ValueRange u = reinterpretar(tu);
+    if (!u.acotada()) return todo(t);
+    return crudo(tu, u.lo_c >> kh, u.hi_c >> kl).reinterpretar(t);
+}
+
+ValueRange ValueRange::desplazar_der_aritmetico(const ValueRange &o) const {
+    if (es_bottom() || o.es_bottom()) return bottom(t);
+    if (!acotada() || !o.acotada()) return top(t);
+    uint32_t kl = 0, kh = 0;
+    if (!cuenta_valida(o, t.bits, kl, kh)) return todo(t);
+    /* Conserva el signo: es una division por `2^k` que redondea HACIA ABAJO, no
+     * hacia cero (`-1 >> 1` vale -1, no 0).  Monotona en `x`, y para un `x` fijo
+     * subir `k` acerca a 0 o a -1 segun el signo: las esquinas bastan. */
+    const Ancho a[2] = {desplegar(t, lo_c), desplegar(t, hi_c)};
+    const uint32_t k[2] = {kl, kh};
+    Ancho p[4];
+    for (int i = 0; i < 2; ++i)
+        for (int j = 0; j < 2; ++j) {
+            if (k[j] >= 63 && sizeof(Ancho) == 8) return todo(t);
+            const Ancho div = static_cast<Ancho>(1) << k[j];
+            const Ancho v = a[i];
+            // Redondeo hacia abajo, escrito sin depender de como divide el host
+            // y sin negar el minimo, que es el desbordamiento de siempre.
+            if (v >= 0) {
+                p[i * 2 + j] = v / div;
+            } else {
+                Ancho av = 0;
+                if (!valor_absoluto(v, av)) return todo(t);
+                p[i * 2 + j] = -((av + div - 1) / div);
+            }
+        }
+    Exacto e;
+    e.ok = true;
+    e.lo = *std::min_element(p, p + 4);
+    e.hi = *std::max_element(p, p + 4);
+    return plegar(t, e);
 }
 
 // ===========================================================================
