@@ -84,9 +84,12 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod) {
                              * el minimo no se prueba nada: solo diria que
                              * PODRIA salirse, y eso no es un error. */
                             const ValueRange &rr = rangos.at(ex.sym);
-                            if (!rr.acotada() || rr.hi < 0) continue;
-                            tope = rr.hi;
-                            objeto = rr.hi;
+                            int64_t rlo, rhi;
+                            if (!rr.acotada() || !rr.vista_con_signo(rlo, rhi) ||
+                                rhi < 0)
+                                continue;
+                            tope = rhi;
+                            objeto = rhi;
                         } else {
                             continue;
                         }
@@ -148,23 +151,30 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod) {
                 /* El intervalo lo trae ya la propia entrada: el resolvedor lo
                  * compuso al derivar la direccion, sumando el offset constante
                  * que llevara la base.  Aqui solo se juzga. */
-                const ValueRange ri =
-                    ValueRange::acotado(pe.off_lo, pe.off_hi);
-                if (!ri.acotada()) continue;
+                if (pe.off_lo > pe.off_hi) continue;
                 const int32_t w = analysis::memory_access_size(in.type);
                 if (w <= 0) continue;
+                /* El final del acceso mas alto.  Con freno: el intervalo puede
+                 * llegar al mayor entero -- es lo que vale un desplazamiento del
+                 * que solo se sabe su tipo -- y sumarle el ancho ahi daria la
+                 * vuelta, convirtiendo "no se nada" en "todo cae antes del
+                 * objeto".  Un calculo que se desborda no prueba nada. */
+                int64_t fin_alto;
+                if (__builtin_add_overflow(pe.off_hi, static_cast<int64_t>(w),
+                                           &fin_alto))
+                    continue;
                 // Entero fuera: o todo el intervalo cae PASADO el final del
                 // objeto, o todo el cae ANTES del principio.  Cualquier otra
                 // cosa es una parte dentro y otra fuera: sospecha, no error.
-                const bool todo_pasado = (ri.lo >= ex2.limite());
-                const bool todo_antes = (ri.hi + w <= 0);
+                const bool todo_pasado = (pe.off_lo >= ex2.limite());
+                const bool todo_antes = (fin_alto <= 0);
                 if (!todo_pasado && !todo_antes) continue;
                 BoundsViolation v;
                 v.function = fn.name;
                 v.line = in.source_line;
                 v.write = (in.op == ir::IrOp::STORE);
                 v.width = w;
-                v.off = ri.lo;
+                v.off = pe.off_lo;
                 v.limite = ex2.limite();
                 v.objeto = ex2.bytes;
                 v.region = nombre_region(pe.kind, pe.root);

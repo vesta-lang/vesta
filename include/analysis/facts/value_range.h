@@ -11,10 +11,9 @@
  *
  * Es la pieza que hace decidible lo que si no habria que callar: una region de
  * tamano SIMBOLICO (`malloc(n)`) no se puede comprobar sin saber cuanto puede
- * valer `n`, y un acceso indexado (`buf[i]`) tampoco sin saber cuanto puede
- * valer `i`.
+ * valer `n`, y un acceso indexado (`buf[i]`) tampoco sin saber cuanto vale `i`.
  *
- * El dominio es un RETICULO de intervalos con tres estados, no dos:
+ * Reticulo de intervalos con TRES estados, no dos:
  *
  *     TOP      no se nada del valor
  *     [lo,hi]  esta entre esos dos
@@ -22,22 +21,40 @@
  *
  * BOTTOM no es "no se": es "aqui no se llega".  Confundirlos hace que una rama
  * imposible -- `x = 20; if (x < 10)` -- se trate como una rama de la que no se
- * sabe nada, y con eso el analisis pierde justo la conclusion mas fuerte que
- * podia sacar.
+ * sabe nada, y peor: permite declarar inalcanzable un punto vivo, que habilita a
+ * cualquier consumidor a concluir lo que quiera sobre codigo que si se ejecuta.
  *
- * SEPARADO de "que bits estan a uno" a proposito: aqui se habla del VALOR
- * MATEMATICO (un `i8` vale entre -128 y 127), no de la representacion fisica.
+ * TOP y `todo(T)` NO son lo mismo, y la diferencia importa:
  *
- * INDEPENDIENTE DE ARQUITECTURA: se razona sobre el IR y sobre los anchos de
- * sus tipos.  Ni registros, ni acarreos, ni convenios de llamada; el mismo
- * hecho vale para x86-64, x86-32 y arm64.
+ *     TOP        ni siquiera se sabe en que dominio se esta hablando
+ *     todo(u8)   se sabe que es un `u8`; el valor, no.  Y eso ya acota: [0,255]
+ *
+ * CADA INTERVALO CONOCE SU TIPO -- ancho en bits e interpretacion --, y esa es
+ * la diferencia entre un prototipo y algo sobre lo que se puede demostrar:
+ *
+ *   - Un `u64` puede valer mas que el mayor `int64_t`.  Representarlo con
+ *     enteros con signo obliga a callarse en la mitad del dominio.
+ *   - La aritmetica del IR ENVUELVE al ancho: un `u8` con `250 + 10` vale 4, no
+ *     260.  Un dominio que calcula 260 no puede hacer nada con ese numero salvo
+ *     tirarlo; uno que sabe el ancho responde 4, que es la verdad.
+ *
+ * POR ESO TODA LA SEMANTICA VIVE AQUI y no en el motor de flujo: envoltura,
+ * comparaciones con y sin signo, extensiones y truncados son propiedades del
+ * TIPO, no del recorrido del grafo.  El motor decide QUE se compone; el dominio,
+ * COMO.  Un dominio que se prueba solo -- sin construir una funcion IR -- es un
+ * dominio del que se puede uno fiar.
+ *
+ * SEPARADO de "que bits estan a uno" a proposito: aqui se habla del VALOR, no
+ * de la representacion fisica.
+ *
+ * INDEPENDIENTE DE ARQUITECTURA: se razona sobre el IR y los anchos de sus
+ * tipos.  Ni registros, ni acarreos, ni convenios de llamada.
  */
 #ifndef ANALYSIS_FACTS_VALUE_RANGE_H
 #define ANALYSIS_FACTS_VALUE_RANGE_H
 
 #include "analysis/facts/ir_facts.h"
 
-#include <algorithm>
 #include <cstdint>
 #include <vector>
 
@@ -47,114 +64,354 @@ struct IrFunction;
 
 namespace analysis {
 
-/// Los tres estados del reticulo.  Ver la nota del fichero: BOTTOM y TOP NO son
-/// lo mismo, y tratarlos igual es el fallo clasico de estos analisis.
+/**
+ * @brief Tipo numerico sobre el que se razona: cuantos bits y como se leen.
+ *
+ * Es el UNICO sitio donde se convierte entre "los bits" y "el numero".  Tenerlo
+ * repartido es como acaban los analisis afirmando que un `u64` grande es
+ * negativo.
+ *
+ * Se construye SIEMPRE por las factorias, que validan el ancho.  Un ancho fuera
+ * de [1,64] no existe en el IR; si llegara, se ensancha a 64 bits, que es una
+ * sobre-aproximacion (se afirma menos), nunca una mentira.
+ */
+struct RangeType {
+    uint8_t bits = 64;
+    bool    sin_signo = false;
+
+    /// Construccion validada.  Es la unica puerta de entrada.
+    static RangeType de(uint8_t bits, bool sin_signo) {
+        RangeType t;
+        t.bits = (bits >= 1 && bits <= 64) ? bits : 64;
+        t.sin_signo = sin_signo;
+        return t;
+    }
+    /// Atajos que se leen como los tipos del lenguaje: `i(32)`, `u(8)`.
+    static RangeType i(uint8_t bits) { return de(bits, false); }
+    static RangeType u(uint8_t bits) { return de(bits, true); }
+
+    bool valido() const { return bits >= 1 && bits <= 64; }
+    bool operator==(const RangeType &o) const {
+        return bits == o.bits && sin_signo == o.sin_signo;
+    }
+    bool operator!=(const RangeType &o) const { return !(*this == o); }
+
+    /// Mascara del ancho: los bits que el tipo realmente tiene.
+    uint64_t mascara() const {
+        return bits >= 64 ? UINT64_MAX : ((uint64_t(1) << bits) - 1);
+    }
+    /// Cuantos valores distintos hay.  0 significa "2^64", que no cabe.
+    uint64_t cardinal() const { return bits >= 64 ? 0 : (uint64_t(1) << bits); }
+
+    /// Mayor y menor valor representables, EN CRUDO (los bits, no el numero).
+    uint64_t max_crudo() const {
+        if (bits >= 64)
+            return sin_signo ? UINT64_MAX : static_cast<uint64_t>(INT64_MAX);
+        const uint64_t m = mascara();
+        return sin_signo ? m : (m >> 1);
+    }
+    uint64_t min_crudo() const {
+        if (sin_signo) return 0;
+        if (bits >= 64) return static_cast<uint64_t>(INT64_MIN);
+        return (uint64_t(1) << (bits - 1)) & mascara();
+    }
+
+    /// Deja el valor dentro del ancho (lo que hace el hardware al envolver).
+    uint64_t normalizar(uint64_t v) const { return v & mascara(); }
+
+    /// Los bits leidos como NUMERO, segun la interpretacion del tipo.
+    int64_t hacia_signo(uint64_t v) const {
+        v = normalizar(v);
+        if (sin_signo || bits >= 64) return static_cast<int64_t>(v);
+        const uint64_t bit = uint64_t(1) << (bits - 1);
+        return static_cast<int64_t>((v ^ bit) - bit); // extension de signo
+    }
+    /// Un numero guardado como bits del tipo (envolviendo si no cabe).
+    uint64_t desde_signo(int64_t v) const {
+        return normalizar(static_cast<uint64_t>(v));
+    }
+
+    /// Orden del tipo: un `u8` compara 200 < 250; un `i8`, -56 < 0.
+    bool menor(uint64_t a, uint64_t b) const {
+        if (sin_signo) return normalizar(a) < normalizar(b);
+        return hacia_signo(a) < hacia_signo(b);
+    }
+    uint64_t menor_de(uint64_t a, uint64_t b) const { return menor(a, b) ? a : b; }
+    uint64_t mayor_de(uint64_t a, uint64_t b) const { return menor(a, b) ? b : a; }
+};
+
 enum class RangeKind : uint8_t { Bottom, Bounded, Top };
 
 /**
- * @brief Intervalo cerrado [lo, hi], o TOP, o BOTTOM.
+ * @brief Intervalo cerrado dentro de un tipo, o TOP, o BOTTOM.
  *
- * Toda la aritmetica del dominio vive aqui como operaciones del reticulo
- * (`unir`, `cortar`, `ensanchar`), en vez de repartida por el motor.  Asi el
- * motor decide QUE compone y el dominio decide COMO se compone.
+ * Los extremos se guardan EN CRUDO (los bits) y se leen segun el tipo.  Asi un
+ * `u64` por encima del mayor `int64_t` se representa igual de bien que un `i8`
+ * negativo, sin que el analisis tenga que rendirse en medio dominio.
+ *
+ * INVARIANTE (comprobable con @c valida): si esta acotado, el tipo es valido,
+ * los dos extremos pertenecen al tipo y `lo <= hi` EN EL ORDEN DEL TIPO.  Las
+ * factorias son las que lo garantizan; construir el struct a mano lo rompe.
+ *
+ * NO REPRESENTA intervalos CIRCULARES.  Cuando el resultado exacto de una
+ * operacion da la vuelta al tipo -- `u8 [250,4]` -- no hay intervalo simple que
+ * lo diga, y la respuesta es `todo(u8)`: menos preciso, nunca falso.
  */
 struct ValueRange {
     RangeKind kind = RangeKind::Top;
-    int64_t   lo = 0;
-    int64_t   hi = 0;
+    RangeType t{};
+    uint64_t  lo_c = 0; ///< extremo inferior, en crudo
+    uint64_t  hi_c = 0; ///< extremo superior, en crudo
 
-    static ValueRange top() { return ValueRange{RangeKind::Top, 0, 0}; }
-    static ValueRange bottom() { return ValueRange{RangeKind::Bottom, 0, 0}; }
-    /// Un intervalo vacio ES bottom: no hay valor que lo cumpla.
-    static ValueRange acotado(int64_t l, int64_t h) {
-        if (l > h) return bottom();
-        return ValueRange{RangeKind::Bounded, l, h};
+    // ----------------------------------------------------------------- crear
+    static ValueRange top(RangeType ty = RangeType{}) {
+        ValueRange r;
+        r.kind = RangeKind::Top;
+        r.t = ty;
+        return r;
     }
-    static ValueRange constante(int64_t v) { return acotado(v, v); }
-
-    bool es_top() const { return kind == RangeKind::Top; }
-    bool es_bottom() const { return kind == RangeKind::Bottom; }
-    /// Hay un intervalo concreto que afirmar (lo unico sobre lo que se prueba).
-    bool acotada() const { return kind == RangeKind::Bounded; }
-
-    bool operator==(const ValueRange &o) const {
-        if (kind != o.kind) return false;
-        return kind != RangeKind::Bounded || (lo == o.lo && hi == o.hi);
-    }
-
-    /// UNION: lo que puede valer si viene por cualquiera de dos caminos.
-    /// `bottom` es el neutro (ese camino no aporta valores); `top` absorbe.
-    ValueRange unir(const ValueRange &o) const {
-        if (es_bottom()) return o;
-        if (o.es_bottom()) return *this;
-        if (es_top() || o.es_top()) return top();
-        return acotado(std::min(lo, o.lo), std::max(hi, o.hi));
-    }
-
-    /// CORTE: lo que cumple las dos afirmaciones a la vez sobre el MISMO punto.
-    /// Si no queda nada, el punto no se alcanza -> bottom (no "no se").
-    ValueRange cortar(const ValueRange &o) const {
-        if (es_bottom() || o.es_bottom()) return bottom();
-        if (es_top()) return o;
-        if (o.es_top()) return *this;
-        return acotado(std::max(lo, o.lo), std::min(hi, o.hi));
+    static ValueRange bottom(RangeType ty = RangeType{}) {
+        ValueRange r;
+        r.kind = RangeKind::Bottom;
+        r.t = ty;
+        return r;
     }
 
     /**
-     * @brief ENSANCHAMIENTO: el extremo que crece se suelta hasta su limite.
+     * @brief Intervalo a partir de VALORES DEL TIPO (se normalizan al ancho).
+     *
+     * Si tras normalizar el intervalo queda invertido, el conjunto DA LA VUELTA
+     * al tipo y no hay intervalo simple que lo represente: se responde
+     * `todo(ty)`.  NUNCA BOTTOM -- un conjunto no vacio no puede convertirse en
+     * "aqui no se llega" por una limitacion de la representacion.
+     */
+    static ValueRange crudo(RangeType ty, uint64_t lo, uint64_t hi) {
+        lo = ty.normalizar(lo);
+        hi = ty.normalizar(hi);
+        if (ty.menor(hi, lo)) return todo(ty);
+        return armar(ty, lo, hi);
+    }
+
+    /**
+     * @brief Intervalo procedente de un CORTE: si queda vacio, es BOTTOM.
+     *
+     * Es la otra mitad de @c crudo, y la distincion es deliberada.  Aqui el
+     * intervalo invertido significa "ninguna de las dos afirmaciones puede
+     * cumplirse a la vez", que es exactamente inalcanzable.
+     */
+    static ValueRange corte(RangeType ty, uint64_t lo, uint64_t hi) {
+        lo = ty.normalizar(lo);
+        hi = ty.normalizar(hi);
+        if (ty.menor(hi, lo)) return bottom(ty);
+        return armar(ty, lo, hi);
+    }
+
+    /// Intervalo desde numeros con signo (el caso comun al escribir codigo).
+    static ValueRange de_enteros(RangeType ty, int64_t lo, int64_t hi) {
+        return crudo(ty, ty.desde_signo(lo), ty.desde_signo(hi));
+    }
+    static ValueRange constante(RangeType ty, uint64_t v) {
+        return armar(ty, ty.normalizar(v), ty.normalizar(v));
+    }
+    /// Todo el tipo: se sabe el dominio, no el valor.  Distinto de TOP.
+    static ValueRange todo(RangeType ty) {
+        return armar(ty, ty.min_crudo(), ty.max_crudo());
+    }
+
+    // -------------------------------------------------------------- consultar
+    bool es_top() const { return kind == RangeKind::Top; }
+    bool es_bottom() const { return kind == RangeKind::Bottom; }
+    bool acotada() const { return kind == RangeKind::Bounded; }
+    bool es_constante() const { return acotada() && lo_c == hi_c; }
+    /// Si cubre el tipo entero: acotado, pero sin informacion util.
+    bool es_todo() const {
+        return acotada() && lo_c == t.min_crudo() && hi_c == t.max_crudo();
+    }
+
+    /// El invariante de la struct.  Se comprueba en las pruebas y en depuracion.
+    bool valida() const {
+        if (kind != RangeKind::Bounded) return true;
+        return t.valido() && !t.menor(hi_c, lo_c) &&
+               t.normalizar(lo_c) == lo_c && t.normalizar(hi_c) == hi_c;
+    }
+
+    /// Los extremos leidos como NUMEROS del tipo.  Sin sentido si no acotada.
+    int64_t lo() const { return t.hacia_signo(lo_c); }
+    int64_t hi() const { return t.hacia_signo(hi_c); }
+
+    /// Cuantos valores contiene (0 = "no cabe en `uint64_t`", solo `u64` entero).
+    uint64_t cardinal() const {
+        if (!acotada()) return 0;
+        const uint64_t d = t.normalizar(hi_c - lo_c);
+        return (d == UINT64_MAX) ? 0 : d + 1;
+    }
+
+    /**
+     * @brief Los dos extremos leidos como `int64_t`, si ambos caben ahi.
+     *
+     * Es una consulta de REPRESENTACION, no una conversion semantica: dice si
+     * este intervalo puede entregarse a un consumidor que trabaja con enteros
+     * con signo de 64 bits (un desplazamiento, un tamano).  Un `u64` por encima
+     * del mayor `int64_t` no cabe, y decirlo es mejor que mentir.
+     */
+    bool vista_con_signo(int64_t &lo_out, int64_t &hi_out) const {
+        if (!acotada()) return false;
+        if (t.sin_signo &&
+            (lo_c > uint64_t(INT64_MAX) || hi_c > uint64_t(INT64_MAX)))
+            return false;
+        lo_out = lo();
+        hi_out = hi();
+        return true;
+    }
+
+    bool operator==(const ValueRange &o) const {
+        if (kind != o.kind || t != o.t) return false;
+        return kind != RangeKind::Bounded || (lo_c == o.lo_c && hi_c == o.hi_c);
+    }
+    bool operator!=(const ValueRange &o) const { return !(*this == o); }
+
+    // ---------------------------------------------------------------- reticulo
+    /// UNION: lo que puede valer si viene por cualquiera de dos caminos.
+    /// BOTTOM es el neutro (ese camino no aporta valores); TOP absorbe.
+    ValueRange unir(const ValueRange &o) const;
+
+    /**
+     * @brief CORTE: lo que cumple las dos afirmaciones sobre el MISMO punto.
+     *
+     * Si no queda nada, el punto no se alcanza -> BOTTOM (no "no se").
+     *
+     * Con tipos DISTINTOS no se corta: mezclar dominios es un fallo del IR o del
+     * llamante, y la respuesta segura es quedarse con lo que ya se sabia.
+     * Devolver BOTTOM ahi convertiria un fallo NUESTRO en "este codigo no se
+     * ejecuta", que es la peor conclusion posible.  Quien quiera cruzar dominios
+     * reinterpreta primero (@c reinterpretar), que si esta definido.
+     */
+    ValueRange cortar(const ValueRange &o) const;
+
+    /**
+     * @brief ENSANCHAMIENTO: el extremo que crece se suelta hasta el del tipo.
      *
      * Es lo que hace que el analisis TERMINE.  Se suelta SOLO el extremo que se
-     * movio -- soltar el intervalo entero tira tambien lo que no habia cambiado,
-     * y en `for (i = 100; i < 200)` lo que no cambia es la cota inferior, que es
+     * movio: soltar el intervalo entero tira tambien lo que no habia cambiado, y
+     * en `for (i = 100; i < 200)` lo que no cambia es la cota inferior, que es
      * justo lo que permite demostrar algo.  Ensanchar no es olvidar.
-     *
-     * @param nuevo  el valor recien calculado (este objeto es el anterior).
-     * @param suelo  hasta donde soltar; si no acota, se suelta al infinito.
      */
-    ValueRange ensanchar(const ValueRange &nuevo, const ValueRange &suelo) const {
-        if (es_bottom()) return nuevo;
-        if (!acotada() || !nuevo.acotada()) return nuevo.es_bottom() ? *this : nuevo;
-        int64_t l = nuevo.lo, h = nuevo.hi;
-        if (l < lo) l = suelo.acotada() ? suelo.lo : INT64_MIN;
-        if (h > hi) h = suelo.acotada() ? suelo.hi : INT64_MAX;
-        return acotado(l, h);
+    ValueRange ensanchar(const ValueRange &nuevo) const;
+
+    // -------------------------------------------------- aritmetica del dominio
+    //
+    //  Todas ENVUELVEN como el IR.  El conjunto exacto se calcula en enteros sin
+    //  limite y luego se pliega al tipo: si cabe, el resultado es exacto (un
+    //  `u8` con 250+10 responde 4); si al plegarlo da la vuelta al tipo, la
+    //  respuesta es `todo(T)`.
+    ValueRange sumar(const ValueRange &o) const;
+    ValueRange restar(const ValueRange &o) const;
+    ValueRange multiplicar(const ValueRange &o) const;
+    ValueRange negar() const;
+    /// `x & c` con `c` constante no negativa no pasa de `c`, venga x de donde
+    /// venga.  Es lo unico afirmable sin mirar los bits del otro lado.
+    ValueRange conjuncion(const ValueRange &o) const;
+
+    // ------------------------------------------------- conversiones del IR
+    //
+    //  CUATRO operaciones distintas, no una: `u8 -> u32`, `i8 -> i32`,
+    //  `u32 -> u8` y "los mismos bits, otra lectura" no significan lo mismo.
+    /// Extension SIN signo: el origen se lee como natural (un `i8` que vale -1
+    /// pasa a valer 255).
+    ValueRange extender_sin_signo(RangeType destino) const;
+    /// Extension CON signo: el numero no cambia.
+    ValueRange extender_con_signo(RangeType destino) const;
+    /// Truncado: es MODULAR.  `u16 [250,260]` en `u8` no es `[250,255]`; el
+    /// conjunto exacto da la vuelta, asi que lo afirmable es `[0,255]`.
+    ValueRange truncar(RangeType destino) const;
+    /// Misma representacion, otra lectura.  La correspondencia no es monotona
+    /// (`u32 [0x7FFFFFF0,0xFFFFFFFF]` en `i32` se parte en dos), y cuando se
+    /// rompe el orden lo afirmable es el tipo entero.
+    ValueRange reinterpretar(RangeType destino) const;
+
+    // --------------------------------------------------------- restricciones
+    //
+    //  Lo que AFIRMA una comparacion sobre este valor.  Viven aqui, y no en el
+    //  motor, porque un `<` no significa lo mismo en `i8` que en `u64`, y esa
+    //  diferencia es del tipo.  Se apoyan en @c corte: si lo afirmado contradice
+    //  lo que ya se sabia, el resultado es BOTTOM -- por ahi no se pasa.
+    ValueRange restringir_menor(const ValueRange &o) const;
+    ValueRange restringir_menor_igual(const ValueRange &o) const;
+    ValueRange restringir_mayor(const ValueRange &o) const;
+    ValueRange restringir_mayor_igual(const ValueRange &o) const;
+    ValueRange restringir_igual(const ValueRange &o) const;
+    /// `x != k` solo estrecha si `k` es constante y cae en un extremo: quitar un
+    /// valor de en medio partiria el intervalo en dos, y eso no se representa.
+    ValueRange restringir_distinto(const ValueRange &o) const;
+
+  private:
+    /// Constructor interno: los extremos YA cumplen el invariante.
+    static ValueRange armar(RangeType ty, uint64_t lo, uint64_t hi) {
+        ValueRange r;
+        r.kind = RangeKind::Bounded;
+        r.t = ty;
+        r.lo_c = lo;
+        r.hi_c = hi;
+        return r;
     }
 };
 
 /* PENDIENTE, y dicho aqui para que no se pierda: un rango simple no basta para
  * `base + i*8`.  Hace falta el PASO ademas del intervalo -- `i en [0,63]` paso 8
  * -> `offset en [0,504]` -- para demostrar `offset + sizeof(T) <= tamano` sin
- * conocer `i`.  Es el salto de limites concretos a simbolicos, y lo que hara
- * comprobables las vistas dinamicas (`@overlay`), cuya geometria se compone de
- * sumas de cotas.
+ * conocer `i`, y ademas la CONGRUENCIA (`offset % 8 == 0`) para hablar de
+ * alineacion.  Es lo que hara comprobables las vistas dinamicas (`@overlay`),
+ * cuya geometria se compone de sumas de cotas.
  *
- * Y este hecho se queda ESPECIALIZADO: no debe convertirse en el objeto que
- * guarda todo lo que se sabe de un valor -- rango, bits, procedencia, region,
- * alineacion, no-nulidad viven juntos en el modelo de hechos, no dentro de cada
- * hecho. */
+ * Ese paso NO entra aqui dentro: sale un hecho HERMANO -- congruencias -- y el
+ * consumidor pregunta a los dos.  Un rango que ademas conoce el paso, los bits,
+ * la region y la alineacion deja de ser un dominio demostrable para convertirse
+ * en el saco de todo lo que se sabe de un valor. */
 
 /// Ajustes del analisis.  Los presupuestos son una RED ante un fallo del propio
-/// motor, no el mecanismo de terminacion (de eso se encarga el ensanchamiento);
-/// van aqui para que los tests puedan medir precision con distintos valores.
+/// motor, no el mecanismo de terminacion (de eso se encarga el ensanchamiento).
 struct RangeOptions {
-    uint32_t retardo_ensanche = 3;   ///< revisitas de una cabecera antes de soltar.
-    uint32_t pasos_por_bloque = 64;  ///< presupuesto = bloques * esto + extra.
+    /// Vueltas por una arista de retroceso antes de ensanchar.  Con 0 se
+    /// ensancha a la primera (termina antes, afirma menos).
+    uint32_t retardo_ensanche = 3;
+    uint32_t pasos_por_bloque = 64;
     uint32_t pasos_extra = 256;
+    /// Vueltas del descenso.  El descenso solo estrecha, asi que pararlo antes
+    /// cuesta precision, nunca correccion.
+    uint32_t pasos_descenso = 8;
 };
 
-/// Rango de cada valor SSA de una funcion, indexado por value-id.
+/**
+ * @brief Que hizo el motor para llegar al resultado.
+ *
+ * Sirve para depurar el COMPILADOR, no el programa: un caso que no converge o
+ * que ensancha mil veces es un fallo del analisis, y sin estas cuentas se
+ * confunde con "ese programa es dificil".
+ */
+struct RangeStats {
+    uint32_t pasos = 0;       ///< bloques procesados en total (ascenso+descenso)
+    uint32_t cambios = 0;     ///< veces que un IN[B] cambio
+    uint32_t ensanches = 0;   ///< veces que se aplico ensanchamiento
+    uint32_t estrechados = 0; ///< veces que el descenso mejoro un IN[B]
+    /// Si el descenso llego hasta el final.  Pararlo a medias NO invalida el
+    /// resultado -- toda la cadena descendente sigue conteniendo al punto fijo
+    /// real --, solo lo deja menos preciso; por eso se cuenta aparte de
+    /// @c RangeFacts::convergio, que si es una condicion de correccion.
+    bool descenso_completo = true;
+};
+
+/// Rango de cada valor SSA, indexado por value-id.
 struct RangeFacts {
     std::vector<ValueRange> r;
     /**
      * @brief Si el calculo llego a PUNTO FIJO o se paro por presupuesto.
      *
-     * El tope no significa "analisis terminado".  Significa "hasta aqui he
-     * llegado", y la diferencia importa: quien va a DEMOSTRAR algo tiene derecho
-     * a saber si lee una conclusion o una parada.  Sin convergencia no se
-     * afirma ningun rango.
+     * El tope no significa "analisis terminado": significa "hasta aqui he
+     * llegado".  Quien va a DEMOSTRAR algo tiene derecho a distinguir una
+     * conclusion de una parada, asi que sin convergencia no se afirma nada.
      */
-    bool convergio = true;
-    int  vueltas = 0;
+    bool       convergio = true;
+    RangeStats stats;
 
     const ValueRange &at(ir::IrValueId v) const {
         static const ValueRange kTop = ValueRange::top();
@@ -174,11 +431,20 @@ struct RangeFacts {
  * Las PHI se resuelven leyendo el estado DE LA ARISTA por la que llega cada
  * argumento: sin eso, una guarda no puede afectar a la PHI que depende de ella.
  *
- * El resultado por valor es su rango EN SU PUNTO DE DEFINICION.  Es una
- * proyeccion derivada, no el transporte del analisis: vale en cualquier uso
- * porque en SSA la definicion domina a todos ellos y el valor no cambia -- en un
- * uso concreto el rango solo puede ser mas estrecho (una guarda de por medio),
- * nunca mas ancho.  Quien necesite esa precision extra pregunta por el punto.
+ * DOS FASES con papeles distintos, no el mismo bucle con una bandera:
+ *
+ *     ASCENSO   crece hasta un post-punto-fijo; ensancha en las aristas de
+ *               retroceso, que es lo unico que garantiza terminar.
+ *     DESCENSO  parte de esa solucion y solo ESTRECHA; recupera lo que el
+ *               ensanchamiento solto.  Pararlo antes cuesta precision, nunca
+ *               correccion.
+ *
+ * El resultado por valor es su rango EN SU PUNTO DE DEFINICION -- una proyeccion
+ * derivada, no el transporte del analisis.  Vale en cualquier uso porque en SSA
+ * la definicion domina a todos ellos, pero NO incorpora los refinamientos
+ * posteriores: en `if (i < 10) usar(i)`, la definicion puede decir `[0,1000]`
+ * mientras el uso esta en `[0,9]`.  Quien necesite esa precision pregunta por el
+ * punto, no por el valor.
  */
 RangeFacts compute_ranges(const ir::IrFunction &fn, const IrFacts &facts,
                           const RangeOptions &op = RangeOptions{});

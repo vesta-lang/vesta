@@ -9,11 +9,16 @@
  * @file value_range.cpp
  * @brief Motor de rangos sensible al flujo (contrato en value_range.h).
  *
- * Organizacion: la aritmetica del DOMINIO va en `dom` -- operaciones sobre
- * intervalos, todas sin desbordar --, la semantica de cada op del IR en
- * `transferir`, y el recorrido del CFG en `Motor`.  Separado a proposito: el
- * dominio se puede probar solo, y el motor no tiene que saber como se
- * multiplican dos intervalos.
+ * Aqui NO hay semantica de tipos.  Ni envoltura, ni signo, ni extensiones: todo
+ * eso vive en el dominio (@c value_range_domain.cpp) y se prueba sin construir
+ * una funcion.  Este fichero solo hace tres cosas:
+ *
+ *   traducir    que operacion del dominio corresponde a cada op del IR
+ *   recorrer    el CFG llevando el estado por bloque y por ARISTA
+ *   terminar    ensanchando en las aristas de retroceso, y luego estrechando
+ *
+ * Esa division es la que permite creerse el resultado: si el dominio no miente,
+ * lo unico que puede fallar aqui es el recorrido, y el recorrido es pequeno.
  */
 #include "analysis/facts/value_range.h"
 
@@ -33,162 +38,45 @@ using ir::IrOp;
 using ir::IrType;
 
 // ===========================================================================
-//  Aritmetica del dominio.  NADA aqui puede desbordar: en C++ el
-//  desbordamiento con signo es comportamiento indefinido, asi que "calcular y
-//  mirar despues" no vale -- para cuando se mira, el dano ya esta hecho.
-// ===========================================================================
-namespace dom {
-
-bool suma(int64_t a, int64_t b, int64_t &out) {
-#if defined(__GNUC__) || defined(__clang__)
-    return !__builtin_add_overflow(a, b, &out);
-#else
-    if ((b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b)) return false;
-    out = a + b;
-    return true;
-#endif
-}
-
-bool resta(int64_t a, int64_t b, int64_t &out) {
-#if defined(__GNUC__) || defined(__clang__)
-    return !__builtin_sub_overflow(a, b, &out);
-#else
-    if ((b < 0 && a > INT64_MAX + b) || (b > 0 && a < INT64_MIN + b)) return false;
-    out = a - b;
-    return true;
-#endif
-}
-
-bool mul(int64_t a, int64_t b, int64_t &out) {
-#if defined(__GNUC__) || defined(__clang__)
-    return !__builtin_mul_overflow(a, b, &out);
-#else
-    if (a == 0 || b == 0) { out = 0; return true; }
-    if (a > 0) {
-        if (b > 0) { if (a > INT64_MAX / b) return false; }
-        else       { if (b < INT64_MIN / a) return false; }
-    } else {
-        if (b > 0) { if (a < INT64_MIN / b) return false; }
-        else       { if (a < INT64_MAX / b) return false; }
-    }
-    out = a * b;
-    return true;
-#endif
-}
-
-bool inc(int64_t a, int64_t &out) { return suma(a, 1, out); }
-bool dec(int64_t a, int64_t &out) { return resta(a, 1, out); }
-
-/// Suma de intervalos.  Si un extremo no cabe, no se afirma nada: mejor TOP
-/// que un extremo inventado, que el consumidor tomaria por demostrado.
-ValueRange sumar(const ValueRange &a, const ValueRange &b) {
-    if (a.es_bottom() || b.es_bottom()) return ValueRange::bottom();
-    if (!a.acotada() || !b.acotada()) return ValueRange::top();
-    int64_t l, h;
-    if (!suma(a.lo, b.lo, l) || !suma(a.hi, b.hi, h)) return ValueRange::top();
-    return ValueRange::acotado(l, h);
-}
-
-ValueRange restar(const ValueRange &a, const ValueRange &b) {
-    if (a.es_bottom() || b.es_bottom()) return ValueRange::bottom();
-    if (!a.acotada() || !b.acotada()) return ValueRange::top();
-    int64_t l, h;
-    // [a.lo - b.hi, a.hi - b.lo].  Se resta directamente: negar b.hi seria UB
-    // cuando vale INT64_MIN.
-    if (!resta(a.lo, b.hi, l) || !resta(a.hi, b.lo, h)) return ValueRange::top();
-    return ValueRange::acotado(l, h);
-}
-
-/// Producto de intervalos por las CUATRO esquinas.  Con signos mezclados el
-/// minimo y el maximo no son los productos de los extremos homologos, asi que
-/// mirar solo dos deja fuera casos perfectamente calculables.
-ValueRange multiplicar(const ValueRange &a, const ValueRange &b) {
-    if (a.es_bottom() || b.es_bottom()) return ValueRange::bottom();
-    if (!a.acotada() || !b.acotada()) return ValueRange::top();
-    int64_t p[4];
-    if (!mul(a.lo, b.lo, p[0]) || !mul(a.lo, b.hi, p[1]) ||
-        !mul(a.hi, b.lo, p[2]) || !mul(a.hi, b.hi, p[3]))
-        return ValueRange::top();
-    return ValueRange::acotado(*std::min_element(p, p + 4),
-                               *std::max_element(p, p + 4));
-}
-
-ValueRange negar(const ValueRange &a) {
-    if (a.es_bottom()) return ValueRange::bottom();
-    if (!a.acotada()) return ValueRange::top();
-    int64_t l, h;
-    if (!resta(0, a.hi, l) || !resta(0, a.lo, h)) return ValueRange::top();
-    return ValueRange::acotado(l, h);
-}
-
-/// `x & c` con `c` constante no negativa no pasa de `c`, venga x de donde
-/// venga.  Es lo unico que se puede afirmar sin mirar los bits del otro lado.
-ValueRange conjuncion(const ValueRange &a, const ValueRange &b) {
-    if (a.es_bottom() || b.es_bottom()) return ValueRange::bottom();
-    auto cte_no_neg = [](const ValueRange &r) {
-        return r.acotada() && r.lo == r.hi && r.lo >= 0;
-    };
-    const bool ca = cte_no_neg(a), cb = cte_no_neg(b);
-    if (!ca && !cb) return ValueRange::top();
-    if (ca && cb) return ValueRange::acotado(0, std::min(a.hi, b.hi));
-    return ValueRange::acotado(0, ca ? a.hi : b.hi);
-}
-
-/// Sube el extremo inferior sin desbordar; si no cabe, deja el intervalo igual.
-ValueRange con_piso(const ValueRange &r, int64_t piso) {
-    if (!r.acotada()) return r;
-    return ValueRange::acotado(std::max(r.lo, piso), r.hi);
-}
-ValueRange con_tope(const ValueRange &r, int64_t tope) {
-    if (!r.acotada()) return r;
-    return ValueRange::acotado(r.lo, std::min(r.hi, tope));
-}
-
-} // namespace dom
-
-// ===========================================================================
-//  Semantica de los tipos del IR
+//  Tipos del IR -> tipos del dominio
 // ===========================================================================
 
-/// Bits del tipo (0 = no es un entero con ancho definido).
-int bits_de(IrType t) {
+RangeType tipo_de(IrType t) {
     switch (t) {
-    case IrType::BOOL: return 1;
-    case IrType::I8: case IrType::U8: return 8;
-    case IrType::I16: case IrType::U16: return 16;
-    case IrType::I32: case IrType::U32: case IrType::HANDLE: return 32;
-    case IrType::I64: case IrType::U64: case IrType::PTR: return 64;
-    default: return 0;
+    case IrType::BOOL: return RangeType::u(1);
+    case IrType::I8: return RangeType::i(8);
+    case IrType::I16: return RangeType::i(16);
+    case IrType::I32: return RangeType::i(32);
+    case IrType::I64: return RangeType::i(64);
+    case IrType::U8: return RangeType::u(8);
+    case IrType::U16: return RangeType::u(16);
+    case IrType::U32: return RangeType::u(32);
+    case IrType::U64: return RangeType::u(64);
+    case IrType::PTR: return RangeType::u(64);
+    default: return RangeType::i(64);
     }
 }
 
-bool es_sin_signo(IrType t) {
+/// Si el tipo permite razonar numericamente sobre el valor.
+bool es_numerico(IrType t) {
     switch (t) {
+    case IrType::I8: case IrType::I16: case IrType::I32: case IrType::I64:
     case IrType::U8: case IrType::U16: case IrType::U32: case IrType::U64:
-    case IrType::BOOL: case IrType::HANDLE: case IrType::PTR:
+    case IrType::BOOL: case IrType::PTR:
         return true;
+    /* HANDLE es una referencia opaca, no una cantidad: acotarla por su ancho
+     * invitaria a que la aritmetica explotara un "rango" sin significado. */
     default:
         return false;
     }
 }
 
-/// Rango que impone el ANCHO del tipo.  Un `u8` no pasa de 255 en ninguna
-/// arquitectura; es el suelo de conocimiento y sale gratis.  Los de 64 bits no
-/// acotan nada representable en `int64_t`, asi que ahi es TOP.
+/// Suelo de conocimiento: lo que impone el tipo, gratis y en cualquier
+/// arquitectura.  Un `u8` no pasa de 255; un `u64` no acota nada util pero SI
+/// dice que no es negativo, y eso ya sirve.
 ValueRange del_tipo(IrType t) {
-    switch (t) {
-    case IrType::I8: return ValueRange::acotado(-128, 127);
-    case IrType::I16: return ValueRange::acotado(-32768, 32767);
-    case IrType::I32: return ValueRange::acotado(INT32_MIN, INT32_MAX);
-    case IrType::U8: return ValueRange::acotado(0, 255);
-    case IrType::U16: return ValueRange::acotado(0, 65535);
-    case IrType::U32: return ValueRange::acotado(0, UINT32_MAX);
-    case IrType::BOOL: return ValueRange::acotado(0, 1);
-    /* HANDLE es una referencia opaca, no una cantidad: acotarla por su ancho
-     * invitaria a que la aritmetica explotara un "rango" que no significa
-     * nada. */
-    default: return ValueRange::top();
-    }
+    if (!es_numerico(t)) return ValueRange::top();
+    return ValueRange::todo(tipo_de(t));
 }
 
 // ===========================================================================
@@ -205,25 +93,26 @@ ValueRange del_tipo(IrType t) {
  * CONVENIO que respetan todos los operadores: la AUSENCIA de una entrada
  * significa "lo que diga el suelo", no "no se".
  *
- * `alcanzable = false` es BOTTOM del estado entero: a este punto no se llega.
- * No es lo mismo que un estado vacio, que significa "se llega y no se sabe nada
- * de mas".
+ * DOS INALCANZABILIDADES, y no son la misma:
+ *
+ *   `alcanzable = false`   propiedad del CFG: a este PUNTO no se llega.
+ *   `ValueRange::Bottom`   propiedad de un VALOR: no hay numero que cumpla lo
+ *                          que se ha afirmado sobre el en este punto.
+ *
+ * Lo segundo IMPLICA lo primero (si un valor vivo no puede valer nada, el punto
+ * no se ejecuta) y por eso las guardas propagan lo uno a lo otro; pero al reves
+ * no: un punto inalcanzable no dice nada de un valor concreto.
  */
 struct Estado {
     bool alcanzable = false;
     std::vector<std::pair<ir::IrValueId, ValueRange>> ref;
 
-    static std::vector<std::pair<ir::IrValueId, ValueRange>>::const_iterator
-    pos(const std::vector<std::pair<ir::IrValueId, ValueRange>> &v,
-        ir::IrValueId k) {
-        return std::lower_bound(
-            v.begin(), v.end(), k,
+    const ValueRange *buscar(ir::IrValueId v) const {
+        auto it = std::lower_bound(
+            ref.begin(), ref.end(), v,
             [](const std::pair<ir::IrValueId, ValueRange> &p, ir::IrValueId x) {
                 return p.first < x;
             });
-    }
-    const ValueRange *buscar(ir::IrValueId v) const {
-        auto it = pos(ref, v);
         return (it == ref.end() || it->first != v) ? nullptr : &it->second;
     }
     void poner(ir::IrValueId v, const ValueRange &r) {
@@ -235,22 +124,27 @@ struct Estado {
         if (it != ref.end() && it->first == v) it->second = r;
         else ref.insert(it, {v, r});
     }
+    void inalcanzable() {
+        alcanzable = false;
+        ref.clear();
+    }
     bool operator==(const Estado &o) const {
         if (alcanzable != o.alcanzable) return false;
         if (!alcanzable) return true; // dos inalcanzables son el mismo estado
         if (ref.size() != o.ref.size()) return false;
         for (size_t i = 0; i < ref.size(); ++i)
-            if (ref[i].first != o.ref[i].first || !(ref[i].second == o.ref[i].second))
+            if (ref[i].first != o.ref[i].first || ref[i].second != o.ref[i].second)
                 return false;
         return true;
     }
 };
 
-/// Arista del CFG con la condicion que la guarda (si la hay).
+/// Arista del CFG.  Lleva la guarda que la justifica y si cierra un ciclo.
 struct Arista {
     ir::IrBlockId desde = 0, hasta = 0;
     ir::IrValueId cond = ir::IR_NO_VALUE;
     bool rama = true;
+    bool retroceso = false; ///< cierra un bucle: es la que obliga a ensanchar
 };
 
 // ===========================================================================
@@ -267,8 +161,8 @@ struct Motor {
     std::vector<Estado>     out_arista;
     std::vector<Estado>     in_bloque;
     std::vector<std::vector<uint32_t>> entrantes, salientes;
-    std::vector<uint8_t>    es_cabecera;
-    std::vector<uint32_t>   revisitas;
+    std::vector<uint32_t>   vueltas_ciclo; ///< veces que el IN de un bloque cambio
+    RangeStats              stats;
 
     Motor(const ir::IrFunction &f, const IrFacts &fc, const RangeOptions &o)
         : fn(f), facts(fc), op(o) {
@@ -276,23 +170,20 @@ struct Motor {
         suelo.assign(n, ValueRange::top());
         for (ir::IrValueId v = 0; v < fn.values.size() && v < n; ++v) {
             suelo[v] = del_tipo(fn.values[v].type);
-            if (fn.values[v].is_const)
-                suelo[v] = suelo[v].cortar(ValueRange::constante(
-                    static_cast<int64_t>(fn.values[v].const_val)));
+            if (fn.values[v].is_const && suelo[v].acotada())
+                suelo[v] = suelo[v].cortar(
+                    ValueRange::constante(suelo[v].t, fn.values[v].const_val));
         }
         const size_t nb = fn.blocks.size();
         in_bloque.assign(nb, Estado{});
         entrantes.assign(nb, {});
         salientes.assign(nb, {});
-        revisitas.assign(nb, 0);
-        es_cabecera.assign(nb, 0);
+        vueltas_ciclo.assign(nb, 0);
         construir_aristas();
         out_arista.assign(aristas.size(), Estado{});
-        const LoopFacts lf = compute_loop_facts(fn);
-        for (uint32_t bi = 0; bi < nb && bi < lf.is_loop_header.size(); ++bi)
-            es_cabecera[bi] = lf.is_loop_header[bi];
     }
 
+    // --- construccion del grafo ------------------------------------------
     void construir_aristas() {
         const size_t nb = fn.blocks.size();
         for (uint32_t bi = 0; bi < nb; ++bi) {
@@ -301,7 +192,7 @@ struct Motor {
             auto anadir = [&](ir::IrBlockId d, ir::IrValueId c, bool r) {
                 if (d == ir::IR_NO_BLOCK || d >= nb) return;
                 const uint32_t id = static_cast<uint32_t>(aristas.size());
-                aristas.push_back({bi, d, c, r});
+                aristas.push_back({bi, d, c, r, false});
                 salientes[bi].push_back(id);
                 entrantes[d].push_back(id);
             };
@@ -314,24 +205,52 @@ struct Motor {
                 anadir(t.false_block, c, false);
             } else if (t.op == IrOp::SWITCH_DENSE || t.op == IrOp::MATCH_VARIANT) {
                 /* Cada case afirma un valor concreto del selector, pero eso
-                 * todavia no se modela: haria falta llevar el valor del case en
-                 * la arista.  Mientras tanto no se afirma nada por estas
-                 * aristas -- que es correcto, solo menos preciso. */
+                 * todavia no se modela: haria falta llevar ese valor en la
+                 * arista.  Mientras tanto no se afirma nada por aqui, que es
+                 * correcto aunque menos preciso. */
                 for (uint32_t d : t.jump_targets) anadir(d, ir::IR_NO_VALUE, true);
                 anadir(t.target_block, ir::IR_NO_VALUE, true);
             }
         }
+        marcar_retrocesos();
     }
 
+    /**
+     * @brief Marca las aristas que CIERRAN un ciclo.
+     *
+     * El ensanchamiento no se dispara por "he visitado este bloque muchas
+     * veces" -- eso es una consecuencia, no la causa -- sino por volver a una
+     * cabecera POR LA ARISTA QUE CIERRA EL BUCLE, que es lo unico que puede
+     * hacer crecer un intervalo sin fin.
+     */
+    void marcar_retrocesos() {
+        const LoopFacts lf = compute_loop_facts(fn);
+        auto dentro_de = [&](ir::IrBlockId b, uint32_t lid) {
+            if (lid == LoopFacts::NO_LOOP) return false;
+            uint32_t l = b < lf.loop_id.size() ? lf.loop_id[b] : LoopFacts::NO_LOOP;
+            while (l != LoopFacts::NO_LOOP) { // sube por los bucles que lo contienen
+                if (l == lid) return true;
+                l = l < lf.parent_loop.size() ? lf.parent_loop[l] : LoopFacts::NO_LOOP;
+            }
+            return false;
+        };
+        for (Arista &a : aristas) {
+            if (a.hasta >= lf.is_loop_header.size() || !lf.is_loop_header[a.hasta])
+                continue;
+            const uint32_t lid =
+                a.hasta < lf.loop_id.size() ? lf.loop_id[a.hasta] : LoopFacts::NO_LOOP;
+            a.retroceso = dentro_de(a.desde, lid);
+        }
+    }
+
+    // --- lectura del estado ------------------------------------------------
     ValueRange valor(const Estado &e, ir::IrValueId v) const {
         if (v == ir::IR_NO_VALUE || v >= suelo.size()) return ValueRange::top();
-        if (!e.alcanzable) return ValueRange::bottom();
+        if (!e.alcanzable) return ValueRange::bottom(suelo[v].t);
         if (const ValueRange *r = e.buscar(v)) return *r;
         return suelo[v];
     }
 
-    /// Union de estados respetando el convenio (la ausencia es el suelo) y
-    /// BOTTOM (un camino inalcanzable no aporta valores, no los destruye).
     Estado unir_estados(const Estado &a, const Estado &b) const {
         if (!a.alcanzable) return b;
         if (!b.alcanzable) return a;
@@ -345,6 +264,7 @@ struct Motor {
         return out;
     }
 
+    /// Ensanchamiento del ascenso: por valor, soltando solo el extremo que crece.
     Estado ensanchar_estado(const Estado &viejo, const Estado &nuevo) const {
         if (!viejo.alcanzable || !nuevo.alcanzable) return nuevo;
         Estado out;
@@ -352,19 +272,50 @@ struct Motor {
         for (const auto &p : nuevo.ref) {
             const ValueRange *v = viejo.buscar(p.first);
             const ValueRange base = v ? *v : suelo[p.first];
-            const ValueRange w = base.ensanchar(p.second, suelo[p.first]);
+            const ValueRange w = base.ensanchar(p.second);
             if (!w.es_top()) out.ref.push_back({p.first, w});
         }
         return out;
     }
 
     /**
+     * @brief Estrechamiento del descenso: se queda con lo mejor de los dos.
+     *
+     * Nunca declara inalcanzable un valor: si el corte quedara vacio seria un
+     * fallo del propio motor (el descenso parte de una solucion estable y solo
+     * puede mejorar), y ante eso se conserva lo recien calculado en vez de
+     * afirmar que ahi no se llega.
+     */
+    Estado estrechar_estado(const Estado &viejo, const Estado &nuevo) const {
+        if (!nuevo.alcanzable || !viejo.alcanzable) return nuevo;
+        Estado out;
+        out.alcanzable = true;
+        for (const auto &p : nuevo.ref) {
+            const ValueRange *v = viejo.buscar(p.first);
+            ValueRange r = p.second;
+            if (v) {
+                const ValueRange c = r.cortar(*v);
+                if (!c.es_bottom()) r = c;
+            }
+            if (!r.es_top()) out.ref.push_back({p.first, r});
+        }
+        return out;
+    }
+
+    // --- guardas ------------------------------------------------------------
+    /**
      * @brief Lo que una guarda AFIRMA sobre una arista, en las DOS ramas.
      *
      * Saber que algo no se cumple informa tanto como saber que si.  Y si lo
      * afirmado contradice lo que ya se sabia, el resultado NO es "no se": es
-     * que por esa arista no se pasa -- `x = 20; if (x < 10)` --, y eso se
-     * propaga como BOTTOM.
+     * que por esa arista no se pasa, y eso se propaga como estado inalcanzable.
+     *
+     * La comparacion decide EN QUE DOMINIO se razona, que no tiene por que ser
+     * el del tipo declarado: un `ult` sobre un `i32` compara sin signo.  Los dos
+     * operandos se releen en ese dominio, se restringe alli, y el resultado se
+     * vuelve a leer en el tipo del valor.  Cuando alguna de esas relecturas no
+     * es monotona el dominio responde "todo", y entonces no se afirma nada --
+     * que es exactamente lo que hay que hacer.
      */
     void estrechar_por_guarda(Estado &e, ir::IrValueId cond, bool rama) const {
         if (!e.alcanzable) return;
@@ -388,198 +339,143 @@ struct Motor {
             }
         }
         const ValueRange ra = valor(e, va), rb = valor(e, vb);
+        if (!ra.acotada() || !rb.acotada()) return;
+        if (ra.t.bits != rb.t.bits) return; // el IR no deberia comparar anchos distintos
+
         const bool sin_signo = (o == IrOp::CMP_ULT || o == IrOp::CMP_ULE ||
                                 o == IrOp::CMP_UGT || o == IrOp::CMP_UGE);
-        /* Un valor sin signo de 64 bits por encima de INT64_MAX cae negativo en
-         * esta representacion; ahi el estrechamiento afirmaria al reves. */
-        if (sin_signo && ((ra.acotada() && ra.lo < 0) || (rb.acotada() && rb.lo < 0)))
-            return;
+        const RangeType dc = RangeType::de(ra.t.bits, sin_signo);
+        const ValueRange ca = ra.reinterpretar(dc), cb = rb.reinterpretar(dc);
 
-        auto aplicar = [&](ir::IrValueId v, const ValueRange &r) {
+        // Devuelve el valor restringido, ya releido en el tipo del propio valor.
+        auto aplicar = [&](ir::IrValueId v, const ValueRange &orig,
+                           const ValueRange &restringido) {
+            if (!e.alcanzable) return;
             if (v == ir::IR_NO_VALUE || v >= suelo.size()) return;
-            if (r.es_bottom()) { e.alcanzable = false; e.ref.clear(); return; }
-            if (!r.es_top()) e.poner(v, r);
+            if (restringido.es_bottom()) { e.inalcanzable(); return; }
+            const ValueRange nuevo = orig.cortar(restringido.reinterpretar(orig.t));
+            if (nuevo.es_bottom()) { e.inalcanzable(); return; }
+            if (!nuevo.es_top()) e.poner(v, nuevo);
         };
-        /* Una comparacion SIN SIGNO acota por si sola: `ult(i, 200)` demuestra
-         * `i en [0,199]` venga i de donde venga -- lo dice la comparacion, no lo
-         * que se supiera antes.  Con signo el extremo inferior queda abierto y
-         * un intervalo cerrado no lo representa. */
-        const ValueRange base_a = (sin_signo && !ra.acotada())
-                                      ? ValueRange::acotado(0, INT64_MAX)
-                                      : ra;
-        const ValueRange base_b = (sin_signo && !rb.acotada())
-                                      ? ValueRange::acotado(0, INT64_MAX)
-                                      : rb;
-        int64_t t;
+
         switch (o) {
         case IrOp::CMP_LT: case IrOp::CMP_ULT:
-            if (rb.acotada() && dom::dec(rb.hi, t)) aplicar(va, dom::con_tope(base_a, t));
-            if (ra.acotada() && dom::inc(ra.lo, t)) aplicar(vb, dom::con_piso(base_b, t));
+            aplicar(va, ra, ca.restringir_menor(cb));
+            aplicar(vb, rb, cb.restringir_mayor(ca));
             break;
         case IrOp::CMP_LE: case IrOp::CMP_ULE:
-            if (rb.acotada()) aplicar(va, dom::con_tope(base_a, rb.hi));
-            if (ra.acotada()) aplicar(vb, dom::con_piso(base_b, ra.lo));
+            aplicar(va, ra, ca.restringir_menor_igual(cb));
+            aplicar(vb, rb, cb.restringir_mayor_igual(ca));
             break;
         case IrOp::CMP_GT: case IrOp::CMP_UGT:
-            if (rb.acotada() && dom::inc(rb.lo, t)) aplicar(va, dom::con_piso(base_a, t));
-            if (ra.acotada() && dom::dec(ra.hi, t)) aplicar(vb, dom::con_tope(base_b, t));
+            aplicar(va, ra, ca.restringir_mayor(cb));
+            aplicar(vb, rb, cb.restringir_menor(ca));
             break;
         case IrOp::CMP_GE: case IrOp::CMP_UGE:
-            if (rb.acotada()) aplicar(va, dom::con_piso(base_a, rb.lo));
-            if (ra.acotada()) aplicar(vb, dom::con_tope(base_b, ra.hi));
+            aplicar(va, ra, ca.restringir_mayor_igual(cb));
+            aplicar(vb, rb, cb.restringir_menor_igual(ca));
             break;
         case IrOp::CMP_EQ:
-            aplicar(va, ra.cortar(rb));
-            if (e.alcanzable) aplicar(vb, rb.cortar(ra));
+            aplicar(va, ra, ca.restringir_igual(cb));
+            aplicar(vb, rb, cb.restringir_igual(ca));
+            break;
+        case IrOp::CMP_NE:
+            aplicar(va, ra, ca.restringir_distinto(cb));
+            aplicar(vb, rb, cb.restringir_distinto(ca));
             break;
         default:
-            break; // CMP_NE sobre intervalos no estrecha salvo en los extremos
+            break;
         }
     }
 
-    /// Reinterpretacion entre anchos.  Un `zext` NO conserva el valor si el
-    /// origen era negativo: `i8 -1` extendido a `u32` vale 255, no -1.
-    ValueRange convertir(IrOp o, const ir::IrInstr &in, const ValueRange &src) const {
-        const IrType t_dst = in.type;
-        const IrType t_src = (!in.operands.empty() && in.operands[0] < fn.values.size())
-                                 ? fn.values[in.operands[0]].type
-                                 : IrType::VOID;
-        const int w = bits_de(t_src);
-        const ValueRange piso_dst = del_tipo(t_dst);
-        if (src.es_bottom()) return ValueRange::bottom();
-        switch (o) {
-        case IrOp::SEXT:
-            // Preserva el VALOR; el destino es mas ancho, asi que siempre cabe.
-            return acotar_al_tipo(src, piso_dst);
-        case IrOp::ZEXT:
-            if (src.acotada() && src.lo >= 0) return acotar_al_tipo(src, piso_dst);
-            if (w > 0 && w < 63) // [0, 2^w - 1] cabe en int64
-                return acotar_al_tipo(ValueRange::acotado(0, (int64_t(1) << w) - 1), piso_dst);
-            return piso_dst;
-        case IrOp::TRUNC: {
-            // Solo se conserva si el valor entero cabe ya en el destino; si no,
-            // lo unico afirmable es el ancho del destino.
-            const ValueRange corte = acotar_al_tipo(src, piso_dst);
-            if (src.acotada() && piso_dst.acotada() && src.lo >= piso_dst.lo &&
-                src.hi <= piso_dst.hi)
-                return corte;
-            return piso_dst;
-        }
-        default:
-            return piso_dst;
-        }
-    }
-
-    /**
-     * @brief Encaja un resultado en su tipo sin afirmar de mas ni de menos.
-     *
-     * Si cabe entero, se queda como esta.  Si NO cabe, la operacion envolvio y
-     * el valor real es otro: lo unico afirmable es el rango del tipo.  Nunca
-     * BOTTOM -- que un resultado se salga del tipo no significa que el programa
-     * no pase por ahi.
-     */
-    static ValueRange acotar_al_tipo(const ValueRange &r, const ValueRange &tipo) {
-        if (r.es_bottom()) return r;          // venia de un camino imposible
-        if (!r.acotada()) return tipo;        // no se sabe: lo que diga el tipo
-        if (!tipo.acotada()) return r;        // el tipo no acota (64 bits)
-        if (r.lo >= tipo.lo && r.hi <= tipo.hi) return r;
-        return tipo;
-    }
-
-    /// Transferencia de una instruccion (las PHI se resuelven en IN[B]).
+    // --- transferencia ------------------------------------------------------
+    /// Que operacion del dominio corresponde a cada op del IR.  Nada mas.
     void transferir(const ir::IrInstr &in, Estado &e) const {
         if (!e.alcanzable) return;
         if (in.dst == ir::IR_NO_VALUE || in.dst >= suelo.size()) return;
+        const ValueRange piso = suelo[in.dst];
         auto arg = [&](size_t i) {
             return i < in.operands.size() ? valor(e, in.operands[i])
                                           : ValueRange::top();
         };
-        ValueRange nuevo;
+        ValueRange nuevo = ValueRange::top(piso.t);
         switch (in.op) {
         case IrOp::CONST:
-            nuevo = ValueRange::constante(static_cast<int64_t>(in.imm));
+            nuevo = piso.acotada() ? ValueRange::constante(piso.t, in.imm)
+                                   : ValueRange::top();
             break;
-        case IrOp::MOV:
-            nuevo = arg(0);
-            break;
-        case IrOp::ADD: nuevo = dom::sumar(arg(0), arg(1)); break;
-        case IrOp::SUB: nuevo = dom::restar(arg(0), arg(1)); break;
-        case IrOp::MUL: nuevo = dom::multiplicar(arg(0), arg(1)); break;
-        case IrOp::NEG: nuevo = dom::negar(arg(0)); break;
-        case IrOp::AND: nuevo = dom::conjuncion(arg(0), arg(1)); break;
+        case IrOp::MOV: nuevo = arg(0); break;
+        case IrOp::ADD: nuevo = arg(0).sumar(arg(1)); break;
+        case IrOp::SUB: nuevo = arg(0).restar(arg(1)); break;
+        case IrOp::MUL: nuevo = arg(0).multiplicar(arg(1)); break;
+        case IrOp::NEG: nuevo = arg(0).negar(); break;
+        case IrOp::AND: nuevo = arg(0).conjuncion(arg(1)); break;
         case IrOp::SEXT:
+            if (piso.acotada()) nuevo = arg(0).extender_con_signo(piso.t);
+            break;
         case IrOp::ZEXT:
+            if (piso.acotada()) nuevo = arg(0).extender_sin_signo(piso.t);
+            break;
         case IrOp::TRUNC:
-            nuevo = convertir(in.op, in, arg(0));
+            if (piso.acotada()) nuevo = arg(0).truncar(piso.t);
             break;
-        /* BITCAST reinterpreta BITS, no valores.  Entre un float y un entero el
-         * rango numerico del origen no dice absolutamente nada del destino, asi
-         * que se pierde.
-         *
-         * Pero entre DOS ENTEROS DEL MISMO ANCHO y con el origen no negativo, el
-         * valor SI se conserva: un numero no negativo tiene la misma
-         * representacion leido con signo o sin el.  Y ese caso no es exotico --
-         * es como el IR pasa un indice `u64` a una suma de punteros --, asi que
-         * tirarlo dejaba fuera de comprobacion justo los accesos indexados. */
-        case IrOp::BITCAST: {
-            const ValueRange s = arg(0);
-            const IrType t_s =
-                (!in.operands.empty() && in.operands[0] < fn.values.size())
-                    ? fn.values[in.operands[0]].type
-                    : IrType::VOID;
-            const int b_s = bits_de(t_s), b_d = bits_de(in.type);
-            if (b_s > 0 && b_s == b_d && s.acotada() && s.lo >= 0)
-                nuevo = s;
-            else
-                nuevo = ValueRange::top();
+        /* BITCAST reinterpreta BITS.  Entre un float y un entero el rango del
+         * origen no dice nada del destino; entre dos enteros del mismo ancho los
+         * bits SON el valor -- que es como el IR pasa un indice `u64` a una suma
+         * de punteros, y tirarlo dejaba fuera de comprobacion justo los accesos
+         * indexados.  El dominio decide cual de los dos casos es. */
+        case IrOp::BITCAST:
+            if (piso.acotada()) nuevo = arg(0).reinterpretar(piso.t);
             break;
-        }
         default:
-            nuevo = ValueRange::top();
-            break;
+            break; // op sin modelar: lo que diga el tipo
         }
-        /* El resultado se ACOTA por el tipo, no se corta contra el.
-         *
-         * La diferencia es de correccion, no de precision: la aritmetica del IR
-         * ENVUELVE al ancho del tipo, asi que un `u8` con 250 + 10 vale 4, no
-         * 260.  Cortar [260,260] contra el suelo [0,255] da un intervalo vacio,
-         * o sea BOTTOM, o sea "aqui no se llega" -- afirmando que un punto
-         * perfectamente alcanzable no lo es.  Ese es el peor error que puede
-         * cometer un analisis: no pierde precision, miente.
-         *
-         * Cuando el resultado no cabe en el tipo, lo unico que se puede afirmar
-         * es el propio tipo. */
-        e.poner(in.dst, acotar_al_tipo(nuevo, suelo[in.dst]));
+        e.poner(in.dst, encajar_en(nuevo, piso));
     }
 
-    /// IN[B]: union de lo que llega por cada arista, con las PHI resueltas
-    /// DESDE EL ESTADO DE SU ARISTA.
+    /// Si cabe entero, se queda; si no, lo afirmable es el tipo.  Nunca BOTTOM
+    /// por no caber (BOTTOM solo viene de un camino imposible).
+    static ValueRange encajar_en(const ValueRange &r, const ValueRange &tipo) {
+        if (r.es_bottom()) return r;
+        if (!r.acotada()) return tipo;
+        if (!tipo.acotada()) return r;
+        if (r.t != tipo.t) return tipo;
+        const ValueRange c = r.cortar(tipo);
+        return c.es_bottom() ? tipo : c;
+    }
+
+    // --- ecuaciones ---------------------------------------------------------
     Estado calcular_in(ir::IrBlockId bi) const {
         Estado e;
         for (uint32_t ai : entrantes[bi])
             if (out_arista[ai].alcanzable) e = unir_estados(e, out_arista[ai]);
-        if (bi == 0) e.alcanzable = true; // la entrada siempre se alcanza
+        if (bi == 0) e.alcanzable = true; // a la entrada siempre se llega
         if (!e.alcanzable) return e;
         resolver_phis(bi, e);
         return e;
     }
 
-    /// Cada PHI vale la union de lo que trae cada arista entrante, leido EN esa
-    /// arista.  Es lo que hace el analisis sensible al flujo y no una
-    /// propagacion global por valor.
+    /**
+     * @brief Cada PHI vale la union de lo que trae cada arista, leido EN ella.
+     *
+     * Es lo que hace el analisis sensible al flujo y no una propagacion global:
+     * sin leer el estado DE LA ARISTA, una guarda no puede afectar a la PHI que
+     * depende de ella.
+     *
+     * Si dos aristas vienen del MISMO bloque (un `switch` con dos casos al mismo
+     * destino), las dos aportan y se unen: el argumento de la PHI identifica el
+     * bloque de origen, no la arista, y unir de mas es correcto.
+     */
     void resolver_phis(ir::IrBlockId bi, Estado &e) const {
         for (const ir::IrInstr &in : fn.blocks[bi].instrs) {
             if (in.op != IrOp::PHI) break; // van al principio del bloque
             if (in.dst == ir::IR_NO_VALUE || in.dst >= suelo.size()) continue;
-            ValueRange acc = ValueRange::bottom();
+            ValueRange acc = ValueRange::bottom(suelo[in.dst].t);
             for (const ir::IrPhiArg &pa : in.phi_args)
                 for (uint32_t ai : entrantes[bi])
                     if (aristas[ai].desde == pa.block && out_arista[ai].alcanzable)
                         acc = acc.unir(valor(out_arista[ai], pa.value));
-            /* Mismo criterio que en la transferencia: acotar por el tipo, no
-             * cortar contra el.  Cortar convertiria un valor que no encaja en
-             * "este punto no se alcanza", que es mentir. */
-            e.poner(in.dst, acotar_al_tipo(acc, suelo[in.dst]));
+            e.poner(in.dst, encajar_en(acc, suelo[in.dst]));
         }
     }
 
@@ -590,42 +486,85 @@ struct Motor {
         return e;
     }
 
+    /// Recalcula las aristas de salida y encola los destinos que cambiaron.
+    void propagar(ir::IrBlockId bi, std::deque<ir::IrBlockId> &cola) {
+        const Estado out = calcular_out(bi, in_bloque[bi]);
+        for (uint32_t ai : salientes[bi]) {
+            Estado se = out;
+            if (aristas[ai].cond != ir::IR_NO_VALUE)
+                estrechar_por_guarda(se, aristas[ai].cond, aristas[ai].rama);
+            if (!(se == out_arista[ai])) {
+                out_arista[ai] = std::move(se);
+                cola.push_back(aristas[ai].hasta);
+            }
+        }
+    }
+
+    /// Alguna arista de retroceso que llega aqui esta viva: el bloque cierra un
+    /// ciclo por el que ya se ha vuelto a pasar.
+    bool cierra_ciclo(ir::IrBlockId bi) const {
+        for (uint32_t ai : entrantes[bi])
+            if (aristas[ai].retroceso && out_arista[ai].alcanzable) return true;
+        return false;
+    }
+
     /**
-     * @brief Punto fijo por lista de trabajo.
-     *
-     * @param ensanchar  ASCENSO: se ensancha en las cabeceras (termina).
-     *                   DESCENSO: se reemplaza el estado (recupera precision).
-     * @return true si la lista se vacio sola.
+     * @brief ASCENSO: crece hasta un post-punto-fijo.  Ensancha en los ciclos.
+     * @return true si la lista de trabajo se vacio sola.
      */
-    bool resolver(bool ensanchar, int presupuesto) {
-        if (fn.blocks.empty()) return true;
+    bool resolver_ascenso(int presupuesto) {
         std::deque<ir::IrBlockId> cola;
         cola.push_back(0);
         int pasos = 0;
         while (!cola.empty()) {
             if (++pasos > presupuesto) return false;
+            stats.pasos++;
             const ir::IrBlockId bi = cola.front();
             cola.pop_front();
 
             Estado nuevo_in = calcular_in(bi);
-            if (ensanchar && es_cabecera[bi] && revisitas[bi] >= op.retardo_ensanche)
+            if (cierra_ciclo(bi) && vueltas_ciclo[bi] >= op.retardo_ensanche) {
                 nuevo_in = ensanchar_estado(in_bloque[bi], nuevo_in);
+                stats.ensanches++;
+            }
             if (!(nuevo_in == in_bloque[bi])) {
                 in_bloque[bi] = std::move(nuevo_in);
-                revisitas[bi]++;
+                vueltas_ciclo[bi]++;
+                stats.cambios++;
             }
             if (!in_bloque[bi].alcanzable) continue;
+            propagar(bi, cola);
+        }
+        return true;
+    }
 
-            const Estado out = calcular_out(bi, in_bloque[bi]);
-            for (uint32_t ai : salientes[bi]) {
-                Estado se = out;
-                if (aristas[ai].cond != ir::IR_NO_VALUE)
-                    estrechar_por_guarda(se, aristas[ai].cond, aristas[ai].rama);
-                if (!(se == out_arista[ai])) {
-                    out_arista[ai] = std::move(se);
-                    cola.push_back(aristas[ai].hasta);
-                }
+    /**
+     * @brief DESCENSO: parte de la solucion ensanchada y SOLO estrecha.
+     *
+     * No es el ascenso con una bandera: aqui no se ensancha nunca y cada IN
+     * nuevo se cruza con el anterior, asi que la sucesion es decreciente.  Eso
+     * es lo que recupera la precision que el ensanchamiento solto -- en
+     * `for (i = 0; i < 200)` el ascenso deja `[0, max]` y el descenso lo devuelve
+     * a `[0,199]` -- sin arriesgar la terminacion: un presupuesto agotado aqui
+     * cuesta precision, jamas correccion.
+     */
+    bool resolver_descenso(int presupuesto) {
+        std::deque<ir::IrBlockId> cola;
+        for (uint32_t bi = 0; bi < fn.blocks.size(); ++bi) cola.push_back(bi);
+        int pasos = 0;
+        while (!cola.empty()) {
+            if (++pasos > presupuesto) return false;
+            stats.pasos++;
+            const ir::IrBlockId bi = cola.front();
+            cola.pop_front();
+
+            const Estado nuevo_in = estrechar_estado(in_bloque[bi], calcular_in(bi));
+            if (!(nuevo_in == in_bloque[bi])) {
+                in_bloque[bi] = nuevo_in;
+                stats.estrechados++;
             }
+            if (!in_bloque[bi].alcanzable) continue;
+            propagar(bi, cola);
         }
         return true;
     }
@@ -659,19 +598,19 @@ RangeFacts compute_ranges(const ir::IrFunction &fn, const IrFacts &facts,
     const int presupuesto =
         static_cast<int>(op.pasos_por_bloque * fn.blocks.size() + op.pasos_extra);
 
-    // Ascenso con ensanchamiento en cabeceras: es lo que garantiza terminar.
-    const bool ok = m.resolver(/*ensanchar=*/true, presupuesto);
-    // Descenso sin ensanchar, partiendo de una solucion ya estable: devuelve la
-    // precision que el ensanchamiento solto.
-    bool ok2 = true;
+    const bool ok = m.resolver_ascenso(presupuesto);
     if (ok) {
-        std::fill(m.revisitas.begin(), m.revisitas.end(), 0u);
-        ok2 = m.resolver(/*ensanchar=*/false, presupuesto);
+        const int tope_descenso =
+            static_cast<int>(op.pasos_descenso * fn.blocks.size() + op.pasos_extra);
+        /* Un descenso a medias sigue siendo correcto: toda la cadena
+         * descendente arranca de un post-punto-fijo y solo estrecha, asi que
+         * cualquier parada intermedia sigue conteniendo al punto fijo real.
+         * Por eso no tumba la convergencia; solo se anota. */
+        m.stats.descenso_completo = m.resolver_descenso(tope_descenso);
     }
 
-    out.vueltas = 0;
-    for (uint32_t v : m.revisitas) out.vueltas = std::max(out.vueltas, (int)v);
-    out.convergio = ok && ok2;
+    out.stats = m.stats;
+    out.convergio = ok;
     if (!out.convergio) {
         // Sin punto fijo no hay hecho que sostener: no se afirma nada.
         out.r.assign(facts.def_of.size(), ValueRange::top());

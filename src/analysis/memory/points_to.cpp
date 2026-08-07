@@ -101,10 +101,15 @@ struct Resolver {
         if (!rangos) return e;
         const ValueRange &r = rangos->at(sym);
         if (!r.acotada()) return e; // TOP o BOTTOM: no hay intervalo que sumar
+        /* Un desplazamiento se mide con signo.  Si el rango no cabe en esa
+         * lectura -- un `u64` por encima del mayor entero con signo -- no se
+         * afirma: como offset no significaria lo que parece. */
+        int64_t rlo, rhi;
+        if (!r.vista_con_signo(rlo, rhi)) return e;
         // Con freno: si la suma se desborda, no se afirma el intervalo.
         int64_t lo, hi;
-        if (__builtin_add_overflow(base_off, r.lo, &lo) ||
-            __builtin_add_overflow(base_off, r.hi, &hi))
+        if (__builtin_add_overflow(base_off, rlo, &lo) ||
+            __builtin_add_overflow(base_off, rhi, &hi))
             return e;
         e.off_lo = lo;
         e.off_hi = hi;
