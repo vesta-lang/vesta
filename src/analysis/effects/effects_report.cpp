@@ -132,11 +132,19 @@ static void print_effects(std::ostream &os, const SemanticEffects &e) {
     if (!tags.empty()) os << "    tags       : " << tags << "\n";
 }
 
-void print_effects_report(std::ostream &os, const ir::IrModule &mod) {
+void print_effects_report(std::ostream &os, const ir::IrModule &mod,
+                          Backend backend) {
     EffectAnalysis ea;
+    ea.set_backend(backend);
     const ModuleSummary &ms = ea.module_summary(mod);
 
-    os << "=== Efectos y contratos (modelo unico) ===\n\n";
+    /* Se dice para QUIEN.  Un efecto no es una propiedad del IR a secas: las
+     * ops que dependen del runtime son una instruccion en la maquina virtual y
+     * una llamada a libvesta_rt en nativo, y hay quien directamente no existe
+     * fuera de la VM.  Un informe que no diga desde donde mira invita a leerlo
+     * como si valiera para los tres. */
+    os << "=== Efectos y contratos (modelo unico) -- backend: "
+       << backend_name(backend) << " ===\n\n";
     // Orden estable: el de mod.functions.
     for (const ir::IrFunction &fn : mod.functions) {
         auto it = ms.fns.find(fn.name);
@@ -286,8 +294,9 @@ static void effects_obj_json(std::ostream &os, const SemanticEffects &e) {
     os << "}";
 }
 
-void effects_json(std::ostream &os, const ir::IrModule &mod) {
+void effects_json(std::ostream &os, const ir::IrModule &mod, Backend backend) {
     EffectAnalysis ea;
+    ea.set_backend(backend);
     const ModuleSummary &ms = ea.module_summary(mod);
 
     os << "{\"functions\":[";

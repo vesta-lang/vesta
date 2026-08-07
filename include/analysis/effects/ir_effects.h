@@ -96,26 +96,49 @@ using NativeDecls = std::map<std::string, const ir::IrNativeEffects *>;
 /// Recoge las declaraciones de todos los modulos del programa.
 NativeDecls collect_native_decls(const std::vector<const ir::IrModule *> &mods);
 
+/// Quien va a EJECUTAR el IR que se analiza.
+///
+/// Un efecto no es una propiedad del IR a secas: una misma op baja distinto en
+/// cada backend, y varias solo existen porque hay un runtime detras.  Decir
+/// "esta funcion es pura" sin decir para quien es decir a medias.
+enum class Backend : uint8_t {
+    Vm = 0, ///< Interprete: cada op es una instruccion de la maquina virtual.
+    Jit,    ///< Igual semantica que Vm; el codigo es nativo.
+    Aot,    ///< Nativo standalone: lo que necesita runtime pasa por libvesta_rt.
+};
+
+const char *backend_name(Backend b);
+
+/// Entorno del analisis: lo que hay que saber ADEMAS del IR para responder.
+///
+/// Va agrupado a proposito.  Son los ejes del modelo -- para quien se compila y
+/// que se sabe de lo ajeno --, y crecera; pasarlos sueltos convertiria cada eje
+/// nuevo en un parametro mas en cada firma de la cadena.
+struct EffectEnv {
+    Backend            backend = Backend::Vm;
+    const NativeDecls *decls = nullptr;
+};
+
 /// Efecto LOCAL de UNA instruccion IR (con completeness + motivo).  El asm
 /// lifteado no es especial: llega como ADD/LOAD/STORE/... normales.  INLINE_ASM/
 /// ASM_MICRO (residuo opaco) se analizan aparte con tags.  @p pt es la tabla
 /// points-to COMPARTIDA de la funcion (resuelve punteros a su localizacion);
 /// el llamador la construye UNA vez (compute_points_to) y la reusa por instr.
-/// @p decls (si != null) son los efectos DECLARADOS de las nativas: una CALLN
-/// a una nativa declarada deja de ser opaca y aporta su efecto exacto, con la
-/// memoria resuelta en el sitio de llamada.
+/// @p env dice para QUE BACKEND se analiza y que se ha declarado de las
+/// nativas: una CALLN a una nativa declarada deja de ser opaca y aporta su
+/// efecto exacto, con la memoria resuelta en el sitio de llamada.
 EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
                                       const analysis::IrFacts &facts,
                                       const analysis::PointsTo &pt,
                                       const ir::IrInstr &ins,
-                                      const NativeDecls *decls = nullptr);
+                                      const EffectEnv &env = EffectEnv{});
 
 /// Efecto LOCAL agregado de una funcion completa (fold de sus bloques).  Es el
 /// `.local` del SemanticSummary; el `.closure` (interproc) lo anade la Fase 2.
 /// @p gaps (si != null) acumula las lagunas de precision encontradas.
 EffectAnalysisResult function_local_effects(const ir::IrFunction &fn,
                                             EffectGaps *gaps = nullptr,
-                                            const NativeDecls *decls = nullptr);
+                                            const EffectEnv &env = EffectEnv{});
 
 } // namespace effects
 } // namespace analysis

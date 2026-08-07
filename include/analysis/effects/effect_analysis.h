@@ -84,6 +84,19 @@ public:
     /// opacidad es fundamental).  Se puebla al construir los summaries.
     const EffectGaps &gaps() const { return gaps_; }
 
+    /// Fija para QUE backend se analiza.  Invalida lo ya calculado: cambiar de
+    /// backend cambia las respuestas, y devolver las de antes seria describir
+    /// un programa que no es el que se va a ejecutar.
+    void set_backend(Backend b) {
+        if (env_.backend == b) return;
+        env_.backend = b;
+        local_cache_.clear();
+        summary_cache_.clear();
+        dirty_.clear();
+        module_dirty_ = true;
+    }
+    Backend backend() const { return env_.backend; }
+
     // ---- Invalidacion ----
     /// Un nodo muto: borra su cache local + marca su funcion sucia.
     void invalidate_node(const ir::IrFunction &fn, const ir::IrInstr &ins);
@@ -106,6 +119,10 @@ private:
     /// las declaraciones de los modulos que se le pasan).  Vacio = ninguna
     /// nativa declarada, que es como estaba antes de que se pudiera declarar.
     NativeDecls                                            native_decls_;
+    /// Entorno del analisis (backend + las declaraciones de arriba).  El
+    /// backend lo fija quien pregunta: el mismo IR analizado para el AOT y para
+    /// el interprete no da la misma respuesta.
+    EffectEnv                                              env_;
     bool module_dirty_ = true;
 
     /// Nucleo interprocedural COMPARTIDO: computa el summary (local + cierre por

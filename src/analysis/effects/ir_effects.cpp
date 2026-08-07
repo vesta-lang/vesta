@@ -17,6 +17,7 @@
 #include "ir/ssa_ir.h"
 #include "vx/asm/asm_analyze.h"
 #include "vx/asm/asm_effects.h" // canonicalizar el registro base (por arch)
+#include "aot/aot_analyze.h" // que necesita cada op para correr (backend AOT)
 
 #include <algorithm>
 
@@ -24,6 +25,8 @@ namespace analysis {
 namespace effects {
 
 using ir::IrOp;
+using ::aot::AotOpClass;
+using ::aot::aot_classify_op;
 
 // --------------------------------------------------------------------------
 // Clasificacion de punteros a AbstractLoc -- delega en el RESOLVEDOR COMPARTIDO
@@ -183,6 +186,38 @@ static void add_write(SemanticEffects &e, const AbstractLoc &l) {
     e.mem.writes.add(l);
 }
 
+const char *backend_name(Backend b) {
+    switch (b) {
+    case Backend::Vm: return "interprete";
+    case Backend::Jit: return "JIT";
+    case Backend::Aot: return "AOT nativo";
+    }
+    return "?";
+}
+
+/**
+ * @brief Ajusta el efecto de una op a lo que hace en ESE backend.
+ *
+ * Una op del IR no es una instruccion: es lo que cada backend haga con ella.  En
+ * la VM (y en el JIT, que conserva su semantica) casi todas son una instruccion
+ * de la maquina; en AOT nativo, las que dependen del runtime -- GC, monitores,
+ * strings, dispatch virtual, scheduler -- se materializan como una LLAMADA a
+ * libvesta_rt.  Un `strcat` no "es" una op ahi: es un `call`, con todo lo que
+ * eso implica para quien lo lea (registros, orden, barrera).
+ *
+ * QUE necesita cada op no se decide aqui: lo dice @c aot_classify_op, que es la
+ * tabla que el propio AOT usa para admitir o rechazar un programa.  Un segundo
+ * criterio que dijera lo mismo con otras palabras se desincronizaria a la
+ * primera op nueva.
+ */
+static void aplicar_backend(SemanticEffects &e, ir::IrOp op, Backend b) {
+    if (b != Backend::Aot) return; // Vm y Jit comparten semantica.
+    if (aot_classify_op(op) != AotOpClass::RUNTIME_DEPENDENT) return;
+    /* Solo si no cedia el control ya por si misma (una CALL sigue siendo una
+     * CALL, y un RET no se convierte en llamada por pasar por el runtime). */
+    if (e.control.kind == ControlKind::FallThrough) e.control.kind = ControlKind::Call;
+}
+
 NativeDecls collect_native_decls(const std::vector<const ir::IrModule *> &mods) {
     NativeDecls out;
     for (const ir::IrModule *m : mods) {
@@ -235,7 +270,7 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
                                       const analysis::IrFacts &facts,
                                       const analysis::PointsTo &pt,
                                       const ir::IrInstr &ins,
-                                      const NativeDecls *decls) {
+                                      const EffectEnv &env) {
     (void)facts; // el points-to (pt) ya se construyo con los hechos.
     EffectAnalysisResult r; // neutro Complete por defecto
     SemanticEffects &e = r.effects;
@@ -423,8 +458,8 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
          * declaracion habla de argumentos ("escribe el segundo"), y es aqui --
          * en el sitio de llamada -- donde eso se puede convertir en memoria
          * concreta: el mismo resolvedor que usan LOAD y STORE. */
-        const ir::IrNativeEffects *d = decls ? buscar_decl(*decls, ins.func_name)
-                                             : nullptr;
+        const ir::IrNativeEffects *d =
+            env.decls ? buscar_decl(*env.decls, ins.func_name) : nullptr;
         if (d) aplicar_decl(e, *d, ops, loc);
         break;
     }
@@ -506,6 +541,7 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
         r.unknown_reason = UnknownReason::UnmodeledOp;
         break;
     }
+    aplicar_backend(e, ins.op, env.backend);
     return r;
 }
 
@@ -514,7 +550,7 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
 // --------------------------------------------------------------------------
 EffectAnalysisResult function_local_effects(const ir::IrFunction &fn,
                                             EffectGaps *gaps,
-                                            const NativeDecls *decls) {
+                                            const EffectEnv &env) {
     analysis::IrFacts facts = analysis::build_ir_facts(fn);
     analysis::PointsTo pt = analysis::compute_points_to(fn, facts);
     EffectAnalysisResult acc;
@@ -525,7 +561,7 @@ EffectAnalysisResult function_local_effects(const ir::IrFunction &fn,
         SemanticEffects blk = SemanticEffects::none();
         bool first_instr = true;
         for (const ir::IrInstr &in : b.instrs) {
-            EffectAnalysisResult r = effects_of_instr(fn, facts, pt, in, decls);
+            EffectAnalysisResult r = effects_of_instr(fn, facts, pt, in, env);
             if (uint8_t(r.completeness) > uint8_t(worst)) worst = r.completeness;
             // Registrar la laguna (si la hubo) para el reporte de cobertura.
             if (gaps && r.completeness != AnalysisCompleteness::Complete &&

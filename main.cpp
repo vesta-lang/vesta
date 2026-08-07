@@ -1986,6 +1986,8 @@ int main(int argc, char *argv[]) {
          * `@Target("arch:x86_64 && !os:windows")` se excluye, y lo que ese
          * import traia (en `std.syscall.linux`, la implementacion entera del
          * arch) quedaba sin declarar. */
+        analysis::effects::Backend analyze_backend =
+            analysis::effects::Backend::Vm;
         if (result.count("format") || result.count("aot-arch")) {
             const std::string fmt =
                 result.count("format") ? result["format"].as<std::string>()
@@ -2006,6 +2008,10 @@ int main(int argc, char *argv[]) {
 #endif
             }
             vx::set_aot_condcomp_target(os_obj, es32 ? "x86" : "x86_64");
+            /* Pedir un objetivo nativo tambien cambia QUIEN ejecuta: alli las
+             * ops que dependen del runtime son llamadas a libvesta_rt, y varias
+             * ni existen.  El informe de efectos tiene que hablar de ese. */
+            analyze_backend = analysis::effects::Backend::Aot;
         }
 
         std::ifstream ifs(vx_path);
@@ -2082,7 +2088,9 @@ int main(int argc, char *argv[]) {
         // proyecta contratos + efectos + reporte de lagunas como parte de
         // --analyze (seccion propia, solo en modo texto; el JSON no la incluye
         // todavia).  Es la exposicion del modelo de efectos al usuario.
-        if (!want_json) analysis::effects::print_effects_report(std::cout, amod_post);
+        if (!want_json)
+            analysis::effects::print_effects_report(std::cout, amod_post,
+                                                   analyze_backend);
         auto find_fp = [&](const std::string &name)
             -> const analyze::FunctionFingerprint * {
             for (const auto &f : fps_post)

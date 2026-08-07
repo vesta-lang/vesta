@@ -18,6 +18,7 @@
 #include "ir/ssa_ir.h"
 #include "analysis/effects/ir_effects.h"
 #include "analysis/escape/escape.h"
+#include "aot/aot_analyze.h" // que necesita cada op para correr (backend AOT)
 
 #include <deque>
 #include <unordered_set>
@@ -47,7 +48,7 @@ EffectAnalysisResult EffectAnalysis::local(const ir::IrFunction &fn,
     auto it = local_cache_.find(key);
     if (it != local_cache_.end()) return it->second;
     EffectAnalysisResult r = effects_of_instr(fn, facts_of(fn), points_to_of(fn),
-                                              ins, &native_decls_);
+                                              ins, env_);
     local_cache_.emplace(key, r);
     return r;
 }
@@ -118,11 +119,20 @@ namespace {
 struct CallInfo {
     std::vector<std::string> static_callees;
     bool                     dynamic = false; // CALLVIRT/CALLIND/CALLN/...
+    /// En AOT, una op que depende del runtime ES una llamada a libvesta_rt.
+    /// No es un callee desconocido -- el helper hace exactamente esa op, y su
+    /// efecto ya esta modelado --, pero la funcion deja de ser hoja.
+    bool                     runtime = false;
 };
-CallInfo callees_of(const ir::IrFunction &fn, const NativeDecls &decls) {
+CallInfo callees_of(const ir::IrFunction &fn, const EffectEnv &env) {
     CallInfo ci;
+    const NativeDecls *decls = env.decls;
     for (const ir::IrBlock &b : fn.blocks)
         for (const ir::IrInstr &in : b.instrs) {
+            if (env.backend == Backend::Aot &&
+                ::aot::aot_classify_op(in.op) ==
+                    ::aot::AotOpClass::RUNTIME_DEPENDENT)
+                ci.runtime = true;
             switch (in.op) {
             case ir::IrOp::CALL:
             case ir::IrOp::TAILCALL:
@@ -142,7 +152,7 @@ CallInfo callees_of(const ir::IrFunction &fn, const NativeDecls &decls) {
                  * declarado se aplico en el sitio de llamada, con su memoria
                  * resuelta.  Anadirla como callee ausente la volveria a subir
                  * al efecto maximo y la declaracion no habria servido de nada. */
-                if (decls.count(in.func_name)) break;
+                if (decls && decls->count(in.func_name)) break;
                 if (!in.func_name.empty())
                     ci.static_callees.push_back(in.func_name);
                 else
@@ -227,6 +237,7 @@ ModuleSummary EffectAnalysis::build_summary(
     //    del analisis local (una nativa declarada aporta su efecto exacto ahi
     //    mismo, no una laguna).
     native_decls_ = collect_native_decls(mods);
+    env_.decls = &native_decls_;
     gaps_ = EffectGaps{};
     std::unordered_map<std::string, CallInfo> calls;
     // El efecto/completeness LOCAL se preserva aparte: el cierre (paso 2) se
@@ -234,7 +245,7 @@ ModuleSummary EffectAnalysis::build_summary(
     std::unordered_map<std::string, SemanticEffects>      local_eff;
     std::unordered_map<std::string, AnalysisCompleteness> local_comp;
     for_each_fn([&](const ir::IrFunction &fn) {
-        EffectAnalysisResult loc = function_local_effects(fn, &gaps_, &native_decls_);
+        EffectAnalysisResult loc = function_local_effects(fn, &gaps_, env_);
         FunctionSummary s;
         s.symbol = fn.name;
         s.semantic.local = loc.effects; // CRUDO (lo muestra --analyze "local")
@@ -245,10 +256,11 @@ ModuleSummary EffectAnalysis::build_summary(
         s.semantic.closure = obs;
         s.structural = structural_of(fn);
         s.completeness = loc.completeness;
-        calls[fn.name] = callees_of(fn, native_decls_);
+        calls[fn.name] = callees_of(fn, env_);
         s.interproc.reaches_dynamic_call = calls[fn.name].dynamic;
-        s.interproc.has_calls =
-            calls[fn.name].dynamic || !calls[fn.name].static_callees.empty();
+        s.interproc.has_calls = calls[fn.name].dynamic ||
+                                calls[fn.name].runtime ||
+                                !calls[fn.name].static_callees.empty();
         local_eff[fn.name] = obs; // OBSERVABLE (sin scratch local) = semilla del cierre
         local_comp[fn.name] = loc.completeness;
         out.fns.emplace(fn.name, std::move(s));
