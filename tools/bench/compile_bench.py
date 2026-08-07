@@ -55,6 +55,8 @@ from run_all_benches import (  # noqa: E402
     buscar_compiladores,
     elegir_compilador,
     find_project_root,
+    find_vm_candidates,
+    prompt_choose_vm,
     serie_asentada,
     una_medida,
 )
@@ -64,6 +66,26 @@ from run_all_benches import (  # noqa: E402
 # lo normal, y coger a ciegas el primero del PATH etiquetaria como gcc un
 # numero que produjo clang.
 ELEGIDO = {"c": "gcc", "cpp": "g++"}
+
+# Un color por lenguaje, el MISMO que usa el banco de ejecucion: las dos
+# tandas se leen a menudo una al lado de la otra, y que C sea azul aqui y
+# verde alli obliga a releer la etiqueta en cada fila.
+COLOR_LANG = {
+    "c": C.BLUE,
+    "cpp": C.MAGENTA,
+    "rust": C.RUST,
+    "go": C.TEAL,
+    "java": C.RED,
+    "python": C.CYAN,
+    "vesta": C.GREEN,
+    "vesta_aot": C.ORANGE,
+}
+
+
+def color_de(lang: str) -> str:
+    """Color del lenguaje, o ninguno si no es uno de los conocidos."""
+    return COLOR_LANG.get(lang, "")
+
 
 # ===========================================================================
 # Generador de fuentes: el mismo programa, en siete lenguajes, con el tamano
@@ -1161,32 +1183,77 @@ def _color_ruido(mad_pct: float) -> str:
     return C.RED
 
 
+def cabecera_fase(num: str, titulo: str, explicacion: str) -> None:
+    """Anuncia una fase antes de empezarla, diciendo QUE mide y por que.
+
+    La tabla de resultados ya lo explica, pero llega al final: mientras la
+    fase corre -- y algunas tardan minutos -- lo unico visible era un cursor
+    parado.  Saber que se esta midiendo en ese momento tambien permite parar
+    a tiempo cuando lo que corre no es lo que se queria medir.
+    """
+    print()
+    print(f"{C.BOLD}{C.CYAN}== {num} {titulo}{C.RESET}")
+    print(f"{C.DIM}   {explicacion}{C.RESET}")
+
+
+def barra(hecho: int, total: int, ancho: int = 16) -> str:
+    """Barra de progreso en texto: `[####------] 4/10`.
+
+    Va dentro del rotulo del spinner, que ya se reescribe solo cada 80 ms.
+    Asi la ventana deja de estar quieta y ademas se sabe cuanto queda, que en
+    una tanda de varios minutos es la diferencia entre esperar y no saber si
+    se ha colgado.
+    """
+    if total <= 0:
+        return ""
+    hecho = max(0, min(hecho, total))
+    llenos = int(ancho * hecho / total)
+    return (f"{C.GREEN}[{'#' * llenos}{C.DIM}{'-' * (ancho - llenos)}"
+            f"{C.RESET}{C.GREEN}]{C.RESET} {hecho}/{total}")
+
+
 def imprimir_tabla(titulo: str, filas: list[tuple], suelo: dict,
                    nota: str = "") -> None:
-    """Una fila por (lenguaje, tamano) con estimacion, dispersion y neto."""
+    """Una fila por (lenguaje, tamano) con estimacion, dispersion y neto.
+
+    Las columnas van con su UNIDAD en la cabecera y con nombres que se
+    entienden sin saber estadistica: `p50` no le dice nada a nadie, y un
+    numero suelto no deja claro si son lineas o milisegundos.  Debajo se
+    recuerda en una linea que significa cada una, porque una tabla que hay
+    que ir a buscar a la documentacion se lee mal.
+    """
     print()
     print(f"{C.BOLD}{titulo}{C.RESET}")
     if nota:
         print(f"{C.DIM}  {nota}{C.RESET}")
-    cab = (f"{'lenguaje / tamano':<26}{'p50':>10}{'MAD':>8}{'MAD%':>8}"
-           f"{'min':>9}{'max':>9}{'neto':>10}")
+    cab = (f"{'lenguaje / caso':<26}{'tiempo':>11}{'+-':>9}{'ruido':>8}"
+           f"{'mas rapido':>12}{'mas lento':>12}{'sin arranque':>14}")
     print(f"{C.BOLD}{cab}{C.RESET}")
+    print(f"{C.DIM}  {'':<24}{'(ms)':>11}{'(ms)':>9}{'':>8}{'(ms)':>12}"
+          f"{'(ms)':>12}{'(ms)':>14}{C.RESET}")
     print("-" * len(cab))
     for lang, etiqueta, s in filas:
+        col = color_de(lang)
         if not s:
-            print(f"  {etiqueta:<24}{C.GREY}{'sin dato':>10}{C.RESET}")
+            print(f"  {col}{etiqueta:<24}{C.RESET}"
+                  f"{C.GREY}{'sin dato':>11}{C.RESET}")
             continue
         piso = (suelo.get(lang) or {}).get("p50")
         if piso is None:
-            neto = f"{'-':>10}"
+            neto = f"{'-':>14}"
         elif s["p50"] - piso <= 0:
-            neto = f"{C.DIM}{'~0':>10}{C.RESET}"
+            neto = f"{C.DIM}{'~0':>14}{C.RESET}"
         else:
-            neto = f"{s['p50'] - piso:>10.0f}"
-        print(f"  {etiqueta:<24}{s['p50']:>10.0f}{s['mad']:>8.1f}"
+            neto = f"{s['p50'] - piso:>14.0f}"
+        print(f"  {col}{etiqueta:<24}{C.RESET}{s['p50']:>11.0f}{s['mad']:>9.1f}"
               f"{_color_ruido(s['mad_pct'])}{s['mad_pct']:>7.1f}%{C.RESET}"
-              f"{s['min']:>9.0f}{s['max']:>9.0f}{neto}")
+              f"{s['min']:>12.0f}{s['max']:>12.0f}{neto}")
     print("-" * len(cab))
+    print(f"{C.DIM}  tiempo = valor tipico (mediana de las medidas).  "
+          f"+- = cuanto se desvia una medida corriente.  "
+          f"ruido = ese desvio en porcentaje.\n"
+          f"  sin arranque = el tiempo descontando lo que cuesta arrancar el "
+          f"compilador (la fila 'Suelo' de arriba).{C.RESET}")
 
 
 def imprimir_ganancia(frio: dict, caliente: dict, langs: list[str]) -> None:
@@ -1210,7 +1277,7 @@ def imprimir_ganancia(frio: dict, caliente: dict, langs: list[str]) -> None:
         pares.append((f["p50"] / c["p50"], ln, f["p50"], c["p50"]))
     for g, ln, f, c in sorted(pares, reverse=True):
         col = C.GREEN if g >= 2.0 else (C.YELLOW if g >= 1.2 else C.DIM)
-        print(f"  {ln:<12}{col}{g:>7.2f}x{C.RESET}"
+        print(f"  {color_de(ln)}{ln:<12}{C.RESET}{col}{g:>7.2f}x{C.RESET}"
               f"   frio {f:>8.0f} ms  ->  caliente {c:>8.0f} ms")
 
 
@@ -1250,15 +1317,26 @@ def main() -> int:
     p.add_argument("--timeout", type=float, default=600.0)
     p.add_argument("--langs", type=str, default="",
                    help="lista separada por comas; vacio = todos")
-    p.add_argument("--out-json", type=str, default="")
+    # Con destino por defecto, como el banco de ejecucion: una tanda que tarda
+    # minutos y no deja nada escrito obliga a repetirla para comparar, y a
+    # nadie se le ocurre pedir el fichero ANTES de ver si el resultado
+    # interesa.  Relativo = junto a la raiz del proyecto.
+    p.add_argument("--out-json", type=str, default="bench_compilacion.json")
     args = p.parse_args()
 
     raiz = find_project_root(Path(__file__).resolve())
-    vm = Path(args.vm_path) if args.vm_path else (
-        raiz / "cmake-build-release" / "vm.exe")
-    if not vm.is_file():
-        print(f"{C.RED}[error]{C.RESET} no encuentro el binario vesta: {vm}")
-        return 1
+    # Que instancia de Vesta se mide.  Igual que el banco de ejecucion: si hay
+    # varias construcciones (release, debug, la del PATH) se pregunta, porque
+    # medir la equivocada da numeros que no significan nada y no se nota.  Con
+    # `--vm-path` no se pregunta, y sin terminal interactiva se toma la
+    # primera avisando.
+    if args.vm_path:
+        vm = Path(args.vm_path)
+        if not vm.is_file():
+            print(f"{C.RED}[error]{C.RESET} no encuentro el binario vesta: {vm}")
+            return 1
+    else:
+        vm = prompt_choose_vm(find_vm_candidates(raiz))
 
     # Sin `--langs`, se usan todos los que ESTeN instalados.  Pedidos a mano,
     # se respetan aunque falten: si alguien nombra una herramienta que no
@@ -1302,19 +1380,25 @@ def main() -> int:
     print(f"{C.DIM}  fuentes generadas en {base_tmp}{C.RESET}")
 
     # --- 1. Suelo de cada herramienta: compilar un fichero que no declara nada.
+    cabecera_fase("1", "Suelo del compilador",
+                  "Compila un fichero vacio en cada lenguaje: arrancar el "
+                  "proceso y no hacer nada.  Se descuenta despues de todo lo "
+                  "demas.")
     suelo: dict[str, dict] = {}
-    for ln in langs:
-        nombre, texto = VACIAS[ln]
-        d = base_tmp / ("suelo_" + ln)
-        d.mkdir(parents=True, exist_ok=True)
-        (d / nombre).write_text(texto, encoding="utf-8")
-        cmd = orden_compilar(ln, d / nombre, d / "out", vm)
-        if not cmd:
-            continue
-        env = entorno_cache(ln, dir_cache, entorno_base)
-        s = medir_caliente(cmd, env, d, args.repes, args.timeout)
-        if s:
-            suelo[ln] = s
+    with Spinner("", color=C.DIM) as spin:
+        for i, ln in enumerate(langs):
+            spin.etiqueta(f"suelo  {barra(i, len(langs))}  {C.BOLD}{ln}{C.RESET}")
+            nombre, texto = VACIAS[ln]
+            d = base_tmp / ("suelo_" + ln)
+            d.mkdir(parents=True, exist_ok=True)
+            (d / nombre).write_text(texto, encoding="utf-8")
+            cmd = orden_compilar(ln, d / nombre, d / "out", vm)
+            if not cmd:
+                continue
+            env = entorno_cache(ln, dir_cache, entorno_base)
+            s = medir_caliente(cmd, env, d, args.repes, args.timeout)
+            if s:
+                suelo[ln] = s
     imprimir_tabla(
         "Suelo del compilador (ms): lo que tarda en compilar un fichero vacio",
         [(ln, ln, suelo.get(ln, {})) for ln in langs], {},
@@ -1323,6 +1407,10 @@ def main() -> int:
         "fuentes se generan con tamano.")
 
     # --- 2. Compilacion completa, caliente y en frio, por tamano.
+    cabecera_fase("2", "Compilacion completa, por tamano",
+                  "El mismo programa en un solo fichero, en varios tamanos, "
+                  "con las caches calientes y en frio.  Es la medida base: "
+                  "cuanto cuesta compilar N lineas.")
     filas_cal: list[tuple] = []
     filas_frio: list[tuple] = []
     frio_por_lang: dict[str, dict] = {}
@@ -1353,26 +1441,35 @@ def main() -> int:
             [(c[0], c[1], c[2], c[3], c[4], c[5]) for c in preparados],
             jobs, args.timeout)
 
-    for clave, ln, cmd, env, d, salida, etiqueta, lineas in preparados:
-        n = clave[1]
-        ok, motivo = veredicto.get(clave, (False, "no verificado"))
-        if not ok:
-            print(f"  {C.RED}[no compila]{C.RESET} {etiqueta}: {motivo}")
-            resultados["casos"].append({
-                "lang": ln, "funciones": n, "lineas": lineas,
-                "error": motivo,
-            })
-            continue
-        if True:
+    with Spinner("", color=C.DIM) as spin:
+        for hechos, (clave, ln, cmd, env, d, salida, etiqueta,
+                     lineas) in enumerate(preparados):
+            n = clave[1]
+            spin.etiqueta(f"midiendo  {barra(hechos, len(preparados))}  "
+                          f"{C.BOLD}{etiqueta}{C.RESET}")
+            ok, motivo = veredicto.get(clave, (False, "no verificado"))
+            if not ok:
+                print(f"  {C.RED}[no compila]{C.RESET} {etiqueta}: {motivo}")
+                resultados["casos"].append({
+                    "lang": ln, "funciones": n, "lineas": lineas,
+                    "error": motivo,
+                })
+                continue
             # Una sola medida de tanteo fija cuantas repeticiones merece la
             # pena: repetir cinco veces algo que tarda cinco segundos son
             # veinticinco segundos para afinar un numero que ya se conoce.
             tanteo = una_medida(cmd, env, args.timeout, d)
             reps = repeticiones(args, tanteo if tanteo > 0 else 0.0)
 
+            spin.etiqueta(f"midiendo  {barra(hechos, len(preparados))}  "
+                          f"{C.BOLD}{etiqueta}{C.RESET} {C.DIM}caliente"
+                          f"{C.RESET}")
             s_cal = medir_caliente(cmd, env, d, reps, args.timeout)
             filas_cal.append((ln, etiqueta, s_cal))
 
+            spin.etiqueta(f"midiendo  {barra(hechos, len(preparados))}  "
+                          f"{C.BOLD}{etiqueta}{C.RESET} {C.DIM}en frio"
+                          f"{C.RESET}")
             s_frio = medir_frio(cmd, env, d, reps, args.timeout, ln,
                                 dir_cache)
             filas_frio.append((ln, etiqueta, s_frio))
@@ -1387,7 +1484,7 @@ def main() -> int:
 
     imprimir_tabla("Compilacion completa, con las caches CALIENTES (ms)",
                    filas_cal, suelo,
-                   "`neto` descuenta el suelo: es el tiempo que se va en "
+                   "`sin arranque` descuenta el suelo: es el tiempo que se va en "
                    "compilar de verdad.")
     imprimir_tabla("Compilacion completa EN FRIO (ms)", filas_frio, suelo,
                    "Sin ninguna cache.  Cada medida vacia la cache antes, asi "
@@ -1397,6 +1494,11 @@ def main() -> int:
     # --- 2b. El MISMO programa repartido en varios ficheros.
     # Se compara contra la fila de un solo fichero del mismo tamano: mismo
     # trabajo, otra forma de presentarselo al compilador.
+    cabecera_fase("2b", "Un proyecto, no un fichero",
+                  "El mismo codigo repartido en varios modulos, y que cuesta "
+                  "reconstruirlo segun QUE cambie: nada, un comentario, un "
+                  "cuerpo, una interfaz.  La escalera entre esas filas es la "
+                  "granularidad de invalidacion del compilador.")
     filas_multi: list[tuple] = []
     filas_inc: list[tuple] = []
     prep_multi = []
@@ -1418,8 +1520,12 @@ def main() -> int:
             [(c[0], c[1], c[2], c[3], c[4], c[5]) for c in prep_multi],
             jobs, args.timeout)
 
-    for clave, ln, cmd, env, d, salida, etiqueta, ficheros in prep_multi:
+    with Spinner("", color=C.DIM) as spin:
+      for hechos, (clave, ln, cmd, env, d, salida, etiqueta,
+                   ficheros) in enumerate(prep_multi):
             n = clave[1]
+            spin.etiqueta(f"multi-fichero  {barra(hechos, len(prep_multi))}  "
+                          f"{C.BOLD}{etiqueta}{C.RESET}")
             ok, motivo = vered_multi.get(clave, (False, "no verificado"))
             if not ok:
                 print(f"  {C.RED}[no compila]{C.RESET} {etiqueta}: {motivo}")
@@ -1496,13 +1602,20 @@ def main() -> int:
     #                  el coste FIJO por modulo: lo que paga un proyecto muy
     #                  dividido solo por estarlo.
     if args.escalado:
+        cabecera_fase("2bis", "Escalado",
+                      "El coste contra el tamano del programa, y contra el "
+                      "numero de modulos a tamano total constante.  Un solo "
+                      "punto no distingue lineal de superlineal; esta fase "
+                      "va imprimiendo cada fila segun la mide.")
         print()
         print(f"{C.BOLD}Escalado por tamano (un fichero){C.RESET}")
         print(f"{C.DIM}  Si el coste por linea sube con el tamano, hay algo "
               f"superlineal.{C.RESET}")
-        cab = (f"{'lenguaje':<12}{'lineas':>9}{'ms':>10}{'ms/kloc':>10}"
+        cab = (f"{'lenguaje':<12}{'lineas':>9}{'tiempo':>10}{'por kloc':>10}"
                f"{'vs el anterior':>16}")
         print(f"{C.BOLD}{cab}{C.RESET}")
+        print(f"{C.DIM}  {'':<10}{'(codigo)':>9}{'(ms)':>10}{'(ms)':>10}"
+              f"{'(veces)':>16}{C.RESET}")
         print("-" * len(cab))
         escala = [200, 800, 3200]
         for ln in langs:
@@ -1529,8 +1642,8 @@ def main() -> int:
                 neto = max(0.001, s["p50"] - piso)
                 por_kloc = 1000.0 * neto / max(1, lineas)
                 rel = ("%6.2fx" % (neto / previo)) if previo else "     -"
-                print(f"  {ln:<10}{lineas:>9}{s['p50']:>10.0f}"
-                      f"{por_kloc:>10.1f}{rel:>16}")
+                print(f"  {color_de(ln)}{ln:<10}{C.RESET}{lineas:>9}"
+                      f"{s['p50']:>10.0f}{por_kloc:>10.1f}{rel:>16}")
                 resultados["casos"].append({
                     "lang": ln, "escalado": "tamano", "lineas": lineas,
                     "stats": s, "neto": neto})
@@ -1572,6 +1685,12 @@ def main() -> int:
     # dependencias.  El cambio se hace SIEMPRE en el modulo del que cuelgan los
     # demas (m0), que es el unico sitio desde donde se puede observar si la
     # invalidacion se propaga o se corta.
+    cabecera_fase("2c", "Topologia de dependencias",
+                  "La misma cantidad de codigo con otra FORMA: ancha, en "
+                  "cadena y en diamante.  El cambio se hace siempre en el "
+                  "modulo del que cuelgan los demas, que es el unico sitio "
+                  "desde donde se ve si la invalidacion se propaga o se "
+                  "corta.")
     filas_topo: list[tuple] = []
     filas_cuenta: list[tuple] = []
     n_topo = tamanos[-1]
@@ -1593,7 +1712,11 @@ def main() -> int:
             [(c[0], c[1], c[2], c[3], c[4], c[5]) for c in prep_topo],
             jobs, args.timeout)
 
-    for clave, ln, cmd, env, d, salida, forma, ficheros in prep_topo:
+    with Spinner("", color=C.DIM) as spin:
+      for hechos, (clave, ln, cmd, env, d, salida, forma,
+                   ficheros) in enumerate(prep_topo):
+            spin.etiqueta(f"topologia  {barra(hechos, len(prep_topo))}  "
+                          f"{C.BOLD}{forma} / {ln}{C.RESET}")
             ok, motivo = vered_topo.get(clave, (False, "no verificado"))
             if not ok:
                 print(f"  {C.RED}[no compila]{C.RESET} topologia {forma}/{ln}: "
@@ -1651,15 +1774,23 @@ def main() -> int:
         cab3 = (f"{'topologia / cambio':<40}{'rehechos':>10}"
                 f"{'reutilizados':>14}{'nuevos':>9}")
         print(f"{C.BOLD}{cab3}{C.RESET}")
+        print(f"{C.DIM}  {'':<38}{'(ficheros)':>10}{'(ficheros)':>14}"
+              f"{'(ficheros)':>9}{C.RESET}")
         print("-" * len(cab3))
         for forma, ln, titulo, (re_, reu, nue) in filas_cuenta:
             col = C.GREEN if reu > re_ else C.YELLOW
-            print(f"  {forma + '  ' + ln + '  ' + titulo:<38}"
+            etq = forma + "  " + ln + "  " + titulo
+            print(f"  {color_de(ln)}{etq:<38}{C.RESET}"
                   f"{col}{re_:>10}{C.RESET}{reu:>14}{nue:>9}")
         print("-" * len(cab3))
 
     # --- 2d. QUE codigo, no cuanto.  Cada familia pega en una parte distinta
     # del compilador, y son justo las que el generador anodino no toca.
+    cabecera_fase("2d", "Familias de codigo",
+                  "QUE codigo, no cuanto: genericos, comptime, anidamiento y "
+                  "tipos.  Cada una pega en una parte distinta del "
+                  "compilador, y son justo las que el generador anodino de "
+                  "las fases anteriores no toca.")
     filas_fam: list[tuple] = []
     prep_fam = []
     for familia, porlang in FAMILIAS.items():
@@ -1688,8 +1819,12 @@ def main() -> int:
             [(c[0], c[1], c[2], c[3], c[4], c[5]) for c in prep_fam],
             jobs, args.timeout)
 
-    for clave, ln, cmd, env, d, salida, familia, cuenta, n_lineas in prep_fam:
+    with Spinner("", color=C.DIM) as spin:
+      for hechos, (clave, ln, cmd, env, d, salida, familia, cuenta,
+                   n_lineas) in enumerate(prep_fam):
             etiqueta = "%-12s %s" % (familia, ln)
+            spin.etiqueta(f"familias  {barra(hechos, len(prep_fam))}  "
+                          f"{C.BOLD}{familia} / {ln}{C.RESET}")
             ok, motivo = vered_fam.get(clave, (False, "no verificado"))
             if not ok:
                 print(f"  {C.RED}[no compila]{C.RESET} {etiqueta}: {motivo}")
@@ -1716,8 +1851,19 @@ def main() -> int:
 
     # --- 2e. Familia x REGIMEN.  Un numero por familia dice cuanto cuesta;
     # el desglose dice DONDE se va y que parte se puede evitar tras un cambio.
+    cabecera_fase("2e", "Familia por regimen",
+                  "La misma familia construida de cero, sin cambios, tras "
+                  "tocar un cuerpo y tras tocar una interfaz.  La distancia "
+                  "entre cuerpo e interfaz es lo que la frontera de modulo "
+                  "esta cortando en esa familia.")
     filas_fr: list[tuple] = []
-    for familia in ("genericos", "comptime", "anidamiento", "tipos"):
+    _familias_fr = ("genericos", "comptime", "anidamiento", "tipos")
+    _spin_fr = Spinner("", color=C.DIM)
+    _spin_fr.__enter__()
+    for _i_fr, familia in enumerate(_familias_fr):
+        _spin_fr.etiqueta(f"familia x regimen  "
+                          f"{barra(_i_fr, len(_familias_fr))}  "
+                          f"{C.BOLD}{familia}{C.RESET}")
         cuenta = {"genericos": 150, "comptime": 60,
                   "anidamiento": 500, "tipos": 400}[familia]
         for ln in ("vesta", "vesta_aot"):
@@ -1765,6 +1911,7 @@ def main() -> int:
                 resultados["casos"].append({
                     "lang": ln, "familia": familia, "regimen": nombre_caso,
                     "cuenta": cuenta, "stats": s_r})
+    _spin_fr.__exit__()
     if filas_fr:
         imprimir_tabla(
             "Familia x regimen: donde se va el tiempo y que se puede evitar (ms)",
@@ -1776,9 +1923,18 @@ def main() -> int:
             "igual en todas.")
 
     # --- 3. Realimentacion: cuanto tarda en salir el diagnostico.
+    cabecera_fase("3", "Realimentacion",
+                  "Solo analizar y diagnosticar, sin generar codigo ni "
+                  "enlazar: lo que tarda en decirte si tu codigo esta bien, "
+                  "que es lo que se espera mientras se edita.")
     filas_chk: list[tuple] = []
-    for n in tamanos:
-        for ln in langs:
+    with Spinner("", color=C.DIM) as spin:
+        for i_chk, (n, ln) in enumerate(
+                [(n, ln) for n in tamanos for ln in langs]):
+            spin.etiqueta(
+                f"realimentacion  "
+                f"{barra(i_chk, len(tamanos) * len(langs))}  "
+                f"{C.BOLD}{ln}{C.RESET}")
             nombre, gen = GENERADORES[ln]
             d = base_tmp / ("gen_%s_%d" % (ln, n))
             fuente = d / nombre
@@ -1802,11 +1958,16 @@ def main() -> int:
 
     # Graficas: las dos curvas que en tabla se leen mal.  Van al lado del
     # JSON, no en el directorio del arnes de ejecucion: son otro banco.
+    # Ruta absoluta o, si es relativa, junto a la raiz del proyecto: lanzar el
+    # banco desde otro directorio no deberia dejar el JSON en un sitio
+    # distinto cada vez.
+    ruta_json = (Path(args.out_json) if os.path.isabs(args.out_json)
+                 else raiz / args.out_json)
+
     if not args.sin_graficas:
         try:
             import plots  # noqa: E402
-            destino = (Path(args.out_json).parent if args.out_json
-                       else raiz) / "bench_plots_compilacion"
+            destino = ruta_json.parent / "bench_plots_compilacion"
             hechas = plots.plot_compilacion(resultados, destino)
             if hechas:
                 print()
@@ -1816,11 +1977,10 @@ def main() -> int:
         except Exception as e:  # noqa: BLE001
             print(f"{C.YELLOW}[aviso]{C.RESET} no pude generar graficas: {e}")
 
-    if args.out_json:
-        Path(args.out_json).write_text(json.dumps(resultados, indent=2),
-                                       encoding="utf-8")
-        print()
-        print(f"{C.GREEN}[ok]{C.RESET} JSON: {args.out_json}")
+    ruta_json.parent.mkdir(parents=True, exist_ok=True)
+    ruta_json.write_text(json.dumps(resultados, indent=2), encoding="utf-8")
+    print()
+    print(f"{C.GREEN}[ok]{C.RESET} JSON: {ruta_json}")
     return 0
 
 

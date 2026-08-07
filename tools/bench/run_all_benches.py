@@ -161,10 +161,15 @@ def find_project_root(start: Path) -> Path:
 def find_vm_candidates(project_root: Path) -> list[tuple[str, Path]]:
     candidates: list[tuple[str, Path]] = []
     seen: set[Path] = set()
+    # Las construcciones OPTIMIZADAS primero: la primera es la opcion por
+    # defecto, y medir una construccion de depuracion da numeros que no
+    # significan nada -- justo lo que preguntar pretende evitar.  Las de
+    # depuracion siguen apareciendo en la lista para quien las quiera a
+    # proposito, pero al final.
     build_patterns = [
-        "cmake-build-windows", "cmake-build-debug", "cmake-build-release",
-        "cmake-build-windows-debug", "cmake-build-windows-release",
-        "build", "build-debug", "build-release", "out",
+        "cmake-build-release", "cmake-build-windows-release",
+        "cmake-build-windows", "build-release", "build", "out",
+        "cmake-build-debug", "cmake-build-windows-debug", "build-debug",
     ]
     for sub in build_patterns:
         for name in ("vm.exe", "vm"):
@@ -205,7 +210,19 @@ def prompt_choose_vm(candidates: list[tuple[str, Path]]) -> Path:
         try:
             choice = input(f"{C.CYAN}Elige [0-{len(candidates)-1}] "
                            f"(default 0): {C.RESET}").strip()
-        except (EOFError, KeyboardInterrupt):
+        except EOFError:
+            # No hay nadie al otro lado (lanzado desde un arnes, con la
+            # entrada cerrada o redirigida).  Eso no es un motivo para no
+            # medir: se toma el defecto y se avisa de cual fue.  Antes moria
+            # aqui, asi que el banco no se podia automatizar sin pasar la
+            # ruta a mano.
+            print()
+            desc, path = candidates[0]
+            warn(f"sin respuesta -- default a [0]: {desc} "
+                 f"{C.DIM}{path}{C.RESET}")
+            return path
+        except KeyboardInterrupt:
+            # Esto SI es una decision: alguien lo ha cortado a proposito.
             print()
             sys.exit(1)
         if not choice:
@@ -969,6 +986,11 @@ class Spinner:
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._start = 0.0
+        # Sin terminal no hay nada que animar: reescribir la linea y borrarla
+        # solo tiene sentido sobre una consola.  Redirigido a un fichero, cada
+        # cuadro se queda escrito y el resultado son miles de lineas de basura
+        # entre las tablas.
+        self._activo = sys.stdout.isatty()
 
     def etiqueta(self, label: str, color: Optional[str] = None) -> None:
         """Cambia el texto SIN parar el spinner.
@@ -998,12 +1020,16 @@ class Spinner:
 
     def __enter__(self):
         self._start = time.perf_counter()
+        if not self._activo:
+            return self
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
         return self
 
     def __exit__(self, *_):
         self._stop.set()
+        if not self._activo:
+            return
         if self._thread:
             self._thread.join(timeout=0.5)
         sys.stdout.write("\r\033[K")
