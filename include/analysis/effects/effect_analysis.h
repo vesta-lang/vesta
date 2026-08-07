@@ -33,6 +33,7 @@
 #include "analysis/effects/ir_effects.h"
 #include "analysis/effects/summary.h"
 #include "analysis/facts/ir_facts.h"
+#include "analysis/facts/value_range.h"
 #include "analysis/manager/analysis_manager.h"
 
 #include <cstdint>
@@ -145,6 +146,9 @@ private:
     /// Tabla points-to cacheada por funcion (depende de IRFacts; el manager
     /// invalida en cascada cuando la funcion muta).
     const PointsTo &points_to_of(const ir::IrFunction &fn);
+    /// Rangos de valor cacheados por funcion (los consume points-to y el
+    /// comprobador de limites).
+    const RangeFacts &ranges_of(const ir::IrFunction &fn);
 
     FunctionSummary compute_summary(const ir::IrModule &mod,
                                     const ir::IrFunction &fn);

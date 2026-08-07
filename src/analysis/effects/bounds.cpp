@@ -131,14 +131,19 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod) {
                                                      : ir::IR_NO_VALUE);
                 if (vptr == ir::IR_NO_VALUE) continue;
                 const PointsToEntry &pe = pt.at(vptr);
-                if (pe.off_exact || pe.off_sym == ir::IR_NO_VALUE) continue;
+                if (pe.off_exact || !pe.off_rango) continue;
                 if (pe.kind != AbstractLoc::Kind::Stack &&
                     pe.kind != AbstractLoc::Kind::Heap)
                     continue;
                 const analysis::RegionExtent &ex2 = pt.extent_of(pe.root);
                 if (!ex2.constante()) continue;
-                const ValueRange &ri = rangos.at(pe.off_sym);
-                if (!ri.conocido) continue;
+                /* El intervalo lo trae ya la propia entrada: el resolvedor lo
+                 * compuso al derivar la direccion, sumando el offset constante
+                 * que llevara la base.  Aqui solo se juzga. */
+                ValueRange ri;
+                ri.conocido = true;
+                ri.lo = pe.off_lo;
+                ri.hi = pe.off_hi;
                 const int32_t w = analysis::memory_access_size(in.type);
                 if (w <= 0) continue;
                 // Entero fuera: o todo el intervalo cae PASADO el final del

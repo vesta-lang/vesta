@@ -42,11 +42,12 @@ bool const_val_of(const ir::IrFunction &fn, ir::IrValueId id, int64_t &out) {
 struct Resolver {
     const ir::IrFunction &fn;
     const IrFacts        &facts;
+    const RangeFacts     *rangos = nullptr;
     std::vector<PointsToEntry> memo;
     std::vector<uint8_t>       state; // 0=nuevo, 1=en-curso, 2=hecho
 
-    Resolver(const ir::IrFunction &f, const IrFacts &fc)
-        : fn(f), facts(fc) {
+    Resolver(const ir::IrFunction &f, const IrFacts &fc, const RangeFacts *rg)
+        : fn(f), facts(fc), rangos(rg) {
         const size_t n = facts.def_of.size();
         memo.assign(n, PointsToEntry{});
         state.assign(n, 0);
@@ -78,6 +79,32 @@ struct Resolver {
         base.off_exact = false;
         base.off_sym = sym;
         return base;
+    }
+
+    /**
+     * @brief Como @c inexact, pero ACOTANDO el desplazamiento con su rango.
+     *
+     * `buf + i` no tiene offset constante; con el rango de `i` si tiene
+     * INTERVALO, y un intervalo ya es una respuesta: dice entre que dos
+     * posiciones cae el acceso.  Sin rangos se comporta igual que antes.
+     *
+     * Se suma el offset constante que ya llevara la base (`(buf+8) + i`), que
+     * es lo que compone la geometria de una vista.
+     */
+    PointsToEntry con_rango(PointsToEntry base, ir::IrValueId sym) {
+        const int64_t base_off = base.off;
+        PointsToEntry e = inexact(base, sym);
+        if (!rangos) return e;
+        const ValueRange &r = rangos->at(sym);
+        if (!r.conocido) return e;
+        // Con freno: si la suma se desborda, no se afirma el intervalo.
+        const int64_t lo = base_off + r.lo, hi = base_off + r.hi;
+        if ((r.lo > 0 && lo < base_off) || (r.hi > 0 && hi < base_off))
+            return e;
+        e.off_lo = lo;
+        e.off_hi = hi;
+        e.off_rango = true;
+        return e;
     }
 
     /// PHI que se esta resolviendo ahora mismo.  Volver a ella por un arg no es
@@ -191,8 +218,8 @@ struct Resolver {
                 const PointsToEntry b = resolve(d->operands[1]);
                 const bool a_raiz = a.kind != K::Unknown && a.kind != K::None;
                 const bool b_raiz = b.kind != K::Unknown && b.kind != K::None;
-                if (a_raiz && !b_raiz) return inexact(a, d->operands[1]);
-                if (b_raiz && !a_raiz) return inexact(b, d->operands[0]);
+                if (a_raiz && !b_raiz) return con_rango(a, d->operands[1]);
+                if (b_raiz && !a_raiz) return con_rango(b, d->operands[0]);
             }
             return unknown();
         }
@@ -285,8 +312,9 @@ static RegionExtent extension_de(const ir::IrInstr &d, const IrFacts &facts) {
     return ex;
 }
 
-PointsTo compute_points_to(const ir::IrFunction &fn, const IrFacts &facts) {
-    Resolver r(fn, facts);
+PointsTo compute_points_to(const ir::IrFunction &fn, const IrFacts &facts,
+                           const RangeFacts *rangos) {
+    Resolver r(fn, facts, rangos);
     PointsTo out;
     const size_t n = facts.def_of.size();
     out.loc.assign(n, PointsToEntry{});

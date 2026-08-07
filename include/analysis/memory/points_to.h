@@ -25,6 +25,7 @@
 
 #include "analysis/effects/effects.h" // AbstractLoc
 #include "analysis/facts/ir_facts.h"  // IrFacts (def_of, param_of)
+#include "analysis/facts/value_range.h" // acotar el desplazamiento variable
 
 #include <cstdint>
 #include <vector>
@@ -46,13 +47,25 @@ struct PointsToEntry {
      * @brief Valor que aporta la parte NO CONSTANTE del desplazamiento.
      *
      * Un `buf[i]` no tiene offset constante, pero eso no es lo mismo que no
-     * saber nada: se sabe QUE valor lo decide.  Guardarlo permite acotarlo
-     * despues con su rango, que es la diferencia entre callarse ante cualquier
-     * acceso indexado y poder juzgarlo.
+     * saber nada: se sabe QUE valor lo decide.
      *
      * @c IR_NO_VALUE (0xFFFFFFFF) = el desplazamiento no viene de un solo valor.
      */
     ir::IrValueId off_sym = 0xFFFFFFFFu;
+    /**
+     * @brief ENTRE QUE DOS desplazamientos esta, cuando no es constante.
+     *
+     * Un valor simbolico suelto solo sirve si quien pregunta sabe acotarlo; el
+     * intervalo ya es la respuesta.  Y hace falta el INTERVALO, no un extremo:
+     * para afirmar que un acceso se sale tiene que salirse entero, porque un
+     * rango es una sobre-aproximacion.
+     *
+     * Es ademas lo que hara comprobables las vistas dinamicas, cuya geometria
+     * se compone de sumas de cotas.
+     */
+    int64_t off_lo = 0;
+    int64_t off_hi = 0;
+    bool    off_rango = false; ///< true = @c off_lo/off_hi valen.
 };
 
 /**
@@ -108,7 +121,13 @@ struct PointsTo {
 
 /// Construye la tabla points-to de @p fn usando los hechos @p facts (def-use +
 /// param-of).  Resolucion recursiva con memoizacion y guardia de ciclos (PHI).
-PointsTo compute_points_to(const ir::IrFunction &fn, const IrFacts &facts);
+///
+/// @p rangos (opcional) permite ACOTAR el desplazamiento cuando no es constante:
+/// sin ellos un `buf[i]` solo puede decir "en algun sitio de buf"; con ellos
+/// dice entre que dos posiciones.  Es informacion, no otra politica: sin rangos
+/// la tabla sale exactamente igual que antes.
+PointsTo compute_points_to(const ir::IrFunction &fn, const IrFacts &facts,
+                           const RangeFacts *rangos = nullptr);
 
 /// Marcador de analisis para el AnalysisManager (cachea la tabla points-to por
 /// funcion).  Depende de IRFactsAnalysis.  El resultado (PointsTo) se invalida

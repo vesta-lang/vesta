@@ -35,11 +35,25 @@ const IrFacts &EffectAnalysis::facts_of(const ir::IrFunction &fn) {
         fn.name, [&]() { return build_ir_facts(fn); });
 }
 
+const RangeFacts &EffectAnalysis::ranges_of(const ir::IrFunction &fn) {
+    // Otro hecho fundacional cacheado por el gestor: un productor, muchos
+    // consumidores (points-to lo usa para acotar; el comprobador de limites,
+    // para juzgar).
+    return facts_mgr_.get_or_compute<RangeAnalysis, RangeFacts>(
+        fn.name, [&]() { return compute_ranges(fn, facts_of(fn)); });
+}
+
 const PointsTo &EffectAnalysis::points_to_of(const ir::IrFunction &fn) {
     // Tabla points-to cacheada; su factory consume facts_of (via el manager),
     // registrando la dependencia PointsTo -> IRFacts para la invalidacion.
-    return facts_mgr_.get_or_compute<PointsToAnalysis, PointsTo>(
-        fn.name, [&]() { return compute_points_to(fn, facts_of(fn)); });
+    /* Con los RANGOS: un desplazamiento variable deja de ser "en algun sitio"
+     * y pasa a ser un intervalo.  Se piden por el mismo gestor, asi que se
+     * calculan una vez por funcion y los comparte quien los necesite. */
+    return facts_mgr_.get_or_compute<PointsToAnalysis, PointsTo>(fn.name, [&]() {
+        const IrFacts &f = facts_of(fn);
+        const RangeFacts &rg = ranges_of(fn);
+        return compute_points_to(fn, f, &rg);
+    });
 }
 
 EffectAnalysisResult EffectAnalysis::local(const ir::IrFunction &fn,
