@@ -667,6 +667,16 @@ AggregateFactsMap observar_con_cache(const ir::IrModule &mod,
             observar(mod, fn, facts, pt, in.dst, o, kProfundidadFrontera,
                      RelacionAcceso::EnPropietario, u_raiz, cache);
 
+            /* Sin un solo acceso observado no hay evidencia de componentes: una
+             * reserva de 32 bytes que nadie toca no dice nada, y afirmar que es
+             * "un valor con componentes" por su tamano seria clasificar por la
+             * representacion -- justo lo que este dominio no hace.  Es la misma
+             * regla que ya se aplicaba a los parametros. */
+            bool hay_evidencia = false;
+            for (const AccesoComponente &ac : o.accesos)
+                if (ac.offset_sabido) { hay_evidencia = true; break; }
+            if (!hay_evidencia) continue;
+
             AggregateFacts a;
             a.ancla = in.dst;
             /* La identidad que cruza el pipeline: donde nace el valor en el
