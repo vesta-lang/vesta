@@ -1568,6 +1568,7 @@ def main() -> int:
     filas_topo: list[tuple] = []
     filas_cuenta: list[tuple] = []
     n_topo = tamanos[-1]
+    prep_topo = []
     for forma in ("ancha", "cadena", "diamante"):
         for ln in langs:
             d = base_tmp / ("topo_%s_%s" % (ln, forma))
@@ -1578,8 +1579,15 @@ def main() -> int:
             if not cmd:
                 continue
             env = entorno_cache(ln, dir_cache, entorno_base)
-            ok, motivo = compila_de_verdad(ln, cmd, env, d, d / "out",
-                                           args.timeout)
+            prep_topo.append(((forma, ln), ln, cmd, env, d, d / "out",
+                              forma, ficheros))
+    with Spinner("verificando las topologias", color=C.DIM):
+        vered_topo = verificar_en_paralelo(
+            [(c[0], c[1], c[2], c[3], c[4], c[5]) for c in prep_topo],
+            jobs, args.timeout)
+
+    for clave, ln, cmd, env, d, salida, forma, ficheros in prep_topo:
+            ok, motivo = vered_topo.get(clave, (False, "no verificado"))
             if not ok:
                 print(f"  {C.RED}[no compila]{C.RESET} topologia {forma}/{ln}: "
                       f"{motivo}")
