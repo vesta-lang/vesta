@@ -2723,9 +2723,11 @@ modes3_case("asmjs", "asm flags-as-SSA con SF: js/jns/sets (bit de signo del res
 
 @case("effects_report")
 def _(ctx):
-    """Modelo unico de efectos: --analyze --effects deriva contratos + reporte
-    de lagunas.  factorial es puro/determinista sin lagunas; un programa con
-    reflexion/FFI reporta opacidad fundamental (ffi-nativo)."""
+    """Modelo unico de efectos: --analyze --effects deriva contratos + mapa de
+    COBERTURA.  factorial es puro/determinista y sus efectos se infieren
+    enteros; un programa con reflexion/FFI reporta opacidad fundamental
+    (ffi-nativo), que no es imprecision sino una region que no se puede
+    demostrar desde aqui."""
     # (1) factorial: puro, sin lagunas.  --effects es flag de primera clase.
     code, log = ctx.run([VM_EXE, "--analyze", ctx.src("01_factorial.vx")])
     if code != 0:
@@ -2734,10 +2736,10 @@ def _(ctx):
     if "Contratos : pure" not in log:
         ctx.fail("factorial deberia derivar el contrato 'pure'", log)
         return
-    if "ninguna: todos los efectos" not in log:
-        ctx.fail("factorial no deberia tener lagunas de precision", log)
+    if "efectos: todos se infirieron sin subir al maximo" not in log:
+        ctx.fail("factorial no deberia tener efectos que suban al maximo", log)
         return
-    ctx.ok("factorial: pure + sin lagunas")
+    ctx.ok("factorial: pure + efectos completos")
     # (2) reflexion/FFI: opacidad fundamental reportada.
     code, log = ctx.run([VM_EXE, "--analyze",
                          ctx.src("100_reflection_full.vx")])
