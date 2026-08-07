@@ -374,43 +374,16 @@ static void print_conflictos(std::ostream &os, EffectAnalysis &ea,
  * Y lo que impide demostrar mas se dice tambien, con su sitio: es lo unico que
  * convierte un "no se" en algo accionable -- dice QUE habria que poder ver.
  */
-/**
- * @brief El conocimiento del modulo, observado UNA vez.
- *
- * Antes cada vista lo volvia a observar por su cuenta -- el resumen, las formas,
- * la cobertura y las transiciones --, lo que ademas de repetir el trabajo
- * impedia garantizar que dos vistas hablaran del MISMO grafo: nada obligaba a
- * que dos recorridos independientes coincidieran.
- *
- * Ahora se observa una vez por estado y las vistas son proyecciones sobre eso,
- * que es lo que el modelo pedia desde el principio: el texto es una proyeccion
- * del conocimiento, no el conocimiento.
- */
-struct ModeloFormas {
-    std::vector<std::pair<std::string, analysis::asa::AggregateFacts>> valores;
-};
-
-static ModeloFormas observar_modulo(const ir::IrModule &mod) {
-    ModeloFormas m;
-    for (const ir::IrFunction &fn : mod.functions) {
-        if (fn.blocks.empty()) continue;
-        const analysis::IrFacts h = analysis::build_ir_facts(fn);
-        for (const analysis::asa::AggregateFacts &a :
-             analysis::asa::observar_agregados(mod, fn, h).agregados)
-            m.valores.emplace_back(fn.name, a);
-    }
-    return m;
-}
-
-static void print_formas_de(std::ostream &os, const ModeloFormas &modelo,
+static void print_formas_de(std::ostream &os, const analysis::asa::ObservacionModulo &modelo,
                             const char *estado) {
     os << "  --- " << estado << " ---\n";
     /* Se ordena por lo que FALTA, no por orden de aparicion.  Un informe que
      * empieza por lo demostrado se lee y se cierra; uno que empieza por lo que
      * no se sabe dirige la atencion a donde hay algo que hacer.  Dentro de cada
      * grupo se conserva el orden del modulo, que es estable. */
-    std::vector<std::pair<std::string, analysis::asa::AggregateFacts>> todos =
-        modelo.valores;
+    std::vector<std::pair<analysis::asa::IdentidadValor,
+                          analysis::asa::AggregateFacts>>
+        todos = modelo.valores;
     auto urgencia = [](const analysis::asa::AggregateFacts &a) {
         // 0 = no se puede elegir, 1 = no se llego a observar, 2 = se sale o no
         // se pudo seguir, 3 = demostrado.  Menor va antes.
@@ -429,8 +402,8 @@ static void print_formas_de(std::ostream &os, const ModeloFormas &modelo,
         std::string fn_actual;
         for (const auto &par : todos) {
             alguno = true;
-            if (par.first != fn_actual) {
-                fn_actual = par.first;
+            if (par.first.funcion != fn_actual) {
+                fn_actual = par.first.funcion;
                 os << "  " << fn_actual << "\n";
             }
             const analysis::asa::AggregateFacts &a = par.second;
@@ -507,7 +480,7 @@ static void print_formas_de(std::ostream &os, const ModeloFormas &modelo,
  * fronteras por las que el conocimiento se sale.  Es el mapa que dice DONDE
  * habria que mirar para saber mas.
  */
-static void print_cobertura_formas(std::ostream &os, const ModeloFormas &modelo,
+static void print_cobertura_formas(std::ostream &os, const analysis::asa::ObservacionModulo &modelo,
                                    const char *estado) {
     uint32_t observados = 0, fronteras = 0, limitaciones = 0;
     uint32_t valores = 0, con_forma = 0, demostrados = 0;
@@ -562,86 +535,60 @@ static void print_cobertura_formas(std::ostream &os, const ModeloFormas &modelo,
     }
 }
 
-/// Identidad de un valor a traves del pipeline: donde NACE.  Los value-id se
-/// renumeran al optimizar, asi que no sirven para emparejar dos estados.
-struct ClaveValor {
-    std::string funcion;
-    uint32_t    linea = 0;
-    uint32_t    indice = 0; // columna, o numero de parametro si linea==0
-    bool operator<(const ClaveValor &o) const {
-        if (funcion != o.funcion) return funcion < o.funcion;
-        if (linea != o.linea) return linea < o.linea;
-        return indice < o.indice;
-    }
-};
-
-static std::map<ClaveValor, analysis::asa::FormaDeValor>
-formas_del_modelo(const ModeloFormas &m) {
-    std::map<ClaveValor, analysis::asa::FormaDeValor> out;
-    for (const auto &par : m.valores)
-        out[ClaveValor{par.first, par.second.declaracion.linea,
-                       par.second.declaracion.indice}] = par.second.forma();
-    return out;
-}
-
 /**
- * @brief Que le paso a cada valor entre los dos estados.
+ * @brief Vista de lo que cambio entre los dos estados.
  *
- * Es una entidad de primera clase, no una diferencia que el lector tenga que
- * buscar comparando dos bloques.  Tres desenlaces y cada uno dice algo distinto:
- *
- *   desaparece      la transformacion se lo llevo -- eso CONFIRMA que ocurrio.
- *   sobrevive       sigue ahi, y sus limitaciones dicen que se lo impidio.
- *   cambia de forma lo que hay que mirar con lupa: una transformacion no
- *                   deberia alterar la naturaleza semantica de un valor, asi
- *                   que o el optimizador rompio algo, o uno de los dos
- *                   analisis miente.  Se resalta por eso.
- *
- * ASA no juzga la transformacion: dice que se observo a cada lado.  Interpretar
- * si estuvo bien es del consumidor.
+ * El emparejamiento NO se hace aqui: es un hecho de ASA (`comparar_estados`), y
+ * esta vista solo lo presenta.  Si viviera en el informe, quien quisiera el
+ * mismo dato sin pasar por el texto -- una herramienta, un modelo -- tendria que
+ * reimplementarlo, y dos implementaciones del mismo hecho acaban discrepando.
  */
-static void print_transiciones(std::ostream &os, const ModeloFormas &despues_m,
-                               const ModeloFormas &antes_m) {
-    const auto antes = formas_del_modelo(antes_m);
-    const auto despues = formas_del_modelo(despues_m);
+static void print_transiciones(std::ostream &os,
+                               const analysis::asa::ObservacionModulo &antes,
+                               const analysis::asa::ObservacionModulo &despues) {
+    const auto ts = analysis::asa::comparar_estados(antes, despues);
+    if (ts.empty()) return;
     const bool color = hay_color(os);
-    uint32_t n_ido = 0, n_igual = 0, n_cambia = 0;
+    uint32_t n_ido = 0, n_igual = 0, n_cambia = 0, n_nuevo = 0;
     std::string detalle;
-    for (const auto &kv : antes) {
-        auto it = despues.find(kv.first);
+    for (const analysis::asa::TransicionValor &t : ts) {
         const std::string donde =
-            kv.first.funcion + (kv.first.linea > 0
-                                    ? " linea " + std::to_string(kv.first.linea)
-                                    : " parametro " +
-                                          std::to_string(kv.first.indice));
-        if (it == despues.end()) {
+            t.valor.funcion +
+            (t.valor.linea > 0 ? " linea " + std::to_string(t.valor.linea)
+                               : " parametro " + std::to_string(t.valor.indice));
+        switch (t.tipo) {
+        case analysis::asa::TipoTransicion::Sobrevive:
+            ++n_igual;
+            break;
+        case analysis::asa::TipoTransicion::Desaparece:
             ++n_ido;
             detalle += "    " + tinte(color, col::kRojo, donde) + ": " +
-                       analysis::asa::nombre_forma(kv.second) +
+                       analysis::asa::nombre_forma(t.antes) +
                        " -> ya no existe (se lo llevo una transformacion)\n";
-        } else if (it->second == kv.second) {
-            ++n_igual;
-        } else {
+            break;
+        case analysis::asa::TipoTransicion::CambiaForma:
             ++n_cambia;
             detalle += "    " + tinte(color, col::kFuerte, donde) + ": " +
-                       tinte(color, color_forma(kv.second),
-                             analysis::asa::nombre_forma(kv.second)) +
+                       tinte(color, color_forma(t.antes),
+                             analysis::asa::nombre_forma(t.antes)) +
                        " -> " +
-                       tinte(color, color_forma(it->second),
-                             analysis::asa::nombre_forma(it->second)) +
-                       tinte(color, col::kAmbar, "   (cambio semantico: revisar)") +
+                       tinte(color, color_forma(t.despues),
+                             analysis::asa::nombre_forma(t.despues)) +
+                       tinte(color, col::kAmbar,
+                             "   (cambio semantico: revisar)") +
                        "\n";
+            break;
+        case analysis::asa::TipoTransicion::Aparece:
+            ++n_nuevo;
+            detalle += "    " + tinte(color, col::kCian, donde) +
+                       ": aparece al optimizar (" +
+                       analysis::asa::nombre_forma(t.despues) + ")\n";
+            break;
         }
     }
-    for (const auto &kv : despues)
-        if (antes.find(kv.first) == antes.end())
-            detalle += "    " + tinte(color, col::kCian, kv.first.funcion) +
-                       ": aparece al optimizar (" +
-                       analysis::asa::nombre_forma(kv.second) + ")\n";
-    if (antes.empty() && despues.empty()) return;
     os << "  --- que cambio entre los dos estados ---\n";
-    os << "    sobreviven igual: " << tinte(color, col::kVerde,
-                                            std::to_string(n_igual))
+    os << "    sobreviven igual: "
+       << tinte(color, col::kVerde, std::to_string(n_igual))
        << "   desaparecen: " << tinte(color, col::kRojo, std::to_string(n_ido))
        << "   cambian de forma: "
        << tinte(color, n_cambia ? col::kAmbar : col::kApagado,
@@ -650,13 +597,15 @@ static void print_transiciones(std::ostream &os, const ModeloFormas &despues_m,
     os << detalle;
 }
 
-static void print_formas(std::ostream &os, const ModeloFormas &final_m,
-                         const ModeloFormas *previo_m) {
+static void print_formas(std::ostream &os, const analysis::asa::ObservacionModulo &final_m,
+                         const analysis::asa::ObservacionModulo *previo_m) {
     os << "=== Forma de los valores con componentes ===\n";
     if (previo_m != nullptr)
         print_formas_de(os, *previo_m, "tal como se escribio");
     print_formas_de(os, final_m, "en el codigo final");
-    if (previo_m != nullptr) print_transiciones(os, final_m, *previo_m);
+    // El orden importa: primero el estado de ANTES.  Invertirlo daba la
+    // transicion del reves y el informe decia lo contrario de lo que pasa.
+    if (previo_m != nullptr) print_transiciones(os, *previo_m, final_m);
     os << "\n";
 }
 
@@ -668,9 +617,11 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
     /* El conocimiento se observa UNA vez por estado; las vistas de abajo son
      * proyecciones sobre el.  Antes cada una lo recalculaba, y nada garantizaba
      * que dos vistas hablaran del mismo grafo. */
-    const ModeloFormas modelo_final = observar_modulo(mod);
-    const ModeloFormas modelo_previo =
-        mod_previo != nullptr ? observar_modulo(*mod_previo) : ModeloFormas{};
+    const analysis::asa::ObservacionModulo modelo_final =
+        analysis::asa::observar_modulo(mod);
+    const analysis::asa::ObservacionModulo modelo_previo =
+        mod_previo != nullptr ? analysis::asa::observar_modulo(*mod_previo)
+                              : analysis::asa::ObservacionModulo{};
 
     /* Se dice para QUIEN.  Un efecto no es una propiedad del IR a secas: las
      * ops que dependen del runtime son una instruccion en la maquina virtual y
@@ -682,7 +633,7 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
      * que mirar o no. */
     {
         const bool color = hay_color(os);
-        const ModeloFormas &fuente =
+        const analysis::asa::ObservacionModulo &fuente =
             mod_previo != nullptr ? modelo_previo : modelo_final;
         uint32_t valores = 0, demostrados = 0, sin_cerrar = 0;
         {

@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -672,6 +673,11 @@ AggregateFactsMap observar_con_cache(const ir::IrModule &mod,
              * fuente.  El value-id no vale -- la optimizacion los renumera. */
             a.declaracion = SitioIr{fn.name, 0, 0, 0, in.source_line};
             a.declaracion.indice = in.source_column;
+            /* El sitio del fuente no siempre es unico: si una funcion se inlina
+             * dos veces en el mismo llamante, la misma linea produce dos valores
+             * distintos.  Con una reserva local normal esto vale "sin sitio de
+             * inlinado" y no cambia nada. */
+            a.instancia = in.inline_site;
             a.bytes = ex.bytes;
             a.accesos = std::move(o.accesos);
             // Se liga al final: hasta ahora no se sabia que desplazamientos
@@ -719,6 +725,66 @@ AggregateFactsMap observar_agregados(const ir::IrModule &mod,
     CacheHechos cache;
     const PointsTo pt = compute_points_to(fn, facts);
     return observar_con_cache(mod, fn, facts, pt, cache);
+}
+
+const char *nombre_transicion(TipoTransicion t) {
+    switch (t) {
+    case TipoTransicion::Desaparece: return "desaparece";
+    case TipoTransicion::CambiaForma: return "cambia-de-forma";
+    case TipoTransicion::Aparece: return "aparece";
+    default: return "sobrevive";
+    }
+}
+
+ObservacionModulo observar_modulo(const ir::IrModule &mod) {
+    ObservacionModulo out;
+    CacheHechos cache; // una sola para todo el modulo: los hechos se consultan
+    for (const ir::IrFunction &fn : mod.functions) {
+        if (fn.blocks.empty()) continue;
+        const CacheHechos::Entrada &e = cache.de(fn);
+        for (AggregateFacts &a :
+             observar_con_cache(mod, fn, e.hechos, e.direcciones, cache)
+                 .agregados) {
+            IdentidadValor id;
+            id.funcion = fn.name;
+            id.linea = a.declaracion.linea;
+            id.indice = a.declaracion.indice;
+            id.instancia = a.instancia;
+            out.valores.emplace_back(std::move(id), std::move(a));
+        }
+    }
+    return out;
+}
+
+std::vector<TransicionValor> comparar_estados(const ObservacionModulo &antes,
+                                              const ObservacionModulo &despues) {
+    std::map<IdentidadValor, FormaDeValor> a_antes, a_despues;
+    for (const auto &p : antes.valores) a_antes[p.first] = p.second.forma();
+    for (const auto &p : despues.valores) a_despues[p.first] = p.second.forma();
+    std::vector<TransicionValor> out;
+    for (const auto &kv : a_antes) {
+        TransicionValor t;
+        t.valor = kv.first;
+        t.antes = kv.second;
+        auto it = a_despues.find(kv.first);
+        if (it == a_despues.end()) {
+            t.tipo = TipoTransicion::Desaparece;
+        } else {
+            t.despues = it->second;
+            t.tipo = (it->second == kv.second) ? TipoTransicion::Sobrevive
+                                               : TipoTransicion::CambiaForma;
+        }
+        out.push_back(std::move(t));
+    }
+    for (const auto &kv : a_despues) {
+        if (a_antes.count(kv.first) != 0) continue;
+        TransicionValor t;
+        t.valor = kv.first;
+        t.tipo = TipoTransicion::Aparece;
+        t.despues = kv.second;
+        out.push_back(std::move(t));
+    }
+    return out;
 }
 
 void volcar_formas(const ir::IrModule &mod, const char *momento) {

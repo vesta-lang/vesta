@@ -396,6 +396,9 @@ struct AggregateFacts {
      * Colapsarlas por nombre y linea producia contradicciones que no existian.
      */
     SitioIr       declaracion;
+    /// Que INSTANCIA es, cuando el sitio del fuente no es unico (una funcion
+    /// inlinada dos veces en el mismo llamante).  Ver @c IdentidadValor.
+    uint32_t      instancia = 0xFFFFFFFFu;
     int64_t       bytes = -1;
 
     // --- nivel A ---
@@ -490,6 +493,76 @@ struct AggregateFactsMap {
 AggregateFactsMap observar_agregados(const ir::IrModule &mod,
                                      const ir::IrFunction &fn,
                                      const IrFacts &facts);
+
+// =========================================================================
+//  El modulo entero, y que le pasa entre dos estados
+// =========================================================================
+
+/**
+ * @brief Identidad de un valor A TRAVES del pipeline.
+ *
+ * Los value-id se renumeran al optimizar, asi que no sirven para emparejar dos
+ * estados.  Lo que sobrevive es DONDE NACE el valor, que ademas es lo que un
+ * programador llama "esa variable".
+ *
+ * @c instancia distingue los casos en que ese sitio NO es unico: si una funcion
+ * se inlina dos veces en el mismo llamante, la misma linea del fuente produce
+ * dos valores distintos, y sin esto se colapsarian en uno.  Con reservas
+ * locales normales vale @c IR_NO_INLINE_SITE y no cambia nada.
+ */
+struct IdentidadValor {
+    std::string funcion;
+    uint32_t    linea = 0;
+    uint32_t    indice = 0;    ///< columna, o numero de parametro si linea==0
+    uint32_t    instancia = 0; ///< sitio de inlinado, si lo hay
+
+    bool operator<(const IdentidadValor &o) const {
+        if (funcion != o.funcion) return funcion < o.funcion;
+        if (linea != o.linea) return linea < o.linea;
+        if (indice != o.indice) return indice < o.indice;
+        return instancia < o.instancia;
+    }
+};
+
+/// Lo observado de un modulo entero, en UN estado.
+struct ObservacionModulo {
+    std::vector<std::pair<IdentidadValor, AggregateFacts>> valores;
+};
+
+ObservacionModulo observar_modulo(const ir::IrModule &mod);
+
+/// Que le paso a un valor entre dos estados.  ASA no juzga la transformacion:
+/// dice que se observo a cada lado.
+enum class TipoTransicion : uint8_t {
+    Sobrevive = 0,   ///< sigue ahi con la misma forma.
+    Desaparece = 1,  ///< la transformacion se lo llevo: eso CONFIRMA que ocurrio.
+    CambiaForma = 2, ///< lo que hay que mirar: una transformacion no deberia
+                     ///< alterar la naturaleza semantica de un valor.
+    Aparece = 3,     ///< no estaba antes y esta despues.
+};
+
+const char *nombre_transicion(TipoTransicion t);
+
+struct TransicionValor {
+    IdentidadValor valor;
+    TipoTransicion tipo = TipoTransicion::Sobrevive;
+    FormaDeValor   antes = FormaDeValor::SinEvidencia;
+    FormaDeValor   despues = FormaDeValor::SinEvidencia;
+};
+
+/**
+ * @brief Empareja dos estados del MISMO modulo y dice que cambio.
+ *
+ * Solo tiene sentido entre estados relacionados: dos observaciones de modulos
+ * distintos no estan en la misma cadena de transformacion, y compararlas no
+ * compara nada.  Eso lo garantiza quien llama.
+ *
+ * Vive aqui y no en el informe porque no es una cuestion de presentacion: es un
+ * hecho sobre el programa, y lo van a querer tanto quien lo lee como quien
+ * entrena un modelo con ello.
+ */
+std::vector<TransicionValor> comparar_estados(const ObservacionModulo &antes,
+                                              const ObservacionModulo &despues);
 
 /**
  * @brief Volcado de MEDICION de todo un modulo, a `stderr`.
