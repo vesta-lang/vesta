@@ -13,6 +13,7 @@
 
 #include "analysis/effects/effect_analysis.h"
 #include "analysis/facts/ir_facts.h"
+#include "analysis/facts/range_summary.h"
 #include "analysis/facts/value_range.h"
 #include "analysis/memory/memory_access.h"
 #include "ir/ssa_ir.h"
@@ -46,13 +47,21 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod) {
 
     EffectAnalysis ea;
     ea.module_summary(mod); // deja el motor con sus tablas listas
+    /* Resumenes de frontera del modulo: lo que entra y sale de cada funcion.
+     * Sin ellos, un parametro vale lo que su tipo y el resultado de una llamada
+     * es desconocido, con lo que nada que cruce una funcion se puede comprobar.
+     * Se calculan UNA vez para todo el modulo. */
+    const analysis::RangeSummaries resumenes =
+        analysis::compute_range_summaries(mod);
     for (const ir::IrFunction &fn : mod.functions) {
         if (fn.blocks.empty()) continue;
         const analysis::PointsTo &pt = ea.points_to_publico(fn);
         /* Rangos de la funcion: es lo que permite juzgar una region de tamano
          * simbolico.  Se calculan una vez por funcion, no por acceso. */
         const analysis::IrFacts hechos = analysis::build_ir_facts(fn);
-        const analysis::RangeFacts rangos = analysis::compute_ranges(fn, hechos);
+        const analysis::RangeFacts rangos =
+            analysis::compute_ranges(fn, hechos, analysis::RangeOptions{},
+                                     &resumenes);
         for (uint32_t bi = 0; bi < fn.blocks.size(); ++bi) {
             const ir::IrBlock &b = fn.blocks[bi];
             /* Se recorre el bloque con el estado del analisis, no se consulta

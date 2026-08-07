@@ -62,6 +62,7 @@ namespace ir {
 struct IrFunction;
 /// Identificador de bloque: lo necesita @c RangeWalk, que pregunta por uno.
 using IrBlockId = uint32_t;
+enum class IrType : uint8_t;
 }
 
 namespace analysis {
@@ -507,9 +508,15 @@ struct RangeFacts {
  * posteriores: en `if (i < 10) usar(i)`, la definicion puede decir `[0,1000]`
  * mientras el uso esta en `[0,9]`.  Quien necesite esa precision pregunta por el
  * punto, no por el valor.
+ *
+ * @param sum Resumenes de frontera del modulo, si se tienen.  Con ellos un
+ *            parametro deja de valer lo que su tipo y el resultado de una
+ *            llamada deja de ser desconocido.  Sin ellos el analisis sigue
+ *            siendo correcto, solo mas ciego en los bordes.
  */
 RangeFacts compute_ranges(const ir::IrFunction &fn, const IrFacts &facts,
-                          const RangeOptions &op = RangeOptions{});
+                          const RangeOptions &op = RangeOptions{},
+                          const struct RangeSummaries *sum = nullptr);
 
 /**
  * @brief Recorre un bloque entregando el rango de un valor EN CADA PUNTO.
@@ -554,6 +561,16 @@ class RangeWalk {
     struct Impl;
     Impl *impl_; ///< puntero desnudo: el tipo completo vive en el .cpp
 };
+
+/**
+ * @brief El rango que impone un TIPO del IR, sin mirar el codigo.
+ *
+ * Es el suelo de cualquier afirmacion sobre un valor de ese tipo, y sale gratis:
+ * un `u8` no pasa de 255 en ninguna arquitectura.  Se expone porque hay quien lo
+ * necesita sin analizar la funcion -- por ejemplo para saber que vale un
+ * parametro del que aun no se sabe quien llama.
+ */
+ValueRange rango_del_tipo(ir::IrType t);
 
 /// Marcador para el AnalysisManager (cachea por funcion; depende de IRFacts).
 struct RangeAnalysis {

@@ -23,6 +23,8 @@
 #include "analysis/facts/value_range.h"
 
 #include "analysis/facts/loop_facts.h"
+#include "analysis/facts/range_summary.h"
+#include "analysis/memory/fn_targets.h"
 #include "ir/ssa_ir.h"
 
 #include <algorithm>
@@ -78,6 +80,12 @@ ValueRange del_tipo(IrType t) {
     if (!es_numerico(t)) return ValueRange::top();
     return ValueRange::todo(tipo_de(t));
 }
+
+} // namespace
+
+ValueRange rango_del_tipo(ir::IrType t) { return del_tipo(t); }
+
+namespace {
 
 // ===========================================================================
 //  Estado por punto del programa
@@ -175,9 +183,12 @@ struct Arista {
 struct Contexto {
     const ir::IrFunction &fn;
     const IrFacts        &facts;
+    const RangeSummaries *sum = nullptr;
     std::vector<ValueRange> suelo;
 
-    Contexto(const ir::IrFunction &f, const IrFacts &fc) : fn(f), facts(fc) {
+    Contexto(const ir::IrFunction &f, const IrFacts &fc,
+             const RangeSummaries *s = nullptr)
+        : fn(f), facts(fc), sum(s) {
         const size_t n = fc.def_of.size();
         suelo.assign(n, ValueRange::top());
         for (ir::IrValueId v = 0; v < fn.values.size() && v < n; ++v) {
@@ -185,6 +196,18 @@ struct Contexto {
             if (fn.values[v].is_const && suelo[v].acotada())
                 suelo[v] = suelo[v].cortar(
                     ValueRange::constante(suelo[v].t, fn.values[v].const_val));
+        }
+        /* Un parametro vale lo que su tipo... salvo que se sepa quien llama.  El
+         * resumen solo estrecha cuando se conocen TODOS los llamantes; si no,
+         * trae el mismo suelo y esto no cambia nada. */
+        if (sum != nullptr) {
+            const FnRangeSummary *mio = sum->buscar(fn.name);
+            if (mio != nullptr)
+                for (size_t i = 0; i < fn.params.size() && i < mio->params.size();
+                     ++i) {
+                    const ir::IrValueId p = fn.params[i];
+                    if (p < suelo.size()) suelo[p] = suelo[p].cortar(mio->params[i]);
+                }
         }
     }
 
@@ -224,8 +247,9 @@ struct Motor : Contexto {
     std::vector<uint32_t>   vueltas_ciclo; ///< veces que el IN de un bloque cambio
     RangeStats              stats;
 
-    Motor(const ir::IrFunction &f, const IrFacts &fc, const RangeOptions &o)
-        : Contexto(f, fc), op(o) {
+    Motor(const ir::IrFunction &f, const IrFacts &fc, const RangeOptions &o,
+          const RangeSummaries *s)
+        : Contexto(f, fc, s), op(o) {
         const size_t nb = fn.blocks.size();
         in_bloque.assign(nb, Estado{});
         entrantes.assign(nb, {});
@@ -691,6 +715,20 @@ void Contexto::transferir(const ir::IrInstr &in, Estado &e) const {
         case IrOp::BITCAST:
             if (piso.acotada()) nuevo = arg(0).reinterpretar(piso.t);
             break;
+        /* El resultado de una llamada no es desconocido si se puede leer el
+         * cuerpo de quien la atiende: lo que devuelve sale de SU codigo y vale
+         * para cualquier llamante, se conozcan o no los demas. */
+        case IrOp::CALL:
+        case IrOp::CALLIND:
+            if (sum != nullptr && piso.acotada()) {
+                const std::string destino =
+                    (in.op == IrOp::CALL)
+                        ? in.func_name
+                        : funcion_apuntada(fn, facts, in.func_ptr);
+                if (const FnRangeSummary *s = sum->buscar(destino))
+                    nuevo = s->ret;
+            }
+            break;
         default:
             break; // op sin modelar: lo que diga el tipo
         }
@@ -700,9 +738,9 @@ void Contexto::transferir(const ir::IrInstr &in, Estado &e) const {
 } // namespace
 
 RangeFacts compute_ranges(const ir::IrFunction &fn, const IrFacts &facts,
-                          const RangeOptions &op) {
+                          const RangeOptions &op, const RangeSummaries *sum) {
     RangeFacts out;
-    Motor m(fn, facts, op);
+    Motor m(fn, facts, op, sum);
     if (fn.blocks.empty()) {
         out.r = m.suelo;
         return out;
@@ -746,7 +784,7 @@ struct RangeWalk::Impl {
 
     Impl(const ir::IrFunction &fn, const IrFacts &facts, const RangeFacts &r,
          ir::IrBlockId b)
-        : ctx(fn, facts), rf(r) {
+        : ctx(fn, facts, nullptr), rf(r) {
         if (b >= fn.blocks.size()) return;
         bloque = &fn.blocks[b];
         if (b < rf.entrada.size()) {

@@ -772,6 +772,20 @@ else ()
     target_link_libraries(test_value_range PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# Resumenes de frontera: que entra y que sale de una funcion, y cuando se puede
+# afirmar (mundo cerrado, punteros a funcion resueltos, recursion).
+add_executable(test_range_summary tests/analysis/test_range_summary.cpp)
+target_include_directories(test_range_summary PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_range_summary PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_range_summary PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_range_summary PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_range_summary PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 add_executable(test_mem_loc tests/analysis/test_mem_loc.cpp)
 target_include_directories(test_mem_loc PRIVATE ${VM_INCLUDES})
 target_link_libraries(test_mem_loc PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
