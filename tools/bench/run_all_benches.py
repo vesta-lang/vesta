@@ -215,6 +215,79 @@ def prompt_choose_vm(candidates: list[tuple[str, Path]]) -> Path:
         warn(f"opcion invalida: {choice!r}")
 
 
+def buscar_compiladores(nombres: list[str]) -> list[tuple[str, str]]:
+    """Compiladores instalados de entre @p nombres, con su ruta.
+
+    Existe porque tener gcc y clang a la vez es lo normal, y coger a ciegas el
+    primero del PATH tiene dos problemas: generan codigo bastante distinto, y la
+    tabla acabaria diciendo "C (gcc -O3)" con clang por debajo.  Un numero mal
+    etiquetado es peor que no tenerlo.
+    """
+    out: list[tuple[str, str]] = []
+    vistos: set[str] = set()
+    for n in nombres:
+        p = shutil.which(n)
+        if not p:
+            continue
+        # Se descarta por VERSION, no por ruta.  En Windows `c++.exe` es una
+        # copia de `g++.exe` del mismo TDM-GCC -- ficheros distintos, mismo
+        # compilador -- y preguntar entre los dos es ruido que ademas dejaria
+        # colgada una corrida automatica.  La version los identifica.
+        ver = get_tool_version([p, "--version"]) or ""
+        # La version empieza por el nombre del propio ejecutable ("g++.EXE
+        # (tdm64-1) 10.3.0"), asi que hay que quitarlo antes de comparar o dos
+        # copias del mismo compilador seguirian pareciendo distintas.
+        clave = ver.lower().replace(Path(p).name.lower(), "").strip()
+        if not clave:
+            clave = str(Path(p).resolve()).lower()
+        if clave in vistos:
+            continue
+        vistos.add(clave)
+        out.append((n, p))
+    return out
+
+
+def elegir_compilador(lenguaje: str, candidatos: list[tuple[str, str]],
+                      forzado: str = "") -> tuple[str, str]:
+    """Devuelve (nombre, ruta) del compilador a usar para @p lenguaje.
+
+    Con uno solo, se usa sin preguntar.  Con varios y terminal interactiva, se
+    pregunta -- igual que ya se hace con el binario de la maquina virtual.  Sin
+    terminal (un script, la integracion continua) se coge el primero y se DICE
+    cual, para que quede en el registro de la corrida.
+    """
+    if forzado:
+        return (Path(forzado).stem, forzado)
+    if not candidatos:
+        return ("", "")
+    if len(candidatos) == 1:
+        return candidatos[0]
+    if not sys.stdin.isatty():
+        n, p = candidatos[0]
+        warn(f"{lenguaje}: hay {len(candidatos)} compiladores y stdin no es "
+             f"TTY -- se usa {C.BOLD}{n}{C.RESET} ({p})")
+        return candidatos[0]
+    print()
+    info(f"{C.BOLD}{lenguaje}: encontre {len(candidatos)} compiladores{C.RESET}")
+    for i, (n, p) in enumerate(candidatos):
+        ver = get_tool_version([p, "--version"])
+        print(f"  {C.GREEN}[{i}]{C.RESET} {n:<10} {C.DIM}{p}{C.RESET}")
+        if ver:
+            print(f"      {C.DIM}{ver}{C.RESET}")
+    while True:
+        try:
+            elec = input(f"{C.CYAN}Elige [0-{len(candidatos)-1}] "
+                         f"(default 0): {C.RESET}").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            sys.exit(1)
+        if not elec:
+            return candidatos[0]
+        if elec.isdigit() and 0 <= int(elec) < len(candidatos):
+            return candidatos[int(elec)]
+        warn(f"opcion invalida: {elec!r}")
+
+
 # =============================================================================
 # Detector de toolchain por lenguaje
 # =============================================================================
@@ -585,7 +658,8 @@ def print_category_summary(rows: list[dict], active_langs: list[str],
     print("-" * (12 + 4 + 17 * (len(active_langs) - 1)))
 
 
-def detect_toolchains(vm_bin: Path) -> dict[str, Toolchain]:
+def detect_toolchains(vm_bin: Path, cc_forzado: str = "",
+                      cxx_forzado: str = "") -> dict[str, Toolchain]:
     tc: dict[str, Toolchain] = {}
 
     tc["vx_interp"] = Toolchain(
@@ -626,21 +700,25 @@ def detect_toolchains(vm_bin: Path) -> dict[str, Toolchain]:
             why_unavailable="" if vm_bin.is_file() else "vm binary missing"
         )
 
-    gcc = shutil.which("gcc")
+    # La ETIQUETA lleva el compilador que se eligio de verdad.  Poner "gcc" con
+    # clang por debajo daria un numero mal atribuido, que es peor que no tenerlo.
+    nombre_c, ruta_c = elegir_compilador(
+        "C", buscar_compiladores(["gcc", "clang", "cc"]), cc_forzado)
     tc["c"] = Toolchain(
-        "c", "C (gcc -O3)", C.BLUE,
-        available=gcc is not None,
-        why_unavailable="" if gcc else "gcc not in PATH"
+        "c", "C (%s -O3)" % (nombre_c or "gcc"), C.BLUE,
+        available=bool(ruta_c),
+        why_unavailable="" if ruta_c else "ni gcc ni clang en el PATH"
     )
-    tc["c"].path = gcc if gcc else ""
+    tc["c"].path = ruta_c
 
-    gpp = shutil.which("g++")
+    nombre_cpp, ruta_cpp = elegir_compilador(
+        "C++", buscar_compiladores(["g++", "clang++", "c++"]), cxx_forzado)
     tc["cpp"] = Toolchain(
-        "cpp", "C++ (g++ -O3)", C.MAGENTA,
-        available=gpp is not None,
-        why_unavailable="" if gpp else "g++ not in PATH"
+        "cpp", "C++ (%s -O3)" % (nombre_cpp or "g++"), C.MAGENTA,
+        available=bool(ruta_cpp),
+        why_unavailable="" if ruta_cpp else "ni g++ ni clang++ en el PATH"
     )
-    tc["cpp"].path = gpp if gpp else ""
+    tc["cpp"].path = ruta_cpp
 
     py = shutil.which("python") or shutil.which("python3")
     tc["python"] = Toolchain(
@@ -994,6 +1072,27 @@ def serie_asentada(traza: list[float]) -> bool:
     return ultimas >= previas * (1.0 - umbral)
 
 
+# Por que no compilo cada (bench, lenguaje).  Sin esto, un compilador roto se
+# publica como un lenguaje lento: el arnes marcaba "TIMEOUT" tanto cuando el
+# programa tardaba demasiado como cuando ni siquiera habia programa que
+# ejecutar, y ademas mandaba el error del compilador a /dev/null.  Paso de
+# verdad: `rustc` no podia enlazar en este equipo -- el `link.exe` de GNU
+# coreutils tapaba al de MSVC en el PATH -- y la tabla lo enseno como TIMEOUT.
+ERRORES_COMPILACION: dict[tuple[str, str], str] = {}
+
+
+def _anotar_fallo(bench: str, lang: str, r) -> None:
+    """Guarda la primera linea del error, que casi siempre basta."""
+    txt = ""
+    if r is not None:
+        txt = (getattr(r, "stderr", "") or getattr(r, "stdout", "") or "")
+        if isinstance(txt, bytes):
+            txt = txt.decode("utf-8", "replace")
+    lineas = [l for l in txt.strip().splitlines() if l.strip()]
+    ERRORES_COMPILACION[(bench, lang)] = (
+        lineas[0][:160] if lineas else "sin mensaje del compilador")
+
+
 # Compilers: cada uno devuelve (cmd_to_run, work_cwd, normalize_factor).
 # normalize_factor: multiplicar wall time medido por este factor para
 # obtener el equivalente "100% workload".  Util cuando Python reduce
@@ -1005,9 +1104,10 @@ def compile_c(variant: BenchVariant, work_dir: Path,
     r = subprocess.run(
         [tc.path, "-O3", "-std=c11", "-march=native",
          str(variant.src_path), "-o", str(out), "-lm"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60.0,
+        capture_output=True, text=True, timeout=60.0,
     )
     if r.returncode != 0 or not out.is_file():
+        _anotar_fallo(variant.bench_name, variant.lang, r)
         return None
     return ([str(out)], work_dir, 1.0)
 
@@ -1018,9 +1118,10 @@ def compile_cpp(variant: BenchVariant, work_dir: Path,
     r = subprocess.run(
         [tc.path, "-O3", "-std=c++17", "-march=native",
          str(variant.src_path), "-o", str(out)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60.0,
+        capture_output=True, text=True, timeout=60.0,
     )
     if r.returncode != 0 or not out.is_file():
+        _anotar_fallo(variant.bench_name, variant.lang, r)
         return None
     return ([str(out)], work_dir, 1.0)
 
@@ -1040,9 +1141,10 @@ def compile_java(variant: BenchVariant, work_dir: Path,
     bench_work.mkdir(exist_ok=True)
     r = subprocess.run(
         [tc.path_javac, "-d", str(bench_work), str(variant.src_path)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60.0,
+        capture_output=True, text=True, timeout=60.0,
     )
     if r.returncode != 0:
+        _anotar_fallo(variant.bench_name, variant.lang, r)
         return None
     return ([tc.path_java, "-cp", str(bench_work), "Main"], bench_work, 1.0)
 
@@ -1056,10 +1158,11 @@ def compile_go(variant: BenchVariant, work_dir: Path,
     out = work_dir / f"{variant.bench_name}_go{suffix}"
     r = subprocess.run(
         [tc.path, "build", "-o", str(out), str(variant.src_path)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120.0,
+        capture_output=True, text=True, timeout=120.0,
         cwd=str(variant.src_path.parent),
     )
     if r.returncode != 0 or not out.is_file():
+        _anotar_fallo(variant.bench_name, variant.lang, r)
         return None
     return ([str(out)], work_dir, 1.0)
 
@@ -1075,9 +1178,10 @@ def compile_rust(variant: BenchVariant, work_dir: Path,
     r = subprocess.run(
         [tc.path, "-O", "-C", "target-cpu=native", "-C", "opt-level=3",
          str(variant.src_path), "-o", str(out)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120.0,
+        capture_output=True, text=True, timeout=120.0,
     )
     if r.returncode != 0 or not out.is_file():
+        _anotar_fallo(variant.bench_name, variant.lang, r)
         return None
     return ([str(out)], work_dir, 1.0)
 
@@ -1087,10 +1191,11 @@ def compile_vx(variant: BenchVariant, work_dir: Path,
     velb_stem = work_dir / f"{variant.bench_name}_vx"
     r = subprocess.run(
         [str(vm_bin), "--vx", str(variant.src_path), "-o", str(velb_stem)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60.0,
+        capture_output=True, text=True, timeout=60.0,
     )
     velb = Path(str(velb_stem) + ".velb")
     if r.returncode != 0 or not velb.is_file():
+        _anotar_fallo(variant.bench_name, variant.lang, r)
         return None
     return ([str(vm_bin), "--run", str(velb)], work_dir, 1.0)
 
@@ -1129,12 +1234,13 @@ def compile_vx_aot(variant: BenchVariant, work_dir: Path,
             [str(vm_bin), "-m", "aot", "--vx", str(variant.src_path),
              "-o", str(out), "--emit", "exe", "--format", fmt,
              "--float-isa", float_isa],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60.0,
+            capture_output=True, text=True, timeout=60.0,
         )
     except subprocess.TimeoutExpired:
         return None
     # N/A si el compile fallo o el ejecutable nativo no se materializo.
     if r.returncode != 0 or not out.is_file():
+        _anotar_fallo(variant.bench_name, variant.lang, r)
         return None
     return ([str(out)], work_dir, 1.0)
 
@@ -1638,6 +1744,8 @@ def print_results_table(rows: list[dict], tc: dict[str, Toolchain],
             t = row.get(ln)
             if t is None:
                 cols.append(f"{C.GREY}{'N/A':>14}{C.RESET}")
+            elif t <= -2 and ln not in dudosas:
+                cols.append(f"{C.RED}{'NO COMPILA':>14}{C.RESET}")
             elif t < 0 and ln not in dudosas:
                 cols.append(f"{C.RED}{'TIMEOUT':>14}{C.RESET}")
             elif ln in dudosas:
@@ -2301,6 +2409,13 @@ def main() -> int:
               "c (gcc -O3), cpp (g++ -O3), python, java, go (Go gc), "
               "rust (rustc -O -C target-cpu=native).  "
               "Ej: --langs vx_jit,vx_aot_auto,c,rust"))
+    parser.add_argument("--cc", type=str, default="",
+                        help="compilador de C a usar (ruta o nombre).  Sin "
+                             "esto: si hay varios instalados se pregunta, y "
+                             "si no hay terminal se coge el primero y se dice "
+                             "cual.")
+    parser.add_argument("--cxx", type=str, default="",
+                        help="compilador de C++ a usar (ruta o nombre).")
     parser.add_argument("--filter", type=str, default="",
                         help="Regex para filtrar benches por nombre")
     parser.add_argument("--runs", type=int, default=RUNS_FAST,
@@ -2400,7 +2515,7 @@ def main() -> int:
     ok(f"usando vm: {C.BOLD}{vm}{C.RESET}")
 
     # Detectar toolchains.
-    tc = detect_toolchains(vm)
+    tc = detect_toolchains(vm, args.cc, args.cxx)
     print()
     info(f"{C.BOLD}Toolchains detectados:{C.RESET}")
     for name, t in tc.items():
@@ -2586,7 +2701,16 @@ def main() -> int:
                 # Para AOT, un compile fallido significa "bench no soportado
                 # por el subset nativo" -> N/A (gris), no FAIL (rojo).  Asi
                 # no entra en el geomean ni se confunde con un crash real.
-                row[ln] = None if ln in VX_AOT_MODES else -1.0
+                #
+                # Para el resto, -2 significa NO COMPILA y -1 fallo al
+                # EJECUTAR.  Antes las dos cosas eran -1 y salian como
+                # "TIMEOUT", que hacia pasar un compilador roto por un lenguaje
+                # lento -- y con el error mandado a /dev/null no habia forma de
+                # saberlo.
+                row[ln] = None if ln in VX_AOT_MODES else -2.0
+                motivo = ERRORES_COMPILACION.get((b.name, ln))
+                if motivo and ln not in VX_AOT_MODES:
+                    warn(f"{b.name}/{ln} no compila: {motivo}")
                 continue
             cmd, cwd, factor = compiled
 
@@ -2758,8 +2882,10 @@ def main() -> int:
             col_w = len(ln) + 1 + 6 + 2  # "<ln>=" + 6 digitos + "ms"
             if v is None:
                 text, color = "N/A", C.GREY
+            elif v <= -2:
+                text, color = "NO COMPILA", C.RED
             elif v < 0:
-                text, color = "FAIL", C.RED
+                text, color = "TIMEOUT", C.RED
             else:
                 text, color = f"{ln}={v:.0f}ms", tc[ln].color
             # Pad-ear el texto visible a ancho fijo y luego aplicar color.

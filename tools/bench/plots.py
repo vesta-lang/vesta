@@ -59,12 +59,30 @@ def _try_import():
         return None
 
 
+def valor(r: dict, lang: str) -> Optional[float]:
+    """El tiempo utilizable de @p lang en la fila @p r, o None.
+
+    Un solo sitio donde se decide que es utilizable, porque si cada grafica lo
+    decide por su cuenta acaban dibujando poblaciones distintas del mismo dato.
+
+    Se descartan las medidas marcadas como que NO se separan del arranque del
+    proceso.  La tabla las ensena con un `~` -- son lo que se midio -- pero
+    aqui no valen: al ser casi cero, cualquier razon calculada con ellas
+    explota.  El radar se quedo plano justo por eso: bastaba una celda de 0.05
+    ms para que el "normalizado al mas rapido" mandara a todos al centro.
+    """
+    if lang in (r.get("_bajo_suelo") or {}):
+        return None
+    v = r.get(lang)
+    return v if (v is not None and v > 0) else None
+
+
 def _filter_valid(rows: list[dict], lang: str) -> tuple[list[str], list[float]]:
-    """Extrae (nombres, valores) validos (>0) para un lenguaje."""
+    """Extrae (nombres, valores) utilizables para un lenguaje."""
     names, vals = [], []
     for r in rows:
-        v = r.get(lang)
-        if v is not None and v > 0:
+        v = valor(r, lang)
+        if v is not None:
             names.append(r["bench"])
             vals.append(v)
     return names, vals
@@ -114,7 +132,7 @@ def _plot_wall_time(ax, rows, langs):
     for i, ln in enumerate(langs):
         times = []
         for r in rows:
-            v = r.get(ln)
+            v = valor(r, ln)
             times.append(v if (v is not None and v > 0) else float("nan"))
         offset = (i - n_langs / 2 + 0.5) * bar_h
         ax.barh([y + offset for y in y_pos], times, bar_h,
@@ -142,8 +160,8 @@ def _plot_ratio_vs_c(ax, rows, langs):
     for i, ln in enumerate(other_langs):
         ratios = []
         for r in rows:
-            t_c = r.get("c")
-            t_l = r.get(ln)
+            t_c = valor(r, "c")
+            t_l = valor(r, ln)
             if t_c is None or t_c <= 0 or t_l is None or t_l <= 0:
                 ratios.append(float("nan"))
             else:
@@ -177,7 +195,7 @@ def _plot_ranking_heatmap(ax, rows, langs):
     for i, r in enumerate(rows):
         vals_with_idx = []
         for j, ln in enumerate(langs):
-            v = r.get(ln)
+            v = valor(r, ln)
             if v is not None and v > 0:
                 vals_with_idx.append((v, j))
         vals_with_idx.sort()
@@ -241,7 +259,7 @@ def plot_heatmap(rows: list[dict], langs: list[str], out_path: Path) -> bool:
     matrix = np.full((n_benches, n_langs), np.nan)
     for i, r in enumerate(rows):
         for j, ln in enumerate(langs):
-            v = r.get(ln)
+            v = valor(r, ln)
             if v is not None and v > 0:
                 matrix[i, j] = math.log10(v)
 
@@ -297,7 +315,7 @@ def plot_radar(rows: list[dict], langs: list[str], out_path: Path) -> bool:
     for ln in langs:
         invs = []
         for r in rows:
-            v = r.get(ln)
+            v = valor(r, ln)
             invs.append(1.0 / v if (v is not None and v > 0) else 0.0)
         inv_data[ln] = invs
         max_inv = max(max_inv, max(invs) if invs else 0.0)
@@ -430,8 +448,8 @@ def plot_per_bench(rows: list[dict], langs: list[str],
     suelo = suelo or {}
     count = 0
     for r in rows:
-        valid = [(ln, r.get(ln)) for ln in langs
-                 if r.get(ln) is not None and r.get(ln, -1) > 0]
+        valid = [(ln, valor(r, ln)) for ln in langs
+                 if valor(r, ln) is not None]
         if len(valid) < 2:
             continue
         valid.sort(key=lambda x: x[1])
@@ -518,8 +536,8 @@ def plot_scatter_ratio(rows: list[dict], langs: list[str],
         ratios = []
         names_ok = []
         for r in rows:
-            tc = r.get("c")
-            tl = r.get(ln)
+            tc = valor(r, "c")
+            tl = valor(r, ln)
             if tc and tc > 0 and tl and tl > 0:
                 ratios.append(tl / tc)
                 names_ok.append(r["bench"])
@@ -572,8 +590,8 @@ def plot_ranking_lines(rows: list[dict], langs: list[str],
     # Para cada bench, calcular ranks.
     rank_data = {ln: [] for ln in langs}
     for r in rows:
-        items = [(ln, r.get(ln)) for ln in langs
-                 if r.get(ln) is not None and r.get(ln, -1) > 0]
+        items = [(ln, valor(r, ln)) for ln in langs
+                 if valor(r, ln) is not None]
         items.sort(key=lambda x: x[1])
         ranks = {ln: i + 1 for i, (ln, _) in enumerate(items)}
         for ln in langs:
@@ -637,7 +655,7 @@ def _plot_ranking_desglose(rows, langs, rank_data, out_path) -> bool:
                 if r.get(l) is not None and r.get(l, -1) > 0]
         mejor = min(vals) if vals else None
         for ln in presentes:
-            v = r.get(ln)
+            v = valor(r, ln)
             ratios[ln].append((v / mejor) if (v and mejor and v > 0) else None)
 
     cols = 3
@@ -725,8 +743,8 @@ def plot_grouped_ratio(rows: list[dict], langs: list[str],
     for i, ln in enumerate(other_langs):
         ratios = []
         for r in rows:
-            tc = r.get("c")
-            tl = r.get(ln)
+            tc = valor(r, "c")
+            tl = valor(r, ln)
             if tc and tc > 0 and tl and tl > 0:
                 ratios.append(tl / tc)
             else:
@@ -779,8 +797,8 @@ def plot_geomean_summary(rows: list[dict], langs: list[str],
     for ln in other_langs:
         ratios = []
         for r in rows:
-            tc = r.get("c")
-            tl = r.get(ln)
+            tc = valor(r, "c")
+            tl = valor(r, ln)
             if tc and tc > 0 and tl and tl > 0:
                 ratios.append(tl / tc)
         if not ratios:

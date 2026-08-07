@@ -50,10 +50,18 @@ sys.path.insert(0, str(Path(__file__).parent))
 from run_all_benches import (  # noqa: E402
     C,
     _stats_summary,
+    buscar_compiladores,
+    elegir_compilador,
     find_project_root,
     serie_asentada,
     una_medida,
 )
+
+# Cual de los compiladores instalados se usa.  Se decide UNA vez al
+# arrancar y todas las ordenes lo consultan: tener gcc y clang a la vez es
+# lo normal, y coger a ciegas el primero del PATH etiquetaria como gcc un
+# numero que produjo clang.
+ELEGIDO = {"c": "gcc", "cpp": "g++"}
 
 # ===========================================================================
 # Generador de fuentes: el mismo programa, en siete lenguajes, con el tamano
@@ -903,9 +911,9 @@ def orden_multi(lang: str, ficheros: list[str], salida: Path,
     como ella lo entiende: unos quieren todas las unidades, otros solo el
     fichero raiz y ya siguen las dependencias."""
     if lang == "c":
-        return ["gcc", "-O2", "-std=c11"] + ficheros + ["-o", str(salida)]
+        return [ELEGIDO["c"], "-O2", "-std=c11"] + ficheros + ["-o", str(salida)]
     if lang == "cpp":
-        return ["g++", "-O2", "-std=c++17"] + ficheros + ["-o", str(salida)]
+        return [ELEGIDO["cpp"], "-O2", "-std=c++17"] + ficheros + ["-o", str(salida)]
     if lang == "go":
         return ["go", "build", "-o", str(salida)] + ficheros
     if lang == "java":
@@ -932,9 +940,9 @@ def orden_multi(lang: str, ficheros: list[str], salida: Path,
 def orden_compilar(lang: str, fuente: Path, salida: Path, vm: Path) -> list[str]:
     """Compilacion COMPLETA hasta binario ejecutable."""
     if lang == "c":
-        return ["gcc", "-O2", "-std=c11", str(fuente), "-o", str(salida)]
+        return [ELEGIDO["c"], "-O2", "-std=c11", str(fuente), "-o", str(salida)]
     if lang == "cpp":
-        return ["g++", "-O2", "-std=c++17", str(fuente), "-o", str(salida)]
+        return [ELEGIDO["cpp"], "-O2", "-std=c++17", str(fuente), "-o", str(salida)]
     if lang == "rust":
         return ["rustc", "-O", str(fuente), "-o", str(salida)]
     if lang == "go":
@@ -962,9 +970,9 @@ def orden_comprobar(lang: str, fuente: Path, salida: Path,
     compararse contra algo que no es lo mismo.
     """
     if lang == "c":
-        return ["gcc", "-fsyntax-only", "-std=c11", str(fuente)]
+        return [ELEGIDO["c"], "-fsyntax-only", "-std=c11", str(fuente)]
     if lang == "cpp":
-        return ["g++", "-fsyntax-only", "-std=c++17", str(fuente)]
+        return [ELEGIDO["cpp"], "-fsyntax-only", "-std=c++17", str(fuente)]
     if lang == "rust":
         return ["rustc", "--emit=metadata", "-o", str(salida) + ".rmeta",
                 str(fuente)]
@@ -1165,6 +1173,11 @@ def main() -> int:
                         "(~5 lineas cada una).  Default: 200,800, que son "
                         "~1.4k y ~5.7k lineas: bastante para que haya algo que "
                         "compilar sin que la tanda dure una eternidad.")
+    p.add_argument("--cc", type=str, default="",
+                   help="compilador de C a usar.  Sin esto: si hay varios "
+                        "instalados se pregunta.")
+    p.add_argument("--cxx", type=str, default="",
+                   help="compilador de C++ a usar.")
     p.add_argument("--escalado", action="store_true",
                    help="anade las dos curvas de escalado: por tamano de "
                         "programa y por numero de modulos.  Cuesta bastante "
@@ -1190,7 +1203,17 @@ def main() -> int:
     # Sin `--langs`, se usan todos los que ESTeN instalados.  Pedidos a mano,
     # se respetan aunque falten: si alguien nombra una herramienta que no
     # tiene, lo que quiere es enterarse, no que se le ignore en silencio.
-    herramienta = {"c": "gcc", "cpp": "g++", "rust": "rustc", "go": "go",
+    n_c, r_c = elegir_compilador(
+        "C", buscar_compiladores(["gcc", "clang", "cc"]), args.cc)
+    n_cpp, r_cpp = elegir_compilador(
+        "C++", buscar_compiladores(["g++", "clang++", "c++"]), args.cxx)
+    if r_c:
+        ELEGIDO["c"] = r_c
+    if r_cpp:
+        ELEGIDO["cpp"] = r_cpp
+
+    herramienta = {"c": r_c or "gcc", "cpp": r_cpp or "g++",
+                   "rust": "rustc", "go": "go",
                    "java": "javac", "python": sys.executable}
     if args.langs:
         langs = [l.strip() for l in args.langs.split(",") if l.strip()]
