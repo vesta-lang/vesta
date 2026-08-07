@@ -304,9 +304,16 @@ static void print_formas_de(std::ostream &os, const ir::IrModule &mod,
         alguno = true;
         os << "  " << fn.name << "\n";
         for (const analysis::asa::AggregateFacts &a : m.agregados) {
-            os << "    linea " << a.declaracion.linea << ":"
-               << a.declaracion.indice << "  " << a.bytes << " bytes, "
-               << a.offsets_tocados() << " desplazamientos  -> "
+            /* De donde sale el valor: una linea del cuerpo o la firma.  Y su
+             * tamano solo si se sabe -- de un parametro lo sabe quien llama. */
+            if (a.declaracion.linea == 0 && a.declaracion.indice > 0)
+                os << "    parametro " << a.declaracion.indice << "  ";
+            else
+                os << "    linea " << a.declaracion.linea << ":"
+                   << a.declaracion.indice << "  ";
+            if (a.bytes >= 0) os << a.bytes << " bytes, ";
+            else os << "tamano no conocido aqui, ";
+            os << a.offsets_tocados() << " desplazamientos  -> "
                << analysis::asa::nombre_forma(a.forma()) << " / "
                << analysis::asa::nombre_certeza(a.sello.certeza) << "\n";
             for (analysis::asa::MotivoForma mo : a.motivos_forma())

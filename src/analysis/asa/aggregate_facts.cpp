@@ -591,6 +591,67 @@ AggregateFactsMap observar_con_cache(const ir::IrModule &mod,
                                      const IrFacts &facts, const PointsTo &pt,
                                      CacheHechos &cache) {
     AggregateFactsMap out;
+    /* Anclas: donde NACE un valor con componentes en esta funcion.  Hoy son dos
+     * clases y la segunda faltaba:
+     *
+     *   la RESERVA local, que lo crea aqui;
+     *   el PARAMETRO que lo recibe, que no lo crea pero es igual de observable
+     *   -- el modelo de efectos ya hablaba de `arg#0+8/8` mientras este dominio
+     *   se callaba sobre las mismas funciones, y dos partes del mismo informe
+     *   con distinta cobertura sobre lo mismo confunden a quien lee.
+     *
+     * El ancla no es la definicion de un valor con componentes: es como se le
+     * sigue.  Anadir una clase de ancla amplia la cobertura sin tocar el
+     * dominio. */
+    for (size_t pi = 0; pi < fn.params.size(); ++pi) {
+        const ir::IrValueId p = fn.params[pi];
+        /* De un parametro NO se sabe la extension -- el tamano lo sabe quien
+         * llama --, asi que la guarda de las reservas no sirve aqui.  La
+         * evidencia de que tiene componentes son sus propios accesos: se
+         * observa primero y se emite despues solo si los hubo.  Pedir extension
+         * constante era usar un sustituto de "tiene componentes" que para un
+         * parametro nunca se cumple. */
+        const RegionExtent &ex = pt.extent_of(p);
+        Observado o;
+        const UniversoId u_raiz = o.abrir_universo(0, fn.name);
+        observar(mod, fn, facts, pt, p, o, kProfundidadFrontera,
+                 RelacionAcceso::EnPropietario, u_raiz, cache);
+        AggregateFacts a;
+        a.ancla = p;
+        a.bytes = ex.constante() ? ex.bytes : -1; // -1 = no se sabe, y se dice
+        /* Un parametro no se declara en una linea del cuerpo: se declara en la
+         * firma.  Se marca cual es (indice+1, para que 0 signifique "no es un
+         * parametro") en vez de inventar una linea 0 que parece un error. */
+        a.declaracion = SitioIr{fn.name, 0, 0,
+                                static_cast<uint32_t>(pi + 1), 0};
+        a.accesos = std::move(o.accesos);
+        ligar_accesos(a.accesos);
+        /* Con componentes o sin ellos: un parametro al que solo se accede en el
+         * desplazamiento 0 es un puntero a un escalar, no un valor con partes, y
+         * meterlo aqui ensuciaria el informe sin decir nada. */
+        bool con_componentes = a.offsets_tocados() >= 2;
+        for (const AccesoComponente &ac : a.accesos)
+            if (ac.offset_sabido && ac.offset > 0) con_componentes = true;
+        if (!con_componentes) continue;
+        a.participaciones = std::move(o.participaciones);
+        a.fronteras = std::move(o.fronteras);
+        a.limitaciones = std::move(o.limitaciones);
+        a.frontera.assign(o.frontera.begin(), o.frontera.end());
+        a.universos = std::move(o.universos);
+        a.pasado_por_abi = o.pasado_por_abi;
+        a.devuelto_entero = o.devuelto_entero;
+        a.transferido_como_bloque = o.transferido_como_bloque;
+        a.sello.origen = {kProductor, fn.name.c_str(), p};
+        a.sello.apoyos.anadir("analysis.points_to");
+        const FormaDeValor f = a.forma();
+        a.sello.certeza = (f == FormaDeValor::SinEvidencia ||
+                           f == FormaDeValor::Desconocida)
+                              ? Certeza::Desconocida
+                              : (a.perfil().universo_completo
+                                     ? Certeza::Demostrada
+                                     : Certeza::Inferida);
+        out.agregados.push_back(std::move(a));
+    }
     for (const ir::IrBlock &b : fn.blocks) {
         for (const ir::IrInstr &in : b.instrs) {
             if (in.op != IrOp::ALLOCA || in.dst == ir::IR_NO_VALUE) continue;
