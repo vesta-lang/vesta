@@ -48,6 +48,7 @@ int run_worker(const std::string &file_name, const std::string &output_prefix,
                 bool skip_preprocessor, bool keep_labels,
                 const std::vector<uint8_t> *ir_section_bytes, bool emit_map);
 }
+#include <chrono>
 #include "vx/type_checker.h"
 
 #include "port/transpiler_base.h"
@@ -258,6 +259,20 @@ CompileResult compile_vx_source(const std::string &source,
                                  const std::string &filename,
                                  const CompileOptions &opts) {
     CompileResult res;
+    // Reloj de fase.  Se mide SIEMPRE: son cinco lecturas por compilacion, y
+    // una medida que hay que pedir con una opcion es una medida que nadie
+    // mira.  De aqui sale ademas el "cuanto tardo en ver el error", que es la
+    // suma de analisis y tipos.
+    using RelojFase = std::chrono::steady_clock;
+    auto marca = RelojFase::now();
+    auto cerrar_fase = [&marca]() -> long {
+        const auto ahora = RelojFase::now();
+        const long us = static_cast<long>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                ahora - marca).count());
+        marca = ahora;
+        return us;
+    };
 
     // 1. Lexer + Parser.  Si el lexer/parser ya reportan errores no
     // tiene sentido seguir: el AST seria parcial y los pases siguientes
@@ -344,6 +359,8 @@ CompileResult compile_vx_source(const std::string &source,
         for (auto &s : synth) kept.push_back(std::move(s));
         mod->decls = std::move(kept);
     }
+
+    res.tiempos.analisis_us = cerrar_fase();
 
     // 2. TypeChecker: rellena result_type y valida semantica.
     TypeChecker tc(*mod, res.diagnostics);
@@ -503,6 +520,8 @@ CompileResult compile_vx_source(const std::string &source,
         res.html_types =
             html_from_dot(graphviz_types_from_ast(*mod), "Tipos", "types");
     }
+
+    res.tiempos.tipos_us = cerrar_fase();
 
     // 3. Lowering: AST -> ir::IrModule.  Pasamos el TypeChecker para
     // que el lowering pueda consultar StructLayout (offsets/tamanos)
@@ -1034,6 +1053,8 @@ CompileResult compile_vx_source(const std::string &source,
     // vectorial recibe registro igual que uno entero.  Aqui hubo un rechazo
     // mientras el asignador solo sabia del banco entero.
 
+    res.tiempos.bajada_us = cerrar_fase();
+
     // 4. Emitir IR -> texto .vel.  Aqui es donde el optimizador IR
     // hace DCE / copy prop / etc segun opt_level y el regalloc lineal
     // asigna r0..r15 a los IrValue.
@@ -1271,6 +1292,11 @@ CompileResult compile_vx_source(const std::string &source,
     if (opts.dump_html_vel) {
         res.html_vel = html_from_vel_text(res.vel_text);
     }
+
+    // Lo que queda desde el final de la bajada es emitir -- y dentro va el
+    // optimizador de IR, que no se separa aparte porque corre entrelazado con
+    // la emision y partirlo daria dos numeros que no suman lo que se ve.
+    res.tiempos.emitir_us = cerrar_fase();
 
     res.ok = !res.diagnostics.has_errors();
     return res;

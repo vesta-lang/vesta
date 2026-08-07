@@ -4287,6 +4287,33 @@ int main(int argc, char *argv[]) {
         }
         vesta::scout() << "[vx] .vel generado: " << vel_path << "\n";
 
+        /* Reparto del coste del frontend.  La construccion ya decia lo que
+         * tardaban ensamblar y enlazar, pero de la mitad delantera -- la que
+         * crece con el tamano del fuente -- no decia nada, asi que "por que
+         * tarda tanto en compilar" no tenia respuesta sin instrumentar a mano.
+         *
+         * `comprobar` es la suma de analisis y tipos: es lo que tarda en salir
+         * un diagnostico, que es la pregunta que se hace quien esta editando.
+         * Sale de la construccion normal, sin un modo aparte que pedir. */
+        {
+            const auto &tf = cr.tiempos;
+            vesta::scout()
+                << "[vx] frontend: analisis " << tf.analisis_us << " us"
+                << " | tipos " << tf.tipos_us << " us"
+                << " | bajada " << tf.bajada_us << " us"
+                << " | emitir " << tf.emitir_us << " us"
+                << "   (comprobar " << tf.comprobar_us() << " us, total "
+                << tf.total_us() << " us)\n";
+            nlohmann::json jf;
+            jf["analisis_us"] = tf.analisis_us;
+            jf["tipos_us"] = tf.tipos_us;
+            jf["bajada_us"] = tf.bajada_us;
+            jf["emitir_us"] = tf.emitir_us;
+            jf["comprobar_us"] = tf.comprobar_us();
+            jf["frontend_total_us"] = tf.total_us();
+            std::cout << "\n__VESTA_TIMES_FRONTEND__ " << jf.dump() << "\n";
+        }
+
         if (emit_only) return EXIT_SUCCESS;
 
         // Compilar .vel -> .velb saltando VPP

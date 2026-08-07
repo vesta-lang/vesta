@@ -311,6 +311,37 @@ struct CompileResult {
     Diagnostics diagnostics; ///< Errores y warnings acumulados.
 
     /**
+     * @struct TiemposFrontend
+     * @brief Cuanto costo cada fase del frontend, en microsegundos.
+     *
+     * La construccion ya publicaba lo que tardan ensamblar y enlazar, pero de
+     * la mitad delantera -- que es la que crece con el tamano del fuente -- no
+     * decia nada, asi que "por que tarda tanto en compilar" no se podia
+     * responder sin instrumentar a mano.
+     *
+     * Se mide SIEMPRE, no bajo una opcion: el coste son cinco lecturas de
+     * reloj por compilacion, y una medida que hay que pedir es una medida que
+     * nadie mira.  Ademas responde a la pregunta de "cuanto tardo en ver el
+     * error" sin necesidad de un modo aparte: es @c comprobar_us, que abarca
+     * hasta el final del analisis de tipos.
+     */
+    struct TiemposFrontend {
+        long analisis_us = 0;   ///< Lexico + sintaxis: fuente -> AST.
+        long tipos_us = 0;      ///< Comprobacion de tipos sobre el AST.
+        long bajada_us = 0;     ///< AST -> IR.
+        long optimizar_us = 0;  ///< Pases sobre el IR.
+        long emitir_us = 0;     ///< IR -> texto .vel.
+        /// Hasta donde llega el diagnostico: analisis + tipos.  Es lo que
+        /// esperaria quien solo quiere saber si su codigo esta bien.
+        long comprobar_us() const { return analisis_us + tipos_us; }
+        long total_us() const {
+            return analisis_us + tipos_us + bajada_us + optimizar_us
+                   + emitir_us;
+        }
+    };
+    TiemposFrontend tiempos; ///< Reparto del coste del frontend.
+
+    /**
      * @brief Opcion W: IR serializado en bytes para embebido en `.velb`.
      *
      * Llenado por @c compile_vx_source con el resultado de
