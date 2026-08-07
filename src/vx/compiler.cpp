@@ -1096,7 +1096,7 @@ CompileResult compile_vx_source(const std::string &source,
             analyze::compose_fingerprints(fps, &res.contracts);
             // En --analyze (`emit_ir_preopt`) NO se emite el error ni se aborta
             // (ver la nota en compiler_project.cpp): analyze mide, el build real
-            // enforça.
+            // enforza.
             if (!opts.emit_ir_preopt) {
                 auto checks = analyze::verify_contracts(fps, res.contracts);
                 bool violated = false;
@@ -1151,6 +1151,10 @@ CompileResult compile_vx_source(const std::string &source,
         /* No se serializa todavia: falta saber en que registro dejo el
          * asignador cada valor, y eso solo se sabe tras emitir.  Se guarda y
          * se serializa mas abajo, ya con esa informacion dentro. */
+        /* Sobre el codigo que DE VERDAD se emite, y ANTES de moverlo.  Mismo
+         * comprobador que usa el camino de proyecto y que `--analyze`: un solo
+         * criterio para los tres. */
+        vx_report_bounds(irmod_for_section, res.diagnostics, filename);
         mod_para_seccion = std::move(irmod_for_section);
         hay_seccion = true;
     }

@@ -37,6 +37,10 @@
 #include "analyze/fingerprint.h" // FunctionContracts
 #include "vxdbg/ids.h"           // huella del mapa de simbolos
 
+namespace ir {
+struct IrModule;
+}
+
 namespace vx {
 
 /**
@@ -546,6 +550,21 @@ bool vx_source_has_imports(const std::string &source);
  * @return true si aparece la palabra `namespace` fuera de comentarios y cadenas.
  */
 bool vx_source_declara_namespace(const std::string &source);
+
+/**
+ * @brief Convierte en diagnosticos los accesos que se salen DEMOSTRABLEMENTE
+ *        de su region.
+ *
+ * Los fallos que el analisis puede demostrar no pueden vivir solo en
+ * `--analyze`: tienen que salir AL COMPILAR, que es cuando se leen.  Consume el
+ * mismo comprobador que usa el informe (`analysis::effects::check_region_bounds`)
+ * para que no haya dos criterios.
+ *
+ * @param mod   Modulo IR ya optimizado (el codigo que de verdad se va a emitir).
+ * @param diags Bolsa donde se acumulan.
+ */
+void vx_report_bounds(const ir::IrModule &mod, Diagnostics &diags,
+                      const std::string &file);
 
 } // namespace vx
 

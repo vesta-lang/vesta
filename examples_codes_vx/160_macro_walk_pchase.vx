@@ -87,7 +87,12 @@ comptime string walk(expr code) {
 
 i32 main() {
     // Reservar buffer host y poblarlo con un mini-grafo de punteros.
-    u64* root = (u64*)malloc(256);
+    // 512 y no 256: el grafo llega hasta `root + 0x1C0` (448) mas 8 bytes del
+    // valor, asi que con 256 las escrituras de los niveles 2 y 3 caian FUERA
+    // del bloque.  Lo señalo el comprobador de limites de `--analyze`
+    // (`region [0,256) ; acceso [448,456)`); funcionaba por el margen que deja
+    // el allocador, que es justo lo que hace dificil de ver un fallo asi.
+    u64* root = (u64*)malloc(512);
 
     // Nivel 0: root[0..3] son valores escalares.
     root[0] = 111;

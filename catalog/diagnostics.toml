@@ -135,6 +135,28 @@ es = "necesita el runtime"
 en = "may abort (panic)"
 es = "puede abortar (panic)"
 
+# --- lowering / IR (VX3xxx) ---
+
+[VX3001]
+en = "{0} of {1} bytes is outside {2}: the object reserves [0, {3}) and the access is [{4}, {5})"
+es = "{0} de {1} bytes fuera de {2}: el objeto reserva [0, {3}) y el acceso es [{4}, {5})"
+
+[VX3002]
+en = "write"
+es = "escritura"
+
+[VX3003]
+en = "read"
+es = "lectura"
+
+[VX3004]
+en = "detected by region analysis: the extent comes from where the object is reserved ({0} bytes) and the access from its offset and width"
+es = "detectado por el analisis de regiones: la extension sale de donde se reserva el objeto ({0} bytes) y el acceso, de su desplazamiento y ancho"
+
+[VX3005]
+en = "either reserve at least {0} bytes for the object, or keep the access within [0, {1})"
+es = "o reserva al menos {0} bytes para el objeto, o manten el acceso dentro de [0, {1})"
+
 # --- modulos / namespaces (VX4xxx) ---
 
 [VX4001]

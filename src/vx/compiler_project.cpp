@@ -36,6 +36,8 @@
 
 #include "ir/ir_emitter.h"
 #include "ir/ir_optimizer.h"
+#include "analysis/effects/bounds.h" // accesos fuera de region -> diagnostico
+#include "vx/diag/diag_format.h"
 #include "ir/passes/select_policy.h"
 #include "ir/ssa_ir.h"
 #include "ir/ssa_ir_serialize.h"
@@ -3089,6 +3091,11 @@ CompileResult compile_vx_project(
     ir::ir_optimize(merged, opt_level_from_int_(opts.opt_level),
                     /*allow_inline=*/!opts.emit_ir_preopt);
 
+    /* Sobre el codigo que DE VERDAD se va a emitir: lo que el analisis puede
+     * demostrar fuera de su region no puede quedarse en `--analyze`, tiene que
+     * salir al compilar, que es cuando se lee. */
+    vx_report_bounds(merged, res.diagnostics, root_path);
+
     if (opts.dump_ir) {
         std::ostringstream ir_oss;
         ir_oss << "// ============================================\n";
@@ -3277,7 +3284,7 @@ CompileResult compile_vx_project(
 }
 
 /**
- * @brief ¿Aparece la palabra @p kw en el texto, fuera de comentarios y cadenas?
+ * @brief Aparece la palabra @p kw en el texto, fuera de comentarios y cadenas?
  *
  * Escaner deliberadamente simple, y permisivo por diseno: si dice que si y el
  * parser luego no la encuentra, no pasa nada.  Se busca por palabra COMPLETA
@@ -3351,6 +3358,37 @@ static bool contiene_palabra(const std::string &source, const char *kw) {
         ++i;
     }
     return false;
+}
+
+/**
+ * @brief Ver la declaracion en compiler.h.
+ *
+ * El texto sale del catalogo multi-idioma: aqui solo viajan DATOS (que region,
+ * que tramo, que hueco).  La prueba va DENTRO del mensaje, porque un "acceso
+ * fuera de region" sin su derivacion obliga a reconstruirla a mano.
+ */
+void vx_report_bounds(const ir::IrModule &mod, Diagnostics &diags,
+                      const std::string &file) {
+    for (const analysis::effects::BoundsViolation &v :
+         analysis::effects::check_region_bounds(mod)) {
+        SourceLoc loc;
+        loc.line = v.line;
+        loc.file = file;
+        diags.diag(loc, DiagLevel::ERR, "VX3001",
+                   {vx::diag::format(v.write ? "VX3002" : "VX3003", {}),
+                    std::to_string(v.width), v.region,
+                    std::to_string(v.limite), std::to_string(v.off),
+                    std::to_string(v.off + v.width)});
+        /* COMO se detecto -- no solo que pasa.  Quien lee un error tiene que
+         * poder juzgar si se lo cree, y para eso necesita saber de donde sale
+         * cada mitad del veredicto. */
+        diags.note(loc, vx::diag::format("VX3004", {std::to_string(v.objeto)}));
+        /* Y QUE hacer.  El analisis conoce las dos salidas: agrandar el objeto
+         * hasta donde llega el acceso, o no pasar de donde llega el objeto. */
+        diags.note(loc, vx::diag::format(
+                            "VX3005", {std::to_string(v.off + v.width),
+                                       std::to_string(v.limite)}));
+    }
 }
 
 bool vx_source_has_imports(const std::string &source) {

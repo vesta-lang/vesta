@@ -1,0 +1,38 @@
+namespace ejemplos.fuera_de_region;
+
+// El comprobador de limites de region, visto desde dentro.
+//
+// El analisis sabe dos cosas por separado: DONDE toca cada operacion (raiz +
+// desplazamiento + ancho) y HASTA DONDE llega cada objeto (la extension, que
+// sale del sitio donde se reserva).  Juntarlas hace decidible el "se sale".
+//
+// Este ejemplo se queda en lo que SI es correcto -- el caso que se sale esta
+// en el test negativo `375_fuera_de_region_mal.vx`, que debe fallar al
+// compilar.  Aqui lo que se comprueba es lo contrario: que no estorba.
+
+i64 dentro_del_hueco() {
+    u8[16] buf;
+    u8* base = &buf[0];
+    // Ultimo qword que cabe: [8,16) sobre un objeto de 16.
+    i64* q = (i64*) (base + 8);
+    *q = 40;
+    return *q;
+}
+
+// Un struct de 3 bytes ocupa 8 en el marco, y el compilador lo copia con un
+// movimiento de 8: ensanchar el acceso DENTRO del hueco es legitimo, y por eso
+// el limite que se compara es el hueco y no el tamano logico.
+struct Tres { u8 a; u8 b; u8 c; }
+
+i64 agregado_pequeno() {
+    Tres t;
+    t.a = 1; t.b = 1; t.c = 0;
+    Tres copia = t;
+    return (i64) (copia.a + copia.b);
+}
+
+i32 main() {
+    i64 r = dentro_del_hueco() + agregado_pequeno();
+    println("r=${r}");
+    return (i32) r;
+}

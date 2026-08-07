@@ -1,0 +1,20 @@
+namespace ejemplos.fuera_de_region_mal;
+
+// NEGATIVO: debe FALLAR al compilar con VX3001.
+//
+// `buf` reserva 16 bytes y la escritura de 8 empieza en el 12: acaba en el 20.
+// No es una sospecha ni un aviso -- esta demostrado con los dos datos que el
+// analisis ya tenia --, asi que corta la compilacion en vez de esperar a que el
+// programa pise memoria ajena en ejecucion.
+//
+// El diagnostico dice las tres cosas: que pasa, COMO se detecto, y que hacer.
+
+i64 mal() {
+    u8[16] buf;
+    u8* base = &buf[0];
+    i64* q = (i64*) (base + 12);
+    *q = 1;
+    return (i64) buf[0];
+}
+
+i32 main() { return (i32) mal(); }

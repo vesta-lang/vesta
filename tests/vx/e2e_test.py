@@ -2818,6 +2818,8 @@ r0_case("ctor_comptime_modulo", "constructor comptime de un tipo de otro modulo"
 r0_case("asm_dse", "un asm no es barrera, pero se respeta lo que lee, lo que cambia y lo que escribe", "372_asm_dse.vx", 42)
 r0_case("campo_por_puntero", "el '.' atraviesa un puntero: leer, escribir, ++, metodo, encadenar, &campo y recorrer una lista", "371_campo_por_puntero.vx", 42)
 r0_case("optional_overlay", "un overlay dentro de un Optional guarda el HANDLE, no una copia: la vista sigue apuntando al buffer original", "373_optional_overlay.vx", 1673)
+r0_case("fuera_de_region_ok", "lo que cabe en su hueco no molesta: ultimo qword del buffer y copia ensanchada de un agregado de 3 bytes", "374_fuera_de_region.vx", 42)
+fails_case("region375", "un acceso demostrablemente fuera de su region corta la compilacion", "375_fuera_de_region_mal.vx", "outside stack")
 r0_case("ctor_importado", "construir un struct declarado en otro modulo", "362_ctor_importado.vx", 42)
 r0_case("ctor_comptime", "constructor comptime: recoge la llamada cuando ninguna sobrecarga encaja", "361_ctor_comptime.vx", 42)
 r0_case("enum_valor_importado", "enum con valor importado: conserva valores y compara por contenido", "359_enum_valor_importado.vx", 42)

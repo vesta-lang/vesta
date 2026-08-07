@@ -27584,8 +27584,26 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     }
     // ----- None() -----  Optional vacio (flag=0) en stack.
     if (is_None) {
+        /* El buffer se dimensiona por el Optional QUE SE ESPERA, no a 16 fijo.
+         *
+         * Un `Optional<u128>` mide 24 (tag + los 16 del struct), y quien
+         * devuelve copia al retbuf tantos qwords como diga el TIPO DE RETORNO:
+         * con 16 reservados, esa copia leia el tercer qword fuera del buffer --
+         * memoria de pila sin inicializar.  No se notaba porque en un `None`
+         * nadie mira el payload, pero el acceso era real: lo señalo el
+         * comprobador de limites de `--analyze` (`region [0,16) ; acceso
+         * [16,24)`) en `checked_div` y en 17 programas mas del corpus.
+         *
+         * Con el tipo a mano se usa el mismo calculo que el resto del camino
+         * (`optional_buf_bytes`); si el contexto no lo da, se queda en 16 como
+         * antes. */
+        size_t none_sz = 16;
+        if (e->result_type.kind == PrimitiveKind::OPTIONAL)
+            none_sz = optional_buf_bytes(e->result_type);
+        else if (sret_active_ && sret_buf_size_ >= 16)
+            none_sz = static_cast<size_t>(sret_buf_size_);
         const ir::IrValueId v_buf =
-            stack_alloc_buf(16, e->loc.line, /*for_optres=*/true);
+            stack_alloc_buf(none_sz, e->loc.line, /*for_optres=*/true);
         const ir::IrValueId v_zero =
             emit_const(ir::IrType::I64, 0, e->loc.line);
         ir::IrInstr st0{};
