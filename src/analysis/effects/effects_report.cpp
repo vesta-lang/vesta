@@ -20,7 +20,10 @@
 #include "vx/diag/diag_format.h" // el texto de los motivos vive en el catalogo
 
 #include <cstdlib>
+#include <algorithm>
 #include <map>
+#include <utility>
+#include <vector>
 #include <iostream>
 #include <string>
 #if defined(_WIN32)
@@ -374,16 +377,42 @@ static void print_conflictos(std::ostream &os, EffectAnalysis &ea,
 static void print_formas_de(std::ostream &os, const ir::IrModule &mod,
                             const char *estado) {
     os << "  --- " << estado << " ---\n";
-    bool alguno = false;
+    /* Se ordena por lo que FALTA, no por orden de aparicion.  Un informe que
+     * empieza por lo demostrado se lee y se cierra; uno que empieza por lo que
+     * no se sabe dirige la atencion a donde hay algo que hacer.  Dentro de cada
+     * grupo se conserva el orden del modulo, que es estable. */
+    std::vector<std::pair<std::string, analysis::asa::AggregateFacts>> todos;
     for (const ir::IrFunction &fn : mod.functions) {
         if (fn.blocks.empty()) continue;
         const analysis::IrFacts h = analysis::build_ir_facts(fn);
-        const analysis::asa::AggregateFactsMap m =
-            analysis::asa::observar_agregados(mod, fn, h);
-        if (m.agregados.empty()) continue;
-        alguno = true;
-        os << "  " << fn.name << "\n";
-        for (const analysis::asa::AggregateFacts &a : m.agregados) {
+        for (const analysis::asa::AggregateFacts &a :
+             analysis::asa::observar_agregados(mod, fn, h).agregados)
+            todos.emplace_back(fn.name, a);
+    }
+    auto urgencia = [](const analysis::asa::AggregateFacts &a) {
+        // 0 = no se puede elegir, 1 = no se llego a observar, 2 = se sale o no
+        // se pudo seguir, 3 = demostrado.  Menor va antes.
+        const analysis::asa::FormaDeValor f = a.forma();
+        if (f == analysis::asa::FormaDeValor::Desconocida) return 0;
+        if (f == analysis::asa::FormaDeValor::SinEvidencia) return 1;
+        if (!a.fronteras.empty() || !a.limitaciones.empty()) return 2;
+        return 3;
+    };
+    std::stable_sort(todos.begin(), todos.end(),
+                     [&](const auto &x, const auto &y) {
+                         return urgencia(x.second) < urgencia(y.second);
+                     });
+    bool alguno = false;
+    {
+        std::string fn_actual;
+        for (const auto &par : todos) {
+            alguno = true;
+            if (par.first != fn_actual) {
+                fn_actual = par.first;
+                os << "  " << fn_actual << "\n";
+            }
+            const analysis::asa::AggregateFacts &a = par.second;
+            {
             /* De donde sale el valor: una linea del cuerpo o la firma.  Y su
              * tamano solo si se sabe -- de un parametro lo sabe quien llama. */
             if (a.declaracion.linea == 0 && a.declaracion.indice > 0)
@@ -427,6 +456,7 @@ static void print_formas_de(std::ostream &os, const ir::IrModule &mod,
                    << analysis::asa::nombre_limitacion(l.codigo) << " en "
                    << l.sitio.funcion << ":" << l.sitio.linea
                    << (l.destino.empty() ? "" : " -> " + l.destino) << "\n";
+            }
         }
     }
     if (!alguno)
@@ -626,6 +656,40 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
      * una llamada a libvesta_rt en nativo, y hay quien directamente no existe
      * fuera de la VM.  Un informe que no diga desde donde mira invita a leerlo
      * como si valiera para los tres. */
+    /* Un resumen antes de cuatrocientas lineas.  No sustituye a nada de lo que
+     * viene despues: da el contexto para leerlo, y dice de entrada si hay algo
+     * que mirar o no. */
+    {
+        const bool color = hay_color(os);
+        const ir::IrModule &fuente = mod_previo != nullptr ? *mod_previo : mod;
+        uint32_t valores = 0, demostrados = 0, sin_cerrar = 0;
+        for (const ir::IrFunction &fn : fuente.functions) {
+            if (fn.blocks.empty()) continue;
+            const analysis::IrFacts h = analysis::build_ir_facts(fn);
+            for (const analysis::asa::AggregateFacts &a :
+                 analysis::asa::observar_agregados(fuente, fn, h).agregados) {
+                ++valores;
+                if (a.sello.certeza == analysis::asa::Certeza::Demostrada)
+                    ++demostrados;
+                if (!a.fronteras.empty() || !a.limitaciones.empty())
+                    ++sin_cerrar;
+            }
+        }
+        os << tinte(color, col::kFuerte, "Resumen") << ": "
+           << mod.functions.size() << " funciones";
+        if (valores > 0)
+            os << ", " << valores << " valores con componentes ("
+               << tinte(color, col::kVerde, std::to_string(demostrados))
+               << " con forma demostrada, "
+               << tinte(color, sin_cerrar ? col::kAmbar : col::kApagado,
+                        std::to_string(sin_cerrar))
+               << " sin cerrar)";
+        os << "\n";
+        os << "Se analiza para el backend " << backend_name(backend)
+           << "; las secciones que hablan del programa lo hacen en sus DOS "
+              "estados (fuente y codigo final).\n\n";
+    }
+
     os << "=== Efectos y contratos (modelo unico) -- backend: "
        << backend_name(backend) << " ===\n\n";
     // Orden estable: el de mod.functions.
