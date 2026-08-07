@@ -331,6 +331,306 @@ def escribir_multi(lang: str, n: int, k: int, d: Path) -> Optional[list[str]]:
 
 
 # ===========================================================================
+# QUE codigo, no cuanto.
+#
+# El generador de arriba emite lo mas anodino que existe: funciones sueltas con
+# aritmetica entera.  Eso mide el trabajo de base -- lexico, sintaxis, tipos,
+# generacion -- y esta bien para las curvas de tamano, pero deja sin tocar todo
+# lo que de verdad puede explotar en un compilador.  Cada una de estas familias
+# pega en una parte distinta:
+#
+#   genericos    Monomorfizacion: una plantilla por N tipos concretos MULTIPLICA
+#                el codigo que hay que generar.  Es el sitio clasico donde un
+#                compilador pasa de lineal a cuadratico sin avisar.
+#   comptime     Ejecutar codigo DURANTE la compilacion.  El coste ya no depende
+#                del tamano del fuente sino de lo que ese codigo tarde en correr,
+#                que es una dimension que ningun otro banco toca.
+#   anidamiento  Una sola expresion con mil niveles.  Pone a prueba la
+#                recursion del analizador y del recorrido del arbol; es donde
+#                aparecen los desbordamientos de pila y los algoritmos que
+#                recorren el arbol una vez por nivel.
+#   tipos        Muchas declaraciones distintas en vez de muchas funciones
+#                iguales.  Estresa las tablas de simbolos y la resolucion de
+#                nombres, no la generacion de codigo.
+#
+# Lo que un lenguaje no tenga se queda FUERA en vez de sustituirse por algo
+# parecido: comptime no tiene equivalente en C, y comparar contra `constexpr`
+# de C++ como si fuera lo mismo daria un numero que no significa nada.
+# ===========================================================================
+
+def gen_genericos_vx(n: int) -> str:
+    """Una plantilla instanciada con `n` tipos distintos de usuario."""
+    partes = ["struct Caja<T> {\n    T dato;\n    T leer() { return this.dato; }\n}\n",
+              "T identidad<T>(T x) {\n    return x;\n}\n"]
+    for i in range(n):
+        partes.append("struct S%d { i64 a; }\n" % i)
+    partes.append("i32 main() {\n    i64 s = 0;")
+    for i in range(n):
+        partes.append("    Caja<S%d> c%d;\n    c%d.dato.a = %d;\n"
+                      "    s = s + identidad<i64>(c%d.leer().a);"
+                      % (i, i, i, i % 100, i))
+    partes.append("    return (i32) (s % 251);\n}\n")
+    return "\n".join(partes)
+
+
+def gen_genericos_cpp(n: int) -> str:
+    partes = ["template <typename T> struct Caja { T dato; T leer() { return dato; } };",
+              "template <typename T> T identidad(T x) { return x; }"]
+    for i in range(n):
+        partes.append("struct S%d { long long a; };" % i)
+    partes.append("int main() {\n    long long s = 0;")
+    for i in range(n):
+        partes.append("    Caja<S%d> c%d; c%d.dato.a = %d;"
+                      " s += identidad<long long>(c%d.leer().a);"
+                      % (i, i, i, i % 100, i))
+    partes.append("    return (int)(s % 251);\n}")
+    return "\n".join(partes) + "\n"
+
+
+def gen_genericos_rs(n: int) -> str:
+    partes = ["struct Caja<T> { dato: T }",
+              "impl<T: Copy> Caja<T> { fn leer(&self) -> T { self.dato } }",
+              "fn identidad<T>(x: T) -> T { x }"]
+    for i in range(n):
+        partes.append("#[derive(Clone, Copy)] struct S%d { a: i64 }" % i)
+    partes.append("fn main() {\n    let mut s: i64 = 0;")
+    for i in range(n):
+        partes.append("    let c%d = Caja { dato: S%d { a: %d } };"
+                      " s = s.wrapping_add(identidad(c%d.leer().a));"
+                      % (i, i, i % 100, i))
+    partes.append("    std::process::exit((s % 251) as i32);\n}")
+    return "\n".join(partes) + "\n"
+
+
+def gen_genericos_java(n: int) -> str:
+    partes = ["public class Gen {",
+              "    static class Caja<T> { T dato; T leer() { return dato; } }",
+              "    static <T> T identidad(T x) { return x; }"]
+    for i in range(n):
+        partes.append("    static class S%d { long a; }" % i)
+    partes.append("    public static void main(String[] args) {\n        long s = 0;")
+    for i in range(n):
+        partes.append("        Caja<S%d> c%d = new Caja<>(); c%d.dato = new S%d();"
+                      " c%d.dato.a = %d; s += identidad(c%d.leer().a);"
+                      % (i, i, i, i, i, i % 100, i))
+    partes.append("        System.exit((int)(s % 251));\n    }\n}")
+    return "\n".join(partes) + "\n"
+
+
+def gen_comptime_vx(n: int) -> str:
+    """`n` constantes calculadas EJECUTANDO codigo al compilar.
+
+    El coste no lo pone el tamano del fuente: lo pone lo que ese codigo tarde en
+    correr.  Es la unica familia donde compilar mas despacio puede deberse a un
+    bucle del programador y no al compilador, y por eso se mide aparte.
+    """
+    partes = ["comptime i64 fib(i64 n) {\n    if (n <= 1) return n;\n"
+              "    return fib(n - 1) + fib(n - 2);\n}\n",
+              "comptime i64 fact(i64 n) {\n    if (n <= 1) return 1;\n"
+              "    return n * fact(n - 1);\n}\n"]
+    for i in range(n):
+        partes.append("const i64 K%d = fib(%d) + fact(%d);" % (i, 10 + (i % 8),
+                                                               5 + (i % 5)))
+    partes.append("i32 main() {\n    i64 s = 0;")
+    for i in range(n):
+        partes.append("    s = s + K%d;" % i)
+    partes.append("    return (i32) (s % 251);\n}\n")
+    return "\n".join(partes)
+
+
+def _anid(n: int, abrir: str, cerrar: str, hoja: str) -> str:
+    """Expresion con `n` niveles de parentesis anidados."""
+    return abrir * n + hoja + cerrar * n
+
+
+def gen_anidamiento_vx(n: int) -> str:
+    return ("i32 main() {\n    i64 s = %s;\n    return (i32) (s %% 251);\n}\n"
+            % _anid(n, "(1 + ", ")", "7"))
+
+
+def gen_anidamiento_c(n: int) -> str:
+    return ("int main(void) {\n    long long s = %s;\n"
+            "    return (int)(s %% 251);\n}\n" % _anid(n, "(1 + ", ")", "7"))
+
+
+def gen_anidamiento_rs(n: int) -> str:
+    return ("fn main() {\n    let s: i64 = %s;\n"
+            "    std::process::exit((s %% 251) as i32);\n}\n"
+            % _anid(n, "(1 + ", ")", "7"))
+
+
+def gen_anidamiento_go(n: int) -> str:
+    return ("package main\n\nimport \"os\"\n\nfunc main() {\n\tvar s int64 = %s\n"
+            "\tos.Exit(int(s %% 251))\n}\n" % _anid(n, "(1 + ", ")", "7"))
+
+
+def gen_anidamiento_java(n: int) -> str:
+    return ("public class Gen {\n    public static void main(String[] a) {\n"
+            "        long s = %s;\n        System.exit((int)(s %% 251));\n"
+            "    }\n}\n" % _anid(n, "(1 + ", ")", "7"))
+
+
+def gen_tipos_vx(n: int) -> str:
+    """`n` structs distintos con varios campos: estresa la tabla de simbolos."""
+    partes = []
+    for i in range(n):
+        partes.append("struct T%d { i64 a; i64 b; i64 c; i64 d; }\n" % i)
+    partes.append("i32 main() {\n    i64 s = 0;")
+    for i in range(n):
+        partes.append("    T%d v%d;\n    v%d.a = %d;\n    s = s + v%d.a;"
+                      % (i, i, i, i % 100, i))
+    partes.append("    return (i32) (s % 251);\n}\n")
+    return "\n".join(partes)
+
+
+def gen_tipos_c(n: int) -> str:
+    partes = []
+    for i in range(n):
+        partes.append("typedef struct { long long a, b, c, d; } T%d;" % i)
+    partes.append("int main(void) {\n    long long s = 0;")
+    for i in range(n):
+        partes.append("    T%d v%d; v%d.a = %d; s += v%d.a;"
+                      % (i, i, i, i % 100, i))
+    partes.append("    return (int)(s % 251);\n}")
+    return "\n".join(partes) + "\n"
+
+
+def gen_tipos_rs(n: int) -> str:
+    partes = []
+    for i in range(n):
+        partes.append("struct T%d { a: i64, b: i64, c: i64, d: i64 }" % i)
+    partes.append("fn main() {\n    let mut s: i64 = 0;")
+    for i in range(n):
+        partes.append("    let v%d = T%d { a: %d, b: 0, c: 0, d: 0 };"
+                      " s = s.wrapping_add(v%d.a);" % (i, i, i % 100, i))
+    partes.append("    std::process::exit((s % 251) as i32);\n}")
+    return "\n".join(partes) + "\n"
+
+
+def gen_tipos_go(n: int) -> str:
+    partes = ["package main", "", "import \"os\"", ""]
+    for i in range(n):
+        partes.append("type T%d struct{ a, b, c, d int64 }" % i)
+    partes.append("func main() {\n\tvar s int64 = 0")
+    for i in range(n):
+        partes.append("\tv%d := T%d{a: %d}\n\ts += v%d.a" % (i, i, i % 100, i))
+    partes.append("\tos.Exit(int(s % 251))\n}")
+    return "\n".join(partes) + "\n"
+
+
+def gen_tipos_java(n: int) -> str:
+    partes = ["public class Gen {"]
+    for i in range(n):
+        partes.append("    static class T%d { long a, b, c, d; }" % i)
+    partes.append("    public static void main(String[] args) {\n        long s = 0;")
+    for i in range(n):
+        partes.append("        T%d v%d = new T%d(); v%d.a = %d; s += v%d.a;"
+                      % (i, i, i, i, i % 100, i))
+    partes.append("        System.exit((int)(s % 251));\n    }\n}")
+    return "\n".join(partes) + "\n"
+
+
+def familia_modular_vx(familia: str, n: int, d: Path) -> Optional[list[str]]:
+    """La familia METIDA EN UN MODULO, con un principal que la usa.
+
+    Un numero por familia dice cuanto cuesta compilarla, y nada mas.  Lo util es
+    el desglose: si de trescientos milisegundos doscientos ochenta son comptime,
+    cambiar el cuerpo de una funcion normal cuesta cuarenta y cambiar su
+    interfaz ciento veinte, ya se sabe donde mirar.  Y eso solo se puede
+    preguntar si la familia vive en un modulo del que otro depende.
+
+    Solo Vesta por ahora: es donde estan comptime y nuestra monomorfizacion, que
+    son los dos subsistemas de los que no habia ni un numero.
+    """
+    d.mkdir(parents=True, exist_ok=True)
+    if familia == "genericos":
+        cuerpo = ["struct Caja<T> {\n    T dato;\n    T leer() { return this.dato; }\n}\n",
+                  "T identidad<T>(T x) {\n    return x;\n}\n"]
+        for i in range(n):
+            cuerpo.append("struct S%d { i64 a; }\n" % i)
+        # El `* 3 +` de la primera linea es el ancla de la mutacion "cuerpo":
+        # sin un patron que cambiar, el cambio no se aplicaba y la fila salia
+        # identica a `sin cambios` sin que nada lo dijera.
+        cuerpo.append("public i64 punto(i64 x) {\n    i64 s = x * 3 + 1;")
+        for i in range(n):
+            cuerpo.append("    Caja<S%d> c%d;\n    c%d.dato.a = %d;\n"
+                          "    s = s + identidad<i64>(c%d.leer().a);"
+                          % (i, i, i, i % 100, i))
+        cuerpo.append("    return s;\n}\n")
+        texto = "namespace fam.m0;\n\n" + "\n".join(cuerpo)
+    elif familia == "comptime":
+        cuerpo = ["comptime i64 fib(i64 n) {\n    if (n <= 1) return n;\n"
+                  "    return fib(n - 1) + fib(n - 2);\n}\n",
+                  "comptime i64 fact(i64 n) {\n    if (n <= 1) return 1;\n"
+                  "    return n * fact(n - 1);\n}\n"]
+        for i in range(n):
+            cuerpo.append("const i64 K%d = fib(%d) + fact(%d);"
+                          % (i, 10 + (i % 8), 5 + (i % 5)))
+        cuerpo.append("public i64 punto(i64 x) {\n    i64 s = x * 3 + 1;")
+        for i in range(n):
+            cuerpo.append("    s = s + K%d;" % i)
+        cuerpo.append("    return s;\n}\n")
+        texto = "namespace fam.m0;\n\n" + "\n".join(cuerpo)
+    elif familia == "anidamiento":
+        texto = ("namespace fam.m0;\n\npublic i64 punto(i64 x) {\n"
+                 "    i64 s = %s;\n    return s + x * 3 + 1;\n}\n"
+                 % _anid(n, "(1 + ", ")", "7"))
+    elif familia == "tipos":
+        cuerpo = []
+        for i in range(n):
+            cuerpo.append("struct T%d { i64 a; i64 b; i64 c; i64 d; }\n" % i)
+        cuerpo.append("public i64 punto(i64 x) {\n    i64 s = x * 3 + 1;")
+        for i in range(n):
+            cuerpo.append("    T%d v%d;\n    v%d.a = %d;\n    s = s + v%d.a;"
+                          % (i, i, i, i % 100, i))
+        cuerpo.append("    return s;\n}\n")
+        texto = "namespace fam.m0;\n\n" + "\n".join(cuerpo)
+    else:
+        return None
+    (d / "m0.vx").write_text(texto, encoding="utf-8")
+    (d / "main.vx").write_text(
+        'import "m0" only punto;\n\ni32 main() {\n'
+        "    return (i32) (punto(1) % 251);\n}\n", encoding="utf-8")
+    return ["m0.vx", "main.vx"]
+
+
+# familia -> {lang: (nombre de fichero, generador)}.  Lo que un lenguaje no
+# tiene simplemente no aparece: sustituirlo por algo parecido daria un numero
+# que no significa lo mismo.
+FAMILIAS = {
+    "genericos": {
+        "vesta": ("gen.vx", gen_genericos_vx),
+        "vesta_aot": ("gen.vx", gen_genericos_vx),
+        "cpp": ("gen.cpp", gen_genericos_cpp),
+        "rust": ("gen.rs", gen_genericos_rs),
+        "java": ("Gen.java", gen_genericos_java),
+    },
+    "comptime": {
+        "vesta": ("gen.vx", gen_comptime_vx),
+        "vesta_aot": ("gen.vx", gen_comptime_vx),
+    },
+    "anidamiento": {
+        "vesta": ("gen.vx", gen_anidamiento_vx),
+        "vesta_aot": ("gen.vx", gen_anidamiento_vx),
+        "c": ("gen.c", gen_anidamiento_c),
+        "cpp": ("gen.cpp", gen_anidamiento_c),
+        "rust": ("gen.rs", gen_anidamiento_rs),
+        "go": ("gen.go", gen_anidamiento_go),
+        "java": ("Gen.java", gen_anidamiento_java),
+    },
+    "tipos": {
+        "vesta": ("gen.vx", gen_tipos_vx),
+        "vesta_aot": ("gen.vx", gen_tipos_vx),
+        "c": ("gen.c", gen_tipos_c),
+        "cpp": ("gen.cpp", gen_tipos_c),
+        "rust": ("gen.rs", gen_tipos_rs),
+        "go": ("gen.go", gen_tipos_go),
+        "java": ("Gen.java", gen_tipos_java),
+    },
+}
+
+
+# ===========================================================================
 # TOPOLOGIA de dependencias.
 #
 # El reparto en ficheros de arriba deja a los veintiun modulos como HOJAS: el
@@ -860,9 +1160,11 @@ def imprimir_ganancia(frio: dict, caliente: dict, langs: list[str]) -> None:
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("vm_path", nargs="?", default="")
-    p.add_argument("--tamanos", type=str, default="200,2000",
+    p.add_argument("--tamanos", type=str, default="200,800",
                    help="numero de funciones generadas por fuente "
-                        "(~5 lineas cada una).  Default: 200,2000")
+                        "(~5 lineas cada una).  Default: 200,800, que son "
+                        "~1.4k y ~5.7k lineas: bastante para que haya algo que "
+                        "compilar sin que la tanda dure una eternidad.")
     p.add_argument("--escalado", action="store_true",
                    help="anade las dos curvas de escalado: por tamano de "
                         "programa y por numero de modulos.  Cuesta bastante "
@@ -885,8 +1187,25 @@ def main() -> int:
         print(f"{C.RED}[error]{C.RESET} no encuentro el binario vesta: {vm}")
         return 1
 
-    langs = [l.strip() for l in args.langs.split(",") if l.strip()] or \
-        list(GENERADORES.keys())
+    # Sin `--langs`, se usan todos los que ESTeN instalados.  Pedidos a mano,
+    # se respetan aunque falten: si alguien nombra una herramienta que no
+    # tiene, lo que quiere es enterarse, no que se le ignore en silencio.
+    herramienta = {"c": "gcc", "cpp": "g++", "rust": "rustc", "go": "go",
+                   "java": "javac", "python": sys.executable}
+    if args.langs:
+        langs = [l.strip() for l in args.langs.split(",") if l.strip()]
+    else:
+        langs = []
+        ausentes = []
+        for ln in GENERADORES:
+            h = herramienta.get(ln)
+            if h is None or shutil.which(h) or Path(h).is_file():
+                langs.append(ln)
+            else:
+                ausentes.append("%s (%s)" % (ln, h))
+        if ausentes:
+            print(f"{C.YELLOW}[aviso]{C.RESET} sin instalar, se omiten: "
+                  + ", ".join(ausentes))
     tamanos = [int(t) for t in args.tamanos.split(",") if t.strip()]
 
     base_tmp = Path(os.environ.get("TEMP", "/tmp")) / "vesta_compile_bench"
@@ -1222,6 +1541,112 @@ def main() -> int:
             print(f"  {forma + '  ' + ln + '  ' + titulo:<38}"
                   f"{col}{re_:>10}{C.RESET}{reu:>14}{nue:>9}")
         print("-" * len(cab3))
+
+    # --- 2d. QUE codigo, no cuanto.  Cada familia pega en una parte distinta
+    # del compilador, y son justo las que el generador anodino no toca.
+    filas_fam: list[tuple] = []
+    for familia, porlang in FAMILIAS.items():
+        # Cuentas distintas por familia: mil niveles de anidamiento no es lo
+        # mismo que mil instanciaciones de una plantilla, y forzar el mismo
+        # numero solo conseguiria que unas tarden segundos y otras nada.
+        cuenta = {"genericos": 150, "comptime": 60,
+                  "anidamiento": 500, "tipos": 400}[familia]
+        for ln in langs:
+            par = porlang.get(ln)
+            if par is None:
+                continue
+            nombre, gen = par
+            d = base_tmp / ("fam_%s_%s" % (familia, ln))
+            d.mkdir(parents=True, exist_ok=True)
+            texto = gen(cuenta)
+            (d / nombre).write_text(texto, encoding="utf-8")
+            cmd = orden_compilar(ln, d / nombre, d / "out", vm)
+            if not cmd:
+                continue
+            env = entorno_cache(ln, dir_cache, entorno_base)
+            etiqueta = "%-12s %s" % (familia, ln)
+            ok, motivo = compila_de_verdad(ln, cmd, env, d, d / "out",
+                                           args.timeout)
+            if not ok:
+                print(f"  {C.RED}[no compila]{C.RESET} {etiqueta}: {motivo}")
+                resultados["casos"].append({
+                    "lang": ln, "familia": familia, "error": motivo})
+                continue
+            s = medir_caliente(cmd, env, d, args.repes, args.timeout)
+            filas_fam.append((ln, etiqueta, s))
+            resultados["casos"].append({
+                "lang": ln, "familia": familia, "cuenta": cuenta,
+                "lineas": texto.count("\n"), "stats": s})
+    if filas_fam:
+        imprimir_tabla(
+            "Por FAMILIA de codigo (ms)", filas_fam, suelo,
+            "No es lo mismo mucho codigo que codigo dificil.  Cada familia pega "
+            "en una parte distinta: genericos multiplica lo que hay que "
+            "generar, comptime EJECUTA al compilar, anidamiento pone a prueba "
+            "la recursion del analizador y tipos estresa la tabla de simbolos.  "
+            "Lo que un lenguaje no tiene no aparece, en vez de sustituirse por "
+            "algo parecido.")
+
+    # --- 2e. Familia x REGIMEN.  Un numero por familia dice cuanto cuesta;
+    # el desglose dice DONDE se va y que parte se puede evitar tras un cambio.
+    filas_fr: list[tuple] = []
+    for familia in ("genericos", "comptime", "anidamiento", "tipos"):
+        cuenta = {"genericos": 150, "comptime": 60,
+                  "anidamiento": 500, "tipos": 400}[familia]
+        for ln in ("vesta", "vesta_aot"):
+            if ln not in langs:
+                continue
+            d = base_tmp / ("fr_%s_%s" % (familia, ln))
+            ficheros = familia_modular_vx(familia, cuenta, d)
+            if not ficheros:
+                continue
+            cmd = orden_multi(ln, ficheros, d / "out", vm)
+            env = entorno_cache(ln, dir_cache, entorno_base)
+            ok, motivo = compila_de_verdad(ln, cmd, env, d, d / "out",
+                                           args.timeout)
+            if not ok:
+                print(f"  {C.RED}[no compila]{C.RESET} {familia}/{ln}: {motivo}")
+                continue
+            s_cero = medir_frio(cmd, env, d, args.repes, args.timeout, ln,
+                                dir_cache)
+            filas_fr.append((ln, "%-12s %-10s de cero" % (familia, ln), s_cero))
+            una_medida(cmd, env, args.timeout, d)
+            for clase, nombre_caso in ((None, "sin cambios"),
+                                       ("cuerpo", "cambia el cuerpo"),
+                                       ("interfaz", "cambia la interfaz")):
+                serie = []
+                fallo_mutacion = False
+                for v in range(args.repes):
+                    if clase is not None and not mutar(d / "m0.vx", ln, clase, v):
+                        # Si el cambio no se puede aplicar, la fila saldria
+                        # IDeNTICA a `sin cambios` y se leeria como que el
+                        # compilador se lo salto.  Paso de verdad: la mutacion
+                        # "cuerpo" buscaba un patron que no existia en estas
+                        # familias y las tres filas eran la misma medida.
+                        fallo_mutacion = True
+                        break
+                    t = una_medida(cmd, env, args.timeout, d)
+                    if t >= 0:
+                        serie.append(t)
+                if fallo_mutacion:
+                    print(f"  {C.RED}[sin medir]{C.RESET} {familia}/{ln} "
+                          f"{nombre_caso}: no se pudo aplicar el cambio")
+                    continue
+                s_r = _stats_summary(serie) if serie else {}
+                filas_fr.append((ln, "%-12s %-10s %s"
+                                 % (familia, ln, nombre_caso), s_r))
+                resultados["casos"].append({
+                    "lang": ln, "familia": familia, "regimen": nombre_caso,
+                    "cuenta": cuenta, "stats": s_r})
+    if filas_fr:
+        imprimir_tabla(
+            "Familia x regimen: donde se va el tiempo y que se puede evitar (ms)",
+            filas_fr, suelo,
+            "Un numero por familia dice cuanto cuesta compilarla; el desglose "
+            "dice donde se va.  `sin cambios` es coste de reutilizar, no "
+            "velocidad.  La distancia entre cuerpo e interfaz es lo que la "
+            "frontera esta cortando en ESA familia -- y no tiene por que ser "
+            "igual en todas.")
 
     # --- 3. Realimentacion: cuanto tarda en salir el diagnostico.
     filas_chk: list[tuple] = []
