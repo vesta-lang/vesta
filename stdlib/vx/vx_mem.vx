@@ -245,6 +245,30 @@ u64[9] __vmem_free;  ///< head de la free-list por clase (0 = vacia)
 u64 __vmem_bump = 0; ///< bump pointer del chunk actual
 u64 __vmem_end = 0;  ///< fin del chunk actual
 
+// ---------------------------------------------------------------------------
+// Cache de bloques GRANDES (>4096), que no pasan por el slab.
+//
+// Sin ella, cada `malloc` grande pedia una arena al sistema y cada `free` se
+// la devolvia: dos llamadas al sistema por bloque.  En un programa que reserva
+// y libera bloques del mismo tamano -- que es el patron corriente: un buffer
+// por vuelta de bucle -- eso son dos syscalls por iteracion, y una syscall
+// cuesta ordenes de magnitud mas que reutilizar lo que ya se tiene.  Medido
+// con 500.000 bloques de 256 KB: 27,0 s frente a los 0,43 s de C, que si los
+// recicla.  Ningun asignador serio devuelve al sistema lo que acaba de pedir.
+//
+// Politica, deliberadamente conservadora porque retener memoria tiene su
+// propio coste: se guardan hasta VMEM_LARGE_CACHE bloques y como mucho
+// VMEM_LARGE_CACHE_BYTES en total, y solo se reutiliza un bloque cuyo tamano
+// COINCIDE exactamente con el pedido -- ni se parte ni se reaprovecha uno mas
+// grande, que convertiria la cache en una fuente de fragmentacion.  Lo que no
+// cabe se devuelve al sistema como antes.
+const i32 VMEM_LARGE_CACHE = 16;              ///< bloques retenidos como mucho
+const u64 VMEM_LARGE_CACHE_BYTES = 67108864;  ///< 64 MiB retenidos como mucho
+
+u64[16] __vmem_large_addr; ///< base de cada bloque retenido (0 = hueco libre)
+u64[16] __vmem_large_size; ///< su tamano TOTAL (payload + 16 de cabecera)
+u64 __vmem_large_bytes = 0; ///< suma de los tamanos retenidos
+
 /**
  * @brief Indice de size-class para @p size (>0).
  * @param size Bytes solicitados.
@@ -341,6 +365,29 @@ u64 __vmem_alloc(u64 size) {
         // posicion que el header de un bloque slab, para que __vmem_free_impl lo
         // detecte leyendo payload-8 (uniforme con el caso slab).
         u64 total = size + 16;
+        // Reutilizar uno retenido del mismo tamano exacto antes de pedirle
+        // otra arena al sistema.  Bajo el mismo cerrojo que el slab: las dos
+        // estructuras las tocan los mismos hilos.
+        __vmem_slab_lock();
+        i32 c = 0;
+        while (c < VMEM_LARGE_CACHE) {
+            if (__vmem_large_addr[c] != 0 && __vmem_large_size[c] == total) {
+                u64 reut = __vmem_large_addr[c];
+                __vmem_large_addr[c] = 0;
+                __vmem_large_bytes = __vmem_large_bytes - total;
+                __vmem_slab_unlock();
+                // Reciclado -> sucio.  El del sistema llega a cero solo, este
+                // no: hay que zerificarlo para que `malloc` siga cumpliendo lo
+                // mismo en los dos caminos.
+                vx_memset(reut + 16, 0, size);
+                u64* hr = (u64*)reut;
+                hr[0] = total;
+                hr[1] = 255;
+                return reut + 16;
+            }
+            c = c + 1;
+        }
+        __vmem_slab_unlock();
         u64 base = vmem_reserve(total, MemProt.ReadWrite);
         u64* h = (u64*)base;
         h[0] = total; // size en base+0 (= payload-16)
@@ -386,6 +433,22 @@ void __vmem_free_impl(u64 payload) {
         u64 base = payload - 16;
         u64* basep = (u64*)base;
         u64 total = basep[0];
+        // Retenerlo para el proximo `malloc` del mismo tamano, si cabe.
+        __vmem_slab_lock();
+        if (__vmem_large_bytes + total <= VMEM_LARGE_CACHE_BYTES) {
+            i32 c = 0;
+            while (c < VMEM_LARGE_CACHE) {
+                if (__vmem_large_addr[c] == 0) {
+                    __vmem_large_addr[c] = base;
+                    __vmem_large_size[c] = total;
+                    __vmem_large_bytes = __vmem_large_bytes + total;
+                    __vmem_slab_unlock();
+                    return;
+                }
+                c = c + 1;
+            }
+        }
+        __vmem_slab_unlock();
         vmem_release(base, total);
         return;
     }
