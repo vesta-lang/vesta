@@ -6980,26 +6980,105 @@ static bool g_licm_alias = [] {
     return e && e[0] == '1';
 }();
 
-static bool model_removable(const IrFunction &fn, const analysis::IrFacts &facts,
-                            const analysis::PointsTo &pt, const IrInstr &ins) {
-    const analysis::effects::EffectAnalysisResult r =
-        analysis::effects::effects_of_instr(fn, facts, pt, ins);
-    if (r.completeness != analysis::effects::AnalysisCompleteness::Complete) return false;
-    const analysis::effects::SemanticEffects &e = r.effects;
-    return !e.mem.writes_memory() && !e.may_trap && !e.may_throw &&
-           !e.may_allocate && !e.may_block && !e.may_io && e.tags.empty() &&
-           e.atomic.order == analysis::effects::MemOrder::None && !e.atomic.is_fence &&
-           e.control.kind == analysis::effects::ControlKind::FallThrough;
+/// Localizaciones que ALGUIEN de la funcion lee, o donde puede leer.
+///
+/// Sirve para responder a "¿le importa a alguien lo que esta escritura deja?".
+/// Una instruccion opaca en cualquier punto de la funcion colapsa el conjunto a
+/// TOP y entonces la respuesta es siempre "si", que es lo correcto: no se sabe
+/// que lee.
+static analysis::effects::LocSet
+locs_leidas(const IrFunction &fn, const analysis::IrFacts &facts,
+            const analysis::PointsTo &pt,
+            const analysis::effects::EffectEnv &env) {
+    analysis::effects::LocSet leidas;
+    for (const IrBlock &bb : fn.blocks) {
+        for (const IrInstr &in : bb.instrs) {
+            const analysis::effects::EffectAnalysisResult r =
+                analysis::effects::effects_of_instr(fn, facts, pt, in, env);
+            /* Lo que no se pudo analizar cuenta como "lee cualquier cosa": el
+             * conjunto describe de que memoria depende el programa, y algo
+             * incompleto puede depender de toda. */
+            if (r.completeness !=
+                analysis::effects::AnalysisCompleteness::Complete) {
+                leidas.is_top = true;
+                leidas.locs.clear();
+                return leidas;
+            }
+            leidas.unite(r.effects.mem.reads);
+            if (leidas.is_top) return leidas;
+        }
+    }
+    return leidas;
 }
 
-bool ir_pass_dce(IrFunction &fn) {
+static bool model_removable(const IrFunction &fn, const analysis::IrFacts &facts,
+                            const analysis::PointsTo &pt, const IrInstr &ins,
+                            const analysis::effects::EffectEnv &env,
+                            const analysis::effects::LocSet &leidas) {
+    const analysis::effects::EffectAnalysisResult r =
+        analysis::effects::effects_of_instr(fn, facts, pt, ins, env);
+    if (r.completeness != analysis::effects::AnalysisCompleteness::Complete) return false;
+    const analysis::effects::SemanticEffects &e = r.effects;
+    if (e.may_trap || e.may_throw || e.may_panic || e.may_allocate ||
+        e.may_block || e.may_io || !e.tags.empty() || !e.determinism.empty() ||
+        e.atomic.order != analysis::effects::MemOrder::None || e.atomic.is_fence)
+        return false;
+    if (e.control.kind != analysis::effects::ControlKind::FallThrough) {
+        /* Una llamada cede el control, y su efecto LOCAL es solo eso: lo que
+         * hace el destino lo pone el cierre interprocedural.  Asi que aqui no
+         * se puede leer "sin efectos locales" como "no hace nada" -- una nativa
+         * de la que nadie ha dicho nada tiene exactamente esa pinta.
+         *
+         * La excepcion es la nativa DECLARADA: ahi la declaracion SI es todo lo
+         * que hace, resuelta ademas a memoria concreta en este sitio de
+         * llamada.  Es el unico caso en que una llamada se puede juzgar por su
+         * efecto local. */
+        if (ins.op != IrOp::CALLN || env.decls == nullptr) return false;
+        if (env.decls->find(ins.func_name) == env.decls->end()) return false;
+        if (e.control.kind != analysis::effects::ControlKind::Call) return false;
+    }
+    if (!e.mem.writes_memory()) return true;
+
+    /* Escribir no es, por si solo, un efecto observable: lo es dejar algo que
+     * alguien va a leer.  Una nativa DECLARADA que solo llena un buffer que
+     * nadie mira no cambia nada de lo que el programa hace, y conservarla
+     * porque "toca memoria" es tratar la declaracion como si no existiera.
+     *
+     * La condicion se comprueba contra el conjunto de lo que lee TODA la
+     * funcion, incluida ella misma: una escritura que se lee a si misma no se
+     * quita, y basta una instruccion opaca en cualquier sitio para que el
+     * conjunto sea TOP y no se quite nada.  Lo que escapa tampoco se pierde:
+     * pasar la direccion a algo que no se puede analizar es justo lo que
+     * vuelve TOP el conjunto. */
+    if (leidas.is_top || e.mem.writes.is_top) return false;
+    for (const analysis::effects::AbstractLoc &w : e.mem.writes.locs) {
+        /* SOLO pila, y de una raiz concreta.  El conjunto de lecturas se
+         * calcula dentro de esta funcion, asi que solo puede decir la ultima
+         * palabra sobre memoria que no sobrevive a la funcion: lo que se
+         * escribe en el heap, en una global o a traves de un parametro lo lee
+         * quien llama, y aqui no se ve.  Un marco de pila, en cambio, muere al
+         * volver: si nadie lo lee aqui, no lo lee nadie. */
+        if (w.kind != analysis::effects::AbstractLoc::Kind::Stack) return false;
+        if (!w.concrete()) return false;
+        if (leidas.may_alias_any(w)) return false;
+    }
+    return !e.mem.writes.locs.empty();
+}
+
+bool ir_pass_dce(IrFunction &fn,
+                 const analysis::effects::NativeDecls *decls) {
     // Modelo de efectos: hechos + points-to por-funcion para el consumidor del
     // DCE (el mismo resolvedor de direcciones que usa todo el tooling).
     analysis::IrFacts fx_facts;
     analysis::PointsTo fx_pt;
+    analysis::effects::EffectEnv fx_env;
+    fx_env.decls = decls;
+    analysis::effects::LocSet fx_leidas;
+    fx_leidas.is_top = true; // sin modelo, se supone que todo se lee
     if (g_dce_effects) {
         fx_facts = analysis::build_ir_facts(fn);
         fx_pt = analysis::compute_points_to(fn, fx_facts);
+        fx_leidas = locs_leidas(fn, fx_facts, fx_pt, fx_env);
     }
 
     // Construir conjunto de valores que son usados en algun operando
@@ -7042,11 +7121,24 @@ bool ir_pass_dce(IrFunction &fn) {
             // como may_allocate y no lo quitaria; se conserva la optimizacion).
             const bool no_effect =
                 g_dce_effects
-                    ? (model_removable(fn, fx_facts, fx_pt, ins) ||
+                    ? (model_removable(fn, fx_facts, fx_pt, ins, fx_env,
+                                       fx_leidas) ||
                        alloc_only_string_op(ins.op))
                     : (!is_side_effecting(ins.op) || alloc_only_string_op(ins.op));
-            if (ins.dst != IR_NO_VALUE && !used.count(ins.dst) && no_effect &&
-                !ins.preserve) {
+            /* Una llamada nativa puede no devolver nada y aun asi sobrar: si lo
+             * unico que hacia era escribir donde nadie lee, no queda de ella
+             * nada que observar.
+             *
+             * Se limita a CALLN A PROPOSITO.  "No produce valor" no es, en
+             * general, motivo para quitar nada: hay ops cuyo efecto ES lo que
+             * dejan en el runtime (registrar un campo o un metodo de una clase,
+             * por ejemplo) y que el modelo todavia describe como neutras.
+             * Generalizarlo borraba el arranque de los modulos con clases. */
+            const bool sin_resultado_util =
+                ins.dst != IR_NO_VALUE
+                    ? used.count(ins.dst) == 0
+                    : (g_dce_effects && ins.op == IrOp::CALLN);
+            if (sin_resultado_util && no_effect && !ins.preserve) {
                 keep = false;
                 changed = true;
             }
@@ -12091,6 +12183,13 @@ bool ir_pass_inline_closures(IrModule &mod) {
 void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
     if (level == OptLevel::O0) return; // sin optimizacion
 
+    /* Lo declarado sobre las nativas del modulo.  Se recoge UNA vez y se pasa
+     * a los pases que preguntan por efectos: sin esto el optimizador trataba
+     * toda CALLN como opaca aunque el modulo dijera exactamente lo que hace, y
+     * la declaracion solo servia para el informe. */
+    const analysis::effects::NativeDecls decls_nativas =
+        analysis::effects::collect_native_decls({&mod});
+
     /*  D.7.opt: inline a nivel modulo ANTES del fix-point loop.
      * Despues del inline, los passes per-function se re-aplican sobre
      * el codigo expandido.
@@ -12275,7 +12374,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
                 any |= ir_pass_licm(fn); /* LICM con dominators reales */
             }
             any |= ir_pass_dead_alloc_elim(fn);
-            any |= ir_pass_dce(fn);
+            any |= ir_pass_dce(fn, &decls_nativas);
 
             if (level >= OptLevel::O2) {
                 // O2: plegado de constantes + bloques inalcanzables + TCO.
@@ -12336,7 +12435,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
                 // necesita.
                 any |= ir_pass_carry_idiom(fn);
                 // Segunda ronda de DCE tras plegado/TCO/loop header inline/CSE.
-                any |= ir_pass_dce(fn);
+                any |= ir_pass_dce(fn, &decls_nativas);
             }
 
             if (level >= OptLevel::O3) {
@@ -12437,7 +12536,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
              * (size const del malloc, etc.). */
             if (any2) {
                 for (auto &fn : mod.functions) {
-                    if (!fn.is_native) ir_pass_dce(fn);
+                    if (!fn.is_native) ir_pass_dce(fn, &decls_nativas);
                 }
             }
         }
@@ -12470,7 +12569,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
                 ir_pass_copy_prop(fn);
                 ir_pass_cse(fn);
                 ir_pass_const_fold(fn);
-                ir_pass_dce(fn);
+                ir_pass_dce(fn, &decls_nativas);
             }
         }
     }

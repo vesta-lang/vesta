@@ -65,6 +65,7 @@
 #ifndef IR_OPTIMIZER_H
 #define IR_OPTIMIZER_H
 
+#include "analysis/effects/ir_effects.h"
 #include "ir/ssa_ir.h"
 
 #include <string>
@@ -129,14 +130,18 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline = true);
 /**
  * @brief Pase DCE: elimina instrucciones cuyo resultado nunca se usa.
  *
- * Solo elimina instrucciones puras (aritmetica, logica, MOV, CONST, CMP, PHI,
- * CAST, GETFIELD, etc.).  Instrucciones con efectos laterales (CALLN, STORE,
- * THROW, BR, monitores, async, distribuidas) nunca se eliminan.
+ * Elimina lo que no tiene efecto observable.  "Sin efecto" lo decide el modelo
+ * unico de efectos, no una lista de opcodes: una llamada nativa DECLARADA que
+ * solo escribe en un buffer que nadie lee tampoco tiene efecto, y una que no
+ * declara nada sigue siendo opaca y se conserva.
  *
- * @param fn Funcion a optimizar.
+ * @param fn    Funcion a optimizar.
+ * @param decls Lo declarado sobre las nativas del programa, o @c nullptr si no
+ *              se sabe nada de ellas (entonces toda CALLN es opaca).
  * @return true si se elimino al menos una instruccion.
  */
-bool ir_pass_dce(IrFunction &fn);
+bool ir_pass_dce(IrFunction &fn,
+                 const analysis::effects::NativeDecls *decls = nullptr);
 
 /**
  * @brief Elision comptime de UNWRAP cuando el operando es provably non-null
