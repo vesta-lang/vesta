@@ -401,6 +401,7 @@ AsmBlockEffects asm_analyze_block(const std::string &nasm_body,
             res.accesos_incompletos = true;
             break;
         }
+    res.escritos.assign(escritos.begin(), escritos.end());
 
     res.explicit_stack_bytes = max_frame;
     return res;

@@ -21,6 +21,10 @@
 #include "analysis/effects/ir_effects.h"       // modelo unico de efectos (consumidor DCE, A/B)
 #include "analysis/effects/effect_analysis.h"  // cierre interproc: callees puros (DSE Fase 4)
 #include "analysis/memory/memory_access.h"     // vocabulario UNICO de acceso a memoria
+#include "analysis/memory/points_to.h"        // que valor contiene un hueco
+#include "vx/asm/asm_analyze.h"               // que memoria toca un bloque asm
+#include "vx/asm/asm_effects.h"               // canonicalizar el registro base
+#include "vx/parser.h"                        // arquitectura del objetivo
 #include <unordered_map>
 #include <map>
 #include <optional>
@@ -6881,6 +6885,33 @@ static bool g_dce_effects = [] {
 // (cobertura, barreras, forwarding, heap/stack) queda IGUAL.  A/B via
 // VESTA_DSE_UNIFIED=1; default OFF hasta validar e2e 3 modos + patrones de
 // regresion (copy-alias, STRMAKE, mvtake, buffer meta-OOP).
+/**
+ * @brief ¿Se trata un bloque `asm` por lo que TOCA en vez de como barrera?
+ *
+ * `VESTA_ASM_DSE=0` vuelve a la barrera total de siempre.  El analisis del asm
+ * ya sabe decir que memoria toca cada bloque; esto es lo que hace que sirva de
+ * algo, porque hasta ahora ningun consumidor lo miraba.
+ */
+static bool asm_dse_activo() {
+    static const bool on = [] {
+        const char *e = std::getenv("VESTA_ASM_DSE");
+        return !(e && e[0] == '0');
+    }();
+    return on;
+}
+
+/**
+ * @brief Arquitectura con la que analizar un cuerpo de asm.
+ *
+ * La del OBJETIVO que se compila, no la del anfitrion: una variante por
+ * `@Target` lleva el asm de SU arquitectura.
+ */
+static std::string dse_arch_asm() {
+    std::string os, arch;
+    vx::get_aot_condcomp_target(os, arch);
+    return arch.empty() ? std::string("x86_64") : arch;
+}
+
 // ENCENDIDO por defecto (2026-08-06).  Medido: no cambia el codigo generado en
 // NINGUNO de los 29 programas del corpus -- toma las mismas decisiones que la
 // resolucion propia que tenia el DSE --, y la suite pasa 878/0 en los tres
@@ -7566,6 +7597,101 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
             }
         };
 
+        /**
+         * @brief Trata un bloque `asm` por lo que TOCA, en vez de como barrera.
+         *
+         * @return true si se pudo; false = no se sabe lo suficiente y el caller
+         *         debe seguir tratandolo como barrera total.
+         */
+        auto dse_asm_preciso = [&](const IrInstr &ins) -> bool {
+            const vx::AsmBlockEffects e =
+                vx::asm_analyze_block(ins.func_name, dse_arch_asm());
+            if (!e.known() || e.is_call || e.has_atomic) {
+                if (dbg) std::fprintf(stderr, "[asmdse] no: known=%d call=%d atom=%d\n",
+                                      (int)e.known(), (int)e.is_call, (int)e.has_atomic);
+                return false;
+            }
+            if (e.accesos_incompletos) {
+                if (dbg) std::fprintf(stderr, "[asmdse] no: accesos incompletos\n");
+                return false;
+            }
+            if (dbg) std::fprintf(stderr, "[asmdse] SI: accesos=%zu escritos=%zu\n",
+                                  e.accesos.size(), e.escritos.size());
+
+            /* PRIMERO lo que no depende de los accesos: el bloque lee el VALOR
+             * de cada variable ligada.  Sus huecos son los operandos. */
+            for (IrValueId op : ins.operands) {
+                if (op == IR_NO_VALUE) return false;
+                auto ai = addr_of.find(op);
+                if (ai == addr_of.end()) return false; // hueco no localizable
+                note_read(ai->second.root, ai->second.off, 8);
+            }
+
+            /* Y el bloque puede CAMBIAR el valor de una variable ligada sin
+             * tocar memoria (`inc rax` sobre un `register("rax") u64 v`).  Lo
+             * que hubiera guardado en su hueco deja de valer, asi que no se
+             * puede seguir reusando: sin esto, leer la variable despues del
+             * bloque devolvia el valor de ANTES (41 en vez de 42). */
+            for (const std::string &w : e.escritos) {
+                for (const AsmRegBinding &b : fn.asm_reg_bindings) {
+                    const bool suyo =
+                        (!w.empty() && w[0] == '$')
+                            ? (b.reg_auto && b.ph_index == std::atoi(w.c_str() + 1))
+                            : (!b.reg.empty() && vx::asm_canonical_reg(b.reg) == w);
+                    if (!suyo) continue;
+                    auto ai = addr_of.find(b.alloca_value);
+                    if (ai == addr_of.end()) return false;
+                    last_store_val.erase({ai->second.root, ai->second.off});
+                }
+            }
+
+            /* Y ahora la memoria que toca A TRAVES de ellos: del registro base
+             * al hueco, del hueco a lo que contiene, y de ahi a la direccion
+             * que el DSE ya sabe seguir. */
+            for (const vx::AsmBlockEffects::Acceso &a : e.accesos) {
+                IrValueId hueco = IR_NO_VALUE;
+                unsigned candidatas = 0;
+                if (!a.base.empty() && a.base[0] == '$') {
+                    const int idx = std::atoi(a.base.c_str() + 1);
+                    for (const AsmRegBinding &b : fn.asm_reg_bindings)
+                        if (b.reg_auto && b.ph_index == idx) {
+                            hueco = b.alloca_value;
+                            ++candidatas;
+                        }
+                } else {
+                    for (const AsmRegBinding &b : fn.asm_reg_bindings)
+                        if (!b.reg.empty() &&
+                            vx::asm_canonical_reg(b.reg) == a.base) {
+                            hueco = b.alloca_value;
+                            ++candidatas;
+                        }
+                }
+                if (candidatas != 1) return false;
+                const IrValueId valor =
+                    analysis::valor_unico_del_hueco(fn, hueco);
+                if (valor == IR_NO_VALUE) return false;
+                auto ai = addr_of.find(valor);
+                if (ai == addr_of.end()) return false; // direccion no seguible
+                // Leer lo apuntado, y si escribe, invalidar el reenvio de esa
+                // direccion.  Ancho 8: el acceso puede ser de cualquier tamano
+                // dentro del objeto.
+                note_read(ai->second.root, ai->second.off, 8);
+                if (a.escribe) {
+                    const AddrKey k{ai->second.root, ai->second.off};
+                    kill_val_overlapping(k, 8);
+                    /* Y la clave EXACTA tambien.  @c kill_val_overlapping se la
+                     * salta a proposito porque quien lo llama es un STORE, que
+                     * la sobrescribe acto seguido con el valor nuevo; aqui no
+                     * hay tal cosa -- el asm escribio por su cuenta y no
+                     * sabemos que dejo --, asi que dejarla viva hace que la
+                     * siguiente lectura reuse el valor ANTERIOR.  Costo: el
+                     * programa devolvia 0 en vez de 42. */
+                    last_store_val.erase(k);
+                }
+            }
+            return true;
+        };
+
         for (size_t i = 0; i < bb.instrs.size(); ++i) {
             auto &ins = bb.instrs[i];
             switch (ins.op) {
@@ -7714,16 +7840,39 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
             case IrOp::CALLM:
             case IrOp::CALLITF:
             case IrOp::CALLCLOSURE:
+            /* Un `asm` puede decir QUE memoria toca, y entonces no tiene por
+             * que ser una barrera para todo lo demas.  Si se sabe -- todos sus
+             * accesos atribuidos a un operando ligado --, se trata como lo que
+             * es: unas lecturas y unas escrituras concretas.
+             *
+             * CUIDADO, y es lo que hace este caso distinto de un LOAD/STORE
+             * normal: el bloque LEE EL VALOR de todas sus variables ligadas,
+             * toque memoria o no.  `add $0, 1` no accede a memoria y aun asi
+             * lee lo que se guardo en el hueco de esa variable, asi que esa
+             * escritura NO esta muerta.  Por eso se marcan como leidos TODOS
+             * los operandos, no solo los que sirven de direccion.
+             *
+             * Ante cualquier cosa que no encaje se cae a la barrera de siempre.
+             * `VESTA_ASM_DSE=0` la fuerza.
+             *
+             * Los TRES niveles de asm entran aqui: en este lenguaje NO HAY
+             * CAJAS NEGRAS.  Un bloque de asm no es codigo incrustado, es
+             * codigo del lenguaje con vida propia -- se analiza, se optimiza y
+             * se adapta al sitio donde acaba.
+             *
+             * Lo unico que `volatile` cambia es que sus BYTES no se reescriben;
+             * inspeccionarlo se inspecciona igual, que es lo que permite no
+             * penalizar a todo lo que tenga alrededor.  Asi que lo que decide
+             * si aqui se puede afinar no es el nivel del bloque, sino si el
+             * analisis alcanza a explicar TODOS sus accesos. */
             case IrOp::RAW_ASM:
-            //  AS inc.3: INLINE_ASM (host asm) es opaco y puede
-            // leer/escribir cualquier memoria + los registros que el
-            // usuario ligo con register().  Barrera total: ni store-to-load
-            // forwarding cruza el bloque ni se eliminan STOREs previos
-            // (el asm puede leerlos via los operandos register-bound).
             case IrOp::INLINE_ASM:
-            // asm opaco liftado: conservador como INLINE_ASM (barrera de
-            // memoria total); mas adelante los eff bits de la DB afinan.
             case IrOp::ASM_MICRO:
+                if (asm_dse_activo() && dse_asm_preciso(ins))
+                    break; // tratado con precision: no es barrera
+                pending.clear();
+                last_store_val.clear();
+                break;
             case IrOp::MEMCPY:
             case IrOp::MEMSET:
             case IrOp::VEC_UNOP:

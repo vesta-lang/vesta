@@ -2815,6 +2815,7 @@ fails_case("literal_sin_digitos", "un prefijo de base sin digitos se rechaza al 
 r0_case("wideint_literales", "literales mas anchos que la palabra en los seis tipos", "364_wideint_literales.vx", 42)
 r0_case("literal_bases", "literal ancho en binario, octal, hexadecimal y decimal", "365_literal_bases.vx", 42)
 r0_case("ctor_comptime_modulo", "constructor comptime de un tipo de otro modulo", "363_ctor_comptime_modulo.vx", 42)
+r0_case("asm_dse", "un asm no es barrera, pero se respeta lo que lee, lo que cambia y lo que escribe", "372_asm_dse.vx", 42)
 r0_case("campo_por_puntero", "el '.' atraviesa un puntero: leer, escribir, ++, metodo, encadenar, &campo y recorrer una lista", "371_campo_por_puntero.vx", 42)
 r0_case("ctor_importado", "construir un struct declarado en otro modulo", "362_ctor_importado.vx", 42)
 r0_case("ctor_comptime", "constructor comptime: recoge la llamada cuando ninguna sobrecarga encaja", "361_ctor_comptime.vx", 42)

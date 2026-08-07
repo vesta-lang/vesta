@@ -1,0 +1,48 @@
+/**
+ * @file 372_asm_dse.vx
+ * @brief Un bloque asm no es una barrera, pero lo que toca hay que respetarlo.
+ *
+ * El optimizador puede tratar un `asm` por lo que hace en vez de suponer que
+ * hace de todo, y eso vale para los tres niveles: en este lenguaje el asm no es
+ * codigo incrustado, es codigo con vida propia.  Pero afinar de mas es
+ * miscompilar en silencio, y este caso cubre las dos formas de equivocarse que
+ * de verdad ocurrieron al implementarlo:
+ *
+ *   1. El bloque LEE el valor de sus variables ligadas aunque no toque memoria.
+ *      Dar por muerta la escritura que las inicializa deja el programa sin sus
+ *      datos.
+ *   2. El bloque CAMBIA el valor de una variable ligada, tambien sin tocar
+ *      memoria (`inc`).  Quien siga creyendo el valor anterior lee lo de antes.
+ *   3. Y cuando escribe por un puntero, lo que hubiera guardado en esa
+ *      direccion deja de valer.
+ *
+ * Los tres suman 42; si alguno se rompe, el numero cambia.
+ */
+i32 main() {
+    // (1) `base` solo se lee desde el asm: su inicializacion no esta muerta.
+    i64 base = 20;
+    i64 salida = 0;
+    i64* p = &salida;
+
+    asm ( reg b = base, reg d = p, ) {
+        mov [d], b
+    }
+    i64 uno = salida;          // 20
+
+    // (2) el asm MODIFICA su variable ligada, sin tocar memoria.
+    register("rcx") i64 cuenta = 13;
+    asm volatile {
+        inc rcx
+    };
+    i64 dos = cuenta;          // 14
+
+    // (3) escribe por el puntero: el valor anterior de `salida` ya no vale.
+    register("rdx") i64 nuevo = 8;
+    register("rsi") i64* q = &salida;
+    asm volatile {
+        mov [rsi], rdx
+    };
+    i64 tres = salida;         // 8
+
+    return (i32) (uno + dos + tres);   // 20 + 14 + 8 = 42
+}

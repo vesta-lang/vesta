@@ -92,6 +92,13 @@ struct AsmBlockEffects {
     /// los @c accesos NO describen todo lo que el bloque toca y hay que
     /// suponer lo peor.
     bool accesos_incompletos = false;
+    /// Operandos que el bloque ESCRIBE: registros canonicos y marcadores `$N`.
+    ///
+    /// Un bloque puede cambiar el valor de una variable ligada SIN tocar
+    /// memoria -- `inc rax` sobre un `register("rax") u64 v` --, y quien crea
+    /// que ese valor sigue siendo el de antes se equivoca.  Sin esto, un
+    /// programa que hace justo eso devolvia 41 en vez de 42.
+    std::vector<std::string> escritos;
     bool has_atomic = false;    ///< prefijo @c lock o instr atomica (barrera).
     bool is_call = false;       ///< @c call / @c syscall alcanzable en el bloque.
     bool touches_flags = false; ///< modifica RFLAGS/condition codes.
