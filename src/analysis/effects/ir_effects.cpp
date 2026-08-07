@@ -72,7 +72,26 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
      * que el bloque toca algo que no sabemos nombrar, y entonces la lista no
      * describe el total.  Igual con las ligaduras que aun no tienen registro
      * (lo elige el asignador despues): no se pueden emparejar por nombre. */
-    bool localizado = !e.accesos.empty() && !e.accesos_incompletos;
+    /* `VESTA_ASM_LOC=0` vuelve a "toca memoria en algun sitio", que es como
+     * estaba.  Mismo criterio que `VESTA_TRAMOS` o `VESTA_SCHED_ALIAS`.
+     *
+     * MEDIDO (2026-08-06): con el y sin el, el codigo generado sale IDENTICO en
+     * los 48 programas del corpus que llevan asm.  No es que la precision no
+     * valga -- se ve en `--analyze`, donde un bloque pasa de "cualquier sitio" a
+     * `stack#0` --: es que NINGUN consumidor la mira todavia.  El DSE y el
+     * planificador tratan un `INLINE_ASM` como barrera TOTAL, escrito a mano en
+     * su propio switch ("mas adelante los eff bits de la DB afinan", dice el
+     * comentario de alli desde hace tiempo).
+     *
+     * O sea que esto esta listo y esperando a que alguien pregunte.  Cablear al
+     * DSE es el siguiente paso, y tiene su cuidado: un asm lee los valores de
+     * sus variables ligadas aunque no toque memoria, asi que una escritura al
+     * hueco de una de ellas NO esta muerta. */
+    static const bool loc_activa = [] {
+        const char *v = std::getenv("VESTA_ASM_LOC");
+        return !(v && v[0] == '0');
+    }();
+    bool localizado = loc_activa && !e.accesos.empty() && !e.accesos_incompletos;
     std::vector<AbstractLoc> locs_lee, locs_escribe;
     if (localizado) {
         for (const vx::AsmBlockEffects::Acceso &a : e.accesos) {
