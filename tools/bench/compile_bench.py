@@ -43,12 +43,14 @@ import statistics
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent))
 from run_all_benches import (  # noqa: E402
     C,
+    Spinner,
     _stats_summary,
     buscar_compiladores,
     elegir_compilador,
@@ -1062,6 +1064,52 @@ def compila_de_verdad(lang: str, cmd: list[str], env: dict, cwd: Path,
             + (": " + primera[0] if primera else ""))
 
 
+def verificar_en_paralelo(casos: list, jobs: int, timeout: float) -> dict:
+    """Comprueba EN PARALELO que cada caso compila.  Devuelve clave -> (ok, motivo).
+
+    Se paraleliza esto y NO las mediciones, y la distincion es la que sostiene
+    todo el modulo: compilar para comprobar que el caso es valido no se
+    cronometra, asi que da igual que ocho compiladores se peleen por la CPU.
+    Cronometrar mientras otros siete compilan daria un numero que mide la carga
+    de la maquina, no el compilador.
+
+    Quien venga luego a "optimizar" el bucle de medidas metiendolas aqui estara
+    haciendo el benchmark mas rapido y mas falso a la vez.
+    """
+    resultados: dict = {}
+    if not casos:
+        return resultados
+    with ThreadPoolExecutor(max_workers=max(1, jobs)) as ex:
+        futuros = {
+            ex.submit(compila_de_verdad, lang, cmd, env, cwd, salida, timeout):
+                clave
+            for (clave, lang, cmd, env, cwd, salida) in casos
+        }
+        for f in as_completed(futuros):
+            clave = futuros[f]
+            try:
+                resultados[clave] = f.result()
+            except Exception as e:  # noqa: BLE001
+                resultados[clave] = (False, str(e))
+    return resultados
+
+
+def repeticiones(args, muestra_ms: float) -> int:
+    """Cuantas veces medir, segun lo que tarde una medida.
+
+    Repetir cinco veces algo que tarda cinco segundos son veinticinco segundos
+    para afinar un numero que ya se conoce con una precision de sobra: la
+    dispersion se publica, asi que si tres medidas no bastan se ve en la MAD y
+    se sube a mano.  Lo que no se hace es recortar en las medidas rapidas, que
+    son las que de verdad necesitan repeticion.
+    """
+    if muestra_ms >= 5000.0:
+        return max(2, args.repes // 2)
+    if muestra_ms >= 1000.0:
+        return max(3, args.repes - 1)
+    return args.repes
+
+
 def _calentar(cmd, env, cwd, timeout) -> int:
     """Descarta ejecuciones hasta que la serie deja de bajar (mismo criterio
     que el arnes de ejecucion: no es un numero fijo, se decide midiendo)."""
@@ -1173,6 +1221,11 @@ def main() -> int:
                         "(~5 lineas cada una).  Default: 200,800, que son "
                         "~1.4k y ~5.7k lineas: bastante para que haya algo que "
                         "compilar sin que la tanda dure una eternidad.")
+    p.add_argument("--jobs", type=int, default=0,
+                   help="compilaciones de VERIFICACION en paralelo "
+                        "(default: nucleos - 2).  Las MEDIDAS siguen "
+                        "secuenciales siempre: paralelizarlas mediria la "
+                        "carga de la maquina, no el compilador.")
     p.add_argument("--cc", type=str, default="",
                    help="compilador de C a usar.  Sin esto: si hay varios "
                         "instalados se pregunta.")
@@ -1231,6 +1284,7 @@ def main() -> int:
                   + ", ".join(ausentes))
     tamanos = [int(t) for t in args.tamanos.split(",") if t.strip()]
 
+    jobs = args.jobs if args.jobs > 0 else max(1, (os.cpu_count() or 4) - 2)
     base_tmp = Path(os.environ.get("TEMP", "/tmp")) / "vesta_compile_bench"
     shutil.rmtree(base_tmp, ignore_errors=True)
     base_tmp.mkdir(parents=True, exist_ok=True)
@@ -1268,36 +1322,51 @@ def main() -> int:
     cal_por_lang: dict[str, dict] = {}
     resultados: dict = {"suelo": suelo, "casos": []}
 
+    # Se preparan TODOS los casos y se verifican en paralelo; medir viene
+    # despues y en fila de uno.  La generacion de fuentes tambien entra aqui
+    # porque escribir cuarenta ficheros de cinco mil lineas no es gratis.
+    preparados = []
     for n in tamanos:
         for ln in langs:
             nombre, gen = GENERADORES[ln]
             d = base_tmp / ("gen_%s_%d" % (ln, n))
             d.mkdir(parents=True, exist_ok=True)
             fuente = d / nombre
-            fuente.write_text(gen(n), encoding="utf-8")
-            lineas = gen(n).count("\n")
+            texto = gen(n)
+            fuente.write_text(texto, encoding="utf-8")
             cmd = orden_compilar(ln, fuente, d / "out", vm)
             if not cmd:
                 continue
             env = entorno_cache(ln, dir_cache, entorno_base)
-            etiqueta = "%s  %dk lineas" % (ln, round(lineas / 1000))
+            etiqueta = "%s  %dk lineas" % (ln, round(texto.count("\n") / 1000))
+            preparados.append(((ln, n), ln, cmd, env, d, d / "out",
+                               etiqueta, texto.count("\n")))
+    with Spinner("verificando que todo compila (en paralelo)", color=C.DIM):
+        veredicto = verificar_en_paralelo(
+            [(c[0], c[1], c[2], c[3], c[4], c[5]) for c in preparados],
+            jobs, args.timeout)
 
-            # ANTES de cronometrar nada: comprobar que esto compila.  Un fallo
-            # rapido parece un compilador rapidisimo.
-            ok, motivo = compila_de_verdad(ln, cmd, env, d, d / "out",
-                                           args.timeout)
-            if not ok:
-                print(f"  {C.RED}[no compila]{C.RESET} {etiqueta}: {motivo}")
-                resultados["casos"].append({
-                    "lang": ln, "funciones": n, "lineas": lineas,
-                    "error": motivo,
-                })
-                continue
+    for clave, ln, cmd, env, d, salida, etiqueta, lineas in preparados:
+        n = clave[1]
+        ok, motivo = veredicto.get(clave, (False, "no verificado"))
+        if not ok:
+            print(f"  {C.RED}[no compila]{C.RESET} {etiqueta}: {motivo}")
+            resultados["casos"].append({
+                "lang": ln, "funciones": n, "lineas": lineas,
+                "error": motivo,
+            })
+            continue
+        if True:
+            # Una sola medida de tanteo fija cuantas repeticiones merece la
+            # pena: repetir cinco veces algo que tarda cinco segundos son
+            # veinticinco segundos para afinar un numero que ya se conoce.
+            tanteo = una_medida(cmd, env, args.timeout, d)
+            reps = repeticiones(args, tanteo if tanteo > 0 else 0.0)
 
-            s_cal = medir_caliente(cmd, env, d, args.repes, args.timeout)
+            s_cal = medir_caliente(cmd, env, d, reps, args.timeout)
             filas_cal.append((ln, etiqueta, s_cal))
 
-            s_frio = medir_frio(cmd, env, d, args.repes, args.timeout, ln,
+            s_frio = medir_frio(cmd, env, d, reps, args.timeout, ln,
                                 dir_cache)
             filas_frio.append((ln, etiqueta, s_frio))
 
@@ -1323,6 +1392,7 @@ def main() -> int:
     # trabajo, otra forma de presentarselo al compilador.
     filas_multi: list[tuple] = []
     filas_inc: list[tuple] = []
+    prep_multi = []
     for n in tamanos:
         for ln in langs:
             d = base_tmp / ("multi_%s_%d" % (ln, n))
@@ -1334,8 +1404,16 @@ def main() -> int:
                 continue
             env = entorno_cache(ln, dir_cache, entorno_base)
             etiqueta = "%s  %d ficheros" % (ln, len(ficheros))
-            ok, motivo = compila_de_verdad(ln, cmd, env, d, d / "out",
-                                           args.timeout)
+            prep_multi.append(((ln, n), ln, cmd, env, d, d / "out",
+                               etiqueta, ficheros))
+    with Spinner("verificando los proyectos multi-fichero", color=C.DIM):
+        vered_multi = verificar_en_paralelo(
+            [(c[0], c[1], c[2], c[3], c[4], c[5]) for c in prep_multi],
+            jobs, args.timeout)
+
+    for clave, ln, cmd, env, d, salida, etiqueta, ficheros in prep_multi:
+            n = clave[1]
+            ok, motivo = vered_multi.get(clave, (False, "no verificado"))
             if not ok:
                 print(f"  {C.RED}[no compila]{C.RESET} {etiqueta}: {motivo}")
                 continue
