@@ -351,6 +351,58 @@ static void print_formas_de(std::ostream &os, const ir::IrModule &mod,
  * segunda lo que de verdad queda.  Ensenar solo la segunda hace decir "no hay
  * ningun valor con componentes" de un programa que tiene seis.
  */
+/**
+ * @brief Mapa de COBERTURA: hasta donde ha llegado la observacion.
+ *
+ * No es una medida de precision.  Que una region sea opaca -- una nativa, un
+ * destino que no se resuelve -- no dice que el analisis sea impreciso: dice que
+ * hay un sitio cuyo comportamiento no se ha podido demostrar DESDE AQUI.  Son
+ * cosas distintas y confundirlas hace leer una limitacion del alcance como un
+ * defecto de calidad.
+ *
+ * Y lo que se cuenta no es "cuanto se sabe" sino "cuanto se ha podido mirar":
+ * ambitos cerrados, ambitos que se saben nombrar pero no se han abierto, y
+ * fronteras por las que el conocimiento se sale.  Es el mapa que dice DONDE
+ * habria que mirar para saber mas.
+ */
+static void print_cobertura_formas(std::ostream &os, const ir::IrModule &mod,
+                                   const char *estado) {
+    uint32_t observados = 0, sin_abrir = 0, fronteras = 0, limitaciones = 0;
+    uint32_t valores = 0, con_forma = 0, demostrados = 0;
+    for (const ir::IrFunction &fn : mod.functions) {
+        if (fn.blocks.empty()) continue;
+        const analysis::IrFacts h = analysis::build_ir_facts(fn);
+        for (const analysis::asa::AggregateFacts &a :
+             analysis::asa::observar_agregados(mod, fn, h).agregados) {
+            ++valores;
+            if (a.forma() != analysis::asa::FormaDeValor::SinEvidencia &&
+                a.forma() != analysis::asa::FormaDeValor::Desconocida)
+                ++con_forma;
+            if (a.sello.certeza == analysis::asa::Certeza::Demostrada)
+                ++demostrados;
+            fronteras += static_cast<uint32_t>(a.fronteras.size());
+            limitaciones += static_cast<uint32_t>(a.limitaciones.size());
+            for (const analysis::asa::Universo &u : a.universos) {
+                if (u.observacion == analysis::asa::EstadoObservacion::Observado)
+                    ++observados;
+                else if (u.identidad ==
+                         analysis::asa::IdentidadUniverso::Conocido)
+                    ++sin_abrir;
+            }
+        }
+    }
+    if (valores == 0) return;
+    os << "  forma de los valores (" << estado << "):\n";
+    os << "    valores observados            : " << valores << "\n";
+    os << "      con forma afirmable         : " << con_forma << "\n";
+    os << "      demostrados (universo cerrado): " << demostrados << "\n";
+    os << "    ambitos abiertos y mirados    : " << observados << "\n";
+    os << "    ambitos que se saben pero no se han mirado: " << sin_abrir
+       << "\n";
+    os << "    fronteras por las que se sale : " << fronteras << "\n";
+    os << "    sitios que no se pudieron seguir: " << limitaciones << "\n";
+}
+
 static void print_formas(std::ostream &os, const ir::IrModule &mod,
                          const ir::IrModule *mod_previo) {
     os << "=== Forma de los valores con componentes ===\n";
@@ -431,9 +483,14 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
     print_fuera_de_region(os, mod);
 
     const EffectGaps &g = ea.gaps();
-    os << "=== Lagunas de precision ===\n";
+    os << "=== Cobertura del conocimiento ===\n";
+    /* La cobertura tambien es de los DOS estados: contar solo el codigo
+     * final decia "2 valores" de un programa cuyo fuente tiene ocho. */
+    if (mod_previo != nullptr)
+        print_cobertura_formas(os, *mod_previo, "tal como se escribio");
+    print_cobertura_formas(os, mod, "en el codigo final");
     if (g.empty()) {
-        os << "  ninguna: todos los efectos se infirieron con precision.\n";
+        os << "  efectos: todos se infirieron sin subir al maximo.\n";
         return;
     }
     os << "  sitios que subieron al efecto maximo (top): " << g.total_top << "\n";
