@@ -37,6 +37,7 @@
 
 #include "ir/ir_emitter.h"
 #include "ir/gc_safepoint.h" // pase compartido: raices GC por safepoint
+#include "analysis/asa/aggregate_facts.h"
 #include "ir/ir_optimizer.h"
 #include "ctpe/fold.h"
 #include "ir/liveness.h"
@@ -6888,6 +6889,13 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
 
     // Trabajar sobre una copia para no modificar el modulo original
     IrModule mod = mod_in;
+
+    /* ASA observa ANTES de optimizar.  Es el punto por el que pasan de verdad
+     * todas las rutas -- el emisor trabaja sobre una copia --, y es otra verdad
+     * del programa, no una peor: medido, la escalarizacion se lleva parte de los
+     * agregados antes de que nadie los mire, asi que observar solo despues hace
+     * creer que el programa no los tenia. */
+    analysis::asa::volcar_formas(mod, "pre-opt");
 
     // Aplicar optimizaciones IR
     ir_optimize(mod, opts.opt_level);

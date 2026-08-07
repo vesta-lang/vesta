@@ -1,0 +1,54 @@
+/**
+ * @file asa_a_saco.vx
+ * @brief Forma de uso A -- SACO: se tocan las partes y nada consume el valor
+ *        entero.  El mismo esqueleto sobre tipos distintos.
+ *
+ * La bateria de IR ya comprueba que el dominio responde bien a cada esqueleto.
+ * Esto comprueba lo otro, que es lo que hace general la tecnologia: que el
+ * FRONTEND no introduzca diferencias por su cuenta.  Si el mismo uso sobre un
+ * struct de enteros, uno de tipos mezclados y un array nativo diera formas
+ * distintas, la independencia del tipo seria aparente.
+ *
+ * INVARIANTE del caso: todos los valores que ASA observe aqui tienen que dar la
+ * MISMA forma.  No importa cual sea mientras sea la misma; lo que se prueba es
+ * la invariancia, no un veredicto concreto.
+ */
+
+struct DosEnteros {
+    u64 a;
+    u64 b;
+};
+
+struct Mezclado {
+    u64 grande;
+    u32 medio;
+    u8  chico;
+};
+
+u64 saco_enteros() {
+    DosEnteros v;
+    v.a = 3;
+    v.b = 4;
+    return v.a + v.b;
+}
+
+u64 saco_mezclado() {
+    Mezclado m;
+    m.grande = 10;
+    m.medio = 20;
+    m.chico = 30;
+    return m.grande;
+}
+
+u64 saco_array() {
+    u64 xs[4];
+    xs[0] = 1;
+    xs[1] = 2;
+    return xs[0] + xs[1];
+}
+
+i32 main(string[] args) {
+    u64 t = saco_enteros() + saco_mezclado() + saco_array();
+    println("A saco: ${t}");
+    return 0;
+}

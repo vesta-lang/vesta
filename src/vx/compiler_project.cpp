@@ -36,6 +36,7 @@
 
 #include "ir/ir_emitter.h"
 #include "ir/ir_optimizer.h"
+#include "analysis/asa/aggregate_facts.h"
 #include "analysis/effects/bounds.h" // accesos fuera de region -> diagnostico
 #include "vx/diag/diag_format.h"
 #include "ir/passes/select_policy.h"
@@ -3088,6 +3089,13 @@ CompileResult compile_vx_project(
             ir::set_target_isa(ir::TargetIsa::X86_64);
     }
 
+    /* ASA observa ANTES de optimizar: esta es la forma del programa tal como se
+     * escribio.  Es una verdad distinta de la de despues, no una version peor
+     * -- medido: de tres sacos escritos a mano, la escalarizacion se lleva dos
+     * antes de que nadie los mire, asi que observar solo despues hace creer que
+     * el programa no los tenia. */
+    analysis::asa::volcar_formas(merged, "pre-opt");
+
     ir::ir_optimize(merged, opt_level_from_int_(opts.opt_level),
                     /*allow_inline=*/!opts.emit_ir_preopt);
 
@@ -3369,6 +3377,9 @@ static bool contiene_palabra(const std::string &source, const char *kw) {
  */
 void vx_report_bounds(const ir::IrModule &mod, Diagnostics &diags,
                       const std::string &file) {
+    // Medicion del dominio de FORMA, apagada salvo que se pida explicitamente.
+    // Todavia no la consume nadie: primero hay que saber si distingue algo.
+    analysis::asa::volcar_formas(mod, "post-opt");
     for (const analysis::effects::BoundsViolation &v :
          analysis::effects::check_region_bounds(mod)) {
         SourceLoc loc;

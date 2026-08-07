@@ -22,6 +22,7 @@
 #include "analyze/bigo.h"
 #include "analyze/fingerprint.h" // verificacion de contratos de huella
 #include "ir/ir_emitter.h"
+#include "analysis/asa/aggregate_facts.h"
 #include "ir/ir_optimizer.h"
 #include "ir/ssa_ir.h"
 #include "ir/ssa_ir_serialize.h"
@@ -923,6 +924,11 @@ CompileResult compile_vx_source(const std::string &source,
                                !opts.port_target.empty();
     if (need_post_opt) {
         ir::IrModule irmod_opt = irmod;
+        /* ASA observa ANTES de optimizar: la forma del programa tal como se
+         * escribio.  Es otra verdad, no una peor -- medido: la escalarizacion se
+         * lleva parte de los agregados antes de que nadie los mire, asi que
+         * observar solo despues hace creer que el programa no los tenia. */
+        analysis::asa::volcar_formas(irmod_opt, "pre-opt");
         ir::ir_optimize(irmod_opt, opt_level_from_int(opts.opt_level));
         if (opts.dump_ir) {
             std::ostringstream ir_oss;

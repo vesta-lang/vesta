@@ -772,6 +772,20 @@ else ()
     target_link_libraries(test_value_range PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# Bateria de FORMAS DE USO: el mismo esqueleto tiene que dar el mismo
+# conocimiento, y la explicacion tiene que ser tan correcta como el veredicto.
+add_executable(test_aggregate_facts tests/analysis/test_aggregate_facts.cpp)
+target_include_directories(test_aggregate_facts PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_aggregate_facts PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_aggregate_facts PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_aggregate_facts PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_aggregate_facts PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 # Resumenes de frontera: que entra y que sale de una funcion, y cuando se puede
 # afirmar (mundo cerrado, punteros a funcion resueltos, recursion).
 add_executable(test_range_summary tests/analysis/test_range_summary.cpp)
