@@ -57,6 +57,13 @@ struct EffectGaps {
     /// del analizador de asm -- la tabla crece bajo demanda --, asi que el dato
     /// tiene que llegar hasta aqui.
     std::map<std::string, uint32_t> mnemonicos_desconocidos;
+    /// Funciones nativas de las que no se sabe que hacen -> numero de veces.
+    ///
+    /// NO toda llamada nativa es una caja negra: muchas son del propio
+    /// proyecto y se sabe perfectamente lo que hacen.  Nombrarlas es lo que
+    /// permite declararlas -- hoy en la tabla de nativas conocidas, manana
+    /// desde el propio lenguaje en las `extern` y las syscall.
+    std::map<std::string, uint32_t> nativas_desconocidas;
 
     void record(int op, UnknownReason why) {
         ++total_top;
@@ -65,6 +72,16 @@ struct EffectGaps {
     }
     /// Apunta un mnemonico que no esta en la tabla.
     void record_mnemonico(const std::string &m) { ++mnemonicos_desconocidos[m]; }
+    /// Apunta una llamada a codigo que NO esta en el programa.
+    ///
+    /// Cuenta como sitio en el maximo igual que los demas: el cierre acaba de
+    /// subir ahi por no tener nada que analizar.  Sin contarlo, el informe
+    /// decia "ninguna laguna" y se callaba el nombre.
+    void record_nativa(const std::string &f) {
+        ++nativas_desconocidas[f];
+        ++total_top;
+        ++by_reason[UnknownReason::UnknownFFI];
+    }
     bool empty() const { return total_top == 0; }
 };
 

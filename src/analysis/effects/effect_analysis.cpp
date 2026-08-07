@@ -129,12 +129,25 @@ CallInfo callees_of(const ir::IrFunction &fn) {
                 if (!in.func_name.empty()) ci.static_callees.push_back(in.func_name);
                 else ci.dynamic = true;
                 break;
+            /* Una llamada NATIVA con nombre se resuelve como cualquier otra: si
+             * la funcion esta en el programa, se ANALIZA -- no se dan por
+             * supuestas sus capacidades ni se espera a que alguien las declare.
+             * Solo cuando el destino no aparece (codigo verdaderamente ajeno)
+             * el cierre sube al efecto maximo, que es donde ya lo hace.
+             *
+             * Antes se marcaba dinamica SIEMPRE, asi que aunque el destino
+             * estuviera delante, su resumen no se miraba nunca. */
+            case ir::IrOp::CALLN:
+                if (!in.func_name.empty())
+                    ci.static_callees.push_back(in.func_name);
+                else
+                    ci.dynamic = true;
+                break;
             case ir::IrOp::CALLVIRT:
             case ir::IrOp::CALLM:
             case ir::IrOp::CALLITF:
             case ir::IrOp::CALLCLOSURE:
             case ir::IrOp::CALLIND:
-            case ir::IrOp::CALLN:
                 ci.dynamic = true;
                 break;
             default:
@@ -259,7 +272,11 @@ ModuleSummary EffectAnalysis::build_summary(
         if (ci.dynamic) { nc = join(nc, SemanticEffects::top()); raise(); }
         for (const std::string &callee : ci.static_callees) {
             auto it = out.fns.find(callee);
-            if (it == out.fns.end()) { // externo al programa -> TOP robusto
+            if (it == out.fns.end()) {
+                /* El destino NO esta en el programa: es codigo ajeno de verdad
+                 * y no hay nada que analizar, asi que efecto maximo.  Se apunta
+                 * su NOMBRE, que es lo unico que permite hacer algo al
+                 * respecto -- traerlo al analisis o declarar sus efectos. */
                 nc = join(nc, SemanticEffects::top());
                 raise();
                 continue;
@@ -294,6 +311,14 @@ ModuleSummary EffectAnalysis::build_summary(
                     if (in_work.insert(caller).second) work.push_back(caller);
         }
     }
+
+    /* Ya convergido, se apunta UNA vez cada llamada a codigo que no esta en el
+     * programa.  Hacerlo dentro del punto fijo contaba la misma llamada tantas
+     * veces como vueltas diera. */
+    for (const auto &kv : calls)
+        for (const std::string &callee : kv.second.static_callees)
+            if (out.fns.find(callee) == out.fns.end())
+                gaps_.record_nativa(callee);
     return out;
 }
 

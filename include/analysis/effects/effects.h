@@ -312,6 +312,8 @@ struct EffectAnalysisResult {
     /// Mnemonicos de asm que la tabla no supo explicar, si el motivo fue ese.
     /// Viajan hasta el informe porque una laguna sin nombre no se puede cerrar.
     std::vector<std::string> mnemonicos_desconocidos;
+    /// Nombre de la funcion nativa sin efectos declarados, si el motivo fue ese.
+    std::string nativa_sin_declarar;
 };
 
 // ===========================================================================

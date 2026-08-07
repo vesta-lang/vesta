@@ -360,10 +360,16 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
         r.completeness = AnalysisCompleteness::Conservative;
         r.unknown_reason = UnknownReason::Indirect;
         break;
-    case IrOp::CALLN: // FFI/nativo: caja negra -> efecto MAXIMO robusto.
-        e = SemanticEffects::top();
-        r.completeness = AnalysisCompleteness::Conservative;
-        r.unknown_reason = UnknownReason::UnknownFFI;
+    case IrOp::CALLN:
+        /* Una llamada NATIVA no es opaca por definicion.  Su efecto LOCAL es el
+         * de cualquier llamada -- ceder el control --; lo que hace el destino lo
+         * pone el cierre interprocedural, que lo busca por nombre y lo ANALIZA
+         * si esta en el programa.  Solo cuando el destino no aparece, el cierre
+         * sube al efecto maximo y lo nombra en el informe.
+         *
+         * Antes se daba por caja negra aqui mismo, con lo que daba igual que el
+         * destino estuviera delante: nadie llegaba a mirarlo. */
+        e.control.kind = ControlKind::Call;
         break;
 
     // ---- Concurrencia ----
@@ -470,6 +476,8 @@ EffectAnalysisResult function_local_effects(const ir::IrFunction &fn,
                 gaps->record(static_cast<int>(in.op), r.unknown_reason);
                 for (const std::string &m : r.mnemonicos_desconocidos)
                     gaps->record_mnemonico(m);
+                if (!r.nativa_sin_declarar.empty())
+                    gaps->record_nativa(r.nativa_sin_declarar);
             }
             blk = first_instr ? r.effects : seq(blk, r.effects);
             first_instr = false;
