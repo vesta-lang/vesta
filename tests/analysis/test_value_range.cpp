@@ -149,6 +149,28 @@ static void probar_aritmetica() {
     check(binaria(ir::IrOp::NEG, INT64_MIN, INT64_MIN, 0, 0).es_top(),
           "desbordamiento: negar INT64_MIN no afirma nada");
 
+    /* La aritmetica del IR ENVUELVE al ancho del tipo: un `u8` con 250 + 10
+     * vale 4, no 260.  Lo que NO puede pasar es que el resultado se corte
+     * contra el tipo y quede un intervalo vacio, porque un intervalo vacio es
+     * BOTTOM, o sea "por aqui no se pasa" -- y por ahi se pasa.  Ese error no
+     * quita precision: miente, y un consumidor que demuestre algo sobre un
+     * punto declarado inalcanzable puede eliminar codigo vivo. */
+    {
+        ir::IrFunction fn;
+        fn.name = "envuelve";
+        const uint32_t b0 = fn.new_block("entry");
+        const ir::IrValueId a = cte(fn, b0, ir::IrType::U8, 250);
+        const ir::IrValueId b = cte(fn, b0, ir::IrType::U8, 10);
+        const ir::IrValueId d = fn.new_value(ir::IrType::U8);
+        emitir(fn, b0, ir::IrOp::ADD, d, {a, b});
+        emitir(fn, b0, ir::IrOp::RET, ir::IR_NO_VALUE, {d});
+        const ValueRange r = analizar(fn).at(d);
+        check(!r.es_bottom(),
+              "envolvente: salirse del tipo NO vuelve inalcanzable el punto");
+        check(es(r, 0, 255),
+              "envolvente: si no cabe en el tipo, lo afirmable es el tipo");
+    }
+
     // El ancho del tipo acota gratis, en cualquier arquitectura.
     {
         ir::IrFunction fn;

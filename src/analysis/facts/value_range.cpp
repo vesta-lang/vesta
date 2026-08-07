@@ -449,17 +449,17 @@ struct Motor {
         if (src.es_bottom()) return ValueRange::bottom();
         switch (o) {
         case IrOp::SEXT:
-            // Preserva el valor: el rango es el mismo, acotado por el destino.
-            return src.cortar(piso_dst);
+            // Preserva el VALOR; el destino es mas ancho, asi que siempre cabe.
+            return acotar_al_tipo(src, piso_dst);
         case IrOp::ZEXT:
-            if (src.acotada() && src.lo >= 0) return src.cortar(piso_dst);
+            if (src.acotada() && src.lo >= 0) return acotar_al_tipo(src, piso_dst);
             if (w > 0 && w < 63) // [0, 2^w - 1] cabe en int64
-                return ValueRange::acotado(0, (int64_t(1) << w) - 1).cortar(piso_dst);
+                return acotar_al_tipo(ValueRange::acotado(0, (int64_t(1) << w) - 1), piso_dst);
             return piso_dst;
         case IrOp::TRUNC: {
             // Solo se conserva si el valor entero cabe ya en el destino; si no,
             // lo unico afirmable es el ancho del destino.
-            const ValueRange corte = src.cortar(piso_dst);
+            const ValueRange corte = acotar_al_tipo(src, piso_dst);
             if (src.acotada() && piso_dst.acotada() && src.lo >= piso_dst.lo &&
                 src.hi <= piso_dst.hi)
                 return corte;
@@ -468,6 +468,22 @@ struct Motor {
         default:
             return piso_dst;
         }
+    }
+
+    /**
+     * @brief Encaja un resultado en su tipo sin afirmar de mas ni de menos.
+     *
+     * Si cabe entero, se queda como esta.  Si NO cabe, la operacion envolvio y
+     * el valor real es otro: lo unico afirmable es el rango del tipo.  Nunca
+     * BOTTOM -- que un resultado se salga del tipo no significa que el programa
+     * no pase por ahi.
+     */
+    static ValueRange acotar_al_tipo(const ValueRange &r, const ValueRange &tipo) {
+        if (r.es_bottom()) return r;          // venia de un camino imposible
+        if (!r.acotada()) return tipo;        // no se sabe: lo que diga el tipo
+        if (!tipo.acotada()) return r;        // el tipo no acota (64 bits)
+        if (r.lo >= tipo.lo && r.hi <= tipo.hi) return r;
+        return tipo;
     }
 
     /// Transferencia de una instruccion (las PHI se resuelven en IN[B]).
@@ -522,7 +538,18 @@ struct Motor {
             nuevo = ValueRange::top();
             break;
         }
-        e.poner(in.dst, suelo[in.dst].cortar(nuevo));
+        /* El resultado se ACOTA por el tipo, no se corta contra el.
+         *
+         * La diferencia es de correccion, no de precision: la aritmetica del IR
+         * ENVUELVE al ancho del tipo, asi que un `u8` con 250 + 10 vale 4, no
+         * 260.  Cortar [260,260] contra el suelo [0,255] da un intervalo vacio,
+         * o sea BOTTOM, o sea "aqui no se llega" -- afirmando que un punto
+         * perfectamente alcanzable no lo es.  Ese es el peor error que puede
+         * cometer un analisis: no pierde precision, miente.
+         *
+         * Cuando el resultado no cabe en el tipo, lo unico que se puede afirmar
+         * es el propio tipo. */
+        e.poner(in.dst, acotar_al_tipo(nuevo, suelo[in.dst]));
     }
 
     /// IN[B]: union de lo que llega por cada arista, con las PHI resueltas
@@ -549,7 +576,10 @@ struct Motor {
                 for (uint32_t ai : entrantes[bi])
                     if (aristas[ai].desde == pa.block && out_arista[ai].alcanzable)
                         acc = acc.unir(valor(out_arista[ai], pa.value));
-            e.poner(in.dst, suelo[in.dst].cortar(acc));
+            /* Mismo criterio que en la transferencia: acotar por el tipo, no
+             * cortar contra el.  Cortar convertiria un valor que no encaja en
+             * "este punto no se alcanza", que es mentir. */
+            e.poner(in.dst, acotar_al_tipo(acc, suelo[in.dst]));
         }
     }
 
