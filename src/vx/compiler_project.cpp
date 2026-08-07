@@ -3272,13 +3272,15 @@ CompileResult compile_vx_project(
     return res;
 }
 
-bool vx_source_has_imports(const std::string &source) {
-    // Scanner muy simple: busca `import` en posicion top-level (al
-    // inicio de linea o tras whitespace, no dentro de un string ni
-    // comentario).  Es heuristica permisiva: si el matcher dice "tiene
-    // imports" pero el parser no los encuentra, no pasa nada (cae al
-    // path normal).  Si dice "no" cuando si los hay, el path single-file
-    // los rechaza con error claro.
+/**
+ * @brief ¿Aparece la palabra @p kw en el texto, fuera de comentarios y cadenas?
+ *
+ * Escaner deliberadamente simple, y permisivo por diseno: si dice que si y el
+ * parser luego no la encuentra, no pasa nada.  Se busca por palabra COMPLETA
+ * para que `importante` o `namespaced` no cuenten.
+ */
+static bool contiene_palabra(const std::string &source, const char *kw) {
+    const size_t klen = std::strlen(kw);
     enum {
         NORMAL,
         IN_LINE_COMMENT,
@@ -3293,10 +3295,10 @@ bool vx_source_has_imports(const std::string &source) {
                 (p >= '0' && p <= '9') || p == '_')
                 return false;
         }
-        if (k + 6 > source.size()) return false;
-        if (source.compare(k, 6, "import") != 0) return false;
-        if (k + 6 < source.size()) {
-            char n = source[k + 6];
+        if (k + klen > source.size()) return false;
+        if (source.compare(k, klen, kw) != 0) return false;
+        if (k + klen < source.size()) {
+            char n = source[k + klen];
             if ((n >= 'a' && n <= 'z') || (n >= 'A' && n <= 'Z') ||
                 (n >= '0' && n <= '9') || n == '_')
                 return false;
@@ -3345,6 +3347,14 @@ bool vx_source_has_imports(const std::string &source) {
         ++i;
     }
     return false;
+}
+
+bool vx_source_has_imports(const std::string &source) {
+    return contiene_palabra(source, "import");
+}
+
+bool vx_source_declara_namespace(const std::string &source) {
+    return contiene_palabra(source, "namespace");
 }
 
 } // namespace vx

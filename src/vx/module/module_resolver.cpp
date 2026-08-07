@@ -995,6 +995,38 @@ uint32_t ModuleGraph::build_from_root(const std::string &root_file) {
     }
     const uint32_t id = load_and_parse_(canonical);
     if (id == UINT32_MAX) return UINT32_MAX;
+
+    /* Si la RAIZ declara un namespace que esta repartido entre varios ficheros
+     * -- el base y uno por arquitectura --, hay que traerse a sus hermanos.
+     *
+     * Al IMPORTAR un namespace parcial ya se hacia (mas arriba); faltaba
+     * cuando el fichero analizado ES uno de ellos.  Sin esto, `std/types.vx`
+     * suelto no se sostiene: usa `usize`, que declara el fichero de su
+     * arquitectura, y el resultado era "tipo no resuelto en alias" -- o sea que
+     * la base de tipos de la que depende media stdlib no se podia ni analizar,
+     * y con ella todo lo que arrastra. */
+    if (ResolvedModule *raiz = modules_[id].get()) {
+        std::vector<std::string> mis_ns;
+        std::string texto;
+        if (read_file_(canonical, texto)) extract_namespaces_(texto, mis_ns);
+        if (!mis_ns.empty()) {
+            build_namespace_index_();
+            for (const auto &ns : mis_ns) {
+                auto itns = ns_index_.find(ns);
+                if (itns == ns_index_.end()) continue;
+                for (const auto &file : itns->second) {
+                    if (file == canonical) continue; // el propio root
+                    const uint32_t mid = load_and_parse_(file);
+                    if (mid == UINT32_MAX) continue;
+                    raiz->dependencies.push_back(mid);
+                    ResolvedModule *herm = modules_[mid].get();
+                    if (herm && herm->dependencies.empty() && herm->parsed_ast)
+                        process_dependencies_(*herm);
+                }
+            }
+        }
+    }
+
     process_dependencies_(*modules_[id]);
     return id;
 }

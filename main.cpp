@@ -1277,13 +1277,21 @@ int main(int argc, char *argv[]) {
         //     en el caso de --format, al linker propio (--link).  Fuera de esos
         //     contextos se ignoraban sin avisar.
         const bool link_mode = result.count("link") > 0;
+        /* El ANALISIS tambien elige objetivo.  Este compilador cruza -- genera
+         * un ELF de Linux desde Windows --, asi que analizar solo para el
+         * anfitrion dejaba fuera justo el codigo que mas se quiere revisar: el
+         * de la otra plataforma.  Con `--format elf` se pedia y se rechazaba,
+         * y sin el, un `@Target("... && !os:windows")` se excluye y el fichero
+         * ni siquiera compila para analizarlo. */
+        const bool analyze_mode = result.count("analyze") > 0;
         if (result.count("emit") && !aot_mode) {
             std::cerr << "[cli] --emit solo aplica con -m aot "
                          "(compilacion nativa standalone).\n";
             return EXIT_FAILURE;
         }
-        if (result.count("format") && !aot_mode && !link_mode) {
-            std::cerr << "[cli] --format solo aplica con -m aot o --link.\n";
+        if (result.count("format") && !aot_mode && !link_mode && !analyze_mode) {
+            std::cerr << "[cli] --format solo aplica con -m aot, --link o "
+                         "--analyze.\n";
             return EXIT_FAILURE;
         }
     }
@@ -1968,6 +1976,38 @@ int main(int argc, char *argv[]) {
         const std::string &vx_path = result["analyze"].as<std::string>();
         const bool want_json = result.count("analyze-json") > 0;
 
+        /* Objetivo del ANALISIS.  Se elige igual que el de la compilacion
+         * nativa (`--format` da el sistema, `--aot-arch` la arquitectura),
+         * porque este compilador CRUZA: genera un ELF de Linux desde Windows.
+         *
+         * Sin esto, analizar solo valia para el anfitrion, y el codigo de la
+         * otra plataforma -- justo el que uno quiere revisar sin poder
+         * ejecutarlo -- ni siquiera compilaba: un
+         * `@Target("arch:x86_64 && !os:windows")` se excluye, y lo que ese
+         * import traia (en `std.syscall.linux`, la implementacion entera del
+         * arch) quedaba sin declarar. */
+        if (result.count("format") || result.count("aot-arch")) {
+            const std::string fmt =
+                result.count("format") ? result["format"].as<std::string>()
+                                       : std::string();
+            const std::string arch =
+                result.count("aot-arch") ? result["aot-arch"].as<std::string>()
+                                         : std::string("x86-64");
+            const bool es32 = (arch == "x86-32" || arch == "x86_32" ||
+                               arch == "i386");
+            std::string os_obj;
+            if (fmt == "pe") os_obj = "windows";
+            else if (fmt == "elf") os_obj = "linux";
+            else {
+#if defined(_WIN32)
+                os_obj = "windows";
+#else
+                os_obj = "linux";
+#endif
+            }
+            vx::set_aot_condcomp_target(os_obj, es32 ? "x86" : "x86_64");
+        }
+
         std::ifstream ifs(vx_path);
         if (!ifs.is_open()) {
             std::cerr << "[analyze] No se puede abrir: " << vx_path << "\n";
@@ -1994,10 +2034,17 @@ int main(int argc, char *argv[]) {
         // siempre a `compile_vx_source` (un solo fichero), asi que analizar un
         // programa que importa cualquier cosa -- la stdlib incluida -- moria en
         // "funcion no declarada" en vez de darte el analisis.
+        // Y tambien si DECLARA un namespace, aunque no importe nada: un
+        // namespace puede repartirse entre varios ficheros (el base y uno por
+        // arquitectura), y suelto no se sostiene porque usa lo que declaran sus
+        // hermanos.  Con el criterio antiguo, analizar `std/types.vx` -- la
+        // base de tipos de la que depende media stdlib -- moria en "tipo no
+        // resuelto en alias".
+        const bool como_proyecto = vx::vx_source_has_imports(vx_source) ||
+                                   vx::vx_source_declara_namespace(vx_source);
         vx::CompileResult cr =
-            vx::vx_source_has_imports(vx_source)
-                ? vx::compile_vx_project(vx_path, copts)
-                : vx::compile_vx_source(vx_source, vx_path, copts);
+            como_proyecto ? vx::compile_vx_project(vx_path, copts)
+                          : vx::compile_vx_source(vx_source, vx_path, copts);
         // Volcar diagnosticos (errores/warnings) del frontend.
         for (const auto &d : cr.diagnostics.all())
             vx::print_diagnostic(std::cerr, d);
