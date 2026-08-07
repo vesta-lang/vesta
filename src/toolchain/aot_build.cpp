@@ -26,6 +26,7 @@
 #include "toolchain/aot_build.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -120,8 +121,84 @@ static bool escribir_acompanante(
     return true;
 }
 
+/**
+ * @struct TelemetriaBackend
+ * @brief Reparto del tiempo del backend AOT, publicado al terminar.
+ *
+ * El frontend ya dice donde se le va el tiempo (analisis, tipos, bajada,
+ * optimizar, emitir); el backend nativo no decia nada, y es donde vive la
+ * mitad cara de una compilacion AOT.  Esto lo cierra con cuatro tramos que
+ * se corresponden con las fronteras REALES del codigo, no con una division
+ * inventada: preparar el IR para nativo, generar codigo maquina funcion a
+ * funcion, montar el fichero objeto y enlazar.
+ *
+ * Se publica en el DESTRUCTOR a proposito: `compile_aot` sale por muchos
+ * sitios (cada validacion de flag, cada error de codegen) y asi el reparto
+ * aparece tambien cuando la compilacion falla -- que es justo cuando saber
+ * hasta donde se llego tiene mas valor.  Los tramos que no se alcanzaron
+ * quedan a cero y no se imprimen.
+ */
+struct TelemetriaBackend {
+    long preparar_us = 0; ///< IR -> IR listo para nativo (merge, lowering).
+    long codegen_us = 0;  ///< Seleccion + regalloc + codificacion por funcion.
+    long objeto_us = 0;   ///< Secciones, relocalizaciones y escritura.
+    long enlazar_us = 0;  ///< Enlazador propio (solo si hubo auto-link).
+
+    /** Parte de @c preparar_us que se va en compilar el runtime escrito en
+     *  Vesta (vx_exc, vx_str, vx_types, vx_atomic, vx_io, vx_mem, vx_ffi).
+     *  NO suma aparte: es un DE LOS CUALES, para no contar dos veces. */
+    long runtime_us = 0;
+
+    std::chrono::steady_clock::time_point marca =
+        std::chrono::steady_clock::now();
+
+    /** @brief Cierra un tramo: acumula lo transcurrido y reinicia el reloj. */
+    void cerrar(long &destino) {
+        const auto ahora = std::chrono::steady_clock::now();
+        destino += (long)std::chrono::duration_cast<std::chrono::microseconds>(
+                       ahora - marca)
+                       .count();
+        marca = ahora;
+    }
+
+    /** @brief Suma a @c runtime_us lo transcurrido desde @p desde. */
+    void sumar_runtime(const std::chrono::steady_clock::time_point &desde) {
+        runtime_us +=
+            (long)std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - desde)
+                .count();
+    }
+
+    long total_us() const {
+        return preparar_us + codegen_us + objeto_us + enlazar_us;
+    }
+
+    ~TelemetriaBackend() {
+        if (total_us() <= 0) return;
+        auto ms = [](long us) { return (double)us / 1000.0; };
+        std::cout << "[aot] backend: preparar " << ms(preparar_us) << " ms";
+        if (runtime_us > 0)
+            std::cout << " (runtime en Vesta " << ms(runtime_us) << " ms)";
+        std::cout << " | codegen " << ms(codegen_us) << " ms | objeto "
+                  << ms(objeto_us) << " ms";
+        if (enlazar_us > 0) std::cout << " | enlazar " << ms(enlazar_us) << " ms";
+        std::cout << " | total " << ms(total_us()) << " ms\n";
+        // Linea para consumo automatico (el banco de pruebas de compilacion la
+        // lee sin tener que parsear la prosa de arriba).
+        std::cout << "__VESTA_TIMES_BACKEND__ {\"preparar_us\":" << preparar_us
+                  << ",\"codegen_us\":" << codegen_us
+                  << ",\"objeto_us\":" << objeto_us
+                  << ",\"enlazar_us\":" << enlazar_us
+                  << ",\"runtime_us\":" << runtime_us
+                  << ",\"total_us\":" << total_us() << "}\n";
+    }
+};
+
 int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 std::string out_prefix, const AotOptions &opt) {
+            // Reparto del tiempo del backend: se publica al salir, por
+            // cualquier via (exito o error).
+            TelemetriaBackend tel;
             // Alias locales de las opciones para no alterar el cuerpo movido.
             const aot::Tier aot_tier = opt.tier;
             const bool aot_freestanding = opt.freestanding;
@@ -221,8 +298,10 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     // Mismo target bits que el modulo principal (el @Naked
                     // setjmp/longjmp x86-32 debe ensamblarse en mode32).
                     ve_opts.asm_target_bits = copts.asm_target_bits;
+                    const auto t_rt_exc = std::chrono::steady_clock::now();
                     vx::CompileResult ve_cr =
                         vx::compile_vx_source(ve_src, ve_path, ve_opts);
+                    tel.sumar_runtime(t_rt_exc);
                     ir::IrModule ve_mod;
                     if (!ve_cr.ok || ve_cr.ir_module_cache_bytes.empty() ||
                         !ir::parse_ir_module_cache(ve_cr.ir_module_cache_bytes,
@@ -313,8 +392,10 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     // con "simbolo no resuelto").  Si el programa ademas usa
                     // async directo, el bloque de vx_async de abajo ve sus fns ya
                     // presentes (dedup por `have`) y las salta.
+                    const auto t_rt_str = std::chrono::steady_clock::now();
                     vx::CompileResult vs_cr =
                         vx::compile_vx_project(vs_path, vs_opts);
+                    tel.sumar_runtime(t_rt_str);
                     ir::IrModule vs_mod;
                     if (!vs_cr.ok || vs_cr.ir_module_cache_bytes.empty() ||
                         !ir::parse_ir_module_cache(vs_cr.ir_module_cache_bytes,
@@ -400,8 +481,10 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     // firmas de los extern).  std.types son typedefs (sin
                     // codigo) -> el merge no anade nada, solo resuelve tipos.
                     (void)vt_src;
+                    const auto t_rt_types = std::chrono::steady_clock::now();
                     vx::CompileResult vt_cr =
                         vx::compile_vx_project(vt_path, vt_opts);
+                    tel.sumar_runtime(t_rt_types);
                     ir::IrModule vt_mod;
                     if (!vt_cr.ok || vt_cr.ir_module_cache_bytes.empty() ||
                         !ir::parse_ir_module_cache(vt_cr.ir_module_cache_bytes,
@@ -487,8 +570,10 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     va_opts.opt_level = copts.opt_level;
                     va_opts.native_poo = true;
                     va_opts.asm_target_bits = copts.asm_target_bits;
+                    const auto t_rt_atomic = std::chrono::steady_clock::now();
                     vx::CompileResult va_cr =
                         vx::compile_vx_source(va_src, va_path, va_opts);
+                    tel.sumar_runtime(t_rt_atomic);
                     ir::IrModule va_mod;
                     if (!va_cr.ok || va_cr.ir_module_cache_bytes.empty() ||
                         !ir::parse_ir_module_cache(va_cr.ir_module_cache_bytes,
@@ -570,8 +655,10 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     vf_opts.opt_level = copts.opt_level;
                     vf_opts.native_poo = true;
                     vf_opts.asm_target_bits = copts.asm_target_bits;
+                    const auto t_rt_fmt = std::chrono::steady_clock::now();
                     vx::CompileResult vf_cr =
                         vx::compile_vx_source(vf_src, vf_path, vf_opts);
+                    tel.sumar_runtime(t_rt_fmt);
                     ir::IrModule vf_mod;
                     if (!vf_cr.ok || vf_cr.ir_module_cache_bytes.empty() ||
                         !ir::parse_ir_module_cache(vf_cr.ir_module_cache_bytes,
@@ -687,8 +774,10 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                      * std.types del lado de Linux, y solo esa ruta resuelve los
                      * imports.  Mismo criterio que vx_thread y vx_fault. */
                     (void)io_src;
+                    const auto t_rt_io = std::chrono::steady_clock::now();
                     vx::CompileResult io_cr =
                         vx::compile_vx_project(io_path, io_opts);
+                    tel.sumar_runtime(t_rt_io);
                     ir::IrModule io_mod;
                     if (!io_cr.ok || io_cr.ir_module_cache_bytes.empty() ||
                         !ir::parse_ir_module_cache(io_cr.ir_module_cache_bytes,
@@ -835,7 +924,9 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 /* Por PROYECTO y no por fuente suelto: el modulo importa
                  * `std.types` (uintptr / nullptr) y solo esa ruta resuelve los
                  * imports.  Mismo criterio que vx_thread y vx_async. */
+                const auto t_rt_fs = std::chrono::steady_clock::now();
                 vx::CompileResult fcr = vx::compile_vx_project(fpath, fopts);
+                tel.sumar_runtime(t_rt_fs);
                 ir::IrModule fmod;
                 if (!fcr.ok || fcr.ir_module_cache_bytes.empty() ||
                     !ir::parse_ir_module_cache(fcr.ir_module_cache_bytes,
@@ -1155,8 +1246,10 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 // Como PROYECTO, no como fichero suelto: la stdlib es codigo
                 // Vesta normal y sus modulos se importan entre si (vx_mem usa
                 // los atomicos de atomic en vez de reimplementarlos).
+                const auto t_rt_mem = std::chrono::steady_clock::now();
                 vx::CompileResult mem_cr =
                     vx::compile_vx_project(mem_path, mem_opts);
+                tel.sumar_runtime(t_rt_mem);
                 if (!mem_cr.ok || mem_cr.ir_module_cache_bytes.empty() ||
                     !ir::parse_ir_module_cache(mem_cr.ir_module_cache_bytes,
                                                mem_mod) ||
@@ -1230,8 +1323,10 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     ffi_opts.opt_level = copts.opt_level;
                     ffi_opts.native_poo = true;
                     ffi_opts.asm_target_bits = copts.asm_target_bits;
+                    const auto t_rt_ffi = std::chrono::steady_clock::now();
                     vx::CompileResult ffi_cr =
                         vx::compile_vx_source(ffi_src, ffi_path, ffi_opts);
+                    tel.sumar_runtime(t_rt_ffi);
                     if (!ffi_cr.ok || ffi_cr.ir_module_cache_bytes.empty() ||
                         !ir::parse_ir_module_cache(
                             ffi_cr.ir_module_cache_bytes, ffi_mod)) {
@@ -1311,6 +1406,8 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
             // ALLOCA_VM ([rbx+0x40]) -> direccion basura -> SIGSEGV.
             for (auto &afn : aot_mod.functions)
                 ir::ir_pass_promote_local_allocas(afn, /*force_all=*/true);
+
+            tel.cerrar(tel.preparar_us);
 
             // ------------------------------------------------------------------
             // Paso 2: codegen nativo (HOST_LEAF) + emision del ejecutable.
@@ -1943,6 +2040,8 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 }
             }
             if (!aot_codegen_ok) return EXIT_FAILURE;
+
+            tel.cerrar(tel.codegen_us);
 
             // ------------------------------------------------------------------
             // Layout MULTI-SECCION (2b, dev OS): el usuario decide en que
@@ -2813,6 +2912,8 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 return EXIT_FAILURE;
             }
 
+            tel.cerrar(tel.objeto_us);
+
             // Auto-link: enlazar el .obj temporal con las .a estaticas de la
             // stdlib que el programa usa (gc / colecciones / math) -> .exe
             // STANDALONE (vm --link interno, sin g++ ni DLLs).
@@ -2829,6 +2930,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     aot::aot_link(inputs, link_real_out, lopts, lerr);
                 std::error_code ec;
                 fs::remove(link_tmp_obj, ec); // limpiar el .obj temporal
+                tel.cerrar(tel.enlazar_us);
                 if (!ok) {
                     std::cerr << "[aot] auto-link error: " << lerr << "\n";
                     return EXIT_FAILURE;
