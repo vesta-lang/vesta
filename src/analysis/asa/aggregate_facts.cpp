@@ -93,28 +93,44 @@ const char *nombre_motivo(MotivoForma m) {
  * @brief Liga cada acceso del propietario al ciclo de vida del valor, si lo esta.
  *
  * Se hace al final, cuando ya se ha visto todo: hasta entonces no se sabe que
- * desplazamientos tocan sus operaciones.  Un acceso del propietario a un sitio
- * que una operacion ESCRIBE consume lo que esa operacion produjo; a uno que
- * alguna LEE, lo construye.  Cualquiera de los dos pertenece al valor.
+ * desplazamientos escriben sus operaciones.
  *
- * El que no encaja en ninguno de los dos es el interesante: se usa una parte que
- * ninguna operacion produce ni consume, es decir, al margen de lo que el valor
- * hace.  Esa es la unica forma en que "participa como unidad" y "se tocan sus
- * partes" llegan a ser incompatibles de verdad.
+ * ESCRIBIR y LEER desde el propietario no son lo mismo, y tratarlos igual era un
+ * error medido:
+ *
+ *   escribir -> CONSTRUIR el valor.  Pertenece a su ciclo de vida siempre, use
+ *               o no ese campo la operacion a la que se pasa despues.
+ *   leer     -> depende.  Leer lo que una operacion escribio es CONSUMIR su
+ *               resultado; leer un sitio que ninguna produce es usar una parte
+ *               al margen de lo que el valor hace.
+ *
+ * Solo lo ultimo hace que "participa como unidad" y "se tocan sus partes" sean
+ * de verdad incompatibles.
  */
 void ligar_accesos(std::vector<AccesoComponente> &accesos) {
-    std::unordered_set<int64_t> escritos_por_operacion, leidos_por_operacion;
-    for (const AccesoComponente &a : accesos) {
-        if (a.relacion != RelacionAcceso::EnOperacion || !a.offset_sabido)
-            continue;
-        if (a.escribe) escritos_por_operacion.insert(a.offset);
-        else leidos_por_operacion.insert(a.offset);
-    }
+    std::unordered_set<int64_t> escritos_por_operacion;
+    for (const AccesoComponente &a : accesos)
+        if (a.relacion == RelacionAcceso::EnOperacion && a.offset_sabido &&
+            a.escribe)
+            escritos_por_operacion.insert(a.offset);
     for (AccesoComponente &a : accesos) {
         if (a.relacion != RelacionAcceso::EnPropietario) continue;
         if (!a.offset_sabido) continue; // ya se anota como acceso dinamico
-        a.ligado_a_operacion = a.escribe ? leidos_por_operacion.count(a.offset) > 0
-                                         : escritos_por_operacion.count(a.offset) > 0;
+        /* ESCRIBIR desde el propietario es CONSTRUIR el valor: se establece su
+         * contenido, y eso pertenece a su ciclo de vida tanto si alguna
+         * operacion lee ese sitio como si no.  Tratarlo igual que una lectura
+         * era el error -- MEDIDO: un valor que se construye campo a campo y se
+         * pasa entero a una operacion que solo mira uno de ellos salia
+         * "evidencia contradictoria", cuando lo unico que pasa es que se
+         * inicializo algo que esa operacion no necesita. */
+        if (a.escribe) {
+            a.ligado_a_operacion = true;
+            continue;
+        }
+        /* LEER, en cambio, si distingue: leer lo que una operacion escribio es
+         * consumir su resultado; leer un sitio que ninguna produce es usar una
+         * parte al margen de lo que el valor hace. */
+        a.ligado_a_operacion = escritos_por_operacion.count(a.offset) > 0;
     }
 }
 
