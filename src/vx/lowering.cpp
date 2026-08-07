@@ -29248,6 +29248,34 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
+        /* El prestamo no deja rastro en el IR -- esto no emite instruccion, el
+         * puntero es el mismo --, asi que lo que el borrow checker demuestra se
+         * quedaba dentro del type checker.  Se apunta como HECHO del IR, con su
+         * procedencia, para que el analisis pueda componerlo con regiones y
+         * efectos.  Anotar no cambia el codigo generado. */
+        auto anota_prestamo = [&](ir::IrValueId v_pres, ir::IrValueId v_owner) {
+            if (v_pres == ir::IR_NO_VALUE || !fn_) return;
+            ir::IrFunction::BorrowFact bf;
+            bf.value = v_pres;
+            bf.owner = v_owner;
+            bf.mutable_ = is_lend_mut;
+            /* La naturaleza de lo prestado viaja con el hecho: prestar un
+             * `unique` no es lo mismo que prestar un local, y nadie debe
+             * confundirlos despues. */
+            const Type &ot = e->args[0]->result_type;
+            using OK = ir::IrFunction::BorrowOwnerKind;
+            bf.owner_kind = (ot.kind == PrimitiveKind::UNIQUE_PTR)  ? OK::Unique
+                            : (ot.kind == PrimitiveKind::SHARED_PTR) ? OK::Shared
+                            : (ot.kind == PrimitiveKind::BORROW ||
+                               ot.kind == PrimitiveKind::BORROW_MUT)
+                                ? OK::Reborrow
+                                : OK::Plain;
+            bf.line = e->loc.line;
+            if (e->args[0]->kind == ast::NodeKind::IdentExpr)
+                bf.owner_name =
+                    static_cast<ast::IdentExpr *>(e->args[0].get())->name;
+            fn_->borrow_facts.push_back(std::move(bf));
+        };
         // Si el owner es unique<T>/shared<T>, equivale a ptr_of(owner)
         // que carga slot+0.  Si es una variable plain, devolvemos
         // &owner (su SSA value, que ya tiene is_host_ptr correcto
@@ -29268,6 +29296,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             if (v != ir::IR_NO_VALUE) {
                 // El borrow_var ya es host_ptr; lo devolvemos tal cual.
                 // (read_borrow/write_borrow lo usaran con movh.)
+                anota_prestamo(v, v); // represtamo: el owner ES otro prestamo
                 out_value = v;
                 return true;
             }
@@ -29293,6 +29322,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     // asi que NO marcamos is_host_ptr aqui: los LOAD/
                     // STORE de read/write_borrow ya consultan eso del
                     // SSA value y emiten mov (no movh) si es slot VM.
+                    anota_prestamo(v, v);
                     out_value = v;
                     return true;
                 }
@@ -29329,14 +29359,17 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 add.operands = {v_ptr, v_sixteen};
                 add.source_line = e->loc.line;
                 emit(current_block_, std::move(add));
+                anota_prestamo(v_pay, v_arg);
                 out_value = v_pay;
                 return true;
             }
+            anota_prestamo(v_ptr, v_arg);
             out_value = v_ptr;
             return true;
         }
         // owner plain: el SSA value ya es la direccion (address-taken).
         // Lo devolvemos tal cual.
+        anota_prestamo(v_arg, v_arg);
         out_value = v_arg;
         return true;
     }

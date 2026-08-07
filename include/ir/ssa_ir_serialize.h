@@ -108,7 +108,8 @@ static constexpr uint32_t IR_SECTION_MAGIC = 0x52494556U; /* 'V''E''I''R' */
  * @brief Version del formato @ir.  Bump cuando cambia el layout.
  */
 static constexpr uint16_t IR_SECTION_VERSION =
-    11; // v11: + IrValue::reg (en que registro vive cada valor)
+    12; // v12: + prestamos (borrow_facts); comparte serialize_function con la
+        // cache, asi que su formato cambia a la vez
 
 /**
  * @brief Emit del bytes de la seccion @c @ir lista para append a
@@ -154,7 +155,7 @@ bool parse_ir_section(const std::vector<uint8_t> &data, size_t offset,
 static constexpr uint32_t IR_MODULE_CACHE_MAGIC =
     0x434D5856U; /* 'V''X''M''C' */
 static constexpr uint16_t IR_MODULE_CACHE_VERSION =
-    11; // v11: + efectos declarados de cada import nativo
+    12; // v12: + prestamos (borrow_facts) por funcion
 
 /**
  * @brief Serializa el IR de UN modulo COMPLETO para el cache `.vxir`.

@@ -133,6 +133,36 @@ static void print_effects(std::ostream &os, const SemanticEffects &e) {
 }
 
 /**
+ * @brief Los PRESTAMOS de la funcion, tal como cruzan al IR.
+ *
+ * El borrow checker demuestra cosas -- sobre todo que un prestamo mutable es
+ * EXCLUSIVO -- y hasta ahora eso moria dentro del type checker, sin llegar al
+ * analisis.  Verlos aqui es lo que permite comprobar que el hecho que cruza
+ * dice lo mismo que el checker, antes de que nadie razone sobre el.
+ *
+ * Se dice la NATURALEZA de lo prestado porque no se mezclan: prestar un
+ * `unique` no es prestar un local, y un puntero crudo no esta sujeto a estas
+ * reglas en absoluto.
+ */
+static void print_prestamos(std::ostream &os, const ir::IrFunction &fn) {
+    if (fn.borrow_facts.empty()) return;
+    auto nat = [](ir::IrFunction::BorrowOwnerKind k) {
+        switch (k) {
+        case ir::IrFunction::BorrowOwnerKind::Unique: return "unique";
+        case ir::IrFunction::BorrowOwnerKind::Shared: return "shared";
+        case ir::IrFunction::BorrowOwnerKind::Reborrow: return "represtamo";
+        default: return "local";
+        }
+    };
+    os << "  Prestamos:\n";
+    for (const ir::IrFunction::BorrowFact &b : fn.borrow_facts) {
+        os << "    " << (b.mutable_ ? "exclusivo" : "compartido") << " de "
+           << (b.owner_name.empty() ? "?" : b.owner_name) << " (" << nat(b.owner_kind)
+           << ") en linea " << b.line << "\n";
+    }
+}
+
+/**
  * @brief Los CONFLICTOS de memoria de una funcion, para que se puedan resolver.
  *
  * Un conflicto es lo que impide tratar dos accesos por separado: tocan memoria
@@ -251,6 +281,7 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
         os << "  Estructura: bloques=" << s.structural.block_count
            << " bucles=" << s.structural.loop_count
            << (s.structural.recursive ? " recursiva" : "") << "\n";
+        print_prestamos(os, fn);
         print_conflictos(os, ea, fn);
         os << "\n";
     }
