@@ -295,9 +295,14 @@ def entorno_msvc() -> dict:
             for linea in (r2.stdout or "").splitlines():
                 if "=" in linea:
                     k, v = linea.split("=", 1)
+                    # La clave se guarda en MAYUSCULAS a proposito: `cmd`
+                    # imprime `Path=` y `os.environ` usa `PATH=`, asi que
+                    # mezclarlas tal cual dejaba DOS entradas distintas en el
+                    # entorno del hijo y ganaba la vieja -- el compilador seguia
+                    # viendo el PATH de antes y todo esto no servia de nada.
                     if k.upper() in ("LIB", "INCLUDE", "LIBPATH", "PATH",
                                      "WINDOWSSDKDIR", "VCTOOLSINSTALLDIR"):
-                        _ENTORNO_MSVC[k] = v
+                        _ENTORNO_MSVC[k.upper()] = v
         finally:
             try:
                 os.unlink(puente)
