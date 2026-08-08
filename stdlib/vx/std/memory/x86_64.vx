@@ -479,8 +479,10 @@ comptime string gen_grande(string mnl, string mne, string mne_cola, i64 ancho,
     }
     // Los punteros avanzan AQUi, a mitad del bloque, y no al final: asi el
     // calculo de las direcciones de la vuelta siguiente arranca antes y se
-    // solapa con lo que queda de esta.  La segunda mitad compensa el avance
-    // restandolo de su desplazamiento, asi que toca exactamente los mismos
+    // solapa con lo que queda de esta.  Lo que avanza es un bloque COMPLETO
+    // -- no medio, aunque se haga a mitad de la vuelta --, y por eso la
+    // segunda mitad accede con desplazamientos NEGATIVOS: la devuelven al
+    // tramo del bloque original que le faltaba, tocando exactamente los mismos
     // bytes que si no se hubiera movido nada.
     out += "add s, ${bloque}\n";
     out += "add d, ${bloque}\n";

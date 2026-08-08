@@ -1,0 +1,542 @@
+namespace std.memory.arm64;
+
+/**
+ * @file arm64.vx
+ * @brief Copias y rellenos anchos para arm64 (NEON).
+ *
+ * La mitad de arm64 de `std.memory`, espejo de la de x86-64: el fichero de
+ * arriba tiene lo portable y este aporta lo que solo existe aqui.
+ * `std.memory` re-exporta el de la arquitectura que toque, asi que quien
+ * escribe `import std.memory` recibe lo suyo sin mencionarlo.
+ *
+ * Lo que CAMBIA respecto a x86-64, y por que el fichero no es una traduccion
+ * linea a linea:
+ *
+ *   - NEON es de 128 bits y punto.  No hay tres anchos entre los que elegir
+ *     -- ni AVX2 ni AVX-512 --, asi que tampoco hay tres familias: hay una.
+ *     La escala se consigue moviendo MAS registros por vuelta, no registros
+ *     mas anchos.
+ *
+ *   - `ldp`/`stp` mueven DOS registros de 128 bits en una sola instruccion,
+ *     con lo que una vuelta de ocho registros son cuatro instrucciones y no
+ *     ocho.  Es la forma natural de la arquitectura y no tiene equivalente en
+ *     x86-64.
+ *
+ *   - No hay nada parecido a `rep movsb`: no existe una copia por microcodigo
+ *     a la que delegar en los tamanos grandes.  El bucle vectorial cubre todo
+ *     el rango de arriba.
+ *
+ *   - `stnp`/`ldnp` dan una INDICACION de acceso no temporal al hardware, y
+ *     ahi la diferencia con x86-64 no es de nombre.  `vmovntdq` es una orden:
+ *     esa escritura no pasa por la cache.  `stnp` es una sugerencia que la
+ *     implementacion puede atender o no, asi que reduce la contaminacion de
+ *     la cache en transferencias grandes pero la arquitectura NO garantiza
+ *     que la evite.  El algoritmo no puede apoyarse en que la evite; solo
+ *     puede pedirlo.
+ *
+ *   - No hace falta preguntar por el procesador: NEON es obligatorio en
+ *     arm64, asi que no hay un `cpuid` que consultar ni ramas que predecir.
+ *     SVE si es opcional y tiene ancho variable; queda para cuando se aporte,
+ *     con su propia deteccion.
+ *
+ * Los tamanos de vuelta (ocho pares = 256 bytes) son un punto de PARTIDA
+ * razonado, no una constante de la arquitectura: el optimo depende de cuantos
+ * registros se mantienen vivos, de la presion sobre la tuberia de carga y
+ * escritura, de la distancia de precarga, del tamano de la cache y de la
+ * frecuencia sostenida.  Estan aqui, con nombre, para poder moverlos cuando
+ * se midan en una maquina concreta.
+ *
+ * ESTADO: este fichero NO esta verificado.  El backend de arm64 todavia no
+ * baja una funcion `main`, asi que ninguna de estas funciones llega a
+ * ensamblarse -- se comprobo metiendo un mnemonico inventado y no protesto
+ * nadie.  Esta escrito siguiendo la arquitectura, pero hasta que el backend
+ * llegue aqui hay que tratarlo como no probado.
+ *
+ * Estas funciones usan `asm`, que el INTERPRETE ignora en silencio.  No hace
+ * falta condicionarlas por motor: solo se llaman desde la variante de `memcpy`
+ * / `memset` que ya eligio motor, y bajo el interprete esa variante ni las
+ * menciona.
+ */
+
+import std.types only usize;
+import std.comptime only inject;
+
+/**
+ * @brief Genera un bloque de copia de @p bytes con pares `ldp`/`stp`.
+ *
+ * Igual que su gemelo de x86-64 en lo que importa -- TODAS las cargas primero
+ * y TODAS las escrituras despues, cada acceso en su propio registro -- porque
+ * la razon es la misma: la copia no necesita haber escrito el bloque 0 para
+ * leer el 1, y encadenarlos por un registro compartido inventaria una
+ * dependencia que el algoritmo no tiene.
+ *
+ * Lo que cambia es la unidad: aqui cada instruccion mueve DOS registros de 16
+ * bytes, asi que el bloque se cuenta en PARES.
+ *
+ * @param mnl Mnemonico de carga (`ldp` o `ldnp`).
+ * @param mne Mnemonico de escritura (`stp` o `stnp`).
+ * @param bytes Bytes que cubre el bloque.  Multiplo de 32.
+ * @param d Registro con la direccion destino.
+ * @param s Registro con la direccion origen.
+ * @return El cuerpo del bloque asm, listo para empalmar.
+ */
+comptime string gen_bloque_neon(string mnl, string mne, i64 bytes, string d,
+                                string s) {
+    static_assert(bytes % 32 == 0,
+                  "el bloque tiene que ser multiplo de 32 (un par de 16)");
+    i64 pares = bytes / 32;
+    static_assert(pares >= 1 && pares <= 8,
+                  "de uno a ocho pares: mas no cabe en el banco sin gastar "
+                  "los que hay que devolver como estaban");
+    string out = "";
+    for (i64 i = 0; i < pares; i++) {
+        i64 o = i * 32;
+        i64 a = i * 2;
+        i64 b = a + 1;
+        out += "${mnl} q${a}, q${b}, [${s}, #${o}]\n";
+    }
+    for (i64 i = 0; i < pares; i++) {
+        i64 o = i * 32;
+        i64 a = i * 2;
+        i64 b = a + 1;
+        out += "${mne} q${a}, q${b}, [${d}, #${o}]\n";
+    }
+    return out;
+}
+
+/**
+ * @brief Genera una copia SOLAPADA de @p bytes + @p bytes.
+ *
+ * Mismo algoritmo que en x86-64: un tramo desde el principio y otro que
+ * termina en el final, solapandose por el medio.  Los bytes del solape se
+ * copian dos veces con el mismo valor, lo que no cuesta nada y ahorra la cola
+ * -- y sobre todo el bucle, que en una copia corta es lo caro.
+ *
+ * @param bytes Bytes que cubre cada mitad.
+ * @return El cuerpo del bloque asm.
+ */
+comptime string gen_solapada_neon(i64 bytes) {
+    return gen_bloque_neon("ldp", "stp", bytes, "d", "s") +
+           gen_bloque_neon("ldp", "stp", bytes, "fd", "fs");
+}
+
+/**
+ * @brief Genera una copia GRANDE: bucle de @p pares por vuelta + cola.
+ *
+ * Espejo de `gen_grande` de x86-64 y por las mismas razones: los punteros
+ * avanzan un bloque completo A MITAD de la vuelta -- no medio bloque -- para
+ * que el calculo de las direcciones de la siguiente arranque antes, y la
+ * condicion se prueba contra el puntero de cola en vez de llevar un contador
+ * aparte.
+ *
+ * @param mnl Mnemonico de carga del bucle.
+ * @param mne Mnemonico de escritura del bucle.
+ * @param mne_cola El de la cola, que arranca donde caiga.
+ * @param pares Pares de registros por vuelta (bloque = pares * 32 bytes).
+ * @param cierre Instruccion final, o cadena vacia.  Las escrituras no
+ *        temporales NO llevan barrera aqui: ver @ref memcpy_streaming_neon.
+ * @return El cuerpo del bloque asm.
+ */
+comptime string gen_grande_neon(string mnl, string mne, string mne_cola,
+                                i64 pares, string cierre) {
+    i64 bloque = pares * 32;
+    i64 mitad = pares / 2;
+    string out = "bucle:\n";
+    // Primera mitad: se lee y se escribe con los punteros donde estan.
+    for (i64 k = 0; k < mitad; k++) {
+        i64 o = k * 32;
+        i64 a = k * 2;
+        i64 b = a + 1;
+        out += "${mnl} q${a}, q${b}, [s, #${o}]\n";
+    }
+    for (i64 k = 0; k < mitad; k++) {
+        i64 o = k * 32;
+        i64 a = k * 2;
+        i64 b = a + 1;
+        out += "${mne} q${a}, q${b}, [d, #${o}]\n";
+    }
+    // Los punteros avanzan un bloque COMPLETO, y se hace aqui -- a mitad de
+    // la vuelta -- para que el calculo de las direcciones de la siguiente
+    // arranque antes y se solape con lo que queda de esta.  La segunda mitad
+    // accede entonces con desplazamientos NEGATIVOS, que la devuelven al
+    // tramo del bloque original que le faltaba: toca exactamente los mismos
+    // bytes que si no se hubiera movido nada.
+    out += "add s, s, #${bloque}\n";
+    out += "add d, d, #${bloque}\n";
+    for (i64 k = mitad; k < pares; k++) {
+        i64 o = k * 32 - bloque;
+        i64 a = k * 2;
+        i64 b = a + 1;
+        out += "${mnl} q${a}, q${b}, [s, #${o}]\n";
+    }
+    for (i64 k = mitad; k < pares; k++) {
+        i64 o = k * 32 - bloque;
+        i64 a = k * 2;
+        i64 b = a + 1;
+        out += "${mne} q${a}, q${b}, [d, #${o}]\n";
+    }
+    out += "cmp s, fs\n";
+    out += "b.lo bucle\n";
+    // Cola: un bloque igual que termina en el final del rango.  Lleva su
+    // propio mnemonico de escritura porque arranca donde caiga.
+    out += gen_bloque_neon(mnl, mne_cola, bloque, "fd", "fs");
+    if (cierre != "") {
+        out += "${cierre}\n";
+    }
+    return out;
+}
+
+/**
+ * @brief Copia entre 65 y 128 bytes con NEON.
+ *
+ * Dos mitades que se SOLAPAN por el medio, sin bucle y sin cola.
+ *
+ * PRECONDICION: @p n entre 65 y 128.
+ *
+ * @param dst Destino.
+ * @param src Origen.
+ * @param n Numero de bytes, entre 65 y 128.
+ */
+@Target("arch:arm64")
+@NoIdiom
+public void memcpy_small_neon(u8* dst, u8* src, usize n) {
+    u8* fin_d = dst + n - 64;
+    u8* fin_s = src + n - 64;
+    asm (
+        reg d = dst,
+        reg s = src,
+        reg fd = fin_d,
+        reg fs = fin_s,
+        vec q0, vec q1, vec q2, vec q3,
+        vec q4, vec q5, vec q6, vec q7,
+    ) {
+        inject(gen_solapada_neon(64))
+    }
+}
+
+/**
+ * @brief Copia grande con NEON: 256 bytes por vuelta (ocho pares).
+ *
+ * PRECONDICION: @p n al menos 256.
+ *
+ * @param dst Destino.
+ * @param src Origen.
+ * @param n Numero de bytes, 256 o mas.
+ */
+@Target("arch:arm64")
+@NoIdiom
+public void memcpy_medium_neon(u8* dst, u8* src, usize n) {
+    u8* fin_d = dst + n - 256;
+    u8* fin_s = src + n - 256;
+    asm (
+        reg d = dst,
+        reg s = src,
+        reg fd = fin_d,
+        reg fs = fin_s,
+        vec q0, vec q1, vec q2,  vec q3,  vec q4,  vec q5,  vec q6,  vec q7,
+        vec q8, vec q9, vec q10, vec q11, vec q12, vec q13, vec q14, vec q15,
+    ) {
+        inject(gen_grande_neon("ldp", "stp", "stp", 8, ""))
+    }
+}
+
+/**
+ * @brief Copia ENORME con accesos NO TEMPORALES (`ldnp`/`stnp`).
+ *
+ * Mismo proposito que su gemela de x86-64: para un destino que no se va a
+ * releer, meterlo entero en la cache solo consigue expulsar lo que habia.
+ * `stnp` le dice al procesador justamente eso.
+ *
+ * NO lleva barrera, a diferencia de la de x86-64.  Una copia no necesita una
+ * para ser correcta: su contrato es que al volver los bytes estan copiados, y
+ * las escrituras forman parte de su propia ejecucion.  Meter un `dmb` aqui
+ * convertiria cada copia en una operacion de sincronizacion entre nucleos que
+ * nadie ha pedido.  Y ademas no haria lo que parece: `dmb` ORDENA, no espera a
+ * que la memoria este escrita -- eso seria `dsb`, bastante mas caro.  Si algun
+ * dia hace falta una frontera de ordenacion, va en el nivel de arriba y con su
+ * contrato, no escondida dentro de `memcpy`.
+ *
+ * PRECONDICION: @p n al menos 256.
+ *
+ * @param dst Destino.
+ * @param src Origen.
+ * @param n Numero de bytes, 256 o mas.
+ */
+@Target("arch:arm64")
+@NoIdiom
+public void memcpy_streaming_neon(u8* dst, u8* src, usize n) {
+    u8* fin_d = dst + n - 256;
+    u8* fin_s = src + n - 256;
+    asm (
+        reg d = dst,
+        reg s = src,
+        reg fd = fin_d,
+        reg fs = fin_s,
+        vec q0, vec q1, vec q2,  vec q3,  vec q4,  vec q5,  vec q6,  vec q7,
+        vec q8, vec q9, vec q10, vec q11, vec q12, vec q13, vec q14, vec q15,
+    ) {
+        inject(gen_grande_neon("ldnp", "stnp", "stp", 8, ""))
+    }
+}
+
+/**
+ * @brief Genera un bloque de RELLENO de @p bytes con pares `stp`.
+ *
+ * La gemela de @ref gen_bloque_neon para el relleno, con la misma diferencia
+ * de forma que en x86-64: rellenar no tiene lecturas, asi que todas las
+ * escrituras sacan el valor del MISMO par de registros y no hay dependencia
+ * entre accesos ni presupuesto que repartir.
+ *
+ * @param mne Mnemonico de escritura (`stp` o `stnp`).
+ * @param bytes Bytes que cubre el bloque.  Multiplo de 32.
+ * @param d Registro con la direccion destino.
+ * @return El cuerpo del bloque asm.
+ */
+comptime string gen_relleno_neon(string mne, i64 bytes, string d) {
+    static_assert(bytes % 32 == 0,
+                  "el bloque tiene que ser multiplo de 32 (un par de 16)");
+    i64 pares = bytes / 32;
+    string out = "";
+    for (i64 i = 0; i < pares; i++) {
+        i64 o = i * 32;
+        out += "${mne} q0, q1, [${d}, #${o}]\n";
+    }
+    return out;
+}
+
+/**
+ * @brief Genera un relleno SOLAPADO de @p bytes + @p bytes.
+ * @param bytes Bytes que cubre cada mitad.
+ * @return El cuerpo del bloque asm.
+ */
+comptime string gen_relleno_solapado_neon(i64 bytes) {
+    return gen_relleno_neon("stp", bytes, "d") +
+           gen_relleno_neon("stp", bytes, "fd");
+}
+
+/**
+ * @brief Genera un relleno GRANDE: bucle de @p pares por vuelta + cola.
+ * @param mne Mnemonico de escritura del bucle.
+ * @param mne_cola El de la cola, que arranca donde caiga.
+ * @param pares Pares por vuelta (bloque = pares * 32 bytes).
+ * @param cierre Instruccion final o cadena vacia.
+ * @return El cuerpo del bloque asm.
+ */
+comptime string gen_relleno_grande_neon(string mne, string mne_cola, i64 pares,
+                                        string cierre) {
+    i64 bloque = pares * 32;
+    i64 mitad = pares / 2;
+    string out = "bucle:\n";
+    for (i64 k = 0; k < mitad; k++) {
+        i64 o = k * 32;
+        out += "${mne} q0, q1, [d, #${o}]\n";
+    }
+    out += "add d, d, #${bloque}\n";
+    for (i64 k = mitad; k < pares; k++) {
+        i64 o = k * 32 - bloque;
+        out += "${mne} q0, q1, [d, #${o}]\n";
+    }
+    out += "cmp d, fd\n";
+    out += "b.lo bucle\n";
+    out += gen_relleno_neon(mne_cola, bloque, "fd");
+    if (cierre != "") {
+        out += "${cierre}\n";
+    }
+    return out;
+}
+
+/**
+ * @brief Rellena entre 65 y 128 bytes con NEON.
+ *
+ * El valor se replica a los ocho bytes de un registro general con una
+ * multiplicacion por 0x0101010101010101 -- una instruccion en vez de siete
+ * desplazamientos -- y de ahi se difunde al vectorial con `dup`, que en NEON
+ * si toma el registro general directamente: no hace falta la semilla que si
+ * necesita AVX2.
+ *
+ * PRECONDICION: @p n entre 65 y 128.
+ *
+ * @param dst Destino.
+ * @param val Byte con el que rellenar.
+ * @param n Numero de bytes, entre 65 y 128.
+ */
+@Target("arch:arm64")
+@NoIdiom
+public void memset_small_neon(u8* dst, u8 val, usize n) {
+    u8* fin_d = dst + n - 64;
+    u64 pat = ((u64) val) * 72340172838076673;
+    asm (
+        reg d = dst,
+        reg fd = fin_d,
+        reg p = pat,
+        vec q0, vec q1,
+    ) {
+        dup q0.2d, p
+        mov q1.16b, q0.16b
+        inject(gen_relleno_solapado_neon(64))
+    }
+}
+
+/**
+ * @brief Relleno grande con NEON: 256 bytes por vuelta.
+ *
+ * PRECONDICION: @p n al menos 256.
+ *
+ * @param dst Destino.
+ * @param val Byte con el que rellenar.
+ * @param n Numero de bytes, 256 o mas.
+ */
+@Target("arch:arm64")
+@NoIdiom
+public void memset_medium_neon(u8* dst, u8 val, usize n) {
+    u8* fin_d = dst + n - 256;
+    u64 pat = ((u64) val) * 72340172838076673;
+    asm (
+        reg d = dst,
+        reg fd = fin_d,
+        reg p = pat,
+        vec q0, vec q1,
+    ) {
+        dup q0.2d, p
+        mov q1.16b, q0.16b
+        inject(gen_relleno_grande_neon("stp", "stp", 8, ""))
+    }
+}
+
+/**
+ * @brief Bytes que pone a cero un `dc zva`, o 0 si no se puede usar.
+ *
+ * `DC ZVA` pone a cero un bloque entero de una vez, sin mover un solo dato por
+ * el banco vectorial: es la instruccion PENSADA para esto, y en un relleno a
+ * cero grande le gana a cualquier bucle de `stp`.  Pero tiene dos condiciones
+ * que hay que preguntar, no suponer:
+ *
+ *   - el tamano de bloque no es fijo por arquitectura, lo dice el sistema en
+ *     @c DCZID_EL0 (bits 3:0 = log2 del bloque en PALABRAS de 4 bytes; lo
+ *     corriente es 4 -> 16 palabras -> 64 bytes, pero no es obligatorio);
+ *   - el bit DZP (4) dice que la instruccion esta PROHIBIDA en este nivel de
+ *     privilegio, y entonces usarla es una excepcion, no una perdida de
+ *     rendimiento.
+ *
+ * Se pregunta una vez y se guarda, igual que `cpu_features` en x86-64:
+ * preguntar en cada relleno seria pagar una lectura de registro de sistema por
+ * llamada.
+ *
+ * @return Bytes por bloque, o 0 si esta prohibida.
+ */
+@Target("arch:arm64")
+@NoIdiom
+u64 __zva_bloque_leer() {
+    register("x0") u64 v = 0;
+    asm volatile { mrs x0, dczid_el0 };
+    // Bit 4 (DZP): prohibida.
+    if ((v & 16) != 0) return 0;
+    // Bits 3:0: log2 del bloque en palabras de 4 bytes.
+    u64 log2_palabras = v & 15;
+    return ((u64) 4) << log2_palabras;
+}
+
+/// Cache de @ref __zva_bloque_leer.  0 = sin preguntar todavia.
+u64 __zva_bloque = 0;
+/// Si ya se pregunto (el resultado legitimo puede ser 0 = prohibida).
+bool __zva_sabido = false;
+
+/**
+ * @brief Bytes por bloque de `dc zva`, preguntando una sola vez.
+ * @return Bytes por bloque, o 0 si no se puede usar.
+ */
+@Target("arch:arm64")
+public u64 zva_bloque() {
+    if (!__zva_sabido) {
+        __zva_bloque = __zva_bloque_leer();
+        __zva_sabido = true;
+    }
+    return __zva_bloque;
+}
+
+/**
+ * @brief Pone a cero @p n bytes con `dc zva`, con cabeza y cola en NEON.
+ *
+ * Solo vale para el valor CERO -- `dc zva` no sabe rellenar con otra cosa --
+ * y solo compensa cuando hay bloques enteros que poner a cero.  El reparto se
+ * encarga de las dos condiciones.
+ *
+ * La forma es la clasica de tres tramos, porque el bloque de `dc zva` tiene
+ * que estar alineado a su propio tamano:
+ *
+ *     cabeza   hasta el primer limite de bloque, con `stp`
+ *     cuerpo   `dc zva` bloque a bloque
+ *     cola     lo que sobra al final, con `stp`
+ *
+ * La cabeza y la cola se escriben de a 16 bytes; el desalineo maximo es un
+ * bloque, asi que son unas pocas vueltas.
+ *
+ * PRECONDICION: @p n al menos un bloque, y @ref zva_bloque distinto de 0.
+ *
+ * @param dst Destino.
+ * @param n Numero de bytes.
+ */
+@Target("arch:arm64")
+@NoIdiom
+public void memset_zva(u8* dst, usize n) {
+    u64 blq = zva_bloque();
+    u64 a = (u64) ((uintptr) dst);
+    u64 fin = a + (u64) n;
+    // Primer limite de bloque en o despues de `a`.
+    u64 ini = (a + blq - 1) & ~(blq - 1);
+    // Ultimo limite de bloque en o antes de `fin`.
+    u64 tope = fin & ~(blq - 1);
+    if (ini >= tope) {
+        // No cabe ni un bloque entero: no hay nada que ganar aqui.
+        memset_c(dst, 0, n);
+        return;
+    }
+    // Cabeza y cola con el relleno normal; el cuerpo con la instruccion.
+    if (ini > a) {
+        memset_c(dst, 0, (usize) (ini - a));
+    }
+    {
+        register("x0") u64 p = ini;
+        register("x1") u64 t = tope;
+        register("x2") u64 b = blq;
+        asm volatile {
+            zva_bucle:
+            dc zva, x0
+            add x0, x0, x2
+            cmp x0, x1
+            b.lo zva_bucle
+        }
+    }
+    if (fin > tope) {
+        memset_c((u8*) ((uintptr) tope), 0, (usize) (fin - tope));
+    }
+}
+
+/**
+ * @brief Relleno ENORME con escrituras NO TEMPORALES (`stnp`).
+ *
+ * En el relleno la ventaja de no pasar por la cache es aun mas clara que en la
+ * copia: no hay lecturas que la aprovechen.
+ *
+ * PRECONDICION: @p n al menos 256.
+ *
+ * @param dst Destino.
+ * @param val Byte con el que rellenar.
+ * @param n Numero de bytes, 256 o mas.
+ */
+@Target("arch:arm64")
+@NoIdiom
+public void memset_streaming_neon(u8* dst, u8 val, usize n) {
+    u8* fin_d = dst + n - 256;
+    u64 pat = ((u64) val) * 72340172838076673;
+    asm (
+        reg d = dst,
+        reg fd = fin_d,
+        reg p = pat,
+        vec q0, vec q1,
+    ) {
+        dup q0.2d, p
+        mov q1.16b, q0.16b
+        inject(gen_relleno_grande_neon("stnp", "stp", 8, ""))
+    }
+}

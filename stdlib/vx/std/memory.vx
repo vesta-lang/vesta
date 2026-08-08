@@ -45,6 +45,8 @@ import std.types only usize, uintptr;
 // mencionarlo.  Mismo reparto que en `std.syscall`.
 @Target("arch:x86_64")
 public import std.memory.x86_64;
+@Target("arch:arm64")
+public import std.memory.arm64;
 
 /// Bytes de la palabra de la maquina.  Sale del propio tipo, no de un numero
 /// escrito a mano: en un objetivo de 32 bits vale 4 y en uno de 64 vale 8, sin
@@ -71,6 +73,17 @@ const usize UMBRAL_ERMS = 2048;
 /// 64 KiB es el punto de partida razonado, no medido en varias maquinas: esta
 /// aqui y con nombre para poder moverlo cuando se mida.
 const usize UMBRAL_NT = 65536;
+
+/// A partir de cuantos bytes se pone a cero con `dc zva` en arm64.
+///
+/// Solo aplica al valor CERO: la instruccion no sabe rellenar con otra cosa.
+/// Por debajo de unos pocos bloques no compensa, porque hay que alinear la
+/// cabeza y rematar la cola con escrituras normales y eso se come la ventaja.
+///
+/// Como todos los de este fichero, es un punto de partida razonado y no una
+/// verdad universal: el tamano de bloque y el coste relativo dependen de la
+/// microarquitectura, y el sitio para moverlo es este.
+const usize UMBRAL_ZVA = 512;
 
 /**
  * @brief Copia @p n bytes con un bucle portable.  La version de referencia.
@@ -301,10 +314,46 @@ public void memcpy(u8* dst, u8* src, usize n) {
 
 /// @copydoc memcpy
 ///
+/// @copydoc memcpy
+///
+/// arm64.  NEON es obligatorio en esta arquitectura, asi que no hay nada que
+/// preguntarle al procesador ni ramas que predecir: el reparto es solo por
+/// tamano.  Tampoco hay equivalente a `rep movsb`, con lo que el bucle
+/// vectorial cubre todo el rango de arriba y el escalon de mas es el de las
+/// escrituras no temporales.
+@Target("(mode:aot || mode:jit) && arch:arm64")
+@NoIdiom
+public void memcpy(u8* dst, u8* src, usize n) {
+    usize total = n;
+    if (total <= 64) {
+        memcpy_tiny(dst, src, n);
+        return;
+    }
+    if (total <= 128) {
+        memcpy_small_neon(dst, src, n);
+        return;
+    }
+    /* El escalon de arriba NO se decide por 256 bytes.  Pedir el acceso no
+     * temporal solo compensa cuando el destino no se va a releer pronto, y a
+     * partir de un tamano en el que ya no cabria en la cache de todos modos.
+     * Elegirlo antes seria sacar de la cache un destino que el llamante va a
+     * usar acto seguido, que es el caso corriente de una copia mediana. */
+    if (total >= UMBRAL_NT && (((uintptr) dst) & 15) == 0) {
+        memcpy_streaming_neon(dst, src, n);
+        return;
+    }
+    if (total >= (usize) 256) {
+        memcpy_medium_neon(dst, src, n);
+        return;
+    }
+    memcpy_c(dst, src, n);
+    return;
+}
+
 /// Arquitecturas que aun no aportan sus copias anchas: se quedan en lo
 /// portable, que es correcto en todas.  Al anadir un `std/memory/<arch>.vx`
 /// basta con darle su propia variante aqui.
-@Target("(mode:aot || mode:jit) && !arch:x86_64")
+@Target("(mode:aot || mode:jit) && !arch:x86_64 && !arch:arm64")
 @NoIdiom
 public void memcpy(u8* dst, u8* src, usize n) {
     usize total = n;
@@ -581,12 +630,50 @@ public void memset(u8* dst, u8 val, usize n) {
 
 /// @copydoc memset
 ///
+/// @copydoc memset
+///
+/// arm64.  Sin nada que preguntarle al procesador -- NEON es obligatorio -- y
+/// sin equivalente a `rep stosb`: el reparto es solo por tamano, con el
+/// escalon de arriba en las escrituras no temporales.
+@Target("(mode:aot || mode:jit) && arch:arm64")
+@NoIdiom
+public void memset(u8* dst, u8 val, usize n) {
+    usize total = n;
+    if (total <= 64) {
+        memset_tiny(dst, val, n);
+        return;
+    }
+    if (total <= 128) {
+        memset_small_neon(dst, val, n);
+        return;
+    }
+    /* Poner a CERO es un caso aparte en esta arquitectura: `dc zva` vacia un
+     * bloque de cache entero sin mover un dato por el banco vectorial, que es
+     * exactamente lo que hace falta.  Va antes que todo lo demas porque le
+     * gana a cualquier bucle de escrituras, y solo se llega aqui si el sistema
+     * dice que la instruccion esta permitida. */
+    if (val == 0 && total >= UMBRAL_ZVA && zva_bloque() != 0) {
+        memset_zva(dst, n);
+        return;
+    }
+    if (total >= UMBRAL_NT && (((uintptr) dst) & 15) == 0) {
+        memset_streaming_neon(dst, val, n);
+        return;
+    }
+    if (total >= (usize) 256) {
+        memset_medium_neon(dst, val, n);
+        return;
+    }
+    memset_c(dst, val, n);
+    return;
+}
+
 /// Arquitecturas que aun no aportan su relleno ancho: se quedan en lo
 /// portable, que es correcto en todas.  El tramo corto SI se aprovecha --
 /// @ref memset_tiny no usa instrucciones especiales --, asi que no se pierde
 /// por no tener registros anchos.  Al anadir un `std/memory/<arch>.vx` basta
 /// con darle su propia variante aqui.
-@Target("(mode:aot || mode:jit) && !arch:x86_64")
+@Target("(mode:aot || mode:jit) && !arch:x86_64 && !arch:arm64")
 @NoIdiom
 public void memset(u8* dst, u8 val, usize n) {
     if (n <= 64) {
