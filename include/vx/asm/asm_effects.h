@@ -36,6 +36,7 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace vx {
@@ -136,8 +137,30 @@ struct AsmEffects {
     std::vector<std::string> implicit_mem_read;
     /// Registros por los que ESCRIBE memoria implicitamente.  Ver el anterior.
     std::vector<std::string> implicit_mem_write;
+
+    /**
+     * Alineacion que la instruccion EXIGE de su direccion de memoria, en
+     * bytes.  0 = no exige ninguna.
+     *
+     * No es una preferencia ni un consejo de rendimiento: `movdqa` sobre una
+     * direccion que no es multiplo de 16 no va mas lenta, lanza una excepcion
+     * y el programa cae.  Que el efecto de una instruccion incluya lo que
+     * PIDE, y no solo lo que hace, es lo que permite comprobarlo en vez de
+     * descubrirlo ejecutando -- que es como se descubrio la ultima vez.
+     *
+     * @c kAlignAnchoOperando significa "tanto como mida su operando
+     * vectorial", que es como lo define la arquitectura: la misma `vmovdqa`
+     * exige 16 con xmm, 32 con ymm y 64 con zmm.  Ponerlo como un numero fijo
+     * seria elegir uno de los tres y equivocarse en los otros dos.
+     */
+    uint16_t align_req = 0;
+
     bool known = false;         ///< false si no esta en la tabla
 };
+
+/// Valor de @c AsmEffects::align_req que significa "el ancho de su operando
+/// vectorial" en vez de un numero concreto.
+static constexpr uint16_t kAlignAnchoOperando = 0xFFFFu;
 
 /**
  * @brief Consulta la tabla de efectos de un mnemonico para una arquitectura.
@@ -164,11 +187,39 @@ AsmEffects asm_effects_for(const std::string &mnemonic);
 /**
  * @brief Resultado de inferir clobbers de un cuerpo de inline asm.
  */
+/**
+ * @brief Una instruccion del cuerpo que EXIGE su direccion alineada.
+ *
+ * Se recoge para poder decirlo.  Una exigencia que el compilador conoce y no
+ * comunica no sirve de nada: el programa sigue cayendo en ejecucion, solo que
+ * ahora ademas se sabia.
+ */
+struct AsmAlignReq {
+    std::string mnemonic; ///< la instruccion, tal como se escribio.
+    std::string operando; ///< el operando de memoria, con sus corchetes.
+    /**
+     * Alineacion exigida, EN BYTES y ya resuelta.  0 = no se pudo determinar.
+     *
+     * Sale resuelta a proposito.  Que una instruccion exija tanto como mida su
+     * operando -- `vmovdqa` pide 16 con xmm, 32 con ymm y 64 con zmm -- es
+     * conocimiento sobre INSTRUCCIONES, y vive donde vive el resto: aqui.
+     * Devolver el nombre del operando y que otro dedujera el ancho partiria
+     * una sola regla entre dos ficheros, y una regla en dos sitios acaba
+     * siendo dos reglas.
+     */
+    uint16_t bytes = 0;
+};
+
+/**
+ * @brief Resultado de inferir clobbers de un cuerpo de inline asm.
+ */
 struct AsmInferResult {
     std::vector<std::string> clobber_regs; ///< nombres GCC-ready (rax.., xmmN)
     bool clobber_memory = false;
     bool clobber_flags = false;
     std::vector<std::string> unknown_mnemonics; ///< para emitir warning
+    /// Instrucciones que exigen alineacion.  Vacio = ninguna la pide.
+    std::vector<AsmAlignReq> align_reqs;
 };
 
 /**
@@ -191,6 +242,25 @@ struct AsmInferResult {
  */
 AsmInferResult asm_infer_clobbers(const std::string &nasm_body,
                                   const std::vector<std::string> &bound_canon);
+
+/**
+ * @brief Igual que la anterior, sabiendo ademas de que CLASE es cada operando.
+ *
+ * Hay instrucciones cuyo efecto depende del ancho de su operando -- las que
+ * exigen alineacion son el caso claro --, y en el cuerpo el operando se llama
+ * como lo bautizo quien escribio el bloque, no `xmm0`.  Con el mapa
+ * `nombre -> clase` la inferencia puede resolverlo ella misma en vez de
+ * devolver una respuesta a medias para que la complete otro.
+ *
+ * @param nasm_body Cuerpo NASM Intel.
+ * @param bound_canon Registros ya ligados por `register(...)`, canonicos.
+ * @param clases_operando Pares (nombre en el cuerpo, clase declarada:
+ *        `"reg"`, `"xmm"`, `"ymm"`, `"zmm"`, `"mem"`...).
+ * @return El mismo resultado, con las exigencias ya resueltas a bytes.
+ */
+AsmInferResult asm_infer_clobbers(
+    const std::string &nasm_body, const std::vector<std::string> &bound_canon,
+    const std::vector<std::pair<std::string, std::string>> &clases_operando);
 
 } // namespace vx
 

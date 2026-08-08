@@ -19,6 +19,7 @@
  */
 
 #include "vx/asm/asm_effects.h"
+#include "vx/asm/instr_db.h" // ancho de un operando, por ISA
 #include "vx/parser.h" // get_aot_condcomp_target: el arch del TARGET, no del host
 
 #include <algorithm>
@@ -285,6 +286,18 @@ std::string asm_canonical_reg(const std::string &raw) {
     return asm_canonical_reg(raw, arch);
 }
 
+/// ISA del objetivo activo, para preguntarle a la base de instrucciones.  Sale
+/// del MISMO sitio que los registros: el target que se compila, no el host.
+instr_db::Isa isa_actual() {
+    std::string os, arch;
+    get_aot_condcomp_target(os, arch);
+    if (arch.empty()) arch = arch_host();
+    if (arch == "arm64" || arch == "aarch64") return instr_db::Isa::ARM64;
+    if (arch == "arm" || arch == "arm32") return instr_db::Isa::ARM32;
+    if (arch == "riscv" || arch == "riscv64") return instr_db::Isa::RISCV;
+    return instr_db::Isa::X86;
+}
+
 // -----------------------------------------------------------------------
 // Tabla plana mnemonic -> AsmEffects.  Subset comun, extensible.  Los
 // registros van en forma canonica.  Construida una vez (lazy) en un
@@ -445,6 +458,62 @@ const EffTable &x86_effects_table() {
         add("bsf", E({}, true, false, true));
         add("bsr", E({}, true, false, true));
         add("bswap", E({}, true, false, false));
+        /* --- Movimientos del banco VECTORIAL --------------------------------
+         *
+         * Todos escriben su primer operando y ninguno toca flags; lo que los
+         * distingue -- y lo unico que hace falta saber para no escribir un
+         * programa que casca -- es cual EXIGE que la direccion este alineada.
+         *
+         * La arquitectura los separa en dos familias con nombres casi iguales,
+         * y ahi esta la trampa: una letra.  `movdqa` con una direccion que no
+         * es multiplo de 16 lanza una excepcion; `movdqu` con la misma
+         * direccion funciona.  Sin tabular esa diferencia, escribir la
+         * equivocada no da ningun aviso al compilar y el programa cae en
+         * ejecucion -- que es exactamente lo que paso.
+         *
+         * Las no temporales (`movntdq` y companeras) exigen igual que las
+         * alineadas: la escritura se salta la cache, pero la direccion tiene
+         * que estar igual de alineada.
+         */
+        {
+            // Sin exigencia: la `u` de "unaligned" es lo que las distingue.
+            for (const char *m :
+                 {"movdqu", "movups", "movupd", "vmovdqu", "vmovups",
+                  "vmovupd", "vmovdqu8", "vmovdqu16", "vmovdqu32",
+                  "vmovdqu64"})
+                add(m, E({}, true, false, false));
+            // Exigen que la direccion sea multiplo del ancho de su operando.
+            auto alineada = [&](const char *m) {
+                AsmEffects e = E({}, true, false, false);
+                e.align_req = kAlignAnchoOperando;
+                add(m, std::move(e));
+            };
+            for (const char *m :
+                 {"movdqa", "movaps", "movapd", "vmovdqa", "vmovaps",
+                  "vmovapd", "vmovdqa32", "vmovdqa64",
+                  // No temporales: se saltan la cache, no la alineacion.
+                  "movntdq", "movntps", "movntpd", "vmovntdq", "vmovntps",
+                  "vmovntpd", "vmovntdqa"})
+                alineada(m);
+            // Movimientos escalares entre bancos y difusiones: sin exigencia
+            // de alineacion (acceden a 4 u 8 bytes, que la arquitectura no
+            // obliga a alinear en estas formas).
+            for (const char *m :
+                 {"movq", "movd", "vmovq", "vmovd", "movss", "movsd_sse",
+                  "vmovss", "vmovsd", "pinsrq", "pinsrd", "vpinsrq",
+                  "vpinsrd", "punpcklqdq", "vpunpcklqdq", "vpbroadcastq",
+                  "vpbroadcastd", "vpbroadcastb", "vbroadcastss",
+                  "vbroadcastsd", "pshufd", "vpshufd", "pxor", "vpxor",
+                  "xorps", "vxorps"})
+                add(m, E({}, true, false, false));
+            // Cierre del modo ancho: ni escribe operandos ni toca memoria,
+            // pero no es una instruccion cualquiera -- deshace la penalizacion
+            // de mezclar codificaciones, asi que quien la quite cambia el
+            // rendimiento sin cambiar el resultado.
+            add("vzeroupper", E({}, 0x0, false, false));
+            add("vzeroall", E({}, 0x0, false, false));
+        }
+
         // --- Movimientos / direcciones (escriben 1er operando, sin flags) ---
         add("mov", E({}, true, false, false));
         add("movzx", E({}, true, false, false));
@@ -777,6 +846,42 @@ AsmInferResult asm_infer_clobbers(const std::string &nasm_body,
             if (opi >= toks.size()) break;
             const std::string canon = asm_canonical_reg(toks[opi]);
             if (!canon.empty()) clob.insert(canon);
+        }
+
+        /* Exigencia de alineacion.  Se resuelve aqui el "tanto como mida su
+         * operando": el ancho lo dice el registro vectorial que aparece en la
+         * linea -- xmm 16, ymm 32, zmm 64 --, que es como lo define la
+         * arquitectura.  Sin un registro vectorial reconocible no se puede
+         * decir cuanto exige, y entonces se dice ESO en vez de callarse. */
+        /* Exigencia de alineacion.  El ancho, cuando es "el de su operando",
+         * lo resuelve @ref instr_db::parse_operand, que conoce los registros
+         * de CADA ISA -- x86 xmm/ymm/zmm, ARM v/q, RISC-V -- y devuelve su
+         * ancho en bits.  Compararlo aqui contra los nombres de x86 seria
+         * meter conocimiento de una arquitectura dentro de un bucle que sirve
+         * para todas, y dejaria a las demas sin comprobacion el dia que la
+         * pidan. */
+        if (eff.align_req != 0) {
+            AsmAlignReq req;
+            req.mnemonic = mnem;
+            if (eff.align_req == kAlignAnchoOperando) {
+                for (size_t k = ti + 1; k < toks.size(); ++k) {
+                    if (toks[k] == "," || toks[k].empty()) continue;
+                    const instr_db::ParsedOp po =
+                        instr_db::parse_operand(isa_actual(), toks[k]);
+                    if (po.kind == instr_db::OP_REG && po.width >= 128) {
+                        req.bytes = (uint16_t)(po.width / 8);
+                        break;
+                    }
+                }
+            } else {
+                req.bytes = eff.align_req;
+            }
+            for (size_t k = ti + 1; k < toks.size(); ++k)
+                if (toks[k].find('[') != std::string::npos) {
+                    req.operando = toks[k];
+                    break;
+                }
+            res.align_reqs.push_back(std::move(req));
         }
 
         // Memoria: implicita del mnemonico o '[' en la linea.
