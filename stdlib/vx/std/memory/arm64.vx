@@ -116,6 +116,9 @@ comptime string gen_bloque_neon(string mnl, string mne, i64 bytes, string d,
  * @return El cuerpo del bloque asm.
  */
 comptime string gen_solapada_neon(i64 bytes) {
+    // Aqui las dos mitades usan el mismo mnemonico porque `ldp`/`stp` no
+    // exigen alineacion; en x86-64 la forma alineada obliga a que el segundo
+    // tramo lleve otra, porque empieza donde caiga.
     return gen_bloque_neon("ldp", "stp", bytes, "d", "s") +
            gen_bloque_neon("ldp", "stp", bytes, "fd", "fs");
 }

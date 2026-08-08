@@ -520,9 +520,16 @@ public void memset(u8* dst, u8 val, usize n) {
     // adivinarlo no es una opcion: una instruccion alineada sobre una
     // direccion que no lo esta no va mas lenta, hace caer el programa.
     uintptr ad = (uintptr) dst;
+    /* Para una variante ALINEADA no basta con que lo este el destino: tambien
+     * el TAMANO tiene que ser multiplo del ancho.  Esas funciones cubren el
+     * tramo con dos mitades solapadas y la segunda arranca en `n - bytes`, asi
+     * que con un tamano cualquiera esa direccion no queda alineada aunque el
+     * destino lo este -- y una instruccion alineada sobre una direccion que no
+     * lo esta hace caer el programa.  Se comprueban las dos cosas, o se va a
+     * la variante sin exigencias. */
     if (total <= 128) {
         if ((rasgos & BIT_AVX512F) != 0) {
-            if ((ad & 63) == 0) {
+            if ((ad & 63) == 0 && (total & 63) == 0) {
                 memset_small_avx512_aligned(dst, val, n);
                 return;
             }
@@ -530,14 +537,14 @@ public void memset(u8* dst, u8 val, usize n) {
             return;
         }
         if ((rasgos & BIT_AVX2) != 0) {
-            if ((ad & 31) == 0) {
+            if ((ad & 31) == 0 && (total & 31) == 0) {
                 memset_small_avx2_aligned(dst, val, n);
                 return;
             }
             memset_small_avx2(dst, val, n);
             return;
         }
-        if ((ad & 15) == 0) {
+        if ((ad & 15) == 0 && (total & 15) == 0) {
             memset_small_sse2_aligned(dst, val, n);
             return;
         }
@@ -578,7 +585,7 @@ public void memset(u8* dst, u8 val, usize n) {
             return;
         }
         if (total >= (usize) 512) {
-            if ((ad & 63) == 0) {
+            if ((ad & 63) == 0 && (total & 63) == 0) {
                 memset_medium_avx512_aligned(dst, val, n);
                 return;
             }
@@ -592,7 +599,7 @@ public void memset(u8* dst, u8 val, usize n) {
             return;
         }
         if (total >= (usize) 256) {
-            if ((ad & 31) == 0) {
+            if ((ad & 31) == 0 && (total & 31) == 0) {
                 memset_medium_avx2_aligned(dst, val, n);
                 return;
             }
@@ -605,7 +612,7 @@ public void memset(u8* dst, u8 val, usize n) {
         return;
     }
     if (total >= (usize) 128) {
-        if ((ad & 15) == 0) {
+        if ((ad & 15) == 0 && (total & 15) == 0) {
             memset_medium_sse2_aligned(dst, val, n);
             return;
         }
@@ -618,9 +625,11 @@ public void memset(u8* dst, u8 val, usize n) {
 
 /// @copydoc memset
 ///
-/// En el INTERPRETE gana la instruccion que la VM ya trae, asi que aqui no se
-/// reparte nada: el bucle simple es lo que el reconocedor de idiomas convierte
-/// en ella.  Sin @c \@NoIdiom a proposito, igual que su gemela de copia.
+/// En el INTERPRETE gana la INSTRUCCION que la maquina ya trae: no hay
+/// registros anchos que aprovechar y cualquier bucle escrito aqui se ejecuta
+/// vuelta a vuelta.  El bucle simple de aqui es lo que el reconocedor de
+/// idiomas convierte en ella, asi que va sin @c \@NoIdiom a proposito -- igual
+/// que su gemela de copia.
 @Target("mode:vm")
 public void memset(u8* dst, u8 val, usize n) {
     for (usize i = 0; i < n; i++) {

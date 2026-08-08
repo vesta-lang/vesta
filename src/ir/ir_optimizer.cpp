@@ -15,6 +15,7 @@
 #include "ir/ir_pattern.h"
 #include "ctpe/evaluable.h"
 #include "ir/passes/if_conversion.h"     // diamante/if-anidado -> SELECT (Capa 1)
+#include "ir/passes/bulk_memory_lower.h" // bucle que mueve memoria -> operacion de bloque
 #include "ir/passes/unroll.h"            // desenrollado de bucles (factor automatico)
 #include "ir/passes/select_simplify.h"   // canonicalizacion algebraica de SELECT
 #include "analysis/facts/ir_facts.h"     // hechos (def-use) para el modelo de efectos
@@ -11552,9 +11553,10 @@ bool ir_pass_schedule(IrFunction &fn, const analysis::PointsTo *pt,
 //       %i_next = add %i_phi, %1_const
 //       br while_header
 //
-// Lo reemplaza por una sola @c CALLN a @c vio_memcpy.  La libc nativa
-// vectoriza con SSE/AVX/AVX-512 segun la CPU, asi el copy loop se
-// acelera ~50-100x sin necesidad de SIMD codegen explicito.
+// Lo reemplaza por una sola @c IrOp::MEMCPY -- la instruccion de la VM, no
+// una llamada a nadie.  Cada backend la materializa por su via mas rapida
+// (`memcpy`/`memcpyh` en el interprete, `rep movsb` en el JIT), y el hecho
+// queda EN el IR, donde efectos, alias y escape pueden razonar sobre el.
 //
 // Pre-condiciones:
 //   - El bloque body tiene EXACTAMENTE los 6-7 instrs del patron.
@@ -11565,8 +11567,7 @@ bool ir_pass_schedule(IrFunction &fn, const analysis::PointsTo *pt,
 //     exigimos 0.
 //   - %i_next = add %i_phi, 1 (step de 1).
 //
-// Tras el match: el body se reemplaza por `CALLN vio_memcpy(dst, src,
-// N) + br exit`.  El header sigue invocando body solo la primera vez;
+// Tras el match: el body se reemplaza por `MEMCPY(dst, src, N) + br exit`.  El header sigue invocando body solo la primera vez;
 // la siguiente iteracion el cond falla porque body cambio el flow.
 // Mas correcto: el body NO retorna a header (br exit directo), asi
 // el loop nunca itera.
@@ -12562,6 +12563,20 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
      * dependencia del acumulador de los bucles reducidos.  Tras clonar, una
      * limpieza local (copy-prop + CSE + const-fold + DCE) optimiza las copias
      * (dedup de direcciones, plegado de indices).  Kill: VESTA_NO_UNROLL=1. */
+    /* Un bucle que resulta ser un movimiento de memoria se reduce a la
+     * operacion de bloque.  ANTES del desenrollador, y el orden es parte del
+     * arreglo: desenrollar primero multiplica el codigo de un bucle que iba a
+     * desaparecer entero. */
+    if (level >= OptLevel::O1) {
+        for (auto &fn : mod.functions) {
+            if (fn.is_native) continue;
+            if (ir_pass_bulk_memory_lower(fn)) {
+                ir_pass_unreachable(fn);
+                ir_pass_dce(fn);
+            }
+        }
+    }
+
     if (level >= OptLevel::O2) {
         for (auto &fn : mod.functions) {
             if (fn.is_native) continue;
