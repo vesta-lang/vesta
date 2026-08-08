@@ -18,6 +18,7 @@
 #include "ir/passes/bulk_memory_lower.h" // bucle que mueve memoria -> operacion de bloque
 #include "ir/passes/unroll.h"            // desenrollado de bucles (factor automatico)
 #include "ir/passes/select_simplify.h"   // canonicalizacion algebraica de SELECT
+#include "analysis/facts/alignment.h" // de cuanto es multiplo un valor
 #include "analysis/facts/ir_facts.h"     // hechos (def-use) para el modelo de efectos
 #include "analysis/effects/ir_effects.h"       // modelo unico de efectos (consumidor DCE, A/B)
 #include "analysis/effects/effect_analysis.h"  // cierre interproc: callees puros (DSE Fase 4)
@@ -7226,6 +7227,47 @@ static bool get_const(const IrFunction &fn, IrValueId id, uint64_t &val) {
 
 bool ir_pass_const_fold(IrFunction &fn) {
     bool changed = false;
+
+    /* Alineacion demostrable de cada valor.  Sirve para plegar `p & (k-1)`
+     * cuando se sabe que `p` es multiplo de k: el resultado es cero, y con el
+     * se cae la comparacion y la rama que colgaba de ella.
+     *
+     * Es la pregunta que un programa se hace en EJECUCION teniendo aqui la
+     * respuesta -- `if ((dir & 31) == 0) usar_la_alineada()` --, y responderla
+     * al compilar convierte dos caminos en uno.  No hace falta que el
+     * programador escriba nada distinto: escribe la comprobacion, que es lo
+     * correcto, y desaparece cuando sobra. */
+    const analysis::AlignmentFacts alin = analysis::compute_alignment(fn);
+    for (auto &bb : fn.blocks) {
+        for (auto &ins : bb.instrs) {
+            if (ins.op != IrOp::AND || ins.dst == IR_NO_VALUE ||
+                ins.operands.size() != 2)
+                continue;
+            // Uno de los dos lados es la mascara `k-1`.
+            for (int lado = 0; lado < 2; ++lado) {
+                const IrValueId m = ins.operands[lado];
+                const IrValueId p = ins.operands[1 - lado];
+                uint64_t mk = 0;
+                if (!get_const(fn, m, mk)) continue;
+                if (mk == 0 || mk == ~0ull) continue;
+                const uint64_t k = mk + 1;
+                // Solo mascaras de la forma k-1 con k potencia de dos.
+                if ((k & (k - 1)) != 0) continue;
+                if (k > 0xFFFFFFFFull) continue;
+                if (!alin.multiplo_de(p, (uint32_t)k)) continue;
+                // Multiplo de k -> los bits bajos son cero.
+                ins.op = IrOp::CONST;
+                ins.imm = 0;
+                ins.operands.clear();
+                if (ins.dst < fn.values.size()) {
+                    fn.values[ins.dst].is_const = true;
+                    fn.values[ins.dst].const_val = 0;
+                }
+                changed = true;
+                break;
+            }
+        }
+    }
 
     for (auto &bb : fn.blocks) {
         for (auto &ins : bb.instrs) {
