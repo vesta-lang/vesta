@@ -464,13 +464,32 @@ public void memset(u8* dst, u8 val, usize n) {
         return;
     }
     u64 rasgos = init_cpuid();
+    // La alineacion del destino se comprueba UNA vez y sirve para todo el
+    // reparto: es un AND, y decide entre dos familias que emiten el mismo
+    // patron con la unica diferencia de si el acceso exige o no estar
+    // alineado.  Preguntarlo es mas barato que el acceso que ahorra, y
+    // adivinarlo no es una opcion: una instruccion alineada sobre una
+    // direccion que no lo esta no va mas lenta, hace caer el programa.
+    uintptr ad = (uintptr) dst;
     if (total <= 128) {
         if ((rasgos & BIT_AVX512F) != 0) {
+            if ((ad & 63) == 0) {
+                memset_small_avx512_aligned(dst, val, n);
+                return;
+            }
             memset_small_avx512(dst, val, n);
             return;
         }
         if ((rasgos & BIT_AVX2) != 0) {
+            if ((ad & 31) == 0) {
+                memset_small_avx2_aligned(dst, val, n);
+                return;
+            }
             memset_small_avx2(dst, val, n);
+            return;
+        }
+        if ((ad & 15) == 0) {
+            memset_small_sse2_aligned(dst, val, n);
             return;
         }
         memset_small_sse2(dst, val, n);
@@ -482,12 +501,11 @@ public void memset(u8* dst, u8 val, usize n) {
     // Exige el destino alineado al ancho del acceso: `vmovntdq` no tolera otra
     // cosa, y comprobarlo es un AND.
     if (total >= UMBRAL_NT) {
-        uintptr a = (uintptr) dst;
-        if ((rasgos & BIT_AVX512F) != 0 && (a & 63) == 0) {
+        if ((rasgos & BIT_AVX512F) != 0 && (ad & 63) == 0) {
             memset_streaming_avx512(dst, val, n);
             return;
         }
-        if ((rasgos & BIT_AVX2) != 0 && (a & 31) == 0) {
+        if ((rasgos & BIT_AVX2) != 0 && (ad & 31) == 0) {
             memset_streaming_avx2(dst, val, n);
             return;
         }
@@ -511,6 +529,10 @@ public void memset(u8* dst, u8 val, usize n) {
             return;
         }
         if (total >= (usize) 512) {
+            if ((ad & 63) == 0) {
+                memset_medium_avx512_aligned(dst, val, n);
+                return;
+            }
             memset_medium_avx512(dst, val, n);
             return;
         }
@@ -521,6 +543,10 @@ public void memset(u8* dst, u8 val, usize n) {
             return;
         }
         if (total >= (usize) 256) {
+            if ((ad & 31) == 0) {
+                memset_medium_avx2_aligned(dst, val, n);
+                return;
+            }
             memset_medium_avx2(dst, val, n);
             return;
         }
@@ -530,6 +556,10 @@ public void memset(u8* dst, u8 val, usize n) {
         return;
     }
     if (total >= (usize) 128) {
+        if ((ad & 15) == 0) {
+            memset_medium_sse2_aligned(dst, val, n);
+            return;
+        }
         memset_medium_sse2(dst, val, n);
         return;
     }

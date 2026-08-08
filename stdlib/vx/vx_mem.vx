@@ -25,37 +25,24 @@
  * con `--no-mem`.
  */
 
-import std.atomic only atomic_cas64, vx_cpu_relax;
-import std.memory only memset;
-import std.types only usize;
+import std.atomic only atomic, vx_cpu_relax;
+import std.memory only memset, memcpy, memmove;
+import std.types only usize, uintptr, size_t;
+// Solo fuera de Windows: alli las arenas salen de kernel32.
+@Target("!os:windows")
+import std.syscall.linux only mmap, munmap;
 
 extern "kernel32.dll" {
     fn VirtualAlloc(u64 addr, u64 size, u32 allocType, u32 protect) -> u64;
     fn VirtualFree(u64 addr, u64 size, u32 freeType) -> i32;
 }
 
-// Linux: mmap/munmap RAW (sin libc) via asm volatile syscall.  SysV: arg4 a r10
-// (no rcx).  nr y resultado comparten rax.  mmap=9 (6 args), munmap=11 (2 args).
-@Target("!os:windows")
-i64 __vmem_sys_mmap(i64 addr, i64 len, i64 prot, i64 flags, i64 fd, i64 off) {
-    register("rdi") i64 a1 = addr;
-    register("rsi") i64 a2 = len;
-    register("rdx") i64 a3 = prot;
-    register("r10") i64 a4 = flags;
-    register("r8")  i64 a5 = fd;
-    register("r9")  i64 a6 = off;
-    register("rax") i64 rax_io = 9; // SYS_mmap
-    asm volatile { syscall };
-    return rax_io;
-}
-@Target("!os:windows")
-i64 __vmem_sys_munmap(i64 addr, i64 len) {
-    register("rdi") i64 a1 = addr;
-    register("rsi") i64 a2 = len;
-    register("rax") i64 rax_io = 11; // SYS_munmap
-    asm volatile { syscall };
-    return rax_io;
-}
+// Linux: las llamadas al sistema salen de `std.syscall`, que es donde vive esa
+// frontera del lenguaje.  Aqui habia dos copias escritas a mano en ensamblador
+// -- con el numero de llamada incrustado y el reparto de registros de System V
+// repetido -- y eso son dos criterios para lo mismo: cada arquitectura nueva
+// obligaba a tocar tambien este fichero, que existe por las arenas y el
+// asignador, no por saber como se le habla al nucleo.
 
 // =========================================================================
 //  Capa 1: utilidades de memoria (hardware-friendly: qwords, no byte-a-byte)
@@ -86,21 +73,11 @@ void vx_memset(u64 dst, u8 val, u64 n) {
  * @param n   Numero de bytes.
  */
 void vx_memcpy(u64 dst, u64 src, u64 n) {
-    u64* dq = (u64*)dst;
-    u64* sq = (u64*)src;
-    u64 i = 0;
-    u64 nq = n / 8;
-    while (i < nq) {
-        dq[i] = sq[i];
-        i = i + 1;
-    }
-    u64 off = nq * 8;
-    while (off < n) {
-        u8* dp = (u8*)(dst + off);
-        u8* sp = (u8*)(src + off);
-        dp[0] = sp[0];
-        off = off + 1;
-    }
+    // Igual que @ref vx_memset: la copia del lenguaje vive en `std.memory`,
+    // que reparte por tamano y por juego de instrucciones.  Aqui habia un
+    // bucle de ocho bytes por vuelta que ni usaba los registros anchos ni
+    // llegaba a `rep movsb`.
+    memcpy((u8*) dst, (u8*) src, (usize) n);
 }
 
 /**
@@ -114,20 +91,9 @@ void vx_memcpy(u64 dst, u64 src, u64 n) {
  * @param n   Numero de bytes.
  */
 void vx_memmove(u64 dst, u64 src, u64 n) {
-    if (dst == src || n == 0) return;
-    if (dst < src) {
-        vx_memcpy(dst, src, n);
-        return;
-    }
-    // dst > src y posible solape: copiar de atras hacia adelante (byte-a-byte;
-    // el solape impide el bulk-qword sin doble buffer).
-    u64 i = n;
-    while (i > 0) {
-        i = i - 1;
-        u8* dp = (u8*)(dst + i);
-        u8* sp = (u8*)(src + i);
-        dp[0] = sp[0];
-    }
+    // Tambien la de `std.memory`: alli el caso hacia atras no es byte a byte
+    // como lo era aqui.
+    memmove((u8*) dst, (u8*) src, (usize) n);
 }
 
 // =========================================================================
@@ -198,9 +164,13 @@ u64 vmem_reserve(u64 size, MemProt prot) {
 @Target("!os:windows")
 u64 vmem_reserve(u64 size, MemProt prot) {
     // MAP_PRIVATE|MAP_ANONYMOUS = 0x22 = 34, fd = -1, off = 0.
-    i64 r = __vmem_sys_mmap(0, (i64)size, (i64)__vmem_prot_flags(prot), 34, -1, 0);
-    if (r == -1) return 0; // MAP_FAILED
-    return (u64)r;
+    uintptr r = mmap((uintptr) 0, (size_t) size, __vmem_prot_flags(prot),
+                     34, -1, 0);
+    // El nucleo devuelve el codigo de error como valor negativo pequeno; el
+    // caso corriente es MAP_FAILED (-1).  Cualquiera de ellos es "no hay
+    // arena", que es lo unico que el llamante puede hacer distinto.
+    if (((i64) r) < 0) return 0;
+    return (u64) r;
 }
 
 /**
@@ -214,7 +184,7 @@ void vmem_release(u64 addr, u64 size) {
 }
 @Target("!os:windows")
 void vmem_release(u64 addr, u64 size) {
-    __vmem_sys_munmap((i64)addr, (i64)size);
+    munmap((uintptr) addr, (size_t) size);
 }
 
 // =========================================================================
@@ -300,12 +270,19 @@ u64 __vmem_size_of(i32 cls) {
 // motivo que vx_sync/vx_async: vx_mem se auto-bundlea single-module; atomic
 // es la lib canonica reutilizable por el codigo de usuario y otras libs).
 i64 __vmem_mt = 0;    ///< 0 = single-thread (sin lock); 1 = multihilo.
-i64 __vmem_lock = 0;  ///< spinlock del slab (0 = libre).
-
-// El CAS y el hint de spin los pone `atomic` (ver el import de la cabecera):
-// son primitivas de la stdlib, no algo que este allocator deba reimplementar.
-// Antes tenia su propio `lock cmpxchg` en inline-asm, lo que lo ataba al codigo
-// maquina y dejaba a vx_mem fuera del interprete.
+/// Spinlock del slab (0 = libre).
+///
+/// Es un `atomic<i64>` y no un `i64` suelto con un CAS al lado: asi el tipo
+/// DICE que esa posicion se toca desde varios hilos, y cada operacion sobre
+/// ella es atomica por construccion en vez de por acordarse de llamar a la
+/// funcion correcta.  Escribir `__vmem_lock = 0` para soltarlo es un store
+/// atomico, no una escritura normal que pareciera igual de inocente.
+///
+/// El CAS y el hint de spin los pone `atomic` (ver el import de la cabecera):
+/// son primitivas de la stdlib, no algo que este allocator deba
+/// reimplementar.  Antes tenia su propio `lock cmpxchg` en inline-asm, lo que
+/// lo ataba al codigo maquina y dejaba a vx_mem fuera del interprete.
+atomic<i64> __vmem_lock;
 
 /// Activa el modo multihilo (lo llaman vx_thread/pool al crear el 1er hilo).
 public void vmem_enable_mt() { __vmem_mt = 1; }
@@ -313,7 +290,7 @@ public void vmem_enable_mt() { __vmem_mt = 1; }
 /// Toma el spinlock del slab si estamos en modo multihilo (si no, no-op).
 void __vmem_slab_lock() {
     if (__vmem_mt == 0) { return; }
-    while (atomic_cas64(&__vmem_lock, 0, 1) != 0) { vx_cpu_relax(); }
+    while (!__vmem_lock.compare_exchange(0, 1)) { vx_cpu_relax(); }
 }
 void __vmem_slab_unlock() {
     if (__vmem_mt == 0) { return; }
