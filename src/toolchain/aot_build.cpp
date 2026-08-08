@@ -1936,6 +1936,52 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
             for (auto &afn : aot_mod.functions)
                 ir::ir_pass_promote_local_allocas(afn, /*force_all=*/true);
 
+            /* Deteccion de CPU de los modulos FUSIONADOS.
+             *
+             * `cpu_features()` no sirve de nada por si sola: alguien tiene que
+             * llamar a `__vx_cpu_init` antes que el programa, y de eso se
+             * encarga el lowering PREPENDIENDOLO a main.  Pero solo lo hace si
+             * la marca se puso al bajar el modulo del usuario, y estos modulos
+             * -- `std.memory` y compania -- se fusionan DESPUES.  Resultado: el
+             * bitmask se quedaba a cero y todo reparto de la stdlib elegia
+             * siempre la variante base, sin que se notara mas que en el
+             * tiempo.  Medido: `rep stosb` estaba en el binario y no se
+             * ejecutaba nunca, porque su rama preguntaba por un bit que nadie
+             * habia puesto.
+             *
+             * Aqui, ya con todo fusionado, se comprueba si el helper existe y
+             * si main lo llama; si no, se prepende.  Es el mismo cableado que
+             * hace el lowering, en el unico punto donde se sabe que modulos
+             * acabaron dentro. */
+            {
+                bool hay_init = false;
+                for (const auto &f : aot_mod.functions)
+                    if (f.name == "__vx_cpu_init") { hay_init = true; break; }
+                if (hay_init) {
+                    for (auto &f : aot_mod.functions) {
+                        if (f.name != "main" || f.blocks.empty()) continue;
+                        auto &ins = f.blocks[0].instrs;
+                        bool ya = false;
+                        for (const auto &i2 : ins)
+                            if (i2.op == ir::IrOp::CALL &&
+                                i2.func_name == "__vx_cpu_init") {
+                                ya = true;
+                                break;
+                            }
+                        if (!ya) {
+                            ir::IrInstr call_init{};
+                            call_init.op = ir::IrOp::CALL;
+                            call_init.type = ir::IrType::VOID;
+                            call_init.dst = ir::IR_NO_VALUE;
+                            call_init.func_name = "__vx_cpu_init";
+                            call_init.source_line = 0;
+                            ins.insert(ins.begin(), std::move(call_init));
+                        }
+                        break;
+                    }
+                }
+            }
+
             tel.cerrar(tel.preparar_us);
 
             // ------------------------------------------------------------------

@@ -26,6 +26,8 @@
  */
 
 import std.atomic only atomic_cas64, vx_cpu_relax;
+import std.memory only memset;
+import std.types only usize;
 
 extern "kernel32.dll" {
     fn VirtualAlloc(u64 addr, u64 size, u32 allocType, u32 protect) -> u64;
@@ -71,23 +73,7 @@ i64 __vmem_sys_munmap(i64 addr, i64 len) {
  * @param n   Numero de bytes a escribir.
  */
 void vx_memset(u64 dst, u8 val, u64 n) {
-    // Patron de 8 bytes = val replicado (shifts CONSTANTES, validos en AOT).
-    u64 b = (u64)val;
-    u64 pat = b | (b << 8) | (b << 16) | (b << 24) |
-              (b << 32) | (b << 40) | (b << 48) | (b << 56);
-    u64* qp = (u64*)dst;
-    u64 i = 0;
-    u64 nq = n / 8;
-    while (i < nq) {
-        qp[i] = pat;
-        i = i + 1;
-    }
-    u64 off = nq * 8;
-    while (off < n) {
-        u8* bp = (u8*)(dst + off);
-        bp[0] = val;
-        off = off + 1;
-    }
+    memset((u8*) dst, val, (usize) n);
 }
 
 /**

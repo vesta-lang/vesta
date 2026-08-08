@@ -3516,6 +3516,16 @@ void vx_report_bounds(const ir::IrModule &mod, Diagnostics &diags,
         /* COMO se detecto -- no solo que pasa.  Quien lee un error tiene que
          * poder juzgar si se lo cree, y para eso necesita saber de donde sale
          * cada mitad del veredicto. */
+        /* EN QUE funcion.  El analisis siempre lo supo (@c BoundsViolation
+         * lleva su nombre) y el informe lo tiraba, con lo que un error en una
+         * funcion de la stdlib -- fusionada en el modulo -- se leia como si
+         * estuviera en el fichero del usuario.  Peor aun: la linea es la del
+         * modulo de origen y el fichero el del raiz, asi que un programa de
+         * quince lineas recibia errores en la linea 414.  Hasta que el informe
+         * sepa de que fichero viene cada funcion, al menos se dice de quien es
+         * la linea para que nadie la busque donde no esta. */
+        if (!v.function.empty())
+            diags.note(loc, vx::diag::format("VX3006", {v.function}));
         diags.note(loc, vx::diag::format("VX3004", {std::to_string(v.objeto)}));
         /* Y QUE hacer.  El analisis conoce las dos salidas: agrandar el objeto
          * hasta donde llega el acceso, o no pasar de donde llega el objeto. */

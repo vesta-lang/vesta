@@ -510,6 +510,92 @@ comptime string gen_grande(string mnl, string mne, string mne_cola, i64 ancho,
 }
 
 /**
+ * @brief Genera un bloque de RELLENO de @p bytes desde @p d.
+ *
+ * La gemela de @ref gen_bloque para el relleno, con una diferencia que cambia
+ * la forma: rellenar no tiene lecturas.  Todas las escrituras sacan el valor
+ * del MISMO registro, asi que no hay presupuesto que repartir ni tandas que
+ * hacer -- un solo registro ancho basta por muchos accesos que haya, y no hay
+ * dependencia entre ellos porque ninguno espera a un dato.
+ *
+ * @param mne Mnemonico de escritura (movdqu / vmovdqu / vmovdqu64 y alineadas).
+ * @param ancho Bytes por acceso: 16, 32 o 64.
+ * @param bytes Bytes que cubre el bloque.  Multiplo de @p ancho.
+ * @param d Registro con la direccion destino.
+ * @return El cuerpo del bloque asm, listo para empalmar.
+ */
+comptime string gen_relleno(string mne, i64 ancho, i64 bytes, string d) {
+    static_assert(ancho == 16 || ancho == 32 || ancho == 64,
+                  "el ancho tiene que ser el de un registro real: 16, 32 o 64");
+    static_assert(bytes % ancho == 0,
+                  "el bloque tiene que ser multiplo del ancho del registro");
+    i64 accesos = bytes / ancho;
+    string out = "";
+    for (i64 i = 0; i < accesos; i++) {
+        i64 o = i * ancho;
+        out += "${mne} [${d} + ${o}], v0\n";
+    }
+    return out;
+}
+
+/**
+ * @brief Genera un relleno SOLAPADO de @p bytes + @p bytes.
+ *
+ * Mismo algoritmo que @ref gen_solapada: un tramo desde el principio y otro
+ * que termina en el final, solapandose por el medio.  Los bytes del solape se
+ * escriben dos veces con el mismo valor -- que en un relleno es literalmente
+ * gratis -- y a cambio no hay cola ni salto que predecir.
+ *
+ * @param mne Mnemonico de escritura.
+ * @param ancho Bytes por acceso.
+ * @param bytes Bytes que cubre cada mitad.
+ * @return El cuerpo del bloque asm.
+ */
+comptime string gen_relleno_solapado(string mne, i64 ancho, i64 bytes) {
+    return gen_relleno(mne, ancho, bytes, "d") +
+           gen_relleno(mne, ancho, bytes, "fd");
+}
+
+/**
+ * @brief Genera un relleno GRANDE: bucle de @p regs accesos por vuelta + cola.
+ *
+ * Espejo de @ref gen_grande sin su mitad de lecturas.  Se conserva lo que
+ * SIGUE aplicando: el puntero avanza a mitad del bloque para adelantar el
+ * calculo de la vuelta siguiente, y la condicion se prueba contra el puntero
+ * de cola en vez de llevar un contador aparte.
+ *
+ * @param mne Mnemonico de escritura del bucle.
+ * @param mne_cola El de la cola, que arranca donde caiga y por eso no puede
+ *        exigir alineacion aunque el bucle si la exija.
+ * @param ancho Bytes por acceso.
+ * @param regs Accesos por vuelta.
+ * @param cierre Instruccion final (`vzeroupper`, `sfence`) o cadena vacia.
+ * @return El cuerpo del bloque asm.
+ */
+comptime string gen_relleno_grande(string mne, string mne_cola, i64 ancho,
+                                   i64 regs, string cierre) {
+    i64 bloque = regs * ancho;
+    i64 mitad = regs / 2;
+    string out = "bucle:\n";
+    for (i64 k = 0; k < mitad; k++) {
+        i64 o = k * ancho;
+        out += "${mne} [d + ${o}], v0\n";
+    }
+    out += "add d, ${bloque}\n";
+    for (i64 k = mitad; k < regs; k++) {
+        i64 o = k * ancho - bloque;
+        out += "${mne} [d + ${o}], v0\n";
+    }
+    out += "cmp d, fd\n";
+    out += "jb bucle\n";
+    out += gen_relleno(mne_cola, ancho, bloque, "fd");
+    if (cierre != "") {
+        out += "${cierre}\n";
+    }
+    return out;
+}
+
+/**
  * @brief Copia grande con registros de 128 bits (SSE2): 128 bytes por vuelta.
  *
  * Ocho accesos por vuelta, que es donde los registros vectoriales empiezan a
@@ -703,6 +789,182 @@ public void memcpy_erms(u8* dst, u8* src, usize n) {
  * @param val Byte con el que rellenar.
  * @param n Numero de bytes.
  */
+/**
+ * @brief Rellena de 65 a 128 bytes con registros de 128 bits (SSE2).
+ *
+ * Espejo de @ref memcpy_small_sse2: dos mitades que se solapan por el medio,
+ * sin bucle y sin cola.
+ *
+ * El valor se difunde a todo el registro en dos pasos: primero se replica a
+ * los ocho bytes de un registro general (@c val * 0x0101010101010101, una
+ * multiplicacion en vez de siete desplazamientos), y de ahi al vectorial.  En
+ * SSE2 no hay difusion directa desde un registro general, asi que se mete la
+ * palabra en la mitad baja y se duplica sobre si misma con @c punpcklqdq.
+ *
+ * PRECONDICION: @p n entre 65 y 128.
+ *
+ * @param dst Destino.
+ * @param val Byte con el que rellenar.
+ * @param n Numero de bytes, entre 65 y 128.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memset_small_sse2(u8* dst, u8 val, usize n) {
+    u8* fin_d = dst + n - 64;
+    u64 pat = ((u64) val) * 72340172838076673;
+    asm (
+        reg d = dst,
+        reg fd = fin_d,
+        reg p = pat,
+        xmm v0,
+    ) {
+        movq v0, p
+        punpcklqdq v0, v0
+        inject(gen_relleno_solapado("movdqu", 16, 64))
+    }
+}
+
+/**
+ * @brief Lo mismo con registros de 256 bits (AVX2).
+ *
+ * Misma forma que @ref memset_small_sse2 con la mitad de accesos, porque cada
+ * uno escribe el doble.  Aqui la difusion si es directa: @c vpbroadcastq.
+ *
+ * PRECONDICION: @p n entre 65 y 128, y el procesador con AVX2.
+ *
+ * @param dst Destino.
+ * @param val Byte con el que rellenar.
+ * @param n Numero de bytes, entre 65 y 128.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memset_small_avx2(u8* dst, u8 val, usize n) {
+    u8* fin_d = dst + n - 64;
+    u64 pat = ((u64) val) * 72340172838076673;
+    asm (
+        reg d = dst,
+        reg fd = fin_d,
+        reg p = pat,
+        xmm sem,
+        ymm v0,
+    ) {
+        // La semilla va en un registro de 128 bits porque `vmovq` escribe la
+        // mitad baja de un `xmm`: no admite un `ymm` como destino.  De ahi
+        // `vpbroadcastq` la difunde a los cuatro cuartos del de 256.
+        vmovq sem, p
+        vpbroadcastq v0, sem
+        inject(gen_relleno_solapado("vmovdqu", 32, 64))
+        vzeroupper
+    }
+}
+
+/**
+ * @brief Lo mismo con registros de 512 bits (AVX-512F).
+ *
+ * PRECONDICION: @p n entre 65 y 128, y el procesador con AVX-512F.
+ *
+ * @param dst Destino.
+ * @param val Byte con el que rellenar.
+ * @param n Numero de bytes, entre 65 y 128.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memset_small_avx512(u8* dst, u8 val, usize n) {
+    u8* fin_d = dst + n - 64;
+    u64 pat = ((u64) val) * 72340172838076673;
+    asm (
+        reg d = dst,
+        reg fd = fin_d,
+        reg p = pat,
+        zmm v0,
+    ) {
+        vpbroadcastq v0, p
+        inject(gen_relleno_solapado("vmovdqu64", 64, 64))
+        vzeroupper
+    }
+}
+
+/**
+ * @brief Relleno grande con registros de 128 bits (SSE2): 128 bytes por vuelta.
+ *
+ * Espejo de @ref memcpy_medium_sse2 sin sus lecturas.
+ *
+ * PRECONDICION: @p n al menos 128.
+ *
+ * @param dst Destino.
+ * @param val Byte con el que rellenar.
+ * @param n Numero de bytes, 128 o mas.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memset_medium_sse2(u8* dst, u8 val, usize n) {
+    u8* fin_d = dst + n - 128;
+    u64 pat = ((u64) val) * 72340172838076673;
+    asm (
+        reg d = dst,
+        reg fd = fin_d,
+        reg p = pat,
+        xmm v0,
+    ) {
+        movq v0, p
+        punpcklqdq v0, v0
+        inject(gen_relleno_grande("movdqu", "movdqu", 16, 8, ""))
+    }
+}
+
+/**
+ * @brief Relleno grande con registros de 256 bits (AVX2): 256 bytes por vuelta.
+ *
+ * PRECONDICION: @p n al menos 256, y el procesador con AVX2.
+ *
+ * @param dst Destino.
+ * @param val Byte con el que rellenar.
+ * @param n Numero de bytes, 256 o mas.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memset_medium_avx2(u8* dst, u8 val, usize n) {
+    u8* fin_d = dst + n - 256;
+    u64 pat = ((u64) val) * 72340172838076673;
+    asm (
+        reg d = dst,
+        reg fd = fin_d,
+        reg p = pat,
+        xmm sem,
+        ymm v0,
+    ) {
+        // Igual que en @ref memset_small_avx2: `vmovq` solo escribe un `xmm`.
+        vmovq sem, p
+        vpbroadcastq v0, sem
+        inject(gen_relleno_grande("vmovdqu", "vmovdqu", 32, 8, "vzeroupper"))
+    }
+}
+
+/**
+ * @brief Relleno grande con registros de 512 bits (AVX-512F): 512 por vuelta.
+ *
+ * PRECONDICION: @p n al menos 512, y el procesador con AVX-512F.
+ *
+ * @param dst Destino.
+ * @param val Byte con el que rellenar.
+ * @param n Numero de bytes, 512 o mas.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memset_medium_avx512(u8* dst, u8 val, usize n) {
+    u8* fin_d = dst + n - 512;
+    u64 pat = ((u64) val) * 72340172838076673;
+    asm (
+        reg d = dst,
+        reg fd = fin_d,
+        reg p = pat,
+        zmm v0,
+    ) {
+        vpbroadcastq v0, p
+        inject(gen_relleno_grande("vmovdqu64", "vmovdqu64", 64, 8, "vzeroupper"))
+    }
+}
+
 @Target("arch:x86_64")
 @NoIdiom
 public void memset_erms(u8* dst, u8 val, usize n) {

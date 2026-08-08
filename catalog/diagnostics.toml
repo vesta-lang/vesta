@@ -157,6 +157,10 @@ es = "detectado por el analisis de regiones: la extension sale de donde se reser
 en = "either reserve at least {0} bytes for the object, or keep the access within [0, {1})"
 es = "o reserva al menos {0} bytes para el objeto, o manten el acceso dentro de [0, {1})"
 
+[VX3006]
+en = "in function '{0}' (the line refers to its own module, which may not be the one being compiled)"
+es = "en la funcion '{0}' (la linea es la de su propio modulo, que puede no ser el que se compila)"
+
 # --- modulos / namespaces (VX4xxx) ---
 
 [VX4001]

@@ -55,6 +55,14 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod) {
         analysis::compute_range_summaries(mod);
     for (const ir::IrFunction &fn : mod.functions) {
         if (fn.blocks.empty()) continue;
+        /* Los cuerpos comptime no son parte del programa que se ejecuta: corren
+         * al compilar y lo que tocan son datos de la propia compilacion, con
+         * desplazamientos que se calculan en ese momento.  Juzgarlos aqui es
+         * juzgar otro programa, y lo que sale son avisos sobre codigo que
+         * nunca llegara al binario -- un fichero de quince lineas recibia
+         * setenta y tres errores por importar `std.memory`, todos de sus
+         * generadores. */
+        if (ir::es_cuerpo_comptime(fn.name)) continue;
         const analysis::PointsTo &pt = ea.points_to_publico(fn);
         /* Rangos de la funcion: es lo que permite juzgar una region de tamano
          * simbolico.  Se calculan una vez por funcion, no por acceso. */

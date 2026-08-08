@@ -323,10 +323,88 @@ public void memset_c(u8* dst, u8 val, usize n) {
 
 /**
  * @brief Rellena @p n bytes con @p val, eligiendo estrategia por tamano.
+ *
+ * Mismo criterio que @ref memcpy: se reparte por tamano y por juego de
+ * instrucciones, y lo que sabe el procesador se pregunta UNA vez.  Rellenar es
+ * la mitad de copiar -- solo hay escrituras -- asi que el reparto es el mismo
+ * quitandole el lado de las lecturas.
+ *
+ * En el INTERPRETE no llega aqui: alli gana la instruccion que la VM ya trae.
+ *
  * @param dst Destino.
  * @param val Byte con el que rellenar.
  * @param n Numero de bytes.
  */
+@Target("(mode:aot || mode:jit) && arch:x86_64")
+@NoIdiom
+public void memset(u8* dst, u8 val, usize n) {
+    usize total = n;
+    // Hasta 64 bytes no hay nada que repartir: el bucle por palabras cubre el
+    // tramo sin montar un registro ancho ni difundir el valor, que en una
+    // escritura corta cuesta mas que lo que ahorra.
+    if (total <= 64) {
+        memset_c(dst, val, n);
+        return;
+    }
+    u64 rasgos = init_cpuid();
+    if (total <= 128) {
+        if ((rasgos & BIT_AVX512F) != 0) {
+            memset_small_avx512(dst, val, n);
+            return;
+        }
+        if ((rasgos & BIT_AVX2) != 0) {
+            memset_small_avx2(dst, val, n);
+            return;
+        }
+        memset_small_sse2(dst, val, n);
+        return;
+    }
+    // `rep stosb` en un procesador que anuncia ERMS escribe por lineas de
+    // cache enteras: le gana a cualquier bucle escrito a mano en cuanto el
+    // tramo es grande, y son tres instrucciones en vez de decenas.  Es
+    // exactamente la razon por la que `memcpy` usa su gemela, y el umbral es
+    // el mismo por el mismo motivo: justo por encima de 128 la puesta en
+    // marcha de `rep` todavia pesa mas que el relleno.
+    if (total >= UMBRAL_ERMS && (rasgos & BIT_ERMS) != 0) {
+        memset_erms(dst, val, n);
+        return;
+    }
+    // Bucle vectorial.  Cada version pide su vuelta entera de margen, asi que
+    // se elige la mas ancha que quepa.
+    if ((rasgos & BIT_AVX512F) != 0 && total >= (usize) 512) {
+        memset_medium_avx512(dst, val, n);
+        return;
+    }
+    if ((rasgos & BIT_AVX2) != 0 && total >= (usize) 256) {
+        memset_medium_avx2(dst, val, n);
+        return;
+    }
+    if (total >= (usize) 128) {
+        memset_medium_sse2(dst, val, n);
+        return;
+    }
+    memset_c(dst, val, n);
+    return;
+}
+
+/// @copydoc memset
+///
+/// En el INTERPRETE gana la instruccion que la VM ya trae, asi que aqui no se
+/// reparte nada: el bucle simple es lo que el reconocedor de idiomas convierte
+/// en ella.  Sin @c \@NoIdiom a proposito, igual que su gemela de copia.
+@Target("mode:vm")
+public void memset(u8* dst, u8 val, usize n) {
+    for (usize i = 0; i < n; i++) {
+        dst[i] = val;
+    }
+}
+
+/// @copydoc memset
+///
+/// Arquitecturas que aun no aportan su relleno ancho: se quedan en lo
+/// portable, que es correcto en todas.  Al anadir un `std/memory/<arch>.vx`
+/// basta con darle su propia variante aqui.
+@Target("(mode:aot || mode:jit) && !arch:x86_64")
 @NoIdiom
 public void memset(u8* dst, u8 val, usize n) {
     memset_c(dst, val, n);

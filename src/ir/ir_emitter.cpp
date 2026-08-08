@@ -7138,7 +7138,7 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
     // entrada
     bool first_func = true;
     for (const auto &fn : mod.functions) {
-        if (omit_comptime_bodies && fn.name.rfind("__macro_", 0) == 0) {
+        if (omit_comptime_bodies && ir::es_cuerpo_comptime(fn.name)) {
             continue;
         }
         if (fn.is_native) {

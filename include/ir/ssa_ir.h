@@ -2012,6 +2012,25 @@ bool ir_verify(const IrModule &mod, std::vector<std::string> &errors);
  * @param ins La instruccion.
  */
 void print_instr(std::ostream &o, const IrFunction &fn, const IrInstr &ins);
+
+/**
+ * @brief @c true si @p nombre es el cuerpo de una funcion de COMPILACION.
+ *
+ * Las macros y las funciones comptime se emiten con el prefijo @c __macro_ y
+ * corren AL COMPILAR: no llegan al programa emitido, y lo que tocan son datos
+ * de la propia compilacion.  Quien razona sobre el programa que se ejecuta
+ * tiene que saltarselas -- juzgarlas es juzgar otro programa.
+ *
+ * Vive aqui porque es el IR quien sabe que significan los nombres de sus
+ * funciones.  La comprobacion estaba escrita a pelo en varios sitios, y una
+ * regla repetida son varias reglas en cuanto una cambia.
+ *
+ * @param nombre Nombre de la funcion.
+ * @return true si es un cuerpo comptime.
+ */
+inline bool es_cuerpo_comptime(const std::string &nombre) {
+    return nombre.rfind("__macro_", 0) == 0;
+}
 } // namespace ir
 
 // Restaurar las macros de Windows que anulamos al principio del header.
