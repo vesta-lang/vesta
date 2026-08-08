@@ -822,7 +822,46 @@ AsmInferResult asm_infer_clobbers(const std::string &nasm_body,
         if (ti >= toks.size()) continue; // linea solo-label/prefijo
 
         const std::string mnem = toks[ti];
-        const AsmEffects eff = asm_effects_for(mnem);
+
+        /* La BASE DE INSTRUCCIONES primero.  Es la fuente generada por ISA, y
+         * de una linea emparejada sabe mas que ninguna tabla escrita a mano:
+         * que registros lee y escribe, si toca memoria y flags, si es barrera
+         * y hasta su latencia.  Preguntarle a ella y dejar la tabla para lo
+         * que no cubra es lo que evita tener dos versiones del mismo saber --
+         * que es como `vmovq` acabo siendo un "mnemonico desconocido" teniendo
+         * la DB su forma desde el principio.
+         *
+         * `modeled=false` significa que la linea no se pudo emparejar (forma
+         * con operandos implicitos, sintaxis que la DB no cubre); entonces se
+         * cae a la tabla, que es exactamente lo que era antes. */
+        const instr_db::AsmInsnSem sem =
+            instr_db::asm_insn_sem(isa_actual(), line, 0);
+        AsmEffects eff;
+        if (sem.modeled) {
+            eff.known = true;
+            eff.implicit_write = sem.writes;
+            eff.implicit_read = sem.reads;
+            eff.touches_mem = sem.reads_mem || sem.writes_mem;
+            eff.touches_flags = sem.writes_flags;
+            eff.barrier = sem.barrier;
+            /* Lo que la DB NO modela y la tabla si: la exigencia de
+             * alineacion, que es una precondicion y no un efecto.  Se toma de
+             * la tabla cuando alli consta, en vez de perderla por venir por
+             * el otro camino. */
+            const AsmEffects tab = asm_effects_for(mnem);
+            if (tab.known) {
+                eff.align_req = tab.align_req;
+                eff.operand_write_mask = tab.operand_write_mask;
+                eff.is_call = eff.is_call || tab.is_call;
+                eff.port_io = tab.port_io;
+                for (const auto &r : tab.implicit_mem_read)
+                    eff.implicit_mem_read.push_back(r);
+                for (const auto &r : tab.implicit_mem_write)
+                    eff.implicit_mem_write.push_back(r);
+            }
+        } else {
+            eff = asm_effects_for(mnem);
+        }
 
         if (!eff.known) {
             res.unknown_mnemonics.push_back(mnem);
@@ -848,11 +887,6 @@ AsmInferResult asm_infer_clobbers(const std::string &nasm_body,
             if (!canon.empty()) clob.insert(canon);
         }
 
-        /* Exigencia de alineacion.  Se resuelve aqui el "tanto como mida su
-         * operando": el ancho lo dice el registro vectorial que aparece en la
-         * linea -- xmm 16, ymm 32, zmm 64 --, que es como lo define la
-         * arquitectura.  Sin un registro vectorial reconocible no se puede
-         * decir cuanto exige, y entonces se dice ESO en vez de callarse. */
         /* Exigencia de alineacion.  El ancho, cuando es "el de su operando",
          * lo resuelve @ref instr_db::parse_operand, que conoce los registros
          * de CADA ISA -- x86 xmm/ymm/zmm, ARM v/q, RISC-V -- y devuelve su
