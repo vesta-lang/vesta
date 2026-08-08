@@ -59,6 +59,19 @@ const usize ANCHO = sizeof<usize>();
 /// se mida en otro.
 const usize UMBRAL_ERMS = 2048;
 
+/// A partir de cuantos bytes conviene NO pasar por la cache.
+///
+/// Por encima de este tamano el destino no cabe en la cache de nivel 2 de una
+/// maquina corriente, asi que meterlo entero solo consigue expulsar lo que
+/// habia -- que si se iba a volver a usar -- y, en el caso del relleno, pagar
+/// ademas la lectura-para-escribir de cada linea, que no aporta nada porque la
+/// linea se sobrescribe completa.  Las escrituras no temporales se saltan las
+/// dos cosas.
+///
+/// 64 KiB es el punto de partida razonado, no medido en varias maquinas: esta
+/// aqui y con nombre para poder moverlo cuando se mida.
+const usize UMBRAL_NT = 65536;
+
 /**
  * @brief Copia @p n bytes con un bucle portable.  La version de referencia.
  *
@@ -237,19 +250,45 @@ public void memcpy(u8* dst, u8* src, usize n) {
     // a mano y ocupa tres instrucciones en vez de decenas.  El umbral no es
     // 128 sino UMBRAL_ERMS porque justo por encima de 128 la puesta en marcha
     // de `rep` todavia pesa mas que la copia.
+    // ENORME: por encima de UMBRAL_NT el destino no se va a releer y meterlo
+    // en la cache solo expulsa lo que habia.  Exige el destino alineado al
+    // ancho del acceso, que es lo que pide `vmovntdq`.
+    if (total >= UMBRAL_NT && (rasgos & BIT_AVX2) != 0 &&
+        (((uintptr) dst) & 31) == 0) {
+        memcpy_streaming_avx2(dst, src, n);
+        return;
+    }
     if (total >= UMBRAL_ERMS && (rasgos & BIT_ERMS) != 0) {
         memcpy_erms(dst, src, n);
         return;
     }
-    // Bucle vectorial.  Cada version pide su vuelta entera de margen, asi que
-    // se elige la mas ancha que quepa; por debajo de una vuelta no hay bucle
-    // que valga y la copia corta ya cubre el rango.
-    if ((rasgos & BIT_AVX512F) != 0 && total >= (usize) 512) {
-        memcpy_medium_avx512(dst, src, n);
-        return;
+    // Bucle vectorial.  Dos escalones: la vuelta DOBLE cuando hay bytes de
+    // sobra para amortizarla, y la sencilla por debajo.  Cada version pide su
+    // vuelta entera de margen, asi que se elige la mas ancha que quepa; por
+    // debajo de una vuelta no hay bucle que valga y la copia corta ya cubre el
+    // rango.
+    if ((rasgos & BIT_AVX512F) != 0) {
+        if (total >= (usize) 1024) {
+            memcpy_big_avx512(dst, src, n);
+            return;
+        }
+        if (total >= (usize) 512) {
+            memcpy_medium_avx512(dst, src, n);
+            return;
+        }
     }
-    if ((rasgos & BIT_AVX2) != 0 && total >= (usize) 256) {
-        memcpy_medium_avx2(dst, src, n);
+    if ((rasgos & BIT_AVX2) != 0) {
+        if (total >= (usize) 512) {
+            memcpy_big_avx2(dst, src, n);
+            return;
+        }
+        if (total >= (usize) 256) {
+            memcpy_medium_avx2(dst, src, n);
+            return;
+        }
+    }
+    if (total >= (usize) 256) {
+        memcpy_big_sse2(dst, src, n);
         return;
     }
     if (total >= (usize) 128) {
@@ -322,6 +361,85 @@ public void memset_c(u8* dst, u8 val, usize n) {
 }
 
 /**
+ * @brief Rellena hasta 64 bytes sin un solo bucle.
+ *
+ * La gemela de @ref memcpy_tiny, con la misma tecnica: en vez de partir @p n
+ * en trozos exactos, se cubre el rango con dos accesos que se SOLAPAN por el
+ * medio.  Los bytes del solape se escriben dos veces con el mismo valor -- que
+ * en un relleno es literalmente gratis, porque el valor es el mismo -- y a
+ * cambio no hay cola ni bucle, que en un tramo corto es lo caro: una
+ * prediccion de salto fallada vale mas que el relleno entero.
+ *
+ * El patron de ocho bytes se construye con una MULTIPLICACION en vez de siete
+ * desplazamientos: `val * 0x0101010101010101` deja el byte replicado en los
+ * ocho, y es una sola instruccion.
+ *
+ * No necesita instrucciones especiales, asi que vale en cualquier
+ * arquitectura y vive en el fichero comun.
+ *
+ * @param dst Destino.
+ * @param val Byte con el que rellenar.
+ * @param n Numero de bytes.  Pensada para <= 64; por encima delega.
+ */
+@NoIdiom
+public void memset_tiny(u8* dst, u8 val, usize n) {
+    usize total = n;
+    if (total == 0) {
+        return;
+    }
+    if (total > 64) {
+        memset_c(dst, val, n);
+        return;
+    }
+    // 0x0101010101010101: el byte replicado a los ocho de la palabra.
+    u64 pat = ((u64) val) * 72340172838076673;
+    if (total >= 32) {
+        u64* d = (u64*) dst;
+        d[0] = pat;
+        d[1] = pat;
+        d[2] = pat;
+        d[3] = pat;
+        u64* dz = (u64*) (dst + total - 32);
+        dz[0] = pat;
+        dz[1] = pat;
+        dz[2] = pat;
+        dz[3] = pat;
+        return;
+    }
+    if (total >= 16) {
+        u64* d = (u64*) dst;
+        d[0] = pat;
+        d[1] = pat;
+        u64* dz = (u64*) (dst + total - 16);
+        dz[0] = pat;
+        dz[1] = pat;
+        return;
+    }
+    if (total >= 8) {
+        u64* d = (u64*) dst;
+        d[0] = pat;
+        u64* dz = (u64*) (dst + total - 8);
+        dz[0] = pat;
+        return;
+    }
+    if (total >= 4) {
+        u32* d = (u32*) dst;
+        d[0] = (u32) pat;
+        u32* dz = (u32*) (dst + total - 4);
+        dz[0] = (u32) pat;
+        return;
+    }
+    if (total >= 2) {
+        u16* d = (u16*) dst;
+        d[0] = (u16) pat;
+        u16* dz = (u16*) (dst + total - 2);
+        dz[0] = (u16) pat;
+        return;
+    }
+    dst[0] = val;
+}
+
+/**
  * @brief Rellena @p n bytes con @p val, eligiendo estrategia por tamano.
  *
  * Mismo criterio que @ref memcpy: se reparte por tamano y por juego de
@@ -339,11 +457,10 @@ public void memset_c(u8* dst, u8 val, usize n) {
 @NoIdiom
 public void memset(u8* dst, u8 val, usize n) {
     usize total = n;
-    // Hasta 64 bytes no hay nada que repartir: el bucle por palabras cubre el
-    // tramo sin montar un registro ancho ni difundir el valor, que en una
-    // escritura corta cuesta mas que lo que ahorra.
+    // Hasta 64 bytes, sin bucle y sin registros anchos: montar uno y difundir
+    // el valor cuesta mas de lo que ahorra en un tramo tan corto.
     if (total <= 64) {
-        memset_c(dst, val, n);
+        memset_tiny(dst, val, n);
         return;
     }
     u64 rasgos = init_cpuid();
@@ -359,6 +476,22 @@ public void memset(u8* dst, u8 val, usize n) {
         memset_small_sse2(dst, val, n);
         return;
     }
+    // ENORME: por encima de UMBRAL_NT no interesa pasar por la cache.  Va
+    // ANTES que `rep stosb` porque en un relleno de este tamano la ventaja de
+    // no leer-para-escribir cada linea es mayor que la del microcodigo.
+    // Exige el destino alineado al ancho del acceso: `vmovntdq` no tolera otra
+    // cosa, y comprobarlo es un AND.
+    if (total >= UMBRAL_NT) {
+        uintptr a = (uintptr) dst;
+        if ((rasgos & BIT_AVX512F) != 0 && (a & 63) == 0) {
+            memset_streaming_avx512(dst, val, n);
+            return;
+        }
+        if ((rasgos & BIT_AVX2) != 0 && (a & 31) == 0) {
+            memset_streaming_avx2(dst, val, n);
+            return;
+        }
+    }
     // `rep stosb` en un procesador que anuncia ERMS escribe por lineas de
     // cache enteras: le gana a cualquier bucle escrito a mano en cuanto el
     // tramo es grande, y son tres instrucciones en vez de decenas.  Es
@@ -369,14 +502,31 @@ public void memset(u8* dst, u8 val, usize n) {
         memset_erms(dst, val, n);
         return;
     }
-    // Bucle vectorial.  Cada version pide su vuelta entera de margen, asi que
-    // se elige la mas ancha que quepa.
-    if ((rasgos & BIT_AVX512F) != 0 && total >= (usize) 512) {
-        memset_medium_avx512(dst, val, n);
-        return;
+    // Bucle vectorial.  Dos escalones: la vuelta DOBLE cuando hay bytes de
+    // sobra para amortizarla, y la sencilla por debajo.  Cada version pide su
+    // vuelta entera de margen, asi que se elige la mas ancha que quepa.
+    if ((rasgos & BIT_AVX512F) != 0) {
+        if (total >= (usize) 1024) {
+            memset_big_avx512(dst, val, n);
+            return;
+        }
+        if (total >= (usize) 512) {
+            memset_medium_avx512(dst, val, n);
+            return;
+        }
     }
-    if ((rasgos & BIT_AVX2) != 0 && total >= (usize) 256) {
-        memset_medium_avx2(dst, val, n);
+    if ((rasgos & BIT_AVX2) != 0) {
+        if (total >= (usize) 512) {
+            memset_big_avx2(dst, val, n);
+            return;
+        }
+        if (total >= (usize) 256) {
+            memset_medium_avx2(dst, val, n);
+            return;
+        }
+    }
+    if (total >= (usize) 256) {
+        memset_big_sse2(dst, val, n);
         return;
     }
     if (total >= (usize) 128) {
@@ -402,11 +552,17 @@ public void memset(u8* dst, u8 val, usize n) {
 /// @copydoc memset
 ///
 /// Arquitecturas que aun no aportan su relleno ancho: se quedan en lo
-/// portable, que es correcto en todas.  Al anadir un `std/memory/<arch>.vx`
-/// basta con darle su propia variante aqui.
+/// portable, que es correcto en todas.  El tramo corto SI se aprovecha --
+/// @ref memset_tiny no usa instrucciones especiales --, asi que no se pierde
+/// por no tener registros anchos.  Al anadir un `std/memory/<arch>.vx` basta
+/// con darle su propia variante aqui.
 @Target("(mode:aot || mode:jit) && !arch:x86_64")
 @NoIdiom
 public void memset(u8* dst, u8 val, usize n) {
+    if (n <= 64) {
+        memset_tiny(dst, val, n);
+        return;
+    }
     memset_c(dst, val, n);
 }
 

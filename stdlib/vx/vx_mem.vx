@@ -346,11 +346,19 @@ u64 __vmem_alloc(u64 size) {
     if (size == 0) size = 1;
     i32 cls = __vmem_class_of(size);
     if (cls < 0) {
-        // Large: arena directa.  Layout: [size en base+0][255 marker en base+8]
-        // [payload en base+16].  El marker va en base+8 = payload-8, la MISMA
+        // Large: arena directa.  Layout: [total en payload-16][255 marker en
+        // payload-8][payload en base+64].  El marker va en payload-8, la MISMA
         // posicion que el header de un bloque slab, para que __vmem_free_impl lo
         // detecte leyendo payload-8 (uniforme con el caso slab).
-        u64 total = size + 16;
+        //
+        // La cabecera ocupa 64 y no 16 para que el PAYLOAD quede alineado a
+        // linea de cache.  Con 16 el payload caia en base+16: multiplo de 16
+        // pero no de 32, y las escrituras no temporales (`vmovntdq`) EXIGEN
+        // 32 o 64 -- con lo que un relleno de 256 KB se quedaba sin el camino
+        // que evita ensuciar la cache, que es justo el suyo.  48 bytes de mas
+        // en un bloque que por definicion pasa de 4 KB no se notan; perder el
+        // camino rapido si.
+        u64 total = size + 64;
         // Reutilizar uno retenido del mismo tamano exacto antes de pedirle
         // otra arena al sistema.  Bajo el mismo cerrojo que el slab: las dos
         // estructuras las tocan los mismos hilos.
@@ -365,20 +373,22 @@ u64 __vmem_alloc(u64 size) {
                 // Reciclado -> sucio.  El del sistema llega a cero solo, este
                 // no: hay que zerificarlo para que `malloc` siga cumpliendo lo
                 // mismo en los dos caminos.
-                vx_memset(reut + 16, 0, size);
-                u64* hr = (u64*)reut;
-                hr[0] = total;
-                hr[1] = 255;
-                return reut + 16;
+                u64 pay = reut + 64;
+                vx_memset(pay, 0, size);
+                u64* hr = (u64*)(pay - 16);
+                hr[0] = total; // total en payload-16
+                hr[1] = 255;   // marker large en payload-8
+                return pay;
             }
             c = c + 1;
         }
         __vmem_slab_unlock();
         u64 base = vmem_reserve(total, MemProt.ReadWrite);
-        u64* h = (u64*)base;
-        h[0] = total; // size en base+0 (= payload-16)
-        h[1] = 255;   // marker large en base+8 (= payload-8)
-        return base + 16;
+        u64 pay = base + 64;
+        u64* h = (u64*)(pay - 16);
+        h[0] = total; // total en payload-16
+        h[1] = 255;   // marker large en payload-8
+        return pay;
     }
     u64 csz = __vmem_size_of(cls);
     // Seccion critica del SLAB (free-list + bump): protegida en modo multihilo.
@@ -416,9 +426,9 @@ void __vmem_free_impl(u64 payload) {
     u64 h = bp[0];
     if (h == 255) {
         // Large: marker en payload-8 (base+8); size en base+0 (payload-16).
-        u64 base = payload - 16;
-        u64* basep = (u64*)base;
-        u64 total = basep[0];
+        u64 base = payload - 64;
+        u64* hp = (u64*)(payload - 16);
+        u64 total = hp[0];
         // Retenerlo para el proximo `malloc` del mismo tamano, si cabe.
         __vmem_slab_lock();
         if (__vmem_large_bytes + total <= VMEM_LARGE_CACHE_BYTES) {

@@ -965,6 +965,163 @@ public void memset_medium_avx512(u8* dst, u8 val, usize n) {
     }
 }
 
+/**
+ * @brief Relleno grande con doble vuelta: 256 bytes, 16 registros (SSE2).
+ *
+ * Espejo de @ref memcpy_big_sse2.  La vuelta es del doble porque se gasta el
+ * banco entero: menos vueltas para los mismos bytes, y la cuenta y el salto
+ * del bucle se reparten entre el doble de trabajo.
+ *
+ * En el relleno el banco ancho no hace falta para GUARDAR datos -- todas las
+ * escrituras leen el mismo registro -- pero declararlos igual permite reusar
+ * el generador y deja al asignador la eleccion; el codigo emitido escribe
+ * siempre desde @c v0.
+ *
+ * PRECONDICION: @p n al menos 256.
+ *
+ * @param dst Destino.
+ * @param val Byte con el que rellenar.
+ * @param n Numero de bytes, 256 o mas.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memset_big_sse2(u8* dst, u8 val, usize n) {
+    u8* fin_d = dst + n - 256;
+    u64 pat = ((u64) val) * 72340172838076673;
+    asm (
+        reg d = dst,
+        reg fd = fin_d,
+        reg p = pat,
+        xmm v0,
+    ) {
+        movq v0, p
+        punpcklqdq v0, v0
+        inject(gen_relleno_grande("movdqu", "movdqu", 16, 16, ""))
+    }
+}
+
+/**
+ * @brief Relleno grande con AVX2 y doble vuelta: 512 bytes.
+ * @copydetails memset_big_sse2
+ *
+ * PRECONDICION: @p n al menos 512, y el procesador con AVX2.
+ *
+ * @param dst Destino.
+ * @param val Byte con el que rellenar.
+ * @param n Numero de bytes, 512 o mas.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memset_big_avx2(u8* dst, u8 val, usize n) {
+    u8* fin_d = dst + n - 512;
+    u64 pat = ((u64) val) * 72340172838076673;
+    asm (
+        reg d = dst,
+        reg fd = fin_d,
+        reg p = pat,
+        xmm sem,
+        ymm v0,
+    ) {
+        vmovq sem, p
+        vpbroadcastq v0, sem
+        inject(gen_relleno_grande("vmovdqu", "vmovdqu", 32, 16, "vzeroupper"))
+    }
+}
+
+/**
+ * @brief Relleno grande con AVX-512 y doble vuelta: 1024 bytes.
+ * @copydetails memset_big_sse2
+ *
+ * PRECONDICION: @p n al menos 1024, y el procesador con AVX-512F.
+ *
+ * @param dst Destino.
+ * @param val Byte con el que rellenar.
+ * @param n Numero de bytes, 1024 o mas.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memset_big_avx512(u8* dst, u8 val, usize n) {
+    u8* fin_d = dst + n - 1024;
+    u64 pat = ((u64) val) * 72340172838076673;
+    asm (
+        reg d = dst,
+        reg fd = fin_d,
+        reg p = pat,
+        zmm v0,
+    ) {
+        vpbroadcastq v0, p
+        inject(gen_relleno_grande("vmovdqu64", "vmovdqu64", 64, 16, "vzeroupper"))
+    }
+}
+
+/**
+ * @brief Relleno ENORME con escrituras NO TEMPORALES (AVX2).
+ *
+ * Espejo de @ref memcpy_streaming_avx2, y aqui la ventaja es aun mas clara
+ * que en la copia: un relleno grande no tiene lecturas que aprovechen la
+ * cache, asi que meter el destino entero en ella es trabajo tirado dos veces
+ * -- se expulsa lo que habia y ademas se paga la lectura-para-escribir de
+ * cada linea, que en un relleno no aporta nada porque la linea se sobrescribe
+ * completa.  `vmovntdq` escribe directo a memoria y se salta las dos cosas.
+ *
+ * No lleva `prefetch`: no hay origen que precargar.  Si lleva `sfence`, y no
+ * es opcional: las escrituras no temporales no respetan el orden que el resto
+ * del programa da por hecho, y sin la barrera quien lea el destino despues
+ * podria no ver lo escrito.
+ *
+ * PRECONDICION: @p dst multiplo de 32 -- `vmovntdq` lo EXIGE, un destino mal
+ * alineado da excepcion del procesador --, @p n al menos 512, y AVX2.
+ *
+ * @param dst Destino, multiplo de 32.
+ * @param val Byte con el que rellenar.
+ * @param n Numero de bytes, 512 o mas.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memset_streaming_avx2(u8* dst, u8 val, usize n) {
+    u8* fin_d = dst + n - 512;
+    u64 pat = ((u64) val) * 72340172838076673;
+    asm (
+        reg d = dst,
+        reg fd = fin_d,
+        reg p = pat,
+        xmm sem,
+        ymm v0,
+    ) {
+        vmovq sem, p
+        vpbroadcastq v0, sem
+        inject(gen_relleno_grande("vmovntdq", "vmovdqu", 32, 16,
+                                  "sfence\nvzeroupper"))
+    }
+}
+
+/**
+ * @brief Relleno ENORME con escrituras NO TEMPORALES (AVX-512F).
+ * @copydetails memset_streaming_avx2
+ *
+ * PRECONDICION: @p dst multiplo de 64, @p n al menos 1024, y AVX-512F.
+ *
+ * @param dst Destino, multiplo de 64.
+ * @param val Byte con el que rellenar.
+ * @param n Numero de bytes, 1024 o mas.
+ */
+@Target("arch:x86_64")
+@NoIdiom
+public void memset_streaming_avx512(u8* dst, u8 val, usize n) {
+    u8* fin_d = dst + n - 1024;
+    u64 pat = ((u64) val) * 72340172838076673;
+    asm (
+        reg d = dst,
+        reg fd = fin_d,
+        reg p = pat,
+        zmm v0,
+    ) {
+        vpbroadcastq v0, p
+        inject(gen_relleno_grande("vmovntdq", "vmovdqu64", 64, 16,
+                                  "sfence\nvzeroupper"))
+    }
+}
+
 @Target("arch:x86_64")
 @NoIdiom
 public void memset_erms(u8* dst, u8 val, usize n) {
