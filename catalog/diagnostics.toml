@@ -292,3 +292,7 @@ es = "exige:       {0}"
 [VX7023]
 en = "this processor has: {0}"
 es = "este procesador tiene: {0}"
+
+[VX7024]
+en = "a catch below takes it, so the program continues"
+es = "un catch de mas abajo se hace cargo, asi que el programa continua"

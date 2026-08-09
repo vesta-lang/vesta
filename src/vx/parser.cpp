@@ -30,6 +30,9 @@
 
 #include "vx/contract_when.h"
 
+#include <algorithm> // std::find sobre los vectores de nombres (lo arrastraba
+                     // otra cabecera en MinGW, pero no en la libreria estandar
+                     // de Linux: alli el fichero no compilaba)
 #include <iostream>
 #include <string>
 #include <unordered_set>

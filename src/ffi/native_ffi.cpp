@@ -113,6 +113,24 @@ void *FFI::load_native_module(const std::string &name) {
         std::string dir = vm_exe_dir();
         if (!dir.empty()) {
             bases.push_back(dir + "/" + name);
+            /* Y el PADRE del directorio del ejecutable.
+             *
+             * En el arbol de compilacion el binario y la stdlib estan juntos,
+             * asi que buscar al lado bastaba.  Instalado no: el ejecutable va
+             * en `bin/` y la stdlib cuelga de la raiz, que es como se instala
+             * cualquier programa -- y ahi `bin/stdlib/...` no existe.  Las
+             * propias reglas de instalacion ya lo daban por hecho ("el runtime
+             * en bin/ los resuelve relativo a su padre"), pero nadie lo habia
+             * implementado, asi que un VestaVM instalado no encontraba sus
+             * propias librerias nativas y cualquier programa que imprimiera
+             * moria al arrancar.
+             *
+             * No se busca el nombre `bin`: se sube un nivel y ya esta, que vale
+             * igual si manana el directorio se llama de otra forma. */
+            const size_t barra = dir.find_last_of("/\\");
+            if (barra != std::string::npos && barra > 0) {
+                bases.push_back(dir.substr(0, barra) + "/" + name);
+            }
         }
     }
 

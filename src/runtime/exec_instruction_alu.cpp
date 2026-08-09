@@ -547,15 +547,24 @@ struct OpIsDivision<Op, std::void_t<decltype(Op::is_division)>>
     : std::integral_constant<bool, Op::is_division> {};
 
 template <typename T, typename Op>
-inline T compute_with_flags(ProcessVM *vm, T a, T b, bool is_signed) {
+inline T compute_with_flags(ProcessVM *vm, T a, T b, bool is_signed,
+                            bool *abortado = nullptr) {
     using UT = std::make_unsigned_t<T>; // vista sin signo para verificaciones
                                         // de flags a nivel de bits
     T res;
     if constexpr (OpIsDivision<Op>::value) {
         if (b == 0) {
-            // division (o modulo) por cero: lanzar FatalError capturable.
-            // throw_fatal hace longjmp al frame mas cercano con tryenter; si
-            // no hay handler activo, deja vm en estado HALT con err_thread.
+            if (abortado) *abortado = true;
+            // Division (o modulo) por cero: lanzar FatalError capturable.
+            //
+            // OJO: `throw_fatal` RETORNA.  Aqui ponia que hacia un salto largo
+            // al marco del `try` mas cercano, y de ahi salia que quien llama
+            // pudiera seguir tranquilamente escribiendo el resultado -- que es
+            // justo lo que hacia, encima del registro donde `do_throw` acababa
+            // de dejar el objeto de la excepcion.  Cuando el destino de la
+            // division era ESE registro (r0), el `catch` recibia un cero y
+            // moria al leerle un campo.  Por eso se avisa de que se aborto: una
+            // division que fallo no produce ningun resultado que escribir.
             // Sin mensaje propio: el tipo de fallo ya lo cuenta el catalogo,
             // en el idioma de quien lee.  Repetirlo aqui en una cadena fija
             // seria decir lo mismo dos veces y solo en castellano.
@@ -568,6 +577,7 @@ inline T compute_with_flags(ProcessVM *vm, T a, T b, bool is_signed) {
             ST sb = (ST)b;
             if (sa == std::numeric_limits<ST>::min() && sb == -1) {
                 // IDIV INT_MIN / -1: desbordamiento; tratar como FATAL.
+                if (abortado) *abortado = true;
                 throw_fatal(vm, FATAL_DIVISION_BY_ZERO, nullptr);
                 return T(0);
             }
@@ -616,9 +626,13 @@ inline T compute_with_flags(ProcessVM *vm, T a, T b, bool is_signed) {
 template <typename T, typename Op>
 inline void alu_core(ProcessVM *vm, T a, T b, bool is_signed,
                      int dst_reg_index) {
+    bool abortado = false;
     T result = compute_with_flags<T, Op>(
-        vm, a, b, is_signed); // calcular y actualizar flags
+        vm, a, b, is_signed, &abortado); // calcular y actualizar flags
     if constexpr (!Op::is_compare) {
+        // La operacion fallo: no hay resultado, y escribir uno pisaria el
+        // registro que el manejador de la excepcion necesita.
+        if (abortado) return;
         // escribir el resultado de vuelta en el registro destino al ancho
         // correcto
         auto &dst = vm->registers.regs[dst_reg_index];
@@ -718,11 +732,13 @@ static void binary_mem_imm_wrapper(ProcessVM *vm, uint64_t addr, uint64_t imm,
                                    bool is_signed) {
     T val =
         vm->vm_mem.read_any<T>(addr); // cargar el valor actual de la memoria VM
-    T res = compute_with_flags<T, Op>(vm, val, (T)imm,
-                                      is_signed); // calcular y actualizar flags
+    bool abortado = false;
+    T res = compute_with_flags<T, Op>(vm, val, (T)imm, is_signed,
+                                      &abortado); // calcular y actualizar flags
     if constexpr (!Op::is_compare)
-        vm->vm_mem.write_any<T>(addr,
-                                res); // escribir de vuelta a menos que sea CMP
+        if (!abortado)
+            vm->vm_mem.write_any<T>(
+                addr, res); // escribir de vuelta a menos que sea CMP
 }
 
 /**
@@ -1072,10 +1088,13 @@ template <typename T, typename Op>
 static void sib_mem_dst_wrapper(ProcessVM *vm, uint64_t addr, uint64_t reg_val,
                                 bool is_signed, int) {
     T mem_val = vm->vm_mem.read_any<T>(addr); // load target from VM memory
-    T res = compute_with_flags<T, Op>(vm, mem_val, (T)reg_val,
-                                      is_signed); // compute and set flags
+    bool abortado = false;
+    T res = compute_with_flags<T, Op>(vm, mem_val, (T)reg_val, is_signed,
+                                      &abortado); // compute and set flags
     if constexpr (!Op::is_compare)
-        vm->vm_mem.write_any<T>(addr, res); // write back (CMP discards result)
+        if (!abortado)
+            vm->vm_mem.write_any<T>(addr,
+                                    res); // write back (CMP discards result)
 }
 
 /** @brief Signature for SIB dispatch functions. */

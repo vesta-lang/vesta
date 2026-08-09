@@ -16,19 +16,14 @@
 // procesador seria un test que pasa o falla segun donde corra, asi que lo que
 // se comprueba es que lo ocurrido CONCUERDE con lo que la maquina declara.
 //
-// El bloque `try` solo contiene la llamada, y la decision se toma fuera a
-// proposito: una rama DENTRO del cuerpo del try, con una llamada que falla,
-// termina hoy en un programa que muere en silencio (bug aparte, con caso
-// minimo reducido; nada que ver con lo que se comprueba aqui).
-//
-// NO esta enganchado a la suite, y esa es la segunda cosa que este fichero
-// documenta: capturar con `try` un fallo lanzado DENTRO del trampolin de asm
-// nativo funciona o mata el proceso en silencio segun donde caiga el binario en
-// memoria.  Se reproduce moviendo el .velb: con la ruta de 65 caracteres corre,
-// con 66 muere, el mismo fichero byte a byte.  Sin capturar -- que es lo que
-// arregla el cambio que trajo este ejemplo -- se cuenta bien en los dos casos,
-// y el equivalente con un puntero nulo (369) tampoco se inmuta.  O sea que lo
-// fragil es volver de un fallo levantado a esa profundidad, no contarlo.
+// Se llego aqui destapando tres averias, las tres cerradas: el planificador
+// colocaba instrucciones DELANTE del punto de aterrizaje del `catch` (que
+// recibe la excepcion en un registro fijo) y se la llevaba por delante; el
+// salto largo con el que se recoge un fallo del procesador no dejaba direccion
+// de retorno, asi que desenrollar desde dentro de un bloque de ensamblador iba
+// o mataba el proceso segun como hubiera quedado la pila -- se reproducia con
+// la longitud de la ruta del .velb --; y el codigo generado en caliente no
+// declaraba como desenrollarlo.
 
 import std.memory.x86_64;
 import std.types only usize;

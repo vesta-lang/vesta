@@ -481,6 +481,10 @@ void Scheduler::run_loop() {
                  * programa en silencio, con el `catch` sin ejecutar. */
                 instance->state.store(READY, std::memory_order_release);
                 instance->tsc = 1;
+                {
+                    std::lock_guard<std::mutex> lock(queue_mutex);
+                    ready_queue.push_back(instance);
+                }
                 continue;
             }
             /* Marcar el proceso como HALT.  No hay mas ejecucion interp. */
@@ -571,10 +575,31 @@ void Scheduler::run_loop() {
                     instance->fatal_pc_exact = true;
                     if (lanzar_fallo_del_sistema(instance)) {
                         /* Lo atrapo un `catch` del programa: el proceso sigue
-                         * vivo, parado en el handler.  Se sale del `setjmp` y
-                         * se sigue ejecutando desde ahi -- no hay nada que
-                         * cerrar. */
+                         * vivo, parado en el handler.
+                         *
+                         * Pero NO se sigue el lote desde aqui.  Se llego por un
+                         * salto largo, y despues de uno las variables locales
+                         * de esta funcion -- que se han ido modificando desde
+                         * que se armo el salto -- valen lo que valgan: seguir
+                         * hacia el bucle de despacho es entrar en el con
+                         * `instance`, el contador de vivos y la tabla en un
+                         * estado que nadie garantiza, y eso terminaba llevandose
+                         * la maquina entera justo despues de contar el fallo.
+                         * Se deja el proceso listo y se vuelve a entrar limpio
+                         * por el camino de siempre, que es el unico que arma sus
+                         * locales desde cero. */
                         instance->av_recovery_active = false;
+                        instance->state.store(READY, std::memory_order_release);
+                        instance->tsc = 1;
+                        {
+                            /* Y se vuelve a la COLA.  Dejarlo listo sin
+                             * encolarlo es dejarlo listo para nadie: el
+                             * planificador se dormia esperando trabajo que ya
+                             * existia pero que no estaba donde lo busca. */
+                            std::lock_guard<std::mutex> lock(queue_mutex);
+                            ready_queue.push_back(instance);
+                        }
+                        continue; /* se retoma en el handler, con marco nuevo */
                     } else {
                     /* Y se cierra el proceso AQUI, con el mismo cierre que usa
                      * la entrada al codigo compilado.

@@ -2912,12 +2912,7 @@ r0_case("wideint_256", "u256: acarreo y prestamo entre mitades de 128, desplazam
 r0_case("comptime_literal_import", "std.comptime.literal cross-module: parse de un entero en compile-time", "348_comptime_literal_import.vx", 42)
 r0_case("div_cero_detiene", "una division por cero detiene el proceso; capturada es un FatalError", "347_div_cero_detiene.vx", 42)
 caught_fault_case("fallo_sistema_capturado", "un fallo del procesador capturado con try/catch, y el programa sigue", "369_fallo_del_sistema_capturado.vx", 48)
-# 370_instruccion_no_soportada.vx NO esta enganchado todavia: destapa un bug
-# aparte -- recuperar un fallo lanzado DENTRO del trampolin de asm nativo y
-# capturarlo con `try` funciona o mata el proceso en silencio segun donde caiga
-# el binario (reproducible con la longitud de la ruta del .velb: 65 caracteres
-# va, 66 no).  Engancharlo asi seria meter un caso que pasa o falla segun el
-# directorio.  El ejemplo se queda porque documenta y reproduce el caso.
+caught_fault_case("instr_no_soportada", "una instruccion que este procesador no tiene se cuenta y se captura", "370_instruccion_no_soportada.vx", 46)
 modes3_case("optional_struct", "Optional<T> con T = struct por valor (payload dimensionado + copia)", "346_optional_struct.vx", 52)
 r0_case("cme299", "captura expr CROSS-MODULO (src(expr) en otro modulo, DSL crudo)", "299_cross_module_expr.vx", 42, line=3709)
 r0_case("scs300", "source(expr) de std.comptime (re-export + siembra transitiva)", "300_stdlib_comptime_source.vx", 42, line=3710)

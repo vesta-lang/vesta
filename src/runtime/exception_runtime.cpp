@@ -45,7 +45,10 @@
 #include <windows.h>
 #else
 #include <signal.h>
-#include <csignal> // std::signal / std::raise
+#include <csignal>   // std::signal / std::raise
+#include <ucontext.h> // estado de la maquina al fallar (el mismo que Windows
+                      // entrega en su CONTEXT): sin el, un fallo se cuenta con
+                      // menos detalle en Linux que en Windows
 #endif
 
 namespace runtime {
@@ -458,14 +461,38 @@ int last_fatal_exit_code() {
     }
 }
 
-static void report_uncaught_fatal(ProcessVM *vm, uint32_t kind) {
-    g_last_fatal_kind.store(kind, std::memory_order_relaxed);
+/**
+ * @brief Cuenta un fallo de ejecucion, lo capture alguien o no.
+ *
+ * Que el programa tenga un `try` alrededor no cambia que el motor acaba de
+ * encontrarse con algo que no puede hacer: una division entre cero, una
+ * direccion que no es suya, una instruccion que este procesador no tiene.  Eso
+ * lo informa quien ejecuta -- interprete o codigo compilado --, no es un
+ * mecanismo del lenguaje, y no puede depender de como este escrito el programa:
+ * si dependiera, la misma averia seria visible o invisible segun quien la
+ * rodease, que es la peor forma de informar.
+ *
+ * Se cuenta lo MISMO en los dos casos -- codigo del catalogo, mensaje, y la
+ * cadena de llamadas con sus tres niveles (fuente, intermedio y maquina) --, y
+ * lo unico que se anade cuando hay quien lo recoja es decirlo, para que se lea
+ * como lo que es y no como el final del programa.
+ *
+ * @param vm          Proceso que fallo.
+ * @param kind        Tipo de fallo (@c FatalKind).
+ * @param hay_handler true si un `catch` del programa va a hacerse cargo.
+ */
+static void informar_del_fallo(ProcessVM *vm, uint32_t kind, bool hay_handler) {
+    /* El codigo de salida solo lo fija el fallo que NADIE recoge: un programa
+     * que captura y sigue termina como decida terminar. */
+    if (!hay_handler) g_last_fatal_kind.store(kind, std::memory_order_relaxed);
     const char *code = fatal_kind_code(kind);
     const std::string texto = vx::diag::format(code, {});
     std::fprintf(stderr, "\n%s [%s]", texto.c_str(), code);
     if (vm->fatal_msg_buf && vm->fatal_msg_buf[0] != '\0')
         std::fprintf(stderr, ": %s", vm->fatal_msg_buf);
     std::fprintf(stderr, "\n");
+    if (hay_handler)
+        std::fprintf(stderr, "%s\n", vx::diag::format("VX7024", {}).c_str());
     if (vm->fatal_trace_buf && vm->fatal_trace_buf[0] != '\0')
         std::fprintf(stderr, "%s", vm->fatal_trace_buf);
     std::fflush(stderr);
@@ -1962,7 +1989,7 @@ void throw_fatal(ProcessVM *vm, uint32_t kind, const char *message) {
          * afirmando que todo fue bien.  Cualquier guion o integracion continua
          * que lo llamara se lo creia.  Un fallo que nadie captura es lo mas
          * parecido a un error de verdad que hay, y tiene que verse. */
-        report_uncaught_fatal(vm, kind);
+        informar_del_fallo(vm, kind, false);
         vm->err_thread = fatal_to_thread_err(kind);
         vm->scheduler.on_event(EVT_ERROR);
         return;
@@ -2013,6 +2040,13 @@ void throw_fatal(ProcessVM *vm, uint32_t kind, const char *message) {
     }
     *(uint64_t *)(base + FATAL_OFF_TRACE_PTR) =
         (uint64_t)(uintptr_t)vm->fatal_trace_buf;
+
+    /* Y se cuenta, aunque haya quien lo recoja.  El fallo ocurrio: que el
+     * programa tenga un `try` alrededor decide si SIGUE, no si se supo.  Antes
+     * el informe colgaba de no haber handler, asi que rodear de `try` una
+     * averia la volvia invisible -- y con ella la unica forma de saber donde
+     * estaba.  Morir sigue siendo cosa de nadie haberlo capturado. */
+    informar_del_fallo(vm, kind, true);
 
     // Lanzar via do_throw (mismo patron que `throw new X` en bytecode).
     do_throw(vm, (uint64_t)(uintptr_t)vm->fatal_slot);
@@ -2238,10 +2272,34 @@ static LONG WINAPI vx_av_veh(EXCEPTION_POINTERS *info) {
     } else if (primero) {
         proc->pending_av_addr = 0;
     }
-    // Redirigir RIP al stub que hara longjmp en contexto normal.
-    // No tocamos RSP: el stub es una funcion C++ valida; reusara
-    // el frame del callee, que ya tiene espacio suficiente.
+    /* Se salta al stub, que hara el salto largo ya en contexto normal.
+     *
+     * Y se entra COMO SI SE LE HUBIERA LLAMADO: se baja la pila y se deja
+     * arriba la direccion donde ocurrio el fallo, haciendo de direccion de
+     * retorno.  Antes se cambiaba solo el puntero de instruccion y se reusaba
+     * la pila tal cual, y eso deja al stub en un marco que no existe: en la
+     * cima no habia ninguna direccion de retorno, sino lo que hubiera ahi.
+     *
+     * En Windows importa porque el salto largo es un DESENROLLADO por tablas:
+     * el sistema camina la pila marco a marco, y el primero que lee es el del
+     * stub.  Con la cima ocupada por un dato cualquiera se iba a parar a
+     * cualquier sitio, asi que un fallo dentro de un bloque de ensamblador se
+     * recuperaba o se llevaba el proceso segun como hubiera quedado la pila --
+     * reproducible con la longitud de la ruta del ejecutable.  Con la direccion
+     * de retorno puesta, el desenrollado sale del stub a la funcion que fallo y
+     * de ahi a sus llamadores, que es lo que tiene que hacer.
+     *
+     * La pila se alinea a 16 antes de bajar los 8 de la direccion, que es
+     * exactamente como queda tras un `call`. */
 #if defined(_M_X64) || defined(__x86_64__)
+    {
+        DWORD64 rsp = info->ContextRecord->Rsp;
+        rsp &= ~(DWORD64)0xF;
+        rsp -= 8;
+        *reinterpret_cast<DWORD64 *>((uintptr_t)rsp) =
+            info->ContextRecord->Rip;
+        info->ContextRecord->Rsp = rsp;
+    }
     info->ContextRecord->Rip = (DWORD64)(uintptr_t)&av_recovery_stub;
 #elif defined(_M_IX86) || defined(__i386__)
     info->ContextRecord->Eip = (DWORD)(uintptr_t)&av_recovery_stub;
@@ -2277,12 +2335,59 @@ void uninstall_host_av_handler() noexcept {
 // ya que en POSIX longjmp desde un signal handler es bien definido
 // si se usa sigsetjmp con savesigs=1.
 static void posix_signal_handler(int sig, siginfo_t *info, void *ctx) {
-    (void)ctx;
     ProcessVM *proc = t_executing_proc;
     if (proc == nullptr || !proc->av_recovery_active) {
         std::signal(sig, SIG_DFL);
         std::raise(sig);
         return;
+    }
+    /* El estado de la maquina al fallar.
+     *
+     * Aqui se tiraba: el tercer argumento se ignoraba con un `(void)ctx`.  Y es
+     * el mismo dato que en Windows se recoge entero, asi que el mismo programa
+     * fallando contaba MENOS en Linux -- sin la instruccion culpable, sin el
+     * rasgo que exige, y en codigo compilado sin siquiera saber en que funcion
+     * estaba, porque el puntero de instruccion de la maquina virtual no se va
+     * actualizando ahi.  Un fallo no puede contarse mejor o peor segun el
+     * sistema donde ocurra. */
+#if defined(__x86_64__)
+    if (ctx != nullptr) {
+        const auto *uc = reinterpret_cast<const ucontext_t *>(ctx);
+        const auto *g = uc->uc_mcontext.gregs;
+        proc->pending_fault_native_pc = (uint64_t)g[REG_RIP];
+        proc->pending_fault_native_sp = (uint64_t)g[REG_RSP];
+        /* En el orden de la codificacion x86-64, el mismo que espera quien lo
+         * lee (`indice_de_reg_x86`).  `gregs` NO va en ese orden. */
+        const uint64_t banco[16] = {
+            (uint64_t)g[REG_RAX], (uint64_t)g[REG_RCX], (uint64_t)g[REG_RDX],
+            (uint64_t)g[REG_RBX], (uint64_t)g[REG_RSP], (uint64_t)g[REG_RBP],
+            (uint64_t)g[REG_RSI], (uint64_t)g[REG_RDI], (uint64_t)g[REG_R8],
+            (uint64_t)g[REG_R9],  (uint64_t)g[REG_R10], (uint64_t)g[REG_R11],
+            (uint64_t)g[REG_R12], (uint64_t)g[REG_R13], (uint64_t)g[REG_R14],
+            (uint64_t)g[REG_R15]};
+        for (int k = 0; k < 16; ++k)
+            proc->pending_fault_native_regs[k] = banco[k];
+        proc->pending_fault_native_regs_ok = true;
+    }
+#elif defined(__i386__)
+    if (ctx != nullptr) {
+        const auto *uc = reinterpret_cast<const ucontext_t *>(ctx);
+        proc->pending_fault_native_pc = (uint64_t)uc->uc_mcontext.gregs[REG_EIP];
+        proc->pending_fault_native_sp = (uint64_t)uc->uc_mcontext.gregs[REG_ESP];
+    }
+#else
+    (void)ctx;
+#endif
+    /* Solo el PRIMER fallo cuenta, como en Windows.
+     *
+     * Construir el informe toca memoria -- desensambla el codigo que revento,
+     * recorre la cadena de marcos --, y si eso vuelve a fallar el segundo
+     * fallo pisaba al primero: el programa terminaba diciendo "acceso a memoria
+     * invalido" cuando lo que habia pasado era una instruccion que el
+     * procesador no tiene.  Contar el segundo y callar el primero es contar el
+     * sintoma en vez de la causa. */
+    if (proc->pending_av_kind != 0xFFFFFFFFu) {
+        std::longjmp(proc->av_recovery_jmpbuf, 1);
     }
     // Bug fix 2026-05-23: capturar tambien SIGFPE (div/0).
     if (sig == SIGFPE) {

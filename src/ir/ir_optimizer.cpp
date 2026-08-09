@@ -11114,6 +11114,15 @@ static bool is_sched_barrier(IrOp op) {
     case IrOp::THROW:
     case IrOp::TRYENTER:
     case IrOp::TRYLEAVE:
+    /* El punto de aterrizaje del `catch` recibe la excepcion en un REGISTRO
+     * FIJO, puesto por quien la lanzo.  Eso no se ve en el IR -- no tiene
+     * operandos --, asi que nada impedia colocar instrucciones delante; y la
+     * primera que escribiera ese registro se llevaba la excepcion por delante.
+     * Bastaba con que el cuerpo del `try` tuviera una rama para que el
+     * planificador encontrara una carga que subir, y entonces el `catch` leia
+     * los campos de un puntero nulo.  Es una barrera: aqui empieza el handler y
+     * lo primero que pasa es recoger la excepcion. */
+    case IrOp::LANDINGPAD:
     case IrOp::SETFIELD:
     case IrOp::ARRAY_STORE:
     case IrOp::MEMCPY:

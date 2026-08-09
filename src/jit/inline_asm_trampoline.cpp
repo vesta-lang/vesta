@@ -28,7 +28,122 @@
 #include <mutex>
 #include <unordered_map>
 
+#if defined(_WIN32)
+#include <windows.h> // RtlAddFunctionTable: desenrollado del codigo generado
+#endif
+
 namespace jit {
+
+#if defined(_WIN32)
+namespace {
+
+/**
+ * @brief Describe el prologo del trampoline para que el sistema sepa
+ *        desenrollarlo.
+ *
+ * En Windows de 64 bits el desenrollado NO se hace siguiendo punteros de marco:
+ * se hace por TABLAS.  Para cada trozo de codigo, el sistema busca una entrada
+ * que diga cuanto ocupa su prologo y que guardo en la pila; si no la encuentra,
+ * da el trozo por hoja y supone que en la cima de la pila esta la direccion de
+ * retorno.
+ *
+ * El codigo que genera el compilador en caliente no esta en ninguna tabla,
+ * porque las tablas las trae el ejecutable.  Mientras nadie tenga que
+ * desenrollar por encima de el, da igual.  Pero un fallo del procesador DENTRO
+ * de un bloque de ensamblador se recoge con un salto largo, y un salto largo en
+ * Windows ES un desenrollado: el sistema se ponia a caminar la pila, llegaba al
+ * trampoline, no encontraba entrada, lo daba por hoja, leia como direccion de
+ * retorno lo que hubiera en la cima -- que en mitad del prologo no lo es -- y se
+ * llevaba el proceso por delante.  Como lo que hubiera en la cima depende de
+ * como quedo la pila, el mismo programa moria o no segun donde estuviera el
+ * binario: se reproducia cambiando la LONGITUD DE LA RUTA del ejecutable.
+ *
+ * Aqui se registra esa entrada.  El prologo son nueve `push` de tamano fijo, asi
+ * que se describe una vez y vale para todos los trampolines.
+ *
+ * La estructura vive en el propio cache de codigo (vida del proceso) porque el
+ * sistema guarda el PUNTERO, no una copia.
+ */
+struct DesenrolladoTrampoline {
+    RUNTIME_FUNCTION funcion;
+    /* UNWIND_INFO cabecera (4 bytes) + 9 codigos de 2 bytes.  Se escribe a mano
+     * porque la definicion de winnt.h lleva un array flexible. */
+    uint8_t info[4 + 9 * 2];
+};
+
+/// Codigos de operacion del desenrollado (winnt.h no los expone como enum).
+enum : uint8_t { UWOP_PUSH_NONVOL = 0, UWOP_ALLOC_SMALL = 2 };
+
+/**
+ * @brief Rellena la descripcion del prologo y la registra en el sistema.
+ *
+ * @param code   Principio del codigo del trampoline (ya copiado y comiteado).
+ * @param n      Tamano del codigo en bytes.
+ * @param cc     Cache donde alojar la descripcion (misma vida que el codigo).
+ * @return true si quedo registrada.
+ */
+bool registrar_desenrollado(uint8_t *code, size_t n, CodeCache &cc) {
+    /* El prologo que emite `build_asm_trampoline`, byte a byte.  Se COMPRUEBA
+     * en vez de darlo por hecho: si algun dia cambia, mentirle al desenrollador
+     * es peor que no decirle nada, asi que ante la duda no se registra. */
+    static const uint8_t kPrologo[] = {
+        0x53,       // push rbx
+        0x55,       // push rbp
+        0x56,       // push rsi
+        0x57,       // push rdi
+        0x41, 0x54, // push r12
+        0x41, 0x55, // push r13
+        0x41, 0x56, // push r14
+        0x41, 0x57, // push r15
+        0x51,       // push rcx  (el que trae ctx en Win64)
+    };
+    const size_t kPrologoLen = sizeof(kPrologo);
+    if (n < kPrologoLen || std::memcmp(code, kPrologo, kPrologoLen) != 0)
+        return false;
+
+    auto *d = reinterpret_cast<DesenrolladoTrampoline *>(
+        cc.alloc(sizeof(DesenrolladoTrampoline), 16));
+    if (d == nullptr) return false;
+    std::memset(d, 0, sizeof(*d));
+
+    /* Los codigos van en orden DESCENDENTE de posicion dentro del prologo: el
+     * desenrollador los aplica de atras hacia delante.  La posicion de cada uno
+     * es la del byte SIGUIENTE a su instruccion. */
+    struct Paso { uint8_t off, op, info; };
+    static const Paso kPasos[] = {
+        {13, UWOP_ALLOC_SMALL, 0},  // push rcx -> solo devuelve 8 bytes de pila
+        {12, UWOP_PUSH_NONVOL, 15}, // push r15
+        {10, UWOP_PUSH_NONVOL, 14}, // push r14
+        {8, UWOP_PUSH_NONVOL, 13},  // push r13
+        {6, UWOP_PUSH_NONVOL, 12},  // push r12
+        {4, UWOP_PUSH_NONVOL, 7},   // push rdi
+        {3, UWOP_PUSH_NONVOL, 6},   // push rsi
+        {2, UWOP_PUSH_NONVOL, 5},   // push rbp
+        {1, UWOP_PUSH_NONVOL, 3},   // push rbx
+    };
+    const uint8_t n_codigos = (uint8_t)(sizeof(kPasos) / sizeof(kPasos[0]));
+    d->info[0] = 1;                        // version 1, sin banderas
+    d->info[1] = (uint8_t)kPrologoLen;     // tamano del prologo
+    d->info[2] = n_codigos;                // numero de codigos
+    d->info[3] = 0;                        // sin registro de marco
+    for (uint8_t i = 0; i < n_codigos; ++i) {
+        d->info[4 + i * 2] = kPasos[i].off;
+        d->info[4 + i * 2 + 1] =
+            (uint8_t)(kPasos[i].op | (kPasos[i].info << 4));
+    }
+
+    /* Las direcciones de la tabla son RELATIVAS a una base que elegimos.  Se
+     * toma el propio codigo, asi que todos los desplazamientos son pequenos. */
+    const DWORD64 base = (DWORD64)(uintptr_t)code;
+    d->funcion.BeginAddress = 0;
+    d->funcion.EndAddress = (DWORD)n;
+    d->funcion.UnwindData =
+        (DWORD)((DWORD64)(uintptr_t)d->info - base);
+    return RtlAddFunctionTable(&d->funcion, 1, base) != FALSE;
+}
+
+} // namespace
+#endif // _WIN32
 
 // =====================================================================
 //   AS inc.6: registro global hash(NASM) -> trampoline + helper
@@ -334,6 +449,16 @@ AsmTrampolineFn build_asm_trampoline(const std::string &user_asm, CodeCache &cc,
     }
     std::memcpy(code, ar.bytes.data(), ar.bytes.size());
     cc.commit(code, ar.bytes.size());
+#if defined(_WIN32)
+    /* Y se dice como desenrollarlo.  Sin esto, un fallo del procesador dentro
+     * del ensamblador se puede recoger o llevarse el proceso segun como haya
+     * quedado la pila -- ver `registrar_desenrollado`. */
+    if (!registrar_desenrollado(code, ar.bytes.size(), cc) &&
+        std::getenv("VESTA_ASM_TRAMP_DEBUG")) {
+        std::fprintf(stderr, "[asm] trampoline sin info de desenrollado: un "
+                             "fallo dentro del asm no sera recuperable\n");
+    }
+#endif
     return reinterpret_cast<AsmTrampolineFn>(code);
 }
 
