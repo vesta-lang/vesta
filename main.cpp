@@ -237,6 +237,97 @@ extern "C" void runtime_ensure_vx_callback_registered(void);
 //  Clave: funcion libre -> su nombre; metodo -> `Struct::metodo` (Struct sin
 //  los type-params, para casar con la clave `plantilla::metodo` del analisis).
 // ---------------------------------------------------------------------------
+/**
+ * @brief Vuelve a compilar con la maquina de compilacion ya cargada.
+ *
+ * Hay codigo que se GENERA al compilar -- una macro, un `inject(...)` que
+ * devuelve el cuerpo de un bloque de asm -- y para generarlo hay que poder
+ * EJECUTAR funciones del propio programa.  En la primera pasada eso todavia no
+ * se puede: el bytecode que las contiene es justo lo que se esta produciendo.
+ * Asi que la primera pasada deja esos sitios sin resolver, se ensambla lo que
+ * hay, y con ese bytecode delante se vuelve a compilar.  La segunda es la
+ * buena: sus valores son los reales, y sus `static_assert` tambien.
+ *
+ * Se hace aqui, en un solo sitio, porque lo necesitan TRES: la compilacion
+ * normal, la nativa, y el informe.  Al informe le faltaba, y eso no era un
+ * detalle: describia los bloques de asm VACIOS -- una funcion que escribe
+ * sesenta y cuatro bytes por su parametro salia como si solo tocara el hueco de
+ * una variable --, o sea que hablaba de un programa que no es el que se compila.
+ * Y el informe es donde se mira si el compilador entendio bien.
+ *
+ * @param cr Resultado de la primera pasada; se SUSTITUYE por el de la segunda.
+ * @param vx_path Ruta del fuente.
+ * @param vx_source Su contenido (para saber si tiene imports).
+ * @param copts Opciones con las que compilar la segunda pasada.
+ * @param prefijo Prefijo de los ficheros temporales (sin extension).
+ * @return @c true si la segunda pasada se hizo.  @c false si no hacia falta o
+ *         si no se pudo ensamblar la intermedia -- ahi se conserva la primera,
+ *         que es lo unico que hay.
+ */
+static bool recompilar_con_maquina_de_compilacion(
+    vx::CompileResult &cr, const std::string &vx_path,
+    const std::string &vx_source, const vx::CompileOptions &copts,
+    const std::string &prefijo) {
+    if (!cr.has_lowerable_macros) return false;
+
+    /* La intermedia se baja para la VM, SIEMPRE.  Quien la ejecuta es el
+     * compilador, no el programa: con la bajada nativa hay cosas que la maquina
+     * de compilacion no sabe ejecutar, y las funciones comptime con asm daban
+     * cero.  Y con informacion de linea, que no lastra a nadie y hace que un
+     * fallo al compilar diga fichero y linea en vez de una direccion. */
+    vx::CompileOptions copts_vm = copts;
+    copts_vm.native_poo = false;
+    copts_vm.emit_debug = true;
+    /* La intermedia es la que se EJECUTA para generar el codigo, asi que se
+     * compila como se compila un programa: si se le pide el trato del informe
+     * -- sin inline, sin comprobaciones -- deja de parecerse al que de verdad
+     * corre, y las funciones de compilacion no llegan a poder ejecutarse. */
+    copts_vm.emit_ir_preopt = false;
+    vx::CompileResult cr_vm =
+        vx::vx_source_has_imports(vx_source)
+            ? vx::compile_vx_project(vx_path, copts_vm)
+            : vx::compile_vx_source(vx_source, vx_path, copts_vm);
+
+    const std::string vel_tmp = prefijo + ".vel.tmp";
+    {
+        std::ofstream tmp(vel_tmp, std::ios::binary);
+        if (!tmp) return false;
+        if (copts_vm.emit_debug) tmp << "// @file " << vx_path << "\n";
+        tmp << cr_vm.vel_text;
+    }
+    const int rc = asm_multi_process::run_worker(
+        vel_tmp, prefijo, /*skip_preprocessor=*/true, /*keep_labels=*/false,
+        /*ir_section_bytes=*/&cr_vm.ir_section_bytes, /*emit_map=*/false);
+    if (rc != EXIT_SUCCESS) {
+        std::remove(vel_tmp.c_str());
+        return false;
+    }
+
+    const std::string velb = prefijo + ".velb";
+#if defined(_WIN32)
+    _putenv_s("VESTA_MC_PREBUILT", velb.c_str());
+#else
+    setenv("VESTA_MC_PREBUILT", velb.c_str(), 1);
+#endif
+    vx::CompileResult cr2 =
+        vx::vx_source_has_imports(vx_source)
+            ? vx::compile_vx_project(vx_path, copts)
+            : vx::compile_vx_source(vx_source, vx_path, copts);
+#if defined(_WIN32)
+    _putenv_s("VESTA_MC_PREBUILT", "");
+#else
+    unsetenv("VESTA_MC_PREBUILT");
+#endif
+    /* La segunda manda, incluso si trae errores: puede ser un `static_assert`
+     * que ha resuelto a false con el valor REAL.  Quedarse con la primera --
+     * que se los salto por no poder evaluarlos -- seria dar por bueno un
+     * programa con valores que no son. */
+    cr = std::move(cr2);
+    std::remove(vel_tmp.c_str());
+    std::remove((velb + "-map").c_str());
+    return true;
+}
+
 static bool
 annotate_write_source(const std::string &path,
                       const std::vector<std::string> &orden,
@@ -2058,6 +2149,21 @@ int main(int argc, char *argv[]) {
         vx::CompileResult cr =
             como_proyecto ? vx::compile_vx_project(vx_path, copts)
                           : vx::compile_vx_source(vx_source, vx_path, copts);
+        /* Y si hay codigo que se GENERA al compilar, se vuelve a compilar con
+         * la maquina de compilacion cargada -- igual que hace el compilador.
+         * Sin esto el informe describia los bloques de asm VACIOS: una funcion
+         * que escribe sesenta y cuatro bytes por su parametro salia tocando
+         * solo el hueco de una variable.  Un informe que habla de otro programa
+         * no sirve para lo que existe: ver si el compilador entendio bien. */
+        {
+            std::error_code ec;
+            const std::string tmp_pref =
+                (std::filesystem::temp_directory_path(ec) /
+                 ("vx_analyze_" + std::filesystem::path(vx_path).stem().string()))
+                    .string();
+            recompilar_con_maquina_de_compilacion(cr, vx_path, vx_source, copts,
+                                                  tmp_pref);
+        }
         // Volcar diagnosticos (errores/warnings) del frontend.
         for (const auto &d : cr.diagnostics.all())
             vx::print_diagnostic(std::cerr, d);
