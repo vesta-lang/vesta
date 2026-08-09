@@ -43,6 +43,7 @@
 
 #include "ir/ssa_ir.h"
 #include "vx/asm/asm_analyze.h" // un `asm` puede llevar un bucle dentro
+#include "vx/asm/asm_cfg.h"     // ...y su grafo de flujo dice cuantos y anidados
 #include "vx/asm/asm_effects.h" // arquitectura del objetivo (tabla de efectos)
 
 #include <algorithm>
@@ -129,6 +130,52 @@ CostClass parse_cost_class(const std::string &expr) {
 }
 
 /// @brief Mapea una profundidad de loop a la clase polinomica que aporta.
+/**
+ * @brief Cuantos bucles anidados lleva DENTRO un bloque de asm.
+ *
+ * Un `asm { }` es UNA instruccion del IR por muy dentro que salte, asi que el
+ * conteo de bucles del IR no ve nada y una funcion cuyo cuerpo entero es un
+ * bucle de copia salia declarada como O(1).  Decir "no se" tampoco vale: la
+ * CLASE si se sabe -- un `rep` es una pasada lineal y el bucle de una copia por
+ * bloques tampoco esta anidado --; lo que no se sabe es CUANTAS VECES da la
+ * vuelta, que es otra pregunta.
+ *
+ * La forma sale del grafo de flujo del propio bloque: una arista que vuelve a
+ * un bloque anterior es un bucle, y su cuerpo es el tramo entre los dos.  Un
+ * bucle metido dentro del tramo de otro esta anidado, y eso es exactamente lo
+ * que multiplica el coste.
+ *
+ * @param cuerpo Texto del bloque asm.
+ * @param isa    ISA con la que clasificar los saltos.
+ * @param seguro Sale a false si el grafo es impreciso (salto indirecto o a una
+ *               etiqueta que no esta): entonces la profundidad es una cota
+ *               inferior, no un hecho.
+ * @return Anidamiento maximo (0 = sin bucles).
+ */
+static uint32_t asm_loop_depth(const std::string &cuerpo,
+                               vx::instr_db::Isa isa, bool &seguro) {
+    const vx::AsmCfg cfg = vx::build_asm_cfg(isa, cuerpo);
+    seguro = !cfg.has_indirect && !cfg.has_unresolved_target;
+    // Cada arista hacia atras es un bucle; su cuerpo es el tramo [cabecera, cola].
+    std::vector<std::pair<uint32_t, uint32_t>> tramos;
+    for (uint32_t b = 0; b < cfg.blocks.size(); ++b)
+        for (uint32_t s : cfg.blocks[b].succs)
+            if (s <= b) tramos.emplace_back(s, b);
+    uint32_t max_prof = 0;
+    for (const auto &t : tramos) {
+        uint32_t prof = 1; // el suyo
+        for (const auto &otro : tramos) {
+            if (&otro == &t) continue;
+            // Contenido ESTRICTAMENTE dentro de otro -> un nivel mas.
+            if (otro.first <= t.first && t.second <= otro.second &&
+                (otro.first < t.first || t.second < otro.second))
+                ++prof;
+        }
+        if (prof > max_prof) max_prof = prof;
+    }
+    return max_prof;
+}
+
 static CostClass class_from_depth(uint32_t depth) {
     switch (depth) {
     case 0:
@@ -352,46 +399,42 @@ CostResult analyze_function(const ir::IrFunction &fn) {
         }
     }
 
-    // 1.c. Bucles que NO estan en el IR: los que lleva dentro un bloque `asm`.
-    //
-    // Un `asm { }` es UNA instruccion del IR por muy dentro que salte, asi que
-    // el conteo de bucles no ve nada y el veredicto salia "O(1), sin loops ni
-    // recursion" para funciones cuyo cuerpo entero es un bucle de copia.  Decir
-    // O(1) de algo que recorre n bytes no es quedarse corto, es afirmar lo
-    // contrario de lo que pasa -- y este analisis se usa para decidir.
-    //
-    // El analizador de asm ya publica que el bloque salta; solo habia que
-    // preguntarselo.  Lo que NO se puede es decir cuanto: la cota sale de una
-    // comparacion entre registros que este analisis no sigue.  Asi que se dice
-    // lo que se sabe -- hay un bucle -- y se deja la cota como desconocida, que
-    // es lo que el autor puede cerrar declarando @complexity.
-    bool asm_con_bucle = false;
-    for (const auto &b : fn.blocks) {
-        for (const auto &ins : b.instrs) {
+    /* 1.c. Bucles que NO estan en el IR: los que lleva dentro un bloque `asm`.
+     *
+     * Se MODELAN, no se dan por desconocidos.  El grafo de flujo del bloque
+     * dice cuantos bucles hay y si estan anidados, que es lo que fija la clase;
+     * y esa profundidad se suma a la del sitio donde esta el `asm`, porque un
+     * bucle de copia dentro de un bucle del programa multiplica igual que dos
+     * bucles del IR.
+     *
+     * Lo que sigue sin saberse es CUANTAS VUELTAS da -- la cota sale de una
+     * comparacion entre registros que este analisis no sigue --, pero eso es la
+     * constante, no la clase. */
+    uint32_t asm_depth_total = 0;
+    bool asm_forma_segura = true;
+    for (ir::IrBlockId bi = 0; bi < fn.blocks.size(); ++bi) {
+        const uint32_t depth_ir = block_loop_depth(bi, ranges);
+        for (const auto &ins : fn.blocks[bi].instrs) {
             if (ins.op != ir::IrOp::INLINE_ASM && ins.op != ir::IrOp::ASM_MICRO)
                 continue;
-            // Sin clases de operando a proposito: aqui solo se pregunta SI
-            // salta, y eso no depende de cuantos bytes mide cada operando.
-            const vx::AsmBlockEffects ef = vx::asm_analyze_block_sin_clases(
-                ins.func_name, vx::asm_arch_actual());
-            if (ef.has_branch) {
-                asm_con_bucle = true;
-                break;
+            bool seguro = true;
+            uint32_t d = asm_loop_depth(ins.func_name, vx::isa_actual(), seguro);
+            /* Repetir tampoco es dar una vuelta en el texto: un `rep movsb`
+             * recorre tantos bytes como diga su contador sin un solo salto.  El
+             * grafo no lo ve, la extension del acceso si. */
+            if (d == 0) {
+                const vx::AsmBlockEffects ef = vx::asm_analyze_block_sin_clases(
+                    ins.func_name, vx::asm_arch_actual());
+                for (const vx::AsmBlockEffects::Acceso &a : ef.accesos)
+                    if (!a.extension.una_vez()) { d = 1; break; }
             }
-            /* Y repetir tampoco es dar una vuelta: un `rep movsb` recorre
-             * tantos bytes como diga su contador, sin un solo salto en el
-             * texto.  Mirar unicamente los saltos dejaba la variante que usa
-             * las cadenas del procesador declarada como O(1). */
-            for (const vx::AsmBlockEffects::Acceso &a : ef.accesos) {
-                if (!a.extension.una_vez()) {
-                    asm_con_bucle = true;
-                    break;
-                }
-            }
-            if (asm_con_bucle) break;
+            if (d == 0) continue;
+            if (!seguro) asm_forma_segura = false;
+            const uint32_t total = depth_ir + d;
+            if (total > asm_depth_total) asm_depth_total = total;
         }
-        if (asm_con_bucle) break;
     }
+    if (asm_depth_total > max_depth) max_depth = asm_depth_total;
 
     // 2. Recursion + divide-y-venceras.
     uint32_t self_calls = 0;
@@ -429,19 +472,17 @@ CostResult analyze_function(const ir::IrFunction &fn) {
     if (max_depth > 0 && r.is_recursive)
         r.confidence = Confidence::HEURISTIC;
 
-    /* Un bucle dentro de un `asm` manda sobre cualquier O(1): que el IR no lo
-     * vea no lo hace desaparecer.  No sube una cota ya mayor -- si el analisis
-     * demostro O(n^2) por los bucles del IR, esa sigue siendo la dominante. */
-    if (asm_con_bucle && r.big_o == CostClass::O_1) {
-        r.big_o = CostClass::O_UNKNOWN;
-        r.confidence = Confidence::HEURISTIC;
-    }
+    /* Si la forma del asm no se pudo determinar del todo (salto indirecto o a
+     * una etiqueta ausente), la clase es una cota INFERIOR: puede haber mas
+     * bucles que el grafo no ve. */
+    if (!asm_forma_segura) r.confidence = Confidence::HEURISTIC;
 
     // 4. Construir la explicacion legible.
     std::ostringstream det;
-    if (asm_con_bucle && max_depth == 0 && !r.is_recursive) {
-        det << "un bloque asm salta: hay un bucle cuya cota este analisis no "
-               "sigue -- declarala con @complexity si la sabes";
+    if (asm_depth_total > 0 && headers.empty() && !r.is_recursive) {
+        det << asm_depth_total
+            << " bucle(s) dentro de un asm (el numero de vueltas no se acota "
+               "aqui; declaralo con @complexity si lo sabes)";
     } else if (max_depth == 0 && !r.is_recursive) {
         det << "sin loops ni recursion";
     } else {

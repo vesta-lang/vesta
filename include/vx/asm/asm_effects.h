@@ -39,6 +39,8 @@
 #include <utility>
 #include <vector>
 
+#include "vx/asm/instr_db.h" // vx::instr_db::Isa (la ISA del objetivo)
+
 namespace vx {
 
 /**
@@ -85,6 +87,18 @@ std::string asm_canonical_reg(const std::string &raw, const std::string &arch);
  * @return @c "x86_64", @c "x86", @c "arm64"...
  */
 std::string asm_arch_actual();
+
+/**
+ * @brief La ISA del objetivo activo, para preguntarle a la base de
+ *        instrucciones.
+ *
+ * Sale del MISMO sitio que los registros -- el objetivo que se compila, no la
+ * maquina donde corre el compilador --, y estaba definida sin declarar, asi que
+ * cada consumidor nuevo se veia obligado a repetir la traduccion de nombre de
+ * arquitectura a ISA.  Dos copias de esa tabla son dos respuestas distintas en
+ * cuanto una se quede atras.
+ */
+instr_db::Isa isa_actual();
 
 /**
  * @brief Registro BASE de un operando de memoria, en forma canonica.
