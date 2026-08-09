@@ -89,7 +89,7 @@ const CatEntry kEntries[] = {
     {"VXA015", {"the access has no known width: the operand that gives it was chosen by the compiler and its class does not say how many bytes it is", "el acceso no tiene ancho conocido: el operando que lo da lo eligio el compilador y su clase no dice cuantos bytes mide"}},
     {"VXA016", {"the block branches, so what comes after cannot be attributed to a fixed distance from the base", "el bloque salta, asi que lo que viene despues no se puede atribuir a una distancia fija de la base"}},
     {"VXA017", {"the base '{0}' is not bound to a single value here", "la base '{0}' no esta ligada a un solo valor aqui"}},
-    {"VXA018", {"asm: this block could not be turned into IR, so it stays opaque: it is not optimized, and what it does is only as known as its instruction table says. First instruction that could not be lifted: '{0}'", "asm: este bloque no se pudo convertir en IR, asi que se queda opaco: no se optimiza, y de lo que hace solo se sabe lo que diga su tabla de instrucciones. Primera instruccion que no se pudo elevar: '{0}'"}},
+    {"VXA018", {"asm: this block stays opaque -- it is not optimized, and what it does is only as known as its instruction table says. It got stuck on '{0}': {1}", "asm: este bloque se queda opaco -- no se optimiza, y de lo que hace solo se sabe lo que diga su tabla de instrucciones. Se atasco en '{0}': {1}"}},
 };
 const int kEntryCount = 70;
 

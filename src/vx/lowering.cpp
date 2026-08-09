@@ -14492,6 +14492,11 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     // compila nativo aunque use rbx.  El mapa registro-canonico -> slot ALLOCA se
     // construye aqui porque necesita el `lookup` de scope; la deteccion/emision
     // vive en el modulo.
+    /* Por que se queda opaco, si se queda.  Lo rellena el ultimo elevado de la
+     * cadena, que es el que decide: sin ese dato el aviso de mas abajo no se
+     * puede atender, y un aviso que no se puede atender solo ensena a ignorar
+     * los avisos. */
+    vx::AsmMotivoOpaco motivo_opaco;
     if (s->level == ast::AsmLevel::Analyzable) {
         std::unordered_map<std::string, ir::IrValueId> slot_of;
         for (const auto &b : fn_->asm_reg_bindings)
@@ -14546,7 +14551,8 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         // de la DB, en vez de la caja opaca INLINE_ASM.  Solo si TODO el bloque
         // encaja (transaccional); si no, cae al INLINE_ASM de abajo.
         if (vx::asm_lift_micro(*fn_, current_block_, vx::instr_db::Isa::X86,
-                               ia.func_name, s->loc.line, slot_of)) {
+                               ia.func_name, s->loc.line, slot_of,
+                               &motivo_opaco)) {
             // El interp ejecuta la ASM_MICRO via vrt:asm_micro_exec (trampoline
             // nativo si hay ensamblador, o emulacion portable del efecto).
             // Registrar el import para que el linker lo resuelva.  Idempotente.
@@ -14696,18 +14702,23 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         }
         if (culpable.empty() && !cfg_op.unknown_terminators.empty())
             culpable = cfg_op.unknown_terminators.front();
-        /* Mientras no se sepa NOMBRAR la instruccion, el aviso va en el modo de
-         * analisis y no en toda compilacion.  No por incomodo: sin el nombre no
-         * se puede hacer nada con el, y treinta y cinco avisos que no se pueden
-         * atender en un programa que solo usa la libreria ensenan a ignorar los
-         * avisos -- que es exactamente lo contrario de lo que se busca.  En
-         * cuanto el elevado diga en que se atasco, esto pasa a ser un aviso de
-         * siempre. */
-        if (avisar_asm_opaco_) {
-            diags_.diag(s->body_loc, DiagLevel::WARN, "VXA018",
-                        {culpable.empty() ? std::string("(no consta cual)")
-                                          : culpable});
+        /* Lo que dijo el elevado manda sobre lo que se deduzca del grafo: el
+         * elevado sabe en que se atasco, el grafo solo ve el control. */
+        std::string detalle;
+        if (motivo_opaco.consta()) {
+            culpable = motivo_opaco.instruccion;
+            detalle = motivo_opaco.detalle;
         }
+        /* Y se avisa SIEMPRE.  Un bloque opaco es inseguro por definicion: deja
+         * de optimizarse y de el solo se sabe lo que diga su tabla de
+         * instrucciones, asi que todo lo que venga despues da por bueno un
+         * analisis que no llego.  Eso no sale como un error, sale como una
+         * respuesta tranquila y equivocada mas tarde y en otro sitio. */
+        diags_.diag(s->body_loc, DiagLevel::WARN, "VXA018",
+                    {culpable.empty() ? std::string("(no consta cual)")
+                                      : culpable,
+                     detalle.empty() ? std::string("no consta el motivo")
+                                     : detalle});
     }
 
     // El bloque NO lifto (cualquier lift habria hecho return arriba) -> se emite

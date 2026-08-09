@@ -93,8 +93,8 @@ en = "the base '{0}' is not bound to a single value here"
 es = "la base '{0}' no esta ligada a un solo valor aqui"
 
 [VXA018]
-en = "asm: this block could not be turned into IR, so it stays opaque: it is not optimized, and what it does is only as known as its instruction table says. First instruction that could not be lifted: '{0}'"
-es = "asm: este bloque no se pudo convertir en IR, asi que se queda opaco: no se optimiza, y de lo que hace solo se sabe lo que diga su tabla de instrucciones. Primera instruccion que no se pudo elevar: '{0}'"
+en = "asm: this block stays opaque -- it is not optimized, and what it does is only as known as its instruction table says. It got stuck on '{0}': {1}"
+es = "asm: este bloque se queda opaco -- no se optimiza, y de lo que hace solo se sabe lo que diga su tabla de instrucciones. Se atasco en '{0}': {1}"
 
 [VX2001]
 en = "'.' does not reach through a pointer: '{0}' is of type '{1}'. Dereference it first -- (*{0}).{2} -- or index it -- {0}[0].{2}"

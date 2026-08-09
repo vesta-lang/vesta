@@ -14,6 +14,7 @@
  *        @c IrOp::ASM_MICRO.  Ver vx/asm/asm_lift_micro.h.
  */
 
+#include "vx/asm/asm_lift_reason.h"
 #include "vx/asm/asm_lift_micro.h"
 
 #include "ir/ssa_ir.h"
@@ -154,18 +155,24 @@ void split_insn(const std::string &insn, std::string &mnem,
 bool build_operands(
     const std::string &insn, const instr_db::AsmInsnSem &sem,
     const std::unordered_map<std::string, ir::IrValueId> &slot_of,
-    std::vector<ir::AsmMicroOperand> &operands, std::string &tmpl) {
+    std::vector<ir::AsmMicroOperand> &operands, std::string &tmpl, AsmMotivoOpaco *motivo) {
     operands.clear();
     std::string mnem;
     std::vector<std::string> toks;
     split_insn(insn, mnem, toks);
-    if (toks.empty()) return false; // sin operandos textuales -> path sin-ops
+    if (toks.empty())
+        return AsmMotivoOpaco::anotar(motivo, insn,
+                                     "no se le reconocio ningun operando");
 
     tmpl = mnem;
     for (size_t k = 0; k < toks.size(); ++k) {
         uint16_t w = 0;
         const int phys = vx::asm_x86_gp_index(toks[k], &w);
-        if (phys < 0) return false; // no es GP (MEM/IMM/FP/VEC)
+        if (phys < 0)
+            return AsmMotivoOpaco::anotar(
+                motivo, insn,
+                "usa un operando que el elevado aun no pasa a IR (memoria, "
+                "inmediato, coma flotante o vectorial)");
         ir::AsmMicroOperand op;
         op.kind = ir::AsmOperandKind::REG;
         op.regclass = vx::ASM_RC_GP;
@@ -175,14 +182,22 @@ bool build_operands(
         // threading SSA + el asignador (constraint en el RA + marshalling en
         // los backends).  Hoy esos bloques caen al
         // INLINE_ASM, que ya resuelve los bindings en interp/JIT/AOT.
-        if (slot_of.find(lower(toks[k])) != slot_of.end()) return false;
+        if (slot_of.find(lower(toks[k])) != slot_of.end())
+            return AsmMotivoOpaco::anotar(
+                motivo, insn,
+                "toca un registro ligado a una variable, y eso todavia se "
+                "resuelve por el camino opaco");
         op.value = ir::IR_NO_VALUE; // fisico opaco (sin SSA)
         // Rol del operando = presencia de su reg canonico en reads/writes DB.
         const std::string cn = lower(toks[k]);
         uint8_t fl = 0;
         if (has_reg(sem.reads, cn)) fl |= ir::ASM_OP_READ;
         if (has_reg(sem.writes, cn)) fl |= ir::ASM_OP_WRITE;
-        if (fl == 0) return false; // operando sin rol conocido -> conservador
+        if (fl == 0)
+            return AsmMotivoOpaco::anotar(
+                motivo, insn,
+                "la base de instrucciones no dice si ese operando se lee o se "
+                "escribe");
         op.flags = fl;
         operands.push_back(op);
         tmpl += (k == 0 ? " $" : ", $") + std::to_string(k);
@@ -195,9 +210,12 @@ bool build_operands(
 bool asm_lift_micro(
     ir::IrFunction &fn, uint32_t block, instr_db::Isa isa,
     const std::string &body, uint32_t line,
-    const std::unordered_map<std::string, ir::IrValueId> &slot_of) {
+    const std::unordered_map<std::string, ir::IrValueId> &slot_of,
+    AsmMotivoOpaco *motivo) {
     const std::vector<std::string> insns = instructions(body);
-    if (insns.empty()) return false;
+    if (insns.empty())
+        return AsmMotivoOpaco::anotar(motivo, std::string(),
+                                     "el bloque no tiene instrucciones");
 
     // Microarq para la semantica: solo usamos los campos SEMaNTICOS (form_id,
     // barrera, mem, flags, reads/writes), no la latencia, asi que cualquier
@@ -243,13 +261,19 @@ bool asm_lift_micro(
                     hay_marcador = true;
                     break;
                 }
-            if (hay_marcador) return false; // -> INLINE_ASM con ligaduras
+            if (hay_marcador)
+                return AsmMotivoOpaco::anotar(
+                    motivo, insn,
+                    "lleva un operando que elige el compilador ($N), y eso "
+                    "todavia se resuelve por el camino opaco");
         }
         instr_db::AsmInsnSem sem =
             instr_db::asm_insn_sem(isa, insn, (uint32_t)ua);
         if (sem.form_id < 0) {        // desconocida por la DB
             anotar_hueco_db(insn, "la base de datos no conoce esta forma");
-            return false;
+            return AsmMotivoOpaco::anotar(
+                motivo, insn,
+                "la base de instrucciones no conoce esta forma");
         }
         // Si la instruccion LEE/ESCRIBE implicitamente un registro que esta
         // LIGADO a una variable Vesta (register(): p.ej. `syscall` con
@@ -275,7 +299,10 @@ bool asm_lift_micro(
                         binds_implicit = true;
                         break;
                     }
-            if (binds_implicit) return false; // -> INLINE_ASM con bindings
+            if (binds_implicit)
+                return AsmMotivoOpaco::anotar(
+                    motivo, insn,
+                    "usa de forma implicita un registro ligado a una variable");
         }
         std::vector<ir::AsmMicroOperand> operands;
         std::string tmpl;
@@ -297,8 +324,8 @@ bool asm_lift_micro(
                 anotar_hueco_db(insn, "la forma esta en la base de datos pero "
                                       "no dice que registros lee o escribe");
             }
-            if (!build_operands(insn, sem, slot_of, operands, tmpl))
-                return false;         // operandos no soportados
+            if (!build_operands(insn, sem, slot_of, operands, tmpl, motivo))
+                return false; // build_operands ya dejo dicho el motivo
         }
         sems.push_back(std::move(sem));
         ops_per.push_back(std::move(operands));

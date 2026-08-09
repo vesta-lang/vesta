@@ -29,6 +29,7 @@
 #ifndef VESTA_VX_ASM_ASM_LIFT_MICRO_H
 #define VESTA_VX_ASM_ASM_LIFT_MICRO_H
 
+#include "vx/asm/asm_lift_reason.h" // en que se atasco el elevado
 #include "vx/asm/instr_db.h"
 
 #include <cstdint>
@@ -67,7 +68,8 @@ namespace vx {
 bool asm_lift_micro(
     ir::IrFunction &fn, uint32_t block, instr_db::Isa isa,
     const std::string &body, uint32_t line,
-    const std::unordered_map<std::string, ir::IrValueId> &slot_of = {});
+    const std::unordered_map<std::string, ir::IrValueId> &slot_of = {},
+    AsmMotivoOpaco *motivo = nullptr);
 
 /**
  * @brief Instrucciones que la base de datos no supo resolver en lo que va de
