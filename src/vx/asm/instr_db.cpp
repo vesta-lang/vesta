@@ -211,6 +211,33 @@ bool split_asm_line(const std::string &line, std::string &mnem,
     size_t sp = s.find_first_of(" \t");
     mnem = sp == std::string::npos ? s : s.substr(0, sp);
     std::string rest = sp == std::string::npos ? "" : s.substr(sp + 1);
+    /* Un PREFIJO de repeticion no es una instruccion: es parte del nombre.
+     *
+     * En el texto se escriben separados (`rep movsb`), pero la base los modela
+     * juntos porque son otra instruccion -- `REP_MOVSB` recorre un contador y
+     * `MOVSB` copia un elemento --, que es una diferencia de verdad y no un
+     * adorno.  Cortando por el primer espacio, el mnemonico salia "rep", que no
+     * existe en ninguna tabla: `memcpy_erms` y `memset_erms`, que ES asi como
+     * estan escritas, quedaban con cero por ciento de cobertura y con "la base
+     * no la conoce" cuando la base si la conoce. */
+    {
+        std::string bajo = mnem;
+        for (char &c : bajo)
+            c = static_cast<char>(std::tolower((unsigned char)c));
+        const bool es_prefijo =
+            (bajo == "rep" || bajo == "repe" || bajo == "repz" ||
+             bajo == "repne" || bajo == "repnz");
+        if (es_prefijo && !rest.empty()) {
+            const size_t sp2 = rest.find_first_of(" \t");
+            const std::string siguiente =
+                (sp2 == std::string::npos) ? rest : rest.substr(0, sp2);
+            if (!siguiente.empty()) {
+                mnem += "_";
+                mnem += siguiente;
+                rest = (sp2 == std::string::npos) ? "" : rest.substr(sp2 + 1);
+            }
+        }
+    }
     toks.clear();
     std::string cur;
     int depth = 0;
