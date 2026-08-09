@@ -1,0 +1,53 @@
+// Elevar un `asm` a IR no puede cambiar lo que el programa hace.
+//
+// Pasar un bloque de ensamblador a IR es una transformacion como cualquier
+// otra, y una transformacion se comprueba comparando el antes con el despues.
+// Hasta que existio el interruptor `VESTA_ASM_NO_LIFT`, la unica forma de
+// hacerlo era reescribir el programa a mano poniendo `volatile` -- que ademas
+// cambia OTRA cosa, la optimizacion, asi que ni siquiera era la misma
+// comparacion.
+//
+// Eso ya costo caro: un elevado de operandos de memoria producia un IR de
+// aspecto impecable (`ops=[$0:W#0, $1:R#2] "movdqu $0, [$1 + 16]"`, con su bit
+// de memoria y todo) y hacia que la funcion devolviera 0 en vez de 5.  Se vio de
+// casualidad, escribiendo el caso a mano.  Que el IR tenga buena pinta no es
+// que este bien.
+//
+// El caso NO fija un valor esperado: lo que se comprueba es que las dos
+// versiones -- elevada y opaca -- coincidan.  Esa es la propiedad que importa y
+// la unica que no envejece cuando el elevado aprenda casos nuevos: hoy sube dos
+// de estos bloques y manana quiza los cinco, y el caso sigue valiendo igual.
+
+i64 g_semilla = 5;
+
+// Registros del banco ancho, sin memoria: el elevado ya los pasa a IR.
+i64 solo_vectorial(i64 x) {
+    register("rax") i64 a = x;
+    asm { movdqa xmm1, xmm0 }
+    return a + 1;
+}
+
+// Aritmetica de registros generales.
+i64 solo_generales(i64 x) {
+    register("rax") i64 a = x;
+    register("rcx") i64 b = 3;
+    asm { add rax, rcx }
+    return a;
+}
+
+// Un bloque que NO se eleva (toca memoria por un registro): tiene que dar lo
+// mismo por los dos caminos igualmente, que es justo lo que hay que vigilar
+// cuando el elevado aprenda a hacerlo.
+i64 con_memoria() {
+    asm { mov rdx, rsp
+          movdqu xmm0, [rdx + 16] }
+    return g_semilla;
+}
+
+i32 main() {
+    i64 t = 0;
+    t = t + solo_vectorial(10);   // 11
+    t = t + solo_generales(20);   // 23
+    t = t + con_memoria();        // 5
+    return (i32) t;               // 39
+}

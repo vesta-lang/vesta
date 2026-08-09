@@ -14497,7 +14497,22 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
      * puede atender, y un aviso que no se puede atender solo ensena a ignorar
      * los avisos. */
     vx::AsmMotivoOpaco motivo_opaco;
-    if (s->level == ast::AsmLevel::Analyzable) {
+    /* Interruptor para PODER COMPARAR: con `VESTA_ASM_NO_LIFT=1` no se eleva
+     * ningun bloque y todos se emiten opacos.
+     *
+     * Elevar un `asm` es una transformacion como cualquier otra, y una
+     * transformacion se comprueba comparando el antes con el despues.  Sin poder
+     * apagarla, la unica manera de saber si cambio el comportamiento era
+     * reescribir el programa a mano con `volatile` -- que ademas cambia OTRA
+     * cosa (la optimizacion), asi que ni siquiera era la misma comparacion.
+     * Esto ya se pago: un elevado que producia un IR de aspecto impecable hacia
+     * que el programa devolviera otro numero, y solo se vio escribiendo el caso
+     * a mano.  Que el IR tenga buena pinta no es que este bien. */
+    static const bool sin_elevado = [] {
+        const char *v = std::getenv("VESTA_ASM_NO_LIFT");
+        return v != nullptr && v[0] != ' ' && v[0] != '0';
+    }();
+    if (!sin_elevado && s->level == ast::AsmLevel::Analyzable) {
         std::unordered_map<std::string, ir::IrValueId> slot_of;
         for (const auto &b : fn_->asm_reg_bindings)
             if (lookup(b.name) == b.alloca_value) {

@@ -729,6 +729,51 @@ def caught_fault_case(tag, label, src, expected, line=None):
     _register(tag, fn, False, line)
 
 
+def asm_lift_case(tag, label, src, line=None):
+    """El MISMO fuente, elevado y sin elevar, tiene que hacer lo mismo.
+
+    Pasar un bloque `asm` a IR es una transformacion, y una transformacion se
+    comprueba comparando el antes con el despues.  Hasta ahora la unica forma de
+    hacerlo era reescribir el programa a mano poniendo `volatile` -- que ademas
+    cambia OTRA cosa, la optimizacion, asi que ni siquiera era la misma
+    comparacion --, y por eso un elevado que producia un IR de aspecto impecable
+    y hacia que el programa devolviera otro numero solo se vio de casualidad.
+
+    Aqui se compila dos veces el mismo fichero, una con `VESTA_ASM_NO_LIFT=1`, y
+    se comparan los tres modos.  No se fija un valor esperado a proposito: lo que
+    se comprueba es que elevar NO CAMBIE NADA, que es la propiedad que importa y
+    la unica que no envejece cuando el elevado aprenda mas casos.
+    """
+    def fn(ctx):
+        ctx.compile_vx(ctx.src(src), tag + "_lift")
+        ctx.compile_vx(ctx.src(src), tag + "_op",
+                       env={"VESTA_ASM_NO_LIFT": "1"})
+        ctx.ok("compilacion %s (elevado y opaco)" % src)
+        for modo in ("vm", "jit"):
+            _, l1 = ctx.run_velb(tag + "_lift", schedulers=1, mode=modo)
+            _, l2 = ctx.run_velb(tag + "_op", schedulers=1, mode=modo)
+            a, b = get_r00(l1), get_r00(l2)
+            if a != b:
+                ctx.fail("%s (-m %s): elevado da %s y opaco da %s -- elevar "
+                         "cambio el resultado" % (label, modo, a, b), l1)
+            if a is None:
+                ctx.fail("%s (-m %s): ninguna de las dos versiones devolvio "
+                         "nada" % (label, modo), l1)
+            ctx.ok("%s (-m %s) -> elevado == opaco (%s)" % (label, modo, a))
+        # El nativo compara el codigo de salida del ejecutable.
+        e1 = aot_build(ctx, ctx.src(src), tag + "_lift_aot", label + " (-m aot)")
+        rc1, _ = ctx.run([e1])
+        e2 = aot_build(ctx, ctx.src(src), tag + "_op_aot", label + " (-m aot op)",
+                       env={"VESTA_ASM_NO_LIFT": "1"})
+        rc2, _ = ctx.run([e2])
+        if exit_code(rc1) != exit_code(rc2):
+            ctx.fail("%s (-m aot): elevado sale %d y opaco %d"
+                     % (label, exit_code(rc1), exit_code(rc2)))
+        ctx.ok("%s (-m aot) -> elevado == opaco (%d)" % (label, exit_code(rc1)))
+    fn.__name__ = "case_" + tag
+    _register(tag, fn, False, line)
+
+
 def diff3_case(tag, label, src, line=None, aot=True):
     """Red de seguridad diferencial: interp=oraculo, jit y aot deben COINCIDIR.
     Sin valor esperado; cualquier divergencia entre backends rompe el build."""
@@ -2913,6 +2958,7 @@ r0_case("comptime_literal_import", "std.comptime.literal cross-module: parse de 
 r0_case("div_cero_detiene", "una division por cero detiene el proceso; capturada es un FatalError", "347_div_cero_detiene.vx", 42)
 caught_fault_case("fallo_sistema_capturado", "un fallo del procesador capturado con try/catch, y el programa sigue", "369_fallo_del_sistema_capturado.vx", 48)
 caught_fault_case("instr_no_soportada", "una instruccion que este procesador no tiene se cuenta y se captura", "370_instruccion_no_soportada.vx", 46)
+asm_lift_case("asm_elevado_equivale", "elevar un asm a IR no cambia lo que el programa hace", "371_asm_elevado_equivale.vx")
 # Las 32 variantes de std.memory, cada una por su nombre y comprobada byte a
 # byte, ejecutando solo las que este procesador soporta.  Interp+JIT: el nativo
 # queda fuera porque el numero depende de los rasgos de la maquina y el arnes
