@@ -979,82 +979,6 @@ build_ns_to_all_modnames_(const std::vector<ProjectModuleWork> &work) {
 ///   - el valor explicito de @c id / @c "id" si esta presente, o
 ///   - @c fnv1a_hex(name @ version) derivado, o
 ///   - vacio (paquete anonimo) si no hay manifest ni nombre.
-std::string derive_package_id_(const std::string &root_path) {
-    namespace fs = std::filesystem;
-    // Normalizar + obtener el directorio del root.
-    std::string norm = root_path;
-    for (char &c : norm)
-        if (c == '\\') c = '/';
-    std::error_code ec;
-    fs::path dir = fs::path(norm).parent_path();
-    std::string manifest;
-    for (int depth = 0; depth < 32 && !dir.empty(); ++depth) {
-        for (const char *fname : {"vx.toml", "vx.json"}) {
-            fs::path cand = dir / fname;
-            if (fs::exists(cand, ec) && fs::is_regular_file(cand, ec)) {
-                std::ifstream f(cand.string(), std::ios::binary);
-                if (f) {
-                    std::stringstream ss;
-                    ss << f.rdbuf();
-                    manifest = ss.str();
-                }
-                break;
-            }
-        }
-        if (!manifest.empty()) break;
-        fs::path parent = dir.parent_path();
-        if (parent == dir) break; // llegamos a la raiz del FS
-        dir = parent;
-    }
-    if (manifest.empty()) return {}; // sin manifest -> anonimo
-
-    // Scan minimo del [package]: name / version / id.  Acepta TOML
-    // (`key = "val"`) y JSON (`"key": "val"`) de forma tolerante: extraemos
-    // el primer string tras el nombre de la clave.
-    auto extract = [&](const std::string &key) -> std::string {
-        // Buscar la clave como token de palabra.
-        size_t pos = 0;
-        while ((pos = manifest.find(key, pos)) != std::string::npos) {
-            // Verificar que es un limite de palabra por la izquierda.
-            bool lok = (pos == 0) || (!std::isalnum((unsigned char)manifest[pos - 1]) &&
-                                      manifest[pos - 1] != '_');
-            size_t after = pos + key.size();
-            bool rok = after >= manifest.size() ||
-                       (!std::isalnum((unsigned char)manifest[after]) &&
-                        manifest[after] != '_');
-            if (lok && rok) {
-                // Buscar el primer '"' tras la clave en la misma logica linea.
-                size_t q1 = manifest.find('"', after);
-                size_t nl = manifest.find('\n', after);
-                if (q1 != std::string::npos &&
-                    (nl == std::string::npos || q1 < nl)) {
-                    size_t q2 = manifest.find('"', q1 + 1);
-                    if (q2 != std::string::npos) {
-                        return manifest.substr(q1 + 1, q2 - q1 - 1);
-                    }
-                }
-            }
-            pos = after;
-        }
-        return {};
-    };
-    const std::string explicit_id = extract("id");
-    if (!explicit_id.empty()) return explicit_id;
-    const std::string name = extract("name");
-    if (name.empty()) return {};
-    const std::string version = extract("version");
-    const std::string ident = name + "@" + version;
-    // FNV-1a 64 sobre name@version -> hex.  Mismo esquema que abi_hash.
-    uint64_t h = 0xCBF29CE484222325ull;
-    for (unsigned char c : ident) {
-        h ^= c;
-        h *= 0x100000001B3ull;
-    }
-    char buf[19];
-    std::snprintf(buf, sizeof(buf), "pkg:%012llx",
-                  (unsigned long long)(h & 0xFFFFFFFFFFFFull));
-    return std::string(buf);
-}
 
 } // namespace
 
@@ -1324,7 +1248,7 @@ CompileResult compile_vx_project(
 
     //  NS.3: PackageId del proyecto (derivado de vx.toml o anonimo).
     // Compartido por todos los modulos del proyecto salvo override @id.
-    const std::string project_package_id = derive_package_id_(root_path);
+    const std::string project_package_id = derive_package_id(root_path);
     //  NS.3: override @id por-modulo, capturado AQUI (antes de que el
     // flatten elimine el NamespaceDecl del AST durante compile_one_module).
     std::vector<std::string> module_pkgid_override(work.size());

@@ -301,6 +301,19 @@ class ModuleGraph {
  */
 std::string detect_stdlib_vx_dir();
 
+/**
+ * @brief De que PAQUETE es un fichero: el manifiesto que lo cobija.
+ *
+ * Sube por los directorios desde @p root_path buscando `vx.toml` / `vx.json` y
+ * devuelve su identidad (el `id` explicito, o `name@version` resumido).  Sin
+ * manifiesto, cadena vacia: anonimo.
+ *
+ * @param root_path Ruta de un fichero (la busqueda empieza en su directorio).
+ * @return Identidad del paquete, o vacia.
+ */
+std::string derive_package_id(const std::string &root_path);
+
+
 } // namespace vx
 
 #endif // VX_MODULE_RESOLVER_H

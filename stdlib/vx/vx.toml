@@ -1,0 +1,16 @@
+# La biblioteca estandar de Vesta, declarada como lo que es: un PAQUETE.
+#
+# Sin esto era anonima, y dos copias suyas -- la del repositorio y la instalada
+# -- resultaban indistinguibles: el mismo namespace declarado en las dos parecia
+# un namespace REPARTIDO y se cargaban ambas, con sus tipos peleandose por la
+# misma identidad ("tipo no resuelto en alias 'std__types__offset'").  Decir que
+# es un paquete es lo que permite reconocer que son la misma libreria encontrada
+# dos veces, y no dos librerias distintas.
+#
+# Da ademas significado a `internal`: interno AL PAQUETE.  Hoy la stdlib no usa
+# ninguno, asi que declararlo no cambia que se ve desde fuera.
+
+[package]
+name = "std"
+version = "0.1.0"
+description = "Biblioteca estandar de Vesta"

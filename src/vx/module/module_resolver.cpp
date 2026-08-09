@@ -56,6 +56,98 @@ static inline bool vx_file_access_ok(const char *p) {
 
 namespace vx {
 
+/**
+ * @brief De que PAQUETE es un fichero: el manifiesto que lo cobija.
+ *
+ * Sube por los directorios desde @p root_path buscando `vx.toml` / `vx.json` y
+ * saca su identidad (`id` explicito, o `name@version` resumido).  Sin
+ * manifiesto, anonimo.
+ *
+ * Vive aqui y no en el compilador de proyecto porque la identidad de un paquete
+ * es parte de RESOLVER que modulo es cual: dos arboles que declaran el mismo
+ * namespace son la misma libreria encontrada dos veces si dicen ser el mismo
+ * paquete, y dos librerias distintas si no.  Quien resuelve necesita saberlo.
+ *
+ * @param root_path Ruta de un fichero (se empieza por su directorio).
+ * @return Identidad del paquete, o cadena vacia si no hay manifiesto.
+ */
+std::string derive_package_id(const std::string &root_path) {
+    namespace fs = std::filesystem;
+    // Normalizar + obtener el directorio del root.
+    std::string norm = root_path;
+    for (char &c : norm)
+        if (c == '\\') c = '/';
+    std::error_code ec;
+    fs::path dir = fs::path(norm).parent_path();
+    std::string manifest;
+    for (int depth = 0; depth < 32 && !dir.empty(); ++depth) {
+        for (const char *fname : {"vx.toml", "vx.json"}) {
+            fs::path cand = dir / fname;
+            if (fs::exists(cand, ec) && fs::is_regular_file(cand, ec)) {
+                std::ifstream f(cand.string(), std::ios::binary);
+                if (f) {
+                    std::stringstream ss;
+                    ss << f.rdbuf();
+                    manifest = ss.str();
+                }
+                break;
+            }
+        }
+        if (!manifest.empty()) break;
+        fs::path parent = dir.parent_path();
+        if (parent == dir) break; // llegamos a la raiz del FS
+        dir = parent;
+    }
+    if (manifest.empty()) return {}; // sin manifest -> anonimo
+
+    // Scan minimo del [package]: name / version / id.  Acepta TOML
+    // (`key = "val"`) y JSON (`"key": "val"`) de forma tolerante: extraemos
+    // el primer string tras el nombre de la clave.
+    auto extract = [&](const std::string &key) -> std::string {
+        // Buscar la clave como token de palabra.
+        size_t pos = 0;
+        while ((pos = manifest.find(key, pos)) != std::string::npos) {
+            // Verificar que es un limite de palabra por la izquierda.
+            bool lok = (pos == 0) || (!std::isalnum((unsigned char)manifest[pos - 1]) &&
+                                      manifest[pos - 1] != '_');
+            size_t after = pos + key.size();
+            bool rok = after >= manifest.size() ||
+                       (!std::isalnum((unsigned char)manifest[after]) &&
+                        manifest[after] != '_');
+            if (lok && rok) {
+                // Buscar el primer '"' tras la clave en la misma logica linea.
+                size_t q1 = manifest.find('"', after);
+                size_t nl = manifest.find('\n', after);
+                if (q1 != std::string::npos &&
+                    (nl == std::string::npos || q1 < nl)) {
+                    size_t q2 = manifest.find('"', q1 + 1);
+                    if (q2 != std::string::npos) {
+                        return manifest.substr(q1 + 1, q2 - q1 - 1);
+                    }
+                }
+            }
+            pos = after;
+        }
+        return {};
+    };
+    const std::string explicit_id = extract("id");
+    if (!explicit_id.empty()) return explicit_id;
+    const std::string name = extract("name");
+    if (name.empty()) return {};
+    const std::string version = extract("version");
+    const std::string ident = name + "@" + version;
+    // FNV-1a 64 sobre name@version -> hex.  Mismo esquema que abi_hash.
+    uint64_t h = 0xCBF29CE484222325ull;
+    for (unsigned char c : ident) {
+        h ^= c;
+        h *= 0x100000001B3ull;
+    }
+    char buf[19];
+    std::snprintf(buf, sizeof(buf), "pkg:%012llx",
+                  (unsigned long long)(h & 0xFFFFFFFFFFFFull));
+    return std::string(buf);
+}
+
 // Autodetecta el directorio de la stdlib Vesta.  Misma logica que usaba
 // compiler_project.cpp inline; factorizada aqui para que el LSP (indices de
 // modulos importados) la reuse sin duplicar la sonda.
@@ -906,6 +998,30 @@ void ModuleGraph::build_namespace_index_() {
     for (const auto &sp : search_paths_) add_root(sp);
     add_root(stdlib_dir_);
 
+    /* De que raiz salio cada namespace, y de que paquete es esa raiz.
+     *
+     * Un namespace REPARTIDO es normal dentro de un arbol: `types.vx` y su
+     * variante por arquitectura declaran el mismo y hay que fusionarlos.  Lo
+     * que no es normal es fusionarlo entre DOS arboles, y pasa en cuanto se
+     * compila algo estando dentro de una copia de la libreria mientras existe
+     * otra instalada: se cargan las dos y sus tipos se pelean por la misma
+     * identidad ("tipo no resuelto en alias 'std__types__offset'").
+     *
+     * Se descarta la segunda SOLO si dice ser el MISMO paquete, que es lo que
+     * la convierte en "la misma libreria encontrada dos veces" en vez de en dos
+     * librerias distintas.  Sin esa comprobacion, quedarse con la primera raiz
+     * romperia a quien reparte un namespace suyo entre varios sitios. */
+    std::unordered_map<std::string, std::string> raiz_del_ns;
+    std::unordered_map<std::string, std::string> paquete_de_raiz;
+    auto paquete_de = [&](const std::string &raiz) -> const std::string & {
+        auto it = paquete_de_raiz.find(raiz);
+        if (it != paquete_de_raiz.end()) return it->second;
+        // Se pregunta por un fichero DENTRO de la raiz: el manifiesto se busca
+        // hacia arriba desde su directorio.
+        return paquete_de_raiz.emplace(raiz, derive_package_id(raiz + "/x"))
+            .first->second;
+    };
+
     for (const auto &root : roots) {
         ::fs::recorrer_arbol(root, [&](const std::string &ruta, bool es_dir) {
             ++n_entradas;
@@ -952,6 +1068,19 @@ void ModuleGraph::build_namespace_index_() {
             }
             const std::string ident = identidad_fichero_(canonical);
             for (const auto &ns : namespaces) {
+                auto itr = raiz_del_ns.find(ns);
+                if (itr == raiz_del_ns.end()) {
+                    raiz_del_ns.emplace(ns, root);
+                } else if (itr->second != root) {
+                    /* Otro arbol declara este namespace.  Si los dos dicen ser
+                     * el mismo paquete, es la misma libreria encontrada dos
+                     * veces: manda la raiz que llego primero, que es la de
+                     * mayor prioridad (el directorio del fuente, luego los
+                     * caminos de busqueda, luego la stdlib). */
+                    const std::string &pa = paquete_de(itr->second);
+                    const std::string &pb = paquete_de(root);
+                    if (pa == pb) continue;
+                }
                 // Dos raices que se solapan (el directorio del root y la
                 // stdlib) recorren los MISMOS ficheros con escrituras
                 // distintas.  Comparar por identidad evita que el namespace
