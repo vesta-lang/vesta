@@ -183,6 +183,18 @@ es = "'{0}' esta declarado con @Target(\"{1}\"), que no se cumple en este objeti
 en = "'{0}' is only declared for other targets ({1}) -- no variant matches the target being compiled"
 es = "'{0}' solo esta declarado para otros objetivos ({1}) -- ninguna variante encaja con el objetivo que se esta compilando"
 
+[VX4003]
+en = "the namespace '{0}' is offered by two different places; the one in '{1}' is used and the one in '{2}' is ignored ({3} namespaces in total)"
+es = "el namespace '{0}' lo ofrecen dos sitios distintos; se usa el de '{1}' y se ignora el de '{2}' ({3} namespaces en total)"
+
+[VX4004]
+en = "they are two copies of the same library, so mixing them would make its types fight over one identity"
+es = "son dos copias de la misma libreria, asi que mezclarlas haria que sus tipos se peleen por una sola identidad"
+
+[VX4005]
+en = "they are two different packages ('{0}' and '{1}') offering the same namespace -- declare which one you want in the manifest, giving it a name of its own if both are needed"
+es = "son dos paquetes distintos ('{0}' y '{1}') que ofrecen el mismo namespace -- declara en el manifiesto cual quieres, dandole un nombre propio si hacen falta los dos"
+
 # --- fallos en ejecucion (VX7xxx) ---
 #
 # Un fallo que nadie captura acaba con el programa, asi que se cuenta igual que

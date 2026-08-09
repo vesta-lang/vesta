@@ -18,6 +18,7 @@
 #include "vx/lexer.h"
 #include "vx/parser.h"
 #include "vx/token.h"
+#include "vx/diag/diag_format.h" // los mensajes salen del catalogo
 
 #include <algorithm>
 #include <cerrno>
@@ -27,6 +28,7 @@
 #include <chrono>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -1026,6 +1028,12 @@ void ModuleGraph::build_namespace_index_() {
         std::string id;        ///< Identidad declarada del paquete ("" = anonimo).
         std::string manifiesto; ///< Fichero que la declara ("" = ninguno).
     };
+    /// Dos sitios que ofrecen los mismos namespaces, para avisar UNA vez.
+    struct Choque {
+        std::string gana, pierde, ejemplo, id_gana, id_pierde;
+        int cuantos = 0;
+    };
+    std::map<std::string, Choque> choques;
     std::unordered_map<std::string, std::string> raiz_del_ns;
     std::unordered_map<std::string, Procedencia> procedencia_de_raiz;
     auto procedencia_de = [&](const std::string &raiz) -> const Procedencia & {
@@ -1110,17 +1118,23 @@ void ModuleGraph::build_namespace_index_() {
                     const bool mismo_paquete =
                         !pa.manifiesto.empty() &&
                         pa.manifiesto == pb.manifiesto;
-                    if (std::getenv("VESTA_TIMES") != nullptr) {
-                        std::cerr << "[resolver] namespace '" << ns
-                                  << "' tambien en '" << root << "' (manifiesto '"
-                                  << pb.manifiesto << "', id '" << pb.id
-                                  << "') frente a '" << itr->second
-                                  << "' (manifiesto '" << pa.manifiesto
-                                  << "', id '" << pa.id << "') -> "
-                                  << (mismo_paquete ? "se fusiona" : "descartado")
-                                  << "\n";
+                    if (!mismo_paquete) {
+                        /* Se anota y se avisa UNA vez por par de sitios, no por
+                         * namespace: dos arboles de la stdlib comparten decenas
+                         * y el aviso repetido tapa el resto de la salida.
+                         * Callarselo es peor -- es lo que costo descubrir a mano
+                         * por que un tipo "no resolvia". */
+                        Choque &ch = choques[itr->second + "\n" + root];
+                        if (ch.ejemplo.empty()) {
+                            ch.gana = itr->second;
+                            ch.pierde = root;
+                            ch.ejemplo = ns;
+                            ch.id_gana = pa.id;
+                            ch.id_pierde = pb.id;
+                        }
+                        ++ch.cuantos;
+                        continue;
                     }
-                    if (!mismo_paquete) continue;
                 }
                 // Dos raices que se solapan (el directorio del root y la
                 // stdlib) recorren los MISMOS ficheros con escrituras
@@ -1132,6 +1146,41 @@ void ModuleGraph::build_namespace_index_() {
             return false;
         });
     }
+    /* Los sitios que se disputan un namespace.  Se dice al final y una vez por
+     * par: cual manda, cual se ignora, y por que -- que no es lo mismo dos
+     * copias de la misma libreria que dos librerias distintas, y lo que hay que
+     * hacer tampoco. */
+    for (const auto &kv : choques) {
+        const Choque &c = kv.second;
+        /* En absoluto: la raiz puede ser `.` -- el directorio desde el que se
+         * invoco --, y decirle a alguien que se usa "el de '.'" no le dice
+         * donde esta. */
+        auto legible = [](const std::string &r) -> std::string {
+            std::error_code ec;
+            std::filesystem::path p =
+                std::filesystem::absolute(std::filesystem::path(r), ec);
+            if (ec) return r;
+            std::string s = p.lexically_normal().string();
+            for (char &ch : s)
+                if (ch == '\\') ch = '/';
+            while (s.size() > 1 && s.back() == '/') s.pop_back();
+            return s;
+        };
+        SourceLoc loc;
+        loc.file = legible(c.pierde);
+        diags_.diag(loc, DiagLevel::WARN, "VX4003",
+                    {c.ejemplo, legible(c.gana), legible(c.pierde),
+                     std::to_string(c.cuantos)});
+        if (c.id_gana == c.id_pierde) {
+            diags_.note(loc, vx::diag::format("VX4004", {}));
+        } else {
+            diags_.note(loc, vx::diag::format(
+                                 "VX4005", {c.id_gana.empty() ? "?" : c.id_gana,
+                                            c.id_pierde.empty() ? "?"
+                                                                : c.id_pierde}));
+        }
+    }
+
     if (std::getenv("VESTA_TIMES") != nullptr) {
         const long us_total =
             static_cast<long>(std::chrono::duration_cast<std::chrono::microseconds>(

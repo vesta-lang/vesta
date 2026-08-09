@@ -45,6 +45,9 @@ const CatEntry kEntries[] = {
     {"VX3006", {"in function '{0}' (the line refers to its own module, which may not be the one being compiled)", "en la funcion '{0}' (la linea es la de su propio modulo, que puede no ser el que se compila)"}},
     {"VX4001", {"'{0}' is declared with @Target(\"{1}\"), which does not hold for this target -- that declaration is not available here", "'{0}' esta declarado con @Target(\"{1}\"), que no se cumple en este objetivo -- esa declaracion no esta disponible aqui"}},
     {"VX4002", {"'{0}' is only declared for other targets ({1}) -- no variant matches the target being compiled", "'{0}' solo esta declarado para otros objetivos ({1}) -- ninguna variante encaja con el objetivo que se esta compilando"}},
+    {"VX4003", {"the namespace '{0}' is offered by two different places; the one in '{1}' is used and the one in '{2}' is ignored ({3} namespaces in total)", "el namespace '{0}' lo ofrecen dos sitios distintos; se usa el de '{1}' y se ignora el de '{2}' ({3} namespaces en total)"}},
+    {"VX4004", {"they are two copies of the same library, so mixing them would make its types fight over one identity", "son dos copias de la misma libreria, asi que mezclarlas haria que sus tipos se peleen por una sola identidad"}},
+    {"VX4005", {"they are two different packages ('{0}' and '{1}') offering the same namespace -- declare which one you want in the manifest, giving it a name of its own if both are needed", "son dos paquetes distintos ('{0}' y '{1}') que ofrecen el mismo namespace -- declara en el manifiesto cual quieres, dandole un nombre propio si hacen falta los dos"}},
     {"VX7001", {"fatal error: null pointer", "error fatal: puntero nulo"}},
     {"VX7002", {"fatal error: division by zero", "error fatal: division entre cero"}},
     {"VX7003", {"fatal error: stack overflow", "error fatal: desbordamiento de pila"}},
@@ -77,7 +80,7 @@ const CatEntry kEntries[] = {
     {"VXA012", {"asm: '{0}' requires an aligned address, but its width cannot be determined from the operands -- the requirement cannot be checked", "asm: '{0}' exige una direccion alineada, pero su ancho no se puede determinar por los operandos -- el requisito no se puede comprobar"}},
     {"VXA013", {"asm: '{0}' requires its address to be a multiple of {1} bytes, and it is not: the address is congruent with {2} modulo {3} -- this does not run slower, it faults", "asm: '{0}' exige que su direccion sea multiplo de {1} bytes, y no lo es: la direccion es congruente con {2} modulo {3} -- esto no va mas lento, hace caer el programa"}},
 };
-const int kEntryCount = 56;
+const int kEntryCount = 59;
 
 } // namespace
 
