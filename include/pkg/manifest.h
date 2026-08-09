@@ -39,7 +39,22 @@ namespace pkg {
  *  3. path (local; sin descarga; cualquier cambio re-compila).
  */
 struct DependencySpec {
-    std::string name;    ///< @c "@vesta/buffer" (qualified)
+    std::string name; ///< @c "@vesta/buffer" (qualified).  Es la CLAVE de la
+                      ///< entrada del manifiesto, que por defecto es tambien el
+                      ///< nombre del paquete.
+    /**
+     * @brief Nombre REAL del paquete cuando la clave es un alias.
+     *
+     * `mibuffer = { package = "@vesta/buffer", version = "1.2" }` deja
+     * @c name = "mibuffer" y @c paquete = "@vesta/buffer".  Sirve para
+     * desempatar cuando dos dependencias ofrecen el mismo namespace: se les
+     * pone un nombre distinto en el manifiesto y ese nombre es por el que se
+     * las importa, sin anadir sintaxis al lenguaje.  Misma convencion que
+     * Cargo.
+     *
+     * Vacio = la clave ya es el nombre del paquete.
+     */
+    std::string paquete;
     std::string version; ///< @c "1.2" (semver opcional)
     std::string sha256;  ///< hash hex del .vx+.vxi (32 bytes hex = 64 chars)
     std::string git_url; ///< @c "https://github.com/..."  vacio si no es git

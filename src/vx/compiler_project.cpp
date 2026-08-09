@@ -62,6 +62,7 @@
 #include "vx/diagram/html_diagrams.h"
 #include "vx/diagram/mermaid_diagrams.h"
 #include "vx/type_checker.h"
+#include "pkg/manifest.h" // las dependencias DECLARADAS del proyecto
 #include "vx/module/vxi_format.h"
 #include "vx/source_hash.h" // la identidad de un fuente son sus tokens
 #include "util/fs_utils.h"   // fs::get_executable_path()
@@ -1080,6 +1081,43 @@ CompileResult compile_vx_project(
     }
     // Permitir override del directorio de busqueda via env var VX_PATH.
     graph.add_vx_path_env();
+
+    /* Las dependencias DECLARADAS del proyecto.
+     *
+     * Hasta aqui un `import` resolvia contra lo que hubiera suelto por el disco
+     * -- el directorio del fuente, `VX_PATH`, la stdlib --, y el manifiesto no
+     * pintaba nada: el gestor de paquetes sabia descargar y verificar, pero el
+     * compilador no miraba lo que se habia declarado.  De ahi que dos copias de
+     * una libreria fueran indistinguibles.
+     *
+     * Ahora lo que el `vx.toml` declara entra como sitio donde buscar, y con
+     * PRIORIDAD sobre la stdlib: si el proyecto dice de que depende, eso es lo
+     * que quiere, no lo que se encuentre por ahi. */
+    {
+        std::string manifiesto;
+        (void)derive_package_id(root_path, &manifiesto);
+        if (!manifiesto.empty()) {
+            const pkg::ParseResult pr = pkg::parse_manifest_file(manifiesto);
+            if (pr.ok) {
+                namespace fs = std::filesystem;
+                const fs::path dir_man = fs::path(manifiesto).parent_path();
+                for (const auto &dep : pr.manifest.dependencies) {
+                    /* Con `path` se toma tal cual (relativo al manifiesto);
+                     * si no, donde el gestor deja lo instalado.  Se usa el
+                     * nombre REAL del paquete, que con un alias no es la clave
+                     * de la entrada. */
+                    const std::string &nombre =
+                        dep.paquete.empty() ? dep.name : dep.paquete;
+                    fs::path cand = dep.path.empty()
+                                        ? (dir_man / "vx_modules" / nombre)
+                                        : (dir_man / dep.path);
+                    std::error_code ec;
+                    if (fs::exists(cand, ec) && fs::is_directory(cand, ec))
+                        graph.add_search_path(cand.lexically_normal().string());
+                }
+            }
+        }
+    }
     // Cablear el directorio de la stdlib Vesta (stdlib/vx).  Permite que
     // `import "simd_string"` (y futuras libs Vesta de la stdlib) resuelva sin
     // que el usuario tenga que copiar la lib a su proyecto.  Autodetect por

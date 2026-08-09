@@ -206,6 +206,12 @@ ParseResult parse_json(const std::string &buffer,
                 if (v.is_string()) {
                     d.version = v.get<std::string>();
                 } else if (v.is_object()) {
+                    /* `package = "..."`: la clave pasa a ser un ALIAS y esto es
+                     * el nombre real.  Es como se desempata cuando dos
+                     * dependencias ofrecen el mismo namespace, sin tocar el
+                     * lenguaje. */
+                    if (v.contains("package"))
+                        d.paquete = v["package"].get<std::string>();
                     if (v.contains("version"))
                         d.version = v["version"].get<std::string>();
                     if (v.contains("sha256"))
