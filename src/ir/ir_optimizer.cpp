@@ -11304,9 +11304,19 @@ bool ir_pass_schedule(IrFunction &fn, const analysis::PointsTo *pt,
         bool blk_has_asm = false;
         bool blk_has_carry = false;
         for (const auto &ins : bb.instrs) {
-            if (ins.op == IrOp::INLINE_ASM || ins.op == IrOp::ASM_MICRO ||
-                ins.op == IrOp::RAW_ASM)
-                blk_has_asm = true;
+            if (ins.op == IrOp::INLINE_ASM || ins.op == IrOp::RAW_ASM) {
+                blk_has_asm = true; // opaco: sus accesos no se ven
+            } else if (ins.op == IrOp::ASM_MICRO) {
+                /* Un micro asm SI se sabe lo que hace, asi que solo estorba si
+                 * de verdad toca memoria.  Antes cualquier asm apagaba el modo
+                 * alias-aware del bloque entero: un `pause`, que no lee ni
+                 * escribe nada, costaba el paralelismo de todo lo que hubiera
+                 * alrededor.  Lo que decide es la base, no la etiqueta. */
+                const uint8_t e = ins.imm < fn.asm_micros.size()
+                                      ? fn.asm_micros[ins.imm].eff
+                                      : 0xFFu; // sin ficha: conservador
+                if ((e & 0x01) != 0 || (e & 0x10) != 0) blk_has_asm = true;
+            }
             if (ins.op == IrOp::ADDC || ins.op == IrOp::SUBB ||
                 ins.op == IrOp::CARRYOF)
                 blk_has_carry = true;
@@ -11398,8 +11408,30 @@ bool ir_pass_schedule(IrFunction &fn, const analysis::PointsTo *pt,
             /* Memory/side-effect deps. */
             // Una pure-call NO es barrera (movimiento semantico unico); gated
             // bajo el scheduler semantico y con el guard de asm (use_alias).
+            /* Y una instruccion de asm liftada es barrera SEGUN LO QUE HAGA,
+             * no por ser asm.
+             *
+             * `ASM_MICRO` no estaba en la lista, asi que un `mfence` liftado no
+             * frenaba al planificador: podia colarse una lectura o una escritura
+             * al otro lado de una barrera de memoria, en silencio y solo cuando
+             * el bloque se hubiera podido elevar.  Hasta ahora eso no se notaba
+             * porque quien escribe una barrera pone `volatile` y con `volatile`
+             * el bloque no se eleva -- o sea que la correccion dependia de una
+             * marca del programador en vez del analisis.
+             *
+             * Lo que decide es la propia instruccion: la base dice si es barrera
+             * (bit 3 de `eff`), y un `pause` liftado no frena nada mientras que
+             * un `mfence` lo frena todo. */
+            bool micro_barr_mem = false;  // ordena la MEMORIA
+            bool micro_barr_total = false; // ordena TODO (efecto desconocido)
+            if (ins.op == IrOp::ASM_MICRO && ins.imm < fn.asm_micros.size()) {
+                const uint8_t e = fn.asm_micros[ins.imm].eff;
+                micro_barr_total = (e & 0x10) != 0;            // call
+                micro_barr_mem = !micro_barr_total && (e & 0x08) != 0;
+            }
             const bool is_barr =
-                is_sched_barrier(ins.op) && !(use_alias && is_pure_sched_call(ins));
+                (is_sched_barrier(ins.op) || micro_barr_total) &&
+                !(use_alias && is_pure_sched_call(ins));
             const bool is_st = is_store_like(ins.op);
             const bool is_ld = is_load_like(ins.op);
 
@@ -11418,6 +11450,29 @@ bool ir_pass_schedule(IrFunction &fn, const analysis::PointsTo *pt,
                     reg_writer[r] = -1;
                     reg_readers[r].clear();
                 }
+            } else if (micro_barr_mem) {
+                /* Una barrera de MEMORIA ordena memoria, no aritmetica.
+                 *
+                 * Tratarla como barrera total serializaba el bloque entero:
+                 * una suma que no toca memoria no puede cruzar un `mfence` mal,
+                 * porque no hay nada que cruzar.  Frenar tambien esas es pagar
+                 * paralelismo por nada, y quien escribe una barrera a mano suele
+                 * estar justo en el camino caliente.
+                 *
+                 * Asi que se ordena contra lo que SI le afecta -- lecturas,
+                 * escrituras y otras barreras --, y lo demas queda libre. */
+                for (const MemAcc &st : prior_stores) add_edge(st.idx, i);
+                for (const MemAcc &ld : prior_loads) add_edge(ld.idx, i);
+                if (last_barrier >= 0)
+                    add_edge(static_cast<size_t>(last_barrier), i);
+                last_barrier = static_cast<long>(i);
+                /* Y lo de despues ordena contra ella: se apunta como acceso
+                 * opaco para que cualquier memoria posterior la vea delante. */
+                const analysis::effects::AbstractLoc U{
+                    analysis::effects::AbstractLoc::Kind::Unknown,
+                    analysis::effects::LOC_GENERIC, 0, 0};
+                prior_stores.push_back({i, U});
+                prior_loads.push_back({i, U});
             } else if (use_alias && (is_st || is_ld)) {
                 /* ALIAS-AWARE (modelo UNICO memory_access): se ordena SOLO
                  * contra accesos previos que PUEDEN aliasar; raices disjuntas
