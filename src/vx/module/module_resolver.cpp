@@ -19,6 +19,7 @@
 #include "vx/parser.h"
 #include "vx/token.h"
 #include "vx/diag/diag_format.h" // los mensajes salen del catalogo
+#include "pkg/paths.h"             // $VX_HOME: el override del usuario
 
 #include <algorithm>
 #include <cerrno>
@@ -161,13 +162,63 @@ std::string derive_package_id(const std::string &root_path,
     return std::string(buf);
 }
 
+std::string override_de_paquete(const std::string &nombre) {
+    /* Se lee UNA vez: es un fichero por maquina que no cambia a mitad de una
+     * compilacion, y consultarlo por cada dependencia seria abrirlo N veces. */
+    static const std::map<std::string, std::string> tabla = [] {
+        std::map<std::string, std::string> t;
+        const std::string home = pkg::paths::vx_home();
+        if (home.empty()) return t;
+        std::ifstream f(home + "/config.toml", std::ios::binary);
+        if (!f) return t;
+        std::string linea;
+        bool dentro = false;
+        while (std::getline(f, linea)) {
+            // Recortar espacios por los dos lados.
+            size_t a = linea.find_first_not_of(" \t\r");
+            if (a == std::string::npos) continue;
+            size_t b = linea.find_last_not_of(" \t\r");
+            const std::string s = linea.substr(a, b - a + 1);
+            if (s.empty() || s[0] == '#') continue;
+            if (s[0] == '[') {
+                dentro = (s == "[override]");
+                continue;
+            }
+            if (!dentro) continue;
+            const size_t eq = s.find('=');
+            if (eq == std::string::npos) continue;
+            std::string clave = s.substr(0, eq);
+            while (!clave.empty() && (clave.back() == ' ' || clave.back() == '\t'))
+                clave.pop_back();
+            const size_t q1 = s.find('"', eq);
+            if (q1 == std::string::npos) continue;
+            const size_t q2 = s.find('"', q1 + 1);
+            if (q2 == std::string::npos) continue;
+            if (!clave.empty()) t[clave] = s.substr(q1 + 1, q2 - q1 - 1);
+        }
+        return t;
+    }();
+    auto it = tabla.find(nombre);
+    return it == tabla.end() ? std::string() : it->second;
+}
+
 // Autodetecta el directorio de la stdlib Vesta.  Misma logica que usaba
 // compiler_project.cpp inline; factorizada aqui para que el LSP (indices de
 // modulos importados) la reuse sin duplicar la sonda.
 std::string detect_stdlib_vx_dir() {
     std::string sd;
+    /* (1) La variable de entorno: lo mas inmediato, para un script o una
+     * prueba suelta.  Manda sobre todo lo demas justamente por eso. */
     if (const char *env = std::getenv("VX_STDLIB_DIR")) sd = env;
     if (!sd.empty()) return sd;
+    /* (2) El override del usuario: se dice UNA vez por maquina y vale para
+     * todos sus proyectos sin tocar ninguno.  Es lo que necesita quien
+     * desarrolla el propio compilador, que tiene la stdlib de trabajo en un
+     * sitio y la instalada en otro. */
+    {
+        const std::string ov = override_de_paquete("std");
+        if (!ov.empty()) return ov;
+    }
     // (2) Candidatos relativos al cwd.
     static const char *cands[] = {"stdlib/vx", "../stdlib/vx", "../../stdlib/vx"};
     for (const char *c : cands) {

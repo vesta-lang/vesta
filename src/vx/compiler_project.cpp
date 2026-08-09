@@ -1108,9 +1108,15 @@ CompileResult compile_vx_project(
                      * de la entrada. */
                     const std::string &nombre =
                         dep.paquete.empty() ? dep.name : dep.paquete;
-                    fs::path cand = dep.path.empty()
-                                        ? (dir_man / "vx_modules" / nombre)
-                                        : (dir_man / dep.path);
+                    /* El override del usuario manda sobre lo declarado: es como
+                     * se trabaja SOBRE una libreria sin tocar el manifiesto de
+                     * cada proyecto que la usa. */
+                    const std::string ov = override_de_paquete(nombre);
+                    fs::path cand = !ov.empty()
+                                        ? fs::path(ov)
+                                        : (dep.path.empty()
+                                               ? (dir_man / "vx_modules" / nombre)
+                                               : (dir_man / dep.path));
                     std::error_code ec;
                     if (fs::exists(cand, ec) && fs::is_directory(cand, ec))
                         graph.add_search_path(cand.lexically_normal().string());

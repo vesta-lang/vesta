@@ -302,6 +302,21 @@ class ModuleGraph {
 std::string detect_stdlib_vx_dir();
 
 /**
+ * @brief Donde vive un paquete segun el override del USUARIO.
+ *
+ * Lee `[override]` de `$VX_HOME/config.toml`: `nombre = "ruta"`.  Se dice una
+ * vez por maquina y vale para todos los proyectos sin tocar ninguno, que es lo
+ * que hace falta cuando se trabaja SOBRE una libreria -- la de desarrollo esta
+ * en un sitio y la instalada en otro -- y no se quiere una ruta absoluta metida
+ * en el manifiesto de cada prueba.
+ *
+ * @param nombre Nombre del paquete (p.ej. @c "std").
+ * @return La ruta declarada, o cadena vacia si no hay override.
+ */
+std::string override_de_paquete(const std::string &nombre);
+
+
+/**
  * @brief De que PAQUETE es un fichero: el manifiesto que lo cobija.
  *
  * Sube por los directorios desde @p root_path buscando `vx.toml` / `vx.json` y
