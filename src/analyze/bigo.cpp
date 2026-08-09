@@ -155,7 +155,23 @@ CostClass parse_cost_class(const std::string &expr) {
 static uint32_t asm_loop_depth(const std::string &cuerpo,
                                vx::instr_db::Isa isa, bool &seguro) {
     const vx::AsmCfg cfg = vx::build_asm_cfg(isa, cuerpo);
+    /* La forma solo se sabe si TODO el control se puede seguir.
+     *
+     * No basta con mirar los saltos indirectos: dentro de un bloque `asm` un
+     * `ret` no devuelve de nada -- el bloque no es una funcion --, es un salto
+     * a lo que haya en la cima de la pila, y `push etiqueta` + `ret` es un
+     * bucle perfectamente escribible que el grafo no ve.  Lo mismo una llamada
+     * o un terminador que no se supo clasificar.  Dar eso por "sin bucles"
+     * seria afirmar O(1) de algo que puede dar vueltas, que es exactamente la
+     * direccion en la que equivocarse hace dano. */
     seguro = !cfg.has_indirect && !cfg.has_unresolved_target;
+    for (const vx::AsmBasicBlock &b : cfg.blocks) {
+        if (b.term == vx::AsmTerm::Ret || b.term == vx::AsmTerm::Indirect ||
+            b.term == vx::AsmTerm::Unknown || b.term == vx::AsmTerm::Call) {
+            seguro = false;
+            break;
+        }
+    }
     // Cada arista hacia atras es un bucle; su cuerpo es el tramo [cabecera, cola].
     std::vector<std::pair<uint32_t, uint32_t>> tramos;
     for (uint32_t b = 0; b < cfg.blocks.size(); ++b)
@@ -415,16 +431,30 @@ CostResult analyze_function(const ir::IrFunction &fn) {
     for (ir::IrBlockId bi = 0; bi < fn.blocks.size(); ++bi) {
         const uint32_t depth_ir = block_loop_depth(bi, ranges);
         for (const auto &ins : fn.blocks[bi].instrs) {
-            if (ins.op != ir::IrOp::INLINE_ASM && ins.op != ir::IrOp::ASM_MICRO)
+            /* El cuerpo NO esta siempre en el mismo sitio: un `asm` con
+             * operandos ligados lo lleva en @c func_name, y uno opaco (sin
+             * operandos, el que sale de `asm { }` con variables `register`) en
+             * la tabla @c asm_micros.  Leer solo el primero dejaba a los
+             * segundos con cuerpo vacio -- ningun bloque, ningun salto -- y por
+             * tanto declarados O(1) por no mirar donde estaban. */
+            std::string cuerpo;
+            if (ins.op == ir::IrOp::INLINE_ASM) {
+                cuerpo = ins.func_name;
+            } else if (ins.op == ir::IrOp::ASM_MICRO &&
+                       ins.imm < fn.asm_micros.size()) {
+                cuerpo = fn.asm_micros[ins.imm].tmpl;
+            } else {
                 continue;
+            }
+            if (cuerpo.empty()) continue;
             bool seguro = true;
-            uint32_t d = asm_loop_depth(ins.func_name, vx::isa_actual(), seguro);
+            uint32_t d = asm_loop_depth(cuerpo, vx::isa_actual(), seguro);
             /* Repetir tampoco es dar una vuelta en el texto: un `rep movsb`
              * recorre tantos bytes como diga su contador sin un solo salto.  El
              * grafo no lo ve, la extension del acceso si. */
             if (d == 0) {
                 const vx::AsmBlockEffects ef = vx::asm_analyze_block_sin_clases(
-                    ins.func_name, vx::asm_arch_actual());
+                    cuerpo, vx::asm_arch_actual());
                 for (const vx::AsmBlockEffects::Acceso &a : ef.accesos)
                     if (!a.extension.una_vez()) { d = 1; break; }
             }
@@ -472,14 +502,23 @@ CostResult analyze_function(const ir::IrFunction &fn) {
     if (max_depth > 0 && r.is_recursive)
         r.confidence = Confidence::HEURISTIC;
 
-    /* Si la forma del asm no se pudo determinar del todo (salto indirecto o a
-     * una etiqueta ausente), la clase es una cota INFERIOR: puede haber mas
-     * bucles que el grafo no ve. */
-    if (!asm_forma_segura) r.confidence = Confidence::HEURISTIC;
+    /* Si la forma del asm no se pudo seguir entera, lo que se cuenta es una
+     * cota INFERIOR: puede haber vueltas que el grafo no ve.  Y cuando ademas
+     * no se vio ningun bucle, no se sabe NADA de la forma -- decir O(1) ahi
+     * seria afirmar lo que no consta --, asi que se dice desconocida. */
+    if (!asm_forma_segura) {
+        r.confidence = Confidence::HEURISTIC;
+        if (r.big_o == CostClass::O_1) r.big_o = CostClass::O_UNKNOWN;
+    }
 
     // 4. Construir la explicacion legible.
     std::ostringstream det;
-    if (asm_depth_total > 0 && headers.empty() && !r.is_recursive) {
+    if (!asm_forma_segura && asm_depth_total == 0 && headers.empty() &&
+        !r.is_recursive) {
+        det << "un bloque asm mueve el control por una via que no se puede "
+               "seguir (salto indirecto, `ret`, llamada o etiqueta ausente): "
+               "no consta que no de vueltas";
+    } else if (asm_depth_total > 0 && headers.empty() && !r.is_recursive) {
         det << asm_depth_total
             << " bucle(s) dentro de un asm (el numero de vueltas no se acota "
                "aqui; declaralo con @complexity si lo sabes)";
