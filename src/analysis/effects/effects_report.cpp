@@ -21,6 +21,7 @@
 
 #include <cstdlib>
 #include <algorithm>
+#include <chrono>
 #include <map>
 #include <utility>
 #include <vector>
@@ -256,8 +257,9 @@ static void print_regiones(std::ostream &os, EffectAnalysis &ea,
  * los dos no es el criterio, es que hacer con el: al construir corta, al
  * analizar se enseña con la prueba delante.
  */
-static void print_fuera_de_region(std::ostream &os, const ir::IrModule &mod) {
-    const std::vector<BoundsViolation> vs = check_region_bounds(mod);
+static void print_fuera_de_region(std::ostream &os, const ir::IrModule &mod,
+                                  EffectAnalysis &ea) {
+    const std::vector<BoundsViolation> vs = check_region_bounds(mod, &ea);
     if (vs.empty()) return;
     os << "\n=== Accesos fuera de region (demostrados) ===\n";
     for (const BoundsViolation &v : vs) {
@@ -623,9 +625,25 @@ static void print_formas(std::ostream &os, const analysis::asa::ObservacionModul
 
 void print_effects_report(std::ostream &os, const ir::IrModule &mod,
                           Backend backend, const ir::IrModule *mod_previo) {
+    /* Reparto del coste del informe.  Cada seccion mira el programa entero, asi
+     * que "el analisis tarda" solo se puede atacar sabiendo cual de ellas. */
+    const bool medir = std::getenv("VESTA_TIMES") != nullptr;
+    using RelojInf = std::chrono::steady_clock;
+    auto marca = RelojInf::now();
+    long us_resumen = 0, us_observar = 0, us_funciones = 0, us_formas = 0,
+         us_limites = 0, us_resto = 0;
+    auto cerrar = [&](long &destino) {
+        const auto ahora = RelojInf::now();
+        destino += static_cast<long>(
+            std::chrono::duration_cast<std::chrono::microseconds>(ahora - marca)
+                .count());
+        marca = ahora;
+    };
+
     EffectAnalysis ea;
     ea.set_backend(backend);
     const ModuleSummary &ms = ea.module_summary(mod);
+    cerrar(us_resumen);
     /* El conocimiento se observa UNA vez por estado; las vistas de abajo son
      * proyecciones sobre el.  Antes cada una lo recalculaba, y nada garantizaba
      * que dos vistas hablaran del mismo grafo. */
@@ -634,6 +652,7 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
     const analysis::asa::ObservacionModulo modelo_previo =
         mod_previo != nullptr ? analysis::asa::observar_modulo(*mod_previo)
                               : analysis::asa::ObservacionModulo{};
+    cerrar(us_observar);
 
     /* Se dice para QUIEN.  Un efecto no es una propiedad del IR a secas: las
      * ops que dependen del runtime son una instruccion en la maquina virtual y
@@ -732,15 +751,28 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
         print_conflictos(os, ea, fn);
         os << "\n";
     }
+    cerrar(us_funciones);
 
     // La FORMA de los valores con componentes: saco de partes o unidad.  Va en
     // el informe y no detras de una variable de entorno porque es conocimiento
     // sobre el programa del usuario, no depuracion del compilador.
     print_formas(os, modelo_final, mod_previo != nullptr ? &modelo_previo : nullptr);
+    cerrar(us_formas);
 
     // Reporte de LAGUNAS: hace visible que falta por modelar (cobertura) y donde
     // la opacidad es fundamental (oportunidades de opt del lado del usuario).
-    print_fuera_de_region(os, mod);
+    print_fuera_de_region(os, mod, ea);
+    cerrar(us_limites);
+
+    auto publicar = [&]() {
+        cerrar(us_resto);
+        if (!medir) return;
+        std::cerr << "[informe] " << mod.functions.size()
+                  << " funciones | resumen " << us_resumen << " us | observar "
+                  << us_observar << " us | por-funcion " << us_funciones
+                  << " us | formas " << us_formas << " us | limites "
+                  << us_limites << " us | resto " << us_resto << " us\n";
+    };
 
     const EffectGaps &g = ea.gaps();
     os << "=== Cobertura del conocimiento ===\n";
@@ -751,6 +783,7 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
     print_cobertura_formas(os, modelo_final, "en el codigo final");
     if (g.empty()) {
         os << "  efectos: todos se infirieron sin subir al maximo.\n";
+        publicar();
         return;
     }
     os << "  sitios que subieron al efecto maximo (top): " << g.total_top << "\n";
@@ -780,6 +813,7 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
         for (const auto &kv : g.mnemonicos_desconocidos)
             os << "    " << kv.first << " x" << kv.second << "\n";
     }
+    publicar();
 }
 
 // ---- Proyeccion JSON (misma fuente que el reporte legible) ----

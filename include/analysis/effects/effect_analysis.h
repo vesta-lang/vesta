@@ -127,6 +127,13 @@ public:
         return points_to_of(fn);
     }
 
+    /// Los hechos fundacionales (def-use) de una funcion, por la misma razon y
+    /// desde la misma cache.  Quien los reconstruye por su cuenta -- lo hacia el
+    /// comprobador de limites -- paga otra vez lo que el motor ya tiene hecho.
+    const IrFacts &facts_publico(const ir::IrFunction &fn) {
+        return facts_of(fn);
+    }
+
     // ---- Invalidacion ----
     /// Un nodo muto: borra su cache local + marca su funcion sucia.
     void invalidate_node(const ir::IrFunction &fn, const ir::IrInstr &ins);

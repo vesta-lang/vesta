@@ -18,7 +18,9 @@
 #include "analysis/memory/memory_access.h"
 #include "ir/ssa_ir.h"
 
+#include <chrono>
 #include <cstdlib>
+#include <iostream>
 
 namespace analysis {
 namespace effects {
@@ -37,7 +39,8 @@ std::string nombre_region(AbstractLoc::Kind k, uint32_t id) {
 }
 } // namespace
 
-std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod) {
+std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
+                                                 EffectAnalysis *ea_dado) {
     std::vector<BoundsViolation> out;
     /* Interruptor de escape.  La comprobacion esta MEDIDA a cero falsos sobre
      * los 454 programas del corpus, pero un veredicto que rompe una compilacion
@@ -45,14 +48,35 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod) {
     if (const char *v = std::getenv("VESTA_ASA_BOUNDS"))
         if (v[0] == '0') return out;
 
-    EffectAnalysis ea;
+    /* El motor lo trae quien ya lo tenia.  Construir uno propio significa
+     * rehacer el escape y los resumenes del modulo entero -- que es justo lo
+     * que acaba de hacer el informe para las secciones de arriba. */
+    EffectAnalysis propio;
+    EffectAnalysis &ea = ea_dado != nullptr ? *ea_dado : propio;
     ea.module_summary(mod); // deja el motor con sus tablas listas
+
+    /* Reparto del coste.  Hizo falta: la sospecha era el def-use y no lo era,
+     * ni el motor duplicado -- solo midiendo cada parte se llego a la que es. */
+    const bool medir = std::getenv("VESTA_TIMES") != nullptr;
+    using RelojLim = std::chrono::steady_clock;
+    auto marca = RelojLim::now();
+    long us_resumenes = 0, us_rangos = 0, us_llamadas = 0;
+    long n_llamadas = 0;
+    auto cerrar = [&](long &destino) {
+        const auto ahora = RelojLim::now();
+        destino += static_cast<long>(
+            std::chrono::duration_cast<std::chrono::microseconds>(ahora - marca)
+                .count());
+        marca = ahora;
+    };
+
     /* Resumenes de frontera del modulo: lo que entra y sale de cada funcion.
      * Sin ellos, un parametro vale lo que su tipo y el resultado de una llamada
      * es desconocido, con lo que nada que cruce una funcion se puede comprobar.
      * Se calculan UNA vez para todo el modulo. */
     const analysis::RangeSummaries resumenes =
         analysis::compute_range_summaries(mod);
+    cerrar(us_resumenes);
     for (const ir::IrFunction &fn : mod.functions) {
         if (fn.blocks.empty()) continue;
         /* Los cuerpos comptime no son parte del programa que se ejecuta: corren
@@ -66,10 +90,13 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod) {
         const analysis::PointsTo &pt = ea.points_to_publico(fn);
         /* Rangos de la funcion: es lo que permite juzgar una region de tamano
          * simbolico.  Se calculan una vez por funcion, no por acceso. */
-        const analysis::IrFacts hechos = analysis::build_ir_facts(fn);
+        // De la cache del motor: reconstruir el def-use aqui era hacerlo por
+        // segunda vez, porque el resumen del modulo ya lo pidio.
+        const analysis::IrFacts &hechos = ea.facts_publico(fn);
         const analysis::RangeFacts rangos =
             analysis::compute_ranges(fn, hechos, analysis::RangeOptions{},
                                      &resumenes);
+        cerrar(us_rangos);
         for (uint32_t bi = 0; bi < fn.blocks.size(); ++bi) {
             const ir::IrBlock &b = fn.blocks[bi];
             /* Se recorre el bloque con el estado del analisis, no se consulta
@@ -162,7 +189,12 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod) {
                      * se sale es un fallo aunque haya mas que no se pudieron
                      * nombrar.  Para acusar no hace falta saberlo todo, hace
                      * falta que lo que se sabe sea cierto. */
+                    const auto t_ll = RelojLim::now();
                     const EfectoEnLlamada ll = ea.at_call_site(fn, in);
+                    us_llamadas +=
+                        std::chrono::duration_cast<std::chrono::microseconds>(
+                            RelojLim::now() - t_ll).count();
+                    ++n_llamadas;
                     revisa(ll.escribe, true);
                     revisa(ll.lee, false);
                 }
@@ -254,6 +286,13 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod) {
             }
         }
     }
+    cerrar(us_rangos);
+    if (medir)
+        std::cerr << "[limites] " << mod.functions.size() << " funciones, "
+                  << n_llamadas << " llamadas | resumenes " << us_resumenes
+                  << " us (" << resumenes.rondas << " pasos) | rangos+recorrer "
+                  << us_rangos << " us | en-la-llamada " << us_llamadas
+                  << " us\n";
     return out;
 }
 

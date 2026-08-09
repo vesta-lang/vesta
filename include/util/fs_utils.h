@@ -492,7 +492,16 @@ static bool is_directory_str(const std::string &s) {
  * por cada entrada para saber si es un directorio o un fichero regular, cosa
  * que la propia enumeracion acaba de decirle.  Medido sobre las 1989 entradas
  * de un arbol de fuentes: 46 ms con el iterador estandar, 35 con
- * `directory_iterator` y pila propia, y 1,7 asi.
+ * `directory_iterator` y pila propia, y 1,7 asi.  En Linux sobre ext4 la
+ * diferencia es menor porque alli el iterador estandar ya es rapido: 1,0 ms
+ * contra 0,5.
+ *
+ * SALVEDAD medida en WSL sobre `/mnt` (9p): ahi `readdir` devuelve
+ * `DT_UNKNOWN`, asi que hay que preguntar por cada entrada y esto sale algo mas
+ * caro que el iterador estandar (85 ms contra 70), que solo pregunta por las
+ * entradas que le interesan.  Es propio de ese puente -- cualquier sistema de
+ * ficheros nativo (ext4, btrfs, xfs, tmpfs) informa del tipo en el listado --,
+ * y en ese escenario todo el recorrido esta dominado por el propio puente.
  *
  * @param raiz Directorio de partida.  Si no se puede abrir, no se llama a
  *             @p ver ni una vez (no es un error: una raiz de busqueda puede

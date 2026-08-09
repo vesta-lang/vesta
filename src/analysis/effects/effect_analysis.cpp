@@ -20,7 +20,10 @@
 #include "analysis/escape/escape.h"
 #include "aot/aot_analyze.h" // que necesita cada op para correr (backend AOT)
 
+#include <chrono>
+#include <cstdlib>
 #include <deque>
+#include <iostream>
 #include <unordered_set>
 #include <utility>
 
@@ -345,6 +348,21 @@ ModuleSummary EffectAnalysis::build_summary(
     const std::vector<const ir::IrModule *> &mods) {
     ModuleSummary out;
 
+    /* Reparto del coste, por fases.  Se publica con VESTA_TIMES porque "el
+     * analisis tarda" no se puede atacar sin saber cual de las cuatro es. */
+    const bool medir = std::getenv("VESTA_TIMES") != nullptr;
+    using RelojFase = std::chrono::steady_clock;
+    auto marca = RelojFase::now();
+    long us_escape = 0, us_local = 0, us_punto_fijo = 0, us_nativas = 0;
+    long n_fns = 0, n_pasos = 0;
+    auto cerrar = [&](long &destino) {
+        const auto ahora = RelojFase::now();
+        destino += static_cast<long>(
+            std::chrono::duration_cast<std::chrono::microseconds>(ahora - marca)
+                .count());
+        marca = ahora;
+    };
+
     // Recorre TODAS las funciones de TODOS los modulos (interproc cross-modulo).
     auto for_each_fn = [&](auto &&f) {
         for (const ir::IrModule *m : mods)
@@ -371,6 +389,7 @@ ModuleSummary EffectAnalysis::build_summary(
             for (auto &kv : em) escape_all[kv.first] = std::move(kv.second);
         }
     }
+    cerrar(us_escape);
 
     // 1) Summary LOCAL de cada funcion (efecto propio, estructura) + lagunas.
     //    Antes se recogen las declaraciones de nativas: son parte de la entrada
@@ -404,7 +423,9 @@ ModuleSummary EffectAnalysis::build_summary(
         local_eff[fn.name] = obs; // OBSERVABLE (sin scratch local) = semilla del cierre
         local_comp[fn.name] = loc.completeness;
         out.fns.emplace(fn.name, std::move(s));
+        ++n_fns;
     });
+    cerrar(us_local);
 
     // 2) Punto-fijo EFICIENTE por WORKLIST (dataflow interprocedural clasico):
     //    closure(fn) = local(fn) U closure(callee) para cada callee.  Solo se
@@ -538,6 +559,7 @@ ModuleSummary EffectAnalysis::build_summary(
         std::string name = std::move(work.front());
         work.pop_front();
         in_work.erase(name);
+        ++n_pasos;
         if (recompute(name)) {
             // El cierre de 'name' cambio -> sus callers pueden cambiar.
             auto cit = callers.find(name);
@@ -546,6 +568,8 @@ ModuleSummary EffectAnalysis::build_summary(
                     if (in_work.insert(caller).second) work.push_back(caller);
         }
     }
+
+    cerrar(us_punto_fijo);
 
     /* Ya convergido, se apunta UNA vez cada llamada a codigo que no esta en el
      * programa.  Hacerlo dentro del punto fijo contaba la misma llamada tantas
@@ -557,6 +581,12 @@ ModuleSummary EffectAnalysis::build_summary(
         for (const std::string &callee : kv.second.native_callees)
             if (!resolver_nativa(out, callee)) gaps_.record_nativa(callee);
     }
+    cerrar(us_nativas);
+    if (medir)
+        std::cerr << "[efectos] " << n_fns << " funciones, " << n_pasos
+                  << " pasos del punto fijo | escape " << us_escape
+                  << " us | local " << us_local << " us | punto-fijo "
+                  << us_punto_fijo << " us | nativas " << us_nativas << " us\n";
     return out;
 }
 
