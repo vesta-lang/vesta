@@ -35,6 +35,8 @@
 #define ANALYSIS_FACTS_ALIGNMENT_H
 
 #include <cstdint>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "ir/ssa_ir.h"
@@ -46,18 +48,42 @@ namespace analysis {
  * @brief Alineacion demostrable de cada valor de una funcion.
  */
 struct AlignmentFacts {
-    /// Por valor: la mayor potencia de dos de la que es multiplo con certeza.
-    /// 1 = no se sabe nada.
+    /// Por valor: el MODULO del que se conoce su resto.  Potencia de dos;
+    /// 1 = no se sabe nada (todo entero es congruente con 0 modulo 1).
     std::vector<uint32_t> de_valor;
+    /// Por valor: el RESTO respecto de ese modulo.
+    ///
+    /// Sin el resto solo se puede decir "quiza"; con el se puede decir que NO.
+    /// `base + 1`, con `base` multiplo de 8, es congruente con 1 modulo 8: eso
+    /// demuestra que no esta alineado a 16, y demostrarlo es la diferencia
+    /// entre avisar y dar un error -- entre "no puedo comprobarlo" y "se que
+    /// esta mal".
+    std::vector<uint32_t> resto;
 
-    /// Consulta segura.  Fuera de rango -> 1 (no se sabe nada).
+    /// Modulo conocido de @p v.  Fuera de rango -> 1 (no se sabe nada).
     uint32_t de(ir::IrValueId v) const noexcept {
         return v < de_valor.size() ? de_valor[v] : 1u;
     }
+    /// Resto conocido de @p v respecto de @ref de.
+    uint32_t resto_de(ir::IrValueId v) const noexcept {
+        return v < resto.size() ? resto[v] : 0u;
+    }
 
-    /// @c true si @p v es multiplo de @p n con certeza.
+    /// @c true si @p v es multiplo de @p n con CERTEZA.
     bool multiplo_de(ir::IrValueId v, uint32_t n) const noexcept {
-        return n != 0 && (de(v) % n) == 0;
+        return n != 0 && de(v) >= n && (de(v) % n) == 0 &&
+               (resto_de(v) % n) == 0;
+    }
+    /// @c true si se sabe con CERTEZA que @p v NO es multiplo de @p n.
+    ///
+    /// No hace falta conocer @p v modulo @p n: basta con conocerlo modulo un
+    /// DIVISOR suyo.  Si se sabe que `v` es congruente con 1 modulo 8, ya se
+    /// sabe que no es multiplo de 16 -- todo multiplo de 16 es congruente con
+    /// 0 modulo 8.  Exigir el modulo entero dejaba fuera justo el caso que
+    /// interesa: una reserva alineada a 8 a la que se le suma uno.
+    bool seguro_no_multiplo_de(ir::IrValueId v, uint32_t n) const noexcept {
+        const uint32_t m = de(v);
+        return n != 0 && m > 1 && (n % m) == 0 && resto_de(v) != 0;
     }
 };
 
@@ -77,6 +103,101 @@ struct AlignmentFacts {
  * @return Los hechos de alineacion de sus valores.
  */
 AlignmentFacts compute_alignment(const ir::IrFunction &fn);
+
+/**
+ * @enum Universo
+ * @brief Hasta donde alcanza lo que se ha podido observar de una funcion.
+ *
+ * Es la pregunta previa a cualquier resumen entre funciones, y responderla mal
+ * no da un resultado peor: da uno FALSO.  Juntar lo que aportan los sitios de
+ * llamada que se ven solo describe lo que le llega a una funcion si no hay
+ * otros, y eso depende de quien pueda alcanzarla.
+ */
+enum class Universo : uint8_t {
+    /// Se puede llamar desde fuera de lo que se esta mirando.  No haber visto
+    /// una llamada NO significa que no exista, asi que no se afirma nada.
+    Abierto,
+    /// Todas las llamadas posibles estaban a la vista y no habia ninguna.  Esto
+    /// no es ignorancia: es haber DEMOSTRADO que nadie la llama, y de un cuerpo
+    /// que no se ejecuta no hay nada que comprobar.
+    CerradoSinLlamantes,
+    /// Todas las llamadas posibles estaban a la vista y son estas.  Lo que
+    /// aportan es todo lo que le llega.
+    CerradoConLlamantes,
+};
+
+/**
+ * @struct AlignmentSummaries
+ * @brief Lo que se sabe de los PARAMETROS de cada funcion del modulo.
+ *
+ * Sin esto, el hecho se para en la frontera de la funcion: dentro de
+ * `void f(u8* dst)` no se sabe nada de `dst`, aunque TODAS las llamadas le
+ * pasen una direccion cuya alineacion se conoce.  Y ahi es donde hace falta,
+ * porque el asm que exige alineacion suele estar dentro de una funcion que
+ * recibe el destino, no donde se reserva.
+ *
+ * El resumen es el ENCUENTRO de lo que aportan todas las llamadas: un
+ * parametro vale lo que su peor sitio de llamada, porque cualquiera puede
+ * darse.  Pero antes de juntarlas hay que poder decir que son TODAS las que
+ * hay -- ver @ref Universo --: una funcion que alguien puede llamar desde otro
+ * modulo no se resume, por muchas llamadas que se le vean aqui.
+ */
+struct AlignmentSummaries {
+    /// Por funcion: modulo y resto conocidos de cada parametro.
+    struct Param {
+        uint32_t modulo = 1;
+        uint32_t resto = 0;
+    };
+    /// Lo que se sabe de una funcion: hasta donde se ha visto, y que le llega.
+    struct Resumen {
+        Universo universo = Universo::Abierto;
+        /// Vacio salvo en @ref Universo::CerradoConLlamantes.
+        std::vector<Param> params;
+    };
+    std::unordered_map<std::string, Resumen> por_funcion;
+
+    /// Lo que se sabe de @p nombre, o nullptr si no hay entrada (equivale a
+    /// universo abierto: no se afirma nada).
+    const Resumen *buscar(const std::string &nombre) const {
+        auto it = por_funcion.find(nombre);
+        return it == por_funcion.end() ? nullptr : &it->second;
+    }
+    /// Universo de @p nombre; abierto si no hay entrada.
+    Universo universo_de(const std::string &nombre) const {
+        const Resumen *r = buscar(nombre);
+        return r == nullptr ? Universo::Abierto : r->universo;
+    }
+};
+
+/**
+ * @brief Resume que se sabe de los parametros de cada funcion del modulo.
+ *
+ * @param mod Modulo completo: hacen falta TODAS las llamadas.
+ * @param programa_cerrado @c true cuando lo que se esta construyendo es el
+ *        programa ENTERO (un ejecutable): entonces nadie de fuera puede llamar
+ *        a nada y hasta una funcion publica tiene sus llamantes a la vista.
+ *        @c false al construir una libreria o al mirar un modulo suelto: ahi
+ *        solo se cierra lo privado.  Se pasa EXPLICITO porque no es una
+ *        propiedad del IR sino de lo que se esta produciendo con el, y de eso
+ *        depende que el mismo fichero de una respuesta u otra.
+ * @return Los resumenes; una funcion sin entrada es una de la que no se puede
+ *         afirmar nada.
+ */
+AlignmentSummaries compute_alignment_summaries(const ir::IrModule &mod,
+                                               bool programa_cerrado);
+
+/**
+ * @brief Como @ref compute_alignment, sembrando los parametros con @p resumen.
+ *
+ * Es la misma cuenta con mejor punto de partida: los parametros dejan de valer
+ * "no se sabe nada" y pasan a valer lo que dicen sus sitios de llamada.
+ *
+ * @param fn Funcion a examinar.
+ * @param resumen Resumenes del modulo, o nullptr para no sembrar nada.
+ * @return Los hechos de alineacion de sus valores.
+ */
+AlignmentFacts compute_alignment(const ir::IrFunction &fn,
+                                 const AlignmentSummaries *resumen);
 
 } // namespace analysis
 

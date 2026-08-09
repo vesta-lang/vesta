@@ -26,10 +26,14 @@
  */
 
 #include "vx/compiler.h"
+#include "vx/source_text.h" // un solo fin de linea para todo el pipeline
 #include "vx/vxdbg_emit.h" // grafo de conocimiento del programa
 #include "vxdbg/codec.h"
 #include "vxdbg/roots.h"
+#include "analysis/facts/alignment.h"    // de cuanto es multiplo un valor
+#include "analysis/facts/asm_bindings.h" // de que valor habla un operando de asm
 #include "analyze/fingerprint.h" // verificacion de contratos
+#include "vx/asm/asm_effects.h"  // que exige cada instruccion
 #include "vx/incremental.h" // CAS global direccionado por contenido (cross-proyecto)
 #include <algorithm> // UCRT64: no transitivo
 #include <chrono>    // reparto del coste por fase
@@ -401,14 +405,13 @@ std::string dep_vel_path_for_(const std::string &source_path) {
 
 /// Lee el fichero a string.  Devuelve cadena vacia en error (el caller
 /// detecta el error via @c diags).
+///
+/// Los fines de linea se normalizan aqui, en la PUERTA: de ahi en adelante todo
+/// el pipeline ve `\n` y nadie mas tiene que acordarse (ver @ref
+/// vx::leer_fuente).
 std::string read_source_(const std::string &path) {
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f.is_open()) return {};
-    const std::streamsize sz = f.tellg();
-    f.seekg(0, std::ios::beg);
     std::string s;
-    s.resize(static_cast<size_t>(sz));
-    if (sz > 0) f.read(s.data(), sz);
+    if (!vx::leer_fuente(path, s)) return {};
     return s;
 }
 
@@ -3222,6 +3225,22 @@ CompileResult compile_vx_project(
      * demostrar fuera de su region no puede quedarse en `--analyze`, tiene que
      * salir al compilar, que es cuando se lee. */
     if (opts.report_bounds) vx_report_bounds(merged, res.diagnostics, root_path);
+    /* Precondiciones del asm.  SIEMPRE, no bajo opcion: una instruccion cuya
+     * exigencia no se cumple no da un resultado peor, hace caer el programa --
+     * y callarselo ya costo descubrirlo ejecutando.
+     *
+     * Aqui esta TODO lo que se va a enlazar, asi que si hay un `main` lo que se
+     * construye es el programa entero y no queda ningun fuera desde el que
+     * llamar: entonces se puede afirmar de una funcion publica lo mismo que de
+     * una privada.  Sin `main` esto es una libreria (o un modulo suelto) y lo
+     * publico sigue siendo alcanzable por quien no se ve. */
+    bool hay_main = false;
+    for (const ir::IrFunction &f : merged.functions)
+        if (f.name == "main") {
+            hay_main = true;
+            break;
+        }
+    vx_report_asm_preconditions(merged, res.diagnostics, root_path, hay_main);
 
     if (opts.dump_ir) {
         std::ostringstream ir_oss;
@@ -3498,6 +3517,175 @@ static bool contiene_palabra(const std::string &source, const char *kw) {
  * que tramo, que hueco).  La prueba va DENTRO del mensaje, porque un "acceso
  * fuera de region" sin su derivacion obliga a reconstruirla a mano.
  */
+
+/**
+ * @brief Ver la declaracion en compiler.h.
+ */
+void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
+                                 const std::string &file,
+                                 bool programa_cerrado) {
+    /* Lo que le llega a cada funcion desde sus sitios de llamada.  Sin esto,
+     * un parametro no vale nada y la comprobacion se queda en la frontera --
+     * que es justo donde NO esta el asm: quien exige alineacion suele recibir
+     * el destino, no reservarlo. */
+    const analysis::AlignmentSummaries resumen =
+        analysis::compute_alignment_summaries(mod, programa_cerrado);
+
+    /**
+     * @brief Lo que se pudo decir de UNA instruccion que exige alineacion.
+     *
+     * El orden importa: es el de menos a mas fuerte.  Una misma instruccion del
+     * fuente puede verse VARIAS veces -- el inline trae una copia a cada sitio
+     * donde se llamo --, y cada copia sabe lo suyo: donde se ve la direccion
+     * concreta se puede demostrar, y en la funcion original quiza no.  Son la
+     * misma instruccion, asi que el usuario tiene que recibir UN veredicto.
+     */
+    enum class Veredicto : uint8_t {
+        SinAncho = 0,  ///< no se pudo determinar cuanto exige.
+        SinPrueba = 1, ///< se sabe cuanto exige, no si se cumple.
+        Cumple = 2,    ///< demostrado que cumple.
+        Falla = 3,     ///< demostrado que NO cumple.
+    };
+    /// Una instruccion del fuente y lo mejor que se pudo decir de ella.
+    struct Sitio {
+        uint32_t line = 0;
+        uint32_t column = 0;
+        std::string mnemonic;
+        uint16_t bytes = 0;
+        std::string operando;
+        uint32_t resto = 0;  ///< la prueba, cuando @c Falla.
+        uint32_t modulo = 0; ///< la prueba, cuando @c Falla.
+        Veredicto v = Veredicto::SinAncho;
+    };
+    std::vector<Sitio> sitios;
+
+    for (const ir::IrFunction &fn : mod.functions) {
+        if (fn.blocks.empty()) continue;
+        /* Una funcion de la que se ha visto TODO lo que podria llamarla, y no
+         * habia nada, no se ejecuta nunca.  Eso no es ignorancia -- es la
+         * ausencia demostrada --, y comprobar el cuerpo de algo que nadie llama
+         * solo produce ruido: es lo que pasa con la copia que el inline deja
+         * huerfana. */
+        if (resumen.universo_de(fn.name) ==
+            analysis::Universo::CerradoSinLlamantes)
+            continue;
+        /* De que valor habla cada operando del asm.  Lo responde el mismo sitio
+         * que se lo responde al modelo de efectos y al eliminador de escrituras
+         * muertas: el camino marcador -> ligadura -> hueco -> contenido se
+         * recorre UNA vez y en un solo sitio. */
+        const analysis::AsmBindingFacts lig = analysis::compute_asm_bindings(fn);
+        /* Y el diccionario que le falta al analisis del texto: tras la
+         * sustitucion, `movdqa [$0], $1` no dice que `$1` mida 128 bits.  Lo
+         * dice la CLASE con la que se declaro, que es lo que escribio el
+         * programador. */
+        std::vector<std::pair<std::string, std::string>> clases;
+        clases.reserve(lig.ligaduras.size());
+        for (const analysis::LigaduraAsm &l : lig.ligaduras)
+            clases.emplace_back(l.marcador, l.clase);
+
+        const analysis::AlignmentFacts alin =
+            analysis::compute_alignment(fn, &resumen);
+        for (const ir::IrBlock &b : fn.blocks) {
+            for (const ir::IrInstr &in : b.instrs) {
+                if (in.op != ir::IrOp::INLINE_ASM) continue;
+                const vx::AsmInferResult inf =
+                    vx::asm_infer_clobbers(in.func_name, {}, clases);
+                for (const vx::AsmAlignReq &req : inf.align_reqs) {
+                    Sitio s;
+                    s.line = in.source_line;
+                    s.column = in.source_column;
+                    s.mnemonic = req.mnemonic;
+                    s.bytes = req.bytes;
+                    s.operando = req.operando.empty() ? "?" : req.operando;
+                    if (req.bytes != 0) {
+                        /* Que valor es la direccion.  El analisis del texto ya
+                         * dijo por que operando se llega (@c req.base); las
+                         * ligaduras dicen de que valor habla ese operando.
+                         *
+                         * Puede haber VARIAS candidatas (dos variables en el
+                         * mismo registro).  Entonces no se sabe cual es, pero
+                         * eso no obliga a callarse: si TODAS cumplen, cumple
+                         * sea cual sea; si TODAS fallan, revienta sea cual sea.
+                         * Solo cuando discrepan no hay nada demostrado -- y ahi
+                         * se avisa, que no es lo mismo que dar por bueno ni que
+                         * dar por malo. */
+                        s.v = Veredicto::SinPrueba;
+                        const auto cands = lig.candidatas(req.base);
+                        if (!cands.empty()) {
+                            bool todas_cumplen = true, todas_fallan = true;
+                            for (const analysis::LigaduraAsm &l : cands) {
+                                const ir::IrValueId dir = l.valor;
+                                const bool cumple =
+                                    dir != ir::IR_NO_VALUE &&
+                                    alin.multiplo_de(dir, req.bytes);
+                                const bool falla =
+                                    dir != ir::IR_NO_VALUE &&
+                                    alin.seguro_no_multiplo_de(dir, req.bytes);
+                                todas_cumplen = todas_cumplen && cumple;
+                                todas_fallan = todas_fallan && falla;
+                                if (falla) {
+                                    // La prueba: la primera que falla vale para
+                                    // explicarlo, y si fallan todas dan la misma
+                                    // razon.
+                                    s.resto = alin.resto_de(dir);
+                                    s.modulo = alin.de(dir);
+                                }
+                            }
+                            if (todas_cumplen) s.v = Veredicto::Cumple;
+                            else if (todas_fallan) s.v = Veredicto::Falla;
+                        }
+                    }
+                    /* Se acumula en vez de emitirse: el veredicto es del SITIO
+                     * del fuente, y hasta haber visto todas sus copias no se
+                     * sabe cual es el mejor que se pudo dar. */
+                    bool fusionado = false;
+                    for (Sitio &y : sitios) {
+                        if (y.line != s.line || y.column != s.column ||
+                            y.mnemonic != s.mnemonic)
+                            continue;
+                        fusionado = true;
+                        if (s.v > y.v) {
+                            const uint32_t l0 = y.line, c0 = y.column;
+                            y = s;
+                            y.line = l0;
+                            y.column = c0;
+                        }
+                        break;
+                    }
+                    if (!fusionado) sitios.push_back(std::move(s));
+                }
+            }
+        }
+    }
+
+    /* Y ahora UN veredicto por sitio.  La regla es la de siempre: una prueba no
+     * la borra una copia que no pudo demostrar nada, y no poder demostrar que
+     * algo es seguro no es demostrar que es inseguro.  Demostrado-que-falla
+     * manda sobre todo: basta con que UN camino reviente. */
+    for (const Sitio &s : sitios) {
+        SourceLoc loc;
+        loc.line = s.line;
+        loc.column = s.column;
+        loc.file = file;
+        switch (s.v) {
+        case Veredicto::Cumple:
+            break; // demostrado: no hay nada que decir.
+        case Veredicto::Falla:
+            diags.diag(loc, DiagLevel::ERR, "VXA013",
+                       {s.mnemonic, std::to_string(s.bytes),
+                        std::to_string(s.resto), std::to_string(s.modulo)});
+            break;
+        case Veredicto::SinPrueba:
+            diags.diag(loc, DiagLevel::WARN, "VXA011",
+                       {s.mnemonic, s.operando, std::to_string(s.bytes)});
+            break;
+        case Veredicto::SinAncho:
+            diags.diag(loc, DiagLevel::WARN, "VXA012", {s.mnemonic});
+            break;
+        }
+    }
+}
+
 void vx_report_bounds(const ir::IrModule &mod, Diagnostics &diags,
                       const std::string &file) {
     // Medicion del dominio de FORMA, apagada salvo que se pida explicitamente.

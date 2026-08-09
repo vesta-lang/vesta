@@ -12,6 +12,7 @@
  *        ASM_MICRO) se analiza aparte, conservador y con tags.
  */
 #include "analysis/effects/ir_effects.h"
+#include "analysis/facts/asm_bindings.h" // de que valor habla cada operando
 #include "analysis/memory/memory_access.h"
 
 #include "ir/ssa_ir.h"
@@ -56,7 +57,13 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
     EffectAnalysisResult r;
     // func_name lleva el cuerpo NASM (lo pone el lowering de asm).  El analisis
     // de bloque del asm opaco vive en el modulo asm (namespace vx).
-    const vx::AsmBlockEffects e = vx::asm_analyze_block(ins.func_name, "x86_64");
+    /* La arquitectura sale del OBJETIVO, no escrita a mano.  Estaba clavada a
+     * x86, asi que al compilar para ARM este analisis leia `ldr x0, [x1]` con
+     * la tabla de x86: mnemonico desconocido, registro desconocido, y el bloque
+     * acababa valiendo "puede hacer cualquier cosa" -- ademas de aparecer como
+     * una laguna del analisis que no existia. */
+    const vx::AsmBlockEffects e =
+        vx::asm_analyze_block(ins.func_name, vx::asm_arch_actual());
     /* Se declara SOLO lo que el bloque hace.  Antes, cualquier asm que tocara
      * memoria se anotaba como lectura Y escritura de todo, y eso lo convierte
      * en una barrera para cuanto haya alrededor: un `mov rax, [rdi]` impedia
@@ -97,40 +104,62 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
     bool localizado = loc_activa && !e.accesos.empty() && !e.accesos_incompletos;
     std::vector<AbstractLoc> locs_lee, locs_escribe;
     if (localizado) {
+        /* De que valor habla cada operando lo responde UN solo sitio.  Antes
+         * este recorrido -- marcador, ligadura, hueco, contenido -- estaba
+         * copiado aqui, en el eliminador de escrituras muertas y en la
+         * comprobacion de precondiciones del asm; tres copias del mismo camino
+         * acaban siendo tres respuestas distintas a la misma pregunta. */
+        const analysis::AsmBindingFacts lig = analysis::compute_asm_bindings(fn);
+        /* Rangos de la funcion: es lo que cierra la extension de un acceso
+         * cuando lo que la determina no es una constante sino un operando --
+         * `rep movsb` recorre `rcx` bytes, y `rcx` es una variable con rango.
+         * Se calculan una vez por bloque, no por acceso. */
+        const analysis::IrFacts hechos_fn = analysis::build_ir_facts(fn);
+        const analysis::RangeFacts rangos =
+            analysis::compute_ranges(fn, hechos_fn);
         for (const vx::AsmBlockEffects::Acceso &a : e.accesos) {
-            ir::IrValueId hueco = ir::IR_NO_VALUE;
-            unsigned candidatas = 0;
-            if (!a.base.empty() && a.base[0] == '$') {
-                /* Marcador `$N`: identifica el operando SIN ambiguedad, asi que
-                 * basta con buscar la ligadura de ese indice.  Es el caso de la
-                 * forma moderna del asm -- la que usa la stdlib -- y ademas no
-                 * depende de nombres de registro. */
-                const int idx = std::atoi(a.base.c_str() + 1);
-                for (const ir::AsmRegBinding &b : fn.asm_reg_bindings)
-                    if (b.reg_auto && b.ph_index == idx) {
-                        hueco = b.alloca_value;
-                        ++candidatas;
-                    }
-            } else {
-                /* Por nombre de registro.  La lista de ligaduras es de TODA la
-                 * funcion, no del ambito de este bloque: si dos variables de
-                 * ambitos distintos usan el mismo registro, quedarse con la
-                 * primera seria elegir a ciegas.  Con mas de una, nada. */
-                for (const ir::AsmRegBinding &b : fn.asm_reg_bindings)
-                    if (!b.reg.empty() && vx::asm_canonical_reg(b.reg) == a.base) {
-                        hueco = b.alloca_value;
-                        ++candidatas;
-                    }
+            /* TODAS las que responden a ese nombre.  Aqui no hace falta saber
+             * cual de ellas es: nombrar las dos dice que el acceso va por una
+             * de estas, y eso sigue siendo MUCHISIMO menos que "cualquier
+             * sitio" -- que es donde caia antes en cuanto dos variables de
+             * ambitos distintos compartian registro. */
+            const auto cands = lig.candidatas(a.base);
+            if (cands.empty()) { localizado = false; break; }
+            /* Hasta donde llega el acceso.  Con la extension resuelta se dice
+             * QUE BYTES toca en vez de dar el objeto entero por tocado, y esa
+             * es la diferencia entre que dos accesos al mismo objeto se
+             * estorben siempre o solo cuando de verdad se pisan.
+             *
+             * Una base que se cargo de memoria (@c desde_memoria) se describe
+             * pero no se resuelve todavia: seguir esa indireccion es preguntar
+             * que habia guardado ahi, y eso es otro paso. */
+            const analysis::ExtensionResuelta ext =
+                a.valida && !a.desde_memoria.hay
+                    ? analysis::resolver_extension(lig, rangos, a.extension)
+                    : analysis::ExtensionResuelta{};
+            for (const analysis::LigaduraAsm &ligadura : cands) {
+                if (ligadura.valor == ir::IR_NO_VALUE) {
+                    localizado = false;
+                    break;
+                }
+                /* Ancho 0 = el objeto entero: lo que se dice cuando no se pudo
+                 * acotar el acceso.  Con la extension, se pide por su tamano y
+                 * se corre al offset donde de verdad cae. */
+                const int32_t ancho =
+                    ext.acotada ? (int32_t)ext.bytes() : (int32_t)0;
+                AbstractLoc l = analysis::loc_of(pt, ligadura.valor, ancho);
+                if (l.kind == AbstractLoc::Kind::Unknown) {
+                    localizado = false;
+                    break;
+                }
+                /* @c loc_of deja el ancho a cero cuando el offset del propio
+                 * valor no es exacto; sin offset exacto no se puede correr
+                 * nada, asi que la extension solo se aplica si sobrevivio. */
+                if (ext.acotada && l.width > 0) l.off += ext.desde;
+                if (a.escribe) locs_escribe.push_back(l);
+                else locs_lee.push_back(l);
             }
-            if (candidatas != 1) { localizado = false; break; }
-            const ir::IrValueId valor =
-                analysis::valor_unico_del_hueco(fn, hueco);
-            if (valor == ir::IR_NO_VALUE) { localizado = false; break; }
-            // Ancho 0: el bloque puede tocar todo el objeto, no un campo.
-            const AbstractLoc l = analysis::loc_of(pt, valor, 0);
-            if (l.kind == AbstractLoc::Kind::Unknown) { localizado = false; break; }
-            if (a.escribe) locs_escribe.push_back(l);
-            else locs_lee.push_back(l);
+            if (!localizado) break;
         }
     }
     if (localizado) {
@@ -274,6 +303,76 @@ static void aplicar_decl(SemanticEffects &e, const ir::IrNativeEffects &d,
     }
     if (d.puede_lanzar) e.may_throw = true;
     if (d.no_determinista) e.determinism.add(DeterminismTag::ExternalObservable);
+}
+
+/// Traduce UNA localizacion del callee a la memoria del llamante.  Devuelve
+/// una localizacion @c Unknown cuando no se puede nombrar aqui, y quien llama
+/// decide que hacer con eso -- que NO es meterla en el conjunto, porque ahi
+/// absorbe todo lo demas.
+static AbstractLoc instanciar_loc(const AbstractLoc &l,
+                                  const std::vector<ir::IrValueId> &args,
+                                  const analysis::PointsTo &pt) {
+    switch (l.kind) {
+    case AbstractLoc::Kind::ArgDerived: {
+        /* El parametro se sustituye por el argumento REAL.  El desplazamiento
+         * del callee se suma al del argumento: si el callee escribe "ocho bytes
+         * mas alla de su primer parametro" y el llamante le pasa `buf`, lo que
+         * se escribe son ocho bytes mas alla de `buf`. */
+        if (l.id >= args.size()) break; // llamada con menos args de la cuenta.
+        AbstractLoc real = analysis::loc_of(pt, args[l.id], l.width);
+        if (real.kind == AbstractLoc::Kind::Unknown) return real;
+        /* @c loc_of deja el ancho a cero cuando el offset del argumento no es
+         * exacto; sin offset exacto no se le puede sumar nada, y lo que queda
+         * es "toca ese objeto", que sigue siendo mucho mas que "toca algo". */
+        if (real.width > 0) real.off += l.off;
+        return real;
+    }
+    case AbstractLoc::Kind::Global:
+    case AbstractLoc::Kind::None:
+    case AbstractLoc::Kind::Unknown:
+        return l; // lo global y lo desconocido significan lo mismo aqui.
+    default:
+        break;
+    }
+    /* Pila o monton del CALLEE: sus identificadores son suyos y aqui no
+     * nombran nada.  Decir que se toca `stack#3` del llamante seria hablar de
+     * otro objeto. */
+    return AbstractLoc{AbstractLoc::Kind::Unknown, LOC_GENERIC};
+}
+
+/// Traduce un conjunto de localizaciones, quedandose con las que SI se pueden
+/// nombrar aqui y avisando si quedo alguna fuera.
+static LocSet instanciar_locset(const LocSet &s,
+                                const std::vector<ir::IrValueId> &args,
+                                const analysis::PointsTo &pt, bool &completo) {
+    LocSet out;
+    if (s.is_top) {
+        // Ya venia sin acotar: no hay nada que traducir y se dice.
+        completo = false;
+        return out;
+    }
+    for (const AbstractLoc &l : s.locs) {
+        const AbstractLoc t = instanciar_loc(l, args, pt);
+        if (t.kind == AbstractLoc::Kind::Unknown) {
+            /* No se pudo nombrar.  Meterla en el conjunto lo absorberia entero
+             * -- lo desconocido es el tope del reticulo -- y con ello se
+             * perderia lo que SI se sabe de las demas.  Se apunta aparte. */
+            completo = false;
+            continue;
+        }
+        out.add(t);
+    }
+    return out;
+}
+
+EfectoEnLlamada instanciar_en_llamada(const SemanticEffects &callee_eff,
+                                      const std::vector<ir::IrValueId> &args,
+                                      const analysis::PointsTo &pt) {
+    EfectoEnLlamada out;
+    out.lee = instanciar_locset(callee_eff.mem.reads, args, pt, out.completo);
+    out.escribe =
+        instanciar_locset(callee_eff.mem.writes, args, pt, out.completo);
+    return out;
 }
 
 EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,

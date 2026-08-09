@@ -1,0 +1,29 @@
+// Un bloque de asm que escribe FUERA de la reserva por la que entra.
+//
+// La reserva son dieciseis bytes y el bloque escribe ocho a partir del byte
+// dieciseis: justo detras.  Que eso se vea al compilar es consecuencia de una
+// cosa concreta -- que el analisis del asm diga hasta donde llega cada acceso
+// (`[p+16, p+24)`) en vez de conformarse con "toca ese objeto" --, porque el
+// comprobador de limites que lo caza ya existia y se saltaba los accesos sin
+// extension.
+//
+// Es la diferencia entre enterarse aqui y enterarse pisando la variable de al
+// lado en ejecucion, que no siempre casca y casi nunca casca donde esta el
+// fallo.
+//
+// @expect-error: VX3001
+
+// Escribe ocho bytes DETRAS de lo que le den.
+void escribe_detras(u8* p) {
+    asm (
+        reg d = p,
+    ) {
+        mov [d+16], rax
+    }
+}
+
+i32 main() {
+    u8 buf[16];
+    escribe_detras(&buf[0]);
+    return 42;
+}

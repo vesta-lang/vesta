@@ -252,6 +252,76 @@ const ArchRegs kArchRegs[] = {
     {"arm64", &canon_arm64},
 };
 
+// ---------------------------------------------------------------------------
+//  Como propaga cada instruccion un puntero.  Mismo reparto que los registros:
+//  cada arquitectura declara los SUYOS y quien sigue el puntero no conoce
+//  ninguno -- pregunta por la clase.  Anadir RISC-V es anadir su funcion y su
+//  fila, sin tocar el analisis.
+// ---------------------------------------------------------------------------
+
+/// x86: mover, calcular direcciones y aritmetica de desplazamiento.
+AsmTransferencia transferencia_x86(const std::string &m) {
+    if (m == "mov" || m == "movq" || m == "movabs") return AsmTransferencia::Transfiere;
+    if (m == "lea") return AsmTransferencia::Direccion;
+    if (m == "add") return AsmTransferencia::Suma;
+    if (m == "sub") return AsmTransferencia::Resta;
+    return AsmTransferencia::Ninguna;
+}
+
+/// arm64: las cargas son instrucciones propias, y la direccion se calcula con
+/// `add` o se toma con `adr`.
+AsmTransferencia transferencia_arm64(const std::string &m) {
+    if (m == "mov" || m == "ldr" || m == "ldur") return AsmTransferencia::Transfiere;
+    if (m == "adr" || m == "adrp") return AsmTransferencia::Direccion;
+    if (m == "add") return AsmTransferencia::Suma;
+    if (m == "sub") return AsmTransferencia::Resta;
+    return AsmTransferencia::Ninguna;
+}
+
+/// Asocia cada arquitectura con su tabla de transferencia.
+struct ArchTransfer {
+    const char *arch;
+    AsmTransferencia (*fn)(const std::string &);
+};
+const ArchTransfer kArchTransfer[] = {
+    {"x86_64", &transferencia_x86},
+    {"x86", &transferencia_x86},
+    {"arm64", &transferencia_arm64},
+};
+
+/// Pistas de tamano de la sintaxis Intel (`qword ptr [rdi]`).  ARM no tiene:
+/// alli el ancho lo dicen el registro y el mnemonico.
+uint32_t pista_x86(const std::string &pre) {
+    static const struct {
+        const char *nombre;
+        uint32_t bytes;
+    } kPistas[] = {{"byte", 1},      {"word", 2},     {"dword", 4},
+                   {"qword", 8},     {"xmmword", 16}, {"oword", 16},
+                   {"ymmword", 32},  {"zmmword", 64}};
+    /* De mas larga a mas corta no hace falta: los nombres largos CONTIENEN a
+     * los cortos (`dword` lleva `word` dentro), asi que se busca el mas largo
+     * que encaje y se devuelve ese. */
+    uint32_t mejor = 0;
+    size_t largo = 0;
+    for (const auto &p : kPistas) {
+        const size_t n = std::strlen(p.nombre);
+        if (pre.find(p.nombre) != std::string::npos && n > largo) {
+            largo = n;
+            mejor = p.bytes;
+        }
+    }
+    return mejor;
+}
+
+struct ArchPista {
+    const char *arch;
+    uint32_t (*fn)(const std::string &);
+};
+const ArchPista kArchPistas[] = {
+    {"x86_64", &pista_x86},
+    {"x86", &pista_x86},
+};
+
 /// La arquitectura del host, para cuando no hay override de target.
 const char *arch_host() {
 #if defined(__aarch64__) || defined(_M_ARM64)
@@ -275,23 +345,21 @@ std::string asm_canonical_reg(const std::string &raw, const std::string &arch) {
     return std::string();
 }
 
-std::string asm_canonical_reg(const std::string &raw) {
-    // Se despacha por el TARGET, no por el host: una variante
-    // @Target("arch:arm64") se compila con los registros de ARM aunque el build
-    // corra en x86.  Sin esto, `register("x0")` era "registro no reconocido" y
-    // las variantes arm64 no habian compilado nunca.
+std::string asm_arch_actual() {
     std::string os, arch;
     get_aot_condcomp_target(os, arch);
     if (arch.empty()) arch = arch_host();
-    return asm_canonical_reg(raw, arch);
+    return arch;
+}
+
+std::string asm_canonical_reg(const std::string &raw) {
+    return asm_canonical_reg(raw, asm_arch_actual());
 }
 
 /// ISA del objetivo activo, para preguntarle a la base de instrucciones.  Sale
 /// del MISMO sitio que los registros: el target que se compila, no el host.
 instr_db::Isa isa_actual() {
-    std::string os, arch;
-    get_aot_condcomp_target(os, arch);
-    if (arch.empty()) arch = arch_host();
+    const std::string arch = asm_arch_actual();
     if (arch == "arm64" || arch == "aarch64") return instr_db::Isa::ARM64;
     if (arch == "arm" || arch == "arm32") return instr_db::Isa::ARM32;
     if (arch == "riscv" || arch == "riscv64") return instr_db::Isa::RISCV;
@@ -362,23 +430,34 @@ const EffTable &x86_effects_table() {
          *
          * `cmps`/`scas` ademas comparan, asi que tocan flags. */
         auto cadena = [&](const char *m, bool lee_rsi, bool escribe_rdi,
-                          bool lee_rdi, bool flags) {
+                          bool lee_rdi, bool flags, uint16_t bytes) {
             AsmEffects s = E({}, 0x0, /*mem=*/true, flags);
             if (lee_rsi) s.implicit_mem_read.emplace_back("rsi");
             if (lee_rdi) s.implicit_mem_read.emplace_back("rdi");
             if (escribe_rdi) s.implicit_mem_write.emplace_back("rdi");
+            /* Cuanto toca CADA paso.  Lo dice el sufijo, y por eso se declara
+             * aqui: quien analiza el bloque no tiene por que saber que una `q`
+             * al final significa ocho bytes en esta arquitectura. */
+            s.mem_bytes_implicito = bytes;
             add(m, s);
         };
-        for (const char *m : {"movsb", "movsw", "movsd", "movsq"})
-            cadena(m, true, true, false, false); // [rdi] <- [rsi]
-        for (const char *m : {"stosb", "stosw", "stosd", "stosq"})
-            cadena(m, false, true, false, false); // [rdi] <- al/ax/eax/rax
-        for (const char *m : {"lodsb", "lodsw", "lodsd", "lodsq"})
-            cadena(m, true, false, false, false); // al/ax/eax/rax <- [rsi]
-        for (const char *m : {"cmpsb", "cmpsw", "cmpsd", "cmpsq"})
-            cadena(m, true, false, true, true); // compara [rsi] con [rdi]
-        for (const char *m : {"scasb", "scasw", "scasd", "scasq"})
-            cadena(m, false, false, true, true); // compara al/... con [rdi]
+        // El sufijo b/w/d/q es el ancho de cada paso: 1, 2, 4 y 8 bytes.
+        static const uint16_t kAnchoSufijo[4] = {1, 2, 4, 8};
+        {
+            const char *movs[4] = {"movsb", "movsw", "movsd", "movsq"};
+            const char *stos[4] = {"stosb", "stosw", "stosd", "stosq"};
+            const char *lods[4] = {"lodsb", "lodsw", "lodsd", "lodsq"};
+            const char *cmps[4] = {"cmpsb", "cmpsw", "cmpsd", "cmpsq"};
+            const char *scas[4] = {"scasb", "scasw", "scasd", "scasq"};
+            for (int k = 0; k < 4; ++k) {
+                const uint16_t w = kAnchoSufijo[k];
+                cadena(movs[k], true, true, false, false, w);  // [rdi] <- [rsi]
+                cadena(stos[k], false, true, false, false, w); // [rdi] <- al/...
+                cadena(lods[k], true, false, false, false, w); // al/... <- [rsi]
+                cadena(cmps[k], true, false, true, true, w);   // [rsi] vs [rdi]
+                cadena(scas[k], false, false, true, true, w);  // al/... vs [rdi]
+            }
+        }
 
         /* --- Entrada/salida por PUERTO ---
          * Las usa cualquier sistema operativo (teclado, reloj, consola serie) y
@@ -750,7 +829,14 @@ std::vector<std::string> tokenize_line(const std::string &line) {
     std::vector<std::string> toks;
     std::string cur;
     for (char c : line) {
-        if (c == ' ' || c == '\t' || c == ',') {
+        /* El RETORNO DE CARRO separa como cualquier otro blanco.  Un fuente
+         * guardado en Windows lleva `\r\n`, asi que al partir por `\n` cada
+         * linea acaba en `\r`: sin esto, el ultimo operando de cada
+         * instruccion se llamaba `v0\r` -- que no es ningun registro -- y una
+         * linea en blanco dentro del asm era un mnemonico desconocido cuyo
+         * nombre no se podia ni imprimir.  Se veia como un aviso que decia
+         * "mnemonico(s) no reconocido(s) ()", con la lista vacia. */
+        if (c == ' ' || c == '\t' || c == '\r' || c == ',') {
             if (!cur.empty()) {
                 toks.push_back(cur);
                 cur.clear();
@@ -764,8 +850,235 @@ std::vector<std::string> tokenize_line(const std::string &line) {
 }
 } // namespace
 
+std::string asm_base_de_memoria(const std::string &operando,
+                                const std::string &arch) {
+    return asm_parse_memoria(operando, arch).base;
+}
+
+AsmMemOperando asm_parse_memoria(const std::string &operando,
+                                 const std::string &arch) {
+    AsmMemOperando m;
+    const size_t a = operando.find('[');
+    if (a == std::string::npos) return m;
+    size_t i = a + 1;
+    while (i < operando.size() && std::isspace((unsigned char)operando[i])) ++i;
+    /* Marcador `$N`: el registro aun no esta elegido -- lo elige el asignador
+     * despues --, pero el marcador YA identifica de que operando se trata, que
+     * es justo lo que hace falta.  Se devuelve tal cual.
+     *
+     * Es ademas el camino MEJOR de los dos: no depende de nombres de registro,
+     * asi que vale igual en cualquier arquitectura, y no puede confundirse con
+     * otra variable que use el mismo registro.  Y es la forma que usa la
+     * stdlib, o sea que sin esto la parte que mas importa quedaba fuera. */
+    if (i < operando.size() && operando[i] == '$') {
+        std::string ph = "$";
+        for (++i;
+             i < operando.size() && std::isdigit((unsigned char)operando[i]);
+             ++i)
+            ph.push_back(operando[i]);
+        if (ph.size() <= 1) return m;
+        m.base = std::move(ph);
+    } else {
+        std::string ident;
+        for (; i < operando.size(); ++i) {
+            const char c = operando[i];
+            if (std::isalnum((unsigned char)c) || c == '_') ident.push_back(c);
+            else break;
+        }
+        if (ident.empty()) return m;
+        m.base = asm_canonical_reg(ident, arch);
+        if (m.base.empty()) return m;
+    }
+
+    /* Lo que queda hasta el corchete de cierre: a que distancia de la base cae
+     * el acceso.  Puede tener tres partes y las tres se describen:
+     *
+     *   `[rdi]`                 -> distancia 0
+     *   `[rdi+8]`  `[x0, #8]`   -> distancia 8      `[rdi-8]` -> -8
+     *   `[rbx+rcx*8]`           -> indice `rcx`, escala 8
+     *   `[rbx+rcx*8+16]`        -> las dos cosas
+     *   `[x0, x1, lsl #3]`      -> indice `x1`, escala 8
+     *
+     * Lo que NO se reconozca deja @c reconocido en false, y entonces no se
+     * afirma distancia ninguna: decir `[p, p+16)` de un acceso que cae en otra
+     * parte no es menos preciso, es falso -- quien pregunte por solapes
+     * concluira que no los hay. */
+    const size_t cierre = operando.find(']', i);
+    if (cierre == std::string::npos) return m;
+    const std::string resto = operando.substr(i, cierre - i);
+
+    int signo = 1;          // signo del termino que se este leyendo
+    bool esperando_lsl = false; // el siguiente numero es un desplazamiento log2
+    size_t k = 0;
+    auto salta_espacios = [&] {
+        while (k < resto.size() &&
+               (std::isspace((unsigned char)resto[k]) || resto[k] == ',' ||
+                resto[k] == '#'))
+            ++k;
+    };
+    while (true) {
+        salta_espacios();
+        if (k >= resto.size()) break;
+        const char c = resto[k];
+        if (c == '+') { signo = 1; ++k; continue; }
+        if (c == '-') { signo = -1; ++k; continue; }
+        if (c == '*') {
+            // La escala del indice: `rcx*8`.
+            ++k;
+            salta_espacios();
+            std::string num;
+            while (k < resto.size() && std::isalnum((unsigned char)resto[k]))
+                num.push_back(resto[k++]);
+            if (num.empty()) return m;
+            m.escala = std::strtoll(num.c_str(), nullptr, 0);
+            continue;
+        }
+        if (c == '$' || std::isalpha((unsigned char)c) || c == '_') {
+            // Un operando: marcador, registro, o la palabra `lsl`/`uxtw`.
+            std::string ident;
+            if (c == '$') {
+                ident.push_back(resto[k++]);
+                while (k < resto.size() &&
+                       std::isdigit((unsigned char)resto[k]))
+                    ident.push_back(resto[k++]);
+            } else {
+                while (k < resto.size() &&
+                       (std::isalnum((unsigned char)resto[k]) ||
+                        resto[k] == '_'))
+                    ident.push_back(resto[k++]);
+            }
+            std::string bajo;
+            for (char ch : ident)
+                bajo.push_back((char)std::tolower((unsigned char)ch));
+            if (bajo == "lsl") { esperando_lsl = true; continue; }
+            if (bajo == "uxtw" || bajo == "sxtw" || bajo == "sxtx") continue;
+            // Un segundo operando dentro de los corchetes es el INDICE.
+            const std::string canon =
+                (ident[0] == '$') ? ident : asm_canonical_reg(ident, arch);
+            if (canon.empty()) return m; // ni registro ni marcador: no se lee.
+            if (!m.indice.empty()) return m; // dos indices: fuera del modelo.
+            m.indice = canon;
+            continue;
+        }
+        if (std::isdigit((unsigned char)c)) {
+            std::string num;
+            while (k < resto.size() &&
+                   (std::isxdigit((unsigned char)resto[k]) ||
+                    resto[k] == 'x' || resto[k] == 'X'))
+                num.push_back(resto[k++]);
+            const long long v = std::strtoll(num.c_str(), nullptr, 0);
+            if (esperando_lsl) {
+                // `lsl #3` escala por 2^3: es la misma idea que `*8`.
+                esperando_lsl = false;
+                if (v < 0 || v > 63) return m;
+                m.escala = (int64_t)1 << v;
+            } else {
+                m.desplazamiento += (int64_t)signo * (int64_t)v;
+            }
+            continue;
+        }
+        return m; // parentesis, aritmetica rara: no se lee.
+    }
+    m.reconocido = true;
+    return m;
+}
+
+AsmTransferencia asm_transferencia(const std::string &mnem,
+                                   const std::string &arch) {
+    for (const auto &a : kArchTransfer)
+        if (arch == a.arch) return a.fn(mnem);
+    return AsmTransferencia::Ninguna;
+}
+
+uint32_t asm_pista_de_tamano(const std::string &operando,
+                             const std::string &arch) {
+    // Solo lo que va DELANTE de los corchetes: dentro estan los registros.
+    std::string pre;
+    for (char c : operando) {
+        if (c == '[') break;
+        pre.push_back((char)std::tolower((unsigned char)c));
+    }
+    if (pre.empty()) return 0;
+    for (const auto &a : kArchPistas)
+        if (arch == a.arch) return a.fn(pre);
+    return 0;
+}
+
+std::string asm_contador_de_repeticion(const std::string &arch) {
+    // Las repeticiones por prefijo son cosa de x86; en su forma canonica el
+    // contador es `rcx` sea cual sea el ancho del modo.
+    if (arch.rfind("x86", 0) == 0) return "rcx";
+    return std::string();
+}
+
+uint32_t asm_ancho_acceso_bytes(
+    const std::vector<std::string> &ops, size_t idx_mem,
+    const std::vector<std::pair<std::string, std::string>> &clases_operando,
+    const std::string &arch) {
+    if (idx_mem >= ops.size()) return 0;
+
+    /* Primero, la pista de tamano si el fuente la escribio (`qword ptr [rdi]`).
+     * Cuando esta, MANDA: es justo lo que se escribe para desambiguar cuando
+     * los operandos no bastan.  Que pistas existen lo dice cada arquitectura. */
+    if (const uint32_t pista = asm_pista_de_tamano(ops[idx_mem], arch))
+        return pista;
+
+    /* Y si no, lo dice el OTRO operando: `mov [rdi], rax` mueve 8 y
+     * `mov [rdi], eax` mueve 4, con los mismos corchetes.  Se recorren todos
+     * por si el de memoria no es el primero. */
+    for (size_t k = 0; k < ops.size(); ++k) {
+        if (k == idx_mem || ops[k].empty()) continue;
+        if (ops[k].find('[') != std::string::npos) continue;
+        uint32_t bits = 0;
+        if (ops[k][0] == '$') {
+            // Lo eligio el compilador: su ancho es el de la clase declarada.
+            for (const auto &co : clases_operando)
+                if (co.first == ops[k]) {
+                    bits = asm_ancho_bits_de_clase(co.second);
+                    break;
+                }
+        } else {
+            bits = asm_ancho_bits_de_clase(ops[k]);
+        }
+        if (bits != 0) return bits / 8;
+    }
+    return 0; // no se afirma cuantos bytes; NO significa cero.
+}
+
+uint32_t asm_ancho_bits_de_clase(const std::string &clase) {
+    if (clase.empty()) return 0;
+    /* Un registro CONCRETO se pregunta tal cual.  Una clase sin numero
+     * (`xmm`, `reg`) no es un registro, asi que se pregunta por uno de esa
+     * clase: el ancho es de la clase entera, no del que toque.  `reg` es el
+     * caso especial -- no es un nombre de ninguna arquitectura --, y significa
+     * "un registro de proposito general del objetivo". */
+    const instr_db::Isa isa = isa_actual();
+    instr_db::ParsedOp po = instr_db::parse_operand(isa, clase);
+    if (po.kind == instr_db::OP_REG && po.width > 0)
+        return (uint32_t)po.width;
+    po = instr_db::parse_operand(isa, clase + "0");
+    if (po.kind == instr_db::OP_REG && po.width > 0)
+        return (uint32_t)po.width;
+    if (clase == "reg") {
+        // El entero del objetivo: se pregunta por su acumulador, que existe en
+        // todas y cuyo ancho ES el del banco general.
+        for (const char *rep : {"rax", "x0", "r0"}) {
+            po = instr_db::parse_operand(isa, rep);
+            if (po.kind == instr_db::OP_REG && po.width > 0)
+                return (uint32_t)po.width;
+        }
+    }
+    return 0;
+}
+
 AsmInferResult asm_infer_clobbers(const std::string &nasm_body,
                                   const std::vector<std::string> &bound_canon) {
+    return asm_infer_clobbers(nasm_body, bound_canon, {});
+}
+
+AsmInferResult asm_infer_clobbers(
+    const std::string &nasm_body, const std::vector<std::string> &bound_canon,
+    const std::vector<std::pair<std::string, std::string>> &clases_operando) {
     AsmInferResult res;
     // Set de regs ligados (canonicos) a EXCLUIR de los clobbers.
     std::unordered_set<std::string> bound(bound_canon.begin(),
@@ -900,10 +1213,25 @@ AsmInferResult asm_infer_clobbers(const std::string &nasm_body,
             if (eff.align_req == kAlignAnchoOperando) {
                 for (size_t k = ti + 1; k < toks.size(); ++k) {
                     if (toks[k] == "," || toks[k].empty()) continue;
-                    const instr_db::ParsedOp po =
-                        instr_db::parse_operand(isa_actual(), toks[k]);
-                    if (po.kind == instr_db::OP_REG && po.width >= 128) {
-                        req.bytes = (uint16_t)(po.width / 8);
+                    /* Si el operando lo eligio el compilador, en el cuerpo se
+                     * llama `$N` y ningun analisis del texto puede decir cuanto
+                     * mide.  Lo dice su CLASE, que es lo que escribio el
+                     * programador, y llega en el diccionario de quien tiene las
+                     * ligaduras.  Sin esto, justo la forma que usa la stdlib se
+                     * quedaba sin poder comprobarse. */
+                    uint32_t bits = 0;
+                    for (const auto &co : clases_operando)
+                        if (co.first == toks[k]) {
+                            bits = asm_ancho_bits_de_clase(co.second);
+                            break;
+                        }
+                    if (bits == 0) {
+                        const instr_db::ParsedOp po =
+                            instr_db::parse_operand(isa_actual(), toks[k]);
+                        if (po.kind == instr_db::OP_REG) bits = (uint32_t)po.width;
+                    }
+                    if (bits >= 128) {
+                        req.bytes = (uint16_t)(bits / 8);
                         break;
                     }
                 }
@@ -913,6 +1241,10 @@ AsmInferResult asm_infer_clobbers(const std::string &nasm_body,
             for (size_t k = ti + 1; k < toks.size(); ++k)
                 if (toks[k].find('[') != std::string::npos) {
                     req.operando = toks[k];
+                    // De donde sale la direccion, por el mismo camino que los
+                    // accesos del bloque: leer dentro de los corchetes es la
+                    // misma operacion, y aqui se hace una sola vez.
+                    req.base = asm_base_de_memoria(toks[k], asm_arch_actual());
                     break;
                 }
             res.align_reqs.push_back(std::move(req));

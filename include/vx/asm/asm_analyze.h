@@ -79,9 +79,92 @@ struct AsmBlockEffects {
      * @brief Un acceso a memoria del bloque: por que registro se llega y si se
      *        escribe.
      */
+    /**
+     * @struct Extension
+     * @brief Hasta donde llega un acceso, como EXPRESION y no como numero.
+     *
+     * Un acceso casi nunca es "tantos bytes": es tantos bytes a tanta
+     * distancia, quiza repetidos tantas veces, y esas cantidades salen de
+     * operandos del propio bloque.  Decir "no se" porque una de ellas no es una
+     * constante seria tirar lo que si se sabe -- que un `rep movsb` recorre
+     * `[dst, dst + rcx)` es un hecho, aunque `rcx` no sea una constante --, y
+     * quien pregunta SI puede acotarlo: el operando esta ligado a una variable
+     * del programa, y de esa se conoce su rango.
+     *
+     * La expresion es:
+     *
+     *     [ base + const_off + indice*escala ,  + bytes * repeticion )
+     *
+     * donde @ref indice y @ref repeticion son NOMBRES de operandos (registro
+     * canonico o marcador `$N`), no valores.  Resolverlos es cosa de quien
+     * tiene las ligaduras y los rangos; describirlos, de aqui.
+     */
+    struct Extension {
+        int64_t const_off = 0; ///< parte constante de la distancia, en bytes.
+        /// Operando que aporta el resto de la distancia, o vacio si no lo hay.
+        /// `[rbx + rcx*8]` -> @c "rcx" con @ref escala 8.
+        std::string indice;
+        int64_t escala = 1; ///< por cuanto se multiplica @ref indice.
+        /// Bytes de UN acceso.  0 = no se pudo determinar cuantos.
+        uint32_t bytes = 0;
+        /// Operando que dice cuantas VECES se repite, o vacio si una sola.
+        /// Un `rep movsb` lo repite `rcx` veces.
+        std::string repeticion;
+
+        /// @c true si la distancia es una constante (sin indice).
+        bool distancia_constante() const { return indice.empty(); }
+        /// @c true si el acceso es uno solo (sin repeticion).
+        bool una_vez() const { return repeticion.empty(); }
+        /// @c true si se conoce el tamano de un acceso.
+        bool ancho_conocido() const { return bytes != 0; }
+        /// @c true si la extension esta COMPLETAMENTE determinada aqui, sin
+        /// necesidad de preguntar el rango de nada.
+        bool cerrada() const {
+            return ancho_conocido() && distancia_constante() && una_vez();
+        }
+    };
+
+    /**
+     * @struct Acceso
+     * @brief Un acceso a memoria del bloque: por donde se llega, si escribe, y
+     *        hasta donde llega.
+     */
+    /**
+     * @struct Indireccion
+     * @brief La base no es el operando, es lo que hay GUARDADO en el.
+     *
+     * `mov rdi, [rsi+8]` y luego `[rdi]` no deja a `rdi` sin explicacion: su
+     * valor es el que estuviera en `[rsi+8]`.  Quien pregunta puede seguir esa
+     * carga -- el bloque no esta solo, alrededor hay un programa que dice que
+     * se guardo ahi --, asi que se describe en vez de rendirse.  Solo se queda
+     * de verdad sin respuesta cuando el valor entra de fuera en ejecucion.
+     */
+    struct Indireccion {
+        bool    hay = false; ///< la base se cargo de memoria.
+        int64_t off = 0;     ///< de que distancia del operando se cargo.
+    };
+
     struct Acceso {
         std::string base;    ///< registro base, CANONICO (vacio = no se supo).
         bool        escribe; ///< true si el acceso escribe.
+        /// Si @c hay, @ref base no es la direccion: es donde estaba GUARDADA.
+        Indireccion desde_memoria;
+        /**
+         * Hasta donde llega.  Ver @ref Extension.
+         *
+         * Sin esto, lo mas que se puede decir de un acceso es "toca ese
+         * objeto", y entonces dos accesos al mismo objeto siempre parecen
+         * estorbarse -- aunque uno vaya al principio y otro al final --.  Con
+         * la extension, `mov [p], rax` y `mov [p+16], rax` son lo que de verdad
+         * son: dos escrituras que no se pisan.
+         *
+         * @c valida en false es el unico "no se" que queda: ni siquiera se pudo
+         * nombrar de que depende (una rama que deja la distancia en el aire,
+         * una instruccion cuya memoria no esta acotada).  Entonces se toma el
+         * objeto entero, que es lo que se hacia siempre.
+         */
+        Extension extension;
+        bool      valida = false; ///< @ref extension describe algo.
     };
     /// Los accesos a memoria, en orden.  Sirven para decir QUE memoria toca el
     /// bloque en vez de "cualquiera": quien tenga las ligaduras puede llevar el
@@ -129,6 +212,24 @@ struct AsmBlockEffects {
  */
 AsmBlockEffects asm_analyze_block(const std::string &nasm_body,
                                   const std::string &arch);
+
+/**
+ * @brief Igual que la anterior, sabiendo ademas de que CLASE es cada operando.
+ *
+ * El ancho de un acceso lo dice el operando que NO son los corchetes, y cuando
+ * ese operando lo eligio el compilador se llama `$N` en el cuerpo: entonces su
+ * ancho solo lo sabe la clase con la que se declaro.  Sin el mapa, un
+ * `movdqa [$0], $1` no puede decir que toca dieciseis bytes.
+ *
+ * @param nasm_body Cuerpo NASM/ARM.
+ * @param arch      Arquitectura del cuerpo.
+ * @param clases_operando Pares (marcador en el cuerpo, clase declarada).
+ * @return Los mismos efectos, con la extension de cada acceso resuelta hasta
+ *         donde el bloque permita.
+ */
+AsmBlockEffects asm_analyze_block(
+    const std::string &nasm_body, const std::string &arch,
+    const std::vector<std::pair<std::string, std::string>> &clases_operando);
 
 } // namespace vx
 

@@ -16,6 +16,7 @@
  */
 
 #include "vx/compiler.h"
+#include "vx/source_text.h" // un solo fin de linea para todo el pipeline
 #include "vx/c_header_gen.h" // Fase 4 interop C: vx --emit-header
 #include "vx/vxdbg_emit.h"   // base de conocimiento de depuracion
 
@@ -806,9 +807,8 @@ CompileResult compile_vx_source(const std::string &source,
                     "fiber_swapctx: no encuentro stdlib/vx/vx_fiber.vx; el "
                     "context-switch de fibra no estara disponible en JIT");
             } else {
-                std::ifstream vff(vf_path);
-                std::string vf_src((std::istreambuf_iterator<char>(vff)),
-                                   std::istreambuf_iterator<char>());
+                std::string vf_src;
+                vx::leer_fuente(vf_path, vf_src);
                 CompileOptions vf_opts;
                 vf_opts.module_name = "vx_fiber";
                 vf_opts.opt_level = 2;
@@ -1183,6 +1183,18 @@ CompileResult compile_vx_source(const std::string &source,
          * criterio para los tres. */
         if (opts.report_bounds)
             vx_report_bounds(irmod_for_section, res.diagnostics, filename);
+        /* Precondiciones del asm.  SIEMPRE, no bajo opcion: una instruccion
+         * cuya exigencia no se cumple no da un resultado peor, hace caer el
+         * programa -- y callarselo ya costo descubrirlo ejecutando.
+         *
+         * El programa NO se da por cerrado: aqui hay UN modulo, y lo que se
+         * este enlazando con el no esta a la vista.  Dar por hecho que estas
+         * son todas las llamadas haria que el mismo fichero dijera una cosa u
+         * otra segun se compilara solo o con el resto -- justo lo que no puede
+         * pasar cuando los modulos se cachean por separado.  Quien SI ve el
+         * programa entero es el camino de proyecto, y alli se dice. */
+        vx_report_asm_preconditions(irmod_for_section, res.diagnostics, filename,
+                                    /*programa_cerrado=*/false);
         mod_para_seccion = std::move(irmod_for_section);
         hay_seccion = true;
     }

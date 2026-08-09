@@ -46,9 +46,31 @@ uint32_t alineacion_de_reserva(int64_t bytes) {
 } // namespace
 
 AlignmentFacts compute_alignment(const ir::IrFunction &fn) {
+    return compute_alignment(fn, nullptr);
+}
+
+AlignmentFacts compute_alignment(const ir::IrFunction &fn,
+                                 const AlignmentSummaries *resumen) {
     AlignmentFacts f;
     f.de_valor.assign(fn.values.size(), 1u);
+    f.resto.assign(fn.values.size(), 0u);
     if (fn.blocks.empty()) return f;
+
+    /* Los parametros no valen "no se sabe nada" si el modulo ya dijo lo que
+     * le llega a esta funcion.  Es lo que hace que un `asm` que exige
+     * alineacion pueda comprobarse donde ESTA -- dentro de la funcion que
+     * recibe el destino -- y no solo donde se reserva. */
+    if (resumen != nullptr) {
+        if (const auto *r = resumen->buscar(fn.name)) {
+            const auto &ps = r->params;
+            for (size_t i = 0; i < fn.params.size() && i < ps.size(); ++i) {
+                const ir::IrValueId v = fn.params[i];
+                if (v >= f.de_valor.size()) continue;
+                f.de_valor[v] = ps[i].modulo;
+                f.resto[v] = ps[i].resto;
+            }
+        }
+    }
 
     /* Se recorre en el orden de los bloques y se repite hasta que nada cambia.
      * Hace falta por los PHI: la rama que viene del final del bucle define un
@@ -65,9 +87,14 @@ AlignmentFacts compute_alignment(const ir::IrFunction &fn) {
                 if (in.dst == ir::IR_NO_VALUE || in.dst >= f.de_valor.size())
                     continue;
                 uint32_t nueva = 1;
+                uint32_t nuevo_resto = 0;
                 switch (in.op) {
                 case ir::IrOp::CONST:
-                    nueva = potencia_que_divide((uint64_t)in.imm);
+                    /* De una constante se sabe TODO: es congruente consigo
+                     * misma modulo lo que sea.  Se toma el tope para tener el
+                     * mayor modulo util, y el resto es la propia constante. */
+                    nueva = kTope;
+                    nuevo_resto = (uint32_t)((uint64_t)in.imm & (kTope - 1));
                     break;
                 case ir::IrOp::ALLOCA:
                     // Una reserva de pila la coloca el marco; el minimo que
@@ -90,17 +117,29 @@ AlignmentFacts compute_alignment(const ir::IrFunction &fn) {
                 case ir::IrOp::MOV:
                 case ir::IrOp::BITCAST:
                 case ir::IrOp::CAST:
-                    // No cambian el valor: heredan su alineacion.
-                    if (!in.operands.empty()) nueva = f.de(in.operands[0]);
+                    // No cambian el valor: heredan lo que se sepa de el.
+                    if (!in.operands.empty()) {
+                        nueva = f.de(in.operands[0]);
+                        nuevo_resto = f.resto_de(in.operands[0]);
+                    }
                     break;
                 case ir::IrOp::ADD:
                 case ir::IrOp::SUB:
                     /* Sumar dos multiplos de 8 da un multiplo de 8; sumar uno
                      * de 8 y uno de 4 solo garantiza 4.  Con potencias de dos,
                      * el maximo comun divisor es la menor de las dos. */
-                    if (in.operands.size() == 2)
+                    if (in.operands.size() == 2) {
                         nueva = std::min(f.de(in.operands[0]),
                                          f.de(in.operands[1]));
+                        /* Los restos se suman o se restan igual que los
+                         * valores, y luego se reducen al modulo comun.  Es lo
+                         * que hace que `base + 1` sepa que le sobra 1. */
+                        const uint32_t ra = f.resto_de(in.operands[0]) % nueva;
+                        const uint32_t rb = f.resto_de(in.operands[1]) % nueva;
+                        nuevo_resto = (in.op == ir::IrOp::ADD)
+                                          ? ((ra + rb) % nueva)
+                                          : ((ra + nueva - rb) % nueva);
+                    }
                     break;
                 case ir::IrOp::MUL: {
                     /* Multiplicar por una constante MULTIPLICA la alineacion:
@@ -174,6 +213,11 @@ AlignmentFacts compute_alignment(const ir::IrFunction &fn) {
                     break;
                 }
                 if (nueva < 1) nueva = 1;
+                nuevo_resto %= nueva;
+                if (f.resto[in.dst] != nuevo_resto) {
+                    f.resto[in.dst] = nuevo_resto;
+                    cambio = true;
+                }
                 if (nueva != f.de_valor[in.dst]) {
                     /* Solo a la baja tras la primera vuelta: si subiera, el
                      * punto fijo podria no terminar. */
@@ -186,6 +230,99 @@ AlignmentFacts compute_alignment(const ir::IrFunction &fn) {
         }
     }
     return f;
+}
+
+AlignmentSummaries compute_alignment_summaries(const ir::IrModule &mod,
+                                               bool programa_cerrado) {
+    AlignmentSummaries out;
+
+    /* Que funciones tienen TODOS sus llamantes a la vista.  Tres cosas los
+     * dejan fuera de la vista, y cada una por su motivo:
+     *
+     *   - la DIRECCION tomada: se la puede llamar por un puntero que sale de
+     *     aqui y acaba quien sabe donde;
+     *   - ser NATIVA: el cuerpo no es nuestro;
+     *   - `main`: la llama el sistema, que no esta en este modulo.
+     *
+     * Y la cuarta, la que depende de lo que se este construyendo: si esto va a
+     * ser una libreria, cualquiera podra llamar a lo PUBLICO desde fuera.  Si
+     * va a ser el programa entero, no hay fuera.  El mismo fichero, dos
+     * respuestas -- por eso el dato entra como parametro y no se adivina. */
+    std::unordered_map<std::string, bool> cerrada;
+    for (const ir::IrFunction &fn : mod.functions)
+        cerrada[fn.name] = !fn.is_native && fn.name != "main" &&
+                           (programa_cerrado || !fn.is_public);
+    for (const ir::IrFunction &fn : mod.functions)
+        for (const ir::IrBlock &b : fn.blocks)
+            for (const ir::IrInstr &in : b.instrs)
+                if (in.op == ir::IrOp::LABEL_ADDR && !in.func_name.empty())
+                    cerrada[in.func_name] = false;
+
+    // Primera pasada: los hechos de cada funcion sin sembrar (los argumentos
+    // que son constantes o reservas ya se conocen sin saber nada de fuera).
+    std::unordered_map<std::string, AlignmentFacts> hechos;
+    for (const ir::IrFunction &fn : mod.functions)
+        hechos.emplace(fn.name, compute_alignment(fn, nullptr));
+
+    // Encuentro de lo que aporta cada sitio de llamada.
+    std::unordered_map<std::string, std::vector<AlignmentSummaries::Param>> acc;
+    std::unordered_map<std::string, bool> visto;
+    for (const ir::IrFunction &fn : mod.functions) {
+        const AlignmentFacts &h = hechos[fn.name];
+        for (const ir::IrBlock &b : fn.blocks) {
+            for (const ir::IrInstr &in : b.instrs) {
+                if (in.op != ir::IrOp::CALL || in.func_name.empty()) continue;
+                auto it = cerrada.find(in.func_name);
+                if (it == cerrada.end() || !it->second) continue;
+                auto &ps = acc[in.func_name];
+                if (ps.size() < in.operands.size())
+                    ps.resize(in.operands.size());
+                const bool primero = !visto[in.func_name];
+                visto[in.func_name] = true;
+                for (size_t i = 0; i < in.operands.size(); ++i) {
+                    const ir::IrValueId a = in.operands[i];
+                    const uint32_t m = h.de(a);
+                    const uint32_t r = h.resto_de(a);
+                    if (primero) {
+                        ps[i].modulo = m;
+                        ps[i].resto = r;
+                        continue;
+                    }
+                    /* Encuentro: el modulo comun es el menor de los dos, y el
+                     * resto solo se conserva si coincide una vez reducido.  Si
+                     * dos llamadas dan restos distintos, lo unico cierto es
+                     * que no se sabe. */
+                    const uint32_t mc = std::min(ps[i].modulo, m);
+                    if ((ps[i].resto % mc) != (r % mc)) {
+                        ps[i].modulo = 1;
+                        ps[i].resto = 0;
+                    } else {
+                        ps[i].modulo = mc;
+                        ps[i].resto = r % mc;
+                    }
+                }
+            }
+        }
+    }
+    /* Y el veredicto por funcion.  La que no esta cerrada no aparece: no se
+     * afirma nada de ella.  La cerrada CON llamantes aporta lo que le llega.  Y
+     * la cerrada SIN llamantes dice justo eso, que es lo contrario de no saber:
+     * se ha visto todo lo que podria llamarla y no habia nada, asi que su
+     * cuerpo no se ejecuta nunca. */
+    for (const ir::IrFunction &fn : mod.functions) {
+        auto ic = cerrada.find(fn.name);
+        if (ic == cerrada.end() || !ic->second) continue;
+        AlignmentSummaries::Resumen r;
+        auto ia = acc.find(fn.name);
+        if (ia == acc.end()) {
+            r.universo = Universo::CerradoSinLlamantes;
+        } else {
+            r.universo = Universo::CerradoConLlamantes;
+            r.params = std::move(ia->second);
+        }
+        out.por_funcion[fn.name] = std::move(r);
+    }
+    return out;
 }
 
 } // namespace analysis

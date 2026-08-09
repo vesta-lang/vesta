@@ -62,6 +62,28 @@ public:
     /// Fase 1 rellena el mapeo real; Fase 0 devuelve el neutro Complete.
     EffectAnalysisResult local(const ir::IrFunction &fn, const ir::IrInstr &ins);
 
+    /**
+     * @brief Que memoria DEL LLAMANTE toca un sitio de llamada concreto.
+     *
+     * El efecto de una funcion habla de sus parametros; aqui se sustituyen por
+     * los argumentos de ESTA llamada, con lo que pasa a hablar de la memoria
+     * del que llama -- que es la unica donde se puede juzgar si un acceso cabe.
+     *
+     * Va aparte de @ref local a proposito: el efecto local de una llamada es
+     * ceder el control, y meterle dentro lo que hace el destino convertiria el
+     * calculo del cierre en una definicion circular.  Esto es una PROYECCION
+     * sobre un cierre ya calculado, no una parte de el.
+     *
+     * @param caller Funcion donde esta la llamada.
+     * @param call   La instruccion de llamada.
+     * @return Lo que la llamada toca de la memoria de @p caller.  Vacio y NO
+     *         completo si no hay resumen del destino (una funcion de fuera del
+     *         programa, o un destino que no se conoce): no saber lo que hace no
+     *         es saber que no hace nada.
+     */
+    EfectoEnLlamada at_call_site(const ir::IrFunction &caller,
+                                 const ir::IrInstr &call);
+
     /// Resumen COMPLETO de una funcion (efectos local/closure + estructura +
     /// interproc).  Recomputa por punto-fijo si esta sucio.  Fase 2 rellena la
     /// logica; Fase 0 devuelve un summary vacio Complete.

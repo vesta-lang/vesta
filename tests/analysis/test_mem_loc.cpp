@@ -12,6 +12,7 @@
  *        (raiz + offset const, sound: nunca afirma un offset no probado).
  */
 #include "analysis/effects/effects.h"
+#include "analysis/effects/ir_effects.h" // traer un efecto al sitio de llamada
 #include "analysis/facts/ir_facts.h"
 #include "analysis/memory/points_to.h"
 #include "ir/ssa_ir.h"
@@ -151,7 +152,67 @@ static void test_points_to() {
     CHECK(must_alias(la, lb), "bitcast(alloca) es la misma direccion (must-alias)");
 }
 
+// --------------------------------------------------------------------------
+// 5) El efecto de una funcion, traido al sitio donde se la llama.
+//
+// Una funcion describe lo que toca en terminos de SUS parametros ("escribo
+// desde el primero, sesenta y cuatro bytes"), y eso dentro de ella no se puede
+// juzgar: el tamano de la region lo sabe quien llama.  Traducirlo al llamante
+// es lo que convierte un conocimiento abstracto en memoria concreta -- y lo que
+// permite que la misma informacion sirva para comprobar limites, para alias y
+// para el optimizador.
+// --------------------------------------------------------------------------
+static void test_instanciar_en_llamada() {
+    // El llamante: reserva un objeto y se lo pasa a alguien.
+    ir::IrFunction fn;
+    fn.name = "caller";
+    const ir::IrBlockId bb = fn.new_block("entry");
+    const ir::IrValueId obj = fn.new_value(ir::IrType::PTR);
+    {
+        ir::IrInstr a{};
+        a.op = ir::IrOp::ALLOCA;
+        a.type = ir::IrType::I8;
+        a.dst = obj;
+        a.imm = 64;
+        fn.append(bb, std::move(a));
+    }
+    const IrFacts facts = build_ir_facts(fn);
+    const PointsTo pt = compute_points_to(fn, facts);
+
+    // El efecto del llamado: escribe ocho bytes a dieciseis de su parametro 0.
+    effects::SemanticEffects callee;
+    callee.mem.writes.add(L(K::ArgDerived, 0, 16, 8));
+    // Y lee algo global, que sigue siendo global se mire desde donde se mire.
+    callee.mem.reads.add(L(K::Global, 7, 0, 4));
+    // Y toca su propia pila, que aqui no nombra nada.
+    callee.mem.writes.add(L(K::Stack, 3, 0, 8));
+
+    const effects::EfectoEnLlamada inst =
+        effects::instanciar_en_llamada(callee, {obj}, pt);
+
+    bool visto_arg = false;
+    for (const AbstractLoc &l : inst.escribe.locs) {
+        if (l.kind == K::Stack && l.id == obj) {
+            visto_arg = true;
+            CHECK(l.off == 16, "el desplazamiento del callee se suma al del arg");
+            CHECK(l.width == 8, "y el ancho se conserva");
+        }
+    }
+    CHECK(visto_arg, "arg#0 pasa a ser el objeto que se le paso");
+    CHECK(!inst.completo,
+          "y se dice que la lista NO es completa: la pila del callee no se "
+          "puede nombrar aqui");
+    CHECK(inst.escribe.locs.size() == 1,
+          "lo que no se puede nombrar se deja fuera en vez de absorber el "
+          "conjunto entero -- si absorbiera, se perderia lo de arg#0");
+    bool visto_global = false;
+    for (const AbstractLoc &l : inst.lee.locs)
+        if (l.kind == K::Global && l.id == 7) visto_global = true;
+    CHECK(visto_global, "lo global no cambia al cruzar la llamada");
+}
+
 int main() {
+    test_instanciar_en_llamada();
     test_range_alias();
     test_class_alias();
     test_must_alias();

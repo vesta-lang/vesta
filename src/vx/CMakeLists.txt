@@ -91,6 +91,14 @@ add_library(vx_lib STATIC
     # Hechos IR objetivos (def-use, call-sites, estructura) para la infra de
     # analisis: base compartida que consumen los analisis sin re-recorrer el IR.
     ${CMAKE_SOURCE_DIR}/src/analysis/facts/ir_facts.cpp
+    # De cuanto es multiplo un valor: el hecho con el que se pliega una
+    # comprobacion de alineacion y se comprueba lo que una instruccion EXIGE.
+    ${CMAKE_SOURCE_DIR}/src/analysis/facts/alignment.cpp
+    # De que valor del programa habla cada operando de un bloque de asm.  Es el
+    # puente entre el texto (donde un operando se llama `$0`) y el IR (donde es
+    # un valor), y lo comparten el modelo de efectos, el eliminador de
+    # escrituras muertas y la comprobacion de precondiciones.
+    ${CMAKE_SOURCE_DIR}/src/analysis/facts/asm_bindings.cpp
     ${CMAKE_SOURCE_DIR}/src/analysis/memory/points_to.cpp
     ${CMAKE_SOURCE_DIR}/src/analysis/memory/memory_access.cpp
     ${CMAKE_SOURCE_DIR}/src/analysis/escape/escape.cpp

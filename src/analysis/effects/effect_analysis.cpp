@@ -67,6 +67,71 @@ EffectAnalysisResult EffectAnalysis::local(const ir::IrFunction &fn,
     return r;
 }
 
+EfectoEnLlamada EffectAnalysis::at_call_site(const ir::IrFunction &caller,
+                                             const ir::IrInstr &call) {
+    EfectoEnLlamada r;
+    if (call.op != ir::IrOp::CALL && call.op != ir::IrOp::TAILCALL &&
+        call.op != ir::IrOp::CALLN) {
+        r.completo = false;
+        return r;
+    }
+    if (call.func_name.empty()) {
+        r.completo = false;
+        return r;
+    }
+
+    /* El cierre del destino.  Se busca en lo que ya se calculo: primero el
+     * programa (varios modulos) y si no el modulo.  Sin resumen no hay nada que
+     * instanciar -- una funcion de fuera del programa no dice lo que hace --, y
+     * eso lo trata quien pregunta como lo que es: falta de conocimiento, no
+     * ausencia de efecto. */
+    const FunctionSummary *s = nullptr;
+    auto buscar = [&](const ModuleSummary &ms) {
+        auto it = ms.fns.find(call.func_name);
+        if (it != ms.fns.end()) s = &it->second;
+        else {
+            // Una nativa se nombra "lib:fn" y tambien "fn" a secas.
+            const size_t sep = call.func_name.rfind(':');
+            if (sep != std::string::npos && sep + 1 < call.func_name.size()) {
+                it = ms.fns.find(call.func_name.substr(sep + 1));
+                if (it != ms.fns.end()) s = &it->second;
+            }
+        }
+    };
+    buscar(program_cache_);
+    if (s == nullptr) buscar(module_cache_);
+    if (s == nullptr) {
+        r.completo = false; // no hay resumen: no se sabe lo que hace.
+        return r;
+    }
+
+    /* Se traduce el efecto PROPIO de la funcion, no su cierre.
+     *
+     * En el cierre esta mezclado lo que hacen sus callees, y eso viene descrito
+     * en terminos de los parametros DE ELLOS: traducirlo con los argumentos de
+     * esta llamada seria emparejar el parametro de una funcion con el argumento
+     * de otra.  El efecto propio si habla de los parametros de quien se llama,
+     * que son los que estos argumentos rellenan.
+     *
+     * Lo que hagan sus callees no se pierde: en el cierre esta, y ahi consta
+     * como memoria sin acotar -- que es lo unico cierto mientras nadie lo
+     * traduzca en SU sitio de llamada. */
+    r = instanciar_en_llamada(s->semantic.local, call.operands,
+                              points_to_of(caller));
+    /* Y lo transitivo se declara como lo que es: algo que esta lista no cuenta.
+     * Sin esto, una funcion que llama a otra parecia tocar solo lo suyo. */
+    const bool tiene_callees =
+        !s->semantic.closure.mem.writes.is_top &&
+        s->semantic.closure.mem.writes.locs.size() >
+            s->semantic.local.mem.writes.locs.size();
+    if (tiene_callees || s->semantic.closure.mem.writes.is_top)
+        r.completo = false;
+    /* Un resumen que ya venia incompleto no se vuelve completo por traducirlo:
+     * lo que no se supo alli sigue sin saberse aqui. */
+    if (s->completeness != AnalysisCompleteness::Complete) r.completo = false;
+    return r;
+}
+
 // Extrae la faceta ESTRUCTURAL de una funcion (bloques, back-edges = bucles,
 // recursion directa).  El detalle de trip-counts (para Big-O) lo afina el
 // subsistema de coste; aqui damos la forma.
@@ -201,10 +266,41 @@ const FunctionSummary *resolver_nativa(const ModuleSummary &ms,
     return it == ms.fns.end() ? nullptr : &it->second;
 }
 
-// Une el cierre del callee en el del caller (sin remapeo fino de ArgDerived:
-// v1 lo trata como Unknown -- conservador y sound).
+/**
+ * @brief Une el cierre del callee en el del caller.
+ *
+ * Lo que el callee dice de SUS parametros no significa nada aqui: `arg#1` es el
+ * primero de EL, no del que llama, y copiarlo tal cual hace que una funcion de
+ * tres parametros acabe afirmando que escribe en su `arg#6`.  No es impreciso,
+ * es falso -- y se estaba imprimiendo en el informe.
+ *
+ * Traducirlo requiere los ARGUMENTOS, que solo existen en el sitio de llamada;
+ * este cierre se calcula por NOMBRE, asi que aqui lo unico honesto es decir que
+ * toca memoria sin saber cual.  Quien quiera la version traducida la pide donde
+ * se puede dar: @ref EffectAnalysis::at_call_site.
+ */
 void merge_callee(SemanticEffects &caller, const SemanticEffects &callee) {
-    caller = join(caller, callee);
+    SemanticEffects c = callee;
+    auto despersonalizar = [](LocSet &s) {
+        if (s.is_top) return;
+        bool hay_arg = false;
+        for (const AbstractLoc &l : s.locs)
+            if (l.kind == AbstractLoc::Kind::ArgDerived) hay_arg = true;
+        if (!hay_arg) return;
+        LocSet out;
+        for (const AbstractLoc &l : s.locs) {
+            if (l.kind == AbstractLoc::Kind::ArgDerived) {
+                // Sus parametros no se pueden nombrar desde aqui.
+                out.add(AbstractLoc{AbstractLoc::Kind::Unknown, LOC_GENERIC});
+                continue;
+            }
+            out.add(l);
+        }
+        s = std::move(out);
+    };
+    despersonalizar(c.mem.reads);
+    despersonalizar(c.mem.writes);
+    caller = join(caller, c);
 }
 
 // Filtra de un LocSet las Stack locs cuya raiz NO escapa (scratch LOCAL, no

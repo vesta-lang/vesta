@@ -3169,6 +3169,12 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     fn.is_naked = fd->is_naked;
     fn.no_idiom = fd->is_no_idiom;
 
+    /* Hasta donde llega lo que se puede afirmar de ella.  De una funcion
+     * privada el modulo tiene TODOS los sitios de llamada, asi que lo que
+     * aportan es todo lo que le llega; de una publica puede llamarla cualquiera
+     * desde otro sitio, y entonces no haberlo visto no es que no exista. */
+    fn.is_public = fd->is_public;
+
     // Subsistema de coste (modo --analyze): propagar el contrato
     // @complexity del AST al IR.  Metadata pura -- el codegen la ignora;
     // solo la consume el analizador estatico analyze::bigo.
@@ -3443,8 +3449,14 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
                             cp.reg.rfind("XMM", 0) == 0 ||
                             cp.reg.rfind("YMM", 0) == 0 ||
                             cp.reg.rfind("ZMM", 0) == 0;
-        fn.asm_reg_bindings.push_back(
-            ir::AsmRegBinding{addr, cp.reg, cp.pt, is_vec, cp.name});
+        {
+            // La clase con la que se declaro: aqui el registro es CONCRETO, asi
+            // que la clase es el registro mismo.  Es lo que dira su ancho a
+            // quien lo pregunte despues.
+            ir::AsmRegBinding b{addr, cp.reg, cp.pt, is_vec, cp.name};
+            b.reg_class = cp.reg;
+            fn.asm_reg_bindings.push_back(std::move(b));
+        }
         // La variable vive en un ALLOCA (como cualquier var register()): marcar
         // address-taken para que read_local emita un LOAD del slot en cada uso
         // (p.ej. `return id`) en lugar de devolver la DIRECCION del alloca.  Sin
@@ -5863,8 +5875,9 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 rb.rfind("xmm", 0) == 0 || rb.rfind("ymm", 0) == 0 ||
                 rb.rfind("zmm", 0) == 0 || rb.rfind("XMM", 0) == 0 ||
                 rb.rfind("YMM", 0) == 0 || rb.rfind("ZMM", 0) == 0;
-            fn_->asm_reg_bindings.push_back(
-                ir::AsmRegBinding{addr, rb, vt, is_vec, vd->name});
+            ir::AsmRegBinding b{addr, rb, vt, is_vec, vd->name};
+            b.reg_class = rb; // registro concreto: la clase es el registro.
+            fn_->asm_reg_bindings.push_back(std::move(b));
         }
 
         // Store del valor inicial (o 0 si no hay init).
@@ -14099,6 +14112,12 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         ir::AsmRegBinding b{addr, reg, vt, is_vec, op.name};
         b.reg_auto = reg_auto;
         b.ph_index = ph_index;
+        /* La clase TAL COMO SE ESCRIBIO.  El registro de arriba es el que se
+         * eligio a la primera para que el interprete tenga algo que sustituir;
+         * la clase es lo que dijo el programador, y es lo unico que sigue
+         * diciendo cuanto mide el operando cuando el cuerpo ya solo lleva
+         * `$N`. */
+        b.reg_class = op.reg_class;
         fn_->asm_reg_bindings.push_back(std::move(b));
         /* Operando SIN inicializador: es un borrador, no entra ningun valor.
          * Meterle un cero era peor que inutil -- creaba un valor vivo desde ese
@@ -37051,9 +37070,12 @@ uint64_t Lowering::ensure_cpu_features_global() {
     // fallaba ("xor rsi, rsi") y con el se caia la funcion ENTERA que hubiera
     // disparado la deteccion -- normalmente `main`.
     const bool bits32 = (asm_target_bits_ == 32);
-    fn_->asm_reg_bindings.push_back(ir::AsmRegBinding{
-        rax_slot, bits32 ? "eax" : "rax", ir::IrType::U64, false,
-        "__cpu_feat"});
+    {
+        ir::AsmRegBinding b{rax_slot, bits32 ? "eax" : "rax", ir::IrType::U64,
+                            false, "__cpu_feat"};
+        b.reg_class = b.reg; // registro concreto.
+        fn_->asm_reg_bindings.push_back(std::move(b));
+    }
 
     // --- bloque INLINE_ASM: deteccion + empaquetado completo, bitmask en rax ---
     // bit0=SSE2(L1.EDX.26) bit1=SSE4.2(L1.ECX.20) bit2=POPCNT(L1.ECX.23)
@@ -37378,8 +37400,11 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
                 al.source_line = ln;
                 emit(current_block_, std::move(al));
             }
-            fn_->asm_reg_bindings.push_back(
-                ir::AsmRegBinding{slot, reg, ty, false, dbg});
+            {
+                ir::AsmRegBinding b{slot, reg, ty, false, dbg};
+                b.reg_class = reg; // registro concreto.
+                fn_->asm_reg_bindings.push_back(std::move(b));
+            }
             // STORE param -> alloca (carga el input en el reg fijado).
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;

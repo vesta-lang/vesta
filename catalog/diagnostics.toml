@@ -70,6 +70,10 @@ es = "asm: '{0}' exige que su direccion ({1}) sea multiplo de {2} bytes -- una d
 en = "asm: '{0}' requires an aligned address, but its width cannot be determined from the operands -- the requirement cannot be checked"
 es = "asm: '{0}' exige una direccion alineada, pero su ancho no se puede determinar por los operandos -- el requisito no se puede comprobar"
 
+[VXA013]
+en = "asm: '{0}' requires its address to be a multiple of {1} bytes, and it is not: the address is congruent with {2} modulo {3} -- this does not run slower, it faults"
+es = "asm: '{0}' exige que su direccion sea multiplo de {1} bytes, y no lo es: la direccion es congruente con {2} modulo {3} -- esto no va mas lento, hace caer el programa"
+
 # --- type-checker (VX2xxx) ---
 
 [VX2001]

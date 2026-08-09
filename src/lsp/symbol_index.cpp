@@ -46,6 +46,7 @@
 #include "vx/diagnostic.h"
 #include "vx/lexer.h"
 #include "vx/parser.h"
+#include "vx/source_text.h" // un solo fin de linea para todo el pipeline
 #include "vx/token.h"
 
 #if defined(_WIN32)
@@ -605,14 +606,12 @@ void collect_vx_files(const std::string &dir, std::vector<std::string> &out) {
 }
 
 /// Lee un fichero entero a un std::string; devuelve false si falla.
+///
+/// Con los fines de linea normalizados, igual que el compilador: si el servidor
+/// de lenguaje contara las lineas de otra manera, senalaria a un sitio distinto
+/// del que senala el error al compilar.
 bool read_file(const std::string &path, std::string &out) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f)
-        return false;
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    out = ss.str();
-    return true;
+    return vx::leer_fuente(path, out);
 }
 
 } // namespace

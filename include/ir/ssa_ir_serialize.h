@@ -108,8 +108,9 @@ static constexpr uint32_t IR_SECTION_MAGIC = 0x52494556U; /* 'V''E''I''R' */
  * @brief Version del formato @ir.  Bump cuando cambia el layout.
  */
 static constexpr uint16_t IR_SECTION_VERSION =
-    12; // v12: + prestamos (borrow_facts); comparte serialize_function con la
-        // cache, asi que su formato cambia a la vez
+    13; // v13: + clase declarada de cada ligadura de asm (AsmRegBinding::
+        // reg_class); comparte serialize_function con la cache, asi que su
+        // formato cambia a la vez
 
 /**
  * @brief Emit del bytes de la seccion @c @ir lista para append a
@@ -155,7 +156,7 @@ bool parse_ir_section(const std::vector<uint8_t> &data, size_t offset,
 static constexpr uint32_t IR_MODULE_CACHE_MAGIC =
     0x434D5856U; /* 'V''X''M''C' */
 static constexpr uint16_t IR_MODULE_CACHE_VERSION =
-    12; // v12: + prestamos (borrow_facts) por funcion
+    13; // v13: + clase declarada de cada ligadura de asm (reg_class)
 
 /**
  * @brief Serializa el IR de UN modulo COMPLETO para el cache `.vxir`.

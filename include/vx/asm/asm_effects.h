@@ -69,6 +69,180 @@ std::string asm_canonical_reg(const std::string &raw);
 std::string asm_canonical_reg(const std::string &raw, const std::string &arch);
 
 /**
+ * @brief Arquitectura del OBJETIVO que se esta compilando.
+ *
+ * Es la pregunta previa a analizar cualquier bloque de asm -- que mnemonicos
+ * existen, como se llaman los registros, cuanto miden --, y tiene UNA respuesta:
+ * el objetivo, no el host.  Una variante @c @Target("arch:arm64") se analiza con
+ * los registros de ARM aunque el build corra en x86.
+ *
+ * Vive aqui porque la preguntan varios -- el modelo de efectos, el eliminador de
+ * escrituras muertas, la inferencia de clobbers -- y cada uno la respondia por su
+ * cuenta: uno la resolvia bien, otro tenia su propia copia, y otro la llevaba
+ * escrita a mano como @c "x86_64".  El resultado era que analizar el MISMO
+ * bloque daba cosas distintas segun quien preguntara.
+ *
+ * @return @c "x86_64", @c "x86", @c "arm64"...
+ */
+std::string asm_arch_actual();
+
+/**
+ * @brief Registro BASE de un operando de memoria, en forma canonica.
+ *
+ * Es el primer identificador dentro de los corchetes, y eso vale igual en las
+ * dos sintaxis: `[rdi]`, `[rbx + rcx*8]` en x86 y `[x0]`, `[x0, #8]`,
+ * `[x0, x1, lsl #3]` en arm64.  Un marcador `$N` se devuelve TAL CUAL: el
+ * registro aun no esta elegido -- lo elige el asignador despues -- pero el
+ * marcador ya identifica de que operando se trata, que es lo que hace falta,
+ * y ademas no depende de nombres de registro ni puede confundirse con otra
+ * variable que use el mismo.
+ *
+ * Vive aqui, y no en quien analiza el bloque, porque lo preguntan DOS: quien
+ * quiere saber que memoria toca el bloque y quien quiere saber si se cumple lo
+ * que la instruccion EXIGE.  Son la misma pregunta sobre el mismo acceso.
+ *
+ * @param operando Texto del operando, con sus corchetes.
+ * @param arch     Arquitectura del cuerpo que se analiza.  EXPLICITA a
+ *                 proposito: el cuerpo puede ser de una arquitectura distinta
+ *                 de la que se este compilando (una variante por `@Target`).
+ * @return El registro canonico o el marcador; cadena vacia si no se pudo
+ *         determinar (direccion absoluta, simbolo, expresion no reconocida).
+ */
+std::string asm_base_de_memoria(const std::string &operando,
+                                const std::string &arch);
+
+/**
+ * @struct AsmMemOperando
+ * @brief Un operando de memoria, leido: por donde se llega y a que distancia.
+ */
+struct AsmMemOperando {
+    /// Registro base en forma canonica, o el marcador @c "$N".  Vacio = no se
+    /// pudo determinar (direccion absoluta, simbolo, expresion no reconocida).
+    std::string base;
+    /// Parte CONSTANTE de la distancia desde la base, en bytes.
+    int64_t desplazamiento = 0;
+    /**
+     * Operando que aporta el RESTO de la distancia, o vacio si no lo hay.
+     *
+     * `[rbx + rcx*8]` no es un acceso sin distancia conocida: es un acceso a
+     * `rcx*8` de `rbx`.  Nombrarlo es lo que permite a quien tenga las
+     * ligaduras acotarlo por el rango de esa variable, en vez de dar el objeto
+     * entero por tocado.
+     */
+    std::string indice;
+    int64_t escala = 1; ///< por cuanto multiplica @ref indice.
+    /// La expresion de dentro de los corchetes se pudo leer entera.  En false,
+    /// ni el desplazamiento ni el indice describen nada (simbolo, aritmetica
+    /// que no se reconoce).
+    bool reconocido = false;
+};
+
+/**
+ * @brief Lee un operando de memoria: base, desplazamiento, indice y escala.
+ *
+ * Cubre las dos sintaxis: `[rdi]`, `[rdi+8]`, `[rdi-8]`, `[rbx+rcx*8]`,
+ * `[rbx+rcx*8+16]` en x86 y `[x0]`, `[x0, #8]`, `[x0, x1, lsl #3]` en arm64.
+ *
+ * @param operando Texto del operando, con sus corchetes.
+ * @param arch     Arquitectura del cuerpo que se analiza.
+ * @return Lo leido; @c base vacia si no se pudo determinar por donde se llega.
+ */
+AsmMemOperando asm_parse_memoria(const std::string &operando,
+                                 const std::string &arch);
+
+/**
+ * @enum AsmTransferencia
+ * @brief Como pasa una instruccion el valor de sus fuentes a su destino.
+ *
+ * Es lo que hace falta para seguir un puntero por dentro de un bloque -- que
+ * `add rdi, 8` no borra a `rdi`, lo mueve ocho bytes -- sin que quien lo sigue
+ * conozca un solo mnemonico.  Cada arquitectura declara los suyos; el analisis
+ * pregunta por la CLASE y vale igual para todas.
+ *
+ * La clase no depende de la forma de los operandos: @c Transfiere cubre tanto
+ * `mov rax, rbx` como `mov rax, [rbx]`, y distinguir copia de carga es mirar si
+ * la fuente lleva corchetes -- cosa que el parser comun ya sabe hacer y no
+ * necesita tabla.
+ */
+enum class AsmTransferencia : uint8_t {
+    Ninguna = 0, ///< no propaga un puntero de forma que se pueda seguir.
+    Transfiere,  ///< dst = fuente (copiarlo, o traerlo de memoria).
+    Suma,        ///< dst = dst + fuente.
+    Resta,       ///< dst = dst - fuente.
+    Direccion,   ///< dst = la DIRECCION que describe la fuente, sin leerla.
+};
+
+/**
+ * @brief Como transfiere @p mnem su valor, segun @p arch.
+ *
+ * @param mnem Mnemonico en minusculas.
+ * @param arch Arquitectura.
+ * @return La clase; @c Ninguna para todo lo que no propague punteros.
+ */
+AsmTransferencia asm_transferencia(const std::string &mnem,
+                                   const std::string &arch);
+
+/**
+ * @brief Bytes que declara una pista de tamano escrita junto a un operando de
+ *        memoria (`qword ptr [rdi]`), o 0 si no hay ninguna.
+ *
+ * Las pistas son SINTAXIS, y cada arquitectura tiene la suya (o ninguna: en
+ * ARM el ancho lo dicen el registro y el mnemonico).  Por eso se pregunta por
+ * arquitectura en vez de buscar las palabras de una dentro del texto de otra.
+ *
+ * @param operando Texto del operando de memoria, con lo que lleve delante.
+ * @param arch     Arquitectura.
+ * @return Bytes declarados, o 0.
+ */
+uint32_t asm_pista_de_tamano(const std::string &operando,
+                             const std::string &arch);
+
+/**
+ * @brief Registro que cuenta las repeticiones de un prefijo `rep`, canonico.
+ *
+ * Es dato de la ARQUITECTURA (en x86 es `rcx`), y hace falta para poder decir
+ * cuantas veces se repite un acceso en vez de rendirse ante un `rep movsb`.
+ *
+ * @param arch Arquitectura.
+ * @return El registro, o cadena vacia si esa arquitectura no repite asi.
+ */
+std::string asm_contador_de_repeticion(const std::string &arch);
+
+/**
+ * @brief Cuantos BYTES toca el acceso a memoria de una linea.
+ *
+ * El ancho no lo dice el operando de memoria, lo dice el OTRO: `mov [rdi], rax`
+ * mueve 8 bytes y `mov [rdi], eax` mueve 4, con los mismos corchetes.  Cuando
+ * el otro operando es uno que eligio el compilador (`$N`), su ancho lo dice la
+ * CLASE con la que se declaro, que llega en @p clases_operando.
+ *
+ * @param ops Operandos de la linea, en orden textual.
+ * @param idx_mem Indice del operando de memoria dentro de @p ops.
+ * @param clases_operando Pares (marcador, clase declarada); puede ir vacio.
+ * @param arch Arquitectura del cuerpo.
+ * @return Ancho en bytes, o 0 si no se puede determinar -- que NO significa
+ *         cero bytes, significa que no se afirma cuantos.
+ */
+uint32_t asm_ancho_acceso_bytes(
+    const std::vector<std::string> &ops, size_t idx_mem,
+    const std::vector<std::pair<std::string, std::string>> &clases_operando,
+    const std::string &arch);
+
+/**
+ * @brief Cuanto MIDE un operando de la clase @p clase, en bits.
+ *
+ * La clase es lo que escribio el programador (@c "reg", @c "xmm", @c "ymm",
+ * @c "zmm") o un registro concreto (@c "rax").  El ancho lo resuelve la base
+ * de instrucciones, que conoce los registros de CADA arquitectura; aqui no se
+ * compara contra nombres de x86, que dejaria a las demas sin respuesta el dia
+ * que la pidan.
+ *
+ * @param clase Clase declarada del operando.
+ * @return Ancho en bits, o 0 si no se reconoce.
+ */
+uint32_t asm_ancho_bits_de_clase(const std::string &clase);
+
+/**
  * @brief Normaliza los literales numericos de un cuerpo NASM Intel a hex
  *        explicito (@c 0x...), detectando la base de entrada.
  *
@@ -137,6 +311,16 @@ struct AsmEffects {
     std::vector<std::string> implicit_mem_read;
     /// Registros por los que ESCRIBE memoria implicitamente.  Ver el anterior.
     std::vector<std::string> implicit_mem_write;
+    /**
+     * Bytes que toca CADA acceso implicito, o 0 si no se sabe.
+     *
+     * Lo dice la propia instruccion -- una `movsq` mueve ocho bytes y una
+     * `movsb` uno --, asi que se declara junto a por donde accede.  Quien
+     * analiza el bloque no tiene por que saber que una `q` final significa ocho
+     * bytes en esta arquitectura: eso es justo lo que hace que anadir la
+     * siguiente arquitectura obligue a tocar el analisis.
+     */
+    uint16_t mem_bytes_implicito = 0;
 
     /**
      * Alineacion que la instruccion EXIGE de su direccion de memoria, en
@@ -197,6 +381,16 @@ AsmEffects asm_effects_for(const std::string &mnemonic);
 struct AsmAlignReq {
     std::string mnemonic; ///< la instruccion, tal como se escribio.
     std::string operando; ///< el operando de memoria, con sus corchetes.
+    /**
+     * De donde sale la direccion: registro canonico o marcador `$N`, ya
+     * extraido por @ref asm_base_de_memoria.  Vacio = no se pudo determinar.
+     *
+     * Sale de aqui y no lo saca quien lee: leer el interior de unos corchetes
+     * es la MISMA operacion que hace el analisis de accesos del bloque, y
+     * quien tenga las ligaduras lo unico que necesita es un nombre por el que
+     * preguntar.
+     */
+    std::string base;
     /**
      * Alineacion exigida, EN BYTES y ya resuelta.  0 = no se pudo determinar.
      *

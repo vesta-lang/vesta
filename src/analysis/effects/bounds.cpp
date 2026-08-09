@@ -142,6 +142,31 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod) {
                 revisa(r.effects.mem.writes, true);
                 revisa(r.effects.mem.reads, false);
 
+                /* Y lo que hace una LLAMADA sobre la memoria de AQUI.
+                 *
+                 * El efecto de una funcion habla de sus parametros -- `memset`
+                 * escribe "desde su primer parametro, tantos bytes" --, y eso
+                 * dentro de ella no se puede juzgar: el tamano de la region lo
+                 * sabe quien llama.  Es justo lo que dice la nota de mas abajo
+                 * sobre los parametros, y la conclusion que faltaba sacar: hay
+                 * que mirarlo AQUI, sustituyendo cada parametro por el argumento
+                 * de esta llamada.
+                 *
+                 * Sin esto, una funcion que rellena mas bytes de los que caben
+                 * compilaba sin una palabra, y el fallo aparecia pisando la
+                 * variable de al lado. */
+                if (in.op == ir::IrOp::CALL || in.op == ir::IrOp::TAILCALL ||
+                    in.op == ir::IrOp::CALLN) {
+                    /* Que la lista no sea COMPLETA no impide juzgar lo que si
+                     * hay en ella: cada una de esas escrituras ocurre, y si una
+                     * se sale es un fallo aunque haya mas que no se pudieron
+                     * nombrar.  Para acusar no hace falta saberlo todo, hace
+                     * falta que lo que se sabe sea cierto. */
+                    const EfectoEnLlamada ll = ea.at_call_site(fn, in);
+                    revisa(ll.escribe, true);
+                    revisa(ll.lee, false);
+                }
+
                 /* Acceso INDEXADO (`buf[i]`).  El modelo colapsa el offset no
                  * constante a "todo el objeto", asi que el bucle de arriba se
                  * calla.  Pero no saber CUANTO vale el desplazamiento no es no

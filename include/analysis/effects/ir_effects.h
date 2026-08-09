@@ -119,6 +119,69 @@ struct EffectEnv {
     const NativeDecls *decls = nullptr;
 };
 
+/**
+ * @brief Traduce el efecto de una funcion al SITIO donde se la llama.
+ *
+ * Una funcion describe lo que toca en terminos de SUS parametros: `memset`
+ * escribe "lo que le apunta el primero, desde 0 hasta n".  Eso no se puede
+ * juzgar dentro de ella -- el tamano de la region lo sabe quien llama --, y
+ * hasta ahora se resolvia tirandolo: el efecto de una llamada se convertia en
+ * "puede tocar cualquier cosa".  Aqui se hace lo otro: cada parametro se
+ * sustituye por el argumento REAL y el efecto pasa a hablar de la memoria del
+ * llamante, que es donde si se puede comprobar.
+ *
+ * Es el mismo mecanismo que ya se usa con las nativas declaradas ("escribe el
+ * segundo argumento" -> memoria concreta), aplicado ahora a lo que el analisis
+ * DEDUCE del cuerpo de una funcion Vesta.  Un mecanismo, dos fuentes.
+ *
+ * Lo que no se puede traducir se dice, no se disimula: la pila o el monton del
+ * callee no se pueden nombrar desde aqui -- sus identificadores son suyos --,
+ * asi que pasan a desconocido.  Lo global sigue siendo global.
+ *
+ * @param callee_eff Efecto (cierre) de la funcion llamada.
+ * @param args       Argumentos del sitio de llamada, en orden.
+ * @param pt         Points-to del LLAMANTE, para resolver cada argumento.
+ * @return El mismo efecto, hablando de la memoria del llamante.
+ */
+/**
+ * @struct EfectoEnLlamada
+ * @brief Lo que una llamada toca de la memoria del llamante.
+ *
+ * NO es un @c LocSet cualquiera, y la diferencia importa: aqui @ref lee y
+ * @ref escribe son las localizaciones que se PUDIERON traducir -- cada una es
+ * memoria que la llamada toca de verdad --, y @ref completo dice si son todas.
+ *
+ * Se separan porque son dos preguntas distintas y mezclarlas pierde la mitad.
+ * En el reticulo normal, una sola localizacion desconocida absorbe el conjunto
+ * entero: basta con que el llamado toque su propia pila para que "escribe en
+ * `buf`, dieciseis bytes mas alla" se convierta en "escribe en algun sitio", y
+ * con eso ya no se puede comprobar nada.  Quien necesite una cota SUPERIOR
+ * ("no toca nada mas que esto") tiene que mirar @ref completo; quien solo
+ * necesite saber que esas SI las toca -- comprobar si caben, por ejemplo --
+ * puede usarlas tal cual.
+ */
+struct EfectoEnLlamada {
+    LocSet lee;            ///< lo que se pudo traducir de las lecturas.
+    LocSet escribe;        ///< lo que se pudo traducir de las escrituras.
+    /// @c false si algo del llamado no se pudo nombrar aqui (su pila, su
+    /// monton, o un efecto que ya venia sin acotar).
+    bool completo = true;
+};
+
+/**
+ * @brief Traduce el efecto de una funcion al SITIO donde se la llama.
+ *
+ * Ver @ref EfectoEnLlamada para lo que significa el resultado.
+ *
+ * @param callee_eff Efecto (cierre) de la funcion llamada.
+ * @param args       Argumentos del sitio de llamada, en orden.
+ * @param pt         Points-to del LLAMANTE, para resolver cada argumento.
+ * @return Lo que toca, en memoria del llamante.
+ */
+EfectoEnLlamada instanciar_en_llamada(const SemanticEffects &callee_eff,
+                                      const std::vector<ir::IrValueId> &args,
+                                      const analysis::PointsTo &pt);
+
 /// Efecto LOCAL de UNA instruccion IR (con completeness + motivo).  El asm
 /// lifteado no es especial: llega como ADD/LOAD/STORE/... normales.  INLINE_ASM/
 /// ASM_MICRO (residuo opaco) se analizan aparte con tags.  @p pt es la tabla

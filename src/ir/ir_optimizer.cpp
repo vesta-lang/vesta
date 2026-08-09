@@ -19,6 +19,7 @@
 #include "ir/passes/unroll.h"            // desenrollado de bucles (factor automatico)
 #include "ir/passes/select_simplify.h"   // canonicalizacion algebraica de SELECT
 #include "analysis/facts/alignment.h" // de cuanto es multiplo un valor
+#include "analysis/facts/asm_bindings.h" // de que valor habla un operando de asm
 #include "analysis/facts/ir_facts.h"     // hechos (def-use) para el modelo de efectos
 #include "analysis/effects/ir_effects.h"       // modelo unico de efectos (consumidor DCE, A/B)
 #include "analysis/effects/effect_analysis.h"  // cierre interproc: callees puros (DSE Fase 4)
@@ -6902,18 +6903,6 @@ static bool asm_dse_activo() {
     return on;
 }
 
-/**
- * @brief Arquitectura con la que analizar un cuerpo de asm.
- *
- * La del OBJETIVO que se compila, no la del anfitrion: una variante por
- * `@Target` lleva el asm de SU arquitectura.
- */
-static std::string dse_arch_asm() {
-    std::string os, arch;
-    vx::get_aot_condcomp_target(os, arch);
-    return arch.empty() ? std::string("x86_64") : arch;
-}
-
 // ENCENDIDO por defecto (2026-08-06).  Medido: no cambia el codigo generado en
 // NINGUNO de los 29 programas del corpus -- toma las mismas decisiones que la
 // resolucion propia que tenia el DSE --, y la suite pasa 878/0 en los tres
@@ -7740,7 +7729,7 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
          */
         auto dse_asm_preciso = [&](const IrInstr &ins) -> bool {
             const vx::AsmBlockEffects e =
-                vx::asm_analyze_block(ins.func_name, dse_arch_asm());
+                vx::asm_analyze_block(ins.func_name, vx::asm_arch_actual());
             if (!e.known() || e.is_call || e.has_atomic) return false;
             if (e.accesos_incompletos) return false;
 
@@ -7758,14 +7747,24 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
              * que hubiera guardado en su hueco deja de valer, asi que no se
              * puede seguir reusando: sin esto, leer la variable despues del
              * bloque devolvia el valor de ANTES (41 en vez de 42). */
+            /* De que valor habla cada operando lo responde UN solo sitio (ver
+             * @ref analysis::compute_asm_bindings); este recorrido estaba
+             * copiado aqui y en el modelo de efectos. */
+            const analysis::AsmBindingFacts lig =
+                analysis::compute_asm_bindings(fn);
+            /* Y los rangos, que son los que cierran la extension de un acceso
+             * cuando la determina un operando en vez de una constante. */
+            const analysis::IrFacts hechos_dse = analysis::build_ir_facts(fn);
+            const analysis::RangeFacts rangos_dse =
+                analysis::compute_ranges(fn, hechos_dse);
             for (const std::string &w : e.escritos) {
-                for (const AsmRegBinding &b : fn.asm_reg_bindings) {
-                    const bool suyo =
-                        (!w.empty() && w[0] == '$')
-                            ? (b.reg_auto && b.ph_index == std::atoi(w.c_str() + 1))
-                            : (!b.reg.empty() && vx::asm_canonical_reg(b.reg) == w);
-                    if (!suyo) continue;
-                    auto ai = addr_of.find(b.alloca_value);
+                /* Si dos variables comparten registro no se sabe a cual de las
+                 * dos escribio -- asi que dejan de valer LAS DOS.  Invalidar de
+                 * mas es correcto (solo impide reusar un valor); rendirse y
+                 * tratar el bloque como barrera total tira ademas todo lo que
+                 * si se sabia de lo demas que toca. */
+                for (const analysis::LigaduraAsm &l : lig.candidatas(w)) {
+                    auto ai = addr_of.find(l.hueco);
                     if (ai == addr_of.end()) return false;
                     last_store_val.erase({ai->second.root, ai->second.off});
                 }
@@ -7775,44 +7774,46 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
              * al hueco, del hueco a lo que contiene, y de ahi a la direccion
              * que el DSE ya sabe seguir. */
             for (const vx::AsmBlockEffects::Acceso &a : e.accesos) {
-                IrValueId hueco = IR_NO_VALUE;
-                unsigned candidatas = 0;
-                if (!a.base.empty() && a.base[0] == '$') {
-                    const int idx = std::atoi(a.base.c_str() + 1);
-                    for (const AsmRegBinding &b : fn.asm_reg_bindings)
-                        if (b.reg_auto && b.ph_index == idx) {
-                            hueco = b.alloca_value;
-                            ++candidatas;
-                        }
-                } else {
-                    for (const AsmRegBinding &b : fn.asm_reg_bindings)
-                        if (!b.reg.empty() &&
-                            vx::asm_canonical_reg(b.reg) == a.base) {
-                            hueco = b.alloca_value;
-                            ++candidatas;
-                        }
-                }
-                if (candidatas != 1) return false;
-                const IrValueId valor =
-                    analysis::valor_unico_del_hueco(fn, hueco);
-                if (valor == IR_NO_VALUE) return false;
-                auto ai = addr_of.find(valor);
-                if (ai == addr_of.end()) return false; // direccion no seguible
-                // Leer lo apuntado, y si escribe, invalidar el reenvio de esa
-                // direccion.  Ancho 8: el acceso puede ser de cualquier tamano
-                // dentro del objeto.
-                note_read(ai->second.root, ai->second.off, 8);
-                if (a.escribe) {
-                    const AddrKey k{ai->second.root, ai->second.off};
-                    kill_val_overlapping(k, 8);
-                    /* Y la clave EXACTA tambien.  @c kill_val_overlapping se la
-                     * salta a proposito porque quien lo llama es un STORE, que
-                     * la sobrescribe acto seguido con el valor nuevo; aqui no
-                     * hay tal cosa -- el asm escribio por su cuenta y no
-                     * sabemos que dejo --, asi que dejarla viva hace que la
-                     * siguiente lectura reuse el valor ANTERIOR.  Costo: el
-                     * programa devolvia 0 en vez de 42. */
-                    last_store_val.erase(k);
+                /* Con varias candidatas el acceso va por UNA de ellas, y como
+                 * no se sabe cual, se tratan todas: se da por leido lo que
+                 * apunta cada una y, si escribe, se invalida el reenvio de
+                 * todas.  Es la misma logica de siempre aplicada a un conjunto
+                 * en vez de a un valor. */
+                const auto cands = lig.candidatas(a.base);
+                if (cands.empty()) return false;
+                /* Cuanto toca de verdad.  Aqui habia un 8 fijo, y no era una
+                 * imprecision: un `movdqa` escribe DIECISEIS, asi que los ocho
+                 * de arriba no se invalidaban y la siguiente lectura reusaba un
+                 * valor que el bloque ya habia pisado.  Cuando no se puede
+                 * acotar se usa un ancho grande a proposito -- pasarse invalida
+                 * de mas, que solo cuesta una optimizacion. */
+                const analysis::ExtensionResuelta ext =
+                    a.valida && !a.desde_memoria.hay
+                        ? analysis::resolver_extension(lig, rangos_dse,
+                                                       a.extension)
+                        : analysis::ExtensionResuelta{};
+                if (!ext.acotada) return false;
+                const int32_t ancho = (int32_t)ext.bytes();
+                for (const analysis::LigaduraAsm &l : cands) {
+                    if (l.valor == IR_NO_VALUE) return false;
+                    auto ai = addr_of.find(l.valor);
+                    if (ai == addr_of.end()) return false; // no seguible
+                    const int64_t off = ai->second.off + ext.desde;
+                    // Leer lo apuntado, y si escribe, invalidar el reenvio de
+                    // esa direccion, con la extension que de verdad tiene.
+                    note_read(ai->second.root, off, ancho);
+                    if (a.escribe) {
+                        const AddrKey k{ai->second.root, off};
+                        kill_val_overlapping(k, ancho);
+                        /* Y la clave EXACTA tambien.  @c kill_val_overlapping
+                         * se la salta a proposito porque quien lo llama es un
+                         * STORE, que la sobrescribe acto seguido con el valor
+                         * nuevo; aqui no hay tal cosa -- el asm escribio por su
+                         * cuenta y no sabemos que dejo --, asi que dejarla viva
+                         * hace que la siguiente lectura reuse el valor ANTERIOR.
+                         * Costo: el programa devolvia 0 en vez de 42. */
+                        last_store_val.erase(k);
+                    }
                 }
             }
             return true;

@@ -1,0 +1,30 @@
+// Dos variables distintas ligadas AL MISMO registro, en ambitos distintos de la
+// misma funcion.
+//
+// La lista de ligaduras es de toda la funcion, asi que por el nombre `rax`
+// responden dos.  El compilador no puede decir cual de las dos toca el bloque
+// -- y no hace falta: sabe que es UNA DE ESTAS DOS, y con eso invalida lo que
+// tenia guardado de las dos.  Rendirse ahi (tratar el bloque como una barrera
+// para toda la memoria) seria tirar lo que si se sabe del resto.
+//
+// Si alguna vez se leyera el valor de ANTES del bloque, esto daria 40.
+//
+// @expect 42
+u64 main() {
+    u64 total = 0;
+    {
+        register("rax") u64 a = 20;
+        asm volatile {
+            inc rax
+        };
+        total = total + a;      // 21
+    }
+    {
+        register("rax") u64 b = 20;
+        asm volatile {
+            inc rax
+        };
+        total = total + b;      // 21 -> 42
+    }
+    return total;
+}

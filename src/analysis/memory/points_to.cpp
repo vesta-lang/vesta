@@ -22,6 +22,8 @@
 
 #include "ir/ssa_ir.h"
 
+#include <algorithm> // orden + busqueda binaria del indice de huecos
+
 namespace analysis {
 
 char PointsToAnalysis::ID = 0;
@@ -482,20 +484,45 @@ AbstractLoc loc_of(const PointsTo &pt, ir::IrValueId ptr, int32_t width) {
     return AbstractLoc{e.kind, e.root, e.off, width};
 }
 
-ir::IrValueId valor_unico_del_hueco(const ir::IrFunction &fn,
-                                    ir::IrValueId slot) {
-    if (slot == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-    ir::IrValueId guardado = ir::IR_NO_VALUE;
+std::vector<ir::IrValueId>
+valores_unicos_de_huecos(const ir::IrFunction &fn,
+                         const std::vector<ir::IrValueId> &slots) {
+    std::vector<ir::IrValueId> out(slots.size(), ir::IR_NO_VALUE);
+    if (slots.empty()) return out;
+
+    /* Indice hueco -> posiciones que lo piden.  Ordenado y contiguo: son unos
+     * pocos y se consulta en el bucle de instrucciones, que es el caro.  Un
+     * mismo hueco puede pedirse varias veces (dos operandos ligados al mismo
+     * slot), asi que se guardan TODAS sus posiciones. */
+    std::vector<std::pair<ir::IrValueId, size_t>> indice;
+    indice.reserve(slots.size());
+    for (size_t i = 0; i < slots.size(); ++i)
+        if (slots[i] != ir::IR_NO_VALUE) indice.emplace_back(slots[i], i);
+    if (indice.empty()) return out;
+    std::sort(indice.begin(), indice.end());
+
+    std::vector<uint32_t> escrituras(slots.size(), 0);
     for (const ir::IrBlock &bb : fn.blocks) {
         for (const ir::IrInstr &in : bb.instrs) {
             if (in.op != ir::IrOp::STORE || in.operands.size() < 2) continue;
-            if (in.operands[1] != slot) continue;
-            // Una segunda escritura: el contenido ya depende del camino.
-            if (guardado != ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-            guardado = in.operands[0];
+            const ir::IrValueId slot = in.operands[1];
+            auto it = std::lower_bound(indice.begin(), indice.end(),
+                                       std::make_pair(slot, (size_t)0));
+            for (; it != indice.end() && it->first == slot; ++it) {
+                const size_t k = it->second;
+                // Una segunda escritura: el contenido ya depende del camino.
+                out[k] = (++escrituras[k] == 1) ? in.operands[0]
+                                                : ir::IR_NO_VALUE;
+            }
         }
     }
-    return guardado;
+    return out;
+}
+
+ir::IrValueId valor_unico_del_hueco(const ir::IrFunction &fn,
+                                    ir::IrValueId slot) {
+    if (slot == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+    return valores_unicos_de_huecos(fn, {slot})[0];
 }
 
 } // namespace analysis

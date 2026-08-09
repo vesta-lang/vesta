@@ -2698,6 +2698,21 @@ warns_r0_case("asmpin", "asm: pin de VALOR a rsp/rbp avisa (VXA008) y compila (p
 r0_case("asmstk", "asm: manipular la pila desde el asm (mov rsp/push/pop)", "asm_stack_manip.vx", 42, line=3654)
 r0_case("asmnss", "asm: stack switch @Naked compilado nativo por el JIT", "asm_naked_stack_switch.vx", 42, line=3654)
 warns_r0_case("asmnsw", "asm: reasignar rsp en funcion normal avisa (VXA010) y compila en JIT", "asm_normal_stack_warn.vx", "VXA010", 42, line=3654)
+# Una instruccion que EXIGE su direccion alineada y NO la tiene: no es un aviso,
+# es un error con su prueba.  Exige que el ancho se resuelva por la CLASE del
+# operando (si no llegara, el diagnostico seria VXA012 "no se puede determinar el
+# ancho" y este caso fallaria) y que el hecho de alineacion cruce la frontera de
+# la funcion (el destino se reserva en `main` y se exige dentro de `rellena_16`).
+fails_case("asmalign", "asm: direccion demostrablemente no alineada -> error (VXA013)", "asm_align_warn.vx", "VXA013", line=3654)
+# Un acceso de asm que se sale de la region por la que entra.  Exige que el
+# analisis diga HASTA DONDE llega cada acceso: con la extension a cero (que es
+# como estaba), el comprobador de limites se lo salta y esto compila.
+fails_case("asmregion", "asm: acceso fuera de la region por la que entra -> error (VX3001)", "asm_fuera_de_region.vx", "VX3001", line=3654)
+# El conocimiento CRUZA la llamada: una funcion que escribe `arg#0+[0,64)` y un
+# llamante que le pasa 16 bytes.  La funcion es recursiva a proposito (no se
+# puede inlinear), asi que esto exige la instanciacion del efecto en el sitio de
+# llamada -- con el inline, el fallo se veria por casualidad.
+fails_case("regcall", "region: una llamada que escribe mas de lo que cabe -> error (VX3001)", "region_cruza_llamada.vx", "VX3001", line=3654)
 modes3_case("asmwidth", "asm: lift general modela anchos x86 (8/16/32/64) en interp/jit/aot", "asm_lift_widths.vx", 42, line=3654)
 modes3_case("shvar", "shift por cantidad variable (SHL/SHR/SAR via CL) en interp/jit/aot", "shift_variable.vx", 42, line=3654)
 modes3_case("fpround", "float floor/ceil/round/trunc/fmin/fmax (f64+f32) en interp/jit/aot", "fp_rounding.vx", 42, line=3654)
@@ -3242,6 +3257,54 @@ def _(ctx):
     if got != 12:
         ctx.fail(" AS inc.5: cross-fn bitcount debio dar 12, dio %s" % got, log)
     ctx.ok(" AS inc.5 cross-fn (helper inline-asm no inlineado) -> 12")
+
+
+@case("fin_de_linea")
+def _(ctx):
+    """El mismo programa en LF, CRLF y CR: mismo resultado y misma linea.
+
+    Un fichero de texto termina sus lineas de tres maneras segun de donde
+    venga, y el lenguaje no puede comportarse distinto por eso.  El CR a secas
+    era el que mentia: contaba todo el fichero como UNA linea, asi que el
+    programa compilaba pero sus diagnosticos senalaban al sitio equivocado --
+    peor que no compilar, porque parece que funciona.
+    """
+    prog = ("i32 main() {\n"
+            "    i32 x = 40;\n"
+            "    asm ( reg a = x, ) {\n"
+            "        add a, 2\n"
+            "    }\n"
+            "    return a;\n"
+            "}\n")
+    # El error va en la linea 5 a proposito: es lo que se comprueba.
+    malo = ("i32 main() {\n"
+            "    i32 a = 1;\n"
+            "    i32 b = 2;\n"
+            "    i32 c = 3;\n"
+            "    return no_existe;\n"
+            "}\n")
+    for nombre, sep in (("lf", "\n"), ("crlf", "\r\n"), ("cr", "\r")):
+        vx = ctx.path("eol_%s.vx" % nombre)
+        with open(vx, "wb") as f:
+            f.write(prog.replace("\n", sep).encode("utf-8"))
+        rc, log = ctx.run([VM_EXE, "--vesta", vx, "-o", ctx.path("eol_" + nombre)])
+        if rc != 0:
+            ctx.fail("fin de linea %s: no compilo" % nombre, log)
+        _, rlog = ctx.run_velb("eol_" + nombre, schedulers=1)
+        got = get_r00(rlog)
+        if got != 42:
+            ctx.fail("fin de linea %s: dio %s, esperado 42" % (nombre, got), rlog)
+        ctx.ok("fin de linea %s -> 42" % nombre)
+
+        # Y la linea que se cita en un diagnostico es la misma en los tres.
+        vxe = ctx.path("eole_%s.vx" % nombre)
+        with open(vxe, "wb") as f:
+            f.write(malo.replace("\n", sep).encode("utf-8"))
+        _, elog = ctx.run([VM_EXE, "--vesta", vxe, "-o", ctx.path("eole_" + nombre)])
+        if not re.search(r"eole_%s\.vx:5:" % nombre, elog):
+            ctx.fail("fin de linea %s: el error no se situa en la linea 5"
+                     % nombre, elog)
+        ctx.ok("fin de linea %s: el diagnostico cita la linea 5" % nombre)
 
 
 @case("asm_examples", line=3576)

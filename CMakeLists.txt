@@ -800,6 +800,36 @@ else ()
     target_link_libraries(test_range_summary PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# Round-trip del serializador del IR.  Importa que este DECLARADO: el AOT
+# compila desde el IR serializado, asi que lo que no cruce esta frontera no
+# existe para el -- y un test que nadie compila no avisa de nada.
+add_executable(test_ir_serialize tests/ir/test_ir_serialize.cpp)
+target_include_directories(test_ir_serialize PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_ir_serialize PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_ir_serialize PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_ir_serialize PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_ir_serialize PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# Puente entre el texto de un asm y los valores del programa (de que valor habla
+# cada operando), ancho aportado por la CLASE del operando, y universo bajo el
+# que se resume una funcion (artefacto + visibilidad).
+add_executable(test_asm_bindings tests/analysis/test_asm_bindings.cpp)
+target_include_directories(test_asm_bindings PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_asm_bindings PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_asm_bindings PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_asm_bindings PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_asm_bindings PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 add_executable(test_mem_loc tests/analysis/test_mem_loc.cpp)
 target_include_directories(test_mem_loc PRIVATE ${VM_INCLUDES})
 target_link_libraries(test_mem_loc PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)

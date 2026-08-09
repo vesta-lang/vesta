@@ -683,8 +683,74 @@ void test_truncated_buffer() {
 
 } // namespace
 
+/**
+ * @brief Las ligaduras de un bloque de asm y la visibilidad cruzan el
+ *        serializador.
+ *
+ * No es un campo mas: el AOT compila desde el IR SERIALIZADO, no desde el de
+ * memoria.  Si la CLASE del operando no cruza, al otro lado nadie puede decir
+ * cuanto mide un `$N` -- y una instruccion que exige su direccion alineada deja
+ * de poder comprobarse justo en el modo que no tiene interprete detras que
+ * disimule.  Y si no cruza la visibilidad, un modulo cacheado se lee como
+ * publico o privado segun el humor, que es lo que decide si de sus llamantes se
+ * puede afirmar algo.
+ */
+static void test_asm_bindings_round_trip() {
+    using namespace ir;
+    IrFunction fn;
+    fn.name = "con_asm";
+    fn.ret_type = IrType::VOID;
+    fn.is_public = false; // privada: el bit viaja en NEGATIVO.
+    const IrBlockId bb = fn.new_block("entry");
+    const IrValueId slot = fn.new_value(IrType::PTR);
+    {
+        IrInstr in{};
+        in.op = IrOp::ALLOCA;
+        in.type = IrType::I8;
+        in.dst = slot;
+        in.imm = 8;
+        fn.append(bb, std::move(in));
+    }
+    AsmRegBinding automatica{slot, "xmm3", IrType::I64, true, "v"};
+    automatica.reg_auto = true;
+    automatica.ph_index = 1;
+    automatica.reg_class = "xmm";
+    fn.asm_reg_bindings.push_back(std::move(automatica));
+    AsmRegBinding fija{slot, "rax", IrType::I64, false, "x"};
+    fija.reg_class = "rax";
+    fn.asm_reg_bindings.push_back(std::move(fija));
+
+    std::vector<uint8_t> buf;
+    serialize_function(fn, buf);
+    size_t off = 0;
+    IrFunction out;
+    CHECK(deserialize_function(buf, off, out), "deserializa la funcion con asm");
+    CHECK(out.asm_reg_bindings.size() == 2, "las dos ligaduras cruzan");
+    if (out.asm_reg_bindings.size() == 2) {
+        CHECK(out.asm_reg_bindings[0].reg_class == "xmm",
+              "la clase declarada del operando automatico cruza");
+        CHECK(out.asm_reg_bindings[0].ph_index == 1, "y su marcador $N");
+        CHECK(out.asm_reg_bindings[1].reg_class == "rax",
+              "la clase del operando fijo cruza");
+    }
+    CHECK(!out.is_public, "una funcion privada sigue siendolo al otro lado");
+
+    // Y el default del lenguaje -- publico -- tambien, que es el caso comun.
+    IrFunction pub;
+    pub.name = "publica";
+    pub.ret_type = IrType::VOID;
+    pub.new_block("entry");
+    std::vector<uint8_t> buf2;
+    serialize_function(pub, buf2);
+    size_t off2 = 0;
+    IrFunction out2;
+    CHECK(deserialize_function(buf2, off2, out2), "deserializa la publica");
+    CHECK(out2.is_public, "sin marca de privada, se lee como publica");
+}
+
 int main() {
     test_trivial_function();
+    test_asm_bindings_round_trip();
     test_complexity_dimensions();
     test_value_flags();
     test_multi_block_branches();

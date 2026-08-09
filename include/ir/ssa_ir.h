@@ -1175,6 +1175,24 @@ struct AsmRegBinding {
     /// @c $ph_index.  false = pin fijo clasico (register("rax") / `rax a`).
     bool reg_auto = false;
     int ph_index = -1;      ///< indice $N del placeholder en el cuerpo (reg_auto)
+    /**
+     * @brief CLASE con la que se declaro el operando, tal como se escribio:
+     *        @c "reg" / @c "xmm" / @c "ymm" / @c "zmm" (el compilador elige el
+     *        registro) o el nombre del registro concreto (@c "rax", @c "eax").
+     *
+     * Es lo que dice cuanto MIDE el operando, y hace falta porque el cuerpo ya
+     * no lo dice: tras la sustitucion, `movdqa [$0], $1` no permite a nadie
+     * saber que `$1` es un registro de 128 bits.  Y ese ancho es lo que decide
+     * dos cosas distintas -- cuanta memoria toca el acceso y cuanta alineacion
+     * EXIGE la instruccion --, asi que sin el la comprobacion no se puede
+     * hacer y un programa que revienta pasa el compilador.
+     *
+     * Es el dato PRIMARIO, no @ref reg: ese registro es el que se eligio a la
+     * primera para que el interprete pueda sustituir algo, y el dia que lo
+     * decida el asignador deja de haberlo.  La clase la escribio el
+     * programador y no cambia.
+     */
+    std::string reg_class;
 };
 
 /**
@@ -1283,6 +1301,22 @@ struct IrFunction {
     std::vector<InlineSite> inline_sites;
     bool is_native = false;        ///< true si es stub para funcion nativa
     bool is_variadic = false;      ///< true si acepta argc variable
+    /**
+     * @brief Alcanzable desde FUERA del modulo (lo que el fuente declara como
+     *        publico; sin palabra clave, en Vesta lo es).
+     *
+     * Decide hasta donde llega lo que se puede afirmar de ella.  Un resumen
+     * interprocedural -- de que valores recibe un parametro, que rango tienen,
+     * como estan alineados -- junta lo que aportan los sitios de llamada QUE SE
+     * VEN, y eso solo vale si no hay otros.  Con una funcion privada, el modulo
+     * los tiene todos; con una publica, cualquiera puede llamarla desde otro
+     * lado y "no he visto llamadas" deja de significar "no las hay".
+     *
+     * Sin este dato la unica salida era suponer, y la suposicion se rompe justo
+     * donde mas duele: al compilar por modulos con cache, el mismo fichero
+     * daria una respuesta u otra segun se recompilara solo o junto al programa.
+     */
+    bool is_public = true;
 
     /**
      * @brief Contract de monomorphizacion: provenance de

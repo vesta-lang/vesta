@@ -1,0 +1,32 @@
+// Una funcion que escribe mas de lo que le cabe a quien la llama.
+//
+// `rellena` no hace nada sospechoso vista por dentro: escribe ocho palabras a
+// partir de donde le digan.  Y `main` tampoco: reserva dieciseis bytes y llama.
+// El fallo solo existe CUANDO SE JUNTAN, y por eso no se puede ver desde
+// ninguno de los dos lados por separado.
+//
+// Lo que lo hace visible es transportar el conocimiento: el compilador sabe que
+// `rellena` escribe `arg#0 + [0,64)` -- lo sabe mirando su cuerpo, sin que
+// nadie se lo declare -- y al llegar a la llamada sustituye ese parametro por
+// `buf`.  Ahi deja de ser una descripcion abstracta y pasa a ser memoria
+// concreta, que es la unica sobre la que se puede juzgar si cabe.
+//
+// La funcion es RECURSIVA a proposito: asi no se puede inlinear, y lo que se
+// comprueba es que el conocimiento cruza la llamada de verdad -- no que el
+// optimizador aplano las dos y el fallo quedo a la vista por casualidad.
+//
+// @expect-error: VX3001
+
+@NoIdiom
+public void rellena(u8* p, u64 n) {
+    u64* q = (u64*) p;
+    q[0] = 0; q[1] = 0; q[2] = 0; q[3] = 0;
+    q[4] = 0; q[5] = 0; q[6] = 0; q[7] = 0;
+    if (n > 100) { rellena(p, n - 1); }
+}
+
+i32 main() {
+    u8 buf[16];   // dieciseis, y ahi caben dos de las ocho palabras
+    rellena(&buf[0], 8);
+    return 42;
+}

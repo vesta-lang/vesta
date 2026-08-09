@@ -617,6 +617,32 @@ bool vx_source_declara_namespace(const std::string &source);
  * @param mod   Modulo IR ya optimizado (el codigo que de verdad se va a emitir).
  * @param diags Bolsa donde se acumulan.
  */
+/**
+ * @brief Comprueba las PRECONDICIONES de los bloques de asm sobre el IR.
+ *
+ * Hoy solo una, la que costo un fallo: hay instrucciones que EXIGEN su
+ * direccion alineada, y una direccion que no lo esta no las hace ir mas
+ * lentas, hace caer el programa.
+ *
+ * Se hace aqui y no al bajar el asm porque aqui SI se puede responder: el
+ * hecho de alineacion necesita la funcion entera, y al bajar todavia se esta
+ * construyendo.  Con el hecho hay tres respuestas y no una:
+ *
+ *   - se demuestra que cumple  -> nada que decir;
+ *   - se demuestra que NO      -> error, con la prueba;
+ *   - no se puede demostrar    -> aviso, diciendo que no se pudo.
+ *
+ * La de en medio es la que faltaba: cuando se SABE que esta mal, avisar no
+ * basta.
+ *
+ * @param mod Modulo ya bajado.
+ * @param diags Donde reportar.
+ * @param file Fichero al que atribuir la posicion.
+ */
+void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
+                                 const std::string &file,
+                                 bool programa_cerrado);
+
 void vx_report_bounds(const ir::IrModule &mod, Diagnostics &diags,
                       const std::string &file);
 

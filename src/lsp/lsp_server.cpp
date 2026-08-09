@@ -33,6 +33,7 @@
 #include "lsp/symbol_index.h"
 #include "vx/ast.h"
 #include "vx/diagnostic.h"
+#include "vx/source_text.h" // un solo fin de linea para todo el pipeline
 
 namespace lsp {
 
@@ -320,11 +321,9 @@ void LspServer::handle_did_close(const nlohmann::json &params) {
     // disco best-effort; si no se puede, quitamos sus entradas.
     {
         const std::string fs_path = uri_to_fs_path(uri);
-        std::ifstream f(fs_path, std::ios::binary);
-        if (f) {
-            std::ostringstream ss;
-            ss << f.rdbuf();
-            workspace_.update_file(uri, ss.str());
+        std::string texto;
+        if (vx::leer_fuente(fs_path, texto)) {
+            workspace_.update_file(uri, std::move(texto));
         } else {
             workspace_.remove_file(uri);
         }

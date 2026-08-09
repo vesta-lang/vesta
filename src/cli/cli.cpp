@@ -66,6 +66,8 @@
 #include <poll.h> // poll() para readline_impl no-bloqueante
 #endif
 
+#include "vx/source_text.h" // un solo fin de linea para todo el pipeline
+
 namespace cli {
 #ifndef _WIN32
 // POSIX: recorrer el array 'environ' terminado en NULL
@@ -793,13 +795,13 @@ static void command_vpp(const std::string &args) {
     }
 
     // --- leer el archivo fuente ---
-    std::ifstream ifs(src_file, std::ios::binary);
-    if (!ifs) {
+    // Con un solo fin de linea: lo que entra al preprocesador tiene que verse
+    // igual venga de donde venga (ver @ref vx::leer_fuente).
+    std::string source;
+    if (!vx::leer_fuente(src_file, source)) {
         vesta::scout() << "[vpp] No se puede abrir: " << src_file << "\n";
         return;
     }
-    std::string source((std::istreambuf_iterator<char>(ifs)),
-                       std::istreambuf_iterator<char>());
 
     // --- configurar el preprocesador ---
     bool had_error = false;

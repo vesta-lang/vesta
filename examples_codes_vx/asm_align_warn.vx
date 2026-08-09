@@ -1,0 +1,39 @@
+// Una instruccion que EXIGE su direccion alineada tiene que decirlo al
+// compilar, no reventar al ejecutar.
+//
+// `movdqa` sobre una direccion que no es multiplo de 16 no va mas lenta: lanza
+// una excepcion del procesador y el programa cae.  Aqui el destino sale de una
+// reserva y se le suma UNO, asi que no puede estar alineado -- y aunque
+// pudiera, el compilador no tendria como demostrarlo.  El aviso VXA011 es la
+// diferencia entre enterarse al compilar y enterarse ejecutando, que fue como
+// se descubrio la primera vez.
+//
+// El programa NO compila, y esa es la diferencia que importa: cuando el
+// compilador SABE que la direccion no cumple -- aqui lo demuestra: sale de una
+// reserva alineada a 8 y se le suma 1, luego es congruente con 1 modulo 8, y
+// todo multiplo de 16 es congruente con 0 -- avisar no basta.  Cuando NO puede
+// demostrarlo, entonces si avisa (VXA011) y deja seguir.
+//
+// @expect-error: VXA013
+
+import std.types only usize, uintptr;
+
+// Rellena 16 bytes con `movdqa`, que exige la direccion alineada a 16.
+void rellena_16(u8* dst) {
+    asm (
+        reg d = dst,
+        xmm v0,
+    ) {
+        pxor v0, v0
+        movdqa [d], v0
+    }
+}
+
+i32 main() {
+    u8* base = (u8*) malloc(64);
+    // Desalineado a proposito: base + 1 no es multiplo de 16 pase lo que pase.
+    u8* p = base + 1;
+    rellena_16(p);
+    free((i64*) base);
+    return 42;
+}

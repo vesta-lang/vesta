@@ -57,6 +57,7 @@
 #include "toolchain/aot_build.h" // AOT nativo extraido (vesta::tc::compile_aot)
 #include "util/assembler_multiprocess.h"
 #include "vx/compiler.h"
+#include "vx/source_text.h" // un solo fin de linea para todo el pipeline
 #include "runtime/exception_runtime.h" // codigo de salida tras un fallo
 #include "vx/vxdbg_emit.h" // publicar el grafo del artefacto
 #include "vx/type_checker.h" // register_comptime_virtual_fns
@@ -2014,14 +2015,11 @@ int main(int argc, char *argv[]) {
             analyze_backend = analysis::effects::Backend::Aot;
         }
 
-        std::ifstream ifs(vx_path);
-        if (!ifs.is_open()) {
+        std::string vx_source;
+        if (!vx::leer_fuente(vx_path, vx_source)) {
             std::cerr << "[analyze] No se puede abrir: " << vx_path << "\n";
             return EXIT_FAILURE;
         }
-        std::string vx_source((std::istreambuf_iterator<char>(ifs)),
-                               std::istreambuf_iterator<char>());
-        ifs.close();
 
         // Compilar hasta el IR.  Reutilizamos compile_vx_source que ya
         // rellena ir_module_cache_bytes (modulo POST-O2) y, con
@@ -2957,13 +2955,11 @@ int main(int argc, char *argv[]) {
     if (result.count("dump-semantic-index")) {
         const std::string vx_path =
             result["dump-semantic-index"].as<std::string>();
-        std::ifstream ifs(vx_path);
-        if (!ifs) {
+        std::string src;
+        if (!vx::leer_fuente(vx_path, src)) {
             std::cerr << "error: no se pudo abrir '" << vx_path << "'\n";
             return EXIT_FAILURE;
         }
-        std::string src((std::istreambuf_iterator<char>(ifs)),
-                        std::istreambuf_iterator<char>());
         vx::Diagnostics diags;
         vx::Lexer lx(src, vx_path, diags);
         vx::Parser p(lx, diags);
@@ -3044,14 +3040,12 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        // 1 Leer el .vx.
-        std::ifstream ifs(vx_path);
-        if (!ifs.is_open()) {
+        // 1 Leer el .vx (con un solo fin de linea, ver vx::leer_fuente).
+        std::string vx_source;
+        if (!vx::leer_fuente(vx_path, vx_source)) {
             std::cerr << "[vx] No se puede abrir: " << vx_path << "\n";
             return EXIT_FAILURE;
         }
-        std::string vx_source((std::istreambuf_iterator<char>(ifs)),
-                               std::istreambuf_iterator<char>());
 
         // 2 Aplicar VPP (mismo pipeline que run_worker).  Esto es
         // best-effort: si una macro genera sintaxis no soportada por Vesta,
