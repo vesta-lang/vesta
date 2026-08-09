@@ -54,6 +54,11 @@ struct DbOperand {
 struct DbForm {
     uint32_t iclass;   ///< mnemonico (indice a kStr).
     uint16_t ext;      ///< extension (indice a kStr).
+    uint16_t isa_set;  ///< conjunto ISA que EXIGE esta forma concreta (indice a
+                       ///< kStr): "AVX512F_512", "AVX2", "SSE2", "BMI2"...  Es
+                       ///< mas fino que @c ext (que agrupa las 14518 formas
+                       ///< AVX-512 bajo un solo "AVX512EVEX") y es lo que hay
+                       ///< que comparar contra lo que el procesador declara.
     uint16_t overlay;  ///< bitmask DbOverlayBit.
     uint8_t rmask;     ///< operandos leidos (bit i = operando i).
     uint8_t wmask;     ///< operandos escritos.
@@ -316,6 +321,41 @@ int32_t match(Isa isa, const std::string &mnemonic,
 const char *iclass_name(Isa isa, int32_t form_id);
 /// Bitmask de overlay de una forma (0 si el FormID no es valido).
 uint16_t overlay_of(Isa isa, int32_t form_id);
+/// Extension de una forma ("AVX512EVEX", "SSE2", "BASE"...), "" si no vale.
+const char *ext_of(Isa isa, int32_t form_id);
+/// Conjunto ISA que EXIGE una forma ("AVX512F_512", "AVX2"...), "" si no vale.
+const char *isa_set_of(Isa isa, int32_t form_id);
+
+/**
+ * @brief Que RASGO del procesador exige un mnemonico, sin conocer sus
+ *        operandos.
+ *
+ * Al recoger un fallo lo unico que hay es el mnemonico que desensamblo el
+ * anfitrion; no hay una linea de asm que emparejar.  Se miran todas las formas
+ * del mnemonico y se responde solo si TODAS coinciden en lo que exigen -- si un
+ * mnemonico tiene formas SSE y formas AVX-512, decir una de las dos seria
+ * inventar cual fallo.
+ *
+ * @param isa      ISA de la maquina.
+ * @param mnemonic Mnemonico, en cualquier caja.
+ * @return El rasgo comun (p.ej. "AVX512F"), o "" si el mnemonico no esta, sus
+ *         formas exigen rasgos distintos, o lo que exige es el conjunto base.
+ */
+std::string requisito_de_mnemonico(Isa isa, const std::string &mnemonic);
+
+/**
+ * @brief Nombre del rasgo, a secas, a partir del conjunto ISA de una forma.
+ *
+ * El conjunto ISA lleva pegado el ancho con el que se codifico
+ * (`AVX512F_512`, `AVX512BW_128`, `AVX512F_SCALAR`), que es un detalle del
+ * encoding y no un rasgo que ningun procesador declare por separado: quien
+ * tiene AVX512F lo tiene para los tres anchos.  Esto devuelve `AVX512F`.
+ *
+ * @param isa_set Conjunto ISA de una forma.
+ * @return El nombre sin el ancho.  Cadena vacia si el conjunto es el base
+ *         (`I86`, `I386`, `LONGMODE`, `-`): eso no es un rasgo que falte.
+ */
+std::string nombre_de_rasgo(const std::string &isa_set);
 /// Numero de formas de la ISA.
 uint32_t form_count(Isa isa);
 

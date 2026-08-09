@@ -8135,6 +8135,83 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
     return changed;
 }
 
+/**
+ * @brief Mapa nombre-completo -> bloque, para resolver las referencias por
+ *        NOMBRE que hace un @c LABEL_ADDR a un bloque de la propia funcion.
+ *
+ * La clave es la que compone @c emit_label_addr para un handler local:
+ * `<funcion>_<bloque>`.  Los @c LABEL_ADDR que apuntan a funciones, lambdas o
+ * destructores externos llevan el nombre de la funcion a secas, asi que no
+ * entran en este mapa y no se confunden con un bloque.
+ */
+static std::unordered_map<std::string, IrBlockId>
+bloques_por_nombre(const IrFunction &fn) {
+    std::unordered_map<std::string, IrBlockId> name2id;
+    for (size_t b = 0; b < fn.blocks.size(); ++b)
+        if (!fn.blocks[b].name.empty())
+            name2id.emplace(fn.name + "_" + fn.blocks[b].name,
+                            static_cast<IrBlockId>(b));
+    return name2id;
+}
+
+/**
+ * @brief Sucesores REALES de un bloque, aristas implicitas incluidas.
+ *
+ * Un handler de `try/catch` no cuelga de ningun salto: se alcanza cuando salta
+ * la excepcion, y lo unico que lo referencia es el @c LABEL_ADDR que el
+ * @c tryenter guarda.  Esa arista es tan real como un @c br, y quien la ignora
+ * da el handler por muerto.
+ *
+ * Estaba escrita solo en el reordenador de bloques.  El pase que borra lo
+ * inalcanzable no la conocia, asi que en cuanto el inlinado le daba una razon
+ * para volver a correr, se llevaba por delante el handler y dejaba el
+ * @c tryenter apuntando a una etiqueta que ya no existia -- el enlazador
+ * terminaba diciendo "simbolo no resuelto" y el programa no llegaba a
+ * construirse.  Ahora la regla vive en un solo sitio y la usan los dos.
+ *
+ * @param fn      Funcion.
+ * @param name2id Mapa de @c bloques_por_nombre.
+ * @param b       Bloque del que se quieren los sucesores.
+ * @param out     Se limpia y se rellena con los sucesores.
+ */
+static void sucesores_de(const IrFunction &fn,
+                         const std::unordered_map<std::string, IrBlockId> &name2id,
+                         size_t b, std::vector<IrBlockId> &out) {
+    out.clear();
+    if (b >= fn.blocks.size() || fn.blocks[b].instrs.empty()) return;
+    /* Se miran TODAS las instrucciones, no solo la ultima.  Un bloque bien
+     * formado tiene su salto al final, pero los que salen de un `asm` llevan un
+     * `br` en medio seguido del propio bloque de ensamblador; quedarse con la
+     * ultima instruccion da ese salto por inexistente y su destino, por muerto.
+     * Contar de mas solo conserva un bloque que quiza sobra; contar de menos
+     * borra uno que hace falta. */
+    for (const IrInstr &ins : fn.blocks[b].instrs) {
+        switch (ins.op) {
+        case IrOp::LABEL_ADDR: {
+            auto it = name2id.find(ins.func_name);
+            if (it != name2id.end() && it->second != b)
+                out.push_back(it->second);
+            break;
+        }
+        case IrOp::BR:
+            if (ins.target_block != IR_NO_BLOCK) out.push_back(ins.target_block);
+            break;
+        case IrOp::BR_COND:
+            if (ins.target_block != IR_NO_BLOCK) out.push_back(ins.target_block);
+            if (ins.false_block != IR_NO_BLOCK) out.push_back(ins.false_block);
+            break;
+        case IrOp::SWITCH_DENSE:
+            /* El default va en target_block y un caso por entrada en
+             * jump_targets[]: omitirlos deja los bloques del match colgando. */
+            if (ins.target_block != IR_NO_BLOCK) out.push_back(ins.target_block);
+            for (IrBlockId s : ins.jump_targets)
+                if (s != IR_NO_BLOCK) out.push_back(s);
+            break;
+        default: break;
+        }
+    }
+}
+
 bool ir_pass_unreachable(IrFunction &fn) {
     if (fn.blocks.empty()) return false;
 
@@ -8142,6 +8219,9 @@ bool ir_pass_unreachable(IrFunction &fn) {
     std::vector<bool> reachable(nblocks, false);
 
     // BFS desde el bloque de entrada (bloque 0)
+    const std::unordered_map<std::string, IrBlockId> name2id =
+        bloques_por_nombre(fn);
+    std::vector<IrBlockId> succs;
     std::queue<IrBlockId> worklist;
     worklist.push(0);
     reachable[0] = true;
@@ -8153,21 +8233,13 @@ bool ir_pass_unreachable(IrFunction &fn) {
         if (bid >= nblocks) continue;
         const IrBlock &bb = fn.blocks[bid];
 
-        // Encontrar el terminador del bloque y sus sucesores
-        for (const auto &ins : bb.instrs) {
-            if (ins.op == IrOp::BR) {
-                IrBlockId s = ins.target_block;
-                if (s < nblocks && !reachable[s]) {
-                    reachable[s] = true;
-                    worklist.push(s);
-                }
-            } else if (ins.op == IrOp::BR_COND) {
-                for (IrBlockId s : {ins.target_block, ins.false_block}) {
-                    if (s < nblocks && !reachable[s]) {
-                        reachable[s] = true;
-                        worklist.push(s);
-                    }
-                }
+        // Los sucesores, con las mismas reglas que usa el reordenador: saltos,
+        // casos de un match, y el handler que solo nombra un LABEL_ADDR.
+        sucesores_de(fn, name2id, bid, succs);
+        for (IrBlockId s : succs) {
+            if (s < nblocks && !reachable[s]) {
+                reachable[s] = true;
+                worklist.push(s);
             }
         }
         // Usar sucesores precalculados si existen
@@ -10223,51 +10295,15 @@ bool ir_pass_speculative_devirt(IrFunction &fn,
 static void reorder_blocks_rpo(IrFunction &fn) {
     const size_t N = fn.blocks.size();
     if (N <= 1) return;
-    /* Mapa nombre_de_bloque -> id.  Resuelve las aristas IMPLICITAS de
-     * LABEL_ADDR: el handler de un tryenter (try/catch) se referencia por
-     * NOMBRE (@Absolute("code.<handler>")), NO por target_block.  Sin capturar
-     * esa arista, el handler queda INALCANZABLE en el DFS -> el RPO lo empuja al
-     * final del post-order -> tras el reverse queda AL PRINCIPIO, desplazando el
-     * entry de la posicion 0 (el interprete/emisor arrancarian por el bloque
-     * equivocado -> excepciones rotas).  Solo cuentan los LABEL_ADDR a bloques
-     * LOCALES de esta funcion (los que apuntan a funciones/lambdas/dtors
-     * externos no estan en el mapa). */
-    /* La clave es el nombre COMPLETO que usa emit_label_addr para un handler
-     * local: "<nombre_funcion>_<nombre_bloque>" (ver lowering del try/catch).
-     * Los LABEL_ADDR a funciones/lambdas/dtors externos llevan el nombre de la
-     * funcion (sin ese prefijo) -> no colisionan con estas claves. */
-    std::unordered_map<std::string, IrBlockId> name2id;
-    for (size_t b = 0; b < N; ++b)
-        if (!fn.blocks[b].name.empty())
-            name2id.emplace(fn.name + "_" + fn.blocks[b].name,
-                            static_cast<IrBlockId>(b));
+    /* Los sucesores salen de `sucesores_de`, que ya incluye la arista implicita
+     * del LABEL_ADDR al handler de un try/catch.  Sin esa arista el handler
+     * queda inalcanzable en el recorrido y el orden inverso lo empuja AL
+     * PRINCIPIO, desplazando al bloque de entrada de la posicion 0 -- se
+     * empezaria a ejecutar por el bloque equivocado. */
+    const std::unordered_map<std::string, IrBlockId> name2id =
+        bloques_por_nombre(fn);
     auto succs_of = [&](size_t b, std::vector<IrBlockId> &out) {
-        out.clear();
-        if (fn.blocks[b].instrs.empty()) return;
-        /* Aristas implicitas: un LABEL_ADDR a un bloque local (handler de
-         * excepcion) es un sucesor real; el handler debe quedar alcanzable
-         * desde su bloque de tryenter para no perder el orden topologico. */
-        for (const IrInstr &ins : fn.blocks[b].instrs)
-            if (ins.op == IrOp::LABEL_ADDR) {
-                auto it = name2id.find(ins.func_name);
-                if (it != name2id.end() && it->second != b)
-                    out.push_back(it->second);
-            }
-        const IrInstr &t = fn.blocks[b].instrs.back();
-        if (t.op == IrOp::BR) {
-            if (t.target_block != IR_NO_BLOCK) out.push_back(t.target_block);
-        } else if (t.op == IrOp::BR_COND) {
-            if (t.target_block != IR_NO_BLOCK) out.push_back(t.target_block);
-            if (t.false_block != IR_NO_BLOCK) out.push_back(t.false_block);
-        } else if (t.op == IrOp::SWITCH_DENSE) {
-            /* SWITCH_DENSE tiene sucesores en target_block (default) Y en
-             * jump_targets[] (una entrada por caso).  Omitirlos dejaba los
-             * bloques del match INALCANZABLES en el DFS -> el RPO los enviaba
-             * al final desconectados (match/ADT daban basura).  */
-            if (t.target_block != IR_NO_BLOCK) out.push_back(t.target_block);
-            for (IrBlockId s : t.jump_targets)
-                if (s != IR_NO_BLOCK) out.push_back(s);
-        }
+        sucesores_de(fn, name2id, b, out);
     };
     std::vector<std::vector<IrBlockId>> sc(N);
     for (size_t b = 0; b < N; ++b) succs_of(b, sc[b]);

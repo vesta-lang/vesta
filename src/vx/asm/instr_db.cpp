@@ -331,6 +331,63 @@ uint16_t overlay_of(Isa isa, int32_t form_id) {
     return t.forms[form_id].overlay;
 }
 
+const char *ext_of(Isa isa, int32_t form_id) {
+    const IsaData t = tables_for(isa);
+    if (!t.forms || form_id < 0 ||
+        static_cast<unsigned>(form_id) >= t.form_count)
+        return "";
+    return t.str[t.forms[form_id].ext];
+}
+
+const char *isa_set_of(Isa isa, int32_t form_id) {
+    const IsaData t = tables_for(isa);
+    if (!t.forms || form_id < 0 ||
+        static_cast<unsigned>(form_id) >= t.form_count)
+        return "";
+    return t.str[t.forms[form_id].isa_set];
+}
+
+std::string requisito_de_mnemonico(Isa isa, const std::string &mnemonic) {
+    const IsaData t = tables_for(isa);
+    if (!t.forms || !t.iclass) return std::string();
+    std::string up = mnemonic;
+    for (char &c : up) c = static_cast<char>(std::toupper((unsigned char)c));
+    const DbIclassRange *r = find_iclass(t, up);
+    if (!r || r->count == 0) return std::string();
+    // Se compara el RASGO, no el conjunto en crudo: las formas de `vmovdqu64`
+    // son AVX512F_128, _256 y _512, tres conjuntos distintos que son el mismo
+    // rasgo -- quien tiene AVX512F lo tiene para los tres anchos.  Comparando en
+    // crudo, ninguna instruccion vectorial habria respondido nunca.
+    //
+    // Lo que si obliga a callar es que el rasgo difiera de verdad: un mnemonico
+    // con formas SSE y formas AVX-512 no permite decir cual fallo sin mirar los
+    // operandos, y aqui no hay operandos que mirar.
+    std::string comun = nombre_de_rasgo(t.str[t.forms[r->first_fid].isa_set]);
+    for (uint32_t i = 1; i < r->count; ++i) {
+        if (nombre_de_rasgo(t.str[t.forms[r->first_fid + i].isa_set]) != comun)
+            return std::string();
+    }
+    return comun;
+}
+
+std::string nombre_de_rasgo(const std::string &isa_set) {
+    if (isa_set.empty() || isa_set == "-") return "";
+    // El conjunto base no es un rasgo: nadie lo declara porque nadie carece de el.
+    if (isa_set == "I86" || isa_set == "I386" || isa_set == "LONGMODE" ||
+        isa_set == "PPRO" || isa_set == "PENTIUMREAL")
+        return "";
+    static const char *const anchos[] = {"_512", "_256", "_128", "_SCALAR"};
+    std::string s = isa_set;
+    for (const char *suf : anchos) {
+        const size_t n = std::strlen(suf);
+        if (s.size() > n && s.compare(s.size() - n, n, suf) == 0) {
+            s.resize(s.size() - n);
+            break;
+        }
+    }
+    return s;
+}
+
 uint32_t form_count(Isa isa) { return tables_for(isa).form_count; }
 
 // -------------------------------------------------------------------------

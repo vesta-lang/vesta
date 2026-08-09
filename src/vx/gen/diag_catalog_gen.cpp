@@ -66,6 +66,11 @@ const CatEntry kEntries[] = {
     {"VX7016", {"source", "fuente"}},
     {"VX7017", {"intermediate (SSA)", "intermedio (SSA)"}},
     {"VX7018", {"machine", "maquina"}},
+    {"VX7019", {"this processor does not have the instruction that was going to run (at {0})", "este procesador no tiene la instruccion que iba a ejecutarse (en {0})"}},
+    {"VX7020", {"the system stopped the program with fault {0}, at {1}", "el sistema detuvo el programa con el fallo {0}, en {1}"}},
+    {"VX7021", {"instruction: {0}", "instruccion: {0}"}},
+    {"VX7022", {"requires:    {0}", "exige:       {0}"}},
+    {"VX7023", {"this processor has: {0}", "este procesador tiene: {0}"}},
     {"VXA001", {"asm: dead code: unreachable instruction in the asm block", "asm: codigo muerto: instruccion inalcanzable en el bloque asm"}},
     {"VXA002", {"asm: jump to label '{0}' not defined in the asm block", "asm: salto a etiqueta '{0}' no definida en el bloque asm"}},
     {"VXA003", {"asm: infinite loop: control cannot leave the asm block", "asm: bucle sin salida: el flujo no puede abandonar el bloque asm"}},
@@ -80,7 +85,7 @@ const CatEntry kEntries[] = {
     {"VXA012", {"asm: '{0}' requires an aligned address, but its width cannot be determined from the operands -- the requirement cannot be checked", "asm: '{0}' exige una direccion alineada, pero su ancho no se puede determinar por los operandos -- el requisito no se puede comprobar"}},
     {"VXA013", {"asm: '{0}' requires its address to be a multiple of {1} bytes, and it is not: the address is congruent with {2} modulo {3} -- this does not run slower, it faults", "asm: '{0}' exige que su direccion sea multiplo de {1} bytes, y no lo es: la direccion es congruente con {2} modulo {3} -- esto no va mas lento, hace caer el programa"}},
 };
-const int kEntryCount = 59;
+const int kEntryCount = 64;
 
 } // namespace
 

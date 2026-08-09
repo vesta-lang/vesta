@@ -1,0 +1,72 @@
+// Una instruccion que este procesador NO tiene: se cuenta, y se puede capturar.
+//
+// Las variantes de `std.memory` se eligen por lo que la maquina soporta, asi
+// que llamar a mano a una de AVX-512 en un procesador sin AVX-512 es la forma
+// mas directa de provocar el caso.  Antes esto no se contaba: el manejador de
+// fallos solo miraba el acceso invalido, la division entre cero y el
+// desbordamiento, y todo lo demas se le escapaba -- el programa moria sin
+// mensaje, sin traza y con el codigo de salida del sistema.  Un fallo que
+// nadie cuenta es indistinguible de uno que no ocurrio.
+//
+// Ahora ademas se dice QUE instruccion y QUE exige, preguntandoselo a la base
+// de instrucciones en vez de deducirlo del nombre de la funcion.
+//
+// El caso se adapta a la maquina: si el procesador SI tiene AVX-512, la llamada
+// es legitima y no hay fallo que capturar.  Exigir un fallo que depende del
+// procesador seria un test que pasa o falla segun donde corra, asi que lo que
+// se comprueba es que lo ocurrido CONCUERDE con lo que la maquina declara.
+//
+// El bloque `try` solo contiene la llamada, y la decision se toma fuera a
+// proposito: una rama DENTRO del cuerpo del try, con una llamada que falla,
+// termina hoy en un programa que muere en silencio (bug aparte, con caso
+// minimo reducido; nada que ver con lo que se comprueba aqui).
+//
+// NO esta enganchado a la suite, y esa es la segunda cosa que este fichero
+// documenta: capturar con `try` un fallo lanzado DENTRO del trampolin de asm
+// nativo funciona o mata el proceso en silencio segun donde caiga el binario en
+// memoria.  Se reproduce moviendo el .velb: con la ruta de 65 caracteres corre,
+// con 66 muere, el mismo fichero byte a byte.  Sin capturar -- que es lo que
+// arregla el cambio que trajo este ejemplo -- se cuenta bien en los dos casos,
+// y el equivalente con un puntero nulo (369) tampoco se inmuta.  O sea que lo
+// fragil es volver de un fallo levantado a esa profundidad, no contarlo.
+
+import std.memory.x86_64;
+import std.types only usize;
+
+u8[256] g_origen;
+u8[256] g_destino;
+
+i32 main() {
+    u64 rasgos = cpu_features();
+    bool avx512 = (rasgos & std.memory.x86_64.BIT_AVX512F) != 0;
+
+    // 0 = no hubo fallo; si lo hubo, el tipo que dijo el runtime.
+    i64 visto = 0;
+    try {
+        std.memory.x86_64.memcpy_small_avx512(&g_destino[0], &g_origen[0],
+                                              (usize) 96);
+    } catch (FatalError e) {
+        visto = (i64) e.kind;
+    }
+
+    i64 hechas = 0;
+    if (avx512) {
+        // Con AVX-512 la instruccion existe: la copia tiene que pasar limpia.
+        if (visto == 0) hechas = 1;
+    } else {
+        // Sin AVX-512 tiene que haberse contado como instruccion que este
+        // procesador no sabe ejecutar (kind 5), no morir en silencio.
+        if (visto == 5) hechas = 1;
+    }
+
+    // Y se sigue: tras un fallo de este tipo el proceso queda utilizable.
+    i64 suma = 0;
+    i64 i = 0;
+    while (i < 10) {
+        suma = suma + i;
+        i = i + 1;
+    }
+
+    // 1 comprobada + 45 = 46, corra donde corra.
+    return (i32) (hechas + suma);
+}

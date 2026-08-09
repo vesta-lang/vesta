@@ -46,18 +46,59 @@ namespace runtime {
  * idioma de quien lee.  Lo unico que se anade es la direccion del acceso, que si
  * aporta, y tambien por catalogo.
  *
+ * Devuelve si un `catch` del programa se hizo cargo.  Sin esto, quien recupera
+ * daba el proceso por muerto SIEMPRE, asi que un fallo del sistema rodeado de
+ * `try` no ejecutaba su `catch`: el programa terminaba sin mensaje y diciendo
+ * que todo fue bien.  Peor que no capturarlo, porque el `try` estaba puesto.
+ *
  * @param p Proceso que fallo.
+ * @return true si el fallo se convirtio en excepcion y alguien la atrapo -- el
+ *         proceso SIGUE VIVO en el `catch` y no hay que cerrarlo.
  */
-static void lanzar_fallo_del_sistema(runtime::ProcessVM *p) {
+static bool lanzar_fallo_del_sistema(runtime::ProcessVM *p) {
+    /* Que haya un `try` activo es lo que decide si esto puede terminar en un
+     * `catch`; se mira ANTES porque `throw_fatal` consume la pila de marcos. */
+    const bool hay_try = (p->exc_frame_stack != nullptr);
+    /* Y que el proceso salga sin error es lo que confirma que el salto al
+     * handler ocurrio: la ruta sin capturar marca `err_thread`. */
+    auto atrapado = [&]() {
+        return hay_try && p->err_thread == runtime::THREAD_NO_ERROR;
+    };
     if (p->pending_av_kind == 1 || p->pending_av_kind == 2) {
         runtime::throw_fatal(p, runtime::FATAL_DIVISION_BY_ZERO, nullptr);
-        return;
+        return atrapado();
     }
     char dir[32];
     std::snprintf(dir, sizeof(dir), "0x%llx",
                   (unsigned long long)p->pending_av_addr);
+    /* Los fallos que NO son un acceso invalido se cuentan con la misma calidad
+     * que los demas: por catalogo, con su sitio, y por la misma via -- asi
+     * heredan la cadena de llamadas y el `fichero:linea` que arma `throw_fatal`.
+     * Contar unos bien y otros con un silencio es peor que no contar ninguno:
+     * el que calla parece que no ocurrio. */
+    if (p->pending_av_kind == 3) {
+        // Una instruccion que este procesador no sabe ejecutar.
+        const std::string detalle = vx::diag::format("VX7019", {dir});
+        runtime::throw_fatal(p, runtime::FATAL_ILLEGAL_INSTRUCTION,
+                             detalle.c_str());
+        return atrapado();
+    }
+    if (p->pending_av_kind == 4) {
+        // Cualquier otro fallo del sistema: se nombra por su codigo, que es lo
+        // unico que se sabe de el, pero se cuenta igual.
+        char codigo[32];
+        std::snprintf(codigo, sizeof(codigo), "0x%llx",
+                      (unsigned long long)p->pending_av_os_code);
+        const std::string detalle = vx::diag::format("VX7020", {codigo, dir});
+        /* El tipo es el del anfitrion abortandonos: es lo unico honesto que se
+         * puede decir cuando el fallo no cae en ninguna de nuestras categorias.
+         * El codigo del sistema, que si lo identifica, va en el detalle. */
+        runtime::throw_fatal(p, runtime::FATAL_NATIVE_CRASH, detalle.c_str());
+        return atrapado();
+    }
     const std::string detalle = vx::diag::format("VX7013", {dir});
     runtime::throw_fatal(p, runtime::FATAL_SEGMENTATION_FAULT, detalle.c_str());
+    return atrapado();
 }
 
 
@@ -409,6 +450,7 @@ void Scheduler::run_loop() {
              * la ejecucion y dejar el proceso HALT. */
             instance->pending_av_kind = 0xFFFFFFFFu;
             instance->av_recovery_active = true;
+            bool atrapado_por_el_programa = false;
             if (setjmp(instance->av_recovery_jmpbuf) == 0) {
                 (void)jit::enter_jit(jf,
                                      reinterpret_cast<vrt_proc *>(instance));
@@ -424,26 +466,23 @@ void Scheduler::run_loop() {
                  * mientras que en el interprete si.  El mismo programa fallando
                  * de dos maneras distintas segun como se ejecute es peor que
                  * cualquiera de las dos. */
-                /* Sin mensaje propio: el tipo de fallo YA lo cuenta el catalogo
-                 * en el idioma de quien lee, y repetirlo aqui en una cadena
-                 * fija seria decir lo mismo dos veces y solo en un idioma.  La
-                 * direccion si aporta, asi que va -- tambien por catalogo. */
-                if (instance->pending_av_kind == 1 ||
-                    instance->pending_av_kind == 2) {
-                    runtime::throw_fatal(
-                        instance, runtime::FATAL_DIVISION_BY_ZERO, nullptr);
-                } else {
-                    char addr[32];
-                    std::snprintf(addr, sizeof(addr), "0x%llx",
-                                  (unsigned long long)instance->pending_av_addr);
-                    const std::string detalle =
-                        vx::diag::format("VX7013", {addr});
-                    runtime::throw_fatal(instance,
-                                         runtime::FATAL_SEGMENTATION_FAULT,
-                                         detalle.c_str());
-                }
+                /* Por el MISMO sitio que el batch del interprete: el fallo se
+                 * cuenta una sola vez, escrito una sola vez.  Antes esto era una
+                 * copia palabra por palabra del otro camino, y solo cubria dos
+                 * de los fallos -- una instruccion que el procesador no tiene
+                 * moria aqui sin decir nada. */
+                atrapado_por_el_programa = lanzar_fallo_del_sistema(instance);
             }
             instance->av_recovery_active = false;
+            if (atrapado_por_el_programa) {
+                /* Un `catch` del programa se hizo cargo: el proceso no ha
+                 * muerto, esta dentro del handler.  Cerrarlo aqui era lo que
+                 * hacia que un fallo del sistema rodeado de `try` terminara el
+                 * programa en silencio, con el `catch` sin ejecutar. */
+                instance->state.store(READY, std::memory_order_release);
+                instance->tsc = 1;
+                continue;
+            }
             /* Marcar el proceso como HALT.  No hay mas ejecucion interp. */
             instance->state.store(HALT, std::memory_order_release);
             instance->tsc = 1; /* marcar que ya ejecuto algo */
@@ -530,7 +569,13 @@ void Scheduler::run_loop() {
                     /* Lo captura el sistema a mitad de instruccion: el PC
                      * apunta a la que fallo, no a la siguiente. */
                     instance->fatal_pc_exact = true;
-                    lanzar_fallo_del_sistema(instance);
+                    if (lanzar_fallo_del_sistema(instance)) {
+                        /* Lo atrapo un `catch` del programa: el proceso sigue
+                         * vivo, parado en el handler.  Se sale del `setjmp` y
+                         * se sigue ejecutando desde ahi -- no hay nada que
+                         * cerrar. */
+                        instance->av_recovery_active = false;
+                    } else {
                     /* Y se cierra el proceso AQUI, con el mismo cierre que usa
                      * la entrada al codigo compilado.
                      *
@@ -547,6 +592,7 @@ void Scheduler::run_loop() {
                     instance->tsc = 1;
                     alive_count--;
                     continue; /* a por otro proceso */
+                    }
                 }
             }
 

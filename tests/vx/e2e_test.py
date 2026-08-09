@@ -704,6 +704,31 @@ def fault3_case(tag, label, src, code, exit_want, line=None):
     _register(tag, fn, False, line)
 
 
+def caught_fault_case(tag, label, src, expected, line=None):
+    """Un fallo del sistema CAPTURADO con `try/catch`, en interprete y JIT.
+
+    Comprueba el valor devuelto, que solo sale bien si el `catch` corrio Y el
+    programa siguio despues.  Ese "y siguio despues" es la parte que se rompio
+    sin que nadie se enterara: quien recuperaba el fallo cerraba el proceso
+    tambien cuando alguien lo habia atrapado.
+
+    El modo nativo queda fuera a proposito: sin desenrollado de excepciones
+    nativo (AOT.7) no puede convertir un fallo del procesador en excepcion.
+    """
+    def fn(ctx):
+        ctx.compile_vx(ctx.src(src), tag)
+        ctx.ok("compilacion %s -> .velb" % src)
+        for modo in ("vm", "jit"):
+            _, log = ctx.run_velb(tag, schedulers=1, mode=modo)
+            got = get_r00(log)
+            if got != expected:
+                ctx.fail("%s (-m %s): R00 == %s, se esperaba %d"
+                         % (label, modo, got, expected), log)
+            ctx.ok("%s (-m %s) -> R0 = %d" % (label, modo, expected))
+    fn.__name__ = "case_" + tag
+    _register(tag, fn, False, line)
+
+
 def diff3_case(tag, label, src, line=None, aot=True):
     """Red de seguridad diferencial: interp=oraculo, jit y aot deben COINCIDIR.
     Sin valor esperado; cualquier divergencia entre backends rompe el build."""
@@ -2886,6 +2911,13 @@ r0_case("wideint_256_signed", "i256: negacion, comparadores con signo y desplaza
 r0_case("wideint_256", "u256: acarreo y prestamo entre mitades de 128, desplazamientos que cruzan la frontera", "349_wideint_256.vx", 42)
 r0_case("comptime_literal_import", "std.comptime.literal cross-module: parse de un entero en compile-time", "348_comptime_literal_import.vx", 42)
 r0_case("div_cero_detiene", "una division por cero detiene el proceso; capturada es un FatalError", "347_div_cero_detiene.vx", 42)
+caught_fault_case("fallo_sistema_capturado", "un fallo del procesador capturado con try/catch, y el programa sigue", "369_fallo_del_sistema_capturado.vx", 48)
+# 370_instruccion_no_soportada.vx NO esta enganchado todavia: destapa un bug
+# aparte -- recuperar un fallo lanzado DENTRO del trampolin de asm nativo y
+# capturarlo con `try` funciona o mata el proceso en silencio segun donde caiga
+# el binario (reproducible con la longitud de la ruta del .velb: 65 caracteres
+# va, 66 no).  Engancharlo asi seria meter un caso que pasa o falla segun el
+# directorio.  El ejemplo se queda porque documenta y reproduce el caso.
 modes3_case("optional_struct", "Optional<T> con T = struct por valor (payload dimensionado + copia)", "346_optional_struct.vx", 52)
 r0_case("cme299", "captura expr CROSS-MODULO (src(expr) en otro modulo, DSL crudo)", "299_cross_module_expr.vx", 42, line=3709)
 r0_case("scs300", "source(expr) de std.comptime (re-export + siembra transitiva)", "300_stdlib_comptime_source.vx", 42, line=3710)

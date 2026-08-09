@@ -272,3 +272,23 @@ es = "intermedio (SSA)"
 [VX7018]
 en = "machine"
 es = "maquina"
+
+[VX7019]
+en = "this processor does not have the instruction that was going to run (at {0})"
+es = "este procesador no tiene la instruccion que iba a ejecutarse (en {0})"
+
+[VX7020]
+en = "the system stopped the program with fault {0}, at {1}"
+es = "el sistema detuvo el programa con el fallo {0}, en {1}"
+
+[VX7021]
+en = "instruction: {0}"
+es = "instruccion: {0}"
+
+[VX7022]
+en = "requires:    {0}"
+es = "exige:       {0}"
+
+[VX7023]
+en = "this processor has: {0}"
+es = "este procesador tiene: {0}"

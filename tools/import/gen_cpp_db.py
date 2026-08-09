@@ -240,6 +240,16 @@ def main():
         ic = fm["iclass"]
         ic_idx = strs.get(ic)
         ext_idx = strs.get(fm["ext"])
+        # Lo que la forma EXIGE del procesador.  `ext` agrupa demasiado (las
+        # 14518 formas AVX-512 caen todas en "AVX512EVEX"); la columna `enc`
+        # trae `isa_set=` por forma -- AVX512F_512, AVX512BW_128, BMI2 -- que es
+        # lo que se puede comparar contra lo que la maquina declara.
+        isa_set = "-"
+        for _tok in fm["enc"].split(","):
+            if _tok.startswith("isa_set="):
+                isa_set = _tok[8:] or "-"
+                break
+        isa_idx = strs.get(isa_set)
         # overlay -> bitmask
         ovl = 0
         for t in fm["overlay"].split(","):
@@ -261,7 +271,7 @@ def main():
                 ops_cnt += 1
         memflags = (int(fm["mem"]) | (int(fm["imm"]) << 1) |
                     (int(fm["wflags"]) << 2) | (int(fm["rflags"]) << 3))
-        form_rows.append((ic_idx, ext_idx, ovl,
+        form_rows.append((ic_idx, ext_idx, isa_idx, ovl,
                           int(fm["rmask"], 16) & 0xFF,
                           int(fm["wmask"], 16) & 0xFF, memflags,
                           ops_off, ops_cnt, strs.get(fm["opcode"])))
@@ -297,9 +307,9 @@ def main():
         f.write("const DbForm kForms[] = {\n")
         for r in form_rows:
             if r is None:
-                f.write("  {0,0,0,0,0,0,0,0,0},\n")  # hueco (FormID sin forma)
+                f.write("  {0,0,0,0,0,0,0,0,0,0},\n")  # hueco (FormID sin forma)
             else:
-                f.write("  {%d,%d,%d,%d,%d,%d,%d,%d,%d},\n" % r)
+                f.write("  {%d,%d,%d,%d,%d,%d,%d,%d,%d,%d},\n" % r)
         f.write("};\n\n")
         # indice por iclass (ordenado)
         f.write("const DbIclassRange kIclassIndex[] = {\n")

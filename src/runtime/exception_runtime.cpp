@@ -13,9 +13,12 @@
 #include "debug/debugger.h"
 #include "disasm/disasm.h"
 #include "jit/auto_jit.h"
+#include "jit/backend_caps.h" // rasgos del procesador que ejecuta (mismo CPUID
+                              // con el que se decide que instrucciones emitir)
 
 #include <capstone/capstone.h>
 
+#include "vx/asm/instr_db.h" // que EXIGE una instruccion, preguntado a la base
 #include "vx/diag/diag_catalog.h"
 #include "vxdbg/codec.h"
 #include "vxdbg/roots.h"
@@ -824,6 +827,86 @@ static int indice_de_reg_x86(unsigned r) {
     }
 }
 
+/**
+ * @brief Mnemonico de la instruccion nativa que hay en una direccion.
+ *
+ * Cuando el procesador rechaza una instruccion, lo unico que se sabe es donde
+ * esta.  Desensamblando ESA -- no una ventana, ni el bloque entero -- se
+ * obtiene su nombre, que es lo que permite preguntarle a la base de
+ * instrucciones que rasgo exige.  Vale igual si el codigo lo genero el
+ * compilador en caliente o si vive en un modulo nativo: en los dos casos la
+ * direccion es del proceso anfitrion.
+ *
+ * @param pc Direccion de la instruccion.
+ * @return Mnemonico en minusculas, o cadena vacia si no se pudo descodificar.
+ */
+static std::string mnemonico_nativo_en(uint64_t pc) {
+    if (pc == 0) return std::string();
+    /* Cuanto se puede leer sin salir de la pagina de la instruccion.
+     *
+     * 16 bytes es lo maximo que ocupa una instruccion x86, pero pedirlos
+     * SIEMPRE es leer memoria que quiza no esta mapeada: si la instruccion cae
+     * cerca del final de su pagina, la lectura se va a la siguiente y provoca
+     * un segundo fallo -- dentro de la recuperacion del primero, que es el peor
+     * momento posible.  Eso hacia que contar el fallo funcionara o matara el
+     * programa en silencio segun donde hubiera caido el codigo, o sea de forma
+     * distinta en cada ejecucion.
+     *
+     * Una instruccion puede cruzar la frontera de pagina; en ese caso se
+     * descodifica lo que hay hasta el corte y, si no basta, no se dice el
+     * mnemonico.  Callar es correcto; leer de mas, no. */
+    const uint64_t kPagina = 4096;
+    const size_t hasta_fin_de_pagina =
+        static_cast<size_t>(kPagina - (pc % kPagina));
+    const size_t leer = hasta_fin_de_pagina < 16 ? hasta_fin_de_pagina : 16;
+    csh h;
+    if (cs_open(CS_ARCH_X86, CS_MODE_64, &h) != CS_ERR_OK) return std::string();
+    cs_insn *ins = nullptr;
+    const size_t n = cs_disasm(h, reinterpret_cast<const uint8_t *>(pc), leer,
+                               pc, 1, &ins);
+    std::string m;
+    if (n > 0) {
+        m = ins[0].mnemonic;
+        cs_free(ins, n);
+    }
+    cs_close(&h);
+    return m;
+}
+
+/**
+ * @brief Rasgos que declara el procesador que esta ejecutando, en una linea.
+ *
+ * Es el MISMO CPUID con el que se decide que instrucciones emitir, asi que
+ * cuando una instruccion falla por falta de rasgo, esta lista es exactamente el
+ * criterio con el que se tomo la decision -- no una aproximacion.
+ *
+ * @return "SSE2, AVX, AVX2, ERMS" o similar; vacia si no se pudo consultar.
+ */
+static std::string rasgos_del_procesador() {
+    // Los nombres son los de la base de instrucciones (`isa_set` sin el ancho),
+    // para que se lean contra lo que exige la instruccion sin traducir nada.
+    static const struct {
+        uint64_t bit;
+        const char *nombre;
+    } kTabla[] = {
+        {jit::CF_SSE2, "SSE2"},       {jit::CF_SSE42, "SSE42"},
+        {jit::CF_POPCNT, "POPCNT"},   {jit::CF_AVX, "AVX"},
+        {jit::CF_AVX2, "AVX2"},       {jit::CF_BMI1, "BMI1"},
+        {jit::CF_BMI2, "BMI2"},       {jit::CF_AVX512F, "AVX512F"},
+        {jit::CF_ERMS, "ERMS"},       {jit::CF_FMA, "FMA"},
+        {jit::CF_LZCNT, "LZCNT"},     {jit::CF_F16C, "F16C"},
+        {jit::CF_SHA, "SHA"},         {jit::CF_AES, "AES"},
+    };
+    const uint64_t bits = jit::backend_caps_host_bits();
+    std::string out;
+    for (const auto &e : kTabla) {
+        if ((bits & e.bit) == 0) continue;
+        if (!out.empty()) out += ", ";
+        out += e.nombre;
+    }
+    return out;
+}
+
 static std::vector<std::string> native_window(ProcessVM *vm, uint64_t pc_fallo,
                                               size_t antes, size_t despues) {
     std::vector<std::string> out;
@@ -1032,6 +1115,39 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
         int n = std::snprintf(buf, sizeof(buf), "%llu", (unsigned long long)v);
         if (n > 0) append(buf, (size_t)n);
     };
+
+    /* Cuando lo que fallo fue una instruccion que este procesador no tiene, se
+     * dice QUE instruccion y QUE rasgo exige, antes de la cadena de llamadas.
+     * Todo eso ya se sabe y estaba sin juntar: la direccion la da el sistema, el
+     * mnemonico el desensamblador, el rasgo la base de instrucciones y lo que la
+     * maquina declara, el CPUID que ya se consulta para decidir que emitir.
+     * Decir solo "instruccion invalida" era tirar cuatro datos que estaban a
+     * mano y dejar a quien lee adivinando cual de las variantes reviento. */
+    if (vm->pending_av_kind == 3 && vm->pending_fault_native_pc != 0) {
+        const std::string mnem = mnemonico_nativo_en(
+            vm->pending_fault_native_pc -
+            (vm->pending_fault_native_is_return ? 1u : 0u));
+        if (!mnem.empty()) {
+            const std::string exige =
+                vx::instr_db::requisito_de_mnemonico(vx::instr_db::Isa::X86,
+                                                     mnem);
+            append_str("  ");
+            append_str(vx::diag::format("VX7021", {mnem}).c_str());
+            append_str("\n");
+            if (!exige.empty()) {
+                append_str("  ");
+                append_str(vx::diag::format("VX7022", {exige}).c_str());
+                append_str("\n");
+            }
+            const std::string tiene = rasgos_del_procesador();
+            if (!tiene.empty()) {
+                append_str("  ");
+                append_str(vx::diag::format("VX7023", {tiene}).c_str());
+                append_str("\n");
+            }
+            append_str("\n");
+        }
+    }
 
     // Cabecera con info del proceso y PC actual.
     append_str("Stack trace (Vesta):\n");
@@ -2028,15 +2144,39 @@ static LONG WINAPI vx_av_veh(EXCEPTION_POINTERS *info) {
     // Manejamos AV y divisiones por cero (Bug fix 2026-05-23).
     // Otras excepciones (illegal instr, debug breakpoints, etc.) siguen
     // su curso normal.
-    uint32_t kind_local = 0; // 0=AV
+    /* TODO FALLO SE CUENTA.  Antes solo se trataban tres codigos y cualquier
+     * otro seguia su curso, o sea que el proceso moria SIN DECIR NADA -- ni
+     * codigo, ni linea, ni cadena de llamadas --.  Eso obliga a buscar a mano
+     * lo que la maquina ya sabia, y es lo peor que puede hacer un runtime.
+     * Pasa de verdad: la biblioteca de memoria trae variantes con AVX-512, y
+     * llamarlas en un procesador que no lo tiene levanta una instruccion
+     * ilegal que no estaba en la lista.
+     *
+     * Lo que SI sigue su curso es lo que no es un fallo: los puntos de ruptura
+     * y el paso a paso son del depurador, y las excepciones de C++ son control
+     * de flujo normal de la propia VM.  Quedarselas romperia a quien las
+     * espera. */
+    switch (code) {
+    case EXCEPTION_BREAKPOINT:
+    case EXCEPTION_SINGLE_STEP:
+    case 0xE06D7363u: // excepcion de C++ (msvc/mingw)
+    case 0x406D1388u: // nombre de hilo para el depurador
+        return EXCEPTION_CONTINUE_SEARCH;
+    default:
+        break;
+    }
+    uint32_t kind_local; // 0=AV 1=div0 2=overflow 3=instr ilegal 4=lo demas
     if (code == EXCEPTION_ACCESS_VIOLATION) {
         kind_local = 0;
     } else if (code == EXCEPTION_INT_DIVIDE_BY_ZERO) {
         kind_local = 1;
     } else if (code == EXCEPTION_INT_OVERFLOW) {
         kind_local = 2;
+    } else if (code == EXCEPTION_ILLEGAL_INSTRUCTION ||
+               code == EXCEPTION_PRIV_INSTRUCTION) {
+        kind_local = 3;
     } else {
-        return EXCEPTION_CONTINUE_SEARCH;
+        kind_local = 4;
     }
     ProcessVM *proc = t_executing_proc;
     if (proc == nullptr || !proc->av_recovery_active) {
@@ -2074,14 +2214,27 @@ static LONG WINAPI vx_av_veh(EXCEPTION_POINTERS *info) {
         proc->pending_fault_native_sp = (uint64_t)info->ContextRecord->Esp;
 #endif
     }
-    if (primero) proc->pending_av_kind = kind_local;
+    if (primero) {
+        proc->pending_av_kind = kind_local;
+        // El codigo del sistema viaja: sin el, un fallo que no esta en la lista
+        // se cuenta pero no se puede identificar.
+        proc->pending_av_os_code = (uint64_t)code;
+    }
     // Capturar la direccion del fault (segundo elemento de
     // ExceptionInformation: 0=read/write flag, 1=virtual addr) -- solo
     // para AV; para div0 / overflow no aplica.
+    //
+    // Para una instruccion que el procesador no tiene, y para lo que no esta en
+    // la lista, la direccion que importa NO es un dato: es donde esta la propia
+    // instruccion.  Esa la da `ExceptionAddress`, y sin ella el mensaje decia
+    // "en la direccion 0x0", que es no decir nada.
     if (primero && kind_local == 0 &&
         info->ExceptionRecord->NumberParameters >= 2) {
         proc->pending_av_addr =
             (uint64_t)info->ExceptionRecord->ExceptionInformation[1];
+    } else if (primero && (kind_local == 3 || kind_local == 4)) {
+        proc->pending_av_addr =
+            (uint64_t)(uintptr_t)info->ExceptionRecord->ExceptionAddress;
     } else if (primero) {
         proc->pending_av_addr = 0;
     }
@@ -2135,10 +2288,23 @@ static void posix_signal_handler(int sig, siginfo_t *info, void *ctx) {
     if (sig == SIGFPE) {
         proc->pending_av_kind = 1; // DIVIDE_BY_ZERO (o overflow)
         proc->pending_av_addr = 0;
-    } else {
+    } else if (sig == SIGILL) {
+        /* Instruccion que este procesador no sabe ejecutar.  Sin esto el
+         * proceso moria por la via legada, sin codigo ni linea ni cadena de
+         * llamadas -- justo lo que obliga a buscar a mano lo que la maquina ya
+         * sabia. */
+        proc->pending_av_kind = 3;
+        proc->pending_av_addr = info ? (uint64_t)(uintptr_t)info->si_addr : 0;
+    } else if (sig == SIGSEGV || sig == SIGBUS) {
         proc->pending_av_kind = 0; // AV
         proc->pending_av_addr = info ? (uint64_t)(uintptr_t)info->si_addr : 0;
+    } else {
+        // Cualquier otra: se cuenta igual.  Callarsela deja al proceso morir
+        // sin decir nada, que es justo lo que hay que evitar.
+        proc->pending_av_kind = 4;
+        proc->pending_av_addr = info ? (uint64_t)(uintptr_t)info->si_addr : 0;
     }
+    proc->pending_av_os_code = (uint64_t)sig;
     std::longjmp(proc->av_recovery_jmpbuf, 1);
 }
 
@@ -2151,6 +2317,7 @@ void install_host_av_handler() noexcept {
         (void)sigaction(SIGSEGV, &sa, nullptr);
         (void)sigaction(SIGBUS, &sa, nullptr);
         (void)sigaction(SIGFPE, &sa, nullptr);
+        (void)sigaction(SIGILL, &sa, nullptr);
     });
 }
 

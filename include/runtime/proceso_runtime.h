@@ -835,6 +835,10 @@ class ProcessVM {
     std::jmp_buf av_recovery_jmpbuf;
     bool av_recovery_active = false;
     uint64_t pending_av_addr = 0; ///< direccion bruta del AV (informativa)
+    /// Codigo de fallo que dio el sistema.  Viaja para poder NOMBRAR lo que
+    /// paso cuando no es uno de los conocidos: sin el, un fallo fuera de la
+    /// lista se cuenta pero no se puede identificar, y quien lee se queda igual.
+    uint64_t pending_av_os_code = 0;
     /// Tipo de excepcion host que disparo el recovery:
     ///   0 = AV (segfault, default), 1 = DIVIDE_BY_ZERO, 2 = INT_OVERFLOW.
     /// El scheduler lo consulta tras el @c longjmp para emitir el
