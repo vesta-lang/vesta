@@ -667,10 +667,38 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
     patch_u32(0, VXI_MAGIC);
     patch_u32(4, static_cast<uint16_t>(VXI_FORMAT_VERSION) |
                      (static_cast<uint32_t>(0) << 16));
-    // 4. abi_hash: FNV-1a sobre entries + payloads + pool (todo despues del
-    // header).
-    const uint64_t abi_hash =
-        vxi_fnv1a(out.data() + HEADER_BYTES, out.size() - HEADER_BYTES);
+    /* 4. abi_hash: lo que el modulo OFRECE.  Cubre todo lo que va despues del
+     * header MENOS la tabla de dependencias.
+     *
+     * Que esa tabla entrase era el motivo de que la invalidacion se propagara a
+     * ciegas: la tabla lleva el `abi_hash` de cada dep, asi que tocar la
+     * interfaz de `m0` cambiaba tambien la de `m1` -- aunque `m1` ofreciera
+     * exactamente lo mismo que antes -- y de ahi a `m2`, y asi hasta el final.
+     * Medido en una cadena de cuarenta modulos: se rehacian veintiuno.
+     *
+     * De quien depende un modulo NO es parte de lo que ofrece.  Sigue estando
+     * en el fichero, y sigue comprobandose: el lector compara dep a dep contra
+     * el `abi_hash` actual de cada uno.  Eso es lo que hace la validacion
+     * transitiva, y hacerlo ademas por el hash de la interfaz era contarlo dos
+     * veces, mal. */
+    /* SALVEDAD: un modulo que exporta PLANTILLAS genericas exporta su codigo
+     * FUENTE, no una firma cerrada.  Quien la instancia la compila en su propio
+     * modulo, asi que lo que llame la plantilla -- que vive en los deps de
+     * QUIEN LA EXPORTA -- le afecta aunque el no lo importe.  Ahi la tabla de
+     * dependencias SI es parte de lo que se ofrece, y quitarla dejaria servir
+     * una instanciacion hecha contra otra version.  Se paga la propagacion solo
+     * donde hace falta. */
+    const bool exporta_plantillas = !gen_offs.empty();
+    uint64_t abi_hash =
+        exporta_plantillas
+            ? vxi_fnv1a(out.data() + HEADER_BYTES, out.size() - HEADER_BYTES)
+            : vxi_fnv1a(out.data() + HEADER_BYTES, deps_start - HEADER_BYTES);
+    if (!exporta_plantillas) {
+        const uint64_t resto =
+            vxi_fnv1a(out.data() + blob_pool_start, out.size() - blob_pool_start);
+        abi_hash ^= resto + 0x9E3779B97F4A7C15ULL + (abi_hash << 6) +
+                    (abi_hash >> 2);
+    }
     patch_u64(8, abi_hash);
     patch_u64(16, mod.source_hash);
     //  M5.b L.27: compiler_version_hash en offset 24.  Si el caller
