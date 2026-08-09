@@ -3843,58 +3843,12 @@ int main(int argc, char *argv[]) {
              * version VM-lowered (native_poo=false) SOLO para el prebuilt del
              * ComptimeVM; el binario final AOT lo produce el pass-2 con
              * native_poo. */
-            vx::CompileOptions copts_vm = copts;
-            copts_vm.native_poo = false;
-            /* Y CON info de linea, siempre.  Este `.velb` es el que ejecuta el
-             * compilador, no el programa: no lastra al usuario y es lo que
-             * permite que un fallo en tiempo de compilacion diga el fichero y
-             * la linea en vez de una direccion. */
-            copts_vm.emit_debug = true;
-            vx::CompileResult cr_vm =
-                vx::vx_source_has_imports(vx_source)
-                    ? vx::compile_vx_project(vx_path, copts_vm)
-                    : vx::compile_vx_source(vx_source, vx_path, copts_vm);
-            const std::string tmp_vel_path = cache_prefix + ".vel.tmp";
-            {
-                std::ofstream tmp(tmp_vel_path, std::ios::binary);
-                if (tmp) {
-                    if (copts.emit_debug) tmp << "// @file " << vx_path << "\n";
-                    tmp << cr_vm.vel_text;
-                }
-            }
-            const int tmp_rc = asm_multi_process::run_worker(
-                tmp_vel_path, cache_prefix,
-                /*skip_preprocessor=*/true, /*keep_labels=*/false,
-                /*ir_section_bytes=*/&cr_vm.ir_section_bytes, /*emit_map=*/false);
-            if (tmp_rc == EXIT_SUCCESS) {
-#if defined(_WIN32)
-                _putenv_s("VESTA_MC_PREBUILT", cache_path.c_str());
-#else
-                setenv("VESTA_MC_PREBUILT", cache_path.c_str(), 1);
-#endif
-                vx::CompileResult cr2 =
-                    vx::vx_source_has_imports(vx_source)
-                        ? vx::compile_vx_project(vx_path, copts)
-                        : vx::compile_vx_source(vx_source, vx_path, copts);
-#if defined(_WIN32)
-                _putenv_s("VESTA_MC_PREBUILT", "");
-#else
-                unsetenv("VESTA_MC_PREBUILT");
-#endif
-                /* pass-2 es AUTORITATIVO: se compilo con el bytecode comptime
-                 * cargado, asi que sus valores (y sus static_assert) son los
-                 * reales.  Adoptamos su cr SIEMPRE -- incluso si tiene errores
-                 * (p.ej. un static_assert que resolvio a false con el valor
-                 * real).  Si nos quedaramos con pass-1 (que tenia los asserts
-                 * diferidos SALTADOS) el compile "tendria exito" con valores
-                 * incorrectos, ocultando el fallo. */
-                cr = std::move(cr2);
+            if (recompilar_con_maquina_de_compilacion(cr, vx_path, vx_source,
+                                                      copts, cache_prefix)) {
                 if (verbose_mc) {
                     std::cerr << "[mc-cache] aot two- populated: "
                               << cache_path << "\n";
                 }
-                std::remove(tmp_vel_path.c_str());
-                std::remove((cache_path + "-map").c_str());
                 /* Si pass-2 fallo (assert real / error), propagar y abortar. */
                 if (!cr.ok) {
                     for (const auto &d : cr.diagnostics.all())
