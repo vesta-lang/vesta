@@ -21,8 +21,14 @@
 
 #include <cstdlib>
 #include <algorithm>
+#include "analyze/asm_report.h" // lo que el ASA sabe de cada bloque asm
+#include "vx/asm/asm_cfg.h"     // trocear el asm en instrucciones
+#include "vx/asm/asm_effects.h" // ISA del objetivo
+#include "vx/asm/instr_db.h"    // que rasgo exige cada instruccion
+
 #include <chrono>
 #include <map>
+#include <set>
 #include <utility>
 #include <vector>
 #include <iostream>
@@ -739,6 +745,51 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
         if (!fallidos.empty())
             os << "    no cumple:\n" << fallidos;
         os << "  Analisis  : " << completeness_name(s.completeness) << "\n";
+        /* QUE juegos de instrucciones usa.
+         *
+         * Una funcion con un `asm` puede exigir del procesador cosas que no se
+         * ven en su firma: AVX-512, AES, ERMS.  Eso decide DONDE puede correr, y
+         * hasta ahora solo se sabia al reventar -- el fallo en ejecucion dice
+         * "exige AVX512F" cuando ya es tarde.  Aqui se dice antes, y sale de la
+         * misma base de instrucciones, asi que vale para cualquier ISA sin
+         * escribir aqui ni un nombre de instruccion. */
+        {
+            std::set<std::string> rasgos;
+            const vx::instr_db::Isa isa_db = vx::isa_actual();
+            for (const ir::IrBlock &b : fn.blocks) {
+                for (const ir::IrInstr &in : b.instrs) {
+                    std::string cuerpo;
+                    if (in.op == ir::IrOp::INLINE_ASM) {
+                        cuerpo = in.func_name;
+                    } else if (in.op == ir::IrOp::ASM_MICRO &&
+                               in.imm < fn.asm_micros.size()) {
+                        cuerpo = fn.asm_micros[in.imm].tmpl;
+                    } else {
+                        continue;
+                    }
+                    for (const vx::AsmInsn &ai :
+                         vx::build_asm_cfg(isa_db, cuerpo).insns) {
+                        if (ai.sintetica) continue;
+                        const int32_t fid =
+                            vx::instr_db::match_asm_line(isa_db, ai.text);
+                        if (fid < 0) continue;
+                        const std::string r = vx::instr_db::nombre_de_rasgo(
+                            vx::instr_db::isa_set_of(isa_db, fid));
+                        if (!r.empty()) rasgos.insert(r);
+                    }
+                }
+            }
+            if (!rasgos.empty()) {
+                os << "  Rasgos    : ";
+                bool primero = true;
+                for (const std::string &r : rasgos) {
+                    if (!primero) os << ", ";
+                    os << r;
+                    primero = false;
+                }
+                os << "   (los exige el procesador donde corra)\n";
+            }
+        }
         os << "  Efecto local:\n";
         print_effects(os, s.semantic.local);
         os << "  Efecto transitivo (cierre):\n";
@@ -757,6 +808,11 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
     // el informe y no detras de una variable de entorno porque es conocimiento
     // sobre el programa del usuario, no depuracion del compilador.
     print_formas(os, modelo_final, mod_previo != nullptr ? &modelo_previo : nullptr);
+
+    /* Y lo que el ASA sabe de cada bloque de ensamblador.  Va en el informe
+     * porque es conocimiento sobre el programa del usuario -- que exige del
+     * procesador, cuanto de el se entiende --, no depuracion del compilador. */
+    analyze::print_asm_report(os, analyze::analizar_bloques_asm(mod));
     cerrar(us_formas);
 
     // Reporte de LAGUNAS: hace visible que falta por modelar (cobertura) y donde

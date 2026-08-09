@@ -193,6 +193,7 @@ add_library(vx_lib STATIC
     # Huella computacional por-declaracion (recursos + efectos): base del
     # modelo dirigido por resumenes y de las anotaciones comprobables.
     ${CMAKE_SOURCE_DIR}/src/analyze/fingerprint.cpp
+    ${CMAKE_SOURCE_DIR}/src/analyze/asm_report.cpp
     comptime/comptime_introspect.cpp
     # Recolector del conjunto comptime (P1 fase 1: base del artefacto comptime
     # separado que compilara/ejecutara todo el comptime en la ComptimeVM).
