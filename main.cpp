@@ -2272,6 +2272,23 @@ int main(int argc, char *argv[]) {
             vx::CompileResult cr_b =
                 como_proyecto ? vx::compile_vx_project(vx_path, copts_b)
                               : vx::compile_vx_source(vx_source, vx_path, copts_b);
+            /* Y con el codigo que se GENERA al compilar ya resuelto, por la
+             * misma razon que el de arriba: este es el modulo que se analiza,
+             * asi que si aqui falta la segunda pasada, el informe describe los
+             * bloques de asm vacios -- una funcion que escribe sesenta y cuatro
+             * bytes por su parametro sale tocando solo el hueco de una
+             * variable.  Arreglarlo en el otro y no en este era arreglarlo en
+             * el que no se mira. */
+            {
+                std::error_code ec2;
+                const std::string pref_b =
+                    (std::filesystem::temp_directory_path(ec2) /
+                     ("vx_analyze_build_" +
+                      std::filesystem::path(vx_path).stem().string()))
+                        .string();
+                recompilar_con_maquina_de_compilacion(cr_b, vx_path, vx_source,
+                                                      copts_b, pref_b);
+            }
             if (cr_b.ok && !cr_b.ir_module_cache_bytes.empty())
                 hay_build = ir::parse_ir_module_cache(cr_b.ir_module_cache_bytes,
                                                       amod_build);
