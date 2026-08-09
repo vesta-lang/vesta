@@ -1485,6 +1485,23 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
         std::unordered_map<ir::IrValueId, std::pair<ir::IrValueId, bool>>
             carry_src;
         for (const ir::IrInstr &in : ib.instrs) {
+            /* Que instruccion se esta tratando, por si se abandona sin decir
+             * nada.
+             *
+             * De los casi doscientos puntos en los que este selector se rinde,
+             * la mitad no dicen por que: comprobaciones sueltas de aridad, de
+             * registros libres, de anchos.  Anotarlas una a una es un rato y se
+             * queda corta en cuanto alguien anada otra; en cambio, dejar dicho
+             * de entrada QUE op se estaba mirando cubre todas a la vez y no
+             * envejece.  Los que si hablan sobrescriben esto con su razon
+             * exacta, que es mas util.
+             *
+             * Sin esto, quien compila solo podia decir "op fuera del subset" --
+             * sin la op --, y cada investigacion empezaba por recompilar con una
+             * variable de entorno puesta para averiguar lo que el compilador ya
+             * sabia. */
+            vreg_ultimo_motivo() =
+                std::string(ir::ir_op_name(in.op)) + " (sin motivo apuntado)";
             MOp mop;
             MCond cc;
             // Estampar la op anterior (sobrevive a `continue`) + snapshot.
