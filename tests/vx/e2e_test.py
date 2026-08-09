@@ -2835,6 +2835,33 @@ fails_case("literal_base_invalida", "un 2 en un literal binario se rechaza al co
 fails_case("literal_sin_digitos", "un prefijo de base sin digitos se rechaza al compilar", "367_literal_sin_digitos.vx", "literal entero sin digitos")
 r0_case("wideint_literales", "literales mas anchos que la palabra en los seis tipos", "364_wideint_literales.vx", 42)
 r0_case("literal_bases", "literal ancho en binario, octal, hexadecimal y decimal", "365_literal_bases.vx", 42)
+# `std.memory` desde FUERA, por TODAS sus variantes y en los TRES modos.
+#
+# Ningun ejemplo lo importaba, asi que la suite pasaba entera mientras
+# `import std.memory` estaba roto: el modulo compila SUELTO y solo falla al
+# consumirlo.  Ademas el TAMANO elige la implementacion (pocos bytes, bloques de
+# registro ancho, lo grande, las colas solapadas), asi que un solo tamano dejaria
+# casi todas sin tocar: el ejemplo barre 24 tramos x copia y relleno = 48
+# comprobaciones byte a byte, y cada modo baja el asm por su cuenta.
+@case("import_std_memory", line=None)
+def _(ctx):
+    """std.memory desde fuera: 24 tamanos x memcpy/memset, en los tres modos."""
+    etiqueta = "importar std.memory desde fuera (24 tamanos x copia/relleno)"
+    ctx.compile_vx(ctx.src("366_import_std_memory.vx"), "e366")
+    ctx.ok("compilacion 366_import_std_memory.vx -> .velb")
+    for modo in ("vm", "jit"):
+        _, log = ctx.run_velb("e366", schedulers=1, mode=modo)
+        got = get_r00(log)
+        if got != 48:
+            ctx.fail("%s (-m %s): R00 == %s, se esperaban 48" % (etiqueta, modo, got), log)
+        ctx.ok("%s (-m %s) -> 48/48" % (etiqueta, modo))
+    exe = aot_build(ctx, ctx.src("366_import_std_memory.vx"), "e366_aot",
+                    etiqueta + " (-m aot)")
+    rc, _ = ctx.run([exe])
+    got = exit_code(rc)
+    if got != 48:
+        ctx.fail("%s (-m aot): sale %d, se esperaban 48" % (etiqueta, got), "")
+    ctx.ok("%s (-m aot) -> 48/48" % etiqueta)
 r0_case("ctor_comptime_modulo", "constructor comptime de un tipo de otro modulo", "363_ctor_comptime_modulo.vx", 42)
 r0_case("asm_dse", "un asm no es barrera, pero se respeta lo que lee, lo que cambia y lo que escribe", "372_asm_dse.vx", 42)
 r0_case("campo_por_puntero", "el '.' atraviesa un puntero: leer, escribir, ++, metodo, encadenar, &campo y recorrer una lista", "371_campo_por_puntero.vx", 42)

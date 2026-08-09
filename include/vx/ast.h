@@ -1642,7 +1642,15 @@ struct FunctionDecl : Node {
     /// @c false = privada al modulo (no se exporta).  El parser setea
     /// segun keyword `public`/`private` precedente; sin keyword = true
     /// (default permisivo para compat con codigo existente).
-    bool is_public = true;
+    /**
+     * @brief Exportada fuera de su modulo.
+     *
+     * PRIVADA por defecto: `public` es obligatorio para exportar.  Nacia en
+     * `true` -- las funciones comptime son anteriores al sistema de visibilidad
+     * y se quedo asi --, y eso hacia que un ayudante de compilacion sin
+     * `public` viajara en el `.vxi` con su codigo fuente entero.
+     */
+    bool is_public = false;
     ///  NS.3: @c "internal" -- visible en TODO el paquete (mismo
     /// PackageId) pero NO exportado a paquetes distintos.  Se exporta al .vxi
     /// con flag; el consumidor de OTRO paquete lo filtra.

@@ -1,0 +1,231 @@
+// Las VARIANTES de `std.memory`, una por una.
+//
+// El modulo no tiene una implementacion de copia: tiene treinta y dos, en tres
+// ejes -- tamano (small / medium / big / streaming), rasgo del procesador
+// (SSE2 / AVX2 / AVX-512 / ERMS) y alineacion (suelta o exigida) --.  Llamar a
+// `memcpy` y variar el tamano deja casi todas sin tocar, porque el despacho
+// elige UNA segun lo que la maquina soporte.
+//
+// Aqui se llama a cada una POR SU NOMBRE, con un tamano de su rango declarado,
+// y se comprueba byte a byte: que llegue todo lo pedido y NI UN BYTE MAS.  Las
+// que exigen un rasgo se saltan si el procesador no lo tiene -- `std.memory.x86_64.init_cpuid()`
+// lo dice --, y las `_aligned` reciben un puntero alineado de verdad: su asm usa
+// `movdqa`/`vmovdqa`, que no va mas lento con una direccion torcida, FALLA.
+//
+// Cuenta cuantas comprobo y lo devuelve, asi que saltarse una por un rasgo que
+// falte cambia el numero: por eso el codigo de salida se compara contra lo que
+// esta maquina puede ejecutar, no contra una constante.
+
+import std.memory;
+import std.memory.x86_64;
+import std.types only usize;
+
+// Marca reconocible por posicion: si un byte no llega, o llega de otro sitio,
+// la comprobacion cae.
+u8 patron(i64 i) {
+    return (u8) ((i * 31 + 7) % 251);
+}
+
+// Buffers estaticos grandes: las variantes `big`/`streaming` piden 1 KiB.
+// Se reservan de sobra para poder alinear dentro sin salirse.
+u8[4096] g_origen;
+u8[4096] g_destino;
+
+// Prepara origen con el patron y destino a cero, y devuelve el desplazamiento
+// que deja `&g_destino[off]` alineado a `alin` bytes.
+i64 alineado_en(u8* base, i64 alin) {
+    i64 dir = (i64) base;
+    i64 resto = dir % alin;
+    if (resto == 0) return 0;
+    return alin - resto;
+}
+
+void preparar() {
+    i64 i = 0;
+    while (i < 4096) {
+        g_origen[i] = patron(i);
+        g_destino[i] = 0;
+        i = i + 1;
+    }
+}
+
+// Comprueba que [0, n) del destino tiene el patron y que el byte n sigue a cero.
+i64 copia_bien(i64 od, i64 os, i64 n) {
+    i64 i = 0;
+    while (i < n) {
+        if (g_destino[od + i] != patron(os + i)) return 0;
+        i = i + 1;
+    }
+    if (g_destino[od + n] != 0) return 0;
+    return 1;
+}
+
+i64 relleno_bien(i64 od, i64 n, u8 v) {
+    i64 i = 0;
+    while (i < n) {
+        if (g_destino[od + i] != v) return 0;
+        i = i + 1;
+    }
+    if (g_destino[od + n] != 0) return 0;
+    return 1;
+}
+
+i32 main() {
+    u64 rasgos = std.memory.x86_64.init_cpuid();
+    bool avx2 = (rasgos & std.memory.x86_64.BIT_AVX2) != 0;
+    bool avx512 = (rasgos & std.memory.x86_64.BIT_AVX512F) != 0;
+    bool erms = (rasgos & std.memory.x86_64.BIT_ERMS) != 0;
+
+    i64 ok = 0;
+
+    // --- copia, tamano pequeno (65..128) --------------------------------
+    preparar();
+    std.memory.x86_64.memcpy_small_sse2(&g_destino[0], &g_origen[0], (usize) 96);
+    ok = ok + copia_bien(0, 0, 96);
+    if (avx2) {
+        preparar();
+        std.memory.x86_64.memcpy_small_avx2(&g_destino[0], &g_origen[0], (usize) 96);
+        ok = ok + copia_bien(0, 0, 96);
+    }
+    if (avx512) {
+        preparar();
+        std.memory.x86_64.memcpy_small_avx512(&g_destino[0], &g_origen[0], (usize) 96);
+        ok = ok + copia_bien(0, 0, 96);
+    }
+
+    // --- copia, tamano medio --------------------------------------------
+    preparar();
+    std.memory.x86_64.memcpy_medium_sse2(&g_destino[0], &g_origen[0], (usize) 200);
+    ok = ok + copia_bien(0, 0, 200);
+    if (avx2) {
+        preparar();
+        std.memory.x86_64.memcpy_medium_avx2(&g_destino[0], &g_origen[0], (usize) 300);
+        ok = ok + copia_bien(0, 0, 300);
+    }
+    if (avx512) {
+        preparar();
+        std.memory.x86_64.memcpy_medium_avx512(&g_destino[0], &g_origen[0], (usize) 600);
+        ok = ok + copia_bien(0, 0, 600);
+    }
+
+    // --- copia, tamano grande y streaming --------------------------------
+    preparar();
+    std.memory.x86_64.memcpy_big_sse2(&g_destino[0], &g_origen[0], (usize) 300);
+    ok = ok + copia_bien(0, 0, 300);
+    if (avx2) {
+        preparar();
+        std.memory.x86_64.memcpy_big_avx2(&g_destino[0], &g_origen[0], (usize) 600);
+        ok = ok + copia_bien(0, 0, 600);
+        preparar();
+        std.memory.x86_64.memcpy_streaming_avx2(&g_destino[0], &g_origen[0], (usize) 600);
+        ok = ok + copia_bien(0, 0, 600);
+    }
+    if (avx512) {
+        preparar();
+        std.memory.x86_64.memcpy_big_avx512(&g_destino[0], &g_origen[0], (usize) 1100);
+        ok = ok + copia_bien(0, 0, 1100);
+    }
+    if (erms) {
+        preparar();
+        std.memory.x86_64.memcpy_erms(&g_destino[0], &g_origen[0], (usize) 777);
+        ok = ok + copia_bien(0, 0, 777);
+    }
+
+    // --- copia ALINEADA: su asm falla con una direccion torcida ----------
+    {
+        i64 od = alineado_en(&g_destino[0], 64);
+        i64 os = alineado_en(&g_origen[0], 64);
+        preparar();
+        std.memory.x86_64.memcpy_small_sse2_aligned(&g_destino[od], &g_origen[os], (usize) 96);
+        ok = ok + copia_bien(od, os, 96);
+        preparar();
+        std.memory.x86_64.memcpy_medium_sse2_aligned(&g_destino[od], &g_origen[os], (usize) 256);
+        ok = ok + copia_bien(od, os, 256);
+        if (avx2) {
+            preparar();
+            std.memory.x86_64.memcpy_medium_avx2_aligned(&g_destino[od], &g_origen[os], (usize) 320);
+            ok = ok + copia_bien(od, os, 320);
+        }
+        if (avx512) {
+            preparar();
+            std.memory.x86_64.memcpy_medium_avx512_aligned(&g_destino[od], &g_origen[os], (usize) 512);
+            ok = ok + copia_bien(od, os, 512);
+        }
+    }
+
+    // --- relleno, los mismos tres tamanos --------------------------------
+    preparar();
+    std.memory.x86_64.memset_small_sse2(&g_destino[0], 0xA5, (usize) 96);
+    ok = ok + relleno_bien(0, 96, 0xA5);
+    preparar();
+    std.memory.x86_64.memset_medium_sse2(&g_destino[0], 0xA5, (usize) 200);
+    ok = ok + relleno_bien(0, 200, 0xA5);
+    preparar();
+    std.memory.x86_64.memset_big_sse2(&g_destino[0], 0xA5, (usize) 300);
+    ok = ok + relleno_bien(0, 300, 0xA5);
+    if (avx2) {
+        preparar();
+        std.memory.x86_64.memset_small_avx2(&g_destino[0], 0xA5, (usize) 96);
+        ok = ok + relleno_bien(0, 96, 0xA5);
+        preparar();
+        std.memory.x86_64.memset_medium_avx2(&g_destino[0], 0xA5, (usize) 300);
+        ok = ok + relleno_bien(0, 300, 0xA5);
+        preparar();
+        std.memory.x86_64.memset_big_avx2(&g_destino[0], 0xA5, (usize) 600);
+        ok = ok + relleno_bien(0, 600, 0xA5);
+        preparar();
+        std.memory.x86_64.memset_streaming_avx2(&g_destino[0], 0xA5, (usize) 600);
+        ok = ok + relleno_bien(0, 600, 0xA5);
+    }
+    if (avx512) {
+        preparar();
+        std.memory.x86_64.memset_small_avx512(&g_destino[0], 0xA5, (usize) 96);
+        ok = ok + relleno_bien(0, 96, 0xA5);
+        preparar();
+        std.memory.x86_64.memset_medium_avx512(&g_destino[0], 0xA5, (usize) 600);
+        ok = ok + relleno_bien(0, 600, 0xA5);
+        preparar();
+        std.memory.x86_64.memset_big_avx512(&g_destino[0], 0xA5, (usize) 1100);
+        ok = ok + relleno_bien(0, 1100, 0xA5);
+        preparar();
+        std.memory.x86_64.memset_streaming_avx512(&g_destino[0], 0xA5, (usize) 1100);
+        ok = ok + relleno_bien(0, 1100, 0xA5);
+    }
+    if (erms) {
+        preparar();
+        std.memory.x86_64.memset_erms(&g_destino[0], 0xA5, (usize) 777);
+        ok = ok + relleno_bien(0, 777, 0xA5);
+    }
+
+    // --- relleno ALINEADO -------------------------------------------------
+    {
+        i64 od = alineado_en(&g_destino[0], 64);
+        preparar();
+        std.memory.x86_64.memset_small_sse2_aligned(&g_destino[od], 0xA5, (usize) 96);
+        ok = ok + relleno_bien(od, 96, 0xA5);
+        preparar();
+        std.memory.x86_64.memset_medium_sse2_aligned(&g_destino[od], 0xA5, (usize) 200);
+        ok = ok + relleno_bien(od, 200, 0xA5);
+        if (avx2) {
+            preparar();
+            std.memory.x86_64.memset_small_avx2_aligned(&g_destino[od], 0xA5, (usize) 96);
+            ok = ok + relleno_bien(od, 96, 0xA5);
+            preparar();
+            std.memory.x86_64.memset_medium_avx2_aligned(&g_destino[od], 0xA5, (usize) 300);
+            ok = ok + relleno_bien(od, 300, 0xA5);
+        }
+        if (avx512) {
+            preparar();
+            std.memory.x86_64.memset_small_avx512_aligned(&g_destino[od], 0xA5, (usize) 96);
+            ok = ok + relleno_bien(od, 96, 0xA5);
+            preparar();
+            std.memory.x86_64.memset_medium_avx512_aligned(&g_destino[od], 0xA5, (usize) 600);
+            ok = ok + relleno_bien(od, 600, 0xA5);
+        }
+    }
+
+    // Cuantas se comprobaron.  El arnes calcula el numero esperado a partir de
+    // los rasgos de la maquina: saltarse una variante por un rasgo ausente es
+    // legitimo, darla por buena sin ejecutarla no.
+    return (i32) ok;
+}

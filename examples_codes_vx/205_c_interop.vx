@@ -21,18 +21,18 @@ struct Vec2 {
 
 // Struct cruza POR PUNTERO (ABI de agregados); el header declara
 // `double vec2_dot(Vec2* a, Vec2* b);` -- ABI-compatible con el .c (void*).
-f64 vec2_dot(Vec2 a, Vec2 b) {
+public f64 vec2_dot(Vec2 a, Vec2 b) {
     return a.x * b.x + a.y * b.y;
 }
 
 // Callback C: el parametro `cfn(i64) -> i64` es un puntero a funcion CRUDO
 // estilo C.  El header lo declara como `int64_t (*f)(int64_t)`.  Un programa
 // C pasa una funcion suya directamente.
-i64 apply(cfn(i64) -> i64 f, i64 x) {
+public i64 apply(cfn(i64) -> i64 f, i64 x) {
     return f(x);
 }
 
 // Funcion escalar pura: prototipo C directo `int64_t add3(int64_t, ...)`.
-i64 add3(i64 a, i64 b, i64 c) {
+public i64 add3(i64 a, i64 b, i64 c) {
     return a + b + c;
 }

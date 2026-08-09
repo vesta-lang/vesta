@@ -9406,6 +9406,36 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
                             return t;
                         }
                     }
+                    /* Variables y constantes.  Faltaban: aqui solo se resolvia
+                     * la funcion y el tipo, asi que leer una constante publica
+                     * por su namespace -- `std.memory.x86_64.BIT_AVX2` -- caia
+                     * al camino de un solo segmento, que no aplica, y acababa
+                     * en "nombre no declarado: 'std'".  Con `only` funcionaba,
+                     * y esa diferencia es la que empujaba a escribir el import
+                     * de otra forma en vez de arreglar esto.
+                     *
+                     * Mismo tratamiento que en el acceso de un segmento: si es
+                     * una constante compile-time, se anota su valor en el nodo
+                     * para que el lowering emita un CONST y no una lectura. */
+                    {
+                        auto itcc =
+                            comptime_const_values_.find(sym.mangled_label);
+                        if (itcc != comptime_const_values_.end()) {
+                            e->comptime_const_resolved = true;
+                            if (itcc->second.is_str) {
+                                e->comptime_const_is_str = true;
+                                e->comptime_const_str = itcc->second.str_value;
+                            } else {
+                                e->comptime_const_int = itcc->second.value;
+                            }
+                            e->result_type = itcc->second.type;
+                            return e->result_type;
+                        }
+                    }
+                    if (sym.kind == 1) { // variable / constante
+                        e->result_type = sym.var_type;
+                        return sym.var_type;
+                    }
                 }
             }
         }
