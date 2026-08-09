@@ -188,6 +188,10 @@ uint32_t project_cache_opts_hash(const ProjectCacheKey &key) {
         * de compilacion cargada es provisional (las funciones comptime no se
         * pudieron ejecutar) y no vale para la pasada buena. */
        << "|mc=" << (key.comptime_prebuilt ? 1 : 0)
+       /* De donde salen los modulos ajenos: con otro arbol de stdlib se
+        * compilan OTROS ficheros, y los de antes siguen en su sitio -- la
+        * comprobacion de las rutas guardadas pasaba igual. */
+       << "|std=" << key.stdlib_dir << "|vxpath=" << key.vx_path
        /* Que artefacto se pidio.  Va en la clave porque el cache guarda el
         * fichero FINAL: un `.velb` y un `.exe` no son intercambiables, ni un
         * `.exe` de x86-64 con uno de aarch64. */

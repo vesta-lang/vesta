@@ -48,6 +48,18 @@ struct ProjectCacheKey {
     /// ella las funciones comptime no se ejecutan y lo compilado es
     /// provisional, asi que no puede compartir entrada con lo definitivo.
     bool comptime_prebuilt = false;
+    /**
+     * @brief De DONDE salen los modulos que no son del proyecto.
+     *
+     * El cache guarda las rutas de cada dep y comprueba que sigan diciendo lo
+     * mismo, pero si se cambia el arbol de la stdlib el compile usa OTROS
+     * ficheros -- y los de antes siguen ahi, intactos, asi que la comprobacion
+     * pasaba y se servia un artefacto construido contra una libreria distinta.
+     * Medido apuntando `VX_STDLIB_DIR` a una instalacion aparte: la corrida
+     * devolvia exito y salida vacia sin compilar nada.
+     */
+    std::string stdlib_dir;
+    std::string vx_path; ///< Directorios extra de busqueda (@c VX_PATH).
 
     /**
      * @name Que artefacto se pidio

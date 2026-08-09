@@ -74,6 +74,7 @@ void set_aot_condcomp_target(const std::string &os,
 #include "vx/comptime/comptime_vm.h"    /*  MC.4 probe del ComptimeRuntime */
 #include "vx/project_cache.h"
 #include "vx/source_hash.h"  /*  M5.B project-level cache */
+#include "vx/module/module_resolver.h" // detect_stdlib_vx_dir
 #include "vx/velb_signature.h" /*  M.L28: firmas digitales */
 #include "util/sqlite_singleton.h"
 #include "util/fs_utils.h"
@@ -3809,6 +3810,11 @@ int main(int argc, char *argv[]) {
             const char *pre = std::getenv("VESTA_MC_PREBUILT");
             pck.comptime_prebuilt = (pre != nullptr && pre[0] != '\0');
         }
+        /* De donde salen los modulos que no son del proyecto.  Es lo mismo que
+         * lo de abajo: si algo que cambia lo compilado no esta en la clave, un
+         * acierto sirve un fichero que no corresponde. */
+        pck.stdlib_dir = vx::detect_stdlib_vx_dir();
+        if (const char *vp = std::getenv("VX_PATH")) pck.vx_path = vp;
         /* Que artefacto se pidio.  El cache guarda el fichero FINAL, asi que
          * pedir un binario nativo y pedir un `.velb` no pueden compartir
          * entrada -- ni dos binarios de arquitecturas distintas.  Todo lo que
