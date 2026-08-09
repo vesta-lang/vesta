@@ -199,7 +199,7 @@ int64_t stack_delta(const std::vector<std::string> &toks, size_t mi,
 
 } // namespace
 
-AsmBlockEffects asm_analyze_block(const std::string &nasm_body,
+AsmBlockEffects asm_analyze_block_sin_clases(const std::string &nasm_body,
                                   const std::string &arch) {
     return asm_analyze_block(nasm_body, arch, {});
 }

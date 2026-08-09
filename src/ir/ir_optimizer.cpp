@@ -7728,8 +7728,17 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
          *         debe seguir tratandolo como barrera total.
          */
         auto dse_asm_preciso = [&](const IrInstr &ins) -> bool {
-            const vx::AsmBlockEffects e =
-                vx::asm_analyze_block(ins.func_name, vx::asm_arch_actual());
+            /* Con las clases de operando: esto pregunta QUE memoria toca el
+             * bloque, que es exactamente lo que no se puede responder sin
+             * saber cuantos bytes mide cada `$N`. */
+            const analysis::AsmBindingFacts lig_asm =
+                analysis::compute_asm_bindings(fn);
+            std::vector<std::pair<std::string, std::string>> clases_asm;
+            clases_asm.reserve(lig_asm.ligaduras.size());
+            for (const analysis::LigaduraAsm &l : lig_asm.ligaduras)
+                clases_asm.emplace_back(l.marcador, l.clase);
+            const vx::AsmBlockEffects e = vx::asm_analyze_block(
+                ins.func_name, vx::asm_arch_actual(), clases_asm);
             if (!e.known() || e.is_call || e.has_atomic) return false;
             if (e.accesos_incompletos) return false;
 

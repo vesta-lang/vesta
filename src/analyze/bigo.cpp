@@ -42,6 +42,8 @@
 #include "analyze/bigo.h"
 
 #include "ir/ssa_ir.h"
+#include "vx/asm/asm_analyze.h" // un `asm` puede llevar un bucle dentro
+#include "vx/asm/asm_effects.h" // arquitectura del objetivo (tabla de efectos)
 
 #include <algorithm>
 #include <cctype>
@@ -350,6 +352,47 @@ CostResult analyze_function(const ir::IrFunction &fn) {
         }
     }
 
+    // 1.c. Bucles que NO estan en el IR: los que lleva dentro un bloque `asm`.
+    //
+    // Un `asm { }` es UNA instruccion del IR por muy dentro que salte, asi que
+    // el conteo de bucles no ve nada y el veredicto salia "O(1), sin loops ni
+    // recursion" para funciones cuyo cuerpo entero es un bucle de copia.  Decir
+    // O(1) de algo que recorre n bytes no es quedarse corto, es afirmar lo
+    // contrario de lo que pasa -- y este analisis se usa para decidir.
+    //
+    // El analizador de asm ya publica que el bloque salta; solo habia que
+    // preguntarselo.  Lo que NO se puede es decir cuanto: la cota sale de una
+    // comparacion entre registros que este analisis no sigue.  Asi que se dice
+    // lo que se sabe -- hay un bucle -- y se deja la cota como desconocida, que
+    // es lo que el autor puede cerrar declarando @complexity.
+    bool asm_con_bucle = false;
+    for (const auto &b : fn.blocks) {
+        for (const auto &ins : b.instrs) {
+            if (ins.op != ir::IrOp::INLINE_ASM && ins.op != ir::IrOp::ASM_MICRO)
+                continue;
+            // Sin clases de operando a proposito: aqui solo se pregunta SI
+            // salta, y eso no depende de cuantos bytes mide cada operando.
+            const vx::AsmBlockEffects ef = vx::asm_analyze_block_sin_clases(
+                ins.func_name, vx::asm_arch_actual());
+            if (ef.has_branch) {
+                asm_con_bucle = true;
+                break;
+            }
+            /* Y repetir tampoco es dar una vuelta: un `rep movsb` recorre
+             * tantos bytes como diga su contador, sin un solo salto en el
+             * texto.  Mirar unicamente los saltos dejaba la variante que usa
+             * las cadenas del procesador declarada como O(1). */
+            for (const vx::AsmBlockEffects::Acceso &a : ef.accesos) {
+                if (!a.extension.una_vez()) {
+                    asm_con_bucle = true;
+                    break;
+                }
+            }
+            if (asm_con_bucle) break;
+        }
+        if (asm_con_bucle) break;
+    }
+
     // 2. Recursion + divide-y-venceras.
     uint32_t self_calls = 0;
     bool halves = false;
@@ -386,9 +429,20 @@ CostResult analyze_function(const ir::IrFunction &fn) {
     if (max_depth > 0 && r.is_recursive)
         r.confidence = Confidence::HEURISTIC;
 
+    /* Un bucle dentro de un `asm` manda sobre cualquier O(1): que el IR no lo
+     * vea no lo hace desaparecer.  No sube una cota ya mayor -- si el analisis
+     * demostro O(n^2) por los bucles del IR, esa sigue siendo la dominante. */
+    if (asm_con_bucle && r.big_o == CostClass::O_1) {
+        r.big_o = CostClass::O_UNKNOWN;
+        r.confidence = Confidence::HEURISTIC;
+    }
+
     // 4. Construir la explicacion legible.
     std::ostringstream det;
-    if (max_depth == 0 && !r.is_recursive) {
+    if (asm_con_bucle && max_depth == 0 && !r.is_recursive) {
+        det << "un bloque asm salta: hay un bucle cuya cota este analisis no "
+               "sigue -- declarala con @complexity si la sabes";
+    } else if (max_depth == 0 && !r.is_recursive) {
         det << "sin loops ni recursion";
     } else {
         bool first = true;

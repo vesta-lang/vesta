@@ -3286,7 +3286,8 @@ CompileResult compile_vx_project(
             hay_main = true;
             break;
         }
-    vx_report_asm_preconditions(merged, res.diagnostics, root_path, hay_main);
+    vx_report_asm_preconditions(merged, res.diagnostics, root_path, hay_main,
+                                opts.emit_ir_preopt);
 
     if (opts.dump_ir) {
         std::ostringstream ir_oss;
@@ -3591,7 +3592,8 @@ static bool contiene_palabra(const std::string &source, const char *kw) {
  */
 void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
                                  const std::string &file,
-                                 bool programa_cerrado) {
+                                 bool programa_cerrado,
+                                 bool decir_lo_no_acotado) {
     /* Lo que le llega a cada funcion desde sus sitios de llamada.  Sin esto,
      * un parametro no vale nada y la comprobacion se queda en la frontera --
      * que es justo donde NO esta el asm: quien exige alineacion suele recibir
@@ -3750,6 +3752,54 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
         case Veredicto::SinAncho:
             diags.diag(loc, DiagLevel::WARN, "VXA012", {s.mnemonic});
             break;
+        }
+    }
+
+    /* Y lo que NO se pudo acotar, dicho.
+     *
+     * Un acceso cuya extension no se determina vale "toca el objeto entero", y
+     * un objeto entero NUNCA se sale de si mismo: la comprobacion de limites
+     * mira ese acceso y calla.  O sea que la unica senal de que el analisis no
+     * llego era... ninguna.  Eso ya costo caro: un `asm` que escribia mas alla
+     * del buffer del llamante pasaba sin un aviso y corrompia la variable de al
+     * lado, y el fallo aparecia despues, lejos y disfrazado de fallo del motor.
+     *
+     * No saber es un resultado, y se cuenta como tal.  Con el MOTIVO, que es lo
+     * unico accionable: quien lee no puede hacer nada con "no se pudo", pero si
+     * con "el bloque salta" o "ese operando no dice cuantos bytes mide". */
+    if (!decir_lo_no_acotado) return;
+    for (const ir::IrFunction &fn : mod.functions) {
+        const analysis::AsmBindingFacts lig = analysis::compute_asm_bindings(fn);
+        std::vector<std::pair<std::string, std::string>> clases;
+        clases.reserve(lig.ligaduras.size());
+        for (const analysis::LigaduraAsm &l : lig.ligaduras)
+            clases.emplace_back(l.marcador, l.clase);
+        for (const ir::IrBlock &b : fn.blocks) {
+            for (const ir::IrInstr &in : b.instrs) {
+                if (in.op != ir::IrOp::INLINE_ASM) continue;
+                const vx::AsmBlockEffects e = vx::asm_analyze_block(
+                    in.func_name, vx::asm_arch_actual(), clases);
+                // Solo importa lo que ESCRIBE: leer de mas no corrompe a nadie.
+                const char *motivo = nullptr;
+                for (const vx::AsmBlockEffects::Acceso &a : e.accesos) {
+                    if (!a.escribe) continue;
+                    if (!a.valida) { motivo = "VXA016"; break; }
+                    if (!a.extension.ancho_conocido()) { motivo = "VXA015"; break; }
+                    if (lig.candidatas(a.base).size() != 1) {
+                        motivo = "VXA017";
+                        break;
+                    }
+                }
+                if (motivo == nullptr && !e.accesos_incompletos) continue;
+                if (motivo == nullptr) motivo = "VXA016";
+                SourceLoc loc;
+                loc.line = in.source_line;
+                loc.column = in.source_column;
+                loc.file = file;
+                const std::string razon =
+                    vx::diag::format(motivo, {std::string()});
+                diags.diag(loc, DiagLevel::WARN, "VXA014", {razon});
+            }
         }
     }
 }

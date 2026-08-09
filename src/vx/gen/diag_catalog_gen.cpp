@@ -85,8 +85,12 @@ const CatEntry kEntries[] = {
     {"VXA011", {"asm: '{0}' requires its address ({1}) to be a multiple of {2} bytes -- an unaligned address does not run slower, it faults; the compiler cannot prove it here, so state the precondition or use the form that requires no alignment", "asm: '{0}' exige que su direccion ({1}) sea multiplo de {2} bytes -- una direccion no alineada no va mas lenta, hace caer el programa; el compilador no puede demostrarlo aqui, asi que declara la precondicion o usa la forma que no exige alineacion"}},
     {"VXA012", {"asm: '{0}' requires an aligned address, but its width cannot be determined from the operands -- the requirement cannot be checked", "asm: '{0}' exige una direccion alineada, pero su ancho no se puede determinar por los operandos -- el requisito no se puede comprobar"}},
     {"VXA013", {"asm: '{0}' requires its address to be a multiple of {1} bytes, and it is not: the address is congruent with {2} modulo {3} -- this does not run slower, it faults", "asm: '{0}' exige que su direccion sea multiplo de {1} bytes, y no lo es: la direccion es congruente con {2} modulo {3} -- esto no va mas lento, hace caer el programa"}},
+    {"VXA014", {"asm: cannot prove where this block writes ({0}), so writing past what the caller reserved would go unnoticed -- state the extent or use a form the analysis can bound", "asm: no se puede demostrar donde escribe este bloque ({0}), asi que escribir mas alla de lo que reservo el llamante pasaria inadvertido -- declara la extension o usa una forma que el analisis pueda acotar"}},
+    {"VXA015", {"the access has no known width: the operand that gives it was chosen by the compiler and its class does not say how many bytes it is", "el acceso no tiene ancho conocido: el operando que lo da lo eligio el compilador y su clase no dice cuantos bytes mide"}},
+    {"VXA016", {"the block branches, so what comes after cannot be attributed to a fixed distance from the base", "el bloque salta, asi que lo que viene despues no se puede atribuir a una distancia fija de la base"}},
+    {"VXA017", {"the base '{0}' is not bound to a single value here", "la base '{0}' no esta ligada a un solo valor aqui"}},
 };
-const int kEntryCount = 65;
+const int kEntryCount = 69;
 
 } // namespace
 

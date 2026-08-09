@@ -62,8 +62,23 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
      * la tabla de x86: mnemonico desconocido, registro desconocido, y el bloque
      * acababa valiendo "puede hacer cualquier cosa" -- ademas de aparecer como
      * una laguna del analisis que no existia. */
+    /* De que CLASE es cada operando.  Sin ese diccionario, un
+     * `vmovdqu [$0 + 0x1e0], $11` no puede decir que toca treinta y dos bytes:
+     * el ancho lo da el operando que no son los corchetes, y cuando lo eligio
+     * el compilador se llama `$11` y solo su clase declarada lo sabe.
+     *
+     * Lo tenia el camino que comprueba la alineacion y no el que calcula los
+     * efectos, asi que aqui cada acceso quedaba sin ancho -> sin extension ->
+     * "toca el objeto entero", y la comprobacion de limites no podia decir
+     * nada.  Un `asm` que escribia mas alla del buffer del llamante pasaba sin
+     * un aviso, y lo que hay detras del buffer es la siguiente variable. */
+    const analysis::AsmBindingFacts lig = analysis::compute_asm_bindings(fn);
+    std::vector<std::pair<std::string, std::string>> clases;
+    clases.reserve(lig.ligaduras.size());
+    for (const analysis::LigaduraAsm &l : lig.ligaduras)
+        clases.emplace_back(l.marcador, l.clase);
     const vx::AsmBlockEffects e =
-        vx::asm_analyze_block(ins.func_name, vx::asm_arch_actual());
+        vx::asm_analyze_block(ins.func_name, vx::asm_arch_actual(), clases);
     /* Se declara SOLO lo que el bloque hace.  Antes, cualquier asm que tocara
      * memoria se anotaba como lectura Y escritura de todo, y eso lo convierte
      * en una barrera para cuanto haya alrededor: un `mov rax, [rdi]` impedia
@@ -109,7 +124,6 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
          * copiado aqui, en el eliminador de escrituras muertas y en la
          * comprobacion de precondiciones del asm; tres copias del mismo camino
          * acaban siendo tres respuestas distintas a la misma pregunta. */
-        const analysis::AsmBindingFacts lig = analysis::compute_asm_bindings(fn);
         /* Rangos de la funcion: es lo que cierra la extension de un acceso
          * cuando lo que la determina no es una constante sino un operando --
          * `rep movsb` recorre `rcx` bytes, y `rcx` es una variable con rango.

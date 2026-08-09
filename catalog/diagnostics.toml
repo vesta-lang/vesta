@@ -76,6 +76,22 @@ es = "asm: '{0}' exige que su direccion sea multiplo de {1} bytes, y no lo es: l
 
 # --- type-checker (VX2xxx) ---
 
+[VXA014]
+en = "asm: cannot prove where this block writes ({0}), so writing past what the caller reserved would go unnoticed -- state the extent or use a form the analysis can bound"
+es = "asm: no se puede demostrar donde escribe este bloque ({0}), asi que escribir mas alla de lo que reservo el llamante pasaria inadvertido -- declara la extension o usa una forma que el analisis pueda acotar"
+
+[VXA015]
+en = "the access has no known width: the operand that gives it was chosen by the compiler and its class does not say how many bytes it is"
+es = "el acceso no tiene ancho conocido: el operando que lo da lo eligio el compilador y su clase no dice cuantos bytes mide"
+
+[VXA016]
+en = "the block branches, so what comes after cannot be attributed to a fixed distance from the base"
+es = "el bloque salta, asi que lo que viene despues no se puede atribuir a una distancia fija de la base"
+
+[VXA017]
+en = "the base '{0}' is not bound to a single value here"
+es = "la base '{0}' no esta ligada a un solo valor aqui"
+
 [VX2001]
 en = "'.' does not reach through a pointer: '{0}' is of type '{1}'. Dereference it first -- (*{0}).{2} -- or index it -- {0}[0].{2}"
 es = "'.' no atraviesa un puntero: '{0}' es de tipo '{1}'. Desreferencialo primero -- (*{0}).{2} -- o indexalo -- {0}[0].{2}"

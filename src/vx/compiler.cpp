@@ -1215,7 +1215,8 @@ CompileResult compile_vx_source(const std::string &source,
          * pasar cuando los modulos se cachean por separado.  Quien SI ve el
          * programa entero es el camino de proyecto, y alli se dice. */
         vx_report_asm_preconditions(irmod_for_section, res.diagnostics, filename,
-                                    /*programa_cerrado=*/false);
+                                    /*programa_cerrado=*/false,
+                                    opts.emit_ir_preopt);
         mod_para_seccion = std::move(irmod_for_section);
         hay_seccion = true;
     }

@@ -208,13 +208,22 @@ struct AsmBlockEffects {
  * @param arch      Arquitectura de destino (@c "x86_64" / @c "arm64" / ...);
  *                  selecciona la tabla de efectos.  Un mnemonico no tabulado
  *                  para ese arch cae en @c unknown_mnemonics.
- * @return Efectos agregados; @c has_unknown()==false si todo se reconocio.
+ * @return Efectos agregados, SIN la extension de los accesos.
+ *
+ * @warning Se llama asi para que elegirla sea una decision con nombre y no un
+ * descuido.  Sin las clases de operando no se puede saber cuantos bytes toca un
+ * `$N`, con lo que cada acceso queda sin ancho y vale "el objeto entero" -- que
+ * es justo lo que NUNCA puede violar un limite.  Eso ya paso: el analisis de
+ * efectos llamaba aqui, un `asm` que escribia fuera del buffer del llamante no
+ * levantaba un solo aviso, y lo que hay detras del buffer es la siguiente
+ * variable.  Usala unicamente si lo que preguntas no depende de que memoria se
+ * toca; si depende, pasa las clases.
  */
-AsmBlockEffects asm_analyze_block(const std::string &nasm_body,
-                                  const std::string &arch);
+AsmBlockEffects asm_analyze_block_sin_clases(const std::string &nasm_body,
+                                            const std::string &arch);
 
 /**
- * @brief Igual que la anterior, sabiendo ademas de que CLASE es cada operando.
+ * @brief El analisis COMPLETO: sabiendo de que CLASE es cada operando.
  *
  * El ancho de un acceso lo dice el operando que NO son los corchetes, y cuando
  * ese operando lo eligio el compilador se llama `$N` en el cuerpo: entonces su
