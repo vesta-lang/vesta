@@ -18,6 +18,7 @@
 #include "vx/asm/asm_lift_micro.h"
 
 #include "ir/ssa_ir.h"
+#include "vx/asm/asm_cfg.h"
 #include "vx/asm/asm_effects.h"
 #include "vx/asm/asm_phys_reg.h"
 
@@ -25,6 +26,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
+#include <unordered_map>
 #include <set>
 #include <string>
 #include <vector>
@@ -324,12 +326,13 @@ bool build_operands(
              * o se escriba es otra cosa, y va en el byte de efectos. */
             op.flags = ir::ASM_OP_READ;
             operands.push_back(op);
-            tmpl += (k == 0 ? " [$" : ", [$") + std::to_string(k);
-            if (disp != 0) {
-                tmpl += (disp > 0 ? " + " : " - ");
-                tmpl += std::to_string(disp > 0 ? disp : -disp);
-            }
-            tmpl += "]";
+            /* La plantilla lleva el marcador PELADO, sin corchetes: que un
+             * operando sea una direccion lo dice la ficha, y como se escribe una
+             * direccion lo sabe el nombrador de la ISA.  Escribirla aqui la ata
+             * a x86 y ademas la ponia dos veces -- salia `[[r15]]`, que no
+             * ensambla, y como un bloque que no ensambla no emite nada, el
+             * programa se quedaba sin ese trozo sin decir palabra. */
+            tmpl += (k == 0 ? " $" : ", $") + std::to_string(k);
             continue;
         }
         if (const ir::AsmRegBinding *b = binding_de_marcador(toks[k], bindings)) {
@@ -373,10 +376,15 @@ bool build_operands(
              * micro asm modela INSTRUCCIONES, y el flujo de control no es de una
              * instruccion, es del grafo.  De eso se ocupa el elevado general.
              * Decirlo como "operando que no pasa a IR" manda a arreglar donde no
-             * es. */
-            const std::string m = lower(mnem);
-            if (m == "jmp" || m == "call" || m == "loop" ||
-                (m.size() >= 2 && m[0] == 'j'))
+             * es.
+             *
+             * Quien sabe si una linea es un salto es el clasificador del ASA, y
+             * lo sabe POR ISA: `jmp` y `b` y `cbz` son la misma cosa en tres
+             * juegos de instrucciones distintos.  Mirar el mnemonico aqui seria
+             * escribir x86 en un sitio que no es de ninguna arquitectura. */
+            std::string destino;
+            const AsmTerm t = asm_classify_term(isa, insn, destino);
+            if (t != AsmTerm::Fallthrough)
                 return AsmMotivoOpaco::anotar(motivo, insn, "VXA035", {toks[k]});
             return AsmMotivoOpaco::anotar(motivo, insn, "VXA023", {toks[k]});
         }
@@ -561,12 +569,11 @@ bool asm_lift_micro(
                     binding_de_marcador(mm, fn.asm_reg_bindings) != nullptr) {
                     if (!elevar_ligados())
                         return AsmMotivoOpaco::anotar(motivo, insn, "VXA023", {t});
-                    std::string rep = "[rax";
-                    if (dd != 0) {
-                        rep += (dd > 0 ? " + " : " - ");
-                        rep += std::to_string(dd > 0 ? dd : -dd);
-                    }
-                    rep += "]";
+                    const std::string rep = vx::asm_mem_operando(
+                        (uint8_t)isa,
+                        vx::asm_reg_muestra((uint8_t)isa, vx::ASM_RC_GP, 64), dd);
+                    if (rep.empty())
+                        return AsmMotivoOpaco::anotar(motivo, insn, "VXA023", {t});
                     const size_t p = consulta.find(t);
                     if (p != std::string::npos) consulta.replace(p, t.size(), rep);
                     continue;
@@ -582,9 +589,9 @@ bool asm_lift_micro(
                 }
                 if (!elevar_ligados())
                     return AsmMotivoOpaco::anotar(motivo, insn, "VXA028");
-                const std::string rep = vx::asm_phys_reg_name(
+                const std::string rep = vx::asm_reg_muestra(
                     (uint8_t)isa,
-                    b->is_vector ? vx::ASM_RC_VEC : vx::ASM_RC_GP, 0,
+                    b->is_vector ? vx::ASM_RC_VEC : vx::ASM_RC_GP,
                     ancho_declarado(*b));
                 if (rep.empty())
                     return AsmMotivoOpaco::anotar(motivo, insn, "VXA028");
@@ -697,6 +704,46 @@ bool asm_lift_micro(
         tmpl_per.push_back(std::move(tmpl));
     }
 
+    /* Una variable ligada vive en un hueco, y lo que el asm necesita es su
+     * VALOR, no la direccion del hueco.  Es la convencion que ya sigue el
+     * elevado general -- "el lift la modela leyendo y escribiendo el slot" -- y
+     * saltarsela fue exactamente el fallo: pasar el hueco como si fuera el
+     * valor hacia que `mov [d], b` escribiera dentro del propio hueco en vez de
+     * donde apuntaba, y la variable se quedaba a cero.
+     *
+     * Se carga UNA vez por bloque y por variable: dos instrucciones que usen la
+     * misma comparten el valor, que es lo que hace que entre y salga una sola
+     * vez.  Lo que el bloque ESCRIBE se devuelve al hueco al final. */
+    std::unordered_map<ir::IrValueId, ir::IrValueId> valor_de_hueco;
+    std::vector<ir::IrValueId> huecos_escritos;
+    auto valor_del_hueco = [&](ir::IrValueId hueco, bool host) {
+        auto it = valor_de_hueco.find(hueco);
+        if (it != valor_de_hueco.end()) return it->second;
+        const ir::IrValueId v = fn.new_value(ir::IrType::I64);
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = v;
+        ld.operands = {hueco};
+        ld.source_line = line;
+        fn.append(block, std::move(ld));
+        if (host) fn.values[v].is_host_ptr = true;
+        valor_de_hueco.emplace(hueco, v);
+        return v;
+    };
+    for (auto &ops : ops_per)
+        for (ir::AsmMicroOperand &op : ops) {
+            if (op.value == ir::IR_NO_VALUE) continue;
+            const ir::IrValueId hueco = op.value;
+            op.value = valor_del_hueco(hueco, op.kind == ir::AsmOperandKind::MEM);
+            if (op.writes() && op.kind != ir::AsmOperandKind::MEM) {
+                bool ya = false;
+                for (ir::IrValueId h : huecos_escritos)
+                    if (h == hueco) { ya = true; break; }
+                if (!ya) huecos_escritos.push_back(hueco);
+            }
+        }
+
     // Fase 2 (emision): una ASM_MICRO por instruccion.
     for (size_t i = 0; i < insns.size(); ++i) {
         ir::AsmMicro am;
@@ -720,6 +767,20 @@ bool asm_lift_micro(
             if (op.value != ir::IR_NO_VALUE) in.operands.push_back(op.value);
         fn.asm_micros.push_back(std::move(am));
         fn.append(block, std::move(in));
+    }
+    /* Y lo que el bloque cambio vuelve a su hueco.  El valor es el MISMO que se
+     * cargo: para el backend ese valor es un registro y el asm lo modifica ahi
+     * mismo, igual que en el camino opaco.  Sin este paso la variable conserva
+     * lo de antes y el `inc` del programa no se ve desde fuera del bloque. */
+    for (ir::IrValueId hueco : huecos_escritos) {
+        const auto it = valor_de_hueco.find(hueco);
+        if (it == valor_de_hueco.end()) continue;
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::I64;
+        st.operands = {it->second, hueco};
+        st.source_line = line;
+        fn.append(block, std::move(st));
     }
     return true;
 }

@@ -49,6 +49,12 @@ AsmDeferredResult asm_deferred_assemble(const AsmBlob &b,
             continue;
         }
         const AsmBlob::DeferredOp &d = b.deferred_ops[idx];
+        /* Un numero no tiene registro que repartir: se escribe y ya. */
+        if (d.es_inmediato) {
+            nasm += std::to_string(d.inmediato);
+            i = j;
+            continue;
+        }
         int phys = d.fixed_phys;
         if (phys < 0) {
             const auto loc = alloc.timeline.first_location(d.vreg);
@@ -82,6 +88,25 @@ AsmDeferredResult asm_deferred_assemble(const AsmBlob &b,
             r.ancho = d.width;
             r.ranura = phys;
             return r;
+        }
+        /* Una direccion se escribe entera y con la sintaxis de SU ISA: x86 pone
+         * `[rax + 8]` y arm64 `[x0, #8]`.  Componerla aqui seria escribir una
+         * arquitectura concreta en el resolvedor de todas. */
+        if (d.es_direccion) {
+            const std::string dir =
+                vx::asm_mem_operando(b.deferred_isa, nm, d.desplazamiento);
+            if (dir.empty()) {
+                r.fallo = AsmDeferredFallo::SIN_NOMBRE;
+                r.operando = idx;
+                r.vreg = d.vreg;
+                r.clase = d.regclass;
+                r.ancho = d.width;
+                r.ranura = phys;
+                return r;
+            }
+            nasm += dir;
+            i = j;
+            continue;
         }
         nasm += nm;
         i = j;

@@ -1541,6 +1541,15 @@ struct AsmBlob {
         int16_t fixed_phys = -1;    ///< fisico fijo (>=0) o -1 = del RA
         uint16_t width = 64;        ///< ancho en bits (nombra el registro)
         uint8_t regclass = 0;       ///< 0=GP (solo GP)
+        /// El operando es un NUMERO escrito en el propio asm: no hay registro
+        /// que repartir, se escribe tal cual.
+        bool es_inmediato = false;
+        int64_t inmediato = 0; ///< su valor (solo si @ref es_inmediato)
+        /// El operando es una DIRECCION formada con este registro como base: al
+        /// resolverlo se escribe la direccion entera, con la sintaxis de la ISA.
+        /// 0 y @c es_direccion false = operando de registro normal.
+        bool es_direccion = false;
+        int64_t desplazamiento = 0; ///< sumado a la base (solo si @ref es_direccion)
     };
     bool deferred = false;              ///< true -> ensamblar en el rewrite
     uint8_t deferred_isa = 0;           ///< ISA (== instr_db::Isa) para el backend

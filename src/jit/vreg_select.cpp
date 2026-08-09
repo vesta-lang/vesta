@@ -4360,6 +4360,73 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 }
                 const ir::AsmMicro &am = fn.asm_micros[in.imm];
+                /* Un operando sin fisico es una variable del programa a la que
+                 * hay que darle registro, y eso lo hace el asignador.  El
+                 * ensamblado se aplaza hasta despues de repartir, que es la
+                 * misma via por la que ya pasan los bloques opacos con
+                 * operandos `reg` -- solo que el micro asm no la usaba. */
+                bool alguno_libre = false;
+                for (const ir::AsmMicroOperand &op : am.operands)
+                    if (op.fixed_phys < 0 &&
+                        op.kind != ir::AsmOperandKind::IMM) {
+                        alguno_libre = true;
+                        break;
+                    }
+                if (alguno_libre) {
+                    AsmBlob blob;
+                    blob.deferred = true;
+                    blob.deferred_isa = am.isa;
+                    blob.deferred_tmpl = am.tmpl;
+                    blob.deferred_ops.resize(am.operands.size());
+                    /* Los VALORES se leen de la instruccion, no de la ficha.
+                     *
+                     * La ficha describe la FORMA -- que operandos hay, de que
+                     * clase, quien lee y quien escribe -- y eso no cambia.  El
+                     * valor si: los pases lo reescriben (propagacion de copias,
+                     * por ejemplo) y actualizan los operandos de la instruccion,
+                     * que es donde los buscan.  Guardarlo tambien en la ficha
+                     * era tenerlo en dos sitios, y el segundo se quedaba viejo:
+                     * la ficha decia `%6` cuando ya era `%base`.  Van en el
+                     * mismo orden, asi que el i-esimo operando con valor es el
+                     * i-esimo de la instruccion. */
+                    size_t nval = 0;
+                    for (size_t oi = 0; oi < am.operands.size(); ++oi) {
+                        const ir::AsmMicroOperand &op = am.operands[oi];
+                        AsmBlob::DeferredOp &d = blob.deferred_ops[oi];
+                        d.fixed_phys = op.fixed_phys;
+                        d.width = op.width;
+                        d.regclass = op.regclass;
+                        d.vreg = 0;
+                        if (op.kind == ir::AsmOperandKind::IMM) {
+                            d.es_inmediato = true;
+                            d.inmediato = op.imm;
+                            continue;
+                        }
+                        if (op.kind == ir::AsmOperandKind::MEM) {
+                            d.es_direccion = true;
+                            d.desplazamiento = op.imm;
+                        }
+                        if (op.value == ir::IR_NO_VALUE) continue;
+                        if (nval >= in.operands.size()) {
+                            vreg_dbg(fn.name.c_str(),
+                                     "asm_micro(la ficha pide mas valores de los "
+                                     "que trae la instruccion)");
+                            return false;
+                        }
+                        d.vreg = (uint32_t)in.operands[nval++];
+                        // El asignador tiene que ver el uso y la definicion, o
+                        // el intervalo del valor no cubre el asm y le da su
+                        // registro a otro.
+                        if (op.reads()) blob.in_vregs.push_back(d.vreg);
+                        if (op.writes() && op.kind != ir::AsmOperandKind::MEM)
+                            blob.out_vregs.push_back(d.vreg);
+                    }
+                    blob.clobbers_mem = (am.eff & 0x9) != 0;
+                    blob.clobbers_flags = (am.eff & 0x4) != 0;
+                    const uint32_t bi = out.intern_asm_blob(std::move(blob));
+                    O.push_back(MInstr::make_inline_asm_raw(bi));
+                    break;
+                }
                 // sustituir $0,$1,... por el nombre del registro FiSICO
                 // FIJO de cada operando ANTES de ensamblar.  Sin operandos, la
                 // plantilla no tiene $N y queda verbatim (caso mfence/etc).

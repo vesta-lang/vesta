@@ -11451,7 +11451,15 @@ bool ir_pass_schedule(IrFunction &fn, const analysis::PointsTo *pt,
             if (ins.op == IrOp::ASM_MICRO && ins.imm < fn.asm_micros.size()) {
                 const uint8_t e = fn.asm_micros[ins.imm].eff;
                 micro_barr_total = (e & 0x10) != 0;            // call
-                micro_barr_mem = !micro_barr_total && (e & 0x08) != 0;
+                /* Ordena la memoria tanto si es una barrera como si simplemente
+                 * la TOCA.  Solo se miraba lo primero, asi que un `mov [d], b`
+                 * elevado no contaba como acceso y la lectura de esa misma
+                 * variable se adelantaba por delante de la escritura: el
+                 * programa leia lo de antes.  Donde escribe no se sabe -- la
+                 * direccion la trae un registro --, asi que cuenta como acceso
+                 * opaco, que es lo que hace esta rama. */
+                micro_barr_mem = !micro_barr_total &&
+                                 (((e & 0x08) != 0) || ((e & 0x01) != 0));
             }
             const bool is_barr =
                 (is_sched_barrier(ins.op) || micro_barr_total) &&

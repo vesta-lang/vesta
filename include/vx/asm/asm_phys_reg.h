@@ -167,6 +167,48 @@ inline std::string asm_phys_reg_name(uint8_t isa, uint8_t regclass, int phys,
 }
 
 /**
+ * @brief Como se escribe "base mas desplazamiento" en esta ISA.
+ *
+ * La sintaxis de una direccion no es la misma en todas partes: x86 la escribe
+ * @c "[rax + 8]" y arm64 @c "[x0, #8]".  Componerla a mano donde haga falta es
+ * escribir una arquitectura concreta en un sitio que no es de ninguna, asi que
+ * vive aqui, junto al resto de nombres por ISA.
+ *
+ * @param isa ISA (== @c instr_db::Isa).
+ * @param base Nombre ya resuelto del registro base.
+ * @param disp Desplazamiento con signo.
+ * @return El operando completo, o @c "" si esa ISA no esta descrita todavia --
+ *         en cuyo caso el bloque se queda opaco, que es lo correcto: mejor sin
+ *         elevar que elevado a una sintaxis inventada.
+ */
+inline std::string asm_mem_operando(uint8_t isa, const std::string &base,
+                                    int64_t disp) {
+    if (base.empty()) return std::string();
+    if (isa <= 2) { // x86-64 / x86-32 / x86-16
+        std::string s = "[" + base;
+        if (disp != 0) {
+            s += (disp > 0 ? " + " : " - ");
+            s += std::to_string(disp > 0 ? disp : -disp);
+        }
+        return s + "]";
+    }
+    return std::string();
+}
+
+/**
+ * @brief Un registro CUALQUIERA de esa clase y ancho, para preguntarle a la base
+ *        de instrucciones por una linea equivalente.
+ *
+ * La forma de una instruccion depende de la CLASE del operando, no de que
+ * registro concreto sea, asi que para clasificar una linea que todavia lleva
+ * marcadores sirve cualquiera.  El de verdad lo elige el asignador despues.
+ */
+inline std::string asm_reg_muestra(uint8_t isa, uint8_t regclass,
+                                   uint16_t width_bits) {
+    return asm_phys_reg_name(isa, regclass, 0, width_bits);
+}
+
+/**
  * @brief Registros FiSICOS que una @c ASM_MICRO destruye, como pares
  *        (clase, indice).
  *
@@ -233,11 +275,12 @@ inline bool asm_micro_subst_phys(const ir::AsmMicro &am, std::string &out) {
         std::string name =
             asm_phys_reg_name(am.isa, op.regclass, op.fixed_phys, op.width);
         if (name.empty()) return false;
-        /* Una direccion se nombra entera: el registro base es lo que se
-         * sustituye, y el desplazamiento viaja con el operando.  El texto no
-         * lleva los corchetes -- los pone la plantilla -- solo lo de dentro. */
+        /* Una direccion se escribe entera y aqui: la plantilla lleva el marcador
+         * pelado porque como se escribe una direccion depende de la ISA. */
         if (op.kind == ir::AsmOperandKind::MEM) {
-            out += name;
+            const std::string dir = asm_mem_operando(am.isa, name, op.imm);
+            if (dir.empty()) return false;
+            out += dir;
             i = j;
             continue;
         }
