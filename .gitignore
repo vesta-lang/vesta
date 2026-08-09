@@ -423,3 +423,4 @@ tools/import/__pycache__/
 ANAMNESIS.txt
 examples_codes_vx/benchmark/vec_axpy/vec_axpy_rs.pdb
 filosofia-del-lenguaje.txt
+bench_compilacion.json
