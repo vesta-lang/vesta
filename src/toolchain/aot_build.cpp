@@ -2526,9 +2526,17 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     }
                 }
                 if (af.bytes.empty()) {
+                    /* CUAL op, no "una op".  El selector lo sabe y lo dejaba
+                     * morir detras de una variable de entorno, asi que esto
+                     * obligaba a recompilar con la traza puesta y a adivinar de
+                     * que funcion se hablaba. */
+                    const std::string &porque = jit::vreg_ultimo_motivo();
                     std::cerr
                         << "[aot] el selector vreg no soporta la funcion '"
-                        << nm << "' todavia (op fuera del subset nativo).\n";
+                        << nm << "' todavia: "
+                        << (porque.empty() ? std::string("no consta que op")
+                                           : ("op " + porque))
+                        << ".\n";
                     aot_codegen_ok = false;
                     break;
                 }

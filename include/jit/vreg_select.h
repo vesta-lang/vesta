@@ -227,6 +227,15 @@ bool vreg_select(const ir::IrFunction &fn, MFunction &out,
                  bool emit_line_map = false,
                  const VregCallbackOpts &cb = {});
 
+/**
+ * @brief La ultima razon por la que el selector abandono una funcion.
+ *
+ * Vacia si no abandono.  La lee quien compila para poder DECIR que le sobro en
+ * vez de un "no pude" a secas: sin ese dato hay que recompilar con una variable
+ * de entorno puesta y adivinar de que funcion se hablaba.
+ */
+std::string &vreg_ultimo_motivo();
+
 } // namespace jit
 
 #endif // VESTA_JIT_VREG_SELECT_H

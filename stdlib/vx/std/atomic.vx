@@ -157,7 +157,7 @@ public void atomic_store64(i64* addr, i64 v) {
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
 public void atomic_fence() {
-    asm volatile { mfence };
+    asm { mfence };
 }
 
 /// Hint de spin para un bucle de espera activa (`pause`).
@@ -169,7 +169,7 @@ public void atomic_fence() {
 @complexity(partial_pre: O(1), partial_post: O(1),
             total_pre: O(1), total_post: O(1))
 public void vx_cpu_relax() {
-    asm volatile { pause };
+    asm { pause };
 }
 
 // ===========================================================================

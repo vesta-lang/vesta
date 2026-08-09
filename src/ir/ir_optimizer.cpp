@@ -10498,6 +10498,30 @@ static void inline_one_multiblock(IrFunction &caller, size_t bi, size_t ii,
             }
             if (in.target_block != IR_NO_BLOCK) in.target_block = rb(in.target_block);
             if (in.false_block != IR_NO_BLOCK) in.false_block = rb(in.false_block);
+            /* La FICHA de un micro asm se muda con el.
+             *
+             * `imm` no es un numero: indexa la tabla de fichas de SU funcion, de
+             * donde salen todos sus efectos.  Al traer la instruccion sin la
+             * ficha, el indice apunta a la tabla del que la recibe -- fuera de
+             * rango o, peor, a la ficha de otra instruccion --.  El inlinador de
+             * un solo bloque ya lo hacia; este no, asi que un `asm` liftado que
+             * cruzara un inline multi-bloque perdia su identidad y el compilador
+             * nativo abandonaba la funcion entera sin decir por que.
+             *
+             * Lo mismo que el resto: los SSA de la ficha se remapean con `rv`. */
+            if (in.op == IrOp::ASM_MICRO) {
+                const uint32_t viejo = static_cast<uint32_t>(in.imm);
+                const uint32_t nuevo =
+                    static_cast<uint32_t>(caller.asm_micros.size());
+                if (viejo < callee.asm_micros.size()) {
+                    ir::AsmMicro am = callee.asm_micros[viejo];
+                    for (auto &op : am.operands) op.value = rv(op.value);
+                    caller.asm_micros.push_back(std::move(am));
+                } else {
+                    caller.asm_micros.emplace_back();
+                }
+                in.imm = nuevo;
+            }
             caller.blocks[nbid].instrs.push_back(std::move(in));
         }
     }

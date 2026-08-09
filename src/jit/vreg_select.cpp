@@ -68,9 +68,28 @@ static bool vreg_fma_ok() {
     return host;
 }
 
+/**
+ * @brief La ULTIMA razon por la que el selector abandono una funcion.
+ *
+ * Quien no puede compilarla sabe perfectamente por que -- lo pasa como texto a
+ * @ref vreg_dbg --, pero eso moria en un `fprintf` detras de una variable de
+ * entorno.  Fuera, el compilador nativo solo veia "cero bytes" y decia "op
+ * fuera del subset nativo" sin poder nombrar cual: el mismo "no pude" sin decir
+ * en que que ya costo caro en el elevado del asm.  Guardarlo cuesta una
+ * asignacion; no guardarlo obliga a recompilar con una variable puesta y a
+ * adivinar de que funcion se hablaba.
+ *
+ * Por hilo, porque cada uno compila la suya.
+ */
+std::string &vreg_ultimo_motivo() {
+    static thread_local std::string motivo;
+    return motivo;
+}
+
 /** @brief Diagnostico opt-in (VESTA_JIT_VREGS_DEBUG=1) de por que una
  *  funcion no es seleccionable por el path vreg. */
 static void vreg_dbg(const char *fn, const char *op) {
+    vreg_ultimo_motivo() = (op != nullptr) ? op : "";
     static const bool on = [] {
         const char *v = std::getenv("VESTA_JIT_VREGS_DEBUG");
         return v && v[0] != '\0' && v[0] != '0';
@@ -4316,7 +4335,13 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     vreg_dbg(fn.name.c_str(), "asm_micro(no-backend)");
                     return false;
                 }
-                if (in.imm >= fn.asm_micros.size()) return false;
+                if (in.imm >= fn.asm_micros.size()) {
+                    /* La ficha del micro asm vive en la funcion, y al inlinar
+                     * hay que traersela: el indice apunta a la tabla del
+                     * CALLEE.  Si no se remapeo, aqui no hay ficha que mirar. */
+                    vreg_dbg(fn.name.c_str(), "asm_micro(ficha fuera de rango)");
+                    return false;
+                }
                 const ir::AsmMicro &am = fn.asm_micros[in.imm];
                 // sustituir $0,$1,... por el nombre del registro FiSICO
                 // FIJO de cada operando ANTES de ensamblar.  Sin operandos, la
