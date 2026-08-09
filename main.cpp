@@ -72,7 +72,8 @@ void set_aot_condcomp_target(const std::string &os,
                              const std::string &arch) noexcept;
 }
 #include "vx/comptime/comptime_vm.h"    /*  MC.4 probe del ComptimeRuntime */
-#include "vx/project_cache.h"  /*  M5.B project-level cache */
+#include "vx/project_cache.h"
+#include "vx/source_hash.h"  /*  M5.B project-level cache */
 #include "vx/velb_signature.h" /*  M.L28: firmas digitales */
 #include "util/sqlite_singleton.h"
 #include "util/fs_utils.h"
@@ -3809,7 +3810,7 @@ int main(int argc, char *argv[]) {
                                         cached_velb) &&
                 cached_opts_hash == opts_hash && !cached_deps.empty() &&
                 !cached_velb.empty() &&
-                vx::project_cache_validate(cached_deps)) {
+                vx::project_cache_validate(cached_deps, copts.emit_debug)) {
                 // HIT: escribir el .velb cacheado al output y salir.
                 const std::string out_velb = out_prefix + ".velb";
                 std::ofstream f(out_velb, std::ios::binary);
@@ -4492,7 +4493,11 @@ int main(int argc, char *argv[]) {
                         vx::ProjectCacheDep d;
                         d.path = p;
                         d.source_hash =
-                            vx::fnv1a64_bytes(dbytes.data(), dbytes.size());
+                            vx::hash_de_tokens(
+                                std::string(reinterpret_cast<const char *>(
+                                                dbytes.data()),
+                                            dbytes.size()),
+                                copts.emit_debug);
                         deps.push_back(std::move(d));
                     }
                     const bool saved = vx::project_cache_save(

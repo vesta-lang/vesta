@@ -206,6 +206,8 @@ add_library(vx_lib STATIC
     # Indice semantico por-declaracion (hash de contenido + grafo de deps):
     # sustrato de la compilacion incremental granular y distribuida.
     semantic_index.cpp
+    # Huella del contenido con SIGNIFICADO de un fuente (tokens, no bytes).
+    source_hash.cpp
     # Driver incremental granular: claves Merkle + CAS + plan_rebuild.
     incremental.cpp
     module/vxi_format.cpp

@@ -90,11 +90,21 @@ bool project_cache_save(const std::string &cache_path, uint32_t opts_hash,
 /// FNV-1a 32 sobre los campos concatenados.
 uint32_t project_cache_opts_hash(const ProjectCacheKey &key);
 
-/// @brief Verifica si el cache esta vigente: dado el cache file
-/// cargado, leer cada @c ProjectCacheDep::path del disco, calcular su
-/// FNV-1a actual y comparar.  Si todos coinciden, cache HIT.
-/// @return @c true si los hashes actuales coinciden con los cacheados.
-bool project_cache_validate(const std::vector<ProjectCacheDep> &cached_deps);
+/// @brief Verifica si el cache esta vigente: dado el cache file cargado, leer
+/// cada @c ProjectCacheDep::path del disco, calcular su huella actual y
+/// comparar.  Si todas coinciden, cache HIT.
+///
+/// La huella es la del CONTENIDO CON SIGNIFICADO (@ref vx::hash_de_tokens), no
+/// la de los bytes: anadir un comentario o reindentar no cambia lo que el
+/// modulo dice y no debe tirar lo que ya se construyo de el.
+///
+/// @param cached_deps Dependencias tal como se guardaron.
+/// @param con_lineas  Incluir la linea de cada token.  Debe valer lo MISMO que
+///                    cuando se guardo, y vale @c emit_debug: con informacion
+///                    de depuracion el artefacto si depende de las lineas.
+/// @return @c true si las huellas actuales coinciden con las cacheadas.
+bool project_cache_validate(const std::vector<ProjectCacheDep> &cached_deps,
+                            bool con_lineas);
 
 /// @brief FNV-1a 64 helper (publico para uso en @c compile_vx_project).
 uint64_t fnv1a64_bytes(const uint8_t *data, size_t size) noexcept;

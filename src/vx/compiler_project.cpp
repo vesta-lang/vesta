@@ -63,6 +63,7 @@
 #include "vx/diagram/mermaid_diagrams.h"
 #include "vx/type_checker.h"
 #include "vx/module/vxi_format.h"
+#include "vx/source_hash.h" // la identidad de un fuente son sus tokens
 #include "util/fs_utils.h"   // fs::get_executable_path()
 
 #include <atomic>
@@ -1526,7 +1527,16 @@ CompileResult compile_vx_project(
         // Sin esto, builds con cache de un modo distinto producen
         // `.vel` con relocations sin resolver -> SEGV silente en runtime
         // (limitacion MC.12 documentada).
-        uint64_t source_hash = vxi_fnv1a(pm.source);
+        /* La identidad del modulo es lo que DICE, no como esta escrito: se
+         * keyea por sus tokens y no por los bytes del fichero.  Anadir un
+         * comentario o reindentar obligaba a recompilar un modulo identico --
+         * medido en el banco, tocar un comentario salia mas caro que cambiar el
+         * cuerpo de una funcion.
+         *
+         * Con informacion de depuracion SI cuenta la linea de cada token: el
+         * artefacto lleva dentro donde esta cada cosa, y un comentario metido
+         * en medio las desplaza todas. */
+        uint64_t source_hash = hash_de_tokens(pm.source, opts.emit_debug);
         // El COMPILADOR forma parte de lo que produjo el artefacto: un mismo
         // fuente compilado por dos versiones distintas da IR distinto.  Sin
         // esto, arreglar un bug de codegen no invalidaba nada y se seguian

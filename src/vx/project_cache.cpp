@@ -10,6 +10,7 @@
  */
 
 #include "vx/project_cache.h"
+#include "vx/source_hash.h"
 #include "vx/module/vxi_format.h" // para vxi_compiler_version_hash() (L.15)
 
 #include <atomic>
@@ -274,14 +275,18 @@ bool project_cache_save(const std::string &cache_path, uint32_t opts_hash,
     return write_file_atomic_internal(cache_path, buf);
 }
 
-bool project_cache_validate(const std::vector<ProjectCacheDep> &cached_deps) {
-    // Para cada dep, abre el path en disco, calcula FNV-1a 64 del source
-    // y compara con el cacheado.  Si CUALQUIER archivo no existe o el
-    // hash difiere, cache miss.
+bool project_cache_validate(const std::vector<ProjectCacheDep> &cached_deps,
+                            bool con_lineas) {
+    // Para cada dep, abre el path en disco, calcula la huella de su CONTENIDO
+    // CON SIGNIFICADO y la compara con la cacheada.  Si CUALQUIER archivo no
+    // existe o la huella difiere, cache miss.
     for (const auto &d : cached_deps) {
         std::vector<uint8_t> bytes;
         if (!read_file_bytes_internal(d.path, bytes)) return false;
-        const uint64_t h = fnv1a64_bytes(bytes.data(), bytes.size());
+        const uint64_t h = hash_de_tokens(
+            std::string(reinterpret_cast<const char *>(bytes.data()),
+                        bytes.size()),
+            con_lineas);
         if (h != d.source_hash) return false;
     }
     return true;

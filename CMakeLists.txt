@@ -820,6 +820,19 @@ endif ()
 add_executable(test_recorrer_arbol tests/util/test_recorrer_arbol.cpp)
 target_include_directories(test_recorrer_arbol PRIVATE ${VM_INCLUDES})
 
+# La identidad de un fuente para la cache: lo que dice, no como esta escrito.
+add_executable(test_source_hash tests/vx/test_source_hash.cpp)
+target_include_directories(test_source_hash PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_source_hash PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_source_hash PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_source_hash PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_source_hash PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 # Puente entre el texto de un asm y los valores del programa (de que valor habla
 # cada operando), ancho aportado por la CLASE del operando, y universo bajo el
 # que se resume una funcion (artefacto + visibilidad).
