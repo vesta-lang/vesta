@@ -5985,8 +5985,80 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // fisico (SSA/RA) o clase no soportada -> trap.
         std::string nasm = am.tmpl;
         if (!am.operands.empty() && !vx::asm_micro_subst_phys(am, nasm)) {
-            ctx.comment("asm_micro con operando no fisico -> trap");
-            ctx.out << "    hlt\n";
+            /* Operandos que son VALORES del programa.  El interprete no reparte
+             * registros, asi que hay que elegirlos (misma funcion que usa quien
+             * prepara la instruccion, o el texto no coincide) y luego meter los
+             * valores antes de ejecutar y sacarlos despues.  Es lo mismo que ya
+             * se hace con los bloques opacos; la diferencia es que alli el dato
+             * es "la variable X" y aqui es un valor del IR, asi que viaja por
+             * una tabla en la pila en vez de por el hueco de la variable. */
+            std::vector<int> phys;
+            if (!vx::asm_micro_subst_greedy(am, nasm, phys)) {
+                ctx.comment("asm_micro: no se pudo dar registro a sus operandos "
+                            "-> trap");
+                ctx.out << "    hlt\n";
+                break;
+            }
+            // Los valores llegan en los operandos de la instruccion, en el mismo
+            // orden que los operandos de la ficha que llevan valor.
+            std::vector<std::pair<size_t, IrValueId>> conv; // (indice ficha, valor)
+            size_t nv = 0;
+            for (size_t oi = 0; oi < am.operands.size(); ++oi) {
+                if (am.operands[oi].value == IR_NO_VALUE) continue;
+                if (nv >= ins.operands.size()) break;
+                conv.emplace_back(oi, ins.operands[nv++]);
+            }
+            if (conv.size() > 8) {
+                ctx.comment("asm_micro: mas de 8 operandos con valor -> trap");
+                ctx.out << "    hlt\n";
+                break;
+            }
+            const uint64_t hash2 = jit::fnv1a64_asm(nasm);
+            uint64_t desc2 = 0;
+            for (size_t i = 0; i < conv.size(); ++i)
+                desc2 |= (uint64_t)(phys[conv[i].first] & 0xF) << (i * 4);
+            const size_t bytes_tabla = conv.size() * 8;
+            const uint32_t cpos = lin_pos_of(ctx, bb.id, idx);
+            std::vector<int> salvar = live_regs_through_call(ctx, cpos, IR_NO_VALUE);
+            emit_save_all_gc_aware(ctx, cpos, salvar);
+            /* Tabla de valores en la pila de la maquina virtual.  La direccion
+             * se lleva en r15 porque la forma de direccionar no admite rsp
+             * directo, y se vuelve a tomar despues de la llamada -- r15 es
+             * ademas donde va el numero de argumentos, asi que no sobrevive. */
+            /* La ranura se direcciona con la forma [base + indice] del
+             * ensamblador: no hay desplazamiento inmediato en esa codificacion,
+             * el desplazamiento va en un registro. */
+            ctx.out << "    subsp rsp, " << bytes_tabla << "\n";
+            ctx.out << "    mov r15, rsp\n";
+            for (size_t i = 0; i < conv.size(); ++i) {
+                const std::string src = ctx.load_src(conv[i].second, 0);
+                ctx.out << "    mov r13, " << (i * 8) << "\n";
+                ctx.out << "    mov [r15 + r13], " << src << "\n";
+            }
+            ctx.out << "    getproc r1\n";
+            char hb2[32];
+            std::snprintf(hb2, sizeof(hb2), "0x%016llx",
+                          (unsigned long long)hash2);
+            ctx.out << "    mov r2, " << hb2 << "\n";
+            ctx.out << "    mov r3, " << (unsigned)am.eff << "\n";
+            ctx.out << "    mov r4, r15\n";
+            std::snprintf(hb2, sizeof(hb2), "0x%llx", (unsigned long long)desc2);
+            ctx.out << "    mov r5, " << hb2 << "\n";
+            ctx.out << "    mov r6, " << conv.size() << "\n";
+            ctx.out << "    mov r15, 6\n";
+            ctx.out << "    calln @Method(\"vrt:asm_micro_ops\")\n";
+            // Y de vuelta lo que el bloque haya cambiado.
+            ctx.out << "    mov r15, rsp\n";
+            for (size_t i = 0; i < conv.size(); ++i) {
+                const auto &opf = am.operands[conv[i].first];
+                if (!opf.writes() || opf.kind == AsmOperandKind::MEM) continue;
+                const std::string rd = ctx.dst_of(conv[i].second);
+                ctx.out << "    mov r13, " << (i * 8) << "\n";
+                ctx.out << "    mov " << rd << ", [r15 + r13]\n";
+                ctx.store_spilled(conv[i].second);
+            }
+            ctx.out << "    addsp rsp, " << bytes_tabla << "\n";
+            emit_restore_all_gc_aware(ctx, cpos, salvar);
             break;
         }
         const uint64_t hash = jit::fnv1a64_asm(nasm);

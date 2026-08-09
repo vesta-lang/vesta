@@ -293,6 +293,11 @@ bool build_operands(
                 !t.empty() && fin != nullptr && *fin == '\0' &&
                 (std::isdigit((unsigned char)t[0]) || t[0] == '-' || t[0] == '+');
             if (es_numero) {
+                // Parte del camino nuevo: mientras este detras del interruptor,
+                // lo esta entero.  Que el defecto sea EXACTAMENTE lo de antes es
+                // lo unico que hace comparable una cosa con la otra.
+                if (!elevar_ligados())
+                    return AsmMotivoOpaco::anotar(motivo, insn, "VXA023", {t});
                 ir::AsmMicroOperand op;
                 op.kind = ir::AsmOperandKind::IMM;
                 op.imm = (int64_t)v;

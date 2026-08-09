@@ -14572,6 +14572,10 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
             // nativo si hay ensamblador, o emulacion portable del efecto).
             // Registrar el import para que el linker lo resuelva.  Idempotente.
             out_mod_->register_native_import("vrt", "asm_micro_exec");
+            /* Y el que enhebra los valores: el interprete no reparte registros,
+             * asi que un bloque cuyos operandos son valores del programa se
+             * ejecuta metiendolos antes y sacandolos despues. */
+            out_mod_->register_native_import("vrt", "asm_micro_ops");
             return; // bloque liftado a ASM_MICRO -> NO se emite el INLINE_ASM.
         }
     }

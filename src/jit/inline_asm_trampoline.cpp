@@ -270,11 +270,61 @@ extern "C" uint64_t vrt_asm_micro_exec(uint64_t proc, uint64_t hash,
     return 0;
 }
 
+/**
+ * @brief Ejecuta una @c ASM_MICRO cuyos operandos son VALORES del programa.
+ *
+ * El interprete no reparte registros, asi que los valores no estan donde la
+ * instruccion los espera: hay que meterlos antes y sacarlos despues.  Es lo
+ * mismo que ya se hacia con los bloques opacos, solo que alli los valores se
+ * leen de la variable y aqui llegan en una tabla, porque despues de elevar el
+ * bloque el dato ya no es "la variable X" sino un valor del IR.
+ *
+ * Sin esto, cada instruccion corria con los registros a cero y devolvia lo que
+ * hiciera al vacio.
+ *
+ * @param proc ProcessVM actual.
+ * @param hash Clave del trampolin (texto ya con sus registros puestos).
+ * @param eff Efectos de la base, para emular si no hay ensamblador.
+ * @param tabla Direccion, en memoria de la maquina virtual, de @p n huecos de
+ *        8 bytes: uno por operando, en el orden de la ficha.
+ * @param desc 4 bits por operando con el registro que le toca.
+ * @param n Cuantos operandos hay (maximo 8).
+ * @return 0.
+ */
+extern "C" uint64_t vrt_asm_micro_ops(uint64_t proc, uint64_t hash,
+                                      uint64_t eff, uint64_t tabla,
+                                      uint64_t desc, uint64_t n) {
+    auto *vm = reinterpret_cast<runtime::ProcessVM *>(proc);
+    if (vm == nullptr) return 0;
+    AsmTrampolineFn tramp = lookup_inline_asm_trampoline(hash);
+    if (tramp == nullptr) {
+        // Sin ensamblador: se emula lo que se pueda de la base (una barrera es
+        // una barrera en cualquier maquina) y los valores quedan como estaban.
+        if (eff & 0x8u) std::atomic_thread_fence(std::memory_order_seq_cst);
+        return 0;
+    }
+    const int nops = (int)(n > 8 ? 8 : n);
+    uint64_t *ctx = vm->asm_ctx;
+    for (int i = 0; i < 16; ++i) ctx[i] = 0;
+    for (int i = 0; i < nops; ++i) {
+        const int phys = (int)((desc >> (i * 4)) & 0xF);
+        ctx[phys] = vm->vm_mem.read_u64(tabla + (uint64_t)i * 8);
+    }
+    tramp(ctx);
+    for (int i = 0; i < nops; ++i) {
+        const int phys = (int)((desc >> (i * 4)) & 0xF);
+        vm->vm_mem.write_u64(tabla + (uint64_t)i * 8, ctx[phys]);
+    }
+    return 0;
+}
+
 void register_inline_asm_runner() {
     ffi::register_virtual_fn("vrt", "inline_asm_exec",
                              reinterpret_cast<void *>(&vrt_inline_asm_exec));
     ffi::register_virtual_fn("vrt", "asm_micro_exec",
                              reinterpret_cast<void *>(&vrt_asm_micro_exec));
+    ffi::register_virtual_fn("vrt", "asm_micro_ops",
+                             reinterpret_cast<void *>(&vrt_asm_micro_ops));
 }
 
 void build_and_register_inline_asm_trampolines(
@@ -303,12 +353,17 @@ void build_and_register_inline_asm_trampolines(
                 } else if (ins.op == ir::IrOp::ASM_MICRO &&
                            ins.imm < fn.asm_micros.size()) {
                     const ir::AsmMicro &am = fn.asm_micros[ins.imm];
+                    std::vector<int> phys_tmp;
                     if (am.operands.empty()) {
                         body = &am.tmpl; // sin operandos: verbatim
                     } else if (vx::asm_micro_subst_phys(am, subst)) {
                         body = &subst;   // fisico fijo sustituido
+                    } else if (vx::asm_micro_subst_greedy(am, subst, phys_tmp)) {
+                        // Operandos que son valores del programa: los registros
+                        // los elige la misma funcion que usa el emisor, o el
+                        // texto no coincidiria y no se encontrarian.
+                        body = &subst;
                     }
-                    // operando no fisico (SSA/RA) -> no se trampolinea
                 }
                 if (body == nullptr) continue;
                 const uint64_t hash = fnv1a64_asm(*body);

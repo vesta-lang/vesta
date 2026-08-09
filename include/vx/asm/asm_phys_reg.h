@@ -291,6 +291,57 @@ inline bool asm_micro_subst_phys(const ir::AsmMicro &am, std::string &out) {
 }
 
 /**
+ * @brief Pone registros a los operandos que no tienen, de forma DETERMINISTA.
+ *
+ * El interprete no reparte registros, asi que alguien tiene que elegirlos, y lo
+ * hacen dos sitios distintos: el que emite el codigo y el que prepara la
+ * instruccion para ejecutarla.  Si eligieran distinto, el texto no coincidiria
+ * y no se encontrarian -- se buscan por el hash de ese texto.  Por eso eligen
+ * aqui, una sola vez.
+ *
+ * Se reparte por orden, saltando los que ya estan pedidos por nombre y los que
+ * no son del programa (la pila y el marco).
+ *
+ * @param am Ficha del micro asm.
+ * @param out Recibe el texto con los registros puestos.
+ * @param phys Recibe el registro de cada operando, en el orden de la ficha
+ *        (-1 para los inmediatos, que no llevan).
+ * @return @c false si algun operando no se pudo resolver -- solo la clase
+ *         general entra aqui: el banco ancho no viaja por esta via.
+ */
+inline bool asm_micro_subst_greedy(const ir::AsmMicro &am, std::string &out,
+                                   std::vector<int> &phys) {
+    phys.assign(am.operands.size(), -1);
+    bool usado[16] = {false};
+    usado[4] = usado[5] = true; // la pila y el marco no se reparten
+    for (size_t i = 0; i < am.operands.size(); ++i) {
+        const ir::AsmMicroOperand &op = am.operands[i];
+        if (op.kind == ir::AsmOperandKind::IMM) continue;
+        if (op.regclass != ASM_RC_GP) return false;
+        if (op.fixed_phys >= 0 && op.fixed_phys < 16) {
+            phys[i] = op.fixed_phys;
+            usado[op.fixed_phys] = true;
+        }
+    }
+    for (size_t i = 0; i < am.operands.size(); ++i) {
+        const ir::AsmMicroOperand &op = am.operands[i];
+        if (op.kind == ir::AsmOperandKind::IMM || phys[i] >= 0) continue;
+        int elegido = -1;
+        for (int r = 0; r < 16; ++r)
+            if (!usado[r]) { elegido = r; break; }
+        if (elegido < 0) return false;
+        usado[elegido] = true;
+        phys[i] = elegido;
+    }
+    // Y ahora el texto, con la misma maquinaria de siempre.
+    ir::AsmMicro copia = am;
+    for (size_t i = 0; i < copia.operands.size(); ++i)
+        if (phys[i] >= 0) copia.operands[i].fixed_phys = (int16_t)phys[i];
+    return asm_micro_subst_phys(copia, out);
+}
+
+
+/**
  * @brief Sustituye @c $0,$1,... por el registro GREEDY (por defecto) del binding
  *        @c reg_auto con ese @c ph_index.  Para el INTERP, que no tiene RA: usa
  *        el pick greedy guardado en @c AsmRegBinding::reg (nombre de 64 bits).
