@@ -69,6 +69,7 @@
 #include <cstring>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 
 // Header generado por CMake (cmake/gen_codegen_version.cmake) que define
 // VXI_COMPILER_BUILD_ID con un hash de las fuentes de codegen.  Asi el
@@ -87,6 +88,106 @@ namespace vx {
 // FNV-1a 64-bit.  Identica formula que ModuleGraph::fnv1a_; replicada
 // aqui para evitar dep circular module_resolver -> vxi_format.
 // ---------------------------------------------------------------------------
+namespace {
+
+/**
+ * @brief Nombres que aparecen dentro de un tipo canonico y NO son un tipo de
+ *        usuario: primitivos y constructores del propio lenguaje.
+ *
+ * Lo que no este aqui y tampoco lo defina el modulo se toma por AJENO, que es
+ * el lado seguro: equivocarse hacia aqui solo cuesta recompilar de mas.
+ */
+bool es_nombre_del_lenguaje(const std::string &n) {
+    /* Solo lo que trae el LENGUAJE.  `usize`, `isize`, `byte` y `uintptr` NO
+     * estan: son newtypes que declara `std.types`, o sea tipos de otro modulo,
+     * y darlos por propios seria justo el error peligroso -- una interfaz que
+     * los usa depende de ese modulo y tiene que enterarse si cambia. */
+    static const std::unordered_set<std::string> k = {
+        "void",   "bool",    "char",   "string", "i8",     "i16",    "i32",
+        "i64",    "u8",      "u16",    "u32",    "u64",    "f32",    "f64",
+        "int8_t", "int16_t", "int32_t", "int64_t", "uint8_t", "uint16_t",
+        "uint32_t", "uint64_t", "float", "double", "ptr", "Object", "Any",
+        // Constructores del lenguaje que envuelven a otro tipo.
+        "Optional", "Result", "Array", "unique", "shared", "borrow",
+        "borrow_mut", "gc", "atomic", "fn", "cfn", "VirtualPtr", "Future",
+        "ArrayList", "HashMap", "HashSet", "Queue", "Deque", "TreeMap",
+        "TreeSet", "Stack",
+    };
+    return k.count(n) != 0;
+}
+
+/// @brief Llama a @p ver por cada identificador de un typename canonico.
+template <class F> void por_cada_identificador(const std::string &t, F ver) {
+    size_t i = 0;
+    while (i < t.size()) {
+        const char c = t[i];
+        const bool inicio = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                            c == '_';
+        if (!inicio) { ++i; continue; }
+        size_t j = i;
+        while (j < t.size()) {
+            const char d = t[j];
+            const bool sigue = (d >= 'A' && d <= 'Z') || (d >= 'a' && d <= 'z') ||
+                               (d >= '0' && d <= '9') || d == '_';
+            if (!sigue) break;
+            ++j;
+        }
+        ver(t.substr(i, j - i));
+        i = j;
+    }
+}
+
+/**
+ * @brief La cara publica del modulo, ¿menciona un tipo que no es suyo?
+ *
+ * Si la menciona, el tamano y la forma de ese tipo son parte de lo que ofrece:
+ * quien llame a la funcion tiene que reservar y leer con ese layout.  Entonces
+ * su interfaz SI depende de sus deps y la tabla de dependencias entra en el
+ * hash.  Si se cierra sobre primitivos y sus propios tipos, no.
+ */
+bool interfaz_menciona_tipo_ajeno(const VxiModule &mod) {
+    std::unordered_set<std::string> propios;
+    for (const auto &s : mod.symbols) {
+        switch (s.kind) {
+        case VxiSymbolKind::TYPEDEF_ALIAS:
+        case VxiSymbolKind::TYPEDEF_NEW:
+        case VxiSymbolKind::STRUCT:
+        case VxiSymbolKind::CLASS:
+        case VxiSymbolKind::ENUM:
+            propios.insert(s.name);
+            break;
+        default:
+            break;
+        }
+    }
+    bool ajeno = false;
+    auto revisar = [&](const std::string &t) {
+        if (ajeno || t.empty()) return;
+        por_cada_identificador(t, [&](const std::string &id) {
+            if (ajeno) return;
+            if (es_nombre_del_lenguaje(id)) return;
+            if (propios.count(id) != 0) return;
+            ajeno = true;
+        });
+    };
+    for (const auto &s : mod.symbols) {
+        revisar(s.return_type);
+        for (const auto &p : s.param_types) revisar(p);
+        for (const auto &f : s.fields) revisar(f.type_str);
+        revisar(s.underlying_type);
+        revisar(s.super_class);
+        for (const auto &i : s.interfaces) revisar(i);
+        for (const auto &m : s.methods) {
+            revisar(m.return_type);
+            for (const auto &p : m.param_types) revisar(p);
+        }
+        if (ajeno) break;
+    }
+    return ajeno;
+}
+
+} // namespace
+
 uint64_t vxi_fnv1a(const void *data, size_t len) noexcept {
     constexpr uint64_t OFFSET = 0xCBF29CE484222325ULL;
     constexpr uint64_t PRIME = 0x100000001B3ULL;
@@ -681,19 +782,34 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
      * el `abi_hash` actual de cada uno.  Eso es lo que hace la validacion
      * transitiva, y hacerlo ademas por el hash de la interfaz era contarlo dos
      * veces, mal. */
-    /* SALVEDAD: un modulo que exporta PLANTILLAS genericas exporta su codigo
-     * FUENTE, no una firma cerrada.  Quien la instancia la compila en su propio
-     * modulo, asi que lo que llame la plantilla -- que vive en los deps de
-     * QUIEN LA EXPORTA -- le afecta aunque el no lo importe.  Ahi la tabla de
-     * dependencias SI es parte de lo que se ofrece, y quitarla dejaria servir
-     * una instanciacion hecha contra otra version.  Se paga la propagacion solo
-     * donde hace falta. */
+    /* SALVEDADES, y por eso no es un simple borrado.  Hay dos formas de que lo
+     * que un modulo ofrece dependa DE VERDAD de sus deps:
+     *
+     *   - Exporta PLANTILLAS genericas.  Una plantilla exporta codigo FUENTE, no
+     *     una firma cerrada: quien la instancia la compila en su propio modulo,
+     *     asi que lo que la plantilla llame -- que vive en los deps de QUIEN LA
+     *     EXPORTA -- le afecta aunque el no lo importe.
+     *
+     *   - Sus firmas publicas MENCIONAN un tipo ajeno.  Entonces el tamano y la
+     *     forma de ese tipo son parte de lo que se ofrece: quien llame a la
+     *     funcion necesita reservar y leer con ese layout.  Verificado: con un
+     *     `Punto` de otro modulo en la firma, cambiarle un campo dejaba a un
+     *     consumidor intermedio con el layout viejo.  (No daba un programa mal:
+     *     lo cazaba el analisis de regiones al construir, diciendo que la
+     *     lectura se salia del objeto.  Pero romper la construccion tampoco es
+     *     la respuesta correcta.)
+     *
+     * En los dos casos la tabla de dependencias SI es parte de la interfaz.  En
+     * el resto -- un modulo cuya cara publica se cierra sobre primitivos y sus
+     * propios tipos -- no lo es, y ahi se corta la propagacion. */
     const bool exporta_plantillas = !gen_offs.empty();
+    const bool interfaz_abierta = interfaz_menciona_tipo_ajeno(mod);
+    const bool depende_de_sus_deps = exporta_plantillas || interfaz_abierta;
     uint64_t abi_hash =
-        exporta_plantillas
+        depende_de_sus_deps
             ? vxi_fnv1a(out.data() + HEADER_BYTES, out.size() - HEADER_BYTES)
             : vxi_fnv1a(out.data() + HEADER_BYTES, deps_start - HEADER_BYTES);
-    if (!exporta_plantillas) {
+    if (!depende_de_sus_deps) {
         const uint64_t resto =
             vxi_fnv1a(out.data() + blob_pool_start, out.size() - blob_pool_start);
         abi_hash ^= resto + 0x9E3779B97F4A7C15ULL + (abi_hash << 6) +
