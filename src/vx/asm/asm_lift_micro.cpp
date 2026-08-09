@@ -333,6 +333,9 @@ bool asm_lift_micro(
     // RDI/RSI/RDX/R10/R8/R9; `int` lee EAX+args; `svc` lee X8+X0..X7.
     const std::string arch_s =
         (isa == instr_db::Isa::ARM64) ? "arm64" : "x86_64";
+    // Registros fisicos que el propio bloque ha escrito hasta ahora, como
+    // (clase << 16) | indice.  Leer uno que no este aqui es leer de fuera.
+    std::set<uint32_t> escritos_del_bloque;
     for (const std::string &insn : insns) {
         /* Un operando que todavia es un MARCADOR (`$0`) es una variable del
          * programa a la que el asignador aun no ha dado registro.  Trocear no
@@ -423,6 +426,44 @@ bool asm_lift_micro(
         // no distingue un registro destruido por nombre de uno destruido por
         // ABI.  Tambien para las que no llevan operandos escritos (cpuid).
         if (!anotar_implicitos(arch_s, insn, operands, motivo)) return false;
+
+        /* Un registro que la instruccion LEE y que el bloque no ha escrito
+         * antes viene de fuera, y de fuera no llega.
+         *
+         * El interprete ejecuta cada una de estas en un trampolin propio que
+         * pone los registros generales a cero y ni siquiera toca el banco
+         * ancho, asi que leer algo de fuera del bloque es leer basura.  En el
+         * JIT y en el AOT si llega -- los bytes van dentro de la funcion -- y
+         * esa diferencia entre modos es precisamente lo que no puede pasar.
+         *
+         * Hoy no se notaba porque un bloque elevado no puede comunicar nada al
+         * programa: no acepta operandos ligados ni memoria.  O sea que solo era
+         * correcto por ser inofensivo.  En cuanto se le deje tocar memoria deja
+         * de serlo, asi que se corta aqui y no cuando ya haya dado un resultado
+         * equivocado.
+         *
+         * Esto lo levanta el paso a valores SSA: cuando el operando deje de ser
+         * un nombre de registro y sea un valor, no habra nada que venga "de
+         * fuera" -- lo trae el propio IR. */
+        for (const ir::AsmMicroOperand &op : operands) {
+            if (!op.reads() || op.fixed_phys < 0) continue;
+            const uint32_t clave =
+                ((uint32_t)op.regclass << 16) | (uint32_t)op.fixed_phys;
+            if (escritos_del_bloque.count(clave) != 0) continue;
+            const std::string nom = vx::asm_phys_reg_name(
+                (uint8_t)isa, op.regclass, op.fixed_phys,
+                op.width != 0 ? op.width
+                              : (uint16_t)(op.regclass == vx::ASM_RC_GP ? 64 : 128));
+            return AsmMotivoOpaco::anotar(
+                motivo, insn,
+                "lee " + (nom.empty() ? std::string("un registro") : nom) +
+                    ", que viene de fuera del bloque");
+        }
+        for (const ir::AsmMicroOperand &op : operands) {
+            if (!op.writes() || op.fixed_phys < 0) continue;
+            escritos_del_bloque.insert(((uint32_t)op.regclass << 16) |
+                                       (uint32_t)op.fixed_phys);
+        }
         sems.push_back(std::move(sem));
         ops_per.push_back(std::move(operands));
         tmpl_per.push_back(std::move(tmpl));

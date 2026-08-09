@@ -87,6 +87,14 @@ class Ctx:
     def skip(self, msg):
         self.lines.append(("SKIP", msg))
 
+    def warn(self, msg):
+        """El caso pasa, pero no comprueba lo que dice comprobar.
+
+        Un caso que no puede fallar da un OK que enganya y se pudre en silencio:
+        mejor que lo diga en voz alta cada vez que se ejecuta.
+        """
+        self.lines.append(("WARN", msg))
+
     def fail(self, msg, detail=""):
         """Marca el fallo y aborta el caso (equivalente al `exit 1` del .sh)."""
         self.lines.append(("FAIL", msg))
@@ -749,6 +757,17 @@ def asm_lift_case(tag, label, src, line=None):
         ctx.compile_vx(ctx.src(src), tag + "_op",
                        env={"VESTA_ASM_NO_LIFT": "1"})
         ctx.ok("compilacion %s (elevado y opaco)" % src)
+        # Si el elevado no elevo nada, las dos versiones son el mismo binario y
+        # compararlas no comprueba nada.  Un caso que no puede fallar da un OK
+        # que enganya, asi que se dice en voz alta en lugar de callarlo.
+        try:
+            b1 = open(ctx.path(tag + "_lift.velb"), "rb").read()
+            b2 = open(ctx.path(tag + "_op.velb"), "rb").read()
+            if b1 == b2:
+                ctx.warn("%s: el elevado no elevo nada -- las dos versiones son "
+                         "identicas y la comparacion no tiene mordida" % src)
+        except OSError:
+            pass
         for modo in ("vm", "jit"):
             _, l1 = ctx.run_velb(tag + "_lift", schedulers=1, mode=modo)
             _, l2 = ctx.run_velb(tag + "_op", schedulers=1, mode=modo)
