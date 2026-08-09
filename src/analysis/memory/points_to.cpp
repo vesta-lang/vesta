@@ -135,7 +135,11 @@ struct Resolver {
      * Se suma el offset constante que ya llevara la base (`(buf+8) + i`), que
      * es lo que compone la geometria de una vista.
      */
-    PointsToEntry con_rango(PointsToEntry base, ir::IrValueId sym) {
+    /// @param resta @c true si @p sym se RESTA de la base en vez de sumarse.
+    ///        Un `p - i` esta a la misma distancia que un `p + i`, del otro
+    ///        lado; el intervalo se niega y por eso sus extremos se cruzan.
+    PointsToEntry con_rango(PointsToEntry base, ir::IrValueId sym,
+                            bool resta = false) {
         const int64_t base_off = base.off;
         PointsToEntry e = inexact(base, sym);
         e.off_base = base_off; // la parte que se sabe, aparte de la que no
@@ -147,6 +151,14 @@ struct Resolver {
          * afirma: como offset no significaria lo que parece. */
         int64_t rlo, rhi;
         if (!r.vista_con_signo(rlo, rhi)) return e;
+        if (resta) {
+            // Negar el intervalo cruza sus extremos, y el minimo con signo no
+            // tiene opuesto: ahi no se afirma nada.
+            if (rlo == INT64_MIN || rhi == INT64_MIN) return e;
+            const int64_t nlo = -rhi, nhi = -rlo;
+            rlo = nlo;
+            rhi = nhi;
+        }
         // Con freno: si la suma se desborda, no se afirma el intervalo.
         int64_t lo, hi;
         if (__builtin_add_overflow(base_off, rlo, &lo) ||
@@ -156,6 +168,19 @@ struct Resolver {
         e.off_hi = hi;
         e.off_rango = true;
         return e;
+    }
+
+    /**
+     * @brief @c true si @p v es una DIRECCION por su tipo.
+     *
+     * Hace falta para saber, en una suma o una resta, cual de los dos lados es
+     * la direccion y cual el desplazamiento.  Preguntarlo por "tiene raiz" no
+     * vale: un parametro entero tambien la tiene -- es memoria alcanzable desde
+     * el, por si alguien lo convierte --, y con ese criterio `dst + n` parecia
+     * la suma de dos direcciones.
+     */
+    bool es_direccion(ir::IrValueId v) const {
+        return v < fn.values.size() && fn.values[v].type == ir::IrType::PTR;
     }
 
     /// PHI que se esta resolviendo ahora mismo.  Volver a ella por un arg no es
@@ -344,14 +369,58 @@ struct Resolver {
              * tienen los dos (sumar dos punteros) no hay forma de decir cual
              * manda, y si no la tiene ninguno no hay nada que conservar. */
             {
+                /* Quien es la DIRECCION y quien el desplazamiento lo dice el
+                 * TIPO, no el hecho de tener raiz.  Un parametro entero es
+                 * "memoria alcanzable desde el parametro" igual que uno
+                 * puntero -- por si alguien lo convierte --, asi que mirar solo
+                 * eso hacia que `dst + n` pareciera la suma de DOS direcciones
+                 * y se resolviera como desconocida.  Y `p + n` es el caso
+                 * normal de recorrer un buffer. */
+                const bool a_ptr = es_direccion(d->operands[0]);
+                const bool b_ptr = es_direccion(d->operands[1]);
                 const PointsToEntry a = resolve(d->operands[0]);
                 const PointsToEntry b = resolve(d->operands[1]);
                 const bool a_raiz = a.kind != K::Unknown && a.kind != K::None;
                 const bool b_raiz = b.kind != K::Unknown && b.kind != K::None;
-                if (a_raiz && !b_raiz) return con_rango(a, d->operands[1]);
-                if (b_raiz && !a_raiz) return con_rango(b, d->operands[0]);
+                if (a_raiz && (a_ptr ? !b_ptr : !b_raiz))
+                    return con_rango(a, d->operands[1]);
+                if (b_raiz && (b_ptr ? !a_ptr : !a_raiz))
+                    return con_rango(b, d->operands[0]);
             }
             return unknown();
+        }
+
+        /* --- RESTA: la misma derivacion, hacia el otro lado ---
+         *
+         * `p - k` sigue apuntando al objeto de `p`, igual que `p + k`.  Sin
+         * esto la resta tiraba la raiz entera, y con ella lo que se supiera de
+         * lo demas -- porque lo desconocido ABSORBE el conjunto de efectos.
+         *
+         * No es un caso raro: `dst + n - ancho` es como TODA la libreria de
+         * memoria calcula el segundo tramo de una copia solapada, asi que
+         * `memcpy`, `memset` y sus variantes en asm salian como "tocan
+         * cualquier cosa" por una resta.
+         *
+         * Solo cuenta cuando la raiz esta a la IZQUIERDA: `p - q` (restar dos
+         * punteros) es una distancia, no una direccion, y `k - p` no es una
+         * derivacion de `p`. */
+        case Op::SUB: {
+            if (d->operands.size() != 2) return unknown();
+            int64_t c;
+            const PointsToEntry b = resolve(d->operands[0]);
+            if (b.kind == K::Unknown || b.kind == K::None) return unknown();
+            // base - const: se acumula el desplazamiento con el signo cambiado.
+            if (b.off_exact && const_expr_of(fn, facts, d->operands[1], c)) {
+                int64_t neg;
+                if (!__builtin_sub_overflow(int64_t(0), c, &neg))
+                    return with_offset(b, neg);
+                return unknown();
+            }
+            // base - valor: se conserva la raiz y se acota con SU rango.  Lo
+            // que descarta es restar otra DIRECCION (eso da una distancia, no
+            // una direccion), y eso lo dice el tipo.
+            if (es_direccion(d->operands[1])) return unknown();
+            return con_rango(b, d->operands[1], /*resta=*/true);
         }
 
         // --- GEP: misma raiz, offset NO probado (escala desconocida aqui) ---

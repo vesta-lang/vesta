@@ -196,6 +196,23 @@ const FunctionSummary &EffectAnalysis::summary(const ir::IrModule &mod,
 // robusto: puede hacer cualquier cosa, con el motivo registrado para el reporte).
 namespace {
 struct CallInfo {
+    /**
+     * @brief Los SITIOS de llamada, con sus argumentos.
+     *
+     * El cierre se calcula por NOMBRE, y por nombre no se puede traducir lo que
+     * el llamado dice de sus parametros: `arg#1` de el no es `arg#1` de quien
+     * llama.  Con los argumentos de CADA sitio si -- y es lo que hace que lo
+     * que toca una funcion de tres niveles abajo llegue arriba hablando de la
+     * memoria de aqui, en vez de perderse en "toca algo".
+     */
+    struct Sitio {
+        std::string callee;
+        std::vector<ir::IrValueId> args;
+    };
+    std::vector<Sitio> sitios;
+    /// La funcion donde estan esos sitios, para resolver sus argumentos.
+    const ir::IrFunction *fn = nullptr;
+
     std::vector<std::string> static_callees;
     bool                     dynamic = false; // CALLVIRT/CALLIND/CALLN/...
     /// En AOT, una op que depende del runtime ES una llamada a libvesta_rt.
@@ -210,6 +227,7 @@ struct CallInfo {
 };
 CallInfo callees_of(const ir::IrFunction &fn, const EffectEnv &env) {
     CallInfo ci;
+    ci.fn = &fn;
     const NativeDecls *decls = env.decls;
     for (const ir::IrBlock &b : fn.blocks)
         for (const ir::IrInstr &in : b.instrs) {
@@ -220,8 +238,12 @@ CallInfo callees_of(const ir::IrFunction &fn, const EffectEnv &env) {
             switch (in.op) {
             case ir::IrOp::CALL:
             case ir::IrOp::TAILCALL:
-                if (!in.func_name.empty()) ci.static_callees.push_back(in.func_name);
-                else ci.dynamic = true;
+                if (!in.func_name.empty()) {
+                    ci.static_callees.push_back(in.func_name);
+                    ci.sitios.push_back({in.func_name, in.operands});
+                } else {
+                    ci.dynamic = true;
+                }
                 break;
             /* Una llamada NATIVA con nombre se resuelve como cualquier otra: si
              * la funcion esta en el programa, se ANALIZA -- no se dan por
@@ -427,8 +449,19 @@ ModuleSummary EffectAnalysis::build_summary(
                 comp = AnalysisCompleteness::Conservative;
         };
         if (ci.dynamic) { nc = join(nc, SemanticEffects::top()); raise(); }
-        for (const std::string &callee : ci.static_callees) {
-            auto it = out.fns.find(callee);
+        /* Lo que hace cada llamada, TRADUCIDO a la memoria de aqui.
+         *
+         * Por nombre no se puede: `arg#1` del llamado no es `arg#1` de quien
+         * llama.  Con los argumentos del SITIO si, y eso es lo que hace que un
+         * `memcpy` que reparte a una variante interna siga diciendo, tres
+         * niveles mas arriba, que escribe en lo que le pasaron -- en vez de
+         * perderse en "toca algo".
+         *
+         * Lo que no se pueda traducir (la pila del llamado, su monton) sube a
+         * desconocido, que es lo unico cierto: aqui esos nombres no significan
+         * nada. */
+        for (const CallInfo::Sitio &sitio : ci.sitios) {
+            auto it = out.fns.find(sitio.callee);
             if (it == out.fns.end()) {
                 /* El destino NO esta en el programa: es codigo ajeno de verdad
                  * y no hay nada que analizar, asi que efecto maximo.  Se apunta
@@ -438,7 +471,26 @@ ModuleSummary EffectAnalysis::build_summary(
                 raise();
                 continue;
             }
-            merge_callee(nc, it->second.semantic.closure);
+            const SemanticEffects &ce = it->second.semantic.closure;
+            if (ci.fn != nullptr) {
+                const EfectoEnLlamada e = instanciar_en_llamada(
+                    ce, sitio.args, points_to_of(*ci.fn));
+                SemanticEffects trad = ce;
+                trad.mem.reads = e.lee;
+                trad.mem.writes = e.escribe;
+                if (!e.completo) {
+                    // Habia algo que no se pudo nombrar: se dice, sin tirar lo
+                    // demas por el camino equivocado -- el join lo absorbera si
+                    // hace falta.
+                    trad.mem.reads.add(
+                        AbstractLoc{AbstractLoc::Kind::Unknown, LOC_GENERIC});
+                    trad.mem.writes.add(
+                        AbstractLoc{AbstractLoc::Kind::Unknown, LOC_GENERIC});
+                }
+                nc = join(nc, trad);
+            } else {
+                merge_callee(nc, ce);
+            }
             if (uint8_t(it->second.completeness) > uint8_t(comp))
                 comp = it->second.completeness;
         }
@@ -457,6 +509,24 @@ ModuleSummary EffectAnalysis::build_summary(
             }
             merge_callee(nc, cs->semantic.closure);
             if (uint8_t(cs->completeness) > uint8_t(comp)) comp = cs->completeness;
+        }
+        /* TOPE.  Traducir en cada sitio hace que una funcion recursiva sobre
+         * punteros genere una posicion nueva por vuelta -- `f(p+8)` da p+0,
+         * p+8, p+16... -- y el punto fijo dejaria de terminar.  Pasado el tope
+         * se colapsan las de una misma raiz a "el objeto entero": se pierde
+         * precision, no correccion, y el calculo termina.  Es el limite
+         * DECLARADO que cualquier analisis con punto fijo necesita. */
+        {
+            constexpr size_t kTopeLocs = 64;
+            auto podar = [](LocSet &s) {
+                if (s.is_top || s.locs.size() <= kTopeLocs) return;
+                LocSet out;
+                for (const AbstractLoc &l : s.locs)
+                    out.add(AbstractLoc{l.kind, l.id, 0, 0}); // toda la raiz
+                s = std::move(out);
+            };
+            podar(nc.mem.reads);
+            podar(nc.mem.writes);
         }
         if (!(nc == s.semantic.closure) || comp != s.completeness) {
             s.semantic.closure = nc;
