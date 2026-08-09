@@ -93,8 +93,20 @@ en = "the base '{0}' is not bound to a single value here"
 es = "la base '{0}' no esta ligada a un solo valor aqui"
 
 [VXA018]
-en = "asm: this block stays opaque -- it is not optimized, and what it does is only as known as its instruction table says. It got stuck on '{0}': {1}"
-es = "asm: este bloque se queda opaco -- no se optimiza, y de lo que hace solo se sabe lo que diga su tabla de instrucciones. Se atasco en '{0}': {1}"
+en = "asm: this block stays opaque -- it is not optimized, and what it does is only as known as its instruction table says. The last attempt to turn it into IR got stuck on '{0}' ({1}): {2}"
+es = "asm: este bloque se queda opaco -- no se optimiza, y de lo que hace solo se sabe lo que diga su tabla de instrucciones. El ultimo intento de pasarlo a IR se atasco en '{0}' ({1}): {2}"
+
+[VXA019]
+en = "general-purpose instruction: it can be modelled in IR and simply is not yet"
+es = "instruccion de proposito general: se puede modelar en IR y simplemente aun no lo esta"
+
+[VXA020]
+en = "instruction specific to {0}: it will never be IR, and that is fine -- what it should do is stay as micro asm the IR can analyse, with its effects from the instruction database"
+es = "instruccion especifica de {0}: nunca sera IR, y esta bien -- lo que deberia es quedarse como micro asm que el IR pueda analizar, con sus efectos de la base de instrucciones"
+
+[VXA021]
+en = "the instruction database does not know it, so not even what it does is known: add it to the database"
+es = "la base de instrucciones no la conoce, asi que no se sabe ni lo que hace: anadela a la base"
 
 [VX2001]
 en = "'.' does not reach through a pointer: '{0}' is of type '{1}'. Dereference it first -- (*{0}).{2} -- or index it -- {0}[0].{2}"

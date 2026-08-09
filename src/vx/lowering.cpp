@@ -14714,9 +14714,35 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
          * instrucciones, asi que todo lo que venga despues da por bueno un
          * analisis que no llego.  Eso no sale como un error, sale como una
          * respuesta tranquila y equivocada mas tarde y en otro sitio. */
+        /* De QUE clase es la instruccion, preguntandoselo a la base.  Son tres
+         * cosas distintas y confundirlas ensena a ignorar el aviso:
+         *
+         *   - de proposito general -> se puede modelar en IR y falta hacerlo;
+         *   - especifica de la ISA (AES, vectorial...) -> nunca sera IR, y esta
+         *     bien: lo que tiene que hacer es quedarse como micro asm que el IR
+         *     pueda analizar, con sus efectos de la base;
+         *   - desconocida por la base -> no se sabe ni lo que hace.  Eso si es
+         *     una caja negra, y es lo unico que hay que arreglar en la base.
+         *
+         * La clasificacion sale de la propia base, asi que vale para cualquier
+         * ISA sin escribir aqui ni un nombre de instruccion. */
+        std::string clase;
+        if (!culpable.empty()) {
+            const vx::instr_db::Isa isa_db = vx::isa_actual();
+            const int32_t fid = vx::instr_db::match_asm_line(isa_db, culpable);
+            if (fid < 0) {
+                clase = vx::diag::format("VXA021", {});
+            } else {
+                const std::string rasgo = vx::instr_db::nombre_de_rasgo(
+                    vx::instr_db::isa_set_of(isa_db, fid));
+                clase = rasgo.empty() ? vx::diag::format("VXA019", {})
+                                      : vx::diag::format("VXA020", {rasgo});
+            }
+        }
         diags_.diag(s->body_loc, DiagLevel::WARN, "VXA018",
                     {culpable.empty() ? std::string("(no consta cual)")
                                       : culpable,
+                     clase.empty() ? std::string("sin clasificar") : clase,
                      detalle.empty() ? std::string("no consta el motivo")
                                      : detalle});
     }

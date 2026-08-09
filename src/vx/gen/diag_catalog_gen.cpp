@@ -89,9 +89,12 @@ const CatEntry kEntries[] = {
     {"VXA015", {"the access has no known width: the operand that gives it was chosen by the compiler and its class does not say how many bytes it is", "el acceso no tiene ancho conocido: el operando que lo da lo eligio el compilador y su clase no dice cuantos bytes mide"}},
     {"VXA016", {"the block branches, so what comes after cannot be attributed to a fixed distance from the base", "el bloque salta, asi que lo que viene despues no se puede atribuir a una distancia fija de la base"}},
     {"VXA017", {"the base '{0}' is not bound to a single value here", "la base '{0}' no esta ligada a un solo valor aqui"}},
-    {"VXA018", {"asm: this block stays opaque -- it is not optimized, and what it does is only as known as its instruction table says. It got stuck on '{0}': {1}", "asm: este bloque se queda opaco -- no se optimiza, y de lo que hace solo se sabe lo que diga su tabla de instrucciones. Se atasco en '{0}': {1}"}},
+    {"VXA018", {"asm: this block stays opaque -- it is not optimized, and what it does is only as known as its instruction table says. The last attempt to turn it into IR got stuck on '{0}' ({1}): {2}", "asm: este bloque se queda opaco -- no se optimiza, y de lo que hace solo se sabe lo que diga su tabla de instrucciones. El ultimo intento de pasarlo a IR se atasco en '{0}' ({1}): {2}"}},
+    {"VXA019", {"general-purpose instruction: it can be modelled in IR and simply is not yet", "instruccion de proposito general: se puede modelar en IR y simplemente aun no lo esta"}},
+    {"VXA020", {"instruction specific to {0}: it will never be IR, and that is fine -- what it should do is stay as micro asm the IR can analyse, with its effects from the instruction database", "instruccion especifica de {0}: nunca sera IR, y esta bien -- lo que deberia es quedarse como micro asm que el IR pueda analizar, con sus efectos de la base de instrucciones"}},
+    {"VXA021", {"the instruction database does not know it, so not even what it does is known: add it to the database", "la base de instrucciones no la conoce, asi que no se sabe ni lo que hace: anadela a la base"}},
 };
-const int kEntryCount = 70;
+const int kEntryCount = 73;
 
 } // namespace
 

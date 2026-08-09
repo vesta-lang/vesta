@@ -16,6 +16,13 @@
  * como un error sino como una respuesta tranquila y equivocada, mas tarde y en
  * otro sitio.
  *
+ * OJO con lo que significa: hoy lo rellena el ULTIMO elevado de la cadena, que
+ * no es siempre el que mas cerca estuvo.  El elevado general de x86 modela
+ * bastante mas -- `lea`, por ejemplo, ya se pasa a aritmetica de puntero -- pero
+ * todavia no dice en cual de sus noventa y seis salidas abandono, asi que lo que
+ * se cuenta es el motivo del ultimo intento.  Es cierto, pero puede no ser la
+ * razon mas util; cuando el elevado general tambien hable, se prefiere la suya.
+ *
  * Por eso el elevado no responde solo "no pude": dice EN QUE se atasco.  Sin
  * ese dato el aviso no se puede atender, y un aviso que no se puede atender solo
  * ensena a ignorar los avisos.  Con el, casi siempre es una sola instruccion y
