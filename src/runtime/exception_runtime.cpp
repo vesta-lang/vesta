@@ -46,6 +46,8 @@
 #else
 #include <signal.h>
 #include <csignal>   // std::signal / std::raise
+#include <pthread.h> // limites REALES de la pila del hilo (pthread_getattr_np):
+                     // recorrerla mas alla de su final mata el proceso
 #include <ucontext.h> // estado de la maquina al fallar (el mismo que Windows
                       // entrega en su CONTEXT): sin el, un fallo se cuenta con
                       // menos detalle en Linux que en Windows
@@ -575,6 +577,29 @@ static uint64_t limite_pila_nativa(uint64_t sp) {
     ULONG_PTR bajo = 0, alto = 0;
     GetCurrentThreadStackLimits(&bajo, &alto);
     if (alto != 0 && (uint64_t)alto > sp) return (uint64_t)alto;
+#elif defined(__linux__)
+    /* El final REAL de la pila de este hilo.
+     *
+     * Solo se preguntaba en Windows; en Linux se daba por bueno el tramo de
+     * abajo, que es una SUPOSICION: si al hilo le quedaba menos pila que eso,
+     * recorrerla entera se salia a memoria que no es suya y mataba el proceso
+     * -- justo mientras se explicaba otro fallo, asi que el programa moria sin
+     * llegar a contar el que importaba.  Adivinar hasta donde se puede leer no
+     * vale: o lo dice el sistema, o no se recorre. */
+    pthread_attr_t attr;
+    if (pthread_getattr_np(pthread_self(), &attr) == 0) {
+        void *base = nullptr;
+        size_t tam = 0;
+        const int ok = pthread_attr_getstack(&attr, &base, &tam);
+        pthread_attr_destroy(&attr);
+        if (ok == 0 && base != nullptr && tam != 0) {
+            const uint64_t alto = (uint64_t)(uintptr_t)base + (uint64_t)tam;
+            if (alto > sp) return alto;
+        }
+    }
+    /* Sin respuesta del sistema, no se recorre: mejor una cadena de llamadas
+     * corta que llevarse el proceso por delante al construirla. */
+    return sp;
 #endif
     return sp + kTramo;
 }
@@ -2225,6 +2250,16 @@ static LONG WINAPI vx_av_veh(EXCEPTION_POINTERS *info) {
      * exactamente lo que pasaba en JIT.  El que hay que explicar es el que
      * rompio el programa, no el que provoco el intento de recuperarlo. */
     const bool primero = (proc->pending_av_kind == 0xFFFFFFFFu);
+    if (!primero) {
+        /* Ya se estaba atendiendo un fallo y ha llegado otro: casi seguro,
+         * construyendo el informe del primero.  Desviar otra vez al stub seria
+         * volver al mismo punto de recuperacion, empezar de cero a atender el
+         * primero, fallar de nuevo en el mismo sitio y no salir nunca.  Un
+         * programa colgado sin decir nada es peor que uno que muere diciendolo,
+         * asi que se suelta la recuperacion y el fallo sigue su curso. */
+        proc->av_recovery_active = false;
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
     /* La direccion NATIVA del fallo, antes de tocarla mas abajo para desviar
      * la ejecucion.  En codigo compilado es el unico dato fiable de donde
      * ocurrio: el PC de la maquina virtual no se va actualizando ahi. */
@@ -2341,6 +2376,29 @@ static void posix_signal_handler(int sig, siginfo_t *info, void *ctx) {
         std::raise(sig);
         return;
     }
+    /* Solo el PRIMER fallo cuenta, como en Windows.
+     *
+     * Construir el informe toca memoria -- desensambla el codigo que revento,
+     * recorre la cadena de marcos --, y si eso vuelve a fallar el segundo
+     * fallo pisaba al primero: el programa terminaba diciendo "acceso a memoria
+     * invalido" cuando lo que habia pasado era una instruccion que el
+     * procesador no tiene.  Contar el segundo y callar el primero es contar el
+     * sintoma en vez de la causa. */
+    if (proc->pending_av_kind != 0xFFFFFFFFu) {
+        /* Ya se estaba atendiendo un fallo y ha ocurrido otro: casi seguro,
+         * construyendo el informe del primero.  Volver al mismo punto de
+         * recuperacion seria empezar de cero a atender el primero, fallar otra
+         * vez en el mismo sitio y no salir nunca -- el programa se quedaba
+         * colgado sin decir nada, que es peor que morir diciendolo.
+         *
+         * Asi que se suelta la recuperacion y se deja que el fallo siga su
+         * curso: el sistema termina el proceso y lo cuenta el.  Se pierde el
+         * informe bonito del primero, pero no se pierde el programa. */
+        proc->av_recovery_active = false;
+        std::signal(sig, SIG_DFL);
+        std::raise(sig);
+        return;
+    }
     /* El estado de la maquina al fallar.
      *
      * Aqui se tiraba: el tercer argumento se ignoraba con un `(void)ctx`.  Y es
@@ -2378,17 +2436,6 @@ static void posix_signal_handler(int sig, siginfo_t *info, void *ctx) {
 #else
     (void)ctx;
 #endif
-    /* Solo el PRIMER fallo cuenta, como en Windows.
-     *
-     * Construir el informe toca memoria -- desensambla el codigo que revento,
-     * recorre la cadena de marcos --, y si eso vuelve a fallar el segundo
-     * fallo pisaba al primero: el programa terminaba diciendo "acceso a memoria
-     * invalido" cuando lo que habia pasado era una instruccion que el
-     * procesador no tiene.  Contar el segundo y callar el primero es contar el
-     * sintoma en vez de la causa. */
-    if (proc->pending_av_kind != 0xFFFFFFFFu) {
-        std::longjmp(proc->av_recovery_jmpbuf, 1);
-    }
     // Bug fix 2026-05-23: capturar tambien SIGFPE (div/0).
     if (sig == SIGFPE) {
         proc->pending_av_kind = 1; // DIVIDE_BY_ZERO (o overflow)
