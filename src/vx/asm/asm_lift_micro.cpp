@@ -161,8 +161,7 @@ bool build_operands(
     std::vector<std::string> toks;
     split_insn(insn, mnem, toks);
     if (toks.empty())
-        return AsmMotivoOpaco::anotar(motivo, insn,
-                                     "no se le reconocio ningun operando");
+        return AsmMotivoOpaco::anotar(motivo, insn, "VXA022");
 
     tmpl = mnem;
     for (size_t k = 0; k < toks.size(); ++k) {
@@ -182,10 +181,7 @@ bool build_operands(
             if (phys >= 0) clase = vx::ASM_RC_VEC;
         }
         if (phys < 0)
-            return AsmMotivoOpaco::anotar(
-                motivo, insn,
-                "usa un operando que el elevado aun no pasa a IR (memoria, "
-                "inmediato o coma flotante)");
+            return AsmMotivoOpaco::anotar(motivo, insn, "VXA023");
         ir::AsmMicroOperand op;
         op.kind = ir::AsmOperandKind::REG;
         op.regclass = clase;
@@ -196,10 +192,7 @@ bool build_operands(
         // los backends).  Hoy esos bloques caen al
         // INLINE_ASM, que ya resuelve los bindings en interp/JIT/AOT.
         if (slot_of.find(lower(toks[k])) != slot_of.end())
-            return AsmMotivoOpaco::anotar(
-                motivo, insn,
-                "toca un registro ligado a una variable, y eso todavia se "
-                "resuelve por el camino opaco");
+            return AsmMotivoOpaco::anotar(motivo, insn, "VXA024");
         op.value = ir::IR_NO_VALUE; // fisico opaco (sin SSA)
         /* Rol del operando: lo dice la FORMA, por posicion.
          *
@@ -224,10 +217,7 @@ bool build_operands(
             if (has_reg(sem.writes, cn)) fl |= ir::ASM_OP_WRITE;
         }
         if (fl == 0)
-            return AsmMotivoOpaco::anotar(
-                motivo, insn,
-                "la base de instrucciones no dice si ese operando se lee o se "
-                "escribe");
+            return AsmMotivoOpaco::anotar(motivo, insn, "VXA025");
         op.flags = fl;
         operands.push_back(op);
         tmpl += (k == 0 ? " $" : ", $") + std::to_string(k);
@@ -279,9 +269,7 @@ bool anotar_implicitos(const std::string &arch, const std::string &insn,
                 if (rl == "flags" || rl == "eflags" || rl == "rflags" ||
                     rl == "nzcv" || rl == "memory")
                     continue;
-                return AsmMotivoOpaco::anotar(
-                    motivo, insn,
-                    "toca por convencion un registro que no se supo nombrar: " + r);
+                return AsmMotivoOpaco::anotar(motivo, insn, "VXA026", {r});
             }
             ir::AsmMicroOperand op;
             op.kind = ir::AsmOperandKind::REG;
@@ -306,8 +294,7 @@ bool asm_lift_micro(
     AsmMotivoOpaco *motivo) {
     const std::vector<std::string> insns = instructions(body);
     if (insns.empty())
-        return AsmMotivoOpaco::anotar(motivo, std::string(),
-                                     "el bloque no tiene instrucciones");
+        return AsmMotivoOpaco::anotar(motivo, std::string(), "VXA027");
 
     // Microarq para la semantica: solo usamos los campos SEMaNTICOS (form_id,
     // barrera, mem, flags, reads/writes), no la latencia, asi que cualquier
@@ -357,18 +344,13 @@ bool asm_lift_micro(
                     break;
                 }
             if (hay_marcador)
-                return AsmMotivoOpaco::anotar(
-                    motivo, insn,
-                    "lleva un operando que elige el compilador ($N), y eso "
-                    "todavia se resuelve por el camino opaco");
+                return AsmMotivoOpaco::anotar(motivo, insn, "VXA028");
         }
         instr_db::AsmInsnSem sem =
             instr_db::asm_insn_sem(isa, insn, (uint32_t)ua);
         if (sem.form_id < 0) {        // desconocida por la DB
             anotar_hueco_db(insn, "la base de datos no conoce esta forma");
-            return AsmMotivoOpaco::anotar(
-                motivo, insn,
-                "la base de instrucciones no conoce esta forma");
+            return AsmMotivoOpaco::anotar(motivo, insn, "VXA029");
         }
         // Si la instruccion LEE/ESCRIBE implicitamente un registro que esta
         // LIGADO a una variable Vesta (register(): p.ej. `syscall` con
@@ -395,9 +377,7 @@ bool asm_lift_micro(
                         break;
                     }
             if (binds_implicit)
-                return AsmMotivoOpaco::anotar(
-                    motivo, insn,
-                    "usa de forma implicita un registro ligado a una variable");
+                return AsmMotivoOpaco::anotar(motivo, insn, "VXA030");
         }
         std::vector<ir::AsmMicroOperand> operands;
         std::string tmpl;
@@ -455,9 +435,8 @@ bool asm_lift_micro(
                 op.width != 0 ? op.width
                               : (uint16_t)(op.regclass == vx::ASM_RC_GP ? 64 : 128));
             return AsmMotivoOpaco::anotar(
-                motivo, insn,
-                "lee " + (nom.empty() ? std::string("un registro") : nom) +
-                    ", que viene de fuera del bloque");
+                motivo, insn, "VXA031",
+                {nom.empty() ? std::string("?") : nom});
         }
         for (const ir::AsmMicroOperand &op : operands) {
             if (!op.writes() || op.fixed_phys < 0) continue;

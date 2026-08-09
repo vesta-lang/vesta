@@ -33,6 +33,7 @@
 #define VESTA_VX_ASM_ASM_LIFT_REASON_H
 
 #include <string>
+#include <vector>
 
 namespace vx {
 
@@ -42,10 +43,16 @@ namespace vx {
  *
  * Se rellena solo cuando el elevado falla.  @ref instruccion vacia significa que
  * el fallo no fue de una instruccion concreta (bloque vacio, por ejemplo).
+ *
+ * El motivo se guarda como ENTRADA DEL CATaLOGO (@ref id) con sus parametros,
+ * no como una frase ya escrita: el aviso que lo envuelve se sirve en el idioma
+ * del usuario, y una frase compuesta aqui saldria siempre en el mismo -- media
+ * linea en un idioma dentro de una linea en otro.
  */
 struct AsmMotivoOpaco {
-    std::string instruccion; ///< texto de la instruccion, tal cual se escribio.
-    std::string detalle;     ///< en una frase, que de ella no se supo pasar.
+    std::string instruccion;       ///< texto de la instruccion, tal cual se escribio.
+    std::string id;                ///< entrada del catalogo con el motivo.
+    std::vector<std::string> args; ///< parametros de esa entrada.
 
     /// @c true si consta la instruccion culpable.
     bool consta() const { return !instruccion.empty(); }
@@ -53,10 +60,11 @@ struct AsmMotivoOpaco {
     /// Anota el motivo si hay donde; devuelve false para poder escribir
     /// `return anotar(...)` en el punto exacto en el que se abandona.
     static bool anotar(AsmMotivoOpaco *destino, const std::string &instruccion,
-                       const std::string &detalle) {
+                       const char *id, std::vector<std::string> args = {}) {
         if (destino != nullptr && !destino->consta()) {
             destino->instruccion = instruccion;
-            destino->detalle = detalle;
+            destino->id = id != nullptr ? id : "";
+            destino->args = std::move(args);
         }
         return false;
     }

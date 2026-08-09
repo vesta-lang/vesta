@@ -14722,7 +14722,11 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         std::string detalle;
         if (motivo_opaco.consta()) {
             culpable = motivo_opaco.instruccion;
-            detalle = motivo_opaco.detalle;
+            // El motivo viene como entrada del catalogo con sus parametros, no
+            // como frase hecha: asi sale en el mismo idioma que el aviso que lo
+            // envuelve, y no media linea en uno dentro de una linea en otro.
+            if (!motivo_opaco.id.empty())
+                detalle = vx::diag::format(motivo_opaco.id, motivo_opaco.args);
         }
         /* Se avisa SIEMPRE... salvo cuando la opacidad se PIDIO.
          *
@@ -14766,10 +14770,10 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         }
         if (!opacidad_pedida)
         diags_.diag(s->body_loc, DiagLevel::WARN, "VXA018",
-                    {culpable.empty() ? std::string("(no consta cual)")
+                    {culpable.empty() ? vx::diag::format("VXA032", {})
                                       : culpable,
-                     clase.empty() ? std::string("sin clasificar") : clase,
-                     detalle.empty() ? std::string("no consta el motivo")
+                     clase.empty() ? vx::diag::format("VXA033", {}) : clase,
+                     detalle.empty() ? vx::diag::format("VXA034", {})
                                      : detalle});
     }
 

@@ -108,6 +108,61 @@ es = "instruccion especifica de {0}: nunca sera IR, y esta bien -- lo que deberi
 en = "the instruction database does not know it, so not even what it does is known: add it to the database"
 es = "la base de instrucciones no la conoce, asi que no se sabe ni lo que hace: anadela a la base"
 
+# Por que se atasco el intento de pasar un bloque asm a IR.  Van dentro de
+# VXA018 como {2}: son el final de la frase, no oraciones completas.
+
+[VXA022]
+en = "no operand of it was recognised"
+es = "no se le reconocio ningun operando"
+
+[VXA023]
+en = "it uses an operand the lift does not turn into IR yet (memory, immediate or floating point)"
+es = "usa un operando que el elevado aun no pasa a IR (memoria, inmediato o coma flotante)"
+
+[VXA024]
+en = "it touches a register bound to a variable, and that is still resolved by the opaque path"
+es = "toca un registro ligado a una variable, y eso todavia se resuelve por el camino opaco"
+
+[VXA025]
+en = "the instruction database does not say whether that operand is read or written"
+es = "la base de instrucciones no dice si ese operando se lee o se escribe"
+
+[VXA026]
+en = "by convention it touches '{0}', a register that could not be named"
+es = "toca por convencion '{0}', un registro que no se supo nombrar"
+
+[VXA027]
+en = "the block has no instructions"
+es = "el bloque no tiene instrucciones"
+
+[VXA028]
+en = "it carries an operand the compiler picks ($N), and that is still resolved by the opaque path"
+es = "lleva un operando que elige el compilador ($N), y eso todavia se resuelve por el camino opaco"
+
+[VXA029]
+en = "the instruction database does not know this form"
+es = "la base de instrucciones no conoce esta forma"
+
+[VXA030]
+en = "it implicitly uses a register bound to a variable"
+es = "usa de forma implicita un registro ligado a una variable"
+
+[VXA031]
+en = "it reads {0}, which comes from outside the block"
+es = "lee {0}, que viene de fuera del bloque"
+
+[VXA032]
+en = "(which one is not on record)"
+es = "(no consta cual)"
+
+[VXA033]
+en = "unclassified"
+es = "sin clasificar"
+
+[VXA034]
+en = "the reason is not on record"
+es = "no consta el motivo"
+
 [VX2001]
 en = "'.' does not reach through a pointer: '{0}' is of type '{1}'. Dereference it first -- (*{0}).{2} -- or index it -- {0}[0].{2}"
 es = "'.' no atraviesa un puntero: '{0}' es de tipo '{1}'. Desreferencialo primero -- (*{0}).{2} -- o indexalo -- {0}[0].{2}"
