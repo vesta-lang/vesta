@@ -223,11 +223,24 @@ inline bool asm_micro_subst_phys(const ir::AsmMicro &am, std::string &out) {
         }
         if (!any || idx >= am.operands.size()) return false; // $ suelto / fuera
         const ir::AsmMicroOperand &op = am.operands[idx];
-        if (op.kind != ir::AsmOperandKind::REG || op.fixed_phys < 0)
-            return false; // MEM/IMM o no fisico
+        // Un inmediato es el numero: no hay registro que poner.
+        if (op.kind == ir::AsmOperandKind::IMM) {
+            out += std::to_string(op.imm);
+            i = j;
+            continue;
+        }
+        if (op.fixed_phys < 0) return false; // lo elige el asignador, aqui no hay
         std::string name =
             asm_phys_reg_name(am.isa, op.regclass, op.fixed_phys, op.width);
         if (name.empty()) return false;
+        /* Una direccion se nombra entera: el registro base es lo que se
+         * sustituye, y el desplazamiento viaja con el operando.  El texto no
+         * lleva los corchetes -- los pone la plantilla -- solo lo de dentro. */
+        if (op.kind == ir::AsmOperandKind::MEM) {
+            out += name;
+            i = j;
+            continue;
+        }
         out += name;
         i = j;
     }

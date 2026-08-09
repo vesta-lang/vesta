@@ -86,6 +86,24 @@ uint8_t pack_eff(const instr_db::AsmInsnSem &sem) {
     return e;
 }
 
+/**
+ * @brief ¿Se elevan tambien los bloques cuyos operandos son variables del
+ *        programa?
+ *
+ * Un operando ligado con @c register() no es un registro opaco: es una variable,
+ * y lo que tiene que viajar es su VALOR.  Mientras los tres modos no sepan
+ * resolverlo -- el asignador dandole registro, el interprete metiendolo y
+ * sacandolo del bloque -- el camino nuevo se pide a mano.  Sin esto el elevado
+ * no llega a ningun bloque real: TODOS los del corpus tienen ligaduras.
+ */
+bool elevar_ligados() {
+    static const bool v = [] {
+        const char *e = std::getenv("VESTA_ASM_LIFT_SSA");
+        return e != nullptr && e[0] != '\0' && e[0] != '0';
+    }();
+    return v;
+}
+
 /// Minusculas de @p s.
 std::string lower(const std::string &s) {
     std::string o;
@@ -152,9 +170,92 @@ void split_insn(const std::string &insn, std::string &mnem,
 /// plantilla con @c $N a partir de la linea + la semantica de la DB.  Devuelve
 /// @c false si algun operando NO es un registro GP nombrable (MEM/IMM/FP/VEC ->
 ///) -> el llamador emite @c INLINE_ASM.
+/**
+ * @brief El operando @c $N del cuerpo, si lo es, y su ligadura.
+ *
+ * @return El binding, o @c nullptr si @p tok no es un marcador.
+ */
+const ir::AsmRegBinding *
+binding_de_marcador(const std::string &tok,
+                    const std::vector<ir::AsmRegBinding> &bindings) {
+    if (tok.size() < 2 || tok[0] != '$') return nullptr;
+    if (tok.find_first_not_of("0123456789", 1) != std::string::npos) return nullptr;
+    const int idx = std::atoi(tok.c_str() + 1);
+    for (const ir::AsmRegBinding &b : bindings)
+        if (b.reg_auto && b.ph_index == idx) return &b;
+    return nullptr;
+}
+
+/**
+ * @brief Descompone @c "[$N + disp]" en el marcador y el desplazamiento.
+ *
+ * Es la forma que deja el lowering cuando el programador escribe una direccion
+ * a partir de una variable, y son 102 de los 113 bloques del corpus: casi todo
+ * el ensamblador real accede a memoria por un puntero que le pasa el programa.
+ *
+ * Solo esta forma -- base mas desplazamiento constante -- porque es la unica en
+ * la que se sabe exactamente que direccion se toca.  Con indice y escala la
+ * direccion depende de otro valor, y eso es otra conversacion.
+ *
+ * @param tok Token completo, corchetes incluidos.
+ * @param marcador Recibe el @c "$N".
+ * @param disp Recibe el desplazamiento (0 si no lleva).
+ * @return @c false si no es esa forma.
+ */
+bool partir_memoria_marcador(const std::string &tok, std::string &marcador,
+                             int64_t &disp) {
+    if (tok.size() < 3 || tok.front() != '[' || tok.back() != ']') return false;
+    std::string in = trim(tok.substr(1, tok.size() - 2));
+    disp = 0;
+    size_t sig = in.find_first_of("+-");
+    if (sig == std::string::npos) {
+        marcador = in;
+    } else {
+        marcador = trim(in.substr(0, sig));
+        std::string resto = trim(in.substr(sig + 1));
+        if (resto.empty()) return false;
+        /* El desplazamiento puede traer su propio signo: el lowering escribe
+         * `[$0 + -0x40]`, con el signo del numero aparte del de la suma.  Se
+         * combinan los dos.  Rechazarlo por el segundo signo dejaba fuera un
+         * tercio de los accesos, todos los que van hacia atras. */
+        int signo = (in[sig] == '-') ? -1 : 1;
+        while (!resto.empty() && (resto[0] == '+' || resto[0] == '-')) {
+            if (resto[0] == '-') signo = -signo;
+            resto = trim(resto.substr(1));
+        }
+        // Un operador mas alla del numero significa indice o escala.
+        if (resto.find_first_of("+-*") != std::string::npos) return false;
+        char *fin = nullptr;
+        const long long v = std::strtoll(resto.c_str(), &fin, 0);
+        if (fin == nullptr || *fin != '\0') return false;
+        disp = (int64_t)v * signo;
+    }
+    return marcador.size() >= 2 && marcador[0] == '$' &&
+           marcador.find_first_not_of("0123456789", 1) == std::string::npos;
+}
+
+/// Ancho en bits del operando que declaro el programador ("reg" -> el del tipo).
+uint16_t ancho_declarado(const ir::AsmRegBinding &b) {
+    if (b.reg_class == "zmm") return 512;
+    if (b.reg_class == "ymm") return 256;
+    if (b.reg_class == "xmm") return 128;
+    switch (b.type) {
+    case ir::IrType::I8:
+    case ir::IrType::U8:
+    case ir::IrType::BOOL: return 8;
+    case ir::IrType::I16:
+    case ir::IrType::U16: return 16;
+    case ir::IrType::I32:
+    case ir::IrType::U32:
+    case ir::IrType::F32: return 32;
+    default: return 64;
+    }
+}
+
 bool build_operands(
     instr_db::Isa isa, const std::string &insn, const instr_db::AsmInsnSem &sem,
     const std::unordered_map<std::string, ir::IrValueId> &slot_of,
+    const std::vector<ir::AsmRegBinding> &bindings,
     std::vector<ir::AsmMicroOperand> &operands, std::string &tmpl, AsmMotivoOpaco *motivo) {
     operands.clear();
     std::string mnem;
@@ -165,6 +266,93 @@ bool build_operands(
 
     tmpl = mnem;
     for (size_t k = 0; k < toks.size(); ++k) {
+        /* Un operando `$N` es una variable del programa a la que todavia no se
+         * le ha dado registro: el programador escribio la CLASE y dejo elegir al
+         * compilador.  Es, literalmente, un pseudo-registro -- y es el 87% de
+         * los bloques del corpus, asi que mientras no entre por aqui el elevado
+         * no llega a casi ningun asm real.
+         *
+         * No se le pone fisico: se queda a -1 y lo reparte el asignador, que es
+         * quien puede.  Lo que si lleva es el VALOR, que es lo que hace que el
+         * dato entre y salga del bloque. */
+        /* La otra cara de lo mismo: una direccion formada a partir de una
+         * variable, `[$0 + 8]`.  El operando es memoria y la BASE es el valor;
+         * el desplazamiento es constante y viaja con el.  Aqui se rompio el
+         * primer intento: trataba la base como un registro con nombre, y la
+         * base es un marcador -- el nombre no existe todavia. */
+        /* Un inmediato es un numero escrito en el propio asm: no depende de
+         * nada y no hay a quien preguntarle.  Va en la ficha como operando
+         * para que la lista siga cuadrando con las posiciones de la forma. */
+        {
+            const std::string &t = toks[k];
+            char *fin = nullptr;
+            const long long v = std::strtoll(t.c_str(), &fin, 0);
+            const bool es_numero =
+                !t.empty() && fin != nullptr && *fin == '\0' &&
+                (std::isdigit((unsigned char)t[0]) || t[0] == '-' || t[0] == '+');
+            if (es_numero) {
+                ir::AsmMicroOperand op;
+                op.kind = ir::AsmOperandKind::IMM;
+                op.imm = (int64_t)v;
+                op.fixed_phys = -1;
+                op.value = ir::IR_NO_VALUE;
+                op.flags = ir::ASM_OP_READ;
+                operands.push_back(op);
+                tmpl += (k == 0 ? " $" : ", $") + std::to_string(k);
+                continue;
+            }
+        }
+        std::string marc;
+        int64_t disp = 0;
+        const ir::AsmRegBinding *bmem = nullptr;
+        if (partir_memoria_marcador(toks[k], marc, disp))
+            bmem = binding_de_marcador(marc, bindings);
+        if (bmem != nullptr) {
+            if (!elevar_ligados())
+                return AsmMotivoOpaco::anotar(motivo, insn, "VXA023", {toks[k]});
+            if (bmem->is_vector) // una direccion no se forma con el banco ancho
+                return AsmMotivoOpaco::anotar(motivo, insn, "VXA023", {toks[k]});
+            ir::AsmMicroOperand op;
+            op.kind = ir::AsmOperandKind::MEM;
+            op.regclass = vx::ASM_RC_GP; // clase de la BASE
+            op.width = 64;               // una direccion, no el dato
+            op.fixed_phys = -1;
+            op.value = bmem->alloca_value;
+            op.imm = disp;
+            /* La BASE siempre se lee: hay que tenerla para formar la direccion,
+             * escriba la instruccion en esa memoria o no.  Que la MEMORIA se lea
+             * o se escriba es otra cosa, y va en el byte de efectos. */
+            op.flags = ir::ASM_OP_READ;
+            operands.push_back(op);
+            tmpl += (k == 0 ? " [$" : ", [$") + std::to_string(k);
+            if (disp != 0) {
+                tmpl += (disp > 0 ? " + " : " - ");
+                tmpl += std::to_string(disp > 0 ? disp : -disp);
+            }
+            tmpl += "]";
+            continue;
+        }
+        if (const ir::AsmRegBinding *b = binding_de_marcador(toks[k], bindings)) {
+            if (!elevar_ligados())
+                return AsmMotivoOpaco::anotar(motivo, insn, "VXA028");
+            ir::AsmMicroOperand op;
+            op.kind = ir::AsmOperandKind::REG;
+            op.regclass = b->is_vector ? vx::ASM_RC_VEC : vx::ASM_RC_GP;
+            op.width = ancho_declarado(*b);
+            op.fixed_phys = -1; // lo elige el asignador
+            op.value = b->alloca_value;
+            bool lee = false, escribe = false;
+            uint8_t fl = 0;
+            if (instr_db::operando_explicito(isa, sem.form_id, k, lee, escribe)) {
+                if (lee) fl |= ir::ASM_OP_READ;
+                if (escribe) fl |= ir::ASM_OP_WRITE;
+            }
+            if (fl == 0) return AsmMotivoOpaco::anotar(motivo, insn, "VXA025");
+            op.flags = fl;
+            operands.push_back(op);
+            tmpl += (k == 0 ? " $" : ", $") + std::to_string(k);
+            continue;
+        }
         uint16_t w = 0;
         uint8_t clase = vx::ASM_RC_GP;
         int phys = vx::asm_x86_gp_index(toks[k], &w);
@@ -180,20 +368,38 @@ bool build_operands(
             phys = vx::asm_x86_vec_index(toks[k], &w);
             if (phys >= 0) clase = vx::ASM_RC_VEC;
         }
-        if (phys < 0)
-            return AsmMotivoOpaco::anotar(motivo, insn, "VXA023");
+        if (phys < 0) {
+            /* Una instruccion de salto no se atasca en un operando: es que el
+             * micro asm modela INSTRUCCIONES, y el flujo de control no es de una
+             * instruccion, es del grafo.  De eso se ocupa el elevado general.
+             * Decirlo como "operando que no pasa a IR" manda a arreglar donde no
+             * es. */
+            const std::string m = lower(mnem);
+            if (m == "jmp" || m == "call" || m == "loop" ||
+                (m.size() >= 2 && m[0] == 'j'))
+                return AsmMotivoOpaco::anotar(motivo, insn, "VXA035", {toks[k]});
+            return AsmMotivoOpaco::anotar(motivo, insn, "VXA023", {toks[k]});
+        }
         ir::AsmMicroOperand op;
         op.kind = ir::AsmOperandKind::REG;
         op.regclass = clase;
         op.width = w;
         op.fixed_phys = (int16_t)phys; // fisico fijo del texto (constraint RA)
-        // Un registro LIGADO a una variable Vesta (register()) necesita
-        // threading SSA + el asignador (constraint en el RA + marshalling en
-        // los backends).  Hoy esos bloques caen al
-        // INLINE_ASM, que ya resuelve los bindings en interp/JIT/AOT.
-        if (slot_of.find(lower(toks[k])) != slot_of.end())
-            return AsmMotivoOpaco::anotar(motivo, insn, "VXA024");
-        op.value = ir::IR_NO_VALUE; // fisico opaco (sin SSA)
+        /* Un registro LIGADO con `register()` no es un registro opaco: es una
+         * variable del programa, y lo que tiene que viajar es su VALOR.  El
+         * registro que escribio el usuario se conserva como PIN -- lo pidio por
+         * algo, y muchas veces es una convencion (el numero de llamada al
+         * sistema va en rax) -- pero el valor va por el IR, que es lo que
+         * permite que el interprete lo meta y lo saque del bloque y que el
+         * asignador sepa que ese registro esta ocupado. */
+        const auto lig = slot_of.find(lower(toks[k]));
+        if (lig != slot_of.end()) {
+            if (!elevar_ligados())
+                return AsmMotivoOpaco::anotar(motivo, insn, "VXA024");
+            op.value = lig->second;
+        } else {
+            op.value = ir::IR_NO_VALUE; // fisico opaco (sin SSA)
+        }
         /* Rol del operando: lo dice la FORMA, por posicion.
          *
          * Se estaba deduciendo buscando el nombre del registro en las listas de
@@ -332,22 +538,62 @@ bool asm_lift_micro(
          * casa una forma que no es y la instruccion acaba pareciendo que no
          * lee ni escribe registros.  El guardia de mas abajo no lo cubre --
          * ese busca el NOMBRE del registro, y aqui todavia no hay ninguno. */
+        /* La base de instrucciones clasifica una linea por sus operandos, y un
+         * marcador no lo es: con `$0` dentro casa una forma que no es, y la
+         * instruccion acaba pareciendo que no lee ni escribe registros.
+         *
+         * Se le pregunta, entonces, por una linea EQUIVALENTE: el marcador
+         * sustituido por un registro de su misma clase y ancho.  Cual sea da
+         * igual -- la forma depende de la clase, no del numero -- y el registro
+         * de verdad lo elegira el asignador.  Antes de esto el bloque se
+         * abandonaba aqui sin llegar a preguntar. */
+        std::string consulta = insn;
         {
             std::string mnem_ph;
             std::vector<std::string> toks_ph;
             split_insn(insn, mnem_ph, toks_ph);
-            bool hay_marcador = false;
-            for (const std::string &t : toks_ph)
-                if (t.size() >= 2 && t[0] == '$' &&
-                    t.find_first_not_of("0123456789", 1) == std::string::npos) {
-                    hay_marcador = true;
-                    break;
+            for (const std::string &t : toks_ph) {
+                // Una direccion se le presenta como direccion: el marcador de la
+                // base por un registro cualquiera, el resto igual.
+                std::string mm;
+                int64_t dd = 0;
+                if (partir_memoria_marcador(t, mm, dd) &&
+                    binding_de_marcador(mm, fn.asm_reg_bindings) != nullptr) {
+                    if (!elevar_ligados())
+                        return AsmMotivoOpaco::anotar(motivo, insn, "VXA023", {t});
+                    std::string rep = "[rax";
+                    if (dd != 0) {
+                        rep += (dd > 0 ? " + " : " - ");
+                        rep += std::to_string(dd > 0 ? dd : -dd);
+                    }
+                    rep += "]";
+                    const size_t p = consulta.find(t);
+                    if (p != std::string::npos) consulta.replace(p, t.size(), rep);
+                    continue;
                 }
-            if (hay_marcador)
-                return AsmMotivoOpaco::anotar(motivo, insn, "VXA028");
+                const ir::AsmRegBinding *b =
+                    binding_de_marcador(t, fn.asm_reg_bindings);
+                if (b == nullptr) {
+                    // Marcador sin ligadura: no se sabe ni de que clase es.
+                    if (t.size() >= 2 && t[0] == '$' &&
+                        t.find_first_not_of("0123456789", 1) == std::string::npos)
+                        return AsmMotivoOpaco::anotar(motivo, insn, "VXA028");
+                    continue;
+                }
+                if (!elevar_ligados())
+                    return AsmMotivoOpaco::anotar(motivo, insn, "VXA028");
+                const std::string rep = vx::asm_phys_reg_name(
+                    (uint8_t)isa,
+                    b->is_vector ? vx::ASM_RC_VEC : vx::ASM_RC_GP, 0,
+                    ancho_declarado(*b));
+                if (rep.empty())
+                    return AsmMotivoOpaco::anotar(motivo, insn, "VXA028");
+                const size_t p = consulta.find(t);
+                if (p != std::string::npos) consulta.replace(p, t.size(), rep);
+            }
         }
         instr_db::AsmInsnSem sem =
-            instr_db::asm_insn_sem(isa, insn, (uint32_t)ua);
+            instr_db::asm_insn_sem(isa, consulta, (uint32_t)ua);
         if (sem.form_id < 0) {        // desconocida por la DB
             anotar_hueco_db(insn, "la base de datos no conoce esta forma");
             return AsmMotivoOpaco::anotar(motivo, insn, "VXA029");
@@ -399,7 +645,8 @@ bool asm_lift_micro(
                 anotar_hueco_db(insn, "la forma esta en la base de datos pero "
                                       "no dice que registros lee o escribe");
             }
-            if (!build_operands(isa, insn, sem, slot_of, operands, tmpl, motivo))
+            if (!build_operands(isa, insn, sem, slot_of, fn.asm_reg_bindings,
+                                operands, tmpl, motivo))
                 return false; // build_operands ya dejo dicho el motivo
         }
         // Lo que la instruccion toca por convencion cuenta igual: el asignador
@@ -427,6 +674,8 @@ bool asm_lift_micro(
          * fuera" -- lo trae el propio IR. */
         for (const ir::AsmMicroOperand &op : operands) {
             if (!op.reads() || op.fixed_phys < 0) continue;
+            // Un operando ligado SI llega: su valor entra por el IR.
+            if (op.value != ir::IR_NO_VALUE) continue;
             const uint32_t clave =
                 ((uint32_t)op.regclass << 16) | (uint32_t)op.fixed_phys;
             if (escritos_del_bloque.count(clave) != 0) continue;
@@ -463,6 +712,12 @@ bool asm_lift_micro(
         in.dst = ir::IR_NO_VALUE;
         in.imm = fn.asm_micros.size();
         in.source_line = line;
+        /* Los valores que la instruccion toca se declaran como operandos de la
+         * instruccion IR, no solo dentro de la ficha.  Los pases miran los
+         * operandos: un valor que solo consta en la ficha no lo ve nadie, y el
+         * primer pase que limpie lo que no se usa se lo lleva por delante. */
+        for (const ir::AsmMicroOperand &op : am.operands)
+            if (op.value != ir::IR_NO_VALUE) in.operands.push_back(op.value);
         fn.asm_micros.push_back(std::move(am));
         fn.append(block, std::move(in));
     }

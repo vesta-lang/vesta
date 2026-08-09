@@ -94,7 +94,7 @@ const CatEntry kEntries[] = {
     {"VXA020", {"instruction specific to {0}: it will never be IR, and that is fine -- what it should do is stay as micro asm the IR can analyse, with its effects from the instruction database", "instruccion especifica de {0}: nunca sera IR, y esta bien -- lo que deberia es quedarse como micro asm que el IR pueda analizar, con sus efectos de la base de instrucciones"}},
     {"VXA021", {"the instruction database does not know it, so not even what it does is known: add it to the database", "la base de instrucciones no la conoce, asi que no se sabe ni lo que hace: anadela a la base"}},
     {"VXA022", {"no operand of it was recognised", "no se le reconocio ningun operando"}},
-    {"VXA023", {"it uses an operand the lift does not turn into IR yet (memory, immediate or floating point)", "usa un operando que el elevado aun no pasa a IR (memoria, inmediato o coma flotante)"}},
+    {"VXA023", {"it uses the operand '{0}', which the lift does not turn into IR yet", "usa el operando '{0}', que el elevado aun no pasa a IR"}},
     {"VXA024", {"it touches a register bound to a variable, and that is still resolved by the opaque path", "toca un registro ligado a una variable, y eso todavia se resuelve por el camino opaco"}},
     {"VXA025", {"the instruction database does not say whether that operand is read or written", "la base de instrucciones no dice si ese operando se lee o se escribe"}},
     {"VXA026", {"by convention it touches '{0}', a register that could not be named", "toca por convencion '{0}', un registro que no se supo nombrar"}},
@@ -106,8 +106,9 @@ const CatEntry kEntries[] = {
     {"VXA032", {"(which one is not on record)", "(no consta cual)"}},
     {"VXA033", {"unclassified", "sin clasificar"}},
     {"VXA034", {"the reason is not on record", "no consta el motivo"}},
+    {"VXA035", {"it is a jump ('{0}'): control flow is the IR's, not one instruction's -- that is for the general lift, which builds the graph", "es un salto ('{0}'): el flujo de control lo lleva el IR, no una instruccion suelta -- eso es del elevado general, que construye el grafo"}},
 };
-const int kEntryCount = 86;
+const int kEntryCount = 87;
 
 } // namespace
 
