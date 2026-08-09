@@ -12,6 +12,14 @@
 // lo dice --, y las `_aligned` reciben un puntero alineado de verdad: su asm usa
 // `movdqa`/`vmovdqa`, que no va mas lento con una direccion torcida, FALLA.
 //
+// Los tamanos NO son arbitrarios: las variantes "grandes" y las de flujo
+// trabajan por bloques de 512 bytes y tocan mas alla de los `n` pedidos, por
+// diseno.  Pedirles menos que un bloque, o darles un buffer justo, hace que
+// escriban fuera -- y lo que hay detras es la siguiente variable.  Aqui costo
+// encontrarlo: parecia un fallo del motor (el interprete devolvia un puntero en
+// vez de la cuenta y el JIT moria en seco) y era el llamante pidiendo mal.  Por
+// eso los buffers son de 16 KiB y cada variante recibe al menos su bloque.
+//
 // Cuenta cuantas comprobo y lo devuelve, asi que saltarse una por un rasgo que
 // falte cambia el numero: por eso el codigo de salida se compara contra lo que
 // esta maquina puede ejecutar, no contra una constante.
@@ -28,8 +36,8 @@ u8 patron(i64 i) {
 
 // Buffers estaticos grandes: las variantes `big`/`streaming` piden 1 KiB.
 // Se reservan de sobra para poder alinear dentro sin salirse.
-u8[4096] g_origen;
-u8[4096] g_destino;
+u8[16384] g_origen;
+u8[16384] g_destino;
 
 // Prepara origen con el patron y destino a cero, y devuelve el desplazamiento
 // que deja `&g_destino[off]` alineado a `alin` bytes.
@@ -42,7 +50,7 @@ i64 alineado_en(u8* base, i64 alin) {
 
 void preparar() {
     i64 i = 0;
-    while (i < 4096) {
+    while (i < 16384) {
         g_origen[i] = patron(i);
         g_destino[i] = 0;
         i = i + 1;
@@ -77,57 +85,70 @@ i32 main() {
     bool erms = (rasgos & std.memory.x86_64.BIT_ERMS) != 0;
 
     i64 ok = 0;
+    // Cuantas comprobaciones LLEGAN a ejecutarse en esta maquina.
+    i64 esperadas = 0;
 
     // --- copia, tamano pequeno (65..128) --------------------------------
     preparar();
     std.memory.x86_64.memcpy_small_sse2(&g_destino[0], &g_origen[0], (usize) 96);
+    esperadas = esperadas + 1;
     ok = ok + copia_bien(0, 0, 96);
     if (avx2) {
         preparar();
         std.memory.x86_64.memcpy_small_avx2(&g_destino[0], &g_origen[0], (usize) 96);
+        esperadas = esperadas + 1;
         ok = ok + copia_bien(0, 0, 96);
     }
     if (avx512) {
         preparar();
         std.memory.x86_64.memcpy_small_avx512(&g_destino[0], &g_origen[0], (usize) 96);
+        esperadas = esperadas + 1;
         ok = ok + copia_bien(0, 0, 96);
     }
 
     // --- copia, tamano medio --------------------------------------------
     preparar();
     std.memory.x86_64.memcpy_medium_sse2(&g_destino[0], &g_origen[0], (usize) 200);
+    esperadas = esperadas + 1;
     ok = ok + copia_bien(0, 0, 200);
     if (avx2) {
         preparar();
         std.memory.x86_64.memcpy_medium_avx2(&g_destino[0], &g_origen[0], (usize) 300);
+        esperadas = esperadas + 1;
         ok = ok + copia_bien(0, 0, 300);
     }
     if (avx512) {
         preparar();
         std.memory.x86_64.memcpy_medium_avx512(&g_destino[0], &g_origen[0], (usize) 600);
+        esperadas = esperadas + 1;
         ok = ok + copia_bien(0, 0, 600);
     }
 
     // --- copia, tamano grande y streaming --------------------------------
     preparar();
-    std.memory.x86_64.memcpy_big_sse2(&g_destino[0], &g_origen[0], (usize) 300);
-    ok = ok + copia_bien(0, 0, 300);
+    std.memory.x86_64.memcpy_big_sse2(&g_destino[0], &g_origen[0], (usize) 1024);
+    esperadas = esperadas + 1;
+    ok = ok + copia_bien(0, 0, 1024);
     if (avx2) {
         preparar();
-        std.memory.x86_64.memcpy_big_avx2(&g_destino[0], &g_origen[0], (usize) 600);
-        ok = ok + copia_bien(0, 0, 600);
+        std.memory.x86_64.memcpy_big_avx2(&g_destino[0], &g_origen[0], (usize) 2048);
+        esperadas = esperadas + 1;
+        ok = ok + copia_bien(0, 0, 2048);
         preparar();
-        std.memory.x86_64.memcpy_streaming_avx2(&g_destino[0], &g_origen[0], (usize) 600);
-        ok = ok + copia_bien(0, 0, 600);
+        std.memory.x86_64.memcpy_streaming_avx2(&g_destino[0], &g_origen[0], (usize) 4096);
+        esperadas = esperadas + 1;
+        ok = ok + copia_bien(0, 0, 4096);
     }
     if (avx512) {
         preparar();
-        std.memory.x86_64.memcpy_big_avx512(&g_destino[0], &g_origen[0], (usize) 1100);
-        ok = ok + copia_bien(0, 0, 1100);
+        std.memory.x86_64.memcpy_big_avx512(&g_destino[0], &g_origen[0], (usize) 4096);
+        esperadas = esperadas + 1;
+        ok = ok + copia_bien(0, 0, 4096);
     }
     if (erms) {
         preparar();
         std.memory.x86_64.memcpy_erms(&g_destino[0], &g_origen[0], (usize) 777);
+        esperadas = esperadas + 1;
         ok = ok + copia_bien(0, 0, 777);
     }
 
@@ -137,18 +158,22 @@ i32 main() {
         i64 os = alineado_en(&g_origen[0], 64);
         preparar();
         std.memory.x86_64.memcpy_small_sse2_aligned(&g_destino[od], &g_origen[os], (usize) 96);
+        esperadas = esperadas + 1;
         ok = ok + copia_bien(od, os, 96);
         preparar();
         std.memory.x86_64.memcpy_medium_sse2_aligned(&g_destino[od], &g_origen[os], (usize) 256);
+        esperadas = esperadas + 1;
         ok = ok + copia_bien(od, os, 256);
         if (avx2) {
             preparar();
             std.memory.x86_64.memcpy_medium_avx2_aligned(&g_destino[od], &g_origen[os], (usize) 320);
+            esperadas = esperadas + 1;
             ok = ok + copia_bien(od, os, 320);
         }
         if (avx512) {
             preparar();
             std.memory.x86_64.memcpy_medium_avx512_aligned(&g_destino[od], &g_origen[os], (usize) 512);
+            esperadas = esperadas + 1;
             ok = ok + copia_bien(od, os, 512);
         }
     }
@@ -156,44 +181,56 @@ i32 main() {
     // --- relleno, los mismos tres tamanos --------------------------------
     preparar();
     std.memory.x86_64.memset_small_sse2(&g_destino[0], 0xA5, (usize) 96);
+    esperadas = esperadas + 1;
     ok = ok + relleno_bien(0, 96, 0xA5);
     preparar();
     std.memory.x86_64.memset_medium_sse2(&g_destino[0], 0xA5, (usize) 200);
+    esperadas = esperadas + 1;
     ok = ok + relleno_bien(0, 200, 0xA5);
     preparar();
-    std.memory.x86_64.memset_big_sse2(&g_destino[0], 0xA5, (usize) 300);
-    ok = ok + relleno_bien(0, 300, 0xA5);
+    std.memory.x86_64.memset_big_sse2(&g_destino[0], 0xA5, (usize) 1024);
+    esperadas = esperadas + 1;
+    ok = ok + relleno_bien(0, 1024, 0xA5);
     if (avx2) {
         preparar();
         std.memory.x86_64.memset_small_avx2(&g_destino[0], 0xA5, (usize) 96);
+        esperadas = esperadas + 1;
         ok = ok + relleno_bien(0, 96, 0xA5);
         preparar();
         std.memory.x86_64.memset_medium_avx2(&g_destino[0], 0xA5, (usize) 300);
+        esperadas = esperadas + 1;
         ok = ok + relleno_bien(0, 300, 0xA5);
         preparar();
-        std.memory.x86_64.memset_big_avx2(&g_destino[0], 0xA5, (usize) 600);
-        ok = ok + relleno_bien(0, 600, 0xA5);
+        std.memory.x86_64.memset_big_avx2(&g_destino[0], 0xA5, (usize) 2048);
+        esperadas = esperadas + 1;
+        ok = ok + relleno_bien(0, 2048, 0xA5);
         preparar();
-        std.memory.x86_64.memset_streaming_avx2(&g_destino[0], 0xA5, (usize) 600);
-        ok = ok + relleno_bien(0, 600, 0xA5);
+        std.memory.x86_64.memset_streaming_avx2(&g_destino[0], 0xA5, (usize) 4096);
+        esperadas = esperadas + 1;
+        ok = ok + relleno_bien(0, 4096, 0xA5);
     }
     if (avx512) {
         preparar();
         std.memory.x86_64.memset_small_avx512(&g_destino[0], 0xA5, (usize) 96);
+        esperadas = esperadas + 1;
         ok = ok + relleno_bien(0, 96, 0xA5);
         preparar();
         std.memory.x86_64.memset_medium_avx512(&g_destino[0], 0xA5, (usize) 600);
+        esperadas = esperadas + 1;
         ok = ok + relleno_bien(0, 600, 0xA5);
         preparar();
-        std.memory.x86_64.memset_big_avx512(&g_destino[0], 0xA5, (usize) 1100);
-        ok = ok + relleno_bien(0, 1100, 0xA5);
+        std.memory.x86_64.memset_big_avx512(&g_destino[0], 0xA5, (usize) 4096);
+        esperadas = esperadas + 1;
+        ok = ok + relleno_bien(0, 4096, 0xA5);
         preparar();
-        std.memory.x86_64.memset_streaming_avx512(&g_destino[0], 0xA5, (usize) 1100);
-        ok = ok + relleno_bien(0, 1100, 0xA5);
+        std.memory.x86_64.memset_streaming_avx512(&g_destino[0], 0xA5, (usize) 4096);
+        esperadas = esperadas + 1;
+        ok = ok + relleno_bien(0, 4096, 0xA5);
     }
     if (erms) {
         preparar();
         std.memory.x86_64.memset_erms(&g_destino[0], 0xA5, (usize) 777);
+        esperadas = esperadas + 1;
         ok = ok + relleno_bien(0, 777, 0xA5);
     }
 
@@ -202,30 +239,39 @@ i32 main() {
         i64 od = alineado_en(&g_destino[0], 64);
         preparar();
         std.memory.x86_64.memset_small_sse2_aligned(&g_destino[od], 0xA5, (usize) 96);
+        esperadas = esperadas + 1;
         ok = ok + relleno_bien(od, 96, 0xA5);
         preparar();
         std.memory.x86_64.memset_medium_sse2_aligned(&g_destino[od], 0xA5, (usize) 200);
+        esperadas = esperadas + 1;
         ok = ok + relleno_bien(od, 200, 0xA5);
         if (avx2) {
             preparar();
             std.memory.x86_64.memset_small_avx2_aligned(&g_destino[od], 0xA5, (usize) 96);
+            esperadas = esperadas + 1;
             ok = ok + relleno_bien(od, 96, 0xA5);
             preparar();
             std.memory.x86_64.memset_medium_avx2_aligned(&g_destino[od], 0xA5, (usize) 300);
+            esperadas = esperadas + 1;
             ok = ok + relleno_bien(od, 300, 0xA5);
         }
         if (avx512) {
             preparar();
             std.memory.x86_64.memset_small_avx512_aligned(&g_destino[od], 0xA5, (usize) 96);
+            esperadas = esperadas + 1;
             ok = ok + relleno_bien(od, 96, 0xA5);
             preparar();
             std.memory.x86_64.memset_medium_avx512_aligned(&g_destino[od], 0xA5, (usize) 600);
+            esperadas = esperadas + 1;
             ok = ok + relleno_bien(od, 600, 0xA5);
         }
     }
 
-    // Cuantas se comprobaron.  El arnes calcula el numero esperado a partir de
-    // los rasgos de la maquina: saltarse una variante por un rasgo ausente es
-    // legitimo, darla por buena sin ejecutarla no.
-    return (i32) ok;
+    // Devuelve 42 si TODAS las comprobaciones que esta maquina puede ejecutar
+    // salieron bien.  El NUMERO de comprobaciones depende del procesador -- una
+    // sin AVX-512 corre menos --, asi que compararlo contra una constante haria
+    // que el caso pasara o fallara segun donde corriera.  Lo que no depende de
+    // la maquina es que ninguna de las que corrio fallara.
+    if (ok == esperadas) return 42;
+    return (i32) (ok - esperadas);
 }

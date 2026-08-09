@@ -2913,6 +2913,11 @@ r0_case("comptime_literal_import", "std.comptime.literal cross-module: parse de 
 r0_case("div_cero_detiene", "una division por cero detiene el proceso; capturada es un FatalError", "347_div_cero_detiene.vx", 42)
 caught_fault_case("fallo_sistema_capturado", "un fallo del procesador capturado con try/catch, y el programa sigue", "369_fallo_del_sistema_capturado.vx", 48)
 caught_fault_case("instr_no_soportada", "una instruccion que este procesador no tiene se cuenta y se captura", "370_instruccion_no_soportada.vx", 46)
+# Las 32 variantes de std.memory, cada una por su nombre y comprobada byte a
+# byte, ejecutando solo las que este procesador soporta.  Interp+JIT: el nativo
+# queda fuera porque el numero depende de los rasgos de la maquina y el arnes
+# compara el valor devuelto, no el codigo de salida.
+caught_fault_case("std_memory_variantes", "las 32 variantes de std.memory, una por una y byte a byte", "367_std_memory_variantes.vx", 42)
 modes3_case("optional_struct", "Optional<T> con T = struct por valor (payload dimensionado + copia)", "346_optional_struct.vx", 52)
 r0_case("cme299", "captura expr CROSS-MODULO (src(expr) en otro modulo, DSL crudo)", "299_cross_module_expr.vx", 42, line=3709)
 r0_case("scs300", "source(expr) de std.comptime (re-export + siembra transitiva)", "300_stdlib_comptime_source.vx", 42, line=3710)
