@@ -456,6 +456,36 @@ struct ImportRequest {
     SourceLoc loc{};                 // posicion del ImportDecl (M6.a.3 diags)
 };
 
+/**
+ * @brief Huella de lo que un modulo VE de uno de sus deps.
+ *
+ * Es lo unico que le puede afectar de el, y por eso es lo que se guarda en su
+ * tabla de dependencias y lo que se recomprueba al reusar lo compilado.  Antes
+ * se guardaba el `abi_hash` ENTERO del dep: anadirle una funcion publica que
+ * nadie usa invalidaba a todos sus consumidores.
+ *
+ * Un import con `only` acota exactamente lo que se puede usar -- para nombrar
+ * un tipo hay que haberlo importado --, asi que ahi la huella es la de esos
+ * simbolos.  Sin `only` (import llano, `only *`, o re-export) el modulo puede
+ * usar cualquier cosa del dep, y entonces lo que le afecta es su interfaz
+ * entera.
+ *
+ * @param dep_vxi Interfaz del dep, ya parseada.
+ * @param req     Como se importo.
+ * @return Huella de lo que este modulo ve de @p dep_vxi.
+ */
+static uint64_t huella_de_lo_usado(const VxiModule &dep_vxi,
+                                   const ImportRequest &req) {
+    if (req.is_plain || req.only_all || req.is_public_reexport ||
+        req.only_symbols.empty()) {
+        return dep_vxi.abi_hash;
+    }
+    std::vector<std::string> nombres;
+    nombres.reserve(req.only_symbols.size());
+    for (const auto &e : req.only_symbols) nombres.push_back(e.name);
+    return vxi_hash_de_simbolos(dep_vxi, nombres);
+}
+
 ///  NS.2-full: mapa namespace punteado -> module_name (filename) del
 /// modulo que lo declara.  Se construye desde los AST de todos los modulos
 /// del proyecto y traduce los imports por-namespace (`import a.b.c;`) al
@@ -1689,6 +1719,16 @@ CompileResult compile_vx_project(
                     // podria haber cambiado.  Verificar que cada DepRecord
                     // del .vxi cacheado matchea el abi_hash actual del dep
                     // (que ya viene populated en work[] por topo order).
+                    /* Como importa este modulo cada dep, para recomputar la
+                     * huella con EL MISMO criterio con que se guardo. */
+                    std::unordered_map<std::string, const ImportRequest *>
+                        como_importa;
+                    std::vector<ImportRequest> imps_val;
+                    if (pm.ast) {
+                        imps_val = collect_imports_(*pm.ast, &ns_to_modname);
+                        for (const auto &r : imps_val)
+                            como_importa.emplace(r.module_name, &r);
+                    }
                     bool deps_match = true;
                     for (const auto &dep_rec : pr.module_.deps) {
                         auto itd = by_name.find(dep_rec.name);
@@ -1704,7 +1744,12 @@ CompileResult compile_vx_project(
                             }
                             break;
                         }
-                        const uint64_t actual = work[itd->second].vxi.abi_hash;
+                        auto itc = como_importa.find(dep_rec.name);
+                        const uint64_t actual =
+                            itc != como_importa.end()
+                                ? huella_de_lo_usado(work[itd->second].vxi,
+                                                     *itc->second)
+                                : work[itd->second].vxi.abi_hash;
                         if (actual != dep_rec.abi_hash) {
                             deps_match = false;
                             if (verbose_cache) {
@@ -2410,7 +2455,10 @@ CompileResult compile_vx_project(
             const ProjectModuleWork &dep = work[itd->second];
             VxiModule::DepRecord drec;
             drec.name = req.module_name;
-            drec.abi_hash = dep.vxi.abi_hash;
+            /* Lo que este modulo VE del dep, no la interfaz entera del dep:
+             * anadirle algo publico que nadie usa no tiene por que invalidar a
+             * quien no lo usa.  El mismo criterio se aplica al validar. */
+            drec.abi_hash = huella_de_lo_usado(dep.vxi, req);
             pm.vxi.deps.push_back(std::move(drec));
         }
 

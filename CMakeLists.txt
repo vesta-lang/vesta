@@ -820,6 +820,19 @@ endif ()
 add_executable(test_recorrer_arbol tests/util/test_recorrer_arbol.cpp)
 target_include_directories(test_recorrer_arbol PRIVATE ${VM_INCLUDES})
 
+# La huella de lo que un consumidor VE de un modulo importado.
+add_executable(test_vxi_hash_simbolos tests/vx/test_vxi_hash_simbolos.cpp)
+target_include_directories(test_vxi_hash_simbolos PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_vxi_hash_simbolos PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_vxi_hash_simbolos PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_vxi_hash_simbolos PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_vxi_hash_simbolos PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 # La identidad de un fuente para la cache: lo que dice, no como esta escrito.
 add_executable(test_source_hash tests/vx/test_source_hash.cpp)
 target_include_directories(test_source_hash PRIVATE ${VM_INCLUDES})

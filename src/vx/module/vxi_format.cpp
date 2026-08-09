@@ -881,6 +881,58 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
     return out;
 }
 
+uint64_t vxi_hash_de_simbolos(const VxiModule &m,
+                              const std::vector<std::string> &nombres) {
+    /* Orden fijo: el consumidor puede escribir sus imports como quiera, y la
+     * huella tiene que salir la misma. */
+    std::vector<std::string> orden = nombres;
+    std::sort(orden.begin(), orden.end());
+    orden.erase(std::unique(orden.begin(), orden.end()), orden.end());
+
+    uint64_t h = 0xCBF29CE484222325ULL;
+    auto mezclar = [&h](const void *datos, size_t n) {
+        const auto *p = static_cast<const unsigned char *>(datos);
+        for (size_t i = 0; i < n; ++i) {
+            h ^= static_cast<uint64_t>(p[i]);
+            h *= 0x100000001B3ULL;
+        }
+    };
+
+    for (const std::string &nombre : orden) {
+        /* El nombre SIEMPRE, exista o no el simbolo: asi quitar de la libreria
+         * algo que alguien usaba tambien cambia su huella (antes solo cambiaba
+         * si quedaba algun otro simbolo que si estuviera). */
+        mezclar(nombre.data(), nombre.size());
+        const VxiSymbol *encontrado = nullptr;
+        for (const auto &s : m.symbols) {
+            if (s.name == nombre) { encontrado = &s; break; }
+        }
+        if (encontrado == nullptr) {
+            h ^= 0xA5A5A5A5A5A5A5A5ULL; // marca de "no esta"
+            h *= 0x100000001B3ULL;
+            continue;
+        }
+        /* Y su contenido, definido como LO QUE EL ESCRITOR PERSISTE de el: se
+         * serializa un modulo con ese unico simbolo y se hashean sus bytes.
+         * Enumerar los campos a mano seria una lista que se queda corta el dia
+         * que se anade uno, y quedarse corto aqui no recompila de mas: sirve un
+         * artefacto que no corresponde al fuente. */
+        VxiModule solo;
+        solo.package_id = m.package_id; // la identidad del paquete si cuenta
+        solo.target = m.target;         // y el objetivo, que cambia layouts
+        solo.blob_pool = m.blob_pool;   // el simbolo puede referenciarlo
+        solo.blob_pool_alignment = m.blob_pool_alignment;
+        solo.symbols.push_back(*encontrado);
+        const std::vector<uint8_t> bytes = vxi_emit(solo);
+        /* Sin la cabecera: ahi vive el `abi_hash` de este modulo de un solo
+         * simbolo, que es funcion de lo demas y no aporta. */
+        constexpr size_t kCabecera = 88;
+        if (bytes.size() > kCabecera)
+            mezclar(bytes.data() + kCabecera, bytes.size() - kCabecera);
+    }
+    return h;
+}
+
 // ===========================================================================
 // Parser: bytes -> VxiModule.
 // ===========================================================================

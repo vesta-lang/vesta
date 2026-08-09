@@ -471,6 +471,32 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size);
  */
 uint64_t vxi_fnv1a(const void *data, size_t len) noexcept;
 
+/**
+ * @brief Huella de UN SUBCONJUNTO de los simbolos de un modulo: lo que un
+ *        consumidor concreto ve de el.
+ *
+ * El `abi_hash` describe la interfaz ENTERA, asi que anadirle a un modulo una
+ * funcion publica que nadie usa invalidaba a todos sus consumidores.  Lo que
+ * de verdad le importa a cada uno es lo que IMPORTA de el, y eso es lo que
+ * mide esta huella.
+ *
+ * La huella de un simbolo se define como *lo que el escritor persiste de el*:
+ * se serializa un modulo con ese unico simbolo y se hashean sus bytes.  Es
+ * deliberado -- enumerar los campos a mano seria una lista que se queda corta
+ * el dia que se anade uno, y quedarse corto aqui no recompila de mas: sirve un
+ * artefacto que no corresponde al fuente.
+ *
+ * Independiente del ORDEN de @p nombres.  Un nombre que no existe en @p m
+ * cuenta igualmente (se mezcla su nombre), para que quitar un simbolo tambien
+ * cambie la huella de quien lo usaba.
+ *
+ * @param m       Modulo importado, ya parseado.
+ * @param nombres Simbolos que el consumidor toma de el.
+ * @return Huella FNV-1a de 64 bits.
+ */
+uint64_t vxi_hash_de_simbolos(const VxiModule &m,
+                              const std::vector<std::string> &nombres);
+
 inline uint64_t vxi_fnv1a(const std::string &s) noexcept {
     return vxi_fnv1a(s.data(), s.size());
 }
