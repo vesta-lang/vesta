@@ -2458,10 +2458,16 @@ int main(int argc, char *argv[]) {
 
         if (medir_analisis) {
             const long us_efectos = tramo_us();
+            const auto &tf = cr.tiempos;
             std::cerr << "[analyze] tiempos: compilar " << us_compilar_coste
                       << " us | coste " << us_coste_bigo
                       << " us | modulo-final " << us_modulo_final
                       << " us | efectos " << us_efectos << " us\n";
+            std::cerr << "[analyze]   dentro de compilar: resolver "
+                      << tf.resolver_us << " us | modulos " << tf.modulos_us
+                      << " us | analisis " << tf.analisis_us << " us | tipos "
+                      << tf.tipos_us << " us | bajada " << tf.bajada_us
+                      << " us | optimizar " << tf.optimizar_us << " us\n";
         }
 
         // Salida legible: por cada funcion (orden del modulo POST-opt),

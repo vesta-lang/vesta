@@ -24,10 +24,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <chrono>
 #include <filesystem>
 #include <functional>
 #include <fstream>
+#include <iostream>
 #include <sstream>
+#include <unordered_set>
 
 #if defined(_WIN32)
 #include <direct.h>
@@ -160,10 +163,27 @@ namespace {
 /// reconoce.
 std::string identidad_fichero_(const std::string &ruta) {
     namespace fs = std::filesystem;
-    std::error_code ec;
-    fs::path p = fs::absolute(fs::path(ruta), ec);
-    if (ec) p = fs::path(ruta);
-    std::string s = p.lexically_normal().string();
+    /* Camino rapido: una ruta que ya es absoluta y no arrastra `.` ni `..` no
+     * necesita ni consultar el directorio actual ni normalizarse otra vez.  Es
+     * el caso de casi todas las llamadas -- llegan de `normalize_path_`, que ya
+     * hizo ese trabajo -- y aquellas dos operaciones, repetidas una vez por
+     * fichero del arbol, eran la mayor parte del escaneo. */
+    std::string s;
+    const bool absoluta =
+        !ruta.empty() &&
+        (ruta[0] == '/' || ruta[0] == '\\' ||
+         (ruta.size() >= 2 && ruta[1] == ':' &&
+          ((ruta[0] >= 'A' && ruta[0] <= 'Z') ||
+           (ruta[0] >= 'a' && ruta[0] <= 'z'))));
+    if (absoluta && ruta.find("/.") == std::string::npos &&
+        ruta.find("\\.") == std::string::npos) {
+        s = ruta;
+    } else {
+        std::error_code ec;
+        fs::path p = fs::absolute(fs::path(ruta), ec);
+        if (ec) p = fs::path(ruta);
+        s = p.lexically_normal().string();
+    }
     for (char &c : s) {
         if (c == '\\') c = '/';
 #if defined(_WIN32)
@@ -851,12 +871,37 @@ void ModuleGraph::build_namespace_index_() {
 
     namespace fs = std::filesystem;
 
+    /* Reparto del coste del escaneo, para decidir con datos si merece la pena
+     * cachearlo y con que criterio: leer cada fichero es una cosa y lexarlo
+     * otra, y el remedio no es el mismo. */
+    long us_leer = 0, us_lexar = 0, n_ficheros = 0, n_entradas = 0;
+    const auto t_indice = std::chrono::steady_clock::now();
+
+    /* Que ficheros lleva ya cada namespace, por identidad.  Antes esto se
+     * preguntaba recorriendo la lista y recalculando la identidad de cada uno
+     * -- que consulta el sistema de ficheros -- por cada fichero nuevo: coste
+     * cuadratico con una llamada al sistema dentro.  Medido, era mas de la
+     * mitad del escaneo, mas que leer y lexar los 757 ficheros juntos. */
+    std::unordered_map<std::string, std::unordered_set<std::string>> vistos;
+    for (const auto &kv : ns_index_) {
+        auto &s = vistos[kv.first];
+        for (const auto &f : kv.second) s.insert(identidad_fichero_(f));
+    }
+
     // Recolectar las raices a escanear (sin duplicados).
     std::vector<std::string> roots;
     auto add_root = [&](const std::string &d) {
         if (d.empty()) return;
-        if (std::find(roots.begin(), roots.end(), d) == roots.end()) {
-            roots.push_back(d);
+        /* Absolutas desde aqui.  Son TRES; los ficheros que cuelgan de ellas
+         * son cientos, y de cada uno habia que averiguar despues donde esta de
+         * verdad -- consultando el directorio actual y renormalizando -- solo
+         * porque su ruta llegaba relativa.  Resolverlo una vez arriba lo evita
+         * en todos. */
+        std::error_code ec;
+        std::string abs = fs::absolute(fs::path(d), ec).lexically_normal().string();
+        const std::string &val = ec ? d : abs;
+        if (std::find(roots.begin(), roots.end(), val) == roots.end()) {
+            roots.push_back(val);
         }
     };
     add_root(root_dir_);
@@ -864,15 +909,8 @@ void ModuleGraph::build_namespace_index_() {
     add_root(stdlib_dir_);
 
     for (const auto &root : roots) {
-        std::error_code ec;
-        if (!fs::exists(root, ec) || !fs::is_directory(root, ec)) continue;
-        fs::recursive_directory_iterator it(
-            root, fs::directory_options::skip_permission_denied, ec);
-        fs::recursive_directory_iterator end;
-        for (; it != end; it.increment(ec)) {
-            if (ec) { ec.clear(); continue; }
-            const fs::directory_entry &de = *it;
-            const fs::path &p = de.path();
+        ::fs::recorrer_arbol(root, [&](const std::string &ruta, bool es_dir) {
+            ++n_entradas;
             /* No bajar a directorios ocultos.  Ahi es donde viven las caches
              * de la propia construccion (`.cache`, `.vx_cache`), que jamas
              * contienen fuentes y en cambio tienen miles de ficheros
@@ -880,48 +918,61 @@ void ModuleGraph::build_namespace_index_() {
              * recorrido veia 1620 entradas para encontrar 21 `.vx`.  Es la
              * misma convencion que sigue cualquier herramienta que recorre un
              * arbol de fuentes. */
-            {
-                const std::string nombre = p.filename().string();
-                if (nombre.size() > 1 && nombre[0] == '.' &&
-                    de.is_directory(ec)) {
-                    it.disable_recursion_pending();
-                    continue;
-                }
-            }
-            /* La extension PRIMERO: es una comparacion sobre lo que el
-             * recorrido ya trae, mientras que preguntar si es un fichero
-             * regular consulta el disco.  Al reves se pagaba una consulta por
-             * cada entrada, y junto a los fuentes conviven los .vxi/.vxir/.vel
-             * generados: en la stdlib son ~1500 entradas para 56 fuentes. */
-            if (p.extension() != ".vx") continue;
-            if (!de.is_regular_file(ec)) continue;
-            std::string canonical = normalize_path_(p.string(), "");
+            const size_t barra = ruta.find_last_of('/');
+            const char *nombre =
+                ruta.c_str() + (barra == std::string::npos ? 0 : barra + 1);
+            if (es_dir) return !(nombre[0] == '.' && nombre[1] != '\0');
+            /* Junto a los fuentes conviven los .vxi/.vxir/.vel generados: en la
+             * stdlib son ~1500 entradas para 56 fuentes.  Que sea un fichero
+             * regular ya lo dijo el listado, asi que aqui solo queda mirar el
+             * nombre. */
+            const size_t n = ruta.size();
+            // `> 3` y no `>= 3`: un fichero llamado solo `.vx` no tiene nombre,
+            // es una extension suelta, y tampoco lo cogia el criterio anterior.
+            if (n <= 3 || ruta.compare(n - 3, 3, ".vx") != 0 ||
+                ruta[n - 4] == '/')
+                return false;
+            std::string canonical = normalize_path_(ruta, "");
             std::string source;
-            if (!read_file_(canonical, source)) continue;
+            const auto t_leer = std::chrono::steady_clock::now();
+            if (!read_file_(canonical, source)) return false;
+            const auto t_lexar = std::chrono::steady_clock::now();
             std::vector<std::string> namespaces;
             std::unordered_map<std::string, std::vector<std::string>> tipos;
             extract_namespaces_(source, namespaces, &tipos);
+            us_leer += std::chrono::duration_cast<std::chrono::microseconds>(
+                           t_lexar - t_leer).count();
+            us_lexar += std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::steady_clock::now() - t_lexar).count();
+            ++n_ficheros;
             for (auto &kv : tipos) {
                 auto &dst = ns_types_[kv.first];
-                for (const auto &n : kv.second) {
-                    if (std::find(dst.begin(), dst.end(), n) == dst.end())
-                        dst.push_back(n);
+                for (const auto &nt : kv.second) {
+                    if (std::find(dst.begin(), dst.end(), nt) == dst.end())
+                        dst.push_back(nt);
                 }
             }
             const std::string ident = identidad_fichero_(canonical);
             for (const auto &ns : namespaces) {
-                auto &files = ns_index_[ns];
                 // Dos raices que se solapan (el directorio del root y la
                 // stdlib) recorren los MISMOS ficheros con escrituras
                 // distintas.  Comparar por identidad evita que el namespace
                 // parezca repartido entre el doble de ficheros de los que hay.
-                bool ya = false;
-                for (const auto &f : files) {
-                    if (identidad_fichero_(f) == ident) { ya = true; break; }
-                }
-                if (!ya) files.push_back(canonical);
+                if (vistos[ns].insert(ident).second)
+                    ns_index_[ns].push_back(canonical);
             }
-        }
+            return false;
+        });
+    }
+    if (std::getenv("VESTA_TIMES") != nullptr) {
+        const long us_total =
+            static_cast<long>(std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - t_indice).count());
+        std::cerr << "[resolver] indice de namespaces: " << n_entradas
+                  << " entradas, " << n_ficheros << " ficheros | recorrer "
+                  << (us_total - us_leer - us_lexar) << " us | leer " << us_leer
+                  << " us | lexar " << us_lexar << " us | total " << us_total
+                  << " us\n";
     }
 }
 
