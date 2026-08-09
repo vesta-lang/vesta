@@ -1,0 +1,30 @@
+// Lo que hace una funcion DOS niveles mas abajo, visto desde donde importa.
+//
+// `hoja` escribe treinta y dos bytes desde su parametro.  `medio` no toca
+// memoria: solo la llama.  Y `main` reserva dieciseis.  Ninguna de las tres,
+// mirada por separado, hace nada sospechoso.
+//
+// Para verlo, lo que `hoja` dice de SU parametro tiene que subir hasta `medio`
+// traducido a los parametros de `medio`, y de ahi hasta `main` traducido a
+// `buf`.  Dos traducciones seguidas, cada una en su sitio de llamada.
+//
+// Las dos funciones son recursivas a proposito: asi no se pueden inlinear, y lo
+// que se comprueba es el transporte y no que el optimizador las aplanara.
+//
+// @expect-error: VX3001
+
+@NoIdiom
+public void hoja(u8* p) {
+    u64* q = (u64*) p;
+    q[0] = 0; q[1] = 0; q[2] = 0; q[3] = 0;
+}
+@NoIdiom
+public void medio(u8* p, u64 n) {
+    if (n > 1000) { medio(p, n - 1); }
+    hoja(p);
+}
+i32 main() {
+    u8 buf[16];
+    medio(&buf[0], 8);
+    return 42;
+}

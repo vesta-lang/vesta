@@ -105,27 +105,19 @@ EfectoEnLlamada EffectAnalysis::at_call_site(const ir::IrFunction &caller,
         return r;
     }
 
-    /* Se traduce el efecto PROPIO de la funcion, no su cierre.
+    /* Se traduce el CIERRE: lo que la funcion hace por si misma y lo que hacen
+     * las que llama.
      *
-     * En el cierre esta mezclado lo que hacen sus callees, y eso viene descrito
-     * en terminos de los parametros DE ELLOS: traducirlo con los argumentos de
-     * esta llamada seria emparejar el parametro de una funcion con el argumento
-     * de otra.  El efecto propio si habla de los parametros de quien se llama,
-     * que son los que estos argumentos rellenan.
+     * Se puede porque el cierre ya viene en terminos de los parametros de ESTA
+     * funcion: al construirlo, lo que aporta cada callee se traduce con los
+     * argumentos de su sitio de llamada.  Antes no era asi -- se copiaban los
+     * `arg#N` del callee tal cual, que son los suyos, no los de aqui -- y por
+     * eso esto miraba solo el efecto propio: lo unico entonces interpretable.
      *
-     * Lo que hagan sus callees no se pierde: en el cierre esta, y ahi consta
-     * como memoria sin acotar -- que es lo unico cierto mientras nadie lo
-     * traduzca en SU sitio de llamada. */
-    r = instanciar_en_llamada(s->semantic.local, call.operands,
+     * Con el cierre, lo que hace una funcion tres niveles mas abajo llega hasta
+     * el sitio donde se puede juzgar. */
+    r = instanciar_en_llamada(s->semantic.closure, call.operands,
                               points_to_of(caller));
-    /* Y lo transitivo se declara como lo que es: algo que esta lista no cuenta.
-     * Sin esto, una funcion que llama a otra parecia tocar solo lo suyo. */
-    const bool tiene_callees =
-        !s->semantic.closure.mem.writes.is_top &&
-        s->semantic.closure.mem.writes.locs.size() >
-            s->semantic.local.mem.writes.locs.size();
-    if (tiene_callees || s->semantic.closure.mem.writes.is_top)
-        r.completo = false;
     /* Un resumen que ya venia incompleto no se vuelve completo por traducirlo:
      * lo que no se supo alli sigue sin saberse aqui. */
     if (s->completeness != AnalysisCompleteness::Complete) r.completo = false;

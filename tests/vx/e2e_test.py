@@ -2713,6 +2713,10 @@ fails_case("asmregion", "asm: acceso fuera de la region por la que entra -> erro
 # puede inlinear), asi que esto exige la instanciacion del efecto en el sitio de
 # llamada -- con el inline, el fallo se veria por casualidad.
 fails_case("regcall", "region: una llamada que escribe mas de lo que cabe -> error (VX3001)", "region_cruza_llamada.vx", "VX3001", line=3654)
+# Y por DOS niveles: lo que hace la hoja sube traducido en cada sitio de llamada
+# hasta donde se puede juzgar.  Las funciones son recursivas para que no se
+# puedan inlinear -- si se aplanaran, el fallo se veria por casualidad.
+fails_case("regcall2", "region: lo que hace una funcion dos niveles abajo -> error (VX3001)", "region_cruza_dos_llamadas.vx", "VX3001", line=3654)
 modes3_case("asmwidth", "asm: lift general modela anchos x86 (8/16/32/64) en interp/jit/aot", "asm_lift_widths.vx", 42, line=3654)
 modes3_case("shvar", "shift por cantidad variable (SHL/SHR/SAR via CL) en interp/jit/aot", "shift_variable.vx", 42, line=3654)
 modes3_case("fpround", "float floor/ceil/round/trunc/fmin/fmax (f64+f32) en interp/jit/aot", "fp_rounding.vx", 42, line=3654)
