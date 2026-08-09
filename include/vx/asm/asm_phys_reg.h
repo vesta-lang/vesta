@@ -27,6 +27,8 @@
 #include <cctype>
 #include <cstdint>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace vx {
 
@@ -162,6 +164,33 @@ inline std::string asm_phys_reg_name(uint8_t isa, uint8_t regclass, int phys,
         return std::string(pref) + std::to_string(phys);
     }
     return std::string();
+}
+
+/**
+ * @brief Registros FiSICOS que una @c ASM_MICRO destruye, como pares
+ *        (clase, indice).
+ *
+ * Una instruccion de ensamblador que escribe en un registro lo destruye, y el
+ * asignador tiene que saberlo o pondra ahi un valor que la instruccion pisa.
+ * La ficha ya lo dice -- cada operando lleva su rol -- pero nadie se lo estaba
+ * preguntando, asi que el asignador trataba el micro asm como si no tocara
+ * ningun registro.
+ *
+ * Cuenta tanto lo que la instruccion escribe por nombre como lo que escribe
+ * por convencion (@c ASM_OP_IMPLICIT): para el que asigna registros, un
+ * registro destruido lo esta igual aparezca o no escrito en el texto.
+ *
+ * @param am Ficha del micro asm.
+ * @param out Recibe los pares (clase de registro, indice fisico).
+ */
+inline void asm_micro_clobbers(const ir::AsmMicro &am,
+                               std::vector<std::pair<uint8_t, int>> &out) {
+    out.clear();
+    for (const ir::AsmMicroOperand &op : am.operands) {
+        if (!op.writes() || op.fixed_phys < 0) continue;
+        if (op.kind != ir::AsmOperandKind::REG) continue;
+        out.emplace_back(op.regclass, (int)op.fixed_phys);
+    }
 }
 
 /**

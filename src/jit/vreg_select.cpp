@@ -4382,8 +4382,74 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 // memoria; bit2 escribe flags.
                 blob.clobbers_mem = (am.eff & 0x9) != 0;
                 blob.clobbers_flags = (am.eff & 0x4) != 0;
+                /* Y los REGISTROS que destruye.
+                 *
+                 * La ficha dice de cada operando si se lee o se escribe, pero
+                 * eso no llegaba hasta aqui: el asm se emitia como bytes sueltos
+                 * y el asignador lo trataba como si no tocara ningun registro.
+                 * Un `movdqa xmm1, xmm0` destruye xmm1 -- si el asignador tenia
+                 * ahi un valor vivo, se pierde sin que nadie lo note.  El campo
+                 * estaba desde el principio; solo faltaba llenarlo. */
+                bool salvar_rbx = false, salvar_rbp = false;
+                {
+                    std::vector<std::pair<uint8_t, int>> cl;
+                    vx::asm_micro_clobbers(am, cl);
+                    for (const auto &c : cl) {
+                        int mreg = -1;
+                        if (c.first == vx::ASM_RC_GP && c.second >= 0 &&
+                            c.second <= 15) {
+                            /* rbx y rbp no son del programa: el envoltorio del
+                             * JIT guarda ahi el proceso y el marco.  El camino
+                             * opaco ya los salvaba alrededor del bloque y este
+                             * no, asi que un `mov rbx, rsp` pisaba el puntero al
+                             * proceso y a partir de ahi todo iba mal -- el mismo
+                             * programa daba 42 sin elevar y basura elevado.
+                             * rsp no se puede envolver (salvarlo usa rsp). */
+                            if (c.second == (int)MReg::RBX) {
+                                salvar_rbx = true;
+                            } else if (c.second == (int)MReg::RBP) {
+                                salvar_rbp = true;
+                            } else if (c.second == (int)MReg::RSP) {
+                                vreg_dbg(fn.name.c_str(),
+                                         "asm_micro(reasigna la pila)");
+                                return false;
+                            } else {
+                                mreg = c.second;
+                            }
+                        } else if ((c.first == vx::ASM_RC_VEC ||
+                                    c.first == vx::ASM_RC_FP) &&
+                                   c.second >= 0 && c.second <= 31) {
+                            mreg = (int)MReg::XMM0 + c.second;
+                        }
+                        if (mreg >= 0) blob.clobbers.push_back((uint8_t)mreg);
+                    }
+                }
                 const uint32_t bidx = out.intern_asm_blob(std::move(blob));
+                if (salvar_rbx) {
+                    MInstr p;
+                    p.op = MOp::PUSH;
+                    p.src1 = MOperand::make_reg(MReg::RBX, 8);
+                    O.push_back(p);
+                }
+                if (salvar_rbp) {
+                    MInstr p;
+                    p.op = MOp::PUSH;
+                    p.src1 = MOperand::make_reg(MReg::RBP, 8);
+                    O.push_back(p);
+                }
                 O.push_back(MInstr::make_inline_asm_raw(bidx));
+                if (salvar_rbp) {
+                    MInstr p;
+                    p.op = MOp::POP;
+                    p.dst = MOperand::make_reg(MReg::RBP, 8);
+                    O.push_back(p);
+                }
+                if (salvar_rbx) {
+                    MInstr p;
+                    p.op = MOp::POP;
+                    p.dst = MOperand::make_reg(MReg::RBX, 8);
+                    O.push_back(p);
+                }
                 break;
             }
 

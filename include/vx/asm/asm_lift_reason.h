@@ -53,10 +53,10 @@ struct AsmMotivoOpaco {
     /// Anota el motivo si hay donde; devuelve false para poder escribir
     /// `return anotar(...)` en el punto exacto en el que se abandona.
     static bool anotar(AsmMotivoOpaco *destino, const std::string &instruccion,
-                       const char *detalle) {
+                       const std::string &detalle) {
         if (destino != nullptr && !destino->consta()) {
             destino->instruccion = instruccion;
-            destino->detalle = detalle ? detalle : "";
+            destino->detalle = detalle;
         }
         return false;
     }

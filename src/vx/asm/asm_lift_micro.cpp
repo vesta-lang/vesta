@@ -235,6 +235,68 @@ bool build_operands(
     return true;
 }
 
+/**
+ * @brief Anota en la ficha los registros que la instruccion toca por
+ *        CONVENCION, no por nombre.
+ *
+ * `cpuid` escribe rax, rbx, rcx y rdx sin que ninguno aparezca escrito en la
+ * linea.  Para el que asigna registros eso es indistinguible de escribirlos:
+ * si no lo sabe, deja ahi un valor vivo y la instruccion lo pisa.  El modelo ya
+ * tenia la marca (@c ASM_OP_IMPLICIT) y nadie la llenaba.
+ *
+ * Van DETRAS de los explicitos para no mover los @c $N de la plantilla, que se
+ * indexan por posicion.
+ *
+ * @param arch Arquitectura para consultar los efectos ("x86_64" / "arm64").
+ * @param insn Instruccion completa.
+ * @param operands Lista de operandos a completar.
+ * @return @c false si algun registro implicito no se supo nombrar -- en ese
+ *         caso no se puede prometer que la ficha este completa.
+ */
+bool anotar_implicitos(const std::string &arch, const std::string &insn,
+                       std::vector<ir::AsmMicroOperand> &operands,
+                       AsmMotivoOpaco *motivo) {
+    const size_t sp = insn.find_first_of(" \t");
+    const std::string mnem = (sp == std::string::npos) ? insn : insn.substr(0, sp);
+    const vx::AsmEffects ef = vx::asm_effects_for(mnem, arch);
+    for (int fase = 0; fase < 2; ++fase) {
+        const std::vector<std::string> &lista =
+            (fase == 0) ? ef.implicit_read : ef.implicit_write;
+        for (const std::string &r : lista) {
+            uint16_t w = 0;
+            uint8_t clase = vx::ASM_RC_GP;
+            int phys = vx::asm_x86_gp_index(r, &w);
+            if (phys < 0) {
+                phys = vx::asm_x86_vec_index(r, &w);
+                if (phys >= 0) clase = vx::ASM_RC_VEC;
+            }
+            if (phys < 0) {
+                /* Los flags ya viajan en el byte de efectos, asi que no hacen
+                 * falta como operando; cualquier otro nombre que no se sepa
+                 * nombrar si es un hueco, y un hueco aqui significa un registro
+                 * destruido del que nadie se entera. */
+                const std::string rl = lower(r);
+                if (rl == "flags" || rl == "eflags" || rl == "rflags" ||
+                    rl == "nzcv" || rl == "memory")
+                    continue;
+                return AsmMotivoOpaco::anotar(
+                    motivo, insn,
+                    "toca por convencion un registro que no se supo nombrar: " + r);
+            }
+            ir::AsmMicroOperand op;
+            op.kind = ir::AsmOperandKind::REG;
+            op.regclass = clase;
+            op.width = w;
+            op.fixed_phys = (int16_t)phys;
+            op.value = ir::IR_NO_VALUE;
+            op.flags = ir::ASM_OP_IMPLICIT |
+                       (fase == 0 ? ir::ASM_OP_READ : ir::ASM_OP_WRITE);
+            operands.push_back(op);
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 bool asm_lift_micro(
@@ -357,6 +419,10 @@ bool asm_lift_micro(
             if (!build_operands(isa, insn, sem, slot_of, operands, tmpl, motivo))
                 return false; // build_operands ya dejo dicho el motivo
         }
+        // Lo que la instruccion toca por convencion cuenta igual: el asignador
+        // no distingue un registro destruido por nombre de uno destruido por
+        // ABI.  Tambien para las que no llevan operandos escritos (cpuid).
+        if (!anotar_implicitos(arch_s, insn, operands, motivo)) return false;
         sems.push_back(std::move(sem));
         ops_per.push_back(std::move(operands));
         tmpl_per.push_back(std::move(tmpl));

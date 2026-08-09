@@ -2959,6 +2959,8 @@ r0_case("div_cero_detiene", "una division por cero detiene el proceso; capturada
 caught_fault_case("fallo_sistema_capturado", "un fallo del procesador capturado con try/catch, y el programa sigue", "369_fallo_del_sistema_capturado.vx", 48)
 caught_fault_case("instr_no_soportada", "una instruccion que este procesador no tiene se cuenta y se captura", "370_instruccion_no_soportada.vx", 46)
 asm_lift_case("asm_elevado_equivale", "elevar un asm a IR no cambia lo que el programa hace", "371_asm_elevado_equivale.vx")
+modes3_case("asm_destruye_registro", "un asm que destruye un registro no se lleva por delante lo que hubiera vivo", "372_asm_destruye_registro.vx", 42)
+asm_lift_case("asm_destruye_registro_eq", "destruir un registro da lo mismo elevado que opaco", "372_asm_destruye_registro.vx")
 # Las 32 variantes de std.memory, cada una por su nombre y comprobada byte a
 # byte, ejecutando solo las que este procesador soporta.  Interp+JIT: el nativo
 # queda fuera porque el numero depende de los rasgos de la maquina y el arnes
