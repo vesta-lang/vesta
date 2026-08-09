@@ -187,8 +187,12 @@ FunctionFingerprint compute_fingerprint(const ir::IrFunction &fn,
                 // `asm { }` nativo: se ANALIZA el cuerpo (efectos exactos) en vez
                 // de tratarlo como caja negra total.  El cuerpo NASM viaja en
                 // @c func_name (lo pone el lowering de  AS).
+                /* Sin clases a proposito: de este bloque solo se preguntan
+                 * el marco explicito y la pureza, y ninguna de las dos depende
+                 * de QUE memoria se toca.  El nombre lo dice para que se vea
+                 * que es una eleccion y no un olvido. */
                 const vx::AsmBlockEffects e =
-                    vx::asm_analyze_block(ins.func_name, arch);
+                    vx::asm_analyze_block_sin_clases(ins.func_name, arch);
                 // El marco EXPLICITO (push/pop/sub rsp con inmediato) SI se ve en
                 // el texto -> se cuenta en el parcial medido.
                 if (e.explicit_stack_bytes > 0)
