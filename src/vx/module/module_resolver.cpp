@@ -890,18 +890,16 @@ void ModuleGraph::build_namespace_index_() {
 
     // Recolectar las raices a escanear (sin duplicados).
     std::vector<std::string> roots;
+    /* Las raices se dejan TAL COMO LLEGAN.  Absolutizarlas aqui se probo -- la
+     * idea era ahorrar la resolucion por fichero -- y no dio velocidad: la que
+     * la dio fue el recorrido.  Lo que si hacia era cambiar la ruta con la que
+     * cada fichero entra en el indice, y esa ruta es la del MODULO: cambiarla
+     * invalida de golpe lo que ya estuviera cacheado a su nombre.  Un cambio
+     * que no gana nada no vale una invalidacion. */
     auto add_root = [&](const std::string &d) {
         if (d.empty()) return;
-        /* Absolutas desde aqui.  Son TRES; los ficheros que cuelgan de ellas
-         * son cientos, y de cada uno habia que averiguar despues donde esta de
-         * verdad -- consultando el directorio actual y renormalizando -- solo
-         * porque su ruta llegaba relativa.  Resolverlo una vez arriba lo evita
-         * en todos. */
-        std::error_code ec;
-        std::string abs = fs::absolute(fs::path(d), ec).lexically_normal().string();
-        const std::string &val = ec ? d : abs;
-        if (std::find(roots.begin(), roots.end(), val) == roots.end()) {
-            roots.push_back(val);
+        if (std::find(roots.begin(), roots.end(), d) == roots.end()) {
+            roots.push_back(d);
         }
     };
     add_root(root_dir_);

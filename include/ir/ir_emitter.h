@@ -68,6 +68,22 @@ struct EmitOptions {
     /// (opaco aqui) y se inyecta el resultado escalar como CONST.  nullptr = sin
     /// CTPE (comportamiento normal, cero coste).
     void *ctpe_runtime = nullptr;
+    /**
+     * @brief El modulo que se entrega YA viene optimizado.
+     *
+     * El emisor trabaja sobre una copia y la optimiza antes de emitir, lo cual
+     * es correcto cuando le llega el IR crudo.  Pero el compilador ya optimiza
+     * el modulo por su cuenta -- lo necesita para la seccion intermedia y para
+     * los comprobadores --, asi que el mismo trabajo se hacia dos veces:
+     * medido en un fuente de 5.700 lineas, 52 ms de los 185 que costaba el
+     * frontend entero.
+     *
+     * No se expresa poniendo @c opt_level a @c O0 porque el nivel no significa
+     * solo eso: el emisor lo consulta para decidir como emite.  Aqui se dice
+     * exactamente lo que se quiere -- no repitas la optimizacion --, sin tocar
+     * nada mas.
+     */
+    bool ya_optimizado = false;
 };
 
 /**

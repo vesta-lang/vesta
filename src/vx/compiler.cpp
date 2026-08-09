@@ -1286,9 +1286,21 @@ CompileResult compile_vx_source(const std::string &source,
      * consumidores -- el informe de `--analyze` -- que no leen ni una linea de
      * ese texto.  Lo que le falta al modulo serializado es en que registro
      * quedo cada valor, que la pone el emisor por ser quien lo decide. */
+    /* Se emite desde el modulo YA OPTIMIZADO en vez de volver a optimizar una
+     * copia del crudo: es el mismo trabajo sobre el mismo modulo, y era la
+     * mayor parte de lo que costaba emitir (52 ms de los 185 del frontend en
+     * un fuente de 5.700 lineas).
+     *
+     * Solo cuando la optimizacion de arriba es la MISMA que haria el emisor.
+     * Con `emit_ir_preopt` no lo es a proposito -- alli se optimiza sin inline
+     * porque el coste que se mide es el del cuerpo escrito --, y el codigo que
+     * se emite si tiene que llevarlo. */
+    const bool emitir_desde_optimizado = hay_seccion && !opts.emit_ir_preopt;
+    emit_opts.ya_optimizado = emitir_desde_optimizado;
     ir::EmitResult eres;
     if (!opts.ir_only) {
-        eres = ir::ir_emit_module(irmod, emit_opts);
+        eres = ir::ir_emit_module(
+            emitir_desde_optimizado ? mod_para_seccion : irmod, emit_opts);
         // Fin del modo CTPE: apagar los polls de safepoint para no afectar a
         // los compiles del JIT en runtime ni a los @Macro del lenguaje.
         jit::jit_set_ctpe_safepoint(0);

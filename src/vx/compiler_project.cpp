@@ -3286,6 +3286,14 @@ CompileResult compile_vx_project(
     // emit_opts.emit_stackmaps queda en su default (true): VSMP siempre.
     emit_opts.module_name =
         opts.module_name.empty() ? work.back().module_name : opts.module_name;
+    /* `merged` sale ya optimizado de la fase anterior.  El emisor optimizaba su
+     * copia otra vez -- el mismo trabajo, el mismo modulo -- y eso era la mayor
+     * parte de lo que costaba emitir.
+     *
+     * Salvo con `emit_ir_preopt`, donde la optimizacion de arriba se hace SIN
+     * inline a proposito (el coste que se mide es el del cuerpo escrito) y el
+     * codigo que se emite si tiene que llevarlo. */
+    emit_opts.ya_optimizado = !opts.emit_ir_preopt;
     /* Quien solo quiere el IR se salta esto.  Asignar registros y escribir el
      * texto `.vel` es el noventa por ciento del coste del frontend, y el
      * informe de `--analyze` no lee ni una linea de ese texto.  Lo que le falta

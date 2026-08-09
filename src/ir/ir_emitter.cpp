@@ -38,6 +38,8 @@
 #include "ir/ir_emitter.h"
 #include "ir/gc_safepoint.h" // pase compartido: raices GC por safepoint
 #include "analysis/asa/aggregate_facts.h"
+#include <chrono>
+#include <iostream>
 #include "ir/ir_optimizer.h"
 #include "ctpe/fold.h"
 #include "ir/liveness.h"
@@ -6897,8 +6899,16 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
      * creer que el programa no los tenia. */
     analysis::asa::volcar_formas(mod, "pre-opt");
 
-    // Aplicar optimizaciones IR
-    ir_optimize(mod, opts.opt_level);
+    // Aplicar optimizaciones IR, salvo que quien llama ya las haya aplicado.
+    if (!opts.ya_optimizado) {
+        const auto t_opt = std::chrono::steady_clock::now();
+        ir_optimize(mod, opts.opt_level);
+        if (std::getenv("VESTA_TIMES") != nullptr)
+            std::cerr << "[emisor] optimizar (dentro del emisor) "
+                      << std::chrono::duration_cast<std::chrono::microseconds>(
+                             std::chrono::steady_clock::now() - t_opt).count()
+                      << " us\n";
+    }
 
     // CTPE (opt-in): tras optimizar, ejecuta los candidatos de precomputo en el
     // ComptimeRuntime dado e inyecta el resultado escalar como CONST.  Solo si el

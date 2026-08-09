@@ -16,7 +16,9 @@
  */
 
 #include "vx/lowering.h"
-#include <algorithm> // UCRT64: no transitivo
+#include <algorithm>
+#include <chrono>
+#include <iostream>
 #include "ffi/virtual_lib_registry.h" // lookup_virtual_fn (bug 161: MC.23)
 #include "vx/asm/asm_effects.h" // inferencia de clobbers ( AS inc.4)
 #include "vx/asm/asm_diag.h"      // diagnosticos estructurales del asm (ASA.2)
@@ -1049,6 +1051,15 @@ void Lowering::register_fn_ret_info(const std::string &name, PrimitiveKind kind,
 }
 
 bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
+    /* Reparto del coste de la bajada.  Es la fase mas cara del frontend en un
+     * fichero de un solo modulo -- 1,0 s de los 1,2 que costaba uno de 5.700
+     * lineas -- y hasta ahora se publicaba como un solo numero, que no dice si
+     * el trabajo esta en las funciones o en lo que se prepara antes. */
+    const bool medir_bajada = std::getenv("VESTA_TIMES") != nullptr;
+    using RelojBajada = std::chrono::steady_clock;
+    const auto marca_run = RelojBajada::now();
+    long us_previo = 0, n_bajadas = 0;
+
     const size_t initial_errors = diags_.error_count();
     out_module.name = module_name;
     out_module.format = "velb";
@@ -1619,13 +1630,19 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         g_macro_visiting = nullptr;
     }
 
-    if (main_decl) lower_function(main_decl, out_module);
+    us_previo = static_cast<long>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            RelojBajada::now() - marca_run).count());
+    const auto marca_fns = RelojBajada::now();
+
+    if (main_decl) { lower_function(main_decl, out_module); ++n_bajadas; }
 
     for (auto &decl : mod_.decls) {
         if (!decl) continue;
         if (decl->kind == ast::NodeKind::FunctionDecl) {
             auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
             if (fd == main_decl) continue; // ya bajada
+            ++n_bajadas;
             if (fd->is_async) {
                 lower_async_function(fd, out_module);
             } else {
@@ -2254,6 +2271,17 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         }
     }
 
+    if (medir_bajada) {
+        const long us_total = static_cast<long>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                RelojBajada::now() - marca_run).count());
+        const long us_fns = static_cast<long>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                RelojBajada::now() - marca_fns).count());
+        std::cerr << "[bajada] " << n_bajadas << " funciones | preparar "
+                  << us_previo << " us | bajar+resto " << us_fns
+                  << " us | total " << us_total << " us\n";
+    }
     return diags_.error_count() == initial_errors;
 }
 
