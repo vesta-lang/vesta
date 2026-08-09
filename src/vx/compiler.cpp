@@ -1173,8 +1173,29 @@ CompileResult compile_vx_source(const std::string &source,
         // PARCIAL es propiedad del cuerpo escrito, no del optimizador.  El
         // coste TOTAL lo compone el analizador via el callgraph.  Fuera de
         // --analyze, inline normal (no se genera .velb en --analyze).
+        /* Se cronometra aparte.  Antes el campo `optimizar_us` valia CERO en el
+         * camino de un fichero suelto -- no porque no se optimizara, sino
+         * porque su coste se contaba dentro de `emitir_us` --, asi que quien
+         * mirase el reparto concluia que optimizar es gratis.  Un numero que se
+         * publica y no es el que dice ser es peor que no publicarlo. */
+        const auto marca_opt = RelojFase::now();
+        /* El codigo que de verdad se construye, para quien ademas del coste del
+         * cuerpo escrito necesita ver eso.  Sale de la misma bajada: se
+         * optimiza una COPIA con el inline puesto, y asi no hay que compilar el
+         * fuente otra vez.  Va antes porque `ir_optimize` modifica el modulo
+         * que recibe. */
+        if (opts.emit_ir_inlined && opts.emit_ir_preopt) {
+            ir::IrModule con_inline = irmod_for_section;
+            ir::ir_optimize(con_inline, opt_level_from_int(opts.opt_level),
+                            /*allow_inline=*/true);
+            res.ir_module_cache_bytes_inlined =
+                ir::emit_ir_module_cache(con_inline);
+        }
         ir::ir_optimize(irmod_for_section, opt_level_from_int(opts.opt_level),
                         /*allow_inline=*/!opts.emit_ir_preopt);
+        res.tiempos.optimizar_us += static_cast<long>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                RelojFase::now() - marca_opt).count());
         /* No se serializa todavia: falta saber en que registro dejo el
          * asignador cada valor, y eso solo se sabe tras emitir.  Se guarda y
          * se serializa mas abajo, ya con esa informacion dentro. */
@@ -1212,7 +1233,9 @@ CompileResult compile_vx_source(const std::string &source,
     // No en modulos con @Macro: el precomputo ya lo hace la maquinaria de macros
     // (comptime) y su two-phase (VESTA_MC_PREBUILT) choca con el two-phase de
     // CTPE.  Ademas los macros dejan un runtime comptime propio que conflictua.
-    if (!std::getenv("VESTA_NO_CTPE") && opts.opt_level >= 2 &&
+    // Tampoco cuando solo se pide el IR: el precomputo existe para que el
+    // artefacto lleve el resultado ya calculado, y aqui no hay artefacto.
+    if (!std::getenv("VESTA_NO_CTPE") && opts.opt_level >= 2 && !opts.ir_only &&
         !res.ir_section_bytes.empty() && !res.has_lowerable_macros) {
         ctpe::Evaluability ev = ctpe::compute_evaluability(irmod);
         std::vector<ctpe::Candidate> cands = ctpe::find_candidates(irmod, ev);
@@ -1258,23 +1281,33 @@ CompileResult compile_vx_source(const std::string &source,
         }
     }
 
-    ir::EmitResult eres = ir::ir_emit_module(irmod, emit_opts);
-    // Fin del modo CTPE: apagar los polls de safepoint para no afectar a los
-    // compiles del JIT en runtime ni a los @Macro del lenguaje.
-    jit::jit_set_ctpe_safepoint(0);
-    if (!eres.ok) {
-        // Volcar el error del emisor al sumidero unificado.
-        SourceLoc loc;
-        loc.file = filename;
-        res.diagnostics.error(std::move(loc),
-                              std::string("emisor IR fallo: ") + eres.error);
-        res.ok = false;
-        return res;
+    /* Quien solo quiere el IR se salta la emision: asignar registros y escribir
+     * el texto `.vel` es el noventa por ciento del coste del frontend, y hay
+     * consumidores -- el informe de `--analyze` -- que no leen ni una linea de
+     * ese texto.  Lo que le falta al modulo serializado es en que registro
+     * quedo cada valor, que la pone el emisor por ser quien lo decide. */
+    ir::EmitResult eres;
+    if (!opts.ir_only) {
+        eres = ir::ir_emit_module(irmod, emit_opts);
+        // Fin del modo CTPE: apagar los polls de safepoint para no afectar a
+        // los compiles del JIT en runtime ni a los @Macro del lenguaje.
+        jit::jit_set_ctpe_safepoint(0);
+        if (!eres.ok) {
+            // Volcar el error del emisor al sumidero unificado.
+            SourceLoc loc;
+            loc.file = filename;
+            res.diagnostics.error(std::move(loc),
+                                  std::string("emisor IR fallo: ") + eres.error);
+            res.ok = false;
+            return res;
+        }
     }
 
     /* Ahora si: el asignador ya dijo donde vive cada valor, asi que el
      * intermedio del artefacto puede llevarlo.  Es lo que permite decir, al
-     * explicar un fallo, que `%8` es el `r1` de la instruccion maquina. */
+     * explicar un fallo, que `%8` es el `r1` de la instruccion maquina.  Sin
+     * emision el mapa esta vacio y el bucle no hace nada: el modulo sale igual,
+     * solo que sin esa anotacion. */
     if (hay_seccion) {
         for (auto &fn : mod_para_seccion.functions) {
             auto it = eres.value_regs.find(fn.name);
@@ -1282,7 +1315,9 @@ CompileResult compile_vx_source(const std::string &source,
             const size_t n = std::min(fn.values.size(), it->second.size());
             for (size_t v = 0; v < n; ++v) fn.values[v].reg = it->second[v];
         }
-        res.ir_section_bytes = ir::emit_ir_section(mod_para_seccion.functions);
+        // El intermedio que viaja dentro del artefacto: sin artefacto, sobra.
+        if (!opts.ir_only)
+            res.ir_section_bytes = ir::emit_ir_section(mod_para_seccion.functions);
         /*  AOT: modulo completo (functions + static_data + globals) para
          * que el driver -m aot materialice los literales en .rodata. */
         res.ir_module_cache_bytes = ir::emit_ir_module_cache(mod_para_seccion);
@@ -1305,10 +1340,12 @@ CompileResult compile_vx_source(const std::string &source,
         res.html_vel = html_from_vel_text(res.vel_text);
     }
 
-    // Lo que queda desde el final de la bajada es emitir -- y dentro va el
-    // optimizador de IR, que no se separa aparte porque corre entrelazado con
-    // la emision y partirlo daria dos numeros que no suman lo que se ve.
-    res.tiempos.emitir_us = cerrar_fase();
+    /* Lo que queda desde el final de la bajada, menos lo que ya se atribuyo al
+     * optimizador: los dos siguen sumando exactamente lo que se ve, pero ahora
+     * se puede saber cual de los dos es el que cuesta.  Hacia falta para poder
+     * responder si `--analyze` -- que necesita el IR optimizado pero NO el
+     * texto `.vel` -- se puede ahorrar la emision. */
+    res.tiempos.emitir_us = cerrar_fase() - res.tiempos.optimizar_us;
 
     res.ok = !res.diagnostics.has_errors();
     return res;

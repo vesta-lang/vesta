@@ -3169,6 +3169,15 @@ CompileResult compile_vx_project(
     // float) no es parte del cuerpo de `fetch_add<i64>` -- su algoritmo real es
     // O(1).  Es resolucion de la monomorfizacion, no optimizacion.  NO se
     // inlinea: el parcial es propiedad del cuerpo escrito.
+    /* Copia para el modulo CON inline, tomada ANTES de ese plegado.  Importa
+     * que sea antes: el plegado se hace para medir el cuerpo escrito y modifica
+     * `merged`, asi que partir de ahi describiria un programa que el compilador
+     * nunca ve.  Desde aqui, la entrada es exactamente la de una compilacion
+     * normal, que es lo unico que hace util al informe. */
+    ir::IrModule para_inline;
+    const bool quiere_inline = opts.emit_ir_inlined && opts.emit_ir_preopt;
+    if (quiere_inline) para_inline = merged;
+
     if (opts.emit_ir_preopt) {
         for (auto &fn : merged.functions) {
             bool changed = true;
@@ -3218,6 +3227,17 @@ CompileResult compile_vx_project(
      * el programa no los tenia. */
     analysis::asa::volcar_formas(merged, "pre-opt");
 
+    /* El codigo que de verdad se construye, para quien ademas del coste del
+     * cuerpo escrito necesita ver eso.  Sale de la misma bajada, asi que no hay
+     * que compilar el fuente otra vez: basta optimizar la copia de arriba con
+     * el inline puesto.  Aqui y no antes, porque la ISA del objetivo ya esta
+     * fijada y el optimizador decide con ella. */
+    if (quiere_inline) {
+        ir::ir_optimize(para_inline, opt_level_from_int_(opts.opt_level),
+                        /*allow_inline=*/true);
+        res.ir_module_cache_bytes_inlined = ir::emit_ir_module_cache(para_inline);
+    }
+
     ir::ir_optimize(merged, opt_level_from_int_(opts.opt_level),
                     /*allow_inline=*/!opts.emit_ir_preopt);
 
@@ -3266,22 +3286,34 @@ CompileResult compile_vx_project(
     // emit_opts.emit_stackmaps queda en su default (true): VSMP siempre.
     emit_opts.module_name =
         opts.module_name.empty() ? work.back().module_name : opts.module_name;
-    ir::EmitResult eres = ir::ir_emit_module(merged, emit_opts);
-    if (!eres.ok) {
-        SourceLoc loc;
-        loc.file = root_path;
-        res.diagnostics.error(std::move(loc),
-                              std::string("emisor IR fallo: ") + eres.error);
-        res.ok = false;
-        return res;
+    /* Quien solo quiere el IR se salta esto.  Asignar registros y escribir el
+     * texto `.vel` es el noventa por ciento del coste del frontend, y el
+     * informe de `--analyze` no lee ni una linea de ese texto.  Lo que le falta
+     * al modulo es en que registro quedo cada valor, que la pone el emisor por
+     * ser quien lo decide; el resto sale igual.
+     *
+     * Se salta la EMISION, no lo que viene detras: ahi se decide si el modulo
+     * necesita la maquina de compilacion, y volver antes la habria apagado
+     * justo para quien mas la necesita. */
+    ir::EmitResult eres;
+    if (!opts.ir_only) {
+        eres = ir::ir_emit_module(merged, emit_opts);
+        if (!eres.ok) {
+            SourceLoc loc;
+            loc.file = root_path;
+            res.diagnostics.error(std::move(loc),
+                                  std::string("emisor IR fallo: ") + eres.error);
+            res.ok = false;
+            return res;
+        }
     }
     res.vel_text = std::move(eres.vel_text);
 
     // Mapa del artefacto: uno solo con los simbolos de TODOS los modulos.  El
     // ejecutable los contiene a todos, asi que una direccion suya puede caer en
     // cualquiera; un mapa por modulo dejaria sin explicar todo lo que no fuera
-    // el modulo raiz.
-    {
+    // el modulo raiz.  Sin artefacto no hay nada que mapear.
+    if (!opts.ir_only) {
         vxdbg::ArtifactMap map;
         for (const auto &pm : work)
             for (const auto &kv : pm.vxdbg_symbols) map.add(kv.first, kv.second);
@@ -3302,7 +3334,9 @@ CompileResult compile_vx_project(
         const size_t n = std::min(fn.values.size(), it->second.size());
         for (size_t v = 0; v < n; ++v) fn.values[v].reg = it->second[v];
     }
-    res.ir_section_bytes = ir::emit_ir_section(merged.functions);
+    // El intermedio que viaja dentro del artefacto: sin artefacto, sobra.
+    if (!opts.ir_only)
+        res.ir_section_bytes = ir::emit_ir_section(merged.functions);
     //  AOT multi-modulo: exponer el IR mergeado (functions + static_data
     // + globals) como module_cache para que el path -m aot lo consuma.  El
     // single-file lo rellena en compile_vx_source; aqui lo rellenamos desde

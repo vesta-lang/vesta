@@ -278,6 +278,11 @@ static bool recompilar_con_maquina_de_compilacion(
     vx::CompileOptions copts_vm = copts;
     copts_vm.native_poo = false;
     copts_vm.emit_debug = true;
+    /* Y con el texto `.vel`, siempre: esta intermedia se ENSAMBLA y se ejecuta.
+     * Quien la pide puede no querer artefacto para si mismo -- el informe no lo
+     * quiere -- pero eso no se hereda aqui: sin `.vel` no hay nada que ensamblar
+     * y no habria maquina de compilacion que ejecutar. */
+    copts_vm.ir_only = false;
     /* La intermedia es la que se EJECUTA para generar el codigo, asi que se
      * compila como se compila un programa: si se le pide el trato del informe
      * -- sin inline, sin comprobaciones -- deja de parecerse al que de verdad
@@ -2120,6 +2125,14 @@ int main(int argc, char *argv[]) {
         copts.module_name = "main";
         copts.opt_level = 2;
         copts.emit_ir_preopt = true;
+        /* Y ademas el modulo con el inline puesto: el informe necesita los DOS
+         * -- el cuerpo escrito para el coste, el codigo real para todo lo
+         * demas -- y antes eso eran dos compilaciones del fuente entero. */
+        copts.emit_ir_inlined = true;
+        /* El informe lee IR y nada mas: el texto `.vel` se generaba entero --
+         * asignacion de registros incluida, que es el noventa por ciento del
+         * coste del frontend -- para tirarlo sin abrirlo. */
+        copts.ir_only = true;
         // --analyze respeta -ffp-contract=off (el coste/IR reflejado debe
         // coincidir con el binario que se generara).
         copts.fp_contract = !(result.count("ffp-contract") &&
@@ -2146,6 +2159,22 @@ int main(int argc, char *argv[]) {
         // resuelto en alias".
         const bool como_proyecto = vx::vx_source_has_imports(vx_source) ||
                                    vx::vx_source_declara_namespace(vx_source);
+        /* Cuanto cuesta analizar, por partes.  Hacia falta: la pregunta de por
+         * que tarda solo se podia responder midiendo por fuera y suponiendo, y
+         * suponer fallo -- la sospecha era la emision del `.vel` y no era.
+         * Se pide con VESTA_TIMES para no ensuciar el informe. */
+        using RelojAnalisis = std::chrono::steady_clock;
+        auto marca_an = RelojAnalisis::now();
+        auto tramo_us = [&marca_an]() -> long {
+            const auto ahora = RelojAnalisis::now();
+            const long us = static_cast<long>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    ahora - marca_an).count());
+            marca_an = ahora;
+            return us;
+        };
+        const bool medir_analisis = std::getenv("VESTA_TIMES") != nullptr;
+        long us_compilar_coste = 0, us_modulo_final = 0;
         vx::CompileResult cr =
             como_proyecto ? vx::compile_vx_project(vx_path, copts)
                           : vx::compile_vx_source(vx_source, vx_path, copts);
@@ -2164,6 +2193,7 @@ int main(int argc, char *argv[]) {
             recompilar_con_maquina_de_compilacion(cr, vx_path, vx_source, copts,
                                                   tmp_pref);
         }
+        us_compilar_coste = tramo_us();
         // Volcar diagnosticos (errores/warnings) del frontend.
         for (const auto &d : cr.diagnostics.all())
             vx::print_diagnostic(std::cerr, d);
@@ -2261,38 +2291,18 @@ int main(int argc, char *argv[]) {
          * analisis que describe un programa distinto del que se construye es
          * peor que no tenerla, porque se le cree.
          *
-         * Asi que se compila una segunda vez con la optimizacion de verdad y es
-         * ESE modulo el que se analiza.  Cuesta una compilacion mas; decir la
-         * verdad los vale. */
+         * Asi que se pide TAMBIEN el modulo con el inline puesto.  Sale de la
+         * misma bajada -- basta optimizar una copia --, asi que ya no cuesta
+         * una compilacion entera del fuente como cuando eran dos pasadas
+         * separadas: en un fuente pequeno con codigo generado al compilar, esa
+         * segunda pasada era casi la mitad de lo que tardaba el informe. */
+        const long us_coste_bigo = tramo_us();
         ir::IrModule amod_build;
         bool hay_build = false;
-        {
-            vx::CompileOptions copts_b = copts;
-            copts_b.emit_ir_preopt = false; // con inline: el codigo final
-            vx::CompileResult cr_b =
-                como_proyecto ? vx::compile_vx_project(vx_path, copts_b)
-                              : vx::compile_vx_source(vx_source, vx_path, copts_b);
-            /* Y con el codigo que se GENERA al compilar ya resuelto, por la
-             * misma razon que el de arriba: este es el modulo que se analiza,
-             * asi que si aqui falta la segunda pasada, el informe describe los
-             * bloques de asm vacios -- una funcion que escribe sesenta y cuatro
-             * bytes por su parametro sale tocando solo el hueco de una
-             * variable.  Arreglarlo en el otro y no en este era arreglarlo en
-             * el que no se mira. */
-            {
-                std::error_code ec2;
-                const std::string pref_b =
-                    (std::filesystem::temp_directory_path(ec2) /
-                     ("vx_analyze_build_" +
-                      std::filesystem::path(vx_path).stem().string()))
-                        .string();
-                recompilar_con_maquina_de_compilacion(cr_b, vx_path, vx_source,
-                                                      copts_b, pref_b);
-            }
-            if (cr_b.ok && !cr_b.ir_module_cache_bytes.empty())
-                hay_build = ir::parse_ir_module_cache(cr_b.ir_module_cache_bytes,
-                                                      amod_build);
-        }
+        if (!cr.ir_module_cache_bytes_inlined.empty())
+            hay_build = ir::parse_ir_module_cache(
+                cr.ir_module_cache_bytes_inlined, amod_build);
+        us_modulo_final = tramo_us();
         const ir::IrModule &amod_efectos = hay_build ? amod_build : amod_post;
         if (!want_json)
             /* Los DOS estados: antes de optimizar y el codigo final.  Mirar
@@ -2444,6 +2454,14 @@ int main(int argc, char *argv[]) {
             js << "}";
             std::cout << js.str() << "\n";
             return EXIT_SUCCESS;
+        }
+
+        if (medir_analisis) {
+            const long us_efectos = tramo_us();
+            std::cerr << "[analyze] tiempos: compilar " << us_compilar_coste
+                      << " us | coste " << us_coste_bigo
+                      << " us | modulo-final " << us_modulo_final
+                      << " us | efectos " << us_efectos << " us\n";
         }
 
         // Salida legible: por cada funcion (orden del modulo POST-opt),
@@ -2676,6 +2694,12 @@ int main(int argc, char *argv[]) {
                 // el cuerpo inlineado -> mide distinto que verify (que si usa el
                 // no-inline) y la sugerencia contradice la verificacion.
                 o2.emit_ir_preopt = true;
+                /* Y de aqui tampoco se lee el texto `.vel`: esta tabla mira el
+                 * IR de cada arquitectura y nada mas.  Compilar el fuente una
+                 * vez por arquitectura ya cuesta; hacerlo generando ademas el
+                 * codigo maquina de cada una para tirarlo era la mayor parte de
+                 * lo que tardaba el informe en los fuentes grandes. */
+                o2.ir_only = true;
                 vx::CompileResult r2 =
                     vx::vx_source_has_imports(vx_source)
                         ? vx::compile_vx_project(vx_path, o2)
@@ -2772,6 +2796,10 @@ int main(int argc, char *argv[]) {
                 tabla.push_back(std::move(pa));
             }
             vx::set_aot_condcomp_target(host_os, host_arch); // dejarlo como estaba
+            if (medir_analisis)
+                std::cerr << "[analyze] tiempos: por-arquitectura ("
+                          << vx::cwhen::known_archs().size()
+                          << " compilaciones) " << tramo_us() << " us\n";
 
             // Las funciones cuyo coste o huella NO son iguales en todas.
             std::set<std::string> difieren;
@@ -4383,6 +4411,7 @@ int main(int argc, char *argv[]) {
                 linea << "[vx] frontend: analisis " << tf.analisis_us << " us"
                       << " | tipos " << tf.tipos_us << " us"
                       << " | bajada " << tf.bajada_us << " us"
+                      << " | optimizar " << tf.optimizar_us << " us"
                       << " | emitir " << tf.emitir_us << " us"
                       << "   (comprobar " << tf.comprobar_us() << " us, total "
                       << tf.total_us() << " us)\n";

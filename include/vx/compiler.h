@@ -82,6 +82,41 @@ struct CompileOptions {
     /// loop-elim).  Cero impacto en el codegen (rama de debug/analisis).
     bool emit_ir_preopt = false;
 
+    /**
+     * @brief Ademas, el modulo optimizado CON inline.
+     *
+     * Solo tiene sentido junto a @c emit_ir_preopt, que optimiza SIN inline
+     * porque el coste parcial es propiedad del cuerpo escrito.  Quien ademas
+     * necesita ver el codigo que de verdad se construye -- el informe de
+     * efectos -- pedia antes una SEGUNDA compilacion entera del fuente para
+     * obtenerlo.  Sale de la misma bajada: basta optimizar una copia.
+     *
+     * Ademas de costar la mitad, quita un fallo: aquella segunda compilacion
+     * corria sin @c emit_ir_preopt, o sea que un contrato incumplido la hacia
+     * abortar y el informe se quedaba callado justo cuando tenia algo que
+     * ensenar.
+     *
+     * Lo deja en @c CompileResult::ir_module_cache_bytes_inlined.
+     */
+    bool emit_ir_inlined = false;
+
+    /**
+     * @brief Parar tras optimizar el IR: no emitir el texto @c .vel.
+     *
+     * Para quien solo quiere el IR y tira el resto.  Medido en un fuente
+     * pequeno: analizar, comprobar tipos y bajar cuestan 2,4 ms entre los tres,
+     * optimizar 3,4 ms, y EMITIR 52 ms -- el noventa por ciento, casi todo
+     * asignacion de registros.  El informe de @c --analyze pagaba eso cuatro
+     * veces para no leer ni una linea del @c .vel.
+     *
+     * Lo que se pierde: @c vel_text queda vacio, y con el @c ir_section_bytes y
+     * la anotacion de registro de cada valor (@c IrValue::reg) -- la pone el
+     * emisor, que es quien la sabe.  @c ir_module_cache_bytes SI se llena; es
+     * el mismo modulo, sin esa anotacion.  Quien necesite un artefacto no debe
+     * pedir esto.
+     */
+    bool ir_only = false;
+
     /// Cuando true, llena @c CompileResult::mermaid_ast con un diagrama
     /// Mermaid del AST Vesta post type-check.  Util para visualizar la
     /// estructura del codigo fuente: clases, herencia, anotaciones.
@@ -418,6 +453,16 @@ struct CompileResult {
      * false (caso comun en builds de produccion: cero coste extra).
      */
     std::vector<uint8_t> ir_module_cache_bytes_preopt;
+
+    /**
+     * @brief El modulo optimizado CON inline (mismo formato magic VXMC).
+     *
+     * Llenado SOLO con @c CompileOptions::emit_ir_inlined.  Es el codigo que de
+     * verdad se construye, frente a @c ir_module_cache_bytes que bajo
+     * @c emit_ir_preopt se optimiza sin inline para medir el cuerpo escrito.
+     * Los dos salen de la misma bajada.
+     */
+    std::vector<uint8_t> ir_module_cache_bytes_inlined;
 
     /// Codigo fuente generado por el transpiler IR -> lenguaje destino.
     /// Lleno solo si @c CompileOptions::port_target != "".  El contenido
