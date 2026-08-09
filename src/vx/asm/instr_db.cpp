@@ -366,6 +366,28 @@ const char *ext_of(Isa isa, int32_t form_id) {
     return t.str[t.forms[form_id].ext];
 }
 
+bool operando_explicito(Isa isa, int32_t form_id, size_t idx, bool &lee,
+                        bool &escribe) {
+    const IsaData t = tables_for(isa);
+    if (!t.forms || form_id < 0 ||
+        static_cast<unsigned>(form_id) >= t.form_count)
+        return false;
+    const DbForm &f = t.forms[form_id];
+    size_t vistos = 0;
+    for (uint8_t i = 0; i < f.ops_count; ++i) {
+        const DbOperand &o = t.ops[f.ops_off + i];
+        // bit2 = implicito, bit3 = suprimido: no se escriben en el texto.
+        if ((o.flags & 0x04) != 0 || (o.flags & 0x08) != 0) continue;
+        if (vistos == idx) {
+            lee = (o.flags & 0x01) != 0;
+            escribe = (o.flags & 0x02) != 0;
+            return true;
+        }
+        ++vistos;
+    }
+    return false;
+}
+
 const char *isa_set_of(Isa isa, int32_t form_id) {
     const IsaData t = tables_for(isa);
     if (!t.forms || form_id < 0 ||

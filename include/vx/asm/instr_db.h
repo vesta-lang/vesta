@@ -323,6 +323,28 @@ const char *iclass_name(Isa isa, int32_t form_id);
 uint16_t overlay_of(Isa isa, int32_t form_id);
 /// Extension de una forma ("AVX512EVEX", "SSE2", "BASE"...), "" si no vale.
 const char *ext_of(Isa isa, int32_t form_id);
+/**
+ * @brief Rol (lee / escribe) del operando EXPLICITO numero @p idx de una forma.
+ *
+ * El rol se estaba deduciendo buscando el nombre del registro en las listas de
+ * lectura y escritura, y eso solo funciona con los generales: para `movdqa
+ * xmm1, xmm0` no encontraba nada y la instruccion acababa pareciendo que no
+ * toca ningun registro.  La forma lo dice por POSICION, que es como esta
+ * modelado y vale para cualquier clase y cualquier ISA.
+ *
+ * Se cuentan solo los operandos EXPLICITOS -- los que se escriben en el texto --
+ * porque es contra ellos contra los que se indexa; los implicitos van aparte.
+ *
+ * @param isa     ISA de la forma.
+ * @param form_id Forma.
+ * @param idx     Posicion del operando explicito (0 = el primero del texto).
+ * @param lee     Sale a true si el operando se lee.
+ * @param escribe Sale a true si se escribe.
+ * @return false si la forma o el indice no existen (no se toca nada).
+ */
+bool operando_explicito(Isa isa, int32_t form_id, size_t idx, bool &lee,
+                        bool &escribe);
+
 /// Conjunto ISA que EXIGE una forma ("AVX512F_512", "AVX2"...), "" si no vale.
 const char *isa_set_of(Isa isa, int32_t form_id);
 

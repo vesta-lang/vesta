@@ -67,6 +67,37 @@ inline const char *asm_x86_gp_name(int phys, uint16_t width_bits) {
 }
 
 /**
+ * @brief indice fisico de un nombre de registro del banco ANCHO de x86
+ *        (@c xmmN / @c ymmN / @c zmmN).  Rellena @p out_width con el ancho en
+ *        bits.  -1 si no es uno de esos.
+ *
+ * Es el inverso de @ref asm_phys_reg_name para la clase vectorial: el numero es
+ * el mismo en los tres anchos porque son la misma ranura vista a 128, 256 o 512
+ * bits, asi que solo el prefijo dice el ancho.
+ */
+inline int asm_x86_vec_index(const std::string &tok, uint16_t *out_width) {
+    std::string s;
+    s.reserve(tok.size());
+    for (char c : tok)
+        s += static_cast<char>(std::tolower((unsigned char)c));
+    uint16_t w = 0;
+    size_t pos = 0;
+    if (s.rfind("xmm", 0) == 0) { w = 128; pos = 3; }
+    else if (s.rfind("ymm", 0) == 0) { w = 256; pos = 3; }
+    else if (s.rfind("zmm", 0) == 0) { w = 512; pos = 3; }
+    else return -1;
+    if (pos >= s.size()) return -1;
+    int n = 0;
+    for (size_t i = pos; i < s.size(); ++i) {
+        if (s[i] < '0' || s[i] > '9') return -1;
+        n = n * 10 + (s[i] - '0');
+        if (n > 31) return -1;
+    }
+    if (out_width) *out_width = w;
+    return n;
+}
+
+/**
  * @brief indice fisico (0..15, orden de encoding) de un nombre de GPR x86.
  *        Rellena @p out_width con el ancho en bits.  -1 si no es un GPR.
  */

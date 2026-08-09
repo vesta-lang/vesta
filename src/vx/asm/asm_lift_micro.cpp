@@ -153,7 +153,7 @@ void split_insn(const std::string &insn, std::string &mnem,
 /// @c false si algun operando NO es un registro GP nombrable (MEM/IMM/FP/VEC ->
 ///) -> el llamador emite @c INLINE_ASM.
 bool build_operands(
-    const std::string &insn, const instr_db::AsmInsnSem &sem,
+    instr_db::Isa isa, const std::string &insn, const instr_db::AsmInsnSem &sem,
     const std::unordered_map<std::string, ir::IrValueId> &slot_of,
     std::vector<ir::AsmMicroOperand> &operands, std::string &tmpl, AsmMotivoOpaco *motivo) {
     operands.clear();
@@ -167,15 +167,28 @@ bool build_operands(
     tmpl = mnem;
     for (size_t k = 0; k < toks.size(); ++k) {
         uint16_t w = 0;
-        const int phys = vx::asm_x86_gp_index(toks[k], &w);
+        uint8_t clase = vx::ASM_RC_GP;
+        int phys = vx::asm_x86_gp_index(toks[k], &w);
+        if (phys < 0) {
+            /* Y del banco ANCHO.
+             *
+             * Solo se aceptaban registros generales, asi que un `movdqa xmm1,
+             * xmm0` -- que es exactamente el caso que DEBE quedarse como micro
+             * asm, porque es especifico de la ISA y nunca sera IR -- se caia al
+             * camino opaco por no saber leer el nombre de su registro.  El
+             * modelo ya tiene la clase vectorial; faltaba el inverso del
+             * nombrador. */
+            phys = vx::asm_x86_vec_index(toks[k], &w);
+            if (phys >= 0) clase = vx::ASM_RC_VEC;
+        }
         if (phys < 0)
             return AsmMotivoOpaco::anotar(
                 motivo, insn,
                 "usa un operando que el elevado aun no pasa a IR (memoria, "
-                "inmediato, coma flotante o vectorial)");
+                "inmediato o coma flotante)");
         ir::AsmMicroOperand op;
         op.kind = ir::AsmOperandKind::REG;
-        op.regclass = vx::ASM_RC_GP;
+        op.regclass = clase;
         op.width = w;
         op.fixed_phys = (int16_t)phys; // fisico fijo del texto (constraint RA)
         // Un registro LIGADO a una variable Vesta (register()) necesita
@@ -188,11 +201,28 @@ bool build_operands(
                 "toca un registro ligado a una variable, y eso todavia se "
                 "resuelve por el camino opaco");
         op.value = ir::IR_NO_VALUE; // fisico opaco (sin SSA)
-        // Rol del operando = presencia de su reg canonico en reads/writes DB.
+        /* Rol del operando: lo dice la FORMA, por posicion.
+         *
+         * Se estaba deduciendo buscando el nombre del registro en las listas de
+         * lectura y escritura de la instruccion, y eso solo funciona con los
+         * generales: para `movdqa xmm1, xmm0` no encontraba nada y la
+         * instruccion acababa pareciendo que no toca ningun registro -- o sea,
+         * el bloque entero se caia al camino opaco por no saber leer su propio
+         * modelo.  La forma lo dice por posicion y vale para cualquier clase.
+         *
+         * El nombre se conserva como respaldo: cubre los casos en que la forma
+         * no distingue (operandos implicitos que si aparecen escritos). */
         const std::string cn = lower(toks[k]);
         uint8_t fl = 0;
-        if (has_reg(sem.reads, cn)) fl |= ir::ASM_OP_READ;
-        if (has_reg(sem.writes, cn)) fl |= ir::ASM_OP_WRITE;
+        bool lee = false, escribe = false;
+        if (instr_db::operando_explicito(isa, sem.form_id, k, lee, escribe)) {
+            if (lee) fl |= ir::ASM_OP_READ;
+            if (escribe) fl |= ir::ASM_OP_WRITE;
+        }
+        if (fl == 0) {
+            if (has_reg(sem.reads, cn)) fl |= ir::ASM_OP_READ;
+            if (has_reg(sem.writes, cn)) fl |= ir::ASM_OP_WRITE;
+        }
         if (fl == 0)
             return AsmMotivoOpaco::anotar(
                 motivo, insn,
@@ -324,7 +354,7 @@ bool asm_lift_micro(
                 anotar_hueco_db(insn, "la forma esta en la base de datos pero "
                                       "no dice que registros lee o escribe");
             }
-            if (!build_operands(insn, sem, slot_of, operands, tmpl, motivo))
+            if (!build_operands(isa, insn, sem, slot_of, operands, tmpl, motivo))
                 return false; // build_operands ya dejo dicho el motivo
         }
         sems.push_back(std::move(sem));
