@@ -144,6 +144,10 @@ std::vector<AsmBlockReport> analizar_bloques_asm(const ir::IrModule &mod) {
                  * darlos. */
                 cuerpo = vx::asm_body_subst_greedy(cuerpo, fn.asm_reg_bindings);
                 AsmBlockReport r = describir(cuerpo, fn.name, in.source_line);
+                /* El nivel viaja en los bits 6-7 del bitfield de calificadores:
+                 * 0 = analizable, 1 = volatile, 2 = raw. */
+                if (in.op == ir::IrOp::INLINE_ASM)
+                    r.opacidad_pedida = ((in.imm >> 6) & 3ull) != 0;
                 r.indice = ++n;
                 out.push_back(std::move(r));
             }
@@ -199,6 +203,9 @@ void print_asm_report(std::ostream &os,
                       "  control   : %u salto(s)   flags: %u   barrera: %s\n",
                       r.control, r.escribe_flags, r.barrera ? "si" : "no");
         os << buf;
+        if (r.opacidad_pedida)
+            os << "  optimizar : NO -- se pidio `volatile`/`raw`.  Todo lo de "
+                  "arriba se sabe igual; lo que se respeta es no tocarlo\n";
 
         os << "  exige     : ";
         if (r.rasgos.empty()) {

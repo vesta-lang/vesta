@@ -14709,11 +14709,21 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
             culpable = motivo_opaco.instruccion;
             detalle = motivo_opaco.detalle;
         }
-        /* Y se avisa SIEMPRE.  Un bloque opaco es inseguro por definicion: deja
-         * de optimizarse y de el solo se sabe lo que diga su tabla de
-         * instrucciones, asi que todo lo que venga despues da por bueno un
-         * analisis que no llego.  Eso no sale como un error, sale como una
-         * respuesta tranquila y equivocada mas tarde y en otro sitio. */
+        /* Se avisa SIEMPRE... salvo cuando la opacidad se PIDIO.
+         *
+         * `volatile` y `raw` significan "no me optimices", y eso es una decision
+         * del programador, no una laguna del compilador: avisar ahi es un falso
+         * positivo, y un falso positivo repetido ensena a ignorar el aviso de
+         * verdad.  Ojo con lo que NO significan: seguir sabiendo QUE HACE el
+         * bloque -- sus efectos, que memoria toca, que le exige al procesador --
+         * vale igual, y el informe lo sigue contando.  Lo que se respeta es que
+         * no se toque, no que no se mire.
+         *
+         * En los demas el aviso va: un bloque opaco SIN QUERER es inseguro por
+         * definicion, porque todo lo que venga despues da por bueno un analisis
+         * que no llego, y eso no sale como un error sino como una respuesta
+         * tranquila y equivocada mas tarde y en otro sitio. */
+        const bool opacidad_pedida = (s->level != ast::AsmLevel::Analyzable);
         /* De QUE clase es la instruccion, preguntandoselo a la base.  Son tres
          * cosas distintas y confundirlas ensena a ignorar el aviso:
          *
@@ -14739,6 +14749,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                                       : vx::diag::format("VXA020", {rasgo});
             }
         }
+        if (!opacidad_pedida)
         diags_.diag(s->body_loc, DiagLevel::WARN, "VXA018",
                     {culpable.empty() ? std::string("(no consta cual)")
                                       : culpable,
@@ -14839,6 +14850,15 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     if (s->q_pure) q |= 1ull << 3;
     if (final_mem) q |= 1ull << 4;
     if (final_flags) q |= 1ull << 5;
+    /* Y el NIVEL, en los dos bits que quedaban libres.
+     *
+     * `q_volatile` no distingue nada: vale true por defecto, o sea en todos los
+     * bloques.  Lo que de verdad separa los casos es el nivel -- `analyzable` es
+     * "puedes analizarme y optimizarme", `volatile`/`raw` son "no me toques",
+     * que NO es "no me mires" --.  Sin ese dato en el IR, quien lee no puede
+     * distinguir un bloque que quedo opaco porque el compilador no supo de uno
+     * que esta opaco porque asi se pidio. */
+    q |= (static_cast<uint64_t>(s->level) & 3ull) << 6;
     //  AS inc.3/4: empaquetar el "asm-id" (indice en asm_clobber_lists)
     // en los bits altos de imm (8..31).  El backend port-C lo lee para
     // recuperar la lista de clobbers (explicitos + inferidos) de ESTE bloque.

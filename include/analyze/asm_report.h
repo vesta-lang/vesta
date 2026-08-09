@@ -85,6 +85,13 @@ struct AsmBlockReport {
     uint32_t escribe_flags = 0;              ///< instrucciones que mueven flags.
     uint32_t control = 0;                    ///< saltos / ramas dentro del bloque.
     bool barrera = false;                    ///< alguna atomica o serializante.
+    /// El programador PIDIO que no se optimizara (`volatile` / `raw`).
+    ///
+    /// Se dice porque cambia como leer todo lo demas: un bloque opaco a
+    /// proposito no es una laguna del compilador, es una decision.  Y no
+    /// significa que no se sepa lo que hace -- los efectos, la memoria y los
+    /// rasgos de aqui al lado valen igual --: significa que no se toca.
+    bool opacidad_pedida = false;
 
     /// Cobertura semantica en tanto por uno (conocidas / instrucciones).
     double cobertura() const {
