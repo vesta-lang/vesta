@@ -48,6 +48,27 @@ struct ProjectCacheKey {
     /// ella las funciones comptime no se ejecutan y lo compilado es
     /// provisional, asi que no puede compartir entrada con lo definitivo.
     bool comptime_prebuilt = false;
+
+    /**
+     * @name Que artefacto se pidio
+     *
+     * El cache guarda el fichero FINAL, y ese fichero no es el mismo segun lo
+     * que se pidiera: un `.velb` de la maquina virtual, o un binario nativo, y
+     * de este ultimo hay uno por formato, por tipo de emision y por
+     * arquitectura.  Sin estos campos en la clave, un acierto podria servir un
+     * `.velb` a quien pidio un `.exe` -- por eso el AOT se salto el cache
+     * entero durante un tiempo, y por eso volver a construirlo sin cambios
+     * costaba lo mismo que construirlo por primera vez.
+     * @{
+     */
+    bool aot = false;        ///< Se pidio codigo NATIVO, no bytecode de la VM.
+    std::string aot_arch;    ///< x86-64 / x86-32 / aarch64.
+    std::string aot_format;  ///< pe / elf.
+    std::string aot_emit;    ///< exe / obj / shared / bin.
+    std::string aot_target;  ///< SO objetivo, si se fijo (@Target / --target).
+    std::string aot_tier;    ///< Nivel de runtime (full / embed / bare).
+    std::string aot_perfil;  ///< Resto de opciones que cambian lo emitido.
+    /** @} */
 };
 
 ///  M5.B: entrada por modulo en el cache file.  Tras un compile

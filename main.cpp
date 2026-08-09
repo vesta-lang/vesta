@@ -265,6 +265,55 @@ extern "C" void runtime_ensure_vx_callback_registered(void);
  *         si no se pudo ensamblar la intermedia -- ahi se conserva la primera,
  *         que es lo unico que hay.
  */
+/**
+ * @brief Guarda en el cache del proyecto el artefacto FINAL que se acaba de
+ *        producir, con la huella de cada fuente que participo.
+ *
+ * Lo comparten los dos caminos que producen un artefacto -- el `.velb` de la
+ * maquina virtual y el binario nativo --, porque lo que se guarda cambia pero
+ * la forma de decidir si sigue valiendo es la misma: las huellas de los mismos
+ * ficheros.  Tenerlo escrito dos veces era garantizar que un dia uno de los dos
+ * se quedara atras.
+ *
+ * @param pc_path     Fichero de cache del proyecto.
+ * @param opts_hash   Huella de las opciones (incluye QUE artefacto se pidio).
+ * @param cr          Resultado del compile, por sus @c dep_paths.
+ * @param con_lineas  Si la huella de cada fuente cuenta las lineas
+ *                    (@c emit_debug); debe valer lo mismo al validar.
+ * @param artefacto   Bytes del fichero producido.
+ * @param verboso     Dejar constancia por stderr.
+ */
+static void guardar_cache_de_proyecto(const std::string &pc_path,
+                                      uint32_t opts_hash,
+                                      const vx::CompileResult &cr,
+                                      bool con_lineas,
+                                      const std::vector<uint8_t> &artefacto,
+                                      bool verboso) {
+    if (cr.dep_paths.empty() || artefacto.empty()) return;
+    std::vector<vx::ProjectCacheDep> deps;
+    deps.reserve(cr.dep_paths.size());
+    for (const auto &p : cr.dep_paths) {
+        std::ifstream df(p, std::ios::binary | std::ios::ate);
+        if (!df.is_open()) continue;
+        const std::streamsize dsz = df.tellg();
+        df.seekg(0, std::ios::beg);
+        std::string texto(static_cast<size_t>(dsz < 0 ? 0 : dsz), '\0');
+        if (dsz > 0) df.read(&texto[0], dsz);
+        vx::ProjectCacheDep d;
+        d.path = p;
+        d.source_hash = vx::hash_de_tokens(texto, con_lineas);
+        deps.push_back(std::move(d));
+    }
+    const bool guardado =
+        vx::project_cache_save(pc_path, opts_hash, deps, artefacto);
+    if (verboso) {
+        std::cerr << "[vx-project-cache] "
+                  << (guardado ? "saved" : "save_failed") << ": " << pc_path
+                  << " (" << artefacto.size() << " bytes, " << deps.size()
+                  << " deps)\n";
+    }
+}
+
 static bool recompilar_con_maquina_de_compilacion(
     vx::CompileResult &cr, const std::string &vx_path,
     const std::string &vx_source, const vx::CompileOptions &copts,
@@ -3760,6 +3809,42 @@ int main(int argc, char *argv[]) {
             const char *pre = std::getenv("VESTA_MC_PREBUILT");
             pck.comptime_prebuilt = (pre != nullptr && pre[0] != '\0');
         }
+        /* Que artefacto se pidio.  El cache guarda el fichero FINAL, asi que
+         * pedir un binario nativo y pedir un `.velb` no pueden compartir
+         * entrada -- ni dos binarios de arquitecturas distintas.  Todo lo que
+         * cambia lo que sale tiene que estar aqui: si algo se queda fuera, un
+         * acierto sirve un fichero que no es el que se pidio. */
+        pck.aot = aot_mode;
+        if (aot_mode) {
+            pck.aot_arch = result["aot-arch"].as<std::string>();
+            if (result.count("format"))
+                pck.aot_format = result["format"].as<std::string>();
+            if (result.count("emit"))
+                pck.aot_emit = result["emit"].as<std::string>();
+            {
+                std::string os_t, arch_t;
+                vx::get_aot_condcomp_target(os_t, arch_t);
+                pck.aot_target = os_t + "/" + arch_t;
+            }
+            pck.aot_tier = std::to_string(static_cast<int>(aot_tier));
+            std::ostringstream perfil;
+            perfil << (aot_freestanding ? "F" : "") << (aot_no_exceptions ? "E" : "")
+                   << (aot_no_io ? "I" : "") << (aot_no_mem ? "M" : "")
+                   << (result.count("no-pie") ? "P" : "") << ":"
+                   << result["float-isa"].as<std::string>() << ":"
+                   << (result.count("debug-info")
+                           ? result["debug-info"].as<std::string>()
+                           : "")
+                   << ":"
+                   << (result.count("bin-base")
+                           ? result["bin-base"].as<std::string>()
+                           : "")
+                   << ":"
+                   << (result.count("sysroot")
+                           ? result["sysroot"].as<std::string>()
+                           : "");
+            pck.aot_perfil = perfil.str();
+        }
         const uint32_t opts_hash = vx::project_cache_opts_hash(pck);
 
         // Path canonico del root para el cache key.
@@ -3791,18 +3876,18 @@ int main(int argc, char *argv[]) {
             diag_vx || diag_ir_pre || diag_ir_post || diag_vel || emit_ir ||
             emit_only || !copts.port_target.empty();
 
-        //  AOT multi-modulo (fix): el project-cache SOLO almacena un
-        // `.velb` (bytecode VM).  En modo `-m aot` el output es un binario
-        // NATIVO (PE/ELF), no un `.velb`.  Si dejaramos que el cache hit
-        // sirviera el `.velb` cacheado de un build previo (la ProjectCacheKey
-        // no distingue aot_mode/--format/--emit), el comando AOT escribiria un
-        // `.velb` y retornaria EXIT_SUCCESS ANTES de llegar al codegen nativo
-        // (bloque `if (aot_mode)` mas abajo) -> el usuario nunca obtenia su
-        // exe.  Solucion: en AOT saltamos por completo el project-cache (no
-        // puede servir ni guardar binarios nativos; el codegen AOT es siempre
-        // fresco).  Los caches per-dep (.vxi/.vxir) siguen aplicando.
-        if (project_cache_enabled && has_imports && !wants_pipeline_artifacts &&
-            !aot_mode) {
+        /* El cache guarda el fichero FINAL, sea cual sea: un `.velb` de la
+         * maquina virtual o un binario nativo.
+         *
+         * El AOT se lo saltaba entero, y con razon en su momento: la clave no
+         * distinguia que artefacto se habia pedido, asi que un acierto le
+         * habria servido un `.velb` a quien pedia un `.exe`.  Pero la respuesta
+         * era arreglar la clave, no apagar el cache -- volver a construir sin
+         * haber cambiado nada costaba lo mismo que construir por primera vez
+         * (127 ms contra los 14 del camino de la VM).  Ahora la clave lleva
+         * arch, formato, tipo de emision, objetivo, nivel de runtime y el resto
+         * de opciones que cambian lo emitido. */
+        if (project_cache_enabled && has_imports && !wants_pipeline_artifacts) {
             uint32_t cached_opts_hash = 0;
             std::vector<vx::ProjectCacheDep> cached_deps;
             std::vector<uint8_t> cached_velb;
@@ -3811,8 +3896,11 @@ int main(int argc, char *argv[]) {
                 cached_opts_hash == opts_hash && !cached_deps.empty() &&
                 !cached_velb.empty() &&
                 vx::project_cache_validate(cached_deps, copts.emit_debug)) {
-                // HIT: escribir el .velb cacheado al output y salir.
-                const std::string out_velb = out_prefix + ".velb";
+                // HIT: escribir el artefacto cacheado al output y salir.  En
+                // AOT el fichero final es `out_prefix` tal cual (ya trae su
+                // extension); en la VM se le anade `.velb`.
+                const std::string out_velb =
+                    aot_mode ? out_prefix : (out_prefix + ".velb");
                 std::ofstream f(out_velb, std::ios::binary);
                 if (f) {
                     f.write(reinterpret_cast<const char *>(cached_velb.data()),
@@ -3991,7 +4079,28 @@ int main(int argc, char *argv[]) {
                 aopt.sysroot = result["sysroot"].as<std::string>();
             aopt.argv0 = argv[0];
             aopt.source_path = vx_path;
-            return vesta::tc::compile_aot(cr, copts, out_prefix, aopt);
+            const int rc_aot = vesta::tc::compile_aot(cr, copts, out_prefix, aopt);
+            /* Y se guarda, para que volver a construir sin haber cambiado nada
+             * no cueste construirlo otra vez.  Solo si salio bien: cachear un
+             * fallo seria servirlo despues como si fuera el artefacto. */
+            if (rc_aot == EXIT_SUCCESS && project_cache_enabled && has_imports &&
+                !wants_pipeline_artifacts) {
+                std::ifstream af(out_prefix, std::ios::binary | std::ios::ate);
+                if (af.is_open()) {
+                    const std::streamsize asz = af.tellg();
+                    af.seekg(0, std::ios::beg);
+                    std::vector<uint8_t> abytes(
+                        static_cast<size_t>(asz < 0 ? 0 : asz));
+                    if (asz > 0)
+                        af.read(reinterpret_cast<char *>(abytes.data()), asz);
+                    af.close();
+                    if (!abytes.empty())
+                        guardar_cache_de_proyecto(pc_path, opts_hash, cr,
+                                                  copts.emit_debug, abytes,
+                                                  project_cache_verbose);
+                }
+            }
+            return rc_aot;
         }
 
         /* CACHE MISS + @Macros presentes: hacer two- y persistir
@@ -4476,39 +4585,10 @@ int main(int argc, char *argv[]) {
                     vf.read(reinterpret_cast<char *>(velb_bytes.data()), sz);
                 }
                 vf.close();
-                if (!velb_bytes.empty()) {
-                    std::vector<vx::ProjectCacheDep> deps;
-                    deps.reserve(cr.dep_paths.size());
-                    for (const auto &p : cr.dep_paths) {
-                        std::ifstream df(p, std::ios::binary | std::ios::ate);
-                        if (!df.is_open()) continue;
-                        const std::streamsize dsz = df.tellg();
-                        df.seekg(0, std::ios::beg);
-                        std::vector<uint8_t> dbytes(
-                            static_cast<size_t>(dsz < 0 ? 0 : dsz));
-                        if (dsz > 0) {
-                            df.read(reinterpret_cast<char *>(dbytes.data()),
-                                    dsz);
-                        }
-                        vx::ProjectCacheDep d;
-                        d.path = p;
-                        d.source_hash =
-                            vx::hash_de_tokens(
-                                std::string(reinterpret_cast<const char *>(
-                                                dbytes.data()),
-                                            dbytes.size()),
-                                copts.emit_debug);
-                        deps.push_back(std::move(d));
-                    }
-                    const bool saved = vx::project_cache_save(
-                        pc_path, opts_hash, deps, velb_bytes);
-                    if (project_cache_verbose) {
-                        std::cerr << "[vx-project-cache] "
-                                  << (saved ? "saved" : "save_failed") << ": "
-                                  << pc_path << " (" << velb_bytes.size()
-                                  << " bytes, " << deps.size() << " deps)\n";
-                    }
-                }
+                if (!velb_bytes.empty())
+                    guardar_cache_de_proyecto(pc_path, opts_hash, cr,
+                                              copts.emit_debug, velb_bytes,
+                                              project_cache_verbose);
             }
         }
 

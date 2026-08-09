@@ -187,7 +187,14 @@ uint32_t project_cache_opts_hash(const ProjectCacheKey &key) {
        /* Mismo motivo que en la clave por modulo: lo compilado SIN la maquina
         * de compilacion cargada es provisional (las funciones comptime no se
         * pudieron ejecutar) y no vale para la pasada buena. */
-       << "|mc=" << (key.comptime_prebuilt ? 1 : 0);
+       << "|mc=" << (key.comptime_prebuilt ? 1 : 0)
+       /* Que artefacto se pidio.  Va en la clave porque el cache guarda el
+        * fichero FINAL: un `.velb` y un `.exe` no son intercambiables, ni un
+        * `.exe` de x86-64 con uno de aarch64. */
+       << "|aot=" << (key.aot ? 1 : 0) << "|arch=" << key.aot_arch
+       << "|fmt=" << key.aot_format << "|emit=" << key.aot_emit
+       << "|tgt=" << key.aot_target << "|tier=" << key.aot_tier
+       << "|perfil=" << key.aot_perfil;
     return fnv1a32_str(os.str());
 }
 
