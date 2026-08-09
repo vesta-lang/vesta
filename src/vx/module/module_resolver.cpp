@@ -71,14 +71,23 @@ namespace vx {
  * @param root_path Ruta de un fichero (se empieza por su directorio).
  * @return Identidad del paquete, o cadena vacia si no hay manifiesto.
  */
-std::string derive_package_id(const std::string &root_path) {
+std::string derive_package_id(const std::string &root_path,
+                              std::string *manifiesto_usado) {
     namespace fs = std::filesystem;
+    if (manifiesto_usado) manifiesto_usado->clear();
     // Normalizar + obtener el directorio del root.
     std::string norm = root_path;
     for (char &c : norm)
         if (c == '\\') c = '/';
     std::error_code ec;
-    fs::path dir = fs::path(norm).parent_path();
+    /* ABSOLUTA antes de subir.  Con una ruta relativa -- `memory.vx`, o la
+     * raiz `.` -- el primer `parent_path()` ya da vacio y el bucle sale sin
+     * mirar nada: el paquete salia ANoNIMO aunque tuviera su manifiesto justo
+     * encima.  Se noto porque dos arboles distintos parecian el mismo paquete
+     * (los dos anonimos) y la regla que los distingue acertaba por casualidad. */
+    fs::path abs = fs::absolute(fs::path(norm), ec);
+    if (ec) abs = fs::path(norm);
+    fs::path dir = abs.lexically_normal().parent_path();
     std::string manifest;
     for (int depth = 0; depth < 32 && !dir.empty(); ++depth) {
         for (const char *fname : {"vx.toml", "vx.json"}) {
@@ -90,6 +99,8 @@ std::string derive_package_id(const std::string &root_path) {
                     ss << f.rdbuf();
                     manifest = ss.str();
                 }
+                if (manifiesto_usado)
+                    *manifiesto_usado = cand.lexically_normal().string();
                 break;
             }
         }
@@ -1011,15 +1022,20 @@ void ModuleGraph::build_namespace_index_() {
      * la convierte en "la misma libreria encontrada dos veces" en vez de en dos
      * librerias distintas.  Sin esa comprobacion, quedarse con la primera raiz
      * romperia a quien reparte un namespace suyo entre varios sitios. */
+    struct Procedencia {
+        std::string id;        ///< Identidad declarada del paquete ("" = anonimo).
+        std::string manifiesto; ///< Fichero que la declara ("" = ninguno).
+    };
     std::unordered_map<std::string, std::string> raiz_del_ns;
-    std::unordered_map<std::string, std::string> paquete_de_raiz;
-    auto paquete_de = [&](const std::string &raiz) -> const std::string & {
-        auto it = paquete_de_raiz.find(raiz);
-        if (it != paquete_de_raiz.end()) return it->second;
+    std::unordered_map<std::string, Procedencia> procedencia_de_raiz;
+    auto procedencia_de = [&](const std::string &raiz) -> const Procedencia & {
+        auto it = procedencia_de_raiz.find(raiz);
+        if (it != procedencia_de_raiz.end()) return it->second;
         // Se pregunta por un fichero DENTRO de la raiz: el manifiesto se busca
         // hacia arriba desde su directorio.
-        return paquete_de_raiz.emplace(raiz, derive_package_id(raiz + "/x"))
-            .first->second;
+        Procedencia p;
+        p.id = derive_package_id(raiz + "/x", &p.manifiesto);
+        return procedencia_de_raiz.emplace(raiz, std::move(p)).first->second;
     };
 
     for (const auto &root : roots) {
@@ -1072,14 +1088,39 @@ void ModuleGraph::build_namespace_index_() {
                 if (itr == raiz_del_ns.end()) {
                     raiz_del_ns.emplace(ns, root);
                 } else if (itr->second != root) {
-                    /* Otro arbol declara este namespace.  Si los dos dicen ser
-                     * el mismo paquete, es la misma libreria encontrada dos
-                     * veces: manda la raiz que llego primero, que es la de
-                     * mayor prioridad (el directorio del fuente, luego los
-                     * caminos de busqueda, luego la stdlib). */
-                    const std::string &pa = paquete_de(itr->second);
-                    const std::string &pb = paquete_de(root);
-                    if (pa == pb) continue;
+                    /* Otro arbol declara este mismo namespace.  Lo que decide
+                     * no es el ID del paquete sino DE QUE MANIFIESTO viene cada
+                     * raiz, porque el id no distingue los dos casos:
+                     *
+                     *   - mismo manifiesto -> es UN paquete cuyos ficheros
+                     *     estan repartidos entre varias raices (un proyecto con
+                     *     `src/` y `lib/`).  Se fusionan: para eso existe el
+                     *     namespace parcial.
+                     *   - manifiestos distintos -> son dos INSTALACIONES.  Si
+                     *     dicen ser el mismo paquete, es la misma libreria
+                     *     encontrada dos veces; si dicen ser distintos, son dos
+                     *     librerias que se disputan el namespace.  En los dos
+                     *     casos manda la raiz que llego primero, que es la de
+                     *     mayor prioridad (el directorio del fuente, luego los
+                     *     caminos de busqueda, luego la stdlib).  Fusionarlas
+                     *     no puede salir bien: sus tipos acaban peleandose por
+                     *     la misma identidad. */
+                    const Procedencia &pa = procedencia_de(itr->second);
+                    const Procedencia &pb = procedencia_de(root);
+                    const bool mismo_paquete =
+                        !pa.manifiesto.empty() &&
+                        pa.manifiesto == pb.manifiesto;
+                    if (std::getenv("VESTA_TIMES") != nullptr) {
+                        std::cerr << "[resolver] namespace '" << ns
+                                  << "' tambien en '" << root << "' (manifiesto '"
+                                  << pb.manifiesto << "', id '" << pb.id
+                                  << "') frente a '" << itr->second
+                                  << "' (manifiesto '" << pa.manifiesto
+                                  << "', id '" << pa.id << "') -> "
+                                  << (mismo_paquete ? "se fusiona" : "descartado")
+                                  << "\n";
+                    }
+                    if (!mismo_paquete) continue;
                 }
                 // Dos raices que se solapan (el directorio del root y la
                 // stdlib) recorren los MISMOS ficheros con escrituras

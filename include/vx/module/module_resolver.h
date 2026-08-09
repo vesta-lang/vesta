@@ -311,7 +311,12 @@ std::string detect_stdlib_vx_dir();
  * @param root_path Ruta de un fichero (la busqueda empieza en su directorio).
  * @return Identidad del paquete, o vacia.
  */
-std::string derive_package_id(const std::string &root_path);
+/// @param manifiesto_usado Si no es nulo, recibe la ruta del manifiesto que
+///        dio la respuesta (vacia si no habia).  Hace falta para distinguir UN
+///        paquete repartido entre varias raices de DOS instalaciones del mismo:
+///        el id no las separa, el fichero que lo declara si.
+std::string derive_package_id(const std::string &root_path,
+                              std::string *manifiesto_usado = nullptr);
 
 
 } // namespace vx
