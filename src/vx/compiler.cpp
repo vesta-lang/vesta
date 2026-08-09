@@ -529,6 +529,7 @@ CompileResult compile_vx_source(const std::string &source,
     // sin recalcularlos.
     ir::IrModule irmod;
     Lowering lo(*mod, tc, res.diagnostics);
+    lo.avisar_asm_opaco_ = opts.emit_ir_preopt;
     if (!opts.instrument_mode.empty() && opts.instrument_mode != "none") {
         lo.set_instrument_mode(opts.instrument_mode);
     }

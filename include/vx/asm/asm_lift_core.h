@@ -311,6 +311,16 @@ inline bool lift_cfg_neutral(LiftCtx &c, const vx::AsmCfg &cfg, const CfgHooks &
     }
     c.block = cont;
     out_exit = cont;
+    /* Y las ARISTAS, que hasta ahora no se ponian.
+     *
+     * Aqui se acaba de construir control de flujo: bloques nuevos con sus
+     * saltos.  El terminador lo dice todo, pero `succs`/`preds` son lo que
+     * camina cualquier analisis del grafo, y sin ellas el bucle que se acaba de
+     * elevar queda INVISIBLE: el coste de una funcion cuyo cuerpo entero es ese
+     * bucle salia O(1), sin un error, sin un aviso, solo una respuesta tranquila
+     * y equivocada.  Se derivan de los terminadores en un solo sitio en vez de
+     * escribirlas a mano aqui. */
+    c.fn.recompute_edges();
     return true;
 }
 

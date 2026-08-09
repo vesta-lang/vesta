@@ -2029,4 +2029,32 @@ bool ir_verify(const IrModule &mod, std::vector<std::string> &errors) {
     return ok;
 }
 
+
+void IrFunction::recompute_edges() {
+    const size_t N = blocks.size();
+    for (size_t b = 0; b < N; ++b) {
+        blocks[b].succs.clear();
+        blocks[b].preds.clear();
+    }
+    for (size_t b = 0; b < N; ++b) {
+        if (blocks[b].instrs.empty()) continue;
+        const IrInstr &t = blocks[b].instrs.back();
+        auto add = [&](IrBlockId s) {
+            if (s != IR_NO_BLOCK && s < N) blocks[b].succs.push_back(s);
+        };
+        if (t.op == IrOp::BR) {
+            add(t.target_block);
+        } else if (t.op == IrOp::BR_COND) {
+            add(t.target_block);
+            add(t.false_block);
+        } else if (t.op == IrOp::SWITCH_DENSE) {
+            add(t.target_block);
+            for (IrBlockId s : t.jump_targets) add(s);
+        }
+    }
+    for (size_t b = 0; b < N; ++b)
+        for (IrBlockId s : blocks[b].succs)
+            blocks[s].preds.push_back(static_cast<IrBlockId>(b));
+}
+
 } // namespace ir

@@ -2306,6 +2306,7 @@ CompileResult compile_vx_project(
         }
 
         Lowering lo(*pm.ast, *pm.tc, pm.diags);
+        lo.avisar_asm_opaco_ = opts.emit_ir_preopt;
         //  AOT multi-modulo: propagar POO/strings nativos a TODOS los
         // modulos del proyecto (no solo al single-file).  Sin esto los deps
         // se bajaban en modo Full (GC) y el IR mergeado no era AOT-compatible.

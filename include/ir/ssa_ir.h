@@ -1569,6 +1569,26 @@ struct IrFunction {
     IrBlockId new_block(const std::string &name = "");
 
     /**
+     * @brief Rehace las aristas del grafo (@c succs / @c preds) a partir de los
+     *        TERMINADORES.
+     *
+     * Las aristas son informacion DERIVADA: quien salta a donde ya lo dice el
+     * terminador de cada bloque.  Mantenerlas ademas a mano, en cada sitio que
+     * construye control de flujo, garantiza que antes o despues una se quede
+     * sin poner -- y quien las lea vera un bloque aislado sin manera de notar
+     * que le falta algo.
+     *
+     * Eso ya paso: el elevado de un `asm` fijaba los terminadores y no tocaba
+     * las aristas, asi que un bucle escrito en ensamblador quedaba invisible
+     * para todo analisis que camina el grafo, y el coste de una funcion cuyo
+     * cuerpo entero es ese bucle salia O(1).  El sintoma no fue un error: fue
+     * una respuesta tranquila y equivocada.
+     *
+     * Llamalo tras construir o reestructurar los bloques de una funcion.
+     */
+    void recompute_edges();
+
+    /**
      * @brief Anade una instruccion al bloque indicado.
      * @param block_id Bloque destino.
      * @param instr    Instruccion a anadir.

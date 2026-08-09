@@ -14669,6 +14669,47 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
             diags_.diag(s->body_loc, DiagLevel::WARN, "VXA010", {sp_reassigned});
     }
 
+    /* El bloque NO lifto, y eso SE DICE.
+     *
+     * Un `asm` que se queda opaco no es un detalle interno: deja de optimizarse
+     * y, sobre todo, de lo que hace solo se sabe lo que diga su tabla de
+     * instrucciones -- ni que memoria toca con que extension, ni que forma tiene
+     * su control.  Callarselo hace que todo lo que venga despues de por bueno un
+     * analisis que no llego, y eso no se manifiesta como un error sino como una
+     * respuesta tranquila y equivocada mucho mas tarde y en otro sitio.
+     *
+     * Se nombra la primera instruccion que el elevado no supo pasar a IR, que es
+     * lo unico accionable: casi siempre es una sola y con reescribirla el bloque
+     * entero pasa a ser IR normal. */
+    {
+        const vx::AsmCfg cfg_op =
+            vx::build_asm_cfg(vx::instr_db::Isa::X86, ia.func_name);
+        std::string culpable;
+        for (const vx::AsmInsn &in : cfg_op.insns) {
+            if (in.sintetica) continue;
+            if (in.term == vx::AsmTerm::Ret || in.term == vx::AsmTerm::Call ||
+                in.term == vx::AsmTerm::Indirect ||
+                in.term == vx::AsmTerm::Unknown) {
+                culpable = in.text;
+                break;
+            }
+        }
+        if (culpable.empty() && !cfg_op.unknown_terminators.empty())
+            culpable = cfg_op.unknown_terminators.front();
+        /* Mientras no se sepa NOMBRAR la instruccion, el aviso va en el modo de
+         * analisis y no en toda compilacion.  No por incomodo: sin el nombre no
+         * se puede hacer nada con el, y treinta y cinco avisos que no se pueden
+         * atender en un programa que solo usa la libreria ensenan a ignorar los
+         * avisos -- que es exactamente lo contrario de lo que se busca.  En
+         * cuanto el elevado diga en que se atasco, esto pasa a ser un aviso de
+         * siempre. */
+        if (avisar_asm_opaco_) {
+            diags_.diag(s->body_loc, DiagLevel::WARN, "VXA018",
+                        {culpable.empty() ? std::string("(no consta cual)")
+                                          : culpable});
+        }
+    }
+
     // El bloque NO lifto (cualquier lift habria hecho return arriba) -> se emite
     // como INLINE_ASM OPACO.  El scheduler machine-level del backend reordena
     // todo el codigo generado, pero NO ve dentro de un INLINE_ASM opaco; para que

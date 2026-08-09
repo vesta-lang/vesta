@@ -1307,6 +1307,19 @@ class Lowering {
     const TypeChecker &tc_;
     Diagnostics &diags_;
 
+  public:
+    /// Avisar de cada bloque `asm` que se queda OPACO (no se pudo pasar a IR).
+    ///
+    /// Un bloque opaco deja de optimizarse y de el solo se sabe lo que diga su
+    /// tabla de instrucciones, asi que callarselo hace que todo lo que venga
+    /// despues de por bueno un analisis que no llego.  Va aparte mientras el
+    /// aviso no sepa NOMBRAR la instruccion en la que se atasco el elevado:
+    /// sin ese dato no se puede atender, y un aviso que no se puede atender
+    /// solo ensena a ignorar los avisos.
+    bool avisar_asm_opaco_ = false;
+
+  private:
+
     // contadores de @Macros lowered al IR.  Diagnostico
     // para que el desarrollador sepa cuantos @Macros se beneficiaron
     // del lowering y cuantos cayeron al evaluator AST por features

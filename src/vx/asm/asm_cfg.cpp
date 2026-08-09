@@ -17,9 +17,13 @@
 
 #include "vx/asm/asm_cfg.h"
 
+#include "vx/asm/asm_effects.h" // asm_canonical_reg: seguir un salto calculado
+
 #include <algorithm>
 #include <cctype>
+#include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace vx {
 
@@ -386,6 +390,98 @@ AsmCfg build_asm_cfg(instr_db::Isa isa, const std::string &body) {
     for (uint32_t i = 0; i < cfg.insns.size(); ++i)
         for (const std::string &l : cfg.insns[i].labels)
             label_at[l] = i;
+
+    /* --- 1.b) Saltos CALCULADOS cuyo destino se conoce. ---
+     *
+     * Un salto por registro, o un `push etiqueta` + `ret`, no es un agujero:
+     * si la direccion se puso con un `lea` o un `mov` de una etiqueta de este
+     * mismo bloque, se sabe perfectamente a donde va.  Darlo por desconocido
+     * dejaba el grafo incompleto -- y con el grafo incompleto el bloque no se
+     * puede elevar a IR, que es donde el analisis de bucles ya sabe trabajar.
+     *
+     * Se sigue lo justo para reconocer las dos formas con las que esto se
+     * escribe: que registro lleva la direccion de que etiqueta, y que hay en la
+     * pila.  Ante cualquier duda se olvida el valor: equivocarse aqui es peor
+     * que no saber, porque inventaria una arista que no existe. */
+    {
+        std::unordered_map<std::string, std::string> reg_etiqueta;
+        std::vector<std::string> pila; // "" = valor desconocido
+        auto etiqueta_de = [&](const std::string &tok) -> std::string {
+            std::string t = trim(tok);
+            // `[rel L]` / `[L]` -> L
+            if (!t.empty() && t.front() == '[' && t.back() == ']') {
+                t = trim(t.substr(1, t.size() - 2));
+                if (t.rfind("rel ", 0) == 0) t = trim(t.substr(4));
+            }
+            return label_at.count(t) ? t : std::string();
+        };
+        for (uint32_t i = 0; i < cfg.insns.size(); ++i) {
+            AsmInsn &in = cfg.insns[i];
+            const std::string mn = first_token(in.text);
+            const std::string ops = operand_str(in.text);
+            const std::string op0 = first_operand(ops);
+            const std::string op1 = last_operand(ops);
+            const std::string r0 = asm_canonical_reg(op0);
+
+            if (mn == "lea" || mn == "mov") {
+                const std::string et = etiqueta_de(op1);
+                if (!r0.empty()) {
+                    if (!et.empty()) reg_etiqueta[r0] = et;
+                    else reg_etiqueta.erase(r0);
+                }
+                continue;
+            }
+            if (mn == "push") {
+                std::string et = etiqueta_de(op0);
+                if (et.empty() && !r0.empty()) {
+                    auto it = reg_etiqueta.find(r0);
+                    if (it != reg_etiqueta.end()) et = it->second;
+                }
+                pila.push_back(et);
+                continue;
+            }
+            if (mn == "pop") {
+                std::string et = pila.empty() ? std::string() : pila.back();
+                if (!pila.empty()) pila.pop_back();
+                if (!r0.empty()) {
+                    if (!et.empty()) reg_etiqueta[r0] = et;
+                    else reg_etiqueta.erase(r0);
+                }
+                continue;
+            }
+            if (in.term == AsmTerm::Ret) {
+                // `ret` no devuelve de nada dentro de un bloque asm: salta a lo
+                // que haya en la cima de la pila.  Si eso es una etiqueta de
+                // aqui, el destino se conoce.
+                if (!pila.empty() && !pila.back().empty()) {
+                    in.term = AsmTerm::UncondJump;
+                    in.target = pila.back();
+                    pila.pop_back();
+                }
+                continue;
+            }
+            if (in.term == AsmTerm::Indirect && !r0.empty()) {
+                auto it = reg_etiqueta.find(r0);
+                if (it != reg_etiqueta.end()) {
+                    in.term = AsmTerm::UncondJump;
+                    in.target = it->second;
+                }
+                continue;
+            }
+            /* Cualquier otra cosa que escriba el registro destino invalida lo
+             * que se sabia de el, y cualquier movimiento no reconocido de la
+             * pila invalida la pila entera. */
+            if (!r0.empty()) reg_etiqueta.erase(r0);
+            if (r0 == "rsp" || mn == "call" || mn == "leave" || mn == "pusha" ||
+                mn == "popa")
+                pila.clear();
+        }
+        // `has_indirect` se decide DESPUES de resolver: lo que se resolvio ya
+        // no es un agujero.
+        cfg.has_indirect = false;
+        for (const AsmInsn &in : cfg.insns)
+            if (in.term == AsmTerm::Indirect) cfg.has_indirect = true;
+    }
 
     // --- 2) Lideres = primera instr, destino de salto, e instr tras un salto. ---
     std::vector<bool> leader(cfg.insns.size(), false);

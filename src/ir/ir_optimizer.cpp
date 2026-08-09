@@ -10406,32 +10406,10 @@ static void reorder_blocks_rpo(IrFunction &fn) {
 
 // Recomputa preds/succs de TODA la funcion desde los terminadores (robusto
 // tras cirugia de CFG; evita bugs de mantenimiento manual).
-static void recompute_preds_succs(IrFunction &fn) {
-    const size_t N = fn.blocks.size();
-    for (size_t b = 0; b < N; ++b) {
-        fn.blocks[b].succs.clear();
-        fn.blocks[b].preds.clear();
-    }
-    for (size_t b = 0; b < N; ++b) {
-        if (fn.blocks[b].instrs.empty()) continue;
-        const IrInstr &t = fn.blocks[b].instrs.back();
-        auto add = [&](IrBlockId s) {
-            if (s != IR_NO_BLOCK && s < N) fn.blocks[b].succs.push_back(s);
-        };
-        if (t.op == IrOp::BR)
-            add(t.target_block);
-        else if (t.op == IrOp::BR_COND) {
-            add(t.target_block);
-            add(t.false_block);
-        } else if (t.op == IrOp::SWITCH_DENSE) {
-            add(t.target_block);
-            for (IrBlockId s : t.jump_targets) add(s);
-        }
-    }
-    for (size_t b = 0; b < N; ++b)
-        for (IrBlockId s : fn.blocks[b].succs)
-            fn.blocks[s].preds.push_back(static_cast<IrBlockId>(b));
-}
+/* Las aristas las rehace la propia funcion (@c IrFunction::recompute_edges):
+ * son informacion derivada del terminador y tenerlas escritas dos veces es
+ * tener dos respuestas a la misma pregunta en cuanto una se quede atras. */
+static void recompute_preds_succs(IrFunction &fn) { fn.recompute_edges(); }
 
 // Inlinea el callee MULTI-bloque en caller.blocks[bi].instrs[ii] (un CALL).
 static void inline_one_multiblock(IrFunction &caller, size_t bi, size_t ii,
