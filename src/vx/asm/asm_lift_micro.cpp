@@ -93,15 +93,16 @@ uint8_t pack_eff(const instr_db::AsmInsnSem &sem) {
  *        programa?
  *
  * Un operando ligado con @c register() no es un registro opaco: es una variable,
- * y lo que tiene que viajar es su VALOR.  Mientras los tres modos no sepan
- * resolverlo -- el asignador dandole registro, el interprete metiendolo y
- * sacandolo del bloque -- el camino nuevo se pide a mano.  Sin esto el elevado
- * no llega a ningun bloque real: TODOS los del corpus tienen ligaduras.
+ * y lo que tiene que viajar es su VALOR.  Sin esto el elevado no llegaba a
+ * ningun bloque real: TODOS los del corpus tienen ligaduras, y el corpus se
+ * quedaba con cero instrucciones elevadas.
  */
 bool elevar_ligados() {
+    /* Ya es lo normal.  Se apaga a mano solo para comparar una version con la
+     * otra cuando algo no cuadra; mientras se construia iba al reves. */
     static const bool v = [] {
-        const char *e = std::getenv("VESTA_ASM_LIFT_SSA");
-        return e != nullptr && e[0] != '\0' && e[0] != '0';
+        const char *e = std::getenv("VESTA_ASM_NO_LIFT_SSA");
+        return !(e != nullptr && e[0] != '\0' && e[0] != '0');
     }();
     return v;
 }

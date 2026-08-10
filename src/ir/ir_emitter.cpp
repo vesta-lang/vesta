@@ -6018,8 +6018,28 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             for (size_t i = 0; i < conv.size(); ++i)
                 desc2 |= (uint64_t)(phys[conv[i].first] & 0xF) << (i * 4);
             const size_t bytes_tabla = conv.size() * 8;
+            /* El valor que el bloque devuelve NO se salva alrededor de la
+             * llamada: se recoge de la tabla despues, y restaurarlo lo devolveria
+             * a lo que era -- `add a, 2` sobre 40 seguia dando 40.  Es el mismo
+             * trato que recibe el resultado de cualquier llamada.  Con mas de un
+             * valor devuelto no hay como decirlo, asi que ese caso no pasa por
+             * aqui. */
+            IrValueId devuelto = IR_NO_VALUE;
+            size_t n_devueltos = 0;
+            for (const auto &c : conv) {
+                const auto &o = am.operands[c.first];
+                if (o.writes() && o.kind != AsmOperandKind::MEM) {
+                    devuelto = c.second;
+                    ++n_devueltos;
+                }
+            }
+            if (n_devueltos > 1) {
+                ctx.comment("asm_micro: mas de un valor devuelto -> trap");
+                ctx.out << "    hlt\n";
+                break;
+            }
             const uint32_t cpos = lin_pos_of(ctx, bb.id, idx);
-            std::vector<int> salvar = live_regs_through_call(ctx, cpos, IR_NO_VALUE);
+            std::vector<int> salvar = live_regs_through_call(ctx, cpos, devuelto);
             emit_save_all_gc_aware(ctx, cpos, salvar);
             /* Tabla de valores en la pila de la maquina virtual.  La direccion
              * se lleva en r15 porque la forma de direccionar no admite rsp
@@ -6047,7 +6067,12 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             ctx.out << "    mov r6, " << conv.size() << "\n";
             ctx.out << "    mov r15, 6\n";
             ctx.out << "    calln @Method(\"vrt:asm_micro_ops\")\n";
-            // Y de vuelta lo que el bloque haya cambiado.
+            /* Y de vuelta lo que el bloque haya cambiado, DESPUES de restaurar
+             * los registros que se salvaron para la llamada.  Recogerlo antes
+             * era tirarlo: el valor recien traido se queda en un registro y la
+             * restauracion lo devuelve a lo que era, asi que `add a, 2` sobre
+             * 40 seguia dando 40.  La tabla vive en la pila hasta el addsp, que
+             * por eso va el ultimo. */
             ctx.out << "    mov r15, rsp\n";
             for (size_t i = 0; i < conv.size(); ++i) {
                 const auto &opf = am.operands[conv[i].first];

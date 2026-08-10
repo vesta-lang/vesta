@@ -298,9 +298,18 @@ extern "C" uint64_t vrt_asm_micro_ops(uint64_t proc, uint64_t hash,
     if (vm == nullptr) return 0;
     AsmTrampolineFn tramp = lookup_inline_asm_trampoline(hash);
     if (tramp == nullptr) {
-        // Sin ensamblador: se emula lo que se pueda de la base (una barrera es
-        // una barrera en cualquier maquina) y los valores quedan como estaban.
+        /* Sin ensamblador se emula lo que se pueda de la base -- una barrera es
+         * una barrera en cualquier maquina -- pero una instruccion que CAMBIA
+         * valores no se puede emular asi: los devolveria sin tocar y el programa
+         * seguiria con los de antes.  Callarselo es dar por hecho un trabajo que
+         * no se hizo, asi que se dice. */
         if (eff & 0x8u) std::atomic_thread_fence(std::memory_order_seq_cst);
+        if (n != 0)
+            std::fprintf(stderr,
+                         "[asm] no hay con que ejecutar este bloque de "
+                         "ensamblador (hash=0x%016llx, %llu operandos): sus "
+                         "valores salen sin tocar\n",
+                         (unsigned long long)hash, (unsigned long long)n);
         return 0;
     }
     const int nops = (int)(n > 8 ? 8 : n);

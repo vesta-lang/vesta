@@ -11458,8 +11458,26 @@ bool ir_pass_schedule(IrFunction &fn, const analysis::PointsTo *pt,
                  * programa leia lo de antes.  Donde escribe no se sabe -- la
                  * direccion la trae un registro --, asi que cuenta como acceso
                  * opaco, que es lo que hace esta rama. */
+                /* Y tambien cuando MODIFICA alguno de sus valores.
+                 *
+                 * Un operando de lectura-escritura cambia el valor donde esta,
+                 * y eso el IR no lo dice: la instruccion lo declara como USO,
+                 * no como definicion, asi que un `store` de ese mismo valor a
+                 * su hueco parecia otra lectura mas y se podia adelantar.  Se
+                 * guardaba el valor viejo, el asm modificaba el suyo y ya nadie
+                 * lo devolvia: `add a, 2` sobre 40 seguia dando 40.
+                 *
+                 * Ordenarlo contra la memoria basta, porque es por el hueco por
+                 * donde el valor entra y sale. */
+                bool micro_escribe_valor = false;
+                for (const AsmMicroOperand &o : fn.asm_micros[ins.imm].operands)
+                    if (o.writes() && o.value != IR_NO_VALUE) {
+                        micro_escribe_valor = true;
+                        break;
+                    }
                 micro_barr_mem = !micro_barr_total &&
-                                 (((e & 0x08) != 0) || ((e & 0x01) != 0));
+                                 (((e & 0x08) != 0) || ((e & 0x01) != 0) ||
+                                  micro_escribe_valor);
             }
             const bool is_barr =
                 (is_sched_barrier(ins.op) || micro_barr_total) &&
