@@ -77,6 +77,31 @@ AlignmentFacts compute_alignment(const ir::IrFunction &fn,
      * valor que aun no se ha visto, y con una sola pasada se le daria el peor
      * caso sin razon.  El punto fijo baja siempre -- una alineacion solo se
      * revisa a la baja --, asi que termina. */
+    /* Que valor guarda cada hueco, cuando guarda uno solo.
+     *
+     * Un valor que pasa por un hueco de pila sigue siendo el mismo valor, pero
+     * la cadena se corta al pasar por memoria y con ella todo lo que se sabia
+     * de el.  Eso hacia que una direccion demostrablemente mal alineada dejara
+     * de serlo en cuanto el compilador la guardaba en algun sitio -- y el
+     * programa, que revienta igual, pasaba el compilador.
+     *
+     * Solo cuenta si al hueco se guarda UNA vez: con dos escrituras no se sabe
+     * cual esta viva en cada lectura, y suponerlo seria inventar. */
+    std::vector<ir::IrValueId> unico_guardado(fn.values.size(), ir::IR_NO_VALUE);
+    {
+        std::vector<uint8_t> veces(fn.values.size(), 0);
+        for (const ir::IrBlock &b : fn.blocks)
+            for (const ir::IrInstr &in : b.instrs) {
+                if (in.op != ir::IrOp::STORE || in.operands.size() < 2) continue;
+                const ir::IrValueId hueco = in.operands[1];
+                if (hueco >= veces.size()) continue;
+                if (veces[hueco] < 2) ++veces[hueco];
+                unico_guardado[hueco] = in.operands[0];
+            }
+        for (size_t i = 0; i < veces.size(); ++i)
+            if (veces[i] != 1) unico_guardado[i] = ir::IR_NO_VALUE;
+    }
+
     bool cambio = true;
     int vueltas = 0;
     while (cambio && vueltas < 8) {
@@ -121,6 +146,25 @@ AlignmentFacts compute_alignment(const ir::IrFunction &fn,
                     if (!in.operands.empty()) {
                         nueva = f.de(in.operands[0]);
                         nuevo_resto = f.resto_de(in.operands[0]);
+                    }
+                    break;
+                case ir::IrOp::LOAD:
+                    /* Leer de un hueco en el que solo se guardo una cosa es
+                     * esa cosa: pasar por memoria no cambia el valor.
+                     *
+                     * Solo se hereda un hecho CONOCIDO.  Heredar "no se sabe"
+                     * es peor que no heredar: en la primera prueba, un acceso
+                     * que estaba demostrado mal alineado paso a no decir nada, y
+                     * no decir nada se lee como que cumple.  Un analisis que se
+                     * equivoca hacia el lado comodo es peor que uno que no sabe,
+                     * porque el que no sabe avisa. */
+                    if (!in.operands.empty() &&
+                        in.operands[0] < unico_guardado.size()) {
+                        const ir::IrValueId v = unico_guardado[in.operands[0]];
+                        if (v != ir::IR_NO_VALUE && f.de(v) > 1u) {
+                            nueva = f.de(v);
+                            nuevo_resto = f.resto_de(v);
+                        }
                     }
                     break;
                 case ir::IrOp::ADD:

@@ -34,6 +34,7 @@
 #include "analysis/facts/asm_bindings.h" // de que valor habla un operando de asm
 #include "analyze/fingerprint.h" // verificacion de contratos
 #include "vx/asm/asm_effects.h"  // que exige cada instruccion
+#include "vx/asm/asm_phys_reg.h" // clases de registro (ancho de cada operando)
 #include "vx/incremental.h" // CAS global direccionado por contenido (cross-proyecto)
 #include <algorithm> // UCRT64: no transitivo
 #include <chrono>    // reparto del coste por fase
@@ -3658,9 +3659,50 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
             analysis::compute_alignment(fn, &resumen);
         for (const ir::IrBlock &b : fn.blocks) {
             for (const ir::IrInstr &in : b.instrs) {
-                if (in.op != ir::IrOp::INLINE_ASM) continue;
-                const vx::AsmInferResult inf =
-                    vx::asm_infer_clobbers(in.func_name, {}, clases);
+                /* Tambien el asm ELEVADO.
+                 *
+                 * Esto solo miraba los bloques opacos, asi que entender mejor un
+                 * bloque hacia que se comprobara MENOS: en cuanto el elevado
+                 * aprendia a pasarlo a IR, la comprobacion de alineacion
+                 * desaparecia y un programa que revienta al ejecutarse pasaba el
+                 * compilador.  Justo al reves de lo que tiene que pasar.
+                 *
+                 * Un micro asm lleva su instruccion en la plantilla, asi que el
+                 * analisis del texto es el mismo; lo que cambia es de donde sale
+                 * la direccion: en el opaco la dicen las ligaduras del bloque y
+                 * aqui la lleva el propio operando. */
+                if (in.op != ir::IrOp::INLINE_ASM &&
+                    in.op != ir::IrOp::ASM_MICRO)
+                    continue;
+                const ir::AsmMicro *am =
+                    (in.op == ir::IrOp::ASM_MICRO && in.imm < fn.asm_micros.size())
+                        ? &fn.asm_micros[in.imm]
+                        : nullptr;
+                if (in.op == ir::IrOp::ASM_MICRO && am == nullptr) continue;
+                /* Cuanto MIDE cada operando.  En el bloque opaco lo dice la
+                 * clase que escribio el programador; en el elevado lo lleva la
+                 * ficha, que para eso guarda el ancho de cada operando.  Sin
+                 * esto la comprobacion se queda a medias: sabe que la
+                 * instruccion exige alineacion pero no de cuantos bytes. */
+                std::vector<std::pair<std::string, std::string>> clases_micro;
+                if (am != nullptr) {
+                    clases_micro.reserve(am->operands.size());
+                    for (size_t oi = 0; oi < am->operands.size(); ++oi) {
+                        const ir::AsmMicroOperand &o = am->operands[oi];
+                        const char *c = "reg";
+                        if (o.regclass == vx::ASM_RC_VEC ||
+                            o.regclass == vx::ASM_RC_FP)
+                            c = o.width == 512   ? "zmm"
+                                : o.width == 256 ? "ymm"
+                                                 : "xmm";
+                        clases_micro.emplace_back("$" + std::to_string(oi), c);
+                    }
+                }
+                const std::string texto =
+                    am != nullptr ? vx::asm_micro_texto_con_forma(*am)
+                                  : in.func_name;
+                const vx::AsmInferResult inf = vx::asm_infer_clobbers(
+                    texto, {}, am != nullptr ? clases_micro : clases);
                 for (const vx::AsmAlignReq &req : inf.align_reqs) {
                     Sitio s;
                     s.line = in.source_line;
@@ -3681,7 +3723,33 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
                          * se avisa, que no es lo mismo que dar por bueno ni que
                          * dar por malo. */
                         s.v = Veredicto::SinPrueba;
-                        const auto cands = lig.candidatas(req.base);
+                        /* En el micro asm la base es un operando de la propia
+                         * instruccion, y su valor viaja con ella: no hay que
+                         * preguntarle a nadie de que variable se trata. */
+                        std::vector<analysis::LigaduraAsm> cands_micro;
+                        if (am != nullptr && req.base.size() >= 2 &&
+                            req.base[0] == '$') {
+                            const size_t k = (size_t)std::atoi(req.base.c_str() + 1);
+                            size_t nv = 0;
+                            for (size_t oi = 0; oi < am->operands.size(); ++oi) {
+                                if (am->operands[oi].value == ir::IR_NO_VALUE)
+                                    continue;
+                                if (oi == k && nv < in.operands.size()) {
+                                    analysis::LigaduraAsm l;
+                                    l.valor = in.operands[nv];
+                                    cands_micro.push_back(l);
+                                    break;
+                                }
+                                ++nv;
+                            }
+                        }
+                        analysis::AsmBindingFacts::Candidatas cands;
+                        if (am != nullptr) {
+                            cands.datos = cands_micro.data();
+                            cands.n = cands_micro.size();
+                        } else {
+                            cands = lig.candidatas(req.base);
+                        }
                         if (!cands.empty()) {
                             bool todas_cumplen = true, todas_fallan = true;
                             for (const analysis::LigaduraAsm &l : cands) {

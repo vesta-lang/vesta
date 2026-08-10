@@ -343,9 +343,20 @@ bool build_operands(
         if (const ir::AsmRegBinding *b = binding_de_marcador(toks[k], bindings)) {
             if (!elevar_ligados())
                 return AsmMotivoOpaco::anotar(motivo, insn, "VXA028");
+            /* El banco ancho, todavia no.
+             *
+             * No porque el interprete no lo tenga -- la maquina tiene f0..f15 /
+             * xmm / ymm / zmm y sus instrucciones --, sino porque el trampolin
+             * por el que pasa un bloque de ensamblador salva y restaura los 16
+             * registros generales y nada mas.  Mientras eso siga asi el bloque
+             * correria a medias: bien en el JIT y mal en el interprete, que es
+             * justo lo que no puede pasar.  Se queda opaco hasta que el
+             * trampolin lleve tambien el banco ancho. */
+            if (b->is_vector)
+                return AsmMotivoOpaco::anotar(motivo, insn, "VXA023", {toks[k]});
             ir::AsmMicroOperand op;
             op.kind = ir::AsmOperandKind::REG;
-            op.regclass = b->is_vector ? vx::ASM_RC_VEC : vx::ASM_RC_GP;
+            op.regclass = vx::ASM_RC_GP;
             op.width = ancho_declarado(*b);
             op.fixed_phys = -1; // lo elige el asignador
             op.value = b->alloca_value;

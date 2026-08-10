@@ -209,6 +209,52 @@ inline std::string asm_reg_muestra(uint8_t isa, uint8_t regclass,
 }
 
 /**
+ * @brief La instruccion con su FORMA completa, para quien la analice leyendo
+ *        el texto.
+ *
+ * La plantilla lleva los marcadores pelados porque como se escribe una
+ * direccion depende de la ISA y eso lo pone el que resuelve.  Pero quien
+ * analiza el texto -- la comprobacion de alineacion, por ejemplo -- necesita
+ * ver que ese operando ES una direccion: sin los corchetes no hay acceso a
+ * memoria que ver, y la comprobacion se apaga sin decir nada.
+ *
+ * @param am Ficha del micro asm.
+ * @return El texto con las direcciones escritas al completo.
+ */
+inline std::string asm_micro_texto_con_forma(const ir::AsmMicro &am) {
+    std::string out;
+    out.reserve(am.tmpl.size() + 16);
+    for (size_t i = 0; i < am.tmpl.size();) {
+        if (am.tmpl[i] != '$') {
+            out += am.tmpl[i++];
+            continue;
+        }
+        size_t j = i + 1;
+        uint32_t idx = 0;
+        bool any = false;
+        while (j < am.tmpl.size() && std::isdigit((unsigned char)am.tmpl[j])) {
+            idx = idx * 10 + (uint32_t)(am.tmpl[j] - '0');
+            ++j;
+            any = true;
+        }
+        if (!any || idx >= am.operands.size()) {
+            out += am.tmpl[i++];
+            continue;
+        }
+        const ir::AsmMicroOperand &op = am.operands[idx];
+        const std::string marca = "$" + std::to_string(idx);
+        if (op.kind == ir::AsmOperandKind::MEM) {
+            const std::string dir = asm_mem_operando(am.isa, marca, op.imm);
+            out += dir.empty() ? marca : dir;
+        } else {
+            out += marca;
+        }
+        i = j;
+    }
+    return out;
+}
+
+/**
  * @brief Registros FiSICOS que una @c ASM_MICRO destruye, como pares
  *        (clase, indice).
  *
