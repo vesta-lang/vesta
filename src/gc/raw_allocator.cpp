@@ -128,6 +128,8 @@ fallback_vm_alloc:
         const uint64_t reusado = grandes_libres_[i].host_ptr;
         grandes_libres_bytes_ -= grandes_libres_[i].size;
         grandes_libres_.erase(grandes_libres_.begin() + (long)i);
+        // Se entrega a cero, igual que uno recien pedido al sistema: quien
+        // reserva no tiene por que saber si le toco uno reciclado.
         std::memset(reinterpret_cast<void *>(reusado), 0, size);
         allocations_.emplace(
             reusado, AllocRecord{reinterpret_cast<void *>(reusado), size});
