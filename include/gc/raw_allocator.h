@@ -398,6 +398,35 @@ class RawAllocator {
     /// aloca un chunk del SO + trocea + thread.
     SlabFreeNode *slab_free_list_[SLAB_CLASSES] = {nullptr};
 
+    /**
+     * @brief Bloques GRANDES ya liberados, guardados para volver a usarlos.
+     *
+     * El slab cubre lo pequeno; por encima de su tope, cada reserva pedia
+     * memoria al sistema operativo y cada liberacion se la devolvia.  Un bucle
+     * que pide y suelta un bloque grande -- que es lo que hace cualquier
+     * programa que procesa por lotes -- pagaba dos llamadas al sistema y el
+     * borrado de todo el bloque en CADA vuelta: medio millon de reservas de
+     * 256 KB tardaban 35 segundos, contra 114 milisegundos del mismo programa
+     * compilado, que usa el asignador escrito en el lenguaje y SI los recicla.
+     *
+     * Se guardan por tamano exacto, que es lo que hace util el reciclaje: el
+     * patron real repite el mismo tamano una y otra vez.  Con un tope, porque
+     * retener memoria sin limite cambia un problema por otro.
+     */
+    struct BloqueLibre {
+        uint64_t host_ptr; ///< direccion del bloque.
+        size_t size;       ///< su tamano exacto.
+    };
+    /// Bloques retenidos, los mas recientes al final (se reusa el ultimo).
+    std::vector<BloqueLibre> grandes_libres_;
+    /// Cuanta memoria se esta reteniendo sin usar.
+    size_t grandes_libres_bytes_ = 0;
+    /// Tope de lo retenido.  Pasado ese punto se devuelve al sistema: el
+    /// reciclaje esta para ahorrar llamadas, no para acaparar.
+    static constexpr size_t kGrandesLibresTope = 256u * 1024u * 1024u;
+    /// Y un tope de cuantos, para que la busqueda siga siendo barata.
+    static constexpr size_t kGrandesLibresMax = 64;
+
     /// @brief Metadata de un chunk del slab.  Sprint mem-perf
     /// (2026-06-02): eliminamos @c slab_payload_to_class_ (unordered_map
     /// costaba ~150-200 ns por insert/erase).  Ahora @c free localiza

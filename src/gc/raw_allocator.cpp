@@ -117,6 +117,27 @@ uint64_t RawAllocator::alloc(size_t size) {
     }
 
 fallback_vm_alloc:
+    /* Antes de pedirle nada al sistema: ¿hay uno de ese tamano guardado?
+     *
+     * Un bucle que pide y suelta un bloque grande pagaba dos llamadas al
+     * sistema y el borrado del bloque entero en cada vuelta.  Reusar el que
+     * acaba de soltarse cuesta un memset -- que se paga igual, porque el
+     * contenido tiene que salir a cero -- y nada mas. */
+    for (size_t i = grandes_libres_.size(); i-- > 0;) {
+        if (grandes_libres_[i].size != size) continue;
+        const uint64_t reusado = grandes_libres_[i].host_ptr;
+        grandes_libres_bytes_ -= grandes_libres_[i].size;
+        grandes_libres_.erase(grandes_libres_.begin() + (long)i);
+        std::memset(reinterpret_cast<void *>(reusado), 0, size);
+        allocations_.emplace(
+            reusado, AllocRecord{reinterpret_cast<void *>(reusado), size});
+        total_bytes_ += size;
+        stats_.alloc_count++;
+        stats_.alloc_bytes += size;
+        if (total_bytes_ > stats_.peak_bytes) stats_.peak_bytes = total_bytes_;
+        return reusado;
+    }
+
     // ===== Slow path: VirtualAlloc/mmap para bloques grandes =====
     // Reservar memoria contigua con permisos READ|WRITE (sin EXEC: la
     // memoria raw es para datos, no para codigo).  La capa @c vm::
@@ -217,10 +238,23 @@ bool RawAllocator::free(uint64_t ptr) {
     stats_.free_count++;
     stats_.freed_bytes += it->second.size;
 
-    // Devolver al SO.  Tras esto, la direccion host puede ser reusada
-    // por @c vm::allocate_memory para otra peticion, asi que cualquier
-    // copia del puntero queda dangling y NO debe deref-earse.
-    vm::free_memory(it->second.host_ptr, it->second.size);
+    /* Guardarlo para el siguiente en vez de devolverlo, mientras quepa.
+     *
+     * El caso que lo justifica no es raro: un bucle que pide un bloque, lo
+     * usa y lo suelta.  Devolviendolo, cada vuelta cuesta dos llamadas al
+     * sistema y el borrado del bloque entero.  Pasado el tope se devuelve --
+     * esto ahorra llamadas, no acapara memoria. */
+    const size_t tam = it->second.size;
+    const uint64_t dir = reinterpret_cast<uint64_t>(it->second.host_ptr);
+    if (grandes_libres_.size() < kGrandesLibresMax &&
+        grandes_libres_bytes_ + tam <= kGrandesLibresTope) {
+        grandes_libres_.push_back({dir, tam});
+        grandes_libres_bytes_ += tam;
+    } else {
+        // Tras esto la direccion puede reusarla el sistema para otra peticion,
+        // asi que cualquier copia del puntero queda colgando.
+        vm::free_memory(it->second.host_ptr, tam);
+    }
     // Actualizar el contador de bytes vivos.  No actualizamos
     // @c peak_bytes (sigue siendo el max historico, no el actual).
     total_bytes_ -= it->second.size;
