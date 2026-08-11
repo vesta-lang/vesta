@@ -12432,6 +12432,30 @@ template <typename F> auto cronometrar_pase(const char *nombre, F &&f)
 
 } // namespace
 
+/* Aplica un pase: lo cronometra, propaga si cambio algo al punto fijo, y marca
+ * la funcion como SUCIA para los analisis cacheados.
+ *
+ * Lo de marcar es lo que permite dejar de invalidar "por si acaso": un analisis
+ * cacheado solo deja de valer si el IR se ha tocado DESDE que se calculo, y
+ * quien lo sabe es el propio pase por su valor de retorno.  Sin esto, cada
+ * consumidor tiraba el points-to y los hechos de la funcion entera aunque en
+ * esa vuelta no hubiera cambiado nada. */
+#define APLICA(llamada)                                                        \
+    do {                                                                       \
+        const bool cambio__ = PASE(llamada);                                   \
+        any = any || cambio__;                                                 \
+        sucia = sucia || cambio__;                                             \
+    } while (0)
+
+/* Igual, para los pases que devuelven cuantos cambios hicieron en vez de un
+ * si/no. */
+#define APLICA_N(llamada)                                                      \
+    do {                                                                       \
+        const bool cambio__ = (PASE(llamada) > 0);                             \
+        any = any || cambio__;                                                 \
+        sucia = sucia || cambio__;                                             \
+    } while (0)
+
 /* Cronometra un pase sin repetir su nombre: `PASE(ir_pass_dse(fn))` mide y
  * devuelve lo mismo que la llamada.  Con el nombre escrito a mano se acabaria
  * midiendo un pase bajo la etiqueta de otro al mover una linea. */
@@ -12626,6 +12650,11 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
                 return analysis::compute_points_to(fn, f);
             });
     };
+    /* Sucia = tocada DESDE que se calcularon sus analisis.  Vive entre vueltas
+     * del punto fijo a proposito: lo que importa no es si cambio en esta vuelta
+     * sino si cambio desde el ultimo calculo.  Arranca en true porque la
+     * primera vez no hay nada cacheado. */
+    std::unordered_map<std::string, bool> sucias;
     auto pt_invalidate = [&](IrFunction &fn) {
         am.invalidate<analysis::IRFactsAnalysis>(fn.name); // cascada a PointsTo
     };
@@ -12637,58 +12666,65 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
         for (auto &fn : mod.functions) {
             if (fn.is_native) continue; // no optimizar stubs nativos
 
+            /* Referencia, no copia: la marca tiene que sobrevivir a la vuelta.
+             * La primera vez se inserta en true (no hay nada calculado aun). */
+            auto  it_sucia = sucias.emplace(fn.name, true).first;
+            bool &sucia = it_sucia->second;
+
             // O1: copy + simplify + SR + reassoc + dead-alloc + DCE
-            any |= PASE(ir_pass_copy_prop(fn));
-            any |= PASE(ir_pass_simplify(fn)); /* algebraic + cast fold + phi simp */
-            any |= PASE(ir_pass_narrow_cmp(fn)); /* cmp(ext(x),K) -> cmp.<W>(x,K) */
+            APLICA(ir_pass_copy_prop(fn));
+            APLICA(ir_pass_simplify(fn)); /* algebraic + cast fold + phi simp */
+            APLICA(ir_pass_narrow_cmp(fn)); /* cmp(ext(x),K) -> cmp.<W>(x,K) */
             // Contraccion FMA (fmul+fadd -> fma) DESPUES de simplify, que ya
             // quito a*0/a*1/+0.  Gated por @fp(fast) (fn.fp_contract).  Decision
             // unica en el IR -> interp/JIT/AOT consistentes (1 redondeo).
-            any |= PASE(ir_pass_fuse_fma(fn));
+            APLICA(ir_pass_fuse_fma(fn));
             /* Consumidores de ValueFacts: computan el analisis UNA vez y lo
              * comparten -- elim SEXT/ZEXT/AND-mask + fold de CMP probado +
              * strength reduction (MUL/DIV/MOD por 2^k -> shift/and, incluido el
              * caso signed cuando el dividendo se prueba no-negativo). */
-            any |= PASE(ir_pass_valuefacts_consumers(fn));
-            any |= PASE(ir_pass_reassoc(fn)); /* (x op c1) op c2 -> x op (c1 op c2) */
+            APLICA(ir_pass_valuefacts_consumers(fn));
+            APLICA(ir_pass_reassoc(fn)); /* (x op c1) op c2 -> x op (c1 op c2) */
             // LICM RECIBE la tabla points-to del AnalysisManager (no la
             // construye).  Solo se pide si el LICM alias-aware esta activo
             // (coste 0 en el default: el manager no computa nada).
             if (g_licm_alias) {
-                pt_invalidate(fn); // fresca: los pases previos mutaron
-                any |= PASE(ir_pass_licm(fn, &pt_of(fn), &pure_callees));
+                /* Solo si algo la ha tocado desde el ultimo calculo. */
+                if (sucia) { pt_invalidate(fn); sucia = false; }
+                APLICA(ir_pass_licm(fn, &pt_of(fn), &pure_callees));
             } else {
-                any |= PASE(ir_pass_licm(fn)); /* LICM con dominators reales */
+                APLICA(ir_pass_licm(fn)); /* LICM con dominators reales */
             }
-            any |= PASE(ir_pass_dead_alloc_elim(fn));
-            any |= PASE(ir_pass_dce(fn, &decls_nativas));
+            APLICA(ir_pass_dead_alloc_elim(fn));
+            APLICA(ir_pass_dce(fn, &decls_nativas));
 
             if (level >= OptLevel::O2) {
                 // O2: plegado de constantes + bloques inalcanzables + TCO.
-                any |= PASE(ir_pass_const_fold(fn));
+                APLICA(ir_pass_const_fold(fn));
                 // If-conversion: diamante/if-anidado/ternario -> SELECT (solo
                 // legalidad; la rentabilidad la decide el pase de coste cercano
                 // al backend).  Debe preceder a `unreachable` para que este
                 // limpie los bloques de rama que quedan vacios.  El SELECT es
                 // una primitiva SEMANTICA: el JIT/AOT lo bajan a cmov, y el
                 // INTERPRETE a la super-instruccion `csel` (1 despacho).
-                any |= (PASE(ir_pass_if_conversion(fn)) > 0);
+                APLICA_N(ir_pass_if_conversion(fn));
                 // Canonicalizacion algebraica de los SELECT recien creados
                 // (select(c,x,x)->x, ->imin/imax, anidados, ...) antes de que
                 // el resto de pases (DCE/CSE) los vean.
-                any |= (PASE(ir_pass_select_simplify(fn)) > 0);
-                any |= PASE(ir_pass_unreachable(fn));
-                any |= PASE(ir_pass_tailcall(fn));
+                APLICA_N(ir_pass_select_simplify(fn));
+                APLICA(ir_pass_unreachable(fn));
+                APLICA(ir_pass_tailcall(fn));
                 // Inline de header trivial de loop -> habilita decjnz fusion.
-                any |= PASE(ir_pass_inline_loop_header(fn));
+                APLICA(ir_pass_inline_loop_header(fn));
                 // Dead store elimination: limpia STOREs muertos consecutivos.
                 // Con Fase 4, las CALL a callees puros no cortan el forwarding.
                 // Recibe la tabla points-to del manager (no la construye).
                 if (g_dse_unified) {
-                    pt_invalidate(fn); // fresca: los pases previos mutaron
-                    any |= PASE(ir_pass_dse(fn, &pt_of(fn), &pure_callees));
+                    /* Solo si algo la ha tocado desde el ultimo calculo. */
+                if (sucia) { pt_invalidate(fn); sucia = false; }
+                    APLICA(ir_pass_dse(fn, &pt_of(fn), &pure_callees));
                 } else {
-                    any |= PASE(ir_pass_dse(fn, nullptr, &pure_callees));
+                    APLICA(ir_pass_dse(fn, nullptr, &pure_callees));
                 }
                 // Global const CSE solamente (safer than full CSE).
                 // El full CSE local tiene bugs sutiles con LOAD/STORE alias
@@ -12698,31 +12734,31 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
                 // stale en fn.values causando fallos no-deterministicos en
                 // test 110 (smart pointers SRET).  Esta version sustituye
                 // operandos directamente y elimina las CONSTs duplicadas.
-                any |= PASE(ir_pass_const_cse_entry(fn));
+                APLICA(ir_pass_const_cse_entry(fn));
                 // CSE local de aritmetica pura (ADD/SUB/MUL/etc.) -- dedupea
                 // `add.ptr this, off` triplicados en getters/setters.  Tiene
                 // invalidacion correcta para LOAD via side-effects.  Habilita
                 // store-to-load forwarding al unificar punteros equivalentes.
-                any |= PASE(ir_pass_cse(fn));
+                APLICA(ir_pass_cse(fn));
                 // Load Narrow: elide SEXT redundante tras LOAD i8/i16/i32
                 // cuando todos los usos son arith narrow-safe (ADD/SUB/MUL/
                 // AND/OR/XOR) + STORE/RET del mismo ancho.  Ahorra 3 instr VM
                 // por LOAD elidido.  Bench struct_field: ~270M instr ahorradas.
-                any |= PASE(ir_pass_load_narrow(fn));
+                APLICA(ir_pass_load_narrow(fn));
                 // Elision COMPTIME de unwrap: si el valor es provably non-null
                 // (CONST!=0, &local/ALLOCA, STR_LIT_ADDR, LABEL_ADDR, Some(const)
                 // tras const-prop/SLF) el UNWRAP se vuelve MOV -> copy_prop/DCE
                 // lo borran -> cero overhead.  Beneficia VM/JIT/AOT.
-                any |= PASE(ir_pass_elide_unwrap(fn));
+                APLICA(ir_pass_elide_unwrap(fn));
                 // Suma/resta cuyo acarreo se deduce comparando el resultado
                 // con un sumando: la maquina ya dejo esa respuesta en un flag,
                 // asi que se marca el par para leerla en vez de recalcularla.
                 // Va despues del CSE porque este unifica los operandos y deja
                 // la comparacion pegada a su suma, que es lo que el patron
                 // necesita.
-                any |= PASE(ir_pass_carry_idiom(fn));
+                APLICA(ir_pass_carry_idiom(fn));
                 // Segunda ronda de DCE tras plegado/TCO/loop header inline/CSE.
-                any |= PASE(ir_pass_dce(fn, &decls_nativas));
+                APLICA(ir_pass_dce(fn, &decls_nativas));
             }
 
             if (level >= OptLevel::O3) {
