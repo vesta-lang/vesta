@@ -11,6 +11,9 @@
  */
 
 #include "ir/ir_optimizer.h"
+
+#include <chrono>
+#include <mutex>
 #include "ir/ir_facts.h"
 #include "ir/ir_pattern.h"
 #include "ctpe/evaluable.h"
@@ -12384,6 +12387,76 @@ bool ir_pass_inline_closures(IrModule &mod) {
 //  Punto de entrada principal
 // =========================================================================
 
+namespace {
+
+/* Acumulador por pase.  Tabla asociativa y no una lista: hay del orden de
+ * cuarenta pases y el punto fijo los repite hasta ocho veces por funcion, asi
+ * que se busca muchisimas mas veces de las que se inserta.  La clave es el
+ * literal del nombre, que es estable. */
+struct AcumuladorPases {
+    /* Con cerrojo porque los modulos se compilan EN PARALELO: sin el, dos
+     * hilos insertando en la misma tabla la corrompen.  Cuesta nada al lado de
+     * un pase -- se toma una vez por pase, no por instruccion. */
+    std::mutex                                                        m;
+    std::unordered_map<const char *, std::pair<long long, long long>> t;
+};
+
+AcumuladorPases &acumulador_pases() {
+    static AcumuladorPases a;
+    return a;
+}
+
+/**
+ * @brief Corre @p f cronometrandola contra @p nombre.
+ *
+ * Plantilla para no pagar una indireccion por pase: se instancia con el lambda
+ * de cada sitio y el compilador lo mete en linea.
+ *
+ * @param nombre Literal estable del pase.
+ * @param f      Lo que hace el pase; devuelve si cambio algo.
+ * @return Lo que devolviera @p f.
+ */
+template <typename F> auto cronometrar_pase(const char *nombre, F &&f)
+    -> decltype(f()) {
+    const auto t0 = std::chrono::steady_clock::now();
+    auto       r = f();
+    const auto t1 = std::chrono::steady_clock::now();
+    AcumuladorPases            &a = acumulador_pases();
+    std::lock_guard<std::mutex> lk(a.m);
+    auto                       &e = a.t[nombre];
+    e.first += std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
+                   .count();
+    e.second += 1;
+    return r;
+}
+
+} // namespace
+
+/* Cronometra un pase sin repetir su nombre: `PASE(ir_pass_dse(fn))` mide y
+ * devuelve lo mismo que la llamada.  Con el nombre escrito a mano se acabaria
+ * midiendo un pase bajo la etiqueta de otro al mover una linea. */
+#define PASE(llamada)                                                          \
+    cronometrar_pase(#llamada, [&] { return (llamada); })
+
+std::vector<TiempoPase> tiempos_de_pases() {
+    AcumuladorPases            &a = acumulador_pases();
+    std::lock_guard<std::mutex> lk(a.m);
+    std::vector<TiempoPase>     v;
+    v.reserve(a.t.size());
+    for (const auto &kv : a.t)
+        v.push_back({kv.first, kv.second.first, kv.second.second});
+    std::sort(v.begin(), v.end(), [](const TiempoPase &a, const TiempoPase &b) {
+        return a.us > b.us;
+    });
+    return v;
+}
+
+void reiniciar_tiempos_de_pases() {
+    AcumuladorPases            &a = acumulador_pases();
+    std::lock_guard<std::mutex> lk(a.m);
+    a.t.clear();
+}
+
 void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
     if (level == OptLevel::O0) return; // sin optimizacion
 
@@ -12555,57 +12628,57 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
             if (fn.is_native) continue; // no optimizar stubs nativos
 
             // O1: copy + simplify + SR + reassoc + dead-alloc + DCE
-            any |= ir_pass_copy_prop(fn);
-            any |= ir_pass_simplify(fn); /* algebraic + cast fold + phi simp */
-            any |= ir_pass_narrow_cmp(fn); /* cmp(ext(x),K) -> cmp.<W>(x,K) */
+            any |= PASE(ir_pass_copy_prop(fn));
+            any |= PASE(ir_pass_simplify(fn)); /* algebraic + cast fold + phi simp */
+            any |= PASE(ir_pass_narrow_cmp(fn)); /* cmp(ext(x),K) -> cmp.<W>(x,K) */
             // Contraccion FMA (fmul+fadd -> fma) DESPUES de simplify, que ya
             // quito a*0/a*1/+0.  Gated por @fp(fast) (fn.fp_contract).  Decision
             // unica en el IR -> interp/JIT/AOT consistentes (1 redondeo).
-            any |= ir_pass_fuse_fma(fn);
+            any |= PASE(ir_pass_fuse_fma(fn));
             /* Consumidores de ValueFacts: computan el analisis UNA vez y lo
              * comparten -- elim SEXT/ZEXT/AND-mask + fold de CMP probado +
              * strength reduction (MUL/DIV/MOD por 2^k -> shift/and, incluido el
              * caso signed cuando el dividendo se prueba no-negativo). */
-            any |= ir_pass_valuefacts_consumers(fn);
-            any |= ir_pass_reassoc(fn); /* (x op c1) op c2 -> x op (c1 op c2) */
+            any |= PASE(ir_pass_valuefacts_consumers(fn));
+            any |= PASE(ir_pass_reassoc(fn)); /* (x op c1) op c2 -> x op (c1 op c2) */
             // LICM RECIBE la tabla points-to del AnalysisManager (no la
             // construye).  Solo se pide si el LICM alias-aware esta activo
             // (coste 0 en el default: el manager no computa nada).
             if (g_licm_alias) {
                 pt_invalidate(fn); // fresca: los pases previos mutaron
-                any |= ir_pass_licm(fn, &pt_of(fn), &pure_callees);
+                any |= PASE(ir_pass_licm(fn, &pt_of(fn), &pure_callees));
             } else {
-                any |= ir_pass_licm(fn); /* LICM con dominators reales */
+                any |= PASE(ir_pass_licm(fn)); /* LICM con dominators reales */
             }
-            any |= ir_pass_dead_alloc_elim(fn);
-            any |= ir_pass_dce(fn, &decls_nativas);
+            any |= PASE(ir_pass_dead_alloc_elim(fn));
+            any |= PASE(ir_pass_dce(fn, &decls_nativas));
 
             if (level >= OptLevel::O2) {
                 // O2: plegado de constantes + bloques inalcanzables + TCO.
-                any |= ir_pass_const_fold(fn);
+                any |= PASE(ir_pass_const_fold(fn));
                 // If-conversion: diamante/if-anidado/ternario -> SELECT (solo
                 // legalidad; la rentabilidad la decide el pase de coste cercano
                 // al backend).  Debe preceder a `unreachable` para que este
                 // limpie los bloques de rama que quedan vacios.  El SELECT es
                 // una primitiva SEMANTICA: el JIT/AOT lo bajan a cmov, y el
                 // INTERPRETE a la super-instruccion `csel` (1 despacho).
-                any |= (ir_pass_if_conversion(fn) > 0);
+                any |= (PASE(ir_pass_if_conversion(fn)) > 0);
                 // Canonicalizacion algebraica de los SELECT recien creados
                 // (select(c,x,x)->x, ->imin/imax, anidados, ...) antes de que
                 // el resto de pases (DCE/CSE) los vean.
-                any |= (ir_pass_select_simplify(fn) > 0);
-                any |= ir_pass_unreachable(fn);
-                any |= ir_pass_tailcall(fn);
+                any |= (PASE(ir_pass_select_simplify(fn)) > 0);
+                any |= PASE(ir_pass_unreachable(fn));
+                any |= PASE(ir_pass_tailcall(fn));
                 // Inline de header trivial de loop -> habilita decjnz fusion.
-                any |= ir_pass_inline_loop_header(fn);
+                any |= PASE(ir_pass_inline_loop_header(fn));
                 // Dead store elimination: limpia STOREs muertos consecutivos.
                 // Con Fase 4, las CALL a callees puros no cortan el forwarding.
                 // Recibe la tabla points-to del manager (no la construye).
                 if (g_dse_unified) {
                     pt_invalidate(fn); // fresca: los pases previos mutaron
-                    any |= ir_pass_dse(fn, &pt_of(fn), &pure_callees);
+                    any |= PASE(ir_pass_dse(fn, &pt_of(fn), &pure_callees));
                 } else {
-                    any |= ir_pass_dse(fn, nullptr, &pure_callees);
+                    any |= PASE(ir_pass_dse(fn, nullptr, &pure_callees));
                 }
                 // Global const CSE solamente (safer than full CSE).
                 // El full CSE local tiene bugs sutiles con LOAD/STORE alias
@@ -12615,31 +12688,31 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
                 // stale en fn.values causando fallos no-deterministicos en
                 // test 110 (smart pointers SRET).  Esta version sustituye
                 // operandos directamente y elimina las CONSTs duplicadas.
-                any |= ir_pass_const_cse_entry(fn);
+                any |= PASE(ir_pass_const_cse_entry(fn));
                 // CSE local de aritmetica pura (ADD/SUB/MUL/etc.) -- dedupea
                 // `add.ptr this, off` triplicados en getters/setters.  Tiene
                 // invalidacion correcta para LOAD via side-effects.  Habilita
                 // store-to-load forwarding al unificar punteros equivalentes.
-                any |= ir_pass_cse(fn);
+                any |= PASE(ir_pass_cse(fn));
                 // Load Narrow: elide SEXT redundante tras LOAD i8/i16/i32
                 // cuando todos los usos son arith narrow-safe (ADD/SUB/MUL/
                 // AND/OR/XOR) + STORE/RET del mismo ancho.  Ahorra 3 instr VM
                 // por LOAD elidido.  Bench struct_field: ~270M instr ahorradas.
-                any |= ir_pass_load_narrow(fn);
+                any |= PASE(ir_pass_load_narrow(fn));
                 // Elision COMPTIME de unwrap: si el valor es provably non-null
                 // (CONST!=0, &local/ALLOCA, STR_LIT_ADDR, LABEL_ADDR, Some(const)
                 // tras const-prop/SLF) el UNWRAP se vuelve MOV -> copy_prop/DCE
                 // lo borran -> cero overhead.  Beneficia VM/JIT/AOT.
-                any |= ir_pass_elide_unwrap(fn);
+                any |= PASE(ir_pass_elide_unwrap(fn));
                 // Suma/resta cuyo acarreo se deduce comparando el resultado
                 // con un sumando: la maquina ya dejo esa respuesta en un flag,
                 // asi que se marca el par para leerla en vez de recalcularla.
                 // Va despues del CSE porque este unifica los operandos y deja
                 // la comparacion pegada a su suma, que es lo que el patron
                 // necesita.
-                any |= ir_pass_carry_idiom(fn);
+                any |= PASE(ir_pass_carry_idiom(fn));
                 // Segunda ronda de DCE tras plegado/TCO/loop header inline/CSE.
-                any |= ir_pass_dce(fn, &decls_nativas);
+                any |= PASE(ir_pass_dce(fn, &decls_nativas));
             }
 
             if (level >= OptLevel::O3) {

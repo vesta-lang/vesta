@@ -75,6 +75,7 @@ void set_aot_condcomp_target(const std::string &os,
 }
 #include "vx/comptime/comptime_vm.h"    /*  MC.4 probe del ComptimeRuntime */
 #include "analysis/asa/fact.h"
+#include "ir/ir_optimizer.h"
 #include "vx/project_cache.h"
 #include "vx/source_hash.h"  /*  M5.B project-level cache */
 #include "vx/module/module_resolver.h" // detect_stdlib_vx_dir
@@ -4628,8 +4629,12 @@ int main(int argc, char *argv[]) {
              * primero el trabajo esta en resolver el grafo y compilar cada
              * modulo, y las fases de un unico fuente no aplican.  Se dice lo
              * que corresponde en cada caso en vez de imprimir ceros. */
-            auto linea = vesta::scout();
-            if (tf.resolver_us > 0 || tf.modulos_us > 0) {
+            /* En su propio ambito para que se vuelque ANTES del desglose por
+             * pase: el desglose explica el `optimizar` de esta linea, y leerlo
+             * antes que ella no ayuda. */
+            {
+                auto linea = vesta::scout();
+                if (tf.resolver_us > 0 || tf.modulos_us > 0) {
                 linea << "[vx] frontend: resolver " << tf.resolver_us << " us"
                       << " | modulos " << tf.modulos_us << " us"
                       << " | optimizar " << tf.optimizar_us << " us"
@@ -4644,7 +4649,39 @@ int main(int argc, char *argv[]) {
                       << "   (comprobar " << tf.comprobar_us() << " us, total "
                       << tf.total_us() << " us)\n";
             }
+            }
+            /* Y el reparto DENTRO de optimizar.  Un solo numero de "optimizar"
+             * no deja arreglar nada: un pase que se lleva el 90 % se lee igual
+             * que veinte repartiendoselo.  Se ensenan los que pesan, no todos,
+             * para que la linea siga siendo legible -- y con cuantas veces
+             * corrio cada uno, que un pase caro por lento y otro caro por
+             * repetirse se arreglan de formas distintas. */
+            const auto pases = ir::tiempos_de_pases();
+            long long  total_pases = 0;
+            for (const auto &q : pases) total_pases += q.us;
+            if (total_pases > 0) {
+                auto lp = vesta::scout();
+                lp << "[vx] optimizar por pase:";
+                int mostrados = 0;
+                for (const auto &q : pases) {
+                    /* Lo que no llega al 1 % del reparto no explica nada y solo
+                     * alarga la linea. */
+                    if (q.us * 100 < total_pases || mostrados >= 6) break;
+                    lp << " " << q.nombre << " " << q.us << " us x" << q.veces
+                       << (++mostrados < 6 ? " |" : "");
+                }
+                lp << "   (" << pases.size() << " pases, " << total_pases
+                   << " us)\n";
+            }
             nlohmann::json jf;
+            if (!pases.empty()) {
+                /* En el volcado de maquina van TODOS, que ahi no molesta la
+                 * longitud y es lo que permite comparar dos compilaciones. */
+                nlohmann::json jp = nlohmann::json::object();
+                for (const auto &q : pases)
+                    jp[q.nombre] = {{"us", q.us}, {"veces", q.veces}};
+                jf["pases"] = jp;
+            }
             jf["analisis_us"] = tf.analisis_us;
             jf["tipos_us"] = tf.tipos_us;
             jf["bajada_us"] = tf.bajada_us;

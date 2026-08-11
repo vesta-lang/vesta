@@ -121,6 +121,29 @@ inline OptLevel opt_level_from_int(int n) {
  *        compone el analizador via el callgraph, no via inline.  Default @c
  *        true: JIT/AOT/interp inlinan normalmente.
  */
+/**
+ * @brief Lo que costo cada pase del optimizador, y cuantas veces corrio.
+ *
+ * El tiempo de "optimizar" es un solo numero y con el no se puede arreglar
+ * nada: un pase que se lleva el 90 % se lee igual que veinte que se reparten.
+ * Esto lo abre por pase, que es la unidad en la que se puede actuar.
+ *
+ * Se acumula SIEMPRE (un reloj por pase es despreciable al lado del pase) y lo
+ * consulta quien vaya a ensenarlo.
+ */
+struct TiempoPase {
+    const char *nombre = "?";
+    long long   us = 0;    ///< tiempo acumulado.
+    long long   veces = 0; ///< llamadas (el punto fijo repite pasadas).
+};
+
+/// Los pases que han corrido, del mas caro al mas barato.
+std::vector<TiempoPase> tiempos_de_pases();
+
+/// Pone a cero el acumulador (una compilacion no debe heredar el reparto de
+/// otra: se llama al empezar cada @ref ir_optimize del modulo raiz).
+void reiniciar_tiempos_de_pases();
+
 void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline = true);
 
 // =========================================================================
