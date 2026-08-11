@@ -7158,7 +7158,8 @@ bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
         cache->isa = isa_actual;
         cache->resp.assign(total_instrs, -1);
     }
-    size_t idx_lineal = 0; ///< posicion de la instruccion en la funcion.
+    size_t idx_lineal = 0;  ///< posicion de la instruccion al LEERLA.
+    size_t idx_escrito = 0; ///< posicion que ocupara tras compactar.
 
     bool changed = false;
     {
@@ -7218,11 +7219,27 @@ bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
                 changed = true;
             }
             if (keep) {
+                /* La respuesta guardada viaja con su instruccion.  Compactar la
+                 * cache en vez de tirarla es lo que hace que sirva de una
+                 * pasada a la siguiente: quitar codigo muerto solo ENCOGE lo
+                 * que la funcion lee, asi que un "no se puede quitar" guardado
+                 * sigue siendo cierto -- a lo sumo se queda corto y se vuelve a
+                 * preguntar mas adelante.  Nunca al reves. */
+                if (cache != nullptr && pos < cache->resp.size() &&
+                    idx_escrito < cache->resp.size())
+                    cache->resp[idx_escrito] = cache->resp[pos];
+                ++idx_escrito;
                 if (write != i) instrs[write] = std::move(instrs[i]);
                 ++write;
             }
         }
         instrs.resize(write);
+    }
+    /* La cache queda del tamano de lo que ha sobrevivido, para que la proxima
+     * pasada la de por buena en vez de tirarla por no cuadrar el tamano. */
+    if (cache != nullptr) {
+        cache->resp.resize(idx_escrito);
+        cache->n = idx_escrito;
     }
     }
     return changed;
@@ -12931,6 +12948,13 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
                 APLICA(ir_pass_licm(fn)); /* LICM con dominators reales */
             }
             APLICA(ir_pass_dead_alloc_elim(fn));
+            /* Si algo toco la funcion desde el ultimo calculo, lo guardado del
+             * modelo ya no describe estas instrucciones.  Hay que mirarlo AQUI
+             * y no solo en `pt_invalidate`: esa senal se emite antes de LICM y
+             * del DSE, y entre ella y este punto corren mas pases que pueden
+             * cambiar una instruccion SIN cambiar cuantas hay -- con lo que ni
+             * la comprobacion de tamano lo veria. */
+            if (sucia) cache_efectos[fn.name].invalidar();
             APLICA(ir_pass_dce(fn, &decls_nativas, &asm_of(fn),
                                &cache_efectos[fn.name]));
 
@@ -13000,6 +13024,9 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
                 // necesita.
                 APLICA(ir_pass_carry_idiom(fn));
                 // Segunda ronda de DCE tras plegado/TCO/loop header inline/CSE.
+                /* Misma razon que arriba: entre medias han corrido pases que
+                 * pueden haber cambiado instrucciones sin cambiar su numero. */
+                if (sucia) cache_efectos[fn.name].invalidar();
                 APLICA(ir_pass_dce(fn, &decls_nativas, &asm_of(fn),
                                &cache_efectos[fn.name]));
             }
