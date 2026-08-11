@@ -12,6 +12,8 @@
 
 #include "ir/ir_optimizer.h"
 
+#include "util/crono_tramo.h"
+
 #include <chrono>
 #include <deque>
 #include <mutex>
@@ -12599,6 +12601,12 @@ std::vector<TiempoPase> tiempos_de_pases() {
     v.reserve(a.t.size());
     for (const auto &kv : a.t)
         v.push_back({kv.first, kv.second.first, kv.second.second});
+    /* Y los tramos medidos FUERA del optimizador -- el modelo de efectos, por
+     * ejemplo --, que van a su propio acumulador porque no son un pase.  Se
+     * juntan aqui para que el reparto salga completo en un solo sitio: quien
+     * lee un tiempo quiere ver donde se va, no en que libreria vive. */
+    for (const util::Tramo &t : util::tramos_medidos())
+        v.push_back({t.nombre, t.us, t.veces});
     std::sort(v.begin(), v.end(), [](const TiempoPase &a, const TiempoPase &b) {
         return a.us > b.us;
     });

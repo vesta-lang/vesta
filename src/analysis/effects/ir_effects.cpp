@@ -12,6 +12,8 @@
  *        ASM_MICRO) se analiza aparte, conservador y con tags.
  */
 #include "analysis/effects/ir_effects.h"
+
+#include "util/crono_tramo.h"
 #include "analysis/facts/asm_bindings.h" // de que valor habla cada operando
 #include "analysis/memory/memory_access.h"
 
@@ -83,11 +85,18 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
     }
     const analysis::AsmBindingFacts &lig = *ligp;
     std::vector<std::pair<std::string, std::string>> clases;
-    clases.reserve(lig.ligaduras.size());
-    for (const analysis::LigaduraAsm &l : lig.ligaduras)
-        clases.emplace_back(l.marcador, l.clase);
-    const vx::AsmBlockEffects e =
-        vx::asm_analyze_block(ins.func_name, vx::asm_arch_actual(), clases);
+    {
+        util::CronoTramo crono__("  efectos:armar-clases");
+        clases.reserve(lig.ligaduras.size());
+        for (const analysis::LigaduraAsm &l : lig.ligaduras)
+            clases.emplace_back(l.marcador, l.clase);
+    }
+    vx::AsmBlockEffects e;
+    {
+        /* En su propio bloque: mide SOLO el analisis del texto del bloque. */
+        util::CronoTramo crono__("  efectos:analizar-bloque-asm");
+        e = vx::asm_analyze_block(ins.func_name, vx::asm_arch_actual(), clases);
+    }
     /* Se declara SOLO lo que el bloque hace.  Antes, cualquier asm que tocara
      * memoria se anotaba como lectura Y escritura de todo, y eso lo convierte
      * en una barrera para cuanto haya alrededor: un `mov rax, [rdi]` impedia
