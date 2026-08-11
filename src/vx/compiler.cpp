@@ -1185,6 +1185,8 @@ CompileResult compile_vx_source(const std::string &source,
          * optimiza una COPIA con el inline puesto, y asi no hay que compilar el
          * fuente otra vez.  Va antes porque `ir_optimize` modifica el modulo
          * que recibe. */
+        // Los mismos mecanismos que el binario nativo, tambien aqui.
+        traer_asignador_del_lenguaje(irmod_for_section, opts, filename);
         if (opts.emit_ir_inlined && opts.emit_ir_preopt) {
             ir::IrModule con_inline = irmod_for_section;
             ir::ir_optimize(con_inline, opt_level_from_int(opts.opt_level),

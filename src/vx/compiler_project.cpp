@@ -1045,6 +1045,133 @@ compute_module_levels_(const std::vector<ProjectModuleWork> &work,
     return levels;
 }
 
+/**
+ * @brief El asignador escrito en el lenguaje, compilado UNA vez por ejecucion.
+ *
+ * El binario nativo lo trae desde hace tiempo; el JIT no, y por eso un fallo
+ * que solo se ve en el nativo hay que perseguirlo en el nativo.  Compartiendo
+ * mecanismo, ese mismo camino se puede recorrer dentro de la maquina, con el
+ * depurador y los volcados de IR delante.  No es por velocidad.
+ *
+ * Se compila una sola vez y se guarda: hacerlo por cada modulo que reserva
+ * memoria multiplicaba el tiempo de compilacion hasta agotar el limite en los
+ * proyectos con varias dependencias.
+ *
+ * @param opts Opciones de la compilacion en curso (nivel y objetivo).
+ * @param alloc_sym Recibe el nombre de la funcion que reserva.
+ * @param free_sym Recibe el de la que libera.
+ * @return El modulo, o @c nullptr si no se encuentra o no lo expone.
+ */
+static const ir::IrModule *asignador_del_lenguaje_(const CompileOptions &opts,
+                                                   std::string &alloc_sym,
+                                                   std::string &free_sym) {
+    struct Cache {
+        bool intentado = false;
+        std::unique_ptr<ir::IrModule> mod;
+        std::string alloc, libera;
+    };
+    static Cache c;
+    static std::mutex m;
+    std::lock_guard<std::mutex> g(m);
+    if (!c.intentado) {
+        c.intentado = true;
+        namespace stdfs = std::filesystem;
+        const std::string dir =
+            stdfs::path(fs::get_executable_path()).parent_path().string();
+        for (const std::string &p : {dir + "/stdlib/vx/vx_mem.vx",
+                                     dir + "/../stdlib/vx/vx_mem.vx",
+                                     std::string("stdlib/vx/vx_mem.vx")}) {
+            if (!stdfs::exists(p)) continue;
+            CompileOptions mo;
+            mo.module_name = "vx_mem";
+            mo.opt_level = opts.opt_level;
+            mo.asm_target_bits = opts.asm_target_bits;
+            mo.sin_asignador_vesta = true; // no puede traerse a si mismo
+            const CompileResult r = compile_vx_project(p, mo, nullptr, nullptr);
+            if (!r.ok || r.aot_alloc_sym.empty() || r.aot_free_sym.empty())
+                break;
+            std::unique_ptr<ir::IrModule> mm(new ir::IrModule());
+            if (!ir::parse_ir_module_cache(r.ir_module_cache_bytes, *mm)) break;
+            c.mod = std::move(mm);
+            c.alloc = r.aot_alloc_sym;
+            c.libera = r.aot_free_sym;
+            break;
+        }
+    }
+    if (!c.mod) return nullptr;
+    alloc_sym = c.alloc;
+    free_sym = c.libera;
+    return c.mod.get();
+}
+
+/**
+ * @brief Deja el asignador del lenguaje DENTRO del modulo, sin tocar las
+ *        reservas.
+ *
+ * Sus funciones quedan disponibles para quien quiera llamarlas -- el selector
+ * del JIT --, y quien no las llame no las nota: el interprete sigue con la
+ * instruccion de la maquina.  Reescribir aqui las reservas seria decidir por
+ * los dos, y ese fue el error del primer intento: se llevo por delante al
+ * interprete.
+ *
+ * @param mod Modulo ya fusionado, antes de optimizar.
+ * @param opts Opciones de la compilacion en curso.
+ * @param root_path Fuente raiz, para no traerse a si mismo.
+ */
+void traer_asignador_del_lenguaje(ir::IrModule &mod,
+                                  const CompileOptions &opts,
+                                  const std::string &root_path) {
+    if (opts.sin_asignador_vesta) return;
+    if (root_path.find("vx_mem") != std::string::npos) return;
+    /* El binario nativo ya lo trae por su cuenta -- su driver lo compila y lee
+     * sus simbolos --, asi que metiendolo tambien desde aqui acabaria con dos
+     * copias del mismo asignador.  Esto es para el camino de maquina, que es el
+     * que no lo tenia. */
+    if (opts.native_poo) return;
+
+    bool reserva = false;
+    for (const ir::IrFunction &f : mod.functions) {
+        if (f.name == "__vx_malloc") return; // ya esta dentro
+        for (const ir::IrBlock &b : f.blocks)
+            for (const ir::IrInstr &in : b.instrs)
+                if (in.op == ir::IrOp::RAW_ALLOC || in.op == ir::IrOp::RAW_FREE)
+                    reserva = true;
+    }
+    if (!reserva) return;
+
+    std::string alloc_sym, free_sym;
+    const ir::IrModule *mem = asignador_del_lenguaje_(opts, alloc_sym, free_sym);
+    if (mem == nullptr) return; // sin el, todo sigue como estaba.
+
+    for (const ir::IrFunction &f : mem->functions) {
+        bool ya = false;
+        for (const ir::IrFunction &g : mod.functions)
+            if (g.name == f.name) { ya = true; break; }
+        if (!ya) {
+            /* Alcanzable aunque nadie la llame TODAVIA: quien la va a llamar es
+             * el selector del JIT, que trabaja despues de optimizar, y para
+             * entonces el pase que limpia lo que no se usa ya se la habria
+             * llevado. */
+            ir::IrFunction copia = f;
+            copia.is_public = true;
+            mod.functions.push_back(std::move(copia));
+        }
+    }
+    ir::IrModule copia_datos = *mem;
+    mod.static_data.append_raw_entries(std::move(copia_datos.static_data));
+    for (const auto &gv : mem->globals) mod.globals.emplace(gv.first, gv.second);
+    // Lo que el asignador llama por su cuenta: pide memoria al sistema por la
+    // interfaz nativa, asi que sus importaciones tienen que venir con el.
+    for (const auto &ni : mem->native_imports)
+        mod.register_native_import(ni.lib, ni.name);
+    for (const auto &nl : mem->native_libs) {
+        bool ya = false;
+        for (const auto &x : mod.native_libs)
+            if (x == nl) { ya = true; break; }
+        if (!ya) mod.native_libs.push_back(nl);
+    }
+}
+
 CompileResult compile_vx_project(
     const std::string &root_path, const CompileOptions &opts,
     const std::unordered_map<std::string, std::string> *source_overlay,
@@ -3265,6 +3392,11 @@ CompileResult compile_vx_project(
                         /*allow_inline=*/true);
         res.ir_module_cache_bytes_inlined = ir::emit_ir_module_cache(para_inline);
     }
+
+    /* El asignador del lenguaje queda DENTRO del modulo (sin tocar las
+     * reservas): asi el selector del JIT puede llamarlo y compartir mecanismo
+     * con el binario nativo, que es lo que permite depurar aquel desde aqui. */
+    traer_asignador_del_lenguaje(merged, opts, root_path);
 
     ir::ir_optimize(merged, opt_level_from_int_(opts.opt_level),
                     /*allow_inline=*/!opts.emit_ir_preopt);

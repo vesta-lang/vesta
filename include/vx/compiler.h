@@ -204,6 +204,18 @@ struct CompileOptions {
     bool native_poo = false;
 
     /**
+     * @brief No traer el asignador escrito en el lenguaje a este modulo.
+     *
+     * El binario nativo lo usa y el JIT no, asi que un fallo que solo se ve en
+     * el nativo hay que perseguirlo alli.  Compartiendo mecanismo se puede
+     * recorrer el mismo camino dentro de la maquina, con el depurador delante.
+     *
+     * Se pone a @c true al compilar el PROPIO asignador, que no puede traerse a
+     * si mismo.
+     */
+    bool sin_asignador_vesta = false;
+
+    /**
      * @brief Convertir en ERROR los accesos demostrablemente fuera de region.
      *
      * Al CONSTRUIR, si.  Al ANALIZAR, no: `--analyze` los enseña en su propia
@@ -269,6 +281,21 @@ struct CompileOptions {
     /// depender de un global mutable que se duplica entre vm.exe/DLL/vmcore.
     bool fp_contract = true;
 };
+
+/**
+ * @brief Deja el asignador escrito en el lenguaje DENTRO del modulo, sin tocar
+ *        las reservas.
+ *
+ * La comparten los dos caminos de compilacion -- fichero suelto y proyecto --
+ * porque de que mecanismos dispone el codigo no puede depender de por cual se
+ * entro a compilar.
+ *
+ * @param mod Modulo ya fusionado, antes de optimizar.
+ * @param opts Opciones de la compilacion en curso.
+ * @param root_path Fuente raiz, para no traerse a si mismo.
+ */
+void traer_asignador_del_lenguaje(ir::IrModule &mod, const CompileOptions &opts,
+                                  const std::string &root_path);
 
 /**
  * @struct CompileResult
