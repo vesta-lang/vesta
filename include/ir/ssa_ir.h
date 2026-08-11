@@ -1777,6 +1777,21 @@ struct IrModule {
     std::unordered_map<std::string, IrValueId> globals; ///< variables globales
     std::vector<std::string> native_libs; ///< libs nativas (@native_lib)
 
+    /**
+     * @brief Que funcion reserva y cual libera en este programa.
+     *
+     * Quien marque una funcion con @c @AllocatorOverride es el asignador de su
+     * programa; el de la biblioteca solo se usa cuando nadie lo hace.  Va aqui
+     * para que la maquina lo sepa: escribir un nombre concreto en el backend
+     * ataria el JIT al asignador por defecto y se saltaria justo el mecanismo
+     * que permite sustituirlo -- un programa con el suyo acabaria usandolo a
+     * medias, que es peor que no usarlo.
+     *
+     * Vacios = ninguno declarado.
+     */
+    std::string alloc_sym;
+    std::string free_sym;
+
     /// Metadata de clases + interfaces declaradas en el modulo.  Llena
     /// por el frontend (Vesta TypeChecker) en lowering.  Consumida por
     /// el port transpiler (C/Java/JS) para emitir POO eficiente.

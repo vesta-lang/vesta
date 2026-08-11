@@ -1142,6 +1142,11 @@ void traer_asignador_del_lenguaje(ir::IrModule &mod,
     std::string alloc_sym, free_sym;
     const ir::IrModule *mem = asignador_del_lenguaje_(opts, alloc_sym, free_sym);
     if (mem == nullptr) return; // sin el, todo sigue como estaba.
+    /* Y QUIEN es, para que la maquina no tenga que adivinarlo.  Si el programa
+     * declara el suyo con @AllocatorOverride manda ese; el de la biblioteca
+     * solo cubre a quien no lo hace. */
+    mod.alloc_sym = alloc_sym;
+    mod.free_sym = free_sym;
 
     for (const ir::IrFunction &f : mem->functions) {
         bool ya = false;
@@ -3545,6 +3550,11 @@ CompileResult compile_vx_project(
                 res.aot_free_sym = fd->name;
         }
     }
+    /* El del PROGRAMA manda sobre el de la biblioteca, tambien para la maquina:
+     * si alguien declara el suyo, se usa entero -- usarlo a medias, con el JIT
+     * llamando a otro, seria peor que no usarlo. */
+    if (!res.aot_alloc_sym.empty()) merged.alloc_sym = res.aot_alloc_sym;
+    if (!res.aot_free_sym.empty()) merged.free_sym = res.aot_free_sym;
     /* has_lowerable_macros: gate del two- compile.  El single-file
      * (compile_vx_source) lo setea escaneando su irmod; en el path multi-modulo
      * hay que escanear el MODULO MERGEADO -- si cualquier funcion (root o dep)
