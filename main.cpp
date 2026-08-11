@@ -74,6 +74,7 @@ void set_aot_condcomp_target(const std::string &os,
                              const std::string &arch) noexcept;
 }
 #include "vx/comptime/comptime_vm.h"    /*  MC.4 probe del ComptimeRuntime */
+#include "analysis/asa/fact.h"
 #include "vx/project_cache.h"
 #include "vx/source_hash.h"  /*  M5.B project-level cache */
 #include "vx/module/module_resolver.h" // detect_stdlib_vx_dir
@@ -281,8 +282,10 @@ extern "C" void runtime_ensure_vx_callback_registered(void);
  * @param pc_path     Fichero de cache del proyecto.
  * @param opts_hash   Huella de las opciones (incluye QUE artefacto se pidio).
  * @param diag_hash   Huella de lo que decide QUE AVISOS salen, sin el
- *                    envoltorio del artefacto: los mismos avisos valen para los
- *                    tres backends.
+ *                    envoltorio del artefacto ni el objetivo.
+ * @param donde       Objetivo en el que se compilo.  Va en cada aviso, no en la
+ *                    clave: asi un solo fichero sirve a todos los objetivos y
+ *                    solo se descarta lo que de verdad es de otro.
  * @param cr          Resultado del compile, por sus @c dep_paths.
  * @param con_lineas  Si la huella de cada fuente cuenta las lineas
  *                    (@c emit_debug); debe valer lo mismo al validar.
@@ -291,6 +294,7 @@ extern "C" void runtime_ensure_vx_callback_registered(void);
  */
 static void guardar_cache_de_proyecto(const std::string &pc_path,
                                       uint32_t opts_hash, uint32_t diag_hash,
+                                      const analysis::asa::Ambito &donde,
                                       const vx::CompileResult &cr,
                                       bool con_lineas,
                                       const std::vector<uint8_t> &artefacto,
@@ -317,8 +321,8 @@ static void guardar_cache_de_proyecto(const std::string &pc_path,
      * aviso saldria la primera vez y desapareceria despues.  Van con SU huella
      * -- la de lo que decide que avisos salen -- y no con la del artefacto, que
      * lleva formato y tipo de emision y los guardaria una vez por backend. */
-    const bool diags_ok =
-        vx::project_cache_save_diags(pc_path, diag_hash, cr.diagnostics.all());
+    const bool diags_ok = vx::project_cache_save_diags(
+        pc_path, diag_hash, cr.diagnostics.all(), donde);
     if (verboso) {
         std::cerr << "[vx-project-cache] "
                   << (guardado ? "saved" : "save_failed") << ": " << pc_path
@@ -3932,6 +3936,14 @@ int main(int argc, char *argv[]) {
          * asi que llevan su propia huella: una sola copia sirve a los tres
          * backends, y cambiar de backend no los pierde. */
         const uint32_t diag_hash = vx::project_cache_diag_hash(pck);
+        /* Donde se esta compilando.  CONSERVADOR: mientras los productores no
+         * sepan decir que un aviso suyo es universal, se marca con el objetivo
+         * actual -- en el peor caso se comporta como antes (se recalcula) y
+         * nunca se afirma en un sitio algo comprobado en otro. */
+        analysis::asa::Ambito donde;
+        donde.isa = pck.aot_arch.empty() ? "x86-64" : pck.aot_arch.c_str();
+        donde.sistema = pck.aot_target.c_str();
+        donde.backend = pck.aot ? "aot" : "vm";
 
         // Path canonico del root para el cache key.
         std::string canonical_root;
@@ -4001,7 +4013,7 @@ int main(int argc, char *argv[]) {
                          * idioma activo aunque se guardaran en otro. */
                         std::vector<vx::Diagnostic> guardados;
                         if (vx::project_cache_load_diags(pc_path, diag_hash,
-                                                         guardados)) {
+                                                         guardados, donde)) {
                             for (const auto &d : guardados)
                                 vx::print_diagnostic(std::cerr, d);
                         }
@@ -4195,7 +4207,8 @@ int main(int argc, char *argv[]) {
                     af.close();
                     if (!abytes.empty())
                         guardar_cache_de_proyecto(pc_path, opts_hash, diag_hash,
-                                                  cr, copts.emit_debug, abytes,
+                                                  donde, cr, copts.emit_debug,
+                                                  abytes,
                                                   project_cache_verbose);
                 }
             }
@@ -4685,8 +4698,8 @@ int main(int argc, char *argv[]) {
                 }
                 vf.close();
                 if (!velb_bytes.empty())
-                    guardar_cache_de_proyecto(pc_path, opts_hash, diag_hash, cr,
-                                              copts.emit_debug, velb_bytes,
+                    guardar_cache_de_proyecto(pc_path, opts_hash, diag_hash, donde,
+                                              cr, copts.emit_debug, velb_bytes,
                                               project_cache_verbose);
             }
         }

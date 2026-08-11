@@ -34,6 +34,7 @@
 #ifndef ANALYSIS_ASA_FACT_H
 #define ANALYSIS_ASA_FACT_H
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -231,6 +232,52 @@ struct Prueba {
 };
 
 /**
+ * @brief DONDE vale un hecho.  Un campo vacio quiere decir "en cualquiera".
+ *
+ * NO TODO LO QUE SE SABE VALE EN TODAS PARTES, y hasta ahora eso no se podia
+ * decir: la unica forma de proteger un hecho especifico de una arquitectura era
+ * separar el ALMACEN ENTERO por objetivo, con lo que se duplicaba tambien todo
+ * lo universal -- que es la mayor parte.  El alcance es propiedad del HECHO, no
+ * del sitio donde se guarda: dicho aqui, un solo almacen sirve a todos los
+ * objetivos y solo se descarta lo que de verdad es de otro.
+ *
+ * Los tres ejes son independientes y se cruzan: un hecho puede valer para
+ * cualquier backend pero solo en x86-64 (lo que exige una instruccion concreta),
+ * o para cualquier ISA pero solo compilando a nativo (lo que impone el enlace),
+ * o para todo (que un valor cabe en 32 bits).
+ *
+ * REGLA AL PRODUCIR: en la duda, el alcance MAS ESTRECHO.  Equivocarse hacia
+ * estrecho solo cuesta recalcular; hacia ancho es afirmar en un sitio algo que
+ * se comprobo en otro.
+ */
+struct Ambito {
+    const char *isa = "";      ///< "x86-64", "aarch64"...  "" = cualquiera.
+    const char *sistema = "";  ///< "windows", "linux"...   "" = cualquiera.
+    const char *backend = "";  ///< "vm", "aot".            "" = cualquiera.
+
+    /// Si un campo del hecho es vacio vale en cualquiera; si no, tiene que
+    /// coincidir con el de @p aqui.
+    bool vale_en(const Ambito &aqui) const {
+        auto casa = [](const char *mio, const char *suyo) {
+            if (mio == nullptr || mio[0] == ' ') return true;
+            if (suyo == nullptr) return false;
+            for (size_t i = 0;; ++i) {
+                if (mio[i] != suyo[i]) return false;
+                if (mio[i] == ' ') return true;
+            }
+        };
+        return casa(isa, aqui.isa) && casa(sistema, aqui.sistema) &&
+               casa(backend, aqui.backend);
+    }
+    /// Universal: sin ninguna restriccion.
+    bool universal() const {
+        return (isa == nullptr || isa[0] == ' ') &&
+               (sistema == nullptr || sistema[0] == ' ') &&
+               (backend == nullptr || backend[0] == ' ');
+    }
+};
+
+/**
  * @brief Un hecho completo.  Es LA representacion; no hay otra.
  *
  * Da igual que lo produzca el analisis estatico, la observacion en ejecucion o
@@ -241,6 +288,7 @@ struct Prueba {
 struct Fact {
     Proposicion que;
     Sujeto      de_quien;
+    Ambito      donde; ///< en que objetivos vale (vacio = en todos).
     Sello       sello;
     Prueba      prueba;
 };

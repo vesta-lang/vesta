@@ -84,9 +84,9 @@ namespace asa {
 /// solo si cambia el sobre; el contenido de cada dominio versiona aparte.
 constexpr uint16_t kContainerVersion = 1;
 
-/// Version del layout de un HECHO.  Va en cada registro: cambiarla descarta los
+/// Version del layout de un HECHO.  La 2 anade el ambito (donde vale).  Va en cada registro: cambiarla descarta los
 /// registros viejos de todos los dominios, pero no rompe el fichero.
-constexpr uint16_t kFactVersion = 1;
+constexpr uint16_t kFactVersion = 2;
 
 /**
  * @brief Cuanto se guarda.  Ajustable con @c VESTA_ASA_CACHE.
@@ -239,12 +239,23 @@ struct ReadResult {
     uint32_t      domains = 0;       ///< registros leidos.
     uint32_t      skipped = 0;       ///< registros de dominios/versiones ajenas.
     uint32_t      stale = 0;        ///< registros cuya huella ya no vale.
+    uint32_t      out_of_scope = 0; ///< hechos que valen en otro objetivo.
     uint32_t      corrupt = 0;      ///< registros cuya suma no cuadra.
     uint32_t      lost_proofs = 0; ///< apoyos en hechos que no se cargaron.
 };
 
 /**
  * @brief Deposita en @p destino los hechos de @p datos.
+ *
+ * FILTRA POR AMBITO: un hecho que dice valer solo en otra arquitectura, otro
+ * sistema u otro backend NO se deposita, y se cuenta en
+ * @c ReadResult::out_of_scope.  Es lo que permite que un SOLO fichero sirva a
+ * todos los objetivos: lo universal -- que es la mayor parte -- se comparte, y
+ * solo se descarta lo que de verdad es de otro sitio.  Sin esto habria que
+ * separar el fichero entero por objetivo y duplicar tambien lo comun.
+ *
+ * Un @c aqui vacio no filtra nada: sirve para leerlo todo (volcados,
+ * herramientas) sin decir donde se esta.
  *
  * EXIGE que los nombres canonicos esten dados de alta antes (ver
  * @c register_canonical_name).  Este fichero es el FORMATO y no conoce a los
@@ -272,13 +283,15 @@ struct ReadResult {
 ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
                       FactStore                     &destino,
                       const std::vector<DomainCost> &vigentes = {},
-                      uint64_t                       compilador = 0);
+                      uint64_t                       compilador = 0,
+                      const Ambito                  &aqui = Ambito{});
 
 /// Lee @p ruta y deposita en @p destino.  Si no existe, @c motivo lo dice.
 ReadResult read_facts_file(const std::string &ruta, uint64_t huella,
                            FactStore                     &destino,
                            const std::vector<DomainCost> &vigentes = {},
-                           uint64_t                       compilador = 0);
+                           uint64_t                       compilador = 0,
+                           const Ambito                  &aqui = Ambito{});
 
 } // namespace asa
 } // namespace analysis

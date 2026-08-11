@@ -37,8 +37,8 @@ constexpr uint32_t kMagicEnd = 0x4E494658u; ///< 'XFIN': cierra el fichero.
  * fichero, y un fichero roto puede decir cualquier cosa.  Con esto, lo que se
  * pide depende de los bytes que quedan de verdad.
  */
-constexpr size_t kBytesMinimosHecho = 4 + 4 + 8 + 8 + 4 + 1 + 4 + 4 + 1 + 1 + 4 +
-                                      4 + 4 + 4 * 4 + 4 + 4;
+constexpr size_t kBytesMinimosHecho = 4 + 4 + 8 + 8 + 4 + 3 * 4 + 1 + 4 + 4 + 1 +
+                                      1 + 4 + 4 + 4 + 4 * 4 + 4 + 4;
 
 /// Marca de "esta cadena no esta" en la tabla de un registro.  No es la cadena
 /// cero: la cadena vacia es una entrada legitima.
@@ -270,6 +270,9 @@ std::vector<uint8_t> serialize(const FactStore               &almacen,
             w.i64(f.que.a);
             w.i64(f.que.b);
             w.u32(cad(f.que.detalle));
+            w.u32(cad(f.donde.isa));
+            w.u32(cad(f.donde.sistema));
+            w.u32(cad(f.donde.backend));
             w.u8(static_cast<uint8_t>(f.de_quien.clase));
             w.u32(cad(f.de_quien.funcion));
             w.u32(f.de_quien.id);
@@ -321,7 +324,7 @@ std::vector<uint8_t> serialize(const FactStore               &almacen,
 ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
                       FactStore                     &destino,
                       const std::vector<DomainCost> &vigentes,
-                      uint64_t                       compilador) {
+                      uint64_t compilador, const Ambito &aqui) {
     ReadResult r;
     if (datos == nullptr || n == 0) {
         r.reason = ReadReason::Empty;
@@ -499,6 +502,9 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
             f.que.a = L.i64();
             f.que.b = L.i64();
             f.que.detalle = cad(L.u32());
+            f.donde.isa = cad(L.u32());
+            f.donde.sistema = cad(L.u32());
+            f.donde.backend = cad(L.u32());
             f.de_quien.clase = static_cast<Sujeto::Clase>(L.u8());
             f.de_quien.funcion = cad(L.u32());
             f.de_quien.id = L.u32();
@@ -518,6 +524,14 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
             for (uint32_t k = 0; k < n_apoyos && L.ok(); ++k)
                 f.prueba.de.push_back(L.u32()); // aun en identidades del fichero.
             if (!L.ok()) break;
+            /* Y aqui el filtro por ambito.  Un hecho que dice valer solo en
+             * otro objetivo no se deposita: afirmarlo aqui seria dar por bueno
+             * en un sitio algo que se comprobo en otro.  Se cuenta, que no
+             * saber por que falta un hecho es lo mismo que no tenerlo. */
+            if (!f.donde.vale_en(aqui)) {
+                ++r.out_of_scope;
+                continue;
+            }
             remapeo[id_original] = base + static_cast<FactId>(leidos.size());
             leidos.push_back(std::move(f));
         }
@@ -558,7 +572,7 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
 ReadResult read_facts_file(const std::string &ruta, uint64_t huella,
                            FactStore                     &destino,
                            const std::vector<DomainCost> &vigentes,
-                           uint64_t                       compilador) {
+                           uint64_t compilador, const Ambito &aqui) {
     ReadResult     r;
     std::vector<uint8_t> bytes;
     if (!::fs::file_exists(ruta)) {
@@ -574,7 +588,7 @@ ReadResult read_facts_file(const std::string &ruta, uint64_t huella,
         return r;
     }
     return read_facts(bytes.data(), bytes.size(), huella, destino, vigentes,
-                      compilador);
+                      compilador, aqui);
 }
 
 } // namespace asa

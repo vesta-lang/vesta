@@ -34,6 +34,7 @@
 #include <string>
 #include <vector>
 
+#include "analysis/asa/fact.h"
 #include "vx/diagnostic.h"
 
 namespace vx {
@@ -131,13 +132,16 @@ bool project_cache_save(const std::string &cache_path, uint32_t opts_hash,
  * cambiar de backend los perderia, cuando no ha cambiado nada de lo que se
  * mira.
  *
+ * Y NO entra el objetivo: cada aviso dice en que arquitectura, sistema y
+ * backend vale (su @c Ambito) y el lector filtra por donde esta.  Asi un solo
+ * fichero sirve a todos los objetivos: lo universal se comparte y solo se
+ * descarta lo que de verdad es de otro sitio.
+ *
  * Entra lo que cambia QUE CODIGO SE MIRA: el nivel de optimizacion y la
  * informacion de depuracion (cambian el IR sobre el que se analiza), la
  * instrumentacion, si la maquina de compilacion estaba cargada (sin ella el
  * codigo comptime no se ejecuto y lo que se ve es otra cosa), de donde salen
- * los modulos ajenos, y el OBJETIVO -- arquitectura, sistema y nivel de
- * runtime --, porque @c @Target selecciona codigo distinto y un aviso puede
- * ser de una rama que solo existe en uno.
+ * los modulos ajenos, y el nivel de runtime, que cambia que se baja.
  *
  * Queda fuera lo que solo cambia el envoltorio: el formato del fichero, el
  * tipo de emision, la direccion base y el resto del perfil de emision.  Pedir
@@ -187,10 +191,16 @@ bool project_cache_validate(const std::vector<ProjectCacheDep> &cached_deps,
  *                   Va tambien en el NOMBRE del fichero, para que dos objetivos
  *                   distintos del mismo proyecto no se pisen el uno al otro.
  * @param diags      Los diagnosticos a guardar.
+ * @param donde      Donde valen.  CONSERVADOR por defecto: lo que no se sepa
+ *                   universal se marca con el objetivo actual, con lo que en el
+ *                   peor caso se comporta como antes -- se recalcula -- y nunca
+ *                   se afirma en un sitio algo comprobado en otro.
  * @return @c true si quedo algo escrito.
  */
-bool project_cache_save_diags(const std::string &cache_path, uint32_t diag_hash,
-                              const std::vector<Diagnostic> &diags);
+bool project_cache_save_diags(const std::string             &cache_path,
+                              uint32_t                       diag_hash,
+                              const std::vector<Diagnostic> &diags,
+                              const analysis::asa::Ambito   &donde);
 
 /**
  * @brief Recupera lo guardado por @ref project_cache_save_diags.
@@ -198,10 +208,13 @@ bool project_cache_save_diags(const std::string &cache_path, uint32_t diag_hash,
  * @param cache_path Mismo que al guardar.
  * @param diag_hash  Misma que al guardar.
  * @param out        Donde se depositan (se vacia antes).
+ * @param aqui       Donde se esta ahora; se descarta lo que valga en otro sitio.
  * @return @c true si se recupero algo.
  */
-bool project_cache_load_diags(const std::string &cache_path, uint32_t diag_hash,
-                              std::vector<Diagnostic> &out);
+bool project_cache_load_diags(const std::string           &cache_path,
+                              uint32_t                     diag_hash,
+                              std::vector<Diagnostic>     &out,
+                              const analysis::asa::Ambito &aqui);
 
 /// @brief FNV-1a 64 helper (publico para uso en @c compile_vx_project).
 uint64_t fnv1a64_bytes(const uint8_t *data, size_t size) noexcept;

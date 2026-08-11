@@ -217,11 +217,13 @@ uint32_t project_cache_diag_hash(const ProjectCacheKey &key) {
        << "|instr=" << key.instrument_mode << "|port=" << key.port_target
        << "|mc=" << (key.comptime_prebuilt ? 1 : 0)
        << "|std=" << key.stdlib_dir << "|vxpath=" << key.vx_path
-       /* El objetivo SI entra: `@Target` selecciona codigo distinto, y un aviso
-        * puede venir de una rama que solo existe en una arquitectura o en un
-        * sistema.  El nivel de runtime tambien cambia lo que se baja. */
-       << "|aot=" << (key.aot ? 1 : 0) << "|arch=" << key.aot_arch
-       << "|tgt=" << key.aot_target << "|tier=" << key.aot_tier;
+       /* El OBJETIVO NO ENTRA.  Que un aviso venga de una rama que solo existe
+        * en una arquitectura lo dice EL AVISO, en su ambito, y el lector lo
+        * filtra.  Meterlo aqui obligaba a partir el fichero por lo mas grueso:
+        * se duplicaba tambien todo lo universal -- que es la mayor parte -- para
+        * proteger lo poco que de verdad es especifico.  El nivel de runtime SI
+        * entra, porque cambia que codigo se baja, no donde vale lo sabido. */
+       << "|tier=" << key.aot_tier;
     return fnv1a32_str(os.str());
 }
 
@@ -357,8 +359,10 @@ std::string ruta_diags_(const std::string &cache_path, uint32_t diag_hash) {
 
 } // namespace
 
-bool project_cache_save_diags(const std::string &cache_path, uint32_t diag_hash,
-                              const std::vector<Diagnostic> &diags) {
+bool project_cache_save_diags(const std::string             &cache_path,
+                              uint32_t                       diag_hash,
+                              const std::vector<Diagnostic> &diags,
+                              const analysis::asa::Ambito   &donde) {
     if (diags.empty()) return false;
     analysis::asa::register_canonical_name(kDominioDiag);
     analysis::asa::FactStore almacen;
@@ -394,6 +398,12 @@ bool project_cache_save_diags(const std::string &cache_path, uint32_t diag_hash,
          * que alguien deduzca despues. */
         f.sello.certeza = analysis::asa::Certeza::Demostrada;
         f.sello.origen.productor = kDominioDiag;
+        /* Donde vale.  Las cadenas se internan en el almacen: el ambito viaja
+         * con el hecho, que es justo lo que permite que un solo fichero sirva a
+         * todos los objetivos. */
+        f.donde.isa = almacen.internar(donde.isa);
+        f.donde.sistema = almacen.internar(donde.sistema);
+        f.donde.backend = almacen.internar(donde.backend);
         almacen.anadir(std::move(f));
     }
     /* Nivel maximo a proposito: esto NO se puede recalcular sin recompilar, que
@@ -405,14 +415,16 @@ bool project_cache_save_diags(const std::string &cache_path, uint32_t diag_hash,
     return ::fs::write_file_atomic(ruta_diags_(cache_path, diag_hash), bytes);
 }
 
-bool project_cache_load_diags(const std::string &cache_path, uint32_t diag_hash,
-                              std::vector<Diagnostic> &out) {
+bool project_cache_load_diags(const std::string           &cache_path,
+                              uint32_t                     diag_hash,
+                              std::vector<Diagnostic>     &out,
+                              const analysis::asa::Ambito &aqui) {
     out.clear();
     analysis::asa::register_canonical_name(kDominioDiag);
     analysis::asa::FactStore almacen;
     const analysis::asa::ReadResult r = analysis::asa::read_facts_file(
         ruta_diags_(cache_path, diag_hash), static_cast<uint64_t>(diag_hash),
-        almacen);
+        almacen, {}, 0, aqui);
     if (!r.ok) return false;
     out.reserve(almacen.size());
     for (analysis::asa::FactId i = 0; i < almacen.size(); ++i) {
