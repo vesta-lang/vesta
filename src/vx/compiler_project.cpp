@@ -1149,12 +1149,16 @@ void traer_asignador_del_lenguaje(ir::IrModule &mod,
     mod.alloc_sym = alloc_sym;
     mod.free_sym = free_sym;
 
+    /* Los nombres que ya estan, en un indice construido UNA vez.  Preguntarlo
+     * recorriendo todas las funciones por cada candidata seria multiplicar dos
+     * listas y comparar cadenas en el bucle interno. */
+    std::unordered_set<std::string> presentes;
+    presentes.reserve(mod.functions.size() * 2);
+    for (const ir::IrFunction &g : mod.functions) presentes.insert(g.name);
+
     std::unordered_set<std::string> traidas;
     for (const ir::IrFunction &f : mem->functions) {
-        bool ya = false;
-        for (const ir::IrFunction &g : mod.functions)
-            if (g.name == f.name) { ya = true; break; }
-        if (!ya) {
+        if (presentes.count(f.name) == 0) {
             /* Alcanzable aunque nadie la llame TODAVIA: quien la va a llamar es
              * el selector del JIT, que trabaja despues de optimizar, y para
              * entonces el pase que limpia lo que no se usa ya se la habria

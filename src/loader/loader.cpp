@@ -1108,13 +1108,14 @@ Loader::load_executable(runtime::VM &vm,
                 for (const auto &sim : last_exe->symbol_table) {
                     if (sim.second != dir_alias) continue;
                     /* Los simbolos van con su seccion delante y la tabla de
-                     * funciones no, asi que se compara por el nombre pelado. */
-                    const size_t punto_sec = sim.first.rfind('.');
-                    const std::string pelado =
-                        punto_sec == std::string::npos
-                            ? sim.first
-                            : sim.first.substr(punto_sec + 1);
-                    if (pelado == punto) continue; // el alias, no el de verdad
+                     * funciones no, asi que se compara por el nombre pelado --
+                     * sin copiarlo: basta una vista sobre el que ya existe. */
+                    const size_t sep = sim.first.rfind('.');
+                    const char *pelado =
+                        sim.first.c_str() +
+                        (sep == std::string::npos ? 0 : sep + 1);
+                    if (std::strcmp(pelado, punto) == 0)
+                        continue; // el alias, no el de verdad
                     auto cand = last_exe->ir_lookup.find(pelado);
                     if (cand != last_exe->ir_lookup.end()) {
                         ita = cand;
