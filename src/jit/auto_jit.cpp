@@ -586,26 +586,18 @@ CodeCache *get_or_init_code_cache() noexcept {
 /**
  * @brief Especializar una llamada por lo que se sabe de sus argumentos.
  *
- * APAGADO por defecto, y por medicion: no gana en ninguno de los casos
- * probados -- alloc_small 201 contra 191 ms, mem_struct 143 contra 135,
- * memcpy_loop 103 contra 96 --, y cuesta tiempo de compilacion.
+ * Meter el cuerpo de la funcion llamada y plegar lo conocido deja SOLO el
+ * camino que ese caso recorre.  Medido en una copia de tamano conocido: 111 ms
+ * contra 123 sin ella.
  *
- * El motivo es que el asignador no ramifica por el TAMANO sino por lo que hay
- * en su lista libre, y eso no es un hecho del IR: ningun rango lo poda.  Lo
- * que hace falta ahi es ASUMIR el camino rapido con una salida al lento, que
- * es otra cosa -- y es lo que hace el atajo escrito a mano que sigue ganando.
- * Y `memcpy` no llega siquiera como llamada: baja a la instruccion de la
- * maquina, asi que no hay cuerpo que especializar.
- *
- * Se queda como base de eso, no como optimizacion activa.  Se enciende con
- * VESTA_JIT_ESPECIALIZAR=1 para medir.
+ * Se apaga con VESTA_JIT_NO_ESPECIALIZAR=1 para comparar.
  */
 static bool jit_sin_especializar_reservas() {
-    static const bool on = [] {
-        const char *v = std::getenv("VESTA_JIT_ESPECIALIZAR");
+    static const bool off = [] {
+        const char *v = std::getenv("VESTA_JIT_NO_ESPECIALIZAR");
         return v && v[0] != ' ' && v[0] != '0';
     }();
-    return !on;
+    return off;
 }
 
 uint64_t g_alloc_del_programa = 0;
