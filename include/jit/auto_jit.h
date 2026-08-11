@@ -146,6 +146,8 @@ extern uint64_t g_vx_swapctx_native;
  *  cargador tras compilarlo; lo lee el selector para saber cual es el monton
  *  y no usar el atajo que replica el de la maquina. */
 extern uint64_t g_alloc_del_programa;
+/** @brief El que libera, del mismo programa.  Va con el de arriba. */
+extern uint64_t g_free_del_programa;
 
 /**
  * @brief FN.3: materializa @c __vx_swapctx (context-switch @Naked) como codigo

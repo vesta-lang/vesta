@@ -4771,6 +4771,38 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  *   total_bytes_ += SLAB_SIZES[cls];
                  *   return node;
                  * (alloc_count/peak son introspeccion -> se omiten.) */
+                /* El asignador del programa, llamado DIRECTO.
+                 *
+                 * No es por velocidad: es que el codigo compilado recorra el
+                 * mismo camino que el binario nativo, que es lo que permite
+                 * depurar aquel desde aqui.  El nombre es fijo y quien hay
+                 * detras lo decidio el compilador, asi que esto no queda atado
+                 * a ningun asignador concreto.
+                 *
+                 * El interprete no se toca: en el IR la reserva sigue siendo la
+                 * suya, y su instruccion va al mismo monton por su cuenta. */
+                if (in.op == ir::IrOp::RAW_ALLOC && vm &&
+                    ent.alloc_del_programa != 0 && in.dst != ir::IR_NO_VALUE &&
+                    in.operands.size() == 1) {
+                    flush_pending();
+                    store_vm_arg(O, 1, in.operands[0]);
+#if defined(_WIN32)
+                    const MReg pr = MReg::RCX;
+#else
+                    const MReg pr = MReg::RDI;
+#endif
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOV, MOperand::make_reg(pr, 8),
+                        MOperand::make_reg(MReg::RBX, 8)));
+                    O.push_back(MInstr::make_call_abs(
+                        out.intern_imm64(ent.alloc_del_programa)));
+                    O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                                   vm_reg_mem(0)));
+                    break;
+                }
+                /* El atajo que replica el asignador de la MAQUINA en linea solo
+                 * vale cuando ese es el monton: con el del programa delante
+                 * repartiria del equivocado. */
                 if (in.op == ir::IrOp::RAW_ALLOC && vm && ent.raw_alloc != 0 &&
                     ent.alloc_del_programa == 0 &&
                     in.dst != ir::IR_NO_VALUE && in.operands.size() == 1 &&
@@ -5200,6 +5232,24 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const ir::IrValueId p = in.operands[0];
                 if (p < v_is_host_alloca.size() && v_is_host_alloca[p])
                     break; // host-stack: no-op
+                /* Quien reserva, libera: si la reserva se fue al asignador del
+                 * programa, esto tiene que ir al mismo.  Los dos llevan su
+                 * propia contabilidad, y soltar por uno lo que pidio el otro
+                 * corrompe el monton. */
+                if (vm && ent.free_del_programa != 0) {
+                    store_vm_arg(O, 1, p);
+#if defined(_WIN32)
+                    const MReg pf = MReg::RCX;
+#else
+                    const MReg pf = MReg::RDI;
+#endif
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOV, MOperand::make_reg(pf, 8),
+                        MOperand::make_reg(MReg::RBX, 8)));
+                    O.push_back(MInstr::make_call_abs(
+                        out.intern_imm64(ent.free_del_programa)));
+                    break;
+                }
                 if (!vm || ent.raw_free == 0) {
                     vreg_dbg(fn.name.c_str(), "raw_free(no-vm/no-addr)");
                     return false;

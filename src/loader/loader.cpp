@@ -1087,7 +1087,27 @@ Loader::load_executable(runtime::VM &vm,
                 std::getenv("VX_ASIGNADOR_PROGRAMA") ? 2u : 0u;
             for (size_t ip = 0; ip < n_puntos; ++ip) {
                 const char *punto = kPuntos[ip];
-                auto ita = last_exe->ir_lookup.find(punto);
+                /* El nombre convenido es un ALIAS -- una etiqueta mas sobre la
+                 * misma direccion --, no una funcion aparte, asi que no aparece
+                 * en la tabla de funciones.  Lo que comparten es la DIRECCION:
+                 * se busca ahi y se compila la funcion que vive en ella. */
+                /* Los simbolos van con el nombre de su seccion delante
+                 * ("code.etiqueta"), asi que se busca de las dos formas. */
+                auto ial = last_exe->symbol_table.find(punto);
+                if (ial == last_exe->symbol_table.end())
+                    ial = last_exe->symbol_table.find(std::string("code.") +
+                                                      punto);
+                if (ial == last_exe->symbol_table.end()) continue;
+                const uint64_t dir_alias = ial->second;
+                auto ita = last_exe->ir_lookup.end();
+                for (const auto &sim : last_exe->symbol_table) {
+                    if (sim.second != dir_alias || sim.first == punto) continue;
+                    auto cand = last_exe->ir_lookup.find(sim.first);
+                    if (cand != last_exe->ir_lookup.end()) {
+                        ita = cand;
+                        break;
+                    }
+                }
                 if (ita == last_exe->ir_lookup.end() ||
                     ita->second >= last_exe->ir_functions.size())
                     continue;
@@ -1114,6 +1134,7 @@ Loader::load_executable(runtime::VM &vm,
                             jit::g_alloc_del_programa = dir;
                         } else {
                             proccess->free_del_programa = dir;
+                            jit::g_free_del_programa = dir;
                         }
                     }
                 } catch (...) {

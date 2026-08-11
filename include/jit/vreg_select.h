@@ -112,6 +112,9 @@ struct VregEntries {
      * uno y soltandose por otro.
      */
     uint64_t alloc_del_programa = 0;
+    /// El que libera, del mismo programa (0 = no hay).  Va con el de arriba:
+    /// quien reserva, libera, o el monton se corrompe.
+    uint64_t free_del_programa = 0;
     uint64_t raw_free = 0;  ///< vrt_raw_free(proc, host_ptr)
     uint64_t gc_allocp = 0; ///< vrt_gc_alloc_payload(proc, size) -> host_ptr
     uint64_t newobj = 0; ///< vrt_newobj_handle(proc, cls) -> GcHandle (NEWOBJ)
