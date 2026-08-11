@@ -4772,6 +4772,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  *   return node;
                  * (alloc_count/peak son introspeccion -> se omiten.) */
                 if (in.op == ir::IrOp::RAW_ALLOC && vm && ent.raw_alloc != 0 &&
+                    ent.alloc_del_programa == 0 &&
                     in.dst != ir::IR_NO_VALUE && in.operands.size() == 1 &&
                     !jit_no_inline_alloc()) {
                     const ir::IrValueId szv = in.operands[0];

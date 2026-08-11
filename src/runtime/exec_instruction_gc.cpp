@@ -690,6 +690,23 @@ void exec_instr_raw_alloc(ProcessVM *vm, const DecodedInstr &instr) {
         instr.data_instruction.reg_data.reg1; // registro con el tamano
     const uint64_t size = read_reg_table[instr.flags_info.mode](vm, rsrc);
 
+    /* El asignador del PROGRAMA, si lo hay.
+     *
+     * La instruccion sigue siendo la misma -- este es el mecanismo del
+     * interprete y es lo portable --, pero el monton tiene que ser UNO: si el
+     * codigo compilado reserva por un sitio y esta instruccion por otro, un
+     * bloque acaba pidiendose por un camino y soltandose por el otro, y eso no
+     * falla donde se comete.
+     *
+     * Cuando no lo hay -- un programa que no trae ninguno, o lo que se reserve
+     * antes de que este compilado -- se queda el propio, que es el respaldo. */
+    if (vm->alloc_del_programa != 0) {
+        vm->registers.regs[R01].qword(size); // convencion de llamada de la VM
+        auto fn = reinterpret_cast<uint64_t (*)(void *)>(
+            static_cast<uintptr_t>(vm->alloc_del_programa));
+        fn(vm);
+        return; // deja el puntero en R00, como el resto de llamadas
+    }
     uint64_t ptr =
         vm->raw_alloc.alloc(static_cast<size_t>(size)); // alocar bloque
     vm->registers.regs[R00].qword(ptr); // devolver puntero host en R00
@@ -708,6 +725,14 @@ void exec_instr_raw_free(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t rsrc = instr.data_instruction.reg_data
                              .reg1; // registro con el puntero a liberar
     const uint64_t ptr = vm->registers.regs[rsrc].qword();
+    // Quien reserva, libera: por el mismo sitio que @ref exec_instr_raw_alloc.
+    if (vm->free_del_programa != 0) {
+        vm->registers.regs[R01].qword(ptr);
+        auto fn = reinterpret_cast<uint64_t (*)(void *)>(
+            static_cast<uintptr_t>(vm->free_del_programa));
+        fn(vm);
+        return;
+    }
     vm->raw_alloc.free(ptr); // liberar el bloque
 }
 

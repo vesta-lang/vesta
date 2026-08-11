@@ -103,6 +103,15 @@ struct VregEntries {
     uint64_t gc_write_barrier =
         0; ///< vrt_gc_write_barrier(proc, container_handle) -- GCWB_IR
     uint64_t raw_alloc = 0; ///< vrt_raw_alloc(proc, size)
+    /**
+     * @brief El asignador de ESTE programa, ya compilado (0 = no hay).
+     *
+     * Cuando lo hay, el monton es el suyo y no el de la maquina, asi que el
+     * atajo que replica el asignador de la maquina en linea deja de valer: seria
+     * un camino mas al monton equivocado, y un bloque acabaria pidiendose por
+     * uno y soltandose por otro.
+     */
+    uint64_t alloc_del_programa = 0;
     uint64_t raw_free = 0;  ///< vrt_raw_free(proc, host_ptr)
     uint64_t gc_allocp = 0; ///< vrt_gc_alloc_payload(proc, size) -> host_ptr
     uint64_t newobj = 0; ///< vrt_newobj_handle(proc, cls) -> GcHandle (NEWOBJ)

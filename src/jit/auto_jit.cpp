@@ -287,6 +287,9 @@ VregEntries make_vreg_entries() {
         e.gc_write_barrier =
             reinterpret_cast<uint64_t>(g_runtime_entries->gc_write_barrier);
         e.raw_alloc = reinterpret_cast<uint64_t>(g_runtime_entries->raw_alloc);
+        /* Si el programa trae su asignador, el monton es el suyo: el selector
+         * lo necesita para no usar el atajo que replica el de la maquina. */
+        e.alloc_del_programa = jit::g_alloc_del_programa;
         e.raw_free = reinterpret_cast<uint64_t>(g_runtime_entries->raw_free);
         e.gc_allocp =
             reinterpret_cast<uint64_t>(g_runtime_entries->gc_alloc_payload);
@@ -575,6 +578,10 @@ CodeCache *get_or_init_code_cache() noexcept {
 }
 
 /* FN.3: fuera del namespace anonimo -- la llama loader.cpp (linkage externa). */
+/** @brief El asignador del programa, ya compilado (0 = no hay).  Lo pone el
+ *  cargador; lo lee el selector para saber cual es el monton. */
+uint64_t g_alloc_del_programa = 0;
+
 uint64_t ensure_vx_swapctx_native(runtime::ProcessVM *vm) noexcept {
     if (g_vx_swapctx_native != 0) return g_vx_swapctx_native;
     if (vm == nullptr) return 0;

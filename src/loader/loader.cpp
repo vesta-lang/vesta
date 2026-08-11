@@ -1063,6 +1063,65 @@ Loader::load_executable(runtime::VM &vm,
                     }
                 }
             }
+            /* El asignador, ANTES que nada.
+             *
+             * Si la primera reserva del programa lo encuentra ya compilado, no hay
+             * un tramo inicial en el que el codigo compilado use un asignador y el
+             * resto otro -- y ese tramo es justo lo que corrompe el monton, porque
+             * quien reserva por uno acaba soltando por el otro.  No es una
+             * optimizacion: es lo que hace que no haya dos.
+             *
+             * Se compila el punto de entrada de nombre conocido, que lleva al
+             * asignador de ESTE programa (el suyo si lo declaro, el de la
+             * biblioteca si no). */
+            /* Compilarlos aqui es lo que haria que la primera reserva ya
+             * encuentre el asignador del programa y no haya dos montones.  De
+             * momento NO: el puente que el frontend construye a mano no llega
+             * entero al codigo generado -- compila, pero el proceso muere al
+             * ejecutarlo --, asi que activarlo cambiaria un problema por otro
+             * peor.  Se enciende con VX_ASIGNADOR_PROGRAMA=1 para trabajar en
+             * ello. */
+            static const char *const kPuntos[2] = {"__vx_alloc_entry",
+                                                  "__vx_free_entry"};
+            const size_t n_puntos =
+                std::getenv("VX_ASIGNADOR_PROGRAMA") ? 2u : 0u;
+            for (size_t ip = 0; ip < n_puntos; ++ip) {
+                const char *punto = kPuntos[ip];
+                auto ita = last_exe->ir_lookup.find(punto);
+                if (ita == last_exe->ir_lookup.end() ||
+                    ita->second >= last_exe->ir_functions.size())
+                    continue;
+                try {
+                    jit::CompileResult ra = jit::eager_compile_function(
+                        last_exe->ir_functions[ita->second], &last_exe->ir_lookup,
+                        &last_exe->ir_functions, &last_exe->symbol_table,
+                        resolve_native, read_vmem_cb, exc_off, exc_free_off,
+                        jit_counter_addr);
+                    /* Y se le dice a la maquina donde esta, para que su
+                     * instruccion reserve en el MISMO monton que el codigo
+                     * compilado.  Cada uno llega por su mecanismo; el monton es
+                     * uno. */
+                        std::fprintf(stderr, "[dbg] compilado %s: %p\n", punto,
+                                     (void *)ra.fn);
+                    if (ra.fn != nullptr) {
+                        const uint64_t dir =
+                            reinterpret_cast<uint64_t>(ra.fn);
+                        if (std::strcmp(punto, "__vx_alloc_entry") == 0) {
+                            proccess->alloc_del_programa = dir;
+                            /* Y que el selector lo sepa: con el monton del
+                             * programa, el atajo que replica el de la maquina
+                             * repartiria del monton equivocado. */
+                            jit::g_alloc_del_programa = dir;
+                        } else {
+                            proccess->free_del_programa = dir;
+                        }
+                    }
+                } catch (...) {
+                    // Sin el, el JIT se queda con el asignador de la maquina: mas
+                    // lento y sin compartir camino con el binario nativo, pero
+                    // correcto.
+                }
+            }
             try {
                 jit::CompileResult res = jit::eager_compile_function(
                     ir_main, &last_exe->ir_lookup, &last_exe->ir_functions,

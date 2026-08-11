@@ -177,13 +177,32 @@ VRT_FORCE_FP vrt_handle vrt_gc_alloc_pinned(vrt_proc *proc, size_t size) {
  * structs Win32/POSIX para pasar a APIs nativas. */
 uint8_t *vrt_raw_alloc(vrt_proc *proc, size_t size) {
     if (!proc) return nullptr;
-    uint64_t ptr = as_proc(proc)->raw_alloc.alloc(size);
+    auto *p = as_proc(proc);
+    /* El asignador del PROGRAMA, si lo hay: el monton tiene que ser uno solo
+     * para todos los caminos, o un bloque acaba pidiendose por uno y
+     * soltandose por otro. */
+    if (p->alloc_del_programa != 0) {
+        p->registers.regs[runtime::R01].qword(size);
+        auto fn = reinterpret_cast<uint64_t (*)(void *)>(
+            static_cast<uintptr_t>(p->alloc_del_programa));
+        fn(p);
+        return reinterpret_cast<uint8_t *>(p->registers.regs[runtime::R00].qword());
+    }
+    uint64_t ptr = p->raw_alloc.alloc(size);
     return reinterpret_cast<uint8_t *>(ptr);
 }
 
 void vrt_raw_free(vrt_proc *proc, uint8_t *ptr) {
     if (!proc || !ptr) return;
-    as_proc(proc)->raw_alloc.free(reinterpret_cast<uint64_t>(ptr));
+    auto *p = as_proc(proc);
+    if (p->free_del_programa != 0) {
+        p->registers.regs[runtime::R01].qword(reinterpret_cast<uint64_t>(ptr));
+        auto fn = reinterpret_cast<uint64_t (*)(void *)>(
+            static_cast<uintptr_t>(p->free_del_programa));
+        fn(p);
+        return;
+    }
+    p->raw_alloc.free(reinterpret_cast<uint64_t>(ptr));
 }
 
 uint8_t *vrt_gc_deref(vrt_proc *proc, vrt_handle h) {

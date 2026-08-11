@@ -6607,6 +6607,28 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
                 in.dst != IR_NO_VALUE && in.operands.size() >= 2)
                 ctx.carry_src[in.dst] = {in.operands[0], in.op == IrOp::SUBB};
 
+    /* Un segundo NOMBRE para el asignador del programa.
+     *
+     * El backend tiene que poder llamarlo sin saber quien es -- el del programa
+     * si lo declaro con @c @AllocatorOverride, el de la biblioteca si no -- y
+     * para eso necesita un nombre fijo.  Dos etiquetas seguidas es exactamente
+     * eso: el mismo codigo con dos nombres, sin generar ni una instruccion.
+     *
+     * Se probo antes con una funcion puente que llamaba al de verdad, fabricada
+     * a mano en el IR.  Compilaba y moria al ejecutarse: fabricar IR fuera del
+     * frontend se salta invariantes que nadie tiene escritos, y solo te enteras
+     * cuando revienta.  Un alias no genera codigo, asi que no hay nada que se
+     * pueda quedar a medias. */
+    if (mod != nullptr && !mod->alloc_sym.empty() &&
+        fn.name == mod->alloc_sym) {
+        if (opts.export_all) out << "@Export(__vx_alloc_entry)\n";
+        out << "__vx_alloc_entry:\n";
+    }
+    if (mod != nullptr && !mod->free_sym.empty() && fn.name == mod->free_sym) {
+        if (opts.export_all) out << "@Export(__vx_free_entry)\n";
+        out << "__vx_free_entry:\n";
+    }
+
     // Etiqueta de funcion (exportada si corresponde)
     if (opts.export_all) {
         out << "@Export(" << ctx.fn_lbl << ")\n";

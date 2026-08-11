@@ -494,6 +494,8 @@ class ProcessVM {
      */
     void *jit_entry_fn = nullptr;
 
+
+
     /**
      * @brief Puntero cacheado a la @c HandleTable del @c gc_heap, para el JIT.
      *
@@ -529,6 +531,25 @@ class ProcessVM {
      * con @c mov rax, [rbx + OSR_BUFFER_OFFSET].
      */
     uint64_t *osr_buffer = nullptr;
+
+    /**
+     * @brief El asignador de ESTE programa, ya compilado, si lo hay.
+     *
+     * Cada modo llega a la memoria por su mecanismo -- el interprete por su
+     * instruccion, el codigo compilado por una llamada directa, el binario
+     * nativo por el enlazado -- pero el monton tiene que ser UNO.  Con dos, un
+     * bloque se pide por un camino y se suelta por otro, y eso no falla donde
+     * se comete.
+     *
+     * Aqui viven las direcciones de los puntos de entrada del programa (el
+     * suyo si lo declaro con @c @AllocatorOverride, el de la biblioteca si no),
+     * que el cargador compila antes de arrancar.  Cuando estan, la instruccion
+     * de la maquina las usa; cuando no -- un programa que no trae ninguno, o lo
+     * que se reserve antes de que esten listas -- se queda el asignador propio,
+     * que sigue siendo el respaldo.
+     */
+    uint64_t alloc_del_programa = 0;
+    uint64_t free_del_programa = 0;
 
     uint64_t tsc{}; ///< Contador de instrucciones ejecutadas (Time Stamp
                     ///< Counter virtual)
@@ -972,6 +993,7 @@ class ProcessVM {
     [[nodiscard]] std::string to_string() const;
 
   private:
+
 };
 
 /**

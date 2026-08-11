@@ -142,6 +142,11 @@ extern uint64_t g_jit_no_ir_count;
  */
 extern uint64_t g_vx_swapctx_native;
 
+/** @brief El asignador del programa, ya compilado (0 = no hay).  Lo pone el
+ *  cargador tras compilarlo; lo lee el selector para saber cual es el monton
+ *  y no usar el atajo que replica el de la maquina. */
+extern uint64_t g_alloc_del_programa;
+
 /**
  * @brief FN.3: materializa @c __vx_swapctx (context-switch @Naked) como codigo
  *        NATIVO y deja su direccion en @c g_vx_swapctx_native (idempotente).
