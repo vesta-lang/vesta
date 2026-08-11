@@ -1338,6 +1338,27 @@ else ()
     target_link_libraries(test_asa_fact_file PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# Suelto a proposito: cuatro ficheros y nada del compilador, para poder
+# correrlo en un sistema donde el proyecto entero no este construido -- que es
+# justo el caso al comprobar que el formato cruza de plataforma.
+add_executable(test_asa_fact_file_lnx tests/analysis/test_asa_fact_file_lnx.cpp
+                                      src/analysis/asa/fact_file.cpp
+                                      src/analysis/asa/fact_store.cpp
+                                      src/util/serialize.cpp)
+target_include_directories(test_asa_fact_file_lnx PRIVATE ${VM_INCLUDES})
+
+add_executable(test_asa_fact_file_robusto tests/analysis/test_asa_fact_file_robusto.cpp)
+target_include_directories(test_asa_fact_file_robusto PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_asa_fact_file_robusto PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_asa_fact_file_robusto PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_asa_fact_file_robusto PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_asa_fact_file_robusto PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 add_executable(test_jit_facts tests/jit/test_jit_facts.cpp)
 target_include_directories(test_jit_facts PRIVATE ${VM_INCLUDES})
 target_link_libraries(test_jit_facts PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)

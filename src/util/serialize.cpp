@@ -67,6 +67,13 @@ void ByteWriter::patch_u32(size_t pos, uint32_t v) {
             static_cast<uint8_t>((v >> (8 * i)) & 0xFF);
 }
 
+void ByteWriter::patch_u64(size_t pos, uint64_t v) {
+    if (pos + 8 > buf_.size()) return;
+    for (int i = 0; i < 8; ++i)
+        buf_[pos + static_cast<size_t>(i)] =
+            static_cast<uint8_t>((v >> (8 * i)) & 0xFF);
+}
+
 // ---------------------------------------------------------------------------
 //  Lectura
 // ---------------------------------------------------------------------------

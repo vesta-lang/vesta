@@ -196,7 +196,12 @@ static void probar_dominio_desconocido() {
 
     /* Se simula un productor de otra version tocando la version DEL PRIMER
      * REGISTRO.  Es lo que pasaria de verdad: alguien cambia el contenido de su
-     * dominio y las caches escritas antes traen el layout viejo. */
+     * dominio y las caches escritas antes traen el layout viejo.
+     *
+     * Y se REHACEN LAS SUMAS, que es la parte que importa: un fichero escrito
+     * por otra version tiene las suyas bien.  Sin rehacerlas esto no seria un
+     * fichero de otra version sino uno corrupto, y se estaria comprobando otra
+     * cosa -- que es justo lo que pasaba antes de que hubiera sumas. */
     std::vector<uint8_t> tocado = bytes;
     const std::string    marca(kProductorEstructura);
     size_t               pos = std::string::npos;
@@ -209,6 +214,26 @@ static void probar_dominio_desconocido() {
     CHECK(pos != std::string::npos, "el nombre del dominio esta en el fichero");
     if (pos == std::string::npos) return;
     tocado[pos + marca.size()] = 0xFE; // version del hecho, byte bajo.
+
+    /* El registro empieza en la longitud del nombre (4 bytes antes de el); su
+     * suma vive tras la version (2) y la huella (8), y el cuerpo acaba donde
+     * dice la longitud que va detras. */
+    const size_t ini = pos - 4;
+    const size_t pos_suma = pos + marca.size() + 2 + 8;
+    size_t       q = pos_suma + 8;
+    uint32_t     longitud = 0;
+    for (int k = 0; k < 4; ++k)
+        longitud |= static_cast<uint32_t>(tocado[q + 4 + static_cast<size_t>(k)])
+                    << (8 * k);
+    const size_t fin = q + 8 + longitud;
+    const uint64_t suma = record_checksum(tocado.data(), ini, pos_suma, fin);
+    for (int k = 0; k < 8; ++k)
+        tocado[pos_suma + static_cast<size_t>(k)] =
+            static_cast<uint8_t>(suma >> (8 * k));
+    const uint64_t global = file_checksum(tocado.data(), tocado.size());
+    for (int k = 0; k < 8; ++k)
+        tocado[tocado.size() - kTailBytes + 8 + static_cast<size_t>(k)] =
+            static_cast<uint8_t>(global >> (8 * k));
 
     FactStore destino;
     const ReadResult r = read_facts(tocado.data(), tocado.size(), 3, destino);
@@ -351,6 +376,11 @@ static void probar_granularidad() {
 
 int main() {
     std::printf("=== ASA: los hechos sobreviven al disco ===\n");
+    /* El formato no conoce a los productores de nadie, asi que quien tenga
+     * literales estables los da de alta.  En el compilador lo hace la base de
+     * hechos al construirse; aqui, que no hay ninguna, se hace a mano -- y que
+     * el test tenga que hacerlo es justo lo que documenta el requisito. */
+    register_asa_canonical_names();
     probar_ida_y_vuelta();
     probar_identidad_de_nombres();
     probar_anade_sobre_lo_existente();

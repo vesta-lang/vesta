@@ -368,6 +368,9 @@ std::vector<const char *> productores_registrados() {
 
 std::vector<ResumenProduccion> producir(const ir::IrModule &mod,
                                         FactStore          &almacen) {
+    /* Antes de producir nada: los nombres de los productores tienen que ser
+     * canonicos para que un hecho leido de disco se reconozca como suyo. */
+    register_asa_canonical_names();
     asegurar_registro();
     std::vector<ResumenProduccion> resumenes;
     /* UNA base para todos los dominios: si tres piden la estructura, se calcula

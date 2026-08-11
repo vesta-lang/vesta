@@ -12,12 +12,12 @@
 
 #include "analysis/asa/fact_file.h"
 
-#include "analysis/asa/base_hechos.h"
 
 #include "util/fnv.h"
 #include "util/fs_utils.h"
 #include "util/serialize.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <unordered_map>
@@ -29,6 +29,16 @@ namespace {
 
 constexpr uint32_t kMagic = 0x46415856u;    ///< 'VXAF' en little-endian.
 constexpr uint32_t kMagicEnd = 0x4E494658u; ///< 'XFIN': cierra el fichero.
+
+/**
+ * @brief Lo MENOS que puede ocupar un hecho serializado.
+ *
+ * Sirve para acotar lo que se reserva al leer: el numero de hechos lo dice el
+ * fichero, y un fichero roto puede decir cualquier cosa.  Con esto, lo que se
+ * pide depende de los bytes que quedan de verdad.
+ */
+constexpr size_t kBytesMinimosHecho = 4 + 4 + 8 + 8 + 4 + 1 + 4 + 4 + 1 + 1 + 4 +
+                                      4 + 4 + 4 * 4 + 4 + 4;
 
 /// Marca de "esta cadena no esta" en la tabla de un registro.  No es la cadena
 /// cero: la cadena vacia es una entrada legitima.
@@ -87,6 +97,16 @@ const char *canonicalize(FactStore &almacen, const std::string &s) {
 
 } // namespace
 
+uint64_t record_checksum(const uint8_t *d, size_t ini, size_t suma, size_t fin) {
+    const uint64_t h = util::fnv_bytes(util::kFnvOffset, d + ini, suma - ini);
+    return util::fnv_bytes(h, d + suma + 8, fin - (suma + 8));
+}
+
+uint64_t file_checksum(const uint8_t *d, size_t n) {
+    /* Todo menos la propia suma y la magia que cierra: lo que va antes de ella. */
+    return util::fnv_bytes(util::kFnvOffset, d, n - kTailBytes + 8);
+}
+
 const char *diag_code(ReadReason m) {
     switch (m) {
     case ReadReason::NoFile: return "VXA036";
@@ -94,7 +114,9 @@ const char *diag_code(ReadReason m) {
     case ReadReason::NotAFactFile: return "VXA038";
     case ReadReason::OtherVersion: return "VXA039";
     case ReadReason::OtherModule: return "VXA042";
+    case ReadReason::OtherCompiler: return "VXA046";
     case ReadReason::Truncated: return "VXA043";
+    case ReadReason::Corrupt: return "VXA045";
     case ReadReason::ReadFailed: return "VXA044";
     default: return "";
     }
@@ -141,10 +163,11 @@ bool should_store(CacheLevel nivel, const DomainCost &c) {
     return !c.recomputable || c.micros >= kUmbralMicros;
 }
 
-std::vector<uint8_t> serialize(const FactStore                 &almacen,
-                                uint64_t                         huella,
-                                CacheLevel                       nivel,
-                                const std::vector<DomainCost> &costes) {
+std::vector<uint8_t> serialize(const FactStore               &almacen,
+                               uint64_t                       huella,
+                               CacheLevel                     nivel,
+                               const std::vector<DomainCost> &costes,
+                               uint64_t                       compilador) {
     if (nivel == CacheLevel::Off || almacen.size() == 0) return {};
 
     /* Agrupar por dominio, indexando por el PUNTERO del nombre: dentro de un
@@ -193,7 +216,8 @@ std::vector<uint8_t> serialize(const FactStore                 &almacen,
 
     w.u32(kMagic);
     w.u16(kContainerVersion);
-    w.u16(0); // reservado: alinea la huella a 8.
+    w.u16(0); // reservado: alinea las huellas a 8.
+    w.u64(compilador);
     w.u64(huella);
     w.u32(static_cast<uint32_t>(almacen.size())); // dimensiona el remapeo.
     w.u32(static_cast<uint32_t>(dominios.size()));
@@ -211,11 +235,17 @@ std::vector<uint8_t> serialize(const FactStore                 &almacen,
         e.hash = name_hash(dom);
         e.offset = w.size();
 
+        const size_t inicio_registro = w.size();
         w.str(dom == nullptr ? std::string() : std::string(dom));
         w.u16(kFactVersion);
         /* La huella de LO QUE MIRO este dominio, no la del modulo: es lo que
          * permite tirar un registro y conservar los demas. */
         w.u64(huella_de[dom]);
+        /* Hueco para la suma de comprobacion del cuerpo, que solo se sabe tras
+         * escribirlo.  Va POR REGISTRO y no por fichero para no perder la
+         * granularidad: unos bytes estropeados tiran ese dominio, no todo. */
+        const size_t pos_suma = w.size();
+        w.u64(0);
         w.u32(static_cast<uint32_t>(ids.size()));
         /* La longitud del cuerpo no se sabe hasta escribirlo, y va DELANTE
          * porque es lo que permite saltarse un dominio desconocido.  Se deja el
@@ -261,6 +291,13 @@ std::vector<uint8_t> serialize(const FactStore                 &almacen,
         tabla.escribir(w);
         w.patch_u32(pos_longitud,
                        static_cast<uint32_t>(w.size() - inicio_cuerpo));
+        /* La suma cubre el registro ENTERO menos ella misma: si solo cubriera
+         * el cuerpo, un byte estropeado en el nombre del dominio atribuiria sus
+         * hechos a otro, y uno en la huella los daria por caducados o por
+         * vigentes sin motivo.  Esos campos deciden tanto como el contenido. */
+        w.patch_u64(pos_suma,
+                    record_checksum(w.bytes().data(), inicio_registro, pos_suma,
+                                    w.size()));
         indice.push_back(e);
     }
 
@@ -270,22 +307,26 @@ std::vector<uint8_t> serialize(const FactStore                 &almacen,
         w.u64(e.offset);
     }
     w.u64(offset_indice);
+    /* Y una suma del FICHERO ENTERO, que cubre lo que las de cada registro no
+     * pueden: la cabecera, el indice de la cola y los huecos.  Con las dos, no
+     * queda un solo byte que se pueda cambiar sin que se note -- y "casi todos"
+     * aqui significa que de vez en cuando el compilador se cree algo falso. */
+    w.u64(util::fnv_bytes(util::kFnvOffset, w.bytes().data(), w.size()));
+    /* Coincide con @ref file_checksum por construccion: lo que se acaba de
+     * escribir es exactamente todo lo anterior a la suma. */
     w.u32(kMagicEnd);
     return w.take();
 }
 
 ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
                       FactStore                     &destino,
-                      const std::vector<DomainCost> &vigentes) {
+                      const std::vector<DomainCost> &vigentes,
+                      uint64_t                       compilador) {
     ReadResult r;
     if (datos == nullptr || n == 0) {
         r.reason = ReadReason::Empty;
         return r;
     }
-    /* Los nombres conocidos tienen que estar dados de alta ANTES de traducir
-     * ninguna cadena, o los hechos volverian con productores que no se
-     * reconocen a si mismos. */
-    register_asa_canonical_names();
     util::ByteReader L(datos, n);
     if (L.u32() != kMagic) {
         r.reason = ReadReason::NotAFactFile;
@@ -299,6 +340,14 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
     }
     if (ver != kContainerVersion) {
         r.reason = ReadReason::OtherVersion;
+        return r;
+    }
+    /* Quien los produjo, antes que de que hablan: un compilador nuevo puede
+     * concluir otra cosa del mismo programa sin que su fuente se haya tocado, y
+     * leer las conclusiones del viejo como propias es creerse un analisis que
+     * nadie ha hecho. */
+    if (L.u64() != compilador) {
+        r.reason = ReadReason::OtherCompiler;
         return r;
     }
     /* La huella es lo unico que garantiza que estos hechos hablan de ESTE
@@ -315,17 +364,56 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
         return r;
     }
 
+    /* La COLA se comprueba ANTES de leer nada.  Sin esto, un fichero cortado
+     * justo en el limite de un registro se lee entero y parece bueno: los
+     * registros que faltan no se distinguen de registros que no existian.  Que
+     * el indice cuadre exactamente con lo que dice la cabecera es lo que
+     * convierte "he leido algo" en "he leido todo lo que habia". */
+    constexpr size_t kBytesCola = kTailBytes;
+    constexpr size_t kBytesEntradaIndice = 8 + 8; // huella del nombre + posicion.
+    if (n < kBytesCola) {
+        r.reason = ReadReason::Truncated;
+        return r;
+    }
+    util::ByteReader cola(datos, n);
+    cola.seek(n - kBytesCola);
+    const uint64_t offset_indice = cola.u64();
+    const uint64_t suma_global = cola.u64();
+    if (cola.u32() != kMagicEnd) {
+        r.reason = ReadReason::Truncated;
+        return r;
+    }
+    if (file_checksum(datos, n) != suma_global) {
+        r.reason = ReadReason::Corrupt;
+        return r;
+    }
+    if (offset_indice > n - kBytesCola ||
+        (n - kBytesCola) - offset_indice !=
+            static_cast<uint64_t>(n_registros) * kBytesEntradaIndice) {
+        r.reason = ReadReason::Truncated;
+        return r;
+    }
+    const size_t fin_registros = static_cast<size_t>(offset_indice);
+
     /* Los hechos se arman aparte antes de depositarlos porque sus pruebas
      * apuntan a identificadores del FICHERO, y hasta no saber cuales se han
      * cargado de verdad no se pueden traducir. */
-    std::vector<Fact>   leidos;
-    std::vector<FactId> remapeo(total_original, kSinHecho);
-    const FactId        base = static_cast<FactId>(destino.size());
+    std::vector<Fact> leidos;
+    /* Tabla asociativa y NO un vector dimensionado por @c total_original: ese
+     * numero lo dice el fichero, y creerselo es reservar dieciseis gigas si
+     * pone cuatro mil millones.  Aqui solo entran identidades que se han leido
+     * de verdad, asi que lo que cuesta lo marca el contenido, no un campo. */
+    std::unordered_map<uint32_t, FactId> remapeo;
+    const FactId                         base = static_cast<FactId>(destino.size());
+    (void)total_original;
 
     for (uint32_t i = 0; i < n_registros && L.ok(); ++i) {
+        const size_t      inicio_registro = L.position();
         const std::string nombre = L.str();
         const uint16_t    ver_hecho = L.u16();
         const uint64_t    huella_dom = L.u64();
+        const size_t      pos_suma = L.position();
+        const uint64_t    suma = L.u64();
         const uint32_t    n_hechos = L.u32();
         const uint32_t    longitud = L.u32();
         if (!L.ok()) break;
@@ -351,6 +439,18 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
          * Un dominio del que no dice nada -- o que no supo decir de que
          * dependia -- se acepta: no se puede comprobar, y suponer lo peor
          * tiraria una cache que probablemente vale. */
+        /* Y ANTES de creerse una sola cifra del cuerpo, comprobar que es el
+         * que se escribio.  Sin esto, un byte estropeado dentro de un numero da
+         * otro numero igual de valido: el compilador razonaria sobre hechos
+         * falsos y nadie se enteraria.  Un registro que no cuadra se tira solo
+         * el, que para eso la suma va por registro. */
+        if (record_checksum(datos, inicio_registro, pos_suma, fin_registro) !=
+            suma) {
+            ++r.corrupt;
+            L.seek(fin_registro);
+            continue;
+        }
+
         bool caduco = false;
         if (huella_dom != 0) {
             for (const DomainCost &v : vigentes) {
@@ -375,7 +475,10 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
         L.seek(inicio_cuerpo + off_tabla);
         const uint32_t            n_cadenas = L.u32();
         std::vector<const char *> cadenas;
-        cadenas.reserve(n_cadenas);
+        /* Reservar por lo que quede, no por lo que diga el fichero: una cadena
+         * ocupa como minimo su longitud (4 bytes), asi que mas de eso es
+         * imposible y pedirlo solo serviria para agotar la memoria. */
+        cadenas.reserve(std::min<size_t>(n_cadenas, L.remaining() / 4));
         for (uint32_t c = 0; c < n_cadenas && L.ok(); ++c)
             cadenas.push_back(canonicalize(destino, L.str()));
         if (!L.ok()) break;
@@ -384,7 +487,10 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
             return k < cadenas.size() ? cadenas[k] : "";
         };
 
-        leidos.reserve(leidos.size() + n_hechos);
+        /* Mismo criterio: un hecho no baja de @c kBytesMinimosHecho. */
+        leidos.reserve(leidos.size() +
+                       std::min<size_t>(n_hechos,
+                                        L.remaining() / kBytesMinimosHecho));
         for (uint32_t h = 0; h < n_hechos && L.ok(); ++h) {
             Fact           f;
             const uint32_t id_original = L.u32();
@@ -408,12 +514,11 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
             f.prueba.regla = cad(L.u32());
             const uint32_t n_apoyos = L.u32();
             if (!L.ok()) break;
-            f.prueba.de.reserve(n_apoyos);
+            f.prueba.de.reserve(std::min<size_t>(n_apoyos, L.remaining() / 4));
             for (uint32_t k = 0; k < n_apoyos && L.ok(); ++k)
                 f.prueba.de.push_back(L.u32()); // aun en identidades del fichero.
             if (!L.ok()) break;
-            if (id_original < remapeo.size())
-                remapeo[id_original] = base + static_cast<FactId>(leidos.size());
+            remapeo[id_original] = base + static_cast<FactId>(leidos.size());
             leidos.push_back(std::move(f));
         }
         if (!L.ok()) break;
@@ -432,9 +537,8 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
     for (Fact &f : leidos) {
         size_t escribe = 0;
         for (size_t k = 0; k < f.prueba.de.size(); ++k) {
-            const FactId orig = f.prueba.de[k];
-            const FactId nuevo =
-                (orig < remapeo.size()) ? remapeo[orig] : kSinHecho;
+            const auto   it = remapeo.find(f.prueba.de[k]);
+            const FactId nuevo = (it == remapeo.end()) ? kSinHecho : it->second;
             if (nuevo == kSinHecho) {
                 ++r.lost_proofs;
                 continue;
@@ -453,7 +557,8 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
 
 ReadResult read_facts_file(const std::string &ruta, uint64_t huella,
                            FactStore                     &destino,
-                           const std::vector<DomainCost> &vigentes) {
+                           const std::vector<DomainCost> &vigentes,
+                           uint64_t                       compilador) {
     ReadResult     r;
     std::vector<uint8_t> bytes;
     if (!::fs::file_exists(ruta)) {
@@ -468,7 +573,8 @@ ReadResult read_facts_file(const std::string &ruta, uint64_t huella,
         r.reason = ReadReason::Empty;
         return r;
     }
-    return read_facts(bytes.data(), bytes.size(), huella, destino, vigentes);
+    return read_facts(bytes.data(), bytes.size(), huella, destino, vigentes,
+                      compilador);
 }
 
 } // namespace asa

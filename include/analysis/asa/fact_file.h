@@ -31,8 +31,8 @@
  * EL FORMATO, y por que es asi.  Registros AUTO-DESCRIPTIVOS por dominio, cada
  * uno con su LONGITUD delante:
  *
- *      cabecera   magia + version + identidad del modulo + cuantos hechos
- *      registro   [dominio][version][huella][cuantos][longitud][cuerpo]
+ *      cabecera   magia + version + compilador + modulo + cuantos hechos
+ *      registro   [dominio][version][huella][suma][cuantos][longitud][cuerpo]
  *      cola       indice dominio -> posicion, para leer solo lo que se pida
  *
  * La longitud por delante es lo importante: un lector que no conoce un dominio
@@ -41,11 +41,27 @@
  * LO SUYO -- cambiar su contenido descarta sus registros, no el fichero entero.
  * Es el mismo reparto que hacen ELF o PNG, y por la misma razon.
  *
+ * Cada registro lleva ademas la SUMA DE COMPROBACION de su cuerpo, y se mira
+ * antes de creerse una sola cifra.  Sin ella, un byte estropeado dentro de un
+ * numero da otro numero igual de valido y el compilador razonaria sobre hechos
+ * falsos sin que nadie se entere -- que es peor que no tener cache.  Va por
+ * registro, como la huella, para no perder la granularidad: unos bytes malos
+ * tiran ese dominio, no el fichero.
+ *
  * Y la HUELLA VA POR REGISTRO, no solo en la cabecera: cada dominio se valida
  * por su cuenta contra lo que hoy dependeria, asi que tocar algo que solo le
  * afecta a el descarta su registro y deja en pie los demas.  Cuanto menos haya
  * que invalidar, menos hay que rehacer -- y con una unica huella global,
  * cambiar una linea obligaria a recalcularlo todo.
+ *
+ * Y LA VERSION DEL COMPILADOR va en la cabecera, aparte de la del modulo.  Un
+ * hecho no lo dice el codigo: lo dice el ANALISIS que lo miro, asi que cambiar
+ * el compilador puede cambiar lo que se sabe del mismo programa sin que su
+ * fuente se haya tocado.  Sin este campo, un compilador nuevo leeria las
+ * conclusiones del viejo y las daria por suyas.  Es un campo y no algo mezclado
+ * en la huella del modulo a proposito: asi el motivo se puede contar -- "esto
+ * lo escribio otro compilador" y "esto es de otro programa" se arreglan de
+ * formas distintas.
  *
  * DONDE VIVE.  En un fichero propio al lado del `.vxir`, con la huella del
  * modulo dentro: si no cuadra, se descarta y se recalcula.  Aparte del IR
@@ -96,6 +112,38 @@ enum class CacheLevel : uint8_t {
     All = 3,    ///< todo lo que se sepa guardar.
 };
 
+/**
+ * @brief Suma de comprobacion de un registro, saltandose el hueco donde ella
+ *        misma vive.
+ *
+ * Es parte del CONTRATO del formato, no un detalle: el que escribe y el que lee
+ * tienen que calcularla igual, y dos copias que se separen una linea harian
+ * ilegible toda cache escrita por la otra version -- con el sintoma inutil de
+ * "la cache no funciona".  Publica ademas porque quien pruebe el formato
+ * necesita poder fabricar un fichero VALIDO de otra version, que no es lo mismo
+ * que uno corrupto.
+ *
+ * @param d    Bytes.
+ * @param ini  Donde empieza el registro.
+ * @param suma Donde esta el hueco de la suma (8 bytes que se saltan).
+ * @param fin  Donde acaba el registro.
+ * @return La suma.
+ */
+uint64_t record_checksum(const uint8_t *d, size_t ini, size_t suma, size_t fin);
+
+/**
+ * @brief Suma del fichero ENTERO, que cubre lo que las de cada registro no
+ *        pueden: la cabecera, el indice de la cola y los huecos.
+ *
+ * @param d Bytes.
+ * @param n Cuantos (el fichero completo, con su cola).
+ * @return La suma que deberia llevar dentro.
+ */
+uint64_t file_checksum(const uint8_t *d, size_t n);
+
+/// Cuanto ocupa la cola: desplazamiento del indice + suma global + magia final.
+constexpr size_t kTailBytes = 8 + 8 + 4;
+
 /// El nivel en vigor, leido una vez de @c VESTA_ASA_CACHE (0..3).
 CacheLevel cache_level();
 
@@ -142,16 +190,21 @@ bool should_store(CacheLevel nivel, const DomainCost &c);
  *
  * @param almacen Hechos a guardar.
  * @param huella  Identidad del modulo; al leer, si no cuadra se descarta todo.
+ * @param compilador Identidad de la version del compilador que los produjo
+ *                   (@c VXI_COMPILER_BUILD_ID donde este disponible).  Al leer,
+ *                   si no cuadra se descarta todo: los hechos son conclusiones
+ *                   del analisis, y otro analisis puede concluir otra cosa.
  * @param nivel   Cuanto guardar.
  * @param costes  Lo que cada dominio dice de si mismo.  Un dominio que no
  *                aparezca se trata como recomputable y de coste cero, o sea que
  *                solo entra en el nivel @c Todo.
  * @return Los bytes, o vacio si el nivel es @c Nada o no quedo nada que guardar.
  */
-std::vector<uint8_t> serialize(const FactStore                 &almacen,
-                                uint64_t                         huella,
-                                CacheLevel                       nivel,
-                                const std::vector<DomainCost> &costes);
+std::vector<uint8_t> serialize(const FactStore               &almacen,
+                               uint64_t                       huella,
+                               CacheLevel                     nivel,
+                               const std::vector<DomainCost> &costes,
+                               uint64_t                       compilador = 0);
 
 /**
  * @brief POR QUE no se pudo leer.  Es un DATO, no una frase.
@@ -167,7 +220,9 @@ enum class ReadReason : uint8_t {
     NotAFactFile,      ///< la magia no cuadra: no es esto.
     OtherVersion,  ///< contenedor de otra version.
     OtherModule,   ///< hechos de otro modulo.
+    OtherCompiler, ///< los escribio otra version del compilador.
     Truncated,         ///< se corto a mitad de escribirlo.
+    Corrupt,           ///< los bytes no son los que se escribieron.
     ReadFailed,     ///< el disco fallo al leerlo.
 };
 
@@ -184,11 +239,24 @@ struct ReadResult {
     uint32_t      domains = 0;       ///< registros leidos.
     uint32_t      skipped = 0;       ///< registros de dominios/versiones ajenas.
     uint32_t      stale = 0;        ///< registros cuya huella ya no vale.
+    uint32_t      corrupt = 0;      ///< registros cuya suma no cuadra.
     uint32_t      lost_proofs = 0; ///< apoyos en hechos que no se cargaron.
 };
 
 /**
  * @brief Deposita en @p destino los hechos de @p datos.
+ *
+ * EXIGE que los nombres canonicos esten dados de alta antes (ver
+ * @c register_canonical_name).  Este fichero es el FORMATO y no conoce a los
+ * productores de nadie: quien tenga literales estables los registra, y quien
+ * solo lea hechos de dominios ajenos los recibira internados -- se conservan y
+ * se pueden leer, pero no se encontraran buscando por un literal que este
+ * programa no tiene.
+ *
+ * REORDENA: los hechos se guardan agrupados por dominio, asi que al volver no
+ * estan en el orden en que se afirmaron.  Lo que se conserva es la DERIVACION
+ * -- cada hecho sigue apoyandose en el mismo --, no la posicion; quien dependa
+ * del orden de llegada esta dependiendo de algo que el fichero no promete.
  *
  * AÑADE: el almacen puede traer hechos ya puestos y los identificadores de las
  * pruebas se recolocan sobre el.  Un registro cuya version no se reconozca se
@@ -202,13 +270,15 @@ struct ReadResult {
  * @return Que se leyo, o por que no.
  */
 ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
-                      FactStore &destino,
-                      const std::vector<DomainCost> &vigentes = {});
+                      FactStore                     &destino,
+                      const std::vector<DomainCost> &vigentes = {},
+                      uint64_t                       compilador = 0);
 
 /// Lee @p ruta y deposita en @p destino.  Si no existe, @c motivo lo dice.
 ReadResult read_facts_file(const std::string &ruta, uint64_t huella,
-                           FactStore &destino,
-                           const std::vector<DomainCost> &vigentes = {});
+                           FactStore                     &destino,
+                           const std::vector<DomainCost> &vigentes = {},
+                           uint64_t                       compilador = 0);
 
 } // namespace asa
 } // namespace analysis

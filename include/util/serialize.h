@@ -74,6 +74,10 @@ class ByteWriter {
      */
     void patch_u32(size_t pos, uint32_t v);
 
+    /// Igual que @ref patch_u32 para un entero de 64 bits (una suma de
+    /// comprobacion, por ejemplo, que solo se sabe tras escribir lo que cubre).
+    void patch_u64(size_t pos, uint64_t v);
+
     /// @return Los bytes acumulados.
     const std::vector<uint8_t> &bytes() const { return buf_; }
 

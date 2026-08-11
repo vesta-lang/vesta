@@ -417,3 +417,11 @@ es = "asa: el fichero de hechos esta truncado"
 [VXA044]
 en = "asa: the facts file could not be read whole"
 es = "asa: el fichero de hechos no se pudo leer entero"
+
+[VXA045]
+en = "asa: the facts file does not match its checksum (corrupted bytes)"
+es = "asa: el fichero de hechos no cuadra con su suma de comprobacion (bytes corruptos)"
+
+[VXA046]
+en = "asa: those facts were written by another version of the compiler"
+es = "asa: esos hechos los escribio otra version del compilador"

@@ -114,8 +114,10 @@ const CatEntry kEntries[] = {
     {"VXA042", {"asa: those facts describe another module (fingerprint mismatch)", "asa: esos hechos hablan de otro modulo (la huella no corresponde)"}},
     {"VXA043", {"asa: the facts file is truncated", "asa: el fichero de hechos esta truncado"}},
     {"VXA044", {"asa: the facts file could not be read whole", "asa: el fichero de hechos no se pudo leer entero"}},
+    {"VXA045", {"asa: the facts file does not match its checksum (corrupted bytes)", "asa: el fichero de hechos no cuadra con su suma de comprobacion (bytes corruptos)"}},
+    {"VXA046", {"asa: those facts were written by another version of the compiler", "asa: esos hechos los escribio otra version del compilador"}},
 };
-const int kEntryCount = 94;
+const int kEntryCount = 96;
 
 } // namespace
 

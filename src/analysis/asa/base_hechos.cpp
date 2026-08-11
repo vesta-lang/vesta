@@ -65,6 +65,8 @@ char BuclesAnalysis::ID = 0;
 char FronteraAnalysis::ID = 0;
 } // namespace
 
+BaseDeHechos::BaseDeHechos() { register_asa_canonical_names(); }
+
 BaseDeHechos::~BaseDeHechos() {
     static const bool loguear = std::getenv("VESTA_ASA_HECHOS_DEBUG") != nullptr;
     if (!loguear || consultas_ == 0) return;

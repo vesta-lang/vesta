@@ -114,10 +114,19 @@ struct HechoRegistrado {
  */
 class BaseDeHechos {
   public:
-    BaseDeHechos() = default;
     /// Al morir cuenta lo que repartio si se pide con @c VESTA_ASA_HECHOS_DEBUG:
     /// una base compartida que no ahorra ninguna pregunta es un computo con otro
     /// nombre, y eso se ve o no se ve.
+    /**
+     * @brief Da de alta los nombres canonicos del ASA.
+     *
+     * Aqui y no en un inicializador estatico: reservar memoria antes de
+     * @c main corre las direcciones de todo lo demas, y en un programa que
+     * dependa de la alineacion de lo suyo eso cambia si funciona o no.  Y aqui
+     * y no dentro del fichero de hechos, que es el formato y no tiene por que
+     * conocer a los productores de nadie.
+     */
+    BaseDeHechos();
     ~BaseDeHechos();
     BaseDeHechos(const BaseDeHechos &) = delete;
     BaseDeHechos &operator=(const BaseDeHechos &) = delete;
