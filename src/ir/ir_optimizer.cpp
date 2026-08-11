@@ -7060,6 +7060,30 @@ static bool model_removable(const IrFunction &fn, const analysis::IrFacts &facts
     return !e.mem.writes.locs.empty();
 }
 
+namespace {
+/// Definida mas abajo, junto al acumulador que alimenta.
+void acumular_tramo(const char *etiqueta, long long us);
+
+/**
+ * @brief Cronometra lo que viva el objeto y lo suma a @p etiqueta.
+ *
+ * Para partir un pase caro POR DENTRO: el reparto por pase dice cual lo es, y
+ * esto dice por que.  Se declara aqui, antes del primer pase que lo usa, y se
+ * define junto al acumulador.
+ */
+struct CronoTramo {
+    const char                           *n;
+    std::chrono::steady_clock::time_point t0;
+    explicit CronoTramo(const char *etiqueta)
+        : n(etiqueta), t0(std::chrono::steady_clock::now()) {}
+    ~CronoTramo() {
+        acumular_tramo(n, std::chrono::duration_cast<std::chrono::microseconds>(
+                              std::chrono::steady_clock::now() - t0)
+                              .count());
+    }
+};
+} // namespace
+
 bool ir_pass_dce(IrFunction &fn,
                  const analysis::effects::NativeDecls *decls) {
     // Modelo de efectos: hechos + points-to por-funcion para el consumidor del
@@ -7071,6 +7095,7 @@ bool ir_pass_dce(IrFunction &fn,
     analysis::effects::LocSet fx_leidas;
     fx_leidas.is_top = true; // sin modelo, se supone que todo se lee
     if (g_dce_effects) {
+        CronoTramo crono__("  dce:hechos");
         fx_facts = analysis::build_ir_facts(fn);
         fx_pt = analysis::compute_points_to(fn, fx_facts);
         fx_leidas = locs_leidas(fn, fx_facts, fx_pt, fx_env);
@@ -7501,30 +7526,6 @@ bool ir_pass_const_fold(IrFunction &fn) {
 //
 // Ahorro: en codigo generado por frontend Vesta se ven STOREs de zero seguidos
 // de STOREs reales (init list, alloca cleared, etc).  ~10-15% reduccion.
-namespace {
-/// Definida mas abajo, junto al acumulador que alimenta.
-void acumular_tramo(const char *etiqueta, long long us);
-
-/**
- * @brief Cronometra lo que viva el objeto y lo suma a @p etiqueta.
- *
- * Para partir un pase caro POR DENTRO: el reparto por pase dice cual lo es, y
- * esto dice por que.  Se declara aqui, antes del primer pase que lo usa, y se
- * define junto al acumulador.
- */
-struct CronoTramo {
-    const char                           *n;
-    std::chrono::steady_clock::time_point t0;
-    explicit CronoTramo(const char *etiqueta)
-        : n(etiqueta), t0(std::chrono::steady_clock::now()) {}
-    ~CronoTramo() {
-        acumular_tramo(n, std::chrono::duration_cast<std::chrono::microseconds>(
-                              std::chrono::steady_clock::now() - t0)
-                              .count());
-    }
-};
-} // namespace
-
 bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
                  const std::unordered_set<std::string> *pure_callees,
                  const HechosDeAsmParaDse *hechos_asm) {
