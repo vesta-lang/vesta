@@ -72,7 +72,14 @@ MemAddr parse_mem(const std::string &opr) {
         }
         int64_t d = 0;
         if (parse_imm(t, d)) { a.disp += pr.first * d; continue; }
-        const std::string r = asm_canonical_reg(t);
+        /* Un marcador de ligadura automatica tambien puede ser la base: es la
+         * forma normal de escribir una direccion a partir de una variable. */
+        std::string r;
+        if (t.size() >= 2 && t[0] == '$' &&
+            t.find_first_not_of("0123456789", 1) == std::string::npos)
+            r = t;
+        else
+            r = asm_canonical_reg(t);
         if (r.empty()) return a;
         if (a.base.empty()) a.base = r;
         else if (a.index.empty()) { a.index = r; a.scale = 1; }
@@ -151,6 +158,15 @@ int reg_info(const std::string &tok, std::string &canon, bool &is_high) {
     while (a < b && std::isspace((unsigned char)s[a])) ++a;
     while (b > a && std::isspace((unsigned char)s[b - 1])) --b;
     s = s.substr(a, b - a);
+    /* Un marcador de ligadura automatica ("$0") es un registro: solo que lo
+     * elige el compilador en vez de nombrarlo el programador.  Sin esto, la
+     * forma normal de escribir -- `reg d = p` -- no se reconoce y la
+     * instruccion se queda sin representar aunque el IR la tenga. */
+    if (s.size() >= 2 && s[0] == '$' &&
+        s.find_first_not_of("0123456789", 1) == std::string::npos) {
+        canon = s;
+        return 64; // el ancho real lo dice su ligadura
+    }
     canon = asm_canonical_reg(s);
     if (canon.empty()) return 0;      // no es registro (o arch no x86)
     if (canon[0] == 'v') return 0;    // vector (xmm/ymm/zmm) -> no GP entero

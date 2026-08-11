@@ -14533,7 +14533,15 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
             std::unordered_map<std::string, vx::AsmBoundReg> bound;
             for (const auto &b : fn_->asm_reg_bindings)
                 if (lookup(b.name) == b.alloca_value) {
-                    const std::string c = asm_canonical_reg(b.reg);
+                    /* Una ligadura sin nombre de registro es la forma NORMAL
+                     * de escribir: `reg d = p` deja que el compilador elija, y
+                     * el cuerpo la nombra con su marcador.  Descartarla dejaba
+                     * al lift general ciego justo a lo que mas se usa -- un
+                     * `mov [d], b`, que en el IR es un almacenamiento de toda
+                     * la vida, acababa como instruccion sin representar. */
+                    std::string c = asm_canonical_reg(b.reg);
+                    if (c.empty() && b.reg_auto)
+                        c = "$" + std::to_string(b.ph_index);
                     if (c.empty()) continue;
                     int wbits = 64;
                     switch (b.type) {
