@@ -14539,9 +14539,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                      * al lift general ciego justo a lo que mas se usa -- un
                      * `mov [d], b`, que en el IR es un almacenamiento de toda
                      * la vida, acababa como instruccion sin representar. */
-                    std::string c = asm_canonical_reg(b.reg);
-                    if (c.empty() && b.reg_auto)
-                        c = "$" + std::to_string(b.ph_index);
+                    const std::string c = asm_canonical_reg(b.reg);
                     if (c.empty()) continue;
                     int wbits = 64;
                     switch (b.type) {
@@ -14556,6 +14554,15 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                     default: wbits = 64; break; // I64/U64/PTR/HANDLE/F64
                     }
                     bound[c] = vx::AsmBoundReg{b.alloca_value, wbits};
+                    /* Y por su MARCADOR.  Una ligadura automatica lleva
+                     * ademas un registro elegido por defecto para el
+                     * interprete, asi que el mapa quedaba indexado por ese
+                     * nombre mientras el cuerpo la nombra con su marcador:
+                     * no se encontraban, y la instruccion se quedaba sin
+                     * representar aunque el IR la tenga. */
+                    if (b.reg_auto && b.ph_index >= 0)
+                        bound["$" + std::to_string(b.ph_index)] =
+                            vx::AsmBoundReg{b.alloca_value, wbits};
                 }
             uint32_t asm_exit = current_block_;
             if (vx::asm_lift_general(*fn_, current_block_, vx::instr_db::Isa::X86,

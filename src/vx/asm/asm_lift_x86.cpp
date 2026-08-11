@@ -8,6 +8,9 @@
  *  Ver asm_lift_x86.h. */
 #include "vx/asm/asm_lift_x86.h"
 
+#include <cstdio>
+#include <cstdlib>
+
 #include "vx/asm/asm_cfg.h"       // build_asm_cfg
 #include "vx/asm/asm_effects.h"   // asm_canonical_reg
 #include "vx/asm/asm_lift_core.h" // core neutro
@@ -37,6 +40,28 @@ struct MemAddr {
 
 /// Parsea CUALQUIER modo de direccionamiento x86 @c [base + index*scale + disp]
 /// (base, index*scale, disp opcionales; el prefijo @c "qword ptr" se ignora).
+/**
+ * @brief Renunciar a elevar diciendo DONDE.
+ *
+ * El lift tenia noventa y seis salidas por renuncia y ninguna decia nada: la
+ * instruccion se quedaba sin representar en el IR y el unico rastro era que
+ * aparecia como micro asm.  Con la linea se llega al sitio en un paso.
+ *
+ * @param que Instruccion o fragmento que no se pudo elevar.
+ * @param linea Linea del lift donde se renuncio.
+ * @return Siempre @c false, para escribirlo como @c return lift_no(...).
+ */
+inline bool lift_no(const std::string &que, int linea) {
+    static const bool on = [] {
+        const char *v = std::getenv("VESTA_ASM_LIFT_DEBUG");
+        return v != nullptr && v[0] != 0 && v[0] != 0x30;
+    }();
+    if (on)
+        std::fprintf(stderr, "[asm-lift] no se eleva %s (x86:%d)\n",
+                     que.c_str(), linea);
+    return false;
+}
+
 MemAddr parse_mem(const std::string &opr) {
     MemAddr a;
     std::string op = trim(opr);
@@ -202,10 +227,10 @@ bool lift_x86(
     std::vector<std::string> insns;
     insns.reserve(cfg.insns.size());
     for (const auto &in : cfg.insns) insns.push_back(in.text);
-    if (insns.empty()) return false;
+    if (insns.empty()) return lift_no("<bloque>", __LINE__);
     // Ramas no resueltas / terminadores desconocidos -> no liftamos (opaco).
     if (cfg.has_unresolved_target || !cfg.unknown_terminators.empty())
-        return false;
+        return lift_no("<bloque>", __LINE__);
 
     // Estado SSA por registro: cur[canon] = valor ARQUITECToNICO COMPLETO de
     // 64 bits del registro fisico (rax), con los bits altos correctos segun las
@@ -512,7 +537,7 @@ bool lift_x86(
             const int aw = reg_info(ops[0], ac, ah);
             if (aw == 0) return false; // 1er operando debe ser registro
             const ir::IrValueId a_full = get_full(ac, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             ir::IrValueId b_full;
             bool bh = false;
             int64_t imm = 0;
@@ -522,7 +547,7 @@ bool lift_x86(
                 std::string bc;
                 if (reg_info(ops[1], bc, bh) == 0) return false; // solo reg/imm
                 b_full = get_full(bc, ok);
-                if (!ok) return false;
+                if (!ok) return lift_no(insn, __LINE__);
             }
             flags.valid = true;
             flags.is_test = (m == "test");
@@ -537,12 +562,12 @@ bool lift_x86(
                    ops.size() == 1) {
             // setcc rd: LEE las flags -> byte 0/1; resto del registro preservado.
             const ir::IrValueId cond = cc_cond(m.substr(3));
-            if (cond == ir::IR_NO_VALUE) return false;
+            if (cond == ir::IR_NO_VALUE) return lift_no(insn, __LINE__);
             std::string dc;
             bool dh = false;
-            if (reg_info(ops[0], dc, dh) == 0) return false;
+            if (reg_info(ops[0], dc, dh) == 0) return lift_no(insn, __LINE__);
             write_reg(dc, 8, dh, cond, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
         } else if (m.size() > 4 && m.compare(0, 4, "cmov") == 0 &&
                    ops.size() == 2) {
             // cmovcc rd, rs: LEE las flags.  rd = cond ? (rs al ancho) : rd via
@@ -550,17 +575,17 @@ bool lift_x86(
             // & mask)).  Respeta la asimetria (taken 32b zero-extiende; not-taken
             // preserva TODO).
             const ir::IrValueId cond = cc_cond(m.substr(4));
-            if (cond == ir::IR_NO_VALUE) return false;
-            if (is_mem(ops[1])) return false;
+            if (cond == ir::IR_NO_VALUE) return lift_no(insn, __LINE__);
+            if (is_mem(ops[1])) return lift_no(insn, __LINE__);
             std::string dc, sc;
             bool dh = false, sh = false;
             const int dw = reg_info(ops[0], dc, dh);
             const int sw = reg_info(ops[1], sc, sh);
-            if (dw == 0 || sw == 0 || dw != sw) return false;
+            if (dw == 0 || sw == 0 || dw != sw) return lift_no(insn, __LINE__);
             const ir::IrValueId rd_old = get_full(dc, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             const ir::IrValueId rs = read_reg(sc, dw, sh, false, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             ir::IrValueId taken;
             if (dw >= 32) {
                 taken = rs;
@@ -582,7 +607,7 @@ bool lift_x86(
             if (dstm && srcm) return false; // mov mem,mem no existe en x86
             if (dstm) { // mov [base+idx*sc+disp], src  (memoria HOST)
                 const MemAddr ma = parse_mem(ops[0]);
-                if (!ma.ok) return false;
+                if (!ma.ok) return lift_no(insn, __LINE__);
                 std::string sc;
                 bool sh = false;
                 const int srw = reg_info(ops[1], sc, sh);
@@ -590,34 +615,34 @@ bool lift_x86(
                 if (w == 0) w = srw;      // ancho del store = registro fuente
                 if (w == 0) return false; // `mov [r], imm` sin size-hint: ambiguo
                 const ir::IrValueId a = mem_addr_of(ma, ok);
-                if (!ok) return false;
+                if (!ok) return lift_no(insn, __LINE__);
                 const ir::IrValueId v = read_op(ops[1], w, false, ok);
-                if (!ok) return false;
+                if (!ok) return lift_no(insn, __LINE__);
                 emit_store(fn, block, v, a, w, /*host=*/true, line);
             } else if (srcm) { // mov rd, [base+idx*sc+disp]  (memoria HOST)
                 const MemAddr ma = parse_mem(ops[1]);
-                if (!ma.ok) return false;
+                if (!ma.ok) return lift_no(insn, __LINE__);
                 std::string rc;
                 bool rh = false;
                 const int rw = reg_info(ops[0], rc, rh);
-                if (rw == 0) return false;
+                if (rw == 0) return lift_no(insn, __LINE__);
                 int w = mem_hint_width(ops[1]);
                 if (w == 0) w = rw;       // ancho del load = registro destino
                 const ir::IrValueId a = mem_addr_of(ma, ok);
-                if (!ok) return false;
+                if (!ok) return lift_no(insn, __LINE__);
                 const ir::IrValueId ld =
                     emit_load(fn, block, a, w, /*host=*/true, line);
                 write_reg(rc, rw, rh, ld, ok);
-                if (!ok) return false;
+                if (!ok) return lift_no(insn, __LINE__);
             } else { // mov rd, (reg|imm)
                 std::string rc;
                 bool rh = false;
                 const int rw = reg_info(ops[0], rc, rh);
-                if (rw == 0) return false;
+                if (rw == 0) return lift_no(insn, __LINE__);
                 const ir::IrValueId v = read_op(ops[1], rw, false, ok);
-                if (!ok) return false;
+                if (!ok) return lift_no(insn, __LINE__);
                 write_reg(rc, rw, rh, v, ok);
-                if (!ok) return false;
+                if (!ok) return lift_no(insn, __LINE__);
             }
         } else if (m == "lea" && ops.size() == 2) {
             // lea rd, [base + index*scale + disp]: NO desreferencia -- calcula la
@@ -626,13 +651,13 @@ bool lift_x86(
             std::string rc;
             bool rh = false;
             const int rw = reg_info(ops[0], rc, rh);
-            if (rw == 0) return false;
+            if (rw == 0) return lift_no(insn, __LINE__);
             const MemAddr ma = parse_mem(ops[1]);
-            if (!ma.ok) return false;
+            if (!ma.ok) return lift_no(insn, __LINE__);
             const ir::IrValueId acc = mem_addr_of(ma, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             write_reg(rc, rw, rh, acc, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
         } else if ((m == "movzx" || m == "movsx" || m == "movsxd") &&
                    ops.size() == 2 && is_mem(ops[1])) {
             // movzx/movsx/movsxd rd, [mem]: carga de src_w bytes de memoria HOST +
@@ -641,20 +666,20 @@ bool lift_x86(
             std::string rc;
             bool rh = false;
             const int rw = reg_info(ops[0], rc, rh);
-            if (rw == 0) return false;
+            if (rw == 0) return lift_no(insn, __LINE__);
             int sw = mem_hint_width(ops[1]);
             if (sw == 0 && m == "movsxd") sw = 32; // movsxd implica dword
             if (sw == 0) return false;             // sin size-hint: ambiguo
             const MemAddr ma = parse_mem(ops[1]);
-            if (!ma.ok) return false;
+            if (!ma.ok) return lift_no(insn, __LINE__);
             const ir::IrValueId a = mem_addr_of(ma, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             const ir::IrValueId ld =
                 emit_load(fn, block, a, sw, /*host=*/true, line);
             // El load HOST zero-extiende los sw bytes; movsx/movsxd sign-extienden.
             const ir::IrValueId v = (m == "movzx") ? ld : sext_low(ld, sw);
             write_reg(rc, rw, rh, v, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
         } else if (binop_of(m, bop) && ops.size() == 2) {
             std::string rc;
             bool rh = false;
@@ -667,7 +692,7 @@ bool lift_x86(
             // escribir).
             const ir::IrValueId a =
                 read_reg(rc, rw, rh, bop == ir::IrOp::SAR, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             // `sub` fija TODAS las flags como `cmp a,b` (x86: sub == cmp en flags)
             // -> soporta CUALQUIER cc posterior (jl/jg/jb/ja, no solo jz/jnz).
             // Capturamos los operandos FULL AQUi (antes de pisar el dst).
@@ -676,15 +701,15 @@ bool lift_x86(
             bool sub_bh = false;
             if (is_sub) {
                 sub_a = get_full(rc, ok);
-                if (!ok) return false;
+                if (!ok) return lift_no(insn, __LINE__);
                 int64_t si = 0;
                 if (parse_imm(ops[1], si)) {
                     sub_b = K(si);
                 } else {
                     std::string sbc;
-                    if (reg_info(ops[1], sbc, sub_bh) == 0) return false;
+                    if (reg_info(ops[1], sbc, sub_bh) == 0) return lift_no(insn, __LINE__);
                     sub_b = get_full(sbc, ok);
-                    if (!ok) return false;
+                    if (!ok) return lift_no(insn, __LINE__);
                 }
             }
             ir::IrValueId b;
@@ -699,16 +724,16 @@ bool lift_x86(
                     b = K(cimm & cmask);
                 } else {
                     b = read_op(ops[1], 64, false, ok);
-                    if (!ok) return false;
+                    if (!ok) return lift_no(insn, __LINE__);
                     b = BIN(ir::IrOp::AND, b, K(cmask));
                 }
             } else {
                 b = read_op(ops[1], rw, false, ok);
-                if (!ok) return false;
+                if (!ok) return lift_no(insn, __LINE__);
             }
             const ir::IrValueId res = BIN(bop, a, b);
             write_reg(rc, rw, rh, res, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             // sub -> flags de comparacion completa (cualquier cc); el resto de
             // ALU no-shift (add/and/or/xor) solo ZF; los shift no se modelan.
             if (is_sub) {
@@ -744,11 +769,11 @@ bool lift_x86(
             std::string rc;
             bool rh = false;
             const int rw = reg_info(ops[0], rc, rh);
-            if (rw != 64) return false;
+            if (rw != 64) return lift_no(insn, __LINE__);
             const ir::IrValueId a = read_reg(rc, 64, rh, false, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             const ir::IrValueId b = read_op(ops[1], 64, false, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             const ir::IrValueId cin = flags.cf;
             ir::IrValueId res, cout;
             if (m == "adc") {
@@ -767,7 +792,7 @@ bool lift_x86(
                 cout = BIN(ir::IrOp::OR, b1, b2);
             }
             write_reg(rc, 64, rh, res, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             flag_from_result(res, 64); // ZF del resultado
             flags.has_cf = true;       // + CF nuevo para el siguiente adc/sbb
             flags.cf = cout;
@@ -775,26 +800,26 @@ bool lift_x86(
             std::string rc;
             bool rh = false;
             const int rw = reg_info(ops[0], rc, rh);
-            if (rw == 0) return false;
+            if (rw == 0) return lift_no(insn, __LINE__);
             const ir::IrValueId a = read_reg(rc, rw, rh, false, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             const ir::IrValueId res = emit_un(
                 fn, block, m == "neg" ? ir::IrOp::NEG : ir::IrOp::NOT, a, line);
             write_reg(rc, rw, rh, res, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             // neg define ZF; not NO toca flags (x86) -> no las siembra.
             if (m == "neg") flag_from_result(res, rw);
         } else if ((m == "inc" || m == "dec") && ops.size() == 1) {
             std::string rc;
             bool rh = false;
             const int rw = reg_info(ops[0], rc, rh);
-            if (rw == 0) return false;
+            if (rw == 0) return lift_no(insn, __LINE__);
             const ir::IrValueId a = read_reg(rc, rw, rh, false, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             const ir::IrValueId res =
                 BIN(m == "inc" ? ir::IrOp::ADD : ir::IrOp::SUB, a, K(1));
             write_reg(rc, rw, rh, res, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             flag_from_result(res, rw); // inc/dec definen ZF (jnz posterior)
         } else if ((m == "popcnt" || m == "lzcnt" || m == "tzcnt") &&
                    ops.size() == 2) {
@@ -805,45 +830,45 @@ bool lift_x86(
             bool rh = false, sh = false;
             const int rw = reg_info(ops[0], rc, rh);
             const int sw = reg_info(ops[1], sc, sh);
-            if (rw != 64 || sw != 64) return false;
+            if (rw != 64 || sw != 64) return lift_no(insn, __LINE__);
             const ir::IrValueId a = read_reg(sc, 64, sh, false, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             const ir::IrOp uop = (m == "popcnt")  ? ir::IrOp::POPCNT
                                  : (m == "lzcnt") ? ir::IrOp::CLZ
                                                   : ir::IrOp::CTZ;
             const ir::IrValueId res = emit_un(fn, block, uop, a, line);
             write_reg(rc, 64, rh, res, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
         } else if (m == "bswap" && ops.size() == 1) {
             /* bswap rd -> BYTESWAP (in-place).  Solo 64 bits (bswap de 32 bits
              * invertiria 4 bytes, distinto ancho). */
             std::string rc;
             bool rh = false;
             const int rw = reg_info(ops[0], rc, rh);
-            if (rw != 64) return false;
+            if (rw != 64) return lift_no(insn, __LINE__);
             const ir::IrValueId a = read_reg(rc, 64, rh, false, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             const ir::IrValueId res =
                 emit_un(fn, block, ir::IrOp::BYTESWAP, a, line);
             write_reg(rc, 64, rh, res, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
         } else if ((m == "movzx" || m == "movsx" || m == "movsxd") &&
                    ops.size() == 2) {
             /* Extension de ancho: lee rs a SU ancho (zero-extend en movzx,
              * sign-extend en movsx/movsxd) y lo escribe en rd.  El modelo de
              * anchos ya cubre exactamente la semantica x86.  Solo reg-reg
              * (memoria -> host, camino opaco). */
-            if (is_mem(ops[1])) return false;
+            if (is_mem(ops[1])) return lift_no(insn, __LINE__);
             std::string rc, sc;
             bool rh = false, sh = false;
             const int rw = reg_info(ops[0], rc, rh);
             const int sw = reg_info(ops[1], sc, sh);
-            if (rw == 0 || sw == 0) return false;
+            if (rw == 0 || sw == 0) return lift_no(insn, __LINE__);
             const bool sgn = (m != "movzx");
             const ir::IrValueId v = read_reg(sc, sw, sh, sgn, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             write_reg(rc, rw, rh, v, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
         } else if ((m == "rol" || m == "ror") && ops.size() == 2) {
             // Rotacion 64-bit -> ROTL/ROTR (el backend la emite nativa: cuenta
             // constante -> rol/ror imm; en registro -> rol/ror CL).
@@ -852,13 +877,13 @@ bool lift_x86(
             const int rw = reg_info(ops[0], rc, rh);
             if (rw != 64) return false; // solo 64-bit (mapeo exacto)
             const ir::IrValueId a = read_reg(rc, 64, rh, false, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             const ir::IrValueId cnt = read_op(ops[1], 64, false, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             const ir::IrValueId res =
                 BIN(m == "rol" ? ir::IrOp::ROTL : ir::IrOp::ROTR, a, cnt);
             write_reg(rc, 64, rh, res, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
         } else if (m == "cqo" || m == "cqto" || m == "cdq") {
             // Extension del DIVIDENDO a rdx:rax (edx:eax) previa a idiv/div.  El
             // patron div/idiv de abajo la ABSORBE (la division 64/64 modela el
@@ -871,23 +896,23 @@ bool lift_x86(
             const int src_bits = (m == "cdqe") ? 32 : (m == "cwde") ? 16 : 8;
             const int dst_bits = (m == "cdqe") ? 64 : (m == "cwde") ? 32 : 16;
             const ir::IrValueId cur_rax = get_full("rax", ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             const ir::IrValueId ext = sext_low(cur_rax, src_bits);
             // Escribir al ancho destino (write_reg enmascara/zero-extiende los
             // bits altos de rax por encima de dst_bits segun las reglas x86).
             write_reg("rax", dst_bits, false, ext, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
         } else if ((m == "div" || m == "idiv") && ops.size() == 1) {
             // Division 64/64: rax = cociente, rdx = resto.  Exige el setup del
             // dividendo alto INMEDIATAMENTE antes -- `xor rdx,rdx` (div, sin
             // signo) o `cqo/cdq` (idiv, con signo) -- para garantizar que el
             // dividendo es rax de 64 bits (no rdx:rax de 128).  El divisor debe
             // ser un registro de 64 bits.
-            if (is_mem(ops[0])) return false;
+            if (is_mem(ops[0])) return lift_no(insn, __LINE__);
             std::string dc;
             bool dh = false;
             const int dw = reg_info(ops[0], dc, dh);
-            if (dw != 64) return false;
+            if (dw != 64) return lift_no(insn, __LINE__);
             if (ii <= from) return false; // sin instruccion previa en el bloque
             std::string pm;
             std::vector<std::string> pops;
@@ -904,9 +929,9 @@ bool lift_x86(
             }
             if (!setup_ok) return false; // dividendo alto desconocido -> opaco
             const ir::IrValueId dvd = read_reg("rax", 64, false, false, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             const ir::IrValueId dsr = read_reg(dc, 64, dh, false, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             const ir::IrType ty = is_signed ? ir::IrType::I64 : ir::IrType::U64;
             // Leer el dividendo UNA vez y sacar cociente + resto de el (antes de
             // pisar rax).
@@ -915,22 +940,22 @@ bool lift_x86(
             const ir::IrValueId r =
                 emit_bin_ty(fn, block, ir::IrOp::MOD, dvd, dsr, ty, line);
             write_reg("rax", 64, false, q, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             write_reg("rdx", 64, false, r, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
         } else if (m == "imul" && ops.size() == 3) {
             // imul rd, rs, imm/reg (3-op, single-def): rd = rs * op3.  La parte
             // baja del producto es identica con/sin signo (complemento a dos).
             std::string rc;
             bool rh = false;
             const int rw = reg_info(ops[0], rc, rh);
-            if (rw == 0) return false;
+            if (rw == 0) return lift_no(insn, __LINE__);
             const ir::IrValueId s1 = read_op(ops[1], rw, false, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             const ir::IrValueId s2 = read_op(ops[2], rw, false, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             write_reg(rc, rw, rh, BIN(ir::IrOp::MUL, s1, s2), ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
         } else if (m == "xchg" && ops.size() == 2 && !is_mem(ops[0]) &&
                    !is_mem(ops[1])) {
             // xchg r1, r2 (registro-registro, sin LOCK ni memoria): intercambio
@@ -941,11 +966,11 @@ bool lift_x86(
             bool h1 = false, h2 = false;
             const int w1 = reg_info(ops[0], c1, h1);
             const int w2 = reg_info(ops[1], c2, h2);
-            if (w1 != 64 || w2 != 64) return false;
+            if (w1 != 64 || w2 != 64) return lift_no(insn, __LINE__);
             const ir::IrValueId v1 = get_full(c1, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             const ir::IrValueId v2 = get_full(c2, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             cur[c1] = v2;
             mark_write(c1);
             cur[c2] = v1;
@@ -956,23 +981,23 @@ bool lift_x86(
             // operando es el multiplicador; rax es el multiplicando implicito.
             // Solo 64 bits (donde el mapeo a rdx:rax es exacto).  Si rdx no se
             // usa, el DCE elimina la descomposicion de la parte alta.
-            if (is_mem(ops[0])) return false;
+            if (is_mem(ops[0])) return lift_no(insn, __LINE__);
             std::string mc;
             bool mh = false;
             const int mw = reg_info(ops[0], mc, mh);
-            if (mw != 64) return false;
+            if (mw != 64) return lift_no(insn, __LINE__);
             const bool is_signed = (m == "imul");
             const ir::IrValueId mplr = read_reg(mc, 64, mh, false, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             const ir::IrValueId mpld = read_reg("rax", 64, false, false, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             const ir::IrValueId lo = BIN(ir::IrOp::MUL, mpld, mplr);
             const ir::IrValueId hi =
                 is_signed ? smulhi(mpld, mplr) : umulhi(mpld, mplr);
             write_reg("rax", 64, false, lo, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
             write_reg("rdx", 64, false, hi, ok);
-            if (!ok) return false;
+            if (!ok) return lift_no(insn, __LINE__);
         } else if (m == "nop") {
             // no-op (incluido el centinela de etiqueta final): no emite IR.
         } else {
@@ -993,7 +1018,7 @@ bool lift_x86(
 
     // --- 1 bloque (straight-line, sin ramas): liftar todo + flush final. ---
     if (cfg.blocks.size() <= 1) {
-        if (!lift_range(0, insns.size())) return false;
+        if (!lift_range(0, insns.size())) return lift_no("<bloque>", __LINE__);
         for (const std::string &r : wrote) {
             auto b = bound.find(r);
             auto v = cur.find(r);
@@ -1034,7 +1059,7 @@ bool lift_x86(
         return cc_cond(jm.substr(1)); // lee las flags dejadas por el cuerpo
     };
     uint32_t exit_blk = block;
-    if (!lift_cfg_neutral(ctx, cfg, hooks, exit_blk)) return false;
+    if (!lift_cfg_neutral(ctx, cfg, hooks, exit_blk)) return lift_no("<bloque>", __LINE__);
     if (out_exit) *out_exit = exit_blk;
     return true;
 }
