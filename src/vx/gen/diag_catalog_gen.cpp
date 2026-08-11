@@ -111,13 +111,15 @@ const CatEntry kEntries[] = {
     {"VXA037", {"asa: the facts file is empty", "asa: el fichero de hechos esta vacio"}},
     {"VXA038", {"asa: that is not a facts file", "asa: eso no es un fichero de hechos"}},
     {"VXA039", {"asa: the facts file was written by another version of the container", "asa: el fichero de hechos lo escribio otra version del contenedor"}},
+    {"VXA040", {"'{0}' requires argument {1} to be a multiple of {2} bytes -- its '{3}' demands it -- and this argument is not: it faults", "'{0}' exige que su argumento {1} sea multiplo de {2} bytes -- se lo exige su '{3}' -- y este argumento no lo es: hace caer el programa"}},
+    {"VXA041", {"'{0}' requires argument {1} to be a multiple of {2} bytes ('{3}' demands it), and it cannot be proven here; align the data or use the variant without that requirement", "'{0}' exige que su argumento {1} sea multiplo de {2} bytes (se lo exige su '{3}'), y aqui no se puede demostrar; alinea el dato o usa la variante que no lo exige"}},
     {"VXA042", {"asa: those facts describe another module (fingerprint mismatch)", "asa: esos hechos hablan de otro modulo (la huella no corresponde)"}},
     {"VXA043", {"asa: the facts file is truncated", "asa: el fichero de hechos esta truncado"}},
     {"VXA044", {"asa: the facts file could not be read whole", "asa: el fichero de hechos no se pudo leer entero"}},
     {"VXA045", {"asa: the facts file does not match its checksum (corrupted bytes)", "asa: el fichero de hechos no cuadra con su suma de comprobacion (bytes corruptos)"}},
     {"VXA046", {"asa: those facts were written by another version of the compiler", "asa: esos hechos los escribio otra version del compilador"}},
 };
-const int kEntryCount = 96;
+const int kEntryCount = 98;
 
 } // namespace
 

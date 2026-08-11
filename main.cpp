@@ -3974,6 +3974,19 @@ int main(int argc, char *argv[]) {
                     f.write(reinterpret_cast<const char *>(cached_velb.data()),
                             static_cast<std::streamsize>(cached_velb.size()));
                     if (f.good()) {
+                        /* Los avisos que dio la compilacion que lleno este
+                         * cache se vuelven a emitir.  Sin esto, compilar dos
+                         * veces lo mismo da salidas distintas -- y la segunda,
+                         * la callada, es la que el usuario ve casi siempre en
+                         * un proyecto grande, que es donde el cache acierta.
+                         * Se rehacen desde sus DATOS, asi que salen en el
+                         * idioma activo aunque se guardaran en otro. */
+                        std::vector<vx::Diagnostic> guardados;
+                        if (vx::project_cache_load_diags(pc_path, opts_hash,
+                                                         guardados)) {
+                            for (const auto &d : guardados)
+                                vx::print_diagnostic(std::cerr, d);
+                        }
                         if (project_cache_verbose) {
                             std::cerr << "[vx-project-cache] hit: " << pc_path
                                       << " -> " << out_velb << " ("

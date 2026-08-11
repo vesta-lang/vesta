@@ -66,6 +66,7 @@
 #include "pkg/manifest.h" // las dependencias DECLARADAS del proyecto
 #include "vx/module/vxi_format.h"
 #include "vx/source_hash.h" // la identidad de un fuente son sus tokens
+#include "analysis/asa/fact_file.h"
 #include "util/fs_utils.h"   // fs::get_executable_path()
 
 #include <atomic>
@@ -305,9 +306,17 @@ bool cas_unpack_module_(const std::vector<uint8_t> &blob,
 /// que multiples proyectos compartan el mismo cache de libs comunes
 /// (e.g. stdlib en read-only).  Sin la env var, comportamiento default:
 /// cache junto al source (estable + facilita distribucion bundle).
-static std::string global_cache_dir_() {
-    const char *v = std::getenv("VX_CACHE_DIR");
-    return (v && v[0]) ? std::string(v) : std::string();
+static const std::string &global_cache_dir_() {
+    /* Una vez por proceso, y por referencia.  Antes se consultaba el entorno y
+     * se construia una cadena en CADA llamada, y hay cuatro rutas por modulo
+     * -- que ademas la pedian dos veces cada una --: en un proyecto grande eso
+     * son miles de consultas al entorno para obtener siempre lo mismo.  El
+     * entorno no cambia a mitad de una compilacion. */
+    static const std::string dir = [] {
+        const char *v = std::getenv("VX_CACHE_DIR");
+        return (v != nullptr && v[0] != '\0') ? std::string(v) : std::string();
+    }();
+    return dir;
 }
 
 /**
@@ -372,14 +381,116 @@ static std::string global_cache_path_(const std::string &source_path,
     return (fs::path(dir) / (std::string(hex) + "_" + base + ext)).string();
 }
 
+/**
+ * @brief Las rutas de cache de un modulo, calculadas UNA vez.
+ *
+ * Todas comparten el mismo trabajo: mirar si hay cache global, hashear el path
+ * canonico y componer un prefijo.  Pedirlas por separado repetia ese trabajo
+ * cuatro veces por modulo, y cada compilacion vuelve a preguntar por las mismas
+ * -- una al mirar si hay acierto de cache y otra al escribir --.  En un
+ * proyecto pequeño da igual; en uno grande es donde se nota.
+ */
+struct RutasCache {
+    std::string vxi;    ///< interfaz binaria del modulo.
+    std::string vxir;   ///< su IR serializado.
+    std::string vel;    ///< su .vel suelto, para distribuirlo aparte.
+    std::string hechos; ///< lo que el ASA supo de el al bajarlo.
+};
+
+/// Prefijo comun de las rutas de @p source_path, sin extension.
+static std::string prefijo_cache_(const std::string &source_path,
+                                  const std::string &tgt_suffix) {
+    if (!global_cache_dir_().empty())
+        return global_cache_path_(source_path, tgt_suffix);
+    const size_t dot = source_path.find_last_of('.');
+    return (dot == std::string::npos ? source_path : source_path.substr(0, dot)) +
+           tgt_suffix;
+}
+
+/**
+ * @brief Las rutas de @p source_path, calculadas la primera vez y reusadas.
+ *
+ * @param source_path Path canonico del modulo.
+ * @param tgt_suffix  Separa el cache por objetivo (ver @c vxir_path_for_).
+ * @return Las cuatro rutas.  La referencia vive lo que el proceso.
+ */
+static const RutasCache &rutas_cache_(const std::string &source_path,
+                                      const std::string &tgt_suffix) {
+    /* Compartida entre los hilos que compilan modulos en paralelo, asi que va
+     * con cerrojo.  Es un puñado de entradas y se tocan una vez por modulo:
+     * el cerrojo cuesta muchisimo menos que rehacer las rutas. */
+    static std::mutex                                     mtx;
+    static std::unordered_map<std::string, RutasCache>    tabla;
+    std::string clave = source_path;
+    clave.push_back('\0');
+    clave += tgt_suffix;
+    std::lock_guard<std::mutex> lk(mtx);
+    auto it = tabla.find(clave);
+    if (it != tabla.end()) return it->second;
+    const std::string base = prefijo_cache_(source_path, tgt_suffix);
+    RutasCache        r;
+    r.vxi = base + ".vxi";
+    r.vxir = base + ".vxir";
+    r.hechos = base + ".vxfacts";
+    /* El .vel no se separa por objetivo: es el mismo modulo suelto. */
+    r.vel = prefijo_cache_(source_path, std::string()) + ".vel";
+    return tabla.emplace(std::move(clave), std::move(r)).first->second;
+}
+
 std::string vxi_path_for_(const std::string &source_path,
                            const std::string &tgt_suffix = "") {
-    if (!global_cache_dir_().empty()) {
-        return global_cache_path_(source_path, tgt_suffix + ".vxi");
-    }
-    size_t dot = source_path.find_last_of('.');
-    if (dot == std::string::npos) return source_path + tgt_suffix + ".vxi";
-    return source_path.substr(0, dot) + tgt_suffix + ".vxi";
+    return rutas_cache_(source_path, tgt_suffix).vxi;
+}
+
+/**
+ * @brief Guarda junto al modulo lo que el ASA supo de el AL BAJARLO.
+ *
+ * Existe porque ese conocimiento no se puede recalcular mirando el modulo ya
+ * compilado: nacio antes, mientras se bajaba el codigo.  Sin esto, la primera
+ * compilacion avisa de algo y la segunda -- con la cache caliente -- se calla,
+ * y el aviso acaba dependiendo de si alguien borro un directorio.
+ *
+ * Se escribe junto al @c .vxi y al @c .vxir, con la misma identidad que ellos:
+ * la huella del modulo dice de que programa habla, y la del compilador que
+ * analisis lo concluyo.
+ *
+ * @param ruta       Donde (de @c RutasCache::hechos, ya calculada).
+ * @param almacen    Hechos a guardar.
+ * @param huella     Identidad del modulo.
+ * @param costes     Lo que cada dominio dice de si mismo (coste y de que
+ *                   depende), con lo que se decide que merece guardarse.
+ * @return @c true si quedo algo escrito.
+ */
+static bool guardar_hechos_(
+    const std::string &ruta, const analysis::asa::FactStore &almacen,
+    uint64_t huella,
+    const std::vector<analysis::asa::DomainCost> &costes) {
+    const std::vector<uint8_t> bytes =
+        analysis::asa::serialize(almacen, huella, analysis::asa::cache_level(),
+                                 costes, compiler_fingerprint_());
+    if (bytes.empty()) return false;
+    return ::fs::write_file_atomic(ruta, bytes);
+}
+
+/**
+ * @brief Recupera lo guardado por @ref guardar_hechos_.
+ *
+ * Que no haya nada NO es un error: es la primera compilacion, o alguien limpio
+ * la cache, o el modulo cambio.  El motivo viaja dentro del resultado para que
+ * quien quiera pueda contarlo -- callarse por que no se sabe algo es lo unico
+ * que el ASA no puede hacer.
+ *
+ * @param ruta     De donde.
+ * @param destino  Donde se depositan (se AÑADEN a lo que ya haya).
+ * @param huella   La que debe llevar dentro.
+ * @param vigentes De que depende hoy cada dominio, para anular solo lo suyo.
+ * @return Que se leyo, o por que no.
+ */
+static analysis::asa::ReadResult recuperar_hechos_(
+    const std::string &ruta, analysis::asa::FactStore &destino, uint64_t huella,
+    const std::vector<analysis::asa::DomainCost> &vigentes) {
+    return analysis::asa::read_facts_file(ruta, huella, destino, vigentes,
+                                          compiler_fingerprint_());
 }
 
 /// Idem para el cache de IR del dep (.vxir).  @c tgt_suffix separa el cache por
@@ -387,23 +498,20 @@ std::string vxi_path_for_(const std::string &source_path,
 /// target no recompila (HALLAZGO-2).  Vacio => fichero unico compartido.
 std::string vxir_path_for_(const std::string &source_path,
                             const std::string &tgt_suffix = "") {
-    if (!global_cache_dir_().empty()) {
-        return global_cache_path_(source_path, tgt_suffix + ".vxir");
-    }
-    size_t dot = source_path.find_last_of('.');
-    if (dot == std::string::npos) return source_path + tgt_suffix + ".vxir";
-    return source_path.substr(0, dot) + tgt_suffix + ".vxir";
+    return rutas_cache_(source_path, tgt_suffix).vxir;
+}
+
+/// Path del fichero de hechos del ASA: lo que se supo del modulo al bajarlo y
+/// no se puede recalcular mirando el modulo ya compilado.
+std::string vxfacts_path_for_(const std::string &source_path,
+                              const std::string &tgt_suffix = "") {
+    return rutas_cache_(source_path, tgt_suffix).hechos;
 }
 
 ///  M5.C: path del @c .vel cacheado per-dep (output secundario
 /// junto al @c .vxi para distribucion de libs precompiladas).
 std::string dep_vel_path_for_(const std::string &source_path) {
-    if (!global_cache_dir_().empty()) {
-        return global_cache_path_(source_path, ".vel");
-    }
-    size_t dot = source_path.find_last_of('.');
-    if (dot == std::string::npos) return source_path + ".vel";
-    return source_path.substr(0, dot) + ".vel";
+    return rutas_cache_(source_path, std::string()).vel;
 }
 
 /// Lee el fichero a string.  Devuelve cadena vacia en error (el caller
@@ -3810,6 +3918,29 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
     };
     std::vector<Sitio> sitios;
 
+    /**
+     * @brief Lo que una funcion EXIGE de quien la llama.
+     *
+     * Dentro de la funcion, la alineacion de un parametro no se puede saber: la
+     * pone el llamante.  Asi que la exigencia que el asm impone sobre un
+     * parametro deja de morir en "sin prueba" y viaja HACIA FUERA, para cruzarla
+     * con lo que se sabe del argumento en cada sitio de llamada.
+     *
+     * Es el simetrico de los resumenes de rango, que hacen el viaje contrario
+     * (lo que los llamantes pasan, hacia dentro).  Y es DERIVADA: sale de lo que
+     * la instruccion exige segun la base de datos, no de una anotacion.
+     */
+    struct ExigenciaFrontera {
+        std::string funcion;
+        uint32_t    param = 0;
+        uint32_t    bytes = 0;   ///< de cuanto tiene que ser multiplo.
+        std::string mnemonic;    ///< quien lo exige, para la prueba.
+    };
+    std::vector<ExigenciaFrontera> exigencias;
+    /// La alineacion de cada funcion, calculada UNA vez: la usan el recorrido
+    /// del asm y despues el de los sitios de llamada.
+    std::unordered_map<std::string, analysis::AlignmentFacts> alineacion_de;
+
     for (const ir::IrFunction &fn : mod.functions) {
         if (fn.blocks.empty()) continue;
         /* Una funcion de la que se ha visto TODO lo que podria llamarla, y no
@@ -3820,6 +3951,7 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
         if (resumen.universo_de(fn.name) ==
             analysis::Universo::CerradoSinLlamantes)
             continue;
+        (void)exigencias; // se llena mas abajo y se cruza tras el recorrido
         /* De que valor habla cada operando del asm.  Lo responde el mismo sitio
          * que se lo responde al modelo de efectos y al eliminador de escrituras
          * muertas: el camino marcador -> ligadura -> hueco -> contenido se
@@ -3834,8 +3966,13 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
         for (const analysis::LigaduraAsm &l : lig.ligaduras)
             clases.emplace_back(l.marcador, l.clase);
 
-        const analysis::AlignmentFacts alin =
-            analysis::compute_alignment(fn, &resumen);
+        /* Se guarda para el segundo recorrido (el de los sitios de llamada) en
+         * vez de volver a calcularla: es el mismo hecho sobre la misma funcion,
+         * y recalcularlo seria pagar dos veces por saber lo mismo. */
+        const analysis::AlignmentFacts &alin =
+            alineacion_de.emplace(fn.name,
+                                  analysis::compute_alignment(fn, &resumen))
+                .first->second;
         for (const ir::IrBlock &b : fn.blocks) {
             for (const ir::IrInstr &in : b.instrs) {
                 /* Tambien el asm ELEVADO.
@@ -3951,6 +4088,30 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
                             }
                             if (todas_cumplen) s.v = Veredicto::Cumple;
                             else if (todas_fallan) s.v = Veredicto::Falla;
+                            /* Y si la direccion es un PARaMETRO, aqui no se
+                             * puede saber: la alineacion la pone QUIEN LLAMA.
+                             * En vez de morir en "sin prueba", la exigencia sale
+                             * de la funcion y se apunta como propiedad suya --
+                             * "el parametro N debe ser multiplo de K" --, para
+                             * cruzarla despues en cada sitio de llamada.
+                             *
+                             * Derivada, no declarada: sale de lo que la
+                             * instruccion EXIGE (base de datos) y de por donde
+                             * le llega la direccion.  Nadie la escribe. */
+                            if (s.v == Veredicto::SinPrueba) {
+                                for (const analysis::LigaduraAsm &l : cands) {
+                                    for (size_t pi = 0; pi < fn.params.size();
+                                         ++pi) {
+                                        if (fn.params[pi] != l.valor) continue;
+                                        ExigenciaFrontera e;
+                                        e.funcion = fn.name;
+                                        e.param = static_cast<uint32_t>(pi);
+                                        e.bytes = req.bytes;
+                                        e.mnemonic = req.mnemonic;
+                                        exigencias.push_back(std::move(e));
+                                    }
+                                }
+                            }
                         }
                     }
                     /* Se acumula en vez de emitirse: el veredicto es del SITIO
@@ -4000,6 +4161,70 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
         case Veredicto::SinAncho:
             diags.diag(loc, DiagLevel::WARN, "VXA012", {s.mnemonic});
             break;
+        }
+    }
+
+    /* Y AHORA lo que la funcion exige, cruzado con lo que se sabe del argumento
+     * EN CADA SITIO DE LLAMADA.
+     *
+     * Es la otra mitad: dentro de la funcion la alineacion de un parametro no se
+     * puede saber, asi que la exigencia salio hacia fuera; aqui se encuentra con
+     * quien si lo sabe.  Sin esto, una precondicion que el propio asm declara se
+     * quedaba sin comprobar en el unico sitio donde era comprobable.
+     *
+     * Indexado por funcion llamada: un vector recorrido por cada llamada seria
+     * llamadas x exigencias, y de eso ya se ha aprendido bastante hoy. */
+    if (!exigencias.empty()) {
+        std::unordered_map<std::string, std::vector<const ExigenciaFrontera *>>
+            por_llamada;
+        for (const ExigenciaFrontera &e : exigencias)
+            por_llamada[e.funcion].push_back(&e);
+        /* Un sitio del fuente se dice UNA vez.  La misma llamada aparece tantas
+         * veces como copias tenga el codigo (inline, monomorfizacion, la propia
+         * funcion analizada en dos modulos), y repetir el mismo aviso cinco
+         * veces no informa cinco veces: entierra los demas.  La clave es el
+         * SITIO y el argumento, que es de lo que se habla. */
+        std::unordered_set<uint64_t> ya_dicho;
+        for (const ir::IrFunction &fn : mod.functions) {
+            if (fn.is_native) continue;
+            /* La alineacion del LLAMANTE, ya calculada en el recorrido de
+             * arriba.  Si esta funcion no llego a analizarse alli, no se
+             * inventa: se deja sin comprobar. */
+            auto ia = alineacion_de.find(fn.name);
+            if (ia == alineacion_de.end()) continue;
+            const analysis::AlignmentFacts &alin_caller = ia->second;
+            for (const ir::IrBlock &b : fn.blocks) {
+                for (const ir::IrInstr &in : b.instrs) {
+                    if (in.op != ir::IrOp::CALL || in.func_name.empty())
+                        continue;
+                    auto it = por_llamada.find(in.func_name);
+                    if (it == por_llamada.end()) continue;
+                    for (const ExigenciaFrontera *e : it->second) {
+                        if (e->param >= in.operands.size()) continue;
+                        const ir::IrValueId arg = in.operands[e->param];
+                        if (arg == ir::IR_NO_VALUE) continue;
+                        if (alin_caller.multiplo_de(arg, e->bytes))
+                            continue; // demostrado que cumple: nada que decir
+                        const uint64_t sitio =
+                            (static_cast<uint64_t>(in.source_line) << 32) ^
+                            (static_cast<uint64_t>(in.source_column) << 8) ^
+                            e->param;
+                        if (!ya_dicho.insert(sitio).second)
+                            continue; // ya se dijo de este sitio
+                        SourceLoc loc;
+                        loc.line = in.source_line;
+                        loc.column = in.source_column;
+                        loc.file = file;
+                        const std::vector<std::string> args = {
+                            in.func_name, std::to_string(e->param),
+                            std::to_string(e->bytes), e->mnemonic};
+                        if (alin_caller.seguro_no_multiplo_de(arg, e->bytes))
+                            diags.diag(loc, DiagLevel::ERR, "VXA040", args);
+                        else
+                            diags.diag(loc, DiagLevel::WARN, "VXA041", args);
+                    }
+                }
+            }
         }
     }
 

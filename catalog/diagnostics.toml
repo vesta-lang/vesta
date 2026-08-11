@@ -425,3 +425,13 @@ es = "asa: el fichero de hechos no cuadra con su suma de comprobacion (bytes cor
 [VXA046]
 en = "asa: those facts were written by another version of the compiler"
 es = "asa: esos hechos los escribio otra version del compilador"
+
+# --- exigencia de alineacion que sale de la funcion (VXA040-VXA041) ---
+
+[VXA040]
+en = "'{0}' requires argument {1} to be a multiple of {2} bytes -- its '{3}' demands it -- and this argument is not: it faults"
+es = "'{0}' exige que su argumento {1} sea multiplo de {2} bytes -- se lo exige su '{3}' -- y este argumento no lo es: hace caer el programa"
+
+[VXA041]
+en = "'{0}' requires argument {1} to be a multiple of {2} bytes ('{3}' demands it), and it cannot be proven here; align the data or use the variant without that requirement"
+es = "'{0}' exige que su argumento {1} sea multiplo de {2} bytes (se lo exige su '{3}'), y aqui no se puede demostrar; alinea el dato o usa la variante que no lo exige"

@@ -10,6 +10,9 @@
  */
 
 #include "vx/project_cache.h"
+
+#include "analysis/asa/fact_file.h"
+#include "util/fs_utils.h"
 #include "vx/source_hash.h"
 #include "vx/module/vxi_format.h" // para vxi_compiler_version_hash() (L.15)
 
@@ -301,6 +304,112 @@ bool project_cache_validate(const std::vector<ProjectCacheDep> &cached_deps,
         if (h != d.source_hash) return false;
     }
     return true;
+}
+
+
+// ---------------------------------------------------------------------------
+//  Diagnosticos que sobreviven al acierto de cache
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// Dominio con el que se guardan.  Literal estable: el ASA compara por
+/// direccion, asi que se da de alta como canonico antes de leer nada.
+const char *const kDominioDiag = "vx.diagnosticos";
+
+/// Separador entre el mensaje y los argumentos dentro de un solo campo.  Un
+/// byte de control que no aparece en texto de usuario.
+constexpr char kSep = '\x1f';
+
+/// Ruta del fichero de diagnosticos que acompana a @p cache_path.
+std::string ruta_diags_(const std::string &cache_path) {
+    return cache_path + ".diags";
+}
+
+} // namespace
+
+bool project_cache_save_diags(const std::string &cache_path, uint32_t opts_hash,
+                              const std::vector<Diagnostic> &diags) {
+    if (diags.empty()) return false;
+    analysis::asa::register_canonical_name(kDominioDiag);
+    analysis::asa::FactStore almacen;
+    almacen.reservar(diags.size());
+    for (const Diagnostic &d : diags) {
+        analysis::asa::Fact f;
+        f.que.dominio = kDominioDiag;
+        /* El CODIGO del catalogo, no el texto: es lo que permite volver a
+         * formatearlo en el idioma de quien compile despues. */
+        f.que.codigo = almacen.internar(d.code);
+        /* Los cuatro numeros de la posicion en los dos campos que un hecho
+         * tiene para ellos.  Empaquetados y no en el texto: son datos, y
+         * meterlos en la cadena obligaria a parsearlos para volver a usarlos.
+         * Hacen falta los cuatro -- sin el desplazamiento y la longitud, al
+         * rehacer el aviso no se puede subrayar el trozo de codigo. */
+        f.que.a = static_cast<int64_t>((static_cast<uint64_t>(d.loc.offset)
+                                        << 32) |
+                                       d.loc.line);
+        f.que.b = static_cast<int64_t>((static_cast<uint64_t>(d.loc.length)
+                                        << 32) |
+                                       d.loc.column);
+        std::string junto = d.message;
+        for (const std::string &a : d.args) {
+            junto.push_back(kSep);
+            junto += a;
+        }
+        f.que.detalle = almacen.internar(junto);
+        f.de_quien.clase = analysis::asa::Sujeto::Clase::Simbolo;
+        f.de_quien.funcion = almacen.internar(d.loc.file);
+        f.de_quien.id = static_cast<uint32_t>(d.level);
+        /* Certeza demostrada: no es una suposicion sobre el programa, es lo que
+         * el compilador dijo.  Y la fuente es lo que lo distingue de un hecho
+         * que alguien deduzca despues. */
+        f.sello.certeza = analysis::asa::Certeza::Demostrada;
+        f.sello.origen.productor = kDominioDiag;
+        almacen.anadir(std::move(f));
+    }
+    /* Nivel maximo a proposito: esto NO se puede recalcular sin recompilar, que
+     * es justo lo que el acierto de cache se ahorra. */
+    const std::vector<uint8_t> bytes = analysis::asa::serialize(
+        almacen, static_cast<uint64_t>(opts_hash), analysis::asa::CacheLevel::All,
+        {{kDominioDiag, 0, false, 0}});
+    if (bytes.empty()) return false;
+    return ::fs::write_file_atomic(ruta_diags_(cache_path), bytes);
+}
+
+bool project_cache_load_diags(const std::string &cache_path, uint32_t opts_hash,
+                              std::vector<Diagnostic> &out) {
+    out.clear();
+    analysis::asa::register_canonical_name(kDominioDiag);
+    analysis::asa::FactStore almacen;
+    const analysis::asa::ReadResult r = analysis::asa::read_facts_file(
+        ruta_diags_(cache_path), static_cast<uint64_t>(opts_hash), almacen);
+    if (!r.ok) return false;
+    out.reserve(almacen.size());
+    for (analysis::asa::FactId i = 0; i < almacen.size(); ++i) {
+        const analysis::asa::Fact &f = almacen.at(i);
+        Diagnostic                 d;
+        d.level = static_cast<DiagLevel>(f.de_quien.id);
+        d.loc.file = f.de_quien.funcion;
+        const uint64_t pa = static_cast<uint64_t>(f.que.a);
+        const uint64_t pb = static_cast<uint64_t>(f.que.b);
+        d.loc.line = static_cast<uint32_t>(pa & 0xFFFFFFFFu);
+        d.loc.offset = static_cast<uint32_t>(pa >> 32);
+        d.loc.column = static_cast<uint32_t>(pb & 0xFFFFFFFFu);
+        d.loc.length = static_cast<uint32_t>(pb >> 32);
+        d.code = f.que.codigo;
+        const std::string junto = f.que.detalle;
+        size_t            ini = junto.find(kSep);
+        d.message = junto.substr(0, ini);
+        while (ini != std::string::npos) {
+            const size_t fin = junto.find(kSep, ini + 1);
+            d.args.push_back(junto.substr(
+                ini + 1, fin == std::string::npos ? std::string::npos
+                                                  : fin - ini - 1));
+            ini = fin;
+        }
+        out.push_back(std::move(d));
+    }
+    return !out.empty();
 }
 
 } // namespace vx

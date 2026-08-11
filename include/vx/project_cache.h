@@ -34,6 +34,8 @@
 #include <string>
 #include <vector>
 
+#include "vx/diagnostic.h"
+
 namespace vx {
 
 ///  M5.B: opciones que afectan el output del compile.  Cualquier
@@ -138,6 +140,38 @@ uint32_t project_cache_opts_hash(const ProjectCacheKey &key);
 /// @return @c true si las huellas actuales coinciden con las cacheadas.
 bool project_cache_validate(const std::vector<ProjectCacheDep> &cached_deps,
                             bool con_lineas);
+
+/**
+ * @brief Guarda los diagnosticos de una compilacion junto a su cache.
+ *
+ * SIN ESTO, un acierto de cache SILENCIA los avisos: el artefacto se sirve del
+ * disco sin volver a compilar, asi que nadie los vuelve a emitir.  La primera
+ * vez el compilador avisa y la segunda se calla, y el aviso acaba dependiendo
+ * de si alguien borro un directorio -- que es como no tenerlo.  Y es en los
+ * proyectos grandes, donde el cache acierta casi siempre, donde mas se nota.
+ *
+ * Se guardan como DATOS -- codigo del catalogo, posicion y argumentos --, no
+ * como texto: al rehacerlos se formatean en el idioma activo, igual que si se
+ * acabaran de emitir.
+ *
+ * @param cache_path Fichero de cache del proyecto (se le anade su extension).
+ * @param opts_hash  Huella de las opciones; si no cuadra no se rehacen.
+ * @param diags      Los diagnosticos a guardar.
+ * @return @c true si quedo algo escrito.
+ */
+bool project_cache_save_diags(const std::string &cache_path, uint32_t opts_hash,
+                              const std::vector<Diagnostic> &diags);
+
+/**
+ * @brief Recupera lo guardado por @ref project_cache_save_diags.
+ *
+ * @param cache_path Mismo que al guardar.
+ * @param opts_hash  Mismo que al guardar.
+ * @param out        Donde se depositan (se vacia antes).
+ * @return @c true si se recupero algo.
+ */
+bool project_cache_load_diags(const std::string &cache_path, uint32_t opts_hash,
+                              std::vector<Diagnostic> &out);
 
 /// @brief FNV-1a 64 helper (publico para uso en @c compile_vx_project).
 uint64_t fnv1a64_bytes(const uint8_t *data, size_t size) noexcept;
