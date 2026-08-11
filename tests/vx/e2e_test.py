@@ -737,6 +737,31 @@ def caught_fault_case(tag, label, src, expected, line=None):
     _register(tag, fn, False, line)
 
 
+def vm_jit_r0_case(tag, label, src, expected, line=None):
+    """Comprueba el valor devuelto en interprete y JIT, sin el modo nativo.
+
+    Existe para los programas que no se pueden comprobar en nativo todavia y
+    que NO capturan ningun fallo.  Antes se colaban por `caught_fault_case`,
+    que hace lo mismo -- corre esos dos modos y mira R00 -- pero cuyo NOMBRE
+    afirma que el programa atrapa un fallo del sistema con `try/catch` y sigue
+    adelante.  Registrar aqui uno que no tiene ni un `try` no rompia nada, y
+    ese era el problema: la suite parecia cubrir la recuperacion de fallos en
+    un caso que no la ejercita, asi que romperla no lo habria hecho fallar.
+    """
+    def fn(ctx):
+        ctx.compile_vx(ctx.src(src), tag)
+        ctx.ok("compilacion %s -> .velb" % src)
+        for modo in ("vm", "jit"):
+            _, log = ctx.run_velb(tag, schedulers=1, mode=modo)
+            got = get_r00(log)
+            if got != expected:
+                ctx.fail("%s (-m %s): R00 == %s, se esperaba %d"
+                         % (label, modo, got, expected), log)
+            ctx.ok("%s (-m %s) -> R0 = %d" % (label, modo, expected))
+    fn.__name__ = "case_" + tag
+    _register(tag, fn, False, line)
+
+
 def asm_lift_case(tag, label, src, line=None):
     """El MISMO fuente, elevado y sin elevar, tiene que hacer lo mismo.
 
@@ -2984,7 +3009,7 @@ asm_lift_case("asm_destruye_registro_eq", "destruir un registro da lo mismo elev
 # byte, ejecutando solo las que este procesador soporta.  Interp+JIT: el nativo
 # queda fuera porque el numero depende de los rasgos de la maquina y el arnes
 # compara el valor devuelto, no el codigo de salida.
-caught_fault_case("std_memory_variantes", "las 32 variantes de std.memory, una por una y byte a byte", "367_std_memory_variantes.vx", 42)
+vm_jit_r0_case("std_memory_variantes", "las 32 variantes de std.memory, una por una y byte a byte", "367_std_memory_variantes.vx", 42)
 modes3_case("optional_struct", "Optional<T> con T = struct por valor (payload dimensionado + copia)", "346_optional_struct.vx", 52)
 r0_case("cme299", "captura expr CROSS-MODULO (src(expr) en otro modulo, DSL crudo)", "299_cross_module_expr.vx", 42, line=3709)
 r0_case("scs300", "source(expr) de std.comptime (re-export + siembra transitiva)", "300_stdlib_comptime_source.vx", 42, line=3710)
