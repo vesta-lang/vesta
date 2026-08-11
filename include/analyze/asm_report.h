@@ -108,6 +108,15 @@ std::vector<AsmBlockReport> analizar_bloques_asm(const ir::IrModule &mod);
 void print_asm_report(std::ostream &os,
                       const std::vector<AsmBlockReport> &bloques);
 
+/**
+ * @brief Da de alta el dominio del ASM como productor de hechos del ASA.
+ *
+ * Vive aqui y no en la capa de analisis porque necesita la base de datos de
+ * instrucciones.  Lo llama quien lo tenga disponible antes de producir: para eso
+ * existe el registro de productores.
+ */
+void registrar_productor_asm();
+
 } // namespace analyze
 
 #endif // VESTA_ANALYZE_ASM_REPORT_H

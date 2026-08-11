@@ -642,7 +642,7 @@ AggregateFactsMap observar_con_cache(const ir::IrModule &mod,
         a.pasado_por_abi = o.pasado_por_abi;
         a.devuelto_entero = o.devuelto_entero;
         a.transferido_como_bloque = o.transferido_como_bloque;
-        a.sello.origen = {kProductor, fn.name.c_str(), p};
+        a.sello.origen = {Fuente::Estatico, kProductor, fn.name.c_str(), p};
         a.sello.apoyos.anadir("analysis.points_to");
         const FormaDeValor f = a.forma();
         a.sello.certeza = (f == FormaDeValor::SinEvidencia ||
@@ -705,7 +705,8 @@ AggregateFactsMap observar_con_cache(const ir::IrModule &mod,
             a.devuelto_entero = o.devuelto_entero;
             a.transferido_como_bloque = o.transferido_como_bloque;
 
-            a.sello.origen = {kProductor, fn.name.c_str(), in.dst};
+            a.sello.origen = {Fuente::Estatico, kProductor, fn.name.c_str(),
+                              in.dst};
             a.sello.apoyos.anadir("analysis.points_to");
             if (!a.frontera.empty()) a.sello.apoyos.anadir("analysis.fn_targets");
 

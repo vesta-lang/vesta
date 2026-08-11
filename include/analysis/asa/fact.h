@@ -35,6 +35,8 @@
 #define ANALYSIS_ASA_FACT_H
 
 #include <cstdint>
+#include <string>
+#include <vector>
 
 namespace analysis {
 namespace asa {
@@ -79,14 +81,34 @@ inline const char *nombre_certeza(Certeza c) {
 }
 
 /**
+ * @brief De DONDE sale un hecho.  Ojo: no es su certeza.
+ *
+ * La certeza es lo que decide al consumidor -- usar directamente, usar con
+ * guarda, o no suponer nada -- y va aparte a proposito.  Esto dice quien lo vio,
+ * que sirve para explicarlo y depurarlo, no para decidir.  Justo por eso un
+ * consumidor puede pasar de mirar la fuente: dos hechos de origen distinto con
+ * la misma certeza se tratan igual.
+ */
+enum class Fuente : uint8_t {
+    Estatico,  ///< leyendo el programa, sin ejecutarlo.
+    Ejecucion, ///< observado corriendo: cierto en lo visto, no en general.
+    Perfil,    ///< medido en corridas anteriores.
+    Declarado, ///< lo afirma el programador (un contrato).  Se VERIFICA, no se cree.
+};
+
+/// Nombre estable para volcados.  No es texto de usuario.
+const char *nombre_fuente(Fuente f);
+
+/**
  * @brief Quien descubrio un hecho y mirando que.
  *
  * Un hecho sin procedencia no se puede explicar ni depurar: cuando un veredicto
- * sorprende, la primera pregunta es siempre "¿de donde ha salido esto?".  El
+ * sorprende, la primera pregunta es siempre "de donde ha salido esto".  El
  * @c productor es un literal estatico (el nombre del analisis), no una cadena
  * construida: identifica al modulo, no al caso.
  */
 struct Procedencia {
+    Fuente      fuente = Fuente::Estatico;
     const char *productor = "?"; ///< analisis que lo emitio.
     const char *funcion = "";    ///< funcion mirada (vacio si es de modulo).
     uint32_t    sitio = 0;       ///< value-id, bloque o linea, segun el dominio.
@@ -129,6 +151,98 @@ struct Sello {
     Certeza      certeza = Certeza::Desconocida;
     Procedencia  origen;
     Dependencias apoyos;
+};
+
+// ===========================================================================
+// EL HECHO.  La frontera comun: lo que un productor deja y un consumidor lee.
+// ===========================================================================
+
+/// Identidad de un hecho dentro de un almacen.  Indice, no puntero: los hechos
+/// viven en un vector contiguo y se referencian entre si.
+using FactId = uint32_t;
+/// "Ningun hecho".  No es el hecho cero.
+extern const FactId kSinHecho;
+
+/**
+ * @brief De QUE habla un hecho.
+ *
+ * Tipado y no una cadena: el sujeto es la clave por la que un consumidor busca,
+ * y compararlo por texto convertiria cada consulta en un parseo.  El nombre de
+ * la funcion es un puntero al que guarda el almacen, estable mientras el viva.
+ */
+struct Sujeto {
+    enum class Clase : uint8_t {
+        Modulo,      ///< el programa entero.
+        Funcion,     ///< una funcion; @c id no se usa.
+        Valor,       ///< un valor SSA; @c id es su value-id.
+        Bloque,      ///< un bloque basico; @c id es su indice.
+        Instruccion, ///< una instruccion; @c id es su posicion lineal.
+        Simbolo      ///< algo con nombre que no es funcion (global, clase).
+    };
+    Clase       clase = Clase::Modulo;
+    const char *funcion = ""; ///< a quien pertenece (vacio si es del modulo).
+    uint32_t    id = 0;
+
+    bool operator==(const Sujeto &o) const {
+        return clase == o.clase && id == o.id &&
+               (funcion == o.funcion || std::string(funcion) == o.funcion);
+    }
+};
+
+const char *nombre_clase_sujeto(Sujeto::Clase c);
+
+/**
+ * @brief QUE se afirma, en DATOS.
+ *
+ * Cada dominio tiene su vocabulario -- un rango no es un prestamo --, pero el
+ * ASA exige que la afirmacion sea material y no una frase: un @c codigo estable
+ * que un consumidor puede comparar, los NUMEROS que la acompanan, y un texto
+ * SOLO para lo que no cabe en numeros.  Quien decida algo mira @c codigo y los
+ * numeros; el texto es para que lo lea una persona.
+ */
+struct Proposicion {
+    const char *dominio = "?"; ///< quien habla (uno de los productores).
+    const char *codigo = "?";  ///< que dice, en vocabulario estable del dominio.
+    int64_t     a = 0;         ///< primer numero del hecho (lo, offset, ...).
+    int64_t     b = 0;         ///< segundo (hi, ancho, profundidad, ...).
+    /**
+     * @brief Lo que no cabe en dos numeros, INTERNADO en el almacen.
+     *
+     * Puntero y no cadena propia por dos razones que van juntas: un programa
+     * grande produce cientos de miles de hechos y los textos se REPITEN
+     * ("vale todo su tipo", "i64", "monton#3"), asi que internarlos guarda una
+     * sola copia de cada uno; y comparar dos hechos pasa a ser comparar
+     * punteros.  Vive lo que el almacen.
+     */
+    const char *detalle = "";
+};
+
+/**
+ * @brief COMO se llego a el.
+ *
+ * @c Dependencias dice de que PRODUCTORES depende (grueso, para invalidar);
+ * esto dice de que HECHOS CONCRETOS se dedujo, que es lo que permite recorrer
+ * una derivacion hacia atras y ensenarla.  Sin ella, "todo veredicto lleva su
+ * prueba" se queda en una intencion.
+ */
+struct Prueba {
+    const char          *regla = ""; ///< la regla aplicada, nombre estable.
+    std::vector<FactId>  de;         ///< hechos de los que se sigue.
+};
+
+/**
+ * @brief Un hecho completo.  Es LA representacion; no hay otra.
+ *
+ * Da igual que lo produzca el analisis estatico, la observacion en ejecucion o
+ * un perfil de corridas anteriores: lo que cambia es la @c Procedencia y la
+ * @c Certeza, que viajan DENTRO.  Un consumidor no pregunta de donde viene: mira
+ * lo que dice y cuanto puede fiarse.
+ */
+struct Fact {
+    Proposicion que;
+    Sujeto      de_quien;
+    Sello       sello;
+    Prueba      prueba;
 };
 
 } // namespace asa

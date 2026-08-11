@@ -599,6 +599,66 @@ static bool jit_sin_especializar_reservas() {
     return off;
 }
 
+/**
+ * @brief Si hay que contar en voz alta cada decision de especializacion.
+ *
+ * Con @c VESTA_JIT_ESPECIALIZAR_DEBUG=1.  Renunciar en silencio es lo que hace
+ * que una optimizacion se pudra sin que nadie se entere: el que renuncia, dice
+ * por que.
+ */
+static bool jit_especializar_debug() {
+    static const bool on = [] {
+        const char *v = std::getenv("VESTA_JIT_ESPECIALIZAR_DEBUG");
+        return v && v[0] != '\0' && v[0] != '0';
+    }();
+    return on;
+}
+
+/**
+ * @brief Cuenta el veredicto de la especializacion con su prueba.
+ *
+ * Una linea por funcion considerada, en campos fijos para poder agregarla con
+ * una herramienta: el veredicto, cuantos sitios se miraron, cuantos traian algo
+ * sabido, y -- cuando lo hay -- el hecho concreto que sostiene el si, con la
+ * certeza de donde salio.
+ *
+ * @param fn        Funcion considerada.
+ * @param cotas     Lo que se supo de sus sitios de llamada y reserva.
+ * @param sello     Procedencia y certeza del conocimiento de rangos usado.
+ * @param cuerpos   Cuantos cuerpos de los llamados estan disponibles.
+ * @param asignador Si entre ellos esta el asignador del programa.
+ */
+static void explicar_especializacion(const ir::IrFunction         &fn,
+                                     const CotasDeLosSitios       &cotas,
+                                     const analysis::asa::Sello   &sello,
+                                     size_t cuerpos, bool asignador) {
+    const char *motivo = "";
+    if (!cotas.hay)
+        motivo = cotas.sitios == 0 ? " motivo=sin-sitios" : " motivo=nada-acotado";
+    else if (cuerpos == 0)
+        motivo = " motivo=sin-cuerpos";
+    std::fprintf(stderr,
+                 "[especializar] %-28s veredicto=%s sitios=%u/%u operandos=%u/%u "
+                 "cuerpos=%zu%s%s",
+                 fn.name.c_str(),
+                 (cotas.hay && cuerpos != 0) ? "si" : "no", cotas.sitios_con_cota,
+                 cotas.sitios, cotas.operandos_con_cota, cotas.operandos, cuerpos,
+                 asignador ? " asignador=si" : "", motivo);
+    if (cotas.hay) {
+        int64_t lo = 0, hi = 0;
+        if (cotas.rango.vista_con_signo(lo, hi))
+            std::fprintf(stderr, " prueba=%s v%u en [%lld,%lld]",
+                         cotas.sitio.c_str(), cotas.valor,
+                         static_cast<long long>(lo), static_cast<long long>(hi));
+        else
+            std::fprintf(stderr, " prueba=%s v%u acotado", cotas.sitio.c_str(),
+                         cotas.valor);
+        std::fprintf(stderr, " certeza=%s",
+                     analysis::asa::nombre_certeza(sello.certeza));
+    }
+    std::fprintf(stderr, "\n");
+}
+
 uint64_t g_alloc_del_programa = 0;
 uint64_t g_free_del_programa = 0;
 
@@ -1452,7 +1512,14 @@ CompileResult eager_compile_function(
              * esta misma base y este sitio no cambia. */
             JitFactBase  propia;
             JitFactBase &base = (hechos != nullptr) ? *hechos : propia;
-            merece = hay_argumento_acotado(*ir_elegida, base.rangos(*ir_elegida));
+            const CotasDeLosSitios cotas =
+                cotas_de_los_sitios(*ir_elegida, base.rangos(*ir_elegida));
+            merece = cotas.hay;
+            if (jit_especializar_debug())
+                explicar_especializacion(
+                    *ir_elegida, cotas,
+                    base.sello(kProductorRangos, *ir_elegida), cuerpos.size(),
+                    hay_asignador);
         }
         if (merece && !cuerpos.empty() && (hay_asignador || !quiero.empty())) {
             esp_clone = *ir_elegida;

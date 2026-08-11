@@ -194,6 +194,9 @@ add_library(vx_lib STATIC
     # modelo dirigido por resumenes y de las anotaciones comprobables.
     ${CMAKE_SOURCE_DIR}/src/analyze/fingerprint.cpp
     ${CMAKE_SOURCE_DIR}/src/analyze/asm_report.cpp
+    # El asm como dominio del ASA (productor de hechos): vive junto al informe
+    # porque comparte la base de datos de instrucciones.
+    ${CMAKE_SOURCE_DIR}/src/analyze/asa_asm.cpp
     comptime/comptime_introspect.cpp
     # Recolector del conjunto comptime (P1 fase 1: base del artefacto comptime
     # separado que compilara/ejecutara todo el comptime en la ComptimeVM).

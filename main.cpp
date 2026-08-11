@@ -28,6 +28,8 @@
 #include "cli/cli.h"
 #include "cli/vsh.h"
 #include "cli/version_info.h" // Banner de `vesta --version` / `-v`
+#include "analysis/asa/dump.h" // Volcado del ASA: modo --asa
+#include "analyze/asm_report.h" // Informe de bloques asm + su productor del ASA
 #include "analyze/bigo.h"         // Subsistema de coste: modo --analyze (Big-O)
 #include "analyze/fingerprint.h" // Huella computacional (recursos + efectos)
 #include "analysis/effects/effects_report.h" // Modelo unico de efectos: --analyze --effects
@@ -801,6 +803,32 @@ int main(int argc, char *argv[]) {
             "analyze-json",
             "Con --analyze: emite el coste por funcion como JSON (para "
             "consumir desde un renderer de diagramas) en vez de texto legible.")(
+            "asa",
+            "Vuelca TODO lo que el compilador sabe de un .vx: cada afirmacion "
+            "con su dominio, su certeza y sobre que se dedujo, mas los "
+            "SILENCIOS (lo que se miro sin sacar nada), que es donde hay sitio "
+            "para saber mas.",
+            cxxopts::value<std::string>())(
+            "asa-json", "Con --asa: la misma informacion, para herramientas.")(
+            "asa-dominio",
+            "Con --asa: limita a estos dominios, separados por comas "
+            "(estructura, rangos, frontera, memoria, bucles).  Sin el, todos.",
+            cxxopts::value<std::string>())(
+            "asa-fn",
+            "Con --asa: limita a estas funciones, separadas por comas.",
+            cxxopts::value<std::string>())(
+            "asa-silencios",
+            "Con --asa: afirma tambien, una por una, las cosas que se miraron "
+            "SIN sacar nada (por defecto solo se cuentan).  Son hechos de "
+            "certeza desconocida: es donde hay sitio para saber mas.")(
+            "asa-pruebas",
+            "Con --asa: ensena la derivacion de cada hecho -- de que otros "
+            "hechos concretos se sigue.")(
+            "asa-tope",
+            "Con --asa: maximo de afirmaciones por dominio y funcion (0 = sin "
+            "tope).  Lo que se deja fuera se cuenta como silencio, nunca se "
+            "calla.",
+            cxxopts::value<int>()->default_value("0"))(
             "analyze-write",
             "Con --analyze: ESCRIBE las anotaciones sugeridas al fichero "
             "analizado (reemplaza las de contrato existentes de cada funcion/"
@@ -2120,6 +2148,89 @@ int main(int argc, char *argv[]) {
     //   vm --analyze prog.vx            -> salida legible
     //   vm --analyze prog.vx --analyze-json -> JSON (para diagramas)
     // -----------------------------------------------------------------
+    // -----------------------------------------------------------------
+    // VOLCADO DEL ASA: vm --asa <archivo.vx>
+    //
+    // Ensena lo que el compilador SABE del programa: cada afirmacion con su
+    // dominio, su certeza y sobre que se dedujo, y ademas los SILENCIOS -- lo
+    // que se miro sin sacar nada --, que es donde hay sitio para saber mas.
+    //
+    // No decide ni transforma: es la ventana a la base de hechos.  Sirve para
+    // depurar un analisis que miente, para ver por que un consumidor renuncia,
+    // y para saber que dominio hace falta antes de escribirlo.
+    // -----------------------------------------------------------------
+    if (result.count("asa")) {
+        const std::string vx_path = result["asa"].as<std::string>();
+        std::string vx_source;
+        if (!vx::leer_fuente(vx_path, vx_source)) {
+            std::cerr << "[asa] No se puede abrir: " << vx_path << "\n";
+            return EXIT_FAILURE;
+        }
+        /* Se mira el codigo que de verdad va a existir (POST-O2), no el
+         * escrito: lo que un consumidor consulta es esto. */
+        vx::CompileOptions copts;
+        copts.module_name = "main";
+        copts.opt_level = 2;
+        copts.ir_only = true;
+        copts.report_bounds = false;
+        const bool como_proyecto = vx::vx_source_has_imports(vx_source) ||
+                                   vx::vx_source_declara_namespace(vx_source);
+        vx::CompileResult cr =
+            como_proyecto ? vx::compile_vx_project(vx_path, copts)
+                          : vx::compile_vx_source(vx_source, vx_path, copts);
+        for (const auto &d : cr.diagnostics.all())
+            vx::print_diagnostic(std::cerr, d);
+        if (!cr.ok || cr.ir_module_cache_bytes.empty()) {
+            std::cerr << "[asa] la compilacion no dejo IR que mirar.\n";
+            return EXIT_FAILURE;
+        }
+        ir::IrModule asa_mod;
+        if (!ir::parse_ir_module_cache(cr.ir_module_cache_bytes, asa_mod)) {
+            std::cerr << "[asa] no se pudo leer el IR.\n";
+            return EXIT_FAILURE;
+        }
+
+        analysis::asa::OpcionesProduccion op;
+        auto partir = [](const std::string &s) {
+            std::vector<std::string> v;
+            std::string acc;
+            for (char c : s) {
+                if (c == ',') {
+                    if (!acc.empty()) v.push_back(acc);
+                    acc.clear();
+                } else if (c != ' ') {
+                    acc.push_back(c);
+                }
+            }
+            if (!acc.empty()) v.push_back(acc);
+            return v;
+        };
+        if (result.count("asa-dominio"))
+            op.dominios = partir(result["asa-dominio"].as<std::string>());
+        if (result.count("asa-fn"))
+            op.funciones = partir(result["asa-fn"].as<std::string>());
+        op.desconocidos = result.count("asa-silencios") > 0;
+        const int tope = result["asa-tope"].as<int>();
+        op.tope_por_funcion = tope > 0 ? static_cast<uint32_t>(tope) : 0u;
+
+        /* El asm es un dominio mas, pero su productor vive junto a la base de
+         * datos de instrucciones: se da de alta desde aqui, que es quien la
+         * tiene.  Para eso existe el registro. */
+        analyze::registrar_productor_asm();
+
+        analysis::asa::FactStore almacen;
+        const std::vector<analysis::asa::ResumenProduccion> resumenes =
+            analysis::asa::producir(asa_mod, almacen, op);
+        analysis::asa::OpcionesVista vista;
+        vista.pruebas = result.count("asa-pruebas") > 0;
+        if (result.count("asa-json"))
+            std::cout << analysis::asa::volcado_json(almacen, resumenes, vista)
+                      << "\n";
+        else
+            analysis::asa::imprimir_volcado(almacen, resumenes, vista, stdout);
+        return EXIT_SUCCESS;
+    }
+
     if (result.count("analyze")) {
         const std::string &vx_path = result["analyze"].as<std::string>();
         const bool want_json = result.count("analyze-json") > 0;

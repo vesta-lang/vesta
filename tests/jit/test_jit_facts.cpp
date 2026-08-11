@@ -171,7 +171,7 @@ static void probar_sello_y_volcado() {
     const ir::IrFunction fn = hacer_con_cota("sellada");
     base.rangos(fn);
 
-    const analysis::asa::Sello s = base.sello_rangos(fn);
+    const analysis::asa::Sello s = base.sello(jit::kProductorRangos, fn);
     CHECK(s.certeza == analysis::asa::Certeza::Demostrada,
           "un analisis que llega a punto fijo da un hecho demostrado");
     CHECK(s.origen.productor == jit::kProductorRangos,
@@ -183,7 +183,7 @@ static void probar_sello_y_volcado() {
 
     // De una funcion que nadie miro no se sabe nada, que NO es saber que no hay.
     const ir::IrFunction ajena = hacer_sin_cota("ajena");
-    CHECK(base.sello_rangos(ajena).certeza ==
+    CHECK(base.sello(jit::kProductorRangos, ajena).certeza ==
               analysis::asa::Certeza::Desconocida,
           "sin preguntar no hay hecho, y eso se dice: desconocida");
 
