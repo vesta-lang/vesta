@@ -198,9 +198,57 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline = true);
  *              se sabe nada de ellas (entonces toda CALLN es opaca).
  * @return true si se elimino al menos una instruccion.
  */
+/**
+ * @brief Lo que el modelo de efectos contesto sobre cada instruccion de una
+ *        funcion.
+ *
+ * Preguntar por los efectos de una instruccion cuesta ~107 us medidos, y el
+ * eliminador de codigo muerto lo pregunta una vez por instruccion en cada
+ * pasada: sobre una funcion de 1740 instrucciones y dieciseis pasadas, eso es
+ * casi todo el tiempo de compilar.  Pero la respuesta NO cambia mientras la
+ * funcion no cambie, asi que se guarda.
+ *
+ * Es una CACHE, no un buffer que se reutiliza: cada respuesta es inmutable
+ * mientras vale, va indexada por su instruccion, y se tira ENTERA en cuanto
+ * algo toca la funcion.  La diferencia importa -- un buffer reciclado se lo
+ * pisa el siguiente que pregunte.
+ *
+ * Y NO sustituye al modelo: lo que guarda es lo que el modelo contesto.  Si el
+ * modelo se afina manana, esto contesta lo afinado.
+ */
+struct CacheEfectosDce {
+    /// Instrucciones que tenia la funcion al llenarse.  Si cambia, no vale.
+    size_t n = 0;
+    /**
+     * @brief Para QUE objetivo se lleno.
+     *
+     * La respuesta del modelo NO es la misma en todos: compilando a nativo, un
+     * `panic` no lanza excepcion sino que no vuelve, y varias operaciones pasan
+     * a ceder el control porque van por el runtime.  Y el analisis de un bloque
+     * de asm lee su texto con la tabla de SU arquitectura -- las mismas letras
+     * dicen otra cosa en x86 que en ARM.
+     *
+     * Guardarlo es lo que impide servir la respuesta de otro objetivo.  Es la
+     * misma leccion del fichero de hechos: lo que se guarda tiene que decir
+     * DONDE vale, o acaba contestando donde no debe.
+     */
+    int         backend = -1;
+    std::string isa;
+    /// Por indice lineal: -1 sin preguntar, 0 conservar, 1 se puede quitar.
+    std::vector<int8_t> resp;
+
+    void invalidar() {
+        n = 0;
+        backend = -1;
+        isa.clear();
+        resp.clear();
+    }
+};
+
 bool ir_pass_dce(IrFunction &fn,
                  const analysis::effects::NativeDecls *decls = nullptr,
-                 const analysis::AsmBindingFacts *asm_bindings = nullptr);
+                 const analysis::AsmBindingFacts *asm_bindings = nullptr,
+                 CacheEfectosDce *cache = nullptr);
 
 /**
  * @brief Elision comptime de UNWRAP cuando el operando es provably non-null

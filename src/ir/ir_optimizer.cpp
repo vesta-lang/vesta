@@ -7089,7 +7089,8 @@ static bool model_removable(const IrFunction &fn, const analysis::IrFacts &facts
 }
 
 bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
-                 const analysis::AsmBindingFacts *asm_bindings) {
+                 const analysis::AsmBindingFacts *asm_bindings,
+                 CacheEfectosDce *cache) {
     // Modelo de efectos: hechos + points-to por-funcion para el consumidor del
     // DCE (el mismo resolvedor de direcciones que usa todo el tooling).
     analysis::IrFacts fx_facts;
@@ -7137,6 +7138,28 @@ bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
     }
 
     }
+    /* La cache se valida por TAMANO: si la funcion tiene otras instrucciones que
+     * cuando se lleno, las posiciones ya no significan lo mismo y se tira
+     * entera.  Es la comprobacion mas barata que es SOUND -- quedarse corto
+     * (tirarla de mas) solo cuesta volver a preguntar. */
+    size_t total_instrs = 0;
+    for (const auto &bb : fn.blocks) total_instrs += bb.instrs.size();
+    /* Y por OBJETIVO: la misma instruccion no tiene los mismos efectos en la
+     * maquina virtual que compilando a nativo, ni un bloque de asm dice lo
+     * mismo leido con la tabla de x86 que con la de ARM.  Servir lo guardado
+     * para otro objetivo seria contestar de otro programa. */
+    const int         backend_actual = static_cast<int>(fx_env.backend);
+    const std::string isa_actual = vx::asm_arch_actual();
+    if (cache != nullptr &&
+        (cache->n != total_instrs || cache->resp.size() != total_instrs ||
+         cache->backend != backend_actual || cache->isa != isa_actual)) {
+        cache->n = total_instrs;
+        cache->backend = backend_actual;
+        cache->isa = isa_actual;
+        cache->resp.assign(total_instrs, -1);
+    }
+    size_t idx_lineal = 0; ///< posicion de la instruccion en la funcion.
+
     bool changed = false;
     {
     CronoTramo crono_barrer__("  dce:barrer");
@@ -7153,11 +7176,29 @@ bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
             // con VESTA_DCE_EFFECTS, el MODELO unico (instruccion-aware).  El
             // caso alloc-only-string se mantiene en ambos (el modelo lo veria
             // como may_allocate y no lo quitaria; se conserva la optimizacion).
+            /* Lo que el modelo dijo de ESTA instruccion, si ya se le pregunto y
+             * la funcion no ha cambiado desde entonces.  No es un criterio
+             * paralelo ni una lista aparte: es su propia respuesta, guardada.
+             * Se pregunta una vez y se reusa en las pasadas siguientes. */
+            const size_t pos = idx_lineal++;
+            bool         modelo_dice = false;
+            if (g_dce_effects) {
+                int8_t guardado =
+                    (cache != nullptr && pos < cache->resp.size())
+                        ? cache->resp[pos]
+                        : static_cast<int8_t>(-1);
+                if (guardado < 0) {
+                    modelo_dice = model_removable(fn, fx_facts, fx_pt, ins,
+                                                  fx_env, fx_leidas);
+                    if (cache != nullptr && pos < cache->resp.size())
+                        cache->resp[pos] = modelo_dice ? 1 : 0;
+                } else {
+                    modelo_dice = (guardado == 1);
+                }
+            }
             const bool no_effect =
                 g_dce_effects
-                    ? (model_removable(fn, fx_facts, fx_pt, ins, fx_env,
-                                       fx_leidas) ||
-                       alloc_only_string_op(ins.op))
+                    ? (modelo_dice || alloc_only_string_op(ins.op))
                     : (!is_side_effecting(ins.op) || alloc_only_string_op(ins.op));
             /* Una llamada nativa puede no devolver nada y aun asi sobrar: si lo
              * unico que hacia era escribir donde nadie lee, no queda de ella
@@ -12841,7 +12882,15 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
         h.rangos = &ranges_of(fn);
         return h;
     };
+    /* Lo que el modelo de efectos contesto de cada funcion, guardado entre
+     * pasadas.  Vive aqui porque aqui se sabe cuando una funcion cambia, que es
+     * lo unico que puede invalidarlo. */
+    std::unordered_map<std::string, CacheEfectosDce> cache_efectos;
     auto pt_invalidate = [&](IrFunction &fn) {
+        /* Lo que el modelo dijo de sus instrucciones se apoya en estos mismos
+         * hechos, asi que cae con ellos.  Una sola senal de invalidacion para
+         * todo lo que depende de la funcion, no una por consumidor. */
+        cache_efectos[fn.name].invalidar();
         am.invalidate<analysis::IRFactsAnalysis>(fn.name); // cascada a PointsTo
     };
 
@@ -12882,7 +12931,8 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
                 APLICA(ir_pass_licm(fn)); /* LICM con dominators reales */
             }
             APLICA(ir_pass_dead_alloc_elim(fn));
-            APLICA(ir_pass_dce(fn, &decls_nativas, &asm_of(fn)));
+            APLICA(ir_pass_dce(fn, &decls_nativas, &asm_of(fn),
+                               &cache_efectos[fn.name]));
 
             if (level >= OptLevel::O2) {
                 // O2: plegado de constantes + bloques inalcanzables + TCO.
@@ -12950,7 +13000,8 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
                 // necesita.
                 APLICA(ir_pass_carry_idiom(fn));
                 // Segunda ronda de DCE tras plegado/TCO/loop header inline/CSE.
-                APLICA(ir_pass_dce(fn, &decls_nativas, &asm_of(fn)));
+                APLICA(ir_pass_dce(fn, &decls_nativas, &asm_of(fn),
+                               &cache_efectos[fn.name]));
             }
 
             if (level >= OptLevel::O3) {
