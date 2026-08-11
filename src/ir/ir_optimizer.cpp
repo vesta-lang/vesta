@@ -7007,10 +7007,35 @@ locs_leidas(const IrFunction &fn, const analysis::IrFacts &facts,
     return leidas;
 }
 
+namespace {
+/// Definida mas abajo, junto al acumulador que alimenta.
+void acumular_tramo(const char *etiqueta, long long us);
+
+/**
+ * @brief Cronometra lo que viva el objeto y lo suma a @p etiqueta.
+ *
+ * Para partir un pase caro POR DENTRO: el reparto por pase dice cual lo es, y
+ * esto dice por que.  Se declara aqui, antes del primer pase que lo usa, y se
+ * define junto al acumulador.
+ */
+struct CronoTramo {
+    const char                           *n;
+    std::chrono::steady_clock::time_point t0;
+    explicit CronoTramo(const char *etiqueta)
+        : n(etiqueta), t0(std::chrono::steady_clock::now()) {}
+    ~CronoTramo() {
+        acumular_tramo(n, std::chrono::duration_cast<std::chrono::microseconds>(
+                              std::chrono::steady_clock::now() - t0)
+                              .count());
+    }
+};
+} // namespace
+
 static bool model_removable(const IrFunction &fn, const analysis::IrFacts &facts,
                             const analysis::PointsTo &pt, const IrInstr &ins,
                             const analysis::effects::EffectEnv &env,
                             const analysis::effects::LocSet &leidas) {
+    CronoTramo crono__("  dce:efectos-por-instr");
     const analysis::effects::EffectAnalysisResult r =
         analysis::effects::effects_of_instr(fn, facts, pt, ins, env);
     if (r.completeness != analysis::effects::AnalysisCompleteness::Complete) return false;
@@ -7060,30 +7085,6 @@ static bool model_removable(const IrFunction &fn, const analysis::IrFacts &facts
     }
     return !e.mem.writes.locs.empty();
 }
-
-namespace {
-/// Definida mas abajo, junto al acumulador que alimenta.
-void acumular_tramo(const char *etiqueta, long long us);
-
-/**
- * @brief Cronometra lo que viva el objeto y lo suma a @p etiqueta.
- *
- * Para partir un pase caro POR DENTRO: el reparto por pase dice cual lo es, y
- * esto dice por que.  Se declara aqui, antes del primer pase que lo usa, y se
- * define junto al acumulador.
- */
-struct CronoTramo {
-    const char                           *n;
-    std::chrono::steady_clock::time_point t0;
-    explicit CronoTramo(const char *etiqueta)
-        : n(etiqueta), t0(std::chrono::steady_clock::now()) {}
-    ~CronoTramo() {
-        acumular_tramo(n, std::chrono::duration_cast<std::chrono::microseconds>(
-                              std::chrono::steady_clock::now() - t0)
-                              .count());
-    }
-};
-} // namespace
 
 bool ir_pass_dce(IrFunction &fn,
                  const analysis::effects::NativeDecls *decls) {
