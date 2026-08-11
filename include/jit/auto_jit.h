@@ -241,6 +241,11 @@ void tier2_tick(runtime::ProcessVM *vm, loader::MethodInfo *method) noexcept;
 /* Forward decl de CompileResult (definido en jit_compiler.h). */
 struct CompileResult;
 
+/* Forward decl de la base de hechos (definida en jit/jit_facts.h): aqui solo se
+ * pasa por puntero, asi que no hace falta arrastrar los dominios de analisis a
+ * todo el que incluya esta cabecera. */
+class JitFactBase;
+
 /**
  * @brief Compila una @c IrFunction usando el JIT subsystem (lazy
  *        init si es la primera invocacion).
@@ -257,6 +262,12 @@ struct CompileResult;
  *        via recursive eager-compile.
  * @param ir_functions Vector con todas las funciones IR del ejecutable.
  *        Usado para resolver llamadas user-fn -> compile + return ptr.
+ * @param hechos Base de hechos del modulo (@c jit/jit_facts.h).  Lo que el
+ *        compilador sabe del programa, para que sus consumidores -- hoy el
+ *        especializador de llamadas -- CONSULTEN en vez de redescubrirlo cada
+ *        uno.  Quien compile varias funciones del mismo modulo pasa la misma
+ *        base y el conocimiento se reparte.  nullptr = compilacion suelta: el
+ *        consumidor se monta la suya como ultimo recurso.
  * @return Resultado de la compilacion (fn=nullptr si fallo o JIT off).
  */
 CompileResult eager_compile_function(
@@ -267,7 +278,7 @@ CompileResult eager_compile_function(
     std::function<uint64_t(const std::string &)> resolve_native_fn = nullptr,
     std::function<uint64_t(uint64_t)> read_vmem_u64 = nullptr,
     int32_t exc_frame_stack_offset = 0, int32_t exc_free_list_offset = 0,
-    uint64_t jit_instr_counter_addr = 0,
+    uint64_t jit_instr_counter_addr = 0, JitFactBase *hechos = nullptr,
     /* callback-ABI (2026-06-06): si @p callback_entry es true, el
      * TOP-LEVEL @p ir_fn se compila con entry de ABI C nativo (callable
      * por qsort/Win32) en vez de VM_ABI.  Sus callees siguen siendo

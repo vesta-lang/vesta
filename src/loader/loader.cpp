@@ -26,6 +26,7 @@
 #include "cli/sync_io.h"
 #include "jit/auto_jit.h"     // eager-compile main + jit_entry_fn
 #include "jit/jit_compiler.h" // CompileResult forward decl ya en auto_jit.h
+#include "jit/jit_facts.h"    // base de hechos compartida por el modulo
 #include "jit/inline_asm_trampoline.h" // inc.6: trampolines de inline-asm para interp
 
 /*
@@ -999,6 +1000,18 @@ Loader::load_executable(runtime::VM &vm,
             }
             const uint64_t jit_counter_addr = reinterpret_cast<uint64_t>(
                 &proccess->scheduler.profiler_jit_instr_counter);
+            /* Lo que se sabe de ESTE modulo, en un solo sitio.
+             *
+             * Aqui se compilan varias funciones del mismo programa -- los
+             * cuerpos de fibra, el asignador, main, y en cascada sus llamadas
+             * --, asi que el conocimiento se calcula una vez y lo reciben
+             * todas.  Antes cada compilacion se construia el suyo, y la misma
+             * funcion lo pagaba de nuevo cada vez que se pedia.
+             *
+             * Vive lo que dura la compilacion de este modulo: dentro de el un
+             * nombre identifica una funcion, que es lo que hace legitimo
+             * cachear por nombre. */
+            jit::JitFactBase hechos_del_modulo;
             // FN.3: force-eager del grafo de fibra ANTES de compilar main.
             // Si algun IR usa el opcode SWAPCTX (fibras via `fiber_swapctx`),
             // (1) materializamos `__vx_swapctx` nativo (deja
@@ -1041,7 +1054,7 @@ Loader::load_executable(runtime::VM &vm,
                                         &last_exe->ir_functions,
                                         &last_exe->symbol_table, resolve_native,
                                         read_vmem_cb, exc_off, exc_free_off,
-                                        jit_counter_addr);
+                                        jit_counter_addr, &hechos_del_modulo);
                                 /* Registrar pc -> jit_code: el path vreg
                                  * top-level NO lo hace por si mismo, y
                                  * `fiber_entry(cuerpo)` (LABEL_ADDR, pieza 1)
@@ -1130,13 +1143,11 @@ Loader::load_executable(runtime::VM &vm,
                         last_exe->ir_functions[ita->second], &last_exe->ir_lookup,
                         &last_exe->ir_functions, &last_exe->symbol_table,
                         resolve_native, read_vmem_cb, exc_off, exc_free_off,
-                        jit_counter_addr);
+                        jit_counter_addr, &hechos_del_modulo);
                     /* Y se le dice a la maquina donde esta, para que su
                      * instruccion reserve en el MISMO monton que el codigo
                      * compilado.  Cada uno llega por su mecanismo; el monton es
                      * uno. */
-                        std::fprintf(stderr, "[dbg] compilado %s: %p\n", punto,
-                                     (void *)ra.fn);
                     if (ra.fn != nullptr) {
                         const uint64_t dir =
                             reinterpret_cast<uint64_t>(ra.fn);
@@ -1161,7 +1172,8 @@ Loader::load_executable(runtime::VM &vm,
                 jit::CompileResult res = jit::eager_compile_function(
                     ir_main, &last_exe->ir_lookup, &last_exe->ir_functions,
                     &last_exe->symbol_table, resolve_native, read_vmem_cb,
-                    exc_off, exc_free_off, jit_counter_addr);
+                    exc_off, exc_free_off, jit_counter_addr,
+                    &hechos_del_modulo);
                 if (res.fn != nullptr) {
                     proccess->jit_entry_fn = reinterpret_cast<void *>(res.fn);
                     if (jit::g_jit_warn_unsupported) {

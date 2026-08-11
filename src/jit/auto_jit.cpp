@@ -28,8 +28,7 @@
 #include "ffi/virtual_lib_registry.h" // Sprint JIT-cross-fn: virtual fn lookup
 #include "loader/loader.h"
 #include "loader/oop_types.h"
-#include "analysis/facts/ir_facts.h"
-#include "analysis/facts/value_range.h"
+#include "jit/jit_facts.h" // base de hechos: se CONSULTA, no se construye aqui
 #include "ir/ir_optimizer.h" // C2.4: devirt especulativa + inline
 #include "ir/passes/if_conversion.h"  // auto-PGO del JIT: re-if-conversion
 #include "ir/passes/select_simplify.h"
@@ -1333,7 +1332,7 @@ CompileResult eager_compile_function(
     std::function<uint64_t(const std::string &)> resolve_native_fn,
     std::function<uint64_t(uint64_t)> read_vmem_u64,
     int32_t exc_frame_stack_offset, int32_t exc_free_list_offset,
-    uint64_t jit_instr_counter_addr, bool callback_entry,
+    uint64_t jit_instr_counter_addr, JitFactBase *hechos, bool callback_entry,
     uint64_t callback_get_proc_addr, int32_t callback_tls_gs_disp) {
     /* @Target("mode:jit"): si el modulo trae una variante para el JIT, se
      * compila SU cuerpo bajo la identidad de la funcion pedida.  El interprete
@@ -1351,6 +1350,40 @@ CompileResult eager_compile_function(
             ir_elegida = &(*ir_functions)[itv->second];
         }
     }
+    /* Init lazy de threshold desde env (1 vez por proceso). */
+    std::call_once(g_env_init_flag, init_threshold_from_env);
+
+    /* Si JIT esta off, no compilar. */
+    if (g_jit_threshold == UINT32_MAX) {
+        return CompileResult{};
+    }
+
+    /* Init lazy del JIT subsystem. */
+    std::call_once(g_jit_init_flag, init_jit_subsystem);
+
+    /* Compilar bajo el mismo mutex que maybe_compile_method (el
+     * JitRegistry necesita acceso exclusivo). */
+    std::lock_guard<std::mutex> lk(g_compile_mtx);
+
+    /* Si ya esta cacheado, retornar el ptr (excepto sentinelas).
+     * En modo callback NO usamos g_eager_cache para el top-level: su
+     * ABI (entry nativo) difiere del VM_ABI que la cache by-name asume;
+     * confundirlos daria un caller VM_ABI saltando a un entry nativo.
+     *
+     * Este corte va ANTES de mirar nada del cuerpo: lo que ya esta compilado no
+     * se vuelve a estudiar.  La variante @Target ya esta elegida, y la
+     * especializacion no cambia el nombre, asi que la clave es la misma que
+     * tendria despues. */
+    if (!callback_entry && !ir_elegida->name.empty()) {
+        auto it = g_eager_cache.find(ir_elegida->name);
+        if (it != g_eager_cache.end() && it->second != 0 &&
+            it->second != EAGER_IN_PROGRESS) {
+            CompileResult cached{};
+            cached.fn = reinterpret_cast<JitFn>(it->second);
+            return cached;
+        }
+    }
+
     /* Especializacion por lo que se sabe AQUI.
      *
      * Una llamada no es una caja negra: si su cuerpo esta en el modulo y en
@@ -1402,32 +1435,24 @@ CompileResult eager_compile_function(
         bool merece = false;
         {
             /* Regla 1: el consumidor NO construye la base de hechos, la RECIBE.
-             * Aqui todavia se calcula en el sitio porque el JIT no recibe un
-             * gestor de analisis; en cuanto lo reciba, esto es una consulta y
-             * no un computo -- y de paso deja de repetirse por cada funcion que
-             * se compila.  Queda escrito para que no se quede asi.
+             * Quien compila el modulo la pasa (@p hechos) y el conocimiento se
+             * calcula una vez y se reparte entre todas sus funciones; una
+             * compilacion suelta se monta la suya aqui como ultimo recurso,
+             * igual que hacen LICM/DSE/planificador cuando nadie les da la
+             * tabla points-to.
              *
-             * Y falta mas de un hecho: los rangos dicen lo que vale un ARGUMENTO,
-             * no lo que hay en el ESTADO que de verdad decide las ramas del
-             * asignador.  Ese hecho existe -- alguien lo sabe -- pero hoy no
-             * llega hasta aqui. */
-            const analysis::IrFacts hechos =
-                analysis::build_ir_facts(*ir_elegida);
-            const analysis::RangeFacts rangos =
-                analysis::compute_ranges(*ir_elegida, hechos);
-            for (const auto &bb : ir_elegida->blocks)
-                for (const auto &in : bb.instrs) {
-                    const bool interesa =
-                        in.op == ir::IrOp::RAW_ALLOC ||
-                        (in.op == ir::IrOp::CALL && !in.func_name.empty());
-                    if (!interesa) continue;
-                    for (ir::IrValueId a : in.operands) {
-                        if (a >= rangos.r.size()) continue;
-                        const auto &rg = rangos.r[a];
-                        if (rg.acotada() && !rg.es_todo()) { merece = true; break; }
-                    }
-                    if (merece) break;
-                }
+             * Lo que se pregunta es que se sabe de los argumentos con los que se
+             * llega a cada llamada o reserva; la decision -- si eso basta para
+             * especializar -- se toma aqui, que es donde se conoce el coste.
+             *
+             * Falta cruzar mas de un dominio: los rangos dicen lo que vale un
+             * ARGUMENTO, no lo que hay en el ESTADO que de verdad decide las
+             * ramas del asignador.  Ese hecho existe -- alguien lo sabe -- pero
+             * hoy no llega hasta aqui; cuando llegue, es un productor mas sobre
+             * esta misma base y este sitio no cambia. */
+            JitFactBase  propia;
+            JitFactBase &base = (hechos != nullptr) ? *hechos : propia;
+            merece = hay_argumento_acotado(*ir_elegida, base.rangos(*ir_elegida));
         }
         if (merece && !cuerpos.empty() && (hay_asignador || !quiero.empty())) {
             esp_clone = *ir_elegida;
@@ -1457,35 +1482,6 @@ CompileResult eager_compile_function(
     }
 
     const ir::IrFunction &ir_fn_sel = *ir_elegida;
-
-    /* Init lazy de threshold desde env (1 vez por proceso). */
-    std::call_once(g_env_init_flag, init_threshold_from_env);
-
-    /* Si JIT esta off, no compilar. */
-    if (g_jit_threshold == UINT32_MAX) {
-        return CompileResult{};
-    }
-
-    /* Init lazy del JIT subsystem. */
-    std::call_once(g_jit_init_flag, init_jit_subsystem);
-
-    /* Compilar bajo el mismo mutex que maybe_compile_method (el
-     * JitRegistry necesita acceso exclusivo). */
-    std::lock_guard<std::mutex> lk(g_compile_mtx);
-
-    /* Si ya esta cacheado, retornar el ptr (excepto sentinelas).
-     * En modo callback NO usamos g_eager_cache para el top-level: su
-     * ABI (entry nativo) difiere del VM_ABI que la cache by-name asume;
-     * confundirlos daria un caller VM_ABI saltando a un entry nativo. */
-    if (!callback_entry && !ir_fn_sel.name.empty()) {
-        auto it = g_eager_cache.find(ir_fn_sel.name);
-        if (it != g_eager_cache.end() && it->second != 0 &&
-            it->second != EAGER_IN_PROGRESS) {
-            CompileResult cached{};
-            cached.fn = reinterpret_cast<JitFn>(it->second);
-            return cached;
-        }
-    }
 
     /*  D.7 perf-gaps (2026-06-06): el intento vreg top-level se
      * MOVIO mas abajo (tras construir el resolver recursivo de user-fns),
@@ -2594,7 +2590,7 @@ uint64_t compile_native_callback(runtime::ProcessVM *vm,
         CompileResult cr = eager_compile_function(
             *ir_fn, &owning_exe->ir_lookup, &owning_exe->ir_functions,
             &owning_exe->symbol_table, resolve_native, read_vmem_cb, exc_off,
-            exc_free_off, jit_counter_addr,
+            exc_free_off, jit_counter_addr, /*hechos=*/nullptr,
             /*callback_entry=*/true, getproc_addr, tls_gs_disp);
         if (saved_thr == UINT32_MAX) set_jit_threshold(saved_thr);
         result = cr.fn ? reinterpret_cast<uint64_t>(cr.fn) : 0;
