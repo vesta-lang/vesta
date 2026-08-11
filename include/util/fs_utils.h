@@ -29,6 +29,8 @@
 #define FS_UTILS_H
 
 #include <algorithm>
+#include <atomic>
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <string>
@@ -595,6 +597,82 @@ static std::string get_executable_path() {
 static std::string get_executable_name() {
     std::string path = get_executable_path();
     return std::filesystem::path(path).filename().string();
+}
+
+/**
+ * @brief Escribe un fichero de forma ATOMICA: quien lo lea vera el contenido
+ *        viejo o el nuevo, nunca uno a medias.
+ *
+ * Escribe a un temporal unico (proceso + contador, para que dos compilaciones
+ * simultaneas no colisionen) y renombra encima.  El renombrado es atomico en
+ * los sistemas de ficheros que usamos (NTFS, ext4, btrfs, APFS), y es lo que
+ * impide que un corte a mitad de la escritura deje una cache corrupta que
+ * ademas parece valida.
+ *
+ * @param path  Destino.
+ * @param bytes Contenido.
+ * @return @c true si el destino quedo escrito.
+ */
+static bool write_file_atomic(const std::string &path,
+                              const std::vector<uint8_t> &bytes) {
+    static std::atomic<uint64_t> contador{0};
+    std::error_code ec;
+    fs::create_directories(fs::path(path).parent_path(), ec);
+    std::string tmp = path + ".tmp.";
+#ifdef _WIN32
+    tmp += std::to_string(static_cast<uint64_t>(GetCurrentProcessId()));
+#else
+    tmp += std::to_string(static_cast<uint64_t>(getpid()));
+#endif
+    tmp += "." + std::to_string(contador.fetch_add(1, std::memory_order_relaxed));
+    {
+        std::ofstream f(tmp, std::ios::binary);
+        if (!f.is_open()) return false;
+        if (!bytes.empty()) {
+            f.write(reinterpret_cast<const char *>(bytes.data()),
+                    static_cast<std::streamsize>(bytes.size()));
+        }
+        if (!f.good()) {
+            f.close();
+            fs::remove(tmp, ec);
+            return false;
+        }
+    }
+    fs::rename(tmp, path, ec);
+    if (ec) {
+        // En Windows hay una carrera rara en la que el renombrado falla si otro
+        // proceso tiene el destino abierto.  Copiar y borrar como segundo
+        // recurso: deja de ser atomico, pero es preferible a no escribir.
+        fs::copy_file(tmp, path, fs::copy_options::overwrite_existing, ec);
+        std::error_code ec2;
+        fs::remove(tmp, ec2);
+        return !ec;
+    }
+    return true;
+}
+
+/**
+ * @brief Lee un fichero entero a bytes.
+ * @param path Ruta.
+ * @param out  Destino; queda vacio si no se pudo leer.
+ * @return @c true si se leyo entero.
+ */
+static bool read_file_bytes(const std::string &path, std::vector<uint8_t> &out) {
+    out.clear();
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (!f.is_open()) return false;
+    const std::streamoff tam = f.tellg();
+    if (tam < 0) return false;
+    out.resize(static_cast<size_t>(tam));
+    if (out.empty()) return true;
+    f.seekg(0);
+    f.read(reinterpret_cast<char *>(out.data()),
+           static_cast<std::streamsize>(out.size()));
+    if (!f) {
+        out.clear();
+        return false;
+    }
+    return true;
 }
 } // namespace fs
 

@@ -387,3 +387,33 @@ es = "este procesador tiene: {0}"
 [VX7024]
 en = "a catch below takes it, so the program continues"
 es = "un catch de mas abajo se hace cargo, asi que el programa continua"
+
+# --- cache de hechos del ASA (VXA036-VXA042) ---
+
+[VXA036]
+en = "asa: no facts file next to the module"
+es = "asa: no hay fichero de hechos junto al modulo"
+
+[VXA037]
+en = "asa: the facts file is empty"
+es = "asa: el fichero de hechos esta vacio"
+
+[VXA038]
+en = "asa: that is not a facts file"
+es = "asa: eso no es un fichero de hechos"
+
+[VXA039]
+en = "asa: the facts file was written by another version of the container"
+es = "asa: el fichero de hechos lo escribio otra version del contenedor"
+
+[VXA042]
+en = "asa: those facts describe another module (fingerprint mismatch)"
+es = "asa: esos hechos hablan de otro modulo (la huella no corresponde)"
+
+[VXA043]
+en = "asa: the facts file is truncated"
+es = "asa: el fichero de hechos esta truncado"
+
+[VXA044]
+en = "asa: the facts file could not be read whole"
+es = "asa: el fichero de hechos no se pudo leer entero"

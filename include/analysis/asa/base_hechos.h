@@ -82,6 +82,16 @@ extern const char *const kProductorBucles;
 extern const char *const kUnidadModulo;
 
 /**
+ * @brief Da de alta los nombres de arriba como CANONICOS.
+ *
+ * Perezoso y a peticion: hace falta antes de leer hechos de disco, porque ASA
+ * compara productores por direccion y una cadena recien leida no se
+ * reconoceria a si misma.  No es un inicializador estatico a proposito --
+ * reservar memoria antes de @c main corre las direcciones de todo lo demas.
+ */
+void register_asa_canonical_names();
+
+/**
  * @brief Una entrada de la base, tal y como se vuelca.
  *
  * Es DATO, no frase: quien quiera enseñarlo lo formatea.  Lleva el sello de ASA

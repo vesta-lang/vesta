@@ -252,7 +252,7 @@ endif ()
 # ---------------------------------------------------------------------------
 add_library(vxdbg_lib STATIC
     src/vxdbg/ids.cpp
-    src/vxdbg/serialize.cpp
+    src/util/serialize.cpp
     src/vxdbg/store.cpp
     src/vxdbg/lowering_map.cpp
     src/vxdbg/backend_meta.cpp
@@ -981,7 +981,7 @@ target_include_directories(test_vxdbg_core PRIVATE ${VM_INCLUDES})
 # contra uno no diria nada del otro.
 add_executable(test_vxdbg_store tests/vxdbg/test_vxdbg_store.cpp
                                 src/vxdbg/ids.cpp
-                                src/vxdbg/serialize.cpp
+                                src/util/serialize.cpp
                                 src/vxdbg/store.cpp)
 target_include_directories(test_vxdbg_store PRIVATE ${VM_INCLUDES})
 
@@ -991,7 +991,7 @@ target_include_directories(test_vxdbg_store PRIVATE ${VM_INCLUDES})
 # por otro.
 add_executable(test_vxdbg_codec tests/vxdbg/test_vxdbg_codec.cpp
                                 src/vxdbg/ids.cpp
-                                src/vxdbg/serialize.cpp
+                                src/util/serialize.cpp
                                 src/vxdbg/store.cpp
                                 src/vxdbg/lowering_map.cpp
                                 src/vxdbg/codec_source.cpp
@@ -1019,7 +1019,7 @@ set_target_properties(test_vxdbg_frontend PROPERTIES
 
 add_executable(test_vxdbg_resolve tests/vxdbg/test_vxdbg_resolve.cpp
                                   src/vxdbg/ids.cpp
-                                  src/vxdbg/serialize.cpp
+                                  src/util/serialize.cpp
                                   src/vxdbg/store.cpp
                                   src/vxdbg/lowering_map.cpp
                                   src/vxdbg/backend_meta.cpp
@@ -1324,6 +1324,18 @@ if (WIN32)
     target_link_libraries(test_asa_fact_store PRIVATE vesta_openssl ws2_32 synchronization)
 else ()
     target_link_libraries(test_asa_fact_store PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+add_executable(test_asa_fact_file tests/analysis/test_asa_fact_file.cpp)
+target_include_directories(test_asa_fact_file PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_asa_fact_file PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_asa_fact_file PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_asa_fact_file PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_asa_fact_file PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
 add_executable(test_jit_facts tests/jit/test_jit_facts.cpp)

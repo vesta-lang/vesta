@@ -6,15 +6,15 @@
  */
 
 /**
- * @file serialize.cpp
+ * @file util/serialize.cpp
  * @brief Implementacion de la escritura y lectura de bytes.
  */
 
-#include "vxdbg/serialize.h"
+#include "util/serialize.h"
 
 #include <cstring>
 
-namespace vxdbg {
+namespace util {
 
 // ---------------------------------------------------------------------------
 //  Escritura
@@ -54,15 +54,17 @@ void ByteWriter::str(const std::string &s) {
     raw(s.data(), s.size());
 }
 
-void ByteWriter::hash(const ContentHash &h) {
-    u64(h.lo);
-    u64(h.hi);
-}
-
 void ByteWriter::raw(const void *data, size_t size) {
     if (size == 0) return;
     const auto *p = static_cast<const uint8_t *>(data);
     buf_.insert(buf_.end(), p, p + size);
+}
+
+void ByteWriter::patch_u32(size_t pos, uint32_t v) {
+    if (pos + 4 > buf_.size()) return;
+    for (int i = 0; i < 4; ++i)
+        buf_[pos + static_cast<size_t>(i)] =
+            static_cast<uint8_t>((v >> (8 * i)) & 0xFF);
 }
 
 // ---------------------------------------------------------------------------
@@ -133,13 +135,6 @@ std::string ByteReader::str() {
     return s;
 }
 
-ContentHash ByteReader::hash() {
-    ContentHash h;
-    h.lo = u64();
-    h.hi = u64();
-    return h;
-}
-
 bool ByteReader::raw(void *out, size_t size) {
     if (size == 0) return true;
     if (!want(size)) return false;
@@ -148,4 +143,13 @@ bool ByteReader::raw(void *out, size_t size) {
     return true;
 }
 
-} // namespace vxdbg
+void ByteReader::seek(size_t pos) {
+    if (!ok_) return;
+    if (pos > size_) {
+        ok_ = false;
+        return;
+    }
+    pos_ = pos;
+}
+
+} // namespace util

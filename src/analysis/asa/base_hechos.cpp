@@ -12,6 +12,7 @@
 
 #include "analysis/asa/base_hechos.h"
 
+#include "analysis/asa/fact_store.h"
 #include "ir/ssa_ir.h"
 
 #include <algorithm>
@@ -27,6 +28,25 @@ const char *const kProductorMemoria = "asa.memoria";
 const char *const kProductorFrontera = "asa.frontera";
 const char *const kProductorBucles = "asa.bucles";
 const char *const kUnidadModulo = "<modulo>";
+
+void register_asa_canonical_names() {
+    /* Perezoso y una sola vez, NO un objeto global.  Un inicializador estatico
+     * reservaria memoria antes de main aunque nadie fuera a leer hechos de
+     * disco, y eso corre las direcciones de todo lo que se reserve despues --
+     * en un programa que dependa de la alineacion de lo suyo, algo asi cambia
+     * si funciona o no.  Ademas evita el orden de inicializacion entre ficheros
+     * objeto, que aqui importa porque la tabla vive en otro. */
+    static const bool hecho = [] {
+        register_canonical_name(kProductorEstructura);
+        register_canonical_name(kProductorRangos);
+        register_canonical_name(kProductorMemoria);
+        register_canonical_name(kProductorFrontera);
+        register_canonical_name(kProductorBucles);
+        register_canonical_name(kUnidadModulo);
+        return true;
+    }();
+    (void)hecho;
+}
 
 /// Marcadores de identidad para el gestor.  Uno por dominio: la cache va por
 /// (analisis, unidad), asi que dos dominios distintos no se pisan.

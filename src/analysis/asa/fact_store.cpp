@@ -37,6 +37,27 @@ const char *nombre_clase_sujeto(Sujeto::Clase c) {
     }
 }
 
+/* Los nombres canonicos son POCOS -- un punado de productores y dominios -- y
+ * se consultan una vez por hecho leido.  Tabla asociativa, no lista: la lectura
+ * de un modulo grande hace cientos de miles de consultas. */
+static std::unordered_map<std::string, const char *> &tabla_canonicos() {
+    static std::unordered_map<std::string, const char *> t;
+    return t;
+}
+
+void register_canonical_name(const char *nombre) {
+    if (nombre == nullptr || nombre[0] == '\0') return;
+    /* El PRIMERO que se registra manda: si dos sitios dieran de alta el mismo
+     * texto con literales distintos, cambiar de opinion a mitad partiria la
+     * identidad justo de los hechos ya leidos. */
+    tabla_canonicos().emplace(std::string(nombre), nombre);
+}
+
+const char *canonical_name(const std::string &s) {
+    auto it = tabla_canonicos().find(s);
+    return it == tabla_canonicos().end() ? nullptr : it->second;
+}
+
 const char *FactStore::internar(const std::string &s) {
     auto it = internados_.find(s);
     if (it != internados_.end()) return it->second;

@@ -47,6 +47,23 @@ namespace analysis {
 namespace asa {
 
 /**
+ * @brief Da de alta un nombre CANONICO (un literal estable y unico).
+ *
+ * ASA identifica al productor por la DIRECCION del literal
+ * (@c Dependencias::depende_de compara punteros), y eso funciona mientras los
+ * hechos nacen en memoria.  En cuanto uno vuelve de disco su nombre es una
+ * cadena recien leida: apuntaria a otro sitio y el mismo productor dejaria de
+ * reconocerse a si mismo.  Por eso al leer se devuelven los nombres conocidos a
+ * su literal, y quien tenga uno lo da de alta aqui.
+ *
+ * @param nombre Literal estable (vive lo que el programa).
+ */
+void register_canonical_name(const char *nombre);
+
+/// El literal canonico de @p s, o @c nullptr si nadie lo ha dado de alta.
+const char *canonical_name(const std::string &s);
+
+/**
  * @brief Almacen de hechos: se anaden y se consultan.
  *
  * Solo CRECE mientras se produce.  Un hecho no se corrige: si algo cambia, se

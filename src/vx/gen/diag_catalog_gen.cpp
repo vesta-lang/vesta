@@ -107,8 +107,15 @@ const CatEntry kEntries[] = {
     {"VXA033", {"unclassified", "sin clasificar"}},
     {"VXA034", {"the reason is not on record", "no consta el motivo"}},
     {"VXA035", {"it is a jump ('{0}'): control flow is the IR's, not one instruction's -- that is for the general lift, which builds the graph", "es un salto ('{0}'): el flujo de control lo lleva el IR, no una instruccion suelta -- eso es del elevado general, que construye el grafo"}},
+    {"VXA036", {"asa: no facts file next to the module", "asa: no hay fichero de hechos junto al modulo"}},
+    {"VXA037", {"asa: the facts file is empty", "asa: el fichero de hechos esta vacio"}},
+    {"VXA038", {"asa: that is not a facts file", "asa: eso no es un fichero de hechos"}},
+    {"VXA039", {"asa: the facts file was written by another version of the container", "asa: el fichero de hechos lo escribio otra version del contenedor"}},
+    {"VXA042", {"asa: those facts describe another module (fingerprint mismatch)", "asa: esos hechos hablan de otro modulo (la huella no corresponde)"}},
+    {"VXA043", {"asa: the facts file is truncated", "asa: el fichero de hechos esta truncado"}},
+    {"VXA044", {"asa: the facts file could not be read whole", "asa: el fichero de hechos no se pudo leer entero"}},
 };
-const int kEntryCount = 87;
+const int kEntryCount = 94;
 
 } // namespace
 
