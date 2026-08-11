@@ -109,6 +109,13 @@ static bool jit_no_inline_deref() {
     return off;
 }
 
+static bool vreg_bail(const char *fn, int linea) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "sin motivo escrito (selector:%d)", linea);
+    vreg_dbg(fn, buf);
+    return false;
+}
+
 /** @brief Diagnostico/A-B: VESTA_JIT_NO_INLINE_ALLOC=1 enruta RAW_ALLOC al
  *  CALL @c vrt_raw_alloc en vez de inline-ar el fast-path del slab (para
  *  medir el inline vs el runtime, o aislar un bug del codegen inline). */
@@ -679,7 +686,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     static_cast<uint8_t>(StackmapGcKind::HANDLE) + 1u;
 
     const size_t NB = fn.blocks.size();
-    if (NB == 0) return false;
+    if (NB == 0) return vreg_bail(fn.name.c_str(), __LINE__);
 
     /* Un label por bloque (MBlock index == IR block id). */
     std::vector<MLabelId> blbl(NB);
@@ -1525,7 +1532,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
 
             if (cmp_cond(in.op, cc)) {
                 flush_pending();
-                if (in.operands.size() != 2) return false;
+                if (in.operands.size() != 2) return vreg_bail(fn.name.c_str(), __LINE__);
                 /* Diferir: quiza se fusione con el BR_COND siguiente. */
                 has_pend = true;
                 pend_cc = cc;
@@ -1732,7 +1739,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::OR:
             case ir::IrOp::XOR: {
                 flush_pending();
-                if (in.operands.size() != 2) return false;
+                if (in.operands.size() != 2) return vreg_bail(fn.name.c_str(), __LINE__);
                 (void)bin_mop(in.op, mop);
                 /* P3 imm-forms: operando CONST (i32) -> forma inmediata,
                  * evita materializar el const en un registro (y para IMUL
@@ -1751,7 +1758,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                 return true;
                             }
                         }
-                        return false;
+                        return false; // no es constante: no es un abandono
                     };
                     const bool commut = (in.op != ir::IrOp::SUB);
                     int64_t c;
@@ -1787,7 +1794,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 }
                 if (in.operands.size() != 2 || in.dst == ir::IR_NO_VALUE)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const bool is_f32 = (in.type == ir::IrType::F32);
                 MOp fop;
                 if (vx_scalar) {
@@ -1840,7 +1847,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 }
                 if (in.operands.size() != 3 || in.dst == ir::IR_NO_VALUE)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const bool is_f32 = (in.type == ir::IrType::F32);
                 O.push_back(MInstr::make_unary(is_f32 ? MOp::MOVSS : MOp::MOVSD,
                                                vrt(in.dst),
@@ -1859,7 +1866,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 }
                 if (in.operands.size() != 1 || in.dst == ir::IR_NO_VALUE)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const MOp fop =
                     (in.type == ir::IrType::F32) ? MOp::SQRTSS : MOp::SQRTSD;
                 O.push_back(MInstr::make_unary(fop, vrt(in.dst),
@@ -1879,7 +1886,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 }
                 if (in.operands.size() != 2 || in.dst == ir::IR_NO_VALUE)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const bool is_f32 = (in.type == ir::IrType::F32);
                 const MOp fop = (in.op == ir::IrOp::FMIN)
                                     ? (is_f32 ? MOp::MINSS : MOp::MINSD)
@@ -1903,7 +1910,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 }
                 if (in.operands.size() != 1 || in.dst == ir::IR_NO_VALUE)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const bool is_f32 = (in.type == ir::IrType::F32);
                 const uint8_t mode = (in.op == ir::IrOp::FROUND)  ? 0u
                                      : (in.op == ir::IrOp::FFLOOR) ? 1u
@@ -1934,7 +1941,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 }
                 if (in.operands.size() != 1 || in.dst == ir::IR_NO_VALUE)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const bool is_f32 = (in.type == ir::IrType::F32);
                 const bool is_abs = (in.op == ir::IrOp::FABS);
                 /* FNEG: signbit (XOR para invertir).  FABS: ~signbit (AND para
@@ -1972,7 +1979,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 }
                 if (in.operands.size() != 1 || in.dst == ir::IR_NO_VALUE)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const MOp cop =
                     (in.type == ir::IrType::F32) ? MOp::CVTSI2SS : MOp::CVTSI2SD;
                 O.push_back(MInstr::make_unary(cop, vrt(in.dst),
@@ -1988,7 +1995,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 }
                 if (in.operands.size() != 1 || in.dst == ir::IR_NO_VALUE)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const ir::IrType st = fn.values[in.operands[0]].type;
                 const MOp cop =
                     (st == ir::IrType::F32) ? MOp::CVTTSS2SI : MOp::CVTTSD2SI;
@@ -2004,7 +2011,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 }
                 if (in.operands.size() != 1 || in.dst == ir::IR_NO_VALUE)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 O.push_back(MInstr::make_unary(MOp::CVTSS2SD, vrt(in.dst),
                                                vrt(in.operands[0])));
                 if (vx_scalar) O.back().flags |= MI_FLAG_VX_SCALAR;
@@ -2017,7 +2024,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 }
                 if (in.operands.size() != 1 || in.dst == ir::IR_NO_VALUE)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 O.push_back(MInstr::make_unary(MOp::CVTSD2SS, vrt(in.dst),
                                                vrt(in.operands[0])));
                 if (vx_scalar) O.back().flags |= MI_FLAG_VX_SCALAR;
@@ -2047,7 +2054,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 }
                 if (in.operands.size() != 2 || in.dst == ir::IR_NO_VALUE)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const ir::IrType st = fn.values[in.operands[0]].type;
                 const MOp ucmp =
                     (st == ir::IrType::F32) ? MOp::UCOMISS : MOp::UCOMISD;
@@ -2092,7 +2099,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false; // gated off -> slots
                 }
                 if (in.operands.size() != 2 || in.dst == ir::IR_NO_VALUE)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 MInstr dm{};
                 dm.op = MOp::DIVMOD_V;
                 dm.dst = vr(in.dst);
@@ -2116,7 +2123,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::NOT: {
                 flush_pending();
                 if (in.operands.size() != 1 || in.dst == ir::IR_NO_VALUE)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const MOp mop = (in.op == ir::IrOp::NEG) ? MOp::NEG : MOp::NOT;
                 O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
                                                vr(in.operands[0])));
@@ -2131,7 +2138,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::SHR:
             case ir::IrOp::SAR: {
                 flush_pending();
-                if (in.operands.size() != 2) return false;
+                if (in.operands.size() != 2) return vreg_bail(fn.name.c_str(), __LINE__);
                 const ir::IrValueId amt_v = in.operands[1];
                 if (amt_v < v_is_const.size() && v_is_const[amt_v]) {
                     /* Cuenta INMEDIATA (caso comun): shift dst, imm8. */
@@ -2148,7 +2155,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * cuenta en un tmp de vida corta pineado a RCX y emitimos el
                  * pseudo SHIFT_V (el rewrite lo expande con R11 como reg de
                  * trabajo -> sin clobbear vivos).  NUNCA cae al interprete. */
-                if (in.dst == ir::IR_NO_VALUE) return false;
+                if (in.dst == ir::IR_NO_VALUE) return vreg_bail(fn.name.c_str(), __LINE__);
                 const ir::IrValueId cnt = new_tmp();
                 O.push_back(MInstr::make_unary(MOp::MOV, vr(cnt),
                                                vr(in.operands[1])));
@@ -2173,7 +2180,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::IABS: { /* |a| = (a^(a>>63)) - (a>>63) */
                 flush_pending();
                 if (in.dst == ir::IR_NO_VALUE || in.operands.size() != 1)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const ir::IrValueId t = new_tmp();
                 O.push_back(
                     MInstr::make_unary(MOp::MOV, vr(t), vr(in.operands[0])));
@@ -2195,7 +2202,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * IMAX->L, IMINU->A, IMAXU->B (signed vs unsigned). */
                 flush_pending();
                 if (in.dst == ir::IR_NO_VALUE || in.operands.size() != 2)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const ir::IrValueId a = in.operands[0], b = in.operands[1];
                 const MCond cc = (in.op == ir::IrOp::IMIN)    ? MCond::G
                                  : (in.op == ir::IrOp::IMAX)  ? MCond::L
@@ -2219,7 +2226,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * cond es booleano 0/1 (lo producen los CMP_*). */
                 flush_pending();
                 if (in.dst == ir::IR_NO_VALUE || in.operands.size() != 3)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const ir::IrValueId cond = in.operands[0];
                 const ir::IrValueId a = in.operands[1], b = in.operands[2];
                 O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst), vr(b)));
@@ -2236,7 +2243,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                        slot) */
                 flush_pending();
                 if (in.dst == ir::IR_NO_VALUE || in.operands.size() != 1)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 O.push_back(MInstr::make_unary(MOp::LZCNT, vr(in.dst),
                                                vr(in.operands[0])));
                 O.push_back(
@@ -2251,7 +2258,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::POPCNT: {
                 flush_pending();
                 if (in.dst == ir::IR_NO_VALUE || in.operands.size() != 1)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const MOp mop = (in.op == ir::IrOp::CLZ)   ? MOp::LZCNT
                                 : (in.op == ir::IrOp::CTZ) ? MOp::TZCNT
                                                            : MOp::POPCNT;
@@ -2262,7 +2269,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::BYTESWAP: { /* mov dst, src; bswap dst */
                 flush_pending();
                 if (in.dst == ir::IR_NO_VALUE || in.operands.size() != 1)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
                                                vr(in.operands[0])));
                 O.push_back(
@@ -2277,7 +2284,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * al interprete. */
                 flush_pending();
                 if (in.dst == ir::IR_NO_VALUE || in.operands.size() != 2)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const ir::IrValueId cnt = in.operands[1];
                 if (cnt < v_is_const.size() && v_is_const[cnt]) {
                     const int32_t amt = static_cast<int32_t>(v_const[cnt] & 63);
@@ -2376,9 +2383,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::CARRYOF: {
                 flush_pending();
                 if (in.dst == ir::IR_NO_VALUE || in.operands.empty())
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 auto it_cs = carry_src.find(in.operands[0]);
-                if (it_cs == carry_src.end()) return false;
+                if (it_cs == carry_src.end()) return vreg_bail(fn.name.c_str(), __LINE__);
                 // Suma: desbordo si el resultado quedo por debajo del primer
                 // sumando.  Resta: pidio prestado si el minuendo era menor que
                 // el resultado.  En ambos casos, `setb` tras la comparacion.
@@ -2446,7 +2453,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::ATOMIC_LD: {
                 flush_pending();
                 if (in.operands.size() != 1 || in.dst == ir::IR_NO_VALUE)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 /* mov dst, [addr] (load 64-bit alineado = atomico en x86). */
                 O.push_back(
                     MInstr::make_load(vr(in.dst), vr(in.operands[0]), 8, false));
@@ -2454,7 +2461,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             }
             case ir::IrOp::ATOMIC_ST: {
                 flush_pending();
-                if (in.operands.size() != 2) return false;
+                if (in.operands.size() != 2) return vreg_bail(fn.name.c_str(), __LINE__);
                 /* mov [addr], val (store alineado; release en x86-TSO). */
                 O.push_back(MInstr::make_store(vr(in.operands[0]),
                                                vr(in.operands[1]), 8));
@@ -2463,7 +2470,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::ATOMIC_ADD: {
                 flush_pending();
                 if (in.operands.size() != 2 || in.dst == ir::IR_NO_VALUE)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 /* dst = delta; lock xadd [addr], dst (dst = valor viejo). */
                 O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
                                                vr(in.operands[1])));
@@ -2477,7 +2484,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::ATOMIC_CAS: {
                 flush_pending();
                 if (in.operands.size() != 3 || in.dst == ir::IR_NO_VALUE)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 /* rax_v = expected (precoloreado a RAX, obligado por cmpxchg);
                  * lock cmpxchg [addr], desired; dst = rax_v (viejo). */
                 const ir::IrValueId rax_v = new_tmp();
@@ -2823,7 +2830,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             }
             case ir::IrOp::BITCAST: {
                 flush_pending();
-                if (in.operands.size() != 1) return false;
+                if (in.operands.size() != 1) return vreg_bail(fn.name.c_str(), __LINE__);
                 /* BITCAST reinterpreta bits sin convertir.  Entre el banco GP
                  * y el XMM hay que MOVER los bits con MOVQ (no un MOV GP->GP).
                  * Caso clave: enum/optional con payload f64 -> el payload se
@@ -2861,7 +2868,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::CAST:
             case ir::IrOp::TRUNC: {
                 flush_pending();
-                if (in.operands.size() != 1) return false;
+                if (in.operands.size() != 1) return vreg_bail(fn.name.c_str(), __LINE__);
                 const ir::IrType st = fn.values[in.operands[0]].type;
                 const ir::IrType dt = in.type;
                 if (ir_type_is_float(st) || ir_type_is_float(dt)) {
@@ -2935,7 +2942,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             }
 
             case ir::IrOp::BR_COND: {
-                if (in.operands.size() != 1) return false;
+                if (in.operands.size() != 1) return vreg_bail(fn.name.c_str(), __LINE__);
                 const ir::IrBlockId tt = in.target_block; // true
                 const ir::IrBlockId tf = in.false_block;  // false
                 /* Tras el critical-edge splitting, ningun target de un
@@ -3074,7 +3081,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::GETSTATIC: {
                 flush_pending();
                 if (in.dst == ir::IR_NO_VALUE || in.operands.empty())
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const int32_t off = static_cast<int32_t>(in.imm);
                 const ir::IrValueId t_cls = new_tmp();
                 O.push_back(MInstr::make_unary(MOp::MOV, vr(t_cls),
@@ -3092,7 +3099,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             }
             case ir::IrOp::SETSTATIC: {
                 flush_pending();
-                if (in.operands.size() < 2) return false;
+                if (in.operands.size() < 2) return vreg_bail(fn.name.c_str(), __LINE__);
                 const int32_t off = static_cast<int32_t>(in.imm);
                 const ir::IrValueId t_cls = new_tmp();
                 O.push_back(MInstr::make_unary(MOp::MOV, vr(t_cls),
@@ -3145,7 +3152,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * (is_host_ptr=false) cae a fallback (necesita traduccion). */
             case ir::IrOp::LOAD: {
                 flush_pending();
-                if (in.operands.size() != 1) return false;
+                if (in.operands.size() != 1) return vreg_bail(fn.name.c_str(), __LINE__);
                 /*  AS inc.5: LOAD desde el alloca de un binding ->
                  * leer el output del inline-asm: MOV dst <- vbind. */
                 if (in.dst != ir::IR_NO_VALUE &&
@@ -3282,7 +3289,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * los vregs operandos es ANTES de clobear RSI/RDI/RCX. */
             case ir::IrOp::MEMCPY: {
                 flush_pending();
-                if (in.operands.size() != 3) return false;
+                if (in.operands.size() != 3) return vreg_bail(fn.name.c_str(), __LINE__);
                 /* 1. dst/src a los scratch reservados (R10/R11): el rewrite
                  *    resuelve cada vr() a su fisico/spill; como el DESTINO es
                  *    un reg fisico, emite MOV reg,reg o MOV reg,[rbp-off]
@@ -3348,7 +3355,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              *   POP RAX ; POP RCX ; POP RDI */
             case ir::IrOp::MEMSET: {
                 flush_pending();
-                if (in.operands.size() != 3) return false;
+                if (in.operands.size() != 3) return vreg_bail(fn.name.c_str(), __LINE__);
                 O.push_back(MInstr::make_unary(MOp::MOV,
                                                MOperand::make_reg(MReg::R10, 8),
                                                vr(in.operands[0]))); // dst
@@ -3396,11 +3403,11 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * igual que VEC_BINOP (clobber set formal). */
             case ir::IrOp::VEC_UNOP: {
                 flush_pending();
-                if (in.operands.size() != 2) return false;
+                if (in.operands.size() != 2) return vreg_bail(fn.name.c_str(), __LINE__);
                 const uint64_t chunk_w = in.imm & 0xFF; // 16/32/64
                 const uint64_t subop = (in.imm >> 8) & 0xFF;
                 if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 if (!fp_ok || in.type != ir::IrType::F64) return false; // f64
                 /* mismo chunk/descompone que VEC_BINOP: emite al ancho del host
                  * (eff_w), descomponiendo el chunk en n_pieces. */
@@ -3412,7 +3419,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     tri_sel.scratch[static_cast<size_t>(RegClass::GP)];
                 const auto &fpsc =
                     tri_sel.scratch[static_cast<size_t>(RegClass::FP)];
-                if (gpsc.size() < 2 || fpsc.size() < 2) return false;
+                if (gpsc.size() < 2 || fpsc.size() < 2) return vreg_bail(fn.name.c_str(), __LINE__);
                 const MReg gp0 = static_cast<MReg>(gpsc[0]);
                 const MReg gp1 = static_cast<MReg>(gpsc[1]);
                 const MReg fp0 = static_cast<MReg>(fpsc[0]);
@@ -3462,7 +3469,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     } else if (subop == 3) {
                         O.push_back(MInstr::make_unary(MOp::SQRTPD, x0, x0));
                     } else {
-                        return false;
+                        return vreg_bail(fn.name.c_str(), __LINE__);
                     }
                     // store -> dst
                     O.push_back(MInstr::make_unary(MOp::MOV,
@@ -3481,11 +3488,11 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * tiene vivos) y dst/a/b a R10/R11 (scratch GP no asignable). */
             case ir::IrOp::VEC_BINOP: {
                 flush_pending();
-                if (in.operands.size() != 3) return false;
+                if (in.operands.size() != 3) return vreg_bail(fn.name.c_str(), __LINE__);
                 const uint64_t chunk_w = in.imm & 0xFF; // 16/32/64 (matcher)
                 const uint64_t subop = (in.imm >> 8) & 0xFF;
                 if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 /* El matcher horneo un chunk de @c chunk_w bytes; lo emitimos
                  * con el ancho SIMD del HOST (16=SSE2/32=AVX2/64=AVX512),
                  * descomponiendo en @c n_pieces ops si el chunk es mas ancho.
@@ -3551,7 +3558,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     tri_sel.scratch[static_cast<size_t>(RegClass::GP)];
                 const auto &fpsc =
                     tri_sel.scratch[static_cast<size_t>(RegClass::FP)];
-                if (gpsc.size() < 2 || fpsc.size() < 2) return false;
+                if (gpsc.size() < 2 || fpsc.size() < 2) return vreg_bail(fn.name.c_str(), __LINE__);
                 const MReg gp0 = static_cast<MReg>(gpsc[0]);
                 const MReg gp1 = static_cast<MReg>(gpsc[1]);
                 const MReg fp0 = static_cast<MReg>(fpsc[0]);
@@ -3607,12 +3614,12 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * x0,[a]; <op> x0,x1; MOVUPD [dst],x0.  Solo f64 por ahora. */
             case ir::IrOp::VEC_BINOP_S: {
                 flush_pending();
-                if (in.operands.size() != 3) return false;
-                if (!fp_ok) return false;
+                if (in.operands.size() != 3) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (!fp_ok) return vreg_bail(fn.name.c_str(), __LINE__);
                 const uint64_t chunk_w = in.imm & 0xFF;
                 const uint64_t subop = (in.imm >> 8) & 0xFF;
                 if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 // op packed segun el tipo de elemento.  El escalar ya viene
                 // REPLICADO a 64 bits (matcher) para los enteros -> un broadcast
                 // de lane de 64 bits (UNPCKLPD/VBROADCASTSD) llena todos los
@@ -3635,26 +3642,26 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                            in.type == ir::IrType::U64) {
                     if (subop == 0) pop = MOp::PADDQ;
                     else if (subop == 1) pop = MOp::PSUBQ;
-                    else return false;
+                    else return vreg_bail(fn.name.c_str(), __LINE__);
                 } else if (in.type == ir::IrType::I32 ||
                            in.type == ir::IrType::U32) {
                     if (subop == 0) pop = MOp::PADDD;
                     else if (subop == 1) pop = MOp::PSUBD;
                     else if (subop == 2) pop = MOp::PMULLD;
-                    else return false;
+                    else return vreg_bail(fn.name.c_str(), __LINE__);
                 } else if (in.type == ir::IrType::I16 ||
                            in.type == ir::IrType::U16) {
                     if (subop == 0) pop = MOp::PADDW;
                     else if (subop == 1) pop = MOp::PSUBW;
                     else if (subop == 2) pop = MOp::PMULLW;
-                    else return false;
+                    else return vreg_bail(fn.name.c_str(), __LINE__);
                 } else if (in.type == ir::IrType::I8 ||
                            in.type == ir::IrType::U8) {
                     if (subop == 0) pop = MOp::PADDB;
                     else if (subop == 1) pop = MOp::PSUBB;
-                    else return false;
+                    else return vreg_bail(fn.name.c_str(), __LINE__);
                 } else {
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 }
                 // HOIST: el escalar ya esta DIFUNDIDO en XMM13 por un VEC_BCAST
                 // del preheader (imm bit 16).  Asi el cuerpo del loop es VX PURO
@@ -3673,7 +3680,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     tri_sel.scratch[static_cast<size_t>(RegClass::GP)];
                 const auto &fpsc =
                     tri_sel.scratch[static_cast<size_t>(RegClass::FP)];
-                if (gpsc.empty() || fpsc.size() < 2) return false;
+                if (gpsc.empty() || fpsc.size() < 2) return vreg_bail(fn.name.c_str(), __LINE__);
                 const MReg gp0 = static_cast<MReg>(gpsc[0]);
                 const MReg fp0 = static_cast<MReg>(fpsc[0]);
                 const MReg fp1 = static_cast<MReg>(fpsc[1]);
@@ -3750,20 +3757,20 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * Requiere AVX (VFMADD); sin el, bail -> interp. */
             case ir::IrOp::VEC_FMA_S: {
                 flush_pending();
-                if (in.operands.size() != 3) return false;
-                if (!fp_ok) return false;
+                if (in.operands.size() != 3) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (!fp_ok) return vreg_bail(fn.name.c_str(), __LINE__);
                 const uint64_t chunk_w = in.imm & 0xFF;
                 if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const bool is_f32 = (in.type == ir::IrType::F32);
                 if (in.type != ir::IrType::F32 && in.type != ir::IrType::F64)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const MOp fma =
                     is_f32 ? MOp::VFMADD231PS : MOp::VFMADD231PD;
                 const uint64_t host_w = vec_host_w();
                 if (host_w < 32) return false; // sin AVX no hay VFMADD
                 const uint64_t eff_w = (chunk_w < host_w) ? chunk_w : host_w;
-                if (eff_w < 32) return false;
+                if (eff_w < 32) return vreg_bail(fn.name.c_str(), __LINE__);
                 const uint64_t n_pieces = chunk_w / eff_w;
                 const bool hoisted = (in.imm >> 16) & 1;
                 if (!hoisted) return false; // el matcher siempre lo hoista
@@ -3774,7 +3781,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     tri_sel.scratch[static_cast<size_t>(RegClass::GP)];
                 const auto &fpsc =
                     tri_sel.scratch[static_cast<size_t>(RegClass::FP)];
-                if (gpsc.empty() || fpsc.size() < 2) return false;
+                if (gpsc.empty() || fpsc.size() < 2) return vreg_bail(fn.name.c_str(), __LINE__);
                 const MReg gp0 = static_cast<MReg>(gpsc[0]);
                 // c=fp0 (consistente con VEC_BINOP/BINOP_S para la cadena
                 // register-resident); a=fp1.
@@ -3824,11 +3831,11 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * AVX<->SSE aqui (fuera del loop) es despreciable. */
             case ir::IrOp::VEC_BCAST: {
                 flush_pending();
-                if (in.operands.empty()) return false;
-                if (!fp_ok) return false;
+                if (in.operands.empty()) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (!fp_ok) return vreg_bail(fn.name.c_str(), __LINE__);
                 const uint64_t chunk_w = in.imm & 0xFF;
                 if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const bool is_f64 = (in.type == ir::IrType::F64);
                 const bool is_f32 = (in.type == ir::IrType::F32);
                 const uint64_t host_w = vec_host_w();
@@ -3890,7 +3897,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::VEC_FMA: {
                 flush_pending();
                 if (in.operands.size() != 3 && in.operands.size() != 4)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const bool fma3 = (in.operands.size() == 4); // element-wise
                 const int o_dst = 0;                  // destino (c o acc)
                 const int o_add = fma3 ? 1 : 0;       // sumando (d o acc)
@@ -3898,8 +3905,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const int o_b = fma3 ? 3 : 2;         // multiplicando b (memoria)
                 const uint64_t chunk_w = in.imm & 0xFF;
                 if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
-                    return false;
-                if (!fp_ok) return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
+                if (!fp_ok) return vreg_bail(fn.name.c_str(), __LINE__);
                 // Bit 8 del imm = variante SUB (c[i]=a[i]*b[i]-d[i]).  Solo en
                 // el caso element-wise 4-op (la reduccion acc-=a*b seria
                 // VFNMADD, fuera de este patron).
@@ -3909,7 +3916,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     fma = fma_sub ? MOp::VFMSUB231PD : MOp::VFMADD231PD;
                 else if (in.type == ir::IrType::F32)
                     fma = fma_sub ? MOp::VFMSUB231PS : MOp::VFMADD231PS;
-                else return false;
+                else return vreg_bail(fn.name.c_str(), __LINE__);
                 const uint64_t host_w =
                     vec_host_w();
                 // FMA requiere AVX (>=256); con host SSE2 solo, bail (el
@@ -3917,13 +3924,13 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 uint64_t emit_w = host_w;
                 if (emit_w < 32) return false; // sin AVX no hay VFMADD
                 const uint64_t eff_w = (chunk_w < emit_w) ? chunk_w : emit_w;
-                if (eff_w < 32) return false;
+                if (eff_w < 32) return vreg_bail(fn.name.c_str(), __LINE__);
                 const uint64_t n_pieces = chunk_w / eff_w;
                 const auto &gpsc =
                     tri_sel.scratch[static_cast<size_t>(RegClass::GP)];
                 const auto &fpsc =
                     tri_sel.scratch[static_cast<size_t>(RegClass::FP)];
-                if (gpsc.size() < 2 || fpsc.size() < 2) return false;
+                if (gpsc.size() < 2 || fpsc.size() < 2) return vreg_bail(fn.name.c_str(), __LINE__);
                 const MReg gp0 = static_cast<MReg>(gpsc[0]);
                 const MReg gp1 = static_cast<MReg>(gpsc[1]);
                 const MReg fp0 = static_cast<MReg>(fpsc[0]);
@@ -3971,7 +3978,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::VEC_ACC_COMBINE:
             case ir::IrOp::VEC_ACC_STORE: {
                 flush_pending();
-                if (!fp_ok) return false;
+                if (!fp_ok) return vreg_bail(fn.name.c_str(), __LINE__);
                 /* Estas operaciones acceden a la memoria DIRECTAMENTE con la
                  * direccion del puntero.  Eso solo vale si el puntero es del
                  * HOST: un array local (`T[N]` -> ALLOCA) vive en la pila de la
@@ -3987,7 +3994,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 }
                 const uint64_t chunk_w = in.imm & 0xFF;
                 if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const uint64_t host_w =
                     vec_host_w();
                 if (chunk_w > host_w) return false; // acc de 1 reg, sin split
@@ -3997,15 +4004,15 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                      in.type == ir::IrType::U64);
                 const bool is_i32 = (in.type == ir::IrType::I32 ||
                                      in.type == ir::IrType::U32);
-                if (!is_f32 && !is_f64 && !is_i64 && !is_i32) return false;
+                if (!is_f32 && !is_f64 && !is_i64 && !is_i32) return vreg_bail(fn.name.c_str(), __LINE__);
                 // FMA solo float (no hay multiplica-acumula entero packed).
                 if (in.op == ir::IrOp::VEC_ACC_FMA && !is_f32 && !is_f64)
-                    return false;
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const auto &gpsc =
                     tri_sel.scratch[static_cast<size_t>(RegClass::GP)];
                 const auto &fpsc =
                     tri_sel.scratch[static_cast<size_t>(RegClass::FP)];
-                if (gpsc.empty() || fpsc.empty()) return false;
+                if (gpsc.empty() || fpsc.empty()) return vreg_bail(fn.name.c_str(), __LINE__);
                 const MReg gp0 = static_cast<MReg>(gpsc[0]);
                 const MReg gp1 =
                     (gpsc.size() >= 2) ? static_cast<MReg>(gpsc[1]) : gp0;
@@ -4540,7 +4547,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * slot contiene null (root ignorado), nunca basura. */
             case ir::IrOp::GC_DEREF_HOST: {
                 flush_pending();
-                if (in.operands.size() != 1) return false;
+                if (in.operands.size() != 1) return vreg_bail(fn.name.c_str(), __LINE__);
                 if (in.dst == ir::IR_NO_VALUE) break; // lookup sin uso: no-op
                 if (!vm) {
                     // HOST_LEAF (AOT native, sin handle table): el "handle"
@@ -5228,7 +5235,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              *    que gc_handle_for_ptr); se queda como CALL. */
             case ir::IrOp::RAW_FREE: {
                 flush_pending();
-                if (in.operands.size() != 1) return false;
+                if (in.operands.size() != 1) return vreg_bail(fn.name.c_str(), __LINE__);
                 const ir::IrValueId p = in.operands[0];
                 if (p < v_is_host_alloca.size() && v_is_host_alloca[p])
                     break; // host-stack: no-op
@@ -6417,7 +6424,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * vreg solo soporta LOAD/STORE host).  No marcamos
                  * host-ness aqui: solo emitimos el inmediato. */
                 flush_pending();
-                if (in.dst == ir::IR_NO_VALUE) return false;
+                if (in.dst == ir::IR_NO_VALUE) return vreg_bail(fn.name.c_str(), __LINE__);
                 /* AOT (HOST_LEAF): el literal vive en .rodata, NO en vm_mem.
                  * Emitimos una referencia por NOMBRE ("rodata.<imm>") que el
                  * driver resuelve contra el offset de la entry en el pool de
@@ -6558,7 +6565,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * En VM_ABI (JIT) no hay secciones nativas -> 0. */
             case ir::IrOp::SECTION_REF: {
                 flush_pending();
-                if (in.dst == ir::IR_NO_VALUE) return false;
+                if (in.dst == ir::IR_NO_VALUE) return vreg_bail(fn.name.c_str(), __LINE__);
                 if (abi != AbiKind::HOST_LEAF) {
                     O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
                                                    MOperand::make_imm32(0)));
