@@ -6997,6 +6997,7 @@ locs_leidas(const IrFunction &fn, const analysis::IrFacts &facts,
                 analysis::effects::AnalysisCompleteness::Complete) {
                 leidas.is_top = true;
                 leidas.locs.clear();
+                leidas.indice_obsoleto(); // se toco el vector por fuera
                 return leidas;
             }
             leidas.unite(r.effects.mem.reads);

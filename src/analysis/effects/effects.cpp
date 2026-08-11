@@ -55,6 +55,7 @@ bool no_alias(const AbstractLoc &a, const AbstractLoc &b) { return !may_alias(a,
 // LocSet
 // --------------------------------------------------------------------------
 void LocSet::add(const AbstractLoc &l) {
+    idx_listo_ = false; // el conjunto cambia: el indice deja de valer.
     if (is_top) return;
     if (l.kind == AbstractLoc::Kind::None) return; // bottom: no aporta
     if (l.kind == AbstractLoc::Kind::Unknown) {    // top absorbente
@@ -68,6 +69,7 @@ void LocSet::add(const AbstractLoc &l) {
 }
 
 void LocSet::unite(const LocSet &other) {
+    idx_listo_ = false; // el conjunto cambia: el indice deja de valer.
     if (is_top) return;
     if (other.is_top) {
         is_top = true;
@@ -77,15 +79,60 @@ void LocSet::unite(const LocSet &other) {
     for (const AbstractLoc &l : other.locs) add(l);
 }
 
+/// Clave del cubo: clase y raiz juntas en un entero.
+static inline uint64_t clave_raiz_(AbstractLoc::Kind k, uint32_t id) {
+    return (static_cast<uint64_t>(static_cast<uint8_t>(k)) << 32) | id;
+}
+
+void LocSet::asegurar_indice_() const {
+    if (idx_listo_) return;
+    idx_listo_ = true;
+    idx_top_ = false;
+    idx_kinds_ = 0;
+    idx_kinds_gen_ = 0;
+    idx_raiz_.clear();
+    idx_raiz_.reserve(locs.size());
+    for (uint32_t i = 0; i < locs.size(); ++i) {
+        const AbstractLoc &e = locs[i];
+        if (e.kind == AbstractLoc::Kind::None) continue;
+        if (e.kind == AbstractLoc::Kind::Unknown) {
+            idx_top_ = true; // hay un TOP dentro: aliasa con cualquier cosa.
+            continue;
+        }
+        const uint32_t bit = 1u << static_cast<uint8_t>(e.kind);
+        idx_kinds_ |= bit;
+        if (e.id == LOC_GENERIC) {
+            idx_kinds_gen_ |= bit; // la clase entera, sin raiz concreta.
+            continue;
+        }
+        idx_raiz_[clave_raiz_(e.kind, e.id)].push_back(i);
+    }
+}
+
 bool LocSet::may_alias_any(const AbstractLoc &l) const {
     if (l.kind == AbstractLoc::Kind::None) return false;
-    if (is_top) return l.kind != AbstractLoc::Kind::None;
-    for (const AbstractLoc &e : locs)
-        if (may_alias(e, l)) return true;
+    if (is_top) return true; // el conjunto es TOP: aliasa cualquier cosa.
+    /* La misma regla que @ref may_alias, respondida sin recorrer el conjunto:
+     *   - un TOP dentro aliasa todo;
+     *   - si lo preguntado es TOP, aliasa con cualquier elemento que haya;
+     *   - la raiz generica de una clase aliasa toda su clase;
+     *   - y si no, solo pueden aliasar los de SU misma raiz, que es el cubo. */
+    asegurar_indice_();
+    if (idx_top_) return true;
+    if (l.kind == AbstractLoc::Kind::Unknown)
+        return idx_kinds_ != 0; // (los None no entran en el indice)
+    const uint32_t bit = 1u << static_cast<uint8_t>(l.kind);
+    if ((idx_kinds_gen_ & bit) != 0) return true;
+    if (l.id == LOC_GENERIC) return (idx_kinds_ & bit) != 0;
+    auto it = idx_raiz_.find(clave_raiz_(l.kind, l.id));
+    if (it == idx_raiz_.end()) return false;
+    for (uint32_t i : it->second)
+        if (may_alias(locs[i], l)) return true;
     return false;
 }
 
 void LocSet::subtract_concrete(const LocSet &other) {
+    idx_listo_ = false; // el conjunto cambia: el indice deja de valer.
     // Si el otro es top, NO sabemos que escribio exactamente -> no matamos nada
     // (sound: mantener las lecturas).
     if (is_top || other.is_top) return;

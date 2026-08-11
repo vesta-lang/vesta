@@ -29,6 +29,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace analysis {
@@ -100,18 +101,62 @@ struct LocSet {
     std::vector<AbstractLoc> locs; ///< vacio si is_top; sin duplicados; sin None.
 
     bool empty() const { return !is_top && locs.empty(); }
-    void clear() { is_top = false; locs.clear(); }
+    void clear() {
+        is_top = false;
+        locs.clear();
+        idx_listo_ = false;
+    }
 
     /// Anade @p l.  Unknown -> top; None -> no-op; resto -> insertar sin dup.
     void add(const AbstractLoc &l);
     /// Union en sitio (this |= other).
     void unite(const LocSet &other);
-    /// ¿algun elemento puede aliasar @p l?
+
+    /**
+     * @brief Avisa de que @c locs se ha tocado por fuera.
+     *
+     * @c locs es publico y hay codigo que lo manipula directamente; el indice
+     * no puede enterarse solo.  Quien lo toque llama a esto -- o mejor, usa
+     * @ref add / @ref unite / @ref clear, que ya lo hacen.
+     */
+    void indice_obsoleto() const { idx_listo_ = false; }
+    /**
+     * @brief ¿algun elemento puede aliasar @p l?
+     *
+     * Consulta INDEXADA por raiz.  Recorrer el vector entero por consulta
+     * costaba O(posiciones), y quien pregunta lo hace una vez por instruccion:
+     * con las dos cosas creciendo con el tamaño de la funcion, eso es
+     * cuadratico.  Medido en el barrido del DCE sobre una funcion de 1740
+     * instrucciones: 21 s de los 32 que tardaba compilar el programa entero.
+     *
+     * El indice sale de la propia regla de aliasing: dos posiciones solo pueden
+     * aliasar si comparten clase Y raiz -- salvo el TOP, que aliasa todo, y la
+     * raiz generica, que aliasa toda su clase.  Asi que basta mirar el cubo de
+     * la raiz preguntada mas los dos casos que abarcan mas.
+     */
     bool may_alias_any(const AbstractLoc &l) const;
     /// this \ other, quitando SOLO locs concretos de other (sound gen/kill: si
     /// other es top NO mata nada -- no sabemos que escribio exactamente).
     void subtract_concrete(const LocSet &other);
     bool operator==(const LocSet &o) const;
+
+  private:
+    /* Indice para @ref may_alias_any.  Perezoso y mutable: se construye en la
+     * primera consulta y se tira en cuanto el conjunto cambia, asi que anadir
+     * sigue costando lo mismo que antes y solo paga quien pregunta.
+     *
+     * `mutable` porque la consulta es const y el indice es cache, no estado:
+     * dos LocSet con el mismo contenido responden lo mismo, se haya construido
+     * el indice o no. */
+    mutable bool                                       idx_listo_ = false;
+    mutable bool                                       idx_top_ = false;
+    mutable uint32_t                                   idx_kinds_ = 0;
+    mutable uint32_t                                   idx_kinds_gen_ = 0;
+    mutable std::unordered_map<uint64_t, std::vector<uint32_t>> idx_raiz_;
+
+    /// Construye el indice si hace falta.
+    void asegurar_indice_() const;
+
 };
 
 /// Efecto de memoria: read-set + write-set sobre localizaciones abstractas.

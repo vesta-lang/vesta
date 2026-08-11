@@ -1341,6 +1341,10 @@ endif ()
 # Suelto a proposito: cuatro ficheros y nada del compilador, para poder
 # correrlo en un sistema donde el proyecto entero no este construido -- que es
 # justo el caso al comprobar que el formato cruza de plataforma.
+add_executable(test_locset_indice tests/analysis/test_locset_indice.cpp
+                                  src/analysis/effects/effects.cpp)
+target_include_directories(test_locset_indice PRIVATE ${VM_INCLUDES})
+
 add_executable(test_asa_fact_file_lnx tests/analysis/test_asa_fact_file_lnx.cpp
                                       src/analysis/asa/fact_file.cpp
                                       src/analysis/asa/fact_store.cpp
