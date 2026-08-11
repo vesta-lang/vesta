@@ -1105,6 +1105,78 @@ static const ir::IrModule *asignador_del_lenguaje_(const CompileOptions &opts,
 }
 
 /**
+ * @brief Un punto de entrada de nombre CONOCIDO que lleva hasta el asignador
+ *        del programa.
+ *
+ * El backend necesita saber que llamar sin suponer quien hay detras.  Si
+ * buscara el nombre del asignador de la biblioteca quedaria atado a el, y un
+ * programa que declara el suyo con @c @AllocatorOverride acabaria usandolo a
+ * medias -- el codigo compilado llamando a uno y el resto a otro, que es peor
+ * que no usarlo.
+ *
+ * Asi el backend busca siempre lo mismo y quien contesta se decide aqui.  El
+ * puente es una llamada y un retorno.
+ *
+ * @param mod Modulo donde ponerlo.
+ */
+static void poner_puente_del_asignador_(ir::IrModule &mod) {
+    struct Par {
+        const char *punto;       // nombre que busca el backend
+        const std::string *real; // a quien lleva
+        bool devuelve;           // reservar devuelve puntero; liberar no
+    };
+    const Par pares[2] = {{"__vx_alloc_entry", &mod.alloc_sym, true},
+                          {"__vx_free_entry", &mod.free_sym, false}};
+    for (const Par &par : pares) {
+        if (par.real->empty()) continue;
+        bool existe = false, hay_real = false;
+        for (const ir::IrFunction &f : mod.functions) {
+            if (f.name == par.punto) existe = true;
+            if (f.name == *par.real) hay_real = true;
+        }
+        if (existe || !hay_real) continue;
+        ir::IrFunction pu;
+        pu.name = par.punto;
+        pu.is_public = true; // nadie la llama TODAVIA: la llamara el backend
+        pu.ret_type = par.devuelve ? ir::IrType::PTR : ir::IrType::VOID;
+        // Un parametro: el tamano al reservar, el puntero al liberar.
+        ir::IrValue p;
+        p.id = 0;
+        p.type = par.devuelve ? ir::IrType::I64 : ir::IrType::PTR;
+        p.name = "%0";
+        p.is_param = true;
+        pu.values.push_back(p);
+        pu.params.push_back(0);
+        ir::IrBlock b;
+        b.id = 0;
+        b.name = "entry";
+        ir::IrInstr llamada;
+        llamada.op = ir::IrOp::CALL;
+        llamada.func_name = *par.real;
+        llamada.operands.push_back(0);
+        if (par.devuelve) {
+            ir::IrValue r;
+            r.id = 1;
+            r.type = ir::IrType::PTR;
+            r.name = "%1";
+            pu.values.push_back(r);
+            llamada.dst = 1;
+            llamada.type = ir::IrType::PTR;
+        }
+        b.instrs.push_back(llamada);
+        ir::IrInstr fin;
+        fin.op = ir::IrOp::RET;
+        if (par.devuelve) {
+            fin.operands.push_back(1);
+            fin.type = ir::IrType::PTR;
+        }
+        b.instrs.push_back(fin);
+        pu.blocks.push_back(std::move(b));
+        mod.functions.push_back(std::move(pu));
+    }
+}
+
+/**
  * @brief Deja el asignador del lenguaje DENTRO del modulo, sin tocar las
  *        reservas.
  *
@@ -1175,6 +1247,11 @@ void traer_asignador_del_lenguaje(ir::IrModule &mod,
             if (x == nl) { ya = true; break; }
         if (!ya) mod.native_libs.push_back(nl);
     }
+    /* Y el punto de entrada de nombre conocido que lleva hasta el.  Al final,
+     * cuando el asignador YA esta dentro: el puente comprueba que existe a
+     * quien llamar antes de ponerse, asi que antes de copiarlo no encontraba
+     * nada.  Aqui pasan los dos caminos de compilacion. */
+    poner_puente_del_asignador_(mod);
 }
 
 CompileResult compile_vx_project(
@@ -3555,6 +3632,16 @@ CompileResult compile_vx_project(
      * llamando a otro, seria peor que no usarlo. */
     if (!res.aot_alloc_sym.empty()) merged.alloc_sym = res.aot_alloc_sym;
     if (!res.aot_free_sym.empty()) merged.free_sym = res.aot_free_sym;
+    /* Y un punto de entrada de nombre CONOCIDO que lleve hasta el.
+     *
+     * El backend tiene que saber que llamar sin suponer quien hay detras: si
+     * buscara un nombre concreto quedaria atado al asignador de la biblioteca,
+     * y un programa con el suyo acabaria usandolo a medias.  Asi busca siempre
+     * lo mismo y quien conteste lo decide aqui.
+     *
+     * Es un puente de una linea, no una copia: llama al de verdad y devuelve lo
+     * que devuelva. */
+    poner_puente_del_asignador_(merged); // por si el programa trae el suyo
     /* has_lowerable_macros: gate del two- compile.  El single-file
      * (compile_vx_source) lo setea escaneando su irmod; en el path multi-modulo
      * hay que escanear el MODULO MERGEADO -- si cualquier funcion (root o dep)
