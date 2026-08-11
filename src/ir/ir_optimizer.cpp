@@ -7727,12 +7727,37 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
          * @return true si se pudo; false = no se sabe lo suficiente y el caller
          *         debe seguir tratandolo como barrera total.
          */
+        /* Los hechos que el trato preciso del asm necesita se calculan UNA vez
+         * por pase, no una por bloque.  Estaban DENTRO del helper de abajo, que
+         * se llama por CADA instruccion de asm, y cada llamada rehacia las
+         * ligaduras (dos veces), la estructura de la funcion y un punto fijo de
+         * rangos COMPLETO: n_asm x O(funcion).  En un programa lleno de asm eso
+         * son segundos -- y es el mismo error que el ASA existe para quitar, un
+         * consumidor construyendo su base de hechos en el sitio.
+         *
+         * Describen la funcion al ENTRAR al pase, y es lo correcto: marcar un
+         * store como muerto no cambia ni de que valor habla cada operando del
+         * asm ni los rangos de nadie.
+         *
+         * Perezosos: un programa sin un solo bloque de asm no paga nada. */
+        bool                      hechos_asm_listos = false;
+        analysis::AsmBindingFacts lig_asm_fn;
+        analysis::IrFacts         hechos_fn;
+        analysis::RangeFacts      rangos_fn;
+        auto asegurar_hechos_asm = [&]() {
+            if (hechos_asm_listos) return;
+            hechos_asm_listos = true;
+            lig_asm_fn = analysis::compute_asm_bindings(fn);
+            hechos_fn = analysis::build_ir_facts(fn);
+            rangos_fn = analysis::compute_ranges(fn, hechos_fn);
+        };
+
         auto dse_asm_preciso = [&](const IrInstr &ins) -> bool {
+            asegurar_hechos_asm();
             /* Con las clases de operando: esto pregunta QUE memoria toca el
              * bloque, que es exactamente lo que no se puede responder sin
              * saber cuantos bytes mide cada `$N`. */
-            const analysis::AsmBindingFacts lig_asm =
-                analysis::compute_asm_bindings(fn);
+            const analysis::AsmBindingFacts &lig_asm = lig_asm_fn;
             std::vector<std::pair<std::string, std::string>> clases_asm;
             clases_asm.reserve(lig_asm.ligaduras.size());
             for (const analysis::LigaduraAsm &l : lig_asm.ligaduras)
@@ -7759,13 +7784,11 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
             /* De que valor habla cada operando lo responde UN solo sitio (ver
              * @ref analysis::compute_asm_bindings); este recorrido estaba
              * copiado aqui y en el modelo de efectos. */
-            const analysis::AsmBindingFacts lig =
-                analysis::compute_asm_bindings(fn);
+            const analysis::AsmBindingFacts &lig = lig_asm_fn;
             /* Y los rangos, que son los que cierran la extension de un acceso
              * cuando la determina un operando en vez de una constante. */
-            const analysis::IrFacts hechos_dse = analysis::build_ir_facts(fn);
-            const analysis::RangeFacts rangos_dse =
-                analysis::compute_ranges(fn, hechos_dse);
+            const analysis::IrFacts    &hechos_dse = hechos_fn;
+            const analysis::RangeFacts &rangos_dse = rangos_fn;
             for (const std::string &w : e.escritos) {
                 /* Si dos variables comparten registro no se sabe a cual de las
                  * dos escribio -- asi que dejan de valer LAS DOS.  Invalidar de
