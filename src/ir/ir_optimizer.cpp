@@ -7103,6 +7103,10 @@ bool ir_pass_dce(IrFunction &fn,
 
     // Construir conjunto de valores que son usados en algun operando
     std::unordered_set<IrValueId> used;
+    {
+    /* Cada tramo en SU bloque: un cronometro de ambito mide hasta que
+     * termina el suyo, y suelto acaba midiendo el resto de la funcion. */
+    CronoTramo crono_usados__("  dce:usados");
     for (const auto &bb : fn.blocks) {
         for (const auto &ins : bb.instrs) {
             for (IrValueId op : ins.operands) {
@@ -7125,7 +7129,10 @@ bool ir_pass_dce(IrFunction &fn,
         }
     }
 
+    }
     bool changed = false;
+    {
+    CronoTramo crono_barrer__("  dce:barrer");
     for (auto &bb : fn.blocks) {
         auto &instrs = bb.instrs;
         size_t write = 0;
@@ -7168,6 +7175,7 @@ bool ir_pass_dce(IrFunction &fn,
             }
         }
         instrs.resize(write);
+    }
     }
     return changed;
 }
