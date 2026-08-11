@@ -121,6 +121,33 @@ bool project_cache_save(const std::string &cache_path, uint32_t opts_hash,
                         const std::vector<ProjectCacheDep> &deps,
                         const std::vector<uint8_t> &velb);
 
+/**
+ * @brief Huella de lo que decide QUE AVISOS salen, que no es lo mismo que la
+ *        de lo que decide QUE ARTEFACTO se emite.
+ *
+ * Los diagnosticos son del frontend: el mismo fuente da los mismos avisos en
+ * interprete, JIT y nativo.  Indexarlos por @ref project_cache_opts_hash --
+ * que lleva formato, tipo de emision y demas -- los guardaria tres veces y
+ * cambiar de backend los perderia, cuando no ha cambiado nada de lo que se
+ * mira.
+ *
+ * Entra lo que cambia QUE CODIGO SE MIRA: el nivel de optimizacion y la
+ * informacion de depuracion (cambian el IR sobre el que se analiza), la
+ * instrumentacion, si la maquina de compilacion estaba cargada (sin ella el
+ * codigo comptime no se ejecuto y lo que se ve es otra cosa), de donde salen
+ * los modulos ajenos, y el OBJETIVO -- arquitectura, sistema y nivel de
+ * runtime --, porque @c @Target selecciona codigo distinto y un aviso puede
+ * ser de una rama que solo existe en uno.
+ *
+ * Queda fuera lo que solo cambia el envoltorio: el formato del fichero, el
+ * tipo de emision, la direccion base y el resto del perfil de emision.  Pedir
+ * un `.obj` en vez de un `.exe` no altera ni un aviso.
+ *
+ * @param key Opciones de la compilacion.
+ * @return La huella con la que se guardan y se recuperan sus diagnosticos.
+ */
+uint32_t project_cache_diag_hash(const ProjectCacheKey &key);
+
 /// @brief Computa el @c opts_hash sobre la @c ProjectCacheKey .
 /// FNV-1a 32 sobre los campos concatenados.
 uint32_t project_cache_opts_hash(const ProjectCacheKey &key);
@@ -155,22 +182,25 @@ bool project_cache_validate(const std::vector<ProjectCacheDep> &cached_deps,
  * acabaran de emitir.
  *
  * @param cache_path Fichero de cache del proyecto (se le anade su extension).
- * @param opts_hash  Huella de las opciones; si no cuadra no se rehacen.
+ * @param diag_hash  Huella de lo que decide que avisos salen
+ *                   (@ref project_cache_diag_hash); si no cuadra no se rehacen.
+ *                   Va tambien en el NOMBRE del fichero, para que dos objetivos
+ *                   distintos del mismo proyecto no se pisen el uno al otro.
  * @param diags      Los diagnosticos a guardar.
  * @return @c true si quedo algo escrito.
  */
-bool project_cache_save_diags(const std::string &cache_path, uint32_t opts_hash,
+bool project_cache_save_diags(const std::string &cache_path, uint32_t diag_hash,
                               const std::vector<Diagnostic> &diags);
 
 /**
  * @brief Recupera lo guardado por @ref project_cache_save_diags.
  *
  * @param cache_path Mismo que al guardar.
- * @param opts_hash  Mismo que al guardar.
+ * @param diag_hash  Misma que al guardar.
  * @param out        Donde se depositan (se vacia antes).
  * @return @c true si se recupero algo.
  */
-bool project_cache_load_diags(const std::string &cache_path, uint32_t opts_hash,
+bool project_cache_load_diags(const std::string &cache_path, uint32_t diag_hash,
                               std::vector<Diagnostic> &out);
 
 /// @brief FNV-1a 64 helper (publico para uso en @c compile_vx_project).

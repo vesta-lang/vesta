@@ -12,6 +12,8 @@
 #include "vx/project_cache.h"
 
 #include "analysis/asa/fact_file.h"
+
+#include <cstdio>
 #include "util/fs_utils.h"
 #include "vx/source_hash.h"
 #include "vx/module/vxi_format.h" // para vxi_compiler_version_hash() (L.15)
@@ -205,6 +207,24 @@ uint32_t project_cache_opts_hash(const ProjectCacheKey &key) {
     return fnv1a32_str(os.str());
 }
 
+uint32_t project_cache_diag_hash(const ProjectCacheKey &key) {
+    /* Solo lo que cambia QUE CODIGO SE MIRA.  Ver la explicacion completa en
+     * la cabecera: lo que unicamente cambia el envoltorio del artefacto
+     * (formato, tipo de emision, direccion base, perfil) no altera ni un
+     * aviso, y meterlo aqui guardaria lo mismo una vez por backend. */
+    std::ostringstream os;
+    os << "opt=" << key.opt_level << "|debug=" << (key.emit_debug ? 1 : 0)
+       << "|instr=" << key.instrument_mode << "|port=" << key.port_target
+       << "|mc=" << (key.comptime_prebuilt ? 1 : 0)
+       << "|std=" << key.stdlib_dir << "|vxpath=" << key.vx_path
+       /* El objetivo SI entra: `@Target` selecciona codigo distinto, y un aviso
+        * puede venir de una rama que solo existe en una arquitectura o en un
+        * sistema.  El nivel de runtime tambien cambia lo que se baja. */
+       << "|aot=" << (key.aot ? 1 : 0) << "|arch=" << key.aot_arch
+       << "|tgt=" << key.aot_target << "|tier=" << key.aot_tier;
+    return fnv1a32_str(os.str());
+}
+
 bool project_cache_load(const std::string &cache_path, uint32_t &out_opts_hash,
                         std::vector<ProjectCacheDep> &out_deps,
                         std::vector<uint8_t> &out_velb) {
@@ -321,14 +341,23 @@ const char *const kDominioDiag = "vx.diagnosticos";
 /// byte de control que no aparece en texto de usuario.
 constexpr char kSep = '\x1f';
 
-/// Ruta del fichero de diagnosticos que acompana a @p cache_path.
-std::string ruta_diags_(const std::string &cache_path) {
-    return cache_path + ".diags";
+/**
+ * @brief Ruta del fichero de diagnosticos que acompana a @p cache_path.
+ *
+ * La huella va en el NOMBRE y no solo dentro: asi el mismo proyecto compilado
+ * para dos objetivos guarda los avisos de cada uno sin que el segundo pise los
+ * del primero.  Si estuviera solo dentro, alternar entre objetivos seria un
+ * fallo de cache permanente.
+ */
+std::string ruta_diags_(const std::string &cache_path, uint32_t diag_hash) {
+    char hex[9];
+    std::snprintf(hex, sizeof hex, "%08x", diag_hash);
+    return cache_path + "." + hex + ".diags";
 }
 
 } // namespace
 
-bool project_cache_save_diags(const std::string &cache_path, uint32_t opts_hash,
+bool project_cache_save_diags(const std::string &cache_path, uint32_t diag_hash,
                               const std::vector<Diagnostic> &diags) {
     if (diags.empty()) return false;
     analysis::asa::register_canonical_name(kDominioDiag);
@@ -370,19 +399,20 @@ bool project_cache_save_diags(const std::string &cache_path, uint32_t opts_hash,
     /* Nivel maximo a proposito: esto NO se puede recalcular sin recompilar, que
      * es justo lo que el acierto de cache se ahorra. */
     const std::vector<uint8_t> bytes = analysis::asa::serialize(
-        almacen, static_cast<uint64_t>(opts_hash), analysis::asa::CacheLevel::All,
+        almacen, static_cast<uint64_t>(diag_hash), analysis::asa::CacheLevel::All,
         {{kDominioDiag, 0, false, 0}});
     if (bytes.empty()) return false;
-    return ::fs::write_file_atomic(ruta_diags_(cache_path), bytes);
+    return ::fs::write_file_atomic(ruta_diags_(cache_path, diag_hash), bytes);
 }
 
-bool project_cache_load_diags(const std::string &cache_path, uint32_t opts_hash,
+bool project_cache_load_diags(const std::string &cache_path, uint32_t diag_hash,
                               std::vector<Diagnostic> &out) {
     out.clear();
     analysis::asa::register_canonical_name(kDominioDiag);
     analysis::asa::FactStore almacen;
     const analysis::asa::ReadResult r = analysis::asa::read_facts_file(
-        ruta_diags_(cache_path), static_cast<uint64_t>(opts_hash), almacen);
+        ruta_diags_(cache_path, diag_hash), static_cast<uint64_t>(diag_hash),
+        almacen);
     if (!r.ok) return false;
     out.reserve(almacen.size());
     for (analysis::asa::FactId i = 0; i < almacen.size(); ++i) {
