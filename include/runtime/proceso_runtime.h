@@ -628,7 +628,19 @@ class ProcessVM {
     // Vive en el ProcessVM (host), no en vm_mem, porque el trampolin
     // nativo lo dereferencia como puntero host crudo.  Sincronico y
     // no-reentrante por proceso (cada bloque asm lo usa secuencialmente).
-    uint64_t asm_ctx[16] = {0}; ///< ctx[16] del trampolin de inline-asm
+    /**
+     * @brief Estado que el trampolin de ensamblador mete y saca del bloque.
+     *
+     * Los 16 registros generales primero y, tras ellos, los 16 del banco ancho
+     * a 512 bits (8 huecos de 64 bits cada uno).  El banco ancho hace falta
+     * porque el micro asm existe justo para las instrucciones que NO tienen
+     * representacion fiel en el IR -- y muchas de esas son vectoriales.  Sin
+     * sitio donde ponerlas, esos bloques se quedaban sin elevar, y la
+     * limitacion no era del lenguaje sino de este array.
+     *
+     * Alineado a 64 porque las formas de mover 512 bits alineados lo exigen.
+     */
+    alignas(64) uint64_t asm_ctx[16 + 16 * 8] = {0};
 
     // --- GC del proceso ---
     gc::GcHeap gc_heap{manager_mem_priv, 2 * 1024 * 1024,

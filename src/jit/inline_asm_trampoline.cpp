@@ -464,9 +464,45 @@ AsmTrampolineFn build_asm_trampoline(const std::string &user_asm, CodeCache &cc,
         nasm += line;
     }
 
+    /* --- el banco ancho, si el cuerpo lo usa ---
+     * El micro asm existe para las instrucciones sin representacion fiel en el
+     * IR, y muchas de esas son vectoriales: sin traer y devolver estos
+     * registros, esos bloques no se podian ejecutar y se quedaban sin elevar.
+     * La limitacion no era del lenguaje, era de este contexto.
+     *
+     * Solo se toca si aparecen, para no pagar 16 movimientos en el caso
+     * comun. */
+    const bool usa_ancho = user_asm.find("xmm") != std::string::npos ||
+                           user_asm.find("ymm") != std::string::npos ||
+                           user_asm.find("zmm") != std::string::npos;
+    if (usa_ancho) {
+        /* El que trae el contexto esta en la pila; los anchos empiezan tras
+         * los 16 generales (16 * 8 = 128 bytes). */
+        nasm += "push r11\n";
+        nasm += "mov r11, [rsp + 8]\n";
+        for (int i = 0; i < 16; ++i) {
+            std::snprintf(line, sizeof(line), "movups xmm%d, [r11 + 0x%x]\n", i,
+                          128 + i * 64);
+            nasm += line;
+        }
+        nasm += "pop r11\n";
+    }
+
     /* --- cuerpo del usuario --- */
     nasm += user_asm;
     if (!user_asm.empty() && user_asm.back() != '\n') nasm += "\n";
+
+    /* --- devolver el banco ancho, antes de tocar los generales --- */
+    if (usa_ancho) {
+        nasm += "push r11\n";
+        nasm += "mov r11, [rsp + 8]\n";
+        for (int i = 0; i < 16; ++i) {
+            std::snprintf(line, sizeof(line), "movups [r11 + 0x%x], xmm%d\n",
+                          128 + i * 64, i);
+            nasm += line;
+        }
+        nasm += "pop r11\n";
+    }
 
     /* --- epilogo: salvar los 16 GP host de vuelta a ctx --- */
     nasm += "push rax\n";           // salvar rax (resultado) temporal

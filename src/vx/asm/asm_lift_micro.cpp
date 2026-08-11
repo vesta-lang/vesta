@@ -344,18 +344,20 @@ bool build_operands(
         if (const ir::AsmRegBinding *b = binding_de_marcador(toks[k], bindings)) {
             if (!elevar_ligados())
                 return AsmMotivoOpaco::anotar(motivo, insn, "VXA028");
-            /* El banco ancho, todavia no.
+            /* El banco ancho, todavia no -- y el motivo ya no es el que era.
              *
-             * No porque el interprete no lo tenga -- la maquina tiene f0..f15 /
-             * xmm / ymm / zmm y sus instrucciones --, sino porque el trampolin
-             * por el que pasa un bloque de ensamblador salva y restaura los 16
-             * registros generales y nada mas.  Mientras eso siga asi el bloque
-             * correria a medias: bien en el JIT y mal en el interprete, que es
-             * justo lo que no puede pasar.  Se queda opaco hasta que el
-             * trampolin lleve tambien el banco ancho. */
+             * El contexto del trampolin YA lo lleva (se amplio), asi que el
+             * interprete puede ejecutar la instruccion.  Lo que falta es meter
+             * y sacar esos valores: los emisores pasan los operandos por una
+             * tabla de enteros, y un registro ancho no cabe ahi.  Comprobado
+             * quitando este bail: el caso vectorial falla en los dos motores.
+             *
+             * Sigue siendo una carencia de los motores, no del modelo -- el ASA
+             * describe estos registros igual que los demas --, pero vive aqui
+             * porque es aqui donde se decide que se eleva. */
+            ir::AsmMicroOperand op;
             if (b->is_vector)
                 return AsmMotivoOpaco::anotar(motivo, insn, "VXA023", {toks[k]});
-            ir::AsmMicroOperand op;
             op.kind = ir::AsmOperandKind::REG;
             op.regclass = vx::ASM_RC_GP;
             op.width = ancho_declarado(*b);
