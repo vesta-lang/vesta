@@ -12546,11 +12546,11 @@ namespace {
  * La etiqueta lleva prefijo del pase para que salga junto a el al ordenar.
  */
 void acumular_tramo(const char *etiqueta, long long us) {
-    AcumuladorPases            &a = acumulador_pases();
-    std::lock_guard<std::mutex> lk(a.m);
-    auto                       &e = a.t[etiqueta];
-    e.first += us;
-    e.second += 1;
+    /* Al de `util`, que NO toma cerrojo (uno por hilo).  El de aqui lo toma, y
+     * vale para los pases -- unos miles de tomas -- pero no para un tramo que
+     * se mide CIEN MIL veces: ahi la contencion del cerrojo se cobra dentro del
+     * tramo que envuelve y el instrumento acaba midiendose a si mismo. */
+    util::acumular_tramo(etiqueta, us);
 }
 } // namespace
 
