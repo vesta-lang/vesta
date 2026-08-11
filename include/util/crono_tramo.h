@@ -39,16 +39,39 @@ namespace util {
  * @param etiqueta Literal estable; se agrupa por el.
  * @param us       Microsegundos a sumar.
  */
-void acumular_tramo(const char *etiqueta, long long us);
+/**
+ * @brief Suma @p ns a la cuenta de @p etiqueta.
+ *
+ * En NANOSEGUNDOS, y no es un detalle: truncando a microsegundos, un tramo de
+ * 0,4 us mide CERO, y doscientas mil llamadas de esas suman cero habiendo
+ * costado 80 ms.  Un tramo corto y muy repetido es justo el que se quiere
+ * descubrir, y era justo el que desaparecia.
+ */
+void acumular_tramo_ns(const char *etiqueta, long long ns);
+
+/// Compatibilidad: suma microsegundos (los convierte).
+inline void acumular_tramo(const char *etiqueta, long long us) {
+    acumular_tramo_ns(etiqueta, us * 1000);
+}
 
 /// Un tramo medido: cuanto se llevo y cuantas veces se entro en el.
 struct Tramo {
     const char *nombre = "?";
-    long long   us = 0;
+    long long   us = 0; ///< microsegundos (se acumula en ns y se divide al leer).
     long long   veces = 0;
 };
 
-/// Los tramos medidos, del mas caro al mas barato.
+/// Lo que cuesta medir y lo fino que es el reloj, en nanosegundos.  Se descuenta
+/// el coste al informar; la resolucion se ensena para que nadie se crea una
+/// cifra mas fina que el reloj que la tomo.
+struct Calibracion_ {
+    long long coste_ns = 0;
+    long long resolucion_ns = 0;
+};
+Calibracion_ calibracion_del_cronometro();
+
+/// Los tramos medidos, del mas caro al mas barato.  Ya descontado el coste de
+/// medir (que es proporcional a las tomas y siempre hacia arriba).
 std::vector<Tramo> tramos_medidos();
 
 /// Pone el acumulador a cero.
@@ -63,9 +86,10 @@ struct CronoTramo {
     explicit CronoTramo(const char *etiqueta)
         : n(etiqueta), t0(std::chrono::steady_clock::now()) {}
     ~CronoTramo() {
-        acumular_tramo(n, std::chrono::duration_cast<std::chrono::microseconds>(
-                              std::chrono::steady_clock::now() - t0)
-                              .count());
+        acumular_tramo_ns(
+            n, std::chrono::duration_cast<std::chrono::nanoseconds>(
+                   std::chrono::steady_clock::now() - t0)
+                   .count());
     }
     CronoTramo(const CronoTramo &) = delete;
     CronoTramo &operator=(const CronoTramo &) = delete;

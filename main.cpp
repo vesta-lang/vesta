@@ -37,22 +37,22 @@
 #include "ir/ir_emitter.h"
 #include "ir/passes/select_policy.h" // PGO: load_branch_profile (if-conversion)
 #include "ir/ssa_ir_serialize.h" //  AOT: parse_ir_section (round-trip del @ir)
-#include "aot/aot_analyze.h" //  AOT.1: analisis de compatibilidad nativa
-#include "aot/aot_lower.h" //  AOT.2: re-bajada RAW_ALLOC/FREE/PANIC -> CALL
+#include "aot/aot_analyze.h" //  analisis de compatibilidad nativa
+#include "aot/aot_lower.h" //  re-bajada RAW_ALLOC/FREE/PANIC -> CALL
 #include "aot/object_writer.h" //  AOT.4: emisor PE/ELF (ObjectWriter)
-#include "aot/aot_native.h"    //  AOT.3 Paso 2: _start arch-portable
-#include "aot/linker.h"        //  AOT.5: linker propio (enlaza .o)
-#include "jit/vreg_pipeline.h" //  AOT.3 Paso 2: vreg_compile_native (HOST_LEAF)
+#include "aot/aot_native.h"    //   _start arch-portable
+#include "aot/linker.h"        //  linker propio (enlaza .o)
+#include "jit/vreg_pipeline.h" //   vreg_compile_native (HOST_LEAF)
 #include "jit/vec_isa.h" // ancho SIMD del target (--float-isa)
 #include "jit/backend_caps.h" // caps del target para el gate FMA (AOT)
 #include "jit/auto_jit.h"
 #include "jit/jit_timing.h"
 #include "jit/jit_branch_prof.h"
 #include "jit/sched/cost_model.h" // --cpu: microarquitectura objetivo del scheduler
-#include "jit/keystone_asm_backend.h" //  AS inc.4b: registrar backend asm
-#include "jit/inline_asm_trampoline.h" //  AS inc.6: helper runner inline-asm
+#include "jit/keystone_asm_backend.h" //  registrar backend asm
+#include "jit/inline_asm_trampoline.h" //  helper runner inline-asm
 #include "jit/naked_native.h" // Bug 198: dispatcher naked (asm con simbolos propios)
-#include "runtime/profile.h"           // Sprint D.6 (2026-06-03)
+#include "runtime/profile.h"           // 
 #include "pkg/cli.h"
 #include "runtime/proceso_runtime.h"
 #include "cli/runtime_api_commands.h"
@@ -77,9 +77,9 @@ void set_aot_condcomp_target(const std::string &os,
 #include "analysis/asa/fact.h"
 #include "ir/ir_optimizer.h"
 #include "vx/project_cache.h"
-#include "vx/source_hash.h"  /*  M5.B project-level cache */
+#include "vx/source_hash.h"  /* project-level cache */
 #include "vx/module/module_resolver.h" // detect_stdlib_vx_dir
-#include "vx/velb_signature.h" /*  M.L28: firmas digitales */
+#include "vx/velb_signature.h" /*firmas digitales */
 #include "util/sqlite_singleton.h"
 #include "util/fs_utils.h"
 #include "runtime/manager_runtime.h"
@@ -93,10 +93,10 @@ void set_aot_condcomp_target(const std::string &os,
 #include "debug/auth.h"
 
 #include <filesystem>
-#include <map>           //  MC.16: per-macro manifest map
-#include <unordered_map> //  AOT.3 2b-ii: layout name->offset
-#include <set>           //  MC.16: manifest diff seen-set
-#include <cctype>        //  MC.16: isalnum en find_macro_ranges_with_names
+#include <map>           // per-macro manifest map
+#include <unordered_map> // layout name->offset
+#include <set>           // manifest diff seen-set
+#include <cctype>        // isalnum en find_macro_ranges_with_names
 #include <openssl/rand.h>
 
 #ifdef VESTA_HAS_PREPROCESSOR
@@ -4672,7 +4672,9 @@ int main(int argc, char *argv[]) {
                 }
                 lp << "   (" << pases.size() << " pases, " << total_pases
                    << " us, " << ir::vueltas_punto_fijo() << " vueltas, "
-                   << ir::visitas_a_funcion() << " funciones)\n";
+                   << ir::visitas_a_funcion() << " visitas; medir cuesta "
+                   << cal.coste_ns << " ns, reloj de " << cal.resolucion_ns
+                   << " ns)\n";
             }
             /* Y donde se concentra: el reparto por pase dice cual es caro, este
              * dice si lo es por igual en todas las funciones o por una sola.
