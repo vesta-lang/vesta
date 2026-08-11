@@ -634,7 +634,19 @@ void maybe_compile_method(runtime::ProcessVM *vm,
      * ~1 ns (branch predicted). */
     if (g_jit_threshold == UINT32_MAX) return;
     if (method->jit_code != nullptr) return;
-    if (method->invocation_count < g_jit_threshold) return;
+    /* El asignador no espera a calentarse.
+     *
+     * Contar invocaciones sirve para decidir SI merece la pena compilar algo, y
+     * en estas la respuesta ya se sabe: las usa todo el codigo que reserva
+     * memoria.  Ademas, mientras no esten compiladas conviven dos caminos de
+     * reserva en el mismo proceso, y eso es justo lo que no puede durar. */
+    const bool del_asignador =
+        method->name.data != nullptr &&
+        ((method->name.size == 11 &&
+          std::memcmp(method->name.data, "__vx_malloc", 11) == 0) ||
+         (method->name.size == 9 &&
+          std::memcmp(method->name.data, "__vx_free", 9) == 0));
+    if (!del_asignador && method->invocation_count < g_jit_threshold) return;
 
     /* SEGURIDAD (sandbox bajo JIT): si hay un sandbox activo (algun modulo
      * con caps restringidas, M.sandbox Sprint A), NO JIT-compilar.  El
