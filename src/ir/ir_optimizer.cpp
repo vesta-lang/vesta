@@ -7748,26 +7748,41 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
         analysis::AsmBindingFacts lig_asm_fn;
         analysis::IrFacts         hechos_fn;
         analysis::RangeFacts      rangos_fn;
+        /* Las clases de operando en la forma que pide el analizador de bloques.
+         * Salen enteras de las ligaduras, que no cambian durante el pase, y
+         * armarlas cuesta una copia de DOS cadenas por ligadura: hacerlo por
+         * cada instruccion de asm era pagar esa copia n_asm veces. */
+        std::vector<std::pair<std::string, std::string>> clases_asm_fn;
         auto asegurar_hechos_asm = [&]() {
             if (hechos_asm_listos) return;
             hechos_asm_listos = true;
             lig_asm_fn = analysis::compute_asm_bindings(fn);
             hechos_fn = analysis::build_ir_facts(fn);
             rangos_fn = analysis::compute_ranges(fn, hechos_fn);
+            clases_asm_fn.reserve(lig_asm_fn.ligaduras.size());
+            for (const analysis::LigaduraAsm &l : lig_asm_fn.ligaduras)
+                clases_asm_fn.emplace_back(l.marcador, l.clase);
         };
+        /* Y el analisis de CADA bloque, memorizado por su nombre.  El texto del
+         * bloque y las clases son los mismos toda la pasada, asi que volver a
+         * analizarlo por cada instruccion que lo menciona es rehacer un trabajo
+         * cuyo resultado ya se tiene. */
+        std::unordered_map<std::string, vx::AsmBlockEffects> efectos_de_bloque;
 
         auto dse_asm_preciso = [&](const IrInstr &ins) -> bool {
             asegurar_hechos_asm();
             /* Con las clases de operando: esto pregunta QUE memoria toca el
              * bloque, que es exactamente lo que no se puede responder sin
              * saber cuantos bytes mide cada `$N`. */
-            const analysis::AsmBindingFacts &lig_asm = lig_asm_fn;
-            std::vector<std::pair<std::string, std::string>> clases_asm;
-            clases_asm.reserve(lig_asm.ligaduras.size());
-            for (const analysis::LigaduraAsm &l : lig_asm.ligaduras)
-                clases_asm.emplace_back(l.marcador, l.clase);
-            const vx::AsmBlockEffects e = vx::asm_analyze_block(
-                ins.func_name, vx::asm_arch_actual(), clases_asm);
+            auto it_ef = efectos_de_bloque.find(ins.func_name);
+            if (it_ef == efectos_de_bloque.end())
+                it_ef = efectos_de_bloque
+                            .emplace(ins.func_name,
+                                     vx::asm_analyze_block(
+                                         ins.func_name, vx::asm_arch_actual(),
+                                         clases_asm_fn))
+                            .first;
+            const vx::AsmBlockEffects &e = it_ef->second;
             if (!e.known() || e.is_call || e.has_atomic) return false;
             if (e.accesos_incompletos) return false;
 
