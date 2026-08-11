@@ -2057,4 +2057,56 @@ void IrFunction::recompute_edges() {
             blocks[s].preds.push_back(static_cast<IrBlockId>(b));
 }
 
+
+/* ==================== ir_correr_indices_de_datos ==================== */
+
+void ir_correr_indices_de_datos(IrFunction &fn, uint64_t desplazamiento) {
+    /* Una funcion es el caso de una lista de una: asi la regla vive en UN
+     * sitio y no puede divergir entre las dos formas de pedirla. */
+    std::vector<IrFunction> una;
+    una.push_back(std::move(fn));
+    ir_correr_indices_de_datos(una, desplazamiento);
+    fn = std::move(una[0]);
+}
+
+void ir_correr_indices_de_datos(std::vector<IrFunction> &fns,
+                                uint64_t desplazamiento) {
+    if (desplazamiento == 0) return;
+    /* Las referencias TEXTUALES: dentro del ensamblador embebido y de las
+     * etiquetas, una ranura se nombra "code.s_<N>". */
+    auto correr_texto = [desplazamiento](std::string &s) {
+        if (s.find("code.s_") == std::string::npos) return;
+        std::string out;
+        out.reserve(s.size());
+        size_t i = 0;
+        while (i < s.size()) {
+            const size_t p = s.find("code.s_", i);
+            if (p == std::string::npos) {
+                out.append(s, i, s.size() - i);
+                break;
+            }
+            out.append(s, i, p - i);
+            out.append("code.s_");
+            size_t j = p + 7;
+            uint64_t num = 0;
+            while (j < s.size() && s[j] >= '0' && s[j] <= '9') {
+                num = num * 10 + static_cast<uint64_t>(s[j] - '0');
+                ++j;
+            }
+            out.append(std::to_string(num + desplazamiento));
+            i = j;
+        }
+        s = std::move(out);
+    };
+    for (IrFunction &fn : fns)
+        for (IrBlock &bb : fn.blocks)
+            for (IrInstr &ins : bb.instrs) {
+                if (ins.op == IrOp::STR_LIT_ADDR) {
+                    ins.imm += static_cast<int64_t>(desplazamiento);
+                    continue;
+                }
+                if (!ins.func_name.empty()) correr_texto(ins.func_name);
+            }
+}
+
 } // namespace ir

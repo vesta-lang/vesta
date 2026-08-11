@@ -2100,6 +2100,33 @@ void print_instr(std::ostream &o, const IrFunction &fn, const IrInstr &ins);
 inline bool es_cuerpo_comptime(const std::string &nombre) {
     return nombre.rfind("__macro_", 0) == 0;
 }
+/**
+ * @brief Corre los indices de datos de unas funciones que se traen a otro modulo.
+ *
+ * Cada modulo numera sus ranuras desde cero.  Al concatenar los datos, las del
+ * modulo que llega se van al final y CAMBIAN de indice, pero sus instrucciones
+ * siguen pidiendo el numero viejo -- que ahora es otra cosa.  Ademas de leer lo
+ * que no es, se pierde la naturaleza: una ranura de variable global vive en
+ * memoria del host y el resto en la de la maquina, asi que el codigo traido
+ * acaba usando una direccion de la maquina como si fuera del host.
+ *
+ * Esto ya costo un fallo que tardo en encontrarse, y estaba escrito DOS veces
+ * -- una por cada sitio que fusiona --, asi que la tercera copia habria sido el
+ * mismo fallo otra vez.  Vive aqui, con la operacion a la que pertenece.
+ *
+ * Corre las referencias por indice y tambien las TEXTUALES (@c "code.s_N"),
+ * que aparecen en el ensamblador embebido y en las etiquetas.
+ *
+ * @param fns Funciones que se traen (se modifican).
+ * @param desplazamiento Cuantas ranuras habia ya en el modulo destino.
+ */
+void ir_correr_indices_de_datos(std::vector<IrFunction> &fns,
+                                uint64_t desplazamiento);
+
+/// @copydoc ir_correr_indices_de_datos
+/// Sobre UNA funcion, para quien las trae de una en una.
+void ir_correr_indices_de_datos(IrFunction &fn, uint64_t desplazamiento);
+
 } // namespace ir
 
 // Restaurar las macros de Windows que anulamos al principio del header.

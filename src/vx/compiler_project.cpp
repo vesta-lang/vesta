@@ -1183,13 +1183,11 @@ void traer_asignador_del_lenguaje(ir::IrModule &mod,
     ir::IrModule copia_datos = *mem;
     const uint64_t desplazamiento = mod.static_data.size();
     mod.static_data.append_raw_entries(std::move(copia_datos.static_data));
-    for (ir::IrFunction &f : mod.functions) {
-        if (!traidas.count(f.name)) continue; // solo las que acaban de entrar
-        for (ir::IrBlock &b : f.blocks)
-            for (ir::IrInstr &in : b.instrs)
-                if (in.op == ir::IrOp::STR_LIT_ADDR)
-                    in.imm += (int64_t)desplazamiento;
-    }
+    /* Con la operacion compartida: corre los indices Y las referencias
+     * textuales del ensamblador embebido, que esta fusion se dejaba. */
+    for (ir::IrFunction &f : mod.functions)
+        if (traidas.count(f.name))
+            ir::ir_correr_indices_de_datos(f, desplazamiento);
     for (const auto &gv : mem->globals) mod.globals.emplace(gv.first, gv.second);
     // Lo que el asignador llama por su cuenta: pide memoria al sistema por la
     // interfaz nativa, asi que sus importaciones tienen que venir con el.
