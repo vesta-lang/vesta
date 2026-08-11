@@ -81,6 +81,7 @@ void set_aot_condcomp_target(const std::string &os,
 #include "vx/module/module_resolver.h" // detect_stdlib_vx_dir
 #include "vx/velb_signature.h" /*firmas digitales */
 #include "util/sqlite_singleton.h"
+#include "util/crono_tramo.h"
 #include "util/fs_utils.h"
 #include "runtime/manager_runtime.h"
 #include "gc/gc_heap.h"
@@ -4660,7 +4661,12 @@ int main(int argc, char *argv[]) {
             long long  total_pases = 0;
             for (const auto &q : pases) total_pases += q.us;
             if (total_pases > 0) {
-                auto lp = vesta::scout();
+                /* La calibracion, a la vista: se descuenta el coste de medir, y
+                 * una cifra mas fina que la resolucion del reloj no significa
+                 * nada.  Ensenarla evita creerse un numero que el instrumento
+                 * no puede dar. */
+                const auto cal = util::calibracion_del_cronometro();
+                auto       lp = vesta::scout();
                 lp << "[vx] optimizar por pase:";
                 int mostrados = 0;
                 for (const auto &q : pases) {
@@ -4672,9 +4678,9 @@ int main(int argc, char *argv[]) {
                 }
                 lp << "   (" << pases.size() << " pases, " << total_pases
                    << " us, " << ir::vueltas_punto_fijo() << " vueltas, "
-                   << ir::visitas_a_funcion() << " visitas; medir cuesta "
-                   << cal.coste_ns << " ns, reloj de " << cal.resolucion_ns
-                   << " ns)\n";
+                   << ir::visitas_a_funcion() << " visitas; reloj "
+                   << cal.fuente << " de " << cal.resolucion_ns
+                   << " ns, medir cuesta " << cal.coste_ns << " ns)\n";
             }
             /* Y donde se concentra: el reparto por pase dice cual es caro, este
              * dice si lo es por igual en todas las funciones o por una sola.

@@ -12,6 +12,8 @@
 
 #include "util/crono_tramo.h"
 
+#include "util/reloj.h"
+
 #include <algorithm>
 #include <mutex>
 #include <unordered_map>
@@ -122,8 +124,14 @@ const Calibracion &calibracion() {
 } // namespace
 
 Calibracion_ calibracion_del_cronometro() {
-    const Calibracion &c = calibracion();
-    return {c.coste_ns, c.resolucion_ns};
+    /* El coste de una TOMA (dos lecturas + la anotacion) sale de medirlo aqui;
+     * la resolucion es la del reloj, que la sabe el.  Los dos se ensenan porque
+     * ninguna cifra puede ser mas fina que su reloj ni menor que su ruido. */
+    Calibracion_ c;
+    c.coste_ns = calibracion().coste_ns;
+    c.resolucion_ns = reloj::info().resolucion_ns;
+    c.fuente = reloj::info().fuente;
+    return c;
 }
 
 std::vector<Tramo> tramos_medidos() {

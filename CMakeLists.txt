@@ -1341,6 +1341,16 @@ endif ()
 # Suelto a proposito: cuatro ficheros y nada del compilador, para poder
 # correrlo en un sistema donde el proyecto entero no este construido -- que es
 # justo el caso al comprobar que el formato cruza de plataforma.
+# Suelto y sin dependencias: el cronometro no depende de nada del compilador, y
+# poder probarlo aparte es parte de que sea reutilizable.
+add_executable(test_crono_precision tests/util/test_crono_precision.cpp
+                                    src/util/crono_tramo.cpp
+                                    src/util/reloj.cpp)
+target_include_directories(test_crono_precision PRIVATE ${VM_INCLUDES})
+if (NOT WIN32)
+    target_link_libraries(test_crono_precision PRIVATE pthread)
+endif ()
+
 add_executable(test_locset_indice tests/analysis/test_locset_indice.cpp
                                   src/analysis/effects/effects.cpp)
 target_include_directories(test_locset_indice PRIVATE ${VM_INCLUDES})
