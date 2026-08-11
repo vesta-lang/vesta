@@ -7086,14 +7086,17 @@ static bool model_removable(const IrFunction &fn, const analysis::IrFacts &facts
     return !e.mem.writes.locs.empty();
 }
 
-bool ir_pass_dce(IrFunction &fn,
-                 const analysis::effects::NativeDecls *decls) {
+bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
+                 const analysis::AsmBindingFacts *asm_bindings) {
     // Modelo de efectos: hechos + points-to por-funcion para el consumidor del
     // DCE (el mismo resolvedor de direcciones que usa todo el tooling).
     analysis::IrFacts fx_facts;
     analysis::PointsTo fx_pt;
     analysis::effects::EffectEnv fx_env;
     fx_env.decls = decls;
+    /* Las ligaduras del asm, si quien llama las tiene cacheadas.  Sin esto el
+     * modelo de efectos las recalcula por instruccion. */
+    fx_env.asm_bindings = asm_bindings;
     analysis::effects::LocSet fx_leidas;
     fx_leidas.is_top = true; // sin modelo, se supone que todo se lee
     if (g_dce_effects) {
@@ -12871,7 +12874,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
                 APLICA(ir_pass_licm(fn)); /* LICM con dominators reales */
             }
             APLICA(ir_pass_dead_alloc_elim(fn));
-            APLICA(ir_pass_dce(fn, &decls_nativas));
+            APLICA(ir_pass_dce(fn, &decls_nativas, &asm_of(fn)));
 
             if (level >= OptLevel::O2) {
                 // O2: plegado de constantes + bloques inalcanzables + TCO.
@@ -12939,7 +12942,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
                 // necesita.
                 APLICA(ir_pass_carry_idiom(fn));
                 // Segunda ronda de DCE tras plegado/TCO/loop header inline/CSE.
-                APLICA(ir_pass_dce(fn, &decls_nativas));
+                APLICA(ir_pass_dce(fn, &decls_nativas, &asm_of(fn)));
             }
 
             if (level >= OptLevel::O3) {

@@ -19,6 +19,7 @@
 
 #include "analysis/facts/ir_facts.h"
 #include "analysis/effects/effects.h"
+#include "analysis/facts/asm_bindings.h"
 #include "analysis/memory/points_to.h"
 
 #include <cstdint>
@@ -117,6 +118,21 @@ const char *backend_name(Backend b);
 struct EffectEnv {
     Backend            backend = Backend::Vm;
     const NativeDecls *decls = nullptr;
+    /**
+     * @brief Las ligaduras de asm de la funcion, YA calculadas.
+     *
+     * De que valor del programa habla cada operando de un bloque de asm es un
+     * hecho de la FUNCION, no de la instruccion: no cambia mientras la funcion
+     * no cambie.  Calcularlo aqui dentro significaba rehacerlo por cada
+     * instruccion de asm y por cada consulta de efectos -- medido en el barrido
+     * del DCE: 20 s de los 33 que tardaba compilar el programa entero, en
+     * 106.665 llamadas.
+     *
+     * Nulo = "no las tengo": entonces se calculan, que es lo que se hacia
+     * siempre.  Asi quien pregunte por efectos sin tener una base de hechos
+     * montada sigue funcionando igual.
+     */
+    const AsmBindingFacts *asm_bindings = nullptr;
 };
 
 /**

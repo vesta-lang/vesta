@@ -53,7 +53,8 @@ static int32_t access_bytes(ir::IrType t) {
 // --------------------------------------------------------------------------
 static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
                                               const analysis::PointsTo &pt,
-                                              const ir::IrInstr &ins) {
+                                              const ir::IrInstr &ins,
+                                              const EffectEnv &env) {
     EffectAnalysisResult r;
     // func_name lleva el cuerpo NASM (lo pone el lowering de asm).  El analisis
     // de bloque del asm opaco vive en el modulo asm (namespace vx).
@@ -72,7 +73,15 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
      * "toca el objeto entero", y la comprobacion de limites no podia decir
      * nada.  Un `asm` que escribia mas alla del buffer del llamante pasaba sin
      * un aviso, y lo que hay detras del buffer es la siguiente variable. */
-    const analysis::AsmBindingFacts lig = analysis::compute_asm_bindings(fn);
+    /* Si quien pregunta ya las tiene, se usan: son un hecho de la FUNCION y
+     * rehacerlas por instruccion es el grueso del coste de este analisis. */
+    analysis::AsmBindingFacts        propias;
+    const analysis::AsmBindingFacts *ligp = env.asm_bindings;
+    if (ligp == nullptr) {
+        propias = analysis::compute_asm_bindings(fn);
+        ligp = &propias;
+    }
+    const analysis::AsmBindingFacts &lig = *ligp;
     std::vector<std::pair<std::string, std::string>> clases;
     clases.reserve(lig.ligaduras.size());
     for (const analysis::LigaduraAsm &l : lig.ligaduras)
@@ -684,7 +693,7 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
 
     // ---- Residuo de asm OPACO ----
     case IrOp::INLINE_ASM: case IrOp::ASM_MICRO:
-        return opaque_asm_effects(fn, pt, ins);
+        return opaque_asm_effects(fn, pt, ins, env);
 
     default:
         // Op no clasificada -> efecto MAXIMO (top): robusto y completo, cubre

@@ -199,7 +199,8 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline = true);
  * @return true si se elimino al menos una instruccion.
  */
 bool ir_pass_dce(IrFunction &fn,
-                 const analysis::effects::NativeDecls *decls = nullptr);
+                 const analysis::effects::NativeDecls *decls = nullptr,
+                 const analysis::AsmBindingFacts *asm_bindings = nullptr);
 
 /**
  * @brief Elision comptime de UNWRAP cuando el operando es provably non-null
