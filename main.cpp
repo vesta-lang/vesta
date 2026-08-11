@@ -805,30 +805,10 @@ int main(int argc, char *argv[]) {
             "consumir desde un renderer de diagramas) en vez de texto legible.")(
             "asa",
             "Vuelca TODO lo que el compilador sabe de un .vx: cada afirmacion "
-            "con su dominio, su certeza y sobre que se dedujo, mas los "
-            "SILENCIOS (lo que se miro sin sacar nada), que es donde hay sitio "
-            "para saber mas.",
+            "con su dominio, su certeza, de donde sale y de que otros hechos se "
+            "sigue; y tambien lo que se miro SIN sacar nada, con el motivo.  Sin "
+            "variantes: lo vuelca entero y se redirige a un fichero.",
             cxxopts::value<std::string>())(
-            "asa-json", "Con --asa: la misma informacion, para herramientas.")(
-            "asa-dominio",
-            "Con --asa: limita a estos dominios, separados por comas "
-            "(estructura, rangos, frontera, memoria, bucles).  Sin el, todos.",
-            cxxopts::value<std::string>())(
-            "asa-fn",
-            "Con --asa: limita a estas funciones, separadas por comas.",
-            cxxopts::value<std::string>())(
-            "asa-silencios",
-            "Con --asa: afirma tambien, una por una, las cosas que se miraron "
-            "SIN sacar nada (por defecto solo se cuentan).  Son hechos de "
-            "certeza desconocida: es donde hay sitio para saber mas.")(
-            "asa-pruebas",
-            "Con --asa: ensena la derivacion de cada hecho -- de que otros "
-            "hechos concretos se sigue.")(
-            "asa-tope",
-            "Con --asa: maximo de afirmaciones por dominio y funcion (0 = sin "
-            "tope).  Lo que se deja fuera se cuenta como silencio, nunca se "
-            "calla.",
-            cxxopts::value<int>()->default_value("0"))(
             "analyze-write",
             "Con --analyze: ESCRIBE las anotaciones sugeridas al fichero "
             "analizado (reemplaza las de contrato existentes de cada funcion/"
@@ -2190,29 +2170,6 @@ int main(int argc, char *argv[]) {
             return EXIT_FAILURE;
         }
 
-        analysis::asa::OpcionesProduccion op;
-        auto partir = [](const std::string &s) {
-            std::vector<std::string> v;
-            std::string acc;
-            for (char c : s) {
-                if (c == ',') {
-                    if (!acc.empty()) v.push_back(acc);
-                    acc.clear();
-                } else if (c != ' ') {
-                    acc.push_back(c);
-                }
-            }
-            if (!acc.empty()) v.push_back(acc);
-            return v;
-        };
-        if (result.count("asa-dominio"))
-            op.dominios = partir(result["asa-dominio"].as<std::string>());
-        if (result.count("asa-fn"))
-            op.funciones = partir(result["asa-fn"].as<std::string>());
-        op.desconocidos = result.count("asa-silencios") > 0;
-        const int tope = result["asa-tope"].as<int>();
-        op.tope_por_funcion = tope > 0 ? static_cast<uint32_t>(tope) : 0u;
-
         /* El asm es un dominio mas, pero su productor vive junto a la base de
          * datos de instrucciones: se da de alta desde aqui, que es quien la
          * tiene.  Para eso existe el registro. */
@@ -2220,14 +2177,8 @@ int main(int argc, char *argv[]) {
 
         analysis::asa::FactStore almacen;
         const std::vector<analysis::asa::ResumenProduccion> resumenes =
-            analysis::asa::producir(asa_mod, almacen, op);
-        analysis::asa::OpcionesVista vista;
-        vista.pruebas = result.count("asa-pruebas") > 0;
-        if (result.count("asa-json"))
-            std::cout << analysis::asa::volcado_json(almacen, resumenes, vista)
-                      << "\n";
-        else
-            analysis::asa::imprimir_volcado(almacen, resumenes, vista, stdout);
+            analysis::asa::producir(asa_mod, almacen);
+        analysis::asa::imprimir_volcado(almacen, resumenes, stdout);
         return EXIT_SUCCESS;
     }
 

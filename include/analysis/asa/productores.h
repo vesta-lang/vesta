@@ -86,28 +86,6 @@ namespace analysis {
 namespace asa {
 
 /**
- * @brief Hasta donde afirmar.  Es politica de PRODUCCION, no de presentacion.
- *
- * Se separa a proposito de los filtros del volcado: no pedir un dominio ahorra
- * CALCULARLO; ocultarlo en la vista no.  Y afirmar lo desconocido es una
- * decision de produccion porque cuesta memoria proporcional al programa.
- */
-struct OpcionesProduccion {
-    std::vector<std::string> dominios;  ///< por nombre corto; vacio = todos.
-    std::vector<std::string> funciones; ///< por nombre exacto; vacio = todas.
-    /**
-     * @brief Afirmar tambien lo que se miro SIN sacar nada.
-     *
-     * Un "de esto no se sabe nada" es un hecho con certeza @c Desconocida, no la
-     * ausencia de hecho: distingue lo que un dominio miro y no supo de lo que ni
-     * siquiera miro, y esa diferencia es la que dice donde hay sitio para saber
-     * mas.  Cuesta memoria proporcional al programa, asi que se pide.
-     */
-    bool     desconocidos = false;
-    uint32_t tope_por_funcion = 0; ///< 0 = sin tope.
-};
-
-/**
  * @brief POR QUE un dominio no supo algo, y cuantas veces.
  *
  * NO SABER ALGO ES UN RESULTADO, y sin el motivo no sirve para nada: "no lo se"
@@ -140,11 +118,10 @@ struct ResumenProduccion {
  * comun (Regla 1) -- y el almacen donde deposita.
  */
 struct Produccion {
-    const ir::IrModule       &mod;
-    BaseDeHechos             &base;
-    FactStore                &almacen;
-    const OpcionesProduccion &op;
-    ResumenProduccion        &resumen;
+    const ir::IrModule &mod;
+    BaseDeHechos       &base;
+    FactStore          &almacen;
+    ResumenProduccion  &resumen;
     /**
      * @brief El hecho de estructura de cada funcion, si ya se produjo.
      *
@@ -153,7 +130,8 @@ struct Produccion {
      */
     std::unordered_map<std::string, FactId> &estructura_de;
 
-    /// Si la funcion entra en el filtro pedido.
+    /// Si hay algo que mirar en ella (los stubs de funciones nativas no tienen
+    /// cuerpo del que sacar nada).
     bool interesa(const ir::IrFunction &fn) const;
     /// Deposita un hecho contandolo en el resumen.
     FactId afirmar(Fact f);
@@ -196,12 +174,10 @@ std::vector<const char *> productores_registrados();
  *
  * @param mod     Modulo IR ya optimizado (el codigo que de verdad va a existir).
  * @param almacen Donde se depositan los hechos.
- * @param op      Politica de produccion.
  * @return El resumen por dominio.
  */
 std::vector<ResumenProduccion> producir(const ir::IrModule &mod,
-                                        FactStore          &almacen,
-                                        const OpcionesProduccion &op);
+                                        FactStore          &almacen);
 
 } // namespace asa
 } // namespace analysis

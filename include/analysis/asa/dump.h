@@ -69,25 +69,23 @@ sin mantener criterios paralelos."
 namespace analysis {
 namespace asa {
 
-/// Que ensenar.  Son filtros de PRESENTACION: no ahorran calcular nada (para
-/// eso estan las opciones de produccion), solo deciden que se ve.
-struct OpcionesVista {
-    /// Ensenar tambien los hechos de certeza desconocida (los silencios).  Solo
-    /// tiene efecto si se pidieron al producir: lo que no se afirmo no existe.
-    bool desconocidos = true;
-    /// Ensenar la derivacion de cada hecho (de que otros hechos se sigue).
-    bool pruebas = false;
-};
-
-/// Salida legible, en orden estable para poder comparar dos volcados.
+/**
+ * @brief Escribe TODO lo que hay en el almacen: los hechos, su derivacion, lo
+ *        que no se supo y por que, y el resumen por dominio y por fuente.
+ *
+ * Sin variantes ni combinaciones a proposito.  Un volcado que hay que pedir por
+ * partes obliga a saber que se busca ANTES de mirarlo, que es justo lo contrario
+ * de para lo que sirve; y cada variante es una forma mas de que dos personas
+ * miren cosas distintas creyendo mirar lo mismo.  Sale por la salida que se le
+ * de: para quedarse con un trozo estan las herramientas de siempre.
+ *
+ * @param almacen   Los hechos.
+ * @param resumenes Lo que produjo cada dominio.
+ * @param salida    Fichero abierto donde escribir.
+ */
 void imprimir_volcado(const FactStore                      &almacen,
                       const std::vector<ResumenProduccion> &resumenes,
-                      const OpcionesVista &vista, FILE *salida);
-
-/// Salida para herramientas.  Mismo contenido, sin adornos.
-std::string volcado_json(const FactStore                      &almacen,
-                         const std::vector<ResumenProduccion> &resumenes,
-                         const OpcionesVista                  &vista);
+                      FILE                                 *salida);
 
 } // namespace asa
 } // namespace analysis

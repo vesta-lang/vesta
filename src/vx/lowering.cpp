@@ -25,6 +25,7 @@
 #include "vx/asm/asm_lift_emit.h"  // lift de patrones atomicos a IR tipado (ASA.3)
 #include "vx/asm/asm_lift_general.h" // lift general straight-line entero a IR real
 #include "vx/asm/asm_lift_micro.h"
+#include "vx/asm/asm_lift_registro.h"
 #include "vx/asm/asm_phys_reg.h" // asm_body_subst_greedy // lift de asm opaco sin operandos -> ASM_MICRO
 #include "vx/asm/instr_db.h"      // reschedule_asm (reoptimizador de asm, ASA)
 #include "vx/asm/asm_backend.h" // validacion de sintaxis via Keystone (inc.4b)
@@ -14571,6 +14572,11 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                 // Si el asm tenia ramas, el lift creo un CFG y devuelve el bloque
                 // de CONTINUACION: el codigo siguiente se baja ahi.
                 current_block_ = asm_exit;
+                /* Y queda anotado que se elevo.  Es el UNICO momento en que se
+                 * sabe: a partir de aqui son operaciones normales y nada las
+                 * distingue de las que escribio el programador. */
+                vx::anotar_bloque_asm(fn_->name, s->loc.line, ia.func_name,
+                                      vx::DestinoAsm::ElevadoAIr);
                 return; // bloque liftado a IR real -> NO se emite el INLINE_ASM.
             }
         }
@@ -14591,6 +14597,8 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
              * asi que un bloque cuyos operandos son valores del programa se
              * ejecuta metiendolos antes y sacandolos despues. */
             out_mod_->register_native_import("vrt", "asm_micro_ops");
+            vx::anotar_bloque_asm(fn_->name, s->loc.line, ia.func_name,
+                                  vx::DestinoAsm::MicroAsm);
             return; // bloque liftado a ASM_MICRO -> NO se emite el INLINE_ASM.
         }
     }
@@ -14908,6 +14916,11 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     // volatile por defecto: el bloque nunca debe eliminarse ni
     // reordenarse por el optimizer del IR.
     ia.preserve = true;
+    /* El tercer destino posible: no se elevo.  Se anota igual que los otros dos
+     * para que el volcado pueda decir cuantos bloques hubo y que fue de cada
+     * uno, en vez de ensenar solo los que quedaron. */
+    vx::anotar_bloque_asm(fn_->name, s->loc.line, ia.func_name,
+                          vx::DestinoAsm::SinElevar);
     emit(current_block_, std::move(ia));
 
     //  AS inc.6: registrar el import nativo del helper runner para que

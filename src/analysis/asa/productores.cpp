@@ -31,10 +31,9 @@ namespace asa {
 // ===========================================================================
 
 bool Produccion::interesa(const ir::IrFunction &fn) const {
-    if (fn.is_native) return false;
-    if (op.funciones.empty()) return true;
-    return std::find(op.funciones.begin(), op.funciones.end(), fn.name) !=
-           op.funciones.end();
+    /* Un stub de funcion nativa no tiene cuerpo del que sacar nada.  No hay mas
+     * criterio: el volcado es entero, sin variantes que combinar. */
+    return !fn.is_native;
 }
 
 FactId Produccion::afirmar(Fact f) {
@@ -60,7 +59,6 @@ void Produccion::callar(Sujeto de_quien, const char *motivo,
         }
     }
     if (!contado) resumen.motivos.push_back({motivo, 1});
-    if (!op.desconocidos) return;
     /* "De esto no se sabe nada" ES un hecho -- con certeza Desconocida --, no la
      * ausencia de uno: distingue lo que se miro y no dio nada de lo que ni
      * siquiera se miro, y esa diferencia es la que dice donde ampliar. */
@@ -185,11 +183,8 @@ void producir_rangos(Produccion &p) {
         if (!p.interesa(fn)) continue;
         const RangeFacts &rf = p.base.rangos(fn);
         const Sello       s = p.base.sello(kProductorRangos, fn);
-        uint32_t          emitidos = 0;
         for (ir::IrValueId v = 0; v < fn.values.size(); ++v) {
             const ValueRange &r = rf.at(v);
-            const bool tope = p.op.tope_por_funcion != 0 &&
-                              emitidos >= p.op.tope_por_funcion;
             if (r.es_bottom()) {
                 Fact f;
                 f.que.dominio = kProductorRangos;
@@ -201,16 +196,12 @@ void producir_rangos(Produccion &p) {
                 p.afirmar(std::move(f));
                 continue;
             }
-            if (!r.acotada() || r.es_todo() || tope) {
-                p.callar(sujeto_valor(p, fn, v),
-                         tope ? "rango.fuera_de_tope" : "rango.sin_cota",
+            if (!r.acotada() || r.es_todo()) {
+                p.callar(sujeto_valor(p, fn, v), "rango.sin_cota",
                          kProductorRangos,
-                         r.es_top() ? "sin dominio"
-                                    : (tope ? "no se miro: tope pedido"
-                                            : "vale todo su tipo"));
+                         r.es_top() ? "sin dominio" : "vale todo su tipo");
                 continue;
             }
-            ++emitidos;
             Fact f;
             f.que.dominio = kProductorRangos;
             f.que.codigo = r.es_constante() ? "rango.constante" : "rango.acotado";
@@ -281,22 +272,17 @@ void producir_memoria(Produccion &p) {
         if (!p.interesa(fn)) continue;
         const PointsTo &pt = p.base.memoria(fn);
         const Sello     s = p.base.sello(kProductorMemoria, fn);
-        uint32_t        emitidos = 0;
         for (ir::IrValueId v = 0; v < fn.values.size(); ++v) {
             const effects::AbstractLoc l = loc_of(pt, v, 0);
-            const bool tope = p.op.tope_por_funcion != 0 &&
-                              emitidos >= p.op.tope_por_funcion;
             if (l.kind == effects::AbstractLoc::Kind::None ||
-                l.kind == effects::AbstractLoc::Kind::Unknown || tope) {
+                l.kind == effects::AbstractLoc::Kind::Unknown) {
                 p.callar(sujeto_valor(p, fn, v), "memoria.sin_localizar",
                          kProductorMemoria,
                          l.kind == effects::AbstractLoc::Kind::Unknown
                              ? "puede referirse a cualquier memoria"
-                             : (tope ? "no se miro: tope pedido"
-                                     : "no es un puntero localizable"));
+                             : "no es un puntero localizable");
                 continue;
             }
-            ++emitidos;
             Fact f;
             f.que.dominio = kProductorMemoria;
             f.que.codigo = "memoria.apunta_a";
@@ -360,20 +346,6 @@ void registrar_los_incluidos() {
     registrar_productor(kProductorBucles, &producir_bucles);
 }
 
-/// Nombre corto para los filtros: `asa.rangos` se pide como `rangos`.
-const char *corto(const char *dominio) {
-    const char *punto = std::strrchr(dominio, '.');
-    return punto != nullptr ? punto + 1 : dominio;
-}
-
-bool pedido(const OpcionesProduccion &op, const char *dominio) {
-    if (op.dominios.empty()) return true;
-    const std::string c = corto(dominio);
-    for (const std::string &d : op.dominios)
-        if (d == c || d == dominio) return true;
-    return false;
-}
-
 } // namespace
 
 // ===========================================================================
@@ -394,9 +366,8 @@ std::vector<const char *> productores_registrados() {
     return v;
 }
 
-std::vector<ResumenProduccion> producir(const ir::IrModule       &mod,
-                                        FactStore                &almacen,
-                                        const OpcionesProduccion &op) {
+std::vector<ResumenProduccion> producir(const ir::IrModule &mod,
+                                        FactStore          &almacen) {
     asegurar_registro();
     std::vector<ResumenProduccion> resumenes;
     /* UNA base para todos los dominios: si tres piden la estructura, se calcula
@@ -411,18 +382,17 @@ std::vector<ResumenProduccion> producir(const ir::IrModule       &mod,
     size_t valores = 0;
     for (const ir::IrFunction &fn : mod.functions)
         if (!fn.is_native) valores += fn.values.size();
-    almacen.reservar(valores * (op.desconocidos ? 2u : 1u) + 64u);
+    almacen.reservar(valores * 2u + 64u);
 
     /* Se reserva de golpe: los resumenes se referencian desde el contexto de
      * cada productor y un realloc a mitad dejaria la referencia colgando. */
     resumenes.reserve(registro().size());
     for (const DominioRegistrado &d : registro()) {
-        if (!pedido(op, d.nombre)) continue;
         resumenes.push_back(ResumenProduccion{});
         ResumenProduccion &r = resumenes.back();
         r.dominio = d.nombre;
         const auto t0 = std::chrono::steady_clock::now();
-        Produccion p{mod, base, almacen, op, r, estructura_de};
+        Produccion p{mod, base, almacen, r, estructura_de};
         d.productor(p);
         r.micros = static_cast<long>(
             std::chrono::duration_cast<std::chrono::microseconds>(

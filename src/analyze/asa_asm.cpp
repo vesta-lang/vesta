@@ -29,6 +29,7 @@
 
 #include "analyze/asm_report.h"
 
+#include "vx/asm/asm_lift_registro.h"
 #include "vx/asm/instr_db.h"
 
 #include "analysis/asa/productores.h"
@@ -225,19 +226,19 @@ void producir_asm(Produccion &p) {
         micros_por_funcion[fn.name] = n;
     }
 
-    /* 2. Los bloques que NO se elevaron: siguen siendo opacos para el IR.  De
-     *    ellos se sabe lo que la base reconoce, y lo que no se sabe se dice. */
+    /* 2. El DETALLE de los bloques asm que siguen en el IR -- opacos o micro --:
+     *    cuanto de ellos entiende la base, que tocan y que exigen del
+     *    procesador.  OJO: esto NO dice si se elevaron; el informe ve lo que
+     *    queda, y lo que queda incluye las micro.  El destino lo dice quien
+     *    elevo (punto 3), que es el unico que lo sabe. */
     const std::vector<AsmBlockReport> bloques = analizar_bloques_asm(p.mod);
-    std::unordered_map<std::string, uint32_t> opacos_por_funcion;
+    std::unordered_map<std::string, uint32_t> bloques_en_ir_por_funcion;
     for (const AsmBlockReport &b : bloques) {
-        /* El filtro por funcion vale tambien aqui: el informe mira el modulo
-         * entero y sin esto se colaria lo que no se ha pedido. */
-        if (micros_por_funcion.find(b.funcion) == micros_por_funcion.end())
-            continue;
-        ++opacos_por_funcion[b.funcion];
+        ++bloques_en_ir_por_funcion[b.funcion];
         Fact f;
         f.que.dominio = kProductorAsm;
-        f.que.codigo = b.opacidad_pedida ? "asm.opaco_pedido" : "asm.no_elevado";
+        f.que.codigo =
+            b.opacidad_pedida ? "asm.bloque_opacidad_pedida" : "asm.bloque";
         f.que.a = b.instrucciones;
         f.que.b = b.desconocidas;
         std::ostringstream o;
@@ -267,41 +268,91 @@ void producir_asm(Produccion &p) {
         p.afirmar(std::move(f));
     }
 
-    /* 3. El resumen por funcion, que es lo que uno mira primero. */
+    /* 3. LO QUE SE ELEVO A IR.  No se puede sacar del IR -- una instruccion
+     *    elevada es una suma o un almacenamiento como cualquier otro --, asi que
+     *    lo dice quien lo elevo, que es el unico que lo sabe.  Sin esto, un
+     *    programa cuyo asm se elevo entero salia igual que uno sin asm. */
+    std::unordered_map<std::string, uint32_t> elevadas_por_funcion;
+    std::unordered_map<std::string, uint32_t> sin_elevar_por_funcion;
+    std::unordered_map<std::string, uint32_t> bloques_por_funcion;
+    for (const vx::BloqueAsmBajado &b : vx::bloques_asm_bajados()) {
+        if (!p.mod.functions.empty()) {
+            /* Puede ser de otra funcion del mismo proceso (otro modulo, o una
+             * que no esta en este IR): no se afirma de lo que no se mira. */
+            bool aqui = false;
+            for (const ir::IrFunction &fn : p.mod.functions)
+                if (fn.name == b.funcion) { aqui = true; break; }
+            if (!aqui) continue;
+        }
+        ++bloques_por_funcion[b.funcion];
+        if (b.destino == vx::DestinoAsm::ElevadoAIr)
+            elevadas_por_funcion[b.funcion] += b.instrucciones;
+        else if (b.destino == vx::DestinoAsm::SinElevar)
+            ++sin_elevar_por_funcion[b.funcion];
+        Fact f;
+        f.que.dominio = kProductorAsm;
+        f.que.codigo = b.destino == vx::DestinoAsm::ElevadoAIr ? "asm.elevado"
+                     : b.destino == vx::DestinoAsm::MicroAsm   ? "asm.a_micro"
+                                                               : "asm.opaco";
+        f.que.a = b.instrucciones;
+        f.que.b = b.linea;
+        std::ostringstream o;
+        o << "linea " << b.linea << ": " << b.instrucciones
+          << " instrucciones del fuente -> " << vx::nombre_destino_asm(b.destino);
+        f.que.detalle = p.almacen.internar(o.str());
+        f.de_quien.clase = Sujeto::Clase::Funcion;
+        f.de_quien.funcion = p.almacen.internar(b.funcion);
+        /* Lo anoto quien lo hizo, en el momento de hacerlo: esta visto, no
+         * deducido. */
+        f.sello.certeza = Certeza::Demostrada;
+        f.sello.origen.productor = kProductorAsm;
+        f.sello.origen.funcion = f.de_quien.funcion;
+        f.prueba.regla = "anotado-al-elevar";
+        p.afirmar(std::move(f));
+    }
+
+    /* 4. El resumen por funcion, que es lo que uno mira primero. */
     for (const ir::IrFunction &fn : p.mod.functions) {
         if (!p.interesa(fn)) continue;
         const uint32_t micros = micros_por_funcion[fn.name];
-        auto it = opacos_por_funcion.find(fn.name);
-        const uint32_t opacos = it == opacos_por_funcion.end() ? 0u : it->second;
-        if (micros == 0 && opacos == 0) {
+        auto it = sin_elevar_por_funcion.find(fn.name);
+        const uint32_t opacos =
+            it == sin_elevar_por_funcion.end() ? 0u : it->second;
+        auto ite = elevadas_por_funcion.find(fn.name);
+        const uint32_t elevadas = ite == elevadas_por_funcion.end() ? 0u
+                                                                    : ite->second;
+        const bool hubo_asm = bloques_por_funcion.count(fn.name) != 0;
+        if (micros == 0 && !hubo_asm &&
+            bloques_en_ir_por_funcion.count(fn.name) == 0) {
             p.callar({Sujeto::Clase::Funcion, p.almacen.internar(fn.name), 0},
-                     "asm.ninguno", kProductorAsm, "no tiene asm sin elevar");
+                     "asm.ninguno", kProductorAsm, "no tiene asm");
             continue;
         }
         Fact f;
         f.que.dominio = kProductorAsm;
         f.que.codigo = "asm.resumen";
-        f.que.a = micros;
-        f.que.b = opacos;
+        f.que.a = elevadas;
+        f.que.b = micros;
         std::ostringstream o;
-        o << micros << " instrucciones como micro asm, " << opacos
-          << " bloques sin elevar";
+        o << elevadas << " instrucciones elevadas a IR, " << micros
+          << " como micro asm, " << opacos << " bloques sin elevar";
         f.que.detalle = p.almacen.internar(o.str());
         f.de_quien.clase = Sujeto::Clase::Funcion;
         f.de_quien.funcion = p.almacen.internar(fn.name);
         f.sello.certeza = Certeza::Demostrada;
         f.sello.origen.productor = kProductorAsm;
         f.sello.origen.funcion = f.de_quien.funcion;
-        f.prueba.regla = "recuento-sobre-el-ir";
+        f.prueba.regla = "recuento-sobre-el-ir-y-lo-anotado-al-elevar";
         p.afirmar(std::move(f));
 
-        /* Lo que NO se puede decir, dicho: cuantas instrucciones se ELEVARON a
-         * ops tipadas no viaja en el IR -- una vez elevadas son operaciones
-         * normales y nada las marca --, asi que se sabe en el momento del
-         * elevado y aqui ya no.  Callarlo daria a entender que no hubo. */
-        p.callar({Sujeto::Clase::Funcion, f.de_quien.funcion, 0},
-                 "asm.elevado_sin_contar", kProductorAsm,
-                 "lo elevado a ops tipadas no queda marcado en el IR");
+        /* Si el IR no se genero en este proceso -- viene de la cache -- el
+         * elevado no corrio y no hay nada anotado.  Se dice: "no consta" no es
+         * "no hubo". */
+        if (!hubo_asm)
+            p.callar({Sujeto::Clase::Funcion, f.de_quien.funcion, 0},
+                     "asm.elevado_no_consta", kProductorAsm,
+                     "su IR vino de cache: el elevado no corrio en este proceso "
+                     "y no consta que hizo (purga la cache para verlo)");
     }
 }
 
