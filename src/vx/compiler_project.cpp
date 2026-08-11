@@ -1149,6 +1149,7 @@ void traer_asignador_del_lenguaje(ir::IrModule &mod,
     mod.alloc_sym = alloc_sym;
     mod.free_sym = free_sym;
 
+    std::unordered_set<std::string> traidas;
     for (const ir::IrFunction &f : mem->functions) {
         bool ya = false;
         for (const ir::IrFunction &g : mod.functions)
@@ -1160,11 +1161,31 @@ void traer_asignador_del_lenguaje(ir::IrModule &mod,
              * llevado. */
             ir::IrFunction copia = f;
             copia.is_public = true;
+            traidas.insert(copia.name);
             mod.functions.push_back(std::move(copia));
         }
     }
+    /* Los datos, y con ellos el DESPLAZAMIENTO de sus indices.
+     *
+     * Cada modulo numera sus ranuras desde cero.  Al concatenar, las del
+     * asignador se van al final y sus indices cambian, pero sus instrucciones
+     * siguen pidiendo el numero viejo -- que ahora es otra cosa.  Ademas de
+     * leer lo que no es, se pierde su naturaleza: una ranura de variable global
+     * vive en memoria del HOST y el resto en la de la maquina, asi que el
+     * asignador acababa usando una direccion de la maquina como si fuera del
+     * host y el programa caia con un acceso invalido.
+     *
+     * Es el mismo desplazamiento que ya hace el merge de dependencias. */
     ir::IrModule copia_datos = *mem;
+    const uint64_t desplazamiento = mod.static_data.size();
     mod.static_data.append_raw_entries(std::move(copia_datos.static_data));
+    for (ir::IrFunction &f : mod.functions) {
+        if (!traidas.count(f.name)) continue; // solo las que acaban de entrar
+        for (ir::IrBlock &b : f.blocks)
+            for (ir::IrInstr &in : b.instrs)
+                if (in.op == ir::IrOp::STR_LIT_ADDR)
+                    in.imm += (int64_t)desplazamiento;
+    }
     for (const auto &gv : mem->globals) mod.globals.emplace(gv.first, gv.second);
     // Lo que el asignador llama por su cuenta: pide memoria al sistema por la
     // interfaz nativa, asi que sus importaciones tienen que venir con el.

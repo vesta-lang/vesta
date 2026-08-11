@@ -1074,17 +1074,20 @@ Loader::load_executable(runtime::VM &vm,
              * Se compila el punto de entrada de nombre conocido, que lleva al
              * asignador de ESTE programa (el suyo si lo declaro, el de la
              * biblioteca si no). */
-            /* Compilarlos aqui es lo que haria que la primera reserva ya
-             * encuentre el asignador del programa y no haya dos montones.  De
-             * momento NO: el puente que el frontend construye a mano no llega
-             * entero al codigo generado -- compila, pero el proceso muere al
-             * ejecutarlo --, asi que activarlo cambiaria un problema por otro
-             * peor.  Se enciende con VX_ASIGNADOR_PROGRAMA=1 para trabajar en
-             * ello. */
+            /* El asignador del programa, compilado ANTES de arrancar.
+             *
+             * Si la primera reserva ya lo encuentra compilado, no hay un tramo
+             * inicial en el que el codigo compilado use un asignador y el resto
+             * otro -- y ese tramo es lo que corrompe el monton, porque quien
+             * pide por uno acaba soltando por el otro.
+             *
+             * Se compila el punto de entrada de nombre conocido, que lleva al
+             * asignador de ESTE programa: el suyo si lo declaro con
+             * @AllocatorOverride, el de la biblioteca si no. */
             static const char *const kPuntos[2] = {"__vx_alloc_entry",
                                                   "__vx_free_entry"};
             const size_t n_puntos =
-                std::getenv("VX_ASIGNADOR_PROGRAMA") ? 2u : 0u;
+                std::getenv("VESTA_ASIGNADOR_MAQUINA") ? 0u : 2u;
             for (size_t ip = 0; ip < n_puntos; ++ip) {
                 const char *punto = kPuntos[ip];
                 /* El nombre convenido es un ALIAS -- una etiqueta mas sobre la
@@ -1097,12 +1100,22 @@ Loader::load_executable(runtime::VM &vm,
                 if (ial == last_exe->symbol_table.end())
                     ial = last_exe->symbol_table.find(std::string("code.") +
                                                       punto);
-                if (ial == last_exe->symbol_table.end()) continue;
+                if (ial == last_exe->symbol_table.end()) {
+                    continue;
+                }
                 const uint64_t dir_alias = ial->second;
                 auto ita = last_exe->ir_lookup.end();
                 for (const auto &sim : last_exe->symbol_table) {
-                    if (sim.second != dir_alias || sim.first == punto) continue;
-                    auto cand = last_exe->ir_lookup.find(sim.first);
+                    if (sim.second != dir_alias) continue;
+                    /* Los simbolos van con su seccion delante y la tabla de
+                     * funciones no, asi que se compara por el nombre pelado. */
+                    const size_t punto_sec = sim.first.rfind('.');
+                    const std::string pelado =
+                        punto_sec == std::string::npos
+                            ? sim.first
+                            : sim.first.substr(punto_sec + 1);
+                    if (pelado == punto) continue; // el alias, no el de verdad
+                    auto cand = last_exe->ir_lookup.find(pelado);
                     if (cand != last_exe->ir_lookup.end()) {
                         ita = cand;
                         break;
