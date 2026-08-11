@@ -12625,6 +12625,27 @@ void acumular_tramo(const char *etiqueta, long long us) {
         const bool cambio__ = PASE(llamada);                                   \
         any = any || cambio__;                                                 \
         sucia = sucia || cambio__;                                             \
+        efectos_sucios = efectos_sucios || cambio__;                           \
+    } while (0)
+
+/**
+ * Igual, pero para un pase que DECLARA preservar los efectos: lo que el modelo
+ * dijo de las instrucciones que sobreviven sigue valiendo.
+ *
+ * Hoy solo lo declara el eliminador de codigo muerto, y esta demostrado: quitar
+ * una instruccion muerta solo ENCOGE lo que la funcion lee, asi que un "no se
+ * puede quitar" guardado sigue siendo cierto -- a lo sumo se queda corto.  Casi
+ * ningun otro pase puede decir lo mismo: reescribir un operando cambia la
+ * memoria que toca la instruccion, y estrechar una carga cambia su ancho.
+ *
+ * Es lo minimo del "cada pase declara que preserva", puesto donde se puede
+ * demostrar y no donde suena bien.
+ */
+#define APLICA_PRESERVA_EFECTOS(llamada)                                       \
+    do {                                                                       \
+        const bool cambio__ = PASE(llamada);                                   \
+        any = any || cambio__;                                                 \
+        sucia = sucia || cambio__;                                             \
     } while (0)
 
 /* Igual, para los pases que devuelven cuantos cambios hicieron en vez de un
@@ -12634,6 +12655,7 @@ void acumular_tramo(const char *etiqueta, long long us) {
         const bool cambio__ = (PASE(llamada) > 0);                             \
         any = any || cambio__;                                                 \
         sucia = sucia || cambio__;                                             \
+        efectos_sucios = efectos_sucios || cambio__;                           \
     } while (0)
 
 /* Cronometra un pase sin repetir su nombre: `PASE(ir_pass_dse(fn))` mide y
@@ -12903,6 +12925,11 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
      * pasadas.  Vive aqui porque aqui se sabe cuando una funcion cambia, que es
      * lo unico que puede invalidarlo. */
     std::unordered_map<std::string, CacheEfectosDce> cache_efectos;
+    /* Por funcion: ¿cambio algo que afecte a los EFECTOS desde el ultimo
+     * calculo?  Va aparte de la marca general porque hay un pase que cambia la
+     * funcion sin tocarlos, y con una sola bandera cada consumidor acaba
+     * tirando lo suyo por lo que le hizo otro. */
+    std::unordered_map<std::string, bool> efectos_sucios_de;
     auto pt_invalidate = [&](IrFunction &fn) {
         /* Lo que el modelo dijo de sus instrucciones se apoya en estos mismos
          * hechos, asi que cae con ellos.  Una sola senal de invalidacion para
@@ -12922,6 +12949,11 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
              * La primera vez se inserta en true (no hay nada calculado aun). */
             auto  it_sucia = sucias.emplace(fn.name, true).first;
             bool &sucia = it_sucia->second;
+            /* Referencia, no busqueda por vuelta: esto esta en el bucle por
+             * funcion y se consulta en cada pase.  Empieza en true porque al
+             * principio no hay nada guardado. */
+            auto  it_ef = efectos_sucios_de.emplace(fn.name, true).first;
+            bool &efectos_sucios = it_ef->second;
 
             // O1: copy + simplify + SR + reassoc + dead-alloc + DCE
             APLICA(ir_pass_copy_prop(fn));
@@ -12954,8 +12986,11 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
              * del DSE, y entre ella y este punto corren mas pases que pueden
              * cambiar una instruccion SIN cambiar cuantas hay -- con lo que ni
              * la comprobacion de tamano lo veria. */
-            if (sucia) cache_efectos[fn.name].invalidar();
-            APLICA(ir_pass_dce(fn, &decls_nativas, &asm_of(fn),
+            if (efectos_sucios) {
+                cache_efectos[fn.name].invalidar();
+                efectos_sucios = false; // queda refrescada en esta ronda
+            }
+            APLICA_PRESERVA_EFECTOS(ir_pass_dce(fn, &decls_nativas, &asm_of(fn),
                                &cache_efectos[fn.name]));
 
             if (level >= OptLevel::O2) {
@@ -13026,8 +13061,11 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
                 // Segunda ronda de DCE tras plegado/TCO/loop header inline/CSE.
                 /* Misma razon que arriba: entre medias han corrido pases que
                  * pueden haber cambiado instrucciones sin cambiar su numero. */
-                if (sucia) cache_efectos[fn.name].invalidar();
-                APLICA(ir_pass_dce(fn, &decls_nativas, &asm_of(fn),
+                if (efectos_sucios) {
+                    cache_efectos[fn.name].invalidar();
+                    efectos_sucios = false;
+                }
+                APLICA_PRESERVA_EFECTOS(ir_pass_dce(fn, &decls_nativas, &asm_of(fn),
                                &cache_efectos[fn.name]));
             }
 
