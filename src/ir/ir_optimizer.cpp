@@ -12438,6 +12438,16 @@ template <typename F> auto cronometrar_pase(const char *nombre, F &&f)
 #define PASE(llamada)                                                          \
     cronometrar_pase(#llamada, [&] { return (llamada); })
 
+long long &vueltas_punto_fijo() {
+    static long long v = 0;
+    return v;
+}
+
+long long &visitas_a_funcion() {
+    static long long n = 0;
+    return n;
+}
+
 std::vector<TiempoPase> tiempos_de_pases() {
     AcumuladorPases            &a = acumulador_pases();
     std::lock_guard<std::mutex> lk(a.m);
@@ -12791,6 +12801,18 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
             }
         }
 
+        /* Cuantas vueltas se dieron de verdad, y sobre cuantas funciones.  Sin
+         * estos dos numeros el coste por pase no se puede interpretar: mil
+         * llamadas pueden ser muchas funciones baratas o pocas carisimas
+         * repetidas, y se arreglan de formas opuestas.  Llegar al tope sin
+         * converger es ademas un sintoma por si solo. */
+        /* ACUMULAN, no se asignan: `ir_optimize` corre una vez por MODULO y
+         * antes cada llamada pisaba a la anterior, con lo que el numero no
+         * cuadraba con las llamadas contadas por pase (244 frente a 822) y
+         * hacia parecer que un pase se llamaba de mas.  Un contador que no
+         * cuadra con lo que mide es peor que no tenerlo. */
+        vueltas_punto_fijo() += 1;
+        visitas_a_funcion() += static_cast<long long>(mod.functions.size());
         if (!any) break; // punto fijo alcanzado
     }
 

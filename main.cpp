@@ -4671,7 +4671,8 @@ int main(int argc, char *argv[]) {
                        << (++mostrados < 6 ? " |" : "");
                 }
                 lp << "   (" << pases.size() << " pases, " << total_pases
-                   << " us)\n";
+                   << " us, " << ir::vueltas_punto_fijo() << " vueltas, "
+                   << ir::visitas_a_funcion() << " funciones)\n";
             }
             nlohmann::json jf;
             if (!pases.empty()) {

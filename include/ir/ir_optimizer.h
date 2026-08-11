@@ -137,6 +137,16 @@ struct TiempoPase {
     long long   veces = 0; ///< llamadas (el punto fijo repite pasadas).
 };
 
+/// Vueltas del punto fijo, SUMADAS sobre todos los modulos (tope 8 por
+/// modulo).  Llegar al tope es un sintoma: o no converge, o dos pases se
+/// deshacen el trabajo mutuamente.
+long long &vueltas_punto_fijo();
+
+/// Visitas a una funcion (vueltas x funciones, sumado sobre los modulos).  Es
+/// el numero con el que TIENE que cuadrar la cuenta de llamadas de un pase que
+/// corra una vez por funcion; si no cuadra, el contador esta mal.
+long long &visitas_a_funcion();
+
 /// Los pases que han corrido, del mas caro al mas barato.
 std::vector<TiempoPase> tiempos_de_pases();
 
