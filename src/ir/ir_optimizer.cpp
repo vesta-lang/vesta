@@ -7526,7 +7526,8 @@ struct CronoTramo {
 } // namespace
 
 bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
-                 const std::unordered_set<std::string> *pure_callees) {
+                 const std::unordered_set<std::string> *pure_callees,
+                 const HechosDeAsmParaDse *hechos_asm) {
     bool changed = false;
 
     // ¿Es esta CALL/TAILCALL a un callee TOTALMENTE PURO?  Entonces NO es
@@ -7780,15 +7781,32 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
          * armarlas cuesta una copia de DOS cadenas por ligadura: hacerlo por
          * cada instruccion de asm era pagar esa copia n_asm veces. */
         std::vector<std::pair<std::string, std::string>> clases_asm_fn;
+        /* Punteros a los que se usan de verdad: los de fuera si llegaron, los
+         * de aqui si hubo que calcularlos.  Sin copiar: son grandes. */
+        const analysis::AsmBindingFacts *lig_usar = nullptr;
+        const analysis::IrFacts         *hechos_usar = nullptr;
+        const analysis::RangeFacts      *rangos_usar = nullptr;
         auto asegurar_hechos_asm = [&]() {
             if (hechos_asm_listos) return;
-            CronoTramo crono__("  dse:hechos(1 vez por llamada)");
             hechos_asm_listos = true;
-            lig_asm_fn = analysis::compute_asm_bindings(fn);
-            hechos_fn = analysis::build_ir_facts(fn);
-            rangos_fn = analysis::compute_ranges(fn, hechos_fn);
-            clases_asm_fn.reserve(lig_asm_fn.ligaduras.size());
-            for (const analysis::LigaduraAsm &l : lig_asm_fn.ligaduras)
+            if (hechos_asm != nullptr && hechos_asm->ligaduras != nullptr &&
+                hechos_asm->estructura != nullptr &&
+                hechos_asm->rangos != nullptr) {
+                /* Ya los tiene quien llama, cacheados: no se toca nada. */
+                lig_usar = hechos_asm->ligaduras;
+                hechos_usar = hechos_asm->estructura;
+                rangos_usar = hechos_asm->rangos;
+            } else {
+                CronoTramo crono__("  dse:hechos(calculados aqui)");
+                lig_asm_fn = analysis::compute_asm_bindings(fn);
+                hechos_fn = analysis::build_ir_facts(fn);
+                rangos_fn = analysis::compute_ranges(fn, hechos_fn);
+                lig_usar = &lig_asm_fn;
+                hechos_usar = &hechos_fn;
+                rangos_usar = &rangos_fn;
+            }
+            clases_asm_fn.reserve(lig_usar->ligaduras.size());
+            for (const analysis::LigaduraAsm &l : lig_usar->ligaduras)
                 clases_asm_fn.emplace_back(l.marcador, l.clase);
         };
         /* Y el analisis de CADA bloque, memorizado por su nombre.  El texto del
@@ -7832,11 +7850,11 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
             /* De que valor habla cada operando lo responde UN solo sitio (ver
              * @ref analysis::compute_asm_bindings); este recorrido estaba
              * copiado aqui y en el modelo de efectos. */
-            const analysis::AsmBindingFacts &lig = lig_asm_fn;
+            const analysis::AsmBindingFacts &lig = *lig_usar;
             /* Y los rangos, que son los que cierran la extension de un acceso
              * cuando la determina un operando en vez de una constante. */
-            const analysis::IrFacts    &hechos_dse = hechos_fn;
-            const analysis::RangeFacts &rangos_dse = rangos_fn;
+            const analysis::IrFacts    &hechos_dse = *hechos_usar;
+            const analysis::RangeFacts &rangos_dse = *rangos_usar;
             for (const std::string &w : e.escritos) {
                 /* Si dos variables comparten registro no se sabe a cual de las
                  * dos escribio -- asi que dejan de valer LAS DOS.  Invalidar de
@@ -12608,6 +12626,14 @@ void reiniciar_tiempos_de_pases() {
     a.por_fn.clear();
 }
 
+namespace {
+/// Marcador de identidad de las ligaduras de asm en el gestor de analisis.
+struct AsmBindingsAnalysis {
+    static char ID;
+};
+char AsmBindingsAnalysis::ID = 0;
+} // namespace
+
 void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
     if (level == OptLevel::O0) return; // sin optimizacion
 
@@ -12772,6 +12798,27 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
      * sino si cambio desde el ultimo calculo.  Arranca en true porque la
      * primera vez no hay nada cacheado. */
     std::unordered_map<std::string, bool> sucias;
+    /* Las ligaduras del asm, cacheadas como todo lo demas.  Marcador propio
+     * para que el gestor no las mezcle con otro analisis de la misma unidad. */
+    auto asm_of = [&](IrFunction &fn) -> const analysis::AsmBindingFacts & {
+        return am.get_or_compute<AsmBindingsAnalysis, analysis::AsmBindingFacts>(
+            fn.name, [&]() { return analysis::compute_asm_bindings(fn); });
+    };
+    auto facts_of = [&](IrFunction &fn) -> const analysis::IrFacts & {
+        return am.get_or_compute<analysis::IRFactsAnalysis, analysis::IrFacts>(
+            fn.name, [&]() { return analysis::build_ir_facts(fn); });
+    };
+    auto ranges_of = [&](IrFunction &fn) -> const analysis::RangeFacts & {
+        return am.get_or_compute<analysis::RangeAnalysis, analysis::RangeFacts>(
+            fn.name, [&]() { return analysis::compute_ranges(fn, facts_of(fn)); });
+    };
+    auto hechos_asm_de = [&](IrFunction &fn) {
+        HechosDeAsmParaDse h;
+        h.ligaduras = &asm_of(fn);
+        h.estructura = &facts_of(fn);
+        h.rangos = &ranges_of(fn);
+        return h;
+    };
     auto pt_invalidate = [&](IrFunction &fn) {
         am.invalidate<analysis::IRFactsAnalysis>(fn.name); // cascada a PointsTo
     };
@@ -12839,9 +12886,15 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
                 if (g_dse_unified) {
                     /* Solo si algo la ha tocado desde el ultimo calculo. */
                 if (sucia) { pt_invalidate(fn); sucia = false; }
-                    APLICA(ir_pass_dse(fn, &pt_of(fn), &pure_callees));
+                    {
+                        const HechosDeAsmParaDse h__ = hechos_asm_de(fn);
+                        APLICA(ir_pass_dse(fn, &pt_of(fn), &pure_callees, &h__));
+                    }
                 } else {
-                    APLICA(ir_pass_dse(fn, nullptr, &pure_callees));
+                    {
+                        const HechosDeAsmParaDse h__ = hechos_asm_de(fn);
+                        APLICA(ir_pass_dse(fn, nullptr, &pure_callees, &h__));
+                    }
                 }
                 // Global const CSE solamente (safer than full CSE).
                 // El full CSE local tiene bugs sutiles con LOAD/STORE alias

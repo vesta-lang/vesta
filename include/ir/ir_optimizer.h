@@ -66,6 +66,11 @@
 #define IR_OPTIMIZER_H
 
 #include "analysis/effects/ir_effects.h"
+/* Los hechos que el DSE recibe ya calculados (ver @c HechosDeAsmParaDse): se
+ * pasan por referencia, asi que hacen falta sus definiciones. */
+#include "analysis/facts/asm_bindings.h"
+#include "analysis/facts/ir_facts.h"
+#include "analysis/facts/value_range.h"
 #include "ir/ssa_ir.h"
 
 #include <string>
@@ -750,8 +755,28 @@ bool ir_pass_cse(IrFunction &fn);
  *        tiene; se lo aporta EffectAnalysis.  nullptr = comportamiento clasico
  *        (toda CALL es barrera).
  */
+/**
+ * @brief Hechos que el DSE necesita para tratar el asm con precision.
+ *
+ * Se le PASAN, no los calcula: son los mismos que ya cachea el gestor de
+ * analisis para el resto de los pases, y recalcularlos aqui es rehacer un
+ * trabajo cuyo resultado ya existe.  Medido: calcularlos dentro se llevaba el
+ * 100 % del pase (30 s de 30 s sobre una funcion de 1740 instrucciones,
+ * recalculados una vez por llamada, 1056 veces).
+ *
+ * Un puntero nulo significa "no los tengo": entonces el pase los calcula, que
+ * es lo que hacia siempre.  Asi quien lo llame suelto -- un test, una
+ * herramienta -- no tiene que montar un gestor de analisis.
+ */
+struct HechosDeAsmParaDse {
+    const analysis::AsmBindingFacts *ligaduras = nullptr;
+    const analysis::IrFacts         *estructura = nullptr;
+    const analysis::RangeFacts      *rangos = nullptr;
+};
+
 bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt = nullptr,
-                 const std::unordered_set<std::string> *pure_callees = nullptr);
+                 const std::unordered_set<std::string> *pure_callees = nullptr,
+                 const HechosDeAsmParaDse *hechos_asm = nullptr);
 
 /**
  * @brief Pase Const CSE Entry: deduplicacion global de constantes.
