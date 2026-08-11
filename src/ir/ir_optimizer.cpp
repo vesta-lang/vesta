@@ -7501,6 +7501,30 @@ bool ir_pass_const_fold(IrFunction &fn) {
 //
 // Ahorro: en codigo generado por frontend Vesta se ven STOREs de zero seguidos
 // de STOREs reales (init list, alloca cleared, etc).  ~10-15% reduccion.
+namespace {
+/// Definida mas abajo, junto al acumulador que alimenta.
+void acumular_tramo(const char *etiqueta, long long us);
+
+/**
+ * @brief Cronometra lo que viva el objeto y lo suma a @p etiqueta.
+ *
+ * Para partir un pase caro POR DENTRO: el reparto por pase dice cual lo es, y
+ * esto dice por que.  Se declara aqui, antes del primer pase que lo usa, y se
+ * define junto al acumulador.
+ */
+struct CronoTramo {
+    const char                           *n;
+    std::chrono::steady_clock::time_point t0;
+    explicit CronoTramo(const char *etiqueta)
+        : n(etiqueta), t0(std::chrono::steady_clock::now()) {}
+    ~CronoTramo() {
+        acumular_tramo(n, std::chrono::duration_cast<std::chrono::microseconds>(
+                              std::chrono::steady_clock::now() - t0)
+                              .count());
+    }
+};
+} // namespace
+
 bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
                  const std::unordered_set<std::string> *pure_callees) {
     bool changed = false;
@@ -7670,6 +7694,7 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
          * alloca, alloca vs heap, malloc vs malloc) NUNCA aliasan -> intactos.
          * Se asume el ancho maximo (8 B) de la entrada trackeada: conservador. */
         auto kill_val_overlapping = [&](const AddrKey &k, int64_t size) {
+            CronoTramo crono__("  dse:kill_val_overlapping");
             for (auto it = last_store_val.begin();
                  it != last_store_val.end();) {
                 bool ov = it->first.first == k.first && it->first != k &&
@@ -7687,6 +7712,7 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
          * cubierto es dead.  Si el rango excede 64 B no se modela la mascara
          * (se descarta el pendiente: conservador, no se mata). */
         auto note_write = [&](IrValueId root, int64_t off, int64_t size) {
+            CronoTramo crono__("  dse:note_write");
             for (auto it = pending.begin(); it != pending.end();) {
                 if (it->root != root || it->off >= off + size ||
                     off >= it->off + it->size) {
@@ -7716,6 +7742,7 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
         /* Un LOAD de [off, off+size) LEE los stores pendientes que solapa ->
          * dejan de ser candidatos a dead. */
         auto note_read = [&](IrValueId root, int64_t off, int64_t size) {
+            CronoTramo crono__("  dse:note_read");
             for (auto it = pending.begin(); it != pending.end();) {
                 if (it->root == root && it->off < off + size &&
                     off < it->off + it->size)
@@ -7755,6 +7782,7 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
         std::vector<std::pair<std::string, std::string>> clases_asm_fn;
         auto asegurar_hechos_asm = [&]() {
             if (hechos_asm_listos) return;
+            CronoTramo crono__("  dse:hechos(1 vez por llamada)");
             hechos_asm_listos = true;
             lig_asm_fn = analysis::compute_asm_bindings(fn);
             hechos_fn = analysis::build_ir_facts(fn);
@@ -7770,6 +7798,7 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
         std::unordered_map<std::string, vx::AsmBlockEffects> efectos_de_bloque;
 
         auto dse_asm_preciso = [&](const IrInstr &ins) -> bool {
+            CronoTramo crono__("  dse:asm");
             asegurar_hechos_asm();
             /* Con las clases de operando: esto pregunta QUE memoria toca el
              * bloque, que es exactamente lo que no se puede responder sin
@@ -12472,6 +12501,23 @@ auto cronometrar_pase(const char *nombre, const IrFunction &fn, F &&f)
     return r;
 }
 
+} // namespace
+
+namespace {
+/**
+ * @brief Suma tiempo a una etiqueta cualquiera del mismo acumulador.
+ *
+ * Sirve para partir un pase por dentro sin inventar otro mecanismo: el reparto
+ * por pase ya dice CUAL es caro, y con esto se pregunta POR QUE dentro de el.
+ * La etiqueta lleva prefijo del pase para que salga junto a el al ordenar.
+ */
+void acumular_tramo(const char *etiqueta, long long us) {
+    AcumuladorPases            &a = acumulador_pases();
+    std::lock_guard<std::mutex> lk(a.m);
+    auto                       &e = a.t[etiqueta];
+    e.first += us;
+    e.second += 1;
+}
 } // namespace
 
 /* Aplica un pase: lo cronometra, propaga si cambio algo al punto fijo, y marca
