@@ -13,6 +13,7 @@
 #include "ir/ir_optimizer.h"
 
 #include <chrono>
+#include <deque>
 #include <mutex>
 #include "ir/ir_facts.h"
 #include "ir/ir_pattern.h"
@@ -12393,12 +12394,23 @@ namespace {
  * cuarenta pases y el punto fijo los repite hasta ocho veces por funcion, asi
  * que se busca muchisimas mas veces de las que se inserta.  La clave es el
  * literal del nombre, que es estable. */
+/// Lo acumulado de un (pase, funcion).
+struct EntradaFn {
+    long long us = 0;
+    long long veces = 0;
+    long long instrs = 0;
+};
+
 struct AcumuladorPases {
     /* Con cerrojo porque los modulos se compilan EN PARALELO: sin el, dos
      * hilos insertando en la misma tabla la corrompen.  Cuesta nada al lado de
      * un pase -- se toma una vez por pase, no por instruccion. */
     std::mutex                                                        m;
     std::unordered_map<const char *, std::pair<long long, long long>> t;
+    /* Y el mismo reparto abierto por funcion.  Clave compuesta en texto: se
+     * construye una vez por llamada a pase (miles, no millones) y ahorra tener
+     * que inventar un hash de par. */
+    std::unordered_map<std::string, EntradaFn> por_fn;
 };
 
 AcumuladorPases &acumulador_pases() {
@@ -12416,17 +12428,32 @@ AcumuladorPases &acumulador_pases() {
  * @param f      Lo que hace el pase; devuelve si cambio algo.
  * @return Lo que devolviera @p f.
  */
-template <typename F> auto cronometrar_pase(const char *nombre, F &&f)
+template <typename F>
+auto cronometrar_pase(const char *nombre, const IrFunction &fn, F &&f)
     -> decltype(f()) {
     const auto t0 = std::chrono::steady_clock::now();
     auto       r = f();
     const auto t1 = std::chrono::steady_clock::now();
+    const long long us =
+        std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+    /* El tamano se mide DESPUES del pase: es el que tiene la funcion cuando se
+     * vuelva a mirar, y lo que interesa es como se relaciona el coste con lo
+     * que hay, no con lo que habia. */
+    long long instrs = 0;
+    for (const auto &b : fn.blocks) instrs += static_cast<long long>(b.instrs.size());
+
     AcumuladorPases            &a = acumulador_pases();
     std::lock_guard<std::mutex> lk(a.m);
     auto                       &e = a.t[nombre];
-    e.first += std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                   .count();
+    e.first += us;
     e.second += 1;
+    std::string clave = nombre;
+    clave.push_back('\0');
+    clave += fn.name;
+    EntradaFn &q = a.por_fn[clave];
+    q.us += us;
+    q.veces += 1;
+    q.instrs = instrs;
     return r;
 }
 
@@ -12460,7 +12487,7 @@ template <typename F> auto cronometrar_pase(const char *nombre, F &&f)
  * devuelve lo mismo que la llamada.  Con el nombre escrito a mano se acabaria
  * midiendo un pase bajo la etiqueta de otro al mover una linea. */
 #define PASE(llamada)                                                          \
-    cronometrar_pase(#llamada, [&] { return (llamada); })
+    cronometrar_pase(#llamada, fn, [&] { return (llamada); })
 
 long long &vueltas_punto_fijo() {
     static long long v = 0;
@@ -12485,10 +12512,39 @@ std::vector<TiempoPase> tiempos_de_pases() {
     return v;
 }
 
+std::vector<TiempoPaseFuncion> tiempos_por_funcion() {
+    AcumuladorPases            &a = acumulador_pases();
+    std::lock_guard<std::mutex> lk(a.m);
+    std::vector<TiempoPaseFuncion> v;
+    v.reserve(a.por_fn.size());
+    /* Los nombres de pase se devuelven como punteros estables: viven en esta
+     * arena, que no invalida al crecer. */
+    static std::deque<std::string> nombres;
+    for (const auto &kv : a.por_fn) {
+        const size_t      corte = kv.first.find('\0');
+        TiempoPaseFuncion x;
+        x.funcion = (corte == std::string::npos)
+                        ? std::string()
+                        : kv.first.substr(corte + 1);
+        x.us = kv.second.us;
+        x.veces = kv.second.veces;
+        x.instrucciones = kv.second.instrs;
+        nombres.push_back(kv.first.substr(0, corte));
+        x.pase = nombres.back().c_str();
+        v.push_back(std::move(x));
+    }
+    std::sort(v.begin(), v.end(),
+              [](const TiempoPaseFuncion &a2, const TiempoPaseFuncion &b2) {
+                  return a2.us > b2.us;
+              });
+    return v;
+}
+
 void reiniciar_tiempos_de_pases() {
     AcumuladorPases            &a = acumulador_pases();
     std::lock_guard<std::mutex> lk(a.m);
     a.t.clear();
+    a.por_fn.clear();
 }
 
 void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {

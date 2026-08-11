@@ -147,6 +147,26 @@ long long &vueltas_punto_fijo();
 /// corra una vez por funcion; si no cuadra, el contador esta mal.
 long long &visitas_a_funcion();
 
+/**
+ * @brief Lo que costo un pase EN UNA FUNCION concreta.
+ *
+ * El reparto por pase dice cual es caro; este dice si lo es por igual en todas
+ * o por una sola.  Son dos averias distintas: un pase caro repartido se
+ * arregla haciendolo mas barato, y uno caro concentrado en la funcion mas
+ * grande se arregla mirando como crece con el tamano.  Sin separarlas se
+ * ataca a ciegas.
+ */
+struct TiempoPaseFuncion {
+    const char *pase = "?";
+    std::string funcion;
+    long long   us = 0;
+    long long   veces = 0;
+    long long   instrucciones = 0; ///< tamano de la funcion, para ver la curva.
+};
+
+/// Los pares (pase, funcion) mas caros primero.
+std::vector<TiempoPaseFuncion> tiempos_por_funcion();
+
 /// Los pases que han corrido, del mas caro al mas barato.
 std::vector<TiempoPase> tiempos_de_pases();
 

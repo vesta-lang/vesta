@@ -4674,6 +4674,24 @@ int main(int argc, char *argv[]) {
                    << " us, " << ir::vueltas_punto_fijo() << " vueltas, "
                    << ir::visitas_a_funcion() << " funciones)\n";
             }
+            /* Y donde se concentra: el reparto por pase dice cual es caro, este
+             * dice si lo es por igual en todas las funciones o por una sola.
+             * Son dos averias distintas -- una se arregla haciendo el pase mas
+             * barato, la otra mirando como crece con el tamano -- y sin
+             * separarlas se ataca a ciegas.  Va el tamano al lado por eso. */
+            const auto porfn = ir::tiempos_por_funcion();
+            if (!porfn.empty() && total_pases > 0) {
+                auto lf = vesta::scout();
+                lf << "[vx] optimizar, donde se concentra:";
+                for (size_t i = 0; i < porfn.size() && i < 4; ++i) {
+                    if (porfn[i].us * 100 < total_pases) break;
+                    lf << " " << porfn[i].pase << "@" << porfn[i].funcion << " "
+                       << porfn[i].us << " us x" << porfn[i].veces << " ("
+                       << porfn[i].instrucciones << " instr)"
+                       << (i + 1 < 4 ? " |" : "");
+                }
+                lf << "\n";
+            }
             nlohmann::json jf;
             if (!pases.empty()) {
                 /* En el volcado de maquina van TODOS, que ahi no molesta la
