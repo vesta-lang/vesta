@@ -28,6 +28,8 @@
 #include "ffi/virtual_lib_registry.h" // Sprint JIT-cross-fn: virtual fn lookup
 #include "loader/loader.h"
 #include "loader/oop_types.h"
+#include "analysis/facts/ir_facts.h"
+#include "analysis/facts/value_range.h"
 #include "ir/ir_optimizer.h" // C2.4: devirt especulativa + inline
 #include "ir/passes/if_conversion.h"  // auto-PGO del JIT: re-if-conversion
 #include "ir/passes/select_simplify.h"
@@ -581,6 +583,31 @@ CodeCache *get_or_init_code_cache() noexcept {
 /* FN.3: fuera del namespace anonimo -- la llama loader.cpp (linkage externa). */
 /** @brief El asignador del programa, ya compilado (0 = no hay).  Lo pone el
  *  cargador; lo lee el selector para saber cual es el monton. */
+/**
+ * @brief Especializar una llamada por lo que se sabe de sus argumentos.
+ *
+ * APAGADO por defecto, y por medicion: no gana en ninguno de los casos
+ * probados -- alloc_small 201 contra 191 ms, mem_struct 143 contra 135,
+ * memcpy_loop 103 contra 96 --, y cuesta tiempo de compilacion.
+ *
+ * El motivo es que el asignador no ramifica por el TAMANO sino por lo que hay
+ * en su lista libre, y eso no es un hecho del IR: ningun rango lo poda.  Lo
+ * que hace falta ahi es ASUMIR el camino rapido con una salida al lento, que
+ * es otra cosa -- y es lo que hace el atajo escrito a mano que sigue ganando.
+ * Y `memcpy` no llega siquiera como llamada: baja a la instruccion de la
+ * maquina, asi que no hay cuerpo que especializar.
+ *
+ * Se queda como base de eso, no como optimizacion activa.  Se enciende con
+ * VESTA_JIT_ESPECIALIZAR=1 para medir.
+ */
+static bool jit_sin_especializar_reservas() {
+    static const bool on = [] {
+        const char *v = std::getenv("VESTA_JIT_ESPECIALIZAR");
+        return v && v[0] != ' ' && v[0] != '0';
+    }();
+    return !on;
+}
+
 uint64_t g_alloc_del_programa = 0;
 uint64_t g_free_del_programa = 0;
 
@@ -1332,6 +1359,111 @@ CompileResult eager_compile_function(
             ir_elegida = &(*ir_functions)[itv->second];
         }
     }
+    /* Especializacion por lo que se sabe AQUI.
+     *
+     * Una llamada no es una caja negra: si su cuerpo esta en el modulo y en
+     * este punto se conocen sus argumentos, meter el cuerpo y plegar las
+     * constantes deja SOLO el camino que ese caso recorre -- sin las ramas que
+     * ya no pueden darse.  Vale para CUALQUIER funcion, no para una en
+     * concreto: lo que cambia por sitio son los hechos que se conocen.
+     *
+     * Una reserva entra por la misma puerta: es una llamada al asignador del
+     * programa, solo que escrita como instruccion.  Convertirla la mete en el
+     * mismo mecanismo, y ahi el asignador se especializa como cualquier otra
+     * -- siguiendo ademas a quien lo sustituya con @AllocatorOverride, cosa
+     * que el atajo escrito a mano en el generador de codigo no puede hacer.
+     *
+     * Es el mismo bucle de inline + constantes que ya usan el OSR y la
+     * devirtualizacion. */
+    ir::IrFunction esp_clone;
+    if (g_jit_use_vregs && !callback_entry && ir_lookup != nullptr &&
+        ir_functions != nullptr && !jit_sin_especializar_reservas()) {
+        /* Que cuerpos hacen falta: los de las llamadas de esta funcion, mas el
+         * del asignador si reserva memoria. */
+        std::unordered_set<std::string> quiero;
+        bool reserva = false;
+        for (const auto &bb : ir_elegida->blocks)
+            for (const auto &in : bb.instrs) {
+                if (in.op == ir::IrOp::RAW_ALLOC) reserva = true;
+                else if (in.op == ir::IrOp::CALL && !in.func_name.empty())
+                    quiero.insert(in.func_name);
+            }
+        if (reserva) quiero.insert("__vx_malloc");
+        std::vector<size_t> cuerpos;
+        for (const auto &nom : quiero) {
+            auto it2 = ir_lookup->find(nom);
+            if (it2 != ir_lookup->end() && it2->second < ir_functions->size())
+                cuerpos.push_back(it2->second);
+        }
+        const bool hay_asignador =
+            reserva && ir_lookup->count("__vx_malloc") != 0;
+
+        /* Y AHORA el criterio: solo merece la pena si de los argumentos se
+         * sabe algo que permita podar.  Sin eso, meter el cuerpo solo engorda
+         * el codigo -- medido: la reserva pasaba de 199 a 293 ms al inlinar un
+         * asignador cuyas ramas no dependen del tamano sino de que hay en la
+         * lista libre, que no es un hecho del IR.
+         *
+         * El hecho no es "es una constante": es que el valor este ACOTADO.  Un
+         * tamano que se sabe menor que el tope del slab poda la rama de los
+         * bloques grandes aunque no sea constante. */
+        bool merece = false;
+        {
+            /* Regla 1: el consumidor NO construye la base de hechos, la RECIBE.
+             * Aqui todavia se calcula en el sitio porque el JIT no recibe un
+             * gestor de analisis; en cuanto lo reciba, esto es una consulta y
+             * no un computo -- y de paso deja de repetirse por cada funcion que
+             * se compila.  Queda escrito para que no se quede asi.
+             *
+             * Y falta mas de un hecho: los rangos dicen lo que vale un ARGUMENTO,
+             * no lo que hay en el ESTADO que de verdad decide las ramas del
+             * asignador.  Ese hecho existe -- alguien lo sabe -- pero hoy no
+             * llega hasta aqui. */
+            const analysis::IrFacts hechos =
+                analysis::build_ir_facts(*ir_elegida);
+            const analysis::RangeFacts rangos =
+                analysis::compute_ranges(*ir_elegida, hechos);
+            for (const auto &bb : ir_elegida->blocks)
+                for (const auto &in : bb.instrs) {
+                    const bool interesa =
+                        in.op == ir::IrOp::RAW_ALLOC ||
+                        (in.op == ir::IrOp::CALL && !in.func_name.empty());
+                    if (!interesa) continue;
+                    for (ir::IrValueId a : in.operands) {
+                        if (a >= rangos.r.size()) continue;
+                        const auto &rg = rangos.r[a];
+                        if (rg.acotada() && !rg.es_todo()) { merece = true; break; }
+                    }
+                    if (merece) break;
+                }
+        }
+        if (merece && !cuerpos.empty() && (hay_asignador || !quiero.empty())) {
+            esp_clone = *ir_elegida;
+            if (hay_asignador)
+                for (auto &bb : esp_clone.blocks)
+                    for (auto &in : bb.instrs)
+                        if (in.op == ir::IrOp::RAW_ALLOC) {
+                            in.op = ir::IrOp::CALL;
+                            in.func_name = "__vx_malloc";
+                        }
+            ir::IrModule tmp;
+            tmp.functions.push_back(esp_clone);
+            for (size_t idx : cuerpos)
+                tmp.functions.push_back((*ir_functions)[idx]);
+            for (int it3 = 0; it3 < 5; ++it3) {
+                bool any = ir::ir_pass_inline_multiblock(tmp, 256);
+                any = ir::ir_pass_inline(tmp, 256) || any;
+                any = ir::ir_pass_const_fold(tmp.functions[0]) || any;
+                any = ir::ir_pass_copy_prop(tmp.functions[0]) || any;
+                any = ir::ir_pass_simplify(tmp.functions[0]) || any;
+                any = ir::ir_pass_dce(tmp.functions[0]) || any;
+                if (!any) break;
+            }
+            esp_clone = std::move(tmp.functions[0]);
+            ir_elegida = &esp_clone; // se compila la version especializada
+        }
+    }
+
     const ir::IrFunction &ir_fn_sel = *ir_elegida;
 
     /* Init lazy de threshold desde env (1 vez por proceso). */
