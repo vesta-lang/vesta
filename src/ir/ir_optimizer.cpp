@@ -7083,6 +7083,8 @@ bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
     // DCE (el mismo resolvedor de direcciones que usa todo el tooling).
     analysis::IrFacts fx_facts;
     analysis::PointsTo fx_pt;
+    const analysis::IrFacts  &hechos = fx_facts;
+    const analysis::PointsTo &apunta_a = fx_pt;
     analysis::effects::EffectEnv fx_env;
     fx_env.decls = decls;
     /* Las ligaduras del asm, si quien llama las tiene cacheadas.  Sin esto el
@@ -7095,6 +7097,20 @@ bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
     fx_leidas.is_top = true; // sin modelo, se supone que todo se lee
     if (g_dce_effects) {
         CronoTramo crono__("  dce:hechos");
+        /* ESTE ES EL MAYOR CONSUMIDOR DEL COMPILADOR: 3,07 s en 1.764 tomas
+         * (veintinueve veces por funcion), porque el pase corre una vez por
+         * funcion y por vuelta del punto fijo.
+         *
+         * INTENTADO Y REVERTIDO (2026-08-12): prestarle los que el orquestador
+         * ya tiene cacheados (`facts_of`/`pt_of`), como se hizo con las
+         * ligaduras de asm y los rangos.  SEGMENTATION FAULT.  `IrFacts::def_of`
+         * guarda PUNTEROS a instrucciones, y los del gestor pueden venir de
+         * antes de que otro pase mutara la funcion: punteros colgando.  Que el
+         * DCE los reconstruya siempre es lo que venia tapando el problema.
+         *
+         * Para cerrarlo hay que arreglar antes la invalidacion -- que los
+         * hechos cacheados no sobrevivan a una mutacion del IR --, no prestarlos
+         * y confiar.  Ver la nota en la cabecera del pase. */
         fx_facts = analysis::build_ir_facts(fn);
         fx_pt = analysis::compute_points_to(fn, fx_facts);
         /* Cuantas veces se piden los rangos de una misma funcion.  El arreglo
@@ -7111,7 +7127,7 @@ bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
         // Reloj del proyecto (TSC calibrado): ~5 ns por lectura frente a ~50 del
         // de la biblioteca estandar, que es la diferencia entre ver esto y no.
         const uint64_t t_r = util::reloj::ahora();
-        fx_rangos = analysis::compute_ranges_ptr(fn, fx_facts);
+        fx_rangos = analysis::compute_ranges_ptr(fn, hechos);
         fx_env.rangos = fx_rangos.get();
         fx_env.rangos_de = &fn;
         ns_peticiones += util::reloj::a_ns(util::reloj::ahora() - t_r);
@@ -7119,7 +7135,7 @@ bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
             std::fprintf(stderr, "[dce-rangos] %lld peticiones | %lld ms\n",
                          n_peticiones.load(), ns_peticiones.load() / 1000000);
         }
-        fx_leidas = locs_leidas(fn, fx_facts, fx_pt, fx_env);
+        fx_leidas = locs_leidas(fn, hechos, apunta_a, fx_env);
     }
 
     // Construir conjunto de valores que son usados en algun operando
@@ -7202,7 +7218,7 @@ bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
                         ? cache->resp[pos]
                         : static_cast<int8_t>(-1);
                 if (guardado < 0) {
-                    modelo_dice = model_removable(fn, fx_facts, fx_pt, ins,
+                    modelo_dice = model_removable(fn, hechos, apunta_a, ins,
                                                   fx_env, fx_leidas);
                     if (cache != nullptr && pos < cache->resp.size())
                         cache->resp[pos] = modelo_dice ? 1 : 0;
@@ -7311,7 +7327,13 @@ bool ir_pass_copy_prop(IrFunction &fn) {
         }
     }
     // Eliminar los MOV que ahora son copias triviales (%a = mov %a)
-    if (changed) ir_pass_dce(fn);
+    /* Etiquetado: el DCE tambien se llama DESDE otros pases para limpiar lo
+     * que acaban de generar.  Sin contarlo, su tramo interno (`dce:hechos`)
+     * salia con mas tomas que el propio pase y el reparto no cuadraba. */
+    if (changed) {
+        util::CronoTramo crono__("  dce:limpieza-en-pase");
+        ir_pass_dce(fn);
+    }
     return changed;
 }
 
@@ -8315,6 +8337,7 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
     // y copy_prop para resolver los MOVs generados por SLF.
     if (changed) {
         ir_pass_copy_prop(fn);
+        util::CronoTramo crono__("  dce:limpieza-en-pase");
         ir_pass_dce(fn);
     }
     return changed;
@@ -13174,7 +13197,9 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
              * (size const del malloc, etc.). */
             if (any2) {
                 for (auto &fn : mod.functions) {
-                    if (!fn.is_native) ir_pass_dce(fn, &decls_nativas);
+                    if (fn.is_native) continue;
+                    util::CronoTramo crono__("  dce:limpieza-orquestada");
+                    ir_pass_dce(fn, &decls_nativas);
                 }
             }
         }
@@ -13209,6 +13234,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
             if (fn.is_native) continue;
             if (ir_pass_bulk_memory_lower(fn)) {
                 ir_pass_unreachable(fn);
+                util::CronoTramo crono__("  dce:limpieza-orquestada");
                 ir_pass_dce(fn);
             }
         }
@@ -13221,6 +13247,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
                 ir_pass_copy_prop(fn);
                 ir_pass_cse(fn);
                 ir_pass_const_fold(fn);
+                util::CronoTramo crono__("  dce:limpieza-orquestada");
                 ir_pass_dce(fn, &decls_nativas);
             }
         }
