@@ -50,7 +50,10 @@
 #ifndef TIMER_H
 #define TIMER_H
 
+#include "util/reloj.h"
+
 #include <chrono>
+#include <cstdint>
 
 /**
  * @struct Timer
@@ -60,12 +63,16 @@
  * @c reset().  Las funciones @c ms(), @c us() y @c ns() miden el tiempo
  * transcurrido desde ese punto hasta el instante de la llamada.
  *
- * @c steady_clock garantiza que las mediciones sean monoton icas: no retrocede
- * aunque el reloj del sistema sea ajustado manualmente.
+ * Usa el reloj del proyecto (@c util::reloj), que en x86 con TSC invariante da
+ * ~5 ns de resolucion y ~5 ns por lectura, frente a los ~100 ns de resolucion y
+ * ~50 ns por lectura del de la biblioteca estandar.  Eso importa aqui: quien
+ * mide algo corto y muy repetido -- un quantum del planificador, un despacho --
+ * con un reloj de 100 ns esta midiendo sobre todo el reloj.  Sigue siendo
+ * monotono: no retrocede aunque se ajuste la hora del sistema.
  */
 typedef struct Timer {
-    /// Punto de inicio de la medicion (instante en que se construyo o resets).
-    std::chrono::steady_clock::time_point start;
+    /// Punto de inicio, en TICKS del reloj del proyecto.
+    uint64_t start;
 
     /**
      * @brief Constructor: inicia el temporizador en el instante de creacion.
@@ -78,7 +85,7 @@ typedef struct Timer {
      * Llamar a @c reset() descarta el tiempo acumulado y comienza una nueva
      * medicion.
      */
-    void reset() { start = std::chrono::steady_clock::now(); }
+    void reset() { start = util::reloj::ahora(); }
 
     /**
      * @brief Devuelve el tiempo transcurrido en milisegundos.
@@ -87,12 +94,7 @@ typedef struct Timer {
      *
      * @return Tiempo transcurrido desde @c start en milisegundos (long long).
      */
-    long long ms() const {
-        auto end = std::chrono::steady_clock::now();
-        return std::chrono::duration_cast<std::chrono::milliseconds>(end -
-                                                                     start)
-            .count();
-    }
+    long long ms() const { return ns() / 1000000; }
 
     /**
      * @brief Devuelve el tiempo transcurrido en microsegundos.
@@ -101,12 +103,7 @@ typedef struct Timer {
      *
      * @return Tiempo transcurrido desde @c start en microsegundos (long long).
      */
-    long long us() const {
-        auto end = std::chrono::steady_clock::now();
-        return std::chrono::duration_cast<std::chrono::microseconds>(end -
-                                                                     start)
-            .count();
-    }
+    long long us() const { return ns() / 1000; }
 
     /**
      * @brief Devuelve el tiempo transcurrido en nanosegundos.
@@ -116,11 +113,7 @@ typedef struct Timer {
      *
      * @return Tiempo transcurrido desde @c start en nanosegundos (long long).
      */
-    long long ns() const {
-        auto end = std::chrono::steady_clock::now();
-        return std::chrono::duration_cast<std::chrono::nanoseconds>(end - start)
-            .count();
-    }
+    long long ns() const { return util::reloj::a_ns(util::reloj::ahora() - start); }
 } Timer;
 
 #endif // TIMER_H

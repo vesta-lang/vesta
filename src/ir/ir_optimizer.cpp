@@ -7024,14 +7024,16 @@ void acumular_tramo(const char *etiqueta, long long us);
  * define junto al acumulador.
  */
 struct CronoTramo {
-    const char                           *n;
-    std::chrono::steady_clock::time_point t0;
-    explicit CronoTramo(const char *etiqueta)
-        : n(etiqueta), t0(std::chrono::steady_clock::now()) {}
+    const char *n;
+    uint64_t    t0;
+    /* Reloj del proyecto y acumulacion en NANOsegundos.  Antes usaba el de la
+     * biblioteca estandar y truncaba a microsegundos, que es justo el fallo que
+     * `acumular_tramo_ns` documenta: un tramo de 0,4 us mide CERO, y doscientas
+     * mil llamadas de esas suman cero habiendo costado 80 ms.  Y un tramo corto
+     * y muy repetido es precisamente el que se quiere descubrir. */
+    explicit CronoTramo(const char *etiqueta) : n(etiqueta), t0(util::reloj::ahora()) {}
     ~CronoTramo() {
-        acumular_tramo(n, std::chrono::duration_cast<std::chrono::microseconds>(
-                              std::chrono::steady_clock::now() - t0)
-                              .count());
+        util::acumular_tramo_ns(n, util::reloj::a_ns(util::reloj::ahora() - t0));
     }
 };
 } // namespace
@@ -12595,11 +12597,10 @@ AcumuladorPases &acumulador_pases() {
 template <typename F>
 auto cronometrar_pase(const char *nombre, const IrFunction &fn, F &&f)
     -> decltype(f()) {
-    const auto t0 = std::chrono::steady_clock::now();
-    auto       r = f();
-    const auto t1 = std::chrono::steady_clock::now();
-    const long long us =
-        std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+    const uint64_t t0 = util::reloj::ahora();
+    auto           r = f();
+    // Reloj del proyecto: ~5 ns de resolucion frente a los ~100 del estandar.
+    const long long us = util::reloj::a_ns(util::reloj::ahora() - t0) / 1000;
     /* El tamano se mide DESPUES del pase: es el que tiene la funcion cuando se
      * vuelva a mirar, y lo que interesa es como se relaciona el coste con lo
      * que hay, no con lo que habia. */
