@@ -7012,31 +7012,14 @@ locs_leidas(const IrFunction &fn, const analysis::IrFacts &facts,
     return leidas;
 }
 
-namespace {
-/// Definida mas abajo, junto al acumulador que alimenta.
-void acumular_tramo(const char *etiqueta, long long us);
-
-/**
- * @brief Cronometra lo que viva el objeto y lo suma a @p etiqueta.
+/* Para partir un pase caro POR DENTRO se usa `util::CronoTramo`: el reparto por
+ * pase dice cual lo es, y el tramo dice por que.
  *
- * Para partir un pase caro POR DENTRO: el reparto por pase dice cual lo es, y
- * esto dice por que.  Se declara aqui, antes del primer pase que lo usa, y se
- * define junto al acumulador.
- */
-struct CronoTramo {
-    const char *n;
-    uint64_t    t0;
-    /* Reloj del proyecto y acumulacion en NANOsegundos.  Antes usaba el de la
-     * biblioteca estandar y truncaba a microsegundos, que es justo el fallo que
-     * `acumular_tramo_ns` documenta: un tramo de 0,4 us mide CERO, y doscientas
-     * mil llamadas de esas suman cero habiendo costado 80 ms.  Y un tramo corto
-     * y muy repetido es precisamente el que se quiere descubrir. */
-    explicit CronoTramo(const char *etiqueta) : n(etiqueta), t0(util::reloj::ahora()) {}
-    ~CronoTramo() {
-        util::acumular_tramo_ns(n, util::reloj::a_ns(util::reloj::ahora() - t0));
-    }
-};
-} // namespace
+ * Aqui habia una copia con el mismo nombre.  Existia porque en su dia alimentaba
+ * otro acumulador, pero acabo reenviando al de `util` -- o sea, dos clases para
+ * el mismo destino.  Dos formas de medir lo mismo acaban dando dos numeros
+ * distintos y no hay manera de saber cual creerse. */
+using util::CronoTramo;
 
 static bool model_removable(const IrFunction &fn, const analysis::IrFacts &facts,
                             const analysis::PointsTo &pt, const IrInstr &ins,
@@ -12622,23 +12605,6 @@ auto cronometrar_pase(const char *nombre, const IrFunction &fn, F &&f)
     return r;
 }
 
-} // namespace
-
-namespace {
-/**
- * @brief Suma tiempo a una etiqueta cualquiera del mismo acumulador.
- *
- * Sirve para partir un pase por dentro sin inventar otro mecanismo: el reparto
- * por pase ya dice CUAL es caro, y con esto se pregunta POR QUE dentro de el.
- * La etiqueta lleva prefijo del pase para que salga junto a el al ordenar.
- */
-void acumular_tramo(const char *etiqueta, long long us) {
-    /* Al de `util`, que NO toma cerrojo (uno por hilo).  El de aqui lo toma, y
-     * vale para los pases -- unos miles de tomas -- pero no para un tramo que
-     * se mide CIEN MIL veces: ahi la contencion del cerrojo se cobra dentro del
-     * tramo que envuelve y el instrumento acaba midiendose a si mismo. */
-    util::acumular_tramo(etiqueta, us);
-}
 } // namespace
 
 /* Aplica un pase: lo cronometra, propaga si cambio algo al punto fijo, y marca
