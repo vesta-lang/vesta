@@ -624,17 +624,22 @@ static bool write_file_atomic(const std::string &path,
      * sistema de ficheros (`stat` + `mkdir`) para saber lo que ya sabiamos:
      * medido en una compilacion en frio, 2.030 escrituras preguntando por los
      * mismos directorios. */
-    {
+    const std::string dir_padre = fs::path(path).parent_path().string();
+    auto asegurar_dir = [&](bool forzar) {
         static std::mutex mx_dirs;
         static std::unordered_set<std::string> hechos;
-        const std::string dir = fs::path(path).parent_path().string();
-        bool crear = false;
+        bool crear = forzar;
         {
             std::lock_guard<std::mutex> g(mx_dirs);
-            crear = hechos.insert(dir).second;
+            if (forzar) hechos.erase(dir_padre);
+            crear = hechos.insert(dir_padre).second || forzar;
         }
-        if (crear) fs::create_directories(dir, ec);
-    }
+        if (crear) {
+            std::error_code e2;
+            fs::create_directories(dir_padre, e2);
+        }
+    };
+    asegurar_dir(false);
     std::string tmp = path + ".tmp.";
 #ifdef _WIN32
     tmp += std::to_string(static_cast<uint64_t>(GetCurrentProcessId()));
@@ -656,7 +661,17 @@ static bool write_file_atomic(const std::string &path,
 #ifdef _WIN32
         HANDLE h = CreateFileA(tmp.c_str(), GENERIC_WRITE, 0, nullptr,
                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (h == INVALID_HANDLE_VALUE) return false;
+        if (h == INVALID_HANDLE_VALUE) {
+            /* El directorio pudo desaparecer despues de crearlo: alguien limpio
+             * el cache, o el arbol se borro entre dos escrituras.  El memo de
+             * arriba diria que ya existe, asi que se rehace y se reintenta UNA
+             * vez.  Sin esto la escritura falla en silencio y el artefacto se
+             * pierde sin que nadie se entere. */
+            asegurar_dir(true);
+            h = CreateFileA(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                            FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (h == INVALID_HANDLE_VALUE) return false;
+        }
         bool ok = true;
         size_t off = 0;
         while (ok && off < bytes.size()) {
@@ -672,8 +687,14 @@ static bool write_file_atomic(const std::string &path,
         CloseHandle(h);
         if (!ok) { fs::remove(tmp, ec); return false; }
 #else
-        const int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd < 0) return false;
+        int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) {
+            // Ver el comentario de la rama de Windows: el memo de directorios
+            // puede haber quedado obsoleto si alguien limpio el arbol.
+            asegurar_dir(true);
+            fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd < 0) return false;
+        }
         bool ok = true;
         size_t off = 0;
         while (ok && off < bytes.size()) {
