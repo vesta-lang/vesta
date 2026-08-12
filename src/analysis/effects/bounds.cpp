@@ -108,6 +108,15 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
                                RelojLim::now() - t_calc)
                                .count();
         cerrar(us_rangos);
+        /* Se prestan al modelo de efectos: ya estan calculados aqui arriba, y si
+         * no se los damos cada bloque de asm los recalcula recorriendo la
+         * funcion entera.  Se retiran al acabar con esta funcion para que no
+         * puedan usarse con la siguiente. */
+        ea.prestar_rangos(&fn, &rangos);
+        struct RetirarRangos {
+            analysis::effects::EffectAnalysis &ea;
+            ~RetirarRangos() { ea.prestar_rangos(nullptr, nullptr); }
+        } retirar{ea};
         for (uint32_t bi = 0; bi < fn.blocks.size(); ++bi) {
             const ir::IrBlock &b = fn.blocks[bi];
             /* Se recorre el bloque con el estado del analisis, no se consulta

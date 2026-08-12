@@ -462,6 +462,9 @@ struct RangeStats {
     uint64_t inserciones = 0;  ///< altas de un valor nuevo (desplazan el vector).
     uint64_t reescrituras = 0; ///< cambios de un valor ya presente (no desplazan).
     uint64_t copias = 0;       ///< estados copiados enteros.
+    uint64_t busquedas = 0;    ///< consultas al estado (busqueda binaria cada una).
+    uint64_t uniones = 0;      ///< confluencias: cada una construye un estado NUEVO.
+    uint64_t unidos = 0;       ///< elementos anadidos al fusionar (reservas).
 };
 
 /**

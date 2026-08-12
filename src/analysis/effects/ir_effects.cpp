@@ -165,12 +165,13 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
         std::shared_ptr<const analysis::RangeFacts> rangos_propios;
         analysis::IrFacts                          hechos_propios;
         const uint64_t t1 = util::reloj::ahora();
-        if (env.rangos == nullptr) {
+        // Solo valen si son de ESTA funcion; si no, se recalculan.
+        const bool tengo = env.rangos != nullptr && env.rangos_de == &fn;
+        if (!tengo) {
             hechos_propios = analysis::build_ir_facts(fn);
             rangos_propios = analysis::compute_ranges_ptr(fn, hechos_propios);
         }
-        const analysis::RangeFacts &rangos =
-            env.rangos ? *env.rangos : *rangos_propios;
+        const analysis::RangeFacts &rangos = tengo ? *env.rangos : *rangos_propios;
         const uint64_t t2 = util::reloj::ahora();
         ns_hechos += util::reloj::a_ns(t1 - t0);
         ns_rangos += util::reloj::a_ns(t2 - t1);

@@ -28,6 +28,9 @@
 #include "ir/ssa_ir.h"
 
 #include "util/fnv.h"
+#include "util/reloj.h"
+
+#include <atomic>
 
 #include <algorithm>
 #include <cstdio>
@@ -128,6 +131,14 @@ struct CosteEstado {
     uint64_t inserciones = 0;
     uint64_t reescrituras = 0;
     uint64_t copias = 0;
+    /* Las dos que faltaban, y que la cuenta de memoria no explicaba: consultar
+     * el estado (una busqueda binaria por operando de cada instruccion y por
+     * vuelta) y fusionarlo en las confluencias (un vector NUEVO por arista y
+     * vuelta, con sus reservas).  Sin contarlas, 300 MB movidos tenian que
+     * explicar 8 s, y no daba. */
+    uint64_t busquedas = 0;
+    uint64_t uniones = 0;
+    uint64_t unidos = 0; ///< elementos anadidos al fusionar (reservas del vector)
 };
 thread_local CosteEstado g_coste;
 
@@ -147,6 +158,7 @@ struct Estado {
     Estado &operator=(Estado &&) = default;
 
     const ValueRange *buscar(ir::IrValueId v) const {
+        ++g_coste.busquedas;
         auto it = std::lower_bound(
             ref.begin(), ref.end(), v,
             [](const std::pair<ir::IrValueId, ValueRange> &p, ir::IrValueId x) {
@@ -428,11 +440,12 @@ struct Motor : Contexto {
         if (!a.alcanzable) return b;
         if (!b.alcanzable) return a;
         Estado out;
+        ++g_coste.uniones;
         out.alcanzable = true;
         for (const auto &p : a.ref) {
             const ValueRange *q = b.buscar(p.first);
             const ValueRange u = p.second.unir(q ? *q : suelo[p.first]);
-            if (!u.es_top()) out.ref.push_back({p.first, u});
+            if (!u.es_top()) { out.ref.push_back({p.first, u}); ++g_coste.unidos; }
         }
         return out;
     }
@@ -441,12 +454,13 @@ struct Motor : Contexto {
     Estado ensanchar_estado(const Estado &viejo, const Estado &nuevo) const {
         if (!viejo.alcanzable || !nuevo.alcanzable) return nuevo;
         Estado out;
+        ++g_coste.uniones;
         out.alcanzable = true;
         for (const auto &p : nuevo.ref) {
             const ValueRange *v = viejo.buscar(p.first);
             const ValueRange base = v ? *v : suelo[p.first];
             const ValueRange w = base.ensanchar(p.second);
-            if (!w.es_top()) out.ref.push_back({p.first, w});
+            if (!w.es_top()) { out.ref.push_back({p.first, w}); ++g_coste.unidos; }
         }
         return out;
     }
@@ -462,6 +476,7 @@ struct Motor : Contexto {
     Estado estrechar_estado(const Estado &viejo, const Estado &nuevo) const {
         if (!nuevo.alcanzable || !viejo.alcanzable) return nuevo;
         Estado out;
+        ++g_coste.uniones;
         out.alcanzable = true;
         for (const auto &p : nuevo.ref) {
             const ValueRange *v = viejo.buscar(p.first);
@@ -470,7 +485,7 @@ struct Motor : Contexto {
                 const ValueRange c = r.cortar(*v);
                 if (!c.es_bottom()) r = c;
             }
-            if (!r.es_top()) out.ref.push_back({p.first, r});
+            if (!r.es_top()) { out.ref.push_back({p.first, r}); ++g_coste.unidos; }
         }
         return out;
     }
@@ -879,8 +894,28 @@ bool dependencias_vigentes(const DependenciasRango &d, const ir::IrFunction &fn,
     return true;
 }
 
+/// Tiempo total dentro del motor, para contrastarlo con lo que diga un perfil:
+/// una lista de puntos calientes dice DONDE, no CUANTO, y confundirlo ya ha
+/// costado varias hipotesis en falso.
+static std::atomic<long long> g_ns_motor{0};
+static std::atomic<long long> g_n_motor{0};
+
+static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn, const IrFacts &facts,
+                                       const RangeOptions &op, const RangeSummaries *sum);
+
 static RangeFacts calcular_rangos(const ir::IrFunction &fn, const IrFacts &facts,
                                   const RangeOptions &op, const RangeSummaries *sum) {
+    const uint64_t t = util::reloj::ahora();
+    RangeFacts r = calcular_rangos_impl(fn, facts, op, sum);
+    g_ns_motor += util::reloj::a_ns(util::reloj::ahora() - t);
+    if ((++g_n_motor % 100) == 0 && std::getenv("VESTA_RANGE_STATS"))
+        std::fprintf(stderr, "[motor-rangos] %lld analisis | %lld ms\n",
+                     g_n_motor.load(), g_ns_motor.load() / 1000000);
+    return r;
+}
+
+static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn, const IrFacts &facts,
+                                       const RangeOptions &op, const RangeSummaries *sum) {
     /* --------------------------------------------------------------- reuso
      *
      * Siete sitios distintos piden rangos de la misma funcion, y medido sobre un
@@ -956,6 +991,9 @@ static RangeFacts calcular_rangos(const ir::IrFunction &fn, const IrFacts &facts
     out.stats.inserciones = g_coste.inserciones;
     out.stats.reescrituras = g_coste.reescrituras;
     out.stats.copias = g_coste.copias;
+    out.stats.busquedas = g_coste.busquedas;
+    out.stats.uniones = g_coste.uniones;
+    out.stats.unidos = g_coste.unidos;
 
     if (const char *v = std::getenv("VESTA_RANGE_STATS")) {
         if (v[0] == '1') {
@@ -1001,7 +1039,8 @@ static RangeFacts calcular_rangos(const ir::IrFunction &fn, const IrFacts &facts
                          incoherente ? 1 : 0);
             std::fprintf(stderr,
                          "%s valores=%u bloques=%zu ref_max=%u "
-                         "ref_media=%.1f altas=%llu reescrituras=%llu copias=%llu\n",
+                         "ref_media=%.1f altas=%llu reescrituras=%llu copias=%llu "
+                         "busquedas=%llu uniones=%llu unidos=%llu\n",
                          fn.name.c_str(), out.stats.valores, fn.blocks.size(),
                          out.stats.ref_max,
                          out.stats.ref_muestras
@@ -1009,7 +1048,10 @@ static RangeFacts calcular_rangos(const ir::IrFunction &fn, const IrFacts &facts
                              : 0.0,
                          (unsigned long long)out.stats.inserciones,
                          (unsigned long long)out.stats.reescrituras,
-                         (unsigned long long)out.stats.copias);
+                         (unsigned long long)out.stats.copias,
+                         (unsigned long long)out.stats.busquedas,
+                         (unsigned long long)out.stats.uniones,
+                         (unsigned long long)out.stats.unidos);
         }
     }
     return out;

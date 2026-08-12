@@ -148,6 +148,15 @@ struct EffectEnv {
      * sigue funcionando igual.
      */
     const analysis::RangeFacts *rangos = nullptr;
+    /**
+     * @brief De QUE funcion son los rangos de arriba.
+     *
+     * Sin esto, un puntero que se quedara apuntando a los rangos de otra funcion
+     * daria respuestas incorrectas EN SILENCIO -- que es peor que recalcularlos.
+     * Con el dueno anotado, usarlos donde no toca es imposible: no coinciden y
+     * se recalculan, que es el comportamiento seguro.
+     */
+    const ir::IrFunction *rangos_de = nullptr;
 };
 
 /**

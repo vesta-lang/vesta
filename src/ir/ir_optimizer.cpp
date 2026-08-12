@@ -7123,6 +7123,7 @@ bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
         const uint64_t t_r = util::reloj::ahora();
         fx_rangos = analysis::compute_ranges_ptr(fn, fx_facts);
         fx_env.rangos = fx_rangos.get();
+        fx_env.rangos_de = &fn;
         ns_peticiones += util::reloj::a_ns(util::reloj::ahora() - t_r);
         if ((++n_peticiones % 500) == 0 && std::getenv("VESTA_TIMES"))
             std::fprintf(stderr, "[dce-rangos] %lld peticiones | %lld ms\n",

@@ -63,6 +63,22 @@ public:
     EffectAnalysisResult local(const ir::IrFunction &fn, const ir::IrInstr &ins);
 
     /**
+     * @brief Presta los rangos de una funcion que el llamante YA tiene.
+     *
+     * Sin esto, el efecto de cada bloque de asm los recalcula recorriendo la
+     * funcion entera: medido con las pilas de VTune, el 22,7 % del tiempo de
+     * compilar un programa con mucho ensamblador.  Van con su dueno para que
+     * usarlos en otra funcion sea imposible (ver @c EffectEnv::rangos_de).
+     *
+     * @param fn      Funcion de la que son.  Nulo los retira.
+     * @param rangos  Sus rangos.  Deben seguir vivos mientras esten prestados.
+     */
+    void prestar_rangos(const ir::IrFunction *fn, const analysis::RangeFacts *rangos) {
+        env_.rangos = rangos;
+        env_.rangos_de = fn;
+    }
+
+    /**
      * @brief Que memoria DEL LLAMANTE toca un sitio de llamada concreto.
      *
      * El efecto de una funcion habla de sus parametros; aqui se sustituyen por
