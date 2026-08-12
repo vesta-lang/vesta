@@ -160,6 +160,19 @@ struct EffectEnv {
 };
 
 /**
+ * @brief Si la funcion lleva algun bloque de asm.
+ *
+ * Es la unica condicion bajo la que hace falta prestarle los rangos: el analisis
+ * de un bloque de asm es lo unico que los consume, porque el ancho de un acceso
+ * como `rep movsb` lo da un registro y hay que saber entre que dos numeros esta.
+ *
+ * Calcularlos "por si acaso" para toda funcion cuesta mucho mas que lo que
+ * ahorra: recorrer la funcion entera, por funcion y por vuelta del punto fijo,
+ * para que nadie los mire.
+ */
+bool funcion_tiene_asm(const ir::IrFunction &fn);
+
+/**
  * @brief Traduce el efecto de una funcion al SITIO donde se la llama.
  *
  * Una funcion describe lo que toca en terminos de SUS parametros: `memset`

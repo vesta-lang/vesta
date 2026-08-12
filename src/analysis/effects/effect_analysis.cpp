@@ -411,8 +411,11 @@ ModuleSummary EffectAnalysis::build_summary(
          * efectos -- el mismo derroche que ya se cerro en el eliminador de
          * codigo muerto y en el analisis de limites; este era el tercer sitio.
          * Salen de la cache si algun otro consumidor ya los pidio. */
-        env_.rangos = &ranges_of(fn); // el accesor cacheado de la clase
-        env_.rangos_de = &fn;
+        // Solo si hay asm: es lo unico que los mira.  Ver funcion_tiene_asm.
+        if (funcion_tiene_asm(fn)) {
+            env_.rangos = &ranges_of(fn); // el accesor cacheado de la clase
+            env_.rangos_de = &fn;
+        }
         /* Se retiran al salir: prestados a la SIGUIENTE funcion serian una
          * respuesta incorrecta en silencio.  El dueno anotado ya lo impide, pero
          * dejar el puntero colgando a unos rangos que mueren aqui, no. */

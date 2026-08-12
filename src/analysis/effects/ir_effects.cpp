@@ -37,6 +37,14 @@ using ir::IrOp;
 using ::aot::AotOpClass;
 using ::aot::aot_classify_op;
 
+bool funcion_tiene_asm(const ir::IrFunction &fn) {
+    for (const ir::IrBlock &b : fn.blocks)
+        for (const ir::IrInstr &in : b.instrs)
+            if (in.op == ir::IrOp::INLINE_ASM || in.op == ir::IrOp::ASM_MICRO)
+                return true;
+    return false;
+}
+
 // --------------------------------------------------------------------------
 // Clasificacion de punteros a AbstractLoc -- delega en el RESOLVEDOR COMPARTIDO
 // (analysis/memory/points_to), que es la unica fuente de "a que memoria apunta

@@ -7116,6 +7116,11 @@ bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
          * del EffectEnv movio el coste de "una vez por bloque de asm" a "una
          * vez por pasada del DCE"; si esa cuenta es alta, lo que sobra es la
          * invalidacion en cascada, no el calculo. */
+        /* Solo si hay asm: es lo unico que los consume aqui.  Calcularlos para
+         * TODA funcion salia carisimo -- recorrer la funcion entera, por funcion
+         * y por vuelta del punto fijo, para que nadie los mirara (medido con las
+         * pilas: 40 % del tiempo, y lo habia metido este mismo arreglo). */
+        if (analysis::effects::funcion_tiene_asm(fn)) {
         static std::atomic<long long> n_peticiones{0};
         static std::atomic<long long> ns_peticiones{0};
         // Reloj del proyecto (TSC calibrado): ~5 ns por lectura frente a ~50 del
@@ -7128,6 +7133,7 @@ bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
         if ((++n_peticiones % 500) == 0 && std::getenv("VESTA_TIMES"))
             std::fprintf(stderr, "[dce-rangos] %lld peticiones | %lld ms\n",
                          n_peticiones.load(), ns_peticiones.load() / 1000000);
+        }
         fx_leidas = locs_leidas(fn, fx_facts, fx_pt, fx_env);
     }
 
