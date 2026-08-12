@@ -15,6 +15,8 @@
  */
 #include "analysis/effects/effect_analysis.h"
 
+#include "analysis/facts/value_range.h"
+
 #include "ir/ssa_ir.h"
 #include "analysis/effects/ir_effects.h"
 #include "analysis/escape/escape.h"
@@ -404,6 +406,20 @@ ModuleSummary EffectAnalysis::build_summary(
     std::unordered_map<std::string, SemanticEffects>      local_eff;
     std::unordered_map<std::string, AnalysisCompleteness> local_comp;
     for_each_fn([&](const ir::IrFunction &fn) {
+        /* Los rangos de la funcion, UNA vez.  Sin esto, cada bloque de asm los
+         * recalcula recorriendo la funcion entera desde dentro del modelo de
+         * efectos -- el mismo derroche que ya se cerro en el eliminador de
+         * codigo muerto y en el analisis de limites; este era el tercer sitio.
+         * Salen de la cache si algun otro consumidor ya los pidio. */
+        env_.rangos = &ranges_of(fn); // el accesor cacheado de la clase
+        env_.rangos_de = &fn;
+        /* Se retiran al salir: prestados a la SIGUIENTE funcion serian una
+         * respuesta incorrecta en silencio.  El dueno anotado ya lo impide, pero
+         * dejar el puntero colgando a unos rangos que mueren aqui, no. */
+        struct Retirar {
+            EffectEnv &e;
+            ~Retirar() { e.rangos = nullptr; e.rangos_de = nullptr; }
+        } retirar{env_};
         EffectAnalysisResult loc = function_local_effects(fn, &gaps_, env_);
         FunctionSummary s;
         s.symbol = fn.name;
