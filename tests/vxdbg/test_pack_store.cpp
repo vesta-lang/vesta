@@ -113,6 +113,24 @@ int main() {
         comprueba(!lector.get(inventada, fuera), "una huella que no existe no devuelve nada");
     }
 
+    // --- lo que ya esta NO se vuelve a escribir ----------------------------
+    //
+    // Reutilizar es lo primero: si una compilacion vuelve a producir los mismos
+    // nodos -- lo normal, porque la clave es el contenido -- no debe escribir
+    // nada.  Sin esto los paquetes se duplican y, peor, los viejos dejan de
+    // poder borrarse porque conservan entradas vivas.
+    {
+        vxdbg::PackNodeStore otra(raiz, nullptr);
+        for (const auto &n : originales) otra.put(n);
+        comprueba(otra.pendientes() == 0,
+                  "volver a guardar lo mismo no deja NADA pendiente");
+        comprueba(otra.volcar(), "y volcar no falla");
+        size_t packs2 = 0;
+        for (const auto &e : stdfs::directory_iterator(raiz + "/packs", ec))
+            if (e.is_regular_file(ec)) ++packs2;
+        comprueba(packs2 == 1, "sigue habiendo UN solo paquete, no dos");
+    }
+
     // --- un paquete estropeado se DESCARTA, no se cree ---------------------
     {
         std::string ruta;

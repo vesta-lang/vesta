@@ -86,6 +86,19 @@ size_t PackNodeStore::pendientes() const {
 bool PackNodeStore::put(const StoredNode &node) {
     if (node.header.hash.empty()) return false; // sin huella no hay donde ir
     std::lock_guard<std::mutex> g(mx_);
+    /* PRIMERO REUSAR, y solo despues escribir.
+     *
+     * Si el nodo ya esta -- en un paquete de otra compilacion o suelto -- no se
+     * vuelve a guardar.  Sin esta comprobacion cada compilacion reescribiria
+     * ENTERO lo que ya estaba: los paquetes se duplicarian, y ademas los viejos
+     * dejarian de poder borrarse porque seguirian teniendo entradas vivas.  El
+     * almacen crecerria sin parar guardando lo mismo una y otra vez.
+     *
+     * Es barato porque la clave ES el contenido: basta mirar el indice en
+     * memoria; no hay que leer ni comparar el cuerpo. */
+    cargar_indices_();
+    if (indice_.count(node.header.hash) != 0) return true;
+    if (suelto_ && suelto_->contains(node.header.hash)) return true;
     /* Si ya esta pendiente con OTRO contenido, algo va mal de verdad: o la
      * huella se calculo sobre otra cosa o se guardo bajo la clave equivocada.
      * Callarlo dejaria el almacen sirviendo un nodo por otro. */
