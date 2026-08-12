@@ -23,6 +23,8 @@
 #include "aot/aot_analyze.h" // que necesita cada op para correr (backend AOT)
 
 #include <algorithm>
+#include "util/reloj.h"
+
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -156,22 +158,22 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
          * sigue copiando el estado de todos los bloques. */
         static std::atomic<long long> ns_hechos{0}, ns_rangos{0};
         static std::atomic<long long> n_veces{0};
-        const auto t0 = std::chrono::steady_clock::now();
+        const uint64_t t0 = util::reloj::ahora();
         /* Si el entorno los trae, no se recalculan: es el mismo trato que las
          * ligaduras de asm.  El puntero se SUJETA aparte de la referencia para
          * que no quede colgando si hay que calcularlos aqui. */
         std::shared_ptr<const analysis::RangeFacts> rangos_propios;
         analysis::IrFacts                          hechos_propios;
-        const auto t1 = std::chrono::steady_clock::now();
+        const uint64_t t1 = util::reloj::ahora();
         if (env.rangos == nullptr) {
             hechos_propios = analysis::build_ir_facts(fn);
             rangos_propios = analysis::compute_ranges_ptr(fn, hechos_propios);
         }
         const analysis::RangeFacts &rangos =
             env.rangos ? *env.rangos : *rangos_propios;
-        const auto t2 = std::chrono::steady_clock::now();
-        ns_hechos += std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
-        ns_rangos += std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();
+        const uint64_t t2 = util::reloj::ahora();
+        ns_hechos += util::reloj::a_ns(t1 - t0);
+        ns_rangos += util::reloj::a_ns(t2 - t1);
         if ((++n_veces % 200) == 0 && std::getenv("VESTA_TIMES"))
             std::fprintf(stderr, "[asm-efectos] %lld veces | def-use %lld ms | rangos %lld ms\n",
                          n_veces.load(), ns_hechos.load() / 1000000,

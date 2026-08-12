@@ -14,6 +14,9 @@
 
 #include "util/crono_tramo.h"
 
+#include "util/reloj.h"
+
+#include <atomic>
 #include <chrono>
 #include <deque>
 #include <mutex>
@@ -7100,12 +7103,30 @@ bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
     /* Las ligaduras del asm, si quien llama las tiene cacheadas.  Sin esto el
      * modelo de efectos las recalcula por instruccion. */
     fx_env.asm_bindings = asm_bindings;
+    /* Y los rangos, por lo mismo: sin esto el modelo recorre la funcion ENTERA
+     * una vez por bloque de asm.  Se sujeta el puntero mientras dure el pase. */
+    std::shared_ptr<const analysis::RangeFacts> fx_rangos;
     analysis::effects::LocSet fx_leidas;
     fx_leidas.is_top = true; // sin modelo, se supone que todo se lee
     if (g_dce_effects) {
         CronoTramo crono__("  dce:hechos");
         fx_facts = analysis::build_ir_facts(fn);
         fx_pt = analysis::compute_points_to(fn, fx_facts);
+        /* Cuantas veces se piden los rangos de una misma funcion.  El arreglo
+         * del EffectEnv movio el coste de "una vez por bloque de asm" a "una
+         * vez por pasada del DCE"; si esa cuenta es alta, lo que sobra es la
+         * invalidacion en cascada, no el calculo. */
+        static std::atomic<long long> n_peticiones{0};
+        static std::atomic<long long> ns_peticiones{0};
+        // Reloj del proyecto (TSC calibrado): ~5 ns por lectura frente a ~50 del
+        // de la biblioteca estandar, que es la diferencia entre ver esto y no.
+        const uint64_t t_r = util::reloj::ahora();
+        fx_rangos = analysis::compute_ranges_ptr(fn, fx_facts);
+        fx_env.rangos = fx_rangos.get();
+        ns_peticiones += util::reloj::a_ns(util::reloj::ahora() - t_r);
+        if ((++n_peticiones % 500) == 0 && std::getenv("VESTA_TIMES"))
+            std::fprintf(stderr, "[dce-rangos] %lld peticiones | %lld ms\n",
+                         n_peticiones.load(), ns_peticiones.load() / 1000000);
         fx_leidas = locs_leidas(fn, fx_facts, fx_pt, fx_env);
     }
 

@@ -930,22 +930,13 @@ static RangeFacts calcular_rangos(const ir::IrFunction &fn, const IrFacts &facts
      * lector fue apuntando, asi que incluye lo que se consulto de verdad --
      * incluidas las llamadas indirectas, que no llevan el nombre escrito. */
     out.deps.huella_ir = huella_de_funcion(fn);
-    /* Los HECHOS son la otra entrada que llega por parametro y no es la funcion:
-     * el suelo de todo el analisis se dimensiona con `def_of.size()`, y de aqui
-     * salen los parametros y los destinos de las llamadas.  No se hashean los
-     * punteros de `def_of` -- son direcciones, no contenido. */
-    {
-        uint64_t hf = util::fnv_mix(util::kFnvOffset, facts.def_of.size());
-        hf = util::fnv_bytes(hf, facts.param_of.data(),
-                             facts.param_of.size() * sizeof(int32_t));
-        hf = util::fnv_mix(hf, facts.block_count);
-        hf = util::fnv_mix(hf, facts.loop_count);
-        hf = util::fnv_mix(hf, facts.recursive ? 1u : 0u);
-        hf = util::fnv_mix(hf, facts.has_dynamic_call ? 1u : 0u);
-        for (const std::string &c : facts.static_callees)
-            hf = util::fnv_bytes(hf, c.data(), c.size());
-        out.deps.huella_ir = util::fnv_mix(out.deps.huella_ir, hf);
-    }
+    /* Los HECHOS (def-use) NO entran aqui, y no por descuido: se derivan de la
+     * funcion, asi que la huella de la funcion ya los cubre.  Mezclarlos
+     * ademas rompia el invariante que sostiene todo esto -- que
+     * `dependencias_vigentes` pueda RECALCULAR esta misma huella para
+     * comprobarla --, porque alli solo se tiene la funcion.  El resultado era
+     * una comparacion que no coincidia nunca: la cache no acertaba jamas.
+     * Medido en su momento: anadirlos no quitaba ni un caso incoherente. */
     out.deps.huella_opciones = util::fnv_bytes(util::kFnvOffset, &op, sizeof(op));
     out.deps.resumenes = m.sum.soltar();
     out.deps.registrada = true;
