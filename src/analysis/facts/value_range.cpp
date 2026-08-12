@@ -142,6 +142,20 @@ struct CosteEstado {
 };
 thread_local CosteEstado g_coste;
 
+/**
+ * @brief Si se estan contando los costes.  Se mira ANTES de tocar @c g_coste.
+ *
+ * En MinGW cada acceso a una variable de hilo es una LLAMADA
+ * (`__emutls_get_address`), y los contadores estan en lo mas caliente del motor:
+ * el constructor de `Estado` y `buscar`.  Medido con las pilas de VTune, eso
+ * costaba el 1,15 % del tiempo total de compilar, encendido siempre y sin que
+ * nadie mirara los numeros.  Con la bandera delante -- un bool global, sin TLS
+ * --, cuando no se mide no se toca la variable de hilo.
+ *
+ * La medida no puede salir gratis, pero si puede salir gratis NO medir.
+ */
+static const bool g_medir_coste = std::getenv("VESTA_RANGE_STATS") != nullptr;
+
 struct Estado {
     bool alcanzable = false;
     std::vector<std::pair<ir::IrValueId, ValueRange>> ref;
@@ -149,16 +163,16 @@ struct Estado {
     Estado() = default;
     /// Copiar un estado es el otro coste de la representacion dispersa: hay que
     /// contarlo aqui porque es donde ocurre (una copia por bloque y vuelta).
-    Estado(const Estado &o) : alcanzable(o.alcanzable), ref(o.ref) { ++g_coste.copias; }
+    Estado(const Estado &o) : alcanzable(o.alcanzable), ref(o.ref) { if (g_medir_coste) ++g_coste.copias; }
     Estado &operator=(const Estado &o) {
-        if (this != &o) { alcanzable = o.alcanzable; ref = o.ref; ++g_coste.copias; }
+        if (this != &o) { alcanzable = o.alcanzable; ref = o.ref; if (g_medir_coste) ++g_coste.copias; }
         return *this;
     }
     Estado(Estado &&) = default;
     Estado &operator=(Estado &&) = default;
 
     const ValueRange *buscar(ir::IrValueId v) const {
-        ++g_coste.busquedas;
+        if (g_medir_coste) ++g_coste.busquedas;
         auto it = std::lower_bound(
             ref.begin(), ref.end(), v,
             [](const std::pair<ir::IrValueId, ValueRange> &p, ir::IrValueId x) {
@@ -174,10 +188,10 @@ struct Estado {
             });
         if (it != ref.end() && it->first == v) {
             it->second = r;
-            ++g_coste.reescrituras;
+            if (g_medir_coste) ++g_coste.reescrituras;
         } else {
             ref.insert(it, {v, r}); // desplaza todo lo que va detras
-            ++g_coste.inserciones;
+            if (g_medir_coste) ++g_coste.inserciones;
         }
     }
     void inalcanzable() {
@@ -440,12 +454,12 @@ struct Motor : Contexto {
         if (!a.alcanzable) return b;
         if (!b.alcanzable) return a;
         Estado out;
-        ++g_coste.uniones;
+        if (g_medir_coste) ++g_coste.uniones;
         out.alcanzable = true;
         for (const auto &p : a.ref) {
             const ValueRange *q = b.buscar(p.first);
             const ValueRange u = p.second.unir(q ? *q : suelo[p.first]);
-            if (!u.es_top()) { out.ref.push_back({p.first, u}); ++g_coste.unidos; }
+            if (!u.es_top()) { out.ref.push_back({p.first, u}); if (g_medir_coste) ++g_coste.unidos; }
         }
         return out;
     }
@@ -454,13 +468,13 @@ struct Motor : Contexto {
     Estado ensanchar_estado(const Estado &viejo, const Estado &nuevo) const {
         if (!viejo.alcanzable || !nuevo.alcanzable) return nuevo;
         Estado out;
-        ++g_coste.uniones;
+        if (g_medir_coste) ++g_coste.uniones;
         out.alcanzable = true;
         for (const auto &p : nuevo.ref) {
             const ValueRange *v = viejo.buscar(p.first);
             const ValueRange base = v ? *v : suelo[p.first];
             const ValueRange w = base.ensanchar(p.second);
-            if (!w.es_top()) { out.ref.push_back({p.first, w}); ++g_coste.unidos; }
+            if (!w.es_top()) { out.ref.push_back({p.first, w}); if (g_medir_coste) ++g_coste.unidos; }
         }
         return out;
     }
@@ -476,7 +490,7 @@ struct Motor : Contexto {
     Estado estrechar_estado(const Estado &viejo, const Estado &nuevo) const {
         if (!nuevo.alcanzable || !viejo.alcanzable) return nuevo;
         Estado out;
-        ++g_coste.uniones;
+        if (g_medir_coste) ++g_coste.uniones;
         out.alcanzable = true;
         for (const auto &p : nuevo.ref) {
             const ValueRange *v = viejo.buscar(p.first);
@@ -485,7 +499,7 @@ struct Motor : Contexto {
                 const ValueRange c = r.cortar(*v);
                 if (!c.es_bottom()) r = c;
             }
-            if (!r.es_top()) { out.ref.push_back({p.first, r}); ++g_coste.unidos; }
+            if (!r.es_top()) { out.ref.push_back({p.first, r}); if (g_medir_coste) ++g_coste.unidos; }
         }
         return out;
     }
@@ -1040,7 +1054,8 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn, const IrFacts &
             std::fprintf(stderr,
                          "%s valores=%u bloques=%zu ref_max=%u "
                          "ref_media=%.1f altas=%llu reescrituras=%llu copias=%llu "
-                         "busquedas=%llu uniones=%llu unidos=%llu\n",
+                         "busquedas=%llu uniones=%llu unidos=%llu "
+                         "pasos=%u cambios=%u ensanches=%u estrechados=%u\n",
                          fn.name.c_str(), out.stats.valores, fn.blocks.size(),
                          out.stats.ref_max,
                          out.stats.ref_muestras
@@ -1051,7 +1066,9 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn, const IrFacts &
                          (unsigned long long)out.stats.copias,
                          (unsigned long long)out.stats.busquedas,
                          (unsigned long long)out.stats.uniones,
-                         (unsigned long long)out.stats.unidos);
+                         (unsigned long long)out.stats.unidos, out.stats.pasos,
+                         out.stats.cambios, out.stats.ensanches,
+                         out.stats.estrechados);
         }
     }
     return out;
