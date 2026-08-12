@@ -1282,6 +1282,20 @@ struct AsmMicro {
  */
 struct IrFunction {
     std::string name;              ///< nombre calificado ("com.pkg.Foo.add")
+    /**
+     * @brief Cuantas veces se ha MODIFICADO esta funcion.
+     *
+     * No describe la funcion: identifica su ESTADO.  Un analisis cacheado se
+     * sella con el valor que tenia al calcularse, y pedirlo con otro distinto lo
+     * recalcula.  Asi un resultado viejo no se puede entregar aunque nadie se
+     * haya acordado de invalidarlo.
+     *
+     * Hace falta porque los hechos guardan PUNTEROS a instrucciones: usarlos
+     * despues de mutar la funcion no es dar una respuesta imprecisa, es leer
+     * memoria liberada.  Lo avanza quien aplica un pase que dice haber
+     * cambiado algo -- un solo sitio, no cada mutacion.
+     */
+    uint64_t version = 0;
     IrType ret_type = IrType::VOID; ///< tipo de retorno
     std::vector<IrValueId> params; ///< IDs de los valores parametro
     /// ABI custom por funcion: registro fisico de entrada por parametro,

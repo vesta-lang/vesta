@@ -12638,12 +12638,19 @@ auto cronometrar_pase(const char *nombre, const IrFunction &fn, F &&f)
  * quien lo sabe es el propio pase por su valor de retorno.  Sin esto, cada
  * consumidor tiraba el points-to y los hechos de la funcion entera aunque en
  * esa vuelta no hubiera cambiado nada. */
+/* `++fn.version` en las tres: un pase que dice haber cambiado algo avanza la
+ * version de la funcion, y con eso un analisis cacheado deja de poder
+ * entregarse -- su sello ya no coincide y se recalcula solo.  Es lo que sustituye
+ * a "acordarse de invalidar", que es una obligacion que no se puede comprobar y
+ * que ya fallaba: hay caminos donde el IR se modifica sin aviso y el cache
+ * servia punteros a instrucciones borradas. */
 #define APLICA(llamada)                                                        \
     do {                                                                       \
         const bool cambio__ = PASE(llamada);                                   \
         any = any || cambio__;                                                 \
         sucia = sucia || cambio__;                                             \
         efectos_sucios = efectos_sucios || cambio__;                           \
+        if (cambio__) ++fn.version;                                            \
     } while (0)
 
 /**
@@ -12664,6 +12671,7 @@ auto cronometrar_pase(const char *nombre, const IrFunction &fn, F &&f)
         const bool cambio__ = PASE(llamada);                                   \
         any = any || cambio__;                                                 \
         sucia = sucia || cambio__;                                             \
+        if (cambio__) ++fn.version;                                            \
     } while (0)
 
 /* Igual, para los pases que devuelven cuantos cambios hicieron en vez de un
@@ -12674,6 +12682,7 @@ auto cronometrar_pase(const char *nombre, const IrFunction &fn, F &&f)
         any = any || cambio__;                                                 \
         sucia = sucia || cambio__;                                             \
         efectos_sucios = efectos_sucios || cambio__;                           \
+        if (cambio__) ++fn.version;                                            \
     } while (0)
 
 /* Cronometra un pase sin repetir su nombre: `PASE(ir_pass_dse(fn))` mide y
@@ -12905,11 +12914,11 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
     // construccion en UN sitio y prepara la incrementalidad futura.
     analysis::AnalysisManager am;
     auto pt_of = [&](IrFunction &fn) -> const analysis::PointsTo & {
-        return am.get_or_compute<analysis::PointsToAnalysis, analysis::PointsTo>(
-            fn.name, [&]() {
+        return am.get_or_compute_v<analysis::PointsToAnalysis, analysis::PointsTo>(
+            fn.name, fn.version, [&]() {
                 const analysis::IrFacts &f =
-                    am.get_or_compute<analysis::IRFactsAnalysis, analysis::IrFacts>(
-                        fn.name, [&]() { return analysis::build_ir_facts(fn); });
+                    am.get_or_compute_v<analysis::IRFactsAnalysis, analysis::IrFacts>(
+                        fn.name, fn.version, [&]() { return analysis::build_ir_facts(fn); });
                 return analysis::compute_points_to(fn, f);
             });
     };
@@ -12921,16 +12930,16 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
     /* Las ligaduras del asm, cacheadas como todo lo demas.  Marcador propio
      * para que el gestor no las mezcle con otro analisis de la misma unidad. */
     auto asm_of = [&](IrFunction &fn) -> const analysis::AsmBindingFacts & {
-        return am.get_or_compute<AsmBindingsAnalysis, analysis::AsmBindingFacts>(
-            fn.name, [&]() { return analysis::compute_asm_bindings(fn); });
+        return am.get_or_compute_v<AsmBindingsAnalysis, analysis::AsmBindingFacts>(
+            fn.name, fn.version, [&]() { return analysis::compute_asm_bindings(fn); });
     };
     auto facts_of = [&](IrFunction &fn) -> const analysis::IrFacts & {
-        return am.get_or_compute<analysis::IRFactsAnalysis, analysis::IrFacts>(
-            fn.name, [&]() { return analysis::build_ir_facts(fn); });
+        return am.get_or_compute_v<analysis::IRFactsAnalysis, analysis::IrFacts>(
+            fn.name, fn.version, [&]() { return analysis::build_ir_facts(fn); });
     };
     auto ranges_of = [&](IrFunction &fn) -> const analysis::RangeFacts & {
-        return am.get_or_compute<analysis::RangeAnalysis, analysis::RangeFacts>(
-            fn.name, [&]() { return analysis::compute_ranges(fn, facts_of(fn)); });
+        return am.get_or_compute_v<analysis::RangeAnalysis, analysis::RangeFacts>(
+            fn.name, fn.version, [&]() { return analysis::compute_ranges(fn, facts_of(fn)); });
     };
     auto hechos_asm_de = [&](IrFunction &fn) {
         HechosDeAsmParaDse h;

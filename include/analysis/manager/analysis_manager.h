@@ -222,6 +222,20 @@ bool call_survives(const T &r, const PreservedAnalyses &p) {
 struct AnalysisResultConcept {
     virtual ~AnalysisResultConcept() = default;
     virtual bool survives(const PreservedAnalyses &p) const = 0;
+    /**
+     * @brief Version de la unidad con la que se calculo este resultado.
+     *
+     * Es lo que hace que la caducidad sea IMPOSIBLE en vez de responsabilidad
+     * de quien invalida.  Un resultado no describe "una funcion": describe una
+     * funcion EN UN ESTADO.  Si el estado avanzo, lo que se guardo aqui habla de
+     * codigo que ya no existe -- y en el caso de @c IrFacts eso no es solo
+     * impreciso: guarda PUNTEROS a instrucciones, asi que leerlo tras una
+     * mutacion es leer memoria ajena.  Medido: un 50 % de las ejecuciones
+     * terminaba en fallo de segmentacion al confiar en la invalidacion manual.
+     *
+     * Cero = "sin versionar", para las unidades que no son funciones IR.
+     */
+    uint64_t version = 0;
 };
 
 /// Modelo templado: guarda un @c T por VALOR y reenvia el gancho.
@@ -263,6 +277,40 @@ public:
     /// Devuelve el resultado de @c A para @p unit, computandolo perezosamente con
     /// @p factory si no esta cacheado.  Registra la dependencia con el computo en
     /// curso (si lo hay) para la invalidacion.  @p factory: `() -> T`.
+    /**
+     * @brief Igual, pero comprobando que lo cacheado siga hablando del MISMO
+     *        estado de la unidad.
+     *
+     * @param version Version actual de la unidad (p.ej. @c IrFunction::version,
+     *        que avanza en cuanto un pase la modifica).  Si no coincide con la
+     *        del resultado guardado, se recalcula: un resultado viejo no se
+     *        entrega jamas, se haya invalidado o no.
+     *
+     * Esto sustituye a "acordarse de invalidar", que es una obligacion que no se
+     * puede comprobar y que ya fallaba: hay caminos donde el IR se modifica sin
+     * que nadie avise, y ahi el cache servia punteros a instrucciones borradas.
+     */
+    template <class A, class T, class Factory>
+    const T &get_or_compute_v(const std::string &unit, uint64_t version,
+                              Factory &&factory) {
+        const Key k{analysis_id<A>(), unit};
+        if (!stack_.empty()) rev_deps_[k].insert(stack_.back());
+        auto it = results_.find(k);
+        if (it != results_.end()) {
+            if (it->second->version == version)
+                return static_cast<AnalysisResultModel<T> *>(it->second.get())->result;
+            invalidate_key(k); // caduco: fuera, y con el lo que dependia de el
+        }
+        stack_.push_back(k);
+        T value = factory();
+        stack_.pop_back();
+        auto model = std::make_unique<AnalysisResultModel<T>>(std::move(value));
+        model->version = version;
+        T &ref = model->result;
+        results_[k] = std::move(model);
+        return ref;
+    }
+
     template <class A, class T, class Factory>
     const T &get_or_compute(const std::string &unit, Factory &&factory) {
         const Key k{analysis_id<A>(), unit};
