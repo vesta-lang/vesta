@@ -13338,6 +13338,20 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
             fprintf(stderr, "[ctpe] CANDIDATO  %s  (ret escalar=%d)\n",
                     c.fn.c_str(), (int)c.ret_type);
     }
+
+    /* Cuanto se REUSA de verdad.  Es lo que dice si cachear analisis por funcion
+     * puede servir de algo aqui: si casi todo sale CADUCADO, la funcion cambia
+     * entre consultas y no hay reuso posible por mucho que se afine. */
+    if (std::getenv("VESTA_TIMES")) {
+        const auto c = am.cuentas();
+        const long long total = c.aciertos + c.caducados + c.nuevos;
+        std::fprintf(stderr,
+                     "[gestor] consultas=%lld aciertos=%lld (%.0f %%) "
+                     "caducados=%lld nuevos=%lld\n",
+                     total, c.aciertos,
+                     total ? 100.0 * double(c.aciertos) / double(total) : 0.0,
+                     c.caducados, c.nuevos);
+    }
 }
 
 // Set global de helpers @c __new_<X> marcados como puros por el frontend.

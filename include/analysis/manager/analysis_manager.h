@@ -297,9 +297,14 @@ public:
         if (!stack_.empty()) rev_deps_[k].insert(stack_.back());
         auto it = results_.find(k);
         if (it != results_.end()) {
-            if (it->second->version == version)
+            if (it->second->version == version) {
+                ++aciertos_;
                 return static_cast<AnalysisResultModel<T> *>(it->second.get())->result;
+            }
+            ++caducados_;
             invalidate_key(k); // caduco: fuera, y con el lo que dependia de el
+        } else {
+            ++nuevos_;
         }
         stack_.push_back(k);
         T value = factory();
@@ -358,7 +363,25 @@ public:
 
     size_t size() const { return results_.size(); }
 
+    /**
+     * @brief Cuantas consultas se sirvieron del cache, cuantas encontraron el
+     *        resultado caducado, y cuantas no tenian nada guardado.
+     *
+     * Es lo que dice si cachear aqui puede servir de algo: si casi todo sale
+     * CADUCADO, la unidad cambia entre consultas y no hay reuso posible por
+     * mucho que se afine el mecanismo.  Sin este dato, "vamos a cachearlo" es
+     * una apuesta.
+     */
+    struct Cuentas {
+        long long aciertos = 0;
+        long long caducados = 0;
+        long long nuevos = 0;
+    };
+    Cuentas cuentas() const { return Cuentas{aciertos_, caducados_, nuevos_}; }
+
 private:
+    long long aciertos_ = 0, caducados_ = 0, nuevos_ = 0;
+
     void invalidate_key(const Key &k) {
         auto it = results_.find(k);
         if (it == results_.end()) return;
