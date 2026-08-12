@@ -291,6 +291,7 @@ add_library(vxdbg_lib STATIC
     src/vxdbg/ids.cpp
     src/util/serialize.cpp
     src/vxdbg/store.cpp
+    src/vxdbg/pack_store.cpp
     src/vxdbg/lowering_map.cpp
     src/vxdbg/backend_meta.cpp
     src/vxdbg/codec_source.cpp
@@ -1046,7 +1047,8 @@ target_include_directories(test_vxdbg_core PRIVATE ${VM_INCLUDES})
 add_executable(test_vxdbg_store tests/vxdbg/test_vxdbg_store.cpp
                                 src/vxdbg/ids.cpp
                                 src/util/serialize.cpp
-                                src/vxdbg/store.cpp)
+                                src/vxdbg/store.cpp
+                                src/vxdbg/pack_store.cpp)
 target_include_directories(test_vxdbg_store PRIVATE ${VM_INCLUDES})
 
 # Serializacion de cada nodo.  Comprueba, sobre todo, que la identidad de un

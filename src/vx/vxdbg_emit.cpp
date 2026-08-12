@@ -31,6 +31,7 @@
 #include "vx/ast.h"
 #include "vx/type_checker.h"
 #include "vxdbg/codec.h"
+#include "vxdbg/pack_store.h"
 #include "vxdbg/store.h"
 #include "vxdbg/roots.h"
 #include "vxdbg/semantic.h"
@@ -586,7 +587,25 @@ bool emit_vxdbg_source(const TypeChecker &tc,
                        const std::string &out_dir, VxdbgEmitStats &stats,
                        std::string &err) {
     (void)err;
-    vxdbg::FileNodeStore store(out_dir.empty() ? default_vxdbg_dir() : out_dir);
+    /* EMPAQUETADO.  Esta emision escribe un nodo por entidad del programa --
+     * medido, 2.030 para 2.004 lineas de fuente --, y con un fichero por nodo el
+     * 90 % del tiempo de compilar en frio se iba en metadatos del sistema de
+     * ficheros.  El almacen empaquetado acumula y publica UN fichero con UN
+     * renombrado, reutilizando lo que ya existe.
+     *
+     * Envuelve al suelto en vez de sustituirlo: lo que ya hay en disco se sigue
+     * leyendo igual, y `put` no reescribe lo que el suelto ya tenga.
+     *
+     * `VESTA_NO_PACK=1` vuelve al comportamiento anterior, para comparar. */
+    const std::string dir = out_dir.empty() ? default_vxdbg_dir() : out_dir;
+    std::unique_ptr<vxdbg::NodeStore> propietario;
+    if (std::getenv("VESTA_NO_PACK") != nullptr) {
+        propietario.reset(new vxdbg::FileNodeStore(dir));
+    } else {
+        propietario.reset(new vxdbg::PackNodeStore(
+            dir, std::unique_ptr<vxdbg::NodeStore>(new vxdbg::FileNodeStore(dir))));
+    }
+    vxdbg::NodeStore &store = *propietario;
 
     Collector col(tc, emit_file(store, source_path, source_text));
     col.collect();
