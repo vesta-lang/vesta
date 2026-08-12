@@ -444,6 +444,23 @@ struct RangeStats {
     /// real --, solo lo deja menos preciso; por eso se cuenta aparte de
     /// @c RangeFacts::convergio, que si es una condicion de correccion.
     bool descenso_completo = true;
+
+    // ------------------------------------------------- coste de la estructura
+    //
+    // El estado de un bloque se guarda DISPERSO (solo los valores con rango) y
+    // ordenado por identificador.  Esa eleccion tiene dos costes opuestos y hay
+    // que poder verlos: meter un valor nuevo desplaza la mitad del vector, pero
+    // copiar el estado mueve solo lo que hay.  Cual domina depende de la
+    // DENSIDAD -- cuantos de los valores de la funcion llegan a tener rango --,
+    // que no se puede suponer: se mide.
+
+    uint32_t valores = 0;      ///< valores SSA de la funcion (tamano si fuese denso).
+    uint32_t ref_max = 0;      ///< mayor numero de valores con rango en un estado.
+    uint64_t ref_suma = 0;     ///< suma de tamanos, para la media.
+    uint32_t ref_muestras = 0; ///< estados medidos (denominador de la media).
+    uint64_t inserciones = 0;  ///< altas de un valor nuevo (desplazan el vector).
+    uint64_t reescrituras = 0; ///< cambios de un valor ya presente (no desplazan).
+    uint64_t copias = 0;       ///< estados copiados enteros.
 };
 
 /**
@@ -461,6 +478,57 @@ struct RangeBlockState {
     std::vector<std::pair<ir::IrValueId, ValueRange>> refinamientos;
 };
 
+// Los resumenes se declaran aparte (range_summary.h incluye a este, no al
+// reves): aqui basta con nombrarlos.
+struct FnRangeSummary;
+struct RangeSummaries;
+
+/**
+ * @brief Lo que el analisis LEYO ademas de la funcion, y como estaba entonces.
+ *
+ * Sirve para responder a una sola pregunta: "lo que calcule sigue valiendo?".
+ * Y la responde sin volver a calcularlo -- basta releer lo mismo y comparar.
+ *
+ * La razon de que exista es que la entrada de este analisis NO se deja enumerar
+ * desde fuera.  Se intento: al IR de la funcion hubo que sumarle los resumenes
+ * que consume, las opciones, el tipo de cada valor y el destino resuelto de las
+ * llamadas indirectas, y AUN ASI quedaban casos de "misma entrada, otro
+ * resultado".  Cada uno de esos habria sido un resultado viejo servido como
+ * bueno.  Enumerar a mano no converge y, peor, no es verificable: no hay forma
+ * de saber cuando has terminado.
+ *
+ * Por eso no se enumera: se APUNTA.  Las lecturas de resumenes pasan todas por
+ * @c LectorResumenes, que las registra aqui segun ocurren, asi que una lectura
+ * nueva entra en la clave sola -- sin que nadie se acuerde de anadirla.
+ */
+struct DependenciasRango {
+    uint64_t huella_ir = 0;        ///< la funcion analizada (forma, tipos, destinos).
+    uint64_t huella_opciones = 0;  ///< el presupuesto: con otro puede converger a otra cosa.
+    /// Cada resumen CONSULTADO: a quien se pregunto y que contesto entonces.
+    /// Se guarda el nombre para poder RELEERLO, no solo comparar un total.
+    std::vector<std::pair<std::string, uint64_t>> resumenes;
+    /// @c false si no se llego a registrar nada (analisis sin dependencias
+    /// conocidas): entonces no se afirma que valga, se recalcula.
+    bool registrada = false;
+};
+
+/// Huella de la FUNCION: forma, tipos y destinos.  Es la parte de la entrada que
+/// si se puede leer entera de un sitio.
+uint64_t huella_de_funcion(const ir::IrFunction &fn);
+
+/// Huella de un resumen (nulo incluido: "no habia" es un estado distinto de
+/// cualquier resumen, y confundirlos serviria un resultado viejo).
+uint64_t huella_de_resumen(const FnRangeSummary *s);
+
+/**
+ * @brief Dice si unos hechos calculados antes siguen valiendo AHORA.
+ *
+ * Relee exactamente lo que se leyo entonces y lo compara.  Coste O(lecturas),
+ * que es lo que hace que preguntar salga mas barato que recalcular.
+ */
+bool dependencias_vigentes(const DependenciasRango &d, const ir::IrFunction &fn,
+                           const RangeOptions &op, const RangeSummaries *sum);
+
 /// Rango de cada valor SSA, indexado por value-id.
 struct RangeFacts {
     std::vector<ValueRange> r;
@@ -474,6 +542,9 @@ struct RangeFacts {
      * conclusion de una parada, asi que sin convergencia no se afirma nada.
      */
     bool       convergio = true;
+    /// Lo que se leyo para llegar hasta aqui.  Es lo que permite reusar estos
+    /// hechos sin recalcularlos, y lo que impide reusarlos cuando no valen.
+    DependenciasRango deps;
     RangeStats stats;
 
     const ValueRange &at(ir::IrValueId v) const {

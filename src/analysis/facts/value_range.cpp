@@ -27,8 +27,14 @@
 #include "analysis/memory/fn_targets.h"
 #include "ir/ssa_ir.h"
 
+#include "util/fnv.h"
+
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <deque>
+#include <mutex>
+#include <unordered_map>
 
 namespace analysis {
 
@@ -111,9 +117,34 @@ namespace {
  * no se ejecuta) y por eso las guardas propagan lo uno a lo otro; pero al reves
  * no: un punto inalcanzable no dice nada de un valor concreto.
  */
+/**
+ * @brief Contadores del coste de la estructura del estado, por hilo.
+ *
+ * Van por hilo porque las funciones se analizan en paralelo, y se ponen a cero
+ * al empezar cada funcion: lo que se quiere saber es el coste de ESTA, no un
+ * acumulado del proceso.  Acaban en @c RangeStats, que es donde vive.
+ */
+struct CosteEstado {
+    uint64_t inserciones = 0;
+    uint64_t reescrituras = 0;
+    uint64_t copias = 0;
+};
+thread_local CosteEstado g_coste;
+
 struct Estado {
     bool alcanzable = false;
     std::vector<std::pair<ir::IrValueId, ValueRange>> ref;
+
+    Estado() = default;
+    /// Copiar un estado es el otro coste de la representacion dispersa: hay que
+    /// contarlo aqui porque es donde ocurre (una copia por bloque y vuelta).
+    Estado(const Estado &o) : alcanzable(o.alcanzable), ref(o.ref) { ++g_coste.copias; }
+    Estado &operator=(const Estado &o) {
+        if (this != &o) { alcanzable = o.alcanzable; ref = o.ref; ++g_coste.copias; }
+        return *this;
+    }
+    Estado(Estado &&) = default;
+    Estado &operator=(Estado &&) = default;
 
     const ValueRange *buscar(ir::IrValueId v) const {
         auto it = std::lower_bound(
@@ -129,8 +160,13 @@ struct Estado {
             [](const std::pair<ir::IrValueId, ValueRange> &p, ir::IrValueId x) {
                 return p.first < x;
             });
-        if (it != ref.end() && it->first == v) it->second = r;
-        else ref.insert(it, {v, r});
+        if (it != ref.end() && it->first == v) {
+            it->second = r;
+            ++g_coste.reescrituras;
+        } else {
+            ref.insert(it, {v, r}); // desplaza todo lo que va detras
+            ++g_coste.inserciones;
+        }
     }
     void inalcanzable() {
         alcanzable = false;
@@ -180,10 +216,42 @@ struct Arista {
 //  el punto fijo signifiquen exactamente lo mismo.
 // ===========================================================================
 
+/**
+ * @brief Unica via para leer un resumen, y apunta cada lectura.
+ *
+ * No es un envoltorio por gusto: es lo que hace que la clave de reuso sea
+ * COMPLETA por construccion.  Mientras el analisis no pueda alcanzar el
+ * @c RangeSummaries de otra forma, cualquier lectura que se anada manana queda
+ * registrada sin que nadie tenga que acordarse de anadirla a ninguna lista.
+ *
+ * Registra el NOMBRE ademas de la huella para que despues se pueda RELEER lo
+ * mismo y comparar; con un total acumulado se sabria que algo cambio, pero no
+ * se podria comprobar contra el estado de ahora.
+ */
+class LectorResumenes {
+public:
+    explicit LectorResumenes(const RangeSummaries *s) : sum_(s) {}
+
+    const FnRangeSummary *buscar(const std::string &nombre) {
+        const FnRangeSummary *s = sum_ ? sum_->buscar(nombre) : nullptr;
+        // Se apunta TAMBIEN cuando no hay resumen: "no habia" es un estado, y
+        // si manana lo hay el resultado puede cambiar.
+        leidas_.emplace_back(nombre, huella_de_resumen(s));
+        return s;
+    }
+    /// @c true si hay resumenes en absoluto (para los caminos que no preguntan).
+    bool hay() const { return sum_ != nullptr; }
+    std::vector<std::pair<std::string, uint64_t>> soltar() { return std::move(leidas_); }
+
+private:
+    const RangeSummaries *sum_ = nullptr;
+    std::vector<std::pair<std::string, uint64_t>> leidas_;
+};
+
 struct Contexto {
     const ir::IrFunction &fn;
     const IrFacts        &facts;
-    const RangeSummaries *sum = nullptr;
+    mutable LectorResumenes sum{nullptr};
     std::vector<ValueRange> suelo;
 
     Contexto(const ir::IrFunction &f, const IrFacts &fc,
@@ -200,8 +268,8 @@ struct Contexto {
         /* Un parametro vale lo que su tipo... salvo que se sepa quien llama.  El
          * resumen solo estrecha cuando se conocen TODOS los llamantes; si no,
          * trae el mismo suelo y esto no cambia nada. */
-        if (sum != nullptr) {
-            const FnRangeSummary *mio = sum->buscar(fn.name);
+        if (sum.hay()) {
+            const FnRangeSummary *mio = sum.buscar(fn.name);
             if (mio != nullptr)
                 for (size_t i = 0; i < fn.params.size() && i < mio->params.size();
                      ++i) {
@@ -720,12 +788,12 @@ void Contexto::transferir(const ir::IrInstr &in, Estado &e) const {
          * para cualquier llamante, se conozcan o no los demas. */
         case IrOp::CALL:
         case IrOp::CALLIND:
-            if (sum != nullptr && piso.acotada()) {
+            if (sum.hay() && piso.acotada()) {
                 const std::string destino =
                     (in.op == IrOp::CALL)
                         ? in.func_name
                         : funcion_apuntada(fn, facts, in.func_ptr);
-                if (const FnRangeSummary *s = sum->buscar(destino))
+                if (const FnRangeSummary *s = sum.buscar(destino))
                     nuevo = s->ret;
             }
             break;
@@ -737,9 +805,117 @@ void Contexto::transferir(const ir::IrInstr &in, Estado &e) const {
 
 } // namespace
 
+uint64_t huella_de_funcion(const ir::IrFunction &fn) {
+    uint64_t h = util::kFnvOffset;
+    for (const ir::IrBlock &b : fn.blocks) {
+        h = util::fnv_mix(h, b.instrs.size());
+        for (const ir::IrInstr &in : b.instrs) {
+            h = util::fnv_mix(h, static_cast<uint64_t>(in.op));
+            // El TIPO va dentro: el suelo de cada rango sale de el, no de la
+            // forma de la instruccion.
+            h = util::fnv_bytes(h, &in.type, sizeof(in.type));
+            h = util::fnv_mix(h, in.dst);
+            h = util::fnv_mix(h, in.target_block);
+            h = util::fnv_mix(h, in.false_block);
+            h = util::fnv_bytes(h, in.operands.data(),
+                                in.operands.size() * sizeof(ir::IrValueId));
+            h = util::fnv_bytes(h, in.func_name.data(), in.func_name.size());
+            h = util::fnv_mix(h, in.func_ptr); // el destino de una llamada INDIRECTA
+            for (const ir::IrPhiArg &pa : in.phi_args) {
+                h = util::fnv_mix(h, pa.value);
+                h = util::fnv_mix(h, pa.block);
+            }
+        }
+    }
+    // Los valores constantes y sus tipos son el suelo de todo el analisis.
+    for (const auto &v : fn.values) {
+        h = util::fnv_bytes(h, &v.type, sizeof(v.type));
+        h = util::fnv_mix(h, v.is_const ? v.const_val : 0);
+        h = util::fnv_mix(h, v.is_const ? 1u : 0u);
+    }
+    for (const ir::IrValueId p : fn.params) h = util::fnv_mix(h, p);
+    return h;
+}
+
+/**
+ * @brief Mezcla un rango en una huella, CAMPO A CAMPO.
+ *
+ * Nunca por bytes: `ValueRange` tiene 5 bytes de relleno de alineacion entre
+ * `sin_signo` y `lo_c` que nadie inicializa, asi que dos rangos identicos
+ * pueden dar huellas distintas segun lo que hubiera antes en esa memoria.  Una
+ * huella que depende de basura no sirve para decidir si algo se puede reusar.
+ */
+static uint64_t mezcla_rango(uint64_t h, const ValueRange &r) {
+    h = util::fnv_mix(h, static_cast<uint64_t>(r.kind));
+    h = util::fnv_mix(h, r.t.bits);
+    h = util::fnv_mix(h, r.t.sin_signo ? 1u : 0u);
+    h = util::fnv_mix(h, r.lo_c);
+    h = util::fnv_mix(h, r.hi_c);
+    return h;
+}
+
+uint64_t huella_de_resumen(const FnRangeSummary *s) {
+    // "No hay resumen" es un estado propio: si manana lo hay, el resultado
+    // puede cambiar, asi que no puede colisionar con un resumen vacio.
+    if (s == nullptr) return util::fnv_mix(util::kFnvOffset, 0xFFFFFFFFFFFFFFFFull);
+    uint64_t h = util::fnv_mix(util::kFnvOffset, s->cerrada ? 1u : 0u);
+    for (const ValueRange &p : s->params) h = mezcla_rango(h, p);
+    return mezcla_rango(h, s->ret);
+}
+
+bool dependencias_vigentes(const DependenciasRango &d, const ir::IrFunction &fn,
+                           const RangeOptions &op, const RangeSummaries *sum) {
+    // Sin registro no se afirma nada: se recalcula.  Es la misma regla que rige
+    // el resto del analisis -- no haber mirado no es haber comprobado.
+    if (!d.registrada) return false;
+    if (d.huella_opciones != util::fnv_bytes(util::kFnvOffset, &op, sizeof(op)))
+        return false;
+    if (d.huella_ir != huella_de_funcion(fn)) return false;
+    // Se RELEE cada resumen que se consulto, contra el estado de ahora.
+    for (const auto &leida : d.resumenes) {
+        const FnRangeSummary *s = sum ? sum->buscar(leida.first) : nullptr;
+        if (huella_de_resumen(s) != leida.second) return false;
+    }
+    return true;
+}
+
 RangeFacts compute_ranges(const ir::IrFunction &fn, const IrFacts &facts,
                           const RangeOptions &op, const RangeSummaries *sum) {
+    /* --------------------------------------------------------------- reuso
+     *
+     * Siete sitios distintos piden rangos de la misma funcion, y medido sobre un
+     * programa real el 75 % de las peticiones son REPETICIONES exactas: misma
+     * funcion, mismas opciones, mismos resumenes.  Recalcularlas no cambia nada.
+     *
+     * El indice va por la parte de la clave que se puede calcular SIN correr el
+     * analisis (funcion + opciones); lo que solo se sabe despues -- que
+     * resumenes se consultaron -- se comprueba releyendolos, que es justo lo que
+     * hace @c dependencias_vigentes.  Por eso un cajon puede tener mas de una
+     * entrada: mismo codigo, distinto entorno.
+     *
+     * Es una cache, no un buffer reaprovechado: se indexa por la entrada, no se
+     * pisa mientras vale, y varios hilos pueden leer la misma. */
+    struct EntradaCache {
+        DependenciasRango deps;
+        RangeFacts        hechos;
+    };
+    static std::mutex mx_cache;
+    static std::unordered_map<uint64_t, std::vector<EntradaCache>> cache;
+    const bool usar_cache = std::getenv("VESTA_NO_RANGE_CACHE") == nullptr;
+
+    uint64_t clave = 0;
+    if (usar_cache) {
+        clave = util::fnv_mix(huella_de_funcion(fn),
+                              util::fnv_bytes(util::kFnvOffset, &op, sizeof(op)));
+        std::lock_guard<std::mutex> g(mx_cache);
+        auto it = cache.find(clave);
+        if (it != cache.end())
+            for (const EntradaCache &e : it->second)
+                if (dependencias_vigentes(e.deps, fn, op, sum)) return e.hechos;
+    }
+
     RangeFacts out;
+    g_coste = CosteEstado{}; // el coste que se mide es el de ESTA funcion
     Motor m(fn, facts, op, sum);
     if (fn.blocks.empty()) {
         out.r = m.suelo;
@@ -768,6 +944,111 @@ RangeFacts compute_ranges(const ir::IrFunction &fn, const IrFacts &facts,
     }
     out.r = m.en_definicion();
     out.entrada = m.estados_de_entrada();
+
+    /* Lo que se leyo para llegar aqui.  No se enumera: se recoge de lo que el
+     * lector fue apuntando, asi que incluye lo que se consulto de verdad --
+     * incluidas las llamadas indirectas, que no llevan el nombre escrito. */
+    out.deps.huella_ir = huella_de_funcion(fn);
+    /* Los HECHOS son la otra entrada que llega por parametro y no es la funcion:
+     * el suelo de todo el analisis se dimensiona con `def_of.size()`, y de aqui
+     * salen los parametros y los destinos de las llamadas.  No se hashean los
+     * punteros de `def_of` -- son direcciones, no contenido. */
+    {
+        uint64_t hf = util::fnv_mix(util::kFnvOffset, facts.def_of.size());
+        hf = util::fnv_bytes(hf, facts.param_of.data(),
+                             facts.param_of.size() * sizeof(int32_t));
+        hf = util::fnv_mix(hf, facts.block_count);
+        hf = util::fnv_mix(hf, facts.loop_count);
+        hf = util::fnv_mix(hf, facts.recursive ? 1u : 0u);
+        hf = util::fnv_mix(hf, facts.has_dynamic_call ? 1u : 0u);
+        for (const std::string &c : facts.static_callees)
+            hf = util::fnv_bytes(hf, c.data(), c.size());
+        out.deps.huella_ir = util::fnv_mix(out.deps.huella_ir, hf);
+    }
+    out.deps.huella_opciones = util::fnv_bytes(util::kFnvOffset, &op, sizeof(op));
+    out.deps.resumenes = m.sum.soltar();
+    out.deps.registrada = true;
+
+    if (usar_cache) {
+        std::lock_guard<std::mutex> g(mx_cache);
+        std::vector<EntradaCache> &cajon = cache[clave];
+        /* Tope por cajon: mismo codigo con muchos entornos distintos no puede
+         * crecer sin limite.  Se queda con las ultimas, que son las que se
+         * vuelven a pedir. */
+        if (cajon.size() >= 8) cajon.erase(cajon.begin());
+        cajon.push_back(EntradaCache{out.deps, out});
+    }
+
+    // Densidad: cuantos de los valores de la funcion acaban teniendo rango en
+    // un estado.  Es lo que decide si conviene guardar el estado DISPERSO (como
+    // ahora) o DENSO indexado por valor; suponerlo seria elegir a ciegas.
+    out.stats.valores = static_cast<uint32_t>(m.suelo.size());
+    for (const RangeBlockState &e : out.entrada) {
+        if (!e.alcanzable) continue;
+        const uint32_t n = static_cast<uint32_t>(e.refinamientos.size());
+        if (n > out.stats.ref_max) out.stats.ref_max = n;
+        out.stats.ref_suma += n;
+        ++out.stats.ref_muestras;
+    }
+    out.stats.inserciones = g_coste.inserciones;
+    out.stats.reescrituras = g_coste.reescrituras;
+    out.stats.copias = g_coste.copias;
+
+    if (const char *v = std::getenv("VESTA_RANGE_STATS")) {
+        if (v[0] == '1') {
+            /* Rehacer un analisis no es lo mismo que hacer trabajo: si el
+             * resultado sale IGUAL que la vez anterior, la vuelta entera sobro y
+             * lo que hay que arreglar es la invalidacion, no la estructura.  Se
+             * compara por huella del resultado, no por tiempo. */
+            uint64_t h = util::kFnvOffset;
+            for (const ValueRange &r : out.r) h = mezcla_rango(h, r);
+            for (const RangeBlockState &e : out.entrada) {
+                h = util::fnv_mix(h, e.alcanzable ? 1u : 0u);
+                for (const auto &p : e.refinamientos) {
+                    h = util::fnv_mix(h, p.first);
+                    h = mezcla_rango(h, p.second);
+                }
+            }
+            /* Y la otra mitad de la pregunta: si sale igual porque la ENTRADA
+             * no habia cambiado, entonces lo que sobra es recalcular, no la
+             * estructura.  Se usa el registro que dejo el propio analisis -- no
+             * una huella calculada aparte: dos criterios acaban discrepando. */
+            uint64_t hir = util::fnv_mix(out.deps.huella_ir, out.deps.huella_opciones);
+            for (const auto &leida : out.deps.resumenes) {
+                hir = util::fnv_bytes(hir, leida.first.data(), leida.first.size());
+                hir = util::fnv_mix(hir, leida.second);
+            }
+            /* La comprobacion va por CLAVE, no "contra la vez anterior": el orden
+             * de las llamadas cambia entre corridas (se compila en paralelo), y
+             * comparar contra la anterior daba numeros distintos cada vez.  Asi
+             * la pregunta es la correcta y no depende del orden: la MISMA clave,
+             * ha dado alguna vez DOS resultados distintos?  Si ocurre una sola
+             * vez, la clave esta incompleta y reusar serviria un valor viejo. */
+            static std::mutex mx;
+            static std::unordered_map<uint64_t, uint64_t> por_clave;
+            bool visto, incoherente;
+            {
+                std::lock_guard<std::mutex> g(mx);
+                auto it = por_clave.find(hir);
+                visto = (it != por_clave.end());
+                incoherente = (visto && it->second != h);
+                if (!visto) por_clave.emplace(hir, h);
+            }
+            std::fprintf(stderr, "[rangos] visto=%d incoherente=%d ", visto ? 1 : 0,
+                         incoherente ? 1 : 0);
+            std::fprintf(stderr,
+                         "%s valores=%u bloques=%zu ref_max=%u "
+                         "ref_media=%.1f altas=%llu reescrituras=%llu copias=%llu\n",
+                         fn.name.c_str(), out.stats.valores, fn.blocks.size(),
+                         out.stats.ref_max,
+                         out.stats.ref_muestras
+                             ? double(out.stats.ref_suma) / out.stats.ref_muestras
+                             : 0.0,
+                         (unsigned long long)out.stats.inserciones,
+                         (unsigned long long)out.stats.reescrituras,
+                         (unsigned long long)out.stats.copias);
+        }
+    }
     return out;
 }
 
