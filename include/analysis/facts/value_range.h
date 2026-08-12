@@ -56,6 +56,7 @@
 #include "analysis/facts/ir_facts.h"
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace ir {
@@ -530,6 +531,21 @@ bool dependencias_vigentes(const DependenciasRango &d, const ir::IrFunction &fn,
                            const RangeOptions &op, const RangeSummaries *sum);
 
 /// Rango de cada valor SSA, indexado por value-id.
+struct RangeFacts;
+
+/**
+ * @brief Los rangos de una funcion SIN copiarlos.
+ *
+ * Preferir esta forma a @c compute_ranges cuando solo se van a LEER.
+ * @c RangeFacts lleva dentro el estado de entrada de cada bloque, asi que
+ * devolverlo por valor copia todo eso -- medido, 16 s de una compilacion de 26
+ * en el camino que pide los rangos una vez por bloque de asm.
+ */
+std::shared_ptr<const RangeFacts>
+compute_ranges_ptr(const ir::IrFunction &fn, const IrFacts &facts,
+                   const RangeOptions &op = RangeOptions{},
+                   const RangeSummaries *sum = nullptr);
+
 struct RangeFacts {
     std::vector<ValueRange> r;
     /// Estado a la entrada de cada bloque, para @c RangeWalk.

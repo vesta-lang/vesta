@@ -23,6 +23,10 @@
 #include "aot/aot_analyze.h" // que necesita cada op para correr (backend AOT)
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 
 namespace analysis {
 namespace effects {
@@ -146,9 +150,32 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
          * cuando lo que la determina no es una constante sino un operando --
          * `rep movsb` recorre `rcx` bytes, y `rcx` es una variable con rango.
          * Se calculan una vez por bloque, no por acceso. */
-        const analysis::IrFacts hechos_fn = analysis::build_ir_facts(fn);
-        const analysis::RangeFacts rangos =
-            analysis::compute_ranges(fn, hechos_fn);
+        /* Se cronometran por separado: reconstruir el def-use y recorrer la
+         * funcion entera son dos costes distintos con arreglos distintos, y el
+         * segundo ya tiene cache -- pero devuelve por VALOR, asi que un acierto
+         * sigue copiando el estado de todos los bloques. */
+        static std::atomic<long long> ns_hechos{0}, ns_rangos{0};
+        static std::atomic<long long> n_veces{0};
+        const auto t0 = std::chrono::steady_clock::now();
+        /* Si el entorno los trae, no se recalculan: es el mismo trato que las
+         * ligaduras de asm.  El puntero se SUJETA aparte de la referencia para
+         * que no quede colgando si hay que calcularlos aqui. */
+        std::shared_ptr<const analysis::RangeFacts> rangos_propios;
+        analysis::IrFacts                          hechos_propios;
+        const auto t1 = std::chrono::steady_clock::now();
+        if (env.rangos == nullptr) {
+            hechos_propios = analysis::build_ir_facts(fn);
+            rangos_propios = analysis::compute_ranges_ptr(fn, hechos_propios);
+        }
+        const analysis::RangeFacts &rangos =
+            env.rangos ? *env.rangos : *rangos_propios;
+        const auto t2 = std::chrono::steady_clock::now();
+        ns_hechos += std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
+        ns_rangos += std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();
+        if ((++n_veces % 200) == 0 && std::getenv("VESTA_TIMES"))
+            std::fprintf(stderr, "[asm-efectos] %lld veces | def-use %lld ms | rangos %lld ms\n",
+                         n_veces.load(), ns_hechos.load() / 1000000,
+                         ns_rangos.load() / 1000000);
         for (const vx::AsmBlockEffects::Acceso &a : e.accesos) {
             /* TODAS las que responden a ese nombre.  Aqui no hace falta saber
              * cual de ellas es: nombrar las dos dice que el acceso va por una

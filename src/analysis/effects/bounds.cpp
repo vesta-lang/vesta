@@ -62,6 +62,13 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
     auto marca = RelojLim::now();
     long us_resumenes = 0, us_rangos = 0, us_llamadas = 0;
     long n_llamadas = 0;
+    /* Reparto del tiempo DENTRO del recorrido por puntos.  En nanosegundos: en
+     * microsegundos, lo que se llama millones de veces se trunca a cero y
+     * parece gratis.  Tres candidatos que llevan a arreglos distintos --
+     * calcular los rangos, montar el estado de cada bloque, o preguntar por los
+     * efectos de cada instruccion -- y solo midiendo se sabe cual paga. */
+    long long ns_calcular = 0, ns_montar_estado = 0, ns_efectos = 0;
+    long long n_bloques = 0, n_instrs = 0;
     auto cerrar = [&](long &destino) {
         const auto ahora = RelojLim::now();
         destino += static_cast<long>(
@@ -93,9 +100,13 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
         // De la cache del motor: reconstruir el def-use aqui era hacerlo por
         // segunda vez, porque el resumen del modulo ya lo pidio.
         const analysis::IrFacts &hechos = ea.facts_publico(fn);
+        const auto t_calc = RelojLim::now();
         const analysis::RangeFacts rangos =
             analysis::compute_ranges(fn, hechos, analysis::RangeOptions{},
                                      &resumenes);
+        ns_calcular += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                               RelojLim::now() - t_calc)
+                               .count();
         cerrar(us_rangos);
         for (uint32_t bi = 0; bi < fn.blocks.size(); ++bi) {
             const ir::IrBlock &b = fn.blocks[bi];
@@ -103,7 +114,12 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
              * por valor: el rango de un indice EN EL PUNTO DEL ACCESO es el que
              * llevan las guardas -- `if (i < n) buf[i]` --, y el de su
              * definicion no sabe nada de ellas. */
+            const auto t_montar = RelojLim::now();
             analysis::RangeWalk paso(fn, hechos, rangos, bi);
+            ns_montar_estado += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                        RelojLim::now() - t_montar)
+                                        .count();
+            ++n_bloques;
             for (const ir::IrInstr &in : b.instrs) {
                 // El estado del punto se consume SIEMPRE, salga la revision por
                 // donde salga: saltarselo desalinearia el recorrido.
@@ -114,7 +130,12 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
                 /* En un punto al que no se llega no hay nada que comprobar, y
                  * senalarlo seria acusar a codigo que no se ejecuta. */
                 if (!paso.alcanzable()) continue;
+                ++n_instrs;
+                const auto t_ef = RelojLim::now();
                 const EffectAnalysisResult r = ea.local(fn, in);
+                ns_efectos += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                      RelojLim::now() - t_ef)
+                                      .count();
                 auto revisa = [&](const LocSet &ls, bool escribe) {
                     if (ls.is_top) return;
                     for (const AbstractLoc &l : ls.locs) {
@@ -292,7 +313,15 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
                   << n_llamadas << " llamadas | resumenes " << us_resumenes
                   << " us (" << resumenes.rondas << " pasos) | rangos+recorrer "
                   << us_rangos << " us | en-la-llamada " << us_llamadas
-                  << " us\n";
+                  << " us\n"
+                  << "[limites]   reparto: calcular " << (ns_calcular / 1000000)
+                  << " ms | montar estado " << (ns_montar_estado / 1000000)
+                  << " ms (" << n_bloques << " bloques) | efectos "
+                  << (ns_efectos / 1000000) << " ms (" << n_instrs
+                  << " instrs) | recorrer "
+                  << ((long long)us_rangos / 1000 - ns_calcular / 1000000 -
+                      ns_montar_estado / 1000000 - ns_efectos / 1000000)
+                  << " ms\n";
     return out;
 }
 

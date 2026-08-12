@@ -879,8 +879,8 @@ bool dependencias_vigentes(const DependenciasRango &d, const ir::IrFunction &fn,
     return true;
 }
 
-RangeFacts compute_ranges(const ir::IrFunction &fn, const IrFacts &facts,
-                          const RangeOptions &op, const RangeSummaries *sum) {
+static RangeFacts calcular_rangos(const ir::IrFunction &fn, const IrFacts &facts,
+                                  const RangeOptions &op, const RangeSummaries *sum) {
     /* --------------------------------------------------------------- reuso
      *
      * Siete sitios distintos piden rangos de la misma funcion, y medido sobre un
@@ -895,25 +895,6 @@ RangeFacts compute_ranges(const ir::IrFunction &fn, const IrFacts &facts,
      *
      * Es una cache, no un buffer reaprovechado: se indexa por la entrada, no se
      * pisa mientras vale, y varios hilos pueden leer la misma. */
-    struct EntradaCache {
-        DependenciasRango deps;
-        RangeFacts        hechos;
-    };
-    static std::mutex mx_cache;
-    static std::unordered_map<uint64_t, std::vector<EntradaCache>> cache;
-    const bool usar_cache = std::getenv("VESTA_NO_RANGE_CACHE") == nullptr;
-
-    uint64_t clave = 0;
-    if (usar_cache) {
-        clave = util::fnv_mix(huella_de_funcion(fn),
-                              util::fnv_bytes(util::kFnvOffset, &op, sizeof(op)));
-        std::lock_guard<std::mutex> g(mx_cache);
-        auto it = cache.find(clave);
-        if (it != cache.end())
-            for (const EntradaCache &e : it->second)
-                if (dependencias_vigentes(e.deps, fn, op, sum)) return e.hechos;
-    }
-
     RangeFacts out;
     g_coste = CosteEstado{}; // el coste que se mide es el de ESTA funcion
     Motor m(fn, facts, op, sum);
@@ -969,15 +950,6 @@ RangeFacts compute_ranges(const ir::IrFunction &fn, const IrFacts &facts,
     out.deps.resumenes = m.sum.soltar();
     out.deps.registrada = true;
 
-    if (usar_cache) {
-        std::lock_guard<std::mutex> g(mx_cache);
-        std::vector<EntradaCache> &cajon = cache[clave];
-        /* Tope por cajon: mismo codigo con muchos entornos distintos no puede
-         * crecer sin limite.  Se queda con las ultimas, que son las que se
-         * vuelven a pedir. */
-        if (cajon.size() >= 8) cajon.erase(cajon.begin());
-        cajon.push_back(EntradaCache{out.deps, out});
-    }
 
     // Densidad: cuantos de los valores de la funcion acaban teniendo rango en
     // un estado.  Es lo que decide si conviene guardar el estado DISPERSO (como
@@ -1050,6 +1022,74 @@ RangeFacts compute_ranges(const ir::IrFunction &fn, const IrFacts &facts,
         }
     }
     return out;
+}
+
+// ===========================================================================
+//  Reuso
+// ===========================================================================
+
+/**
+ * @brief Los rangos de una funcion, calculados o reusados, SIN copiarlos.
+ *
+ * Devolver por valor era el problema: `RangeFacts` lleva dentro el estado de
+ * entrada de CADA bloque, asi que un acierto de cache copiaba todo eso.  Medido
+ * en el camino del asm -- que pide los rangos de la funcion entera una vez por
+ * bloque de asm --, esa copia costaba 16 s de una compilacion de 26.
+ *
+ * Se devuelve un puntero COMPARTIDO, no una referencia al cajon: asi la entrada
+ * puede desalojarse sin dejar colgado a quien la estaba mirando.
+ */
+static std::shared_ptr<const RangeFacts>
+rangos_de(const ir::IrFunction &fn, const IrFacts &facts, const RangeOptions &op,
+          const RangeSummaries *sum) {
+    struct EntradaCache {
+        DependenciasRango                 deps;
+        std::shared_ptr<const RangeFacts> hechos;
+    };
+    static std::mutex mx_cache;
+    static std::unordered_map<uint64_t, std::vector<EntradaCache>> cache;
+
+    if (std::getenv("VESTA_NO_RANGE_CACHE") != nullptr)
+        return std::make_shared<const RangeFacts>(calcular_rangos(fn, facts, op, sum));
+
+    /* El indice va por la parte de la clave que se puede calcular SIN correr el
+     * analisis (funcion + opciones); lo que solo se sabe despues -- que
+     * resumenes se consultaron -- se comprueba releyendolos.  Por eso un cajon
+     * puede tener varias entradas: mismo codigo, distinto entorno. */
+    const uint64_t clave =
+        util::fnv_mix(huella_de_funcion(fn),
+                      util::fnv_bytes(util::kFnvOffset, &op, sizeof(op)));
+    {
+        std::lock_guard<std::mutex> g(mx_cache);
+        auto it = cache.find(clave);
+        if (it != cache.end())
+            for (const EntradaCache &e : it->second)
+                if (dependencias_vigentes(e.deps, fn, op, sum)) return e.hechos;
+    }
+
+    auto nuevos = std::make_shared<const RangeFacts>(calcular_rangos(fn, facts, op, sum));
+    {
+        std::lock_guard<std::mutex> g(mx_cache);
+        std::vector<EntradaCache> &cajon = cache[clave];
+        // Tope por cajon: mismo codigo con muchos entornos no puede crecer sin fin.
+        if (cajon.size() >= 8) cajon.erase(cajon.begin());
+        cajon.push_back(EntradaCache{nuevos->deps, nuevos});
+    }
+    return nuevos;
+}
+
+std::shared_ptr<const RangeFacts> compute_ranges_ptr(const ir::IrFunction &fn,
+                                                     const IrFacts &facts,
+                                                     const RangeOptions &op,
+                                                     const RangeSummaries *sum) {
+    return rangos_de(fn, facts, op, sum);
+}
+
+RangeFacts compute_ranges(const ir::IrFunction &fn, const IrFacts &facts,
+                          const RangeOptions &op, const RangeSummaries *sum) {
+    // Quien solo va a LEERLOS deberia usar `compute_ranges_ptr` y ahorrarse esta
+    // copia; esta forma se mantiene para quien necesite los suyos propios.
+    return *rangos_de(fn, facts, op, sum);
 }
 
 // ===========================================================================

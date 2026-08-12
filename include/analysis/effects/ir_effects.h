@@ -133,6 +133,21 @@ struct EffectEnv {
      * montada sigue funcionando igual.
      */
     const AsmBindingFacts *asm_bindings = nullptr;
+    /**
+     * @brief Los rangos de la funcion, YA calculados.
+     *
+     * Mismo caso que @ref asm_bindings, y por la misma razon: entre que dos
+     * numeros esta un valor es un hecho de la FUNCION, no de la instruccion --
+     * no cambia mientras la funcion no cambie.  Calcularlo aqui dentro
+     * significaba recorrer la funcion ENTERA una vez por bloque de asm: medido
+     * sobre un programa con mucho ensamblador, 16,8 s de los 26 que tardaba
+     * compilarlo, en 1.000 llamadas.
+     *
+     * Nulo = "no los tengo": entonces se calculan, que es lo que se hacia
+     * siempre.  Asi quien pregunte por efectos sin una base de hechos montada
+     * sigue funcionando igual.
+     */
+    const analysis::RangeFacts *rangos = nullptr;
 };
 
 /**
