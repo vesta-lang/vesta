@@ -145,6 +145,7 @@ if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif ()
 
+
 # GCC 16 (UCRT64) tiene un ICE en el pase de var-tracking a -O3 sobre algunas
 # funciones del frontend.  var-tracking es info de DEBUG -> en Release
 # (-DNDEBUG, sin -g) no aporta NADA y se puede desactivar SIN tocar el nivel
@@ -152,6 +153,42 @@ endif ()
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     string(APPEND CMAKE_CXX_FLAGS_RELEASE " -fno-var-tracking")
     string(APPEND CMAKE_C_FLAGS_RELEASE " -fno-var-tracking")
+endif ()
+
+# ---------------------------------------------------------------------------
+#  Configuracion Profile: Release CON simbolos, para perfilar de verdad
+# ---------------------------------------------------------------------------
+#
+# Por que no vale ninguna de las que ya hay.  Un perfil sobre Debug dice QUE
+# codigo existe, no CUANTO pesa: sin meter en linea, cualquier funcion pequena
+# llamada a menudo copa la lista.  Eso costo cinco iteraciones tirando de un
+# hilo -- el mapa del analisis de rangos -- que en Release pesa el 2 %.  Y
+# RelWithDebInfo aqui es -O1: otro nivel de optimizacion es otro programa, y por
+# tanto otras proporciones.
+#
+# Profile PARTE de los flags de Release (por eso va DESPUES del bloque de
+# arriba: hereda tambien -fno-var-tracking, que con -g volveria a activarse y es
+# lo que dispara el ICE de GCC 16 a -O3) y solo anade lo que el perfilador
+# necesita para atribuir tiempo:
+#
+#   -g                       simbolos; sin ellos hay que traducir direcciones a mano
+#   -fno-omit-frame-pointer  pilas de llamada fiables (Release las omite)
+#
+# El nivel de optimizacion NO se toca.  Si cambiara, volveriamos a medir un
+# programa distinto del que se ejecuta, que es justo el error que esto evita.
+#
+#   cmake -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Profile -B cmake-build-profile
+set(CMAKE_CXX_FLAGS_PROFILE "${CMAKE_CXX_FLAGS_RELEASE} -g -fno-omit-frame-pointer"
+        CACHE STRING "Flags C++ para perfilar (Release + simbolos)" FORCE)
+set(CMAKE_C_FLAGS_PROFILE "${CMAKE_C_FLAGS_RELEASE} -g -fno-omit-frame-pointer"
+        CACHE STRING "Flags C para perfilar (Release + simbolos)" FORCE)
+set(CMAKE_EXE_LINKER_FLAGS_PROFILE "${CMAKE_EXE_LINKER_FLAGS_RELEASE}"
+        CACHE STRING "Flags de enlazado para perfilar" FORCE)
+set(CMAKE_SHARED_LINKER_FLAGS_PROFILE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE}"
+        CACHE STRING "Flags de enlazado dinamico para perfilar" FORCE)
+if (CMAKE_CONFIGURATION_TYPES)
+    list(APPEND CMAKE_CONFIGURATION_TYPES Profile)
+    list(REMOVE_DUPLICATES CMAKE_CONFIGURATION_TYPES)
 endif ()
 
 
@@ -492,7 +529,24 @@ target_link_options(vm PRIVATE
         #-Wl,--compress-debug-sections=zlib   # Solo binutils modernos
         #-flto=thin                # mi MinGW no soporta LTO
         >
+
+        # Profile enlaza como Release SALVO el estripado: `--strip-all` borra
+        # justo lo que hace falta para atribuir cada muestra a una funcion.
+        # Tampoco se descartan secciones (--gc-sections) para que no desaparezca
+        # codigo frio que se quiera ver en el perfil.
+        $<$<CONFIG:Profile>:
+        -Wl,--as-needed
+        -Wl,--build-id=none
+        >
 )
+
+# Enlace estatico en Profile igual que en Release: el binario tiene que ser el
+# mismo programa, no uno que ademas pague saltos a DLLs que Release no paga.
+if (WIN32)
+    target_link_options(vm PRIVATE
+            $<$<CONFIG:Profile>:-static -static-libgcc -static-libstdc++>
+    )
+endif ()
 
 # Enlace estático solo en Windows + Release
 target_link_options(vm PRIVATE
@@ -504,24 +558,34 @@ target_link_options(vm PRIVATE
         >
 )
 
-# Opciones por configuracion
-target_compile_options(vm PRIVATE
-        $<$<CONFIG:Debug>:
-        -g -O0 -Wall -Wextra -fno-omit-frame-pointer -DMODE_DEBUG_ENABLE
-        >
-        $<$<CONFIG:Release>:
+# Opciones de codigo de Release, en UNA lista.
+#
+# Esta suelta a proposito: Release y Profile tienen que compilar EXACTAMENTE el
+# mismo codigo, y la unica forma de garantizarlo es que compartan la lista en
+# vez de tener cada uno su copia (dos copias acaban divergiendo, y entonces el
+# perfil describe un programa que no es el que se ejecuta).  Lo unico que
+# cambia entre ambas es el marco de pila y los simbolos.
+set(VESTA_OPTS_CODIGO_RELEASE
         -O3
         -march=x86-64
         -mtune=native
         -ffast-math
         -fstrict-aliasing
         -fno-plt
-        -fomit-frame-pointer
         -fvisibility=hidden
         -ffunction-sections
         -fdata-sections
         -DNDEBUG
+)
+
+# Opciones por configuracion
+target_compile_options(vm PRIVATE
+        $<$<CONFIG:Debug>:
+        -g -O0 -Wall -Wextra -fno-omit-frame-pointer -DMODE_DEBUG_ENABLE
         >
+        $<$<CONFIG:Release>:${VESTA_OPTS_CODIGO_RELEASE};-fomit-frame-pointer>
+        # Mismo codigo que Release; solo se anade con que atribuir el tiempo.
+        $<$<CONFIG:Profile>:${VESTA_OPTS_CODIGO_RELEASE};-g;-fno-omit-frame-pointer>
         $<$<CONFIG:RelWithDebInfo>:-fpermissive -g -O1 -fno-omit-frame-pointer>
 )
 

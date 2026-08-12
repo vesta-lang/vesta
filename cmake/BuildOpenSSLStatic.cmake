@@ -107,23 +107,46 @@ function(vesta_build_openssl_static)
     set(_sha "a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8")
     set(_url "https://github.com/openssl/openssl/releases/download/openssl-${_ver}/openssl-${_ver}.tar.gz")
 
-    # Cache persistente DENTRO del build dir (no ensucia el repo; sobrevive a un
-    # reconfigure, se rehace en un clean total -- raro).
-    set(_root   "${CMAKE_BINARY_DIR}/openssl-static")
+    # Donde vive el resultado.  COMPARTIDO entre directorios de build, no dentro
+    # de uno.
+    #
+    # Antes se guardaba en ${CMAKE_BINARY_DIR}, y eso hacia que cada build dir
+    # nuevo tuviera que compilar OpenSSL OTRA VEZ -- o sea, volver a exigir un
+    # perl estilo UNIX que en muchas maquinas no hay.  El resultado no depende
+    # del tipo de build (es una libreria de terceros, no lleva nuestros flags),
+    # asi que tenerlo por build dir no aportaba nada y costaba una dependencia
+    # de herramientas por cada configuracion.  Se compila UNA vez y lo comparten
+    # Release, Profile y Debug.
+    set(VESTA_OSSL_STATIC_ROOT "${CMAKE_SOURCE_DIR}/.deps/openssl-static"
+            CACHE PATH "Donde se guarda el OpenSSL estatico ya compilado")
+
+    # Sitios donde puede estar ya hecho, en orden: el compartido, este build dir
+    # (por si viene de la epoca en que se guardaba ahi) y cualquier otro build
+    # dir del arbol.  Reconocer lo ya compilado evita pedir herramientas para
+    # rehacer algo que ya existe.
+    set(_cands_root "${VESTA_OSSL_STATIC_ROOT}" "${CMAKE_BINARY_DIR}/openssl-static")
+    file(GLOB _otros_builds "${CMAKE_SOURCE_DIR}/cmake-build-*/openssl-static")
+    list(APPEND _cands_root ${_otros_builds})
+    list(REMOVE_DUPLICATES _cands_root)
+
+    foreach (_cand IN LISTS _cands_root)
+        if (EXISTS "${_cand}/out/lib/libssl.a" AND
+            EXISTS "${_cand}/out/lib/libcrypto.a" AND
+            EXISTS "${_cand}/out/include/openssl/ssl.h")
+            message(STATUS "[OpenSSL] estatico ya compilado (cache): ${_cand}")
+            set(VESTA_OSSL_STATIC_OK      TRUE                          PARENT_SCOPE)
+            set(VESTA_OSSL_STATIC_SSL     "${_cand}/out/lib/libssl.a"    PARENT_SCOPE)
+            set(VESTA_OSSL_STATIC_CRYPTO  "${_cand}/out/lib/libcrypto.a" PARENT_SCOPE)
+            set(VESTA_OSSL_STATIC_INCLUDE "${_cand}/out/include"         PARENT_SCOPE)
+            return()
+        endif ()
+    endforeach ()
+
+    # No esta hecho en ningun sitio: se compila en el compartido.
+    set(_root   "${VESTA_OSSL_STATIC_ROOT}")
     set(_ssl_a    "${_root}/out/lib/libssl.a")
     set(_crypto_a "${_root}/out/lib/libcrypto.a")
     set(_inc      "${_root}/out/include")
-
-    # -- IDEMPOTENCIA: ya compiladas -> exportar y salir --------------------
-    if (EXISTS "${_ssl_a}" AND EXISTS "${_crypto_a}" AND
-        EXISTS "${_inc}/openssl/ssl.h")
-        message(STATUS "[OpenSSL] estatico ya compilado (cache): ${_ssl_a}")
-        set(VESTA_OSSL_STATIC_OK      TRUE       PARENT_SCOPE)
-        set(VESTA_OSSL_STATIC_SSL     "${_ssl_a}"    PARENT_SCOPE)
-        set(VESTA_OSSL_STATIC_CRYPTO  "${_crypto_a}" PARENT_SCOPE)
-        set(VESTA_OSSL_STATIC_INCLUDE "${_inc}"      PARENT_SCOPE)
-        return()
-    endif()
 
     # -- Herramientas: perl (completo) + make -------------------------------
     #  perl: helper que prefiere uno del sistema que sirva y, si no, baja
