@@ -465,9 +465,20 @@ struct Motor : Contexto {
          * rangos de tres corridas sin solaparse.  Evitar la cadena de realojos
          * en 7.334 fusiones pesa mas que pedir memoria de sobra. */
         out.ref.reserve(a.ref.size());
+        /* FUSION LINEAL, no biseccion.  Los dos estados estan ordenados por
+         * identificador, asi que recorrer uno buscando cada elemento en el otro
+         * es avanzar dos indices a la vez -- O(|a|+|b|) en vez de
+         * O(|a| log|b|) --, y ademas en orden, sin saltar por el vector.
+         *
+         * Es lo que el perfil senalaba: `buscar` -> `lower_bound` bajo esta
+         * funcion era el mayor coste propio del motor.  El resultado es el
+         * MISMO: mismos elementos, mismo orden. */
+        size_t j = 0;
         for (const auto &p : a.ref) {
-            const ValueRange *q = b.buscar(p.first);
-            const ValueRange u = p.second.unir(q ? *q : suelo[p.first]);
+            while (j < b.ref.size() && b.ref[j].first < p.first) ++j;
+            const bool hay = (j < b.ref.size() && b.ref[j].first == p.first);
+            if (g_medir_coste) ++g_coste.busquedas; // comparable con la version vieja
+            const ValueRange u = p.second.unir(hay ? b.ref[j].second : suelo[p.first]);
             if (!u.es_top()) { out.ref.push_back({p.first, u}); if (g_medir_coste) ++g_coste.unidos; }
         }
         return out;
@@ -480,9 +491,13 @@ struct Motor : Contexto {
         if (g_medir_coste) ++g_coste.uniones;
         out.alcanzable = true;
         out.ref.reserve(nuevo.ref.size()); // cota superior; ver unir_estados
+        // Fusion lineal (ver unir_estados): ambos ordenados por identificador.
+        size_t j = 0;
         for (const auto &p : nuevo.ref) {
-            const ValueRange *v = viejo.buscar(p.first);
-            const ValueRange base = v ? *v : suelo[p.first];
+            while (j < viejo.ref.size() && viejo.ref[j].first < p.first) ++j;
+            const bool hay = (j < viejo.ref.size() && viejo.ref[j].first == p.first);
+            if (g_medir_coste) ++g_coste.busquedas;
+            const ValueRange base = hay ? viejo.ref[j].second : suelo[p.first];
             const ValueRange w = base.ensanchar(p.second);
             if (!w.es_top()) { out.ref.push_back({p.first, w}); if (g_medir_coste) ++g_coste.unidos; }
         }
@@ -503,11 +518,15 @@ struct Motor : Contexto {
         if (g_medir_coste) ++g_coste.uniones;
         out.alcanzable = true;
         out.ref.reserve(nuevo.ref.size()); // cota superior; ver unir_estados
+        // Fusion lineal (ver unir_estados): ambos ordenados por identificador.
+        size_t j = 0;
         for (const auto &p : nuevo.ref) {
-            const ValueRange *v = viejo.buscar(p.first);
+            while (j < viejo.ref.size() && viejo.ref[j].first < p.first) ++j;
+            const bool hay = (j < viejo.ref.size() && viejo.ref[j].first == p.first);
+            if (g_medir_coste) ++g_coste.busquedas;
             ValueRange r = p.second;
-            if (v) {
-                const ValueRange c = r.cortar(*v);
+            if (hay) {
+                const ValueRange c = r.cortar(viejo.ref[j].second);
                 if (!c.es_bottom()) r = c;
             }
             if (!r.es_top()) { out.ref.push_back({p.first, r}); if (g_medir_coste) ++g_coste.unidos; }
