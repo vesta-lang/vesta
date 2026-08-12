@@ -29,6 +29,8 @@
 #define FS_UTILS_H
 
 #include <algorithm>
+#include <mutex>
+#include <unordered_set>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -60,6 +62,7 @@
 #else
 #include <dirent.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 #include <unistd.h>
 #endif
 
@@ -617,7 +620,21 @@ static bool write_file_atomic(const std::string &path,
                               const std::vector<uint8_t> &bytes) {
     static std::atomic<uint64_t> contador{0};
     std::error_code ec;
-    fs::create_directories(fs::path(path).parent_path(), ec);
+    /* El directorio, UNA vez.  Pedirlo en cada escritura son dos llamadas al
+     * sistema de ficheros (`stat` + `mkdir`) para saber lo que ya sabiamos:
+     * medido en una compilacion en frio, 2.030 escrituras preguntando por los
+     * mismos directorios. */
+    {
+        static std::mutex mx_dirs;
+        static std::unordered_set<std::string> hechos;
+        const std::string dir = fs::path(path).parent_path().string();
+        bool crear = false;
+        {
+            std::lock_guard<std::mutex> g(mx_dirs);
+            crear = hechos.insert(dir).second;
+        }
+        if (crear) fs::create_directories(dir, ec);
+    }
     std::string tmp = path + ".tmp.";
 #ifdef _WIN32
     tmp += std::to_string(static_cast<uint64_t>(GetCurrentProcessId()));
@@ -625,18 +642,48 @@ static bool write_file_atomic(const std::string &path,
     tmp += std::to_string(static_cast<uint64_t>(getpid()));
 #endif
     tmp += "." + std::to_string(contador.fetch_add(1, std::memory_order_relaxed));
+    /* Escritura con las llamadas del SISTEMA, no con las de la biblioteca.
+     *
+     * `std::ofstream` mete una capa de buffer propia encima: reserva, copia los
+     * bytes a su buffer y los vuelca al cerrar.  Para un fichero que se escribe
+     * ENTERO de una vez eso no aporta nada -- ya tenemos todos los bytes en un
+     * vector -- y se paga en cada uno.  MEDIDO con VTune en una compilacion en
+     * frio: `fclose` 0,566 s y `fsopen` 0,118 s de 1,22 s de CPU, mas de la
+     * mitad del tiempo, escribiendo 2.030 ficheros pequenos.
+     *
+     * Aqui se abre, se escribe y se cierra, sin intermediarios. */
     {
-        std::ofstream f(tmp, std::ios::binary);
-        if (!f.is_open()) return false;
-        if (!bytes.empty()) {
-            f.write(reinterpret_cast<const char *>(bytes.data()),
-                    static_cast<std::streamsize>(bytes.size()));
+#ifdef _WIN32
+        HANDLE h = CreateFileA(tmp.c_str(), GENERIC_WRITE, 0, nullptr,
+                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h == INVALID_HANDLE_VALUE) return false;
+        bool ok = true;
+        size_t off = 0;
+        while (ok && off < bytes.size()) {
+            // `WriteFile` toma un contador de 32 bits: los ficheros grandes van
+            // en varias tandas en vez de truncarse en silencio.
+            const DWORD trozo = static_cast<DWORD>(
+                std::min<size_t>(bytes.size() - off, 32u * 1024u * 1024u));
+            DWORD escritos = 0;
+            ok = WriteFile(h, bytes.data() + off, trozo, &escritos, nullptr) != 0 &&
+                 escritos == trozo;
+            off += escritos;
         }
-        if (!f.good()) {
-            f.close();
-            fs::remove(tmp, ec);
-            return false;
+        CloseHandle(h);
+        if (!ok) { fs::remove(tmp, ec); return false; }
+#else
+        const int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) return false;
+        bool ok = true;
+        size_t off = 0;
+        while (ok && off < bytes.size()) {
+            const ssize_t n = ::write(fd, bytes.data() + off, bytes.size() - off);
+            if (n <= 0) ok = false;
+            else off += static_cast<size_t>(n);
         }
+        ::close(fd);
+        if (!ok) { fs::remove(tmp, ec); return false; }
+#endif
     }
     fs::rename(tmp, path, ec);
     if (ec) {
