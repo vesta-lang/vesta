@@ -259,11 +259,11 @@ struct Ambito {
     /// coincidir con el de @p aqui.
     bool vale_en(const Ambito &aqui) const {
         auto casa = [](const char *mio, const char *suyo) {
-            if (mio == nullptr || mio[0] == ' ') return true;
+            if (mio == nullptr || mio[0] == '\0') return true;
             if (suyo == nullptr) return false;
             for (size_t i = 0;; ++i) {
                 if (mio[i] != suyo[i]) return false;
-                if (mio[i] == ' ') return true;
+                if (mio[i] == '\0') return true;
             }
         };
         return casa(isa, aqui.isa) && casa(sistema, aqui.sistema) &&
@@ -271,9 +271,9 @@ struct Ambito {
     }
     /// Universal: sin ninguna restriccion.
     bool universal() const {
-        return (isa == nullptr || isa[0] == ' ') &&
-               (sistema == nullptr || sistema[0] == ' ') &&
-               (backend == nullptr || backend[0] == ' ');
+        return (isa == nullptr || isa[0] == '\0') &&
+               (sistema == nullptr || sistema[0] == '\0') &&
+               (backend == nullptr || backend[0] == '\0');
     }
 };
 

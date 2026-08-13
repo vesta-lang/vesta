@@ -594,7 +594,7 @@ CodeCache *get_or_init_code_cache() noexcept {
 static bool jit_sin_especializar_reservas() {
     static const bool off = [] {
         const char *v = std::getenv("VESTA_JIT_NO_ESPECIALIZAR");
-        return v && v[0] != ' ' && v[0] != '0';
+        return v && v[0] != '\0' && v[0] != '0';
     }();
     return off;
 }

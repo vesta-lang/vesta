@@ -14511,7 +14511,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
      * a mano.  Que el IR tenga buena pinta no es que este bien. */
     static const bool sin_elevado = [] {
         const char *v = std::getenv("VESTA_ASM_NO_LIFT");
-        return v != nullptr && v[0] != ' ' && v[0] != '0';
+        return v != nullptr && v[0] != '\0' && v[0] != '0';
     }();
     if (!sin_elevado && s->level == ast::AsmLevel::Analyzable) {
         std::unordered_map<std::string, ir::IrValueId> slot_of;

@@ -1308,7 +1308,7 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
                 (linea_forzada != 0 && pc == cur_pc) ? linea_forzada : 0;
             if (forzada != 0 || (info.found && info.line > 0)) {
                 append_str(" (");
-                if (!tiene_modulo && info.file && info.file[0] != ' ') {
+                if (!tiene_modulo && info.file && info.file[0] != '\0') {
                     append_str(info.file);
                     append_str(":");
                 } else {
