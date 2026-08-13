@@ -7097,20 +7097,28 @@ bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
     fx_leidas.is_top = true; // sin modelo, se supone que todo se lee
     if (g_dce_effects) {
         CronoTramo crono__("  dce:hechos");
-        /* ESTE ES EL MAYOR CONSUMIDOR DEL COMPILADOR: 3,07 s en 1.764 tomas
-         * (veintinueve veces por funcion), porque el pase corre una vez por
-         * funcion y por vuelta del punto fijo.
+        /* Los hechos y el points-to se reconstruyen en CADA llamada, y el pase
+         * corre una vez por funcion y por vuelta del punto fijo.
          *
-         * INTENTADO Y REVERTIDO (2026-08-12): prestarle los que el orquestador
-         * ya tiene cacheados (`facts_of`/`pt_of`), como se hizo con las
-         * ligaduras de asm y los rangos.  SEGMENTATION FAULT.  `IrFacts::def_of`
-         * guarda PUNTEROS a instrucciones, y los del gestor pueden venir de
-         * antes de que otro pase mutara la funcion: punteros colgando.  Que el
-         * DCE los reconstruya siempre es lo que venia tapando el problema.
+         * INTENTADO DOS VECES Y DESCARTADO, y las dos por motivos distintos --
+         * conviene no repetirlas:
          *
-         * Para cerrarlo hay que arreglar antes la invalidacion -- que los
-         * hechos cacheados no sobrevivan a una mutacion del IR --, no prestarlos
-         * y confiar.  Ver la nota en la cabecera del pase. */
+         *   1. Prestarle los que el orquestador ya tiene cacheados
+         *      (`facts_of`/`pt_of`) daba FALLO DE SEGMENTACION en 3 de cada 6
+         *      ejecuciones.  `IrFacts::def_of` guarda PUNTEROS a instrucciones y
+         *      los cacheados sobrevivian a mutaciones del IR.  Eso YA NO PASA:
+         *      lo cerro el sello de version (`IrFunction::version` +
+         *      `AnalysisManager::get_or_compute_v`), con el que las mismas seis
+         *      ejecuciones dan cero fallos.
+         *
+         *   2. Aun siendo seguro, NO COMPENSA: prestarselos sube el optimizador
+         *      de 2.440-2.482 ms a 2.560-2.594 ms.  El motivo lo dijo este mismo
+         *      tramo -- al prestarlos NO bajo --: lo que cuesta aqui no es el
+         *      def-use ni el points-to, es el calculo de rangos del guarda de
+         *      asm que viene despues.  Se pagaban dos consultas mas por llamada
+         *      para ahorrar algo que ya era barato.
+         *
+         * O sea: la via esta abierta y medida, y no vale la pena por ahora. */
         fx_facts = analysis::build_ir_facts(fn);
         fx_pt = analysis::compute_points_to(fn, fx_facts);
         /* Cuantas veces se piden los rangos de una misma funcion.  El arreglo

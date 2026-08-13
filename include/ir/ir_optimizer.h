@@ -246,12 +246,11 @@ struct CacheEfectosDce {
 };
 
 /**
- * @note Reconstruye los hechos y el points-to de la funcion en CADA llamada, y
- *       eso es el mayor consumidor del compilador (3,07 s en 1.764 tomas).
- *       Prestarselos ya calculados se intento y REVIENTA: `IrFacts::def_of`
- *       guarda punteros a instrucciones y los cacheados pueden venir de antes de
- *       que otro pase mutara la funcion.  Antes de volver a intentarlo hay que
- *       arreglar la invalidacion; el detalle esta en el cuerpo del pase.
+ * @note Reconstruye los hechos y el points-to de la funcion en CADA llamada.
+ *       Prestarselos ya calculados es SEGURO desde el sello de version, pero
+ *       MEDIDO no compensa: sube el optimizador un 4 % porque lo que cuesta
+ *       aqui no es el def-use sino el calculo de rangos que viene despues.  El
+ *       detalle, con los numeros, esta en el cuerpo del pase.
  */
 bool ir_pass_dce(IrFunction &fn,
                  const analysis::effects::NativeDecls *decls = nullptr,
