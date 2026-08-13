@@ -196,6 +196,28 @@ AlignmentSummaries compute_alignment_summaries(const ir::IrModule &mod,
  * @param resumen Resumenes del modulo, o nullptr para no sembrar nada.
  * @return Los hechos de alineacion de sus valores.
  */
+/**
+ * @brief Como @ref compute_alignment, pero pudiendo mirar la DISPOSICION real
+ *        de los datos estaticos del modulo.
+ *
+ * Aqui esta la diferencia entre este compilador y uno tradicional.  En uno
+ * tradicional la direccion final de un dato la decide un enlazador ajeno, asi
+ * que lo unico afirmable es la garantia generica del formato -- 8 bytes -- y
+ * cualquier exigencia mayor queda en "no puedo probarlo".
+ *
+ * Aqui el enlazador es NUESTRO: de cada dato se conoce su desplazamiento dentro
+ * de la seccion (@c StaticDataStore::Entry::byte_offset) y con que alineacion
+ * se coloca la seccion.  Con esas dos cosas la alineacion real es
+ * `mcd(alineacion de la seccion, desplazamiento)`, que es un NUMERO, no una
+ * cota.  Quedarse en la garantia generica seria renunciar a lo que si se sabe.
+ *
+ * @param mod Modulo al que pertenece @p fn.  Nulo = como antes: de un dato
+ *        estatico solo se afirma la garantia por defecto.
+ */
+AlignmentFacts compute_alignment(const ir::IrFunction &fn,
+                                 const AlignmentSummaries *resumen,
+                                 const ir::IrModule *mod);
+
 AlignmentFacts compute_alignment(const ir::IrFunction &fn,
                                  const AlignmentSummaries *resumen);
 

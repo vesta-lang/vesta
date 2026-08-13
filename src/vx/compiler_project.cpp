@@ -3971,7 +3971,7 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
          * y recalcularlo seria pagar dos veces por saber lo mismo. */
         const analysis::AlignmentFacts &alin =
             alineacion_de.emplace(fn.name,
-                                  analysis::compute_alignment(fn, &resumen))
+                                  analysis::compute_alignment(fn, &resumen, &mod))
                 .first->second;
         for (const ir::IrBlock &b : fn.blocks) {
             for (const ir::IrInstr &in : b.instrs) {

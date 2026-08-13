@@ -51,6 +51,12 @@ AlignmentFacts compute_alignment(const ir::IrFunction &fn) {
 
 AlignmentFacts compute_alignment(const ir::IrFunction &fn,
                                  const AlignmentSummaries *resumen) {
+    return compute_alignment(fn, resumen, nullptr);
+}
+
+AlignmentFacts compute_alignment(const ir::IrFunction &fn,
+                                 const AlignmentSummaries *resumen,
+                                 const ir::IrModule *mod) {
     AlignmentFacts f;
     f.de_valor.assign(fn.values.size(), 1u);
     f.resto.assign(fn.values.size(), 0u);
@@ -121,6 +127,44 @@ AlignmentFacts compute_alignment(const ir::IrFunction &fn,
                     nueva = kTope;
                     nuevo_resto = (uint32_t)((uint64_t)in.imm & (kTope - 1));
                     break;
+                case ir::IrOp::STR_LIT_ADDR: {
+                    /* La direccion de un dato ESTATICO.  No se estima: se
+                     * calcula, porque la disposicion es nuestra.
+                     *
+                     * La seccion arranca alineada a `alignment_default` (o a lo
+                     * que pida la entrada, si pide mas) y el dato cae en un
+                     * desplazamiento conocido dentro de ella.  Lo que se puede
+                     * afirmar de la suma de las dos cosas es su maximo comun
+                     * divisor -- y con potencias de dos, la menor.
+                     *
+                     * Un compilador con enlazador ajeno no puede pasar de la
+                     * garantia generica: no sabe donde acabara el dato.  Aqui
+                     * si, y no aprovecharlo dejaba en "no se puede probar"
+                     * casos que son un numero exacto. */
+                    if (mod == nullptr) break;
+                    const auto &sd = mod->static_data;
+                    const size_t slot = (size_t)in.imm;
+                    if (slot >= sd.size()) break;
+                    uint32_t base = sd.alignment_default;
+                    const uint32_t pedida = sd.meta_at(slot).alignment;
+                    if (pedida > base) base = pedida;
+                    if (base == 0) break;
+                    /* La seccion arranca alineada a `base`, asi que la
+                     * direccion del dato es congruente con su DESPLAZAMIENTO
+                     * modulo `base`.  Eso es lo que hay que decir -- no "es
+                     * multiplo de algo".
+                     *
+                     * La diferencia no es cosmetica: guardar el resto es lo que
+                     * permite DEMOSTRAR que algo NO esta alineado.  Un dato en
+                     * el desplazamiento 8 de una seccion alineada a 8 no es
+                     * multiplo de 32, y decirlo convierte un "no puedo
+                     * probarlo" en un error con nombre. */
+                    if (base > kTope) base = kTope;
+                    const uint32_t off = sd.entries[slot].byte_offset;
+                    nueva = base;
+                    nuevo_resto = off % base;
+                    break;
+                }
                 case ir::IrOp::ALLOCA:
                     // Una reserva de pila la coloca el marco; el minimo que
                     // garantiza cualquier ABI de los que se compilan es 8.
@@ -238,6 +282,49 @@ AlignmentFacts compute_alignment(const ir::IrFunction &fn,
                     }
                     break;
                 }
+                case ir::IrOp::MOD: {
+                    bool break_por_signo = false;
+                    /* `x % 2^k` es EXACTAMENTE `x & (2^k - 1)` cuando `x` no es
+                     * negativo, y de ahi sale lo que se sabe: el resultado vale
+                     * lo mismo que `x` modulo `2^k`.
+                     *
+                     * Sin esta regla se rompia la cadena del idioma de alinear
+                     * hacia arriba -- `x % k`, `k - resto`, `base + eso` --:
+                     * el `%` devolvia "no se sabe nada" y todo lo que venia
+                     * detras heredaba la ignorancia, aunque la suma y la resta
+                     * si supieran propagar restos.  El `AND` con mascara ya
+                     * estaba modelado; esta es la misma operacion escrita de la
+                     * otra forma, que es como la escribe quien no piensa en
+                     * bits.
+                     *
+                     * Solo con el divisor CONSTANTE y potencia de dos, y solo
+                     * si de `x` se conoce un modulo que sea multiplo de el: si
+                     * no, el resto del resultado no se puede deducir.  Y solo
+                     * sin signo -- con signo, `-1 % 8` vale -1 en esta
+                     * aritmetica, y un resto negativo no cabe en el reticulo. */
+                    if (in.operands.size() != 2) break;
+                    switch (in.type) {
+                    case ir::IrType::U8:
+                    case ir::IrType::U16:
+                    case ir::IrType::U32:
+                    case ir::IrType::U64:
+                    case ir::IrType::PTR:
+                        break; // sin signo: el resto nunca es negativo
+                    default:
+                        break_por_signo = true;
+                    }
+                    if (break_por_signo) break;
+                    const ir::IrValueId dv = in.operands[1];
+                    if (dv >= fn.values.size() || !fn.values[dv].is_const) break;
+                    const uint64_t k = (uint64_t)fn.values[dv].const_val;
+                    if (k == 0 || (k & (k - 1)) != 0 || k > kTope) break;
+                    const uint32_t k32 = (uint32_t)k;
+                    const uint32_t mx = f.de(in.operands[0]);
+                    if (mx < k32 || (mx % k32) != 0) break;
+                    nueva = k32;
+                    nuevo_resto = f.resto_de(in.operands[0]) % k32;
+                    break;
+                }
                 case ir::IrOp::PHI: {
                     /* Vale lo que su PEOR rama: cualquiera puede darse.  Una
                      * rama sin ver todavia no baja el valor -- se resuelve en
@@ -306,7 +393,7 @@ AlignmentSummaries compute_alignment_summaries(const ir::IrModule &mod,
     // que son constantes o reservas ya se conocen sin saber nada de fuera).
     std::unordered_map<std::string, AlignmentFacts> hechos;
     for (const ir::IrFunction &fn : mod.functions)
-        hechos.emplace(fn.name, compute_alignment(fn, nullptr));
+        hechos.emplace(fn.name, compute_alignment(fn, nullptr, &mod));
 
     // Encuentro de lo que aporta cada sitio de llamada.
     std::unordered_map<std::string, std::vector<AlignmentSummaries::Param>> acc;
