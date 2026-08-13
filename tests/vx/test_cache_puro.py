@@ -33,11 +33,22 @@ SELLO_TIEMPO = range(32, 36)
 
 # Casos variados a proposito: cada familia pega en una parte distinta del
 # compilador, y la propiedad tiene que cumplirse en todas.
+# Uno por AREA del compilador, no por cantidad: ampliar con mas de lo mismo no
+# protege mas.  Lo que protege es que cada caso pegue en una parte distinta,
+# porque la propiedad puede romperse en una sola de ellas.
 CASOS = [
-    "examples_codes_vx/02_hola_mundo.vx",        # el minimo
-    "examples_codes_vx/18_reflexion_basica.vx",  # clases y reflexion
-    "examples_codes_vx/103_async_args_typed.vx", # concurrencia
-    "examples_codes_vx/132_comptime_introspect.vx",  # EJECUTA al compilar
+    "examples_codes_vx/02_hola_mundo.vx",             # el minimo
+    "examples_codes_vx/05_struct_punto.vx",           # tipos por valor
+    "examples_codes_vx/18_reflexion_basica.vx",       # clases y reflexion
+    "examples_codes_vx/103_async_args_typed.vx",      # concurrencia
+    "examples_codes_vx/111_borrow_shared_ok.vx",      # prestamos
+    "examples_codes_vx/109_unique_comprehensive.vx",  # propiedad y destructores
+    "examples_codes_vx/132_comptime_introspect.vx",   # EJECUTA al compilar
+    "examples_codes_vx/172_string_array_natural.vx",  # cadenas y arrays
+    "examples_codes_vx/175_generics_deep_nesting.vx", # genericos anidados
+    "examples_codes_vx/186_float_params_loop.vx",     # coma flotante
+    "examples_codes_vx/218_structs_genericos.vx",     # monomorfizacion
+    "examples_codes_vx/222_metodos_genericos.vx",     # metodos genericos
 ]
 
 
@@ -76,6 +87,28 @@ def main():
 
     fallos = 0
     tmp = tempfile.mkdtemp(prefix="vesta_cache_puro_")
+
+    # AUTOCOMPROBACION.  Un test que nunca se ha visto fallar es un test en el
+    # que se confia por fe.  Aqui se altera a proposito una salida y se exige
+    # que la comparacion lo DETECTE: si esto no saltara, todos los "ok" de abajo
+    # no significarian nada.
+    ref = os.path.join(tmp, "auto_a")
+    alt = os.path.join(tmp, "auto_b")
+    if compila(vm, CASOS[0], ref, os.path.join(tmp, "auto_cache")):
+        bs = bytearray(open(ref + ".velb", "rb").read())
+        # Se toca un byte del CUERPO, lejos del sello de tiempo que se ignora.
+        bs[len(bs) // 2] ^= 0xFF
+        open(alt + ".velb", "wb").write(bytes(bs))
+        if difieren(ref + ".velb", alt + ".velb"):
+            print("  ok       (autocomprobacion: una salida alterada SI se detecta)")
+        else:
+            print("  FALLA    la comparacion no detecta un byte cambiado:")
+            print("           todo lo que venga despues no significa nada")
+            fallos += 1
+    else:
+        print("  FALLA    la autocomprobacion no pudo compilar")
+        fallos += 1
+
     print("[cache puro] borrar el almacen no puede cambiar el binario")
     try:
         for caso in CASOS:
