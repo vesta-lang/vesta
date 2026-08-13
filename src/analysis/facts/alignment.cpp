@@ -145,6 +145,40 @@ AlignmentFacts compute_alignment(const ir::IrFunction &fn,
                     const auto &sd = mod->static_data;
                     const size_t slot = (size_t)in.imm;
                     if (slot >= sd.size()) break;
+                    /* De donde sale la garantia depende de DONDE acabe el
+                     * dato, y no todos acaban en el mismo sitio.
+                     *
+                     * Los de seccion `.data` van al bloque de globales en
+                     * memoria host, que se reserva con una alineacion conocida
+                     * (@ref analysis::kAlineacionBloqueGlobales) -- y en el
+                     * nativo, a una seccion que se coloca en pagina, que es
+                     * mas.  Se toma la menor de las dos: quedarse corto solo
+                     * pierde una optimizacion; pasarse deja pasar un programa
+                     * que revienta.
+                     *
+                     * Los demas viven en memoria de la maquina virtual, cuya
+                     * colocacion es otra historia, asi que ahi se sigue con la
+                     * garantia generica.  Distinguirlos importa: dar por buena
+                     * la del bloque de globales para un dato que no esta en el
+                     * seria afirmar algo de una memoria que no es. */
+                    /* Y aqui NO se usa todavia la del bloque de globales, que
+                     * es mayor, porque quien coloca la seccion depende del
+                     * destino y en uno de ellos manda el usuario:
+                     *
+                     *   - VM/JIT: el bloque lo reserva el cargador con
+                     *     @ref analysis::kAlineacionBloqueGlobales.  Ahi el
+                     *     numero es firme.
+                     *   - Nativo: las secciones caen en pagina POR DEFECTO,
+                     *     pero un guion de enlazado puede colocarlas donde
+                     *     quiera (`place_section(nombre, dir)`), y esa
+                     *     direccion no tiene por que ser multiplo de 64.
+                     *
+                     * Afirmar el numero bueno sin saber cual de los dos es
+                     * seria justo el fallo contra el que existe este analisis:
+                     * prometer una alineacion que la memoria no da.  Falta el
+                     * eje que ya tiene el modelo de efectos -- para QUE backend
+                     * se analiza -- y con el, la del guion de enlazado cuando
+                     * lo haya.  Hasta entonces, la garantia generica. */
                     uint32_t base = sd.alignment_default;
                     const uint32_t pedida = sd.meta_at(slot).alignment;
                     if (pedida > base) base = pedida;

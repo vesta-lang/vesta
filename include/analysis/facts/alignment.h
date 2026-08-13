@@ -214,6 +214,27 @@ AlignmentSummaries compute_alignment_summaries(const ir::IrModule &mod,
  * @param mod Modulo al que pertenece @p fn.  Nulo = como antes: de un dato
  *        estatico solo se afirma la garantia por defecto.
  */
+/**
+ * @brief Alineacion GARANTIZADA del bloque de globales en memoria host.
+ *
+ * No es una estimacion ni un deseo: es la alineacion con la que ese bloque se
+ * reserva.  Vive aqui, y no donde se reserva, porque quien la necesita son los
+ * dos lados -- quien reserva y quien razona sobre el resultado -- y si cada uno
+ * llevara su numero podrian separarse sin que nada fallara: el analisis
+ * afirmaria una alineacion que la reserva ya no da, y eso no da error, da
+ * memoria mal leida.  Con una sola definicion, cambiarla los mueve a la vez.
+ *
+ * @see Executable::gdata_host, que la cumple y lo comprueba al compilar.
+ */
+/// 64 no es un numero redondo elegido por gusto: es el MAYOR de los que exigen
+/// las arquitecturas que se soportan.  AVX-512 pide 64 en sus accesos
+/// alineados, la linea de cache de x86-64 y de arm64 mide 64, SSE pide 16 y
+/// NEON 16.  Cumplir el mayor cumple todos a la vez, asi que el bloque vale
+/// para cualquier destino sin reservarlo distinto en cada uno.  Subirlo cuando
+/// entre una ISA que pida mas -- SVE con vectores mas largos -- es cambiar esta
+/// linea; bajarlo es romper en silencio la ISA que pedia mas.
+static constexpr uint32_t kAlineacionBloqueGlobales = 64;
+
 AlignmentFacts compute_alignment(const ir::IrFunction &fn,
                                  const AlignmentSummaries *resumen,
                                  const ir::IrModule *mod);

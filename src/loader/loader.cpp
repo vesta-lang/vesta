@@ -13,6 +13,9 @@
 #include <algorithm> // UCRT64: no transitivo
 
 #include <cstdio>
+#include <cstdlib>
+
+#include "analysis/facts/alignment.h"
 #include <cstring>
 #include "debug/debug_info.h"
 #include "ir/ssa_ir_serialize.h"
@@ -723,6 +726,27 @@ std::unique_ptr<Executable> Loader::parse_velb(std::vector<uint8_t> bytecode) {
 /// load_executable, que va antes.
 static void materialize_gdata_host(Executable &exe);
 
+/// Alineacion del bloque de globales: una linea de cache.  Es lo que permite
+/// DEMOSTRAR la alineacion de un dato estatico en vez de solo no poder
+/// desmentirla (ver `Executable::gdata_host`).
+static constexpr size_t kGdataAlign = analysis::kAlineacionBloqueGlobales;
+
+/* Que la reserva y el analisis usen el MISMO numero no puede quedar en la
+ * confianza: si alguien bajara uno de los dos, el analisis seguiria afirmando
+ * una alineacion que la memoria ya no tiene, y eso no falla -- lee mal.  Aqui
+ * no compila. */
+static_assert(kGdataAlign >= 8 && (kGdataAlign & (kGdataAlign - 1)) == 0,
+              "la alineacion del bloque de globales debe ser potencia de dos");
+
+void Executable::BorrarAlineado::operator()(uint8_t *p) const noexcept {
+    if (p == nullptr) return;
+#ifdef _WIN32
+    _aligned_free(p);
+#else
+    std::free(p);
+#endif
+}
+
 runtime::ProcessVM *Loader::load_executable(runtime::VM &vm, std::string path) {
     // Leer archivo completo
     std::ifstream file(path, std::ios::binary);
@@ -1250,7 +1274,25 @@ static void materialize_gdata_host(Executable &exe) {
     if (end <= va) return; // seccion declarada pero vacia
     const size_t size = static_cast<size_t>(end - va);
 
-    exe.gdata_host.reset(new uint8_t[size]());
+    /* Alineado a linea de cache: ver `Executable::gdata_host`.  El tamano se
+     * redondea al multiplo, que es lo que exigen las reservas alineadas. */
+    const size_t redondeado = (size + kGdataAlign - 1) & ~(size_t)(kGdataAlign - 1);
+    uint8_t *bloque = nullptr;
+#if defined(_WIN32)
+    bloque = static_cast<uint8_t *>(_aligned_malloc(redondeado, kGdataAlign));
+#else
+    /* `posix_memalign` y no `aligned_alloc`: el segundo es de C11 y falta en
+     * varias plataformas que si se soportan (Android viejo, macOS anterior a
+     * 10.15), mientras que el primero esta en cualquier sistema POSIX desde
+     * hace dos decadas.  La alternativa era compilar en unos sitios y no en
+     * otros por una reserva. */
+    void *tmp = nullptr;
+    if (posix_memalign(&tmp, kGdataAlign, redondeado) != 0) tmp = nullptr;
+    bloque = static_cast<uint8_t *>(tmp);
+#endif
+    if (bloque == nullptr) return; // sin bloque no hay globales que materializar
+    std::memset(bloque, 0, redondeado);
+    exe.gdata_host.reset(bloque);
     exe.gdata_size = size;
     exe.gdata_va = va;
 

@@ -153,7 +153,28 @@ typedef struct Executable {
      * comparten sus globales (igual que en AOT), y su aislamiento viene de sus
      * locals y su heap, no de aqui.
      */
-    std::unique_ptr<uint8_t[]> gdata_host;
+    /**
+     * @brief Bloque HOST donde viven las variables globales.
+     *
+     * Reservado con alineacion de LINEA DE CACHE, no con `new[]`.
+     *
+     * `new[]` garantiza la alineacion fundamental -- 16 bytes en x86-64 -- y
+     * eso deja sin poder demostrar cualquier exigencia mayor: las
+     * instrucciones que EXIGEN direccion alineada (`vmovdqa` pide 32,
+     * `vmovdqa64` pide 64) quedaban en "no puedo probarlo" sobre datos que el
+     * propio compilador coloca.  Y no era una limitacion del analisis: el
+     * dato realmente no tenia esa garantia.
+     *
+     * Como este bloque lo reservamos NOSOTROS, la garantia la elegimos
+     * nosotros.  Con 64 bytes, todo dato en un desplazamiento multiplo de 64
+     * queda demostrablemente alineado, y la comprobacion pasa de avisar a
+     * verificar.  El coste es unos pocos bytes de mas en UNA reserva por
+     * programa.
+     */
+    struct BorrarAlineado {
+        void operator()(uint8_t *p) const noexcept;
+    };
+    std::unique_ptr<uint8_t[], BorrarAlineado> gdata_host;
     size_t gdata_size = 0;   ///< Bytes de @ref gdata_host.
     uint64_t gdata_va = 0;   ///< VA de la seccion `gdata` (0 = el modulo no tiene).
 
