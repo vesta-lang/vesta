@@ -77,6 +77,9 @@ extern const char *const kProductorRangos;
 extern const char *const kProductorMemoria;
 extern const char *const kProductorFrontera;
 extern const char *const kProductorBucles;
+/// Como se COLOCA la memoria del programa: lo unico que un compilador con
+/// enlazador propio sabe y uno tradicional no.
+extern const char *const kProductorDisposicion;
 
 /// Clave con la que se guarda lo que es del MODULO entero y no de una funcion.
 extern const char *const kUnidadModulo;

@@ -35,6 +35,7 @@
 #define ANALYSIS_FACTS_ALIGNMENT_H
 
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -234,6 +235,37 @@ AlignmentSummaries compute_alignment_summaries(const ir::IrModule &mod,
 /// entre una ISA que pida mas -- SVE con vectores mas largos -- es cambiar esta
 /// linea; bajarlo es romper en silencio la ISA que pedia mas.
 static constexpr uint32_t kAlineacionBloqueGlobales = 64;
+
+/**
+ * @brief Con que alineacion se coloca la seccion de datos EN ESTE AMBITO.
+ *
+ * Es EL criterio, no una copia suya.  Lo usan los dos lados -- quien afirma el
+ * hecho en el ASA y quien lo consume para probar una alineacion --, y esta
+ * aqui por eso: si cada uno llevara el suyo serian dos criterios, y podrian
+ * separarse sin que nada fallara.  Uno afirmaria lo que el otro ya no cumple.
+ *
+ * @param backend "vm", "jit" o "aot".  Vacio = sin decidir.
+ * @return La alineacion garantizada, o 0 si en ese ambito NO SE SABE -- que no
+ *         es lo mismo que "no esta alineado": es que no se puede afirmar, y
+ *         quien pregunte debe quedarse con la garantia generica.
+ */
+inline uint32_t alineacion_seccion_datos(const char *backend) {
+    if (backend == nullptr) return 0;
+    /* Corriendo en la maquina el bloque lo reserva el cargador: el numero es
+     * nuestro y es firme. */
+    if (std::strcmp(backend, "vm") == 0 || std::strcmp(backend, "jit") == 0)
+        return kAlineacionBloqueGlobales;
+    /* Y en el nativo NO se sabe aqui: las secciones caen en pagina por
+     * defecto, pero un guion de enlazado puede colocarlas donde quiera y esa
+     * direccion no tiene por que cumplir nada.  Cuando el guion llegue hasta
+     * aqui, este 0 pasa a ser el numero que toque. */
+    return 0;
+}
+
+AlignmentFacts compute_alignment(const ir::IrFunction &fn,
+                                 const AlignmentSummaries *resumen,
+                                 const ir::IrModule *mod,
+                                 uint32_t garantia_seccion_datos);
 
 AlignmentFacts compute_alignment(const ir::IrFunction &fn,
                                  const AlignmentSummaries *resumen,

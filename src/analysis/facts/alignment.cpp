@@ -57,6 +57,14 @@ AlignmentFacts compute_alignment(const ir::IrFunction &fn,
 AlignmentFacts compute_alignment(const ir::IrFunction &fn,
                                  const AlignmentSummaries *resumen,
                                  const ir::IrModule *mod) {
+    /* Sin garantia dicha, la generica: nadie afirma por omision. */
+    return compute_alignment(fn, resumen, mod, 0u);
+}
+
+AlignmentFacts compute_alignment(const ir::IrFunction &fn,
+                                 const AlignmentSummaries *resumen,
+                                 const ir::IrModule *mod,
+                                 uint32_t garantia_datos) {
     AlignmentFacts f;
     f.de_valor.assign(fn.values.size(), 1u);
     f.resto.assign(fn.values.size(), 0u);
@@ -179,7 +187,17 @@ AlignmentFacts compute_alignment(const ir::IrFunction &fn,
                      * eje que ya tiene el modelo de efectos -- para QUE backend
                      * se analiza -- y con el, la del guion de enlazado cuando
                      * lo haya.  Hasta entonces, la garantia generica. */
-                    uint32_t base = sd.alignment_default;
+                    /* La garantia de la seccion la trae quien pregunta,
+                     * porque depende de DONDE vaya a correr esto -- y eso el
+                     * analisis no lo decide.  Si no la sabe manda 0 y aqui se
+                     * usa la generica: quedarse corto solo pierde una
+                     * optimizacion; pasarse deja pasar un programa que
+                     * revienta. */
+                    const bool en_datos =
+                        sd.meta_at(slot).section_name == ".data";
+                    uint32_t base = (en_datos && garantia_datos != 0)
+                                        ? garantia_datos
+                                        : sd.alignment_default;
                     const uint32_t pedida = sd.meta_at(slot).alignment;
                     if (pedida > base) base = pedida;
                     if (base == 0) break;

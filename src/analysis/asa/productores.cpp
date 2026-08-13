@@ -22,6 +22,7 @@
 #include <chrono>
 #include <cstring>
 #include <sstream>
+#include "analysis/facts/alignment.h"
 
 namespace analysis {
 namespace asa {
@@ -267,6 +268,68 @@ void producir_frontera(Produccion &p) {
 ///
 /// CRITERIO DEL DOMINIO: un puntero que puede apuntar a cualquier cosa no es un
 /// hecho, es la ausencia de uno.
+/**
+ * @brief Con que alineacion se COLOCA cada seccion de datos.
+ *
+ * Es el hecho que un compilador con enlazador ajeno no puede producir: la
+ * direccion final de un dato la decide otro, asi que lo unico afirmable es la
+ * garantia generica del formato y cualquier exigencia mayor queda en "no puedo
+ * probarlo".  Aqui la colocacion es nuestra.
+ *
+ * Y por eso mismo el hecho NACE CON AMBITO, en vez de ser un numero del
+ * programa: la misma seccion no se coloca igual segun donde acabe corriendo.
+ * En la maquina virtual el bloque lo reserva el cargador y el numero es firme.
+ * En el nativo las secciones caen en pagina por defecto, PERO un guion de
+ * enlazado puede ponerlas donde quiera (`place_section`), y esa direccion no
+ * tiene por que cumplir nada.
+ *
+ * Afirmar el numero bueno sin decir para donde vale seria cometer justo el
+ * fallo que este conocimiento existe para evitar: prometer una alineacion que
+ * la memoria no da.  Y eso no falla ruidosamente -- lee mal.
+ */
+void producir_disposicion(Produccion &p) {
+    /* Un hecho por SECCION, no por dato: la garantia es de la seccion, y el
+     * desplazamiento de cada dato dentro de ella ya lo sabe quien pregunta. */
+    bool hay_datos = false;
+    for (size_t i = 0; i < p.mod.static_data.size(); ++i) {
+        if (p.mod.static_data.meta_at(i).section_name == ".data") {
+            hay_datos = true;
+            break;
+        }
+    }
+    if (!hay_datos) return; // sin datos estaticos no hay nada que colocar
+
+    Sujeto sujeto;
+    sujeto.clase = Sujeto::Clase::Modulo;
+
+    /* Corriendo en la maquina -- interprete o JIT -- el bloque de globales lo
+     * reserva el cargador, y lo hace con una alineacion que elegimos nosotros.
+     * Ahi el numero no se estima: se sabe. */
+    {
+        Fact f;
+        f.que.dominio = kProductorDisposicion;
+        f.que.codigo = "disposicion.alineacion_seccion";
+        f.que.a = static_cast<int64_t>(alineacion_seccion_datos("vm"));
+        f.que.detalle = p.almacen.internar(".data");
+        f.de_quien = sujeto;
+        f.donde.backend = "vm";
+        f.sello.certeza = Certeza::Demostrada;
+        f.sello.origen.fuente = Fuente::Estatico;
+        f.sello.origen.productor = kProductorDisposicion;
+        f.prueba.regla = "disposicion.reserva_del_cargador";
+        p.afirmar(f);
+    }
+
+    /* Y compilando a nativo NO se afirma, porque la colocacion la puede fijar
+     * el usuario y aqui no se ve su guion de enlazado.  No decir nada seria
+     * indistinguible de no haberlo mirado, asi que se deja constancia del
+     * motivo: cuando el guion llegue hasta aqui, este silencio se convierte en
+     * el numero que toque. */
+    p.callar(sujeto, "disposicion.colocacion_configurable", kProductorDisposicion,
+             "en el nativo la seccion la coloca el guion de enlazado; "
+             "sin verlo no se puede afirmar su alineacion");
+}
+
 void producir_memoria(Produccion &p) {
     for (const ir::IrFunction &fn : p.mod.functions) {
         if (!p.interesa(fn)) continue;
@@ -344,6 +407,7 @@ void registrar_los_incluidos() {
     registrar_productor(kProductorFrontera, &producir_frontera);
     registrar_productor(kProductorMemoria, &producir_memoria);
     registrar_productor(kProductorBucles, &producir_bucles);
+    registrar_productor(kProductorDisposicion, &producir_disposicion);
 }
 
 } // namespace

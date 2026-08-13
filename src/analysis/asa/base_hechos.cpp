@@ -25,6 +25,7 @@ namespace asa {
 const char *const kProductorEstructura = "asa.estructura";
 const char *const kProductorRangos = "asa.rangos";
 const char *const kProductorMemoria = "asa.memoria";
+const char *const kProductorDisposicion = "asa.disposicion";
 const char *const kProductorFrontera = "asa.frontera";
 const char *const kProductorBucles = "asa.bucles";
 const char *const kUnidadModulo = "<modulo>";
@@ -40,6 +41,7 @@ void register_asa_canonical_names() {
         register_canonical_name(kProductorEstructura);
         register_canonical_name(kProductorRangos);
         register_canonical_name(kProductorMemoria);
+        register_canonical_name(kProductorDisposicion);
         register_canonical_name(kProductorFrontera);
         register_canonical_name(kProductorBucles);
         register_canonical_name(kUnidadModulo);
