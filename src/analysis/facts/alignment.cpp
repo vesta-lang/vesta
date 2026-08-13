@@ -38,9 +38,9 @@ uint32_t potencia_que_divide(uint64_t k) {
 /// un chunk alineado, y los grandes con una de 64 sobre una arena del sistema
 /// -- que llega alineada a pagina.  Si esa politica cambia, cambia aqui, y por
 /// eso esta en un solo sitio en vez de repartida por quien la aproveche.
-uint32_t alineacion_de_reserva(int64_t bytes) {
+uint32_t alineacion_de_reserva(int64_t bytes, uint32_t cabecera_slab) {
     if (bytes > 4096) return kTope; // arena directa: cabecera de 64.
-    return 8;                       // slab: payload tras 8 bytes de cabecera.
+    return cabecera_slab;           // slab: payload justo tras la cabecera.
 }
 
 } // namespace
@@ -58,13 +58,14 @@ AlignmentFacts compute_alignment(const ir::IrFunction &fn,
                                  const AlignmentSummaries *resumen,
                                  const ir::IrModule *mod) {
     /* Sin garantia dicha, la generica: nadie afirma por omision. */
-    return compute_alignment(fn, resumen, mod, 0u);
+    return compute_alignment(fn, resumen, mod, 0u, 8u);
 }
 
 AlignmentFacts compute_alignment(const ir::IrFunction &fn,
                                  const AlignmentSummaries *resumen,
                                  const ir::IrModule *mod,
-                                 uint32_t garantia_datos) {
+                                 uint32_t garantia_datos,
+                                 uint32_t cabecera_slab) {
     AlignmentFacts f;
     f.de_valor.assign(fn.values.size(), 1u);
     f.resto.assign(fn.values.size(), 0u);
@@ -232,7 +233,7 @@ AlignmentFacts compute_alignment(const ir::IrFunction &fn,
                         if (v < fn.values.size() && fn.values[v].is_const)
                             bytes = fn.values[v].const_val;
                     }
-                    nueva = alineacion_de_reserva(bytes);
+                    nueva = alineacion_de_reserva(bytes, cabecera_slab);
                     break;
                 }
                 case ir::IrOp::MOV:

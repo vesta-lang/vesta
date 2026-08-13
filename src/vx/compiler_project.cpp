@@ -3896,6 +3896,7 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
      * compilando a nativo y no avisar en la maquina, porque en un sitio la
      * alineacion se demuestra y en el otro no. */
     const uint32_t garantia = analysis::alineacion_seccion_datos(backend);
+    const uint32_t cabecera = analysis::alineacion_payload_reserva(backend);
     /* Lo que le llega a cada funcion desde sus sitios de llamada.  Sin esto,
      * un parametro no vale nada y la comprobacion se queda en la frontera --
      * que es justo donde NO esta el asm: quien exige alineacion suele recibir
@@ -3985,7 +3986,7 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
         const analysis::AlignmentFacts &alin =
             alineacion_de.emplace(fn.name,
                                   analysis::compute_alignment(fn, &resumen, &mod,
-                                                              garantia))
+                                                              garantia, cabecera))
                 .first->second;
         for (const ir::IrBlock &b : fn.blocks) {
             for (const ir::IrInstr &in : b.instrs) {

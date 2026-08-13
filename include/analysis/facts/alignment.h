@@ -249,6 +249,42 @@ static constexpr uint32_t kAlineacionBloqueGlobales = 64;
  *         es lo mismo que "no esta alineado": es que no se puede afirmar, y
  *         quien pregunte debe quedarse con la garantia generica.
  */
+/**
+ * @brief Alineacion del payload que entrega el asignador EN ESTE AMBITO.
+ *
+ * Tampoco es una propiedad del programa: cada destino usa un asignador
+ * distinto, y no tienen la misma disposicion interna.
+ *
+ *   - Nativo: `stdlib/vx/vx_mem.vx`, cabecera de 16, asi que el payload queda
+ *     alineado a 16 y `movdqa` se puede DEMOSTRAR sobre memoria de monton.
+ *   - Maquina: el de C++ (@c gc::RawAllocator), cabecera de 8.  Su camino
+ *     rapido lo INLINEA el JIT, asi que subirlo es otro cambio con su propia
+ *     medicion -- y hasta que se haga, afirmar 16 aqui seria mentir.
+ *
+ * Que los dos numeros discrepen no es un descuido: es lo que hay, y por eso se
+ * dice en vez de promediarlo a la baja o darlo por igual.
+ *
+ * @return La alineacion garantizada del payload de una reserva pequena.
+ */
+inline uint32_t alineacion_payload_reserva(const char *backend) {
+    (void)backend;
+    /* 16 en los dos, por caminos distintos:
+     *
+     *   - Maquina y JIT: `gc::RawAllocator` NO lleva cabecera.  Trocea un
+     *     chunk de pagina en slots del tamano de la clase -- 16, 32, 64...,
+     *     potencias de dos --, asi que el payload cae alineado A SU CLASE, que
+     *     es 16 lo mas bajo.  Se afirma 16 y no la clase porque el tamano
+     *     exacto no siempre se conoce aqui; cuando se conozca, se puede
+     *     afinar y sera MAS, nunca menos.
+     *   - Nativo: `vx_mem.vx` lleva cabecera de 16 y avanza a saltos
+     *     multiplos de 16, con lo que el payload queda igual de alineado.
+     *
+     * Antes se afirmaba 8, que en la maquina era quedarse corto por un factor
+     * de dos o mas -- y en el nativo era la verdad, hasta que se subio la
+     * cabecera. */
+    return 16;
+}
+
 inline uint32_t alineacion_seccion_datos(const char *backend) {
     if (backend == nullptr) return 0;
     /* Corriendo en la maquina el bloque lo reserva el cargador: el numero es
@@ -265,7 +301,8 @@ inline uint32_t alineacion_seccion_datos(const char *backend) {
 AlignmentFacts compute_alignment(const ir::IrFunction &fn,
                                  const AlignmentSummaries *resumen,
                                  const ir::IrModule *mod,
-                                 uint32_t garantia_seccion_datos);
+                                 uint32_t garantia_seccion_datos,
+                                 uint32_t cabecera_slab);
 
 AlignmentFacts compute_alignment(const ir::IrFunction &fn,
                                  const AlignmentSummaries *resumen,

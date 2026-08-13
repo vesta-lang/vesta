@@ -194,7 +194,11 @@ void vmem_release(u64 addr, u64 size) {
 // Layout de bloque: [8 bytes header][payload].  El header guarda el indice de
 // size-class (0..8) o 255 (large: arena directa).  La free-list es intrusiva:
 // un bloque libre guarda el next en su payload.  malloc devuelve el payload
-// (header + 8).  Payload 8-aligned (los loads SIMD usan MOVUPD).
+// (header + 16).  Payload 16-aligned: `movdqa` y `vmovdqa` de 128 bits
+// pasan a ser DEMOSTRABLES sobre memoria de monton, que es donde vive la
+// mayor parte de los datos.  Con 8 no lo eran -- no por falta de analisis,
+// sino porque el asignador no lo daba -- y toda carga SIMD caia en la
+// variante no alineada.  Cuestan 8 bytes por reserva pequena.
 
 /// 9 size-classes: 16,32,64,128,256,512,1024,2048,4096.  Head de free-list/clase.
 u64[9] __vmem_free;  ///< head de la free-list por clase (0 = vacia)
@@ -317,16 +321,17 @@ void __vmem_new_chunk(u64 min_need) {
  * escritos por un constructor queda garantizado (convencion de @AllocatorOverride).
  *
  * @param size Bytes solicitados.
- * @return Direccion del payload (header + 8), o de base+16 si es large.
+ * @return Direccion del payload (header + 16), o de base+64 si es large.
  */
 u64 __vmem_alloc(u64 size) {
     if (size == 0) size = 1;
     i32 cls = __vmem_class_of(size);
     if (cls < 0) {
-        // Large: arena directa.  Layout: [total en payload-16][255 marker en
-        // payload-8][payload en base+64].  El marker va en payload-8, la MISMA
+        // Large: arena directa.  Layout: [255 marker en payload-16][total en
+        // payload-8][payload en base+64].  El marker va en payload-16, la MISMA
         // posicion que el header de un bloque slab, para que __vmem_free_impl lo
-        // detecte leyendo payload-8 (uniforme con el caso slab).
+        // detecte con UNA sola lectura (uniforme con el caso slab).  Si el slab
+        // se mueve, este marcador se mueve con el: van atados.
         //
         // La cabecera ocupa 64 y no 16 para que el PAYLOAD quede alineado a
         // linea de cache.  Con 16 el payload caia en base+16: multiplo de 16
@@ -353,8 +358,8 @@ u64 __vmem_alloc(u64 size) {
                 u64 pay = reut + 64;
                 vx_memset(pay, 0, size);
                 u64* hr = (u64*)(pay - 16);
-                hr[0] = total; // total en payload-16
-                hr[1] = 255;   // marker large en payload-8
+                hr[0] = 255;   // marker large en payload-16
+                hr[1] = total; // total en payload-8
                 return pay;
             }
             c = c + 1;
@@ -363,8 +368,8 @@ u64 __vmem_alloc(u64 size) {
         u64 base = vmem_reserve(total, MemProt.ReadWrite);
         u64 pay = base + 64;
         u64* h = (u64*)(pay - 16);
-        h[0] = total; // total en payload-16
-        h[1] = 255;   // marker large en payload-8
+        h[0] = 255;   // marker large en payload-16
+        h[1] = total; // total en payload-8
         return pay;
     }
     u64 csz = __vmem_size_of(cls);
@@ -372,16 +377,22 @@ u64 __vmem_alloc(u64 size) {
     __vmem_slab_lock();
     u64 head = __vmem_free[cls];
     if (head != 0) {
-        // Pop: head es el block (header); next guardado en su payload (head+8).
+        // Pop: head es el block (header); el next cabe YA en la cabecera
+        // (head+8), sin invadir el payload como cuando media 8.
         u64* hp = (u64*)head;
         __vmem_free[cls] = hp[1];
         __vmem_slab_unlock();
         hp[0] = (u64)cls; // re-set header (fuera del lock: el bloque ya es nuestro)
-        vx_memset(head + 8, 0, csz); // reciclado -> sucio: kzalloc
-        return head + 8;
+        vx_memset(head + 16, 0, csz); // reciclado -> sucio: kzalloc
+        return head + 16;
     }
     // Bump del chunk actual (memoria fresca del SO = ya a cero).
-    u64 need = csz + 8;
+    // Redondeado a 16: la cabecera sola no basta.  Los bloques salen de un
+    // bump consecutivo, asi que el SALTO entre uno y otro tiene que ser
+    // multiplo de 16 tambien; si no, el primero cae alineado y el siguiente ya
+    // no -- y la garantia valdria para unas reservas si y otras no, que es
+    // peor que no tenerla, porque parece cumplirse hasta que falla.
+    u64 need = (csz + 16 + 15) & 18446744073709551600;
     if (__vmem_bump == 0) __vmem_new_chunk(need);
     if (__vmem_bump + need > __vmem_end) __vmem_new_chunk(need);
     u64 block = __vmem_bump;
@@ -389,7 +400,7 @@ u64 __vmem_alloc(u64 size) {
     __vmem_slab_unlock();
     u64* bp = (u64*)block;
     bp[0] = (u64)cls;
-    return block + 8;
+    return block + 16;
 }
 
 /**
@@ -398,14 +409,14 @@ u64 __vmem_alloc(u64 size) {
  */
 void __vmem_free_impl(u64 payload) {
     if (payload == 0) return;
-    u64 block = payload - 8;
+    u64 block = payload - 16;
     u64* bp = (u64*)block;
     u64 h = bp[0];
     if (h == 255) {
-        // Large: marker en payload-8 (base+8); size en base+0 (payload-16).
+        // Large: marker en payload-16; size en payload-8.
         u64 base = payload - 64;
         u64* hp = (u64*)(payload - 16);
-        u64 total = hp[0];
+        u64 total = hp[1]; // el marcador ocupa hp[0]; el total va detras
         // Retenerlo para el proximo `malloc` del mismo tamano, si cabe.
         __vmem_slab_lock();
         if (__vmem_large_bytes + total <= VMEM_LARGE_CACHE_BYTES) {
@@ -425,11 +436,18 @@ void __vmem_free_impl(u64 payload) {
         vmem_release(base, total);
         return;
     }
-    // Push a la free-list: next = old head (guardado en el payload).
+    // Push a la free-list: next = old head, guardado en la CABECERA (block+8).
+    //
+    // Antes iba en el payload, y era correcto porque con cabecera de 8 el
+    // payload EMPEZABA en block+8: el sitio donde escribia el push y el que
+    // leia el pop eran el mismo por casualidad del tamano.  Al crecer la
+    // cabecera dejan de coincidir, asi que el next pasa a vivir donde le
+    // corresponde -- dentro de la cabecera, que ahora tiene hueco -- y deja de
+    // ensuciar la memoria del usuario.
     // Seccion critica del SLAB: protegida en modo multihilo.
     __vmem_slab_lock();
-    u64* pp = (u64*)payload;
-    pp[0] = __vmem_free[h];
+    u64* pp = (u64*)block;
+    pp[1] = __vmem_free[h];
     __vmem_free[h] = block;
     __vmem_slab_unlock();
 }
