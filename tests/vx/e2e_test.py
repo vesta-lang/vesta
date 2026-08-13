@@ -4019,6 +4019,24 @@ def main():
         if not ok:
             failed.append(tag)
 
+    # INVARIANTES del compilador, no casos.  Van al final porque no prueban un
+    # programa: prueban una propiedad de la que dependen otras decisiones.  El
+    # del cache puro sostiene que reclamar espacio sea seguro; si se rompe, hay
+    # que enterarse en ese commit y no meses despues.
+    import subprocess as _sp
+    _inv = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "test_cache_puro.py")
+    if os.path.exists(_inv):
+        print("")
+        _r = _sp.run([sys.executable, _inv, args.build_dir], capture_output=True,
+                     text=True)
+        for _l in _r.stdout.splitlines():
+            print(_l)
+        if _r.returncode != 0:
+            failed.append("cache-puro")
+        else:
+            steps += 1
+
     print("")
     if failed:
         print("=== e2e: %d pasos OK, %d casos fallidos (%s) ==="
