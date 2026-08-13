@@ -154,6 +154,33 @@ struct AlignmentSummaries {
         Universo universo = Universo::Abierto;
         /// Vacio salvo en @ref Universo::CerradoConLlamantes.
         std::vector<Param> params;
+        /**
+         * @brief Lo que la funcion GARANTIZA del valor que devuelve.
+         *
+         * Es la otra mitad, y faltaba.  Con solo los parametros el hecho viaja
+         * hacia dentro -- lo que las llamadas le dan --, pero no hacia fuera:
+         * el resultado de CUALQUIER llamada quedaba en "no se sabe", incluso
+         * el de una funcion cuyo cuerpo esta a la vista y devuelve algo cuya
+         * alineacion se demuestra sola.
+         *
+         * El caso que lo pedia era el asignador, y por eso importa que esto NO
+         * mire nombres: reconocer `malloc` habria resuelto ese caso y ninguno
+         * mas, y ademas habria atado el analisis a una convencion -- un
+         * asignador propio, un envoltorio, una funcion que devuelve el campo de
+         * un objeto alineado, no se llaman de ninguna forma en particular.  Se
+         * mira el CUERPO, asi que sirve para cualquier funcion.
+         *
+         * El encuentro de todos los `ret`: la funcion garantiza lo que
+         * garantiza su peor salida, porque cualquiera puede darse.
+         */
+        Param retorno;
+        /// Si @ref retorno dice algo.  Falso cuando no hay cuerpo que mirar
+        /// (nativa) o cuando sus salidas no coinciden en nada.
+        ///
+        /// Es una condicion DISTINTA de @ref universo: para el retorno hace
+        /// falta ver el CUERPO, no los llamantes.  Una funcion publica que
+        /// cualquiera puede llamar sigue devolviendo lo mismo.
+        bool retorno_valido = false;
     };
     std::unordered_map<std::string, Resumen> por_funcion;
 

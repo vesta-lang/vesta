@@ -236,6 +236,27 @@ AlignmentFacts compute_alignment(const ir::IrFunction &fn,
                     nueva = alineacion_de_reserva(bytes, cabecera_slab);
                     break;
                 }
+                case ir::IrOp::TAILCALL:
+                case ir::IrOp::CALLSUPER:
+                case ir::IrOp::CALLN:
+                case ir::IrOp::CALL: {
+                    /* Lo que devuelve una llamada vale lo que su funcion
+                     * GARANTICE, y eso sale de mirar su cuerpo -- no de
+                     * reconocerla por el nombre.
+                     *
+                     * La diferencia importa: por nombre solo se acertaria con
+                     * los que alguien haya escrito en una lista, y quedarian
+                     * fuera el envoltorio del asignador, el asignador propio de
+                     * quien lo sustituya, o cualquier funcion que devuelva algo
+                     * ya alineado.  Mirando el cuerpo salen todos, y el dia que
+                     * el asignador cambie su cabecera esto se entera solo. */
+                    if (resumen == nullptr || in.func_name.empty()) break;
+                    const auto *r = resumen->buscar(in.func_name);
+                    if (r == nullptr || !r->retorno_valido) break;
+                    nueva = r->retorno.modulo;
+                    nuevo_resto = r->retorno.resto;
+                    break;
+                }
                 case ir::IrOp::MOV:
                 case ir::IrOp::BITCAST:
                 case ir::IrOp::CAST:
@@ -448,6 +469,85 @@ AlignmentSummaries compute_alignment_summaries(const ir::IrModule &mod,
     for (const ir::IrFunction &fn : mod.functions)
         hechos.emplace(fn.name, compute_alignment(fn, nullptr, &mod));
 
+    /* Lo que cada funcion garantiza de su retorno, que es lo que permite que
+     * el hecho salga de la funcion en vez de morir en ella.
+     *
+     * Se repite unas pocas veces porque una funcion puede devolver lo que le
+     * dio otra: `envoltorio()` que devuelve `reservar()` que devuelve el
+     * payload.  En la primera vuelta el retorno de `reservar` aun no se sabe,
+     * asi que `envoltorio` tampoco; en la segunda ya si.
+     *
+     * Se empieza sin saber nada y solo se anade, nunca se quita, asi que
+     * pararse antes de tiempo cuesta precision y no correccion -- que es la
+     * unica forma de que un tope fijo sea legitimo.  Con recursion mutua
+     * simplemente se queda en "no se sabe", que es la respuesta correcta. */
+    for (int vuelta = 0; vuelta < 3; ++vuelta) {
+        bool cambio = false;
+        for (const ir::IrFunction &fn : mod.functions) {
+            if (fn.is_native) continue; // sin cuerpo no hay nada que mirar
+            const AlignmentFacts &h = hechos[fn.name];
+            bool primero = true;
+            AlignmentSummaries::Param ret;
+            bool alguno = false;
+            for (const ir::IrBlock &b : fn.blocks) {
+                for (const ir::IrInstr &in : b.instrs) {
+                    /* `tailcall` tambien es una salida: lo que devuelve el
+                     * destino es lo que devuelve esta funcion.  Mirar solo
+                     * `ret` dejaria sin resumen justo a las que delegan, que
+                     * son las que mas se encadenan.
+                     *
+                     * Pero su valor NO esta en los operandos -- ahi van los
+                     * ARGUMENTOS --, sino en lo que garantice el destino.
+                     * Tomarlo de `operands[0]` seria afirmar la alineacion de
+                     * un argumento como si fuera la del resultado. */
+                    uint32_t m = 0, r = 0;
+                    if (in.op == ir::IrOp::RET) {
+                        if (in.operands.empty()) continue;
+                        m = h.de(in.operands[0]);
+                        r = h.resto_de(in.operands[0]);
+                    } else if (in.op == ir::IrOp::TAILCALL) {
+                        if (in.func_name.empty()) continue;
+                        const auto *rd = out.buscar(in.func_name);
+                        if (rd == nullptr || !rd->retorno_valido) continue;
+                        m = rd->retorno.modulo;
+                        r = rd->retorno.resto;
+                    } else {
+                        continue;
+                    }
+                    alguno = true;
+                    if (primero) {
+                        ret.modulo = m;
+                        ret.resto = r;
+                        primero = false;
+                        continue;
+                    }
+                    /* La funcion garantiza lo que garantiza su PEOR salida:
+                     * cualquiera de ellas puede ser la que se tome. */
+                    const uint32_t mc = std::min(ret.modulo, m);
+                    if ((ret.resto % mc) != (r % mc)) {
+                        ret.modulo = 1;
+                        ret.resto = 0;
+                    } else {
+                        ret.modulo = mc;
+                        ret.resto = r % mc;
+                    }
+                }
+            }
+            if (!alguno || ret.modulo <= 1) continue;
+            AlignmentSummaries::Resumen &res = out.por_funcion[fn.name];
+            if (res.retorno_valido && res.retorno.modulo == ret.modulo &&
+                res.retorno.resto == ret.resto)
+                continue;
+            res.retorno = ret;
+            res.retorno_valido = true;
+            cambio = true;
+        }
+        if (!cambio) break; // punto fijo: otra vuelta daria lo mismo
+        // Rehacer los hechos sabiendo ya lo que devuelven las llamadas.
+        for (const ir::IrFunction &fn : mod.functions)
+            hechos[fn.name] = compute_alignment(fn, &out, &mod);
+    }
+
     // Encuentro de lo que aporta cada sitio de llamada.
     std::unordered_map<std::string, std::vector<AlignmentSummaries::Param>> acc;
     std::unordered_map<std::string, bool> visto;
@@ -496,7 +596,11 @@ AlignmentSummaries compute_alignment_summaries(const ir::IrModule &mod,
     for (const ir::IrFunction &fn : mod.functions) {
         auto ic = cerrada.find(fn.name);
         if (ic == cerrada.end() || !ic->second) continue;
-        AlignmentSummaries::Resumen r;
+        /* Sobre la entrada que YA hay, no una nueva: el retorno se calculo
+         * arriba y vive aqui.  Reemplazar la entrada entera lo borraria, y en
+         * silencio -- el analisis seguiria funcionando, solo que sin saber lo
+         * que devuelve ninguna funcion. */
+        AlignmentSummaries::Resumen &r = out.por_funcion[fn.name];
         auto ia = acc.find(fn.name);
         if (ia == acc.end()) {
             r.universo = Universo::CerradoSinLlamantes;
@@ -504,7 +608,6 @@ AlignmentSummaries compute_alignment_summaries(const ir::IrModule &mod,
             r.universo = Universo::CerradoConLlamantes;
             r.params = std::move(ia->second);
         }
-        out.por_funcion[fn.name] = std::move(r);
     }
     return out;
 }
