@@ -1219,7 +1219,7 @@ CompileResult compile_vx_source(const std::string &source,
          * programa entero es el camino de proyecto, y alli se dice. */
         vx_report_asm_preconditions(irmod_for_section, res.diagnostics, filename,
                                     /*programa_cerrado=*/false,
-                                    opts.emit_ir_preopt);
+                                    opts.emit_ir_preopt, opts.native_poo ? "aot" : "vm");
         mod_para_seccion = std::move(irmod_for_section);
         hay_seccion = true;
     }

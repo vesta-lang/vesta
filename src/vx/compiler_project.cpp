@@ -3562,7 +3562,8 @@ CompileResult compile_vx_project(
             break;
         }
     vx_report_asm_preconditions(merged, res.diagnostics, root_path, hay_main,
-                                opts.emit_ir_preopt);
+                                opts.emit_ir_preopt,
+                                opts.native_poo ? "aot" : "vm");
 
     if (opts.dump_ir) {
         std::ostringstream ir_oss;
@@ -3882,7 +3883,19 @@ static bool contiene_palabra(const std::string &source, const char *kw) {
 void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
                                  const std::string &file,
                                  bool programa_cerrado,
-                                 bool decir_lo_no_acotado) {
+                                 bool decir_lo_no_acotado,
+                                 const char *backend) {
+    /* Con QUE garantia se coloca la seccion de datos NO es una propiedad del
+     * programa: depende de donde acabe corriendo.  Por eso se pregunta aqui,
+     * con el destino en la mano, en vez de llevar un numero dentro.
+     *
+     * Corriendo en la maquina el bloque lo reserva el cargador y el numero es
+     * firme.  Compilando a nativo la seccion la coloca el guion de enlazado
+     * del usuario, asi que no se afirma: se devuelve 0 y se usa la garantia
+     * generica.  Consecuencia buscada -- el mismo programa puede avisar
+     * compilando a nativo y no avisar en la maquina, porque en un sitio la
+     * alineacion se demuestra y en el otro no. */
+    const uint32_t garantia = analysis::alineacion_seccion_datos(backend);
     /* Lo que le llega a cada funcion desde sus sitios de llamada.  Sin esto,
      * un parametro no vale nada y la comprobacion se queda en la frontera --
      * que es justo donde NO esta el asm: quien exige alineacion suele recibir
@@ -3971,7 +3984,8 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
          * y recalcularlo seria pagar dos veces por saber lo mismo. */
         const analysis::AlignmentFacts &alin =
             alineacion_de.emplace(fn.name,
-                                  analysis::compute_alignment(fn, &resumen, &mod))
+                                  analysis::compute_alignment(fn, &resumen, &mod,
+                                                              garantia))
                 .first->second;
         for (const ir::IrBlock &b : fn.blocks) {
             for (const ir::IrInstr &in : b.instrs) {

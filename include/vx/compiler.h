@@ -714,7 +714,8 @@ bool vx_source_declara_namespace(const std::string &source);
 void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
                                  const std::string &file,
                                  bool programa_cerrado,
-                                 bool decir_lo_no_acotado);
+                                 bool decir_lo_no_acotado,
+                                 const char *backend);
 
 void vx_report_bounds(const ir::IrModule &mod, Diagnostics &diags,
                       const std::string &file);
