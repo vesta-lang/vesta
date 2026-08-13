@@ -38,7 +38,8 @@
 
 #include <atomic>
 #include <chrono>
-#include <cstdio> //   : snprintf para hex-encode del hash
+#include <cstdio>
+#include <cstdlib> //   : snprintf para hex-encode del hash
 #include <cstring>
 #include <thread>
 #include <vector>
@@ -938,16 +939,28 @@ bool ComptimeRuntime::load_macros_from_bytes(
                         if (res.fn) {
                             impl_->jit_code_by_pc[entry_pc] =
                                 reinterpret_cast<void *>(res.fn);
-                        } else {
-                            // El codigo comptime va compilado.  Que una
-                            // funcion no se pueda compilar no es un modo de
-                            // funcionamiento alternativo: es un fallo a
-                            // corregir, y callarselo lo deja corriendo
-                            // interpretado sin que nadie se entere.
+                        } else if (std::getenv("VESTA_COMPTIME_DEBUG") !=
+                                   nullptr) {
+                            /* El comptime corre por el JIT; interpretarlo es
+                             * el camino LENTO, no el habitual.  Pero no es un
+                             * fallo: ese codigo solo corre dentro del
+                             * compilador, asi que caer al interprete cuesta
+                             * tiempo de COMPILACION y nada mas -- no cambia lo
+                             * que el programa hace ni deja nada a medias.
+                             *
+                             * Se decia en CADA compilacion de cualquier fichero
+                             * con generadores, y eso es ruido: un aviso que
+                             * sale siempre y no pide ninguna accion entrena a
+                             * no leer los avisos.  Y ahi hay avisos que SI
+                             * piden accion -- el de alineacion, sin ir mas
+                             * lejos, quedaba enterrado entre estos.
+                             *
+                             * Se conserva tras `VESTA_COMPTIME_DEBUG` porque a
+                             * quien mire el coste del comptime si le interesa:
+                             * interpretado es mas lento que compilado. */
                             std::fprintf(stderr,
-                                         "[comptime] aviso: no se pudo "
-                                         "compilar '%s'; se ejecutara "
-                                         "interpretado\n",
+                                         "[comptime] no se pudo compilar '%s'; "
+                                         "se ejecuta interpretado\n",
                                          kv.first.c_str());
                         }
                     } catch (...) {
