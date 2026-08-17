@@ -118,7 +118,13 @@ inline LaneHazard lane_hazard(const ValueRequirements &r, const Lane &lane,
     if (r.lane_forbidden(lane.id))                 return LaneHazard::LANE_FORBIDDEN;
     // El valor requiere una lane PRESERVADA (esta viva a traves de un CALL que clobbea
     // las volatiles).  El nombre no menciona "caller-saved": el requisito es "preservada".
-    if (r.crosses_call && lane.preservation_of(r.width) != SavePolicy::PRESERVED)
+    // Pregunta @c needs_preserved, no @c crosses_call: son dos preguntas (ver
+    // @c ValueRequirements).  Por defecto valen lo mismo -- el criterio INCLUSIVO,
+    // que es el correcto porque muchas "posiciones de llamada" son pseudo-ops que
+    // se EXPANDEN (divmod, load/store VM, atomicas, asm) y ahi el clobber es una
+    // REGION, no un punto.  Solo se separan en el caso que no puede cruzar nada:
+    // el operando de un asm cuyo intervalo es el punto del propio bloque.
+    if (r.needs_preserved && lane.preservation_of(r.width) != SavePolicy::PRESERVED)
         return LaneHazard::NOT_PRESERVED;
     return LaneHazard::NONE;
 }

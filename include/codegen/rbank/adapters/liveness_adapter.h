@@ -128,6 +128,10 @@ inline void populate_liveness_requirements(
     for (uint32_t p : call_positions)
         if (interval_covers(iv, p)) { crosses = true; break; }
     r.crosses_call = crosses;
+    /* Aqui las dos preguntas valen LO MISMO a proposito: este adaptador no sabe
+     * si el valor es un operando de asm, que es el unico caso en el que se
+     * separan.  Quien lo sabe es @c backend_bridge (tiene @c reg_required). */
+    r.needs_preserved = crosses;
 }
 
 } // namespace rbank

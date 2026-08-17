@@ -77,7 +77,25 @@ struct ValueRequirements {
     Residency     residency = Residency::ANY;      ///< donde puede vivir.
 
     // --- Hechos estructurales (poblados desde la capa de Facts) ---
-    bool     crosses_call     = false; ///< vivo a traves de al menos un CALL.
+    /* DOS preguntas distintas sobre la misma llamada, con criterios OPUESTOS.
+     * Tenerlas en un solo campo era un bug: el criterio bueno para una es el
+     * malo para la otra (medido; ver la nota de @c liveness_adapter).
+     *
+     * @c crosses_call = VIVO EN la posicion de un CALL (criterio INCLUSIVO,
+     * `def <= p <= end`).  Es lo que necesita el stackmap: una raiz de GC viva en
+     * un safepoint DEBE constar, y estrechar esto deja de marcar raices -- no es
+     * rendimiento, es correccion.
+     *
+     * @c needs_preserved = SOBREVIVE a la llamada (criterio ESTRICTO,
+     * `def < p < end`).  Es lo que decide si hace falta una lane PRESERVADA: un
+     * valor definido EN `p` es el resultado de `p` y no puede destruirlo quien lo
+     * produce; uno cuyo ultimo uso esta EN `p` lo consume `p` y no necesita
+     * sobrevivirla.  Con el criterio inclusivo, el operando de un bloque asm
+     * -- intervalo [p,p] del propio bloque, que cuenta como posicion de llamada
+     * porque clobbea -- salia "cruzandose a si mismo", pedia lane preservada, y
+     * en el banco vectorial de x86-64 no hay ninguna: 0 admisibles. */
+    bool     crosses_call     = false; ///< vivo EN un CALL (inclusivo) -- GC.
+    bool     needs_preserved  = false; ///< sobrevive a un CALL (estricto) -- lane.
     bool     is_gc            = false; ///< handle/puntero GC (visible en stackmap).
     bool     address_taken    = false; ///< se toma su direccion -> implica MEMORY.
     bool     rematerializable = false; ///< recomputable en vez de spillear (const/lea).

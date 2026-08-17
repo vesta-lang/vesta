@@ -144,6 +144,26 @@ inline AbstractProblem intervals_to_problem(const jit::IntervalResult &ivs) {
                 if (cp >= r.from && cp < r.to) { av.req.crosses_call = true; break; }
             if (av.req.crosses_call) break;
         }
+        /* @c needs_preserved (¿hace falta una lane PRESERVADA?) vale lo mismo que
+         * @c crosses_call SALVO en un caso, que es el que rompia los bloques asm:
+         * un operando de asm cuyo intervalo entero es UN PUNTO no puede cruzar
+         * nada -- ese punto ES el bloque que lo usa, y el bloque se registra como
+         * posicion de llamada porque clobbea, asi que se marcaba cruzandose a si
+         * mismo.  Pedia una lane preservada y en el banco vectorial de x86-64 no
+         * hay ninguna: 0 admisibles con residencia REGISTER = insatisfacible, el
+         * bloque se quedaba sin bytes y una funcion cuyo cuerpo entero es ese asm
+         * quedaba VACIA.
+         *
+         * El criterio NO se relaja para nadie mas, y con razon: muchas "posiciones
+         * de llamada" son pseudo-ops que se EXPANDEN a varias instrucciones
+         * nativas (divmod, load/store VM, atomicas, el propio asm), asi que su
+         * clobber es una REGION y un valor que muere "en" ellas puede leerse
+         * DESPUES del clobber.  Relajarlo en general rompe `spr`, `cfn199`,
+         * `cmb245` y `raii101` -- medido, no supuesto. */
+        av.req.needs_preserved = av.req.crosses_call;
+        if (av.req.crosses_call && iv.reg_required && iv.ranges.size() == 1 &&
+            iv.ranges[0].to <= iv.ranges[0].from + 1)
+            av.req.needs_preserved = false;
         // HAZARD "debe-memoria" (residency=MEMORY): UN mecanismo, dos origenes -- GC
         // root cross-call (stackmap) + force_spill (live-in a handler abnormal; el
         // throw clobbea TODOS los regs, solo la memoria sobrevive).
@@ -161,9 +181,14 @@ inline AbstractProblem intervals_to_problem(const jit::IntervalResult &ivs) {
         if (iv.reg_required && std::getenv("VESTA_RBANK_ASM_DEBUG")) {
             std::fprintf(stderr,
                          "[rbank] operando asm vreg %u: rango [%u,%u], %zu "
-                         "trozos, cruza-llamada=%d, llamadas=%zu\n",
+                         "trozos, tramo0=[%u,%u), cruza-llamada=%d, "
+                         "pide-preservada=%d, clase=%u, llamadas=%zu\n",
                          iv.vreg, av.start, av.end, iv.ranges.size(),
-                         av.req.crosses_call ? 1 : 0, ivs.call_positions.size());
+                         iv.ranges.empty() ? 0 : iv.ranges.front().from,
+                         iv.ranges.empty() ? 0 : iv.ranges.front().to,
+                         av.req.crosses_call ? 1 : 0,
+                         av.req.needs_preserved ? 1 : 0,
+                         (unsigned)av.req.cls, ivs.call_positions.size());
         }
         // HAZARD "lanes muertas" (forbidden_lanes): las lanes que un INLINE_ASM destruye
         // en un punto que el valor atraviesa (incluye callee-saved que el CALL no protege).

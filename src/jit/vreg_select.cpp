@@ -448,6 +448,41 @@ inline bool has_critical_edge_to_phi(const ir::IrFunction &fn) {
  * registros vectoriales ("vN") devuelven -1 (el banco FP no es asignable
  * en el regalloc v1).  El selector cae a fallback si recibe -1.
  */
+/**
+ * @brief Nombre canonico de un registro VECTORIAL -> @c MReg (XMM0=16..XMM15=31).
+ *
+ * @c canon_gp_to_mreg devuelve -1 para los vectoriales, y en el manejo de
+ * CLOBBERS ese -1 se interpretaba como "no es envolvible" y el clobber se
+ * DESCARTABA: la lista de clobbers de un bloque asm solo llevaba registros GP.
+ * Con eso, el mecanismo PRECISO (@c asm_clobbers -> @c forbidden_lanes) se
+ * quedaba ciego para el banco vectorial y solo actuaba el burdo (contar el asm
+ * como posicion de llamada, que exige lane PRESERVADA).  En x86-64 ninguna xmm
+ * es callee-saved en SysV, asi que un operando vectorial vivo a traves de otro
+ * bloque asm se quedaba con CERO lanes admisibles.
+ *
+ * @c xmm3, @c ymm3 y @c zmm3 son el MISMO registro fisico en vistas de distinto
+ * ancho, asi que los tres mapean a la misma lane: lo que el asm destruye es el
+ * registro, no la vista.
+ *
+ * @param c Nombre canonico en minusculas (@c xmm0, @c ymm7, @c zmm15, ...).
+ * @return El @c MReg (16..31), o -1 si no es un vectorial reconocible.
+ */
+inline int canon_vec_to_mreg(const std::string &c) {
+    if (c.size() < 4) return -1;
+    const bool es_vec = (c.compare(0, 3, "xmm") == 0 ||
+                         c.compare(0, 3, "ymm") == 0 ||
+                         c.compare(0, 3, "zmm") == 0);
+    if (!es_vec) return -1;
+    unsigned n = 0;
+    for (size_t i = 3; i < c.size(); ++i) {
+        if (c[i] < '0' || c[i] > '9') return -1;   // sufijo raro: no arriesgar
+        n = n * 10u + static_cast<unsigned>(c[i] - '0');
+        if (n > 15u) return -1;                     // xmm16+ (AVX-512) aun no
+    }
+    return static_cast<int>(static_cast<uint8_t>(MReg::XMM0)) +
+           static_cast<int>(n);
+}
+
 inline int canon_gp_to_mreg(const std::string &c, bool for_pin = false) {
     static const struct {
         const char *n;
@@ -4266,7 +4301,14 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     if (asm_id < fn.asm_clobber_lists.size()) {
                         for (const auto &cn : fn.asm_clobber_lists[asm_id]) {
                             const std::string c = vx::asm_canonical_reg(cn);
-                            const int phys = canon_gp_to_mreg(c);
+                            int phys = canon_gp_to_mreg(c);
+                            /* Los vectoriales viven en el MISMO espacio de lanes
+                             * (XMM0=16..XMM15=31), asi que su clobber se registra
+                             * igual de preciso que el de un GP.  Antes caian al
+                             * -1 y se perdian, dejando ciego al mecanismo
+                             * preciso justo en el banco donde el burdo es
+                             * insatisfacible. */
+                            if (phys < 0) phys = canon_vec_to_mreg(c);
                             if (phys >= 0) {
                                 blob.clobbers.push_back(
                                     static_cast<uint8_t>(phys));

@@ -341,6 +341,32 @@ uint32_t LiveInterval::first_overlap_from(const LiveInterval &o,
 namespace {
 
 /**
+ * @brief ¿Se sabe EXACTAMENTE que registros destruye este bloque de inline-asm?
+ *
+ * Un @c INLINE_ASM_RAW se trataba SIEMPRE como posicion de llamada ("clobbea
+ * cualquiera"), y ADEMAS sus clobbers reales se registran aparte en
+ * @c asm_clobbers, que alimenta @c forbidden_lanes y dice con PRECISION que lanes
+ * destruye.  Eran dos mecanismos midiendo el mismo hecho, y el burdo no anadia
+ * nada: solo exigia, encima, una lane PRESERVADA.
+ *
+ * En el banco vectorial de x86-64 eso es insatisfacible -- NINGUNA xmm es
+ * callee-saved en SysV --, asi que un operando vectorial vivo a traves de otro
+ * bloque asm se quedaba con 0 lanes admisibles.  Con residencia REGISTER (el uso
+ * lo nombra como registro) no hay salida: el bloque se queda sin bytes y una
+ * funcion cuyo cuerpo ENTERO es ese asm sale VACIA, devolviendo el residuo del
+ * registro de retorno.  Eso rompia `std.memory.x86_64.memset_*_avx2`.
+ *
+ * Cuando la lista de clobbers esta VACIA no se sabe nada del asm y hay que seguir
+ * siendo conservador: entonces si cuenta como posicion de llamada.
+ *
+ * @return true si el blob tiene lista de clobbers (el mecanismo preciso aplica).
+ */
+inline bool asm_clobbers_conocidos(const MFunction &mf, const MInstr &in) {
+    const uint32_t idx = static_cast<uint32_t>(in.src1.value);
+    return idx < mf.asm_blobs.size() && !mf.asm_blobs[idx].clobbers.empty();
+}
+
+/**
  * @brief Bitset word-packed minimo (vector<uint64_t>) para liveness.
  *        Operaciones por palabra de 64 bits para cache locality.
  */
@@ -510,7 +536,8 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
                  * conservador: cualquiera) -> los vregs vivos a traves van a
                  * callee-saved/spill.  Los binding precoloreados son EXENTOS:
                  * el linear_scan les asigna su fixed_reg incondicionalmente. */
-                || in.op == MOp::INLINE_ASM_RAW) {
+                || (in.op == MOp::INLINE_ASM_RAW &&
+                    !asm_clobbers_conocidos(mf, in))) {
                 out.call_positions.push_back(2u * gi);
                 /* Los arg-dst custom de este CALL son clobbers de su posicion
                  * (incluye callee-saved que crosses_call no protege). */
