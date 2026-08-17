@@ -345,10 +345,19 @@ AsmBlockEffects asm_analyze_block(
          * Sin esto, un `movsd [$0], $1` -- guardar un flotante -- se tomaba por
          * la de cadena: los efectos que se le atribuian eran los de otra
          * instruccion. */
+        const std::vector<std::string> ops_de_linea = operandos_de(line, mnem);
         std::string mnem_efectos = mnem;
-        if (!operandos_de(line, mnem).empty() &&
-            (mnem == "movsd" || mnem == "cmpsd"))
+        if (!ops_de_linea.empty() && (mnem == "movsd" || mnem == "cmpsd"))
             mnem_efectos = mnem + "_sse";
+        /* Y `imul` es el mismo caso por otra via: con UN operando multiplica
+         * contra el acumulador y deja el resultado en `rdx:rax`; con dos o tres,
+         * solo en su destino y sin tocar `rdx`.  Estaba tabulado con la forma de
+         * un operando "por si acaso", asi que un `imul rax, rbx` -- que es la
+         * forma que escribe cualquiera -- salia destruyendo `rdx`.  Eso no es
+         * conservador: es afirmar un efecto que no existe, y con el se pierde el
+         * valor que hubiera ahi. */
+        else if (ops_de_linea.size() >= 2 && mnem == "imul")
+            mnem_efectos = "imul_2op";
         AsmEffects eff = asm_effects_for(mnem_efectos, arch);
 
         /* Lo que la tabla escrita a mano no conoce, lo sabe la BASE DE DATOS.
@@ -380,7 +389,8 @@ AsmBlockEffects asm_analyze_block(
             if (sem.modeled) {
                 eff.known = true;
                 eff.touches_mem = sem.reads_mem || sem.writes_mem;
-                eff.touches_flags = sem.reads_flags || sem.writes_flags;
+                eff.writes_flags = sem.writes_flags;
+                eff.reads_flags = sem.reads_flags;
                 eff.barrier = sem.barrier;
                 for (const std::string &r : sem.reads)
                     eff.implicit_read.push_back(r);
@@ -390,7 +400,7 @@ AsmBlockEffects asm_analyze_block(
                  * lo que distingue el destino de las fuentes. */
                 for (size_t k = 0; k < 8; ++k) {
                     bool lee_op = false, escribe_op = false;
-                    if (!vx::instr_db::operando_explicito(isa_de_arch(arch),
+                    if (!vx::instr_db::explicit_operand(isa_de_arch(arch),
                                                           sem.form_id, k, lee_op,
                                                           escribe_op))
                         break;
@@ -403,7 +413,13 @@ AsmBlockEffects asm_analyze_block(
             continue;
         }
         if (eff.touches_mem) res.touches_mem = true;
-        if (eff.touches_flags) res.touches_flags = true;
+        /* Los dos sentidos por separado, y el agregado como la union de ambos:
+         * quien solo pregunta "toca las banderas" sigue teniendo respuesta, y
+         * quien necesita saber si el bloque DEPENDE de ellas o las DESTRUYE ya no
+         * tiene que suponer lo peor de los dos. */
+        if (eff.reads_flags) res.reads_flags = true;
+        if (eff.writes_flags) res.writes_flags = true;
+        if (eff.reads_flags || eff.writes_flags) res.touches_flags = true;
         if (eff.is_call) res.is_call = true;
         if (eff.port_io) res.has_port_io = true;
         if (eff.barrier) res.has_atomic = true; // ordena: misma consecuencia
@@ -415,9 +431,17 @@ AsmBlockEffects asm_analyze_block(
          * decir de menos aqui seria dejar reordenar algo que no se puede. */
         if (lock_prefix || line_has_mem || eff.touches_mem) {
             bool lee = true, escribe = true; // por defecto, lo conservador
-            if (!lock_prefix && line_has_mem) {
-                /* Memoria EXPLICITA (`[...]` en un operando) y sin prefijo
-                 * atomico: se puede precisar si se identifica cual es.
+            if (line_has_mem) {
+                /* Memoria EXPLICITA (`[...]` en un operando): se puede precisar
+                 * si se identifica cual es.
+                 *
+                 * El prefijo `lock` NO lo impide, y excluirlo era un error: da
+                 * atomicidad y ordena, pero no cambia QUE memoria se toca -- un
+                 * `lock inc [rdi]` toca exactamente `[rdi]`, con los corchetes a
+                 * la vista --.  Se quedaba fuera de la atribucion, o sea que un
+                 * bloque atomico salia tocando memoria que no sabe nombrar y con
+                 * ello se suponia lo peor de toda.  Lo que el prefijo si obliga
+                 * es a contar los DOS sentidos, y eso se aplica mas abajo.
                  *
                  * La condicion es tener CORCHETES, no que la instruccion toque
                  * memoria "implicitamente": en arm64 toda carga o almacen la
@@ -448,8 +472,10 @@ AsmBlockEffects asm_analyze_block(
                  * puede mover una escritura, ni subir una lectura fuera de un
                  * bucle, ni eliminar una escritura muerta.  Y `lea` esta por todas
                  * partes. */
-                if (vx::asm_transferencia(mnem, arch) ==
-                    AsmTransferencia::Direccion) {
+                const bool solo_calcula_direccion =
+                    vx::asm_transferencia(mnem, arch) ==
+                    AsmTransferencia::Direccion;
+                if (solo_calcula_direccion) {
                     idx_mem = -1;
                     /* Y no lee ni escribe.  `lee` arranca en `true` -- lo
                      * conservador cuando no se sabe --, asi que quitar el acceso
@@ -459,7 +485,14 @@ AsmBlockEffects asm_analyze_block(
                     lee = false;
                     escribe = false;
                 }
-                if (idx_mem >= 0 && !varios && idx_mem < 8) {
+                if (solo_calcula_direccion) {
+                    /* No hay acceso que atribuir, y eso NO es lo mismo que un
+                     * acceso que no se ha podido atribuir: lo segundo obliga a
+                     * suponer lo peor de toda la memoria.  Sin distinguirlos, el
+                     * `lea` volvia a ser una barrera por la otra puerta -- ya no
+                     * declaraba la lectura, pero dejaba el bloque marcado como que
+                     * toca memoria que no sabe nombrar. */
+                } else if (idx_mem >= 0 && !varios && idx_mem < 8) {
                     escribe = ((eff.operand_write_mask >> idx_mem) & 1u) != 0u;
                     lee = !escribe || (eff.operand_write_mask == 0u);
                     /* Un operando que se escribe puede ademas leerse (`add
@@ -467,6 +500,14 @@ AsmBlockEffects asm_analyze_block(
                      * -- no lee lo que pisa, y distinguirlo no compensa el
                      * riesgo: si escribe, se cuenta tambien como lectura. */
                     if (escribe) lee = true;
+                    /* Y una operacion ATOMICA lee y escribe siempre: eso es lo
+                     * que la hace atomica.  El prefijo no cambia por donde -- eso
+                     * ya se atribuyo arriba --, cambia que los dos sentidos estan
+                     * garantizados. */
+                    if (lock_prefix) {
+                        lee = true;
+                        escribe = true;
+                    }
                     /* Por donde se llega y hasta donde llega.  Si no se sabe lo
                      * primero, el bloque toca memoria que no se puede nombrar y
                      * hay que decirlo; lo segundo puede faltar sin que lo

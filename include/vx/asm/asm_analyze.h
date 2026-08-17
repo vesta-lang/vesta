@@ -188,7 +188,22 @@ struct AsmBlockEffects {
     std::vector<std::string> escritos;
     bool has_atomic = false;    ///< prefijo @c lock o instr atomica (barrera).
     bool is_call = false;       ///< @c call / @c syscall alcanzable en el bloque.
-    bool touches_flags = false; ///< modifica RFLAGS/condition codes.
+    /// El bloque toca las banderas, en cualquier sentido.  Se mantiene porque es
+    /// lo que pregunta quien solo quiere saber si son suyas o no; los dos
+    /// sentidos por separado estan debajo.
+    bool touches_flags = false;
+    /**
+     * @name Banderas por SENTIDO.
+     *
+     * Un bloque que solo las LEE (`setz al`) depende de la comparacion de antes
+     * pero no destruye nada; uno que solo las ESCRIBE (`cmp`) destruye pero no
+     * depende.  Con un bit unico los dos salen iguales y hay que suponer lo peor
+     * de los dos, que es no mover nada ni a un lado ni al otro.
+     * @{
+     */
+    bool reads_flags = false;  ///< consume banderas producidas fuera del bloque.
+    bool writes_flags = false; ///< las modifica: quien las tuviera las pierde.
+    /// @}
     bool has_branch = false;    ///< salto/rama dentro del bloque.
     int64_t explicit_stack_bytes = 0; ///< marco EXPLICITO (push/sub rsp), en bytes.
     std::vector<std::string> unknown_mnemonics; ///< desconocidos -> error claro.

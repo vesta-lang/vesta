@@ -405,7 +405,7 @@ const EffTable &x86_effects_table() {
                 e.implicit_read.emplace_back(r);
             e.operand_write_mask = wmask;
             e.touches_mem = mem;
-            e.touches_flags = flags;
+            e.writes_flags = flags;
             e.is_call = call;
             return e;
         };
@@ -492,12 +492,20 @@ const EffTable &x86_effects_table() {
                 add(m, s);
             }
         }
-        // mul/imul 1-operando + div/idiv: rdx:rax.
+        /* mul/imul de UN operando + div/idiv: el otro factor es el acumulador y
+         * el resultado va a `rdx:rax`, sin que ninguno aparezca en el texto. */
         add("mul", E({"rax", "rdx"}, false, false, true));
-        add("imul",
-            E({"rax", "rdx"}, false, false, true)); // forma 1-op (conservador)
+        add("imul", E({"rax", "rdx"}, false, false, true));
         add("div", E({"rax", "rdx"}, false, false, true));
         add("idiv", E({"rax", "rdx"}, false, false, true));
+        /* Y la forma de DOS o tres operandos de `imul`, que deja el producto solo
+         * en su destino y no toca `rdx`.  Vive con un sufijo porque la tabla se
+         * indexa por mnemonico y el mnemonico es el mismo; quien conoce los
+         * operandos -- el analisis de la linea -- elige cual de las dos.  Es la
+         * misma solucion que `movsd_sse`, por el mismo motivo.
+         *
+         * El nombre con sufijo no lo escribe nadie: no es sintaxis. */
+        add("imul_2op", E({}, /*wmask=*/0x1, /*mem=*/false, /*flags=*/true));
         add("cqo", E({"rdx"}, false, false, false));
         add("cdq", E({"rdx"}, false, false, false));
         // syscall (Linux x64 + Windows x64 NT): escribe RAX (valor de retorno) +
@@ -523,8 +531,6 @@ const EffTable &x86_effects_table() {
         // --- Aritmetica/bitwise que escribe el 1er operando + flags ---
         add("add", E({}, true, false, true));
         add("sub", E({}, true, false, true));
-        add("adc", E({}, true, false, true));
-        add("sbb", E({}, true, false, true));
         add("and", E({}, true, false, true));
         add("or", E({}, true, false, true));
         add("xor", E({}, true, false, true));
@@ -536,14 +542,69 @@ const EffTable &x86_effects_table() {
         add("sar", E({}, true, false, true));
         add("rol", E({}, true, false, true));
         add("ror", E({}, true, false, true));
-        add("rcl", E({}, true, false, true));
-        add("rcr", E({}, true, false, true));
         add("popcnt", E({}, true, false, true));
         add("lzcnt", E({}, true, false, true));
         add("tzcnt", E({}, true, false, true));
         add("bsf", E({}, true, false, true));
         add("bsr", E({}, true, false, true));
         add("bswap", E({}, true, false, false));
+        /* --- Las que ademas CONSUMEN una bandera ----------------------------
+         *
+         * Estas cuatro leen el acarreo Y lo vuelven a escribir: `adc` suma con
+         * acarreo, `rcl` rota a traves de el.  Declarar solo la escritura las
+         * hacia parecer productoras puras, y entonces una `add` que produjo el
+         * acarreo se podia mover por debajo de la `adc` que lo consume -- que es
+         * como se rompe una suma de 128 bits, y el sintoma seria un bit perdido
+         * en el resultado, sin nada que cascara. */
+        {
+            auto lee_y_escribe_banderas = [&](const char *m) {
+                AsmEffects e = E({}, /*wmask=*/0x1, /*mem=*/false,
+                                 /*flags=*/true);
+                e.reads_flags = true;
+                add(m, std::move(e));
+            };
+            for (const char *m : {"adc", "sbb", "rcl", "rcr", "adcx", "adox"})
+                lee_y_escribe_banderas(m);
+            /* Y las que SOLO las leen o SOLO las escriben, sin operandos.  No
+             * estaban, con lo que un `stc` seguido de una `adc` dejaba al
+             * planificador libre para separarlos. */
+            {
+                AsmEffects e = E({}, /*wmask=*/0x0, /*mem=*/false,
+                                 /*flags=*/false);
+                e.reads_flags = true;
+                add("lahf", std::move(e)); // las lleva a AH: las lee
+            }
+            /* `pushf`/`popf` las mueven a la PILA, asi que ademas de banderas
+             * tocan memoria por `rsp` -- y se dice por donde, que es la
+             * diferencia entre saberlo y dar la memoria entera por tocada. */
+            for (const char *m : {"pushf", "pushfq"}) {
+                /* Y MUEVEN `rsp`, igual que cualquier `push`: se lee para saber
+                 * donde escribir y se escribe al bajarlo.  Sin declarar la
+                 * escritura, quien crea que `rsp` sigue donde estaba calcula mal
+                 * cualquier direccion que salga de el. */
+                AsmEffects e = E({"rsp"}, 0x0, /*mem=*/true, /*flags=*/false,
+                                 /*call=*/false, {"rsp"});
+                e.reads_flags = true;
+                e.implicit_mem_write.emplace_back("rsp");
+                add(m, std::move(e));
+            }
+            for (const char *m : {"popf", "popfq"}) {
+                AsmEffects e = E({"rsp"}, 0x0, /*mem=*/true, /*flags=*/true,
+                                 /*call=*/false, {"rsp"});
+                e.implicit_mem_read.emplace_back("rsp");
+                add(m, std::move(e));
+            }
+            // `cmc` complementa el acarreo: lo lee y lo escribe.
+            {
+                AsmEffects e = E({}, 0x0, false, /*flags=*/true);
+                e.reads_flags = true;
+                add("cmc", std::move(e));
+            }
+            // Poner/quitar una bandera a mano: solo escriben.
+            for (const char *m : {"stc", "clc", "std", "cld", "sti", "cli",
+                                  "sahf"})
+                add(m, E({}, 0x0, false, /*flags=*/true));
+        }
         /* --- Movimientos del banco VECTORIAL --------------------------------
          *
          * Todos escriben su primer operando y ninguno toca flags; lo que los
@@ -570,23 +631,26 @@ const EffTable &x86_effects_table() {
                 add(m, E({}, true, false, false));
             // Exigen que la direccion sea multiplo del ancho de su operando.
             auto alineada = [&](const char *m) {
-                /* Estas instrucciones TOCAN MEMORIA -- son la forma alineada de
-                 * mover a memoria o desde ella --, y el tercer parametro de `E`
-                 * es justo eso.  Estaba a `false`, con lo que `movdqa` y compania
-                 * se declaraban como que no tocan memoria.
+                /* `mem` es memoria IMPLICITA -- la que la instruccion toca sin
+                 * que aparezca en el texto, como el `rdi` de una `stosb` --, y
+                 * estas no tienen ninguna: acceden por un operando EXPLICITO, con
+                 * sus corchetes, y de eso ya se encarga el analisis del texto.
                  *
-                 * La consecuencia no se ve venir desde aqui, y costo un dia
-                 * encontrarla: sin ese bit, el analisis del texto no reporta la
-                 * escritura, el cierre de efectos de la funcion sale sin
-                 * escrituras, el contrato `readonly` se cumple -- y una funcion
-                 * que escribe la memoria de su llamante se declara de solo
-                 * lectura.  Con eso el JIT del llamante se queda con el valor
-                 * anterior en un registro: `20_align_demostrada` daba 1 en JIT y
-                 * 42 interpretado.
+                 * Estuvo a `true` un rato, y eso era peor que el problema que
+                 * pretendia arreglar: con ese bit, un `movdqa xmm0, xmm1` -- una
+                 * copia entre registros, sin un corchete a la vista -- salia
+                 * leyendo Y escribiendo memoria, o sea que cada movimiento
+                 * vectorial se convertia en una barrera para todo lo que le
+                 * rodeaba.  Y ademas por partida doble: quien lo consume no puede
+                 * saber por donde accede, asi que tiene que dar la memoria entera
+                 * por tocada.
                  *
-                 * El `wmask` a 0x1 esta bien -- escriben su primer operando --,
-                 * pero era lo unico que estaba bien de los dos. */
-                AsmEffects e = E({}, /*wmask=*/0x1, /*mem=*/true,
+                 * Lo unico propio de esta familia es lo que EXIGEN: que la
+                 * direccion sea multiplo del ancho de su operando.  `movdqa` con
+                 * una direccion que no lo es lanza una excepcion y `movdqu` con la
+                 * misma direccion funciona, y esa letra de diferencia no da ningun
+                 * aviso al compilar. */
+                AsmEffects e = E({}, /*wmask=*/0x1, /*mem=*/false,
                                  /*flags=*/false);
                 e.align_req = kAlignAnchoOperando;
                 add(m, std::move(e));
@@ -710,9 +774,30 @@ const EffTable &x86_effects_table() {
         // --- Comparaciones / test: solo flags ---
         add("cmp", E({}, false, false, true));
         add("test", E({}, false, false, true));
-        // --- Pila: tocan memoria + rsp ---
-        add("push", E({"rsp"}, false, true, false));
-        add("pop", E({"rsp"}, true, true, false));
+        /* --- Pila: tocan memoria + rsp ---
+         *
+         * Y se dice POR DONDE: la arquitectura fija que se accede por `rsp`, igual
+         * de fijo que si estuviera escrito entre corchetes.  Sin declararlo, el
+         * bloque quedaba marcado como que toca memoria que no sabe nombrar, y eso
+         * obliga a suponer lo peor de TODA la memoria -- cuando lo unico que se
+         * toca es la cima de la pila --.
+         *
+         * `mem_bytes_implicito` se queda a cero a proposito: cuanto se apila
+         * depende del modo (ocho bytes en 64, cuatro en 32) y esta tabla es la
+         * misma para los tres anchos de x86.  No saber la extension no impide
+         * saber la base, y afirmar una extension equivocada si haria dano. */
+        {
+            AsmEffects e = E({"rsp"}, /*wmask=*/0x0, /*mem=*/true,
+                             /*flags=*/false, /*call=*/false, {"rsp"});
+            e.implicit_mem_write.emplace_back("rsp");
+            add("push", std::move(e));
+        }
+        {
+            AsmEffects e = E({"rsp"}, /*wmask=*/0x1, /*mem=*/true,
+                             /*flags=*/false, /*call=*/false, {"rsp"});
+            e.implicit_mem_read.emplace_back("rsp");
+            add("pop", std::move(e));
+        }
         // --- Control de flujo / no-ops: sin clobbers ---
         add("nop", E({}, false, false, false));
         /* Trampas de depuracion: no tocan memoria ni registros; ceden el
@@ -759,7 +844,7 @@ const EffTable &arm64_effects_table() {
                 e.implicit_read.emplace_back(r);
             e.operand_write_mask = wmask;
             e.touches_mem = mem;
-            e.touches_flags = flags;
+            e.writes_flags = flags;
             e.is_call = call;
             return e;
         };
@@ -890,14 +975,14 @@ AsmEffects asm_effects_for(const std::string &mnemonic,
         if (m.rfind("set", 0) == 0 && m.size() > 3) {
             AsmEffects e;
             e.operand_write_mask = 0x1;
-            e.touches_flags = true; // las LEE
+            e.reads_flags = true; // las LEE, no las escribe
             e.known = true;
             return e;
         }
         if (m.rfind("cmov", 0) == 0 && m.size() > 4) {
             AsmEffects e;
             e.operand_write_mask = 0x1;
-            e.touches_flags = true; // las LEE para decidir
+            e.reads_flags = true; // las LEE para decidir, no las escribe
             e.known = true;
             return e;
         }
@@ -1262,7 +1347,11 @@ AsmInferResult asm_infer_clobbers(
             eff.implicit_write = sem.writes;
             eff.implicit_read = sem.reads;
             eff.touches_mem = sem.reads_mem || sem.writes_mem;
-            eff.touches_flags = sem.writes_flags;
+            /* Los dos sentidos, que la base tiene separados: quedarse solo con
+             * la escritura hacia que un `setz` -- que las LEE -- pasara por no
+             * tener nada que ver con las banderas. */
+            eff.writes_flags = sem.writes_flags;
+            eff.reads_flags = sem.reads_flags;
             eff.barrier = sem.barrier;
             /* Lo que la DB NO modela y la tabla si: la exigencia de
              * alineacion, que es una precondicion y no un efecto.  Se toma de
@@ -1359,7 +1448,7 @@ AsmInferResult asm_infer_clobbers(
 
         // Memoria: implicita del mnemonico o '[' en la linea.
         if (eff.touches_mem || line_has_mem) res.clobber_memory = true;
-        if (eff.touches_flags) res.clobber_flags = true;
+        if (eff.writes_flags) res.clobber_flags = true;
 
         // call/syscall: clobber conservador de TODO el caller-saved.
         if (eff.is_call) {

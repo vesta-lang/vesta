@@ -366,26 +366,75 @@ const char *ext_of(Isa isa, int32_t form_id) {
     return t.str[t.forms[form_id].ext];
 }
 
-bool operando_explicito(Isa isa, int32_t form_id, size_t idx, bool &lee,
-                        bool &escribe) {
+bool explicit_operand(Isa isa, int32_t form_id, size_t idx, bool &reads,
+                      bool &writes) {
+    DbOpKind kind = OP_REG; // el rol sin la clase: la ignora quien no la pida.
+    return explicit_operand(isa, form_id, idx, reads, writes, kind);
+}
+
+bool explicit_operand(Isa isa, int32_t form_id, size_t idx, bool &reads,
+                      bool &writes, DbOpKind &kind) {
     const IsaData t = tables_for(isa);
     if (!t.forms || form_id < 0 ||
         static_cast<unsigned>(form_id) >= t.form_count)
         return false;
     const DbForm &f = t.forms[form_id];
-    size_t vistos = 0;
+    size_t seen = 0;
     for (uint8_t i = 0; i < f.ops_count; ++i) {
         const DbOperand &o = t.ops[f.ops_off + i];
         // bit2 = implicito, bit3 = suprimido: no se escriben en el texto.
         if ((o.flags & 0x04) != 0 || (o.flags & 0x08) != 0) continue;
-        if (vistos == idx) {
-            lee = (o.flags & 0x01) != 0;
-            escribe = (o.flags & 0x02) != 0;
+        if (seen == idx) {
+            reads = (o.flags & 0x01) != 0;
+            writes = (o.flags & 0x02) != 0;
+            kind = static_cast<DbOpKind>(o.kind);
             return true;
         }
-        ++vistos;
+        ++seen;
     }
     return false;
+}
+
+bool memory_of(Isa isa, int32_t form_id, bool &reads, bool &writes) {
+    const IsaData t = tables_for(isa);
+    if (!t.forms || form_id < 0 ||
+        static_cast<unsigned>(form_id) >= t.form_count)
+        return false;
+    const DbForm &f = t.forms[form_id];
+    reads = false;
+    writes = false;
+    bool mem_operand = false;
+    for (uint8_t i = 0; i < f.ops_count; ++i) {
+        const DbOperand &o = t.ops[f.ops_off + i];
+        if (o.kind != OP_MEM) continue;
+        mem_operand = true;
+        /* El sentido lo da el ROL del operando de memoria, no el mnemonico.  Se
+         * mira el flag del propio operando y tambien la mascara de la forma:
+         * son la misma cosa dicha dos veces en el generador, y quedarse con una
+         * sola dejaria de responder el dia que una de las dos falte. */
+        if ((o.flags & 0x01) != 0 || ((f.rmask >> i) & 1) != 0) reads = true;
+        if ((o.flags & 0x02) != 0 || ((f.wmask >> i) & 1) != 0) writes = true;
+    }
+    /* Memoria que la forma toca sin nombrarla en el texto (`push`, `pop`): se
+     * responde en los dos sentidos.  Es lo unico honesto sin saber cual, y cae
+     * del lado que no habilita transformaciones. */
+    if (!mem_operand && (f.memflags & 0x01) != 0) {
+        reads = true;
+        writes = true;
+    }
+    return true;
+}
+
+bool flags_of(Isa isa, int32_t form_id, bool &reads, bool &writes) {
+    const IsaData t = tables_for(isa);
+    if (!t.forms || form_id < 0 ||
+        static_cast<unsigned>(form_id) >= t.form_count)
+        return false;
+    const DbForm &f = t.forms[form_id];
+    // bit2 = escribe banderas, bit3 = las lee (mismo campo que la memoria).
+    writes = (f.memflags & 0x04) != 0;
+    reads = (f.memflags & 0x08) != 0;
+    return true;
 }
 
 const char *isa_set_of(Isa isa, int32_t form_id) {

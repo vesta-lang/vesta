@@ -338,12 +338,65 @@ const char *ext_of(Isa isa, int32_t form_id);
  * @param isa     ISA de la forma.
  * @param form_id Forma.
  * @param idx     Posicion del operando explicito (0 = el primero del texto).
- * @param lee     Sale a true si el operando se lee.
- * @param escribe Sale a true si se escribe.
+ * @param reads   Sale a true si el operando se lee.
+ * @param writes  Sale a true si se escribe.
  * @return false si la forma o el indice no existen (no se toca nada).
  */
-bool operando_explicito(Isa isa, int32_t form_id, size_t idx, bool &lee,
-                        bool &escribe);
+bool explicit_operand(Isa isa, int32_t form_id, size_t idx, bool &reads,
+                      bool &writes);
+
+/**
+ * @brief Igual que la anterior, diciendo ademas de que CLASE es el operando.
+ *
+ * El rol sin la clase no distingue `add rax, rbx` de `add rax, [rbx]`: los dos
+ * leen su segundo operando, pero uno lo lee de un registro y el otro de memoria.
+ * Y esa es justo la diferencia que decide si un bloque se puede mover, borrar o
+ * reordenar, asi que no puede quedarse fuera.
+ *
+ * @param kind Sale con la clase del operando (@ref OP_REG, @ref OP_MEM,
+ *             @ref OP_IMM...).
+ */
+bool explicit_operand(Isa isa, int32_t form_id, size_t idx, bool &reads,
+                      bool &writes, DbOpKind &kind);
+
+/**
+ * @brief Si una forma LEE memoria y si la ESCRIBE, por separado.
+ *
+ * Los dos sentidos no son lo mismo y no se pueden colapsar en un "toca
+ * memoria": una lectura de mas convierte un bloque inocente en una barrera para
+ * todo lo que le rodea, y una escritura de menos deja pasar una optimizacion que
+ * rompe.  Un `movdqa [rdi], xmm0` solo escribe.
+ *
+ * Y no se puede responder por MNEMONICO, que es lo que se intentaba: la misma
+ * `movdqa` lee con `movdqa xmm0, [rdi]` y escribe con `movdqa [rdi], xmm0`.  Lo
+ * que lo decide es la FORMA -- cual de sus operandos es el de memoria y en que
+ * rol --, y eso ya esta modelado aqui: se DERIVA, no se declara.
+ *
+ * Cuando la forma toca memoria sin nombrarla en el texto (`push`, `pop`) se
+ * responde que en los dos sentidos: es lo unico honesto sin saber cual, y se
+ * queda del lado que no habilita transformaciones.
+ *
+ * @param reads  Sale a true si algun operando de memoria se lee.
+ * @param writes Sale a true si alguno se escribe.
+ * @return false si la forma no existe (no se afirma nada de ella).
+ */
+bool memory_of(Isa isa, int32_t form_id, bool &reads, bool &writes);
+
+/**
+ * @brief Si una forma LEE las banderas y si las ESCRIBE, por separado.
+ *
+ * Los dos sentidos son cosas distintas y colapsarlos pierde justo lo que hace
+ * falta: un `add` ESCRIBE las banderas y un `setz` las LEE, y con un solo bit las
+ * dos salen iguales.  Con el bit unico, mover un `cmp` por encima de un `setz`
+ * parece igual de seguro que moverlo por encima de un `add`, y no lo es -- el
+ * `setz` consume justo lo que el `cmp` produjo --.  Al reves, declarar que un
+ * `setz` las escribe lo hace pasar por destructor de un valor que no toca.
+ *
+ * @param reads  Sale a true si la forma lee las banderas.
+ * @param writes Sale a true si las escribe.
+ * @return false si la forma no existe (no se afirma nada de ella).
+ */
+bool flags_of(Isa isa, int32_t form_id, bool &reads, bool &writes);
 
 /// Conjunto ISA que EXIGE una forma ("AVX512F_512", "AVX2"...), "" si no vale.
 const char *isa_set_of(Isa isa, int32_t form_id);

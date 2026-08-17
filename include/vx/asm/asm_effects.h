@@ -312,8 +312,32 @@ struct AsmEffects {
     /// una CAS escribe el destino.  0 = no escribe ningun operando.
     uint8_t operand_write_mask = 0;
 
-    bool touches_mem = false;   ///< toca memoria implicitamente
-    bool touches_flags = false; ///< modifica RFLAGS/condition codes
+    /**
+     * Toca memoria IMPLICITAMENTE: la que no aparece en el texto.
+     *
+     * No es "esta instruccion puede acceder a memoria".  Que un operando lleve
+     * corchetes lo dice el propio texto, y de eso se encarga el analisis de la
+     * linea: declararlo aqui ademas hace que un `movdqa xmm0, xmm1` -- una copia
+     * entre registros, sin un corchete a la vista -- salga tocando memoria, y con
+     * ello cada movimiento vectorial se convierte en una barrera.  Aqui va solo la
+     * que la arquitectura fija sin escribirla, como el `rdi` de una `stosb`, y
+     * entonces se dice ADEMAS por donde: ver @ref implicit_mem_read.
+     */
+    bool touches_mem = false;
+    /**
+     * @name Banderas de condicion, por SENTIDO.
+     *
+     * Separadas porque son cosas distintas: un `add` las ESCRIBE y un `setz` las
+     * LEE.  Con un solo bit las dos salian iguales, y entonces mover un `cmp` por
+     * encima de un `setz` parecia igual de seguro que moverlo por encima de un
+     * `add` -- y no lo es, el `setz` consume justo lo que el `cmp` produjo --.
+     * Al reves, un `setz` declarado como que las escribe pasa por destruir un
+     * valor que no toca, y ademas entra en la lista de clobbers sin motivo.
+     * @{
+     */
+    bool writes_flags = false; ///< modifica RFLAGS/condition codes
+    bool reads_flags = false;  ///< las consume (adc, setcc, cmovcc, jcc, rcl...)
+    /// @}
     bool is_call = false;       ///< call/syscall: clobber de caller-saved
     /// Entrada/salida por PUERTO (`in`/`out`).  No toca memoria, pero es un
     /// efecto observable del exterior: no se puede eliminar ni reordenar como
