@@ -55,6 +55,7 @@ ComptimeArtifact comptime_artifact_get(const ComptimeUnit &unit,
     req.quiet = true;
 
     const vesta::tc::CompileResponse resp = vesta::tc::compile(req);
+    out.frontend_us = resp.frontend_us;
     if (!resp.ok) {
         /* Que el conjunto no compile significa que NO es auto-suficiente, o sea
          * un fallo del recolector.  Se propaga con el primer diagnostico

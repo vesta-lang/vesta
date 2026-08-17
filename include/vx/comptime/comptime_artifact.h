@@ -54,6 +54,12 @@ struct ComptimeArtifact {
     bool from_cache = false;      ///< @c true si se reuso (no se compilo).
     std::vector<uint8_t> velb;    ///< Bytecode del conjunto.
     std::string error;            ///< Motivo, si @c ok es @c false.
+    /// Microsegundos que tardo el FRONTEND (.vx -> .vel) al compilarlo.  0 si se
+    /// reuso.  Se expone junto al total para poder decir en que MITAD esta el
+    /// coste -- frontend, o ensamblado+enlazado -- sin tener que perfilar: si un
+    /// conjunto de tres funciones triviales tarda decenas de milisegundos, eso es
+    /// coste FIJO y conviene saber de que lado cae antes de buscarlo.
+    uint64_t frontend_us = 0;
 };
 
 /**
