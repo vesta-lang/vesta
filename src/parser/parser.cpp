@@ -20,7 +20,9 @@
  * parse_number().
  */
 #include "parser/parser.h"
+#include "emmit/mnemonic.h" // consulta por indice, no por hash de cadena
 
+#include <climits>
 #include <iomanip>
 
 #include "Levenshtein.hpp"
@@ -952,40 +954,106 @@ std::unique_ptr<ASTNode> Parser::parse_instruction() {
         ext_opcode = current.lexeme;
         opcode += ext_opcode;
     }
-    auto it = InstructionSet.find(opcode);
+    /* El camino que ACIERTA no hashea el nombre: se traduce una vez a mnemonico
+     * y el patron sale de una lectura por indice.  Esto corre por cada
+     * instruccion del fuente.
+     *
+     * La ruta de recuperacion de abajo -- la que busca el nombre parecido cuando
+     * el usuario se equivoca -- sigue recorriendo la tabla, y esta bien: solo se
+     * paga al fallar, y ahi lo que importa es dar un buen mensaje, no la
+     * velocidad. */
+    static const emmit::MnemonicIndex<InstructionPattern> kIndex(InstructionSet);
+    const InstructionPattern *patron =
+        kIndex.find(emmit::mnemonic_from_text(opcode.c_str()));
+    auto it = InstructionSet.end();
     auto valid_it = it;
-    if (it == InstructionSet.end()) {
+    if (patron == nullptr) {
         float affinity = 0.0;
         int dist = 0;
+        /* La mejor candidata vista, y las que valen para el mensaje detallado. */
+        std::string mejor;
+        int mejor_dist = INT_MAX;
+        struct Cercana {
+            std::string nombre;
+            int dist;
+            float affinity;
+        };
+        std::vector<Cercana> cercanas;
 
-        // intentamos recuperarnos del error ?de sintaxis?
+        /* Intentamos recuperarnos del error de escritura.
+         *
+         * Se descartan por LONGITUD antes de medir la distancia: dos palabras
+         * cuyos tamanos difieren en mas de 3 estan a distancia mayor que 3 por
+         * fuerza -- cada caracter de mas cuesta al menos una insercion --, asi
+         * que calcularla es trabajo con resultado conocido.  La medida es
+         * cuadratica en la longitud y esto se recorre sobre las 329, de las que
+         * la comparacion de longitud descarta la mayoria en una resta.
+         *
+         * El recorte tiene que valer para los DOS filtros de abajo, y no solo
+         * para el de distancia: la afinidad admite distancias mayores cuando las
+         * palabras son largas, asi que recortar solo por `dif > 3` podria tirar
+         * una candidata que si habria pasado por afinidad.  Se exige que la
+         * diferencia haga imposibles las dos cosas -- la distancia nunca es menor
+         * que la diferencia de longitudes --, y entonces descartar no cambia el
+         * resultado, solo lo alcanza antes. */
+        const int len_opcode = static_cast<int>(opcode.size());
         for (auto &option : InstructionSet) {
+            const int len_opt = static_cast<int>(option.first.size());
+            const int dif = len_opcode > len_opt ? len_opcode - len_opt
+                                                 : len_opt - len_opcode;
+            /* Afinidad >= 80% exige distancia <= 20% de la palabra mas larga. */
+            const int mayor = len_opcode > len_opt ? len_opcode : len_opt;
+            if (dif > 3 && dif * 5 > mayor) continue;
             dist = utils::Levenshtein::distance(opcode, option.first);
             affinity = utils::Levenshtein::affinity(opcode, option.first);
 
-            // Top 3 resultados
+            /* La MEJOR, no la primera que pase.
+             *
+             * Antes se aceptaba la primera candidata que cumpliera el filtro, y
+             * como se recorre un `unordered_map`, "la primera" es la que caiga
+             * antes en el orden del hash -- no la mas parecida.  Para `movv`
+             * sugeria `mld` teniendo `mov` a distancia uno.  Quedarse con el
+             * minimo sale gratis: ya se estan midiendo todas. */
             if (dist <= 3 || affinity >= 80) {
-                // si la distancia es <= 3 o la afinidad es mayor o igual al 80%
-                warning(current.line, current.column,
-                        "Instruccion '" + opcode + "' desconocida",
-                        option.first);
-                opcode = option.first;
-                valid_it = InstructionSet.find(option.first); // Actualizar
-                goto exit_error; // nos pudimos recuperar tal vez
+                /* A igual distancia, la mas CORTA.  `movv` esta a distancia uno
+                 * de `mov` y de `movc`, y la primera es la probable: teclear un
+                 * caracter de mas es el error mas comun, y sin desempate la
+                 * elegida seria la que cayera antes en el orden del hash -- otra
+                 * vez arbitraria. */
+                const bool mejora = dist < mejor_dist ||
+                                    (dist == mejor_dist && !mejor.empty() &&
+                                     option.first.size() < mejor.size());
+                if (mejora) {
+                    mejor_dist = dist;
+                    mejor = option.first;
+                }
             }
+            /* Y de paso las cercanas para el mensaje detallado, en la MISMA
+             * pasada: antes se recorria la tabla dos veces midiendo las mismas
+             * distancias, una para sugerir y otra para listar. */
+            if (affinity > 30) cercanas.push_back({option.first, dist, affinity});
         }
 
-        std::stringstream ss;
-        for (auto &option : InstructionSet) {
-            dist = utils::Levenshtein::distance(opcode, option.first);
-            affinity = utils::Levenshtein::affinity(opcode, option.first);
+        if (!mejor.empty()) {
+            warning(current.line, current.column,
+                    "Instruccion '" + opcode + "' desconocida", mejor);
+            opcode = mejor;
+            valid_it = InstructionSet.find(mejor);
+            goto exit_error; // nos pudimos recuperar
+        }
 
-            if (affinity > 30) {
-                ss << "Instr: " << option.first << "\n"
-                   << "Dist: " << dist << "\n"
-                   << "Aff: " << std::fixed << std::setprecision(1)
-                   << affinity * 100 << "%\n\n";
-            }
+        /* Nada suficientemente cerca: se enumeran las parecidas, de mas a menos,
+         * para que el mensaje empiece por la candidata mas probable. */
+        std::sort(cercanas.begin(), cercanas.end(),
+                  [](const Cercana &a, const Cercana &b) {
+                      return a.dist < b.dist;
+                  });
+        std::stringstream ss;
+        for (const Cercana &c : cercanas) {
+            ss << "Instr: " << c.nombre << "\n"
+               << "Dist: " << c.dist << "\n"
+               << "Aff: " << std::fixed << std::setprecision(1)
+               << c.affinity * 100 << "%\n\n";
         }
 
         error(current,
@@ -993,7 +1061,11 @@ std::unique_ptr<ASTNode> Parser::parse_instruction() {
         return nullptr;
     }
 exit_error:
-    const auto &pattern = valid_it->second; // SIEMPRE valido
+    /* Del indice si acerto a la primera; de la recuperacion si hubo que buscar un
+     * nombre parecido.  En los dos casos hay patron: si no lo hubiera, arriba se
+     * habria dado el error y no se llegaria aqui. */
+    if (patron == nullptr) patron = &valid_it->second;
+    const auto &pattern = *patron;
 
     advance(); // consumir el opcode
 
