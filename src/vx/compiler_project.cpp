@@ -25,6 +25,7 @@
  *   - Sin checks de colision de nombres cross-module todavia (M5).
  */
 
+#include "vx/comptime/comptime_collect.h"
 #include "vx/compiler.h"
 #include "vx/source_text.h" // un solo fin de linea para todo el pipeline
 #include "vx/vxdbg_emit.h" // grafo de conocimiento del programa
@@ -2101,6 +2102,20 @@ CompileResult compile_vx_project(
         // dep por su MODULO (lib__Y).  Se registran en el TypeChecker para que
         // el acceso qualified (mylib.helper()) resuelva dentro del modulo.
         auto inline_namespaces = flatten_namespaces(*pm.ast);
+
+        /* El conjunto comptime de ESTE modulo, con los nombres ya mangled.  El
+         * volcado equivalente del camino de fichero suelto (`compile_vx_source`)
+         * no sirve aqui: los modulos que de verdad tienen comptime -- la stdlib
+         * -- llegan por el camino de PROYECTO, asi que sin esto la medida se
+         * tomaba sobre casos sinteticos y la granularidad del artefacto se
+         * elegia por arquitectura en vez de por dato.  Solo diagnostico. */
+        if (std::getenv("VESTA_DUMP_COMPTIME_UNIT")) {
+            const ComptimeUnit cu = collect_comptime_unit(*pm.ast, pm.source);
+            if (!cu.empty()) {
+                std::cerr << "[comptime-unit] modulo " << pm.module_name << "\n";
+                dump_comptime_unit(cu, std::cerr);
+            }
+        }
 
         pm.tc = std::make_unique<TypeChecker>(*pm.ast, pm.diags);
 
