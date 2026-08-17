@@ -15,11 +15,15 @@
  * de @c compute_liveness) y las posiciones de las llamadas, y rellena
  * EXCLUSIVAMENTE @c crosses_call.  No inventa nada mas.
  *
- * SEMANTICA canonica (reusada del linear_scan, NO redefinida): un valor "cruza"
- * una llamada si su intervalo COVERS la posicion de la llamada, donde
- * @c covers(p) == (def <= p <= end) -- mismo criterio inclusivo que el allocator
- * de produccion.  Asi la respuesta a "¿por que crosses_call=true?" es SIEMPRE
- * "el LivenessAdapter: el intervalo [def,end] cubre la posicion de un call".
+ * SEMANTICA: un valor "cruza" una llamada si su intervalo COVERS la posicion,
+ * @c covers(p) == (def <= p <= end) -- INCLUSIVO.  Asi la respuesta a "¿por que
+ * crosses_call=true?" es SIEMPRE "el LivenessAdapter: el intervalo [def,end]
+ * cubre la posicion de un call".
+ *
+ * NO es el mismo criterio que el resto, aunque antes lo afirmara este comentario:
+ * el linear_scan (@c jit_regalloc) es estricto por la IZQUIERDA y
+ * @c backend_bridge por la DERECHA.  Tres sitios, tres criterios.  Unificarlos
+ * NO es libre: ver la nota sobre las dos preguntas junto a @c interval_covers.
  *
  * QUE ES UNA "LLAMADA" AQUI (decision documentada, no heuristica): las ops de
  * llamada del IR (CALL/CALLIND/TAILCALL/CALLVIRT/CALLN/CALLM/CALLCLOSURE/CALLITF)
@@ -72,6 +76,24 @@ inline bool ir_op_is_call(ir::IrOp op) noexcept {
 inline bool interval_covers(const ir::LiveInterval &iv, uint32_t p) noexcept {
     return p >= iv.def && p <= iv.end;
 }
+
+/*
+ * OJO -- @c crosses_call responde HOY a DOS preguntas que necesitan criterios
+ * DISTINTOS, y por eso NO se puede estrechar sin mas (medido 2026-08-17):
+ *
+ *   - PRESERVACION ("¿sobrevive a la llamada?"): querria el criterio ESTRICTO
+ *     @c def < p < end.  Un valor DEFINIDO en @p p es el resultado de esa
+ *     instruccion y no puede destruirlo quien lo produce; uno cuyo ULTIMO uso
+ *     esta en @p p lo consume esa instruccion y no necesita sobrevivirla.
+ *   - RAIZ DE GC (@c backend_bridge: `crosses_call && is_gc -> MEMORY`): necesita
+ *     "vivo EN el safepoint", que es el criterio INCLUSIVO.  Estrecharlo deja de
+ *     marcar raices que el stackmap necesita -- no es rendimiento, es correccion.
+ *
+ * Cambiar este @c covers por el estricto rompe `spr`, `cfn199` y `cmb245` en la
+ * e2e (919/4 -> 915/7), y esa es la razon.  El arreglo de verdad es SEPARAR las
+ * dos preguntas en dos campos, no elegir un criterio para las dos.
+ * Ver [[proj_bug_asm_sin_registro]] en la memoria del agente.
+ */
 
 /**
  * @brief Posiciones LINEALIZADAS de las llamadas de @p fn, en el MISMO espacio

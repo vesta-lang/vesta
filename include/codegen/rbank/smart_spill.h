@@ -352,12 +352,20 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
                     ++admisibles;
                     if (lane_free(l.id)) ++libres;
                 }
+                /* El motivo se cuenta con el NOMBRE del impedimento y con los
+                 * requisitos que lo provocan: un numero de enum obliga a ir a
+                 * buscar la tabla, y sin los requisitos no se sabe CUAL de
+                 * ellos es el que no se puede satisfacer. */
                 std::fprintf(stderr,
                              "[rbank] el valor %u tiene que estar en registro "
                              "y no lo consigue: %u lanes de su clase, %u "
-                             "admisibles, %u libres, primer impedimento %d\n",
+                             "admisibles, %u libres, primer impedimento %s "
+                             "(clase %u, ancho %u, cruza-llamada=%d, pin=%d, "
+                             "debe-memoria=%d)\n",
                              v->value_id, de_su_clase, admisibles, libres,
-                             static_cast<int>(razon));
+                             lane_hazard_name(razon), (unsigned)v->req.cls,
+                             (unsigned)v->req.width, v->req.crosses_call ? 1 : 0,
+                             v->req.fixed_reg, v->req.must_be_memory() ? 1 : 0);
             }
             out.spill(v->value_id); // v es la peor de mantener -> derramar v.
         } else {
