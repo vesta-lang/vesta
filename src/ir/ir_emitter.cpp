@@ -36,6 +36,7 @@
  */
 
 #include "ir/ir_emitter.h"
+#include "ir/vel_sink.h"     // a donde sale lo emitido (una emision, N destinos)
 #include "ir/gc_safepoint.h" // pase compartido: raices GC por safepoint
 #include "analysis/asa/aggregate_facts.h"
 #include <chrono>
@@ -75,7 +76,7 @@ namespace ir {
 //  width=8B).  Fallback a la secuencia de 3 si off excede int16 (+/-32KB).
 //  Libre (no toca caches del EmitCtx; el llamante los invalida si procede).
 // =========================================================================
-static inline void emit_spill_access(std::ostringstream &out,
+static inline void emit_spill_access(VelSink &out,
                                      const std::string &reg, long long slot,
                                      bool is_load) {
     const long long off = (slot + 1) * 8;
@@ -103,7 +104,7 @@ struct EmitCtx {
     const codegen::RegAlloc &alloc; // asignacion de registros
     const LivenessResult
         &liveness; // intervalos de vida (necesario para save/restore en CALL)
-    std::ostringstream &out; // stream de salida .vel
+    VelSink &out; // a donde sale lo emitido (ver ir/vel_sink.h)
     bool comments;           // emitir comentarios de origen
     bool emit_debug;         // emitir comentarios @line N por instruccion
     bool emit_stackmaps;     //  E.1: emitir `// @sm <hex>` en safepoints
@@ -188,7 +189,7 @@ struct EmitCtx {
     std::string fn_lbl;
 
     EmitCtx(const IrFunction &fn_, const codegen::RegAlloc &alloc_,
-            const LivenessResult &liveness_, std::ostringstream &out_,
+            const LivenessResult &liveness_, VelSink &out_,
             bool comments_, bool emit_debug_, bool has_frame_,
             bool emit_stackmaps_ = false)
         : fn(fn_), alloc(alloc_), liveness(liveness_), out(out_),
@@ -5882,16 +5883,39 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             int phys;
         };
         std::vector<AsmBind> binds;
+        bool ancho_sin_pasar = false;
         for (ir::IrValueId opv : ins.operands) {
             if (opv == IR_NO_VALUE) continue;
             for (const auto &b : ctx.fn.asm_reg_bindings) {
                 if (b.alloca_value != opv) continue;
-                if (b.is_vector) break; // banco FP no soportado en interp v1
+                if (b.is_vector) {
+                    /* Por aqui el valor del banco ancho no viaja: esta emision
+                     * pasa los operandos por una lista de enteros.
+                     *
+                     * Antes se salia en SILENCIO, y eso es lo peor que podia
+                     * hacer: la ligadura desaparecia de la lista, el bloque se
+                     * ejecutaba con lo que hubiera en ese registro y devolvia
+                     * sin tocar lo que hubiera calculado.  Un resultado
+                     * equivocado sin una sola queja, que es exactamente el
+                     * fallo que se acaba de perseguir tres veces hoy.
+                     *
+                     * Se anota y abajo se para: mejor un bloque que no se emite
+                     * y lo dice, que uno que se emite mintiendo. */
+                    ancho_sin_pasar = true;
+                    break;
+                }
                 const int phys =
                     gp_phys_of_canon(vx::asm_canonical_reg(b.reg));
                 if (phys >= 0) binds.push_back({opv, phys});
                 break;
             }
+        }
+        if (ancho_sin_pasar) {
+            ctx.comment("inline_asm: un operando del banco ancho no puede "
+                        "pasar por esta via (sus valores no entran ni salen) "
+                        "-> trap en vez de resultado falso");
+            ctx.out << "    hlt\n";
+            break;
         }
         if (binds.size() > 8) {
             // >8 bindings excede el limite de args (argc 12 = 4 fijos + 8
@@ -6014,10 +6038,32 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 break;
             }
             const uint64_t hash2 = jit::fnv1a64_asm(nasm);
-            uint64_t desc2 = 0;
-            for (size_t i = 0; i < conv.size(); ++i)
-                desc2 |= (uint64_t)(phys[conv[i].first] & 0xF) << (i * 4);
-            const size_t bytes_tabla = conv.size() * 8;
+            /* Descriptor: 8 bits por operando -- 5 de ranura y 3 de ancho.
+             *
+             * Con 4 bits solo cabia la ranura, y quien lo lee no podia saber si
+             * el valor iba al banco general o al ancho: lo metia siempre en el
+             * general.  El ancho va aqui y no se deduce del registro porque
+             * `xmm3`, `ymm3` y `zmm3` son la MISMA ranura.
+             *
+             * Los dos lados sacan el formato del mismo sitio (@c vx::kAsm*): es
+             * un acuerdo, y con una copia en cada lado se pueden separar sin que
+             * nada falle al compilar -- el fallo sale como valores movidos de
+             * sitio, que es basura, no un error. */
+            /* Los descriptores van EN MEMORIA, detras de la tabla de valores,
+             * uno por operando y con campos nombrados.  Empaquetados en un
+             * entero le ponian techo de bits a algo que crece con cada ISA, y
+             * el campo que se quedo fuera fue el de CLASE -- con lo que ocho
+             * bytes en el banco ancho acababan en el general. */
+            /* Ranuras del ancho MAYOR, todas iguales: con ranuras ajustadas a
+             * cada operando el desplazamiento de la ranura `i` depende de todas
+             * las anteriores, y ese calculo tendria que salir identico aqui y
+             * al otro lado. */
+            /* Un solo bloque: valores primero, descriptores detras.  Dos
+             * reservas separadas serian dos sitios que cuadrar entre este lado
+             * y el que los lee. */
+            const size_t bytes_valores = conv.size() * vx::kAsmSlotBytes;
+            const size_t bytes_tabla =
+                bytes_valores + conv.size() * vx::kAsmDescBytes;
             /* El valor que el bloque devuelve NO se salva alrededor de la
              * llamada: se recoge de la tabla despues, y restaurarlo lo devolveria
              * a lo que era -- `add a, 2` sobre 40 seguia dando 40.  Es el mismo
@@ -6052,8 +6098,32 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             ctx.out << "    mov r15, rsp\n";
             for (size_t i = 0; i < conv.size(); ++i) {
                 const std::string src = ctx.load_src(conv[i].second, 0);
-                ctx.out << "    mov r13, " << (i * 8) << "\n";
+                ctx.out << "    mov r13, " << (i * vx::kAsmSlotBytes) << "\n";
                 ctx.out << "    mov [r15 + r13], " << src << "\n";
+            }
+            /* Y los descriptores, que aqui son constantes conocidas. */
+            for (size_t i = 0; i < conv.size(); ++i) {
+                const auto &opd = am.operands[conv[i].first];
+                const bool ancho = (opd.regclass == vx::ASM_RC_VEC ||
+                                    opd.regclass == vx::ASM_RC_FP);
+                const unsigned bytes =
+                    (ancho && opd.width >= 8) ? (unsigned)opd.width / 8u : 8u;
+                const uint64_t campos =
+                    (uint64_t)(unsigned)opd.regclass |
+                    ((uint64_t)(unsigned)(phys[conv[i].first] & 0xFFFF) << 16) |
+                    ((uint64_t)(bytes & 0xFFFFu) << 32);
+                char cb[32];
+                std::snprintf(cb, sizeof(cb), "0x%llx",
+                              (unsigned long long)campos);
+                /* r13 y r14, que son los scratch que este emisor ya usa para
+                 * direccionar la tabla.  Coger otro cualquiera -- r12, por
+                 * ejemplo -- pisaria un valor vivo: aqui no hay asignador, asi
+                 * que un registro solo esta libre si la convencion dice que lo
+                 * esta. */
+                ctx.out << "    mov r13, "
+                        << (bytes_valores + i * vx::kAsmDescBytes) << "\n";
+                ctx.out << "    mov r14, " << cb << "\n";
+                ctx.out << "    mov [r15 + r13], r14\n";
             }
             ctx.out << "    getproc r1\n";
             char hb2[32];
@@ -6062,8 +6132,13 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             ctx.out << "    mov r2, " << hb2 << "\n";
             ctx.out << "    mov r3, " << (unsigned)am.eff << "\n";
             ctx.out << "    mov r4, r15\n";
-            std::snprintf(hb2, sizeof(hb2), "0x%llx", (unsigned long long)desc2);
-            ctx.out << "    mov r5, " << hb2 << "\n";
+            /* r5 deja de ser el descriptor empaquetado y pasa a ser DONDE estan
+             * los descriptores: detras de los valores, en el mismo bloque.  Un
+             * entero no daba para describir clase, ranura y ancho de cada
+             * operando, y menos segun entren ISAs y extensiones. */
+            ctx.out << "    mov r5, r15\n";
+            ctx.out << "    mov r13, " << bytes_valores << "\n";
+            ctx.out << "    addu r5, r13\n"; // sin signo: es una direccion
             ctx.out << "    mov r6, " << conv.size() << "\n";
             ctx.out << "    mov r15, 6\n";
             ctx.out << "    calln @Method(\"vrt:asm_micro_ops\")\n";
@@ -6078,7 +6153,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 const auto &opf = am.operands[conv[i].first];
                 if (!opf.writes() || opf.kind == AsmOperandKind::MEM) continue;
                 const std::string rd = ctx.dst_of(conv[i].second);
-                ctx.out << "    mov r13, " << (i * 8) << "\n";
+                ctx.out << "    mov r13, " << (i * vx::kAsmSlotBytes) << "\n";
                 ctx.out << "    mov " << rd << ", [r15 + r13]\n";
                 ctx.store_spilled(conv[i].second);
             }
@@ -6441,7 +6516,7 @@ compute_zmm_alloc(const IrFunction &fn, const LivenessResult &liveness) {
 }
 
 static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
-                                 std::ostringstream &out,
+                                 VelSink &out,
                                  bool is_entry_point = false,
                                  const IrModule *mod = nullptr,
                                  std::vector<uint8_t> *value_regs = nullptr) {
@@ -7145,7 +7220,7 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
         }
     }
 
-    std::ostringstream out;
+    VelSink out;
 
     // Cabecera del modulo
     out << "// Emitido por ir_emitter - VestaVM\n";
@@ -7448,7 +7523,7 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
         out << "\n";
     }
 
-    result.vel_text = out.str();
+    result.vel_text = out.tomar_texto();
     return result;
 }
 
