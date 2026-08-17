@@ -189,6 +189,10 @@ inline AbstractProblem intervals_to_problem(const jit::IntervalResult &ivs) {
                          av.req.crosses_call ? 1 : 0,
                          av.req.needs_preserved ? 1 : 0,
                          (unsigned)av.req.cls, ivs.call_positions.size());
+            std::fprintf(stderr, "[rbank]   posiciones de llamada:");
+            for (uint32_t cp : ivs.call_positions)
+                std::fprintf(stderr, " %u", cp);
+            std::fprintf(stderr, "\n");
         }
         // HAZARD "lanes muertas" (forbidden_lanes): las lanes que un INLINE_ASM destruye
         // en un punto que el valor atraviesa (incluye callee-saved que el CALL no protege).

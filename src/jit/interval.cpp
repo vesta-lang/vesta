@@ -526,6 +526,20 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
         for (const MInstr &in : mf.blocks[b].instrs) {
             if (in.op == MOp::ARG && in.dst.is_reg())
                 pending_arg_regs.push_back(in.dst.reg);
+            if (in.op == MOp::INLINE_ASM_RAW &&
+                std::getenv("VESTA_RBANK_ASM_DEBUG")) {
+                const uint32_t bi = static_cast<uint32_t>(in.src1.value);
+                std::fprintf(stderr,
+                             "[rbank]   asm en pos %u: blob %u, "
+                             "clobbers_conocidos=%d, n_clobbers=%zu\n",
+                             2u * gi, bi,
+                             bi < mf.asm_blobs.size()
+                                 ? (int)mf.asm_blobs[bi].clobbers_conocidos
+                                 : -1,
+                             bi < mf.asm_blobs.size()
+                                 ? mf.asm_blobs[bi].clobbers.size()
+                                 : 0);
+            }
             /* DIVMOD_V clobbea RAX/RDX (idiv) -> tratarlo como call-position
              * para que los vregs vivos a traves vayan a callee-saved.
              * LOAD_VM/STORE_VM: su page-miss hace CALL a vrt_vm_read/write
@@ -544,6 +558,14 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
                 || (in.op == MOp::INLINE_ASM_RAW &&
                     !asm_clobbers_conocidos(mf, in))) {
                 out.call_positions.push_back(2u * gi);
+                if (std::getenv("VESTA_RBANK_ASM_DEBUG")) {
+                    /* QUE op impone cada posicion: sin esto, "cruza-llamada=1"
+                     * no dice si es una llamada de verdad o una pseudo-op que
+                     * clobbea (divmod / memoria VM / atomica / asm). */
+                    std::fprintf(stderr,
+                                 "[rbank]   pos %u impuesta por op %d\n",
+                                 2u * gi, static_cast<int>(in.op));
+                }
                 /* Los arg-dst custom de este CALL son clobbers de su posicion
                  * (incluye callee-saved que crosses_call no protege). */
                 if (!pending_arg_regs.empty()) {
