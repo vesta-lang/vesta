@@ -126,6 +126,9 @@ struct Row {
     std::string reads[PLACE_COUNT], writes[PLACE_COUNT];
     bool reads_mem = false, writes_mem = false;
     bool reads_flags = false, writes_flags = false;
+    /// QUE banderas, no solo si toca alguna.  Vacio = la base no lo dice para
+    /// esta ISA, que NO es lo mismo que no tocar ninguna.
+    std::string reads_flag_names, writes_flag_names;
     bool barrier = false, call = false;
     /**
      * Cuantas FORMAS tiene el mnemonico en la base.
@@ -228,6 +231,17 @@ Coverage measure(vx::instr_db::Isa isa, const vx::instr_db::IsaData &db,
             if (!dst.empty()) dst += ", ";
             dst += what;
         };
+        /* QUE banderas, no solo si toca alguna.  Es lo que separa un `inc` de un
+         * `add`: `inc` no toca el acarreo, y por eso se puede encadenar con un
+         * `adc`.  Con un solo bit de "toca banderas" los dos salian iguales. */
+        {
+            std::vector<std::string> lee, escribe;
+            if (vx::instr_db::flag_names_of(isa, fid, lee, escribe)) {
+                for (const std::string &n : lee) append(f.reads_flag_names, n);
+                for (const std::string &n : escribe)
+                    append(f.writes_flag_names, n);
+            }
+        }
         /* TODAS las formas del mnemonico, no solo la primera.
          *
          * Una entrada de la tabla a mano responde por el mnemonico ENTERO, asi que
@@ -383,8 +397,11 @@ void report(const char *what, const Coverage &r) {
                 print_effect("write", kPlaceName[p], f.writes[p],
                              mem ? f.writes_mem : !f.writes[p].empty());
             }
-            if (f.reads_flags) std::printf("         read   flags\n");
-            if (f.writes_flags) std::printf("         write  flags\n");
+            /* Las banderas con NOMBRE cuando se sabe cual: `write flags cf, zf`
+             * dice mucho mas que `write flags`, y es la unica forma de ver que un
+             * `inc` no toca el acarreo. */
+            print_effect("read", "flags", f.reads_flag_names, f.reads_flags);
+            print_effect("write", "flags", f.writes_flag_names, f.writes_flags);
             if (f.barrier)
                 std::printf("         barrier        %snada la cruza%s\n", AMBER,
                             RESET);
