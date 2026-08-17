@@ -180,6 +180,27 @@ int run_driver(const std::string &folder, int threads,
  * @return EXIT_SUCCESS si el ensamblado fue correcto; EXIT_FAILURE si hubo
  * errores.
  */
+/**
+ * @brief Ensambla desde una fuente YA EN MEMORIA.
+ *
+ * Cuando el `.vel` lo acaba de producir el compilador, escribirlo a un fichero
+ * para que la linea siguiente lo vuelva a leer es trabajo puro: el texto ya
+ * esta en la memoria de este proceso.
+ *
+ * NO duplica nada -- es el cuerpo de @ref run_worker, que ahora es solo la
+ * entrada por fichero.  La entrada por fichero se queda: un `.vel` escrito a
+ * mano es un formato de primera clase del lenguaje (`--worker`, `--driver`).
+ *
+ * @param code Fuente `.vel` completo (se consume).
+ * @param file_name Nombre con el que referirse a el en diagnosticos y para
+ *        resolver los `#include` relativos.  No hace falta que exista en disco.
+ */
+int run_worker_from_source(std::string code, const std::string &file_name,
+                          const std::string &output_prefix,
+                          bool skip_preprocessor, bool keep_labels,
+                          const std::vector<uint8_t> *ir_section_bytes = nullptr,
+                          bool emit_map = false);
+
 int run_worker(const std::string &file_name, const std::string &output_prefix,
                bool skip_preprocessor = false, bool keep_labels = false,
                const std::vector<uint8_t> *ir_section_bytes = nullptr,

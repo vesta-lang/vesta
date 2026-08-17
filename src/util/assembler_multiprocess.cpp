@@ -33,26 +33,30 @@ namespace asm_multi_process {
 int run_worker(const std::string &file_name, const std::string &output_prefix,
                bool skip_preprocessor, bool keep_labels,
                const std::vector<uint8_t> *ir_section_bytes, bool emit_map) {
-    // if (arch.empty()) {
-    //     std::cerr << "--arch es requerido en modo --worker\n";
-    //     return EXIT_FAILURE;
-    // }
-
-    Timer global;
-
-    // Leer archivo fuente
-    const std::string name_file(file_name);
-    std::ifstream file(name_file);
+    /* Entrada por FICHERO: el `.vel` escrito a mano, que es un formato de
+     * entrada de primera clase del lenguaje.  Lo unico que hace es leerlo y
+     * delegar. */
+    std::ifstream file(file_name);
     if (!file.is_open()) {
-        std::cerr << "ERROR: No se pudo abrir: " << name_file << "\n";
+        std::cerr << "ERROR: No se pudo abrir: " << file_name << "\n";
         return 1;
     }
-
     std::string code((std::istreambuf_iterator<char>(file)),
                      std::istreambuf_iterator<char>());
+    return run_worker_from_source(std::move(code), file_name, output_prefix,
+                                  skip_preprocessor, keep_labels,
+                                  ir_section_bytes, emit_map);
+}
+
+int run_worker_from_source(std::string code, const std::string &file_name,
+                           const std::string &output_prefix,
+                           bool skip_preprocessor, bool keep_labels,
+                           const std::vector<uint8_t> *ir_section_bytes,
+                           bool emit_map) {
+    Timer global;
 
     if (code.empty()) {
-        std::cerr << "ERROR: Archivo vacio\n";
+        std::cerr << "ERROR: fuente vacio: " << file_name << "\n";
         return 1;
     }
 
