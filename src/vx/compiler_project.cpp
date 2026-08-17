@@ -2131,6 +2131,18 @@ CompileResult compile_vx_project(
                               << "\n";
                     dump_comptime_unit(cu, std::cerr);
                 }
+                /* El TEXTO extraido, a un fichero por modulo.  Cuando la suma no
+                 * compila hay que poder LEER lo que se extrajo: reproducirlo con
+                 * fuentes de juguete no lo consigue -- se intento con
+                 * `namespace` y con la concatenacion de dos modulos, y los dos
+                 * compilan bien. */
+                if (const char *d = std::getenv("VESTA_VOLCAR_UNIDAD")) {
+                    std::error_code vec;
+                    std::filesystem::create_directories(d, vec);
+                    std::ofstream f(std::string(d) + "/" + pm.module_name +
+                                    ".unidad.vx");
+                    if (f) f << cu.unit_source;
+                }
             }
         }
 

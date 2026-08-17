@@ -24,6 +24,69 @@ namespace vx {
 
 namespace {
 
+/**
+ * @brief Principio REAL de la declaracion que empieza (segun el AST) en @p off.
+ *
+ * `loc.offset` de una decl apunta a su TIPO DE RETORNO, no a donde empieza de
+ * verdad: lo que va delante -- `comptime`, `public`, anotaciones `@Macro` /
+ * `@Pure`, el comentario de documentacion -- queda fuera.  Recortar por ahi
+ * rompe el texto por los DOS lados: la decl extraida pierde su modificador (un
+ * `comptime string f()` sale como `string f()`) y la decl ANTERIOR se queda con
+ * ese `comptime` colgando al final, que es codigo invalido.  Se vio como "se
+ * esperaba ';' al final de la declaracion" y "se esperaba un tipo al inicio de
+ * la declaracion top-level" al compilar el conjunto extraido.
+ *
+ * Se retrocede hasta el principio de la linea de @p off y, desde ahi, por las
+ * lineas anteriores mientras sean parte de la declaracion: anotaciones (`@`),
+ * documentacion (`//`, `/*`, `*`) o una linea con solo modificadores.  Se para
+ * en cuanto encuentra algo que ya es otra cosa (el `}` de la decl anterior, una
+ * linea en blanco no precedida de anotacion, etc.).
+ *
+ * @param src Fuente completo del modulo.
+ * @param off Offset que da el AST para la decl.
+ * @return Offset del primer caracter de la declaracion, <= @p off.
+ */
+uint32_t inicio_real_de_decl(const std::string &src, uint32_t off) {
+    if (off > src.size()) return static_cast<uint32_t>(src.size());
+    // Principio de la linea de `off`.
+    uint32_t ini = off;
+    while (ini > 0 && src[ini - 1] != '\n') --ini;
+
+    /// @brief Contenido de la linea que TERMINA en @p fin (exclusivo), sin
+    ///        espacios de los extremos.
+    auto linea_previa = [&src](uint32_t fin, uint32_t &ini_out) -> std::string {
+        if (fin == 0) return {};
+        uint32_t f = fin - 1;              // saltar el '\n' que la cierra
+        uint32_t i = f;
+        while (i > 0 && src[i - 1] != '\n') --i;
+        ini_out = i;
+        std::string s = src.substr(i, f - i);
+        size_t a = s.find_first_not_of(" \t\r");
+        if (a == std::string::npos) return {};
+        size_t b = s.find_last_not_of(" \t\r");
+        return s.substr(a, b - a + 1);
+    };
+
+    for (;;) {
+        uint32_t ini_prev = 0;
+        const std::string prev = linea_previa(ini, ini_prev);
+        if (prev.empty()) break; // linea en blanco o principio del fichero
+        const bool es_anotacion = prev[0] == '@';
+        const bool es_doc = prev.rfind("//", 0) == 0 ||
+                            prev.rfind("/*", 0) == 0 || prev[0] == '*';
+        /* Una linea que es SOLO modificadores (`public`, `comptime`, ...) sin
+         * nada mas: es la cabecera de esta decl partida en dos lineas. */
+        const bool es_modificador =
+            prev == "comptime" || prev == "public" || prev == "private" ||
+            prev == "protected" || prev == "static" || prev == "final" ||
+            prev == "extern" || prev == "public comptime" ||
+            prev == "private comptime";
+        if (!es_anotacion && !es_doc && !es_modificador) break;
+        ini = ini_prev;
+    }
+    return ini;
+}
+
 /// Acumula en @p out los nombres de funcion invocados (callee IdentExpr) dentro
 /// de una expresion, recursivamente.  Solo nos interesan las llamadas directas
 /// por nombre; las indirectas (punteros a fn) no arrastran una decl concreta.
@@ -247,7 +310,11 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
                  * cache sin que nada comptime hubiera cambiado. */
                 in = false;
             const bool es_import = d->kind == ast::NodeKind::ImportDecl;
-            spans.push_back({d->loc.offset, in, es_import});
+            /* El principio REAL, no el que da el AST: si no, el recorte pierde
+             * el `comptime`/`@Macro` de esta decl y se lo cuelga a la anterior
+             * (ver @ref inicio_real_de_decl). */
+            spans.push_back(
+                {inicio_real_de_decl(source, d->loc.offset), in, es_import});
         }
         std::sort(spans.begin(), spans.end(),
                   [](const Span &a, const Span &b) { return a.off < b.off; });

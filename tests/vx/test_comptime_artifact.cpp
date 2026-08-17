@@ -265,6 +265,84 @@ i32 main() { return 0; }
         }
     }
 
+    /* CASO 6 -- CON `namespace`, que es donde se rompio de verdad.
+     *
+     * Al compilar un proyecto real, el conjunto extraido NO compilaba: daba
+     * errores de SINTAXIS ("se esperaba ';' al final de la declaracion", "se
+     * esperaba un tipo al inicio de la declaracion top-level").  Los casos de
+     * arriba no lo cazaban porque ninguno usa `namespace`.
+     *
+     * La extraccion recorta cada decl por `[decl.offset, siguiente.offset)`.
+     * Con un `namespace X { ... }` las decls de dentro llevan offsets dentro del
+     * bloque, asi que un recorte puede arrastrar la llave de cierre -- o
+     * perderla -- y lo extraido deja de ser codigo valido. */
+    {
+        const std::string src = R"VX(
+namespace mimod;
+
+i64 ayudante(i64 n) { return n * 3; }
+comptime i64 usa_ayudante(i64 n) { return ayudante(n) + 1; }
+i32 main() { return 0; }
+)VX";
+        bool ok = false;
+        const ComptimeUnit u = unidad_de(src, ok);
+        CK(ok);
+        if (ok && !u.empty()) {
+            vesta::tc::CompileResponse resp;
+            const auto velb =
+                compilar(u.unit_source, (dir / "ns").string(), resp);
+            CK(resp.ok);
+            if (!resp.ok) {
+                std::printf("FAIL [namespace]: el conjunto extraido de un modulo"
+                            " con `namespace` NO compila\n");
+                std::printf("--- extraido ---\n%s\n---\n",
+                            u.unit_source.c_str());
+                volcar_diags(resp);
+            }
+            CK(!velb.empty());
+        }
+    }
+
+    /* CASO 7 -- LA CONCATENACION DE VARIOS MODULOS, que es lo que hace el
+     * compilador de proyecto y lo que fallaba de verdad.
+     *
+     * Cada modulo aporta su conjunto y todos se pegan en un solo fuente.  Al
+     * hacerlo con un proyecto real salian errores de SINTAXIS, asi que lo que
+     * hay que fijar no es que cada conjunto compile por separado -- eso ya lo
+     * cubren los casos de arriba -- sino que la SUMA siga siendo codigo valido.
+     *
+     * Ojo al caso obvio que esto destapa: si dos modulos importan lo mismo, el
+     * `import` sale DUPLICADO en la suma. */
+    {
+        const std::string mod_a = R"VX(
+import std.io;
+i64 ayudante_a(i64 n) { return n * 3; }
+comptime i64 usa_a(i64 n) { return ayudante_a(n) + 1; }
+i32 main() { return 0; }
+)VX";
+        const std::string mod_b = R"VX(
+import std.io;
+comptime i64 usa_b(i64 n) { return n * 7; }
+)VX";
+        bool oa = false, ob = false;
+        const ComptimeUnit ua = unidad_de(mod_a, oa);
+        const ComptimeUnit ub = unidad_de(mod_b, ob);
+        CK(oa && ob);
+        if (oa && ob) {
+            const std::string suma = ua.unit_source + ub.unit_source;
+            vesta::tc::CompileResponse resp;
+            const auto velb = compilar(suma, (dir / "suma").string(), resp);
+            CK(resp.ok);
+            if (!resp.ok) {
+                std::printf("FAIL [concatenacion]: la SUMA de los conjuntos de "
+                            "dos modulos NO compila\n");
+                std::printf("--- suma ---\n%s\n---\n", suma.c_str());
+                volcar_diags(resp);
+            }
+            CK(!velb.empty());
+        }
+    }
+
     std::filesystem::remove_all(dir, ec);
 
     std::printf("\n=== test_comptime_artifact: %d OK, %d fallidos ===\n", g_pass,
