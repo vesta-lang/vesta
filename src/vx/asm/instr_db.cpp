@@ -546,9 +546,16 @@ bool flag_names_of_mnemonic(Isa isa, const std::string &mnemonic,
     writes.clear();
     const IsaData t = tables_for(isa);
     if (!t.forms || t.flag_names == nullptr || t.flag_count == 0) return false;
+    /* La condicion de arm va PEGADA al mnemonico (`b.eq`) y la base nombra la
+     * clase sin ella (`B`): se separa para buscarla, y el hecho de que estuviera
+     * se usa mas abajo para elegir entre la rama que lee banderas y la que no. */
+    const size_t punto = mnemonic.find('.');
+    const std::string base =
+        (punto != std::string::npos && punto > 0) ? mnemonic.substr(0, punto)
+                                                  : mnemonic;
     std::string up;
-    up.reserve(mnemonic.size());
-    for (char c : mnemonic)
+    up.reserve(base.size());
+    for (char c : base)
         up.push_back(static_cast<char>(std::toupper((unsigned char)c)));
     const DbIclassRange *r = find_iclass(t, up);
     if (r == nullptr || r->count == 0) return false;
@@ -560,10 +567,18 @@ bool flag_names_of_mnemonic(Isa isa, const std::string &mnemonic,
      * se pudo resolver --, y tratar ese hueco como una respuesta distinta dejaria
      * sin contestar a un mnemonico sobre el que las tres que hablan dicen lo
      * mismo.  Una forma que no sabe no contradice a las que si. */
+    /* Cuando el mnemonico lleva CONDICION (`b.eq`), solo son candidatas las
+     * formas que leen banderas: la condicion es lo que las lee, y la base agrupa
+     * la rama condicional y la incondicional bajo el mismo nombre (`B`).  Sin
+     * esta restriccion las dos discrepan y no se contesta; con ella se contesta
+     * lo que dice la que corresponde.  No es elegir por conveniencia: es que la
+     * sintaxis ya dijo cual de las dos se escribio. */
+    const bool condicional = mnemonic.find('.') != std::string::npos;
     uint16_t w = 0, rd = 0;
     bool alguna = false;
     for (uint32_t k = 0; k < r->count; ++k) {
         const DbForm &f = t.forms[r->first_fid + k];
+        if (condicional && f.rflags_set == 0) continue; // no es la condicional
         if (f.wflags_set == 0 && f.rflags_set == 0) continue; // no sabe
         if (!alguna) {
             w = f.wflags_set;
