@@ -498,8 +498,22 @@ AsmBlockEffects asm_analyze_block(
                                            /*ua_id=*/0);
             const int32_t fid = sem.modeled ? sem.form_id : -1;
             std::vector<std::string> lee, escribe;
-            if (fid >= 0 &&
-                vx::instr_db::flag_names_of(isa_db, fid, lee, escribe)) {
+            /* Si la forma no caso -- un `adds x0, x1, x2` tiene tres operandos y
+             * la forma con desplazamiento tiene cuatro --, se pregunta por el
+             * MNEMONICO, que contesta solo si todas sus formas coinciden.  Las
+             * banderas de `adds` son las mismas en las cuatro. */
+            const bool por_forma =
+                fid >= 0 && vx::instr_db::flag_names_of(isa_db, fid, lee, escribe);
+            /* Y NO se pregunta por el mnemonico cuando hubo que desambiguarlo:
+             * ahi el nombre designa dos instrucciones distintas -- `movsd` es la
+             * de cadena y la de SSE --, asi que contestar por el nombre es
+             * contestar por la otra.  Es justo el fallo que ya aparecio una vez:
+             * un `movsd [rdi], xmm0` cogia la bandera de direccion. */
+            const bool nombre_ambiguo = mnem_efectos != mnem;
+            if (por_forma ||
+                (!nombre_ambiguo &&
+                 vx::instr_db::flag_names_of_mnemonic(isa_db, mnem, lee,
+                                                      escribe))) {
                 auto anota = [](std::vector<std::string> &dst,
                                 const std::vector<std::string> &src) {
                     for (const std::string &n : src) {

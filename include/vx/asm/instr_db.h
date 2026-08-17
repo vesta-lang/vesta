@@ -503,6 +503,27 @@ bool flag_names_of(Isa isa, int32_t form_id, std::vector<std::string> &reads,
                    std::vector<std::string> &writes);
 
 /**
+ * @brief Igual, pero por MNEMONICO, cuando no se ha podido resolver la forma.
+ *
+ * Se responde solo si TODAS las formas del mnemonico coinciden en que banderas
+ * tocan.  Si discrepan, no se contesta: elegir una seria inventar cual de ellas
+ * se escribio.  Es el mismo criterio que se usa para decir que rasgo del
+ * procesador exige un mnemonico.
+ *
+ * Hace falta porque una linea no siempre casa con una forma concreta: un
+ * `adds x0, x1, x2` tiene tres operandos y la forma con desplazamiento tiene
+ * cuatro, asi que la aridad no cuadra y el emparejador se queda a nivel de
+ * mnemonico.  Las banderas, sin embargo, son las mismas en las cuatro formas de
+ * `adds`, asi que ahi si se puede afirmar.
+ *
+ * @return false si el mnemonico no existe, si sus formas discrepan, o si la base
+ *         no trae el detalle para esa ISA.
+ */
+bool flag_names_of_mnemonic(Isa isa, const std::string &mnemonic,
+                            std::vector<std::string> &reads,
+                            std::vector<std::string> &writes);
+
+/**
  * @brief Si la base puede modelar una forma ELLA SOLA, sin ayuda de la tabla.
  *
  * Es la misma condicion que @ref asm_insn_sem aplica sobre una linea concreta,

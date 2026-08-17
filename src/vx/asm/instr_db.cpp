@@ -539,6 +539,49 @@ bool flag_names_of(Isa isa, int32_t form_id, std::vector<std::string> &reads,
     return true;
 }
 
+bool flag_names_of_mnemonic(Isa isa, const std::string &mnemonic,
+                            std::vector<std::string> &reads,
+                            std::vector<std::string> &writes) {
+    reads.clear();
+    writes.clear();
+    const IsaData t = tables_for(isa);
+    if (!t.forms || t.flag_names == nullptr || t.flag_count == 0) return false;
+    std::string up;
+    up.reserve(mnemonic.size());
+    for (char c : mnemonic)
+        up.push_back(static_cast<char>(std::toupper((unsigned char)c)));
+    const DbIclassRange *r = find_iclass(t, up);
+    if (r == nullptr || r->count == 0) return false;
+    /* Las formas que TIENEN el dato tienen que coincidir.  Si discrepan no se
+     * contesta: elegir una seria inventar cual de ellas se escribio.
+     *
+     * Las que no lo traen se saltan, no cuentan como discrepancia: de las seis
+     * formas de `ADDS` solo tres traen el suyo -- el pseudocodigo de las otras no
+     * se pudo resolver --, y tratar ese hueco como una respuesta distinta dejaria
+     * sin contestar a un mnemonico sobre el que las tres que hablan dicen lo
+     * mismo.  Una forma que no sabe no contradice a las que si. */
+    uint16_t w = 0, rd = 0;
+    bool alguna = false;
+    for (uint32_t k = 0; k < r->count; ++k) {
+        const DbForm &f = t.forms[r->first_fid + k];
+        if (f.wflags_set == 0 && f.rflags_set == 0) continue; // no sabe
+        if (!alguna) {
+            w = f.wflags_set;
+            rd = f.rflags_set;
+            alguna = true;
+        } else if (f.wflags_set != w || f.rflags_set != rd) {
+            return false;
+        }
+    }
+    if (!alguna) return false; // sin dato: no es lo mismo que no tocar ninguna
+    for (unsigned b = 0; b < t.flag_count && b < 16; ++b) {
+        if (t.flag_names[b] == nullptr) continue;
+        if ((rd >> b) & 1u) reads.emplace_back(t.flag_names[b]);
+        if ((w >> b) & 1u) writes.emplace_back(t.flag_names[b]);
+    }
+    return true;
+}
+
 bool flags_of(Isa isa, int32_t form_id, bool &reads, bool &writes) {
     const IsaData t = tables_for(isa);
     if (!t.forms || form_id < 0 ||
