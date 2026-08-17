@@ -74,7 +74,7 @@ def overlay_props(operation_ps):
 
 
 def derive(decode_ps, operation_ps, operands):
-    """Devuelve (rw, wf, rf, mem_rw, flags_barrier) o None si no hay Operation.
+    """Devuelve (rw, wf, rf, mem_rw, flags_barrier, rflags, wflags) o None.
 
     @c rw = list[(lee, escribe)] por operando (mismo orden que @c operands).
     @c mem_rw = (lee, escribe) del acceso a memoria, o None si no hay.
@@ -100,16 +100,32 @@ def derive(decode_ps, operation_ps, operands):
             (writes if assign else reads).add(i)
 
     # NZCV: escritura si tras la aparicion (con ')' opcional) hay '='.
+    #
+    # Y CUALES, no solo si toca alguna: el propio texto emparejado las nombra
+    # (`PSTATE.<N,Z,C,V>`, `PSTATE.C`, `PSTATE.NZCV`) y se estaba tirando.  Un
+    # `adds` escribe las cuatro y un `cmn` tambien, pero hay instrucciones que
+    # solo tocan el acarreo, y con un bit unico todas parecen destruir lo mismo.
     wf = rf = False
+    wflags, rflags = set(), set()
     for m in _PSTATE.finditer(op):
+        texto = m.group(0)
+        # Las letras del propio nombre.  `PSTATE.NZCV` y `PSTATE.<N,Z,C,V>` son
+        # las cuatro; `PSTATE.C` es solo el acarreo.
+        letras = [c.lower() for c in texto if c in 'NZCV']
         if _PSTATE_WR.match(op[m.end():m.end() + 6]):
             wf = True
+            wflags.update(letras)
         else:
             rf = True
+            rflags.update(letras)
     # helpers que LEEN NZCV sin nombrarlo: ConditionHolds (A64) /
     # ConditionPassed (AArch32, instruccion condicional por <c>).
     if re.search(r'ConditionHolds|ConditionPassed|CurrentCond', op):
         rf = True
+        # La condicion puede mirar cualquiera de las cuatro segun cual sea, y
+        # aqui no se sabe cual es: se declaran las cuatro.  Es lo unico honesto,
+        # y cae del lado que no habilita reordenar.
+        rflags.update(('n', 'z', 'c', 'v'))
 
     # memoria
     mem_rw = None
@@ -146,4 +162,4 @@ def derive(decode_ps, operation_ps, operands):
                 rw.append((r, w))
         else:
             rw.append(None)
-    return rw, wf, rf, mem_rw, fb
+    return rw, wf, rf, mem_rw, fb, sorted(rflags), sorted(wflags)

@@ -95,11 +95,13 @@ def to_irform(syn):
     ps = mras_pseudocode.derive(syn.decode_ps, syn.operation_ps, syn.operands)
     mem_rw = None
     if ps is not None:
-        rw_ps, wf, rf, mem_rw, _fb = ps
+        rw_ps, wf, rf, mem_rw, _fb, rflags, wflags = ps
         rw = [rw_ps[i] if rw_ps[i] is not None else rw_h[i]
               for i in range(len(syn.operands))]
     else:
         rw, wf, rf = rw_h, wf_h, rf_h
+        # Sin pseudocodigo no se sabe CUALES: la heuristica solo da el bit.
+        rflags, wflags = [], []
 
     ops = []
     for i, (o, (r, w)) in enumerate(zip(syn.operands, rw)):
@@ -127,6 +129,7 @@ def to_irform(syn):
         enc=ir.EncodingFeatures(isa_set=syn.feature or 'A64'),
         operands=ops, read_mask=rm, write_mask=wm, has_mem=hm, has_imm=hi,
         writes_flags=wf or dwf, reads_flags=rf or drf,
+        flags_written=",".join(wflags), flags_read=",".join(rflags),
         category=("alias:" + syn.alias_of if syn.is_alias
                   else (syn.feature or syn.instr_class)),
         summary=syn.brief,
