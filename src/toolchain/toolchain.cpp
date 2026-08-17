@@ -224,9 +224,21 @@ CompileResponse compile(const CompileRequest &req) {
         ofs << cr.vel_text;
     }
 
-    // 6) Ensamblar + linkar el .vel -> .velb (embebe el IR en la seccion @ir).
-    const int rc = asm_multi_process::run_worker(
-        vel_path, out_prefix,
+    /* 6) Ensamblar + linkar -> .velb (embebe el IR en la seccion @ir).
+     *
+     * Desde la fuente EN MEMORIA.  El `.vel` se sigue escribiendo porque es un
+     * artefacto que se pide (`--vx-emit-only`) y sirve para depurar, pero
+     * ensamblar ya no lo lee: el texto es el que acaba de salir del emisor, y
+     * volver a leerlo del disco era el mismo contenido dando un viaje.
+     *
+     * El prologo `// @file` que se escribe al fichero cuando hay info de
+     * depuracion tiene que ir tambien en lo que se ensambla, o la seccion de
+     * depuracion del `.velb` se queda sin el nombre del fuente. */
+    std::string vel_src;
+    if (opts.emit_debug) vel_src = "// @file " + req.input + "\n";
+    vel_src += cr.vel_text;
+    const int rc = asm_multi_process::run_worker_from_source(
+        std::move(vel_src), vel_path, out_prefix,
         /*skip_preprocessor=*/true,
         /*keep_labels=*/req.keep_labels,
         /*ir_section_bytes=*/&cr.ir_section_bytes,
