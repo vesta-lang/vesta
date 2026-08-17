@@ -309,8 +309,19 @@ std::string canon_reg(Isa isa, const std::string &tok) {
             if (low == p.first) return p.second;
         return low;
     }
-    // x86 y ARM64 (colapsa rax/eax, x0/w0...).  ARM32 sin alias de ancho.
-    return vx::asm_canonical_reg(low);
+    /* x86 y ARM (colapsa rax/eax, x0/w0...).  Con la arquitectura de la ISA que
+     * se esta analizando, NO la del objetivo activo: la version de un argumento
+     * la resuelve por el entorno, asi que analizando una linea de ARM mientras se
+     * compila para x86 un `x0` no canonicalizaba a nada y el registro escrito se
+     * perdia en silencio -- la forma salia resuelta y sin decir que escribe --.
+     *
+     * Es justo el motivo por el que existe la version de dos argumentos, y lo
+     * dice su propia cabecera: ahi el arch es un dato del ANALISIS, no del
+     * entorno. */
+    const char *arch = isa == Isa::ARM64   ? "arm64"
+                       : isa == Isa::ARM32 ? "arm32"
+                                           : "x86_64";
+    return vx::asm_canonical_reg(low, arch);
 }
 
 /// Registros que aparecen dentro de un operando de memoria (direccion).
