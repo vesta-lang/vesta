@@ -21,6 +21,7 @@
  * apply_directive().
  */
 #include "emmit/parser_to_bytecode.h"
+#include "emmit/mnemonic.h" // consulta por indice, no por hash de cadena
 #include <algorithm> // UCRT64: no transitivo
 
 #include "cli/sync_io.h"
@@ -349,10 +350,16 @@ void Assembler::first_pass(const vm::ASTNode *node, uint64_t &offset) {
     // --- INSTRUCCIONES Y DIRECTIVAS ---
     else if (auto instr = dynamic_cast<const vm::Instruction *>(node)) {
         {
-            // Es una instruccion real?
-            auto it = InstrTable.find(instr->opcode);
+            /* Es una instruccion real?  Por indice: esto corre por cada nodo
+             * del programa, y el nombre ya no se hashea -- se traduce una vez a
+             * mnemonico y de ahi es una lectura.  El indice se construye una vez
+             * sobre la misma tabla; no hay copia de los datos. */
+            static const emmit::MnemonicIndex<std::vector<InstrInfo>> kIndex(
+                InstrTable);
+            const std::vector<InstrInfo> *variantes =
+                kIndex.find(emmit::mnemonic_from_text(instr->opcode.c_str()));
 
-            if (it == InstrTable.end()) {
+            if (variantes == nullptr) {
                 // No esta en la tabla -> puede ser una pseudo-instruccion
                 // (directiva) o un error del usuario.
 
