@@ -616,6 +616,79 @@ const EffTable &x86_effects_table() {
         add("movsx", E({}, true, false, false));
         add("movsxd", E({}, true, false, false));
         add("lea", E({}, true, false, false));
+
+        /* Probar un bit: no estaban, y su efecto es precisamente dejar el bit
+         * probado en el acarreo.  Sin declararlo, un `bt` seguido de un `jc`
+         * puede reordenarse y el salto decide con una bandera de otra
+         * instruccion. */
+        add("bt", E({}, /*wmask=*/0x0, /*mem=*/false, /*flags=*/true));
+        /* Las tres que ademas MODIFICAN el bit escriben su primer operando. */
+        add("bts", E({}, /*wmask=*/0x1, /*mem=*/false, /*flags=*/true));
+        add("btr", E({}, /*wmask=*/0x1, /*mem=*/false, /*flags=*/true));
+        add("btc", E({}, /*wmask=*/0x1, /*mem=*/false, /*flags=*/true));
+        /* Y las de buscar un bit: dejan cero si no habia ninguno. */
+        add("bsf", E({}, /*wmask=*/0x1, /*mem=*/false, /*flags=*/true));
+        add("bsr", E({}, /*wmask=*/0x1, /*mem=*/false, /*flags=*/true));
+
+        /* --- Aritmetica y logica EMPAQUETADA (SIMD) ---
+         *
+         * No estaba ninguna, asi que un `paddd $1, [$0]` -- sumar contra memoria,
+         * que es el patron de cualquier bucle vectorizado a mano -- no declaraba
+         * ni la lectura.  Y un acceso que no se declara es una escritura ajena
+         * que se puede mover por encima de el.
+         *
+         * Escriben su primer operando y NO tocan banderas: eso las distingue de
+         * la aritmetica entera, y es la diferencia que permite mover una
+         * comparacion a traves de ellas.  Que su operando pueda ser memoria lo
+         * dice el propio texto, con sus corchetes; aqui solo se declara la forma.
+         */
+        auto empaquetada = [&](const char *m) {
+            add(m, E({}, /*wmask=*/0x1, /*mem=*/false, /*flags=*/false));
+        };
+        for (const char *m :
+             {// Enteras: suma, resta, producto, y sus formas AVX.
+              "paddb", "paddw", "paddd", "paddq", "psubb", "psubw", "psubd",
+              "psubq", "pmullw", "pmulld", "pmuludq", "pmaddwd",
+              "vpaddb", "vpaddw", "vpaddd", "vpaddq", "vpsubb", "vpsubw",
+              "vpsubd", "vpsubq", "vpmulld", "vpmuludq",
+              // Con saturacion: las de tratamiento de senal y de imagen.
+              "paddsb", "paddsw", "paddusb", "paddusw", "psubsb", "psubsw",
+              "psubusb", "psubusw", "vpaddusb", "vpaddusw",
+              // Logica empaquetada.
+              "pand", "pandn", "por", "pxor", "vpand", "vpandn", "vpor",
+              "vpxor",
+              // Desplazamientos empaquetados.
+              "psllw", "pslld", "psllq", "psrlw", "psrld", "psrlq", "psraw",
+              "psrad", "vpsllw", "vpslld", "vpsllq", "vpsrlw", "vpsrld",
+              "vpsrlq",
+              // Comparacion empaquetada: deja una MASCARA en el destino, no
+              // banderas -- por eso no lleva `flags`.
+              "pcmpeqb", "pcmpeqw", "pcmpeqd", "pcmpgtb", "pcmpgtw", "pcmpgtd",
+              "vpcmpeqb", "vpcmpeqd", "vpcmpgtd",
+              // Minimos, maximos y promedios.
+              "pminub", "pminsw", "pmaxub", "pmaxsw", "pavgb", "pavgw",
+              // Empaquetar y desempaquetar.
+              "packuswb", "packsswb", "packssdw", "punpckhbw", "punpckhwd",
+              "punpckhdq", "punpckhqdq",
+              // Flotante empaquetado, simple y doble, con sus formas AVX.
+              "addps", "addpd", "subps", "subpd", "mulps", "mulpd", "divps",
+              "divpd", "minps", "minpd", "maxps", "maxpd", "sqrtps", "sqrtpd",
+              "andps", "andpd", "orps", "orpd", "xorps", "xorpd",
+              "vaddps", "vaddpd", "vsubps", "vsubpd", "vmulps", "vmulpd",
+              "vdivps", "vdivpd", "vminps", "vmaxps", "vsqrtps", "vxorps",
+              // Multiplicar y acumular en una: la base del producto de matrices.
+              "vfmadd231ps", "vfmadd231pd", "vfmadd213ps", "vfmadd132ps",
+              // Escalares flotantes: mismas reglas, un solo elemento.
+              "addss", "addsd", "subss", "subsd", "mulss", "mulsd", "divss",
+              "divsd", "sqrtss", "sqrtsd",
+              "vaddss", "vaddsd", "vmulss", "vmulsd"})
+            empaquetada(m);
+        /* Las que SI dejan banderas: comparar escalares las escribe de verdad,
+         * y de ahi que sean las unicas de la familia con las que se puede saltar
+         * directamente. */
+        for (const char *m : {"comiss", "comisd", "ucomiss", "ucomisd",
+                              "vcomiss", "vucomisd"})
+            add(m, E({}, /*wmask=*/0x0, /*mem=*/false, /*flags=*/true));
         add("xchg", E({}, 0x3, false, false)); // escribe AMBOS operandos
         // --- Atomicas RMW x86 (siempre con prefijo lock salvo xchg): tocan
         //     memoria + flags; cmpxchg compara/escribe rax.  cmpxchg16b usa
@@ -799,15 +872,25 @@ AsmEffects asm_effects_for(const std::string &mnemonic,
     if (x86) {
         // setcc (sete/setne/...) y cmovcc se reconocen por prefijo: escriben
         // el 1er operando.
+        /* Las dos LEEN las banderas -- es su razon de existir: `setz` convierte
+         * una bandera en un valor y `cmovz` decide con ella --, y no lo
+         * declaraban.
+         *
+         * Que falte no da un resultado falso por si solo, pero deja mover el
+         * bloque por encima de la comparacion que produjo la bandera que lee, y
+         * entonces decide con la de otra: un fallo que depende de si al
+         * planificador le convino reordenar, o sea intermitente. */
         if (m.rfind("set", 0) == 0 && m.size() > 3) {
             AsmEffects e;
             e.operand_write_mask = 0x1;
+            e.touches_flags = true; // las LEE
             e.known = true;
             return e;
         }
         if (m.rfind("cmov", 0) == 0 && m.size() > 4) {
             AsmEffects e;
             e.operand_write_mask = 0x1;
+            e.touches_flags = true; // las LEE para decidir
             e.known = true;
             return e;
         }

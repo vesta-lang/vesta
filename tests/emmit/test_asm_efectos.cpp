@@ -110,7 +110,7 @@ std::vector<std::pair<std::string, std::string>> clases(const char *c1) {
 
 void comprueba(const Caso &c, const char *clase_operando) {
     const vx::AsmBlockEffects r =
-        vx::asm_analyze_block(c.texto, std::string("x86-64"),
+        vx::asm_analyze_block(c.texto, std::string("x86_64"),
                               clases(clase_operando));
     uint32_t real = NINGUNO;
     if (r.reads_mem) real |= LEE_MEM;

@@ -330,7 +330,26 @@ AsmBlockEffects asm_analyze_block(
         // Efectos por-instruccion segun la tabla del arch.  Un mnemonico no
         // tabulado -> a la lista de desconocidos para que el caller de un error
         // claro (disciplina "crecer bajo demanda, error claro siempre").
-        const AsmEffects eff = asm_effects_for(mnem, arch);
+        /* Nombres que la ISA usa para DOS instrucciones distintas.
+         *
+         * `movsd` es a la vez "mover una cadena de doble palabra" -- sin
+         * operandos, gobernada por los registros de indice -- y "mover un
+         * flotante de doble precision" -- con dos operandos --.  Lo mismo
+         * `cmpsd`.  El nombre no las distingue; el numero de operandos si.
+         *
+         * La tabla de efectos solo recibe el mnemonico, asi que no puede
+         * desambiguar: por eso la forma flotante vive con el sufijo `_sse`, que
+         * no es lo que nadie escribe.  Aqui SI se conocen los operandos, y este
+         * es el unico sitio donde se puede resolver.
+         *
+         * Sin esto, un `movsd [$0], $1` -- guardar un flotante -- se tomaba por
+         * la de cadena: los efectos que se le atribuian eran los de otra
+         * instruccion. */
+        std::string mnem_efectos = mnem;
+        if (!operandos_de(line, mnem).empty() &&
+            (mnem == "movsd" || mnem == "cmpsd"))
+            mnem_efectos = mnem + "_sse";
+        const AsmEffects eff = asm_effects_for(mnem_efectos, arch);
         if (!eff.known) {
             res.unknown_mnemonics.push_back(mnem);
             continue;
@@ -366,6 +385,32 @@ AsmBlockEffects asm_analyze_block(
                         if (idx_mem >= 0) varios = true;
                         else idx_mem = static_cast<int>(k);
                     }
+                /* Corchetes que NO son un acceso: hay instrucciones cuyo operando
+                 * entre corchetes es una direccion que se CALCULA, no una que se
+                 * sigue.  `lea rax, [rbx+8]` no lee memoria: hace aritmetica.
+                 *
+                 * No es una excepcion de x86 -- `adr`/`adrp` de arm64 hacen lo
+                 * mismo -- y no se decide aqui por el nombre: se pregunta por su
+                 * CLASE, que el modulo de efectos ya sabe responder
+                 * (@c AsmTransferencia::Direccion).
+                 *
+                 * Contarlo como lectura no daba un resultado falso, daba algo mas
+                 * sutil: el bloque pasaba a parecer que toca memoria, y con eso se
+                 * convierte en una barrera para todo lo que le rodea -- no se
+                 * puede mover una escritura, ni subir una lectura fuera de un
+                 * bucle, ni eliminar una escritura muerta.  Y `lea` esta por todas
+                 * partes. */
+                if (vx::asm_transferencia(mnem, arch) ==
+                    AsmTransferencia::Direccion) {
+                    idx_mem = -1;
+                    /* Y no lee ni escribe.  `lee` arranca en `true` -- lo
+                     * conservador cuando no se sabe --, asi que quitar el acceso
+                     * no basta: sin esto la instruccion seguia declarando una
+                     * lectura por el valor de partida, que es justo el efecto que
+                     * la convierte en barrera. */
+                    lee = false;
+                    escribe = false;
+                }
                 if (idx_mem >= 0 && !varios && idx_mem < 8) {
                     escribe = ((eff.operand_write_mask >> idx_mem) & 1u) != 0u;
                     lee = !escribe || (eff.operand_write_mask == 0u);
