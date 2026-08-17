@@ -190,6 +190,19 @@ def parse_syntactic(path):
             ps_op[nm] = _txt(ps)
         else:
             ps_dec[nm] = ps_dec.get(nm, '') + '\n' + _txt(ps)
+    # El MRAS publica UN pseudocodigo por iclass y lo NOMBRA con el primer
+    # encoding: `subs_addsub_shift.xml` trae `SUBS_32_addsub_shift` y nada para
+    # `SUBS_64_addsub_shift`, aunque el <ps> cuelga del <iclass> que contiene a
+    # los dos.  Buscarlo por nombre de encoding dejaba sin semantica al 54% de
+    # las formas A64 (2502 de 4619), que caian enteras a la heuristica: por eso
+    # `subs` de 64 bits decia no escribir banderas y `cmp` de 64 decia escribir
+    # el registro que compara.  El nombre es nomenclatura, no ambito.
+    #
+    # Ningun fichero del corpus declara mas de un Operation (2117 tienen uno,
+    # 170 ninguno), asi que no hay nada que desambiguar: el unico que haya sirve
+    # a todos sus encodings.  Es la misma regla que @ref mras_aarch32 ya aplica.
+    def_op = next(iter(ps_op.values())) if len(ps_op) == 1 else ''
+    def_dec = next(iter(ps_dec.values())) if len(ps_dec) == 1 else ''
     brief = ''
     b = root.find('./desc/brief/para')
     if b is not None:
@@ -211,6 +224,11 @@ def parse_syntactic(path):
         dv = {d.get('key'): d.get('value') for d in icl.findall('./docvars/docvar')}
         instr_class = dv.get('instr-class') or top.get('instr-class') or 'general'
         feature = dv.get('feature', '') or top.get('feature', '')
+        # Decode de ESTA iclass: es donde cuelga estructuralmente, asi que vale
+        # para todos sus encodings aunque lleve el nombre del primero.  Mas
+        # preciso que el del fichero cuando hay varias iclass.
+        icl_dec = '\n'.join(_txt(ps) for ps in icl.findall('.//ps')
+                            if ps.get('secttype') != 'Operation')
         rd = icl.find('regdiagram')
         base_bits, fields = _regdiagram(rd) if rd is not None else (['x'] * 32, {})
         psname = rd.get('psname', '') if rd is not None else ''
@@ -251,8 +269,8 @@ def parse_syntactic(path):
                 instr_class=instr_class, ext=ext, feature=feature, brief=brief,
                 datatype=edv.get('datatype', ''), psname=psname,
                 has_mem=has_mem, is_alias=is_alias, alias_of=alias_of,
-                decode_ps=ps_dec.get(ename, ''),
-                operation_ps=ps_op.get(ename, ''),
+                decode_ps=ps_dec.get(ename) or icl_dec or def_dec,
+                operation_ps=ps_op.get(ename) or def_op,
                 operands=ops))
     return out
 
