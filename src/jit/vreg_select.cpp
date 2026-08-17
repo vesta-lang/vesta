@@ -4421,6 +4421,25 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                             return false;
                         }
                         d.vreg = (uint32_t)in.operands[nval++];
+                        /* Y de que BANCO es.  La ficha del operando lo dice,
+                         * pero el asignador no la mira: mira la clase del vreg,
+                         * y sin decirsela le daba un registro general a un valor
+                         * del banco ancho.  Luego, al escribir el nombre, se
+                         * descuenta la base del banco y salia una ranura
+                         * NEGATIVA -- que es justo lo que el propio codigo
+                         * estaba avisando ("la ranura -9 no se puede nombrar"). */
+                        if (d.regclass == vx::ASM_RC_VEC ||
+                            d.regclass == vx::ASM_RC_FP) {
+                            if (d.vreg < out.vreg_class.size())
+                                out.vreg_class[d.vreg] = RegClass::FP;
+                        }
+                        /* Y que TIENE que tocarle registro.  Un operando de un
+                         * bloque asm no se puede derramar a memoria: el texto
+                         * lleva escrito el nombre de un registro, no una
+                         * direccion.  Sin esto el asignador lo derramaba y el
+                         * bloque se quedaba sin poder emitirse. */
+                        if (op.kind != ir::AsmOperandKind::IMM)
+                            out.set_vreg_reg_required(d.vreg);
                         // El asignador tiene que ver el uso y la definicion, o
                         // el intervalo del valor no cubre el asm y le da su
                         // registro a otro.
@@ -4443,6 +4462,20 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     // Operando no fisico (SSA/RA) o clase no soportada.
                     vreg_dbg(fn.name.c_str(), "asm_micro(operando-no-fisico)");
                     return false;
+                }
+                /* El texto que de verdad se ensambla por ESTA ruta.
+                 *
+                 * `VESTA_JIT_ASM_DUMP` cubria solo la ruta diferida, asi que para
+                 * un bloque que va por aqui no imprimia nada -- y eso se leia
+                 * como "no pasa por el JIT" cuando lo que pasaba era que el
+                 * volcado estaba en el camino contrario.  Un diagnostico que
+                 * calla donde hace falta es peor que no tenerlo: manda a buscar
+                 * a otro sitio. */
+                if (std::getenv("VESTA_JIT_ASM_DUMP") != nullptr) {
+                    std::fprintf(stderr, "[asm-jit fijo] %s: plantilla=<%s>\n",
+                                 fn.name.c_str(), am.tmpl.c_str());
+                    std::fprintf(stderr, "[asm-jit fijo] %s: final=<%s>\n",
+                                 fn.name.c_str(), nasm.c_str());
                 }
                 vx::AsmAssembleResult ar = vx::g_asm_backend->assemble(
                     nasm, mode32 ? vx::AsmArch::X86_32 : vx::AsmArch::X86_64);
