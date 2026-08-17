@@ -802,6 +802,8 @@ AsmInsnSem asm_insn_sem(Isa isa, const std::string &line, uint32_t ua_id) {
     s.barrier = (f.overlay & OVL_BARRIER_ANY) != 0;
     s.writes_flags = (f.memflags & 0x04) != 0;
     s.reads_flags = (f.memflags & 0x08) != 0;
+    s.writes_flags_set = f.wflags_set;
+    s.reads_flags_set = f.rflags_set;
     s.latency = cost(isa, fid, ua_id).latency;
 
     // Operandos EXPLICITOS del form (no implicit/suppressed, no flags) alineados
@@ -909,10 +911,26 @@ bool asm_dep_conflict(const AsmInsnSem &a, const AsmInsnSem &b) {
     bool amem = a.reads_mem || a.writes_mem;
     bool bmem = b.reads_mem || b.writes_mem;
     if ((a.writes_mem && bmem) || (b.writes_mem && amem)) return true;
-    // flags: WAW / WAR / RAW.
-    if ((a.writes_flags && (b.reads_flags || b.writes_flags)) ||
-        (b.writes_flags && a.reads_flags))
+    /* Banderas: WAW / WAR / RAW, pero POR BANDERA cuando se sabe cuales.
+     *
+     * Con el bit grueso, cualquier par que tocara banderas chocaba: un `inc` --
+     * que no toca el acarreo -- estorbaba al `adc` que lo consume, y dos `cmp`
+     * sobre valores distintos se daban por dependientes.  Con las mascaras solo
+     * choca lo que comparte una bandera concreta.
+     *
+     * Si alguna de las dos no trae el detalle -- otra ISA, o una forma sin dato --
+     * se cae al bit grueso, que sigue siendo cierto: mejor estorbar de mas que
+     * dejar pasar un reorden que rompe. */
+    const bool detalle = (a.writes_flags_set | a.reads_flags_set) != 0 &&
+                         (b.writes_flags_set | b.reads_flags_set) != 0;
+    if (detalle) {
+        if ((a.writes_flags_set & (b.reads_flags_set | b.writes_flags_set)) != 0)
+            return true;
+        if ((b.writes_flags_set & a.reads_flags_set) != 0) return true;
+    } else if ((a.writes_flags && (b.reads_flags || b.writes_flags)) ||
+               (b.writes_flags && a.reads_flags)) {
         return true;
+    }
     // registros: RAW (a escribe -> b lee), WAW (ambos escriben),
     // WAR (a lee -> b escribe).
     for (const auto &w : a.writes)

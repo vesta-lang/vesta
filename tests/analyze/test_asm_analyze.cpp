@@ -7,6 +7,7 @@
  * Cubre las cuatro arquitecturas: x86_64, x86 (32-bit), x86_16 y arm64.
  */
 #include "vx/asm/asm_analyze.h"
+#include "vx/asm/instr_db.h"
 
 #include <cstdio>
 #include <string>
@@ -286,6 +287,39 @@ int main() {
         AsmBlockEffects e = asm_analyze_block_no_classes("  ldr w1, [x0]\n", "arm64");
         CHECK(!e.accesos.empty() && e.accesos[0].base == "x0",
               "arm64: w1/x1 comparten canonico");
+    }
+
+    /* --- Dependencias POR BANDERA -------------------------------------------
+     *
+     * Saber que banderas toca cada instruccion solo sirve si alguien lo usa, y
+     * quien lo usa es esto: decidir si dos instrucciones se estorban.  Con un
+     * solo bit de "toca banderas", cualquier par que las tocara chocaba, y eso
+     * impide reordenar cosas que no tienen nada que ver.
+     *
+     * Los casos estan elegidos para que fallen si se vuelve al bit grueso. */
+    {
+        using vx::instr_db::asm_dep_conflict;
+        using vx::instr_db::asm_insn_sem;
+        using vx::instr_db::Isa;
+        auto choca = [](const char *a, const char *b) {
+            return asm_dep_conflict(asm_insn_sem(Isa::X86, a, 0),
+                                    asm_insn_sem(Isa::X86, b, 0));
+        };
+        CHECK(!choca("cld", "adc rax, rdx"),
+              "cld toca `df` y adc el acarreo: no se estorban");
+        CHECK(choca("stc", "adc rax, rdx"),
+              "stc pone el acarreo y adc lo lee: si se estorban");
+        CHECK(!choca("bt rax, 3", "setz cl"),
+              "bt no toca `zf`, que es lo que setz lee: no se estorban");
+        CHECK(choca("cmp rax, rbx", "setz cl"),
+              "cmp deja `zf` y setz la lee: dependencia real");
+        CHECK(!choca("mov rax, rbx", "add rcx, rdx"),
+              "mover no toca banderas: nada que compartir");
+        /* Y este SI choca aunque la de la izquierda no toque el acarreo: las dos
+         * escriben `zf`, asi que quien la lea despues ve una u otra segun el
+         * orden.  Es la parte que no se puede relajar. */
+        CHECK(choca("inc rbx", "adc rax, rdx"),
+              "inc y adc escriben las mismas banderas menos el acarreo: chocan");
     }
 
     if (g_fail == 0)

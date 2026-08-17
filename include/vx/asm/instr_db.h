@@ -312,6 +312,23 @@ struct AsmInsnSem {
     bool reads_mem = false, writes_mem = false;
     bool reads_flags = false, writes_flags = false;
     /**
+     * @name QUE banderas, como mascara (bit = indice en la leyenda de la ISA).
+     *
+     * Los booleanos de arriba dicen SI toca alguna; estas dicen CUALES, y es lo
+     * que permite no estorbar de mas: un `inc` no toca el acarreo, asi que no
+     * choca con el `adc` que lo consume -- y con el bit grueso si chocaba --.
+     *
+     * Son mascaras y no nombres a proposito: esto lo pregunta el planificador por
+     * cada par de instrucciones, y comparar dos enteros es una operacion.  Los
+     * nombres, que son para leer, los da @ref flag_names_of.
+     *
+     * 0 = la base no trae el detalle para esta ISA.  Ahi mandan los booleanos,
+     * que siguen siendo ciertos.
+     * @{
+     */
+    uint16_t reads_flags_set = 0, writes_flags_set = 0;
+    /// @}
+    /**
      * @name ESTADO del procesador que no es un registro general.
      *
      * Nombrado (@c "cr0", @c "gdtr", @c "msrs", @c "mxcsr", @c "st(0)"...) en vez
