@@ -196,10 +196,23 @@ extern "C" uint64_t vrt_inline_asm_exec(uint64_t proc, uint64_t hash,
 
     AsmTrampolineFn tramp = lookup_inline_asm_trampoline(hash);
     if (tramp == nullptr) {
-        std::fprintf(stderr,
-                     "[asm] vrt_inline_asm_exec: trampoline no registrado "
-                     "(hash=0x%016llx) -- inline-asm no se ejecutara\n",
-                     static_cast<unsigned long long>(hash));
+        /* El TERCER sitio con el mismo fallo, y lo encontro la prueba del
+         * arreglo de los otros dos: se avisaba por la salida de error y se
+         * continuaba, asi que un programa cuyo `asm` no se puede ejecutar --
+         * porque la VM corre en otra arquitectura, que es el caso que este camino
+         * existe para cubrir -- seguia con los valores de antes y devolvia un
+         * resultado falso sin que el `catch` del programa llegara a entrar.
+         *
+         * Aqui no se puede distinguir un bloque que solo ordena la memoria (los
+         * efectos no llegan a esta via), asi que se para siempre.  Es lo
+         * conservador correcto: parar de mas cuesta un `try`/`catch` explicito,
+         * seguir de mas cuesta un resultado equivocado. */
+        char msg[192];
+        std::snprintf(msg, sizeof(msg),
+                      "bloque de ensamblador no ejecutable en esta maquina: no "
+                      "hay ensamblador para su ISA, y saltarlo cambiaria el "
+                      "resultado");
+        runtime::throw_fatal(vm, runtime::FATAL_ILLEGAL_INSTRUCTION, msg);
         return 0;
     }
 

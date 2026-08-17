@@ -1,0 +1,19 @@
+// Con ensamblador el bloque corre y da 42; sin el, el fallo se captura y da 7.
+// Es el caso que el trampolin existe para cubrir -- la VM puede correr en una
+// arquitectura para la que este `asm` no sirve -- y hasta ahora ahi seguia con
+// los valores de antes y devolvia un resultado falso en silencio.
+//
+// Se prueba con VESTA_NO_ASM_BACKEND=1, que es la unica forma de ejercitar ese
+// camino sin tener esa otra maquina.
+// @expect 42
+i32 main() {
+    i32 r = 0;
+    try {
+        register("rax") i64 a = 40;
+        asm volatile { add rax, 2 };
+        r = (i32) a;
+    } catch (FatalError e) {
+        r = 7; // sin ensamblador: se captura y el programa DECIDE, no se arrastra
+    }
+    return r;
+}

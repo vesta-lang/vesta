@@ -462,7 +462,21 @@ struct KeystoneAsmBackend final : vx::AsmBackend {
 void register_keystone_asm_backend() {
     static std::once_flag once;
     static KeystoneAsmBackend backend;
-    std::call_once(once, [] { vx::g_asm_backend = &backend; });
+    std::call_once(once, [] {
+        /* Se puede pedir que NO haya ensamblador.
+         *
+         * No es un interruptor de conveniencia: es la unica forma de probar aqui
+         * lo que pasa en una maquina donde no lo hay -- la VM tiene que poder
+         * correr en cualquier arquitectura, y ahi un bloque `asm` escrito para
+         * otra no se puede ejecutar de ninguna manera.  Ese camino existia sin
+         * poder ejercitarse, y por eso llevaba tiempo haciendo lo contrario de
+         * lo correcto: avisar y seguir con los valores sin tocar.
+         *
+         * Con esto se comprueba que ahora para. */
+        const char *sin = std::getenv("VESTA_NO_ASM_BACKEND");
+        if (sin != nullptr && sin[0] == '1') return;
+        vx::g_asm_backend = &backend;
+    });
 }
 
 } // namespace jit
