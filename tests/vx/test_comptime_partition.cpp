@@ -226,6 +226,74 @@ i32 main() { return 0; }
         }
     }
 
+    /* CASO 5 -- EL TEXTO EXTRAIDO es lo que se compilara aparte, asi que tiene
+     * que llevar lo comptime y sus dependencias, los `import` (sin ellos no
+     * compila por si solo) y NADA del codigo normal: cada linea de mas es
+     * artefacto que se recompila en cada cambio. */
+    {
+        const std::string src = R"VX(
+import std.io;
+i64 ayudante(i64 n) { return n * 3; }
+comptime i64 usa_ayudante(i64 n) { return ayudante(n) + 1; }
+i64 solo_runtime(i64 n) { return n + 12345; }
+i32 main() { return 0; }
+)VX";
+        bool ok = false;
+        const ComptimeUnit u = unidad_de(src, ok);
+        CK(ok);
+        if (ok) {
+            const bool lleva_comptime =
+                u.unit_source.find("usa_ayudante") != std::string::npos;
+            const bool lleva_dep =
+                u.unit_source.find("ayudante(i64 n)") != std::string::npos;
+            const bool lleva_import =
+                u.unit_source.find("import std.io") != std::string::npos;
+            const bool sin_runtime =
+                u.unit_source.find("solo_runtime") == std::string::npos &&
+                u.unit_source.find("12345") == std::string::npos;
+            CK(lleva_comptime);
+            CK(lleva_dep);
+            CK(lleva_import);
+            CK(sin_runtime);
+            if (!(lleva_comptime && lleva_dep && lleva_import && sin_runtime)) {
+                std::printf("FAIL [texto]: el fuente extraido no es el esperado."
+                            "  comptime=%d dep=%d import=%d sin_runtime=%d\n",
+                            (int)lleva_comptime, (int)lleva_dep,
+                            (int)lleva_import, (int)sin_runtime);
+                std::printf("--- extraido ---\n%s\n---\n",
+                            u.unit_source.c_str());
+            }
+        }
+    }
+
+    /* CASO 6 -- un `import` que nadie comptime usa NO puede mover el hash: si
+     * lo moviera, tocar los imports invalidaria el artefacto comptime sin que
+     * nada comptime hubiera cambiado, y el cache dejaria de servir. */
+    {
+        const std::string sin_import = R"VX(
+comptime i64 doble(i64 n) { return n * 2; }
+i32 main() { return 0; }
+)VX";
+        const std::string con_import = R"VX(
+import std.io;
+comptime i64 doble(i64 n) { return n * 2; }
+i32 main() { return 0; }
+)VX";
+        bool o1 = false, o2 = false;
+        const ComptimeUnit a = unidad_de(sin_import, o1);
+        const ComptimeUnit b = unidad_de(con_import, o2);
+        CK(o1 && o2);
+        if (o1 && o2) {
+            const bool estable = a.content_hash == b.content_hash;
+            CK(estable);
+            if (!estable)
+                std::printf("FAIL [hash-import]: anadir un import movio el hash "
+                            "(0x%llx -> 0x%llx)\n",
+                            (unsigned long long)a.content_hash,
+                            (unsigned long long)b.content_hash);
+        }
+    }
+
     std::printf("\n=== test_comptime_partition: %d OK, %d fallidos ===\n",
                 g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;

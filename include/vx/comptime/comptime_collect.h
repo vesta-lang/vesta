@@ -52,6 +52,16 @@ struct ComptimeUnit {
     /// alteran -> el artefacto comptime se reusa entre builds.  0 si @c empty().
     uint64_t content_hash = 0;
 
+    /// TEXTO FUENTE del conjunto: los `import` del modulo mas las decls
+    /// comptime y sus dependencias, en orden de aparicion.  Es lo que hay que
+    /// compilar para producir el artefacto comptime SEPARADO, y sale del mismo
+    /// recorrido que computa @c content_hash (los spans se calculaban ya y se
+    /// tiraban).  Los `import` viajan porque sin ellos el texto no compila por
+    /// si solo, pero NO entran en el hash: anadir un import que el codigo
+    /// comptime no usa no debe invalidar el cache.  Vacio si @c source estaba
+    /// vacio o el conjunto es @c empty().
+    std::string unit_source;
+
     /// @return true si el modulo no tiene nada comptime (el artefacto seria
     /// vacio y P1 no aplica).
     bool empty() const {

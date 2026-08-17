@@ -219,7 +219,8 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
 
         struct Span {
             uint32_t off;
-            bool in_unit;
+            bool in_unit;   ///< pertenece al conjunto comptime (entra al hash).
+            bool is_import; ///< es un `import` (viaja, pero NO entra al hash).
         };
         std::vector<Span> spans;
         spans.reserve(mod.decls.size());
@@ -236,7 +237,17 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
                              ->name) > 0;
             else if (d->kind == ast::NodeKind::ComptimeBlockStmt)
                 in = true; // el bloque comptime es parte del conjunto.
-            spans.push_back({d->loc.offset, in});
+            else if (d->kind == ast::NodeKind::ImportDecl)
+                /* Los `import` NO son parte del conjunto -- no se ejecutan al
+                 * compilar -- pero SI hacen falta para que el texto extraido
+                 * compile por si solo: una comptime que usa `string` o llama a
+                 * la stdlib necesita las mismas importaciones que su modulo.  Se
+                 * marcan aparte para no ensuciar el hash: si entrasen en el,
+                 * anadir un import que el codigo comptime no usa invalidaria el
+                 * cache sin que nada comptime hubiera cambiado. */
+                in = false;
+            const bool es_import = d->kind == ast::NodeKind::ImportDecl;
+            spans.push_back({d->loc.offset, in, es_import});
         }
         std::sort(spans.begin(), spans.end(),
                   [](const Span &a, const Span &b) { return a.off < b.off; });
@@ -244,11 +255,17 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
         uint64_t h = 1469598103934665603ULL; // FNV-1a offset basis.
         const uint32_t src_len = static_cast<uint32_t>(source.size());
         for (size_t i = 0; i < spans.size(); ++i) {
-            if (!spans[i].in_unit) continue;
+            if (!spans[i].in_unit && !spans[i].is_import) continue;
             uint32_t start = spans[i].off;
             uint32_t end = (i + 1 < spans.size()) ? spans[i + 1].off : src_len;
             if (start > src_len) start = src_len;
             if (end > src_len) end = src_len;
+            /* El TEXTO del conjunto, recogido en el MISMO recorrido que ya
+             * calculaba el hash: los spans se computaban, se usaban para hashear
+             * y se tiraban, y son justo lo que la fase siguiente necesita para
+             * poder compilar el conjunto POR SEPARADO. */
+            u.unit_source.append(source, start, end - start);
+            if (!spans[i].in_unit) continue; // un import viaja, pero no hashea.
             for (uint32_t j = start; j < end; ++j) {
                 h ^= static_cast<uint8_t>(source[j]);
                 h *= 1099511628211ULL; // FNV-1a prime.
