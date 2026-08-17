@@ -529,7 +529,14 @@ AsmBlockEffects asm_analyze_block(
                  * es incondicional: no depende de nada.  Quien lo sabe es la
                  * tabla, que separa el sufijo, asi que ahi manda ella -- si dice
                  * que no lee, no se le atribuye la lectura de la clase. */
-                const bool a32 = arch == "arm32" || arch == "arm";
+                /* En ARM la condicion va en el MNEMONICO (`addeq`, `b.eq`), y la
+                 * base modela la clase entera -- rama condicional e
+                 * incondicional comparten iclass y forma explicita --.  Quien las
+                 * separa es la tabla, que lee el sufijo: si dice que no lee, no se
+                 * le atribuye la lectura de la clase.  Sin esto, un `b` a secas
+                 * salia leyendo las cuatro banderas de su hermana condicional. */
+                const bool a32 = arch == "arm32" || arch == "arm" ||
+                                 arch == "arm64" || arch == "aarch64";
                 if (!a32 || eff.reads_flags) anota(res.flags_read, lee);
                 anota(res.flags_written, escribe);
                 /* Si la base dice que toca alguna, el agregado tambien lo dice:

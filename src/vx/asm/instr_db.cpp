@@ -869,7 +869,13 @@ AsmInsnSem asm_insn_sem(Isa isa, const std::string &line, uint32_t ua_id) {
     std::vector<ParsedOp> ops;
     ops.reserve(toks.size());
     for (const auto &t : toks) ops.push_back(parse_operand(isa, t));
-    int32_t fid = match(isa, mnem, ops);
+    /* Si la forma caso POR OPERANDOS lo dice el emparejador, que es quien conoce
+     * la regla entera -- incluida la de que se pueden omitir los opcionales del
+     * final --.  Aqui se recalculaba con una igualdad estricta de aridad, asi que
+     * una forma que el emparejador SI habia resuelto se declaraba no modelada:
+     * dos sitios calculando lo mismo y solo uno enterado de la regla nueva. */
+    bool caso_por_operandos = false;
+    int32_t fid = match(isa, mnem, ops, &caso_por_operandos);
     s.form_id = fid;
     if (fid < 0) {                               // mnemonico desconocido
         s.barrier = true;                        // CONSERVADOR: no se reordena.
@@ -902,7 +908,11 @@ AsmInsnSem asm_insn_sem(Isa isa, const std::string &line, uint32_t ua_id) {
         if (o.kind == OP_MEM) mem_operand = true;
         expl.push_back(static_cast<int>(i));
     }
-    bool arity_ok = expl.size() == toks.size();
+    /* La aridad la da el EMPAREJADOR, no una igualdad aparte: es quien sabe que
+     * los opcionales del final se pueden omitir.  Con la igualdad estricta, un
+     * `adds x0, x1, x2` -- cuya forma declara ademas un desplazamiento opcional --
+     * salia no modelado aunque la forma estuviera perfectamente resuelta. */
+    bool arity_ok = caso_por_operandos;
     // memoria implicita (memflags bit0 sin operando mem, p.ej. push/pop) -> no
     // modelada.
     bool implicit_mem = (f.memflags & 0x01) != 0 && !mem_operand;
@@ -950,7 +960,10 @@ AsmInsnSem asm_insn_sem(Isa isa, const std::string &line, uint32_t ua_id) {
     s.modeled = arity_ok;
 
     if (arity_ok) {
-        for (size_t k = 0; k < expl.size(); ++k) {
+        /* Hasta donde llegan los TOKENS: la forma puede declarar mas operandos
+         * que los escritos -- los opcionales omitidos --, y recorrerlos todos
+         * leeria fuera de la linea. */
+        for (size_t k = 0; k < expl.size() && k < toks.size(); ++k) {
             int i = expl[k];
             const DbOperand &o = tb.ops[f.ops_off + i];
             bool rd = (f.rmask >> i) & 1;

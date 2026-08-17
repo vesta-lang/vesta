@@ -149,6 +149,7 @@ def parse_syntactic(path):
             asm = enc.find('asmtemplate')
             ops = []
             depth = 0
+            depth_opt = 0   # llaves: lo que se puede omitir al escribirla
             has_mem = False
             if asm is not None:
                 for ch in list(asm):
@@ -157,6 +158,7 @@ def parse_syntactic(path):
                         if '[' in s:
                             has_mem = True
                         depth += s.count('[') - s.count(']')
+                        depth_opt += s.count('{') - s.count('}')
                     elif ch.tag == 'a':
                         disp = mras_a64._txt(ch)
                         d = disp.strip()
@@ -166,7 +168,8 @@ def parse_syntactic(path):
                         kind, w, rs = mras_a64._classify(disp, field)
                         ops.append(mras_a64.SynOperand(
                             disp=disp, field=field, kind=kind, width=w,
-                            register_set=rs, in_memory=depth > 0))
+                            register_set=rs, in_memory=depth > 0,
+                            optional=depth_opt > 0))
             out.append(mras_a64.SynForm(
                 mnemonic=mnem, encoding=ename, opcode=opcode,
                 instr_class=instr_class, ext=ext, feature=isa, brief=brief,
