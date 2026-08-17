@@ -591,6 +591,44 @@ bool ComptimeRuntime::invoke_string_macro_memoized(
     }
 }
 
+bool ComptimeRuntime::make_vm_string(const std::string &s,
+                                   uint64_t &out_handle) noexcept {
+    out_handle = 0;
+    ensure_vm_initialized();
+    if (impl_ == nullptr || impl_->proc == nullptr) return false;
+    try {
+        /* Cabecera de `StringObject` (40 bytes) + los datos + un nulo de
+         * cortesia, que es lo que espera cualquier consumidor que la pase a una
+         * API de C.  El layout esta en `include/loader/string_object.h` y no se
+         * escribe a mano campo por campo aqui: se usa el propio tipo, para que
+         * si crece la cabecera esto no se quede corto en silencio. */
+        const size_t n = s.size();
+        const size_t total = sizeof(loader::StringObject) + n + 1;
+        /* Fijado a proposito: el handle se entrega y se usa DESPUES.  Si el
+         * recolector moviera el objeto entre crearlo y la llamada, el argumento
+         * apuntaria a otro sitio. */
+        const gc::GcHandle h = impl_->proc->gc_heap.alloc_pinned(total);
+        if (h == gc::GC_NULL_HANDLE) return false;
+        uint8_t *payload = impl_->proc->gc_heap.deref(h);
+        if (payload == nullptr) return false;
+        std::memset(payload, 0, total);
+        auto *so = reinterpret_cast<loader::StringObject *>(payload);
+        /* UTF-8 y `length` en bytes: la cadena viene del FUENTE, que es ASCII
+         * salvo la enye, asi que contar puntos de codigo aqui seria pagar un
+         * recorrido por un caso que este camino no produce.  Si algun dia entra
+         * texto multibyte por aqui, `length` hay que contarlo de verdad. */
+        so->encoding = (uint8_t)loader::StringEncoding::UTF8;
+        so->length = (uint32_t)n;
+        so->byte_len = (uint32_t)n;
+        so->str_hash = 0; // 0 = sin calcular; lo cachea quien lo pida
+        if (n != 0) std::memcpy(payload + sizeof(loader::StringObject), s.data(), n);
+        out_handle = (uint64_t)h;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 bool ComptimeRuntime::invoke_raw(const std::string &macro_name,
                                  const std::vector<uint64_t> &args,
                                  size_t n_bytes, unsigned addr_reg,

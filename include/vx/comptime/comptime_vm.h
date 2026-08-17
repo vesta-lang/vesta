@@ -311,6 +311,31 @@ class ComptimeRuntime {
      * @param out_bytes Recibe una copia de esos bytes.
      * @return true si la ejecucion termino y se pudieron leer.
      */
+    /**
+     * @brief Crea un @c StringObject EN la VM de compilacion y devuelve su
+     *        handle, listo para pasarlo como argumento.
+     *
+     * Es el inverso de @c comptime_read_vm_string, y faltaba.  Sin el, una
+     * funcion comptime que recibe cadenas no se podia invocar por el camino
+     * real: los argumentos viajan crudos en R1..R12, y un puntero del host no
+     * significa nada dentro de la VM, que tiene su propio monton.
+     *
+     * Ese hueco es la razon por la que `inject(...)` se seguia evaluando con el
+     * tree-walker del AST -- el unico sitio del lenguaje donde los argumentos
+     * comptime son cadenas del propio fuente.  Y de ahi salia el resto: el
+     * tree-walker no puede ejecutar, devolvia DIFERIDO, y un diferido repite la
+     * compilacion ENTERA.
+     *
+     * Se reserva @c alloc_pinned porque el handle se entrega y se usa despues:
+     * si el recolector moviera el objeto entre la creacion y la llamada, el
+     * argumento apuntaria a otro sitio.
+     *
+     * @param s Cadena del host.
+     * @param out_handle Recibe el @c GcHandle (valido en la VM comptime).
+     * @return true si se pudo crear.
+     */
+    bool make_vm_string(const std::string &s, uint64_t &out_handle) noexcept;
+
     bool invoke_raw(const std::string &macro_name,
                     const std::vector<uint64_t> &args, size_t n_bytes,
                     unsigned addr_reg, std::vector<uint8_t> &out_bytes) noexcept;
