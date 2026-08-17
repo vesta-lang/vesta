@@ -234,7 +234,7 @@ struct AsmBlockEffects {
  * variable.  Usala unicamente si lo que preguntas no depende de que memoria se
  * toca; si depende, pasa las clases.
  */
-AsmBlockEffects asm_analyze_block_sin_clases(const std::string &nasm_body,
+AsmBlockEffects asm_analyze_block_no_classes(const std::string &nasm_body,
                                             const std::string &arch);
 
 /**

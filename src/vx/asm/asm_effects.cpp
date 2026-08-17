@@ -364,14 +364,14 @@ std::string asm_canonical_reg(const std::string &raw) {
 /// arquitectura dada -- que es lo normal: el analisis recibe la suya -- no tenia a
 /// quien preguntarle y habria tenido que repetir la correspondencia.  Dos copias
 /// de la misma tabla se separan, y el sintoma seria leer la base de otra ISA.
-instr_db::Isa isa_de_arch(const std::string &arch) {
+instr_db::Isa isa_of_arch(const std::string &arch) {
     if (arch == "arm64" || arch == "aarch64") return instr_db::Isa::ARM64;
     if (arch == "arm" || arch == "arm32") return instr_db::Isa::ARM32;
     if (arch == "riscv" || arch == "riscv64") return instr_db::Isa::RISCV;
     return instr_db::Isa::X86;
 }
 
-instr_db::Isa isa_actual() { return isa_de_arch(asm_arch_actual()); }
+instr_db::Isa isa_actual() { return isa_of_arch(asm_arch_actual()); }
 
 // -----------------------------------------------------------------------
 // Tabla plana mnemonic -> AsmEffects.  Subset comun, extensible.  Los
@@ -806,15 +806,49 @@ const EffTable &x86_effects_table() {
          * `int3` en su ruta de fallo. */
         add("int3", E({}, false, false, false));
         add("ud2", E({}, false, false, false));
-        add("ret", E({}, false, true, false));
+        /* `ret` saca la direccion de retorno de la PILA -- al contrario que en
+         * arm, donde vive en un registro --, asi que lee memoria por `rsp` y lo
+         * mueve.  Se dice por donde: sin eso, cualquier bloque con un `ret` queda
+         * tocando memoria que no sabe nombrar. */
+        {
+            AsmEffects e = E({"rsp"}, /*wmask=*/0x0, /*mem=*/true, /*flags=*/false,
+                             /*call=*/false, {"rsp"});
+            e.implicit_mem_read.emplace_back("rsp");
+            add("ret", std::move(e));
+        }
         add("jmp", E({}, false, false, false));
-        add("leave", E({"rsp", "rbp"}, false, true, false));
-        // saltos condicionales: solo leen flags.
+        {
+            AsmEffects e = E({"rsp", "rbp"}, /*wmask=*/0x0, /*mem=*/true,
+                             /*flags=*/false, /*call=*/false, {"rbp"});
+            e.implicit_mem_read.emplace_back("rbp");
+            add("leave", std::move(e));
+        }
+        /* Saltos condicionales: solo LEEN las banderas.
+         *
+         * Lo decia el comentario y no lo decia el codigo, que declaraba un efecto
+         * vacio.  Con eso el salto no dependia de nada, y la comparacion que lo
+         * decide se quedaba sin nadie que la use: se puede mover por debajo del
+         * salto o eliminarse por muerta.  El mismo hueco estaba en `b.CC` de
+         * arm64 y en `setcc`/`cmovcc`. */
         for (const char *j : {"je",  "jne", "jz",  "jnz", "jg",  "jge", "jl",
                               "jle", "ja",  "jae", "jb",  "jbe", "jo",  "jno",
-                              "js",  "jns", "jc",  "jnc", "jp",  "jnp"}) {
-            add(j, E({}, false, false, false));
+                              "js",  "jns", "jc",  "jnc", "jp",  "jnp",
+                              "jpe", "jpo", "jna", "jnae", "jnb", "jnbe",
+                              "jng", "jnge", "jnl", "jnle", "jeq"}) {
+            AsmEffects e = E({}, 0x0, false, false);
+            e.reads_flags = true;
+            add(j, std::move(e));
         }
+        /* `jcxz`/`jecxz`/`jrcxz` miran el REGISTRO contador, no las banderas: es
+         * lo que las separa del resto de los saltos condicionales. */
+        for (const char *j : {"jcxz", "jecxz", "jrcxz"})
+            add(j, E({}, 0x0, false, false, false, {"rcx"}));
+        /* `mulx` (BMI2) multiplica sin tocar banderas y con destino EXPLICITO:
+         * escribe sus dos primeros operandos y lee `rdx` sin nombrarlo.  Ese
+         * operando implicito es lo que impide que la base la modele por si sola,
+         * asi que aqui se declara. */
+        add("mulx", E({}, /*wmask=*/0x3, /*mem=*/false, /*flags=*/false,
+                      /*call=*/false, {"rdx"}));
         return t;
     }();
     return table;
@@ -866,10 +900,28 @@ const EffTable &arm64_effects_table() {
         for (const char *m : {"mov", "movz", "movk", "movn", "adr", "adrp",
                               "fmov"})
             add(m, E({}, true, false, false));
-        // --- Seleccion condicional (leen flags, escriben 1er operando) ---
+        /* --- Seleccion condicional: CONSUMEN las banderas ---
+         *
+         * El comentario ya decia "leen flags" y el codigo no lo declaraba: es el
+         * mismo hueco que tenian `setcc`/`cmovcc` en x86.  Sin la lectura, el
+         * bloque se puede mover por encima del `cmp` que produjo la bandera con la
+         * que decide, y entonces decide con la de otra comparacion -- un fallo que
+         * depende de si al planificador le convino reordenar. */
         for (const char *m : {"csel", "cset", "csetm", "csinc", "csinv",
-                              "csneg", "cinc", "cinv", "cneg", "ccmp", "ccmn"})
-            add(m, E({}, true, false, false));
+                              "csneg", "cinc", "cinv", "cneg"}) {
+            AsmEffects e = E({}, /*wmask=*/0x1, /*mem=*/false, /*flags=*/false);
+            e.reads_flags = true;
+            add(m, std::move(e));
+        }
+        /* Y la comparacion CONDICIONAL hace las dos cosas y no escribe ningun
+         * registro: lee las banderas para decidir si compara, y las escribe con el
+         * resultado.  Estaba declarada como que escribe su primer operando, que es
+         * el valor que compara: se daba por destruido. */
+        for (const char *m : {"ccmp", "ccmn"}) {
+            AsmEffects e = E({}, /*wmask=*/0x0, /*mem=*/false, /*flags=*/true);
+            e.reads_flags = true;
+            add(m, std::move(e));
+        }
         // --- Bit / rev / bitfield (escriben 1er operando) ---
         for (const char *m : {"clz", "cls", "rbit", "rev", "rev16", "rev32",
                               "ubfx", "sbfx", "ubfm", "sbfm", "bfi", "bfxil",
@@ -877,8 +929,12 @@ const EffTable &arm64_effects_table() {
             add(m, E({}, true, false, false));
         // --- Cargas: escriben 1er operando + memoria ---
         for (const char *m : {"ldr", "ldrb", "ldrh", "ldrsw", "ldrsb", "ldrsh",
-                              "ldur", "ldp"})
+                              "ldur"})
             add(m, E({}, true, true, false));
+        /* `ldp` carga un PAR: escribe DOS destinos.  Con la mascara a 0x1 el
+         * segundo se daba por intacto, y quien creyera que sigue valiendo lo de
+         * antes se equivoca en la mitad de los casos. */
+        add("ldp", E({}, /*wmask=*/0x3, /*mem=*/true, /*flags=*/false));
         /* --- Almacenes: el operando ESCRITO es el de memoria ---
          * La mascara dice "que operandos escribe", y eso incluye el de
          * memoria: es lo mismo que ya hacia x86 (`mov [rdi], rax` marca el
@@ -900,10 +956,29 @@ const EffTable &arm64_effects_table() {
         // ldaxp/ldxp cargan un PAR -> escriben op1 Y op2.
         for (const char *m : {"ldaxp", "ldxp"})
             add(m, E({}, 0x3, true, false));
-        for (const char *m : {"stlxr", "stxr", "stlr", "stlxrb", "stxrb",
-                              "stlrb", "stlxrh", "stxrh", "stlrh", "stlxp",
-                              "stxp"})
-            add(m, E({}, 0x1, true, false)); // status en op1
+        /* Los almacenes atomicos escriben MEMORIA, y la mascara tiene que decirlo
+         * en la posicion donde esta el operando de memoria: quien la consume mira
+         * ese bit para saber si el acceso es lectura o escritura.  Con la mascara
+         * solo en el registro de estado, un `stxr w0, x1, [x2]` -- que GUARDA --
+         * salia declarando una LECTURA de `[x2]`, y con eso una escritura muerta a
+         * esa direccion se puede eliminar y una carga se puede subir por encima.
+         *
+         * La posicion cambia con la forma, y por eso van por grupos en vez de una
+         * mascara para todos:
+         *   stxr  w0, x1, [x2]        -> estado op0 + memoria op2  = 0x5
+         *   stxp  w0, x1, x2, [x3]    -> estado op0 + memoria op3  = 0x9
+         *   stlr  x1, [x0]            -> SIN estado, memoria op1   = 0x2 */
+        for (const char *m : {"stlxr", "stxr", "stlxrb", "stxrb", "stlxrh",
+                              "stxrh"})
+            add(m, E({}, /*wmask=*/0x5, /*mem=*/true, /*flags=*/false));
+        for (const char *m : {"stlxp", "stxp"})
+            add(m, E({}, /*wmask=*/0x9, /*mem=*/true, /*flags=*/false));
+        /* Los de LIBERACION no llevan registro de estado -- no pueden fallar --,
+         * asi que su unico efecto es la memoria.  Estaban en el mismo grupo que los
+         * condicionales, lo que les atribuia una escritura al registro que
+         * guardan: justo el valor que hay que dar por vivo. */
+        for (const char *m : {"stlr", "stlrb", "stlrh"})
+            add(m, E({}, /*wmask=*/0x2, /*mem=*/true, /*flags=*/false));
         // --- CAS / RMW atomicas (armv8.1): escriben el destino + memoria ---
         for (const char *m : {"cas", "casa", "casl", "casal", "casb", "casab",
                               "caslb", "casalb", "cash", "casah", "caslh",
@@ -911,18 +986,37 @@ const EffTable &arm64_effects_table() {
                               "ldadda", "ldaddl", "ldaddal", "ldset", "ldseta",
                               "ldsetl", "ldsetal", "ldclr", "ldclra", "ldclrl",
                               "ldclral", "ldeor", "ldeora", "ldeorl", "ldeoral"})
-            add(m, E({}, 0x1, true, false));
-        // casp* comparan/escriben un PAR de registros (op1 Y op2).
+            /* `casal x0, x1, [x2]`: deja el valor ANTERIOR en op0 -- el dato con el
+             * que se decide si reintentar -- y ESCRIBE la memoria de op2. */
+            add(m, E({}, /*wmask=*/0x5, /*mem=*/true, /*flags=*/false));
+        /* casp* comparan/escriben un PAR de registros, y la memoria se va al quinto
+         * operando: `caspal x0, x1, x2, x3, [x4]` -> 0x3 | 0x10. */
         for (const char *m : {"casp", "caspa", "caspl", "caspal"})
-            add(m, E({}, 0x3, true, false));
-        // --- Barreras de memoria (efecto de orden; tocan memoria conserv.) ---
-        for (const char *m : {"dmb", "dsb", "isb"})
-            add(m, E({}, false, true, false));
-        // --- Control de flujo ---
-        add("ret", E({}, false, true, false));
-        add("br", E({}, false, false, false));
-        add("blr", E({}, false, true, true)); // llamada indirecta
-        add("bl", E({}, false, true, true));  // llamada directa
+            add(m, E({}, /*wmask=*/0x13, /*mem=*/true, /*flags=*/false));
+        /* --- Barreras de memoria ---
+         *
+         * ORDENAN; no leen ni escriben nada.  Estaban declaradas como que tocan
+         * memoria, y como no nombran por donde, el bloque entero quedaba con
+         * memoria sin atribuir -- o sea suponiendo lo peor de TODA --.  Ordenar y
+         * acceder son cosas distintas, y en x86 ya se distinguian: es la misma
+         * `barrier` de `mfence`. */
+        for (const char *m : {"dmb", "dsb", "isb"}) {
+            AsmEffects e = E({}, /*wmask=*/0x0, /*mem=*/false, /*flags=*/false);
+            e.barrier = true;
+            add(m, std::move(e));
+        }
+        /* --- Control de flujo ---
+         *
+         * En arm la direccion de retorno va en un REGISTRO (`x30`, el de enlace),
+         * no en la pila: una llamada lo ESCRIBE y `ret` lo LEE, y ninguna de las
+         * dos toca memoria por eso.  Estaban las tres declaradas como que si, con
+         * lo que cualquier bloque con un `ret` o un `bl` pasaba a tocar memoria que
+         * no sabe nombrar. */
+        add("ret", E({}, /*wmask=*/0x0, /*mem=*/false, /*flags=*/false,
+                     /*call=*/false, {"x30"}));
+        add("br", E({}, 0x0, false, false));
+        add("blr", E({"x30"}, 0x0, /*mem=*/false, /*flags=*/false, /*call=*/true));
+        add("bl", E({"x30"}, 0x0, /*mem=*/false, /*flags=*/false, /*call=*/true));
         add("b", E({}, false, false, false));
         for (const char *m : {"cbz", "cbnz", "tbz", "tbnz"})
             add(m, E({}, false, false, false));
@@ -942,9 +1036,298 @@ const EffTable &arm64_effects_table() {
     return table;
 }
 
+/**
+ * @brief Tabla de efectos A32 (arm32), por mnemonico BASE.
+ *
+ * A32 no es "arm64 con otros nombres", y tratarlo asi era peor que no tratarlo:
+ * un `casal` -- que solo existe en A64 -- salia conocido al compilar para A32.
+ *
+ * Lo que lo separa es que el mnemonico LLEVA DENTRO parte del efecto:
+ *
+ *   - un sufijo de CONDICION (`addeq`, `blne`, `movcs`) hace que la instruccion
+ *     dependa de las banderas.  Sin sufijo es incondicional y no depende de
+ *     nada: casi toda instruccion A32 admite condicion, asi que decir que todas
+ *     las leen -- que es lo que sale de modelar la clase entera -- convierte
+ *     cualquier bloque en dependiente de la ultima comparacion;
+ *   - un sufijo `s` (`adds`, `movs`) es lo que hace que ESCRIBA las banderas.
+ *     Sin el no las toca, y esa letra es toda la diferencia.
+ *
+ * Por eso aqui van solo las BASES y el resto se descompone: enumerar
+ * base x condicion x `s` serian miles de entradas que ademas se separarian entre
+ * si en cuanto una se quedase atras.
+ */
+const EffTable &arm32_effects_table() {
+    static const EffTable table = [] {
+        EffTable t;
+        auto add = [&t](const char *m, AsmEffects e) {
+            e.known = true;
+            t[m] = std::move(e);
+        };
+        auto E = [](std::initializer_list<const char *> wr, uint8_t wmask,
+                    bool mem, bool flags, bool call = false,
+                    std::initializer_list<const char *> rd = {}) {
+            AsmEffects e;
+            for (const char *w : wr)
+                e.implicit_write.emplace_back(w);
+            for (const char *r : rd)
+                e.implicit_read.emplace_back(r);
+            e.operand_write_mask = wmask;
+            e.touches_mem = mem;
+            e.writes_flags = flags;
+            e.is_call = call;
+            return e;
+        };
+        /* Proceso de datos: escriben su primer operando y NO tocan banderas.  Las
+         * formas que si lo hacen son las del sufijo `s`, y las construye el
+         * descomponedor a partir de estas mismas. */
+        for (const char *m : {"mov", "mvn", "movw", "movt", "add", "sub", "rsb",
+                              "and", "orr", "eor", "bic", "orn", "lsl", "lsr",
+                              "asr", "ror", "mul", "mla", "mls", "umull",
+                              "smull", "umlal", "smlal", "sdiv", "udiv", "clz",
+                              "rev", "rev16", "rbit", "uxtb", "uxth", "sxtb",
+                              "sxth", "ubfx", "sbfx", "bfi", "bfc", "adr"})
+            add(m, E({}, /*wmask=*/0x1, /*mem=*/false, /*flags=*/false));
+        /* Las que CONSUMEN el acarreo: es su razon de ser -- encadenar sumas de
+         * mas bits de los que caben en un registro --, y sin declararlo la suma
+         * que lo produjo se puede mover por debajo de la que lo usa. */
+        for (const char *m : {"adc", "sbc", "rsc", "rrx"}) {
+            AsmEffects e = E({}, 0x1, false, false);
+            e.reads_flags = true;
+            add(m, std::move(e));
+        }
+        // Comparar: escriben banderas sin sufijo `s` y no tocan sus operandos.
+        for (const char *m : {"cmp", "cmn", "tst", "teq"})
+            add(m, E({}, /*wmask=*/0x0, /*mem=*/false, /*flags=*/true));
+        // Cargas: escriben su destino y leen memoria (siempre con corchetes).
+        for (const char *m : {"ldr", "ldrb", "ldrh", "ldrsb", "ldrsh", "ldrd",
+                              "ldrt", "ldrbt"})
+            add(m, E({}, /*wmask=*/0x1, /*mem=*/true, /*flags=*/false));
+        /* Almacenes: el operando ESCRITO es el de memoria, que en A32 es el
+         * segundo (`str r0, [r1]`) igual que en A64. */
+        for (const char *m : {"str", "strb", "strh", "strd", "strt", "strbt"})
+            add(m, E({}, /*wmask=*/0x2, /*mem=*/true, /*flags=*/false));
+        /* Transferencia MULTIPLE y pila.  Acceden por el registro base, que aqui
+         * es un OPERANDO y no uno fijo, asi que de momento se declara el acceso
+         * sin poder atribuirlo: decir que tocan memoria es cierto, decir por
+         * donde requiere nombrar operandos y eso todavia no se puede. */
+        for (const char *m : {"ldm", "ldmia", "ldmib", "ldmda", "ldmdb", "pop"})
+            add(m, E({}, /*wmask=*/0x0, /*mem=*/true, /*flags=*/false));
+        for (const char *m : {"stm", "stmia", "stmib", "stmda", "stmdb", "push"})
+            add(m, E({}, /*wmask=*/0x0, /*mem=*/true, /*flags=*/false));
+        /* Control.  Como en A64, la direccion de retorno va a un REGISTRO (`lr`),
+         * no a la pila: `bl`/`blx` lo escriben y no tocan memoria por eso. */
+        add("b", E({}, 0x0, false, false));
+        add("bx", E({}, 0x0, false, false));
+        add("bl", E({"x30"}, 0x0, /*mem=*/false, /*flags=*/false, /*call=*/true));
+        add("blx", E({"x30"}, 0x0, /*mem=*/false, /*flags=*/false, /*call=*/true));
+        // Barreras: ORDENAN y no mueven datos.
+        for (const char *m : {"dmb", "dsb", "isb"}) {
+            AsmEffects e = E({}, 0x0, false, false);
+            e.barrier = true;
+            add(m, std::move(e));
+        }
+        // Sin efecto observable.
+        for (const char *m : {"nop", "yield", "wfe", "wfi", "sev"})
+            add(m, E({}, 0x0, false, false));
+        /* `svc` (Linux A32): LEE el numero de servicio en `r7` y los argumentos en
+         * `r0`..`r6`; ESCRIBE el resultado en `r0`.  Sin los reads, un
+         * `register("r0")` no viviria hasta aqui y el argumento no se colocaria. */
+        add("svc", E({"r0"}, 0x0, /*mem=*/true, /*flags=*/false, /*call=*/true,
+                     {"r7", "r0", "r1", "r2", "r3", "r4", "r5", "r6"}));
+        // Estado del procesador.
+        add("mrs", E({}, 0x1, false, false));
+        add("msr", E({}, 0x0, false, true)); // puede reescribir las banderas
+        return t;
+    }();
+    return table;
+}
+
+/**
+ * @brief Separa un mnemonico A32 en su base, su sufijo `s` y su condicion.
+ *
+ * `addeqs` no existe: el orden es base + `s` + condicion (`addseq`).  Y hay bases
+ * que TERMINAN en una condicion -- `teq` acaba en `eq` -- o en `s` -- `bics`,
+ * `movs` --, asi que primero se prueba el mnemonico ENTERO contra la tabla: si ya
+ * es una base, no hay nada que separar.  Sin ese primer intento, `teq` se leeria
+ * como una `t` condicional que no existe.
+ *
+ * @param m         Mnemonico en minusculas.
+ * @param base      Sale con la base reconocida.
+ * @param con_s     Sale a true si llevaba el sufijo que actualiza banderas.
+ * @param con_cond  Sale a true si llevaba condicion (o sea, si DEPENDE de ellas).
+ * @return false si la base no esta en la tabla.
+ */
+bool arm32_decompose(const std::string &m, std::string &base, bool &con_s,
+                      bool &con_cond) {
+    const EffTable &t = arm32_effects_table();
+    con_s = false;
+    con_cond = false;
+    if (t.find(m) != t.end()) { // ya es una base: `teq`, `bl`, `push`...
+        base = m;
+        return true;
+    }
+    static const char *kCond[] = {"eq", "ne", "cs", "hs", "cc", "lo", "mi",
+                                  "pl", "vs", "vc", "hi", "ls", "ge", "lt",
+                                  "gt", "le", "al"};
+    std::string resto = m;
+    for (const char *c : kCond) {
+        const size_t n = std::strlen(c);
+        if (resto.size() > n && resto.compare(resto.size() - n, n, c) == 0) {
+            resto.resize(resto.size() - n);
+            con_cond = true;
+            break;
+        }
+    }
+    if (t.find(resto) != t.end()) { // base + condicion
+        base = resto;
+        return true;
+    }
+    if (!resto.empty() && resto.back() == 's') { // base + `s` [+ condicion]
+        resto.pop_back();
+        if (t.find(resto) != t.end()) {
+            base = resto;
+            con_s = true;
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * @brief Tabla de efectos RISC-V (RV64I + M + A).
+ *
+ * La que mas separa el modelo del de x86, y por eso es la que mejor comprueba
+ * que no se le ha escrito encima: RISC-V **no tiene registro de banderas**.  Una
+ * rama compara dos registros y salta; no hay nada que leer ni que destruir, asi
+ * que ninguna entrada de aqui toca banderas -- y un modelo que diera por hecho
+ * que una rama condicional las lee se inventaria una dependencia que no existe.
+ *
+ * La memoria tambien se escribe distinto: `desplazamiento(base)`, sin corchetes.
+ * De reconocerla se encarga @ref asm_is_memory, que pregunta por la sintaxis de
+ * la arquitectura en vez de buscar la de otra.
+ */
+const EffTable &riscv_effects_table() {
+    static const EffTable table = [] {
+        EffTable t;
+        auto add = [&t](const char *m, AsmEffects e) {
+            e.known = true;
+            t[m] = std::move(e);
+        };
+        auto E = [](std::initializer_list<const char *> wr, uint8_t wmask,
+                    bool mem, bool call = false,
+                    std::initializer_list<const char *> rd = {}) {
+            AsmEffects e;
+            for (const char *w : wr)
+                e.implicit_write.emplace_back(w);
+            for (const char *r : rd)
+                e.implicit_read.emplace_back(r);
+            e.operand_write_mask = wmask;
+            e.touches_mem = mem;
+            e.is_call = call;
+            return e; // sin banderas: la arquitectura no las tiene
+        };
+        /* Aritmetica, logica y desplazamiento: escriben su primer operando.  Las
+         * formas `w` operan sobre 32 bits en RV64; el efecto es el mismo. */
+        for (const char *m : {"add", "addi", "addw", "addiw", "sub", "subw",
+                              "and", "andi", "or", "ori", "xor", "xori",
+                              "sll", "slli", "sllw", "slliw", "srl", "srli",
+                              "srlw", "srliw", "sra", "srai", "sraw", "sraiw",
+                              "slt", "slti", "sltu", "sltiu", "lui", "auipc",
+                              "mul", "mulh", "mulhu", "mulhsu", "mulw",
+                              "div", "divu", "divw", "divuw",
+                              "rem", "remu", "remw", "remuw",
+                              // Pseudoinstrucciones de uso corriente.
+                              "li", "mv", "not", "neg", "negw", "seqz", "snez",
+                              "sltz", "sgtz", "sext.w", "zext.b"})
+            add(m, E({}, /*wmask=*/0x1, /*mem=*/false));
+        // Cargas: escriben su destino y leen memoria.
+        for (const char *m : {"lb", "lh", "lw", "ld", "lbu", "lhu", "lwu",
+                              "flw", "fld"})
+            add(m, E({}, /*wmask=*/0x1, /*mem=*/true));
+        /* Almacenes: el operando ESCRITO es el de memoria, que aqui es el
+         * segundo (`sd a0, 8(a1)`). */
+        for (const char *m : {"sb", "sh", "sw", "sd", "fsw", "fsd"})
+            add(m, E({}, /*wmask=*/0x2, /*mem=*/true));
+        /* Ramas: comparan DOS REGISTROS y no miran ninguna bandera.  Que no
+         * declaren nada no es que falte informacion -- es el hecho. */
+        for (const char *m : {"beq", "bne", "blt", "bge", "bltu", "bgeu",
+                              "beqz", "bnez", "blez", "bgez", "bltz", "bgtz"})
+            add(m, E({}, /*wmask=*/0x0, /*mem=*/false));
+        /* Saltos con enlace: guardan la direccion de retorno en un REGISTRO
+         * (`ra`), no en la pila, igual que ARM. */
+        add("jal", E({"ra"}, 0x0, /*mem=*/false, /*call=*/true));
+        add("jalr", E({"ra"}, 0x0, /*mem=*/false, /*call=*/true));
+        add("call", E({"ra"}, 0x0, /*mem=*/false, /*call=*/true));
+        add("j", E({}, 0x0, false));
+        add("jr", E({}, 0x0, false));
+        add("ret", E({}, 0x0, /*mem=*/false, /*call=*/false, {"ra"}));
+        // Barreras: ORDENAN y no mueven datos.
+        for (const char *m : {"fence", "fence.i", "fence.tso"}) {
+            AsmEffects e = E({}, 0x0, false);
+            e.barrier = true;
+            add(m, std::move(e));
+        }
+        /* Atomicas: reserva/condicional y las AMO.  Escriben su destino, tocan
+         * memoria y ORDENAN.  La memoria va en el ultimo operando. */
+        for (const char *m : {"lr.w", "lr.d"}) {
+            AsmEffects e = E({}, /*wmask=*/0x1, /*mem=*/true);
+            e.barrier = true;
+            add(m, std::move(e));
+        }
+        for (const char *m : {"sc.w", "sc.d"}) {
+            // `sc.d rd, rs2, (rs1)`: estado en op0 + memoria en op2.
+            AsmEffects e = E({}, /*wmask=*/0x5, /*mem=*/true);
+            e.barrier = true;
+            add(m, std::move(e));
+        }
+        for (const char *m : {"amoadd.w", "amoadd.d", "amoswap.w", "amoswap.d",
+                              "amoand.w", "amoand.d", "amoor.w", "amoor.d",
+                              "amoxor.w", "amoxor.d", "amomax.w", "amomax.d",
+                              "amomin.w", "amomin.d", "amomaxu.w", "amomaxu.d",
+                              "amominu.w", "amominu.d"}) {
+            AsmEffects e = E({}, /*wmask=*/0x5, /*mem=*/true);
+            e.barrier = true;
+            add(m, std::move(e));
+        }
+        /* Llamada al sistema: LEE el numero de servicio en `a7` y los argumentos
+         * en `a0`..`a5`; ESCRIBE el resultado en `a0`. */
+        add("ecall", E({"a0"}, 0x0, /*mem=*/true, /*call=*/true,
+                       {"a7", "a0", "a1", "a2", "a3", "a4", "a5"}));
+        add("ebreak", E({}, 0x0, false, /*call=*/true));
+        // Sin efecto observable.
+        add("nop", E({}, 0x0, false));
+        return t;
+    }();
+    return table;
+}
+
 /// @c true si @p arch es una variante x86 (16/32/64 comparten tabla).
-bool es_x86(const std::string &arch) {
+bool is_x86(const std::string &arch) {
     return arch.rfind("x86", 0) == 0 || arch.empty();
+}
+
+/**
+ * @brief La tabla escrita a mano de @p arch, o @c nullptr si no hay ninguna.
+ *
+ * Devolver @c nullptr es una respuesta, y es la correcta para una ISA sin tabla.
+ * Lo que habia antes era un `x86 ? x86 : arm64`, o sea que arm32 y RISC-V se
+ * contestaban con la tabla de arm64: un `casal` -- que solo existe en arm64 --
+ * salia CONOCIDO al compilar para RISC-V, con los efectos de otra arquitectura
+ * dados por ciertos.  Y de paso tapaba el camino bueno: sin tabla, quien pregunta
+ * cae en la BASE DE INSTRUCCIONES, que si es multi-ISA y contesta por forma para
+ * la arquitectura de verdad.
+ */
+const EffTable *table_for_arch(const std::string &arch) {
+    if (is_x86(arch)) return &x86_effects_table();
+    if (arch == "arm64" || arch == "aarch64") return &arm64_effects_table();
+    if (arch == "arm" || arch == "arm32") return &arm32_effects_table();
+    if (arch.rfind("riscv", 0) == 0) return &riscv_effects_table();
+    return nullptr; // lo que venga: sin tabla no se afirma, contesta la base.
+}
+
+/// @c true si @p arch es A32 (donde el mnemonico lleva dentro parte del efecto).
+bool is_arm32(const std::string &arch) {
+    return arch == "arm" || arch == "arm32";
 }
 
 } // namespace
@@ -956,8 +1339,31 @@ AsmEffects asm_effects_for(const std::string &mnemonic,
     for (char c : mnemonic)
         m.push_back((char)std::tolower((unsigned char)c));
 
-    const bool x86 = es_x86(arch);
-    const EffTable &table = x86 ? x86_effects_table() : arm64_effects_table();
+    const bool x86 = is_x86(arch);
+    const EffTable *tabla = table_for_arch(arch);
+    if (tabla == nullptr) {
+        /* Sin tabla para esta ISA no se afirma nada: el `known=false` es lo que
+         * hace que quien pregunta consulte la base de instrucciones por la ISA
+         * correcta en vez de quedarse con una respuesta de otra. */
+        AsmEffects sin_tabla;
+        return sin_tabla;
+    }
+    const EffTable &table = *tabla;
+    /* En A32 el mnemonico lleva dentro parte del efecto: la condicion dice que
+     * DEPENDE de las banderas y el sufijo `s` que las ESCRIBE.  Se descompone en
+     * vez de tabular base x condicion x `s`, que serian miles de entradas. */
+    if (is_arm32(arch)) {
+        std::string base;
+        bool con_s = false, con_cond = false;
+        if (arm32_decompose(m, base, con_s, con_cond)) {
+            AsmEffects e = table.find(base)->second;
+            if (con_s) e.writes_flags = true;
+            if (con_cond) e.reads_flags = true;
+            return e;
+        }
+        AsmEffects unknown;
+        return unknown;
+    }
     auto it = table.find(m);
     if (it != table.end()) return it->second;
 
@@ -986,10 +1392,43 @@ AsmEffects asm_effects_for(const std::string &mnemonic,
             e.known = true;
             return e;
         }
+        /* Y los SALTOS condicionales, por el mismo motivo y con la misma
+         * consecuencia: un `je` depende de la bandera que dejo el `cmp`, y si no
+         * lo declara, la comparacion no tiene quien la use -- se puede mover por
+         * debajo del salto, o eliminarse por muerta --.  Es el mismo hueco que
+         * tenia `b.CC` en arm64.
+         *
+         * `jmp` no: no mira nada.  Y `jcxz`/`jecxz`/`jrcxz` miran el REGISTRO
+         * contador, no las banderas; meterlas en el mismo saco les atribuiria una
+         * dependencia que no tienen. */
+        if (m.size() > 1 && m[0] == 'j' && m != "jmp" && m != "jcxz" &&
+            m != "jecxz" && m != "jrcxz") {
+            AsmEffects e;
+            e.reads_flags = true;
+            e.known = true;
+            return e;
+        }
+        /* `loop` cuenta con `rcx`; sus formas condicionales miran ADEMAS la
+         * bandera de cero.  Las tres escriben `rcx` al decrementarlo. */
+        if (m == "loop" || m == "loope" || m == "loopne" || m == "loopz" ||
+            m == "loopnz") {
+            AsmEffects e;
+            e.implicit_read.emplace_back("rcx");
+            e.implicit_write.emplace_back("rcx");
+            e.reads_flags = m != "loop";
+            e.known = true;
+            return e;
+        }
     } else {
-        // arm64: b.CC (b.eq/b.ne/...) es una rama que solo lee flags.
+        /* arm64: b.CC (b.eq/b.ne/...) es una rama que solo LEE las banderas.
+         *
+         * Lo decia el comentario y no lo decia el codigo: devolvia un efecto
+         * vacio.  Con eso, el salto no dependia de nada y la comparacion que lo
+         * decide se podia mover por debajo de el, o eliminarse por no tener quien
+         * la use.  Es la diferencia con `cbz`, que mira un REGISTRO. */
         if (m.rfind("b.", 0) == 0 && m.size() > 2) {
             AsmEffects e;
+            e.reads_flags = true;
             e.known = true;
             return e;
         }
@@ -1047,11 +1486,55 @@ std::string asm_base_de_memoria(const std::string &operando,
     return asm_parse_memoria(operando, arch).base;
 }
 
+bool asm_is_memory(const std::string &operando, const std::string &arch) {
+    if (operando.find('[') != std::string::npos) return true;
+    /* RISC-V escribe el acceso `desplazamiento(base)`: `0(a0)`, `-8(sp)`,
+     * `8($1)`.  El parentesis solo cuenta como acceso en esa sintaxis; en x86 un
+     * parentesis no aparece en un operando de memoria. */
+    if (arch.rfind("riscv", 0) != 0) return false;
+    const size_t p = operando.find('(');
+    return p != std::string::npos && operando.find(')', p) != std::string::npos;
+}
+
 AsmMemOperando asm_parse_memoria(const std::string &operando,
                                  const std::string &arch) {
     AsmMemOperando m;
     const size_t a = operando.find('[');
-    if (a == std::string::npos) return m;
+    if (a == std::string::npos) {
+        /* La forma de RISC-V: `desplazamiento(base)`.  El desplazamiento es
+         * siempre una constante -- no hay indice ni escala, la arquitectura no
+         * los tiene --, asi que se lee entero y queda RECONOCIDO: decir que no se
+         * pudo leer obligaria a suponer lo peor de toda la memoria cuando lo que
+         * hay delante es un acceso perfectamente acotado. */
+        const size_t p = operando.find('(');
+        const size_t q = p == std::string::npos ? p : operando.find(')', p);
+        if (!asm_is_memory(operando, arch) || q == std::string::npos) return m;
+        std::string disp = operando.substr(0, p);
+        while (!disp.empty() && std::isspace((unsigned char)disp.front()))
+            disp.erase(0, 1);
+        while (!disp.empty() && std::isspace((unsigned char)disp.back()))
+            disp.pop_back();
+        if (!disp.empty()) {
+            try {
+                m.desplazamiento = std::stoll(disp, nullptr, 0);
+            } catch (...) {
+                return m; // desplazamiento que no es una constante: no se afirma
+            }
+        }
+        std::string base = operando.substr(p + 1, q - p - 1);
+        while (!base.empty() && std::isspace((unsigned char)base.front()))
+            base.erase(0, 1);
+        while (!base.empty() && std::isspace((unsigned char)base.back()))
+            base.pop_back();
+        if (base.empty()) return m;
+        /* Un marcador `$N` se devuelve tal cual -- el registro aun no esta
+         * elegido, pero el marcador ya identifica de que operando se trata --; un
+         * nombre de registro se canonicaliza. */
+        m.base = base[0] == '$' ? base : asm_canonical_reg(base, arch);
+        if (m.base.empty()) return m;
+        m.reconocido = true;
+        return m;
+    }
     size_t i = a + 1;
     while (i < operando.size() && std::isspace((unsigned char)operando[i])) ++i;
     /* Marcador `$N`: el registro aun no esta elegido -- lo elige el asignador

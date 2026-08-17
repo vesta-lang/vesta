@@ -56,7 +56,7 @@ namespace {
 
 /// Cobertura minima exigida, en tanto por mil.  SUBIRLO al cubrir mas; bajarlo es
 /// admitir un retroceso, y para eso hay que decir por que en el commit.
-constexpr int kMinCoveragePerMille = 164; // medido 2026-08-13: 318 de 1930 x86
+constexpr int kMinCoveragePerMille = 178; // medido 2026-08-17: 344 de 1930 x86
 
 /* El color y los veredictos son de la utilidad comun (@c tests/util/test_report.h):
  * estaban copiados aqui y en el test de efectos, que es como dos informes del
@@ -171,7 +171,12 @@ Coverage measure(vx::instr_db::Isa isa, const vx::instr_db::IsaData &db,
          * preguntarselo daba la misma respuesta para los dos y aqui se doblaba
          * una sola bandera.  La forma si lo sabe: dice cual de sus operandos es
          * el de memoria y en que rol. */
-        f.reads_flags = e.touches_flags;
+        /* Las banderas, TAMBIEN por sentido, y de la misma fuente que la memoria:
+         * la forma.  Salian las dos del mismo bit, asi que un `add` -- que las
+         * ESCRIBE -- se imprimia como que las lee, que es justo al reves. */
+        vx::instr_db::flags_of(isa, fid, f.reads_flags, f.writes_flags);
+        f.reads_flags = f.reads_flags || e.reads_flags;
+        f.writes_flags = f.writes_flags || e.writes_flags;
         f.barrier = e.barrier;
         f.call = e.is_call;
         f.align_req = e.align_req;

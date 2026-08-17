@@ -192,7 +192,7 @@ FunctionFingerprint compute_fingerprint(const ir::IrFunction &fn,
                  * de QUE memoria se toca.  El nombre lo dice para que se vea
                  * que es una eleccion y no un olvido. */
                 const vx::AsmBlockEffects e =
-                    vx::asm_analyze_block_sin_clases(ins.func_name, arch);
+                    vx::asm_analyze_block_no_classes(ins.func_name, arch);
                 // El marco EXPLICITO (push/pop/sub rsp con inmediato) SI se ve en
                 // el texto -> se cuenta en el parcial medido.
                 if (e.explicit_stack_bytes > 0)

@@ -199,7 +199,7 @@ int64_t stack_delta(const std::vector<std::string> &toks, size_t mi,
 
 } // namespace
 
-AsmBlockEffects asm_analyze_block_sin_clases(const std::string &nasm_body,
+AsmBlockEffects asm_analyze_block_no_classes(const std::string &nasm_body,
                                   const std::string &arch) {
     return asm_analyze_block(nasm_body, arch, {});
 }
@@ -262,7 +262,12 @@ AsmBlockEffects asm_analyze_block(
         size_t slpos = line.find("//");
         if (slpos != std::string::npos) line = line.substr(0, slpos);
 
-        const bool line_has_mem = line.find('[') != std::string::npos;
+        /* Un acceso a memoria se escribe distinto en cada arquitectura -- `[base]`
+         * en x86 y ARM, `desplazamiento(base)` en RISC-V --, asi que se pregunta
+         * por la sintaxis en vez de buscar el corchete de una dentro del texto de
+         * otra: buscarlo dejaba a RISC-V sin ningun acceso reconocido, ni sus
+         * cargas ni sus almacenes. */
+        const bool line_has_mem = vx::asm_is_memory(line, arch);
 
         auto toks = tokenize_line(line);
         if (toks.empty()) continue;
@@ -385,13 +390,47 @@ AsmBlockEffects asm_analyze_block(
          * afirmar sobre una forma que no se reconocio es peor que no afirmar. */
         if (!eff.known) {
             const vx::instr_db::AsmInsnSem sem = vx::instr_db::asm_insn_sem(
-                isa_de_arch(arch), line, /*ua_id=*/0);
+                isa_of_arch(arch), line, /*ua_id=*/0);
             if (sem.modeled) {
                 eff.known = true;
                 eff.touches_mem = sem.reads_mem || sem.writes_mem;
                 eff.writes_flags = sem.writes_flags;
                 eff.reads_flags = sem.reads_flags;
-                eff.barrier = sem.barrier;
+                /* QUE clase de instruccion es -- rama, llamada, barrera -- lo dice
+                 * la forma, no su nombre.
+                 *
+                 * Se estaba decidiendo por el nombre, y un nombre solo se reconoce
+                 * en la arquitectura para la que se escribio la lista: `call` y
+                 * `syscall` de x86, `bl` y `b.eq` de arm64.  Un `bl` de A32 o un
+                 * `ecall` de RISC-V no salian como llamada, y un `beq` de RISC-V no
+                 * salia como rama -- con lo que el seguimiento de punteros seguia
+                 * dando por buena la distancia de un solo camino habiendo dos.
+                 *
+                 * La base marca cada forma con lo que es, y eso vale para las
+                 * cuatro arquitecturas sin una lista de nombres por cada una. */
+                const uint16_t ovl = vx::instr_db::overlay_of(isa_of_arch(arch),
+                                                              sem.form_id);
+                if ((ovl & (vx::instr_db::OVL_CALL |
+                            vx::instr_db::OVL_SYSCALL)) != 0u)
+                    eff.is_call = true;
+                if ((ovl & vx::instr_db::OVL_BRANCH) != 0u) {
+                    res.has_branch = true;
+                    // Con dos caminos, la distancia que diga el texto es la de uno.
+                    seguimiento_valido = false;
+                }
+                /* Y ORDENAR es otra cosa: una rama no es una barrera de memoria.
+                 * La base junta las dos bajo un mismo `barrier`, asi que aqui se
+                 * mira el motivo concreto -- barrera, serializante, atomica, o
+                 * adquisicion/liberacion -- y no el resumen, que dejaba cualquier
+                 * salto pareciendo una valla para la memoria. */
+                const uint16_t kOrdena =
+                    vx::instr_db::OVL_BARRIER | vx::instr_db::OVL_SERIALIZING |
+                    vx::instr_db::OVL_ATOMIC | vx::instr_db::OVL_LL_SC |
+                    vx::instr_db::OVL_MEM_ACQUIRE |
+                    vx::instr_db::OVL_MEM_RELEASE |
+                    vx::instr_db::OVL_MEM_SEQ_CST |
+                    vx::instr_db::OVL_NO_REORDER;
+                eff.barrier = (ovl & kOrdena) != 0u;
                 for (const std::string &r : sem.reads)
                     eff.implicit_read.push_back(r);
                 for (const std::string &w : sem.writes)
@@ -400,7 +439,7 @@ AsmBlockEffects asm_analyze_block(
                  * lo que distingue el destino de las fuentes. */
                 for (size_t k = 0; k < 8; ++k) {
                     bool lee_op = false, escribe_op = false;
-                    if (!vx::instr_db::explicit_operand(isa_de_arch(arch),
+                    if (!vx::instr_db::explicit_operand(isa_of_arch(arch),
                                                           sem.form_id, k, lee_op,
                                                           escribe_op))
                         break;
@@ -453,7 +492,7 @@ AsmBlockEffects asm_analyze_block(
                 int idx_mem = -1;
                 bool varios = false;
                 for (size_t k = 0; k < ops.size(); ++k)
-                    if (ops[k].find('[') != std::string::npos) {
+                    if (vx::asm_is_memory(ops[k], arch)) {
                         if (idx_mem >= 0) varios = true;
                         else idx_mem = static_cast<int>(k);
                     }

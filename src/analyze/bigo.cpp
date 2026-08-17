@@ -453,7 +453,7 @@ CostResult analyze_function(const ir::IrFunction &fn) {
              * recorre tantos bytes como diga su contador sin un solo salto.  El
              * grafo no lo ve, la extension del acceso si. */
             if (d == 0) {
-                const vx::AsmBlockEffects ef = vx::asm_analyze_block_sin_clases(
+                const vx::AsmBlockEffects ef = vx::asm_analyze_block_no_classes(
                     cuerpo, vx::asm_arch_actual());
                 for (const vx::AsmBlockEffects::Acceso &a : ef.accesos)
                     if (!a.extension.una_vez()) { d = 1; break; }

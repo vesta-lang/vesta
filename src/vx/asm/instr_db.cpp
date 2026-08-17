@@ -175,6 +175,20 @@ ParsedOp parse_operand(Isa isa, const std::string &token) {
     }
     // x86/ARM: memoria [...].
     if (low.find('[') != std::string::npos) return ParsedOp{OP_MEM, 0};
+    /* Marcador de operando del compilador (`$0`, `$1`...): es un REGISTRO.
+     *
+     * Se clasificaba como inmediato -- no empieza por letra ni por digito --, y
+     * con eso el emparejador elegia una forma con operando de memoria: un
+     * `pext $0, $1, $2` acababa declarando que lee y escribe memoria, que es
+     * justo lo que convierte un bloque en una barrera.  Cuando el operando acaba
+     * siendo memoria, en el texto lleva sus corchetes y lo coge la regla de
+     * arriba; un marcador PELADO siempre es un registro.
+     *
+     * El `$` a secas y el `$$` de NASM (la direccion de aqui, el principio de la
+     * seccion) no son marcadores: llevan digito detras solo los nuestros. */
+    if (low.size() > 1 && low[0] == '$' &&
+        std::isdigit((unsigned char)low[1]))
+        return ParsedOp{OP_REG, 0};
     // inmediato ARM (#imm) o numero.
     std::string num = low;
     if (!num.empty() && num[0] == '#') num.erase(0, 1);

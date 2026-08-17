@@ -89,27 +89,24 @@ std::string asm_canonical_reg(const std::string &raw, const std::string &arch);
 std::string asm_arch_actual();
 
 /**
- * @brief La ISA del objetivo activo, para preguntarle a la base de
- *        instrucciones.
- *
- * Sale del MISMO sitio que los registros -- el objetivo que se compila, no la
- * maquina donde corre el compilador --, y estaba definida sin declarar, asi que
- * cada consumidor nuevo se veia obligado a repetir la traduccion de nombre de
- * arquitectura a ISA.  Dos copias de esa tabla son dos respuestas distintas en
- * cuanto una se quede atras.
- */
-/// La ISA de un nombre de arquitectura cualquiera (no solo el objetivo activo).
-instr_db::Isa isa_de_arch(const std::string &arch);
-
-/**
  * @brief La ISA de un nombre de arquitectura cualquiera, no solo del objetivo.
  *
  * Quien analiza un bloque recibe SU arquitectura, no la activa, asi que necesita
  * poder traducirla sin repetir la correspondencia: dos copias de la misma tabla
  * se separan, y el sintoma seria leer la base de instrucciones de otra ISA.
+ *
+ * Estaba declarada DOS veces, con dos comentarios distintos que decian lo mismo:
+ * el aviso de que una regla en dos sitios acaba siendo dos reglas, aplicado a su
+ * propia declaracion.
  */
-instr_db::Isa isa_de_arch(const std::string &arch);
+instr_db::Isa isa_of_arch(const std::string &arch);
 
+/**
+ * @brief La ISA del objetivo ACTIVO, para preguntarle a la base.
+ *
+ * Sale del mismo sitio que los registros: el objetivo que se compila, no la
+ * maquina donde corre el compilador.
+ */
 instr_db::Isa isa_actual();
 
 /**
@@ -162,6 +159,21 @@ struct AsmMemOperando {
     /// que no se reconoce).
     bool reconocido = false;
 };
+
+/**
+ * @brief Si @p operando es un acceso a MEMORIA en la sintaxis de @p arch.
+ *
+ * La forma de escribir un acceso es de cada arquitectura y no se puede buscar la
+ * de una dentro del texto de otra: x86 y ARM lo escriben `[base + ...]`, y
+ * RISC-V lo escribe `desplazamiento(base)`, sin un corchete a la vista.  Buscar
+ * solo el corchete dejaba a RISC-V sin ningun acceso reconocido -- ni sus cargas
+ * ni sus almacenes --, que no es lo mismo que decir que no toca memoria: es no
+ * mirar.
+ *
+ * @param operando Texto del operando.
+ * @param arch     Arquitectura del cuerpo que se analiza.
+ */
+bool asm_is_memory(const std::string &operando, const std::string &arch);
 
 /**
  * @brief Lee un operando de memoria: base, desplazamiento, indice y escala.

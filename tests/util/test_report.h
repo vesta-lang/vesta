@@ -80,6 +80,46 @@ struct Tally {
     int exit_code() const { return failed == 0 ? 0 : 1; }
 };
 
+/// Ancho total de una linea del informe.  Lo que pase de aqui lo parte el
+/// terminal por donde le toque, y entonces dos filas se juntan visualmente y la
+/// segunda parece pertenecer a la primera -- que es peor que no imprimirla.
+constexpr int kLineWidth = 80;
+
+/**
+ * @brief Imprime @p text en una columna, partiendolo por espacios.
+ *
+ * Las continuaciones van sangradas hasta la misma columna, asi que un detalle
+ * largo sigue leyendose como una sola celda en vez de invadir la fila de abajo.
+ *
+ * @param col   Columna donde empieza el texto (lo ya impreso a su izquierda).
+ * @param text  Lo que se imprime; los cortes se buscan en los espacios.
+ * @param color Color del texto, o cadena vacia.
+ */
+inline void print_in_column(int col, const std::string &text,
+                            const char *color = "") {
+    const size_t width =
+        static_cast<size_t>(kLineWidth - col > 20 ? kLineWidth - col : 20);
+    size_t pos = 0;
+    bool first = true;
+    while (pos < text.size()) {
+        size_t take = text.size() - pos;
+        if (take > width) {
+            /* Se corta en el ultimo espacio que quepa; si no hay ninguno -- una
+             * sola palabra mas larga que la columna -- se corta a lo bruto, que
+             * es mejor que desbordar. */
+            const size_t sp = text.rfind(' ', pos + width);
+            take = (sp != std::string::npos && sp > pos) ? sp - pos : width;
+        }
+        if (!first) std::printf("%*s", col, "");
+        std::printf("%s%s%s\n", color, text.substr(pos, take).c_str(),
+                    *color != '\0' ? reset() : "");
+        pos += take;
+        while (pos < text.size() && text[pos] == ' ') ++pos;
+        first = false;
+    }
+    if (first) std::printf("\n"); // texto vacio: cerrar la linea igual
+}
+
 /// Titulo del informe.
 inline void title(const char *text) {
     std::printf("%s[%s]%s\n", bold(), text, reset());
@@ -95,8 +135,8 @@ inline void section(const char *name, const char *detail = "") {
 /// que solo ensena los fallos no dice que se comprobo, y entonces no se puede
 /// distinguir "todo bien" de "no se miro".
 inline void pass(Tally &t, const char *what, const char *detail = "") {
-    std::printf("  %sok%s   %-28s %s%s%s\n", green(), reset(), what, dim(), detail,
-                reset());
+    std::printf("  %sok%s   %-28s ", green(), reset(), what);
+    print_in_column(36, detail, dim()); // 2+2+3 del prefijo + 28 + 1
     ++t.passed;
 }
 
@@ -114,9 +154,12 @@ inline void pending(Tally &t, const char *what, const char *why) {
 inline void fail(Tally &t, const char *what, const std::string &expected,
                  const std::string &actual, const char *why) {
     std::printf("  %sFAIL%s  %-28s\n", red(), reset(), what);
-    std::printf("        esperado: %s%s%s\n", green(), expected.c_str(), reset());
-    std::printf("        real:     %s%s%s\n", red(), actual.c_str(), reset());
-    std::printf("        porque:   %s%s%s\n", dim(), why, reset());
+    std::printf("        esperado: ");
+    print_in_column(18, expected, green());
+    std::printf("        real:     ");
+    print_in_column(18, actual, red());
+    std::printf("        porque:   ");
+    print_in_column(18, why, dim());
     ++t.failed;
 }
 
