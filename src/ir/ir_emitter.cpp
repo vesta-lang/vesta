@@ -310,6 +310,28 @@ struct EmitCtx {
     // para devolver un host_ptr FRESCO (post-eventual GC move).  Asi el
     // resto del emisor recibe siempre host_ptr en regs is_gc_object,
     // independientemente de si vinieron de reg directo o de spill.
+    /**
+     * @brief EN QUE registro de la VM deja @ref load_src el valor @p vid.
+     *
+     * El mismo criterio que @ref load_src, devuelto como numero en vez de como
+     * nombre.  Hace falta cuando el valor no se va a escribir en el texto sino a
+     * DECIR: un bloque `asm` puede leer sus operandos del registro donde ya
+     * estan, y para eso hay que poder nombrar el registro, no imprimirlo.
+     *
+     * Lee el mismo estado que aquel a proposito.  Duplicar la decision seria
+     * arriesgar que el numero dicho y el registro usado se separen, y eso no
+     * falla: mueve el valor equivocado.
+     *
+     * @param vid Valor.
+     * @param scratch_idx Cual de los dos scratch usaria si estuviera derramado.
+     * @return indice del registro de la VM (0..15).
+     */
+    int load_src_reg(IrValueId vid, int scratch_idx = 0) const {
+        if (vid == IR_NO_VALUE) return 0; // r0, igual que load_src
+        if (alloc.in_reg(vid)) return alloc.reg_of(vid);
+        return (scratch_idx == 0) ? SCRATCH_REG : SCRATCH2_REG;
+    }
+
     std::string load_src(IrValueId vid, int scratch_idx = 0) {
         if (vid == IR_NO_VALUE) return "r0";
         if (alloc.in_reg(vid)) return reg_name(alloc.reg_of(vid));

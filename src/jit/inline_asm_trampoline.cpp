@@ -309,8 +309,8 @@ extern "C" uint64_t vrt_asm_micro_exec(uint64_t proc, uint64_t hash,
  * @param n     Cuantos operandos.
  */
 extern "C" uint64_t vrt_asm_micro_regs(uint64_t proc, uint64_t hash,
-                                       uint64_t eff, uint64_t locs,
-                                       uint64_t n) {
+                                       uint64_t eff, uint64_t locs0,
+                                       uint64_t locs1, uint64_t n) {
     auto *vm = reinterpret_cast<runtime::ProcessVM *>(proc);
     if (vm == nullptr) return 0;
     AsmTrampolineFn tramp = lookup_inline_asm_trampoline(hash);
@@ -329,51 +329,55 @@ extern "C" uint64_t vrt_asm_micro_regs(uint64_t proc, uint64_t hash,
         return 0;
     }
 
-    const int nops = (int)(n > vx::kAsmMaxOps ? vx::kAsmMaxOps : n);
+    const uint64_t kMax = vx::kAsmLocsPerWord * 2;
+    const int nops = (int)(n > kMax ? kMax : n);
     uint64_t *ctx = vm->asm_ctx;
     /* El contexto entero: dejar restos de un bloque anterior en las partes que
      * este no escribe seria darle entrada a un valor que nadie le paso. */
     std::memset(ctx, 0, sizeof(vm->asm_ctx));
 
-    /* De los registros de la VM al contexto del trampolin.  Sin pasar por la
-     * pila: el valor se lee de su banco y se escribe donde el codigo nativo lo
-     * espera. */
+    auto loc_de = [&](int i) -> uint16_t {
+        const uint64_t w = (i < (int)vx::kAsmLocsPerWord) ? locs0 : locs1;
+        const int k = i % (int)vx::kAsmLocsPerWord;
+        return (uint16_t)((w >> (k * 16)) & 0xFFFFu);
+    };
+
+    /* De los registros de la VM al contexto del trampolin.  Sin pila, sin tabla
+     * y sin ningun registro reservado para direccionarla: las posiciones vienen
+     * en los propios argumentos porque se conocen al compilar. */
     for (int i = 0; i < nops; ++i) {
-        const uint64_t a = locs + (uint64_t)i * vx::kAsmLocBytes;
-        const uint8_t bank = (uint8_t)vm->vm_mem.read_u8(a);
-        const uint8_t vm_reg = (uint8_t)vm->vm_mem.read_u8(a + 1);
-        const uint8_t phys = (uint8_t)vm->vm_mem.read_u8(a + 2);
-        const uint8_t flags = (uint8_t)vm->vm_mem.read_u8(a + 3);
-        if ((flags & vx::kAsmLocReads) == 0) continue; // solo escribe: nada que meter
-        if (bank == vx::kAsmBankWide) {
-            if (vm_reg >= 16 || phys >= vx::kAsmCtxVecSlots) continue;
-            vm->registers.zmm[vm_reg].read_zmm(
-                &ctx[vx::kAsmCtxGpSlots + (size_t)phys * vx::kAsmCtxVecQwords]);
+        const uint16_t p = loc_de(i);
+        if ((vx::asm_loc_flags(p) & vx::kAsmLocReads) == 0) continue;
+        const uint8_t r = vx::asm_loc_vm_reg(p);
+        const uint8_t ph = vx::asm_loc_phys(p);
+        if (vx::asm_loc_bank(p) == vx::kAsmBankWide) {
+            if (ph >= vx::kAsmCtxVecSlots) continue;
+            vm->registers.zmm[r].read_zmm(
+                &ctx[vx::kAsmCtxGpSlots + (size_t)ph * vx::kAsmCtxVecQwords]);
         } else {
-            if (vm_reg >= 16 || phys >= vx::kAsmCtxGpSlots) continue;
-            ctx[phys] = vm->registers.regs[vm_reg].qword();
+            if (ph >= vx::kAsmCtxGpSlots) continue;
+            ctx[ph] = vm->registers.regs[r].qword();
         }
     }
 
     tramp(ctx);
 
-    /* Y de vuelta, solo lo que el bloque ESCRIBE.  Devolver tambien lo que solo
-     * se lee sobreescribiria el registro de la VM con lo que el codigo nativo
-     * dejara ahi, que no es asunto suyo. */
+    /* Y de vuelta, SOLO lo que el bloque escribe.  Devolver tambien lo que
+     * unicamente se lee sobreescribiria el registro de la VM con lo que el
+     * codigo nativo dejara ahi, que no es asunto suyo -- y eso no falla,
+     * corrompe. */
     for (int i = 0; i < nops; ++i) {
-        const uint64_t a = locs + (uint64_t)i * vx::kAsmLocBytes;
-        const uint8_t bank = (uint8_t)vm->vm_mem.read_u8(a);
-        const uint8_t vm_reg = (uint8_t)vm->vm_mem.read_u8(a + 1);
-        const uint8_t phys = (uint8_t)vm->vm_mem.read_u8(a + 2);
-        const uint8_t flags = (uint8_t)vm->vm_mem.read_u8(a + 3);
-        if ((flags & vx::kAsmLocWrites) == 0) continue;
-        if (bank == vx::kAsmBankWide) {
-            if (vm_reg >= 16 || phys >= vx::kAsmCtxVecSlots) continue;
-            vm->registers.zmm[vm_reg].write_zmm(
-                &ctx[vx::kAsmCtxGpSlots + (size_t)phys * vx::kAsmCtxVecQwords]);
+        const uint16_t p = loc_de(i);
+        if ((vx::asm_loc_flags(p) & vx::kAsmLocWrites) == 0) continue;
+        const uint8_t r = vx::asm_loc_vm_reg(p);
+        const uint8_t ph = vx::asm_loc_phys(p);
+        if (vx::asm_loc_bank(p) == vx::kAsmBankWide) {
+            if (ph >= vx::kAsmCtxVecSlots) continue;
+            vm->registers.zmm[r].write_zmm(
+                &ctx[vx::kAsmCtxGpSlots + (size_t)ph * vx::kAsmCtxVecQwords]);
         } else {
-            if (vm_reg >= 16 || phys >= vx::kAsmCtxGpSlots) continue;
-            vm->registers.regs[vm_reg].qword(ctx[phys]);
+            if (ph >= vx::kAsmCtxGpSlots) continue;
+            vm->registers.regs[r].qword(ctx[ph]);
         }
     }
     return 0;

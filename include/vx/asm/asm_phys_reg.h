@@ -101,16 +101,42 @@ static constexpr uint32_t kAsmDescBytes = 8;
  * ida, las cargas de vuelta y el descriptor de ancho -- el ancho lo dice el
  * banco.
  */
-struct AsmOperandLoc {
-    uint8_t bank;   ///< 0 = general (`regs`), 1 = ancho (`zmm`).
-    uint8_t vm_reg; ///< indice dentro de ese banco.
-    uint8_t phys;   ///< ranura fisica que le toca en el asm.
-    uint8_t flags;  ///< bit0 = lo lee, bit1 = lo escribe.
-};
+/**
+ * @brief La posicion de un operando, empaquetada en 16 bits.
+ *
+ * Va en los ARGUMENTOS de la llamada, no en una tabla: cuatro operandos caben en
+ * un entero de 64 bits y ocho en dos, que es mas de lo que un bloque `asm` usa.
+ *
+ * Sin tabla desaparecen la reserva de pila, los almacenamientos y -- lo que de
+ * verdad costo -- la necesidad de un registro para direccionarla.  El primer
+ * intento uso los scratch del emisor para eso, y cada carga de un operando
+ * pisaba el puntero: 105 casos rotos.  Un dato que se conoce al compilar no
+ * necesita memoria ni registro; viaja como inmediato.
+ *
+ *     bits 0-3   registro de la VM (0..15)
+ *     bits 4-8   ranura fisica en el asm (0..31)
+ *     bit  9     banco: 0 general, 1 ancho
+ *     bits 10-11 lee / escribe
+ */
+inline constexpr uint16_t asm_pack_loc(uint8_t vm_reg, uint8_t phys,
+                                       uint8_t bank, uint8_t flags) {
+    return (uint16_t)((vm_reg & 0xF) | ((phys & 0x1F) << 4) |
+                      ((bank & 1) << 9) | ((flags & 0x3) << 10));
+}
 
-/// Bytes de una entrada de la tabla de posiciones.  Cuatro campos de un byte:
-/// cabe en una palabra y no hay nada que alinear.
-static constexpr uint32_t kAsmLocBytes = 4;
+inline constexpr uint8_t asm_loc_vm_reg(uint16_t p) { return (uint8_t)(p & 0xF); }
+inline constexpr uint8_t asm_loc_phys(uint16_t p) {
+    return (uint8_t)((p >> 4) & 0x1F);
+}
+inline constexpr uint8_t asm_loc_bank(uint16_t p) {
+    return (uint8_t)((p >> 9) & 1);
+}
+inline constexpr uint8_t asm_loc_flags(uint16_t p) {
+    return (uint8_t)((p >> 10) & 0x3);
+}
+
+/// Cuantas posiciones caben en cada entero que se pasa como argumento.
+static constexpr uint32_t kAsmLocsPerWord = 4;
 
 /// @name Bancos de @ref AsmOperandLoc::bank
 /// @{
