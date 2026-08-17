@@ -117,7 +117,8 @@ def to_irform(syn):
     for i, (o, (r, w)) in enumerate(zip(syn.operands, rw)):
         ops.append(ir.Operand(idx=i, kind=o.kind, width=o.width, read=r, write=w,
                               implicit=False, suppressed=False,
-                              register_set=o.register_set))
+                              register_set=o.register_set,
+                              optional=getattr(o, "optional", False)))
     # operando de memoria sintetico (r/w del pseudocodigo si esta; si no,
     # convencion Fase 1 load/store/atomico).
     if (syn.has_mem or mem_rw) and not any(o.kind == 'mem' for o in ops):

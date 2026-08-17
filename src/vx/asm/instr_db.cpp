@@ -52,9 +52,24 @@ void explicit_ops(const IsaData &t, const DbForm &f,
 /// Puntua los operandos del usuario contra los de la forma; -1 si no casan.
 int score_ops(const std::vector<ParsedOp> &user,
               const std::vector<const DbOperand *> &form) {
-    if (user.size() != form.size()) return -1;
+    /* Se pueden OMITIR los operandos opcionales del final.
+     *
+     * `ADDS <Wd>, <Wn>, <Wm>{, <shift> #<amount>}` declara cinco operandos y un
+     * `adds w0, w1, w2` escribe tres: exigir la misma cuenta hacia que la forma
+     * no casara NUNCA, y el emparejador se quedaba a nivel de mnemonico -- de ahi
+     * el rodeo de responder por el nombre --.  Los que sobran tienen que ser
+     * TODOS opcionales (bit4); si alguno no lo es, faltan operandos de verdad.
+     *
+     * Casar exacto puntua mas: entre una forma que usa todos sus operandos y otra
+     * que deja opcionales fuera, gana la que encaja del todo. */
+    if (user.size() > form.size()) return -1;
     int s = 0;
-    for (size_t i = 0; i < form.size(); ++i) {
+    if (user.size() < form.size()) {
+        for (size_t i = user.size(); i < form.size(); ++i)
+            if ((form[i]->flags & 0x10) == 0) return -1; // no era opcional
+        s -= 1; // encajo, pero dejando cosas fuera
+    }
+    for (size_t i = 0; i < user.size(); ++i) {
         const ParsedOp &u = user[i];
         const DbOperand &fo = *form[i];
         if (u.kind != fo.kind) return -1;

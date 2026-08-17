@@ -78,7 +78,10 @@ enum DbOverlayBit : uint16_t {
 struct DbOperand {
     uint8_t kind;    ///< DbOpKind.
     uint16_t width;  ///< bits (0 si no aplica).
-    uint8_t flags;   ///< bit0=read, bit1=write, bit2=implicit, bit3=suppressed.
+    uint8_t flags;   ///< bit0=read bit1=write bit2=implicit bit3=suppressed
+                     ///< bit4=OPCIONAL (se puede omitir al escribirla: en la
+                     ///< plantilla del MRAS va entre llaves).  Sin el, una forma
+                     ///< con opcionales no casa nunca por aridad.
     uint16_t regset; ///< indice a kStr del conjunto de registros permitido
                      ///< (p.ej. "AX", "DX", "GPR64", "-").  Para operandos
                      ///< IMPLICITOS de registro fijo nombra el registro

@@ -50,6 +50,14 @@ class Operand:
     implicit: bool
     suppressed: bool
     register_set: str     # conjunto permitido (distingue AL de GPR8); entra en id
+    # Se puede OMITIR al escribir la instruccion: en la plantilla del MRAS va
+    # entre llaves (`ADDS <Wd>, <Wn>, <Wm>{, <shift> #<amount>}`).  Sin esto, la
+    # forma declara cinco operandos y un `adds w0, w1, w2` escribe tres, asi que
+    # la aridad no casa nunca y el emparejador se queda a nivel de mnemonico.
+    #
+    # Va al FINAL y NO entra en @ref form_key: es como se ESCRIBE la forma, no
+    # que forma es, asi que ningun FormID se mueve.
+    optional: bool = False
 
 
 @dataclass(frozen=True)

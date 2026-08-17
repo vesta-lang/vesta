@@ -40,8 +40,12 @@ def _san(s):
 def _op_field(operands):
     parts = []
     for o in operands:
+        # bit4 = OPCIONAL: se puede omitir al escribir la instruccion (en la
+        # plantilla del MRAS va entre llaves).  Sin el, una forma con operandos
+        # opcionales no casa nunca por aridad con lo que se escribe.
         flags = (int(o.read) | (int(o.write) << 1) |
-                 (int(o.implicit) << 2) | (int(o.suppressed) << 3))
+                 (int(o.implicit) << 2) | (int(o.suppressed) << 3) |
+                 (int(getattr(o, 'optional', False)) << 4))
         rs = o.register_set.replace(";", "/").replace("|", "/").replace(",", "/")
         rs = rs.replace(" ", "_") or "-"
         parts.append("%d,%s,%d,%d,%s" % (o.idx, o.kind or "-", o.width, flags, rs))

@@ -52,6 +52,7 @@ class SynOperand:
     width: int                # bits (0 si vector escalable / no aplica)
     register_set: str         # GPR32|GPR64|GPR64_SP|SVE_Z|SVE_P|SIMD128|...
     in_memory: bool           # aparece dentro de [ ... ]
+    optional: bool = False    # va entre llaves en la plantilla: se puede omitir
 
 
 @dataclass
@@ -223,6 +224,7 @@ def parse_syntactic(path):
             asm = enc.find('asmtemplate')
             ops = []
             depth = 0
+            depth_opt = 0   # profundidad de llaves: lo que se puede omitir
             has_mem = False
             idx = 0
             if asm is not None:
@@ -232,6 +234,7 @@ def parse_syntactic(path):
                         if '[' in s:
                             has_mem = True
                         depth += s.count('[') - s.count(']')
+                        depth_opt += s.count('{') - s.count('}')
                     elif ch.tag == 'a':
                         disp = _txt(ch)
                         if _QUALIFIER.match(disp.strip()):
@@ -240,7 +243,8 @@ def parse_syntactic(path):
                         kind, width, rs = _classify(disp, field)
                         ops.append(SynOperand(disp=disp, field=field, kind=kind,
                                               width=width, register_set=rs,
-                                              in_memory=depth > 0))
+                                              in_memory=depth > 0,
+                                              optional=depth_opt > 0))
                         idx += 1
             out.append(SynForm(
                 mnemonic=mnem, encoding=ename, opcode=opcode,
