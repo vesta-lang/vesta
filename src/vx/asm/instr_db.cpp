@@ -44,7 +44,7 @@ void explicit_ops(const IsaData &t, const DbForm &f,
     for (unsigned i = 0; i < f.ops_count; ++i) {
         const DbOperand &o = t.ops[f.ops_off + i];
         if (o.flags & 0x0C) continue;          // implicit(bit2) | suppressed(bit3)
-        if (o.kind == OP_FLAGS) continue;
+        if (!op_kind_is_textual(o.kind)) continue;
         out.push_back(&o);
     }
 }
@@ -439,6 +439,106 @@ bool memory_of(Isa isa, int32_t form_id, bool &reads, bool &writes) {
     return true;
 }
 
+std::vector<ImplicitOperand> implicit_operands(Isa isa, int32_t form_id) {
+    std::vector<ImplicitOperand> out;
+    const IsaData t = tables_for(isa);
+    if (!t.forms || form_id < 0 ||
+        static_cast<unsigned>(form_id) >= t.form_count)
+        return out;
+    const DbForm &f = t.forms[form_id];
+    for (uint8_t i = 0; i < f.ops_count; ++i) {
+        const DbOperand &o = t.ops[f.ops_off + i];
+        // bit2 = implicito, bit3 = suprimido: los dos son "no esta en el texto".
+        if ((o.flags & 0x0C) == 0) continue;
+        if (o.kind != OP_REG && o.kind != OP_MEM) continue; // banderas: aparte
+        ImplicitOperand io;
+        io.is_memory = o.kind == OP_MEM;
+        io.reads = (o.flags & 0x01) != 0;
+        io.writes = (o.flags & 0x02) != 0;
+        if (!io.is_memory) {
+            /* El conjunto de registros de un operando implicito NOMBRA el
+             * registro concreto (`AX`, `EDX`, `RSP`).  Se canonicaliza para que
+             * `AX`, `EAX` y `RAX` sean el mismo registro fisico, que es lo que le
+             * importa a quien consume el efecto.
+             *
+             * Algunos nombran un conjunto interno que no es un registro
+             * (`MSRS`): ahi se deja vacio, y quien lo lea sabe que hay un efecto
+             * cuyo sitio no se puede nombrar -- que es un dato, no un fallo. */
+            const char *arch = isa == Isa::ARM64   ? "arm64"
+                               : isa == Isa::ARM32 ? "arm32"
+                               : isa == Isa::RISCV ? "riscv"
+                                                   : "x86_64";
+            const char *nombre = t.str[o.regset];
+            io.reg = asm_canonical_reg(nombre, arch);
+            /* Lo que no es un registro general SI es estado con nombre: `cr0`,
+             * `gdtr`, `msrs`, `mxcsr`, `rip`, la pila del x87.  Se conserva el
+             * nombre en minusculas en vez de perderlo: un efecto sin sitio obliga
+             * a suponer lo peor, y uno con sitio solo choca con quien toque ese
+             * mismo sitio. */
+            if (io.reg.empty() && nombre != nullptr)
+                for (const char *p = nombre; *p != '\0'; ++p)
+                    io.state.push_back(
+                        static_cast<char>(std::tolower((unsigned char)*p)));
+        }
+        out.push_back(std::move(io));
+    }
+    return out;
+}
+
+bool form_is_modelable(Isa isa, int32_t form_id) {
+    const IsaData t = tables_for(isa);
+    if (!t.forms || form_id < 0 ||
+        static_cast<unsigned>(form_id) >= t.form_count)
+        return false;
+    const DbForm &f = t.forms[form_id];
+    const char *arch = isa == Isa::ARM64   ? "arm64"
+                       : isa == Isa::ARM32 ? "arm32"
+                       : isa == Isa::RISCV ? "riscv"
+                                           : "x86_64";
+    for (uint8_t i = 0; i < f.ops_count; ++i) {
+        const DbOperand &o = t.ops[f.ops_off + i];
+        if (!op_kind_is_textual(o.kind)) continue;
+        // bit2 = implicito, bit3 = suprimido: no se escriben en el texto.
+        if ((o.flags & 0x0C) == 0) continue;
+        (void)arch;
+        (void)o;
+        /* Un registro implicito ya NO impide modelarla: la forma dice CUAL es
+         * (ver @ref implicit_operands), asi que se sabe que toca y donde.
+         *
+         * Y uno cuyo nombre no es un registro -- `MSRS`, `MXCSR` -- tampoco: sus
+         * efectos sobre registros y memoria siguen capturados, y lo que no se
+         * puede nombrar se trata como que ORDENA, o sea que nada se mueve a
+         * traves.  Rendirse entero seria tirar lo que si se sabe.
+         *
+         * Antes bastaba con que hubiera UNO para rendirse, y eso dejaba fuera a
+         * las 271 instrucciones de x86 que nadie conocia: justo las que hacen algo
+         * con `rdx:rax`.  No es que faltara el dato -- estaba en la forma --: es
+         * que no se miraba. */
+    }
+    return true;
+}
+
+bool flag_names_of(Isa isa, int32_t form_id, std::vector<std::string> &reads,
+                   std::vector<std::string> &writes) {
+    reads.clear();
+    writes.clear();
+    const IsaData t = tables_for(isa);
+    if (!t.forms || form_id < 0 ||
+        static_cast<unsigned>(form_id) >= t.form_count)
+        return false;
+    /* Sin leyenda no se puede nombrar ningun bit.  Se responde que no se sabe --
+     * y no que no toca ninguna --, que son cosas distintas: lo segundo permitiria
+     * mover una comparacion a traves de algo que la destruye. */
+    if (t.flag_names == nullptr || t.flag_count == 0) return false;
+    const DbForm &f = t.forms[form_id];
+    for (unsigned b = 0; b < t.flag_count && b < 16; ++b) {
+        if (t.flag_names[b] == nullptr) continue;
+        if ((f.rflags_set >> b) & 1u) reads.emplace_back(t.flag_names[b]);
+        if ((f.wflags_set >> b) & 1u) writes.emplace_back(t.flag_names[b]);
+    }
+    return true;
+}
+
 bool flags_of(Isa isa, int32_t form_id, bool &reads, bool &writes) {
     const IsaData t = tables_for(isa);
     if (!t.forms || form_id < 0 ||
@@ -712,7 +812,7 @@ AsmInsnSem asm_insn_sem(Isa isa, const std::string &line, uint32_t ua_id) {
     bool mem_operand = false;
     for (unsigned i = 0; i < f.ops_count; ++i) {
         const DbOperand &o = tb.ops[f.ops_off + i];
-        if (o.kind == OP_FLAGS) continue;
+        if (!op_kind_is_textual(o.kind)) continue;
         bool impl = (o.flags & 0x0C) != 0;
         if (impl) {
             if (o.kind == OP_REG) implicit_reg = true;
@@ -725,7 +825,48 @@ AsmInsnSem asm_insn_sem(Isa isa, const std::string &line, uint32_t ua_id) {
     // memoria implicita (memflags bit0 sin operando mem, p.ej. push/pop) -> no
     // modelada.
     bool implicit_mem = (f.memflags & 0x01) != 0 && !mem_operand;
-    s.modeled = arity_ok && !implicit_reg && !implicit_mem;
+    /* Los operandos IMPLICITOS, leidos de la propia forma.
+     *
+     * Un registro implicito ya no descalifica la instruccion: la forma dice CUAL
+     * es -- que una `div` usa `rdx:rax`, que una `rdmsr` escribe `eax:edx` y lee
+     * `ecx` --, asi que se anota igual que si estuviera escrito.  Rendirse aqui
+     * era dejar sin modelar justo a las instrucciones que tocan registros que
+     * nadie ve venir, que son las peligrosas: quien crea que `rdx` sigue valiendo
+     * lo de antes despues de una `div` se equivoca.
+     *
+     * Lo que no se puede situar es un implicito cuyo nombre no es un registro
+     * (`MSRS` y demas conjuntos internos).  Ahi si se marca como no modelada:
+     * hay un efecto real en un sitio que no se puede nombrar. */
+    bool mem_implicita_vista = false;
+    for (const ImplicitOperand &io : implicit_operands(isa, fid)) {
+        if (io.is_memory) {
+            mem_implicita_vista = true;
+            if (io.reads) s.reads_mem = true;
+            if (io.writes) s.writes_mem = true;
+            continue;
+        }
+        /* Registro general o ESTADO con nombre: los dos son efectos concretos y
+         * los dos se anotan.  Una instruccion privilegiada no es una caja negra
+         * -- `wrmsr` escribe `msrs`, `lgdt` escribe `gdtr`, `stmxcsr` lee
+         * `mxcsr` --, y con el nombre delante solo choca con quien toque ese
+         * mismo sitio.  Sin el, habria que dejar de mover todo a su alrededor. */
+        const std::string &donde = io.reg.empty() ? io.state : io.reg;
+        if (donde.empty()) continue;
+        std::vector<std::string> &lee =
+            io.reg.empty() ? s.reads_state : s.reads;
+        std::vector<std::string> &escribe =
+            io.reg.empty() ? s.writes_state : s.writes;
+        if (io.reads) lee.push_back(donde);
+        if (io.writes) escribe.push_back(donde);
+    }
+    (void)implicit_reg; // ya no descalifica: la forma dice cual es
+    /* Memoria que la forma toca sin decir por donde y sin operando implicito que
+     * la describa: ahi no se sabe ni el sentido, y se suponen los dos. */
+    if (implicit_mem && !mem_implicita_vista) {
+        s.reads_mem = true;
+        s.writes_mem = true;
+    }
+    s.modeled = arity_ok;
 
     if (arity_ok) {
         for (size_t k = 0; k < expl.size(); ++k) {
@@ -734,7 +875,17 @@ AsmInsnSem asm_insn_sem(Isa isa, const std::string &line, uint32_t ua_id) {
             bool rd = (f.rmask >> i) & 1;
             bool wr = (f.wmask >> i) & 1;
             if (o.kind == OP_REG) {
-                std::string cr = canon_reg(isa, toks[k]);
+                /* Un marcador `$N` se conserva TAL CUAL: no canonicaliza a ningun
+                 * registro -- todavia no hay ninguno elegido --, y meterlo por el
+                 * canonicalizador devolvia una cadena vacia que acababa en la
+                 * lista de escritos.  Un nombre vacio no dice nada y ademas se
+                 * cuela como si fuera un registro mas. */
+                const std::string &tok = toks[k];
+                std::string cr = (tok.size() > 1 && tok[0] == '$' &&
+                                  std::isdigit((unsigned char)tok[1]))
+                                     ? tok
+                                     : canon_reg(isa, tok);
+                if (cr.empty()) continue; // no se pudo nombrar: no se inventa
                 if (rd) s.reads.push_back(cr);
                 if (wr) s.writes.push_back(cr);
             } else if (o.kind == OP_MEM) {
@@ -768,6 +919,16 @@ bool asm_dep_conflict(const AsmInsnSem &a, const AsmInsnSem &b) {
         if (contains(b.reads, w) || contains(b.writes, w)) return true;
     for (const auto &w : b.writes)
         if (contains(a.reads, w)) return true;
+    /* Y el ESTADO del procesador, con las mismas tres reglas: `cr0`, `gdtr`,
+     * `msrs`, `mxcsr`, la pila del x87.  Es lo que hace que modelarlo sirva de
+     * algo -- dos privilegiadas que tocan estados distintos no se estorban --, y
+     * lo que impide que una `wrmsr` se cuele por delante de la `rdmsr` que lee lo
+     * que acaba de escribir. */
+    for (const auto &w : a.writes_state)
+        if (contains(b.reads_state, w) || contains(b.writes_state, w))
+            return true;
+    for (const auto &w : b.writes_state)
+        if (contains(a.reads_state, w)) return true;
     return false;
 }
 

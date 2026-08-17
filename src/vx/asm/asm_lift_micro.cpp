@@ -147,10 +147,46 @@ void anotar_hueco_db(const std::string &insn, const char *motivo) {
     std::fprintf(stderr, "[asm-db] '%s': %s\n", insn.c_str(), motivo);
 }
 
+/**
+ * @brief ¿Es @p tok un PREFIJO y no una instruccion?
+ *
+ * `rep stosb` se partia como mnemonico `rep` con operando `stosb`, y por eso la
+ * base de datos "no lo conocia": se le preguntaba por un prefijo y se le daba
+ * una instruccion como operando.  La base SI tiene `stosb`; lo que estaba mal
+ * era la pregunta.
+ */
+bool es_prefijo(const std::string &tok) {
+    const std::string t = lower(tok);
+    return t == "rep" || t == "repe" || t == "repz" || t == "repne" ||
+           t == "repnz" || t == "lock";
+}
+
 void split_insn(const std::string &insn, std::string &mnem,
                 std::vector<std::string> &ops) {
     ops.clear();
-    size_t sp = insn.find_first_of(" \t");
+    /* Los prefijos se van con el mnemonico, no delante de el: lo que hay que
+     * consultar es la instruccion que modifican. */
+    /* Un prefijo va CON el mnemonico, no delante como si fuera otra cosa.
+     *
+     * `rep stosb` se partia en mnemonico `rep` y operando `stosb`, y de ahi
+     * salian los dos fallos: el bucle de operandos se atascaba en un `stosb`
+     * que no es ningun operando, y a la base se le preguntaba por `rep`, que no
+     * es ninguna instruccion.  Juntos, el mnemonico es `rep stosb` y la lista
+     * de operandos queda vacia, que es la verdad.
+     *
+     * Y NO se quita aqui: este es el texto que se va a emitir, y sin el `rep`
+     * la instruccion escribe un byte donde el programa pide `rcx`.  Quitarlo es
+     * cosa de la consulta, que es otra cadena. */
+    size_t ini = 0;
+    while (true) {
+        const size_t sp0 = insn.find_first_of(" \t", ini);
+        if (sp0 == std::string::npos) break;
+        if (!es_prefijo(trim(insn.substr(ini, sp0 - ini)))) break;
+        const size_t sig = insn.find_first_not_of(" \t", sp0);
+        if (sig == std::string::npos) break;
+        ini = sig;
+    }
+    size_t sp = insn.find_first_of(" \t", ini);
     if (sp == std::string::npos) { // sin operandos
         mnem = insn;
         return;
@@ -267,6 +303,7 @@ bool build_operands(
     if (toks.empty())
         return AsmMotivoOpaco::anotar(motivo, insn, "VXA022");
 
+
     tmpl = mnem;
     for (size_t k = 0; k < toks.size(); ++k) {
         /* Un operando `$N` es una variable del programa a la que todavia no se
@@ -356,16 +393,33 @@ bool build_operands(
              * describe estos registros igual que los demas --, pero vive aqui
              * porque es aqui donde se decide que se eleva. */
             ir::AsmMicroOperand op;
-            if (b->is_vector)
-                return AsmMotivoOpaco::anotar(motivo, insn, "VXA023", {toks[k]});
+            /* El banco ancho sigue sin subir, y ahora se sabe exactamente que
+             * falta.  El reparto de registros ya no es el problema -- se hace
+             * por clase, y `xmm0` no estorba a `rax` --, ni el nombrado, que ya
+             * sabe escribir xmm/ymm/zmm.  Lo que falta esta en los MOTORES:
+             * meter y sacar el valor.  Medido quitando este bail: la e2e cae en
+             * 4 casos (import_std_memory, instr_no_soportada,
+             * std_memory_variantes, asm_examples).
+             *
+             * Y el precio de que siga puesto conviene tenerlo escrito: un solo
+             * operando ancho deja opaco el BLOQUE ENTERO, y de un bloque opaco
+             * no sale ninguna exigencia de alineacion -- justo lo que estas
+             * instrucciones EXIGEN. */
             op.kind = ir::AsmOperandKind::REG;
-            op.regclass = vx::ASM_RC_GP;
+            op.regclass = b->is_vector ? vx::ASM_RC_VEC : vx::ASM_RC_GP;
+            /* Y si el registro es mas ancho de lo que cabe en el contexto, este
+             * bloque se queda opaco A PROPOSITO.  Moverlo a medias no da error:
+             * deja medio valor, y el programa sigue con la otra mitad de antes.
+             * Pasa con SVE (hasta 2048 bits) y con RVV, que ni siquiera tiene
+             * tope fijo. */
+            if (b->is_vector && !vx::asm_cabe_en_ranura(ancho_declarado(*b)))
+                return AsmMotivoOpaco::anotar(motivo, insn, "VXA023", {toks[k]});
             op.width = ancho_declarado(*b);
             op.fixed_phys = -1; // lo elige el asignador
             op.value = b->alloca_value;
             bool lee = false, escribe = false;
             uint8_t fl = 0;
-            if (instr_db::operando_explicito(isa, sem.form_id, k, lee, escribe)) {
+            if (instr_db::explicit_operand(isa, sem.form_id, k, lee, escribe)) {
                 if (lee) fl |= ir::ASM_OP_READ;
                 if (escribe) fl |= ir::ASM_OP_WRITE;
             }
@@ -441,7 +495,7 @@ bool build_operands(
         const std::string cn = lower(toks[k]);
         uint8_t fl = 0;
         bool lee = false, escribe = false;
-        if (instr_db::operando_explicito(isa, sem.form_id, k, lee, escribe)) {
+        if (instr_db::explicit_operand(isa, sem.form_id, k, lee, escribe)) {
             if (lee) fl |= ir::ASM_OP_READ;
             if (escribe) fl |= ir::ASM_OP_WRITE;
         }
@@ -524,7 +578,13 @@ bool asm_lift_micro(
     ir::IrFunction &fn, uint32_t block, instr_db::Isa isa,
     const std::string &body, uint32_t line,
     const std::unordered_map<std::string, ir::IrValueId> &slot_of,
-    AsmMotivoOpaco *motivo) {
+    AsmMotivoOpaco *motivo, uint32_t *bloque_salida) {
+    /* Por donde sigue la ejecucion.  Hoy, el mismo bloque en el que se emite:
+     * un asm sin saltos empieza y acaba donde estaba.  Se contesta ANTES de
+     * cualquier salida para que quien pregunte tenga respuesta tambien cuando
+     * el bloque no se puede elevar -- ahi la ejecucion sigue igualmente, con el
+     * asm como caja, y el llamante necesita saber donde. */
+    if (bloque_salida != nullptr) *bloque_salida = block;
     const std::vector<std::string> insns = instructions(body);
     if (insns.empty())
         return AsmMotivoOpaco::anotar(motivo, std::string(), "VXA027");
@@ -618,8 +678,38 @@ bool asm_lift_micro(
                 if (p != std::string::npos) consulta.replace(p, t.size(), rep);
             }
         }
+        /* A la base se le pregunta por la INSTRUCCION, no por su prefijo.
+         *
+         * `rep stosb` se le presentaba tal cual, y lo leia como un mnemonico
+         * `rep` con un operando `stosb`: no reconocia ninguno de los dos y la
+         * daba por desconocida.  La base SI tiene `stosb` -- lo que estaba mal
+         * era la pregunta.
+         *
+         * Y se quita AQUI y no antes porque el texto que se emite tiene que
+         * conservarlo: sin el `rep`, `stosb` escribe un byte donde el programa
+         * pide `rcx`.  Son dos cadenas con dos usos, y confundirlas cambia lo
+         * que hace el programa.
+         *
+         * Con la consulta acertando, la instruccion deja de ser OPACA: sus
+         * efectos -- que toca memoria, que lee el contador -- salen de la base
+         * como los de cualquier otra.  Que la repeticion no se convierta en
+         * operaciones del IR es otra cosa: no elevarla no es no conocerla, y
+         * tratarlo igual tiraba informacion que si teniamos. */
+        std::string consulta_db = consulta;
+        {
+            size_t ini = 0;
+            while (true) {
+                const size_t sp0 = consulta_db.find_first_of(" \t", ini);
+                if (sp0 == std::string::npos) break;
+                if (!es_prefijo(trim(consulta_db.substr(ini, sp0 - ini)))) break;
+                const size_t sig = consulta_db.find_first_not_of(" \t", sp0);
+                if (sig == std::string::npos) break;
+                ini = sig;
+            }
+            if (ini != 0) consulta_db = consulta_db.substr(ini);
+        }
         instr_db::AsmInsnSem sem =
-            instr_db::asm_insn_sem(isa, consulta, (uint32_t)ua);
+            instr_db::asm_insn_sem(isa, consulta_db, (uint32_t)ua);
         if (sem.form_id < 0) {        // desconocida por la DB
             anotar_hueco_db(insn, "la base de datos no conoce esta forma");
             return AsmMotivoOpaco::anotar(motivo, insn, "VXA029");

@@ -56,7 +56,12 @@ namespace {
 
 /// Cobertura minima exigida, en tanto por mil.  SUBIRLO al cubrir mas; bajarlo es
 /// admitir un retroceso, y para eso hay que decir por que en el commit.
-constexpr int kMinCoveragePerMille = 178; // medido 2026-08-17: 344 de 1930 x86
+/* Medido 2026-08-17: las CUATRO ISA al 1000.  El numero de antes (178) medía
+ * otra cosa -- solo la tabla escrita a mano --, y con eso parecia que faltaba el
+ * 82 % de x86 cuando la base ya contestaba por casi todo.  Ahora se exige el
+ * total: bajar de aqui es que alguna instruccion dejo de tener efectos, y eso no
+ * puede pasar inadvertido. */
+constexpr int kMinCoveragePerMille = 1000;
 
 /* El color y los veredictos son de la utilidad comun (@c tests/util/test_report.h):
  * estaban copiados aqui y en el test de efectos, que es como dos informes del
@@ -78,7 +83,23 @@ constexpr int kMinCoveragePerMille = 178; // medido 2026-08-17: 344 de 1930 x86
  */
 struct Row {
     std::string mnemonic;
-    bool        covered = false;
+
+    /**
+     * @brief De donde sale lo que se sabe de esta instruccion.
+     *
+     * Contar solo las de la TABLA mide la tabla, no lo que el compilador sabe: el
+     * analisis pregunta primero a la tabla y, cuando no la conoce, a la BASE, que
+     * modela la forma sola.  Sin separarlo, la lista de "lo que falta" mezclaba
+     * trabajo real con instrucciones que ya funcionan, y la unica manera de
+     * repartir el trabajo era ir probandolas una a una.
+     *
+     * Lo que de verdad hay que escribir a mano es @ref FUENTE_NINGUNA: las que la
+     * base no puede modelar sola -- porque tienen registros implicitos, que no
+     * aparecen en el texto -- y nadie ha declarado.
+     */
+    enum Source { SOURCE_NONE = 0, SOURCE_DB, SOURCE_TABLE };
+    Source source = SOURCE_NONE;
+    bool        covered = false; ///< la conoce alguna de las dos fuentes
 
     /// Donde esta un operando.  Un inmediato no es un registro, y meterlos en el
     /// mismo saco es perder justo lo que se estaba intentando ver: `add rax, 8`
@@ -138,7 +159,8 @@ struct Coverage {
     /// Por extension ("SSE2", "AVX512EVEX", "BASE"...): TODAS sus instrucciones.
     std::map<std::string, std::vector<Row>> by_ext;
     size_t total = 0;
-    size_t known = 0;
+    size_t known = 0;      ///< las que sabe alguna de las dos fuentes
+    size_t from_table = 0; ///< de esas, las que estan escritas a mano
 };
 
 /// Recorre las clases de instruccion de @p isa y pregunta por cada nombre.
@@ -159,8 +181,20 @@ Coverage measure(vx::instr_db::Isa isa, const vx::instr_db::IsaData &db,
         Row f;
         f.mnemonic = m;
         const vx::AsmEffects e = vx::asm_effects_for(m, arch);
-        f.covered = e.known;
+        f.source = e.known ? Row::SOURCE_TABLE : Row::SOURCE_NONE;
+        /* Si la tabla no la conoce, puede conocerla la base: basta con que UNA de
+         * sus formas se pueda modelar sola.  Es exactamente lo que hace el
+         * analisis cuando la tabla no contesta. */
+        if (f.source == Row::SOURCE_NONE)
+            for (unsigned nf = 0; nf < db.iclass[i].count; ++nf)
+                if (vx::instr_db::form_is_modelable(
+                        isa, fid + static_cast<int32_t>(nf))) {
+                    f.source = Row::SOURCE_DB;
+                    break;
+                }
+        f.covered = f.source != Row::SOURCE_NONE;
         if (f.covered) ++r.known;
+        if (f.source == Row::SOURCE_TABLE) ++r.from_table;
         /* QUE declara, no solo si declara algo.  `movdqa` estaba "cubierta" y
          * decia que no tocaba memoria: un informe que no ensena los efectos no
          * habria permitido verlo.
@@ -291,10 +325,11 @@ void print_effect(const char *sense, const char *place, const std::string &who,
 void report(const char *what, const Coverage &r) {
     const int pm = per_mille(r);
     const char *tint = pm >= 800 ? GREEN : (pm >= 400 ? AMBER : RED);
-    std::printf("\n%s== %s ==%s  %s%zu de %zu%s con efectos declarados  "
-                "(%s%d.%d %%%s)\n",
+    std::printf("\n%s== %s ==%s  %s%zu de %zu%s con efectos conocidos  "
+                "(%s%d.%d %%%s)  %s%zu a mano, %zu de la base%s\n",
                 BOLD, what, RESET, BOLD, r.known, r.total, RESET, tint,
-                pm / 10, pm % 10, RESET);
+                pm / 10, pm % 10, RESET, DIM, r.from_table,
+                r.known - r.from_table, RESET);
     /* TODAS, cubiertas y sin cubrir, agrupadas por la extension a la que
      * pertenecen -- que es la unidad en la que se decide el trabajo: cubrir `AES`
      * entero son seis instrucciones, cubrir cuarenta nombres elegidos por orden
@@ -314,7 +349,10 @@ void report(const char *what, const Coverage &r) {
                     t, cov, kv.second.size(), RESET);
         if (!detail) {
             /* Sin detalle, al menos los nombres de las que faltan: son el trabajo
-             * pendiente, y una cuenta sin nombres no se puede repartir. */
+             * pendiente, y una cuenta sin nombres no se puede repartir.  Y son
+             * las que no sabe NADIE -- ni la tabla ni la base --, no las que
+             * simplemente no estan escritas a mano: la mayoria de esas ya
+             * funcionan. */
             std::string line = "       ";
             for (const Row &f : kv.second) {
                 if (f.covered) continue;

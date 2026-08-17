@@ -65,11 +65,24 @@ namespace vx {
  *         aparece una instruccion desconocida o un operando no soportado
  *         (MEM/IMM/FP/VEC/implicito) -> el llamador emite @c INLINE_ASM.
  */
+/**
+ * @param bloque_salida Si no es nulo, recibe el bloque del IR por el que SIGUE
+ *        la ejecucion despues del asm.
+ *
+ * Hoy es siempre @p block, porque un bloque sin saltos empieza y acaba en el
+ * mismo sitio.  Existe porque deja de serlo en cuanto el asm lleve flujo de
+ * control: entonces el elevado crea bloques y ramas, y la ejecucion continua en
+ * OTRO.  Sin esta salida, el codigo que va detras del `asm` se colgaria del
+ * bloque de entrada -- que ya no es donde termina -- y acabaria en una rama que
+ * no se ejecuta.  Es la unica pieza del contrato que hay que cambiar antes de
+ * poder elevar un salto, y cambiarla ahora, con el comportamiento intacto, deja
+ * el paso siguiente sin tocar a los llamantes.
+ */
 bool asm_lift_micro(
     ir::IrFunction &fn, uint32_t block, instr_db::Isa isa,
     const std::string &body, uint32_t line,
     const std::unordered_map<std::string, ir::IrValueId> &slot_of = {},
-    AsmMotivoOpaco *motivo = nullptr);
+    AsmMotivoOpaco *motivo = nullptr, uint32_t *bloque_salida = nullptr);
 
 /**
  * @brief Instrucciones que la base de datos no supo resolver en lo que va de

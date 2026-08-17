@@ -60,18 +60,45 @@ def _check_attrs(el, known, elem, unknown):
 
 
 def _flags_rw(attrib):
+    """(lee, escribe, leidas, escritas) de los atributos @c flag_* de la fuente.
+
+    La fuente lo dice POR BANDERA (@c flag_CF="w", @c flag_ZF="r",
+    @c flag_CF="cw" para las condicionales, @c flag_AF="undef") y aqui se
+    colapsaba a dos booleanos, con lo que un @c bt -- que solo deja el acarreo --
+    y un @c cmp -- que deja las seis -- salian identicos.  Se conservan los
+    nombres ademas de los booleanos: lo segundo es lo que ya habia, lo primero es
+    lo que faltaba.
+
+    @c undef se cuenta como ESCRITA: la bandera queda con un valor que no se
+    puede predecir, asi que quien la tuviera la ha perdido igual.  Decir que no
+    se toca seria lo unico que romperia.
+    """
     r = w = False
+    leidas, escritas = [], []
     for k, v in attrib.items():
-        if k.startswith("flag_"):
-            if "r" in v:
-                r = True
-            if "w" in v:
-                w = True
-    return r, w
+        if not k.startswith("flag_"):
+            continue
+        nombre = k[len("flag_"):].lower()
+        if "r" in v:
+            r = True
+            leidas.append(nombre)
+        # `w`, `cw` (condicional) y `undef` dejan la bandera cambiada o inservible.
+        if "w" in v or v == "undef":
+            w = True
+            escritas.append(nombre)
+    return (r, w, sorted(leidas, key=ir.flag_sort_key),
+            sorted(escritas, key=ir.flag_sort_key))
 
 
-def _parse_operands(el, unknown):
-    """Lista de @ref ir.Operand (los efectos derivados los da ir.derive_effects)."""
+def _parse_operands(el, unknown, flag_sets=None):
+    """Lista de @ref ir.Operand (los efectos derivados los da ir.derive_effects).
+
+    @param flag_sets Si se pasa una lista, se le anaden las banderas LEIDAS y
+                     ESCRITAS por nombre (dos listas).  Va aparte de los operandos
+                     porque es un efecto de la forma, no un operando mas -- y
+                     sobre todo porque los operandos entran en la IDENTIDAD de la
+                     forma, y meterlo ahi moveria todos los FormID.
+    """
     operands = []
     for op in el.findall("operand"):
         _check_attrs(op, _OPERAND_KNOWN, "operand", unknown)
@@ -84,9 +111,11 @@ def _parse_operands(el, unknown):
         implicit = suppressed or a.get("implicit", "0") == "1"
         width = int(a.get("width", "0") or "0")
         if kind == "flags":
-            fr, fw = _flags_rw(a)
+            fr, fw, leidas, escritas = _flags_rw(a)
             reads = reads or fr
             writes = writes or fw
+            if flag_sets is not None:
+                flag_sets.append((leidas, escritas))
         operands.append(ir.Operand(idx0, kind, width, reads, writes,
                                    implicit, suppressed, (op.text or "").strip()))
     return operands
@@ -184,13 +213,20 @@ def parse(xml_path, specs, report=None):
         iform = el.get("iform", "")
         if iform:
             _check_attrs(el, _INSTR_KNOWN, "instruction", unknown)
-            ops = _parse_operands(el, unknown)
+            flag_sets = []
+            ops = _parse_operands(el, unknown, flag_sets)
             (rm, wm, mem, imm, wf, rf) = ir.derive_effects(ops)
+            # Una forma tiene como mucho un operando de banderas; si no lo tiene,
+            # los conjuntos quedan vacios y los booleanos ya dicen que no toca
+            # ninguna.
+            leidas = ",".join(flag_sets[0][0]) if flag_sets else ""
+            escritas = ",".join(flag_sets[0][1]) if flag_sets else ""
             form = ir.InstrForm(iform, el.get("iclass", ""), el.get("asm", ""),
                                 el.get("opcode", ""), el.get("extension", ""),
                                 _encoding(el), ops, rm, wm, mem, imm, wf, rf,
                                 el.get("category", ""), el.get("summary", ""),
-                                el.get("string", ""), el.get("url", ""))
+                                el.get("string", ""), el.get("url", ""),
+                                escritas, leidas)
             key = ir.form_key(form)
             if key not in known_forms:
                 known_forms[key] = form

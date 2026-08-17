@@ -435,6 +435,12 @@ AsmBlockEffects asm_analyze_block(
                     eff.implicit_read.push_back(r);
                 for (const std::string &w : sem.writes)
                     eff.implicit_write.push_back(w);
+                /* Y el ESTADO del procesador, con su nombre: es lo que hace que
+                 * una instruccion privilegiada quede modelada en vez de opaca. */
+                for (const std::string &r : sem.reads_state)
+                    eff.implicit_state_read.push_back(r);
+                for (const std::string &w : sem.writes_state)
+                    eff.implicit_state_write.push_back(w);
                 /* El rol de cada operando EXPLICITO tambien lo dice la base, y es
                  * lo que distingue el destino de las fuentes. */
                 for (size_t k = 0; k < 8; ++k) {
@@ -766,6 +772,20 @@ AsmBlockEffects asm_analyze_block(
          * implicitos y los operandos que su mascara senala.  Se acumulan para
          * invalidar despues los accesos cuya base pise el propio bloque. */
         for (const std::string &w : eff.implicit_write) escritos.insert(w);
+        /* Y el ESTADO del procesador que toca la linea, con su nombre.  Se
+         * acumula sin repetir: un bloque que hace tres `wrmsr` escribe `msrs`,
+         * no lo escribe tres veces. */
+        auto anota_estado = [](std::vector<std::string> &dst,
+                               const std::vector<std::string> &src) {
+            for (const std::string &e : src) {
+                bool ya = false;
+                for (const std::string &v : dst)
+                    if (v == e) { ya = true; break; }
+                if (!ya) dst.push_back(e);
+            }
+        };
+        anota_estado(res.state_read, eff.implicit_state_read);
+        anota_estado(res.state_written, eff.implicit_state_write);
         {
             const std::vector<std::string> ops = operandos_de(line, mnem);
             for (size_t k = 0; k < ops.size() && k < 8; ++k) {

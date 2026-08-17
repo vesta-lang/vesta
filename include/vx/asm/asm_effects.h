@@ -374,6 +374,19 @@ struct AsmEffects {
     /// Registros por los que ESCRIBE memoria implicitamente.  Ver el anterior.
     std::vector<std::string> implicit_mem_write;
     /**
+     * @name ESTADO del procesador que no es un registro general.
+     *
+     * Nombrado -- @c "cr0", @c "gdtr", @c "idtr", @c "msrs", @c "mxcsr",
+     * @c "fsbase", @c "st(0)", @c "x87status" -- en vez de tratado como un efecto
+     * opaco.  Una instruccion privilegiada tiene efectos tan concretos como una
+     * suma, y decir CUAL toca es lo que separa "no muevas nada a su alrededor" de
+     * "solo choca con quien toque `gdtr`".
+     * @{
+     */
+    std::vector<std::string> implicit_state_read;
+    std::vector<std::string> implicit_state_write;
+    /// @}
+    /**
      * Bytes que toca CADA acceso implicito, o 0 si no se sabe.
      *
      * Lo dice la propia instruccion -- una `movsq` mueve ocho bytes y una

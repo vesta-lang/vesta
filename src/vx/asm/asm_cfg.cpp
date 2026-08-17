@@ -15,6 +15,7 @@
  * @brief Implementacion de la reconstruccion del CFG de un bloque de inline asm.
  */
 
+#include "vx/asm/asm_phys_reg.h" // nombres de registro por ISA
 #include "vx/asm/asm_cfg.h"
 
 #include "vx/asm/asm_effects.h" // asm_canonical_reg: seguir un salto calculado
@@ -355,6 +356,7 @@ AsmCfg build_asm_cfg(instr_db::Isa isa, const std::string &body) {
             cfg.unknown_terminators.push_back(first_token(cur));
         cfg.insns.push_back(std::move(in));
     }
+
 
     // Nodo de SALIDA sintetico (`nop`).  El bloque asm sale implicitamente al
     // FINAL: por fall-through de la ultima instruccion, por la rama NO-tomada de

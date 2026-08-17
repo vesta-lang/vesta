@@ -23,11 +23,42 @@
 namespace vx {
 namespace instr_db {
 
-/// Clase de operando (debe casar con @c _KIND del generador).
+/**
+ * @brief Clase de operando.  Debe casar con @c _KIND del generador.
+ *
+ * Y no casaba: el generador emite @c flags como **6** y aqui se declaraba como 7,
+ * que es el valor con el que el generador rellena lo que NO reconoce.  El
+ * comentario de los dos sitios decia que tenian que coincidir; solo faltaba que
+ * alguien los comparase.
+ *
+ * La consecuencia era silenciosa y grande: los 3893 operandos de banderas de x86
+ * no se reconocian como tales, asi que contaban como operandos ESCRITOS EN EL
+ * TEXTO.  Con uno de mas, la aridad de la forma no casa nunca con la de la linea
+ * -- `add rax, rbx` tiene dos operandos y la forma parecia tener tres --, y el
+ * emparejador se quedaba en el nivel del mnemonico en vez de resolver la forma.
+ * De ahi que casi 450 clases de x86 no se pudieran modelar.
+ */
 enum DbOpKind : uint8_t {
     OP_REG = 0, OP_MEM = 1, OP_IMM = 2, OP_AGEN = 3, OP_RELBR = 4,
-    OP_ABSBR = 5, OP_FLAGS = 7,
+    OP_ABSBR = 5,
+    OP_FLAGS = 6, ///< banderas de condicion: no se escriben en el texto.
+    /**
+     * Lo que el generador no supo clasificar (su valor por defecto).
+     *
+     * En ARM son 1357 operandos de formas como `ADD`, `ADR` o `AESE`, que no
+     * tienen nada que ver con las banderas.  Se trata igual que ellas -- no se
+     * cuenta como operando del texto -- porque es lo que venia haciendose y lo
+     * que hace que la aridad de ARM case; lo que NO se puede es seguir llamandolo
+     * banderas, que es afirmar algo falso sobre 1357 operandos.
+     */
+    OP_OTHER = 7,
 };
+
+/// @c true si @p kind no es un operando que se escriba en el texto.  Los dos
+/// casos van juntos siempre, y tenerlo en un sitio evita que uno se quede atras.
+inline bool op_kind_is_textual(uint8_t kind) {
+    return kind != OP_FLAGS && kind != OP_OTHER;
+}
 
 /// Bits de overlay (semantica que el encoding no da; casa con @c _OVL).
 enum DbOverlayBit : uint16_t {
@@ -66,6 +97,25 @@ struct DbForm {
     uint32_t ops_off;  ///< offset en el pool de operandos (>64K -> 32 bits).
     uint8_t ops_count; ///< numero de operandos.
     uint32_t opcode;   ///< opcode (indice a kStr; documentacion).
+    /**
+     * @name QUE banderas toca, no solo si toca alguna.
+     *
+     * Un bit por bandera; el nombre de cada bit esta en @ref IsaData::flag_names,
+     * que es la leyenda de ESA ISA -- `cf`/`pf`/`af`/`zf`/`sf`/`of` en x86,
+     * `n`/`z`/`c`/`v` en ARM, ninguna en RISC-V --.  El juego sale de los datos y
+     * no de una lista escrita en el codigo, que seria la de una sola.
+     *
+     * `memflags` dice SI toca alguna; esto dice CUALES, y es la diferencia entre
+     * un `bt` -- que solo deja el acarreo -- y un `cmp` -- que deja las seis --,
+     * o entre un `inc` y un `add`: `inc` no toca el acarreo, que es justo lo que
+     * permite encadenarlo con un `adc`.
+     *
+     * 0 = la fuente no lo dijo, que NO es lo mismo que no tocar ninguna.
+     * @{
+     */
+    uint16_t wflags_set;
+    uint16_t rflags_set;
+    /// @}
 };
 
 /// Rango de FormIDs con el mismo iclass (para el matcher; ordenado por nombre).
@@ -96,6 +146,11 @@ struct IsaData {
     unsigned form_count = 0;
     const DbIclassRange *iclass = nullptr;
     unsigned iclass_count = 0;
+    /// Leyenda de banderas de la ISA: el indice de cada nombre es su bit en
+    /// @ref DbForm::wflags_set y @ref DbForm::rflags_set.  Vacia en las que no
+    /// tienen banderas de condicion (RISC-V).
+    const char *const *flag_names = nullptr;
+    unsigned flag_count = 0;
 };
 
 /// Accesores de las tablas de cada ISA (definidos en @c gen/instr_db_*_gen.cpp).
@@ -256,6 +311,18 @@ struct AsmInsnSem {
     std::vector<std::string> writes; ///< registros canonicos escritos.
     bool reads_mem = false, writes_mem = false;
     bool reads_flags = false, writes_flags = false;
+    /**
+     * @name ESTADO del procesador que no es un registro general.
+     *
+     * Nombrado (@c "cr0", @c "gdtr", @c "msrs", @c "mxcsr", @c "st(0)"...) en vez
+     * de tratado como un efecto opaco.  Una instruccion privilegiada tiene
+     * efectos igual de concretos que una aritmetica, y modelarlos es lo que
+     * permite decir que una `rdmsr` y una `stmxcsr` no se estorban -- mientras
+     * que "toca algo" obliga a no mover nada alrededor de ninguna de las dos.
+     * @{
+     */
+    std::vector<std::string> reads_state, writes_state;
+    /// @}
     float latency = 0.0f;   ///< latencia en la microarq (prioridad del scheduler).
     std::string text;       ///< linea original (para reemitir).
 };
@@ -397,6 +464,90 @@ bool memory_of(Isa isa, int32_t form_id, bool &reads, bool &writes);
  * @return false si la forma no existe (no se afirma nada de ella).
  */
 bool flags_of(Isa isa, int32_t form_id, bool &reads, bool &writes);
+
+/**
+ * @brief QUE banderas lee y escribe una forma, por NOMBRE.
+ *
+ * @ref flags_of dice si toca alguna; esto dice cuales.  Es la diferencia entre
+ * un `bt` -- que solo deja el acarreo -- y un `cmp` -- que deja las seis --, y
+ * entre un `inc` y un `add`: `inc` no toca el acarreo, que es justo lo que
+ * permite encadenarlo con un `adc`.  Sin ese detalle, cualquier instruccion que
+ * toque banderas parece destruir el trabajo de cualquier otra.
+ *
+ * Los nombres son los de la ISA (`cf`, `zf`, `of` en x86; `n`, `z`, `c`, `v` en
+ * ARM; ninguno en RISC-V, que no tiene banderas).
+ *
+ * @param reads  Sale con las banderas que la forma consume.
+ * @param writes Sale con las que modifica.
+ * @return false si la forma no existe, o si la base aun no trae el detalle por
+ *         bandera para esa ISA (que no es lo mismo que no tocar ninguna).
+ */
+bool flag_names_of(Isa isa, int32_t form_id, std::vector<std::string> &reads,
+                   std::vector<std::string> &writes);
+
+/**
+ * @brief Si la base puede modelar una forma ELLA SOLA, sin ayuda de la tabla.
+ *
+ * Es la misma condicion que @ref asm_insn_sem aplica sobre una linea concreta,
+ * pero preguntada sobre la FORMA: no vale si tiene operandos de registro
+ * IMPLICITOS -- los que no se escriben en el texto, como el `rdx:rax` de una
+ * `div` -- ni memoria implicita sin operando que la nombre.  En esos casos la
+ * base sabe que existen pero no puede emparejarlos con lo que hay escrito, y ahi
+ * es donde hace falta una entrada a mano.
+ *
+ * Sirve para saber DE DONDE sale cada respuesta.  Contar solo las de la tabla
+ * mide la tabla, no lo que el compilador sabe: la mayoria de las instrucciones
+ * las contesta la base sin que nadie las escriba, y las que no son justo las que
+ * hay que escribir.  Sin separarlo, la lista de "lo que falta" mezcla trabajo
+ * real con instrucciones que ya funcionan.
+ *
+ * @return false si la forma no existe o necesita una entrada a mano.
+ */
+bool form_is_modelable(Isa isa, int32_t form_id);
+
+/**
+ * @struct ImplicitOperand
+ * @brief Un operando que la instruccion toca SIN escribirlo en el texto.
+ */
+struct ImplicitOperand {
+    /// Registro en forma canonica (@c "rax", @c "rdx"...), vacio si lo que toca
+    /// no es un registro general.
+    std::string reg;
+    /**
+     * ESTADO del procesador que no es un registro general, en minusculas:
+     * @c "cr0", @c "gdtr", @c "idtr", @c "msrs", @c "mxcsr", @c "rip",
+     * @c "fsbase", @c "st(0)", @c "x87status"...
+     *
+     * Se nombra en vez de tratarse como un efecto opaco.  Son 28 en x86 -- y
+     * ninguno en ARM ni RISC-V, donde todo canonicaliza --, y darles nombre es lo
+     * que separa "esta instruccion toca algo que no se cual es" de "escribe
+     * `gdtr`": lo primero obliga a no mover NADA a su alrededor, lo segundo solo
+     * choca con quien toque `gdtr`.  Una `rdmsr` y una `stmxcsr` no se estorban.
+     */
+    std::string state;
+    bool is_memory = false; ///< el acceso implicito es a MEMORIA, no a un reg.
+    bool reads = false;
+    bool writes = false;
+};
+
+/**
+ * @brief Los operandos IMPLICITOS de una forma, con su registro y su rol.
+ *
+ * Es lo que hacia falta para no escribir a mano las ~270 instrucciones de x86
+ * que el analisis no conocia: TODAS estan en la base, y la base ya dice que
+ * registro tocan -- que una `div` usa `rdx:rax`, que una `rdmsr` escribe
+ * `eax:edx` y lee `ecx`, que una `pcmpestri` deja el resultado en `ecx` --.  Lo
+ * unico que faltaba era leerlo.
+ *
+ * Escribirlas a mano habria sido copiar a otro sitio lo que ya estaba aqui, con
+ * lo que eso trae: dos listas que se separan en cuanto una se quede atras.
+ *
+ * @param isa     ISA de la forma.
+ * @param form_id Forma.
+ * @return Los implicitos en el orden en que la forma los declara.  Vacio si la
+ *         forma no existe o no tiene ninguno.
+ */
+std::vector<ImplicitOperand> implicit_operands(Isa isa, int32_t form_id);
 
 /// Conjunto ISA que EXIGE una forma ("AVX512F_512", "AVX2"...), "" si no vale.
 const char *isa_set_of(Isa isa, int32_t form_id);

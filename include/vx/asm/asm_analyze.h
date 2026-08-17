@@ -186,6 +186,19 @@ struct AsmBlockEffects {
     /// que ese valor sigue siendo el de antes se equivoca.  Sin esto, un
     /// programa que hace justo eso devolvia 41 en vez de 42.
     std::vector<std::string> escritos;
+    /**
+     * @name ESTADO del procesador que el bloque toca, por nombre y sentido.
+     *
+     * @c "cr0", @c "gdtr", @c "idtr", @c "msrs", @c "mxcsr", @c "fsbase",
+     * @c "st(0)", @c "x87status"...  Un bloque que hace `wrmsr` no es un bloque
+     * que "hace algo raro": es uno que escribe `msrs`, y eso solo estorba a quien
+     * lea o escriba `msrs`.  Sin nombrarlo habria que tratar cualquier
+     * instruccion privilegiada como una valla para todo lo que la rodea.
+     * @{
+     */
+    std::vector<std::string> state_read;
+    std::vector<std::string> state_written;
+    /// @}
     bool has_atomic = false;    ///< prefijo @c lock o instr atomica (barrera).
     bool is_call = false;       ///< @c call / @c syscall alcanzable en el bloque.
     /// El bloque toca las banderas, en cualquier sentido.  Se mantiene porque es

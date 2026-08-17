@@ -21,6 +21,21 @@ from dataclasses import astuple, dataclass, field
 # encoding deja de contar), subir esto -> los FormID viejos no se reutilizan.
 SEMANTIC_SCHEMA = 1
 
+# Las banderas se guardan por NOMBRE y ordenadas alfabeticamente, sin lista fija.
+#
+# No hay un juego de banderas comun: x86 tiene `cf`/`pf`/`af`/`zf`/`sf`/`of` mas
+# `df`/`if` de control, ARM tiene `n`/`z`/`c`/`v` (y `q`/`ge` para el SIMD), y
+# RISC-V no tiene ninguna -- una rama compara dos registros --.  Fijar aqui el
+# orden de x86 seria escribir el modelo a la medida de una ISA y obligar a la
+# siguiente a encajar en el.
+#
+# Por eso viajan como nombres: cada ISA nombra los suyos, se ordenan para que el
+# fichero sea determinista, y quien necesite una mascara compacta se la construye
+# por ISA a partir de lo que esa ISA use de verdad.
+def flag_sort_key(name):
+    """Orden determinista de un nombre de bandera (alfabetico, insensible)."""
+    return name.lower()
+
 
 @dataclass(frozen=True)
 class Operand:
@@ -134,6 +149,25 @@ class InstrForm:
     summary: str = ""       # descripcion ("Bit Test", "CPU Identification"...)
     asm_string: str = ""    # forma legible ("BT (M16, R16)")
     url: str = ""           # pagina de uops.info de esta forma (ver original)
+    # QUE banderas, no solo si toca alguna.  La fuente lo da por bandera
+    # (`flag_CF="w"`, `flag_ZF="r"`) y se colapsaba a los dos booleanos de
+    # arriba, con lo que un `bt` -- que solo deja el acarreo -- y un `cmp` -- que
+    # deja las seis -- salian identicos.  Y no lo son: `inc` no toca el acarreo,
+    # que es justo lo que permite encadenarlo con un `adc`.
+    #
+    # Nombres separados por coma, ordenados (ver @ref flag_sort_key).  Cada ISA
+    # nombra los suyos -- `cf`/`zf`/`of` en x86, `n`/`z`/`c`/`v` en ARM, ninguno
+    # en RISC-V --, asi que aqui no hay lista fija: lo que se guarda es lo que la
+    # fuente de esa ISA diga.  Vacio = la fuente no lo dijo, que NO es lo mismo
+    # que no tocar ninguna: para eso estan los booleanos de arriba.
+    #
+    # Van al FINAL del dataclass a proposito: los campos de en medio se pasan por
+    # POSICION desde los importadores, asi que colarlos antes habria desplazado
+    # `category`, `summary` y `url` sin que nada chocara.  Y no entran en
+    # @ref form_key -- son un efecto de la forma, no parte de su identidad --,
+    # asi que ningun FormID se mueve.
+    flags_written: str = ""
+    flags_read: str = ""
 
 
 def _pack_str(buf, s):

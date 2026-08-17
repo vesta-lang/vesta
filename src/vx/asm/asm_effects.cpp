@@ -1332,12 +1332,49 @@ bool is_arm32(const std::string &arch) {
 
 } // namespace
 
+/**
+ * @brief Nombre CANONICO de un mnemonico que la base escribe fusionado.
+ *
+ * La base nombra por separado cada combinacion de prefijo -- `rep_movsb`,
+ * `repne_scasb`, `cmpxchg_lock` -- y de alcance -- `ret_near`, `call_far` --,
+ * porque son codificaciones distintas.  Nadie escribe eso: en un fuente se pone
+ * `rep movsb`, y el analisis separa el prefijo antes de preguntar.
+ *
+ * Traducirlo aqui sirve para dos cosas.  Una, que preguntar por el nombre de la
+ * base devuelva la respuesta que corresponde en vez de "no se sabe" -- eran 45
+ * de las 271 que parecian sin cubrir, o sea trabajo que no existia --.  Y dos,
+ * que quien escriba el nombre fusionado obtenga lo mismo que quien escriba el
+ * separado, que es lo unico coherente.
+ *
+ * El prefijo no cambia QUE se toca: `rep movsb` accede a lo mismo que `movsb`,
+ * mas veces.  Cuantas, lo dice el contador, y de eso se encarga el analisis de
+ * la linea, que es quien ve el prefijo.
+ */
+std::string x86_canonical_mnemonic(const std::string &m) {
+    static const char *kPrefijos[] = {"rep_", "repe_", "repne_", "repz_",
+                                      "repnz_"};
+    for (const char *p : kPrefijos) {
+        const size_t n = std::strlen(p);
+        if (m.size() > n && m.compare(0, n, p) == 0) return m.substr(n);
+    }
+    static const struct { const char *sufijo, *nada; } kSufijos[] = {
+        {"_lock", ""}, {"_near", ""}, {"_far", ""},
+    };
+    for (const auto &s : kSufijos) {
+        const size_t n = std::strlen(s.sufijo);
+        if (m.size() > n && m.compare(m.size() - n, n, s.sufijo) == 0)
+            return m.substr(0, m.size() - n);
+    }
+    return m;
+}
+
 AsmEffects asm_effects_for(const std::string &mnemonic,
                            const std::string &arch) {
     std::string m;
     m.reserve(mnemonic.size());
     for (char c : mnemonic)
         m.push_back((char)std::tolower((unsigned char)c));
+    if (is_x86(arch)) m = x86_canonical_mnemonic(m);
 
     const bool x86 = is_x86(arch);
     const EffTable *tabla = table_for_arch(arch);

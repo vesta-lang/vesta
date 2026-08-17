@@ -32,6 +32,29 @@ _ISA = {
 # kind de operando -> entero estable (debe casar con el enum C++ DbOpKind).
 _KIND = {"reg": 0, "mem": 1, "imm": 2, "agen": 3, "relbr": 4, "absbr": 5,
          "flags": 6}
+
+
+def _flag_mask(campo, flag_names):
+    """Mascara de banderas de @p campo (@c "cf,zf" o @c "-"), por ISA.
+
+    El bit de cada bandera se asigna la primera vez que aparece y se guarda en
+    @p flag_names, que acaba siendo la leyenda de esa ISA.  Asi el juego de
+    banderas sale de los datos -- seis en x86, cuatro en ARM, ninguna en
+    RISC-V -- en vez de estar escrito aqui.
+    """
+    if not campo or campo == "-":
+        return 0
+    m = 0
+    for nombre in campo.split(","):
+        nombre = nombre.strip().lower()
+        if not nombre:
+            continue
+        if nombre not in flag_names:
+            if len(flag_names) >= 16:
+                continue  # la mascara es de 16 bits; no se inventa un bit 17
+            flag_names.append(nombre)
+        m |= 1 << flag_names.index(nombre)
+    return m
 # etiquetas de overlay -> bit (debe casar con el enum C++ DbOverlay).
 _OVL = {"barrier": 0, "serializing": 1, "atomic": 2, "ll_sc": 3,
         "mem_acquire": 4, "mem_release": 5, "mem_seq_cst": 6, "no_reorder": 7,
@@ -225,6 +248,10 @@ def main():
     strs = Interner()
     ops_pool = []            # (kind, width, flags) aplanado
     form_rows = []           # por FormID: campos empaquetados
+    # Nombres de bandera de ESTA ISA, en orden de aparicion: el indice es el bit.
+    # Se construye con lo que la ISA usa de verdad en vez de con una lista fija,
+    # que seria la de x86 y dejaria a ARM (`n`/`z`/`c`/`v`) encajando a la fuerza.
+    flag_names = []
     # indice iclass -> (primer_fid, count).  Las formas ya vienen ordenadas por
     # clave (iclass primero) -> mismas iclass contiguas.
     iclass_index = []        # (iclass_str_idx, first_fid, count)
@@ -271,10 +298,17 @@ def main():
                 ops_cnt += 1
         memflags = (int(fm["mem"]) | (int(fm["imm"]) << 1) |
                     (int(fm["wflags"]) << 2) | (int(fm["rflags"]) << 3))
+        # QUE banderas, no solo si toca alguna.  Los nombres son de la ISA
+        # (`cf`/`zf`/`of` en x86, `n`/`z`/`c`/`v` en ARM, ninguna en RISC-V), asi
+        # que el bit de cada una se asigna POR ISA segun lo que esa ISA use de
+        # verdad, en vez de fijar aqui el juego de una sola.
+        wflagset = _flag_mask(fm.get("wflagset", "-"), flag_names)
+        rflagset = _flag_mask(fm.get("rflagset", "-"), flag_names)
         form_rows.append((ic_idx, ext_idx, isa_idx, ovl,
                           int(fm["rmask"], 16) & 0xFF,
                           int(fm["wmask"], 16) & 0xFF, memflags,
-                          ops_off, ops_cnt, strs.get(fm["opcode"])))
+                          ops_off, ops_cnt, strs.get(fm["opcode"]),
+                          wflagset, rflagset))
         # indice por iclass
         if ic != cur_ic:
             if cur_ic is not None:
@@ -307,11 +341,21 @@ def main():
         f.write("const DbForm kForms[] = {\n")
         for r in form_rows:
             if r is None:
-                f.write("  {0,0,0,0,0,0,0,0,0,0},\n")  # hueco (FormID sin forma)
+                f.write("  {0,0,0,0,0,0,0,0,0,0,0,0},\n")  # hueco (sin forma)
             else:
-                f.write("  {%d,%d,%d,%d,%d,%d,%d,%d,%d,%d},\n" % r)
+                f.write("  {%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d},\n" % r)
         f.write("};\n\n")
         # indice por iclass (ordenado)
+        # Leyenda de banderas de la ISA: el indice de cada nombre es su bit en
+        # las mascaras de la forma.  Va CON los datos porque el juego de banderas
+        # es de cada arquitectura -- seis en x86, cuatro en ARM, ninguna en
+        # RISC-V --, y una lista fija en el codigo seria la de una sola.
+        f.write("const char *const kFlagNames[] = {\n")
+        for n in flag_names:
+            f.write("  \"%s\",\n" % n)
+        if not flag_names:
+            f.write("  nullptr,  // esta ISA no tiene banderas de condicion\n")
+        f.write("};\n\n")
         f.write("const DbIclassRange kIclassIndex[] = {\n")
         for ic_idx, first, n in iclass_index:
             f.write("  {%d,%d,%d},\n" % (ic_idx, first, n))
@@ -320,9 +364,10 @@ def main():
         # accesor: rellena IsaData con las tablas de arriba.
         f.write("const IsaData &db_%s() {\n" % low)
         f.write("  static const IsaData d = {\n")
-        f.write("    kStr, %d, kOps, %d, kForms, %d, kIclassIndex, %d};\n"
+        f.write("    kStr, %d, kOps, %d, kForms, %d, kIclassIndex, %d,\n"
+                "    kFlagNames, %d};\n"
                 % (len(strs.items), len(ops_pool), len(form_rows),
-                   len(iclass_index)))
+                   len(iclass_index), len(flag_names)))
         f.write("  return d;\n}\n\n")
         f.write("}} // namespace vx::instr_db\n")
 

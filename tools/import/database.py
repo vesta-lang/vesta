@@ -13,15 +13,26 @@ def load_vxisa(path):
     """@return { form_id: {checksum,uid,iclass,ext,opcode,enc,rmask,wmask,mem,
     imm,wflags,rflags,operands,overlay} }."""
     cols = ("checksum", "uid", "iclass", "ext", "opcode", "enc", "rmask",
-            "wmask", "mem", "imm", "wflags", "rflags", "operands", "overlay",
-            "category", "summary", "string", "url")
+            "wmask", "mem", "imm", "wflags", "rflags", "wflagset", "rflagset",
+            "operands", "overlay", "category", "summary", "string", "url")
+    # Las mismas columnas SIN los conjuntos de banderas, para leer ficheros
+    # escritos antes de que existieran.  Se distinguen por el numero de campos, no
+    # por la version de la cabecera: un fichero es lo que tiene, y contar es mas
+    # fiable que fiarse de una etiqueta.
+    cols_sin_flagsets = tuple(c for c in cols
+                              if c not in ("wflagset", "rflagset"))
     forms = {}
     with open(path, "r", encoding="ascii") as f:
         for line in f:
             if line.startswith(("vxisa", "#")) or not line.strip():
                 continue
             c = line.rstrip("\n").split("|")
-            forms[int(c[0])] = dict(zip(cols, c[1:]))
+            campos = c[1:]
+            usar = cols if len(campos) >= len(cols) else cols_sin_flagsets
+            d = dict(zip(usar, campos))
+            d.setdefault("wflagset", "-")
+            d.setdefault("rflagset", "-")
+            forms[int(c[0])] = d
     return forms
 
 
