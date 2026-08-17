@@ -149,6 +149,27 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
         return !(v && v[0] == '0');
     }();
     bool localizado = loc_activa && !e.accesos.empty() && !e.accesos_incompletos;
+    /* Que dice el analisis del TEXTO de este bloque, en crudo.
+     *
+     * Existe porque la cadena que va de aqui a los contratos tiene varios pasos
+     * y cada uno puede perder la escritura -- el analisis del texto, la
+     * localizacion, el filtro de lo observable, el cierre --.  Sin ver el primer
+     * eslabon, buscar en los otros es adivinar, y adivinar aqui sale caro:
+     * `readonly` sobre una funcion que escribe hace que su llamante se quede con
+     * el valor viejo. */
+    if (std::getenv("VESTA_ASM_EFF_DEBUG") != nullptr) {
+        std::fprintf(stderr,
+                     "[asm-eff] %s: accesos=%zu incompletos=%d mem_r=%d "
+                     "mem_w=%d localizado=%d\n",
+                     fn.name.c_str(), e.accesos.size(),
+                     (int)e.accesos_incompletos, (int)e.reads_mem,
+                     (int)e.writes_mem, (int)localizado);
+        for (const auto &a : e.accesos)
+            std::fprintf(stderr,
+                         "[asm-eff]   base=<%s> escribe=%d desde_memoria=%d\n",
+                         a.base.c_str(), (int)a.escribe,
+                         (int)a.desde_memoria.hay);
+    }
     std::vector<AbstractLoc> locs_lee, locs_escribe;
     if (localizado) {
         /* De que valor habla cada operando lo responde UN solo sitio.  Antes
@@ -217,6 +238,34 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
                  * se corre al offset donde de verdad cae. */
                 const int32_t ancho =
                     ext.acotada ? (int32_t)ext.bytes() : (int32_t)0;
+                /* Si la base del acceso se CARGo DE MEMORIA, la localizacion del
+                 * valor no es la del acceso: falta una indireccion.  `loc_of`
+                 * responde donde vive el puntero -- el hueco de la pila que lo
+                 * guarda --, y el `asm` escribe A DoNDE APUNTA.
+                 *
+                 * Tomar el hueco por el destino tenia una consecuencia que no se
+                 * ve venir: el cierre de efectos filtra las escrituras a pila
+                 * local porque el llamante no las observa, asi que una funcion
+                 * que escribe la memoria de SU LLAMANTE a traves de un parametro
+                 * salia `readonly` y `pure`.  Y con eso el llamante se queda con
+                 * el valor viejo en un registro: `20_align_demostrada` daba 1 en
+                 * JIT y 42 interpretado.
+                 *
+                 * Hasta que la indireccion se siga -- preguntar que se guardo
+                 * ahi, que es otro paso --, lo correcto es no afirmar la
+                 * localizacion.  Se cae al efecto generico, que dice "escribe
+                 * memoria" sin decir donde: menos preciso, pero cierto.
+                 *
+                 * OJO: esta guarda es correcta pero NO es la que arregla el caso
+                 * de `20_align_demostrada` -- comprobado, ahi no dispara, porque
+                 * su base no viene marcada como cargada de memoria.  Ese sigue
+                 * saliendo `readonly` y su causa esta antes: `loc_of` le da una
+                 * localizacion de pila que no escapa a una escritura que va a la
+                 * memoria del llamante. */
+                if (a.desde_memoria.hay) {
+                    localizado = false;
+                    break;
+                }
                 AbstractLoc l = analysis::loc_of(pt, ligadura.valor, ancho);
                 if (l.kind == AbstractLoc::Kind::Unknown) {
                     localizado = false;

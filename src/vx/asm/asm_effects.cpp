@@ -563,7 +563,24 @@ const EffTable &x86_effects_table() {
                 add(m, E({}, true, false, false));
             // Exigen que la direccion sea multiplo del ancho de su operando.
             auto alineada = [&](const char *m) {
-                AsmEffects e = E({}, true, false, false);
+                /* Estas instrucciones TOCAN MEMORIA -- son la forma alineada de
+                 * mover a memoria o desde ella --, y el tercer parametro de `E`
+                 * es justo eso.  Estaba a `false`, con lo que `movdqa` y compania
+                 * se declaraban como que no tocan memoria.
+                 *
+                 * La consecuencia no se ve venir desde aqui, y costo un dia
+                 * encontrarla: sin ese bit, el analisis del texto no reporta la
+                 * escritura, el cierre de efectos de la funcion sale sin
+                 * escrituras, el contrato `readonly` se cumple -- y una funcion
+                 * que escribe la memoria de su llamante se declara de solo
+                 * lectura.  Con eso el JIT del llamante se queda con el valor
+                 * anterior en un registro: `20_align_demostrada` daba 1 en JIT y
+                 * 42 interpretado.
+                 *
+                 * El `wmask` a 0x1 esta bien -- escriben su primer operando --,
+                 * pero era lo unico que estaba bien de los dos. */
+                AsmEffects e = E({}, /*wmask=*/0x1, /*mem=*/true,
+                                 /*flags=*/false);
                 e.align_req = kAlignAnchoOperando;
                 add(m, std::move(e));
             };
