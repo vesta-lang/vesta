@@ -43,13 +43,19 @@ enum DbOpKind : uint8_t {
     OP_ABSBR = 5,
     OP_FLAGS = 6, ///< banderas de condicion: no se escriben en el texto.
     /**
-     * Lo que el generador no supo clasificar (su valor por defecto).
+     * Operando que la fuente no clasifica.  El importador de ARM lo marca `?` y
+     * el generador lo emite con su valor por defecto, que es este.
      *
-     * En ARM son 1357 operandos de formas como `ADD`, `ADR` o `AESE`, que no
-     * tienen nada que ver con las banderas.  Se trata igual que ellas -- no se
-     * cuenta como operando del texto -- porque es lo que venia haciendose y lo
-     * que hace que la aridad de ARM case; lo que NO se puede es seguir llamandolo
-     * banderas, que es afirmar algo falso sobre 1357 operandos.
+     * Son 1357 en ARM, y NO son un error de etiquetado: son cosas que en A64 no
+     * se escriben como un operando suelto -- la condicion de `b.eq`, que va
+     * pegada al mnemonico, o el nombre de la operacion de sistema de un `at` --.
+     * Por eso no cuentan como operando del texto, igual que las banderas.
+     *
+     * Lo que SI queda por hacer es la OPCIONALIDAD: `ADDS_32_addsub_shift`
+     * declara cinco operandos porque incluye el desplazamiento opcional
+     * (`{, <shift> #<amount>}`), y un `adds x0, x1, x2` escribe tres.  Esa es la
+     * razon real de que la aridad no case en ARM -- no esta clase --, y arreglarla
+     * pide que la fuente diga cuales son opcionales.
      */
     OP_OTHER = 7,
 };
@@ -399,7 +405,8 @@ int32_t match_asm_line(Isa isa, const std::string &line);
  * operandos, devuelve la primera del rango (nivel mnemonico).
  */
 int32_t match(Isa isa, const std::string &mnemonic,
-              const std::vector<ParsedOp> &ops);
+              const std::vector<ParsedOp> &ops,
+              bool *por_operandos = nullptr);
 
 /// Nombre del iclass de una forma (o "" si el FormID no es valido).
 const char *iclass_name(Isa isa, int32_t form_id);

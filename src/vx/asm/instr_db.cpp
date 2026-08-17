@@ -334,7 +334,7 @@ int32_t match_asm_line(Isa isa, const std::string &line) {
 }
 
 int32_t match(Isa isa, const std::string &mnemonic,
-              const std::vector<ParsedOp> &ops) {
+              const std::vector<ParsedOp> &ops, bool *por_operandos) {
     const IsaData t = tables_for(isa);
     if (!t.forms) return -1;
     std::string up = mnemonic;
@@ -352,7 +352,13 @@ int32_t match(Isa isa, const std::string &mnemonic,
             best = static_cast<int32_t>(fid);
         }
     }
-    // El mnemonico existe: si nada caso por operandos, vale la primera del rango.
+    /* El mnemonico existe: si nada caso por operandos, vale la primera del rango
+     * -- sirve para saber que la instruccion EXISTE --, pero se dice que fue por
+     * el nombre y no por la forma.  Devolver las dos cosas iguales ya mordio dos
+     * veces: un `movsd [rdi], xmm0` cogia la forma de CADENA porque la de SSE no
+     * casaba por aridad, y con ella sus efectos -- los de otra instruccion --.
+     * Quien necesite certeza pregunta; quien solo quiera saber si existe, no. */
+    if (por_operandos != nullptr) *por_operandos = best >= 0;
     return best >= 0 ? best : static_cast<int32_t>(r->first_fid);
 }
 
