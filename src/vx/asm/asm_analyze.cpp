@@ -465,6 +465,47 @@ AsmBlockEffects asm_analyze_block(
         if (eff.reads_flags) res.reads_flags = true;
         if (eff.writes_flags) res.writes_flags = true;
         if (eff.reads_flags || eff.writes_flags) res.touches_flags = true;
+        /* Y CUALES.  Se pregunta a la BASE aunque el mnemonico este en la tabla
+         * escrita a mano, porque la tabla solo tiene el bit grueso: dejar que
+         * tape al dato mas fino seria quedarse con la peor de las dos respuestas.
+         *
+         * Un bloque que hace `inc` no toca el acarreo y uno que hace `add` si, y
+         * con "toca banderas" a secas los dos obligan a lo mismo a todo lo que
+         * los rodea. */
+        {
+            const vx::instr_db::Isa isa_db = isa_of_arch(arch);
+            /* Solo si la forma casó POR OPERANDOS.  Cuando ninguna casa, el
+             * emparejador devuelve la primera del rango -- que sirve para saber
+             * que existe el mnemonico, no para afirmar sus efectos --, y con eso
+             * un `movsd [rdi], xmm0` cogia las banderas de la `movsd` de CADENA,
+             * que lee la bandera de direccion.  Las banderas habrian salido de
+             * otra instruccion.  `modeled` es justo esa condicion. */
+            const vx::instr_db::AsmInsnSem sem =
+                vx::instr_db::asm_insn_sem(isa_db, line, /*ua_id=*/0);
+            const int32_t fid = sem.modeled ? sem.form_id : -1;
+            std::vector<std::string> lee, escribe;
+            if (fid >= 0 &&
+                vx::instr_db::flag_names_of(isa_db, fid, lee, escribe)) {
+                auto anota = [](std::vector<std::string> &dst,
+                                const std::vector<std::string> &src) {
+                    for (const std::string &n : src) {
+                        bool ya = false;
+                        for (const std::string &v : dst)
+                            if (v == n) { ya = true; break; }
+                        if (!ya) dst.push_back(n);
+                    }
+                };
+                anota(res.flags_read, lee);
+                anota(res.flags_written, escribe);
+                /* Si la base dice que toca alguna, el agregado tambien lo dice:
+                 * los dos caminos tienen que contar lo mismo. */
+                if (!lee.empty()) { res.reads_flags = true; res.touches_flags = true; }
+                if (!escribe.empty()) {
+                    res.writes_flags = true;
+                    res.touches_flags = true;
+                }
+            }
+        }
         if (eff.is_call) res.is_call = true;
         if (eff.port_io) res.has_port_io = true;
         if (eff.barrier) res.has_atomic = true; // ordena: misma consecuencia

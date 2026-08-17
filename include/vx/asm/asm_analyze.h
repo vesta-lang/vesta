@@ -216,6 +216,19 @@ struct AsmBlockEffects {
      */
     bool reads_flags = false;  ///< consume banderas producidas fuera del bloque.
     bool writes_flags = false; ///< las modifica: quien las tuviera las pierde.
+    /**
+     * QUE banderas, por nombre (@c "cf", @c "zf", @c "of"...).
+     *
+     * Los booleanos dicen SI toca alguna; esto dice cuales, y es lo que separa un
+     * bloque que hace `inc` -- que no toca el acarreo -- de uno que hace `add`.
+     * Sale de la BASE, que lo sabe por forma, aunque el mnemonico este ademas en
+     * la tabla escrita a mano: la tabla solo tiene el bit grueso, y dejar que
+     * tape al dato mas fino seria quedarse con la peor de las dos respuestas.
+     *
+     * Vacio = no se sabe (otra ISA, forma sin dato), que NO es "no toca ninguna".
+     */
+    std::vector<std::string> flags_read;
+    std::vector<std::string> flags_written;
     /// @}
     bool has_branch = false;    ///< salto/rama dentro del bloque.
     int64_t explicit_stack_bytes = 0; ///< marco EXPLICITO (push/sub rsp), en bytes.

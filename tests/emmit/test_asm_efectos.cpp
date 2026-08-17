@@ -366,7 +366,7 @@ int main() {
          "desapilar lee memoria, escribe su destino y mueve `rsp`"},
         {"pushf", WRITES_MEM | WRITES_REG | READS_FLAGS, READS_MEM,
          "apilar las banderas las LEE: es la unica forma de guardarlas"},
-        {"popf", WRITES_FLAGS | WRITES_REG | READS_MEM, WRITES_MEM,
+        {"popf", WRITES_FLAGS | WRITES_REG | READS_MEM | READS_FLAGS, WRITES_MEM,
          "y recuperarlas las escribe"},
 
         // Control: se va del bloque.
@@ -381,18 +381,18 @@ int main() {
 
         // Cadena: repiten segun un contador, y acceden por registros que no
         // aparecen en el texto.
-        {"rep stosb", WRITES_MEM, READS_MEM | WRITES_REG,
+        {"rep stosb", WRITES_MEM | READS_FLAGS, READS_MEM | WRITES_REG,
          "rellenar escribe memoria por `rdi`, sin un corchete a la vista"},
-        {"rep movsb", READS_MEM | WRITES_MEM, WRITES_REG,
+        {"rep movsb", READS_MEM | WRITES_MEM | READS_FLAGS, WRITES_REG,
          "copiar lee por `rsi` y escribe por `rdi`"},
-        {"rep scasb", READS_MEM | WRITES_FLAGS, WRITES_REG,
+        {"rep scasb", READS_MEM | WRITES_FLAGS, WRITES_REG | READS_FLAGS,
          "buscar lee y compara"},
 
         // Entrada/salida por PUERTO: no es memoria, pero se ve desde fuera.
-        {"in $0, 96", WRITES_OP0 | PORT_IO, UNCHECKED,
+        {"in $0, 96", WRITES_OP0 | PORT_IO, READS_FLAGS,
          "leer un puerto no es memoria, pero NO es pura: sin declararlo, se "
          "puede borrar por no hacer nada"},
-        {"out 96, $0", PORT_IO, UNCHECKED, "y escribirlo tampoco es memoria"},
+        {"out 96, $0", PORT_IO, READS_FLAGS, "y escribirlo tampoco es memoria"},
 
         /* Ramas.  Un salto CONDICIONAL lee las banderas y es de lo que depende;
          * uno incondicional no mira nada.  Y `loop` mira un REGISTRO -- `rcx` --,
@@ -454,16 +454,16 @@ int main() {
 
         /* Trampas y parada.  No mueven datos, pero ceden el control: tratarlas
          * como que no hacen nada permite borrarlas. */
-        {"int3", NONE, UNCHECKED, "una trampa de depuracion no toca datos"},
+        {"int3", NONE, READS_FLAGS | WRITES_FLAGS, "una trampa de depuracion no toca datos"},
         {"ud2", NONE, UNCHECKED, "ni una instruccion invalida deliberada"},
         {"hlt", NONE, UNCHECKED, "ni parar el procesador"},
 
         // Cadena en otros anchos: el sufijo dice cuanto mueve cada paso.
-        {"rep stosq", WRITES_MEM, READS_MEM | WRITES_REG,
+        {"rep stosq", WRITES_MEM | READS_FLAGS, READS_MEM | WRITES_REG,
          "rellenar de ocho en ocho, por `rdi`"},
-        {"rep movsq", READS_MEM | WRITES_MEM, WRITES_REG,
+        {"rep movsq", READS_MEM | WRITES_MEM | READS_FLAGS, WRITES_REG,
          "copiar de ocho en ocho"},
-        {"rep cmpsb", READS_MEM | WRITES_FLAGS, WRITES_REG,
+        {"rep cmpsb", READS_MEM | WRITES_FLAGS, WRITES_REG | READS_FLAGS,
          "comparar dos bloques lee los dos y deja banderas"},
 
         // Lectura de estado del procesador: escriben registros que no nombran.
