@@ -106,6 +106,24 @@ def to_irform(syn):
                 not syn.mnemonic.upper().endswith('S'):
             wflags = []
             wf = False
+        # Un ALIAS hereda el pseudocodigo de su base pero NO sus operandos:
+        # `cmp x0, x1` es `subs xzr, x0, x1`, asi que el destino de la base no
+        # aparece escrito y los que si aparecen estan desplazados.  Con eso, la
+        # heuristica "el primero es el destino" hace que `cmp` declare que escribe
+        # `x0` -- justo el valor que compara --.
+        #
+        # Tomar todos los no resueltos de un alias como FUENTE arregla `cmp`,
+        # `cmn` y `tst` y ROMPE `mov`, que tambien es un alias y si escribe su
+        # primer operando: pasaba a declarar que no escribe nada, y eso es peor --
+        # un consumidor creeria que el registro conserva su valor y movería una
+        # lectura por encima --.  Se cambia un error del lado conservador por uno
+        # que no lo es.
+        #
+        # Lo correcto es REMAPEAR los operandos del alias contra los de su base
+        # (que campo del alias corresponde a que campo de la base) en vez de
+        # adivinar por posicion.  Hasta entonces se deja la heuristica, cuyo error
+        # -- una escritura de mas en las comparaciones -- cae del lado que no
+        # habilita transformaciones.
         rw = [rw_ps[i] if rw_ps[i] is not None else rw_h[i]
               for i in range(len(syn.operands))]
     else:
