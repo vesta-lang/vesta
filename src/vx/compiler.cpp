@@ -48,6 +48,11 @@ namespace asm_multi_process {
 int run_worker(const std::string &file_name, const std::string &output_prefix,
                 bool skip_preprocessor, bool keep_labels,
                 const std::vector<uint8_t> *ir_section_bytes, bool emit_map);
+int run_worker_from_source(std::string code, const std::string &file_name,
+                           const std::string &output_prefix,
+                           bool skip_preprocessor, bool keep_labels,
+                           const std::vector<uint8_t> *ir_section_bytes,
+                           bool emit_map);
 }
 #include <chrono>
 #include "vx/type_checker.h"
@@ -1253,15 +1258,16 @@ CompileResult compile_vx_source(const std::string &source,
                 std::string base =
                     ".cache/ctpe/tmp/ctpe_" +
                     std::to_string(std::hash<std::string>{}(e1.vel_text));
-                std::string tvel = base + ".vel";
-                {
-                    std::ofstream o(tvel, std::ios::binary);
-                    o << e1.vel_text;
-                }
-                // Ensamblar el .vel a un .velb con su seccion @ir (para que el
-                // runtime pueda compilar main en JIT y ejecutarlo).
-                int rc = asm_multi_process::run_worker(
-                    tvel, base, /*skip_preprocessor=*/true,
+                /* Ensamblar a un `.velb` con su seccion @ir (para que el runtime
+                 * pueda compilar main en JIT y ejecutarlo).
+                 *
+                 * Desde la fuente EN MEMORIA: el texto lo acaba de producir la
+                 * linea de arriba, asi que escribirlo a un fichero para que la
+                 * siguiente lo vuelva a leer era trabajo puro.  El nombre se
+                 * conserva para los diagnosticos, no para abrir nada. */
+                int rc = asm_multi_process::run_worker_from_source(
+                    e1.vel_text, base + ".vel", base,
+                    /*skip_preprocessor=*/true,
                     /*keep_labels=*/false, &res.ir_section_bytes,
                     /*emit_map=*/false);
                 if (rc == 0) {
