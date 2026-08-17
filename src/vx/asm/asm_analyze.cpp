@@ -523,11 +523,21 @@ AsmBlockEffects asm_analyze_block(
                         if (!ya) dst.push_back(n);
                     }
                 };
-                anota(res.flags_read, lee);
+                /* En A32 casi toda instruccion admite condicion, asi que la base
+                 * modela la clase entera como que LEE las banderas.  Pero la
+                 * condicion va pegada al mnemonico (`addeq`), y un `add` a secas
+                 * es incondicional: no depende de nada.  Quien lo sabe es la
+                 * tabla, que separa el sufijo, asi que ahi manda ella -- si dice
+                 * que no lee, no se le atribuye la lectura de la clase. */
+                const bool a32 = arch == "arm32" || arch == "arm";
+                if (!a32 || eff.reads_flags) anota(res.flags_read, lee);
                 anota(res.flags_written, escribe);
                 /* Si la base dice que toca alguna, el agregado tambien lo dice:
                  * los dos caminos tienen que contar lo mismo. */
-                if (!lee.empty()) { res.reads_flags = true; res.touches_flags = true; }
+                if (!lee.empty() && (!a32 || eff.reads_flags)) {
+                    res.reads_flags = true;
+                    res.touches_flags = true;
+                }
                 if (!escribe.empty()) {
                     res.writes_flags = true;
                     res.touches_flags = true;

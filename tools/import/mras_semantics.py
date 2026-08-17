@@ -96,6 +96,16 @@ def to_irform(syn):
     mem_rw = None
     if ps is not None:
         rw_ps, wf, rf, mem_rw, _fb, rflags, wflags = ps
+        # En A32 la MISMA codificacion cubre `add` y `adds`: el pseudocodigo
+        # escribe las banderas bajo `if setflags`, y el bit S del encoding decide.
+        # Leerlo como una escritura incondicional hacia que las 21 formas de `ADD`
+        # dijeran que escriben `c,n,v,z`, que es justo lo contrario de lo que las
+        # distingue.  Quien lo decide es el SUFIJO del mnemonico, que aqui se
+        # conoce.
+        if 'setflags' in (syn.operation_ps or '') and \
+                not syn.mnemonic.upper().endswith('S'):
+            wflags = []
+            wf = False
         rw = [rw_ps[i] if rw_ps[i] is not None else rw_h[i]
               for i in range(len(syn.operands))]
     else:
