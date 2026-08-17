@@ -71,6 +71,26 @@ int main() {
                       category_of(Mnemonic::CALLVIRT) == Category::Call,
                   "la categoria se conoce al compilar");
 
+    /* La frontera texto -> mnemonico. */
+    exige(mnemonic_from_text("mov") == Mnemonic::MOV, "\"mov\" -> MOV");
+    exige(mnemonic_from_text("jmp.je") == Mnemonic::JMP_JE,
+          "un mnemonico con punto se reconoce");
+    exige(!is_valid(mnemonic_from_text("movv")),
+          "un mnemonico inexistente no se inventa");
+    exige(!is_valid(mnemonic_from_text("")), "la cadena vacia no es instruccion");
+    exige(!is_valid(mnemonic_from_text(nullptr)), "un puntero nulo no revienta");
+
+    /* Ida y vuelta sobre TODAS.  Es la comprobacion que descubre una entrada
+     * REPETIDA en la lista: dos mnemonicos con el mismo texto compilan sin
+     * queja, y uno de los dos se queda sin poder alcanzarse nunca. */
+    for (uint16_t i = 0; i < mnemonic_count(); ++i) {
+        const auto m = static_cast<Mnemonic>(i);
+        if (mnemonic_from_text(text_of(m)) == m) continue;
+        std::printf("  FALLA    '%s' no vuelve a su mnemonico (texto repetido?)\n",
+                    text_of(m));
+        ++fallos;
+    }
+
     std::printf("[mnemonicos] %s\n", fallos == 0 ? "TODO OK" : "CON FALLOS");
     return fallos == 0 ? 0 : 1;
 }

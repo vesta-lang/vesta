@@ -32,7 +32,10 @@
 #ifndef EMMIT_MNEMONIC_H
 #define EMMIT_MNEMONIC_H
 
+#include <algorithm>
 #include <cstdint>
+#include <cstring>
+#include <vector>
 
 namespace emmit {
 
@@ -158,6 +161,56 @@ inline constexpr bool is_in(Mnemonic m, Category c) {
     const CategoryRange r = range_of(c);
     const uint16_t i = static_cast<uint16_t>(m);
     return !r.empty && i >= r.first && i <= r.last;
+}
+
+/**
+ * @brief El mnemonico que se escribe @p text, o @c kCount si no existe.
+ *
+ * Es la FRONTERA: el unico sitio donde una cadena se convierte en mnemonico.
+ * Del lado de dentro ya nadie compara texto -- se compara el enum, que es un
+ * entero --, y por eso esta conversion ocurre UNA vez por token en el lexer y no
+ * en cada consulta como pasaba con las tablas indexadas por cadena.
+ *
+ * Devolver @c kCount y no lanzar es a proposito: "esto no es una instruccion" es
+ * una respuesta que el lexer necesita para poder decir DoNDE estaba el nombre
+ * mal escrito.
+ *
+ * La tabla se ordena por texto la primera vez y luego es busqueda binaria.  No
+ * puede aprovecharse el orden del enum porque ese es por categoria, y las dos
+ * ordenaciones no coinciden -- ni deben: la del enum sirve para las preguntas
+ * calientes por categoria, y esta solo se usa al leer texto.
+ */
+inline Mnemonic mnemonic_from_text(const char *text) {
+    struct Entry {
+        const char *text;
+        Mnemonic m;
+    };
+    static const std::vector<Entry> kSorted = [] {
+        std::vector<Entry> v;
+        v.reserve(mnemonic_count());
+#define VX_INSTR(id, text, cat) v.push_back({text, Mnemonic::id});
+#include "emmit/instr_list.h"
+#undef VX_INSTR
+        std::sort(v.begin(), v.end(), [](const Entry &a, const Entry &b) {
+            return std::strcmp(a.text, b.text) < 0;
+        });
+        return v;
+    }();
+    if (text == nullptr) return Mnemonic::kCount;
+    size_t lo = 0, hi = kSorted.size();
+    while (lo < hi) {
+        const size_t mid = lo + (hi - lo) / 2;
+        const int c = std::strcmp(kSorted[mid].text, text);
+        if (c == 0) return kSorted[mid].m;
+        if (c < 0) lo = mid + 1;
+        else hi = mid;
+    }
+    return Mnemonic::kCount;
+}
+
+/// Si @p m es una instruccion de verdad y no el centinela del final.
+inline constexpr bool is_valid(Mnemonic m) {
+    return static_cast<uint16_t>(m) < mnemonic_count();
 }
 
 /// Nombre de la categoria, para diagnosticos y volcados.
