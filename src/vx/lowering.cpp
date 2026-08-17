@@ -1627,6 +1627,45 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                 scan_methods(
                     static_cast<ast::ClassDecl *>(decl.get())->methods);
         }
+        /* Que quedo DENTRO de la particion comptime.  Es el conjunto que hay que
+         * poder compilar y cachear POR SEPARADO del codigo normal, asi que lo
+         * primero es poder VERLO: sin esto, "la particion" es una idea y no un
+         * dato.  Bajo variable de entorno; cero coste cuando no se pide. */
+        if (std::getenv("VESTA_VER_PARTICION_COMPTIME")) {
+            /* Las RAICES (lo que el usuario marco) y la CLAUSURA (los helpers que
+             * el pre-pase recolecta) son conjuntos DISTINTOS, y confundirlos lleva
+             * a creer que la particion ya esta calculada cuando no lo esta: el
+             * pre-pase solo recoge los helpers de un @Macro LOWEREABLE. */
+            size_t n_comptime = 0, n_macro = 0;
+            std::vector<std::string> raices;
+            for (auto &d : mod_.decls) {
+                if (!d || d->kind != ast::NodeKind::FunctionDecl) continue;
+                auto *fd = static_cast<ast::FunctionDecl *>(d.get());
+                /* La particion incluye TODA funcion `comptime` y TODO `@Macro`.
+                 * `comptime` es una ORDEN del usuario, no una inferencia: no se
+                 * filtra por ningun analisis de evaluabilidad (eso es de
+                 * CTPE/CTFE, que si son oportunistas). */
+                if (fd->is_macro) {
+                    ++n_macro;
+                    raices.push_back("@Macro " + fd->name);
+                } else if (fd->is_comptime) {
+                    ++n_comptime;
+                    raices.push_back("comptime " + fd->name);
+                }
+            }
+            std::sort(raices.begin(), raices.end());
+            std::vector<std::string> nombres(comptime_fns_to_force_lower_.begin(),
+                                             comptime_fns_to_force_lower_.end());
+            std::sort(nombres.begin(), nombres.end());
+            std::fprintf(stderr,
+                         "[particion] %zu decls: raices comptime=%zu macro=%zu"
+                         " | clausura force-lower=%zu\n",
+                         mod_.decls.size(), n_comptime, n_macro, nombres.size());
+            for (const std::string &r : raices)
+                std::fprintf(stderr, "[particion]   raiz  %s\n", r.c_str());
+            for (const std::string &n : nombres)
+                std::fprintf(stderr, "[particion]   claus %s\n", n.c_str());
+        }
         g_macro_force_lower = nullptr;
         g_macro_visiting = nullptr;
     }
@@ -14125,7 +14164,15 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
             v0 = lower_expr(op.init.get());
             if (v0 != ir::IR_NO_VALUE) vt = fn_->values[v0].type;
         }
-        const size_t bytes = ir_type_size(vt);
+        /* El tamano lo manda la CLASE cuando la hay: una variable ligada a
+         * `xmm` mide 16 bytes aunque su tipo Vesta sea de 8.  Con el del tipo,
+         * el valor solo conservaba su mitad baja al cruzar de un bloque asm a
+         * otro y la alta pasaba a ser lo que hubiera en la pila -- basura
+         * dentro del resultado, sin un solo aviso. */
+        const uint32_t bytes_clase = vx::asm_bytes_de_clase(
+            (uint8_t)vx::isa_actual(), op.reg_class);
+        const size_t bytes =
+            bytes_clase != 0 ? (size_t)bytes_clase : ir_type_size(vt);
         const ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
         ir::IrInstr ai{};
         ai.op = ir::IrOp::ALLOCA;
@@ -14136,8 +14183,15 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
         emit(current_block_, std::move(ai));
         bind(op.name, addr);
         address_taken_locals_.insert(op.name);
-        const bool is_vec = reg.rfind("xmm", 0) == 0 ||
-                            reg.rfind("ymm", 0) == 0 || reg.rfind("zmm", 0) == 0;
+        /* De que banco es lo decide quien conoce los bancos de cada ISA, no
+         * este fichero.  Y se le pregunta por la CLASE DECLARADA, no por el
+         * registro de arriba: cuando la ligadura es automatica ese registro es
+         * uno elegido a la primera para tener algo que sustituir, y deducir de
+         * el la clase daba la respuesta contraria -- un `xmm v0` salia marcado
+         * como entero, y sin ruido: cada capa quedaba coherente consigo misma y
+         * el valor acababa en `rax` donde el `movdqa` lo espera en `xmm0`. */
+        const bool is_vec =
+            vx::asm_clase_de_banco((uint8_t)vx::isa_actual(), op.reg_class) == vx::ASM_RC_VEC;
         ir::AsmRegBinding b{addr, reg, vt, is_vec, op.name};
         b.reg_auto = reg_auto;
         b.ph_index = ph_index;
@@ -14896,6 +14950,14 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     if (s->q_pure) q |= 1ull << 3;
     if (final_mem) q |= 1ull << 4;
     if (final_flags) q |= 1ull << 5;
+    /* bit 32: la lista de clobbers es AUTORITATIVA -- la inferencia corrio sobre
+     * el cuerpo, asi que una lista VACIA significa "no destruye nada mas que sus
+     * operandos", no "no se sabe".  Con `noinfer` no se promete nada y el backend
+     * sigue siendo conservador.
+     *
+     * Va en el bit 32 y no en el 6 porque los bits 6-7 son el NIVEL del asm y los
+     * 8-31 el asm-id; los altos de un imm de 64 bits estan libres. */
+    if (!s->q_noinfer) q |= 1ull << 32;
     /* Y el NIVEL, en los dos bits que quedaban libres.
      *
      * `q_volatile` no distingue nada: vale true por defecto, o sea en todos los

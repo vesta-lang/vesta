@@ -21,6 +21,7 @@
 #ifndef PROCESO_RUNTIME_H
 #define PROCESO_RUNTIME_H
 
+#include "vx/asm/asm_phys_reg.h" // ABI del contexto de un bloque asm
 #include "scheduler.h"
 #include "vm_registers.h"
 #include "vm_state_event.h"
@@ -639,8 +640,14 @@ class ProcessVM {
      * limitacion no era del lenguaje sino de este array.
      *
      * Alineado a 64 porque las formas de mover 512 bits alineados lo exigen.
+     *
+     * El tamano NO se escribe aqui: sale del ABI compartido con quien lo llena
+     * (@ref vx::kAsmCtxQwords).  Estaba puesto `16 + 16*8`, que describe x86
+     * con AVX y nada mas -- en arm64, con 31 generales, o con AVX-512 y sus 32
+     * ranuras anchas, el registro alto caia FUERA del array.  Eso no da error:
+     * escribe pasado el final.
      */
-    alignas(64) uint64_t asm_ctx[16 + 16 * 8] = {0};
+    alignas(64) uint64_t asm_ctx[vx::kAsmCtxQwords] = {0};
 
     // --- GC del proceso ---
     gc::GcHeap gc_heap{manager_mem_priv, 2 * 1024 * 1024,

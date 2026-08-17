@@ -113,6 +113,15 @@ AsmDeferredResult asm_deferred_assemble(const AsmBlob &b,
     }
 
     r.texto = nasm;
+    /* El texto FINAL, ya con registros puestos.  Es el dato que faltaba las dos
+     * veces que hubo que averiguar por que un bloque salia mal: los veredictos
+     * por operando se veian, pero lo que de verdad se ensambla no.  Y cuando el
+     * mismo bloque da un resultado en el interprete y otro aqui, la diferencia
+     * esta justo en estos dos textos. */
+    if (std::getenv("VESTA_JIT_ASM_DUMP") != nullptr) {
+        std::fprintf(stderr, "[asm-jit] plantilla: %s\n", b.deferred_tmpl.c_str());
+        std::fprintf(stderr, "[asm-jit] final:\n%s\n", nasm.c_str());
+    }
     vx::AsmAssembleResult ar =
         vx::g_asm_backend->assemble(nasm, vx::AsmArch::X86_64);
     if (!ar.ok) {
