@@ -23,7 +23,7 @@
  *  - **Dejar fuera un `@Macro`**.  No es una `comptime fn` con otro nombre:
  *    tiene su propia marca y su propio camino de invocacion.  Un recolector que
  *    solo mirase la palabra `comptime` construiria el artefacto sin los macros y
- *    rompeeria esa feature entera sin que ninguna prueba del `inject` fallara.
+ *    romperia esa feature entera sin que ninguna prueba del `inject` fallara.
  *  - **Perder una dependencia**.  Si el codigo comptime llama a una funcion
  *    normal y esa no viaja en el artefacto, el artefacto no es auto-suficiente y
  *    la llamada revienta EN COMPILACION, que es el peor momento.
@@ -59,9 +59,15 @@ static int g_fail = 0;
         }                                                                      \
     } while (0)
 
-/// Parsea @p src y devuelve su conjunto comptime.  @p ok queda a false si el
-/// fuente no parsea (asi un fallo de sintaxis del test no se lee como un fallo
-/// del recolector).
+/**
+ * @brief Parsea @p src y devuelve su conjunto comptime.
+ *
+ * @param src Fuente Vesta del caso.
+ * @param ok  [salida] @c false si el fuente no parsea.  Se separa del resultado
+ *            para que un fallo de sintaxis DEL TEST no se lea como un fallo del
+ *            recolector, que son cosas distintas.
+ * @return El conjunto comptime, o uno vacio si @p ok quedo a @c false.
+ */
 static ComptimeUnit unidad_de(const std::string &src, bool &ok) {
     Diagnostics diags;
     Lexer lx(src, "<test>", diags);
@@ -72,15 +78,28 @@ static ComptimeUnit unidad_de(const std::string &src, bool &ok) {
     return vx::collect_comptime_unit(*mod, src);
 }
 
-/// ¿Esta @p name en @p v?
+/**
+ * @brief Pertenencia de @p name a @p v.
+ *
+ * @param v    Lista donde buscar.
+ * @param name Nombre buscado.
+ * @return @c true si @p v contiene @p name.
+ */
 static bool tiene(const std::vector<std::string> &v, const std::string &name) {
     for (const std::string &s : v)
         if (s == name) return true;
     return false;
 }
 
-/// Imprime una lista cuando una afirmacion falla: un "no coincide" a secas
-/// obliga a reejecutar a mano para ver que sobra o que falta.
+/**
+ * @brief Imprime una lista del conjunto cuando una afirmacion falla.
+ *
+ * Un "no coincide" a secas obliga a reejecutar a mano para ver que sobra o que
+ * falta; con la lista delante el fallo se lee de una vez.
+ *
+ * @param etiqueta Nombre de la lista (@c comptime_fns, @c macros, ...).
+ * @param v        Contenido a volcar.
+ */
 static void volcar(const char *etiqueta, const std::vector<std::string> &v) {
     std::printf("  %s (%zu):", etiqueta, v.size());
     for (const std::string &s : v) std::printf(" %s", s.c_str());
