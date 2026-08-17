@@ -11,6 +11,7 @@
  *        como ADD/LOAD/STORE/... normales.  Solo el residuo opaco (INLINE_ASM/
  *        ASM_MICRO) se analiza aparte, conservador y con tags.
  */
+#include <cctype>
 #include "analysis/effects/ir_effects.h"
 
 #include "util/crono_tramo.h"
@@ -105,11 +106,50 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
         for (const analysis::LigaduraAsm &l : lig.ligaduras)
             clases.emplace_back(l.marcador, l.clase);
     }
+    /* EL TEXTO A ANALIZAR, que no siempre esta donde estaba.
+     *
+     * Un `INLINE_ASM` lleva su cuerpo en `func_name`.  Un `ASM_MICRO` NO: lleva
+     * el indice de su ficha en `imm`, y el texto esta en la ficha.  Se analizaba
+     * `func_name` en los dos casos, asi que para todo bloque ELEVADO se analizaba
+     * la cadena VACiA -- cero accesos, cero efectos de memoria --.  Y eso no da
+     * error: da una funcion que escribe memoria declarada `pure readonly`, y con
+     * ella un llamante que se queda con el valor viejo en un registro.
+     *
+     * Ademas hay que reponer los CORCHETES.  La plantilla de un micro lleva el
+     * operando pelado (`movdqa $0, $1`) porque como se escribe una direccion
+     * depende de la ISA y eso se decide al sustituir.  El detector de accesos
+     * busca corchetes -- con razon: es lo que distingue tocar memoria de mover
+     * entre registros --, asi que sin ellos no ve ninguno.  La informacion no
+     * falta, esta en la ficha: el operando dice que es de memoria. */
+    std::string texto_asm = ins.func_name;
+    if (ins.op == ir::IrOp::ASM_MICRO && ins.imm < fn.asm_micros.size()) {
+        const ir::AsmMicro &am = fn.asm_micros[ins.imm];
+        texto_asm = am.tmpl;
+        for (size_t k = 0; k < am.operands.size(); ++k) {
+            if (am.operands[k].kind != ir::AsmOperandKind::MEM) continue;
+            const std::string marcador = "$" + std::to_string(k);
+            /* Se busca el marcador EXACTO: `$1` no debe casar dentro de `$10`. */
+            size_t p = 0;
+            while ((p = texto_asm.find(marcador, p)) != std::string::npos) {
+                const size_t fin = p + marcador.size();
+                const bool solo =
+                    fin >= texto_asm.size() ||
+                    !std::isdigit((unsigned char)texto_asm[fin]);
+                if (solo) {
+                    texto_asm.insert(fin, "]");
+                    texto_asm.insert(p, "[");
+                    p = fin + 2;
+                } else {
+                    p = fin;
+                }
+            }
+        }
+    }
     vx::AsmBlockEffects e;
     {
         /* En su propio bloque: mide SOLO el analisis del texto del bloque. */
         util::CronoTramo crono__("  efectos:analizar-bloque-asm");
-        e = vx::asm_analyze_block(ins.func_name, vx::asm_arch_actual(), clases);
+        e = vx::asm_analyze_block(texto_asm, vx::asm_arch_actual(), clases);
     }
     /* Se declara SOLO lo que el bloque hace.  Antes, cualquier asm que tocara
      * memoria se anotaba como lectura Y escritura de todo, y eso lo convierte
