@@ -27,6 +27,7 @@
  */
 
 #include "toolchain/toolchain.h"
+#include "vx/comptime/comptime_artifact.h"
 #include "vx/comptime/comptime_collect.h"
 #include "vx/lexer.h"
 #include "vx/parser.h"
@@ -186,6 +187,81 @@ i32 main() { return 0; }
         if (ok) {
             CK(u.empty());
             CK(u.unit_source.empty());
+        }
+    }
+
+    /* CASO 4 -- EL AHORRO: la segunda vez NO se recompila.
+     *
+     * Es la razon de ser de todo esto.  Y no basta con que "funcione": hay que
+     * comprobar las tres direcciones, porque cada una falla distinto.
+     *   (a) la primera vez compila (no puede haber acierto de la nada);
+     *   (b) la segunda REUSA -- si no, el cache no sirve y no se ahorra nada;
+     *   (c) tocar la comptime NO reusa -- si reusara, se estaria ejecutando
+     *       codigo comptime VIEJO, que es peor que recompilar de mas. */
+    {
+        const std::string src = R"VX(
+comptime i64 doble(i64 n) { return n * 2; }
+i32 main() { return 0; }
+)VX";
+        const std::string src_cambiada = R"VX(
+comptime i64 doble(i64 n) { return n * 3; }
+i32 main() { return 0; }
+)VX";
+        bool ok = false, ok2 = false;
+        const ComptimeUnit u = unidad_de(src, ok);
+        const ComptimeUnit u2 = unidad_de(src_cambiada, ok2);
+        CK(ok && ok2);
+        if (ok && ok2) {
+            // Store PROPIO del test: usar el global mezclaria este caso con lo
+            // que haya dejado cualquier compilacion previa de la maquina.
+            const vx::CasStore cas((dir / "cas").string());
+            const std::string work = (dir / "work").string();
+
+            const vx::ComptimeArtifact a1 =
+                vx::comptime_artifact_get(u, cas, work);
+            CK(a1.ok);
+            if (!a1.ok) std::printf("  error: %s\n", a1.error.c_str());
+            CK(!a1.from_cache); // (a) la primera compila
+
+            const vx::ComptimeArtifact a2 =
+                vx::comptime_artifact_get(u, cas, work);
+            CK(a2.ok);
+            CK(a2.from_cache); // (b) la segunda reusa
+            if (a2.ok && !a2.from_cache)
+                std::printf("FAIL [cache]: la segunda vez recompilo; el "
+                            "artefacto comptime no se estaria reusando y el "
+                            "ahorro seria cero\n");
+            CK(a1.velb == a2.velb); // y es EL MISMO bytecode
+
+            const vx::ComptimeArtifact a3 =
+                vx::comptime_artifact_get(u2, cas, work);
+            CK(a3.ok);
+            CK(!a3.from_cache); // (c) cambiar la comptime NO reusa
+            if (a3.ok && a3.from_cache)
+                std::printf("FAIL [cache]: tras cambiar la funcion comptime se "
+                            "reuso el artefacto: se ejecutaria codigo comptime "
+                            "OBSOLETO\n");
+        }
+    }
+
+    /* CASO 5 -- "no hay nada que hacer" NO es "no se pudo".  Un modulo sin
+     * comptime devuelve ok=false pero SIN error: si se confundieran, un fallo
+     * real de compilacion pasaria por "este modulo no tenia comptime". */
+    {
+        const std::string src = R"VX(
+i64 suma(i64 a, i64 b) { return a + b; }
+i32 main() { return 0; }
+)VX";
+        bool ok = false;
+        const ComptimeUnit u = unidad_de(src, ok);
+        CK(ok);
+        if (ok) {
+            const vx::CasStore cas((dir / "cas2").string());
+            const vx::ComptimeArtifact a =
+                vx::comptime_artifact_get(u, cas, (dir / "work2").string());
+            CK(!a.ok);
+            CK(a.error.empty());
+            CK(a.velb.empty());
         }
     }
 
