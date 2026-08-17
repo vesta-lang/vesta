@@ -22,6 +22,7 @@
  * y otras funciones de emision referenciadas en @c InstrTable.
  */
 #include "emmit/parser_to_bytecode.h"
+#include "emmit/mnemonic.h" // consulta por indice, no por hash de cadena
 
 namespace Assembly::Bytecode {
 size_t Assembler::size_of_directive(const std::string &dir) const {
@@ -88,12 +89,21 @@ void Assembler::emit_data(const vm::DataDecl *data) {
 const InstrInfo &Assembler::select_variant(
     const std::string &mnemonic,
     const std::vector<std::unique_ptr<vm::ASTNode>> &ops) const {
-    auto it = InstrTable.find(mnemonic);
-    if (it == InstrTable.end())
+    /* Por INDICE, no hasheando el nombre.  Esto corre una vez por instruccion
+     * emitida, y hasta ahora cada una pagaba el hash de su mnemonico ademas de
+     * la comparacion de la cadena al resolver la colision.
+     *
+     * El indice se construye UNA vez desde la misma tabla -- no hay una segunda
+     * copia de los datos: apunta a ella.  Y la tabla sigue escrita por nombre,
+     * que es lo que una persona lee y edita. */
+    static const emmit::MnemonicIndex<std::vector<InstrInfo>> kIndex(InstrTable);
+    const std::vector<InstrInfo> *found =
+        kIndex.find(emmit::mnemonic_from_text(mnemonic.c_str()));
+    if (found == nullptr)
         throw std::runtime_error(
             "select_variant(): Unknown instruction in InstrTable: " + mnemonic);
 
-    const auto &variants = it->second;
+    const auto &variants = *found;
 
     // si es un registro el primero
     AddressingMode mode = AddressingMode::NONE;

@@ -35,6 +35,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace emmit {
@@ -212,6 +213,67 @@ inline Mnemonic mnemonic_from_text(const char *text) {
 inline constexpr bool is_valid(Mnemonic m) {
     return static_cast<uint16_t>(m) < mnemonic_count();
 }
+
+/**
+ * @brief Indice plano por mnemonico sobre una tabla ajena indexada por cadena.
+ *
+ * El problema que resuelve: una tabla `nombre -> lo que sea` obliga a hashear la
+ * cadena en CADA consulta, y las consultas de este tipo ocurren una vez por
+ * instruccion emitida.  Convertir esa tabla entera a indexada por enum son
+ * cientos de entradas que tocar; esto da el mismo resultado sin tocar ninguna:
+ * se recorre UNA vez al arrancar y de ahi en adelante la busqueda es un indice.
+ *
+ * La tabla de cadenas queda como los DATOS -- donde se escriben las entradas,
+ * que es lo que una persona lee y edita -- y este indice como la forma de
+ * consultarla.  Sin dos copias: los punteros apuntan a la de siempre.
+ *
+ * @tparam V Tipo del valor de la tabla ajena.
+ */
+template <typename V> class MnemonicIndex {
+  public:
+    /**
+     * @brief Construye el indice desde @p table.
+     *
+     * Lo que la tabla tenga y la lista no -- o al reves -- se puede consultar
+     * despues (@ref unknown_names, @ref missing).  No se calla: una entrada que
+     * no casa es una instruccion que existe en un lado y no en el otro, y eso es
+     * precisamente el fallo mudo que este trabajo persigue.
+     */
+    template <typename Table> explicit MnemonicIndex(const Table &table) {
+        slots_.assign(mnemonic_count(), nullptr);
+        for (const auto &kv : table) {
+            const Mnemonic m = mnemonic_from_text(kv.first.c_str());
+            if (!is_valid(m)) {
+                unknown_names_.push_back(kv.first);
+                continue;
+            }
+            slots_[static_cast<uint16_t>(m)] = &kv.second;
+        }
+    }
+
+    /// El valor de @p m, o @c nullptr si la tabla no lo tenia.  Un indice.
+    const V *find(Mnemonic m) const {
+        const uint16_t i = static_cast<uint16_t>(m);
+        return i < slots_.size() ? slots_[i] : nullptr;
+    }
+
+    /// Nombres que la tabla tenia y la lista de instrucciones no conoce.
+    const std::vector<std::string> &unknown_names() const {
+        return unknown_names_;
+    }
+
+    /// Mnemonicos de la lista que la tabla no cubre.
+    std::vector<Mnemonic> missing() const {
+        std::vector<Mnemonic> out;
+        for (uint16_t i = 0; i < slots_.size(); ++i)
+            if (slots_[i] == nullptr) out.push_back(static_cast<Mnemonic>(i));
+        return out;
+    }
+
+  private:
+    std::vector<const V *> slots_;
+    std::vector<std::string> unknown_names_;
+};
 
 /// Nombre de la categoria, para diagnosticos y volcados.
 inline constexpr const char *category_name(Category c) {
