@@ -540,6 +540,28 @@ struct CompileResult {
      * structs/arrays (futuros) tambien se beneficien del path VM.
      */
     bool has_lowerable_macros = false;
+
+    /**
+     * @brief Fuente del CONJUNTO COMPTIME de la compilacion: las decls que se
+     *        ejecutan al compilar (`comptime` y `@Macro`), sus dependencias y
+     *        los `import` que necesitan, concatenadas.
+     *
+     * Lo que alimenta hoy a la ComptimeVM se obtiene compilando el PROYECTO
+     * ENTERO -- 704 KB, 182 macros, ~800 ms, el 43% de una compilacion en frio
+     * --, cuando las raices comptime reales de ese mismo programa son ocho
+     * funciones.  Devolviendo aqui su fuente, quien orquesta puede compilar SOLO
+     * eso, que ademas debe hacerse desde FUERA: construir el artefacto dentro de
+     * la compilacion que lo necesita RECURSA (`inject` es un `@Macro`, asi que
+     * el conjunto se contiene a si mismo).
+     *
+     * Vacio si el modulo no tiene nada comptime.
+     */
+    std::string comptime_unit_source;
+    /// Clave de contenido de @c comptime_unit_source: cambia si y solo si cambia
+    /// una decl comptime o una de sus dependencias.  Tocar codigo de runtime NO
+    /// la mueve, que es lo que permite reusar el artefacto entre compilaciones.
+    /// 0 si no hay conjunto.
+    uint64_t comptime_unit_hash = 0;
     /// true si el modulo tiene candidatos de precomputo CTPE (fn evaluable
     /// zero-param con retorno escalar).  Informativo; el plegado ocurre dentro
     /// del emisor cuando VESTA_CTPE esta activo.

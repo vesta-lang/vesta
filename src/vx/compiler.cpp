@@ -304,49 +304,23 @@ CompileResult compile_vx_source(const std::string &source,
     // conjunto comptime del modulo (comptime fns/@Macro/consts + deps
     // transitivas).  Es la base del futuro artefacto comptime separado.  Hoy
     // solo diagnostico opt-in (VESTA_DUMP_COMPTIME_UNIT=1); no cambia codegen.
-    if (std::getenv("VESTA_DUMP_COMPTIME_UNIT")) {
+    {
+        /* Se recolecta SIEMPRE, no solo al diagnosticar: es lo que permite que
+         * quien orquesta compile el conjunto comptime APARTE en vez de compilar
+         * el proyecto ENTERO para obtener lo mismo (hoy: 704 KB y ~800 ms, el
+         * 43% de una compilacion en frio, para lo que son ocho funciones).  El
+         * coste es un recorrido de las decls y un substr por decl del conjunto.
+         *
+         * Aqui SOLO se recolecta y se devuelve.  Construir el artefacto tiene
+         * que hacerlo quien orquesta, desde FUERA: hacerlo aqui RECURSA --
+         * compilar el conjunto vuelve a entrar por este mismo punto y construye
+         * el artefacto DEL artefacto (observado: tres niveles, con el conjunto
+         * encogiendo en cada uno).  Es la version practica de que el conjunto
+         * comptime SE CONTIENE A SI MISMO: `inject` es un `@Macro`. */
         const ComptimeUnit cu = collect_comptime_unit(*mod, source);
-        dump_comptime_unit(cu, std::cerr);
-        /* Y cuanto costaria de verdad tenerlo aparte.  El artefacto de hoy se
-         * produce compilando el PROYECTO ENTERO; la pregunta que decide el
-         * diseno es cuanto cuesta compilar SOLO el conjunto, porque si ya es
-         * barato, la granularidad por unidad (enlazar objetos sueltos) es una
-         * optimizacion de segundo orden y no un requisito. */
-        /* GUARDA DE REENTRADA -- construir el artefacto compila su fuente, y esa
-         * compilacion vuelve a pasar por aqui: sin la guarda, el compilador
-         * construye el artefacto DEL ARTEFACTO, y asi hasta que el conjunto se
-         * vacia (se observo: tres niveles, con el conjunto encogiendo en cada
-         * uno).  Es la version practica de que el conjunto comptime SE CONTIENE
-         * A SI MISMO -- `inject` es un `@Macro` --, y hay que tenerla presente al
-         * cablear esto de verdad: quien construya el artefacto no puede estar
-         * dentro de la compilacion que lo necesita. */
-        static thread_local bool construyendo_artefacto = false;
-        if (!cu.empty() && !cu.unit_source.empty() && !construyendo_artefacto) {
-            construyendo_artefacto = true;
-            struct Restaurar {
-                bool &f;
-                ~Restaurar() { f = false; }
-            } restaurar{construyendo_artefacto};
-            const CasStore cas = CasStore::open_default();
-            const auto t0 = std::chrono::steady_clock::now();
-            const ComptimeArtifact art =
-                comptime_artifact_get(cu, cas, ".cache/comptime");
-            const auto us =
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::steady_clock::now() - t0)
-                    .count();
-            std::cerr << "  artefacto      : "
-                      << (art.ok ? (art.from_cache ? "REUSADO" : "compilado")
-                                 : "FALLO")
-                      << ", " << art.velb.size() << " bytes, " << us
-                      << " us (frontend " << art.frontend_us << " us, resto "
-                      << (us > (long long)art.frontend_us
-                              ? us - (long long)art.frontend_us
-                              : 0)
-                      << " us = ensamblar+enlazar)\n";
-            if (!art.ok && !art.error.empty())
-                std::cerr << "  motivo         : " << art.error << "\n";
-        }
+        res.comptime_unit_source = cu.unit_source;
+        res.comptime_unit_hash = cu.content_hash;
+        if (std::getenv("VESTA_DUMP_COMPTIME_UNIT")) dump_comptime_unit(cu, std::cerr);
     }
 
     // P1: eliminar el tree-walker tambien para los `comptime { }` de modulo.

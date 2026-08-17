@@ -2109,11 +2109,28 @@ CompileResult compile_vx_project(
          * -- llegan por el camino de PROYECTO, asi que sin esto la medida se
          * tomaba sobre casos sinteticos y la granularidad del artefacto se
          * elegia por arquitectura en vez de por dato.  Solo diagnostico. */
-        if (std::getenv("VESTA_DUMP_COMPTIME_UNIT")) {
+        {
             const ComptimeUnit cu = collect_comptime_unit(*pm.ast, pm.source);
             if (!cu.empty()) {
-                std::cerr << "[comptime-unit] modulo " << pm.module_name << "\n";
-                dump_comptime_unit(cu, std::cerr);
+                /* Los conjuntos de TODOS los modulos se CONCATENAN en uno solo:
+                 * el trabajo comptime esta concentrado (medido: 6 de las 8
+                 * raices de este proyecto viven en un unico modulo), asi que
+                 * repartirlo en artefactos por modulo no tendria de que morder,
+                 * y ademas cada compilacion paga un suelo fijo (~8.5 ms) que se
+                 * multiplicaria por el numero de artefactos. */
+                res.comptime_unit_source += cu.unit_source;
+                /* Clave combinada: mezclar los hashes por modulo, no rehashear
+                 * el texto -- asi el orden de los modulos no cambia la clave
+                 * mientras el conjunto sea el mismo. */
+                res.comptime_unit_hash ^= cu.content_hash +
+                                          0x9e3779b97f4a7c15ULL +
+                                          (res.comptime_unit_hash << 6) +
+                                          (res.comptime_unit_hash >> 2);
+                if (std::getenv("VESTA_DUMP_COMPTIME_UNIT")) {
+                    std::cerr << "[comptime-unit] modulo " << pm.module_name
+                              << "\n";
+                    dump_comptime_unit(cu, std::cerr);
+                }
             }
         }
 
