@@ -1627,45 +1627,6 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                 scan_methods(
                     static_cast<ast::ClassDecl *>(decl.get())->methods);
         }
-        /* Que quedo DENTRO de la particion comptime.  Es el conjunto que hay que
-         * poder compilar y cachear POR SEPARADO del codigo normal, asi que lo
-         * primero es poder VERLO: sin esto, "la particion" es una idea y no un
-         * dato.  Bajo variable de entorno; cero coste cuando no se pide. */
-        if (std::getenv("VESTA_VER_PARTICION_COMPTIME")) {
-            /* Las RAICES (lo que el usuario marco) y la CLAUSURA (los helpers que
-             * el pre-pase recolecta) son conjuntos DISTINTOS, y confundirlos lleva
-             * a creer que la particion ya esta calculada cuando no lo esta: el
-             * pre-pase solo recoge los helpers de un @Macro LOWEREABLE. */
-            size_t n_comptime = 0, n_macro = 0;
-            std::vector<std::string> raices;
-            for (auto &d : mod_.decls) {
-                if (!d || d->kind != ast::NodeKind::FunctionDecl) continue;
-                auto *fd = static_cast<ast::FunctionDecl *>(d.get());
-                /* La particion incluye TODA funcion `comptime` y TODO `@Macro`.
-                 * `comptime` es una ORDEN del usuario, no una inferencia: no se
-                 * filtra por ningun analisis de evaluabilidad (eso es de
-                 * CTPE/CTFE, que si son oportunistas). */
-                if (fd->is_macro) {
-                    ++n_macro;
-                    raices.push_back("@Macro " + fd->name);
-                } else if (fd->is_comptime) {
-                    ++n_comptime;
-                    raices.push_back("comptime " + fd->name);
-                }
-            }
-            std::sort(raices.begin(), raices.end());
-            std::vector<std::string> nombres(comptime_fns_to_force_lower_.begin(),
-                                             comptime_fns_to_force_lower_.end());
-            std::sort(nombres.begin(), nombres.end());
-            std::fprintf(stderr,
-                         "[particion] %zu decls: raices comptime=%zu macro=%zu"
-                         " | clausura force-lower=%zu\n",
-                         mod_.decls.size(), n_comptime, n_macro, nombres.size());
-            for (const std::string &r : raices)
-                std::fprintf(stderr, "[particion]   raiz  %s\n", r.c_str());
-            for (const std::string &n : nombres)
-                std::fprintf(stderr, "[particion]   claus %s\n", n.c_str());
-        }
         g_macro_force_lower = nullptr;
         g_macro_visiting = nullptr;
     }
