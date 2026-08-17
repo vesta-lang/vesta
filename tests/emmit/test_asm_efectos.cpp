@@ -385,7 +385,7 @@ int main() {
          "rellenar escribe memoria por `rdi`, sin un corchete a la vista"},
         {"rep movsb", READS_MEM | WRITES_MEM | READS_FLAGS, WRITES_REG,
          "copiar lee por `rsi` y escribe por `rdi`"},
-        {"rep scasb", READS_MEM | WRITES_FLAGS, WRITES_REG | READS_FLAGS,
+        {"rep scasb", READS_MEM | WRITES_FLAGS | READS_FLAGS, WRITES_REG,
          "buscar lee y compara"},
 
         // Entrada/salida por PUERTO: no es memoria, pero se ve desde fuera.
@@ -463,7 +463,7 @@ int main() {
          "rellenar de ocho en ocho, por `rdi`"},
         {"rep movsq", READS_MEM | WRITES_MEM | READS_FLAGS, WRITES_REG,
          "copiar de ocho en ocho"},
-        {"rep cmpsb", READS_MEM | WRITES_FLAGS, WRITES_REG | READS_FLAGS,
+        {"rep cmpsb", READS_MEM | WRITES_FLAGS | READS_FLAGS, WRITES_REG,
          "comparar dos bloques lee los dos y deja banderas"},
 
         // Lectura de estado del procesador: escriben registros que no nombran.

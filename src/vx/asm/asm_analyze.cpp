@@ -480,8 +480,22 @@ AsmBlockEffects asm_analyze_block(
              * un `movsd [rdi], xmm0` cogia las banderas de la `movsd` de CADENA,
              * que lee la bandera de direccion.  Las banderas habrian salido de
              * otra instruccion.  `modeled` es justo esa condicion. */
+            /* Y con la linea SIN el prefijo.  La base nombra las formas
+             * fusionadas (`REP_MOVSB`), asi que preguntarle por `rep movsb` la
+             * hace leer `rep` como mnemonico y no encontrar nada: el detalle se
+             * perdia justo en las de cadena, que son las que LEEN la bandera de
+             * direccion.  El prefijo no cambia que banderas toca la
+             * instruccion -- cambia cuantas veces la ejecuta --, asi que se
+             * pregunta por ella y ya esta. */
+            std::string linea_sin_prefijo = mnem;
+            {
+                const std::vector<std::string> ops_db = operandos_de(line, mnem);
+                for (size_t k = 0; k < ops_db.size(); ++k)
+                    linea_sin_prefijo += (k == 0 ? " " : ", ") + ops_db[k];
+            }
             const vx::instr_db::AsmInsnSem sem =
-                vx::instr_db::asm_insn_sem(isa_db, line, /*ua_id=*/0);
+                vx::instr_db::asm_insn_sem(isa_db, linea_sin_prefijo,
+                                           /*ua_id=*/0);
             const int32_t fid = sem.modeled ? sem.form_id : -1;
             std::vector<std::string> lee, escribe;
             if (fid >= 0 &&
