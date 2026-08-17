@@ -3568,6 +3568,33 @@ int main(int argc, char *argv[]) {
         const uint8_t cache_format_version =
             2; /* Bump por MC.14 macro-scoped key */
 
+        /* QUE CONTIENE el artefacto, no solo como se lee.
+         *
+         * La clave hasta ahora decia de QUE FUENTE se derivo y con QUE FORMATO
+         * se lee, pero no que se metio dentro.  Y eso es una variable: lo que la
+         * ComptimeVM necesita se puede producir compilando el PROGRAMA ENTERO
+         * (lo de hoy) o solo el CONJUNTO COMPTIME (lo que se esta construyendo,
+         * ~350x mas pequeno).  Con la misma clave para las dos cosas, cambiar de
+         * productor deja en el cache un artefacto cuyo contenido no es el que la
+         * clave promete -- y el cache no puede detectarlo: lo carga y MIENTE.
+         *
+         * Ya paso, y costo caro: un artefacto INCOMPLETO persistido durante una
+         * prueba envenenó todas las compilaciones siguientes (e2e 919/4 ->
+         * 903/12), y el sintoma -- macros que dejan de resolver -- no apunta al
+         * cache por ningun lado.  Se reviritio codigo CORRECTO tres veces
+         * persiguiendolo, hasta que purgar `.cache/vx/` lo devolvio todo a su
+         * sitio.
+         *
+         * Con la clase en la clave, un artefacto de otra clase sencillamente NO
+         * SE ENCUENTRA: falla el hit, se reconstruye, y no hay nada que
+         * detectar porque no llega a cargarse. */
+        enum class ClaseArtefactoComptime : uint8_t {
+            ProgramaEntero = 1, ///< el `.vel` del programa, ensamblado entero.
+            ConjuntoComptime = 2, ///< solo lo que se ejecuta al compilar.
+        };
+        const uint8_t clase_artefacto =
+            static_cast<uint8_t>(ClaseArtefactoComptime::ProgramaEntero);
+
         /*  MC.14: macro-scoped cache key.  Hashea SOLO los rangos
          * source que contienen declaraciones `@Macro` (incluyendo
          * anotaciones precedentes como @Pure/@Inline).  Cambios en
@@ -3808,6 +3835,10 @@ int main(int argc, char *argv[]) {
                 h *= FNV_PRIME;
             }
             h ^= cache_format_version;
+            h *= FNV_PRIME;
+            /* La CLASE del artefacto: sin esto, dos cosas distintas comparten
+             * clave y el cache sirve una por la otra sin poder notarlo. */
+            h ^= clase_artefacto;
             h *= FNV_PRIME;
             for (char c : vx_path) {
                 h ^= static_cast<uint8_t>(c);
