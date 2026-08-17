@@ -363,7 +363,12 @@ namespace {
  */
 inline bool asm_clobbers_conocidos(const MFunction &mf, const MInstr &in) {
     const uint32_t idx = static_cast<uint32_t>(in.src1.value);
-    return idx < mf.asm_blobs.size() && !mf.asm_blobs[idx].clobbers.empty();
+    /* Lo que decide es que la lista sea AUTORITATIVA, no que tenga elementos: una
+     * lista vacia con inferencia hecha significa "no destruye nada mas que sus
+     * operandos", y es justo el caso de los memset AVX2 (`xmm sem`, `ymm v0` son
+     * OPERANDOS declarados, no clobbers).  Confundir "vacia" con "no se sabe" era
+     * lo que dejaba el trato conservador puesto. */
+    return idx < mf.asm_blobs.size() && mf.asm_blobs[idx].clobbers_conocidos;
 }
 
 /**

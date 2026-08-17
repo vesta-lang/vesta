@@ -4281,6 +4281,10 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 }
                 blob.clobbers_mem = ((in.imm >> 4) & 1u) != 0;
                 blob.clobbers_flags = ((in.imm >> 5) & 1u) != 0;
+                /* bit 32: la inferencia corrio -> la lista es autoritativa y una
+                 * lista vacia significa "nada mas que sus operandos".  (Los bits
+                 * 6-7 son el nivel del asm y los 8-31 el asm-id.) */
+                blob.clobbers_conocidos = ((in.imm >> 32) & 1ull) != 0;
                 //  AS inc.5e: registros fisicos clobbered (explicitos
                 // del usuario + inferidos; asm_clobber_lists YA excluye los
                 // regs ligados por register()).  El regalloc los excluye

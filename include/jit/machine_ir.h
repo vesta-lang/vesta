@@ -1487,6 +1487,22 @@ struct AsmBlob {
     std::vector<uint32_t> in_vregs;  ///< vregs leidos por el asm
     std::vector<uint32_t> out_vregs; ///< vregs escritos por el asm
     std::vector<uint8_t> clobbers;   ///< MReg ids clobbered (no bindings)
+    /**
+     * @brief ¿La lista @c clobbers es AUTORITATIVA (se sabe que destruye)?
+     *
+     * Distingue "no destruye nada mas que sus operandos" de "no se sabe que
+     * destruye", que son dos cosas y compartian representacion: la lista VACIA.
+     * Es @c true cuando la inferencia de clobbers corrio sobre el cuerpo (lo
+     * normal; @c noinfer la desactiva).  Con la lista vacia y esto a @c true, el
+     * asm NO necesita el trato conservador de "posicion de llamada": sus
+     * operandos declarados ya se le asignan y no toca nada mas.
+     *
+     * Sin esta distincion, un `asm` que solo usa sus propios operandos -- p.ej.
+     * `asm (reg d = dst, xmm sem, ymm v0) { ... }` de los memset AVX2 -- caia en
+     * el trato conservador, sus operandos VECTORIALES salian exigiendo una lane
+     * PRESERVADA, y en x86-64 ninguna xmm lo es: 0 lanes admisibles.
+     */
+    bool clobbers_conocidos = false;
     bool clobbers_flags = false;
     bool clobbers_mem = false;
     /// Solo-inspeccion (LSP): etiquetas internas del asm -> offset RELATIVO al
