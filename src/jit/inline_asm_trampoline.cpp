@@ -16,6 +16,7 @@
 #include "jit/code_cache.h"
 #include "vx/asm/asm_backend.h"
 #include "ffi/virtual_lib_registry.h" // inc.6: registrar el helper runner
+#include "runtime/exception_runtime.h" // parar si el asm no se puede ejecutar
 #include "runtime/proceso_runtime.h" // inc.6: acceso a ProcessVM::asm_ctx + vm_mem
 
 #include <atomic> // emulacion portable del efecto (barrera) sin ensamblador
@@ -319,13 +320,32 @@ extern "C" uint64_t vrt_asm_micro_regs(uint64_t proc, uint64_t hash,
          * una barrera en cualquier maquina -- pero una instruccion que CAMBIA
          * valores no: los devolveria sin tocar.  Callarselo seria dar por hecho
          * un trabajo que no se hizo. */
+        /* Una barrera SI se puede cumplir sin ensamblador -- es una barrera en
+         * cualquier maquina -- asi que un bloque que solo ordena la memoria
+         * sigue siendo correcto y se deja pasar. */
         if (eff & 0x8u) std::atomic_thread_fence(std::memory_order_seq_cst);
-        if (n != 0)
-            std::fprintf(stderr,
-                         "[asm] no hay con que ejecutar este bloque de "
-                         "ensamblador (hash=0x%016llx, %llu operandos): sus "
-                         "valores salen sin tocar\n",
-                         (unsigned long long)hash, (unsigned long long)n);
+        if (n != 0) {
+            /* Pero un bloque que CAMBIA valores no se puede saltar.  Antes se
+             * avisaba por la salida de error y se continuaba con los valores sin
+             * tocar: el programa seguia y daba resultados falsos, que es peor que
+             * pararse -- nadie lee un aviso de un programa que "funciona".
+             *
+             * Y este caso no es raro ni teorico: la VM tiene que poder correr en
+             * cualquier arquitectura, asi que un `asm` escrito para otra no se
+             * puede ejecutar aqui de ninguna forma.  Lo correcto entonces es
+             * decirlo y parar; el programa portable elige otro camino con
+             * `@Target`, que para eso esta.
+             *
+             * Es capturable (`try { } catch (FatalError e) { }`), asi que quien
+             * quiera seguir puede decidirlo -- explicitamente, no por omision. */
+            char msg[192];
+            std::snprintf(msg, sizeof(msg),
+                          "bloque de ensamblador no ejecutable en esta maquina "
+                          "(%llu operandos): no hay ensamblador para su ISA, y "
+                          "sus valores cambiarian el resultado",
+                          (unsigned long long)n);
+            runtime::throw_fatal(vm, runtime::FATAL_ILLEGAL_INSTRUCTION, msg);
+        }
         return 0;
     }
 
@@ -395,13 +415,32 @@ extern "C" uint64_t vrt_asm_micro_ops(uint64_t proc, uint64_t hash,
          * valores no se puede emular asi: los devolveria sin tocar y el programa
          * seguiria con los de antes.  Callarselo es dar por hecho un trabajo que
          * no se hizo, asi que se dice. */
+        /* Una barrera SI se puede cumplir sin ensamblador -- es una barrera en
+         * cualquier maquina -- asi que un bloque que solo ordena la memoria
+         * sigue siendo correcto y se deja pasar. */
         if (eff & 0x8u) std::atomic_thread_fence(std::memory_order_seq_cst);
-        if (n != 0)
-            std::fprintf(stderr,
-                         "[asm] no hay con que ejecutar este bloque de "
-                         "ensamblador (hash=0x%016llx, %llu operandos): sus "
-                         "valores salen sin tocar\n",
-                         (unsigned long long)hash, (unsigned long long)n);
+        if (n != 0) {
+            /* Pero un bloque que CAMBIA valores no se puede saltar.  Antes se
+             * avisaba por la salida de error y se continuaba con los valores sin
+             * tocar: el programa seguia y daba resultados falsos, que es peor que
+             * pararse -- nadie lee un aviso de un programa que "funciona".
+             *
+             * Y este caso no es raro ni teorico: la VM tiene que poder correr en
+             * cualquier arquitectura, asi que un `asm` escrito para otra no se
+             * puede ejecutar aqui de ninguna forma.  Lo correcto entonces es
+             * decirlo y parar; el programa portable elige otro camino con
+             * `@Target`, que para eso esta.
+             *
+             * Es capturable (`try { } catch (FatalError e) { }`), asi que quien
+             * quiera seguir puede decidirlo -- explicitamente, no por omision. */
+            char msg[192];
+            std::snprintf(msg, sizeof(msg),
+                          "bloque de ensamblador no ejecutable en esta maquina "
+                          "(%llu operandos): no hay ensamblador para su ISA, y "
+                          "sus valores cambiarian el resultado",
+                          (unsigned long long)n);
+            runtime::throw_fatal(vm, runtime::FATAL_ILLEGAL_INSTRUCTION, msg);
+        }
         return 0;
     }
     /* Descriptor: 8 bits por operando -- 5 de ranura (0..31) y 3 de ancho.  Con
