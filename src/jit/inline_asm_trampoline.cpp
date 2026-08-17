@@ -291,6 +291,94 @@ extern "C" uint64_t vrt_asm_micro_exec(uint64_t proc, uint64_t hash,
  * @param n Cuantos operandos hay (maximo 8).
  * @return 0.
  */
+/**
+ * @brief Ejecuta un bloque `asm` leyendo sus operandos DONDE YA ESTAN: en los
+ *        registros de la VM.
+ *
+ * Es la via que sustituye a la tabla.  La otra mueve los valores a la pila para
+ * leerlos de ahi y los devuelve al terminar -- dos copias por operando y por
+ * bloque -- cuando el valor ya esta en un registro de la VM, y la VM tiene los
+ * dos bancos.  Un bloque `asm` no es una frontera que cruzar copiando: es codigo
+ * dentro del codigo.
+ *
+ * @param proc  Proceso (el que devuelve `getproc`).
+ * @param hash  FNV-1a del cuerpo ya sustituido: la clave del trampolin.
+ * @param eff   Efectos empaquetados del bloque (memoria, flags, barrera).
+ * @param locs  Direccion VM de un array de @ref vx::AsmOperandLoc, uno por
+ *              operando con valor.
+ * @param n     Cuantos operandos.
+ */
+extern "C" uint64_t vrt_asm_micro_regs(uint64_t proc, uint64_t hash,
+                                       uint64_t eff, uint64_t locs,
+                                       uint64_t n) {
+    auto *vm = reinterpret_cast<runtime::ProcessVM *>(proc);
+    if (vm == nullptr) return 0;
+    AsmTrampolineFn tramp = lookup_inline_asm_trampoline(hash);
+    if (tramp == nullptr) {
+        /* Sin ensamblador se emula lo que se pueda de la base -- una barrera es
+         * una barrera en cualquier maquina -- pero una instruccion que CAMBIA
+         * valores no: los devolveria sin tocar.  Callarselo seria dar por hecho
+         * un trabajo que no se hizo. */
+        if (eff & 0x8u) std::atomic_thread_fence(std::memory_order_seq_cst);
+        if (n != 0)
+            std::fprintf(stderr,
+                         "[asm] no hay con que ejecutar este bloque de "
+                         "ensamblador (hash=0x%016llx, %llu operandos): sus "
+                         "valores salen sin tocar\n",
+                         (unsigned long long)hash, (unsigned long long)n);
+        return 0;
+    }
+
+    const int nops = (int)(n > vx::kAsmMaxOps ? vx::kAsmMaxOps : n);
+    uint64_t *ctx = vm->asm_ctx;
+    /* El contexto entero: dejar restos de un bloque anterior en las partes que
+     * este no escribe seria darle entrada a un valor que nadie le paso. */
+    std::memset(ctx, 0, sizeof(vm->asm_ctx));
+
+    /* De los registros de la VM al contexto del trampolin.  Sin pasar por la
+     * pila: el valor se lee de su banco y se escribe donde el codigo nativo lo
+     * espera. */
+    for (int i = 0; i < nops; ++i) {
+        const uint64_t a = locs + (uint64_t)i * vx::kAsmLocBytes;
+        const uint8_t bank = (uint8_t)vm->vm_mem.read_u8(a);
+        const uint8_t vm_reg = (uint8_t)vm->vm_mem.read_u8(a + 1);
+        const uint8_t phys = (uint8_t)vm->vm_mem.read_u8(a + 2);
+        const uint8_t flags = (uint8_t)vm->vm_mem.read_u8(a + 3);
+        if ((flags & vx::kAsmLocReads) == 0) continue; // solo escribe: nada que meter
+        if (bank == vx::kAsmBankWide) {
+            if (vm_reg >= 16 || phys >= vx::kAsmCtxVecSlots) continue;
+            vm->registers.zmm[vm_reg].read_zmm(
+                &ctx[vx::kAsmCtxGpSlots + (size_t)phys * vx::kAsmCtxVecQwords]);
+        } else {
+            if (vm_reg >= 16 || phys >= vx::kAsmCtxGpSlots) continue;
+            ctx[phys] = vm->registers.regs[vm_reg].qword();
+        }
+    }
+
+    tramp(ctx);
+
+    /* Y de vuelta, solo lo que el bloque ESCRIBE.  Devolver tambien lo que solo
+     * se lee sobreescribiria el registro de la VM con lo que el codigo nativo
+     * dejara ahi, que no es asunto suyo. */
+    for (int i = 0; i < nops; ++i) {
+        const uint64_t a = locs + (uint64_t)i * vx::kAsmLocBytes;
+        const uint8_t bank = (uint8_t)vm->vm_mem.read_u8(a);
+        const uint8_t vm_reg = (uint8_t)vm->vm_mem.read_u8(a + 1);
+        const uint8_t phys = (uint8_t)vm->vm_mem.read_u8(a + 2);
+        const uint8_t flags = (uint8_t)vm->vm_mem.read_u8(a + 3);
+        if ((flags & vx::kAsmLocWrites) == 0) continue;
+        if (bank == vx::kAsmBankWide) {
+            if (vm_reg >= 16 || phys >= vx::kAsmCtxVecSlots) continue;
+            vm->registers.zmm[vm_reg].write_zmm(
+                &ctx[vx::kAsmCtxGpSlots + (size_t)phys * vx::kAsmCtxVecQwords]);
+        } else {
+            if (vm_reg >= 16 || phys >= vx::kAsmCtxGpSlots) continue;
+            vm->registers.regs[vm_reg].qword(ctx[phys]);
+        }
+    }
+    return 0;
+}
+
 extern "C" uint64_t vrt_asm_micro_ops(uint64_t proc, uint64_t hash,
                                       uint64_t eff, uint64_t tabla,
                                       uint64_t desc, uint64_t n) {
@@ -312,17 +400,62 @@ extern "C" uint64_t vrt_asm_micro_ops(uint64_t proc, uint64_t hash,
                          (unsigned long long)hash, (unsigned long long)n);
         return 0;
     }
-    const int nops = (int)(n > 8 ? 8 : n);
+    /* Descriptor: 8 bits por operando -- 5 de ranura (0..31) y 3 de ancho.  Con
+     * 4 bits solo cabia la ranura, y entonces aqui no habia forma de saber si
+     * el valor iba a `rax` o a `xmm0`: se metia en el banco general SIEMPRE, y
+     * por eso el banco ancho no podia pasar por aqui.
+     *
+     * El ancho va en el descriptor y no se deduce del registro porque son cosas
+     * distintas: `xmm3`, `ymm3` y `zmm3` son la MISMA ranura, y lo unico que
+     * dice cuantos bytes hay que mover es el ancho. */
+    /* Los descriptores llegan EN MEMORIA, uno por operando, detras de la tabla
+     * de valores.  Antes venian empaquetados en `desc`, y ese entero le ponia
+     * un techo de bits a algo que crece con cada ISA: no cabia el campo de
+     * clase, y sin el un valor de ocho bytes en el banco ancho -- un `double`
+     * en `xmm0` -- se metia en el general. */
+    const int nops = (int)(n > vx::kAsmMaxOps ? vx::kAsmMaxOps : n);
     uint64_t *ctx = vm->asm_ctx;
-    for (int i = 0; i < 16; ++i) ctx[i] = 0;
+    /* El contexto entero: dejar restos de un bloque anterior en las partes que
+     * este no escribe seria darle entrada a un valor que nadie le paso. */
+    std::memset(ctx, 0, sizeof(vm->asm_ctx));
+    auto leer_desc = [&](int i, vx::AsmOperandDesc &d) {
+        const uint64_t a = desc + (uint64_t)i * vx::kAsmDescBytes;
+        d.clase = (uint16_t)vm->vm_mem.read_u16(a);
+        d.ranura = (uint16_t)vm->vm_mem.read_u16(a + 2);
+        d.bytes = (uint16_t)vm->vm_mem.read_u16(a + 4);
+        d.flags = (uint16_t)vm->vm_mem.read_u16(a + 6);
+    };
+    auto en_banco_ancho = [](const vx::AsmOperandDesc &d) {
+        return d.clase == vx::ASM_RC_VEC || d.clase == vx::ASM_RC_FP;
+    };
     for (int i = 0; i < nops; ++i) {
-        const int phys = (int)((desc >> (i * 4)) & 0xF);
-        ctx[phys] = vm->vm_mem.read_u64(tabla + (uint64_t)i * 8);
+        vx::AsmOperandDesc d;
+        leer_desc(i, d);
+        const uint64_t slot = tabla + (uint64_t)i * vx::kAsmSlotBytes;
+        if (d.ranura >= vx::kAsmCtxGpSlots) continue; // fuera del contexto
+        if (!en_banco_ancho(d)) {
+            ctx[d.ranura] = vm->vm_mem.read_u64(slot);
+            continue;
+        }
+        if (!vx::asm_cabe_en_ranura((unsigned)d.bytes * 8)) continue;
+        uint8_t *dst = reinterpret_cast<uint8_t *>(
+            &ctx[vx::kAsmCtxGpSlots + (size_t)d.ranura * vx::kAsmCtxVecQwords]);
+        vm->vm_mem.read_bytes(slot, dst, d.bytes ? d.bytes : 8);
     }
     tramp(ctx);
     for (int i = 0; i < nops; ++i) {
-        const int phys = (int)((desc >> (i * 4)) & 0xF);
-        vm->vm_mem.write_u64(tabla + (uint64_t)i * 8, ctx[phys]);
+        vx::AsmOperandDesc d;
+        leer_desc(i, d);
+        const uint64_t slot = tabla + (uint64_t)i * vx::kAsmSlotBytes;
+        if (d.ranura >= vx::kAsmCtxGpSlots) continue;
+        if (!en_banco_ancho(d)) {
+            vm->vm_mem.write_u64(slot, ctx[d.ranura]);
+            continue;
+        }
+        if (!vx::asm_cabe_en_ranura((unsigned)d.bytes * 8)) continue;
+        const uint8_t *src = reinterpret_cast<const uint8_t *>(
+            &ctx[vx::kAsmCtxGpSlots + (size_t)d.ranura * vx::kAsmCtxVecQwords]);
+        vm->vm_mem.write_bytes(slot, src, d.bytes ? d.bytes : 8);
     }
     return 0;
 }
@@ -332,6 +465,8 @@ void register_inline_asm_runner() {
                              reinterpret_cast<void *>(&vrt_inline_asm_exec));
     ffi::register_virtual_fn("vrt", "asm_micro_exec",
                              reinterpret_cast<void *>(&vrt_asm_micro_exec));
+    ffi::register_virtual_fn("vrt", "asm_micro_regs",
+                             reinterpret_cast<void *>(&vrt_asm_micro_regs));
     ffi::register_virtual_fn("vrt", "asm_micro_ops",
                              reinterpret_cast<void *>(&vrt_asm_micro_ops));
 }
@@ -472,12 +607,39 @@ AsmTrampolineFn build_asm_trampoline(const std::string &user_asm, CodeCache &cc,
      *
      * Solo se toca si aparecen, para no pagar 16 movimientos en el caso
      * comun. */
-    const bool usa_ancho = user_asm.find("xmm") != std::string::npos ||
-                           user_asm.find("ymm") != std::string::npos ||
-                           user_asm.find("zmm") != std::string::npos;
+    /* CUALES usa, no solo si usa alguno.  Guardar y devolver los dieciseis
+     * eran treinta y dos movimientos de 16 bytes para un bloque que casi
+     * siempre toca uno o dos: el resto es copiar ceros de ida y de vuelta.
+     *
+     * Se leen del propio cuerpo, que es lo unico que hay aqui -- el trampolin
+     * se indexa por el hash del texto, asi que dos cuerpos distintos son dos
+     * trampolines y no se puede compartir de mas. */
+    bool usa_slot[16] = {false};
+    bool usa_ancho = false;
+    for (size_t p = 0; p + 3 < user_asm.size(); ++p) {
+        const char c0 = (char)std::tolower((unsigned char)user_asm[p]);
+        if (c0 != 'x' && c0 != 'y' && c0 != 'z') continue;
+        if (std::tolower((unsigned char)user_asm[p + 1]) != 'm' ||
+            std::tolower((unsigned char)user_asm[p + 2]) != 'm')
+            continue;
+        size_t q = p + 3;
+        if (q >= user_asm.size() || !std::isdigit((unsigned char)user_asm[q]))
+            continue;
+        int n = 0;
+        while (q < user_asm.size() && std::isdigit((unsigned char)user_asm[q]))
+            n = n * 10 + (user_asm[q++] - '0');
+        if (n < 0 || n >= 16) continue; // fuera del contexto: no se toca
+        usa_slot[n] = true;
+        usa_ancho = true;
+    }
     if (usa_ancho) {
-        /* El que trae el contexto esta en la pila; los anchos empiezan tras
-         * los 16 generales (16 * 8 = 128 bytes). */
+        /* El que trae el contexto esta en la pila.  DONDE empiezan los anchos
+         * no se escribe aqui: sale de la misma constante que dimensiona el
+         * contexto.  Estaba puesto el 128 a mano -- 16 generales por 8 -- y al
+         * crecer el banco general para arm64 este codigo siguio leyendo en el
+         * sitio viejo, que ya era de otro.  No da error: mueve el valor
+         * equivocado. */
+        const unsigned base_ancho = vx::kAsmCtxGpSlots * 8;
         nasm += "push r11\n";
         nasm += "mov r11, [rsp + 8]\n";
         for (int i = 0; i < 16; ++i) {
@@ -496,9 +658,10 @@ AsmTrampolineFn build_asm_trampoline(const std::string &user_asm, CodeCache &cc,
     if (usa_ancho) {
         nasm += "push r11\n";
         nasm += "mov r11, [rsp + 8]\n";
+        const unsigned base_ancho = vx::kAsmCtxGpSlots * 8;
         for (int i = 0; i < 16; ++i) {
             std::snprintf(line, sizeof(line), "movups [r11 + 0x%x], xmm%d\n",
-                          128 + i * 64, i);
+                          base_ancho + i * vx::kAsmCtxVecQwords * 8, i);
             nasm += line;
         }
         nasm += "pop r11\n";
