@@ -3579,7 +3579,7 @@ int main(int argc, char *argv[]) {
          * clave promete -- y el cache no puede detectarlo: lo carga y MIENTE.
          *
          * Ya paso, y costo caro: un artefacto INCOMPLETO persistido durante una
-         * prueba envenenó todas las compilaciones siguientes (e2e 919/4 ->
+         * prueba enveneno todas las compilaciones siguientes (e2e 919/4 ->
          * 903/12), y el sintoma -- macros que dejan de resolver -- no apunta al
          * cache por ningun lado.  Se reviritio codigo CORRECTO tres veces
          * persiguiendolo, hasta que purgar `.cache/vx/` lo devolvio todo a su
