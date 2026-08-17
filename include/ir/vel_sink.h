@@ -42,9 +42,31 @@ namespace ir {
  * @class VelSink
  * @brief Destino de lo que emite el backend del IR.
  *
- * Se usa igual que un stream (`sink << "mov r0, 1\n"`), asi que los sitios que
- * emiten no saben ni les importa a donde va.  Eso es lo que permite cambiar el
- * destino sin tocarlos.
+ * ## El `operator<<` es PROVISIONAL, y no es el objetivo
+ *
+ * Aceptar cualquier cosa por `<<` no hace la emision mas robusta que el texto:
+ * mueve el problema de sitio.  Un `out << "movv r0, 1\n"` con el mnemonico mal
+ * escrito compila igual y falla al ensamblar, y un operando que no existe
+ * tampoco lo ve nadie hasta entonces.
+ *
+ * El objetivo es que la ENTRADA sea tipada aunque la salida siga siendo texto:
+ * el mnemonico de un ENUM, los operandos de tipos que solo admitan lo que la
+ * instruccion acepta.  Asi un mnemonico inexistente o un operando de la clase
+ * equivocada no compilan, en vez de descubrirse al final de la cadena.
+ *
+ * ## Restriccion al escribir ese enum: NO duplicar la lista
+ *
+ * Los mnemonicos ya viven en dos sitios -- `InstrSet` (parser) e `InstrTable`
+ * (emisor de bytecode) --, los dos indexados por CADENA.  Un enum escrito a
+ * mano seria una tercera copia del mismo conocimiento, y las tres se separarian
+ * en cuanto alguien anada una instruccion a dos de ellas.
+ *
+ * Lo correcto es al reves: el enum pasa a ser la FUENTE, y esas tablas indexan
+ * por el.  Entonces anadir una instruccion se hace en un sitio y el compilador
+ * obliga a completar el resto.
+ *
+ * Mientras eso no este, `<<` sigue siendo lo que hay -- pero como lo que hay,
+ * no como el diseno.
  */
 class VelSink {
   public:
