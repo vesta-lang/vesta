@@ -80,6 +80,9 @@ extern const char *const kProductorBucles;
 /// Como se COLOCA la memoria del programa: lo unico que un compilador con
 /// enlazador propio sabe y uno tradicional no.
 extern const char *const kProductorDisposicion;
+/// El FLUJO DE CONTROL dentro de un bloque `asm`: cuantos bloques basicos tiene,
+/// de que clase es cada terminador y que destinos quedan sin resolver.
+extern const char *const kProductorAsmFlujo;
 
 /// Clave con la que se guarda lo que es del MODULO entero y no de una funcion.
 extern const char *const kUnidadModulo;

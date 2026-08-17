@@ -23,6 +23,8 @@
 #include <cstring>
 #include <sstream>
 #include "analysis/facts/alignment.h"
+#include "vx/asm/asm_cfg.h"
+#include "vx/asm/asm_effects.h" // isa_actual
 
 namespace analysis {
 namespace asa {
@@ -287,6 +289,125 @@ void producir_frontera(Produccion &p) {
  * fallo que este conocimiento existe para evitar: prometer una alineacion que
  * la memoria no da.  Y eso no falla ruidosamente -- lee mal.
  */
+/**
+ * @brief El FLUJO DE CONTROL de cada bloque `asm`, como hecho.
+ *
+ * Hoy esto se calcula dentro del elevado y muere ahi: si un bloque tiene un
+ * salto, se marca opaco y nadie mas se entera de la FORMA que tiene -- cuantos
+ * bloques basicos hay, que arista sale de cada uno, si algun destino no se
+ * resuelve.  Y esa forma ya se sabe: `build_asm_cfg` la construye, y la
+ * consumen el informe de efectos, `--analyze` y el calculo de coste, cada uno
+ * volviendola a pedir por su cuenta.
+ *
+ * Puesta aqui, se calcula una vez y la lee quien quiera -- que es lo que hace
+ * que el elevado del flujo (E1) no tenga que llevar su propio analisis.
+ *
+ * El terminador va en el hecho como NUMERO (`AsmTerm`) y no como frase: quien
+ * decida algo compara el codigo, y el texto es solo para que lo lea una
+ * persona.
+ */
+/// Nombre de la ISA con el vocabulario que ya usa @c Ambito::isa.  No existe un
+/// helper para esto en la base, y escribirlo aqui es preferible a inventar otro
+/// juego de nombres: el que compara es el filtro del alcance.
+const char *nombre_isa_ambito(vx::instr_db::Isa isa) {
+    switch (isa) {
+    case vx::instr_db::Isa::X86: return "x86-64";
+    case vx::instr_db::Isa::ARM64: return "aarch64";
+    case vx::instr_db::Isa::ARM32: return "arm";
+    case vx::instr_db::Isa::RISCV: return "riscv";
+    }
+    return "";
+}
+
+void producir_asm_flujo(Produccion &p) {
+    const vx::instr_db::Isa isa = vx::isa_actual();
+    for (const ir::IrFunction &fn : p.mod.functions) {
+        if (!p.interesa(fn)) continue;
+        uint32_t idx = 0; // posicion lineal de la instruccion dentro de la fn
+        for (const ir::IrBlock &b : fn.blocks) {
+            for (const ir::IrInstr &in : b.instrs) {
+                ++idx;
+                /* El cuerpo esta en `func_name` cuando el bloque quedo opaco, y
+                 * en la ficha del micro cuando se elevo.  Los dos casos
+                 * interesan: la forma del flujo no depende de si se elevo. */
+                std::string cuerpo;
+                if (in.op == ir::IrOp::INLINE_ASM) {
+                    cuerpo = in.func_name;
+                } else if (in.op == ir::IrOp::ASM_MICRO &&
+                           in.imm < fn.asm_micros.size()) {
+                    cuerpo = fn.asm_micros[in.imm].tmpl;
+                } else {
+                    continue;
+                }
+                if (cuerpo.empty()) continue;
+                /* TAPoN PROVISIONAL, y conviene saber por que.
+                 *
+                 * Un `INLINE_ASM` no siempre lleva ensamblador: aqui llega
+                 * `; __vxf_inject pendiente`, que es el MARCADOR de un bloque
+                 * cuyo cuerpo lo genera `inject(...)` al compilar.  Saltarlos
+                 * evita analizar un comentario, pero se lleva por delante justo
+                 * los bloques CON FLUJO DE CONTROL: los `jb` del corpus salen
+                 * todos de un `inject`, asi que lo que queda son los rectos.
+                 *
+                 * O sea que esto no esta bien: esta callado.  Lo correcto es que
+                 * el flujo se analice DESPUES de la inyeccion, donde el cuerpo
+                 * ya existe.  Hoy hay dos vistas y ninguna sirve sola -- el
+                 * lowering ve el asm expandido y avisa (VXA018), y aqui llega un
+                 * marcador --, y por eso los dos recuentos nunca cuadraron. */
+                if (cuerpo.find("__vxf_inject") != std::string::npos) continue;
+                const vx::AsmCfg cfg = vx::build_asm_cfg(isa, cuerpo);
+                if (std::getenv("VESTA_ASMFLUJO_DEBUG") != nullptr)
+                    std::fprintf(stderr,
+                                 "[asm-flujo] %s#%u: %zu bloques, %zu instr, "
+                                 "cuerpo=<%.60s>\n",
+                                 fn.name.c_str(), idx, cfg.blocks.size(),
+                                 cfg.insns.size(), cuerpo.c_str());
+                if (cfg.blocks.size() <= 1 && !cfg.has_indirect &&
+                    cfg.unknown_terminators.empty())
+                    continue; // recto y sin sorpresas: no hay nada que decir
+
+                Sujeto s;
+                s.clase = Sujeto::Clase::Instruccion;
+                s.funcion = p.almacen.internar(fn.name);
+                s.id = idx;
+
+                Fact f;
+                f.que.dominio = kProductorAsmFlujo;
+                f.que.codigo = "asm_flujo.forma";
+                f.que.a = (int64_t)cfg.blocks.size();
+                f.que.b = (int64_t)cfg.insns.size();
+                std::ostringstream o;
+                o << cfg.blocks.size() << " bloques basicos";
+                if (cfg.has_indirect) o << ", con salto indirecto";
+                if (cfg.has_unresolved_target) o << ", con destino sin resolver";
+                if (!cfg.unknown_terminators.empty())
+                    o << ", " << cfg.unknown_terminators.size()
+                      << " terminador(es) sin clasificar";
+                f.que.detalle = p.almacen.internar(o.str());
+                f.de_quien = s;
+                /* La forma del grafo no depende del backend, pero SI de la ISA:
+                 * el mismo texto no se trocea igual en dos juegos de
+                 * instrucciones. */
+                f.donde.isa = p.almacen.internar(nombre_isa_ambito(isa));
+                f.sello.certeza = Certeza::Demostrada;
+                f.sello.origen.fuente = Fuente::Estatico;
+                f.sello.origen.productor = kProductorAsmFlujo;
+                f.sello.origen.funcion = s.funcion;
+                f.sello.origen.sitio = idx;
+                f.prueba.regla = "asm_flujo.grafo_del_bloque";
+                p.afirmar(f);
+
+                /* Y lo que NO se supo, con su motivo: un terminador sin
+                 * clasificar es una laguna concreta -- el mnemonico -- y
+                 * callarla la vuelve indistinguible de no haber mirado. */
+                for (const std::string &mn : cfg.unknown_terminators)
+                    p.callar(s, "asm_flujo.terminador_desconocido",
+                             kProductorAsmFlujo, p.almacen.internar(mn));
+            }
+        }
+    }
+}
+
 void producir_disposicion(Produccion &p) {
     /* Un hecho por SECCION, no por dato: la garantia es de la seccion, y el
      * desplazamiento de cada dato dentro de ella ya lo sabe quien pregunta. */
@@ -408,6 +529,7 @@ void registrar_los_incluidos() {
     registrar_productor(kProductorMemoria, &producir_memoria);
     registrar_productor(kProductorBucles, &producir_bucles);
     registrar_productor(kProductorDisposicion, &producir_disposicion);
+    registrar_productor(kProductorAsmFlujo, &producir_asm_flujo);
 }
 
 } // namespace
