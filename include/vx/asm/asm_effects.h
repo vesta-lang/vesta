@@ -98,6 +98,18 @@ std::string asm_arch_actual();
  * arquitectura a ISA.  Dos copias de esa tabla son dos respuestas distintas en
  * cuanto una se quede atras.
  */
+/// La ISA de un nombre de arquitectura cualquiera (no solo el objetivo activo).
+instr_db::Isa isa_de_arch(const std::string &arch);
+
+/**
+ * @brief La ISA de un nombre de arquitectura cualquiera, no solo del objetivo.
+ *
+ * Quien analiza un bloque recibe SU arquitectura, no la activa, asi que necesita
+ * poder traducirla sin repetir la correspondencia: dos copias de la misma tabla
+ * se separan, y el sintoma seria leer la base de instrucciones de otra ISA.
+ */
+instr_db::Isa isa_de_arch(const std::string &arch);
+
 instr_db::Isa isa_actual();
 
 /**

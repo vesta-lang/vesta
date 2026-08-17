@@ -349,7 +349,55 @@ AsmBlockEffects asm_analyze_block(
         if (!operandos_de(line, mnem).empty() &&
             (mnem == "movsd" || mnem == "cmpsd"))
             mnem_efectos = mnem + "_sse";
-        const AsmEffects eff = asm_effects_for(mnem_efectos, arch);
+        AsmEffects eff = asm_effects_for(mnem_efectos, arch);
+
+        /* Lo que la tabla escrita a mano no conoce, lo sabe la BASE DE DATOS.
+         *
+         * De las 1930 instrucciones que la base describe, la tabla cubria 318.
+         * Las otras 1612 caian en "no se sabe", y eso cuesta una de dos cosas: si
+         * se resuelve conservador, el bloque es una barrera y alrededor no se
+         * mueve nada; si se resuelve permisivo, deja pasar optimizaciones que
+         * rompen -- lo que paso con `movdqa` y con la aritmetica empaquetada.
+         *
+         * Pero la base YA tiene la respuesta: por forma sabe si lee o escribe
+         * memoria, si toca banderas, si es una barrera y que registros lee y
+         * escribe implicitamente.  La tabla a mano estaba duplicando ese
+         * conocimiento para una fraccion de las instrucciones y dejando el resto
+         * sin nada.
+         *
+         * Asi que la tabla pasa a ser lo que debe: las EXCEPCIONES -- lo que la
+         * base no puede expresar, como la exigencia de alineacion de las formas
+         * alineadas -- y todo lo demas se deriva.  Se consulta con la LiNEA, no
+         * con el mnemonico, porque la base responde por forma y es la linea la que
+         * dice cual: `movsd` con operandos y sin ellos son dos instrucciones.
+         *
+         * `modeled == false` significa que la base no pudo emparejar la forma o
+         * que la instruccion tiene operandos implicitos; ahi NO se deriva, porque
+         * afirmar sobre una forma que no se reconocio es peor que no afirmar. */
+        if (!eff.known) {
+            const vx::instr_db::AsmInsnSem sem = vx::instr_db::asm_insn_sem(
+                isa_de_arch(arch), line, /*ua_id=*/0);
+            if (sem.modeled) {
+                eff.known = true;
+                eff.touches_mem = sem.reads_mem || sem.writes_mem;
+                eff.touches_flags = sem.reads_flags || sem.writes_flags;
+                eff.barrier = sem.barrier;
+                for (const std::string &r : sem.reads)
+                    eff.implicit_read.push_back(r);
+                for (const std::string &w : sem.writes)
+                    eff.implicit_write.push_back(w);
+                /* El rol de cada operando EXPLICITO tambien lo dice la base, y es
+                 * lo que distingue el destino de las fuentes. */
+                for (size_t k = 0; k < 8; ++k) {
+                    bool lee_op = false, escribe_op = false;
+                    if (!vx::instr_db::operando_explicito(isa_de_arch(arch),
+                                                          sem.form_id, k, lee_op,
+                                                          escribe_op))
+                        break;
+                    if (escribe_op) eff.operand_write_mask |= (uint8_t)(1u << k);
+                }
+            }
+        }
         if (!eff.known) {
             res.unknown_mnemonics.push_back(mnem);
             continue;

@@ -34,6 +34,8 @@
 
 #include "vx/asm/asm_analyze.h"
 
+#include "util/test_report.h"
+
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
@@ -125,11 +127,25 @@ void comprueba(const Caso &c, const char *clase_operando) {
     uint32_t sin_mirar = c.sin_mirar;
     if (c.tiene & ESCRIBE_MEM) sin_mirar |= LEE_MEM;
     const uint32_t mirar = ~sin_mirar;
+    auto nombres = [](uint32_t e) {
+        std::string s;
+        if (e & LEE_MEM) s += "lee_mem ";
+        if (e & ESCRIBE_MEM) s += "escribe_mem ";
+        if (e & BANDERAS) s += "banderas ";
+        if (e & LLAMADA) s += "llamada ";
+        if (s.empty()) s = "(nada)";
+        return s;
+    };
     if ((real & mirar) == (c.tiene & mirar)) {
+        /* Se imprime TAMBIEN lo que esta bien.  Un informe que solo enseña los
+         * fallos no dice que se comprobo, y entonces no se puede distinguir "todo
+         * correcto" de "no se miro". */
+        std::printf("  %sok%s   %-26s %s%s%s\n", tests::verde(), tests::fin(), c.texto, tests::gris(),
+                    nombres(real).c_str(), tests::fin());
         ++comprobados;
         return;
     }
-    auto nombre = [](uint32_t e) {
+    auto nombre_sin_usar = [](uint32_t e) {
         static std::string s;
         s.clear();
         if (e & LEE_MEM) s += "lee_mem ";
@@ -141,14 +157,17 @@ void comprueba(const Caso &c, const char *clase_operando) {
     };
     const char *motivo = nullptr;
     if (es_pendiente(c.texto, &motivo)) {
-        std::printf("  PENDIENTE '%s': %s\n", c.texto, motivo);
+        std::printf("  %spend%s %-26s %s%s%s\n", tests::ambar(), tests::fin(), c.texto, tests::gris(), motivo,
+                    tests::fin());
         ++pendientes;
         return;
     }
-    std::printf("  FALLA    '%s'\n", c.texto);
-    std::printf("           esperado: %s\n", nombre(c.tiene & mirar).c_str());
-    std::printf("           real:     %s\n", nombre(real & mirar).c_str());
-    std::printf("           porque:   %s\n", c.porque);
+    std::printf("  %sFALLA%s %-26s\n", tests::rojo(), tests::fin(), c.texto);
+    std::printf("        esperado: %s%s%s\n", tests::verde(),
+                nombres(c.tiene & mirar).c_str(), tests::fin());
+    std::printf("        real:     %s%s%s\n", tests::rojo(), nombres(real & mirar).c_str(),
+                tests::fin());
+    std::printf("        porque:   %s%s%s\n", tests::gris(), c.porque, tests::fin());
     ++fallos;
 }
 

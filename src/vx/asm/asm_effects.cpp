@@ -358,13 +358,20 @@ std::string asm_canonical_reg(const std::string &raw) {
 
 /// ISA del objetivo activo, para preguntarle a la base de instrucciones.  Sale
 /// del MISMO sitio que los registros: el target que se compila, no el host.
-instr_db::Isa isa_actual() {
-    const std::string arch = asm_arch_actual();
+/// La ISA de un nombre de arquitectura CUALQUIERA, no solo del objetivo activo.
+///
+/// Estaba solo dentro de `isa_actual`, asi que quien analizaba un bloque para una
+/// arquitectura dada -- que es lo normal: el analisis recibe la suya -- no tenia a
+/// quien preguntarle y habria tenido que repetir la correspondencia.  Dos copias
+/// de la misma tabla se separan, y el sintoma seria leer la base de otra ISA.
+instr_db::Isa isa_de_arch(const std::string &arch) {
     if (arch == "arm64" || arch == "aarch64") return instr_db::Isa::ARM64;
     if (arch == "arm" || arch == "arm32") return instr_db::Isa::ARM32;
     if (arch == "riscv" || arch == "riscv64") return instr_db::Isa::RISCV;
     return instr_db::Isa::X86;
 }
+
+instr_db::Isa isa_actual() { return isa_de_arch(asm_arch_actual()); }
 
 // -----------------------------------------------------------------------
 // Tabla plana mnemonic -> AsmEffects.  Subset comun, extensible.  Los
