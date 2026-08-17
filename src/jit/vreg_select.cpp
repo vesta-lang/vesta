@@ -4113,6 +4113,18 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 // El inline-asm de @Naked/asm{} se ensambla en el modo del
                 // TARGET (no del host): x86-32 -> KS_MODE_32 (si no, `jmp ecx`
                 // y demas codificaciones de 32 bits fallan en KS_MODE_64).
+                /* La TERCERA ruta del asm en el JIT, y la que faltaba por ver.
+                 *
+                 * Con alguna ligadura automatica el cuerpo no se ensambla aqui:
+                 * se aplaza al rewrite, cuando ya hay registros.  Las dos rutas
+                 * de `ASM_MICRO` ya se volcaban y esta no, asi que un bloque que
+                 * viene por aqui no aparecia en ningun volcado -- y eso se leia
+                 * como "no pasa por el JIT". */
+                if (std::getenv("VESTA_JIT_ASM_DUMP") != nullptr)
+                    std::fprintf(stderr,
+                                 "[asm-jit inline] %s: auto=%d cuerpo=<%s>\n",
+                                 fn.name.c_str(), (int)asm_has_auto,
+                                 in.func_name.c_str());
                 vx::AsmAssembleResult ar;
                 if (!asm_has_auto) {
                     ar = vx::g_asm_backend->assemble(
