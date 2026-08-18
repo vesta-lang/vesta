@@ -96,6 +96,17 @@ project(VMProject
         DESCRIPTION "VestaVM: register-based VM + Vex frontend"
         LANGUAGES C CXX)
 
+# ---------------------------------------------------------------------------
+# Cache de compilador (ver cmake/EnsureCcache.cmake).
+#
+# Va aqui, justo despues de `project()`: los lanzadores del compilador hay que
+# fijarlos antes de que se cree ningun target, porque cada uno se queda con el
+# valor que hubiera en ese momento.
+# ---------------------------------------------------------------------------
+option(VESTA_USE_CCACHE "Usar cache de compilador (se descarga si no hay)" ON)
+include("${CMAKE_SOURCE_DIR}/cmake/EnsureCcache.cmake")
+vesta_setup_ccache()
+
 # Nivel minimo de API de Windows.  Algunas funciones que usa el runtime
 # (p.ej. GetCurrentThreadStackLimits, Win8+) exigen _WIN32_WINNT>=0x0602.
 # msys/ucrt64 lo trae alto por defecto; TDM-GCC (mingw-w64 mas antiguo) lo
