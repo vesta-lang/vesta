@@ -72,7 +72,8 @@ struct Diag {
 
 /**
  * @struct CompileRequest
- * @brief Parametros de una compilacion (equivalente a los flags de @c main.cpp).
+ * @brief Parametros de una compilacion (equivalente a los flags de @c
+ * main.cpp).
  */
 struct CompileRequest {
     /// Fuente: un fichero @c .vx (single-file) o el @c .vx raiz de un proyecto
@@ -120,11 +121,11 @@ struct CompileRequest {
  * @brief Resultado de una compilacion.
  */
 struct CompileResponse {
-    bool ok = false;              ///< true si se produjo el artefacto sin errores.
-    std::string output_path;      ///< Ruta del @c .velb producido (si @c ok).
-    std::vector<Diag> diagnostics;///< Errores + warnings + notas del frontend.
-    uint64_t frontend_us = 0;     ///< Microsegundos del frontend (.vx -> .vel).
-    std::string message;          ///< Nota adicional (p.ej. razon de un fallo).
+    bool ok = false;         ///< true si se produjo el artefacto sin errores.
+    std::string output_path; ///< Ruta del @c .velb producido (si @c ok).
+    std::vector<Diag> diagnostics; ///< Errores + warnings + notas del frontend.
+    uint64_t frontend_us = 0; ///< Microsegundos del frontend (.vx -> .vel).
+    std::string message;      ///< Nota adicional (p.ej. razon de un fallo).
 };
 
 /**

@@ -2011,7 +2011,8 @@ InstrFormat decode_table_extended[0X100] = {
     /* 0x6C  getarg r_dst, r_idx (FIXED_4)
              Aloca un StringObject FLAT con el contenido del arg[idx] y
              deposita su GcHandle en r_dst.  Si idx fuera de rango,
-             deposita 0 (GC_NULL_HANDLE).  Builtin Vesta `args_get(i) -> string`.
+             deposita 0 (GC_NULL_HANDLE).  Builtin Vesta `args_get(i) ->
+       string`.
      */
     {"getarg", Assembly::Bytecode::AddressingMode::REG,
      Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_getarg,
@@ -2035,7 +2036,8 @@ InstrFormat decode_table_extended[0X100] = {
 
     /* 0x6F  getfldat r_class, r_idx (FIXED_4)
              Variante reg-reg de getfield (0xD8).  R00 = &cls->fields[idx]
-             o 0 si fuera de rango / nulo.  Builtin Vesta `getFieldAt(cls, i)`. */
+             o 0 si fuera de rango / nulo.  Builtin Vesta `getFieldAt(cls, i)`.
+     */
     {"getfldat", Assembly::Bytecode::AddressingMode::REG,
      Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_getfldat,
      decode_instr_two_op_reg},
@@ -2250,18 +2252,20 @@ InstrFormat decode_table_extended[0X100] = {
      decode_instr_simple},
 
     /* 0x8F  csel r_dst, r_cond, r_a, r_b (FIXED_4): dst = cond ? a : b.
-       Super-instruccion del IrOp::SELECT para el interp.  Ver exec_instr_csel. */
+       Super-instruccion del IrOp::SELECT para el interp.  Ver exec_instr_csel.
+     */
     {"csel", Assembly::Bytecode::AddressingMode::REG,
      Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_csel,
      decode_instr_four_reg},
 
-    /* 0x90  mld r_dst, [base +/- index*scale +/- disp] (FIXED_8): load universal.
-       base in {r0-r15, rbp, rsp}.  Ver exec_instr_mld. */
+    /* 0x90  mld r_dst, [base +/- index*scale +/- disp] (FIXED_8): load
+       universal. base in {r0-r15, rbp, rsp}.  Ver exec_instr_mld. */
     {"mld", Assembly::Bytecode::AddressingMode::REG,
      Assembly::Bytecode::InstrSizeMode::FIXED_8, exec_instr_mld,
      decode_instr_mem_full},
 
-    /* 0x91  mst [base +/- index*scale +/- disp], r_src (FIXED_8): store universal. */
+    /* 0x91  mst [base +/- index*scale +/- disp], r_src (FIXED_8): store
+       universal. */
     {"mst", Assembly::Bytecode::AddressingMode::REG,
      Assembly::Bytecode::InstrSizeMode::FIXED_8, exec_instr_mst,
      decode_instr_mem_full},
@@ -2409,7 +2413,8 @@ InstrFormat decode_table_extended[0X100] = {
      decode_instr_simple_mov},
 
     /* 0xAB */
-    {// ATOMICCAS reg_dst_sized, reg_addr, reg_exp, reg_des - FIXED_6 (ctrl+regs).
+    {// ATOMICCAS reg_dst_sized, reg_addr, reg_exp, reg_des - FIXED_6
+     // (ctrl+regs).
      "atomiccas", Assembly::Bytecode::AddressingMode::REG,
      Assembly::Bytecode::InstrSizeMode::FIXED_6, exec_instr_atomiccas,
      decode_instr_atomic_rmw},

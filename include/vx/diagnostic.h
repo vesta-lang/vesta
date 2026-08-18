@@ -82,8 +82,8 @@ struct SourceLoc;
  * @brief De donde salio un trozo de codigo que nadie escribio.
  *
  * Una `@Macro` genera texto y ese texto se parsea: lo que sale de ahi no esta
- * en ningun fichero, asi que su posicion -- linea 3 de `<macro:X>` -- no lleva a
- * ninguna parte.  Lo que hace falta saber es DE QUE expansion vino y DESDE
+ * en ningun fichero, asi que su posicion -- linea 3 de `<macro:X>` -- no lleva
+ * a ninguna parte.  Lo que hace falta saber es DE QUE expansion vino y DESDE
  * DONDE se invoco, y contarlo encadenado:
  *
  *     ... en el codigo generado
@@ -121,8 +121,8 @@ struct SourceLoc {
 struct Diagnostic {
     DiagLevel level = DiagLevel::ERR; ///< Severidad.
     SourceLoc loc;                    ///< Posicion en el fuente.
-    std::string message;              ///< Texto crudo (ruta LEGADA sin catalogo).
-    std::string code;                 ///< Codigo estable (p.ej. "VXA001").
+    std::string message; ///< Texto crudo (ruta LEGADA sin catalogo).
+    std::string code;    ///< Codigo estable (p.ej. "VXA001").
     /// ARGS (datos) para los placeholders {0},{1},... del mensaje del catalogo.
     /// El texto se formatea al IMPRIMIR, en el idioma activo -> el mismo
     /// diagnostico se reformatea en cualquier idioma o se vuelca a JSON/SARIF.
@@ -202,8 +202,8 @@ class Diagnostics {
 
     /**
      * @brief Emite un diagnostico CATALOGADO: solo el codigo estable + los args
-     *        (datos).  El texto se resuelve del catalogo, en el idioma activo, al
-     *        imprimir.  Es la ruta preferida para todo diagnostico nuevo (deja el
+     *        (datos).  El texto se resuelve del catalogo, en el idioma activo,
+     * al imprimir.  Es la ruta preferida para todo diagnostico nuevo (deja el
      *        texto fuera del compilador -> multi-idioma + salida maquina).
      * @param loc   Posicion en el fuente.
      * @param level Severidad.
@@ -295,8 +295,8 @@ inline void print_diagnostic(std::ostream &os, const Diagnostic &d) {
     case DiagLevel::WARN: os << "warning: "; break;
     case DiagLevel::NOTE: os << "note: "; break;
     }
-    // Mensaje: del CATALOGO (idioma activo) si el codigo esta catalogado; si no,
-    // el @c message crudo (diagnosticos aun no migrados).
+    // Mensaje: del CATALOGO (idioma activo) si el codigo esta catalogado; si
+    // no, el @c message crudo (diagnosticos aun no migrados).
     if (!d.code.empty() && diag::has_code(d.code))
         os << diag::format(d.code, d.args);
     else
@@ -312,8 +312,8 @@ inline void print_diagnostic(std::ostream &os, const Diagnostic &d) {
     for (const ExpansionInfo *ex = d.loc.expansion; ex != nullptr;) {
         std::string sitio = "?";
         if (ex->site)
-            sitio = ex->site->file + ":" + std::to_string(ex->site->line) + ":" +
-                    std::to_string(ex->site->column);
+            sitio = ex->site->file + ":" + std::to_string(ex->site->line) +
+                    ":" + std::to_string(ex->site->column);
         os << "  " << diag::format("VX7015", {ex->macro, sitio}) << "\n";
         ex = ex->site ? ex->site->expansion : nullptr;
     }

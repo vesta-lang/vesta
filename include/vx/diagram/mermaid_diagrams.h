@@ -12,7 +12,8 @@
 
 /**
  * @file mermaid_diagrams.h
- * @brief Generadores de diagramas Mermaid para AST Vesta, SSA IR y bytecode .vel.
+ * @brief Generadores de diagramas Mermaid para AST Vesta, SSA IR y bytecode
+ * .vel.
  *
  * Pensado para debug, traceo y analisis post-mortem.  El output es markdown
  * con un bloque @c mermaid envolvente, listo para abrir en VS Code (con la

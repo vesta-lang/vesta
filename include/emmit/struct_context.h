@@ -256,9 +256,10 @@ typedef struct Section {
      *
      * La imagen .velb es PLANA: el loader deriva el offset de fichero de una
      * seccion a partir de su direccion virtual con
-     * @c file_offset = space->file_offset + (address_init - space->range.address_init).
-     * Por tanto el flujo de bytes y el espacio virtual son el mismo eje y
-     * se cumple @c address_init == space_base + stream_offset.
+     * @c file_offset = space->file_offset + (address_init -
+     * space->range.address_init). Por tanto el flujo de bytes y el espacio
+     * virtual son el mismo eje y se cumple @c address_init == space_base +
+     * stream_offset.
      *
      * Lo fija el ensamblador la primera vez que entra en la seccion (tras
      * alinear el flujo a @c size_align_section) y lo consume
@@ -407,13 +408,13 @@ typedef struct Space {
      * seccion sabe en que offset del flujo empieza (@c stream_offset, fijado al
      * entrar en ella por primera vez y ya alineado a @c size_align_section) y
      * cuantos bytes ocupa (@c size_real).  Aqui solo se traslada ese reparto al
-     * espacio virtual sumando la base del espacio, lo que mantiene el invariante
-     * de imagen plana que asume el loader:
+     * espacio virtual sumando la base del espacio, lo que mantiene el
+     * invariante de imagen plana que asume el loader:
      *
      *     address_init == range.address_init + stream_offset
      *
-     * Las secciones nunca usadas (@c layout_started == false) conservan su rango
-     * inicial y no participan del reparto.
+     * Las secciones nunca usadas (@c layout_started == false) conservan su
+     * rango inicial y no participan del reparto.
      */
     void compute_sections_ranges() {
         for (Section *sec : ordered_sections) {
@@ -725,11 +726,13 @@ typedef struct Context {
     // ensamblar el .velb final, sumando el offset del code section para
     // producir offsets absolutos, y las emite como seccion VSMP.
     struct StackmapSlotRec {
-        uint8_t location; ///< <0x40 = reg R<location>; >=0x40 = slot (location-0x40)
+        uint8_t location; ///< <0x40 = reg R<location>; >=0x40 = slot
+                          ///< (location-0x40)
         uint8_t gc_kind;  ///< jit::StackmapGcKind (0=HANDLE 1=HOSTPTR 2=STRING)
     };
     struct StackmapRec {
-        uint32_t byte_offset; ///< offset del safepoint dentro del bytecode del modulo
+        uint32_t byte_offset; ///< offset del safepoint dentro del bytecode del
+                              ///< modulo
         std::vector<StackmapSlotRec> slots;
     };
     std::vector<StackmapRec> stackmap_recs;

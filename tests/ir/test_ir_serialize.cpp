@@ -724,7 +724,8 @@ static void test_asm_bindings_round_trip() {
     serialize_function(fn, buf);
     size_t off = 0;
     IrFunction out;
-    CHECK(deserialize_function(buf, off, out), "deserializa la funcion con asm");
+    CHECK(deserialize_function(buf, off, out),
+          "deserializa la funcion con asm");
     CHECK(out.asm_reg_bindings.size() == 2, "las dos ligaduras cruzan");
     if (out.asm_reg_bindings.size() == 2) {
         CHECK(out.asm_reg_bindings[0].reg_class == "xmm",

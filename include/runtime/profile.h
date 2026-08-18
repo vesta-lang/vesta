@@ -1,6 +1,7 @@
 /*
  * VestaVM - Maquina Virtual Distribuida
- * Copyright (C) 2026 David Lopez.T (DesmonHak); Licencia: GPLv2 + excepcion de runtime (ver LICENSE)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak); Licencia: GPLv2 + excepcion de
+ * runtime (ver LICENSE)
  */
 /**
  * @file include/runtime/profile.h
@@ -233,10 +234,10 @@ inline void lite_profile_branch(uint64_t pc, bool taken) {
     LiteBranchSlot &slot = g_lite_branches[h & kLiteBranchMask];
     uint64_t cur = slot.pc.load(std::memory_order_relaxed);
     if (cur != pc) {
-        if (cur != 0) return; // ranura ocupada por otro PC: descartar muestra
+        if (cur != 0) return;  // ranura ocupada por otro PC: descartar muestra
         uint64_t expected = 0; // reclamar la ranura vacia
         if (!slot.pc.compare_exchange_strong(expected, pc,
-                                              std::memory_order_relaxed) &&
+                                             std::memory_order_relaxed) &&
             expected != pc) {
             return; // otro thread la reclamo con un PC distinto: descartar
         }
@@ -283,8 +284,9 @@ void profile_dump();
  * @param pc_to_line Callback PC (VM) -> linea fuente (0 si desconocida).
  * @return numero de lineas escritas.
  */
-int profile_write_branch_lines(const std::string &path,
-                               const std::function<uint32_t(uint64_t)> &pc_to_line);
+int profile_write_branch_lines(
+    const std::string &path,
+    const std::function<uint32_t(uint64_t)> &pc_to_line);
 
 /**
  * @brief Bridge desacoplado runtime -> IR: vuelca el perfil de branches medido
@@ -300,7 +302,8 @@ int profile_write_branch_lines(const std::string &path,
  * @param pc_to_line Callback PC (VM) -> linea fuente (0 si desconocida).
  * @return numero de lineas volcadas al almacen de la if-conversion.
  */
-int profile_apply_branch_lines(const std::function<uint32_t(uint64_t)> &pc_to_line);
+int profile_apply_branch_lines(
+    const std::function<uint32_t(uint64_t)> &pc_to_line);
 
 /**
  * @brief Registra el resultado de un branch condicional.

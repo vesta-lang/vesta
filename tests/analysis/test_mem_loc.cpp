@@ -24,7 +24,7 @@ using namespace analysis::effects;
 using K = AbstractLoc::Kind;
 
 static int g_checks = 0, g_fail = 0;
-#define CHECK(cond, msg)                                                        \
+#define CHECK(cond, msg)                                                       \
     do {                                                                       \
         ++g_checks;                                                            \
         if (!(cond)) {                                                         \
@@ -102,10 +102,10 @@ static void test_points_to() {
         fn.values.push_back(v);
         return static_cast<ir::IrValueId>(fn.values.size() - 1);
     };
-    ir::IrValueId a = add_val(false, 0);   // 0: alloca dst
-    ir::IrValueId c8 = add_val(true, 8);   // 1: const 8
-    ir::IrValueId g = add_val(false, 0);   // 2: add dst
-    ir::IrValueId b = add_val(false, 0);   // 3: bitcast dst
+    ir::IrValueId a = add_val(false, 0); // 0: alloca dst
+    ir::IrValueId c8 = add_val(true, 8); // 1: const 8
+    ir::IrValueId g = add_val(false, 0); // 2: add dst
+    ir::IrValueId b = add_val(false, 0); // 3: bitcast dst
 
     ir::IrBlock bb;
     bb.id = 0;
@@ -149,7 +149,8 @@ static void test_points_to() {
     // El slot base [0..4) y el offset+8 [8..12) NO aliasan (misma raiz).
     CHECK(no_alias(la, lg), "alloca[0..4) y alloca+8[8..12) disjuntos");
     // bitcast y alloca SI aliasan (misma direccion).
-    CHECK(must_alias(la, lb), "bitcast(alloca) es la misma direccion (must-alias)");
+    CHECK(must_alias(la, lb),
+          "bitcast(alloca) es la misma direccion (must-alias)");
 }
 
 // --------------------------------------------------------------------------
@@ -194,7 +195,8 @@ static void test_instanciar_en_llamada() {
     for (const AbstractLoc &l : inst.escribe.locs) {
         if (l.kind == K::Stack && l.id == obj) {
             visto_arg = true;
-            CHECK(l.off == 16, "el desplazamiento del callee se suma al del arg");
+            CHECK(l.off == 16,
+                  "el desplazamiento del callee se suma al del arg");
             CHECK(l.width == 8, "y el ancho se conserva");
         }
     }

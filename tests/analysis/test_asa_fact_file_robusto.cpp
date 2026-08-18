@@ -63,7 +63,7 @@ static std::vector<uint8_t> fichero_de_muestra(uint32_t n_por_dominio = 8) {
     static const char *const kDominios[] = {"asa.estructura", "asa.rangos",
                                             "asa.memoria"};
     FactStore a;
-    FactId    anterior = kSinHecho;
+    FactId anterior = kSinHecho;
     for (const char *dom : kDominios) {
         for (uint32_t i = 0; i < n_por_dominio; ++i) {
             Fact f;
@@ -91,9 +91,9 @@ static std::vector<uint8_t> fichero_de_muestra(uint32_t n_por_dominio = 8) {
 // ===========================================================================
 static void probar_truncado_exhaustivo() {
     const std::vector<uint8_t> bueno = fichero_de_muestra();
-    bool                       todo_bien = true;
+    bool todo_bien = true;
     for (size_t corte = 0; corte < bueno.size(); ++corte) {
-        FactStore        d;
+        FactStore d;
         const ReadResult r = read_facts(bueno.data(), corte, 0x1234ull, d);
         /* Un prefijo NUNCA puede darse por bueno: los hechos que faltan no se
          * distinguirian de hechos que no existen, y eso es peor que no leer. */
@@ -116,27 +116,31 @@ static void probar_truncado_exhaustivo() {
 // ===========================================================================
 static void probar_corrupcion_exhaustiva() {
     const std::vector<uint8_t> bueno = fichero_de_muestra();
-    static const uint8_t       kValores[] = {0x00, 0x01, 0x7F, 0x80, 0xFF};
-    size_t                     detectados = 0, colados = 0;
-    FactStore                  limpio;
-    const uint32_t             hechos_buenos =
+    static const uint8_t kValores[] = {0x00, 0x01, 0x7F, 0x80, 0xFF};
+    size_t detectados = 0, colados = 0;
+    FactStore limpio;
+    const uint32_t hechos_buenos =
         read_facts(bueno.data(), bueno.size(), 0x1234ull, limpio).facts;
     for (size_t i = 0; i < bueno.size(); ++i) {
         for (uint8_t v : kValores) {
             if (bueno[i] == v) continue;
             std::vector<uint8_t> malo = bueno;
             malo[i] = v;
-            FactStore        d;
+            FactStore d;
             const ReadResult r =
                 read_facts(malo.data(), malo.size(), 0x1234ull, d);
             /* Se exige DETECTARLO, no solo sobrevivir.  Un byte cambiado
              * dentro de un numero da otro numero igual de valido, asi que sin
              * suma de comprobacion el compilador razonaria sobre hechos falsos
              * y nadie se enteraria -- peor que no tener cache.  Cuenta como
-             * detectado tanto rechazar el fichero como descartar el registro. */
+             * detectado tanto rechazar el fichero como descartar el registro.
+             */
             const bool detectado =
                 !r.ok || r.corrupt > 0 || r.facts != hechos_buenos;
-            if (detectado) ++detectados; else ++colados;
+            if (detectado)
+                ++detectados;
+            else
+                ++colados;
             if (r.ok) {
                 /* Y si lo acepta, lo que deposito tiene que ser coherente: los
                  * apoyos apuntan a hechos que existen de verdad. */
@@ -183,7 +187,7 @@ static void probar_cuentas_absurdas() {
     {
         std::vector<uint8_t> malo = bueno;
         poner_u32(malo, 16, 0xFFFFFFFFu); // total de hechos original
-        FactStore        d;
+        FactStore d;
         const ReadResult r = read_facts(malo.data(), malo.size(), 0x1234ull, d);
         CHECK(!r.ok || d.size() <= malo.size(),
               "un total de hechos absurdo no se cree ni reserva por el");
@@ -191,7 +195,7 @@ static void probar_cuentas_absurdas() {
     {
         std::vector<uint8_t> malo = bueno;
         poner_u32(malo, 20, 0xFFFFFFFFu); // numero de registros
-        FactStore        d;
+        FactStore d;
         const ReadResult r = read_facts(malo.data(), malo.size(), 0x1234ull, d);
         CHECK(!r.ok, "mas registros de los que caben es un fichero roto");
         CHECK(d.size() == 0, "y no deposita nada");
@@ -202,7 +206,7 @@ static void probar_cuentas_absurdas() {
     {
         std::vector<uint8_t> malo = bueno;
         poner_u32(malo, 24, 0xFFFFFFFFu); // longitud del nombre del dominio
-        FactStore        d;
+        FactStore d;
         const ReadResult r = read_facts(malo.data(), malo.size(), 0x1234ull, d);
         CHECK(!r.ok && d.size() == 0,
               "un nombre de dominio mas largo que el fichero se rechaza");
@@ -214,11 +218,11 @@ static void probar_cuentas_absurdas() {
 // ===========================================================================
 static void probar_ciclos() {
     FactStore a;
-    Fact      x;
+    Fact x;
     x.que.dominio = "asa.rangos";
     x.que.codigo = "a";
     const FactId ix = a.anadir(std::move(x));
-    Fact         y;
+    Fact y;
     y.que.dominio = "asa.rangos";
     y.que.codigo = "b";
     y.prueba.de.push_back(ix);
@@ -227,7 +231,7 @@ static void probar_ciclos() {
      * en otro anterior), asi que se fabrica en los BYTES -- que es justo de
      * donde vendria: un fichero puede decir lo que quiera. */
     std::vector<uint8_t> bytes = serialize(a, 9, CacheLevel::All, {});
-    bool                 tocado = false;
+    bool tocado = false;
     for (size_t i = 0; i + 4 <= bytes.size(); ++i) {
         uint32_t v = 0;
         for (int k = 0; k < 4; ++k)
@@ -241,11 +245,12 @@ static void probar_ciclos() {
     }
     CHECK(tocado, "se pudo fabricar el ciclo en los bytes");
 
-    FactStore        d;
+    FactStore d;
     const ReadResult r = read_facts(bytes.data(), bytes.size(), 9, d);
     if (r.ok && d.size() > 0) {
         /* Lo unico que importa: TERMINA.  Si no, aqui se cuelga el test. */
-        const size_t pasos = d.explicar(static_cast<FactId>(d.size() - 1)).size();
+        const size_t pasos =
+            d.explicar(static_cast<FactId>(d.size() - 1)).size();
         CHECK(pasos <= d.size(), "explicar un ciclo termina y no repite");
     } else {
         ++g_checks; // rechazarlo tambien es una respuesta valida.
@@ -274,7 +279,7 @@ static void probar_volumen() {
     const std::vector<uint8_t> bytes = serialize(a, 11, CacheLevel::All, {});
     CHECK(!bytes.empty(), "veinte mil hechos se escriben");
 
-    FactStore        d;
+    FactStore d;
     const ReadResult r = read_facts(bytes.data(), bytes.size(), 11, d);
     CHECK(r.ok && d.size() == 20000, "y vuelven todos");
     CHECK(r.lost_proofs == 0, "sin perder un solo apoyo");
@@ -290,11 +295,13 @@ static void probar_volumen() {
         const Fact &f = d.at(i);
         const int64_t yo = f.que.a;
         if (yo == 0) {
-            if (!f.prueba.de.empty()) { grafo_intacto = false; break; }
+            if (!f.prueba.de.empty()) {
+                grafo_intacto = false;
+                break;
+            }
             continue;
         }
-        if (f.prueba.de.size() != 1 ||
-            d.at(f.prueba.de[0]).que.a != yo - 1) {
+        if (f.prueba.de.size() != 1 || d.at(f.prueba.de[0]).que.a != yo - 1) {
             grafo_intacto = false;
             break;
         }
@@ -312,19 +319,19 @@ static void probar_volumen() {
 // ===========================================================================
 static void probar_por_disco() {
     const std::vector<uint8_t> bytes = fichero_de_muestra();
-    const std::string          ruta = "asa_hechos_prueba.bin";
+    const std::string ruta = "asa_hechos_prueba.bin";
     CHECK(::fs::write_file_atomic(ruta, bytes), "se escribe el fichero");
 
-    FactStore        d;
+    FactStore d;
     const ReadResult r = read_facts_file(ruta, 0x1234ull, d);
     CHECK(r.ok && d.size() == 24, "y se lee lo mismo que se escribio");
 
-    FactStore        d2;
+    FactStore d2;
     const ReadResult r2 = read_facts_file(ruta, 0x9999ull, d2);
     CHECK(!r2.ok && r2.reason == ReadReason::OtherModule,
           "con otra huella no se lee");
 
-    FactStore        d3;
+    FactStore d3;
     const ReadResult r3 = read_facts_file("no_existe_este_fichero.bin", 1, d3);
     CHECK(!r3.ok && r3.reason == ReadReason::NoFile,
           "y no haber fichero se distingue de que este roto");
@@ -339,9 +346,9 @@ static void probar_por_disco() {
 /// una cadena de apoyos que CRUZA de un dominio al siguiente -- que es lo que
 /// permite ver que se pierde cuando uno cae.
 static std::vector<uint8_t> con_dominios(const std::vector<const char *> &doms,
-                                         uint32_t                     por_dominio,
+                                         uint32_t por_dominio,
                                          const std::vector<uint64_t> &huellas,
-                                         FactStore                   &a) {
+                                         FactStore &a) {
     FactId anterior = kSinHecho;
     for (const char *dom : doms) {
         for (uint32_t i = 0; i < por_dominio; ++i) {
@@ -365,9 +372,10 @@ static std::vector<uint8_t> con_dominios(const std::vector<const char *> &doms,
 static void probar_anulacion() {
     const std::vector<const char *> doms = {"asa.estructura", "asa.rangos",
                                             "asa.memoria", "asa.bucles"};
-    const std::vector<uint64_t>     originales = {11, 22, 33, 44};
-    FactStore                       origen;
-    const std::vector<uint8_t> bytes = con_dominios(doms, 5, originales, origen);
+    const std::vector<uint64_t> originales = {11, 22, 33, 44};
+    FactStore origen;
+    const std::vector<uint8_t> bytes =
+        con_dominios(doms, 5, originales, origen);
 
     std::vector<DomainCost> igual;
     for (size_t i = 0; i < doms.size(); ++i)
@@ -377,7 +385,7 @@ static void probar_anulacion() {
      * caza el fallo silencioso de invalidar siempre: una cache que se tira
      * sola pasa todos los tests de correccion y no sirve para nada. */
     {
-        FactStore        d;
+        FactStore d;
         const ReadResult r =
             read_facts(bytes.data(), bytes.size(), 0x5150ull, d, igual);
         CHECK(r.ok && r.stale == 0 && r.facts == 20,
@@ -390,7 +398,7 @@ static void probar_anulacion() {
     {
         std::vector<DomainCost> v = igual;
         v[1].fingerprint = 0xDEADull;
-        FactStore        d;
+        FactStore d;
         const ReadResult r =
             read_facts(bytes.data(), bytes.size(), 0x5150ull, d, v);
         CHECK(r.stale == 1, "cae exactamente un registro");
@@ -399,7 +407,8 @@ static void probar_anulacion() {
         /* El apoyo que cruzaba al dominio caido se PIERDE y se cuenta: una
          * derivacion mas corta es aceptable, una que apunta a un hecho que no
          * existe no lo es. */
-        CHECK(r.lost_proofs == 1, "se cuenta el apoyo que se quedo sin destino");
+        CHECK(r.lost_proofs == 1,
+              "se cuenta el apoyo que se quedo sin destino");
         bool sanos = true;
         for (FactId i = 0; i < d.size(); ++i)
             for (FactId pr : d.at(i).prueba.de)
@@ -411,8 +420,9 @@ static void probar_anulacion() {
      * quedarse con nada valido no es lo mismo que estar roto. */
     {
         std::vector<DomainCost> v = igual;
-        for (size_t i = 0; i < v.size(); ++i) v[i].fingerprint = 0x9000ull + i;
-        FactStore        d;
+        for (size_t i = 0; i < v.size(); ++i)
+            v[i].fingerprint = 0x9000ull + i;
+        FactStore d;
         const ReadResult r =
             read_facts(bytes.data(), bytes.size(), 0x5150ull, d, v);
         CHECK(r.ok, "quedarse sin nada valido no es un fichero roto");
@@ -421,10 +431,12 @@ static void probar_anulacion() {
 
     /* (d) Cambia el MODULO: no se lee nada, y por OTRO motivo.  La huella del
      * modulo y la del dominio contestan preguntas distintas, y confundirlas
-     * seria no poder distinguir "esto es de otro programa" de "esto envejecio". */
+     * seria no poder distinguir "esto es de otro programa" de "esto envejecio".
+     */
     {
-        FactStore        d;
-        const ReadResult r = read_facts(bytes.data(), bytes.size(), 0x5151ull, d);
+        FactStore d;
+        const ReadResult r =
+            read_facts(bytes.data(), bytes.size(), 0x5151ull, d);
         CHECK(!r.ok && r.reason == ReadReason::OtherModule && d.size() == 0,
               "otro modulo no se lee, y se distingue de un dominio caducado");
     }
@@ -433,8 +445,8 @@ static void probar_anulacion() {
      * "se que cambio" y "no lo se". */
     {
         std::vector<DomainCost> v = {{doms[0], 0, true, 0xBEEFull}};
-        FactStore               d;
-        const ReadResult        r =
+        FactStore d;
+        const ReadResult r =
             read_facts(bytes.data(), bytes.size(), 0x5150ull, d, v);
         CHECK(r.stale == 1 && r.facts == 15,
               "solo se anula aquello de lo que se dijo algo");
@@ -444,7 +456,7 @@ static void probar_anulacion() {
     {
         std::vector<DomainCost> v = igual;
         v.push_back({"asa.no.existe", 0, true, 1});
-        FactStore        d;
+        FactStore d;
         const ReadResult r =
             read_facts(bytes.data(), bytes.size(), 0x5150ull, d, v);
         CHECK(r.ok && r.stale == 0 && r.facts == 20,
@@ -459,14 +471,16 @@ static void probar_anulacion() {
             escritos.push_back({doms[i], 0, true, 0});
         const std::vector<uint8_t> sin_huella =
             serialize(origen, 0x5150ull, CacheLevel::All, escritos);
-        FactStore        d;
+        FactStore d;
         const ReadResult r = read_facts(sin_huella.data(), sin_huella.size(),
                                         0x5150ull, d, igual);
-        CHECK(r.ok && r.stale == 0, "sin huella guardada no hay nada que comparar");
+        CHECK(r.ok && r.stale == 0,
+              "sin huella guardada no hay nada que comparar");
 
         std::vector<DomainCost> v = igual;
-        for (size_t i = 0; i < v.size(); ++i) v[i].fingerprint = 0;
-        FactStore        d2;
+        for (size_t i = 0; i < v.size(); ++i)
+            v[i].fingerprint = 0;
+        FactStore d2;
         const ReadResult r2 =
             read_facts(bytes.data(), bytes.size(), 0x5150ull, d2, v);
         CHECK(r2.ok && r2.stale == 0, "ni sin huella vigente tampoco");
@@ -481,7 +495,7 @@ static void probar_anulacion() {
             costes.push_back({doms[i], 0, false, originales[i]});
         const std::vector<uint8_t> b_min =
             serialize(origen, 0x5150ull, CacheLevel::Minimum, costes);
-        FactStore        d;
+        FactStore d;
         const ReadResult r =
             read_facts(b_min.data(), b_min.size(), 0x5150ull, d, igual);
         CHECK(r.ok && r.stale == 0,
@@ -494,7 +508,7 @@ static void probar_anulacion() {
     {
         std::vector<uint8_t> malo = bytes;
         malo[4] = static_cast<uint8_t>(kContainerVersion + 7);
-        FactStore        d;
+        FactStore d;
         const ReadResult r = read_facts(malo.data(), malo.size(), 0x5150ull, d);
         CHECK(!r.ok && r.reason == ReadReason::OtherVersion,
               "otra version del contenedor descarta el fichero entero");
@@ -504,18 +518,17 @@ static void probar_anulacion() {
 /// Cambiar de compilador invalida: los hechos son conclusiones del analisis, y
 /// otro analisis puede concluir otra cosa del mismo programa.
 static void probar_version_del_compilador() {
-    FactStore                  a;
-    const std::vector<uint8_t> bytes =
-        con_dominios({"asa.rangos"}, 4, {5}, a);
+    FactStore a;
+    const std::vector<uint8_t> bytes = con_dominios({"asa.rangos"}, 4, {5}, a);
     const std::vector<uint8_t> con_v =
         serialize(a, 0x5150ull, CacheLevel::All, {}, 0xC0FFEEull);
 
-    FactStore        d;
+    FactStore d;
     const ReadResult r =
         read_facts(con_v.data(), con_v.size(), 0x5150ull, d, {}, 0xC0FFEEull);
     CHECK(r.ok && r.facts == 4, "el mismo compilador lee lo suyo");
 
-    FactStore        d2;
+    FactStore d2;
     const ReadResult r2 =
         read_facts(con_v.data(), con_v.size(), 0x5150ull, d2, {}, 0xB00Bull);
     CHECK(!r2.ok && r2.reason == ReadReason::OtherCompiler,
@@ -523,7 +536,7 @@ static void probar_version_del_compilador() {
     CHECK(d2.size() == 0, "y no deposita nada");
     /* Y se distingue de "otro modulo": son dos cosas que se arreglan de forma
      * distinta, asi que contarlas igual seria perder la unica pista util. */
-    FactStore        d3;
+    FactStore d3;
     const ReadResult r3 =
         read_facts(con_v.data(), con_v.size(), 0x9999ull, d3, {}, 0xC0FFEEull);
     CHECK(r3.reason == ReadReason::OtherModule,
@@ -537,15 +550,15 @@ static void probar_version_del_compilador() {
 static void probar_anulacion_estable() {
     const std::vector<const char *> doms = {"asa.estructura", "asa.rangos",
                                             "asa.memoria"};
-    const std::vector<uint64_t>     hu = {7, 8, 9};
-    FactStore                       origen;
-    const std::vector<uint8_t>      bytes = con_dominios(doms, 3, hu, origen);
+    const std::vector<uint64_t> hu = {7, 8, 9};
+    FactStore origen;
+    const std::vector<uint8_t> bytes = con_dominios(doms, 3, hu, origen);
 
     std::vector<DomainCost> v1 = {
         {doms[0], 0, true, 7}, {doms[1], 0, true, 0xFF}, {doms[2], 0, true, 9}};
     std::vector<DomainCost> v2 = {
         {doms[2], 0, true, 9}, {doms[1], 0, true, 0xFF}, {doms[0], 0, true, 7}};
-    FactStore        d1, d2;
+    FactStore d1, d2;
     const ReadResult r1 =
         read_facts(bytes.data(), bytes.size(), 0x5150ull, d1, v1);
     const ReadResult r2 =

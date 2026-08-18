@@ -240,18 +240,21 @@ enum class IrOp : uint16_t {
     // Compiler-internas: las emite el matcher de vectorize.cpp para el cuerpo
     // de un loop element-wise (W elementos por iteracion).  Son FUSIONADAS
     // (load+op+store en UNA op) para NO necesitar un "valor vectorial" SSA: el
-    // modelo de valores del IR es de 8 bytes (GP) y un vector son 16/32/64B, asi
+    // modelo de valores del IR es de 8 bytes (GP) y un vector son 16/32/64B,
+    // asi
     // que el vector vive solo TRANSITORIO dentro de la op (zmm0/zmm1 scratch en
     // interp, xmm0/xmm1 en jit).  Operandos = punteros HOST a los elementos i.
-    // imm bits 0-7 = ancho en bytes (16/32/64 = 128/256/512b); bits 8-15 = sub-op.
+    // imm bits 0-7 = ancho en bytes (16/32/64 = 128/256/512b); bits 8-15 =
+    // sub-op.
     // Bajada por backend (reusa ops EXISTENTES; cero opcodes VM nuevos):
     //   interp: movh host<->VM-stack scratch + fload/fstore ZMM + f<op>[.ps]
     //           packed.  Roundtrip correcto (interp = oraculo).
     //   jit/aot: MOVUPD [ptr] + <packed op> + MOVUPD (SIMD directo).
     // VEC_UNOP dst[i] = OP a[i]    (subop 0=copy 1=fneg 2=fabs 3=fsqrt)
     // VEC_BINOP dst[i] = a[i] OP b[i] (subop 0=fadd 1=fsub 2=fmul 3=fdiv)
-    VEC_UNOP = 0x2D, ///< vec_unop.fN %dst_ptr, %a_ptr        imm=(subop<<8)|ancho
-    VEC_BINOP = 0x2E, ///< vec_binop.fN %dst_ptr, %a_ptr, %b_ptr imm=(subop<<8)|ancho
+    VEC_UNOP = 0x2D, ///< vec_unop.fN %dst_ptr, %a_ptr imm=(subop<<8)|ancho
+    VEC_BINOP =
+        0x2E, ///< vec_binop.fN %dst_ptr, %a_ptr, %b_ptr imm=(subop<<8)|ancho
     // VEC_FMA acc[i] += a[i] * b[i]  (dot-product fusionado, 1 redondeo).
     VEC_FMA = 0x2F, ///< vec_fma.fN %acc_ptr, %a_ptr, %b_ptr   imm=ancho
 
@@ -310,7 +313,7 @@ enum class IrOp : uint16_t {
     F32TOF64 = 0x58, ///< %dst = f32tof64  %src  (widening: f32 -> f64)
     F64TOF32 = 0x59, ///< %dst = f64tof32  %src  (narrowing: f64 -> f32)
     BITCAST =
-        0x5A, ///< %dst = bitcast.T %src  (reinterpretar bits sin conversion)
+        0x5A,   ///< %dst = bitcast.T %src  (reinterpretar bits sin conversion)
     FMA = 0x5B, ///< %dst = fma.fN  %a, %b, %c   (multiply-add CONTRAIDO: UN
                 ///< SOLO redondeo, round(a*b+c) -- NO es fmul+fadd).  Intencion
                 ///< matematica (como IMIN/IMAX): interp usa std::fma; JIT/AOT
@@ -398,15 +401,16 @@ enum class IrOp : uint16_t {
     ///<   @c dst = IR_NO_VALUE (marker puro)
     ///<
     ///< El IR emitter actual lo trata como no-op.
-    SWITCH_DENSE = 0x8B, ///< switch_dense %tag, min=imm, targets=jump_targets[],
-                         ///< default=target_block.  Marker (no-op en interp/
-                         ///< optimizer/ir_emitter) que el backend JIT (vreg)
-                         ///< baja a un island nativo O(1) (computed-goto):
-                         ///< idx=tag-min; if idx u>=N -> default; else jmp al
-                         ///< brazo jump_targets[idx].  Emitido por
-                         ///< lower_match_expr para match DENSO (rango~=N) tras
-                         ///< el LOAD del tag y JUNTO al BST (que es el dispatch
-                         ///< del interp + fallback).  operands[0]=%tag.
+    SWITCH_DENSE =
+        0x8B, ///< switch_dense %tag, min=imm, targets=jump_targets[],
+              ///< default=target_block.  Marker (no-op en interp/
+              ///< optimizer/ir_emitter) que el backend JIT (vreg)
+              ///< baja a un island nativo O(1) (computed-goto):
+              ///< idx=tag-min; if idx u>=N -> default; else jmp al
+              ///< brazo jump_targets[idx].  Emitido por
+              ///< lower_match_expr para match DENSO (rango~=N) tras
+              ///< el LOAD del tag y JUNTO al BST (que es el dispatch
+              ///< del interp + fallback).  operands[0]=%tag.
 
     MAKE_CLOSURE =
         0x87, ///< make_closure @helper, env_kind=imm, captures=[%c0, %c1, ...]
@@ -437,23 +441,25 @@ enum class IrOp : uint16_t {
     STORE = 0x92,  ///< store.T  %val, %ptr         (escribir; idem LOAD)
     MEMCPY = 0x93, ///< memcpy %dst_ptr, %src_ptr, %len
     /**
-     * memset %dst_ptr, %val, %len  -- rellena @c len bytes desde @c dst con el byte
-     * bajo de @c val.  Gemelo de @c MEMCPY.
+     * memset %dst_ptr, %val, %len  -- rellena @c len bytes desde @c dst con el
+     * byte bajo de @c val.  Gemelo de @c MEMCPY.
      *
-     * POR QUE ES UN OP DEL IR Y NO UNA CADENA DE STORES.  "Esta region se pone a un
-     * valor" es un HECHO SEMANTICO, y desplegarlo en el lowering lo DESTRUYE: ningun
-     * nivel inferior puede reconstruirlo a partir de N stores sueltos.  Es la regla del
-     * optimizer -- cada cosa en el nivel MAS ALTO donde la informacion aun existe.
-     * Medido antes de existir este op: `i32[8192] arr;` (una DECLARACION) generaba
-     * 16397 instrucciones, 86 KB de codigo y 1,7 s de compilacion, porque el zero-fill
-     * se desplegaba a un STORE por cada 8 bytes sin limite.
+     * POR QUE ES UN OP DEL IR Y NO UNA CADENA DE STORES.  "Esta region se pone
+     * a un valor" es un HECHO SEMANTICO, y desplegarlo en el lowering lo
+     * DESTRUYE: ningun nivel inferior puede reconstruirlo a partir de N stores
+     * sueltos.  Es la regla del optimizer -- cada cosa en el nivel MAS ALTO
+     * donde la informacion aun existe. Medido antes de existir este op:
+     * `i32[8192] arr;` (una DECLARACION) generaba 16397 instrucciones, 86 KB de
+     * codigo y 1,7 s de compilacion, porque el zero-fill se desplegaba a un
+     * STORE por cada 8 bytes sin limite.
      *
      * Cada backend lo MATERIALIZA segun su contexto, que es justo lo que un op
-     * semantico permite: el interprete un bucle, el JIT/AOT `rep stosb` o SIMD, y un
-     * programa sin runtime la rutina que el usuario haya puesto en su lugar (el
-     * mecanismo de sobrecarga ya existe: @c vx_memset es Vesta puro, sin libc, y el
-     * vectorizador del AOT puede promover su bucle de qwords).  Un tamano pequeno y
-     * constante lo desenrolla el BACKEND -- ahi la decision ya no pierde nada.
+     * semantico permite: el interprete un bucle, el JIT/AOT `rep stosb` o SIMD,
+     * y un programa sin runtime la rutina que el usuario haya puesto en su
+     * lugar (el mecanismo de sobrecarga ya existe: @c vx_memset es Vesta puro,
+     * sin libc, y el vectorizador del AOT puede promover su bucle de qwords).
+     * Un tamano pequeno y constante lo desenrolla el BACKEND -- ahi la decision
+     * ya no pierde nada.
      */
     MEMSET = 0x9F,
     RAW_ALLOC =
@@ -470,21 +476,20 @@ enum class IrOp : uint16_t {
                              ///< AOT: CALL vx_gc_register_finalizer.
     GC_COLLECT = 0xD4, ///< gccollect  (fuerza minor+major GC del proceso +
                        ///< drena finalizadores).  Builtin Vesta gc_collect().
-                       ///< interp/JIT: opcode gccollect; AOT: CALL vx_gc_collect.
+    ///< interp/JIT: opcode gccollect; AOT: CALL vx_gc_collect.
     GC_FINALIZE_ALL = 0xD5, ///< gcfinall  (finaliza TODO objeto GC vivo con
-                            ///< recurso interno).  Builtin Vesta gc_finalize_all().
-                            ///< interp/JIT: opcode gcfinall; AOT: CALL
-                            ///< vx_gc_finalize_all.  Determinista.
-    GC_ALLOCP = 0x98, ///< %dst = gc_allocp.ptr %size  (gcallocp: alloc + deref
-                      ///< + xchg en 1 instr)
-    GETSTATIC = 0x99, ///< %dst = getstatic.i64 %cls, imm=offset   (carga campo
-                      ///< estatico)
-    SETSTATIC = 0x9A, ///< setstatic.i64 %cls, %val, imm=offset    (almacena
-                      ///< campo estatico)
-    ATOMIC_LD = 0x9B, ///< %dst = atomic_ld.i64 [%addr]   (atomic load i64)
-    ATOMIC_ST = 0x9C, ///< atomic_st.i64 [%addr], %val
-    ATOMIC_CAS =
-        0x9D, ///< %dst = atomic_cas.i64 [%addr], %expected, %desired
+                            ///< recurso interno).  Builtin Vesta
+                            ///< gc_finalize_all(). interp/JIT: opcode gcfinall;
+                            ///< AOT: CALL vx_gc_finalize_all.  Determinista.
+    GC_ALLOCP = 0x98,  ///< %dst = gc_allocp.ptr %size  (gcallocp: alloc + deref
+                       ///< + xchg en 1 instr)
+    GETSTATIC = 0x99,  ///< %dst = getstatic.i64 %cls, imm=offset   (carga campo
+                       ///< estatico)
+    SETSTATIC = 0x9A,  ///< setstatic.i64 %cls, %val, imm=offset    (almacena
+                       ///< campo estatico)
+    ATOMIC_LD = 0x9B,  ///< %dst = atomic_ld.i64 [%addr]   (atomic load i64)
+    ATOMIC_ST = 0x9C,  ///< atomic_st.i64 [%addr], %val
+    ATOMIC_CAS = 0x9D, ///< %dst = atomic_cas.i64 [%addr], %expected, %desired
     ATOMIC_ADD =
         0x9E, ///< %dst = atomic_add.i64 [%addr], %delta (fetch-and-add)
               ///< El bloque queda en HandleTable y participa del mark/sweep.
@@ -575,12 +580,11 @@ enum class IrOp : uint16_t {
     ///<   seteada; en cualquier otro contexto el runtime lanza
     ///<   FATAL_ILLEGAL_INSTRUCTION.  Reemplaza el viejo
     ///<   RAW_ASM "rethrow\n" usado en synchronized cleanup.
-    SHARED_STAT =
-        0xC7, ///< %dst = shared_stat.T %op_code    ( Z introspect)
-              ///<   op_code (i32 imm): 0=live_count (-> u32), 1=bytes (-> u64),
-              ///<                       2=gc_collect (-> void).
-              ///<   Reemplaza RAW_ASM "sharedstat ..." con un IR op tipado;
-              ///<   el bytecode emitido sigue siendo el opcode extended 0xAD.
+    SHARED_STAT = 0xC7, ///< %dst = shared_stat.T %op_code    ( Z introspect)
+    ///<   op_code (i32 imm): 0=live_count (-> u32), 1=bytes (-> u64),
+    ///<                       2=gc_collect (-> void).
+    ///<   Reemplaza RAW_ASM "sharedstat ..." con un IR op tipado;
+    ///<   el bytecode emitido sigue siendo el opcode extended 0xAD.
     READ_VM_REG = 0xC8, ///< %dst = read_vm_reg.T imm=N      (leer @c
                         ///< proc->registers.regs[N])
     ///<   Lectura directa de un VM register por indice (0..15).
@@ -683,16 +687,20 @@ enum class IrOp : uint16_t {
     // El acumulador de W lanes vive en un XMM/YMM/ZMM DEDICADO (no en memoria)
     // a traves del bucle -> sin round-trip por iteracion.  El interprete
     // (oraculo) usa el acc_slot de memoria (lento pero correcto); el JIT usa el
-    // registro y solo vuelca al slot UNA vez (VEC_ACC_STORE) al salir del bucle,
-    // donde la reduccion horizontal existente lo consume.  imm = ancho (16/32/64).
+    // registro y solo vuelca al slot UNA vez (VEC_ACC_STORE) al salir del
+    // bucle,
+    // donde la reduccion horizontal existente lo consume.  imm = ancho
+    // (16/32/64).
     // imm = ancho(bits0-7) | acc_idx(bits8-11) | src_idx(bits12-15, COMBINE).
     // Para ocultar la latencia de la cadena de dependencia, el bucle se
     // desenrolla en U acumuladores INDEPENDIENTES (acc_idx 0..U-1); al final se
-    // combinan (VEC_ACC_COMBINE acc0 += acc_j) antes de la reduccion horizontal.
-    VEC_ACC_ZERO = 0xE5,  ///< vec_acc_zero %slot         (acc[idx] = 0)
-    VEC_ACC_ADD = 0xE6,   ///< vec_acc_add  %slot, %a      (acc[idx] += a[chunk])
-    VEC_ACC_FMA = 0xE7,   ///< vec_acc_fma  %slot, %a, %b  (acc[idx] += a*b)
-    VEC_ACC_STORE = 0xE8, ///< vec_acc_store %slot         (slot = acc[0]; nop interp)
+    // combinan (VEC_ACC_COMBINE acc0 += acc_j) antes de la reduccion
+    // horizontal.
+    VEC_ACC_ZERO = 0xE5, ///< vec_acc_zero %slot         (acc[idx] = 0)
+    VEC_ACC_ADD = 0xE6,  ///< vec_acc_add  %slot, %a      (acc[idx] += a[chunk])
+    VEC_ACC_FMA = 0xE7,  ///< vec_acc_fma  %slot, %a, %b  (acc[idx] += a*b)
+    VEC_ACC_STORE =
+        0xE8, ///< vec_acc_store %slot         (slot = acc[0]; nop interp)
     VEC_ACC_COMBINE = 0xE9, ///< vec_acc_combine %slot   (acc[dst] += acc[src])
 
     // VEC_BINOP_S dst[i] = a[i] OP escalar  (escalado/offset element-wise): el
@@ -745,18 +753,17 @@ enum class IrOp : uint16_t {
     // ---- codigo ensamblador incrustado ----
     ASM_MICRO =
         0xEF, ///< una instruccion asm OPACA liftada (ver @ref AsmMicro):
-              ///<   imm=indice en IrFunction::asm_micros.  Lleva su identidad en
-              ///<   la DB (isa+form_id) de donde se consultan TODOS sus efectos.
-              ///<   operands=SSA de entrada (espejo, para que liveness los vea);
-              ///<   dst=primera salida.  Multi-arch; JIT/AOT la re-emiten
-              ///<   verbatim, el interp NO la soporta (como INLINE_ASM).
-    INLINE_ASM =
-        0xFE, ///< inline_asm host ( AS): func_name=cuerpo NASM Intel,
-              ///<   imm=bitfield de calificadores (bit0 volatile, bit1 nomem,
-              ///<   bit2 preserves_flags, bit3 pure, bit4 clobbers_memory,
-              ///<   bit5 clobbers_flags).  Distinto de RAW_ASM (asm de la VM):
-              ///<   este es asm de la CPU host, lo materializan port-C / JIT /
-              ///<   AOT.  El backend bytecode/interp NO lo soporta.
+    ///<   imm=indice en IrFunction::asm_micros.  Lleva su identidad en
+    ///<   la DB (isa+form_id) de donde se consultan TODOS sus efectos.
+    ///<   operands=SSA de entrada (espejo, para que liveness los vea);
+    ///<   dst=primera salida.  Multi-arch; JIT/AOT la re-emiten
+    ///<   verbatim, el interp NO la soporta (como INLINE_ASM).
+    INLINE_ASM = 0xFE, ///< inline_asm host ( AS): func_name=cuerpo NASM Intel,
+    ///<   imm=bitfield de calificadores (bit0 volatile, bit1 nomem,
+    ///<   bit2 preserves_flags, bit3 pure, bit4 clobbers_memory,
+    ///<   bit5 clobbers_flags).  Distinto de RAW_ASM (asm de la VM):
+    ///<   este es asm de la CPU host, lo materializan port-C / JIT /
+    ///<   AOT.  El backend bytecode/interp NO lo soporta.
     RAW_ASM = 0xFF, ///< raw_asm "texto"  (ensamblador .vel verbatim; nunca
                     ///< optimizado)
 };
@@ -767,8 +774,6 @@ enum class IrOp : uint16_t {
  * @return Nombre de texto del opcode.
  */
 const char *ir_op_name(IrOp op);
-
-
 
 /**
  * @brief Parsea el nombre de un opcode del formato de texto.
@@ -1035,23 +1040,26 @@ struct IrInstr {
     /// del linear scan (ver lower_for / lower_while).
     bool preserve = false;
 
-    /// @Naked: si true en un IrOp::RET, este RET es el SINTETICO de caida-al-final
-    /// (fallthrough) que el lowering inserta cuando la funcion no termina en un
-    /// `return` explicito -- NO proviene de un `return` del usuario.  El codegen
-    /// nativo lo usa para @Naked: una funcion @Naked NO emite el `ret` implicito
-    /// (para no pisar el `iretq`/`ret` que el propio asm provee en un ISR o
-    /// bootloader), pero SI materializa un `return` explicito (read-back + `ret`,
-    /// sin epilogo de frame).  Mirar solo si el RET porta operando NO basta: el
-    /// implicito de una fn con retorno no-void lleva un `0` sintetico.  Se
-    /// serializa (el AOT consume el @ir del .velb/.vxir).
+    /// @Naked: si true en un IrOp::RET, este RET es el SINTETICO de
+    /// caida-al-final (fallthrough) que el lowering inserta cuando la funcion
+    /// no termina en un `return` explicito -- NO proviene de un `return` del
+    /// usuario.  El codegen nativo lo usa para @Naked: una funcion @Naked NO
+    /// emite el `ret` implicito (para no pisar el `iretq`/`ret` que el propio
+    /// asm provee en un ISR o bootloader), pero SI materializa un `return`
+    /// explicito (read-back + `ret`, sin epilogo de frame).  Mirar solo si el
+    /// RET porta operando NO basta: el implicito de una fn con retorno no-void
+    /// lleva un `0` sintetico.  Se serializa (el AOT consume el @ir del
+    /// .velb/.vxir).
     bool ret_implicit = false;
 
-    /// @fp(strict) bajo inlining: cuando el inliner copia el cuerpo de un callee
-    /// STRICT (fp_contract=false) dentro de un caller FAST, marca las ops float
-    /// copiadas con este flag para que @c ir_pass_fuse_fma NO las contraiga a FMA
-    /// (preservar la semantica IEEE de 2 redondeos del callee).  Marcador
-    /// TRANSITORIO de compile-time (el fuse corre en O2 ANTES de serializar el
-    /// @ir post-opt) -> NO se serializa; el JIT/AOT consumen el IR ya fusionado.
+    /// @fp(strict) bajo inlining: cuando el inliner copia el cuerpo de un
+    /// callee STRICT (fp_contract=false) dentro de un caller FAST, marca las
+    /// ops float copiadas con este flag para que @c ir_pass_fuse_fma NO las
+    /// contraiga a FMA (preservar la semantica IEEE de 2 redondeos del callee).
+    /// Marcador TRANSITORIO de compile-time (el fuse corre en O2 ANTES de
+    /// serializar el
+    /// @ir post-opt) -> NO se serializa; el JIT/AOT consumen el IR ya
+    /// fusionado.
     bool no_fp_contract = false;
 
     /// AOT: STR_LIT_ADDR sobre la plantilla de un `thread_local` (TLS).  Solo
@@ -1163,18 +1171,19 @@ struct DevirtCandidate {
  */
 struct AsmRegBinding {
     IrValueId alloca_value; ///< dst del ALLOCA del var register-bound
-    std::string reg;        ///< nombre del registro RAW (eax/rax/xmm0...); vacio
-                            ///< si @c reg_auto (el fisico lo elige el RA post-regalloc)
-    IrType type;            ///< tipo escalar del var (para el ctype en C)
-    bool is_vector;         ///< true si reg es xmm/ymm/zmm (constraint "x")
-    std::string name;       ///< nombre Vesta de la variable (para filtrar
-                            ///< por scope activo en lower_asm)
+    std::string
+        reg;        ///< nombre del registro RAW (eax/rax/xmm0...); vacio
+                    ///< si @c reg_auto (el fisico lo elige el RA post-regalloc)
+    IrType type;    ///< tipo escalar del var (para el ctype en C)
+    bool is_vector; ///< true si reg es xmm/ymm/zmm (constraint "x")
+    std::string name; ///< nombre Vesta de la variable (para filtrar
+                      ///< por scope activo en lower_asm)
     /// operando `reg` (AUTO) de un @c asm ( ... ): el RA ELIGE el
     /// registro (constraint register-required, no un pin) y el ensamblado se
     /// aplaza a post-regalloc.  El cuerpo lo referencia por el placeholder
     /// @c $ph_index.  false = pin fijo clasico (register("rax") / `rax a`).
     bool reg_auto = false;
-    int ph_index = -1;      ///< indice $N del placeholder en el cuerpo (reg_auto)
+    int ph_index = -1; ///< indice $N del placeholder en el cuerpo (reg_auto)
     /**
      * @brief CLASE con la que se declaro el operando, tal como se escribio:
      *        @c "reg" / @c "xmm" / @c "ymm" / @c "zmm" (el compilador elige el
@@ -1205,9 +1214,10 @@ struct AsmRegBinding {
  * @c RAX de @c mul).
  */
 enum AsmOperandFlag : uint8_t {
-    ASM_OP_READ = 1u << 0,       ///< el operando se LEE
-    ASM_OP_WRITE = 1u << 1,      ///< el operando se ESCRIBE
-    ASM_OP_IMPLICIT = 1u << 2,   ///< implicito (no aparece en la sintaxis textual)
+    ASM_OP_READ = 1u << 0,  ///< el operando se LEE
+    ASM_OP_WRITE = 1u << 1, ///< el operando se ESCRIBE
+    ASM_OP_IMPLICIT =
+        1u << 2, ///< implicito (no aparece en la sintaxis textual)
     ASM_OP_SUPPRESSED = 1u << 3, ///< leido/escrito pero fuera del encoding
     ASM_OP_CLOBBER = 1u << 4,    ///< destruido sin valor observable
 };
@@ -1218,7 +1228,8 @@ enum AsmOperandFlag : uint8_t {
  */
 enum class AsmOperandKind : uint8_t {
     REG = 0, ///< registro (clase en @c regclass, fisico en @c fixed_phys)
-    MEM = 1, ///< memoria (base/index en @c value; @c regclass del registro base)
+    MEM =
+        1, ///< memoria (base/index en @c value; @c regclass del registro base)
     IMM = 2, ///< inmediato (valor en @c imm)
 };
 
@@ -1231,18 +1242,22 @@ enum class AsmOperandKind : uint8_t {
  * referencian esta lista por indice.
  *
  * @c regclass es ARCH-NEUTRA (misma para x86, arm64, riscv): el ancho y la
- * sintaxis concreta los da la forma de la base de datos (@ref AsmMicro::form_id).
+ * sintaxis concreta los da la forma de la base de datos (@ref
+ * AsmMicro::form_id).
  * @c fixed_phys fija el operando a un registro fisico REQUERIDO (p.ej. @c cpuid
  * escribe eax/ebx/ecx/edx); -1 = libre, lo elige el asignador de registros.
  */
 struct AsmMicroOperand {
     AsmOperandKind kind = AsmOperandKind::REG; ///< REG / MEM / IMM
-    uint8_t flags = 0;       ///< @ref AsmOperandFlag (READ|WRITE|IMPLICIT|...)
-    uint8_t regclass = 0;    ///< clase del REG / base de MEM: 0=GP 1=FP 2=VEC 3=PRED 4=FLAGS
-    uint16_t width = 0;      ///< ancho en BITS del operando (de la forma DB); nombra el reg
+    uint8_t flags = 0; ///< @ref AsmOperandFlag (READ|WRITE|IMPLICIT|...)
+    uint8_t regclass =
+        0; ///< clase del REG / base de MEM: 0=GP 1=FP 2=VEC 3=PRED 4=FLAGS
+    uint16_t width =
+        0; ///< ancho en BITS del operando (de la forma DB); nombra el reg
     int16_t fixed_phys = -1; ///< reg fisico fijo (-1 = libre, lo asigna el RA)
-    IrValueId value = 0;     ///< SSA leido/definido (REG/MEM base); IR_NO_VALUE si no
-    int64_t imm = 0;         ///< inmediato (solo @c kind==IMM)
+    IrValueId value =
+        0;           ///< SSA leido/definido (REG/MEM base); IR_NO_VALUE si no
+    int64_t imm = 0; ///< inmediato (solo @c kind==IMM)
 
     bool reads() const { return (flags & ASM_OP_READ) != 0; }
     bool writes() const { return (flags & ASM_OP_WRITE) != 0; }
@@ -1263,15 +1278,21 @@ struct AsmMicroOperand {
  * Es MULTI-ARCH: @c isa identifica la ISA (misma codificacion que
  * @c instr_db::Isa) y @c form_id es el indice de la forma en la base de datos
  * de ESA ISA.  El interprete NO ejecuta @c ASM_MICRO (no se emula cpuid): solo
- * lo materializan JIT/AOT (nativos); lo liftado a ops tipadas SI corre en interp.
+ * lo materializan JIT/AOT (nativos); lo liftado a ops tipadas SI corre en
+ * interp.
  */
 struct AsmMicro {
-    uint8_t isa = 0;    ///< ISA (== instr_db::Isa: 0=x86_64,1=x86,2=x86_16,3=arm64,...)
-    uint32_t form_id = 0; ///< indice de la forma en la DB de @c isa (efectos/timing)
-    std::string tmpl;   ///< plantilla NASM con placeholders $0,$1,... por operando
-    std::vector<AsmMicroOperand> operands; ///< lista PLANA en ORDEN TEXTUAL (roles en flags)
-    uint8_t eff = 0;    ///< cache: bit0 mem, bit1 flags_r, bit2 flags_w, bit3 barrera,
-                        ///<   bit4 call (la DB es la verdad; esto es solo un atajo)
+    uint8_t isa =
+        0; ///< ISA (== instr_db::Isa: 0=x86_64,1=x86,2=x86_16,3=arm64,...)
+    uint32_t form_id =
+        0; ///< indice de la forma en la DB de @c isa (efectos/timing)
+    std::string
+        tmpl; ///< plantilla NASM con placeholders $0,$1,... por operando
+    std::vector<AsmMicroOperand>
+        operands; ///< lista PLANA en ORDEN TEXTUAL (roles en flags)
+    uint8_t eff =
+        0; ///< cache: bit0 mem, bit1 flags_r, bit2 flags_w, bit3 barrera,
+           ///<   bit4 call (la DB es la verdad; esto es solo un atajo)
 };
 
 /**
@@ -1281,14 +1302,14 @@ struct AsmMicro {
  * El primer bloque (id=0) es siempre el bloque de entrada "entry".
  */
 struct IrFunction {
-    std::string name;              ///< nombre calificado ("com.pkg.Foo.add")
+    std::string name; ///< nombre calificado ("com.pkg.Foo.add")
     /**
      * @brief Cuantas veces se ha MODIFICADO esta funcion.
      *
      * No describe la funcion: identifica su ESTADO.  Un analisis cacheado se
-     * sella con el valor que tenia al calcularse, y pedirlo con otro distinto lo
-     * recalcula.  Asi un resultado viejo no se puede entregar aunque nadie se
-     * haya acordado de invalidarlo.
+     * sella con el valor que tenia al calcularse, y pedirlo con otro distinto
+     * lo recalcula.  Asi un resultado viejo no se puede entregar aunque nadie
+     * se haya acordado de invalidarlo.
      *
      * Hace falta porque los hechos guardan PUNTEROS a instrucciones: usarlos
      * despues de mutar la funcion no es dar una respuesta imprecisa, es leer
@@ -1297,7 +1318,7 @@ struct IrFunction {
      */
     uint64_t version = 0;
     IrType ret_type = IrType::VOID; ///< tipo de retorno
-    std::vector<IrValueId> params; ///< IDs de los valores parametro
+    std::vector<IrValueId> params;  ///< IDs de los valores parametro
     /// ABI custom por funcion: registro fisico de entrada por parametro,
     /// indexado igual que @c params.  Cadena vacia = ABI estandar del target
     /// (i-esimo arg-reg SysV/Win64).  "rax".."r15".  Lo llena el lowering desde
@@ -1307,14 +1328,14 @@ struct IrFunction {
     /// Vacio TAMBIEN cuando NINGUN param tiene ABI custom (caso comun -> no
     /// ocupa espacio en el 99% de funciones).
     std::vector<std::string> param_abi_regs;
-    std::vector<IrValue> values;   ///< pool de todos los valores SSA
-    std::vector<IrBlock> blocks;   ///< bloques basicos (bloques[0] = entry)
+    std::vector<IrValue> values; ///< pool de todos los valores SSA
+    std::vector<IrBlock> blocks; ///< bloques basicos (bloques[0] = entry)
     /// Llamadas que se aplanaron aqui al inlinar.  Las instrucciones apuntan a
     /// una entrada por indice (@c IrInstr::inline_site); vacio si no se inlino
     /// nada, que es lo comun.
     std::vector<InlineSite> inline_sites;
-    bool is_native = false;        ///< true si es stub para funcion nativa
-    bool is_variadic = false;      ///< true si acepta argc variable
+    bool is_native = false;   ///< true si es stub para funcion nativa
+    bool is_variadic = false; ///< true si acepta argc variable
     /**
      * @brief Alcanzable desde FUERA del modulo (lo que el fuente declara como
      *        publico; sin palabra clave, en Vesta lo es).
@@ -1439,10 +1460,11 @@ struct IrFunction {
      * que impide componerlo con regiones, rangos y efectos.
      *
      * Esta tabla lateral (misma forma que @c asm_reg_bindings: vacia en las
-     * funciones que no prestan) lo hace cruzar.  Lleva la PROCEDENCIA -- fichero
-     * y linea del `lend`, y el nombre que el usuario escribio -- porque un
-     * veredicto sin su origen no se puede explicar: al bajar la comprobacion al
-     * IR se pierden los nombres, y el diagnostico no debe perderse con ellos.
+     * funciones que no prestan) lo hace cruzar.  Lleva la PROCEDENCIA --
+     * fichero y linea del `lend`, y el nombre que el usuario escribio -- porque
+     * un veredicto sin su origen no se puede explicar: al bajar la comprobacion
+     * al IR se pierden los nombres, y el diagnostico no debe perderse con
+     * ellos.
      */
     /**
      * @brief De que NATURALEZA es lo que se presto.
@@ -1459,19 +1481,19 @@ struct IrFunction {
      * objeto ni al interior de un `unique`.
      */
     enum class BorrowOwnerKind : uint8_t {
-        Plain = 0,  ///< Local corriente cuya direccion se tomo.
-        Unique,     ///< `unique<T>`: propiedad, no prestamo.
-        Shared,     ///< `shared<T>`: propiedad compartida con recuento.
-        Reborrow,   ///< Otro prestamo (cadena de represtamos).
+        Plain = 0, ///< Local corriente cuya direccion se tomo.
+        Unique,    ///< `unique<T>`: propiedad, no prestamo.
+        Shared,    ///< `shared<T>`: propiedad compartida con recuento.
+        Reborrow,  ///< Otro prestamo (cadena de represtamos).
     };
 
     struct BorrowFact {
-        IrValueId   value = IR_NO_VALUE; ///< El puntero que ES el prestamo.
-        IrValueId   owner = IR_NO_VALUE; ///< De donde se presto (su valor SSA).
-        bool        mutable_ = false;    ///< `lend_mut` (exclusivo) vs `lend`.
+        IrValueId value = IR_NO_VALUE; ///< El puntero que ES el prestamo.
+        IrValueId owner = IR_NO_VALUE; ///< De donde se presto (su valor SSA).
+        bool mutable_ = false;         ///< `lend_mut` (exclusivo) vs `lend`.
         BorrowOwnerKind owner_kind = BorrowOwnerKind::Plain;
-        uint32_t    line = 0;            ///< Linea del `lend` (procedencia).
-        std::string owner_name;          ///< Nombre escrito por el usuario.
+        uint32_t line = 0;      ///< Linea del `lend` (procedencia).
+        std::string owner_name; ///< Nombre escrito por el usuario.
     };
     std::vector<BorrowFact> borrow_facts;
 
@@ -1679,10 +1701,10 @@ struct IrNativeEffects {
     /// "algun sitio".
     uint32_t lee_apuntado = 0;
     uint32_t escribe_apuntado = 0;
-    bool lee_global = false;      ///< Lee estado global (estatico del proceso).
-    bool escribe_global = false;  ///< Lo escribe.
-    bool io = false;              ///< E/S observable (consola, fichero, puerto).
-    bool puede_lanzar = false;    ///< Puede cortar el flujo (throw/abort).
+    bool lee_global = false;     ///< Lee estado global (estatico del proceso).
+    bool escribe_global = false; ///< Lo escribe.
+    bool io = false;             ///< E/S observable (consola, fichero, puerto).
+    bool puede_lanzar = false;   ///< Puede cortar el flujo (throw/abort).
     bool no_determinista = false; ///< Dos llamadas iguales pueden diferir.
     /// Corre AL COMPILAR, no en ejecucion.  Sus efectos son sobre la propia
     /// compilacion, no sobre el programa compilado.
@@ -2115,7 +2137,8 @@ inline bool es_cuerpo_comptime(const std::string &nombre) {
     return nombre.rfind("__macro_", 0) == 0;
 }
 /**
- * @brief Corre los indices de datos de unas funciones que se traen a otro modulo.
+ * @brief Corre los indices de datos de unas funciones que se traen a otro
+ * modulo.
  *
  * Cada modulo numera sus ranuras desde cero.  Al concatenar los datos, las del
  * modulo que llega se van al final y CAMBIAN de indice, pero sus instrucciones

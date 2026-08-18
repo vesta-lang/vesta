@@ -22,16 +22,16 @@
  * (@ref vx::collect_comptime_unit), ya trae su texto compilable
  * (@c ComptimeUnit::unit_source) y su clave de cache
  * (@c ComptimeUnit::content_hash), compilar un fuente en memoria ya se sabe
- * hacer (@c vesta::tc::compile con @c source_overlay) y guardar un artefacto por
- * contenido tambien (@ref vx::CasStore).  Lo que faltaba era JUNTARLO, que es lo
- * unico que hay aqui.
+ * hacer (@c vesta::tc::compile con @c source_overlay) y guardar un artefacto
+ * por contenido tambien (@ref vx::CasStore).  Lo que faltaba era JUNTARLO, que
+ * es lo unico que hay aqui.
  *
  * @par Por que por contenido y no por fichero
  * La clave es el @c content_hash del conjunto, que cambia si y solo si cambia
  * una decl comptime o una de sus dependencias.  Editar codigo de runtime -- o
- * anadir un `import` que el comptime no usa -- NO la mueve, asi que el artefacto
- * se reusa entre compilaciones y entre proyectos (el store por defecto es
- * global).  Ese es todo el ahorro.
+ * anadir un `import` que el comptime no usa -- NO la mueve, asi que el
+ * artefacto se reusa entre compilaciones y entre proyectos (el store por
+ * defecto es global).  Ese es todo el ahorro.
  */
 
 #ifndef VESTA_VX_COMPTIME_ARTIFACT_H
@@ -50,15 +50,16 @@ namespace vx {
  * @brief Resultado de obtener el artefacto de un conjunto comptime.
  */
 struct ComptimeArtifact {
-    bool ok = false;              ///< @c true si hay bytecode utilizable.
-    bool from_cache = false;      ///< @c true si se reuso (no se compilo).
-    std::vector<uint8_t> velb;    ///< Bytecode del conjunto.
-    std::string error;            ///< Motivo, si @c ok es @c false.
-    /// Microsegundos que tardo el FRONTEND (.vx -> .vel) al compilarlo.  0 si se
-    /// reuso.  Se expone junto al total para poder decir en que MITAD esta el
-    /// coste -- frontend, o ensamblado+enlazado -- sin tener que perfilar: si un
-    /// conjunto de tres funciones triviales tarda decenas de milisegundos, eso es
-    /// coste FIJO y conviene saber de que lado cae antes de buscarlo.
+    bool ok = false;           ///< @c true si hay bytecode utilizable.
+    bool from_cache = false;   ///< @c true si se reuso (no se compilo).
+    std::vector<uint8_t> velb; ///< Bytecode del conjunto.
+    std::string error;         ///< Motivo, si @c ok es @c false.
+    /// Microsegundos que tardo el FRONTEND (.vx -> .vel) al compilarlo.  0 si
+    /// se reuso.  Se expone junto al total para poder decir en que MITAD esta
+    /// el coste -- frontend, o ensamblado+enlazado -- sin tener que perfilar:
+    /// si un conjunto de tres funciones triviales tarda decenas de
+    /// milisegundos, eso es coste FIJO y conviene saber de que lado cae antes
+    /// de buscarlo.
     uint64_t frontend_us = 0;
 };
 

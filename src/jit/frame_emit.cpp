@@ -19,7 +19,9 @@ namespace jit {
 namespace {
 
 /** @brief Operando de registro de 64 bits. */
-MOperand r64(MReg r) { return MOperand::make_reg(r, 8); }
+MOperand r64(MReg r) {
+    return MOperand::make_reg(r, 8);
+}
 
 /** @brief `push r`. */
 MInstr push_of(MReg r) {
@@ -50,15 +52,15 @@ void emit_frame_prologue(const FrameSpec &f, std::vector<MInstr> &out) {
         out.push_back(push_of(MReg::RBP));
     } else if (!f.no_frame) {
         out.push_back(push_of(MReg::RBP));
-        out.push_back(MInstr::make_unary(MOp::MOV, r64(MReg::RBP),
-                                         r64(MReg::RSP)));
+        out.push_back(
+            MInstr::make_unary(MOp::MOV, r64(MReg::RBP), r64(MReg::RSP)));
     }
 
     if (f.bajo_vm) {
         // RBX lleva el ProcessVM* durante toda la funcion; hay que devolverlo.
         out.push_back(push_of(MReg::RBX));
-        out.push_back(MInstr::make_unary(MOp::MOV, r64(MReg::RBX),
-                                         r64(f.vm.proc_arg)));
+        out.push_back(
+            MInstr::make_unary(MOp::MOV, r64(MReg::RBX), r64(f.vm.proc_arg)));
     }
     for (uint8_t r : f.callee_saved)
         out.push_back(push_of(static_cast<MReg>(r)));
@@ -92,7 +94,8 @@ void emit_frame_prologue(const FrameSpec &f, std::vector<MInstr> &out) {
 
     if (f.bajo_vm && f.vm.has_alloca) {
         /* Guardar el RSP de la VM: lo que se reserve de su pila mas adelante se
-         * devuelve en el epilogo.  Sin esto, cada llamada se dejaria un trozo. */
+         * devuelve en el epilogo.  Sin esto, cada llamada se dejaria un trozo.
+         */
         out.push_back(MInstr::make_unary(
             MOp::MOV, r64(f.vm.scratch),
             MOperand::make_mem(MReg::RBX, VESTA_PROC_STACK_POINTER_OFFSET)));
@@ -110,8 +113,7 @@ void emit_frame_epilogue(const FrameSpec &f, std::vector<MInstr> &out) {
          * porque esta forma solo se usa en hojas. */
         if (f.spill_bytes > 0)
             out.push_back(MInstr::make_unary(
-                MOp::ADD, r64(MReg::RSP),
-                MOperand::make_imm32(f.spill_bytes)));
+                MOp::ADD, r64(MReg::RSP), MOperand::make_imm32(f.spill_bytes)));
         for (size_t i = f.callee_saved.size(); i-- > 0;)
             out.push_back(pop_of(static_cast<MReg>(f.callee_saved[i])));
         if (f.bajo_vm) out.push_back(pop_of(MReg::RBX));
@@ -138,7 +140,8 @@ void emit_frame_epilogue(const FrameSpec &f, std::vector<MInstr> &out) {
             MOperand::make_mem(MReg::RBX, VESTA_PROC_STACK_POINTER_OFFSET),
             r64(f.vm.scratch)));
     }
-    /* Deshace la reserva y deja RSP en el ultimo registro salvado, de una vez. */
+    /* Deshace la reserva y deja RSP en el ultimo registro salvado, de una vez.
+     */
     out.push_back(MInstr::make_unary(
         MOp::LEA, r64(MReg::RSP),
         MOperand::make_mem(

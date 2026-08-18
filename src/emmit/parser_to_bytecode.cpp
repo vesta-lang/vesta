@@ -22,7 +22,7 @@
  */
 #include "emmit/parser_to_bytecode.h"
 #include "emmit/mnemonic.h" // consulta por indice, no por hash de cadena
-#include <algorithm> // UCRT64: no transitivo
+#include <algorithm>        // UCRT64: no transitivo
 
 #include "cli/sync_io.h"
 
@@ -189,11 +189,12 @@ void Assembler::emit_pass(const vm::ASTNode *node) {
             if (this->current_section != nullptr &&
                 this->current_section->layout_started) {
                 if (output.offset > this->current_section->stream_offset) {
-                    // las dos pasadas discrepan: seria un fallo del ensamblador,
-                    // no del programa del usuario.  Mejor abortar que emitir un
-                    // binario con las direcciones corridas.
+                    // las dos pasadas discrepan: seria un fallo del
+                    // ensamblador, no del programa del usuario.  Mejor abortar
+                    // que emitir un binario con las direcciones corridas.
                     throw std::runtime_error(
-                        "Error interno: descuadre entre pasadas en la seccion '" +
+                        "Error interno: descuadre entre pasadas en la seccion "
+                        "'" +
                         section_name + "': el flujo va por " +
                         std::to_string(output.offset) +
                         " pero la seccion empieza en " +
@@ -352,8 +353,8 @@ void Assembler::first_pass(const vm::ASTNode *node, uint64_t &offset) {
         {
             /* Es una instruccion real?  Por indice: esto corre por cada nodo
              * del programa, y el nombre ya no se hashea -- se traduce una vez a
-             * mnemonico y de ahi es una lectura.  El indice se construye una vez
-             * sobre la misma tabla; no hay copia de los datos. */
+             * mnemonico y de ahi es una lectura.  El indice se construye una
+             * vez sobre la misma tabla; no hay copia de los datos. */
             static const emmit::MnemonicIndex<std::vector<InstrInfo>> kIndex(
                 InstrTable);
             const std::vector<InstrInfo> *variantes =

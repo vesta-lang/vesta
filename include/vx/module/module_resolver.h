@@ -238,8 +238,8 @@ class ModuleGraph {
     /// namespace.
     static void extract_namespaces_(
         const std::string &source, std::vector<std::string> &out,
-        std::unordered_map<std::string, std::vector<std::string>>
-            *types_by_ns = nullptr);
+        std::unordered_map<std::string, std::vector<std::string>> *types_by_ns =
+            nullptr);
 
     /// Normaliza un path: separadores -> `/`, resuelve `..`, expande
     /// relativos contra @c base_dir si no es absoluto.  Devuelve la
@@ -315,7 +315,6 @@ std::string detect_stdlib_vx_dir();
  */
 std::string override_de_paquete(const std::string &nombre);
 
-
 /**
  * @brief De que PAQUETE es un fichero: el manifiesto que lo cobija.
  *
@@ -332,7 +331,6 @@ std::string override_de_paquete(const std::string &nombre);
 ///        el id no las separa, el fichero que lo declara si.
 std::string derive_package_id(const std::string &root_path,
                               std::string *manifiesto_usado = nullptr);
-
 
 } // namespace vx
 

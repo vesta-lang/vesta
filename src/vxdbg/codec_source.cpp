@@ -99,9 +99,9 @@ StoredNode encode(const ResolvedEntity &n) {
     // La cabecera no sale del objeto: una entidad resuelta no tiene ninguna.
     // Genero y version son propiedades del FORMATO, y ponerlas aqui es lo que
     // permite calcular una identidad sin construir antes algo del almacen.
-    return make(DebugNodeHeader{NodeKind::Entity, LanguageEntity::kSchemaVersion,
-                                {}},
-                w);
+    return make(
+        DebugNodeHeader{NodeKind::Entity, LanguageEntity::kSchemaVersion, {}},
+        w);
 }
 
 bool decode(const StoredNode &s, LanguageEntity &out) {
@@ -117,8 +117,8 @@ bool decode(const StoredNode &s, LanguageEntity &out) {
     if (!r.ok()) return false;
     out.relations.clear();
     // Se reserva por el numero leido, que ya paso por el lector: si los bytes
-    // estuvieran rotos, `ok()` seria falso y no se llegaria aqui.  Sin esto, una
-    // entidad con muchas relaciones va creciendo el vector a cachos.
+    // estuvieran rotos, `ok()` seria falso y no se llegaria aqui.  Sin esto,
+    // una entidad con muchas relaciones va creciendo el vector a cachos.
     out.relations.reserve(n_rel);
     for (uint32_t i = 0; i < n_rel && r.ok(); ++i) {
         Relation rel;

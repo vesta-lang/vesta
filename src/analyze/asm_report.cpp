@@ -99,7 +99,8 @@ AsmBlockReport describir(const std::string &cuerpo, const std::string &funcion,
 
 const char *nombre_banda(BandaCobertura b) {
     switch (b) {
-    case BandaCobertura::Total: return "se entiende entero -> optimizacion normal";
+    case BandaCobertura::Total:
+        return "se entiende entero -> optimizacion normal";
     case BandaCobertura::Conservadora:
         return "casi entero -> optimizacion conservadora";
     case BandaCobertura::Restringida:
@@ -161,7 +162,8 @@ void print_asm_report(std::ostream &os,
     if (bloques.empty()) return;
     os << "\n=== ASA: bloques de ensamblador ===\n";
     os << "Cada bloque, con lo que la base de instrucciones sabe de el.  La\n"
-          "COBERTURA es lo que decide cuanto se puede optimizar a su alrededor.\n";
+          "COBERTURA es lo que decide cuanto se puede optimizar a su "
+          "alrededor.\n";
     char buf[128];
     for (const AsmBlockReport &r : bloques) {
         os << "\nBLOQUE #" << r.indice << "\n";
@@ -195,9 +197,8 @@ void print_asm_report(std::ostream &os,
                       "vectoriales  lee %u  escribe %u\n",
                       r.lee_gpr, r.escribe_gpr, r.lee_vec, r.escribe_vec);
         os << buf;
-        std::snprintf(buf, sizeof(buf),
-                      "  memoria   : lee %u  escribe %u\n", r.lee_mem,
-                      r.escribe_mem);
+        std::snprintf(buf, sizeof(buf), "  memoria   : lee %u  escribe %u\n",
+                      r.lee_mem, r.escribe_mem);
         os << buf;
         std::snprintf(buf, sizeof(buf),
                       "  control   : %u salto(s)   flags: %u   barrera: %s\n",

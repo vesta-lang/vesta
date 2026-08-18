@@ -60,10 +60,8 @@ inline bool is_gc_safepoint(IrOp op) {
     case IrOp::NEWOBJS:
     case IrOp::GC_ALLOC:
     case IrOp::GC_ALLOCP:
-    case IrOp::GC_COLLECT:
-        return true;
-    default:
-        return false;
+    case IrOp::GC_COLLECT: return true;
+    default: return false;
     }
 }
 
@@ -72,8 +70,8 @@ inline bool is_gc_safepoint(IrOp op) {
  *        ubicacion fisica).
  */
 struct SafepointRoots {
-    uint32_t lin_pos = 0;           ///< posicion lineal del safepoint (liveness)
-    std::vector<IrValueId> roots;   ///< SSA values vivos con is_gc_object
+    uint32_t lin_pos = 0;         ///< posicion lineal del safepoint (liveness)
+    std::vector<IrValueId> roots; ///< SSA values vivos con is_gc_object
 };
 
 /**
@@ -98,9 +96,10 @@ struct SafepointRoots {
  * enlace @c ir_emitter sin requerir un .cpp dedicado en cada lista de
  * fuentes (el JIT/AOT que lo adopten lo obtienen igual con solo incluir).
  */
-inline std::vector<IrValueId>
-safepoint_gc_roots(const IrFunction &fn, const LivenessResult &liveness,
-                   uint32_t pos, IrValueId def_dst) {
+inline std::vector<IrValueId> safepoint_gc_roots(const IrFunction &fn,
+                                                 const LivenessResult &liveness,
+                                                 uint32_t pos,
+                                                 IrValueId def_dst) {
     std::vector<IrValueId> roots;
     roots.reserve(8);
     // Parte SEMANTICA compartida: valor vivo en pos (def <= pos < end) y

@@ -19,13 +19,13 @@
 #endif
 
 static int g_checks = 0, g_fails = 0;
-#define CHECK(cond, msg)                                                        \
-    do {                                                                        \
-        ++g_checks;                                                             \
-        if (!(cond)) {                                                          \
-            ++g_fails;                                                          \
-            std::printf("  FAIL: %s (linea %d)\n", msg, __LINE__);              \
-        }                                                                       \
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fails;                                                         \
+            std::printf("  FAIL: %s (linea %d)\n", msg, __LINE__);             \
+        }                                                                      \
     } while (0)
 
 // Reserva memoria ejecutable y copia los bytes; devuelve el puntero.

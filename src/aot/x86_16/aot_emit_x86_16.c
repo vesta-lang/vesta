@@ -21,10 +21,10 @@
  * + @c $/@c $$ + @c @at/@c @order) del driver.
  *
  * Este fichero queda como punto de extension para un futuro emisor NATIVO de 16
- * bits (p.ej. un formato de imagen de firmware propio, o structs Elf16/segmentos
- * reales) si algun dia se necesita algo que el flat binary no cubra.  De momento
- * es una unidad de traduccion vacia (sin simbolos) que solo materializa el
- * subdirectorio del desacople.
+ * bits (p.ej. un formato de imagen de firmware propio, o structs
+ * Elf16/segmentos reales) si algun dia se necesita algo que el flat binary no
+ * cubra.  De momento es una unidad de traduccion vacia (sin simbolos) que solo
+ * materializa el subdirectorio del desacople.
  */
 
 #include "aot/aot_emit_shim.h"

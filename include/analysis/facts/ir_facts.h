@@ -11,13 +11,14 @@
  *        SIN retículo, punto-fijo ni interpretacion.  Es la base compartida que
  *        consumen todos los analisis (no re-recorren el IR).  Criterio: si
  *        necesita retículo/punto-fijo/eleccion-de-precision es ANaLISIS, no
- *        hecho -- por eso aqui NO hay efectos, points-to ni alias (eso lo produce
- *        EffectAnalysis/AliasAnalysis sobre estos hechos).
+ *        hecho -- por eso aqui NO hay efectos, points-to ni alias (eso lo
+ * produce EffectAnalysis/AliasAnalysis sobre estos hechos).
  *
- * Incluye: def-use (value -> instr que lo define; value -> indice de parametro),
- * call-SITES estaticos + flag de llamada dinamica (el callgraph RESUELTO es un
- * analisis aparte), y estructura minima (bloques, back-edges = bucles, recursion
- * directa).  Se invalida al MUTAR el IR (default: solo sobrevive a preserve-all).
+ * Incluye: def-use (value -> instr que lo define; value -> indice de
+ * parametro), call-SITES estaticos + flag de llamada dinamica (el callgraph
+ * RESUELTO es un analisis aparte), y estructura minima (bloques, back-edges =
+ * bucles, recursion directa).  Se invalida al MUTAR el IR (default: solo
+ * sobrevive a preserve-all).
  */
 #ifndef VESTA_ANALYSIS_IR_FACTS_H
 #define VESTA_ANALYSIS_IR_FACTS_H
@@ -44,17 +45,20 @@ struct IRFactsAnalysis {
 /// invalida los def-use/CFG).
 struct IrFacts {
     // --- def-use ---
-    std::vector<const ir::IrInstr *> def_of;   ///< value id -> instr que lo define.
-    std::vector<int32_t>             param_of; ///< value id -> indice de parametro, -1 si no.
+    std::vector<const ir::IrInstr *>
+        def_of; ///< value id -> instr que lo define.
+    std::vector<int32_t>
+        param_of; ///< value id -> indice de parametro, -1 si no.
 
     // --- call-sites (sintacticos; el callgraph resuelto es otro analisis) ---
-    std::vector<std::string> static_callees; ///< nombres de CALL/TAILCALL estaticos.
-    bool                     has_dynamic_call = false; ///< CALLVIRT/CALLN/CALLIND/...
+    std::vector<std::string>
+        static_callees;            ///< nombres de CALL/TAILCALL estaticos.
+    bool has_dynamic_call = false; ///< CALLVIRT/CALLN/CALLIND/...
 
     // --- estructura ---
     uint32_t block_count = 0;
-    uint32_t loop_count = 0;   ///< back-edges (aproximacion de bucles).
-    bool     recursive = false; ///< se llama a si misma directamente.
+    uint32_t loop_count = 0; ///< back-edges (aproximacion de bucles).
+    bool recursive = false;  ///< se llama a si misma directamente.
 
     /// ¿Hay def para @p v?  (helper de conveniencia.)
     const ir::IrInstr *def(ir::IrValueId v) const {

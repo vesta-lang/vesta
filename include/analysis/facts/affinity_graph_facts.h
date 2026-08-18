@@ -7,21 +7,23 @@
 
 /**
  * @file analysis/facts/affinity_graph_facts.h
- * @brief AffinityGraphFacts: el grafo de AFINIDAD entre valores (Fact de 1er nivel).
+ * @brief AffinityGraphFacts: el grafo de AFINIDAD entre valores (Fact de 1er
+ * nivel).
  *
  * A diferencia de LoopFacts/ProfileFacts (que analizan el PROGRAMA), este Fact
  * expresa una RELACION entre valores: "estos dos preferirian compartir color
  * fisico".  NO representa "hay un MOV"; representa la AFINIDAD -- un hecho del
- * problema de asignacion, independiente del algoritmo de coloreado.  La afinidad
- * es NO DIRIGIDA (@c a -- @c b, no @c a -> @c b).
+ * problema de asignacion, independiente del algoritmo de coloreado.  La
+ * afinidad es NO DIRIGIDA (@c a -- @c b, no @c a -> @c b).
  *
- * DATO PURO: solo responde "¿que valores tienen afinidad?".  NADA de heuristicas,
- * coste ni move-elimination -- esas son DECISIONES del Objective / solver, no del
- * Fact.  Tampoco @c coalesce_group / @c preferred_lane / @c move_chain.
+ * DATO PURO: solo responde "¿que valores tienen afinidad?".  NADA de
+ * heuristicas, coste ni move-elimination -- esas son DECISIONES del Objective /
+ * solver, no del Fact.  Tampoco @c coalesce_group / @c preferred_lane / @c
+ * move_chain.
  *
  * GENERALIZACION (la propiedad valiosa): la copia es solo la PRIMERA fuente de
- * afinidad.  Multiples fuentes producen EL MISMO Fact, y el consumidor no sabe de
- * donde vino cada arista -- por eso el nombre es "afinidad", no "copia":
+ * afinidad.  Multiples fuentes producen EL MISMO Fact, y el consumidor no sabe
+ * de donde vino cada arista -- por eso el nombre es "afinidad", no "copia":
  *
  *      QueryProducer<AffinityGraphFacts>
  *          edges += movs
@@ -30,15 +32,17 @@
  *          edges += ISA register hints
  *          edges += vector pack/unpack
  *          edges += call ABI
- *      Objective / solver  ->  consume AffinityGraphFacts  (sin conocer el origen)
+ *      Objective / solver  ->  consume AffinityGraphFacts  (sin conocer el
+ * origen)
  *
  * En lugar de cuatro listas de "preferencias" repartidas por SSA-coalesce, el
  * lowering de PHI, el two-address y el ABI:  Programa -> Facts -> Objective.
  *
  * INTEGRACION FUTURA (query system): en el FunctionSnapshot sera una celda
- * LazyFact<AffinityGraphFacts> + QueryProducer<AffinityGraphFacts>, alimentada por
- * ssa_coalesce.cpp (produccion).  Hoy (Fase 3, aislamiento) lo lleva el
- * AbstractProblem como input sintetico.  El consumidor (coalescing) tira del Fact.
+ * LazyFact<AffinityGraphFacts> + QueryProducer<AffinityGraphFacts>, alimentada
+ * por ssa_coalesce.cpp (produccion).  Hoy (Fase 3, aislamiento) lo lleva el
+ * AbstractProblem como input sintetico.  El consumidor (coalescing) tira del
+ * Fact.
  */
 
 #ifndef VESTA_ANALYSIS_FACTS_AFFINITY_GRAPH_FACTS_H
@@ -57,9 +61,9 @@ namespace analysis {
  *        para priorizar cual romper primero; el Fact no decide nada con ella).
  */
 struct AffinityEdge {
-    uint32_t a      = 0;
-    uint32_t b      = 0;
-    float    weight = 1.0f;
+    uint32_t a = 0;
+    uint32_t b = 0;
+    float weight = 1.0f;
 };
 
 /**
@@ -79,7 +83,7 @@ enum class AffinityCheck {
 /// Hallazgo de la autocertificacion (DATO, no mensaje; i18n aguas arriba).
 struct AffinityIssue {
     AffinityCheck check;
-    uint32_t      value = 0;
+    uint32_t value = 0;
 };
 
 /** @brief AUTOCERTIFICA el grafo: sin auto-aristas ni pesos negativos.
@@ -87,8 +91,7 @@ struct AffinityIssue {
 inline std::vector<AffinityIssue> validate(const AffinityGraphFacts &g) {
     std::vector<AffinityIssue> out;
     for (const AffinityEdge &e : g.edges) {
-        if (e.a == e.b)
-            out.push_back({AffinityCheck::SELF_EDGE, e.a});
+        if (e.a == e.b) out.push_back({AffinityCheck::SELF_EDGE, e.a});
         if (e.weight < 0.0f)
             out.push_back({AffinityCheck::NEGATIVE_WEIGHT, e.a});
     }

@@ -49,8 +49,10 @@ std::mutex &huecos_db_mutex() {
 /// Recorta espacios de los extremos.
 std::string trim(const std::string &s) {
     size_t a = 0, b = s.size();
-    while (a < b && std::isspace((unsigned char)s[a])) ++a;
-    while (b > a && std::isspace((unsigned char)s[b - 1])) --b;
+    while (a < b && std::isspace((unsigned char)s[a]))
+        ++a;
+    while (b > a && std::isspace((unsigned char)s[b - 1]))
+        --b;
     return s.substr(a, b - a);
 }
 
@@ -92,10 +94,10 @@ uint8_t pack_eff(const instr_db::AsmInsnSem &sem) {
  * @brief ¿Se elevan tambien los bloques cuyos operandos son variables del
  *        programa?
  *
- * Un operando ligado con @c register() no es un registro opaco: es una variable,
- * y lo que tiene que viajar es su VALOR.  Sin esto el elevado no llegaba a
- * ningun bloque real: TODOS los del corpus tienen ligaduras, y el corpus se
- * quedaba con cero instrucciones elevadas.
+ * Un operando ligado con @c register() no es un registro opaco: es una
+ * variable, y lo que tiene que viajar es su VALOR.  Sin esto el elevado no
+ * llegaba a ningun bloque real: TODOS los del corpus tienen ligaduras, y el
+ * corpus se quedaba con cero instrucciones elevadas.
  */
 bool elevar_ligados() {
     /* Ya es lo normal.  Se apaga a mano solo para comparar una version con la
@@ -111,7 +113,8 @@ bool elevar_ligados() {
 std::string lower(const std::string &s) {
     std::string o;
     o.reserve(s.size());
-    for (char c : s) o += (char)std::tolower((unsigned char)c);
+    for (char c : s)
+        o += (char)std::tolower((unsigned char)c);
     return o;
 }
 
@@ -218,7 +221,8 @@ const ir::AsmRegBinding *
 binding_de_marcador(const std::string &tok,
                     const std::vector<ir::AsmRegBinding> &bindings) {
     if (tok.size() < 2 || tok[0] != '$') return nullptr;
-    if (tok.find_first_not_of("0123456789", 1) != std::string::npos) return nullptr;
+    if (tok.find_first_not_of("0123456789", 1) != std::string::npos)
+        return nullptr;
     const int idx = std::atoi(tok.c_str() + 1);
     for (const ir::AsmRegBinding &b : bindings)
         if (b.reg_auto && b.ph_index == idx) return &b;
@@ -273,7 +277,8 @@ bool partir_memoria_marcador(const std::string &tok, std::string &marcador,
            marcador.find_first_not_of("0123456789", 1) == std::string::npos;
 }
 
-/// Ancho en bits del operando que declaro el programador ("reg" -> el del tipo).
+/// Ancho en bits del operando que declaro el programador ("reg" -> el del
+/// tipo).
 uint16_t ancho_declarado(const ir::AsmRegBinding &b) {
     if (b.reg_class == "zmm") return 512;
     if (b.reg_class == "ymm") return 256;
@@ -295,22 +300,21 @@ bool build_operands(
     instr_db::Isa isa, const std::string &insn, const instr_db::AsmInsnSem &sem,
     const std::unordered_map<std::string, ir::IrValueId> &slot_of,
     const std::vector<ir::AsmRegBinding> &bindings,
-    std::vector<ir::AsmMicroOperand> &operands, std::string &tmpl, AsmMotivoOpaco *motivo) {
+    std::vector<ir::AsmMicroOperand> &operands, std::string &tmpl,
+    AsmMotivoOpaco *motivo) {
     operands.clear();
     std::string mnem;
     std::vector<std::string> toks;
     split_insn(insn, mnem, toks);
-    if (toks.empty())
-        return AsmMotivoOpaco::anotar(motivo, insn, "VXA022");
-
+    if (toks.empty()) return AsmMotivoOpaco::anotar(motivo, insn, "VXA022");
 
     tmpl = mnem;
     for (size_t k = 0; k < toks.size(); ++k) {
         /* Un operando `$N` es una variable del programa a la que todavia no se
-         * le ha dado registro: el programador escribio la CLASE y dejo elegir al
-         * compilador.  Es, literalmente, un pseudo-registro -- y es el 87% de
-         * los bloques del corpus, asi que mientras no entre por aqui el elevado
-         * no llega a casi ningun asm real.
+         * le ha dado registro: el programador escribio la CLASE y dejo elegir
+         * al compilador.  Es, literalmente, un pseudo-registro -- y es el 87%
+         * de los bloques del corpus, asi que mientras no entre por aqui el
+         * elevado no llega a casi ningun asm real.
          *
          * No se le pone fisico: se queda a -1 y lo reparte el asignador, que es
          * quien puede.  Lo que si lleva es el VALOR, que es lo que hace que el
@@ -327,13 +331,14 @@ bool build_operands(
             const std::string &t = toks[k];
             char *fin = nullptr;
             const long long v = std::strtoll(t.c_str(), &fin, 0);
-            const bool es_numero =
-                !t.empty() && fin != nullptr && *fin == '\0' &&
-                (std::isdigit((unsigned char)t[0]) || t[0] == '-' || t[0] == '+');
+            const bool es_numero = !t.empty() && fin != nullptr &&
+                                   *fin == '\0' &&
+                                   (std::isdigit((unsigned char)t[0]) ||
+                                    t[0] == '-' || t[0] == '+');
             if (es_numero) {
                 // Parte del camino nuevo: mientras este detras del interruptor,
-                // lo esta entero.  Que el defecto sea EXACTAMENTE lo de antes es
-                // lo unico que hace comparable una cosa con la otra.
+                // lo esta entero.  Que el defecto sea EXACTAMENTE lo de antes
+                // es lo unico que hace comparable una cosa con la otra.
                 if (!elevar_ligados())
                     return AsmMotivoOpaco::anotar(motivo, insn, "VXA023", {t});
                 ir::AsmMicroOperand op;
@@ -354,9 +359,11 @@ bool build_operands(
             bmem = binding_de_marcador(marc, bindings);
         if (bmem != nullptr) {
             if (!elevar_ligados())
-                return AsmMotivoOpaco::anotar(motivo, insn, "VXA023", {toks[k]});
+                return AsmMotivoOpaco::anotar(motivo, insn, "VXA023",
+                                              {toks[k]});
             if (bmem->is_vector) // una direccion no se forma con el banco ancho
-                return AsmMotivoOpaco::anotar(motivo, insn, "VXA023", {toks[k]});
+                return AsmMotivoOpaco::anotar(motivo, insn, "VXA023",
+                                              {toks[k]});
             ir::AsmMicroOperand op;
             op.kind = ir::AsmOperandKind::MEM;
             op.regclass = vx::ASM_RC_GP; // clase de la BASE
@@ -365,20 +372,21 @@ bool build_operands(
             op.value = bmem->alloca_value;
             op.imm = disp;
             /* La BASE siempre se lee: hay que tenerla para formar la direccion,
-             * escriba la instruccion en esa memoria o no.  Que la MEMORIA se lea
-             * o se escriba es otra cosa, y va en el byte de efectos. */
+             * escriba la instruccion en esa memoria o no.  Que la MEMORIA se
+             * lea o se escriba es otra cosa, y va en el byte de efectos. */
             op.flags = ir::ASM_OP_READ;
             operands.push_back(op);
             /* La plantilla lleva el marcador PELADO, sin corchetes: que un
-             * operando sea una direccion lo dice la ficha, y como se escribe una
-             * direccion lo sabe el nombrador de la ISA.  Escribirla aqui la ata
-             * a x86 y ademas la ponia dos veces -- salia `[[r15]]`, que no
+             * operando sea una direccion lo dice la ficha, y como se escribe
+             * una direccion lo sabe el nombrador de la ISA.  Escribirla aqui la
+             * ata a x86 y ademas la ponia dos veces -- salia `[[r15]]`, que no
              * ensambla, y como un bloque que no ensambla no emite nada, el
              * programa se quedaba sin ese trozo sin decir palabra. */
             tmpl += (k == 0 ? " $" : ", $") + std::to_string(k);
             continue;
         }
-        if (const ir::AsmRegBinding *b = binding_de_marcador(toks[k], bindings)) {
+        if (const ir::AsmRegBinding *b =
+                binding_de_marcador(toks[k], bindings)) {
             if (!elevar_ligados())
                 return AsmMotivoOpaco::anotar(motivo, insn, "VXA028");
             /* El banco ancho, todavia no -- y el motivo ya no es el que era.
@@ -413,7 +421,8 @@ bool build_operands(
              * Pasa con SVE (hasta 2048 bits) y con RVV, que ni siquiera tiene
              * tope fijo. */
             if (b->is_vector && !vx::asm_cabe_en_ranura(ancho_declarado(*b)))
-                return AsmMotivoOpaco::anotar(motivo, insn, "VXA023", {toks[k]});
+                return AsmMotivoOpaco::anotar(motivo, insn, "VXA023",
+                                              {toks[k]});
             op.width = ancho_declarado(*b);
             op.fixed_phys = -1; // lo elige el asignador
             op.value = b->alloca_value;
@@ -446,10 +455,10 @@ bool build_operands(
         }
         if (phys < 0) {
             /* Una instruccion de salto no se atasca en un operando: es que el
-             * micro asm modela INSTRUCCIONES, y el flujo de control no es de una
-             * instruccion, es del grafo.  De eso se ocupa el elevado general.
-             * Decirlo como "operando que no pasa a IR" manda a arreglar donde no
-             * es.
+             * micro asm modela INSTRUCCIONES, y el flujo de control no es de
+             * una instruccion, es del grafo.  De eso se ocupa el elevado
+             * general. Decirlo como "operando que no pasa a IR" manda a
+             * arreglar donde no es.
              *
              * Quien sabe si una linea es un salto es el clasificador del ASA, y
              * lo sabe POR ISA: `jmp` y `b` y `cbz` son la misma cosa en tres
@@ -458,7 +467,8 @@ bool build_operands(
             std::string destino;
             const AsmTerm t = asm_classify_term(isa, insn, destino);
             if (t != AsmTerm::Fallthrough)
-                return AsmMotivoOpaco::anotar(motivo, insn, "VXA035", {toks[k]});
+                return AsmMotivoOpaco::anotar(motivo, insn, "VXA035",
+                                              {toks[k]});
             return AsmMotivoOpaco::anotar(motivo, insn, "VXA023", {toks[k]});
         }
         ir::AsmMicroOperand op;
@@ -503,8 +513,7 @@ bool build_operands(
             if (has_reg(sem.reads, cn)) fl |= ir::ASM_OP_READ;
             if (has_reg(sem.writes, cn)) fl |= ir::ASM_OP_WRITE;
         }
-        if (fl == 0)
-            return AsmMotivoOpaco::anotar(motivo, insn, "VXA025");
+        if (fl == 0) return AsmMotivoOpaco::anotar(motivo, insn, "VXA025");
         op.flags = fl;
         operands.push_back(op);
         tmpl += (k == 0 ? " $" : ", $") + std::to_string(k);
@@ -534,7 +543,8 @@ bool anotar_implicitos(const std::string &arch, const std::string &insn,
                        std::vector<ir::AsmMicroOperand> &operands,
                        AsmMotivoOpaco *motivo) {
     const size_t sp = insn.find_first_of(" \t");
-    const std::string mnem = (sp == std::string::npos) ? insn : insn.substr(0, sp);
+    const std::string mnem =
+        (sp == std::string::npos) ? insn : insn.substr(0, sp);
     const vx::AsmEffects ef = vx::asm_effects_for(mnem, arch);
     for (int fase = 0; fase < 2; ++fase) {
         const std::vector<std::string> &lista =
@@ -640,21 +650,25 @@ bool asm_lift_micro(
             std::vector<std::string> toks_ph;
             split_insn(insn, mnem_ph, toks_ph);
             for (const std::string &t : toks_ph) {
-                // Una direccion se le presenta como direccion: el marcador de la
-                // base por un registro cualquiera, el resto igual.
+                // Una direccion se le presenta como direccion: el marcador de
+                // la base por un registro cualquiera, el resto igual.
                 std::string mm;
                 int64_t dd = 0;
                 if (partir_memoria_marcador(t, mm, dd) &&
                     binding_de_marcador(mm, fn.asm_reg_bindings) != nullptr) {
                     if (!elevar_ligados())
-                        return AsmMotivoOpaco::anotar(motivo, insn, "VXA023", {t});
+                        return AsmMotivoOpaco::anotar(motivo, insn, "VXA023",
+                                                      {t});
                     const std::string rep = vx::asm_mem_operando(
                         (uint8_t)isa,
-                        vx::asm_reg_muestra((uint8_t)isa, vx::ASM_RC_GP, 64), dd);
+                        vx::asm_reg_muestra((uint8_t)isa, vx::ASM_RC_GP, 64),
+                        dd);
                     if (rep.empty())
-                        return AsmMotivoOpaco::anotar(motivo, insn, "VXA023", {t});
+                        return AsmMotivoOpaco::anotar(motivo, insn, "VXA023",
+                                                      {t});
                     const size_t p = consulta.find(t);
-                    if (p != std::string::npos) consulta.replace(p, t.size(), rep);
+                    if (p != std::string::npos)
+                        consulta.replace(p, t.size(), rep);
                     continue;
                 }
                 const ir::AsmRegBinding *b =
@@ -662,15 +676,15 @@ bool asm_lift_micro(
                 if (b == nullptr) {
                     // Marcador sin ligadura: no se sabe ni de que clase es.
                     if (t.size() >= 2 && t[0] == '$' &&
-                        t.find_first_not_of("0123456789", 1) == std::string::npos)
+                        t.find_first_not_of("0123456789", 1) ==
+                            std::string::npos)
                         return AsmMotivoOpaco::anotar(motivo, insn, "VXA028");
                     continue;
                 }
                 if (!elevar_ligados())
                     return AsmMotivoOpaco::anotar(motivo, insn, "VXA028");
                 const std::string rep = vx::asm_reg_muestra(
-                    (uint8_t)isa,
-                    b->is_vector ? vx::ASM_RC_VEC : vx::ASM_RC_GP,
+                    (uint8_t)isa, b->is_vector ? vx::ASM_RC_VEC : vx::ASM_RC_GP,
                     ancho_declarado(*b));
                 if (rep.empty())
                     return AsmMotivoOpaco::anotar(motivo, insn, "VXA028");
@@ -701,7 +715,8 @@ bool asm_lift_micro(
             while (true) {
                 const size_t sp0 = consulta_db.find_first_of(" \t", ini);
                 if (sp0 == std::string::npos) break;
-                if (!es_prefijo(trim(consulta_db.substr(ini, sp0 - ini)))) break;
+                if (!es_prefijo(trim(consulta_db.substr(ini, sp0 - ini))))
+                    break;
                 const size_t sig = consulta_db.find_first_not_of(" \t", sp0);
                 if (sig == std::string::npos) break;
                 ini = sig;
@@ -710,7 +725,7 @@ bool asm_lift_micro(
         }
         instr_db::AsmInsnSem sem =
             instr_db::asm_insn_sem(isa, consulta_db, (uint32_t)ua);
-        if (sem.form_id < 0) {        // desconocida por la DB
+        if (sem.form_id < 0) { // desconocida por la DB
             anotar_hueco_db(insn, "la base de datos no conoce esta forma");
             return AsmMotivoOpaco::anotar(motivo, insn, "VXA029");
         }
@@ -754,7 +769,8 @@ bool asm_lift_micro(
         std::vector<std::string> toks_tmp;
         split_insn(insn, mnem_tmp, toks_tmp);
         if (toks_tmp.empty() && sem.reads.empty() && sem.writes.empty()) {
-            // Sin operandos de registro: plantilla verbatim (mfence/lfence/...).
+            // Sin operandos de registro: plantilla verbatim
+            // (mfence/lfence/...).
             tmpl = insn;
         } else {
             if (!toks_tmp.empty() && sem.reads.empty() && sem.writes.empty()) {
@@ -797,11 +813,11 @@ bool asm_lift_micro(
             if (escritos_del_bloque.count(clave) != 0) continue;
             const std::string nom = vx::asm_phys_reg_name(
                 (uint8_t)isa, op.regclass, op.fixed_phys,
-                op.width != 0 ? op.width
-                              : (uint16_t)(op.regclass == vx::ASM_RC_GP ? 64 : 128));
+                op.width != 0
+                    ? op.width
+                    : (uint16_t)(op.regclass == vx::ASM_RC_GP ? 64 : 128));
             return AsmMotivoOpaco::anotar(
-                motivo, insn, "VXA031",
-                {nom.empty() ? std::string("?") : nom});
+                motivo, insn, "VXA031", {nom.empty() ? std::string("?") : nom});
         }
         for (const ir::AsmMicroOperand &op : operands) {
             if (!op.writes() || op.fixed_phys < 0) continue;
@@ -844,11 +860,15 @@ bool asm_lift_micro(
         for (ir::AsmMicroOperand &op : ops) {
             if (op.value == ir::IR_NO_VALUE) continue;
             const ir::IrValueId hueco = op.value;
-            op.value = valor_del_hueco(hueco, op.kind == ir::AsmOperandKind::MEM);
+            op.value =
+                valor_del_hueco(hueco, op.kind == ir::AsmOperandKind::MEM);
             if (op.writes() && op.kind != ir::AsmOperandKind::MEM) {
                 bool ya = false;
                 for (ir::IrValueId h : huecos_escritos)
-                    if (h == hueco) { ya = true; break; }
+                    if (h == hueco) {
+                        ya = true;
+                        break;
+                    }
                 if (!ya) huecos_escritos.push_back(hueco);
             }
         }

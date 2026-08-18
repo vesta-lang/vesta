@@ -55,9 +55,9 @@ struct EntityView {
     std::string key; ///< identidad semantica, no necesariamente un nombre
     EntityKind kind = EntityKind::Unknown; ///< especie comun a todo lenguaje
     std::string lang_kind;                 ///< como lo llama SU lenguaje
-    std::vector<std::string> derives;    ///< cadena completa, de cerca a lejos
+    std::vector<std::string> derives; ///< cadena completa, de cerca a lejos
     std::vector<std::string> implements;
-    std::string declared_in;             ///< modulo o espacio de nombres
+    std::string declared_in; ///< modulo o espacio de nombres
     SourceSpan declared_at;
     /// La cadena de derivacion se cerraba sobre si misma.  Es un fallo de quien
     /// genero los datos, y callarlo dejaria una jerarquia recortada sin que
@@ -205,8 +205,8 @@ class DebugResolver {
      * @param addresses Direcciones, de la mas reciente a la mas antigua.
      * @return Un tramo explicado por cada direccion.
      */
-    std::vector<ResolvedFrame> resolve_stack(
-        const std::vector<uint64_t> &addresses) const;
+    std::vector<ResolvedFrame>
+    resolve_stack(const std::vector<uint64_t> &addresses) const;
 
     /**
      * @brief El camino inverso: de una posicion del fuente a las direcciones.
@@ -238,7 +238,8 @@ class DebugResolver {
   private:
     /* El recorrido va por fases, una por capa que atraviesa, y cada una decide
      * si se puede seguir.  Escrito de corrido cabia, pero el camino tiene cinco
-     * saltos y no para de crecer: partido, cada salto se lee y se prueba solo. */
+     * saltos y no para de crecer: partido, cada salto se lee y se prueba solo.
+     */
 
     /// Fase 1: de la direccion al cuerpo de codigo.  @return si se pudo.
     bool resolve_code(uint64_t address, ResolvedSite &s) const;

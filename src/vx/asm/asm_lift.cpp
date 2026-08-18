@@ -17,7 +17,7 @@
 
 #include "vx/asm/asm_lift.h"
 
-#include "vx/asm/asm_cfg.h"     // build_asm_cfg (estructura del bucle LL/SC arm64)
+#include "vx/asm/asm_cfg.h" // build_asm_cfg (estructura del bucle LL/SC arm64)
 #include "vx/asm/asm_effects.h" // asm_canonical_reg
 
 #include <cctype>
@@ -45,8 +45,7 @@ std::string trim(const std::string &s) {
 
 std::string strip_comment(const std::string &s) {
     for (size_t i = 0; i < s.size(); ++i) {
-        if (s[i] == ';')
-            return s.substr(0, i);
+        if (s[i] == ';') return s.substr(0, i);
         if (s[i] == '/' && i + 1 < s.size() && s[i + 1] == '/')
             return s.substr(0, i);
     }
@@ -57,8 +56,7 @@ std::string strip_comment(const std::string &s) {
 bool is_label(const std::string &line) {
     const std::string t = trim(line);
     size_t colon = t.find(':');
-    if (colon == std::string::npos)
-        return false;
+    if (colon == std::string::npos) return false;
     for (size_t i = 0; i < colon; ++i)
         if (!(std::isalnum(static_cast<unsigned char>(t[i])) || t[i] == '_' ||
               t[i] == '.'))
@@ -76,8 +74,7 @@ std::vector<std::string> real_insns(const std::string &body) {
             pos, nl == std::string::npos ? std::string::npos : nl - pos);
         pos = (nl == std::string::npos) ? body.size() + 1 : nl + 1;
         std::string t = trim(strip_comment(raw));
-        if (t.empty() || is_label(t))
-            continue;
+        if (t.empty() || is_label(t)) continue;
         out.push_back(t);
     }
     return out;
@@ -93,7 +90,8 @@ void split_insn(const std::string &insn, std::string &mnem,
     while (i < insn.size() && std::isspace(static_cast<unsigned char>(insn[i])))
         ++i;
     size_t j = i;
-    while (j < insn.size() && !std::isspace(static_cast<unsigned char>(insn[j])))
+    while (j < insn.size() &&
+           !std::isspace(static_cast<unsigned char>(insn[j])))
         ++j;
     mnem = lower(insn.substr(i, j - i));
     // Operandos: partir por comas fuera de [..].
@@ -107,28 +105,24 @@ void split_insn(const std::string &insn, std::string &mnem,
             --depth;
         if (c == ',' && depth == 0) {
             std::string o = trim(cur);
-            if (!o.empty())
-                ops.push_back(o);
+            if (!o.empty()) ops.push_back(o);
             cur.clear();
         } else {
             cur += c;
         }
     }
     std::string o = trim(cur);
-    if (!o.empty())
-        ops.push_back(o);
+    if (!o.empty()) ops.push_back(o);
 }
 
 /// Si @p op es una memoria @c [reg] PLANA (un solo registro, sin
 /// desplazamiento/indice), devuelve el registro canonico; si no, "".
 std::string plain_mem_reg(const std::string &op) {
-    if (op.size() < 3 || op.front() != '[' || op.back() != ']')
-        return "";
+    if (op.size() < 3 || op.front() != '[' || op.back() != ']') return "";
     std::string inner = trim(op.substr(1, op.size() - 2));
     // Rechazar cualquier operador de direccionamiento.
     for (char c : inner)
-        if (c == '+' || c == '-' || c == '*' || c == ' ' || c == ':')
-            return "";
+        if (c == '+' || c == '-' || c == '*' || c == ' ' || c == ':') return "";
     return asm_canonical_reg(inner);
 }
 
@@ -160,7 +154,8 @@ bool insn_writes_reg(const std::string &insn, const std::string &reg) {
     std::string mnem;
     std::vector<std::string> ops;
     split_insn(insn, mnem, ops);
-    if (mnem == "lock" && !ops.empty()) split_insn(trim(insn.substr(4)), mnem, ops);
+    if (mnem == "lock" && !ops.empty())
+        split_insn(trim(insn.substr(4)), mnem, ops);
     const AsmEffects eff = asm_effects_for(mnem, "x86_64");
     for (const std::string &w : eff.implicit_write)
         if (w == reg) return true;
@@ -259,7 +254,8 @@ AsmLift lift_x86(const std::vector<std::string> &insns) {
             r.note = "cmpxchg: el 1er operando debe ser [reg] plano";
             return r;
         }
-        instr_db::ParsedOp des = instr_db::parse_operand(instr_db::Isa::X86, ops[1]);
+        instr_db::ParsedOp des =
+            instr_db::parse_operand(instr_db::Isa::X86, ops[1]);
         if (des.kind != instr_db::OP_REG || des.width != 64) {
             r.note = "cmpxchg: solo i64 (registro de 64 bits) soportado";
             return r;
@@ -284,7 +280,8 @@ AsmLift lift_x86(const std::vector<std::string> &insns) {
             r.note = "xadd: el 1er operando debe ser [reg] plano";
             return r;
         }
-        instr_db::ParsedOp src = instr_db::parse_operand(instr_db::Isa::X86, ops[1]);
+        instr_db::ParsedOp src =
+            instr_db::parse_operand(instr_db::Isa::X86, ops[1]);
         if (src.kind != instr_db::OP_REG || src.width != 64) {
             r.note = "xadd: solo i64 (registro de 64 bits) soportado";
             return r;
@@ -292,7 +289,7 @@ AsmLift lift_x86(const std::vector<std::string> &insns) {
         r.op = AsmLiftOp::AtomicAdd;
         r.addr_reg = addr;
         r.des_reg = asm_canonical_reg(ops[1]); // delta
-        r.result_reg = r.des_reg;              // old value queda en el mismo reg
+        r.result_reg = r.des_reg; // old value queda en el mismo reg
         r.width = 64;
         return r;
     }
@@ -305,15 +302,13 @@ AsmLift lift_x86(const std::vector<std::string> &insns) {
 
 /// Canonicaliza un registro arm64 a su fisico de 64 bits: x0/w0 -> "x0".  El
 /// registro de estado del stlxr (w) y el objeto de 64 bits (x) del MISMO numero
-/// comparten fisico -> mismo canonico (permite cruzar el `w` del cbnz con el del
-/// stlxr).
+/// comparten fisico -> mismo canonico (permite cruzar el `w` del cbnz con el
+/// del stlxr).
 std::string arm_canon(const std::string &raw) {
     const std::string s = lower(trim(raw));
-    if (s.size() < 2 || (s[0] != 'x' && s[0] != 'w'))
-        return "";
+    if (s.size() < 2 || (s[0] != 'x' && s[0] != 'w')) return "";
     for (size_t i = 1; i < s.size(); ++i)
-        if (!std::isdigit(static_cast<unsigned char>(s[i])))
-            return "";
+        if (!std::isdigit(static_cast<unsigned char>(s[i]))) return "";
     return "x" + s.substr(1);
 }
 
@@ -325,12 +320,10 @@ bool arm_is_x64(const std::string &raw) {
 
 /// Registro de una memoria arm @c [reg] plana (sin offset/indice), canonico.
 std::string arm_mem_reg(const std::string &op) {
-    if (op.size() < 3 || op.front() != '[' || op.back() != ']')
-        return "";
+    if (op.size() < 3 || op.front() != '[' || op.back() != ']') return "";
     const std::string inner = trim(op.substr(1, op.size() - 2));
     for (char c : inner)
-        if (c == '+' || c == '-' || c == '*' || c == ' ' || c == ',')
-            return "";
+        if (c == '+' || c == '-' || c == '*' || c == ' ' || c == ',') return "";
     return arm_canon(inner);
 }
 
@@ -361,7 +354,8 @@ AsmLift lift_arm64(const std::string &body) {
     std::string m;
     std::vector<std::string> o;
 
-    // 0) L_retry: ldaxr/ldxr old, [addr]  (debe tener etiqueta = destino del bucle)
+    // 0) L_retry: ldaxr/ldxr old, [addr]  (debe tener etiqueta = destino del
+    // bucle)
     if (in[0].labels.empty()) {
         r.note = "arm64: el ldaxr debe llevar la etiqueta del bucle (retry)";
         return r;
@@ -426,14 +420,14 @@ AsmLift lift_arm64(const std::string &body) {
         return r;
     }
     if (arm_canon(o[0]) != flag) {
-        r.note = "arm64: el registro de estado del cbnz no coincide con el stlxr";
+        r.note =
+            "arm64: el registro de estado del cbnz no coincide con el stlxr";
         return r;
     }
     const std::string retry_lbl = in[4].target;
     bool retry_ok = false;
     for (const auto &l : in[0].labels)
-        if (l == retry_lbl)
-            retry_ok = true;
+        if (l == retry_lbl) retry_ok = true;
     if (!retry_ok) {
         r.note = "arm64: el cbnz no vuelve al ldaxr (no es el bucle LL/SC)";
         return r;
@@ -466,10 +460,8 @@ AsmLift asm_lift_detect(instr_db::Isa isa, const std::string &body) {
         }
         return lift_x86(insns);
     }
-    case instr_db::Isa::ARM64:
-        return lift_arm64(body);
-    default:
-        break;
+    case instr_db::Isa::ARM64: return lift_arm64(body);
+    default: break;
     }
     AsmLift r;
     r.note = "lift no soportado para esta ISA todavia";

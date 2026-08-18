@@ -93,7 +93,8 @@ static void probar_ida_y_vuelta() {
     CHECK(!bytes.empty(), "escribir dos hechos no puede dar un fichero vacio");
 
     FactStore destino;
-    const ReadResult r = read_facts(bytes.data(), bytes.size(), 0xCAFEull, destino);
+    const ReadResult r =
+        read_facts(bytes.data(), bytes.size(), 0xCAFEull, destino);
     CHECK(r.ok, "el fichero recien escrito tiene que poder leerse");
     CHECK(r.facts == 2, "vuelven los dos hechos");
     CHECK(r.domains == 2, "cada dominio es su propio registro");
@@ -109,7 +110,8 @@ static void probar_ida_y_vuelta() {
     const Fact &f1 = destino.at(1);
     CHECK(f1.que.a == -5, "un numero negativo no se estropea al guardarlo");
     CHECK(f1.sello.origen.fuente == Fuente::Perfil, "la fuente vuelve");
-    CHECK(f1.de_quien.clase == Sujeto::Clase::Valor, "la clase de sujeto vuelve");
+    CHECK(f1.de_quien.clase == Sujeto::Clase::Valor,
+          "la clase de sujeto vuelve");
     CHECK(f1.de_quien.id == 12, "y el valor del que habla");
 
     /* Lo que de verdad importa: el hecho derivado sigue apoyandose EN EL MISMO,
@@ -153,7 +155,7 @@ static void probar_anade_sobre_lo_existente() {
         serialize(origen, 2, CacheLevel::All, {});
 
     FactStore destino;
-    Fact      previo;
+    Fact previo;
     previo.que.dominio = kProductorBucles;
     previo.que.codigo = "bucle.forma";
     destino.anadir(std::move(previo));
@@ -161,7 +163,8 @@ static void probar_anade_sobre_lo_existente() {
     const ReadResult r = read_facts(bytes.data(), bytes.size(), 2, destino);
     CHECK(r.ok && destino.size() == 3, "lo leido se suma a lo que ya habia");
     /* El apoyo se ha corrido: el hecho base ya no es el 0, es el 1. */
-    CHECK(destino.at(2).prueba.de.size() == 1 && destino.at(2).prueba.de[0] == 1,
+    CHECK(destino.at(2).prueba.de.size() == 1 &&
+              destino.at(2).prueba.de[0] == 1,
           "los apoyos se recolocan sobre el almacen destino");
 }
 
@@ -175,7 +178,8 @@ static void probar_huella() {
         serialize(origen, 0xAAAAull, CacheLevel::All, {});
 
     FactStore destino;
-    const ReadResult r = read_facts(bytes.data(), bytes.size(), 0xBBBBull, destino);
+    const ReadResult r =
+        read_facts(bytes.data(), bytes.size(), 0xBBBBull, destino);
     CHECK(!r.ok, "hechos de otro modulo no se aceptan");
     CHECK(destino.size() == 0, "y no se deposita nada a medias");
     /* Y el motivo es un DATO con su codigo de catalogo, no una frase: quien lo
@@ -203,8 +207,8 @@ static void probar_dominio_desconocido() {
      * fichero de otra version sino uno corrupto, y se estaria comprobando otra
      * cosa -- que es justo lo que pasaba antes de que hubiera sumas. */
     std::vector<uint8_t> tocado = bytes;
-    const std::string    marca(kProductorEstructura);
-    size_t               pos = std::string::npos;
+    const std::string marca(kProductorEstructura);
+    size_t pos = std::string::npos;
     for (size_t i = 0; i + marca.size() <= tocado.size(); ++i) {
         if (std::memcmp(tocado.data() + i, marca.data(), marca.size()) == 0) {
             pos = i;
@@ -220,11 +224,12 @@ static void probar_dominio_desconocido() {
      * dice la longitud que va detras. */
     const size_t ini = pos - 4;
     const size_t pos_suma = pos + marca.size() + 2 + 8;
-    size_t       q = pos_suma + 8;
-    uint32_t     longitud = 0;
+    size_t q = pos_suma + 8;
+    uint32_t longitud = 0;
     for (int k = 0; k < 4; ++k)
-        longitud |= static_cast<uint32_t>(tocado[q + 4 + static_cast<size_t>(k)])
-                    << (8 * k);
+        longitud |=
+            static_cast<uint32_t>(tocado[q + 4 + static_cast<size_t>(k)])
+            << (8 * k);
     const size_t fin = q + 8 + longitud;
     const uint64_t suma = record_checksum(tocado.data(), ini, pos_suma, fin);
     for (int k = 0; k < 8; ++k)
@@ -281,7 +286,8 @@ static void probar_niveles() {
     const std::vector<uint8_t> b_min =
         serialize(origen, 5, CacheLevel::Minimum, costes);
     read_facts(b_min.data(), b_min.size(), 5, d_min);
-    CHECK(d_min.size() == 1, "el minimo guarda solo lo que no se puede rehacer");
+    CHECK(d_min.size() == 1,
+          "el minimo guarda solo lo que no se puede rehacer");
 
     FactStore d_coste;
     const std::vector<uint8_t> b_coste =
@@ -350,7 +356,7 @@ static void probar_granularidad() {
         {kProductorEstructura, 0, true, 0x1111ull},
         {kProductorRangos, 0, true, 0x9999ull},
     };
-    FactStore        destino;
+    FactStore destino;
     const ReadResult r =
         read_facts(bytes.data(), bytes.size(), 7, destino, vigentes);
     CHECK(r.ok, "que un dominio caduque no invalida el fichero");

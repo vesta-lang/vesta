@@ -192,15 +192,12 @@ bool RuntimeEntries::all_resolved() const noexcept {
            monitor_enter && monitor_exit && monitor_wait && monitor_notify &&
            monitor_notify_all && throw_fatal && tryenter && tryleave &&
            tryenter_jit && throw_user && rethrow && invoke_native && callvirt &&
-           callm &&
-           callitf && callclosure && calln && call_bc_function && vm_read_u64 &&
-           vm_write_u64 && findclass && newobj && defclass && deffield &&
-           defmethod && addadvice && findmethod && findfield && setmethdbg &&
-           str_make && str_make_h && str_len && str_get_bytes && str_raw &&
-           str_cat &&
-           str_slice &&
-           str_cmp && panic_str && gc_alloc_payload && safepoint_poll &&
-           safepoint_handler;
+           callm && callitf && callclosure && calln && call_bc_function &&
+           vm_read_u64 && vm_write_u64 && findclass && newobj && defclass &&
+           deffield && defmethod && addadvice && findmethod && findfield &&
+           setmethdbg && str_make && str_make_h && str_len && str_get_bytes &&
+           str_raw && str_cat && str_slice && str_cmp && panic_str &&
+           gc_alloc_payload && safepoint_poll && safepoint_handler;
 }
 
 } // namespace jit

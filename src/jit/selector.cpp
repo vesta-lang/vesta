@@ -1762,9 +1762,9 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                                          SCRATCH_B); // a
                 load_op_rematerializable(mf, ir_fn, ins.operands[0],
                                          SCRATCH_C); // cond
-                mf.blocks.back().instrs.push_back(MInstr::make_unary(
-                    MOp::TEST, MOperand::make_reg(SCRATCH_C),
-                    MOperand::make_reg(SCRATCH_C)));
+                mf.blocks.back().instrs.push_back(
+                    MInstr::make_unary(MOp::TEST, MOperand::make_reg(SCRATCH_C),
+                                       MOperand::make_reg(SCRATCH_C)));
                 {
                     MInstr i;
                     i.op = MOp::CMOVCC;

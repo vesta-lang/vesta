@@ -60,17 +60,17 @@ inline void acumular_tramo(const char *etiqueta, long long us) {
 /// Un tramo medido: cuanto se llevo y cuantas veces se entro en el.
 struct Tramo {
     const char *nombre = "?";
-    long long   us = 0; ///< microsegundos (se acumula en ns y se divide al leer).
-    long long   veces = 0;
+    long long us = 0; ///< microsegundos (se acumula en ns y se divide al leer).
+    long long veces = 0;
 };
 
-/// Lo que cuesta medir y lo fino que es el reloj, en nanosegundos.  Se descuenta
-/// el coste al informar; la resolucion se ensena para que nadie se crea una
-/// cifra mas fina que el reloj que la tomo.
+/// Lo que cuesta medir y lo fino que es el reloj, en nanosegundos.  Se
+/// descuenta el coste al informar; la resolucion se ensena para que nadie se
+/// crea una cifra mas fina que el reloj que la tomo.
 struct Calibracion_ {
-    long long   coste_ns = 0;
-    double      resolucion_ns = 0.0; ///< en coma flotante: puede ser < 1 ns.
-    const char *fuente = "?";        ///< que reloj se esta usando.
+    long long coste_ns = 0;
+    double resolucion_ns = 0.0; ///< en coma flotante: puede ser < 1 ns.
+    const char *fuente = "?";   ///< que reloj se esta usando.
 };
 Calibracion_ calibracion_del_cronometro();
 
@@ -86,7 +86,7 @@ void reiniciar_tramos();
  */
 struct CronoTramo {
     const char *n;
-    uint64_t    t0; ///< en ticks del reloj elegido, no en tiempo.
+    uint64_t t0; ///< en ticks del reloj elegido, no en tiempo.
     explicit CronoTramo(const char *etiqueta)
         : n(etiqueta), t0(reloj::ahora()) {}
     ~CronoTramo() {

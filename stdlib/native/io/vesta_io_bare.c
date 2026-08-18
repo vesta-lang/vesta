@@ -40,19 +40,29 @@ void __vx_write(const char *buf, unsigned long long len) {
 }
 
 /** @brief Entero con signo en decimal. */
-void __vx_print_i64(long long v) { printf("%lld", v); }
+void __vx_print_i64(long long v) {
+    printf("%lld", v);
+}
 
 /** @brief Entero sin signo en decimal. */
-void __vx_print_u64(unsigned long long v) { printf("%llu", v); }
+void __vx_print_u64(unsigned long long v) {
+    printf("%llu", v);
+}
 
 /** @brief Hexadecimal con prefijo 0x (16 nibbles compactos). */
-void __vx_print_hex(unsigned long long v) { printf("0x%llx", v); }
+void __vx_print_hex(unsigned long long v) {
+    printf("0x%llx", v);
+}
 
 /** @brief Octal con prefijo 0o. */
-void __vx_print_oct(unsigned long long v) { printf("0o%llo", v); }
+void __vx_print_oct(unsigned long long v) {
+    printf("0o%llo", v);
+}
 
 /** @brief Puntero: hex compacto con prefijo 0x. */
-void __vx_print_ptr(unsigned long long v) { printf("0x%llx", v); }
+void __vx_print_ptr(unsigned long long v) {
+    printf("0x%llx", v);
+}
 
 /** @brief Booleano como "true"/"false". */
 void __vx_print_bool(unsigned long long v) {
@@ -74,7 +84,8 @@ void __vx_print_bin(unsigned long long v) {
             tmp[n++] = (char)('0' + (int)(v & 1ULL));
             v >>= 1;
         }
-        while (n) buf[i++] = tmp[--n];
+        while (n)
+            buf[i++] = tmp[--n];
     }
     fwrite(buf, 1, (unsigned long)i, stdout);
 }
@@ -107,4 +118,6 @@ void __vx_print_cstr(const char *s) {
 }
 
 /** @brief Vacia el buffer de stdout (flush). */
-void __vx_flush(void) { fflush(stdout); }
+void __vx_flush(void) {
+    fflush(stdout);
+}

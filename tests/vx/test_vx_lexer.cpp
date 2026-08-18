@@ -55,7 +55,7 @@ using vx::TokenKind;
 static int g_failed = 0;
 static int g_passed = 0;
 
-#define VX_ASSERT(cond, msg)                                                  \
+#define VX_ASSERT(cond, msg)                                                   \
     do {                                                                       \
         if (!(cond)) {                                                         \
             std::fprintf(stderr, "FAIL [%s:%d] %s\n", __FILE__, __LINE__,      \
@@ -66,7 +66,7 @@ static int g_passed = 0;
         }                                                                      \
     } while (0)
 
-#define VX_ASSERT_EQ(a, b, msg)                                               \
+#define VX_ASSERT_EQ(a, b, msg)                                                \
     do {                                                                       \
         auto av = (a);                                                         \
         auto bv = (b);                                                         \
@@ -117,7 +117,7 @@ static void test_whitespace_and_comments() {
                             "  ";
     auto toks = tokenize_all(src, diags);
     VX_ASSERT_EQ(toks.size(), (size_t)1,
-                  "solo whitespace y comentarios -> EOF");
+                 "solo whitespace y comentarios -> EOF");
     VX_ASSERT(!diags.has_errors(), "comentarios bien cerrados");
 }
 
@@ -197,10 +197,8 @@ static void test_float_literals() {
         VX_ASSERT(toks[i].kind == TokenKind::FLOAT_LIT, "FLOAT_LIT");
     }
     // Comparacion aproximada para evitar problemas de coma flotante.
-    VX_ASSERT(toks[0].flt_val > 3.13 && toks[0].flt_val < 3.15,
-               "3.14 ~= 3.14");
-    VX_ASSERT(toks[2].flt_val > 2.49e10 && toks[2].flt_val < 2.51e10,
-               "2.5e10");
+    VX_ASSERT(toks[0].flt_val > 3.13 && toks[0].flt_val < 3.15, "3.14 ~= 3.14");
+    VX_ASSERT(toks[2].flt_val > 2.49e10 && toks[2].flt_val < 2.51e10, "2.5e10");
 }
 
 static void test_char_literals() {
@@ -429,7 +427,7 @@ int main() {
     test_tricky_dot_vs_float();
     test_minimal_program();
 
-    std::printf("\n=== test_vx_lexer: %d pasos OK, %d fallidos ===\n",
-                g_passed, g_failed);
+    std::printf("\n=== test_vx_lexer: %d pasos OK, %d fallidos ===\n", g_passed,
+                g_failed);
     return g_failed == 0 ? 0 : 1;
 }

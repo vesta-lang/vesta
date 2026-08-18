@@ -47,7 +47,7 @@ namespace ast = vx::ast;
 static int g_passed = 0;
 static int g_failed = 0;
 
-#define VX_ASSERT(cond, msg)                                                  \
+#define VX_ASSERT(cond, msg)                                                   \
     do {                                                                       \
         if (!(cond)) {                                                         \
             std::fprintf(stderr, "FAIL [%s:%d] %s\n", __FILE__, __LINE__,      \
@@ -58,7 +58,7 @@ static int g_failed = 0;
         }                                                                      \
     } while (0)
 
-#define VX_ASSERT_EQ(a, b, msg)                                               \
+#define VX_ASSERT_EQ(a, b, msg)                                                \
     do {                                                                       \
         auto av = (a);                                                         \
         auto bv = (b);                                                         \
@@ -110,7 +110,7 @@ static void test_minimal_main_lowers() {
     // El nombre del bloque incluye un sufijo "_<id>" garantizado unico
     // (necesario por el bug de etiquetas duplicadas en loops anidados).
     VX_ASSERT(b.name.compare(0, 5, "entry") == 0,
-               "bloque entry (con sufijo unico)");
+              "bloque entry (con sufijo unico)");
     VX_ASSERT(b.instrs.size() >= (size_t)2, "al menos CONST y RET");
     // El ultimo instr debe ser RET.
     VX_ASSERT(b.instrs.back().op == ir::IrOp::RET, "termina en RET");
@@ -157,8 +157,7 @@ static void test_add_function_lowers() {
         for (const auto &ins : b.instrs) {
             if (ins.op == ir::IrOp::CALL && ins.func_name == "add") {
                 found_call = true;
-                VX_ASSERT_EQ(ins.operands.size(), (size_t)2,
-                              "call con 2 args");
+                VX_ASSERT_EQ(ins.operands.size(), (size_t)2, "call con 2 args");
             }
         }
     }
@@ -193,8 +192,8 @@ static void test_if_else_cfg() {
     const auto &entry = fn.blocks[0];
     VX_ASSERT(has_prefix(entry.name, "entry"), "entry block primero");
     VX_ASSERT(!entry.instrs.empty() &&
-                   entry.instrs.back().op == ir::IrOp::BR_COND,
-               "entry termina con BR_COND");
+                  entry.instrs.back().op == ir::IrOp::BR_COND,
+              "entry termina con BR_COND");
     // Debe haber un CMP_LT antes del BR_COND.
     bool found_cmp = false;
     for (const auto &ins : entry.instrs) {

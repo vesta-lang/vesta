@@ -90,36 +90,37 @@ bool vx_sym_resolver(const char *symbol, uint64_t *value) {
 // `mov r64, simbolo` con el resolver da KS_ERR_ASM_FIXUP_INVALID (el sentinela
 // de 64 bits no cabe en el campo imm que Keystone reserva para un simbolo).
 // PERO Keystone SI encodea `mov r64, <literal 64-bit>` (forma REX.W + B8, 10
-// bytes) cuando el inmediato es un literal que no cabe en int32.  Asi enrutamos:
-// los `mov r64, simbolo` (cargar la DIRECCION ABSOLUTA de un simbolo propio en
-// un registro) los "ensamblamos nosotros" sustituyendo el simbolo por un literal
-// placeholder unico de 64 bits ANTES de Keystone; Keystone ensambla TODO el
-// bloque (labels/saltos/offsets correctos) con ese literal, y tras ensamblar
-// localizamos los 8 bytes LE del placeholder en la salida y emitimos un SymRef
-// Abs64 -- el resto de formas (rel32/disp32) las sigue resolviendo Keystone via
-// el sym-resolver.  El reloc ABS64 lo materializa el driver contra la VA real
-// (PE con base fija sin DYNAMIC_BASE, o ELF no-pie).
+// bytes) cuando el inmediato es un literal que no cabe en int32.  Asi
+// enrutamos: los `mov r64, simbolo` (cargar la DIRECCION ABSOLUTA de un simbolo
+// propio en un registro) los "ensamblamos nosotros" sustituyendo el simbolo por
+// un literal placeholder unico de 64 bits ANTES de Keystone; Keystone ensambla
+// TODO el bloque (labels/saltos/offsets correctos) con ese literal, y tras
+// ensamblar localizamos los 8 bytes LE del placeholder en la salida y emitimos
+// un SymRef Abs64 -- el resto de formas (rel32/disp32) las sigue resolviendo
+// Keystone via el sym-resolver.  El reloc ABS64 lo materializa el driver contra
+// la VA real (PE con base fija sin DYNAMIC_BASE, o ELF no-pie).
 struct Imm64SymPatch {
-    uint64_t placeholder;   ///< literal de 64 bits inyectado en el texto.
-    std::string symbol;     ///< simbolo original (__vxf_* / __vxg_*).
+    uint64_t placeholder; ///< literal de 64 bits inyectado en el texto.
+    std::string symbol;   ///< simbolo original (__vxf_* / __vxg_*).
 };
 
 /// Es @p t un registro GPR de 64 bits (rax..r15)?
 inline bool is_reg64_token(const std::string &t) {
-    static const char *kR64[] = {
-        "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp",
-        "r8",  "r9",  "r10", "r11", "r12", "r13", "r14", "r15"};
+    static const char *kR64[] = {"rax", "rbx", "rcx", "rdx", "rsi", "rdi",
+                                 "rbp", "rsp", "r8",  "r9",  "r10", "r11",
+                                 "r12", "r13", "r14", "r15"};
     std::string s;
     s.reserve(t.size());
-    for (char c : t) s += static_cast<char>(std::tolower((unsigned char)c));
+    for (char c : t)
+        s += static_cast<char>(std::tolower((unsigned char)c));
     for (const char *r : kR64)
         if (s == r) return true;
     return false;
 }
 
 /// Reescribe el texto NASM enrutando cada `mov r64, __vxf_*|__vxg_*` a un
-/// literal placeholder de 64 bits; rellena @p patches con (placeholder, simbolo).
-/// El resto del texto queda verbatim (Keystone lo ensambla igual).
+/// literal placeholder de 64 bits; rellena @p patches con (placeholder,
+/// simbolo). El resto del texto queda verbatim (Keystone lo ensambla igual).
 std::string route_imm64_syms(const std::string &nasm,
                              std::vector<Imm64SymPatch> &patches) {
     std::string out;
@@ -161,13 +162,14 @@ std::string route_imm64_syms(const std::string &nasm,
             for (char c : tok[0])
                 mnem += static_cast<char>(std::tolower((unsigned char)c));
             const std::string &sym = tok[2];
-            const bool is_sym = (sym.rfind("__vxf_", 0) == 0 ||
-                                 sym.rfind("__vxg_", 0) == 0);
+            const bool is_sym =
+                (sym.rfind("__vxf_", 0) == 0 || sym.rfind("__vxg_", 0) == 0);
             if (mnem == "mov" && is_reg64_token(tok[1]) && is_sym) {
                 // Placeholder unico > int32 (fuerza imm64) y patron de 8 bytes
                 // distintivo en la salida.
-                const uint64_t ph = 0x00C0FFEE00000001ULL +
-                                    static_cast<uint64_t>(patches.size()) * 0x100ULL;
+                const uint64_t ph =
+                    0x00C0FFEE00000001ULL +
+                    static_cast<uint64_t>(patches.size()) * 0x100ULL;
                 patches.push_back({ph, sym});
                 char buf[64];
                 std::snprintf(buf, sizeof(buf), "\tmov %s, 0x%llx",
@@ -212,15 +214,16 @@ bool arch_to_ks(vx::AsmArch a, ks_arch &arch, ks_mode &mode) {
 }
 
 /// Impl concreta: abre un @c ks_engine por cada @c assemble.  El engine es
-/// LOCAL a la llamada, pero Keystone/LLVM mantiene ESTADO GLOBAL mutable (registro
-/// de targets + capa MC) que NO es thread-safe: dos @c ks_asm concurrentes (p.ej.
-/// dos modulos con inline-asm compilados en paralelo por M8) corren sobre ese
-/// estado -> corrupcion/crash.  Serializamos toda la operacion con un mutex
-/// global.  Ensamblar es un camino RARO (un bloque `asm { }` puntual), asi que la
-/// serializacion tiene coste despreciable frente al resto del compile paralelo.
+/// LOCAL a la llamada, pero Keystone/LLVM mantiene ESTADO GLOBAL mutable
+/// (registro de targets + capa MC) que NO es thread-safe: dos @c ks_asm
+/// concurrentes (p.ej. dos modulos con inline-asm compilados en paralelo por
+/// M8) corren sobre ese estado -> corrupcion/crash.  Serializamos toda la
+/// operacion con un mutex global.  Ensamblar es un camino RARO (un bloque `asm
+/// { }` puntual), asi que la serializacion tiene coste despreciable frente al
+/// resto del compile paralelo.
 struct KeystoneAsmBackend final : vx::AsmBackend {
     vx::AsmAssembleResult assemble(const std::string &nasm,
-                                    vx::AsmArch arch) override {
+                                   vx::AsmArch arch) override {
         // Keystone/LLVM no es thread-safe: un unico assemble a la vez.
         static std::mutex ks_global_mtx;
         std::lock_guard<std::mutex> ks_lock(ks_global_mtx);
@@ -257,10 +260,11 @@ struct KeystoneAsmBackend final : vx::AsmBackend {
             arch == vx::AsmArch::X86_16)
             ks_option(ks, KS_OPT_SYNTAX, KS_OPT_SYNTAX_NASM);
         // Resolver de simbolos propios (SOLO x86: la maquinaria de asm-inline).
-        // En AArch64 la mera presencia del resolver altera el parser de Keystone
-        // y corrompe los inmediatos; alli se usa Keystone plano (sintaxis oficial
-        // de ARM), como el ensamblador general.  Los simbolos cross-funcion arm64
-        // se resuelven por relocs (R_AARCH64_CALL26), no por este resolver.
+        // En AArch64 la mera presencia del resolver altera el parser de
+        // Keystone y corrompe los inmediatos; alli se usa Keystone plano
+        // (sintaxis oficial de ARM), como el ensamblador general.  Los simbolos
+        // cross-funcion arm64 se resuelven por relocs (R_AARCH64_CALL26), no
+        // por este resolver.
         const bool ks_is_x86 =
             (arch == vx::AsmArch::X86_64 || arch == vx::AsmArch::X86_32 ||
              arch == vx::AsmArch::X86_16);
@@ -286,8 +290,8 @@ struct KeystoneAsmBackend final : vx::AsmBackend {
             src = "default rel\n";
             src += route_imm64_syms(nasm, imm64_patches);
         }
-        const char *asm_text = (arch == vx::AsmArch::X86_64) ? src.c_str()
-                                                              : nasm.c_str();
+        const char *asm_text =
+            (arch == vx::AsmArch::X86_64) ? src.c_str() : nasm.c_str();
         unsigned char *enc = nullptr;
         size_t enc_size = 0, stat_count = 0;
         const int rc =
@@ -313,7 +317,7 @@ struct KeystoneAsmBackend final : vx::AsmBackend {
              arch == vx::AsmArch::X86_16)) {
             cs_mode cm = arch == vx::AsmArch::X86_64   ? CS_MODE_64
                          : arch == vx::AsmArch::X86_32 ? CS_MODE_32
-                                                        : CS_MODE_16;
+                                                       : CS_MODE_16;
             csh h;
             if (cs_open(CS_ARCH_X86, cm, &h) == CS_ERR_OK) {
                 // Detalle ON solo si hay simbolos por resolver (para localizar
@@ -336,8 +340,8 @@ struct KeystoneAsmBackend final : vx::AsmBackend {
                         static_cast<uint32_t>(insn[i].address - kAsmBase));
                     if (!need_detail || insn[i].detail == nullptr) continue;
                     const cs_x86 &x = insn[i].detail->x86;
-                    const uint64_t ia = insn[i].address;       // absoluta
-                    const uint64_t ia_rel = ia - kAsmBase;     // offset bloque
+                    const uint64_t ia = insn[i].address;   // absoluta
+                    const uint64_t ia_rel = ia - kAsmBase; // offset bloque
                     const uint64_t il = insn[i].size;
                     // Es un salto/llamada DIRECTO (jmp/call/jcc rel)?  Su imm
                     // operand es el TARGET absoluto (Capstone lo resuelve); el
@@ -362,7 +366,8 @@ struct KeystoneAsmBackend final : vx::AsmBackend {
                             uint64_t sym_val = static_cast<uint64_t>(op.imm);
                             if (is_branch && x.encoding.imm_size == 4)
                                 sym_val -= x.encoding.imm_size;
-                            const std::string *s = sym_state.symbol_for(sym_val);
+                            const std::string *s =
+                                sym_state.symbol_for(sym_val);
                             if (!s || !x.encoding.imm_size) continue;
                             vx::AsmAssembleResult::SymRef ref;
                             ref.offset = static_cast<uint32_t>(
@@ -370,7 +375,8 @@ struct KeystoneAsmBackend final : vx::AsmBackend {
                             ref.size = x.encoding.imm_size;
                             ref.symbol = *s;
                             // jmp/call sym (directo, rel32) -> BranchRel32;
-                            // mov reg,imm64 -> Abs64; push/mov r32,imm32 -> Abs32.
+                            // mov reg,imm64 -> Abs64; push/mov r32,imm32 ->
+                            // Abs32.
                             if (is_branch && x.encoding.imm_size == 4)
                                 ref.kind = K::BranchRel32;
                             else if (x.encoding.imm_size == 8)
@@ -383,14 +389,15 @@ struct KeystoneAsmBackend final : vx::AsmBackend {
                             // [rip+sym] (indirecto / lea).  Bug de Keystone con
                             // KS_OPT_SYM_RESOLVER: computa el disp relativo al
                             // INICIO del campo disp (ia+disp_offset) en vez del
-                            // fin de instruccion (ia+il), asi el disp escrito es
-                            // sym - (ia + disp_offset) y el sentinela original se
-                            // recupera como disp + ia + disp_offset.  Usamos
-                            // disp_offset DIRECTAMENTE (no il - disp_size): en
-                            // instrucciones con inmediato despues del disp (p.ej.
-                            // `mov [rip+sym], imm32`) el disp NO es el ultimo
-                            // campo, asi que `il - disp_size` apuntaria al imm y
-                            // el lookup del sentinela fallaria -> disp sin relocar
+                            // fin de instruccion (ia+il), asi el disp escrito
+                            // es sym - (ia + disp_offset) y el sentinela
+                            // original se recupera como disp + ia +
+                            // disp_offset.  Usamos disp_offset DIRECTAMENTE (no
+                            // il - disp_size): en instrucciones con inmediato
+                            // despues del disp (p.ej. `mov [rip+sym], imm32`)
+                            // el disp NO es el ultimo campo, asi que `il -
+                            // disp_size` apuntaria al imm y el lookup del
+                            // sentinela fallaria -> disp sin relocar
                             // -> escritura a direccion basura.  (El reloc
                             // DATA_REL32 que emitimos abajo sobrescribe el disp
                             // con el valor correcto via el driver.)
@@ -432,14 +439,14 @@ struct KeystoneAsmBackend final : vx::AsmBackend {
         }
 
         // Escaneo de placeholders del routing imm64: por cada patch, localiza
-        // sus 8 bytes LE en la salida y emite un SymRef Abs64.  Independiente de
-        // Capstone (estos simbolos no pasaron por el sym-resolver).
+        // sus 8 bytes LE en la salida y emite un SymRef Abs64.  Independiente
+        // de Capstone (estos simbolos no pasaron por el sym-resolver).
         if (r.ok && !imm64_patches.empty()) {
             for (const auto &p : imm64_patches) {
                 uint8_t pat[8];
                 for (int i = 0; i < 8; ++i)
-                    pat[i] = static_cast<uint8_t>((p.placeholder >> (i * 8)) &
-                                                  0xFF);
+                    pat[i] =
+                        static_cast<uint8_t>((p.placeholder >> (i * 8)) & 0xFF);
                 for (size_t off = 0; off + 8 <= r.bytes.size(); ++off) {
                     if (std::memcmp(r.bytes.data() + off, pat, 8) == 0) {
                         vx::AsmAssembleResult::SymRef ref;
@@ -465,12 +472,12 @@ void register_keystone_asm_backend() {
     std::call_once(once, [] {
         /* Se puede pedir que NO haya ensamblador.
          *
-         * No es un interruptor de conveniencia: es la unica forma de probar aqui
-         * lo que pasa en una maquina donde no lo hay -- la VM tiene que poder
-         * correr en cualquier arquitectura, y ahi un bloque `asm` escrito para
-         * otra no se puede ejecutar de ninguna manera.  Ese camino existia sin
-         * poder ejercitarse, y por eso llevaba tiempo haciendo lo contrario de
-         * lo correcto: avisar y seguir con los valores sin tocar.
+         * No es un interruptor de conveniencia: es la unica forma de probar
+         * aqui lo que pasa en una maquina donde no lo hay -- la VM tiene que
+         * poder correr en cualquier arquitectura, y ahi un bloque `asm` escrito
+         * para otra no se puede ejecutar de ninguna manera.  Ese camino existia
+         * sin poder ejercitarse, y por eso llevaba tiempo haciendo lo contrario
+         * de lo correcto: avisar y seguir con los valores sin tocar.
          *
          * Con esto se comprueba que ahora para. */
         const char *sin = std::getenv("VESTA_NO_ASM_BACKEND");

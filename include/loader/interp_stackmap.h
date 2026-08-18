@@ -100,7 +100,8 @@ static constexpr uint8_t INTERP_SM_PUSH_BASE = 0x80u;
 
 /// Offset (bytes) del PRIMER handle empujado desde el rbp del callee:
 /// @c [callee_rbp] = saved_rbp, @c [callee_rbp+8] = return_pc, y el empuje
-/// mas alto (topmost, ultimo empujado antes del call) queda en @c callee_rbp+16.
+/// mas alto (topmost, ultimo empujado antes del call) queda en @c
+/// callee_rbp+16.
 static constexpr uint32_t INTERP_SM_PUSH_FIRST_OFF = 16u;
 
 /**
@@ -109,7 +110,8 @@ static constexpr uint32_t INTERP_SM_PUSH_FIRST_OFF = 16u;
  *        GC viva en un safepoint del interprete.  2 bytes empaquetados.
  */
 struct InterpStackmapSlot {
-    uint8_t location = 0; ///< <0x40 = reg R<location>; >=0x40 = slot (location-0x40)
+    uint8_t location =
+        0; ///< <0x40 = reg R<location>; >=0x40 = slot (location-0x40)
     jit::StackmapGcKind gc_kind =
         jit::StackmapGcKind::HANDLE; ///< categoria del valor
 
@@ -117,7 +119,8 @@ struct InterpStackmapSlot {
     bool is_reg() const noexcept { return location < INTERP_SM_SLOT_BASE; }
     /// True si es un slot de spill (caller-rbp relativo).
     bool is_spill() const noexcept {
-        return location >= INTERP_SM_SLOT_BASE && location < INTERP_SM_PUSH_BASE;
+        return location >= INTERP_SM_SLOT_BASE &&
+               location < INTERP_SM_PUSH_BASE;
     }
     /// True si es un handle empujado a traves de un call (callee-rbp relativo).
     bool is_pushed() const noexcept { return location >= INTERP_SM_PUSH_BASE; }

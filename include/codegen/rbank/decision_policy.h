@@ -18,20 +18,22 @@
  *
  * El allocator (o el scheduler, o el vectorizador) NO sabe COMO se decide.
  * Manana pueden coexistir @c WeightedObjectivePolicy, @c MLDecisionPolicy,
- * @c PGODecisionPolicy, @c EnergyDecisionPolicy... y el consumidor no cambia una
- * linea.  Eso es inusual en compiladores, donde estas decisiones suelen estar
- * repartidas entre muchos pases con heuristicas locales.
+ * @c PGODecisionPolicy, @c EnergyDecisionPolicy... y el consumidor no cambia
+ * una linea.  Eso es inusual en compiladores, donde estas decisiones suelen
+ * estar repartidas entre muchos pases con heuristicas locales.
  *
  * TRES OPERACIONES (por eso es un ENGINE, no una simple politica):
- *   - @c score(candidate, ctx)   -> coste escalar (punto de enganche del Predictor).
- *   - @c choose(candidates, ctx) -> el mejor candidato VALIDO (argmin del coste;
- *     frontera de Pareto colapsada por los pesos; empate estable).
- *   - explicacion (@c DecisionExplanation) -> DATO i18n-ready: candidato elegido,
- *     conteos y los TOP contribuyentes al coste (para KB/ANAMNESIS + catalogo).
+ *   - @c score(candidate, ctx)   -> coste escalar (punto de enganche del
+ * Predictor).
+ *   - @c choose(candidates, ctx) -> el mejor candidato VALIDO (argmin del
+ * coste; frontera de Pareto colapsada por los pesos; empate estable).
+ *   - explicacion (@c DecisionExplanation) -> DATO i18n-ready: candidato
+ * elegido, conteos y los TOP contribuyentes al coste (para KB/ANAMNESIS +
+ * catalogo).
  *
  * PREDICTOR (P16): @c score es el enganche del aprendizaje.  Hoy heuristica
- * determinista; manana un modelo MLGO subclasea @c DecisionEngine con los mismos
- * candidatos + contexto como features, sin tocar a los consumidores.
+ * determinista; manana un modelo MLGO subclasea @c DecisionEngine con los
+ * mismos candidatos + contexto como features, sin tocar a los consumidores.
  *
  * i18n: @c DecisionExplanation es DATO (enums + fracciones), NUNCA texto; el
  * consumidor lo mapea a un codigo @c VXNNNN del catalogo al mostrarlo.
@@ -61,12 +63,12 @@ namespace rbank {
  *        consumidores deciden cosas distintas; el handle lleva su significado.
  */
 enum class DecisionKind : uint8_t {
-    GENERIC = 0,   ///< sin semantica especifica.
-    LANE,          ///< eleccion de lane/registro (allocator).
-    SPILL_SLOT,    ///< eleccion de slot de spill.
-    ORDER,         ///< posicion en un orden (scheduler).
-    VECTOR_WIDTH,  ///< ancho de vectorizacion.
-    INSTRUCTION,   ///< eleccion de instruccion/patron (selector).
+    GENERIC = 0,  ///< sin semantica especifica.
+    LANE,         ///< eleccion de lane/registro (allocator).
+    SPILL_SLOT,   ///< eleccion de slot de spill.
+    ORDER,        ///< posicion en un orden (scheduler).
+    VECTOR_WIDTH, ///< ancho de vectorizacion.
+    INSTRUCTION,  ///< eleccion de instruccion/patron (selector).
 };
 
 /**
@@ -75,8 +77,8 @@ enum class DecisionKind : uint8_t {
  *        consumidor segun @c kind (id de lane, indice de orden, ancho, ...).
  */
 struct DecisionHandle {
-    DecisionKind kind  = DecisionKind::GENERIC;
-    uint32_t     value = 0;
+    DecisionKind kind = DecisionKind::GENERIC;
+    uint32_t value = 0;
 
     bool operator==(const DecisionHandle &o) const noexcept {
         return kind == o.kind && value == o.value;
@@ -98,9 +100,9 @@ inline DecisionHandle handle(uint32_t value,
  * interpreta el consumidor; el motor solo razona sobre coste.
  */
 struct Candidate {
-    DecisionHandle id;             ///< handle tipado del candidato.
-    ObjectiveTerms terms;          ///< coste estimado.
-    bool           valid = true;   ///< paso Constraints.
+    DecisionHandle id;    ///< handle tipado del candidato.
+    ObjectiveTerms terms; ///< coste estimado.
+    bool valid = true;    ///< paso Constraints.
 };
 
 /**
@@ -108,9 +110,19 @@ struct Candidate {
  * @brief Dimension del Objective.  DATO para la explicacion i18n (no texto).
  */
 enum class DominantTerm : uint8_t {
-    NONE = 0, LATENCY, THROUGHPUT, CODE_SIZE, ENERGY,
-    CACHE_PRESSURE, REGISTER_PRESSURE, SPILL, MOVE, CALLSAVE,
-    DEPENDENCY, PORT_PRESSURE, SCHEDULER,
+    NONE = 0,
+    LATENCY,
+    THROUGHPUT,
+    CODE_SIZE,
+    ENERGY,
+    CACHE_PRESSURE,
+    REGISTER_PRESSURE,
+    SPILL,
+    MOVE,
+    CALLSAVE,
+    DEPENDENCY,
+    PORT_PRESSURE,
+    SCHEDULER,
     COUNT
 };
 
@@ -120,35 +132,41 @@ enum class DominantTerm : uint8_t {
  *        una explicacion rica ("40% spill, 39% latency, 21% move").
  */
 struct Contribution {
-    DominantTerm term     = DominantTerm::NONE;
-    double       weighted = 0.0; ///< peso*termino (coste absoluto aportado).
-    double       fraction = 0.0; ///< fraccion del coste total [0,1].
+    DominantTerm term = DominantTerm::NONE;
+    double weighted = 0.0; ///< peso*termino (coste absoluto aportado).
+    double fraction = 0.0; ///< fraccion del coste total [0,1].
 };
 
 /** @brief Numero de dimensiones del Objective. */
-static constexpr size_t kObjectiveDims = static_cast<size_t>(DominantTerm::COUNT) - 1;
+static constexpr size_t kObjectiveDims =
+    static_cast<size_t>(DominantTerm::COUNT) - 1;
 
 /** @brief Contribuciones ponderadas de TODAS las dimensiones (sin ordenar). */
 inline std::array<Contribution, kObjectiveDims>
-weighted_contributions(const ObjectiveTerms &t, const ObjectiveWeights &w) noexcept {
+weighted_contributions(const ObjectiveTerms &t,
+                       const ObjectiveWeights &w) noexcept {
     std::array<Contribution, kObjectiveDims> c = {{
-        {DominantTerm::LATENCY,           w.latency * t.latency, 0.0},
-        {DominantTerm::THROUGHPUT,        w.throughput * t.throughput, 0.0},
-        {DominantTerm::CODE_SIZE,         w.code_size * t.code_size, 0.0},
-        {DominantTerm::ENERGY,            w.energy * t.energy, 0.0},
-        {DominantTerm::CACHE_PRESSURE,    w.cache_pressure * t.cache_pressure, 0.0},
-        {DominantTerm::REGISTER_PRESSURE, w.register_pressure * t.register_pressure, 0.0},
-        {DominantTerm::SPILL,             w.spill * t.spill, 0.0},
-        {DominantTerm::MOVE,              w.move * t.move, 0.0},
-        {DominantTerm::CALLSAVE,          w.callsave * t.callsave, 0.0},
-        {DominantTerm::DEPENDENCY,        w.dependency * t.dependency, 0.0},
-        {DominantTerm::PORT_PRESSURE,     w.port_pressure * t.port_pressure, 0.0},
-        {DominantTerm::SCHEDULER,         w.scheduler * t.scheduler, 0.0},
+        {DominantTerm::LATENCY, w.latency * t.latency, 0.0},
+        {DominantTerm::THROUGHPUT, w.throughput * t.throughput, 0.0},
+        {DominantTerm::CODE_SIZE, w.code_size * t.code_size, 0.0},
+        {DominantTerm::ENERGY, w.energy * t.energy, 0.0},
+        {DominantTerm::CACHE_PRESSURE, w.cache_pressure * t.cache_pressure,
+         0.0},
+        {DominantTerm::REGISTER_PRESSURE,
+         w.register_pressure * t.register_pressure, 0.0},
+        {DominantTerm::SPILL, w.spill * t.spill, 0.0},
+        {DominantTerm::MOVE, w.move * t.move, 0.0},
+        {DominantTerm::CALLSAVE, w.callsave * t.callsave, 0.0},
+        {DominantTerm::DEPENDENCY, w.dependency * t.dependency, 0.0},
+        {DominantTerm::PORT_PRESSURE, w.port_pressure * t.port_pressure, 0.0},
+        {DominantTerm::SCHEDULER, w.scheduler * t.scheduler, 0.0},
     }};
     double total = 0.0;
-    for (const Contribution &e : c) total += e.weighted;
+    for (const Contribution &e : c)
+        total += e.weighted;
     if (total > 0.0)
-        for (Contribution &e : c) e.fraction = e.weighted / total;
+        for (Contribution &e : c)
+            e.fraction = e.weighted / total;
     return c;
 }
 
@@ -159,7 +177,10 @@ inline DominantTerm dominant_term(const ObjectiveTerms &t,
     DominantTerm best = DominantTerm::NONE;
     double bestv = 0.0;
     for (const Contribution &e : c)
-        if (e.weighted > bestv) { bestv = e.weighted; best = e.term; }
+        if (e.weighted > bestv) {
+            bestv = e.weighted;
+            best = e.term;
+        }
     return best;
 }
 
@@ -171,15 +192,16 @@ static constexpr size_t kTopContributors = 3;
  * @brief Justificacion (DATO) de una decision, para ANAMNESIS + i18n.
  */
 struct DecisionExplanation {
-    DecisionHandle chosen;                ///< handle del candidato elegido.
-    double         chosen_score          = 0.0;
-    size_t         candidates_considered = 0;
-    size_t         candidates_rejected   = 0; ///< invalidos descartados.
-    bool           found                 = false;
-    DominantTerm   dominant              = DominantTerm::NONE; ///< top-1.
-    /// Los @c kTopContributors mayores contribuyentes al coste (desc), con fraccion.
+    DecisionHandle chosen; ///< handle del candidato elegido.
+    double chosen_score = 0.0;
+    size_t candidates_considered = 0;
+    size_t candidates_rejected = 0; ///< invalidos descartados.
+    bool found = false;
+    DominantTerm dominant = DominantTerm::NONE; ///< top-1.
+    /// Los @c kTopContributors mayores contribuyentes al coste (desc), con
+    /// fraccion.
     std::array<Contribution, kTopContributors> top{};
-    size_t         top_count             = 0;
+    size_t top_count = 0;
 };
 
 /** @brief Rellena @p out con los @p max mayores contribuyentes (desc). */
@@ -217,9 +239,10 @@ struct DecisionEngine {
      * @param out  si no es nullptr, se rellena con la explicacion (DATO).
      * @return puntero al candidato elegido, o @c nullptr si ninguno es valido.
      */
-    virtual const Candidate *choose(const std::vector<Candidate> &candidates,
-                                    const OptimizationContext &ctx,
-                                    DecisionExplanation *out = nullptr) const = 0;
+    virtual const Candidate *
+    choose(const std::vector<Candidate> &candidates,
+           const OptimizationContext &ctx,
+           DecisionExplanation *out = nullptr) const = 0;
 };
 
 /**
@@ -242,20 +265,27 @@ struct WeightedObjectivePolicy : DecisionEngine {
         double best_score = 0.0;
         size_t rejected = 0;
         for (const Candidate &c : candidates) {
-            if (!c.valid) { ++rejected; continue; }
+            if (!c.valid) {
+                ++rejected;
+                continue;
+            }
             const double s = score(c, ctx);
-            if (!best || s < best_score) { best = &c; best_score = s; }
+            if (!best || s < best_score) {
+                best = &c;
+                best_score = s;
+            }
         }
         if (out) {
             out->candidates_considered = candidates.size();
-            out->candidates_rejected   = rejected;
-            out->found                 = (best != nullptr);
+            out->candidates_rejected = rejected;
+            out->found = (best != nullptr);
             if (best) {
-                out->chosen       = best->id;
+                out->chosen = best->id;
                 out->chosen_score = best_score;
-                out->dominant     = dominant_term(best->terms, ctx.weights());
-                out->top_count    = fill_top_contributors(
-                    best->terms, ctx.weights(), out->top.data(), kTopContributors);
+                out->dominant = dominant_term(best->terms, ctx.weights());
+                out->top_count =
+                    fill_top_contributors(best->terms, ctx.weights(),
+                                          out->top.data(), kTopContributors);
             }
         }
         return best;

@@ -126,13 +126,15 @@ class Lowering {
     /// 64 (defecto), 32 o 16.  Lo fija el driver AOT desde --aot-arch.
     void set_asm_target_bits(uint8_t bits) { asm_target_bits_ = bits; }
     /// Ancho del chunk SIMD (bytes) que hornea el matcher del vectorizador en
-    /// AOT (16 SSE2 / 32 AVX / 64 AVX512).  Lo fija el driver desde --float-isa.
+    /// AOT (16 SSE2 / 32 AVX / 64 AVX512).  Lo fija el driver desde
+    /// --float-isa.
     void set_aot_vec_width(uint8_t w) { aot_vec_width_ = w; }
     /// --float-isa auto: chunk DUAL (element-wise 64, reduccion 16) para que un
     /// IR compile a las 3 variantes (multiversion por cpuid en runtime).
     void set_aot_auto_vec(bool on) { aot_auto_vec_ = on; }
     /// Solo-LSP: bajar tambien las funciones @c comptime (no-macro) a IR para
-    /// poder inspeccionar su codegen.  Ver @c CompileOptions::emit_comptime_fns.
+    /// poder inspeccionar su codegen.  Ver @c
+    /// CompileOptions::emit_comptime_fns.
     void set_emit_comptime_fns(bool on) { emit_comptime_fns_ = on; }
 
     /// C-3: registra los nombres de las funciones libres marcadas con
@@ -231,8 +233,7 @@ class Lowering {
      */
     bool materialize_comptime_bytes(const std::vector<uint8_t> &bytes,
                                     const StructLayout &layout,
-                                    ir::IrValueId v_dst,
-                                    uint32_t source_line);
+                                    ir::IrValueId v_dst, uint32_t source_line);
 
     /**
      * @brief Emite GETPROC y devuelve el SSA value (PTR al ProcessVM).
@@ -404,8 +405,8 @@ class Lowering {
     /// de copia de bytes/elementos `while (i < N) { dst[i] = src[i]; i++; }`
     /// sobre punteros HOST, lo reemplaza por un unico @c MEMCPY (el JIT/AOT lo
     /// bajan a @c rep @c movsb / SIMD; el interprete a un bucle host->host).
-    /// Devuelve true si reconocio y bajo el idioma (el llamante debe @c return);
-    /// false si no matchea (seguir con el lowering normal del while).
+    /// Devuelve true si reconocio y bajo el idioma (el llamante debe @c
+    /// return); false si no matchea (seguir con el lowering normal del while).
     bool try_lower_memcpy_idiom(ast::WhileStmt *s);
     /// Igual para @c for(T i=init; i<N; i++) dst[i]=src[i]; (la forma canonica
     /// del memcpy).  Cubre el for que DECLARA la var del loop en @c init
@@ -420,15 +421,16 @@ class Lowering {
     /// Auto-vectorizacion de DIFUSION ESCALAR (scalar broadcast):
     /// @c for(T i=init; i<N; i++) c[i] = a[i] OP scalar; con @c c/@c a punteros
     /// f64 HOST y @c scalar un valor f64 invariante del loop.  Tambien la forma
-    /// conmutativa @c scalar OP a[i] (add/mul) y el compound @c c[i] OP= scalar.
-    /// El escalar se difunde a todos los lanes (UNPCKLPD/VBROADCASTSD) en JIT/
-    /// AOT, escalar por lane en interp.  Devuelve true si matcheo.
+    /// conmutativa @c scalar OP a[i] (add/mul) y el compound @c c[i] OP=
+    /// scalar. El escalar se difunde a todos los lanes (UNPCKLPD/VBROADCASTSD)
+    /// en JIT/ AOT, escalar por lane en interp.  Devuelve true si matcheo.
     bool try_vectorize_scalar_for(ast::Stmt *s);
     /// Auto-vectorizacion UNARIA: @c for(T i=init; i<N; i++) b[i] = OP a[i];
     /// con @c a/@c b punteros f64 HOST y OP in @c -a[i] (fneg), @c sqrt(a[i])
     /// (fsqrt), @c fabs(a[i]) (fabs).  Loop principal W=2 con @c VEC_UNOP (SIMD
     /// packed SQRTPD/XORPD/ANDPD en JIT/AOT, escalar por lane en interp) + cola
-    /// escalar.  La copia pura la cubre el memcpy-idiom.  Devuelve true si match.
+    /// escalar.  La copia pura la cubre el memcpy-idiom.  Devuelve true si
+    /// match.
     bool try_vectorize_unary_for(ast::Stmt *s);
     /// Auto-vectorizacion de REDUCCION: @c for(T i=init; i<N; i++) acc = acc +
     /// a[i]; con @c acc escalar f64 y @c a puntero f64 HOST.  Usa un acumulador
@@ -442,15 +444,16 @@ class Lowering {
     /// es left-leaning `((a OP1 x) OP2 y) ...` (precedencia natural de
     /// @c a[i]*k + b[i]).  Emite el loop principal usando @c c como acumulador:
     /// @c c = a OP1 x ; @c c = c OP2 y ; ... (cadena de @c VEC_BINOP /
-    /// @c VEC_BINOP_S por chunk) + cola escalar.  Solo f64/f32.  Cubre el patron
-    /// axpy/FMA que los matchers de 1-op no aceptan.  Devuelve true si matcheo.
+    /// @c VEC_BINOP_S por chunk) + cola escalar.  Solo f64/f32.  Cubre el
+    /// patron axpy/FMA que los matchers de 1-op no aceptan.  Devuelve true si
+    /// matcheo.
     bool try_vectorize_compound_for(ast::Stmt *s);
     /// Valida que @p asg sea exactamente @c dst[idx] = src[idx] con bases
     /// IdentExpr HOST ptr/array de igual tamano de elemento.  Compartido por
     /// las formas while/for.  Rellena las bases y el tamano de elemento.
     bool mc_match_copy_assign(ast::AssignExpr *asg, const std::string &idx_name,
-                              ast::IdentExpr **out_dst, ast::IdentExpr **out_src,
-                              size_t *out_esz);
+                              ast::IdentExpr **out_dst,
+                              ast::IdentExpr **out_src, size_t *out_esz);
     /// Emite el MEMCPY equivalente a la copia en @c current_block_.  @p v_idx
     /// es el SSA del indice inicial (ya resuelto por el llamante: lookup para
     /// el while, lower del init para el for).  Si @p idx_name_for_post no esta
@@ -467,8 +470,8 @@ class Lowering {
     void lower_throw(ast::ThrowStmt *s);
     void lower_foreach(ast::ForEachStmt *s);
     void lower_synchronized(ast::SynchronizedStmt *s);
-    void lower_asm(
-        ast::AsmStmt *s); ///<  AS: baja a IrOp::INLINE_ASM (marker host).
+    void
+    lower_asm(ast::AsmStmt *s); ///<  AS: baja a IrOp::INLINE_ASM (marker host).
 
     ir::IrValueId lower_expr(ast::Expr *e);
     ir::IrValueId lower_binary(ast::BinaryExpr *e);
@@ -516,7 +519,8 @@ class Lowering {
      * que las rutas enteras porque el valor SSA de un struct es su DIRECCION:
      * la ruta entera le sumaba 1 a la direccion del objeto.
      *
-     * @param is_inc `++` (true) o `--`; @param is_pre prefijo (true) o postfijo.
+     * @param is_inc `++` (true) o `--`; @param is_pre prefijo (true) o
+     * postfijo.
      */
     ir::IrValueId lower_overloaded_step(ast::UnaryExpr *e, bool is_inc,
                                         bool is_pre);
@@ -643,8 +647,8 @@ class Lowering {
     /// Nombres de resolvedores de overlay ya sintetizados (dedup).
     std::unordered_set<std::string> generated_overlay_resolvers_;
     /**
-     * @brief `extent(v)`: sintetiza `__ovl_extent_<S>(self) -> u64` que computa el
-     *        SPAN total del layout de la vista con los datos de la instancia
+     * @brief `extent(v)`: sintetiza `__ovl_extent_<S>(self) -> u64` que computa
+     * el SPAN total del layout de la vista con los datos de la instancia
      *        (max(fin de campo) - base).  Cubre escalares (offset const/expr/
      *        block) + arrays de stride CON count; salta arrays sin count y
      *        @element (variable) y resolvers que usan parent<T>().  Devuelve el
@@ -660,13 +664,14 @@ class Lowering {
      */
     ir::IrValueId lower_overlay_root(ast::Expr *e);
     /**
-     * @brief Merge SSA N-vias tras un `match` (Braun): inserta PHIs en @c merge_bb
-     *        para cada variable del scope enclosing que quedo con SSA values
-     *        DISTINTOS entre los arms que alcanzan el merge, y rebindea el nombre
-     *        al PHI.  Sin esto, una variable ASIGNADA (no `return`) dentro de un
-     *        arm se quedaba con el valor del ULTIMO arm bajado.  @c arm_scopes /
-     *        @c arm_preds / @c arm_reaches son paralelos (uno por arm; solo cuentan
-     *        los que @c arm_reaches[i]==true).  Deja @c scopes_ listo en el merge.
+     * @brief Merge SSA N-vias tras un `match` (Braun): inserta PHIs en @c
+     * merge_bb para cada variable del scope enclosing que quedo con SSA values
+     *        DISTINTOS entre los arms que alcanzan el merge, y rebindea el
+     * nombre al PHI.  Sin esto, una variable ASIGNADA (no `return`) dentro de
+     * un arm se quedaba con el valor del ULTIMO arm bajado.  @c arm_scopes /
+     *        @c arm_preds / @c arm_reaches son paralelos (uno por arm; solo
+     * cuentan los que @c arm_reaches[i]==true).  Deja @c scopes_ listo en el
+     * merge.
      */
     void emit_match_arm_phis(
         const std::vector<std::unordered_map<std::string, ir::IrValueId>>
@@ -682,14 +687,13 @@ class Lowering {
      *        entero de 2/4/8 bytes recien leido/por escribir).  Evalua la expr
      *        de endianness del campo @c fi (con los campos hermanos de @c lay
      *        ligados desde la base de la vista @c base_expr) -> `big`; devuelve
-     *        `big ? bswap(value) : value` (select sin ramas; comptime se pliega).
-     *        Simetrico: sirve para read y para write.
+     *        `big ? bswap(value) : value` (select sin ramas; comptime se
+     * pliega). Simetrico: sirve para read y para write.
      */
     ir::IrValueId emit_overlay_endian_swap(ast::Expr *base_expr,
                                            const StructLayout &lay,
                                            const StructFieldInfo &fi,
-                                           ir::IrValueId value,
-                                           uint32_t line);
+                                           ir::IrValueId value, uint32_t line);
 
     /**
      * @brief ADTs: lowering de un constructor de variante de
@@ -759,8 +763,9 @@ class Lowering {
     /// match sobre STRINGS.  Hiper-eficiente: computa el hash del scrutinee
     /// (STRHASH) una vez, despacha por los hashes de los literales (calculados
     /// en compile-time, mismo FNV-1a 32-bit que el runtime) via dispatch entero
-    /// (BST O(log N) / lineal), y en el candidato hace UN STRCMP de verificacion
-    /// (colisiones).  Tipico: 1 hash + 1 strcmp, no N comparaciones.
+    /// (BST O(log N) / lineal), y en el candidato hace UN STRCMP de
+    /// verificacion (colisiones).  Tipico: 1 hash + 1 strcmp, no N
+    /// comparaciones.
     ir::IrValueId lower_match_string(ast::MatchExpr *e);
 
     /**
@@ -867,14 +872,14 @@ class Lowering {
     /// Invoca un metodo de struct (`<Struct>__<m>`) sobre un struct que vive en
     /// un campo HOST (p.ej. campo struct de una clase, cuyo payload es host).
     /// Los metodos de struct se compilan asumiendo `this` en memoria VM
-    /// (interp/JIT); llamarlos con un `this` host hace que lean `this.campo` con
-    /// `mov` (VM) sobre una direccion host -> basura.  En interp/JIT copiamos el
-    /// campo a un temporal en VM-stack y llamamos el metodo sobre el temporal
-    /// (lee `temp.campo` con VM correcto; los punteros internos son host y se
-    /// deref-ean bien).  Valido para metodos que operan sobre los POINTEES
-    /// (dtor: free del ptr; copy-hook: ++refcount via el ptr) sin necesidad de
-    /// copy-back.  En AOT (native_poo_) el struct ya es host y el metodo
-    /// host-this: CALL directo sobre @c field_addr.
+    /// (interp/JIT); llamarlos con un `this` host hace que lean `this.campo`
+    /// con `mov` (VM) sobre una direccion host -> basura.  En interp/JIT
+    /// copiamos el campo a un temporal en VM-stack y llamamos el metodo sobre
+    /// el temporal (lee `temp.campo` con VM correcto; los punteros internos son
+    /// host y se deref-ean bien).  Valido para metodos que operan sobre los
+    /// POINTEES (dtor: free del ptr; copy-hook: ++refcount via el ptr) sin
+    /// necesidad de copy-back.  En AOT (native_poo_) el struct ya es host y el
+    /// metodo host-this: CALL directo sobre @c field_addr.
     /// @param field_addr  host_ptr a la direccion del campo struct.
     /// @param struct_name  nombre del struct (para el tamano y el label).
     /// @param method_label  label del metodo (`<Struct>__<m>`).
@@ -903,19 +908,20 @@ class Lowering {
     void emit_enum_copy(ir::IrValueId dst_addr, ir::IrValueId src_addr,
                         bool src_is_host, uint64_t size_bytes, uint32_t line);
     /// Tamano del buffer SRET de BUFFER PLANO (enum / Optional / Result) que
-    /// devuelve la fn @p callee, o 0 si no devuelve un SRET copiable.  Usado por
-    /// el fix nested-SRET de @c lower_call para copiar el retbuf de una llamada
-    /// anidada a un slot fresco (y no depender del slot fragil del productor
-    /// cuando la presion de registros clobbea su registro).  @p out_is_host (si
-    /// no es null) recibe la naturaleza que debe tener el slot fresco: false
-    /// (VM-stack) para enum, true (host) para Optional/Result -- debe coincidir
-    /// con como el callee lee su parametro.
+    /// devuelve la fn @p callee, o 0 si no devuelve un SRET copiable.  Usado
+    /// por el fix nested-SRET de @c lower_call para copiar el retbuf de una
+    /// llamada anidada a un slot fresco (y no depender del slot fragil del
+    /// productor cuando la presion de registros clobbea su registro).  @p
+    /// out_is_host (si no es null) recibe la naturaleza que debe tener el slot
+    /// fresco: false (VM-stack) para enum, true (host) para Optional/Result --
+    /// debe coincidir con como el callee lee su parametro.
     uint64_t nested_sret_flat_size(const std::string &callee,
                                    bool *out_is_host = nullptr) const;
-    /// Emite los valores por defecto de los campos de @p lay (los `u8 a = 0x10`)
-    /// sobre el struct ya alocado y zero-inicializado en @p base_addr.  Recurre
-    /// en campos struct anidados que tengan defaults propios.  Se llama tras el
-    /// zero-fill y ANTES del init-list explicito (que sobrescribe lo que toque).
+    /// Emite los valores por defecto de los campos de @p lay (los `u8 a =
+    /// 0x10`) sobre el struct ya alocado y zero-inicializado en @p base_addr.
+    /// Recurre en campos struct anidados que tengan defaults propios.  Se llama
+    /// tras el zero-fill y ANTES del init-list explicito (que sobrescribe lo
+    /// que toque).
     /// @p only_non_comptime: emitir SOLO los defaults que NO son
     /// comptime-evaluables (una referencia a funcion, un string).  Se usa
     /// cuando el struct ya se inicializo copiando una imagen construida en
@@ -955,13 +961,15 @@ class Lowering {
     /// InitListExpr como valor).  Un campo struct/array inicializado con una
     /// EXPRESION (otra variable, llamada, ...) usa copia memberwise; un campo
     /// escalar usa STORE.  Comparte la logica del init-list de struct de
-    /// @c lower_var_decl para que ambos caminos (top-level y anidado) coincidan.
+    /// @c lower_var_decl para que ambos caminos (top-level y anidado)
+    /// coincidan.
     void emit_struct_init_fields(ir::IrValueId base_addr,
                                  const StructLayout &lay, ast::InitListExpr *il,
                                  uint32_t line);
     /// Materializa un struct cuyo valor fue calculado en compile-time.
-    /// Cuando una funcion @c comptime devuelve un struct por valor, el resultado
-    /// llega como un valor de compile-time con un campo por cada miembro
+    /// Cuando una funcion @c comptime devuelve un struct por valor, el
+    /// resultado llega como un valor de compile-time con un campo por cada
+    /// miembro
     /// (@c ComptimeEvalResult::struct_fields).  Este metodo aloca el buffer del
     /// struct y escribe cada campo con su valor constante (STORE), de forma que
     /// en el binario aparece el struct ya construido, sin llamada en tiempo de
@@ -982,9 +990,10 @@ class Lowering {
 
     /// @brief Nombre de la IrFunction de un ctor `comptime` de struct.
     ///
-    /// Un ctor comptime se ejecuta en la ComptimeVM, asi que baja con el prefijo
-    /// @c __macro_ (lo identifica como codigo comptime) sobre el mismo esquema de
-    /// aridad que el ctor runtime: `__macro_<Struct>__ctor_<aridad>`.
+    /// Un ctor comptime se ejecuta en la ComptimeVM, asi que baja con el
+    /// prefijo
+    /// @c __macro_ (lo identifica como codigo comptime) sobre el mismo esquema
+    /// de aridad que el ctor runtime: `__macro_<Struct>__ctor_<aridad>`.
     ///
     /// @param struct_name Nombre del struct.
     /// @param arity       Numero de parametros del constructor.
@@ -994,15 +1003,16 @@ class Lowering {
 
     /// @brief Intenta bajar `T(args)` como constructor `comptime` (F1b).
     ///
-    /// Si @p slay tiene un ctor @c comptime cuya aridad casa con @p e, ejecuta el
-    /// ctor en la ComptimeVM (@c invoke_struct_macro, convencion SRET donde el
-    /// buffer de retorno ES el @c this del ctor) y materializa el struct como
-    /// datos constantes (@c materialize_comptime_struct), sin llamada en runtime.
-    /// Los tres modos (interp/JIT/AOT) ven el struct ya construido.
+    /// Si @p slay tiene un ctor @c comptime cuya aridad casa con @p e, ejecuta
+    /// el ctor en la ComptimeVM (@c invoke_struct_macro, convencion SRET donde
+    /// el buffer de retorno ES el @c this del ctor) y materializa el struct
+    /// como datos constantes (@c materialize_comptime_struct), sin llamada en
+    /// runtime. Los tres modos (interp/JIT/AOT) ven el struct ya construido.
     ///
     /// @param e    La expresion de llamada `T(args)`.
     /// @param slay El layout del struct @c T.
-    /// @return La direccion del struct materializado, o @c ir::IR_NO_VALUE si el
+    /// @return La direccion del struct materializado, o @c ir::IR_NO_VALUE si
+    /// el
     ///         struct no tiene ctor comptime o los argumentos no son
     ///         comptime-evaluables (el caller sigue con el ctor runtime).
     ir::IrValueId try_lower_comptime_ctor_call(ast::CallExpr *e,
@@ -1015,12 +1025,13 @@ class Lowering {
                                              const std::string &struct_name,
                                              uint32_t line);
     /// Ruta B (H3 inc-on-copy): incrementa el refcount del bloque de control de
-    /// un `shared<T>` al copiarlo (`b = a`, campo = a, paso por valor).  El slot
-    /// guarda el host_ptr al ctrl; refcount en [ctrl+0].  No-op si ctrl==0.
+    /// un `shared<T>` al copiarlo (`b = a`, campo = a, paso por valor).  El
+    /// slot guarda el host_ptr al ctrl; refcount en [ctrl+0].  No-op si
+    /// ctrl==0.
     void emit_shared_refcount_inc(ir::IrValueId v_slot, uint32_t line);
-    /// Ruta B (H3/H5 dec-on-drop): decrementa el refcount y libera (RAW_FREE) si
-    /// cae a 0.  Lo usan el cleanup del scope y el dtor del contenedor (campo
-    /// shared).  No-op si ctrl==0.
+    /// Ruta B (H3/H5 dec-on-drop): decrementa el refcount y libera (RAW_FREE)
+    /// si cae a 0.  Lo usan el cleanup del scope y el dtor del contenedor
+    /// (campo shared).  No-op si ctrl==0.
     void emit_shared_refcount_dec(ir::IrValueId v_slot, uint32_t line);
     /// Libera un slot Tier 1 (16B [ptr][deleter]) heap dado su VALOR (no via un
     /// campo): null-guard, dispatch del deleter (slot+8) + RAW_FREE(slot).  Lo
@@ -1034,8 +1045,9 @@ class Lowering {
     /// `__vx_free_uniq(i64 slot)` que libera un slot Tier 1 de unique<T>
     /// (null-guard + dispatch del deleter + RAW_FREE del slot, reusando
     /// @c emit_free_unique_slot).  La usa el reassign-free de un campo unique
-    /// como una sola CALL (el diamante del free vive DENTRO del helper, evitando
-    /// la interaccion del diamante con el tailcall del dtor en el call site).
+    /// como una sola CALL (el diamante del free vive DENTRO del helper,
+    /// evitando la interaccion del diamante con el tailcall del dtor en el call
+    /// site).
     void generate_free_uniq_helper(ir::IrModule &out);
     /// @c true si algun reassign de campo unique<T> requiere el helper.
     bool needs_free_uniq_helper_ = false;
@@ -1100,10 +1112,11 @@ class Lowering {
     ir::IrValueId lower_struct_method_call(ast::CallExpr *e);
 
     /**
-     * @brief @Virtual: emite (una vez, cacheada) la vtable estatica de un struct
-     * polimorfico como blob en @c static_data con @c sym_refs a
+     * @brief @Virtual: emite (una vez, cacheada) la vtable estatica de un
+     * struct polimorfico como blob en @c static_data con @c sym_refs a
      * @c <owner>__<metodo> por slot (reloc datos->codigo).  Devuelve el indice
-     * del blob en @c static_data.  Modelo AOT: la vtable vive en @c .data.rel.ro.
+     * del blob en @c static_data.  Modelo AOT: la vtable vive en @c
+     * .data.rel.ro.
      */
     uint64_t get_or_emit_struct_vtable(const StructLayout &lay);
 
@@ -1319,7 +1332,6 @@ class Lowering {
     bool avisar_asm_opaco_ = false;
 
   private:
-
     // contadores de @Macros lowered al IR.  Diagnostico
     // para que el desarrollador sepa cuantos @Macros se beneficiaron
     // del lowering y cuantos cayeron al evaluator AST por features
@@ -1329,10 +1341,10 @@ class Lowering {
 
     /// Force-lower de comptime helpers: nombres (mangled) de las comptime fns
     /// no-macro que un @Macro lowereable referencia (transitivamente) y que por
-    /// tanto DEBEN bajarse a runtime (`code.<helper>`) para que el `__macro_<X>`
-    /// que las llama resuelva.  Poblado por un pre-pase en @c run() antes del
-    /// lowering; consumido por @c lower_function (baja la comptime fn como fn
-    /// runtime normal en vez de elidirla).
+    /// tanto DEBEN bajarse a runtime (`code.<helper>`) para que el
+    /// `__macro_<X>` que las llama resuelva.  Poblado por un pre-pase en @c
+    /// run() antes del lowering; consumido por @c lower_function (baja la
+    /// comptime fn como fn runtime normal en vez de elidirla).
     std::unordered_set<std::string> comptime_fns_to_force_lower_;
 
     /// por cada @Macro que el lowering rechazo (usa
@@ -1354,8 +1366,8 @@ class Lowering {
      * sale medio vacio y nadie se entera hasta que hace falta.
      *
      * Cada entrada es `(simbolo, "Tipo::miembro")`.  Lo consume quien vuelca el
-     * conocimiento del programa para poder ir de una direccion de ejecucion a la
-     * declaracion que la origino.
+     * conocimiento del programa para poder ir de una direccion de ejecucion a
+     * la declaracion que la origino.
      */
     std::vector<std::pair<std::string, std::string>> emitted_symbols_;
 
@@ -1363,9 +1375,9 @@ class Lowering {
     /**
      * @brief El tramo de fuente de una sentencia, dentro de su funcion.
      *
-     * Una LINEA no basta: en `return foo(a) / bar(b);` hay tres cosas que pueden
-     * fallar y las tres estan en la misma.  Con la columna y la longitud se
-     * puede senalar cual.
+     * Una LINEA no basta: en `return foo(a) / bar(b);` hay tres cosas que
+     * pueden fallar y las tres estan en la misma.  Con la columna y la longitud
+     * se puede senalar cual.
      */
     struct StmtSpan {
         std::string symbol; ///< funcion en la que esta
@@ -1632,9 +1644,9 @@ class Lowering {
     /// la direccion si es agregado).  El init-once se materializa con un guard
     /// booleano global (otro slot) cuando el init no es un cero constante.
     struct StaticLocalSlot {
-        uint64_t slot = 0;           ///< indice en static_data (gdata)
+        uint64_t slot = 0;                    ///< indice en static_data (gdata)
         ir::IrType ld_type = ir::IrType::I64; ///< ancho del LOAD/STORE
-        bool aggregate = false;      ///< struct/array -> el valor ES la direccion
+        bool aggregate = false; ///< struct/array -> el valor ES la direccion
     };
     std::unordered_map<std::string, StaticLocalSlot> static_local_slots_;
     /// Nombres (ya mangled) de los globals declarados en ESTE modulo.  Sirve
@@ -1645,8 +1657,9 @@ class Lowering {
 
     /// thread_local con init != 0: (slot static_data, valor inicial 8B LE).  El
     /// lowering sintetiza __vx_tls_init (TLS callback del PE) que escribe estos
-    /// valores en la copia por-hilo al attach del hilo -- el cargador de Windows
-    /// no siempre copia la plantilla del TLS de una .dll a un consumidor minimal.
+    /// valores en la copia por-hilo al attach del hilo -- el cargador de
+    /// Windows no siempre copia la plantilla del TLS de una .dll a un
+    /// consumidor minimal.
     std::vector<std::pair<uint64_t, uint64_t>> tls_nonzero_inits_;
 
     /// sret en call sites: cache nombre-de-funcion -> PrimitiveKind
@@ -1948,7 +1961,8 @@ class Lowering {
     /// Para ASCII coincide con el conteo de bytes (cero cambio en los tests
     /// ASCII existentes).  @c emit_native_str_cplen emite la CALL.
     std::string ensure_str_cplen_helper();
-    ir::IrValueId emit_native_str_cplen(ir::IrValueId v_ptr, ir::IrValueId v_blen,
+    ir::IrValueId emit_native_str_cplen(ir::IrValueId v_ptr,
+                                        ir::IrValueId v_blen,
                                         uint32_t source_line);
     /// Vesta Embed Inc 6: @c .wstr() devuelve un @c u16* NUL-terminado en
     /// UTF-16LE para FFI Win32 @c *W.  El helper
@@ -2016,8 +2030,7 @@ class Lowering {
     /// aplicable).  -1 = longitud runtime (rama CMP_GT como antes).
     void build_native_string_finalize(ir::IrValueId v_slot,
                                       ir::IrValueId v_src_ptr,
-                                      ir::IrValueId v_len,
-                                      uint32_t source_line,
+                                      ir::IrValueId v_len, uint32_t source_line,
                                       int64_t known_len = -1);
     /// str_make optimo (Vesta Embed): COPIA @p v_len bytes de @p v_ptr a un
     /// value-string PROPIO (slot 24B + buffer; RAII lo libera).  Sin GC.
@@ -2078,9 +2091,9 @@ class Lowering {
     /// native.  Solo en @c native_poo_.  @p v_app_ptr / @p v_app_len no
     /// se consumen.
     void build_native_string_append_inplace(ir::IrValueId v_dst_slot,
-                                             ir::IrValueId v_app_ptr,
-                                             ir::IrValueId v_app_len,
-                                             uint32_t source_line);
+                                            ir::IrValueId v_app_ptr,
+                                            ir::IrValueId v_app_len,
+                                            uint32_t source_line);
     /// Vesta Embed Inc 2: construye un value-string owned a partir de un
     /// literal interpolado @p slit ("texto ${a} mas ${b}").  Concatena las
     /// partes literales con cada @c ${expr} convertido a texto INLINE
@@ -2137,10 +2150,11 @@ class Lowering {
     /// (is_inlineable exige 1 bloque).  Devuelve el nombre.  Solo en
     /// @c native_poo_.
     std::string ensure_strcmp_helper();
-    bool strcmp_helper_emitted_ = false; ///< El helper strcmp ya esta emitido.
+    bool strcmp_helper_emitted_ = false;  ///< El helper strcmp ya esta emitido.
     bool strdata_helper_emitted_ = false; ///< El helper __vx_strdata emitido.
-    bool strlen_helper_emitted_ = false; ///< El helper __vx_strlen emitido.
-    bool str_cplen_helper_emitted_ = false; ///< El helper __vx_str_cplen emitido.
+    bool strlen_helper_emitted_ = false;  ///< El helper __vx_strlen emitido.
+    bool str_cplen_helper_emitted_ =
+        false; ///< El helper __vx_str_cplen emitido.
     bool str_to_utf16_helper_emitted_ = false; ///< __vx_str_to_utf16 emitido.
 
     /// CPU dispatch (cimiento): asegura que existan el global
@@ -2239,7 +2253,8 @@ class Lowering {
     ir::IrValueId emit_gc_promote(ir::IrValueId v_src, uint32_t line);
     ir::IrValueId emit_gc_demote(ir::IrValueId v_src, uint32_t line);
     // wt = ancho del atomico (1/2/4/8 bytes via IrType).  Default I64 (8 bytes)
-    // para los builtins Z.8 originales; los genericos pasan el tipo del pointee.
+    // para los builtins Z.8 originales; los genericos pasan el tipo del
+    // pointee.
     ir::IrValueId emit_atomic_ld_i64(ir::IrValueId v_addr, uint32_t line,
                                      ir::IrType wt = ir::IrType::I64);
     void emit_atomic_st_i64(ir::IrValueId v_addr, ir::IrValueId v_val,
@@ -2302,13 +2317,16 @@ class Lowering {
     std::string instrument_mode_ = "none";
     ///  AOT.2.b: modo POO nativa (sin runtime VM).  Ver set_native_poo.
     bool native_poo_ = false;
-    /// Multihilo AOT: true si esta funcion (o el modulo) uso `spawn { }` que bajo
-    /// a un hilo real (__vx_thread_run).  Al lowerar `main` con este flag, se
-    /// inyecta CALL __vx_thread_join_all() antes de su RET (join-all implicito).
+    /// Multihilo AOT: true si esta funcion (o el modulo) uso `spawn { }` que
+    /// bajo a un hilo real (__vx_thread_run).  Al lowerar `main` con este flag,
+    /// se inyecta CALL __vx_thread_join_all() antes de su RET (join-all
+    /// implicito).
     bool vx_thread_used_ = false;
-    /// Bits del target para validar el inline-asm (@Naked/asm{}); 64 por defecto.
+    /// Bits del target para validar el inline-asm (@Naked/asm{}); 64 por
+    /// defecto.
     uint8_t asm_target_bits_ = 64;
-    /// Ancho del chunk SIMD del vectorizador en AOT (16/32/64 bytes); 16 default.
+    /// Ancho del chunk SIMD del vectorizador en AOT (16/32/64 bytes); 16
+    /// default.
     uint8_t aot_vec_width_ = 16;
     /// --float-isa auto: chunk dual para multiversion (ver set_aot_auto_vec).
     bool aot_auto_vec_ = false;
@@ -2416,40 +2434,41 @@ class Lowering {
         ///                  exit del scope.  Si llega a 0 invoca el
         ///                  deleter sobre payload (ctrl_block + 16).
         enum class Kind {
-            RAW_ASM,    ///< Cleanup opaco (no preserva regs caller-saved).
-            CALL_DTOR,  ///< CALLVIRT real al destructor de la clase.
+            RAW_ASM,     ///< Cleanup opaco (no preserva regs caller-saved).
+            CALL_DTOR,   ///< CALLVIRT real al destructor de la clase.
             STRUCT_DTOR, ///< CALL directo al destructor de un STRUCT value-type
-                        ///< (`<Struct>__dtor(addr)`).  Sin vtable: dispatch
-                        ///< estatico.  Inlineable (un dtor trivial cuesta ~0
-                        ///< tras el inliner).  Se registra solo si el struct
-                        ///< tiene `~Struct()` y NO escapa (move-on-return /
-                        ///< store suprime el cleanup via escaping_locals_).
+                         ///< (`<Struct>__dtor(addr)`).  Sin vtable: dispatch
+                         ///< estatico.  Inlineable (un dtor trivial cuesta ~0
+                         ///< tras el inliner).  Se registra solo si el struct
+                         ///< tiene `~Struct()` y NO escapa (move-on-return /
+                         ///< store suprime el cleanup via escaping_locals_).
             CALLN_FREE, ///< CALLN a libreria nativa (e.g. free de colecciones).
             SMARTPTR_FREE, ///< Liberar @c unique<T> al exit del scope.
             SHAREDPTR_REL, ///< Decrementar refcount de @c shared<T>.
             SYNC_EXIT, ///< Exit de @c synchronized {} : TRYLEAVE + MONEXIT como
                        ///< IR ops.
             NATIVE_FREE, ///<  AOT.2.b: RAW_FREE(obj) de una instancia de
-                        ///< clase NATIVA (calloc) al exit del scope (RAII; sin
-                        ///< GC). aot_lower lo convierte en call<free>.  Sin
-                        ///< dangling.
+                         ///< clase NATIVA (calloc) al exit del scope (RAII; sin
+                         ///< GC). aot_lower lo convierte en call<free>.  Sin
+                         ///< dangling.
             STRING_FREE, ///< Vesta Embed Inc 0: liberar el buffer de un
-                        ///< string value-type (native_poo_) al exit del
-                        ///< scope.  operands[0] = PTR al slot de 24 bytes
-                        ///< {ptr,len,cap}.  Emite LOAD ptr@[slot+0] +
-                        ///< RAW_FREE(ptr) (aot_lower -> call free; free(0)
-                        ///< es no-op tras un move, sin doble-free).
+                         ///< string value-type (native_poo_) al exit del
+                         ///< scope.  operands[0] = PTR al slot de 24 bytes
+                         ///< {ptr,len,cap}.  Emite LOAD ptr@[slot+0] +
+                         ///< RAW_FREE(ptr) (aot_lower -> call free; free(0)
+                         ///< es no-op tras un move, sin doble-free).
             CLOSURE_ENV_FREE ///< Ownership: liberar el env+slot heap de los
-                        ///< campos closure (lambda con captura) de un struct
-                        ///< value-type que recibio su valor por move (init
-                        ///< desde una call que retorna un struct con closure
-                        ///< escapado).  operands[0] = PTR al struct (refresh
-                        ///< por refresh_name); @c closure_field_offsets lista
-                        ///< los offsets de los campos fn.  Emite, por campo,
-                        ///< la misma secuencia que @c emit_free_closure_env_field
-                        ///< (null-guard, free env + slot).  Sin GC; un solo
-                        ///< free porque el productor suprime su cleanup
-                        ///< (move-on-return via escaping_locals_).
+                             ///< campos closure (lambda con captura) de un
+                             ///< struct value-type que recibio su valor por
+                             ///< move (init desde una call que retorna un
+                             ///< struct con closure escapado).  operands[0] =
+                             ///< PTR al struct (refresh por refresh_name); @c
+                             ///< closure_field_offsets lista los offsets de los
+                             ///< campos fn.  Emite, por campo, la misma
+                             ///< secuencia que @c emit_free_closure_env_field
+                             ///< (null-guard, free env + slot).  Sin GC; un
+                             ///< solo free porque el productor suprime su
+                             ///< cleanup (move-on-return via escaping_locals_).
         };
         Kind kind = Kind::RAW_ASM;
         // --- Comun ---
@@ -2534,7 +2553,8 @@ class Lowering {
     /// stack: el campo guarda la direccion del slot y sobrevive al scope donde
     /// se creo el unique (igual que el env de un closure en un campo).  El dtor
     /// del contenedor libera el inner (via deleter) Y el slot heap.  Lo activa
-    /// @c lower_assign antes de bajar el RHS; lo consumen unique_box/unique_with.
+    /// @c lower_assign antes de bajar el RHS; lo consumen
+    /// unique_box/unique_with.
     bool unique_slot_to_heap_ = false;
 
     /// Stack de targets de break/continue para los loops anidados.

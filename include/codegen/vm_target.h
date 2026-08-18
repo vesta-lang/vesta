@@ -68,13 +68,15 @@ inline jit::TargetRegInfo build_vm_target(bool reserve_scratch = true) {
 
     const size_t GP = static_cast<size_t>(jit::RegClass::GP);
     const uint8_t last_alloc = reserve_scratch ? 12 : 15;
-    for (uint8_t r = 0; r <= last_alloc; ++r) t.allocatable[GP].push_back(r);
+    for (uint8_t r = 0; r <= last_alloc; ++r)
+        t.allocatable[GP].push_back(r);
     if (reserve_scratch) {
         t.scratch[GP] = {13, 14};
         t.reserved = {15}; // argc
     }
     // Convencion que el emisor pre-asigna: retorno en r0, argumentos r1-r12.
-    for (uint8_t r = 1; r <= 12; ++r) t.arg_regs[GP].push_back(r);
+    for (uint8_t r = 1; r <= 12; ++r)
+        t.arg_regs[GP].push_back(r);
     t.ret_reg[GP] = 0;
 
     /* Que sobrevive a un CALL.  El emisor salva y restaura los valores vivos
@@ -90,7 +92,8 @@ inline jit::TargetRegInfo build_vm_target(bool reserve_scratch = true) {
      * 165_unique_dtor y cuelgues en 39_spawn_pingpong, pic_real y
      * test_av_mixed.  Aqui es un HECHO del ABI, en el sitio donde se describe
      * la ISA, y el allocator lo respeta sin saber nada de la VM. */
-    for (uint8_t r = 1; r <= last_alloc; ++r) t.callee_saved[GP].push_back(r);
+    for (uint8_t r = 1; r <= last_alloc; ++r)
+        t.callee_saved[GP].push_back(r);
     t.caller_saved[GP].push_back(0);
     return t;
 }

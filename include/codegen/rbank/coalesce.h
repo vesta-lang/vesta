@@ -11,50 +11,54 @@
  *        valores AFINES que pueden compartir lane SIN aumentar la presion ->
  *        reciben la misma lane -> la copia se ELIMINA.
  *
- *     AbstractProblem { values, affinity }  --coalesce_conservative-->  AbstractProblem'
- *                                                                      (grupos fundidos)
+ *     AbstractProblem { values, affinity }  --coalesce_conservative-->
+ * AbstractProblem' (grupos fundidos)
  *
  * CRITERIO (correcto para interval graphs, NO Briggs):
  *   Se funde (a,b) si son AFINES Y:
- *     1. compatibilidad FISICA: misma ResourceClass, mismo ancho, pin compatible
- *        (ambos sin pin, o el mismo).  Sin esto la fusion cambia la semantica.
- *     2. NO interfieren (sus vidas no se solapan): dos valores en la misma lane no
- *        pueden estar vivos a la vez.
+ *     1. compatibilidad FISICA: misma ResourceClass, mismo ancho, pin
+ * compatible (ambos sin pin, o el mismo).  Sin esto la fusion cambia la
+ * semantica.
+ *     2. NO interfieren (sus vidas no se solapan): dos valores en la misma lane
+ * no pueden estar vivos a la vez.
  *     3. la fusion NO AUMENTA el @c max_overlap de la clase (no rompe la
  *        K-colorabilidad -> no reintroduce spill).
  *
- * POR QUE EL PUNTO 3 (matiz importante -- la seguridad es respecto al MODELO, no a
- * la teoria general).  El allocator NO trabaja con los intervalos originales:
- * trabaja con los @c AbstractValue que le pasamos, y hemos decidido representar el
- * grupo fundido por su ENVOLVENTE [min(start), max(end)] (un solo intervalo, no
- * multi-rango).  Por tanto la pregunta correcta NO es "¿la union matematica aumenta
- * el overlap?" sino "¿el modelo AbstractValue-de-envolventes que voy a pasar al
- * allocator aumenta la presion?".  Eso es EXACTAMENTE lo que mide el punto 3
- * (@c hull_overlap sobre las envolventes).  La propiedad "fundir no-interferentes
- * preserva max_overlap" es cierta para la UNION REAL, pero el ENVOLVENTE puede
- * cubrir un HUECO donde vivia OTRO valor -> subir el cromatico DEL MODELO.  Ejemplo:
- * A=[0,3] y B=[10,12] (afines, no interfieren) con C=[5,8] entre medias: el
- * envolvente [0,12] pasa a interferir con C.  Para afinidades de la MISMA VIDA
- * LOGICA (a muere, b nace justo despues -- el caso normal de COPY/PHI) el envolvente
- * = union real, no hay hueco, y el punto 3 lo acepta; los "con hueco" los RECHAZA.
- * Asi la representacion simple (envolvente) sigue siendo segura RESPECTO AL MODELO,
- * sin necesidad de valores multi-rango.
+ * POR QUE EL PUNTO 3 (matiz importante -- la seguridad es respecto al MODELO,
+ * no a la teoria general).  El allocator NO trabaja con los intervalos
+ * originales: trabaja con los @c AbstractValue que le pasamos, y hemos decidido
+ * representar el grupo fundido por su ENVOLVENTE [min(start), max(end)] (un
+ * solo intervalo, no multi-rango).  Por tanto la pregunta correcta NO es "¿la
+ * union matematica aumenta el overlap?" sino "¿el modelo
+ * AbstractValue-de-envolventes que voy a pasar al allocator aumenta la
+ * presion?".  Eso es EXACTAMENTE lo que mide el punto 3
+ * (@c hull_overlap sobre las envolventes).  La propiedad "fundir
+ * no-interferentes preserva max_overlap" es cierta para la UNION REAL, pero el
+ * ENVOLVENTE puede cubrir un HUECO donde vivia OTRO valor -> subir el cromatico
+ * DEL MODELO.  Ejemplo: A=[0,3] y B=[10,12] (afines, no interfieren) con
+ * C=[5,8] entre medias: el envolvente [0,12] pasa a interferir con C.  Para
+ * afinidades de la MISMA VIDA LOGICA (a muere, b nace justo despues -- el caso
+ * normal de COPY/PHI) el envolvente = union real, no hay hueco, y el punto 3 lo
+ * acepta; los "con hueco" los RECHAZA. Asi la representacion simple
+ * (envolvente) sigue siendo segura RESPECTO AL MODELO, sin necesidad de valores
+ * multi-rango.
  *
- * IMPORTANTE: el punto (3) NO es una propiedad del coalescing -- es el PRECIO de
- * elegir representar el grupo por su ENVOLVENTE.  Dos caminos:
- *   Opcion A (esta): grupo = envolvente + protegerlo con el check de max_overlap.
+ * IMPORTANTE: el punto (3) NO es una propiedad del coalescing -- es el PRECIO
+ * de elegir representar el grupo por su ENVOLVENTE.  Dos caminos: Opcion A
+ * (esta): grupo = envolvente + protegerlo con el check de max_overlap.
  *     Correcto; O(n^3) en el prototipo.
  *   Opcion B (diferida): grupo = CONJUNTO de intervalos (RangeSet) en vez de
  *     envolvente.  Desaparecen los huecos -> el punto (3) NO hace falta, ni el
- *     O(n^3); pero el modelo del allocator pasa de Range a RangeSet (demasiado para
- *     Fase 3).  Se elige A para el prototipo; cuando el allocator real justifique
- *     multi-rango, B elimina el check por completo.
+ *     O(n^3); pero el modelo del allocator pasa de Range a RangeSet (demasiado
+ * para Fase 3).  Se elige A para el prototipo; cuando el allocator real
+ * justifique multi-rango, B elimina el check por completo.
  *
  * El grafo es el Fact @c AffinityGraphFacts; el coalescing lo CONSUME.  En
- * produccion vendra de @c snapshot.query<AffinityGraphFacts>() (ssa_coalesce); en
- * aislamiento lo lleva el AbstractProblem.  Forma uniforme con CanonicalProblem:
- * transformacion pura AbstractProblem -> AbstractProblem' + mapeos + metrica (empieza
- * a emerger la familia AbstractProblem -> Canonical -> Coalesced -> Colored).
+ * produccion vendra de @c snapshot.query<AffinityGraphFacts>() (ssa_coalesce);
+ * en aislamiento lo lleva el AbstractProblem.  Forma uniforme con
+ * CanonicalProblem: transformacion pura AbstractProblem -> AbstractProblem' +
+ * mapeos + metrica (empieza a emerger la familia AbstractProblem -> Canonical
+ * -> Coalesced -> Colored).
  *
  * i18n: produce DATOS.  Fase 3: ADITIVO, funcion pura, sin consumidores de
  * produccion (solo el prototipo/test).  O(n^3) deliberado (prototipo).
@@ -76,21 +80,23 @@ namespace rbank {
 /**
  * @struct CoalesceResult
  * @brief Problema con los grupos afines fundidos + cuantas afinidades se
- *        realizaron (copias eliminadas) + el mapeo de cada value_id original a su
- *        representante.
+ *        realizaron (copias eliminadas) + el mapeo de cada value_id original a
+ * su representante.
  */
 struct CoalesceResult {
-    AbstractProblem                        problem;               ///< grupos fundidos.
-    uint32_t                               copies_eliminated = 0;
-    std::unordered_map<uint32_t, uint32_t> rep; ///< orig value_id -> representante.
+    AbstractProblem problem; ///< grupos fundidos.
+    uint32_t copies_eliminated = 0;
+    std::unordered_map<uint32_t, uint32_t>
+        rep; ///< orig value_id -> representante.
 };
 
 /**
- * @brief Pico de solapamiento (max_overlap) de la clase @p cls sobre una lista de
- *        intervalos-envolvente (start,end).  Barrido de eventos: -1 antes que +1 a
+ * @brief Pico de solapamiento (max_overlap) de la clase @p cls sobre una lista
+ * de intervalos-envolvente (start,end).  Barrido de eventos: -1 antes que +1 a
  *        igual posicion (dos rangos que solo se tocan en el borde no solapan).
  */
-inline uint32_t hull_overlap(const std::vector<std::pair<uint32_t, uint32_t>> &iv) {
+inline uint32_t
+hull_overlap(const std::vector<std::pair<uint32_t, uint32_t>> &iv) {
     std::vector<std::pair<uint32_t, int>> ev;
     ev.reserve(iv.size() * 2);
     for (const auto &r : iv) {
@@ -112,21 +118,25 @@ inline uint32_t hull_overlap(const std::vector<std::pair<uint32_t, uint32_t>> &i
 
 /**
  * @brief Coalescing CONSERVADOR (ver criterio en la cabecera del fichero).
- *        Funcion pura: AbstractProblem -> AbstractProblem' con los grupos fundidos.
+ *        Funcion pura: AbstractProblem -> AbstractProblem' con los grupos
+ * fundidos.
  */
 inline CoalesceResult coalesce_conservative(const AbstractProblem &p) {
     CoalesceResult out;
     const size_t n = p.values.size();
 
     std::unordered_map<uint32_t, size_t> idx; // value_id -> indice.
-    for (size_t i = 0; i < n; ++i) idx[p.values[i].value_id] = i;
+    for (size_t i = 0; i < n; ++i)
+        idx[p.values[i].value_id] = i;
 
     // grp[i] = grupo del valor i (inicialmente cada valor su propio grupo).
     std::vector<int> grp(n);
-    for (size_t i = 0; i < n; ++i) grp[i] = static_cast<int>(i);
+    for (size_t i = 0; i < n; ++i)
+        grp[i] = static_cast<int>(i);
 
-    // Hulls (envolventes) de una clase, con la fusion tentativa gy->gx tratada como
-    // UN solo grupo.  (gx=-1,gy=-2 = "sin fusion": no matchean ningun grupo real.)
+    // Hulls (envolventes) de una clase, con la fusion tentativa gy->gx tratada
+    // como UN solo grupo.  (gx=-1,gy=-2 = "sin fusion": no matchean ningun
+    // grupo real.)
     auto class_hulls = [&](ResourceClass cls, int gx, int gy) {
         std::unordered_map<int, std::pair<uint32_t, uint32_t>> seen;
         for (size_t i = 0; i < n; ++i) {
@@ -137,13 +147,16 @@ inline CoalesceResult coalesce_conservative(const AbstractProblem &p) {
             if (it == seen.end())
                 seen[g] = {p.values[i].start, p.values[i].end};
             else {
-                it->second.first = std::min(it->second.first, p.values[i].start);
-                it->second.second = std::max(it->second.second, p.values[i].end);
+                it->second.first =
+                    std::min(it->second.first, p.values[i].start);
+                it->second.second =
+                    std::max(it->second.second, p.values[i].end);
             }
         }
         std::vector<std::pair<uint32_t, uint32_t>> iv;
         iv.reserve(seen.size());
-        for (const auto &kv : seen) iv.push_back(kv.second);
+        for (const auto &kv : seen)
+            iv.push_back(kv.second);
         return iv;
     };
     auto groups_interfere = [&](int g1, int g2) {
@@ -176,12 +189,16 @@ inline CoalesceResult coalesce_conservative(const AbstractProblem &p) {
         // (2) no interfieren (member-wise).
         if (groups_interfere(ga, gb)) continue;
         // (3) la fusion (por envolvente) NO aumenta el max_overlap de la clase.
-        const uint32_t before = hull_overlap(class_hulls(ra.cls, -1, -2)); // sin fusion.
-        const uint32_t after = hull_overlap(class_hulls(ra.cls, ga, gb));   // con fusion.
-        if (after > before) continue; // rechaza (el envolvente crea interferencia).
+        const uint32_t before =
+            hull_overlap(class_hulls(ra.cls, -1, -2)); // sin fusion.
+        const uint32_t after =
+            hull_overlap(class_hulls(ra.cls, ga, gb)); // con fusion.
+        if (after > before)
+            continue; // rechaza (el envolvente crea interferencia).
 
         // Fundir gb en ga.
-        for (size_t i = 0; i < n; ++i) if (grp[i] == gb) grp[i] = ga;
+        for (size_t i = 0; i < n; ++i)
+            if (grp[i] == gb) grp[i] = ga;
         ++out.copies_eliminated;
     }
 
@@ -198,12 +215,17 @@ inline CoalesceResult coalesce_conservative(const AbstractProblem &p) {
             AbstractValue &av = out.problem.values[it->second];
             av.start = std::min(av.start, v.start);
             av.end = std::max(av.end, v.end);
-            if (v.value_id < av.value_id) { av.value_id = v.value_id; av.req.value_id = v.value_id; }
-            if (av.req.fixed_reg < 0 && v.req.fixed_reg >= 0) av.req.fixed_reg = v.req.fixed_reg;
+            if (v.value_id < av.value_id) {
+                av.value_id = v.value_id;
+                av.req.value_id = v.value_id;
+            }
+            if (av.req.fixed_reg < 0 && v.req.fixed_reg >= 0)
+                av.req.fixed_reg = v.req.fixed_reg;
         }
     }
     for (size_t i = 0; i < n; ++i)
-        out.rep[p.values[i].value_id] = out.problem.values[group_repr[grp[i]]].value_id;
+        out.rep[p.values[i].value_id] =
+            out.problem.values[group_repr[grp[i]]].value_id;
 
     return out;
 }

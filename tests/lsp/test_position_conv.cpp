@@ -126,19 +126,18 @@ int main() {
         // Documento con tres lineas usando CRLF.
         store.open("file:///t.vx", "uno\r\ndos\r\ntres");
         // line() debe devolver la linea SIN el CR final.
-        check_eq("line 0 len", static_cast<uint32_t>(
-                                   store.line("file:///t.vx", 0).size()),
+        check_eq("line 0 len",
+                 static_cast<uint32_t>(store.line("file:///t.vx", 0).size()),
                  3); // "uno"
-        check_eq("line 1 len", static_cast<uint32_t>(
-                                   store.line("file:///t.vx", 1).size()),
+        check_eq("line 1 len",
+                 static_cast<uint32_t>(store.line("file:///t.vx", 1).size()),
                  3); // "dos"
-        check_eq("line 2 len", static_cast<uint32_t>(
-                                   store.line("file:///t.vx", 2).size()),
+        check_eq("line 2 len",
+                 static_cast<uint32_t>(store.line("file:///t.vx", 2).size()),
                  4); // "tres"
         // Linea fuera de rango -> vacia.
         check_eq("line 99 (fuera) len",
-                 static_cast<uint32_t>(
-                     store.line("file:///t.vx", 99).size()),
+                 static_cast<uint32_t>(store.line("file:///t.vx", 99).size()),
                  0);
         // Documento inexistente -> vacia.
         check_eq("line de uri inexistente",
@@ -160,8 +159,7 @@ int main() {
         // Linea 1, caracter 3 -> offset 8 ('d').
         check_eq("inv l1 c3", lsp_position_to_byte_offset(s, 1, 3), 8);
         // Linea fuera de rango -> fin del texto.
-        check_eq("inv l9 (fuera)",
-                 lsp_position_to_byte_offset(s, 9, 0),
+        check_eq("inv l9 (fuera)", lsp_position_to_byte_offset(s, 9, 0),
                  static_cast<uint32_t>(s.size()));
     }
 

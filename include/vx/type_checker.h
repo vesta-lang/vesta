@@ -113,10 +113,10 @@ struct FunctionSig {
     Type return_type;
     std::vector<Type> param_types;
     /// ABI custom por-parametro (`register("rXX") T name`): registro fisico de
-    /// entrada por parametro, alineado con @c param_types.  Vacio = ABI estandar.
-    /// Lo consume: (a) el codegen del CALL directo (via IrFunction), y (b) el
-    /// tipado de `&funcion`, que construye un @c cfn cuyo @c fn_param_abi_regs
-    /// hereda esta lista -> el tipo del puntero LLEVA la ABI.
+    /// entrada por parametro, alineado con @c param_types.  Vacio = ABI
+    /// estandar. Lo consume: (a) el codegen del CALL directo (via IrFunction),
+    /// y (b) el tipado de `&funcion`, que construye un @c cfn cuyo @c
+    /// fn_param_abi_regs hereda esta lista -> el tipo del puntero LLEVA la ABI.
     std::vector<std::string> param_abi_regs;
     ///  FFI extern: si no esta vacio, esta funcion es un import
     /// de una libreria nativa (ej. "user32.dll", "kernel32.dll" o
@@ -141,9 +141,10 @@ struct FunctionSig {
     /// count); el count va en un param i64 OCULTO al final.
     bool is_variadic = false;
     Type variadic_elem;
-    /// Variadico CRUDO: el ULTIMO param es un `...` pelado (sin tipo ni nombre).
-    /// El caller NO empaqueta los args trailing -- los pasa crudos en los
-    /// arg-regs del ABI segun el tipo de cada uno.  Solo para funciones @Naked.
+    /// Variadico CRUDO: el ULTIMO param es un `...` pelado (sin tipo ni
+    /// nombre). El caller NO empaqueta los args trailing -- los pasa crudos en
+    /// los arg-regs del ABI segun el tipo de cada uno.  Solo para funciones
+    /// @Naked.
     bool is_raw_variadic = false;
     /// Bug/feature 198: @Naked -- funcion cuyo cuerpo es asm nativo puro (sin
     /// prologo/epilogo VM).  El lowering, al ver una llamada a una @Naked,
@@ -177,7 +178,8 @@ struct StructFieldInfo {
     /// y @c size pero con distintos @c bit_offset.
     uint8_t bit_offset = 0;
     uint8_t bit_width = 0;
-    /// `comptime T campo`: campo solo-compile-time (en @c comptime_fields, no en
+    /// `comptime T campo`: campo solo-compile-time (en @c comptime_fields, no
+    /// en
     /// @c fields).  @c offset/@c size no aplican (no vive en la instancia).
     bool is_comptime = false;
     /// Valor por defecto del campo (`u8 a = 0x10;`), no-owning al AST (vive
@@ -190,32 +192,35 @@ struct StructFieldInfo {
     /// lowering evalua esta expresion (los nombres desnudos de hermanos leen
     /// @c LOAD [base + hermano.offset]) y direcciona en @c base + resultado.
     ast::Expr *offset_expr = nullptr;
-    /// Resolver de la DIRECCION del campo (F3): `@offset { ...; return <dir>; }`.
-    /// no-owning al AST.  A diferencia de @c offset_expr (un offset relativo a
-    /// base), el bloque DEVUELVE la DIRECCION absoluta donde vive el campo, con
-    /// control de flujo completo; tiene `base` (el puntero de la vista) y los
-    /// campos hermanos en scope.  null = usa expr/offset constante.
+    /// Resolver de la DIRECCION del campo (F3): `@offset { ...; return <dir>;
+    /// }`. no-owning al AST.  A diferencia de @c offset_expr (un offset
+    /// relativo a base), el bloque DEVUELVE la DIRECCION absoluta donde vive el
+    /// campo, con control de flujo completo; tiene `base` (el puntero de la
+    /// vista) y los campos hermanos en scope.  null = usa expr/offset
+    /// constante.
     ast::BlockStmt *offset_block = nullptr;
     /// Overlay ARRAY (F3b): `T Name[count] @offset(pos) stride(s)`.  Si
-    /// @c array_stride != null, el campo es un array: @c offset/@c offset_expr da
-    /// `pos` (base de la tabla), @c array_stride los bytes por elemento, y
+    /// @c array_stride != null, el campo es un array: @c offset/@c offset_expr
+    /// da `pos` (base de la tabla), @c array_stride los bytes por elemento, y
     /// @c type es el tipo del ELEMENTO.  `v.Name[i]` = base + pos + i*stride.
     /// no-owning al AST.
     ast::Expr *array_count = nullptr;
     ast::Expr *array_stride = nullptr;
-    /// Overlay array POR-ELEMENTO (`T Name[c] @element { ... }`): resolver que da
-    /// la DIRECCION del elemento `index` (stride variable / TLV).  no-owning al
-    /// AST.  null = array de stride fijo (usa @c array_stride).
+    /// Overlay array POR-ELEMENTO (`T Name[c] @element { ... }`): resolver que
+    /// da la DIRECCION del elemento `index` (stride variable / TLV).  no-owning
+    /// al AST.  null = array de stride fijo (usa @c array_stride).
     ast::BlockStmt *element_block = nullptr;
-    /// Overlay endianness (F5): 0=nativo, 1=big-endian (`@be`), 2=little (`@le`).
-    /// Un campo `@be` emite BYTESWAP en read/write (host x86-64 = little-endian).
+    /// Overlay endianness (F5): 0=nativo, 1=big-endian (`@be`), 2=little
+    /// (`@le`). Un campo `@be` emite BYTESWAP en read/write (host x86-64 =
+    /// little-endian).
     uint8_t endian = 0;
     /// Overlay endianness DINAMICA (F5): `@endian(expr)` -- expr (nonzero=BE)
-    /// decide el orden en tiempo de acceso.  no-owning al AST.  null = estatico.
+    /// decide el orden en tiempo de acceso.  no-owning al AST.  null =
+    /// estatico.
     ast::Expr *endian_expr = nullptr;
     /// Overlay array SIN count (`T Name[] @offset(...) stride(s)`): el usuario
-    /// gestiona la terminacion (p.ej. bucle hasta entrada nula).  @c array_count
-    /// null + @c is_array true = array no acotado.
+    /// gestiona la terminacion (p.ej. bucle hasta entrada nula).  @c
+    /// array_count null + @c is_array true = array no acotado.
     bool is_array = false;
     /// F4: el resolver `@offset { }` de este campo usa `parent<T>()`.  Entonces
     /// la funcion sintetizada recibe un param extra `root` (el puntero de la
@@ -250,8 +255,9 @@ struct ClassMethodInfo {
     bool is_virtual = false;
     bool is_constructor = false;
     /// F1b: constructor `comptime T(expr)` de un struct value-type.  Se ejecuta
-    /// en compile-time (ComptimeVM) y materializa el struct como datos; no emite
-    /// llamada en runtime.  Propagado desde @c ClassMethodDecl::is_comptime.
+    /// en compile-time (ComptimeVM) y materializa el struct como datos; no
+    /// emite llamada en runtime.  Propagado desde @c
+    /// ClassMethodDecl::is_comptime.
     bool is_comptime = false;
     /// destructor `~ClassName()`.  Sin params, void retorno.
     /// El lowering lo invoca via CALLVIRT al exit del scope para
@@ -307,16 +313,18 @@ struct StructLayout {
     std::string name;
     std::vector<StructFieldInfo> fields;
     /// Campos `static`: NO viven en cada instancia; su storage es una global
-    /// sintetica `<Struct>__<campo>` (una sola por tipo).  Se listan aparte para
-    /// que `Struct.campo` los resuelva (lectura/escritura) sin inflar el layout.
+    /// sintetica `<Struct>__<campo>` (una sola por tipo).  Se listan aparte
+    /// para que `Struct.campo` los resuelva (lectura/escritura) sin inflar el
+    /// layout.
     std::vector<StructFieldInfo> static_fields;
     /// Campos `comptime`: existen SOLO en tiempo de compilacion (los consume el
     /// codigo comptime, p.ej. un `comptime char* name` para un hash).  NO
     /// ocupan espacio en la instancia runtime; se listan aparte para que un
     /// constructor/metodo comptime pueda resolver `this.campo`.
     std::vector<StructFieldInfo> comptime_fields;
-    /// Tamano del buffer usado por la ComptimeVM al evaluar un constructor/metodo
-    /// comptime: incluye los campos runtime (@c size_bytes) MAS los campos
+    /// Tamano del buffer usado por la ComptimeVM al evaluar un
+    /// constructor/metodo comptime: incluye los campos runtime (@c size_bytes)
+    /// MAS los campos
     /// @c comptime apilados al final (cada uno con su @c offset asignado dentro
     /// de @c comptime_fields).  La materializacion del struct solo copia los
     /// primeros @c size_bytes (descarta la cola comptime).  == @c size_bytes si
@@ -330,10 +338,11 @@ struct StructLayout {
     std::vector<ClassMethodInfo> methods;
     uint32_t size_bytes = 0;
     uint32_t align_bytes = 1;
-    /// Overlay F1: el struct es una VISTA sobre un puntero base ajeno.  Un valor
-    /// de este tipo ES un puntero (host) de 8 bytes; no se aloca buffer ni se
-    /// zero-inicializa.  Los @c fields usan sus @c offset EXPLICITOS (@offset).
-    bool is_union = false; ///< union C-style: campos en offset 0, size=max.
+    /// Overlay F1: el struct es una VISTA sobre un puntero base ajeno.  Un
+    /// valor de este tipo ES un puntero (host) de 8 bytes; no se aloca buffer
+    /// ni se zero-inicializa.  Los @c fields usan sus @c offset EXPLICITOS
+    /// (@offset).
+    bool is_union = false;    ///< union C-style: campos en offset 0, size=max.
     bool is_abstract = false; ///< `@Abstract`: no instanciable, solo base.
     /// true si el struct tiene >=1 metodo `@Virtual` (propio o heredado): es
     /// "polimorfico" y lleva un vptr en offset 0 (los campos empiezan en 8).
@@ -347,9 +356,10 @@ struct StructLayout {
     bool is_overlay = false;
     /// Overlay: HUELLA estatica de la vista = max(offset+size) sobre los campos
     /// de offset constante, redondeada al alineamiento.  Es lo que `sizeof(T)`
-    /// devuelve para un overlay (no @c size_bytes=8, que es el puntero): permite
-    /// reservar `u8[sizeof(PEB)] buf;` con el tamano exacto para CREAR la vista.
-    /// Los campos de offset dinamico (@offset(expr)) no cuentan (data-dependent).
+    /// devuelve para un overlay (no @c size_bytes=8, que es el puntero):
+    /// permite reservar `u8[sizeof(PEB)] buf;` con el tamano exacto para CREAR
+    /// la vista. Los campos de offset dinamico (@offset(expr)) no cuentan
+    /// (data-dependent).
     uint32_t overlay_extent = 0;
     /// Fase 1 interop C: categoria INFERIDA de los campos (clasificador de
     /// Fase 0).  @c cat_c_representable: el struct cruza la frontera C por
@@ -400,7 +410,7 @@ struct StructLayout {
 struct EnumVariantInfo {
     std::string name;
     uint32_t tag = 0;
-    int64_t int_value = 0;  ///< Valor (enums con tipo base ENTERO C-style).
+    int64_t int_value = 0; ///< Valor (enums con tipo base ENTERO C-style).
     /// Enums con VALOR de tipo NO-entero (float/string/struct/clase): el
     /// lowering de @c E.A baja directamente esta expresion AST (reusa el
     /// lowering de literales float/string/init-list).  Para backing entero
@@ -431,8 +441,8 @@ struct EnumVariantInfo {
 struct EnumLayout {
     std::string name;
     std::vector<EnumVariantInfo> variants;
-    bool is_valued = false;              ///< enum con VALOR (`: u8`).
-    PrimitiveKind backing = PrimitiveKind::I64;  ///< tipo base si is_valued.
+    bool is_valued = false;                     ///< enum con VALOR (`: u8`).
+    PrimitiveKind backing = PrimitiveKind::I64; ///< tipo base si is_valued.
     /// Nombre del tipo de USUARIO cuando @c backing es STRUCT/CLASS (`enum
     /// Color : Rgb {..}`).  Un valor del enum ES un valor de este tipo.
     std::string backing_type_name;
@@ -755,8 +765,9 @@ class TypeChecker {
 
     /**
      * @brief Anyade una plantilla generica / comptime fn / @Macro re-exportada
-     * a los exports de ESTE modulo (via `public import`).  El emitter del `.vxi`
-     * la vuelca como fuente para que los consumidores del re-exportador la vean.
+     * a los exports de ESTE modulo (via `public import`).  El emitter del
+     * `.vxi` la vuelca como fuente para que los consumidores del re-exportador
+     * la vean.
      */
     void add_reexported_generic_template(ast::GenericTemplateExport tex) {
         mod_.generic_template_exports.push_back(std::move(tex));
@@ -821,34 +832,36 @@ class TypeChecker {
                                     const SourceLoc &loc);
 
     /**
-     * @brief Aplana la herencia ESTATICA de structs y resuelve `Self` 
+     * @brief Aplana la herencia ESTATICA de structs y resuelve `Self`
      *
-     * Corre en pre_mono (antes de @c collect_globals).  Por CADA struct concreto
-     * S (base o derivado): (a) embebe los campos de su cadena de bases al INICIO
-     * (raiz primero, layout-compatible); (b) hereda los metodos de la cadena (el
-     * mas derivado gana por nombre); (c) sustituye el marcador `Self` por el tipo
-     * concreto S en firmas y cuerpos, via @c GenSubst{["Self"],[STRUCT S]} +
+     * Corre en pre_mono (antes de @c collect_globals).  Por CADA struct
+     * concreto S (base o derivado): (a) embebe los campos de su cadena de bases
+     * al INICIO (raiz primero, layout-compatible); (b) hereda los metodos de la
+     * cadena (el mas derivado gana por nombre); (c) sustituye el marcador
+     * `Self` por el tipo concreto S en firmas y cuerpos, via @c
+     * GenSubst{["Self"],[STRUCT S]} +
      * @c clone_type_with_subst / @c clone_stmt -- la misma maquinaria de los
-     * genericos.  Tras esto el resto del compilador solo ve structs concretos sin
-     * `Self`.  Aplica las prohibiciones: `Self` por VALOR en el layout, `Self` en
-     * un metodo `@Virtual`.  Ver [[proj_struct_self_inheritance]].
+     * genericos.  Tras esto el resto del compilador solo ve structs concretos
+     * sin `Self`.  Aplica las prohibiciones: `Self` por VALOR en el layout,
+     * `Self` en un metodo `@Virtual`.  Ver [[proj_struct_self_inheritance]].
      */
     void flatten_struct_inheritance();
 
     /**
      * @brief Verifica que cada struct que declara `: IConcepto` satisface ese
      *        concepto.  Coste cero: es una comprobacion comptime (misma via que
-     *        `where T: C`), no genera codigo ni vtables.  Distinto de heredar de
-     *        un `@Abstract` (que aporta campos + implementacion): aqui la
-     *        interfaz solo OBLIGA la forma (contrato), no da codigo.
+     *        `where T: C`), no genera codigo ni vtables.  Distinto de heredar
+     * de un `@Abstract` (que aporta campos + implementacion): aqui la interfaz
+     * solo OBLIGA la forma (contrato), no da codigo.
      */
     void verify_struct_interface_conformance();
 
     /**
      * @brief @Virtual: true si `value` es asignable a `target` por upcast de
      * puntero `Derivado* -> Base*` (herencia estatica de structs).  Recorre la
-     * cadena super_name del pointee de @p value buscando el pointee de @p target.
-     * Layout-compatible (el derivado embebe la base al inicio, vptr en offset 0).
+     * cadena super_name del pointee de @p value buscando el pointee de @p
+     * target. Layout-compatible (el derivado embebe la base al inicio, vptr en
+     * offset 0).
      */
     bool struct_ptr_upcast_ok(const Type &target, const Type &value) const;
 
@@ -874,14 +887,14 @@ class TypeChecker {
     /// instanciaciones ya vienen resueltas del clon; las plantillas se saltan
     /// (no producen IR y sus `when:` sobre T no tienen respuesta fuera de una
     /// instanciacion).
-    void resolve_complexity_decls_(
-        std::vector<std::unique_ptr<ast::Node>> &decls);
+    void
+    resolve_complexity_decls_(std::vector<std::unique_ptr<ast::Node>> &decls);
 
     /**
      * @brief Monomorphizacion de funcion generica.  Clona la FunctionDecl
-     * template sustituyendo los type_params, la anyade a @c mod_.decls (para que
-     * collect_globals registre su firma y el lowering la baje) y devuelve el
-     * nombre mangled (e.g. "id_i64").  Idempotente.
+     * template sustituyendo los type_params, la anyade a @c mod_.decls (para
+     * que collect_globals registre su firma y el lowering la baje) y devuelve
+     * el nombre mangled (e.g. "id_i64").  Idempotente.
      */
     std::string monomorphize_function(const std::string &template_name,
                                       const std::vector<Type> &args,
@@ -994,7 +1007,8 @@ class TypeChecker {
     void verify_pending_type_bounds();
 
     /**
-     * @brief Disponibilidad condicional de un metodo por su clausula `where` (#6).
+     * @brief Disponibilidad condicional de un metodo por su clausula `where`
+     * (#6).
      *
      * Modelo Rust `impl<T: Bound>` / Swift `extension where`.  Un metodo de un
      * struct/clase generico con `where T: Concepto` (sobre un type-param del
@@ -1012,19 +1026,21 @@ class TypeChecker {
      * (has_method) sobre un type-param del contenedor se veria como no
      * satisfecho aqui; no debe usarse para filtrar existencia.
      */
-    bool method_available_for_subst(
-        const ast::ClassMethodDecl *m,
-        const std::vector<std::string> &container_params,
-        const std::vector<Type> &container_args,
-        std::vector<ast::TypeBound> &method_only);
+    bool
+    method_available_for_subst(const ast::ClassMethodDecl *m,
+                               const std::vector<std::string> &container_params,
+                               const std::vector<Type> &container_args,
+                               std::vector<ast::TypeBound> &method_only);
 
-    /// Registra @p m como no-disponible en la instanciacion @p container_mangled
-    /// (por su `where`), para dar un mensaje claro si se intenta llamar.
+    /// Registra @p m como no-disponible en la instanciacion @p
+    /// container_mangled (por su `where`), para dar un mensaje claro si se
+    /// intenta llamar.
     void record_unavailable_method(const std::string &container_mangled,
                                    const ast::ClassMethodDecl *m);
 
     /**
-     * @brief Elige la especializacion de struct mas especifica para @p args (#7).
+     * @brief Elige la especializacion de struct mas especifica para @p args
+     * (#7).
      *
      * Busca en @c struct_specializations_[base] la especializacion (total o
      * parcial) cuyo patron matchee @p args; entre varias, la MAS ESPECIFICA
@@ -1034,23 +1050,17 @@ class TypeChecker {
      * devuelve nullptr (el llamante usa el template primario).  Implementado
      * en src/vx/specialization.cpp.
      */
-    const ast::StructDecl *
-    select_struct_specialization(const std::string &base,
-                                 const std::vector<Type> &args,
-                                 std::vector<std::string> &out_params,
-                                 std::vector<Type> &out_args);
+    const ast::StructDecl *select_struct_specialization(
+        const std::string &base, const std::vector<Type> &args,
+        std::vector<std::string> &out_params, std::vector<Type> &out_args);
     /// #7: idem para CLASES genericas.  En specialization.cpp.
-    const ast::ClassDecl *
-    select_class_specialization(const std::string &base,
-                                const std::vector<Type> &args,
-                                std::vector<std::string> &out_params,
-                                std::vector<Type> &out_args);
+    const ast::ClassDecl *select_class_specialization(
+        const std::string &base, const std::vector<Type> &args,
+        std::vector<std::string> &out_params, std::vector<Type> &out_args);
     /// #7: idem para FUNCIONES genericas.  En specialization.cpp.
-    const ast::FunctionDecl *
-    select_function_specialization(const std::string &base,
-                                   const std::vector<Type> &args,
-                                   std::vector<std::string> &out_params,
-                                   std::vector<Type> &out_args);
+    const ast::FunctionDecl *select_function_specialization(
+        const std::string &base, const std::vector<Type> &args,
+        std::vector<std::string> &out_params, std::vector<Type> &out_args);
 
     /// L2.3: stack de contexto.  Cuando check_var_decl o check_assign
     /// procesa `Maybe<i32> a = Maybe.Some(42)`, push ("Maybe","Maybe_i32")
@@ -1693,9 +1703,10 @@ class TypeChecker {
      * coste en builds normales.
      */
     struct ComptimeBlockSnapshot {
-        std::string name;      ///< Nombre de la variable o "static_assert".
-        std::string scope;     ///< Ambito; e.g. "comptime@<linea>".
-        std::string type_kind; ///< "int"|"string"|"array"|"struct"|"type"|"assert".
+        std::string name;  ///< Nombre de la variable o "static_assert".
+        std::string scope; ///< Ambito; e.g. "comptime@<linea>".
+        std::string
+            type_kind; ///< "int"|"string"|"array"|"struct"|"type"|"assert".
         std::string value_str; ///< Representacion legible del valor.
     };
 
@@ -1745,17 +1756,18 @@ class TypeChecker {
     /// Solo se llena con @c capture_comptime_block_locals_ activo (LSP).
     std::unordered_map<std::string, int64_t> lsp_var_values_;
     /// Mini-evaluador comptime de enteros/bools: literales, variables conocidas
-    /// (@c lsp_var_values_), builtins escalares y operadores logicos/aritmeticos.
-    /// Devuelve true y escribe @p out si la expresion es evaluable.
+    /// (@c lsp_var_values_), builtins escalares y operadores
+    /// logicos/aritmeticos. Devuelve true y escribe @p out si la expresion es
+    /// evaluable.
     bool lsp_eval_int(const ast::Expr *e, int64_t *out);
     /// Evalua un builtin de introspeccion que da un escalar/bool (sizeof,
-    /// field_count, has_field, is_subtype, is_float, ...).  No cubre los que dan
-    /// string.  Publico: ademas del LSP lo usa el lowering para resolver en
+    /// field_count, has_field, is_subtype, is_float, ...).  No cubre los que
+    /// dan string.  Publico: ademas del LSP lo usa el lowering para resolver en
     /// comptime los predicados de tipo y emitirlos como constante.
-public:
+  public:
     bool lsp_eval_builtin_scalar(const ast::CallExpr *e, int64_t *out);
 
-private:
+  private:
     std::unordered_map<std::string, ComptimeConst> comptime_const_values_;
     std::vector<std::unordered_map<std::string, ComptimeConst>>
         comptime_const_locals_;
@@ -1941,7 +1953,6 @@ private:
     }
 
   private:
-
     ///  M.L26: set de nombres que @c lookup_with_depth resolvio
     /// exitosamente.  Mutable porque el lookup es @c const pero el
     /// tracking es metadata observacional, no afecta la semantica.
@@ -1963,7 +1974,7 @@ private:
     std::unordered_map<std::string, uint32_t> ns_idx_by_local_name_;
 
     /// NS short-form: alias del ULTIMO segmento de un namespace punteado
-    /// (`org.geo.shapes` -> `shapes`) hacia su indice, cuando es UNICO.  Permite
+    /// (`org.geo.shapes` -> `shapes`) hacia su indice, cuando es UNICO. Permite
     /// acceder por el ultimo segmento (`shapes.area`) ademas del path completo.
     /// @c ns_short_ambiguous_ marca los segmentos que aparecen en 2+ namespaces
     /// (no se resuelve el short-form; hay que usar el path completo).
@@ -1973,7 +1984,8 @@ private:
     /// NS.2 round-trip: namespaces DECLARADOS por este modulo (via
     /// `namespace X;`), para que el export al .vxi sepa que la funcion
     /// mangled `mylib__helper` pertenece al namespace `mylib` con nombre
-    /// publico `helper`.  Clave = mangled_label; valor = (ns_path, public_name).
+    /// publico `helper`.  Clave = mangled_label; valor = (ns_path,
+    /// public_name).
     std::unordered_map<std::string, std::pair<std::string, std::string>>
         declared_ns_symbols_;
 
@@ -1990,8 +2002,7 @@ private:
                                      const std::string &public_name) {
         declared_ns_symbols_[mangled_label] = {ns_path, public_name};
     }
-    const std::unordered_map<std::string,
-                             std::pair<std::string, std::string>> &
+    const std::unordered_map<std::string, std::pair<std::string, std::string>> &
     declared_ns_symbols() const {
         return declared_ns_symbols_;
     }
@@ -2020,7 +2031,6 @@ private:
     std::unordered_map<std::string, std::vector<std::string>> target_skipped_;
 
   public:
-
   private:
   public:
     ///  M.7: namespace de un modulo importado.  Cada entry
@@ -2310,11 +2320,13 @@ private:
     /// `struct Caja<T*>` parcial).  Mapea nombre base -> indices en
     /// mod_.decls de las especializaciones.  Al instanciar `Caja<X>` se
     /// elige la mas especifica que matchee (ver select_struct_specialization).
-    std::unordered_map<std::string, std::vector<size_t>> struct_specializations_;
+    std::unordered_map<std::string, std::vector<size_t>>
+        struct_specializations_;
     /// #7: especializaciones de CLASE (mismo modelo que structs).
     std::unordered_map<std::string, std::vector<size_t>> class_specializations_;
     /// #7: especializaciones de FUNCION generica (`R id<i64>(...)`).
-    std::unordered_map<std::string, std::vector<size_t>> function_specializations_;
+    std::unordered_map<std::string, std::vector<size_t>>
+        function_specializations_;
     /// Templates de FUNCIONES genericas (`T id<T>(T x)`).  Mapea template_name
     /// -> indice en mod_.decls.  Cada llamada `id<i64>(...)` (o con args
     /// inferidos) se monomorphiza via monomorphize_function().
@@ -2343,8 +2355,9 @@ private:
     };
     std::vector<PendingBoundCheck> pending_bound_checks_;
     /// #6: metodos omitidos por su `where` en una instanciacion concreta.
-    /// Clave = contenedor mangled (`atomic_f32`); valor = [(metodo, requisitos)]
-    /// para dar un mensaje claro si se intenta llamar el metodo no disponible.
+    /// Clave = contenedor mangled (`atomic_f32`); valor = [(metodo,
+    /// requisitos)] para dar un mensaje claro si se intenta llamar el metodo no
+    /// disponible.
     std::unordered_map<std::string,
                        std::vector<std::pair<std::string, std::string>>>
         unavailable_methods_;
@@ -2352,7 +2365,7 @@ private:
     /// AST del contenedor + chequear su body (drenada por
     /// drain_pending_method_monos tras check_functions).
     struct PendingMethodMono {
-        std::string container;                       ///< struct/clase
+        std::string container;                        ///< struct/clase
         bool is_struct = false;                       ///< true si struct
         std::unique_ptr<ast::ClassMethodDecl> method; ///< clon sustituido
     };
@@ -2539,8 +2552,7 @@ private:
     }
 
     void register_imported_enum(const std::string &name, EnumLayout L) {
-        if (getenv("VX_DBG_REG"))
-        {
+        if (getenv("VX_DBG_REG")) {
             fprintf(stderr, "[REG] %s is_valued=%d nvars=%d:", name.c_str(),
                     (int)L.is_valued, (int)L.variants.size());
             for (const auto &v : L.variants)
@@ -2693,7 +2705,8 @@ private:
     /// construir TODOS los layouts de overlay), para que un resolver pueda usar
     /// `parent<Otro>()` aunque Otro se defina despues (dependencia circular:
     /// PeImage.Imports usa ImportDesc; ImportDesc.name usa parent<PeImage>()).
-    std::vector<std::pair<const ast::StructDecl *, const ast::StructFieldDecl *>>
+    std::vector<
+        std::pair<const ast::StructDecl *, const ast::StructFieldDecl *>>
         pending_overlay_resolvers_;
     void check_overlay_resolvers_deferred();
 

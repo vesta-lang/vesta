@@ -7,11 +7,13 @@
 
 /**
  * @file tests/jit/test_next_use.cpp
- * @brief MachineNextUseFacts (nivel MachineIR): next-use por vreg en la numeracion
- *        de build_intervals (2 por instr, uso en 2*gi).  Valida (1) next-use lineal
- *        + sentinela de vreg muerto + distancia, (2) numeracion CONTINUA cross-block
- *        (gi global, no reinicia por bloque), y (3) el tipo fuerte codegen::LinearPos.
- *        Construye MFunctions de juguete a mano, como test_interval.
+ * @brief MachineNextUseFacts (nivel MachineIR): next-use por vreg en la
+ * numeracion de build_intervals (2 por instr, uso en 2*gi).  Valida (1)
+ * next-use lineal
+ *        + sentinela de vreg muerto + distancia, (2) numeracion CONTINUA
+ * cross-block (gi global, no reinicia por bloque), y (3) el tipo fuerte
+ * codegen::LinearPos. Construye MFunctions de juguete a mano, como
+ * test_interval.
  */
 
 #include "jit/interval.h"
@@ -23,22 +25,27 @@ using namespace jit;
 static int g_checks = 0;
 static int g_fail = 0;
 
-#define CHECK(cond, msg)                                                     \
-    do {                                                                     \
-        ++g_checks;                                                          \
-        if (!(cond)) {                                                       \
-            ++g_fail;                                                        \
-            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);        \
-        }                                                                    \
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fail;                                                          \
+            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);          \
+        }                                                                      \
     } while (0)
 
-static MOperand imm(int32_t v) { return MOperand::make_imm32(v); }
+static MOperand imm(int32_t v) {
+    return MOperand::make_imm32(v);
+}
 
 /// Azucar: envuelve un uint32_t crudo como posicion del dominio MachineIR.
-static constexpr codegen::LinearPos P(uint32_t v) { return codegen::LinearPos{v}; }
+static constexpr codegen::LinearPos P(uint32_t v) {
+    return codegen::LinearPos{v};
+}
 
 int main() {
-    std::printf("=== test_next_use (next-use MachineIR, codegen::LinearPos) ===\n");
+    std::printf(
+        "=== test_next_use (next-use MachineIR, codegen::LinearPos) ===\n");
 
     // -----------------------------------------------------------------------
     // (1) Straight-line.  Numeracion: instr i -> use@2i, def@2i+1.
@@ -84,7 +91,8 @@ int main() {
               "v3 muerto -> distancia infinita");
         // Belady: en el punto del ADD (pos 4), v0/v1 mueren enseguida (mejor
         // victima) que v2 (que se reusa en 6).
-        CHECK(f.has_uses(0) && f.has_uses(1) && f.has_uses(2), "v0/v1/v2 usados");
+        CHECK(f.has_uses(0) && f.has_uses(1) && f.has_uses(2),
+              "v0/v1/v2 usados");
         // Fuera de rango (defensivo).
         CHECK(f.next_use_after(99, P(0)) == MachineNextUseFacts::NO_NEXT_USE,
               "vreg fuera de rango -> NO_NEXT_USE (sin crash)");

@@ -11,8 +11,8 @@
  *
  * La base no vive aqui: es del ASA (@c analysis/asa/base_hechos.h) y el JIT es
  * UNO de sus consumidores, igual que el volcado, el nativo o una herramienta.
- * Lo que si es del JIT es la pregunta que se hace en sus decisiones, y eso es lo
- * que declara este fichero.
+ * Lo que si es del JIT es la pregunta que se hace en sus decisiones, y eso es
+ * lo que declara este fichero.
  *
  * @c JitFactBase es el nombre con el que el JIT llama a esa base.  Se mantiene
  * porque es como la nombran sus consumidores, no porque haya dos cosas.
@@ -51,7 +51,7 @@ using analysis::asa::volcar_hechos;
  * veredicto lleva su derivacion, en datos).
  */
 struct CotasDeLosSitios {
-    bool     hay = false;            ///< veredicto: algun argumento acotado.
+    bool hay = false;                ///< veredicto: algun argumento acotado.
     uint32_t sitios = 0;             ///< llamadas y reservas miradas.
     uint32_t sitios_con_cota = 0;    ///< de esas, cuantas traian algo sabido.
     uint32_t operandos = 0;          ///< argumentos mirados en total.
@@ -59,8 +59,8 @@ struct CotasDeLosSitios {
 
     /// La primera prueba concreta: que sitio, que valor y que se sabia de el.
     /// Vacia si el veredicto es que no.
-    std::string          sitio;
-    uint32_t             valor = 0;
+    std::string sitio;
+    uint32_t valor = 0;
     analysis::ValueRange rango;
 };
 
@@ -78,11 +78,11 @@ struct CotasDeLosSitios {
  * @param rangos Rangos de @p fn, recibidos de la base de hechos.
  * @return El recuento y la prueba.
  */
-CotasDeLosSitios cotas_de_los_sitios(const ir::IrFunction         &fn,
+CotasDeLosSitios cotas_de_los_sitios(const ir::IrFunction &fn,
                                      const analysis::RangeFacts &rangos);
 
 /// Azucar sobre @c cotas_de_los_sitios cuando solo interesa el veredicto.
-inline bool hay_argumento_acotado(const ir::IrFunction         &fn,
+inline bool hay_argumento_acotado(const ir::IrFunction &fn,
                                   const analysis::RangeFacts &rangos) {
     return cotas_de_los_sitios(fn, rangos).hay;
 }

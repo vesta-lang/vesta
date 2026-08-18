@@ -18,10 +18,11 @@
  *        genera codigo mas eficiente.
  *
  * Es la base del refactor completo del asm inline (no solo atomicos): mientras
- * el reconocedor de patrones (@ref asm_lift_detect) mapea secuencias conocidas a
- * ops tipados de alto nivel (ATOMIC_CAS...), este lifter cubre el caso general
- * instruccion-a-instruccion.  Crece bajo demanda: instruccion fuera del subset
- * soportado -> devuelve false (el llamador cae a la emision INLINE_ASM opaca).
+ * el reconocedor de patrones (@ref asm_lift_detect) mapea secuencias conocidas
+ * a ops tipados de alto nivel (ATOMIC_CAS...), este lifter cubre el caso
+ * general instruccion-a-instruccion.  Crece bajo demanda: instruccion fuera del
+ * subset soportado -> devuelve false (el llamador cae a la emision INLINE_ASM
+ * opaca).
  */
 
 #ifndef VESTA_VX_ASM_ASM_LIFT_GENERAL_H
@@ -44,12 +45,12 @@ namespace vx {
 /**
  * @brief Registro ligado a una variable Vesta via @c register(): su slot ALLOCA
  *        y el ancho (bits) del tipo de la variable.  El ancho es imprescindible
- *        para cargar/escribir el slot EXACTO: @c register("eax") @c u32 tiene un
- *        slot de 4 bytes, @c register("rax") @c u64 uno de 8.
+ *        para cargar/escribir el slot EXACTO: @c register("eax") @c u32 tiene
+ * un slot de 4 bytes, @c register("rax") @c u64 uno de 8.
  */
 struct AsmBoundReg {
-    ir::IrValueId slot;   ///< dst del ALLOCA del var
-    int width_bits = 64;  ///< 8/16/32/64 segun el tipo de la variable
+    ir::IrValueId slot;  ///< dst del ALLOCA del var
+    int width_bits = 64; ///< 8/16/32/64 segun el tipo de la variable
 };
 
 /**
@@ -64,11 +65,10 @@ struct AsmBoundReg {
  * @return true si TODO el bloque se lifto (0 INLINE_ASM); false si aparece una
  *         instruccion/forma fuera del subset -> el llamador emite INLINE_ASM.
  */
-bool asm_lift_general(
-    ir::IrFunction &fn, uint32_t block, instr_db::Isa isa,
-    const std::string &body,
-    const std::unordered_map<std::string, AsmBoundReg> &bound, uint32_t line,
-    uint32_t *out_exit = nullptr);
+bool asm_lift_general(ir::IrFunction &fn, uint32_t block, instr_db::Isa isa,
+                      const std::string &body,
+                      const std::unordered_map<std::string, AsmBoundReg> &bound,
+                      uint32_t line, uint32_t *out_exit = nullptr);
 
 } // namespace vx
 

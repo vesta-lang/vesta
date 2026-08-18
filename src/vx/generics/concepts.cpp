@@ -36,12 +36,12 @@ namespace vx {
 
 bool is_builtin_concept(const std::string &name) {
     static const std::unordered_set<std::string> set = {
-        "Numeric",  "Number",   "Integer",   "Int",      "Float",
-        "Signed",   "Unsigned", "Bool",      "Char",     "Pointer",
-        "String",   "Comparable", "Ordered", "Eq",       "Sized",
-        "Copyable", "Hashable", "Stringable", "Default",  "Primitive",
-        "Class",    "Struct",   "Callable",  "Destructible", "Iterable",
-        "Shareable", "Enum",    "ValuedEnum", "Scalar",
+        "Numeric",   "Number",     "Integer",    "Int",          "Float",
+        "Signed",    "Unsigned",   "Bool",       "Char",         "Pointer",
+        "String",    "Comparable", "Ordered",    "Eq",           "Sized",
+        "Copyable",  "Hashable",   "Stringable", "Default",      "Primitive",
+        "Class",     "Struct",     "Callable",   "Destructible", "Iterable",
+        "Shareable", "Enum",       "ValuedEnum", "Scalar",
     };
     return set.count(name) > 0;
 }
@@ -52,14 +52,12 @@ static bool eval_builtin_concept(const TypeChecker &tc, const std::string &name,
                                  const Type &t, bool &found) {
     found = true;
     const PrimitiveKind k = t.kind;
-    const bool is_int =
-        k == PrimitiveKind::I8 || k == PrimitiveKind::I16 ||
-        k == PrimitiveKind::I32 || k == PrimitiveKind::I64 ||
-        k == PrimitiveKind::U8 || k == PrimitiveKind::U16 ||
-        k == PrimitiveKind::U32 || k == PrimitiveKind::U64;
-    const bool is_signed =
-        k == PrimitiveKind::I8 || k == PrimitiveKind::I16 ||
-        k == PrimitiveKind::I32 || k == PrimitiveKind::I64;
+    const bool is_int = k == PrimitiveKind::I8 || k == PrimitiveKind::I16 ||
+                        k == PrimitiveKind::I32 || k == PrimitiveKind::I64 ||
+                        k == PrimitiveKind::U8 || k == PrimitiveKind::U16 ||
+                        k == PrimitiveKind::U32 || k == PrimitiveKind::U64;
+    const bool is_signed = k == PrimitiveKind::I8 || k == PrimitiveKind::I16 ||
+                           k == PrimitiveKind::I32 || k == PrimitiveKind::I64;
     const bool is_flt = k == PrimitiveKind::F32 || k == PrimitiveKind::F64;
     const bool is_num = is_int || is_flt;
     const bool is_prim = comptime_is_primitive(t);
@@ -148,8 +146,9 @@ ConceptEval comptime_eval_concept(const TypeChecker &tc,
 
     auto it = tc.concepts().find(name);
     if (it == tc.concepts().end() && name.find('.') != std::string::npos) {
-        // NS.2: concepto cualificado por namespace (`mat.Numerico`).  El flatten
-        // lo registro como `mat__Numerico`; mapear `.`->`__` y reintentar.
+        // NS.2: concepto cualificado por namespace (`mat.Numerico`).  El
+        // flatten lo registro como `mat__Numerico`; mapear `.`->`__` y
+        // reintentar.
         std::string mangled;
         for (char c : name)
             mangled += (c == '.') ? std::string("__") : std::string(1, c);
@@ -199,8 +198,8 @@ ConceptEval comptime_eval_concept(const TypeChecker &tc,
         auto &mut_tc = const_cast<TypeChecker &>(tc);
         ComptimeControl ctrl;
         const bool ok = comptime_eval_stmt(mut_tc, cloned.get(), ctrl);
-        r.satisfied =
-            ok && ctrl.returned && ctrl.return_value.ok && ctrl.return_value.value != 0;
+        r.satisfied = ok && ctrl.returned && ctrl.return_value.ok &&
+                      ctrl.return_value.value != 0;
         return r;
     }
     case ast::ConceptKind::Structural: {
@@ -211,8 +210,7 @@ ConceptEval comptime_eval_concept(const TypeChecker &tc,
         const std::vector<ClassMethodInfo> *methods = nullptr;
         if (t.kind == PrimitiveKind::CLASS) {
             auto itc = tc.class_layouts().find(t.struct_name);
-            if (itc != tc.class_layouts().end())
-                methods = &itc->second.methods;
+            if (itc != tc.class_layouts().end()) methods = &itc->second.methods;
         } else if (t.kind == PrimitiveKind::STRUCT) {
             auto its = tc.struct_layouts().find(t.struct_name);
             if (its != tc.struct_layouts().end())
@@ -373,9 +371,9 @@ void TypeChecker::verify_pending_type_bounds() {
             const ConceptEval ev =
                 comptime_eval_concept(*this, pc.concept_name, pc.arg);
             if (!ev.found) {
-                diags_.error(pc.loc, "concepto desconocido '" +
-                                         pc.concept_name + "' en el bound de '" +
-                                         pc.type_param + "'");
+                diags_.error(pc.loc,
+                             "concepto desconocido '" + pc.concept_name +
+                                 "' en el bound de '" + pc.type_param + "'");
                 continue;
             }
             if (!ev.satisfied) {

@@ -21,13 +21,13 @@ using namespace vx;
 
 static int g_checks = 0;
 static int g_fail = 0;
-#define CHECK(cond, msg)                                                        \
-    do {                                                                        \
-        ++g_checks;                                                             \
-        if (!(cond)) {                                                          \
-            ++g_fail;                                                           \
-            std::printf("  FAIL: %s (linea %d)\n", (msg), __LINE__);            \
-        }                                                                       \
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fail;                                                          \
+            std::printf("  FAIL: %s (linea %d)\n", (msg), __LINE__);           \
+        }                                                                      \
     } while (0)
 
 // Construye un SymbolEntry sintetico.  content_hash = hash del "cuerpo" para
@@ -68,7 +68,8 @@ int main() {
             sym("m.B", 222, {"C"}),
             sym("m.C", 333, {}),
         });
-        SemanticIndex i2 = make_index({ // mismo grafo, orden distinto.
+        SemanticIndex i2 = make_index({
+            // mismo grafo, orden distinto.
             sym("m.C", 333, {}),
             sym("m.A", 111, {"B", "C"}),
             sym("m.B", 222, {"C"}),
@@ -90,8 +91,7 @@ int main() {
         MerkleKeys k0 = compute_merkle_keys(sample_AB(111, 222));
         MerkleKeys k1 = compute_merkle_keys(sample_AB(111, 999)); // B cambia
         CHECK(k1.of("m.B") != k0.of("m.B"), "B cambia de clave");
-        CHECK(k1.of("m.A") != k0.of("m.A"),
-              "A (dependiente) cambia por B");
+        CHECK(k1.of("m.A") != k0.of("m.A"), "A (dependiente) cambia por B");
     }
 
     // -- 3. Independencia: cambiar A no cambia B (que no depende de A) --------
@@ -130,8 +130,7 @@ int main() {
               "std.core misma clave cross-proyecto");
         CHECK(ka.of("std.util") == kb.of("std.util"),
               "std.util misma clave cross-proyecto");
-        CHECK(ka.of("app.main") != kb.of("app.otra"),
-              "codigo de app difiere");
+        CHECK(ka.of("app.main") != kb.of("app.otra"), "codigo de app difiere");
     }
 
     // -- 5. Ciclos (SCC): A<->B mutuamente recursivos; cambiar A cambia ambos -
@@ -147,10 +146,8 @@ int main() {
         MerkleKeys k1 = compute_merkle_keys(cyc(9, 2)); // solo A cambia
         CHECK(k0.of("m.A") != 0 && k0.of("m.B") != 0, "ciclo tiene claves");
         CHECK(k1.of("m.A") != k0.of("m.A"), "A cambia");
-        CHECK(k1.of("m.B") != k0.of("m.B"),
-              "B (mismo ciclo) cambia con A");
-        CHECK(k1.of("m.C") != k0.of("m.C"),
-              "C (dependiente del ciclo) cambia");
+        CHECK(k1.of("m.B") != k0.of("m.B"), "B (mismo ciclo) cambia con A");
+        CHECK(k1.of("m.C") != k0.of("m.C"), "C (dependiente del ciclo) cambia");
         CHECK(k0.of("m.A") != k0.of("m.B"),
               "miembros del ciclo tienen claves distintas");
     }
@@ -267,7 +264,8 @@ int main() {
         mod.functions.push_back(fA);
         mod.functions.push_back(fB);
 
-        // Extraer fragmentos, pasar por el CAS (serializar/parsear) y re-montar.
+        // Extraer fragmentos, pasar por el CAS (serializar/parsear) y
+        // re-montar.
         const std::string root =
             (fs::temp_directory_path() / "vx_cas_frag").string();
         std::error_code ec;
@@ -280,7 +278,8 @@ int main() {
             // Los indices de la fn del fragmento son LOCALES (0..k-1).
             CHECK(frag.blobs.size() >= 1, "fragmento con blobs");
             std::vector<uint8_t> bytes = serialize_ir_fragment(frag);
-            // Guardar/leer del CAS con una clave arbitraria (aqui hash del nombre).
+            // Guardar/leer del CAS con una clave arbitraria (aqui hash del
+            // nombre).
             const MerkleKey k = static_cast<MerkleKey>(
                 std::hash<std::string>{}(fn.name) | 1ull);
             CHECK(cas.put(k, bytes), "put fragmento");
@@ -326,7 +325,8 @@ int main() {
             const size_t p = asm_txt.find("code.s_");
             CHECK(p != std::string::npos, "B: RAW_ASM tiene code.s_");
             if (p != std::string::npos) {
-                uint64_t idx = std::strtoull(asm_txt.c_str() + p + 7, nullptr, 10);
+                uint64_t idx =
+                    std::strtoull(asm_txt.c_str() + p + 7, nullptr, 10);
                 CHECK(blob_str(reasm, idx) == "xyz",
                       "B: code.s_ resuelve a xyz");
             }
@@ -346,7 +346,8 @@ int main() {
         CHECK(same.ir_fingerprint() == ir0 && same.full_fingerprint() == full0,
               "config identica -> mismos fp");
 
-        // Dimensiones que CAMBIAN el IR pre-optimize -> cambian ir_fp Y full_fp.
+        // Dimensiones que CAMBIAN el IR pre-optimize -> cambian ir_fp Y
+        // full_fp.
         {
             BuildConfig c = base;
             c.asm_target_bits = 32;
@@ -382,7 +383,8 @@ int main() {
             c.aot_vec_width = 32;
             CHECK(c.ir_fingerprint() == ir0,
                   "aot_vec_width NO cambia ir_fp (post-opt)");
-            CHECK(c.full_fingerprint() != full0, "aot_vec_width cambia full_fp");
+            CHECK(c.full_fingerprint() != full0,
+                  "aot_vec_width cambia full_fp");
         }
         {
             BuildConfig c = base;

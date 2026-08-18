@@ -169,12 +169,14 @@ inline TargetRegInfo build_x86_64_target(bool sysv, bool reserve_vec_acc = true,
     /* XMM10..XMM13 (ids 26..29): los U=4 acumuladores vectoriales de las
      * reducciones/FMA (VEC_ACC_*), que deben sobrevivir TODO el bucle en
      * registros (no en memoria) y ser INDEPENDIENTES (unroll -> oculta la
-     * latencia de la cadena vaddpd).  Reserva DEMAND-DRIVEN: solo se excluyen de
-     * allocatable en funciones que USAN el path de reduccion (@p reserve_vec_acc
-     * = true); en las que NO lo usan (la gran mayoria) XMM10-13 son asignables
-     * para FP escalar -> 14 lanes en vez de 10.  El selector solo fija XMM13-idx
-     * cuando hay ops VEC_ACC_*, asi que la MISMA condicion decide reserva Y uso
-     * -> coherente (nadie pisa un acumulador vivo).  acc_idx 0..3 -> XMM13..10. */
+     * latencia de la cadena vaddpd).  Reserva DEMAND-DRIVEN: solo se excluyen
+     * de allocatable en funciones que USAN el path de reduccion (@p
+     * reserve_vec_acc = true); en las que NO lo usan (la gran mayoria) XMM10-13
+     * son asignables para FP escalar -> 14 lanes en vez de 10.  El selector
+     * solo fija XMM13-idx cuando hay ops VEC_ACC_*, asi que la MISMA condicion
+     * decide reserva Y uso
+     * -> coherente (nadie pisa un acumulador vivo).  acc_idx 0..3 -> XMM13..10.
+     */
     /* XMM14/15 son el scratch del reescritor (materializar derrames FP,
      * legalizar las operaciones de dos operandos, romper ciclos al permutar).
      * Una funcion que NO hace nada de eso -- porque su unico uso del banco
@@ -187,8 +189,8 @@ inline TargetRegInfo build_x86_64_target(bool sysv, bool reserve_vec_acc = true,
      * coma flotante propias, porque esos registros solo se codifican con EVEX
      * y el codificador de esas no sabe.  Los operandos de un bloque asm si
      * pueden usarlos: ese texto lo ensambla otro que si sabe. */
-    const int fp_hi = reserve_vec_acc ? 25
-                      : (reserve_fp_scratch ? 29 : (wide512 ? 47 : 31));
+    const int fp_hi =
+        reserve_vec_acc ? 25 : (reserve_fp_scratch ? 29 : (wide512 ? 47 : 31));
     for (int i = 16; i <= fp_hi; ++i) {
         t.allocatable[FP].push_back(static_cast<uint8_t>(i));
         t.caller_saved[FP].push_back(static_cast<uint8_t>(i));
@@ -263,12 +265,14 @@ inline const TargetRegInfo &target_x86_32() {
 }
 
 /**
- * @brief @c TargetRegInfo x86-64 para el ABI @p sysv (cacheado por ABI x reserva).
+ * @brief @c TargetRegInfo x86-64 para el ABI @p sysv (cacheado por ABI x
+ * reserva).
  * @param reserve_vec_acc  true (defecto) = XMM10-13 reservados para VEC_ACC
- *        (funciones con reduccion vectorial); false = XMM10-13 asignables para FP
- *        escalar (funciones sin reduccion).  La reserva es DEMAND-DRIVEN.
+ *        (funciones con reduccion vectorial); false = XMM10-13 asignables para
+ * FP escalar (funciones sin reduccion).  La reserva es DEMAND-DRIVEN.
  */
-inline const TargetRegInfo &target_x86_64_abi(bool sysv, bool reserve_vec_acc = true,
+inline const TargetRegInfo &target_x86_64_abi(bool sysv,
+                                              bool reserve_vec_acc = true,
                                               bool reserve_fp_scratch = true,
                                               bool wide512 = false) {
     static const TargetRegInfo t[16] = {
@@ -318,8 +322,8 @@ inline constexpr bool host_is_sysv() noexcept {
 inline const TargetRegInfo &target_x86_64_vm_abi(bool reserve_vec_acc = true,
                                                  bool reserve_fp_scratch = true,
                                                  bool wide512 = false) {
-    return target_x86_64_abi(host_is_sysv(), reserve_vec_acc, reserve_fp_scratch,
-                             wide512);
+    return target_x86_64_abi(host_is_sysv(), reserve_vec_acc,
+                             reserve_fp_scratch, wide512);
 }
 
 /*
@@ -329,11 +333,25 @@ inline const TargetRegInfo &target_x86_64_vm_abi(bool reserve_vec_acc = true,
  * FP/SIMD v_n = 32 + n (32-63).  sp/x29/x30 no son registros-valor asignables.
  */
 enum : uint8_t {
-    A64_X0 = 0, A64_X8 = 8, A64_X15 = 15, A64_X16 = 16, A64_X17 = 17,
-    A64_X18 = 18, A64_X19 = 19, A64_X28 = 28, A64_X29_FP = 29, A64_X30_LR = 30,
+    A64_X0 = 0,
+    A64_X8 = 8,
+    A64_X15 = 15,
+    A64_X16 = 16,
+    A64_X17 = 17,
+    A64_X18 = 18,
+    A64_X19 = 19,
+    A64_X28 = 28,
+    A64_X29_FP = 29,
+    A64_X30_LR = 30,
     A64_SP = 31,
-    A64_V0 = 32, A64_V7 = 39, A64_V8 = 40, A64_V15 = 47, A64_V16 = 48,
-    A64_V29 = 61, A64_V30 = 62, A64_V31 = 63,
+    A64_V0 = 32,
+    A64_V7 = 39,
+    A64_V8 = 40,
+    A64_V15 = 47,
+    A64_V16 = 48,
+    A64_V29 = 61,
+    A64_V30 = 62,
+    A64_V31 = 63,
 };
 
 /**
@@ -356,30 +374,37 @@ inline TargetRegInfo build_arm64_target() {
     /* --- GP --- */
     t.scratch[GP] = {A64_X16, A64_X17}; // IP0/IP1: temporales del rewrite.
     /* Caller-saved asignables: x0..x15 (args + temporales). */
-    for (uint8_t r = A64_X0; r <= A64_X15; ++r) t.caller_saved[GP].push_back(r);
+    for (uint8_t r = A64_X0; r <= A64_X15; ++r)
+        t.caller_saved[GP].push_back(r);
     /* Callee-saved asignables: x19..x28. */
-    for (uint8_t r = A64_X19; r <= A64_X28; ++r) t.callee_saved[GP].push_back(r);
+    for (uint8_t r = A64_X19; r <= A64_X28; ++r)
+        t.callee_saved[GP].push_back(r);
     t.allocatable[GP] = t.caller_saved[GP];
     t.allocatable[GP].insert(t.allocatable[GP].end(),
                              t.callee_saved[GP].begin(),
                              t.callee_saved[GP].end());
     t.ret_reg[GP] = A64_X0;
-    for (uint8_t r = A64_X0; r <= 7; ++r) t.arg_regs[GP].push_back(r); // x0-x7
+    for (uint8_t r = A64_X0; r <= 7; ++r)
+        t.arg_regs[GP].push_back(r); // x0-x7
     t.reserved = {A64_X18, A64_X29_FP, A64_X30_LR, A64_SP};
 
     /* --- FP/SIMD --- */
     t.scratch[FP] = {A64_V30, A64_V31};
     /* Caller-saved: v0..v7 (args) + v16..v29. */
-    for (uint8_t r = A64_V0; r <= A64_V7; ++r) t.caller_saved[FP].push_back(r);
-    for (uint8_t r = A64_V16; r <= A64_V29; ++r) t.caller_saved[FP].push_back(r);
+    for (uint8_t r = A64_V0; r <= A64_V7; ++r)
+        t.caller_saved[FP].push_back(r);
+    for (uint8_t r = A64_V16; r <= A64_V29; ++r)
+        t.caller_saved[FP].push_back(r);
     /* Callee-saved: v8..v15. */
-    for (uint8_t r = A64_V8; r <= A64_V15; ++r) t.callee_saved[FP].push_back(r);
+    for (uint8_t r = A64_V8; r <= A64_V15; ++r)
+        t.callee_saved[FP].push_back(r);
     t.allocatable[FP] = t.caller_saved[FP];
     t.allocatable[FP].insert(t.allocatable[FP].end(),
                              t.callee_saved[FP].begin(),
                              t.callee_saved[FP].end());
     t.ret_reg[FP] = A64_V0;
-    for (uint8_t r = A64_V0; r <= A64_V7; ++r) t.arg_regs[FP].push_back(r);
+    for (uint8_t r = A64_V0; r <= A64_V7; ++r)
+        t.arg_regs[FP].push_back(r);
 
     return t;
 }

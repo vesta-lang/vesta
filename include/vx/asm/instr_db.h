@@ -1,13 +1,14 @@
 /**
  * @file instr_db.h
- * @brief Base de datos de instrucciones EMBEBIDA en el compilador (autocontenida,
- *        sin archivos externos).
+ * @brief Base de datos de instrucciones EMBEBIDA en el compilador
+ * (autocontenida, sin archivos externos).
  *
  * Las tablas (sintaxis por-ISA, y mas adelante coste por microarquitectura) las
  * genera @c tools/import/gen_cpp_db.py a partir de la DB (@c arch-data) y se
  * compilan DENTRO del compilador como @c .rodata estatica.  Asi el analisis de
  * asm (ASA), el LSP (hover) y el optimizer JIT/AOT resuelven cada instruccion a
- * su FORMA (identidad ISA) sin depender de ficheros ni parsear texto en runtime.
+ * su FORMA (identidad ISA) sin depender de ficheros ni parsear texto en
+ * runtime.
  *
  * El FormID es el indice denso del orden lexicografico de la clave estructural
  * (misma identidad que la DB); un @c match(mnemonico, operandos) resuelve el
@@ -26,20 +27,25 @@ namespace instr_db {
 /**
  * @brief Clase de operando.  Debe casar con @c _KIND del generador.
  *
- * Y no casaba: el generador emite @c flags como **6** y aqui se declaraba como 7,
- * que es el valor con el que el generador rellena lo que NO reconoce.  El
+ * Y no casaba: el generador emite @c flags como **6** y aqui se declaraba como
+ * 7, que es el valor con el que el generador rellena lo que NO reconoce.  El
  * comentario de los dos sitios decia que tenian que coincidir; solo faltaba que
  * alguien los comparase.
  *
- * La consecuencia era silenciosa y grande: los 3893 operandos de banderas de x86
- * no se reconocian como tales, asi que contaban como operandos ESCRITOS EN EL
- * TEXTO.  Con uno de mas, la aridad de la forma no casa nunca con la de la linea
+ * La consecuencia era silenciosa y grande: los 3893 operandos de banderas de
+ * x86 no se reconocian como tales, asi que contaban como operandos ESCRITOS EN
+ * EL TEXTO.  Con uno de mas, la aridad de la forma no casa nunca con la de la
+ * linea
  * -- `add rax, rbx` tiene dos operandos y la forma parecia tener tres --, y el
  * emparejador se quedaba en el nivel del mnemonico en vez de resolver la forma.
  * De ahi que casi 450 clases de x86 no se pudieran modelar.
  */
 enum DbOpKind : uint8_t {
-    OP_REG = 0, OP_MEM = 1, OP_IMM = 2, OP_AGEN = 3, OP_RELBR = 4,
+    OP_REG = 0,
+    OP_MEM = 1,
+    OP_IMM = 2,
+    OP_AGEN = 3,
+    OP_RELBR = 4,
     OP_ABSBR = 5,
     OP_FLAGS = 6, ///< banderas de condicion: no se escriben en el texto.
     /**
@@ -48,40 +54,49 @@ enum DbOpKind : uint8_t {
      *
      * Son 1357 en ARM, y NO son un error de etiquetado: son cosas que en A64 no
      * se escriben como un operando suelto -- la condicion de `b.eq`, que va
-     * pegada al mnemonico, o el nombre de la operacion de sistema de un `at` --.
-     * Por eso no cuentan como operando del texto, igual que las banderas.
+     * pegada al mnemonico, o el nombre de la operacion de sistema de un `at`
+     * --. Por eso no cuentan como operando del texto, igual que las banderas.
      *
      * Lo que SI queda por hacer es la OPCIONALIDAD: `ADDS_32_addsub_shift`
      * declara cinco operandos porque incluye el desplazamiento opcional
-     * (`{, <shift> #<amount>}`), y un `adds x0, x1, x2` escribe tres.  Esa es la
-     * razon real de que la aridad no case en ARM -- no esta clase --, y arreglarla
-     * pide que la fuente diga cuales son opcionales.
+     * (`{, <shift> #<amount>}`), y un `adds x0, x1, x2` escribe tres.  Esa es
+     * la razon real de que la aridad no case en ARM -- no esta clase --, y
+     * arreglarla pide que la fuente diga cuales son opcionales.
      */
     OP_OTHER = 7,
 };
 
 /// @c true si @p kind no es un operando que se escriba en el texto.  Los dos
-/// casos van juntos siempre, y tenerlo en un sitio evita que uno se quede atras.
+/// casos van juntos siempre, y tenerlo en un sitio evita que uno se quede
+/// atras.
 inline bool op_kind_is_textual(uint8_t kind) {
     return kind != OP_FLAGS && kind != OP_OTHER;
 }
 
 /// Bits de overlay (semantica que el encoding no da; casa con @c _OVL).
 enum DbOverlayBit : uint16_t {
-    OVL_BARRIER = 1u << 0, OVL_SERIALIZING = 1u << 1, OVL_ATOMIC = 1u << 2,
-    OVL_LL_SC = 1u << 3, OVL_MEM_ACQUIRE = 1u << 4, OVL_MEM_RELEASE = 1u << 5,
-    OVL_MEM_SEQ_CST = 1u << 6, OVL_NO_REORDER = 1u << 7, OVL_BRANCH = 1u << 8,
-    OVL_CALL = 1u << 9, OVL_RET = 1u << 10, OVL_SYSCALL = 1u << 11,
+    OVL_BARRIER = 1u << 0,
+    OVL_SERIALIZING = 1u << 1,
+    OVL_ATOMIC = 1u << 2,
+    OVL_LL_SC = 1u << 3,
+    OVL_MEM_ACQUIRE = 1u << 4,
+    OVL_MEM_RELEASE = 1u << 5,
+    OVL_MEM_SEQ_CST = 1u << 6,
+    OVL_NO_REORDER = 1u << 7,
+    OVL_BRANCH = 1u << 8,
+    OVL_CALL = 1u << 9,
+    OVL_RET = 1u << 10,
+    OVL_SYSCALL = 1u << 11,
 };
 
 /// Un operando de una forma (kind + ancho en bits + flags r/w/impl/suppr).
 struct DbOperand {
-    uint8_t kind;    ///< DbOpKind.
-    uint16_t width;  ///< bits (0 si no aplica).
-    uint8_t flags;   ///< bit0=read bit1=write bit2=implicit bit3=suppressed
-                     ///< bit4=OPCIONAL (se puede omitir al escribirla: en la
-                     ///< plantilla del MRAS va entre llaves).  Sin el, una forma
-                     ///< con opcionales no casa nunca por aridad.
+    uint8_t kind;   ///< DbOpKind.
+    uint16_t width; ///< bits (0 si no aplica).
+    uint8_t flags;  ///< bit0=read bit1=write bit2=implicit bit3=suppressed
+                    ///< bit4=OPCIONAL (se puede omitir al escribirla: en la
+                    ///< plantilla del MRAS va entre llaves).  Sin el, una forma
+                    ///< con opcionales no casa nunca por aridad.
     uint16_t regset; ///< indice a kStr del conjunto de registros permitido
                      ///< (p.ej. "AX", "DX", "GPR64", "-").  Para operandos
                      ///< IMPLICITOS de registro fijo nombra el registro
@@ -109,15 +124,16 @@ struct DbForm {
     /**
      * @name QUE banderas toca, no solo si toca alguna.
      *
-     * Un bit por bandera; el nombre de cada bit esta en @ref IsaData::flag_names,
-     * que es la leyenda de ESA ISA -- `cf`/`pf`/`af`/`zf`/`sf`/`of` en x86,
-     * `n`/`z`/`c`/`v` en ARM, ninguna en RISC-V --.  El juego sale de los datos y
-     * no de una lista escrita en el codigo, que seria la de una sola.
+     * Un bit por bandera; el nombre de cada bit esta en @ref
+     * IsaData::flag_names, que es la leyenda de ESA ISA --
+     * `cf`/`pf`/`af`/`zf`/`sf`/`of` en x86, `n`/`z`/`c`/`v` en ARM, ninguna en
+     * RISC-V --.  El juego sale de los datos y no de una lista escrita en el
+     * codigo, que seria la de una sola.
      *
-     * `memflags` dice SI toca alguna; esto dice CUALES, y es la diferencia entre
-     * un `bt` -- que solo deja el acarreo -- y un `cmp` -- que deja las seis --,
-     * o entre un `inc` y un `add`: `inc` no toca el acarreo, que es justo lo que
-     * permite encadenarlo con un `adc`.
+     * `memflags` dice SI toca alguna; esto dice CUALES, y es la diferencia
+     * entre un `bt` -- que solo deja el acarreo -- y un `cmp` -- que deja las
+     * seis --, o entre un `inc` y un `add`: `inc` no toca el acarreo, que es
+     * justo lo que permite encadenarlo con un `adc`.
      *
      * 0 = la fuente no lo dijo, que NO es lo mismo que no tocar ninguna.
      * @{
@@ -162,7 +178,8 @@ struct IsaData {
     unsigned flag_count = 0;
 };
 
-/// Accesores de las tablas de cada ISA (definidos en @c gen/instr_db_*_gen.cpp).
+/// Accesores de las tablas de cada ISA (definidos en @c
+/// gen/instr_db_*_gen.cpp).
 const IsaData &db_x86();
 const IsaData &db_arm64();
 const IsaData &db_arm32();
@@ -171,23 +188,24 @@ const IsaData &db_riscv();
 // ------------------------------------------------------------------------
 // Capa de COSTE por microarquitectura (latencia + puertos = ejecucion
 // paralela superescalar).  La consume el optimizer (scheduling) y el LSP
-// (hover: coste por microarq).  Tablas generadas en gen/instr_db_<isa>_cost_gen.cpp.
+// (hover: coste por microarq).  Tablas generadas en
+// gen/instr_db_<isa>_cost_gen.cpp.
 // ------------------------------------------------------------------------
 
 /// Uso de un puerto de ejecucion por una clase (para el modelo superescalar):
 /// @c port indexa el legado de puertos de la microarquitectura.
 struct AsmPortSlot {
-    uint8_t port;  ///< indice al legado de puertos de la microarq.
-    float uops;    ///< uops repartidos a ese grupo de puertos.
+    uint8_t port; ///< indice al legado de puertos de la microarq.
+    float uops;   ///< uops repartidos a ese grupo de puertos.
 };
 
 /// Clase de scheduling deduplicada (formas con el mismo coste comparten clase).
 struct AsmClass {
-    float recip_tp;    ///< throughput reciproco (1/IPC).
-    float latency;     ///< latencia maxima (proxy del camino critico del nodo).
-    float div_cycles;  ///< ciclos de division (-1 si no aplica).
-    uint16_t uops;     ///< uops emitidas.
-    uint8_t flags;     ///< bit0 microcoded, bit1 macro_fusible.
+    float recip_tp;   ///< throughput reciproco (1/IPC).
+    float latency;    ///< latencia maxima (proxy del camino critico del nodo).
+    float div_cycles; ///< ciclos de division (-1 si no aplica).
+    uint16_t uops;    ///< uops emitidas.
+    uint8_t flags;    ///< bit0 microcoded, bit1 macro_fusible.
     uint16_t ports_off; ///< offset en el pool de AsmPortSlot de la microarq.
     uint8_t ports_count;
 };
@@ -199,7 +217,7 @@ struct MicroarchData {
     uint16_t port_count;
     const AsmClass *classes;
     uint16_t class_count;
-    const AsmPortSlot *slots; ///< pool de puertos de todas las clases.
+    const AsmPortSlot *slots;  ///< pool de puertos de todas las clases.
     const int16_t *form_class; ///< FormID -> class_id (-1 = sin coste aqui).
     uint32_t form_count;
 };
@@ -216,9 +234,9 @@ const CostData &cost_riscv();
 
 /// Coste resuelto de una forma en una microarquitectura (resultado publico).
 struct AsmCost {
-    bool found = false;         ///< false = la microarq no cronometra esta forma.
-    float recip_tp = 0.0f;      ///< throughput reciproco.
-    float latency = 0.0f;       ///< latencia (camino critico del nodo).
+    bool found = false;    ///< false = la microarq no cronometra esta forma.
+    float recip_tp = 0.0f; ///< throughput reciproco.
+    float latency = 0.0f;  ///< latencia (camino critico del nodo).
     float div_cycles = -1.0f;
     uint16_t uops = 0;
     bool microcoded = false;
@@ -312,10 +330,10 @@ AsmBlockCost analyze_asm_cost(Isa isa, const std::string &body, uint32_t ua_id);
 /// Semantica de UNA instruccion de asm (para el grafo de dependencias).
 struct AsmInsnSem {
     int32_t form_id = -1;
-    bool modeled = false;   ///< false = operandos implicitos / no emparejada ->
-                            ///< se trata CONSERVADOR (no se reordena alrededor).
-    bool barrier = false;   ///< overlay barrera/serializante/atomica/rama/call/
-                            ///< ret/syscall: nada la cruza.
+    bool modeled = false; ///< false = operandos implicitos / no emparejada ->
+                          ///< se trata CONSERVADOR (no se reordena alrededor).
+    bool barrier = false; ///< overlay barrera/serializante/atomica/rama/call/
+                          ///< ret/syscall: nada la cruza.
     std::vector<std::string> reads;  ///< registros canonicos leidos.
     std::vector<std::string> writes; ///< registros canonicos escritos.
     bool reads_mem = false, writes_mem = false;
@@ -327,9 +345,9 @@ struct AsmInsnSem {
      * que permite no estorbar de mas: un `inc` no toca el acarreo, asi que no
      * choca con el `adc` que lo consume -- y con el bit grueso si chocaba --.
      *
-     * Son mascaras y no nombres a proposito: esto lo pregunta el planificador por
-     * cada par de instrucciones, y comparar dos enteros es una operacion.  Los
-     * nombres, que son para leer, los da @ref flag_names_of.
+     * Son mascaras y no nombres a proposito: esto lo pregunta el planificador
+     * por cada par de instrucciones, y comparar dos enteros es una operacion.
+     * Los nombres, que son para leer, los da @ref flag_names_of.
      *
      * 0 = la base no trae el detalle para esta ISA.  Ahi mandan los booleanos,
      * que siguen siendo ciertos.
@@ -340,8 +358,8 @@ struct AsmInsnSem {
     /**
      * @name ESTADO del procesador que no es un registro general.
      *
-     * Nombrado (@c "cr0", @c "gdtr", @c "msrs", @c "mxcsr", @c "st(0)"...) en vez
-     * de tratado como un efecto opaco.  Una instruccion privilegiada tiene
+     * Nombrado (@c "cr0", @c "gdtr", @c "msrs", @c "mxcsr", @c "st(0)"...) en
+     * vez de tratado como un efecto opaco.  Una instruccion privilegiada tiene
      * efectos igual de concretos que una aritmetica, y modelarlos es lo que
      * permite decir que una `rdmsr` y una `stmxcsr` no se estorban -- mientras
      * que "toca algo" obliga a no mover nada alrededor de ninguna de las dos.
@@ -349,8 +367,9 @@ struct AsmInsnSem {
      */
     std::vector<std::string> reads_state, writes_state;
     /// @}
-    float latency = 0.0f;   ///< latencia en la microarq (prioridad del scheduler).
-    std::string text;       ///< linea original (para reemitir).
+    float latency =
+        0.0f;         ///< latencia en la microarq (prioridad del scheduler).
+    std::string text; ///< linea original (para reemitir).
 };
 
 /// Semantica de una instruccion de asm (@p line) en la microarq @p ua_id.
@@ -366,13 +385,14 @@ bool asm_dep_conflict(const AsmInsnSem &a, const AsmInsnSem &b);
 struct AsmSchedule {
     std::vector<uint32_t> order; ///< permutacion de indices (orden nuevo).
     bool moved = false;          ///< true si el orden cambio.
-    bool valid = true;           ///< invariante: respeta TODAS las dependencias.
+    bool valid = true; ///< invariante: respeta TODAS las dependencias.
 };
 
 /// Planifica (list scheduling) las instrucciones de @p body por su altura de
 /// camino critico (latencia), respetando dependencias y barreras.  No cambia la
 /// semantica; devuelve una permutacion valida.  @p ua_id da las latencias.
-AsmSchedule schedule_asm_block(Isa isa, const std::string &body, uint32_t ua_id);
+AsmSchedule schedule_asm_block(Isa isa, const std::string &body,
+                               uint32_t ua_id);
 
 /// Reordena las instrucciones de @p body (via @ref schedule_asm_block) y
 /// devuelve el cuerpo REORDENADO **solo si es seguro**: sin labels (un salto a
@@ -400,7 +420,8 @@ int32_t match_asm_line(Isa isa, const std::string &line);
 
 /**
  * @brief Resuelve el texto de una instruccion (mnemonico + operandos) a su
- *        FormID en la DB de la ISA dada.  Devuelve -1 si el mnemonico no existe.
+ *        FormID en la DB de la ISA dada.  Devuelve -1 si el mnemonico no
+ * existe.
  *
  * Espeja el emparejador del analizador: busca el rango del iclass (binaria) y
  * puntua por clase+ancho de operando (aridad exacta); la forma de mayor
@@ -408,8 +429,7 @@ int32_t match_asm_line(Isa isa, const std::string &line);
  * operandos, devuelve la primera del rango (nivel mnemonico).
  */
 int32_t match(Isa isa, const std::string &mnemonic,
-              const std::vector<ParsedOp> &ops,
-              bool *por_operandos = nullptr);
+              const std::vector<ParsedOp> &ops, bool *por_operandos = nullptr);
 
 /// Nombre del iclass de una forma (o "" si el FormID no es valido).
 const char *iclass_name(Isa isa, int32_t form_id);
@@ -426,8 +446,9 @@ const char *ext_of(Isa isa, int32_t form_id);
  * toca ningun registro.  La forma lo dice por POSICION, que es como esta
  * modelado y vale para cualquier clase y cualquier ISA.
  *
- * Se cuentan solo los operandos EXPLICITOS -- los que se escriben en el texto --
- * porque es contra ellos contra los que se indexa; los implicitos van aparte.
+ * Se cuentan solo los operandos EXPLICITOS -- los que se escriben en el texto
+ * -- porque es contra ellos contra los que se indexa; los implicitos van
+ * aparte.
  *
  * @param isa     ISA de la forma.
  * @param form_id Forma.
@@ -443,9 +464,9 @@ bool explicit_operand(Isa isa, int32_t form_id, size_t idx, bool &reads,
  * @brief Igual que la anterior, diciendo ademas de que CLASE es el operando.
  *
  * El rol sin la clase no distingue `add rax, rbx` de `add rax, [rbx]`: los dos
- * leen su segundo operando, pero uno lo lee de un registro y el otro de memoria.
- * Y esa es justo la diferencia que decide si un bloque se puede mover, borrar o
- * reordenar, asi que no puede quedarse fuera.
+ * leen su segundo operando, pero uno lo lee de un registro y el otro de
+ * memoria. Y esa es justo la diferencia que decide si un bloque se puede mover,
+ * borrar o reordenar, asi que no puede quedarse fuera.
  *
  * @param kind Sale con la clase del operando (@ref OP_REG, @ref OP_MEM,
  *             @ref OP_IMM...).
@@ -458,8 +479,8 @@ bool explicit_operand(Isa isa, int32_t form_id, size_t idx, bool &reads,
  *
  * Los dos sentidos no son lo mismo y no se pueden colapsar en un "toca
  * memoria": una lectura de mas convierte un bloque inocente en una barrera para
- * todo lo que le rodea, y una escritura de menos deja pasar una optimizacion que
- * rompe.  Un `movdqa [rdi], xmm0` solo escribe.
+ * todo lo que le rodea, y una escritura de menos deja pasar una optimizacion
+ * que rompe.  Un `movdqa [rdi], xmm0` solo escribe.
  *
  * Y no se puede responder por MNEMONICO, que es lo que se intentaba: la misma
  * `movdqa` lee con `movdqa xmm0, [rdi]` y escribe con `movdqa [rdi], xmm0`.  Lo
@@ -480,11 +501,12 @@ bool memory_of(Isa isa, int32_t form_id, bool &reads, bool &writes);
  * @brief Si una forma LEE las banderas y si las ESCRIBE, por separado.
  *
  * Los dos sentidos son cosas distintas y colapsarlos pierde justo lo que hace
- * falta: un `add` ESCRIBE las banderas y un `setz` las LEE, y con un solo bit las
- * dos salen iguales.  Con el bit unico, mover un `cmp` por encima de un `setz`
- * parece igual de seguro que moverlo por encima de un `add`, y no lo es -- el
- * `setz` consume justo lo que el `cmp` produjo --.  Al reves, declarar que un
- * `setz` las escribe lo hace pasar por destructor de un valor que no toca.
+ * falta: un `add` ESCRIBE las banderas y un `setz` las LEE, y con un solo bit
+ * las dos salen iguales.  Con el bit unico, mover un `cmp` por encima de un
+ * `setz` parece igual de seguro que moverlo por encima de un `add`, y no lo es
+ * -- el `setz` consume justo lo que el `cmp` produjo --.  Al reves, declarar
+ * que un `setz` las escribe lo hace pasar por destructor de un valor que no
+ * toca.
  *
  * @param reads  Sale a true si la forma lee las banderas.
  * @param writes Sale a true si las escribe.
@@ -526,8 +548,8 @@ bool flag_names_of(Isa isa, int32_t form_id, std::vector<std::string> &reads,
  * mnemonico.  Las banderas, sin embargo, son las mismas en las cuatro formas de
  * `adds`, asi que ahi si se puede afirmar.
  *
- * @return false si el mnemonico no existe, si sus formas discrepan, o si la base
- *         no trae el detalle para esa ISA.
+ * @return false si el mnemonico no existe, si sus formas discrepan, o si la
+ * base no trae el detalle para esa ISA.
  */
 bool flag_names_of_mnemonic(Isa isa, const std::string &mnemonic,
                             std::vector<std::string> &reads,
@@ -540,14 +562,14 @@ bool flag_names_of_mnemonic(Isa isa, const std::string &mnemonic,
  * pero preguntada sobre la FORMA: no vale si tiene operandos de registro
  * IMPLICITOS -- los que no se escriben en el texto, como el `rdx:rax` de una
  * `div` -- ni memoria implicita sin operando que la nombre.  En esos casos la
- * base sabe que existen pero no puede emparejarlos con lo que hay escrito, y ahi
- * es donde hace falta una entrada a mano.
+ * base sabe que existen pero no puede emparejarlos con lo que hay escrito, y
+ * ahi es donde hace falta una entrada a mano.
  *
  * Sirve para saber DE DONDE sale cada respuesta.  Contar solo las de la tabla
  * mide la tabla, no lo que el compilador sabe: la mayoria de las instrucciones
- * las contesta la base sin que nadie las escriba, y las que no son justo las que
- * hay que escribir.  Sin separarlo, la lista de "lo que falta" mezcla trabajo
- * real con instrucciones que ya funcionan.
+ * las contesta la base sin que nadie las escriba, y las que no son justo las
+ * que hay que escribir.  Sin separarlo, la lista de "lo que falta" mezcla
+ * trabajo real con instrucciones que ya funcionan.
  *
  * @return false si la forma no existe o necesita una entrada a mano.
  */
@@ -567,10 +589,11 @@ struct ImplicitOperand {
      * @c "fsbase", @c "st(0)", @c "x87status"...
      *
      * Se nombra en vez de tratarse como un efecto opaco.  Son 28 en x86 -- y
-     * ninguno en ARM ni RISC-V, donde todo canonicaliza --, y darles nombre es lo
-     * que separa "esta instruccion toca algo que no se cual es" de "escribe
-     * `gdtr`": lo primero obliga a no mover NADA a su alrededor, lo segundo solo
-     * choca con quien toque `gdtr`.  Una `rdmsr` y una `stmxcsr` no se estorban.
+     * ninguno en ARM ni RISC-V, donde todo canonicaliza --, y darles nombre es
+     * lo que separa "esta instruccion toca algo que no se cual es" de "escribe
+     * `gdtr`": lo primero obliga a no mover NADA a su alrededor, lo segundo
+     * solo choca con quien toque `gdtr`.  Una `rdmsr` y una `stmxcsr` no se
+     * estorban.
      */
     std::string state;
     bool is_memory = false; ///< el acceso implicito es a MEMORIA, no a un reg.

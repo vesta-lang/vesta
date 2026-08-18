@@ -68,8 +68,9 @@ struct AsmAssembleResult {
     /// CONTRATO opcional (solo-inspeccion): offset en bytes de CADA instruccion
     /// emitida, en ORDEN de fuente (insn_offsets[i] = offset de la i-esima
     /// instruccion).  Permite a NUESTRO codigo mapear etiquetas/lineas a
-    /// offsets sin acoplar la inspeccion al backend concreto.  Un backend que no
-    /// lo soporte lo deja vacio (la inspeccion degrada sin etiquetas de asm).
+    /// offsets sin acoplar la inspeccion al backend concreto.  Un backend que
+    /// no lo soporte lo deja vacio (la inspeccion degrada sin etiquetas de
+    /// asm).
     std::vector<uint32_t> insn_offsets;
 
     /// Reloc de un SIMBOLO referenciado desde el asm (`jmp [sym]`, `mov rax,
@@ -86,15 +87,15 @@ struct AsmAssembleResult {
         Abs32,       ///< `push sym` / `mov r32, sym`: absoluto 32-bit (imm32).
     };
     struct SymRef {
-        uint32_t offset = 0;  ///< offset del campo dentro de @c bytes
-        uint8_t size = 0;     ///< 4 u 8
+        uint32_t offset = 0; ///< offset del campo dentro de @c bytes
+        uint8_t size = 0;    ///< 4 u 8
         /// Bytes que siguen al campo DENTRO de la misma instruccion (p.ej. el
         /// imm32 de `mov [rip+disp32], imm32`).  Solo relevante para rip-rel
         /// (DataRel32): el disp32 se mide desde el FIN de instruccion, no desde
         /// el fin del campo disp.  El consumidor resta este valor al addend.
         uint8_t pcrel_trailing = 0;
         SymRefKind kind = SymRefKind::DataRel32;
-        std::string symbol;   ///< nombre del simbolo Vesta
+        std::string symbol; ///< nombre del simbolo Vesta
     };
     std::vector<SymRef> sym_refs;
 };

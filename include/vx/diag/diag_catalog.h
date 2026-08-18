@@ -64,14 +64,16 @@ const char *language_code(int idx);
 /// Acepta formas como "es_ES.UTF-8" (usa el prefijo antes de '_'/'.').
 int language_index(const std::string &code);
 
-/// Indice del idioma segun el ENTORNO: @c VESTA_LANG, luego @c LC_ALL / @c LANG.
-/// Si ninguno se reconoce, devuelve 0 (el primer idioma del catalogo, fallback).
+/// Indice del idioma segun el ENTORNO: @c VESTA_LANG, luego @c LC_ALL / @c
+/// LANG. Si ninguno se reconoce, devuelve 0 (el primer idioma del catalogo,
+/// fallback).
 int language_from_env();
 
 /// Fija el idioma activo global (indice).  Fuera de rango -> se ignora.
 void set_language(int idx);
 
-/// Idioma activo global (indice).  Por defecto 0 hasta que se llame set_language.
+/// Idioma activo global (indice).  Por defecto 0 hasta que se llame
+/// set_language.
 int current_language();
 
 // --- Formateo ---
@@ -79,8 +81,9 @@ int current_language();
 /// @c true si el catalogo contiene @p code.
 bool has_code(const std::string &code);
 
-/// Formatea el mensaje del @p code en el idioma ACTIVO con @p args.  Si falta la
-/// traduccion, cae al idioma 0; si el codigo no existe, devuelve el propio code.
+/// Formatea el mensaje del @p code en el idioma ACTIVO con @p args.  Si falta
+/// la traduccion, cae al idioma 0; si el codigo no existe, devuelve el propio
+/// code.
 std::string format(const std::string &code,
                    const std::vector<std::string> &args = {});
 

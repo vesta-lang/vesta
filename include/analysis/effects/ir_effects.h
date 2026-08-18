@@ -41,8 +41,8 @@ namespace effects {
 /// de los HECHOS (def-use) de la funcion: ALLOCA->Stack, alloc->Heap,
 /// static->Global, parametro->ArgDerived, GEP/cast->recurse.  Unknown si no se
 /// puede.  Consume @c analysis::IrFacts (NO reconstruye el def-use).
-AbstractLoc classify_ptr(const ir::IrFunction &fn, const analysis::IrFacts &facts,
-                         ir::IrValueId ptr);
+AbstractLoc classify_ptr(const ir::IrFunction &fn,
+                         const analysis::IrFacts &facts, ir::IrValueId ptr);
 
 /// Registro de LAGUNAS de precision: hace VISIBLE donde el motor tuvo que subir
 /// al efecto TOP y por que.  Permite reportar (a) que IrOps faltan por modelar
@@ -50,9 +50,9 @@ AbstractLoc classify_ptr(const ir::IrFunction &fn, const analysis::IrFacts &fact
 /// (FFI/dinamico -> oportunidades de optimizacion que solo un cambio de codigo
 /// del usuario desbloquea).  Sin esto, un top() a secas ocultaria ambos.
 struct EffectGaps {
-    std::map<int, uint32_t>           unmodeled_ops;  ///< IrOp (int) -> numero de veces.
-    std::map<UnknownReason, uint32_t> by_reason;      ///< motivo -> numero de veces.
-    uint32_t total_top = 0;                           ///< sitios que subieron a top.
+    std::map<int, uint32_t> unmodeled_ops; ///< IrOp (int) -> numero de veces.
+    std::map<UnknownReason, uint32_t> by_reason; ///< motivo -> numero de veces.
+    uint32_t total_top = 0;                      ///< sitios que subieron a top.
     /// Mnemonicos de asm que la tabla no sabe explicar -> numero de veces.
     ///
     /// Sin el nombre, una laguna no se puede cerrar: "hay 2 instrucciones
@@ -74,7 +74,9 @@ struct EffectGaps {
         if (reason_is_gap(why)) ++unmodeled_ops[op];
     }
     /// Apunta un mnemonico que no esta en la tabla.
-    void record_mnemonico(const std::string &m) { ++mnemonicos_desconocidos[m]; }
+    void record_mnemonico(const std::string &m) {
+        ++mnemonicos_desconocidos[m];
+    }
     /// Apunta una llamada a codigo que NO esta en el programa.
     ///
     /// Cuenta como sitio en el maximo igual que los demas: el cierre acaba de
@@ -105,7 +107,7 @@ NativeDecls collect_native_decls(const std::vector<const ir::IrModule *> &mods);
 enum class Backend : uint8_t {
     Vm = 0, ///< Interprete: cada op es una instruccion de la maquina virtual.
     Jit,    ///< Igual semantica que Vm; el codigo es nativo.
-    Aot,    ///< Nativo standalone: lo que necesita runtime pasa por libvesta_rt.
+    Aot, ///< Nativo standalone: lo que necesita runtime pasa por libvesta_rt.
 };
 
 const char *backend_name(Backend b);
@@ -116,7 +118,7 @@ const char *backend_name(Backend b);
 /// que se sabe de lo ajeno --, y crecera; pasarlos sueltos convertiria cada eje
 /// nuevo en un parametro mas en cada firma de la cadena.
 struct EffectEnv {
-    Backend            backend = Backend::Vm;
+    Backend backend = Backend::Vm;
     const NativeDecls *decls = nullptr;
     /**
      * @brief Las ligaduras de asm de la funcion, YA calculadas.
@@ -151,10 +153,10 @@ struct EffectEnv {
     /**
      * @brief De QUE funcion son los rangos de arriba.
      *
-     * Sin esto, un puntero que se quedara apuntando a los rangos de otra funcion
-     * daria respuestas incorrectas EN SILENCIO -- que es peor que recalcularlos.
-     * Con el dueno anotado, usarlos donde no toca es imposible: no coinciden y
-     * se recalculan, que es el comportamiento seguro.
+     * Sin esto, un puntero que se quedara apuntando a los rangos de otra
+     * funcion daria respuestas incorrectas EN SILENCIO -- que es peor que
+     * recalcularlos. Con el dueno anotado, usarlos donde no toca es imposible:
+     * no coinciden y se recalculan, que es el comportamiento seguro.
      */
     const ir::IrFunction *rangos_de = nullptr;
 };
@@ -162,9 +164,10 @@ struct EffectEnv {
 /**
  * @brief Si la funcion lleva algun bloque de asm.
  *
- * Es la unica condicion bajo la que hace falta prestarle los rangos: el analisis
- * de un bloque de asm es lo unico que los consume, porque el ancho de un acceso
- * como `rep movsb` lo da un registro y hay que saber entre que dos numeros esta.
+ * Es la unica condicion bajo la que hace falta prestarle los rangos: el
+ * analisis de un bloque de asm es lo unico que los consume, porque el ancho de
+ * un acceso como `rep movsb` lo da un registro y hay que saber entre que dos
+ * numeros esta.
  *
  * Calcularlos "por si acaso" para toda funcion cuesta mucho mas que lo que
  * ahorra: recorrer la funcion entera, por funcion y por vuelta del punto fijo,
@@ -214,8 +217,8 @@ bool funcion_tiene_asm(const ir::IrFunction &fn);
  * puede usarlas tal cual.
  */
 struct EfectoEnLlamada {
-    LocSet lee;            ///< lo que se pudo traducir de las lecturas.
-    LocSet escribe;        ///< lo que se pudo traducir de las escrituras.
+    LocSet lee;     ///< lo que se pudo traducir de las lecturas.
+    LocSet escribe; ///< lo que se pudo traducir de las escrituras.
     /// @c false si algo del llamado no se pudo nombrar aqui (su pila, su
     /// monton, o un efecto que ya venia sin acotar).
     bool completo = true;
@@ -236,7 +239,7 @@ EfectoEnLlamada instanciar_en_llamada(const SemanticEffects &callee_eff,
                                       const analysis::PointsTo &pt);
 
 /// Efecto LOCAL de UNA instruccion IR (con completeness + motivo).  El asm
-/// lifteado no es especial: llega como ADD/LOAD/STORE/... normales.  INLINE_ASM/
+/// lifteado no es especial: llega como ADD/LOAD/STORE/... normales. INLINE_ASM/
 /// ASM_MICRO (residuo opaco) se analizan aparte con tags.  @p pt es la tabla
 /// points-to COMPARTIDA de la funcion (resuelve punteros a su localizacion);
 /// el llamador la construye UNA vez (compute_points_to) y la reusa por instr.

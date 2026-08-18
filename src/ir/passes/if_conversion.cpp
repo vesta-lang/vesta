@@ -7,7 +7,8 @@
 
 /**
  * @file if_conversion.cpp
- * @brief Implementacion del pase de if-conversion (diamante/triangulo -> SELECT).
+ * @brief Implementacion del pase de if-conversion (diamante/triangulo ->
+ * SELECT).
  *
  * Ver @c include/ir/passes/if_conversion.h para el contrato y la separacion de
  * responsabilidades.  Este pase SOLO decide legalidad + presupuesto de tamano;
@@ -132,13 +133,15 @@ bool is_gp_type(IrType t) {
     __builtin_unreachable();
 }
 
-/// @brief Indice id -> posicion en @c fn.blocks (robusto a ids no secuenciales).
+/// @brief Indice id -> posicion en @c fn.blocks (robusto a ids no
+/// secuenciales).
 using BlockIndex = std::unordered_map<IrBlockId, size_t>;
 
 BlockIndex build_index(const IrFunction &fn) {
     BlockIndex idx;
     idx.reserve(fn.blocks.size() * 2);
-    for (size_t i = 0; i < fn.blocks.size(); ++i) idx[fn.blocks[i].id] = i;
+    for (size_t i = 0; i < fn.blocks.size(); ++i)
+        idx[fn.blocks[i].id] = i;
     return idx;
 }
 
@@ -209,7 +212,8 @@ BranchChain trace_branch(IrFunction &fn, const BlockIndex &idx,
             if (++r.ninstr > kMaxChainInstrs) return r;
         }
         r.hoist.push_back(cur);
-        const IrBlockId succId = cur->succs.empty() ? IR_NO_VALUE : cur->succs[0];
+        const IrBlockId succId =
+            cur->succs.empty() ? IR_NO_VALUE : cur->succs[0];
         IrBlock *succ = blk(succId);
         if (!succ) return r;
         if (succ->preds.size() >= 2) { // el sucesor es el join -> merge
@@ -258,8 +262,10 @@ bool value_reaches(const DefIndex &di, IrValueId start, IrValueId target) {
         auto it = di.find(v);
         if (it == di.end()) continue;
         const IrInstr *d = it->second;
-        for (IrValueId op : d->operands) stack.push_back(op);
-        for (const auto &pa : d->phi_args) stack.push_back(pa.value);
+        for (IrValueId op : d->operands)
+            stack.push_back(op);
+        for (const auto &pa : d->phi_args)
+            stack.push_back(pa.value);
     }
     return false;
 }
@@ -358,7 +364,10 @@ bool try_convert(IrFunction &fn, const BlockIndex &idx, size_t ci) {
         if (src_line == 0) {
             for (const auto &bb : fn.blocks)
                 for (const auto &ii : bb.instrs)
-                    if (ii.dst == cond) { src_line = ii.source_line; break; }
+                    if (ii.dst == cond) {
+                        src_line = ii.source_line;
+                        break;
+                    }
         }
         if (!prefer_select(fn, cond, src_line, tc.ninstr, fc.ninstr,
                            loop_carried))

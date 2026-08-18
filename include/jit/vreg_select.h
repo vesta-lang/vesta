@@ -61,17 +61,17 @@ using CallResolver = std::function<uint64_t(const std::string &)>;
 
 /**
  * @brief Resuelve la ABI custom (param_abi_regs) de un callee por NOMBRE, para
- *        el CALL directo.  Devuelve puntero al vector de registros por parametro
- *        (alineado con los args), o nullptr si el callee usa la ABI estandar.
- *        El puntero debe seguir vivo durante la compilacion (el driver lo
+ *        el CALL directo.  Devuelve puntero al vector de registros por
+ * parametro (alineado con los args), o nullptr si el callee usa la ABI
+ * estandar. El puntero debe seguir vivo durante la compilacion (el driver lo
  *        respalda con su indice de IrFunctions).
  */
 using AbiResolver =
     std::function<const std::vector<std::string> *(const std::string &)>;
 
 /**
- * @brief Registra (thread-local) el resolver de ABI custom para el CALL directo.
- *        Lo llama el driver AOT antes de compilar cada funcion.  Pasar {} lo
+ * @brief Registra (thread-local) el resolver de ABI custom para el CALL
+ * directo. Lo llama el driver AOT antes de compilar cada funcion.  Pasar {} lo
  *        limpia.  El CALLIND no lo usa (su ABI viaja en la instruccion).
  */
 void vreg_set_abi_resolver(AbiResolver resolver) noexcept;
@@ -83,21 +83,24 @@ void vreg_set_abi_resolver(AbiResolver resolver) noexcept;
  *        a fallback).  Se construye desde @c RuntimeEntries en @c auto_jit.
  */
 struct VregEntries {
-    /// Auto-PGO tier-2: entry-point que el prologo del metodo llama al cruzar el
-    /// umbral de invocaciones (proc, method_ptr).  0 = no emitir el contador.
+    /// Auto-PGO tier-2: entry-point que el prologo del metodo llama al cruzar
+    /// el umbral de invocaciones (proc, method_ptr).  0 = no emitir el
+    /// contador.
     uint64_t tier2_request = 0;
     /// Direccion de method->invocation_count del metodo en compilacion (para el
-    /// contador del prologo).  0 = no emitir (compilacion sin MethodInfo o AOT).
+    /// contador del prologo).  0 = no emitir (compilacion sin MethodInfo o
+    /// AOT).
     uint64_t tier2_ctr_addr = 0;
     /// MethodInfo* (arg del entry-point tier2_request).
     uint64_t tier2_method_ptr = 0;
     /// Umbral absoluto (invocation_count) al que disparar tier-2.
     uint32_t tier2_threshold = 0;
-    uint64_t callvirt = 0;  ///< vrt_callvirt(proc, obj, vtbl_idx)
-    uint64_t callm = 0;     ///< vrt_callm(proc, obj, method_ptr)
-    uint64_t callitf = 0;   ///< vrt_callitf(proc, obj, params, method_idx)
-    uint64_t unwrap_throw = 0; ///< vrt_unwrap_throw(proc) -- UNWRAP null (VM_ABI)
-    uint64_t proc_pid = 0;     ///< vrt_proc_pid(proc) -> PID encoded (GETPID)
+    uint64_t callvirt = 0; ///< vrt_callvirt(proc, obj, vtbl_idx)
+    uint64_t callm = 0;    ///< vrt_callm(proc, obj, method_ptr)
+    uint64_t callitf = 0;  ///< vrt_callitf(proc, obj, params, method_idx)
+    uint64_t unwrap_throw =
+        0;                  ///< vrt_unwrap_throw(proc) -- UNWRAP null (VM_ABI)
+    uint64_t proc_pid = 0;  ///< vrt_proc_pid(proc) -> PID encoded (GETPID)
     uint64_t gc_deref = 0;  ///< vrt_gc_deref(proc, handle)
     uint64_t gc_handle = 0; ///< vrt_gc_handle_for_ptr(proc, host_ptr)
     uint64_t gc_write_barrier =
@@ -107,9 +110,9 @@ struct VregEntries {
      * @brief El asignador de ESTE programa, ya compilado (0 = no hay).
      *
      * Cuando lo hay, el monton es el suyo y no el de la maquina, asi que el
-     * atajo que replica el asignador de la maquina en linea deja de valer: seria
-     * un camino mas al monton equivocado, y un bloque acabaria pidiendose por
-     * uno y soltandose por otro.
+     * atajo que replica el asignador de la maquina en linea deja de valer:
+     * seria un camino mas al monton equivocado, y un bloque acabaria pidiendose
+     * por uno y soltandose por otro.
      */
     uint64_t alloc_del_programa = 0;
     /// El que libera, del mismo programa (0 = no hay).  Va con el de arriba:
@@ -117,10 +120,10 @@ struct VregEntries {
     uint64_t free_del_programa = 0;
     uint64_t raw_free = 0;  ///< vrt_raw_free(proc, host_ptr)
     uint64_t gc_allocp = 0; ///< vrt_gc_alloc_payload(proc, size) -> host_ptr
-    uint64_t newobj = 0; ///< vrt_newobj_handle(proc, cls) -> GcHandle (NEWOBJ)
-    uint64_t newobjs = 0;   ///< vrt_newobjs(proc, cls) -> handle (NEWOBJS shared)
-    uint64_t dlopen = 0;    ///< vrt_dlopen(proc, path_vaddr, len) -> host handle
-    uint64_t str_conv = 0;  ///< vrt_str_conv(proc, str, enc) -> handle (STRCONV)
+    uint64_t newobj = 0;  ///< vrt_newobj_handle(proc, cls) -> GcHandle (NEWOBJ)
+    uint64_t newobjs = 0; ///< vrt_newobjs(proc, cls) -> handle (NEWOBJS shared)
+    uint64_t dlopen = 0;  ///< vrt_dlopen(proc, path_vaddr, len) -> host handle
+    uint64_t str_conv = 0; ///< vrt_str_conv(proc, str, enc) -> handle (STRCONV)
     uint64_t panic_str = 0; ///< vrt_panic_str(proc, msg_vaddr, len) (PANIC)
     /* Excepciones in-JIT (Opcion B).  tryenter_jit registra el frame con la
      * direccion nativa del catch + rsp/rbp host; tryleave hace el pop normal;
@@ -132,7 +135,7 @@ struct VregEntries {
      * in-JIT.  -1 = no disponible -> TRYENTER baila. */
     int32_t jit_exc_rsp_off = -1; ///< offsetof(ProcessVM, jit_exc_rsp)
     int32_t jit_exc_rbp_off = -1; ///< offsetof(ProcessVM, jit_exc_rbp)
-    uint64_t calln = 0;  ///< vrt_calln(proc, lib_id, fn_id) -- FFI native
+    uint64_t calln = 0; ///< vrt_calln(proc, lib_id, fn_id) -- FFI native
     /* Class registry (Fase 2).  Todos 1-arg (proc, params_vaddr) salvo
      * deffield/defmethod (2-arg: cls, params) y addadvice (3-arg). */
     uint64_t findclass = 0;  ///< vrt_findclass(proc, params) -> ClassInfo*
@@ -149,11 +152,11 @@ struct VregEntries {
     uint64_t str_make = 0; ///< vrt_str_make(proc, vm_addr, byte_len) -> handle
     uint64_t str_make_h =
         0; ///< vrt_str_make_h(proc, host_addr, byte_len) -> handle (buf host)
-    uint64_t str_len = 0; ///< vrt_str_len(proc, handle) -> i64 (code points)
-    uint64_t str_cat = 0;  ///< vrt_str_cat(proc, a, b) -> handle (ROPE)
+    uint64_t str_len = 0;   ///< vrt_str_len(proc, handle) -> i64 (code points)
+    uint64_t str_cat = 0;   ///< vrt_str_cat(proc, a, b) -> handle (ROPE)
     uint64_t str_slice = 0; ///< vrt_str_slice(proc, src, range) -> handle
-    uint64_t str_cmp = 0;  ///< vrt_str_cmp(proc, a, b) -> i64 (-1/0/1)
-    uint64_t str_raw = 0;  ///< vrt_str_raw(proc, handle) -> host_ptr a data[]
+    uint64_t str_cmp = 0;   ///< vrt_str_cmp(proc, a, b) -> i64 (-1/0/1)
+    uint64_t str_raw = 0;   ///< vrt_str_raw(proc, handle) -> host_ptr a data[]
     uint64_t str_get_bytes =
         0; ///< vrt_str_get_bytes(proc, handle) -> i64 byte_len
     uint64_t call_bc_function =
@@ -205,8 +208,9 @@ struct VregEntries {
  * marshalea los args nativos a @c proc->registers.regs[1..N] (+ argc en R15) y,
  * en modo SAFE (cuerpo no hoja-puro), salva/restaura @c proc->registers[0..15]
  * para re-entrancia; el RET escribe el retorno tanto en @c regs[0] como en RAX
- * (retorno nativo).  Replica el @c callback_entry del selector-slots que se esta
- * jubilando, para que los callbacks (qsort, WndProc, ...) los compile vreg.
+ * (retorno nativo).  Replica el @c callback_entry del selector-slots que se
+ * esta jubilando, para que los callbacks (qsort, WndProc, ...) los compile
+ * vreg.
  */
 struct VregCallbackOpts {
     bool callback_entry = false;
@@ -236,8 +240,7 @@ bool vreg_select(const ir::IrFunction &fn, MFunction &out,
 #endif
                  ,
                  bool mode32 = false, FloatIsa fisa = FloatIsa::SSE2,
-                 bool emit_line_map = false,
-                 const VregCallbackOpts &cb = {});
+                 bool emit_line_map = false, const VregCallbackOpts &cb = {});
 
 /**
  * @brief La ultima razon por la que el selector abandono una funcion.

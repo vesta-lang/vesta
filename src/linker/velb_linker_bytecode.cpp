@@ -844,9 +844,8 @@ void Linker::build_header() {
     // loader acaba leyendo el magic del propio fichero como nombre de libreria.
     // El loader ya usaba el conteo correcto (`exe.sections.size()`), asi que
     // ambos solo coincidian por accidente.
-    uint64_t init_bytecode =
-        final_header.table_offset +
-        sizeof(section_range_memory) * final_header.count;
+    uint64_t init_bytecode = final_header.table_offset +
+                             sizeof(section_range_memory) * final_header.count;
     // inicio del bytecode, es el offset dentro del archivo final donde se
     // encuentra todo el bytecode.
 
@@ -974,7 +973,8 @@ void Linker::compute_symbol_file_offsets() {
     // una direccion virtual a la base del espacio es su offset en el flujo de
     // bytecode.  Es el mismo invariante que aplica el loader al derivar el
     // offset de fichero de cada seccion
-    // (file_offset = space->file_offset + (address_init - space->range.address_init)).
+    // (file_offset = space->file_offset + (address_init -
+    // space->range.address_init)).
     for (auto &[name, info] : symbol_info) {
         auto it_space = spaces_address.find(info.space);
         if (it_space == spaces_address.end()) continue;
@@ -982,8 +982,8 @@ void Linker::compute_symbol_file_offsets() {
         const uint64_t space_base = it_space->second.range.address_init;
         if (info.absolute < space_base) continue; // fuera del espacio
 
-        info.file_offset = it_space->second.file_offset +
-                           (info.absolute - space_base);
+        info.file_offset =
+            it_space->second.file_offset + (info.absolute - space_base);
     }
 }
 

@@ -7,19 +7,20 @@
 
 /**
  * @file loop_structure.cpp
- * @brief Implementacion del verificador estructural de bucles (loop_structure.h).
+ * @brief Implementacion del verificador estructural de bucles
+ * (loop_structure.h).
  */
 
 #include "analysis/facts/loop_structure.h"
 
 namespace analysis {
 
+using ir::IR_NO_BLOCK;
+using ir::IR_NO_VALUE;
 using ir::IrBlockId;
 using ir::IrInstr;
 using ir::IrOp;
 using ir::IrValueId;
-using ir::IR_NO_BLOCK;
-using ir::IR_NO_VALUE;
 
 LoopStructure detect_loop_structure(const ir::IrFunction &fn,
                                     const analysis::LoopFacts &lf,
@@ -54,12 +55,13 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
     st.body_entry = t_in ? term.target_block : term.false_block;
     st.exit = t_in ? term.false_block : term.target_block;
 
-    // Ningun instr del header salvo PHIs y el UNICO que define cond (sin efectos
-    // laterales que el clonado no pueda replicar).
+    // Ningun instr del header salvo PHIs y el UNICO que define cond (sin
+    // efectos laterales que el clonado no pueda replicar).
     for (size_t i = 0; i + 1 < hins.size(); ++i) { // sin el terminador.
         const IrInstr &in = hins[i];
         if (in.op == IrOp::PHI) continue;
-        if (in.dst != cond) return st; // instr extra en el header -> no elegible.
+        if (in.dst != cond)
+            return st; // instr extra en el header -> no elegible.
     }
 
     // Latch: unico bloque del bucle cuyo terminador salta (BR) al header.
@@ -90,17 +92,16 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
     }
 
     // Preheader: unico pred del header FUERA del bucle.  Se calcula LOCALMENTE
-    // desde los terminadores (no desde fn.blocks[].preds, que un pase previo pudo
-    // dejar obsoletos) para no depender de mutar el CFG de la funcion.
+    // desde los terminadores (no desde fn.blocks[].preds, que un pase previo
+    // pudo dejar obsoletos) para no depender de mutar el CFG de la funcion.
     for (size_t p = 0; p < Nb; ++p) {
         if (st.contains((IrBlockId)p)) continue;
         const auto &pins = fn.blocks[p].instrs;
         if (pins.empty()) continue;
         const IrInstr &pt = pins.back();
-        const bool goes_to_H =
-            (pt.op == IrOp::BR && pt.target_block == H) ||
-            (pt.op == IrOp::BR_COND &&
-             (pt.target_block == H || pt.false_block == H));
+        const bool goes_to_H = (pt.op == IrOp::BR && pt.target_block == H) ||
+                               (pt.op == IrOp::BR_COND &&
+                                (pt.target_block == H || pt.false_block == H));
         if (goes_to_H) {
             if (st.preheader != IR_NO_BLOCK) return st; // >1 entrada.
             st.preheader = (IrBlockId)p;
@@ -115,9 +116,12 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
         HeaderPhi hp;
         hp.dst = in.dst;
         for (const auto &pa : in.phi_args) {
-            if (pa.block == st.preheader) hp.init = pa.value;
-            else if (pa.block == st.latch) hp.back = pa.value;
-            else return st; // arg desde un bloque inesperado.
+            if (pa.block == st.preheader)
+                hp.init = pa.value;
+            else if (pa.block == st.latch)
+                hp.back = pa.value;
+            else
+                return st; // arg desde un bloque inesperado.
         }
         if (hp.init == IR_NO_VALUE || hp.back == IR_NO_VALUE) return st;
         st.phis.push_back(hp);
@@ -137,8 +141,10 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
             for (IrValueId o : in.operands)
                 if (body_defs.count(o)) return st;
             for (const auto &pa : in.phi_args) {
-                if (st.contains(pa.block) && body_defs.count(pa.value)) return st;
-                if (body_defs.count(pa.value) && !st.contains(pa.block)) return st;
+                if (st.contains(pa.block) && body_defs.count(pa.value))
+                    return st;
+                if (body_defs.count(pa.value) && !st.contains(pa.block))
+                    return st;
             }
         }
     }

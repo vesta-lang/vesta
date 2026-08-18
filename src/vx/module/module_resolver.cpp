@@ -19,7 +19,7 @@
 #include "vx/parser.h"
 #include "vx/token.h"
 #include "vx/diag/diag_format.h" // los mensajes salen del catalogo
-#include "pkg/paths.h"             // $VX_HOME: el override del usuario
+#include "pkg/paths.h"           // $VX_HOME: el override del usuario
 
 #include <algorithm>
 #include <cerrno>
@@ -87,7 +87,8 @@ std::string derive_package_id(const std::string &root_path,
      * raiz `.` -- el primer `parent_path()` ya da vacio y el bucle sale sin
      * mirar nada: el paquete salia ANoNIMO aunque tuviera su manifiesto justo
      * encima.  Se noto porque dos arboles distintos parecian el mismo paquete
-     * (los dos anonimos) y la regla que los distingue acertaba por casualidad. */
+     * (los dos anonimos) y la regla que los distingue acertaba por casualidad.
+     */
     fs::path abs = fs::absolute(fs::path(norm), ec);
     if (ec) abs = fs::path(norm);
     fs::path dir = abs.lexically_normal().parent_path();
@@ -122,8 +123,9 @@ std::string derive_package_id(const std::string &root_path,
         size_t pos = 0;
         while ((pos = manifest.find(key, pos)) != std::string::npos) {
             // Verificar que es un limite de palabra por la izquierda.
-            bool lok = (pos == 0) || (!std::isalnum((unsigned char)manifest[pos - 1]) &&
-                                      manifest[pos - 1] != '_');
+            bool lok = (pos == 0) ||
+                       (!std::isalnum((unsigned char)manifest[pos - 1]) &&
+                        manifest[pos - 1] != '_');
             size_t after = pos + key.size();
             bool rok = after >= manifest.size() ||
                        (!std::isalnum((unsigned char)manifest[after]) &&
@@ -188,7 +190,8 @@ std::string override_de_paquete(const std::string &nombre) {
             const size_t eq = s.find('=');
             if (eq == std::string::npos) continue;
             std::string clave = s.substr(0, eq);
-            while (!clave.empty() && (clave.back() == ' ' || clave.back() == '\t'))
+            while (!clave.empty() &&
+                   (clave.back() == ' ' || clave.back() == '\t'))
                 clave.pop_back();
             const size_t q1 = s.find('"', eq);
             if (q1 == std::string::npos) continue;
@@ -220,7 +223,8 @@ std::string detect_stdlib_vx_dir() {
         if (!ov.empty()) return ov;
     }
     // (2) Candidatos relativos al cwd.
-    static const char *cands[] = {"stdlib/vx", "../stdlib/vx", "../../stdlib/vx"};
+    static const char *cands[] = {"stdlib/vx", "../stdlib/vx",
+                                  "../../stdlib/vx"};
     for (const char *c : cands) {
         std::ifstream test(std::string(c) + "/simd_string.vx");
         if (test.good()) return c;
@@ -312,7 +316,8 @@ namespace {
 /// del root, absoluta desde la stdlib -- y tomando la escritura como identidad
 /// entraba dos veces en el grafo.  Eso duplicaba cada diagnostico suyo y, en un
 /// namespace repartido entre varios ficheros, dejaba una de las dos copias sin
-/// fusionar: sus tipos no resolvian aunque el fichero hermano estuviera cargado.
+/// fusionar: sus tipos no resolvian aunque el fichero hermano estuviera
+/// cargado.
 ///
 /// Se usa SOLO para decidir si dos rutas son el mismo fichero; los mensajes
 /// siguen mostrando la ruta tal y como se escribio, que es la que el usuario
@@ -326,11 +331,10 @@ std::string identidad_fichero_(const std::string &ruta) {
      * fichero del arbol, eran la mayor parte del escaneo. */
     std::string s;
     const bool absoluta =
-        !ruta.empty() &&
-        (ruta[0] == '/' || ruta[0] == '\\' ||
-         (ruta.size() >= 2 && ruta[1] == ':' &&
-          ((ruta[0] >= 'A' && ruta[0] <= 'Z') ||
-           (ruta[0] >= 'a' && ruta[0] <= 'z'))));
+        !ruta.empty() && (ruta[0] == '/' || ruta[0] == '\\' ||
+                          (ruta.size() >= 2 && ruta[1] == ':' &&
+                           ((ruta[0] >= 'A' && ruta[0] <= 'Z') ||
+                            (ruta[0] >= 'a' && ruta[0] <= 'z'))));
     if (absoluta && ruta.find("/.") == std::string::npos &&
         ruta.find("\\.") == std::string::npos) {
         s = ruta;
@@ -482,9 +486,9 @@ void ModuleGraph::set_stdlib_dir(const std::string &dir) {
 // importan estas funciones (cross-module expr-capture).  Reusa el AST YA
 // parseado del dep; no re-parsea nada.
 // ---------------------------------------------------------------------------
-static void
-collect_expr_param_fns_(const std::vector<std::unique_ptr<ast::Node>> &decls,
-                        std::unordered_map<std::string, std::vector<int>> &out) {
+static void collect_expr_param_fns_(
+    const std::vector<std::unique_ptr<ast::Node>> &decls,
+    std::unordered_map<std::string, std::vector<int>> &out) {
     for (const auto &d : decls) {
         if (!d) continue;
         if (d->kind == ast::NodeKind::FunctionDecl) {
@@ -566,8 +570,7 @@ collect_type_names_(const std::vector<std::unique_ptr<ast::Node>> &decls,
             collect_type_names_(
                 static_cast<ast::NamespaceDecl *>(d.get())->decls, out);
             break;
-        default:
-            break;
+        default: break;
         }
     }
 }
@@ -578,9 +581,9 @@ collect_type_names_(const std::vector<std::unique_ptr<ast::Node>> &decls,
 // params @c expr: una fn `source(expr)` re-exportada por std.comptime desde
 // std.comptime.basics debe seguir siendo capturada como texto crudo en el
 // modulo que importa std.comptime.
-static void gather_public_reexports_(
-    const std::vector<std::unique_ptr<ast::Node>> &decls,
-    std::vector<std::pair<std::string, bool>> &out) {
+static void
+gather_public_reexports_(const std::vector<std::unique_ptr<ast::Node>> &decls,
+                         std::vector<std::pair<std::string, bool>> &out) {
     for (const auto &d : decls) {
         if (!d) continue;
         if (d->kind == ast::NodeKind::ImportDecl) {
@@ -775,11 +778,10 @@ uint32_t ModuleGraph::load_and_parse_(const std::string &canonical_path) {
         // siembra en el importador de std.comptime.
         std::unordered_set<uint32_t> visited_dep;
         std::vector<uint32_t> worklist;
-        auto resolve_to_id = [&](const std::string &p,
-                                 bool by_ns,
+        auto resolve_to_id = [&](const std::string &p, bool by_ns,
                                  const std::string &importer) -> uint32_t {
-            ResolveResult r = by_ns ? resolve_namespace_(p, importer)
-                                    : resolve(p, importer);
+            ResolveResult r =
+                by_ns ? resolve_namespace_(p, importer) : resolve(p, importer);
             if (r.status != ResolveResult::Status::OK) return UINT32_MAX;
             if (r.module_id >= modules_.size()) return UINT32_MAX;
             return r.module_id;
@@ -833,7 +835,8 @@ uint32_t ModuleGraph::load_and_parse_(const std::string &canonical_path) {
         parser.seed_imported_expr_params(imported_expr_params);
     // Los tipos visibles desde los deps: sin esto `(T) x` con T de otro
     // fichero no se reconoce como cast.
-    for (const auto &tn : imported_type_names) parser.add_known_alias(tn);
+    for (const auto &tn : imported_type_names)
+        parser.add_known_alias(tn);
     auto ast = parser.parse_program();
     if (!ast) {
         SourceLoc l;
@@ -994,8 +997,7 @@ void ModuleGraph::extract_namespaces_(
                         if (prof > 0) --prof;
                     } else if (prof == 0) {
                         if (c.kind == TokenKind::SEMICOLON) break;
-                        if (c.kind == TokenKind::IDENTIFIER)
-                            ultimo = c.lexeme;
+                        if (c.kind == TokenKind::IDENTIFIER) ultimo = c.lexeme;
                     }
                     c = lex.next();
                 }
@@ -1004,8 +1006,7 @@ void ModuleGraph::extract_namespaces_(
                 continue;
             }
             if (t.kind == TokenKind::KW_STRUCT ||
-                t.kind == TokenKind::KW_CLASS ||
-                t.kind == TokenKind::KW_ENUM) {
+                t.kind == TokenKind::KW_CLASS || t.kind == TokenKind::KW_ENUM) {
                 Token id = lex.next();
                 if (id.kind == TokenKind::IDENTIFIER) anota_tipo(id.lexeme);
                 t = id;
@@ -1041,7 +1042,8 @@ void ModuleGraph::build_namespace_index_() {
     std::unordered_map<std::string, std::unordered_set<std::string>> vistos;
     for (const auto &kv : ns_index_) {
         auto &s = vistos[kv.first];
-        for (const auto &f : kv.second) s.insert(identidad_fichero_(f));
+        for (const auto &f : kv.second)
+            s.insert(identidad_fichero_(f));
     }
 
     // Recolectar las raices a escanear (sin duplicados).
@@ -1059,7 +1061,8 @@ void ModuleGraph::build_namespace_index_() {
         }
     };
     add_root(root_dir_);
-    for (const auto &sp : search_paths_) add_root(sp);
+    for (const auto &sp : search_paths_)
+        add_root(sp);
     add_root(stdlib_dir_);
 
     /* De que raiz salio cada namespace, y de que paquete es esa raiz.
@@ -1076,7 +1079,7 @@ void ModuleGraph::build_namespace_index_() {
      * librerias distintas.  Sin esa comprobacion, quedarse con la primera raiz
      * romperia a quien reparte un namespace suyo entre varios sitios. */
     struct Procedencia {
-        std::string id;        ///< Identidad declarada del paquete ("" = anonimo).
+        std::string id; ///< Identidad declarada del paquete ("" = anonimo).
         std::string manifiesto; ///< Fichero que la declara ("" = ninguno).
     };
     /// Dos sitios que ofrecen los mismos namespaces, para avisar UNA vez.
@@ -1130,9 +1133,11 @@ void ModuleGraph::build_namespace_index_() {
             std::unordered_map<std::string, std::vector<std::string>> tipos;
             extract_namespaces_(source, namespaces, &tipos);
             us_leer += std::chrono::duration_cast<std::chrono::microseconds>(
-                           t_lexar - t_leer).count();
+                           t_lexar - t_leer)
+                           .count();
             us_lexar += std::chrono::duration_cast<std::chrono::microseconds>(
-                            std::chrono::steady_clock::now() - t_lexar).count();
+                            std::chrono::steady_clock::now() - t_lexar)
+                            .count();
             ++n_ficheros;
             for (auto &kv : tipos) {
                 auto &dst = ns_types_[kv.first];
@@ -1166,15 +1171,14 @@ void ModuleGraph::build_namespace_index_() {
                      *     la misma identidad. */
                     const Procedencia &pa = procedencia_de(itr->second);
                     const Procedencia &pb = procedencia_de(root);
-                    const bool mismo_paquete =
-                        !pa.manifiesto.empty() &&
-                        pa.manifiesto == pb.manifiesto;
+                    const bool mismo_paquete = !pa.manifiesto.empty() &&
+                                               pa.manifiesto == pb.manifiesto;
                     if (!mismo_paquete) {
                         /* Se anota y se avisa UNA vez por par de sitios, no por
                          * namespace: dos arboles de la stdlib comparten decenas
                          * y el aviso repetido tapa el resto de la salida.
-                         * Callarselo es peor -- es lo que costo descubrir a mano
-                         * por que un tipo "no resolvia". */
+                         * Callarselo es peor -- es lo que costo descubrir a
+                         * mano por que un tipo "no resolvia". */
                         Choque &ch = choques[itr->second + "\n" + root];
                         if (ch.ejemplo.empty()) {
                             ch.gana = itr->second;
@@ -1214,7 +1218,8 @@ void ModuleGraph::build_namespace_index_() {
             std::string s = p.lexically_normal().string();
             for (char &ch : s)
                 if (ch == '\\') ch = '/';
-            while (s.size() > 1 && s.back() == '/') s.pop_back();
+            while (s.size() > 1 && s.back() == '/')
+                s.pop_back();
             return s;
         };
         SourceLoc loc;
@@ -1225,17 +1230,18 @@ void ModuleGraph::build_namespace_index_() {
         if (c.id_gana == c.id_pierde) {
             diags_.note(loc, vx::diag::format("VX4004", {}));
         } else {
-            diags_.note(loc, vx::diag::format(
-                                 "VX4005", {c.id_gana.empty() ? "?" : c.id_gana,
-                                            c.id_pierde.empty() ? "?"
-                                                                : c.id_pierde}));
+            diags_.note(
+                loc, vx::diag::format(
+                         "VX4005", {c.id_gana.empty() ? "?" : c.id_gana,
+                                    c.id_pierde.empty() ? "?" : c.id_pierde}));
         }
     }
 
     if (std::getenv("VESTA_TIMES") != nullptr) {
-        const long us_total =
-            static_cast<long>(std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - t_indice).count());
+        const long us_total = static_cast<long>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - t_indice)
+                .count());
         std::cerr << "[resolver] indice de namespaces: " << n_entradas
                   << " entradas, " << n_ficheros << " ficheros | recorrer "
                   << (us_total - us_leer - us_lexar) << " us | leer " << us_leer
@@ -1281,7 +1287,8 @@ void ModuleGraph::process_dependencies_(ResolvedModule &mod) {
     // NS.1 fix: los imports pueden estar ANIDADOS dentro de un NamespaceDecl
     // (forma statement `namespace a.b.c;` que envuelve el resto del fichero,
     // imports incluidos).  Recolectarlos recursivamente; si no, el grafo de
-    // modulos no ve el import -> el dep no se compila -> "funcion no declarada".
+    // modulos no ve el import -> el dep no se compila -> "funcion no
+    // declarada".
     std::vector<ast::ImportDecl *> imports;
     std::function<void(std::vector<std::unique_ptr<ast::Node>> &)> gather =
         [&](std::vector<std::unique_ptr<ast::Node>> &decls) {
@@ -1291,16 +1298,18 @@ void ModuleGraph::process_dependencies_(ResolvedModule &mod) {
                     imports.push_back(
                         static_cast<ast::ImportDecl *>(decl.get()));
                 } else if (decl->kind == ast::NodeKind::NamespaceDecl) {
-                    gather(static_cast<ast::NamespaceDecl *>(decl.get())->decls);
+                    gather(
+                        static_cast<ast::NamespaceDecl *>(decl.get())->decls);
                 }
             }
         };
     gather(mod.parsed_ast->decls);
 
     for (auto *imp : imports) {
-        ResolveResult r = imp->by_namespace
-                              ? resolve_namespace_(imp->path, mod.canonical_path)
-                              : resolve(imp->path, mod.canonical_path);
+        ResolveResult r =
+            imp->by_namespace
+                ? resolve_namespace_(imp->path, mod.canonical_path)
+                : resolve(imp->path, mod.canonical_path);
         if (r.status == ResolveResult::Status::NOT_FOUND) {
             diags_.error(imp->loc, r.error_message);
             continue;

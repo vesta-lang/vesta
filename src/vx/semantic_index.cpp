@@ -41,14 +41,10 @@ std::string decl_name(const ast::Node *d) {
         return static_cast<const ast::GlobalVarDecl *>(d)->name;
     case K::TypeAliasDecl:
         return static_cast<const ast::TypeAliasDecl *>(d)->name;
-    case K::StructDecl:
-        return static_cast<const ast::StructDecl *>(d)->name;
-    case K::ClassDecl:
-        return static_cast<const ast::ClassDecl *>(d)->name;
-    case K::EnumDecl:
-        return static_cast<const ast::EnumDecl *>(d)->name;
-    case K::ConceptDecl:
-        return static_cast<const ast::ConceptDecl *>(d)->name;
+    case K::StructDecl: return static_cast<const ast::StructDecl *>(d)->name;
+    case K::ClassDecl: return static_cast<const ast::ClassDecl *>(d)->name;
+    case K::EnumDecl: return static_cast<const ast::EnumDecl *>(d)->name;
+    case K::ConceptDecl: return static_cast<const ast::ConceptDecl *>(d)->name;
     case K::ExtensionDecl:
         // No introduce un simbolo nuevo: extiende un tipo.  Clave sintetica
         // para que el indice lo rastree (su hash/deps importan).
@@ -58,8 +54,7 @@ std::string decl_name(const ast::Node *d) {
         const auto *im = static_cast<const ast::ImplDecl *>(d);
         return "impl@" + im->concept_name + "@" + im->target_type;
     }
-    default:
-        return {};
+    default: return {};
     }
 }
 
@@ -79,14 +74,11 @@ bool decl_is_public(const ast::Node *d) {
         return static_cast<const ast::TypeAliasDecl *>(d)->is_public;
     case K::StructDecl:
         return static_cast<const ast::StructDecl *>(d)->is_public;
-    case K::ClassDecl:
-        return static_cast<const ast::ClassDecl *>(d)->is_public;
-    case K::EnumDecl:
-        return static_cast<const ast::EnumDecl *>(d)->is_public;
+    case K::ClassDecl: return static_cast<const ast::ClassDecl *>(d)->is_public;
+    case K::EnumDecl: return static_cast<const ast::EnumDecl *>(d)->is_public;
     case K::ConceptDecl:
         return static_cast<const ast::ConceptDecl *>(d)->is_public;
-    default:
-        return true;
+    default: return true;
     }
 }
 
@@ -100,8 +92,7 @@ struct FlatDecl {
 };
 
 void flatten_decls(const std::vector<std::unique_ptr<ast::Node>> &decls,
-                   const std::string &ns_prefix,
-                   std::vector<FlatDecl> &out) {
+                   const std::string &ns_prefix, std::vector<FlatDecl> &out) {
     for (const auto &d : decls) {
         if (!d) continue;
         if (d->kind == ast::NodeKind::NamespaceDecl) {
@@ -145,7 +136,8 @@ void scan_identifiers(const char *data, size_t n,
         if (ident_char(data[i], /*first=*/true)) {
             const size_t start = i;
             ++i;
-            while (i < n && ident_char(data[i], /*first=*/false)) ++i;
+            while (i < n && ident_char(data[i], /*first=*/false))
+                ++i;
             out.emplace(data + start, i - start);
         } else {
             ++i;
@@ -155,7 +147,8 @@ void scan_identifiers(const char *data, size_t n,
 
 } // namespace
 
-const SymbolEntry *SemanticIndex::find(const std::string &qualified_name) const {
+const SymbolEntry *
+SemanticIndex::find(const std::string &qualified_name) const {
     for (const auto &s : symbols)
         if (s.name == qualified_name) return &s;
     return nullptr;
@@ -242,7 +235,8 @@ void put_u32(std::vector<uint8_t> &b, uint32_t v) {
     b.push_back((v >> 24) & 0xFF);
 }
 void put_u64(std::vector<uint8_t> &b, uint64_t v) {
-    for (int i = 0; i < 8; ++i) b.push_back((v >> (i * 8)) & 0xFF);
+    for (int i = 0; i < 8; ++i)
+        b.push_back((v >> (i * 8)) & 0xFF);
 }
 void put_str(std::vector<uint8_t> &b, const std::string &s) {
     put_u32(b, static_cast<uint32_t>(s.size()));
@@ -254,13 +248,19 @@ struct Reader {
     const uint8_t *end;
     bool ok = true;
     uint16_t u16() {
-        if (p + 2 > end) { ok = false; return 0; }
+        if (p + 2 > end) {
+            ok = false;
+            return 0;
+        }
         uint16_t v = p[0] | (p[1] << 8);
         p += 2;
         return v;
     }
     uint32_t u32() {
-        if (p + 4 > end) { ok = false; return 0; }
+        if (p + 4 > end) {
+            ok = false;
+            return 0;
+        }
         uint32_t v = static_cast<uint32_t>(p[0]) |
                      (static_cast<uint32_t>(p[1]) << 8) |
                      (static_cast<uint32_t>(p[2]) << 16) |
@@ -269,7 +269,10 @@ struct Reader {
         return v;
     }
     uint64_t u64() {
-        if (p + 8 > end) { ok = false; return 0; }
+        if (p + 8 > end) {
+            ok = false;
+            return 0;
+        }
         uint64_t v = 0;
         for (int i = 0; i < 8; ++i)
             v |= static_cast<uint64_t>(p[i]) << (i * 8);
@@ -278,7 +281,10 @@ struct Reader {
     }
     std::string str() {
         uint32_t n = u32();
-        if (!ok || p + n > end) { ok = false; return {}; }
+        if (!ok || p + n > end) {
+            ok = false;
+            return {};
+        }
         std::string s(reinterpret_cast<const char *>(p), n);
         p += n;
         return s;
@@ -302,7 +308,8 @@ std::vector<uint8_t> serialize_semantic_index(const SemanticIndex &idx) {
         put_u32(b, s.src_length);
         b.push_back(s.is_public ? 1 : 0); // v2
         put_u32(b, static_cast<uint32_t>(s.deps.size()));
-        for (const auto &d : s.deps) put_str(b, d);
+        for (const auto &d : s.deps)
+            put_str(b, d);
     }
     return b;
 }
@@ -312,7 +319,7 @@ bool parse_semantic_index(const std::vector<uint8_t> &bytes,
     Reader r{bytes.data(), bytes.data() + bytes.size()};
     if (r.u32() != VXIDX_MAGIC) return false;
     if (r.u16() != VXIDX_VERSION) return false; // sin legacy: version exacta.
-    r.u16(); // _pad
+    r.u16();                                    // _pad
     out = SemanticIndex{};
     out.module_hash = r.u64();
     out.module_path = r.str();
@@ -322,32 +329,39 @@ bool parse_semantic_index(const std::vector<uint8_t> &bytes,
     for (uint32_t i = 0; i < count && r.ok; ++i) {
         SymbolEntry s;
         s.name = r.str();
-        if (r.p >= r.end) { r.ok = false; break; }
+        if (r.p >= r.end) {
+            r.ok = false;
+            break;
+        }
         s.kind = *r.p++;
         s.content_hash = r.u64();
         s.src_offset = r.u32();
         s.src_length = r.u32();
-        if (r.p >= r.end) { r.ok = false; break; }
+        if (r.p >= r.end) {
+            r.ok = false;
+            break;
+        }
         s.is_public = (*r.p++ != 0);
         const uint32_t dc = r.u32();
         if (!r.ok || dc > 1'000'000u) return false;
         s.deps.reserve(dc);
-        for (uint32_t j = 0; j < dc && r.ok; ++j) s.deps.push_back(r.str());
+        for (uint32_t j = 0; j < dc && r.ok; ++j)
+            s.deps.push_back(r.str());
         out.symbols.push_back(std::move(s));
     }
     return r.ok;
 }
 
-std::vector<std::string>
-changed_symbols_closure(const SemanticIndex &old_idx,
-                        const SemanticIndex &new_idx) {
+std::vector<std::string> changed_symbols_closure(const SemanticIndex &old_idx,
+                                                 const SemanticIndex &new_idx) {
     // 1. Mapa nombre -> hash del indice previo.
     std::unordered_map<std::string, uint64_t> old_hash;
     old_hash.reserve(old_idx.symbols.size() * 2 + 1);
-    for (const auto &s : old_idx.symbols) old_hash[s.name] = s.content_hash;
+    for (const auto &s : old_idx.symbols)
+        old_hash[s.name] = s.content_hash;
 
     // 2. Cambiados de PRIMER nivel: nuevos, o con hash distinto.
-    std::unordered_set<std::string> changed; // nombres cualificados.
+    std::unordered_set<std::string> changed;        // nombres cualificados.
     std::unordered_set<std::string> changed_simple; // sus nombres simples.
     auto simple = [](const std::string &q) {
         const size_t p = q.rfind('.');
@@ -364,7 +378,8 @@ changed_symbols_closure(const SemanticIndex &old_idx,
     // revalidarse, aunque el propio simbolo ya no exista).
     {
         std::unordered_set<std::string> new_names;
-        for (const auto &s : new_idx.symbols) new_names.insert(s.name);
+        for (const auto &s : new_idx.symbols)
+            new_names.insert(s.name);
         for (const auto &s : old_idx.symbols)
             if (!new_names.count(s.name)) changed_simple.insert(simple(s.name));
     }
@@ -412,11 +427,11 @@ std::string semantic_index_to_json(const SemanticIndex &idx) {
         if (i) j += ",";
         std::snprintf(hb, sizeof(hb), "%llu",
                       static_cast<unsigned long long>(s.content_hash));
-        j += "{\"name\":\"" + esc(s.name) + "\",\"kind\":" +
-             std::to_string(static_cast<int>(s.kind)) + ",\"hash\":\"" +
-             std::string(hb) + "\",\"offset\":" +
-             std::to_string(s.src_offset) + ",\"length\":" +
-             std::to_string(s.src_length) + ",\"deps\":[";
+        j += "{\"name\":\"" + esc(s.name) +
+             "\",\"kind\":" + std::to_string(static_cast<int>(s.kind)) +
+             ",\"hash\":\"" + std::string(hb) +
+             "\",\"offset\":" + std::to_string(s.src_offset) +
+             ",\"length\":" + std::to_string(s.src_length) + ",\"deps\":[";
         for (size_t k = 0; k < s.deps.size(); ++k) {
             if (k) j += ",";
             j += "\"" + esc(s.deps[k]) + "\"";
@@ -429,16 +444,18 @@ std::string semantic_index_to_json(const SemanticIndex &idx) {
 
 // -- Indices de modulos importados (CROSS-MODULE, para el LSP) ---------------
 
-std::vector<ImportedModuleSemIndex> build_imported_sem_indexes(
-    const std::string &root_file, const std::string &root_overlay_text,
-    const std::vector<std::string> &extra_search_paths) {
+std::vector<ImportedModuleSemIndex>
+build_imported_sem_indexes(const std::string &root_file,
+                           const std::string &root_overlay_text,
+                           const std::vector<std::string> &extra_search_paths) {
     std::vector<ImportedModuleSemIndex> out;
     // Grafo de modulos con la MISMA resolucion de paths que el compilador.
     Diagnostics diags;
     ModuleGraph graph(diags);
     // El buffer del editor como overlay del root; las deps se leen del disco.
     graph.set_source_overlay(root_file, root_overlay_text);
-    for (const auto &d : extra_search_paths) graph.add_search_path(d);
+    for (const auto &d : extra_search_paths)
+        graph.add_search_path(d);
     graph.add_vx_path_env();
     {
         std::string sd = detect_stdlib_vx_dir();
@@ -450,10 +467,12 @@ std::vector<ImportedModuleSemIndex> build_imported_sem_indexes(
         for (char &c : norm)
             if (c == '\\') c = '/';
         size_t slash = norm.find_last_of('/');
-        if (slash != std::string::npos) graph.add_search_path(norm.substr(0, slash));
+        if (slash != std::string::npos)
+            graph.add_search_path(norm.substr(0, slash));
     }
     const uint32_t root_id = graph.build_from_root(root_file);
-    if (root_id == UINT32_MAX) return out; // root irresoluble: sin cross-module.
+    if (root_id == UINT32_MAX)
+        return out; // root irresoluble: sin cross-module.
 
     // Un indice por cada modulo != root que resolvio y parseo.
     const size_t n = graph.module_count();
@@ -472,8 +491,8 @@ std::vector<ImportedModuleSemIndex> build_imported_sem_indexes(
         e.uri = "file://" + m->canonical_path;
         e.source = std::move(src);
         try {
-            e.index =
-                build_semantic_index(*m->parsed_ast, e.source, m->canonical_path);
+            e.index = build_semantic_index(*m->parsed_ast, e.source,
+                                           m->canonical_path);
         } catch (...) {
             continue; // modulo con AST raro: se omite, sin abortar.
         }

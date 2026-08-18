@@ -13,25 +13,27 @@
  * @brief Las instrucciones del `.vel`, UNA vez y agrupadas por lo que hacen.
  *
  * De aqui salen el enum de mnemonicos, sus nombres y su categoria; y cuando se
- * migren, las tablas del parser y del emisor de bytecode.  Se incluye definiendo
+ * migren, las tablas del parser y del emisor de bytecode.  Se incluye
+ * definiendo
  * @c VX_INSTR y cada consumidor decide que hacer con cada linea.  No lleva
- * guarda de inclusion a proposito: se incluye varias veces con macros distintas.
+ * guarda de inclusion a proposito: se incluye varias veces con macros
+ * distintas.
  *
  * ## Por que existe
  *
  * La lista vivia DOS veces -- `InstrSet` (parser) e `InstrTable` (emisor) --,
  * las dos indexadas por cadena, y ya habian divergido: `callnr` y `jmpr` estan
- * en la del emisor y el parser no las conoce, con lo que son INALCANZABLES.  Eso
+ * en la del emisor y el parser no las conoce, con lo que son INALCANZABLES. Eso
  * no da error: da una instruccion que parece existir y no se puede usar.
  *
  * ## El ORDEN no es alfabetico, es por categoria
  *
  * Va agrupado para que cada categoria sea un rango CONTIGUO.  Asi preguntar si
- * una instruccion es un salto, o una llamada, son dos comparaciones -- sin tabla
- * que consultar ni salto que predecir.  Alfabetico obligaria a mirar una tabla
- * para cada pregunta de ese tipo, y esas preguntas se hacen en bucles calientes:
- * el clasificador de terminadores del asm, el planificador, el analisis de
- * efectos.
+ * una instruccion es un salto, o una llamada, son dos comparaciones -- sin
+ * tabla que consultar ni salto que predecir.  Alfabetico obligaria a mirar una
+ * tabla para cada pregunta de ese tipo, y esas preguntas se hacen en bucles
+ * calientes: el clasificador de terminadores del asm, el planificador, el
+ * analisis de efectos.
  *
  * La categoria sale de las SECCIONES en las que ya estaba dividida la tabla del
  * emisor -- no se invento aqui.

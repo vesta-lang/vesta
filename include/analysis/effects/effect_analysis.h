@@ -12,7 +12,8 @@
  *        FUNCION, resultado de un pase de punto-fijo sobre el callgraph.  Los
  *        optimizadores y el tooling preguntan aqui; NUNCA re-leen el IR ni
  *        computan efectos por su cuenta (ese es el invariante que garantiza que
- *        `--analyze`, diagramas y LSP muestren lo mismo que consume el compilador).
+ *        `--analyze`, diagramas y LSP muestren lo mismo que consume el
+ * compilador).
  *
  * Invalidacion (especificada desde el inicio para evitar bugs de staleness):
  *   mutacion del IR de un nodo
@@ -23,8 +24,8 @@
  *   El recomputo es perezoso: summary(fn) recomputa si esta sucio.
  *
  *   esqueleto (interfaz + cache local + invalidacion).  La logica de
- * `local(node)` (mapa IrOp -> SemanticEffects) entra en Fase 1; el punto-fijo de
- * `summary(fn)` en Fase 2.
+ * `local(node)` (mapa IrOp -> SemanticEffects) entra en Fase 1; el punto-fijo
+ * de `summary(fn)` en Fase 2.
  */
 #ifndef ANALYSIS_EFFECTS_EFFECT_ANALYSIS_H
 #define ANALYSIS_EFFECTS_EFFECT_ANALYSIS_H
@@ -55,12 +56,13 @@ namespace effects {
  *        local por nodo y los summaries por funcion, con invalidacion.
  */
 class EffectAnalysis {
-public:
+  public:
     EffectAnalysis() = default;
 
-    /// Efecto LOCAL de un nodo IR (intrinseco al opcode + operandos).  Cacheado.
+    /// Efecto LOCAL de un nodo IR (intrinseco al opcode + operandos). Cacheado.
     /// Fase 1 rellena el mapeo real; Fase 0 devuelve el neutro Complete.
-    EffectAnalysisResult local(const ir::IrFunction &fn, const ir::IrInstr &ins);
+    EffectAnalysisResult local(const ir::IrFunction &fn,
+                               const ir::IrInstr &ins);
 
     /**
      * @brief Presta los rangos de una funcion que el llamante YA tiene.
@@ -73,7 +75,8 @@ public:
      * @param fn      Funcion de la que son.  Nulo los retira.
      * @param rangos  Sus rangos.  Deben seguir vivos mientras esten prestados.
      */
-    void prestar_rangos(const ir::IrFunction *fn, const analysis::RangeFacts *rangos) {
+    void prestar_rangos(const ir::IrFunction *fn,
+                        const analysis::RangeFacts *rangos) {
         env_.rangos = rangos;
         env_.rangos_de = fn;
     }
@@ -111,9 +114,9 @@ public:
 
     /// Resumen interprocedural de TODO UN PROGRAMA (varios modulos): el cierre
     /// del callgraph CRUZA fronteras de modulo -- un CALL a una funcion de otro
-    /// modulo se resuelve contra el mapa COMBINADO (no como externa -> top).  Es
-    /// el analisis interprocedural A NIVEL DE MoDULOS; module_summary(mod) es el
-    /// caso particular de un solo modulo.  Necesario para la compilacion
+    /// modulo se resuelve contra el mapa COMBINADO (no como externa -> top). Es
+    /// el analisis interprocedural A NIVEL DE MoDULOS; module_summary(mod) es
+    /// el caso particular de un solo modulo.  Necesario para la compilacion
     /// SEPARADA (cuando el IR no viene ya fusionado): el consumidor pasa todos
     /// los modulos del programa (o sus summaries) y obtiene el cierre global.
     const ModuleSummary &
@@ -144,8 +147,9 @@ public:
     }
 
     /// Los hechos fundacionales (def-use) de una funcion, por la misma razon y
-    /// desde la misma cache.  Quien los reconstruye por su cuenta -- lo hacia el
-    /// comprobador de limites -- paga otra vez lo que el motor ya tiene hecho.
+    /// desde la misma cache.  Quien los reconstruye por su cuenta -- lo hacia
+    /// el comprobador de limites -- paga otra vez lo que el motor ya tiene
+    /// hecho.
     const IrFacts &facts_publico(const ir::IrFunction &fn) {
         return facts_of(fn);
     }
@@ -153,39 +157,41 @@ public:
     // ---- Invalidacion ----
     /// Un nodo muto: borra su cache local + marca su funcion sucia.
     void invalidate_node(const ir::IrFunction &fn, const ir::IrInstr &ins);
-    /// Una funcion muto: su summary + el de sus callers transitivos quedan sucios.
+    /// Una funcion muto: su summary + el de sus callers transitivos quedan
+    /// sucios.
     void invalidate_function(const std::string &fn_name);
     /// Borra TODO (reconstruccion completa).
     void clear();
 
-private:
-    // Clave de nodo: (funcion, indice-de-instruccion estable).  En Fase 0 usamos
-    // la direccion del IrInstr como clave provisional; Fase 1 fija una clave
-    // estable (id de instruccion) cuando el IR lo exponga.
+  private:
+    // Clave de nodo: (funcion, indice-de-instruccion estable).  En Fase 0
+    // usamos la direccion del IrInstr como clave provisional; Fase 1 fija una
+    // clave estable (id de instruccion) cuando el IR lo exponga.
     std::unordered_map<const void *, EffectAnalysisResult> local_cache_;
-    std::unordered_map<std::string, FunctionSummary>       summary_cache_;
-    std::unordered_map<std::string, bool>                  dirty_; // fn -> sucio
-    ModuleSummary                                          module_cache_;
-    ModuleSummary                                          program_cache_;
-    EffectGaps                                             gaps_;
+    std::unordered_map<std::string, FunctionSummary> summary_cache_;
+    std::unordered_map<std::string, bool> dirty_; // fn -> sucio
+    ModuleSummary module_cache_;
+    ModuleSummary program_cache_;
+    EffectGaps gaps_;
     /// Lo declarado sobre las nativas del programa (lo llena build_summary con
     /// las declaraciones de los modulos que se le pasan).  Vacio = ninguna
     /// nativa declarada, que es como estaba antes de que se pudiera declarar.
-    NativeDecls                                            native_decls_;
+    NativeDecls native_decls_;
     /// Entorno del analisis (backend + las declaraciones de arriba).  El
     /// backend lo fija quien pregunta: el mismo IR analizado para el AOT y para
     /// el interprete no da la misma respuesta.
-    EffectEnv                                              env_;
+    EffectEnv env_;
     bool module_dirty_ = true;
 
-    /// Nucleo interprocedural COMPARTIDO: computa el summary (local + cierre por
-    /// punto-fijo del callgraph) sobre las funciones de TODOS los @p mods.  Un
-    /// solo modulo -> module_summary; varios -> program_summary (cross-modulo).
+    /// Nucleo interprocedural COMPARTIDO: computa el summary (local + cierre
+    /// por punto-fijo del callgraph) sobre las funciones de TODOS los @p mods.
+    /// Un solo modulo -> module_summary; varios -> program_summary
+    /// (cross-modulo).
     ModuleSummary build_summary(const std::vector<const ir::IrModule *> &mods);
 
-    /// Gestor de analisis: cachea los IrFacts (hechos fundacionales) por funcion
-    /// para no reconstruir el def-use en cada consulta.  EffectAnalysis es el
-    /// primer consumidor del AnalysisManager.
+    /// Gestor de analisis: cachea los IrFacts (hechos fundacionales) por
+    /// funcion para no reconstruir el def-use en cada consulta.  EffectAnalysis
+    /// es el primer consumidor del AnalysisManager.
     AnalysisManager facts_mgr_;
     const IrFacts &facts_of(const ir::IrFunction &fn);
     /// Tabla points-to cacheada por funcion (depende de IRFacts; el manager

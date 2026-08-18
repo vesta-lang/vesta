@@ -7,11 +7,11 @@
 
 /**
  * @file analysis/asa/fact_file.cpp
- * @brief Implementacion del fichero de hechos (ver @c analysis/asa/fact_file.h).
+ * @brief Implementacion del fichero de hechos (ver @c
+ * analysis/asa/fact_file.h).
  */
 
 #include "analysis/asa/fact_file.h"
-
 
 #include "util/fnv.h"
 #include "util/fs_utils.h"
@@ -37,8 +37,8 @@ constexpr uint32_t kMagicEnd = 0x4E494658u; ///< 'XFIN': cierra el fichero.
  * fichero, y un fichero roto puede decir cualquier cosa.  Con esto, lo que se
  * pide depende de los bytes que quedan de verdad.
  */
-constexpr size_t kBytesMinimosHecho = 4 + 4 + 8 + 8 + 4 + 3 * 4 + 1 + 4 + 4 + 1 +
-                                      1 + 4 + 4 + 4 + 4 * 4 + 4 + 4;
+constexpr size_t kBytesMinimosHecho =
+    4 + 4 + 8 + 8 + 4 + 3 * 4 + 1 + 4 + 4 + 1 + 1 + 4 + 4 + 4 + 4 * 4 + 4 + 4;
 
 /// Marca de "esta cadena no esta" en la tabla de un registro.  No es la cadena
 /// cero: la cadena vacia es una entrada legitima.
@@ -72,12 +72,13 @@ class StringTable {
     }
     void escribir(util::ByteWriter &w) const {
         w.u32(static_cast<uint32_t>(orden_.size()));
-        for (const std::string &s : orden_) w.str(s);
+        for (const std::string &s : orden_)
+            w.str(s);
     }
     bool vacia() const { return orden_.empty(); }
 
   private:
-    std::vector<std::string>                  orden_;
+    std::vector<std::string> orden_;
     std::unordered_map<std::string, uint32_t> idx_;
 };
 
@@ -97,13 +98,15 @@ const char *canonicalize(FactStore &almacen, const std::string &s) {
 
 } // namespace
 
-uint64_t record_checksum(const uint8_t *d, size_t ini, size_t suma, size_t fin) {
+uint64_t record_checksum(const uint8_t *d, size_t ini, size_t suma,
+                         size_t fin) {
     const uint64_t h = util::fnv_bytes(util::kFnvOffset, d + ini, suma - ini);
     return util::fnv_bytes(h, d + suma + 8, fin - (suma + 8));
 }
 
 uint64_t file_checksum(const uint8_t *d, size_t n) {
-    /* Todo menos la propia suma y la magia que cierra: lo que va antes de ella. */
+    /* Todo menos la propia suma y la magia que cierra: lo que va antes de ella.
+     */
     return util::fnv_bytes(util::kFnvOffset, d, n - kTailBytes + 8);
 }
 
@@ -163,11 +166,10 @@ bool should_store(CacheLevel nivel, const DomainCost &c) {
     return !c.recomputable || c.micros >= kUmbralMicros;
 }
 
-std::vector<uint8_t> serialize(const FactStore               &almacen,
-                               uint64_t                       huella,
-                               CacheLevel                     nivel,
+std::vector<uint8_t> serialize(const FactStore &almacen, uint64_t huella,
+                               CacheLevel nivel,
                                const std::vector<DomainCost> &costes,
-                               uint64_t                       compilador) {
+                               uint64_t compilador) {
     if (nivel == CacheLevel::Off || almacen.size() == 0) return {};
 
     /* Agrupar por dominio, indexando por el PUNTERO del nombre: dentro de un
@@ -175,14 +177,14 @@ std::vector<uint8_t> serialize(const FactStore               &almacen,
      * FactStore los indexa), asi que esto evita construir una cadena por hecho.
      * Se conserva el orden de aparicion para que dos volcados del mismo modulo
      * den el mismo fichero y se puedan comparar. */
-    std::vector<const char *>                             dominios;
+    std::vector<const char *> dominios;
     std::unordered_map<const char *, std::vector<FactId>> por_dominio;
-    std::unordered_map<const char *, bool>                admitido;
-    std::unordered_map<const char *, uint64_t>            huella_de;
+    std::unordered_map<const char *, bool> admitido;
+    std::unordered_map<const char *, uint64_t> huella_de;
     for (FactId id = 0; id < static_cast<FactId>(almacen.size()); ++id) {
-        const Fact       &f = almacen.at(id);
+        const Fact &f = almacen.at(id);
         const char *const dom = f.que.dominio;
-        auto              ad = admitido.find(dom);
+        auto ad = admitido.find(dom);
         if (ad == admitido.end()) {
             /* El criterio se resuelve UNA vez por dominio: depende del dominio,
              * y preguntarlo por hecho seria repetir la misma respuesta cientos
@@ -231,7 +233,7 @@ std::vector<uint8_t> serialize(const FactStore               &almacen,
 
     for (const char *dom : dominios) {
         const std::vector<FactId> &ids = por_dominio[dom];
-        IndexEntry              e;
+        IndexEntry e;
         e.hash = name_hash(dom);
         e.offset = w.size();
 
@@ -256,13 +258,13 @@ std::vector<uint8_t> serialize(const FactStore               &almacen,
         const size_t inicio_cuerpo = w.size();
 
         /* La tabla de cadenas tampoco se conoce hasta codificar los hechos, asi
-         * que va DETRAS y el cuerpo empieza por su desplazamiento.  Misma razon:
-         * ni buffers intermedios ni copias. */
+         * que va DETRAS y el cuerpo empieza por su desplazamiento.  Misma
+         * razon: ni buffers intermedios ni copias. */
         const size_t pos_tabla = w.size();
         w.u32(0);
 
         StringTable tabla;
-        auto         cad = [&](const char *s) { return tabla.index_of(s); };
+        auto cad = [&](const char *s) { return tabla.index_of(s); };
         for (FactId id : ids) {
             const Fact &f = almacen.at(id);
             w.u32(id); // identidad dentro del fichero, para las pruebas.
@@ -287,20 +289,19 @@ std::vector<uint8_t> serialize(const FactStore               &almacen,
             }
             w.u32(cad(f.prueba.regla));
             w.u32(static_cast<uint32_t>(f.prueba.de.size()));
-            for (FactId d : f.prueba.de) w.u32(d);
+            for (FactId d : f.prueba.de)
+                w.u32(d);
         }
-        w.patch_u32(pos_tabla,
-                       static_cast<uint32_t>(w.size() - inicio_cuerpo));
+        w.patch_u32(pos_tabla, static_cast<uint32_t>(w.size() - inicio_cuerpo));
         tabla.escribir(w);
         w.patch_u32(pos_longitud,
-                       static_cast<uint32_t>(w.size() - inicio_cuerpo));
+                    static_cast<uint32_t>(w.size() - inicio_cuerpo));
         /* La suma cubre el registro ENTERO menos ella misma: si solo cubriera
          * el cuerpo, un byte estropeado en el nombre del dominio atribuiria sus
          * hechos a otro, y uno en la huella los daria por caducados o por
          * vigentes sin motivo.  Esos campos deciden tanto como el contenido. */
-        w.patch_u64(pos_suma,
-                    record_checksum(w.bytes().data(), inicio_registro, pos_suma,
-                                    w.size()));
+        w.patch_u64(pos_suma, record_checksum(w.bytes().data(), inicio_registro,
+                                              pos_suma, w.size()));
         indice.push_back(e);
     }
 
@@ -322,7 +323,7 @@ std::vector<uint8_t> serialize(const FactStore               &almacen,
 }
 
 ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
-                      FactStore                     &destino,
+                      FactStore &destino,
                       const std::vector<DomainCost> &vigentes,
                       uint64_t compilador, const Ambito &aqui) {
     ReadResult r;
@@ -373,7 +374,8 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
      * el indice cuadre exactamente con lo que dice la cabecera es lo que
      * convierte "he leido algo" en "he leido todo lo que habia". */
     constexpr size_t kBytesCola = kTailBytes;
-    constexpr size_t kBytesEntradaIndice = 8 + 8; // huella del nombre + posicion.
+    constexpr size_t kBytesEntradaIndice =
+        8 + 8; // huella del nombre + posicion.
     if (n < kBytesCola) {
         r.reason = ReadReason::Truncated;
         return r;
@@ -407,18 +409,18 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
      * pone cuatro mil millones.  Aqui solo entran identidades que se han leido
      * de verdad, asi que lo que cuesta lo marca el contenido, no un campo. */
     std::unordered_map<uint32_t, FactId> remapeo;
-    const FactId                         base = static_cast<FactId>(destino.size());
+    const FactId base = static_cast<FactId>(destino.size());
     (void)total_original;
 
     for (uint32_t i = 0; i < n_registros && L.ok(); ++i) {
-        const size_t      inicio_registro = L.position();
+        const size_t inicio_registro = L.position();
         const std::string nombre = L.str();
-        const uint16_t    ver_hecho = L.u16();
-        const uint64_t    huella_dom = L.u64();
-        const size_t      pos_suma = L.position();
-        const uint64_t    suma = L.u64();
-        const uint32_t    n_hechos = L.u32();
-        const uint32_t    longitud = L.u32();
+        const uint16_t ver_hecho = L.u16();
+        const uint64_t huella_dom = L.u64();
+        const size_t pos_suma = L.position();
+        const uint64_t suma = L.u64();
+        const uint32_t n_hechos = L.u32();
+        const uint32_t longitud = L.u32();
         if (!L.ok()) break;
         const size_t inicio_cuerpo = L.position();
         const size_t fin_registro = inicio_cuerpo + longitud;
@@ -428,9 +430,9 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
         }
 
         /* Un dominio cuyo layout no se reconoce SE SALTA.  Para esto lleva la
-         * longitud delante: cambiar el contenido de un dominio descarta lo suyo,
-         * no el fichero entero, y nadie tiene que subir una version global para
-         * añadir un productor. */
+         * longitud delante: cambiar el contenido de un dominio descarta lo
+         * suyo, no el fichero entero, y nadie tiene que subir una version
+         * global para añadir un productor. */
         if (ver_hecho != kFactVersion) {
             ++r.skipped;
             L.seek(fin_registro);
@@ -476,7 +478,7 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
         if (!L.ok()) break;
         const size_t pos_hechos = L.position();
         L.seek(inicio_cuerpo + off_tabla);
-        const uint32_t            n_cadenas = L.u32();
+        const uint32_t n_cadenas = L.u32();
         std::vector<const char *> cadenas;
         /* Reservar por lo que quede, no por lo que diga el fichero: una cadena
          * ocupa como minimo su longitud (4 bytes), asi que mas de eso es
@@ -491,11 +493,11 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
         };
 
         /* Mismo criterio: un hecho no baja de @c kBytesMinimosHecho. */
-        leidos.reserve(leidos.size() +
-                       std::min<size_t>(n_hechos,
-                                        L.remaining() / kBytesMinimosHecho));
+        leidos.reserve(
+            leidos.size() +
+            std::min<size_t>(n_hechos, L.remaining() / kBytesMinimosHecho));
         for (uint32_t h = 0; h < n_hechos && L.ok(); ++h) {
-            Fact           f;
+            Fact f;
             const uint32_t id_original = L.u32();
             f.que.dominio = dominio;
             f.que.codigo = cad(L.u32());
@@ -522,7 +524,8 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
             if (!L.ok()) break;
             f.prueba.de.reserve(std::min<size_t>(n_apoyos, L.remaining() / 4));
             for (uint32_t k = 0; k < n_apoyos && L.ok(); ++k)
-                f.prueba.de.push_back(L.u32()); // aun en identidades del fichero.
+                f.prueba.de.push_back(
+                    L.u32()); // aun en identidades del fichero.
             if (!L.ok()) break;
             /* Y aqui el filtro por ambito.  Un hecho que dice valer solo en
              * otro objetivo no se deposita: afirmarlo aqui seria dar por bueno
@@ -551,7 +554,7 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
     for (Fact &f : leidos) {
         size_t escribe = 0;
         for (size_t k = 0; k < f.prueba.de.size(); ++k) {
-            const auto   it = remapeo.find(f.prueba.de[k]);
+            const auto it = remapeo.find(f.prueba.de[k]);
             const FactId nuevo = (it == remapeo.end()) ? kSinHecho : it->second;
             if (nuevo == kSinHecho) {
                 ++r.lost_proofs;
@@ -563,17 +566,18 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
     }
 
     destino.reservar(destino.size() + leidos.size());
-    for (Fact &f : leidos) destino.anadir(std::move(f));
+    for (Fact &f : leidos)
+        destino.anadir(std::move(f));
     r.facts = static_cast<uint32_t>(leidos.size());
     r.ok = true;
     return r;
 }
 
 ReadResult read_facts_file(const std::string &ruta, uint64_t huella,
-                           FactStore                     &destino,
+                           FactStore &destino,
                            const std::vector<DomainCost> &vigentes,
                            uint64_t compilador, const Ambito &aqui) {
-    ReadResult     r;
+    ReadResult r;
     std::vector<uint8_t> bytes;
     if (!::fs::file_exists(ruta)) {
         r.reason = ReadReason::NoFile;

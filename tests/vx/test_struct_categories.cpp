@@ -29,13 +29,13 @@ using vx::Diagnostics;
 using vx::Lexer;
 using vx::Parser;
 using vx::PrimitiveKind;
-using vx::TypeChecker;
 using vx::Type;
+using vx::TypeChecker;
 
 static int g_pass = 0;
 static int g_fail = 0;
 
-#define CK(cond)                                                              \
+#define CK(cond)                                                               \
     do {                                                                       \
         if (cond) {                                                            \
             ++g_pass;                                                          \

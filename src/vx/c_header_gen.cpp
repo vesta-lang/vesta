@@ -118,7 +118,8 @@ std::string guard_of(const std::string &base) {
         else
             g += '_';
     }
-    if (g.empty() || std::isdigit(static_cast<unsigned char>(g[0]))) g = "_" + g;
+    if (g.empty() || std::isdigit(static_cast<unsigned char>(g[0])))
+        g = "_" + g;
     return g + "_H";
 }
 
@@ -166,7 +167,8 @@ std::string generate_c_header(const ast::ModuleNode &mod, const TypeChecker &tc,
         os << prelude << "\n";
     } else {
         // Fallback minimo si no se encuentra stdlib/port/c.
-        os << "#include <stdint.h>\n#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n";
+        os << "#include <stdint.h>\n#ifdef __cplusplus\nextern \"C\" "
+              "{\n#endif\n\n";
     }
 
     // --- 1. Structs C-representables, en orden topologico ---

@@ -150,7 +150,8 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
 
     /* ---- 4) Construccion de rangos precisos por valor ---- */
     std::vector<LiveInterval> iv(NV);
-    for (uint32_t v = 0; v < NV; ++v) iv[v].vreg = v;
+    for (uint32_t v = 0; v < NV; ++v)
+        iv[v].vreg = v;
     std::vector<uint32_t> b_first(NV, UINT32_MAX), b_first_def(NV, UINT32_MAX),
         b_last_use(NV, 0);
     std::vector<uint8_t> b_used(NV, 0), b_def(NV, 0);
@@ -187,7 +188,8 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
             if (in.dst != ir::IR_NO_VALUE && in.dst < NV) {
                 mark(in.dst);
                 b_def[in.dst] = 1;
-                if (def_pos < b_first_def[in.dst]) b_first_def[in.dst] = def_pos;
+                if (def_pos < b_first_def[in.dst])
+                    b_first_def[in.dst] = def_pos;
                 if (def_pos < b_first[in.dst]) b_first[in.dst] = def_pos;
             }
         }
@@ -215,11 +217,13 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
     // no-phi para no depender de la numeracion lineal imprecisa.  El grafo de
     // interferencia PRECISO `interfere()` (live-at-def, mas abajo) + el gate
     // `sibling_dep` cubren la interferencia real -- incluido el caso original
-    // de state_machine -- sin perder el coalescing del acumulador loop-carried.)
+    // de state_machine -- sin perder el coalescing del acumulador
+    // loop-carried.)
 
     /* ---- 5) Coalescing de congruencias de PHI ---- */
     std::vector<uint32_t> parent(NV);
-    for (uint32_t v = 0; v < NV; ++v) parent[v] = v;
+    for (uint32_t v = 0; v < NV; ++v)
+        parent[v] = v;
     std::function<uint32_t(uint32_t)> find = [&](uint32_t x) -> uint32_t {
         while (parent[x] != x) {
             parent[x] = parent[parent[x]];
@@ -229,7 +233,8 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
     };
     std::vector<LiveInterval> merged = iv; // clusters (valido en el rep)
     std::vector<std::vector<uint32_t>> members(NV);
-    for (uint32_t v = 0; v < NV; ++v) members[v].push_back(v);
+    for (uint32_t v = 0; v < NV; ++v)
+        members[v].push_back(v);
 
     /* Pares PROHIBIDOS 2-address: dst<->operands[1]. */
     /* Marca de phi-dsts: un valor definido por un PHI.  Coalescer un phi_dst
@@ -283,7 +288,8 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
     {
         std::vector<char> liveset(NV, 0);
         for (uint32_t b = 0; b < NB; ++b) {
-            for (uint32_t v = 0; v < NV; ++v) liveset[v] = live_out[idx(b, v)];
+            for (uint32_t v = 0; v < NV; ++v)
+                liveset[v] = live_out[idx(b, v)];
             const auto &ins = fn.blocks[b].instrs;
             for (size_t j = ins.size(); j-- > 0;) {
                 const ir::IrInstr &in = ins[j];
@@ -302,10 +308,10 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
             }
         }
     }
-    /* Interferencia de CLUSTERS: dos representantes interfieren sii algun par de
-     * miembros (uno de cada) tiene una arista.  Static adj sobre vregs
-     * originales; correcto porque si dos originales interfieren, sus clusters no
-     * pueden fusionarse.  Itera el cluster menor. */
+    /* Interferencia de CLUSTERS: dos representantes interfieren sii algun par
+     * de miembros (uno de cada) tiene una arista.  Static adj sobre vregs
+     * originales; correcto porque si dos originales interfieren, sus clusters
+     * no pueden fusionarse.  Itera el cluster menor. */
     auto interfere = [&](uint32_t ra, uint32_t rb) -> bool {
         const uint32_t small =
             members[ra].size() <= members[rb].size() ? ra : rb;
@@ -329,19 +335,17 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
         for (size_t j = 0; j < fn.blocks[b].instrs.size(); ++j) {
             const ir::IrInstr &in = fn.blocks[b].instrs[j];
             const ir::IrOp op = in.op;
-            bool is_call = (op == ir::IrOp::CALL || op == ir::IrOp::CALLN ||
-                            op == ir::IrOp::CALLIND || op == ir::IrOp::CALLVIRT ||
-                            op == ir::IrOp::CALLITF || op == ir::IrOp::CALLM ||
-                            op == ir::IrOp::TAILCALL ||
-                            /* ops GC con slow-path call inline (clobbean
-                             * caller-saved): deref/alloc/promote/etc. */
-                            op == ir::IrOp::GC_DEREF_HOST ||
-                            op == ir::IrOp::GC_ALLOC ||
-                            op == ir::IrOp::GC_ALLOCP ||
-                            op == ir::IrOp::NEWOBJ ||
-                            op == ir::IrOp::GC_HANDLE_FOR_PTR ||
-                            op == ir::IrOp::GC_PROMOTE ||
-                            op == ir::IrOp::GC_DEMOTE);
+            bool is_call =
+                (op == ir::IrOp::CALL || op == ir::IrOp::CALLN ||
+                 op == ir::IrOp::CALLIND || op == ir::IrOp::CALLVIRT ||
+                 op == ir::IrOp::CALLITF || op == ir::IrOp::CALLM ||
+                 op == ir::IrOp::TAILCALL ||
+                 /* ops GC con slow-path call inline (clobbean
+                  * caller-saved): deref/alloc/promote/etc. */
+                 op == ir::IrOp::GC_DEREF_HOST || op == ir::IrOp::GC_ALLOC ||
+                 op == ir::IrOp::GC_ALLOCP || op == ir::IrOp::NEWOBJ ||
+                 op == ir::IrOp::GC_HANDLE_FOR_PTR ||
+                 op == ir::IrOp::GC_PROMOTE || op == ir::IrOp::GC_DEMOTE);
             /* LOAD/STORE sobre memoria VM (puntero NO host) baja a LOAD_VM/
              * STORE_VM, que hace un CALL a vrt_vm_read/write en el page-miss
              * -> clobbea caller-saved.  Se detecta por is_host_ptr del ptr. */
@@ -377,7 +381,8 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
                     (op == ir::IrOp::CALL || op == ir::IrOp::CALLN ||
                      op == ir::IrOp::CALLIND || op == ir::IrOp::CALLVIRT ||
                      op == ir::IrOp::CALLITF || op == ir::IrOp::CALLM ||
-                     op == ir::IrOp::TAILCALL || op == ir::IrOp::GC_DEREF_HOST ||
+                     op == ir::IrOp::TAILCALL ||
+                     op == ir::IrOp::GC_DEREF_HOST ||
                      op == ir::IrOp::GC_ALLOC || op == ir::IrOp::GC_ALLOCP ||
                      op == ir::IrOp::NEWOBJ ||
                      op == ir::IrOp::GC_HANDLE_FOR_PTR ||
@@ -415,7 +420,8 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
         return v && v[0] != '\0' && v[0] != '0';
     }();
 
-    /* Operandos del def (no-phi) de cada valor -- para la regla del diamante. */
+    /* Operandos del def (no-phi) de cada valor -- para la regla del diamante.
+     */
     std::vector<std::vector<ir::IrValueId>> def_operands(NV);
     for (uint32_t b = 0; b < NB; ++b)
         for (const ir::IrInstr &in : fn.blocks[b].instrs) {
@@ -427,10 +433,11 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
         }
 
     /* Back-edges (DFS): una arista u->v es back-edge si v esta GRIS (en la pila
-     * del DFS) al visitar u->v.  v es entonces una cabecera de loop.  Sirve para
-     * distinguir, en un phi de cabecera `%d = phi[preheader:%init, back:%carry]`,
-     * el arg de ENTRADA (init, arista forward que domina) del loop-carried
-     * (arista de retorno).  Coalescer el arg de entrada haria el phi trivial
+     * del DFS) al visitar u->v.  v es entonces una cabecera de loop.  Sirve
+     * para distinguir, en un phi de cabecera `%d = phi[preheader:%init,
+     * back:%carry]`, el arg de ENTRADA (init, arista forward que domina) del
+     * loop-carried (arista de retorno).  Coalescer el arg de entrada haria el
+     * phi trivial
      * (`%d = phi[%d,%d]`) y perderia/pisaria la inicializacion. */
     std::unordered_set<uint64_t> back_edges;
     std::vector<uint8_t> is_loop_header(NB, 0);
@@ -468,16 +475,16 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
             if (in.op != ir::IrOp::PHI || in.dst == ir::IR_NO_VALUE) continue;
             for (const ir::IrPhiArg &a : in.phi_args) {
                 const ir::IrValueId d = in.dst, s = a.value;
-                /* En una cabecera de loop, solo coalescer el arg de la ARISTA DE
-                 * RETORNO (loop-carried).  El arg de entrada (init, arista
-                 * forward) NO: coalescerlo hace el phi trivial (`%d=phi[%d,%d]`)
-                 * y al consumir el remap se perderia la inicializacion (el reg
-                 * del init y del phi serian el mismo y la copia de entrada seria
-                 * no-op).  Aplica a AMBOS consumidores del remap (interp
-                 * allocate_regs + machine apply_ssa_coalesce).  Los phis de
-                 * if/else (bloque no-header) no se afectan. */
-                if (is_loop_header[b] &&
-                    a.block < NB &&
+                /* En una cabecera de loop, solo coalescer el arg de la ARISTA
+                 * DE RETORNO (loop-carried).  El arg de entrada (init, arista
+                 * forward) NO: coalescerlo hace el phi trivial
+                 * (`%d=phi[%d,%d]`) y al consumir el remap se perderia la
+                 * inicializacion (el reg del init y del phi serian el mismo y
+                 * la copia de entrada seria no-op).  Aplica a AMBOS
+                 * consumidores del remap (interp allocate_regs + machine
+                 * apply_ssa_coalesce).  Los phis de if/else (bloque no-header)
+                 * no se afectan. */
+                if (is_loop_header[b] && a.block < NB &&
                     !back_edges.count(((uint64_t)a.block << 32) | (uint64_t)b))
                     continue;
                 if (d >= NV || s >= NV || d == s) continue;
@@ -486,10 +493,10 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
                 /* NO coalescer con un arg CONSTANTE ni con un phi cuyo dst sea
                  * const: una const tiene valor FIJO (rematerializable), no
                  * loop-carried.  Si el phi cae en la clase de la const, el
-                 * vreg_select del JIT rematerializa el valor como la constante K
-                 * en cada uso (p.ej. `mul rng(=7), LCG` -> `imul r, r, 7`),
-                 * perdiendo el valor loop-carried.  Se excluye de la DECISION de
-                 * congruencia, comun a los dos consumidores del remap. */
+                 * vreg_select del JIT rematerializa el valor como la constante
+                 * K en cada uso (p.ej. `mul rng(=7), LCG` -> `imul r, r, 7`),
+                 * perdiendo el valor loop-carried.  Se excluye de la DECISION
+                 * de congruencia, comun a los dos consumidores del remap. */
                 if ((d < fn.values.size() && fn.values[d].is_const) ||
                     (s < fn.values.size() && fn.values[s].is_const))
                     continue;
@@ -499,34 +506,41 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
                  * %s y %o NO interfieren (ramas distintas) pero NO son el mismo
                  * valor SSA -- unirlos en la clase de %d hace que el reg que
                  * contiene `%o+c` deje de ser distinguible del que contiene %o
-                 * -> semantica rota.  Distincion con el loop `%i_next=%i+1`: ahi
-                 * %i_next depende del DST %i (loop-carry legitimo), NO de un
-                 * hermano arg -> ese SI coalesce.  Solo miramos dependencia de
-                 * HERMANOS (otros args del phi), no del dst. */
+                 * -> semantica rota.  Distincion con el loop `%i_next=%i+1`:
+                 * ahi %i_next depende del DST %i (loop-carry legitimo), NO de
+                 * un hermano arg -> ese SI coalesce.  Solo miramos dependencia
+                 * de HERMANOS (otros args del phi), no del dst. */
                 {
                     bool sibling_dep = false;
                     for (ir::IrValueId u : def_operands[s]) {
-                        if (u == d) continue; // dependencia del DST = loop-carry OK
+                        if (u == d)
+                            continue; // dependencia del DST = loop-carry OK
                         for (const ir::IrPhiArg &sib : in.phi_args)
-                            if (sib.value == u && u != s) { sibling_dep = true; break; }
+                            if (sib.value == u && u != s) {
+                                sibling_dep = true;
+                                break;
+                            }
                         if (sibling_dep) break;
                     }
                     if (sibling_dep) {
                         if (dbg)
-                            std::fprintf(stderr,
+                            std::fprintf(
+                                stderr,
                                 "[ssa-coal] %s phi v%u<-v%u SIBLINGDEP\n",
                                 fn.name.c_str(), d, s);
                         continue;
                     }
                 }
                 // (Antes: gate conservador `non_phi_used[s]` -- rechazaba
-                // coalescer cualquier arg con usos NO-phi SIN consultar el grafo
-                // de interferencia.  Era un band-aid sobre la imprecision de la
-                // numeracion lineal; el grafo PRECISO `interfere()` (live-at-def)
-                // de abajo ya detecta la interferencia real, asi que el band-aid
-                // sobra y ademas perdia el coalescing del acumulador loop-carried
-                // -- `acc` cuyo `acc+1` es un uso no-phi legitimo.  La correccion
-                // real es confiar en el grafo preciso + sibling_dep, no rodearlo.)
+                // coalescer cualquier arg con usos NO-phi SIN consultar el
+                // grafo de interferencia.  Era un band-aid sobre la imprecision
+                // de la numeracion lineal; el grafo PRECISO `interfere()`
+                // (live-at-def) de abajo ya detecta la interferencia real, asi
+                // que el band-aid sobra y ademas perdia el coalescing del
+                // acumulador loop-carried
+                // -- `acc` cuyo `acc+1` es un uso no-phi legitimo.  La
+                // correccion real es confiar en el grafo preciso + sibling_dep,
+                // no rodearlo.)
                 const uint32_t rd = find(d), rs = find(s);
                 if (rd == rs) continue;
                 if (crosses_call(rd) || crosses_call(rs)) {
@@ -544,14 +558,15 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
                          * lineales -- el clasico falso-conflicto del back-edge
                          * de loop no modelado como copia paralela) vs FORBIDDEN
                          * (2-address dst<->operands[1]).  Imprimir los rangos
-                         * para ver si el overlap es solo la arista de retorno. */
-                        std::fprintf(
-                            stderr,
-                            "[ssa-coal] %s phi v%u<-v%u REJECT:%s "
-                            "rd[%u,%u) rs[%u,%u)\n",
-                            fn.name.c_str(), d, s, itf ? "INTERFERE" : "FORBIDDEN",
-                            merged[rd].start(), merged[rd].end(),
-                            merged[rs].start(), merged[rs].end());
+                         * para ver si el overlap es solo la arista de retorno.
+                         */
+                        std::fprintf(stderr,
+                                     "[ssa-coal] %s phi v%u<-v%u REJECT:%s "
+                                     "rd[%u,%u) rs[%u,%u)\n",
+                                     fn.name.c_str(), d, s,
+                                     itf ? "INTERFERE" : "FORBIDDEN",
+                                     merged[rd].start(), merged[rd].end(),
+                                     merged[rs].start(), merged[rs].end());
                     }
                     continue;
                 }
@@ -570,7 +585,8 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
 
     if (!any) return remap; // vacio
     remap.resize(NV);
-    for (uint32_t v = 0; v < NV; ++v) remap[v] = find(v);
+    for (uint32_t v = 0; v < NV; ++v)
+        remap[v] = find(v);
     return remap;
 }
 
@@ -587,7 +603,8 @@ bool apply_ssa_coalesce(MFunction &mf, const ir::IrFunction &fn) {
      * como PARALLEL MOVE (regalloc_rewrite) y el gen/kill de build_intervals
      * procesa usos-antes-de-defs (sin esto, `add v,v,1` tras coalescing perdia
      * el uso -> rango fragmentado -> corrupcion).  diff_harness: 388 OK / 0
-     * VREG_HANG/DIVERGE/CRASH (solo el asm_stack_manip inherente interp-vs-jit). */
+     * VREG_HANG/DIVERGE/CRASH (solo el asm_stack_manip inherente
+     * interp-vs-jit). */
     static const bool off = [] {
         const char *en = std::getenv("VESTA_NO_SSA_COALESCE");
         return en && en[0] != '\0' && en[0] != '0';

@@ -27,8 +27,6 @@
 namespace vx {
 namespace vxgen {
 
-
-
 std::string mangle_args(const std::vector<Type> &args) {
     std::string s;
     for (size_t i = 0; i < args.size(); ++i) {
@@ -53,7 +51,8 @@ std::string mangle_type(const Type &t) {
     case PrimitiveKind::BOOL: return "bool";
     case PrimitiveKind::CHAR: return "ch";
     case PrimitiveKind::PTR: {
-        // Incluir el pointee + la naturaleza (virtual vs host) para no colisionar
+        // Incluir el pointee + la naturaleza (virtual vs host) para no
+        // colisionar
         // (`Caja<i64*>` vs `Caja<u8*>` vs `Caja<VirtualPtr<i64>>`).
         const std::string base = t.is_virtual ? "vptr" : "ptr";
         return t.pointee ? (base + mangle_type(*t.pointee)) : base;
@@ -67,13 +66,12 @@ std::string mangle_type(const Type &t) {
     }
 }
 
-
 // Reconstruye un TypeNode AST a partir de un Type ya resuelto.  Lo usa la
 // sustitucion de type-params cuando el arg NO es un escalar simple: un puntero
 // (`i64*`) o un array (`i64[4]`) deben preservar su pointee/element y tamano,
 // no colapsar a un PrimitiveTypeNode{PTR/ARRAY} que pierde esa info (#2).
 std::unique_ptr<ast::TypeNode> type_node_from_type(const Type &a,
-                                                          const SourceLoc &loc) {
+                                                   const SourceLoc &loc) {
     // Enum con valor de backing entero/float/string: el kind es el del backing
     // pero la IDENTIDAD del tipo es el nombre del enum (con is_valued_enum).
     // Reconstruir como NamedTypeNode con ese nombre para que la re-resolucion
@@ -125,8 +123,8 @@ std::unique_ptr<ast::TypeNode> type_node_from_type(const Type &a,
     }
 }
 
-std::unique_ptr<ast::TypeNode>
-clone_type_with_subst(const ast::TypeNode *t, const GenSubst &g) {
+std::unique_ptr<ast::TypeNode> clone_type_with_subst(const ast::TypeNode *t,
+                                                     const GenSubst &g) {
     if (!t) return nullptr;
     switch (t->kind) {
     case ast::NodeKind::PrimitiveTypeNode: {
@@ -199,8 +197,7 @@ clone_type_with_subst(const ast::TypeNode *t, const GenSubst &g) {
     }
 }
 
-std::unique_ptr<ast::Expr> clone_expr(const ast::Expr *e,
-                                             const GenSubst &g) {
+std::unique_ptr<ast::Expr> clone_expr(const ast::Expr *e, const GenSubst &g) {
     if (!e) return nullptr;
     switch (e->kind) {
     case ast::NodeKind::IntLitExpr: {
@@ -460,8 +457,7 @@ std::unique_ptr<ast::Expr> clone_expr(const ast::Expr *e,
     }
 }
 
-std::unique_ptr<ast::Stmt> clone_stmt(const ast::Stmt *s,
-                                             const GenSubst &g) {
+std::unique_ptr<ast::Stmt> clone_stmt(const ast::Stmt *s, const GenSubst &g) {
     if (!s) return nullptr;
     switch (s->kind) {
     case ast::NodeKind::BlockStmt: {
@@ -738,8 +734,7 @@ void rename_in_expr(ast::Expr *e) {
         }
         return;
     }
-    default:
-        return; // literales y nodos sin sub-expresiones
+    default: return; // literales y nodos sin sub-expresiones
     }
 }
 
@@ -809,16 +804,14 @@ void rename_in_stmt(ast::Stmt *s) {
         rename_in_stmt(y->body.get());
         return;
     }
-    default:
-        return;
+    default: return;
     }
 }
 
 } // namespace
 
 void rename_idents(
-    ast::Node *n,
-    const std::unordered_map<std::string, std::string> &renames) {
+    ast::Node *n, const std::unordered_map<std::string, std::string> &renames) {
     if (!n || renames.empty()) return;
     g_renames = &renames;
     switch (n->kind) {
@@ -839,8 +832,7 @@ void rename_idents(
             if (m) rename_in_stmt(m->body.get());
         break;
     }
-    default:
-        break;
+    default: break;
     }
     g_renames = nullptr;
 }

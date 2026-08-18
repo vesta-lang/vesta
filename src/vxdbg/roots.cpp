@@ -24,19 +24,19 @@ LanguageEntityId ArtifactMap::find(const std::string &symbol) const {
     // Busqueda binaria: el orden se mantiene al insertar precisamente para
     // poder buscar sin construir ningun indice al leer, que es lo que hace que
     // resolver una traza no cueste mas que la traza.
-    auto it = std::lower_bound(
-        symbols.begin(), symbols.end(), symbol,
-        [](const std::pair<std::string, LanguageEntityId> &a,
-           const std::string &b) { return a.first < b; });
+    auto it =
+        std::lower_bound(symbols.begin(), symbols.end(), symbol,
+                         [](const std::pair<std::string, LanguageEntityId> &a,
+                            const std::string &b) { return a.first < b; });
     if (it == symbols.end() || it->first != symbol) return {};
     return it->second;
 }
 
 void ArtifactMap::add(std::string symbol, LanguageEntityId entity) {
-    auto it = std::lower_bound(
-        symbols.begin(), symbols.end(), symbol,
-        [](const std::pair<std::string, LanguageEntityId> &a,
-           const std::string &b) { return a.first < b; });
+    auto it =
+        std::lower_bound(symbols.begin(), symbols.end(), symbol,
+                         [](const std::pair<std::string, LanguageEntityId> &a,
+                            const std::string &b) { return a.first < b; });
     // Un simbolo corresponde a UNA entidad.  Si llega otra vez es que quien lo
     // construyo se contradice; se queda la primera, igual que con las claves
     // repetidas del grafo.
@@ -56,8 +56,8 @@ SourceExtent SpanMap::find(const std::string &symbol, uint32_t line) const {
     SourceExtent buscado;
     buscado.symbol = symbol;
     buscado.line = line;
-    auto it = std::lower_bound(extents.begin(), extents.end(), buscado,
-                               extent_less);
+    auto it =
+        std::lower_bound(extents.begin(), extents.end(), buscado, extent_less);
     if (it == extents.end() || it->symbol != symbol || it->line != line)
         return {};
     return *it;
@@ -89,8 +89,8 @@ bool CacheRootRepository::publish(BuildId build, ContentHash map,
     if (!f) return false;
     // Se escribe tambien de quien es: si el fichero acabara donde no toca, al
     // leerlo se nota en vez de servir el mapa de otro programa.
-    const std::string body = map.to_hex() + "\n" + build.hash.to_hex() +
-                             "\n" + spans.to_hex() + "\n";
+    const std::string body = map.to_hex() + "\n" + build.hash.to_hex() + "\n" +
+                             spans.to_hex() + "\n";
     const bool ok = std::fwrite(body.data(), 1, body.size(), f) == body.size();
     std::fclose(f);
     return ok;
@@ -123,7 +123,8 @@ bool CacheRootRepository::lookup(BuildId build, ArtifactMap &out_map) const {
     return load_node(store_, map, out_map);
 }
 
-bool CacheRootRepository::lookup_spans(BuildId build, SpanMap &out_spans) const {
+bool CacheRootRepository::lookup_spans(BuildId build,
+                                       SpanMap &out_spans) const {
     if (build.empty()) return false;
     std::FILE *f = std::fopen(path_for(build).c_str(), "rb");
     if (!f) return false;
@@ -140,7 +141,8 @@ bool CacheRootRepository::lookup_spans(BuildId build, SpanMap &out_spans) const 
     if (p2 == std::string::npos) return false;
     size_t p3 = body.find(10, p2 + 1);
     if (p3 == std::string::npos) return false;
-    const ContentHash h = ContentHash::from_hex(body.substr(p2 + 1, p3 - p2 - 1));
+    const ContentHash h =
+        ContentHash::from_hex(body.substr(p2 + 1, p3 - p2 - 1));
     if (h.empty()) return false;
     return load_node(store_, h, out_spans);
 }

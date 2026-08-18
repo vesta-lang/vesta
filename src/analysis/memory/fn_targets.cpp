@@ -7,7 +7,8 @@
 
 /**
  * @file fn_targets.cpp
- * @brief Implementacion del resolvedor de punteros a funcion (ver fn_targets.h).
+ * @brief Implementacion del resolvedor de punteros a funcion (ver
+ * fn_targets.h).
  */
 #include "analysis/memory/fn_targets.h"
 
@@ -36,11 +37,12 @@ std::string seguir(const ir::IrFunction &fn, const IrFacts &facts,
     case IrOp::MOV:
     case IrOp::BITCAST:
         // Copias y reinterpretaciones no cambian a donde apunta.
-        return d->operands.empty() ? std::string{}
-                                   : seguir(fn, facts, d->operands[0], saltos + 1);
+        return d->operands.empty()
+                   ? std::string{}
+                   : seguir(fn, facts, d->operands[0], saltos + 1);
     case IrOp::LOAD: {
-        /* Guardado y releido.  Solo vale si el hueco se escribe UNA vez: con dos
-         * escrituras el contenido depende del camino, y entonces el destino
+        /* Guardado y releido.  Solo vale si el hueco se escribe UNA vez: con
+         * dos escrituras el contenido depende del camino, y entonces el destino
          * tambien. */
         if (d->operands.empty()) return {};
         const ir::IrValueId guardado =
@@ -54,13 +56,14 @@ std::string seguir(const ir::IrFunction &fn, const IrFacts &facts,
         for (const ir::IrPhiArg &pa : d->phi_args) {
             const std::string n = seguir(fn, facts, pa.value, saltos + 1);
             if (n.empty()) return {};
-            if (comun.empty()) comun = n;
-            else if (comun != n) return {};
+            if (comun.empty())
+                comun = n;
+            else if (comun != n)
+                return {};
         }
         return comun;
     }
-    default:
-        return {};
+    default: return {};
     }
 }
 
@@ -83,7 +86,8 @@ bool usos_solo_en_llamadas(const ir::IrFunction &fn, ir::IrValueId v,
             }
             for (ir::IrValueId a : in.operands)
                 if (a == v) return false;
-            if (in.func_ptr == v) return false; // otro tipo de llamada indirecta
+            if (in.func_ptr == v)
+                return false; // otro tipo de llamada indirecta
             for (const ir::IrPhiArg &pa : in.phi_args)
                 if (pa.value == v) return false;
         }
@@ -108,8 +112,8 @@ DireccionTomada seguir_direccion(const ir::IrModule &mod,
         for (const ir::IrBlock &b : fn.blocks) {
             for (const ir::IrInstr &in : b.instrs) {
                 /* Un bloque de ensamblador puede saltar a un simbolo por su
-                 * nombre sin que aparezca ninguna instruccion de llamada.  No se
-                 * intenta interpretarlo: basta con que lo nombre. */
+                 * nombre sin que aparezca ninguna instruccion de llamada.  No
+                 * se intenta interpretarlo: basta con que lo nombre. */
                 if (in.op == IrOp::RAW_ASM || in.op == IrOp::INLINE_ASM) {
                     if (in.func_name.find(nombre) != std::string::npos) {
                         out.tomada = true;
@@ -122,8 +126,9 @@ DireccionTomada seguir_direccion(const ir::IrModule &mod,
                     continue; // llamada directa: se ve sin seguir nada
                 out.tomada = true;
                 if (in.op != IrOp::LABEL_ADDR || in.dst == ir::IR_NO_VALUE) {
-                    // Registrada como metodo, usada de deleter, nombrada por una
-                    // nativa...: son puertas de entrada que no se pueden censar.
+                    // Registrada como metodo, usada de deleter, nombrada por
+                    // una nativa...: son puertas de entrada que no se pueden
+                    // censar.
                     todas = false;
                     continue;
                 }

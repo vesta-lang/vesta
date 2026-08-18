@@ -13,7 +13,8 @@
  *   1. Utilidades: localizar la definicion de un valor, coste de un op.
  *   2. Predictores especializados (cada uno experto en un dominio; devuelven
  *      Unknown si no reconocen el patron).
- *   3. @c estimate_p_mispredict: combina los predictores (el mas confiado gana).
+ *   3. @c estimate_p_mispredict: combina los predictores (el mas confiado
+ * gana).
  *   4. @c prefer_select: modelo de coste (score(branch) vs score(select)).
  */
 
@@ -130,7 +131,8 @@ PredictorResult predict_data_bittest(const IrFunction &fn, IrValueId cond) {
 
     const int bits = __builtin_popcountll(mask);
     double p_true = 1.0;
-    for (int i = 0; i < bits; ++i) p_true *= 0.5; // 2^-bits
+    for (int i = 0; i < bits; ++i)
+        p_true *= 0.5; // 2^-bits
     if (cmp->op == IrOp::CMP_NE) p_true = 1.0 - p_true;
     const double p_mis = std::min(p_true, 1.0 - p_true);
 
@@ -169,8 +171,8 @@ PredictorResult predict_const_compare(const IrFunction &fn, IrValueId cond) {
     }
     if (cmp->operands.size() != 2) return r;
     uint64_t cv = 0;
-    const bool has_const =
-        as_const(fn, cmp->operands[0], cv) || as_const(fn, cmp->operands[1], cv);
+    const bool has_const = as_const(fn, cmp->operands[0], cv) ||
+                           as_const(fn, cmp->operands[1], cv);
     if (!has_const) return r;
     // Igualdad exacta contra constante: tiende a ser predecible.
     const bool eq = (cmp->op == IrOp::CMP_EQ || cmp->op == IrOp::CMP_NE);
@@ -181,7 +183,8 @@ PredictorResult predict_const_compare(const IrFunction &fn, IrValueId cond) {
     return r;
 }
 
-/// @brief true si @p op es una comparacion relacional (< <= > >=, con/sin signo).
+/// @brief true si @p op es una comparacion relacional (< <= > >=, con/sin
+/// signo).
 bool is_relational(IrOp op) {
     switch (op) {
     case IrOp::CMP_LT:
@@ -228,10 +231,14 @@ PredictorResult predict_loop_induction(const IrFunction &fn, IrValueId cond) {
         const IrValueId x = cmp->operands[i];
         const IrInstr *dx = find_def(fn, x);
         if (!dx || (dx->op != IrOp::ADD && dx->op != IrOp::SUB)) continue;
-        // x = op(a, b); si a o b vuelve a x, x es un contador que se realimenta.
+        // x = op(a, b); si a o b vuelve a x, x es un contador que se
+        // realimenta.
         bool recurrent = false;
         for (IrValueId o : dx->operands)
-            if (value_reaches(fn, o, x)) { recurrent = true; break; }
+            if (value_reaches(fn, o, x)) {
+                recurrent = true;
+                break;
+            }
         if (recurrent) {
             r.known = true;
             r.p_mispredict = 0.02; // condicion de loop
@@ -295,9 +302,9 @@ PredictorResult predict_profile(uint32_t source_line) {
     r.known = true;
     r.p_mispredict = it->second;
     r.confidence = 0.95; // el dato medido manda sobre lo estructural
-    r.cls = it->second > 0.35 ? BranchClass::DataDependent
+    r.cls = it->second > 0.35   ? BranchClass::DataDependent
             : it->second < 0.05 ? BranchClass::AlmostNeverTaken
-                                 : BranchClass::Unknown;
+                                : BranchClass::Unknown;
     return r;
 }
 
@@ -347,12 +354,9 @@ double estimate_p_mispredict(const IrFunction &fn, IrValueId cond,
     // no reconoce el patron devuelve Unknown y no aporta.  El de PERFIL domina
     // cuando hay dato medido.
     const PredictorResult preds[] = {
-        predict_profile(source_line),
-        predict_pointer_nullcheck(fn, cond),
-        predict_loop_induction(fn, cond),
-        predict_switch_chain(fn, cond),
-        predict_data_bittest(fn, cond),
-        predict_const_compare(fn, cond),
+        predict_profile(source_line),     predict_pointer_nullcheck(fn, cond),
+        predict_loop_induction(fn, cond), predict_switch_chain(fn, cond),
+        predict_data_bittest(fn, cond),   predict_const_compare(fn, cond),
     };
     const PredictorResult *best = nullptr;
     for (const auto &p : preds) {

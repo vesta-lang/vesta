@@ -20,16 +20,25 @@ using namespace analysis;
 static int g_checks = 0, g_fails = 0;
 static void check(bool ok, const char *what) {
     ++g_checks;
-    if (!ok) { ++g_fails; std::printf("  FALLO: %s\n", what); }
+    if (!ok) {
+        ++g_fails;
+        std::printf("  FALLO: %s\n", what);
+    }
 }
 
 // --- Analisis A (hecho base): resultado ResultA.  Sin gancho survives. ---
-struct AnalysisA { static char ID; };
+struct AnalysisA {
+    static char ID;
+};
 char AnalysisA::ID = 0;
-struct ResultA { int v; };
+struct ResultA {
+    int v;
+};
 
 // --- Analisis B: depende de A.  ResultB SOBREVIVE si B esta preservado. ---
-struct AnalysisB { static char ID; };
+struct AnalysisB {
+    static char ID;
+};
 char AnalysisB::ID = 0;
 struct ResultB {
     int v;
@@ -43,7 +52,10 @@ static int g_a_calls = 0, g_b_calls = 0;
 int main() {
     {
         AnalysisManager am;
-        auto compute_a = [&]() -> ResultA { ++g_a_calls; return {7}; };
+        auto compute_a = [&]() -> ResultA {
+            ++g_a_calls;
+            return {7};
+        };
         auto compute_b = [&]() -> ResultB {
             ++g_b_calls;
             // B lee A -> registra dependencia B->A.
@@ -53,9 +65,11 @@ int main() {
         };
 
         // (1) get B computa A y B una vez.
-        const ResultB &b = am.get_or_compute<AnalysisB, ResultB>("f", compute_b);
+        const ResultB &b =
+            am.get_or_compute<AnalysisB, ResultB>("f", compute_b);
         check(b.v == 8, "B = A+1 = 8");
-        check(g_a_calls == 1 && g_b_calls == 1, "computo perezoso: A y B una vez");
+        check(g_a_calls == 1 && g_b_calls == 1,
+              "computo perezoso: A y B una vez");
         check(am.size() == 2, "caché con 2 resultados");
 
         // (2) segundo get: cache hit, no recomputa.
@@ -76,7 +90,10 @@ int main() {
         // gancho) no sobrevive -> se recomputa.
         AnalysisManager am;
         g_a_calls = g_b_calls = 0;
-        auto compute_a = [&]() -> ResultA { ++g_a_calls; return {1}; };
+        auto compute_a = [&]() -> ResultA {
+            ++g_a_calls;
+            return {1};
+        };
         auto compute_b = [&]() -> ResultB {
             ++g_b_calls;
             am.get_or_compute<AnalysisA, ResultA>("g", compute_a);

@@ -16,8 +16,8 @@
  *
  * Para cada llamada a una funcion conocida @c f(a, b, c) produce un hint con el
  * NOMBRE de cada parametro justo ANTES de su argumento, de modo que el cliente
- * lo pinte como texto fantasma: @c f(x: a, y: b, z: c).  Asi el lector ve el rol
- * de cada argumento sin abrir la firma.
+ * lo pinte como texto fantasma: @c f(x: a, y: b, z: c).  Asi el lector ve el
+ * rol de cada argumento sin abrir la firma.
  *
  * Estrategia (robusta, sin recorrer todo el AST):
  *   1. PARSEAR el documento y recolectar, de las declaraciones top-level

@@ -29,36 +29,55 @@ using ir::IrType;
 static int g_checks = 0;
 static int g_fail = 0;
 
-#define CHECK(cond, msg)                                                     \
-    do {                                                                     \
-        ++g_checks;                                                          \
-        if (!(cond)) {                                                       \
-            ++g_fail;                                                        \
-            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);        \
-        }                                                                    \
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fail;                                                          \
+            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);          \
+        }                                                                      \
     } while (0)
 
 static IrInstr br(IrBlockId t) {
-    IrInstr i; i.op = IrOp::BR; i.type = IrType::VOID; i.dst = ir::IR_NO_VALUE;
-    i.target_block = t; return i;
+    IrInstr i;
+    i.op = IrOp::BR;
+    i.type = IrType::VOID;
+    i.dst = ir::IR_NO_VALUE;
+    i.target_block = t;
+    return i;
 }
 static IrInstr brcond(IrBlockId tt, IrBlockId ff) {
-    IrInstr i; i.op = IrOp::BR_COND; i.type = IrType::VOID; i.dst = ir::IR_NO_VALUE;
-    i.operands = {0}; i.target_block = tt; i.false_block = ff; return i;
+    IrInstr i;
+    i.op = IrOp::BR_COND;
+    i.type = IrType::VOID;
+    i.dst = ir::IR_NO_VALUE;
+    i.operands = {0};
+    i.target_block = tt;
+    i.false_block = ff;
+    return i;
 }
 static IrInstr ret() {
-    IrInstr i; i.op = IrOp::RET; i.type = IrType::VOID; i.dst = ir::IR_NO_VALUE;
+    IrInstr i;
+    i.op = IrOp::RET;
+    i.type = IrType::VOID;
+    i.dst = ir::IR_NO_VALUE;
     return i;
 }
 static IrBlock block(IrBlockId id, const char *name, IrInstr term) {
-    IrBlock b; b.id = id; b.name = name; b.instrs.push_back(term); return b;
+    IrBlock b;
+    b.id = id;
+    b.name = name;
+    b.instrs.push_back(term);
+    return b;
 }
 
 int main() {
     std::printf("=== test_rbank_loop_adapter (Fase 0.25.4) ===\n");
 
-    // CFG anidado: 0 entry / 1 outer_h / 2 inner_h / 3 inner_b / 4 latch / 5 exit.
-    ir::IrFunction fn; fn.name = "nested";
+    // CFG anidado: 0 entry / 1 outer_h / 2 inner_h / 3 inner_b / 4 latch / 5
+    // exit.
+    ir::IrFunction fn;
+    fn.name = "nested";
     fn.blocks.push_back(block(0, "entry", br(1)));
     fn.blocks.push_back(block(1, "outer_h", brcond(2, 5)));
     fn.blocks.push_back(block(2, "inner_h", brcond(3, 4)));
@@ -90,12 +109,14 @@ int main() {
     std::printf("\n[solo toca loop_depth]\n");
     {
         ValueRequirements r;
-        r.value_id = 7; r.crosses_call = true; r.rematerializable = true;
+        r.value_id = 7;
+        r.crosses_call = true;
+        r.rematerializable = true;
         r.cls = ResourceClass::FP_VECTOR;
         populate_loop_requirements(r, f, 2);
         CHECK(r.loop_depth == 2, "no actualizo loop_depth");
         CHECK(r.value_id == 7 && r.crosses_call && r.rematerializable &&
-              r.cls == ResourceClass::FP_VECTOR,
+                  r.cls == ResourceClass::FP_VECTOR,
               "el LoopAdapter toco campos ajenos");
     }
 

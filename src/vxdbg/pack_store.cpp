@@ -67,8 +67,8 @@ uint64_t id_proceso() {
 
 } // namespace
 
-PackNodeStore::PackNodeStore(std::string root, std::unique_ptr<NodeStore> suelto,
-                             size_t tope)
+PackNodeStore::PackNodeStore(std::string root,
+                             std::unique_ptr<NodeStore> suelto, size_t tope)
     : root_(std::move(root)), suelto_(std::move(suelto)), tope_(tope) {}
 
 PackNodeStore::~PackNodeStore() {
@@ -138,7 +138,8 @@ bool PackNodeStore::volcar() {
     for (const auto &kv : lote) {
         const uint64_t off = static_cast<uint64_t>(w.size());
         escribir_cuerpo(w, kv.second);
-        sitios.push_back({kv.first, {off, static_cast<uint32_t>(w.size() - off)}});
+        sitios.push_back(
+            {kv.first, {off, static_cast<uint32_t>(w.size() - off)}});
     }
 
     // Indice al final: hasta aqui no se sabian los desplazamientos.
@@ -209,14 +210,15 @@ void PackNodeStore::cargar_indices_() const {
         if (magia_fin != VXDBG_PACK_MAGIC_FIN) continue;
         if (off_indice > bytes.size() - 20) continue;
 
-        const size_t tam_idx = bytes.size() - 20 - static_cast<size_t>(off_indice);
+        const size_t tam_idx =
+            bytes.size() - 20 - static_cast<size_t>(off_indice);
         if (tam_idx != static_cast<size_t>(n) * 32) continue;
         /* La suma del indice se comprueba SIEMPRE.  Un indice alterado no
          * rompe la compilacion: sirve un nodo por otro, y el fallo aparece
          * lejisimos de aqui.  Ante la duda, el paquete entero se descarta y lo
          * suyo se recalcula. */
-        if (util::fnv_bytes(util::kFnvOffset, bytes.data() + off_indice, tam_idx) !=
-            suma)
+        if (util::fnv_bytes(util::kFnvOffset, bytes.data() + off_indice,
+                            tam_idx) != suma)
             continue;
 
         util::ByteReader ri(bytes);
@@ -261,7 +263,10 @@ size_t PackNodeStore::reclamar(const std::set<ContentHash> &vivas) {
          * dejarlo a medio borrar seria peor que no borrarlo. */
         const std::string muerto = ruta + ".muerto";
         stdfs::rename(ruta, muerto, ec);
-        if (ec) { ec.clear(); continue; } // otro se adelanto: no pasa nada
+        if (ec) {
+            ec.clear();
+            continue;
+        } // otro se adelanto: no pasa nada
         stdfs::remove(muerto, ec);
         ec.clear();
         ++borrados;
@@ -282,7 +287,8 @@ bool PackNodeStore::get(ContentHash hash, StoredNode &out) const {
     {
         std::lock_guard<std::mutex> g(mx_);
         auto p = pendientes_.find(hash);
-        if (p != pendientes_.end()) { // aun sin escribir, pero ya se puede servir
+        if (p !=
+            pendientes_.end()) { // aun sin escribir, pero ya se puede servir
             out = p->second;
             return true;
         }

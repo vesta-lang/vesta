@@ -16,8 +16,7 @@ typedef struct vx_exc_frame {
 static VX_TLS vx_exc_frame *vx_exc_top = 0;
 static VX_TLS int64_t vx_exc_value = 0;
 
-static VX_UNUSED VX_NORETURN VX_COLD void
-vx_panic_with_str(const void *msg) {
+static VX_UNUSED VX_NORETURN VX_COLD void vx_panic_with_str(const void *msg) {
     vx_exc_value = (int64_t)(intptr_t)msg;
     if (vx_exc_top != 0) {
         longjmp(vx_exc_top->buf, 1);

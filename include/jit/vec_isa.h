@@ -7,7 +7,8 @@
 
 /**
  * @file jit/vec_isa.h
- * @brief Seleccion del ancho SIMD para la auto-vectorizacion (SSE2/AVX2/AVX512).
+ * @brief Seleccion del ancho SIMD para la auto-vectorizacion
+ * (SSE2/AVX2/AVX512).
  *
  * Dos decisiones ORTOGONALES:
  *
@@ -60,7 +61,8 @@ inline VecIsa vec_isa_host() noexcept {
     return VecIsa::SSE2; // x86-64 garantiza SSE2
 }
 
-/** @brief Parsea un override de entorno; devuelve @p deflt si ausente/invalido. */
+/** @brief Parsea un override de entorno; devuelve @p deflt si ausente/invalido.
+ */
 inline VecIsa vec_isa_from_env(const char *var, VecIsa deflt) noexcept {
     const char *v = std::getenv(var);
     if (!v || !*v) return deflt;
@@ -73,8 +75,7 @@ inline VecIsa vec_isa_from_env(const char *var, VecIsa deflt) noexcept {
 
 /** @brief ISA del CHUNK que el matcher hornea (VESTA_VEC_ISA, default host). */
 inline VecIsa vec_chunk_isa() noexcept {
-    static const VecIsa v =
-        vec_isa_from_env("VESTA_VEC_ISA", vec_isa_host());
+    static const VecIsa v = vec_isa_from_env("VESTA_VEC_ISA", vec_isa_host());
     return v;
 }
 

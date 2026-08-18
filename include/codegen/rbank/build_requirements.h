@@ -8,8 +8,8 @@
 /**
  * @file codegen/rbank/build_requirements.h
  * @brief Ensamblador del SNAPSHOT: @c build_value_requirements(fn) corre TODOS
- *        los adaptadores sobre una funcion real y produce el @c ValueRequirements
- *        por valor.
+ *        los adaptadores sobre una funcion real y produce el @c
+ * ValueRequirements por valor.
  *
  * Este es el punto donde el modelo deja de ser un conjunto de piezas y pasa a
  * ALIMENTARSE DE CODIGO REAL.  Arquitectura del ensamblaje:
@@ -25,8 +25,9 @@
  *          |     |                 |          |             |      |
  *          v     v                 v          v             v      v
  *      +-------------+  +--------+ +--------+ +--------+ +---------+
- *      | Liveness    |  | Type   | | Const  | | Loop   | | Profile |   <- adaptadores
- *      | Adapter     |  | Adapter| | Adapter| | Adapter| | Adapter |   (solo traducen)
+ *      | Liveness    |  | Type   | | Const  | | Loop   | | Profile |   <-
+ * adaptadores | Adapter     |  | Adapter| | Adapter| | Adapter| | Adapter |
+ * (solo traducen)
  *      +------+------+  +---+----+ +---+----+ +---+----+ +----+----+
  *   crosses_call|      cls/width| remat|    loop_depth| exec_weight|
  *          +----+-----------+-------+--------+---------+-----+
@@ -35,22 +36,22 @@
  *                                  |
  *                   +--------------+---------------+
  *                   v                              v
- *          audit_requirements               Constraints -> Objective -> Decision
- *        (¿valores imposibles?)              (el resto de la piramide)
+ *          audit_requirements               Constraints -> Objective ->
+ * Decision (¿valores imposibles?)              (el resto de la piramide)
  *
  * SNAPSHOT INMUTABLE: se computan los Facts UNA vez, los adaptadores rellenan
  * cada @c ValueRequirements y el resultado es una FOTOGRAFIA congelada del
- * programa.  El resto del compilador (allocator/scheduler/...) trabaja sobre esa
- * foto en vez de recalcular Liveness/Loop por su cuenta.
+ * programa.  El resto del compilador (allocator/scheduler/...) trabaja sobre
+ * esa foto en vez de recalcular Liveness/Loop por su cuenta.
  *
  * AUDITOR: una vez existe el snapshot, el compilador puede AUDITARSE a si mismo
- * (¿hay valores imposibles?, ¿un F64 acabo como GP?, ¿un fixed_reg incompatible?,
- * ¿una lane que no soporta el ancho?) via @c requirements_satisfiable sobre cada
- * valor real -- ver @c audit_requirements.
+ * (¿hay valores imposibles?, ¿un F64 acabo como GP?, ¿un fixed_reg
+ * incompatible?, ¿una lane que no soporta el ancho?) via @c
+ * requirements_satisfiable sobre cada valor real -- ver @c audit_requirements.
  *
- * Fase 0.25: ADITIVO.  Los adaptadores usados hoy: Type, Const, Liveness, Loop y
- * (si hay perfil) Profile.  @c is_gc se toma directo del flag del IR (un futuro
- * GcAdapter/AliasFacts lo formalizara); @c address_taken queda diferido.
+ * Fase 0.25: ADITIVO.  Los adaptadores usados hoy: Type, Const, Liveness, Loop
+ * y (si hay perfil) Profile.  @c is_gc se toma directo del flag del IR (un
+ * futuro GcAdapter/AliasFacts lo formalizara); @c address_taken queda diferido.
  */
 
 #ifndef VESTA_CODEGEN_RBANK_BUILD_REQUIREMENTS_H
@@ -78,8 +79,9 @@ namespace rbank {
 
 /**
  * @brief Ensambla los @c ValueRequirements corriendo los adaptadores sobre unos
- *        Facts YA COMPUTADOS (no los recomputa).  Lo usan @c build_value_requirements
- *        y @c build_snapshot para no duplicar el trabajo de Facts.
+ *        Facts YA COMPUTADOS (no los recomputa).  Lo usan @c
+ * build_value_requirements y @c build_snapshot para no duplicar el trabajo de
+ * Facts.
  * @param fn     funcion SSA.
  * @param live   liveness ya computada.
  * @param calls  posiciones de call (de @c collect_call_positions).
@@ -90,10 +92,10 @@ inline std::vector<ValueRequirements> assemble_value_requirements(
     const ir::IrFunction &fn, const ir::LivenessResult &live,
     const std::vector<uint32_t> &calls, const analysis::LoopFacts &loops,
     const analysis::ProfileFacts &pf) {
-
     // value_id -> bloque de definicion (params se definen en la entrada).
     std::unordered_map<ir::IrValueId, ir::IrBlockId> def_block;
-    for (ir::IrValueId p : fn.params) def_block[p] = 0;
+    for (ir::IrValueId p : fn.params)
+        def_block[p] = 0;
     for (size_t b = 0; b < fn.blocks.size(); ++b)
         for (const ir::IrInstr &ins : fn.blocks[b].instrs)
             if (ins.dst != ir::IR_NO_VALUE)
@@ -101,7 +103,8 @@ inline std::vector<ValueRequirements> assemble_value_requirements(
 
     // value_id -> intervalo de vida.
     std::unordered_map<ir::IrValueId, const ir::LiveInterval *> iv;
-    for (const ir::LiveInterval &I : live.intervals) iv[I.id] = &I;
+    for (const ir::LiveInterval &I : live.intervals)
+        iv[I.id] = &I;
 
     std::vector<ValueRequirements> out;
     out.reserve(fn.values.size());
@@ -113,20 +116,23 @@ inline std::vector<ValueRequirements> assemble_value_requirements(
 
         ValueRequirements r;
         r.value_id = v.id;
-        populate_type_requirements(r, v.type);   // cls + width
-        populate_const_requirements(r, v);        // rematerializable
-        // is_gc: flag directo del IR (o tipo HANDLE).  Futuro: GcAdapter/AliasFacts.
+        populate_type_requirements(r, v.type); // cls + width
+        populate_const_requirements(r, v);     // rematerializable
+        // is_gc: flag directo del IR (o tipo HANDLE).  Futuro:
+        // GcAdapter/AliasFacts.
         r.is_gc = v.is_gc_object || v.type == ir::IrType::HANDLE;
 
         auto it = iv.find(v.id);
         if (it != iv.end())
-            populate_liveness_requirements(r, *it->second, calls); // crosses_call
+            populate_liveness_requirements(r, *it->second,
+                                           calls); // crosses_call
 
         auto db = def_block.find(v.id);
         if (db != def_block.end()) {
-            populate_loop_requirements(r, loops, db->second);       // loop_depth
+            populate_loop_requirements(r, loops, db->second); // loop_depth
             if (pf.has_profile)
-                populate_profile_requirements(r, pf, db->second);   // execution_weight
+                populate_profile_requirements(r, pf,
+                                              db->second); // execution_weight
         }
         out.push_back(r);
     }
@@ -140,9 +146,9 @@ inline std::vector<ValueRequirements> assemble_value_requirements(
  * @param prof  perfil de branches (opcional); si es @c nullptr o vacio, el
  *              @c execution_weight queda 0 -> el contexto usa el estatico.
  */
-inline std::vector<ValueRequirements> build_value_requirements(
-    const ir::IrFunction &fn,
-    const analysis::BranchProfile *prof = nullptr) {
+inline std::vector<ValueRequirements>
+build_value_requirements(const ir::IrFunction &fn,
+                         const analysis::BranchProfile *prof = nullptr) {
     ir::LivenessResult live = ir::compute_liveness(fn);
     std::vector<uint32_t> calls = collect_call_positions(fn, live);
     analysis::LoopFacts loops = analysis::compute_loop_facts(fn);
@@ -157,22 +163,24 @@ inline std::vector<ValueRequirements> build_value_requirements(
  * @brief Una INCOHERENCIA detectada por el auditor (DATO, no mensaje).
  */
 struct RequirementIssue {
-    uint32_t    value_id = 0;
-    UnsatReason reason   = UnsatReason::OK; ///< por que el valor no es realizable.
+    uint32_t value_id = 0;
+    UnsatReason reason =
+        UnsatReason::OK; ///< por que el valor no es realizable.
 };
 
 /**
  * @brief AUDITA el snapshot contra un banco: reporta los valores IMPOSIBLES
- *        (que el hardware no puede alojar).  El compilador auditandose a si mismo.
+ *        (que el hardware no puede alojar).  El compilador auditandose a si
+ * mismo.
  * @param reqs      snapshot de @c build_value_requirements.
  * @param bank      banco fisico del target.
  * @param vec_reduction_active  si el path de reduccion vectorial esta activo.
  * @return          lista de incoherencias (vacia = todo realizable).
  */
-inline std::vector<RequirementIssue> audit_requirements(
-    const std::vector<ValueRequirements> &reqs,
-    const PhysicalRegisterBank &bank, bool vec_reduction_active = false) {
-
+inline std::vector<RequirementIssue>
+audit_requirements(const std::vector<ValueRequirements> &reqs,
+                   const PhysicalRegisterBank &bank,
+                   bool vec_reduction_active = false) {
     std::vector<RequirementIssue> issues;
     for (const ValueRequirements &r : reqs) {
         SatisfiabilityReport sat =

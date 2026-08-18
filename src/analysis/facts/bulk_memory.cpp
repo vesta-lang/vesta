@@ -59,7 +59,8 @@ bool resolve_direccion(const ir::IrFunction &fn,
     if (dir >= def.size() || def[dir] == nullptr) return false;
     const ir::IrInstr *d = def[dir];
     // Un bitcast no cambia la direccion: se atraviesa.
-    while (d != nullptr && d->op == ir::IrOp::BITCAST && d->operands.size() == 1) {
+    while (d != nullptr && d->op == ir::IrOp::BITCAST &&
+           d->operands.size() == 1) {
         const ir::IrValueId v = d->operands[0];
         if (v >= def.size()) return false;
         d = def[v];
@@ -195,18 +196,30 @@ std::vector<BulkMemoryFact> detect_bulk_memory(const ir::IrFunction &fn) {
             if (descartado) break;
             for (const ir::IrInstr &in : fn.blocks[b].instrs) {
                 const MemoryAccess acc = memory_access(in, pt);
-                if (acc.opaque) { descartado = true; break; }
+                if (acc.opaque) {
+                    descartado = true;
+                    break;
+                }
                 if (acc.is_store) {
-                    if (el_store != nullptr) { descartado = true; break; }
+                    if (el_store != nullptr) {
+                        descartado = true;
+                        break;
+                    }
                     el_store = &in;
                     continue;
                 }
                 if (acc.is_load) {
-                    if (el_load != nullptr) { descartado = true; break; }
+                    if (el_load != nullptr) {
+                        descartado = true;
+                        break;
+                    }
                     el_load = &in;
                     continue;
                 }
-                if (acc.touches) { descartado = true; break; }
+                if (acc.touches) {
+                    descartado = true;
+                    break;
+                }
                 // Sin tocar memoria: solo se admite el andamiaje del recorrido
                 // -- indices, direcciones, la guarda y los saltos.
                 switch (in.op) {
@@ -223,11 +236,8 @@ std::vector<BulkMemoryFact> detect_bulk_memory(const ir::IrFunction &fn) {
                 case ir::IrOp::CMP_LE:
                 case ir::IrOp::CMP_ULE:
                 case ir::IrOp::BR:
-                case ir::IrOp::BR_COND:
-                    break;
-                default:
-                    descartado = true;
-                    break;
+                case ir::IrOp::BR_COND: break;
+                default: descartado = true; break;
                 }
                 if (descartado) break;
             }
@@ -277,7 +287,8 @@ std::vector<BulkMemoryFact> detect_bulk_memory(const ir::IrFunction &fn) {
                 const uint64_t k = (uint64_t)fn.values[v_escrito].const_val;
                 const uint64_t b = k & 0xFFull;
                 uint64_t repetido = 0;
-                for (int i = 0; i < 8; ++i) repetido |= b << (i * 8);
+                for (int i = 0; i < 8; ++i)
+                    repetido |= b << (i * 8);
                 // Solo se comparan los bytes que el acceso escribe de verdad.
                 const uint64_t mascara =
                     (w >= 8) ? ~0ull : (((uint64_t)1 << (w * 8)) - 1);

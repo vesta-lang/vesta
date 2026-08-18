@@ -189,7 +189,8 @@ AotOpClass aot_classify_op(IrOp op) noexcept {
     case IrOp::ATOMIC_ADD:
     // -- ensamblador host incrustado ( AS) --
     case IrOp::INLINE_ASM:
-    // -- asm opaco liftado: emite bytes nativos (ensamblados de su plantilla) --
+    // -- asm opaco liftado: emite bytes nativos (ensamblados de su plantilla)
+    // --
     case IrOp::ASM_MICRO:
     // -- handle<->ptr en native (AOT.2 sin handle table): el GcHandle ES el
     //    host_ptr crudo (objetos = ptr de calloc/malloc) -> el selector
@@ -212,8 +213,7 @@ AotOpClass aot_classify_op(IrOp op) noexcept {
     // la VM -> compilable a nativo.  En freestanding se rechaza salvo que el
     // usuario provea las funciones.
     case IrOp::DLOPEN:
-    case IrOp::DLSYM:
-        return AotOpClass::LIBC_MAPPED;
+    case IrOp::DLSYM: return AotOpClass::LIBC_MAPPED;
 
     // -- todo lo demas necesita libvesta_rt --
     default: return AotOpClass::RUNTIME_DEPENDENT;

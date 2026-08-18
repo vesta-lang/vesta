@@ -27,7 +27,8 @@ constexpr uint32_t kTope = 64;
 uint32_t potencia_que_divide(uint64_t k) {
     if (k == 0) return kTope;
     uint32_t a = 1;
-    while (a < kTope && (k & a) == 0) a <<= 1;
+    while (a < kTope && (k & a) == 0)
+        a <<= 1;
     return ((k & (a - 1)) == 0) ? a : 1;
 }
 
@@ -102,12 +103,14 @@ AlignmentFacts compute_alignment(const ir::IrFunction &fn,
      *
      * Solo cuenta si al hueco se guarda UNA vez: con dos escrituras no se sabe
      * cual esta viva en cada lectura, y suponerlo seria inventar. */
-    std::vector<ir::IrValueId> unico_guardado(fn.values.size(), ir::IR_NO_VALUE);
+    std::vector<ir::IrValueId> unico_guardado(fn.values.size(),
+                                              ir::IR_NO_VALUE);
     {
         std::vector<uint8_t> veces(fn.values.size(), 0);
         for (const ir::IrBlock &b : fn.blocks)
             for (const ir::IrInstr &in : b.instrs) {
-                if (in.op != ir::IrOp::STORE || in.operands.size() < 2) continue;
+                if (in.op != ir::IrOp::STORE || in.operands.size() < 2)
+                    continue;
                 const ir::IrValueId hueco = in.operands[1];
                 if (hueco >= veces.size()) continue;
                 if (veces[hueco] < 2) ++veces[hueco];
@@ -272,10 +275,10 @@ AlignmentFacts compute_alignment(const ir::IrFunction &fn,
                      *
                      * Solo se hereda un hecho CONOCIDO.  Heredar "no se sabe"
                      * es peor que no heredar: en la primera prueba, un acceso
-                     * que estaba demostrado mal alineado paso a no decir nada, y
-                     * no decir nada se lee como que cumple.  Un analisis que se
-                     * equivoca hacia el lado comodo es peor que uno que no sabe,
-                     * porque el que no sabe avisa. */
+                     * que estaba demostrado mal alineado paso a no decir nada,
+                     * y no decir nada se lee como que cumple.  Un analisis que
+                     * se equivoca hacia el lado comodo es peor que uno que no
+                     * sabe, porque el que no sabe avisa. */
                     if (!in.operands.empty() &&
                         in.operands[0] < unico_guardado.size()) {
                         const ir::IrValueId v = unico_guardado[in.operands[0]];
@@ -351,7 +354,8 @@ AlignmentFacts compute_alignment(const ir::IrFunction &fn,
                         // ~(k-1) tiene los bits bajos a cero: cuantos, es la
                         // alineacion que impone.
                         uint32_t a2 = 1;
-                        while (a2 < kTope && (mk & a2) == 0) a2 <<= 1;
+                        while (a2 < kTope && (mk & a2) == 0)
+                            a2 <<= 1;
                         if ((mk & (a2 - 1)) == 0) nueva = std::max(nueva, a2);
                     }
                     break;
@@ -375,7 +379,8 @@ AlignmentFacts compute_alignment(const ir::IrFunction &fn,
                      * si de `x` se conoce un modulo que sea multiplo de el: si
                      * no, el resto del resultado no se puede deducir.  Y solo
                      * sin signo -- con signo, `-1 % 8` vale -1 en esta
-                     * aritmetica, y un resto negativo no cabe en el reticulo. */
+                     * aritmetica, y un resto negativo no cabe en el reticulo.
+                     */
                     if (in.operands.size() != 2) break;
                     switch (in.type) {
                     case ir::IrType::U8:
@@ -384,12 +389,12 @@ AlignmentFacts compute_alignment(const ir::IrFunction &fn,
                     case ir::IrType::U64:
                     case ir::IrType::PTR:
                         break; // sin signo: el resto nunca es negativo
-                    default:
-                        break_por_signo = true;
+                    default: break_por_signo = true;
                     }
                     if (break_por_signo) break;
                     const ir::IrValueId dv = in.operands[1];
-                    if (dv >= fn.values.size() || !fn.values[dv].is_const) break;
+                    if (dv >= fn.values.size() || !fn.values[dv].is_const)
+                        break;
                     const uint64_t k = (uint64_t)fn.values[dv].const_val;
                     if (k == 0 || (k & (k - 1)) != 0 || k > kTope) break;
                     const uint32_t k32 = (uint32_t)k;
@@ -413,9 +418,7 @@ AlignmentFacts compute_alignment(const ir::IrFunction &fn,
                     nueva = alguna ? peor : 1u;
                     break;
                 }
-                default:
-                    nueva = 1;
-                    break;
+                default: nueva = 1; break;
                 }
                 if (nueva < 1) nueva = 1;
                 nuevo_resto %= nueva;

@@ -7,14 +7,15 @@
 
 /**
  * @file jit_branch_prof.h
- * @brief Contadores de branch del CODIGO JIT-NATIVO, indexados por linea fuente.
+ * @brief Contadores de branch del CODIGO JIT-NATIVO, indexados por linea
+ * fuente.
  *
  * El auto-PGO del JIT necesita datos de branches para re-decidir la
  * if-conversion.  El profiler del interprete (runtime/profile.h) solo ve el
  * codigo interpretado; cuando el JIT compila EAGER, el codigo corre nativo sin
  * pasar por el interp -> el profiler del interp queda ciego.  La solucion que
- * usan los JIT de produccion: el propio codigo JIT-eado incrementa contadores en
- * cada branch.  Aqui esos contadores viven en una tabla FIJA indexada por
+ * usan los JIT de produccion: el propio codigo JIT-eado incrementa contadores
+ * en cada branch.  Aqui esos contadores viven en una tabla FIJA indexada por
  * @c source_line (que el IR ya lleva en cada @c BR_COND), de modo que:
  *
  *   - Es VM-INDEPENDIENTE: no hay que mapear PC->linea con @c debug_info; la
@@ -55,7 +56,8 @@ extern JitLineCtr g_jit_line_ctrs[kJitLineSlots];
 ///        `mov reg, imm64(addr)` del incremento.
 inline uint64_t jit_line_ctr_addr(uint32_t source_line, bool taken) {
     const uint32_t idx = source_line & kJitLineMask;
-    const uint8_t *base = reinterpret_cast<const uint8_t *>(&g_jit_line_ctrs[idx]);
+    const uint8_t *base =
+        reinterpret_cast<const uint8_t *>(&g_jit_line_ctrs[idx]);
     return reinterpret_cast<uint64_t>(base) + (taken ? 0u : 4u);
 }
 

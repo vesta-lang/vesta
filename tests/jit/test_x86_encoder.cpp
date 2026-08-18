@@ -547,18 +547,19 @@ void test_encode_vfmadd231pd_ymm() {
     /* vfmadd231pd ymm14,ymm15,[r10] -> c4 42 85 b8 32  (66 0F38 W1 B8) */
     MFunction fn = make_single_block_fn({MInstr::make_binary(
         MOp::VFMADD231PD, MOperand::make_reg(MReg::XMM14, 32),
-        MOperand::make_reg(MReg::XMM15, 32), MOperand::make_mem(MReg::R10, 0))});
+        MOperand::make_reg(MReg::XMM15, 32),
+        MOperand::make_mem(MReg::R10, 0))});
     X86Encoder enc;
     std::vector<uint8_t> out;
     enc.encode(fn, out);
-    CHECK_BYTES(out,
-                (std::vector<uint8_t>{0xC4, 0x42, 0x85, 0xB8, 0x32}));
+    CHECK_BYTES(out, (std::vector<uint8_t>{0xC4, 0x42, 0x85, 0xB8, 0x32}));
 }
 void test_encode_vfmadd231pd_zmm() {
     /* vfmadd231pd zmm14,zmm15,[r10] -> 62 52 85 48 b8 32 */
     MFunction fn = make_single_block_fn({MInstr::make_binary(
         MOp::VFMADD231PD, MOperand::make_reg(MReg::XMM14, 64),
-        MOperand::make_reg(MReg::XMM15, 64), MOperand::make_mem(MReg::R10, 0))});
+        MOperand::make_reg(MReg::XMM15, 64),
+        MOperand::make_mem(MReg::R10, 0))});
     X86Encoder enc;
     std::vector<uint8_t> out;
     enc.encode(fn, out);
@@ -651,7 +652,8 @@ void test_encode_vbroadcastsd_ymm() {
     CHECK_BYTES(out, (std::vector<uint8_t>{0xC4, 0x42, 0x7D, 0x19, 0xF6}));
 }
 void test_encode_vbroadcastsd_zmm() {
-    /* vbroadcastsd zmm14,xmm14 -> 62 52 fd 48 19 f6  (EVEX.512.66.0F38.W1 19) */
+    /* vbroadcastsd zmm14,xmm14 -> 62 52 fd 48 19 f6  (EVEX.512.66.0F38.W1 19)
+     */
     MFunction fn = make_single_block_fn({MInstr::make_unary(
         MOp::VBROADCASTSD, MOperand::make_reg(MReg::XMM14, 64),
         MOperand::make_reg(MReg::XMM14, 16))});

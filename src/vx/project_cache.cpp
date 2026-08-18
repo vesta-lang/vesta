@@ -188,15 +188,18 @@ uint32_t project_cache_opts_hash(const ProjectCacheKey &key) {
     std::ostringstream os;
     os << "opt=" << key.opt_level << "|debug=" << (key.emit_debug ? 1 : 0)
        << "|base=0x" << std::hex << key.vx_base
-       << "|instr=" << key.instrument_mode << "|port=" << key.port_target
+       << "|instr=" << key.instrument_mode << "|port="
+       << key.port_target
        /* Mismo motivo que en la clave por modulo: lo compilado SIN la maquina
         * de compilacion cargada es provisional (las funciones comptime no se
         * pudieron ejecutar) y no vale para la pasada buena. */
-       << "|mc=" << (key.comptime_prebuilt ? 1 : 0)
+       << "|mc="
+       << (key.comptime_prebuilt ? 1 : 0)
        /* De donde salen los modulos ajenos: con otro arbol de stdlib se
         * compilan OTROS ficheros, y los de antes siguen en su sitio -- la
         * comprobacion de las rutas guardadas pasaba igual. */
-       << "|std=" << key.stdlib_dir << "|vxpath=" << key.vx_path
+       << "|std=" << key.stdlib_dir << "|vxpath="
+       << key.vx_path
        /* Que artefacto se pidio.  Va en la clave porque el cache guarda el
         * fichero FINAL: un `.velb` y un `.exe` no son intercambiables, ni un
         * `.exe` de x86-64 con uno de aarch64. */
@@ -215,14 +218,16 @@ uint32_t project_cache_diag_hash(const ProjectCacheKey &key) {
     std::ostringstream os;
     os << "opt=" << key.opt_level << "|debug=" << (key.emit_debug ? 1 : 0)
        << "|instr=" << key.instrument_mode << "|port=" << key.port_target
-       << "|mc=" << (key.comptime_prebuilt ? 1 : 0)
-       << "|std=" << key.stdlib_dir << "|vxpath=" << key.vx_path
+       << "|mc=" << (key.comptime_prebuilt ? 1 : 0) << "|std=" << key.stdlib_dir
+       << "|vxpath="
+       << key.vx_path
        /* El OBJETIVO NO ENTRA.  Que un aviso venga de una rama que solo existe
         * en una arquitectura lo dice EL AVISO, en su ambito, y el lector lo
         * filtra.  Meterlo aqui obligaba a partir el fichero por lo mas grueso:
-        * se duplicaba tambien todo lo universal -- que es la mayor parte -- para
-        * proteger lo poco que de verdad es especifico.  El nivel de runtime SI
-        * entra, porque cambia que codigo se baja, no donde vale lo sabido. */
+        * se duplicaba tambien todo lo universal -- que es la mayor parte --
+        * para proteger lo poco que de verdad es especifico.  El nivel de
+        * runtime SI entra, porque cambia que codigo se baja, no donde vale lo
+        * sabido. */
        << "|tier=" << key.aot_tier;
     return fnv1a32_str(os.str());
 }
@@ -328,7 +333,6 @@ bool project_cache_validate(const std::vector<ProjectCacheDep> &cached_deps,
     return true;
 }
 
-
 // ---------------------------------------------------------------------------
 //  Diagnosticos que sobreviven al acierto de cache
 // ---------------------------------------------------------------------------
@@ -359,10 +363,9 @@ std::string ruta_diags_(const std::string &cache_path, uint32_t diag_hash) {
 
 } // namespace
 
-bool project_cache_save_diags(const std::string             &cache_path,
-                              uint32_t                       diag_hash,
+bool project_cache_save_diags(const std::string &cache_path, uint32_t diag_hash,
                               const std::vector<Diagnostic> &diags,
-                              const analysis::asa::Ambito   &donde) {
+                              const analysis::asa::Ambito &donde) {
     if (diags.empty()) return false;
     analysis::asa::register_canonical_name(kDominioDiag);
     analysis::asa::FactStore almacen;
@@ -378,12 +381,10 @@ bool project_cache_save_diags(const std::string             &cache_path,
          * meterlos en la cadena obligaria a parsearlos para volver a usarlos.
          * Hacen falta los cuatro -- sin el desplazamiento y la longitud, al
          * rehacer el aviso no se puede subrayar el trozo de codigo. */
-        f.que.a = static_cast<int64_t>((static_cast<uint64_t>(d.loc.offset)
-                                        << 32) |
-                                       d.loc.line);
-        f.que.b = static_cast<int64_t>((static_cast<uint64_t>(d.loc.length)
-                                        << 32) |
-                                       d.loc.column);
+        f.que.a = static_cast<int64_t>(
+            (static_cast<uint64_t>(d.loc.offset) << 32) | d.loc.line);
+        f.que.b = static_cast<int64_t>(
+            (static_cast<uint64_t>(d.loc.length) << 32) | d.loc.column);
         std::string junto = d.message;
         for (const std::string &a : d.args) {
             junto.push_back(kSep);
@@ -409,15 +410,14 @@ bool project_cache_save_diags(const std::string             &cache_path,
     /* Nivel maximo a proposito: esto NO se puede recalcular sin recompilar, que
      * es justo lo que el acierto de cache se ahorra. */
     const std::vector<uint8_t> bytes = analysis::asa::serialize(
-        almacen, static_cast<uint64_t>(diag_hash), analysis::asa::CacheLevel::All,
-        {{kDominioDiag, 0, false, 0}});
+        almacen, static_cast<uint64_t>(diag_hash),
+        analysis::asa::CacheLevel::All, {{kDominioDiag, 0, false, 0}});
     if (bytes.empty()) return false;
     return ::fs::write_file_atomic(ruta_diags_(cache_path, diag_hash), bytes);
 }
 
-bool project_cache_load_diags(const std::string           &cache_path,
-                              uint32_t                     diag_hash,
-                              std::vector<Diagnostic>     &out,
+bool project_cache_load_diags(const std::string &cache_path, uint32_t diag_hash,
+                              std::vector<Diagnostic> &out,
                               const analysis::asa::Ambito &aqui) {
     out.clear();
     analysis::asa::register_canonical_name(kDominioDiag);
@@ -429,7 +429,7 @@ bool project_cache_load_diags(const std::string           &cache_path,
     out.reserve(almacen.size());
     for (analysis::asa::FactId i = 0; i < almacen.size(); ++i) {
         const analysis::asa::Fact &f = almacen.at(i);
-        Diagnostic                 d;
+        Diagnostic d;
         d.level = static_cast<DiagLevel>(f.de_quien.id);
         d.loc.file = f.de_quien.funcion;
         const uint64_t pa = static_cast<uint64_t>(f.que.a);
@@ -440,13 +440,13 @@ bool project_cache_load_diags(const std::string           &cache_path,
         d.loc.length = static_cast<uint32_t>(pb >> 32);
         d.code = f.que.codigo;
         const std::string junto = f.que.detalle;
-        size_t            ini = junto.find(kSep);
+        size_t ini = junto.find(kSep);
         d.message = junto.substr(0, ini);
         while (ini != std::string::npos) {
             const size_t fin = junto.find(kSep, ini + 1);
-            d.args.push_back(junto.substr(
-                ini + 1, fin == std::string::npos ? std::string::npos
-                                                  : fin - ini - 1));
+            d.args.push_back(junto.substr(ini + 1, fin == std::string::npos
+                                                       ? std::string::npos
+                                                       : fin - ini - 1));
             ini = fin;
         }
         out.push_back(std::move(d));

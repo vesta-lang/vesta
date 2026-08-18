@@ -8,21 +8,22 @@
 /**
  * @file analysis/asa/base_hechos.h
  * @brief La base de hechos: lo que se sabe del programa, en UN sitio, con su
- *        procedencia y su certeza, para que quien lo necesite CONSULTE en vez de
- *        redescubrirlo.
+ *        procedencia y su certeza, para que quien lo necesite CONSULTE en vez
+ * de redescubrirlo.
  *
- * Es la Regla 1 hecha objeto: un pase CONSUME la base, no la CONSTRUYE.  Vive en
- * @c analysis/ y no en @c jit/ porque no es del JIT: el compilador en caliente es
- * UN consumidor, y lo mismo valen el volcado (@c analysis/asa/dump.h), el nativo
- * o una herramienta.
+ * Es la Regla 1 hecha objeto: un pase CONSUME la base, no la CONSTRUYE.  Vive
+ * en
+ * @c analysis/ y no en @c jit/ porque no es del JIT: el compilador en caliente
+ * es UN consumidor, y lo mismo valen el volcado (@c analysis/asa/dump.h), el
+ * nativo o una herramienta.
  *
  * POR QUE IMPORTA MAS ALLA DE AHORRAR UN COMPUTO.  Un consumidor que construye
  * lo que necesita solo puede preguntar por lo que sabe construir: se queda con
  * un dominio y con la precision que ese sitio del codigo se molesto en pedir.
- * Uno que CONSULTA puede cruzar dominios sin cambiar, y sobre todo puede recibir
- * hechos que EL no sabe producir -- los que solo existen ejecutando, que es lo
- * que aportara el C2.  Anadir una fuente de conocimiento pasa a ser anadir un
- * productor, no tocar a cada consumidor.
+ * Uno que CONSULTA puede cruzar dominios sin cambiar, y sobre todo puede
+ * recibir hechos que EL no sabe producir -- los que solo existen ejecutando,
+ * que es lo que aportara el C2.  Anadir una fuente de conocimiento pasa a ser
+ * anadir un productor, no tocar a cada consumidor.
  *
  * DE DONDE VIENE UN HECHO NO ES ASUNTO DEL CONSUMIDOR.  Analisis estatico,
  * observacion en ejecucion o perfil de corridas anteriores alimentan la MISMA
@@ -31,10 +32,11 @@
  * especulador lo decida, sino porque un hecho observado nace sin demostrar.
  *
  * AMBITO Y VIDA.  Una base vale para UN modulo: dentro de el un nombre
- * identifica una funcion, que es lo que hace legitimo cachear por nombre.  Quien
- * la crea la mantiene viva mientras trabaja sobre ese modulo y se la pasa a cada
- * consumidor; el conocimiento se calcula una vez y se reparte.  Sin base, el
- * consumidor se monta la suya como ultimo recurso: correcto, solo sin reparto.
+ * identifica una funcion, que es lo que hace legitimo cachear por nombre. Quien
+ * la crea la mantiene viva mientras trabaja sobre ese modulo y se la pasa a
+ * cada consumidor; el conocimiento se calcula una vez y se reparte.  Sin base,
+ * el consumidor se monta la suya como ultimo recurso: correcto, solo sin
+ * reparto.
  *
  * MUTAR EL IR CADUCA LOS HECHOS: quien lo toque avisa con @c invalidar.
  */
@@ -69,9 +71,9 @@ namespace asa {
 /// Se DECLARAN aqui y se definen una sola vez en el .cpp, y eso no es
 /// cosmetico: ASA identifica al productor por la DIRECCION del literal
 /// (@c Dependencias::depende_de compara punteros).  Con @c constexpr cada
-/// unidad de traduccion plegaria la lectura a SU propio literal -- los literales
-/// no se unifican entre ficheros objeto -- y el mismo productor dejaria de
-/// reconocerse a si mismo visto desde otro fichero.
+/// unidad de traduccion plegaria la lectura a SU propio literal -- los
+/// literales no se unifican entre ficheros objeto -- y el mismo productor
+/// dejaria de reconocerse a si mismo visto desde otro fichero.
 extern const char *const kProductorEstructura;
 extern const char *const kProductorRangos;
 extern const char *const kProductorMemoria;
@@ -80,8 +82,8 @@ extern const char *const kProductorBucles;
 /// Como se COLOCA la memoria del programa: lo unico que un compilador con
 /// enlazador propio sabe y uno tradicional no.
 extern const char *const kProductorDisposicion;
-/// El FLUJO DE CONTROL dentro de un bloque `asm`: cuantos bloques basicos tiene,
-/// de que clase es cada terminador y que destinos quedan sin resolver.
+/// El FLUJO DE CONTROL dentro de un bloque `asm`: cuantos bloques basicos
+/// tiene, de que clase es cada terminador y que destinos quedan sin resolver.
 extern const char *const kProductorAsmFlujo;
 
 /// Clave con la que se guarda lo que es del MODULO entero y no de una funcion.
@@ -101,14 +103,14 @@ void register_asa_canonical_names();
  * @brief Una entrada de la base, tal y como se vuelca.
  *
  * Es DATO, no frase: quien quiera enseñarlo lo formatea.  Lleva el sello de ASA
- * -- certeza, procedencia y de que otros hechos se dedujo -- porque un hecho sin
- * origen no se puede explicar ni depurar, y porque de la certeza depende lo que
- * el consumidor tiene derecho a hacer con el.
+ * -- certeza, procedencia y de que otros hechos se dedujo -- porque un hecho
+ * sin origen no se puede explicar ni depurar, y porque de la certeza depende lo
+ * que el consumidor tiene derecho a hacer con el.
  */
 struct HechoRegistrado {
     const char *dominio = kProductorEstructura;
     std::string funcion;
-    Sello       sello;
+    Sello sello;
 };
 
 /**
@@ -120,9 +122,9 @@ struct HechoRegistrado {
  */
 class BaseDeHechos {
   public:
-    /// Al morir cuenta lo que repartio si se pide con @c VESTA_ASA_HECHOS_DEBUG:
-    /// una base compartida que no ahorra ninguna pregunta es un computo con otro
-    /// nombre, y eso se ve o no se ve.
+    /// Al morir cuenta lo que repartio si se pide con @c
+    /// VESTA_ASA_HECHOS_DEBUG: una base compartida que no ahorra ninguna
+    /// pregunta es un computo con otro nombre, y eso se ve o no se ve.
     /**
      * @brief Da de alta los nombres canonicos del ASA.
      *
@@ -186,11 +188,11 @@ class BaseDeHechos {
     /**
      * @brief El sello del conocimiento de @p productor sobre @p fn.
      *
-     * La certeza NO la pone quien pregunta, viaja DENTRO del hecho, y de ella se
-     * sigue lo que el consumidor puede hacer: sobre un hecho @c Demostrado se
-     * puede quitar una comprobacion; sobre uno @c Inferido -- el analisis paro
-     * por presupuesto, o mañana: lo observado en ejecucion -- hay que dejar red,
-     * o sea una guarda.
+     * La certeza NO la pone quien pregunta, viaja DENTRO del hecho, y de ella
+     * se sigue lo que el consumidor puede hacer: sobre un hecho @c Demostrado
+     * se puede quitar una comprobacion; sobre uno @c Inferido -- el analisis
+     * paro por presupuesto, o mañana: lo observado en ejecucion -- hay que
+     * dejar red, o sea una guarda.
      *
      * @param productor Uno de los @c kProductor*.
      * @param fn        Funcion IR consultada.
@@ -204,8 +206,8 @@ class BaseDeHechos {
     /**
      * @brief Todo lo que la base sabe, en DATOS y en orden estable.
      *
-     * Un conocimiento que no se puede volcar no se puede auditar: ni explicar un
-     * veredicto, ni ver por que un analisis se callo, ni comprobar que la
+     * Un conocimiento que no se puede volcar no se puede auditar: ni explicar
+     * un veredicto, ni ver por que un analisis se callo, ni comprobar que la
      * procedencia es la que se cree.  Ordenado por funcion y dominio para que
      * dos volcados se puedan comparar.
      *
@@ -214,15 +216,17 @@ class BaseDeHechos {
     std::vector<HechoRegistrado> volcado() const;
 
     /// Preguntas atendidas.  Con @c computos mide el reparto de verdad, que es
-    /// lo unico que distingue una base compartida de un computo con otro nombre.
+    /// lo unico que distingue una base compartida de un computo con otro
+    /// nombre.
     size_t consultas() const { return consultas_; }
-    /// Analisis que hubo que ejecutar de verdad (los demas salieron de la cache).
+    /// Analisis que hubo que ejecutar de verdad (los demas salieron de la
+    /// cache).
     size_t computos() const { return computos_; }
 
   private:
     /// Identidad de @p fn dentro del modulo.  Sin nombre no hay identidad
-    /// estable, y entonces vale su direccion: es unica mientras la funcion viva,
-    /// que es lo que dura la base.
+    /// estable, y entonces vale su direccion: es unica mientras la funcion
+    /// viva, que es lo que dura la base.
     static std::string clave_de(const ir::IrFunction &fn);
 
     /// Anota el sello de un hecho recien producido.
@@ -236,8 +240,8 @@ class BaseDeHechos {
         sellos_;
 
     AnalysisManager gestor_;
-    size_t          consultas_ = 0;
-    size_t          computos_ = 0;
+    size_t consultas_ = 0;
+    size_t computos_ = 0;
 };
 
 /**

@@ -117,7 +117,8 @@ static void gc_finalizer_call_bytecode(ProcessVM *p, uint64_t entry_vaddr,
     p->registers.stack_pointer.qword(saved_rsp);
     p->registers.base_pointer.raw(saved_rbp);
     p->registers.flags.raw = saved_flags;
-    p->frame_stack = saved_frame_stack; // por si el deleter dejo frames colgando
+    p->frame_stack =
+        saved_frame_stack; // por si el deleter dejo frames colgando
     for (int i = 0; i < 16; ++i)
         p->registers.regs[i].qword(saved_regs[i]);
     // El deleter decodifico instrucciones en el icache (indexado por PC): las
@@ -126,7 +127,8 @@ static void gc_finalizer_call_bytecode(ProcessVM *p, uint64_t entry_vaddr,
     // fresco al reanudar, evitando ejecutar una instruccion del deleter en el
     // slot del caller (bug observado: `return C.libs` justo tras gc_collect
     // leia basura).  Coste aceptable: los finalizadores son poco frecuentes.
-    for (uint32_t k = 0; k < ICACHE_SIZE; ++k) p->icache[k].pc = UINT64_MAX;
+    for (uint32_t k = 0; k < ICACHE_SIZE; ++k)
+        p->icache[k].pc = UINT64_MAX;
     p->decoded_ptr = saved_decoded_ptr;
 }
 
@@ -176,10 +178,10 @@ static void gc_finalizer_run(void *owner, const gc::GcPendingFinalizer &f) {
         // f.a0 = dtor_vaddr (<Clase>____dtor concreto, dispatch estatico),
         // f.a1 = obj_host_ptr (la instancia).  Correr bytecode dtor(obj) --
         // EXACTAMENTE el mismo <Clase>____dtor que el cleanup determinista
-        // CALL_DTOR del caso no-escape (portable en interp, arch-independiente).
-        // NO se libera memoria aqui: el GC ya reclamo el slot de la instancia;
-        // el dtor solo libera los RECURSOS internos (campos owned, file
-        // handles, etc.).
+        // CALL_DTOR del caso no-escape (portable en interp,
+        // arch-independiente). NO se libera memoria aqui: el GC ya reclamo el
+        // slot de la instancia; el dtor solo libera los RECURSOS internos
+        // (campos owned, file handles, etc.).
         const uint64_t dtor_vaddr = f.a0;
         const uint64_t obj = f.a1;
         if (dtor_vaddr == 0 || obj == 0) return;
@@ -187,8 +189,7 @@ static void gc_finalizer_run(void *owner, const gc::GcPendingFinalizer &f) {
         break;
     }
     case gc::GcFinalizerKind::NONE:
-    default:
-        break;
+    default: break;
     }
 }
 
@@ -580,7 +581,8 @@ void exec_instr_jmp(ProcessVM *vm, const DecodedInstr &instr) {
     // incondicionales (0x0F+) no aportan info al C2.
     if (cond < 0x0E) {
         const uint64_t bpc = vm->registers.rip.raw();
-        // Profiler ligero (auto-PGO del JIT): self-guarded, ~1 ciclo cuando OFF.
+        // Profiler ligero (auto-PGO del JIT): self-guarded, ~1 ciclo cuando
+        // OFF.
         profile::lite_profile_branch(bpc, taken);
         // Profiler pesado D.6 (--profile): solo cuando activo.
         if (__builtin_expect(
@@ -626,9 +628,10 @@ void exec_instr_callvm(ProcessVM *vm, const DecodedInstr &instr) {
             // dispara un GC, el scan preciso de raices del interprete halla el
             // frame de este caller (aun en interp) via el stackmap del @sm que
             // el emisor puso tras el CALLVM -- igual que el caso interp->interp
-            // (caller hallado por el return_pc del callee).  Sin esto RIP seguiria
-            // en el propio CALLVM (sin stackmap) y las raices GC vivas de este
-            // frame se perderian (UAF con el GC movible).  El JIT VM_ABI no lee RIP.
+            // (caller hallado por el return_pc del callee).  Sin esto RIP
+            // seguiria en el propio CALLVM (sin stackmap) y las raices GC vivas
+            // de este frame se perderian (UAF con el GC movible).  El JIT
+            // VM_ABI no lee RIP.
             write_rip(vm, ret_addr);
             jit::enter_jit(reinterpret_cast<jit::JitFn>(jit_fn),
                            reinterpret_cast<vrt_proc *>(vm));
@@ -655,9 +658,10 @@ void exec_instr_callvm(ProcessVM *vm, const DecodedInstr &instr) {
             // dispara un GC, el scan preciso de raices del interprete halla el
             // frame de este caller (aun en interp) via el stackmap del @sm que
             // el emisor puso tras el CALLVM -- igual que el caso interp->interp
-            // (caller hallado por el return_pc del callee).  Sin esto RIP seguiria
-            // en el propio CALLVM (sin stackmap) y las raices GC vivas de este
-            // frame se perderian (UAF con el GC movible).  El JIT VM_ABI no lee RIP.
+            // (caller hallado por el return_pc del callee).  Sin esto RIP
+            // seguiria en el propio CALLVM (sin stackmap) y las raices GC vivas
+            // de este frame se perderian (UAF con el GC movible).  El JIT
+            // VM_ABI no lee RIP.
             write_rip(vm, ret_addr);
             jit::enter_jit(reinterpret_cast<jit::JitFn>(jit_fn),
                            reinterpret_cast<vrt_proc *>(vm));
@@ -865,9 +869,10 @@ void exec_instr_callvmr(ProcessVM *vm, const DecodedInstr &instr) {
             // dispara un GC, el scan preciso de raices del interprete halla el
             // frame de este caller (aun en interp) via el stackmap del @sm que
             // el emisor puso tras el CALLVM -- igual que el caso interp->interp
-            // (caller hallado por el return_pc del callee).  Sin esto RIP seguiria
-            // en el propio CALLVM (sin stackmap) y las raices GC vivas de este
-            // frame se perderian (UAF con el GC movible).  El JIT VM_ABI no lee RIP.
+            // (caller hallado por el return_pc del callee).  Sin esto RIP
+            // seguiria en el propio CALLVM (sin stackmap) y las raices GC vivas
+            // de este frame se perderian (UAF con el GC movible).  El JIT
+            // VM_ABI no lee RIP.
             write_rip(vm, ret_addr);
             jit::enter_jit(reinterpret_cast<jit::JitFn>(jit_fn),
                            reinterpret_cast<vrt_proc *>(vm));
@@ -882,9 +887,10 @@ void exec_instr_callvmr(ProcessVM *vm, const DecodedInstr &instr) {
             // dispara un GC, el scan preciso de raices del interprete halla el
             // frame de este caller (aun en interp) via el stackmap del @sm que
             // el emisor puso tras el CALLVM -- igual que el caso interp->interp
-            // (caller hallado por el return_pc del callee).  Sin esto RIP seguiria
-            // en el propio CALLVM (sin stackmap) y las raices GC vivas de este
-            // frame se perderian (UAF con el GC movible).  El JIT VM_ABI no lee RIP.
+            // (caller hallado por el return_pc del callee).  Sin esto RIP
+            // seguiria en el propio CALLVM (sin stackmap) y las raices GC vivas
+            // de este frame se perderian (UAF con el GC movible).  El JIT
+            // VM_ABI no lee RIP.
             write_rip(vm, ret_addr);
             jit::enter_jit(reinterpret_cast<jit::JitFn>(jit_fn),
                            reinterpret_cast<vrt_proc *>(vm));

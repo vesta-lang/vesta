@@ -74,9 +74,9 @@ namespace codegen {
  *
  * @param fn    funcion SSA (para localizar las llamadas).
  * @param live  vivacidad de @c compute_liveness (dominio IR).
- * @param coalesce_remap  congruencias de PHI (indexado por IrValueId) o nullptr.
- *        Con el, los valores de una clase se funden en su root con el intervalo
- *        unido -- porque congruentes SON el mismo valor.
+ * @param coalesce_remap  congruencias de PHI (indexado por IrValueId) o
+ * nullptr. Con el, los valores de una clase se funden en su root con el
+ * intervalo unido -- porque congruentes SON el mismo valor.
  * @return el problema en el dominio IR, listo para @c color_smart_spill.
  *
  * Los @c value_id son @c IrValueId directamente: el modelo los trata como
@@ -116,7 +116,8 @@ liveness_to_problem(const ir::IrFunction &fn, const ir::LivenessResult &live,
         canon.block_end = live.block_end;
         canon.num_instrs = live.num_instrs;
         canon.intervals.reserve(merged.size());
-        for (auto &kv : merged) canon.intervals.push_back(kv.second);
+        for (auto &kv : merged)
+            canon.intervals.push_back(kv.second);
         std::sort(canon.intervals.begin(), canon.intervals.end(),
                   [](const ir::LiveInterval &a, const ir::LiveInterval &b) {
                       return a.def < b.def || (a.def == b.def && a.id < b.id);
@@ -138,11 +139,13 @@ liveness_to_problem(const ir::IrFunction &fn, const ir::LivenessResult &live,
      * pisado un retorno.  Quien dice cuales son es @c vm_isa_facts.h -- aqui
      * solo se recogen sus posiciones. */
     std::vector<uint32_t> calls = rbank::collect_call_positions(fn, live);
-    for (size_t b = 0; b < fn.blocks.size() && b < live.block_start.size(); ++b) {
+    for (size_t b = 0; b < fn.blocks.size() && b < live.block_start.size();
+         ++b) {
         const uint32_t base = live.block_start[b];
         const std::vector<ir::IrInstr> &ins = fn.blocks[b].instrs;
         for (size_t j = 0; j < ins.size(); ++j)
-            if (vm_op_clobbers_ret(ins[j].op) && !rbank::ir_op_is_call(ins[j].op))
+            if (vm_op_clobbers_ret(ins[j].op) &&
+                !rbank::ir_op_is_call(ins[j].op))
                 calls.push_back(base + static_cast<uint32_t>(j));
     }
     std::sort(calls.begin(), calls.end());
@@ -152,7 +155,7 @@ liveness_to_problem(const ir::IrFunction &fn, const ir::LivenessResult &live,
      * el parametro NO cabe en registro y vive en memoria.  Se indexa por
      * IrValueId para no buscar dentro del bucle. */
     constexpr size_t kMaxRegParams = 12;
-    std::vector<int16_t> pin;      // -1 = sin pin
+    std::vector<int16_t> pin;       // -1 = sin pin
     std::vector<uint8_t> in_memory; // 1 = parametro que no cabe en registro
     for (size_t i = 0; i < fn.params.size(); ++i) {
         const ir::IrValueId pid = fn.params[i];
@@ -160,12 +163,15 @@ liveness_to_problem(const ir::IrFunction &fn, const ir::LivenessResult &live,
             pin.resize(static_cast<size_t>(pid) + 1, -1);
             in_memory.resize(static_cast<size_t>(pid) + 1, 0);
         }
-        if (i < kMaxRegParams) pin[pid] = static_cast<int16_t>(i + 1);
-        else in_memory[pid] = 1;
+        if (i < kMaxRegParams)
+            pin[pid] = static_cast<int16_t>(i + 1);
+        else
+            in_memory[pid] = 1;
     }
 
     for (const ir::LiveInterval &iv : live.intervals) {
-        if (iv.end < iv.def) continue; // intervalo vacio: el allocator lo ignora.
+        if (iv.end < iv.def)
+            continue; // intervalo vacio: el allocator lo ignora.
         rbank::AbstractValue av;
         av.value_id = iv.id;
         av.start = iv.def;

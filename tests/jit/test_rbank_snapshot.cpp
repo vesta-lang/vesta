@@ -31,53 +31,75 @@ using ir::IrValueId;
 static int g_checks = 0;
 static int g_fail = 0;
 
-#define CHECK(cond, msg)                                                     \
-    do {                                                                     \
-        ++g_checks;                                                          \
-        if (!(cond)) {                                                       \
-            ++g_fail;                                                        \
-            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);        \
-        }                                                                    \
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fail;                                                          \
+            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);          \
+        }                                                                      \
     } while (0)
 
 static IrInstr mk(IrOp op, IrType t, IrValueId dst,
                   std::vector<IrValueId> ops = {}, uint64_t imm = 0,
                   std::string fn = "") {
-    IrInstr i; i.op = op; i.type = t; i.dst = dst;
-    i.operands = std::move(ops); i.imm = imm; i.func_name = std::move(fn);
+    IrInstr i;
+    i.op = op;
+    i.type = t;
+    i.dst = dst;
+    i.operands = std::move(ops);
+    i.imm = imm;
+    i.func_name = std::move(fn);
     return i;
 }
 static IrValue mkval(IrValueId id, IrType t, bool is_const = false,
                      bool is_param = false) {
-    IrValue v; v.id = id; v.type = t; v.is_const = is_const; v.is_param = is_param;
+    IrValue v;
+    v.id = id;
+    v.type = t;
+    v.is_const = is_const;
+    v.is_param = is_param;
     return v;
 }
 
 /** @brief Funcion con un bucle y un acumulador f64 que cruza el back-edge. */
 static ir::IrFunction make_loop_fn() {
-    ir::IrFunction fn; fn.name = "loopfp"; fn.ret_type = IrType::F64;
-    fn.values = {mkval(0, IrType::I64, false, true), mkval(1, IrType::F64, true),
-                 mkval(2, IrType::F64)};
+    ir::IrFunction fn;
+    fn.name = "loopfp";
+    fn.ret_type = IrType::F64;
+    fn.values = {mkval(0, IrType::I64, false, true),
+                 mkval(1, IrType::F64, true), mkval(2, IrType::F64)};
     fn.params = {0};
-    IrBlock b0; b0.id = 0; b0.name = "entry";
-    b0.instrs.push_back(mk(IrOp::CONST, IrType::F64, 1, {}, 0x3FF8000000000000ull));
+    IrBlock b0;
+    b0.id = 0;
+    b0.name = "entry";
+    b0.instrs.push_back(
+        mk(IrOp::CONST, IrType::F64, 1, {}, 0x3FF8000000000000ull));
     b0.instrs.push_back(mk(IrOp::BR, IrType::VOID, ir::IR_NO_VALUE));
     b0.instrs.back().target_block = 1;
-    IrBlock b1; b1.id = 1; b1.name = "header";
+    IrBlock b1;
+    b1.id = 1;
+    b1.name = "header";
     b1.instrs.push_back(mk(IrOp::ADD, IrType::F64, 2, {1, 1}));
     b1.instrs.push_back(mk(IrOp::BR_COND, IrType::VOID, ir::IR_NO_VALUE, {0}));
-    b1.instrs.back().target_block = 2; b1.instrs.back().false_block = 3;
-    IrBlock b2; b2.id = 2; b2.name = "body";
+    b1.instrs.back().target_block = 2;
+    b1.instrs.back().false_block = 3;
+    IrBlock b2;
+    b2.id = 2;
+    b2.name = "body";
     b2.instrs.push_back(mk(IrOp::BR, IrType::VOID, ir::IR_NO_VALUE));
     b2.instrs.back().target_block = 1;
-    IrBlock b3; b3.id = 3; b3.name = "exit";
+    IrBlock b3;
+    b3.id = 3;
+    b3.name = "exit";
     b3.instrs.push_back(mk(IrOp::RET, IrType::F64, ir::IR_NO_VALUE, {2}));
     fn.blocks = {std::move(b0), std::move(b1), std::move(b2), std::move(b3)};
     return fn;
 }
 
 int main() {
-    std::printf("=== test_rbank_snapshot (fotografia + autocertificacion) ===\n");
+    std::printf(
+        "=== test_rbank_snapshot (fotografia + autocertificacion) ===\n");
 
     ir::IrFunction fn = make_loop_fn();
     FunctionSnapshot snap = build_snapshot(fn);
@@ -89,30 +111,40 @@ int main() {
     CHECK(!snap.value_reqs().empty(), "sin ValueRequirements");
     // El acumulador v2 (f64, en el loop) esta en la foto con sus hechos.
     const ValueRequirements *v2 = nullptr;
-    for (const ValueRequirements &r : snap.value_reqs()) if (r.value_id == 2) v2 = &r;
+    for (const ValueRequirements &r : snap.value_reqs())
+        if (r.value_id == 2) v2 = &r;
     CHECK(v2 && v2->cls == ResourceClass::FP_VECTOR && v2->loop_depth == 1,
           "v2 (f64 en loop) mal en la foto");
 
-    std::printf("\n[query system LAZY: computa on-demand + cachea + arrastra deps]\n");
+    std::printf(
+        "\n[query system LAZY: computa on-demand + cachea + arrastra deps]\n");
     {
-        FunctionSnapshot lazy; lazy.fn = &fn; // nada computado aun
+        FunctionSnapshot lazy;
+        lazy.fn = &fn; // nada computado aun
         CHECK(!lazy.is_computed(Fact::Loops), "recien creado ya tiene Loops");
         CHECK(lazy.loop_facts().loop_count == 1, "lazy loop_facts no computo");
         CHECK(lazy.is_computed(Fact::Loops), "lazy no cacheo Loops");
         // value_reqs arrastra liveness + loops por dependencia.
         CHECK(!lazy.value_reqs().empty(), "lazy value_reqs vacio");
-        CHECK(lazy.is_computed(Fact::Liveness) && lazy.is_computed(Fact::Values),
+        CHECK(lazy.is_computed(Fact::Liveness) &&
+                  lazy.is_computed(Fact::Values),
               "lazy value_reqs no arrastro las dependencias");
     }
 
     std::printf("\n[query<T>() generico: registro por tipo (QueryProducer)]\n");
     {
-        FunctionSnapshot q; q.fn = &fn;
-        // El snapshot NO conoce el algoritmo: query<T>() lo pide al QueryProducer<T>.
-        CHECK(q.query<analysis::LoopFacts>().loop_count == 1, "query<LoopFacts> mal");
-        CHECK(!q.query<ir::LivenessResult>().intervals.empty(), "query<LivenessResult> vacio");
-        // Dependencias resueltas SOLAS por el productor (produce llama a query<U>()).
-        CHECK(!q.query<std::vector<ValueRequirements>>().empty(), "query<vector<VR>> vacio");
+        FunctionSnapshot q;
+        q.fn = &fn;
+        // El snapshot NO conoce el algoritmo: query<T>() lo pide al
+        // QueryProducer<T>.
+        CHECK(q.query<analysis::LoopFacts>().loop_count == 1,
+              "query<LoopFacts> mal");
+        CHECK(!q.query<ir::LivenessResult>().intervals.empty(),
+              "query<LivenessResult> vacio");
+        // Dependencias resueltas SOLAS por el productor (produce llama a
+        // query<U>()).
+        CHECK(!q.query<std::vector<ValueRequirements>>().empty(),
+              "query<vector<VR>> vacio");
         CHECK(q.is_computed(Fact::Liveness) && q.is_computed(Fact::Loops),
               "query<Values> no arrastro sus dependencias via productor");
         // El accessor nombrado es AZUCAR: MISMA celda cacheada que query<T>().
@@ -120,8 +152,11 @@ int main() {
               "el accessor no es la misma celda que query<T>()");
     }
 
-    PhysicalRegisterBank bank = physical_bank_x86_64(
-        true, [] { BackendCaps c{}; c.sse2 = true; return c; }());
+    PhysicalRegisterBank bank = physical_bank_x86_64(true, [] {
+        BackendCaps c{};
+        c.sse2 = true;
+        return c;
+    }());
 
     std::printf("\n[autocertificacion: conocimiento SANO]\n");
     {
@@ -135,11 +170,13 @@ int main() {
     {
         FunctionSnapshot bad = build_snapshot(fn);
         // Corrompemos LoopFacts: header (block1) in_loop pero depth 0.
-        bad.loops.unsafe_mutable_ref().loop_depth[1] = 0; // in_loop[1] sigue 1 -> mismatch
+        bad.loops.unsafe_mutable_ref().loop_depth[1] =
+            0; // in_loop[1] sigue 1 -> mismatch
         FunctionSnapshot::ValidationReport rep = bad.validate(bank);
         bool caught = false;
         for (const analysis::FactIssue &i : rep.fact_issues)
-            if (i.check == analysis::FactCheck::LOOP_DEPTH_INLOOP_MISMATCH) caught = true;
+            if (i.check == analysis::FactCheck::LOOP_DEPTH_INLOOP_MISMATCH)
+                caught = true;
         CHECK(!rep.ok() && caught, "no cazo el LoopFacts corrupto");
     }
 
@@ -148,7 +185,10 @@ int main() {
         FunctionSnapshot bad = build_snapshot(fn);
         // Pin de un valor FP a un registro GP (RAX).
         for (ValueRequirements &r : bad.values.unsafe_mutable_ref())
-            if (r.cls == ResourceClass::FP_VECTOR) { r.fixed_reg = 0; break; }
+            if (r.cls == ResourceClass::FP_VECTOR) {
+                r.fixed_reg = 0;
+                break;
+            }
         FunctionSnapshot::ValidationReport rep = bad.validate(bank);
         bool caught = false;
         for (const RequirementIssue &i : rep.value_issues)
@@ -159,10 +199,14 @@ int main() {
     std::printf("\n[SnapshotBuilder: subconjunto de Facts]\n");
     {
         // Solo Loops -> ni liveness ni values.
-        FunctionSnapshot only_loops = SnapshotBuilder().enable(Fact::Loops).build(fn);
-        CHECK(only_loops.loop_facts().loop_count == 1, "builder solo-Loops sin bucles");
-        CHECK(!only_loops.is_computed(Fact::Liveness), "builder solo-Loops computo liveness");
-        CHECK(!only_loops.is_computed(Fact::Values), "builder solo-Loops computo values");
+        FunctionSnapshot only_loops =
+            SnapshotBuilder().enable(Fact::Loops).build(fn);
+        CHECK(only_loops.loop_facts().loop_count == 1,
+              "builder solo-Loops sin bucles");
+        CHECK(!only_loops.is_computed(Fact::Liveness),
+              "builder solo-Loops computo liveness");
+        CHECK(!only_loops.is_computed(Fact::Values),
+              "builder solo-Loops computo values");
     }
 
     std::printf("\n[SnapshotBuilder: resuelve dependencias]\n");

@@ -28,17 +28,17 @@
 #include "vx/comptime/comptime_collect.h"
 #include "vx/compiler.h"
 #include "vx/source_text.h" // un solo fin de linea para todo el pipeline
-#include "vx/vxdbg_emit.h" // grafo de conocimiento del programa
+#include "vx/vxdbg_emit.h"  // grafo de conocimiento del programa
 #include "vxdbg/codec.h"
 #include "vxdbg/roots.h"
 #include "analysis/facts/alignment.h"    // de cuanto es multiplo un valor
 #include "analysis/facts/asm_bindings.h" // de que valor habla un operando de asm
-#include "analyze/fingerprint.h" // verificacion de contratos
-#include "vx/asm/asm_effects.h"  // que exige cada instruccion
+#include "analyze/fingerprint.h"         // verificacion de contratos
+#include "vx/asm/asm_effects.h"          // que exige cada instruccion
 #include "vx/asm/asm_phys_reg.h" // clases de registro (ancho de cada operando)
 #include "vx/incremental.h" // CAS global direccionado por contenido (cross-proyecto)
-#include <algorithm> // UCRT64: no transitivo
-#include <chrono>    // reparto del coste por fase
+#include <algorithm>        // UCRT64: no transitivo
+#include <chrono>           // reparto del coste por fase
 #include <unordered_set>
 
 #include "ir/ir_emitter.h"
@@ -68,7 +68,7 @@
 #include "vx/module/vxi_format.h"
 #include "vx/source_hash.h" // la identidad de un fuente son sus tokens
 #include "analysis/asa/fact_file.h"
-#include "util/fs_utils.h"   // fs::get_executable_path()
+#include "util/fs_utils.h" // fs::get_executable_path()
 
 #include <atomic>
 #include <cstdlib>
@@ -231,9 +231,10 @@ uint64_t module_content_key_(uint64_t source_hash,
             h *= 1099511628211ull;
         }
     };
-    mix(0x5641434B4559ull);          // dominio "CAS module key".
-    mix(vxi_compiler_version_hash()); // build del compilador -> no reusar stale.
-    mix(source_hash);                 // contenido (incl. instrument/native_poo).
+    mix(0x5641434B4559ull);           // dominio "CAS module key".
+    mix(vxi_compiler_version_hash()); // build del compilador -> no reusar
+                                      // stale.
+    mix(source_hash); // contenido (incl. instrument/native_poo).
     // Config que afecta al IR pre-optimize (BuildConfig::ir_fingerprint):
     // asm_target_bits, native_poo, exceptions, instrument.  Cierra el hueco de
     // cross-bits AOT (@Naked/asm{} baja distinto en 32/64) con CAS compartido.
@@ -247,8 +248,10 @@ uint64_t module_content_key_(uint64_t source_hash,
         const char *pre = std::getenv("VESTA_MC_PREBUILT");
         mix((pre != nullptr && pre[0] != '\0') ? 1ull : 0ull);
     }
-    if (!tgt_suffix.empty()) mix(vxi_fnv1a(tgt_suffix)); // @Target (PE/ELF/...).
-    for (uint64_t d : dep_hashes) mix(d);
+    if (!tgt_suffix.empty())
+        mix(vxi_fnv1a(tgt_suffix)); // @Target (PE/ELF/...).
+    for (uint64_t d : dep_hashes)
+        mix(d);
     return h;
 }
 
@@ -352,8 +355,7 @@ static uint64_t compiler_fingerprint_() {
             const auto sz = std::filesystem::file_size(p, ec);
             if (!ec) mix(static_cast<uint64_t>(sz));
             const auto tm = std::filesystem::last_write_time(p, ec);
-            if (!ec)
-                mix(static_cast<uint64_t>(tm.time_since_epoch().count()));
+            if (!ec) mix(static_cast<uint64_t>(tm.time_since_epoch().count()));
         }
         // Respaldo por si no se pudo mirar el ejecutable: al menos el formato
         // de interfaz, que ya cambia con las modificaciones de fondo.
@@ -404,7 +406,8 @@ static std::string prefijo_cache_(const std::string &source_path,
     if (!global_cache_dir_().empty())
         return global_cache_path_(source_path, tgt_suffix);
     const size_t dot = source_path.find_last_of('.');
-    return (dot == std::string::npos ? source_path : source_path.substr(0, dot)) +
+    return (dot == std::string::npos ? source_path
+                                     : source_path.substr(0, dot)) +
            tgt_suffix;
 }
 
@@ -420,8 +423,8 @@ static const RutasCache &rutas_cache_(const std::string &source_path,
     /* Compartida entre los hilos que compilan modulos en paralelo, asi que va
      * con cerrojo.  Es un puñado de entradas y se tocan una vez por modulo:
      * el cerrojo cuesta muchisimo menos que rehacer las rutas. */
-    static std::mutex                                     mtx;
-    static std::unordered_map<std::string, RutasCache>    tabla;
+    static std::mutex mtx;
+    static std::unordered_map<std::string, RutasCache> tabla;
     std::string clave = source_path;
     clave.push_back('\0');
     clave += tgt_suffix;
@@ -429,7 +432,7 @@ static const RutasCache &rutas_cache_(const std::string &source_path,
     auto it = tabla.find(clave);
     if (it != tabla.end()) return it->second;
     const std::string base = prefijo_cache_(source_path, tgt_suffix);
-    RutasCache        r;
+    RutasCache r;
     r.vxi = base + ".vxi";
     r.vxir = base + ".vxir";
     r.hechos = base + ".vxfacts";
@@ -439,7 +442,7 @@ static const RutasCache &rutas_cache_(const std::string &source_path,
 }
 
 std::string vxi_path_for_(const std::string &source_path,
-                           const std::string &tgt_suffix = "") {
+                          const std::string &tgt_suffix = "") {
     return rutas_cache_(source_path, tgt_suffix).vxi;
 }
 
@@ -462,10 +465,10 @@ std::string vxi_path_for_(const std::string &source_path,
  *                   depende), con lo que se decide que merece guardarse.
  * @return @c true si quedo algo escrito.
  */
-static bool guardar_hechos_(
-    const std::string &ruta, const analysis::asa::FactStore &almacen,
-    uint64_t huella,
-    const std::vector<analysis::asa::DomainCost> &costes) {
+static bool
+guardar_hechos_(const std::string &ruta,
+                const analysis::asa::FactStore &almacen, uint64_t huella,
+                const std::vector<analysis::asa::DomainCost> &costes) {
     const std::vector<uint8_t> bytes =
         analysis::asa::serialize(almacen, huella, analysis::asa::cache_level(),
                                  costes, compiler_fingerprint_());
@@ -487,9 +490,10 @@ static bool guardar_hechos_(
  * @param vigentes De que depende hoy cada dominio, para anular solo lo suyo.
  * @return Que se leyo, o por que no.
  */
-static analysis::asa::ReadResult recuperar_hechos_(
-    const std::string &ruta, analysis::asa::FactStore &destino, uint64_t huella,
-    const std::vector<analysis::asa::DomainCost> &vigentes) {
+static analysis::asa::ReadResult
+recuperar_hechos_(const std::string &ruta, analysis::asa::FactStore &destino,
+                  uint64_t huella,
+                  const std::vector<analysis::asa::DomainCost> &vigentes) {
     return analysis::asa::read_facts_file(ruta, huella, destino, vigentes,
                                           compiler_fingerprint_());
 }
@@ -498,7 +502,7 @@ static analysis::asa::ReadResult recuperar_hechos_(
 /// target (p.ej. ".linux-x86_64") para modulos con @Target -> alternar de
 /// target no recompila (HALLAZGO-2).  Vacio => fichero unico compartido.
 std::string vxir_path_for_(const std::string &source_path,
-                            const std::string &tgt_suffix = "") {
+                           const std::string &tgt_suffix = "") {
     return rutas_cache_(source_path, tgt_suffix).vxir;
 }
 
@@ -563,8 +567,8 @@ struct ImportRequest {
     bool by_namespace = false;       // NS.2-full: import a.b.c; (por-namespace)
     std::string ns_path;             // namespace original (por-namespace): para
                                      // registrar TODOS los ficheros de un
-                                     // namespace PARCIAL (varios modulos = 1 ns)
-    SourceLoc loc{};                 // posicion del ImportDecl (M6.a.3 diags)
+    // namespace PARCIAL (varios modulos = 1 ns)
+    SourceLoc loc{}; // posicion del ImportDecl (M6.a.3 diags)
 };
 
 /**
@@ -593,7 +597,8 @@ static uint64_t huella_de_lo_usado(const VxiModule &dep_vxi,
     }
     std::vector<std::string> nombres;
     nombres.reserve(req.only_symbols.size());
-    for (const auto &e : req.only_symbols) nombres.push_back(e.name);
+    for (const auto &e : req.only_symbols)
+        nombres.push_back(e.name);
     return vxi_hash_de_simbolos(dep_vxi, nombres);
 }
 
@@ -843,7 +848,8 @@ void mangle_top_level_(ast::ModuleNode &mod, const std::string &module_name) {
                 if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
                     c == '_') {
                     size_t j = i + 1;
-                    while (j < body.size() && is_ident_ch(body[j])) ++j;
+                    while (j < body.size() && is_ident_ch(body[j]))
+                        ++j;
                     std::string tok = body.substr(i, j - i);
                     auto it = rename_map.find(tok);
                     if (it != rename_map.end())
@@ -892,8 +898,8 @@ collect_imports_(const ast::ModuleNode &mod,
     // ANIDADOS dentro del NamespaceDecl -> recolectarlos recursivamente (si no,
     // no se procesan y el dep no se inyecta).
     std::vector<const ast::ImportDecl *> imports;
-    std::function<void(const std::vector<std::unique_ptr<ast::Node>> &)> gather =
-        [&](const std::vector<std::unique_ptr<ast::Node>> &decls) {
+    std::function<void(const std::vector<std::unique_ptr<ast::Node>> &)>
+        gather = [&](const std::vector<std::unique_ptr<ast::Node>> &decls) {
             for (const auto &d : decls) {
                 if (!d) continue;
                 if (d->kind == ast::NodeKind::ImportDecl)
@@ -920,8 +926,7 @@ collect_imports_(const ast::ModuleNode &mod,
                 auto it = ns_to_modname->find(im->path);
                 if (it != ns_to_modname->end()) req.module_name = it->second;
             }
-            req.local_name =
-                im->alias.empty() ? req.module_name : im->alias;
+            req.local_name = im->alias.empty() ? req.module_name : im->alias;
         } else {
             // Por-path: module_name = ultimo segmento del path.
             size_t slash = im->path.find_last_of('/');
@@ -979,12 +984,14 @@ void nombres_de_tipo_(const ast::TypeNode *t, std::vector<std::string> &out) {
     case ast::NodeKind::NamedTypeNode: {
         const auto *n = static_cast<const ast::NamedTypeNode *>(t);
         out.push_back(n->name);
-        for (const auto &a : n->type_args) nombres_de_tipo_(a.get(), out);
+        for (const auto &a : n->type_args)
+            nombres_de_tipo_(a.get(), out);
         break;
     }
     case ast::NodeKind::PrimitiveTypeNode: {
         const auto *p = static_cast<const ast::PrimitiveTypeNode *>(t);
-        for (const auto &a : p->type_args) nombres_de_tipo_(a.get(), out);
+        for (const auto &a : p->type_args)
+            nombres_de_tipo_(a.get(), out);
         break;
     }
     case ast::NodeKind::PointerTypeNode:
@@ -998,7 +1005,8 @@ void nombres_de_tipo_(const ast::TypeNode *t, std::vector<std::string> &out) {
         break;
     case ast::NodeKind::FunctionTypeNode: {
         const auto *f = static_cast<const ast::FunctionTypeNode *>(t);
-        for (const auto &p : f->param_types) nombres_de_tipo_(p.get(), out);
+        for (const auto &p : f->param_types)
+            nombres_de_tipo_(p.get(), out);
         nombres_de_tipo_(f->return_type.get(), out);
         break;
     }
@@ -1053,14 +1061,17 @@ void ordenar_alias_por_dependencia_(
     std::function<void(size_t)> visitar = [&](size_t k) {
         if (marca[k] != 0) return;
         marca[k] = 1;
-        for (size_t d : deriva_de[k]) visitar(d);
+        for (size_t d : deriva_de[k])
+            visitar(d);
         marca[k] = 2;
         orden.push_back(k);
     };
-    for (size_t k = 0; k < n; ++k) visitar(k);
+    for (size_t k = 0; k < n; ++k)
+        visitar(k);
 
     std::vector<std::unique_ptr<ast::Node>> movidos(n);
-    for (size_t k = 0; k < n; ++k) movidos[k] = std::move(decls[huecos[k]]);
+    for (size_t k = 0; k < n; ++k)
+        movidos[k] = std::move(decls[huecos[k]]);
     for (size_t k = 0; k < n; ++k)
         decls[huecos[k]] = std::move(movidos[orden[k]]);
 }
@@ -1108,9 +1119,10 @@ build_ns_to_all_modnames_(const std::vector<ProjectModuleWork> &work) {
 ///
 /// Vive aqui, en un solo sitio, porque cualquiera que resuelva un import de
 /// otra manera reintroduce esa confusion en su rincon.
-size_t resolve_import_module_(const ImportRequest &req,
-                              const std::unordered_map<std::string, size_t> &by_name,
-                              const std::unordered_map<std::string, size_t> &by_ns) {
+size_t
+resolve_import_module_(const ImportRequest &req,
+                       const std::unordered_map<std::string, size_t> &by_name,
+                       const std::unordered_map<std::string, size_t> &by_ns) {
     if (req.by_namespace && !req.ns_path.empty()) {
         auto itn = by_ns.find(req.ns_path);
         if (itn != by_ns.end()) return itn->second;
@@ -1135,15 +1147,15 @@ compute_module_levels_(const std::vector<ProjectModuleWork> &work,
         int max_dep_level = -1;
         auto imports = collect_imports_(*pm.ast, &ns_to_modname);
         for (const auto &req : imports) {
-            // Resolver el dep por NAMESPACE COMPLETO (by_ns) cuando el import es
-            // por-namespace: `by_name` colisiona cuando dos modulos comparten el
-            // ultimo segmento (std.syscall.linux.x86_64 y ...windows.x86_64 son
-            // ambos "x86_64") -> un import de linux.x86_64 podia resolver al idx
-            // de windows.x86_64 (o a ninguno) y el nivel topo quedaba mal ->
-            // race en el compile paralelo (el consumidor compila antes que su
-            // dep real).  Igual que la resolucion de deps del propio compilador.
-            const size_t dep_idx =
-                resolve_import_module_(req, by_name, by_ns);
+            // Resolver el dep por NAMESPACE COMPLETO (by_ns) cuando el import
+            // es por-namespace: `by_name` colisiona cuando dos modulos
+            // comparten el ultimo segmento (std.syscall.linux.x86_64 y
+            // ...windows.x86_64 son ambos "x86_64") -> un import de
+            // linux.x86_64 podia resolver al idx de windows.x86_64 (o a
+            // ninguno) y el nivel topo quedaba mal -> race en el compile
+            // paralelo (el consumidor compila antes que su dep real).  Igual
+            // que la resolucion de deps del propio compilador.
+            const size_t dep_idx = resolve_import_module_(req, by_name, by_ns);
             if (dep_idx >= work.size()) continue;
             if (static_cast<int>(levels[dep_idx]) > max_dep_level) {
                 max_dep_level = levels[dep_idx];
@@ -1187,9 +1199,9 @@ static const ir::IrModule *asignador_del_lenguaje_(const CompileOptions &opts,
         namespace stdfs = std::filesystem;
         const std::string dir =
             stdfs::path(fs::get_executable_path()).parent_path().string();
-        for (const std::string &p : {dir + "/stdlib/vx/vx_mem.vx",
-                                     dir + "/../stdlib/vx/vx_mem.vx",
-                                     std::string("stdlib/vx/vx_mem.vx")}) {
+        for (const std::string &p :
+             {dir + "/stdlib/vx/vx_mem.vx", dir + "/../stdlib/vx/vx_mem.vx",
+              std::string("stdlib/vx/vx_mem.vx")}) {
             if (!stdfs::exists(p)) continue;
             CompileOptions mo;
             mo.module_name = "vx_mem";
@@ -1213,7 +1225,6 @@ static const ir::IrModule *asignador_del_lenguaje_(const CompileOptions &opts,
     return c.mod.get();
 }
 
-
 /**
  * @brief Deja el asignador del lenguaje DENTRO del modulo, sin tocar las
  *        reservas.
@@ -1228,8 +1239,7 @@ static const ir::IrModule *asignador_del_lenguaje_(const CompileOptions &opts,
  * @param opts Opciones de la compilacion en curso.
  * @param root_path Fuente raiz, para no traerse a si mismo.
  */
-void traer_asignador_del_lenguaje(ir::IrModule &mod,
-                                  const CompileOptions &opts,
+void traer_asignador_del_lenguaje(ir::IrModule &mod, const CompileOptions &opts,
                                   const std::string &root_path) {
     if (opts.sin_asignador_vesta) return;
     if (root_path.find("vx_mem") != std::string::npos) return;
@@ -1250,7 +1260,8 @@ void traer_asignador_del_lenguaje(ir::IrModule &mod,
     if (!reserva) return;
 
     std::string alloc_sym, free_sym;
-    const ir::IrModule *mem = asignador_del_lenguaje_(opts, alloc_sym, free_sym);
+    const ir::IrModule *mem =
+        asignador_del_lenguaje_(opts, alloc_sym, free_sym);
     if (mem == nullptr) return; // sin el, todo sigue como estaba.
     /* Y QUIEN es, para que la maquina no tenga que adivinarlo.  Si el programa
      * declara el suyo con @AllocatorOverride manda ese; el de la biblioteca
@@ -1263,7 +1274,8 @@ void traer_asignador_del_lenguaje(ir::IrModule &mod,
      * listas y comparar cadenas en el bucle interno. */
     std::unordered_set<std::string> presentes;
     presentes.reserve(mod.functions.size() * 2);
-    for (const ir::IrFunction &g : mod.functions) presentes.insert(g.name);
+    for (const ir::IrFunction &g : mod.functions)
+        presentes.insert(g.name);
 
     std::unordered_set<std::string> traidas;
     for (const ir::IrFunction &f : mem->functions) {
@@ -1297,7 +1309,8 @@ void traer_asignador_del_lenguaje(ir::IrModule &mod,
     for (ir::IrFunction &f : mod.functions)
         if (traidas.count(f.name))
             ir::ir_correr_indices_de_datos(f, desplazamiento);
-    for (const auto &gv : mem->globals) mod.globals.emplace(gv.first, gv.second);
+    for (const auto &gv : mem->globals)
+        mod.globals.emplace(gv.first, gv.second);
     // Lo que el asignador llama por su cuenta: pide memoria al sistema por la
     // interfaz nativa, asi que sus importaciones tienen que venir con el.
     for (const auto &ni : mem->native_imports)
@@ -1305,7 +1318,10 @@ void traer_asignador_del_lenguaje(ir::IrModule &mod,
     for (const auto &nl : mem->native_libs) {
         bool ya = false;
         for (const auto &x : mod.native_libs)
-            if (x == nl) { ya = true; break; }
+            if (x == nl) {
+                ya = true;
+                break;
+            }
         if (!ya) mod.native_libs.push_back(nl);
     }
     /* Y el punto de entrada de nombre conocido que lleva hasta el.  Al final,
@@ -1347,7 +1363,8 @@ CompileResult compile_vx_project(
     // analizado), para que un modulo con imports relativos al root del proyecto
     // (p.ej. `import "modules/buffer"`) resuelva aunque se abra standalone.
     if (extra_search_paths) {
-        for (const auto &d : *extra_search_paths) graph.add_search_path(d);
+        for (const auto &d : *extra_search_paths)
+            graph.add_search_path(d);
     }
     // Permitir override del directorio de busqueda via env var VX_PATH.
     graph.add_vx_path_env();
@@ -1382,11 +1399,11 @@ CompileResult compile_vx_project(
                      * se trabaja SOBRE una libreria sin tocar el manifiesto de
                      * cada proyecto que la usa. */
                     const std::string ov = override_de_paquete(nombre);
-                    fs::path cand = !ov.empty()
-                                        ? fs::path(ov)
-                                        : (dep.path.empty()
-                                               ? (dir_man / "vx_modules" / nombre)
-                                               : (dir_man / dep.path));
+                    fs::path cand =
+                        !ov.empty() ? fs::path(ov)
+                                    : (dep.path.empty()
+                                           ? (dir_man / "vx_modules" / nombre)
+                                           : (dir_man / dep.path));
                     std::error_code ec;
                     if (fs::exists(cand, ec) && fs::is_directory(cand, ec))
                         graph.add_search_path(cand.lexically_normal().string());
@@ -1400,7 +1417,8 @@ CompileResult compile_vx_project(
     // candidatos comunes desde el cwd (override via env var VX_STDLIB_DIR).
     {
         // Autodetect de la stdlib Vesta (env VX_STDLIB_DIR, cwd, o relativo al
-        // ejecutable).  Factorizado en detect_stdlib_vx_dir() para reuso del LSP.
+        // ejecutable).  Factorizado en detect_stdlib_vx_dir() para reuso del
+        // LSP.
         std::string sd = detect_stdlib_vx_dir();
         if (!sd.empty()) graph.set_stdlib_dir(sd);
     }
@@ -1662,7 +1680,8 @@ CompileResult compile_vx_project(
                     pm.diags.warning(
                         fd->loc,
                         "@HelperOverride: helper '" + tgt +
-                            "' no es multi-versionado (solo 'memcpy', 'strcmp', "
+                            "' no es multi-versionado (solo 'memcpy', "
+                            "'strcmp', "
                             "'strlen' por ahora); la anotacion se ignora");
                     continue;
                 }
@@ -1676,12 +1695,11 @@ CompileResult compile_vx_project(
                     is_root ? fd->name : (pm.module_name + "__" + fd->name);
                 // Validacion de firma (no fatal, el usuario manda).
                 bool ret_void =
-                    !fd->return_type ||
-                    (fd->return_type->kind ==
-                         ast::NodeKind::PrimitiveTypeNode &&
-                     static_cast<ast::PrimitiveTypeNode *>(
-                         fd->return_type.get())
-                             ->prim == PrimitiveKind::VOID);
+                    !fd->return_type || (fd->return_type->kind ==
+                                             ast::NodeKind::PrimitiveTypeNode &&
+                                         static_cast<ast::PrimitiveTypeNode *>(
+                                             fd->return_type.get())
+                                                 ->prim == PrimitiveKind::VOID);
                 bool sig_ok = true;
                 std::string expected;
                 if (tgt == "memcpy") {
@@ -1716,10 +1734,11 @@ CompileResult compile_vx_project(
                         // precedencia (ambos imports, o el caso imposible de
                         // dos roots) overriden el mismo target -> error.
                         res.ok = false;
-                        res.diagnostics.error(
-                            fd->loc,
-                            "multiples @HelperOverride(" + tgt + ") cross-module: '" +
-                                existing->second + "' y '" + sym_name + "'");
+                        res.diagnostics.error(fd->loc,
+                                              "multiples @HelperOverride(" +
+                                                  tgt + ") cross-module: '" +
+                                                  existing->second + "' y '" +
+                                                  sym_name + "'");
                         return res;
                     }
                 } else {
@@ -1744,19 +1763,20 @@ CompileResult compile_vx_project(
     std::mutex verbose_mtx;
     // HALLAZGO-2: capturar el override de @Target (thread_local del parser) en
     // el main thread.  Se usa para (a) mezclarlo en el source_hash del cache
-    // -> PE y ELF del MISMO proyecto no comparten `.vxir` (si no, cross-compilar
-    // a un target y luego a otro reusaba el IR del target equivocado), y (b)
-    // re-aplicarlo en los workers del compile paralelo (el thread_local arranca
-    // vacio en un thread nuevo).
+    // -> PE y ELF del MISMO proyecto no comparten `.vxir` (si no,
+    // cross-compilar a un target y luego a otro reusaba el IR del target
+    // equivocado), y (b) re-aplicarlo en los workers del compile paralelo (el
+    // thread_local arranca vacio en un thread nuevo).
     std::string cc_tgt_os, cc_tgt_arch;
     vx::get_aot_condcomp_target(cc_tgt_os, cc_tgt_arch);
 
     // CAS global direccionado por contenido (opt-in via VX_CAS_DIR): tier de
-    // cache ADICIONAL, independiente de la ruta, que permite reusar el artefacto
-    // de un modulo (interfaz + IR) entre proyectos distintos y entre maquinas.
-    // Ejemplo: la stdlib se compila una sola vez para toda la maquina.  Default
-    // OFF -> comportamiento y builds actuales intactos.  Comparte un solo
-    // CasStore entre threads (sus ops de fichero son atomicas / read-only).
+    // cache ADICIONAL, independiente de la ruta, que permite reusar el
+    // artefacto de un modulo (interfaz + IR) entre proyectos distintos y entre
+    // maquinas. Ejemplo: la stdlib se compila una sola vez para toda la
+    // maquina.  Default OFF -> comportamiento y builds actuales intactos.
+    // Comparte un solo CasStore entre threads (sus ops de fichero son atomicas
+    // / read-only).
     std::unique_ptr<CasStore> cas;
     if (cache_enabled && std::getenv("VX_CAS_DIR") != nullptr)
         cas = std::make_unique<CasStore>(CasStore::open_default());
@@ -1827,8 +1847,8 @@ CompileResult compile_vx_project(
         // Esto solo muerde libs con clases/funciones CONCRETAS (las plantillas
         // genericas no producen IR en el dep; se monomorphizan en el root).
         if (opts.native_poo) {
-            source_hash ^= 0xA07A07A07A07A07AULL + (source_hash << 7) +
-                           (source_hash >> 3);
+            source_hash ^=
+                0xA07A07A07A07A07AULL + (source_hash << 7) + (source_hash >> 3);
         }
         // HALLAZGO-2: un modulo SOLO es target-especifico si usa @Target (que
         // descarta decls distintas segun os/arch al parsear).  Para NO
@@ -1887,7 +1907,8 @@ CompileResult compile_vx_project(
                         if (vb.size() >= 16) {
                             uint64_t hh = 0;
                             for (int b = 0; b < 8; ++b)
-                                hh |= static_cast<uint64_t>(vb[8 + b]) << (b * 8);
+                                hh |= static_cast<uint64_t>(vb[8 + b])
+                                      << (b * 8);
                             pm.vxi.abi_hash = hh;
                         }
                         pm.ir.functions = std::move(dep_mod.functions);
@@ -1898,7 +1919,8 @@ CompileResult compile_vx_project(
                         pm.ok = true;
                         if (verbose_cache) {
                             std::ostringstream tmp;
-                            tmp << "[vx-cas] hit: " << pm.canonical_path << "\n";
+                            tmp << "[vx-cas] hit: " << pm.canonical_path
+                                << "\n";
                             std::lock_guard<std::mutex> lk(verbose_mtx);
                             std::cerr << tmp.str();
                         }
@@ -2028,7 +2050,8 @@ CompileResult compile_vx_project(
                                 if (!read_file_bytes_(vp, vb2)) {
                                     par_coherente = false;
                                 } else {
-                                    auto pr2 = vxi_parse(vb2.data(), vb2.size());
+                                    auto pr2 =
+                                        vxi_parse(vb2.data(), vb2.size());
                                     if (!pr2.ok ||
                                         pr2.module_.source_hash != source_hash)
                                         par_coherente = false;
@@ -2104,8 +2127,9 @@ CompileResult compile_vx_project(
         auto inline_namespaces = flatten_namespaces(*pm.ast);
 
         /* El conjunto comptime de ESTE modulo, con los nombres ya mangled.  El
-         * volcado equivalente del camino de fichero suelto (`compile_vx_source`)
-         * no sirve aqui: los modulos que de verdad tienen comptime -- la stdlib
+         * volcado equivalente del camino de fichero suelto
+         * (`compile_vx_source`) no sirve aqui: los modulos que de verdad tienen
+         * comptime -- la stdlib
          * -- llegan por el camino de PROYECTO, asi que sin esto la medida se
          * tomaba sobre casos sinteticos y la granularidad del artefacto se
          * elegia por arquitectura en vez de por dato.  Solo diagnostico. */
@@ -2121,8 +2145,8 @@ CompileResult compile_vx_project(
                 res.comptime_unit_source += cu.unit_source;
                 /* Los NOMBRES, que son el criterio de pertenencia al emitir el
                  * artefacto.  Deducirlo del texto seria adivinar: una busqueda
-                 * de subcadena acierta por accidente (un nombre mencionado en un
-                 * comentario, o uno que es prefijo de otro). */
+                 * de subcadena acierta por accidente (un nombre mencionado en
+                 * un comentario, o uno que es prefijo de otro). */
                 for (const auto *lista :
                      {&cu.comptime_fns, &cu.macros, &cu.helper_deps})
                     res.comptime_unit_names.insert(
@@ -2140,9 +2164,9 @@ CompileResult compile_vx_project(
                               << "\n";
                     dump_comptime_unit(cu, std::cerr);
                 }
-                /* El TEXTO extraido, a un fichero por modulo.  Cuando la suma no
-                 * compila hay que poder LEER lo que se extrajo: reproducirlo con
-                 * fuentes de juguete no lo consigue -- se intento con
+                /* El TEXTO extraido, a un fichero por modulo.  Cuando la suma
+                 * no compila hay que poder LEER lo que se extrajo: reproducirlo
+                 * con fuentes de juguete no lo consigue -- se intento con
                  * `namespace` y con la concatenacion de dos modulos, y los dos
                  * compilan bien. */
                 if (const char *d = std::getenv("VESTA_VOLCAR_UNIDAD")) {
@@ -2167,11 +2191,10 @@ CompileResult compile_vx_project(
                 pm.tc->register_imported_namespace(ins.name, ins.name);
             for (const auto &sym : ins.symbols) {
                 TypeChecker::ImportedNamespace::Sym ns_sym;
-                ns_sym.kind = (sym.kind == FlattenedNamespace::Sym::Function)
-                                  ? 0
-                                  : (sym.kind == FlattenedNamespace::Sym::Type
-                                         ? 2
-                                         : 1);
+                ns_sym.kind =
+                    (sym.kind == FlattenedNamespace::Sym::Function)
+                        ? 0
+                        : (sym.kind == FlattenedNamespace::Sym::Type ? 2 : 1);
                 ns_sym.mangled_label = sym.mangled_label;
                 pm.tc->register_namespace_symbol(ns_idx, sym.public_name,
                                                  std::move(ns_sym));
@@ -2218,11 +2241,10 @@ CompileResult compile_vx_project(
         // distinto, ambos no vacios).  Dentro del mismo paquete, internal es
         // visible (no se filtra).  El storage lo aporta el caller (vive lo que
         // dure el uso del &const devuelto).
-        const std::string consumer_pkgid =
-            (i < module_pkgid_override.size() &&
-             !module_pkgid_override[i].empty())
-                ? module_pkgid_override[i]
-                : project_package_id;
+        const std::string consumer_pkgid = (i < module_pkgid_override.size() &&
+                                            !module_pkgid_override[i].empty())
+                                               ? module_pkgid_override[i]
+                                               : project_package_id;
         auto filter_internal_ = [&](const VxiModule &v,
                                     VxiModule &storage) -> const VxiModule & {
             if (consumer_pkgid.empty() || v.package_id.empty() ||
@@ -2231,7 +2253,10 @@ CompileResult compile_vx_project(
             }
             bool any_internal = false;
             for (const auto &s : v.symbols)
-                if (s.is_internal) { any_internal = true; break; }
+                if (s.is_internal) {
+                    any_internal = true;
+                    break;
+                }
             if (!any_internal) return v;
             storage = v;
             auto &syms = storage.symbols;
@@ -2248,14 +2273,12 @@ CompileResult compile_vx_project(
         // arreglo del dep.  Solo se nota si el import no lleva `only`, porque
         // entonces no hay ningun simbolo concreto que echar en falta.
         for (const auto &req : imports) {
-            const size_t dep_idx =
-                resolve_import_module_(req, by_name, by_ns);
+            const size_t dep_idx = resolve_import_module_(req, by_name, by_ns);
             if (dep_idx >= work.size() || work[dep_idx].ok) continue;
-            pm.diags.error(req.loc,
-                           "no puedo usar '" +
-                               (req.ns_path.empty() ? req.module_name
-                                                    : req.ns_path) +
-                               "': no ha compilado");
+            pm.diags.error(req.loc, "no puedo usar '" +
+                                        (req.ns_path.empty() ? req.module_name
+                                                             : req.ns_path) +
+                                        "': no ha compilado");
             pm.ok = false;
             return;
         }
@@ -2290,8 +2313,8 @@ CompileResult compile_vx_project(
         }
 
         for (auto &req : imports) {
-            // Resolver el dep por NAMESPACE completo (unico) cuando el import es
-            // por-namespace: evita la colision de module_name corto (dos
+            // Resolver el dep por NAMESPACE completo (unico) cuando el import
+            // es por-namespace: evita la colision de module_name corto (dos
             // "x86_64" de linux vs windows).  Fallback a by_name (por-path).
             size_t dep_idx = 0;
             bool dep_found = false;
@@ -2328,9 +2351,10 @@ CompileResult compile_vx_project(
                 filter_internal_(dep.vxi, dep_filtered_storage);
             // `only *` (glob): expandir a TODOS los simbolos publicos del dep,
             // como si el usuario hubiera listado cada uno (nombre directo, sin
-            // rename).  Se hace aqui -- no en el mapeo AST -- porque necesita el
-            // .vxi del dep (la lista de sus simbolos).  Con `public import` los
-            // re-exporta (req.is_public_reexport se propaga a mark_imported).
+            // rename).  Se hace aqui -- no en el mapeo AST -- porque necesita
+            // el .vxi del dep (la lista de sus simbolos).  Con `public import`
+            // los re-exporta (req.is_public_reexport se propaga a
+            // mark_imported).
             if (req.only_all && req.only_symbols.empty()) {
                 // Inyectar TODOS los simbolos publicos del dep.  El .vxi ya
                 // filtro los sinteticos del compilador, asi que NO descartamos
@@ -2364,12 +2388,11 @@ CompileResult compile_vx_project(
                             VxiModule other_store;
                             const VxiModule &other_vxi = filter_internal_(
                                 work[ito->second].vxi, other_store);
-                            register_namespace_for_import(*pm.tc,
-                                                          req.local_name,
-                                                          other_mn, other_vxi);
-                            inject_generic_templates_from_vxi(
-                                *pm.tc, other_vxi, /*wanted=*/{},
-                                req.local_name);
+                            register_namespace_for_import(
+                                *pm.tc, req.local_name, other_mn, other_vxi);
+                            inject_generic_templates_from_vxi(*pm.tc, other_vxi,
+                                                              /*wanted=*/{},
+                                                              req.local_name);
                         }
                     }
                 }
@@ -2402,15 +2425,16 @@ CompileResult compile_vx_project(
                         pm.tc->mark_imported(os.name, /*is_reexport=*/true);
                     }
                     // Re-exportar TAMBIEN las plantillas genericas / comptime
-                    // fns / @Macros: viven en `generic_templates` (texto fuente),
-                    // NO en `symbols`.  Sin esto, `public import std.comptime.
-                    // basics` no reexpone `source`/`inject` (comptime fns) ->
-                    // `import std.comptime only source` daba "no exporta source".
-                    // La rama is_plain de arriba YA las inyecto en este modulo
-                    // (inject_generic_templates_from_vxi con ns_prefix=local);
-                    // aqui solo las anyadimos a sus exports marcadas re-export
-                    // para que floten a su .vxi.  NO re-inyectar (doble inject ->
-                    // "redefinicion de comptime fn").
+                    // fns / @Macros: viven en `generic_templates` (texto
+                    // fuente), NO en `symbols`.  Sin esto, `public import
+                    // std.comptime. basics` no reexpone `source`/`inject`
+                    // (comptime fns) -> `import std.comptime only source` daba
+                    // "no exporta source". La rama is_plain de arriba YA las
+                    // inyecto en este modulo (inject_generic_templates_from_vxi
+                    // con ns_prefix=local); aqui solo las anyadimos a sus
+                    // exports marcadas re-export para que floten a su .vxi.  NO
+                    // re-inyectar (doble inject -> "redefinicion de comptime
+                    // fn").
                     if (!dep_vxi.generic_templates.empty()) {
                         for (const auto &g : dep_vxi.generic_templates) {
                             if (g.name.empty() || g.name[0] == '_') continue;
@@ -2439,13 +2463,14 @@ CompileResult compile_vx_project(
                 // via only) -> pasarlos como alias_unqualified.
                 // Nota: el matching en el inject es por el nombre ORIGINAL del
                 // decl (`nm`), por eso usamos os.name.  El `as <rename>` de un
-                // macro invocado sin cualificar es un caso raro no cubierto aun.
+                // macro invocado sin cualificar es un caso raro no cubierto
+                // aun.
                 std::unordered_set<std::string> only_alias;
                 for (const auto &os : req.only_symbols)
                     only_alias.insert(os.name);
                 inject_generic_templates_from_vxi(*pm.tc, dep_vxi,
-                                                   /*wanted=*/{},
-                                                   /*ns_prefix=*/"", only_alias);
+                                                  /*wanted=*/{},
+                                                  /*ns_prefix=*/"", only_alias);
                 // M2.d: inyeccion directa via only.  M6.a.3: usar la variante
                 // que devuelve los missing para emitir diagnostico claro.
                 // Cualificar por NAMESPACE, no por fichero (ver flatten_ns_).
@@ -2455,13 +2480,14 @@ CompileResult compile_vx_project(
                         : req.module_name;
                 auto missing = import_vxi_into_typechecker_with_missing(
                     *pm.tc, dep_vxi, req.only_symbols, qual);
-                // Namespace PARCIAL: un `import std.types only uintptr` resuelve
-                // `req.module_name` al PRIMER fichero del namespace (p.ej.
-                // arm64), donde el simbolo puede estar @Target-inactivo -> queda
-                // en `missing`.  Reintentar los que faltan contra los OTROS
-                // ficheros del mismo `namespace X;` (p.ej. std/types/x86_64.vx),
-                // igual que el plain-import de arriba.  Sin esto, `only X` de un
-                // namespace multi-fichero fallaba con "no exporta 'X'".
+                // Namespace PARCIAL: un `import std.types only uintptr`
+                // resuelve `req.module_name` al PRIMER fichero del namespace
+                // (p.ej. arm64), donde el simbolo puede estar @Target-inactivo
+                // -> queda en `missing`.  Reintentar los que faltan contra los
+                // OTROS ficheros del mismo `namespace X;` (p.ej.
+                // std/types/x86_64.vx), igual que el plain-import de arriba.
+                // Sin esto, `only X` de un namespace multi-fichero fallaba con
+                // "no exporta 'X'".
                 if (!missing.empty() && req.by_namespace &&
                     !req.ns_path.empty()) {
                     auto ita = ns_to_all_modnames.find(req.ns_path);
@@ -2490,7 +2516,8 @@ CompileResult compile_vx_project(
                             auto still =
                                 import_vxi_into_typechecker_with_missing(
                                     *pm.tc, other_vxi, retry, qual);
-                            // reducir retry a los que aun faltan tras este fichero
+                            // reducir retry a los que aun faltan tras este
+                            // fichero
                             std::vector<TypeChecker::VxiOnlyEntry> next_retry;
                             for (const auto &os : retry) {
                                 for (const auto &m : still) {
@@ -2549,11 +2576,11 @@ CompileResult compile_vx_project(
             }
         }
 
-        // NS.6-ext: re-apendear los metodos de `extension`/`impl` que declararon
-        // los deps (directos + transitivos) al layout del tipo destino en este
-        // consumidor.  Asi `obj.metodo()` resuelve cross-modulo (dispatch
-        // estatico al mangled_label del .velb del dep).  Los layouts de los
-        // tipos importados ya estan registrados (import loop de arriba).
+        // NS.6-ext: re-apendear los metodos de `extension`/`impl` que
+        // declararon los deps (directos + transitivos) al layout del tipo
+        // destino en este consumidor.  Asi `obj.metodo()` resuelve cross-modulo
+        // (dispatch estatico al mangled_label del .velb del dep).  Los layouts
+        // de los tipos importados ya estan registrados (import loop de arriba).
         {
             std::unordered_set<std::string> seen;
             std::vector<std::string> queue;
@@ -2677,11 +2704,10 @@ CompileResult compile_vx_project(
             for (const auto &e : lo.emitted_spans())
                 spans.push_back({e.symbol, e.line, e.column, e.length});
             if (!emit_vxdbg_source(*pm.tc, lo.emitted_symbols(), spans,
-                                   pm.canonical_path,
-                                   pm.source, opts.vxdbg_dir, st, dbg_err)) {
+                                   pm.canonical_path, pm.source, opts.vxdbg_dir,
+                                   st, dbg_err)) {
                 std::cerr << "[vxdbg] no se pudo emitir " << pm.canonical_path
-                          << ": "
-                          << dbg_err << "\n";
+                          << ": " << dbg_err << "\n";
             }
             pm.vxdbg_symbols = st.symbol_links;
             pm.vxdbg_spans = st.spans;
@@ -2705,9 +2731,10 @@ CompileResult compile_vx_project(
         export_typechecker_to_vxi(*pm.tc, source_hash, pm.vxi, strip_prefix);
 
         //  NS.3: estampar el PackageId en el .vxi del modulo.  Por defecto
-        // el del proyecto (vx.toml); si el modulo declaro `namespace X @id(..)`,
-        // ese override gana (identidad ABI por-namespace).  El override se
-        // capturo antes del flatten (que borra el NamespaceDecl del AST).
+        // el del proyecto (vx.toml); si el modulo declaro `namespace X
+        // @id(..)`, ese override gana (identidad ABI por-namespace).  El
+        // override se capturo antes del flatten (que borra el NamespaceDecl del
+        // AST).
         pm.vxi.package_id = (i < module_pkgid_override.size() &&
                              !module_pkgid_override[i].empty())
                                 ? module_pkgid_override[i]
@@ -2888,17 +2915,15 @@ CompileResult compile_vx_project(
                 std::vector<std::thread> threads;
                 threads.reserve(end_idx - base);
                 for (size_t k = base; k < end_idx; ++k) {
-                    threads.emplace_back(
-                        [&compile_one_module, idx = mods[k], cc_tgt_os,
-                         cc_tgt_arch]() {
-                            // HALLAZGO-2: re-aplicar el target de @Target en
-                            // este worker antes de parsear (el thread_local del
-                            // parser arranca vacio en un thread nuevo).
-                            if (!cc_tgt_os.empty() || !cc_tgt_arch.empty())
-                                vx::set_aot_condcomp_target(cc_tgt_os,
-                                                             cc_tgt_arch);
-                            compile_one_module(idx);
-                        });
+                    threads.emplace_back([&compile_one_module, idx = mods[k],
+                                          cc_tgt_os, cc_tgt_arch]() {
+                        // HALLAZGO-2: re-aplicar el target de @Target en
+                        // este worker antes de parsear (el thread_local del
+                        // parser arranca vacio en un thread nuevo).
+                        if (!cc_tgt_os.empty() || !cc_tgt_arch.empty())
+                            vx::set_aot_condcomp_target(cc_tgt_os, cc_tgt_arch);
+                        compile_one_module(idx);
+                    });
                 }
                 // Barrier: esperar todos los threads del lote antes de
                 // pasar al siguiente.  Necesario porque modulos del mismo
@@ -3407,12 +3432,14 @@ CompileResult compile_vx_project(
     // @stack) sobre el IR PRE-opt (snapshot antes de optimizar): ahi TODAS las
     // funciones existen (el inline/DCE aun no las elimino) -> enforcement
     // completo.  Semantica source-level (source<=N => efectivo<=N, sound).
-    // Solo ERROR cuando la violacion es DEMOSTRABLE.  Parte del sistema de tipos.
+    // Solo ERROR cuando la violacion es DEMOSTRABLE.  Parte del sistema de
+    // tipos.
     {
         // Recoger los contratos declarados en los AST de los modulos (root +
         // deps), guardarlos en el resultado (para --analyze) y verificar.
         std::function<void(const std::vector<std::unique_ptr<ast::Node>> &)>
-            collect = [&](const std::vector<std::unique_ptr<ast::Node>> &decls) {
+            collect = [&](const std::vector<std::unique_ptr<ast::Node>>
+                              &decls) {
                 for (const auto &d : decls) {
                     if (!d) continue;
                     if (d->kind == ast::NodeKind::NamespaceDecl) {
@@ -3555,9 +3582,9 @@ CompileResult compile_vx_project(
     //    analizador via el callgraph.  Fuera de --analyze, inline normal.
     // Multi-ISA: la rentabilidad de la if-conversion (SELECT vs branch) depende
     // de la microarquitectura destino (cmov ~2c x86, csel ~1c ARM64, sin cmov
-    // nativo en RISC-V).  Ajustamos el modelo de coste al arch del TARGET activo
-    // antes de optimizar; asi la decision horneada en el IR corresponde a la ISA
-    // para la que se compila (host x86_64 por defecto).
+    // nativo en RISC-V).  Ajustamos el modelo de coste al arch del TARGET
+    // activo antes de optimizar; asi la decision horneada en el IR corresponde
+    // a la ISA para la que se compila (host x86_64 por defecto).
     {
         std::string tisa_os, tisa_arch;
         vx::get_aot_condcomp_target(tisa_os, tisa_arch);
@@ -3584,7 +3611,8 @@ CompileResult compile_vx_project(
     if (quiere_inline) {
         ir::ir_optimize(para_inline, opt_level_from_int_(opts.opt_level),
                         /*allow_inline=*/true);
-        res.ir_module_cache_bytes_inlined = ir::emit_ir_module_cache(para_inline);
+        res.ir_module_cache_bytes_inlined =
+            ir::emit_ir_module_cache(para_inline);
     }
 
     /* El asignador del lenguaje queda DENTRO del modulo (sin tocar las
@@ -3598,7 +3626,8 @@ CompileResult compile_vx_project(
     /* Sobre el codigo que DE VERDAD se va a emitir: lo que el analisis puede
      * demostrar fuera de su region no puede quedarse en `--analyze`, tiene que
      * salir al compilar, que es cuando se lee. */
-    if (opts.report_bounds) vx_report_bounds(merged, res.diagnostics, root_path);
+    if (opts.report_bounds)
+        vx_report_bounds(merged, res.diagnostics, root_path);
     /* Precondiciones del asm.  SIEMPRE, no bajo opcion: una instruccion cuya
      * exigencia no se cumple no da un resultado peor, hace caer el programa --
      * y callarselo ya costo descubrirlo ejecutando.
@@ -3669,9 +3698,9 @@ CompileResult compile_vx_project(
          * es copiar el modulo y filtrar un vector.  El enfoque por texto tenia
          * que RECONSTRUIR eso, y el AST ni siquiera guarda el tramo de cada
          * decl (`SourceLoc::length` es la del token). */
-        /* Valvula: `VESTA_NO_FILTRO_COMPTIME=1` vuelve al artefacto del programa
-         * entero.  Sirve para separar en un fallo si la causa es el filtro o
-         * cualquier otra cosa, sin recompilar el compilador. */
+        /* Valvula: `VESTA_NO_FILTRO_COMPTIME=1` vuelve al artefacto del
+         * programa entero.  Sirve para separar en un fallo si la causa es el
+         * filtro o cualquier otra cosa, sin recompilar el compilador. */
         if (!res.comptime_unit_names.empty() &&
             !std::getenv("VESTA_NO_FILTRO_COMPTIME")) {
             std::unordered_set<std::string> del_conjunto(
@@ -3686,17 +3715,17 @@ CompileResult compile_vx_project(
              *
              * No basta con lo que el recolector nombra.  Hay dos familias
              * SINTETICAS que nadie declara y que se ejecutan al compilar igual:
-             * los `__macro_<X>` (incluidos los constructores `comptime T(expr)`,
-             * que bajan a `__macro_<T>__ctor_N`) y los `__ctblock_N` de un
-             * bloque `comptime { }`.  Dejarlas fuera rompio
+             * los `__macro_<X>` (incluidos los constructores `comptime
+             * T(expr)`, que bajan a `__macro_<T>__ctor_N`) y los `__ctblock_N`
+             * de un bloque `comptime { }`.  Dejarlas fuera rompio
              * `comptime_literal_import` y `bfc311`. */
             std::vector<std::string> pendientes;
             std::unordered_set<std::string> dentro;
             for (const ir::IrFunction &f : merged.functions) {
                 /* `__module_init` es raiz aunque nadie lo nombre: es lo que
                  * registra clases y macros al cargar el artefacto.  Sin el, la
-                 * carga deja simbolos sin resolver y el comptime no se entera --
-                 * el programa compilaba y daba otro resultado. */
+                 * carga deja simbolos sin resolver y el comptime no se entera
+                 * -- el programa compilaba y daba otro resultado. */
                 const bool sintetica = f.name.rfind("__macro_", 0) == 0 ||
                                        f.name.rfind("__ctblock_", 0) == 0 ||
                                        f.name == "__module_init";
@@ -3711,8 +3740,8 @@ CompileResult compile_vx_project(
             }
             /* CLAUSURA sobre el grafo de llamadas del IR: lo que una raiz llama
              * tiene que viajar con ella o el artefacto no es auto-suficiente y
-             * la invocacion falla EN COMPILACION.  Hacerlo aqui -- y no sobre el
-             * fuente -- es lo que lo vuelve cerrado POR CONSTRUCCION: los
+             * la invocacion falla EN COMPILACION.  Hacerlo aqui -- y no sobre
+             * el fuente -- es lo que lo vuelve cerrado POR CONSTRUCCION: los
              * nombres ya estan resueltos y no hay que adivinar nada. */
             while (!pendientes.empty()) {
                 const std::string actual = std::move(pendientes.back());
@@ -3730,8 +3759,8 @@ CompileResult compile_vx_project(
                     }
             }
 
-            /* `main` NO viaja.  Se probo incluirlo -- el artefacto se carga como
-             * ejecutable y parecia necesitar punto de entrada -- pero sus
+            /* `main` NO viaja.  Se probo incluirlo -- el artefacto se carga
+             * como ejecutable y parecia necesitar punto de entrada -- pero sus
              * llamadas quedaban COLGANDO y el enlazado fallaba con "simbolo no
              * resuelto: code.copy_ok".  Cerrar sobre `main` traeria el programa
              * entero, que es justo lo que se evita.  Lo que de verdad faltaba
@@ -3747,16 +3776,16 @@ CompileResult compile_vx_project(
                     res.comptime_vel_text = std::move(e_ct.vel_text);
                     /* PUNTO DE ENTRADA: `__module_init`, no `main`.
                      *
-                     * El artefacto comptime NO es un programa: es una biblioteca
-                     * de funciones que la ComptimeVM invoca por su PC, resuelto
-                     * desde la tabla de simbolos.  Nunca se entra por `main`.
-                     * Pero se carga con `load_executable`, y un ejecutable tiene
-                     * entrada: sin ninguna, el enlazador deja `start_pc = 0` --
-                     * avisa con "PC(0) por defecto" -- y usarlo salta a la
-                     * direccion 0 (segfault).
+                     * El artefacto comptime NO es un programa: es una
+                     * biblioteca de funciones que la ComptimeVM invoca por su
+                     * PC, resuelto desde la tabla de simbolos.  Nunca se entra
+                     * por `main`. Pero se carga con `load_executable`, y un
+                     * ejecutable tiene entrada: sin ninguna, el enlazador deja
+                     * `start_pc = 0` -- avisa con "PC(0) por defecto" -- y
+                     * usarlo salta a la direccion 0 (segfault).
                      *
-                     * Incluir `main` para taparlo no vale: arrastra sus llamadas
-                     * y el enlazado falla con simbolos sin resolver
+                     * Incluir `main` para taparlo no vale: arrastra sus
+                     * llamadas y el enlazado falla con simbolos sin resolver
                      * (`code.copy_ok`), y cerrar sobre el traeria el programa
                      * entero, que es lo que se esta evitando.
                      *
@@ -3765,7 +3794,10 @@ CompileResult compile_vx_project(
                      * clases y los macros. */
                     bool tiene_init = false;
                     for (const ir::IrFunction &f : solo_ct.functions)
-                        if (f.name == "__module_init") { tiene_init = true; break; }
+                        if (f.name == "__module_init") {
+                            tiene_init = true;
+                            break;
+                        }
                     if (tiene_init)
                         res.comptime_vel_text =
                             "@InitPc(code.__module_init)\n" +
@@ -3779,23 +3811,23 @@ CompileResult compile_vx_project(
                      * artefacto filtrado se comporta distinto del entero. */
                     std::cerr << "[comptime-ir] fuera:";
                     for (const ir::IrFunction &f : merged.functions)
-                        if (!dentro.count(f.name))
-                            std::cerr << " " << f.name;
+                        if (!dentro.count(f.name)) std::cerr << " " << f.name;
                     std::cerr << "\n";
                 }
                 if (std::getenv("VESTA_PRUEBA_IR_COMPTIME"))
-                    std::cerr << "[comptime-ir] programa " << merged.functions.size()
-                              << " fns / " << eres.vel_text.size() << " B .vel"
-                              << "  ->  conjunto " << solo_ct.functions.size()
-                              << " fns / " << res.comptime_vel_text.size()
-                              << " B .vel" << (e_ct.ok ? "" : "  (FALLO)") << "\n";
+                    std::cerr
+                        << "[comptime-ir] programa " << merged.functions.size()
+                        << " fns / " << eres.vel_text.size() << " B .vel"
+                        << "  ->  conjunto " << solo_ct.functions.size()
+                        << " fns / " << res.comptime_vel_text.size()
+                        << " B .vel" << (e_ct.ok ? "" : "  (FALLO)") << "\n";
             }
         }
         if (!eres.ok) {
             SourceLoc loc;
             loc.file = root_path;
-            res.diagnostics.error(std::move(loc),
-                                  std::string("emisor IR fallo: ") + eres.error);
+            res.diagnostics.error(
+                std::move(loc), std::string("emisor IR fallo: ") + eres.error);
             res.ok = false;
             return res;
         }
@@ -3809,10 +3841,10 @@ CompileResult compile_vx_project(
     if (!opts.ir_only) {
         vxdbg::ArtifactMap map;
         for (const auto &pm : work)
-            for (const auto &kv : pm.vxdbg_symbols) map.add(kv.first, kv.second);
-        vxdbg::FileNodeStore store(opts.vxdbg_dir.empty()
-                                       ? default_vxdbg_dir()
-                                       : opts.vxdbg_dir);
+            for (const auto &kv : pm.vxdbg_symbols)
+                map.add(kv.first, kv.second);
+        vxdbg::FileNodeStore store(opts.vxdbg_dir.empty() ? default_vxdbg_dir()
+                                                          : opts.vxdbg_dir);
         vxdbg::ContentHash h;
         if (!map.symbols.empty() && vxdbg::store_node(store, map, h))
             res.vxdbg_artifact_map = h;
@@ -3825,7 +3857,8 @@ CompileResult compile_vx_project(
         auto it = eres.value_regs.find(fn.name);
         if (it == eres.value_regs.end()) continue;
         const size_t n = std::min(fn.values.size(), it->second.size());
-        for (size_t v = 0; v < n; ++v) fn.values[v].reg = it->second[v];
+        for (size_t v = 0; v < n; ++v)
+            fn.values[v].reg = it->second[v];
     }
     // El intermedio que viaja dentro del artefacto: sin artefacto, sobra.
     if (!opts.ir_only)
@@ -3851,16 +3884,16 @@ CompileResult compile_vx_project(
             auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
             if (fd->is_panic_handler) res.aot_panic_sym = fd->name;
             if (!fd->is_alloc_override) continue;
-            // El que devuelve puntero es el alloc; el que devuelve void, el free.
+            // El que devuelve puntero es el alloc; el que devuelve void, el
+            // free.
             bool ret_ptr = false;
             if (fd->return_type &&
                 fd->return_type->kind == ast::NodeKind::PrimitiveTypeNode) {
                 ret_ptr = (static_cast<ast::PrimitiveTypeNode *>(
                                fd->return_type.get())
                                ->prim == PrimitiveKind::PTR);
-            } else if (fd->return_type &&
-                       fd->return_type->kind ==
-                           ast::NodeKind::PointerTypeNode) {
+            } else if (fd->return_type && fd->return_type->kind ==
+                                              ast::NodeKind::PointerTypeNode) {
                 ret_ptr = true;
             }
             if (ret_ptr)
@@ -3897,8 +3930,7 @@ CompileResult compile_vx_project(
         // es lo que sobrevive al merge; sin esto la fase no se disparaba y el
         // constructor acababa resolviendose por el evaluador de AST -- que
         // solo funciona dentro del mismo fichero.
-        if (fn.is_macro_compiled ||
-            fn.name.compare(0, 8, "__macro_") == 0) {
+        if (fn.is_macro_compiled || fn.name.compare(0, 8, "__macro_") == 0) {
             res.has_lowerable_macros = true;
             break;
         }
@@ -4063,8 +4095,7 @@ static bool contiene_palabra(const std::string &source, const char *kw) {
  * @brief Ver la declaracion en compiler.h.
  */
 void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
-                                 const std::string &file,
-                                 bool programa_cerrado,
+                                 const std::string &file, bool programa_cerrado,
                                  bool decir_lo_no_acotado,
                                  const char *backend) {
     /* Con QUE garantia se coloca la seccion de datos NO es una propiedad del
@@ -4119,18 +4150,18 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
      *
      * Dentro de la funcion, la alineacion de un parametro no se puede saber: la
      * pone el llamante.  Asi que la exigencia que el asm impone sobre un
-     * parametro deja de morir en "sin prueba" y viaja HACIA FUERA, para cruzarla
-     * con lo que se sabe del argumento en cada sitio de llamada.
+     * parametro deja de morir en "sin prueba" y viaja HACIA FUERA, para
+     * cruzarla con lo que se sabe del argumento en cada sitio de llamada.
      *
      * Es el simetrico de los resumenes de rango, que hacen el viaje contrario
-     * (lo que los llamantes pasan, hacia dentro).  Y es DERIVADA: sale de lo que
-     * la instruccion exige segun la base de datos, no de una anotacion.
+     * (lo que los llamantes pasan, hacia dentro).  Y es DERIVADA: sale de lo
+     * que la instruccion exige segun la base de datos, no de una anotacion.
      */
     struct ExigenciaFrontera {
         std::string funcion;
-        uint32_t    param = 0;
-        uint32_t    bytes = 0;   ///< de cuanto tiene que ser multiplo.
-        std::string mnemonic;    ///< quien lo exige, para la prueba.
+        uint32_t param = 0;
+        uint32_t bytes = 0;   ///< de cuanto tiene que ser multiplo.
+        std::string mnemonic; ///< quien lo exige, para la prueba.
     };
     std::vector<ExigenciaFrontera> exigencias;
     /// La alineacion de cada funcion, calculada UNA vez: la usan el recorrido
@@ -4152,7 +4183,8 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
          * que se lo responde al modelo de efectos y al eliminador de escrituras
          * muertas: el camino marcador -> ligadura -> hueco -> contenido se
          * recorre UNA vez y en un solo sitio. */
-        const analysis::AsmBindingFacts lig = analysis::compute_asm_bindings(fn);
+        const analysis::AsmBindingFacts lig =
+            analysis::compute_asm_bindings(fn);
         /* Y el diccionario que le falta al analisis del texto: tras la
          * sustitucion, `movdqa [$0], $1` no dice que `$1` mida 128 bits.  Lo
          * dice la CLASE con la que se declaro, que es lo que escribio el
@@ -4166,31 +4198,31 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
          * vez de volver a calcularla: es el mismo hecho sobre la misma funcion,
          * y recalcularlo seria pagar dos veces por saber lo mismo. */
         const analysis::AlignmentFacts &alin =
-            alineacion_de.emplace(fn.name,
-                                  analysis::compute_alignment(fn, &resumen, &mod,
-                                                              garantia, cabecera))
+            alineacion_de
+                .emplace(fn.name, analysis::compute_alignment(
+                                      fn, &resumen, &mod, garantia, cabecera))
                 .first->second;
         for (const ir::IrBlock &b : fn.blocks) {
             for (const ir::IrInstr &in : b.instrs) {
                 /* Tambien el asm ELEVADO.
                  *
-                 * Esto solo miraba los bloques opacos, asi que entender mejor un
-                 * bloque hacia que se comprobara MENOS: en cuanto el elevado
+                 * Esto solo miraba los bloques opacos, asi que entender mejor
+                 * un bloque hacia que se comprobara MENOS: en cuanto el elevado
                  * aprendia a pasarlo a IR, la comprobacion de alineacion
-                 * desaparecia y un programa que revienta al ejecutarse pasaba el
-                 * compilador.  Justo al reves de lo que tiene que pasar.
+                 * desaparecia y un programa que revienta al ejecutarse pasaba
+                 * el compilador.  Justo al reves de lo que tiene que pasar.
                  *
                  * Un micro asm lleva su instruccion en la plantilla, asi que el
-                 * analisis del texto es el mismo; lo que cambia es de donde sale
-                 * la direccion: en el opaco la dicen las ligaduras del bloque y
-                 * aqui la lleva el propio operando. */
+                 * analisis del texto es el mismo; lo que cambia es de donde
+                 * sale la direccion: en el opaco la dicen las ligaduras del
+                 * bloque y aqui la lleva el propio operando. */
                 if (in.op != ir::IrOp::INLINE_ASM &&
                     in.op != ir::IrOp::ASM_MICRO)
                     continue;
-                const ir::AsmMicro *am =
-                    (in.op == ir::IrOp::ASM_MICRO && in.imm < fn.asm_micros.size())
-                        ? &fn.asm_micros[in.imm]
-                        : nullptr;
+                const ir::AsmMicro *am = (in.op == ir::IrOp::ASM_MICRO &&
+                                          in.imm < fn.asm_micros.size())
+                                             ? &fn.asm_micros[in.imm]
+                                             : nullptr;
                 if (in.op == ir::IrOp::ASM_MICRO && am == nullptr) continue;
                 /* Cuanto MIDE cada operando.  En el bloque opaco lo dice la
                  * clase que escribio el programador; en el elevado lo lleva la
@@ -4242,9 +4274,11 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
                         std::vector<analysis::LigaduraAsm> cands_micro;
                         if (am != nullptr && req.base.size() >= 2 &&
                             req.base[0] == '$') {
-                            const size_t k = (size_t)std::atoi(req.base.c_str() + 1);
+                            const size_t k =
+                                (size_t)std::atoi(req.base.c_str() + 1);
                             size_t nv = 0;
-                            for (size_t oi = 0; oi < am->operands.size(); ++oi) {
+                            for (size_t oi = 0; oi < am->operands.size();
+                                 ++oi) {
                                 if (am->operands[oi].value == ir::IR_NO_VALUE)
                                     continue;
                                 if (oi == k && nv < in.operands.size()) {
@@ -4277,20 +4311,23 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
                                 todas_fallan = todas_fallan && falla;
                                 if (falla) {
                                     // La prueba: la primera que falla vale para
-                                    // explicarlo, y si fallan todas dan la misma
-                                    // razon.
+                                    // explicarlo, y si fallan todas dan la
+                                    // misma razon.
                                     s.resto = alin.resto_de(dir);
                                     s.modulo = alin.de(dir);
                                 }
                             }
-                            if (todas_cumplen) s.v = Veredicto::Cumple;
-                            else if (todas_fallan) s.v = Veredicto::Falla;
+                            if (todas_cumplen)
+                                s.v = Veredicto::Cumple;
+                            else if (todas_fallan)
+                                s.v = Veredicto::Falla;
                             /* Y si la direccion es un PARaMETRO, aqui no se
                              * puede saber: la alineacion la pone QUIEN LLAMA.
-                             * En vez de morir en "sin prueba", la exigencia sale
-                             * de la funcion y se apunta como propiedad suya --
-                             * "el parametro N debe ser multiplo de K" --, para
-                             * cruzarla despues en cada sitio de llamada.
+                             * En vez de morir en "sin prueba", la exigencia
+                             * sale de la funcion y se apunta como propiedad
+                             * suya -- "el parametro N debe ser multiplo de K"
+                             * --, para cruzarla despues en cada sitio de
+                             * llamada.
                              *
                              * Derivada, no declarada: sale de lo que la
                              * instruccion EXIGE (base de datos) y de por donde
@@ -4344,8 +4381,7 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
         loc.column = s.column;
         loc.file = file;
         switch (s.v) {
-        case Veredicto::Cumple:
-            break; // demostrado: no hay nada que decir.
+        case Veredicto::Cumple: break; // demostrado: no hay nada que decir.
         case Veredicto::Falla:
             diags.diag(loc, DiagLevel::ERR, "VXA013",
                        {s.mnemonic, std::to_string(s.bytes),
@@ -4364,10 +4400,10 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
     /* Y AHORA lo que la funcion exige, cruzado con lo que se sabe del argumento
      * EN CADA SITIO DE LLAMADA.
      *
-     * Es la otra mitad: dentro de la funcion la alineacion de un parametro no se
-     * puede saber, asi que la exigencia salio hacia fuera; aqui se encuentra con
-     * quien si lo sabe.  Sin esto, una precondicion que el propio asm declara se
-     * quedaba sin comprobar en el unico sitio donde era comprobable.
+     * Es la otra mitad: dentro de la funcion la alineacion de un parametro no
+     * se puede saber, asi que la exigencia salio hacia fuera; aqui se encuentra
+     * con quien si lo sabe.  Sin esto, una precondicion que el propio asm
+     * declara se quedaba sin comprobar en el unico sitio donde era comprobable.
      *
      * Indexado por funcion llamada: un vector recorrido por cada llamada seria
      * llamadas x exigencias, y de eso ya se ha aprendido bastante hoy. */
@@ -4439,7 +4475,8 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
      * con "el bloque salta" o "ese operando no dice cuantos bytes mide". */
     if (!decir_lo_no_acotado) return;
     for (const ir::IrFunction &fn : mod.functions) {
-        const analysis::AsmBindingFacts lig = analysis::compute_asm_bindings(fn);
+        const analysis::AsmBindingFacts lig =
+            analysis::compute_asm_bindings(fn);
         std::vector<std::pair<std::string, std::string>> clases;
         clases.reserve(lig.ligaduras.size());
         for (const analysis::LigaduraAsm &l : lig.ligaduras)
@@ -4453,8 +4490,14 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
                 const char *motivo = nullptr;
                 for (const vx::AsmBlockEffects::Acceso &a : e.accesos) {
                     if (!a.escribe) continue;
-                    if (!a.valida) { motivo = "VXA016"; break; }
-                    if (!a.extension.ancho_conocido()) { motivo = "VXA015"; break; }
+                    if (!a.valida) {
+                        motivo = "VXA016";
+                        break;
+                    }
+                    if (!a.extension.ancho_conocido()) {
+                        motivo = "VXA015";
+                        break;
+                    }
                     if (lig.candidatas(a.base).size() != 1) {
                         motivo = "VXA017";
                         break;
@@ -4486,9 +4529,8 @@ void vx_report_bounds(const ir::IrModule &mod, Diagnostics &diags,
         loc.file = file;
         diags.diag(loc, DiagLevel::ERR, "VX3001",
                    {vx::diag::format(v.write ? "VX3002" : "VX3003", {}),
-                    std::to_string(v.width), v.region,
-                    std::to_string(v.limite), std::to_string(v.off),
-                    std::to_string(v.off + v.width)});
+                    std::to_string(v.width), v.region, std::to_string(v.limite),
+                    std::to_string(v.off), std::to_string(v.off + v.width)});
         /* COMO se detecto -- no solo que pasa.  Quien lee un error tiene que
          * poder juzgar si se lo cree, y para eso necesita saber de donde sale
          * cada mitad del veredicto. */
@@ -4505,9 +4547,9 @@ void vx_report_bounds(const ir::IrModule &mod, Diagnostics &diags,
         diags.note(loc, vx::diag::format("VX3004", {std::to_string(v.objeto)}));
         /* Y QUE hacer.  El analisis conoce las dos salidas: agrandar el objeto
          * hasta donde llega el acceso, o no pasar de donde llega el objeto. */
-        diags.note(loc, vx::diag::format(
-                            "VX3005", {std::to_string(v.off + v.width),
-                                       std::to_string(v.limite)}));
+        diags.note(loc,
+                   vx::diag::format("VX3005", {std::to_string(v.off + v.width),
+                                               std::to_string(v.limite)}));
     }
 }
 

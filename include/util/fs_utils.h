@@ -646,7 +646,8 @@ static bool write_file_atomic(const std::string &path,
 #else
     tmp += std::to_string(static_cast<uint64_t>(getpid()));
 #endif
-    tmp += "." + std::to_string(contador.fetch_add(1, std::memory_order_relaxed));
+    tmp +=
+        "." + std::to_string(contador.fetch_add(1, std::memory_order_relaxed));
     /* Escritura con las llamadas del SISTEMA, no con las de la biblioteca.
      *
      * `std::ofstream` mete una capa de buffer propia encima: reserva, copia los
@@ -668,8 +669,8 @@ static bool write_file_atomic(const std::string &path,
              * vez.  Sin esto la escritura falla en silencio y el artefacto se
              * pierde sin que nadie se entere. */
             asegurar_dir(true);
-            h = CreateFileA(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                            FILE_ATTRIBUTE_NORMAL, nullptr);
+            h = CreateFileA(tmp.c_str(), GENERIC_WRITE, 0, nullptr,
+                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
             if (h == INVALID_HANDLE_VALUE) return false;
         }
         bool ok = true;
@@ -680,12 +681,16 @@ static bool write_file_atomic(const std::string &path,
             const DWORD trozo = static_cast<DWORD>(
                 std::min<size_t>(bytes.size() - off, 32u * 1024u * 1024u));
             DWORD escritos = 0;
-            ok = WriteFile(h, bytes.data() + off, trozo, &escritos, nullptr) != 0 &&
+            ok = WriteFile(h, bytes.data() + off, trozo, &escritos, nullptr) !=
+                     0 &&
                  escritos == trozo;
             off += escritos;
         }
         CloseHandle(h);
-        if (!ok) { fs::remove(tmp, ec); return false; }
+        if (!ok) {
+            fs::remove(tmp, ec);
+            return false;
+        }
 #else
         int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd < 0) {
@@ -698,12 +703,18 @@ static bool write_file_atomic(const std::string &path,
         bool ok = true;
         size_t off = 0;
         while (ok && off < bytes.size()) {
-            const ssize_t n = ::write(fd, bytes.data() + off, bytes.size() - off);
-            if (n <= 0) ok = false;
-            else off += static_cast<size_t>(n);
+            const ssize_t n =
+                ::write(fd, bytes.data() + off, bytes.size() - off);
+            if (n <= 0)
+                ok = false;
+            else
+                off += static_cast<size_t>(n);
         }
         ::close(fd);
-        if (!ok) { fs::remove(tmp, ec); return false; }
+        if (!ok) {
+            fs::remove(tmp, ec);
+            return false;
+        }
 #endif
     }
     fs::rename(tmp, path, ec);
@@ -725,7 +736,8 @@ static bool write_file_atomic(const std::string &path,
  * @param out  Destino; queda vacio si no se pudo leer.
  * @return @c true si se leyo entero.
  */
-static bool read_file_bytes(const std::string &path, std::vector<uint8_t> &out) {
+static bool read_file_bytes(const std::string &path,
+                            std::vector<uint8_t> &out) {
     out.clear();
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f.is_open()) return false;

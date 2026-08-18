@@ -13,14 +13,12 @@
  * @brief Efectos de una MInstr LEIDOS DE LAS DBs generadas (no re-derivados a
  *        mano).  Para una instruccion real de la ISA, la forma de @c instr_db
  *        (rmask/wmask/memflags + flags r/w de cada operando) es la fuente de
- *        verdad; los registros implicitos (rax:rdx de div...) salen del regset de la DB.
- *        Solo los PSEUDOS propios de VestaVM (que no existen en ninguna ISA) se
- *        modelan aqui explicitamente.
+ *        verdad; los registros implicitos (rax:rdx de div...) salen del regset
+ * de la DB. Solo los PSEUDOS propios de VestaVM (que no existen en ninguna ISA)
+ * se modelan aqui explicitamente.
  */
 
 #include "jit/sched/machine_effects.h"
-
-
 
 #include <string>
 
@@ -34,7 +32,8 @@ using vx::instr_db::DbOperand;
 using vx::instr_db::Isa;
 using vx::instr_db::ParsedOp;
 
-/// Clave de registro uniforme de un operando REG/VREG (o UINT32_MAX si no lo es).
+/// Clave de registro uniforme de un operando REG/VREG (o UINT32_MAX si no lo
+/// es).
 uint32_t reg_key(const MOperand &o) {
     if (o.kind == MOperandKind::REG) return o.reg;
     if (o.kind == MOperandKind::VREG)
@@ -58,8 +57,9 @@ void add_mem_addr_reads(MEffects &e, const MOperand &o) {
 }
 
 /// Base del espacio de claves para registros que NO estan en MReg (mascaras K,
-/// MMX/x87, segmento, control/debug, MSR/MXCSR, zmm16-31...): se rastrean por su
-/// indice de register_set en el pool de strings -> misma cadena, misma clave.
+/// MMX/x87, segmento, control/debug, MSR/MXCSR, zmm16-31...): se rastrean por
+/// su indice de register_set en el pool de strings -> misma cadena, misma
+/// clave.
 constexpr uint32_t SPECIAL_BASE = 1u << 21;
 
 /// Sufijo numerico de un nombre de registro tras un prefijo de N letras
@@ -77,11 +77,12 @@ int suffix_num(const std::string &s, size_t pref) {
 /**
  * @brief Decodifica un @c register_set de la DB a una CLAVE de dependencia
  *        uniforme, cubriendo TODAS las clases de registro x86:
- *          - GP (A/C/D/B/SP/BP/SI/DI/R8..R15, cualquier ancho) -> id de MReg 0-15
- *            (aliasa los operandos GP explicitos).
- *          - vector XMM/YMM/ZMM 0-15 -> MReg XMM (16+n); YMMn/ZMMn aliasan XMMn.
- *          - todo lo demas con NOMBRE fijo (mascaras K0-7, MMX MM0-7, x87 ST(n),
- *            segmento ES/CS/SS/DS/FS/GS, control CRn, debug DRn, MSR, MXCSR,
+ *          - GP (A/C/D/B/SP/BP/SI/DI/R8..R15, cualquier ancho) -> id de MReg
+ * 0-15 (aliasa los operandos GP explicitos).
+ *          - vector XMM/YMM/ZMM 0-15 -> MReg XMM (16+n); YMMn/ZMMn aliasan
+ * XMMn.
+ *          - todo lo demas con NOMBRE fijo (mascaras K0-7, MMX MM0-7, x87
+ * ST(n), segmento ES/CS/SS/DS/FS/GS, control CRn, debug DRn, MSR, MXCSR,
  *            ZMM16-31...) -> SPECIAL_BASE + @p regset_idx (clave estable por
  *            nombre; no esta en MReg pero se rastrea igual).
  * @return la clave, o UINT32_MAX si es una CLASE (varios regs, "GPR64", "-") o
@@ -99,8 +100,8 @@ uint32_t regset_to_key_arm(const std::string &s, uint16_t regset_idx) {
         return SPECIAL_BASE + regset_idx;
     const char c = s[0];
     const bool gp = (c == 'X' || c == 'W');
-    const bool fp = (c == 'V' || c == 'Q' || c == 'D' || c == 'S' ||
-                     c == 'H' || c == 'B');
+    const bool fp =
+        (c == 'V' || c == 'Q' || c == 'D' || c == 'S' || c == 'H' || c == 'B');
     if (gp || fp) {
         const int n = suffix_num(s, 1);
         if (gp && n >= 0 && n <= 30) return static_cast<uint32_t>(n);
@@ -118,16 +119,17 @@ uint32_t regset_to_key(const char *rs, uint16_t regset_idx, EffIsa isa) {
     if (isa != EffIsa::X86) return regset_to_key_arm(s, regset_idx);
 
     // --- GP (familia de una letra o Rn, cualquier ancho) ---
-    struct Fam { const char *k; int reg; };
+    struct Fam {
+        const char *k;
+        int reg;
+    };
     static const Fam fam[] = {
-        {"AX", 0},  {"EAX", 0}, {"RAX", 0}, {"AL", 0},  {"AH", 0},
-        {"CX", 1},  {"ECX", 1}, {"RCX", 1}, {"CL", 1},  {"CH", 1},
-        {"DX", 2},  {"EDX", 2}, {"RDX", 2}, {"DL", 2},  {"DH", 2},
-        {"BX", 3},  {"EBX", 3}, {"RBX", 3}, {"BL", 3},  {"BH", 3},
-        {"SP", 4},  {"ESP", 4}, {"RSP", 4}, {"SPL", 4},
-        {"BP", 5},  {"EBP", 5}, {"RBP", 5}, {"BPL", 5},
-        {"SI", 6},  {"ESI", 6}, {"RSI", 6}, {"SIL", 6},
-        {"DI", 7},  {"EDI", 7}, {"RDI", 7}, {"DIL", 7},
+        {"AX", 0},  {"EAX", 0}, {"RAX", 0}, {"AL", 0},  {"AH", 0},  {"CX", 1},
+        {"ECX", 1}, {"RCX", 1}, {"CL", 1},  {"CH", 1},  {"DX", 2},  {"EDX", 2},
+        {"RDX", 2}, {"DL", 2},  {"DH", 2},  {"BX", 3},  {"EBX", 3}, {"RBX", 3},
+        {"BL", 3},  {"BH", 3},  {"SP", 4},  {"ESP", 4}, {"RSP", 4}, {"SPL", 4},
+        {"BP", 5},  {"EBP", 5}, {"RBP", 5}, {"BPL", 5}, {"SI", 6},  {"ESI", 6},
+        {"RSI", 6}, {"SIL", 6}, {"DI", 7},  {"EDI", 7}, {"RDI", 7}, {"DIL", 7},
     };
     for (const Fam &f : fam)
         if (s == f.k) return static_cast<uint32_t>(f.reg);
@@ -181,8 +183,7 @@ bool to_parsed(const MOperand &o, ParsedOp &out) {
         out.kind = vx::instr_db::OP_RELBR;
         out.width = 0;
         return true;
-    default:
-        return false; // NONE
+    default: return false; // NONE
     }
 }
 
@@ -205,10 +206,11 @@ struct OpRoles {
     bool dst_read = false;    ///< el slot dst se LEE (two-address / compare)
     bool writes_flags = false;
     bool reads_flags = false;
-    bool div_family = false;  ///< consultar la DB por el implicito rax:rdx
+    bool div_family = false; ///< consultar la DB por el implicito rax:rdx
 };
 
-/// Clasifica los roles de un MOp real (los mismos que enumera @ref mop_mnemonic).
+/// Clasifica los roles de un MOp real (los mismos que enumera @ref
+/// mop_mnemonic).
 OpRoles mop_roles(MOp op) {
     OpRoles r;
     switch (op) {
@@ -228,9 +230,7 @@ OpRoles mop_roles(MOp op) {
     case MOp::MOVSD:
     case MOp::MOVSS:
     case MOp::MOVUPD:
-    case MOp::MOVAPD:
-        r.dst_written = true;
-        break;
+    case MOp::MOVAPD: r.dst_written = true; break;
     /* SETcc: escribe dst, LEE flags. */
     case MOp::SETCC:
         r.dst_written = true;
@@ -276,7 +276,8 @@ OpRoles mop_roles(MOp op) {
         r.writes_flags = true;
         break;
 
-    /* CMP / TEST / UCOMIS*: leen ambos (dst LEIDO), escriben flags, sin destino. */
+    /* CMP / TEST / UCOMIS*: leen ambos (dst LEIDO), escriben flags, sin
+     * destino. */
     case MOp::CMP:
     case MOp::TEST:
     case MOp::UCOMISD:
@@ -343,12 +344,10 @@ OpRoles mop_roles(MOp op) {
     case MOp::VXORPS:
     case MOp::VANDPS:
     case MOp::VBROADCASTSD:
-    case MOp::VBROADCASTSS:
-        r.dst_written = true;
-        break;
+    case MOp::VBROADCASTSS: r.dst_written = true; break;
 
-    /* Division entera: el operando explicito es el divisor (LEIDO); el resultado
-     * va a rax:rdx (implicito de la DB); escribe flags. */
+    /* Division entera: el operando explicito es el divisor (LEIDO); el
+     * resultado va a rax:rdx (implicito de la DB); escribe flags. */
     case MOp::IDIV:
     case MOp::DIV_U:
         r.dst_read = true;
@@ -391,7 +390,7 @@ void add_div_implicit_from_db(const MInstr &mi, const char *mnem, Isa isa,
     const DbForm &f = db.forms[static_cast<uint32_t>(fid)];
     for (uint8_t i = 0; i < f.ops_count; ++i) {
         const DbOperand &o = db.ops[f.ops_off + i];
-        if ((o.flags & 0x4) == 0) continue;          // solo implicitos
+        if ((o.flags & 0x4) == 0) continue;           // solo implicitos
         if (o.kind != vx::instr_db::OP_REG) continue; // solo registros
         if (o.regset >= db.str_count) continue;
         const uint32_t k = regset_to_key(db.str[o.regset], o.regset, isa);
@@ -465,22 +464,18 @@ void pseudo_effects(const MInstr &mi, MEffects &e) {
     switch (mi.op) {
     /* Sin efecto de datos y movibles libremente. */
     case MOp::NOP:
-    case MOp::COMMENT:
-        break;
+    case MOp::COMMENT: break;
 
     /* Posiciones FIJAS: un LABEL_DEF es destino de salto y las entradas de
      * jump-table son datos inline referenciados por su offset -> barrera (nada
      * se reordena a traves de ellas). */
     case MOp::LABEL_DEF:
     case MOp::DATA_PTR_LABEL:
-    case MOp::DATA_REL32_LABEL:
-        e.is_barrier = true;
-        break;
+    case MOp::DATA_REL32_LABEL: e.is_barrier = true; break;
 
-    /* ARG: marca un argumento -> LEE su src1 (para no adelantar al productor). */
-    case MOp::ARG:
-        add(e.reads, reg_key(mi.src1));
-        break;
+    /* ARG: marca un argumento -> LEE su src1 (para no adelantar al productor).
+     */
+    case MOp::ARG: add(e.reads, reg_key(mi.src1)); break;
 
     /* PUSH src: lee src + rsp, escribe rsp + memoria. */
     case MOp::PUSH:
@@ -499,15 +494,15 @@ void pseudo_effects(const MInstr &mi, MEffects &e) {
         break;
 
     /* Cargas pseudo: dst = [addr]. */
-    case MOp::LOAD:      // dst, src1=addr
-    case MOp::LOAD_VM:   // dst, src1=addr, src2=imm64_idx (fallback)
+    case MOp::LOAD:    // dst, src1=addr
+    case MOp::LOAD_VM: // dst, src1=addr, src2=imm64_idx (fallback)
         add(e.writes, reg_key(mi.dst));
         add(e.reads, reg_key(mi.src1));
         e.reads_mem = true;
         break;
     /* Stores pseudo: [addr] = val. */
-    case MOp::STORE:     // src1=addr, src2=val
-    case MOp::STORE_VM:  // src1=addr, src2=val, dst=imm64_idx
+    case MOp::STORE:    // src1=addr, src2=val
+    case MOp::STORE_VM: // src1=addr, src2=val, dst=imm64_idx
         add(e.reads, reg_key(mi.src1));
         add(e.reads, reg_key(mi.src2));
         e.writes_mem = true;
@@ -515,9 +510,7 @@ void pseudo_effects(const MInstr &mi, MEffects &e) {
 
     /* ALLOCA: dst = puntero a espacio reservado del frame. */
     case MOp::ALLOCA:
-    case MOp::ALLOCA_VM:
-        add(e.writes, reg_key(mi.dst));
-        break;
+    case MOp::ALLOCA_VM: add(e.writes, reg_key(mi.dst)); break;
 
     /* Division/modulo en vregs (pre-rewrite): dst = src1 op src2; clobbea flags
      * y (al bajar) RAX/RDX -> se declara ese clobber para que un uso posterior
@@ -532,7 +525,8 @@ void pseudo_effects(const MInstr &mi, MEffects &e) {
         break;
 
     /* Atomicos en vregs: RMW sobre memoria + flags + (al bajar) RAX. */
-    case MOp::ATOMICCAS_V: // dst in/out (expected->old), src1=addr, src2=desired
+    case MOp::ATOMICCAS_V: // dst in/out (expected->old), src1=addr,
+                           // src2=desired
         add(e.reads, reg_key(mi.dst));
         add(e.writes, reg_key(mi.dst));
         add(e.reads, reg_key(mi.src1));
@@ -592,9 +586,7 @@ void pseudo_effects(const MInstr &mi, MEffects &e) {
     case MOp::LEA_RIP_SYM:
     case MOp::LEA_LABEL:
     case MOp::TLS_LE_ADDR:
-    case MOp::TLS_PE_ADDR:
-        add(e.writes, reg_key(mi.dst));
-        break;
+    case MOp::TLS_PE_ADDR: add(e.writes, reg_key(mi.dst)); break;
 
     /* Salva/restaura proc->registers en la work-area del frame (usa R11). */
     case MOp::CB_SAVE_REGS:
@@ -609,9 +601,7 @@ void pseudo_effects(const MInstr &mi, MEffects &e) {
         break;
 
     /* Barreras: control de flujo / puntos de sincronizacion / asm opaco. */
-    case MOp::JMP:
-        e.is_barrier = true;
-        break;
+    case MOp::JMP: e.is_barrier = true; break;
     case MOp::JCC:
         e.reads_flags = true;
         e.is_barrier = true;
@@ -624,9 +614,7 @@ void pseudo_effects(const MInstr &mi, MEffects &e) {
     case MOp::RET:
     case MOp::SAFEPOINT:
     case MOp::INT3:
-    case MOp::INLINE_ASM_RAW:
-        e.is_barrier = true;
-        break;
+    case MOp::INLINE_ASM_RAW: e.is_barrier = true; break;
 
     /* Cualquier otro pseudo no listado: barrera dura (nunca miscompilar). */
     default:
@@ -645,9 +633,9 @@ void pseudo_effects(const MInstr &mi, MEffects &e) {
 } // namespace
 
 const char *mop_mnemonic(MOp op, EffIsa isa) {
-    // arm64: los MOp enteros genericos se comparten; los A64_* son propios.  Los
-    // saltos/llamadas (b/bl/ret/cbz) NO se mapean -> pseudo (barrera), igual que
-    // en x86.  Se usa para los efectos DB (machine_effects) y el coste DB.
+    // arm64: los MOp enteros genericos se comparten; los A64_* son propios. Los
+    // saltos/llamadas (b/bl/ret/cbz) NO se mapean -> pseudo (barrera), igual
+    // que en x86.  Se usa para los efectos DB (machine_effects) y el coste DB.
     if (isa == EffIsa::ARM64) {
         switch (op) {
         case MOp::MOV: return "mov";
@@ -722,7 +710,8 @@ const char *mop_mnemonic(MOp op, EffIsa isa) {
     case MOp::TZCNT: return "tzcnt";
     case MOp::CMP: return "cmp";
     case MOp::TEST: return "test";
-    case MOp::SETCC: return "setne";  // representante (mismos efectos: wr dst, rd flags)
+    case MOp::SETCC:
+        return "setne"; // representante (mismos efectos: wr dst, rd flags)
     case MOp::CMOVCC: return "cmovne"; // representante (r+w dst, rd flags)
     case MOp::BSWAP: return "bswap";
     case MOp::ROL: return "rol";

@@ -311,11 +311,12 @@ void ProcessVMRootProvider::write_back_regs(const uint64_t regs[16]) {
         proc_->registers.regs[i].qword(regs[i]);
 }
 
-vm::VirtualMemory *ProcessVMRootProvider::vm_mem() { return &proc_->vm_mem; }
+vm::VirtualMemory *ProcessVMRootProvider::vm_mem() {
+    return &proc_->vm_mem;
+}
 
-uint64_t
-ProcessVMRootProvider::scan_interp_precise_roots(InterpRootCallback cb,
-                                                 void *cb_ctx) {
+uint64_t ProcessVMRootProvider::scan_interp_precise_roots(InterpRootCallback cb,
+                                                          void *cb_ctx) {
     if (!cb) return 0;
 
     // Coleccion de executables cargados (cada uno con su tabla VSMP).
@@ -335,7 +336,8 @@ ProcessVMRootProvider::scan_interp_precise_roots(InterpRootCallback cb,
     // Snapshot de los 16 GP regs del frame TOP (los unicos accesibles como
     // registros; los frames caller ya spillaron sus GC vivos a la pila).
     uint64_t regs[16];
-    for (int i = 0; i < 16; ++i) regs[i] = proc_->registers.regs[i].qword();
+    for (int i = 0; i < 16; ++i)
+        regs[i] = proc_->registers.regs[i].qword();
 
     uint64_t marked = 0;
 
@@ -447,10 +449,12 @@ bool ProcessVMRootProvider::all_interp_frames_have_stackmaps() {
     // cuando NO hay safepoints, es decir cuando no hay raices GC que perder.
     const auto &executables =
         proc_->scheduler.vm_reference.loader_public.executables;
-    if (executables.empty()) return false; // sin ejecutables -> no asumir preciso
+    if (executables.empty())
+        return false; // sin ejecutables -> no asumir preciso
     for (const auto &exe_ptr : executables) {
         if (!exe_ptr) continue;
-        if (exe_ptr->header.format_v < 0x4) return false; // legacy -> conservador
+        if (exe_ptr->header.format_v < 0x4)
+            return false; // legacy -> conservador
     }
     return true;
 }

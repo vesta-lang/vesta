@@ -7,8 +7,8 @@
 
 /**
  * @file tests/jit/test_rbank_canonical.cpp
- * @brief Fase 1: canonicalizacion + cache de soluciones.  El allocator recibe un
- *        problema CANONICO -> el mismo problema (salvo etiquetas/offset/orden) se
+ * @brief Fase 1: canonicalizacion + cache de soluciones.  El allocator recibe
+ * un problema CANONICO -> el mismo problema (salvo etiquetas/offset/orden) se
  *        colorea UNA vez y se REUSA.
  *
  * Propiedades:
@@ -35,13 +35,13 @@ using namespace codegen::rbank; // el modelo.
 static int g_checks = 0;
 static int g_fail = 0;
 
-#define CHECK(cond, msg)                                                     \
-    do {                                                                     \
-        ++g_checks;                                                          \
-        if (!(cond)) {                                                       \
-            ++g_fail;                                                        \
-            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);        \
-        }                                                                    \
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fail;                                                          \
+            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);          \
+        }                                                                      \
     } while (0)
 
 static AbstractValue mkval(uint32_t id, uint32_t start, uint32_t end,
@@ -57,7 +57,8 @@ static AbstractValue mkval(uint32_t id, uint32_t start, uint32_t end,
 }
 
 /** @brief Problema equivalente: renombra ids + traslada posiciones + baraja. */
-static AbstractProblem transform_equivalent(const AbstractProblem &p, std::mt19937 &rng) {
+static AbstractProblem transform_equivalent(const AbstractProblem &p,
+                                            std::mt19937 &rng) {
     // Permutacion de value_ids (biyeccion sobre 100..).
     std::vector<uint32_t> new_ids(p.values.size());
     std::iota(new_ids.begin(), new_ids.end(), 100u);
@@ -69,7 +70,8 @@ static AbstractProblem transform_equivalent(const AbstractProblem &p, std::mt199
         AbstractValue av = p.values[i];
         av.value_id = new_ids[i];
         av.req.value_id = new_ids[i];
-        av.start += off; // traslacion (no cambia la estructura de solapamiento).
+        av.start +=
+            off; // traslacion (no cambia la estructura de solapamiento).
         av.end += off;
         q.values.push_back(av);
     }
@@ -78,9 +80,14 @@ static AbstractProblem transform_equivalent(const AbstractProblem &p, std::mt199
 }
 
 int main() {
-    std::printf("=== test_rbank_canonical (Fase 1: forma canonica + cache) ===\n");
+    std::printf(
+        "=== test_rbank_canonical (Fase 1: forma canonica + cache) ===\n");
 
-    const BackendCaps caps = [] { BackendCaps c{}; c.sse2 = true; return c; }();
+    const BackendCaps caps = [] {
+        BackendCaps c{};
+        c.sse2 = true;
+        return c;
+    }();
     PhysicalRegisterBank bank = physical_bank_x86_64(true, caps);
 
     // --- Unit: invariancia bajo traslacion + permutacion de ids ---
@@ -92,9 +99,10 @@ int main() {
                     mkval(3, 12, 20, ResourceClass::FP_VECTOR, ViewWidth::W16)};
         // Trasladado +1000 con ids distintos y en otro orden.
         AbstractProblem q;
-        q.values = {mkval(77, 1012, 1020, ResourceClass::FP_VECTOR, ViewWidth::W16),
-                    mkval(55, 1000, 1010, ResourceClass::GP, ViewWidth::W8),
-                    mkval(66, 1005, 1015, ResourceClass::GP, ViewWidth::W8)};
+        q.values = {
+            mkval(77, 1012, 1020, ResourceClass::FP_VECTOR, ViewWidth::W16),
+            mkval(55, 1000, 1010, ResourceClass::GP, ViewWidth::W8),
+            mkval(66, 1005, 1015, ResourceClass::GP, ViewWidth::W8)};
         CHECK(canonical_hash(p) == canonical_hash(q),
               "hash NO invariante bajo traslacion/permutacion/orden");
     }
@@ -113,7 +121,8 @@ int main() {
         AbstractProblem c; // misma estructura que 'a' pero clase distinta.
         c.values = {mkval(1, 0, 10, ResourceClass::FP_VECTOR, ViewWidth::W16),
                     mkval(2, 5, 15, ResourceClass::FP_VECTOR, ViewWidth::W16)};
-        CHECK(canonical_hash(a) != canonical_hash(c), "clase distinta no cambio el hash");
+        CHECK(canonical_hash(a) != canonical_hash(c),
+              "clase distinta no cambio el hash");
     }
 
     // --- Unit: cache HIT reusa la solucion de la forma equivalente ---
@@ -129,14 +138,18 @@ int main() {
         SolutionCache cache;
         LaneAssignment s1 = cache.solve(p, bank, false); // miss
         LaneAssignment s2 = cache.solve(q, bank, false); // hit (misma forma)
-        CHECK(cache.misses == 1 && cache.hits == 1, "la forma equivalente no dio HIT");
-        CHECK(is_proper_coloring(p, s1, bank, false), "solve(p) no es coloreado propio");
-        CHECK(is_proper_coloring(q, s2, bank, false), "solve(q) no es coloreado propio");
+        CHECK(cache.misses == 1 && cache.hits == 1,
+              "la forma equivalente no dio HIT");
+        CHECK(is_proper_coloring(p, s1, bank, false),
+              "solve(p) no es coloreado propio");
+        CHECK(is_proper_coloring(q, s2, bank, false),
+              "solve(q) no es coloreado propio");
         // La solucion via cache == coloreado directo (mismo problema).
         LaneAssignment direct = color_linear_scan(p, bank, false);
         bool same = true;
         for (const AbstractValue &v : p.values)
-            if (direct.lane_of(v.value_id) != s1.lane_of(v.value_id)) same = false;
+            if (direct.lane_of(v.value_id) != s1.lane_of(v.value_id))
+                same = false;
         CHECK(same, "la solucion cacheada difiere del coloreado directo");
     }
 
@@ -158,9 +171,10 @@ int main() {
                 const uint32_t s = pos(rng);
                 const uint32_t e = s + dur(rng);
                 const bool fp = coin(rng) != 0;
-                p.values.push_back(mkval(i + 1, s, e,
-                                         fp ? ResourceClass::FP_VECTOR : ResourceClass::GP,
-                                         fp ? ViewWidth::W16 : ViewWidth::W8));
+                p.values.push_back(
+                    mkval(i + 1, s, e,
+                          fp ? ResourceClass::FP_VECTOR : ResourceClass::GP,
+                          fp ? ViewWidth::W16 : ViewWidth::W8));
             }
             AbstractProblem q = transform_equivalent(p, rng);
 

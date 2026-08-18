@@ -11,8 +11,8 @@
  *
  * Todo lo demas del subsistema da por hecho que ya se conoce una huella.  Pero
  * quien depura nunca empieza asi: empieza por `PC = 0x4015c2`, por `frame #7` o
- * por el nombre de una funcion.  Sin algo que convierta eso en una identidad, el
- * grafo es impecable y a la vez inalcanzable.
+ * por el nombre de una funcion.  Sin algo que convierta eso en una identidad,
+ * el grafo es impecable y a la vez inalcanzable.
  *
  *     direccion --> simbolo --> BuildId --> ArtifactMap --> entidad --> resto
  *     \_______________/   \_________________________________________________/
@@ -20,24 +20,25 @@
  *
  * El primer tramo -- de una direccion a un simbolo -- pertenece al ARTEFACTO y
  * no a este subsistema: depende del formato del ejecutable, de su tabla de
- * simbolos y de donde lo cargo el sistema, cosas que cambian con cada objetivo y
- * que aqui no se conocen.  Quien lo sepa lo resuelve y entra por el simbolo.
+ * simbolos y de donde lo cargo el sistema, cosas que cambian con cada objetivo
+ * y que aqui no se conocen.  Quien lo sepa lo resuelve y entra por el simbolo.
  * Mezclarlo habria atado el grafo a un formato de binario, que es justo lo que
  * hace a DWARF y PDB inservibles fuera de su mundo.
  *
  * La identidad del artefacto es un @ref BuildId y NO su nombre.  Un fichero
- * llamado `programa` puede ser cinco compilaciones distintas; con el nombre como
- * identidad, un binario viejo se explicaria con los simbolos del nuevo, que es
- * peor que no explicarlo.  Por eso ni Windows busca un PDB por el nombre ni
- * Linux busca un DWARF por el nombre: los dos buscan por identificador de
+ * llamado `programa` puede ser cinco compilaciones distintas; con el nombre
+ * como identidad, un binario viejo se explicaria con los simbolos del nuevo,
+ * que es peor que no explicarlo.  Por eso ni Windows busca un PDB por el nombre
+ * ni Linux busca un DWARF por el nombre: los dos buscan por identificador de
  * construccion.
  *
- * Un @ref ArtifactMap es un nodo mas -- inmutable, identificado por su contenido
- * -- y por tanto tampoco se encuentra sin su huella.  Lo que rompe el circulo es
- * el @ref RootProvider: el mecanismo de DESCUBRIMIENTO, que es lo unico mutable
- * de todo el subsistema y esta fuera del grafo a proposito.  Es lo mismo que
- * hacen Git, Nix, Bazel, PDB o dSYM: contenido inmutable, y aparte algo que dice
- * cual es la raiz de ahora.
+ * Un @ref ArtifactMap es un nodo mas -- inmutable, identificado por su
+ * contenido
+ * -- y por tanto tampoco se encuentra sin su huella.  Lo que rompe el circulo
+ * es el @ref RootProvider: el mecanismo de DESCUBRIMIENTO, que es lo unico
+ * mutable de todo el subsistema y esta fuera del grafo a proposito.  Es lo
+ * mismo que hacen Git, Nix, Bazel, PDB o dSYM: contenido inmutable, y aparte
+ * algo que dice cual es la raiz de ahora.
  *
  * Que el mapa si sea un nodo tiene consecuencia practica: dos compilaciones que
  * produzcan los mismos simbolos lo comparten, y una que cambie produce otro sin
@@ -80,13 +81,13 @@ using BuildId = NodeId<BuildTag>;
  *
  * No se llama indice porque no lo es: un indice es una estructura auxiliar que
  * se puede tirar y reconstruir.  Esto es conocimiento -- que simbolo salio de
- * que declaracion -- que solo tuvo quien compilo, y si se pierde no hay de donde
- * sacarlo.
+ * que declaracion -- que solo tuvo quien compilo, y si se pierde no hay de
+ * donde sacarlo.
  *
- * Hoy solo lleva simbolos.  Acabara siendo la RAIZ PUBLICA del artefacto: de que
- * compilacion salio, cual es su entidad principal, que funciones intermedias y
- * que modulos contiene.  Se anadira cuando esas capas existan de verdad; ponerlo
- * ahora seria adivinar la forma de algo que todavia no hay.
+ * Hoy solo lleva simbolos.  Acabara siendo la RAIZ PUBLICA del artefacto: de
+ * que compilacion salio, cual es su entidad principal, que funciones
+ * intermedias y que modulos contiene.  Se anadira cuando esas capas existan de
+ * verdad; ponerlo ahora seria adivinar la forma de algo que todavia no hay.
  */
 struct ArtifactMap {
     static constexpr uint32_t kSchemaVersion = 1;
@@ -155,10 +156,10 @@ struct SpanMap {
 /**
  * @brief De donde se saca el mapa de un artefacto.
  *
- * Se declara como interfaz porque el mismo grafo se va a alcanzar de maneras muy
- * distintas segun donde este: dentro del propio ejecutable, en la cache de quien
- * compilo, en un fichero al lado, o en un servidor al otro extremo de la red.
- * Quien resuelve una traza no deberia enterarse de cual fue.
+ * Se declara como interfaz porque el mismo grafo se va a alcanzar de maneras
+ * muy distintas segun donde este: dentro del propio ejecutable, en la cache de
+ * quien compilo, en un fichero al lado, o en un servidor al otro extremo de la
+ * red. Quien resuelve una traza no deberia enterarse de cual fue.
  *
  * Sin esta separacion, anadir manana un servidor de simbolos o un depurador
  * remoto obligaria a tocar todo lo que hoy busca en disco.
@@ -172,9 +173,9 @@ class RootProvider {
      *
      * Devuelve el MAPA y no su huella: que exista un almacen direccionado por
      * contenido es asunto de quien lo provee, no de quien pregunta.  El dia que
-     * venga de un servidor, comprimido o embebido en el propio ejecutable, quien
-     * resuelve una traza no tiene que cambiar ni enterarse de que antes hubo una
-     * huella por medio.
+     * venga de un servidor, comprimido o embebido en el propio ejecutable,
+     * quien resuelve una traza no tiene que cambiar ni enterarse de que antes
+     * hubo una huella por medio.
      *
      * @param build De que compilacion.
      * @param out_map Recibe el mapa.
@@ -216,9 +217,9 @@ class CacheRootRepository : public RootProvider {
     /**
      * @brief Deja constancia de que mapa corresponde a una compilacion.
      *
-     * Lo escrito aqui es lo unico mutable del subsistema, y lo es por necesidad:
-     * un almacen por contenido no tiene por donde empezar.  Va en su propia
-     * carpeta para que nadie lo confunda con un nodo.
+     * Lo escrito aqui es lo unico mutable del subsistema, y lo es por
+     * necesidad: un almacen por contenido no tiene por donde empezar.  Va en su
+     * propia carpeta para que nadie lo confunda con un nodo.
      *
      * @param build De que compilacion.
      * @param map Huella de su mapa.

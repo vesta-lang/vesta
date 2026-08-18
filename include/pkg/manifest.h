@@ -55,11 +55,11 @@ struct DependencySpec {
      * Vacio = la clave ya es el nombre del paquete.
      */
     std::string paquete;
-    std::string version; ///< @c "1.2" (semver opcional)
-    std::string sha256;  ///< hash hex del .vx+.vxi (32 bytes hex = 64 chars)
-    std::string git_url; ///< @c "https://github.com/..."  vacio si no es git
-    std::string git_rev; ///< commit hash exacto (NO branch, NO tag) si es git
-    std::string path;    ///< ruta local relativa o absoluta si es local
+    std::string version;   ///< @c "1.2" (semver opcional)
+    std::string sha256;    ///< hash hex del .vx+.vxi (32 bytes hex = 64 chars)
+    std::string git_url;   ///< @c "https://github.com/..."  vacio si no es git
+    std::string git_rev;   ///< commit hash exacto (NO branch, NO tag) si es git
+    std::string path;      ///< ruta local relativa o absoluta si es local
     std::string trust_key; ///< fingerprint de la clave que firma (opcional,
                            ///< override trust pin)
     bool is_dev =

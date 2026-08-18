@@ -93,7 +93,7 @@ int main(int argc, char **argv) {
     register_canonical_name(kDomA);
     register_canonical_name(kDomB);
 
-    FactStore                  origen;
+    FactStore origen;
     poblar(origen);
     const std::vector<uint8_t> bytes =
         serialize(origen, 0xABCDEF0123456789ull, CacheLevel::All, {},
@@ -110,10 +110,10 @@ int main(int argc, char **argv) {
     std::printf("  bytes=%zu  huella=%016llx\n", bytes.size(),
                 static_cast<unsigned long long>(huella_bytes));
 
-    FactStore        d;
-    const ReadResult r = read_facts(bytes.data(), bytes.size(),
-                                    0xABCDEF0123456789ull, d, {},
-                                    0x1122334455667788ull);
+    FactStore d;
+    const ReadResult r =
+        read_facts(bytes.data(), bytes.size(), 0xABCDEF0123456789ull, d, {},
+                   0x1122334455667788ull);
     CHECK(r.ok && r.facts == 12, "y se lee entero");
     CHECK(d.at(0).que.a == -1234567890123456789ll,
           "un negativo grande cruza sin estropearse");
@@ -133,20 +133,21 @@ int main(int argc, char **argv) {
 
     /* Invalidacion, tambien aqui: si una plataforma anulara distinto, la cache
      * compartida haria cosas distintas segun quien la lea. */
-    CHECK(read_facts(bytes.data(), bytes.size(), 1, d, {},
-                     0x1122334455667788ull)
-                  .reason == ReadReason::OtherModule,
-          "otro modulo se rechaza igual");
-    CHECK(read_facts(bytes.data(), bytes.size(), 0xABCDEF0123456789ull, d, {}, 7)
-                  .reason == ReadReason::OtherCompiler,
-          "otro compilador tambien");
+    CHECK(
+        read_facts(bytes.data(), bytes.size(), 1, d, {}, 0x1122334455667788ull)
+                .reason == ReadReason::OtherModule,
+        "otro modulo se rechaza igual");
+    CHECK(
+        read_facts(bytes.data(), bytes.size(), 0xABCDEF0123456789ull, d, {}, 7)
+                .reason == ReadReason::OtherCompiler,
+        "otro compilador tambien");
     {
         std::vector<uint8_t> malo = bytes;
         malo[malo.size() / 2] ^= 0xFF;
-        FactStore        dc;
-        const ReadResult rc = read_facts(malo.data(), malo.size(),
-                                         0xABCDEF0123456789ull, dc, {},
-                                         0x1122334455667788ull);
+        FactStore dc;
+        const ReadResult rc =
+            read_facts(malo.data(), malo.size(), 0xABCDEF0123456789ull, dc, {},
+                       0x1122334455667788ull);
         CHECK(!rc.ok || rc.corrupt > 0, "un byte estropeado se detecta igual");
     }
 
@@ -157,7 +158,7 @@ int main(int argc, char **argv) {
          * ponga sus temporales. */
         const std::string ruta = "asa_hechos_prueba.bin";
         CHECK(::fs::write_file_atomic(ruta, bytes), "se escribe en disco");
-        FactStore        dd;
+        FactStore dd;
         const ReadResult rd = read_facts_file(ruta, 0xABCDEF0123456789ull, dd,
                                               {}, 0x1122334455667788ull);
         CHECK(rd.ok && dd.size() == 12, "y se lee de disco");

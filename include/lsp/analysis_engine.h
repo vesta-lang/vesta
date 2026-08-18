@@ -56,8 +56,8 @@ namespace lsp {
  * produjo, para invalidar la cache cuando el documento cambia.
  */
 struct DocAnalysis {
-    uint64_t text_hash = 0;       ///< Hash FNV-1a del texto analizado.
-    vx::CompileResult result;    ///< Resultado completo de la compilacion.
+    uint64_t text_hash = 0;   ///< Hash FNV-1a del texto analizado.
+    vx::CompileResult result; ///< Resultado completo de la compilacion.
 
     /// Nombres de clases declaradas top-level (para enriquecer el resaltado
     /// semantico: un IDENTIFIER que coincide se clasifica como @c class).

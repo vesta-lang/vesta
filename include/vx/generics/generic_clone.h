@@ -72,8 +72,8 @@ std::unique_ptr<ast::TypeNode> type_node_from_type(const Type &a,
                                                    const SourceLoc &loc);
 
 /// @brief Clona un @c TypeNode aplicando la sustitucion @p g.
-std::unique_ptr<ast::TypeNode>
-clone_type_with_subst(const ast::TypeNode *t, const GenSubst &g);
+std::unique_ptr<ast::TypeNode> clone_type_with_subst(const ast::TypeNode *t,
+                                                     const GenSubst &g);
 
 /// @brief Clona una @c Expr aplicando la sustitucion @p g (default: vacia).
 std::unique_ptr<ast::Expr> clone_expr(const ast::Expr *e,

@@ -345,7 +345,8 @@ struct OpNameTable {
 } // namespace
 
 /**
- * @brief Devuelve el nombre de texto de un IrOp (O(1), array indexado por opcode).
+ * @brief Devuelve el nombre de texto de un IrOp (O(1), array indexado por
+ * opcode).
  */
 const char *ir_op_name(IrOp op) {
     static const OpNameTable t;
@@ -530,7 +531,8 @@ void IrModule::register_native_import(std::string lib, std::string name,
                                       const IrNativeEffects &efectos) {
     for (auto &ni : native_imports) {
         if (ni.lib == lib && ni.name == name) {
-            if (efectos.declarados && !ni.efectos.declarados) ni.efectos = efectos;
+            if (efectos.declarados && !ni.efectos.declarados)
+                ni.efectos = efectos;
             return;
         }
     }
@@ -543,7 +545,8 @@ void IrModule::register_native_import(std::string lib, std::string name,
  * Busqueda lineal, como el registro: los imports nativos de un modulo son
  * decenas como mucho.
  */
-const IrNativeEffects *IrModule::native_effects_of(const std::string &lib_fn) const {
+const IrNativeEffects *
+IrModule::native_effects_of(const std::string &lib_fn) const {
     const size_t sep = lib_fn.rfind(':');
     if (sep == std::string::npos) return nullptr;
     for (const auto &ni : native_imports) {
@@ -619,17 +622,16 @@ void print_instr(std::ostream &o, const IrFunction &fn, const IrInstr &ins) {
         ins.op == IrOp::REJECT || ins.op == IrOp::STORE ||
         ins.op == IrOp::SETFIELD || ins.op == IrOp::RESUME ||
         ins.op == IrOp::SWAPCTX || ins.op == IrOp::MEMCPY ||
-        ins.op == IrOp::MEMSET ||
-        ins.op == IrOp::TRYENTER || ins.op == IrOp::GCWB_IR ||
-        ins.op == IrOp::GCDEREF_IR || ins.op == IrOp::ARRAY_STORE ||
-        ins.op == IrOp::RETHROW || ins.op == IrOp::RSPAWN_RETURN ||
-        ins.op == IrOp::SMARTPTR_FREE || ins.op == IrOp::STRFINALIZE ||
-        ins.op == IrOp::VEC_UNOP || ins.op == IrOp::VEC_BINOP || ins.op == IrOp::VEC_FMA ||
+        ins.op == IrOp::MEMSET || ins.op == IrOp::TRYENTER ||
+        ins.op == IrOp::GCWB_IR || ins.op == IrOp::GCDEREF_IR ||
+        ins.op == IrOp::ARRAY_STORE || ins.op == IrOp::RETHROW ||
+        ins.op == IrOp::RSPAWN_RETURN || ins.op == IrOp::SMARTPTR_FREE ||
+        ins.op == IrOp::STRFINALIZE || ins.op == IrOp::VEC_UNOP ||
+        ins.op == IrOp::VEC_BINOP || ins.op == IrOp::VEC_FMA ||
         ins.op == IrOp::VEC_ACC_ZERO || ins.op == IrOp::VEC_ACC_ADD ||
         ins.op == IrOp::VEC_ACC_FMA || ins.op == IrOp::VEC_ACC_STORE ||
-        ins.op == IrOp::VEC_ACC_COMBINE ||
-        ins.op == IrOp::VEC_BINOP_S || ins.op == IrOp::VEC_FMA_S ||
-        ins.op == IrOp::VEC_BCAST) {
+        ins.op == IrOp::VEC_ACC_COMBINE || ins.op == IrOp::VEC_BINOP_S ||
+        ins.op == IrOp::VEC_FMA_S || ins.op == IrOp::VEC_BCAST) {
         print_type = false;
     }
     if (print_type) o << "." << ir_type_name(ins.type);
@@ -769,8 +771,8 @@ void print_instr(std::ostream &o, const IrFunction &fn, const IrInstr &ins) {
         o << " ";
         if (!ins.operands.empty()) print_val(o, fn, ins.operands[0]);
         o << ", min=" << static_cast<int64_t>(ins.imm & 0xFFFFFFFFu)
-          << (((ins.imm >> 32) & 1u) ? " no_bounds" : "")
-          << ", default=BB" << ins.target_block << ", [";
+          << (((ins.imm >> 32) & 1u) ? " no_bounds" : "") << ", default=BB"
+          << ins.target_block << ", [";
         for (size_t i = 0; i < ins.jump_targets.size(); ++i) {
             if (i) o << ", ";
             o << "BB" << ins.jump_targets[i];
@@ -857,8 +859,8 @@ void print_instr(std::ostream &o, const IrFunction &fn, const IrInstr &ins) {
     case IrOp::VEC_BINOP_S:
         // vec_binop.fN %dst_ptr, %a_ptr[, %b_ptr]   imm=(subop<<8)|ancho.
         // La aridad varia entre estos ops (VEC_ACC_ZERO/COMBINE/STORE tienen 1
-        // operando, VEC_ACC_ADD 2, VEC_ACC_FMA/VEC_BINOP 3): imprimimos solo los
-        // operandos que existen para no leer fuera de rango.
+        // operando, VEC_ACC_ADD 2, VEC_ACC_FMA/VEC_BINOP 3): imprimimos solo
+        // los operandos que existen para no leer fuera de rango.
         for (size_t k = 0; k < ins.operands.size(); ++k) {
             o << (k == 0 ? " " : ", ");
             print_val(o, fn, ins.operands[k]);
@@ -967,8 +969,7 @@ void print_instr(std::ostream &o, const IrFunction &fn, const IrInstr &ins) {
             if (!ins.operands.empty()) {
                 o << " ins=[";
                 for (size_t i = 0; i < ins.operands.size(); ++i) {
-                    if (i)
-                        o << ", ";
+                    if (i) o << ", ";
                     print_val(o, fn, ins.operands[i]);
                 }
                 o << "]";
@@ -976,8 +977,7 @@ void print_instr(std::ostream &o, const IrFunction &fn, const IrInstr &ins) {
             if (!am.operands.empty()) {
                 o << " ops=[";
                 for (size_t i = 0; i < am.operands.size(); ++i) {
-                    if (i)
-                        o << ", ";
+                    if (i) o << ", ";
                     const auto &op = am.operands[i];
                     o << "$" << i << ":";
                     // rol como flags legibles.
@@ -2029,7 +2029,6 @@ bool ir_verify(const IrModule &mod, std::vector<std::string> &errors) {
     return ok;
 }
 
-
 void IrFunction::recompute_edges() {
     const size_t N = blocks.size();
     for (size_t b = 0; b < N; ++b) {
@@ -2049,14 +2048,14 @@ void IrFunction::recompute_edges() {
             add(t.false_block);
         } else if (t.op == IrOp::SWITCH_DENSE) {
             add(t.target_block);
-            for (IrBlockId s : t.jump_targets) add(s);
+            for (IrBlockId s : t.jump_targets)
+                add(s);
         }
     }
     for (size_t b = 0; b < N; ++b)
         for (IrBlockId s : blocks[b].succs)
             blocks[s].preds.push_back(static_cast<IrBlockId>(b));
 }
-
 
 /* ==================== ir_correr_indices_de_datos ==================== */
 

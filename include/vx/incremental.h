@@ -65,14 +65,14 @@ struct BuildConfig {
     uint8_t asm_target_bits = 64;   ///< 64/32/16: lowering de @Naked / asm{}.
     bool native_poo = false;        ///< clases AOT (calloc/dtor) vs VM (GC).
     bool exceptions_enabled = true; ///< lowering de try/catch en AOT.
-    std::string instrument_mode;    ///< "none"/"trace"/"profile": afecta emision.
-    std::string tgt_os;             ///< @Target OS (solo si el modulo lo usa).
-    std::string tgt_arch;           ///< @Target arch (idem).
+    std::string instrument_mode; ///< "none"/"trace"/"profile": afecta emision.
+    std::string tgt_os;          ///< @Target OS (solo si el modulo lo usa).
+    std::string tgt_arch;        ///< @Target arch (idem).
     // -- Dimensiones que afectan SOLO al artefacto final (post-merge) --------
-    int opt_level = 2;              ///< 0..3: optimizacion post-merge.
-    bool emit_debug = false;        ///< info de debug en el .velb final.
-    uint8_t aot_vec_width = 16;     ///< SSE2/AVX/AVX512: vectorizador (post-opt).
-    std::string profile_id;         ///< PGO / perfil (futuro).
+    int opt_level = 2;          ///< 0..3: optimizacion post-merge.
+    bool emit_debug = false;    ///< info de debug en el .velb final.
+    uint8_t aot_vec_width = 16; ///< SSE2/AVX/AVX512: vectorizador (post-opt).
+    std::string profile_id;     ///< PGO / perfil (futuro).
 
     /// @brief Fingerprint de las dimensiones que cambian el IR pre-optimize.
     uint64_t ir_fingerprint() const;

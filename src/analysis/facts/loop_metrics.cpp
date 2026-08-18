@@ -16,11 +16,11 @@
 
 namespace analysis {
 
+using ir::IR_NO_VALUE;
 using ir::IrBlockId;
 using ir::IrInstr;
 using ir::IrOp;
 using ir::IrValueId;
-using ir::IR_NO_VALUE;
 
 namespace {
 
@@ -112,10 +112,9 @@ LoopMetrics compute_loop_metrics(const ir::IrFunction &fn,
         if (b >= fn.blocks.size()) continue;
         ++m.basic_blocks;
         for (const IrInstr &in : fn.blocks[b].instrs) {
-            const bool is_term =
-                (in.op == IrOp::BR || in.op == IrOp::BR_COND ||
-                 in.op == IrOp::RET || in.op == IrOp::THROW ||
-                 in.op == IrOp::UNREACHABLE);
+            const bool is_term = (in.op == IrOp::BR || in.op == IrOp::BR_COND ||
+                                  in.op == IrOp::RET || in.op == IrOp::THROW ||
+                                  in.op == IrOp::UNREACHABLE);
             if (is_term) ++m.terminators;
             if (in.op == IrOp::PHI) {
                 ++m.phis;
@@ -134,10 +133,9 @@ LoopMetrics compute_loop_metrics(const ir::IrFunction &fn,
                 if (is_fp(in.op)) ++m.fp_ops;
                 if (is_expensive(in.op)) ++m.expensive_ops;
                 // Efectos no capturados por los conteos: atomics, io, barreras.
-                if (in.op == IrOp::ATOMIC_LD ||
-                    in.op == IrOp::ATOMIC_ST ||
-                    in.op == IrOp::ATOMIC_CAS ||
-                    in.op == IrOp::ATOMIC_ADD || in.op == IrOp::RAW_ASM)
+                if (in.op == IrOp::ATOMIC_LD || in.op == IrOp::ATOMIC_ST ||
+                    in.op == IrOp::ATOMIC_CAS || in.op == IrOp::ATOMIC_ADD ||
+                    in.op == IrOp::RAW_ASM)
                     m.has_side_effects = true;
             }
             if (in.op == IrOp::BR_COND) ++m.branches;
@@ -146,15 +144,16 @@ LoopMetrics compute_loop_metrics(const ir::IrFunction &fn,
     }
 
     // Presion de registros (proxy): valores DEFINIDOS en el cuerpo que se usan
-    // FUERA del cuerpo -- los back-args de las PHIs del header (loop-carried) mas
-    // los live-out.  Son los unicos que cada copia del unroll mantiene vivos a la
-    // vez; los temporales intra-iteracion se consumen dentro de su copia y NO
-    // cuentan.  (El proxy anterior miraba el latch: en un bucle de un solo bloque
-    // latch == cuerpo, contaba los temporales intra-iteracion e inflaba la
-    // presion, capando el factor.)
+    // FUERA del cuerpo -- los back-args de las PHIs del header (loop-carried)
+    // mas los live-out.  Son los unicos que cada copia del unroll mantiene
+    // vivos a la vez; los temporales intra-iteracion se consumen dentro de su
+    // copia y NO cuentan.  (El proxy anterior miraba el latch: en un bucle de
+    // un solo bloque latch == cuerpo, contaba los temporales intra-iteracion e
+    // inflaba la presion, capando el factor.)
     std::unordered_set<IrValueId> live;
     for (size_t b = 0; b < fn.blocks.size(); ++b) {
-        if (body_set.count((IrBlockId)b)) continue; // solo bloques FUERA del cuerpo
+        if (body_set.count((IrBlockId)b))
+            continue; // solo bloques FUERA del cuerpo
         for (const IrInstr &in : fn.blocks[b].instrs) {
             for (IrValueId o : in.operands)
                 if (body_defs.count(o)) live.insert(o);

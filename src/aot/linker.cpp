@@ -84,8 +84,8 @@ struct ObjSec {
     uint64_t sh_size = 0;
     uint64_t sh_offset = 0;
     uint64_t sh_addralign = 0;
-    uint32_t sh_info = 0;   // SHT_RELA: seccion a la que aplica
-    bool comdat = false;    // COFF IMAGE_SCN_LNK_COMDAT (seccion "pick-any")
+    uint32_t sh_info = 0; // SHT_RELA: seccion a la que aplica
+    bool comdat = false;  // COFF IMAGE_SCN_LNK_COMDAT (seccion "pick-any")
 };
 struct ObjSym {
     std::string name;
@@ -96,20 +96,20 @@ struct ObjSym {
     bool comdat = false; // simbolo COMDAT/weak (duplicado tolerado: 1o gana)
 };
 struct ObjRel {
-    uint32_t applies_sh = 0;       // seccion a la que aplica (indice interno)
-    uint64_t off = 0;             // offset del campo dentro de esa seccion
-    uint32_t sym = 0;             // indice en la tabla de simbolos
+    uint32_t applies_sh = 0; // seccion a la que aplica (indice interno)
+    uint64_t off = 0;        // offset del campo dentro de esa seccion
+    uint32_t sym = 0;        // indice en la tabla de simbolos
     aot::RelocKind kind = aot::RelocKind::REL32; // normalizado por el parser
-    int64_t addend = 0;          // addend FINAL (ELF: del registro +4 si PC32;
-                                 //   COFF: leido del propio campo)
-    bool got = false;            // GOTPCREL: el sitio referencia la entrada GOT
-                                 //   del simbolo (su DIRECCION), no el simbolo
-    bool tls = false;            // TPOFF (local-exec): el sitio recibe el offset
-                                 //   TLS del simbolo desde el thread pointer
-    bool tls_ie = false;         // GOTTPOFF (initial-exec): entrada GOT con el
-                                 //   TPOFF; el sitio REL32 a esa entrada
-    bool tls_gd = false;         // TLSGD (general-dynamic): se relaja a
-                                 //   local-exec (secuencia de 16 bytes)
+    int64_t addend = 0;  // addend FINAL (ELF: del registro +4 si PC32;
+                         //   COFF: leido del propio campo)
+    bool got = false;    // GOTPCREL: el sitio referencia la entrada GOT
+                         //   del simbolo (su DIRECCION), no el simbolo
+    bool tls = false;    // TPOFF (local-exec): el sitio recibe el offset
+                         //   TLS del simbolo desde el thread pointer
+    bool tls_ie = false; // GOTTPOFF (initial-exec): entrada GOT con el
+                         //   TPOFF; el sitio REL32 a esa entrada
+    bool tls_gd = false; // TLSGD (general-dynamic): se relaja a
+                         //   local-exec (secuencia de 16 bytes)
 };
 struct ParsedObj {
     std::string path;
@@ -127,8 +127,7 @@ bool read_file(const std::string &path, std::vector<uint8_t> &out) {
     if (n < 0) return false;
     f.seekg(0);
     out.resize((size_t)n);
-    if (n > 0)
-        f.read(reinterpret_cast<char *>(out.data()), n);
+    if (n > 0) f.read(reinterpret_cast<char *>(out.data()), n);
     return (bool)f;
 }
 
@@ -136,17 +135,15 @@ bool read_file(const std::string &path, std::vector<uint8_t> &out) {
 // buffer; en un thin archive estan en un fichero externo (la ruta es el nombre,
 // relativa -> respecto al directorio del .a).
 bool load_ar_member_bytes(const std::string &archive_path,
-                          const std::vector<uint8_t> &abuf,
-                          const ArMember &m, std::vector<uint8_t> &out) {
+                          const std::vector<uint8_t> &abuf, const ArMember &m,
+                          std::vector<uint8_t> &out) {
     if (m.is_thin) {
         std::string p = m.name;
-        const bool absolute =
-            !p.empty() && (p[0] == '/' || p[0] == '\\' ||
-                           (p.size() > 1 && p[1] == ':'));
+        const bool absolute = !p.empty() && (p[0] == '/' || p[0] == '\\' ||
+                                             (p.size() > 1 && p[1] == ':'));
         if (!absolute) {
             const size_t sl = archive_path.find_last_of("\\/");
-            if (sl != std::string::npos)
-                p = archive_path.substr(0, sl + 1) + p;
+            if (sl != std::string::npos) p = archive_path.substr(0, sl + 1) + p;
         }
         return read_file(p, out);
     }
@@ -223,7 +220,10 @@ bool parse_elf_obj(const std::string &path, ParsedObj &po, std::string &err) {
     // Symtab + strtab.
     int symtab_idx = -1;
     for (uint16_t i = 0; i < e_shnum; ++i)
-        if (po.secs[i].sh_type == SHT_SYMTAB) { symtab_idx = i; break; }
+        if (po.secs[i].sh_type == SHT_SYMTAB) {
+            symtab_idx = i;
+            break;
+        }
     if (symtab_idx >= 0) {
         const uint8_t *shp = &b[e_shoff + (uint64_t)symtab_idx * e_shentsize];
         const uint32_t strtab_idx = rd32(shp + 40); // sh_link
@@ -301,10 +301,10 @@ bool parse_elf_obj(const std::string &path, ParsedObj &po, std::string &err) {
             case 20: /* TLSLD     */
             case 21: /* DTPOFF32  */
                 // TLS local-dynamic / dtpoff: requieren __tls_get_addr con un
-                // modulo y no aparecen en accesos a thread_local de un ejecutable
-                // (que usan LE/IE/GD).  Error claro.
-                err = path +
-                      ": modelo TLS no soportado (reloc " + std::to_string(rt) +
+                // modulo y no aparecen en accesos a thread_local de un
+                // ejecutable (que usan LE/IE/GD).  Error claro.
+                err = path + ": modelo TLS no soportado (reloc " +
+                      std::to_string(rt) +
                       "); compila con -ftls-model=local-exec/initial-exec o "
                       "enlazalo con gcc/ld";
                 return false;
@@ -391,7 +391,10 @@ bool parse_elf32_obj(const std::string &path, ParsedObj &po, std::string &err) {
     // Symtab (Elf32_Sym = 16 bytes) + strtab.
     int symtab_idx = -1;
     for (uint16_t i = 0; i < e_shnum; ++i)
-        if (po.secs[i].sh_type == SHT_SYMTAB) { symtab_idx = i; break; }
+        if (po.secs[i].sh_type == SHT_SYMTAB) {
+            symtab_idx = i;
+            break;
+        }
     if (symtab_idx >= 0) {
         const uint8_t *shp = &b[e_shoff + (uint64_t)symtab_idx * e_shentsize];
         const uint32_t strtab_idx = rd32(shp + 24); // sh_link
@@ -469,8 +472,7 @@ bool parse_elf32_obj(const std::string &path, ParsedObj &po, std::string &err) {
                 // y secuencias de relajacion distintas a x86-64.  Para un
                 // ejecutable, compila el thread_local en local-exec (sin -fPIC,
                 // que es el modelo por defecto) o enlazalo con gcc/ld.
-                err = path +
-                      ": modelo TLS i386 no soportado (reloc " +
+                err = path + ": modelo TLS i386 no soportado (reloc " +
                       std::to_string(rt) +
                       "); compila el thread_local en local-exec (sin -fPIC)";
                 return false;
@@ -563,8 +565,8 @@ bool parse_coff_obj(const std::string &path, ParsedObj &po, std::string &err) {
         const uint8_t *sh = &b[sh_base + (uint64_t)i * 40];
         ObjSec &s = po.secs[i + 1];
         s.name = fold_name(sec_name(sh));
-        s.sh_size = rd32(sh + 16);          // SizeOfRawData
-        s.sh_offset = rd32(sh + 20);        // PointerToRawData
+        s.sh_size = rd32(sh + 16);   // SizeOfRawData
+        s.sh_offset = rd32(sh + 20); // PointerToRawData
         const uint32_t chars = rd32(sh + 36);
         // Mapear Characteristics a flags ELF-like que el merge entiende.
         s.sh_flags = SHF_ALLOC;
@@ -612,15 +614,16 @@ bool parse_coff_obj(const std::string &path, ParsedObj &po, std::string &err) {
         os.bind = (sclass == IMAGE_SYM_CLASS_EXTERNAL) ? STB_GLOBAL : 0;
         // Simbolo de SECCION: STATIC con Value 0 cuyo nombre == nombre de
         // seccion (lo que el linker trata como STT_SECTION).
-        os.type = (sclass == IMAGE_SYM_CLASS_STATIC && secnum > 0 &&
-                   os.value == 0 && (uint16_t)secnum <= nsec &&
-                   po.secs[secnum].name == os.name)
-                      ? STT_SECTION
-                      : 0;
-        // Weak external (105) o simbolo en seccion COMDAT -> duplicado tolerado.
-        os.comdat = (sclass == 105 /*IMAGE_SYM_CLASS_WEAK_EXTERNAL*/) ||
-                    (secnum > 0 && (uint16_t)secnum <= nsec &&
-                     po.secs[secnum].comdat);
+        os.type =
+            (sclass == IMAGE_SYM_CLASS_STATIC && secnum > 0 && os.value == 0 &&
+             (uint16_t)secnum <= nsec && po.secs[secnum].name == os.name)
+                ? STT_SECTION
+                : 0;
+        // Weak external (105) o simbolo en seccion COMDAT -> duplicado
+        // tolerado.
+        os.comdat =
+            (sclass == 105 /*IMAGE_SYM_CLASS_WEAK_EXTERNAL*/) ||
+            (secnum > 0 && (uint16_t)secnum <= nsec && po.secs[secnum].comdat);
         po.syms[k] = os;
         k += 1 + naux; // los aux ocupan slots pero los dejamos vacios
         for (uint8_t a = 0; a < naux && k - 1 + a < nsyms; ++a) {
@@ -633,9 +636,9 @@ bool parse_coff_obj(const std::string &path, ParsedObj &po, std::string &err) {
     for (uint16_t i = 0; i < nsec; ++i) {
         if (!(po.secs[i + 1].sh_flags & SHF_ALLOC)) continue;
         const uint8_t *sh = &b[sh_base + (uint64_t)i * 40];
-        const uint32_t prel = rd32(sh + 24);     // PointerToRelocations
-        const uint16_t nrel = rd16(sh + 32);     // NumberOfRelocations
-        const uint32_t raw = rd32(sh + 20);      // PointerToRawData
+        const uint32_t prel = rd32(sh + 24); // PointerToRelocations
+        const uint16_t nrel = rd16(sh + 32); // NumberOfRelocations
+        const uint32_t raw = rd32(sh + 20);  // PointerToRawData
         if (prel == 0 || nrel == 0) continue;
         for (uint16_t k = 0; k < nrel; ++k) {
             const uint8_t *re = &b[prel + (uint64_t)k * 10];
@@ -649,26 +652,31 @@ bool parse_coff_obj(const std::string &path, ParsedObj &po, std::string &err) {
             switch (type) {
             case IMAGE_REL_AMD64_REL32:
                 r.kind = aot::RelocKind::REL32;
-                r.addend = (field + 4 <= b.size()) ? (int32_t)rd32(&b[field]) : 0;
+                r.addend =
+                    (field + 4 <= b.size()) ? (int32_t)rd32(&b[field]) : 0;
                 break;
             case IMAGE_REL_AMD64_ADDR64:
                 r.kind = aot::RelocKind::ABS64;
-                r.addend = (field + 8 <= b.size()) ? (int64_t)rd64(&b[field]) : 0;
+                r.addend =
+                    (field + 8 <= b.size()) ? (int64_t)rd64(&b[field]) : 0;
                 break;
             case IMAGE_REL_AMD64_ADDR32:
             case IMAGE_REL_I386_DIR32:
                 r.kind = aot::RelocKind::IMM32;
-                r.addend = (field + 4 <= b.size()) ? (int32_t)rd32(&b[field]) : 0;
+                r.addend =
+                    (field + 4 <= b.size()) ? (int32_t)rd32(&b[field]) : 0;
                 break;
             case IMAGE_REL_I386_REL32:
                 r.kind = aot::RelocKind::REL32;
-                r.addend = (field + 4 <= b.size()) ? (int32_t)rd32(&b[field]) : 0;
+                r.addend =
+                    (field + 4 <= b.size()) ? (int32_t)rd32(&b[field]) : 0;
                 break;
-            case 0x0B: // IMAGE_REL_AMD64_SECREL / I386_SECREL (TLS thread_local):
-                       // offset del simbolo dentro de su seccion (.tls).  El
-                       // addend (offset del var) vive en el campo.
+            case 0x0B: // IMAGE_REL_AMD64_SECREL / I386_SECREL (TLS
+                       // thread_local): offset del simbolo dentro de su seccion
+                       // (.tls).  El addend (offset del var) vive en el campo.
                 r.kind = aot::RelocKind::SECREL32;
-                r.addend = (field + 4 <= b.size()) ? (int32_t)rd32(&b[field]) : 0;
+                r.addend =
+                    (field + 4 <= b.size()) ? (int32_t)rd32(&b[field]) : 0;
                 break;
             default:
                 err = path + ": tipo de reloc COFF no soportado (" +
@@ -751,20 +759,18 @@ std::string system_dll_path(const char *dll) {
 // compile ELF desde otro SO) se buscan bajo esa raiz; si no, en rutas nativas
 // (Linux).  Si no se encuentra, el usuario pasa la .so explicitamente.
 std::string libc_so_path(const std::string &sysroot, bool is32) {
-    static const char *const cands64[] = {
-        "/usr/lib/x86_64-linux-gnu/libc.so.6",
-        "/lib/x86_64-linux-gnu/libc.so.6",
-        "/lib64/libc.so.6",
-        "/usr/lib64/libc.so.6",
-        "/usr/lib/libc.so.6",
-        "/lib/libc.so.6"};
-    static const char *const cands32[] = {
-        "/usr/lib/i386-linux-gnu/libc.so.6",
-        "/lib/i386-linux-gnu/libc.so.6",
-        "/lib32/libc.so.6",
-        "/usr/lib32/libc.so.6",
-        "/usr/lib/libc.so.6",
-        "/lib/libc.so.6"};
+    static const char *const cands64[] = {"/usr/lib/x86_64-linux-gnu/libc.so.6",
+                                          "/lib/x86_64-linux-gnu/libc.so.6",
+                                          "/lib64/libc.so.6",
+                                          "/usr/lib64/libc.so.6",
+                                          "/usr/lib/libc.so.6",
+                                          "/lib/libc.so.6"};
+    static const char *const cands32[] = {"/usr/lib/i386-linux-gnu/libc.so.6",
+                                          "/lib/i386-linux-gnu/libc.so.6",
+                                          "/lib32/libc.so.6",
+                                          "/usr/lib32/libc.so.6",
+                                          "/usr/lib/libc.so.6",
+                                          "/lib/libc.so.6"};
     const char *const *cands = is32 ? cands32 : cands64;
     const int ncand = 6;
     for (int ci = 0; ci < ncand; ++ci) {
@@ -935,8 +941,8 @@ bool aot_link(const std::vector<std::string> &inputs,
     const bool is32 = objs[0].is32;
     for (size_t i = 1; i < objs.size(); ++i)
         if (objs[i].is32 != is32) {
-            err = "linker: mezcla de objetos de 32 y 64 bits (" + inputs[i] +
-                  ")";
+            err =
+                "linker: mezcla de objetos de 32 y 64 bits (" + inputs[i] + ")";
             return false;
         }
 
@@ -996,8 +1002,7 @@ bool aot_link(const std::vector<std::string> &inputs,
             uint64_t base = align_up(cur, a);
             // Rellenar el hueco de alineamiento con ceros en data (si no hay
             // bss intermedio) -- mantiene data contigua antes del bss.
-            if (m.bss_size == 0 && base > m.data.size())
-                m.data.resize(base, 0);
+            if (m.bss_size == 0 && base > m.data.size()) m.data.resize(base, 0);
             secmap[oi][si].mindex = mi;
             secmap[oi][si].base = base;
             if (is_bss) {
@@ -1161,8 +1166,9 @@ bool aot_link(const std::vector<std::string> &inputs,
     // recolectan APARTE (no en globals: cada .o tiene su propio init con su
     // mismo nombre -> no es una definicion multiple) y el linker los ejecuta
     // TODOS antes de main (en orden cpu -> memcpy -> strdisp, porque memcpy/
-    // strdisp leen el global de features que cpu_init escribe).  Asi un .o Vesta
-    // SIN main (libreria que usa strings/memcpy) tambien inicializa sus slots.
+    // strdisp leen el global de features que cpu_init escribe).  Asi un .o
+    // Vesta SIN main (libreria que usa strings/memcpy) tambien inicializa sus
+    // slots.
     std::vector<std::pair<int, uint64_t>> init_cpu, init_memcpy, init_strdisp;
     for (size_t oi = 0; oi < objs.size(); ++oi) {
         ParsedObj &o = objs[oi];
@@ -1196,14 +1202,16 @@ bool aot_link(const std::vector<std::string> &inputs,
                 // COMDAT / weak: folding -- la primera definicion gana (inline
                 // y plantillas de C++ aparecen en multiples .obj del .a).
                 if (sy.comdat) continue;
-                err = "linker: definicion multiple del simbolo '" + sy.name + "'";
+                err =
+                    "linker: definicion multiple del simbolo '" + sy.name + "'";
                 return false;
             }
             globals[sy.name] = d;
         }
     }
 
-    // 5. Crear el ObjectWriter y anyadir las secciones (stub primero si hosted).
+    // 5. Crear el ObjectWriter y anyadir las secciones (stub primero si
+    // hosted).
     ObjectWriter w(opts.fmt);
     w.set_mode32(is32); // contenedor ELF32 / PE32 + emisores 32-bit
     LayoutConfig cfg = opts.layout;
@@ -1244,7 +1252,8 @@ bool aot_link(const std::vector<std::string> &inputs,
     if (has_tls) {
         WriterSection ts;
         ts.name = ".tdata";
-        ts.flags = SecFlag::READ | SecFlag::WRITE | SecFlag::DATA | SecFlag::TLS;
+        ts.flags =
+            SecFlag::READ | SecFlag::WRITE | SecFlag::DATA | SecFlag::TLS;
         ts.data = std::move(tls_tdata);
         ts.bss_size = (uint32_t)tls_bss;
         ts.align = tls_align;
@@ -1288,7 +1297,8 @@ bool aot_link(const std::vector<std::string> &inputs,
             const std::string libc = libc_so_path(opts.sysroot, is32);
             if (!libc.empty()) cand.push_back(libc);
         }
-        for (const std::string &dp : dll_inputs) // .dll/.so pasados como entrada
+        for (const std::string &dp :
+             dll_inputs) // .dll/.so pasados como entrada
             cand.push_back(dp);
         for (const std::string &dp : cand) {
             std::vector<std::string> exps;
@@ -1297,14 +1307,14 @@ bool aot_link(const std::vector<std::string> &inputs,
             const size_t sl = base.find_last_of("\\/");
             if (sl != std::string::npos) base = base.substr(sl + 1);
             for (std::string &e : exps)
-                sym2dll.emplace(std::move(e), base); // 1a DLL que lo exporta gana
+                sym2dll.emplace(std::move(e),
+                                base); // 1a DLL que lo exporta gana
         }
     }
     // Resuelve el nombre real de un simbolo a su DLL (strip __imp_ de los
     // dllimport de MinGW).  Devuelve "" si ninguna DLL candidata lo exporta.
     auto dll_of = [&sym2dll](const std::string &n) -> std::string {
-        const std::string real =
-            (n.rfind("__imp_", 0) == 0) ? n.substr(6) : n;
+        const std::string real = (n.rfind("__imp_", 0) == 0) ? n.substr(6) : n;
         auto it = sym2dll.find(real);
         return it != sym2dll.end() ? it->second : std::string();
     };
@@ -1332,13 +1342,14 @@ bool aot_link(const std::vector<std::string> &inputs,
         int64_t tls_const = 0;
     };
     std::unordered_map<std::string, GotEntry> got_entries;
-    std::unordered_set<std::string> got_ext_syms; // externals que necesitan thunk
+    std::unordered_set<std::string>
+        got_ext_syms; // externals que necesitan thunk
 
     for (size_t oi = 0; oi < objs.size(); ++oi) {
         ParsedObj &o = objs[oi];
         for (ObjRel &r : o.rels) {
-            // TLS local-exec (r.tls) y general-dynamic relajado (r.tls_gd) ya se
-            // parchearon en el pre-pase 2.c (valor TP-relativo constante).
+            // TLS local-exec (r.tls) y general-dynamic relajado (r.tls_gd) ya
+            // se parchearon en el pre-pase 2.c (valor TP-relativo constante).
             if (r.tls || r.tls_gd) continue;
             if (r.applies_sh >= secmap[oi].size()) continue;
             const SecMap &site = secmap[oi][r.applies_sh];
@@ -1354,7 +1365,8 @@ bool aot_link(const std::vector<std::string> &inputs,
             if (r.tls_ie) {
                 // GOTTPOFF (initial-exec): el sitio carga el TPOFF desde una
                 // entrada GOT que contiene el offset TP-relativo CONSTANTE.
-                if (sy.shndx >= tls_off[oi].size() || tls_off[oi][sy.shndx] < 0) {
+                if (sy.shndx >= tls_off[oi].size() ||
+                    tls_off[oi][sy.shndx] < 0) {
                     err = o.path + ": GOTTPOFF sobre un simbolo no-TLS";
                     return false;
                 }
@@ -1380,9 +1392,9 @@ bool aot_link(const std::vector<std::string> &inputs,
                         secmap[oi][sy.shndx].mindex >= 0) {
                         const SecMap &tm = secmap[oi][sy.shndx];
                         ge.def_wsec = sec_base + tm.mindex;
-                        ge.def_off = tm.base + (sy.type == STT_SECTION
-                                                    ? 0
-                                                    : (uint64_t)sy.value);
+                        ge.def_off =
+                            tm.base +
+                            (sy.type == STT_SECTION ? 0 : (uint64_t)sy.value);
                         key = "D" + std::to_string(ge.def_wsec) + ":" +
                               std::to_string(ge.def_off);
                         gok = true;
@@ -1459,10 +1471,10 @@ bool aot_link(const std::vector<std::string> &inputs,
     //     (jmp [rip+IAT]) intra-imagen; el thunk se parchea por el mecanismo de
     //     import (add_import_call) al slot real de la IAT.
     //   - Simbolo `__imp_X` (dllimport de MinGW): el codigo ya hizo
-    //     `call [rip+__imp_X]` (FF 15) o `mov reg,[rip+__imp_X]`; el sitio de la
-    //     reloc ES el disp32, que debe apuntar al slot de la IAT.  Se registra
-    //     como un import directo (call_off = inicio del FF 15 = site_off-2) sin
-    //     anyadir reloc.
+    //     `call [rip+__imp_X]` (FF 15) o `mov reg,[rip+__imp_X]`; el sitio de
+    //     la reloc ES el disp32, que debe apuntar al slot de la IAT.  Se
+    //     registra como un import directo (call_off = inicio del FF 15 =
+    //     site_off-2) sin anyadir reloc.
     if (!imp_sites.empty() || !got_sites.empty()) {
         // El DLL de cada simbolo se LEE de los exports reales (sym2dll), no se
         // adivina con una tabla embebida: dll_of(sym) -> la DLL que lo exporta.
@@ -1570,8 +1582,8 @@ bool aot_link(const std::vector<std::string> &inputs,
             return false;
         }
         const GDef mn = it->second;
-        const bool any_init = !init_cpu.empty() || !init_memcpy.empty() ||
-                              !init_strdisp.empty();
+        const bool any_init =
+            !init_cpu.empty() || !init_memcpy.empty() || !init_strdisp.empty();
         if (any_init) {
             // Sintetizar __vx_premain: llama a CADA init de programa (en orden
             // cpu -> memcpy -> strdisp) y salta a main.  Asi los slots fp de
@@ -1651,11 +1663,10 @@ void ar_put_header(std::vector<uint8_t> &out, const std::string &name16,
     std::memset(hdr, ' ', sizeof(hdr));
     // name (16), mtime (12)@16, uid (6)@28, gid (6)@34, mode (8)@40,
     // size (10)@48, fin "`\n"@58.
-    std::memcpy(hdr, name16.data(),
-                name16.size() < 16 ? name16.size() : 16);
-    hdr[16] = '0'; // mtime = 0
-    hdr[28] = '0'; // uid = 0
-    hdr[34] = '0'; // gid = 0
+    std::memcpy(hdr, name16.data(), name16.size() < 16 ? name16.size() : 16);
+    hdr[16] = '0';                   // mtime = 0
+    hdr[28] = '0';                   // uid = 0
+    hdr[34] = '0';                   // gid = 0
     std::memcpy(hdr + 40, "644", 3); // mode 0644
     char sz[16];
     int n = std::snprintf(sz, sizeof(sz), "%zu", data_size);
@@ -1673,7 +1684,9 @@ void ar_put_u32be(std::vector<uint8_t> &out, uint32_t v) {
     out.push_back((uint8_t)v);
 }
 
-inline size_t ar_even(size_t n) { return n + (n & 1); }
+inline size_t ar_even(size_t n) {
+    return n + (n & 1);
+}
 
 } // namespace
 
@@ -1689,8 +1702,8 @@ bool aot_ar_create(const std::string &out_path,
         std::string name; // basename (p.ej. "gc_heap.cpp.obj")
         std::vector<uint8_t> bytes;
         std::vector<std::string> syms; // globals definidos
-        std::string name_field;        // campo nombre del header ("name/" o "/N")
-        uint64_t header_off = 0;       // posicion de la cabecera en el .a
+        std::string name_field;  // campo nombre del header ("name/" o "/N")
+        uint64_t header_off = 0; // posicion de la cabecera en el .a
     };
     // Extrae los globals definidos de un objeto ya parseado.
     auto collect_globals = [](const ParsedObj &po, Member &m) {
@@ -1701,8 +1714,8 @@ bool aot_ar_create(const std::string &out_path,
     };
 
     std::vector<Member> mem;
-    // Nombres (basename) de los objetos nuevos -> reemplazan al miembro homonimo
-    // si el .a ya existia (semantica de `ar r`).
+    // Nombres (basename) de los objetos nuevos -> reemplazan al miembro
+    // homonimo si el .a ya existia (semantica de `ar r`).
     std::unordered_set<std::string> new_names;
     for (const std::string &p : objs) {
         const size_t sl = p.find_last_of("\\/");
@@ -1719,12 +1732,13 @@ bool aot_ar_create(const std::string &out_path,
             std::string e2;
             if (ar_parse(existing, ems, esyms, e2)) {
                 for (const ArMember &am : ems) {
-                    // En un thin archive el nombre es una ruta -> el basename es
-                    // el nombre de miembro.
+                    // En un thin archive el nombre es una ruta -> el basename
+                    // es el nombre de miembro.
                     std::string mname = am.name;
                     if (am.is_thin) {
                         const size_t sl = mname.find_last_of("\\/");
-                        if (sl != std::string::npos) mname = mname.substr(sl + 1);
+                        if (sl != std::string::npos)
+                            mname = mname.substr(sl + 1);
                     }
                     if (new_names.count(mname)) continue; // reemplazado
                     Member m;
@@ -1772,7 +1786,8 @@ bool aot_ar_create(const std::string &out_path,
 
     // 3. Indice de simbolos: contar + tamano.  offsets[i] apunta a la cabecera
     //    del miembro que define el simbolo i.
-    std::vector<std::pair<std::string, size_t>> sym_list; // (nombre, idx miembro)
+    std::vector<std::pair<std::string, size_t>>
+        sym_list; // (nombre, idx miembro)
     for (size_t i = 0; i < mem.size(); ++i)
         for (const std::string &s : mem[i].syms)
             sym_list.emplace_back(s, i);
@@ -1781,7 +1796,7 @@ bool aot_ar_create(const std::string &out_path,
         symtab_data += s.first.size() + 1;
 
     // 4. Calcular las posiciones de cabecera de cada miembro.
-    uint64_t pos = 8; // tras el magic "!<arch>\n"
+    uint64_t pos = 8;                 // tras el magic "!<arch>\n"
     pos += 60 + ar_even(symtab_data); // miembro symtab "/"
     if (!longnames.empty()) pos += 60 + ar_even(longnames.size()); // "//"
     for (Member &m : mem) {
@@ -1825,7 +1840,8 @@ bool aot_ar_create(const std::string &out_path,
         err = "ar: no se puede crear " + out_path;
         return false;
     }
-    f.write(reinterpret_cast<const char *>(out.data()), (std::streamsize)out.size());
+    f.write(reinterpret_cast<const char *>(out.data()),
+            (std::streamsize)out.size());
     if (!f) {
         err = "ar: error al escribir " + out_path;
         return false;

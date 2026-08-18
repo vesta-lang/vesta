@@ -24,14 +24,15 @@
  *
  * ALGORITMO (el mismo canonico que ya usaban SROA/LICM, ahora en un sitio): CFG
  * desde los terminadores -> dominadores (Cooper-Harvey-Kennedy) -> back-edges
- * (arista b->h con h dominando b) -> cuerpo del bucle (BFS inverso por preds) ->
- * profundidad = numero de bucles que contienen el bloque.
+ * (arista b->h con h dominando b) -> cuerpo del bucle (BFS inverso por preds)
+ * -> profundidad = numero de bucles que contienen el bloque.
  *
- * NOTA (dispersion aun mas profunda, documentada): los dominadores tambien viven
- * como @c DomInfo LOCAL en @c ir_optimizer.cpp.  @c LoopFacts los computa
- * INTERNAMENTE por ahora (autocontenido); un futuro @c DomFacts los centralizara
- * y entonces @c LoopFacts, SROA e LICM los compartiran (patron strangler-fig:
- * primero el productor unificado, luego migran los consumidores).
+ * NOTA (dispersion aun mas profunda, documentada): los dominadores tambien
+ * viven como @c DomInfo LOCAL en @c ir_optimizer.cpp.  @c LoopFacts los computa
+ * INTERNAMENTE por ahora (autocontenido); un futuro @c DomFacts los
+ * centralizara y entonces @c LoopFacts, SROA e LICM los compartiran (patron
+ * strangler-fig: primero el productor unificado, luego migran los
+ * consumidores).
  */
 
 #ifndef VESTA_ANALYSIS_FACTS_LOOP_FACTS_H
@@ -54,17 +55,22 @@ struct LoopFacts {
     static constexpr uint32_t NO_LOOP = 0xFFFFFFFFu;
 
     // --- Hechos POR BLOQUE (indexados por IrBlockId) ---
-    std::vector<uint32_t> loop_depth;     ///< profundidad de anidamiento (0 = fuera).
-    std::vector<uint8_t>  is_loop_header; ///< 1 si el bloque es cabecera de un bucle.
-    std::vector<uint8_t>  in_loop;        ///< 1 si el bloque esta dentro de algun bucle.
-    std::vector<uint32_t> loop_id;        ///< id del bucle MAS INTERNO que lo contiene (o NO_LOOP).
+    std::vector<uint32_t>
+        loop_depth; ///< profundidad de anidamiento (0 = fuera).
+    std::vector<uint8_t>
+        is_loop_header; ///< 1 si el bloque es cabecera de un bucle.
+    std::vector<uint8_t>
+        in_loop; ///< 1 si el bloque esta dentro de algun bucle.
+    std::vector<uint32_t>
+        loop_id; ///< id del bucle MAS INTERNO que lo contiene (o NO_LOOP).
 
     // --- Hechos POR BUCLE (indexados por id de bucle 0..loop_count-1) ---
-    std::vector<uint32_t> loop_header;    ///< bloque cabecera de cada bucle.
-    std::vector<uint32_t> parent_loop;    ///< bucle que CONTIENE a cada bucle (o NO_LOOP).
-                                          ///< Para unroller/vectorizer/scheduler:
-                                          ///< "¿quien contiene este bucle?".
-    uint32_t              loop_count = 0; ///< numero de bucles naturales detectados.
+    std::vector<uint32_t> loop_header; ///< bloque cabecera de cada bucle.
+    std::vector<uint32_t>
+        parent_loop;         ///< bucle que CONTIENE a cada bucle (o NO_LOOP).
+                             ///< Para unroller/vectorizer/scheduler:
+                             ///< "¿quien contiene este bucle?".
+    uint32_t loop_count = 0; ///< numero de bucles naturales detectados.
 
     // --- Consultas seguras por bloque (fuera de rango -> valor neutro) ---
     uint32_t depth_of(ir::IrBlockId b) const noexcept {
@@ -85,8 +91,9 @@ struct LoopFacts {
         return loop < parent_loop.size() ? parent_loop[loop] : NO_LOOP;
     }
     uint32_t header_block_of(uint32_t loop) const noexcept {
-        return loop < loop_header.size() ? loop_header[loop]
-                                         : static_cast<uint32_t>(ir::IR_NO_BLOCK);
+        return loop < loop_header.size()
+                   ? loop_header[loop]
+                   : static_cast<uint32_t>(ir::IR_NO_BLOCK);
     }
 };
 

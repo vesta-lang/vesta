@@ -53,11 +53,11 @@ namespace ir {
  * recupera lo que necesite de la funcion.
  */
 struct PatternMatch {
-    IrBlockId block = 0;   ///< Bloque donde empieza.
-    size_t index = 0;      ///< Instruccion dentro del bloque.
-    size_t aux_block = 0;  ///< Segunda ubicacion, si el patron abarca dos.
-    size_t aux_index = 0;  ///< Idem.
-    bool valid = false;    ///< false = no hay patron aqui.
+    IrBlockId block = 0;  ///< Bloque donde empieza.
+    size_t index = 0;     ///< Instruccion dentro del bloque.
+    size_t aux_block = 0; ///< Segunda ubicacion, si el patron abarca dos.
+    size_t aux_index = 0; ///< Idem.
+    bool valid = false;   ///< false = no hay patron aqui.
 };
 
 /**

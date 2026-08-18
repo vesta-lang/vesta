@@ -32,8 +32,7 @@ int g_current = 0;
 std::string lang_prefix(const std::string &s) {
     std::string out;
     for (char c : s) {
-        if (c == '_' || c == '.' || c == '-' || c == '@' || c == ' ')
-            break;
+        if (c == '_' || c == '.' || c == '-' || c == '@' || c == ' ') break;
         out += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     }
     return out;
@@ -49,20 +48,17 @@ int language_count() {
 const char *language_code(int idx) {
     int n = 0;
     const char *const *langs = catalog_languages(&n);
-    if (idx < 0 || idx >= n)
-        return "";
+    if (idx < 0 || idx >= n) return "";
     return langs[idx];
 }
 
 int language_index(const std::string &code) {
     const std::string want = lang_prefix(code);
-    if (want.empty())
-        return -1;
+    if (want.empty()) return -1;
     int n = 0;
     const char *const *langs = catalog_languages(&n);
     for (int i = 0; i < n; ++i)
-        if (want == langs[i])
-            return i;
+        if (want == langs[i]) return i;
     return -1;
 }
 
@@ -73,28 +69,26 @@ int language_from_env() {
         const char *val = std::getenv(v);
         if (val && *val) {
             int idx = language_index(val);
-            if (idx >= 0)
-                return idx;
+            if (idx >= 0) return idx;
         }
     }
     return 0; // fallback: primer idioma del catalogo.
 }
 
 void set_language(int idx) {
-    if (idx >= 0 && idx < language_count())
-        g_current = idx;
+    if (idx >= 0 && idx < language_count()) g_current = idx;
 }
 
-int current_language() { return g_current; }
+int current_language() {
+    return g_current;
+}
 
 bool has_code(const std::string &code) {
     // Existe si tiene plantilla en ALGUN idioma (probamos el 0, que es el
     // completo por convencion; si faltara, probamos los demas).
-    if (catalog_template(code.c_str(), 0))
-        return true;
+    if (catalog_template(code.c_str(), 0)) return true;
     for (int i = 1; i < language_count(); ++i)
-        if (catalog_template(code.c_str(), i))
-            return true;
+        if (catalog_template(code.c_str(), i)) return true;
     return false;
 }
 
@@ -103,8 +97,7 @@ std::string format(const std::string &code, int lang,
     const char *tmpl = catalog_template(code.c_str(), lang);
     if (!tmpl || !*tmpl)
         tmpl = catalog_template(code.c_str(), 0); // fallback al idioma 0.
-    if (!tmpl)
-        return code; // codigo desconocido -> el propio codigo.
+    if (!tmpl) return code; // codigo desconocido -> el propio codigo.
 
     // Sustituir los placeholders posicionales {N} por args[N].  Un '{' que no
     // abre un indice valido se copia literal (no rompe con texto con llaves).

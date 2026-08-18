@@ -16,8 +16,8 @@
  * Parte del desacople multi-arch (aot/common + aot/x86_64 + aot/x86_32 +
  * aot/x86_16 + aot/arm64).  Aqui viven SOLO los emisores de 32 bits (EM_386,
  * structs Elf32 / PE32); los de 64 bits estan en aot/x86_64 y los helpers
- * arch-neutrales + la frontera con LibPEparse en aot/common.  Se compila como C.
- * El wrapper COFF de 32 bits (aot_emit_coff32_obj) vive en aot/common porque
+ * arch-neutrales + la frontera con LibPEparse en aot/common.  Se compila como
+ * C. El wrapper COFF de 32 bits (aot_emit_coff32_obj) vive en aot/common porque
  * comparte coff_obj_impl con la variante de 64 bits (solo cambia is32).
  */
 
@@ -606,16 +606,20 @@ int aot_emit_elf32_dynexec(const char *path, const AotLayoutCfg *cfg,
         return 0;
     }
     if (num_imps < 0) num_imps = 0;
-    /* num_imps == 0 es valido: un EXEC dinamico sin imports de libc pero con TLS
-     * (necesita el cargador para montar el bloque thread-local).  GOT vacia +
-     * dynsym de 1 entrada (null) + DT_NEEDED libc.so.6 (monta el TLS estatico). */
+    /* num_imps == 0 es valido: un EXEC dinamico sin imports de libc pero con
+     * TLS (necesita el cargador para montar el bloque thread-local).  GOT vacia
+     * + dynsym de 1 entrada (null) + DT_NEEDED libc.so.6 (monta el TLS
+     * estatico). */
 
     const uint32_t PAGE = (uint32_t)AOT_ELF_PAGE;
     /* Seccion TLS (plantilla thread_local local-exec): si existe, anyade un
      * PT_TLS para que el cargador monte el bloque TLS por-hilo. */
     int tls_sec = -1;
     for (int i = 0; i < num_secs; ++i)
-        if (secs[i].flags & AOT_SEC_TLS) { tls_sec = i; break; }
+        if (secs[i].flags & AOT_SEC_TLS) {
+            tls_sec = i;
+            break;
+        }
     const int NPH = 6 + (tls_sec >= 0 ? 1 : 0);
     const int nsym = 1 + num_imps;
     const char interp[] = "/lib/ld-linux.so.2";
@@ -824,8 +828,8 @@ int aot_emit_elf32_dynexec(const char *path, const AotLayoutCfg *cfg,
             wr32(ph + 20,
                  (uint32_t)(secs[tls_sec].size + secs[tls_sec].bss_size));
             wr32(ph + 24, PF_R);
-            wr32(ph + 28, secs[tls_sec].align ? (uint32_t)secs[tls_sec].align
-                                              : 4u);
+            wr32(ph + 28,
+                 secs[tls_sec].align ? (uint32_t)secs[tls_sec].align : 4u);
         }
     }
 
@@ -1025,7 +1029,8 @@ int aot_emit_elf32_obj(const char *path, const AotSection *secs, int num_secs,
             return 0;
         }
     }
-    /* Indices de section headers: 0=NULL, 1..N=user, sym, str, rel[i], shstr. */
+    /* Indices de section headers: 0=NULL, 1..N=user, sym, str, rel[i], shstr.
+     */
     int *sec_nrel = (int *)calloc((size_t)num_secs, sizeof(int));
     for (int r = 0; r < num_relocs; ++r)
         sec_nrel[relocs[r].site_section]++;
@@ -1067,13 +1072,13 @@ int aot_emit_elf32_obj(const char *path, const AotSection *secs, int num_secs,
     memset(&symtab, 0, sizeof(symtab));
     ob_put(&symtab, NULL, 16); /* sym[0] = null */
     for (int i = 0; i < num_secs; ++i) {
-        e32_push32(&symtab, 0);                /* st_name */
-        e32_push32(&symtab, 0);                /* st_value */
-        e32_push32(&symtab, 0);                /* st_size */
+        e32_push32(&symtab, 0); /* st_name */
+        e32_push32(&symtab, 0); /* st_value */
+        e32_push32(&symtab, 0); /* st_size */
         uint8_t info = (uint8_t)((STB_LOCAL << 4) | STT_SECTION);
-        ob_put(&symtab, &info, 1);             /* st_info */
+        ob_put(&symtab, &info, 1); /* st_info */
         uint8_t other = 0;
-        ob_put(&symtab, &other, 1);            /* st_other */
+        ob_put(&symtab, &other, 1);             /* st_other */
         e32_push16(&symtab, (uint16_t)(1 + i)); /* st_shndx */
     }
     for (int g = 0; g < num_syms; ++g) {
@@ -1142,7 +1147,7 @@ int aot_emit_elf32_obj(const char *path, const AotSection *secs, int num_secs,
     eh[6] = 1; /* version */
     wr16le(eh + 16, ET_REL);
     wr16le(eh + 18, 3 /* EM_386 */);
-    wr32(eh + 20, 1); /* e_version */
+    wr32(eh + 20, 1);    /* e_version */
     wr16le(eh + 40, 52); /* e_ehsize */
     wr16le(eh + 46, 40); /* e_shentsize */
     wr16le(eh + 48, (uint16_t)shnum);
@@ -1198,7 +1203,7 @@ int aot_emit_elf32_obj(const char *path, const AotSection *secs, int num_secs,
                 sym_idx = (uint32_t)(1 + rl->target_section); /* section sym */
                 type = (rl->kind == AOT_RELOC_REL32) ? R_386_PC32 : R_386_32;
             }
-            e32_push32(&out, (uint32_t)rl->site_off); /* r_offset */
+            e32_push32(&out, (uint32_t)rl->site_off);         /* r_offset */
             e32_push32(&out, (sym_idx << 8) | (type & 0xff)); /* r_info */
             rel_cnt[i]++;
         }
@@ -1210,18 +1215,18 @@ int aot_emit_elf32_obj(const char *path, const AotSection *secs, int num_secs,
 
     /* Section headers (40 bytes c/u). */
     /* helper para empujar un Elf32_Shdr. */
-#define E32_SHDR(name, type, flags, off, size, link, info, align, entsz)        \
-    do {                                                                        \
-        e32_push32(&out, (name));                                               \
-        e32_push32(&out, (type));                                               \
-        e32_push32(&out, (flags));                                              \
-        e32_push32(&out, 0); /* sh_addr */                                      \
-        e32_push32(&out, (off));                                                \
-        e32_push32(&out, (size));                                               \
-        e32_push32(&out, (link));                                               \
-        e32_push32(&out, (info));                                               \
-        e32_push32(&out, (align));                                              \
-        e32_push32(&out, (entsz));                                              \
+#define E32_SHDR(name, type, flags, off, size, link, info, align, entsz)       \
+    do {                                                                       \
+        e32_push32(&out, (name));                                              \
+        e32_push32(&out, (type));                                              \
+        e32_push32(&out, (flags));                                             \
+        e32_push32(&out, 0); /* sh_addr */                                     \
+        e32_push32(&out, (off));                                               \
+        e32_push32(&out, (size));                                              \
+        e32_push32(&out, (link));                                              \
+        e32_push32(&out, (info));                                              \
+        e32_push32(&out, (align));                                             \
+        e32_push32(&out, (entsz));                                             \
     } while (0)
     /* indice 0: NULL */
     E32_SHDR(0, 0, 0, 0, 0, 0, 0, 0, 0);
@@ -1235,15 +1240,16 @@ int aot_emit_elf32_obj(const char *path, const AotSection *secs, int num_secs,
     }
     E32_SHDR(no_symtab, SHT_SYMTAB, 0, symtab_off, (uint32_t)symtab.len,
              (uint32_t)str_sh, (uint32_t)first_global, 4, 16);
-    E32_SHDR(no_strtab, SHT_STRTAB, 0, strtab_off, (uint32_t)strtab.len, 0, 0, 1,
-             0);
+    E32_SHDR(no_strtab, SHT_STRTAB, 0, strtab_off, (uint32_t)strtab.len, 0, 0,
+             1, 0);
     for (int i = 0; i < num_secs; ++i) {
         if (!rel_sh[i]) continue;
         E32_SHDR(rel_nameoff[i], 9 /* SHT_REL */, 0, rel_off[i],
-                 (uint32_t)(rel_cnt[i] * 8), (uint32_t)sym_sh, (uint32_t)(1 + i),
-                 4, 8);
+                 (uint32_t)(rel_cnt[i] * 8), (uint32_t)sym_sh,
+                 (uint32_t)(1 + i), 4, 8);
     }
-    E32_SHDR(no_shstr, SHT_STRTAB, 0, shstr_off, (uint32_t)shstr.len, 0, 0, 1, 0);
+    E32_SHDR(no_shstr, SHT_STRTAB, 0, shstr_off, (uint32_t)shstr.len, 0, 0, 1,
+             0);
 #undef E32_SHDR
 
     wr32(out.p + 32, shoff); /* e_shoff */

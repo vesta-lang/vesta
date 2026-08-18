@@ -16,14 +16,14 @@
 
 #include "jit/code_cache.h"
 #include "jit/vreg_pipeline.h"
-#include "jit/auto_jit.h"          // FN.3: lookup/compile/get_or_init_code_cache
+#include "jit/auto_jit.h" // FN.3: lookup/compile/get_or_init_code_cache
 #include "jit/interp_jit_bridge.h" // FN.3: enter_jit (VM_ABI dispatch)
 #include "ffi/virtual_lib_registry.h"
 #include "ffi/native_ffi.h"
 #include "runtime/proceso_runtime.h"
 #include "runtime/runtime.h"
 #include "runtime/scheduler.h"
-#include "runtime/native_invoke.h"     // invoke_native_unchecked (CALLIND naked)
+#include "runtime/native_invoke.h" // invoke_native_unchecked (CALLIND naked)
 #include "runtime/exception_runtime.h" // throw_fatal (CALLIND null)
 #include "vesta_rt/public.h"           // vrt_call_bc_function (CALLIND VA)
 #include "vesta_rt/abi.h"              // VESTA_FATAL_* codes
@@ -90,7 +90,8 @@ loader::Executable *find_exe_with_fn(runtime::ProcessVM *vm,
     for (auto &exe : loader.executables) {
         if (!exe) continue;
         auto it = exe->ir_lookup.find(name);
-        if (it != exe->ir_lookup.end() && it->second < exe->ir_functions.size()) {
+        if (it != exe->ir_lookup.end() &&
+            it->second < exe->ir_functions.size()) {
             out_idx = it->second;
             return exe.get();
         }
@@ -140,8 +141,7 @@ uint64_t resolve_naked_symbol(runtime::ProcessVM *vm, const std::string &sym,
                 if (debug)
                     std::fprintf(stderr,
                                  "[naked] global %s -> va=0x%llx host=0x%llx\n",
-                                 sym.c_str(),
-                                 (unsigned long long)it->second,
+                                 sym.c_str(), (unsigned long long)it->second,
                                  (unsigned long long)host);
                 return host;
             }
@@ -173,8 +173,8 @@ uint64_t resolve_naked_symbol(runtime::ProcessVM *vm, const std::string &sym,
 }
 
 /**
- * @brief Compila (o recupera de cache) la funcion Vesta @p name como una entrada
- *        NATIVA (ABI HOST_LEAF, respetando @c is_naked) con TODOS sus relocs
+ * @brief Compila (o recupera de cache) la funcion Vesta @p name como una
+ * entrada NATIVA (ABI HOST_LEAF, respetando @c is_naked) con TODOS sus relocs
  *        resueltos a direcciones vivas.  Devuelve la direccion, o 0 si falla.
  */
 uint64_t compile_native_fn(runtime::ProcessVM *vm, const std::string &name,
@@ -282,9 +282,7 @@ uint64_t compile_native_fn(runtime::ProcessVM *vm, const std::string &name,
             std::memcpy(site, &rel32, 4);
             break;
         }
-        case NativeReloc::Kind::ABS64:
-            std::memcpy(site, &target, 8);
-            break;
+        case NativeReloc::Kind::ABS64: std::memcpy(site, &target, 8); break;
         default:
             if (debug)
                 std::fprintf(stderr, "[naked] reloc kind %d no soportado\n",
@@ -393,8 +391,7 @@ extern "C" uint64_t vrt_naked_dispatch(uint64_t proc, uint64_t name_hash,
         entry = compile_native_fn(vm, target_name, debug);
     }
     if (entry == 0) {
-        std::fprintf(stderr,
-                     "[naked] no se pudo compilar nativa '%s'\n",
+        std::fprintf(stderr, "[naked] no se pudo compilar nativa '%s'\n",
                      target_name.c_str());
         return 0;
     }
@@ -556,11 +553,11 @@ extern "C" uint64_t vrt_fiber_jit_ctx(uint64_t entry) {
     /* Cima de la pila host, 16-alineada (la pila crece hacia abajo). */
     const uint64_t top =
         (reinterpret_cast<uint64_t>(stk) + kFiberJitStackBytes) & ~15ULL;
-    ctx[0] = tramp;                             // PC   (arranque = trampolin)
-    ctx[1] = top;                               // SP
-    ctx[2] = top;                               // BP
-    ctx[3] = reinterpret_cast<uint64_t>(vm);    // rbx = proc (VM_ABI del entry)
-    ctx[4] = entry;                             // r12 = entry (trampolin: jmp r12)
+    ctx[0] = tramp;                          // PC   (arranque = trampolin)
+    ctx[1] = top;                            // SP
+    ctx[2] = top;                            // BP
+    ctx[3] = reinterpret_cast<uint64_t>(vm); // rbx = proc (VM_ABI del entry)
+    ctx[4] = entry;                          // r12 = entry (trampolin: jmp r12)
     /* ctx[5..] (r13,r14,r15,rdi,rsi,...) ya a 0 por calloc. */
     return reinterpret_cast<uint64_t>(ctx);
 }

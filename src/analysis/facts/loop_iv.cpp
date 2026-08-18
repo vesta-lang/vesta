@@ -7,26 +7,27 @@
 
 /**
  * @file loop_iv.cpp
- * @brief Implementacion del descubridor de la variable de induccion (loop_iv.h).
+ * @brief Implementacion del descubridor de la variable de induccion
+ * (loop_iv.h).
  */
 
 #include "analysis/facts/loop_iv.h"
 
 namespace analysis {
 
+using ir::IR_NO_BLOCK;
+using ir::IR_NO_VALUE;
 using ir::IrBlockId;
 using ir::IrInstr;
 using ir::IrOp;
 using ir::IrValueId;
-using ir::IR_NO_BLOCK;
-using ir::IR_NO_VALUE;
 
 namespace {
 
 // Guarda creciente reconocida: `iv < N` / `iv <= N` (signed y unsigned).
 bool is_lt_cmp(IrOp op) {
-    return op == IrOp::CMP_LT || op == IrOp::CMP_LE ||
-           op == IrOp::CMP_ULT || op == IrOp::CMP_ULE;
+    return op == IrOp::CMP_LT || op == IrOp::CMP_LE || op == IrOp::CMP_ULT ||
+           op == IrOp::CMP_ULE;
 }
 
 // Resuelve el valor CONSTANTE de @p v (la CONST que lo define en su bloque).
@@ -69,9 +70,9 @@ bool add_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
 
 } // namespace
 
-bool detect_loop_iv(const ir::IrFunction &fn,
-                    const std::vector<int> &def_block, IrBlockId header,
-                    IrBlockId preheader, IrBlockId latch, LoopIV &out) {
+bool detect_loop_iv(const ir::IrFunction &fn, const std::vector<int> &def_block,
+                    IrBlockId header, IrBlockId preheader, IrBlockId latch,
+                    LoopIV &out) {
     out.phi_index = -1;
     if (header == (IrBlockId)IR_NO_BLOCK || header >= fn.blocks.size())
         return false;
@@ -102,8 +103,10 @@ bool detect_loop_iv(const ir::IrFunction &fn,
         ++phi_index; // indice entre las PHIs, en orden de aparicion.
         IrValueId init = IR_NO_VALUE, back = IR_NO_VALUE;
         for (const auto &pa : in.phi_args) {
-            if (pa.block == preheader) init = pa.value;
-            else if (pa.block == latch) back = pa.value;
+            if (pa.block == preheader)
+                init = pa.value;
+            else if (pa.block == latch)
+                back = pa.value;
         }
         if (init == IR_NO_VALUE || back == IR_NO_VALUE) continue;
         IrValueId base;

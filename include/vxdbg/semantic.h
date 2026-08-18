@@ -14,14 +14,15 @@
  * nombra a las demas por su CLAVE en lugar de por su identificador -- la misma
  * descripcion, la misma definicion, cambiando solo como se refiere a los otros.
  *
- * No se llama simbolo porque no lo es: un simbolo es algo aislado con un nombre,
- * y esto es un NODO de un grafo, donde las aristas importan tanto como el nodo.
- * El conjunto que produce una fase es el grafo semantico de lo que esa fase
- * sabe.
+ * No se llama simbolo porque no lo es: un simbolo es algo aislado con un
+ * nombre, y esto es un NODO de un grafo, donde las aristas importan tanto como
+ * el nodo. El conjunto que produce una fase es el grafo semantico de lo que esa
+ * fase sabe.
  *
  * El camino tiene tres trabajos, deliberadamente separados:
  *
- *     SemanticNode --[resolve_graph]--> ResolvedNode --[emit_resolved]--> almacen
+ *     SemanticNode --[resolve_graph]--> ResolvedNode --[emit_resolved]-->
+ * almacen
  *
  * El primero ordena, detecta ciclos y convierte claves en identificadores; el
  * ultimo solo guarda.  Como se calcula la identidad es el tercero, y por eso se

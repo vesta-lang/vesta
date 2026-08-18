@@ -18,10 +18,10 @@
  * Detecta secuencias de asm cuya semantica corresponde EXACTAMENTE a un op del
  * IR neutro (p.ej. @c lock @c cmpxchg -> @c ATOMIC_CAS, @c lock @c xadd ->
  * @c ATOMIC_ADD).  Cuando el patron encaja, el lowering puede emitir el op
- * tipado en lugar de una caja opaca @c INLINE_ASM: el interprete lo ejecuta como
- * opcode (sin trampolin), el JIT/AOT lo emiten con la instruccion atomica nativa
- * y el analizador lo entiende (contratos/coste).  Multi-arch: x86 y arm64 liftan
- * al MISMO op neutro; el backend re-emite por target.
+ * tipado en lugar de una caja opaca @c INLINE_ASM: el interprete lo ejecuta
+ * como opcode (sin trampolin), el JIT/AOT lo emiten con la instruccion atomica
+ * nativa y el analizador lo entiende (contratos/coste).  Multi-arch: x86 y
+ * arm64 liftan al MISMO op neutro; el backend re-emite por target.
  *
  * Este modulo SOLO RECONOCE (funcion pura); no toca el IR.  Devuelve los
  * registros canonicos implicados para que el lowering los mapee a sus valores
@@ -42,13 +42,13 @@ namespace vx {
 
 /// Operacion tipada a la que un bloque de asm se puede liftar.
 enum class AsmLiftOp : uint8_t {
-    None,       ///< no se reconocio ningun patron liftible.
-    AtomicCas,  ///< compare-and-swap (lock cmpxchg / bucle ldaxr-stlxr).
-    AtomicAdd,  ///< fetch-and-add (lock xadd / bucle ldaxr-add-stlxr).
+    None,      ///< no se reconocio ningun patron liftible.
+    AtomicCas, ///< compare-and-swap (lock cmpxchg / bucle ldaxr-stlxr).
+    AtomicAdd, ///< fetch-and-add (lock xadd / bucle ldaxr-add-stlxr).
 };
 
-/// Resultado del reconocimiento.  Los registros van en forma CANONICA (rax..r15)
-/// para que el lowering los cruce con los @c register() bindings.
+/// Resultado del reconocimiento.  Los registros van en forma CANONICA
+/// (rax..r15) para que el lowering los cruce con los @c register() bindings.
 struct AsmLift {
     AsmLiftOp op = AsmLiftOp::None;
     std::string addr_reg;   ///< registro que contiene la DIRECCION (puntero).
@@ -56,7 +56,7 @@ struct AsmLift {
     std::string des_reg;    ///< CAS: valor DESEADO.  ADD: el DELTA.
     std::string result_reg; ///< registro que recibe el valor VIEJO (retorno).
     uint16_t width = 64;    ///< ancho en bits (8/16/32/64).
-    std::string note;       ///< motivo por el que NO se lifto (diagnostico), o "".
+    std::string note; ///< motivo por el que NO se lifto (diagnostico), o "".
 };
 
 /**

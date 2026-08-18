@@ -7,7 +7,8 @@
 
 /**
  * @file escape.cpp
- * @brief Implementacion de EscapeAnalysis: COMPLETA (cada op modelado, sin bail)
+ * @brief Implementacion de EscapeAnalysis: COMPLETA (cada op modelado, sin
+ * bail)
  *        + INTERPROCEDURAL (los CALL resuelven captura via el summary del
  *        callee, cerrado por punto-fijo).
  */
@@ -25,23 +26,25 @@ namespace {
 
 using ir::IrOp;
 
-// ¿La posicion (op, idx) usa el operando como DIRECCION de memoria (leer/escribir
-// su CONTENIDO, sin capturar el puntero)?  Lista COMPLETA de accesos a memoria.
+// ¿La posicion (op, idx) usa el operando como DIRECCION de memoria
+// (leer/escribir su CONTENIDO, sin capturar el puntero)?  Lista COMPLETA de
+// accesos a memoria.
 bool is_address_operand(IrOp op, size_t idx) {
     switch (op) {
     case IrOp::LOAD: return idx == 0;
-    case IrOp::STORE: return idx == 1;         // [0]=valor (captura), [1]=addr
+    case IrOp::STORE: return idx == 1; // [0]=valor (captura), [1]=addr
     case IrOp::GETFIELD: return idx == 0;
-    case IrOp::SETFIELD: return idx == 0;       // base; el valor es captura
+    case IrOp::SETFIELD: return idx == 0; // base; el valor es captura
     case IrOp::GCWB_IR: return idx == 0;
     case IrOp::ARRAY_LOAD: return idx == 0;
-    case IrOp::ARRAY_STORE: return idx == 0;    // base; index/valor no-address
+    case IrOp::ARRAY_STORE: return idx == 0; // base; index/valor no-address
     case IrOp::ARRAY_LEN: return idx == 0;
     case IrOp::STRLEN:
     case IrOp::STRGETBYTES:
     case IrOp::STRHASH: return idx == 0;
     case IrOp::MEMCPY: return idx == 0 || idx == 1; // dst, src (contenido)
-    case IrOp::MEMSET: return idx == 0;             // dst (contenido); val es escalar
+    case IrOp::MEMSET:
+        return idx == 0; // dst (contenido); val es escalar
     // Ops VECTORIALES: todos sus operandos-puntero son DIRECCIONES (leen/
     // escriben memoria, no capturan el puntero).
     case IrOp::VEC_UNOP:
@@ -81,12 +84,24 @@ bool is_derivation(IrOp op) {
 // ¿op LEE el valor del puntero sin capturarlo (comparacion / test)?  No escapa.
 bool is_comparison(IrOp op) {
     switch (op) {
-    case IrOp::CMP_EQ: case IrOp::CMP_NE: case IrOp::CMP_LT: case IrOp::CMP_GT:
-    case IrOp::CMP_LE: case IrOp::CMP_GE: case IrOp::CMP_ULT: case IrOp::CMP_UGT:
-    case IrOp::CMP_ULE: case IrOp::CMP_UGE:
-    case IrOp::FCMP_EQ: case IrOp::FCMP_NE: case IrOp::FCMP_LT: case IrOp::FCMP_GT:
-    case IrOp::FCMP_LE: case IrOp::FCMP_GE:
-    case IrOp::ISNULL: case IrOp::INSTANCEOF: return true;
+    case IrOp::CMP_EQ:
+    case IrOp::CMP_NE:
+    case IrOp::CMP_LT:
+    case IrOp::CMP_GT:
+    case IrOp::CMP_LE:
+    case IrOp::CMP_GE:
+    case IrOp::CMP_ULT:
+    case IrOp::CMP_UGT:
+    case IrOp::CMP_ULE:
+    case IrOp::CMP_UGE:
+    case IrOp::FCMP_EQ:
+    case IrOp::FCMP_NE:
+    case IrOp::FCMP_LT:
+    case IrOp::FCMP_GT:
+    case IrOp::FCMP_LE:
+    case IrOp::FCMP_GE:
+    case IrOp::ISNULL:
+    case IrOp::INSTANCEOF: return true;
     default: return false;
     }
 }
@@ -99,8 +114,12 @@ bool is_static_call(IrOp op) {
 // ¿op es una llamada DINAMICA/nativa (callee desconocido -> captura todos)?
 bool is_dynamic_call(IrOp op) {
     switch (op) {
-    case IrOp::CALLVIRT: case IrOp::CALLM: case IrOp::CALLITF:
-    case IrOp::CALLIND: case IrOp::CALLCLOSURE: case IrOp::CALLN:
+    case IrOp::CALLVIRT:
+    case IrOp::CALLM:
+    case IrOp::CALLITF:
+    case IrOp::CALLIND:
+    case IrOp::CALLCLOSURE:
+    case IrOp::CALLN:
     case IrOp::CALLSUPER: return true;
     default: return false;
     }
@@ -109,7 +128,8 @@ bool is_dynamic_call(IrOp op) {
 } // namespace
 
 EscapeInfo compute_escape(const ir::IrFunction &fn, const IrFacts &facts,
-                          const PointsTo &pt, const CalleeEscapesParam &callee) {
+                          const PointsTo &pt,
+                          const CalleeEscapesParam &callee) {
     (void)facts;
     EscapeInfo out;
     using K = effects::AbstractLoc::Kind;
@@ -147,8 +167,8 @@ EscapeInfo compute_escape(const ir::IrFunction &fn, const IrFacts &facts,
                 if (is_comparison(ins.op)) continue;
                 // 3) DERIVACION: no captura SI el resultado sigue siendo la
                 //    MISMA raiz (se decidira en los usos del resultado); si la
-                //    derivacion PIERDE la raiz (dst Unknown), la direccion fue a
-                //    un calculo no rastreable -> escapa.
+                //    derivacion PIERDE la raiz (dst Unknown), la direccion fue
+                //    a un calculo no rastreable -> escapa.
                 if (is_derivation(ins.op)) {
                     if (ins.dst != ir::IR_NO_VALUE && same_root(o, ins.dst))
                         continue;
@@ -164,10 +184,15 @@ EscapeInfo compute_escape(const ir::IrFunction &fn, const IrFacts &facts,
                     continue;
                 }
                 // 5) CALL dinamico/nativo: callee desconocido -> captura todos.
-                if (is_dynamic_call(ins.op)) { mark_escape(o); continue; }
-                // 6) Cualquier otra posicion (STORE valor, RET, THROW, SETSTATIC
-                //    valor, atomic store, MAKE_CLOSURE, aritmetica no-derivacion
-                //    sobre el puntero, ...): el VALOR del puntero se usa/guarda
+                if (is_dynamic_call(ins.op)) {
+                    mark_escape(o);
+                    continue;
+                }
+                // 6) Cualquier otra posicion (STORE valor, RET, THROW,
+                // SETSTATIC
+                //    valor, atomic store, MAKE_CLOSURE, aritmetica
+                //    no-derivacion sobre el puntero, ...): el VALOR del puntero
+                //    se usa/guarda
                 //    -> CAPTURA -> escapa.  Es el caso CORRECTO, no un bail.
                 mark_escape(o);
             }
@@ -185,8 +210,9 @@ std::unordered_map<std::string, EscapeInfo> compute_escape_module(
     std::unordered_map<std::string, EscapeInfo> res;
 
     // Punto-fijo: escaping_params(fn) crece monotono (un param escapa si se usa
-    // en captura O se pasa a un callee que captura su param).  Oraculo: un param
-    // de un callee CONOCIDO escapa segun res; un callee DESCONOCIDO captura todo.
+    // en captura O se pasa a un callee que captura su param).  Oraculo: un
+    // param de un callee CONOCIDO escapa segun res; un callee DESCONOCIDO
+    // captura todo.
     auto oracle = [&](const std::string &name, int32_t pidx) -> bool {
         auto it = res.find(name);
         if (it == res.end()) return true; // externo/no analizado -> captura
@@ -204,8 +230,7 @@ std::unordered_map<std::string, EscapeInfo> compute_escape_module(
         changed = false;
         for (const ir::IrFunction &fn : mod.functions) {
             if (fn.is_native) continue;
-            EscapeInfo e =
-                compute_escape(fn, facts_of(fn), pt_of(fn), oracle);
+            EscapeInfo e = compute_escape(fn, facts_of(fn), pt_of(fn), oracle);
             EscapeInfo &cur = res[fn.name];
             // Crece monotono: comparar tamanos basta (solo se anaden).
             if (e.escaping_params.size() != cur.escaping_params.size() ||

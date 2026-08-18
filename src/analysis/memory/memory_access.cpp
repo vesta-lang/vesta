@@ -39,8 +39,13 @@ int32_t memory_access_size_bytes(int32_t raw) {
     // no exacto): NUNCA sub-estimar (un vector de 32 B como 8 perderia el
     // solapamiento con offsets 8..31 -> dependencia de memoria perdida).
     switch (raw) {
-    case 1: case 2: case 4: case 8:
-    case 16: case 32: case 64: return raw;
+    case 1:
+    case 2:
+    case 4:
+    case 8:
+    case 16:
+    case 32:
+    case 64: return raw;
     default: return 0;
     }
 }
@@ -50,9 +55,10 @@ AbstractLoc unknown_loc() {
     return {AbstractLoc::Kind::Unknown, effects::LOC_GENERIC, 0, 0};
 }
 // Localizacion de @p ptr con ancho @p width MAS un offset EXTRA constante (para
-// accesos base+disp: acumuladores VEC_ACC en acc_slot+aidx*width, datos a+disp).
-// Solo se suma el offset si la loc base es PRECISA (width>0); si es whole-root o
-// Unknown, el offset no es representable -> se deja como esta (conservador).
+// accesos base+disp: acumuladores VEC_ACC en acc_slot+aidx*width, datos
+// a+disp). Solo se suma el offset si la loc base es PRECISA (width>0); si es
+// whole-root o Unknown, el offset no es representable -> se deja como esta
+// (conservador).
 AbstractLoc loc_at(const PointsTo &pt, ir::IrValueId ptr, int32_t width,
                    int64_t extra_off) {
     AbstractLoc l = loc_of(pt, ptr, width);
@@ -67,7 +73,8 @@ MemoryAccess memory_access(const ir::IrInstr &ins, const PointsTo &pt) {
     const auto &ops = ins.operands;
     const int32_t w = memory_access_size(ins.type);
     // Ancho VECTORIAL (16/32/64) para los ops VEC_*: vive en imm&0xFF (bytes).
-    const int32_t vw = memory_access_size_bytes(static_cast<int32_t>(ins.imm & 0xFF));
+    const int32_t vw =
+        memory_access_size_bytes(static_cast<int32_t>(ins.imm & 0xFF));
 
     switch (ins.op) {
     // --- Lecturas con direccion precisa (offset+ancho) ---
@@ -133,7 +140,8 @@ MemoryAccess memory_access(const ir::IrInstr &ins, const PointsTo &pt) {
             a.reads.push_back(loc_of(pt, ops[2], vw));
         }
         return a;
-    case Op::VEC_BINOP_S: // {dst, a, ESCALAR}: escribe dst, lee a (op2 = escalar)
+    case Op::VEC_BINOP_S: // {dst, a, ESCALAR}: escribe dst, lee a (op2 =
+                          // escalar)
         if (ops.size() >= 2) {
             a.touches = a.is_load = a.is_store = true;
             a.writes.push_back(loc_of(pt, ops[0], vw));
@@ -168,8 +176,8 @@ MemoryAccess memory_access(const ir::IrInstr &ins, const PointsTo &pt) {
             a.writes.push_back(loc_at(pt, ops[0], aw, aidx * aw));
         }
         return a;
-    case Op::VEC_ACC_ADD:  // {acc_slot, a}: acc[aidx] += a[disp]
-    case Op::VEC_ACC_FMA:  // {acc_slot, a, b}: acc[aidx] += a[disp]*b[disp]
+    case Op::VEC_ACC_ADD: // {acc_slot, a}: acc[aidx] += a[disp]
+    case Op::VEC_ACC_FMA: // {acc_slot, a, b}: acc[aidx] += a[disp]*b[disp]
         if (!ops.empty()) {
             const uint64_t im = static_cast<uint64_t>(ins.imm);
             const int32_t aw = memory_access_size_bytes(int32_t(im & 0xFF));
@@ -179,7 +187,8 @@ MemoryAccess memory_access(const ir::IrInstr &ins, const PointsTo &pt) {
             const AbstractLoc accl = loc_at(pt, ops[0], aw, aidx * aw);
             a.reads.push_back(accl);  // acc read-modify
             a.writes.push_back(accl); // acc write
-            if (ops.size() >= 2) a.reads.push_back(loc_at(pt, ops[1], aw, disp));
+            if (ops.size() >= 2)
+                a.reads.push_back(loc_at(pt, ops[1], aw, disp));
             if (ins.op == Op::VEC_ACC_FMA && ops.size() >= 3)
                 a.reads.push_back(loc_at(pt, ops[2], aw, disp));
         }
@@ -196,7 +205,8 @@ MemoryAccess memory_access(const ir::IrInstr &ins, const PointsTo &pt) {
             a.writes.push_back(dst0);
         }
         return a;
-    case Op::VEC_ACC_STORE: // {acc_slot}: vuelca el acc register-resident a acc[0]
+    case Op::VEC_ACC_STORE: // {acc_slot}: vuelca el acc register-resident a
+                            // acc[0]
         if (!ops.empty()) {
             const uint64_t im = static_cast<uint64_t>(ins.imm);
             const int32_t aw = memory_access_size_bytes(int32_t(im & 0xFF));
@@ -205,8 +215,7 @@ MemoryAccess memory_access(const ir::IrInstr &ins, const PointsTo &pt) {
         }
         return a;
 
-    default:
-        return a; // no es un acceso a memoria localizable
+    default: return a; // no es un acceso a memoria localizable
     }
 }
 

@@ -83,8 +83,7 @@ nlohmann::json LspServer::compile_request(const std::string &method,
     tc::CompileRequest req;
     req.input = fs_path;
     // Si el documento esta abierto, usar su buffer (overlay) en vez del disco.
-    if (docs_.has(uri))
-        req.source_overlay = docs_.text(uri);
+    if (docs_.has(uri)) req.source_overlay = docs_.text(uri);
     req.output = params.value("output", std::string());
     req.module_name = params.value("moduleName", std::string("main"));
     req.debug = params.value("debug", false);
@@ -100,11 +99,12 @@ nlohmann::json LspServer::compile_request(const std::string &method,
     const std::string mode = params.value("mode", std::string("vm"));
     if (mode == "aot") {
         req.mode = tc::ExecMode::AOT;
-        // Opciones del emisor nativo (todas opcionales; defaults por host/tier).
+        // Opciones del emisor nativo (todas opcionales; defaults por
+        // host/tier).
         const std::string tier = params.value("tier", std::string("bare"));
-        req.aot.tier = (tier == "embed")
-                           ? aot::Tier::EMBED
-                           : (tier == "full" ? aot::Tier::FULL : aot::Tier::BARE);
+        req.aot.tier = (tier == "embed") ? aot::Tier::EMBED
+                                         : (tier == "full" ? aot::Tier::FULL
+                                                           : aot::Tier::BARE);
         req.aot.freestanding = params.value("freestanding", false);
         req.aot.no_exceptions = params.value("noExceptions", false);
         req.aot.no_io = params.value("noIo", false);
@@ -116,7 +116,8 @@ nlohmann::json LspServer::compile_request(const std::string &method,
         req.aot.no_pie = params.value("noPie", false);
         req.aot.bin_base = params.value("binBase", std::string());
         req.aot.sysroot = params.value("sysroot", std::string());
-        // Para localizar la stdlib (auto-bundle de exc/io): junto al ejecutable.
+        // Para localizar la stdlib (auto-bundle de exc/io): junto al
+        // ejecutable.
         req.aot.argv0 = fs::get_executable_path();
     } else if (mode == "jit")
         req.mode = tc::ExecMode::JIT;
@@ -125,8 +126,7 @@ nlohmann::json LspServer::compile_request(const std::string &method,
 
     // Proyecto: explicito por el metodo/param, o auto-detectado si el fuente
     // tiene algun `import "..."`.
-    const std::string &src =
-        docs_.has(uri) ? docs_.text(uri) : std::string();
+    const std::string &src = docs_.has(uri) ? docs_.text(uri) : std::string();
     const bool has_imports = src.find("import \"") != std::string::npos ||
                              src.find("import\t\"") != std::string::npos;
     req.is_project = (method == "vesta/compileProject") ||
@@ -137,8 +137,7 @@ nlohmann::json LspServer::compile_request(const std::string &method,
     if (req.is_project) {
         std::string d = fs_path;
         size_t slash = d.find_last_of("/\\");
-        if (slash != std::string::npos)
-            d = d.substr(0, slash);
+        if (slash != std::string::npos) d = d.substr(0, slash);
         for (int lvl = 0; lvl < 40 && !d.empty(); ++lvl) {
             req.search_paths.push_back(d);
             size_t s = d.find_last_of("/\\");
@@ -153,10 +152,10 @@ nlohmann::json LspServer::compile_request(const std::string &method,
     nlohmann::json diags = nlohmann::json::array();
     for (const auto &d : cr.diagnostics) {
         nlohmann::json jd;
-        jd["level"] = (d.level == tc::DiagLevel::Error)
-                          ? "error"
-                          : (d.level == tc::DiagLevel::Warning ? "warning"
-                                                               : "note");
+        jd["level"] =
+            (d.level == tc::DiagLevel::Error)
+                ? "error"
+                : (d.level == tc::DiagLevel::Warning ? "warning" : "note");
         jd["line"] = d.line;
         jd["column"] = d.column;
         jd["message"] = d.message;
@@ -171,8 +170,7 @@ nlohmann::json LspServer::compile_request(const std::string &method,
     out["frontend_us"] = cr.frontend_us;
     out["mode"] = mode;
     out["project"] = req.is_project;
-    if (!cr.message.empty())
-        out["message"] = cr.message;
+    if (!cr.message.empty()) out["message"] = cr.message;
     return out;
 }
 
@@ -196,7 +194,8 @@ void LspServer::handle_initialize(const nlohmann::json &msg) {
         }
         // rootUri (deprecado pero comun).
         if (params.contains("rootUri") && params.at("rootUri").is_string()) {
-            roots.push_back(uri_to_fs_path(params.at("rootUri").get<std::string>()));
+            roots.push_back(
+                uri_to_fs_path(params.at("rootUri").get<std::string>()));
         }
         // rootPath (muy antiguo): ya es una ruta de sistema de ficheros.
         if (params.contains("rootPath") && params.at("rootPath").is_string()) {
@@ -205,8 +204,7 @@ void LspServer::handle_initialize(const nlohmann::json &msg) {
         // Deduplicar entradas vacias/repetidas conservando el orden.
         std::vector<std::string> uniq;
         for (const auto &r : roots) {
-            if (r.empty())
-                continue;
+            if (r.empty()) continue;
             bool dup = false;
             for (const auto &u : uniq) {
                 if (u == r) {
@@ -214,8 +212,7 @@ void LspServer::handle_initialize(const nlohmann::json &msg) {
                     break;
                 }
             }
-            if (!dup)
-                uniq.push_back(r);
+            if (!dup) uniq.push_back(r);
         }
         workspace_.set_roots(uniq);
     }
@@ -297,11 +294,9 @@ void LspServer::handle_did_change(const nlohmann::json &params) {
     // Sincronizacion full: tomamos el texto del ultimo contentChange.
     const auto &td = params.at("textDocument");
     const std::string uri = td.at("uri").get<std::string>();
-    if (!params.contains("contentChanges"))
-        return;
+    if (!params.contains("contentChanges")) return;
     const auto &changes = params.at("contentChanges");
-    if (!changes.is_array() || changes.empty())
-        return;
+    if (!changes.is_array() || changes.empty()) return;
     // En modo full sync, el ultimo cambio contiene el documento entero.
     const auto &last = changes.back();
     std::string text = last.value("text", std::string());
@@ -367,9 +362,10 @@ void LspServer::publish_diagnostics(const std::string &uri) {
                        (c >= '0' && c <= '9') || c == '_';
             };
             const std::string &lt = line_text;
-            // Si el punto cae en la indentacion / espacios (diagnostico cuyo loc
-            // apunta al inicio de la sentencia), avanzar al primer token real de
-            // la linea: un subrayado sobre el hueco en blanco no se entiende.
+            // Si el punto cae en la indentacion / espacios (diagnostico cuyo
+            // loc apunta al inicio de la sentencia), avanzar al primer token
+            // real de la linea: un subrayado sobre el hueco en blanco no se
+            // entiende.
             while (span_start < lt.size() &&
                    (lt[span_start] == ' ' || lt[span_start] == '\t'))
                 ++span_start;
@@ -378,14 +374,17 @@ void LspServer::publish_diagnostics(const std::string &uri) {
                 // Identificador bajo la posicion: extender hacia adelante hasta
                 // el final del identificador.
                 uint32_t e = span_start;
-                while (e < lt.size() && is_ident(lt[e])) ++e;
+                while (e < lt.size() && is_ident(lt[e]))
+                    ++e;
                 span_end = e;
             } else if (span_start > 0 && span_start <= lt.size() &&
                        is_ident(lt[span_start - 1])) {
-                // Simbolo precedido de un identificador (p.ej. "static_assert("):
-                // subrayar ese identificador anterior, que es lo significativo.
+                // Simbolo precedido de un identificador (p.ej.
+                // "static_assert("): subrayar ese identificador anterior, que
+                // es lo significativo.
                 uint32_t s = span_start;
-                while (s > 0 && is_ident(lt[s - 1])) --s;
+                while (s > 0 && is_ident(lt[s - 1]))
+                    --s;
                 span_end = span_start;
                 span_start = s;
             }
@@ -403,8 +402,7 @@ void LspServer::publish_diagnostics(const std::string &uri) {
         jd["range"] = range;
         jd["severity"] = diag_severity_to_lsp(d.level);
         jd["source"] = "vesta";
-        if (!d.code.empty())
-            jd["code"] = d.code;
+        if (!d.code.empty()) jd["code"] = d.code;
         jd["message"] = d.message;
         diags.push_back(std::move(jd));
     }
@@ -434,8 +432,7 @@ void LspServer::handle_semantic_tokens_full(const nlohmann::json &msg) {
         // Reusar el analisis cacheado (mismo punto que los diagnosticos) para
         // enriquecer los identificadores con los nombres declarados.
         const DocAnalysis &an = engine_.analyze_document(uri, text);
-        std::vector<uint32_t> toks =
-            compute_semantic_tokens(text, uri, &an);
+        std::vector<uint32_t> toks = compute_semantic_tokens(text, uri, &an);
         // Volcar el array plano de uint32 a JSON.
         data = nlohmann::json(toks);
     }
@@ -501,8 +498,7 @@ nlohmann::json make_completion_item(const std::string &label,
     it["label"] = label;
     it["kind"] = static_cast<int>(kind);
     it["insertText"] = label;
-    if (!detail.empty())
-        it["detail"] = detail;
+    if (!detail.empty()) it["detail"] = detail;
     return it;
 }
 
@@ -519,38 +515,34 @@ nlohmann::json make_completion_item(const std::string &label,
  * hay comentario.  Tolerante: cualquier caso raro devuelve lo acumulado.
  */
 std::string extract_doc_comment(const std::string &text, size_t name_offset) {
-    if (name_offset > text.size())
-        return std::string();
+    if (name_offset > text.size()) return std::string();
     // Inicio de la linea que contiene el nombre.
     size_t line_start = text.rfind('\n', name_offset ? name_offset - 1 : 0);
     line_start = (line_start == std::string::npos) ? 0 : line_start + 1;
 
     auto trim = [](const std::string &s) -> std::string {
         size_t a = s.find_first_not_of(" \t\r");
-        if (a == std::string::npos)
-            return std::string();
+        if (a == std::string::npos) return std::string();
         size_t b = s.find_last_not_of(" \t\r");
         return s.substr(a, b - a + 1);
     };
 
-    std::vector<std::string> doc; // de la mas cercana a la mas lejana (luego se invierte)
+    std::vector<std::string>
+        doc; // de la mas cercana a la mas lejana (luego se invierte)
     size_t pos = line_start;
     int guard = 0;
     while (pos > 0 && guard++ < 200) {
         // Linea anterior: [prev_start, prev_end) sin el '\n'.
         size_t nl = text.rfind('\n', pos - 2 < text.size() ? pos - 2 : 0);
         size_t prev_start = (pos >= 2 && nl != std::string::npos) ? nl + 1 : 0;
-        if (pos < 2)
-            prev_start = 0;
+        if (pos < 2) prev_start = 0;
         size_t prev_end = pos - 1; // posicion del '\n' que separa.
-        if (prev_end > text.size())
-            break;
+        if (prev_end > text.size()) break;
         std::string raw = text.substr(prev_start, prev_end - prev_start);
         std::string t = trim(raw);
         if (t.rfind("//", 0) == 0) {
             std::string c = t.substr(2);
-            if (!c.empty() && c[0] == ' ')
-                c = c.substr(1);
+            if (!c.empty() && c[0] == ' ') c = c.substr(1);
             // saltar las marcas Doxygen de mero formato (@brief queda visible).
             doc.push_back(c);
             pos = prev_start;
@@ -565,28 +557,23 @@ std::string extract_doc_comment(const std::string &text, size_t name_offset) {
                 c = c.substr(3);
             else if (c.rfind("/*", 0) == 0)
                 c = c.substr(2);
-            if (!c.empty() && c[0] == '*')
-                c = c.substr(1);
+            if (!c.empty() && c[0] == '*') c = c.substr(1);
             if (c.size() >= 2 && c.substr(c.size() - 2) == "*/")
                 c = c.substr(0, c.size() - 2);
             c = trim(c);
-            if (!c.empty())
-                doc.push_back(c);
+            if (!c.empty()) doc.push_back(c);
             pos = prev_start;
             // si era la apertura del bloque, ya terminamos.
-            if (t.rfind("/*", 0) == 0)
-                break;
+            if (t.rfind("/*", 0) == 0) break;
             continue;
         }
         // Ni comentario ni continuacion de bloque: fin de la doc.
         break;
     }
-    if (doc.empty())
-        return std::string();
+    if (doc.empty()) return std::string();
     std::string out;
     for (auto it = doc.rbegin(); it != doc.rend(); ++it) {
-        if (!out.empty())
-            out += "\n";
+        if (!out.empty()) out += "\n";
         out += *it;
     }
     return out;
@@ -597,20 +584,64 @@ std::string extract_doc_comment(const std::string &text, size_t name_offset) {
 const std::vector<std::string> &vx_keywords() {
     static const std::vector<std::string> kws = {
         // Declaraciones y modificadores.
-        "const", "static", "final", "nonnull", "typedef", "using", "namespace",
-        "struct", "class", "interface", "enum", "fn", "public", "private",
-        "protected", "import", "extern", "get", "set", "override",
+        "const",
+        "static",
+        "final",
+        "nonnull",
+        "typedef",
+        "using",
+        "namespace",
+        "struct",
+        "class",
+        "interface",
+        "enum",
+        "fn",
+        "public",
+        "private",
+        "protected",
+        "import",
+        "extern",
+        "get",
+        "set",
+        "override",
         // Control de flujo.
-        "if", "else", "while", "do", "for", "in", "break", "continue", "goto",
-        "return", "try", "catch", "finally", "throw", "match", "case",
+        "if",
+        "else",
+        "while",
+        "do",
+        "for",
+        "in",
+        "break",
+        "continue",
+        "goto",
+        "return",
+        "try",
+        "catch",
+        "finally",
+        "throw",
+        "match",
+        "case",
         // Objetos / memoria.
-        "new", "delete", "this", "super",
+        "new",
+        "delete",
+        "this",
+        "super",
         // Concurrencia / distribucion.
-        "synchronized", "monitor", "await", "spawn", "rspawn", "asm",
+        "synchronized",
+        "monitor",
+        "await",
+        "spawn",
+        "rspawn",
+        "asm",
         // Smart pointers / borrow.
-        "unique", "shared", "borrow", "borrow_mut",
+        "unique",
+        "shared",
+        "borrow",
+        "borrow_mut",
         // Literales.
-        "true", "false", "null",
+        "true",
+        "false",
+        "null",
     };
     return kws;
 }
@@ -619,16 +650,45 @@ const std::vector<std::string> &vx_keywords() {
 const std::vector<std::string> &vx_types() {
     static const std::vector<std::string> tys = {
         // Primitivos canonicos.
-        "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64",
-        "bool", "char", "void", "string",
+        "i8",
+        "i16",
+        "i32",
+        "i64",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "f32",
+        "f64",
+        "bool",
+        "char",
+        "void",
+        "string",
         // Alias estilo C.
-        "int8_t", "int16_t", "int32_t", "int64_t", "uint8_t", "uint16_t",
-        "uint32_t", "uint64_t", "float", "double",
+        "int8_t",
+        "int16_t",
+        "int32_t",
+        "int64_t",
+        "uint8_t",
+        "uint16_t",
+        "uint32_t",
+        "uint64_t",
+        "float",
+        "double",
         // Colecciones (keywords del lenguaje).
-        "ArrayList", "HashMap", "HashSet", "Queue", "Deque", "TreeMap",
-        "TreeSet", "Stack",
+        "ArrayList",
+        "HashMap",
+        "HashSet",
+        "Queue",
+        "Deque",
+        "TreeMap",
+        "TreeSet",
+        "Stack",
         // Builtins de tipo generico.
-        "Optional", "Result", "Future", "Array",
+        "Optional",
+        "Result",
+        "Future",
+        "Array",
     };
     return tys;
 }
@@ -641,16 +701,35 @@ const std::vector<std::string> &vx_types() {
 const std::vector<std::string> &vx_builtins() {
     static const std::vector<std::string> bs = {
         // I/O.
-        "print", "println", "echo", "flush", "panic",
+        "print",
+        "println",
+        "echo",
+        "flush",
+        "panic",
         // Memoria.
-        "malloc", "free", "sizeof", "alignof",
+        "malloc",
+        "free",
+        "sizeof",
+        "alignof",
         // Strings.
-        "str_length", "str_bytes", "str_concat", "str_equals", "str_intern",
+        "str_length",
+        "str_bytes",
+        "str_concat",
+        "str_equals",
+        "str_intern",
         "to_str",
         // Reflexion / introspeccion.
-        "forName", "getClass", "getField", "getMethod", "newInstance",
+        "forName",
+        "getClass",
+        "getField",
+        "getMethod",
+        "newInstance",
         // Concurrencia.
-        "pid", "msgsend", "msgrecv", "loadmodule", "unloadmodule",
+        "pid",
+        "msgsend",
+        "msgrecv",
+        "loadmodule",
+        "unloadmodule",
     };
     return bs;
 }
@@ -658,10 +737,8 @@ const std::vector<std::string> &vx_builtins() {
 /// @brief true si @p name empieza por @p prefix (case-sensitive).  Prefijo
 ///        vacio coincide con todo.
 bool has_prefix(const std::string &name, const std::string &prefix) {
-    if (prefix.empty())
-        return true;
-    if (name.size() < prefix.size())
-        return false;
+    if (prefix.empty()) return true;
+    if (name.size() < prefix.size()) return false;
     return name.compare(0, prefix.size(), prefix) == 0;
 }
 
@@ -699,7 +776,8 @@ std::string ident_prefix_before(const std::string &text, size_t byte_off,
  * @param text         Texto del documento.
  * @param prefix_start Offset de inicio del prefijo que se escribe.
  * @param out_receiver Salida: nombre del receptor si hay acceso a miembro.
- * @return true si hay un @c '.' antes del prefijo con un receptor identificable.
+ * @return true si hay un @c '.' antes del prefijo con un receptor
+ * identificable.
  */
 bool member_receiver_before(const std::string &text, size_t prefix_start,
                             std::string &out_receiver) {
@@ -707,9 +785,8 @@ bool member_receiver_before(const std::string &text, size_t prefix_start,
     size_t i = prefix_start;
     while (i > 0 && (text[i - 1] == ' ' || text[i - 1] == '\t'))
         --i;
-    if (i == 0 || text[i - 1] != '.')
-        return false; // no es acceso a miembro.
-    --i;              // saltar el punto.
+    if (i == 0 || text[i - 1] != '.') return false; // no es acceso a miembro.
+    --i;                                            // saltar el punto.
     // Saltar espacios entre el receptor y el punto.
     while (i > 0 && (text[i - 1] == ' ' || text[i - 1] == '\t'))
         --i;
@@ -717,8 +794,7 @@ bool member_receiver_before(const std::string &text, size_t prefix_start,
     size_t end = i;
     while (i > 0 && is_ident_char(text[i - 1]))
         --i;
-    if (i == end)
-        return false; // sin identificador receptor.
+    if (i == end) return false; // sin identificador receptor.
     out_receiver = text.substr(i, end - i);
     return !out_receiver.empty();
 }
@@ -738,26 +814,23 @@ bool member_receiver_before(const std::string &text, size_t prefix_start,
  * @param known_types Conjunto de nombres de tipo (clases + structs).
  * @return Nombre del tipo deducido, o cadena vacia.
  */
-std::string deduce_receiver_type(
-    const std::string &text, const std::string &receiver,
-    const std::unordered_set<std::string> &known_types) {
+std::string
+deduce_receiver_type(const std::string &text, const std::string &receiver,
+                     const std::unordered_set<std::string> &known_types) {
     const size_t n = text.size();
     const size_t rlen = receiver.size();
-    if (rlen == 0)
-        return std::string();
+    if (rlen == 0) return std::string();
     for (size_t p = 0; p + rlen <= n;) {
         // Localizar la siguiente aparicion del receptor.
         size_t pos = text.find(receiver, p);
-        if (pos == std::string::npos)
-            break;
+        if (pos == std::string::npos) break;
         p = pos + 1; // avanzar para la siguiente busqueda.
         // Exigir limites de palabra: lo anterior y lo posterior no deben ser
         // caracteres de identificador.
         bool left_ok = (pos == 0) || !is_ident_char(text[pos - 1]);
         size_t after = pos + rlen;
         bool right_ok = (after >= n) || !is_ident_char(text[after]);
-        if (!left_ok || !right_ok)
-            continue;
+        if (!left_ok || !right_ok) continue;
         // Retroceder por espacios antes del receptor.
         size_t j = pos;
         while (j > 0 && (text[j - 1] == ' ' || text[j - 1] == '\t'))
@@ -766,11 +839,9 @@ std::string deduce_receiver_type(
         size_t word_end = j;
         while (j > 0 && is_ident_char(text[j - 1]))
             --j;
-        if (j == word_end)
-            continue; // no hay palabra previa.
+        if (j == word_end) continue; // no hay palabra previa.
         std::string prev = text.substr(j, word_end - j);
-        if (known_types.count(prev) != 0)
-            return prev;
+        if (known_types.count(prev) != 0) return prev;
     }
     return std::string();
 }
@@ -784,15 +855,15 @@ bool LspServer::word_under_cursor(const nlohmann::json &params,
         return false;
     const auto &td = params.at("textDocument");
     out_uri = td.value("uri", std::string());
-    if (out_uri.empty() || !docs_.has(out_uri))
-        return false;
+    if (out_uri.empty() || !docs_.has(out_uri)) return false;
     const auto &pos = params.at("position");
     const uint32_t line = pos.value("line", 0u);
     const uint32_t character = pos.value("character", 0u);
 
     const std::string &text = docs_.text(out_uri);
     // Convertir la posicion LSP a un offset de byte para localizar el token.
-    const uint32_t byte_off = lsp_position_to_byte_offset(text, line, character);
+    const uint32_t byte_off =
+        lsp_position_to_byte_offset(text, line, character);
 
     // Construir (o recomputar barato) el indice por-documento y buscar el
     // identificador que el cursor toca.
@@ -801,11 +872,9 @@ bool LspServer::word_under_cursor(const nlohmann::json &params,
     if (ref == nullptr) {
         // El cursor puede caer justo al final del identificador (posicion
         // exclusiva): reintentar un byte antes.
-        if (byte_off > 0)
-            ref = sym.ref_at(byte_off - 1);
+        if (byte_off > 0) ref = sym.ref_at(byte_off - 1);
     }
-    if (ref == nullptr)
-        return false;
+    if (ref == nullptr) return false;
     out_word = ref->name;
     return true;
 }
@@ -835,8 +904,8 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
                 byte_column_to_utf16(line_text, cv.loc.column + cv.loc.length);
             if (pchar >= s && pchar < e) {
                 std::string md = "**" + cv.name + "**  _(comptime)_\n\n";
-                md += "= **" + cv.value_str +
-                      "**  _(resuelto en compilacion)_\n";
+                md +=
+                    "= **" + cv.value_str + "**  _(resuelto en compilacion)_\n";
                 nlohmann::json result, contents;
                 contents["kind"] = "markdown";
                 contents["value"] = md;
@@ -886,7 +955,8 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
             kind = wdefs.front().kind;
             signature = wdefs.front().signature;
             container = wdefs.front().container;
-            def_uri = wdefs.front().uri; // Big-O sale del fichero que la define.
+            def_uri =
+                wdefs.front().uri; // Big-O sale del fichero que la define.
             resolved = true;
         }
     }
@@ -903,10 +973,11 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
             const size_t dot = q.rfind('.');
             const std::string simple =
                 (dot == std::string::npos) ? q : q.substr(dot + 1);
-            if (simple != word)
-                continue;
+            if (simple != word) continue;
             switch (static_cast<vx::ast::NodeKind>(s.kind)) {
-            case vx::ast::NodeKind::StructDecl: kind = SymbolKind::Struct; break;
+            case vx::ast::NodeKind::StructDecl:
+                kind = SymbolKind::Struct;
+                break;
             case vx::ast::NodeKind::ClassDecl: kind = SymbolKind::Class; break;
             case vx::ast::NodeKind::EnumDecl: kind = SymbolKind::Enum; break;
             case vx::ast::NodeKind::TypeAliasDecl:
@@ -917,17 +988,18 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
                 break;
             default: kind = SymbolKind::Function; break;
             }
-            container = (dot == std::string::npos) ? std::string()
-                                                   : q.substr(0, dot);
-            // Firma = cabecera del decl (primera linea del span, hasta '{'/';').
+            container =
+                (dot == std::string::npos) ? std::string() : q.substr(0, dot);
+            // Firma = cabecera del decl (primera linea del span, hasta
+            // '{'/';').
             const size_t len = std::min<size_t>(s.src_length, 240);
             std::string span = text.substr(s.src_offset, len);
             const size_t cut = span.find_first_of("{;\n");
             signature = (cut == std::string::npos) ? span : span.substr(0, cut);
             // trim trailing spaces.
-            while (!signature.empty() && (signature.back() == ' ' ||
-                                          signature.back() == '\t' ||
-                                          signature.back() == '\r'))
+            while (!signature.empty() &&
+                   (signature.back() == ' ' || signature.back() == '\t' ||
+                    signature.back() == '\r'))
                 signature.pop_back();
             resolved = true;
             break;
@@ -942,12 +1014,17 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
                     const size_t dot = q.rfind('.');
                     const std::string simple =
                         (dot == std::string::npos) ? q : q.substr(dot + 1);
-                    if (simple != word)
-                        continue;
+                    if (simple != word) continue;
                     switch (static_cast<vx::ast::NodeKind>(s.kind)) {
-                    case vx::ast::NodeKind::StructDecl: kind = SymbolKind::Struct; break;
-                    case vx::ast::NodeKind::ClassDecl: kind = SymbolKind::Class; break;
-                    case vx::ast::NodeKind::EnumDecl: kind = SymbolKind::Enum; break;
+                    case vx::ast::NodeKind::StructDecl:
+                        kind = SymbolKind::Struct;
+                        break;
+                    case vx::ast::NodeKind::ClassDecl:
+                        kind = SymbolKind::Class;
+                        break;
+                    case vx::ast::NodeKind::EnumDecl:
+                        kind = SymbolKind::Enum;
+                        break;
                     case vx::ast::NodeKind::TypeAliasDecl:
                         kind = SymbolKind::TypeAlias;
                         break;
@@ -962,18 +1039,19 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
                     if (s.src_offset < im.source.size()) {
                         std::string span = im.source.substr(s.src_offset, len);
                         const size_t cut = span.find_first_of("{;\n");
-                        signature = (cut == std::string::npos) ? span
-                                                               : span.substr(0, cut);
-                        while (!signature.empty() && (signature.back() == ' ' ||
-                                                      signature.back() == '\t' ||
-                                                      signature.back() == '\r'))
+                        signature = (cut == std::string::npos)
+                                        ? span
+                                        : span.substr(0, cut);
+                        while (!signature.empty() &&
+                               (signature.back() == ' ' ||
+                                signature.back() == '\t' ||
+                                signature.back() == '\r'))
                             signature.pop_back();
                     }
                     resolved = true;
                     break;
                 }
-                if (resolved)
-                    break;
+                if (resolved) break;
             }
         }
     }
@@ -1077,8 +1155,7 @@ void LspServer::handle_definition(const nlohmann::json &msg) {
 
     nlohmann::json locs = nlohmann::json::array();
     for (const auto &d : local.defs) {
-        if (d.name != word)
-            continue;
+        if (d.name != word) continue;
         WorkspaceLocation l;
         l.uri = uri;
         byte_offset_to_lsp_position(text, d.byte_offset, l.start_line,
@@ -1094,9 +1171,10 @@ void LspServer::handle_definition(const nlohmann::json &msg) {
     }
 
     // NS.4: fallback por indice semantico -- resuelve el acceso CUALIFICADO por
-    // namespace (`shapes.area`, cursor sobre `area`).  El word bajo el cursor es
-    // el ULTIMO segmento; buscamos en el indice los simbolos cuyo nombre simple
-    // (ultimo segmento del nombre cualificado) coincide y devolvemos su span.
+    // namespace (`shapes.area`, cursor sobre `area`).  El word bajo el cursor
+    // es el ULTIMO segmento; buscamos en el indice los simbolos cuyo nombre
+    // simple (ultimo segmento del nombre cualificado) coincide y devolvemos su
+    // span.
     if (locs.empty()) {
         const DocAnalysis &an = engine_.analyze_document(uri, text);
         for (const auto &s : an.sem_index.symbols) {
@@ -1104,8 +1182,7 @@ void LspServer::handle_definition(const nlohmann::json &msg) {
             const size_t dot = q.rfind('.');
             const std::string simple =
                 (dot == std::string::npos) ? q : q.substr(dot + 1);
-            if (simple != word)
-                continue;
+            if (simple != word) continue;
             WorkspaceLocation l;
             l.uri = uri;
             byte_offset_to_lsp_position(text, s.src_offset, l.start_line,
@@ -1125,8 +1202,7 @@ void LspServer::handle_definition(const nlohmann::json &msg) {
                     const size_t dot = q.rfind('.');
                     const std::string simple =
                         (dot == std::string::npos) ? q : q.substr(dot + 1);
-                    if (simple != word)
-                        continue;
+                    if (simple != word) continue;
                     WorkspaceLocation l;
                     l.uri = im.uri;
                     byte_offset_to_lsp_position(im.source, s.src_offset,
@@ -1182,7 +1258,8 @@ void LspServer::handle_completion(const nlohmann::json &msg) {
         send_result(msg.at("id"), nlohmann::json::array());
         return;
     }
-    const std::string uri = params.at("textDocument").value("uri", std::string());
+    const std::string uri =
+        params.at("textDocument").value("uri", std::string());
     if (uri.empty() || !docs_.has(uri)) {
         send_result(msg.at("id"), nlohmann::json::array());
         return;
@@ -1193,8 +1270,7 @@ void LspServer::handle_completion(const nlohmann::json &msg) {
 
     const std::string &text = docs_.text(uri);
     // Offset de byte del cursor, prefijo que se esta escribiendo y su inicio.
-    const size_t cursor =
-        lsp_position_to_byte_offset(text, line, character);
+    const size_t cursor = lsp_position_to_byte_offset(text, line, character);
     size_t prefix_start = cursor;
     const std::string prefix = ident_prefix_before(text, cursor, prefix_start);
 
@@ -1205,10 +1281,8 @@ void LspServer::handle_completion(const nlohmann::json &msg) {
 
     auto add_item = [&](const std::string &label, CompletionKind kind,
                         const std::string &detail) {
-        if (items.size() >= kMaxItems)
-            return;
-        if (label.empty() || seen.count(label) != 0)
-            return;
+        if (items.size() >= kMaxItems) return;
+        if (label.empty() || seen.count(label) != 0) return;
         seen.insert(label);
         items.push_back(make_completion_item(label, kind, detail));
     };
@@ -1239,10 +1313,8 @@ void LspServer::handle_completion(const nlohmann::json &msg) {
             // Listar metodos y campos cuyo contenedor sea el tipo resuelto.
             DocSymbols sym = build_doc_symbols(text, uri);
             for (const auto &d : sym.defs) {
-                if (d.container != type_name)
-                    continue;
-                if (!has_prefix(d.name, prefix))
-                    continue;
+                if (d.container != type_name) continue;
+                if (!has_prefix(d.name, prefix)) continue;
                 if (d.kind == SymbolKind::Method) {
                     add_item(d.name, CompletionKind::Method, d.signature);
                 } else if (d.kind == SymbolKind::Field) {
@@ -1260,67 +1332,84 @@ void LspServer::handle_completion(const nlohmann::json &msg) {
             // (nombres CUALIFICADOS) + su fuente (para extraer la firma).  Se
             // aplica al indice del documento Y a los de los modulos importados
             // (cross-module: `import "lib"; lib.<TAB>`).
-            auto offer_ns_members = [&](const std::vector<vx::SymbolEntry> &syms,
-                                        const std::string &src, bool public_only) {
-                for (const auto &s : syms) {
-                    // Cross-module: solo los `public` son importables.
-                    if (public_only && !s.is_public)
-                        continue;
-                    const std::string &q = s.name;
-                    const size_t dot = q.rfind('.');
-                    if (dot == std::string::npos)
-                        continue; // simbolo sin namespace.
-                    const std::string ns = q.substr(0, dot);
-                    const std::string member = q.substr(dot + 1);
-                    bool match = (ns == receiver);
-                    if (!match) {
-                        const size_t nd = ns.rfind('.');
-                        const std::string last =
-                            (nd == std::string::npos) ? ns : ns.substr(nd + 1);
-                        match = (last == receiver);
-                    }
-                    if (!match || !has_prefix(member, prefix))
-                        continue;
-                    // Mapear el ast::NodeKind (u8) del indice a CompletionKind.
-                    CompletionKind k = CompletionKind::Function;
-                    switch (static_cast<vx::ast::NodeKind>(s.kind)) {
-                    case vx::ast::NodeKind::StructDecl: k = CompletionKind::Struct; break;
-                    case vx::ast::NodeKind::ClassDecl: k = CompletionKind::Class; break;
-                    case vx::ast::NodeKind::EnumDecl: k = CompletionKind::Enum; break;
-                    case vx::ast::NodeKind::TypeAliasDecl: k = CompletionKind::Class; break;
-                    case vx::ast::NodeKind::ConceptDecl: k = CompletionKind::Interface; break;
-                    case vx::ast::NodeKind::GlobalVarDecl:
-                        k = CompletionKind::Variable;
-                        break;
-                    default: k = CompletionKind::Function; break;
-                    }
-                    // Detalle = firma (cabecera del decl) + namespace, como el hover.
-                    std::string detail;
-                    {
-                        const size_t len = std::min<size_t>(s.src_length, 200);
-                        if (s.src_offset < src.size()) {
-                            std::string span = src.substr(s.src_offset, len);
-                            const size_t cut = span.find_first_of("{;\n");
-                            std::string sig = (cut == std::string::npos)
-                                                  ? span
-                                                  : span.substr(0, cut);
-                            while (!sig.empty() && (sig.back() == ' ' ||
-                                                    sig.back() == '\t' ||
-                                                    sig.back() == '\r'))
-                                sig.pop_back();
-                            detail = sig.empty() ? ns : (sig + "  (" + ns + ")");
-                        } else {
-                            detail = ns;
+            auto offer_ns_members =
+                [&](const std::vector<vx::SymbolEntry> &syms,
+                    const std::string &src, bool public_only) {
+                    for (const auto &s : syms) {
+                        // Cross-module: solo los `public` son importables.
+                        if (public_only && !s.is_public) continue;
+                        const std::string &q = s.name;
+                        const size_t dot = q.rfind('.');
+                        if (dot == std::string::npos)
+                            continue; // simbolo sin namespace.
+                        const std::string ns = q.substr(0, dot);
+                        const std::string member = q.substr(dot + 1);
+                        bool match = (ns == receiver);
+                        if (!match) {
+                            const size_t nd = ns.rfind('.');
+                            const std::string last = (nd == std::string::npos)
+                                                         ? ns
+                                                         : ns.substr(nd + 1);
+                            match = (last == receiver);
                         }
+                        if (!match || !has_prefix(member, prefix)) continue;
+                        // Mapear el ast::NodeKind (u8) del indice a
+                        // CompletionKind.
+                        CompletionKind k = CompletionKind::Function;
+                        switch (static_cast<vx::ast::NodeKind>(s.kind)) {
+                        case vx::ast::NodeKind::StructDecl:
+                            k = CompletionKind::Struct;
+                            break;
+                        case vx::ast::NodeKind::ClassDecl:
+                            k = CompletionKind::Class;
+                            break;
+                        case vx::ast::NodeKind::EnumDecl:
+                            k = CompletionKind::Enum;
+                            break;
+                        case vx::ast::NodeKind::TypeAliasDecl:
+                            k = CompletionKind::Class;
+                            break;
+                        case vx::ast::NodeKind::ConceptDecl:
+                            k = CompletionKind::Interface;
+                            break;
+                        case vx::ast::NodeKind::GlobalVarDecl:
+                            k = CompletionKind::Variable;
+                            break;
+                        default: k = CompletionKind::Function; break;
+                        }
+                        // Detalle = firma (cabecera del decl) + namespace, como
+                        // el hover.
+                        std::string detail;
+                        {
+                            const size_t len =
+                                std::min<size_t>(s.src_length, 200);
+                            if (s.src_offset < src.size()) {
+                                std::string span =
+                                    src.substr(s.src_offset, len);
+                                const size_t cut = span.find_first_of("{;\n");
+                                std::string sig = (cut == std::string::npos)
+                                                      ? span
+                                                      : span.substr(0, cut);
+                                while (!sig.empty() && (sig.back() == ' ' ||
+                                                        sig.back() == '\t' ||
+                                                        sig.back() == '\r'))
+                                    sig.pop_back();
+                                detail =
+                                    sig.empty() ? ns : (sig + "  (" + ns + ")");
+                            } else {
+                                detail = ns;
+                            }
+                        }
+                        add_item(member, k, detail);
                     }
-                    add_item(member, k, detail);
-                }
-            };
-            // Namespaces del propio documento (todos, incl. privados de fichero).
+                };
+            // Namespaces del propio documento (todos, incl. privados de
+            // fichero).
             offer_ns_members(an.sem_index.symbols, text, /*public_only=*/false);
             // Namespaces de los modulos importados (solo los public).
             for (const auto &im : an.imported_sem_indexes)
-                offer_ns_members(im.index.symbols, im.source, /*public_only=*/true);
+                offer_ns_members(im.index.symbols, im.source,
+                                 /*public_only=*/true);
         }
         // Caso miembro: NO mezclamos el completado general (evitar inundar con
         // todo el universo de nombres tras un punto).  Respondemos lo hallado
@@ -1336,8 +1425,7 @@ void LspServer::handle_completion(const nlohmann::json &msg) {
             add_item(kw, CompletionKind::Keyword, std::string());
     // Tipos (primitivos + alias + colecciones + genericos builtin).
     for (const auto &ty : vx_types())
-        if (has_prefix(ty, prefix))
-            add_item(ty, CompletionKind::Class, "tipo");
+        if (has_prefix(ty, prefix)) add_item(ty, CompletionKind::Class, "tipo");
     // Builtins comunes (lista curada, incluye los que no tienen doc formal).
     for (const auto &b : vx_builtins())
         if (has_prefix(b, prefix))
@@ -1349,16 +1437,18 @@ void LspServer::handle_completion(const nlohmann::json &msg) {
             const BuiltinDoc *d = lookup_builtin(b);
             // Los conceptos se ofrecen como interfaz/clase (bound o predicado);
             // el resto como funcion builtin.
-            bool is_concept = d && d->signature.find("<T>()  |  <T:") != std::string::npos;
-            add_item(b, is_concept ? CompletionKind::Interface : CompletionKind::Function,
+            bool is_concept =
+                d && d->signature.find("<T>()  |  <T:") != std::string::npos;
+            add_item(b,
+                     is_concept ? CompletionKind::Interface
+                                : CompletionKind::Function,
                      d ? d->signature : std::string("builtin"));
         }
 
     // Simbolos del propio documento (con su firma como detalle cuando exista).
     DocSymbols sym = build_doc_symbols(text, uri);
     for (const auto &d : sym.defs) {
-        if (!has_prefix(d.name, prefix))
-            continue;
+        if (!has_prefix(d.name, prefix)) continue;
         CompletionKind k;
         switch (d.kind) {
         case SymbolKind::Function: k = CompletionKind::Function; break;
@@ -1382,27 +1472,26 @@ void LspServer::handle_completion(const nlohmann::json &msg) {
     // dedup por label evita duplicar los que ya aporto el documento.
     if (items.size() < kMaxItems && workspace_.has_roots()) {
         workspace_.ensure_built();
-        workspace_.for_each_def_name(
-            [&](const std::string &name, SymbolKind kind,
-                const std::string &signature) {
-                if (!has_prefix(name, prefix))
-                    return;
-                CompletionKind k;
-                switch (kind) {
-                case SymbolKind::Function: k = CompletionKind::Function; break;
-                case SymbolKind::Class: k = CompletionKind::Class; break;
-                case SymbolKind::Struct: k = CompletionKind::Struct; break;
-                case SymbolKind::Enum: k = CompletionKind::Enum; break;
-                case SymbolKind::TypeAlias: k = CompletionKind::Class; break;
-                case SymbolKind::Variable: k = CompletionKind::Variable; break;
-                case SymbolKind::Method: k = CompletionKind::Method; break;
-                case SymbolKind::Field: k = CompletionKind::Field; break;
-                case SymbolKind::EnumVariant: k = CompletionKind::Enum; break;
-                case SymbolKind::Concept: k = CompletionKind::Interface; break;
-                default: k = CompletionKind::Variable; break;
-                }
-                add_item(name, k, signature);
-            });
+        workspace_.for_each_def_name([&](const std::string &name,
+                                         SymbolKind kind,
+                                         const std::string &signature) {
+            if (!has_prefix(name, prefix)) return;
+            CompletionKind k;
+            switch (kind) {
+            case SymbolKind::Function: k = CompletionKind::Function; break;
+            case SymbolKind::Class: k = CompletionKind::Class; break;
+            case SymbolKind::Struct: k = CompletionKind::Struct; break;
+            case SymbolKind::Enum: k = CompletionKind::Enum; break;
+            case SymbolKind::TypeAlias: k = CompletionKind::Class; break;
+            case SymbolKind::Variable: k = CompletionKind::Variable; break;
+            case SymbolKind::Method: k = CompletionKind::Method; break;
+            case SymbolKind::Field: k = CompletionKind::Field; break;
+            case SymbolKind::EnumVariant: k = CompletionKind::Enum; break;
+            case SymbolKind::Concept: k = CompletionKind::Interface; break;
+            default: k = CompletionKind::Variable; break;
+            }
+            add_item(name, k, signature);
+        });
     }
 
     send_result(msg.at("id"), items);
@@ -1436,9 +1525,10 @@ bool LspServer::handle_vesta_request(const std::string &method,
             return true;
         }
 
-        // Target OS/arch opcional (vistas por plataforma): params.os / params.arch
-        // (vacios = host).  Permite ver el IR/bytecode/asm/JIT/diagrama que el
-        // compilador genera para Linux/Windows x x86-64/x86-32.
+        // Target OS/arch opcional (vistas por plataforma): params.os /
+        // params.arch (vacios = host).  Permite ver el
+        // IR/bytecode/asm/JIT/diagrama que el compilador genera para
+        // Linux/Windows x x86-64/x86-32.
         lsp::InspectTarget itarget;
         itarget.os = params.value("os", std::string());
         itarget.arch = params.value("arch", std::string());
@@ -1448,7 +1538,8 @@ bool LspServer::handle_vesta_request(const std::string &method,
             const std::string fn = params.value("function", std::string());
             result = inspector_.bytecode(uri, fn, itarget);
         } else if (method == "vesta/ir") {
-            const std::string phase = params.value("phase", std::string("post"));
+            const std::string phase =
+                params.value("phase", std::string("post"));
             result = inspector_.ir(uri, phase, itarget);
         } else if (method == "vesta/irDiff") {
             const std::string fn = params.value("function", std::string());
@@ -1456,7 +1547,8 @@ bool LspServer::handle_vesta_request(const std::string &method,
         } else if (method == "vesta/complexity") {
             result = inspector_.complexity(uri);
         } else if (method == "vesta/diagram") {
-            const std::string kind = params.value("kind", std::string("ir-post"));
+            const std::string kind =
+                params.value("kind", std::string("ir-post"));
             const std::string format =
                 params.value("format", std::string("mermaid"));
             const bool cost = params.value("cost", false);
@@ -1510,8 +1602,9 @@ bool LspServer::handle_vesta_request(const std::string &method,
         } else if (method == "vesta/symbolInfo") {
             // Informacion del simbolo bajo el cursor para el hover rico:
             // nombre + categoria + firma + doc (comentarios precedentes).  Las
-            // pestanas IR/bytecode/JIT/AOT las pide el cliente aparte (on-demand)
-            // con vesta/ir, vesta/bytecode, vesta/jitAsm, vesta/aotAsm.
+            // pestanas IR/bytecode/JIT/AOT las pide el cliente aparte
+            // (on-demand) con vesta/ir, vesta/bytecode, vesta/jitAsm,
+            // vesta/aotAsm.
             const uint32_t line = params.value("line", 0u);
             const uint32_t character = params.value("character", 0u);
             nlohmann::json info = nlohmann::json::object();
@@ -1538,7 +1631,8 @@ bool LspServer::handle_vesta_request(const std::string &method,
                         info["kind"] = symbol_kind_name(def->kind);
                         info["signature"] = def->signature;
                         info["container"] = def->container;
-                        info["doc"] = extract_doc_comment(text, def->byte_offset);
+                        info["doc"] =
+                            extract_doc_comment(text, def->byte_offset);
                         const bool callable =
                             def->kind == SymbolKind::Function ||
                             def->kind == SymbolKind::Method;
@@ -1586,8 +1680,7 @@ bool LspServer::handle_vesta_request(const std::string &method,
 void LspServer::dispatch(const nlohmann::json &msg) {
     // Todo mensaje LSP valido lleva un campo method (string).  Sin el, lo
     // ignoramos (puede ser una respuesta a una peticion nuestra, etc.).
-    if (!msg.contains("method") || !msg.at("method").is_string())
-        return;
+    if (!msg.contains("method") || !msg.at("method").is_string()) return;
     const std::string method = msg.at("method").get<std::string>();
 
     // Peticiones (llevan id) y notificaciones (no llevan id) se distinguen
@@ -1615,15 +1708,13 @@ void LspServer::dispatch(const nlohmann::json &msg) {
         try {
             handle_hover(msg);
         } catch (...) {
-            if (msg.contains("id"))
-                send_result(msg.at("id"), nullptr);
+            if (msg.contains("id")) send_result(msg.at("id"), nullptr);
         }
     } else if (method == "textDocument/definition") {
         try {
             handle_definition(msg);
         } catch (...) {
-            if (msg.contains("id"))
-                send_result(msg.at("id"), nullptr);
+            if (msg.contains("id")) send_result(msg.at("id"), nullptr);
         }
     } else if (method == "textDocument/references") {
         try {

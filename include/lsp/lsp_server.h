@@ -142,7 +142,8 @@ class LspServer {
      *     antes del punto) es resoluble a un tipo clase/struct conocido (o es
      *     directamente el nombre de un tipo), lista sus METODOS y CAMPOS
      *     (tomados del indice por-documento, @c container == tipo).  Si el tipo
-     *     no se resuelve, devuelve lista vacia para el caso miembro (no inunda).
+     *     no se resuelve, devuelve lista vacia para el caso miembro (no
+     * inunda).
      *   - COMPLETADO GENERAL (sin @c '.'): une palabras clave de Vesta, tipos
      *     primitivos, builtins comunes y simbolos del documento/workspace,
      *     deduplicados por label y filtrados por el prefijo que se esta
@@ -163,7 +164,8 @@ class LspServer {
      * (o reusa) el indice por-documento, convierte la posicion a offset de
      * byte y devuelve la referencia que el cursor toca (o nullptr).
      *
-     * @param params       params del mensaje (lleva textDocument.uri + position).
+     * @param params       params del mensaje (lleva textDocument.uri +
+     * position).
      * @param out_uri       Salida: uri del documento.
      * @param out_word      Salida: nombre del identificador bajo el cursor.
      * @return true si se localizo un identificador; false si no (o documento
@@ -208,7 +210,8 @@ class LspServer {
     JsonRpcTransport transport_; ///< Transporte de mensajes.
     DocumentStore docs_;         ///< Documentos abiertos.
     AnalysisEngine engine_;      ///< Motor de analisis reutilizable.
-    Inspector inspector_{engine_, docs_}; ///< Inspector del ecosistema (Fase 3).
+    Inspector inspector_{engine_,
+                         docs_}; ///< Inspector del ecosistema (Fase 3).
     WorkspaceIndex workspace_;   ///< Indice de simbolos del workspace (Fase 4).
     bool initialized_ = false;   ///< true tras un initialize correcto.
     bool shutdown_requested_ = false; ///< true tras shutdown (espera exit).

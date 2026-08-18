@@ -311,8 +311,9 @@ class Parser {
     std::unique_ptr<ast::ImportDecl> parse_import_decl(bool is_public_reexport);
     /// @brief Parsea @c "namespace foo { decls }" ( M.7.c).
     std::unique_ptr<ast::NamespaceDecl> parse_namespace_decl();
-    /// #cross-module-generics: captura el texto fuente de una plantilla/concepto
-    /// (top-level o dentro de un namespace) en @c generic_template_exports.
+    /// #cross-module-generics: captura el texto fuente de una
+    /// plantilla/concepto (top-level o dentro de un namespace) en @c
+    /// generic_template_exports.
     void collect_template_export_(ast::ModuleNode *mod, ast::Node *decl,
                                   uint32_t decl_start_off);
     /// Modulo actual en curso (para que parse_namespace_decl exporte las
@@ -325,8 +326,8 @@ class Parser {
     std::unique_ptr<ast::StructDecl> parse_struct_decl(bool is_overlay = false);
     /// `typedef struct {...} Name;` o
     /// `typedef enum {...} Name;`.  Devuelve StructDecl o EnumDecl.
-    std::unique_ptr<ast::Node> parse_typedef_struct_or_enum(
-        bool leading_typedef = true);
+    std::unique_ptr<ast::Node>
+    parse_typedef_struct_or_enum(bool leading_typedef = true);
     std::unique_ptr<ast::ClassDecl> parse_class_decl();
     std::unique_ptr<ast::ClassDecl> parse_interface_decl();
 
@@ -387,9 +388,9 @@ class Parser {
     /// aparecen DENTRO de un patron compuesto (`T*`, `T[]`) -> son los params
     /// frescos de una especializacion PARCIAL.  Un identificador desnudo
     /// (`Punto`) o un primitivo (`i64`) es CONCRETO (especializacion TOTAL).
-    void
-    parse_specialization_pattern(std::vector<std::unique_ptr<ast::TypeNode>> &pattern,
-                                 std::vector<std::string> &fresh_params);
+    void parse_specialization_pattern(
+        std::vector<std::unique_ptr<ast::TypeNode>> &pattern,
+        std::vector<std::string> &fresh_params);
 
     /// #7: nombres de struct/clase/funcion genericos ya vistos como template
     /// PRIMARIO.  La PRIMERA decl `Caja<...>` es el primario; las siguientes
@@ -409,10 +410,11 @@ class Parser {
     std::unique_ptr<ast::ExtensionDecl> parse_extension_decl();
     /// @brief NS.6-ext: @c "impl Concept for Tipo { metodos }".
     std::unique_ptr<ast::ImplDecl> parse_impl_decl();
-    /// @brief NS.6-ext: parsea UN metodo de instancia (return name(params) body)
-    /// para el cuerpo de una extension/impl.  @p target_tparams son los type
-    /// params del tipo destino (para reconocer casts).  nullptr si error.
-    std::unique_ptr<ast::ClassMethodDecl> parse_extension_method(uint8_t access);
+    /// @brief NS.6-ext: parsea UN metodo de instancia (return name(params)
+    /// body) para el cuerpo de una extension/impl.  @p target_tparams son los
+    /// type params del tipo destino (para reconocer casts).  nullptr si error.
+    std::unique_ptr<ast::ClassMethodDecl>
+    parse_extension_method(uint8_t access);
 
     /// @brief Registra @p names como type-aliases temporales para que
     /// `(T)x` se reconozca como cast dentro de un body generico (los
@@ -512,8 +514,8 @@ class Parser {
      *        para que el error se reporte sobre el nombre culpable en vez
      *        de degenerar en "se esperaba un tipo" al inicio de la linea.
      */
-    [[nodiscard]] bool starts_type(bool allow_reserved_name = false)
-        const noexcept;
+    [[nodiscard]] bool
+    starts_type(bool allow_reserved_name = false) const noexcept;
 
     /**
      * @brief  AS inc.2: decide si el statement actual es un var-decl
@@ -528,8 +530,8 @@ class Parser {
 
     /**
      * @brief Consume una anotacion opcional `register("rXX")` al inicio de un
-     *        parametro (o de un tipo de parametro en `cfn(...)`), devolviendo el
-     *        nombre del registro o "" si no hay.  Habilita la ABI custom por
+     *        parametro (o de un tipo de parametro en `cfn(...)`), devolviendo
+     * el nombre del registro o "" si no hay.  Habilita la ABI custom por
      *        funcion: el parametro se recibe (y el caller lo coloca) en ese
      *        registro fisico.  Solo consume si el patron exacto
      *        `register ( "reg" )` aparece; deja intacto cualquier otro caso.
@@ -597,7 +599,8 @@ class Parser {
         std::vector<std::string> complexity_vars;
         std::string partial_pre, partial_post, total_pre, total_post;
         /// Los @complexity cuyo `when:` habla del parametro de tipo: se
-        /// resuelven al monomorphizar, no aqui.  Ver @ref ast::PendingComplexity.
+        /// resuelven al monomorphizar, no aqui.  Ver @ref
+        /// ast::PendingComplexity.
         std::vector<ast::PendingComplexity> pending;
         /// Contratos de HUELLA con `when:`, sin resolver.
         std::vector<ast::PendingFootprint> footprint_pending;
@@ -618,18 +621,20 @@ class Parser {
     ///        el contrato no es de esta compilacion y el caller lo tira.  Los
     ///        que hablan del parametro de tipo salen con true y sin evaluar --
     ///        el que puede es el clon de la monomorphizacion, con T concreto.
-    void parse_complexity_args_(std::string &expr, std::vector<std::string> &vars,
+    void parse_complexity_args_(std::string &expr,
+                                std::vector<std::string> &vars,
                                 std::string &partial_pre,
-                                std::string &partial_post, std::string &total_pre,
-                                std::string &total_post,
+                                std::string &partial_post,
+                                std::string &total_pre, std::string &total_post,
                                 std::string *out_when = nullptr,
                                 bool *out_aplica = nullptr);
 
     /// @brief Lee `when: <expr>` de un contrato de huella y devuelve el texto
     ///        raw de la expresion (sin comillas, como en @complexity).
     ///
-    /// Se entra con @c current_ en el identificador `when`.  Captura hasta --sin
-    /// consumir-- el `)` de nivel 0, respetando los parentesis de un predicado
+    /// Se entra con @c current_ en el identificador `when`.  Captura hasta
+    /// --sin consumir-- el `)` de nivel 0, respetando los parentesis de un
+    /// predicado
     /// (`is_float<T>()`).  Devuelve "" y reporta si esta mal formado.
     std::string read_footprint_when_();
 
@@ -644,7 +649,8 @@ class Parser {
         std::string when;
     };
 
-    /// @brief Parsea el contenido de `@alloc(...)`/`@stack(...)` TRAS consumir el
+    /// @brief Parsea el contenido de `@alloc(...)`/`@stack(...)` TRAS consumir
+    /// el
     ///        `(` y hasta --sin consumir-- el `)`.  Acepta la forma corta
     ///        (un entero -> total) y la nombrada (`partial:`/`total:`), con un
     ///        `when:` opcional al final.  @p nm es "alloc"/"stack" (mensajes).
@@ -662,8 +668,8 @@ class Parser {
     ///        parsea una expresion a la que SIGUE un bloque del lenguaje.
     ///
     /// El unico sitio donde una expresion no va parentizada y lleva un `{`
-    /// pegado es el scrutinee del `match` (`match s { case ... }`, estilo Rust).
-    /// Ahi el `{` abre el cuerpo del match, no una llamada.
+    /// pegado es el scrutinee del `match` (`match s { case ... }`, estilo
+    /// Rust). Ahi el `{` abre el cuerpo del match, no una llamada.
     bool no_braces_call_ = false;
 
     /// Set de identifiers declarados como typedef / using en el archivo
@@ -683,11 +689,12 @@ class Parser {
     /// alias) y rechazaria la secuencia como agrupacion.
     std::unordered_set<std::string> imported_namespaces_;
     /// Nombres de los parametros `expr` de la funcion cuyo CUERPO se esta
-    /// parseando ahora mismo.  Sirve para el forwarding de expr-capture anidado:
-    /// si el argumento de una llamada a otra fn expr-capture es exactamente uno
-    /// de estos nombres (`return src(code);` donde `code` es un `expr` param del
-    /// macro), NO se re-captura el identificador como texto ("code") sino que se
-    /// emite un IdentExpr que en AST-eval resuelve al texto ya capturado.
+    /// parseando ahora mismo.  Sirve para el forwarding de expr-capture
+    /// anidado: si el argumento de una llamada a otra fn expr-capture es
+    /// exactamente uno de estos nombres (`return src(code);` donde `code` es un
+    /// `expr` param del macro), NO se re-captura el identificador como texto
+    /// ("code") sino que se emite un IdentExpr que en AST-eval resuelve al
+    /// texto ya capturado.
     std::unordered_set<std::string> current_expr_param_names_;
 
     /// Aliases extra producidos por un typedef C-style multi-declarador
@@ -714,16 +721,16 @@ class Parser {
 
     /// Consume un sufijo de array C-style `[N][M]...` (uni o multidimensional,
     /// dimension opcional para `[]`) tras el nombre de un campo/variable y
-    /// envuelve @c base en @c ArrayTypeNode anidados.  `T[N][M]` = array de N de
-    /// (array de M de T): el primer `[` es el mas externo.  Devuelve @c base sin
-    /// cambios si no hay `[`.
+    /// envuelve @c base en @c ArrayTypeNode anidados.  `T[N][M]` = array de N
+    /// de (array de M de T): el primer `[` es el mas externo.  Devuelve @c base
+    /// sin cambios si no hay `[`.
     std::unique_ptr<ast::TypeNode>
     wrap_c_array_dims_(std::unique_ptr<ast::TypeNode> base);
 
     /// Parsea un agregado ANONIMO inline (`struct { ... }` / `union { ... }`,
     /// tag opcional) dentro del cuerpo de otro struct.  Devuelve un StructDecl
     /// con nombre SINTETICO (`__anon<N>`) que el caller encola en
-    /// @c pending_before_decls_ y referencia como tipo del campo.  Precondicion:
+    /// @c pending_before_decls_ y referencia como tipo del campo. Precondicion:
     /// current_ es 'struct'/'union' y el siguiente token (tras un tag opcional)
     /// es '{'.
     std::unique_ptr<ast::StructDecl> parse_inline_anon_aggregate_();
@@ -788,7 +795,7 @@ class Parser {
     /// Un mismo nombre puede tener varias variantes (una por plataforma).
     std::unordered_map<std::string, std::vector<std::string>> target_skipped_;
 
-public:
+  public:
     /// Simbolos que este fichero declara SOLO para otros objetivos.  Quien
     /// resuelve nombres lo consulta cuando una busqueda falla, para distinguir
     /// "no existe" de "existe pero no para este target".

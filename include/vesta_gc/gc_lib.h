@@ -1,6 +1,7 @@
 /**
  * @file vesta_gc/gc_lib.h
- * @brief C-ABI de `libvesta_gc` -- el GC opt-in de Vesta para codigo nativo AOT.
+ * @brief C-ABI de `libvesta_gc` -- el GC opt-in de Vesta para codigo nativo
+ * AOT.
  *
  * `gc<T>` de Vesta (opt-in via `import vx.gc`) baja a CALLs a estas funciones,
  * igual que vx_io / vx_mem.  El motor por debajo es EL MISMO `gc::GcHeap` que
@@ -10,8 +11,8 @@
  *
  * @par Modelo en AOT
  * Un unico `GcHeap` global (sin `ProcessVM`: no hay vm_mem ni proceso).  Las
- * raices se descubren con STACKMAPS PRECISOS emitidos por el codegen AOT en cada
- * safepoint: `major_gc` camina los frames NATIVOS (cadena RBP) y, por cada
+ * raices se descubren con STACKMAPS PRECISOS emitidos por el codegen AOT en
+ * cada safepoint: `major_gc` camina los frames NATIVOS (cadena RBP) y, por cada
  * direccion de retorno, lee de su stackmap los slots/registros vivos que
  * contienen un GcHandle (reusa `scan_jit_roots_precise`, el mismo walker que el
  * JIT).  Permite el GC generacional moving completo (no conservativo).
@@ -48,9 +49,11 @@ uint32_t vx_gc_alloc(uint64_t size);
 /**
  * @brief Traduce un GcHandle a su puntero de payload.
  * @param handle GcHandle devuelto por @c vx_gc_alloc.
- * @return Puntero host al payload, o NULL si el handle no es valido/esta muerto.
+ * @return Puntero host al payload, o NULL si el handle no es valido/esta
+ * muerto.
  * @note Estable hasta el proximo GC (el GC puede mover el objeto; el handle
- *       sigue siendo valido, el puntero crudo NO -> re-derefa tras un safepoint).
+ *       sigue siendo valido, el puntero crudo NO -> re-derefa tras un
+ * safepoint).
  */
 uint8_t *vx_gc_deref(uint32_t handle);
 
@@ -133,7 +136,8 @@ void vx_gc_unregister_finalizer(uint8_t *payload);
 void vx_gc_finalize_all(void);
 
 /**
- * @brief Numero de finalizadores nativos ejecutados (introspeccion/diagnostico).
+ * @brief Numero de finalizadores nativos ejecutados
+ * (introspeccion/diagnostico).
  * @return Contador acumulado de deleters/dtors invocados por el runner nativo.
  */
 uint64_t vx_gc_fin_count(void);

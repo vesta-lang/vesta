@@ -14,10 +14,10 @@
 
 namespace analysis {
 
+using ir::IR_NO_VALUE;
 using ir::IrInstr;
 using ir::IrOp;
 using ir::IrValueId;
-using ir::IR_NO_VALUE;
 
 namespace {
 
@@ -46,7 +46,8 @@ LoopTripInfo compute_trip_count(const ir::IrFunction &fn,
     if (!const_of(fn, def_block, iv.init, init_v)) return info;
     if (!const_of(fn, def_block, iv.bound, bound_v)) return info;
 
-    // room = cuanto queda desde el primer iv (mas el offset de la guarda) hasta N.
+    // room = cuanto queda desde el primer iv (mas el offset de la guarda) hasta
+    // N.
     const int64_t room = bound_v - iv.cmp_offset - init_v;
     if (room <= 0) {
         info.trip = 0; // no itera (guarda falsa de entrada).
@@ -55,7 +56,7 @@ LoopTripInfo compute_trip_count(const ir::IrFunction &fn,
     if (iv.cmp_op == IrOp::CMP_LT || iv.cmp_op == IrOp::CMP_ULT) {
         info.trip = (room + iv.stride - 1) / iv.stride; // ceil
     } else if (iv.cmp_op == IrOp::CMP_LE || iv.cmp_op == IrOp::CMP_ULE) {
-        info.trip = room / iv.stride + 1;               // floor + 1
+        info.trip = room / iv.stride + 1; // floor + 1
     }
     // Guarda no soportada -> trip queda en -1 (desconocido).
     return info;

@@ -57,8 +57,8 @@ class SchedCostModel {
     virtual InstrCost cost(const MInstr &mi) const = 0;
     /// Ancho de emision del core (uops/ciclo) -- limite superescalar.
     virtual int issue_width() const = 0;
-    /// Numero de grupos de puertos de ejecucion del core (dimensiona la tabla de
-    /// ocupacion del scheduler).
+    /// Numero de grupos de puertos de ejecucion del core (dimensiona la tabla
+    /// de ocupacion del scheduler).
     virtual int port_count() const = 0;
     /// Capacidad (uops/ciclo) del grupo de puertos @p group: cuantos puertos
     /// fisicos contiene (p.ej. "p0156" = 4, "p23" = 2, "p0" = 1).  El scheduler
@@ -108,11 +108,11 @@ enum class SchedMode : uint8_t { JIT_AUTO, AOT_GENERIC };
  * @param cpu  nombre de microarquitectura (@c --cpu, p.ej. "intel-skylake",
  *             "amd-zen3").  Vacio -> auto (JIT) o generico (AOT).
  * @param mode JIT (auto-detecta el host) o AOT (generico sin @c --cpu).
- * @return Un modelo de coste (nunca null; cae al generico si la uarch no existe).
+ * @return Un modelo de coste (nunca null; cae al generico si la uarch no
+ * existe).
  */
-std::unique_ptr<SchedCostModel> make_cost_model(SchedIsa isa,
-                                                const std::string &cpu,
-                                                SchedMode mode);
+std::unique_ptr<SchedCostModel>
+make_cost_model(SchedIsa isa, const std::string &cpu, SchedMode mode);
 
 /// Microarquitectura objetivo global (@c --cpu).  La fija @c main.cpp al
 /// arrancar; el scheduler la lee para el modelo de coste.  Vacio = auto (JIT) /

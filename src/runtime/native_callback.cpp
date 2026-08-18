@@ -69,8 +69,8 @@ extern "C" uint64_t vx_get_native_thunk(uint64_t fn_pc, uint64_t /*argc*/) {
  * objeto (no es referenciado desde main).  `__attribute__((constructor))`
  * fuerza ejecucion antes de main, garantizado por GCC/Clang. */
 #if defined(__GNUC__) || defined(__clang__)
-__attribute__((used, constructor)) static void
-vx_callback_register_virtual_fn() {
+__attribute__((used,
+               constructor)) static void vx_callback_register_virtual_fn() {
     ffi::register_virtual_fn("vesta_runtime", "vx_get_native_thunk",
                              reinterpret_cast<void *>(&::vx_get_native_thunk));
 }
@@ -116,11 +116,11 @@ extern "C" uint64_t vesta_runtime_cpu_features(void) {
         if (c & (1u << 28)) f |= 1ull << 3; // ECX.28 AVX
     }
     if (__get_cpuid_count(7u, 0u, &a, &b, &c, &d)) {
-        if (b & (1u << 5))  f |= 1ull << 4; // EBX.5  AVX2
-        if (b & (1u << 3))  f |= 1ull << 5; // EBX.3  BMI1
-        if (b & (1u << 8))  f |= 1ull << 6; // EBX.8  BMI2
+        if (b & (1u << 5)) f |= 1ull << 4;  // EBX.5  AVX2
+        if (b & (1u << 3)) f |= 1ull << 5;  // EBX.3  BMI1
+        if (b & (1u << 8)) f |= 1ull << 6;  // EBX.8  BMI2
         if (b & (1u << 16)) f |= 1ull << 7; // EBX.16 AVX512F
-        if (b & (1u << 9))  f |= 1ull << 8; // EBX.9  ERMS
+        if (b & (1u << 9)) f |= 1ull << 8;  // EBX.9  ERMS
     }
 #else
     // Sin cpuid.h (no GNU/Clang): x86-64 garantiza SSE2 por ABI base.
@@ -132,8 +132,8 @@ extern "C" uint64_t vesta_runtime_cpu_features(void) {
 }
 
 #if defined(__GNUC__) || defined(__clang__)
-__attribute__((used, constructor)) static void
-vx_cpu_features_register_virtual_fn() {
+__attribute__((used,
+               constructor)) static void vx_cpu_features_register_virtual_fn() {
     ffi::register_virtual_fn(
         "vesta_runtime", "cpu_features",
         reinterpret_cast<void *>(&::vesta_runtime_cpu_features));

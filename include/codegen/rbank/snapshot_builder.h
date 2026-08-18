@@ -9,8 +9,8 @@
  * @file codegen/rbank/snapshot_builder.h
  * @brief SnapshotBuilder: el ALGORITMO que construye la @c FunctionSnapshot.
  *
- * Separacion DATO vs ALGORITMO: el snapshot (function_snapshot.h) es un DATO; su
- * construccion es un ALGORITMO y vive aqui.  Esto mantiene la API limpia y,
+ * Separacion DATO vs ALGORITMO: el snapshot (function_snapshot.h) es un DATO;
+ * su construccion es un ALGORITMO y vive aqui.  Esto mantiene la API limpia y,
  * sobre todo, hace que el crecimiento futuro NO rompa el punto de entrada:
  * cuando lleguen DomFacts/AliasFacts/EscapeFacts/MemoryFacts, se anaden como
  * @c Fact nuevos + su rama en @c build; los consumidores que piden
@@ -66,8 +66,8 @@ namespace rbank {
  *        lazy: pedir @c snapshot.value_reqs() arrastra sus dependencias solo.
  */
 struct SnapshotBuilder {
-    uint32_t                       enabled = 0;       ///< mascara de Facts pedidos.
-    const analysis::BranchProfile *prof    = nullptr; ///< perfil (opcional).
+    uint32_t enabled = 0; ///< mascara de Facts pedidos.
+    const analysis::BranchProfile *prof = nullptr; ///< perfil (opcional).
 
     SnapshotBuilder &enable(Fact f) noexcept {
         enabled |= static_cast<uint32_t>(f);
@@ -81,7 +81,8 @@ struct SnapshotBuilder {
         return (e & static_cast<uint32_t>(f)) != 0;
     }
 
-    /** @brief Cierra las DEPENDENCIAS: Values->{Liveness,Loops}; Profile->Loops. */
+    /** @brief Cierra las DEPENDENCIAS: Values->{Liveness,Loops};
+     * Profile->Loops. */
     static uint32_t resolve(uint32_t e) noexcept {
         if (e & static_cast<uint32_t>(Fact::Values))
             e |= static_cast<uint32_t>(Fact::Liveness) |
@@ -95,13 +96,13 @@ struct SnapshotBuilder {
     FunctionSnapshot build(const ir::IrFunction &fn) const {
         const uint32_t e = resolve(enabled);
         FunctionSnapshot s;
-        s.fn   = &fn;
+        s.fn = &fn;
         s.prof = prof;
         // Forzar via los accessors lazy (computan + cachean + resuelven deps).
         if (has(e, Fact::Liveness)) (void)s.liveness();
-        if (has(e, Fact::Loops))    (void)s.loop_facts();
-        if (has(e, Fact::Profile))  (void)s.profile_facts();
-        if (has(e, Fact::Values))   (void)s.value_reqs();
+        if (has(e, Fact::Loops)) (void)s.loop_facts();
+        if (has(e, Fact::Profile)) (void)s.profile_facts();
+        if (has(e, Fact::Values)) (void)s.value_reqs();
         return s;
     }
 };
@@ -110,9 +111,9 @@ struct SnapshotBuilder {
  * @brief Conveniencia: fotografia COMPLETA de @p fn (todos los Facts).
  * @param prof  perfil de branches (opcional).
  */
-inline FunctionSnapshot build_snapshot(
-    const ir::IrFunction &fn,
-    const analysis::BranchProfile *prof = nullptr) {
+inline FunctionSnapshot
+build_snapshot(const ir::IrFunction &fn,
+               const analysis::BranchProfile *prof = nullptr) {
     SnapshotBuilder b;
     b.enable(Fact::All);
     if (prof) b.with_profile(*prof);

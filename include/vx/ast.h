@@ -84,22 +84,22 @@ enum class NodeKind : uint8_t {
     TypeAliasDecl,
     StructDecl,
     ClassDecl,
-    EnumDecl,     ///< Declaracion de tipo algebraico (enum + variantes con/sin
-                  ///< payload).
-    ExternFnDecl, ///< @c extern "lib.dll" fn name(params) -> ret; (FFI
-                  ///< declarativo, 0 overhead).
-    ImportDecl, ///< @c import "path" [as alias] [only A, B];  ( M sistema
-                ///< de modulos).
+    EnumDecl,      ///< Declaracion de tipo algebraico (enum + variantes con/sin
+                   ///< payload).
+    ExternFnDecl,  ///< @c extern "lib.dll" fn name(params) -> ret; (FFI
+                   ///< declarativo, 0 overhead).
+    ImportDecl,    ///< @c import "path" [as alias] [only A, B];  ( M sistema
+                   ///< de modulos).
     NamespaceDecl, ///< @c namespace foo { decls }  ( M.7.c, inline
                    ///< namespace estilo C++).
     BytesDecl,     ///< @c bytes name { db/dw/dd/dq/times ... }  (datos crudos
                    ///< estilo NASM, AOT).
     ConceptDecl,   ///< @c concept Name<T> = pred; | { stmts } | { metodos }
-                   ///< (constraints/bounds de genericos, #6; compile-time puro).
+    ///< (constraints/bounds de genericos, #6; compile-time puro).
     ExtensionDecl, ///< @c extension Tipo { metodos }  (NS.6-ext: anyade metodos
                    ///< a un tipo existente; dispatch estatico directo).
-    ImplDecl,      ///< @c impl Concept for Tipo { metodos }  (NS.6-ext: implementa
-                   ///< un concept para un tipo; conformance estructural).
+    ImplDecl, ///< @c impl Concept for Tipo { metodos }  (NS.6-ext: implementa
+              ///< un concept para un tipo; conformance estructural).
 
     // ----- Statements -----
     BlockStmt,
@@ -122,8 +122,8 @@ enum class NodeKind : uint8_t {
     ComptimeBlockStmt, ///< A.39: comptime { ... } scope para comptime const +
                        ///< for + asserts
     ComptimeForStmt, ///< A.39: comptime for (i in lo..hi) { body } -- unrolled
-    AsmStmt, ///<  AS: asm [quals] { ...NASM... } clobbers(...)  (inline
-             ///< asm nativo)
+    AsmStmt,         ///<  AS: asm [quals] { ...NASM... } clobbers(...)  (inline
+                     ///< asm nativo)
 
     // ----- Expressions -----
     IntLitExpr,
@@ -276,9 +276,10 @@ struct Node {
 struct Expr;
 struct Stmt;
 struct TypeNode;
-struct ParamDecl; ///< Necesaria para LambdaExpr antes de su definicion.
-struct ClassMethodDecl; ///< Necesaria para StructDecl::methods antes de definirse.
-struct BlockStmt; ///< Necesaria para LambdaExpr antes de su definicion.
+struct ParamDecl;       ///< Necesaria para LambdaExpr antes de su definicion.
+struct ClassMethodDecl; ///< Necesaria para StructDecl::methods antes de
+                        ///< definirse.
+struct BlockStmt;       ///< Necesaria para LambdaExpr antes de su definicion.
 
 /**
  * @struct PendingComplexity
@@ -297,8 +298,9 @@ struct BlockStmt; ///< Necesaria para LambdaExpr antes de su definicion.
  * campos normales de la instanciacion.
  */
 struct PendingComplexity {
-    std::string when;  ///< expresion del `when:` (con al menos un atomo sobre T).
-    std::string expr;  ///< azucar posicional (= total_post).
+    std::string
+        when; ///< expresion del `when:` (con al menos un atomo sobre T).
+    std::string expr; ///< azucar posicional (= total_post).
     std::vector<std::string> vars;
     std::string partial_pre;
     std::string partial_post;
@@ -366,8 +368,8 @@ struct TypeNode : Node {
     bool is_nonnull = false;
     /// const-correctness C-style POR NIVEL: `const T` marca el nodo del tipo
     /// base; `T *const` marca el PointerTypeNode de ese nivel.  Se propaga a
-    /// @c Type::is_const en type_from_node.  (volatile se parsea pero se ignora:
-    /// Vesta no tiene semantica volatile.)
+    /// @c Type::is_const en type_from_node.  (volatile se parsea pero se
+    /// ignora: Vesta no tiene semantica volatile.)
     bool is_const = false;
     explicit TypeNode(NodeKind k) : Node(k) {}
 };
@@ -482,13 +484,14 @@ struct FunctionTypeNode : TypeNode {
     /// false = lambda/closure (@c fn(...) -> R): fat-pointer de 16 bytes
     /// {fn_addr, env}.  Conceptos distintos: lambda != puntero a funcion.
     bool is_raw = false;
-    /// ABI custom por-parametro (`cfn(register("rax") T, register("rdi") T, ...)`):
-    /// registro fisico de entrada por parametro, alineado con @c param_types.
-    /// Cadena vacia = ABI estandar.  La ABI forma parte del TIPO: dos @c cfn con
-    /// abi_regs distintos son tipos INCOMPATIBLES (el type checker rechaza
-    /// mezclarlos), de modo que una CALLIND siempre conoce la ABI en compile-time
-    /// desde el tipo del puntero (aunque el VALOR del puntero cambie en runtime).
-    /// Vacio TAMBIEN cuando ningun parametro declara ABI custom (caso comun).
+    /// ABI custom por-parametro (`cfn(register("rax") T, register("rdi") T,
+    /// ...)`): registro fisico de entrada por parametro, alineado con @c
+    /// param_types. Cadena vacia = ABI estandar.  La ABI forma parte del TIPO:
+    /// dos @c cfn con abi_regs distintos son tipos INCOMPATIBLES (el type
+    /// checker rechaza mezclarlos), de modo que una CALLIND siempre conoce la
+    /// ABI en compile-time desde el tipo del puntero (aunque el VALOR del
+    /// puntero cambie en runtime). Vacio TAMBIEN cuando ningun parametro
+    /// declara ABI custom (caso comun).
     std::vector<std::string> param_abi_regs;
     FunctionTypeNode() : TypeNode(NodeKind::FunctionTypeNode) {}
 };
@@ -938,9 +941,9 @@ struct IndexExpr : Expr {
     /// @c b.  Hoy solo aplica al value-type `string` en modo native_poo_
     /// (devuelve una COPIA owned de los bytes [a, b)); RAII libera la
     /// copia.  La vista zero-copy (`borrow<string>`) llegara con borrow.
-    bool is_range = false;            ///< true para `s[a..b]` / `s[a..=b]`.
-    bool range_inclusive = false;     ///< true para `..=` (incluye b).
-    std::unique_ptr<Expr> range_hi;   ///< limite superior @c b del rango.
+    bool is_range = false;          ///< true para `s[a..b]` / `s[a..=b]`.
+    bool range_inclusive = false;   ///< true para `..=` (incluye b).
+    std::unique_ptr<Expr> range_hi; ///< limite superior @c b del rango.
     /// Overlay F3b: true si @c base es `v.arr` (campo array de un overlay).
     /// El lowering computa `base_overlay + pos + index*stride` (escala por el
     /// STRIDE del overlay, no por sizeof).  @c result_type = tipo del elemento.
@@ -1085,11 +1088,11 @@ struct MatchArm {
     std::string variant_name; ///< "Red", "Green", "_" (default), etc.
     std::vector<std::string>
         bindings; ///< Nombres locales para los payload fields.
-    /// Patron de VALOR para `match` sobre escalares (enteros/chars): `case 1 =>`,
-    /// `case 'a' =>`.  no-owning-al-cuerpo IntLitExpr/CharLitExpr.  null en las
-    /// arms de variante ADT y en el default `_`.  El type checker exige que el
-    /// scrutinee sea entero/char y todos los patrones literales de ese tipo.
-    /// Tambien es el literal de un match sobre string (StringLitExpr).
+    /// Patron de VALOR para `match` sobre escalares (enteros/chars): `case 1
+    /// =>`, `case 'a' =>`.  no-owning-al-cuerpo IntLitExpr/CharLitExpr.  null
+    /// en las arms de variante ADT y en el default `_`.  El type checker exige
+    /// que el scrutinee sea entero/char y todos los patrones literales de ese
+    /// tipo. Tambien es el literal de un match sobre string (StringLitExpr).
     std::unique_ptr<Expr> value_pattern;
     /// Fin (alto) de un patron de RANGO `case a..b =>` (exclusivo) o
     /// `case a..=b =>` (inclusivo), donde @c value_pattern es el inicio (bajo).
@@ -1233,7 +1236,8 @@ struct LambdaExpr : Expr {
     /// almacena en un campo).  Implica @c env_in_heap, pero el env se aloca
     /// con @c RAW_ALLOC host SIN etiqueta (no GC, no "__closure_env"): el
     /// destructor del contenedor lo libera (RAII), igual que un campo
-    /// @c unique<T>.  Modelo "sin GC" -- ver doc/VMdoc/Vesta/ClosuresEnCampos.md.
+    /// @c unique<T>.  Modelo "sin GC" -- ver
+    /// doc/VMdoc/Vesta/ClosuresEnCampos.md.
     bool env_owned_by_field = false;
 
     LambdaExpr() : Expr(NodeKind::LambdaExpr) {}
@@ -1516,10 +1520,11 @@ struct SynchronizedStmt : Stmt {
  *        salida; sin inicializador ni lectura posterior = scratch.
  */
 struct AsmOperand {
-    std::string reg_class;         ///< "reg" | "rax".."r15" | "xmm"/"ymm"/... | "mem".
-    std::string name;              ///< placeholder usado en el cuerpo NASM.
-    std::unique_ptr<Expr> init;    ///< valor de entrada (nullptr = scratch/out-only).
-    SourceLoc loc;                 ///< para diagnosticos.
+    std::string reg_class; ///< "reg" | "rax".."r15" | "xmm"/"ymm"/... | "mem".
+    std::string name;      ///< placeholder usado en el cuerpo NASM.
+    std::unique_ptr<Expr>
+        init;      ///< valor de entrada (nullptr = scratch/out-only).
+    SourceLoc loc; ///< para diagnosticos.
 };
 
 /**
@@ -1584,9 +1589,10 @@ struct ParamDecl : Node {
      * El @c type guarda el tipo del ELEMENTO (T), no el del puntero. */
     bool is_variadic = false;
     /** @c true si el parametro es un VARIADICO CRUDO: un `...` pelado (sin tipo
-     * ni nombre), estilo C.  Acepta N args de CUALQUIER tipo; cada uno se coloca
-     * segun su propia regla de ABI en el call site (enteros/punteros -> arg-regs
-     * GP, float -> arg-regs XMM).  El callee NO los empaqueta ni ofrece
+     * ni nombre), estilo C.  Acepta N args de CUALQUIER tipo; cada uno se
+     * coloca segun su propia regla de ABI en el call site (enteros/punteros ->
+     * arg-regs GP, float -> arg-regs XMM).  El callee NO los empaqueta ni
+     * ofrece
      * @c vacount()/array: es para funciones @c @Naked, donde el cuerpo asm lee
      * los registros ABI directamente.  Implica @c is_variadic. */
     bool is_raw_variadic = false;
@@ -1594,9 +1600,10 @@ struct ParamDecl : Node {
      * RECIBE (y en el que el caller lo COLOCA), declarado con
      * `register("rXX") T name`.  Vacio = ABI estandar del target (el i-esimo
      * arg-reg SysV/Win64).  Habilita wrappers de syscall/FFI de coste minimo:
-     * `register("rax") i64 id, register("rdi") i64 a1, ...` -> el call site pone
-     * cada valor directo en su registro (cero shift) y el cuerpo asm los lee tal
-     * cual.  Nombre en minusculas ("rax".."r15"); validado por el type checker. */
+     * `register("rax") i64 id, register("rdi") i64 a1, ...` -> el call site
+     * pone cada valor directo en su registro (cero shift) y el cuerpo asm los
+     * lee tal cual.  Nombre en minusculas ("rax".."r15"); validado por el type
+     * checker. */
     std::string abi_reg;
     ParamDecl() : Node(NodeKind::ParamDecl) {}
 };
@@ -1665,7 +1672,8 @@ struct FunctionDecl : Node {
     /// parametros de tipo genericos.  Dos sintaxis:
     ///   - comptime: `comptime <T, U> R name(params) { ... }` (type-level
     ///     metaprogramming; el body usa T como tipo, sizeof<T>/kind<T>/...).
-    ///   - runtime:  `R name<T>(params) { ... }` (funcion generica monomorphizada
+    ///   - runtime:  `R name<T>(params) { ... }` (funcion generica
+    ///   monomorphizada
     ///     en cada llamada `name<i64>(...)` o con args inferidos; equivalente a
     ///     un template de C++).
     /// En ambos casos se rellena este vector; @c is_comptime distingue el modo.
@@ -1801,18 +1809,20 @@ struct FunctionDecl : Node {
     /// resolver al parsear (T aun no es nada), asi que se guarda tal cual y lo
     /// resuelve el clon de la monomorphizacion.  Ver @ref PendingComplexity.
     std::vector<PendingComplexity> complexity_pending;
-    /// Contratos de HUELLA con `when:`, sin resolver.  Ver @ref PendingFootprint.
+    /// Contratos de HUELLA con `when:`, sin resolver.  Ver @ref
+    /// PendingFootprint.
     std::vector<PendingFootprint> footprint_pending;
     /// Contratos comprobables de recurso/efecto (huella computacional).  El
     /// compilador los VERIFICA contra la huella inferida del IR (sound: solo
     /// error cuando la violacion es demostrable).  Ausente = no declarado.
     ///   @pure @nothrow @nopanic  (flags)
     ///   @alloc(N) @stack(N)       (N = maximo permitido)
-    bool contract_pure = false;      ///< @pure declarado.
-    bool contract_nothrow = false;   ///< @nothrow declarado.
-    bool contract_nopanic = false;   ///< @nopanic declarado.
+    bool contract_pure = false;    ///< @pure declarado.
+    bool contract_nothrow = false; ///< @nothrow declarado.
+    bool contract_nopanic = false; ///< @nopanic declarado.
     // @alloc/@stack con DOS dimensiones (parcial=propio, total=cierre/pila peor
-    // caso).  La forma corta `@alloc(N)`/`@stack(N)` fija el TOTAL.  -1 = no decl.
+    // caso).  La forma corta `@alloc(N)`/`@stack(N)` fija el TOTAL.  -1 = no
+    // decl.
     int64_t contract_alloc = -1;         ///< @alloc(total: N) o `@alloc(N)`.
     int64_t contract_alloc_partial = -1; ///< @alloc(partial: N).
     int64_t contract_stack = -1;         ///< @stack(total: N) o `@stack(N)`.
@@ -1855,10 +1865,10 @@ struct StructuralMethod {
 
 struct ConceptDecl : Node {
     std::string name;
-    std::vector<std::string> type_params;        ///< usualmente ["T"]
+    std::vector<std::string> type_params; ///< usualmente ["T"]
     ConceptKind ckind = ConceptKind::Predicate;
-    std::unique_ptr<Expr> predicate;             ///< forma Predicate
-    std::unique_ptr<BlockStmt> body;             ///< forma Block
+    std::unique_ptr<Expr> predicate; ///< forma Predicate
+    std::unique_ptr<BlockStmt> body; ///< forma Block
     /// forma Structural: firmas completas (nombre + retorno + params).
     std::vector<StructuralMethod> structural_methods;
     bool is_public = true;
@@ -2086,7 +2096,8 @@ struct TypeAliasDecl : Node {
 struct ImportDecl : Node {
     /// Ruta literal tal como aparecio en el source (sin las comillas).
     /// E.g. @c "editor/buffer" o @c "std/io".  Cuando @c by_namespace es
-    /// true, contiene el path punteado del namespace (e.g. @c "std.collections").
+    /// true, contiene el path punteado del namespace (e.g. @c
+    /// "std.collections").
     std::string path;
     ///  NS.2-full: true si el import vino de la forma por-NAMESPACE
     /// @c "import a.b.c;" (identificadores punteados) en lugar de la forma
@@ -2141,11 +2152,12 @@ struct NamespaceDecl : Node {
     std::string name; ///< "ui", "audio", "std.collections" (path punteado)
     std::vector<std::unique_ptr<Node>> decls; ///< contenidos top-level
     ///  NS.1: true si vino de la forma STATEMENT `namespace a.b.c;` (agrupa
-    /// el resto del fichero) en lugar de la forma BLOQUE `namespace a.b.c {...}`.
-    /// Semanticamente equivalentes (ambas manglan sus @c decls con el path); el
-    /// flag es informativo para diagnosticos.
+    /// el resto del fichero) en lugar de la forma BLOQUE `namespace a.b.c
+    /// {...}`. Semanticamente equivalentes (ambas manglan sus @c decls con el
+    /// path); el flag es informativo para diagnosticos.
     bool is_statement_form = false;
-    ///  NS.3: override opcional del PackageId via @c "namespace X @id(\"..\");".
+    ///  NS.3: override opcional del PackageId via @c "namespace X
+    ///  @id(\"..\");".
     /// Vacio = usar el PackageId derivado del vx.toml.  Permite renombrar el
     /// namespace manteniendo la identidad ABI (el .vxi del modulo lo estampa).
     std::string package_id_override;
@@ -2170,8 +2182,8 @@ struct StructFieldDecl {
     bool is_static = false;
     /// Miembro ANONIMO C11: `struct { ... };` / `union { ... };` sin nombre de
     /// campo.  Sus campos se APLANAN en el struct contenedor (se accede a
-    /// `parent.inner_field` directamente).  @c type apunta al agregado sintetico
-    /// y @c name es un placeholder sintetico (no usado para acceso).
+    /// `parent.inner_field` directamente).  @c type apunta al agregado
+    /// sintetico y @c name es un placeholder sintetico (no usado para acceso).
     bool is_anonymous = false;
     /// Bit field width.  0 = campo normal (byte-aligned).
     /// >0 = bit field con esta cantidad de bits.  El type checker
@@ -2180,7 +2192,8 @@ struct StructFieldDecl {
     uint8_t bit_width = 0;
     /// Overlay (F1): offset EXPLICITO CONSTANTE del campo dentro de la vista
     /// (`ptr X @offset(0x30);` o `@0x30`).  -1 = sin offset constante (campo
-    /// normal, o offset dado por @c offset_expr).  Fast-path del caso constante.
+    /// normal, o offset dado por @c offset_expr).  Fast-path del caso
+    /// constante.
     int64_t explicit_offset = -1;
     /// Overlay (F2): offset del campo dado por una EXPRESION que puede
     /// referenciar campos hermanos (`@offset(prev_off + 0x10)`).  null = usa
@@ -2193,31 +2206,32 @@ struct StructFieldDecl {
     /// de flujo (if/else, bucles), `let` locales y referenciar los campos
     /// hermanos + el puntero `base` de la vista.  null = usa expr/offset const.
     std::unique_ptr<BlockStmt> offset_block;
-    /// Overlay (F3b) ARRAY: `T Name[count] @offset(pos) stride(s)`.  count = num
-    /// de elementos (expr, para bounds), stride = bytes entre elementos (expr).
-    /// El tipo del campo (@c type) es el tipo del ELEMENTO.  `v.Name[i]` resuelve
-    /// a `base + pos + i*stride`.  null = campo escalar (no array).
+    /// Overlay (F3b) ARRAY: `T Name[count] @offset(pos) stride(s)`.  count =
+    /// num de elementos (expr, para bounds), stride = bytes entre elementos
+    /// (expr). El tipo del campo (@c type) es el tipo del ELEMENTO. `v.Name[i]`
+    /// resuelve a `base + pos + i*stride`.  null = campo escalar (no array).
     std::unique_ptr<Expr> array_count;
     std::unique_ptr<Expr> array_stride;
-    /// Overlay array POR-ELEMENTO (`T Name[count] @element { ... }`): resolver que
-    /// devuelve la DIRECCION del elemento `index` (con `index` en scope), para
-    /// stride VARIABLE / records de longitud variable / TLV.  Puede acceder al
-    /// elemento anterior (`self.Name[index-1]`).  null = array de stride fijo.
+    /// Overlay array POR-ELEMENTO (`T Name[count] @element { ... }`): resolver
+    /// que devuelve la DIRECCION del elemento `index` (con `index` en scope),
+    /// para stride VARIABLE / records de longitud variable / TLV.  Puede
+    /// acceder al elemento anterior (`self.Name[index-1]`).  null = array de
+    /// stride fijo.
     std::unique_ptr<BlockStmt> element_block;
     /// Overlay array marcado con `[` (aunque el count este vacio: `T Name[]`).
     /// Distingue un array NO acotado (el usuario gestiona la terminacion) de un
     /// campo escalar.  true = es un array (con o sin @c array_count).
     bool is_array = false;
     /// Overlay ENDIANNESS del campo (F5): 0 = nativo/host (sin swap), 1 = big-
-    /// endian (`@be`), 2 = little-endian explicito (`@le`).  Un campo `@be` en un
-    /// host little-endian (x86-64) emite BYTESWAP en cada read/write.  Para
+    /// endian (`@be`), 2 = little-endian explicito (`@le`).  Un campo `@be` en
+    /// un host little-endian (x86-64) emite BYTESWAP en cada read/write.  Para
     /// formatos de endianness fija (red = BE, ELF lo declara en e_ident).
     uint8_t endian = 0;
     /// Overlay endianness DINAMICA (F5): `@endian(expr)` -- la expr (bool/int:
     /// nonzero = big-endian) decide el orden EN TIEMPO DE ACCESO.  Puede
     /// referenciar campos hermanos (`@endian(ei_data == 2)`, ELF) o un comptime
-    /// const (se pliega).  null = usa @c endian estatico.  El swap es condicional
-    /// (branchless select) cuando la expr es runtime.
+    /// const (se pliega).  null = usa @c endian estatico.  El swap es
+    /// condicional (branchless select) cuando la expr es runtime.
     std::unique_ptr<Expr> endian_expr;
     /// Valor por defecto del campo (`u8 a = 0x10;`).  null = sin default
     /// (el campo se zero-inicializa).  Se aplica cuando el struct se crea con
@@ -2234,7 +2248,8 @@ struct StructFieldDecl {
 
 /**
  * @struct StructDecl
- * @brief Declaracion de un @c struct (value type con herencia ESTATICA opcional).
+ * @brief Declaracion de un @c struct (value type con herencia ESTATICA
+ * opcional).
  *
  * Solo cubre campos; los metodos opcionales llegan en hitos posteriores.
  * El type checker
@@ -2280,10 +2295,10 @@ struct StructDecl : Node {
     /// del campo mayor y el alineamiento el maximo.  Reusa toda la maquinaria
     /// de struct salvo el calculo de layout (offsets/size).
     bool is_union = false;
-    /// `@Abstract` -- el struct NO es instanciable por si mismo; solo sirve como
-    /// base de otros (`struct D : Base`).  Independiente de `Self`: un struct con
-    /// `Self` es instanciable por defecto (Self = el propio tipo si no hay
-    /// derivado).  Ver [[proj_struct_self_inheritance]].
+    /// `@Abstract` -- el struct NO es instanciable por si mismo; solo sirve
+    /// como base de otros (`struct D : Base`).  Independiente de `Self`: un
+    /// struct con `Self` es instanciable por defecto (Self = el propio tipo si
+    /// no hay derivado).  Ver [[proj_struct_self_inheritance]].
     bool is_abstract = false;
     /// Parametros de tipo opcionales (templates).  `struct Box<T> { T v; }`
     /// produce type_params = ["T"].  Vacio para structs no genericos.  Si no
@@ -2313,9 +2328,10 @@ struct StructDecl : Node {
     /// con la natural) y padea el tamano a un multiplo de N.  0 = sin override.
     /// Equivalente a C `__declspec(align(N))` / `_Alignas(N)`.
     uint16_t attr_align = 0;
-    /// Struct INCOMPLETO (forward-decl opaco `typedef struct Tag *P;` sin cuerpo).
-    /// Se registra el tipo (usable via puntero, 8 bytes) pero sin campos; una
-    /// definicion posterior `struct Tag { ... }` lo completa (sobrescribe).
+    /// Struct INCOMPLETO (forward-decl opaco `typedef struct Tag *P;` sin
+    /// cuerpo). Se registra el tipo (usable via puntero, 8 bytes) pero sin
+    /// campos; una definicion posterior `struct Tag { ... }` lo completa
+    /// (sobrescribe).
     bool is_incomplete = false;
     StructDecl() : Node(NodeKind::StructDecl) {}
 };
@@ -2393,8 +2409,9 @@ struct EnumDecl : Node {
     std::vector<std::string> type_params;
     /// #6: constraints de los type-params (`enum E<T: Concepto>`).
     std::vector<TypeBound> type_bounds;
-    /// Contratos de layout comprobables (modo --analyze): @size(N) (@pod/@no_heap
-    /// aplican tambien, aunque un enum sin payload es trivialmente @pod).
+    /// Contratos de layout comprobables (modo --analyze): @size(N)
+    /// (@pod/@no_heap aplican tambien, aunque un enum sin payload es
+    /// trivialmente @pod).
     bool contract_pod = false;
     bool contract_no_heap = false;
     int64_t contract_size = -1;
@@ -2455,8 +2472,9 @@ struct ClassMethodDecl : Node {
     /// F1b: constructor `comptime T(expr)` de un struct value-type.  Se ejecuta
     /// en compile-time (ComptimeVM) y materializa el struct; base de los
     /// literales de tipo usuario (modelo Swift ExpressibleByIntegerLiteral).
-    /// Solo valido en constructores; el lowering lo baja a `__macro_<T>__ctor_N`
-    /// y el call site `T(literal)` lo invoca via `invoke_struct_macro`.
+    /// Solo valido en constructores; el lowering lo baja a
+    /// `__macro_<T>__ctor_N` y el call site `T(literal)` lo invoca via
+    /// `invoke_struct_macro`.
     bool is_comptime = false;
     /// true si es destructor `~ClassName()` declarado dentro
     /// del cuerpo de la clase.  Sin parametros (validado en parser).
@@ -2479,11 +2497,11 @@ struct ClassMethodDecl : Node {
     ///
     /// Un metodo hace lo mismo que una funcion libre con un argumento mas, asi
     /// que no habia motivo para que no pudiera declarar lo mismo -- y sin esto,
-    /// un tipo cuya API son METODOS (`atomic<T>`, las colecciones, ...) no puede
-    /// declarar sus propiedades aunque el compilador sepa verificarlas.
-    bool contract_pure = false;    ///< @pure declarado.
-    bool contract_nothrow = false; ///< @nothrow declarado.
-    bool contract_nopanic = false; ///< @nopanic declarado.
+    /// un tipo cuya API son METODOS (`atomic<T>`, las colecciones, ...) no
+    /// puede declarar sus propiedades aunque el compilador sepa verificarlas.
+    bool contract_pure = false;          ///< @pure declarado.
+    bool contract_nothrow = false;       ///< @nothrow declarado.
+    bool contract_nopanic = false;       ///< @nopanic declarado.
     int64_t contract_alloc = -1;         ///< @alloc(total: N) o `@alloc(N)`.
     int64_t contract_alloc_partial = -1; ///< @alloc(partial: N).
     int64_t contract_stack = -1;         ///< @stack(total: N) o `@stack(N)`.
@@ -2500,7 +2518,8 @@ struct ClassMethodDecl : Node {
     /// resolver al parsear (T aun no es nada), asi que se guarda tal cual y lo
     /// resuelve el clon de la monomorphizacion.  Ver @ref PendingComplexity.
     std::vector<PendingComplexity> complexity_pending;
-    /// Contratos de HUELLA con `when:`, sin resolver.  Ver @ref PendingFootprint.
+    /// Contratos de HUELLA con `when:`, sin resolver.  Ver @ref
+    /// PendingFootprint.
     std::vector<PendingFootprint> footprint_pending;
 
     /// @brief si !=0, el metodo es accesor de propiedad.
@@ -2633,9 +2652,10 @@ struct ClassDecl : Node {
  * `concept`.  @c kind = NodeKind del decl.
  */
 struct GenericTemplateExport {
-    std::string name;    ///< nombre del template (para diagnostico/dedup)
-    uint8_t kind = 0;    ///< NodeKind del decl (Struct/Class/Function/Enum/Concept)
-    std::string source;  ///< texto fuente completo del decl
+    std::string name; ///< nombre del template (para diagnostico/dedup)
+    uint8_t kind =
+        0; ///< NodeKind del decl (Struct/Class/Function/Enum/Concept)
+    std::string source; ///< texto fuente completo del decl
     bool is_public = true;
 };
 

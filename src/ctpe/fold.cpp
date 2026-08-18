@@ -49,7 +49,8 @@ std::string cache_path_for(uint64_t key) {
 using CacheMap =
     std::unordered_map<std::string, std::pair<ir::IrType, uint64_t>>;
 
-// Formato binario simple: [u32 count] { [u32 name_len][name][u8 type][u64 val] }.
+// Formato binario simple: [u32 count] { [u32 name_len][name][u8 type][u64 val]
+// }.
 void load_cache(uint64_t key, CacheMap &out) {
     std::ifstream f(cache_path_for(key), std::ios::binary);
     if (!f) return;
@@ -73,7 +74,8 @@ void load_cache(uint64_t key, CacheMap &out) {
 
 void save_cache(uint64_t key, const CacheMap &m) {
     std::error_code ec;
-    std::filesystem::create_directories(".cache/ctpe", ec); // mkdir -p portable.
+    std::filesystem::create_directories(".cache/ctpe",
+                                        ec); // mkdir -p portable.
     std::ofstream f(cache_path_for(key), std::ios::binary | std::ios::trunc);
     if (!f) return;
     uint32_t count = static_cast<uint32_t>(m.size());
@@ -89,9 +91,9 @@ void save_cache(uint64_t key, const CacheMap &m) {
     }
 }
 
-// Reescribe el cuerpo de @p fn a `[call __module_init*]; %r = CONST value; ret %r`.
-// La funcion es zero-param evaluable con retorno escalar; su COMPUTACION se
-// sustituye por el valor precomputado.  PERO se PRESERVAN las llamadas a
+// Reescribe el cuerpo de @p fn a `[call __module_init*]; %r = CONST value; ret
+// %r`. La funcion es zero-param evaluable con retorno escalar; su COMPUTACION
+// se sustituye por el valor precomputado.  PERO se PRESERVAN las llamadas a
 // `__module_init*` (registro de clases/aspectos en el ClassRegistry global):
 // ese efecto PERSISTE mas alla de main -- si el .velb se carga como modulo via
 // loadmodule, el caller usa las clases registradas.  Plegarlas a un simple
@@ -99,7 +101,8 @@ void save_cache(uint64_t key, const CacheMap &m) {
 // un programa standalone el __module_init es inofensivo (registra y sigue).
 void replace_body_with_const(ir::IrFunction &fn, uint64_t value, ir::IrType t) {
     // Recolectar los nombres de las llamadas a __module_init* del cuerpo actual
-    // (en orden) ANTES de limpiar.  Son CALL void sin operandos (registro global).
+    // (en orden) ANTES de limpiar.  Son CALL void sin operandos (registro
+    // global).
     std::vector<std::string> module_inits;
     for (const auto &blk : fn.blocks)
         for (const auto &in : blk.instrs)
@@ -108,7 +111,8 @@ void replace_body_with_const(ir::IrFunction &fn, uint64_t value, ir::IrType t) {
                 module_inits.push_back(in.func_name);
 
     if (std::getenv("VESTA_CTPE_DEBUG"))
-        std::fprintf(stderr, "[ctpe] %s: plegado, %zu __module_init, %zu params\n",
+        std::fprintf(stderr,
+                     "[ctpe] %s: plegado, %zu __module_init, %zu params\n",
                      fn.name.c_str(), module_inits.size(), fn.params.size());
 
     fn.blocks.clear();
@@ -161,7 +165,8 @@ int fold(ir::IrModule &mod, vx::ComptimeRuntime &rt, const FoldBudget &budget) {
     load_cache(key, cache);
 
     std::unordered_map<std::string, ir::IrFunction *> by_name;
-    for (auto &fn : mod.functions) by_name[fn.name] = &fn;
+    for (auto &fn : mod.functions)
+        by_name[fn.name] = &fn;
 
     vx::ComptimeRuntime::CtpeBudget b;
     b.millis = budget.millis;
@@ -182,7 +187,8 @@ int fold(ir::IrModule &mod, vx::ComptimeRuntime &rt, const FoldBudget &budget) {
         uint64_t value = 0;
         auto cit = cache.find(cand.fn);
         if (cit != cache.end() && cit->second.first == cand.ret_type) {
-            value = cit->second.second; // cache hit: mismo IR -> mismo resultado.
+            value =
+                cit->second.second; // cache hit: mismo IR -> mismo resultado.
             if (trace)
                 std::fprintf(stderr, "[ctpe] %s -> 0x%llx (cache)\n",
                              cand.fn.c_str(), (unsigned long long)value);

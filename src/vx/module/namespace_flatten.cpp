@@ -112,7 +112,8 @@ void rewrite_refs_in_type_(
     } else if (t->kind == ast::NodeKind::PrimitiveTypeNode) {
         // NS.1 fix: los smart pointers (gc<T>/unique<T>/shared<T>/borrow<T>) y
         // las colecciones (ArrayList<T>/HashMap<K,V>/...) se parsean como
-        // PrimitiveTypeNode con type_args -> hay que manglar los tipos internos.
+        // PrimitiveTypeNode con type_args -> hay que manglar los tipos
+        // internos.
         auto *pn = static_cast<ast::PrimitiveTypeNode *>(t);
         for (auto &ta : pn->type_args)
             rewrite_refs_in_type_(ta.get(), rename_map);
@@ -137,14 +138,13 @@ void rewrite_refs_in_expr_(
             rewrite_refs_in_expr_(a.get(), rename_map);
         for (auto &ta : c->type_args)
             rewrite_refs_in_type_(ta.get(), rename_map);
-        // NS.1 fix: reflexion.  forName("ClassName") / Class.forName("ClassName")
-        // referencian una clase por STRING; si la clase es del namespace esta
-        // mangled -> reescribir el literal para que el lookup runtime la
-        // encuentre.
+        // NS.1 fix: reflexion.  forName("ClassName") /
+        // Class.forName("ClassName") referencian una clase por STRING; si la
+        // clase es del namespace esta mangled -> reescribir el literal para que
+        // el lookup runtime la encuentre.
         {
             const ast::IdentExpr *cid = nullptr;
-            if (c->callee &&
-                c->callee->kind == ast::NodeKind::IdentExpr)
+            if (c->callee && c->callee->kind == ast::NodeKind::IdentExpr)
                 cid = static_cast<const ast::IdentExpr *>(c->callee.get());
             else if (c->callee &&
                      c->callee->kind == ast::NodeKind::FieldAccessExpr)
@@ -152,12 +152,11 @@ void rewrite_refs_in_expr_(
                 cid = nullptr; // el field_name se chequea abajo
             const std::string fname =
                 cid ? cid->name
-                    : (c->callee &&
-                       c->callee->kind == ast::NodeKind::FieldAccessExpr)
-                          ? static_cast<const ast::FieldAccessExpr *>(
-                                c->callee.get())
-                                ->field_name
-                          : std::string();
+                : (c->callee &&
+                   c->callee->kind == ast::NodeKind::FieldAccessExpr)
+                    ? static_cast<const ast::FieldAccessExpr *>(c->callee.get())
+                          ->field_name
+                    : std::string();
             // Builtins de reflexion que reciben un nombre de tipo/clase como
             // STRING literal: forName (clase), find_type (@Introspect).
             if (fname == "forName" || fname == "find_type") {
@@ -403,8 +402,8 @@ void mangle_decls_(std::vector<std::unique_ptr<ast::Node>> &decls,
                    std::unordered_map<std::string, std::string> &rename_map);
 
 /// NS.1 fix: reescribe los nombres de CONCEPTS en los bounds de genericos
-/// (`<T: MiConcepto>` / `where T: A + B`).  Sin esto, un concept declarado en el
-/// namespace (mangled) no se resuelve en el bound ("concepto desconocido").
+/// (`<T: MiConcepto>` / `where T: A + B`).  Sin esto, un concept declarado en
+/// el namespace (mangled) no se resuelve en el bound ("concepto desconocido").
 void rewrite_bounds_(
     std::vector<ast::TypeBound> &bounds,
     const std::unordered_map<std::string, std::string> &rename_map) {
@@ -511,8 +510,8 @@ void mangle_class_decl_(
         // NS.1 fix: AOP.  El pointcut de un advice (@Before/@After/@Around) se
         // guarda como string "ClassName.methodName" en advice_target.  Si la
         // clase target es del namespace, esta mangled -> reescribir la parte de
-        // la clase para que el pointcut matchee (si no, el advice no se registra
-        // y el @After no pisa el resultado).
+        // la clase para que el pointcut matchee (si no, el advice no se
+        // registra y el @After no pisa el resultado).
         if (!m->advice_target.empty()) {
             size_t dot = m->advice_target.find('.');
             if (dot != std::string::npos) {
@@ -743,8 +742,7 @@ void collect_and_flatten_(std::vector<std::unique_ptr<ast::Node>> &in_decls,
             auto *fd = static_cast<ast::FunctionDecl *>(d.get());
             FlattenedNamespace::Sym sym;
             sym.kind = FlattenedNamespace::Sym::Function;
-            sym.public_name =
-                strip_ns_prefix_(fd->name, full_path);
+            sym.public_name = strip_ns_prefix_(fd->name, full_path);
             sym.mangled_label = fd->name;
             out_ns.symbols.push_back(std::move(sym));
             out_decls.push_back(std::move(d));
@@ -754,8 +752,7 @@ void collect_and_flatten_(std::vector<std::unique_ptr<ast::Node>> &in_decls,
             auto *sd = static_cast<ast::StructDecl *>(d.get());
             FlattenedNamespace::Sym sym;
             sym.kind = FlattenedNamespace::Sym::Type;
-            sym.public_name =
-                strip_ns_prefix_(sd->name, full_path);
+            sym.public_name = strip_ns_prefix_(sd->name, full_path);
             sym.mangled_label = sd->name;
             out_ns.symbols.push_back(std::move(sym));
             out_decls.push_back(std::move(d));
@@ -765,8 +762,7 @@ void collect_and_flatten_(std::vector<std::unique_ptr<ast::Node>> &in_decls,
             auto *cd = static_cast<ast::ClassDecl *>(d.get());
             FlattenedNamespace::Sym sym;
             sym.kind = FlattenedNamespace::Sym::Type;
-            sym.public_name =
-                strip_ns_prefix_(cd->name, full_path);
+            sym.public_name = strip_ns_prefix_(cd->name, full_path);
             sym.mangled_label = cd->name;
             out_ns.symbols.push_back(std::move(sym));
             out_decls.push_back(std::move(d));
@@ -776,8 +772,7 @@ void collect_and_flatten_(std::vector<std::unique_ptr<ast::Node>> &in_decls,
             auto *ed = static_cast<ast::EnumDecl *>(d.get());
             FlattenedNamespace::Sym sym;
             sym.kind = FlattenedNamespace::Sym::Type;
-            sym.public_name =
-                strip_ns_prefix_(ed->name, full_path);
+            sym.public_name = strip_ns_prefix_(ed->name, full_path);
             sym.mangled_label = ed->name;
             out_ns.symbols.push_back(std::move(sym));
             out_decls.push_back(std::move(d));
@@ -787,8 +782,7 @@ void collect_and_flatten_(std::vector<std::unique_ptr<ast::Node>> &in_decls,
             auto *td = static_cast<ast::TypeAliasDecl *>(d.get());
             FlattenedNamespace::Sym sym;
             sym.kind = FlattenedNamespace::Sym::Type;
-            sym.public_name =
-                strip_ns_prefix_(td->name, full_path);
+            sym.public_name = strip_ns_prefix_(td->name, full_path);
             sym.mangled_label = td->name;
             out_ns.symbols.push_back(std::move(sym));
             out_decls.push_back(std::move(d));
@@ -798,8 +792,7 @@ void collect_and_flatten_(std::vector<std::unique_ptr<ast::Node>> &in_decls,
             auto *gd = static_cast<ast::GlobalVarDecl *>(d.get());
             FlattenedNamespace::Sym sym;
             sym.kind = FlattenedNamespace::Sym::Variable;
-            sym.public_name =
-                strip_ns_prefix_(gd->name, full_path);
+            sym.public_name = strip_ns_prefix_(gd->name, full_path);
             sym.mangled_label = gd->name;
             out_ns.symbols.push_back(std::move(sym));
             out_decls.push_back(std::move(d));
@@ -808,7 +801,8 @@ void collect_and_flatten_(std::vector<std::unique_ptr<ast::Node>> &in_decls,
         case ast::NodeKind::ConceptDecl: {
             auto *cd = static_cast<ast::ConceptDecl *>(d.get());
             FlattenedNamespace::Sym sym;
-            sym.kind = FlattenedNamespace::Sym::Type; // concepto = simbolo tipo-like
+            sym.kind =
+                FlattenedNamespace::Sym::Type; // concepto = simbolo tipo-like
             sym.public_name = strip_ns_prefix_(cd->name, full_path);
             sym.mangled_label = cd->name;
             out_ns.symbols.push_back(std::move(sym));

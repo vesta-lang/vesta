@@ -40,8 +40,8 @@ class TypeChecker;
  * @brief Cuenta de lo emitido, para poder informar sin adivinar.
  */
 struct VxdbgEmitStats {
-    size_t entities = 0;   ///< entidades escritas (tipos y miembros)
-    size_t members = 0;    ///< de las anteriores, campos/metodos/variantes
+    size_t entities = 0; ///< entidades escritas (tipos y miembros)
+    size_t members = 0;  ///< de las anteriores, campos/metodos/variantes
     /// Nombres referenciados que no corresponden a ningun tipo conocido.  La
     /// relacion se omite en vez de inventarse un destino: preferimos no decir
     /// nada a decir algo falso.  Que este contador no sea cero es informacion
@@ -118,8 +118,8 @@ bool publish_vxdbg_artifact(const std::string &artifact_path,
  *
  * @param tc Checker ya ejecutado.
  * @param symbol_links Que declaracion produjo cada simbolo, tal como lo anoto
- *        el lowering al crear los nombres (@c Lowering::emitted_symbols).  Es lo
- *        que permite ir de una direccion de ejecucion a una declaracion; vacio
+ *        el lowering al crear los nombres (@c Lowering::emitted_symbols).  Es
+ * lo que permite ir de una direccion de ejecucion a una declaracion; vacio
  *        emite el grafo pero sin forma de entrar en el.
  * @param source_path Ruta del fuente principal.
  * @param source_text Su contenido, para resumirlo y poder detectar despues que
@@ -129,14 +129,12 @@ bool publish_vxdbg_artifact(const std::string &artifact_path,
  * @param err Recibe el motivo si algo fallo.
  * @return @c true si se escribio todo.
  */
-bool emit_vxdbg_source(const TypeChecker &tc,
-                       const std::vector<std::pair<std::string, std::string>>
-                           &symbol_links,
-                       const std::vector<vxdbg::SourceExtent> &spans,
-                       const std::string &source_path,
-                       const std::string &source_text,
-                       const std::string &out_dir, VxdbgEmitStats &stats,
-                       std::string &err);
+bool emit_vxdbg_source(
+    const TypeChecker &tc,
+    const std::vector<std::pair<std::string, std::string>> &symbol_links,
+    const std::vector<vxdbg::SourceExtent> &spans,
+    const std::string &source_path, const std::string &source_text,
+    const std::string &out_dir, VxdbgEmitStats &stats, std::string &err);
 
 } // namespace vx
 

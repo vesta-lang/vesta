@@ -56,7 +56,8 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
     ea.module_summary(mod); // deja el motor con sus tablas listas
 
     /* Reparto del coste.  Hizo falta: la sospecha era el def-use y no lo era,
-     * ni el motor duplicado -- solo midiendo cada parte se llego a la que es. */
+     * ni el motor duplicado -- solo midiendo cada parte se llego a la que es.
+     */
     const bool medir = std::getenv("VESTA_TIMES") != nullptr;
     using RelojLim = std::chrono::steady_clock;
     auto marca = RelojLim::now();
@@ -101,15 +102,14 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
         // segunda vez, porque el resumen del modulo ya lo pidio.
         const analysis::IrFacts &hechos = ea.facts_publico(fn);
         const auto t_calc = RelojLim::now();
-        const analysis::RangeFacts rangos =
-            analysis::compute_ranges(fn, hechos, analysis::RangeOptions{},
-                                     &resumenes);
+        const analysis::RangeFacts rangos = analysis::compute_ranges(
+            fn, hechos, analysis::RangeOptions{}, &resumenes);
         ns_calcular += std::chrono::duration_cast<std::chrono::nanoseconds>(
-                               RelojLim::now() - t_calc)
-                               .count();
+                           RelojLim::now() - t_calc)
+                           .count();
         cerrar(us_rangos);
-        /* Se prestan al modelo de efectos: ya estan calculados aqui arriba, y si
-         * no se los damos cada bloque de asm los recalcula recorriendo la
+        /* Se prestan al modelo de efectos: ya estan calculados aqui arriba, y
+         * si no se los damos cada bloque de asm los recalcula recorriendo la
          * funcion entera.  Se retiran al acabar con esta funcion para que no
          * puedan usarse con la siguiente. */
         ea.prestar_rangos(&fn, &rangos);
@@ -125,9 +125,10 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
              * definicion no sabe nada de ellas. */
             const auto t_montar = RelojLim::now();
             analysis::RangeWalk paso(fn, hechos, rangos, bi);
-            ns_montar_estado += std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                        RelojLim::now() - t_montar)
-                                        .count();
+            ns_montar_estado +=
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    RelojLim::now() - t_montar)
+                    .count();
             ++n_bloques;
             for (const ir::IrInstr &in : b.instrs) {
                 // El estado del punto se consume SIEMPRE, salga la revision por
@@ -142,9 +143,10 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
                 ++n_instrs;
                 const auto t_ef = RelojLim::now();
                 const EffectAnalysisResult r = ea.local(fn, in);
-                ns_efectos += std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                      RelojLim::now() - t_ef)
-                                      .count();
+                ns_efectos +=
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        RelojLim::now() - t_ef)
+                        .count();
                 auto revisa = [&](const LocSet &ls, bool escribe) {
                     if (ls.is_top) return;
                     for (const AbstractLoc &l : ls.locs) {
@@ -174,8 +176,8 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
                              * PODRIA salirse, y eso no es un error. */
                             const ValueRange &rr = rangos.at(ex.sym);
                             int64_t rlo, rhi;
-                            if (!rr.acotada() || !rr.vista_con_signo(rlo, rhi) ||
-                                rhi < 0)
+                            if (!rr.acotada() ||
+                                !rr.vista_con_signo(rlo, rhi) || rhi < 0)
                                 continue;
                             tope = rhi;
                             objeto = rhi;
@@ -206,8 +208,8 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
                  * dentro de ella no se puede juzgar: el tamano de la region lo
                  * sabe quien llama.  Es justo lo que dice la nota de mas abajo
                  * sobre los parametros, y la conclusion que faltaba sacar: hay
-                 * que mirarlo AQUI, sustituyendo cada parametro por el argumento
-                 * de esta llamada.
+                 * que mirarlo AQUI, sustituyendo cada parametro por el
+                 * argumento de esta llamada.
                  *
                  * Sin esto, una funcion que rellena mas bytes de los que caben
                  * compilaba sin una palabra, y el fallo aparecia pisando la
@@ -223,7 +225,8 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
                     const EfectoEnLlamada ll = ea.at_call_site(fn, in);
                     us_llamadas +=
                         std::chrono::duration_cast<std::chrono::microseconds>(
-                            RelojLim::now() - t_ll).count();
+                            RelojLim::now() - t_ll)
+                            .count();
                     ++n_llamadas;
                     revisa(ll.escribe, true);
                     revisa(ll.lee, false);
@@ -243,24 +246,23 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
                  * Comprobar solo el minimo daba 17 falsos en la suite con
                  * desplazamientos de -2147483648: no era un indice, era el
                  * ancho del tipo. */
-                const bool es_acceso = (in.op == ir::IrOp::LOAD ||
-                                        in.op == ir::IrOp::STORE);
+                const bool es_acceso =
+                    (in.op == ir::IrOp::LOAD || in.op == ir::IrOp::STORE);
                 if (!es_acceso || in.operands.empty()) continue;
                 const ir::IrValueId vptr =
-                    (in.op == ir::IrOp::LOAD) ? in.operands[0]
-                                              : (in.operands.size() > 1
-                                                     ? in.operands[1]
-                                                     : ir::IR_NO_VALUE);
+                    (in.op == ir::IrOp::LOAD)
+                        ? in.operands[0]
+                        : (in.operands.size() > 1 ? in.operands[1]
+                                                  : ir::IR_NO_VALUE);
                 if (vptr == ir::IR_NO_VALUE) continue;
                 const PointsToEntry &pe = pt.at(vptr);
                 if (std::getenv("VESTA_BOUNDS_DEBUG"))
                     std::fprintf(stderr,
                                  "[bounds] fn=%s linea=%u kind=%d exact=%d "
                                  "rango=%d [%lld,%lld]\n",
-                                 fn.name.c_str(), in.source_line,
-                                 (int)pe.kind, pe.off_exact ? 1 : 0,
-                                 pe.off_rango ? 1 : 0, (long long)pe.off_lo,
-                                 (long long)pe.off_hi);
+                                 fn.name.c_str(), in.source_line, (int)pe.kind,
+                                 pe.off_exact ? 1 : 0, pe.off_rango ? 1 : 0,
+                                 (long long)pe.off_lo, (long long)pe.off_hi);
 
                 if (pe.off_exact || !pe.off_rango) continue;
                 if (pe.kind != AbstractLoc::Kind::Stack &&
@@ -280,7 +282,8 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
                     int64_t l = 0, h = 0;
                     if (rp.acotada() && rp.vista_con_signo(rlo, rhi) &&
                         !__builtin_add_overflow(pe.off_base, rlo, &l) &&
-                        !__builtin_add_overflow(pe.off_base, rhi, &h) && l <= h) {
+                        !__builtin_add_overflow(pe.off_base, rhi, &h) &&
+                        l <= h) {
                         off_lo = l;
                         off_hi = h;
                     }
@@ -289,9 +292,9 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
                 const int32_t w = analysis::memory_access_size(in.type);
                 if (w <= 0) continue;
                 /* El final del acceso mas alto.  Con freno: el intervalo puede
-                 * llegar al mayor entero -- es lo que vale un desplazamiento del
-                 * que solo se sabe su tipo -- y sumarle el ancho ahi daria la
-                 * vuelta, convirtiendo "no se nada" en "todo cae antes del
+                 * llegar al mayor entero -- es lo que vale un desplazamiento
+                 * del que solo se sabe su tipo -- y sumarle el ancho ahi daria
+                 * la vuelta, convirtiendo "no se nada" en "todo cae antes del
                  * objeto".  Un calculo que se desborda no prueba nada. */
                 int64_t fin_alto;
                 if (__builtin_add_overflow(off_hi, static_cast<int64_t>(w),

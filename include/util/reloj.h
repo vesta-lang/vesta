@@ -17,8 +17,8 @@
  * @c QueryPerformanceCounter, que en las maquinas actuales corre a 10 MHz: un
  * salto cada **100 ns**.  Un tramo de treinta nanosegundos repetido cien mil
  * veces -- justo el que hay que descubrir -- no se puede distinguir de cero con
- * esa granularidad.  El contador de ciclos del procesador da del orden de 0,3 ns
- * por tick y ademas se lee mas barato.
+ * esa granularidad.  El contador de ciclos del procesador da del orden de 0,3
+ * ns por tick y ademas se lee mas barato.
  *
  * CUANDO SE USA EL CONTADOR DE CICLOS.  Solo si el procesador declara que su
  * contador es INVARIANTE: que no cambia de ritmo con la frecuencia ni se para
@@ -55,9 +55,9 @@ struct Info {
      * para decidir si una medida significa algo.  Un reloj que dice que su
      * resolucion es cero no se puede distinguir de uno roto.
      */
-    double    resolucion_ns = 0.0;
+    double resolucion_ns = 0.0;
     long long coste_ns = 0; ///< lo que cuesta una lectura.
-    bool      tsc_invariante = false;
+    bool tsc_invariante = false;
 };
 
 /// Lectura del reloj, en TICKS de su propia unidad (no en tiempo).

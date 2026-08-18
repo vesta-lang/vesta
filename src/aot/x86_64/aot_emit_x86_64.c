@@ -26,8 +26,9 @@
  * estructura prohibe meter src/ en el path). */
 #include "../common/aot_emit_internal.h"
 
-/* aot_set_debug_symbols + g_aot_dbg_syms/n -> movidos a common/aot_emit_common.c
- * (arch-neutral); se leen aqui via las declaraciones extern del header interno.
+/* aot_set_debug_symbols + g_aot_dbg_syms/n -> movidos a
+ * common/aot_emit_common.c (arch-neutral); se leen aqui via las declaraciones
+ * extern del header interno.
  *
  * =========================================================================
  *  PE32+
@@ -86,10 +87,11 @@ static uint64_t aot_pe_synth_tls(PE64FILE_struct *pe, const AotSection *secs,
      * [24]=IMAGE_TLS_DIRECTORY64(40). */
     _BYTE tlsd[64];
     memset(tlsd, 0, sizeof(tlsd));
-    int tlsd_idx = addSection(pe, ".tls$d",
-                              ___IMAGE_SCN_CNT_INITIALIZED_DATA |
-                                  ___IMAGE_SCN_MEM_READ | ___IMAGE_SCN_MEM_WRITE,
-                              tlsd, (_DWORD)sizeof(tlsd));
+    int tlsd_idx =
+        addSection(pe, ".tls$d",
+                   ___IMAGE_SCN_CNT_INITIALIZED_DATA | ___IMAGE_SCN_MEM_READ |
+                       ___IMAGE_SCN_MEM_WRITE,
+                   tlsd, (_DWORD)sizeof(tlsd));
     const uint32_t tls_rva = pe->sectionHeaders[tls_sec].VirtualAddress;
     const uint32_t tlsd_rva = pe->sectionHeaders[tlsd_idx].VirtualAddress;
     _BYTE *sd = pe->sectionData[tlsd_idx];
@@ -98,21 +100,21 @@ static uint64_t aot_pe_synth_tls(PE64FILE_struct *pe, const AotSection *secs,
      * .dll en un consumidor minimal). */
     int have_cb = (cb_section >= 0 && cb_section < pe->numberOfSections);
     if (have_cb) {
-        uint64_t cb_va = image_base +
-                         pe->sectionHeaders[cb_section].VirtualAddress + cb_off;
+        uint64_t cb_va =
+            image_base + pe->sectionHeaders[cb_section].VirtualAddress + cb_off;
         memcpy(sd + 8, &cb_va, 8); /* [+8] = &__vx_tls_init ; [+16] = NULL */
     }
     _BYTE *db = sd + 24; /* IMAGE_TLS_DIRECTORY */
     uint64_t start = image_base + tls_rva;
     uint64_t end = image_base + tls_rva + secs[tls_sec].size;
-    uint64_t idx_va = image_base + tlsd_rva + 0; /* &_tls_index */
+    uint64_t idx_va = image_base + tlsd_rva + 0;   /* &_tls_index */
     uint64_t cbarr_va = image_base + tlsd_rva + 8; /* &array de callbacks */
     memcpy(db + 0, &start, 8);
     memcpy(db + 8, &end, 8);
     memcpy(db + 16, &idx_va, 8);
     memcpy(db + 24, &cbarr_va, 8);
     uint32_t zfill = (uint32_t)secs[tls_sec].bss_size;
-    memcpy(db + 32, &zfill, 4); /* SizeOfZeroFill */
+    memcpy(db + 32, &zfill, 4);      /* SizeOfZeroFill */
     uint32_t tls_char = 0x00400000u; /* IMAGE_SCN_ALIGN_8BYTES */
     memcpy(db + 36, &tls_char, 4);   /* Characteristics (alineamiento) */
     pe->ntHeaders.OptionalHeader.DataDirectory[___IMAGE_DIRECTORY_ENTRY_TLS]
@@ -143,11 +145,11 @@ static uint64_t aot_pe_synth_tls(PE64FILE_struct *pe, const AotSection *secs,
             uint16_t e = (uint16_t)((10u << 12) | ((voff[k] - page) & 0xFFFu));
             memcpy(rel + 8 + k * 2, &e, 2);
         }
-        int rel_idx =
-            addSection(pe, ".reloc",
-                       ___IMAGE_SCN_CNT_INITIALIZED_DATA |
-                           ___IMAGE_SCN_MEM_READ | 0x02000000u /* DISCARDABLE */,
-                       rel, blksz);
+        int rel_idx = addSection(pe, ".reloc",
+                                 ___IMAGE_SCN_CNT_INITIALIZED_DATA |
+                                     ___IMAGE_SCN_MEM_READ |
+                                     0x02000000u /* DISCARDABLE */,
+                                 rel, blksz);
         const uint32_t rel_rva = pe->sectionHeaders[rel_idx].VirtualAddress;
         pe->ntHeaders.OptionalHeader
             .DataDirectory[___IMAGE_DIRECTORY_ENTRY_BASERELOC]
@@ -194,11 +196,12 @@ static int aot_pe_apply_tls_reloc(PE64FILE_struct *pe, const AotSection *secs,
 /* --aot-debug=1 (PE): apende una tabla de simbolos COFF al final del .exe/.dll
  * ya escrito y parchea el IMAGE_FILE_HEADER (PointerToSymbolTable +
  * NumberOfSymbols) para exponerla.  gdb/WinDbg/objdump leen los IMAGE_SYMBOL
- * (18 bytes: Name(8)/Value(4)/SectionNumber(2)/Type(2)/StorageClass(1)/NumAux(1)).
- * Value = RVA (sec_rva[seccion] + offset): gdb calcula image_base + Value.  El
- * symtab va TRAS todas las secciones -> no afecta la ejecucion.  Best-effort:
- * ante cualquier fallo deja el fichero intacto (sin simbolos).  Los @p sec_rva
- * son las RVAs finales de cada seccion (pe.sectionHeaders[i].VirtualAddress). */
+ * (18 bytes:
+ * Name(8)/Value(4)/SectionNumber(2)/Type(2)/StorageClass(1)/NumAux(1)). Value =
+ * RVA (sec_rva[seccion] + offset): gdb calcula image_base + Value.  El symtab
+ * va TRAS todas las secciones -> no afecta la ejecucion.  Best-effort: ante
+ * cualquier fallo deja el fichero intacto (sin simbolos).  Los @p sec_rva son
+ * las RVAs finales de cada seccion (pe.sectionHeaders[i].VirtualAddress). */
 static void aot_pe_append_coff_symtab(const char *path, const AotSym *syms,
                                       int n, const uint32_t *sec_rva) {
     if (n <= 0 || !syms || !sec_rva) return;
@@ -246,8 +249,8 @@ static void aot_pe_append_coff_symtab(const char *path, const AotSym *syms,
             memcpy(s, nm, l); /* nombre inline en Name[8] (resto ya a 0) */
         } else {
             uint32_t zero = 0;
-            memcpy(s, &zero, 4);           /* Name.Zeroes = 0 */
-            memcpy(s + 4, &strtab_sz, 4);  /* Name.Offset */
+            memcpy(s, &zero, 4);          /* Name.Zeroes = 0 */
+            memcpy(s + 4, &strtab_sz, 4); /* Name.Offset */
             char *ns = (char *)realloc(strtab, strtab_sz + l + 1);
             if (!ns) break;
             strtab = ns;
@@ -257,7 +260,7 @@ static void aot_pe_append_coff_symtab(const char *path, const AotSym *syms,
         uint32_t rva = sec_rva[syms[i].section] + (uint32_t)syms[i].offset;
         memcpy(s + 8, &rva, 4); /* Value = RVA */
         int16_t sn = (int16_t)(syms[i].section + 1);
-        memcpy(s + 12, &sn, 2); /* SectionNumber (1-based) */
+        memcpy(s + 12, &sn, 2);                   /* SectionNumber (1-based) */
         uint16_t ty = syms[i].is_func ? 0x20 : 0; /* 0x20 = funcion */
         memcpy(s + 14, &ty, 2);
         s[16] = 2; /* IMAGE_SYM_CLASS_EXTERNAL */
@@ -331,8 +334,11 @@ int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
     }
 
     /* TLS (thread_local): sintetizar el IMAGE_TLS_DIRECTORY + _tls_index si hay
-     * seccion SHF_TLS (devuelve la VA de _tls_index para resolver los relocs). */
-    uint64_t tls_index_va = aot_pe_synth_tls(&pe, secs, num_secs, 0, cfg ? cfg->tls_callback_section : -1, cfg ? cfg->tls_callback_off : 0);
+     * seccion SHF_TLS (devuelve la VA de _tls_index para resolver los relocs).
+     */
+    uint64_t tls_index_va = aot_pe_synth_tls(
+        &pe, secs, num_secs, 0, cfg ? cfg->tls_callback_section : -1,
+        cfg ? cfg->tls_callback_off : 0);
 
     /* Relocations cross-seccion: resolver AHORA que addSection ya asigno las
      * VirtualAddress de todas las secciones del usuario (igual que el parcheo
@@ -632,7 +638,8 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
     /* Arquitectura del ELF: por defecto x86-64; si el driver pide otra (p.ej.
      * EM_AARCH64) se la pasamos a LibPEparse.  El layout ELF64 (ehdr/phdr/
      * secciones) es arch-neutral; solo cambia e_machine (y, para relocs de
-     * CODIGO, su encoding -- que en el EXEC whole-program ya viene resuelto). */
+     * CODIGO, su encoding -- que en el EXEC whole-program ya viene resuelto).
+     */
     if (cfg && cfg->machine) elf_builder_set_machine(b, cfg->machine);
     Elf64_Phdr *phdr = (Elf64_Phdr *)b->phdr;
 
@@ -661,12 +668,13 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
      * El emisor pone vaddr = base + file_off, asi que basta con alinear a
      * pagina entre las dos pasadas para que cada region empiece en un limite
      * de pagina (requisito de mmap del loader del kernel). */
-    uint64_t rx_end_off = 0;     /* fin (offset-en-fichero) del segmento exec */
-    uint64_t rw_start_off = 0;   /* inicio del segmento R+W (0 = sin datos rw) */
-    uint64_t rw_end_off = 0;     /* fin del segmento R+W */
-    int exec_seg_writable = 0;   /* alguna seccion exec es tambien writable? */
+    uint64_t rx_end_off = 0;   /* fin (offset-en-fichero) del segmento exec */
+    uint64_t rw_start_off = 0; /* inicio del segmento R+W (0 = sin datos rw) */
+    uint64_t rw_end_off = 0;   /* fin del segmento R+W */
+    int exec_seg_writable = 0; /* alguna seccion exec es tambien writable? */
     for (int pass = 0; pass < 2; ++pass) {
-        /* Pasada 0 = grupo EXEC (+ rodata); pasada 1 = data writable no-exec. */
+        /* Pasada 0 = grupo EXEC (+ rodata); pasada 1 = data writable no-exec.
+         */
         const int want_rwseg = (pass == 1);
         if (want_rwseg) {
             /* Cerrar el segmento exec y abrir el R+W en un limite de pagina. */
@@ -701,13 +709,12 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
             if (s->flags & AOT_SEC_EXEC) sh_flags |= SHF_EXECINSTR;
             if (s->flags & AOT_SEC_WRITE) sh_flags |= SHF_WRITE;
             uint64_t align_use = s->align ? s->align : AOT_ELF_PAGE;
-            /* VA fija (place_section): rellenar el fichero hasta vaddr-base para
-             * que vaddr = base + offset de exactamente lo pedido.  El gap se
-             * rellena con ceros (un PT_LOAD lo cubre).  Va en orden de VA: una
-             * VA fija por DEBAJO de la posicion actual es inalcanzable. */
+            /* VA fija (place_section): rellenar el fichero hasta vaddr-base
+             * para que vaddr = base + offset de exactamente lo pedido.  El gap
+             * se rellena con ceros (un PT_LOAD lo cubre).  Va en orden de VA:
+             * una VA fija por DEBAJO de la posicion actual es inalcanzable. */
             if (s->vaddr != 0) {
-                if (s->vaddr < base ||
-                    (s->vaddr - base) < (uint64_t)b->size) {
+                if (s->vaddr < base || (s->vaddr - base) < (uint64_t)b->size) {
                     free(sec_va);
                     free(sec_foff);
                     free(sec_seen);
@@ -753,8 +760,8 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
      * contenido en fichero.  Van DESPUES de .data en el espacio de direcciones
      * (base + rw_end_off + ...); el loader las zerifica via p_memsz > p_filesz.
      * Solo son TARGET de relocs (nunca SITE), asi que sec_foff queda en 0.
-     * Necesario para dev-OS: cualquier global sin inicializar (Vesta o un .o de C)
-     * cae en .bss. */
+     * Necesario para dev-OS: cualquier global sin inicializar (Vesta o un .o de
+     * C) cae en .bss. */
     uint64_t bss_total = 0;
     {
         uint64_t bss_off = rw_end_off;
@@ -866,10 +873,10 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
             symtab[1].st_info = ELF64_ST_INFO(STB_GLOBAL, STT_FUNC);
             symtab[1].st_shndx = (uint16_t)(entry_sec + 1);
             symtab[1].st_value = entry_vaddr + entry_off;
-            /* st_size=0 (simbolo puntual): con varios simbolos en .text, un size
-             * que abarque toda la seccion haria que _start "engulla" a main y
-             * gdb resolveria como "_start+N"; con 0, gdb resuelve por el simbolo
-             * de mayor VA <= pc (el correcto). */
+            /* st_size=0 (simbolo puntual): con varios simbolos en .text, un
+             * size que abarque toda la seccion haria que _start "engulla" a
+             * main y gdb resolveria como "_start+N"; con 0, gdb resuelve por el
+             * simbolo de mayor VA <= pc (el correcto). */
             symtab[1].st_size = 0;
             sp += 7;
             /* funciones de debug (indices 2..). */
@@ -881,14 +888,15 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
                 s->st_info = ELF64_ST_INFO(
                     STB_GLOBAL, dsyms[i].is_func ? STT_FUNC : STT_OBJECT);
                 s->st_shndx = (uint16_t)(dsyms[i].section + 1);
-                s->st_value = (sec_va ? sec_va[dsyms[i].section] : 0) +
-                              dsyms[i].offset;
+                s->st_value =
+                    (sec_va ? sec_va[dsyms[i].section] : 0) + dsyms[i].offset;
                 s->st_size = 0; /* se calcula abajo */
                 sp += l + 1;
             }
-            /* st_size = distancia al siguiente simbolo de la misma seccion (o al
-             * fin de seccion) -> valgrind resuelve por RANGO (gdb por valor).
-             * Cubre _start (indice 1, seccion entry_sec) + funciones (2..). */
+            /* st_size = distancia al siguiente simbolo de la misma seccion (o
+             * al fin de seccion) -> valgrind resuelve por RANGO (gdb por
+             * valor). Cubre _start (indice 1, seccion entry_sec) + funciones
+             * (2..). */
             for (int k = 1; k <= ndbg + 1; ++k) {
                 int ksec = (k == 1) ? entry_sec : dsyms[k - 2].section;
                 uint64_t v = symtab[k].st_value;
@@ -926,7 +934,8 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
     const int has_rw = (rw_end_off > rw_start_off) || (bss_total > 0);
 
     /* PT_LOAD ejecutable: codigo + rodata.  R+X, y ademas W si contiene alguna
-     * seccion rwx (e.g. `.boot` de un kernel/bootloader que se auto-modifica). */
+     * seccion rwx (e.g. `.boot` de un kernel/bootloader que se auto-modifica).
+     */
     phdr[0].p_type = PT_LOAD;
     phdr[0].p_flags = PF_R | PF_X | (exec_seg_writable ? PF_W : 0);
     phdr[0].p_offset = 0;
@@ -944,7 +953,8 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
         phdr[1].p_offset = rw_start_off;
         phdr[1].p_vaddr = base + rw_start_off;
         phdr[1].p_paddr = base + rw_start_off;
-        phdr[1].p_filesz = rw_end_off - rw_start_off; /* solo .data en fichero */
+        phdr[1].p_filesz =
+            rw_end_off - rw_start_off; /* solo .data en fichero */
         /* p_memsz cubre .data + .bss (el loader zerifica [filesz, memsz)). */
         phdr[1].p_memsz = (rw_end_off - rw_start_off) + bss_total;
         phdr[1].p_align = AOT_ELF_PAGE;
@@ -1032,9 +1042,9 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
         return 0;
     }
     if (num_imps < 0) num_imps = 0;
-    /* num_imps == 0 es valido: un EXEC dinamico sin imports de libc pero con TLS
-     * (necesita el cargador para montar el bloque thread-local) o con relocs
-     * RELATIVE.  GOT vacia + dynsym de 1 entrada (null). */
+    /* num_imps == 0 es valido: un EXEC dinamico sin imports de libc pero con
+     * TLS (necesita el cargador para montar el bloque thread-local) o con
+     * relocs RELATIVE.  GOT vacia + dynsym de 1 entrada (null). */
 
     const uint64_t PAGE = AOT_ELF_PAGE;
     /* Seccion TLS (plantilla thread_local): si existe, anyade un PT_TLS. */
@@ -1118,9 +1128,10 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
     off = AOT_DYN_ALIGN(off, 8);
     uint64_t rela_off = off;
     /* Las relocs ABS64 del driver (p.ej. las entradas de la .got que el linker
-     * construye para los GOTPCREL) no caben tal cual en un PIE (base aleatoria):
-     * se materializan como R_X86_64_RELATIVE en .rela.dyn (el cargador escribe
-     * base + addend).  Se cuentan aqui para dimensionar .rela.dyn. */
+     * construye para los GOTPCREL) no caben tal cual en un PIE (base
+     * aleatoria): se materializan como R_X86_64_RELATIVE en .rela.dyn (el
+     * cargador escribe base + addend).  Se cuentan aqui para dimensionar
+     * .rela.dyn. */
     int num_abs64 = 0;
     for (int r = 0; r < num_relocs; ++r)
         if (relocs[r].kind == AOT_RELOC_ABS64) ++num_abs64;
@@ -1278,7 +1289,8 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
     if (tls_sec >= 0) {
         ph[6].p_type = PT_TLS;
         ph[6].p_flags = PF_R;
-        ph[6].p_offset = sec_va[tls_sec]; /* file offset == vaddr (PIE base 0) */
+        ph[6].p_offset =
+            sec_va[tls_sec]; /* file offset == vaddr (PIE base 0) */
         ph[6].p_vaddr = sec_va[tls_sec];
         ph[6].p_paddr = sec_va[tls_sec];
         ph[6].p_filesz = secs[tls_sec].size;
@@ -1373,20 +1385,20 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
               !sec_seen[rl->target_section]))) {
             {
                 char m[160];
-                snprintf(m, sizeof(m),
-                         "elf_dynexec: reloc con seccion invalida "
-                         "(kind=%d site_sec=%d seen=%d target_sec=%d seen=%d "
-                         "is_size=%d num_secs=%d)",
-                         rl->kind, rl->site_section,
-                         (rl->site_section >= 0 && rl->site_section < num_secs)
-                             ? sec_seen[rl->site_section]
-                             : -1,
-                         rl->target_section,
-                         (rl->target_section >= 0 &&
-                          rl->target_section < num_secs)
-                             ? sec_seen[rl->target_section]
-                             : -1,
-                         rl->target_is_size, num_secs);
+                snprintf(
+                    m, sizeof(m),
+                    "elf_dynexec: reloc con seccion invalida "
+                    "(kind=%d site_sec=%d seen=%d target_sec=%d seen=%d "
+                    "is_size=%d num_secs=%d)",
+                    rl->kind, rl->site_section,
+                    (rl->site_section >= 0 && rl->site_section < num_secs)
+                        ? sec_seen[rl->site_section]
+                        : -1,
+                    rl->target_section,
+                    (rl->target_section >= 0 && rl->target_section < num_secs)
+                        ? sec_seen[rl->target_section]
+                        : -1,
+                    rl->target_is_size, num_secs);
                 set_err(err, err_cap, m);
             }
             ok = 0;
@@ -1415,8 +1427,7 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
                 break;
             }
             uint64_t talign = secs[tls_sec].align ? secs[tls_sec].align : 8;
-            uint64_t tls_total =
-                secs[tls_sec].size + secs[tls_sec].bss_size;
+            uint64_t tls_total = secs[tls_sec].size + secs[tls_sec].bss_size;
             uint64_t aligned_total = (tls_total + talign - 1) & ~(talign - 1);
             /* tv = VA del simbolo TLS; el offset en el bloque = tv -
              * sec_va[tls_sec] (el bloque empieza en la 1a seccion SHF_TLS). */
@@ -1516,9 +1527,10 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
                 memcpy(strtab + sp, ds->name, l + 1);
                 Elf64_Sym *s = &symtab[1 + i];
                 s->st_name = (uint32_t)sp;
-                s->st_info = ELF64_ST_INFO(
-                    STB_GLOBAL, ds->is_func ? STT_FUNC : STT_OBJECT);
-                s->st_shndx = (uint16_t)(1 + ds->section); /* seccion en la SHT */
+                s->st_info = ELF64_ST_INFO(STB_GLOBAL,
+                                           ds->is_func ? STT_FUNC : STT_OBJECT);
+                s->st_shndx =
+                    (uint16_t)(1 + ds->section); /* seccion en la SHT */
                 s->st_value = sec_va[ds->section] + ds->offset;
                 s->st_size = 0; /* se calcula abajo */
                 sp += l + 1;
@@ -1564,8 +1576,7 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
                     e->sh_flags = SHF_ALLOC;
                     if (secs[i].flags & AOT_SEC_EXEC)
                         e->sh_flags |= SHF_EXECINSTR;
-                    if (secs[i].flags & AOT_SEC_WRITE)
-                        e->sh_flags |= SHF_WRITE;
+                    if (secs[i].flags & AOT_SEC_WRITE) e->sh_flags |= SHF_WRITE;
                     e->sh_addr = sec_va[i];
                     e->sh_offset = is_bss ? 0 : sec_va[i]; /* PIE base 0 */
                     e->sh_size = aot_sec_size(&secs[i]);
@@ -1577,7 +1588,7 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
                 shsym->sh_offset = symtab_off;
                 shsym->sh_size = (uint64_t)(n + 1) * sizeof(Elf64_Sym);
                 shsym->sh_link = (uint32_t)(1 + nsec + 1); /* -> .strtab */
-                shsym->sh_info = 1;                         /* primer global */
+                shsym->sh_info = 1;                        /* primer global */
                 shsym->sh_addralign = 8;
                 shsym->sh_entsize = sizeof(Elf64_Sym);
                 Elf64_Shdr *shstr_sh = &sh[1 + nsec + 1];
@@ -1995,7 +2006,8 @@ int aot_emit_elf_obj(const char *path, const AotSection *secs, int num_secs,
     return ok;
 }
 
-/* aot_emit_elf32_obj (+ e32_push16/32) -> movidos a x86_32/aot_emit_x86_32.c. */
+/* aot_emit_elf32_obj (+ e32_push16/32) -> movidos a x86_32/aot_emit_x86_32.c.
+ */
 
 /* =========================================================================
  *  COFF RELOCATABLE (.obj Windows) -- movido a common/aot_emit_common.c
@@ -2108,7 +2120,9 @@ int aot_emit_pe_dll(const char *path, const AotLayoutCfg *cfg,
      * _tls_index igual que en el .exe.  El cargador de Windows procesa el
      * directorio TLS tambien para DLLs (Vista+: tambien las cargadas con
      * LoadLibrary), montando el bloque por-hilo. */
-    uint64_t tls_index_va = aot_pe_synth_tls(&pe, secs, num_secs, 1, cfg ? cfg->tls_callback_section : -1, cfg ? cfg->tls_callback_off : 0);
+    uint64_t tls_index_va = aot_pe_synth_tls(
+        &pe, secs, num_secs, 1, cfg ? cfg->tls_callback_section : -1,
+        cfg ? cfg->tls_callback_off : 0);
 
     /* TLS .dll: el cargador de Windows aplica la plantilla del TLS de una .dll
      * a traves de su DllMain (no la copia sin un entry que dispare su init).

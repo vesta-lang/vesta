@@ -345,7 +345,8 @@ void test_typedef_new_explicit_conversions() {
     s.is_opaque = false;
     s.align_override = 16; // L.9
     s.from_conversions = {
-        {"u64", true}, {"i32", false}, // privada (no public)
+        {"u64", true},
+        {"i32", false}, // privada (no public)
     };
     s.to_conversions = {{"u64", true}};
     m.symbols.push_back(std::move(s));

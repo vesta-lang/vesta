@@ -133,12 +133,14 @@ int main() {
     vx::TypeChecker tc(*mod, diags);
     if (!tc.run()) {
         std::printf("  FALLA el fuente de prueba no pasa el checker\n");
-        for (const auto &d : diags.all()) std::printf("    %s\n", d.message.c_str());
+        for (const auto &d : diags.all())
+            std::printf("    %s\n", d.message.c_str());
         return 1;
     }
 
-    // El grafo se emite tras bajar a intermedio: es cuando existen los SIMBOLOS,
-    // y sin ellos no habria por donde entrar desde una direccion de ejecucion.
+    // El grafo se emite tras bajar a intermedio: es cuando existen los
+    // SIMBOLOS, y sin ellos no habria por donde entrar desde una direccion de
+    // ejecucion.
     ir::IrModule irmod;
     vx::Lowering lo(*mod, tc, diags);
     if (!lo.run(irmod, "prueba")) {
@@ -154,7 +156,8 @@ int main() {
 
     vx::VxdbgEmitStats stats;
     std::string err;
-    comprobar(vx::emit_vxdbg_source(tc, lo.emitted_symbols(), tramos, "prueba.vx", FUENTE, dir, stats, err),
+    comprobar(vx::emit_vxdbg_source(tc, lo.emitted_symbols(), tramos,
+                                    "prueba.vx", FUENTE, dir, stats, err),
               "se emite el grafo");
     comprobar(stats.entities > 0, "y no sale vacio");
 
@@ -163,8 +166,7 @@ int main() {
     std::printf("Los tipos, con la especie que les corresponde\n");
     vxdbg::LanguageEntity e;
     comprobar(leer(store, buscar(stats, "Lector"), e), "la clase esta");
-    comprobar(e.kind == vxdbg::EntityKind::Type &&
-                  e.lang_kind == "class",
+    comprobar(e.kind == vxdbg::EntityKind::Type && e.lang_kind == "class",
               "  es un tipo, y Vesta lo llama clase");
     // Lo que pedia el usuario ver en un fallo: de quien deriva y que cumple.
     size_t deriva = 0, cumple = 0;
@@ -197,8 +199,7 @@ int main() {
     comprobar(stats.duplicates == 0, "ninguna clave se declaro dos veces");
     comprobar(buscar(stats, "NoExiste").hash.empty(),
               "un tipo que no existe no aparece");
-    comprobar(stats.unresolved == 0,
-              "y no queda ninguna relacion sin destino");
+    comprobar(stats.unresolved == 0, "y no queda ninguna relacion sin destino");
 
     std::printf("Los tramos de fuente\n");
     comprobar(!stats.span_map.empty(), "se emite el mapa de tramos");
@@ -212,9 +213,10 @@ int main() {
         comprobar(con_columna, "  y al menos uno dice columna y longitud");
 
         vxdbg::SpanMap sm;
-        for (const auto &sp : stats.spans) sm.add(sp);
-        const auto encontrado = sm.find(stats.spans[0].symbol,
-                                        stats.spans[0].line);
+        for (const auto &sp : stats.spans)
+            sm.add(sp);
+        const auto encontrado =
+            sm.find(stats.spans[0].symbol, stats.spans[0].line);
         comprobar(encontrado.line == stats.spans[0].line,
                   "  y se encuentran por funcion y linea");
         comprobar(sm.find("NoExisteTalFuncion", 1).line == 0,
@@ -225,8 +227,8 @@ int main() {
     comprobar(!stats.artifact_map.empty(), "se emite el mapa de simbolos");
     comprobar(stats.linked > 0, "con simbolos ligados a su entidad");
 
-    // Una compilacion cualquiera, identificada por su CONTENIDO y no por como se
-    // llame el fichero: es lo unico que sobrevive a renombrarlo o moverlo.
+    // Una compilacion cualquiera, identificada por su CONTENIDO y no por como
+    // se llame el fichero: es lo unico que sobrevive a renombrarlo o moverlo.
     const vxdbg::BuildId build{vxdbg::hash_bytes("artefacto-de-prueba", 19)};
     vxdbg::CacheRootRepository repo(dir, store);
     comprobar(repo.publish(build, stats.artifact_map),
@@ -252,8 +254,7 @@ int main() {
               "  un constructor de clase, que no se llama como su metodo");
     comprobar(!mapa.find("Punto__ctor_2").hash.empty(),
               "  uno de struct, que ademas lleva la aridad");
-    comprobar(!mapa.find("Punto____dtor").hash.empty(),
-              "  y un destructor");
+    comprobar(!mapa.find("Punto____dtor").hash.empty(), "  y un destructor");
     comprobar(!mapa.find("Punto__suma").hash.empty(), "  ademas del metodo");
     comprobar(stats.unlinked == 0,
               "  sin dejar ningun simbolo del lowering sin ligar");
@@ -271,7 +272,8 @@ int main() {
     // la propiedad que hace incremental al sistema, y si se rompiera aqui el
     // cache creceria sin parar sin que nadie lo notara.
     vx::VxdbgEmitStats stats2;
-    comprobar(vx::emit_vxdbg_source(tc, lo.emitted_symbols(), tramos, "prueba.vx", FUENTE, dir, stats2, err),
+    comprobar(vx::emit_vxdbg_source(tc, lo.emitted_symbols(), tramos,
+                                    "prueba.vx", FUENTE, dir, stats2, err),
               "la segunda vez tambien va");
     comprobar(stats2.roots.size() == stats.roots.size(),
               "con los mismos tipos");

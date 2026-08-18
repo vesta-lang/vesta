@@ -139,10 +139,12 @@ void *FFI::load_native_module(const std::string &name) {
         candidates.push_back(base);
 #ifndef _WIN32
         /* Separar el directorio del nombre del modulo para poder anñadir el
-         * prefijo @c lib sin romper el path (e.g. @c a/b/x -> @c a/b/libx.so). */
+         * prefijo @c lib sin romper el path (e.g. @c a/b/x -> @c a/b/libx.so).
+         */
         const size_t slash = base.find_last_of('/');
-        const std::string dir_part =
-            (slash == std::string::npos) ? std::string() : base.substr(0, slash + 1);
+        const std::string dir_part = (slash == std::string::npos)
+                                         ? std::string()
+                                         : base.substr(0, slash + 1);
         const std::string leaf =
             (slash == std::string::npos) ? base : base.substr(slash + 1);
 #ifdef __APPLE__
@@ -181,7 +183,8 @@ void *FFI::load_native_module(const std::string &name) {
      * el usuario no ve que se probo (y el ultimo suele ser la variante menos
      * probable), lo que hace el fallo mucho mas dificil de diagnosticar. */
     std::string probados;
-    for (const auto &cand : candidates) probados += "\n    " + cand;
+    for (const auto &cand : candidates)
+        probados += "\n    " + cand;
     throw FFIError("FFI: No se pudo cargar la libreria '" + name +
                    "'.  Paths probados:" + probados +
                    "\n  Ultimo error: " + last_err);

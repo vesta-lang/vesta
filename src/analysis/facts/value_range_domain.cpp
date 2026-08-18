@@ -7,8 +7,8 @@
 
 /**
  * @file value_range_domain.cpp
- * @brief Semantica del dominio de intervalos: reticulo, aritmetica, conversiones
- *        y restricciones (contrato en value_range.h).
+ * @brief Semantica del dominio de intervalos: reticulo, aritmetica,
+ * conversiones y restricciones (contrato en value_range.h).
  *
  * SEPARADO del motor de flujo a proposito.  Aqui no hay CFG, ni bloques, ni
  * punto fijo: solo numeros y tipos.  Se puede probar entero sin construir una
@@ -24,11 +24,11 @@
  * El paso 3 es el que distingue este dominio de uno ingenuo.  Un `u8` con
  * `250 + 10` da 4, no 260: el conjunto exacto tiene UN valor y ese valor cabe,
  * asi que la respuesta es exacta.  Y cuando el conjunto exacto DA LA VUELTA al
- * tipo -- `u8 [250,260]` -> `{250..255} U {0..4}` -- no hay intervalo simple que
- * lo diga y la respuesta es el tipo entero: menos preciso, nunca falso.
+ * tipo -- `u8 [250,260]` -> `{250..255} U {0..4}` -- no hay intervalo simple
+ * que lo diga y la respuesta es el tipo entero: menos preciso, nunca falso.
  *
- * NUNCA se responde BOTTOM por no caber.  BOTTOM significa "aqui no se llega", y
- * una operacion que envuelve produce valores perfectamente reales.
+ * NUNCA se responde BOTTOM por no caber.  BOTTOM significa "aqui no se llega",
+ * y una operacion que envuelve produce valores perfectamente reales.
  */
 #include "analysis/facts/value_range.h"
 
@@ -51,16 +51,26 @@ namespace {
 /* `__extension__` porque el estandar no tiene enteros de 128 bits: es una
  * extension del compilador, y decirlo evita que -Wpedantic la rechace. */
 __extension__ typedef __int128 Ancho;
-inline bool suma_ancha(Ancho a, Ancho b, Ancho &o) { o = a + b; return true; }
-inline bool resta_ancha(Ancho a, Ancho b, Ancho &o) { o = a - b; return true; }
-inline bool mul_ancha(Ancho a, Ancho b, Ancho &o) { o = a * b; return true; }
+inline bool suma_ancha(Ancho a, Ancho b, Ancho &o) {
+    o = a + b;
+    return true;
+}
+inline bool resta_ancha(Ancho a, Ancho b, Ancho &o) {
+    o = a - b;
+    return true;
+}
+inline bool mul_ancha(Ancho a, Ancho b, Ancho &o) {
+    o = a * b;
+    return true;
+}
 #else
 using Ancho = int64_t;
 inline bool suma_ancha(Ancho a, Ancho b, Ancho &o) {
 #if defined(__GNUC__) || defined(__clang__)
     return !__builtin_add_overflow(a, b, &o);
 #else
-    if ((b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b)) return false;
+    if ((b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b))
+        return false;
     o = a + b;
     return true;
 #endif
@@ -69,7 +79,8 @@ inline bool resta_ancha(Ancho a, Ancho b, Ancho &o) {
 #if defined(__GNUC__) || defined(__clang__)
     return !__builtin_sub_overflow(a, b, &o);
 #else
-    if ((b < 0 && a > INT64_MAX + b) || (b > 0 && a < INT64_MIN + b)) return false;
+    if ((b < 0 && a > INT64_MAX + b) || (b > 0 && a < INT64_MIN + b))
+        return false;
     o = a - b;
     return true;
 #endif
@@ -78,11 +89,23 @@ inline bool mul_ancha(Ancho a, Ancho b, Ancho &o) {
 #if defined(__GNUC__) || defined(__clang__)
     return !__builtin_mul_overflow(a, b, &o);
 #else
-    if (a == 0 || b == 0) { o = 0; return true; }
-    if (a > 0) { if (b > 0) { if (a > INT64_MAX / b) return false; }
-                 else       { if (b < INT64_MIN / a) return false; } }
-    else       { if (b > 0) { if (a < INT64_MIN / b) return false; }
-                 else       { if (a < INT64_MAX / b) return false; } }
+    if (a == 0 || b == 0) {
+        o = 0;
+        return true;
+    }
+    if (a > 0) {
+        if (b > 0) {
+            if (a > INT64_MAX / b) return false;
+        } else {
+            if (b < INT64_MIN / a) return false;
+        }
+    } else {
+        if (b > 0) {
+            if (a < INT64_MIN / b) return false;
+        } else {
+            if (a < INT64_MAX / b) return false;
+        }
+    }
     o = a * b;
     return true;
 #endif
@@ -108,7 +131,10 @@ inline bool div_ancha(Ancho a, Ancho b, Ancho &o) {
 /// Valor absoluto sin desbordar: el minimo con signo no tiene opuesto en su
 /// propio ancho, asi que ese caso se declara no calculable en vez de negarlo.
 inline bool valor_absoluto(Ancho v, Ancho &o) {
-    if (v >= 0) { o = v; return true; }
+    if (v >= 0) {
+        o = v;
+        return true;
+    }
     if (sizeof(Ancho) == 8 && v == static_cast<Ancho>(INT64_MIN)) return false;
     o = -v;
     return true;
@@ -116,7 +142,7 @@ inline bool valor_absoluto(Ancho v, Ancho &o) {
 
 /// Conjunto exacto de una operacion, antes de plegarlo al tipo.
 struct Exacto {
-    bool  ok = false; ///< false = no cabe ni en el entero ancho: no se afirma
+    bool ok = false; ///< false = no cabe ni en el entero ancho: no se afirma
     Ancho lo = 0, hi = 0;
 };
 
@@ -136,7 +162,8 @@ Ancho desplegar(RangeType t, uint64_t crudo) {
 ValueRange plegar(RangeType t, const Exacto &e) {
     if (!e.ok) return ValueRange::todo(t);
     Ancho anchura = e.hi - e.lo;
-    if (anchura < 0) return ValueRange::todo(t); // no deberia pasar; no se afirma
+    if (anchura < 0)
+        return ValueRange::todo(t); // no deberia pasar; no se afirma
     const uint64_t card = t.cardinal();
     if (card == 0) {
         // 64 bits: solo cubre el tipo si la anchura llega a 2^64.
@@ -251,8 +278,8 @@ ValueRange ValueRange::dividir(const ValueRange &o) const {
     if (es_bottom() || o.es_bottom()) return bottom(t);
     if (!operables(*this, o)) return top(t);
     /* Un divisor que puede ser cero no permite afirmar nada.  Y ademas hay que
-     * apartarlo aqui: calcular primero y mirar despues seria dividir por cero de
-     * verdad, en el propio analizador. */
+     * apartarlo aqui: calcular primero y mirar despues seria dividir por cero
+     * de verdad, en el propio analizador. */
     if (contiene_cero(o)) return todo(t);
     /* Un intervalo que no contiene el cero es entero positivo o entero
      * negativo, asi que la division es monotona en cada argumento y las cuatro
@@ -339,7 +366,8 @@ ValueRange ValueRange::disyuncion(const ValueRange &o) const {
     // Encender bits no baja de ninguno de los dos, y no puede pasar del tope.
     const uint64_t suelo = t.mayor_de(lo_c, o.lo_c);
     const uint64_t techo = tope_por_bits(t.mayor_de(hi_c, o.hi_c));
-    // Aqui todo es natural, asi que la comparacion con el tope del tipo tambien.
+    // Aqui todo es natural, asi que la comparacion con el tope del tipo
+    // tambien.
     if (techo > t.max_crudo()) return todo(t);
     return corte(t, suelo, techo);
 }
@@ -405,9 +433,10 @@ ValueRange ValueRange::desplazar_der_logico(const ValueRange &o) const {
     if (!acotada() || !o.acotada()) return top(t);
     uint32_t kl = 0, kh = 0;
     if (!cuenta_valida(o, t.bits, kl, kh)) return todo(t);
-    /* El desplazamiento LOGICO trata los bits como un natural, asi que se razona
-     * en el dominio sin signo del mismo ancho y se vuelve al tipo al final.  Ahi
-     * la operacion es monotona en los dos argumentos y los extremos bastan. */
+    /* El desplazamiento LOGICO trata los bits como un natural, asi que se
+     * razona en el dominio sin signo del mismo ancho y se vuelve al tipo al
+     * final.  Ahi la operacion es monotona en los dos argumentos y los extremos
+     * bastan. */
     const RangeType tu = RangeType::de(t.bits, true);
     const ValueRange u = reinterpretar(tu);
     if (!u.acotada()) return todo(t);
@@ -420,8 +449,8 @@ ValueRange ValueRange::desplazar_der_aritmetico(const ValueRange &o) const {
     uint32_t kl = 0, kh = 0;
     if (!cuenta_valida(o, t.bits, kl, kh)) return todo(t);
     /* Conserva el signo: es una division por `2^k` que redondea HACIA ABAJO, no
-     * hacia cero (`-1 >> 1` vale -1, no 0).  Monotona en `x`, y para un `x` fijo
-     * subir `k` acerca a 0 o a -1 segun el signo: las esquinas bastan. */
+     * hacia cero (`-1 >> 1` vale -1, no 0).  Monotona en `x`, y para un `x`
+     * fijo subir `k` acerca a 0 o a -1 segun el signo: las esquinas bastan. */
     const Ancho a[2] = {desplegar(t, lo_c), desplegar(t, hi_c)};
     const uint32_t k[2] = {kl, kh};
     Ancho p[4];
@@ -458,8 +487,8 @@ ValueRange ValueRange::extender_sin_signo(RangeType destino) const {
      * numero CAMBIA, y por eso esto no es lo mismo que extender con signo. */
     uint64_t ul = lo_c, uh = hi_c;
     if (!t.sin_signo && lo() < 0 && hi() >= 0) {
-        // Cruza el cero: leido sin signo el conjunto se parte (los negativos son
-        // los mas grandes).  Lo afirmable es todo el ancho del origen.
+        // Cruza el cero: leido sin signo el conjunto se parte (los negativos
+        // son los mas grandes).  Lo afirmable es todo el ancho del origen.
         ul = 0;
         uh = t.mascara();
     }
@@ -553,21 +582,24 @@ ValueRange ValueRange::restringir_fuera(const ValueRange &o) const {
     // Nos cubre entero: no queda ningun valor posible.
     if (!t.menor(lo_c, o.lo_c) && !t.menor(o.hi_c, hi_c)) return bottom(t);
     // Muerde por abajo: el intervalo empieza donde acaba el prohibido.
-    if (!t.menor(lo_c, o.lo_c) && !t.menor(o.hi_c, lo_c) && o.hi_c != t.max_crudo())
+    if (!t.menor(lo_c, o.lo_c) && !t.menor(o.hi_c, lo_c) &&
+        o.hi_c != t.max_crudo())
         return corte(t, t.normalizar(o.hi_c + 1), hi_c);
     // Muerde por arriba.
-    if (!t.menor(hi_c, o.lo_c) && !t.menor(o.hi_c, hi_c) && o.lo_c != t.min_crudo())
+    if (!t.menor(hi_c, o.lo_c) && !t.menor(o.hi_c, hi_c) &&
+        o.lo_c != t.min_crudo())
         return corte(t, lo_c, t.normalizar(o.lo_c - 1));
-    /* Lo parte por en medio (o no lo toca): quitar un trozo interior dejaria dos
-     * intervalos -- `[0,10]` sin el 5 son `[0,4]` y `[6,10]` -- y eso no se
+    /* Lo parte por en medio (o no lo toca): quitar un trozo interior dejaria
+     * dos intervalos -- `[0,10]` sin el 5 son `[0,4]` y `[6,10]` -- y eso no se
      * representa.  Quedarse como estaba es correcto, solo menos preciso. */
     return *this;
 }
 
 ValueRange ValueRange::restringir_distinto(const ValueRange &o) const {
     if (es_bottom() || o.es_bottom()) return bottom(t);
-    /* `x != y` con `y` en un rango no afirma NADA sobre x: que x pueda coincidir
-     * con algun valor de ese rango no obliga a que coincida con el que toque. */
+    /* `x != y` con `y` en un rango no afirma NADA sobre x: que x pueda
+     * coincidir con algun valor de ese rango no obliga a que coincida con el
+     * que toque. */
     if (!o.es_constante()) return *this;
     return restringir_fuera(o);
 }

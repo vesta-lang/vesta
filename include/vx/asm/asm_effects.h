@@ -74,15 +74,15 @@ std::string asm_canonical_reg(const std::string &raw, const std::string &arch);
  * @brief Arquitectura del OBJETIVO que se esta compilando.
  *
  * Es la pregunta previa a analizar cualquier bloque de asm -- que mnemonicos
- * existen, como se llaman los registros, cuanto miden --, y tiene UNA respuesta:
- * el objetivo, no el host.  Una variante @c @Target("arch:arm64") se analiza con
- * los registros de ARM aunque el build corra en x86.
+ * existen, como se llaman los registros, cuanto miden --, y tiene UNA
+ * respuesta: el objetivo, no el host.  Una variante @c @Target("arch:arm64") se
+ * analiza con los registros de ARM aunque el build corra en x86.
  *
- * Vive aqui porque la preguntan varios -- el modelo de efectos, el eliminador de
- * escrituras muertas, la inferencia de clobbers -- y cada uno la respondia por su
- * cuenta: uno la resolvia bien, otro tenia su propia copia, y otro la llevaba
- * escrita a mano como @c "x86_64".  El resultado era que analizar el MISMO
- * bloque daba cosas distintas segun quien preguntara.
+ * Vive aqui porque la preguntan varios -- el modelo de efectos, el eliminador
+ * de escrituras muertas, la inferencia de clobbers -- y cada uno la respondia
+ * por su cuenta: uno la resolvia bien, otro tenia su propia copia, y otro la
+ * llevaba escrita a mano como @c "x86_64".  El resultado era que analizar el
+ * MISMO bloque daba cosas distintas segun quien preguntara.
  *
  * @return @c "x86_64", @c "x86", @c "arm64"...
  */
@@ -91,13 +91,14 @@ std::string asm_arch_actual();
 /**
  * @brief La ISA de un nombre de arquitectura cualquiera, no solo del objetivo.
  *
- * Quien analiza un bloque recibe SU arquitectura, no la activa, asi que necesita
- * poder traducirla sin repetir la correspondencia: dos copias de la misma tabla
- * se separan, y el sintoma seria leer la base de instrucciones de otra ISA.
+ * Quien analiza un bloque recibe SU arquitectura, no la activa, asi que
+ * necesita poder traducirla sin repetir la correspondencia: dos copias de la
+ * misma tabla se separan, y el sintoma seria leer la base de instrucciones de
+ * otra ISA.
  *
- * Estaba declarada DOS veces, con dos comentarios distintos que decian lo mismo:
- * el aviso de que una regla en dos sitios acaba siendo dos reglas, aplicado a su
- * propia declaracion.
+ * Estaba declarada DOS veces, con dos comentarios distintos que decian lo
+ * mismo: el aviso de que una regla en dos sitios acaba siendo dos reglas,
+ * aplicado a su propia declaracion.
  */
 instr_db::Isa isa_of_arch(const std::string &arch);
 
@@ -163,12 +164,12 @@ struct AsmMemOperando {
 /**
  * @brief Si @p operando es un acceso a MEMORIA en la sintaxis de @p arch.
  *
- * La forma de escribir un acceso es de cada arquitectura y no se puede buscar la
- * de una dentro del texto de otra: x86 y ARM lo escriben `[base + ...]`, y
+ * La forma de escribir un acceso es de cada arquitectura y no se puede buscar
+ * la de una dentro del texto de otra: x86 y ARM lo escriben `[base + ...]`, y
  * RISC-V lo escribe `desplazamiento(base)`, sin un corchete a la vista.  Buscar
- * solo el corchete dejaba a RISC-V sin ningun acceso reconocido -- ni sus cargas
- * ni sus almacenes --, que no es lo mismo que decir que no toca memoria: es no
- * mirar.
+ * solo el corchete dejaba a RISC-V sin ningun acceso reconocido -- ni sus
+ * cargas ni sus almacenes --, que no es lo mismo que decir que no toca memoria:
+ * es no mirar.
  *
  * @param operando Texto del operando.
  * @param arch     Arquitectura del cuerpo que se analiza.
@@ -314,8 +315,8 @@ struct AsmEffects {
 
     /// Registros LEIDOS que NO aparecen como operandos (p.ej. @c syscall lee el
     /// numero de servicio en RAX y los argumentos en RDI/RSI/RDX/R10/R8/R9).
-    /// Sin esto el regalloc no sabe que un `register("rdi")` vive HASTA el asm y
-    /// lo elimina (DCE) o no coloca el arg en su registro.  Canonicos.
+    /// Sin esto el regalloc no sabe que un `register("rdi")` vive HASTA el asm
+    /// y lo elimina (DCE) o no coloca el arg en su registro.  Canonicos.
     std::vector<std::string> implicit_read;
 
     /// Que OPERANDOS escribe la instruccion, como bitmask: bit0=1er operando,
@@ -329,28 +330,30 @@ struct AsmEffects {
      *
      * No es "esta instruccion puede acceder a memoria".  Que un operando lleve
      * corchetes lo dice el propio texto, y de eso se encarga el analisis de la
-     * linea: declararlo aqui ademas hace que un `movdqa xmm0, xmm1` -- una copia
-     * entre registros, sin un corchete a la vista -- salga tocando memoria, y con
-     * ello cada movimiento vectorial se convierte en una barrera.  Aqui va solo la
-     * que la arquitectura fija sin escribirla, como el `rdi` de una `stosb`, y
-     * entonces se dice ADEMAS por donde: ver @ref implicit_mem_read.
+     * linea: declararlo aqui ademas hace que un `movdqa xmm0, xmm1` -- una
+     * copia entre registros, sin un corchete a la vista -- salga tocando
+     * memoria, y con ello cada movimiento vectorial se convierte en una
+     * barrera.  Aqui va solo la que la arquitectura fija sin escribirla, como
+     * el `rdi` de una `stosb`, y entonces se dice ADEMAS por donde: ver @ref
+     * implicit_mem_read.
      */
     bool touches_mem = false;
     /**
      * @name Banderas de condicion, por SENTIDO.
      *
-     * Separadas porque son cosas distintas: un `add` las ESCRIBE y un `setz` las
-     * LEE.  Con un solo bit las dos salian iguales, y entonces mover un `cmp` por
-     * encima de un `setz` parecia igual de seguro que moverlo por encima de un
-     * `add` -- y no lo es, el `setz` consume justo lo que el `cmp` produjo --.
-     * Al reves, un `setz` declarado como que las escribe pasa por destruir un
-     * valor que no toca, y ademas entra en la lista de clobbers sin motivo.
+     * Separadas porque son cosas distintas: un `add` las ESCRIBE y un `setz`
+     * las LEE.  Con un solo bit las dos salian iguales, y entonces mover un
+     * `cmp` por encima de un `setz` parecia igual de seguro que moverlo por
+     * encima de un `add` -- y no lo es, el `setz` consume justo lo que el `cmp`
+     * produjo --. Al reves, un `setz` declarado como que las escribe pasa por
+     * destruir un valor que no toca, y ademas entra en la lista de clobbers sin
+     * motivo.
      * @{
      */
     bool writes_flags = false; ///< modifica RFLAGS/condition codes
-    bool reads_flags = false;  ///< las consume (adc, setcc, cmovcc, jcc, rcl...)
+    bool reads_flags = false; ///< las consume (adc, setcc, cmovcc, jcc, rcl...)
     /// @}
-    bool is_call = false;       ///< call/syscall: clobber de caller-saved
+    bool is_call = false; ///< call/syscall: clobber de caller-saved
     /// Entrada/salida por PUERTO (`in`/`out`).  No toca memoria, pero es un
     /// efecto observable del exterior: no se puede eliminar ni reordenar como
     /// si fuera aritmetica, y quien la use no es codigo autonomo.  Sin
@@ -377,10 +380,10 @@ struct AsmEffects {
      * @name ESTADO del procesador que no es un registro general.
      *
      * Nombrado -- @c "cr0", @c "gdtr", @c "idtr", @c "msrs", @c "mxcsr",
-     * @c "fsbase", @c "st(0)", @c "x87status" -- en vez de tratado como un efecto
-     * opaco.  Una instruccion privilegiada tiene efectos tan concretos como una
-     * suma, y decir CUAL toca es lo que separa "no muevas nada a su alrededor" de
-     * "solo choca con quien toque `gdtr`".
+     * @c "fsbase", @c "st(0)", @c "x87status" -- en vez de tratado como un
+     * efecto opaco.  Una instruccion privilegiada tiene efectos tan concretos
+     * como una suma, y decir CUAL toca es lo que separa "no muevas nada a su
+     * alrededor" de "solo choca con quien toque `gdtr`".
      * @{
      */
     std::vector<std::string> implicit_state_read;
@@ -414,7 +417,7 @@ struct AsmEffects {
      */
     uint16_t align_req = 0;
 
-    bool known = false;         ///< false si no esta en la tabla
+    bool known = false; ///< false si no esta en la tabla
 };
 
 /// Valor de @c AsmEffects::align_req que significa "el ancho de su operando
@@ -427,7 +430,8 @@ static constexpr uint16_t kAlignAnchoOperando = 0xFFFFu;
  * @param mnemonic Nombre de la instruccion (cualquier case).
  * @param arch     Arquitectura de destino.  @c "x86_64" / @c "x86" (32-bit) /
  *                 @c "x86_16" comparten la MISMA tabla de efectos (el efecto de
- *                 @c add / @c mov / @c cmp no cambia con el ancho; lo que cambia
+ *                 @c add / @c mov / @c cmp no cambia con el ancho; lo que
+ * cambia
  *                 -- ancho de registro, tamano del slot de pila -- se resuelve
  *                 fuera de aqui).  @c "arm64" tiene su propia tabla (LL/SC,
  *                 branches, cset/csel, barreras...).  Un arch no reconocido cae

@@ -24,19 +24,20 @@
  *
  * que se ejecuta EN TIEMPO DE COMPILACION (en la ComptimeVM, por interprete o
  * JIT) y cuyo resultado se MATERIALIZA como un struct constante en el binario:
- * `u128 m = u128(0xFFFF...)` no deja ninguna llamada en runtime, solo los campos
- * ya escritos.  Es la base de los literales de tipo usuario (modelo Swift
+ * `u128 m = u128(0xFFFF...)` no deja ninguna llamada en runtime, solo los
+ * campos ya escritos.  Es la base de los literales de tipo usuario (modelo
+ * Swift
  * @c ExpressibleByIntegerLiteral): un tipo de libreria puede construirse desde
  * un literal sin que el compilador conozca su representacion interna.
  *
  * El ctor comptime reutiliza integramente la maquinaria ya existente:
- *   - Se baja a `__macro_<T>__ctor_<aridad>` (en @c lower_struct_methods), igual
- *     que una comptime fn-VM, y se registra en el @c ComptimeRuntime.
+ *   - Se baja a `__macro_<T>__ctor_<aridad>` (en @c lower_struct_methods),
+ * igual que una comptime fn-VM, y se registra en el @c ComptimeRuntime.
  *   - En el call site `T(args)` se invoca con @c invoke_struct_macro, cuya
  *     convencion SRET encaja de forma natural: el buffer de retorno que el
  *     harness antepone ES el @c this que el cuerpo del ctor inicializa.
- *   - El struct resultante se reconstruye con @c fill_struct_fields_from_bytes y
- *     se emite como datos con @c materialize_comptime_struct -- identico en los
+ *   - El struct resultante se reconstruye con @c fill_struct_fields_from_bytes
+ * y se emite como datos con @c materialize_comptime_struct -- identico en los
  *     tres modos (interp/JIT/AOT).
  *
  * Estos son metodos de @c vx::Lowering (declarados en @c vx/lowering.h) pero se
@@ -65,9 +66,8 @@ std::string Lowering::comptime_ctor_ir_name(const std::string &struct_name,
     return "__macro_" + struct_name + "__ctor_" + std::to_string(arity);
 }
 
-ir::IrValueId
-Lowering::try_lower_comptime_ctor_call(ast::CallExpr *e,
-                                       const StructLayout &slay) {
+ir::IrValueId Lowering::try_lower_comptime_ctor_call(ast::CallExpr *e,
+                                                     const StructLayout &slay) {
     // Localizar un ctor `comptime` cuya aridad case con la llamada.  Si no hay,
     // no aplica: el caller sigue con el ctor runtime.
     const size_t arity = e->args.size();
@@ -87,8 +87,8 @@ Lowering::try_lower_comptime_ctor_call(ast::CallExpr *e,
     // resolver en el linker.
     //
     // Marshalar los argumentos a la ComptimeVM.  Un argumento `expr` fue
-    // capturado por el parser como @c StringLitExpr (el texto crudo del literal)
-    // y se pasa como GcHandle a un StringObject; el resto se evalua en
+    // capturado por el parser como @c StringLitExpr (el texto crudo del
+    // literal) y se pasa como GcHandle a un StringObject; el resto se evalua en
     // compile-time a su valor entero.  En el pass 1 del two-phase la VM aun no
     // esta lista (el marshalling/evaluacion puede diferir): en ese caso se cae
     // al placeholder de abajo.
@@ -147,7 +147,8 @@ Lowering::try_lower_comptime_ctor_call(ast::CallExpr *e,
             if (fi.size == 0 || fi.size > 8) continue;
             if (static_cast<size_t>(fi.offset) + fi.size > bytes.size())
                 continue;
-            const ComptimeEvalResult dv = comptime_eval_expr(tc_, fi.default_init);
+            const ComptimeEvalResult dv =
+                comptime_eval_expr(tc_, fi.default_init);
             if (!dv.ok || dv.deferred || dv.is_str || dv.is_array ||
                 dv.is_struct || dv.is_type)
                 continue;

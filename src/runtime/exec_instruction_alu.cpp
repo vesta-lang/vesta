@@ -1558,14 +1558,14 @@ void exec_instr_setcc(ProcessVM *vm, const DecodedInstr &instr) {
  */
 void exec_instr_sext(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t dst_reg =
-        instr.data_instruction.reg_data.reg1 & 0xF;        // r_dst (nibble bajo)
+        instr.data_instruction.reg_data.reg1 & 0xF; // r_dst (nibble bajo)
     const uint8_t width = instr.data_instruction.reg_data.reg2; // N bits
     const uint64_t v = vm->registers.regs[dst_reg].qword();
     uint64_t res;
     switch (width) {
     case 8:
-        res = static_cast<uint64_t>(
-            static_cast<int64_t>(static_cast<int8_t>(v)));
+        res =
+            static_cast<uint64_t>(static_cast<int64_t>(static_cast<int8_t>(v)));
         break;
     case 16:
         res = static_cast<uint64_t>(

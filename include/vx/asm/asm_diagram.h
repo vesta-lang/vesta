@@ -37,10 +37,10 @@ namespace vx {
 /// Opciones de generacion de un diagrama de asm.
 struct AsmDiagramOptions {
     instr_db::Isa isa = instr_db::Isa::X86;
-    uint32_t ua_id = 0;             ///< microarquitectura (indice) para el coste.
-    std::string microarch;          ///< nombre de la microarq (para el titulo).
-    std::string id_prefix = "asm";  ///< prefijo unico de los ids de nodo.
-    std::string title;              ///< titulo opcional del subgrafo.
+    uint32_t ua_id = 0;    ///< microarquitectura (indice) para el coste.
+    std::string microarch; ///< nombre de la microarq (para el titulo).
+    std::string id_prefix = "asm"; ///< prefijo unico de los ids de nodo.
+    std::string title;             ///< titulo opcional del subgrafo.
 };
 
 /**

@@ -11,12 +11,14 @@
  *
  * El backend es el UNICO que entiende la ISA: aqui construye las operaciones
  * sinteticas que le importan al asignador de recursos (reload/spill/move),
- * pregunta su coste al @c SchedCostModel y empaqueta los @c InstrCost abstractos
- * en un @c MachineCostFacts.  Ni el snapshot ni el allocator ven un @c MInstr.
+ * pregunta su coste al @c SchedCostModel y empaqueta los @c InstrCost
+ * abstractos en un @c MachineCostFacts.  Ni el snapshot ni el allocator ven un
+ * @c MInstr.
  *
  *      SchedCostModel  --cost(MInstr LOAD/STORE/MOV)-->  InstrCost
  *                                                          |
- *                                             empaqueta -> MachineCostFacts (Tipo C)
+ *                                             empaqueta -> MachineCostFacts
+ * (Tipo C)
  *
  * "El scheduler ya no calcula latencias: PUBLICA conocimiento" -- el mismo
  * movimiento que LoopFacts/ProfileFacts/ValueRequirements, ahora sobre el HW.

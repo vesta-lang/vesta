@@ -21,8 +21,9 @@
  *
  * BOTTOM no es "no se": es "aqui no se llega".  Confundirlos hace que una rama
  * imposible -- `x = 20; if (x < 10)` -- se trate como una rama de la que no se
- * sabe nada, y peor: permite declarar inalcanzable un punto vivo, que habilita a
- * cualquier consumidor a concluir lo que quiera sobre codigo que si se ejecuta.
+ * sabe nada, y peor: permite declarar inalcanzable un punto vivo, que habilita
+ * a cualquier consumidor a concluir lo que quiera sobre codigo que si se
+ * ejecuta.
  *
  * TOP y `todo(T)` NO son lo mismo, y la diferencia importa:
  *
@@ -40,9 +41,9 @@
  *
  * POR ESO TODA LA SEMANTICA VIVE AQUI y no en el motor de flujo: envoltura,
  * comparaciones con y sin signo, extensiones y truncados son propiedades del
- * TIPO, no del recorrido del grafo.  El motor decide QUE se compone; el dominio,
- * COMO.  Un dominio que se prueba solo -- sin construir una funcion IR -- es un
- * dominio del que se puede uno fiar.
+ * TIPO, no del recorrido del grafo.  El motor decide QUE se compone; el
+ * dominio, COMO.  Un dominio que se prueba solo -- sin construir una funcion IR
+ * -- es un dominio del que se puede uno fiar.
  *
  * SEPARADO de "que bits estan a uno" a proposito: aqui se habla del VALOR, no
  * de la representacion fisica.
@@ -64,7 +65,7 @@ struct IrFunction;
 /// Identificador de bloque: lo necesita @c RangeWalk, que pregunta por uno.
 using IrBlockId = uint32_t;
 enum class IrType : uint8_t;
-}
+} // namespace ir
 
 namespace analysis {
 
@@ -81,7 +82,7 @@ namespace analysis {
  */
 struct RangeType {
     uint8_t bits = 64;
-    bool    sin_signo = false;
+    bool sin_signo = false;
 
     /// Construccion validada.  Es la unica puerta de entrada.
     static RangeType de(uint8_t bits, bool sin_signo) {
@@ -140,8 +141,12 @@ struct RangeType {
         if (sin_signo) return normalizar(a) < normalizar(b);
         return hacia_signo(a) < hacia_signo(b);
     }
-    uint64_t menor_de(uint64_t a, uint64_t b) const { return menor(a, b) ? a : b; }
-    uint64_t mayor_de(uint64_t a, uint64_t b) const { return menor(a, b) ? b : a; }
+    uint64_t menor_de(uint64_t a, uint64_t b) const {
+        return menor(a, b) ? a : b;
+    }
+    uint64_t mayor_de(uint64_t a, uint64_t b) const {
+        return menor(a, b) ? b : a;
+    }
 };
 
 enum class RangeKind : uint8_t { Bottom, Bounded, Top };
@@ -164,8 +169,8 @@ enum class RangeKind : uint8_t { Bottom, Bounded, Top };
 struct ValueRange {
     RangeKind kind = RangeKind::Top;
     RangeType t{};
-    uint64_t  lo_c = 0; ///< extremo inferior, en crudo
-    uint64_t  hi_c = 0; ///< extremo superior, en crudo
+    uint64_t lo_c = 0; ///< extremo inferior, en crudo
+    uint64_t hi_c = 0; ///< extremo superior, en crudo
 
     // ----------------------------------------------------------------- crear
     static ValueRange top(RangeType ty = RangeType{}) {
@@ -232,7 +237,8 @@ struct ValueRange {
         return acotada() && lo_c == t.min_crudo() && hi_c == t.max_crudo();
     }
 
-    /// El invariante de la struct.  Se comprueba en las pruebas y en depuracion.
+    /// El invariante de la struct.  Se comprueba en las pruebas y en
+    /// depuracion.
     bool valida() const {
         if (kind != RangeKind::Bounded) return true;
         return t.valido() && !t.menor(hi_c, lo_c) &&
@@ -243,7 +249,8 @@ struct ValueRange {
     int64_t lo() const { return t.hacia_signo(lo_c); }
     int64_t hi() const { return t.hacia_signo(hi_c); }
 
-    /// Cuantos valores contiene (0 = "no cabe en `uint64_t`", solo `u64` entero).
+    /// Cuantos valores contiene (0 = "no cabe en `uint64_t`", solo `u64`
+    /// entero).
     uint64_t cardinal() const {
         if (!acotada()) return 0;
         const uint64_t d = t.normalizar(hi_c - lo_c);
@@ -284,11 +291,11 @@ struct ValueRange {
      *
      * Si no queda nada, el punto no se alcanza -> BOTTOM (no "no se").
      *
-     * Con tipos DISTINTOS no se corta: mezclar dominios es un fallo del IR o del
-     * llamante, y la respuesta segura es quedarse con lo que ya se sabia.
+     * Con tipos DISTINTOS no se corta: mezclar dominios es un fallo del IR o
+     * del llamante, y la respuesta segura es quedarse con lo que ya se sabia.
      * Devolver BOTTOM ahi convertiria un fallo NUESTRO en "este codigo no se
-     * ejecuta", que es la peor conclusion posible.  Quien quiera cruzar dominios
-     * reinterpreta primero (@c reinterpretar), que si esta definido.
+     * ejecuta", que es la peor conclusion posible.  Quien quiera cruzar
+     * dominios reinterpreta primero (@c reinterpretar), que si esta definido.
      */
     ValueRange cortar(const ValueRange &o) const;
 
@@ -296,17 +303,17 @@ struct ValueRange {
      * @brief ENSANCHAMIENTO: el extremo que crece se suelta hasta el del tipo.
      *
      * Es lo que hace que el analisis TERMINE.  Se suelta SOLO el extremo que se
-     * movio: soltar el intervalo entero tira tambien lo que no habia cambiado, y
-     * en `for (i = 100; i < 200)` lo que no cambia es la cota inferior, que es
-     * justo lo que permite demostrar algo.  Ensanchar no es olvidar.
+     * movio: soltar el intervalo entero tira tambien lo que no habia cambiado,
+     * y en `for (i = 100; i < 200)` lo que no cambia es la cota inferior, que
+     * es justo lo que permite demostrar algo.  Ensanchar no es olvidar.
      */
     ValueRange ensanchar(const ValueRange &nuevo) const;
 
     // -------------------------------------------------- aritmetica del dominio
     //
-    //  Todas ENVUELVEN como el IR.  El conjunto exacto se calcula en enteros sin
-    //  limite y luego se pliega al tipo: si cabe, el resultado es exacto (un
-    //  `u8` con 250+10 responde 4); si al plegarlo da la vuelta al tipo, la
+    //  Todas ENVUELVEN como el IR.  El conjunto exacto se calcula en enteros
+    //  sin limite y luego se pliega al tipo: si cabe, el resultado es exacto
+    //  (un `u8` con 250+10 responde 4); si al plegarlo da la vuelta al tipo, la
     //  respuesta es `todo(T)`.
     ValueRange sumar(const ValueRange &o) const;
     ValueRange restar(const ValueRange &o) const;
@@ -368,8 +375,9 @@ struct ValueRange {
     //
     //  Lo que AFIRMA una comparacion sobre este valor.  Viven aqui, y no en el
     //  motor, porque un `<` no significa lo mismo en `i8` que en `u64`, y esa
-    //  diferencia es del tipo.  Se apoyan en @c corte: si lo afirmado contradice
-    //  lo que ya se sabia, el resultado es BOTTOM -- por ahi no se pasa.
+    //  diferencia es del tipo.  Se apoyan en @c corte: si lo afirmado
+    //  contradice lo que ya se sabia, el resultado es BOTTOM -- por ahi no se
+    //  pasa.
     ValueRange restringir_menor(const ValueRange &o) const;
     ValueRange restringir_menor_igual(const ValueRange &o) const;
     ValueRange restringir_mayor(const ValueRange &o) const;
@@ -378,10 +386,10 @@ struct ValueRange {
     /**
      * @brief El valor NO esta en @p o.  Resta de intervalos.
      *
-     * Si @p o se come este intervalo entero, no queda nada: BOTTOM.  Si lo muerde
-     * por un extremo, se recorta.  Si lo parte por en medio quedarian dos trozos
-     * y eso no se representa, asi que se deja como estaba -- correcto, solo menos
-     * preciso.
+     * Si @p o se come este intervalo entero, no queda nada: BOTTOM.  Si lo
+     * muerde por un extremo, se recorta.  Si lo parte por en medio quedarian
+     * dos trozos y eso no se representa, asi que se deja como estaba --
+     * correcto, solo menos preciso.
      *
      * Sirve para dos cosas distintas que son la misma: `x != k` y la rama por
      * DEFECTO de un `switch`, que afirma que el selector cae fuera de la tabla.
@@ -404,7 +412,8 @@ struct ValueRange {
 };
 
 /* PENDIENTE, y dicho aqui para que no se pierda: un rango simple no basta para
- * `base + i*8`.  Hace falta el PASO ademas del intervalo -- `i en [0,63]` paso 8
+ * `base + i*8`.  Hace falta el PASO ademas del intervalo -- `i en [0,63]` paso
+ * 8
  * -> `offset en [0,504]` -- para demostrar `offset + sizeof(T) <= tamano` sin
  * conocer `i`, y ademas la CONGRUENCIA (`offset % 8 == 0`) para hablar de
  * alineacion.  Es lo que hara comprobables las vistas dinamicas (`@overlay`),
@@ -436,9 +445,9 @@ struct RangeOptions {
  * confunde con "ese programa es dificil".
  */
 struct RangeStats {
-    uint32_t pasos = 0;       ///< bloques procesados en total (ascenso+descenso)
-    uint32_t cambios = 0;     ///< veces que un IN[B] cambio
-    uint32_t ensanches = 0;   ///< veces que se aplico ensanchamiento
+    uint32_t pasos = 0;     ///< bloques procesados en total (ascenso+descenso)
+    uint32_t cambios = 0;   ///< veces que un IN[B] cambio
+    uint32_t ensanches = 0; ///< veces que se aplico ensanchamiento
     uint32_t estrechados = 0; ///< veces que el descenso mejoro un IN[B]
     /// Si el descenso llego hasta el final.  Pararlo a medias NO invalida el
     /// resultado -- toda la cadena descendente sigue conteniendo al punto fijo
@@ -455,16 +464,20 @@ struct RangeStats {
     // DENSIDAD -- cuantos de los valores de la funcion llegan a tener rango --,
     // que no se puede suponer: se mide.
 
-    uint32_t valores = 0;      ///< valores SSA de la funcion (tamano si fuese denso).
-    uint32_t ref_max = 0;      ///< mayor numero de valores con rango en un estado.
-    uint64_t ref_suma = 0;     ///< suma de tamanos, para la media.
+    uint32_t valores =
+        0; ///< valores SSA de la funcion (tamano si fuese denso).
+    uint32_t ref_max = 0;  ///< mayor numero de valores con rango en un estado.
+    uint64_t ref_suma = 0; ///< suma de tamanos, para la media.
     uint32_t ref_muestras = 0; ///< estados medidos (denominador de la media).
-    uint64_t inserciones = 0;  ///< altas de un valor nuevo (desplazan el vector).
-    uint64_t reescrituras = 0; ///< cambios de un valor ya presente (no desplazan).
-    uint64_t copias = 0;       ///< estados copiados enteros.
-    uint64_t busquedas = 0;    ///< consultas al estado (busqueda binaria cada una).
-    uint64_t uniones = 0;      ///< confluencias: cada una construye un estado NUEVO.
-    uint64_t unidos = 0;       ///< elementos anadidos al fusionar (reservas).
+    uint64_t inserciones =
+        0; ///< altas de un valor nuevo (desplazan el vector).
+    uint64_t reescrituras =
+        0;               ///< cambios de un valor ya presente (no desplazan).
+    uint64_t copias = 0; ///< estados copiados enteros.
+    uint64_t busquedas =
+        0;                ///< consultas al estado (busqueda binaria cada una).
+    uint64_t uniones = 0; ///< confluencias: cada una construye un estado NUEVO.
+    uint64_t unidos = 0;  ///< elementos anadidos al fusionar (reservas).
 };
 
 /**
@@ -506,8 +519,9 @@ struct RangeSummaries;
  * nueva entra en la clave sola -- sin que nadie se acuerde de anadirla.
  */
 struct DependenciasRango {
-    uint64_t huella_ir = 0;        ///< la funcion analizada (forma, tipos, destinos).
-    uint64_t huella_opciones = 0;  ///< el presupuesto: con otro puede converger a otra cosa.
+    uint64_t huella_ir = 0; ///< la funcion analizada (forma, tipos, destinos).
+    uint64_t huella_opciones =
+        0; ///< el presupuesto: con otro puede converger a otra cosa.
     /// Cada resumen CONSULTADO: a quien se pregunto y que contesto entonces.
     /// Se guarda el nombre para poder RELEERLO, no solo comparar un total.
     std::vector<std::pair<std::string, uint64_t>> resumenes;
@@ -516,8 +530,8 @@ struct DependenciasRango {
     bool registrada = false;
 };
 
-/// Huella de la FUNCION: forma, tipos y destinos.  Es la parte de la entrada que
-/// si se puede leer entera de un sitio.
+/// Huella de la FUNCION: forma, tipos y destinos.  Es la parte de la entrada
+/// que si se puede leer entera de un sitio.
 uint64_t huella_de_funcion(const ir::IrFunction &fn);
 
 /// Huella de un resumen (nulo incluido: "no habia" es un estado distinto de
@@ -560,7 +574,7 @@ struct RangeFacts {
      * llegado".  Quien va a DEMOSTRAR algo tiene derecho a distinguir una
      * conclusion de una parada, asi que sin convergencia no se afirma nada.
      */
-    bool       convergio = true;
+    bool convergio = true;
     /// Lo que se leyo para llegar hasta aqui.  Es lo que permite reusar estos
     /// hechos sin recalcularlos, y lo que impide reusarlos cuando no valen.
     DependenciasRango deps;
@@ -579,7 +593,8 @@ struct RangeFacts {
  *
  *     IN[B]              = union de OUT_ARISTA[P -> B]
  *     OUT[B]             = transferencia(B, IN[B])
- *     OUT_ARISTA[P -> S] = cortar(OUT[P], lo que afirma la guarda de esa arista)
+ *     OUT_ARISTA[P -> S] = cortar(OUT[P], lo que afirma la guarda de esa
+ * arista)
  *
  * Las PHI se resuelven leyendo el estado DE LA ARISTA por la que llega cada
  * argumento: sin eso, una guarda no puede afectar a la PHI que depende de ella.
@@ -592,12 +607,12 @@ struct RangeFacts {
  *               ensanchamiento solto.  Pararlo antes cuesta precision, nunca
  *               correccion.
  *
- * El resultado por valor es su rango EN SU PUNTO DE DEFINICION -- una proyeccion
- * derivada, no el transporte del analisis.  Vale en cualquier uso porque en SSA
- * la definicion domina a todos ellos, pero NO incorpora los refinamientos
- * posteriores: en `if (i < 10) usar(i)`, la definicion puede decir `[0,1000]`
- * mientras el uso esta en `[0,9]`.  Quien necesite esa precision pregunta por el
- * punto, no por el valor.
+ * El resultado por valor es su rango EN SU PUNTO DE DEFINICION -- una
+ * proyeccion derivada, no el transporte del analisis.  Vale en cualquier uso
+ * porque en SSA la definicion domina a todos ellos, pero NO incorpora los
+ * refinamientos posteriores: en `if (i < 10) usar(i)`, la definicion puede
+ * decir `[0,1000]` mientras el uso esta en `[0,9]`.  Quien necesite esa
+ * precision pregunta por el punto, no por el valor.
  *
  * @param sum Resumenes de frontera del modulo, si se tienen.  Con ellos un
  *            parametro deja de valer lo que su tipo y el resultado de una
@@ -655,10 +670,10 @@ class RangeWalk {
 /**
  * @brief El rango que impone un TIPO del IR, sin mirar el codigo.
  *
- * Es el suelo de cualquier afirmacion sobre un valor de ese tipo, y sale gratis:
- * un `u8` no pasa de 255 en ninguna arquitectura.  Se expone porque hay quien lo
- * necesita sin analizar la funcion -- por ejemplo para saber que vale un
- * parametro del que aun no se sabe quien llama.
+ * Es el suelo de cualquier afirmacion sobre un valor de ese tipo, y sale
+ * gratis: un `u8` no pasa de 255 en ninguna arquitectura.  Se expone porque hay
+ * quien lo necesita sin analizar la funcion -- por ejemplo para saber que vale
+ * un parametro del que aun no se sabe quien llama.
  */
 ValueRange rango_del_tipo(ir::IrType t);
 

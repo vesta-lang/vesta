@@ -5,7 +5,6 @@
  * Licencia: GPLv2 + excepcion de runtime (ver LICENSE).
  */
 
-
 /*
 La clave está especialmente aquí:
                                     ┌─────────────┐
@@ -22,21 +21,22 @@ C2       -> certeza posiblemente inválida
 PGO      -> conocimiento observado
 
 
-En un diseño convencional, es frecuente encontrar algo conceptualmente más parecido a:
+En un diseño convencional, es frecuente encontrar algo conceptualmente más
+parecido a:
 
 range analysis ─────► optimizador ──► criterio propio
 points-to ──────────► optimizador ──► criterio propio
 profile ────────────► JIT ──────────► criterio propio
 type analysis ──────► codegen ──────► criterio propio
 
-Aunque existen sistemas que comparten análisis, la idea fuerte de que el 
-conocimiento sea un recurso arquitectónico explícito, 
-con certeza/procedencia/prueba, y que los consumidores sean 
+Aunque existen sistemas que comparten análisis, la idea fuerte de que el
+conocimiento sea un recurso arquitectónico explícito,
+con certeza/procedencia/prueba, y que los consumidores sean
 deliberadamente agnósticos respecto al productor, es otra cosa.
 
 "Vesta introduce una arquitectura de conocimiento unificada basada en ASA,
-donde análisis estático, runtime/JIT y PGO actúan como productores de hechos 
-con certeza y procedencia, mientras los consumidores consultan ese conocimiento 
+donde análisis estático, runtime/JIT y PGO actúan como productores de hechos
+con certeza y procedencia, mientras los consumidores consultan ese conocimiento
 sin mantener criterios paralelos."
 
 */
@@ -63,8 +63,8 @@ sin mantener criterios paralelos."
  *
  * AMPLIAR es anadir un productor con @c registrar_productor: aparece en el
  * almacen, en el volcado y en los filtros sin tocar el motor.  Mañana el mismo
- * mecanismo recibe lo observado en ejecucion o un perfil de corridas anteriores:
- * otro productor, mismos hechos, otra procedencia y otra certeza.
+ * mecanismo recibe lo observado en ejecucion o un perfil de corridas
+ * anteriores: otro productor, mismos hechos, otra procedencia y otra certeza.
  */
 #ifndef ANALYSIS_ASA_PRODUCTORES_H
 #define ANALYSIS_ASA_PRODUCTORES_H
@@ -97,16 +97,16 @@ namespace asa {
  */
 struct MotivoIgnorancia {
     const char *codigo = "?"; ///< estable, del vocabulario del dominio.
-    uint32_t    veces = 0;
+    uint32_t veces = 0;
 };
 
 /// Lo que se produjo por dominio.  Las "miradas" incluyen lo que no dio nada.
 struct ResumenProduccion {
     const char *dominio = nullptr;
-    uint32_t    hechos = 0;   ///< afirmaciones con algo que decir.
-    uint32_t    miradas = 0;  ///< entidades examinadas.
-    uint32_t    callados = 0; ///< de esas, las que no dieron nada.
-    long        micros = 0;
+    uint32_t hechos = 0;   ///< afirmaciones con algo que decir.
+    uint32_t miradas = 0;  ///< entidades examinadas.
+    uint32_t callados = 0; ///< de esas, las que no dieron nada.
+    long micros = 0;
     /// Desglose de @c callados por motivo.  Pocos por dominio: vector plano.
     std::vector<MotivoIgnorancia> motivos;
 };
@@ -119,9 +119,9 @@ struct ResumenProduccion {
  */
 struct Produccion {
     const ir::IrModule &mod;
-    BaseDeHechos       &base;
-    FactStore          &almacen;
-    ResumenProduccion  &resumen;
+    BaseDeHechos &base;
+    FactStore &almacen;
+    ResumenProduccion &resumen;
     /**
      * @brief El hecho de estructura de cada funcion, si ya se produjo.
      *
@@ -138,10 +138,10 @@ struct Produccion {
     /**
      * @brief Anota que se miro @p de_quien y no se saco nada, Y POR QUE.
      *
-     * El motivo se registra siempre (agregado por codigo); ademas se afirma como
-     * hecho de certeza desconocida si se pidieron los desconocidos.  Un dominio
-     * NUNCA se calla sin decir por que: sin el motivo, "no lo se" y "no lo mire"
-     * se leen igual.
+     * El motivo se registra siempre (agregado por codigo); ademas se afirma
+     * como hecho de certeza desconocida si se pidieron los desconocidos.  Un
+     * dominio NUNCA se calla sin decir por que: sin el motivo, "no lo se" y "no
+     * lo mire" se leen igual.
      *
      * @param de_quien De que entidad no se supo nada.
      * @param motivo   Codigo ESTABLE del vocabulario del dominio.
@@ -172,12 +172,13 @@ std::vector<const char *> productores_registrados();
  * Monta UNA base de hechos para todos: el conocimiento comun se calcula una vez
  * aunque lo usen cinco dominios.
  *
- * @param mod     Modulo IR ya optimizado (el codigo que de verdad va a existir).
+ * @param mod     Modulo IR ya optimizado (el codigo que de verdad va a
+ * existir).
  * @param almacen Donde se depositan los hechos.
  * @return El resumen por dominio.
  */
 std::vector<ResumenProduccion> producir(const ir::IrModule &mod,
-                                        FactStore          &almacen);
+                                        FactStore &almacen);
 
 } // namespace asa
 } // namespace analysis

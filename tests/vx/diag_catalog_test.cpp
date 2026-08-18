@@ -1,7 +1,8 @@
 /**
  * @file diag_catalog_test.cpp
- * @brief Tests del catalogo multi-idioma de diagnosticos (ver vx/diag_catalog.h):
- *        seleccion de idioma, sustitucion de placeholders, fallback.
+ * @brief Tests del catalogo multi-idioma de diagnosticos (ver
+ * vx/diag_catalog.h): seleccion de idioma, sustitucion de placeholders,
+ * fallback.
  */
 #include "vx/diag/diag_catalog.h"
 #include "vx/diag/diag_format.h"
@@ -14,13 +15,13 @@
 using namespace vx;
 
 static int g_checks = 0, g_fail = 0;
-#define CHECK(cond, msg)                                                        \
-    do {                                                                        \
-        ++g_checks;                                                             \
-        if (!(cond)) {                                                          \
-            ++g_fail;                                                           \
-            std::printf("  FAIL: %s (linea %d)\n", (msg), __LINE__);            \
-        }                                                                       \
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fail;                                                          \
+            std::printf("  FAIL: %s (linea %d)\n", (msg), __LINE__);           \
+        }                                                                      \
     } while (0)
 
 int main() {

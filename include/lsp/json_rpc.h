@@ -65,7 +65,8 @@ class JsonRpcTransport {
      * @param in  Flujo de entrada (por defecto @c stdin).
      * @param out Flujo de salida (por defecto @c stdout).
      */
-    explicit JsonRpcTransport(std::FILE *in = nullptr, std::FILE *out = nullptr);
+    explicit JsonRpcTransport(std::FILE *in = nullptr,
+                              std::FILE *out = nullptr);
 
     /**
      * @brief Lee el siguiente mensaje completo del flujo de entrada.

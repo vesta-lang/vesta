@@ -14,13 +14,13 @@
 #include <vector>
 
 static int g_checks = 0, g_fail = 0;
-#define CHECK(cond, msg)                                                        \
-    do {                                                                        \
-        ++g_checks;                                                             \
-        if (!(cond)) {                                                          \
-            ++g_fail;                                                           \
-            std::printf("  FAIL: %s (linea %d)\n", (msg), __LINE__);            \
-        }                                                                       \
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fail;                                                          \
+            std::printf("  FAIL: %s (linea %d)\n", (msg), __LINE__);           \
+        }                                                                      \
     } while (0)
 
 static bool has(const std::string &s, const std::string &sub) {
@@ -164,9 +164,9 @@ static std::string emit_sum_fn(bool &uns) {
 
 /// Construye `do_atomics(p)`: sobre la celda en @c *p (inicializada a 10 por el
 /// harness) hace  a=fetch_add(p,5) (=10, celda->15);  b=cas(p,15,42) (=15,
-/// celda->42);  c=fetch_add(p,0) (=42);  return c.  Ejercita ATOMIC_ADD (fetch +
-/// store) y ATOMIC_CAS (match + store) y relee la celda -> el resultado 42 solo
-/// sale si TODA la cadena atomica es correcta.
+/// celda->42);  c=fetch_add(p,0) (=42);  return c.  Ejercita ATOMIC_ADD (fetch
+/// + store) y ATOMIC_CAS (match + store) y relee la celda -> el resultado 42
+/// solo sale si TODA la cadena atomica es correcta.
 static std::string emit_atomics_fn(bool &uns) {
     ir::IrFunction fn;
     fn.name = "atomics";
@@ -229,16 +229,15 @@ static void write_boot(std::ofstream &o, const std::string &fn_body, int arg) {
 }
 
 /// Modo `boot <out.s>`: escribe un programa AArch64 bare-metal que llama a la
-/// funcion `add` GENERADA por el selector con add(3,4) y sale por semihosting con
-/// el resultado (7) como codigo.  Lo consume tests/aot/qemu_arm64_codegen_test.py.
+/// funcion `add` GENERADA por el selector con add(3,4) y sale por semihosting
+/// con el resultado (7) como codigo.  Lo consume
+/// tests/aot/qemu_arm64_codegen_test.py.
 static int emit_boot(const char *path) {
     bool uns = false;
     const std::string body = emit_add_fn(uns);
-    if (uns)
-        return 1;
+    if (uns) return 1;
     std::ofstream o(path);
-    if (!o)
-        return 1;
+    if (!o) return 1;
     // Harness: sp por encima del DTB de virt; carga args, llama add, exit(x0).
     o << "movz x20, #0x4030, lsl #16\n";
     o << "mov sp, x20\n";
@@ -260,35 +259,30 @@ static int emit_boot(const char *path) {
 }
 
 int main(int argc, char **argv) {
-    if (argc >= 3 && std::string(argv[1]) == "boot")
-        return emit_boot(argv[2]);
+    if (argc >= 3 && std::string(argv[1]) == "boot") return emit_boot(argv[2]);
     if (argc >= 3 && std::string(argv[1]) == "bootsum") {
         bool uns = false;
         const std::string body = emit_sum_fn(uns);
-        if (uns)
-            return 1;
+        if (uns) return 1;
         std::ofstream o(argv[2]);
-        if (!o)
-            return 1;
+        if (!o) return 1;
         write_boot(o, body, 4); // sum(4) = 10
         return 0;
     }
     if (argc >= 3 && std::string(argv[1]) == "bootatomic") {
         bool uns = false;
         const std::string body = emit_atomics_fn(uns);
-        if (uns)
-            return 1;
+        if (uns) return 1;
         std::ofstream o(argv[2]);
-        if (!o)
-            return 1;
+        if (!o) return 1;
         // Harness: reserva una celda en la pila, la inicializa a 10, pasa su
         // direccion en x0 y llama.  El resultado (42) sale por semihosting.
         o << "movz x20, #0x4030, lsl #16\n";
         o << "mov sp, x20\n";
         o << "sub sp, sp, #16\n";
         o << "movz x0, #10\n";
-        o << "str x0, [sp]\n";  // celda = 10
-        o << "mov x0, sp\n";    // x0 = &celda
+        o << "str x0, [sp]\n"; // celda = 10
+        o << "mov x0, sp\n";   // x0 = &celda
         o << "bl fn_body\n";
         o << "mov x21, x0\n";
         o << "sub sp, sp, #16\n";
@@ -306,11 +300,9 @@ int main(int argc, char **argv) {
         bool u1 = false, u2 = false;
         const std::string caller = emit_caller_fn(u1);
         const std::string add = emit_add_fn(u2);
-        if (u1 || u2)
-            return 1;
+        if (u1 || u2) return 1;
         std::ofstream o(argv[2]);
-        if (!o)
-            return 1;
+        if (!o) return 1;
         // Harness: llama caller() (sin args), que a su vez hace `bl add`.
         o << "movz x20, #0x4030, lsl #16\n";
         o << "mov sp, x20\n";
@@ -409,7 +401,8 @@ int main(int argc, char **argv) {
         /* El destino de la llamada NO va en el texto: se emite `bl 0` y el
          * simbolo se anota aparte para que lo resuelva la reubicacion.  El
          * test esperaba `bl add`, que era como se hacia antes. */
-        CHECK(has(a, "bl 0"), "caller: llamada emitida (destino por reubicacion)");
+        CHECK(has(a, "bl 0"),
+              "caller: llamada emitida (destino por reubicacion)");
         CHECK(has(a, "str x30,"), "caller: salva LR (hay llamada)");
         CHECK(has(a, "ldr x30,"), "caller: restaura LR antes del ret");
         CHECK(has(a, "str x0,") && has(a, "ldr x0,"),
@@ -429,7 +422,8 @@ int main(int argc, char **argv) {
         CHECK(!uns, "atomics: soportado");
         CHECK(has(a, "ldaxr x12, [x9]"), "atomics: ldaxr del CAS");
         CHECK(has(a, "stlxr w13, x11, [x9]"), "atomics: stlxr del CAS");
-        CHECK(has(a, "b.ne .Latomics_acd"), "atomics: salida del CAS en mismatch");
+        CHECK(has(a, "b.ne .Latomics_acd"),
+              "atomics: salida del CAS en mismatch");
         CHECK(has(a, "ldaxr x11, [x9]"), "atomics: ldaxr del ADD");
         CHECK(has(a, "add x12, x11, x10"), "atomics: suma del fetch-and-add");
         CHECK(has(a, "cbnz w13, .Latomics_aar"), "atomics: reintento del ADD");

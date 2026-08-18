@@ -49,10 +49,8 @@ inline bool es_dos_operandos_no_conmutativa(MOp op) noexcept {
     case MOp::SUBSD:
     case MOp::SUBSS:
     case MOp::DIVSD:
-    case MOp::DIVSS:
-        return true;
-    default:
-        return false;
+    case MOp::DIVSS: return true;
+    default: return false;
     }
 }
 
@@ -62,8 +60,8 @@ inline bool es_dos_operandos_no_conmutativa(MOp op) noexcept {
  * @param mf Funcion en representacion de maquina, antes de asignar.
  * @return El conjunto, vacio si la funcion no tiene ninguna.
  */
-inline codegen::rbank::ConstraintSet recoger_restricciones_de_forma(
-    const MFunction &mf) {
+inline codegen::rbank::ConstraintSet
+recoger_restricciones_de_forma(const MFunction &mf) {
     codegen::rbank::ConstraintSet cs;
     for (const auto &b : mf.blocks) {
         for (const MInstr &in : b.instrs) {

@@ -530,9 +530,10 @@ void exec_instr_setstatic(ProcessVM *vm, const DecodedInstr &instr) {
 static inline uint64_t mem_full_addr(ProcessVM *vm, uint8_t base, int16_t disp,
                                      uint8_t flags, uint8_t index,
                                      uint8_t scale) {
-    uint64_t addr = base < 16 ? vm->registers.regs[base].qword()
-                    : (base == 16 ? vm->registers.base_pointer.raw()
-                                  : vm->registers.stack_pointer.raw());
+    uint64_t addr = base < 16
+                        ? vm->registers.regs[base].qword()
+                        : (base == 16 ? vm->registers.base_pointer.raw()
+                                      : vm->registers.stack_pointer.raw());
     addr += static_cast<uint64_t>(static_cast<int64_t>(disp));
     if (flags & 0x02) { // has_index
         const uint64_t idx = vm->registers.regs[index].qword() << scale;
@@ -559,9 +560,10 @@ void exec_instr_mld(ProcessVM *vm, const DecodedInstr &instr) {
         case 2: val = vm->vm_mem.read_u16(addr); break;
         case 4: val = vm->vm_mem.read_u32(addr); break;
         // read_u64_fast: page-cache -> memcpy directo en hit (~1 ns) vs TLB
-        // walk completo (~50 ns).  mld es la carga universal del hot loop (arrays,
-        // locales, campos): accesos MAYORMENTE en la misma pagina -> el cache
-        // acierta.  En scattered cae al camino lento (correcto, sin regresion).
+        // walk completo (~50 ns).  mld es la carga universal del hot loop
+        // (arrays, locales, campos): accesos MAYORMENTE en la misma pagina ->
+        // el cache acierta.  En scattered cae al camino lento (correcto, sin
+        // regresion).
         default: val = vm->vm_mem.read_u64_fast(addr); break;
         }
     }
@@ -607,7 +609,8 @@ void exec_instr_mst(ProcessVM *vm, const DecodedInstr &instr) {
     const uint64_t addr =
         mem_full_addr(vm, m.base, m.disp, m.flags, m.index, m.scale);
     // Banco FP (bit 4): el valor a escribir se lee DIRECTO del banco ZMM como
-    // float, sin bitcast a GP.  Se reinterpretan los bits IEEE (no se convierte).
+    // float, sin bitcast a GP.  Se reinterpretan los bits IEEE (no se
+    // convierte).
     uint64_t val;
     if (m.flags & 0x10) {
         const ZmmRegister &z = vm->registers.zmm[m.reg];
@@ -631,7 +634,9 @@ void exec_instr_mst(ProcessVM *vm, const DecodedInstr &instr) {
         case 1: vm->vm_mem.write_u8(addr, static_cast<uint8_t>(val)); break;
         case 2: vm->vm_mem.write_u16(addr, static_cast<uint16_t>(val)); break;
         case 4: vm->vm_mem.write_u32(addr, static_cast<uint32_t>(val)); break;
-        default: vm->vm_mem.write_u64_fast(addr, val); break; // page-cache (ver mld)
+        default:
+            vm->vm_mem.write_u64_fast(addr, val);
+            break; // page-cache (ver mld)
         }
     }
 }

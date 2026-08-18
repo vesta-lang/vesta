@@ -45,7 +45,8 @@ struct FoldBudget {
 /**
  * @brief Ejecuta los candidatos de precomputo del modulo e inyecta los CONST.
  * @param mod    modulo (se modifica: cuerpos plegados).
- * @param rt     ComptimeRuntime YA CARGADO con el modulo (invocaciones in-memory).
+ * @param rt     ComptimeRuntime YA CARGADO con el modulo (invocaciones
+ * in-memory).
  * @param budget presupuesto (tiempo/heap) del modo CTPE.
  * @return numero de funciones plegadas.
  */

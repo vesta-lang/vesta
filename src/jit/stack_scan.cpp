@@ -124,8 +124,8 @@ const Stackmap *find_stackmap_in(const JitFunctionInfo &info,
 }
 } // namespace
 
-JitScanStats scan_aot_frames(JitRootCallback cb, void *cb_ctx, uint64_t start_pc,
-                             uint64_t start_sp) noexcept {
+JitScanStats scan_aot_frames(JitRootCallback cb, void *cb_ctx,
+                             uint64_t start_pc, uint64_t start_sp) noexcept {
     JitScanStats stats{};
     if (!cb || start_pc == 0 || start_sp == 0) return stats;
 
@@ -142,15 +142,17 @@ JitScanStats scan_aot_frames(JitRootCallback cb, void *cb_ctx, uint64_t start_pc
             reg.lookup(reinterpret_cast<const uint8_t *>(pc));
         /* PC fuera de toda funcion Vesta registrada (CRT / _start / thunk):
          * fin del walk.  Los frames Vesta intermedios SIEMPRE se registran (con
-         * frame_size real), aunque no retengan roots, para poder atravesarlos. */
+         * frame_size real), aunque no retengan roots, para poder atravesarlos.
+         */
         if (!info) break;
 
         ++stats.frames_walked;
         ++stats.jit_frames;
 
         /* Reconstruir RBP SIN leer la cadena [rbp]: en un safepoint call de
-         * este frame, RBP = RSP + frame_size.  Robusto ante -fomit-frame-pointer
-         * de OTROS frames (nunca dependemos del saved-RBP ajeno). */
+         * este frame, RBP = RSP + frame_size.  Robusto ante
+         * -fomit-frame-pointer de OTROS frames (nunca dependemos del saved-RBP
+         * ajeno). */
         const uint64_t rbp = sp + info->frame_size;
 
         const Stackmap *sm = find_stackmap_in(*info, pc);

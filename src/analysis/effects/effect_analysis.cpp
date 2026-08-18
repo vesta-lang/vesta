@@ -33,9 +33,9 @@ namespace analysis {
 namespace effects {
 
 const IrFacts &EffectAnalysis::facts_of(const ir::IrFunction &fn) {
-    // Hechos fundacionales cacheados por el AnalysisManager: se computan una vez
-    // por funcion y se reusan (antes se reconstruian en cada consulta local ->
-    // O(n^2) por funcion; ahora O(n)).
+    // Hechos fundacionales cacheados por el AnalysisManager: se computan una
+    // vez por funcion y se reusan (antes se reconstruian en cada consulta local
+    // -> O(n^2) por funcion; ahora O(n)).
     return facts_mgr_.get_or_compute<IRFactsAnalysis, IrFacts>(
         fn.name, [&]() { return build_ir_facts(fn); });
 }
@@ -54,11 +54,12 @@ const PointsTo &EffectAnalysis::points_to_of(const ir::IrFunction &fn) {
     /* Con los RANGOS: un desplazamiento variable deja de ser "en algun sitio"
      * y pasa a ser un intervalo.  Se piden por el mismo gestor, asi que se
      * calculan una vez por funcion y los comparte quien los necesite. */
-    return facts_mgr_.get_or_compute<PointsToAnalysis, PointsTo>(fn.name, [&]() {
-        const IrFacts &f = facts_of(fn);
-        const RangeFacts &rg = ranges_of(fn);
-        return compute_points_to(fn, f, &rg);
-    });
+    return facts_mgr_.get_or_compute<PointsToAnalysis, PointsTo>(
+        fn.name, [&]() {
+            const IrFacts &f = facts_of(fn);
+            const RangeFacts &rg = ranges_of(fn);
+            return compute_points_to(fn, f, &rg);
+        });
 }
 
 EffectAnalysisResult EffectAnalysis::local(const ir::IrFunction &fn,
@@ -66,8 +67,8 @@ EffectAnalysisResult EffectAnalysis::local(const ir::IrFunction &fn,
     const void *key = static_cast<const void *>(&ins);
     auto it = local_cache_.find(key);
     if (it != local_cache_.end()) return it->second;
-    EffectAnalysisResult r = effects_of_instr(fn, facts_of(fn), points_to_of(fn),
-                                              ins, env_);
+    EffectAnalysisResult r =
+        effects_of_instr(fn, facts_of(fn), points_to_of(fn), ins, env_);
     local_cache_.emplace(key, r);
     return r;
 }
@@ -93,7 +94,8 @@ EfectoEnLlamada EffectAnalysis::at_call_site(const ir::IrFunction &caller,
     const FunctionSummary *s = nullptr;
     auto buscar = [&](const ModuleSummary &ms) {
         auto it = ms.fns.find(call.func_name);
-        if (it != ms.fns.end()) s = &it->second;
+        if (it != ms.fns.end())
+            s = &it->second;
         else {
             // Una nativa se nombra "lib:fn" y tambien "fn" a secas.
             const size_t sep = call.func_name.rfind(':');
@@ -136,7 +138,8 @@ static StructuralSummary structural_of(const ir::IrFunction &fn) {
     StructuralSummary st;
     st.block_count = static_cast<uint32_t>(fn.blocks.size());
     // Back-edge = arista a un bloque de indice <= el actual (aproximacion de
-    // bucle sobre el orden de bloques).  Recursion directa = se llama a si misma.
+    // bucle sobre el orden de bloques).  Recursion directa = se llama a si
+    // misma.
     for (uint32_t bi = 0; bi < fn.blocks.size(); ++bi) {
         for (const ir::IrInstr &in : fn.blocks[bi].instrs) {
             auto is_back = [&](ir::IrBlockId t) {
@@ -150,14 +153,18 @@ static StructuralSummary structural_of(const ir::IrFunction &fn) {
             } else if (in.op == ir::IrOp::SWITCH_DENSE ||
                        in.op == ir::IrOp::MATCH_VARIANT) {
                 for (uint32_t t : in.jump_targets)
-                    if (is_back(t)) { ++st.loop_count; break; }
+                    if (is_back(t)) {
+                        ++st.loop_count;
+                        break;
+                    }
             }
             if ((in.op == ir::IrOp::CALL || in.op == ir::IrOp::TAILCALL) &&
                 in.func_name == fn.name)
                 st.recursive = true;
         }
     }
-    if (st.loop_count > 0) st.has_unbounded_loop = true; // conservador sin trip-count
+    if (st.loop_count > 0)
+        st.has_unbounded_loop = true; // conservador sin trip-count
     return st;
 }
 
@@ -170,7 +177,8 @@ FunctionSummary EffectAnalysis::compute_summary(const ir::IrModule & /*mod*/,
     s.symbol = fn.name;
     EffectAnalysisResult loc = function_local_effects(fn);
     s.semantic.local = loc.effects;
-    s.semantic.closure = loc.effects; // sin interproc; module_summary lo completa
+    s.semantic.closure =
+        loc.effects; // sin interproc; module_summary lo completa
     s.structural = structural_of(fn);
     s.completeness = loc.completeness;
     return s;
@@ -190,7 +198,8 @@ const FunctionSummary &EffectAnalysis::summary(const ir::IrModule &mod,
 
 // Callees de una funcion: nombres estaticos (CALL/TAILCALL) + si hace alguna
 // llamada DINAMICA/nativa (callee desconocido -> el cierre toma el efecto TOP
-// robusto: puede hacer cualquier cosa, con el motivo registrado para el reporte).
+// robusto: puede hacer cualquier cosa, con el motivo registrado para el
+// reporte).
 namespace {
 struct CallInfo {
     /**
@@ -211,11 +220,11 @@ struct CallInfo {
     const ir::IrFunction *fn = nullptr;
 
     std::vector<std::string> static_callees;
-    bool                     dynamic = false; // CALLVIRT/CALLIND/CALLN/...
+    bool dynamic = false; // CALLVIRT/CALLIND/CALLN/...
     /// En AOT, una op que depende del runtime ES una llamada a libvesta_rt.
     /// No es un callee desconocido -- el helper hace exactamente esa op, y su
     /// efecto ya esta modelado --, pero la funcion deja de ser hoja.
-    bool                     runtime = false;
+    bool runtime = false;
     /// Llamadas NATIVAS por su nombre completo "lib:fn".  Van aparte porque
     /// resuelven en DOS pasos (ver el cierre): el nombre completo y, si no
     /// esta, el simbolo a secas -- que es como acaba llamandose cuando la
@@ -254,20 +263,20 @@ CallInfo callees_of(const ir::IrFunction &fn, const EffectEnv &env) {
                 /* Si alguien DIJO lo que hace, ya esta contado: el efecto
                  * declarado se aplico en el sitio de llamada, con su memoria
                  * resuelta.  Anadirla como callee ausente la volveria a subir
-                 * al efecto maximo y la declaracion no habria servido de nada. */
+                 * al efecto maximo y la declaracion no habria servido de nada.
+                 */
                 if (decls && decls->count(in.func_name)) break;
-                if (!in.func_name.empty()) ci.native_callees.push_back(in.func_name);
-                else ci.dynamic = true;
+                if (!in.func_name.empty())
+                    ci.native_callees.push_back(in.func_name);
+                else
+                    ci.dynamic = true;
                 break;
             case ir::IrOp::CALLVIRT:
             case ir::IrOp::CALLM:
             case ir::IrOp::CALLITF:
             case ir::IrOp::CALLCLOSURE:
-            case ir::IrOp::CALLIND:
-                ci.dynamic = true;
-                break;
-            default:
-                break;
+            case ir::IrOp::CALLIND: ci.dynamic = true; break;
+            default: break;
             }
         }
     return ci;
@@ -346,8 +355,8 @@ SemanticEffects observable_effect(SemanticEffects e,
 }
 } // namespace
 
-ModuleSummary EffectAnalysis::build_summary(
-    const std::vector<const ir::IrModule *> &mods) {
+ModuleSummary
+EffectAnalysis::build_summary(const std::vector<const ir::IrModule *> &mods) {
     ModuleSummary out;
 
     /* Reparto del coste, por fases.  Se publica con VESTA_TIMES porque "el
@@ -365,30 +374,34 @@ ModuleSummary EffectAnalysis::build_summary(
         marca = ahora;
     };
 
-    // Recorre TODAS las funciones de TODOS los modulos (interproc cross-modulo).
+    // Recorre TODAS las funciones de TODOS los modulos (interproc
+    // cross-modulo).
     auto for_each_fn = [&](auto &&f) {
         for (const ir::IrModule *m : mods)
             if (m)
-                for (const ir::IrFunction &fn : m->functions) f(fn);
+                for (const ir::IrFunction &fn : m->functions)
+                    f(fn);
     };
 
     // 0) EscapeAnalysis del programa: que Stack roots locales escapan (sus
-    //    escrituras SI son observables por el caller).  Provee la base de hechos
-    //    via el manager (facts_of/points_to_of), no la construye aqui.  Para
-    //    varios modulos se computa por-modulo (un callee de otro modulo se trata
-    //    como externo = captura, sound).
+    //    escrituras SI son observables por el caller).  Provee la base de
+    //    hechos via el manager (facts_of/points_to_of), no la construye aqui.
+    //    Para varios modulos se computa por-modulo (un callee de otro modulo se
+    //    trata como externo = captura, sound).
     std::unordered_map<std::string, analysis::EscapeInfo> escape_all;
     {
         auto facts_fn = [this](const ir::IrFunction &fn) -> const IrFacts & {
             return facts_of(fn);
         };
-        auto pt_fn = [this](const ir::IrFunction &fn) -> const analysis::PointsTo & {
+        auto pt_fn =
+            [this](const ir::IrFunction &fn) -> const analysis::PointsTo & {
             return points_to_of(fn);
         };
         for (const ir::IrModule *m : mods) {
             if (!m) continue;
             auto em = analysis::compute_escape_module(*m, facts_fn, pt_fn);
-            for (auto &kv : em) escape_all[kv.first] = std::move(kv.second);
+            for (auto &kv : em)
+                escape_all[kv.first] = std::move(kv.second);
         }
     }
     cerrar(us_escape);
@@ -402,8 +415,9 @@ ModuleSummary EffectAnalysis::build_summary(
     gaps_ = EffectGaps{};
     std::unordered_map<std::string, CallInfo> calls;
     // El efecto/completeness LOCAL se preserva aparte: el cierre (paso 2) se
-    // recomputa SIEMPRE desde el local + callees (idempotente para el worklist).
-    std::unordered_map<std::string, SemanticEffects>      local_eff;
+    // recomputa SIEMPRE desde el local + callees (idempotente para el
+    // worklist).
+    std::unordered_map<std::string, SemanticEffects> local_eff;
     std::unordered_map<std::string, AnalysisCompleteness> local_comp;
     for_each_fn([&](const ir::IrFunction &fn) {
         /* Los rangos de la funcion, UNA vez.  Sin esto, cada bloque de asm los
@@ -417,20 +431,24 @@ ModuleSummary EffectAnalysis::build_summary(
             env_.rangos_de = &fn;
         }
         /* Se retiran al salir: prestados a la SIGUIENTE funcion serian una
-         * respuesta incorrecta en silencio.  El dueno anotado ya lo impide, pero
-         * dejar el puntero colgando a unos rangos que mueren aqui, no. */
+         * respuesta incorrecta en silencio.  El dueno anotado ya lo impide,
+         * pero dejar el puntero colgando a unos rangos que mueren aqui, no. */
         struct Retirar {
             EffectEnv &e;
-            ~Retirar() { e.rangos = nullptr; e.rangos_de = nullptr; }
+            ~Retirar() {
+                e.rangos = nullptr;
+                e.rangos_de = nullptr;
+            }
         } retirar{env_};
         EffectAnalysisResult loc = function_local_effects(fn, &gaps_, env_);
         FunctionSummary s;
         s.symbol = fn.name;
         s.semantic.local = loc.effects; // CRUDO (lo muestra --analyze "local")
         // El cierre parte del efecto OBSERVABLE: sin las escrituras/lecturas a
-        // Stack scratch LOCAL (no las ve el caller) -> una reduccion que escribe
-        // solo Stack#acc_slot pasa a readonly.
-        SemanticEffects obs = observable_effect(loc.effects, escape_all[fn.name]);
+        // Stack scratch LOCAL (no las ve el caller) -> una reduccion que
+        // escribe solo Stack#acc_slot pasa a readonly.
+        SemanticEffects obs =
+            observable_effect(loc.effects, escape_all[fn.name]);
         s.semantic.closure = obs;
         s.structural = structural_of(fn);
         s.completeness = loc.completeness;
@@ -439,7 +457,8 @@ ModuleSummary EffectAnalysis::build_summary(
         s.interproc.has_calls = calls[fn.name].dynamic ||
                                 calls[fn.name].runtime ||
                                 !calls[fn.name].static_callees.empty();
-        local_eff[fn.name] = obs; // OBSERVABLE (sin scratch local) = semilla del cierre
+        local_eff[fn.name] =
+            obs; // OBSERVABLE (sin scratch local) = semilla del cierre
         local_comp[fn.name] = loc.completeness;
         out.fns.emplace(fn.name, std::move(s));
         ++n_fns;
@@ -452,7 +471,8 @@ ModuleSummary EffectAnalysis::build_summary(
     //    -> O(aristas del callgraph x altura del reticulo), NO O(n^2).  Un
     //    callee ausente del mapa (externo al PROGRAMA / dinamico / nativo) hace
     //    el cierre CONSERVADOR (TOP robusto).  Con varios modulos, un callee de
-    //    otro modulo SI esta en el mapa -> se resuelve (interproc cross-modulo).
+    //    otro modulo SI esta en el mapa -> se resuelve (interproc
+    //    cross-modulo).
     // Reverse-callgraph: callee -> callers (para re-encolar dependientes).
     std::unordered_map<std::string, std::vector<std::string>> callers;
     for (const auto &kv : calls) {
@@ -469,8 +489,8 @@ ModuleSummary EffectAnalysis::build_summary(
         }
     }
 
-    // Recomputa el cierre de una funcion desde su local + los cierres de callees.
-    // Devuelve true si cambio (para propagar a sus callers).
+    // Recomputa el cierre de una funcion desde su local + los cierres de
+    // callees. Devuelve true si cambio (para propagar a sus callers).
     auto recompute = [&](const std::string &name) -> bool {
         FunctionSummary &s = out.fns[name];
         SemanticEffects nc = local_eff[name];
@@ -480,7 +500,10 @@ ModuleSummary EffectAnalysis::build_summary(
             if (comp == AnalysisCompleteness::Complete)
                 comp = AnalysisCompleteness::Conservative;
         };
-        if (ci.dynamic) { nc = join(nc, SemanticEffects::top()); raise(); }
+        if (ci.dynamic) {
+            nc = join(nc, SemanticEffects::top());
+            raise();
+        }
         /* Lo que hace cada llamada, TRADUCIDO a la memoria de aqui.
          *
          * Por nombre no se puede: `arg#1` del llamado no es `arg#1` de quien
@@ -505,8 +528,8 @@ ModuleSummary EffectAnalysis::build_summary(
             }
             const SemanticEffects &ce = it->second.semantic.closure;
             if (ci.fn != nullptr) {
-                const EfectoEnLlamada e = instanciar_en_llamada(
-                    ce, sitio.args, points_to_of(*ci.fn));
+                const EfectoEnLlamada e =
+                    instanciar_en_llamada(ce, sitio.args, points_to_of(*ci.fn));
                 SemanticEffects trad = ce;
                 trad.mem.reads = e.lee;
                 trad.mem.writes = e.escribe;
@@ -540,7 +563,8 @@ ModuleSummary EffectAnalysis::build_summary(
                 continue;
             }
             merge_callee(nc, cs->semantic.closure);
-            if (uint8_t(cs->completeness) > uint8_t(comp)) comp = cs->completeness;
+            if (uint8_t(cs->completeness) > uint8_t(comp))
+                comp = cs->completeness;
         }
         /* TOPE.  Traducir en cada sitio hace que una funcion recursiva sobre
          * punteros genere una posicion nueva por vuelta -- `f(p+8)` da p+0,
@@ -568,7 +592,7 @@ ModuleSummary EffectAnalysis::build_summary(
         return false;
     };
 
-    std::deque<std::string>         work;
+    std::deque<std::string> work;
     std::unordered_set<std::string> in_work;
     for (const auto &kv : out.fns) {
         work.push_back(kv.first);
@@ -616,10 +640,11 @@ const ModuleSummary &EffectAnalysis::module_summary(const ir::IrModule &mod) {
     return module_cache_;
 }
 
-const ModuleSummary &EffectAnalysis::program_summary(
-    const std::vector<const ir::IrModule *> &mods) {
+const ModuleSummary &
+EffectAnalysis::program_summary(const std::vector<const ir::IrModule *> &mods) {
     // Interprocedural a nivel de PROGRAMA (varios modulos).  No se cachea por
-    // dirty (se recomputa: se invoca puntualmente para el analisis whole-program).
+    // dirty (se recomputa: se invoca puntualmente para el analisis
+    // whole-program).
     program_cache_ = build_summary(mods);
     return program_cache_;
 }
@@ -633,11 +658,12 @@ void EffectAnalysis::invalidate_node(const ir::IrFunction &fn,
 void EffectAnalysis::invalidate_function(const std::string &fn_name) {
     dirty_[fn_name] = true;
     module_dirty_ = true;
-    // Los hechos (def-use/CFG) de la funcion cambiaron -> invalidar en el manager
-    // para que se recomputen la proxima vez que se pidan.
+    // Los hechos (def-use/CFG) de la funcion cambiaron -> invalidar en el
+    // manager para que se recomputen la proxima vez que se pidan.
     facts_mgr_.invalidate<IRFactsAnalysis>(fn_name);
     // TODO: propagar a los callers transitivos por el callgraph (SCC) cuando el
-    // cierre interprocedural se cachee por-funcion (hoy module_summary lo rehace).
+    // cierre interprocedural se cachee por-funcion (hoy module_summary lo
+    // rehace).
 }
 
 void EffectAnalysis::clear() {

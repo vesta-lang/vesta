@@ -11,8 +11,8 @@
  *        fiar de el.  Vocabulario UNICO para todos los dominios.
  *
  * ASA no es un analisis: es la base de conocimiento del compilador.  Un dominio
- * (rangos, regiones, efectos, agregados, prestamos, bucles) DESCUBRE hechos; los
- * consumidores (comprobaciones de seguridad, optimizador, diagnosticos,
+ * (rangos, regiones, efectos, agregados, prestamos, bucles) DESCUBRE hechos;
+ * los consumidores (comprobaciones de seguridad, optimizador, diagnosticos,
  * herramientas) deciden que hacer con ellos.  Este fichero define lo unico que
  * todos comparten, y existe por una razon concreta:
  *
@@ -69,7 +69,9 @@ enum class Certeza : uint8_t {
 
 /// La confianza de algo deducido de varias cosas es la MAS DEBIL de todas: una
 /// cadena no es mas fuerte que su eslabon peor.
-inline Certeza combinar(Certeza a, Certeza b) { return a < b ? a : b; }
+inline Certeza combinar(Certeza a, Certeza b) {
+    return a < b ? a : b;
+}
 
 /// Nombre estable para volcados y depuracion.  NO es texto de usuario: los
 /// mensajes salen del catalogo i18n, nunca de aqui.
@@ -85,16 +87,17 @@ inline const char *nombre_certeza(Certeza c) {
  * @brief De DONDE sale un hecho.  Ojo: no es su certeza.
  *
  * La certeza es lo que decide al consumidor -- usar directamente, usar con
- * guarda, o no suponer nada -- y va aparte a proposito.  Esto dice quien lo vio,
- * que sirve para explicarlo y depurarlo, no para decidir.  Justo por eso un
- * consumidor puede pasar de mirar la fuente: dos hechos de origen distinto con
- * la misma certeza se tratan igual.
+ * guarda, o no suponer nada -- y va aparte a proposito.  Esto dice quien lo
+ * vio, que sirve para explicarlo y depurarlo, no para decidir.  Justo por eso
+ * un consumidor puede pasar de mirar la fuente: dos hechos de origen distinto
+ * con la misma certeza se tratan igual.
  */
 enum class Fuente : uint8_t {
     Estatico,  ///< leyendo el programa, sin ejecutarlo.
     Ejecucion, ///< observado corriendo: cierto en lo visto, no en general.
     Perfil,    ///< medido en corridas anteriores.
-    Declarado, ///< lo afirma el programador (un contrato).  Se VERIFICA, no se cree.
+    Declarado, ///< lo afirma el programador (un contrato).  Se VERIFICA, no se
+               ///< cree.
 };
 
 /// Nombre estable para volcados.  No es texto de usuario.
@@ -109,10 +112,10 @@ const char *nombre_fuente(Fuente f);
  * construida: identifica al modulo, no al caso.
  */
 struct Procedencia {
-    Fuente      fuente = Fuente::Estatico;
+    Fuente fuente = Fuente::Estatico;
     const char *productor = "?"; ///< analisis que lo emitio.
     const char *funcion = "";    ///< funcion mirada (vacio si es de modulo).
-    uint32_t    sitio = 0;       ///< value-id, bloque o linea, segun el dominio.
+    uint32_t sitio = 0; ///< value-id, bloque o linea, segun el dominio.
 };
 
 /**
@@ -130,7 +133,10 @@ struct Dependencias {
 
     void anadir(const char *productor) {
         for (int i = 0; i < kMax; ++i) {
-            if (de[i] == nullptr) { de[i] = productor; return; }
+            if (de[i] == nullptr) {
+                de[i] = productor;
+                return;
+            }
             if (de[i] == productor) return;
         }
     }
@@ -149,8 +155,8 @@ struct Dependencias {
  * funciones virtuales pagaria indireccion en el sitio equivocado.
  */
 struct Sello {
-    Certeza      certeza = Certeza::Desconocida;
-    Procedencia  origen;
+    Certeza certeza = Certeza::Desconocida;
+    Procedencia origen;
     Dependencias apoyos;
 };
 
@@ -180,9 +186,9 @@ struct Sujeto {
         Instruccion, ///< una instruccion; @c id es su posicion lineal.
         Simbolo      ///< algo con nombre que no es funcion (global, clase).
     };
-    Clase       clase = Clase::Modulo;
+    Clase clase = Clase::Modulo;
     const char *funcion = ""; ///< a quien pertenece (vacio si es del modulo).
-    uint32_t    id = 0;
+    uint32_t id = 0;
 
     bool operator==(const Sujeto &o) const {
         return clase == o.clase && id == o.id &&
@@ -203,9 +209,9 @@ const char *nombre_clase_sujeto(Sujeto::Clase c);
  */
 struct Proposicion {
     const char *dominio = "?"; ///< quien habla (uno de los productores).
-    const char *codigo = "?";  ///< que dice, en vocabulario estable del dominio.
-    int64_t     a = 0;         ///< primer numero del hecho (lo, offset, ...).
-    int64_t     b = 0;         ///< segundo (hi, ancho, profundidad, ...).
+    const char *codigo = "?"; ///< que dice, en vocabulario estable del dominio.
+    int64_t a = 0;            ///< primer numero del hecho (lo, offset, ...).
+    int64_t b = 0;            ///< segundo (hi, ancho, profundidad, ...).
     /**
      * @brief Lo que no cabe en dos numeros, INTERNADO en el almacen.
      *
@@ -227,8 +233,8 @@ struct Proposicion {
  * prueba" se queda en una intencion.
  */
 struct Prueba {
-    const char          *regla = ""; ///< la regla aplicada, nombre estable.
-    std::vector<FactId>  de;         ///< hechos de los que se sigue.
+    const char *regla = ""; ///< la regla aplicada, nombre estable.
+    std::vector<FactId> de; ///< hechos de los que se sigue.
 };
 
 /**
@@ -242,18 +248,18 @@ struct Prueba {
  * objetivos y solo se descarta lo que de verdad es de otro.
  *
  * Los tres ejes son independientes y se cruzan: un hecho puede valer para
- * cualquier backend pero solo en x86-64 (lo que exige una instruccion concreta),
- * o para cualquier ISA pero solo compilando a nativo (lo que impone el enlace),
- * o para todo (que un valor cabe en 32 bits).
+ * cualquier backend pero solo en x86-64 (lo que exige una instruccion
+ * concreta), o para cualquier ISA pero solo compilando a nativo (lo que impone
+ * el enlace), o para todo (que un valor cabe en 32 bits).
  *
  * REGLA AL PRODUCIR: en la duda, el alcance MAS ESTRECHO.  Equivocarse hacia
  * estrecho solo cuesta recalcular; hacia ancho es afirmar en un sitio algo que
  * se comprobo en otro.
  */
 struct Ambito {
-    const char *isa = "";      ///< "x86-64", "aarch64"...  "" = cualquiera.
-    const char *sistema = "";  ///< "windows", "linux"...   "" = cualquiera.
-    const char *backend = "";  ///< "vm", "aot".            "" = cualquiera.
+    const char *isa = "";     ///< "x86-64", "aarch64"...  "" = cualquiera.
+    const char *sistema = ""; ///< "windows", "linux"...   "" = cualquiera.
+    const char *backend = ""; ///< "vm", "aot".            "" = cualquiera.
 
     /// Si un campo del hecho es vacio vale en cualquiera; si no, tiene que
     /// coincidir con el de @p aqui.
@@ -282,15 +288,15 @@ struct Ambito {
  *
  * Da igual que lo produzca el analisis estatico, la observacion en ejecucion o
  * un perfil de corridas anteriores: lo que cambia es la @c Procedencia y la
- * @c Certeza, que viajan DENTRO.  Un consumidor no pregunta de donde viene: mira
- * lo que dice y cuanto puede fiarse.
+ * @c Certeza, que viajan DENTRO.  Un consumidor no pregunta de donde viene:
+ * mira lo que dice y cuanto puede fiarse.
  */
 struct Fact {
     Proposicion que;
-    Sujeto      de_quien;
-    Ambito      donde; ///< en que objetivos vale (vacio = en todos).
-    Sello       sello;
-    Prueba      prueba;
+    Sujeto de_quien;
+    Ambito donde; ///< en que objetivos vale (vacio = en todos).
+    Sello sello;
+    Prueba prueba;
 };
 
 } // namespace asa

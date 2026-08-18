@@ -10,12 +10,12 @@
  * @brief Los hechos, en disco: lo que solo se sabe al BAJAR el codigo sobrevive
  *        al primer acierto de cache.
  *
- * EL PROBLEMA QUE RESUELVE.  Hay conocimiento que no se puede recalcular mirando
- * el modulo ya compilado porque nacio ANTES, mientras se bajaba: que exige del
- * procesador un bloque de asm, por que no se pudo demostrar algo, que ligaduras
- * habia.  Sin esto, la primera vez el compilador avisa y la segunda -- con la
- * cache caliente -- se calla, y el aviso depende de si alguien borro un
- * directorio.  Un diagnostico que va y viene solo no es un diagnostico.
+ * EL PROBLEMA QUE RESUELVE.  Hay conocimiento que no se puede recalcular
+ * mirando el modulo ya compilado porque nacio ANTES, mientras se bajaba: que
+ * exige del procesador un bloque de asm, por que no se pudo demostrar algo, que
+ * ligaduras habia.  Sin esto, la primera vez el compilador avisa y la segunda
+ * -- con la cache caliente -- se calla, y el aviso depende de si alguien borro
+ * un directorio.  Un diagnostico que va y viene solo no es un diagnostico.
  *
  * QUE SE GUARDA.  El criterio NO es "recomputable si o no", es el COSTE:
  *
@@ -84,8 +84,9 @@ namespace asa {
 /// solo si cambia el sobre; el contenido de cada dominio versiona aparte.
 constexpr uint16_t kContainerVersion = 1;
 
-/// Version del layout de un HECHO.  La 2 anade el ambito (donde vale).  Va en cada registro: cambiarla descarta los
-/// registros viejos de todos los dominios, pero no rompe el fichero.
+/// Version del layout de un HECHO.  La 2 anade el ambito (donde vale).  Va en
+/// cada registro: cambiarla descarta los registros viejos de todos los
+/// dominios, pero no rompe el fichero.
 constexpr uint16_t kFactVersion = 2;
 
 /**
@@ -100,16 +101,16 @@ constexpr uint16_t kFactVersion = 2;
  *    nivel con que se escribio.  Si el nivel se mezclara con la huella, cambiar
  *    de nivel tiraria caches validas -- justo lo que se quiere evitar.
  *  - El nivel NO puede afectar a la CORRECCION.  En los cuatro, el codigo
- *    generado es identico; lo unico que cambia es cuanto hay que rehacer.  Si un
- *    nivel cambiara la salida dejaria de ser una cache, y volveriamos a que el
+ *    generado es identico; lo unico que cambia es cuanto hay que rehacer.  Si
+ * un nivel cambiara la salida dejaria de ser una cache, y volveriamos a que el
  *    programa dependa de si habia cache.
  */
 enum class CacheLevel : uint8_t {
-    Off = 0,    ///< no guardar nada.  Es la herramienta para contestar a "esto
+    Off = 0,     ///< no guardar nada.  Es la herramienta para contestar a "esto
                  ///< es la cache o es el codigo?" sin borrar ficheros a mano.
-    Minimum = 1,  ///< solo lo que no se puede recalcular.
-    ByCost = 2, ///< DEFECTO: lo caro tambien.  Se ajusta solo a la maquina.
-    All = 3,    ///< todo lo que se sepa guardar.
+    Minimum = 1, ///< solo lo que no se puede recalcular.
+    ByCost = 2,  ///< DEFECTO: lo caro tambien.  Se ajusta solo a la maquina.
+    All = 3,     ///< todo lo que se sepa guardar.
 };
 
 /**
@@ -159,8 +160,8 @@ const char *level_name(CacheLevel n);
  */
 struct DomainCost {
     const char *domain = "?";
-    long        micros = 0;          ///< lo que costo producirlo.
-    bool        recomputable = true; ///< false = se perdio si no se guarda.
+    long micros = 0;          ///< lo que costo producirlo.
+    bool recomputable = true; ///< false = se perdio si no se guarda.
     /**
      * @brief Huella de LO QUE ESTE DOMINIO MIRO, no del modulo entero.
      *
@@ -198,13 +199,13 @@ bool should_store(CacheLevel nivel, const DomainCost &c);
  * @param costes  Lo que cada dominio dice de si mismo.  Un dominio que no
  *                aparezca se trata como recomputable y de coste cero, o sea que
  *                solo entra en el nivel @c Todo.
- * @return Los bytes, o vacio si el nivel es @c Nada o no quedo nada que guardar.
+ * @return Los bytes, o vacio si el nivel es @c Nada o no quedo nada que
+ * guardar.
  */
-std::vector<uint8_t> serialize(const FactStore               &almacen,
-                               uint64_t                       huella,
-                               CacheLevel                     nivel,
+std::vector<uint8_t> serialize(const FactStore &almacen, uint64_t huella,
+                               CacheLevel nivel,
                                const std::vector<DomainCost> &costes,
-                               uint64_t                       compilador = 0);
+                               uint64_t compilador = 0);
 
 /**
  * @brief POR QUE no se pudo leer.  Es un DATO, no una frase.
@@ -214,16 +215,16 @@ std::vector<uint8_t> serialize(const FactStore               &almacen,
  * de analisis no escribe mensajes.
  */
 enum class ReadReason : uint8_t {
-    Ok = 0,      ///< se leyo bien.
-    NoFile,     ///< primera compilacion, o se limpio la cache.
-    Empty,            ///< existe pero no tiene nada.
-    NotAFactFile,      ///< la magia no cuadra: no es esto.
+    Ok = 0,        ///< se leyo bien.
+    NoFile,        ///< primera compilacion, o se limpio la cache.
+    Empty,         ///< existe pero no tiene nada.
+    NotAFactFile,  ///< la magia no cuadra: no es esto.
     OtherVersion,  ///< contenedor de otra version.
     OtherModule,   ///< hechos de otro modulo.
     OtherCompiler, ///< los escribio otra version del compilador.
-    Truncated,         ///< se corto a mitad de escribirlo.
-    Corrupt,           ///< los bytes no son los que se escribieron.
-    ReadFailed,     ///< el disco fallo al leerlo.
+    Truncated,     ///< se corto a mitad de escribirlo.
+    Corrupt,       ///< los bytes no son los que se escribieron.
+    ReadFailed,    ///< el disco fallo al leerlo.
 };
 
 /// El codigo del catalogo con el que se cuenta @p m en el idioma de quien
@@ -233,15 +234,15 @@ const char *diag_code(ReadReason m);
 /// Que paso al leer.  Un fichero que no vale NO es un error: es que hay que
 /// recalcular, y el motivo se dice para poder distinguirlo de un fallo real.
 struct ReadResult {
-    bool          ok = false;
+    bool ok = false;
     ReadReason reason = ReadReason::Ok;
-    uint32_t      facts = 0;         ///< depositados en el almacen.
-    uint32_t      domains = 0;       ///< registros leidos.
-    uint32_t      skipped = 0;       ///< registros de dominios/versiones ajenas.
-    uint32_t      stale = 0;        ///< registros cuya huella ya no vale.
-    uint32_t      out_of_scope = 0; ///< hechos que valen en otro objetivo.
-    uint32_t      corrupt = 0;      ///< registros cuya suma no cuadra.
-    uint32_t      lost_proofs = 0; ///< apoyos en hechos que no se cargaron.
+    uint32_t facts = 0;        ///< depositados en el almacen.
+    uint32_t domains = 0;      ///< registros leidos.
+    uint32_t skipped = 0;      ///< registros de dominios/versiones ajenas.
+    uint32_t stale = 0;        ///< registros cuya huella ya no vale.
+    uint32_t out_of_scope = 0; ///< hechos que valen en otro objetivo.
+    uint32_t corrupt = 0;      ///< registros cuya suma no cuadra.
+    uint32_t lost_proofs = 0;  ///< apoyos en hechos que no se cargaron.
 };
 
 /**
@@ -281,17 +282,16 @@ struct ReadResult {
  * @return Que se leyo, o por que no.
  */
 ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
-                      FactStore                     &destino,
+                      FactStore &destino,
                       const std::vector<DomainCost> &vigentes = {},
-                      uint64_t                       compilador = 0,
-                      const Ambito                  &aqui = Ambito{});
+                      uint64_t compilador = 0, const Ambito &aqui = Ambito{});
 
 /// Lee @p ruta y deposita en @p destino.  Si no existe, @c motivo lo dice.
 ReadResult read_facts_file(const std::string &ruta, uint64_t huella,
-                           FactStore                     &destino,
+                           FactStore &destino,
                            const std::vector<DomainCost> &vigentes = {},
-                           uint64_t                       compilador = 0,
-                           const Ambito                  &aqui = Ambito{});
+                           uint64_t compilador = 0,
+                           const Ambito &aqui = Ambito{});
 
 } // namespace asa
 } // namespace analysis

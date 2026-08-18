@@ -72,9 +72,9 @@ namespace {
  */
 std::string escape_label(const std::string &s_in) {
     // NS: los nombres de un namespace estan mangled con `__` como separador
-    // (org__geo__shapes__area).  Para el diagrama los mostramos CUALIFICADOS con
-    // puntos (org.geo.shapes.area), mucho mas legibles.  Se preserva un `__`
-    // INICIAL (nombres sinteticos: __module_init, __new_X, __lambda_N).
+    // (org__geo__shapes__area).  Para el diagrama los mostramos CUALIFICADOS
+    // con puntos (org.geo.shapes.area), mucho mas legibles.  Se preserva un
+    // `__` INICIAL (nombres sinteticos: __module_init, __new_X, __lambda_N).
     std::string s;
     s.reserve(s_in.size());
     for (size_t i = 0; i < s_in.size();) {
@@ -1657,38 +1657,30 @@ std::string mermaid_types_from_ast(const ast::ModuleNode &mod) {
     std::vector<std::string> rels;
 
     for (const auto &node : mod.decls) {
-        if (!node)
-            continue;
+        if (!node) continue;
         switch (node->kind) {
         case ast::NodeKind::ClassDecl: {
             auto *d = static_cast<const ast::ClassDecl *>(node.get());
-            if (d->name.empty())
-                break;
+            if (d->name.empty()) break;
             os << "    class " << d->name << " {\n";
-            if (d->is_final)
-                os << "        <<final>>\n";
+            if (d->is_final) os << "        <<final>>\n";
             for (const auto &f : d->fields) {
-                os << "        " << access_sym(f.access) << fmt_type(f.type.get())
-                   << ' ' << f.name;
+                os << "        " << access_sym(f.access)
+                   << fmt_type(f.type.get()) << ' ' << f.name;
                 if (f.is_static)
                     os << "$"; // '$' = estatico en mermaid classDiagram.
                 os << '\n';
             }
             for (const auto &m : d->methods) {
-                if (!m || m->name.empty())
-                    continue;
+                if (!m || m->name.empty()) continue;
                 os << "        " << access_sym(m->access) << m->name << "(";
                 for (size_t i = 0; i < m->params.size(); ++i) {
-                    if (i)
-                        os << ", ";
-                    if (m->params[i])
-                        os << fmt_type(m->params[i]->type.get());
+                    if (i) os << ", ";
+                    if (m->params[i]) os << fmt_type(m->params[i]->type.get());
                 }
                 os << ")";
-                if (m->return_type)
-                    os << ' ' << fmt_type(m->return_type.get());
-                if (m->is_static)
-                    os << "$";
+                if (m->return_type) os << ' ' << fmt_type(m->return_type.get());
+                if (m->is_static) os << "$";
                 if (m->is_final || m->is_override)
                     os << "*"; // '*' = abstracto/override en mermaid.
                 os << '\n';
@@ -1703,19 +1695,16 @@ std::string mermaid_types_from_ast(const ast::ModuleNode &mod) {
         }
         case ast::NodeKind::StructDecl: {
             auto *d = static_cast<const ast::StructDecl *>(node.get());
-            if (d->name.empty())
-                break;
+            if (d->name.empty()) break;
             os << "    class " << d->name << " {\n";
             os << "        <<struct>>\n";
             for (const auto &f : d->fields)
                 os << "        +" << fmt_type(f.type.get()) << ' ' << f.name
                    << '\n';
             for (const auto &m : d->methods) {
-                if (!m || m->name.empty())
-                    continue;
+                if (!m || m->name.empty()) continue;
                 os << "        +" << m->name << "()";
-                if (m->return_type)
-                    os << ' ' << fmt_type(m->return_type.get());
+                if (m->return_type) os << ' ' << fmt_type(m->return_type.get());
                 os << '\n';
             }
             os << "    }\n";
@@ -1723,8 +1712,7 @@ std::string mermaid_types_from_ast(const ast::ModuleNode &mod) {
         }
         case ast::NodeKind::EnumDecl: {
             auto *d = static_cast<const ast::EnumDecl *>(node.get());
-            if (d->name.empty())
-                break;
+            if (d->name.empty()) break;
             os << "    class " << d->name << " {\n";
             os << "        <<enumeration>>\n";
             if (!d->backing_type.empty())
@@ -1736,15 +1724,13 @@ std::string mermaid_types_from_ast(const ast::ModuleNode &mod) {
         }
         case ast::NodeKind::ConceptDecl: {
             auto *d = static_cast<const ast::ConceptDecl *>(node.get());
-            if (d->name.empty())
-                break;
+            if (d->name.empty()) break;
             os << "    class " << d->name << " {\n";
             os << "        <<concept>>\n";
             os << "    }\n";
             break;
         }
-        default:
-            break;
+        default: break;
         }
     }
 
@@ -1899,10 +1885,9 @@ std::string mermaid_from_ir_module(const ir::IrModule &mod,
     for (size_t fi = 0; fi < mod.functions.size(); ++fi) {
         // --diagram-cost: si hay analisis de coste, anexar la etiqueta al
         // subgraph de cada funcion.
-        std::string cost_label =
-            cost ? analyze::cost_label_for_function(*cost,
-                                                    mod.functions[fi].name)
-                 : std::string();
+        std::string cost_label = cost ? analyze::cost_label_for_function(
+                                            *cost, mod.functions[fi].name)
+                                      : std::string();
         render_ir_function(os, mod.functions[fi], fi, intra_calls, cost_label);
     }
 
@@ -1921,7 +1906,8 @@ std::string mermaid_from_ir_module(const ir::IrModule &mod,
 
     // Expandir cada bloque de inline asm en su propio CFG anotado con coste
     // (latencia, throughput superescalar, cuello de botella por puerto, flags y
-    // diagnosticos).  El microarq por defecto es el mismo que asume el lowering.
+    // diagnosticos).  El microarq por defecto es el mismo que asume el
+    // lowering.
     {
         int32_t ua =
             instr_db::microarch_by_name(instr_db::Isa::X86, "intel-skylake");

@@ -52,7 +52,7 @@ static int g_fail = 0;
             ++g_pass;                                                          \
         } else {                                                               \
             ++g_fail;                                                          \
-            std::printf("FAIL linea %d: %s\n", __LINE__, #cond);                \
+            std::printf("FAIL linea %d: %s\n", __LINE__, #cond);               \
         }                                                                      \
     } while (0)
 
@@ -124,8 +124,8 @@ int main() {
      * no-comptime arrastrada y sin nada del codigo de runtime.
      *
      * El fuente completo tiene una funcion normal que el codigo comptime NO usa
-     * y que, ademas, llama a algo inexistente: si el extractor se llevara de mas,
-     * la compilacion de la unidad fallaria y el test lo diria. */
+     * y que, ademas, llama a algo inexistente: si el extractor se llevara de
+     * mas, la compilacion de la unidad fallaria y el test lo diria. */
     {
         const std::string src = R"VX(
 i64 ayudante(i64 n) { return n * 3; }
@@ -143,8 +143,9 @@ i32 main() { return 0; }
                 compilar(u.unit_source, (dir / "unidad").string(), resp);
             CK(resp.ok);
             if (!resp.ok) {
-                std::printf("FAIL [unidad]: el conjunto comptime NO compila por "
-                            "si solo -- no es auto-suficiente\n");
+                std::printf(
+                    "FAIL [unidad]: el conjunto comptime NO compila por "
+                    "si solo -- no es auto-suficiente\n");
                 std::printf("--- fuente extraido ---\n%s\n---\n",
                             u.unit_source.c_str());
                 volcar_diags(resp);
@@ -168,9 +169,10 @@ i32 main() { return 0; }
         const auto velb = compilar(src, (dir / "completo").string(), resp);
         CK(!resp.ok);
         if (resp.ok)
-            std::printf("FAIL [contraste]: el fuente completo compilo, asi que "
-                        "el caso 1 no demuestra que la extraccion sea correcta; "
-                        "hay que endurecer el caso\n");
+            std::printf(
+                "FAIL [contraste]: el fuente completo compilo, asi que "
+                "el caso 1 no demuestra que la extraccion sea correcta; "
+                "hay que endurecer el caso\n");
         (void)velb;
     }
 
@@ -273,8 +275,8 @@ i32 main() { return 0; }
      * arriba no lo cazaban porque ninguno usa `namespace`.
      *
      * La extraccion recorta cada decl por `[decl.offset, siguiente.offset)`.
-     * Con un `namespace X { ... }` las decls de dentro llevan offsets dentro del
-     * bloque, asi que un recorte puede arrastrar la llave de cierre -- o
+     * Con un `namespace X { ... }` las decls de dentro llevan offsets dentro
+     * del bloque, asi que un recorte puede arrastrar la llave de cierre -- o
      * perderla -- y lo extraido deja de ser codigo valido. */
     {
         const std::string src = R"VX(
@@ -293,8 +295,9 @@ i32 main() { return 0; }
                 compilar(u.unit_source, (dir / "ns").string(), resp);
             CK(resp.ok);
             if (!resp.ok) {
-                std::printf("FAIL [namespace]: el conjunto extraido de un modulo"
-                            " con `namespace` NO compila\n");
+                std::printf(
+                    "FAIL [namespace]: el conjunto extraido de un modulo"
+                    " con `namespace` NO compila\n");
                 std::printf("--- extraido ---\n%s\n---\n",
                             u.unit_source.c_str());
                 volcar_diags(resp);
@@ -345,7 +348,7 @@ comptime i64 usa_b(i64 n) { return n * 7; }
 
     std::filesystem::remove_all(dir, ec);
 
-    std::printf("\n=== test_comptime_artifact: %d OK, %d fallidos ===\n", g_pass,
-                g_fail);
+    std::printf("\n=== test_comptime_artifact: %d OK, %d fallidos ===\n",
+                g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

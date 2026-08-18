@@ -10,7 +10,8 @@
  * @brief Proyeccion del modelo de efectos a texto legible (--analyze).
  *        Muestra, por funcion, los EFECTOS inferidos y los CONTRATOS derivados,
  *        mas un reporte de LAGUNAS de precision.  Es una PROYECCION del mismo
- *        SemanticSummary que consume el compilador (invariante: no re-lee el IR).
+ *        SemanticSummary que consume el compilador (invariante: no re-lee el
+ * IR).
  */
 #ifndef ANALYSIS_EFFECTS_EFFECTS_REPORT_H
 #define ANALYSIS_EFFECTS_EFFECTS_REPORT_H

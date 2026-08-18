@@ -23,19 +23,19 @@
 #include "jit/runtime_entries.h"
 #include "jit/vreg_pipeline.h"
 #include "jit/osr_registry.h" // registro de bucles re-entrables
-#include "jit/naked_native.h"      // FN.3: vrt_callind + compile_naked_native
+#include "jit/naked_native.h" // FN.3: vrt_callind + compile_naked_native
 #include "vesta_rt/public.h"
 #include "ffi/virtual_lib_registry.h" // Sprint JIT-cross-fn: virtual fn lookup
 #include "loader/loader.h"
 #include "loader/oop_types.h"
 #include "jit/jit_facts.h" // base de hechos: se CONSULTA, no se construye aqui
-#include "ir/ir_optimizer.h" // C2.4: devirt especulativa + inline
-#include "ir/passes/if_conversion.h"  // auto-PGO del JIT: re-if-conversion
+#include "ir/ir_optimizer.h"         // C2.4: devirt especulativa + inline
+#include "ir/passes/if_conversion.h" // auto-PGO del JIT: re-if-conversion
 #include "ir/passes/select_simplify.h"
 #include "ir/passes/select_policy.h"
 #include "jit/jit_branch_prof.h"
-#include "runtime/profile.h"           // bridge runtime->IR del perfil medido
-#include "debug/debug_info.h"          // PC -> linea fuente
+#include "runtime/profile.h"  // bridge runtime->IR del perfil medido
+#include "debug/debug_info.h" // PC -> linea fuente
 #include "runtime/proceso_runtime.h"
 #include "runtime/runtime.h"
 #include "runtime/scheduler.h"
@@ -64,7 +64,6 @@ namespace jit {
 /// repite aqui en vez de incluir el AST entero para no atar el JIT al
 /// frontend, que es independiente por diseno.
 static constexpr const char *kSufijoVarianteJit = "__jit";
-
 
 /* ===================================================================== */
 /* Threshold global                                                       */
@@ -177,7 +176,8 @@ void init_threshold_from_env() {
      * correcto), no a slots.  Por eso `g_jit_use_vregs` es siempre true; el
      * env-var `VESTA_JIT_VREGS=0` ya NO reactiva slots (queda como no-op).
      * Consecuencia: los "SLOTS_BUG" del selector legacy no pueden manifestarse
-     * (slots inalcanzable).  El C2 tambien recompila por vreg (ver mas abajo). */
+     * (slots inalcanzable).  El C2 tambien recompila por vreg (ver mas abajo).
+     */
     g_jit_use_vregs = true;
     /* C2 tier-up (opt-in).  VESTA_C2_THRESHOLD=N activa el tier-up con
      * umbral N; ausente o 0 = C2 apagado (default). */
@@ -231,11 +231,12 @@ bool osr_opt_enabled() {
 /** @brief Metodos ya recompilados a tier-2 (auto-PGO) -> no repetir. */
 std::unordered_set<const void *> g_tier2_done;
 std::mutex g_tier2_mtx;
-/** @brief Bandera: recompilacion tier-2 en curso.  Cuando esta activa, el bloque
- *  PGO de maybe_compile_method NO re-vuelca el perfil (ya lo poblo maybe_tier2
- *  desde g_jit_line_ctrs por linea), solo aplica la if-conversion.  Global plano
- *  (no thread_local: MinGW/DLL + emutls da problemas de link); la recompilacion
- *  va serializada por g_tier2_mtx, asi que no hay concurrencia real. */
+/** @brief Bandera: recompilacion tier-2 en curso.  Cuando esta activa, el
+ * bloque PGO de maybe_compile_method NO re-vuelca el perfil (ya lo poblo
+ * maybe_tier2 desde g_jit_line_ctrs por linea), solo aplica la if-conversion.
+ * Global plano (no thread_local: MinGW/DLL + emutls da problemas de link); la
+ * recompilacion va serializada por g_tier2_mtx, asi que no hay concurrencia
+ * real. */
 bool g_tier2_recompiling = false;
 
 /** @brief Delta (invocaciones tras tier-1) para disparar tier-2.  DINAMICO: no
@@ -329,8 +330,7 @@ VregEntries make_vreg_entries() {
             reinterpret_cast<uint64_t>(g_runtime_entries->str_make_h);
         e.str_len = reinterpret_cast<uint64_t>(g_runtime_entries->str_len);
         e.str_cat = reinterpret_cast<uint64_t>(g_runtime_entries->str_cat);
-        e.str_slice =
-            reinterpret_cast<uint64_t>(g_runtime_entries->str_slice);
+        e.str_slice = reinterpret_cast<uint64_t>(g_runtime_entries->str_slice);
         e.str_cmp = reinterpret_cast<uint64_t>(g_runtime_entries->str_cmp);
         e.str_raw = reinterpret_cast<uint64_t>(g_runtime_entries->str_raw);
         e.str_get_bytes =
@@ -399,14 +399,14 @@ uint64_t get_ic_slot(uint64_t key) {
     return addr;
 }
 
-/* Callback call-fallback (jubilacion de slots): cuando no hay TLS-direct (Linux,
- * o Windows si TlsAlloc fallo), el prologo del callback debe cargar proc via un
- * CALL a get_current_executing_process.  Ese call clobbea los arg-regs nativos
- * (que aun tienen los args del callback).  Este stub los PRESERVA: guarda los
- * GP-args (push/pop) + los FP-args (movsd) alrededor del call y devuelve proc en
- * RAX, para que el marshalling posterior lea los args intactos.  Se genera una
- * vez en el code cache (ABI del HOST: JIT == host==target).  Devuelve 0 si el
- * subsistema JIT no esta listo. */
+/* Callback call-fallback (jubilacion de slots): cuando no hay TLS-direct
+ * (Linux, o Windows si TlsAlloc fallo), el prologo del callback debe cargar
+ * proc via un CALL a get_current_executing_process.  Ese call clobbea los
+ * arg-regs nativos (que aun tienen los args del callback).  Este stub los
+ * PRESERVA: guarda los GP-args (push/pop) + los FP-args (movsd) alrededor del
+ * call y devuelve proc en RAX, para que el marshalling posterior lea los args
+ * intactos.  Se genera una vez en el code cache (ABI del HOST: JIT ==
+ * host==target).  Devuelve 0 si el subsistema JIT no esta listo. */
 uint64_t cb_preserving_get_proc() {
     static uint64_t g_stub = 0;
     if (g_stub != 0) return g_stub;
@@ -420,7 +420,8 @@ uint64_t cb_preserving_get_proc() {
         reinterpret_cast<uint64_t>(&runtime::get_current_executing_process);
     std::vector<uint8_t> b;
     auto imm64 = [&](uint64_t v) {
-        for (int i = 0; i < 8; ++i) b.push_back((v >> (i * 8)) & 0xFF);
+        for (int i = 0; i < 8; ++i)
+            b.push_back((v >> (i * 8)) & 0xFF);
     };
     /* Prologo comun: alinear rsp a 16 via rbp (agnostico a la alineacion de
      * entrada, que depende del nº de callee-saved del frame del callback). */
@@ -558,12 +559,13 @@ uint64_t reserve_tier_counter(uint64_t fn_pc) {
 // CTPE: inicializa el subsistema JIT (idempotente) y devuelve la direccion del
 // handler de safepoint.  Fuera del namespace anonimo -> linkage externo (la usa
 // comptime_vm.cpp).  Puede llamar a init_jit_subsystem/g_jit_init_flag del
-// namespace anonimo porque son visibles en el namespace jit envolvente (mismo TU).
+// namespace anonimo porque son visibles en el namespace jit envolvente (mismo
+// TU).
 uint64_t jit_safepoint_handler_addr() noexcept {
     std::call_once(g_jit_init_flag, init_jit_subsystem);
-    return g_runtime_entries
-               ? reinterpret_cast<uint64_t>(g_runtime_entries->safepoint_handler)
-               : 0;
+    return g_runtime_entries ? reinterpret_cast<uint64_t>(
+                                   g_runtime_entries->safepoint_handler)
+                             : 0;
 }
 
 void jit_set_ctpe_safepoint(uint64_t handler_addr) noexcept {
@@ -579,7 +581,8 @@ CodeCache *get_or_init_code_cache() noexcept {
     return g_code_cache;
 }
 
-/* FN.3: fuera del namespace anonimo -- la llama loader.cpp (linkage externa). */
+/* FN.3: fuera del namespace anonimo -- la llama loader.cpp (linkage externa).
+ */
 /** @brief El asignador del programa, ya compilado (0 = no hay).  Lo pone el
  *  cargador; lo lee el selector para saber cual es el monton. */
 /**
@@ -628,28 +631,30 @@ static bool jit_especializar_debug() {
  * @param cuerpos   Cuantos cuerpos de los llamados estan disponibles.
  * @param asignador Si entre ellos esta el asignador del programa.
  */
-static void explicar_especializacion(const ir::IrFunction         &fn,
-                                     const CotasDeLosSitios       &cotas,
-                                     const analysis::asa::Sello   &sello,
+static void explicar_especializacion(const ir::IrFunction &fn,
+                                     const CotasDeLosSitios &cotas,
+                                     const analysis::asa::Sello &sello,
                                      size_t cuerpos, bool asignador) {
     const char *motivo = "";
     if (!cotas.hay)
-        motivo = cotas.sitios == 0 ? " motivo=sin-sitios" : " motivo=nada-acotado";
+        motivo =
+            cotas.sitios == 0 ? " motivo=sin-sitios" : " motivo=nada-acotado";
     else if (cuerpos == 0)
         motivo = " motivo=sin-cuerpos";
-    std::fprintf(stderr,
-                 "[especializar] %-28s veredicto=%s sitios=%u/%u operandos=%u/%u "
-                 "cuerpos=%zu%s%s",
-                 fn.name.c_str(),
-                 (cotas.hay && cuerpos != 0) ? "si" : "no", cotas.sitios_con_cota,
-                 cotas.sitios, cotas.operandos_con_cota, cotas.operandos, cuerpos,
-                 asignador ? " asignador=si" : "", motivo);
+    std::fprintf(
+        stderr,
+        "[especializar] %-28s veredicto=%s sitios=%u/%u operandos=%u/%u "
+        "cuerpos=%zu%s%s",
+        fn.name.c_str(), (cotas.hay && cuerpos != 0) ? "si" : "no",
+        cotas.sitios_con_cota, cotas.sitios, cotas.operandos_con_cota,
+        cotas.operandos, cuerpos, asignador ? " asignador=si" : "", motivo);
     if (cotas.hay) {
         int64_t lo = 0, hi = 0;
         if (cotas.rango.vista_con_signo(lo, hi))
             std::fprintf(stderr, " prueba=%s v%u en [%lld,%lld]",
                          cotas.sitio.c_str(), cotas.valor,
-                         static_cast<long long>(lo), static_cast<long long>(hi));
+                         static_cast<long long>(lo),
+                         static_cast<long long>(hi));
         else
             std::fprintf(stderr, " prueba=%s v%u acotado", cotas.sitio.c_str(),
                          cotas.valor);
@@ -1125,9 +1130,8 @@ void maybe_compile_method(runtime::ProcessVM *vm,
     } else if (runtime::profile::lite_profile_active()) {
         /* Tier-1: bridge del profiler ligero del interp (PC->linea via
          * debug_info).  Util cuando el metodo corrio en interp (tier-0). */
-        const int applied =
-            runtime::profile::profile_apply_branch_lines([&](uint64_t pc)
-                                                             -> uint32_t {
+        const int applied = runtime::profile::profile_apply_branch_lines(
+            [&](uint64_t pc) -> uint32_t {
                 for (const auto &exe : owning_vm.loader_public.executables) {
                     if (!exe || !exe->debug_info) continue;
                     auto info =
@@ -1175,10 +1179,9 @@ void maybe_compile_method(runtime::ProcessVM *vm,
         }
         size_t vcode_size = 0;
         std::vector<LineMapEntry> vcode_lines;
-        uint8_t *vcode =
-            vreg_compile(*compile_ir, *g_code_cache, mc_opts.resolve_user_fn,
-                         vent, mc_opts.resolve_native_fn, mc_sym_res,
-                         &vcode_size, &vcode_lines);
+        uint8_t *vcode = vreg_compile(
+            *compile_ir, *g_code_cache, mc_opts.resolve_user_fn, vent,
+            mc_opts.resolve_native_fn, mc_sym_res, &vcode_size, &vcode_lines);
         g_vreg_compiling_method = nullptr;
         if (vcode != nullptr) {
             method->jit_code = reinterpret_cast<void *>(vcode);
@@ -1188,18 +1191,21 @@ void maybe_compile_method(runtime::ProcessVM *vm,
                                         vcode_size, &vcode_lines);
             ++g_jit_compiled_count;
             if (g_jit_warn_unsupported)
-                std::fprintf(stderr, "[jit-vreg] compilado '%s'\n", key.c_str());
+                std::fprintf(stderr, "[jit-vreg] compilado '%s'\n",
+                             key.c_str());
             return;
         }
         if (g_jit_warn_unsupported)
-            std::fprintf(stderr,
-                         "[jit-vreg] '%s' no soportada -> interp (slots jubilado)\n",
-                         key.c_str());
+            std::fprintf(
+                stderr,
+                "[jit-vreg] '%s' no soportada -> interp (slots jubilado)\n",
+                key.c_str());
         /* Jubilacion slots (A3): un metodo que el vreg no soporta NO cae al
          * selector-slots (legacy, backlog B-JIT-1) -> se queda en el INTERPRETE
          * (siempre correcto).  maybe_compile_method NUNCA compila callbacks
          * (esos van por compile_native_callback), asi que no hay caso que
-         * necesite codigo nativo aqui.  En produccion ningun SLOTS_BUG usa slots
+         * necesite codigo nativo aqui.  En produccion ningun SLOTS_BUG usa
+         * slots
          * -> sin regresion (verificado por subagente).  VESTA_JIT_VREGS=0
          * (g_jit_use_vregs=false) reactiva slots para A/B. */
         return;
@@ -1267,14 +1273,14 @@ loader::MethodInfo *g_vreg_compiling_method = nullptr;
 
 /** @brief Entry-point del prologo tier-2 (lo llama el codigo JIT-eado).  Recibe
  *  (proc, method_ptr) en la convencion C nativa; dispara la recompilacion. */
-extern "C" void jit_tier2_request_entry(void *proc, uint64_t method_ptr) noexcept {
+extern "C" void jit_tier2_request_entry(void *proc,
+                                        uint64_t method_ptr) noexcept {
     auto *vm = reinterpret_cast<runtime::ProcessVM *>(proc);
     auto *method = reinterpret_cast<loader::MethodInfo *>(method_ptr);
     if (vm && method) maybe_tier2_method(vm, method);
 }
 
-void tier2_tick(runtime::ProcessVM *vm,
-                loader::MethodInfo *method) noexcept {
+void tier2_tick(runtime::ProcessVM *vm, loader::MethodInfo *method) noexcept {
     /* Se llama desde el fast-path de CALLVIRT (metodo ya JIT-eado) SOLO cuando
      * el guard barato de alli paso.  Cuenta invocaciones tras tier-1 y dispara
      * la recompilacion tier-2 al cruzar el delta dinamico.  Vive aqui (TU
@@ -1312,14 +1318,16 @@ void maybe_tier2_method(runtime::ProcessVM *vm,
     std::vector<std::string> keys{key};
     if (method->owner_class) {
         const std::string cls = sx(method->owner_class->name);
-        if (!cls.empty() && cls == sx(method->name)) keys.push_back(cls + "__ctor");
+        if (!cls.empty() && cls == sx(method->name))
+            keys.push_back(cls + "__ctor");
     }
     runtime::VM &owning_vm = vm->scheduler.vm_reference;
     const ir::IrFunction *ir_fn = nullptr;
     for (const auto &exe : owning_vm.loader_public.executables) {
         for (const auto &k : keys) {
             auto it = exe->ir_lookup.find(k);
-            if (it != exe->ir_lookup.end() && it->second < exe->ir_functions.size()) {
+            if (it != exe->ir_lookup.end() &&
+                it->second < exe->ir_functions.size()) {
                 ir_fn = &exe->ir_functions[it->second];
                 break;
             }
@@ -1330,8 +1338,8 @@ void maybe_tier2_method(runtime::ProcessVM *vm,
 
     /* Poblar g_branch_profile desde los contadores NATIVOS por linea: para cada
      * BR_COND del IR, leer g_jit_line_ctrs[line & mask] (que el codigo tier-1
-     * incremento en runtime) y fijar P(mispredict) = min/total.  VM-independiente
-     * (clave = source_line del IR, sin PC ni debug_info). */
+     * incremento en runtime) y fijar P(mispredict) = min/total.
+     * VM-independiente (clave = source_line del IR, sin PC ni debug_info). */
     uint64_t total_samples = 0;
     for (const auto &blk : ir_fn->blocks) {
         if (blk.instrs.empty()) continue;
@@ -1469,7 +1477,8 @@ CompileResult eager_compile_function(
         bool reserva = false;
         for (const auto &bb : ir_elegida->blocks)
             for (const auto &in : bb.instrs) {
-                if (in.op == ir::IrOp::RAW_ALLOC) reserva = true;
+                if (in.op == ir::IrOp::RAW_ALLOC)
+                    reserva = true;
                 else if (in.op == ir::IrOp::CALL && !in.func_name.empty())
                     quiero.insert(in.func_name);
             }
@@ -1501,16 +1510,17 @@ CompileResult eager_compile_function(
              * igual que hacen LICM/DSE/planificador cuando nadie les da la
              * tabla points-to.
              *
-             * Lo que se pregunta es que se sabe de los argumentos con los que se
-             * llega a cada llamada o reserva; la decision -- si eso basta para
-             * especializar -- se toma aqui, que es donde se conoce el coste.
+             * Lo que se pregunta es que se sabe de los argumentos con los que
+             * se llega a cada llamada o reserva; la decision -- si eso basta
+             * para especializar -- se toma aqui, que es donde se conoce el
+             * coste.
              *
              * Falta cruzar mas de un dominio: los rangos dicen lo que vale un
              * ARGUMENTO, no lo que hay en el ESTADO que de verdad decide las
              * ramas del asignador.  Ese hecho existe -- alguien lo sabe -- pero
              * hoy no llega hasta aqui; cuando llegue, es un productor mas sobre
              * esta misma base y este sitio no cambia. */
-            JitFactBase  propia;
+            JitFactBase propia;
             JitFactBase &base = (hechos != nullptr) ? *hechos : propia;
             const CotasDeLosSitios cotas =
                 cotas_de_los_sitios(*ir_elegida, base.rangos(*ir_elegida));
@@ -1655,10 +1665,10 @@ CompileResult eager_compile_function(
             if (g_jit_use_vregs) {
                 size_t vc_size2 = 0;
                 std::vector<LineMapEntry> vc_lines2;
-                uint8_t *vc = vreg_compile(
-                    child_ir, *g_code_cache, *resolver_holder,
-                    make_vreg_entries(), resolve_native_fn, sym_resolver,
-                    &vc_size2, &vc_lines2);
+                uint8_t *vc =
+                    vreg_compile(child_ir, *g_code_cache, *resolver_holder,
+                                 make_vreg_entries(), resolve_native_fn,
+                                 sym_resolver, &vc_size2, &vc_lines2);
                 if (vc != nullptr) {
                     const uint64_t va = reinterpret_cast<uint64_t>(vc);
                     g_eager_cache[name] = va;
@@ -1678,7 +1688,8 @@ CompileResult eager_compile_function(
                 }
                 /* Jubilacion slots (A3): vreg no soporta -> interp, NO slots.
                  * Devolvemos 0; el caller vera la CALL sin resolver y bailara a
-                 * interp tambien.  VESTA_JIT_VREGS=0 reactiva slots para A/B. */
+                 * interp tambien.  VESTA_JIT_VREGS=0 reactiva slots para A/B.
+                 */
                 g_eager_cache[name] = 0;
                 return 0;
             }
@@ -1696,9 +1707,8 @@ CompileResult eager_compile_function(
             if (cres.fn && sym_resolver) {
                 const uint64_t pc = sym_resolver("code." + name);
                 if (pc != 0) {
-                    register_jit_code_at_pc(pc,
-                                            reinterpret_cast<void *>(cres.fn),
-                                            cres.code_size);
+                    register_jit_code_at_pc(
+                        pc, reinterpret_cast<void *>(cres.fn), cres.code_size);
                 }
             }
             if (g_jit_warn_unsupported) {
@@ -1777,13 +1787,13 @@ CompileResult eager_compile_function(
     if (g_jit_use_vregs && !callback_entry) {
         size_t vcode_size = 0;
         std::vector<LineMapEntry> vcode_lines;
-        uint8_t *vcode =
-            vreg_compile(ir_fn_sel, *g_code_cache, resolver, make_vreg_entries(),
-                         resolve_native_fn, sym_resolver, &vcode_size,
-                         &vcode_lines);
+        uint8_t *vcode = vreg_compile(ir_fn_sel, *g_code_cache, resolver,
+                                      make_vreg_entries(), resolve_native_fn,
+                                      sym_resolver, &vcode_size, &vcode_lines);
         if (vcode != nullptr) {
             if (!ir_fn_sel.name.empty())
-                g_eager_cache[ir_fn_sel.name] = reinterpret_cast<uint64_t>(vcode);
+                g_eager_cache[ir_fn_sel.name] =
+                    reinterpret_cast<uint64_t>(vcode);
             /* NOTA: el registro pc->jit lo hace el caller
              * (maybe_compile_callvm_target) desde el CompileResult; no lo
              * duplicamos aqui para no registrar compiles degenerados. */
@@ -1803,7 +1813,7 @@ CompileResult eager_compile_function(
                     std::string fnm;
                     uint32_t hdr = 0;
                     if (!osr_loop_info(lid, fnm, hdr)) continue; // abortado/oob
-                    if (fnm != ir_fn_sel.name) continue;             // otra funcion
+                    if (fnm != ir_fn_sel.name) continue;         // otra funcion
                     /* Red de seguridad: los vids que el C1 capturo al buffer.
                      * El OSR-entry del C2 solo puede leer estos (si su live-in
                      * pide otro, vreg_compile_osr aborta -> no swap). */
@@ -1926,8 +1936,8 @@ CompileResult eager_compile_function(
                          ir_fn_sel.name.c_str());
     }
 
-    /* Jubilacion slots (A3): en el compile top-level (eager), un NO-callback que
-     * el vreg no compilo NO cae a slots -> corre en interp (correcto).  Los
+    /* Jubilacion slots (A3): en el compile top-level (eager), un NO-callback
+     * que el vreg no compilo NO cae a slots -> corre en interp (correcto).  Los
      * CALLBACKS (callback_entry) SI necesitan una direccion de codigo NATIVO
      * (va a una API C: qsort/Win32/CRT) -> el interprete no es un puntero de fn
      * valido, asi que siguen usando el selector-slots como unica via hasta que
@@ -1946,13 +1956,12 @@ CompileResult eager_compile_function(
         cbopts.callback_entry = true;
         cbopts.get_proc_addr = callback_get_proc_addr;
         cbopts.tls_gs_disp = callback_tls_gs_disp;
-        uint8_t *vcode = vreg_compile_callback(
-            ir_fn_sel, *g_code_cache, cbopts, resolver, make_vreg_entries(),
-            resolve_native_fn, sym_resolver);
+        uint8_t *vcode = vreg_compile_callback(ir_fn_sel, *g_code_cache, cbopts,
+                                               resolver, make_vreg_entries(),
+                                               resolve_native_fn, sym_resolver);
         if (vcode != nullptr) {
             if (g_jit_warn_unsupported)
-                std::fprintf(stderr,
-                             "[jit-vreg] callback compilado '%s'\n",
+                std::fprintf(stderr, "[jit-vreg] callback compilado '%s'\n",
                              ir_fn_sel.name.c_str());
             CompileResult r{};
             r.fn = reinterpret_cast<JitFn>(vcode);
@@ -1995,7 +2004,8 @@ CompileResult eager_compile_function(
             }
         }
         if (g_jit_disasm) {
-            debug_dump_jit_code(ir_fn_sel.name.empty() ? "<anon>" : ir_fn_sel.name,
+            debug_dump_jit_code(ir_fn_sel.name.empty() ? "<anon>"
+                                                       : ir_fn_sel.name,
                                 res.code_start, res.code_size);
         }
     } else {
@@ -2224,8 +2234,9 @@ bool lookup_line_by_native_pc(uint64_t native_pc, uint32_t &out_line) noexcept {
     return false;
 }
 
-void register_jit_code_at_pc(uint64_t vaddr, void *fn, size_t code_size,
-                             const std::vector<LineMapEntry> *line_map) noexcept {
+void register_jit_code_at_pc(
+    uint64_t vaddr, void *fn, size_t code_size,
+    const std::vector<LineMapEntry> *line_map) noexcept {
     if (!fn) return;
     if (code_size != 0) register_jit_region(vaddr, fn, code_size, line_map);
     if (vaddr == 0) return;
@@ -3043,10 +3054,10 @@ void c2_tier_up(runtime::ProcessVM *vm, uint64_t fn_pc) noexcept {
         const uint8_t *c2_code = nullptr;
         bool c2_unsupported = false;
         /* Camino preparado para el C2 sin slots: con vregs on (default) el C2
-         * recompila el IR especulado por el PATH VREG (regalloc real), igual que
-         * el JIT normal.  `g_c2_vreg` (VESTA_C2_VREG) fuerza el path vreg incluso
-         * con vregs off (para A/B del propio C2).  Solo cae a slots (abajo) si
-         * vregs esta off. */
+         * recompila el IR especulado por el PATH VREG (regalloc real), igual
+         * que el JIT normal.  `g_c2_vreg` (VESTA_C2_VREG) fuerza el path vreg
+         * incluso con vregs off (para A/B del propio C2).  Solo cae a slots
+         * (abajo) si vregs esta off. */
         if (g_c2_vreg || g_jit_use_vregs) {
             ffi::FFI *ffi2 = &owning_vm.loader_public.ffi_loader;
             auto nat_res = [ffi2](const std::string &name) -> uint64_t {
@@ -3082,9 +3093,10 @@ void c2_tier_up(runtime::ProcessVM *vm, uint64_t fn_pc) noexcept {
         }
         CompileResult res{};
         /* Jubilacion slots (A3): con vregs on (default), el C2 NO cae al
-         * selector-slots.  Si el recompile por vreg (arriba, cuando g_c2_vreg ||
-         * g_jit_use_vregs) no produjo codigo, queda C1 (tier-1 vreg) -- ver el
-         * "queda C1" de abajo.  Solo VESTA_JIT_VREGS=0 reactiva slots para A/B. */
+         * selector-slots.  Si el recompile por vreg (arriba, cuando g_c2_vreg
+         * || g_jit_use_vregs) no produjo codigo, queda C1 (tier-1 vreg) -- ver
+         * el "queda C1" de abajo.  Solo VESTA_JIT_VREGS=0 reactiva slots para
+         * A/B. */
         if (c2_fn == nullptr && !g_jit_use_vregs) {
             res = g_compiler->compile_with_opts(*compile_target, c2);
             c2_fn = res.fn;

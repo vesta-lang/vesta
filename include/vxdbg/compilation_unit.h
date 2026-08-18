@@ -65,9 +65,9 @@ struct TargetSpec {
  * corresponde.
  */
 struct CompilerIdentity {
-    std::string vendor;       ///< quien lo hace
-    std::string version;      ///< que version
-    std::string git_revision; ///< y exactamente que revision
+    std::string vendor;             ///< quien lo hace
+    std::string version;            ///< que version
+    std::string git_revision;       ///< y exactamente que revision
     std::vector<std::string> flags; ///< con que ajustes se construyo
 };
 

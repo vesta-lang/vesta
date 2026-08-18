@@ -38,9 +38,8 @@
 namespace vx {
 using namespace vxgen;
 
-const ast::ClassMethodDecl *
-TypeChecker::find_generic_method_template(const std::string &container,
-                                          const std::string &method_name) const {
+const ast::ClassMethodDecl *TypeChecker::find_generic_method_template(
+    const std::string &container, const std::string &method_name) const {
     // Busqueda directa en mod_.decls del struct/clase `container` y, dentro,
     // del metodo `method_name` con method_type_params no vacios.  Se llama
     // solo en llamadas a metodo con type-args o no resueltas (no es hot
@@ -70,10 +69,11 @@ TypeChecker::find_generic_method_template(const std::string &container,
     return nullptr;
 }
 
-std::string TypeChecker::monomorphize_method(
-    const std::string &container, bool is_struct,
-    const ast::ClassMethodDecl *tmpl, const std::vector<Type> &targs,
-    const SourceLoc &loc) {
+std::string TypeChecker::monomorphize_method(const std::string &container,
+                                             bool is_struct,
+                                             const ast::ClassMethodDecl *tmpl,
+                                             const std::vector<Type> &targs,
+                                             const SourceLoc &loc) {
     if (tmpl->method_type_params.size() != targs.size()) {
         diags_.error(loc, "numero incorrecto de args de tipo para el metodo "
                           "generico '" +
@@ -192,8 +192,8 @@ bool TypeChecker::try_monomorphize_method_call(ast::CallExpr *e,
         // del argumento correspondiente.
         for (const auto &tp : tmpl->method_type_params) {
             Type deduced{PrimitiveKind::COUNT};
-            for (size_t pi = 0;
-                 pi < tmpl->params.size() && pi < e->args.size(); ++pi) {
+            for (size_t pi = 0; pi < tmpl->params.size() && pi < e->args.size();
+                 ++pi) {
                 auto *pt = tmpl->params[pi]->type.get();
                 if (pt && pt->kind == ast::NodeKind::NamedTypeNode &&
                     static_cast<ast::NamedTypeNode *>(pt)->name == tp) {

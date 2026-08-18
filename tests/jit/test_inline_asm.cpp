@@ -68,7 +68,7 @@ static_assert(offsetof(Proxy, regs) == VESTA_PROC_REGISTERS_OFFSET,
 /** @brief Backend de ensamblado STUB: tabla nasm-string -> bytes. */
 struct StubAsm : vx::AsmBackend {
     vx::AsmAssembleResult assemble(const std::string &nasm,
-                                    vx::AsmArch) override {
+                                   vx::AsmArch) override {
         vx::AsmAssembleResult r;
         r.ok = true;
         if (nasm == "popcnt rax, rdi") {
@@ -137,8 +137,13 @@ static bool run_vm(const ir::IrFunction &fn, Proxy &px) {
         return false;
     }
     const TargetRegInfo &tri = target_x86_64_vm_abi();
-    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(build_intervals(mf, tri), mf.vreg_count, tri, false);
-    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM);
+    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(
+        build_intervals(mf, tri), mf.vreg_count, tri, false);
+    MFunction pf =
+        rewrite_to_physical(mf,
+                            codegen::build_allocation_result(
+                                ra, nullptr, codegen::AssignmentPlan{}),
+                            tri, AbiKind::VM);
     X86Encoder enc;
     std::vector<uint8_t> bytes;
     if (enc.encode(pf, bytes) == 0 || bytes.empty()) {

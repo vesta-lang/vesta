@@ -40,7 +40,8 @@ void aot_set_debug_symbols(const AotSym *syms, int n) {
     g_aot_dbg_n = (n > 0) ? n : 0;
 }
 
-/* Hash SysV de ELF (para .hash / DT_HASH).  Compartido por los dynexec 64/32. */
+/* Hash SysV de ELF (para .hash / DT_HASH).  Compartido por los dynexec 64/32.
+ */
 unsigned long aot_elf_hash(const char *name) {
     unsigned long h = 0, g;
     while (*name) {
@@ -265,8 +266,7 @@ static int coff_obj_impl(const char *path, const AotSection *secs, int num_secs,
 
     COFF_HEADER header;
     memset(&header, 0, sizeof(header));
-    header.Machine =
-        is32 ? 0x14c /* I386 */ : 0x8664 /* AMD64 */;
+    header.Machine = is32 ? 0x14c /* I386 */ : 0x8664 /* AMD64 */;
     header.NumberOfSections = (uint16_t)num_secs;
     header.NumberOfSymbols = (uint32_t)nsym;
     header.SizeOfOptionalHeader = 0;
@@ -380,15 +380,16 @@ int aot_emit_flat_bin(const char *path, uint64_t base, const AotSection *secs,
         uint64_t nxt_at = (uint64_t)nxt->at;
         if (cur_end > nxt_at) {
             char b[256];
-            snprintf(b, sizeof(b),
-                     "aot_emit_flat_bin: solape @at -- la seccion '%s' "
-                     "(@0x%llX..0x%llX) se solapa con '%s' (@0x%llX) por 0x%llX "
-                     "bytes; sube su @at a 0x%llX o reduce '%s'",
-                     cur->name ? cur->name : "?",
-                     (unsigned long long)cur_at, (unsigned long long)cur_end,
-                     nxt->name ? nxt->name : "?", (unsigned long long)nxt_at,
-                     (unsigned long long)(cur_end - nxt_at),
-                     (unsigned long long)cur_end, cur->name ? cur->name : "?");
+            snprintf(
+                b, sizeof(b),
+                "aot_emit_flat_bin: solape @at -- la seccion '%s' "
+                "(@0x%llX..0x%llX) se solapa con '%s' (@0x%llX) por 0x%llX "
+                "bytes; sube su @at a 0x%llX o reduce '%s'",
+                cur->name ? cur->name : "?", (unsigned long long)cur_at,
+                (unsigned long long)cur_end, nxt->name ? nxt->name : "?",
+                (unsigned long long)nxt_at,
+                (unsigned long long)(cur_end - nxt_at),
+                (unsigned long long)cur_end, cur->name ? cur->name : "?");
             set_err(err, err_cap, b);
             goto fail;
         }
@@ -589,7 +590,8 @@ int aot_elf_export_names(const char *path, char ***out_names, int *out_count) {
         return 1;
     }
     int n = 0;
-    /* elf_dynsym_export_names COPIA cada nombre -> el buffer se puede liberar. */
+    /* elf_dynsym_export_names COPIA cada nombre -> el buffer se puede liberar.
+     */
     char **names = elf_dynsym_export_names(&elf, &n);
     free(buf);
     *out_names = names;

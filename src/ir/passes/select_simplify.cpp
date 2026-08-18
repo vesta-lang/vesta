@@ -57,14 +57,38 @@ void to_mov(IrInstr &sel, IrValueId src) {
 ///        es sin signo.
 bool cmp_info(IrOp op, bool &less, bool &uns) {
     switch (op) {
-    case IrOp::CMP_LT: less = true; uns = false; return true;
-    case IrOp::CMP_LE: less = true; uns = false; return true;
-    case IrOp::CMP_GT: less = false; uns = false; return true;
-    case IrOp::CMP_GE: less = false; uns = false; return true;
-    case IrOp::CMP_ULT: less = true; uns = true; return true;
-    case IrOp::CMP_ULE: less = true; uns = true; return true;
-    case IrOp::CMP_UGT: less = false; uns = true; return true;
-    case IrOp::CMP_UGE: less = false; uns = true; return true;
+    case IrOp::CMP_LT:
+        less = true;
+        uns = false;
+        return true;
+    case IrOp::CMP_LE:
+        less = true;
+        uns = false;
+        return true;
+    case IrOp::CMP_GT:
+        less = false;
+        uns = false;
+        return true;
+    case IrOp::CMP_GE:
+        less = false;
+        uns = false;
+        return true;
+    case IrOp::CMP_ULT:
+        less = true;
+        uns = true;
+        return true;
+    case IrOp::CMP_ULE:
+        less = true;
+        uns = true;
+        return true;
+    case IrOp::CMP_UGT:
+        less = false;
+        uns = true;
+        return true;
+    case IrOp::CMP_UGE:
+        less = false;
+        uns = true;
+        return true;
     default: return false;
     }
 }
@@ -122,8 +146,7 @@ bool simplify_one(IrFunction &fn, const DefIndex &di, IrInstr &sel) {
         bool less = false, uns = false;
         if (cmp_info(cd->op, less, uns) && cd->operands.size() == 2) {
             const IrValueId cx = cd->operands[0], cy = cd->operands[1];
-            const bool same_set =
-                (a == cx && b == cy) || (a == cy && b == cx);
+            const bool same_set = (a == cx && b == cy) || (a == cy && b == cx);
             if (same_set && cx != cy) {
                 // cond true (cx REL cy) selecciona a.
                 //  less:  a==cx -> min ; a==cy -> max
@@ -166,8 +189,9 @@ bool simplify_one(IrFunction &fn, const DefIndex &di, IrInstr &sel) {
 int ir_pass_select_simplify(IrFunction &fn) {
     int total = 0;
     bool changed = true;
-    // Punto fijo: una simplificacion (p.ej. colapsar un anidado) puede habilitar
-    // otra.  Se reconstruye el def-index cada pasada porque los ops cambian.
+    // Punto fijo: una simplificacion (p.ej. colapsar un anidado) puede
+    // habilitar otra.  Se reconstruye el def-index cada pasada porque los ops
+    // cambian.
     while (changed) {
         changed = false;
         const DefIndex di = build_def_index(fn);

@@ -7,14 +7,14 @@
 
 /**
  * @file vx/asm/asm_lift_registro.h
- * @brief Que paso con cada bloque `asm` al bajarlo: se elevo a IR, se quedo como
- *        micro asm, o no se elevo.
+ * @brief Que paso con cada bloque `asm` al bajarlo: se elevo a IR, se quedo
+ * como micro asm, o no se elevo.
  *
- * Hace falta porque ESO NO SE PUEDE RECONSTRUIR DESPUES.  Una instruccion de asm
- * elevada a operaciones tipadas se convierte en una suma o un almacenamiento
- * como cualquier otro: nada la marca, y preguntarle al IR cuanto asm se elevo es
- * preguntarle por algo que ya no existe alli.  Lo sabe quien lo eleva, en el
- * momento de elevarlo, y si no lo dice se pierde.
+ * Hace falta porque ESO NO SE PUEDE RECONSTRUIR DESPUES.  Una instruccion de
+ * asm elevada a operaciones tipadas se convierte en una suma o un
+ * almacenamiento como cualquier otro: nada la marca, y preguntarle al IR cuanto
+ * asm se elevo es preguntarle por algo que ya no existe alli.  Lo sabe quien lo
+ * eleva, en el momento de elevarlo, y si no lo dice se pierde.
  *
  * Se anota al bajar y lo lee el dominio del asm del ASA.  Un dato del que no se
  * puede hablar hace que un volcado diga "no hay" donde deberia decir "hubo y no
@@ -31,7 +31,8 @@ namespace vx {
 
 /// Donde acabo un bloque `asm`.
 enum class DestinoAsm : uint8_t {
-    ElevadoAIr, ///< a operaciones tipadas: el optimizador y el interprete lo ven.
+    ElevadoAIr, ///< a operaciones tipadas: el optimizador y el interprete lo
+                ///< ven.
     MicroAsm,   ///< sigue siendo asm, pero dentro del IR y con sus efectos.
     SinElevar,  ///< bloque opaco: el IR solo sabe que esta ahi.
 };
@@ -41,9 +42,9 @@ const char *nombre_destino_asm(DestinoAsm d);
 /// Un bloque `asm` y lo que fue de el.
 struct BloqueAsmBajado {
     std::string funcion;
-    uint32_t    linea = 0;
-    uint32_t    instrucciones = 0; ///< las del fuente, sin contar etiquetas.
-    DestinoAsm  destino = DestinoAsm::SinElevar;
+    uint32_t linea = 0;
+    uint32_t instrucciones = 0; ///< las del fuente, sin contar etiquetas.
+    DestinoAsm destino = DestinoAsm::SinElevar;
 };
 
 /**

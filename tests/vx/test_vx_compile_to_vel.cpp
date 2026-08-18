@@ -39,7 +39,7 @@ using vx::CompileResult;
 static int g_passed = 0;
 static int g_failed = 0;
 
-#define VX_ASSERT(cond, msg)                                                  \
+#define VX_ASSERT(cond, msg)                                                   \
     do {                                                                       \
         if (!(cond)) {                                                         \
             std::fprintf(stderr, "FAIL [%s:%d] %s\n", __FILE__, __LINE__,      \
@@ -111,8 +111,7 @@ static void test_error_propagates() {
     // Programa con error sintactico: el facade debe devolver !ok y cero
     // .vel.  El test verifica que NO se aborta y que los diagnosticos
     // estan disponibles para que el caller los imprima.
-    CompileResult r =
-        compile_vx_source("i32 main() { return ; }", "<bad>", {});
+    CompileResult r = compile_vx_source("i32 main() { return ; }", "<bad>", {});
     VX_ASSERT(!r.ok, "error sintactico => no ok");
     VX_ASSERT(r.diagnostics.has_errors(), "diagnosticos contienen error");
 }

@@ -121,8 +121,7 @@ uint64_t comptime_type_size(const TypeChecker &tc, const Type &t) {
         if (it != tc.struct_layouts().end()) {
             // Overlay: `sizeof(T)` = HUELLA de la vista (para reservar el
             // buffer de respaldo), no @c size_bytes=8 (el puntero).
-            if (it->second.is_overlay)
-                return it->second.overlay_extent;
+            if (it->second.is_overlay) return it->second.overlay_extent;
             return it->second.size_bytes;
         }
         auto en = tc.enum_layouts().find(t.struct_name);
@@ -512,8 +511,7 @@ bool comptime_is_enum(const TypeChecker &tc, const Type &t) {
 static bool stmt_contains_asm_ci(const ast::Stmt *s) {
     if (!s) return false;
     switch (s->kind) {
-    case ast::NodeKind::AsmStmt:
-        return true;
+    case ast::NodeKind::AsmStmt: return true;
     case ast::NodeKind::BlockStmt: {
         const auto *bs = static_cast<const ast::BlockStmt *>(s);
         for (const auto &st : bs->body)
@@ -536,8 +534,7 @@ static bool stmt_contains_asm_ci(const ast::Stmt *s) {
         return stmt_contains_asm_ci(fs->init.get()) ||
                stmt_contains_asm_ci(fs->body.get());
     }
-    default:
-        return false;
+    default: return false;
     }
 }
 
@@ -568,8 +565,7 @@ static bool expr_calls_naked_ci(const TypeChecker &tc, const ast::Expr *e) {
     case ast::NodeKind::CastExpr:
         return expr_calls_naked_ci(
             tc, static_cast<const ast::CastExpr *>(e)->operand.get());
-    default:
-        return false;
+    default: return false;
     }
 }
 
@@ -614,8 +610,7 @@ static bool stmt_calls_naked_ci(const TypeChecker &tc, const ast::Stmt *s) {
                expr_calls_naked_ci(tc, fs->step.get()) ||
                stmt_calls_naked_ci(tc, fs->body.get());
     }
-    default:
-        return false;
+    default: return false;
     }
 }
 
@@ -685,8 +680,7 @@ static bool stmt_uses_io_ci(const ast::Stmt *s) {
         return stmt_uses_io_ci(fs->init.get()) ||
                stmt_uses_io_ci(fs->body.get());
     }
-    default:
-        return false;
+    default: return false;
     }
 }
 
@@ -701,7 +695,8 @@ bool comptime_fn_needs_vm(const TypeChecker &tc, const ast::FunctionDecl *fd) {
      * monomorfizan antes (la instancia concreta llega aqui sin type_params); el
      * template en si nunca se invoca directo.  Las que devuelven `Type` no se
      * "ejecutan" para producir un valor VM: su resultado (un tipo) se pliega en
-     * el consumidor (typename/sizeof) al bajarlo, asi que caen al tree-walker. */
+     * el consumidor (typename/sizeof) al bajarlo, asi que caen al tree-walker.
+     */
     if (!fd->type_params.empty()) return false;
     if (fd->return_type) {
         const Type rt = tc.resolve_type_node(fd->return_type.get());
@@ -1454,16 +1449,15 @@ static ComptimeEvalResult eval_builtin_call(const TypeChecker &tc,
      * (Numeric/Integer/Float/...).  Todos derivan de t1.kind. */
     {
         const PrimitiveKind k = t1.kind;
-        const bool is_int =
-            k == PrimitiveKind::I8 || k == PrimitiveKind::I16 ||
-            k == PrimitiveKind::I32 || k == PrimitiveKind::I64 ||
-            k == PrimitiveKind::U8 || k == PrimitiveKind::U16 ||
-            k == PrimitiveKind::U32 || k == PrimitiveKind::U64;
+        const bool is_int = k == PrimitiveKind::I8 || k == PrimitiveKind::I16 ||
+                            k == PrimitiveKind::I32 ||
+                            k == PrimitiveKind::I64 || k == PrimitiveKind::U8 ||
+                            k == PrimitiveKind::U16 ||
+                            k == PrimitiveKind::U32 || k == PrimitiveKind::U64;
         const bool is_signed =
             k == PrimitiveKind::I8 || k == PrimitiveKind::I16 ||
             k == PrimitiveKind::I32 || k == PrimitiveKind::I64;
-        const bool is_flt =
-            k == PrimitiveKind::F32 || k == PrimitiveKind::F64;
+        const bool is_flt = k == PrimitiveKind::F32 || k == PrimitiveKind::F64;
         if (nm == "is_integer") {
             r.ok = true;
             r.value = is_int ? 1 : 0;
@@ -1687,9 +1681,10 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                  * bytecode del helper): usamos un placeholder VACIO y marcamos
                  * el resultado como deferido.  Asi la interpolacion produce la
                  * ESTRUCTURA (`"() => { ... }"` con cuerpo vacio) -> el type-
-                 * check de pass-1 ve un lambda valido y resuelve su tipo; pass-2
-                 * (VM cargada) reconstruye el texto completo.  Sin esto, un solo
-                 * expr deferido tumbaria toda la interpolacion (bf_gen -> ""). */
+                 * check de pass-1 ve un lambda valido y resuelve su tipo;
+                 * pass-2 (VM cargada) reconstruye el texto completo.  Sin esto,
+                 * un solo expr deferido tumbaria toda la interpolacion (bf_gen
+                 * -> ""). */
                 if (er.deferred) {
                     any_deferred = true;
                     continue;
@@ -2281,10 +2276,11 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                  * (depende de una comptime fn con asm via ComptimeVM aun no
                  * cargada, pass 1 del two-phase) NO debe dispararse aqui -- el
                  * FFI `vesta_comptime:static_assert` no distingue deferred de
-                 * false y daria un error espurio.  Se resuelve en pass 2 (con el
-                 * bytecode comptime cargado, la cond da su valor real).  Cubre
-                 * el static_assert DENTRO de un `comptime {}` block, que pasa
-                 * por esta ruta (el top-level pasa por check_call, ya arreglado). */
+                 * false y daria un error espurio.  Se resuelve en pass 2 (con
+                 * el bytecode comptime cargado, la cond da su valor real).
+                 * Cubre el static_assert DENTRO de un `comptime {}` block, que
+                 * pasa por esta ruta (el top-level pasa por check_call, ya
+                 * arreglado). */
                 if (cid->name == "static_assert" && !ce->args.empty()) {
                     ComptimeEvalResult cond =
                         comptime_eval_expr(tc, ce->args[0].get());
@@ -2601,40 +2597,43 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                  * (compiler_project.cpp) y la ComptimeVM lo carga
                  * (load_macros_from_bytes filtra `code.__macro_` de TODO el
                  * symbol_table, sin distinguir local/importado).  Asi cualquier
-                 * funcion es invocable en comptime venga de donde venga (malloc,
-                 * bucles, etc.), no solo las locales.  Antes se forzaban al
-                 * TREE-WALKER legacy (que no ejecuta builtins nativos como
-                 * malloc), asumiendo -- falsamente ya -- que no habia `__macro_`
-                 * que invocar.  El unico caso que sigue en el tree-walker es el
-                 * expr-capture forwardeado (abajo), que el path VM no marshaliza. */
+                 * funcion es invocable en comptime venga de donde venga
+                 * (malloc, bucles, etc.), no solo las locales.  Antes se
+                 * forzaban al TREE-WALKER legacy (que no ejecuta builtins
+                 * nativos como malloc), asumiendo -- falsamente ya -- que no
+                 * habia `__macro_` que invocar.  El unico caso que sigue en el
+                 * tree-walker es el expr-capture forwardeado (abajo), que el
+                 * path VM no marshaliza. */
                 /* Forwarding de expr-capture anidado: si la fn tiene un param
-                 * `expr` cuyo argumento NO es un StringLit crudo (es un IdentExpr
-                 * forwardeado desde un `expr` param del macro/comptime fn
-                 * llamante), el path VM (`__macro_<fn>`) no maneja el texto
-                 * forwardeado (devuelve vacio).  Se rutea al TREE-WALKER, que
-                 * evalua `return code` con `code` = el texto ya capturado. */
+                 * `expr` cuyo argumento NO es un StringLit crudo (es un
+                 * IdentExpr forwardeado desde un `expr` param del
+                 * macro/comptime fn llamante), el path VM (`__macro_<fn>`) no
+                 * maneja el texto forwardeado (devuelve vacio).  Se rutea al
+                 * TREE-WALKER, que evalua `return code` con `code` = el texto
+                 * ya capturado. */
                 bool forwarded_expr_arg = false;
                 {
                     const auto &prms = fn_it->second->params;
-                    for (size_t pi = 0; pi < prms.size() && pi < ce->args.size();
-                         ++pi) {
+                    for (size_t pi = 0;
+                         pi < prms.size() && pi < ce->args.size(); ++pi) {
                         if (prms[pi] && prms[pi]->is_expr_capture &&
                             ce->args[pi] &&
-                            ce->args[pi]->kind != ast::NodeKind::StringLitExpr) {
+                            ce->args[pi]->kind !=
+                                ast::NodeKind::StringLitExpr) {
                             forwarded_expr_arg = true;
                             break;
                         }
                     }
                 }
-                /* Una comptime fn IMPORTADA con un param `expr` (expr-capture) NO
-                 * baja a un `__macro_<fn>` propio: el importer la expande INLINE
-                 * (fast-path del lowering) porque su valor es el TEXTO capturado
-                 * del call site.  No hay simbolo que invocar en la ComptimeVM ->
-                 * debe evaluarse por el tree-walker (que devuelve `code`).  El
-                 * `forwarded_expr_arg` de arriba no la captura cuando el arg ya
-                 * llega como StringLit (p.ej. `source( p++; )`).  Sin
-                 * expr-capture (p.ej. `parse_int_lit(string)`), la importada SI
-                 * tiene `__macro_` mergeado y va por la VM. */
+                /* Una comptime fn IMPORTADA con un param `expr` (expr-capture)
+                 * NO baja a un `__macro_<fn>` propio: el importer la expande
+                 * INLINE (fast-path del lowering) porque su valor es el TEXTO
+                 * capturado del call site.  No hay simbolo que invocar en la
+                 * ComptimeVM -> debe evaluarse por el tree-walker (que devuelve
+                 * `code`).  El `forwarded_expr_arg` de arriba no la captura
+                 * cuando el arg ya llega como StringLit (p.ej. `source( p++;
+                 * )`).  Sin expr-capture (p.ej. `parse_int_lit(string)`), la
+                 * importada SI tiene `__macro_` mergeado y va por la VM. */
                 bool imported_expr_capture = false;
                 if (fn_it->second->is_imported_comptime) {
                     for (const auto &p : fn_it->second->params)
@@ -2652,8 +2651,8 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                         const Type rt = tc.resolve_type_node(
                             fn_it->second->return_type.get());
                         ret_is_str = (rt.kind == PrimitiveKind::STRING);
-                        /* Retorno struct por valor: se recupera por su buffer de
-                         * retorno (SRET) y se reconstruye campo a campo.  Se
+                        /* Retorno struct por valor: se recupera por su buffer
+                         * de retorno (SRET) y se reconstruye campo a campo.  Se
                          * excluyen los enums (comparten el kind STRUCT) y los
                          * overlay, cuyo valor es un puntero y no un buffer. */
                         if (rt.kind == PrimitiveKind::STRUCT) {
@@ -2687,23 +2686,24 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                             }
                             vm_args.push_back(handle);
                         } else {
-                            vm_args.push_back(
-                                static_cast<uint64_t>(a.value));
+                            vm_args.push_back(static_cast<uint64_t>(a.value));
                         }
                     }
                     ComptimeEvalResult vr;
                     vr.ok = true;
                     if (!marshal_ok) {
                         /* No pudimos marshalizar (VM no lista en pass 1):
-                         * diferir; pass 2 lo resuelve con el bytecode cargado. */
+                         * diferir; pass 2 lo resuelve con el bytecode cargado.
+                         */
                         if (ret_is_str) vr.is_str = true;
                         vr.deferred = true;
                         return vr;
                     }
                     /* Nombre del macro: para las LOCALES el call site
-                     * (`cid->name`) es la clave correcta (comportamiento previo;
-                     * puede diferir del decl en casos como lambdas/monomorfiza-
-                     * cion).  Para las IMPORTADAS el call usa el nombre desnudo
+                     * (`cid->name`) es la clave correcta (comportamiento
+                     * previo; puede diferir del decl en casos como
+                     * lambdas/monomorfiza- cion).  Para las IMPORTADAS el call
+                     * usa el nombre desnudo
                      * (`buf_sum`) pero el `__macro_` mergeado del dep lleva el
                      * nombre mangled del namespace
                      * (`std__comptime__literal__buf_sum`), que es justamente el
@@ -2713,8 +2713,8 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                         "__macro_" + (fn_it->second->is_imported_comptime
                                           ? fn_it->second->name
                                           : cid->name);
-                    /* El otro nombre posible.  Una funcion comptime declarada en
-                     * un fichero CON `namespace` compila a un simbolo con el
+                    /* El otro nombre posible.  Una funcion comptime declarada
+                     * en un fichero CON `namespace` compila a un simbolo con el
                      * prefijo del namespace (`__macro_mimod__gen`), pero desde
                      * su propio fichero se la llama por el nombre desnudo
                      * (`gen`) -- y con la clave desnuda no se encontraba, se
@@ -2727,7 +2727,8 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                     if (ret_is_str) {
                         std::string out;
                         bool inv =
-                            const_cast<TypeChecker &>(tc).comptime_runtime()
+                            const_cast<TypeChecker &>(tc)
+                                .comptime_runtime()
                                 .invoke_string_macro(macro_nm, vm_args, out);
                         if (!inv && macro_alt != macro_nm)
                             inv = const_cast<TypeChecker &>(tc)
@@ -2735,40 +2736,48 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                                       .invoke_string_macro(macro_alt, vm_args,
                                                            out);
                         vr.is_str = true;
-                        if (inv) vr.str = std::move(out);
-                        else vr.deferred = true;
+                        if (inv)
+                            vr.str = std::move(out);
+                        else
+                            vr.deferred = true;
                     } else if (ret_is_struct) {
                         /* La funcion escribe el struct en un buffer de retorno
                          * (SRET); recuperamos sus bytes y reconstruimos cada
                          * campo como valor de compile-time. */
                         std::vector<uint8_t> sbytes;
-                        bool inv =
-                            const_cast<TypeChecker &>(tc).comptime_runtime()
-                                .invoke_struct_macro(macro_nm, vm_args,
-                                                     ret_slay->size_bytes,
-                                                     sbytes);
+                        bool inv = const_cast<TypeChecker &>(tc)
+                                       .comptime_runtime()
+                                       .invoke_struct_macro(
+                                           macro_nm, vm_args,
+                                           ret_slay->size_bytes, sbytes);
                         if (!inv && macro_alt != macro_nm)
                             inv = const_cast<TypeChecker &>(tc)
                                       .comptime_runtime()
-                                      .invoke_struct_macro(
-                                          macro_alt, vm_args,
-                                          ret_slay->size_bytes, sbytes);
+                                      .invoke_struct_macro(macro_alt, vm_args,
+                                                           ret_slay->size_bytes,
+                                                           sbytes);
                         if (inv)
                             fill_struct_fields_from_bytes(tc, *ret_slay, sbytes,
                                                           0, vr);
-                        else vr.deferred = true;
+                        else
+                            vr.deferred = true;
                     } else {
                         uint64_t r0 = 0;
                         bool inv =
-                            const_cast<TypeChecker &>(tc).comptime_runtime()
+                            const_cast<TypeChecker &>(tc)
+                                .comptime_runtime()
                                 .invoke_simple_macro(macro_nm, vm_args, r0);
                         if (!inv && macro_alt != macro_nm)
                             inv = const_cast<TypeChecker &>(tc)
                                       .comptime_runtime()
                                       .invoke_simple_macro(macro_alt, vm_args,
                                                            r0);
-                        if (inv) vr.value = static_cast<int64_t>(r0);
-                        else { vr.value = 0; vr.deferred = true; }
+                        if (inv)
+                            vr.value = static_cast<int64_t>(r0);
+                        else {
+                            vr.value = 0;
+                            vr.deferred = true;
+                        }
                     }
                     return vr;
                 }
@@ -2956,16 +2965,16 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                 binding->is_array || binding->is_struct)
                 return r;
             const int64_t old_v = binding->value;
-            const int64_t delta = (un->op == ast::UnOp::PreInc ||
-                                   un->op == ast::UnOp::PostInc)
-                                      ? 1
-                                      : -1;
+            const int64_t delta =
+                (un->op == ast::UnOp::PreInc || un->op == ast::UnOp::PostInc)
+                    ? 1
+                    : -1;
             binding->value = old_v + delta;
             r.ok = true;
-            r.value = (un->op == ast::UnOp::PostInc ||
-                       un->op == ast::UnOp::PostDec)
-                          ? old_v
-                          : binding->value;
+            r.value =
+                (un->op == ast::UnOp::PostInc || un->op == ast::UnOp::PostDec)
+                    ? old_v
+                    : binding->value;
             return r;
         }
         default: return r;

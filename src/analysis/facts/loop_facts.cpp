@@ -9,8 +9,8 @@
  * @file analysis/facts/loop_facts.cpp
  * @brief Implementacion de @c compute_loop_facts (ver loop_facts.h).
  *
- * CFG desde terminadores -> dominadores (Cooper-Harvey-Kennedy) -> back-edges ->
- * cuerpos de bucle (BFS inverso) -> profundidad por bloque.  Mismo algoritmo
+ * CFG desde terminadores -> dominadores (Cooper-Harvey-Kennedy) -> back-edges
+ * -> cuerpos de bucle (BFS inverso) -> profundidad por bloque.  Mismo algoritmo
  * canonico que SROA/LICM usaban por separado, ahora unificado.
  */
 
@@ -59,7 +59,8 @@ build_preds(const std::vector<std::vector<IrBlockId>> &succs) {
 
 /**
  * @brief Numeracion postorden por DFS desde @p entry (iterativo).
- * @param po      salida: po[b] = numero postorden, o UINT32_MAX si inalcanzable.
+ * @param po      salida: po[b] = numero postorden, o UINT32_MAX si
+ * inalcanzable.
  * @param rpo     salida: bloques en reverse-postorden (solo alcanzables).
  */
 void compute_rpo(const std::vector<std::vector<IrBlockId>> &succs,
@@ -78,14 +79,18 @@ void compute_rpo(const std::vector<std::vector<IrBlockId>> &succs,
         auto &top = stk.back();
         if (top.second < succs[top.first].size()) {
             IrBlockId s = succs[top.first][top.second++];
-            if (!visited[s]) { visited[s] = 1; stk.push_back({s, 0}); }
+            if (!visited[s]) {
+                visited[s] = 1;
+                stk.push_back({s, 0});
+            }
         } else {
             order.push_back(top.first);
             stk.pop_back();
         }
     }
     uint32_t n = 0;
-    for (IrBlockId b : order) po[b] = n++;
+    for (IrBlockId b : order)
+        po[b] = n++;
     // RPO = orden inverso del postorden.
     rpo.assign(order.rbegin(), order.rend());
 }
@@ -93,8 +98,8 @@ void compute_rpo(const std::vector<std::vector<IrBlockId>> &succs,
 /** @brief idom via CHK.  idom[b] = IR_NO_BLOCK si inalcanzable. */
 std::vector<IrBlockId>
 compute_idom(const std::vector<std::vector<IrBlockId>> &preds,
-             const std::vector<uint32_t> &po,
-             const std::vector<IrBlockId> &rpo, IrBlockId entry) {
+             const std::vector<uint32_t> &po, const std::vector<IrBlockId> &rpo,
+             IrBlockId entry) {
     const size_t N = preds.size();
     std::vector<IrBlockId> idom(N, ir::IR_NO_BLOCK);
     if (rpo.empty()) return idom;
@@ -103,8 +108,10 @@ compute_idom(const std::vector<std::vector<IrBlockId>> &preds,
     auto intersect = [&](IrBlockId a, IrBlockId b) -> IrBlockId {
         while (a != b) {
             // Numeros postorden mas ALTOS = mas cerca de la entrada en RPO.
-            while (po[a] < po[b]) a = idom[a];
-            while (po[b] < po[a]) b = idom[b];
+            while (po[a] < po[b])
+                a = idom[a];
+            while (po[b] < po[a])
+                b = idom[b];
         }
         return a;
     };
@@ -116,8 +123,10 @@ compute_idom(const std::vector<std::vector<IrBlockId>> &preds,
             if (b == entry) continue;
             IrBlockId new_idom = ir::IR_NO_BLOCK;
             for (IrBlockId p : preds[b]) {
-                if (idom[p] == ir::IR_NO_BLOCK) continue; // pred aun sin procesar
-                new_idom = (new_idom == ir::IR_NO_BLOCK) ? p : intersect(p, new_idom);
+                if (idom[p] == ir::IR_NO_BLOCK)
+                    continue; // pred aun sin procesar
+                new_idom =
+                    (new_idom == ir::IR_NO_BLOCK) ? p : intersect(p, new_idom);
             }
             if (new_idom != ir::IR_NO_BLOCK && idom[b] != new_idom) {
                 idom[b] = new_idom;
@@ -134,7 +143,8 @@ bool dominates(const std::vector<IrBlockId> &idom, IrBlockId a, IrBlockId b) {
     IrBlockId cur = b;
     while (true) {
         if (cur == a) return true;
-        if (idom[cur] == cur) return false; // llego a la entrada sin encontrar a
+        if (idom[cur] == cur)
+            return false; // llego a la entrada sin encontrar a
         cur = idom[cur];
     }
 }
@@ -159,7 +169,11 @@ LoopFacts compute_loop_facts(const IrFunction &fn) {
     auto idom = compute_idom(preds, po, rpo, entry);
 
     // Back-edges (b -> h con h dominando b), agrupados por cabecera = 1 bucle.
-    struct Loop { IrBlockId header; std::vector<uint8_t> body; size_t size = 0; };
+    struct Loop {
+        IrBlockId header;
+        std::vector<uint8_t> body;
+        size_t size = 0;
+    };
     std::vector<Loop> loops;
     std::vector<int32_t> loop_of_header(N, -1); // header -> indice en loops
 
@@ -177,12 +191,19 @@ LoopFacts compute_loop_facts(const IrFunction &fn) {
             Loop &lp = loops[li];
             // Cuerpo: BFS inverso desde b por preds, sin pasar de h.
             std::vector<IrBlockId> stk;
-            if (!lp.body[b]) { lp.body[b] = 1; stk.push_back(static_cast<IrBlockId>(b)); }
+            if (!lp.body[b]) {
+                lp.body[b] = 1;
+                stk.push_back(static_cast<IrBlockId>(b));
+            }
             while (!stk.empty()) {
-                IrBlockId x = stk.back(); stk.pop_back();
+                IrBlockId x = stk.back();
+                stk.pop_back();
                 if (x == h) continue;
                 for (IrBlockId p : preds[x])
-                    if (!lp.body[p]) { lp.body[p] = 1; if (p != h) stk.push_back(p); }
+                    if (!lp.body[p]) {
+                        lp.body[p] = 1;
+                        if (p != h) stk.push_back(p);
+                    }
             }
         }
     }
@@ -190,7 +211,8 @@ LoopFacts compute_loop_facts(const IrFunction &fn) {
     // Tamanos + hechos por bloque.
     for (Loop &lp : loops) {
         lp.size = 0;
-        for (size_t b = 0; b < N; ++b) lp.size += lp.body[b];
+        for (size_t b = 0; b < N; ++b)
+            lp.size += lp.body[b];
     }
     f.loop_count = static_cast<uint32_t>(loops.size());
     for (size_t li = 0; li < loops.size(); ++li) {
@@ -200,7 +222,8 @@ LoopFacts compute_loop_facts(const IrFunction &fn) {
             if (!lp.body[b]) continue;
             f.in_loop[b] = 1;
             f.loop_depth[b] += 1; // un bucle mas que contiene el bloque
-            // loop_id = bucle MAS INTERNO (menor cuerpo) que contiene el bloque.
+            // loop_id = bucle MAS INTERNO (menor cuerpo) que contiene el
+            // bloque.
             uint32_t cur = f.loop_id[b];
             if (cur == LoopFacts::NO_LOOP || lp.size < loops[cur].size)
                 f.loop_id[b] = static_cast<uint32_t>(li);
@@ -208,7 +231,8 @@ LoopFacts compute_loop_facts(const IrFunction &fn) {
     }
 
     // Hechos POR BUCLE: cabecera + bucle padre (el bucle mas pequeno que
-    // CONTIENE PROPIAMENTE a este = su cabecera cae en el cuerpo de otro mayor).
+    // CONTIENE PROPIAMENTE a este = su cabecera cae en el cuerpo de otro
+    // mayor).
     f.loop_header.resize(loops.size());
     f.parent_loop.assign(loops.size(), LoopFacts::NO_LOOP);
     for (size_t li = 0; li < loops.size(); ++li) {
@@ -218,9 +242,13 @@ LoopFacts compute_loop_facts(const IrFunction &fn) {
         size_t best_size = SIZE_MAX;
         for (size_t lj = 0; lj < loops.size(); ++lj) {
             if (lj == li) continue;
-            if (!loops[lj].body[h]) continue;              // lj contiene la cabecera de li
-            if (loops[lj].size <= loops[li].size) continue; // contencion PROPIA (mayor)
-            if (loops[lj].size < best_size) { best_size = loops[lj].size; best = static_cast<uint32_t>(lj); }
+            if (!loops[lj].body[h]) continue; // lj contiene la cabecera de li
+            if (loops[lj].size <= loops[li].size)
+                continue; // contencion PROPIA (mayor)
+            if (loops[lj].size < best_size) {
+                best_size = loops[lj].size;
+                best = static_cast<uint32_t>(lj);
+            }
         }
         f.parent_loop[li] = best;
     }
@@ -241,16 +269,17 @@ std::vector<FactIssue> validate(const LoopFacts &f) {
             issues.push_back({FactCheck::LOOP_HEADER_NOT_IN_LOOP, b, 0});
         // loop_id en rango.
         if (f.loop_id[b] != LoopFacts::NO_LOOP && f.loop_id[b] >= f.loop_count)
-            issues.push_back({FactCheck::LOOP_ID_OUT_OF_RANGE, b, f.loop_id[b]});
+            issues.push_back(
+                {FactCheck::LOOP_ID_OUT_OF_RANGE, b, f.loop_id[b]});
     }
     for (uint32_t L = 0; L < f.loop_count; ++L) {
         const uint32_t p = f.parent_of(L);
         if (p != LoopFacts::NO_LOOP && p >= f.loop_count)
             issues.push_back({FactCheck::LOOP_PARENT_OUT_OF_RANGE, L, p});
-        if (p == L)
-            issues.push_back({FactCheck::LOOP_PARENT_SELF, L, 0});
+        if (p == L) issues.push_back({FactCheck::LOOP_PARENT_SELF, L, 0});
         if (L < f.loop_header.size() && f.loop_header[L] >= N)
-            issues.push_back({FactCheck::LOOP_HEADER_BLOCK_OOR, L, f.loop_header[L]});
+            issues.push_back(
+                {FactCheck::LOOP_HEADER_BLOCK_OOR, L, f.loop_header[L]});
     }
     return issues;
 }

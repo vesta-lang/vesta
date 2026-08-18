@@ -30,8 +30,8 @@ namespace aot {
 
 namespace {
 
-/// Backend x86: envuelve @c jit::vreg_compile_native (comportamiento identico al
-/// del driver antes del desacoplamiento).
+/// Backend x86: envuelve @c jit::vreg_compile_native (comportamiento identico
+/// al del driver antes del desacoplamiento).
 class X86Backend : public NativeBackend {
   public:
     explicit X86Backend(AotArch a) : arch_(a) {}
@@ -54,9 +54,10 @@ class X86Backend : public NativeBackend {
     AotArch arch_;
 };
 
-/// Backend arm64: baja la funcion a texto AArch64 (arm64_emit_asm) y lo ensambla
-/// con Keystone.  Subconjunto entero (incluye ramas, llamadas intra-unit y
-/// atomicos); las funciones con ops no soportadas devuelven bytes vacios.
+/// Backend arm64: baja la funcion a texto AArch64 (arm64_emit_asm) y lo
+/// ensambla con Keystone.  Subconjunto entero (incluye ramas, llamadas
+/// intra-unit y atomicos); las funciones con ops no soportadas devuelven bytes
+/// vacios.
 class Arm64Backend : public NativeBackend {
   public:
     AotArch arch() const override { return AotArch::ARM64; }
@@ -71,7 +72,7 @@ class Arm64Backend : public NativeBackend {
          * (make_native_backend(ARM64) construyo este backend).  Path por
          * defecto: VREG (MachineIR + regalloc generico + scheduler) via el
          * orquestador arch-neutral con Arm64Target; el template queda como
-         * fallback para las funciones fuera del subset vreg.  VESTA_ARM64_VREG=0
+         * fallback para las funciones fuera del subset vreg. VESTA_ARM64_VREG=0
          * fuerza el template (escape-hatch de depuracion). */
         static const bool use_vreg = [] {
             const char *v = std::getenv("VESTA_ARM64_VREG");
@@ -94,10 +95,8 @@ class Arm64Backend : public NativeBackend {
         std::vector<std::string> call_targets;
         const std::string text = jit::arm64::arm64_emit_asm(
             fn, unsupported, jit::arm64::Arm64Abi::AAPCS64, &call_targets);
-        if (unsupported || text.empty())
-            return r; // no soportada.
-        if (!vx::g_asm_backend)
-            return r; // sin ensamblador registrado.
+        if (unsupported || text.empty()) return r; // no soportada.
+        if (!vx::g_asm_backend) return r; // sin ensamblador registrado.
         vx::AsmAssembleResult asmres =
             vx::g_asm_backend->assemble(text, vx::AsmArch::ARM64);
         if (!asmres.ok)
@@ -110,14 +109,14 @@ class Arm64Backend : public NativeBackend {
         // parchea su imm26 a la VA real (BFS del callee incluido).
         if (!call_targets.empty() && !r.bytes.empty()) {
             csh h;
-            if (cs_open(CS_ARCH_ARM64, CS_MODE_LITTLE_ENDIAN, &h) == CS_ERR_OK) {
+            if (cs_open(CS_ARCH_ARM64, CS_MODE_LITTLE_ENDIAN, &h) ==
+                CS_ERR_OK) {
                 cs_insn *insn = nullptr;
                 size_t n = cs_disasm(h, r.bytes.data(), r.bytes.size(),
                                      /*addr=*/0, /*count=*/0, &insn);
                 size_t ci = 0;
                 for (size_t i = 0; i < n && ci < call_targets.size(); ++i) {
-                    if (insn[i].id != ARM64_INS_BL)
-                        continue;
+                    if (insn[i].id != ARM64_INS_BL) continue;
                     jit::NativeReloc rl;
                     rl.kind = jit::NativeReloc::Kind::ARM64_CALL26;
                     rl.offset =
@@ -125,8 +124,7 @@ class Arm64Backend : public NativeBackend {
                     rl.symbol = call_targets[ci++];
                     r.relocs.push_back(std::move(rl));
                 }
-                if (insn)
-                    cs_free(insn, n);
+                if (insn) cs_free(insn, n);
                 cs_close(&h);
             }
         }
@@ -144,8 +142,7 @@ std::unique_ptr<NativeBackend> make_native_backend(AotArch arch) {
         return std::unique_ptr<NativeBackend>(new X86Backend(arch));
     case AotArch::ARM64:
         return std::unique_ptr<NativeBackend>(new Arm64Backend());
-    default:
-        return nullptr;
+    default: return nullptr;
     }
 }
 

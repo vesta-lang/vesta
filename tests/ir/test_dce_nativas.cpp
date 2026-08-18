@@ -45,7 +45,9 @@ const char *kLib = "stdlib/native/io/vesta_io";
 const char *kFn = "escribe_buf";
 
 /// Nombre con el que el IR referencia a la nativa ("lib:fn").
-std::string nombre_llamada() { return std::string(kLib) + ":" + kFn; }
+std::string nombre_llamada() {
+    return std::string(kLib) + ":" + kFn;
+}
 
 /// Cuenta las llamadas nativas de @p fn.
 int cuenta_calln(const IrFunction &fn) {

@@ -15,7 +15,8 @@
  * @brief Emision del IR tipado resultante de liftar un bloque de inline asm.
  *
  * Separa la EMISION (que necesita el IR) del RECONOCIMIENTO (funcion pura en
- * vx/asm_lift.h), para mantener el lowering minimo.  Dado el cuerpo de un bloque
+ * vx/asm_lift.h), para mantener el lowering minimo.  Dado el cuerpo de un
+ * bloque
  * @c asm y el mapa de registros canonicos -> slot ALLOCA de sus @c register()
  * bindings, si el bloque encaja con un patron atomico (@ref asm_lift_detect),
  * emite las instrucciones tipadas (LOAD de operandos + ATOMIC_CAS/ADD + STORE

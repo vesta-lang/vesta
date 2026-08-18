@@ -38,12 +38,10 @@ std::string f1(float v) {
 }
 
 /// Puerto mas cargado (cuello de botella) de un AsmBlockCost: (nombre, uops).
-std::pair<std::string, float>
-bottleneck(const instr_db::AsmBlockCost &c) {
+std::pair<std::string, float> bottleneck(const instr_db::AsmBlockCost &c) {
     std::pair<std::string, float> best{"", 0.0f};
     for (const auto &p : c.port_pressure)
-        if (p.second > best.second)
-            best = p;
+        if (p.second > best.second) best = p;
     return best;
 }
 
@@ -74,8 +72,7 @@ std::string esc_dot(const std::string &s) {
     std::string o;
     o.reserve(s.size() + 8);
     for (char c : s) {
-        if (c == '"' || c == '\\')
-            o += '\\';
+        if (c == '"' || c == '\\') o += '\\';
         if (c == '\n') {
             o += "\\l"; // alineado a la izquierda en graphviz.
             continue;
@@ -125,10 +122,8 @@ BlockCost block_cost(const AsmCfg &cfg, const AsmBasicBlock &bb,
 /// Marcadores compactos de flags para el label de un bloque.
 std::string flag_marks(const BlockCost &bc) {
     std::string m;
-    if (bc.writes_flags)
-        m += " Fw"; // escribe flags
-    if (bc.reads_flags)
-        m += " Fr"; // lee flags
+    if (bc.writes_flags) m += " Fw"; // escribe flags
+    if (bc.reads_flags) m += " Fr";  // lee flags
     return m;
 }
 
@@ -136,14 +131,12 @@ std::string flag_marks(const BlockCost &bc) {
 /// truncado a 6 instrucciones para legibilidad.
 std::string block_body_text(const AsmCfg &cfg, const AsmBasicBlock &bb) {
     std::string t;
-    if (!bb.label.empty())
-        t += bb.label + ":\n";
+    if (!bb.label.empty()) t += bb.label + ":\n";
     const uint32_t n = bb.last - bb.first + 1;
     const uint32_t show = n > 6 ? 5 : n;
     for (uint32_t k = 0; k < show; ++k)
         t += cfg.insns[bb.first + k].text + "\n";
-    if (n > 6)
-        t += "... (" + std::to_string(n) + " instrs)\n";
+    if (n > 6) t += "... (" + std::to_string(n) + " instrs)\n";
     return t;
 }
 
@@ -162,8 +155,7 @@ std::string asm_cfg_mermaid(const std::string &body,
 
     // Titulo del subgrafo: microarq + coste total + cuello de botella.
     std::string head = opt.title.empty() ? std::string("asm") : opt.title;
-    if (!opt.microarch.empty())
-        head += " @ " + opt.microarch;
+    if (!opt.microarch.empty()) head += " @ " + opt.microarch;
     head += "\nlat " + f1(total.latency_sum) + "c (serie) / thr " +
             f1(total.throughput) + "c (superescalar)";
     if (!bn.first.empty())
@@ -179,8 +171,7 @@ std::string asm_cfg_mermaid(const std::string &body,
         BlockCost bc = block_cost(cfg, cfg.blocks[b], opt);
         std::string lbl = block_body_text(cfg, cfg.blocks[b]);
         lbl += "[lat " + f1(bc.latency) + "c / thr " + f1(bc.throughput) + "c";
-        if (!bc.port.empty())
-            lbl += " / " + bc.port;
+        if (!bc.port.empty()) lbl += " / " + bc.port;
         lbl += flag_marks(bc);
         lbl += "]";
         os << "    " << p << "_b" << b << " [\"" << esc_mermaid(lbl) << "\"]\n";
@@ -219,8 +210,7 @@ std::string asm_cfg_graphviz(const std::string &body,
     const std::string &p = opt.id_prefix;
 
     std::string head = opt.title.empty() ? std::string("asm") : opt.title;
-    if (!opt.microarch.empty())
-        head += " @ " + opt.microarch;
+    if (!opt.microarch.empty()) head += " @ " + opt.microarch;
     head += "\\nlat " + f1(total.latency_sum) + "c / thr " +
             f1(total.throughput) + "c";
     if (!bn.first.empty())
@@ -235,8 +225,7 @@ std::string asm_cfg_graphviz(const std::string &body,
         BlockCost bc = block_cost(cfg, cfg.blocks[b], opt);
         std::string lbl = block_body_text(cfg, cfg.blocks[b]);
         lbl += "[lat " + f1(bc.latency) + "c / thr " + f1(bc.throughput) + "c";
-        if (!bc.port.empty())
-            lbl += " / " + bc.port;
+        if (!bc.port.empty()) lbl += " / " + bc.port;
         lbl += flag_marks(bc);
         lbl += "]";
         os << "    " << p << "_b" << b << " [label=\"" << esc_dot(lbl)
@@ -247,8 +236,7 @@ std::string asm_cfg_graphviz(const std::string &body,
         for (uint32_t s : cfg.blocks[b].succs) {
             const bool back = (s <= b);
             os << "    " << p << "_b" << b << " -> " << p << "_b" << s;
-            if (back)
-                os << " [style=dashed, label=\"back\"]";
+            if (back) os << " [style=dashed, label=\"back\"]";
             os << ";\n";
         }
 

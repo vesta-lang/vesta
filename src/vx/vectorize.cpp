@@ -50,8 +50,7 @@ static bool mc_expr_refs_ident(ast::Expr *e, const std::string &name) {
     using namespace ast;
     if (!e) return false;
     switch (e->kind) {
-    case NodeKind::IdentExpr:
-        return static_cast<IdentExpr *>(e)->name == name;
+    case NodeKind::IdentExpr: return static_cast<IdentExpr *>(e)->name == name;
     case NodeKind::BinaryExpr: {
         auto *b = static_cast<BinaryExpr *>(e);
         return mc_expr_refs_ident(b->lhs.get(), name) ||
@@ -99,7 +98,8 @@ static bool mc_is_increment_expr(ast::Expr *e, const std::string &idx) {
     }
     if (e->kind == NodeKind::AssignExpr) {
         auto *ia = static_cast<AssignExpr *>(e);
-        if (!ia->target || ia->target->kind != NodeKind::IdentExpr) return false;
+        if (!ia->target || ia->target->kind != NodeKind::IdentExpr)
+            return false;
         if (static_cast<IdentExpr *>(ia->target.get())->name != idx)
             return false;
         if (ia->op == AssignOp::AddAssign) { // idx += 1
@@ -128,15 +128,16 @@ namespace {
 /// SSA actual via lookup).
 struct VecLoop {
     std::string idx_name;
-    ast::Expr *limit = nullptr;        // N (cond.rhs)
+    ast::Expr *limit = nullptr;          // N (cond.rhs)
     std::vector<ast::Expr *> body_exprs; // sentencias del cuerpo (AssignExpr)
-    ast::Expr *for_init = nullptr;     // vd->init (for) o nullptr (while)
+    ast::Expr *for_init = nullptr;       // vd->init (for) o nullptr (while)
 };
 
 /// Extrae un @c VecLoop de un @c for(T i=init; i<N; i++) BODY o de un
 /// @c while(i<N){ BODY; i=i+1; }.  El cuerpo del @c for es 1 sentencia; el del
 /// @c while son las sentencias previas a un incremento final de @c i.  Devuelve
-/// false si la forma no encaja (cualquier desviacion -> el loop se baja normal).
+/// false si la forma no encaja (cualquier desviacion -> el loop se baja
+/// normal).
 bool mc_extract_vec_loop(ast::Stmt *s, VecLoop &out) {
     using namespace ast;
     if (!s) return false;
@@ -219,13 +220,15 @@ bool Lowering::mc_match_copy_assign(ast::AssignExpr *asg,
     auto *dst_ix = static_cast<IndexExpr *>(asg->target.get());
     auto *src_ix = static_cast<IndexExpr *>(asg->value.get());
     // Sin overloads de operador ni slices/ranges.
-    if (!dst_ix->overload_method.empty() ||
-        !dst_ix->index_set_method.empty() || dst_ix->is_range)
+    if (!dst_ix->overload_method.empty() || !dst_ix->index_set_method.empty() ||
+        dst_ix->is_range)
         return false;
     if (!src_ix->overload_method.empty() || src_ix->is_range) return false;
     // base = ident; index = el MISMO idx del loop en ambos.
-    if (!dst_ix->base || dst_ix->base->kind != NodeKind::IdentExpr) return false;
-    if (!src_ix->base || src_ix->base->kind != NodeKind::IdentExpr) return false;
+    if (!dst_ix->base || dst_ix->base->kind != NodeKind::IdentExpr)
+        return false;
+    if (!src_ix->base || src_ix->base->kind != NodeKind::IdentExpr)
+        return false;
     if (!dst_ix->index || dst_ix->index->kind != NodeKind::IdentExpr)
         return false;
     if (!src_ix->index || src_ix->index->kind != NodeKind::IdentExpr)
@@ -514,8 +517,9 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
         case AssignOp::DivAssign: subop = 3; break;
         default: return false;
         }
-        if (!asg->value || asg->value->kind != NodeKind::IndexExpr) return false;
-        a_ix = c_ix;                                       // a = c (lhs implicito)
+        if (!asg->value || asg->value->kind != NodeKind::IndexExpr)
+            return false;
+        a_ix = c_ix; // a = c (lhs implicito)
         b_ix = static_cast<IndexExpr *>(asg->value.get()); // b = el operando
     }
 
@@ -525,16 +529,56 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
     auto elem_info = [](PrimitiveKind k, ir::IrType *out_ty, uint64_t *out_esz,
                         bool *out_fp) -> bool {
         switch (k) {
-        case PrimitiveKind::F64: *out_ty = ir::IrType::F64; *out_esz = 8; *out_fp = true;  return true;
-        case PrimitiveKind::F32: *out_ty = ir::IrType::F32; *out_esz = 4; *out_fp = true;  return true;
-        case PrimitiveKind::I64: *out_ty = ir::IrType::I64; *out_esz = 8; *out_fp = false; return true;
-        case PrimitiveKind::U64: *out_ty = ir::IrType::U64; *out_esz = 8; *out_fp = false; return true;
-        case PrimitiveKind::I32: *out_ty = ir::IrType::I32; *out_esz = 4; *out_fp = false; return true;
-        case PrimitiveKind::U32: *out_ty = ir::IrType::U32; *out_esz = 4; *out_fp = false; return true;
-        case PrimitiveKind::I16: *out_ty = ir::IrType::I16; *out_esz = 2; *out_fp = false; return true;
-        case PrimitiveKind::U16: *out_ty = ir::IrType::U16; *out_esz = 2; *out_fp = false; return true;
-        case PrimitiveKind::I8:  *out_ty = ir::IrType::I8;  *out_esz = 1; *out_fp = false; return true;
-        case PrimitiveKind::U8:  *out_ty = ir::IrType::U8;  *out_esz = 1; *out_fp = false; return true;
+        case PrimitiveKind::F64:
+            *out_ty = ir::IrType::F64;
+            *out_esz = 8;
+            *out_fp = true;
+            return true;
+        case PrimitiveKind::F32:
+            *out_ty = ir::IrType::F32;
+            *out_esz = 4;
+            *out_fp = true;
+            return true;
+        case PrimitiveKind::I64:
+            *out_ty = ir::IrType::I64;
+            *out_esz = 8;
+            *out_fp = false;
+            return true;
+        case PrimitiveKind::U64:
+            *out_ty = ir::IrType::U64;
+            *out_esz = 8;
+            *out_fp = false;
+            return true;
+        case PrimitiveKind::I32:
+            *out_ty = ir::IrType::I32;
+            *out_esz = 4;
+            *out_fp = false;
+            return true;
+        case PrimitiveKind::U32:
+            *out_ty = ir::IrType::U32;
+            *out_esz = 4;
+            *out_fp = false;
+            return true;
+        case PrimitiveKind::I16:
+            *out_ty = ir::IrType::I16;
+            *out_esz = 2;
+            *out_fp = false;
+            return true;
+        case PrimitiveKind::U16:
+            *out_ty = ir::IrType::U16;
+            *out_esz = 2;
+            *out_fp = false;
+            return true;
+        case PrimitiveKind::I8:
+            *out_ty = ir::IrType::I8;
+            *out_esz = 1;
+            *out_fp = false;
+            return true;
+        case PrimitiveKind::U8:
+            *out_ty = ir::IrType::U8;
+            *out_esz = 1;
+            *out_fp = false;
+            return true;
         default: return false;
         }
     };
@@ -551,11 +595,13 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
             return false;
         auto *base = static_cast<IdentExpr *>(ix->base.get());
         const Type &t = base->result_type;
-        const bool ptr_like = (t.kind == PrimitiveKind::PTR ||
-                               t.kind == PrimitiveKind::ARRAY) &&
-                              static_cast<bool>(t.pointee);
-        if (!ptr_like || t.is_virtual) return false;        // solo HOST
-        ir::IrType ety; uint64_t esz2; bool fp2;
+        const bool ptr_like =
+            (t.kind == PrimitiveKind::PTR || t.kind == PrimitiveKind::ARRAY) &&
+            static_cast<bool>(t.pointee);
+        if (!ptr_like || t.is_virtual) return false; // solo HOST
+        ir::IrType ety;
+        uint64_t esz2;
+        bool fp2;
         if (!elem_info(t.pointee->kind, &ety, &esz2, &fp2)) return false;
         *out_base = base;
         *out_kind = t.pointee->kind;
@@ -566,14 +612,16 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
     if (!check_idx_host(c_ix, &c_base, &ck)) return false;
     if (!check_idx_host(a_ix, &a_base, &ak)) return false;
     if (!check_idx_host(b_ix, &b_base, &bk)) return false;
-    if (ck != ak || ak != bk) return false;        // mismo tipo de elemento
-    ir::IrType elem_ty; uint64_t esz; bool elem_fp;
+    if (ck != ak || ak != bk) return false; // mismo tipo de elemento
+    ir::IrType elem_ty;
+    uint64_t esz;
+    bool elem_fp;
     elem_info(ck, &elem_ty, &esz, &elem_fp);
     // Enteros: nunca div packed (subop 3 bail).  mul (subop 2) solo donde hay
     // packed mul: i16/u16 (PMULLW) e i32/u32 (PMULLD); i8/u8 e i64/u64 sin mul.
     if (!elem_fp) {
-        if (subop == 3) return false;          // div entera -> escalar
-        if (subop == 2) {                       // mul entera
+        if (subop == 3) return false; // div entera -> escalar
+        if (subop == 2) {             // mul entera
             const bool has_pmul = (esz == 2 || esz == 4); // word/dword
             if (!has_pmul) return false;
         }
@@ -587,13 +635,16 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
     // El chunk (16/32/64 bytes) lo elige la ISA: SSE2 W=2, AVX2 W=4, AVX512 W=8
     // (f64).  El IR es portable: el JIT descompone el chunk al ancho del host.
     const uint32_t ln = s->loc.line;
-    // AOT (native_poo): el chunk lo fija el TARGET (--float-isa, aot_vec_width_)
+    // AOT (native_poo): el chunk lo fija el TARGET (--float-isa,
+    // aot_vec_width_)
     // -> cross-compile correcto + la reduccion (acc de 1 reg, no splittea) cabe
     // (chunk==host_w del codegen).  Fuera de AOT: host (vec_chunk_isa) para que
     // el .velb sea portable (el JIT descompone el chunk al ancho del host).
     const uint64_t width =
-        native_poo_ ? (aot_auto_vec_ ? 64u // AUTO: element-wise/unary/scalar a 64 -> cada variante decompone (4x128/2x256/1x512)
-                                     : static_cast<uint64_t>(aot_vec_width_))
+        native_poo_ ? (aot_auto_vec_
+                           ? 64u // AUTO: element-wise/unary/scalar a 64 -> cada
+                                 // variante decompone (4x128/2x256/1x512)
+                           : static_cast<uint64_t>(aot_vec_width_))
                     : jit::vec_isa_width(jit::vec_chunk_isa());
     const uint64_t W = width / esz; // lanes segun ancho/tipo
 
@@ -623,8 +674,11 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
                    ir::IrValueId b) -> ir::IrValueId {
         const ir::IrValueId d = fn_->new_value(ty);
         ir::IrInstr in{};
-        in.op = op; in.type = ty; in.dst = d;
-        in.operands = {a, b}; in.source_line = ln;
+        in.op = op;
+        in.type = ty;
+        in.dst = d;
+        in.operands = {a, b};
+        in.source_line = ln;
         fn_->append(current_block_, std::move(in));
         return d;
     };
@@ -640,8 +694,13 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
     current_block_ = entry;
     const ir::IrValueId v_W = emit_const(idx_ty, (uint64_t)W, ln);
     const ir::IrValueId v_esz = emit_const(ir::IrType::I64, esz, ln);
-    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = mhdr;
-      br.source_line = ln; fn_->append(entry, std::move(br)); }
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = mhdr;
+        br.source_line = ln;
+        fn_->append(entry, std::move(br));
+    }
     fn_->blocks[entry].succs.push_back(mhdr);
     fn_->blocks[mhdr].preds.push_back(entry);
 
@@ -649,8 +708,11 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
     current_block_ = mhdr;
     const ir::IrValueId phi_im = fn_->new_value(idx_ty);
     {
-        ir::IrInstr phi{}; phi.op = ir::IrOp::PHI; phi.type = idx_ty;
-        phi.dst = phi_im; phi.source_line = ln;
+        ir::IrInstr phi{};
+        phi.op = ir::IrOp::PHI;
+        phi.type = idx_ty;
+        phi.dst = phi_im;
+        phi.source_line = ln;
         phi.phi_args.push_back({i_init, entry});
         fn_->append(mhdr, std::move(phi));
     }
@@ -658,8 +720,12 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
     const ir::IrValueId cond_m =
         bin(ir::IrOp::CMP_LE, ir::IrType::BOOL, v_ipW, v_N);
     {
-        ir::IrInstr brc{}; brc.op = ir::IrOp::BR_COND; brc.operands = {cond_m};
-        brc.target_block = mbody; brc.false_block = thdr; brc.source_line = ln;
+        ir::IrInstr brc{};
+        brc.op = ir::IrOp::BR_COND;
+        brc.operands = {cond_m};
+        brc.target_block = mbody;
+        brc.false_block = thdr;
+        brc.source_line = ln;
         fn_->append(mhdr, std::move(brc));
     }
     fn_->blocks[mhdr].succs.push_back(mbody);
@@ -669,7 +735,8 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
 
     // --- mbody: VEC_BINOP(c+i*esz, a+i*esz, b+i*esz); i += W; BR mhdr ---
     current_block_ = mbody;
-    auto ptr_at = [&](ir::IrValueId base, ir::IrValueId i64off) -> ir::IrValueId {
+    auto ptr_at = [&](ir::IrValueId base,
+                      ir::IrValueId i64off) -> ir::IrValueId {
         const ir::IrValueId d = fn_->new_value(ir::IrType::PTR);
         /* La aritmetica de punteros HEREDA la naturaleza de la base: un array
          * de `malloc` vive en memoria host, pero uno local (`T[N]`, que baja a
@@ -679,19 +746,26 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
          * vectorizado. */
         fn_->values[d].is_host_ptr =
             (base < fn_->values.size()) && fn_->values[base].is_host_ptr;
-        ir::IrInstr in{}; in.op = ir::IrOp::ADD; in.type = ir::IrType::PTR;
-        in.dst = d; in.operands = {base, i64off}; in.source_line = ln;
+        ir::IrInstr in{};
+        in.op = ir::IrOp::ADD;
+        in.type = ir::IrType::PTR;
+        in.dst = d;
+        in.operands = {base, i64off};
+        in.source_line = ln;
         fn_->append(current_block_, std::move(in));
         return d;
     };
     {
         const ir::IrValueId i64 =
             cast_if_needed(phi_im, idx_ty, ir::IrType::I64, ln);
-        const ir::IrValueId off = bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
+        const ir::IrValueId off =
+            bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
         const ir::IrValueId c_at = ptr_at(v_c, off);
         const ir::IrValueId a_at = ptr_at(v_a, off);
         const ir::IrValueId b_at = ptr_at(v_b, off);
-        ir::IrInstr vb{}; vb.op = ir::IrOp::VEC_BINOP; vb.type = elem_ty;
+        ir::IrInstr vb{};
+        vb.op = ir::IrOp::VEC_BINOP;
+        vb.type = elem_ty;
         vb.dst = ir::IR_NO_VALUE;
         vb.operands = {c_at, a_at, b_at};
         vb.imm = ((uint64_t)subop << 8) | width;
@@ -699,8 +773,13 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
         fn_->append(current_block_, std::move(vb));
     }
     const ir::IrValueId i_mnext = bin(ir::IrOp::ADD, idx_ty, phi_im, v_W);
-    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = mhdr;
-      br.source_line = ln; fn_->append(current_block_, std::move(br)); }
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = mhdr;
+        br.source_line = ln;
+        fn_->append(current_block_, std::move(br));
+    }
     fn_->blocks[mbody].succs.push_back(mhdr);
     fn_->blocks[mhdr].preds.push_back(mbody);
     fn_->blocks[mhdr].instrs[0].phi_args.push_back({i_mnext, mbody});
@@ -709,16 +788,23 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
     current_block_ = thdr;
     const ir::IrValueId phi_it = fn_->new_value(idx_ty);
     {
-        ir::IrInstr phi{}; phi.op = ir::IrOp::PHI; phi.type = idx_ty;
-        phi.dst = phi_it; phi.source_line = ln;
+        ir::IrInstr phi{};
+        phi.op = ir::IrOp::PHI;
+        phi.type = idx_ty;
+        phi.dst = phi_it;
+        phi.source_line = ln;
         phi.phi_args.push_back({phi_im, mhdr});
         fn_->append(thdr, std::move(phi));
     }
     const ir::IrValueId cond_t =
         bin(ir::IrOp::CMP_LT, ir::IrType::BOOL, phi_it, v_N);
     {
-        ir::IrInstr brc{}; brc.op = ir::IrOp::BR_COND; brc.operands = {cond_t};
-        brc.target_block = tbody; brc.false_block = exit; brc.source_line = ln;
+        ir::IrInstr brc{};
+        brc.op = ir::IrOp::BR_COND;
+        brc.operands = {cond_t};
+        brc.target_block = tbody;
+        brc.false_block = exit;
+        brc.source_line = ln;
         fn_->append(thdr, std::move(brc));
     }
     fn_->blocks[thdr].succs.push_back(tbody);
@@ -737,8 +823,12 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
         auto load_el = [&](ir::IrValueId base) -> ir::IrValueId {
             const ir::IrValueId at = ptr_at(base, off);
             const ir::IrValueId v = fn_->new_value(elem_ty);
-            ir::IrInstr ld{}; ld.op = ir::IrOp::LOAD; ld.type = elem_ty;
-            ld.dst = v; ld.operands = {at}; ld.source_line = ln;
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = elem_ty;
+            ld.dst = v;
+            ld.operands = {at};
+            ld.source_line = ln;
             fn_->append(current_block_, std::move(ld));
             return v;
         };
@@ -756,15 +846,23 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
                                  : ir::IrOp::MUL;
         const ir::IrValueId v_res = bin(eop, elem_ty, v_ai, v_bi);
         const ir::IrValueId c_at = ptr_at(v_c, off);
-        ir::IrInstr st{}; st.op = ir::IrOp::STORE; st.type = elem_ty;
-        st.dst = ir::IR_NO_VALUE; st.operands = {v_res, c_at};
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = elem_ty;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_res, c_at};
         st.source_line = ln;
         fn_->append(current_block_, std::move(st));
     }
     const ir::IrValueId i_tnext =
         bin(ir::IrOp::ADD, idx_ty, phi_it, emit_const(idx_ty, 1, ln));
-    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = thdr;
-      br.source_line = ln; fn_->append(current_block_, std::move(br)); }
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = thdr;
+        br.source_line = ln;
+        fn_->append(current_block_, std::move(br));
+    }
     fn_->blocks[tbody].succs.push_back(thdr);
     fn_->blocks[thdr].preds.push_back(tbody);
     fn_->blocks[thdr].instrs[0].phi_args.push_back({i_tnext, tbody});
@@ -814,8 +912,10 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         }
     };
     // Array f32/f64 HOST indexado por idx.  El tipo de elemento se captura en
-    // @p c_kind (todas las hojas array deben ser del MISMO tipo que el destino).
-    PrimitiveKind c_kind = PrimitiveKind::F64; // se fija al clasificar el destino
+    // @p c_kind (todas las hojas array deben ser del MISMO tipo que el
+    // destino).
+    PrimitiveKind c_kind =
+        PrimitiveKind::F64; // se fija al clasificar el destino
     auto as_fp_arr = [&](ast::Expr *e, IdentExpr **base,
                          PrimitiveKind expected) -> bool {
         if (!e || e->kind != NodeKind::IndexExpr) return false;
@@ -829,9 +929,9 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
             return false;
         auto *b = static_cast<IdentExpr *>(ix->base.get());
         const Type &t = b->result_type;
-        const bool ptr_like = (t.kind == PrimitiveKind::PTR ||
-                               t.kind == PrimitiveKind::ARRAY) &&
-                              static_cast<bool>(t.pointee);
+        const bool ptr_like =
+            (t.kind == PrimitiveKind::PTR || t.kind == PrimitiveKind::ARRAY) &&
+            static_cast<bool>(t.pointee);
         if (!ptr_like || t.is_virtual) return false;
         const PrimitiveKind ek = t.pointee->kind;
         if (ek != PrimitiveKind::F32 && ek != PrimitiveKind::F64) return false;
@@ -851,7 +951,7 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
     auto is_scalar_leaf = [&](ast::Expr *e) -> bool {
         if (!e) return false;
         IdentExpr *tmp = nullptr;
-        if (as_arr_any(e, &tmp)) return false;             // array -> no escalar
+        if (as_arr_any(e, &tmp)) return false; // array -> no escalar
         if (mc_expr_refs_ident(e, idx_name)) return false; // depende de idx
         return true;
     };
@@ -876,10 +976,14 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         if (be->op != BinOp::Mul) return false;
         IdentExpr *b = nullptr;
         if (as_arr_c(be->lhs.get(), &b) && is_scalar_leaf(be->rhs.get())) {
-            *base = b; *scal = be->rhs.get(); return true;
+            *base = b;
+            *scal = be->rhs.get();
+            return true;
         }
         if (as_arr_c(be->rhs.get(), &b) && is_scalar_leaf(be->lhs.get())) {
-            *base = b; *scal = be->lhs.get(); return true;
+            *base = b;
+            *scal = be->lhs.get();
+            return true;
         }
         return false;
     };
@@ -888,13 +992,16 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
     // para poner la sub-cadena array a la izquierda.  Asi vectorizan tambien
     // `b[i] + a[i]*k` (right-leaning) y `k*a[i] + b[i]` (escalar primero), no
     // solo el left-leaning `a[i]*k + b[i]`.  NO re-asocia (eso si cambiaria el
-    // redondeo): solo swap de operandos de un mismo nodo.  Atomico (save/restore
-    // de S) para reintentar el swap sin dejar estado sucio.
+    // redondeo): solo swap de operandos de un mismo nodo.  Atomico
+    // (save/restore de S) para reintentar el swap sin dejar estado sucio.
     IdentExpr *start_base = nullptr;
     std::vector<Step> S;
     std::function<bool(ast::Expr *)> flatten = [&](ast::Expr *e) -> bool {
         IdentExpr *ab = nullptr;
-        if (as_arr_c(e, &ab)) { start_base = ab; return true; } // hoja inicial
+        if (as_arr_c(e, &ab)) {
+            start_base = ab;
+            return true;
+        } // hoja inicial
         if (!e || e->kind != NodeKind::BinaryExpr) return false;
         auto *be = static_cast<BinaryExpr *>(e);
         int so;
@@ -933,7 +1040,8 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
     if (!start_base) return false;
     int n_scalar = 0;
     for (auto &st : S)
-        if (st.is_scalar && ++n_scalar > 4) return false; // <=4 escalares (XMM10-13)
+        if (st.is_scalar && ++n_scalar > 4)
+            return false; // <=4 escalares (XMM10-13)
     // f32 con escalar YA soportado: VEC_BCAST/VEC_BINOP_S difunden el f32 via
     // SHUFPS(0) (SSE2 128b) o VBROADCASTSS (AVX/AVX512), y operan packed-single
     // (ADDPS/MULPS/...).  El escalar se castea a elem_ty (F32) mas abajo.
@@ -941,12 +1049,13 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
     const ir::IrType elem_ty = is_f32 ? ir::IrType::F32 : ir::IrType::F64;
     const uint64_t esz = is_f32 ? 4u : 8u;
 
-    // FMA fusion del patron `c[i] = a[i]*b[i] + d[i]` (2 pasos array Mul+Add, sin
-    // escalares) -> UN VFMADD231 (4 instr vs 8 de mul+add) + 1 redondeo (estilo
-    // -ffast-math de C).  GATE: el VFMADD requiere AVX.  En AOT solo si el target
-    // es fixed avx/avx512 (NO sse2, NO auto cuya variante sse2 romperia).  En el
-    // .velb (interp/jit) si: el interp emula fused (oraculo), el jit usa FMA en
-    // host AVX o cae a interp -> resultado determinista (siempre fused).
+    // FMA fusion del patron `c[i] = a[i]*b[i] + d[i]` (2 pasos array Mul+Add,
+    // sin escalares) -> UN VFMADD231 (4 instr vs 8 de mul+add) + 1 redondeo
+    // (estilo -ffast-math de C).  GATE: el VFMADD requiere AVX.  En AOT solo si
+    // el target es fixed avx/avx512 (NO sse2, NO auto cuya variante sse2
+    // romperia).  En el .velb (interp/jit) si: el interp emula fused (oraculo),
+    // el jit usa FMA en host AVX o cae a interp -> resultado determinista
+    // (siempre fused).
     bool can_fma;
     if (native_poo_)
         can_fma = (!aot_auto_vec_ && aot_vec_width_ >= 32);
@@ -1012,8 +1121,12 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
             raw = cast_if_needed(raw, fn_->values[raw].type, elem_ty, ln);
             if (S[k].subop == 1) { // Sub -> negar el escalar
                 const ir::IrValueId neg = fn_->new_value(elem_ty);
-                ir::IrInstr fn{}; fn.op = ir::IrOp::FNEG; fn.type = elem_ty;
-                fn.dst = neg; fn.operands = {raw}; fn.source_line = ln;
+                ir::IrInstr fn{};
+                fn.op = ir::IrOp::FNEG;
+                fn.type = elem_ty;
+                fn.dst = neg;
+                fn.operands = {raw};
+                fn.source_line = ln;
                 fn_->append(current_block_, std::move(fn));
                 raw = neg;
             }
@@ -1024,8 +1137,8 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
             if (raw == ir::IR_NO_VALUE) return false;
             // Escalar al tipo del elemento (F32 o F64) para que el broadcast y
             // la op packed sean del ancho de lane correcto.
-            step_scalar[k] = cast_if_needed(raw, fn_->values[raw].type,
-                                            elem_ty, ln);
+            step_scalar[k] =
+                cast_if_needed(raw, fn_->values[raw].type, elem_ty, ln);
             step_sidx[k] = next_sidx++;
         } else {
             const ir::IrValueId vb = lower_expr(S[k].arr);
@@ -1042,8 +1155,11 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
                    ir::IrValueId b) -> ir::IrValueId {
         const ir::IrValueId d = fn_->new_value(ty);
         ir::IrInstr in{};
-        in.op = op; in.type = ty; in.dst = d;
-        in.operands = {a, b}; in.source_line = ln;
+        in.op = op;
+        in.type = ty;
+        in.dst = d;
+        in.operands = {a, b};
+        in.source_line = ln;
         fn_->append(current_block_, std::move(in));
         return d;
     };
@@ -1062,14 +1178,22 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
     for (size_t k = 0; k < S.size(); ++k) {
         if (!S[k].is_scalar && !S[k].is_scaled_arr) continue;
         ir::IrInstr bc{};
-        bc.op = ir::IrOp::VEC_BCAST; bc.type = elem_ty;
-        bc.dst = ir::IR_NO_VALUE; bc.operands = {step_scalar[k]};
+        bc.op = ir::IrOp::VEC_BCAST;
+        bc.type = elem_ty;
+        bc.dst = ir::IR_NO_VALUE;
+        bc.operands = {step_scalar[k]};
         // imm: bits 0-7 = ancho ; bits 8-10 = indice de reg (XMM13-idx).
         bc.imm = width | ((uint64_t)(step_sidx[k] & 0x7) << 8);
-        bc.source_line = ln; fn_->append(entry, std::move(bc));
+        bc.source_line = ln;
+        fn_->append(entry, std::move(bc));
     }
-    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = mhdr;
-      br.source_line = ln; fn_->append(entry, std::move(br)); }
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = mhdr;
+        br.source_line = ln;
+        fn_->append(entry, std::move(br));
+    }
     fn_->blocks[entry].succs.push_back(mhdr);
     fn_->blocks[mhdr].preds.push_back(entry);
 
@@ -1077,8 +1201,11 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
     current_block_ = mhdr;
     const ir::IrValueId phi_im = fn_->new_value(idx_ty);
     {
-        ir::IrInstr phi{}; phi.op = ir::IrOp::PHI; phi.type = idx_ty;
-        phi.dst = phi_im; phi.source_line = ln;
+        ir::IrInstr phi{};
+        phi.op = ir::IrOp::PHI;
+        phi.type = idx_ty;
+        phi.dst = phi_im;
+        phi.source_line = ln;
         phi.phi_args.push_back({i_init, entry});
         fn_->append(mhdr, std::move(phi));
     }
@@ -1086,8 +1213,12 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
     const ir::IrValueId cond_m =
         bin(ir::IrOp::CMP_LE, ir::IrType::BOOL, v_ipW, v_N);
     {
-        ir::IrInstr brc{}; brc.op = ir::IrOp::BR_COND; brc.operands = {cond_m};
-        brc.target_block = mbody; brc.false_block = thdr; brc.source_line = ln;
+        ir::IrInstr brc{};
+        brc.op = ir::IrOp::BR_COND;
+        brc.operands = {cond_m};
+        brc.target_block = mbody;
+        brc.false_block = thdr;
+        brc.source_line = ln;
         fn_->append(mhdr, std::move(brc));
     }
     fn_->blocks[mhdr].succs.push_back(mbody);
@@ -1097,7 +1228,8 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
 
     // --- mbody: cadena de VEC ops con c acumulador; i += W; BR mhdr ---
     current_block_ = mbody;
-    auto ptr_at = [&](ir::IrValueId base, ir::IrValueId i64off) -> ir::IrValueId {
+    auto ptr_at = [&](ir::IrValueId base,
+                      ir::IrValueId i64off) -> ir::IrValueId {
         const ir::IrValueId d = fn_->new_value(ir::IrType::PTR);
         /* La aritmetica de punteros HEREDA la naturaleza de la base: un array
          * de `malloc` vive en memoria host, pero uno local (`T[N]`, que baja a
@@ -1107,74 +1239,98 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
          * vectorizado. */
         fn_->values[d].is_host_ptr =
             (base < fn_->values.size()) && fn_->values[base].is_host_ptr;
-        ir::IrInstr in{}; in.op = ir::IrOp::ADD; in.type = ir::IrType::PTR;
-        in.dst = d; in.operands = {base, i64off}; in.source_line = ln;
+        ir::IrInstr in{};
+        in.op = ir::IrOp::ADD;
+        in.type = ir::IrType::PTR;
+        in.dst = d;
+        in.operands = {base, i64off};
+        in.source_line = ln;
         fn_->append(current_block_, std::move(in));
         return d;
     };
     {
         const ir::IrValueId i64 =
             cast_if_needed(phi_im, idx_ty, ir::IrType::I64, ln);
-        const ir::IrValueId off = bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
+        const ir::IrValueId off =
+            bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
         const ir::IrValueId c_at = ptr_at(v_c, off);
         const ir::IrValueId start_at = ptr_at(v_start, off);
         if (is_fma) {
             // c = a*b +/- d  ->  VEC_FMA (4 ops: {c, d, a, b}, 1 redondeo).
             // bit 8 del imm = SUB (VFMSUB231: a*b - d).
             const ir::IrValueId b_at = ptr_at(step_base[0], off); // S[0]=Mul b
-            const ir::IrValueId d_at = ptr_at(step_base[1], off); // S[1]=Add/Sub
-            ir::IrInstr vf{}; vf.op = ir::IrOp::VEC_FMA; vf.type = elem_ty;
+            const ir::IrValueId d_at =
+                ptr_at(step_base[1], off); // S[1]=Add/Sub
+            ir::IrInstr vf{};
+            vf.op = ir::IrOp::VEC_FMA;
+            vf.type = elem_ty;
             vf.dst = ir::IR_NO_VALUE;
             vf.operands = {c_at, d_at, start_at, b_at};
             vf.imm = width | (fma_sub ? (1ull << 8) : 0ull);
             vf.source_line = ln;
             fn_->append(current_block_, std::move(vf));
         } else
-        for (size_t k = 0; k < S.size(); ++k) {
-            const ir::IrValueId src0 = (k == 0) ? start_at : c_at; // acumulador
-            // Cadena register-resident: el acumulador c del chunk vive en un XMM
-            // (fp0) ENTRE pasos, en vez de round-trip a memoria.  bit 20 =
-            // SRC0_IN_REG (c ya en reg; salta la carga); bit 21 = DST_IN_REG
-            // (deja c en reg; salta el store).  El PRIMER paso carga start de
-            // memoria; el ULTIMO escribe c a memoria.  El interp los IGNORA
-            // (memoria siempre = mismo valor); solo JIT/AOT los honran cuando
-            // n_pieces==1.  Reduce ~2x el trafico de memoria del element-wise.
-            const uint64_t rr = ((k > 0) ? (1ull << 20) : 0ull) |
-                                ((k + 1 < S.size()) ? (1ull << 21) : 0ull);
-            if (S[k].is_scaled_arr) {
-                // c += arr[i]*escalar (VEC_FMA_S lee/escribe c_at; escalar
-                // hoisted, ya negado si Sub).  Siempre k>=1 -> src0 == c_at.
-                const ir::IrValueId leaf_at = ptr_at(step_base[k], off);
-                ir::IrInstr vf{}; vf.op = ir::IrOp::VEC_FMA_S; vf.type = elem_ty;
-                vf.dst = ir::IR_NO_VALUE;
-                vf.operands = {c_at, leaf_at, step_scalar[k]};
-                vf.imm = width | (1ull << 16) |
-                         ((uint64_t)(step_sidx[k] & 0x7) << 17) | rr;
-                vf.source_line = ln;
-                fn_->append(current_block_, std::move(vf));
-            } else if (S[k].is_scalar) {
-                ir::IrInstr vb{}; vb.op = ir::IrOp::VEC_BINOP_S; vb.type = elem_ty;
-                vb.dst = ir::IR_NO_VALUE;
-                vb.operands = {c_at, src0, step_scalar[k]};
-                // imm: subop(8-15) | ancho(0-7) | hoisted(16) | sidx(17-19).
-                vb.imm = ((uint64_t)S[k].subop << 8) | width | (1ull << 16) |
-                         ((uint64_t)(step_sidx[k] & 0x7) << 17) | rr;
-                vb.source_line = ln;
-                fn_->append(current_block_, std::move(vb));
-            } else {
-                const ir::IrValueId leaf_at = ptr_at(step_base[k], off);
-                ir::IrInstr vb{}; vb.op = ir::IrOp::VEC_BINOP; vb.type = elem_ty;
-                vb.dst = ir::IR_NO_VALUE;
-                vb.operands = {c_at, src0, leaf_at};
-                vb.imm = ((uint64_t)S[k].subop << 8) | width | rr;
-                vb.source_line = ln;
-                fn_->append(current_block_, std::move(vb));
+            for (size_t k = 0; k < S.size(); ++k) {
+                const ir::IrValueId src0 =
+                    (k == 0) ? start_at : c_at; // acumulador
+                // Cadena register-resident: el acumulador c del chunk vive en
+                // un XMM (fp0) ENTRE pasos, en vez de round-trip a memoria. bit
+                // 20 = SRC0_IN_REG (c ya en reg; salta la carga); bit 21 =
+                // DST_IN_REG (deja c en reg; salta el store).  El PRIMER paso
+                // carga start de memoria; el ULTIMO escribe c a memoria.  El
+                // interp los IGNORA (memoria siempre = mismo valor); solo
+                // JIT/AOT los honran cuando n_pieces==1.  Reduce ~2x el trafico
+                // de memoria del element-wise.
+                const uint64_t rr = ((k > 0) ? (1ull << 20) : 0ull) |
+                                    ((k + 1 < S.size()) ? (1ull << 21) : 0ull);
+                if (S[k].is_scaled_arr) {
+                    // c += arr[i]*escalar (VEC_FMA_S lee/escribe c_at; escalar
+                    // hoisted, ya negado si Sub).  Siempre k>=1 -> src0 ==
+                    // c_at.
+                    const ir::IrValueId leaf_at = ptr_at(step_base[k], off);
+                    ir::IrInstr vf{};
+                    vf.op = ir::IrOp::VEC_FMA_S;
+                    vf.type = elem_ty;
+                    vf.dst = ir::IR_NO_VALUE;
+                    vf.operands = {c_at, leaf_at, step_scalar[k]};
+                    vf.imm = width | (1ull << 16) |
+                             ((uint64_t)(step_sidx[k] & 0x7) << 17) | rr;
+                    vf.source_line = ln;
+                    fn_->append(current_block_, std::move(vf));
+                } else if (S[k].is_scalar) {
+                    ir::IrInstr vb{};
+                    vb.op = ir::IrOp::VEC_BINOP_S;
+                    vb.type = elem_ty;
+                    vb.dst = ir::IR_NO_VALUE;
+                    vb.operands = {c_at, src0, step_scalar[k]};
+                    // imm: subop(8-15) | ancho(0-7) | hoisted(16) |
+                    // sidx(17-19).
+                    vb.imm = ((uint64_t)S[k].subop << 8) | width |
+                             (1ull << 16) |
+                             ((uint64_t)(step_sidx[k] & 0x7) << 17) | rr;
+                    vb.source_line = ln;
+                    fn_->append(current_block_, std::move(vb));
+                } else {
+                    const ir::IrValueId leaf_at = ptr_at(step_base[k], off);
+                    ir::IrInstr vb{};
+                    vb.op = ir::IrOp::VEC_BINOP;
+                    vb.type = elem_ty;
+                    vb.dst = ir::IR_NO_VALUE;
+                    vb.operands = {c_at, src0, leaf_at};
+                    vb.imm = ((uint64_t)S[k].subop << 8) | width | rr;
+                    vb.source_line = ln;
+                    fn_->append(current_block_, std::move(vb));
+                }
             }
-        }
     }
     const ir::IrValueId i_mnext = bin(ir::IrOp::ADD, idx_ty, phi_im, v_W);
-    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = mhdr;
-      br.source_line = ln; fn_->append(current_block_, std::move(br)); }
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = mhdr;
+        br.source_line = ln;
+        fn_->append(current_block_, std::move(br));
+    }
     fn_->blocks[mbody].succs.push_back(mhdr);
     fn_->blocks[mhdr].preds.push_back(mbody);
     fn_->blocks[mhdr].instrs[0].phi_args.push_back({i_mnext, mbody});
@@ -1183,16 +1339,23 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
     current_block_ = thdr;
     const ir::IrValueId phi_it = fn_->new_value(idx_ty);
     {
-        ir::IrInstr phi{}; phi.op = ir::IrOp::PHI; phi.type = idx_ty;
-        phi.dst = phi_it; phi.source_line = ln;
+        ir::IrInstr phi{};
+        phi.op = ir::IrOp::PHI;
+        phi.type = idx_ty;
+        phi.dst = phi_it;
+        phi.source_line = ln;
         phi.phi_args.push_back({phi_im, mhdr});
         fn_->append(thdr, std::move(phi));
     }
     const ir::IrValueId cond_t =
         bin(ir::IrOp::CMP_LT, ir::IrType::BOOL, phi_it, v_N);
     {
-        ir::IrInstr brc{}; brc.op = ir::IrOp::BR_COND; brc.operands = {cond_t};
-        brc.target_block = tbody; brc.false_block = exit; brc.source_line = ln;
+        ir::IrInstr brc{};
+        brc.op = ir::IrOp::BR_COND;
+        brc.operands = {cond_t};
+        brc.target_block = tbody;
+        brc.false_block = exit;
+        brc.source_line = ln;
         fn_->append(thdr, std::move(brc));
     }
     fn_->blocks[thdr].succs.push_back(tbody);
@@ -1211,8 +1374,12 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         auto load_el = [&](ir::IrValueId base) -> ir::IrValueId {
             const ir::IrValueId at = ptr_at(base, off);
             const ir::IrValueId v = fn_->new_value(elem_ty);
-            ir::IrInstr ld{}; ld.op = ir::IrOp::LOAD; ld.type = elem_ty;
-            ld.dst = v; ld.operands = {at}; ld.source_line = ln;
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = elem_ty;
+            ld.dst = v;
+            ld.operands = {at};
+            ld.source_line = ln;
             fn_->append(current_block_, std::move(ld));
             return v;
         };
@@ -1237,14 +1404,23 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
             }
         }
         const ir::IrValueId c_at = ptr_at(v_c, off);
-        ir::IrInstr st{}; st.op = ir::IrOp::STORE; st.type = elem_ty;
-        st.dst = ir::IR_NO_VALUE; st.operands = {acc, c_at}; st.source_line = ln;
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = elem_ty;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {acc, c_at};
+        st.source_line = ln;
         fn_->append(current_block_, std::move(st));
     }
     const ir::IrValueId i_tnext =
         bin(ir::IrOp::ADD, idx_ty, phi_it, emit_const(idx_ty, 1, ln));
-    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = thdr;
-      br.source_line = ln; fn_->append(current_block_, std::move(br)); }
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = thdr;
+        br.source_line = ln;
+        fn_->append(current_block_, std::move(br));
+    }
     fn_->blocks[tbody].succs.push_back(thdr);
     fn_->blocks[thdr].preds.push_back(tbody);
     fn_->blocks[thdr].instrs[0].phi_args.push_back({i_tnext, tbody});
@@ -1293,8 +1469,7 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
             return refs_idx(ix->base.get()) || refs_idx(ix->index.get());
         }
         case NodeKind::FloatLitExpr:
-        case NodeKind::IntLitExpr:
-            return false;
+        case NodeKind::IntLitExpr: return false;
         default:
             // Conservador: cualquier nodo no reconocido -> no vectorizar.
             return true;
@@ -1341,7 +1516,7 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
         }
         if (!asg->value || asg->value->kind == NodeKind::IndexExpr)
             return false; // si es indexado -> es elementwise, no scalar
-        a_ix = c_ix;            // a = c (lhs implicito)
+        a_ix = c_ix;      // a = c (lhs implicito)
         scalar_expr = asg->value.get();
     }
     if (!scalar_expr || refs_idx(scalar_expr)) return false;
@@ -1351,15 +1526,51 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
     auto sb_elem_info = [](PrimitiveKind k, ir::IrType *ty, uint64_t *esz,
                            bool *fp) -> bool {
         switch (k) {
-        case PrimitiveKind::F64: *ty = ir::IrType::F64; *esz = 8; *fp = true;  return true;
-        case PrimitiveKind::I64: *ty = ir::IrType::I64; *esz = 8; *fp = false; return true;
-        case PrimitiveKind::U64: *ty = ir::IrType::U64; *esz = 8; *fp = false; return true;
-        case PrimitiveKind::I32: *ty = ir::IrType::I32; *esz = 4; *fp = false; return true;
-        case PrimitiveKind::U32: *ty = ir::IrType::U32; *esz = 4; *fp = false; return true;
-        case PrimitiveKind::I16: *ty = ir::IrType::I16; *esz = 2; *fp = false; return true;
-        case PrimitiveKind::U16: *ty = ir::IrType::U16; *esz = 2; *fp = false; return true;
-        case PrimitiveKind::I8:  *ty = ir::IrType::I8;  *esz = 1; *fp = false; return true;
-        case PrimitiveKind::U8:  *ty = ir::IrType::U8;  *esz = 1; *fp = false; return true;
+        case PrimitiveKind::F64:
+            *ty = ir::IrType::F64;
+            *esz = 8;
+            *fp = true;
+            return true;
+        case PrimitiveKind::I64:
+            *ty = ir::IrType::I64;
+            *esz = 8;
+            *fp = false;
+            return true;
+        case PrimitiveKind::U64:
+            *ty = ir::IrType::U64;
+            *esz = 8;
+            *fp = false;
+            return true;
+        case PrimitiveKind::I32:
+            *ty = ir::IrType::I32;
+            *esz = 4;
+            *fp = false;
+            return true;
+        case PrimitiveKind::U32:
+            *ty = ir::IrType::U32;
+            *esz = 4;
+            *fp = false;
+            return true;
+        case PrimitiveKind::I16:
+            *ty = ir::IrType::I16;
+            *esz = 2;
+            *fp = false;
+            return true;
+        case PrimitiveKind::U16:
+            *ty = ir::IrType::U16;
+            *esz = 2;
+            *fp = false;
+            return true;
+        case PrimitiveKind::I8:
+            *ty = ir::IrType::I8;
+            *esz = 1;
+            *fp = false;
+            return true;
+        case PrimitiveKind::U8:
+            *ty = ir::IrType::U8;
+            *esz = 1;
+            *fp = false;
+            return true;
         default: return false;
         }
     };
@@ -1376,11 +1587,13 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
             return false;
         auto *base = static_cast<IdentExpr *>(ix->base.get());
         const Type &t = base->result_type;
-        const bool ptr_like = (t.kind == PrimitiveKind::PTR ||
-                               t.kind == PrimitiveKind::ARRAY) &&
-                              static_cast<bool>(t.pointee);
+        const bool ptr_like =
+            (t.kind == PrimitiveKind::PTR || t.kind == PrimitiveKind::ARRAY) &&
+            static_cast<bool>(t.pointee);
         if (!ptr_like || t.is_virtual) return false;
-        ir::IrType ety; uint64_t es2; bool fp2;
+        ir::IrType ety;
+        uint64_t es2;
+        bool fp2;
         if (!sb_elem_info(t.pointee->kind, &ety, &es2, &fp2)) return false;
         *out_base = base;
         *out_kind = t.pointee->kind;
@@ -1391,9 +1604,12 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
     if (!check_idx(c_ix, &c_base, &ck)) return false;
     if (!check_idx(a_ix, &a_base, &ak)) return false;
     if (ck != ak) return false; // mismo tipo de elemento
-    ir::IrType elem_ty; uint64_t esz; bool elem_fp;
+    ir::IrType elem_ty;
+    uint64_t esz;
+    bool elem_fp;
     sb_elem_info(ck, &elem_ty, &esz, &elem_fp);
-    // Enteros: div siempre escalar; mul solo donde hay packed (i16/i32, esz 2/4).
+    // Enteros: div siempre escalar; mul solo donde hay packed (i16/i32, esz
+    // 2/4).
     if (!elem_fp) {
         if (subop == 3) return false;
         if (subop == 2 && esz != 2 && esz != 4) return false;
@@ -1405,10 +1621,13 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
 
     // ======== Emitir el loop vectorizado + cola escalar. ========
     const uint32_t ln = s->loc.line;
-    // AOT: chunk del TARGET (--float-isa); fuera de AOT, host (portabilidad .velb).
+    // AOT: chunk del TARGET (--float-isa); fuera de AOT, host (portabilidad
+    // .velb).
     const uint64_t width =
-        native_poo_ ? (aot_auto_vec_ ? 64u // AUTO: element-wise/unary/scalar a 64 -> cada variante decompone (4x128/2x256/1x512)
-                                     : static_cast<uint64_t>(aot_vec_width_))
+        native_poo_ ? (aot_auto_vec_
+                           ? 64u // AUTO: element-wise/unary/scalar a 64 -> cada
+                                 // variante decompone (4x128/2x256/1x512)
+                           : static_cast<uint64_t>(aot_vec_width_))
                     : jit::vec_isa_width(jit::vec_chunk_isa());
     const uint64_t W = width / esz;
 
@@ -1428,8 +1647,11 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
                    ir::IrValueId b) -> ir::IrValueId {
         const ir::IrValueId d = fn_->new_value(ty);
         ir::IrInstr in{};
-        in.op = op; in.type = ty; in.dst = d;
-        in.operands = {a, b}; in.source_line = ln;
+        in.op = op;
+        in.type = ty;
+        in.dst = d;
+        in.operands = {a, b};
+        in.source_line = ln;
         fn_->append(current_block_, std::move(in));
         return d;
     };
@@ -1437,8 +1659,9 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
     // El escalar SSA que recibe VEC_BINOP_S:
     //  - f64: el valor coercido a F64 (el JIT lo difunde con MOVSD+broadcast).
     //  - enteros: los esz bytes bajos REPLICADOS a lo ancho de 64 bits, de modo
-    //    que un broadcast de lane de 64 bits (UNPCKLPD/VBROADCASTSD) llene todos
-    //    los sub-lanes con el escalar.  Hecho con IR (portable interp+jit).
+    //    que un broadcast de lane de 64 bits (UNPCKLPD/VBROADCASTSD) llene
+    //    todos los sub-lanes con el escalar.  Hecho con IR (portable
+    //    interp+jit).
     ir::IrValueId v_s;
     if (elem_fp) {
         v_s = cast_if_needed(v_s_raw, fn_->values[v_s_raw].type,
@@ -1479,12 +1702,22 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
     // HOIST del broadcast: difundir el escalar a XMM13 UNA vez en el preheader
     // (el JIT lo reusa en el cuerpo sin re-broadcast; no-op en interp).
     {
-        ir::IrInstr bc{}; bc.op = ir::IrOp::VEC_BCAST; bc.type = elem_ty;
-        bc.dst = ir::IR_NO_VALUE; bc.operands = {v_s}; bc.imm = width;
-        bc.source_line = ln; fn_->append(entry, std::move(bc));
+        ir::IrInstr bc{};
+        bc.op = ir::IrOp::VEC_BCAST;
+        bc.type = elem_ty;
+        bc.dst = ir::IR_NO_VALUE;
+        bc.operands = {v_s};
+        bc.imm = width;
+        bc.source_line = ln;
+        fn_->append(entry, std::move(bc));
     }
-    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = mhdr;
-      br.source_line = ln; fn_->append(entry, std::move(br)); }
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = mhdr;
+        br.source_line = ln;
+        fn_->append(entry, std::move(br));
+    }
     fn_->blocks[entry].succs.push_back(mhdr);
     fn_->blocks[mhdr].preds.push_back(entry);
 
@@ -1492,8 +1725,11 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
     current_block_ = mhdr;
     const ir::IrValueId phi_im = fn_->new_value(idx_ty);
     {
-        ir::IrInstr phi{}; phi.op = ir::IrOp::PHI; phi.type = idx_ty;
-        phi.dst = phi_im; phi.source_line = ln;
+        ir::IrInstr phi{};
+        phi.op = ir::IrOp::PHI;
+        phi.type = idx_ty;
+        phi.dst = phi_im;
+        phi.source_line = ln;
         phi.phi_args.push_back({i_init, entry});
         fn_->append(mhdr, std::move(phi));
     }
@@ -1501,8 +1737,12 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
     const ir::IrValueId cond_m =
         bin(ir::IrOp::CMP_LE, ir::IrType::BOOL, v_ipW, v_N);
     {
-        ir::IrInstr brc{}; brc.op = ir::IrOp::BR_COND; brc.operands = {cond_m};
-        brc.target_block = mbody; brc.false_block = thdr; brc.source_line = ln;
+        ir::IrInstr brc{};
+        brc.op = ir::IrOp::BR_COND;
+        brc.operands = {cond_m};
+        brc.target_block = mbody;
+        brc.false_block = thdr;
+        brc.source_line = ln;
         fn_->append(mhdr, std::move(brc));
     }
     fn_->blocks[mhdr].succs.push_back(mbody);
@@ -1512,7 +1752,8 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
 
     // --- mbody: VEC_BINOP_S(c+off, a+off, scalar); i += W ---
     current_block_ = mbody;
-    auto ptr_at = [&](ir::IrValueId base, ir::IrValueId i64off) -> ir::IrValueId {
+    auto ptr_at = [&](ir::IrValueId base,
+                      ir::IrValueId i64off) -> ir::IrValueId {
         const ir::IrValueId d = fn_->new_value(ir::IrType::PTR);
         /* La aritmetica de punteros HEREDA la naturaleza de la base: un array
          * de `malloc` vive en memoria host, pero uno local (`T[N]`, que baja a
@@ -1522,18 +1763,25 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
          * vectorizado. */
         fn_->values[d].is_host_ptr =
             (base < fn_->values.size()) && fn_->values[base].is_host_ptr;
-        ir::IrInstr in{}; in.op = ir::IrOp::ADD; in.type = ir::IrType::PTR;
-        in.dst = d; in.operands = {base, i64off}; in.source_line = ln;
+        ir::IrInstr in{};
+        in.op = ir::IrOp::ADD;
+        in.type = ir::IrType::PTR;
+        in.dst = d;
+        in.operands = {base, i64off};
+        in.source_line = ln;
         fn_->append(current_block_, std::move(in));
         return d;
     };
     {
         const ir::IrValueId i64 =
             cast_if_needed(phi_im, idx_ty, ir::IrType::I64, ln);
-        const ir::IrValueId off = bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
+        const ir::IrValueId off =
+            bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
         const ir::IrValueId c_at = ptr_at(v_c, off);
         const ir::IrValueId a_at = ptr_at(v_a, off);
-        ir::IrInstr vb{}; vb.op = ir::IrOp::VEC_BINOP_S; vb.type = elem_ty;
+        ir::IrInstr vb{};
+        vb.op = ir::IrOp::VEC_BINOP_S;
+        vb.type = elem_ty;
         vb.dst = ir::IR_NO_VALUE;
         vb.operands = {c_at, a_at, v_s};
         // bit16 = HOISTED: el broadcast esta pre-hecho en XMM13 (VEC_BCAST del
@@ -1543,8 +1791,13 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
         fn_->append(current_block_, std::move(vb));
     }
     const ir::IrValueId i_mnext = bin(ir::IrOp::ADD, idx_ty, phi_im, v_W);
-    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = mhdr;
-      br.source_line = ln; fn_->append(current_block_, std::move(br)); }
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = mhdr;
+        br.source_line = ln;
+        fn_->append(current_block_, std::move(br));
+    }
     fn_->blocks[mbody].succs.push_back(mhdr);
     fn_->blocks[mhdr].preds.push_back(mbody);
     fn_->blocks[mhdr].instrs[0].phi_args.push_back({i_mnext, mbody});
@@ -1553,16 +1806,23 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
     current_block_ = thdr;
     const ir::IrValueId phi_it = fn_->new_value(idx_ty);
     {
-        ir::IrInstr phi{}; phi.op = ir::IrOp::PHI; phi.type = idx_ty;
-        phi.dst = phi_it; phi.source_line = ln;
+        ir::IrInstr phi{};
+        phi.op = ir::IrOp::PHI;
+        phi.type = idx_ty;
+        phi.dst = phi_it;
+        phi.source_line = ln;
         phi.phi_args.push_back({phi_im, mhdr});
         fn_->append(thdr, std::move(phi));
     }
     const ir::IrValueId cond_t =
         bin(ir::IrOp::CMP_LT, ir::IrType::BOOL, phi_it, v_N);
     {
-        ir::IrInstr brc{}; brc.op = ir::IrOp::BR_COND; brc.operands = {cond_t};
-        brc.target_block = tbody; brc.false_block = exit; brc.source_line = ln;
+        ir::IrInstr brc{};
+        brc.op = ir::IrOp::BR_COND;
+        brc.operands = {cond_t};
+        brc.target_block = tbody;
+        brc.false_block = exit;
+        brc.source_line = ln;
         fn_->append(thdr, std::move(brc));
     }
     fn_->blocks[thdr].succs.push_back(tbody);
@@ -1580,33 +1840,46 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
                                       emit_const(ir::IrType::I64, esz, ln));
         const ir::IrValueId a_at = ptr_at(v_a, off);
         const ir::IrValueId v_ai = fn_->new_value(elem_ty);
-        { ir::IrInstr ld{}; ld.op = ir::IrOp::LOAD; ld.type = elem_ty;
-          ld.dst = v_ai; ld.operands = {a_at}; ld.source_line = ln;
-          fn_->append(current_block_, std::move(ld)); }
+        {
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = elem_ty;
+            ld.dst = v_ai;
+            ld.operands = {a_at};
+            ld.source_line = ln;
+            fn_->append(current_block_, std::move(ld));
+        }
         // escalar de la cola con el tipo del elemento (no el i64 replicado).
         const ir::IrValueId v_s_tail =
             elem_fp ? v_s
                     : cast_if_needed(v_s_raw, fn_->values[v_s_raw].type,
                                      elem_ty, ln);
-        const ir::IrOp eop =
-            elem_fp ? ((subop == 0)   ? ir::IrOp::FADD
-                       : (subop == 1) ? ir::IrOp::FSUB
-                       : (subop == 2) ? ir::IrOp::FMUL
-                                      : ir::IrOp::FDIV)
-                    : ((subop == 0)   ? ir::IrOp::ADD
-                       : (subop == 1) ? ir::IrOp::SUB
-                                      : ir::IrOp::MUL);
+        const ir::IrOp eop = elem_fp ? ((subop == 0)   ? ir::IrOp::FADD
+                                        : (subop == 1) ? ir::IrOp::FSUB
+                                        : (subop == 2) ? ir::IrOp::FMUL
+                                                       : ir::IrOp::FDIV)
+                                     : ((subop == 0)   ? ir::IrOp::ADD
+                                        : (subop == 1) ? ir::IrOp::SUB
+                                                       : ir::IrOp::MUL);
         const ir::IrValueId v_res = bin(eop, elem_ty, v_ai, v_s_tail);
         const ir::IrValueId c_at = ptr_at(v_c, off);
-        ir::IrInstr st{}; st.op = ir::IrOp::STORE; st.type = elem_ty;
-        st.dst = ir::IR_NO_VALUE; st.operands = {v_res, c_at};
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = elem_ty;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_res, c_at};
         st.source_line = ln;
         fn_->append(current_block_, std::move(st));
     }
     const ir::IrValueId i_tnext =
         bin(ir::IrOp::ADD, idx_ty, phi_it, emit_const(idx_ty, 1, ln));
-    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = thdr;
-      br.source_line = ln; fn_->append(current_block_, std::move(br)); }
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = thdr;
+        br.source_line = ln;
+        fn_->append(current_block_, std::move(br));
+    }
     fn_->blocks[tbody].succs.push_back(thdr);
     fn_->blocks[thdr].preds.push_back(tbody);
     fn_->blocks[thdr].instrs[0].phi_args.push_back({i_tnext, tbody});
@@ -1636,7 +1909,7 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
     // value = OP a[idx].  OP in: -a[idx] (UnaryExpr Neg=fneg), sqrt(a[idx])
     // (CallExpr fsqrt), fabs(a[idx]) (CallExpr fabs).  La COPIA pura
     // (b[i]=a[i]) la cubre el memcpy-idiom (loop entero -> 1 rep movsb).
-    int subop = -1;            // 1=fneg, 2=fabs, 3=fsqrt
+    int subop = -1; // 1=fneg, 2=fabs, 3=fsqrt
     ast::IndexExpr *a_ix = nullptr;
     if (asg->value && asg->value->kind == NodeKind::UnaryExpr) {
         auto *u = static_cast<UnaryExpr *>(asg->value.get());
@@ -1648,13 +1921,17 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
         a_ix = static_cast<IndexExpr *>(u->operand.get());
     } else if (asg->value && asg->value->kind == NodeKind::CallExpr) {
         auto *cl = static_cast<CallExpr *>(asg->value.get());
-        if (!cl->callee || cl->callee->kind != NodeKind::IdentExpr) return false;
+        if (!cl->callee || cl->callee->kind != NodeKind::IdentExpr)
+            return false;
         if (!cl->type_args.empty() || cl->args.size() != 1) return false;
         const std::string &fname =
             static_cast<IdentExpr *>(cl->callee.get())->name;
-        if (fname == "fabs") subop = 2;
-        else if (fname == "sqrt") subop = 3;
-        else return false;
+        if (fname == "fabs")
+            subop = 2;
+        else if (fname == "sqrt")
+            subop = 3;
+        else
+            return false;
         if (!cl->args[0] || cl->args[0]->kind != NodeKind::IndexExpr)
             return false;
         a_ix = static_cast<IndexExpr *>(cl->args[0].get());
@@ -1664,8 +1941,7 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
 
     // Helper: valida que @p ix es base_ident[idx] HOST f64, devuelve la base.
     // Solo f64: fneg/fabs/fsqrt son float (SQRTPD/XORPD/ANDPD operan f64).
-    auto check_idx_f64_host = [&](IndexExpr *ix,
-                                  IdentExpr **out_base) -> bool {
+    auto check_idx_f64_host = [&](IndexExpr *ix, IdentExpr **out_base) -> bool {
         if (!ix->overload_method.empty() || !ix->index_set_method.empty() ||
             ix->is_range)
             return false;
@@ -1675,10 +1951,10 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
             return false;
         auto *base = static_cast<IdentExpr *>(ix->base.get());
         const Type &t = base->result_type;
-        const bool ptr_like = (t.kind == PrimitiveKind::PTR ||
-                               t.kind == PrimitiveKind::ARRAY) &&
-                              static_cast<bool>(t.pointee);
-        if (!ptr_like || t.is_virtual) return false;        // solo HOST
+        const bool ptr_like =
+            (t.kind == PrimitiveKind::PTR || t.kind == PrimitiveKind::ARRAY) &&
+            static_cast<bool>(t.pointee);
+        if (!ptr_like || t.is_virtual) return false;             // solo HOST
         if (t.pointee->kind != PrimitiveKind::F64) return false; // solo f64
         *out_base = base;
         return true;
@@ -1694,11 +1970,14 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
     // ======== Emitir el loop vectorizado + cola escalar. ========
     // Chunk por ISA (SSE2/AVX2/AVX512); el JIT descompone al ancho del host.
     const uint32_t ln = s->loc.line;
-    const uint64_t esz = 8;     // f64
-    // AOT: chunk del TARGET (--float-isa); fuera de AOT, host (portabilidad .velb).
+    const uint64_t esz = 8; // f64
+    // AOT: chunk del TARGET (--float-isa); fuera de AOT, host (portabilidad
+    // .velb).
     const uint64_t width =
-        native_poo_ ? (aot_auto_vec_ ? 64u // AUTO: element-wise/unary/scalar a 64 -> cada variante decompone (4x128/2x256/1x512)
-                                     : static_cast<uint64_t>(aot_vec_width_))
+        native_poo_ ? (aot_auto_vec_
+                           ? 64u // AUTO: element-wise/unary/scalar a 64 -> cada
+                                 // variante decompone (4x128/2x256/1x512)
+                           : static_cast<uint64_t>(aot_vec_width_))
                     : jit::vec_isa_width(jit::vec_chunk_isa());
     const uint64_t W = width / esz;
 
@@ -1716,8 +1995,11 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
                    ir::IrValueId b) -> ir::IrValueId {
         const ir::IrValueId d = fn_->new_value(ty);
         ir::IrInstr in{};
-        in.op = op; in.type = ty; in.dst = d;
-        in.operands = {a, b}; in.source_line = ln;
+        in.op = op;
+        in.type = ty;
+        in.dst = d;
+        in.operands = {a, b};
+        in.source_line = ln;
         fn_->append(current_block_, std::move(in));
         return d;
     };
@@ -1731,8 +2013,12 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
          * vectorizado. */
         fn_->values[d].is_host_ptr =
             (base < fn_->values.size()) && fn_->values[base].is_host_ptr;
-        ir::IrInstr in{}; in.op = ir::IrOp::ADD; in.type = ir::IrType::PTR;
-        in.dst = d; in.operands = {base, off}; in.source_line = ln;
+        ir::IrInstr in{};
+        in.op = ir::IrOp::ADD;
+        in.type = ir::IrType::PTR;
+        in.dst = d;
+        in.operands = {base, off};
+        in.source_line = ln;
         fn_->append(current_block_, std::move(in));
         return d;
     };
@@ -1748,8 +2034,13 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
     current_block_ = entry;
     const ir::IrValueId v_W = emit_const(idx_ty, (uint64_t)W, ln);
     const ir::IrValueId v_esz = emit_const(ir::IrType::I64, esz, ln);
-    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = mhdr;
-      br.source_line = ln; fn_->append(entry, std::move(br)); }
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = mhdr;
+        br.source_line = ln;
+        fn_->append(entry, std::move(br));
+    }
     fn_->blocks[entry].succs.push_back(mhdr);
     fn_->blocks[mhdr].preds.push_back(entry);
 
@@ -1757,8 +2048,11 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
     current_block_ = mhdr;
     const ir::IrValueId phi_im = fn_->new_value(idx_ty);
     {
-        ir::IrInstr phi{}; phi.op = ir::IrOp::PHI; phi.type = idx_ty;
-        phi.dst = phi_im; phi.source_line = ln;
+        ir::IrInstr phi{};
+        phi.op = ir::IrOp::PHI;
+        phi.type = idx_ty;
+        phi.dst = phi_im;
+        phi.source_line = ln;
         phi.phi_args.push_back({i_init, entry});
         fn_->append(mhdr, std::move(phi));
     }
@@ -1766,8 +2060,12 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
     const ir::IrValueId cond_m =
         bin(ir::IrOp::CMP_LE, ir::IrType::BOOL, v_ipW, v_N);
     {
-        ir::IrInstr brc{}; brc.op = ir::IrOp::BR_COND; brc.operands = {cond_m};
-        brc.target_block = mbody; brc.false_block = thdr; brc.source_line = ln;
+        ir::IrInstr brc{};
+        brc.op = ir::IrOp::BR_COND;
+        brc.operands = {cond_m};
+        brc.target_block = mbody;
+        brc.false_block = thdr;
+        brc.source_line = ln;
         fn_->append(mhdr, std::move(brc));
     }
     fn_->blocks[mhdr].succs.push_back(mbody);
@@ -1780,10 +2078,13 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
     {
         const ir::IrValueId i64 =
             cast_if_needed(phi_im, idx_ty, ir::IrType::I64, ln);
-        const ir::IrValueId off = bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
+        const ir::IrValueId off =
+            bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
         const ir::IrValueId b_at = ptr_at(v_b, off);
         const ir::IrValueId a_at = ptr_at(v_a, off);
-        ir::IrInstr vu{}; vu.op = ir::IrOp::VEC_UNOP; vu.type = ir::IrType::F64;
+        ir::IrInstr vu{};
+        vu.op = ir::IrOp::VEC_UNOP;
+        vu.type = ir::IrType::F64;
         vu.dst = ir::IR_NO_VALUE;
         vu.operands = {b_at, a_at};
         vu.imm = ((uint64_t)subop << 8) | width;
@@ -1791,8 +2092,13 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
         fn_->append(current_block_, std::move(vu));
     }
     const ir::IrValueId i_mnext = bin(ir::IrOp::ADD, idx_ty, phi_im, v_W);
-    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = mhdr;
-      br.source_line = ln; fn_->append(current_block_, std::move(br)); }
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = mhdr;
+        br.source_line = ln;
+        fn_->append(current_block_, std::move(br));
+    }
     fn_->blocks[mbody].succs.push_back(mhdr);
     fn_->blocks[mhdr].preds.push_back(mbody);
     fn_->blocks[mhdr].instrs[0].phi_args.push_back({i_mnext, mbody});
@@ -1801,16 +2107,23 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
     current_block_ = thdr;
     const ir::IrValueId phi_it = fn_->new_value(idx_ty);
     {
-        ir::IrInstr phi{}; phi.op = ir::IrOp::PHI; phi.type = idx_ty;
-        phi.dst = phi_it; phi.source_line = ln;
+        ir::IrInstr phi{};
+        phi.op = ir::IrOp::PHI;
+        phi.type = idx_ty;
+        phi.dst = phi_it;
+        phi.source_line = ln;
         phi.phi_args.push_back({phi_im, mhdr});
         fn_->append(thdr, std::move(phi));
     }
     const ir::IrValueId cond_t =
         bin(ir::IrOp::CMP_LT, ir::IrType::BOOL, phi_it, v_N);
     {
-        ir::IrInstr brc{}; brc.op = ir::IrOp::BR_COND; brc.operands = {cond_t};
-        brc.target_block = tbody; brc.false_block = exit; brc.source_line = ln;
+        ir::IrInstr brc{};
+        brc.op = ir::IrOp::BR_COND;
+        brc.operands = {cond_t};
+        brc.target_block = tbody;
+        brc.false_block = exit;
+        brc.source_line = ln;
         fn_->append(thdr, std::move(brc));
     }
     fn_->blocks[thdr].succs.push_back(tbody);
@@ -1828,26 +2141,46 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
                                       emit_const(ir::IrType::I64, esz, ln));
         const ir::IrValueId a_at = ptr_at(v_a, off);
         const ir::IrValueId v_ai = fn_->new_value(ir::IrType::F64);
-        { ir::IrInstr ld{}; ld.op = ir::IrOp::LOAD; ld.type = ir::IrType::F64;
-          ld.dst = v_ai; ld.operands = {a_at}; ld.source_line = ln;
-          fn_->append(current_block_, std::move(ld)); }
+        {
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = ir::IrType::F64;
+            ld.dst = v_ai;
+            ld.operands = {a_at};
+            ld.source_line = ln;
+            fn_->append(current_block_, std::move(ld));
+        }
         const ir::IrOp uop = (subop == 1)   ? ir::IrOp::FNEG
                              : (subop == 2) ? ir::IrOp::FABS
                                             : ir::IrOp::FSQRT;
         const ir::IrValueId v_res = fn_->new_value(ir::IrType::F64);
-        { ir::IrInstr un{}; un.op = uop; un.type = ir::IrType::F64;
-          un.dst = v_res; un.operands = {v_ai}; un.source_line = ln;
-          fn_->append(current_block_, std::move(un)); }
+        {
+            ir::IrInstr un{};
+            un.op = uop;
+            un.type = ir::IrType::F64;
+            un.dst = v_res;
+            un.operands = {v_ai};
+            un.source_line = ln;
+            fn_->append(current_block_, std::move(un));
+        }
         const ir::IrValueId b_at = ptr_at(v_b, off);
-        ir::IrInstr st{}; st.op = ir::IrOp::STORE; st.type = ir::IrType::F64;
-        st.dst = ir::IR_NO_VALUE; st.operands = {v_res, b_at};
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::F64;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_res, b_at};
         st.source_line = ln;
         fn_->append(current_block_, std::move(st));
     }
     const ir::IrValueId i_tnext =
         bin(ir::IrOp::ADD, idx_ty, phi_it, emit_const(idx_ty, 1, ln));
-    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = thdr;
-      br.source_line = ln; fn_->append(current_block_, std::move(br)); }
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = thdr;
+        br.source_line = ln;
+        fn_->append(current_block_, std::move(br));
+    }
     fn_->blocks[tbody].succs.push_back(thdr);
     fn_->blocks[thdr].preds.push_back(tbody);
     fn_->blocks[thdr].instrs[0].phi_args.push_back({i_tnext, tbody});
@@ -1878,41 +2211,70 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     auto red_elem_info = [](PrimitiveKind k, ir::IrType *out_ty,
                             uint64_t *out_esz, bool *out_fp) -> bool {
         switch (k) {
-        case PrimitiveKind::F64: *out_ty = ir::IrType::F64; *out_esz = 8; *out_fp = true;  return true;
-        case PrimitiveKind::F32: *out_ty = ir::IrType::F32; *out_esz = 4; *out_fp = true;  return true;
-        case PrimitiveKind::I64: *out_ty = ir::IrType::I64; *out_esz = 8; *out_fp = false; return true;
-        case PrimitiveKind::U64: *out_ty = ir::IrType::U64; *out_esz = 8; *out_fp = false; return true;
-        case PrimitiveKind::I32: *out_ty = ir::IrType::I32; *out_esz = 4; *out_fp = false; return true;
-        case PrimitiveKind::U32: *out_ty = ir::IrType::U32; *out_esz = 4; *out_fp = false; return true;
+        case PrimitiveKind::F64:
+            *out_ty = ir::IrType::F64;
+            *out_esz = 8;
+            *out_fp = true;
+            return true;
+        case PrimitiveKind::F32:
+            *out_ty = ir::IrType::F32;
+            *out_esz = 4;
+            *out_fp = true;
+            return true;
+        case PrimitiveKind::I64:
+            *out_ty = ir::IrType::I64;
+            *out_esz = 8;
+            *out_fp = false;
+            return true;
+        case PrimitiveKind::U64:
+            *out_ty = ir::IrType::U64;
+            *out_esz = 8;
+            *out_fp = false;
+            return true;
+        case PrimitiveKind::I32:
+            *out_ty = ir::IrType::I32;
+            *out_esz = 4;
+            *out_fp = false;
+            return true;
+        case PrimitiveKind::U32:
+            *out_ty = ir::IrType::U32;
+            *out_esz = 4;
+            *out_fp = false;
+            return true;
         default: return false;
         }
     };
-    ir::IrType elem_ty; uint64_t esz; bool elem_fp;
+    ir::IrType elem_ty;
+    uint64_t esz;
+    bool elem_fp;
     if (!red_elem_info(acc_id->result_type.kind, &elem_ty, &esz, &elem_fp))
         return false;
     const std::string acc_name = acc_id->name;
-    // value = acc + a[idx]  (reduccion) o  acc + a[idx]*b[idx]  (dot-product/FMA)
+    // value = acc + a[idx]  (reduccion) o  acc + a[idx]*b[idx]
+    // (dot-product/FMA)
     if (!asg->value || asg->value->kind != NodeKind::BinaryExpr) return false;
     auto *rhs = static_cast<BinaryExpr *>(asg->value.get());
     if (rhs->op != BinOp::Add) return false;
     if (!rhs->lhs || rhs->lhs->kind != NodeKind::IdentExpr) return false;
     if (static_cast<IdentExpr *>(rhs->lhs.get())->name != acc_name)
         return false; // lhs debe ser el MISMO acc
-    // Valida base_ident[idx] HOST del MISMO tipo que el acumulador; devuelve base.
+    // Valida base_ident[idx] HOST del MISMO tipo que el acumulador; devuelve
+    // base.
     auto check_idx_base = [&](ast::Expr *e) -> ast::IdentExpr * {
         if (!e || e->kind != NodeKind::IndexExpr) return nullptr;
         auto *ix = static_cast<IndexExpr *>(e);
         if (!ix->overload_method.empty() || ix->is_range) return nullptr;
         if (!ix->base || ix->base->kind != NodeKind::IdentExpr) return nullptr;
-        if (!ix->index || ix->index->kind != NodeKind::IdentExpr) return nullptr;
+        if (!ix->index || ix->index->kind != NodeKind::IdentExpr)
+            return nullptr;
         if (static_cast<IdentExpr *>(ix->index.get())->name != idx_name)
             return nullptr;
         auto *base = static_cast<IdentExpr *>(ix->base.get());
         const Type &t = base->result_type;
-        const bool ptr_like = (t.kind == PrimitiveKind::PTR ||
-                               t.kind == PrimitiveKind::ARRAY) &&
-                              static_cast<bool>(t.pointee);
-        if (!ptr_like || t.is_virtual) return nullptr;            // solo HOST
+        const bool ptr_like =
+            (t.kind == PrimitiveKind::PTR || t.kind == PrimitiveKind::ARRAY) &&
+            static_cast<bool>(t.pointee);
+        if (!ptr_like || t.is_virtual) return nullptr; // solo HOST
         if (t.pointee->kind != acc_id->result_type.kind) return nullptr;
         return base;
     };
@@ -1940,7 +2302,7 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
             if (a_base) {
                 scal_e = mul->rhs.get(); // a[i] * c
             } else if (b_base) {
-                a_base = b_base;         // c * a[i]  -> array a la izquierda
+                a_base = b_base; // c * a[i]  -> array a la izquierda
                 b_base = nullptr;
                 scal_e = mul->lhs.get();
             } else {
@@ -1963,21 +2325,21 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     // ======== Emitir: acumulador vectorial + reduccion horizontal + cola.
     // El ancho del acumulador vectorial lo elige la ISA (16/32/64 = W lanes).
     // UNROLL: U acumuladores INDEPENDIENTES (XMM10-13 reservados) -> oculta la
-    // latencia de la cadena vaddpd.  El bucle desenrollado procesa U*W elems/iter
-    // acumulando en acc0..acc{U-1}; al final se combinan en acc0 y el bucle
-    // W-granular existente sirve de remainder.
+    // latencia de la cadena vaddpd.  El bucle desenrollado procesa U*W
+    // elems/iter acumulando en acc0..acc{U-1}; al final se combinan en acc0 y
+    // el bucle W-granular existente sirve de remainder.
     const uint32_t ln = s->loc.line;
-    // AOT: chunk del TARGET (--float-isa); fuera de AOT, host (portabilidad .velb).
-    // AUTO (multiversion): la REDUCCION hornea chunk=16 (128b) -> el acumulador
-    // register-resident (1 reg, no splittea) cabe en TODAS las variantes
-    // (sse2/avx2/avx512); las 3 corren la reduccion a 128b (correcto; el unroll
-    // multi-acc compensa la falta de width win).
+    // AOT: chunk del TARGET (--float-isa); fuera de AOT, host (portabilidad
+    // .velb). AUTO (multiversion): la REDUCCION hornea chunk=16 (128b) -> el
+    // acumulador register-resident (1 reg, no splittea) cabe en TODAS las
+    // variantes (sse2/avx2/avx512); las 3 corren la reduccion a 128b (correcto;
+    // el unroll multi-acc compensa la falta de width win).
     const uint64_t width =
-        native_poo_ ? (aot_auto_vec_ ? 16u
-                                     : static_cast<uint64_t>(aot_vec_width_))
-                    : jit::vec_isa_width(jit::vec_chunk_isa());
-    const uint64_t W = width / esz;     // lanes segun ancho/tipo
-    const uint64_t U = 4;               // acumuladores (XMM13,12,11,10)
+        native_poo_
+            ? (aot_auto_vec_ ? 16u : static_cast<uint64_t>(aot_vec_width_))
+            : jit::vec_isa_width(jit::vec_chunk_isa());
+    const uint64_t W = width / esz; // lanes segun ancho/tipo
+    const uint64_t U = 4;           // acumuladores (XMM13,12,11,10)
     // imm de las VEC_ACC ops: ancho | acc_idx<<8 | src_idx<<12 | disp<<16.
     // disp (bits 16-31) = displacement de bytes en el array a[]/b[] para las
     // U piezas del unroll: en vez de recalcular el puntero (MUL+ADD) por pieza,
@@ -2027,11 +2389,16 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     if (acc_bt == elem_ty) {
         acc_init = acc_binding; // valor SSA directo
     } else if (acc_bt == ir::IrType::PTR) {
-        // acc en slot: cargar el valor inicial (hereda is_host_ptr del binding).
+        // acc en slot: cargar el valor inicial (hereda is_host_ptr del
+        // binding).
         acc_slot_ext = acc_binding;
         const ir::IrValueId loaded = fn_->new_value(elem_ty);
-        ir::IrInstr ld{}; ld.op = ir::IrOp::LOAD; ld.type = elem_ty;
-        ld.dst = loaded; ld.operands = {acc_binding}; ld.source_line = ln;
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = elem_ty;
+        ld.dst = loaded;
+        ld.operands = {acc_binding};
+        ld.source_line = ln;
         fn_->append(current_block_, std::move(ld));
         acc_init = loaded;
     } else {
@@ -2043,8 +2410,11 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
                    ir::IrValueId b) -> ir::IrValueId {
         const ir::IrValueId d = fn_->new_value(ty);
         ir::IrInstr in{};
-        in.op = op; in.type = ty; in.dst = d;
-        in.operands = {a, b}; in.source_line = ln;
+        in.op = op;
+        in.type = ty;
+        in.dst = d;
+        in.operands = {a, b};
+        in.source_line = ln;
         fn_->append(current_block_, std::move(in));
         return d;
     };
@@ -2058,16 +2428,24 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
          * vectorizado. */
         fn_->values[d].is_host_ptr =
             (base < fn_->values.size()) && fn_->values[base].is_host_ptr;
-        ir::IrInstr in{}; in.op = ir::IrOp::ADD; in.type = ir::IrType::PTR;
-        in.dst = d; in.operands = {base, off}; in.source_line = ln;
+        ir::IrInstr in{};
+        in.op = ir::IrOp::ADD;
+        in.type = ir::IrType::PTR;
+        in.dst = d;
+        in.operands = {base, off};
+        in.source_line = ln;
         fn_->append(current_block_, std::move(in));
         return d;
     };
     // load/store del tipo de elemento (acumulador y array).
     auto load_el = [&](ir::IrValueId at) -> ir::IrValueId {
         const ir::IrValueId v = fn_->new_value(elem_ty);
-        ir::IrInstr ld{}; ld.op = ir::IrOp::LOAD; ld.type = elem_ty;
-        ld.dst = v; ld.operands = {at}; ld.source_line = ln;
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = elem_ty;
+        ld.dst = v;
+        ld.operands = {at};
+        ld.source_line = ln;
         fn_->append(current_block_, std::move(ld));
         return v;
     };
@@ -2075,8 +2453,12 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     const ir::IrOp acc_op = elem_fp ? ir::IrOp::FADD : ir::IrOp::ADD;
     // store crudo de 8 bytes a 0 (zero-init del slot de 16B, cualquier tipo).
     auto store_zero8 = [&](ir::IrValueId at, ir::IrValueId vz) {
-        ir::IrInstr st{}; st.op = ir::IrOp::STORE; st.type = ir::IrType::I64;
-        st.dst = ir::IR_NO_VALUE; st.operands = {vz, at}; st.source_line = ln;
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::I64;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {vz, at};
+        st.source_line = ln;
         fn_->append(current_block_, std::move(st));
     };
 
@@ -2096,15 +2478,23 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     const ir::IrValueId acc_slot = fn_->new_value(ir::IrType::PTR);
     fn_->values[acc_slot].is_host_ptr = true;
     {
-        ir::IrInstr al{}; al.op = ir::IrOp::ALLOCA; al.type = ir::IrType::I8;
-        al.dst = acc_slot; al.imm = static_cast<int64_t>(U * width);
+        ir::IrInstr al{};
+        al.op = ir::IrOp::ALLOCA;
+        al.type = ir::IrType::I8;
+        al.dst = acc_slot;
+        al.imm = static_cast<int64_t>(U * width);
         al.host_alloca = true;
-        al.source_line = ln; fn_->append(entry, std::move(al));
+        al.source_line = ln;
+        fn_->append(entry, std::move(al));
     }
     for (uint8_t u = 0; u < U; ++u) {
-        ir::IrInstr az{}; az.op = ir::IrOp::VEC_ACC_ZERO; az.type = elem_ty;
-        az.dst = ir::IR_NO_VALUE; az.operands = {acc_slot};
-        az.imm = acc_imm(u, 0); az.source_line = ln;
+        ir::IrInstr az{};
+        az.op = ir::IrOp::VEC_ACC_ZERO;
+        az.type = elem_ty;
+        az.dst = ir::IR_NO_VALUE;
+        az.operands = {acc_slot};
+        az.imm = acc_imm(u, 0);
+        az.source_line = ln;
         fn_->append(entry, std::move(az));
     }
     // Scalar-factor (acc += a[i]*c): difundir el escalar c a un buffer host de
@@ -2114,16 +2504,23 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     if (is_scalar_fma) {
         v_b = fn_->new_value(ir::IrType::PTR);
         fn_->values[v_b].is_host_ptr = true;
-        ir::IrInstr al{}; al.op = ir::IrOp::ALLOCA; al.type = ir::IrType::I8;
-        al.dst = v_b; al.imm = static_cast<int64_t>(U * width);
-        al.host_alloca = true; al.source_line = ln;
+        ir::IrInstr al{};
+        al.op = ir::IrOp::ALLOCA;
+        al.type = ir::IrType::I8;
+        al.dst = v_b;
+        al.imm = static_cast<int64_t>(U * width);
+        al.host_alloca = true;
+        al.source_line = ln;
         fn_->append(entry, std::move(al));
         for (uint64_t e = 0; e < U * W; ++e) {
             ir::IrValueId at = v_b;
             if (e > 0)
                 at = ptr_at(v_b, emit_const(ir::IrType::I64, e * esz, ln));
-            ir::IrInstr st{}; st.op = ir::IrOp::STORE; st.type = elem_ty;
-            st.dst = ir::IR_NO_VALUE; st.operands = {v_c, at};
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = elem_ty;
+            st.dst = ir::IR_NO_VALUE;
+            st.operands = {v_c, at};
             st.source_line = ln;
             fn_->append(entry, std::move(st));
         }
@@ -2131,8 +2528,13 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     const ir::IrValueId v_W = emit_const(idx_ty, (uint64_t)W, ln);
     const ir::IrValueId v_UW = emit_const(idx_ty, (uint64_t)(U * W), ln);
     const ir::IrValueId v_esz = emit_const(ir::IrType::I64, esz, ln);
-    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = uhdr;
-      br.source_line = ln; fn_->append(entry, std::move(br)); }
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = uhdr;
+        br.source_line = ln;
+        fn_->append(entry, std::move(br));
+    }
     fn_->blocks[entry].succs.push_back(uhdr);
     fn_->blocks[uhdr].preds.push_back(entry);
 
@@ -2140,8 +2542,11 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     current_block_ = uhdr;
     const ir::IrValueId phi_iu = fn_->new_value(idx_ty);
     {
-        ir::IrInstr phi{}; phi.op = ir::IrOp::PHI; phi.type = idx_ty;
-        phi.dst = phi_iu; phi.source_line = ln;
+        ir::IrInstr phi{};
+        phi.op = ir::IrOp::PHI;
+        phi.type = idx_ty;
+        phi.dst = phi_iu;
+        phi.source_line = ln;
         phi.phi_args.push_back({i_init, entry});
         fn_->append(uhdr, std::move(phi));
     }
@@ -2149,8 +2554,12 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     const ir::IrValueId cond_u =
         bin(ir::IrOp::CMP_LE, ir::IrType::BOOL, v_iuUW, v_N);
     {
-        ir::IrInstr brc{}; brc.op = ir::IrOp::BR_COND; brc.operands = {cond_u};
-        brc.target_block = ubody; brc.false_block = comb; brc.source_line = ln;
+        ir::IrInstr brc{};
+        brc.op = ir::IrOp::BR_COND;
+        brc.operands = {cond_u};
+        brc.target_block = ubody;
+        brc.false_block = comb;
+        brc.source_line = ln;
         fn_->append(uhdr, std::move(brc));
     }
     fn_->blocks[uhdr].succs.push_back(ubody);
@@ -2175,12 +2584,15 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     // scalar-factor: b = c_buf FIJO (no avanza con el loop; el VEC_ACC_FMA ya
     // suma el disp de pieza, que cabe en los U*W elementos del buffer).
     const ir::IrValueId b_at0 = is_scalar_fma ? v_b
-                                : is_fma ? ptr_at(v_b, off_base)
-                                         : ir::IR_NO_VALUE;
+                                : is_fma      ? ptr_at(v_b, off_base)
+                                              : ir::IR_NO_VALUE;
     for (uint8_t u = 0; u < U; ++u) {
         const uint64_t disp = (uint64_t)u * W * esz; // constante de pieza
-        ir::IrInstr v{}; v.type = elem_ty; v.dst = ir::IR_NO_VALUE;
-        v.imm = acc_imm(u, 0, disp); v.source_line = ln;
+        ir::IrInstr v{};
+        v.type = elem_ty;
+        v.dst = ir::IR_NO_VALUE;
+        v.imm = acc_imm(u, 0, disp);
+        v.source_line = ln;
         if (is_fma) {
             v.op = ir::IrOp::VEC_ACC_FMA;
             v.operands = {acc_slot, a_at0, b_at0};
@@ -2191,8 +2603,13 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
         fn_->append(ubody, std::move(v));
     }
     const ir::IrValueId i_unext = bin(ir::IrOp::ADD, idx_ty, phi_iu, v_UW);
-    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = uhdr;
-      br.source_line = ln; fn_->append(current_block_, std::move(br)); }
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = uhdr;
+        br.source_line = ln;
+        fn_->append(current_block_, std::move(br));
+    }
     fn_->blocks[ubody].succs.push_back(uhdr);
     fn_->blocks[uhdr].preds.push_back(ubody);
     fn_->blocks[uhdr].instrs[0].phi_args.push_back({i_unext, ubody});
@@ -2200,13 +2617,22 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     // --- comb: acc0 += acc_u (u=1..U-1); BR mhdr ---
     current_block_ = comb;
     for (uint8_t u = 1; u < U; ++u) {
-        ir::IrInstr c{}; c.op = ir::IrOp::VEC_ACC_COMBINE; c.type = elem_ty;
-        c.dst = ir::IR_NO_VALUE; c.operands = {acc_slot};
-        c.imm = acc_imm(0, u); c.source_line = ln; // acc0 += acc_u
+        ir::IrInstr c{};
+        c.op = ir::IrOp::VEC_ACC_COMBINE;
+        c.type = elem_ty;
+        c.dst = ir::IR_NO_VALUE;
+        c.operands = {acc_slot};
+        c.imm = acc_imm(0, u);
+        c.source_line = ln; // acc0 += acc_u
         fn_->append(comb, std::move(c));
     }
-    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = mhdr;
-      br.source_line = ln; fn_->append(comb, std::move(br)); }
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = mhdr;
+        br.source_line = ln;
+        fn_->append(comb, std::move(br));
+    }
     fn_->blocks[comb].succs.push_back(mhdr);
     fn_->blocks[mhdr].preds.push_back(comb);
 
@@ -2214,8 +2640,11 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     current_block_ = mhdr;
     const ir::IrValueId phi_im = fn_->new_value(idx_ty);
     {
-        ir::IrInstr phi{}; phi.op = ir::IrOp::PHI; phi.type = idx_ty;
-        phi.dst = phi_im; phi.source_line = ln;
+        ir::IrInstr phi{};
+        phi.op = ir::IrOp::PHI;
+        phi.type = idx_ty;
+        phi.dst = phi_im;
+        phi.source_line = ln;
         phi.phi_args.push_back({phi_iu, comb}); // i continua tras el unroll
         fn_->append(mhdr, std::move(phi));
     }
@@ -2223,8 +2652,12 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     const ir::IrValueId cond_m =
         bin(ir::IrOp::CMP_LE, ir::IrType::BOOL, v_ipW, v_N);
     {
-        ir::IrInstr brc{}; brc.op = ir::IrOp::BR_COND; brc.operands = {cond_m};
-        brc.target_block = mbody; brc.false_block = redb; brc.source_line = ln;
+        ir::IrInstr brc{};
+        brc.op = ir::IrOp::BR_COND;
+        brc.operands = {cond_m};
+        brc.target_block = mbody;
+        brc.false_block = redb;
+        brc.source_line = ln;
         fn_->append(mhdr, std::move(brc));
     }
     fn_->blocks[mhdr].succs.push_back(mbody);
@@ -2233,25 +2666,30 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     fn_->blocks[redb].preds.push_back(mhdr);
 
     // --- mbody: acc += a[i..]  (VEC_ACC_ADD) o  acc += a*b (VEC_ACC_FMA);
-    //     acc REGISTER-RESIDENT (XMM dedicado en JIT, sin round-trip a memoria);
-    //     i += W; BR mhdr ---
+    //     acc REGISTER-RESIDENT (XMM dedicado en JIT, sin round-trip a
+    //     memoria); i += W; BR mhdr ---
     current_block_ = mbody;
     {
         const ir::IrValueId i64 =
             cast_if_needed(phi_im, idx_ty, ir::IrType::I64, ln);
-        const ir::IrValueId off = bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
+        const ir::IrValueId off =
+            bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
         const ir::IrValueId a_at = ptr_at(v_a, off);
         if (is_fma) {
             // scalar-factor: b = c_buf FIJO (imm=width -> disp 0, dentro de W).
             const ir::IrValueId b_at = is_scalar_fma ? v_b : ptr_at(v_b, off);
-            ir::IrInstr vf{}; vf.op = ir::IrOp::VEC_ACC_FMA; vf.type = elem_ty;
+            ir::IrInstr vf{};
+            vf.op = ir::IrOp::VEC_ACC_FMA;
+            vf.type = elem_ty;
             vf.dst = ir::IR_NO_VALUE;
             vf.operands = {acc_slot, a_at, b_at}; // acc += a*b
             vf.imm = width;
             vf.source_line = ln;
             fn_->append(current_block_, std::move(vf));
         } else {
-            ir::IrInstr va{}; va.op = ir::IrOp::VEC_ACC_ADD; va.type = elem_ty;
+            ir::IrInstr va{};
+            va.op = ir::IrOp::VEC_ACC_ADD;
+            va.type = elem_ty;
             va.dst = ir::IR_NO_VALUE;
             va.operands = {acc_slot, a_at}; // acc += a
             va.imm = width;
@@ -2260,8 +2698,13 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
         }
     }
     const ir::IrValueId i_mnext = bin(ir::IrOp::ADD, idx_ty, phi_im, v_W);
-    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = mhdr;
-      br.source_line = ln; fn_->append(current_block_, std::move(br)); }
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = mhdr;
+        br.source_line = ln;
+        fn_->append(current_block_, std::move(br));
+    }
     fn_->blocks[mbody].succs.push_back(mhdr);
     fn_->blocks[mhdr].preds.push_back(mbody);
     fn_->blocks[mhdr].instrs[0].phi_args.push_back({i_mnext, mbody});
@@ -2270,21 +2713,31 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     //     reduce horizontalmente sum_{k<W} acc_slot[k] + acc_init; BR thdr ---
     current_block_ = redb;
     {
-        ir::IrInstr st{}; st.op = ir::IrOp::VEC_ACC_STORE; st.type = elem_ty;
-        st.dst = ir::IR_NO_VALUE; st.operands = {acc_slot};
-        st.imm = width; st.source_line = ln;
+        ir::IrInstr st{};
+        st.op = ir::IrOp::VEC_ACC_STORE;
+        st.type = elem_ty;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {acc_slot};
+        st.imm = width;
+        st.source_line = ln;
         fn_->append(redb, std::move(st));
     }
     ir::IrValueId result0 = acc_init;
     for (uint64_t k = 0; k < W; ++k) {
         const ir::IrValueId at =
-            (k == 0) ? acc_slot
-                     : ptr_at(acc_slot, emit_const(ir::IrType::I64, k * esz, ln));
+            (k == 0)
+                ? acc_slot
+                : ptr_at(acc_slot, emit_const(ir::IrType::I64, k * esz, ln));
         const ir::IrValueId lane = load_el(at);
         result0 = bin(acc_op, elem_ty, result0, lane);
     }
-    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = thdr;
-      br.source_line = ln; fn_->append(redb, std::move(br)); }
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = thdr;
+        br.source_line = ln;
+        fn_->append(redb, std::move(br));
+    }
     fn_->blocks[redb].succs.push_back(thdr);
     fn_->blocks[thdr].preds.push_back(redb);
 
@@ -2292,23 +2745,33 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     current_block_ = thdr;
     const ir::IrValueId phi_it = fn_->new_value(idx_ty);
     {
-        ir::IrInstr phi{}; phi.op = ir::IrOp::PHI; phi.type = idx_ty;
-        phi.dst = phi_it; phi.source_line = ln;
+        ir::IrInstr phi{};
+        phi.op = ir::IrOp::PHI;
+        phi.type = idx_ty;
+        phi.dst = phi_it;
+        phi.source_line = ln;
         phi.phi_args.push_back({phi_im, redb});
         fn_->append(thdr, std::move(phi));
     }
     const ir::IrValueId phi_res = fn_->new_value(elem_ty);
     {
-        ir::IrInstr phi{}; phi.op = ir::IrOp::PHI; phi.type = elem_ty;
-        phi.dst = phi_res; phi.source_line = ln;
+        ir::IrInstr phi{};
+        phi.op = ir::IrOp::PHI;
+        phi.type = elem_ty;
+        phi.dst = phi_res;
+        phi.source_line = ln;
         phi.phi_args.push_back({result0, redb});
         fn_->append(thdr, std::move(phi));
     }
     const ir::IrValueId cond_t =
         bin(ir::IrOp::CMP_LT, ir::IrType::BOOL, phi_it, v_N);
     {
-        ir::IrInstr brc{}; brc.op = ir::IrOp::BR_COND; brc.operands = {cond_t};
-        brc.target_block = tbody; brc.false_block = exit; brc.source_line = ln;
+        ir::IrInstr brc{};
+        brc.op = ir::IrOp::BR_COND;
+        brc.operands = {cond_t};
+        brc.target_block = tbody;
+        brc.false_block = exit;
+        brc.source_line = ln;
         fn_->append(thdr, std::move(brc));
     }
     fn_->blocks[thdr].succs.push_back(tbody);
@@ -2324,7 +2787,8 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     {
         const ir::IrValueId i64 =
             cast_if_needed(phi_it, idx_ty, ir::IrType::I64, ln);
-        const ir::IrValueId off = bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
+        const ir::IrValueId off =
+            bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
         const ir::IrValueId ai = load_el(ptr_at(v_a, off));
         ir::IrValueId addend = ai;
         if (is_scalar_fma) {
@@ -2338,8 +2802,13 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
         const ir::IrValueId rnext = bin(acc_op, elem_ty, phi_res, addend);
         const ir::IrValueId i_tnext =
             bin(ir::IrOp::ADD, idx_ty, phi_it, emit_const(idx_ty, 1, ln));
-        { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = thdr;
-          br.source_line = ln; fn_->append(current_block_, std::move(br)); }
+        {
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR;
+            br.target_block = thdr;
+            br.source_line = ln;
+            fn_->append(current_block_, std::move(br));
+        }
         fn_->blocks[tbody].succs.push_back(thdr);
         fn_->blocks[thdr].preds.push_back(tbody);
         fn_->blocks[thdr].instrs[0].phi_args.push_back({i_tnext, tbody});
@@ -2350,10 +2819,13 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     current_block_ = exit;
     block_terminated_ = false;
     if (acc_slot_ext != ir::IR_NO_VALUE) {
-        // acc vive en un slot: escribir el resultado de vuelta (el binding sigue
-        // siendo el slot; lecturas posteriores de acc cargan de ahi).
-        ir::IrInstr st{}; st.op = ir::IrOp::STORE; st.type = elem_ty;
-        st.dst = ir::IR_NO_VALUE; st.operands = {phi_res, acc_slot_ext};
+        // acc vive en un slot: escribir el resultado de vuelta (el binding
+        // sigue siendo el slot; lecturas posteriores de acc cargan de ahi).
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = elem_ty;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {phi_res, acc_slot_ext};
         st.source_line = ln;
         fn_->append(exit, std::move(st));
     } else {

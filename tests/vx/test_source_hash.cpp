@@ -61,14 +61,15 @@ int main() {
     igual(base, base, "el mismo texto");
     igual(base, base + "// un comentario al final\n", "comentario al final");
     igual(base, "// arriba\n" + base, "comentario al principio");
-    igual(base, "i64 f(i64 x) {\n        i64 a = x * 3 + 1;\n"
-                "        return a;\n}\n",
+    igual(base,
+          "i64 f(i64 x) {\n        i64 a = x * 3 + 1;\n"
+          "        return a;\n}\n",
           "otra sangria");
     igual(base, base + "\n\n\n", "lineas en blanco al final");
-    igual(base, "i64 f(i64 x){i64 a=x*3+1;return a;}\n",
-          "todo en una linea");
-    igual(base, "i64 f(i64 x) {\n    i64 a = x * 3 /* en medio */ + 1;\n"
-                "    return a;\n}\n",
+    igual(base, "i64 f(i64 x){i64 a=x*3+1;return a;}\n", "todo en una linea");
+    igual(base,
+          "i64 f(i64 x) {\n    i64 a = x * 3 /* en medio */ + 1;\n"
+          "    return a;\n}\n",
           "comentario de bloque en medio");
 
     // -- Lo que SI lo cambia -------------------------------------------------

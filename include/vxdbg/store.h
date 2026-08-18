@@ -15,8 +15,8 @@
  *  - **Incremental de verdad.**  Guardar algo que ya esta es no hacer nada.  Si
  *    una funcion no cambia, su huella es la misma, ya esta guardada, y
  *    recompilar un modulo de cien funciones donde se toco una rehace una.
- *  - **Compartido sin duplicar.**  Dos modulos que usan el mismo tipo apuntan al
- *    mismo objeto, no a dos copias que puedan acabar discrepando.
+ *  - **Compartido sin duplicar.**  Dos modulos que usan el mismo tipo apuntan
+ * al mismo objeto, no a dos copias que puedan acabar discrepando.
  *
  * **Nunca un fichero monolitico.**  Un unico fichero con todo habria que
  * rehacerlo entero porque cambiase una linea en cualquier sitio, y habria que
@@ -207,9 +207,9 @@ class FileNodeStore : public NodeStore {
  * el orden en que estan aqui.
  */
 struct NodeFileHeader {
-    uint32_t magic = 0;         ///< @ref VXDBG_NODE_MAGIC
-    uint16_t kind = 0;          ///< genero del nodo
-    uint16_t reserved = 0;      ///< a cero; deja el encabezado alineado a 4
+    uint32_t magic = 0;    ///< @ref VXDBG_NODE_MAGIC
+    uint16_t kind = 0;     ///< genero del nodo
+    uint16_t reserved = 0; ///< a cero; deja el encabezado alineado a 4
     uint32_t schema_version = 0;
     uint32_t payload_size = 0;
 };

@@ -39,8 +39,7 @@ bool ir_pass_bulk_memory_lower(IrFunction &fn) {
 
     bool cambiado = false;
     for (const analysis::BulkMemoryFact &f : hechos) {
-        if (f.st.preheader >= fn.blocks.size() ||
-            f.st.exit >= fn.blocks.size())
+        if (f.st.preheader >= fn.blocks.size() || f.st.exit >= fn.blocks.size())
             continue;
 
         /* La operacion va en el PREHEADER, no donde estaba el bucle.  Ahi es
@@ -119,13 +118,12 @@ bool ir_pass_bulk_memory_lower(IrFunction &fn) {
             cab.preds.end());
         for (IrInstr &in : cab.instrs) {
             if (in.op != IrOp::PHI) break;
-            in.phi_args.erase(std::remove_if(in.phi_args.begin(),
-                                             in.phi_args.end(),
-                                             [&f](const IrPhiArg &pa) {
-                                                 return pa.block ==
-                                                        f.st.preheader;
-                                             }),
-                              in.phi_args.end());
+            in.phi_args.erase(
+                std::remove_if(in.phi_args.begin(), in.phi_args.end(),
+                               [&f](const IrPhiArg &pa) {
+                                   return pa.block == f.st.preheader;
+                               }),
+                in.phi_args.end());
         }
         cambiado = true;
     }

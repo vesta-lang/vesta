@@ -43,10 +43,11 @@ extern "C" {
 #define AOT_SEC_CODE 0x08u  /* contiene codigo */
 #define AOT_SEC_DATA 0x10u  /* datos inicializados */
 #define AOT_SEC_BSS 0x20u   /* datos sin inicializar (no ocupan fichero) */
-#define AOT_SEC_TLS 0x40u   /* plantilla TLS (thread_local): se describe con un \
-                               segmento PT_TLS; el cargador la copia por-hilo.   \
-                               data = parte .tdata (en fichero), bss_size =       \
-                               parte .tbss (solo memsz). */
+#define AOT_SEC_TLS                                                            \
+    0x40u /* plantilla TLS (thread_local): se describe con un                  \
+             segmento PT_TLS; el cargador la copia por-hilo.                   \
+             data = parte .tdata (en fichero), bss_size =                      \
+             parte .tbss (solo memsz). */
 
 /**
  * @brief Una seccion definida por el usuario.
@@ -86,23 +87,24 @@ typedef struct {
  *  que es quien puede parchear refs a datos (.rodata), simbolos de seccion
  *  (start/end/size), etc.  ARCH-agnostico: site + target + como escribir.
  * ------------------------------------------------------------------------- */
-#define AOT_RELOC_REL32 0 /* *(int32*)site  = (target_value) - (site_va + 4)   \
-                           */
+#define AOT_RELOC_REL32                                                        \
+    0 /* *(int32*)site  = (target_value) - (site_va + 4)                       \
+       */
 #define AOT_RELOC_ABS64                                                        \
     1 /* *(uint64*)site = target_value (direccion absoluta) */
 #define AOT_RELOC_IMM32                                                        \
     2 /* *(uint32*)site = target_value (inmediato, e.g. SIZE) */
 #define AOT_RELOC_IMM64 3 /* *(uint64*)site = target_value */
-#define AOT_RELOC_TPOFF32                                                       \
-    4 /* TLS local-exec (ELF .o): R_X86_64_TPOFF32 contra el simbolo de         \
-       * seccion de .tdata + addend = offset; el sitio queda SIN resolver en    \
+#define AOT_RELOC_TPOFF32                                                      \
+    4 /* TLS local-exec (ELF .o): R_X86_64_TPOFF32 contra el simbolo de        \
+       * seccion de .tdata + addend = offset; el sitio queda SIN resolver en   \
        * el .o (el --link calcula el TPOFF TP-relativo). */
-#define AOT_RELOC_SECREL32                                                      \
-    5 /* TLS PE (Windows): *(int32*)site = offset del target dentro de su       \
+#define AOT_RELOC_SECREL32                                                     \
+    5 /* TLS PE (Windows): *(int32*)site = offset del target dentro de su      \
        * seccion (.tls), no la VA.  El emisor PE escribe target_off. */
-#define AOT_RELOC_ARM64_CALL26                                                  \
-    6 /* AArch64 BL/B (R_AARCH64_CALL26/JUMP26): parchea el campo imm26 de la    \
-       * instruccion de 32 bits en el sitio con ((target - site) >> 2).  Para   \
+#define AOT_RELOC_ARM64_CALL26                                                 \
+    6 /* AArch64 BL/B (R_AARCH64_CALL26/JUMP26): parchea el campo imm26 de la  \
+       * instruccion de 32 bits en el sitio con ((target - site) >> 2).  Para  \
        * el `bl main` del _start arm64 y llamadas cross-funcion arm64. */
 
 /**
@@ -281,12 +283,13 @@ typedef struct {
 /**
  * @brief Fija los simbolos de DEPURACION (nivel 1) para los EJECUTABLES.
  *
- * Los emisores de EXEC (aot_emit_elf / aot_emit_elf_dynexec / PE) consultan esta
- * lista global y, si no es vacia, embeben un @c .symtab (ELF) / symtab COFF (PE)
- * con los simbolos de funcion -> gdb/WinDbg/lldb muestran nombres en backtraces.
- * Estado global (el emit es single-thread por llamada); el driver lo fija antes
- * de emitir y lo resetea (n=0) despues.  n=0 -> sin simbolos (cero coste, binario
- * identico al modo release).  Los @c section/@c offset son los mismos que en un
+ * Los emisores de EXEC (aot_emit_elf / aot_emit_elf_dynexec / PE) consultan
+ * esta lista global y, si no es vacia, embeben un @c .symtab (ELF) / symtab
+ * COFF (PE) con los simbolos de funcion -> gdb/WinDbg/lldb muestran nombres en
+ * backtraces. Estado global (el emit es single-thread por llamada); el driver
+ * lo fija antes de emitir y lo resetea (n=0) despues.  n=0 -> sin simbolos
+ * (cero coste, binario identico al modo release).  Los @c section/@c offset son
+ * los mismos que en un
  * @c AotSym de export; @c st_value se calcula con la VA final de cada seccion.
  */
 void aot_set_debug_symbols(const AotSym *syms, int n);

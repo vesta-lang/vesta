@@ -32,7 +32,8 @@ namespace analysis {
 struct HeaderPhi {
     ir::IrValueId dst = ir::IR_NO_VALUE;
     ir::IrValueId init = ir::IR_NO_VALUE; ///< arg desde el preheader.
-    ir::IrValueId back = ir::IR_NO_VALUE; ///< arg desde el latch (loop-carried).
+    ir::IrValueId back =
+        ir::IR_NO_VALUE; ///< arg desde el latch (loop-carried).
 };
 
 /// Forma estructural de un bucle contado.  @c valid=false si no es elegible.
@@ -44,8 +45,9 @@ struct LoopStructure {
     ir::IrBlockId body_entry = ir::IR_NO_BLOCK; ///< sucesor del header DENTRO.
     ir::IrBlockId exit = ir::IR_NO_BLOCK;       ///< sucesor del header FUERA.
     std::vector<ir::IrBlockId> body;            ///< bloques del bucle salvo H.
-    std::unordered_set<ir::IrBlockId> loop_blocks; ///< header + body (membresia).
-    std::vector<HeaderPhi> phis;                ///< PHIs del header, en orden.
+    std::unordered_set<ir::IrBlockId>
+        loop_blocks;             ///< header + body (membresia).
+    std::vector<HeaderPhi> phis; ///< PHIs del header, en orden.
 
     bool contains(ir::IrBlockId b) const { return loop_blocks.count(b) != 0; }
 };

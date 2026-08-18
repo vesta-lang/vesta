@@ -47,9 +47,9 @@ bool unroll_disabled() {
 // Descriptor de un bucle ELEGIBLE: agrega los HECHOS (analysis/facts).  El pase
 // no descubre nada; solo los ensambla y transforma.
 struct LoopInfo {
-    analysis::LoopStructure st;   // forma del CFG + PHIs del header.
-    analysis::LoopIV iv;          // IV contado (incluye su phi_index).
-    analysis::LoopTripInfo trip;  // numero de iteraciones (si constante).
+    analysis::LoopStructure st;  // forma del CFG + PHIs del header.
+    analysis::LoopIV iv;         // IV contado (incluye su phi_index).
+    analysis::LoopTripInfo trip; // numero de iteraciones (si constante).
 };
 
 // Reconstruye preds/succs de TODA la funcion desde los terminadores.
@@ -58,9 +58,9 @@ struct LoopInfo {
 // un `tryenter %handler_pc` instala un bloque catch al que NO se salta por un
 // terminador (solo al lanzarse una excepcion).  Si no la anadieramos, el bloque
 // handler quedaria sin pred (huerfano) y un consumidor del CFG podria tratarlo
-// como muerto.  El handler_pc es un LABEL_ADDR cuyo @c func_name es el nombre del
-// bloque catch; se resuelve val -> nombre -> id y se anade `bloque_tryenter ->
-// bloque_handler`.
+// como muerto.  El handler_pc es un LABEL_ADDR cuyo @c func_name es el nombre
+// del bloque catch; se resuelve val -> nombre -> id y se anade `bloque_tryenter
+// -> bloque_handler`.
 void rebuild_cfg(IrFunction &fn) {
     for (auto &b : fn.blocks) {
         b.preds.clear();
@@ -99,8 +99,7 @@ void rebuild_cfg(IrFunction &fn) {
             auto lv = label_of_val.find(in.operands[0]);
             if (lv == label_of_val.end()) continue;
             auto bn = block_by_name.find(lv->second);
-            if (bn != block_by_name.end())
-                add_edge((IrBlockId)bi, bn->second);
+            if (bn != block_by_name.end()) add_edge((IrBlockId)bi, bn->second);
         }
         // RET/THROW/UNREACHABLE/TAILCALL/etc.: sin sucesores normales.
     }
@@ -111,13 +110,14 @@ void rebuild_cfg(IrFunction &fn) {
 bool analyze_loop(const IrFunction &fn, const analysis::LoopFacts &lf,
                   const std::vector<int> &def_block, uint32_t L,
                   LoopInfo &out) {
-    // 1) Estructura del CFG: reducible, 1 latch, 1 salida, header limpio, LCSSA.
+    // 1) Estructura del CFG: reducible, 1 latch, 1 salida, header limpio,
+    // LCSSA.
     out.st = analysis::detect_loop_structure(fn, lf, L);
     if (!out.st.valid) return false;
 
     // 2) Variable de induccion contada (creciente, stride constante > 0).
-    if (!analysis::detect_loop_iv(fn, def_block, out.st.header, out.st.preheader,
-                                  out.st.latch, out.iv))
+    if (!analysis::detect_loop_iv(fn, def_block, out.st.header,
+                                  out.st.preheader, out.st.latch, out.iv))
         return false;
 
     // 3) La cota N debe ser INVARIANTE (no definida dentro del bucle).  Es una
@@ -135,7 +135,8 @@ bool analyze_loop(const IrFunction &fn, const analysis::LoopFacts &lf,
 // Clona un valor NUEVO copiando los atributos relevantes del original.
 IrValueId clone_value(IrFunction &fn, IrValueId orig, IrType type) {
     IrValueId nd = fn.new_value(type);
-    if (orig != IR_NO_VALUE && orig < fn.values.size() && nd < fn.values.size()) {
+    if (orig != IR_NO_VALUE && orig < fn.values.size() &&
+        nd < fn.values.size()) {
         fn.values[nd].is_host_ptr = fn.values[orig].is_host_ptr;
         fn.values[nd].is_const = fn.values[orig].is_const;
         fn.values[nd].const_val = fn.values[orig].const_val;
@@ -146,10 +147,9 @@ IrValueId clone_value(IrFunction &fn, IrValueId orig, IrType type) {
 // Transforma (desenrolla) el bucle @p li por factor U.
 void do_unroll(IrFunction &fn, const LoopInfo &li, int U) {
     const IrBlockId H = li.st.header;
-    const IrType iv_ty =
-        (li.st.phis[li.iv.phi_index].dst < fn.values.size())
-            ? fn.values[li.st.phis[li.iv.phi_index].dst].type
-            : IrType::I64;
+    const IrType iv_ty = (li.st.phis[li.iv.phi_index].dst < fn.values.size())
+                             ? fn.values[li.st.phis[li.iv.phi_index].dst].type
+                             : IrType::I64;
 
     // --- 1) Crear TODOS los bloques nuevos primero (new_block redimensiona
     //     fn.blocks -> despues solo indexamos por id, sin new_block). ---
@@ -158,9 +158,8 @@ void do_unroll(IrFunction &fn, const LoopInfo &li, int U) {
     std::vector<std::unordered_map<IrBlockId, IrBlockId>> blk_clone(U);
     for (int k = 0; k < U; ++k)
         for (IrBlockId b : li.st.body)
-            blk_clone[k][b] =
-                fn.new_block("unroll_c" + std::to_string(k) + "_" +
-                             fn.blocks[b].name);
+            blk_clone[k][b] = fn.new_block("unroll_c" + std::to_string(k) +
+                                           "_" + fn.blocks[b].name);
 
     // --- 2) PHIs de UH (una por PHI del header): dst nuevo. ---
     std::vector<IrValueId> uphi(li.st.phis.size());
@@ -168,18 +167,20 @@ void do_unroll(IrFunction &fn, const LoopInfo &li, int U) {
         uphi[i] = clone_value(fn, li.st.phis[i].dst,
                               fn.values[li.st.phis[i].dst].type);
 
-    // --- 3) Clonar el cuerpo U veces, encadenando los valores loop-carried. ---
-    // back_prev[phi_dst] = valor loop-carried de la copia anterior (o UH phi).
+    // --- 3) Clonar el cuerpo U veces, encadenando los valores loop-carried.
+    // --- back_prev[phi_dst] = valor loop-carried de la copia anterior (o UH
+    // phi).
     std::unordered_map<IrValueId, IrValueId> back_prev;
     for (size_t i = 0; i < li.st.phis.size(); ++i)
-        back_prev[li.st.phis[i].dst] = uphi[i]; // copia 0 arranca en las UH phis
+        back_prev[li.st.phis[i].dst] =
+            uphi[i]; // copia 0 arranca en las UH phis
 
     for (int k = 0; k < U; ++k) {
-        const IrBlockId incoming = (k == 0)
-                                       ? UH
-                                       : blk_clone[k - 1].at(li.st.latch);
+        const IrBlockId incoming =
+            (k == 0) ? UH : blk_clone[k - 1].at(li.st.latch);
         std::unordered_map<IrValueId, IrValueId> vmap;
-        // Las PHIs del header mapean al valor loop-carried ENTRANTE de esta copia.
+        // Las PHIs del header mapean al valor loop-carried ENTRANTE de esta
+        // copia.
         for (size_t i = 0; i < li.st.phis.size(); ++i)
             vmap[li.st.phis[i].dst] = back_prev[li.st.phis[i].dst];
 
@@ -208,7 +209,8 @@ void do_unroll(IrFunction &fn, const LoopInfo &li, int U) {
             for (const IrInstr &in : fn.blocks[b].instrs) {
                 IrInstr ni = in; // copia (op, type, imm, func_name, flags...)
                 if (in.dst != IR_NO_VALUE) ni.dst = vmap.at(in.dst);
-                for (IrValueId &o : ni.operands) o = rv(o);
+                for (IrValueId &o : ni.operands)
+                    o = rv(o);
                 if (ni.func_ptr != IR_NO_VALUE) ni.func_ptr = rv(ni.func_ptr);
                 for (auto &pa : ni.phi_args) {
                     pa.value = rv(pa.value);
@@ -217,10 +219,11 @@ void do_unroll(IrFunction &fn, const LoopInfo &li, int U) {
                 // Terminadores: remapear destinos.
                 if (ni.op == IrOp::BR) {
                     if (in.target_block == H) {
-                        // Latch: encadenar a la siguiente copia (o volver a UH).
-                        ni.target_block = (k + 1 < U)
-                                              ? blk_clone[k + 1].at(li.st.body_entry)
-                                              : UH;
+                        // Latch: encadenar a la siguiente copia (o volver a
+                        // UH).
+                        ni.target_block =
+                            (k + 1 < U) ? blk_clone[k + 1].at(li.st.body_entry)
+                                        : UH;
                     } else {
                         ni.target_block = rb(in.target_block);
                     }
@@ -235,7 +238,8 @@ void do_unroll(IrFunction &fn, const LoopInfo &li, int U) {
 
         // Valores loop-carried al final de esta copia (para encadenar).
         std::unordered_map<IrValueId, IrValueId> back_now;
-        for (const auto &p : li.st.phis) back_now[p.dst] = rv(p.back);
+        for (const auto &p : li.st.phis)
+            back_now[p.dst] = rv(p.back);
         back_prev = std::move(back_now);
     }
 
@@ -249,8 +253,8 @@ void do_unroll(IrFunction &fn, const LoopInfo &li, int U) {
             phi.type = fn.values[li.st.phis[i].dst].type;
             phi.dst = uphi[i];
             phi.phi_args.push_back({li.st.phis[i].init, li.st.preheader});
-            phi.phi_args.push_back(
-                {back_prev[li.st.phis[i].dst], blk_clone[U - 1].at(li.st.latch)});
+            phi.phi_args.push_back({back_prev[li.st.phis[i].dst],
+                                    blk_clone[U - 1].at(li.st.latch)});
             uh.push_back(std::move(phi));
         }
         // Guarda: replica la del header con lookahead de (U-1) iteraciones.
@@ -262,7 +266,8 @@ void do_unroll(IrFunction &fn, const LoopInfo &li, int U) {
             c.op = IrOp::CONST;
             c.type = iv_ty;
             c.dst = c_uh;
-            c.imm = (uint64_t)((int64_t)(U - 1) * li.iv.stride + li.iv.cmp_offset);
+            c.imm =
+                (uint64_t)((int64_t)(U - 1) * li.iv.stride + li.iv.cmp_offset);
             fn.values[c_uh].is_const = true;
             fn.values[c_uh].const_val = c.imm;
             uh.push_back(std::move(c));
@@ -301,14 +306,15 @@ void do_unroll(IrFunction &fn, const LoopInfo &li, int U) {
     // preheader: su terminador apuntaba a H -> ahora a UH.
     {
         IrInstr &pt = fn.blocks[li.st.preheader].instrs.back();
-        if (pt.op == IrOp::BR && pt.target_block == H) pt.target_block = UH;
+        if (pt.op == IrOp::BR && pt.target_block == H)
+            pt.target_block = UH;
         else if (pt.op == IrOp::BR_COND) {
             if (pt.target_block == H) pt.target_block = UH;
             if (pt.false_block == H) pt.false_block = UH;
         }
     }
-    // header (remainder): la PHI arg de entrada (desde preheader) ahora viene de
-    // UH con el valor de la UH phi correspondiente.
+    // header (remainder): la PHI arg de entrada (desde preheader) ahora viene
+    // de UH con el valor de la UH phi correspondiente.
     for (IrInstr &in : fn.blocks[H].instrs) {
         if (in.op != IrOp::PHI) continue;
         for (size_t i = 0; i < li.st.phis.size(); ++i) {
@@ -331,11 +337,13 @@ bool ir_pass_unroll(IrFunction &fn, int factor) {
     if (fn.blocks.size() < 3) return false;
 
     // NO se reconstruye el CFG de la funcion aqui: rebuild_cfg solo mira los
-    // terminadores y perderia las aristas de handler (tryenter -> bloque catch),
-    // dejando el bloque handler sin pred y expuesto a que un pase posterior lo
-    // borre.  detect_loop_structure calcula los preds del header localmente.
+    // terminadores y perderia las aristas de handler (tryenter -> bloque
+    // catch), dejando el bloque handler sin pred y expuesto a que un pase
+    // posterior lo borre.  detect_loop_structure calcula los preds del header
+    // localmente.
 
-    // def_block[v] = bloque que define v (para distinguir invariante vs interno).
+    // def_block[v] = bloque que define v (para distinguir invariante vs
+    // interno).
     std::vector<int> def_block(fn.values.size(), -1);
     for (size_t bi = 0; bi < fn.blocks.size(); ++bi)
         for (const IrInstr &in : fn.blocks[bi].instrs)
@@ -345,7 +353,8 @@ bool ir_pass_unroll(IrFunction &fn, int factor) {
     analysis::LoopFacts lf = analysis::compute_loop_facts(fn);
     if (lf.loop_count == 0) return false;
 
-    // Solo bucles INNERMOST (sin hijos): los que tienen cuerpo cloneable simple.
+    // Solo bucles INNERMOST (sin hijos): los que tienen cuerpo cloneable
+    // simple.
     std::vector<uint8_t> has_child(lf.loop_count, 0);
     for (uint32_t l = 0; l < lf.loop_count; ++l) {
         uint32_t p = lf.parent_of(l);
@@ -358,14 +367,16 @@ bool ir_pass_unroll(IrFunction &fn, int factor) {
     for (uint32_t L = 0; L < lf.loop_count; ++L) {
         if (has_child[L]) continue; // no innermost
         LoopInfo li;
-        if (analyze_loop(fn, lf, def_block, L, li)) eligible.push_back(std::move(li));
+        if (analyze_loop(fn, lf, def_block, L, li))
+            eligible.push_back(std::move(li));
     }
     if (eligible.empty()) return false;
 
     // Tamano estimado de la funcion (proxy: instrucciones no-terminadoras) para
     // la presion de I-cache del presupuesto.
     int fn_size = 0;
-    for (const auto &b : fn.blocks) fn_size += (int)b.instrs.size();
+    for (const auto &b : fn.blocks)
+        fn_size += (int)b.instrs.size();
 
     // Target del IR compartido (antes del split de backend): punto medio.  El
     // pase rellena el tamano de la funcion; el resto son parametros del target.

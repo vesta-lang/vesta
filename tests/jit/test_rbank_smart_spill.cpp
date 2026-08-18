@@ -8,10 +8,10 @@
 /**
  * @file tests/jit/test_rbank_smart_spill.cpp
  * @brief Fase 5 (nucleo): spill INTELIGENTE (victima por coste) vs spill NAIVE.
- *        El coste lo describe el Objective; la estrategia (cost-aware de duracion
- *        restante, NO Belady) es del algoritmo -- separacion dato/mecanismo.  El
- *        Belady real llega con UseDefFacts->next-use.  Property: smart NUNCA peor que
- *        naive + coloreo propio + los valores CALIENTES sobreviven.
+ *        El coste lo describe el Objective; la estrategia (cost-aware de
+ * duracion restante, NO Belady) es del algoritmo -- separacion dato/mecanismo.
+ * El Belady real llega con UseDefFacts->next-use.  Property: smart NUNCA peor
+ * que naive + coloreo propio + los valores CALIENTES sobreviven.
  */
 
 #include "codegen/rbank/coloring.h"
@@ -29,17 +29,18 @@ using namespace codegen::rbank; // el modelo.
 static int g_checks = 0;
 static int g_fail = 0;
 
-#define CHECK(cond, msg)                                                     \
-    do {                                                                     \
-        ++g_checks;                                                          \
-        if (!(cond)) {                                                       \
-            ++g_fail;                                                        \
-            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);        \
-        }                                                                    \
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fail;                                                          \
+            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);          \
+        }                                                                      \
     } while (0)
 
 static AbstractValue mkval(uint32_t id, uint32_t start, uint32_t end,
-                           ResourceClass cls, ViewWidth w, uint16_t loop_depth = 0) {
+                           ResourceClass cls, ViewWidth w,
+                           uint16_t loop_depth = 0) {
     AbstractValue v;
     v.value_id = id;
     v.start = start;
@@ -54,7 +55,11 @@ static AbstractValue mkval(uint32_t id, uint32_t start, uint32_t end,
 int main() {
     std::printf("=== test_rbank_smart_spill (Fase 5: spill por coste) ===\n");
 
-    const BackendCaps caps = [] { BackendCaps c{}; c.sse2 = true; return c; }();
+    const BackendCaps caps = [] {
+        BackendCaps c{};
+        c.sse2 = true;
+        return c;
+    }();
     PhysicalRegisterBank bank = physical_bank_x86_64(true, caps);
     ConstraintSet cs;
     OptimizationContext ctx = make_context(bank, cs);
@@ -65,16 +70,20 @@ int main() {
     std::printf("\n[caliente sobrevive, frio se derrama]\n");
     {
         AbstractProblem p;
-        // K fríos + 1 caliente, TODOS vivos [0,100] -> K+1 en K lanes -> 1 spill.
+        // K fríos + 1 caliente, TODOS vivos [0,100] -> K+1 en K lanes -> 1
+        // spill.
         for (uint32_t i = 0; i < K; ++i)
-            p.values.push_back(mkval(i + 1, 0, 100, ResourceClass::GP, ViewWidth::W8, 0));
+            p.values.push_back(
+                mkval(i + 1, 0, 100, ResourceClass::GP, ViewWidth::W8, 0));
         const uint32_t hot = static_cast<uint32_t>(K) + 1;
-        p.values.push_back(mkval(hot, 0, 100, ResourceClass::GP, ViewWidth::W8, 3));
+        p.values.push_back(
+            mkval(hot, 0, 100, ResourceClass::GP, ViewWidth::W8, 3));
 
         LaneAssignment s = color_smart_spill(p, ctx, false);
         CHECK(is_proper_coloring(p, s, bank, false), "smart: coloreo invalido");
         CHECK(spill_count(p, s) == 1, "smart: no derramo exactamente 1");
-        CHECK(s.lane_of(hot) != kSpilled, "smart derramo el valor CALIENTE (deberia el frio)");
+        CHECK(s.lane_of(hot) != kSpilled,
+              "smart derramo el valor CALIENTE (deberia el frio)");
     }
 
     // --- Unit: sin presion -> 0 spills ---
@@ -115,8 +124,10 @@ int main() {
                 mkval(100 + i, 0, 50, ResourceClass::GP, ViewWidth::W8, 3));
 
         LaneAssignment s = color_smart_spill(p, ctx, false);
-        CHECK(is_proper_coloring(p, s, bank, false), "huecos: coloreo invalido");
-        CHECK(spill_count(p, s) == 0, "huecos: derramo pudiendo compartir lane");
+        CHECK(is_proper_coloring(p, s, bank, false),
+              "huecos: coloreo invalido");
+        CHECK(spill_count(p, s) == 0,
+              "huecos: derramo pudiendo compartir lane");
         CHECK(s.lane_of(1) == s.lane_of(2),
               "huecos: no llego a compartir la lane (los separo)");
     }
@@ -135,8 +146,10 @@ int main() {
                 mkval(100 + i, 0, 50, ResourceClass::GP, ViewWidth::W8, 3));
 
         LaneAssignment s = color_smart_spill(p, ctx, false);
-        CHECK(is_proper_coloring(p, s, bank, false), "sin huecos: coloreo invalido");
-        CHECK(spill_count(p, s) == 1, "sin huecos: deberia derramar exactamente 1");
+        CHECK(is_proper_coloring(p, s, bank, false),
+              "sin huecos: coloreo invalido");
+        CHECK(spill_count(p, s) == 1,
+              "sin huecos: deberia derramar exactamente 1");
     }
 
     // --- PROPERTY-BASED: smart NUNCA peor que naive + coloreo propio ---
@@ -149,7 +162,8 @@ int main() {
         for (int t = 0; t < TRIALS; ++t) {
             std::uniform_int_distribution<uint32_t> nvals(2, 22);
             std::uniform_int_distribution<uint32_t> pos(0, 20);
-            std::uniform_int_distribution<uint32_t> dur(0, 30); // rangos largos -> presion.
+            std::uniform_int_distribution<uint32_t> dur(
+                0, 30); // rangos largos -> presion.
             std::uniform_int_distribution<uint16_t> depth(0, 3);
 
             AbstractProblem p;
@@ -157,8 +171,8 @@ int main() {
             for (uint32_t i = 0; i < n; ++i) {
                 const uint32_t s = pos(rng);
                 const uint32_t e = s + dur(rng);
-                p.values.push_back(mkval(i + 1, s, e, ResourceClass::GP, ViewWidth::W8,
-                                         depth(rng)));
+                p.values.push_back(mkval(i + 1, s, e, ResourceClass::GP,
+                                         ViewWidth::W8, depth(rng)));
             }
 
             LaneAssignment smart = color_smart_spill(p, ctx, false);
@@ -173,10 +187,12 @@ int main() {
             if (cn > EPS) ++pressured; // hubo spill en el naive.
         }
         CHECK(proper == TRIALS, "smart produjo un coloreado invalido");
-        CHECK(not_worse == TRIALS, "smart fue PEOR que el naive en coste de spill");
+        CHECK(not_worse == TRIALS,
+              "smart fue PEOR que el naive en coste de spill");
         CHECK(better > 0, "smart nunca mejoro al naive (no-op?)");
-        std::printf("  propio=%d/%d  no_peor=%d/%d  mejoro=%d/%d  (con_presion=%d)\n",
-                    proper, TRIALS, not_worse, TRIALS, better, TRIALS, pressured);
+        std::printf(
+            "  propio=%d/%d  no_peor=%d/%d  mejoro=%d/%d  (con_presion=%d)\n",
+            proper, TRIALS, not_worse, TRIALS, better, TRIALS, pressured);
     }
 
     std::printf("\n=== %d checks, %d fallos ===\n", g_checks, g_fail);

@@ -10,17 +10,21 @@
 using namespace vx::instr_db;
 
 static int g_checks = 0, g_fail = 0;
-#define CHECK(cond, msg)                                                        \
-    do {                                                                        \
-        ++g_checks;                                                             \
-        if (!(cond)) {                                                          \
-            ++g_fail;                                                           \
-            std::printf("  FAIL: %s (linea %d)\n", (msg), __LINE__);            \
-        }                                                                       \
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fail;                                                          \
+            std::printf("  FAIL: %s (linea %d)\n", (msg), __LINE__);           \
+        }                                                                      \
     } while (0)
 
-static ParsedOp reg(uint16_t w) { return ParsedOp{OP_REG, w}; }
-static ParsedOp mem(uint16_t w) { return ParsedOp{OP_MEM, w}; }
+static ParsedOp reg(uint16_t w) {
+    return ParsedOp{OP_REG, w};
+}
+static ParsedOp mem(uint16_t w) {
+    return ParsedOp{OP_MEM, w};
+}
 
 int main() {
     std::printf("=== instr_db_test ===\n");
@@ -56,8 +60,7 @@ int main() {
           "syscall: overlay syscall");
 
     // mnemonico inexistente -> -1.
-    CHECK(match(Isa::X86, "frobnicate", {}) < 0,
-          "mnemonico inexistente -> -1");
+    CHECK(match(Isa::X86, "frobnicate", {}) < 0, "mnemonico inexistente -> -1");
 
     // --- ARM64 (AArch64) ---
     CHECK(form_count(Isa::ARM64) == 4619, "arm64: 4619 formas embebidas");
@@ -75,11 +78,13 @@ int main() {
     // --- RISC-V ---
     CHECK(form_count(Isa::RISCV) == 1867, "riscv: 1867 formas embebidas");
     // amoadd.w -> overlay atomic.
-    int32_t amo = match(Isa::RISCV, "amoadd.w", {reg(0), reg(0), reg(0), mem(0)});
+    int32_t amo =
+        match(Isa::RISCV, "amoadd.w", {reg(0), reg(0), reg(0), mem(0)});
     CHECK(amo >= 0 && (overlay_of(Isa::RISCV, amo) & OVL_ATOMIC),
           "riscv: amoadd.w overlay atomic");
     // fence -> overlay barrera.
-    int32_t fen = match(Isa::RISCV, "fence", {ParsedOp{OP_IMM, 0}, ParsedOp{OP_IMM, 0}});
+    int32_t fen =
+        match(Isa::RISCV, "fence", {ParsedOp{OP_IMM, 0}, ParsedOp{OP_IMM, 0}});
     CHECK(fen >= 0 && (overlay_of(Isa::RISCV, fen) & OVL_BARRIER),
           "riscv: fence overlay barrera");
     // la misma DB no confunde ISAs: 'ldaxr' no existe en x86.
@@ -93,9 +98,11 @@ int main() {
     AsmCost ca = cost(Isa::X86, add, (uint32_t)skl);
     CHECK(ca.found, "coste add en skylake encontrado");
     CHECK(ca.latency >= 1.0f && ca.latency <= 1.5f, "add skylake latencia ~1");
-    CHECK(ca.ports_count > 0 && ca.port_names, "add skylake usa puertos (paralelo)");
+    CHECK(ca.ports_count > 0 && ca.port_names,
+          "add skylake usa puertos (paralelo)");
     // microarq inexistente / forma sin coste -> found=false.
-    CHECK(!cost(Isa::X86, add, 999).found, "microarq fuera de rango -> no found");
+    CHECK(!cost(Isa::X86, add, 999).found,
+          "microarq fuera de rango -> no found");
     // arm64: coste en neoverse-n2.
     int32_t n2 = microarch_by_name(Isa::ARM64, "neoverse-n2");
     CHECK(n2 >= 0, "arm64: neoverse-n2 presente");
@@ -119,7 +126,8 @@ int main() {
     // ARM: linea con 3 registros (el ancho real x=64 descarta las formas
     // ADD vectoriales) y con memoria.
     int32_t ml_aadd = match_asm_line(Isa::ARM64, "add x0, x1, x2");
-    CHECK(ml_aadd >= 0 && std::string(iclass_name(Isa::ARM64, ml_aadd)) == "ADD",
+    CHECK(ml_aadd >= 0 &&
+              std::string(iclass_name(Isa::ARM64, ml_aadd)) == "ADD",
           "asm line arm64: add x,x,x -> ADD");
     int32_t ml_ldaxr = match_asm_line(Isa::ARM64, "ldaxr x0, [x1]");
     CHECK(ml_ldaxr >= 0 && (overlay_of(Isa::ARM64, ml_ldaxr) & OVL_LL_SC),
@@ -153,22 +161,24 @@ int main() {
           "arm32 comparte tabla de features con arm64");
     // riscv: sifive-x280 tiene vector.
     int32_t x280 = cpu_by_name(Isa::RISCV, "sifive-x280");
-    CHECK(x280 >= 0 && cpu_has_feature(Isa::RISCV, (uint32_t)x280, "StdExtZve32x"),
+    CHECK(x280 >= 0 &&
+              cpu_has_feature(Isa::RISCV, (uint32_t)x280, "StdExtZve32x"),
           "riscv: sifive-x280 tiene Zve32x (vector)");
 
     // --- coste de BLOQUE (modelo superescalar: latencia + puertos) ---
     {
         const char *blk = "mov rax, rbx\nadd rax, rcx\nimul rax, rax\n";
         AsmBlockCost bc = analyze_asm_cost(Isa::X86, blk, (uint32_t)skl);
-        CHECK(bc.instr_count == 3 && bc.matched == 3, "bloque: 3 instr emparejadas");
+        CHECK(bc.instr_count == 3 && bc.matched == 3,
+              "bloque: 3 instr emparejadas");
         CHECK(bc.costed == 3, "bloque: 3 con coste en skylake");
         CHECK(bc.total_uops >= 3, "bloque: uops >= 3");
         CHECK(bc.latency_sum > 0.0f, "bloque: latencia serie > 0");
         CHECK(bc.throughput > 0.0f && !bc.port_pressure.empty(),
               "bloque: throughput + presion de puertos (modelo paralelo)");
         // una linea desconocida cuenta como instr no emparejada.
-        AsmBlockCost b2 =
-            analyze_asm_cost(Isa::X86, "add rax, rcx\nfrobnicate\n", (uint32_t)skl);
+        AsmBlockCost b2 = analyze_asm_cost(
+            Isa::X86, "add rax, rcx\nfrobnicate\n", (uint32_t)skl);
         CHECK(b2.instr_count == 2 && b2.matched == 1,
               "bloque: linea desconocida no empareja");
     }
@@ -241,7 +251,7 @@ int main() {
         std::printf("=== instr_db_test: %d checks OK, 0 fallidos ===\n",
                     g_checks);
     else
-        std::printf("=== instr_db_test: %d checks, %d FALLIDOS ===\n",
-                    g_checks, g_fail);
+        std::printf("=== instr_db_test: %d checks, %d FALLIDOS ===\n", g_checks,
+                    g_fail);
     return g_fail == 0 ? 0 : 1;
 }

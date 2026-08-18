@@ -175,8 +175,9 @@ typedef struct Executable {
         void operator()(uint8_t *p) const noexcept;
     };
     std::unique_ptr<uint8_t[], BorrarAlineado> gdata_host;
-    size_t gdata_size = 0;   ///< Bytes de @ref gdata_host.
-    uint64_t gdata_va = 0;   ///< VA de la seccion `gdata` (0 = el modulo no tiene).
+    size_t gdata_size = 0; ///< Bytes de @ref gdata_host.
+    uint64_t gdata_va =
+        0; ///< VA de la seccion `gdata` (0 = el modulo no tiene).
 
     /**
      * @brief Version del formato VELB.

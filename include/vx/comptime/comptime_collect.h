@@ -49,7 +49,8 @@ struct ComptimeUnit {
     /// deps).  Es la CLAVE DE CACHE del futuro artefacto comptime separado:
     /// cambia si y solo si cambia alguna decl comptime o una dep; los cambios
     /// en codigo no-comptime (main, helpers no usados por comptime) NO lo
-    /// alteran -> el artefacto comptime se reusa entre builds.  0 si @c empty().
+    /// alteran -> el artefacto comptime se reusa entre builds.  0 si @c
+    /// empty().
     uint64_t content_hash = 0;
 
     /// TEXTO FUENTE del conjunto: los `import` del modulo mas las decls

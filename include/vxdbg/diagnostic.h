@@ -143,8 +143,8 @@ enum class FactRole : uint8_t {
  */
 struct DiagnosticFact {
     FactRole role = FactRole::Subject;
-    NodeRef target;   ///< a que se refiere
-    SourceSpan span;  ///< donde se ve, si se ve en algun sitio
+    NodeRef target;  ///< a que se refiere
+    SourceSpan span; ///< donde se ve, si se ve en algun sitio
 
     /// Codigo del catalogo que explica ESTE eslabon.  El texto vive en el
     /// catalogo multi-idioma, nunca aqui.
@@ -154,11 +154,11 @@ struct DiagnosticFact {
 
 /// Como se relaciona un hecho con otro.
 enum class FactRelation : uint8_t {
-    Because = 0,    ///< aquel explica a este
-    Through = 1,    ///< se llego a este a traves de aquel
-    Contains = 2,   ///< aquel es parte de este
-    Alternative = 3,///< aquel es otra posibilidad
-    LeadsTo = 4,    ///< este lleva a aquel
+    Because = 0,     ///< aquel explica a este
+    Through = 1,     ///< se llego a este a traves de aquel
+    Contains = 2,    ///< aquel es parte de este
+    Alternative = 3, ///< aquel es otra posibilidad
+    LeadsTo = 4,     ///< este lleva a aquel
 };
 
 /**

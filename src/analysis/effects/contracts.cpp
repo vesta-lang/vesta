@@ -40,7 +40,8 @@ static inline void si(ContractCheck &k, bool cond, R r) {
 ///   - Relaxed : tolera may_trap (los traps 'no deberian pasar').
 static ContractCheck p_pure(const FunctionSummary &s, ContractProfile profile) {
     ContractCheck k;
-    si(k, s.completeness == AnalysisCompleteness::Unknown, R::AnalisisIncompleto);
+    si(k, s.completeness == AnalysisCompleteness::Unknown,
+       R::AnalisisIncompleto);
     const SemanticEffects &c = s.semantic.closure;
     si(k, c.mem.writes_memory(), R::EscribeMemoria);
     si(k, c.may_throw, R::PuedeLanzar);
@@ -62,8 +63,8 @@ static ContractCheck p_pure(const FunctionSummary &s, ContractProfile profile) {
  *
  * Es mas fuerte que @c pure -- que si admite lecturas -- y es justo la
  * condicion que permite que una LLAMADA deje de ser una barrera de memoria: si
- * no lee ni escribe nada, ni atrapa, ni aloca, ni tiene atomicas, lo que hubiera
- * antes y despues de ella se puede mover libremente.
+ * no lee ni escribe nada, ni atrapa, ni aloca, ni tiene atomicas, lo que
+ * hubiera antes y despues de ella se puede mover libremente.
  *
  * El optimizador ya usaba esta condicion, escrita a mano dentro de el.  Al ser
  * una fila mas de esta tabla, la usan LOS DOS y ademas sale en el informe de
@@ -97,7 +98,8 @@ static ContractCheck p_readonly(const FunctionSummary &s,
                                 ContractProfile profile) {
     (void)profile;
     ContractCheck k;
-    si(k, s.completeness == AnalysisCompleteness::Unknown, R::AnalisisIncompleto);
+    si(k, s.completeness == AnalysisCompleteness::Unknown,
+       R::AnalisisIncompleto);
     si(k, s.semantic.closure.mem.writes_memory(), R::EscribeMemoria);
     return k;
 }
@@ -115,7 +117,8 @@ static ContractCheck p_nothrow(const FunctionSummary &s,
                                ContractProfile profile) {
     (void)profile;
     ContractCheck k;
-    si(k, s.completeness == AnalysisCompleteness::Unknown, R::AnalisisIncompleto);
+    si(k, s.completeness == AnalysisCompleteness::Unknown,
+       R::AnalisisIncompleto);
     si(k, s.semantic.closure.may_throw, R::PuedeLanzar);
     return k;
 }
@@ -129,7 +132,8 @@ static ContractCheck p_nopanic(const FunctionSummary &s,
                                ContractProfile profile) {
     (void)profile;
     ContractCheck k;
-    si(k, s.completeness == AnalysisCompleteness::Unknown, R::AnalisisIncompleto);
+    si(k, s.completeness == AnalysisCompleteness::Unknown,
+       R::AnalisisIncompleto);
     si(k, s.semantic.closure.may_panic, R::PuedeAbortar);
     return k;
 }
@@ -140,7 +144,8 @@ static ContractCheck p_deterministic(const FunctionSummary &s,
     (void)profile;
     ContractCheck k;
     const SemanticEffects &c = s.semantic.closure;
-    si(k, s.completeness == AnalysisCompleteness::Unknown, R::AnalisisIncompleto);
+    si(k, s.completeness == AnalysisCompleteness::Unknown,
+       R::AnalisisIncompleto);
     si(k, !c.determinism.empty(), R::NoDeterminista);
     si(k, c.may_io, R::HaceIO);
     return k;
@@ -151,7 +156,8 @@ static ContractCheck p_heap_free(const FunctionSummary &s,
                                  ContractProfile profile) {
     (void)profile;
     ContractCheck k;
-    si(k, s.completeness == AnalysisCompleteness::Unknown, R::AnalisisIncompleto);
+    si(k, s.completeness == AnalysisCompleteness::Unknown,
+       R::AnalisisIncompleto);
     si(k, s.semantic.closure.may_allocate, R::UsaMonton);
     return k;
 }
@@ -166,17 +172,19 @@ static ContractCheck p_gc_free(const FunctionSummary &s,
     return k;
 }
 
-/// freestanding: no toca estado de maquina privilegiado ni I/O (candidato a Bare).
+/// freestanding: no toca estado de maquina privilegiado ni I/O (candidato a
+/// Bare).
 static ContractCheck p_freestanding(const FunctionSummary &s,
                                     ContractProfile profile) {
     (void)profile;
     ContractCheck k;
     const SemanticEffects &c = s.semantic.closure;
-    const bool machine =
-        c.tags.has(CapabilityTag::PortIO) || c.tags.has(CapabilityTag::MSR) ||
-        c.tags.has(CapabilityTag::Privileged) ||
-        c.tags.has(CapabilityTag::InterruptState);
-    si(k, s.completeness == AnalysisCompleteness::Unknown, R::AnalisisIncompleto);
+    const bool machine = c.tags.has(CapabilityTag::PortIO) ||
+                         c.tags.has(CapabilityTag::MSR) ||
+                         c.tags.has(CapabilityTag::Privileged) ||
+                         c.tags.has(CapabilityTag::InterruptState);
+    si(k, s.completeness == AnalysisCompleteness::Unknown,
+       R::AnalisisIncompleto);
     si(k, machine, R::NecesitaRuntime);
     si(k, c.may_io, R::HaceIO);
     return k;

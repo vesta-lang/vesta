@@ -17,12 +17,12 @@
  *
  * Y pide estar UNA vez.  Estaba copiado en dos tests, que es como empiezan a
  * separarse: uno apaga el color con NO_COLOR y el otro no, uno imprime lo que
- * pasa y el otro solo lo que falla, y al final dos informes del mismo arbol no se
- * leen igual.
+ * pasa y el otro solo lo que falla, y al final dos informes del mismo arbol no
+ * se leen igual.
  *
- * Cabecera sola, sin biblioteca que enlazar: un test de este arbol se compila con
- * un `g++` y sus objetos, y anadirle una dependencia de enlace por unas cadenas
- * de color seria peor que la duplicacion.
+ * Cabecera sola, sin biblioteca que enlazar: un test de este arbol se compila
+ * con un `g++` y sus objetos, y anadirle una dependencia de enlace por unas
+ * cadenas de color seria peor que la duplicacion.
  */
 #ifndef TESTS_UTIL_TEST_REPORT_H
 #define TESTS_UTIL_TEST_REPORT_H
@@ -45,21 +45,35 @@ inline bool color_enabled() {
     return v;
 }
 
-/// Devuelve @p code si hay color, o la cadena vacia si no: asi el mismo `printf`
-/// sirve para los dos casos sin duplicar el formato.
+/// Devuelve @p code si hay color, o la cadena vacia si no: asi el mismo
+/// `printf` sirve para los dos casos sin duplicar el formato.
 inline const char *ansi(const char *code) {
     return color_enabled() ? code : "";
 }
 
 /// @name Colores, nombrados por lo que SIGNIFICAN donde se pueda.
 /// @{
-inline const char *dim() { return ansi("\033[90m"); }     ///< detalle secundario
-inline const char *red() { return ansi("\033[31m"); }     ///< algo esta mal
-inline const char *green() { return ansi("\033[32m"); }   ///< algo esta bien
-inline const char *amber() { return ansi("\033[33m"); }   ///< pendiente, no roto
-inline const char *cyan() { return ansi("\033[36m"); }    ///< un grupo o seccion
-inline const char *bold() { return ansi("\033[1m"); }     ///< titulo
-inline const char *reset() { return ansi("\033[0m"); }    ///< vuelve a lo normal
+inline const char *dim() {
+    return ansi("\033[90m");
+} ///< detalle secundario
+inline const char *red() {
+    return ansi("\033[31m");
+} ///< algo esta mal
+inline const char *green() {
+    return ansi("\033[32m");
+} ///< algo esta bien
+inline const char *amber() {
+    return ansi("\033[33m");
+} ///< pendiente, no roto
+inline const char *cyan() {
+    return ansi("\033[36m");
+} ///< un grupo o seccion
+inline const char *bold() {
+    return ansi("\033[1m");
+} ///< titulo
+inline const char *reset() {
+    return ansi("\033[0m");
+} ///< vuelve a lo normal
 /// @}
 
 /**
@@ -67,9 +81,9 @@ inline const char *reset() { return ansi("\033[0m"); }    ///< vuelve a lo norma
  *
  * Los tres van separados a proposito.  "Pendiente" no es "roto": es trabajo
  * identificado que aun no se ha hecho, y mezclarlos obliga a elegir entre dejar
- * el test en rojo permanente -- que se acaba ignorando, y entonces el dia que se
- * rompa otra cosa nadie lo mira -- o borrar el caso, que es peor porque entonces
- * nadie sabe que falta.
+ * el test en rojo permanente -- que se acaba ignorando, y entonces el dia que
+ * se rompa otra cosa nadie lo mira -- o borrar el caso, que es peor porque
+ * entonces nadie sabe que falta.
  */
 struct Tally {
     int passed = 0;
@@ -114,7 +128,8 @@ inline void print_in_column(int col, const std::string &text,
         std::printf("%s%s%s\n", color, text.substr(pos, take).c_str(),
                     *color != '\0' ? reset() : "");
         pos += take;
-        while (pos < text.size() && text[pos] == ' ') ++pos;
+        while (pos < text.size() && text[pos] == ' ')
+            ++pos;
         first = false;
     }
     if (first) std::printf("\n"); // texto vacio: cerrar la linea igual

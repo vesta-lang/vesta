@@ -48,12 +48,13 @@ void aot_lower_runtime(ir::IrModule &mod, const AotLowerConfig &cfg) {
                     //       dangling/crash);
                     //   (b) sea un valor COLGANTE -- sin definicion en la fn y
                     //       que NO es un parametro.  Esto pasa cuando un pase
-                    //       (scalar-replace / dead-alloc-elim) ELIMINA el objeto
-                    //       pero deja su `raw_free` referenciando un SSA value
-                    //       ya inexistente.  El interp/JIT/PE lo toleran, pero
-                    //       `free()` de libc aborta ("invalid pointer", visto en
-                    //       callvirt_hot via gcc).  NOPearlo es correcto: el
-                    //       objeto ya no existe, no hay nada que liberar.
+                    //       (scalar-replace / dead-alloc-elim) ELIMINA el
+                    //       objeto pero deja su `raw_free` referenciando un SSA
+                    //       value ya inexistente.  El interp/JIT/PE lo toleran,
+                    //       pero `free()` de libc aborta ("invalid pointer",
+                    //       visto en callvirt_hot via gcc).  NOPearlo es
+                    //       correcto: el objeto ya no existe, no hay nada que
+                    //       liberar.
                     bool nop = in.operands.empty();
                     if (!in.operands.empty()) {
                         const ir::IrValueId p = in.operands[0];
@@ -106,7 +107,8 @@ void aot_lower_runtime(ir::IrModule &mod, const AotLowerConfig &cfg) {
                     break;
 
                 case ir::IrOp::CALLN:
-                    // ffi_call: CALLN "__callni__:" con operands=[fn_ptr,args..]
+                    // ffi_call: CALLN "__callni__:" con
+                    // operands=[fn_ptr,args..]
                     // -> CALLIND (llamada INDIRECTA nativa que vreg_select baja
                     // a `call reg`): func_ptr = operands[0], args = el resto.
                     // El resto de CALLN (extern "lib" fn) pasa sin cambios.

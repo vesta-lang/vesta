@@ -87,8 +87,8 @@ bool JsonRpcTransport::read_message(nlohmann::json &out_msg) {
         std::string lower;
         lower.reserve(line.size());
         for (char ch : line)
-            lower.push_back(static_cast<char>(std::tolower(
-                static_cast<unsigned char>(ch))));
+            lower.push_back(static_cast<char>(
+                std::tolower(static_cast<unsigned char>(ch))));
         if (lower.rfind(kKey, 0) == 0) {
             // Extraer el numero tras los dos puntos, ignorando espacios.
             const char *p = line.c_str() + std::strlen(kKey);
@@ -100,8 +100,7 @@ bool JsonRpcTransport::read_message(nlohmann::json &out_msg) {
     }
 
     // Si no leimos cabeceras ni cuerpo, asumimos EOF limpio.
-    if (!saw_any_header && content_length < 0)
-        return false;
+    if (!saw_any_header && content_length < 0) return false;
 
     if (content_length < 0) {
         // Framing invalido: sin Content-Length no podemos leer el cuerpo.
@@ -113,8 +112,7 @@ bool JsonRpcTransport::read_message(nlohmann::json &out_msg) {
     size_t got = 0;
     while (got < body.size()) {
         size_t n = std::fread(body.data() + got, 1, body.size() - got, in_);
-        if (n == 0)
-            return false; // EOF prematuro: mensaje truncado.
+        if (n == 0) return false; // EOF prematuro: mensaje truncado.
         got += n;
     }
 
@@ -123,8 +121,7 @@ bool JsonRpcTransport::read_message(nlohmann::json &out_msg) {
     out_msg = nlohmann::json::parse(body.begin(), body.end(),
                                     /*cb=*/nullptr,
                                     /*allow_exceptions=*/false);
-    if (out_msg.is_discarded())
-        return false;
+    if (out_msg.is_discarded()) return false;
     return true;
 }
 

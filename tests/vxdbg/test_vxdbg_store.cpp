@@ -95,7 +95,8 @@ static void probar_serializacion() {
     vxdbg::ByteWriter w3;
     w3.u32(0xFFFFFFFFu); // longitud imposible
     vxdbg::ByteReader r3(w3.bytes());
-    comprobar(r3.str().empty(), "una longitud imposible no revienta la lectura");
+    comprobar(r3.str().empty(),
+              "una longitud imposible no revienta la lectura");
     comprobar(!r3.ok(), "y deja constancia de que los bytes estaban mal");
 
     // Ojear no consume ni rompe.

@@ -7,10 +7,11 @@
 
 /**
  * @file tests/jit/test_rbank_liveness_adapter.cpp
- * @brief Test del LivenessAdapter (Fase 0.25): liveness + calls -> crosses_call.
- *        Dos niveles: (a) traduccion pura (intervalo + posiciones sinteticas);
- *        (b) INTEGRACION con un IrFunction real + compute_liveness, que valida
- *        que las posiciones de call son consistentes con def/end (linealizacion).
+ * @brief Test del LivenessAdapter (Fase 0.25): liveness + calls ->
+ * crosses_call. Dos niveles: (a) traduccion pura (intervalo + posiciones
+ * sinteticas); (b) INTEGRACION con un IrFunction real + compute_liveness, que
+ * valida que las posiciones de call son consistentes con def/end
+ * (linealizacion).
  */
 
 #include "ir/liveness.h"
@@ -26,21 +27,25 @@ using namespace codegen::rbank;
 static int g_checks = 0;
 static int g_fail = 0;
 
-#define CHECK(cond, msg)                                                     \
-    do {                                                                     \
-        ++g_checks;                                                          \
-        if (!(cond)) {                                                       \
-            ++g_fail;                                                        \
-            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);        \
-        }                                                                    \
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fail;                                                          \
+            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);          \
+        }                                                                      \
     } while (0)
 
 static ir::IrInstr mk(ir::IrOp op, ir::IrType t, ir::IrValueId dst,
                       std::vector<ir::IrValueId> ops = {}, uint64_t imm = 0,
                       std::string fn = "") {
     ir::IrInstr i;
-    i.op = op; i.type = t; i.dst = dst;
-    i.operands = std::move(ops); i.imm = imm; i.func_name = std::move(fn);
+    i.op = op;
+    i.type = t;
+    i.dst = dst;
+    i.operands = std::move(ops);
+    i.imm = imm;
+    i.func_name = std::move(fn);
     return i;
 }
 
@@ -50,17 +55,19 @@ int main() {
     // --- ir_op_is_call ---
     std::printf("\n[ir_op_is_call]\n");
     CHECK(ir_op_is_call(ir::IrOp::CALL) && ir_op_is_call(ir::IrOp::CALLN) &&
-          ir_op_is_call(ir::IrOp::CALLVIRT) && ir_op_is_call(ir::IrOp::CALLCLOSURE),
+              ir_op_is_call(ir::IrOp::CALLVIRT) &&
+              ir_op_is_call(ir::IrOp::CALLCLOSURE),
           "op de llamada no reconocida");
     CHECK(!ir_op_is_call(ir::IrOp::ADD) && !ir_op_is_call(ir::IrOp::CONST) &&
-          !ir_op_is_call(ir::IrOp::RET),
+              !ir_op_is_call(ir::IrOp::RET),
           "op no-llamada marcada como llamada");
 
     // --- interval_covers (canonico: def <= p <= end) ---
     std::printf("\n[interval_covers inclusivo]\n");
     {
         ir::LiveInterval iv{0, 2, 8};
-        CHECK(interval_covers(iv, 2) && interval_covers(iv, 5) && interval_covers(iv, 8),
+        CHECK(interval_covers(iv, 2) && interval_covers(iv, 5) &&
+                  interval_covers(iv, 8),
               "covers de borde/interior falla");
         CHECK(!interval_covers(iv, 1) && !interval_covers(iv, 9),
               "covers fuera de rango");
@@ -70,7 +77,9 @@ int main() {
     std::printf("\n[crosses_call: traduccion pura]\n");
     {
         ir::LiveInterval iv{0, 2, 8};
-        ValueRequirements r; r.loop_depth = 9; r.is_gc = true; // otros campos
+        ValueRequirements r;
+        r.loop_depth = 9;
+        r.is_gc = true; // otros campos
         populate_liveness_requirements(r, iv, {5});
         CHECK(r.crosses_call, "call en [def,end] no marca crosses_call");
         CHECK(r.loop_depth == 9 && r.is_gc, "toco campos ajenos");
@@ -85,17 +94,29 @@ int main() {
     // --- INTEGRACION: IrFunction real + compute_liveness ---
     std::printf("\n[integracion: IrFunction real]\n");
     {
-        using ir::IrOp; using ir::IrType;
+        using ir::IrOp;
+        using ir::IrType;
         ir::IrFunction fn;
-        fn.name = "test"; fn.ret_type = IrType::I64;
+        fn.name = "test";
+        fn.ret_type = IrType::I64;
         fn.values.resize(3);
-        for (uint32_t i = 0; i < 3; ++i) { fn.values[i].id = i; fn.values[i].type = IrType::I64; }
-        ir::IrBlock blk; blk.id = 0; blk.name = "entry";
-        blk.instrs.push_back(mk(IrOp::CONST, IrType::I64, 0, {}, 5));       // pos 0: def v0
-        blk.instrs.push_back(mk(IrOp::CALL, IrType::VOID, ir::IR_NO_VALUE, {}, 0, "foo")); // pos 1: call
-        blk.instrs.push_back(mk(IrOp::CONST, IrType::I64, 1, {}, 7));       // pos 2: def v1 (tras call)
-        blk.instrs.push_back(mk(IrOp::ADD, IrType::I64, 2, {0, 1}));        // pos 3: usa v0 y v1
-        blk.instrs.push_back(mk(IrOp::RET, IrType::I64, ir::IR_NO_VALUE, {2})); // pos 4: usa v2
+        for (uint32_t i = 0; i < 3; ++i) {
+            fn.values[i].id = i;
+            fn.values[i].type = IrType::I64;
+        }
+        ir::IrBlock blk;
+        blk.id = 0;
+        blk.name = "entry";
+        blk.instrs.push_back(
+            mk(IrOp::CONST, IrType::I64, 0, {}, 5)); // pos 0: def v0
+        blk.instrs.push_back(mk(IrOp::CALL, IrType::VOID, ir::IR_NO_VALUE, {},
+                                0, "foo")); // pos 1: call
+        blk.instrs.push_back(mk(IrOp::CONST, IrType::I64, 1, {},
+                                7)); // pos 2: def v1 (tras call)
+        blk.instrs.push_back(
+            mk(IrOp::ADD, IrType::I64, 2, {0, 1})); // pos 3: usa v0 y v1
+        blk.instrs.push_back(
+            mk(IrOp::RET, IrType::I64, ir::IR_NO_VALUE, {2})); // pos 4: usa v2
         fn.blocks.push_back(std::move(blk));
 
         ir::LivenessResult live = ir::compute_liveness(fn);
@@ -108,7 +129,8 @@ int main() {
         bool seen[3] = {false, false, false};
         for (const ir::LiveInterval &iv : live.intervals) {
             if (iv.id > 2) continue;
-            ValueRequirements r; r.value_id = iv.id;
+            ValueRequirements r;
+            r.value_id = iv.id;
             populate_liveness_requirements(r, iv, calls);
             crosses[iv.id] = r.crosses_call;
             seen[iv.id] = true;

@@ -28,10 +28,10 @@ namespace {
  * @brief Lo que se sabe de un bucle instrumentado.
  */
 struct Bucle {
-    std::string fn_name;                 ///< funcion que lo contiene.
-    uint32_t header_block = 0;           ///< bloque de entrada.
-    std::vector<osr::Captura> capturas;  ///< estado vivo a la entrada.
-    bool abortado = false;               ///< true si no se capturo el estado.
+    std::string fn_name;                ///< funcion que lo contiene.
+    uint32_t header_block = 0;          ///< bloque de entrada.
+    std::vector<osr::Captura> capturas; ///< estado vivo a la entrada.
+    bool abortado = false;              ///< true si no se capturo el estado.
 };
 
 /* Indexado por identificador de bucle. */
@@ -132,9 +132,13 @@ uint64_t registrar_bucle(std::string fn_name, uint32_t header_block,
     return id;
 }
 
-uint64_t *contador_de_vueltas() noexcept { return &g_vueltas; }
+uint64_t *contador_de_vueltas() noexcept {
+    return &g_vueltas;
+}
 
-void *disparador() noexcept { return reinterpret_cast<void *>(&disparar); }
+void *disparador() noexcept {
+    return reinterpret_cast<void *>(&disparar);
+}
 
 void instalar_resumen_al_salir() {
     static bool instalado = false;
@@ -150,9 +154,13 @@ void instalar_resumen_al_salir() {
 
 } // namespace osr
 
-void set_osr_handler(uint64_t (*handler)(uint64_t)) { g_handler = handler; }
+void set_osr_handler(uint64_t (*handler)(uint64_t)) {
+    g_handler = handler;
+}
 
-uint32_t osr_loop_count() { return g_sitios; }
+uint32_t osr_loop_count() {
+    return g_sitios;
+}
 
 bool osr_loop_info(uint64_t loop_id, std::string &fn_name_out,
                    uint32_t &header_block_out) {
@@ -170,7 +178,8 @@ bool osr_loop_captures(uint64_t loop_id, std::vector<uint32_t> &out_vids) {
     if (b.abortado) return false;
     out_vids.clear();
     out_vids.reserve(b.capturas.size());
-    for (const osr::Captura &c : b.capturas) out_vids.push_back(c.vid);
+    for (const osr::Captura &c : b.capturas)
+        out_vids.push_back(c.vid);
     return true;
 }
 

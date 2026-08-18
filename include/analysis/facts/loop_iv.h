@@ -33,13 +33,14 @@ namespace analysis {
  * ampliar el descriptor con una direccion (Direction) mas adelante.
  */
 struct LoopIV {
-    ir::IrValueId phi = ir::IR_NO_VALUE;   ///< PHI del header (el IV).
-    int phi_index = -1;                    ///< indice de esa PHI entre las del
-                                           ///< header (para no re-localizarla).
-    ir::IrValueId init = ir::IR_NO_VALUE;  ///< valor inicial (desde el preheader).
-    int64_t stride = 0;                    ///< incremento por iteracion (> 0).
-    ir::IrOp cmp_op = ir::IrOp::NOP;       ///< CMP_LT/LE/ULT/ULE de la guarda.
-    int64_t cmp_offset = 0;                ///< c de cmp(iv + c, bound) (0 = iv).
+    ir::IrValueId phi = ir::IR_NO_VALUE; ///< PHI del header (el IV).
+    int phi_index = -1;                  ///< indice de esa PHI entre las del
+                                         ///< header (para no re-localizarla).
+    ir::IrValueId init =
+        ir::IR_NO_VALUE;             ///< valor inicial (desde el preheader).
+    int64_t stride = 0;              ///< incremento por iteracion (> 0).
+    ir::IrOp cmp_op = ir::IrOp::NOP; ///< CMP_LT/LE/ULT/ULE de la guarda.
+    int64_t cmp_offset = 0;          ///< c de cmp(iv + c, bound) (0 = iv).
     ir::IrValueId bound = ir::IR_NO_VALUE; ///< cota N (invariante del bucle).
 };
 
@@ -47,20 +48,21 @@ struct LoopIV {
  * @brief Descubre el IV canonico creciente de un bucle reducible.
  *
  * Lee las PHIs del @p header (init = arg desde @p preheader, back = arg desde
- * @p latch) y la guarda (el cmp que define la condicion del BR_COND del header).
- * Identifica la PHI cuyo valor de retorno es `phi + S` con S constante > 0 (el
- * IV), y la cota N del cmp (que puede comparar `iv` o `iv + c`).  Rellena @p out
- * (incluido @c out.phi_index, el indice del IV entre las PHIs del header en
- * orden de aparicion).
+ * @p latch) y la guarda (el cmp que define la condicion del BR_COND del
+ * header). Identifica la PHI cuyo valor de retorno es `phi + S` con S constante
+ * > 0 (el IV), y la cota N del cmp (que puede comparar `iv` o `iv + c`).
+ * Rellena @p out (incluido @c out.phi_index, el indice del IV entre las PHIs
+ * del header en orden de aparicion).
  *
- * NO verifica que @c out.bound sea invariante del bucle: eso es una comprobacion
- * ESTRUCTURAL (necesita el conjunto de bloques del bucle) que hace el llamante.
+ * NO verifica que @c out.bound sea invariante del bucle: eso es una
+ * comprobacion ESTRUCTURAL (necesita el conjunto de bloques del bucle) que hace
+ * el llamante.
  *
  * @return true si hay un IV canonico creciente con cota reconocible.
  */
-bool detect_loop_iv(const ir::IrFunction &fn,
-                    const std::vector<int> &def_block, ir::IrBlockId header,
-                    ir::IrBlockId preheader, ir::IrBlockId latch, LoopIV &out);
+bool detect_loop_iv(const ir::IrFunction &fn, const std::vector<int> &def_block,
+                    ir::IrBlockId header, ir::IrBlockId preheader,
+                    ir::IrBlockId latch, LoopIV &out);
 
 } // namespace analysis
 

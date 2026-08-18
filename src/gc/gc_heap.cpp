@@ -229,7 +229,7 @@ GC_DBG_TLS GcDebugAtExit g_gc_debug_at_exit;
 //   [fmap+0]  count (u32)   [fmap+4]  pad (u32)   [fmap+8]  off0, off1, ...
 // Solo campos con Type.gc_managed == true (NUNCA unique/shared/raw/prim).
 namespace {
-constexpr uint32_t VX_TDESC_HDR = 32;          // cabecera antes de la vtable
+constexpr uint32_t VX_TDESC_HDR = 32;            // cabecera antes de la vtable
 constexpr uint32_t VX_TDESC_MAGIC = 0x44545856u; // 'VXTD' little-endian
 
 // Lee el field-map de un objeto gc<X> AOT a partir de su @p payload (= obj[0],
@@ -239,20 +239,20 @@ constexpr uint32_t VX_TDESC_MAGIC = 0x44545856u; // 'VXTD' little-endian
 // devuelven count=0 (nada que trazar/reescribir).  Solo lecturas de memoria
 // host valida (.rodata/.data.rel.ro); freestanding-safe (sin libc/stdio).
 inline void read_gc_field_map(const uint8_t *payload, bool host_ptr_only,
-                              uint32_t &count,
-                              const uint32_t *&offs) noexcept {
+                              uint32_t &count, const uint32_t *&offs) noexcept {
     count = 0;
     offs = nullptr;
     if (host_ptr_only) return; // box por valor (gc<primitivo>): sin descriptor
     uint64_t obj0 = 0;
     std::memcpy(&obj0, payload, 8); // obj[0] = &descriptor + 32
     if (obj0 == 0) return;
-    const uint8_t *desc = reinterpret_cast<const uint8_t *>(obj0) - VX_TDESC_HDR;
+    const uint8_t *desc =
+        reinterpret_cast<const uint8_t *>(obj0) - VX_TDESC_HDR;
     uint64_t fmap_ptr = 0;
     std::memcpy(&fmap_ptr, desc, 8); // field_map_ptr @ desc+0
     if (fmap_ptr == 0) return;       // clase gc sin campos-referencia
     const uint8_t *fmap = reinterpret_cast<const uint8_t *>(fmap_ptr);
-    std::memcpy(&count, fmap, 4);         // count @ fmap+0
+    std::memcpy(&count, fmap, 4);                        // count @ fmap+0
     offs = reinterpret_cast<const uint32_t *>(fmap + 8); // offsets @ fmap+8
 }
 } // namespace
@@ -1039,9 +1039,9 @@ void GcHeap::scan_jit_roots_precise(std::vector<GcHandle> &worklist,
     JitPreciseCtx ctx{this, &worklist, 0, young};
 
     /* MODO AOT: WALK POR TAMANO DE FRAME desde el frame Vesta capturado en la
-     * frontera C<-Vesta (set_aot_scan_boundary, fijado por cada runtime-entry del
-     * GC que puede colectar).  Reconstruye cada RBP con frame_size en vez de la
-     * cadena RBP -> salta los frames C++ de libvesta_gc (no-walkables por
+     * frontera C<-Vesta (set_aot_scan_boundary, fijado por cada runtime-entry
+     * del GC que puede colectar).  Reconstruye cada RBP con frame_size en vez
+     * de la cadena RBP -> salta los frames C++ de libvesta_gc (no-walkables por
      * -fomit-frame-pointer) y arranca en el primer frame Vesta real.  Es lo que
      * cierra el bug de raices vivas colectadas en AOT.  El path interp/JIT
      * (abajo) NO cambia. */
@@ -1052,7 +1052,8 @@ void GcHeap::scan_jit_roots_precise(std::vector<GcHandle> &worklist,
         stats_.precise_frames_scanned += stats.jit_frames;
         /* Invalidar el boundary: cada runtime-entry del GC lo re-captura antes
          * de colectar.  Asi un hipotetico major_gc que no pase por la frontera
-         * nunca caminaria un frame Vesta ya muerto (defensa anti-corrupcion). */
+         * nunca caminaria un frame Vesta ya muerto (defensa anti-corrupcion).
+         */
         aot_boundary_valid_ = false;
         return;
     }
@@ -1060,12 +1061,13 @@ void GcHeap::scan_jit_roots_precise(std::vector<GcHandle> &worklist,
     /* INTERP+JIT: boundary capturado por la runtime-entry (@c vrt_*) que el
      * codigo JIT llamo DIRECTAMENTE para alocar.  Mismo WALK POR TAMANO DE
      * FRAME que el AOT (reconstruye RBP con frame_size) -> robusto ante los
-     * frames C++ del runtime que a -O0 rompen la cadena RBP (@c lea rbp,[rsp+N]),
-     * que es justo lo que hacia que el scan de frames JIT (cadena RBP) marcara
-     * 0 young roots dentro de un loop JIT que dispara GC.  NO invalida el
-     * boundary: la misma coleccion puede correr varias fases (minor: este
-     * root-scan + @c scan_jit_forwards; major: otro root-scan) sobre el mismo
-     * frame JIT llamador -- lo invalida el guard de la runtime-entry al salir. */
+     * frames C++ del runtime que a -O0 rompen la cadena RBP (@c lea
+     * rbp,[rsp+N]), que es justo lo que hacia que el scan de frames JIT (cadena
+     * RBP) marcara 0 young roots dentro de un loop JIT que dispara GC.  NO
+     * invalida el boundary: la misma coleccion puede correr varias fases
+     * (minor: este root-scan + @c scan_jit_forwards; major: otro root-scan)
+     * sobre el mismo frame JIT llamador -- lo invalida el guard de la
+     * runtime-entry al salir. */
     if (jit_boundary_valid_) {
         const jit::JitScanStats stats = jit::scan_aot_frames(
             &jit_precise_root_cb, &ctx, jit_boundary_pc_, jit_boundary_sp_);
@@ -1116,8 +1118,8 @@ void GcHeap::scan_jit_roots_precise(std::vector<GcHandle> &worklist,
 
 bool GcHeap::jit_forward_slot(uint64_t value, const uint8_t *slot_addr) {
     if (slot_addr == nullptr || value == 0 || value < 256) return false;
-    const auto *p = reinterpret_cast<const uint8_t *>(
-        static_cast<uintptr_t>(value));
+    const auto *p =
+        reinterpret_cast<const uint8_t *>(static_cast<uintptr_t>(value));
     const uint8_t *const *fv = forward_table_.find(p);
     if (fv == nullptr) return false;
     const uint64_t new_v = reinterpret_cast<uint64_t>(*fv);
@@ -1138,8 +1140,8 @@ struct JitForwardCtx {
 
 /**
  * @brief Callback de @c scan_jit_frames para el forward-update: por cada slot
- *        HOSTPTR/STRING con un host_ptr evacuado, reescribe el slot con la nueva
- *        direccion.  Los slots HANDLE no se tocan (el GcHandle es estable).
+ *        HOSTPTR/STRING con un host_ptr evacuado, reescribe el slot con la
+ * nueva direccion.  Los slots HANDLE no se tocan (el GcHandle es estable).
  */
 void jit_forward_cb(void *ctx, uint64_t value, jit::StackmapGcKind kind,
                     const uint8_t *slot_addr) {
@@ -1206,7 +1208,8 @@ void interp_precise_root_cb(void *ctx, uint64_t value, uint8_t kind) {
     // kind reusa jit::StackmapGcKind (0=HANDLE 1=HOSTPTR 2=STRING).
     if (kind == static_cast<uint8_t>(jit::StackmapGcKind::HANDLE)) {
         const auto h = static_cast<gc::GcHandle>(value);
-        if (c->heap->try_mark_precise_handle(h, *c->worklist)) ++c->roots_marked;
+        if (c->heap->try_mark_precise_handle(h, *c->worklist))
+            ++c->roots_marked;
     } else {
         if (value == 0) return;
         const auto *ptr = reinterpret_cast<const uint8_t *>(value);
@@ -1269,22 +1272,21 @@ void GcHeap::scan_interp_roots_precise(std::vector<GcHandle> &worklist) {
     // Diagnostico temporal de desarrollo (verificador aditivo-vs-primario):
     // NO es un flag de producto.  Muestra la cobertura precisa-vs-conservador.
     // Gateado por FREESTANDING: el GC del AOT (libvesta_gc) no tiene libc/stdio
-    // (arrastrar std::fprintf romperia el link con __mingw_fprintf sin resolver)
-    // y ademas no hay pila de interprete que trazar en AOT.  Usa gc_dbg_emit
-    // (write() syscall, freestanding-safe) en el build de la VM.
+    // (arrastrar std::fprintf romperia el link con __mingw_fprintf sin
+    // resolver) y ademas no hay pila de interprete que trazar en AOT.  Usa
+    // gc_dbg_emit (write() syscall, freestanding-safe) en el build de la VM.
 #if !defined(VESTA_GC_FREESTANDING)
     static const bool trace = [] {
         const char *v = std::getenv("VESTA_GC_INTERP_TRACE");
         return v && v[0] == '1';
     }();
     if (trace && ctx.notified > 0) {
-        gc_dbg_emit(
-            "[gc-interp-precise] notified=%llu marked=%llu "
-            "(acc marked=%llu conservador=%llu)\n",
-            (unsigned long long)ctx.notified,
-            (unsigned long long)ctx.roots_marked,
-            (unsigned long long)stats_.interp_precise_roots_marked,
-            (unsigned long long)stats_.conservative_roots_marked);
+        gc_dbg_emit("[gc-interp-precise] notified=%llu marked=%llu "
+                    "(acc marked=%llu conservador=%llu)\n",
+                    (unsigned long long)ctx.notified,
+                    (unsigned long long)ctx.roots_marked,
+                    (unsigned long long)stats_.interp_precise_roots_marked,
+                    (unsigned long long)stats_.conservative_roots_marked);
         gc_debug_flush();
     }
 #endif
@@ -1350,17 +1352,17 @@ void GcHeap::verify_completeness(std::vector<GcHandle> &worklist) {
         // escalares pequenos que nunca son host_ptrs canonicos.
         if (v < 65536) return;
         if ((v & 7) != 0) return; // host_ptr GC siempre alineado a 8
-        const auto *ptr = reinterpret_cast<const uint8_t *>(
-            static_cast<uintptr_t>(v));
+        const auto *ptr =
+            reinterpret_cast<const uint8_t *>(static_cast<uintptr_t>(v));
         GcHandle h = handle_for_ptr(ptr);
         if (h == GC_NULL_HANDLE) {
-            // Intento de interior scan en OldGen (STRRAW -> data[] a offset 40).
+            // Intento de interior scan en OldGen (STRRAW -> data[] a offset
+            // 40).
             for (auto &block : old_blocks_) {
                 uint8_t *bend = block.ptr + block.bump_offset;
                 if (ptr < block.ptr || ptr >= bend) continue;
                 GcHeader *hdr = find_containing_header(
-                    block.ptr, block.bump_offset,
-                    const_cast<uint8_t *>(ptr));
+                    block.ptr, block.bump_offset, const_cast<uint8_t *>(ptr));
                 if (hdr == nullptr) return;
                 uint8_t *payload =
                     reinterpret_cast<uint8_t *>(hdr) + sizeof(GcHeader);
@@ -1386,15 +1388,15 @@ void GcHeap::verify_completeness(std::vector<GcHandle> &worklist) {
         for (uint64_t addr = rsp; addr + 8 <= high; addr += 8)
             check_hostptr(vmem->read_u64(addr));
     }
-    for (int i = 0; i < 16; ++i) check_hostptr(regs[i]);
+    for (int i = 0; i < 16; ++i)
+        check_hostptr(regs[i]);
 
     if (!gap_handles.empty()) {
         stats_.verify_gap_roots += gap_handles.size();
         gc_dbg_emit(
             "[gc-verify] CANDIDATO: %zu obj(s) GC via host_ptr que el PRECISO "
             "no marco (major_gc #%llu) -- confirmar con PRECISE_ONLY. handles:",
-            gap_handles.size(),
-            (unsigned long long)stats_.major_gc_count);
+            gap_handles.size(), (unsigned long long)stats_.major_gc_count);
         for (GcHandle h : gap_handles)
             gc_dbg_emit(" %u", (unsigned)h);
         gc_dbg_emit("\n");
@@ -1498,9 +1500,10 @@ void GcHeap::register_finalizer(uint8_t *payload, GcFinalizerKind kind,
     // CLASS_DTOR: guardar el vaddr del dtor concreto en la side-table (la
     // instancia de clase no lo lleva inline).  Keyed por el host_ptr del
     // payload, estable mientras el objeto no se evacue (los boxes gc<Clase>
-    // usan alloc_pinned -> OldGen non-moving -> el ptr es estable).  Freestanding
-    // -safe (U64U64Map hash open-addressing): mismo camino en interp/JIT/AOT,
-    // cierra la fuga de gc<Clase> con ~Clase() en AOT.  O(1) amortizado.
+    // usan alloc_pinned -> OldGen non-moving -> el ptr es estable).
+    // Freestanding -safe (U64U64Map hash open-addressing): mismo camino en
+    // interp/JIT/AOT, cierra la fuga de gc<Clase> con ~Clase() en AOT.  O(1)
+    // amortizado.
     if (kind == GcFinalizerKind::CLASS_DTOR) {
         const uint64_t key = reinterpret_cast<uint64_t>(payload);
         // set() sobrescribe si ya existe (re-registro del mismo host_ptr).
@@ -1513,7 +1516,8 @@ void GcHeap::unregister_finalizer(uint8_t *payload) {
     auto *hdr = reinterpret_cast<GcHeader *>(payload - sizeof(GcHeader));
     hdr->has_finalizer = 0;
     hdr->finalizer_kind = 0;
-    // Quitar la entrada de la side-table CLASS_DTOR (hash erase, O(1) amortizado).
+    // Quitar la entrada de la side-table CLASS_DTOR (hash erase, O(1)
+    // amortizado).
     const uint64_t key = reinterpret_cast<uint64_t>(payload);
     class_dtor_vaddr_.erase(key);
 }
@@ -1534,7 +1538,8 @@ void GcHeap::stage_finalizer(GcHeader *hdr, uint8_t *payload) {
         class_dtor_vaddr_.take(key, f.a0);
         f.a1 = reinterpret_cast<uint64_t>(payload);
     } else {
-        // UNIQUE: box = [inner_ptr@0, deleter_vaddr@8].  SHARED: box = [ctrl@0].
+        // UNIQUE: box = [inner_ptr@0, deleter_vaddr@8].  SHARED: box =
+        // [ctrl@0].
         std::memcpy(&f.a0, payload, sizeof(uint64_t));
         if (kind == GcFinalizerKind::UNIQUE)
             std::memcpy(&f.a1, payload + 8, sizeof(uint64_t));
@@ -1597,9 +1602,9 @@ void GcHeap::write_barrier(GcHandle old_handle) {
     // remembered_set: un contenedor YOUNG con refs young ya se alcanza por el
     // BFS del nursery (o esta muerto), y al promoverse co-evacua sus refs en el
     // mismo minor.  El barrier SOLO importa cuando un objeto YA OLD recibe una
-    // referencia young en un campo (store post-promocion).  Sound: sin el filtro
-    // solo habria mas entradas (over-approx); con el filtro el set queda minimo
-    // (old->young reales).  Barato: 1 lookup + 1 check de generacion.
+    // referencia young en un campo (store post-promocion).  Sound: sin el
+    // filtro solo habria mas entradas (over-approx); con el filtro el set queda
+    // minimo (old->young reales).  Barato: 1 lookup + 1 check de generacion.
     if (old_handle == GC_NULL_HANDLE ||
         old_handle >= static_cast<GcHandle>(handles_.size()))
         return;
@@ -1771,8 +1776,8 @@ void GcHeap::mark_reachable(GcHandle h, std::vector<GcHandle> &worklist) {
             uint64_t fptr = 0;
             std::memcpy(&fptr, payload + fo, 8);
             if (fptr == 0) continue; // campo nulo
-            const GcHandle ref = handle_for_ptr(
-                reinterpret_cast<const uint8_t *>(fptr));
+            const GcHandle ref =
+                handle_for_ptr(reinterpret_cast<const uint8_t *>(fptr));
             if (ref == GC_NULL_HANDLE ||
                 ref >= static_cast<GcHandle>(handles_.size()))
                 continue;
@@ -1835,27 +1840,28 @@ void GcHeap::minor_gc() {
         if (hdr->gen == GcGen::YOUNG) hdr->color = GcColor::WHITE;
     }
 
-    // MIGRACION DEL NURSERY A RAICES PRECISAS (scan_interp_young_roots_precise).
+    // MIGRACION DEL NURSERY A RAICES PRECISAS
+    // (scan_interp_young_roots_precise).
     //
     // El scan PRECISO (stackmaps VSMP) reporta TODAS las raices GC del
     // interprete independientemente de la generacion; el enrutado a
     // try_mark_precise_young marca los YOUNG DIRECTAMENTE alcanzables desde la
     // pila/regs.  Es el mismo mecanismo que el major_gc usa para OldGen.
     //
-    // BLOQUEANTE ESTRUCTURAL (por eso el preciso young es OPT-IN, NO el default):
-    // un minor_gc generacional preciso NECESITA un WRITE-BARRIER old->young para
-    // encontrar los YOUNG alcanzables SOLO a traves de un campo de un objeto OLD
-    // (p.ej. `l.head` cuando `l` ya se promovio).  El opcode `gcwb` +
-    // remembered_set EXISTEN, pero el frontend Vesta NUNCA los emite en stores de
-    // campo (los baja a STORE/movh de host_ptr, sin barrier) -> remembered_set
-    // queda VACIO.  El scan CONSERVADOR enmascara este hueco al retener esos
-    // young via slots rancios de la pila VM.  Sin el write-barrier, hacer el
-    // young preciso PRIMARIO perderia los young alcanzables solo via old (UAF con
-    // el GC moving).  Hasta que exista el write-barrier, el conservador sigue
-    // siendo el PRIMARIO del nursery (comportamiento previo, sound en la
-    // practica).  El preciso young se activa para validacion/futuro con
-    // VESTA_GC_YOUNG_PRECISE=1 (aditivo con el conservador salvo que ademas se
-    // pida VESTA_GC_PRECISE_ONLY=1).
+    // BLOQUEANTE ESTRUCTURAL (por eso el preciso young es OPT-IN, NO el
+    // default): un minor_gc generacional preciso NECESITA un WRITE-BARRIER
+    // old->young para encontrar los YOUNG alcanzables SOLO a traves de un campo
+    // de un objeto OLD (p.ej. `l.head` cuando `l` ya se promovio).  El opcode
+    // `gcwb` + remembered_set EXISTEN, pero el frontend Vesta NUNCA los emite
+    // en stores de campo (los baja a STORE/movh de host_ptr, sin barrier) ->
+    // remembered_set queda VACIO.  El scan CONSERVADOR enmascara este hueco al
+    // retener esos young via slots rancios de la pila VM.  Sin el
+    // write-barrier, hacer el young preciso PRIMARIO perderia los young
+    // alcanzables solo via old (UAF con el GC moving).  Hasta que exista el
+    // write-barrier, el conservador sigue siendo el PRIMARIO del nursery
+    // (comportamiento previo, sound en la practica).  El preciso young se
+    // activa para validacion/futuro con VESTA_GC_YOUNG_PRECISE=1 (aditivo con
+    // el conservador salvo que ademas se pida VESTA_GC_PRECISE_ONLY=1).
     std::vector<GcHandle> worklist;
 
 #if !defined(VESTA_GC_FREESTANDING)
@@ -1880,7 +1886,7 @@ void GcHeap::minor_gc() {
     // El write-barrier old->young (gcwb, emitido por el frontend en cada store
     // de campo-CLASS y filtrado a old->young reales por write_barrier()) puebla
     // el remembered_set -> los young alcanzables SOLO via un campo de un objeto
-    // OLD (p.ej. la cola young de una lista cuyo head ya es OLD) sobreviven.  El
+    // OLD (p.ej. la cola young de una lista cuyo head ya es OLD) sobreviven. El
     // scan CONSERVADOR de la pila deja de ser primario: sus falsos positivos
     // (host_ptrs rancios) retenian young ya muertos -> no-determinismo.  Queda
     // como fallback GATEADO (igual que en major_gc):
@@ -1891,14 +1897,14 @@ void GcHeap::minor_gc() {
     // conservador primario para no perder raices de sus frames.
     scan_interp_young_roots_precise(worklist);
 
-    // Frames JIT nativos: raices YOUNG precisas via stackmaps (mismo walk que el
-    // major_gc pero enrutado a try_mark_precise_young).  Imprescindible al
+    // Frames JIT nativos: raices YOUNG precisas via stackmaps (mismo walk que
+    // el major_gc pero enrutado a try_mark_precise_young).  Imprescindible al
     // flipear a preciso-primario: el scan de interp SOLO cubre frames del
     // interprete; un objeto young cuya unica raiz viva vive en un frame
     // JIT-compilado (p.ej. el `head`/`tail` de un build() JIT-eado) se perderia
-    // sin esto.  En AOT (aot_precise_roots_) el nursery queda vacio -> se omite.
-    if (!aot_precise_roots_)
-        scan_jit_roots_precise(worklist, /*young=*/true);
+    // sin esto.  En AOT (aot_precise_roots_) el nursery queda vacio -> se
+    // omite.
+    if (!aot_precise_roots_) scan_jit_roots_precise(worklist, /*young=*/true);
 
     // Decidir si corre el conservador de la pila del interprete (fallback).
     bool run_conservative_minor = false;
@@ -1970,8 +1976,8 @@ void GcHeap::minor_gc() {
     // cada uno, scan_young_refs MARCA+PUSH los young DIRECTOS al worklist (NO
     // evacua).  DEBE correr ANTES del BFS de abajo: asi la cadena transitiva
     // (old->young1->young2...) se sigue por el mismo BFS y la evacuacion
-    // unificada mueve TODO.  (Antes se escaneaba DESPUES de la evacuacion con un
-    // worklist local que se descartaba -> los hijos transitivos del young
+    // unificada mueve TODO.  (Antes se escaneaba DESPUES de la evacuacion con
+    // un worklist local que se descartaba -> los hijos transitivos del young
     // directo-desde-old se perdian.)
     for (GcHandle old_h : remembered_set_) {
         if (old_h >= static_cast<GcHandle>(handles_.size()) ||
@@ -2028,9 +2034,9 @@ void GcHeap::minor_gc() {
         }
     }
 
-    // (El scan del remembered_set old->young corre ARRIBA, antes del BFS y de la
-    // evacuacion, para que la cadena transitiva old->young1->young2 se evacue
-    // completa.  Aqui ya no se re-escanea.)
+    // (El scan del remembered_set old->young corre ARRIBA, antes del BFS y de
+    // la evacuacion, para que la cadena transitiva old->young1->young2 se
+    // evacue completa.  Aqui ya no se re-escanea.)
 
     // los handles YOUNG no evacuados (color WHITE tras
     // scan) deben liberarse: handles_[h].live = false + payload_ptr
@@ -2077,11 +2083,12 @@ void GcHeap::minor_gc() {
     }
     // Forward-update de los host_ptrs GC guardados en frames JIT nativos (la
     // pila VM la cubre update_stack_forwards arriba; los frames JIT-compilados
-    // tienen sus propios slots en la pila NATIVA).  Sin esto, un `gc<T>` vivo en
-    // un frame JIT a traves de la alocacion que disparo el minor quedaria stale
+    // tienen sus propios slots en la pila NATIVA).  Sin esto, un `gc<T>` vivo
+    // en un frame JIT a traves de la alocacion que disparo el minor quedaria
+    // stale
     // -> el siguiente store de campo escribiria en el nursery ya reseteado
-    // (sintoma: la cola de una lista construida en un loop JIT se pierde tras el
-    // primer minor).  En AOT el nursery esta vacio -> se omite.
+    // (sintoma: la cola de una lista construida en un loop JIT se pierde tras
+    // el primer minor).  En AOT el nursery esta vacio -> se omite.
     if (!aot_precise_roots_) scan_jit_forwards();
     forward_table_.clear();
 
@@ -2230,8 +2237,9 @@ void GcHeap::major_gc() {
 #if !defined(VESTA_GC_FREESTANDING)
     // SOUNDNESS DEL MOVING con marcado PRECISO.  El scan preciso del interprete
     // es ahora COMPLETO: cada raiz GC viva (regs + slots de spill + slots de
-    // Vesta ALLOCA materializados como spill del SSA value) queda cubierta por el
-    // stackmap del PC del safepoint.  Cerrados los dos huecos que lo rompian:
+    // Vesta ALLOCA materializados como spill del SSA value) queda cubierta por
+    // el stackmap del PC del safepoint.  Cerrados los dos huecos que lo
+    // rompian:
     //   (1) el offset del stackmap se registraba TRAS la instruccion (rip+size)
     //       en vez de en su INICIO -> el scan (match exacto con rip) nunca lo
     //       hallaba (ver helpers_emmit_parser_to_bytecode.cpp);
@@ -2328,87 +2336,89 @@ void GcHeap::major_gc() {
     // guardan un GcHandle ESTABLE (mover el objeto solo actualiza
     // handles_[h].addr; las referencias-handle embebidas no cambian) y las
     // UNICAS referencias crudas (host_ptr) viven en la pila/regs del VM, que se
-    // reescriben tras mover.  NO se compacta en AOT (native_poo guarda host_ptrs
-    // crudos en los fields, sin tabla de handles -> haria falta un field-map que
-    // no existe) ni con frames nativos JIT activos (host_ptrs en la pila nativa
-    // sin reescritura implementada aun).  En esos modos se cae al sweep
-    // no-moving de siempre -> comportamiento identico a hoy.
-    // AOT (native_poo): compactar con reescritura de raices (stackmaps) +
-    // punteros internos (field-maps del descriptor de tipo).  Es correcto
-    // porque el mark AOT es preciso (raices via scan_aot_frames + interior via
-    // field-maps).  Sigue OPT-IN dentro de compact_old_gen_aot.  El path
-    // interp mantiene su gate original (vm_mem + sin JIT frames nativos).
+    // reescriben tras mover.  NO se compacta en AOT (native_poo guarda
+    // host_ptrs crudos en los fields, sin tabla de handles -> haria falta un
+    // field-map que no existe) ni con frames nativos JIT activos (host_ptrs en
+    // la pila nativa sin reescritura implementada aun).  En esos modos se cae
+    // al sweep no-moving de siempre -> comportamiento identico a hoy. AOT
+    // (native_poo): compactar con reescritura de raices (stackmaps) + punteros
+    // internos (field-maps del descriptor de tipo).  Es correcto porque el mark
+    // AOT es preciso (raices via scan_aot_frames + interior via field-maps).
+    // Sigue OPT-IN dentro de compact_old_gen_aot.  El path interp mantiene su
+    // gate original (vm_mem + sin JIT frames nativos).
     const bool can_compact_now =
         aot_precise_roots_ ||
         (root_provider_ != nullptr && root_provider_->vm_mem() != nullptr &&
          jit::JitRegistry::instance().size() == 0);
     if (!(can_compact_now && compact_old_gen())) {
-    // SWEEP: WHITE (sin raiz) -> DEAD, y reconstruir free lists.
-    //
-    // (iv) GC no-moving: tras el sweep, los slots DEAD se vuelven a
-    // colocar en sus free lists segregadas para que el siguiente
-    // alloc_in_old los reuse en O(1).  Limpiamos las free lists al
-    // inicio del sweep y las repoblamos al recorrer cada slot DEAD.
-    // De este modo el estado de las listas siempre refleja la realidad
-    // post-sweep, sin entradas obsoletas.
-    //
-    // Solo se barren los bytes [block.ptr, block.ptr + block.bump_offset);
-    // los bytes posteriores nunca se aloacron y no contienen GcHeaders
-    // validos.
-    freelist_clear();
-    for (auto &block : old_blocks_) {
-        uint8_t *cursor = block.ptr;
-        uint8_t *end = block.ptr + block.bump_offset;
+        // SWEEP: WHITE (sin raiz) -> DEAD, y reconstruir free lists.
+        //
+        // (iv) GC no-moving: tras el sweep, los slots DEAD se vuelven a
+        // colocar en sus free lists segregadas para que el siguiente
+        // alloc_in_old los reuse en O(1).  Limpiamos las free lists al
+        // inicio del sweep y las repoblamos al recorrer cada slot DEAD.
+        // De este modo el estado de las listas siempre refleja la realidad
+        // post-sweep, sin entradas obsoletas.
+        //
+        // Solo se barren los bytes [block.ptr, block.ptr + block.bump_offset);
+        // los bytes posteriores nunca se aloacron y no contienen GcHeaders
+        // validos.
+        freelist_clear();
+        for (auto &block : old_blocks_) {
+            uint8_t *cursor = block.ptr;
+            uint8_t *end = block.ptr + block.bump_offset;
 
-        while (cursor + sizeof(GcHeader) <= end) {
-            auto *hdr = reinterpret_cast<GcHeader *>(cursor);
-            if (hdr->size == 0) break;
+            while (cursor + sizeof(GcHeader) <= end) {
+                auto *hdr = reinterpret_cast<GcHeader *>(cursor);
+                if (hdr->size == 0) break;
 
-            const size_t total = (sizeof(GcHeader) + hdr->size + 7) & ~7ULL;
+                const size_t total = (sizeof(GcHeader) + hdr->size + 7) & ~7ULL;
 
-            if (hdr->color == GcColor::WHITE) {
-                GC_LOGF("major_gc sweep killed OLD obj cursor=%p size=%u",
-                        (void *)cursor, (unsigned)hdr->size);
-                // FINALIZADOR: si el objeto colectado tiene un recurso interno
-                // (unique/shared con deleter), encolar su finalizador para
-                // correrlo en el safe point post-collect.  NO se ejecuta aqui
-                // (dentro del sweep) para no reentrar al interprete en medio
-                // del mark/sweep; se drena tras completar el collect.  Se
-                // limpia el bit para no re-encolar si el slot se re-inspecciona.
-                if (hdr->has_finalizer)
-                    stage_finalizer(hdr, cursor + sizeof(GcHeader));
-                stats_.freed_count++;
-                stats_.freed_bytes += total; // total slot, no payload
-                old_used_ -= total;
-                hdr->color = GcColor::DEAD;
-                // Modo AOT: LIBERAR el handle del objeto colectado (live=false +
-                // borrar de ptr_to_handle_ + reciclar).  En el path VM el handle
-                // colgante es benigno (el programa ya lo solto) y NO se libera
-                // en el sweep -> aqui solo lo hacemos en AOT para que la tabla
-                // de handles no crezca sin limite (new-and-forget) y para que el
-                // conteo de vivos sea exacto.  El slot se reusa abajo (freelist).
-                if (aot_precise_roots_) {
-                    uint8_t *payload = cursor + sizeof(GcHeader);
-                    const GcHandle dh = ptr_to_handle_.find(payload);
-                    if (dh != GC_NULL_HANDLE) {
-                        ptr_to_handle_.erase(payload);
-                        if (dh < static_cast<GcHandle>(handles_.size())) {
-                            handles_[dh].addr = nullptr;
-                            handles_[dh].live = false;
-                            free_handles_.push_back(dh);
+                if (hdr->color == GcColor::WHITE) {
+                    GC_LOGF("major_gc sweep killed OLD obj cursor=%p size=%u",
+                            (void *)cursor, (unsigned)hdr->size);
+                    // FINALIZADOR: si el objeto colectado tiene un recurso
+                    // interno (unique/shared con deleter), encolar su
+                    // finalizador para correrlo en el safe point post-collect.
+                    // NO se ejecuta aqui (dentro del sweep) para no reentrar al
+                    // interprete en medio del mark/sweep; se drena tras
+                    // completar el collect.  Se limpia el bit para no
+                    // re-encolar si el slot se re-inspecciona.
+                    if (hdr->has_finalizer)
+                        stage_finalizer(hdr, cursor + sizeof(GcHeader));
+                    stats_.freed_count++;
+                    stats_.freed_bytes += total; // total slot, no payload
+                    old_used_ -= total;
+                    hdr->color = GcColor::DEAD;
+                    // Modo AOT: LIBERAR el handle del objeto colectado
+                    // (live=false + borrar de ptr_to_handle_ + reciclar).  En
+                    // el path VM el handle colgante es benigno (el programa ya
+                    // lo solto) y NO se libera en el sweep -> aqui solo lo
+                    // hacemos en AOT para que la tabla de handles no crezca sin
+                    // limite (new-and-forget) y para que el conteo de vivos sea
+                    // exacto.  El slot se reusa abajo (freelist).
+                    if (aot_precise_roots_) {
+                        uint8_t *payload = cursor + sizeof(GcHeader);
+                        const GcHandle dh = ptr_to_handle_.find(payload);
+                        if (dh != GC_NULL_HANDLE) {
+                            ptr_to_handle_.erase(payload);
+                            if (dh < static_cast<GcHandle>(handles_.size())) {
+                                handles_[dh].addr = nullptr;
+                                handles_[dh].live = false;
+                                free_handles_.push_back(dh);
+                            }
                         }
                     }
                 }
-            }
 
-            if (hdr->color == GcColor::DEAD) {
-                // Re-insertar en su free list (sea exact match o large).
-                freelist_push(cursor, total);
-            }
+                if (hdr->color == GcColor::DEAD) {
+                    // Re-insertar en su free list (sea exact match o large).
+                    freelist_push(cursor, total);
+                }
 
-            cursor += total;
+                cursor += total;
+            }
         }
-    }
     } // fin del sweep no-moving (solo si NO se compacto arriba)
 
     // WEAK SWEEP: anular referencias debiles a objetos recolectados
@@ -2460,11 +2470,13 @@ void GcHeap::major_gc() {
 //
 // Fases:
 //   A. PLAN   : clasifica BLACK (mueve) vs WHITE/DEAD (colecta), calcula el
-//               destino de cada BLACK, sin mutar memoria.  Aborta (return false)
-//               si un BLACK no tiene handle valido (defensa anti-corrupcion) o
-//               si la fragmentacion esta por debajo del umbral (salvo forzado).
-//   B. FIN    : stagea los finalizadores de los colectados (memoria aun intacta).
-//   C. MOVE   : memmove de cada BLACK a su destino (orden creciente -> solape
+//               destino de cada BLACK, sin mutar memoria.  Aborta (return
+//               false) si un BLACK no tiene handle valido (defensa
+//               anti-corrupcion) o si la fragmentacion esta por debajo del
+//               umbral (salvo forzado).
+//   B. FIN    : stagea los finalizadores de los colectados (memoria aun
+//   intacta). C. MOVE   : memmove de cada BLACK a su destino (orden creciente
+//   -> solape
 //               seguro: destino <= fuente siempre).
 //   D. MAPS   : actualiza handles_ (moved: nueva addr; collected: release) y
 //               ptr_to_handle_ (erase viejos, insert nuevos).
@@ -2585,7 +2597,8 @@ bool GcHeap::compact_old_gen() {
                 dest += total;
                 live_bytes += total;
             } else {
-                // WHITE (inalcanzable, a colectar) o DEAD (ya colectado): hueco.
+                // WHITE (inalcanzable, a colectar) o DEAD (ya colectado):
+                // hueco.
                 if (hdr->color == GcColor::WHITE) {
                     collected.push_back(
                         {cursor, total, hdr->has_finalizer != 0});
@@ -2597,8 +2610,8 @@ bool GcHeap::compact_old_gen() {
         new_bump[bi] = static_cast<size_t>(dest - block.ptr);
     }
 
-    // Gate de fragmentacion: si no se fuerza y hay pocos huecos, no vale la pena
-    // mover (el sweep no-moving es mas barato).
+    // Gate de fragmentacion: si no se fuerza y hay pocos huecos, no vale la
+    // pena mover (el sweep no-moving es mas barato).
     const size_t total_bytes = live_bytes + dead_bytes;
     if (!compact_always) {
         if (total_bytes == 0) return false;
@@ -2695,10 +2708,9 @@ bool GcHeap::compact_old_gen() {
              static_cast<int64_t>(reinterpret_cast<intptr_t>(m.new_hdr) -
                                   reinterpret_cast<intptr_t>(m.old_hdr))});
     }
-    std::sort(ranges.begin(), ranges.end(),
-              [](const Range &a, const Range &b) {
-                  return a.old_start < b.old_start;
-              });
+    std::sort(ranges.begin(), ranges.end(), [](const Range &a, const Range &b) {
+        return a.old_start < b.old_start;
+    });
     auto remap = [&](uint64_t v) -> uint64_t {
         if (ranges.empty()) return v;
         // Busqueda binaria: mayor old_start <= v.
@@ -2810,8 +2822,7 @@ bool GcHeap::compact_old_gen() {
             while (cursor + sizeof(GcHeader) <= end) {
                 auto *hdr = reinterpret_cast<GcHeader *>(cursor);
                 if (hdr->size == 0) break;
-                const size_t total =
-                    (sizeof(GcHeader) + hdr->size + 7) & ~7ULL;
+                const size_t total = (sizeof(GcHeader) + hdr->size + 7) & ~7ULL;
                 uint8_t *pl = cursor + sizeof(GcHeader);
                 const size_t sz = hdr->size;
                 for (size_t off = 0; off + 8 <= sz; off += 8) {
@@ -2822,8 +2833,7 @@ bool GcHeap::compact_old_gen() {
                         ++stale_payload;
                         gc_dbg_emit("[gc-verify-move] STALE payload cursor=%p "
                                     "off=%zu v=0x%llx\n",
-                                    (void *)cursor, off,
-                                    (unsigned long long)v);
+                                    (void *)cursor, off, (unsigned long long)v);
                     }
                 }
                 cursor += total;
@@ -2860,11 +2870,13 @@ bool GcHeap::compact_old_gen() {
 namespace {
 // Emisor freestanding-safe (SIN vsnprintf) para el resumen de la compactacion
 // AOT: formatea manualmente los contadores a decimal y los escribe al fd 2 via
-// GC_DBG_WRITE (_write/::write).  Gateado en runtime por VESTA_GC_DEBUG.  Asi la
-// compactacion AOT es OBSERVABLE (moved/collected/stale) sin arrastrar stdio.
+// GC_DBG_WRITE (_write/::write).  Gateado en runtime por VESTA_GC_DEBUG.  Asi
+// la compactacion AOT es OBSERVABLE (moved/collected/stale) sin arrastrar
+// stdio.
 inline void gc_aot_write_str(const char *s) noexcept {
     size_t n = 0;
-    while (s[n]) ++n;
+    while (s[n])
+        ++n;
     if (n) GC_DBG_WRITE(2, s, (unsigned)n);
 }
 inline void gc_aot_write_u64(uint64_t v) noexcept {
@@ -2951,7 +2963,7 @@ void aot_root_verify_cb(void *ctx, uint64_t value, jit::StackmapGcKind /*k*/,
         if (value >= h.old_start && value < h.old_end) {
             ++c->stale;
             GC_AOT_DBG("[gc-verify-move-aot] STALE root v=0x%llx\n",
-                        (unsigned long long)value);
+                       (unsigned long long)value);
             break;
         }
 }
@@ -3028,8 +3040,8 @@ bool GcHeap::compact_old_gen_aot() {
                 if (h == GC_NULL_HANDLE || h >= handles_.size() ||
                     !handles_[h].live || handles_[h].addr != cursor) {
                     GC_AOT_DBG("[gc-compact-aot] abort: BLACK sin handle "
-                                "(cursor=%p)\n",
-                                (void *)cursor);
+                               "(cursor=%p)\n",
+                               (void *)cursor);
                     return false;
                 }
                 moved.push_back({h, cursor, dest, total});
@@ -3071,8 +3083,7 @@ bool GcHeap::compact_old_gen_aot() {
 
     // ----   MOVER (memmove sliding) ----
     for (const auto &m : moved)
-        if (m.new_hdr != m.old_hdr)
-            std::memmove(m.new_hdr, m.old_hdr, m.total);
+        if (m.new_hdr != m.old_hdr) std::memmove(m.new_hdr, m.old_hdr, m.total);
 
     // ---- Rangos de reubicacion (para remapear punteros) ----
     std::vector<AotRange> ranges;
@@ -3130,8 +3141,7 @@ bool GcHeap::compact_old_gen_aot() {
             while (cursor + sizeof(GcHeader) <= end) {
                 auto *hdr = reinterpret_cast<GcHeader *>(cursor);
                 if (hdr->size == 0) break;
-                const size_t total =
-                    (sizeof(GcHeader) + hdr->size + 7) & ~7ULL;
+                const size_t total = (sizeof(GcHeader) + hdr->size + 7) & ~7ULL;
                 uint8_t *payload = cursor + sizeof(GcHeader);
                 const size_t sz = hdr->size;
                 uint32_t fcount = 0;
@@ -3183,8 +3193,7 @@ bool GcHeap::compact_old_gen_aot() {
             while (cursor + sizeof(GcHeader) <= end) {
                 auto *hdr = reinterpret_cast<GcHeader *>(cursor);
                 if (hdr->size == 0) break;
-                const size_t total =
-                    (sizeof(GcHeader) + hdr->size + 7) & ~7ULL;
+                const size_t total = (sizeof(GcHeader) + hdr->size + 7) & ~7ULL;
                 uint8_t *payload = cursor + sizeof(GcHeader);
                 const size_t sz = hdr->size;
                 uint32_t fcount = 0;
@@ -3199,8 +3208,8 @@ bool GcHeap::compact_old_gen_aot() {
                     if (v >= 65536 && in_hole(v)) {
                         ++stale_fields;
                         GC_AOT_DBG("[gc-verify-move-aot] STALE field cursor=%p "
-                                    "off=%u v=0x%llx\n",
-                                    (void *)cursor, fo, (unsigned long long)v);
+                                   "off=%u v=0x%llx\n",
+                                   (void *)cursor, fo, (unsigned long long)v);
                     }
                 }
                 cursor += total;
@@ -3583,8 +3592,7 @@ uint64_t GcHeap::monitor_release(GcHandle h, uint64_t owner_encoded) {
 inline WaitTable &GcHeap::wait_table_for(GcHandle h) noexcept {
     if ((h & SHARED_HANDLE_BIT) && root_provider_ != nullptr) {
         // Shared: usar la tabla per-VM (cross-process visible).
-        if (WaitTable *swt = root_provider_->shared_wait_table())
-            return *swt;
+        if (WaitTable *swt = root_provider_->shared_wait_table()) return *swt;
     }
     // Local: tabla per-process.
     return wait_table_;

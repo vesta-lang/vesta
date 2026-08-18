@@ -31,7 +31,8 @@ StoredNode encode(const LoweringMap &n) {
         w.u8(static_cast<uint8_t>(e.origin));
         w.id(e.inlined_into);
         w.u32(static_cast<uint32_t>(e.ir_instrs.size()));
-        for (const auto &i : e.ir_instrs) w.id(i);
+        for (const auto &i : e.ir_instrs)
+            w.id(i);
     }
     return make(n.header, w);
 }
@@ -78,7 +79,8 @@ StoredNode encode(const CodeNode &n) {
     w.hash(n.backend_hash);
     w.id(n.unit);
     w.u32(static_cast<uint32_t>(n.dependencies.size()));
-    for (const auto &d : n.dependencies) w.hash(d);
+    for (const auto &d : n.dependencies)
+        w.hash(d);
     return make(n.header, w);
 }
 
@@ -111,7 +113,8 @@ StoredNode encode(const CodeDebug &n) {
         w.u32(rg.end);
         w.u8(static_cast<uint8_t>(rg.kind));
         w.u32(static_cast<uint32_t>(rg.ir_instrs.size()));
-        for (const auto &i : rg.ir_instrs) w.id(i);
+        for (const auto &i : rg.ir_instrs)
+            w.id(i);
     }
     return make(n.header, w);
 }
@@ -187,7 +190,8 @@ StoredNode encode(const ExecutionEdge &n) {
     w.u8(static_cast<uint8_t>(n.dispatch));
     w.u8(static_cast<uint8_t>(n.form));
     w.u32(static_cast<uint32_t>(n.statements.size()));
-    for (const auto &st : n.statements) w.id(st);
+    for (const auto &st : n.statements)
+        w.id(st);
     return make(n.header, w);
 }
 
@@ -256,10 +260,10 @@ bool decode(const StoredNode &s, ArtifactMap &out) {
     for (uint32_t i = 0; i < n; ++i) {
         std::string sym = r.str();
         // Se conserva el orden con el que venia en vez de reordenar al leer: se
-        // escribio ya ordenado, y confiar en eso permite leer un mapa grande sin
-        // pagar una ordenacion que casi siempre sobra.  Si viniera desordenado,
-        // la busqueda binaria no encontraria algun simbolo -- fallo de omision,
-        // nunca de dar el equivocado.
+        // escribio ya ordenado, y confiar en eso permite leer un mapa grande
+        // sin pagar una ordenacion que casi siempre sobra.  Si viniera
+        // desordenado, la busqueda binaria no encontraria algun simbolo --
+        // fallo de omision, nunca de dar el equivocado.
         out.symbols.emplace_back(std::move(sym), r.id<LanguageEntityTag>());
     }
     return r.ok();

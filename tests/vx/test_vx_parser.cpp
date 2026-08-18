@@ -44,7 +44,7 @@ namespace ast = vx::ast;
 static int g_passed = 0;
 static int g_failed = 0;
 
-#define VX_ASSERT(cond, msg)                                                  \
+#define VX_ASSERT(cond, msg)                                                   \
     do {                                                                       \
         if (!(cond)) {                                                         \
             std::fprintf(stderr, "FAIL [%s:%d] %s\n", __FILE__, __LINE__,      \
@@ -55,7 +55,7 @@ static int g_failed = 0;
         }                                                                      \
     } while (0)
 
-#define VX_ASSERT_EQ(a, b, msg)                                               \
+#define VX_ASSERT_EQ(a, b, msg)                                                \
     do {                                                                       \
         auto av = (a);                                                         \
         auto bv = (b);                                                         \
@@ -98,8 +98,7 @@ static void test_minimal_main() {
     auto out = parse_src("i32 main() { return 0; }");
     VX_ASSERT(!out.diags.has_errors(), "minimal main sin errores");
     VX_ASSERT(out.mod != nullptr, "modulo no nulo");
-    VX_ASSERT_EQ(out.mod->decls.size(), (size_t)1,
-                  "una declaracion top-level");
+    VX_ASSERT_EQ(out.mod->decls.size(), (size_t)1, "una declaracion top-level");
     auto fn = as_node<ast::FunctionDecl>(out.mod->decls[0].get(),
                                          ast::NodeKind::FunctionDecl);
     VX_ASSERT(fn != nullptr, "es FunctionDecl");
@@ -167,11 +166,11 @@ static void test_function_with_params() {
     auto t2 = as_node<ast::PrimitiveTypeNode>(p2->type.get(),
                                               ast::NodeKind::PrimitiveTypeNode);
     VX_ASSERT(t0 && t0->prim == PrimitiveKind::I32,
-               "param 0 -> int32_t -> I32");
+              "param 0 -> int32_t -> I32");
     VX_ASSERT(t1 && t1->prim == PrimitiveKind::I32, "param 1 -> i32 -> I32");
     VX_ASSERT(t2 && t2->prim == PrimitiveKind::U8, "param 2 -> u8 -> U8");
     VX_ASSERT(p0->name == "a" && p1->name == "b" && p2->name == "c",
-               "nombres de params");
+              "nombres de params");
 }
 
 static void test_arithmetic_precedence() {
@@ -303,16 +302,15 @@ static void test_if_while_for() {
                                          ast::NodeKind::FunctionDecl);
     VX_ASSERT(fn != nullptr, "es funcion");
     VX_ASSERT_EQ(fn->body->body.size(), (size_t)5,
-                  "decl i, decl s, while, for, return");
+                 "decl i, decl s, while, for, return");
     auto wh = as_node<ast::WhileStmt>(fn->body->body[2].get(),
                                       ast::NodeKind::WhileStmt);
     VX_ASSERT(wh != nullptr, "while presente");
     auto fr =
         as_node<ast::ForStmt>(fn->body->body[3].get(), ast::NodeKind::ForStmt);
     VX_ASSERT(fr != nullptr, "for presente");
-    VX_ASSERT(fr->init != nullptr && fr->cond != nullptr &&
-                   fr->step != nullptr,
-               "for con tres partes");
+    VX_ASSERT(fr->init != nullptr && fr->cond != nullptr && fr->step != nullptr,
+              "for con tres partes");
     auto fbody =
         as_node<ast::BlockStmt>(fr->body.get(), ast::NodeKind::BlockStmt);
     VX_ASSERT(fbody != nullptr, "for body es block");
@@ -354,11 +352,11 @@ static void test_break_continue() {
                                       ast::NodeKind::WhileStmt);
     auto bk = as_node<ast::BlockStmt>(wh->body.get(), ast::NodeKind::BlockStmt);
     VX_ASSERT(as_node<ast::BreakStmt>(bk->body[0].get(),
-                                       ast::NodeKind::BreakStmt) != nullptr,
-               "break presente");
+                                      ast::NodeKind::BreakStmt) != nullptr,
+              "break presente");
     VX_ASSERT(as_node<ast::ContinueStmt>(
-                   bk->body[1].get(), ast::NodeKind::ContinueStmt) != nullptr,
-               "continue presente");
+                  bk->body[1].get(), ast::NodeKind::ContinueStmt) != nullptr,
+              "continue presente");
 }
 
 static void test_compound_assignments() {

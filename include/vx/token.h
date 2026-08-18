@@ -157,7 +157,7 @@ enum class TokenKind : uint16_t {
     KW_CLASS,
     KW_INTERFACE,
     KW_ENUM,
-    KW_FN, ///< Tipo de funcion / closure (lambda): fn(T) -> R (16 bytes)
+    KW_FN,  ///< Tipo de funcion / closure (lambda): fn(T) -> R (16 bytes)
     KW_CFN, ///< Puntero a funcion crudo estilo C: cfn(T) -> R (8 bytes)
     KW_PUBLIC,
     KW_PRIVATE,
@@ -265,10 +265,10 @@ enum class TokenKind : uint16_t {
     COMMA,     ///< ,
     SEMICOLON, ///< ;
     COLON,     ///< :
-    DOT,        ///< .
-    DOTDOT,     ///< ..  (rango exclusivo en comptime for)
-    DOTDOTEQ,   ///< ..= (rango inclusivo en comptime for)
-    DOTDOTDOT,  ///< ... (parametro variadico: T... name)
+    DOT,       ///< .
+    DOTDOT,    ///< ..  (rango exclusivo en comptime for)
+    DOTDOTEQ,  ///< ..= (rango inclusivo en comptime for)
+    DOTDOTDOT, ///< ... (parametro variadico: T... name)
     ARROW,     ///< ->
     FAT_ARROW, ///< =>
     QUESTION,  ///< ?

@@ -265,7 +265,8 @@ class GcHandleRefMap {
             Slot &s = table_[i];
             if (s.first == EMPTY) {
                 const size_t at = (first_tomb != SIZE_MAX) ? first_tomb : i;
-                if (table_[at].first != TOMB) ++used_; // EMPTY -> ocupa slot nuevo
+                if (table_[at].first != TOMB)
+                    ++used_; // EMPTY -> ocupa slot nuevo
                 table_[at].first = h;
                 table_[at].second = 0;
                 ++live_count_;
@@ -303,7 +304,8 @@ class GcHandleRefMap {
         const Slot *p;
         const Slot *e;
         void skip() noexcept {
-            while (p != e && (p->first == EMPTY || p->first == TOMB)) ++p;
+            while (p != e && (p->first == EMPTY || p->first == TOMB))
+                ++p;
         }
         const Slot &operator*() const noexcept { return *p; }
         const Slot *operator->() const noexcept { return p; }
@@ -399,7 +401,8 @@ class GcHandleSet {
         const GcHandle *p;
         const GcHandle *e;
         void skip() noexcept {
-            while (p != e && (*p == EMPTY || *p == TOMB)) ++p;
+            while (p != e && (*p == EMPTY || *p == TOMB))
+                ++p;
         }
         GcHandle operator*() const noexcept { return *p; }
         const_iterator &operator++() noexcept {
@@ -755,13 +758,13 @@ enum class GcGen : uint8_t {
  * sin necesidad de un thunk por tipo.
  */
 enum class GcFinalizerKind : uint8_t {
-    NONE = 0,   /**< Sin finalizador (default: gc<primitivo>). */
-    UNIQUE = 1, /**< Box = slot unique<T> [ptr@0, deleter@8].  El finalizador
-                 *   lee slot+8: si deleter!=0 llama deleter(slot[0]); si es 0
-                 *   (default unique_box) libera slot[0] con free. */
-    SHARED = 2, /**< Box = slot shared<T> [ctrl_block_ptr@0].  El finalizador
-                 *   decrementa el refcount del control block y lo libera con
-                 *   free cuando llega a 0 (modelo refcount puro). */
+    NONE = 0,      /**< Sin finalizador (default: gc<primitivo>). */
+    UNIQUE = 1,    /**< Box = slot unique<T> [ptr@0, deleter@8].  El finalizador
+                    *   lee slot+8: si deleter!=0 llama deleter(slot[0]); si es 0
+                    *   (default unique_box) libera slot[0] con free. */
+    SHARED = 2,    /**< Box = slot shared<T> [ctrl_block_ptr@0].  El finalizador
+                    *   decrementa el refcount del control block y lo libera con
+                    *   free cuando llega a 0 (modelo refcount puro). */
     CLASS_DTOR = 3 /**< Box = instancia de clase gc<Clase> con ~Clase().  El
                     *   finalizador invoca el dtor concreto <Clase>____dtor
                     *   sobre el host_ptr del objeto (CALL directo, dispatch
@@ -823,10 +826,11 @@ struct alignas(8) GcHeader {
                                 *   sweep, al colectar un objeto WHITE con este
                                 *   bit, encola su finalizador para correrlo en
                                 *   un safe point (drain post-collect). */
-    uint8_t finalizer_kind : 2; /**< GcFinalizerKind del objeto (0-2).  Vive en
-                                 *   el propio header (sin side-table) para ser
-                                 *   freestanding-safe (libvesta_gc AOT) y
-                                 *   cache-friendly (el sweep ya lee el header).*/
+    uint8_t finalizer_kind
+        : 2;                   /**< GcFinalizerKind del objeto (0-2).  Vive en
+                                *   el propio header (sin side-table) para ser
+                                *   freestanding-safe (libvesta_gc AOT) y
+                                *   cache-friendly (el sweep ya lee el header).*/
     uint8_t host_ptr_only : 1; /**< 1 si el objeto SOLO es alcanzable por su
                                 *   host_ptr (payload start), nunca por su
                                 *   GcHandle numerico.  Lo ponen los boxes
@@ -1309,22 +1313,23 @@ class GcHeap {
      *                 precise marcados como BLACK.
      * @param young    si true, enruta cada raiz a @c try_mark_precise_young
      *                 (solo marca objetos YOUNG del nursery -- lo usa el
-     *                 minor_gc); si false (default), a @c try_mark_precise_handle
-     *                 (marca OLD -- lo usa el major_gc).
+     *                 minor_gc); si false (default), a @c
+     * try_mark_precise_handle (marca OLD -- lo usa el major_gc).
      */
     void scan_jit_roots_precise(std::vector<GcHandle> &worklist,
                                 bool young = false);
 
     /**
-     * @brief Actualiza los host_ptrs GC guardados en frames JIT nativos tras una
-     *        evacuacion del minor_gc (analogo a @c update_stack_forwards pero
-     *        para la pila NATIVA del JIT, no la pila VM).
+     * @brief Actualiza los host_ptrs GC guardados en frames JIT nativos tras
+     * una evacuacion del minor_gc (analogo a @c update_stack_forwards pero para
+     * la pila NATIVA del JIT, no la pila VM).
      *
      * Cuando el minor_gc evacua un objeto YOUNG a OldGen, su payload cambia de
-     * direccion.  Los host_ptrs cacheados en slots de frames JIT-compilados (p.ej.
-     * un `gc<Node> tail` vivo a traves de una alocacion que disparo el minor)
-     * quedarian STALE -> el siguiente acceso al campo escribiria en memoria del
-     * nursery ya reseteada.  Recorre los frames JIT via stackmaps (usa el
+     * direccion.  Los host_ptrs cacheados en slots de frames JIT-compilados
+     * (p.ej. un `gc<Node> tail` vivo a traves de una alocacion que disparo el
+     * minor) quedarian STALE -> el siguiente acceso al campo escribiria en
+     * memoria del nursery ya reseteada.  Recorre los frames JIT via stackmaps
+     * (usa el
      * @c slot_addr que reporta @c scan_jit_frames) y, para cada slot HOSTPTR/
      * STRING cuyo valor este en @c forward_table_, escribe la nueva direccion.
      * Los slots HANDLE no necesitan actualizacion (el GcHandle es estable).
@@ -1334,7 +1339,8 @@ class GcHeap {
 
     /**
      * @brief Si @c value esta en @c forward_table_, escribe la direccion
-     *        forwarded en @c *slot_addr (8 bytes).  Helper de @c scan_jit_forwards.
+     *        forwarded en @c *slot_addr (8 bytes).  Helper de @c
+     * scan_jit_forwards.
      * @return true si aplico un forward.
      */
     bool jit_forward_slot(uint64_t value, const uint8_t *slot_addr);
@@ -1473,8 +1479,8 @@ class GcHeap {
     void set_aot_mode(bool v) noexcept { aot_precise_roots_ = v; }
 
     /**
-     * @brief Fija el frame Vesta de ENTRADA para el WALK POR TAMANO DE FRAME del
-     *        scan preciso de AOT.
+     * @brief Fija el frame Vesta de ENTRADA para el WALK POR TAMANO DE FRAME
+     * del scan preciso de AOT.
      *
      * Lo captura cada runtime-entry del GC que puede colectar (vx_gc_collect,
      * vx_gc_finalize_all) EN LA FRONTERA C<-Vesta: @p pc es la direccion de
@@ -1502,22 +1508,22 @@ class GcHeap {
      * llamada que lo fijo (no se camina un frame JIT ya retornado).
      */
     struct JitScanBoundary {
-        uint64_t pc = 0;   ///< PC de retorno al codigo JIT.
-        uint64_t sp = 0;   ///< RSP del frame JIT justo antes del @c call.
+        uint64_t pc = 0;    ///< PC de retorno al codigo JIT.
+        uint64_t sp = 0;    ///< RSP del frame JIT justo antes del @c call.
         bool valid = false; ///< true si @c pc y @c sp son utilizables.
     };
 
     /**
      * @brief Fija el boundary del WALK POR TAMANO DE FRAME en modo interp+JIT.
      *
-     * Analogo a @c set_aot_scan_boundary pero para el proceso de la VM (interp +
-     * JIT), donde @c aot_precise_roots_ es false.  Lo fija cada runtime-entry
+     * Analogo a @c set_aot_scan_boundary pero para el proceso de la VM (interp
+     * + JIT), donde @c aot_precise_roots_ es false.  Lo fija cada runtime-entry
      * @c vrt_* que puede colectar y que el codigo JIT llama DIRECTAMENTE,
      * capturado en la frontera C<-JIT: @p pc es la direccion de retorno al
      * codigo JIT y @p sp es el RSP de ese frame JIT justo antes del @c call.
      * Mientras sea valido, @c scan_jit_roots_precise y @c scan_jit_forwards
-     * usan @c scan_aot_frames (reconstruye RBP con @c frame_size) en lugar de la
-     * cadena RBP -> saltan los frames C++ del runtime, que a -O0 rompen la
+     * usan @c scan_aot_frames (reconstruye RBP con @c frame_size) en lugar de
+     * la cadena RBP -> saltan los frames C++ del runtime, que a -O0 rompen la
      * cadena (p.ej. @c lea rbp,[rsp+N]).  Boundary SEPARADO del de AOT para no
      * pisar su estado.
      *
@@ -1958,7 +1964,8 @@ class GcHeap {
      * handle-pequeno que impedia la colecta determinista de boxes escapados.
      * No-op si @p payload no es un objeto GC vivo de este heap.
      *
-     * @param payload Puntero host al payload del box (lo que devuelve gcallocp).
+     * @param payload Puntero host al payload del box (lo que devuelve
+     * gcallocp).
      */
     void mark_host_ptr_only(uint8_t *payload) {
         if (payload == nullptr) return;
@@ -1967,7 +1974,8 @@ class GcHeap {
     }
 
     /**
-     * @brief Desregistra el finalizador del objeto @p payload (anti-doble-free).
+     * @brief Desregistra el finalizador del objeto @p payload
+     * (anti-doble-free).
      *
      * Limpia el bit @c has_finalizer del GcHeader.  Lo llama el
      * cleanup determinista de scope (caso NO-escape): el recurso ya se libero
@@ -2005,9 +2013,7 @@ class GcHeap {
     void run_pending_finalizers();
 
     /** @brief true si hay finalizadores stageados pendientes de ejecutar. */
-    bool has_pending_finalizers() const {
-        return !pending_finalizers_.empty();
-    }
+    bool has_pending_finalizers() const { return !pending_finalizers_.empty(); }
 
     /**
      * @brief Finaliza TODOS los objetos vivos con recurso interno (exit-time).
@@ -2017,19 +2023,21 @@ class GcHeap {
      * cuando el proceso termina (HALT del main) mientras el interprete sigue
      * vivo, para garantizar que un objeto GC con recurso que ESCAPO su scope
      * (y por tanto no tuvo cleanup determinista) libere su recurso interno
-     * ANTES del exit -- aunque el GC no lo haya colectado todavia.  Idempotente:
+     * ANTES del exit -- aunque el GC no lo haya colectado todavia. Idempotente:
      * limpia el bit al encolar, asi no re-finaliza en un segundo pase.
      */
     void finalize_all_live();
 
     /**
-     * @brief Stagea (sin drenar) el finalizador de TODO objeto vivo con recurso.
+     * @brief Stagea (sin drenar) el finalizador de TODO objeto vivo con
+     * recurso.
      *
      * Igual que @c finalize_all_live pero SIN llamar @c run_pending_finalizers:
      * solo encola.  Lo usa el opcode @c gcfinall (builtin gc_finalize_all) para
-     * que el DRENADO ocurra despues, en el safe point del scheduler (reentrar al
-     * interp para el deleter/dtor dentro del handler de la instruccion
-     * corromperia la instruccion en curso).  Idempotente (limpia has_finalizer).
+     * que el DRENADO ocurra despues, en el safe point del scheduler (reentrar
+     * al interp para el deleter/dtor dentro del handler de la instruccion
+     * corromperia la instruccion en curso).  Idempotente (limpia
+     * has_finalizer).
      */
     void stage_all_live_finalizers();
 
@@ -2127,19 +2135,20 @@ class GcHeap {
     bool aot_precise_roots_ = false;
 
     /// Boundary del WALK POR TAMANO DE FRAME (scan preciso de AOT).  Lo fija
-    /// @c set_aot_scan_boundary en cada runtime-entry del GC que puede colectar,
-    /// capturado en la frontera C<-Vesta.  @c aot_boundary_pc_ es el PC de retorno
-    /// al frame Vesta y @c aot_boundary_sp_ su RSP antes del @c call.  Mientras sea
-    /// valido, @c scan_jit_roots_precise usa @c scan_aot_frames (frame_size) en
-    /// vez de la cadena RBP.  Fresco en cada coleccion (cada entry lo re-fija).
+    /// @c set_aot_scan_boundary en cada runtime-entry del GC que puede
+    /// colectar, capturado en la frontera C<-Vesta.  @c aot_boundary_pc_ es el
+    /// PC de retorno al frame Vesta y @c aot_boundary_sp_ su RSP antes del @c
+    /// call.  Mientras sea valido, @c scan_jit_roots_precise usa @c
+    /// scan_aot_frames (frame_size) en vez de la cadena RBP.  Fresco en cada
+    /// coleccion (cada entry lo re-fija).
     uint64_t aot_boundary_pc_ = 0;
     uint64_t aot_boundary_sp_ = 0;
     bool aot_boundary_valid_ = false;
 
     /// Boundary del WALK POR TAMANO DE FRAME para el modo interp+JIT.  Lo fija
     /// @c set_jit_scan_boundary en cada runtime-entry @c vrt_* que puede
-    /// colectar y que el codigo JIT llama DIRECTAMENTE, capturado en la frontera
-    /// C<-JIT.  Mientras sea valido, @c scan_jit_roots_precise y
+    /// colectar y que el codigo JIT llama DIRECTAMENTE, capturado en la
+    /// frontera C<-JIT.  Mientras sea valido, @c scan_jit_roots_precise y
     /// @c scan_jit_forwards usan @c scan_aot_frames (frame_size) en vez de la
     /// cadena RBP -> saltan los frames C++ del runtime (que a -O0 la rompen con
     /// @c lea rbp,[rsp+N]).  SEPARADO del boundary AOT para no pisar su estado.
@@ -2230,7 +2239,8 @@ class GcHeap {
     /// compila igual que la VM, asi que el finalizador CLASS_DTOR resuelve el
     /// dtor por el MISMO camino en interp/JIT/AOT (cierra la fuga de gc<Clase>
     /// con ~Clase() en AOT).  register/unregister/stage son O(1) amortizado
-    /// (antes O(n) con busqueda lineal -> O(n^2) agregado con muchos gc<Clase>).
+    /// (antes O(n) con busqueda lineal -> O(n^2) agregado con muchos
+    /// gc<Clase>).
     U64U64Map class_dtor_vaddr_;
 
     // --- Tabla de referencias debiles ---
@@ -2441,9 +2451,10 @@ class GcHeap {
      * interiores tipo STRRAW).  El mapa inverso @c ptr_to_handle_ se actualiza
      * al mover.
      *
-     * SOLO es correcto para el camino INTERPRETE (fields = GcHandle).  El caller
-     * (@c major_gc) restringe su uso a ese camino (ver "GATE" alli): NO corre en
-     * AOT (native_poo: los fields guardan host_ptrs crudos, sin tabla de
+     * SOLO es correcto para el camino INTERPRETE (fields = GcHandle).  El
+     * caller
+     * (@c major_gc) restringe su uso a ese camino (ver "GATE" alli): NO corre
+     * en AOT (native_poo: los fields guardan host_ptrs crudos, sin tabla de
      * handles -> haria falta un field-map que no existe) ni con frames nativos
      * JIT activos (host_ptrs en la pila nativa sin reescritura implementada).
      *

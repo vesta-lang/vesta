@@ -18,8 +18,8 @@
  *   - @c SemanticEffects : efecto SEMANTICO puro, independiente de maquina (lo
  *     que importa para legalidad de optimizacion y contratos).  NO contiene
  *     `unknown` (eso es estado del analisis, ver @c EffectAnalysisResult).
- *   - @c MachineEffects  : footprint fisico (regs/flags/stack/latencia), SOLO lo
- *     rellenan MachineIR (post-seleccion) y el asm OPACO (clobbers).  Los nodos
+ *   - @c MachineEffects  : footprint fisico (regs/flags/stack/latencia), SOLO
+ * lo rellenan MachineIR (post-seleccion) y el asm OPACO (clobbers).  Los nodos
  *     IR lo dejan vacio.
  *   - Combinadores @c seq / @c join / @c callsite : el RETICULO (agregar
  *     instr->bloque->funcion NO es OR campo-a-campo).
@@ -62,13 +62,15 @@ struct AbstractLoc {
         Stack,      ///< marco de pila local (slots ALLOCA).
         Heap,       ///< heap; @c id = alloc-site (LOC_GENERIC = heap generico).
         Global,     ///< dato estatico/global; @c id = symbol/slot id.
-        ArgDerived, ///< memoria alcanzable desde el parametro @c id (points-to grueso).
+        ArgDerived, ///< memoria alcanzable desde el parametro @c id (points-to
+                    ///< grueso).
         Unknown     ///< TOP: puede aliasar cualquier cosa.
     };
-    Kind     kind = Kind::None;
-    uint32_t id = 0;      ///< raiz concreta dentro de la clase; LOC_GENERIC = toda la clase.
-    int64_t  off = 0;     ///< offset const desde la raiz (solo si id concreto).
-    int32_t  width = 0;   ///< bytes accedidos; 0 = desconocido/objeto entero.
+    Kind kind = Kind::None;
+    uint32_t id =
+        0; ///< raiz concreta dentro de la clase; LOC_GENERIC = toda la clase.
+    int64_t off = 0;   ///< offset const desde la raiz (solo si id concreto).
+    int32_t width = 0; ///< bytes accedidos; 0 = desconocido/objeto entero.
 
     bool operator==(const AbstractLoc &o) const {
         return kind == o.kind && id == o.id && off == o.off && width == o.width;
@@ -97,8 +99,9 @@ bool no_alias(const AbstractLoc &a, const AbstractLoc &b);
 // Unknown, colapsa a top y vacia el vector (comparaciones O(1)).
 // ===========================================================================
 struct LocSet {
-    bool                     is_top = false;
-    std::vector<AbstractLoc> locs; ///< vacio si is_top; sin duplicados; sin None.
+    bool is_top = false;
+    std::vector<AbstractLoc>
+        locs; ///< vacio si is_top; sin duplicados; sin None.
 
     bool empty() const { return !is_top && locs.empty(); }
     void clear() {
@@ -148,15 +151,14 @@ struct LocSet {
      * `mutable` porque la consulta es const y el indice es cache, no estado:
      * dos LocSet con el mismo contenido responden lo mismo, se haya construido
      * el indice o no. */
-    mutable bool                                       idx_listo_ = false;
-    mutable bool                                       idx_top_ = false;
-    mutable uint32_t                                   idx_kinds_ = 0;
-    mutable uint32_t                                   idx_kinds_gen_ = 0;
+    mutable bool idx_listo_ = false;
+    mutable bool idx_top_ = false;
+    mutable uint32_t idx_kinds_ = 0;
+    mutable uint32_t idx_kinds_gen_ = 0;
     mutable std::unordered_map<uint64_t, std::vector<uint32_t>> idx_raiz_;
 
     /// Construye el indice si hace falta.
     void asegurar_indice_() const;
-
 };
 
 /// Efecto de memoria: read-set + write-set sobre localizaciones abstractas.
@@ -189,22 +191,31 @@ enum class ControlKind : uint8_t {
 
 struct ControlEffect {
     ControlKind kind = ControlKind::FallThrough;
-    int32_t     callee_ref = -1; ///< symbol/summary id si Call conocido; -1 = desconocido.
+    int32_t callee_ref =
+        -1; ///< symbol/summary id si Call conocido; -1 = desconocido.
     bool operator==(const ControlEffect &o) const {
         return kind == o.kind && callee_ref == o.callee_ref;
     }
 };
 
-/// ¿Este control TERMINA el flujo lineal (nada despues se ejecuta en secuencia)?
+/// ¿Este control TERMINA el flujo lineal (nada despues se ejecuta en
+/// secuencia)?
 bool control_is_terminator(ControlKind k);
 
 // ===========================================================================
 // Atomicity -- orden de memoria de una operacion atomica / barrera.
 // ===========================================================================
-enum class MemOrder : uint8_t { None, Relaxed, Acquire, Release, AcqRel, SeqCst };
+enum class MemOrder : uint8_t {
+    None,
+    Relaxed,
+    Acquire,
+    Release,
+    AcqRel,
+    SeqCst
+};
 struct Atomicity {
     MemOrder order = MemOrder::None;
-    bool     is_fence = false;
+    bool is_fence = false;
     bool operator==(const Atomicity &o) const {
         return order == o.order && is_fence == o.is_fence;
     }
@@ -216,13 +227,14 @@ struct Atomicity {
 // (type-safe + eficiente).  Cada tag tiene una CLASE de efecto.
 // ===========================================================================
 enum class CapabilityTag : uint16_t {
-    MachineState,    ///< toca estado global de la maquina (no modelable como mem).
+    MachineState, ///< toca estado global de la maquina (no modelable como mem).
     InterruptState,  ///< cli/sti (interrupt flag).
     PortIO,          ///< in/out.
     MSR,             ///< rdmsr/wrmsr.
     CPUID,           ///< cpuid (serializante + lee estado CPU).
     Privileged,      ///< ring-0 / instr privilegiada.
-    SecretDependent, ///< control/acceso dependiente de dato secreto (constant-time).
+    SecretDependent, ///< control/acceso dependiente de dato secreto
+                     ///< (constant-time).
     SelfModifying,   ///< codigo automodificante.
     UserBarrier,     ///< barrera declarada por el usuario (asm volatile).
     TLBFlush,        ///< invlpg / mov cr3.
@@ -230,7 +242,8 @@ enum class CapabilityTag : uint16_t {
     COUNT_           ///< centinela (numero de tags).
 };
 
-/// Clase de un tag: unos afectan LEGALIDAD de optimizacion, otros son solo info.
+/// Clase de un tag: unos afectan LEGALIDAD de optimizacion, otros son solo
+/// info.
 enum class CapabilityClass : uint8_t {
     Observable,      ///< efecto observable (I/O) -> limita reordenacion.
     Synchronization, ///< barrera/sync.
@@ -244,7 +257,9 @@ CapabilityClass class_of(CapabilityTag t);
 struct TagSet {
     uint64_t bits = 0;
     void add(CapabilityTag t) { bits |= (uint64_t(1) << uint16_t(t)); }
-    bool has(CapabilityTag t) const { return bits & (uint64_t(1) << uint16_t(t)); }
+    bool has(CapabilityTag t) const {
+        return bits & (uint64_t(1) << uint16_t(t));
+    }
     bool empty() const { return bits == 0; }
     void unite(const TagSet &o) { bits |= o.bits; }
     bool operator==(const TagSet &o) const { return bits == o.bits; }
@@ -255,12 +270,19 @@ struct TagSet {
 // Vacio = PureDeterministic.  El contrato `deterministic` sale de empty().
 // ===========================================================================
 enum class DeterminismTag : uint8_t {
-    ReadsClock, ReadsRandom, ReadsPID, ReadsEnvironment, ExternalObservable, COUNT_
+    ReadsClock,
+    ReadsRandom,
+    ReadsPID,
+    ReadsEnvironment,
+    ExternalObservable,
+    COUNT_
 };
 struct DeterminismSet {
     uint8_t bits = 0;
     void add(DeterminismTag t) { bits |= (uint8_t(1) << uint8_t(t)); }
-    bool has(DeterminismTag t) const { return bits & (uint8_t(1) << uint8_t(t)); }
+    bool has(DeterminismTag t) const {
+        return bits & (uint8_t(1) << uint8_t(t));
+    }
     bool empty() const { return bits == 0; }
     void unite(const DeterminismSet &o) { bits |= o.bits; }
     bool operator==(const DeterminismSet &o) const { return bits == o.bits; }
@@ -268,24 +290,25 @@ struct DeterminismSet {
 
 // ===========================================================================
 // SemanticEffects -- el modelo UNIVERSAL, independiente de maquina.  SIN
-// `unknown` (eso es estado del analisis, no un efecto): ver EffectAnalysisResult.
+// `unknown` (eso es estado del analisis, no un efecto): ver
+// EffectAnalysisResult.
 // ===========================================================================
 struct SemanticEffects {
-    MemEffect      mem;
-    ControlEffect  control;
-    Atomicity      atomic;
-    bool           may_trap = false;     ///< fallo hw (div0, deref invalido).
-    bool           may_throw = false;    ///< lanza excepcion Vesta (capturable).
+    MemEffect mem;
+    ControlEffect control;
+    Atomicity atomic;
+    bool may_trap = false;  ///< fallo hw (div0, deref invalido).
+    bool may_throw = false; ///< lanza excepcion Vesta (capturable).
     /// Aborta por `panic`.  NO es lo mismo que lanzar, y por eso va aparte: en
     /// la maquina virtual un panic es un FatalError que un `catch` recoge, y en
     /// nativo llama al hook de panico y no vuelve.  Con una sola senal, decir
     /// "no lanza" en nativo se leia como "no aborta".
-    bool           may_panic = false;
-    bool           may_allocate = false; ///< aloca heap (GC/raw/newobj/closure-GC).
-    bool           may_block = false;    ///< puede bloquear (await/monenter/msgrecv).
-    bool           may_io = false;       ///< I/O observable.
-    DeterminismSet determinism;          ///< vacio = puro-determinista.
-    TagSet         tags;                 ///< capabilities.
+    bool may_panic = false;
+    bool may_allocate = false;  ///< aloca heap (GC/raw/newobj/closure-GC).
+    bool may_block = false;     ///< puede bloquear (await/monenter/msgrecv).
+    bool may_io = false;        ///< I/O observable.
+    DeterminismSet determinism; ///< vacio = puro-determinista.
+    TagSet tags;                ///< capabilities.
 
     bool operator==(const SemanticEffects &o) const;
     /// El efecto NEUTRO (bottom): no hace nada observable.
@@ -294,7 +317,8 @@ struct SemanticEffects {
     /// ROBUSTA y COMPLETA ante lo desconocido (callee dinamico/externo/opaco):
     /// enciende TODOS los efectos posibles, asi ningun consumidor puede asumir
     /// de menos.  Nunca causa una optimizacion incorrecta (solo puede impedir
-    /// una valida).  Debe cubrir CADA campo -- olvidar uno seria un error latente.
+    /// una valida).  Debe cubrir CADA campo -- olvidar uno seria un error
+    /// latente.
     static SemanticEffects top();
 };
 
@@ -302,18 +326,20 @@ struct SemanticEffects {
 // MachineEffects -- footprint fisico.  SOLO MachineIR y asm OPACO.  Incluye
 // latencia/throughput (asi el modelo del scheduler es uno solo).
 // ===========================================================================
-using RegMask = uint64_t; ///< bit por registro fisico (GP 0..15, XMM 16..31, ...).
+using RegMask =
+    uint64_t; ///< bit por registro fisico (GP 0..15, XMM 16..31, ...).
 
 struct MachineEffects {
     RegMask regs_read = 0;
     RegMask regs_written = 0;
-    uint8_t flags_read = 0;    ///< bits CF/ZF/SF/OF/PF/AF/DF.
+    uint8_t flags_read = 0; ///< bits CF/ZF/SF/OF/PF/AF/DF.
     uint8_t flags_written = 0;
-    int64_t stack_net = 0;     ///< delta neto de pila (bytes).
-    int64_t stack_peak = 0;    ///< profundidad maxima alcanzada (bytes).
-    uint16_t latency = 0;                ///< ciclos (prioridad del scheduler).
-    uint16_t reciprocal_throughput = 0;  ///< 1/throughput * 100 (culo de botella).
-    bool    serializing = false;         ///< barrera de ejecucion (cpuid/mfence/...).
+    int64_t stack_net = 0;  ///< delta neto de pila (bytes).
+    int64_t stack_peak = 0; ///< profundidad maxima alcanzada (bytes).
+    uint16_t latency = 0;   ///< ciclos (prioridad del scheduler).
+    uint16_t reciprocal_throughput =
+        0;                    ///< 1/throughput * 100 (culo de botella).
+    bool serializing = false; ///< barrera de ejecucion (cpuid/mfence/...).
 
     bool operator==(const MachineEffects &o) const;
 };
@@ -328,15 +354,16 @@ enum class AnalysisCompleteness : uint8_t {
     Conservative, ///< sobre-aproximado pero acotado.
     Unknown       ///< no se pudo inferir (caja negra).
 };
-/// Por que el analisis no es Complete.  Distingue imprecision FUNDAMENTAL (no se
-/// puede saber mas: FFI, dispatch dinamico, indirecto) de LAGUNA DEL MOTOR
-/// (@c UnmodeledOp/@c UnknownMnemonic: deberiamos modelarlo para ganar precision).
-/// Esta distincion es lo que permite reportar "que falta por modelar" (cobertura)
-/// vs "donde perdemos optimizacion por opacidad real".
+/// Por que el analisis no es Complete.  Distingue imprecision FUNDAMENTAL (no
+/// se puede saber mas: FFI, dispatch dinamico, indirecto) de LAGUNA DEL MOTOR
+/// (@c UnmodeledOp/@c UnknownMnemonic: deberiamos modelarlo para ganar
+/// precision). Esta distincion es lo que permite reportar "que falta por
+/// modelar" (cobertura) vs "donde perdemos optimizacion por opacidad real".
 enum class UnknownReason : uint8_t {
     None,
-    UnmodeledOp,      ///< LAGUNA: IrOp que el motor aun no clasifica (mejorable).
-    UnknownMnemonic,  ///< LAGUNA: mnemonico de asm opaco no tabulado (mejorable).
+    UnmodeledOp, ///< LAGUNA: IrOp que el motor aun no clasifica (mejorable).
+    UnknownMnemonic,  ///< LAGUNA: mnemonico de asm opaco no tabulado
+                      ///< (mejorable).
     UnknownIntrinsic, ///< LAGUNA: intrinsic no modelado (mejorable).
     UnknownEncoding,  ///< LAGUNA: forma no reconocida (mejorable).
     UserBarrier,      ///< FUNDAMENTAL: barrera declarada por el usuario.
@@ -350,19 +377,21 @@ enum class UnknownReason : uint8_t {
 /// ¿El motivo es una LAGUNA del motor (mejorable modelandolo) o imprecision
 /// FUNDAMENTAL?  Lo usa el reporte de cobertura para separar ambos.
 inline bool reason_is_gap(UnknownReason r) {
-    return r == UnknownReason::UnmodeledOp || r == UnknownReason::UnknownMnemonic ||
+    return r == UnknownReason::UnmodeledOp ||
+           r == UnknownReason::UnknownMnemonic ||
            r == UnknownReason::UnknownIntrinsic ||
            r == UnknownReason::UnknownEncoding;
 }
 
 struct EffectAnalysisResult {
-    SemanticEffects      effects;
+    SemanticEffects effects;
     AnalysisCompleteness completeness = AnalysisCompleteness::Complete;
-    UnknownReason        unknown_reason = UnknownReason::None;
+    UnknownReason unknown_reason = UnknownReason::None;
     /// Mnemonicos de asm que la tabla no supo explicar, si el motivo fue ese.
     /// Viajan hasta el informe porque una laguna sin nombre no se puede cerrar.
     std::vector<std::string> mnemonicos_desconocidos;
-    /// Nombre de la funcion nativa sin efectos declarados, si el motivo fue ese.
+    /// Nombre de la funcion nativa sin efectos declarados, si el motivo fue
+    /// ese.
     std::string nativa_sin_declarar;
 };
 
@@ -375,12 +404,12 @@ struct EffectAnalysisResult {
 /// 'a' termina el flujo, si no el de 'b'; may_*/tags/determinism: union;
 /// atomic: el orden mas fuerte.
 SemanticEffects seq(const SemanticEffects &a, const SemanticEffects &b);
-MachineEffects  seq(const MachineEffects &a, const MachineEffects &b);
+MachineEffects seq(const MachineEffects &a, const MachineEffects &b);
 
 /// JOIN de control (merge de dos ramas).  may-effects: UNION.  stack peak: max.
 /// Es el meet del reticulo para las propiedades may-.
 SemanticEffects join(const SemanticEffects &a, const SemanticEffects &b);
-MachineEffects  join(const MachineEffects &a, const MachineEffects &b);
+MachineEffects join(const MachineEffects &a, const MachineEffects &b);
 
 } // namespace effects
 } // namespace analysis

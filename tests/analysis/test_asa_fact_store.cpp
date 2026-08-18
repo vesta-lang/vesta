@@ -14,8 +14,8 @@
  * El test EXIGE las propiedades que hacen util al sistema, no que compile:
  * que un consumidor pueda preguntar POR QUE y recibir la derivacion; que dos
  * hechos del mismo texto compartan UNA copia (o el almacen crece con el
- * programa); y que un hecho observado en ejecucion se distinga de uno demostrado
- * SIN que el consumidor tenga que saber quien lo produjo.
+ * programa); y que un hecho observado en ejecucion se distinga de uno
+ * demostrado SIN que el consumidor tenga que saber quien lo produjo.
  */
 
 #include "analysis/asa/fact_store.h"
@@ -61,13 +61,14 @@ static void probar_derivacion() {
     const FactId base = a.anadir(hecho(a, "asa.estructura", "estructura.forma",
                                        "f", Certeza::Demostrada));
 
-    Fact rango = hecho(a, "asa.rangos", "rango.acotado", "f", Certeza::Demostrada);
+    Fact rango =
+        hecho(a, "asa.rangos", "rango.acotado", "f", Certeza::Demostrada);
     rango.prueba.regla = "flujo-de-datos";
     rango.prueba.de.push_back(base);
     const FactId r = a.anadir(std::move(rango));
 
-    Fact derivado = hecho(a, "asa.memoria", "memoria.apunta_a", "f",
-                          Certeza::Demostrada);
+    Fact derivado =
+        hecho(a, "asa.memoria", "memoria.apunta_a", "f", Certeza::Demostrada);
     derivado.prueba.regla = "propagacion";
     derivado.prueba.de.push_back(r);
     const FactId d = a.anadir(std::move(derivado));
@@ -75,11 +76,13 @@ static void probar_derivacion() {
     const std::vector<FactId> cadena = a.explicar(d);
     CHECK(cadena.size() == 3, "la derivacion llega hasta el hecho fundacional");
     CHECK(cadena[0] == d && cadena[1] == r && cadena[2] == base,
-          "y viene en orden: primero el hecho, detras aquello de lo que se sigue");
+          "y viene en orden: primero el hecho, detras aquello de lo que se "
+          "sigue");
 
     /* Un grafo, no un arbol: dos hechos pueden apoyarse en el mismo y la
      * explicacion no debe repetirlo. */
-    Fact otro = hecho(a, "asa.bucles", "bucle.cabecera", "f", Certeza::Demostrada);
+    Fact otro =
+        hecho(a, "asa.bucles", "bucle.cabecera", "f", Certeza::Demostrada);
     otro.prueba.de.push_back(base);
     otro.prueba.de.push_back(r);
     const FactId o = a.anadir(std::move(otro));
@@ -104,8 +107,10 @@ static void probar_internado() {
 // ===========================================================================
 static void probar_consulta() {
     FactStore a;
-    a.anadir(hecho(a, "asa.rangos", "rango.acotado", "uno", Certeza::Demostrada));
-    a.anadir(hecho(a, "asa.rangos", "rango.acotado", "dos", Certeza::Demostrada));
+    a.anadir(
+        hecho(a, "asa.rangos", "rango.acotado", "uno", Certeza::Demostrada));
+    a.anadir(
+        hecho(a, "asa.rangos", "rango.acotado", "dos", Certeza::Demostrada));
     a.anadir(hecho(a, "asa.memoria", "memoria.apunta_a", "uno",
                    Certeza::Demostrada));
 
@@ -126,7 +131,8 @@ static void probar_certeza_agnostica() {
      * certeza: sobre lo demostrado puede quitar la comprobacion; sobre lo
      * observado tiene que dejar red (una guarda). */
     a.anadir(hecho(a, "asa.rangos", "rango.acotado", "f", Certeza::Demostrada));
-    a.anadir(hecho(a, "asa.observado", "rango.acotado", "f", Certeza::Inferida));
+    a.anadir(
+        hecho(a, "asa.observado", "rango.acotado", "f", Certeza::Inferida));
 
     const FactStore::Recuento c = a.recuento();
     CHECK(c.demostradas == 1 && c.inferidas == 1,
@@ -134,9 +140,12 @@ static void probar_certeza_agnostica() {
 
     int con_red = 0, sin_red = 0;
     for (FactId id : a.de_funcion("f")) {
-        /* Asi decide un consumidor: por la certeza, sin mirar la procedencia. */
-        if (a.at(id).sello.certeza == Certeza::Demostrada) ++sin_red;
-        else ++con_red;
+        /* Asi decide un consumidor: por la certeza, sin mirar la procedencia.
+         */
+        if (a.at(id).sello.certeza == Certeza::Demostrada)
+            ++sin_red;
+        else
+            ++con_red;
     }
     CHECK(sin_red == 1 && con_red == 1,
           "la decision sale de la certeza, no de quien lo dijo");
@@ -150,8 +159,8 @@ static void probar_registro() {
     CHECK(ds.size() >= 5,
           "los dominios de casa estan dados de alta (estructura, rangos, "
           "frontera, memoria, bucles)");
-    bool estructura_primero = ds.empty() ? false
-                                         : std::string(ds[0]) == "asa.estructura";
+    bool estructura_primero =
+        ds.empty() ? false : std::string(ds[0]) == "asa.estructura";
     CHECK(estructura_primero,
           "la estructura va primero: los demas apoyan sus hechos en el suyo");
 }

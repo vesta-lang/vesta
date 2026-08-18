@@ -7,16 +7,16 @@
 
 /**
  * @file analysis/manager/analysis_manager.h
- * @brief Infraestructura de analisis del compilador (estilo PassManager nuevo de
- *        LLVM / MLIR).  Los HECHOS son unicos (IRFacts), los ANaLISIS son
+ * @brief Infraestructura de analisis del compilador (estilo PassManager nuevo
+ * de LLVM / MLIR).  Los HECHOS son unicos (IRFacts), los ANaLISIS son
  *        independientes (cada uno su retículo/punto-fijo), y los PRODUCTOS
  *        (contratos, complejidad, --analyze) son proyecciones puras FUERA de
  *        aqui.  Este header es el nucleo: identidad de analisis, resultados por
  *        TYPE-ERASURE con concepto (sin herencia forzada), PreservedAnalyses y
  *        el gestor con dependencias explicitas + invalidacion.
  *
- * Es TRANSVERSAL (no pertenece al IR): IR es un consumidor, MachineIR sera otro.
- * Por eso vive en @c analysis/, no en @c ir/.
+ * Es TRANSVERSAL (no pertenece al IR): IR es un consumidor, MachineIR sera
+ * otro. Por eso vive en @c analysis/, no en @c ir/.
  *
  * ===========================================================================
  *  VISTA GLOBAL -- EL MOTOR DE CONOCIMIENTO (un motor, capas modulares)
@@ -106,23 +106,24 @@
  *     vuelve a usar un valor EN EL PROGRAMA (UseDefFacts), profundidad de loop
  *     (LoopFacts), frecuencia (ProfileFacts), si es recomputable (RematFacts).
  *   - MachineKnowledge -> el CUANTO.  Coste real de una operacion en la
- *     microarquitectura (MachineCostFacts: latencia/puertos/uops; SpillCostCard:
- *     reload/store/move).  OJO: es conocimiento de la ARQUITECTURA, NO del
- *     MachineIR -- por eso vive en @c analysis/hw/, no en @c jit/.  Se puede
+ *     microarquitectura (MachineCostFacts: latencia/puertos/uops;
+ * SpillCostCard: reload/store/move).  OJO: es conocimiento de la ARQUITECTURA,
+ * NO del MachineIR -- por eso vive en @c analysis/hw/, no en @c jit/.  Se puede
  *     preguntar "cuanto cuesta este ADD i64" SIN emitir una sola instruccion.
- *   - MachineIR -> el CUANDO FISICO.  El orden real tras la seleccion, use/def a
- *     2 posiciones por instruccion, folds (LEA), immediates, movimientos extra,
+ *   - MachineIR -> el CUANDO FISICO.  El orden real tras la seleccion, use/def
+ * a 2 posiciones por instruccion, folds (LEA), immediates, movimientos extra,
  *     presion de registros.  Solo aqui se conoce el coste OBSERVADO.
  *
  * COSTE ESTIMADO vs OBSERVADO.  De esos ejes salen dos costes:
  *   - ESTIMADO: IR (que op) + MachineKnowledge (cuanto) -> ANTES de bajar a
- *     MachineIR.  Ej: coste de recomputar una @c RematRecipe = latencia de su op.
- *   - OBSERVADO: tras la seleccion de instrucciones (MachineIR) -> incluye folds,
- *     immediates, MOVs extra, puertos ocupados.
- * El IR NUNCA conoce su coste maquina (no hay @c IrInstr::machine_cost()); es la
- * MAQUINA quien lo estima (@c MachineCostFacts::estimate(recipe)).  El punto donde
- * los ejes se fusionan es el @c OptimizationContext (Facts-programa x
- * Facts-hardware -> ObjectiveTerms -> decision).
+ *     MachineIR.  Ej: coste de recomputar una @c RematRecipe = latencia de su
+ * op.
+ *   - OBSERVADO: tras la seleccion de instrucciones (MachineIR) -> incluye
+ * folds, immediates, MOVs extra, puertos ocupados. El IR NUNCA conoce su coste
+ * maquina (no hay @c IrInstr::machine_cost()); es la MAQUINA quien lo estima
+ * (@c MachineCostFacts::estimate(recipe)).  El punto donde los ejes se fusionan
+ * es el @c OptimizationContext (Facts-programa x Facts-hardware ->
+ * ObjectiveTerms -> decision).
  *
  * ===========================================================================
  *  UN FACT PERTENECE A UN DOMINIO (posiciones tipadas por nivel)
@@ -130,15 +131,17 @@
  * Un mismo concepto puede existir en VARIOS niveles sin ser duplicacion, porque
  * responde a dominios distintos.  Ejemplo canonico: el NEXT-USE ("cuando se
  * vuelve a usar cada valor") existe en dos, y no son intercambiables:
- *   - Belady IR      = @c UseDefFacts         (IrValueId + @c ir::LinearPos)  -> remat / sched IR
- *   - Belady Machine = @c MachineNextUseFacts  (vreg + @c codegen::LinearPos)      -> allocator
- * Sus POSICIONES viven en dominios distintos (1 vs 2 por instruccion); el tipo
- * fuerte @c ir::LinearPos / @c codegen::LinearPos lo impide cruzar en compilacion
- * (ver @c ir/linear_pos.h, @c codegen/linear_pos.h).  REGLA GENERAL: cada dominio
- * tiene sus Facts y sus posiciones.  Que un Fact nuevo aparezca "por nivel" (no
- * como parche de un consumidor) es indicio de que la regla es correcta.  Cuando
- * lleguen @c CFGPos / @c ProfilePos / ... seran "posiciones" pero ninguna
- * intercambiable -- justo el error que merece atrapar el compilador.
+ *   - Belady IR      = @c UseDefFacts         (IrValueId + @c ir::LinearPos) ->
+ * remat / sched IR
+ *   - Belady Machine = @c MachineNextUseFacts  (vreg + @c codegen::LinearPos)
+ * -> allocator Sus POSICIONES viven en dominios distintos (1 vs 2 por
+ * instruccion); el tipo fuerte @c ir::LinearPos / @c codegen::LinearPos lo
+ * impide cruzar en compilacion (ver @c ir/linear_pos.h, @c
+ * codegen/linear_pos.h).  REGLA GENERAL: cada dominio tiene sus Facts y sus
+ * posiciones.  Que un Fact nuevo aparezca "por nivel" (no como parche de un
+ * consumidor) es indicio de que la regla es correcta.  Cuando lleguen @c CFGPos
+ * / @c ProfilePos / ... seran "posiciones" pero ninguna intercambiable -- justo
+ * el error que merece atrapar el compilador.
  */
 #ifndef VESTA_ANALYSIS_MANAGER_H
 #define VESTA_ANALYSIS_MANAGER_H
@@ -156,19 +159,24 @@ namespace analysis {
 
 // ===========================================================================
 // AnalysisID -- identidad ESTABLE de un analisis (ortogonal a la interfaz de
-// resultado).  Cada analisis expone un `static char ID;`; su direccion es el id.
+// resultado).  Cada analisis expone un `static char ID;`; su direccion es el
+// id.
 // ===========================================================================
 using AnalysisID = const void *;
 
-/// Deriva el AnalysisID de un tipo de analisis @c A (que define `static char ID`).
-template <class A> AnalysisID analysis_id() { return &A::ID; }
+/// Deriva el AnalysisID de un tipo de analisis @c A (que define `static char
+/// ID`).
+template <class A> AnalysisID analysis_id() {
+    return &A::ID;
+}
 
 // ===========================================================================
-// PreservedAnalyses -- que sobrevive a un pase.  Un pase declara lo que preserva;
-// el manager conserva esos resultados y recomputa el resto perezosamente.
+// PreservedAnalyses -- que sobrevive a un pase.  Un pase declara lo que
+// preserva; el manager conserva esos resultados y recomputa el resto
+// perezosamente.
 // ===========================================================================
 class PreservedAnalyses {
-public:
+  public:
     static PreservedAnalyses all() {
         PreservedAnalyses p;
         p.all_ = true;
@@ -188,27 +196,26 @@ public:
         return preserves_id(analysis_id<A>());
     }
 
-private:
-    bool                            all_ = false;
-    std::unordered_set<AnalysisID>  ids_;
+  private:
+    bool all_ = false;
+    std::unordered_set<AnalysisID> ids_;
 };
 
 // ===========================================================================
 // Type-erasure con CONCEPTO.  Los resultados NO heredan nada: pueden ser
 // value-types puros (EffectSummary, IRFacts...).  El unico gancho que importa
 // es `survives(PreservedAnalyses)`: se detecta por duck-typing (si el resultado
-// lo define, se usa; si no, default conservador = no sobrevive -> se recomputa).
+// lo define, se usa; si no, default conservador = no sobrevive -> se
+// recomputa).
 // ===========================================================================
 namespace detail {
-template <class T, class = void>
-struct has_survives : std::false_type {};
+template <class T, class = void> struct has_survives : std::false_type {};
 template <class T>
-struct has_survives<
-    T, decltype((void)std::declval<const T &>().survives(
-           std::declval<const PreservedAnalyses &>()))> : std::true_type {};
+struct has_survives<T, decltype((void)std::declval<const T &>().survives(
+                           std::declval<const PreservedAnalyses &>()))>
+    : std::true_type {};
 
-template <class T>
-bool call_survives(const T &r, const PreservedAnalyses &p) {
+template <class T> bool call_survives(const T &r, const PreservedAnalyses &p) {
     // preserve-all no invalida NADA (el pase no cambio nada relevante).
     if (p.preserves_all()) return true;
     if constexpr (has_survives<T>::value)
@@ -227,8 +234,8 @@ struct AnalysisResultConcept {
      *
      * Es lo que hace que la caducidad sea IMPOSIBLE en vez de responsabilidad
      * de quien invalida.  Un resultado no describe "una funcion": describe una
-     * funcion EN UN ESTADO.  Si el estado avanzo, lo que se guardo aqui habla de
-     * codigo que ya no existe -- y en el caso de @c IrFacts eso no es solo
+     * funcion EN UN ESTADO.  Si el estado avanzo, lo que se guardo aqui habla
+     * de codigo que ya no existe -- y en el caso de @c IrFacts eso no es solo
      * impreciso: guarda PUNTEROS a instrucciones, asi que leerlo tras una
      * mutacion es leer memoria ajena.  Medido: un 50 % de las ejecuciones
      * terminaba en fallo de segmentacion al confiar en la invalidacion manual.
@@ -239,8 +246,7 @@ struct AnalysisResultConcept {
 };
 
 /// Modelo templado: guarda un @c T por VALOR y reenvia el gancho.
-template <class T>
-struct AnalysisResultModel final : AnalysisResultConcept {
+template <class T> struct AnalysisResultModel final : AnalysisResultConcept {
     T result;
     explicit AnalysisResultModel(T r) : result(std::move(r)) {}
     bool survives(const PreservedAnalyses &p) const override {
@@ -252,16 +258,16 @@ struct AnalysisResultModel final : AnalysisResultConcept {
 // AnalysisManager -- lazy + caché + dependencias explicitas + invalidacion.
 //
 // Clave = (AnalysisID, unit).  `unit` es un string (nombre de funcion, o
-// "<module>" para el nivel modulo).  El grafo de DEPENDENCIAS se construye SOLO:
-// cuando el computo de A pide getResult<B>, se registra "A depende de B"; asi
-// invalidar B invalida A -- y esto captura los DOS ejes de invalidacion (cross-
-// analisis e interprocedural: si el cierre de un caller lee el summary del
-// callee, la dependencia lo refleja automaticamente).
+// "<module>" para el nivel modulo).  El grafo de DEPENDENCIAS se construye
+// SOLO: cuando el computo de A pide getResult<B>, se registra "A depende de B";
+// asi invalidar B invalida A -- y esto captura los DOS ejes de invalidacion
+// (cross- analisis e interprocedural: si el cierre de un caller lee el summary
+// del callee, la dependencia lo refleja automaticamente).
 // ===========================================================================
 class AnalysisManager {
-public:
+  public:
     struct Key {
-        AnalysisID  id;
+        AnalysisID id;
         std::string unit;
         bool operator==(const Key &o) const {
             return id == o.id && unit == o.unit;
@@ -274,9 +280,10 @@ public:
         }
     };
 
-    /// Devuelve el resultado de @c A para @p unit, computandolo perezosamente con
-    /// @p factory si no esta cacheado.  Registra la dependencia con el computo en
-    /// curso (si lo hay) para la invalidacion.  @p factory: `() -> T`.
+    /// Devuelve el resultado de @c A para @p unit, computandolo perezosamente
+    /// con
+    /// @p factory si no esta cacheado.  Registra la dependencia con el computo
+    /// en curso (si lo hay) para la invalidacion.  @p factory: `() -> T`.
     /**
      * @brief Igual, pero comprobando que lo cacheado siga hablando del MISMO
      *        estado de la unidad.
@@ -286,9 +293,10 @@ public:
      *        del resultado guardado, se recalcula: un resultado viejo no se
      *        entrega jamas, se haya invalidado o no.
      *
-     * Esto sustituye a "acordarse de invalidar", que es una obligacion que no se
-     * puede comprobar y que ya fallaba: hay caminos donde el IR se modifica sin
-     * que nadie avise, y ahi el cache servia punteros a instrucciones borradas.
+     * Esto sustituye a "acordarse de invalidar", que es una obligacion que no
+     * se puede comprobar y que ya fallaba: hay caminos donde el IR se modifica
+     * sin que nadie avise, y ahi el cache servia punteros a instrucciones
+     * borradas.
      */
     template <class A, class T, class Factory>
     const T &get_or_compute_v(const std::string &unit, uint64_t version,
@@ -299,7 +307,8 @@ public:
         if (it != results_.end()) {
             if (it->second->version == version) {
                 ++aciertos_;
-                return static_cast<AnalysisResultModel<T> *>(it->second.get())->result;
+                return static_cast<AnalysisResultModel<T> *>(it->second.get())
+                    ->result;
             }
             ++caducados_;
             invalidate_key(k); // caduco: fuera, y con el lo que dependia de el
@@ -323,7 +332,8 @@ public:
         if (!stack_.empty()) rev_deps_[k].insert(stack_.back());
         auto it = results_.find(k);
         if (it != results_.end())
-            return static_cast<AnalysisResultModel<T> *>(it->second.get())->result;
+            return static_cast<AnalysisResultModel<T> *>(it->second.get())
+                ->result;
         stack_.push_back(k);
         T value = factory(); // puede pedir otros get_or_compute -> mas deps
         stack_.pop_back();
@@ -346,12 +356,14 @@ public:
 
     /// Invalida los resultados de @p unit que NO sobreviven a @p preserved
     /// (mecanismo PreservedAnalyses tras un pase).  Cascada por dependencias.
-    void invalidate(const std::string &unit, const PreservedAnalyses &preserved) {
+    void invalidate(const std::string &unit,
+                    const PreservedAnalyses &preserved) {
         std::vector<Key> dead;
         for (const auto &kv : results_)
             if (kv.first.unit == unit && !kv.second->survives(preserved))
                 dead.push_back(kv.first);
-        for (const Key &k : dead) invalidate_key(k);
+        for (const Key &k : dead)
+            invalidate_key(k);
     }
 
     /// Borra TODO (reconstruccion completa).
@@ -379,7 +391,7 @@ public:
     };
     Cuentas cuentas() const { return Cuentas{aciertos_, caducados_, nuevos_}; }
 
-private:
+  private:
     long long aciertos_ = 0, caducados_ = 0, nuevos_ = 0;
 
     void invalidate_key(const Key &k) {
@@ -390,12 +402,14 @@ private:
         if (d == rev_deps_.end()) return;
         std::vector<Key> deps(d->second.begin(), d->second.end());
         rev_deps_.erase(d);
-        for (const Key &dep : deps) invalidate_key(dep); // cascada
+        for (const Key &dep : deps)
+            invalidate_key(dep); // cascada
     }
 
     std::unordered_map<Key, std::unique_ptr<AnalysisResultConcept>, KeyHash>
         results_;
-    std::unordered_map<Key, std::unordered_set<Key, KeyHash>, KeyHash> rev_deps_;
+    std::unordered_map<Key, std::unordered_set<Key, KeyHash>, KeyHash>
+        rev_deps_;
     std::vector<Key> stack_; // computos en curso (para registrar dependencias)
 };
 

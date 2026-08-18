@@ -10,8 +10,8 @@
  * @brief El motor de produccion y los dominios que hoy saben afirmar.
  *
  * El motor NO conoce ningun dominio: recorre los registrados.  Cada dominio es
- * una funcion corta que traduce SU analisis a hechos, y ahi -- no en quien luego
- * los mire -- vive el criterio de que merece afirmarse.
+ * una funcion corta que traduce SU analisis a hechos, y ahi -- no en quien
+ * luego los mire -- vive el criterio de que merece afirmarse.
  */
 
 #include "analysis/asa/productores.h"
@@ -49,10 +49,10 @@ void Produccion::callar(Sujeto de_quien, const char *motivo,
                         const char *dominio, const char *detalle) {
     ++resumen.miradas;
     ++resumen.callados;
-    /* El motivo SIEMPRE, aunque no se pidan los hechos uno a uno: un dominio que
-     * no supo algo tiene que decir por que, o su silencio no se puede arreglar.
-     * Son pocos codigos por dominio -- un vector plano se recorre antes de lo
-     * que un mapa calcula el hash. */
+    /* El motivo SIEMPRE, aunque no se pidan los hechos uno a uno: un dominio
+     * que no supo algo tiene que decir por que, o su silencio no se puede
+     * arreglar. Son pocos codigos por dominio -- un vector plano se recorre
+     * antes de lo que un mapa calcula el hash. */
     bool contado = false;
     for (MotivoIgnorancia &m : resumen.motivos) {
         if (m.codigo == motivo || std::strcmp(m.codigo, motivo) == 0) {
@@ -62,8 +62,8 @@ void Produccion::callar(Sujeto de_quien, const char *motivo,
         }
     }
     if (!contado) resumen.motivos.push_back({motivo, 1});
-    /* "De esto no se sabe nada" ES un hecho -- con certeza Desconocida --, no la
-     * ausencia de uno: distingue lo que se miro y no dio nada de lo que ni
+    /* "De esto no se sabe nada" ES un hecho -- con certeza Desconocida --, no
+     * la ausencia de uno: distingue lo que se miro y no dio nada de lo que ni
      * siquiera se miro, y esa diferencia es la que dice donde ampliar. */
     Fact f;
     f.que.dominio = dominio;
@@ -83,7 +83,7 @@ namespace {
 
 struct DominioRegistrado {
     const char *nombre;
-    Productor   productor;
+    Productor productor;
 };
 
 /// Vector plano: son unos pocos y se recorren enteros; un mapa aqui seria
@@ -139,8 +139,10 @@ std::string texto_rango(const ValueRange &r) {
     std::ostringstream o;
     int64_t lo = 0, hi = 0;
     if (r.vista_con_signo(lo, hi)) {
-        if (lo == hi) o << "= " << lo;
-        else o << "[" << lo << "," << hi << "]";
+        if (lo == hi)
+            o << "= " << lo;
+        else
+            o << "[" << lo << "," << hi << "]";
     } else {
         o << "[" << r.lo_c << "," << r.hi_c << "] sin signo";
     }
@@ -179,13 +181,13 @@ void producir_estructura(Produccion &p) {
 
 /// Rangos: entre que dos numeros esta cada valor.
 ///
-/// CRITERIO DEL DOMINIO: se afirma lo que dice MAS que el tipo.  Repetir "un u64
-/// cabe en un u64" no es conocimiento, es la definicion del tipo.
+/// CRITERIO DEL DOMINIO: se afirma lo que dice MAS que el tipo.  Repetir "un
+/// u64 cabe en un u64" no es conocimiento, es la definicion del tipo.
 void producir_rangos(Produccion &p) {
     for (const ir::IrFunction &fn : p.mod.functions) {
         if (!p.interesa(fn)) continue;
         const RangeFacts &rf = p.base.rangos(fn);
-        const Sello       s = p.base.sello(kProductorRangos, fn);
+        const Sello s = p.base.sello(kProductorRangos, fn);
         for (ir::IrValueId v = 0; v < fn.values.size(); ++v) {
             const ValueRange &r = rf.at(v);
             if (r.es_bottom()) {
@@ -207,7 +209,8 @@ void producir_rangos(Produccion &p) {
             }
             Fact f;
             f.que.dominio = kProductorRangos;
-            f.que.codigo = r.es_constante() ? "rango.constante" : "rango.acotado";
+            f.que.codigo =
+                r.es_constante() ? "rango.constante" : "rango.acotado";
             int64_t lo = 0, hi = 0;
             if (r.vista_con_signo(lo, hi)) {
                 f.que.a = lo;
@@ -229,7 +232,7 @@ void producir_rangos(Produccion &p) {
 /// que le llega a un parametro solo se sabe mirando a todos los que llaman.
 void producir_frontera(Produccion &p) {
     const RangeSummaries &rs = p.base.frontera(p.mod);
-    const Sello           s = p.base.sello_de_modulo(kProductorFrontera);
+    const Sello s = p.base.sello_de_modulo(kProductorFrontera);
     for (const ir::IrFunction &fn : p.mod.functions) {
         if (!p.interesa(fn)) continue;
         const FnRangeSummary *r = rs.buscar(fn.name);
@@ -243,9 +246,8 @@ void producir_frontera(Produccion &p) {
         f.que.codigo = r->cerrada ? "frontera.cerrada" : "frontera.abierta";
         f.que.a = static_cast<int64_t>(r->params.size());
         std::ostringstream o;
-        o << (r->cerrada
-                  ? "se ven todos los llamantes"
-                  : "llamantes sin ver -- los parametros valen su tipo");
+        o << (r->cerrada ? "se ven todos los llamantes"
+                         : "llamantes sin ver -- los parametros valen su tipo");
         for (size_t i = 0; i < r->params.size(); ++i) {
             if (!r->params[i].acotada() || r->params[i].es_todo()) continue;
             int64_t lo = 0, hi = 0;
@@ -349,11 +351,12 @@ void producir_asm_flujo(Produccion &p) {
                  * los bloques CON FLUJO DE CONTROL: los `jb` del corpus salen
                  * todos de un `inject`, asi que lo que queda son los rectos.
                  *
-                 * O sea que esto no esta bien: esta callado.  Lo correcto es que
-                 * el flujo se analice DESPUES de la inyeccion, donde el cuerpo
-                 * ya existe.  Hoy hay dos vistas y ninguna sirve sola -- el
-                 * lowering ve el asm expandido y avisa (VXA018), y aqui llega un
-                 * marcador --, y por eso los dos recuentos nunca cuadraron. */
+                 * O sea que esto no esta bien: esta callado.  Lo correcto es
+                 * que el flujo se analice DESPUES de la inyeccion, donde el
+                 * cuerpo ya existe.  Hoy hay dos vistas y ninguna sirve sola --
+                 * el lowering ve el asm expandido y avisa (VXA018), y aqui
+                 * llega un marcador --, y por eso los dos recuentos nunca
+                 * cuadraron. */
                 if (cuerpo.find("__vxf_inject") != std::string::npos) continue;
                 const vx::AsmCfg cfg = vx::build_asm_cfg(isa, cuerpo);
                 if (std::getenv("VESTA_ASMFLUJO_DEBUG") != nullptr)
@@ -379,7 +382,8 @@ void producir_asm_flujo(Produccion &p) {
                 std::ostringstream o;
                 o << cfg.blocks.size() << " bloques basicos";
                 if (cfg.has_indirect) o << ", con salto indirecto";
-                if (cfg.has_unresolved_target) o << ", con destino sin resolver";
+                if (cfg.has_unresolved_target)
+                    o << ", con destino sin resolver";
                 if (!cfg.unknown_terminators.empty())
                     o << ", " << cfg.unknown_terminators.size()
                       << " terminador(es) sin clasificar";
@@ -446,7 +450,8 @@ void producir_disposicion(Produccion &p) {
      * indistinguible de no haberlo mirado, asi que se deja constancia del
      * motivo: cuando el guion llegue hasta aqui, este silencio se convierte en
      * el numero que toque. */
-    p.callar(sujeto, "disposicion.colocacion_configurable", kProductorDisposicion,
+    p.callar(sujeto, "disposicion.colocacion_configurable",
+             kProductorDisposicion,
              "en el nativo la seccion la coloca el guion de enlazado; "
              "sin verlo no se puede afirmar su alineacion");
 }
@@ -455,7 +460,7 @@ void producir_memoria(Produccion &p) {
     for (const ir::IrFunction &fn : p.mod.functions) {
         if (!p.interesa(fn)) continue;
         const PointsTo &pt = p.base.memoria(fn);
-        const Sello     s = p.base.sello(kProductorMemoria, fn);
+        const Sello s = p.base.sello(kProductorMemoria, fn);
         for (ir::IrValueId v = 0; v < fn.values.size(); ++v) {
             const effects::AbstractLoc l = loc_of(pt, v, 0);
             if (l.kind == effects::AbstractLoc::Kind::None ||
@@ -497,8 +502,8 @@ void producir_bucles(Produccion &p) {
     for (const ir::IrFunction &fn : p.mod.functions) {
         if (!p.interesa(fn)) continue;
         const LoopFacts &lf = p.base.bucles(fn);
-        const Sello      s = p.base.sello(kProductorBucles, fn);
-        uint32_t         vistos = 0;
+        const Sello s = p.base.sello(kProductorBucles, fn);
+        uint32_t vistos = 0;
         for (ir::IrBlockId b = 0; b < fn.blocks.size(); ++b) {
             if (!lf.header_of(b)) continue;
             ++vistos;
@@ -548,12 +553,13 @@ std::vector<const char *> productores_registrados() {
     asegurar_registro();
     std::vector<const char *> v;
     v.reserve(registro().size());
-    for (const DominioRegistrado &d : registro()) v.push_back(d.nombre);
+    for (const DominioRegistrado &d : registro())
+        v.push_back(d.nombre);
     return v;
 }
 
 std::vector<ResumenProduccion> producir(const ir::IrModule &mod,
-                                        FactStore          &almacen) {
+                                        FactStore &almacen) {
     /* Antes de producir nada: los nombres de los productores tienen que ser
      * canonicos para que un hecho leido de disco se reconozca como suyo. */
     register_asa_canonical_names();
@@ -561,13 +567,13 @@ std::vector<ResumenProduccion> producir(const ir::IrModule &mod,
     std::vector<ResumenProduccion> resumenes;
     /* UNA base para todos los dominios: si tres piden la estructura, se calcula
      * una vez.  Es la Regla 1 aplicada a la propia produccion. */
-    BaseDeHechos                            base;
+    BaseDeHechos base;
     std::unordered_map<std::string, FactId> estructura_de;
 
     /* Reservar de golpe: un modulo grande produce cientos de miles de hechos y
      * dejarlos crecer de uno en uno copia el vector entero una y otra vez.  La
-     * cota se estima de lo unico que la determina -- valores por dominio -- y no
-     * hace falta que sea exacta. */
+     * cota se estima de lo unico que la determina -- valores por dominio -- y
+     * no hace falta que sea exacta. */
     size_t valores = 0;
     for (const ir::IrFunction &fn : mod.functions)
         if (!fn.is_native) valores += fn.values.size();

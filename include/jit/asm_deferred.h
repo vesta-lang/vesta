@@ -42,11 +42,11 @@ namespace jit {
  * @brief Por que no se pudo ensamblar un bloque diferido.
  */
 enum class AsmDeferredFallo : uint8_t {
-    NINGUNO = 0,      ///< salio bien.
-    SIN_ENSAMBLADOR,  ///< no hay ensamblador registrado.
-    SIN_REGISTRO,     ///< a un operando no le toco ranura (banco insuficiente).
-    SIN_NOMBRE,       ///< la ranura no se puede nombrar (clase/ancho raros).
-    NO_ENSAMBLA,      ///< el ensamblador rechazo el texto ya sustituido.
+    NINGUNO = 0,     ///< salio bien.
+    SIN_ENSAMBLADOR, ///< no hay ensamblador registrado.
+    SIN_REGISTRO,    ///< a un operando no le toco ranura (banco insuficiente).
+    SIN_NOMBRE,      ///< la ranura no se puede nombrar (clase/ancho raros).
+    NO_ENSAMBLA,     ///< el ensamblador rechazo el texto ya sustituido.
 };
 
 /**
@@ -57,18 +57,18 @@ enum class AsmDeferredFallo : uint8_t {
  * clase, su ancho y la ranura.  Quien informa los convierte en un mensaje.
  */
 struct AsmDeferredResult {
-    bool ok = false;                ///< false si no se pudo; ver @c fallo.
-    std::vector<uint8_t> bytes;     ///< codigo del bloque (vacio si !ok).
-    std::string texto;              ///< el asm con los registros ya puestos.
+    bool ok = false;            ///< false si no se pudo; ver @c fallo.
+    std::vector<uint8_t> bytes; ///< codigo del bloque (vacio si !ok).
+    std::string texto;          ///< el asm con los registros ya puestos.
 
     AsmDeferredFallo fallo = AsmDeferredFallo::NINGUNO;
-    uint32_t operando = 0;          ///< indice $N del operando que fallo.
-    uint32_t vreg = 0;              ///< su valor virtual.
-    uint8_t  clase = 0;             ///< su clase de registro (ASM_RC_*).
-    uint16_t ancho = 0;             ///< su ancho en bits.
-    int32_t  ranura = -1;           ///< la ranura fisica, si llego a haber una.
-    bool     en_memoria = false;    ///< el asignador lo dejo en la pila.
-    std::string detalle;            ///< lo que dijo el ensamblador (NO_ENSAMBLA).
+    uint32_t operando = 0;   ///< indice $N del operando que fallo.
+    uint32_t vreg = 0;       ///< su valor virtual.
+    uint8_t clase = 0;       ///< su clase de registro (ASM_RC_*).
+    uint16_t ancho = 0;      ///< su ancho en bits.
+    int32_t ranura = -1;     ///< la ranura fisica, si llego a haber una.
+    bool en_memoria = false; ///< el asignador lo dejo en la pila.
+    std::string detalle;     ///< lo que dijo el ensamblador (NO_ENSAMBLA).
 };
 
 /**

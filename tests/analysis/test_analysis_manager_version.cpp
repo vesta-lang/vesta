@@ -17,8 +17,8 @@
  * segmentacion en la mitad de las ejecuciones, porque @c IrFacts guarda
  * PUNTEROS a instrucciones y el IR se habia modificado por medio.
  *
- * Por eso el test mira la version, no el contenido: si el sello no se comprueba,
- * el resultado viejo se entrega y el contador de calculos no sube.
+ * Por eso el test mira la version, no el contenido: si el sello no se
+ * comprueba, el resultado viejo se entrega y el contador de calculos no sube.
  */
 #include "analysis/manager/analysis_manager.h"
 
@@ -74,13 +74,15 @@ int main() {
     // 2. Sin cambios, se reusa: para eso esta el cache.
     pedir();
     pedir();
-    comprueba(calculos == 1, "sin cambios NO se recalcula (3 peticiones, 1 calculo)");
+    comprueba(calculos == 1,
+              "sin cambios NO se recalcula (3 peticiones, 1 calculo)");
 
     // 3. La unidad cambia.  Nadie invalida NADA -- ese es el punto: la
     //    disciplina de acordarse es justo lo que no queremos que haga falta.
     version = 2;
     const ResultadoFalso &b = pedir();
-    comprueba(calculos == 2, "tras cambiar la unidad SI se recalcula, sin invalidar a mano");
+    comprueba(calculos == 2,
+              "tras cambiar la unidad SI se recalcula, sin invalidar a mano");
     comprueba(b.estado_visto == 2, "el resultado nuevo habla del estado 2");
 
     // 4. Y el nuevo tambien se reusa mientras el estado no vuelva a moverse.
@@ -92,7 +94,8 @@ int main() {
     //    reutilizan; suponer monotonia seria otra forma de confiar.)
     version = 1;
     pedir();
-    comprueba(calculos == 3, "un estado distinto recalcula aunque sea uno anterior");
+    comprueba(calculos == 3,
+              "un estado distinto recalcula aunque sea uno anterior");
 
     // 6. Sin versionar (0) sigue comportandose como un cache normal: las
     //    unidades que no son funciones IR no tienen por que inventarse un
@@ -104,7 +107,8 @@ int main() {
             ++calculos_sv;
             return ResultadoFalso{0};
         });
-    comprueba(calculos_sv == 1, "sin versionar se comporta como un cache normal");
+    comprueba(calculos_sv == 1,
+              "sin versionar se comporta como un cache normal");
 
     std::printf(fallos == 0 ? "[gestor de analisis] TODO OK\n"
                             : "[gestor de analisis] %d FALLOS\n",

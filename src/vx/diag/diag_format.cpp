@@ -99,8 +99,7 @@ void render_sarif(std::ostream &os, const Diagnostics &diags) {
     // Reglas = codigos distintos que aparecen.
     std::set<std::string> rules;
     for (const Diagnostic &d : all)
-        if (!d.code.empty())
-            rules.insert(d.code);
+        if (!d.code.empty()) rules.insert(d.code);
 
     os << "{\n";
     os << "  \"version\": \"2.1.0\",\n";

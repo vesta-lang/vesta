@@ -43,7 +43,7 @@ namespace ast = vx::ast;
 static int g_passed = 0;
 static int g_failed = 0;
 
-#define VX_ASSERT(cond, msg)                                                  \
+#define VX_ASSERT(cond, msg)                                                   \
     do {                                                                       \
         if (!(cond)) {                                                         \
             std::fprintf(stderr, "FAIL [%s:%d] %s\n", __FILE__, __LINE__,      \
@@ -116,7 +116,7 @@ static void test_result_type_filled() {
         as_node<ast::BinaryExpr>(ret->value.get(), ast::NodeKind::BinaryExpr);
     VX_ASSERT(add != nullptr, "es Add");
     VX_ASSERT(add->result_type.kind == PrimitiveKind::I64,
-               "literales 1+2 promueven a i64");
+              "literales 1+2 promueven a i64");
 }
 
 static void test_typedef_alias_resolves() {

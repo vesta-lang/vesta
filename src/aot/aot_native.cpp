@@ -141,12 +141,11 @@ StartStub start_x86_32_pe() {
  *        @c -semihosting (cargado con @c -kernel), sin libc ni syscalls Linux.
  *
  *   d2a80614   movz x20, #0x4030, lsl #16  ; sp = 0x40300000 (RAM alta de virt)
- *   910202 9f  mov  sp, x20                ; el bare-metal NO trae sp inicializado
- *   97ffffff   bl main                     ; main return en x0 (imm26->reloc CALL26)
- *   aa0003f5   mov x21, x0                 ; guarda el codigo de salida
- *   d10043ff   sub sp, sp, #16
- *   d28004c2   movz x2, #0x26              ; ADP_Stopped_ApplicationExit = 0x20026
- *   f2a00042   movk x2, #0x2, lsl #16
+ *   910202 9f  mov  sp, x20                ; el bare-metal NO trae sp
+ * inicializado 97ffffff   bl main                     ; main return en x0
+ * (imm26->reloc CALL26) aa0003f5   mov x21, x0                 ; guarda el
+ * codigo de salida d10043ff   sub sp, sp, #16 d28004c2   movz x2, #0x26 ;
+ * ADP_Stopped_ApplicationExit = 0x20026 f2a00042   movk x2, #0x2, lsl #16
  *   f90003e2   str x2, [sp]                ; parametro[0] = razon
  *   f90007f5   str x21, [sp, #8]           ; parametro[1] = exit code
  *   910003e1   mov x1, sp                  ; x1 -> bloque de parametros

@@ -1,6 +1,7 @@
 /*
  * VestaVM - Maquina Virtual Distribuida
- * Copyright (C) 2026 David Lopez.T (DesmonHak); Licencia: GPLv2 + excepcion de runtime (ver LICENSE)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak); Licencia: GPLv2 + excepcion de
+ * runtime (ver LICENSE)
  */
 /**
  * @file lombok.cpp

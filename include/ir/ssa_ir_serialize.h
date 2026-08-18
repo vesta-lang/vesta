@@ -192,7 +192,8 @@ bool parse_ir_module_cache(const std::vector<uint8_t> &data, IrModule &out);
  *
  * Expuesto para el driver incremental (fragmentos de IR por-simbolo): los
  * blobs de static_data que referencia una funcion forman un mini-store que
- * viaja con su fragmento.  Round-trip byte-exacto con @c deserialize_static_data.
+ * viaja con su fragmento.  Round-trip byte-exacto con @c
+ * deserialize_static_data.
  */
 void serialize_static_data(const IrModule::StaticDataStore &sd,
                            std::vector<uint8_t> &out);

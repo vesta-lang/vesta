@@ -11,13 +11,15 @@
  *
  * Misma arquitectura que el asignador de banco ancho y que el reconocedor de
  * patrones del optimizador: **Facts -> Capabilities -> Constraints ->
- * Objective**.  No es una analogia: es el mismo esquema aplicado a otro dominio.
+ * Objective**.  No es una analogia: es el mismo esquema aplicado a otro
+ * dominio.
  *
  *  - **Facts**: los nodos.  Ya son hechos inmutables del programa,
  *    identificados por contenido; no hay que inventar nada.
  *  - **Capabilities**: esto.  Que preguntas se pueden responder.
- *  - **Constraints**: por que no se puede responder el resto (@ref Unavailable):
- *    no se guardo, el optimizador lo elimino, lo guardado ya no corresponde.
+ *  - **Constraints**: por que no se puede responder el resto (@ref
+ * Unavailable): no se guardo, el optimizador lo elimino, lo guardado ya no
+ * corresponde.
  *  - **Objective**: que se busca (@ref Query) -- explicar un fallo, colocar un
  *    punto de parada, atribuir una muestra -- porque no todos necesitan lo
  *    mismo y averiguar de mas cuesta.
@@ -90,7 +92,8 @@ enum class Capability : uint32_t {
 /// Cuantas capacidades hay, derivado del propio enum.
 static constexpr size_t CAPABILITY_COUNT = []() {
     size_t n = 0;
-    for (uint32_t v = static_cast<uint32_t>(Capability::_Last); v; v >>= 1) ++n;
+    for (uint32_t v = static_cast<uint32_t>(Capability::_Last); v; v >>= 1)
+        ++n;
     return n;
 }();
 

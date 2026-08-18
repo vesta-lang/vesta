@@ -82,10 +82,10 @@ const char *symbol_kind_name(SymbolKind k);
  * @c byte_offset_to_lsp_position cuando necesita responder.
  */
 struct SymbolDef {
-    std::string name;            ///< Nombre del simbolo.
+    std::string name;                      ///< Nombre del simbolo.
     SymbolKind kind = SymbolKind::Unknown; ///< Categoria.
-    size_t byte_offset = 0;      ///< Offset de byte del nombre (inicio).
-    size_t byte_length = 0;      ///< Longitud en bytes del nombre.
+    size_t byte_offset = 0; ///< Offset de byte del nombre (inicio).
+    size_t byte_length = 0; ///< Longitud en bytes del nombre.
     /// Cualificador opcional para miembros (e.g. clase contenedora).  Vacio
     /// para simbolos top-level.  Informativo para el hover.
     std::string container;
@@ -149,7 +149,7 @@ DocSymbols build_doc_symbols(const std::string &text,
  * fichero.  El @c uri es la URI @c file:// del fichero.
  */
 struct WorkspaceLocation {
-    std::string uri;        ///< URI file:// del fichero.
+    std::string uri; ///< URI file:// del fichero.
     uint32_t start_line = 0;
     uint32_t start_char = 0;
     uint32_t end_line = 0;
@@ -241,9 +241,9 @@ class WorkspaceIndex {
      *
      * @param fn Callback invocado una vez por nombre definido.
      */
-    void for_each_def_name(
-        const std::function<void(const std::string &, SymbolKind,
-                                 const std::string &)> &fn) const;
+    void
+    for_each_def_name(const std::function<void(const std::string &, SymbolKind,
+                                               const std::string &)> &fn) const;
 
     /// @brief true si las raices estan fijadas (hay donde indexar).
     bool has_roots() const { return !roots_.empty(); }

@@ -68,7 +68,8 @@ void Assembler::emit_data(const vm::DataDecl *data) {
         // `dq @Absolute("code.<sym>")`: referencia absoluta a un simbolo (reloc
         // datos->codigo).  La usa la vtable de los structs @Virtual.  Registra
         // una relocacion @c Absolute64 que el linker rebasa a la direccion VM
-        // final del simbolo y emite 8 bytes placeholder (el linker los parchea).
+        // final del simbolo y emite 8 bytes placeholder (el linker los
+        // parchea).
         if (auto ar = dynamic_cast<vm::AbsRefExpr *>(expr.get())) {
             Relocation rel;
             rel.symbol = ar->symbol;
@@ -76,7 +77,8 @@ void Assembler::emit_data(const vm::DataDecl *data) {
             rel.offset = static_cast<uint64_t>(output.offset);
             rel.type = Type::Absolute64;
             ctx.add_relocation(rel);
-            for (int i = 0; i < 8; ++i) output.emit8(0x00); // placeholder
+            for (int i = 0; i < 8; ++i)
+                output.emit8(0x00); // placeholder
             continue;
         }
 
@@ -96,7 +98,8 @@ const InstrInfo &Assembler::select_variant(
      * El indice se construye UNA vez desde la misma tabla -- no hay una segunda
      * copia de los datos: apunta a ella.  Y la tabla sigue escrita por nombre,
      * que es lo que una persona lee y edita. */
-    static const emmit::MnemonicIndex<std::vector<InstrInfo>> kIndex(InstrTable);
+    static const emmit::MnemonicIndex<std::vector<InstrInfo>> kIndex(
+        InstrTable);
     const std::vector<InstrInfo> *found =
         kIndex.find(emmit::mnemonic_from_text(mnemonic.c_str()));
     if (found == nullptr)
@@ -325,10 +328,11 @@ void Assembler::emit_instruction(const vm::Instruction *instr) {
                     // byte_offset se fija DESPUES de emitir esta instruccion:
                     // el marcador `// @sm` que produjo el emisor va ligado a la
                     // instruccion de CALL (el lexer lo consume en el skip de
-                    // whitespace tras el call), pero la raiz debe registrarse en
-                    // el RETURN_PC = offset del byte SIGUIENTE al call (lo que
-                    // callvm/callvirt empujan como ret_addr).  Por eso diferimos
-                    // la asignacion del offset al final de la emision.
+                    // whitespace tras el call), pero la raiz debe registrarse
+                    // en el RETURN_PC = offset del byte SIGUIENTE al call (lo
+                    // que callvm/callvirt empujan como ret_addr).  Por eso
+                    // diferimos la asignacion del offset al final de la
+                    // emision.
                 }
             }
         }
@@ -356,27 +360,28 @@ void Assembler::emit_instruction(const vm::Instruction *instr) {
         }
     }
 
-    // Fijar el offset del stackmap pendiente y publicarlo.  El PC bajo el que el
-    // scan busca el stackmap depende del TIPO de safepoint:
+    // Fijar el offset del stackmap pendiente y publicarlo.  El PC bajo el que
+    // el scan busca el stackmap depende del TIPO de safepoint:
     //
     //   - DIRECTO (newobj/gcalloc/...): el marcador `// @sm` queda ligado al
     //     propio opcode del safepoint; el rip del interprete cuando el GC corre
     //     ES el INICIO de esa instruccion -> byte_offset = instr_start_offset.
     //
-    //   - RETURN-SITE (tras callvm/callvirt/callm): el emisor coloca el marcador
+    //   - RETURN-SITE (tras callvm/callvirt/callm): el emisor coloca el
+    //   marcador
     //     `// @sm` JUSTO DESPUES del call, con la INTENCION de ligarlo a la
     //     instruccion siguiente (el return_pc).  Pero el lexer lo captura en el
     //     lookahead que cierra el parse del PROPIO call -> el marcador queda
-    //     ligado al CALL, no a la instruccion posterior.  El frame-walk del scan
-    //     preciso lee el return_pc = [rbp+8], que es el offset del byte SIGUIENTE
-    //     al call (lo que callvm/callvirt empujan como ret_addr) = el INICIO +
-    //     el tamano del call = @c output.offset TRAS emitir el call.  Por eso el
-    //     stackmap de un carrier de tipo CALL se registra en el offset POST-emit
-    //     (return_pc), no en su inicio.  Sin esto el stackmap queda mal-keyed
-    //     (nunca coincide con el return_pc del walk) y las raices GC vivas SOLO
-    //     alcanzables desde un frame CALLER (p.ej. el `l` de una lista enlazada
-    //     construida en un helper) se pierden -> UAF con el GC moving del
-    //     nursery preciso.
+    //     ligado al CALL, no a la instruccion posterior.  El frame-walk del
+    //     scan preciso lee el return_pc = [rbp+8], que es el offset del byte
+    //     SIGUIENTE al call (lo que callvm/callvirt empujan como ret_addr) = el
+    //     INICIO + el tamano del call = @c output.offset TRAS emitir el call.
+    //     Por eso el stackmap de un carrier de tipo CALL se registra en el
+    //     offset POST-emit (return_pc), no en su inicio.  Sin esto el stackmap
+    //     queda mal-keyed (nunca coincide con el return_pc del walk) y las
+    //     raices GC vivas SOLO alcanzables desde un frame CALLER (p.ej. el `l`
+    //     de una lista enlazada construida en un helper) se pierden -> UAF con
+    //     el GC moving del nursery preciso.
     if (pending_stackmap) {
         const bool call_carrier =
             (instr->opcode == "callvm" || instr->opcode == "callvirt" ||

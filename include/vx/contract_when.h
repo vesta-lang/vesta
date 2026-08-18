@@ -11,12 +11,12 @@
  *   - del PARAMETRO DE TIPO (`is_float<T>()`, `sizeof<T>() OP N`), que solo
  *     tiene respuesta al monomorphizar.
  *
- * Los dos ejes se mezclan en la misma expresion (`arch:x86_64 && is_float<T>()`)
- * porque es una sola gramatica: atomos + `!` + `&&` + `||` + parentesis, con
- * precedencia `!` > `&&` > `||`.  Este modulo la parsea UNA vez y deja que cada
- * llamante diga cuanto vale cada atomo, que es lo que permite usarla tanto para
- * evaluarla de verdad (con el target y T reales) como para razonar sobre ella
- * (con asignaciones hipoteticas, al comparar especificidad).
+ * Los dos ejes se mezclan en la misma expresion (`arch:x86_64 &&
+ * is_float<T>()`) porque es una sola gramatica: atomos + `!` + `&&` + `||` +
+ * parentesis, con precedencia `!` > `&&` > `||`.  Este modulo la parsea UNA vez
+ * y deja que cada llamante diga cuanto vale cada atomo, que es lo que permite
+ * usarla tanto para evaluarla de verdad (con el target y T reales) como para
+ * razonar sobre ella (con asignaciones hipoteticas, al comparar especificidad).
  *
  * @par Por que hace falta comparar especificidad
  * Varios `when:` pueden casar A LA VEZ:
@@ -117,10 +117,10 @@ bool only_target(const std::string &spec);
 
 /// Relacion entre dos `when:` segun cual es mas especifico.
 enum class Spec {
-    A_MAS,     ///< A es mas especifica que B (A implica B, B no implica A).
-    B_MAS,     ///< B es mas especifica que A.
-    IGUALES,   ///< se implican mutuamente (misma condicion) -> gana la ultima.
-    AMBIGUAS,  ///< ninguna implica a la otra -> el llamante debe dar error.
+    A_MAS,    ///< A es mas especifica que B (A implica B, B no implica A).
+    B_MAS,    ///< B es mas especifica que A.
+    IGUALES,  ///< se implican mutuamente (misma condicion) -> gana la ultima.
+    AMBIGUAS, ///< ninguna implica a la otra -> el llamante debe dar error.
 };
 
 /// @brief Compara dos `when:` por especificidad.
@@ -165,8 +165,8 @@ using ErrFn = std::function<void(const std::string &msg)>;
 void resolve(const std::vector<ast::PendingComplexity> &decls,
              const AtomEval &ev, const ErrFn &err, Resolved &out);
 
-/// Los contratos de huella resueltos (tri-estado -1/0/1, o -1 para @alloc/@stack
-/// no declarados).
+/// Los contratos de huella resueltos (tri-estado -1/0/1, o -1 para
+/// @alloc/@stack no declarados).
 struct ResolvedFP {
     int8_t pure = -1;
     int8_t nothrow_ = -1;
@@ -180,10 +180,10 @@ struct ResolvedFP {
 /// @brief Resuelve los contratos de HUELLA con `when:` aplicando la prioridad.
 ///
 /// Igual que @ref resolve pero para @pure/@nothrow/@nopanic/@alloc/@stack.  Los
-/// que casan compiten por especificidad campo a campo; ante empate no decidible,
-/// error.  Se parte de @p base (los contratos SIN `when:`, que son el default,
-/// como si su `when:` fuese `true` -- lo menos especifico): un `when:` que casa
-/// siempre gana sobre ellos.
+/// que casan compiten por especificidad campo a campo; ante empate no
+/// decidible, error.  Se parte de @p base (los contratos SIN `when:`, que son
+/// el default, como si su `when:` fuese `true` -- lo menos especifico): un
+/// `when:` que casa siempre gana sobre ellos.
 void resolve_footprint(const std::vector<ast::PendingFootprint> &decls,
                        const ResolvedFP &base, const AtomEval &ev,
                        const ErrFn &err, ResolvedFP &out);

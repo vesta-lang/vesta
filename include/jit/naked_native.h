@@ -21,13 +21,13 @@
  * La solucion aqui es una mini-AOT AL VUELO: cuando el codigo VM/JIT (VM_ABI)
  * llama a una funcion @Naked, la llamada se ha bajado a un CALLN al dispatcher
  * @c vrt_naked_dispatch.  El dispatcher (1) native-compila la funcion @Naked y
- * TODAS sus callees Vesta alcanzables via @c vreg_compile_native (ABI HOST_LEAF,
- * naked), (2) resuelve sus relocs a direcciones VIVAS (funcion -> code cache;
- * global -> direccion HOST del slot en @c vm_mem, que es donde el codigo VM_ABI
- * escribe/lee el global), (3) cachea el resultado por nombre, y (4) invoca la
- * entrada nativa con los argumentos ya marshalizados desde los registros VM
- * (R2..) al ABI nativo -- exactamente el mismo puente que @c CALLN ya usa para
- * FFI.  Retorno de la nativa (rax) -> R0.
+ * TODAS sus callees Vesta alcanzables via @c vreg_compile_native (ABI
+ * HOST_LEAF, naked), (2) resuelve sus relocs a direcciones VIVAS (funcion ->
+ * code cache; global -> direccion HOST del slot en @c vm_mem, que es donde el
+ * codigo VM_ABI escribe/lee el global), (3) cachea el resultado por nombre, y
+ * (4) invoca la entrada nativa con los argumentos ya marshalizados desde los
+ * registros VM (R2..) al ABI nativo -- exactamente el mismo puente que @c CALLN
+ * ya usa para FFI.  Retorno de la nativa (rax) -> R0.
  *
  * Cero coste si el programa no usa @Naked con simbolos: el dispatcher solo se
  * registra (como cualquier virtual-fn) y jamas se invoca.
@@ -96,8 +96,8 @@ inline uint64_t fnv1a64_name(const char *s) {
 /* ===================================================================== */
 
 /**
- * @brief Compila (o recupera de cache) la funcion Vesta @p name como una entrada
- *        NATIVA HOST_LEAF (respetando @c is_naked), con sus relocs resueltos.
+ * @brief Compila (o recupera de cache) la funcion Vesta @p name como una
+ * entrada NATIVA HOST_LEAF (respetando @c is_naked), con sus relocs resueltos.
  *        Wrapper publico y thread-safe de la maquinaria @Naked interna.
  *
  * Lo usa el force-eager del grafo de fibra para materializar @c __vx_swapctx
@@ -141,8 +141,8 @@ extern "C" int32_t vrt_jit_active(void);
 extern "C" uint64_t vrt_getproc(void);
 
 /**
- * @brief FN.3: extern `vrt:fiber_jit_ctx(entry)` -> construye en memoria HOST el
- *        contexto de una fibra para el context-switch nativo (JIT).
+ * @brief FN.3: extern `vrt:fiber_jit_ctx(entry)` -> construye en memoria HOST
+ * el contexto de una fibra para el context-switch nativo (JIT).
  *
  * Reserva ctx (152 B) + pila (64 KiB) con malloc (memoria host), materializa el
  * trampolin `__fiber_trampoline` nativo, y rellena el ctx con el layout que
@@ -156,8 +156,8 @@ extern "C" uint64_t vrt_getproc(void);
 extern "C" uint64_t vrt_fiber_jit_ctx(uint64_t entry);
 
 /**
- * @brief FN.3: extern `vrt:fiber_jit_scratch()` -> ctx host vacio (152 B a cero)
- *        para el scheduler/main (se rellena en el primer swap-out).  Solo JIT.
+ * @brief FN.3: extern `vrt:fiber_jit_scratch()` -> ctx host vacio (152 B a
+ * cero) para el scheduler/main (se rellena en el primer swap-out).  Solo JIT.
  */
 extern "C" uint64_t vrt_fiber_jit_scratch(void);
 

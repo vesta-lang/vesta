@@ -36,7 +36,7 @@
  */
 
 #include "ir/ir_emitter.h"
-#include "ir/vel_sink.h"     // a donde sale lo emitido (una emision, N destinos)
+#include "ir/vel_sink.h" // a donde sale lo emitido (una emision, N destinos)
 #include "ir/gc_safepoint.h" // pase compartido: raices GC por safepoint
 #include "analysis/asa/aggregate_facts.h"
 #include <chrono>
@@ -47,12 +47,12 @@
 #include "codegen/vm_allocate.h"
 #include "ir/regalloc.h"
 #include "ir/ssa_ir.h"
-#include "vx/asm/asm_effects.h"           // inc.6: asm_canonical_reg
-#include "vx/asm/asm_phys_reg.h"          // sustitucion $N -> reg fisico
+#include "vx/asm/asm_effects.h"        // inc.6: asm_canonical_reg
+#include "vx/asm/asm_phys_reg.h"       // sustitucion $N -> reg fisico
 #include "jit/inline_asm_trampoline.h" // inc.6: fnv1a64_asm (clave del trampoline)
-#include "jit/ssa_coalesce.h"          // ssa_phi_coalesce_remap (congruencia SSA)
-#include "codegen/parallel_move.h"     // sequence_parallel_moves (compartido 3 modos)
-#include "loader/interp_stackmap.h"    // E.1: INTERP_SM_SLOT_BASE + StackmapGcKind
+#include "jit/ssa_coalesce.h"      // ssa_phi_coalesce_remap (congruencia SSA)
+#include "codegen/parallel_move.h" // sequence_parallel_moves (compartido 3 modos)
+#include "loader/interp_stackmap.h" // E.1: INTERP_SM_SLOT_BASE + StackmapGcKind
 #include <sstream>
 #include <cstdio>
 #include <cstdlib>
@@ -76,14 +76,13 @@ namespace ir {
 //  width=8B).  Fallback a la secuencia de 3 si off excede int16 (+/-32KB).
 //  Libre (no toca caches del EmitCtx; el llamante los invalida si procede).
 // =========================================================================
-static inline void emit_spill_access(VelSink &out,
-                                     const std::string &reg, long long slot,
-                                     bool is_load) {
+static inline void emit_spill_access(VelSink &out, const std::string &reg,
+                                     long long slot, bool is_load) {
     const long long off = (slot + 1) * 8;
     if (off <= 32768) {
         const uint16_t disp = static_cast<uint16_t>(static_cast<int16_t>(-off));
-        out << "    " << (is_load ? "mld" : "mst") << " " << reg << ", r0, 784, "
-            << static_cast<unsigned>(disp) << "\n";
+        out << "    " << (is_load ? "mld" : "mst") << " " << reg
+            << ", r0, 784, " << static_cast<unsigned>(disp) << "\n";
         return;
     }
     // Fallback (offset > 32KB, funcion enorme): secuencia de 3 instrucciones.
@@ -100,15 +99,15 @@ static inline void emit_spill_access(VelSink &out,
 // =========================================================================
 
 struct EmitCtx {
-    const IrFunction &fn;     // funcion SSA a emitir
+    const IrFunction &fn;           // funcion SSA a emitir
     const codegen::RegAlloc &alloc; // asignacion de registros
     const LivenessResult
-        &liveness; // intervalos de vida (necesario para save/restore en CALL)
-    VelSink &out; // a donde sale lo emitido (ver ir/vel_sink.h)
-    bool comments;           // emitir comentarios de origen
-    bool emit_debug;         // emitir comentarios @line N por instruccion
-    bool emit_stackmaps;     //  E.1: emitir `// @sm <hex>` en safepoints
-    uint32_t label_seq;      // secuencia para etiquetas unicas de condicion
+        &liveness;   // intervalos de vida (necesario para save/restore en CALL)
+    VelSink &out;    // a donde sale lo emitido (ver ir/vel_sink.h)
+    bool comments;   // emitir comentarios de origen
+    bool emit_debug; // emitir comentarios @line N por instruccion
+    bool emit_stackmaps; //  E.1: emitir `// @sm <hex>` en safepoints
+    uint32_t label_seq;  // secuencia para etiquetas unicas de condicion
     // true si se emitio enter (spill_count > 0); false = metodo hoja sin frame.
     // Permite skipear leave en epilogos cuando no hay frame, ahorrando 2 bytes
     // por ret en metodos hoja (tipicos: getters, setters, ops aritmeticas
@@ -134,9 +133,9 @@ struct EmitCtx {
     // register-held empujadas (el scan conservador las cubre en modo aditivo).
     bool has_alloca = false;
 
-    // Fusion de direccion en mld/mst: instrucciones ADD/MUL que se fusionaron en
-    // el direccionamiento de un LOAD/STORE.  Se SALTAN en el loop de emision (su
-    // efecto lo hace el mld/mst).
+    // Fusion de direccion en mld/mst: instrucciones ADD/MUL que se fusionaron
+    // en el direccionamiento de un LOAD/STORE.  Se SALTAN en el loop de emision
+    // (su efecto lo hace el mld/mst).
     std::unordered_set<const IrInstr *> fused_skip;
     // Descriptor de direccion fusionada: `[base + index<<scale + disp]`.
     // Fase 1 (campo, offset const): index = IR_NO_VALUE, disp = offset.
@@ -189,13 +188,12 @@ struct EmitCtx {
     std::string fn_lbl;
 
     EmitCtx(const IrFunction &fn_, const codegen::RegAlloc &alloc_,
-            const LivenessResult &liveness_, VelSink &out_,
-            bool comments_, bool emit_debug_, bool has_frame_,
-            bool emit_stackmaps_ = false)
+            const LivenessResult &liveness_, VelSink &out_, bool comments_,
+            bool emit_debug_, bool has_frame_, bool emit_stackmaps_ = false)
         : fn(fn_), alloc(alloc_), liveness(liveness_), out(out_),
           comments(comments_), emit_debug(emit_debug_),
-          emit_stackmaps(emit_stackmaps_), label_seq(0),
-          has_frame(has_frame_), fn_lbl(sanitize(fn_.name)) {}
+          emit_stackmaps(emit_stackmaps_), label_seq(0), has_frame(has_frame_),
+          fn_lbl(sanitize(fn_.name)) {}
 
     // Convierte un nombre arbitrario a un identificador .vel valido
     static std::string sanitize(const std::string &s) {
@@ -260,8 +258,9 @@ struct EmitCtx {
 
     // Emite la carga de un slot de derrame en 1 instruccion (mld) -- resuelve
     // la codificacion [rbp - off] que el SIB no admite (rbp no es base GP), asi
-    // que antes eran 3 instrucciones (mov r13,rbp; subu; mov [r13]).  NO clobbea
-    // r13.  Fallback a la secuencia de 3 si el offset excede int16 (+/-32KB).
+    // que antes eran 3 instrucciones (mov r13,rbp; subu; mov [r13]).  NO
+    // clobbea r13.  Fallback a la secuencia de 3 si el offset excede int16
+    // (+/-32KB).
     void emit_spill_load(const std::string &dst_reg, int slot) {
         const bool fallback = ((long long)(slot + 1) * 8) > 32768;
         emit_spill_access(out, dst_reg, slot, /*is_load=*/true);
@@ -322,8 +321,8 @@ struct EmitCtx {
      * @brief EN QUE registro de la VM deja @ref load_src el valor @p vid.
      *
      * El mismo criterio que @ref load_src, devuelto como numero en vez de como
-     * nombre.  Hace falta cuando el valor no se va a escribir en el texto sino a
-     * DECIR: un bloque `asm` puede leer sus operandos del registro donde ya
+     * nombre.  Hace falta cuando el valor no se va a escribir en el texto sino
+     * a DECIR: un bloque `asm` puede leer sus operandos del registro donde ya
      * estan, y para eso hay que poder nombrar el registro, no imprimirlo.
      *
      * Lee el mismo estado que aquel a proposito.  Duplicar la decision seria
@@ -443,7 +442,6 @@ static bool slot_is_gdata(const IrModule &mod, size_t idx) {
     return mod.static_data.meta_at(idx).section_name == ".data";
 }
 
-
 // =========================================================================
 //  Utilidades internas del emisor
 // =========================================================================
@@ -557,9 +555,18 @@ static void emit_three_reg_op(EmitCtx &ctx, const char *mnem, IrValueId a,
     ctx.out.emit(emmit::Mnemonic::PUSH, "r10");
     ctx.out.emit(emmit::Mnemonic::PUSH, "r11");
     ctx.out.emit(emmit::Mnemonic::PUSH, "r12");
-    { const std::string p = ctx.load_src(a, 0); ctx.out.emit(emmit::Mnemonic::PUSH, p); }
-    { const std::string p = ctx.load_src(b, 0); ctx.out.emit(emmit::Mnemonic::PUSH, p); }
-    { const std::string p = ctx.load_src(c, 0); ctx.out.emit(emmit::Mnemonic::PUSH, p); }
+    {
+        const std::string p = ctx.load_src(a, 0);
+        ctx.out.emit(emmit::Mnemonic::PUSH, p);
+    }
+    {
+        const std::string p = ctx.load_src(b, 0);
+        ctx.out.emit(emmit::Mnemonic::PUSH, p);
+    }
+    {
+        const std::string p = ctx.load_src(c, 0);
+        ctx.out.emit(emmit::Mnemonic::PUSH, p);
+    }
     ctx.out.emit(emmit::Mnemonic::POP, "r12");
     ctx.out.emit(emmit::Mnemonic::POP, "r11");
     ctx.out.emit(emmit::Mnemonic::POP, "r10");
@@ -800,10 +807,9 @@ struct SmLoc {
 // Serializa @p locs a hex y emite el marcador `// @sm <hex>` (nada si vacio).
 static void emit_sm_locs(EmitCtx &ctx, std::vector<SmLoc> &locs) {
     // Deduplicar por location (mantener el primer kind visto).
-    std::sort(locs.begin(), locs.end(),
-              [](const SmLoc &a, const SmLoc &b) {
-                  return a.location < b.location;
-              });
+    std::sort(locs.begin(), locs.end(), [](const SmLoc &a, const SmLoc &b) {
+        return a.location < b.location;
+    });
     locs.erase(std::unique(locs.begin(), locs.end(),
                            [](const SmLoc &a, const SmLoc &b) {
                                return a.location == b.location;
@@ -847,9 +853,9 @@ static void emit_stackmap_marker(EmitCtx &ctx, const IrBlock &bb, size_t idx) {
         if (ctx.alloc.in_reg(vid)) {
             const int r = ctx.alloc.reg_of(vid);
             if (r >= 0 && r < 16)
-                locs.push_back({static_cast<uint8_t>(r),
-                                static_cast<uint8_t>(
-                                    jit::StackmapGcKind::HOSTPTR)});
+                locs.push_back(
+                    {static_cast<uint8_t>(r),
+                     static_cast<uint8_t>(jit::StackmapGcKind::HOSTPTR)});
         }
         if (ctx.alloc.spilled(vid)) {
             const int slot = static_cast<int>(ctx.alloc.slot_of(vid));
@@ -883,7 +889,10 @@ pushed_gc_reg_positions(const EmitCtx &ctx, uint32_t call_pos,
     // Rama A de emit_save_live_regs: !any_gc && size>=2 -> fastpush, sin GC.
     bool any_gc = false;
     for (int r : regs_to_save) {
-        if (reg_holds_gc_object(ctx, call_pos, r)) { any_gc = true; break; }
+        if (reg_holds_gc_object(ctx, call_pos, r)) {
+            any_gc = true;
+            break;
+        }
     }
     if (!any_gc) return pos_of; // ningun GC empujado individualmente
     // Empuje individual: en TODAS las ramas con any_gc, los regs GC se
@@ -904,8 +913,14 @@ pushed_gc_reg_positions(const EmitCtx &ctx, uint32_t call_pos,
     int num_nongc_tail = 0;
     for (int r : regs_to_save) {
         const bool is_gc = reg_holds_gc_object(ctx, call_pos, r);
-        if (is_gc && saw_nongc) { gc_first_ordered = false; break; }
-        if (!is_gc) { saw_nongc = true; ++num_nongc_tail; }
+        if (is_gc && saw_nongc) {
+            gc_first_ordered = false;
+            break;
+        }
+        if (!is_gc) {
+            saw_nongc = true;
+            ++num_nongc_tail;
+        }
     }
     const bool hybrid = gc_first_ordered && num_nongc_tail >= 2;
     int push_idx = 0;
@@ -1008,10 +1023,10 @@ static void emit_return_site_stackmap(EmitCtx &ctx, const IrBlock &bb,
             const uint32_t slot_idx =
                 spill_count + static_cast<uint32_t>(push_idx);
             if (slot_idx < 0x40)
-                locs.push_back({static_cast<uint8_t>(
-                                    loader::INTERP_SM_SLOT_BASE + slot_idx),
-                                static_cast<uint8_t>(
-                                    jit::StackmapGcKind::HANDLE)});
+                locs.push_back(
+                    {static_cast<uint8_t>(loader::INTERP_SM_SLOT_BASE +
+                                          slot_idx),
+                     static_cast<uint8_t>(jit::StackmapGcKind::HANDLE)});
         } else {
             // Con ALLOCA: offset callee-rbp = 16 + 8*(N-1-push_idx).
             // Con empuje individual forzado, push_idx = indice en regs_to_save,
@@ -1019,7 +1034,8 @@ static void emit_return_site_stackmap(EmitCtx &ctx, const IrBlock &bb,
             const int from_top = n_saved - 1 - push_idx;
             if (from_top >= 0 && from_top < 0x40)
                 locs.push_back(
-                    {static_cast<uint8_t>(loader::INTERP_SM_PUSH_BASE + from_top),
+                    {static_cast<uint8_t>(loader::INTERP_SM_PUSH_BASE +
+                                          from_top),
                      static_cast<uint8_t>(jit::StackmapGcKind::HANDLE)});
         }
     }
@@ -1043,11 +1059,12 @@ static void emit_return_site_stackmap(EmitCtx &ctx, const IrBlock &bb,
 // True si debemos FORZAR el empuje individual (sin fastpush/hibrido) para que
 // el layout de la pila de empuje sea DETERMINISTA y el stackmap del sitio de
 // retorno pueda localizar cada handle GC empujado por su offset relativo al
-// rbp del CALLEE (robusto ante ALLOCA en el caller).  Solo cuando hay GC preciso
-// activo Y la funcion tiene ALLOCA (que desplaza rsp de forma no reflejada en
-// spill_count, rompiendo el offset rbp-relativo del caller).  En funciones sin
-// ALLOCA seguimos usando fastpush/hibrido (mismo perf de antes) porque el offset
-// caller-rbp del handle empujado (spill_count + push_idx) SI es exacto.
+// rbp del CALLEE (robusto ante ALLOCA en el caller).  Solo cuando hay GC
+// preciso activo Y la funcion tiene ALLOCA (que desplaza rsp de forma no
+// reflejada en spill_count, rompiendo el offset rbp-relativo del caller).  En
+// funciones sin ALLOCA seguimos usando fastpush/hibrido (mismo perf de antes)
+// porque el offset caller-rbp del handle empujado (spill_count + push_idx) SI
+// es exacto.
 static inline bool force_individual_push_stackmap(const EmitCtx &ctx) {
     return ctx.emit_stackmaps && ctx.has_alloca;
 }
@@ -1129,7 +1146,8 @@ static void emit_save_live_regs(EmitCtx &ctx, uint32_t call_pos,
     // Empuje individual (default y forzado con ALLOCA+GC preciso): cada reg en
     // orden de regs_to_save; los GC como handle (gchandle+push), los no-GC como
     // push reg.  Layout determinista -> el offset callee-rbp de cada handle es
-    // 16 + 8*(N-1-i) donde i es su indice en regs_to_save (N = total empujados).
+    // 16 + 8*(N-1-i) donde i es su indice en regs_to_save (N = total
+    // empujados).
     for (int r : regs_to_save) {
         if (reg_holds_gc_object(ctx, call_pos, r)) {
             ctx.out.emit(emmit::Mnemonic::GCHANDLE, sc, reg_name(r));
@@ -1447,17 +1465,16 @@ static void emit_select(EmitCtx &ctx, IrValueId dst, IrValueId cond,
     //
     // CLAVE (trafico de registros): NO forzamos los operandos a scratches fijos
     // (eso anadia un mov por operando).  Usamos el registro YA ASIGNADO por el
-    // regalloc a cada valor (reg_of); solo los DERRAMADOS se cargan a un scratch
-    // (r14/r13/r15, que el regalloc nunca asigna a un SSA value).  csel lee los
-    // 4 operandos y luego escribe dst -> el aliasing dst==cond (ambos derramados
-    // a r14) es correcto (lee antes de escribir).  Caso comun (todo en registro):
-    // 0 movs, un solo csel.
-    // emit_load_spilled_into usa r13 como temp de direccion (lo clobbea en cada
-    // carga).  Por eso a los operandos DERRAMADOS les asignamos scratches en
-    // orden r15 -> r14 -> r13, con r13 el ULTIMO: asi ninguna carga posterior
-    // destruye un valor ya cargado (r13 solo se usa como HOLDER cuando es el
-    // ultimo derramado, y su carga es la ultima).  Los operandos en registro
-    // usan su reg asignado (0 movs).
+    // regalloc a cada valor (reg_of); solo los DERRAMADOS se cargan a un
+    // scratch (r14/r13/r15, que el regalloc nunca asigna a un SSA value).  csel
+    // lee los 4 operandos y luego escribe dst -> el aliasing dst==cond (ambos
+    // derramados a r14) es correcto (lee antes de escribir).  Caso comun (todo
+    // en registro): 0 movs, un solo csel. emit_load_spilled_into usa r13 como
+    // temp de direccion (lo clobbea en cada carga).  Por eso a los operandos
+    // DERRAMADOS les asignamos scratches en orden r15 -> r14 -> r13, con r13 el
+    // ULTIMO: asi ninguna carga posterior destruye un valor ya cargado (r13
+    // solo se usa como HOLDER cuando es el ultimo derramado, y su carga es la
+    // ultima).  Los operandos en registro usan su reg asignado (0 movs).
     const char *spill_scratch[3] = {"r15", "r14", "r13"};
     int nspill = 0;
     auto op_reg = [&](IrValueId v) -> std::string {
@@ -1549,8 +1566,7 @@ static void emit_float_binop(EmitCtx &ctx, const std::string &mnemonic,
         std::string rs1 = f0_has_src1 ? std::string() : ctx.load_src(src1, 0);
         std::string rs2 = ctx.load_src(src2, 1);
         Reg rd = ctx.dst_of(dst);
-        if (!f0_has_src1)
-            emit_gp_to_zmm_bits(ctx, rs1, "f0");
+        if (!f0_has_src1) emit_gp_to_zmm_bits(ctx, rs1, "f0");
         emit_gp_to_zmm_bits(ctx, rs2, "f1");
         ctx.out << "    " << mnemonic << suffix << " f0, f1\n";
         emit_zmm_to_gp_bits(ctx, "f0", rd);
@@ -1559,8 +1575,8 @@ static void emit_float_binop(EmitCtx &ctx, const std::string &mnemonic,
         return;
     }
 
-    // Path ZMM-aware.  Operandos: su registro del banco si estan alocados; si no,
-    // se cargan a scratch f0/f1 via bitg2z desde GP.  El resultado va a su
+    // Path ZMM-aware.  Operandos: su registro del banco si estan alocados; si
+    // no, se cargan a scratch f0/f1 via bitg2z desde GP.  El resultado va a su
     // registro del banco (si alocado) o a f0 -> bitz2g GP.
     std::string ra, rb;
     if (z1 >= 0) {
@@ -1578,8 +1594,9 @@ static void emit_float_binop(EmitCtx &ctx, const std::string &mnemonic,
     const std::string rd = (zd >= 0) ? ("f" + std::to_string(zd)) : "f0";
     const bool comm = (mnemonic == "fadd" || mnemonic == "fmul" ||
                        mnemonic == "fmin" || mnemonic == "fmax");
-    // 2-address: rd = ra OP rb.  El reuso de registro del regalloc garantiza que
-    // rd == ra (o rd == rb) solo si ese operando murio -> seguro sobrescribir.
+    // 2-address: rd = ra OP rb.  El reuso de registro del regalloc garantiza
+    // que rd == ra (o rd == rb) solo si ese operando murio -> seguro
+    // sobrescribir.
     if (rd == ra) {
         ctx.out << "    " << mnemonic << suffix << " " << rd << ", " << rb
                 << "\n";
@@ -1599,7 +1616,8 @@ static void emit_float_binop(EmitCtx &ctx, const std::string &mnemonic,
         emit_zmm_to_gp_bits(ctx, "f0", ctx.dst_of(dst));
         ctx.store_spilled(dst);
     }
-    // Este path pudo tocar f0/f1/f2 scratch -> la opt GP last_f0 ya no es valida.
+    // Este path pudo tocar f0/f1/f2 scratch -> la opt GP last_f0 ya no es
+    // valida.
     ctx.last_f0 = IR_NO_VALUE;
 }
 
@@ -1618,8 +1636,7 @@ static void emit_float_unop(EmitCtx &ctx, const std::string &mnemonic,
             (ctx.last_f0 != IR_NO_VALUE && ctx.last_f0 == src);
         std::string rs = f0_has_src ? std::string() : ctx.load_src(src, 0);
         Reg rd = ctx.dst_of(dst);
-        if (!f0_has_src)
-            emit_gp_to_zmm_bits(ctx, rs, "f0");
+        if (!f0_has_src) emit_gp_to_zmm_bits(ctx, rs, "f0");
         ctx.out << "    " << mnemonic << suffix << " f0, f0\n";
         emit_zmm_to_gp_bits(ctx, "f0", rd);
         ctx.store_spilled(dst);
@@ -1673,15 +1690,13 @@ static void emit_float_fma(EmitCtx &ctx, IrType type, IrValueId dst,
     // Cargar c en el acumulador.
     if (zc >= 0) {
         const std::string rc = "f" + std::to_string(zc);
-        if (acc != rc)
-            ctx.out.emit(emmit::Mnemonic::FMOV, acc, rc);
+        if (acc != rc) ctx.out.emit(emmit::Mnemonic::FMOV, acc, rc);
     } else {
         emit_gp_to_zmm_bits(ctx, ctx.load_src(c, 2), acc);
     }
     ctx.out << "    fmadd" << suffix << " " << acc << ", " << ra << ", " << rb
             << "\n";
-    if (acc != rd)
-        ctx.out.emit(emmit::Mnemonic::FMOV, rd, acc);
+    if (acc != rd) ctx.out.emit(emmit::Mnemonic::FMOV, rd, acc);
     if (zd < 0) {
         emit_zmm_to_gp_bits(ctx, rd, ctx.dst_of(dst));
         ctx.store_spilled(dst);
@@ -1690,9 +1705,9 @@ static void emit_float_fma(EmitCtx &ctx, IrType type, IrValueId dst,
 }
 
 // Componentes de direccionamiento de un LOAD/STORE para el banco ancho
-// (mld/mst): usa la fusion Fase 1/2 si existe (base + index<<scale + disp), o el
-// registro del puntero (base, disp 0).  addr_op = indice del operando direccion
-// (0 en LOAD, 1 en STORE).
+// (mld/mst): usa la fusion Fase 1/2 si existe (base + index<<scale + disp), o
+// el registro del puntero (base, disp 0).  addr_op = indice del operando
+// direccion (0 en LOAD, 1 en STORE).
 struct WideAddr {
     int base;
     int index;
@@ -1701,7 +1716,8 @@ struct WideAddr {
     int32_t disp;
     bool host;
 };
-static WideAddr compute_wide_addr(EmitCtx &ctx, const IrInstr &ins, int addr_op) {
+static WideAddr compute_wide_addr(EmitCtx &ctx, const IrInstr &ins,
+                                  int addr_op) {
     WideAddr w{0, 0, false, 0, 0, false};
     auto fit = ctx.addr_fusion.find(&ins);
     if (fit != ctx.addr_fusion.end()) {
@@ -1755,29 +1771,27 @@ static void emit_wide_mem(EmitCtx &ctx, bool is_load, int freg,
 
 // True si la op deja f0 conteniendo el valor de su dst (las binarias/unarias
 // float que pasan por emit_float_binop/emit_float_unop).  Cualquier otra op
-// debe invalidar ctx.last_f0 porque puede clobbear f0 (FCMP, FCVT, conversiones,
-// CALL, prints, aritmetica entera que reusa el scratch, etc.).
+// debe invalidar ctx.last_f0 porque puede clobbear f0 (FCMP, FCVT,
+// conversiones, CALL, prints, aritmetica entera que reusa el scratch, etc.).
 static inline bool is_tracked_float_op(IrOp op) {
     switch (op) {
-        case IrOp::FADD:
-        case IrOp::FSUB:
-        case IrOp::FMUL:
-        case IrOp::FDIV:
-        case IrOp::FMIN:
-        case IrOp::FMAX:
-        case IrOp::FNEG:
-        case IrOp::FABS:
-        case IrOp::FSQRT:
-        case IrOp::FFLOOR:
-        case IrOp::FCEIL:
-        case IrOp::FROUND:
-        case IrOp::FTRUNC:
-        // ITOF/UITOF dejan el valor convertido en f0 (fcvt gp,f0 -> bitz2g).
-        case IrOp::ITOF:
-        case IrOp::UITOF:
-            return true;
-        default:
-            return false;
+    case IrOp::FADD:
+    case IrOp::FSUB:
+    case IrOp::FMUL:
+    case IrOp::FDIV:
+    case IrOp::FMIN:
+    case IrOp::FMAX:
+    case IrOp::FNEG:
+    case IrOp::FABS:
+    case IrOp::FSQRT:
+    case IrOp::FFLOOR:
+    case IrOp::FCEIL:
+    case IrOp::FROUND:
+    case IrOp::FTRUNC:
+    // ITOF/UITOF dejan el valor convertido en f0 (fcvt gp,f0 -> bitz2g).
+    case IrOp::ITOF:
+    case IrOp::UITOF: return true;
+    default: return false;
     }
 }
 
@@ -1905,16 +1919,14 @@ static bool has_phi_copies_to(EmitCtx &ctx, IrBlockId pred_id,
         for (const auto &pa : ins.phi_args) {
             if (pa.block == pred_id && pa.value != IR_NO_VALUE) {
                 // Solo es una colision real si dst != src (mov no trivial).
-                int d_reg = ctx.alloc.in_reg(ins.dst)
-                                ? ctx.alloc.reg_of(ins.dst)
-                                : -1;
+                int d_reg =
+                    ctx.alloc.in_reg(ins.dst) ? ctx.alloc.reg_of(ins.dst) : -1;
                 int s_reg = ctx.alloc.in_reg(pa.value)
                                 ? ctx.alloc.reg_of(pa.value)
                                 : -2;
                 if (d_reg != s_reg) return true;
                 // Si alguno esta spilled, tambien hay copias (load/store)
-                if (ctx.alloc.spilled(ins.dst) ||
-                    ctx.alloc.spilled(pa.value))
+                if (ctx.alloc.spilled(ins.dst) || ctx.alloc.spilled(pa.value))
                     return true;
             }
         }
@@ -1988,12 +2000,15 @@ static void emit_cmp_standalone(EmitCtx &ctx, const IrInstr &ins) {
         int setcc_cond = -1;
         bool swap = false;
         switch (ins.op) {
-        case IrOp::CMP_EQ:  setcc_cond = 0x04; break;
-        case IrOp::CMP_NE:  setcc_cond = 0x05; break;
-        case IrOp::CMP_LT:  setcc_cond = 0x0C; break;
-        case IrOp::CMP_GE:  setcc_cond = 0x0D; break;
-        case IrOp::CMP_LE:  setcc_cond = 0x0E; break;
-        case IrOp::CMP_GT:  setcc_cond = 0x0C; swap = true; break; // b < a
+        case IrOp::CMP_EQ: setcc_cond = 0x04; break;
+        case IrOp::CMP_NE: setcc_cond = 0x05; break;
+        case IrOp::CMP_LT: setcc_cond = 0x0C; break;
+        case IrOp::CMP_GE: setcc_cond = 0x0D; break;
+        case IrOp::CMP_LE: setcc_cond = 0x0E; break;
+        case IrOp::CMP_GT:
+            setcc_cond = 0x0C;
+            swap = true;
+            break; // b < a
         case IrOp::CMP_ULT: setcc_cond = 0x02; break;
         case IrOp::CMP_UGE: setcc_cond = 0x03; break;
         case IrOp::CMP_ULE: setcc_cond = 0x06; break;
@@ -2101,8 +2116,7 @@ static void emit_phi_copies(EmitCtx &ctx, IrBlockId pred_id,
             const int zd = ctx.zmm_of(c.dst);
             const int zs = ctx.zmm_of(c.src);
             if (zd >= 0 && zs >= 0) {
-                if (zd != zs)
-                    zpend[zd] = zs;
+                if (zd != zs) zpend[zd] = zs;
             } else {
                 rest.push_back(c); // pura GP (o congruente ya coalescida)
             }
@@ -2195,7 +2209,8 @@ static void emit_phi_copies(EmitCtx &ctx, IrBlockId pred_id,
         std::vector<codegen::PMoveStep> pmoves;
         pmoves.reserve(reg_copies.size());
         for (const auto &c : reg_copies)
-            pmoves.push_back({ctx.alloc.reg_of(c.dst), ctx.alloc.reg_of(c.src)});
+            pmoves.push_back(
+                {ctx.alloc.reg_of(c.dst), ctx.alloc.reg_of(c.src)});
         for (const auto &step :
              codegen::sequence_parallel_moves(std::move(pmoves), SCRATCH_REG))
             ctx.out << "    mov " << reg_name(step.dst) << ", "
@@ -2261,7 +2276,7 @@ static const char *vec_mv(const EmitCtx &ctx, const ir::IrInstr &ins,
     if (idx >= ins.operands.size()) return "movh";
     const ir::IrValueId v = ins.operands[idx];
     return (v < ctx.fn.values.size() && ctx.fn.values[v].is_host_ptr) ? "movh"
-                                                                     : "mov";
+                                                                      : "mov";
 }
 
 static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
@@ -2334,7 +2349,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     // Solo el backend JIT (vreg) lo baja a un island nativo (computed-goto).
     case IrOp::SWITCH_DENSE:
         if (ctx.comments) {
-            ctx.out << "    // switch_dense min=" << static_cast<int64_t>(ins.imm)
+            ctx.out << "    // switch_dense min="
+                    << static_cast<int64_t>(ins.imm)
                     << " n=" << ins.jump_targets.size() << "\n";
         }
         break;
@@ -2368,9 +2384,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // (memoria host); el resto de slots -- literales que alimentan a
         // STRMAKE, params de los opcodes meta -- en `code`, que es memoria de
         // la VM porque es la que esos consumidores exigen.
-        const char *sec = (ctx.mod && slot_is_gdata(*ctx.mod, ins.imm))
-                              ? "gdata"
-                              : "code";
+        const char *sec =
+            (ctx.mod && slot_is_gdata(*ctx.mod, ins.imm)) ? "gdata" : "code";
         ctx.out << "    mov " << rd << ", @Absolute(\"" << sec << ".s_"
                 << ins.imm << "\")\n";
         ctx.store_spilled(ins.dst);
@@ -2418,8 +2433,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (ins.operands.size() >= 2) {
             emit_binop(ctx, arith_mnemonic(ins.op, ins.type), ins.dst,
                        ins.operands[0], ins.operands[1]);
-            ctx.carry_src[ins.dst] = {ins.operands[0],
-                                      ins.op == IrOp::SUBB};
+            ctx.carry_src[ins.dst] = {ins.operands[0], ins.op == IrOp::SUBB};
             // El acarreo se lee AQUI, no donde aparezca el CARRYOF: es un
             // flag, y basta una operacion aritmetica en medio para pisarlo.
             for (size_t k = idx + 1; k < bb.instrs.size(); ++k) {
@@ -2717,10 +2731,12 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             if (zs >= 0) {
                 fs = "f" + std::to_string(zs);
             } else {
-                emit_gp_to_zmm_bits(ctx, ctx.load_src(ins.operands[0], 0), "f0");
+                emit_gp_to_zmm_bits(ctx, ctx.load_src(ins.operands[0], 0),
+                                    "f0");
                 fs = "f0";
             }
-            const std::string fd = (zd >= 0) ? ("f" + std::to_string(zd)) : "f1";
+            const std::string fd =
+                (zd >= 0) ? ("f" + std::to_string(zd)) : "f1";
             ctx.out.emit(emmit::Mnemonic::FEXTEND, fd, fs);
             if (zd < 0) {
                 emit_zmm_to_gp_bits(ctx, "f1", ctx.dst_of(ins.dst));
@@ -2743,10 +2759,12 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             if (zs >= 0) {
                 fs = "f" + std::to_string(zs);
             } else {
-                emit_gp_to_zmm_bits(ctx, ctx.load_src(ins.operands[0], 0), "f0");
+                emit_gp_to_zmm_bits(ctx, ctx.load_src(ins.operands[0], 0),
+                                    "f0");
                 fs = "f0";
             }
-            const std::string fd = (zd >= 0) ? ("f" + std::to_string(zd)) : "f1";
+            const std::string fd =
+                (zd >= 0) ? ("f" + std::to_string(zd)) : "f1";
             ctx.out.emit(emmit::Mnemonic::FNARROW, fd, fs);
             if (zd < 0) {
                 emit_zmm_to_gp_bits(ctx, "f1", ctx.dst_of(ins.dst));
@@ -3177,7 +3195,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // 4. argc + call.
         ctx.out << "    mov r15, " << nargs << "\n";
         if (ins.op == IrOp::TAILCALL) {
-            // Restaurar el banco ancho callee-saved ANTES de desmontar el frame.
+            // Restaurar el banco ancho callee-saved ANTES de desmontar el
+            // frame.
             emit_zmm_callee_restore(ctx);
             // solo emitir leave si se emitio enter (has_frame).
             if (ctx.has_frame) {
@@ -3774,12 +3793,11 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                     ((has_index ? 1u : 0u) << 12) |
                     ((sign_ext ? 1u : 0u) << 14);
                 ctx.out << "    mld " << reg_name(dst_reg) << ", "
-                        << reg_name(idx_reg) << ", " << cw << ", " << static_cast<uint16_t>(static_cast<int16_t>(fa.disp))
+                        << reg_name(idx_reg) << ", " << cw << ", "
+                        << static_cast<uint16_t>(static_cast<int16_t>(fa.disp))
                         << "\n";
-                if (dst_reg == SCRATCH_REG)
-                    ctx.r14_cache = -1;
-                if (dst_reg == SCRATCH2_REG)
-                    ctx.r13_cache = -1;
+                if (dst_reg == SCRATCH_REG) ctx.r14_cache = -1;
+                if (dst_reg == SCRATCH2_REG) ctx.r13_cache = -1;
                 ctx.store_spilled(ins.dst);
                 break;
             }
@@ -3866,9 +3884,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
 
     case IrOp::STORE: {
         if (ins.operands.size() < 2) break;
-        // Fase 3: si el VALOR a escribir es un escalar float residente del banco
-        // ancho, se escribe DIRECTO desde su registro ZMM (mst bank=1), sin
-        // bitz2g previo.  Reusa la fusion de direccion Fase 1/2.
+        // Fase 3: si el VALOR a escribir es un escalar float residente del
+        // banco ancho, se escribe DIRECTO desde su registro ZMM (mst bank=1),
+        // sin bitz2g previo.  Reusa la fusion de direccion Fase 1/2.
         {
             const int freg = ctx.zmm_of(ins.operands[0]);
             if (freg >= 0) {
@@ -3884,8 +3902,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             auto fit = ctx.addr_fusion.find(&ins);
             if (fit != ctx.addr_fusion.end()) {
                 const auto &fa = fit->second;
-                // Cargar el valor primero (puede usar scratch); base e index son
-                // registros reales, asi que no se pisan.
+                // Cargar el valor primero (puede usar scratch); base e index
+                // son registros reales, asi que no se pisan.
                 std::string rv = ctx.load_src(ins.operands[0], 0);
                 const int base_reg = ctx.reg_num(fa.base);
                 const int idx_reg =
@@ -4087,10 +4105,14 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                                          : nullptr; // 0=copy (sin op)
         ctx.out.emit(emmit::Mnemonic::PUSH, "r10");
         ctx.out.emit(emmit::Mnemonic::PUSH, "r11");
-        { const std::string p = ctx.load_src(ins.operands[0], 0); // dst
-          ctx.out.emit(emmit::Mnemonic::PUSH, p); }
-        { const std::string p = ctx.load_src(ins.operands[1], 0); // a
-          ctx.out.emit(emmit::Mnemonic::PUSH, p); }
+        {
+            const std::string p = ctx.load_src(ins.operands[0], 0); // dst
+            ctx.out.emit(emmit::Mnemonic::PUSH, p);
+        }
+        {
+            const std::string p = ctx.load_src(ins.operands[1], 0); // a
+            ctx.out.emit(emmit::Mnemonic::PUSH, p);
+        }
         ctx.out.emit(emmit::Mnemonic::POP, "r11");
         ctx.out.emit(emmit::Mnemonic::POP, "r10"); // a, dst
         for (uint64_t k = 0; k < W; ++k) {
@@ -4098,13 +4120,15 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 ctx.out << "    addu r10, " << esz << "\n";
                 ctx.out << "    addu r11, " << esz << "\n";
             }
-            ctx.out << "    " << vec_mv(ctx, ins, 1) << " r14, [r11]\n";        // a[k] bits
+            ctx.out << "    " << vec_mv(ctx, ins, 1)
+                    << " r14, [r11]\n"; // a[k] bits
             if (uop) {
                 ctx.out << "    bitg2z f0, r14\n";
                 ctx.out << "    " << uop << " f0, f0\n";
                 ctx.out << "    bitz2g r14, f0\n";
             }
-            ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14\n";        // dst[k]
+            ctx.out << "    " << vec_mv(ctx, ins, 0)
+                    << " [r10], r14\n"; // dst[k]
         }
         ctx.out.emit(emmit::Mnemonic::POP, "r11");
         ctx.out.emit(emmit::Mnemonic::POP, "r10");
@@ -4125,8 +4149,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const size_t esz = ir_type_size(ins.type);
         if (esz == 0) break;
         const uint64_t W = width / esz;
-        const bool is_fp =
-            (ins.type == IrType::F64 || ins.type == IrType::F32);
+        const bool is_fp = (ins.type == IrType::F64 || ins.type == IrType::F32);
         const char *fop = (subop == 0)   ? "fadd"
                           : (subop == 1) ? "fsub"
                           : (subop == 2) ? "fmul"
@@ -4139,23 +4162,31 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const std::string suf = (ins.type == IrType::F32) ? ".ps" : "";
         // sufijo de tamano del reg para load/store entero
         // (8b->"", 4b->"d", 2b->"w", 1b->"b").
-        const std::string rsz =
-            (esz == 4) ? "d" : (esz == 2) ? "w" : (esz == 1) ? "b" : "";
+        const std::string rsz = (esz == 4)   ? "d"
+                                : (esz == 2) ? "w"
+                                : (esz == 1) ? "b"
+                                             : "";
         // Cargar los 3 punteros (dst/a/b) en r10/r11/r12 via push del VALOR
         // (sin hazard de parallel-move).
         ctx.out.emit(emmit::Mnemonic::PUSH, "r10");
-    ctx.out.emit(emmit::Mnemonic::PUSH, "r11");
-    ctx.out.emit(emmit::Mnemonic::PUSH, "r12");
+        ctx.out.emit(emmit::Mnemonic::PUSH, "r11");
+        ctx.out.emit(emmit::Mnemonic::PUSH, "r12");
         // load_src emite codigo (spill) -> capturar en var ANTES del push.
-        { const std::string p = ctx.load_src(ins.operands[0], 0); // dst
-          ctx.out.emit(emmit::Mnemonic::PUSH, p); }
-        { const std::string p = ctx.load_src(ins.operands[1], 0); // a
-          ctx.out.emit(emmit::Mnemonic::PUSH, p); }
-        { const std::string p = ctx.load_src(ins.operands[2], 0); // b
-          ctx.out.emit(emmit::Mnemonic::PUSH, p); }
+        {
+            const std::string p = ctx.load_src(ins.operands[0], 0); // dst
+            ctx.out.emit(emmit::Mnemonic::PUSH, p);
+        }
+        {
+            const std::string p = ctx.load_src(ins.operands[1], 0); // a
+            ctx.out.emit(emmit::Mnemonic::PUSH, p);
+        }
+        {
+            const std::string p = ctx.load_src(ins.operands[2], 0); // b
+            ctx.out.emit(emmit::Mnemonic::PUSH, p);
+        }
         ctx.out.emit(emmit::Mnemonic::POP, "r12");
-    ctx.out.emit(emmit::Mnemonic::POP, "r11");
-    ctx.out.emit(emmit::Mnemonic::POP, "r10"); // b, a, dst
+        ctx.out.emit(emmit::Mnemonic::POP, "r11");
+        ctx.out.emit(emmit::Mnemonic::POP, "r10"); // b, a, dst
         for (uint64_t k = 0; k < W; ++k) {
             if (k > 0) {
                 ctx.out << "    addu r10, " << esz << "\n";
@@ -4165,13 +4196,16 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             if (is_fp) {
                 // carga esz bytes (f64=8 -> r14; f32=4 -> r14d) y opera con el
                 // sufijo .ps cuando es f32 (low 32 del banco ZMM).
-                ctx.out << "    " << vec_mv(ctx, ins, 1) << " r14" << rsz << ", [r11]\n"; // a[k] bits
-                ctx.out << "    " << vec_mv(ctx, ins, 2) << " r13" << rsz << ", [r12]\n"; // b[k] bits
+                ctx.out << "    " << vec_mv(ctx, ins, 1) << " r14" << rsz
+                        << ", [r11]\n"; // a[k] bits
+                ctx.out << "    " << vec_mv(ctx, ins, 2) << " r13" << rsz
+                        << ", [r12]\n"; // b[k] bits
                 ctx.out << "    bitg2z f0, r14\n";
                 ctx.out << "    bitg2z f1, r13\n";
                 ctx.out << "    " << fop << suf << " f0, f1\n";
                 ctx.out << "    bitz2g r14, f0\n";
-                ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz << "\n"; // dst[k]
+                ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz
+                        << "\n"; // dst[k]
             } else {
                 // entero: cargar esz bytes ZERO-EXTENDIDO (loadzh, no movh: el
                 // movh-load parcial de 16/8b deja bits altos basura que rompen
@@ -4181,12 +4215,13 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 ctx.out << "    loadzh r14" << rsz << ", r11\n"; // a[k]
                 ctx.out << "    loadzh r13" << rsz << ", r12\n"; // b[k]
                 ctx.out << "    " << iop << " r14, r13\n";       // a OP b (64b)
-                ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz << "\n"; // dst[k]
+                ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz
+                        << "\n"; // dst[k]
             }
         }
         ctx.out.emit(emmit::Mnemonic::POP, "r12");
-    ctx.out.emit(emmit::Mnemonic::POP, "r11");
-    ctx.out.emit(emmit::Mnemonic::POP, "r10");
+        ctx.out.emit(emmit::Mnemonic::POP, "r11");
+        ctx.out.emit(emmit::Mnemonic::POP, "r10");
         ctx.r13_cache = -1;
         ctx.r14_cache = -1;
         break;
@@ -4194,8 +4229,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
 
     // VEC_BINOP_S dst[i] = a[i] OP escalar.  Interp = W ops escalares por lane.
     // f64: el escalar en f2.  enteros: el escalar (i64 replicado; sus esz bytes
-    // bajos = el valor) en r13; loadzh por lane + add/sub/mul de 64b + store low.
-    // r10=dst, r11=a.
+    // bajos = el valor) en r13; loadzh por lane + add/sub/mul de 64b + store
+    // low. r10=dst, r11=a.
     case IrOp::VEC_BINOP_S: {
         if (ins.operands.size() < 3) break;
         const uint64_t width = ins.imm & 0xFF;
@@ -4203,8 +4238,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const size_t esz = ir_type_size(ins.type);
         if (esz == 0) break;
         const uint64_t W = width / esz;
-        const bool is_fp =
-            (ins.type == IrType::F64 || ins.type == IrType::F32);
+        const bool is_fp = (ins.type == IrType::F64 || ins.type == IrType::F32);
         const char *fop = (subop == 0)   ? "fadd"
                           : (subop == 1) ? "fsub"
                           : (subop == 2) ? "fmul"
@@ -4214,17 +4248,27 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                                          : "muls";
         // .ps para f32 (opera el low 32 del banco ZMM); vacio para f64.
         const std::string suf = (ins.type == IrType::F32) ? ".ps" : "";
-        const std::string rsz =
-            (esz == 4) ? "d" : (esz == 2) ? "w" : (esz == 1) ? "b" : "";
+        const std::string rsz = (esz == 4)   ? "d"
+                                : (esz == 2) ? "w"
+                                : (esz == 1) ? "b"
+                                             : "";
         ctx.out.emit(emmit::Mnemonic::PUSH, "r10");
         ctx.out.emit(emmit::Mnemonic::PUSH, "r11");
-        { const std::string p = ctx.load_src(ins.operands[0], 0); // dst
-          ctx.out.emit(emmit::Mnemonic::PUSH, p); }
-        { const std::string p = ctx.load_src(ins.operands[1], 0); // a
-          ctx.out.emit(emmit::Mnemonic::PUSH, p); }
-        { const std::string p = ctx.load_src(ins.operands[2], 0); // escalar
-          if (is_fp) ctx.out << "    bitg2z f2, " << p << "\n";
-          else       ctx.out << "    mov r13, " << p << "\n"; }
+        {
+            const std::string p = ctx.load_src(ins.operands[0], 0); // dst
+            ctx.out.emit(emmit::Mnemonic::PUSH, p);
+        }
+        {
+            const std::string p = ctx.load_src(ins.operands[1], 0); // a
+            ctx.out.emit(emmit::Mnemonic::PUSH, p);
+        }
+        {
+            const std::string p = ctx.load_src(ins.operands[2], 0); // escalar
+            if (is_fp)
+                ctx.out << "    bitg2z f2, " << p << "\n";
+            else
+                ctx.out << "    mov r13, " << p << "\n";
+        }
         ctx.out.emit(emmit::Mnemonic::POP, "r11");
         ctx.out.emit(emmit::Mnemonic::POP, "r10"); // a, dst
         for (uint64_t k = 0; k < W; ++k) {
@@ -4234,15 +4278,18 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             }
             if (is_fp) {
                 // f64=8 bytes -> r14; f32=4 -> r14d; op con sufijo .ps si f32.
-                ctx.out << "    " << vec_mv(ctx, ins, 1) << " r14" << rsz << ", [r11]\n"; // a[k]
+                ctx.out << "    " << vec_mv(ctx, ins, 1) << " r14" << rsz
+                        << ", [r11]\n"; // a[k]
                 ctx.out << "    bitg2z f0, r14\n";
                 ctx.out << "    " << fop << suf << " f0, f2\n";
                 ctx.out << "    bitz2g r14, f0\n";
-                ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz << "\n"; // dst[k]
+                ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz
+                        << "\n"; // dst[k]
             } else {
                 ctx.out << "    loadzh r14" << rsz << ", r11\n"; // a[k]
-                ctx.out << "    " << iop << " r14, r13\n";        // a OP scalar
-                ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz << "\n";  // dst[k]
+                ctx.out << "    " << iop << " r14, r13\n";       // a OP scalar
+                ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz
+                        << "\n"; // dst[k]
             }
         }
         ctx.out.emit(emmit::Mnemonic::POP, "r11");
@@ -4252,9 +4299,10 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         break;
     }
 
-    // VEC_FMA_S: dst[k] += a[k]*escalar (por lane, fmadd = 1 redondeo, BIT-EXACTO
-    // con VFMADD231 del JIT).  Paso "array escalado" del compound.  El escalar es
-    // el operando 2 (leido por lane; el bcast del JIT es no-op aqui).
+    // VEC_FMA_S: dst[k] += a[k]*escalar (por lane, fmadd = 1 redondeo,
+    // BIT-EXACTO con VFMADD231 del JIT).  Paso "array escalado" del compound.
+    // El escalar es el operando 2 (leido por lane; el bcast del JIT es no-op
+    // aqui).
     case IrOp::VEC_FMA_S: {
         if (ins.operands.size() < 3) break;
         const uint64_t width = ins.imm & 0xFF;
@@ -4265,12 +4313,18 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const std::string rsz = (esz == 4) ? "d" : "";
         ctx.out.emit(emmit::Mnemonic::PUSH, "r10");
         ctx.out.emit(emmit::Mnemonic::PUSH, "r11");
-        { const std::string p = ctx.load_src(ins.operands[0], 0); // dst
-          ctx.out.emit(emmit::Mnemonic::PUSH, p); }
-        { const std::string p = ctx.load_src(ins.operands[1], 0); // a
-          ctx.out.emit(emmit::Mnemonic::PUSH, p); }
-        { const std::string p = ctx.load_src(ins.operands[2], 0); // escalar
-          ctx.out << "    bitg2z f2, " << p << "\n"; }
+        {
+            const std::string p = ctx.load_src(ins.operands[0], 0); // dst
+            ctx.out.emit(emmit::Mnemonic::PUSH, p);
+        }
+        {
+            const std::string p = ctx.load_src(ins.operands[1], 0); // a
+            ctx.out.emit(emmit::Mnemonic::PUSH, p);
+        }
+        {
+            const std::string p = ctx.load_src(ins.operands[2], 0); // escalar
+            ctx.out << "    bitg2z f2, " << p << "\n";
+        }
         ctx.out.emit(emmit::Mnemonic::POP, "r11");
         ctx.out.emit(emmit::Mnemonic::POP, "r10"); // a, dst
         for (uint64_t k = 0; k < W; ++k) {
@@ -4278,13 +4332,16 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 ctx.out << "    addu r10, " << esz << "\n";
                 ctx.out << "    addu r11, " << esz << "\n";
             }
-            ctx.out << "    " << vec_mv(ctx, ins, 1) << " r14" << rsz << ", [r11]\n"; // a[k]
+            ctx.out << "    " << vec_mv(ctx, ins, 1) << " r14" << rsz
+                    << ", [r11]\n"; // a[k]
             ctx.out << "    bitg2z f0, r14\n";
-            ctx.out << "    " << vec_mv(ctx, ins, 0) << " r14" << rsz << ", [r10]\n"; // c[k]
+            ctx.out << "    " << vec_mv(ctx, ins, 0) << " r14" << rsz
+                    << ", [r10]\n"; // c[k]
             ctx.out << "    bitg2z f1, r14\n";
             ctx.out << "    fmadd" << suf << " f1, f0, f2\n"; // f1 = a*esc + c
             ctx.out << "    bitz2g r14, f1\n";
-            ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz << "\n"; // c[k]
+            ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz
+                    << "\n"; // c[k]
         }
         ctx.out.emit(emmit::Mnemonic::POP, "r11");
         ctx.out.emit(emmit::Mnemonic::POP, "r10");
@@ -4294,16 +4351,15 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     }
 
     // VEC_BCAST: hoist del broadcast del escalar a XMM13 (solo JIT).  En el
-    // interprete es NO-OP: el VEC_BINOP_S del cuerpo re-lee el escalar (operando
-    // 2) por lane, asi que no necesita estado pre-difundido.
-    case IrOp::VEC_BCAST:
-        break;
+    // interprete es NO-OP: el VEC_BINOP_S del cuerpo re-lee el escalar
+    // (operando 2) por lane, asi que no necesita estado pre-difundido.
+    case IrOp::VEC_BCAST: break;
 
     // VEC_FMA fusionado (1 redondeo).  Interp (oraculo) = W ops ESCALARES por
-    // lane con `fmadd` (std::fma) para coincidir BIT-A-BIT con VFMADD231 del JIT.
-    // Dos formas: 3 ops {acc,a,b} = reduccion acc[i]+=a[i]*b[i] (sumando==dst);
-    // 4 ops {c,d,a,b} = element-wise c[i]=a[i]*b[i]+d[i] (sumando d != dst c).
-    // r9=sumando, r10=dst, r11=a, r12=b.  Solo f64/f32.
+    // lane con `fmadd` (std::fma) para coincidir BIT-A-BIT con VFMADD231 del
+    // JIT. Dos formas: 3 ops {acc,a,b} = reduccion acc[i]+=a[i]*b[i]
+    // (sumando==dst); 4 ops {c,d,a,b} = element-wise c[i]=a[i]*b[i]+d[i]
+    // (sumando d != dst c). r9=sumando, r10=dst, r11=a, r12=b.  Solo f64/f32.
     case IrOp::VEC_FMA: {
         if (ins.operands.size() < 3) break;
         const bool fma3 = (ins.operands.size() >= 4); // element-wise
@@ -4325,14 +4381,23 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         ctx.out.emit(emmit::Mnemonic::PUSH, "r10");
         ctx.out.emit(emmit::Mnemonic::PUSH, "r11");
         ctx.out.emit(emmit::Mnemonic::PUSH, "r12");
-        { const std::string p = ctx.load_src(ins.operands[o_add], 0); // sumando
-          ctx.out.emit(emmit::Mnemonic::PUSH, p); }
-        { const std::string p = ctx.load_src(ins.operands[o_dst], 0); // dst
-          ctx.out.emit(emmit::Mnemonic::PUSH, p); }
-        { const std::string p = ctx.load_src(ins.operands[o_a], 0); // a
-          ctx.out.emit(emmit::Mnemonic::PUSH, p); }
-        { const std::string p = ctx.load_src(ins.operands[o_b], 0); // b
-          ctx.out.emit(emmit::Mnemonic::PUSH, p); }
+        {
+            const std::string p =
+                ctx.load_src(ins.operands[o_add], 0); // sumando
+            ctx.out.emit(emmit::Mnemonic::PUSH, p);
+        }
+        {
+            const std::string p = ctx.load_src(ins.operands[o_dst], 0); // dst
+            ctx.out.emit(emmit::Mnemonic::PUSH, p);
+        }
+        {
+            const std::string p = ctx.load_src(ins.operands[o_a], 0); // a
+            ctx.out.emit(emmit::Mnemonic::PUSH, p);
+        }
+        {
+            const std::string p = ctx.load_src(ins.operands[o_b], 0); // b
+            ctx.out.emit(emmit::Mnemonic::PUSH, p);
+        }
         ctx.out.emit(emmit::Mnemonic::POP, "r12");
         ctx.out.emit(emmit::Mnemonic::POP, "r11");
         ctx.out.emit(emmit::Mnemonic::POP, "r10");
@@ -4344,16 +4409,21 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 ctx.out << "    addu r11, " << esz << "\n";
                 ctx.out << "    addu r12, " << esz << "\n";
             }
-            ctx.out << "    " << vec_mv(ctx, ins, 0) << " r14" << rsz << ", [r9]\n"; // sumando[k]
+            ctx.out << "    " << vec_mv(ctx, ins, 0) << " r14" << rsz
+                    << ", [r9]\n"; // sumando[k]
             ctx.out << "    bitg2z f0, r14\n";
             if (fma_sub) ctx.out << "    fneg" << suf << " f0, f0\n"; // -d
-            ctx.out << "    " << vec_mv(ctx, ins, 1) << " r13" << rsz << ", [r11]\n"; // a[k]
+            ctx.out << "    " << vec_mv(ctx, ins, 1) << " r13" << rsz
+                    << ", [r11]\n"; // a[k]
             ctx.out << "    bitg2z f1, r13\n";
-            ctx.out << "    " << vec_mv(ctx, ins, 2) << " r14" << rsz << ", [r12]\n"; // b[k]
+            ctx.out << "    " << vec_mv(ctx, ins, 2) << " r14" << rsz
+                    << ", [r12]\n"; // b[k]
             ctx.out << "    bitg2z f2, r14\n";
-            ctx.out << "    fmadd" << suf << " f0, f1, f2\n"; // f0 = a*b + sumando
+            ctx.out << "    fmadd" << suf
+                    << " f0, f1, f2\n"; // f0 = a*b + sumando
             ctx.out << "    bitz2g r14, f0\n";
-            ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz << "\n"; // dst[k]
+            ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz
+                    << "\n"; // dst[k]
         }
         ctx.out.emit(emmit::Mnemonic::POP, "r12");
         ctx.out.emit(emmit::Mnemonic::POP, "r11");
@@ -4374,8 +4444,10 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const uint64_t width = ins.imm & 0xFF;
         const uint64_t acc_off = ((ins.imm >> 8) & 0xF) * width; // sub-slot idx
         ctx.out.emit(emmit::Mnemonic::PUSH, "r10");
-        { const std::string p = ctx.load_src(ins.operands[0], 0);
-          ctx.out.emit(emmit::Mnemonic::PUSH, p); }
+        {
+            const std::string p = ctx.load_src(ins.operands[0], 0);
+            ctx.out.emit(emmit::Mnemonic::PUSH, p);
+        }
         ctx.out.emit(emmit::Mnemonic::POP, "r10");
         if (acc_off) ctx.out << "    addu r10, " << acc_off << "\n";
         ctx.out << "    mov r14, 0\n";
@@ -4398,15 +4470,18 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const uint64_t W = width / esz;
         const std::string suf = (ins.type == IrType::F32) ? ".ps" : "";
         const std::string rsz = (esz == 4) ? "d" : "";
-        const bool is_fp =
-            (ins.type == IrType::F64 || ins.type == IrType::F32);
+        const bool is_fp = (ins.type == IrType::F64 || ins.type == IrType::F32);
         ctx.out.emit(emmit::Mnemonic::PUSH, "r10");
-    ctx.out.emit(emmit::Mnemonic::PUSH, "r11");
-    ctx.out.emit(emmit::Mnemonic::PUSH, "r12");
-        { const std::string p = ctx.load_src(ins.operands[0], 0); // acc slot
-          ctx.out.emit(emmit::Mnemonic::PUSH, p); }
-        { const std::string p = ctx.load_src(ins.operands[1], 0); // a
-          ctx.out.emit(emmit::Mnemonic::PUSH, p); }
+        ctx.out.emit(emmit::Mnemonic::PUSH, "r11");
+        ctx.out.emit(emmit::Mnemonic::PUSH, "r12");
+        {
+            const std::string p = ctx.load_src(ins.operands[0], 0); // acc slot
+            ctx.out.emit(emmit::Mnemonic::PUSH, p);
+        }
+        {
+            const std::string p = ctx.load_src(ins.operands[1], 0); // a
+            ctx.out.emit(emmit::Mnemonic::PUSH, p);
+        }
         if (is_fma) {
             const std::string p = ctx.load_src(ins.operands[2], 0); // b
             ctx.out.emit(emmit::Mnemonic::PUSH, p);
@@ -4414,15 +4489,20 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         }
         ctx.out.emit(emmit::Mnemonic::POP, "r11");
         ctx.out.emit(emmit::Mnemonic::POP, "r10"); // a, acc
-        { const uint64_t acc_off = ((ins.imm >> 8) & 0xF) * width;
-          if (acc_off) ctx.out << "    addu r10, " << acc_off << "\n"; }
+        {
+            const uint64_t acc_off = ((ins.imm >> 8) & 0xF) * width;
+            if (acc_off) ctx.out << "    addu r10, " << acc_off << "\n";
+        }
         // disp de array (bits 16-31): displacement constante de la pieza del
-        // unroll sobre a[]/b[].  Paridad con el codegen vreg (movupd disp(base)).
-        { const uint64_t arr_disp = ((ins.imm >> 16) & 0xFFFFull);
-          if (arr_disp) {
-              ctx.out << "    addu r11, " << arr_disp << "\n";
-              if (is_fma) ctx.out << "    addu r12, " << arr_disp << "\n";
-          } }
+        // unroll sobre a[]/b[].  Paridad con el codegen vreg (movupd
+        // disp(base)).
+        {
+            const uint64_t arr_disp = ((ins.imm >> 16) & 0xFFFFull);
+            if (arr_disp) {
+                ctx.out << "    addu r11, " << arr_disp << "\n";
+                if (is_fma) ctx.out << "    addu r12, " << arr_disp << "\n";
+            }
+        }
         for (uint64_t k = 0; k < W; ++k) {
             if (k > 0) {
                 ctx.out << "    addu r10, " << esz << "\n";
@@ -4430,30 +4510,37 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 if (is_fma) ctx.out << "    addu r12, " << esz << "\n";
             }
             if (is_fp) {
-                ctx.out << "    " << vec_mv(ctx, ins, 0) << " r14" << rsz << ", [r10]\n"; // acc[k]
+                ctx.out << "    " << vec_mv(ctx, ins, 0) << " r14" << rsz
+                        << ", [r10]\n"; // acc[k]
                 ctx.out << "    bitg2z f0, r14\n";
-                ctx.out << "    " << vec_mv(ctx, ins, 1) << " r13" << rsz << ", [r11]\n"; // a[k]
+                ctx.out << "    " << vec_mv(ctx, ins, 1) << " r13" << rsz
+                        << ", [r11]\n"; // a[k]
                 ctx.out << "    bitg2z f1, r13\n";
                 if (is_fma) {
-                    ctx.out << "    " << vec_mv(ctx, ins, 2) << " r14" << rsz << ", [r12]\n"; // b[k]
+                    ctx.out << "    " << vec_mv(ctx, ins, 2) << " r14" << rsz
+                            << ", [r12]\n"; // b[k]
                     ctx.out << "    bitg2z f2, r14\n";
                     ctx.out << "    fmadd" << suf << " f0, f1, f2\n"; // += a*b
                 } else {
                     ctx.out << "    fadd" << suf << " f0, f1\n"; // += a
                 }
                 ctx.out << "    bitz2g r14, f0\n";
-                ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz << "\n"; // acc[k]
+                ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz
+                        << "\n"; // acc[k]
             } else {
                 // entero (solo ADD; FMA es float-only): acc[k] += a[k].
-                ctx.out << "    " << vec_mv(ctx, ins, 0) << " r14" << rsz << ", [r10]\n"; // acc[k]
-                ctx.out << "    " << vec_mv(ctx, ins, 1) << " r13" << rsz << ", [r11]\n"; // a[k]
-                ctx.out << "    adds r14, r13\n";                // 64b add
-                ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz << "\n"; // acc[k]
+                ctx.out << "    " << vec_mv(ctx, ins, 0) << " r14" << rsz
+                        << ", [r10]\n"; // acc[k]
+                ctx.out << "    " << vec_mv(ctx, ins, 1) << " r13" << rsz
+                        << ", [r11]\n";           // a[k]
+                ctx.out << "    adds r14, r13\n"; // 64b add
+                ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz
+                        << "\n"; // acc[k]
             }
         }
         ctx.out.emit(emmit::Mnemonic::POP, "r12");
-    ctx.out.emit(emmit::Mnemonic::POP, "r11");
-    ctx.out.emit(emmit::Mnemonic::POP, "r10");
+        ctx.out.emit(emmit::Mnemonic::POP, "r11");
+        ctx.out.emit(emmit::Mnemonic::POP, "r10");
         ctx.r13_cache = -1;
         ctx.r14_cache = -1;
         break;
@@ -4465,17 +4552,18 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const size_t esz = ir_type_size(ins.type);
         if (esz == 0) break;
         const uint64_t W = width / esz;
-        const bool is_fp =
-            (ins.type == IrType::F64 || ins.type == IrType::F32);
+        const bool is_fp = (ins.type == IrType::F64 || ins.type == IrType::F32);
         const std::string suf = (ins.type == IrType::F32) ? ".ps" : "";
         const std::string rsz = (esz == 4) ? "d" : "";
         const uint64_t dst_off = ((ins.imm >> 8) & 0xF) * width;
         const uint64_t src_off = ((ins.imm >> 12) & 0xF) * width;
         ctx.out.emit(emmit::Mnemonic::PUSH, "r10");
         ctx.out.emit(emmit::Mnemonic::PUSH, "r11");
-        { const std::string p = ctx.load_src(ins.operands[0], 0);
-          ctx.out.emit(emmit::Mnemonic::PUSH, p);
-          ctx.out.emit(emmit::Mnemonic::PUSH, p); }
+        {
+            const std::string p = ctx.load_src(ins.operands[0], 0);
+            ctx.out.emit(emmit::Mnemonic::PUSH, p);
+            ctx.out.emit(emmit::Mnemonic::PUSH, p);
+        }
         // ambos = slot base
         ctx.out.emit(emmit::Mnemonic::POP, "r10");
         ctx.out.emit(emmit::Mnemonic::POP, "r11");
@@ -4487,18 +4575,24 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 ctx.out << "    addu r11, " << esz << "\n";
             }
             if (is_fp) {
-                ctx.out << "    " << vec_mv(ctx, ins, 0) << " r14" << rsz << ", [r10]\n";
+                ctx.out << "    " << vec_mv(ctx, ins, 0) << " r14" << rsz
+                        << ", [r10]\n";
                 ctx.out << "    bitg2z f0, r14\n";
-                ctx.out << "    " << vec_mv(ctx, ins, 1) << " r13" << rsz << ", [r11]\n";
+                ctx.out << "    " << vec_mv(ctx, ins, 1) << " r13" << rsz
+                        << ", [r11]\n";
                 ctx.out << "    bitg2z f1, r13\n";
                 ctx.out << "    fadd" << suf << " f0, f1\n";
                 ctx.out << "    bitz2g r14, f0\n";
-                ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz << "\n";
+                ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz
+                        << "\n";
             } else {
-                ctx.out << "    " << vec_mv(ctx, ins, 0) << " r14" << rsz << ", [r10]\n";
-                ctx.out << "    " << vec_mv(ctx, ins, 1) << " r13" << rsz << ", [r11]\n";
+                ctx.out << "    " << vec_mv(ctx, ins, 0) << " r14" << rsz
+                        << ", [r10]\n";
+                ctx.out << "    " << vec_mv(ctx, ins, 1) << " r13" << rsz
+                        << ", [r11]\n";
                 ctx.out << "    adds r14, r13\n";
-                ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz << "\n";
+                ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz
+                        << "\n";
             }
         }
         ctx.out.emit(emmit::Mnemonic::POP, "r11");
@@ -4599,7 +4693,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         ctx.out << "    gcderef cur0, " << r_obj << "\n";
         if (ins.imm) ctx.out << "    addcur cur0, " << ins.imm << "\n";
         ctx.out << "    writecur cur0, " << r_val << "\n";
-        if (ins.type == IrType::HANDLE) ctx.out.emit(emmit::Mnemonic::GCWB, r_obj);
+        if (ins.type == IrType::HANDLE)
+            ctx.out.emit(emmit::Mnemonic::GCWB, r_obj);
         break;
     }
 
@@ -4630,8 +4725,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
             // emitir la carga si el valor esta derramado).
             (void)ctx.load_src(ins.operands[0], 0);
-            ctx.out << "    isnull " << ctx.reg_of(ins.dst) << ", "
-                    << ctx.reg_of(ins.operands[0]) << "\n";
+        ctx.out << "    isnull " << ctx.reg_of(ins.dst) << ", "
+                << ctx.reg_of(ins.operands[0]) << "\n";
         break;
     }
 
@@ -4675,7 +4770,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     case IrOp::GCWB_IR: {
         // gcwb_ir %handle  ->  gcwb r_handle
         if (!ins.operands.empty())
-            ctx.out.emit(emmit::Mnemonic::GCWB, ctx.load_src(ins.operands[0], 0));
+            ctx.out.emit(emmit::Mnemonic::GCWB,
+                         ctx.load_src(ins.operands[0], 0));
         break;
     }
 
@@ -4777,7 +4873,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         ctx.out << "    addu r13, " << r_arr << "\n";
         ctx.out << "    mov [r13], " << r_val << "\n";
         // write barrier si el tipo de elemento es HANDLE
-        if (ins.type == IrType::HANDLE) ctx.out.emit(emmit::Mnemonic::GCWB, r_arr);
+        if (ins.type == IrType::HANDLE)
+            ctx.out.emit(emmit::Mnemonic::GCWB, r_arr);
         break;
     }
 
@@ -4968,7 +5065,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
             // emitir la carga si el valor esta derramado).
             (void)ctx.load_src(ins.operands[0], 0);
-            ctx.out.emit(emmit::Mnemonic::THROW, ctx.reg_of(ins.operands[0]));
+        ctx.out.emit(emmit::Mnemonic::THROW, ctx.reg_of(ins.operands[0]));
         break;
     }
 
@@ -5008,7 +5105,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
             // emitir la carga si el valor esta derramado).
             (void)ctx.load_src(ins.operands[0], 0);
-            ctx.out.emit(emmit::Mnemonic::AWAIT, ctx.reg_of(ins.operands[0])); // bloquea; resultado en r0
+            ctx.out.emit(
+                emmit::Mnemonic::AWAIT,
+                ctx.reg_of(ins.operands[0])); // bloquea; resultado en r0
             if (ins.dst != IR_NO_VALUE)
                 emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), Reg::gp(0));
         }
@@ -5057,8 +5156,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         }
         const std::string r_pid = ctx.load_src(ins.operands[0], 0);
         const std::string r_addr = ctx.load_src(ins.operands[1], 1);
-        ctx.out << "    msgsend " << r_pid << ", " << r_addr << ", "
-                << r_len << "\n";
+        ctx.out << "    msgsend " << r_pid << ", " << r_addr << ", " << r_len
+                << "\n";
         if (ins.dst != IR_NO_VALUE)
             emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), Reg::gp(0));
         break;
@@ -5098,35 +5197,35 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
             // emitir la carga si el valor esta derramado).
             (void)ctx.load_src(ins.operands[0], 0);
-            ctx.out.emit(emmit::Mnemonic::MONENTER, ctx.reg_of(ins.operands[0]));
+        ctx.out.emit(emmit::Mnemonic::MONENTER, ctx.reg_of(ins.operands[0]));
         break;
     case IrOp::MONEXIT:
         if (!ins.operands.empty())
             // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
             // emitir la carga si el valor esta derramado).
             (void)ctx.load_src(ins.operands[0], 0);
-            ctx.out.emit(emmit::Mnemonic::MONEXIT, ctx.reg_of(ins.operands[0]));
+        ctx.out.emit(emmit::Mnemonic::MONEXIT, ctx.reg_of(ins.operands[0]));
         break;
     case IrOp::MONWAIT:
         if (!ins.operands.empty())
             // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
             // emitir la carga si el valor esta derramado).
             (void)ctx.load_src(ins.operands[0], 0);
-            ctx.out.emit(emmit::Mnemonic::MONWAIT, ctx.reg_of(ins.operands[0]));
+        ctx.out.emit(emmit::Mnemonic::MONWAIT, ctx.reg_of(ins.operands[0]));
         break;
     case IrOp::MONNOTI:
         if (!ins.operands.empty())
             // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
             // emitir la carga si el valor esta derramado).
             (void)ctx.load_src(ins.operands[0], 0);
-            ctx.out.emit(emmit::Mnemonic::MONNOTI, ctx.reg_of(ins.operands[0]));
+        ctx.out.emit(emmit::Mnemonic::MONNOTI, ctx.reg_of(ins.operands[0]));
         break;
     case IrOp::MONNOTA:
         if (!ins.operands.empty())
             // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
             // emitir la carga si el valor esta derramado).
             (void)ctx.load_src(ins.operands[0], 0);
-            ctx.out.emit(emmit::Mnemonic::MONNOTA, ctx.reg_of(ins.operands[0]));
+        ctx.out.emit(emmit::Mnemonic::MONNOTA, ctx.reg_of(ins.operands[0]));
         break;
 
     // --- Intrinsics VM ---
@@ -5166,7 +5265,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // Recarga previa: reg_of solo CONSULTA (devuelve el scratch sin
             // emitir la carga si el valor esta derramado).
             (void)ctx.load_src(ins.operands[0], 0);
-            ctx.out.emit(emmit::Mnemonic::RESUME, ctx.reg_of(ins.operands[0]));
+        ctx.out.emit(emmit::Mnemonic::RESUME, ctx.reg_of(ins.operands[0]));
         break;
     case IrOp::YIELD: ctx.out.emit(emmit::Mnemonic::YIELD); break;
     case IrOp::SWAPCTX:
@@ -5175,9 +5274,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // scratch: reg_of solo consulta y devolveria el
             // mismo registro para los dos.
             (void)ctx.load_src(ins.operands[0], 0);
-            (void)ctx.load_src(ins.operands[1], 1);
-            ctx.out << "    swapctx " << ctx.reg_at(ins.operands[0], 0) << ", "
-                    << ctx.reg_at(ins.operands[1], 1) << "\n";
+        (void)ctx.load_src(ins.operands[1], 1);
+        ctx.out << "    swapctx " << ctx.reg_at(ins.operands[0], 0) << ", "
+                << ctx.reg_at(ins.operands[1], 1) << "\n";
         break;
 
     case IrOp::SPAWN_ARGS: {
@@ -5290,9 +5389,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // scratch: reg_of solo consulta y devolveria el
             // mismo registro para los dos.
             (void)ctx.load_src(ins.operands[0], 0);
-            (void)ctx.load_src(ins.operands[1], 1);
-            ctx.out << "    panic " << ctx.reg_at(ins.operands[0], 0) << ", "
-                    << ctx.reg_at(ins.operands[1], 1) << "\n";
+        (void)ctx.load_src(ins.operands[1], 1);
+        ctx.out << "    panic " << ctx.reg_at(ins.operands[0], 0) << ", "
+                << ctx.reg_at(ins.operands[1], 1) << "\n";
         break;
     case IrOp::SPAWN_ON: {
         if (ins.operands.size() < 2) break;
@@ -5324,9 +5423,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // scratch: reg_of solo consulta y devolveria el
             // mismo registro para los dos.
             (void)ctx.load_src(ins.operands[0], 0);
-            (void)ctx.load_src(ins.operands[1], 1);
-            ctx.out << "    mvtake " << ctx.reg_at(ins.operands[0], 0) << ", "
-                    << ctx.reg_at(ins.operands[1], 1) << "\n";
+        (void)ctx.load_src(ins.operands[1], 1);
+        ctx.out << "    mvtake " << ctx.reg_at(ins.operands[0], 0) << ", "
+                << ctx.reg_at(ins.operands[1], 1) << "\n";
         break;
 
     // --- gcfinal: registra/desregistra finalizador GC del box ---
@@ -5341,7 +5440,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 // dos.
                 (void)ctx.load_src(ins.operands[0], 0);
                 (void)ctx.load_src(ins.operands[1], 1);
-                ctx.out.emit(emmit::Mnemonic::GCFINALC, ctx.reg_at(ins.operands[0], 0), ctx.reg_at(ins.operands[1], 1));
+                ctx.out.emit(emmit::Mnemonic::GCFINALC,
+                             ctx.reg_at(ins.operands[0], 0),
+                             ctx.reg_at(ins.operands[1], 1));
             } else {
                 (void)ctx.load_src(ins.operands[0], 0);
                 ctx.out << "    gcfinal " << ctx.reg_of(ins.operands[0]) << ", "
@@ -5350,7 +5451,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         }
         break;
 
-    // --- gccollect: fuerza minor+major GC del proceso + drena finalizadores ---
+    // --- gccollect: fuerza minor+major GC del proceso + drena finalizadores
+    // ---
     case IrOp::GC_COLLECT:
         // gccollect ejecuta minor_gc + major_gc in-situ: es un SAFEPOINT.  El
         // mark corre con las raices del programa vivas en regs/slots del frame
@@ -5362,9 +5464,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         break;
 
     // --- gcfinall: finaliza TODO objeto GC vivo con recurso interno ---
-    case IrOp::GC_FINALIZE_ALL:
-        ctx.out.emit(emmit::Mnemonic::GCFINALL);
-        break;
+    case IrOp::GC_FINALIZE_ALL: ctx.out.emit(emmit::Mnemonic::GCFINALL); break;
 
     // --- gcallocp: alloc + deref + xchg fusionados ---
     case IrOp::GC_ALLOCP:
@@ -5397,9 +5497,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // scratch: reg_of solo consulta y devolveria el
             // mismo registro para los dos.
             (void)ctx.load_src(ins.operands[0], 0);
-            (void)ctx.load_src(ins.operands[1], 1);
-            ctx.out << "    setstatic " << ctx.reg_at(ins.operands[0], 0) << ", "
-                    << ctx.reg_at(ins.operands[1], 1) << ", " << ins.imm << "\n";
+        (void)ctx.load_src(ins.operands[1], 1);
+        ctx.out << "    setstatic " << ctx.reg_at(ins.operands[0], 0) << ", "
+                << ctx.reg_at(ins.operands[1], 1) << ", " << ins.imm << "\n";
         break;
 
     // --- atomics i64 ( Z) ---
@@ -5416,10 +5516,11 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (ins.dst != IR_NO_VALUE && !ins.operands.empty()) {
             // El ANCHO del atomico (1/2/4/8) va en el sufijo de tamano del reg
             // de VALOR (.b/.w/.d), como loadz -- el emisor lo lee y lo mete en
-            // el ctrl-byte.  La direccion (operando 0) queda a 64 bits (puntero).
+            // el ctrl-byte.  La direccion (operando 0) queda a 64 bits
+            // (puntero).
             const std::string a = ctx.load_src(ins.operands[0], 0);
-            ctx.out.emit(emmit::Mnemonic::ATOMICLD, atomic_sized(ctx.dst_of(ins.dst),
-                                                       ins.type), a);
+            ctx.out.emit(emmit::Mnemonic::ATOMICLD,
+                         atomic_sized(ctx.dst_of(ins.dst), ins.type), a);
             ctx.store_spilled(ins.dst);
         }
         break;
@@ -5429,7 +5530,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             const std::string v = ctx.load_src(ins.operands[1], 1);
             // Ancho en ins.type (fijado por emit_atomic_st con el ancho del
             // valor; I64/VOID -> 8 bytes por defecto para productores viejos).
-            ctx.out.emit(emmit::Mnemonic::ATOMICST, a, atomic_sized(v, ins.type));
+            ctx.out.emit(emmit::Mnemonic::ATOMICST, a,
+                         atomic_sized(v, ins.type));
         }
         break;
     case IrOp::ATOMIC_CAS:
@@ -5455,9 +5557,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             const std::string e = ctx.load_src(ins.operands[1], 1);
             // Ancho (mode) en el sufijo del DST; exp/des tambien sized (mismo
             // ancho); la direccion (a) plana (puntero de 64 bits).
-            ctx.out << "    atomiccas " << atomic_sized(ctx.dst_of(ins.dst),
-                                                        ins.type)
-                    << ", " << a << ", " << atomic_sized(e, ins.type) << ", "
+            ctx.out << "    atomiccas "
+                    << atomic_sized(ctx.dst_of(ins.dst), ins.type) << ", " << a
+                    << ", " << atomic_sized(e, ins.type) << ", "
                     << atomic_sized(d, ins.type) << "\n";
             ctx.store_spilled(ins.dst);
         }
@@ -5467,9 +5569,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             const std::string a = ctx.load_src(ins.operands[0], 0);
             const std::string d = ctx.load_src(ins.operands[1], 1);
             // Ancho (mode) en el sufijo del DST y del delta; direccion plana.
-            ctx.out << "    atomicadd " << atomic_sized(ctx.dst_of(ins.dst),
-                                                        ins.type)
-                    << ", " << a << ", " << atomic_sized(d, ins.type) << "\n";
+            ctx.out << "    atomicadd "
+                    << atomic_sized(ctx.dst_of(ins.dst), ins.type) << ", " << a
+                    << ", " << atomic_sized(d, ins.type) << "\n";
             ctx.store_spilled(ins.dst);
         }
         break;
@@ -5481,9 +5583,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // scratch: reg_of solo consulta y devolveria el
             // mismo registro para los dos.
             (void)ctx.load_src(ins.operands[0], 0);
-            (void)ctx.load_src(ins.operands[1], 1);
-            ctx.out << "    fulfillhlt " << ctx.reg_at(ins.operands[0], 0) << ", "
-                    << ctx.reg_at(ins.operands[1], 1) << "\n";
+        (void)ctx.load_src(ins.operands[1], 1);
+        ctx.out << "    fulfillhlt " << ctx.reg_at(ins.operands[0], 0) << ", "
+                << ctx.reg_at(ins.operands[1], 1) << "\n";
         break;
 
     // --- raw_asm-elim wave 3: ops nuevos sin operandos / con imm ---
@@ -5755,9 +5857,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // scratch: reg_of solo consulta y devolveria el
             // mismo registro para los dos.
             (void)ctx.load_src(ins.operands[0], 0);
-            (void)ctx.load_src(ins.operands[1], 1);
-            ctx.out << "    deffield " << ctx.reg_at(ins.operands[0], 0) << ", "
-                    << ctx.reg_at(ins.operands[1], 1) << "\n";
+        (void)ctx.load_src(ins.operands[1], 1);
+        ctx.out << "    deffield " << ctx.reg_at(ins.operands[0], 0) << ", "
+                << ctx.reg_at(ins.operands[1], 1) << "\n";
         break;
     case IrOp::DEFMETHOD:
         if (ins.operands.size() >= 2)
@@ -5765,9 +5867,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // scratch: reg_of solo consulta y devolveria el
             // mismo registro para los dos.
             (void)ctx.load_src(ins.operands[0], 0);
-            (void)ctx.load_src(ins.operands[1], 1);
-            ctx.out << "    defmethod " << ctx.reg_at(ins.operands[0], 0) << ", "
-                    << ctx.reg_at(ins.operands[1], 1) << "\n";
+        (void)ctx.load_src(ins.operands[1], 1);
+        ctx.out << "    defmethod " << ctx.reg_at(ins.operands[0], 0) << ", "
+                << ctx.reg_at(ins.operands[1], 1) << "\n";
         break;
     case IrOp::ADDADVICE:
         if (ins.operands.size() >= 2) {
@@ -5776,8 +5878,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // mismo registro para los dos.
             (void)ctx.load_src(ins.operands[0], 0);
             (void)ctx.load_src(ins.operands[1], 1);
-            ctx.out << "    addadvice " << ctx.reg_at(ins.operands[0], 0) << ", "
-                    << ctx.reg_at(ins.operands[1], 1) << ", " << ins.imm << "\n";
+            ctx.out << "    addadvice " << ctx.reg_at(ins.operands[0], 0)
+                    << ", " << ctx.reg_at(ins.operands[1], 1) << ", " << ins.imm
+                    << "\n";
         }
         break;
     case IrOp::FINDMETHOD:
@@ -5808,9 +5911,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // scratch: reg_of solo consulta y devolveria el
             // mismo registro para los dos.
             (void)ctx.load_src(ins.operands[0], 0);
-            (void)ctx.load_src(ins.operands[1], 1);
-            ctx.out << "    setmethdbg " << ctx.reg_at(ins.operands[0], 0) << ", "
-                    << ctx.reg_at(ins.operands[1], 1) << "\n";
+        (void)ctx.load_src(ins.operands[1], 1);
+        ctx.out << "    setmethdbg " << ctx.reg_at(ins.operands[0], 0) << ", "
+                << ctx.reg_at(ins.operands[1], 1) << "\n";
         break;
     case IrOp::CALLSUPER: {
         // Signature: operands[0] = v_cls (ClassInfo* host_ptr del super),
@@ -5970,8 +6073,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                     ancho_sin_pasar = true;
                     break;
                 }
-                const int phys =
-                    gp_phys_of_canon(vx::asm_canonical_reg(b.reg));
+                const int phys = gp_phys_of_canon(vx::asm_canonical_reg(b.reg));
                 if (phys >= 0) binds.push_back({opv, phys});
                 break;
             }
@@ -6052,7 +6154,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     case IrOp::ASM_MICRO: {
         // asm opaco liftado en el INTERPRETE.  Diseno UNIFICADO (la ventaja de
         // ASM_MICRO sobre INLINE_ASM: lleva sus efectos de la DB):
-        //   - si hay ENSAMBLADOR para el host, el loader ensamblo la plantilla a
+        //   - si hay ENSAMBLADOR para el host, el loader ensamblo la plantilla
+        //   a
         //     un trampoline nativo por hash -> se ejecuta la instruccion REAL;
         //   - si NO hay ensamblador (u otra arch), se EMULA el efecto de forma
         //     PORTABLE (barrera de memoria via los eff bits) -> el codigo SIGUE
@@ -6084,14 +6187,16 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
              * una tabla en la pila en vez de por el hueco de la variable. */
             std::vector<int> phys;
             if (!vx::asm_micro_subst_greedy(am, nasm, phys)) {
-                ctx.comment("asm_micro: no se pudo dar registro a sus operandos "
-                            "-> trap");
+                ctx.comment(
+                    "asm_micro: no se pudo dar registro a sus operandos "
+                    "-> trap");
                 ctx.out.emit(emmit::Mnemonic::HLT);
                 break;
             }
-            // Los valores llegan en los operandos de la instruccion, en el mismo
-            // orden que los operandos de la ficha que llevan valor.
-            std::vector<std::pair<size_t, IrValueId>> conv; // (indice ficha, valor)
+            // Los valores llegan en los operandos de la instruccion, en el
+            // mismo orden que los operandos de la ficha que llevan valor.
+            std::vector<std::pair<size_t, IrValueId>>
+                conv; // (indice ficha, valor)
             size_t nv = 0;
             for (size_t oi = 0; oi < am.operands.size(); ++oi) {
                 if (am.operands[oi].value == IR_NO_VALUE) continue;
@@ -6112,9 +6217,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
              * `xmm3`, `ymm3` y `zmm3` son la MISMA ranura.
              *
              * Los dos lados sacan el formato del mismo sitio (@c vx::kAsm*): es
-             * un acuerdo, y con una copia en cada lado se pueden separar sin que
-             * nada falle al compilar -- el fallo sale como valores movidos de
-             * sitio, que es basura, no un error. */
+             * un acuerdo, y con una copia en cada lado se pueden separar sin
+             * que nada falle al compilar -- el fallo sale como valores movidos
+             * de sitio, que es basura, no un error. */
             /* Los descriptores van EN MEMORIA, detras de la tabla de valores,
              * uno por operando y con campos nombrados.  Empaquetados en un
              * entero le ponian techo de bits a algo que crece con cada ISA, y
@@ -6131,11 +6236,11 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             const size_t bytes_tabla =
                 bytes_valores + conv.size() * vx::kAsmDescBytes;
             /* El valor que el bloque devuelve NO se salva alrededor de la
-             * llamada: se recoge de la tabla despues, y restaurarlo lo devolveria
-             * a lo que era -- `add a, 2` sobre 40 seguia dando 40.  Es el mismo
-             * trato que recibe el resultado de cualquier llamada.  Con mas de un
-             * valor devuelto no hay como decirlo, asi que ese caso no pasa por
-             * aqui. */
+             * llamada: se recoge de la tabla despues, y restaurarlo lo
+             * devolveria a lo que era -- `add a, 2` sobre 40 seguia dando 40.
+             * Es el mismo trato que recibe el resultado de cualquier llamada.
+             * Con mas de un valor devuelto no hay como decirlo, asi que ese
+             * caso no pasa por aqui. */
             IrValueId devuelto = IR_NO_VALUE;
             size_t n_devueltos = 0;
             for (const auto &c : conv) {
@@ -6151,7 +6256,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 break;
             }
             const uint32_t cpos = lin_pos_of(ctx, bb.id, idx);
-            std::vector<int> salvar = live_regs_through_call(ctx, cpos, devuelto);
+            std::vector<int> salvar =
+                live_regs_through_call(ctx, cpos, devuelto);
             emit_save_all_gc_aware(ctx, cpos, salvar);
             /* Tabla de valores en la pila de la maquina virtual.  La direccion
              * se lleva en r15 porque la forma de direccionar no admite rsp
@@ -6269,12 +6375,14 @@ static bool interp_fuse_disabled();
 // del banco" + su vivacidad y les asigna INDICES de registro.  Cada CLIENTE
 // (floats escalares hoy; vectores/memcpy en el futuro) computa SUS candidatos
 // con su propia semantica y comparte este allocador.  El ancho concreto de cada
-// registro lo decide el TIPO del valor en la emision (f64=8 B, f32=4 B, vNNN...).
+// registro lo decide el TIPO del valor en la emision (f64=8 B, f32=4 B,
+// vNNN...).
 //
 // Cliente FLOAT: un valor F64/F32 puede residir en el banco (sin roundtrip
 // bitg2z/bitz2g) si su DEF es un productor float (arith/load) y TODOS sus usos
 // son consumidores float (arith/store).  Cualquier cruce de banco (PHI, CALL,
-// RET, BITCAST, conversiones int<->float, FCMP) lo excluye -> path GP + bitcast.
+// RET, BITCAST, conversiones int<->float, FCMP) lo excluye -> path GP +
+// bitcast.
 
 static inline bool zmm_producer_op(IrOp op) {
     switch (op) {
@@ -6300,8 +6408,7 @@ static inline bool zmm_producer_op(IrOp op) {
     case IrOp::F32TOF64: // f32 -> f64 (fextend)
     case IrOp::F64TOF32: // f64 -> f32 (fnarrow)
         return true;
-    default:
-        return false;
+    default: return false;
     }
 }
 static inline bool zmm_consumer_op(IrOp op) {
@@ -6319,7 +6426,7 @@ static inline bool zmm_consumer_op(IrOp op) {
     case IrOp::FCEIL:
     case IrOp::FROUND:
     case IrOp::FTRUNC:
-    case IrOp::FMA:   // consume a, b, c (floats)
+    case IrOp::FMA: // consume a, b, c (floats)
     case IrOp::STORE:
     // Fronteras que CONSUMEN un float del banco:
     case IrOp::FTOI:     // float -> int (GP)
@@ -6332,10 +6439,10 @@ static inline bool zmm_consumer_op(IrOp op) {
     case IrOp::FCMP_GT:
     case IrOp::FCMP_LE:
     case IrOp::FCMP_GE:
-    case IrOp::PHI: // el PHI de un acumulador loop-carried consume floats del banco
+    case IrOp::PHI: // el PHI de un acumulador loop-carried consume floats del
+                    // banco
         return true;
-    default:
-        return false;
+    default: return false;
     }
 }
 
@@ -6350,14 +6457,11 @@ static bool interp_zmm_disabled() {
 // registros quedan reservados como scratch del cliente.  Reusable por cualquier
 // cliente del banco (floats, vectores SIMD, memcpy...).  Los que no obtienen
 // registro (banco lleno) se quedan fuera y el cliente cae a su path de reserva.
-static std::unordered_map<IrValueId, int>
-wide_bank_linear_scan(std::vector<IrValueId> cands,
-                      const LivenessResult &liveness, int num_regs,
-                      int num_scratch,
-                      const std::unordered_map<IrValueId, IrValueId> &prefer) {
+static std::unordered_map<IrValueId, int> wide_bank_linear_scan(
+    std::vector<IrValueId> cands, const LivenessResult &liveness, int num_regs,
+    int num_scratch, const std::unordered_map<IrValueId, IrValueId> &prefer) {
     std::unordered_map<IrValueId, int> zmm_assign; // banco ZMM, NO el GP
-    if (cands.empty())
-        return zmm_assign;
+    if (cands.empty()) return zmm_assign;
     std::unordered_map<IrValueId, const LiveInterval *> iv;
     for (const auto &it : liveness.intervals)
         iv[it.id] = &it;
@@ -6372,8 +6476,7 @@ wide_bank_linear_scan(std::vector<IrValueId> cands,
     std::vector<std::pair<uint32_t, IrValueId>> active; // (end, vid)
     for (IrValueId v : cands) {
         auto it = iv.find(v);
-        if (it == iv.end())
-            continue;
+        if (it == iv.end()) continue;
         const uint32_t start = it->second->def, end = it->second->end;
         for (size_t k = 0; k < active.size();) {
             if (active[k].first < start) {
@@ -6416,11 +6519,9 @@ wide_bank_linear_scan(std::vector<IrValueId> cands,
 // float) y les asigna registros via el allocador general.
 static std::unordered_map<IrValueId, int>
 compute_zmm_alloc(const IrFunction &fn, const LivenessResult &liveness) {
-    if (interp_zmm_disabled())
-        return {};
+    if (interp_zmm_disabled()) return {};
     const size_t nv = fn.values.size();
-    if (nv == 0)
-        return {};
+    if (nv == 0) return {};
     std::vector<IrOp> def_op(nv);
     std::vector<char> has_def(nv, 0), bad(nv, 0);
     std::unordered_set<IrValueId> is_param(fn.params.begin(), fn.params.end());
@@ -6461,16 +6562,14 @@ compute_zmm_alloc(const IrFunction &fn, const LivenessResult &liveness) {
     auto uf_union = [&](int a, int b) {
         a = uf_find(a);
         b = uf_find(b);
-        if (a != b)
-            uf[a] = b;
+        if (a != b) uf[a] = b;
     };
     for (const auto &bb : fn.blocks)
         for (const auto &in : bb.instrs)
             if (in.op == IrOp::PHI && in.dst != IR_NO_VALUE &&
                 static_cast<size_t>(in.dst) < nv) {
                 const IrType dt = fn.values[in.dst].type;
-                if (dt != IrType::F64 && dt != IrType::F32)
-                    continue;
+                if (dt != IrType::F64 && dt != IrType::F32) continue;
                 for (const auto &pa : in.phi_args)
                     if (pa.value != IR_NO_VALUE &&
                         static_cast<size_t>(pa.value) < nv)
@@ -6479,40 +6578,33 @@ compute_zmm_alloc(const IrFunction &fn, const LivenessResult &liveness) {
             }
     auto indiv_ok = [&](IrValueId v) -> bool {
         const IrType t = fn.values[v].type;
-        if (t != IrType::F64 && t != IrType::F32)
-            return false;
-        if (is_param.count(v) || !has_def[v] || bad[v])
-            return false;
+        if (t != IrType::F64 && t != IrType::F32) return false;
+        if (is_param.count(v) || !has_def[v] || bad[v]) return false;
         return zmm_producer_op(def_op[v]) || def_op[v] == IrOp::PHI;
     };
     // comp_ok[root] = todos los miembros float del componente son elegibles.
     std::unordered_map<int, bool> comp_ok;
     for (IrValueId v = 0; static_cast<size_t>(v) < nv; ++v) {
         const IrType t = fn.values[v].type;
-        if (t != IrType::F64 && t != IrType::F32)
-            continue;
+        if (t != IrType::F64 && t != IrType::F32) continue;
         const int r = uf_find(static_cast<int>(v));
         auto it = comp_ok.find(r);
-        if (it == comp_ok.end())
-            comp_ok[r] = true;
-        if (!indiv_ok(v))
-            comp_ok[r] = false;
+        if (it == comp_ok.end()) comp_ok[r] = true;
+        if (!indiv_ok(v)) comp_ok[r] = false;
     }
     std::vector<IrValueId> cands;
     for (IrValueId v = 0; static_cast<size_t>(v) < nv; ++v) {
         const IrType t = fn.values[v].type;
-        if (t != IrType::F64 && t != IrType::F32)
-            continue;
-        if (!indiv_ok(v))
-            continue;
+        if (t != IrType::F64 && t != IrType::F32) continue;
+        if (!indiv_ok(v)) continue;
         auto it = comp_ok.find(uf_find(static_cast<int>(v)));
-        if (it == comp_ok.end() || !it->second)
-            continue;
+        if (it == comp_ok.end() || !it->second) continue;
         cands.push_back(v);
     }
     // Hint de coalescing: el dst de un binop/unop float aritmetico prefiere
     // reutilizar el registro de su src1 (que suele morir ahi) -> ahorra el
-    // `fmov` del 2-address.  Solo un hint; el allocador lo respeta si es seguro.
+    // `fmov` del 2-address.  Solo un hint; el allocador lo respeta si es
+    // seguro.
     std::unordered_map<IrValueId, IrValueId> prefer;
     for (const auto &bb : fn.blocks) {
         for (const auto &in : bb.instrs) {
@@ -6540,8 +6632,7 @@ compute_zmm_alloc(const IrFunction &fn, const LivenessResult &liveness) {
                     in.operands[2] != IR_NO_VALUE)
                     prefer[in.dst] = in.operands[2];
                 break;
-            default:
-                break;
+            default: break;
             }
         }
     }
@@ -6558,32 +6649,26 @@ compute_zmm_alloc(const IrFunction &fn, const LivenessResult &liveness) {
         std::unordered_map<int, int> total, in_bank;
         for (IrValueId v = 0; static_cast<size_t>(v) < nv; ++v) {
             const IrType t = fn.values[v].type;
-            if (t != IrType::F64 && t != IrType::F32)
-                continue;
-            if (!indiv_ok(v))
-                continue;
+            if (t != IrType::F64 && t != IrType::F32) continue;
+            if (!indiv_ok(v)) continue;
             const int r = uf_find(static_cast<int>(v));
             auto it = comp_ok.find(r);
-            if (it == comp_ok.end() || !it->second)
-                continue;
+            if (it == comp_ok.end() || !it->second) continue;
             total[r]++;
-            if (zmm_map.count(v))
-                in_bank[r]++;
+            if (zmm_map.count(v)) in_bank[r]++;
         }
         for (const auto &kv : total)
             if (kv.second > 1 && in_bank[kv.first] != kv.second) {
                 const int r = kv.first;
                 for (IrValueId v = 0; static_cast<size_t>(v) < nv; ++v)
-                    if (uf_find(static_cast<int>(v)) == r)
-                        zmm_map.erase(v);
+                    if (uf_find(static_cast<int>(v)) == r) zmm_map.erase(v);
             }
     }
     return zmm_map;
 }
 
 static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
-                                 VelSink &out,
-                                 bool is_entry_point = false,
+                                 VelSink &out, bool is_entry_point = false,
                                  const IrModule *mod = nullptr,
                                  std::vector<uint8_t> *value_regs = nullptr) {
     // Liveness + asignacion de registros.
@@ -6592,9 +6677,9 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
     // congruencia que usa el JIT/AOT (jit::ssa_phi_coalesce_remap, funcion pura
     // del IR) y se CONSUME en el allocator sin tocar el SSA -> los valores
     // congruentes comparten registro VM, las copias PHI intra-clase quedan
-    // no-op, el bytecode emitido tiene menos MOVs.  Se fuerza que cada param sea
-    // el root de su clase para que la pre-asignacion de params encaje con los
-    // valores canonicos.  Escape: VESTA_NO_IR_COALESCE=1 lo desactiva.
+    // no-op, el bytecode emitido tiene menos MOVs.  Se fuerza que cada param
+    // sea el root de su clase para que la pre-asignacion de params encaje con
+    // los valores canonicos.  Escape: VESTA_NO_IR_COALESCE=1 lo desactiva.
     LivenessResult liveness = compute_liveness(fn);
     std::vector<uint32_t> coal_remap;
     {
@@ -6609,7 +6694,8 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
                 // el allocator pre-asigna params por su IrValueId, asi que un
                 // param no puede ser un miembro no-root.
                 for (IrValueId pid : fn.params) {
-                    if (pid == IR_NO_VALUE || pid >= coal_remap.size()) continue;
+                    if (pid == IR_NO_VALUE || pid >= coal_remap.size())
+                        continue;
                     IrValueId old_root = coal_remap[pid];
                     if (old_root == pid) continue;
                     for (IrValueId v = 0; v < coal_remap.size(); ++v)
@@ -6685,7 +6771,10 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
             for (size_t i = 0; i < bb.instrs.size() && !force_frame_gc; ++i) {
                 const IrInstr &ins = bb.instrs[i];
                 // (1) Safepoint directo.
-                if (ir::is_gc_safepoint(ins.op)) { force_frame_gc = true; break; }
+                if (ir::is_gc_safepoint(ins.op)) {
+                    force_frame_gc = true;
+                    break;
+                }
                 // (2) Empuje de raiz GC register-held a traves de un CALL.
                 switch (ins.op) {
                 case IrOp::CALL:
@@ -6702,7 +6791,10 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
                         ir::safepoint_gc_roots(fn, liveness, pos, ins.dst);
                     for (IrValueId vid : roots) {
                         if (alloc.spilled(vid)) continue; // spill: no push
-                        if (alloc.in_reg(vid)) { force_frame_gc = true; break; }
+                        if (alloc.in_reg(vid)) {
+                            force_frame_gc = true;
+                            break;
+                        }
                     }
                     break;
                 }
@@ -6716,7 +6808,8 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
     // Fase 3: asignar el banco ancho (ZMM) a los escalares float residentes.
     // Se computa ANTES de has_frame: si la funcion usa registros callee-saved
     // del banco, necesita frame para guardarlos en el prologo.
-    std::unordered_map<IrValueId, int> zmm_map = compute_zmm_alloc(fn, liveness);
+    std::unordered_map<IrValueId, int> zmm_map =
+        compute_zmm_alloc(fn, liveness);
     std::vector<int> zmm_saved_regs;
     for (const auto &kv : zmm_map)
         zmm_saved_regs.push_back(kv.second);
@@ -6794,8 +6887,8 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
     // spills viven seguros en el area allocada por enter, sin interferir
     // con el caller.
     if (has_frame) {
-        // El frame reserva los slots de spill + un slot de 8 B por cada registro
-        // callee-saved del banco ancho que la funcion usa.
+        // El frame reserva los slots de spill + un slot de 8 B por cada
+        // registro callee-saved del banco ancho que la funcion usa.
         const uint32_t frame_bytes =
             (alloc.num_spill_slots + ctx.zmm_saved_regs.size()) * 8;
         out.emit(emmit::Mnemonic::ENTER, frame_bytes);
@@ -6841,7 +6934,8 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
                            fn.values[pid].is_gc_object;
         if (is_gc) {
             out << "    gchandle r14, " << reg_name(preg) << "\n";
-            emit_spill_access(out, "r14", alloc.slot_of(pid), /*is_load=*/false);
+            emit_spill_access(out, "r14", alloc.slot_of(pid),
+                              /*is_load=*/false);
         } else {
             emit_spill_access(out, reg_name(preg), alloc.slot_of(pid),
                               /*is_load=*/false);
@@ -6863,11 +6957,9 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
         for (const IrBlock &bb : fn.blocks) {
             for (const IrInstr &in : bb.instrs) {
                 for (IrValueId op : in.operands)
-                    if (op != IR_NO_VALUE)
-                        use_count[op]++;
+                    if (op != IR_NO_VALUE) use_count[op]++;
                 for (const auto &pa : in.phi_args)
-                    if (pa.value != IR_NO_VALUE)
-                        use_count[pa.value]++;
+                    if (pa.value != IR_NO_VALUE) use_count[pa.value]++;
             }
         }
         for (const IrBlock &bb : fn.blocks) {
@@ -6880,8 +6972,7 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
                     addr = in.operands[1];
                 else
                     continue;
-                if (addr == IR_NO_VALUE)
-                    continue;
+                if (addr == IR_NO_VALUE) continue;
                 // El ADD debe ser la instruccion inmediatamente anterior y
                 // definir precisamente la direccion del load/store.
                 const IrInstr &prev = bb.instrs[i - 1];
@@ -6891,21 +6982,20 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
                 // addr single-use (solo este load/store): si no, no podemos
                 // eliminar el add.
                 auto uc = use_count.find(addr);
-                if (uc == use_count.end() || uc->second != 1)
-                    continue;
+                if (uc == use_count.end() || uc->second != 1) continue;
                 const IrValueId base = prev.operands[0];
                 const IrValueId off = prev.operands[1];
                 if (base >= fn.values.size() || off >= fn.values.size())
                     continue;
-                // La base debe estar en un registro (no derramada); si estuviera
-                // derramada el path normal ya la carga y no ganamos nada.
+                // La base debe estar en un registro (no derramada); si
+                // estuviera derramada el path normal ya la carga y no ganamos
+                // nada.
                 if (!alloc.in_reg(base)) continue;
 
                 if (fn.values[off].is_const) {
                     //   offset constante -> [base + disp].
                     const int64_t d = (int64_t)fn.values[off].const_val;
-                    if (d < -32768 || d > 32767)
-                        continue;
+                    if (d < -32768 || d > 32767) continue;
                     ctx.addr_fusion[&in] = {base, IR_NO_VALUE, (int32_t)d, 0};
                     ctx.fused_skip.insert(&prev);
                     continue;
@@ -6913,10 +7003,10 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
 
                 //   offset en registro -> [base + index<<scale].  El index
                 // (off) esta vivo en i-1 (lo usa el add) y, por adyacencia, su
-                // registro sigue intacto en i (el mld).  Ademas, si off viene de
-                // un `mul idx, pow2` single-use INMEDIATAMENTE anterior al add
-                // (mul en i-2 tras el sink), se pliega el mul en el `scale` del
-                // mld (idx<<shift), eliminando tambien el mul.
+                // registro sigue intacto en i (el mld).  Ademas, si off viene
+                // de un `mul idx, pow2` single-use INMEDIATAMENTE anterior al
+                // add (mul en i-2 tras el sink), se pliega el mul en el `scale`
+                // del mld (idx<<shift), eliminando tambien el mul.
                 IrValueId index = off;
                 uint8_t scale = 0;
                 bool folded_mul = false;
@@ -6934,8 +7024,7 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
                                 for (uint64_t t = k; t > 1; t >>= 1)
                                     ++sh;
                                 const IrValueId mi = mul.operands[0];
-                                if (mi < fn.values.size() &&
-                                    alloc.in_reg(mi)) {
+                                if (mi < fn.values.size() && alloc.in_reg(mi)) {
                                     index = mi;
                                     scale = sh;
                                     folded_mul = true;
@@ -7054,11 +7143,9 @@ static void interp_sink_addr_adds(IrFunction &fn) {
     for (auto &bb : fn.blocks) {
         for (auto &in : bb.instrs) {
             for (IrValueId op : in.operands)
-                if (op != IR_NO_VALUE)
-                    use_count[op]++;
+                if (op != IR_NO_VALUE) use_count[op]++;
             for (auto &pa : in.phi_args)
-                if (pa.value != IR_NO_VALUE)
-                    use_count[pa.value]++;
+                if (pa.value != IR_NO_VALUE) use_count[pa.value]++;
         }
     }
     for (auto &bb : fn.blocks) {
@@ -7068,26 +7155,23 @@ static void interp_sink_addr_adds(IrFunction &fn) {
         std::unordered_map<IrValueId, size_t> add_at, mul_at;
         for (size_t j = 0; j < bb.instrs.size(); ++j) {
             const IrInstr &in = bb.instrs[j];
-            if (in.dst == IR_NO_VALUE || in.operands.size() < 2)
-                continue;
+            if (in.dst == IR_NO_VALUE || in.operands.size() < 2) continue;
             auto uc = use_count.find(in.dst);
-            if (uc == use_count.end() || uc->second != 1)
-                continue;
+            if (uc == use_count.end() || uc->second != 1) continue;
             if (in.op == IrOp::ADD) {
                 add_at[in.dst] = j;
             } else if (in.op == IrOp::MUL) {
                 const IrValueId sc = in.operands[1];
                 if (sc < fn.values.size() && fn.values[sc].is_const) {
                     const uint64_t k = fn.values[sc].const_val;
-                    if (k && (k & (k - 1)) == 0 && k <= 128)
-                        mul_at[in.dst] = j;
+                    if (k && (k & (k - 1)) == 0 && k <= 128) mul_at[in.dst] = j;
                 }
             }
         }
-        if (add_at.empty())
-            continue;
+        if (add_at.empty()) continue;
         // sink_chain[idx_ls] = [ (mul_idx opcional), add_idx ] a insertar justo
-        // antes del load/store.  to_remove = instrucciones a quitar de su sitio.
+        // antes del load/store.  to_remove = instrucciones a quitar de su
+        // sitio.
         std::unordered_map<size_t, std::vector<size_t>> sink_chain;
         std::unordered_set<size_t> to_remove;
         for (size_t j = 0; j < bb.instrs.size(); ++j) {
@@ -7100,8 +7184,7 @@ static void interp_sink_addr_adds(IrFunction &fn) {
             else
                 continue;
             auto ia = add_at.find(addr);
-            if (ia == add_at.end() || ia->second >= j)
-                continue;
+            if (ia == add_at.end() || ia->second >= j) continue;
             std::vector<size_t> chain;
             size_t mul_idx = static_cast<size_t>(-1);
             // Mul opcional que produce el offset del add (patron array[i]).
@@ -7116,21 +7199,18 @@ static void interp_sink_addr_adds(IrFunction &fn) {
             const bool adjacent =
                 (ia->second == j - 1) &&
                 (mul_idx == static_cast<size_t>(-1) || mul_idx == j - 2);
-            if (adjacent)
-                continue;
+            if (adjacent) continue;
             sink_chain[j] = std::move(chain);
             for (size_t idx : sink_chain[j])
                 to_remove.insert(idx);
         }
-        if (sink_chain.empty())
-            continue;
+        if (sink_chain.empty()) continue;
         // Reconstruir: saltar las instrucciones hundidas en su sitio original;
         // antes de cada load/store objetivo, insertar su cadena (en orden).
         std::vector<IrInstr> rebuilt;
         rebuilt.reserve(bb.instrs.size());
         for (size_t j = 0; j < bb.instrs.size(); ++j) {
-            if (to_remove.count(j))
-                continue;
+            if (to_remove.count(j)) continue;
             auto sc = sink_chain.find(j);
             if (sc != sink_chain.end())
                 for (size_t idx : sc->second)
@@ -7154,9 +7234,9 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
 
     /* ASA observa ANTES de optimizar.  Es el punto por el que pasan de verdad
      * todas las rutas -- el emisor trabaja sobre una copia --, y es otra verdad
-     * del programa, no una peor: medido, la escalarizacion se lleva parte de los
-     * agregados antes de que nadie los mire, asi que observar solo despues hace
-     * creer que el programa no los tenia. */
+     * del programa, no una peor: medido, la escalarizacion se lleva parte de
+     * los agregados antes de que nadie los mire, asi que observar solo despues
+     * hace creer que el programa no los tenia. */
     analysis::asa::volcar_formas(mod, "pre-opt");
 
     // Aplicar optimizaciones IR, salvo que quien llama ya las haya aplicado.
@@ -7166,13 +7246,15 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
         if (std::getenv("VESTA_TIMES") != nullptr)
             std::cerr << "[emisor] optimizar (dentro del emisor) "
                       << std::chrono::duration_cast<std::chrono::microseconds>(
-                             std::chrono::steady_clock::now() - t_opt).count()
+                             std::chrono::steady_clock::now() - t_opt)
+                             .count()
                       << " us\n";
     }
 
     // CTPE (opt-in): tras optimizar, ejecuta los candidatos de precomputo en el
-    // ComptimeRuntime dado e inyecta el resultado escalar como CONST.  Solo si el
-    // caller paso un runtime (fase 2 del CTPE); nullptr = comportamiento normal.
+    // ComptimeRuntime dado e inyecta el resultado escalar como CONST.  Solo si
+    // el caller paso un runtime (fase 2 del CTPE); nullptr = comportamiento
+    // normal.
     if (opts.ctpe_runtime) {
         ctpe::fold(mod,
                    *reinterpret_cast<vx::ComptimeRuntime *>(opts.ctpe_runtime));
@@ -7188,8 +7270,7 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
     // su propio reordenamiento con su contexto de ISA).
     if (!interp_fuse_disabled()) {
         for (auto &fn : mod.functions) {
-            if (fn.is_native)
-                continue;
+            if (fn.is_native) continue;
             interp_sink_addr_adds(fn);
         }
     }
@@ -7396,8 +7477,7 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
     if (!mod.native_imports.empty()) {
         out << "@Import {\n";
         for (const auto &ni : mod.native_imports) {
-            if (omit_comptime_bodies && ni.lib == "vesta_comptime")
-                continue;
+            if (omit_comptime_bodies && ni.lib == "vesta_comptime") continue;
             out << "    @Method { @Lib(\"" << ni.lib << "\")"
                 << " @Name(\"" << ni.name << "\") }\n";
         }
@@ -7487,14 +7567,17 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
             // @Virtual: slot con sym_refs (reloc datos->codigo) = una VTABLE.
             // Se emite como `s_N dq @Absolute("code.<sym>"), ...` en orden de
             // offset (rellenando huecos con 0).  El linker parchea cada entrada
-            // con la direccion VM del metodo -> el dispatch dinamico funciona en
-            // interp/.velb (no solo en AOT).  Los sym vienen como <owner>__<m>;
-            // el prefijo "code." los ancla a la seccion de codigo.
+            // con la direccion VM del metodo -> el dispatch dinamico funciona
+            // en interp/.velb (no solo en AOT).  Los sym vienen como
+            // <owner>__<m>; el prefijo "code." los ancla a la seccion de
+            // codigo.
             if (!meta_i.sym_refs.empty()) {
-                // Mapa offset -> simbolo (los sym_refs vienen ordenados, pero no
-                // asumimos).  Todos son width=8 (dq) por construccion de la vtable.
+                // Mapa offset -> simbolo (los sym_refs vienen ordenados, pero
+                // no asumimos).  Todos son width=8 (dq) por construccion de la
+                // vtable.
                 std::map<uint32_t, std::string> at;
-                for (const auto &sr : meta_i.sym_refs) at[sr.offset] = sr.sym;
+                for (const auto &sr : meta_i.sym_refs)
+                    at[sr.offset] = sr.sym;
                 out << "    s_" << i << " dq ";
                 bool first = true;
                 for (uint32_t off = 0; off + 8u <= bn; off += 8u) {

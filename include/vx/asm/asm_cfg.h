@@ -23,13 +23,13 @@
  * los diagramas del CFG en el IDE.
  *
  * La clasificacion del terminador de cada instruccion es POR ISA (x86, arm64,
- * arm32, riscv): que mnemonicos saltan, si es condicional o incondicional, si es
- * un retorno, y cual es la etiqueta destino.  Un salto/llamada INDIRECTO (a
+ * arm32, riscv): que mnemonicos saltan, si es condicional o incondicional, si
+ * es un retorno, y cual es la etiqueta destino.  Un salto/llamada INDIRECTO (a
  * registro/memoria) marca el CFG como impreciso (@c has_indirect) porque el
  * destino no se conoce estaticamente.
  *
- * Es 100% propia (no usa Keystone ni Capstone): reutiliza @c asm_canonical_reg /
- * la tabla de efectos por-arquitectura, y su propio troceo de lineas.
+ * Es 100% propia (no usa Keystone ni Capstone): reutiliza @c asm_canonical_reg
+ * / la tabla de efectos por-arquitectura, y su propio troceo de lineas.
  */
 
 #ifndef VX_ASM_CFG_H
@@ -49,22 +49,23 @@ namespace vx {
 enum class AsmTerm : uint8_t {
     Fallthrough, ///< cae a la siguiente instruccion (sin salto).
     UncondJump,  ///< salto incondicional a una etiqueta (jmp / b / j).
-    CondBranch,  ///< rama condicional: destino + fallthrough (jCC / b.CC / cbz).
-    Call,        ///< llamada: retorna -> fallthrough (call / bl).  No aristas al callee.
-    Ret,         ///< retorno: sin sucesores (ret / iret / bx lr).
-    Indirect,    ///< salto/llamada a registro/memoria: destino desconocido.
-    Unknown      ///< terminador no clasificado (mnemonico de rama desconocido).
+    CondBranch, ///< rama condicional: destino + fallthrough (jCC / b.CC / cbz).
+    Call,       ///< llamada: retorna -> fallthrough (call / bl).  No aristas al
+                ///< callee.
+    Ret,        ///< retorno: sin sucesores (ret / iret / bx lr).
+    Indirect,   ///< salto/llamada a registro/memoria: destino desconocido.
+    Unknown     ///< terminador no clasificado (mnemonico de rama desconocido).
 };
 
 /**
  * @brief Una instruccion del bloque, con las etiquetas que la preceden.
  */
 struct AsmInsn {
-    std::string text;                ///< texto de la instruccion (sin las labels).
-    std::vector<std::string> labels; ///< etiquetas definidas justo antes.
+    std::string text; ///< texto de la instruccion (sin las labels).
+    std::vector<std::string> labels;     ///< etiquetas definidas justo antes.
     AsmTerm term = AsmTerm::Fallthrough; ///< clase de control de flujo.
-    std::string target;              ///< etiqueta destino (si UncondJump/CondBranch).
-    uint32_t line_no = 0;            ///< indice de linea fisica (para reportes).
+    std::string target;   ///< etiqueta destino (si UncondJump/CondBranch).
+    uint32_t line_no = 0; ///< indice de linea fisica (para reportes).
     /// No estaba en el codigo del usuario: la anadio el constructor del grafo
     /// para representar la SALIDA del bloque.
     ///
@@ -82,11 +83,12 @@ struct AsmInsn {
  *        y una sola salida.
  */
 struct AsmBasicBlock {
-    uint32_t first = 0;  ///< indice de la primera instruccion (en AsmCfg::insns).
-    uint32_t last = 0;   ///< indice de la ultima instruccion (inclusive).
-    std::string label;   ///< etiqueta de entrada del bloque ("" si no tiene).
-    std::vector<uint32_t> succs; ///< bloques sucesores.
-    std::vector<uint32_t> preds; ///< bloques predecesores.
+    uint32_t first =
+        0;             ///< indice de la primera instruccion (en AsmCfg::insns).
+    uint32_t last = 0; ///< indice de la ultima instruccion (inclusive).
+    std::string label; ///< etiqueta de entrada del bloque ("" si no tiene).
+    std::vector<uint32_t> succs;         ///< bloques sucesores.
+    std::vector<uint32_t> preds;         ///< bloques predecesores.
     AsmTerm term = AsmTerm::Fallthrough; ///< terminador del bloque.
 };
 
@@ -94,11 +96,14 @@ struct AsmBasicBlock {
  * @brief Grafo de flujo de control completo de un bloque de asm.
  */
 struct AsmCfg {
-    std::vector<AsmInsn> insns;       ///< instrucciones en orden textual.
-    std::vector<AsmBasicBlock> blocks;///< bloques basicos.
-    std::vector<std::string> unknown_terminators; ///< mnemonicos de rama sin clasificar.
-    bool has_indirect = false;        ///< algun salto/llamada indirecto -> CFG impreciso.
-    bool has_unresolved_target = false; ///< salto a etiqueta no definida en el bloque.
+    std::vector<AsmInsn> insns;        ///< instrucciones en orden textual.
+    std::vector<AsmBasicBlock> blocks; ///< bloques basicos.
+    std::vector<std::string>
+        unknown_terminators; ///< mnemonicos de rama sin clasificar.
+    bool has_indirect =
+        false; ///< algun salto/llamada indirecto -> CFG impreciso.
+    bool has_unresolved_target =
+        false; ///< salto a etiqueta no definida en el bloque.
 };
 
 /**

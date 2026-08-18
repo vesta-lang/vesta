@@ -98,8 +98,7 @@ static std::string canonical_typename_of(const Type &t) {
     case PrimitiveKind::PTR:
         if (t.pointee) {
             const std::string inner = canonical_typename_of(*t.pointee);
-            return t.is_virtual ? ("VirtualPtr<" + inner + ">")
-                                : (inner + "*");
+            return t.is_virtual ? ("VirtualPtr<" + inner + ">") : (inner + "*");
         }
         break;
     case PrimitiveKind::OPTIONAL:
@@ -126,9 +125,10 @@ static std::string canonical_typename_of(const Type &t) {
     case PrimitiveKind::FUNCTION: {
         // cfn (puntero a funcion crudo, 8 bytes) vs fn (lambda/fat pointer, 16
         // bytes) SOLO difieren en `fn_is_raw`.  Sin serializarlo, un typedef
-        // `cfn(...)` importado de otro modulo se leia como `fn(...)` -> el campo
-        // que lo usa se dimensionaba a 16 bytes y su default se promovia a
-        // lambda -> el CALLIND llamaba al slot en vez de a la funcion (crash).
+        // `cfn(...)` importado de otro modulo se leia como `fn(...)` -> el
+        // campo que lo usa se dimensionaba a 16 bytes y su default se promovia
+        // a lambda -> el CALLIND llamaba al slot en vez de a la funcion
+        // (crash).
         std::string s = t.fn_is_raw ? "cfn(" : "fn(";
         for (size_t i = 0; i < t.fn_params.size(); ++i) {
             if (i) s += ", ";
@@ -138,8 +138,7 @@ static std::string canonical_typename_of(const Type &t) {
         s += t.pointee ? canonical_typename_of(*t.pointee) : "void";
         return s;
     }
-    default:
-        break;
+    default: break;
     }
     // type_to_string ya produce un nombre canonico legible.  Por ejemplo:
     //   i32, u64*, Optional<i32>, Result<i32, string>, fn(i32) -> i64,
@@ -232,10 +231,10 @@ Type TypeChecker::resolve_type_string(const std::string &type_str) const {
     // newtype -- de cualquier modulo -- son == entre si sin importar el
     // typedef).  El `#` no aparece en ningun otro typename canonico.
     if (type_str.find('#') != std::string::npos &&
-        type_str.substr(0, type_str.find('#'))
-                .find_first_of("<([*") == std::string::npos &&
-        type_str.substr(type_str.find('#') + 1)
-                .find_first_of("<>([*], \t") == std::string::npos) {
+        type_str.substr(0, type_str.find('#')).find_first_of("<([*") ==
+            std::string::npos &&
+        type_str.substr(type_str.find('#') + 1).find_first_of("<>([*], \t") ==
+            std::string::npos) {
         // Solo un newtype de TOP-LEVEL, y con AMBOS lados del '#' simples:
         //   - Antes del '#': un identificador.  Si lleva '<'/'('/'*'/'[' el
         //     newtype esta ANIDADO en un compuesto (`Optional<fiber#u64>`) y
@@ -277,9 +276,9 @@ Type TypeChecker::resolve_type_string(const std::string &type_str) const {
         return u;
     }
 
-    // Tipo funcion (`cfn(...) -> T` / `fn(...) -> T`): NO stripear el '*' final.
-    // Si el retorno es un puntero (`cfn(i64) -> u8*`), ese '*' pertenece al
-    // RETORNO, no al tipo entero: tratarlo como sufijo daba "puntero a
+    // Tipo funcion (`cfn(...) -> T` / `fn(...) -> T`): NO stripear el '*'
+    // final. Si el retorno es un puntero (`cfn(i64) -> u8*`), ese '*' pertenece
+    // al RETORNO, no al tipo entero: tratarlo como sufijo daba "puntero a
     // cfn(i64) -> u8", el typedef importado quedaba en void y el campo que lo
     // usaba dejaba de ser invocable cross-module.
     const bool is_fn_typename =
@@ -433,8 +432,8 @@ Type TypeChecker::resolve_type_string(const std::string &type_str) const {
                             params.push_back(resolve_type_string(p));
                     }
                     Type ret = resolve_type_string(ret_str);
-                    Type fn = Type::make_function(std::move(params),
-                                                  std::move(ret));
+                    Type fn =
+                        Type::make_function(std::move(params), std::move(ret));
                     fn.fn_is_raw = is_raw; // cfn -> raw (8 bytes)
                     return fn;
                 }
@@ -580,8 +579,9 @@ TypeChecker::register_imported_namespace(const std::string &local_name,
     pending_imported_ns_names_.push_back({local_name, idx});
     ns_idx_by_local_name_[local_name] = idx;
 
-    // NS short-form: si el nombre es multi-segmento (`org.geo.shapes`), registrar
-    // tambien su ULTIMO segmento (`shapes`) como alias, para poder acceder por el
+    // NS short-form: si el nombre es multi-segmento (`org.geo.shapes`),
+    // registrar tambien su ULTIMO segmento (`shapes`) como alias, para poder
+    // acceder por el
     // (`shapes.area()`) ademas del path completo -- SOLO cuando sea UNICO.
     const size_t dot = local_name.rfind('.');
     if (dot != std::string::npos) {
@@ -604,9 +604,9 @@ TypeChecker::register_imported_namespace(const std::string &local_name,
                 // NO declaramos un Symbol::Namespace global para el alias corto
                 // (eso sombrearia una funcion/variable homonima -- p.ej. un
                 // namespace `x.fiber_swapctx` cuyo ultimo segmento coincide con
-                // la funcion `fiber_swapctx`).  El alias vive solo en los mapas;
-                // la base de un `alias.Symbol` lo resuelve como FALLBACK cuando
-                // el nombre no es ya otro simbolo.
+                // la funcion `fiber_swapctx`).  El alias vive solo en los
+                // mapas; la base de un `alias.Symbol` lo resuelve como FALLBACK
+                // cuando el nombre no es ya otro simbolo.
                 ns_short_alias_[last] = idx;
                 ns_idx_by_local_name_[last] = idx;
             }
@@ -670,8 +670,8 @@ namespace vx {
 // export: TypeChecker -> VxiModule.
 // ---------------------------------------------------------------------------
 void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
-                                VxiModule &out,
-                                const std::string &strip_prefix) {
+                               VxiModule &out,
+                               const std::string &strip_prefix) {
     out.source_hash = source_hash;
     out.symbols.clear();
     // Reserva pesimista: cubrir todos los simbolos conocidos en una sola
@@ -878,10 +878,11 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         s.super_class = layout.super_name;
         // Metodos del struct: incluye los HEREDADOS ya aplanados por el flatten
         // de la herencia (con Self resuelto al derivado) y los operadores.  Sin
-        // esto, un `struct` con metodos importado cross-module no exponia NINGUN
-        // metodo (ni propios, ni heredados, ni __op__).  El dispatch de metodos
-        // de struct es ESTATICO (value-type) -> el mangled_label lleva el nombre
-        // real de la free-function en el .velb (`<mangled_struct>__<metodo>`).
+        // esto, un `struct` con metodos importado cross-module no exponia
+        // NINGUN metodo (ni propios, ni heredados, ni __op__).  El dispatch de
+        // metodos de struct es ESTATICO (value-type) -> el mangled_label lleva
+        // el nombre real de la free-function en el .velb
+        // (`<mangled_struct>__<metodo>`).
         s.methods.reserve(layout.methods.size());
         for (const auto &m : layout.methods) {
             VxiSymbol::MethodInfo mi;
@@ -1039,8 +1040,9 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         const std::string &fname = kv.first;
         const FunctionSig *sig = tc.function_sig_by_name(fname);
         if (getenv("VX_DBG_VXI") && fname.find("invoke") != std::string::npos)
-            fprintf(stderr, "[vxi-fn] fname=%s sig=%p strip='%s' in_ns=%d "
-                            "pub=%d\n",
+            fprintf(stderr,
+                    "[vxi-fn] fname=%s sig=%p strip='%s' in_ns=%d "
+                    "pub=%d\n",
                     fname.c_str(), (void *)sig, strip_prefix.c_str(),
                     (int)(tc.declared_ns_symbols().count(fname)),
                     (int)tc.is_function_public(fname));
@@ -1115,7 +1117,8 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         s.kind = VxiSymbolKind::FUNCTION;
         s.name = public_name;
         s.mangled_label = mangled_label;
-        s.ns_path = ns_path_for_sym; // NS.2: namespace declarado (vacio si none)
+        s.ns_path =
+            ns_path_for_sym; // NS.2: namespace declarado (vacio si none)
         s.return_type = canonical_typename_of(sig->return_type);
         s.is_extern = !sig->extern_lib.empty();
         s.extern_lib = sig->extern_lib;
@@ -1130,8 +1133,8 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         }
         s.param_names.assign(sig->param_types.size(), std::string());
         // ABI custom por-param (`register("rax")`): imprescindible para que un
-        // CALLIND cross-modulo a traves de un campo cuyo default es esta funcion
-        // coloque los args en los registros correctos.
+        // CALLIND cross-modulo a traves de un campo cuyo default es esta
+        // funcion coloque los args en los registros correctos.
         s.param_abi_regs = sig->param_abi_regs;
         out.symbols.push_back(std::move(s));
     }
@@ -1396,24 +1399,29 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         if (!is_ext && !is_impl) continue;
         std::string target_src;
         if (is_ext)
-            target_src =
-                static_cast<const ast::ExtensionDecl *>(decl.get())->target_type;
+            target_src = static_cast<const ast::ExtensionDecl *>(decl.get())
+                             ->target_type;
         else
             target_src =
                 static_cast<const ast::ImplDecl *>(decl.get())->target_type;
-        // Resolver la clave del layout (directo / mangled / resolve_type_string).
+        // Resolver la clave del layout (directo / mangled /
+        // resolve_type_string).
         std::string key;
         bool is_class = false;
         const std::vector<ClassMethodInfo> *layout_methods = nullptr;
         auto set_key = [&](const std::string &k) -> bool {
             auto sit = tc.struct_layouts().find(k);
             if (sit != tc.struct_layouts().end()) {
-                key = k; is_class = false; layout_methods = &sit->second.methods;
+                key = k;
+                is_class = false;
+                layout_methods = &sit->second.methods;
                 return true;
             }
             auto cit = tc.class_layouts().find(k);
             if (cit != tc.class_layouts().end()) {
-                key = k; is_class = true; layout_methods = &cit->second.methods;
+                key = k;
+                is_class = true;
+                layout_methods = &cit->second.methods;
                 return true;
             }
             return false;
@@ -1452,17 +1460,16 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
 // ---------------------------------------------------------------------------
 void inject_generic_templates_from_vxi(
     TypeChecker &tc, const VxiModule &mod,
-    const std::unordered_set<std::string> &wanted,
-    const std::string &ns_prefix,
+    const std::unordered_set<std::string> &wanted, const std::string &ns_prefix,
     const std::unordered_set<std::string> &alias_unqualified) {
     if (mod.generic_templates.empty()) return;
 
     // Dedup a nivel de (modulo + namespace): un modulo importado dos veces
     // bajo el mismo prefijo no se re-inyecta.  La clave usa el nombre del
     // primer template + ns para identificar el conjunto.
-    const std::string dedup_key =
-        "__modtpl__" + ns_prefix + "|" + mod.generic_templates.front().name +
-        "@" + std::to_string(mod.generic_templates.size());
+    const std::string dedup_key = "__modtpl__" + ns_prefix + "|" +
+                                  mod.generic_templates.front().name + "@" +
+                                  std::to_string(mod.generic_templates.size());
     if (tc.has_injected_template(dedup_key)) return;
     tc.mark_injected_template(dedup_key);
 
@@ -1496,15 +1503,18 @@ void inject_generic_templates_from_vxi(
     }
     // Las plantillas comptime/macro se inyectan TODAS (wanted vacio) y se
     // type-checkean; si su firma referencia un typedef transparente del modulo
-    // (WORD -> u16) que NO fue importado por `only`, el checker no lo resolveria
-    // (-> void).  Registrar aqui los alias transparentes del modulo (idempotente)
-    // para que esas firmas resuelvan.  Son alias a primitivos: inocuos.
+    // (WORD -> u16) que NO fue importado por `only`, el checker no lo
+    // resolveria
+    // (-> void).  Registrar aqui los alias transparentes del modulo
+    // (idempotente) para que esas firmas resuelvan.  Son alias a primitivos:
+    // inocuos.
     for (const auto &sym : mod.symbols) {
         if (sym.kind != VxiSymbolKind::TYPEDEF_ALIAS) continue;
         Type u = tc.resolve_type_string(sym.underlying_type);
         if (u.kind == PrimitiveKind::VOID && sym.underlying_type != "void")
-            continue;  // underlying no resoluble aun; skip.
-        // emplace es idempotente: no pisa un alias ya registrado (local o import).
+            continue; // underlying no resoluble aun; skip.
+        // emplace es idempotente: no pisa un alias ya registrado (local o
+        // import).
         tc.register_imported_type_alias(sym.name, std::move(u));
     }
     auto parsed = parser.parse_program();
@@ -1635,10 +1645,11 @@ void inject_generic_templates_from_vxi(
         if (!decl) continue;
         // Cross-module comptime/macro: marcar las fns comptime/macro
         // re-parseadas como IMPORTADAS para que el importer NO las re-baje a IR
-        // (el dep ya baja `__macro_<X>` + helpers force-lowered, que el importer
-        // mergea).  Re-bajar aqui produce un `code.<helper>` colgante por el
-        // mangling incoherente del cuerpo re-parseado.  El importer solo las
-        // AST-evalua al invocarlas.  Ver ast::FunctionDecl::is_imported_comptime.
+        // (el dep ya baja `__macro_<X>` + helpers force-lowered, que el
+        // importer mergea).  Re-bajar aqui produce un `code.<helper>` colgante
+        // por el mangling incoherente del cuerpo re-parseado.  El importer solo
+        // las AST-evalua al invocarlas.  Ver
+        // ast::FunctionDecl::is_imported_comptime.
         if (decl->kind == ast::NodeKind::FunctionDecl) {
             auto *ifd = static_cast<ast::FunctionDecl *>(decl.get());
             if (ifd->is_comptime || ifd->is_macro)
@@ -1672,8 +1683,7 @@ void inject_generic_templates_from_vxi(
                 tc.register_imported_namespace(tpl_ns, tpl_ns);
             TypeChecker::ImportedNamespace::Sym nsym;
             nsym.mangled_label = mangled_full;
-            nsym.kind =
-                (decl->kind == ast::NodeKind::FunctionDecl) ? 0 : 2;
+            nsym.kind = (decl->kind == ast::NodeKind::FunctionDecl) ? 0 : 2;
             tc.register_namespace_symbol(tns_idx, nm, std::move(nsym));
         } else if (!ns_prefix.empty() && !nm.empty()) {
             set_decl_name(decl.get(), ns_prefix + "." + nm);
@@ -1763,7 +1773,6 @@ static EnumLayout enum_layout_from_vxi_(TypeChecker &tc, const VxiSymbol &s,
     return L;
 }
 
-
 // ---------------------------------------------------------------------------
 // import: VxiModule -> TypeChecker (inyeccion selectiva via only_symbols).
 //
@@ -1806,10 +1815,8 @@ void import_vxi_into_typechecker(
         case VxiSymbolKind::TYPEDEF_NEW:
         case VxiSymbolKind::STRUCT:
         case VxiSymbolKind::CLASS:
-        case VxiSymbolKind::ENUM:
-            return true;
-        default:
-            return false;
+        case VxiSymbolKind::ENUM: return true;
+        default: return false;
         }
     };
     std::vector<const TypeChecker::VxiOnlyEntry *> ordered;
@@ -1820,12 +1827,13 @@ void import_vxi_into_typechecker(
         if (!is_type_sym(os)) ordered.push_back(&os);
 
     // Mapa nombre-de-tipo-en-el-ORIGEN -> local_name.  El .vxi serializa los
-    // param_types/return_type de los metodos con el nombre CANONICO (mangled con
-    // su namespace, p.ej. "std__wideint__u128") del modulo origen, pero el
+    // param_types/return_type de los metodos con el nombre CANONICO (mangled
+    // con su namespace, p.ej. "std__wideint__u128") del modulo origen, pero el
     // consumidor registra cada tipo con su local_name (p.ej. "u128").  Sin
-    // traducir, `types_assignable` compararia "std__wideint__u128" contra "u128"
-    // y fallaria -> un metodo u operador con parametros del propio modulo no
-    // resolveria cross-module (`a / b` con a,b:u128 daba "u128 no declara /").
+    // traducir, `types_assignable` compararia "std__wideint__u128" contra
+    // "u128" y fallaria -> un metodo u operador con parametros del propio
+    // modulo no resolveria cross-module (`a / b` con a,b:u128 daba "u128 no
+    // declara /").
     std::unordered_map<std::string, Type> origin_to_local;
     for (const auto *os_ptr : ordered) {
         auto it = by_name.find(os_ptr->name);
@@ -1833,10 +1841,8 @@ void import_vxi_into_typechecker(
         const VxiSymbol &s = mod.symbols[it->second];
         switch (s.kind) {
         case VxiSymbolKind::STRUCT:
-        case VxiSymbolKind::CLASS:
-            break;
-        default:
-            continue;
+        case VxiSymbolKind::CLASS: break;
+        default: continue;
         }
         const std::string local =
             os_ptr->rename.empty() ? os_ptr->name : os_ptr->rename;
@@ -1844,19 +1850,19 @@ void import_vxi_into_typechecker(
         // `namespace` declarado la clave es `<modulo>__<nombre>`.
         std::string mangled;
         {
-            mangled = s.ns_path.empty()
-                          ? qualify_once_(module_name, s.name)
-                          : qualify_once_(s.ns_path, s.name);
+            mangled = s.ns_path.empty() ? qualify_once_(module_name, s.name)
+                                        : qualify_once_(s.ns_path, s.name);
         }
-        // Type base local ya construido: se usa DIRECTO (sin resolve_type_string)
-        // porque el struct que porta el metodo todavia no esta registrado cuando
-        // se resuelven sus propios param_types (self-reference: `a / b` con
-        // a,b:u128 -> __div__(u128)).  Solo STRUCT/CLASS por valor (los tipos por
-        // los que se cruzan los operadores); ENUM/typedef caen a resolve_type_string.
-        // Bug M: el Type base lleva la identidad CANONICA (la misma que
-        // `L.name` del layout), no el nombre local: si no, el tipo de retorno
-        // de un metodo importado (`u128.from_u64() -> u128`) quedaba con una
-        // identidad distinta a la del tipo declarado por el consumer.
+        // Type base local ya construido: se usa DIRECTO (sin
+        // resolve_type_string) porque el struct que porta el metodo todavia no
+        // esta registrado cuando se resuelven sus propios param_types
+        // (self-reference: `a / b` con a,b:u128 -> __div__(u128)).  Solo
+        // STRUCT/CLASS por valor (los tipos por los que se cruzan los
+        // operadores); ENUM/typedef caen a resolve_type_string. Bug M: el Type
+        // base lleva la identidad CANONICA (la misma que `L.name` del layout),
+        // no el nombre local: si no, el tipo de retorno de un metodo importado
+        // (`u128.from_u64() -> u128`) quedaba con una identidad distinta a la
+        // del tipo declarado por el consumer.
         Type base;
         if (s.kind == VxiSymbolKind::STRUCT)
             base = Type{PrimitiveKind::STRUCT, mangled};
@@ -1872,10 +1878,10 @@ void import_vxi_into_typechecker(
     // (primitivos, punteros, tipos externos) delega en resolve_type_string.
     auto resolve_imported = [&](const std::string &ts_in) -> Type {
         // Strip de sufijos de puntero: `std__chan__Chan*` -> resolver el base
-        // `std__chan__Chan` via origin_to_local (al Type LOCAL `Chan`) y re-aplicar
-        // el puntero.  Sin esto, un param `f(Chan* c)` de una funcion libre
-        // importada no unificaba con un `Chan*` del consumidor (el base quedaba
-        // como el struct MANGLED std__chan__Chan).
+        // `std__chan__Chan` via origin_to_local (al Type LOCAL `Chan`) y
+        // re-aplicar el puntero.  Sin esto, un param `f(Chan* c)` de una
+        // funcion libre importada no unificaba con un `Chan*` del consumidor
+        // (el base quedaba como el struct MANGLED std__chan__Chan).
         std::string ts = ts_in;
         int nptr = 0;
         while (!ts.empty() && ts.back() == '*') {
@@ -1912,8 +1918,8 @@ void import_vxi_into_typechecker(
         //
         // Bug M: registrar los tipos bajo `local_name` creaba un SEGUNDO layout
         // para el mismo tipo (uno por `only T`, otro por el re-export
-        // namespaced).  Dos claves = dos identidades: un valor construido por el
-        // llamante no unificaba con el parametro de una funcion importada de
+        // namespaced).  Dos claves = dos identidades: un valor construido por
+        // el llamante no unificaba con el parametro de una funcion importada de
         // otro modulo ("tipo (T*) incompatible con parametro (mod__T*)").
         // Se registra bajo la canonica y se ata `local_name` como ALIAS, que es
         // justo lo que TYPEDEF_NEW ya hace via stable_nominal_id.
@@ -1972,8 +1978,9 @@ void import_vxi_into_typechecker(
                 // `<nombre>#<underlying>` en las firmas del .vxi, y el decoder
                 // deriva el id de ESE nombre: si aqui fuera el local, un modulo
                 // que importa la firma antes que el typedef obtendria
-                // id(FNV"usize") mientras que quien importa el typedef obtendria
-                // id(FNV"std__types__usize") -> dos identidades para un tipo.
+                // id(FNV"usize") mientras que quien importa el typedef
+                // obtendria id(FNV"std__types__usize") -> dos identidades para
+                // un tipo.
                 underlying.nominal_name = canon;
                 underlying.is_opaque = s.is_opaque;
                 underlying.align_override = s.align_override;
@@ -2038,7 +2045,8 @@ void import_vxi_into_typechecker(
             // canonica.  Las firmas serializadas en los .vxi referencian el
             // nombre mangled (`std__types__usize`); si solo estuviera el
             // publico, esa referencia no resolveria al MISMO tipo y un newtype
-            // acabaria con dos identidades ("(usize) incompatible con (usize)").
+            // acabaria con dos identidades ("(usize) incompatible con
+            // (usize)").
             tc.register_imported_type_alias(local_name, underlying);
             if (canon != local_name)
                 tc.register_imported_type_alias(canon, std::move(underlying));
@@ -2067,13 +2075,13 @@ void import_vxi_into_typechecker(
             L.super_name = s.super_class;
             // Metodos del struct importado (propios + heredados aplanados +
             // operadores).  El lowering del consumidor los usa para resolver
-            // `a.metodo(...)` y los operadores (`a / b` -> __div__) cross-module.
+            // `a.metodo(...)` y los operadores (`a / b` -> __div__)
+            // cross-module.
             L.methods.reserve(s.methods.size());
             for (const auto &mi : s.methods) {
                 ClassMethodInfo cmi;
                 cmi.name = mi.name;
-                cmi.return_type =
-                    resolve_imported(mi.return_type);
+                cmi.return_type = resolve_imported(mi.return_type);
                 cmi.vtable_index = mi.vtable_index;
                 cmi.is_static = (mi.flags & 0x01) != 0;
                 cmi.is_constructor = (mi.flags & 0x02) != 0;
@@ -2082,18 +2090,18 @@ void import_vxi_into_typechecker(
                 cmi.link_name = mi.mangled_label;
                 cmi.param_types.reserve(mi.param_types.size());
                 for (const auto &pt : mi.param_types)
-                    cmi.param_types.push_back(
-                        resolve_imported(pt));
+                    cmi.param_types.push_back(resolve_imported(pt));
                 L.methods.push_back(std::move(cmi));
             }
             // Bug M: UNA identidad (`L.name` = canonica) accesible por DOS
             // claves.  Las firmas de los .vxi referencian el tipo por su nombre
             // mangled (`std__ntwindows__PROCESSOR_NUMBER`) y el codigo del
             // consumer por el publico (`PROCESSOR_NUMBER`); con una sola clave,
-            // cual de las dos identidades acababa en la firma dependia del ORDEN
-            // de los imports -> "tipo (T*) incompatible con parametro (mod__T*)"
-            // siendo el mismo tipo.  La resolucion nombre->Type devuelve
-            // `L.name`, no la clave, asi que ambas rutas dan el mismo tipo.
+            // cual de las dos identidades acababa en la firma dependia del
+            // ORDEN de los imports -> "tipo (T*) incompatible con parametro
+            // (mod__T*)" siendo el mismo tipo.  La resolucion nombre->Type
+            // devuelve `L.name`, no la clave, asi que ambas rutas dan el mismo
+            // tipo.
             if (canon != local_name) tc.register_imported_struct(local_name, L);
             tc.register_imported_struct(canon, std::move(L));
             break;
@@ -2128,8 +2136,7 @@ void import_vxi_into_typechecker(
             for (const auto &mi : s.methods) {
                 ClassMethodInfo cmi;
                 cmi.name = mi.name;
-                cmi.return_type =
-                    resolve_imported(mi.return_type);
+                cmi.return_type = resolve_imported(mi.return_type);
                 cmi.vtable_index = mi.vtable_index;
                 cmi.is_static = (mi.flags & 0x01) != 0;
                 cmi.is_constructor = (mi.flags & 0x02) != 0;
@@ -2138,8 +2145,7 @@ void import_vxi_into_typechecker(
                 cmi.link_name = mi.mangled_label;
                 cmi.param_types.reserve(mi.param_types.size());
                 for (const auto &pt : mi.param_types) {
-                    cmi.param_types.push_back(
-                        resolve_imported(pt));
+                    cmi.param_types.push_back(resolve_imported(pt));
                 }
                 L.methods.push_back(std::move(cmi));
             }
@@ -2324,9 +2330,9 @@ void register_namespace_for_import(TypeChecker &tc,
         // Depende de que `ns_path` sobreviva a los re-exports (lo garantiza el
         // registro del origen al importar): sin eso, los nombres ya venian
         // cualificados y volver a prefijarlos daba `ch__top__ch__base__handle`.
-        const std::string mangled_pre =
-            s.ns_path.empty() ? qualify_once_(module_name, s.name)
-                              : qualify_once_(s.ns_path, s.name);
+        const std::string mangled_pre = s.ns_path.empty()
+                                            ? qualify_once_(module_name, s.name)
+                                            : qualify_once_(s.ns_path, s.name);
         switch (s.kind) {
         case VxiSymbolKind::STRUCT: {
             StructLayout L;
@@ -2380,11 +2386,11 @@ void register_namespace_for_import(TypeChecker &tc,
         // `X__Tipo` resuelvan directo, y para que `__new_X__Tipo` coincida.
         std::string ns_mangled_prefix;
         for (char c : s.ns_path)
-            ns_mangled_prefix += (c == '.') ? std::string("__")
-                                            : std::string(1, c);
-        const std::string mangled =
-            s.ns_path.empty() ? (module_name + "__" + s.name)
-                              : (ns_mangled_prefix + "__" + s.name);
+            ns_mangled_prefix +=
+                (c == '.') ? std::string("__") : std::string(1, c);
+        const std::string mangled = s.ns_path.empty()
+                                        ? (module_name + "__" + s.name)
+                                        : (ns_mangled_prefix + "__" + s.name);
         switch (s.kind) {
         case VxiSymbolKind::TYPEDEF_ALIAS:
         case VxiSymbolKind::TYPEDEF_NEW: {
@@ -2560,7 +2566,8 @@ void register_namespace_for_import(TypeChecker &tc,
         sym.kind = 2; // TypeAlias
         sym.mangled_label = mangled;
         // NS.2: si el tipo pertenece a un namespace DECLARADO por el dep,
-        // registrarlo bajo ESE namespace (mylib.MyClass), no bajo el del modulo.
+        // registrarlo bajo ESE namespace (mylib.MyClass), no bajo el del
+        // modulo.
         const uint32_t type_target_ns =
             s.ns_path.empty()
                 ? ns_idx
@@ -2592,7 +2599,8 @@ void register_namespace_for_import(TypeChecker &tc,
             // (`namespace mylib;`), la registramos bajo ESE namespace (mylib)
             // para que el consumidor la vea como `mylib.helper()` (desacoplado
             // del nombre del modulo).  register_imported_namespace dedupea por
-            // nombre, asi que varios simbolos del mismo namespace comparten idx.
+            // nombre, asi que varios simbolos del mismo namespace comparten
+            // idx.
             const uint32_t target_ns =
                 s.ns_path.empty()
                     ? ns_idx

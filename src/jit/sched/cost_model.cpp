@@ -291,7 +291,9 @@ InstrCost generic_cost_for(const MInstr &mi) {
 InstrCost GenericCostModel::cost(const MInstr &mi) const {
     return generic_cost_for(mi);
 }
-int GenericCostModel::port_count() const { return GP_COUNT; }
+int GenericCostModel::port_count() const {
+    return GP_COUNT;
+}
 int GenericCostModel::port_capacity(int group) const {
     return (group >= 0 && group < GP_COUNT) ? kGenPortCap[group] : 1;
 }
@@ -311,10 +313,19 @@ void build_ops(const MInstr &mi, std::vector<idb::ParsedOp> &ops) {
         if (o.kind == MOperandKind::NONE) return;
         idb::ParsedOp p;
         switch (o.kind) {
-        case MOperandKind::MEM: p.kind = idb::OP_MEM; p.width = 0; break;
+        case MOperandKind::MEM:
+            p.kind = idb::OP_MEM;
+            p.width = 0;
+            break;
         case MOperandKind::IMM32:
-        case MOperandKind::IMM64_IDX: p.kind = idb::OP_IMM; p.width = 0; break;
-        case MOperandKind::LABEL: p.kind = idb::OP_RELBR; p.width = 0; break;
+        case MOperandKind::IMM64_IDX:
+            p.kind = idb::OP_IMM;
+            p.width = 0;
+            break;
+        case MOperandKind::LABEL:
+            p.kind = idb::OP_RELBR;
+            p.width = 0;
+            break;
         default: // REG / VREG / REL_RT -> registro
             p.kind = idb::OP_REG;
             p.width = static_cast<uint16_t>(o.width * 8);
@@ -355,7 +366,8 @@ class UarchCostModel final : public SchedCostModel {
         build_ops(mi, ops);
         const int32_t form = idb::match(isa_, mnem, ops);
         if (form < 0) return generic_cost_for(mi);
-        const idb::AsmCost ac = idb::cost(isa_, form, static_cast<uint32_t>(ua_id_));
+        const idb::AsmCost ac =
+            idb::cost(isa_, form, static_cast<uint32_t>(ua_id_));
         if (!ac.found) return generic_cost_for(mi); // la uarch no cronometra
         // Partir de la familia generica (para el fallback de grupos) y
         // sobreescribir con los numeros EXACTOS de la DB.
@@ -375,9 +387,11 @@ class UarchCostModel final : public SchedCostModel {
     }
     int issue_width() const override {
         // El ancho de emision del core ~ suma de capacidades de sus puertos,
-        // acotado a un rango sensato (los cores modernos emiten 4-6 uops/ciclo).
+        // acotado a un rango sensato (los cores modernos emiten 4-6
+        // uops/ciclo).
         int total = 0;
-        for (int g = 0; g < port_count(); ++g) total += port_capacity(g);
+        for (int g = 0; g < port_count(); ++g)
+            total += port_capacity(g);
         if (total < 2) total = 2;
         if (total > 8) total = 8;
         return total;
@@ -423,7 +437,10 @@ void host_cpuid(unsigned leaf, unsigned subleaf, unsigned regs[4]) {
 #if defined(_MSC_VER)
     int r[4];
     __cpuidex(r, static_cast<int>(leaf), static_cast<int>(subleaf));
-    regs[0] = r[0]; regs[1] = r[1]; regs[2] = r[2]; regs[3] = r[3];
+    regs[0] = r[0];
+    regs[1] = r[1];
+    regs[2] = r[2];
+    regs[3] = r[3];
 #else
     __get_cpuid_count(leaf, subleaf, &regs[0], &regs[1], &regs[2], &regs[3]);
 #endif
@@ -445,25 +462,41 @@ std::string host_uarch_x86() {
     const unsigned family =
         base_family + ((base_family == 0xF) ? ext_family : 0);
     const unsigned model =
-        base_model + (((base_family == 0x6) || (base_family == 0xF))
-                          ? (ext_model << 4)
-                          : 0);
+        base_model +
+        (((base_family == 0x6) || (base_family == 0xF)) ? (ext_model << 4) : 0);
 
     const bool intel = std::strcmp(vendor, "GenuineIntel") == 0;
     const bool amd = std::strcmp(vendor, "AuthenticAMD") == 0;
 
     if (intel && family == 0x6) {
         switch (model) {
-        case 0x2A: case 0x2D: return "intel-sandybridge";
-        case 0x3C: case 0x45: case 0x46: case 0x3F: return "intel-haswell";
-        case 0x3D: case 0x47: case 0x4F: case 0x56: return "intel-broadwell";
+        case 0x2A:
+        case 0x2D: return "intel-sandybridge";
+        case 0x3C:
+        case 0x45:
+        case 0x46:
+        case 0x3F: return "intel-haswell";
+        case 0x3D:
+        case 0x47:
+        case 0x4F:
+        case 0x56: return "intel-broadwell";
         case 0x55: return "intel-skylake-x";
-        case 0x4E: case 0x5E: case 0x8E: case 0x9E: case 0xA5: case 0xA6:
-            return "intel-skylake";
-        case 0x7D: case 0x7E: case 0x6A: case 0x6C: return "intel-icelake";
+        case 0x4E:
+        case 0x5E:
+        case 0x8E:
+        case 0x9E:
+        case 0xA5:
+        case 0xA6: return "intel-skylake";
+        case 0x7D:
+        case 0x7E:
+        case 0x6A:
+        case 0x6C: return "intel-icelake";
         case 0xA7: return "intel-rocketlake";
-        case 0x97: case 0x9A: case 0xBF: case 0xB7: case 0xBA:
-            return "intel-alderlake-p";
+        case 0x97:
+        case 0x9A:
+        case 0xBF:
+        case 0xB7:
+        case 0xBA: return "intel-alderlake-p";
         default: return "intel-skylake"; // Intel moderno desconocido
         }
     }
@@ -513,9 +546,8 @@ idb::Isa to_db_isa(SchedIsa isa) {
 
 } // namespace
 
-std::unique_ptr<SchedCostModel> make_cost_model(SchedIsa isa,
-                                                const std::string &cpu,
-                                                SchedMode mode) {
+std::unique_ptr<SchedCostModel>
+make_cost_model(SchedIsa isa, const std::string &cpu, SchedMode mode) {
     const idb::Isa dbi = to_db_isa(isa);
 
     // 1. --cpu explicito: microarquitectura exacta de la DB.
@@ -548,8 +580,12 @@ namespace {
 std::string g_sched_cpu; // --cpu global (fijado por main.cpp)
 } // namespace
 
-void set_sched_cpu(const std::string &cpu) { g_sched_cpu = cpu; }
-const std::string &sched_cpu() { return g_sched_cpu; }
+void set_sched_cpu(const std::string &cpu) {
+    g_sched_cpu = cpu;
+}
+const std::string &sched_cpu() {
+    return g_sched_cpu;
+}
 
 } // namespace sched
 } // namespace jit

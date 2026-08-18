@@ -590,8 +590,8 @@ static const std::unordered_map<std::string, std::vector<InstrInfo>>
         /* --- Lookup inverso ptr -> handle (opcode 0x56) ---
          *  gchandle r_dst, r_src  -> r_dst = GcHandle(host_ptr) o
          * GC_NULL_HANDLE Es el inverso de gcderef.  O(1) via hash map en
-         * GcHeap.  Usado por Vesta synchronized(obj) para obtener el handle desde
-         * el host_ptr.
+         * GcHeap.  Usado por Vesta synchronized(obj) para obtener el handle
+         * desde el host_ptr.
          */
         {"gchandle",
          {{0x00, 0x56, InstrSizeMode::FIXED_4, AddressingMode::REG,
@@ -634,7 +634,8 @@ static const std::unordered_map<std::string, std::vector<InstrInfo>>
          {{0x00, 0x7E, InstrSizeMode::FIXED_4, AddressingMode::REG,
            emit_instr_one_reg}}},
 
-        /* --- Finalizadores GC: gcfinal r_box, kind (FIXED_4, reg + nibble) --- */
+        /* --- Finalizadores GC: gcfinal r_box, kind (FIXED_4, reg + nibble) ---
+         */
         {"gcfinal",
          {{0x00, 0x7F, InstrSizeMode::FIXED_4, AddressingMode::INMED,
            emit_gcfinal}}},
@@ -644,11 +645,13 @@ static const std::unordered_map<std::string, std::vector<InstrInfo>>
          {{0x00, 0x8D, InstrSizeMode::FIXED_4, AddressingMode::REG,
            emit_gcfinalc}}},
 
-        /* --- gccollect (ZERO, FIXED_2): fuerza minor+major GC del proceso --- */
+        /* --- gccollect (ZERO, FIXED_2): fuerza minor+major GC del proceso ---
+         */
         {"gccollect",
          {{0x00, 0x8C, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
 
-        /* --- gcfinall (ZERO, FIXED_2): finaliza todo objeto vivo con recurso */
+        /* --- gcfinall (ZERO, FIXED_2): finaliza todo objeto vivo con recurso
+         */
         {"gcfinall",
          {{0x00, 0x8E, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
 

@@ -91,8 +91,13 @@ static void test_call_two() {
     mf.blocks.push_back(std::move(b));
 
     const TargetRegInfo &tri = target_x86_64_vm_abi();
-    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(build_intervals(mf, tri), mf.vreg_count, tri, false);
-    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::HOST_LEAF);
+    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(
+        build_intervals(mf, tri), mf.vreg_count, tri, false);
+    MFunction pf =
+        rewrite_to_physical(mf,
+                            codegen::build_allocation_result(
+                                ra, nullptr, codegen::AssignmentPlan{}),
+                            tri, AbiKind::HOST_LEAF);
     CodeCache cc;
     uint8_t *code = compile(cc, pf);
     CHECK(code != nullptr, "encode ok (2-arg call)");
@@ -124,8 +129,13 @@ static void test_call_three() {
     mf.blocks.push_back(std::move(b));
 
     const TargetRegInfo &tri = target_x86_64_vm_abi();
-    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(build_intervals(mf, tri), mf.vreg_count, tri, false);
-    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::HOST_LEAF);
+    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(
+        build_intervals(mf, tri), mf.vreg_count, tri, false);
+    MFunction pf =
+        rewrite_to_physical(mf,
+                            codegen::build_allocation_result(
+                                ra, nullptr, codegen::AssignmentPlan{}),
+                            tri, AbiKind::HOST_LEAF);
     CodeCache cc;
     uint8_t *code = compile(cc, pf);
     CHECK(code != nullptr, "encode ok (3-arg call)");

@@ -18,14 +18,14 @@
 
 namespace jit {
 
-CotasDeLosSitios cotas_de_los_sitios(const ir::IrFunction       &fn,
+CotasDeLosSitios cotas_de_los_sitios(const ir::IrFunction &fn,
                                      const analysis::RangeFacts &rangos) {
     CotasDeLosSitios r;
     for (const auto &bb : fn.blocks)
         for (const auto &in : bb.instrs) {
             /* Los sitios donde el conocimiento se puede aprovechar: una llamada
-             * con cuerpo conocido y una reserva, que es una llamada al asignador
-             * escrita como instruccion. */
+             * con cuerpo conocido y una reserva, que es una llamada al
+             * asignador escrita como instruccion. */
             const bool interesa =
                 in.op == ir::IrOp::RAW_ALLOC ||
                 (in.op == ir::IrOp::CALL && !in.func_name.empty());
@@ -40,8 +40,8 @@ CotasDeLosSitios cotas_de_los_sitios(const ir::IrFunction       &fn,
                 este_sitio = true;
                 if (!r.hay) { // la primera es la que sostiene el veredicto
                     r.hay = true;
-                    r.sitio = in.op == ir::IrOp::RAW_ALLOC ? "reserva"
-                                                           : in.func_name;
+                    r.sitio =
+                        in.op == ir::IrOp::RAW_ALLOC ? "reserva" : in.func_name;
                     r.valor = a;
                     r.rango = rg;
                 }

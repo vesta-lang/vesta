@@ -61,7 +61,6 @@ namespace vx {
 std::string comptime_read_vm_string(uint64_t proc_ptr, uint64_t addr,
                                     uint64_t len);
 
-
 /* Pimpl interno -- la VM real se inicializa en MC.3.  En MC.2
  * la clase es solo scaffolding y el puntero queda nullptr. */
 struct ComptimeVmImpl;
@@ -245,19 +244,20 @@ class ComptimeRuntime {
      * tienen presupuesto (responsabilidad del programador).
      */
     struct CtpeBudget {
-        uint32_t millis = 3000;                          ///< tope de tiempo real.
-        uint64_t max_heap_bytes = 512ull * 1024 * 1024;  ///< tope de heap comptime.
+        uint32_t millis = 3000; ///< tope de tiempo real.
+        uint64_t max_heap_bytes =
+            512ull * 1024 * 1024; ///< tope de heap comptime.
     };
 
     /**
      * @brief Invoca una funcion REGULAR (no @Macro) en modo CTPE RESTRINGIDO.
      *
      * A diferencia de @c invoke_simple_macro (sin restriccion, para los @Macro
-     * del lenguaje), este modo aplica el SANDBOX del CTPE: capacidades DENEGADAS
-     * (sin fs/net/ffi/spawn/dlopen/loadmod) + presupuesto (tiempo/heap).  Si la
-     * ejecucion real toca cualquier op no-contenida, el trap del sandbox aborta
-     * limpio.  Registra + eager-compila la funcion on-demand desde el Executable
-     * ya cargado en memoria (cero ficheros).
+     * del lenguaje), este modo aplica el SANDBOX del CTPE: capacidades
+     * DENEGADAS (sin fs/net/ffi/spawn/dlopen/loadmod) + presupuesto
+     * (tiempo/heap).  Si la ejecucion real toca cualquier op no-contenida, el
+     * trap del sandbox aborta limpio.  Registra + eager-compila la funcion
+     * on-demand desde el Executable ya cargado en memoria (cero ficheros).
      *
      * @return @c true si completo dentro del presupuesto sin tocar nada
      *         prohibido (@p out_r0 = R0); @c false si abortó (trap/timeout/oom/
@@ -338,7 +338,8 @@ class ComptimeRuntime {
 
     bool invoke_raw(const std::string &macro_name,
                     const std::vector<uint64_t> &args, size_t n_bytes,
-                    unsigned addr_reg, std::vector<uint8_t> &out_bytes) noexcept;
+                    unsigned addr_reg,
+                    std::vector<uint8_t> &out_bytes) noexcept;
 
     bool invoke_string_macro(const std::string &macro_name,
                              const std::vector<uint64_t> &args,
@@ -367,11 +368,12 @@ class ComptimeRuntime {
      * @brief invoca una funcion @c comptime que devuelve un struct por valor y
      *        copia los @c struct_size bytes del resultado a @c out_bytes.
      *
-     * Una funcion que devuelve un struct por valor lo hace por SRET: el valor no
-     * viaja en un registro; el llamante aloca el buffer del resultado y lo pasa
-     * como primer parametro oculto (un @c host_ptr), y la funcion lo rellena.
-     * Este metodo hace de llamante: aloca @c out_bytes en memoria del proceso
-     * (no en la pila de la funcion, que se libera al retornar), lo antepone a
+     * Una funcion que devuelve un struct por valor lo hace por SRET: el valor
+     * no viaja en un registro; el llamante aloca el buffer del resultado y lo
+     * pasa como primer parametro oculto (un @c host_ptr), y la funcion lo
+     * rellena. Este metodo hace de llamante: aloca @c out_bytes en memoria del
+     * proceso (no en la pila de la funcion, que se libera al retornar), lo
+     * antepone a
      * @c args como ese buffer, ejecuta la funcion en la VM de compile-time y
      * devuelve los bytes escritos.  Como la VM se ejecuta dentro del propio
      * compilador, el puntero al buffer es una direccion valida que la funcion

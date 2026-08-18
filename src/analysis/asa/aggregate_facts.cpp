@@ -7,7 +7,8 @@
 
 /**
  * @file aggregate_facts.cpp
- * @brief Implementacion del dominio de FORMA de un valor (ver aggregate_facts.h).
+ * @brief Implementacion del dominio de FORMA de un valor (ver
+ * aggregate_facts.h).
  *
  * Tres partes en el orden de los tres niveles: se OBSERVA (con contexto), se
  * DERIVA un perfil de uso, y solo al final se PROYECTA.  El recorrido no
@@ -91,13 +92,14 @@ const char *nombre_motivo(MotivoForma m) {
 }
 
 /**
- * @brief Liga cada acceso del propietario al ciclo de vida del valor, si lo esta.
+ * @brief Liga cada acceso del propietario al ciclo de vida del valor, si lo
+ * esta.
  *
  * Se hace al final, cuando ya se ha visto todo: hasta entonces no se sabe que
  * desplazamientos escriben sus operaciones.
  *
- * ESCRIBIR y LEER desde el propietario no son lo mismo, y tratarlos igual era un
- * error medido:
+ * ESCRIBIR y LEER desde el propietario no son lo mismo, y tratarlos igual era
+ * un error medido:
  *
  *   escribir -> CONSTRUIR el valor.  Pertenece a su ciclo de vida siempre, use
  *               o no ese campo la operacion a la que se pasa despues.
@@ -189,10 +191,11 @@ bool AggregateFacts::cerrado(uint32_t universo) const {
 /**
  * @brief Forma vista DESDE un ambito: solo cuenta lo observado ahi dentro.
  *
- * Es lo que impide que una frontera lejana borre una verdad local.  Si el ambito
- * de `mul` esta cerrado y ahi el valor participa como unidad, eso es cierto en
- * `mul` por mucho que el modulo siga abierto por un `callind` de otra funcion.
- * Las dos respuestas son correctas; solo hay que decir desde donde se mira.
+ * Es lo que impide que una frontera lejana borre una verdad local.  Si el
+ * ambito de `mul` esta cerrado y ahi el valor participa como unidad, eso es
+ * cierto en `mul` por mucho que el modulo siga abierto por un `callind` de otra
+ * funcion. Las dos respuestas son correctas; solo hay que decir desde donde se
+ * mira.
  */
 FormaDeValor AggregateFacts::forma_en(uint32_t universo) const {
     if (!cerrado(universo)) return FormaDeValor::SinEvidencia;
@@ -242,8 +245,8 @@ std::vector<AggregateFacts::EfectoAlcance> AggregateFacts::efectos() const {
          * explica por que este no eleva. */
         /* La causa se busca por CONTENCION, no solo en el ambito exacto: un
          * ambito puede estar abierto por una frontera que sale de otro que
-         * contiene, y esa frontera SIGUE SIENDO la razon por la que la verdad no
-         * sube.  Mirar solo el ambito exacto dejaba sin explicar mas de un
+         * contiene, y esa frontera SIGUE SIENDO la razon por la que la verdad
+         * no sube.  Mirar solo el ambito exacto dejaba sin explicar mas de un
          * tercio de los efectos (134 de 366 medidos). */
         auto contenido_en = [&](UniversoId u2, UniversoId ancestro) {
             while (u2 < universos.size()) {
@@ -287,14 +290,15 @@ FormaDeValor AggregateFacts::forma() const {
      * `Agregado` ahi convierte "no lo he visto" en "no lo hay". */
     if (!p.universo_completo) return FormaDeValor::SinEvidencia;
     /* Hay evidencia relevante -- se accede a un componente sin saber a cual --
-     * pero no permite separar interpretaciones.  Eso es `Desconocida`, que no es
-     * lo mismo que no tener evidencia. */
+     * pero no permite separar interpretaciones.  Eso es `Desconocida`, que no
+     * es lo mismo que no tener evidencia. */
     if (p.acceso_dinamico) return FormaDeValor::Desconocida;
-    /* Participar como unidad y que se toquen sus partes NO se contradice: asi es
-     * como se implementa una unidad, y como se construye y se consume.  Lo que
-     * SI son dos interpretaciones incompatibles es que participe como unidad y
-     * ademas se use una parte que ninguna de sus operaciones produce ni consume:
-     * ahi hay dos modos de uso que no se pueden reconciliar, y se calla. */
+    /* Participar como unidad y que se toquen sus partes NO se contradice: asi
+     * es como se implementa una unidad, y como se construye y se consume.  Lo
+     * que SI son dos interpretaciones incompatibles es que participe como
+     * unidad y ademas se use una parte que ninguna de sus operaciones produce
+     * ni consume: ahi hay dos modos de uso que no se pueden reconciliar, y se
+     * calla. */
     if (p.unidad && p.acceso_independiente) return FormaDeValor::Desconocida;
     if (p.unidad) return FormaDeValor::Compuesto;
     if (p.acceso_en_propietario) return FormaDeValor::Agregado;
@@ -336,7 +340,7 @@ constexpr int kProfundidadFrontera = 3;
 /// el analisis de memoria en cada una.
 struct CacheHechos {
     struct Entrada {
-        IrFacts  hechos;
+        IrFacts hechos;
         PointsTo direcciones;
     };
     std::unordered_map<std::string, std::unique_ptr<Entrada>> por_funcion;
@@ -373,20 +377,21 @@ bool es_llamada(IrOp op) {
 
 /// Todo lo observado de un valor mientras se le sigue por el modulo.
 struct Observado {
-    std::vector<AccesoComponente>    accesos;
+    std::vector<AccesoComponente> accesos;
     std::vector<ParticipacionUnidad> participaciones;
-    std::vector<Frontera>              fronteras;
-    std::vector<Limitacion>          limitaciones;
-    std::unordered_set<std::string>  frontera;
-    std::vector<Universo>            universos;
+    std::vector<Frontera> fronteras;
+    std::vector<Limitacion> limitaciones;
+    std::unordered_set<std::string> frontera;
+    std::vector<Universo> universos;
     bool pasado_por_abi = false;
     bool devuelto_entero = false;
     bool transferido_como_bloque = false;
 
     /// Abre un ambito nuevo colgando del actual y devuelve su id.
-    UniversoId abrir_universo(UniversoId padre, const std::string &ambito,
-                              IdentidadUniverso identidad = IdentidadUniverso::Conocido,
-                              EstadoObservacion obs = EstadoObservacion::Observado) {
+    UniversoId
+    abrir_universo(UniversoId padre, const std::string &ambito,
+                   IdentidadUniverso identidad = IdentidadUniverso::Conocido,
+                   EstadoObservacion obs = EstadoObservacion::Observado) {
         Universo u;
         u.id = static_cast<UniversoId>(universos.size());
         u.padre = padre;
@@ -400,14 +405,16 @@ struct Observado {
         universos.push_back(u);
         return u.id;
     }
-    /* Una frontera o un limite abren el ambito DONDE aparecen y todos los que lo
-     * contienen: lo que no se ha visto ahi tampoco se ha visto desde fuera.  Pero
-     * NO abre a los hermanos ni a los hijos ya cerrados: la verdad que ellos
-     * demostraron sigue en pie, y borrarla seria tirar conocimiento calculado. */
+    /* Una frontera o un limite abren el ambito DONDE aparecen y todos los que
+     * lo contienen: lo que no se ha visto ahi tampoco se ha visto desde fuera.
+     * Pero NO abre a los hermanos ni a los hijos ya cerrados: la verdad que
+     * ellos demostraron sigue en pie, y borrarla seria tirar conocimiento
+     * calculado. */
     void abrir_hacia_arriba(uint32_t u) {
         while (true) {
             if (u >= universos.size()) return;
-            if (!universos[u].cerrado) return; // ya abierto: y sus padres tambien
+            if (!universos[u].cerrado)
+                return; // ya abierto: y sus padres tambien
             universos[u].cerrado = false;
             if (u == universos[u].padre) return;
             u = universos[u].padre;
@@ -419,7 +426,8 @@ struct Observado {
     /// el -- y con su identidad, que es otro eje: se puede saber quien esta al
     /// otro lado sin haber mirado dentro.
     void anotar_frontera(CodigoFrontera c, SitioIr s, ir::IrValueId v,
-                  const std::string &destino, IdentidadUniverso identidad) {
+                         const std::string &destino,
+                         IdentidadUniverso identidad) {
         const UniversoId desde = s.universo;
         abrir_hacia_arriba(desde);
         Frontera f;
@@ -470,8 +478,8 @@ void observar(const ir::IrModule &mod, const ir::IrFunction &fn,
             if (acceso_de(in, ptr, escribe)) {
                 const PointsToEntry &e = pt.at(ptr);
                 /* Solo cuenta como componente si la direccion se DERIVA del
-                 * ancla: un `[x + 8]` cualquiera puede ser otra cosa, y quien lo
-                 * sabe es el resolvedor de direcciones. */
+                 * ancla: un `[x + 8]` cualquiera puede ser otra cosa, y quien
+                 * lo sabe es el resolvedor de direcciones. */
                 if (e.root != raiz) continue;
                 AccesoComponente a;
                 a.sitio = sitio;
@@ -489,8 +497,8 @@ void observar(const ir::IrModule &mod, const ir::IrFunction &fn,
                 /* Se guarda el puntero en memoria: al otro lado esta quien lea
                  * ese sitio, y a ese no se le puede ni nombrar. */
                 o.anotar_frontera(CodigoFrontera::DireccionGuardada, sitio,
-                           in.operands[0], "<memoria>",
-                           IdentidadUniverso::Desconocido);
+                                  in.operands[0], "<memoria>",
+                                  IdentidadUniverso::Desconocido);
                 continue;
             }
             if (in.op == IrOp::RET && !in.operands.empty() &&
@@ -528,8 +536,8 @@ void observar(const ir::IrModule &mod, const ir::IrFunction &fn,
                     /* Se llevan una PARTE a otra funcion: el destino SI se
                      * puede nombrar, aunque no se haya mirado dentro. */
                     o.anotar_frontera(CodigoFrontera::ComponenteSeLleva, sitio,
-                               in.operands[a], in.func_name,
-                               IdentidadUniverso::Conocido);
+                                      in.operands[a], in.func_name,
+                                      IdentidadUniverso::Conocido);
                 }
             }
             if (arg < 0) continue;
@@ -555,13 +563,17 @@ void observar(const ir::IrModule &mod, const ir::IrFunction &fn,
             }
             const ir::IrFunction *g = nullptr;
             for (const ir::IrFunction &c : mod.functions)
-                if (c.name == destino) { g = &c; break; }
+                if (c.name == destino) {
+                    g = &c;
+                    break;
+                }
             if (g == nullptr || g->blocks.empty()) {
                 o.limitar(CodigoLimitacion::DestinoNoVisible, sitio, destino);
                 continue;
             }
             if (static_cast<size_t>(arg) >= g->params.size()) {
-                o.limitar(CodigoLimitacion::ParametroFueraDeRango, sitio, destino);
+                o.limitar(CodigoLimitacion::ParametroFueraDeRango, sitio,
+                          destino);
                 continue;
             }
             if (!o.frontera.insert(g->name).second) continue; // ya observada
@@ -570,7 +582,8 @@ void observar(const ir::IrModule &mod, const ir::IrFunction &fn,
              * nada, esta llamada deja de ser "los bytes viajan juntos" y pasa a
              * ser lo unico que sostiene la unidad. */
             /* La operacion es un UNIVERSO propio: dentro puede demostrarse algo
-             * aunque el de fuera siga abierto, y esa verdad local no se tira. */
+             * aunque el de fuera siga abierto, y esa verdad local no se tira.
+             */
             const uint32_t u_op = o.abrir_universo(universo, g->name);
             const CacheHechos::Entrada &e = cache.de(*g);
             observar(mod, *g, e.hechos, e.direcciones, g->params[arg], o,
@@ -623,13 +636,13 @@ AggregateFactsMap observar_con_cache(const ir::IrModule &mod,
         /* Un parametro no se declara en una linea del cuerpo: se declara en la
          * firma.  Se marca cual es (indice+1, para que 0 signifique "no es un
          * parametro") en vez de inventar una linea 0 que parece un error. */
-        a.declaracion = SitioIr{fn.name, 0, 0,
-                                static_cast<uint32_t>(pi + 1), 0};
+        a.declaracion =
+            SitioIr{fn.name, 0, 0, static_cast<uint32_t>(pi + 1), 0};
         a.accesos = std::move(o.accesos);
         ligar_accesos(a.accesos);
         /* Con componentes o sin ellos: un parametro al que solo se accede en el
-         * desplazamiento 0 es un puntero a un escalar, no un valor con partes, y
-         * meterlo aqui ensuciaria el informe sin decir nada. */
+         * desplazamiento 0 es un puntero a un escalar, no un valor con partes,
+         * y meterlo aqui ensuciaria el informe sin decir nada. */
         bool con_componentes = a.offsets_tocados() >= 2;
         for (const AccesoComponente &ac : a.accesos)
             if (ac.offset_sabido && ac.offset > 0) con_componentes = true;
@@ -645,21 +658,20 @@ AggregateFactsMap observar_con_cache(const ir::IrModule &mod,
         a.sello.origen = {Fuente::Estatico, kProductor, fn.name.c_str(), p};
         a.sello.apoyos.anadir("analysis.points_to");
         const FormaDeValor f = a.forma();
-        a.sello.certeza = (f == FormaDeValor::SinEvidencia ||
-                           f == FormaDeValor::Desconocida)
-                              ? Certeza::Desconocida
-                              : (a.perfil().universo_completo
-                                     ? Certeza::Demostrada
-                                     : Certeza::Inferida);
+        a.sello.certeza =
+            (f == FormaDeValor::SinEvidencia || f == FormaDeValor::Desconocida)
+                ? Certeza::Desconocida
+                : (a.perfil().universo_completo ? Certeza::Demostrada
+                                                : Certeza::Inferida);
         out.agregados.push_back(std::move(a));
     }
     for (const ir::IrBlock &b : fn.blocks) {
         for (const ir::IrInstr &in : b.instrs) {
             if (in.op != IrOp::ALLOCA || in.dst == ir::IR_NO_VALUE) continue;
             const RegionExtent &ex = pt.extent_of(in.dst);
-            /* Un valor con componentes necesita SITIO para varios.  Un hueco del
-             * tamano de un escalar es una variable, y meterla aqui ensuciaria la
-             * medida sin anadir un caso real. */
+            /* Un valor con componentes necesita SITIO para varios.  Un hueco
+             * del tamano de un escalar es una variable, y meterla aqui
+             * ensuciaria la medida sin anadir un caso real. */
             if (!ex.constante() || ex.bytes <= 8) continue;
 
             Observado o;
@@ -667,8 +679,8 @@ AggregateFactsMap observar_con_cache(const ir::IrModule &mod,
             observar(mod, fn, facts, pt, in.dst, o, kProfundidadFrontera,
                      RelacionAcceso::EnPropietario, u_raiz, cache);
 
-            /* Sin un solo acceso con desplazamiento conocido no hay evidencia de
-             * componentes: afirmarlo por el tamano seria clasificar por la
+            /* Sin un solo acceso con desplazamiento conocido no hay evidencia
+             * de componentes: afirmarlo por el tamano seria clasificar por la
              * representacion, justo lo que este dominio no hace.
              *
              * Pero eso decide la FORMA, no si el valor se observa: `a.forma()`
@@ -687,9 +699,9 @@ AggregateFactsMap observar_con_cache(const ir::IrModule &mod,
             a.declaracion = SitioIr{fn.name, 0, 0, 0, in.source_line};
             a.declaracion.indice = in.source_column;
             /* El sitio del fuente no siempre es unico: si una funcion se inlina
-             * dos veces en el mismo llamante, la misma linea produce dos valores
-             * distintos.  Con una reserva local normal esto vale "sin sitio de
-             * inlinado" y no cambia nada. */
+             * dos veces en el mismo llamante, la misma linea produce dos
+             * valores distintos.  Con una reserva local normal esto vale "sin
+             * sitio de inlinado" y no cambia nada. */
             a.instancia = in.inline_site;
             a.bytes = ex.bytes;
             a.accesos = std::move(o.accesos);
@@ -708,7 +720,8 @@ AggregateFactsMap observar_con_cache(const ir::IrModule &mod,
             a.sello.origen = {Fuente::Estatico, kProductor, fn.name.c_str(),
                               in.dst};
             a.sello.apoyos.anadir("analysis.points_to");
-            if (!a.frontera.empty()) a.sello.apoyos.anadir("analysis.fn_targets");
+            if (!a.frontera.empty())
+                a.sello.apoyos.anadir("analysis.fn_targets");
 
             /* La certeza depende de si se pudo observar el universo entero.  No
              * de lo ordenados que sean los accesos ni de lo convencido que este
@@ -766,10 +779,10 @@ ObservacionModulo observar_modulo(const ir::IrModule &mod) {
             id.linea = a.declaracion.linea;
             id.indice = a.declaracion.indice;
             id.instancia = a.instancia;
-            /* Varios valores pueden compartir sitio -- un macro expandido varias
-             * veces --, asi que se numeran por orden de aparicion DENTRO de este
-             * estado.  Sirve para distinguirlos aqui, no para emparejarlos con
-             * otro estado. */
+            /* Varios valores pueden compartir sitio -- un macro expandido
+             * varias veces --, asi que se numeran por orden de aparicion DENTRO
+             * de este estado.  Sirve para distinguirlos aqui, no para
+             * emparejarlos con otro estado. */
             id.orden = por_sitio[id]++;
             out.valores.emplace_back(std::move(id), std::move(a));
         }
@@ -777,19 +790,27 @@ ObservacionModulo observar_modulo(const ir::IrModule &mod) {
     return out;
 }
 
-std::vector<TransicionValor> comparar_estados(const ObservacionModulo &antes,
-                                              const ObservacionModulo &despues) {
+std::vector<TransicionValor>
+comparar_estados(const ObservacionModulo &antes,
+                 const ObservacionModulo &despues) {
     std::map<IdentidadValor, FormaDeValor> a_antes, a_despues;
-    for (const auto &p : antes.valores) a_antes[p.first] = p.second.forma();
-    for (const auto &p : despues.valores) a_despues[p.first] = p.second.forma();
+    for (const auto &p : antes.valores)
+        a_antes[p.first] = p.second.forma();
+    for (const auto &p : despues.valores)
+        a_despues[p.first] = p.second.forma();
 
     /* Cuantos valores hay en cada SITIO a cada lado.  Si el numero cambio, el
      * orden de aparicion ya no dice quien es quien: emparejar por posicion
      * describiria cambios que no ocurrieron. */
-    auto sitio_de = [](IdentidadValor i) { i.orden = 0; return i; };
+    auto sitio_de = [](IdentidadValor i) {
+        i.orden = 0;
+        return i;
+    };
     std::map<IdentidadValor, uint32_t> n_antes, n_despues;
-    for (const auto &kv : a_antes) ++n_antes[sitio_de(kv.first)];
-    for (const auto &kv : a_despues) ++n_despues[sitio_de(kv.first)];
+    for (const auto &kv : a_antes)
+        ++n_antes[sitio_de(kv.first)];
+    for (const auto &kv : a_despues)
+        ++n_despues[sitio_de(kv.first)];
     auto emparejable = [&](const IdentidadValor &id) {
         const IdentidadValor s = sitio_de(id);
         auto a = n_antes.find(s);
@@ -838,17 +859,16 @@ std::vector<TransicionValor> comparar_estados(const ObservacionModulo &antes,
 void volcar_formas(const ir::IrModule &mod, const char *momento) {
     if (std::getenv("VESTA_ASA_FORMAS") == nullptr) return;
     /* Cada recorrido es un ESTADO distinto, aunque la etapa se llame igual: el
-     * emisor se invoca varias veces por compilacion y entre una y otra el modulo
-     * cambia.  Sin el contador, dos estados comparten nombre y el mismo valor
-     * aparece con dos formas a la vez. */
+     * emisor se invoca varias veces por compilacion y entre una y otra el
+     * modulo cambia.  Sin el contador, dos estados comparten nombre y el mismo
+     * valor aparece con dos formas a la vez. */
     static uint32_t estado = 0;
     const uint32_t id_estado = estado++;
     /* Un estado se identifica ademas por el MODULO que representa: dos estados
      * de modulos distintos no estan en la misma cadena de transformacion, y
      * comparar hechos entre ellos no compara nada.  Antes de relacionar dos
      * estados hay que demostrar que estan relacionados. */
-    std::fprintf(stderr,
-                 "[forma] estado=%u etapa=%s modulo=%s funciones=%u\n",
+    std::fprintf(stderr, "[forma] estado=%u etapa=%s modulo=%s funciones=%u\n",
                  id_estado, momento,
                  mod.name.empty() ? "<anonimo>" : mod.name.c_str(),
                  static_cast<uint32_t>(mod.functions.size()));
@@ -862,29 +882,26 @@ void volcar_formas(const ir::IrModule &mod, const char *momento) {
             const PerfilDeUso p = a.perfil();
             // El PERFIL, no solo la forma: es lo que permite ver si el analisis
             // distingue algo antes de que nadie consuma su veredicto.
-            std::fprintf(stderr,
-                         "[forma] momento=%s#%u fn=%s decl=%u:%u ancla=%u "
-                         "bytes=%lld "
-                         "offsets=%u forma=%s "
-                         "certeza=%s completo=%d unidad=%d accprop=%d accop=%d "
-                         "indep=%d dinamico=%d escapa=%d abi=%d dev=%d bloque=%d "
-                         "frontera=%u lim=%u esc=%u\n",
-                         momento, id_estado, fn.name.c_str(),
-                         a.declaracion.linea,
-                         a.declaracion.indice, a.ancla,
-                         static_cast<long long>(a.bytes), a.offsets_tocados(),
-                         nombre_forma(a.forma()),
-                         nombre_certeza(a.sello.certeza),
-                         p.universo_completo ? 1 : 0, p.unidad ? 1 : 0,
-                         p.acceso_en_propietario ? 1 : 0,
-                         p.acceso_en_operacion ? 1 : 0,
-                         p.acceso_independiente ? 1 : 0,
-                         p.acceso_dinamico ? 1 : 0, p.escapa ? 1 : 0,
-                         p.paso_por_abi ? 1 : 0, p.retorno_entero ? 1 : 0,
-                         p.transferencia_entera ? 1 : 0,
-                         static_cast<uint32_t>(a.frontera.size()),
-                         static_cast<uint32_t>(a.limitaciones.size()),
-                         static_cast<uint32_t>(a.fronteras.size()));
+            std::fprintf(
+                stderr,
+                "[forma] momento=%s#%u fn=%s decl=%u:%u ancla=%u "
+                "bytes=%lld "
+                "offsets=%u forma=%s "
+                "certeza=%s completo=%d unidad=%d accprop=%d accop=%d "
+                "indep=%d dinamico=%d escapa=%d abi=%d dev=%d bloque=%d "
+                "frontera=%u lim=%u esc=%u\n",
+                momento, id_estado, fn.name.c_str(), a.declaracion.linea,
+                a.declaracion.indice, a.ancla, static_cast<long long>(a.bytes),
+                a.offsets_tocados(), nombre_forma(a.forma()),
+                nombre_certeza(a.sello.certeza), p.universo_completo ? 1 : 0,
+                p.unidad ? 1 : 0, p.acceso_en_propietario ? 1 : 0,
+                p.acceso_en_operacion ? 1 : 0, p.acceso_independiente ? 1 : 0,
+                p.acceso_dinamico ? 1 : 0, p.escapa ? 1 : 0,
+                p.paso_por_abi ? 1 : 0, p.retorno_entero ? 1 : 0,
+                p.transferencia_entera ? 1 : 0,
+                static_cast<uint32_t>(a.frontera.size()),
+                static_cast<uint32_t>(a.limitaciones.size()),
+                static_cast<uint32_t>(a.fronteras.size()));
             /* Las verdades LOCALES: un ambito cerrado demuestra lo suyo aunque
              * el de fuera siga abierto, y sin esto se tiraban. */
             for (const Universo &u : a.universos)
@@ -901,19 +918,18 @@ void volcar_formas(const ir::IrModule &mod, const char *momento) {
             /* ORIGEN + CAUSA + EFECTO: donde esta demostrado, que lo bloquea y
              * hasta donde no llega. */
             for (const AggregateFacts::EfectoAlcance &ef : a.efectos())
-                std::fprintf(stderr,
-                             "[forma]   efecto=no-eleva universo=%u forma=%s "
-                             "bloqueado_en=%u causa=%s fn=%s bloque=%u "
-                             "instr=%u linea=%u\n",
-                             ef.universo, nombre_forma(ef.forma),
-                             ef.bloqueado_en,
-                             !ef.causa_localizada
-                                 ? "no-localizada-en-este-ambito"
-                                 : (ef.por_frontera
-                                        ? nombre_frontera(ef.frontera)
-                                        : nombre_limitacion(ef.limitacion)),
-                             ef.causa.funcion.c_str(), ef.causa.bloque,
-                             ef.causa.indice, ef.causa.linea);
+                std::fprintf(
+                    stderr,
+                    "[forma]   efecto=no-eleva universo=%u forma=%s "
+                    "bloqueado_en=%u causa=%s fn=%s bloque=%u "
+                    "instr=%u linea=%u\n",
+                    ef.universo, nombre_forma(ef.forma), ef.bloqueado_en,
+                    !ef.causa_localizada
+                        ? "no-localizada-en-este-ambito"
+                        : (ef.por_frontera ? nombre_frontera(ef.frontera)
+                                           : nombre_limitacion(ef.limitacion)),
+                    ef.causa.funcion.c_str(), ef.causa.bloque, ef.causa.indice,
+                    ef.causa.linea);
             /* Los accesos que DECIDEN el veredicto: el dinamico y el que no se
              * liga a ninguna operacion.  Sin verlos, un "desconocida" obliga a
              * reconstruir a mano por que lo es. */
@@ -923,18 +939,19 @@ void volcar_formas(const ir::IrModule &mod, const char *momento) {
                     (ac.relacion == RelacionAcceso::EnPropietario &&
                      !ac.ligado_a_operacion);
                 if (!decide) continue;
-                std::fprintf(stderr,
-                             "[forma]   acceso=%s off=%lld sabido=%d escribe=%d "
-                             "ligado=%d fn=%s bloque=%u instr=%u linea=%u\n",
-                             nombre_relacion(ac.relacion),
-                             static_cast<long long>(ac.offset),
-                             ac.offset_sabido ? 1 : 0, ac.escribe ? 1 : 0,
-                             ac.ligado_a_operacion ? 1 : 0,
-                             ac.sitio.funcion.c_str(), ac.sitio.bloque,
-                             ac.sitio.indice, ac.sitio.linea);
+                std::fprintf(
+                    stderr,
+                    "[forma]   acceso=%s off=%lld sabido=%d escribe=%d "
+                    "ligado=%d fn=%s bloque=%u instr=%u linea=%u\n",
+                    nombre_relacion(ac.relacion),
+                    static_cast<long long>(ac.offset), ac.offset_sabido ? 1 : 0,
+                    ac.escribe ? 1 : 0, ac.ligado_a_operacion ? 1 : 0,
+                    ac.sitio.funcion.c_str(), ac.sitio.bloque, ac.sitio.indice,
+                    ac.sitio.linea);
             }
             for (MotivoForma mo : a.motivos_forma())
-                std::fprintf(stderr, "[forma]   motivo=%s\n", nombre_motivo(mo));
+                std::fprintf(stderr, "[forma]   motivo=%s\n",
+                             nombre_motivo(mo));
             for (const Frontera &es : a.fronteras)
                 std::fprintf(stderr,
                              "[forma]   frontera=%s desde=%u hacia=%d fn=%s "
@@ -949,9 +966,9 @@ void volcar_formas(const ir::IrModule &mod, const char *momento) {
                 std::fprintf(stderr,
                              "[forma]   limite=%s fn=%s bloque=%u instr=%u "
                              "linea=%u destino=%s\n",
-                             nombre_limitacion(l.codigo), l.sitio.funcion.c_str(),
-                             l.sitio.bloque, l.sitio.indice, l.sitio.linea,
-                             l.destino.c_str());
+                             nombre_limitacion(l.codigo),
+                             l.sitio.funcion.c_str(), l.sitio.bloque,
+                             l.sitio.indice, l.sitio.linea, l.destino.c_str());
         }
     }
 }

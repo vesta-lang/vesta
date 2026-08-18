@@ -71,14 +71,19 @@ RangeType tipo_de(IrType t) {
 /// Si el tipo permite razonar numericamente sobre el valor.
 bool es_numerico(IrType t) {
     switch (t) {
-    case IrType::I8: case IrType::I16: case IrType::I32: case IrType::I64:
-    case IrType::U8: case IrType::U16: case IrType::U32: case IrType::U64:
-    case IrType::BOOL: case IrType::PTR:
-        return true;
+    case IrType::I8:
+    case IrType::I16:
+    case IrType::I32:
+    case IrType::I64:
+    case IrType::U8:
+    case IrType::U16:
+    case IrType::U32:
+    case IrType::U64:
+    case IrType::BOOL:
+    case IrType::PTR: return true;
     /* HANDLE es una referencia opaca, no una cantidad: acotarla por su ancho
      * invitaria a que la aritmetica explotara un "rango" sin significado. */
-    default:
-        return false;
+    default: return false;
     }
 }
 
@@ -92,7 +97,9 @@ ValueRange del_tipo(IrType t) {
 
 } // namespace
 
-ValueRange rango_del_tipo(ir::IrType t) { return del_tipo(t); }
+ValueRange rango_del_tipo(ir::IrType t) {
+    return del_tipo(t);
+}
 
 namespace {
 
@@ -138,8 +145,9 @@ struct CosteEstado {
      * explicar 8 s, y no daba. */
     uint64_t busquedas = 0;
     uint64_t uniones = 0;
-    uint64_t unidos = 0; ///< elementos anadidos al fusionar (reservas del vector)
-    uint64_t elems_muertos = 0;     ///< refinamientos de valores que ya no se usan
+    uint64_t unidos =
+        0; ///< elementos anadidos al fusionar (reservas del vector)
+    uint64_t elems_muertos = 0; ///< refinamientos de valores que ya no se usan
     uint64_t elems_vivos_total = 0; ///< total mirado, para el ratio
 };
 thread_local CosteEstado g_coste;
@@ -148,10 +156,11 @@ thread_local CosteEstado g_coste;
  * @brief Si se estan contando los costes.  Se mira ANTES de tocar @c g_coste.
  *
  * En MinGW cada acceso a una variable de hilo es una LLAMADA
- * (`__emutls_get_address`), y los contadores estan en lo mas caliente del motor:
- * el constructor de `Estado` y `buscar`.  Medido con las pilas de VTune, eso
- * costaba el 1,15 % del tiempo total de compilar, encendido siempre y sin que
- * nadie mirara los numeros.  Con la bandera delante -- un bool global, sin TLS
+ * (`__emutls_get_address`), y los contadores estan en lo mas caliente del
+ * motor: el constructor de `Estado` y `buscar`.  Medido con las pilas de VTune,
+ * eso costaba el 1,15 % del tiempo total de compilar, encendido siempre y sin
+ * que nadie mirara los numeros.  Con la bandera delante -- un bool global, sin
+ * TLS
  * --, cuando no se mide no se toca la variable de hilo.
  *
  * La medida no puede salir gratis, pero si puede salir gratis NO medir.
@@ -165,9 +174,15 @@ struct Estado {
     Estado() = default;
     /// Copiar un estado es el otro coste de la representacion dispersa: hay que
     /// contarlo aqui porque es donde ocurre (una copia por bloque y vuelta).
-    Estado(const Estado &o) : alcanzable(o.alcanzable), ref(o.ref) { if (g_medir_coste) ++g_coste.copias; }
+    Estado(const Estado &o) : alcanzable(o.alcanzable), ref(o.ref) {
+        if (g_medir_coste) ++g_coste.copias;
+    }
     Estado &operator=(const Estado &o) {
-        if (this != &o) { alcanzable = o.alcanzable; ref = o.ref; if (g_medir_coste) ++g_coste.copias; }
+        if (this != &o) {
+            alcanzable = o.alcanzable;
+            ref = o.ref;
+            if (g_medir_coste) ++g_coste.copias;
+        }
         return *this;
     }
     Estado(Estado &&) = default;
@@ -175,19 +190,17 @@ struct Estado {
 
     const ValueRange *buscar(ir::IrValueId v) const {
         if (g_medir_coste) ++g_coste.busquedas;
-        auto it = std::lower_bound(
-            ref.begin(), ref.end(), v,
-            [](const std::pair<ir::IrValueId, ValueRange> &p, ir::IrValueId x) {
-                return p.first < x;
-            });
+        auto it =
+            std::lower_bound(ref.begin(), ref.end(), v,
+                             [](const std::pair<ir::IrValueId, ValueRange> &p,
+                                ir::IrValueId x) { return p.first < x; });
         return (it == ref.end() || it->first != v) ? nullptr : &it->second;
     }
     void poner(ir::IrValueId v, const ValueRange &r) {
-        auto it = std::lower_bound(
-            ref.begin(), ref.end(), v,
-            [](const std::pair<ir::IrValueId, ValueRange> &p, ir::IrValueId x) {
-                return p.first < x;
-            });
+        auto it =
+            std::lower_bound(ref.begin(), ref.end(), v,
+                             [](const std::pair<ir::IrValueId, ValueRange> &p,
+                                ir::IrValueId x) { return p.first < x; });
         if (it != ref.end() && it->first == v) {
             it->second = r;
             if (g_medir_coste) ++g_coste.reescrituras;
@@ -205,7 +218,8 @@ struct Estado {
         if (!alcanzable) return true; // dos inalcanzables son el mismo estado
         if (ref.size() != o.ref.size()) return false;
         for (size_t i = 0; i < ref.size(); ++i)
-            if (ref[i].first != o.ref[i].first || ref[i].second != o.ref[i].second)
+            if (ref[i].first != o.ref[i].first ||
+                ref[i].second != o.ref[i].second)
                 return false;
         return true;
     }
@@ -230,7 +244,7 @@ struct Arista {
     bool rama = true;
     // Afirmacion por caso de un switch.
     ir::IrValueId sel = ir::IR_NO_VALUE;
-    bool     dentro = true; ///< true: sel esta en [caso_lo,caso_hi]; false: fuera
+    bool dentro = true; ///< true: sel esta en [caso_lo,caso_hi]; false: fuera
     uint64_t caso_lo = 0, caso_hi = 0;
     bool retroceso = false; ///< cierra un bucle: es la que obliga a ensanchar
 };
@@ -257,7 +271,7 @@ struct Arista {
  * se podria comprobar contra el estado de ahora.
  */
 class LectorResumenes {
-public:
+  public:
     explicit LectorResumenes(const RangeSummaries *s) : sum_(s) {}
 
     const FnRangeSummary *buscar(const std::string &nombre) {
@@ -267,18 +281,21 @@ public:
         leidas_.emplace_back(nombre, huella_de_resumen(s));
         return s;
     }
-    /// @c true si hay resumenes en absoluto (para los caminos que no preguntan).
+    /// @c true si hay resumenes en absoluto (para los caminos que no
+    /// preguntan).
     bool hay() const { return sum_ != nullptr; }
-    std::vector<std::pair<std::string, uint64_t>> soltar() { return std::move(leidas_); }
+    std::vector<std::pair<std::string, uint64_t>> soltar() {
+        return std::move(leidas_);
+    }
 
-private:
+  private:
     const RangeSummaries *sum_ = nullptr;
     std::vector<std::pair<std::string, uint64_t>> leidas_;
 };
 
 struct Contexto {
     const ir::IrFunction &fn;
-    const IrFacts        &facts;
+    const IrFacts &facts;
     mutable LectorResumenes sum{nullptr};
     std::vector<ValueRange> suelo;
 
@@ -293,16 +310,17 @@ struct Contexto {
                 suelo[v] = suelo[v].cortar(
                     ValueRange::constante(suelo[v].t, fn.values[v].const_val));
         }
-        /* Un parametro vale lo que su tipo... salvo que se sepa quien llama.  El
+        /* Un parametro vale lo que su tipo... salvo que se sepa quien llama. El
          * resumen solo estrecha cuando se conocen TODOS los llamantes; si no,
          * trae el mismo suelo y esto no cambia nada. */
         if (sum.hay()) {
             const FnRangeSummary *mio = sum.buscar(fn.name);
             if (mio != nullptr)
-                for (size_t i = 0; i < fn.params.size() && i < mio->params.size();
-                     ++i) {
+                for (size_t i = 0;
+                     i < fn.params.size() && i < mio->params.size(); ++i) {
                     const ir::IrValueId p = fn.params[i];
-                    if (p < suelo.size()) suelo[p] = suelo[p].cortar(mio->params[i]);
+                    if (p < suelo.size())
+                        suelo[p] = suelo[p].cortar(mio->params[i]);
                 }
         }
     }
@@ -334,13 +352,14 @@ struct Contexto {
 // ===========================================================================
 
 struct Motor : Contexto {
-    const RangeOptions   &op;
+    const RangeOptions &op;
 
-    std::vector<Arista>     aristas;
-    std::vector<Estado>     out_arista;
-    std::vector<Estado>     in_bloque;
+    std::vector<Arista> aristas;
+    std::vector<Estado> out_arista;
+    std::vector<Estado> in_bloque;
     std::vector<std::vector<uint32_t>> entrantes, salientes;
-    std::vector<uint32_t>   vueltas_ciclo; ///< veces que el IN de un bloque cambio
+    std::vector<uint32_t>
+        vueltas_ciclo; ///< veces que el IN de un bloque cambio
     /**
      * @brief Ultimo bloque donde se USA cada valor.
      *
@@ -350,8 +369,9 @@ struct Motor : Contexto {
      * -- y, si compensa, dejar de arrastrarlo.
      *
      * Se calcula en una pasada: para cada operando, el mayor indice de bloque
-     * donde aparece.  Los argumentos de PHI cuentan en el bloque del que VIENEN,
-     * no donde esta la PHI: ahi es donde el valor tiene que seguir vivo.
+     * donde aparece.  Los argumentos de PHI cuentan en el bloque del que
+     * VIENEN, no donde esta la PHI: ahi es donde el valor tiene que seguir
+     * vivo.
      */
     std::vector<uint32_t> ultimo_uso;
 
@@ -360,13 +380,15 @@ struct Motor : Contexto {
         for (uint32_t bi = 0; bi < fn.blocks.size(); ++bi)
             for (const ir::IrInstr &in : fn.blocks[bi].instrs) {
                 for (ir::IrValueId v : in.operands)
-                    if (v < ultimo_uso.size() && bi > ultimo_uso[v]) ultimo_uso[v] = bi;
+                    if (v < ultimo_uso.size() && bi > ultimo_uso[v])
+                        ultimo_uso[v] = bi;
                 for (const ir::IrPhiArg &pa : in.phi_args)
-                    if (pa.value < ultimo_uso.size() && pa.block > ultimo_uso[pa.value])
+                    if (pa.value < ultimo_uso.size() &&
+                        pa.block > ultimo_uso[pa.value])
                         ultimo_uso[pa.value] = pa.block;
             }
     }
-    RangeStats              stats;
+    RangeStats stats;
 
     Motor(const ir::IrFunction &f, const IrFacts &fc, const RangeOptions &o,
           const RangeSummaries *s)
@@ -401,8 +423,8 @@ struct Motor : Contexto {
                 a.rama = r;
                 anadir_arista(a);
             };
-            auto anadir_caso = [&](ir::IrBlockId d, ir::IrValueId sel, bool dentro,
-                                   uint64_t lo, uint64_t hi) {
+            auto anadir_caso = [&](ir::IrBlockId d, ir::IrValueId sel,
+                                   bool dentro, uint64_t lo, uint64_t hi) {
                 Arista a;
                 a.desde = bi;
                 a.hasta = d;
@@ -433,15 +455,15 @@ struct Motor : Contexto {
                     anadir_caso(t.jump_targets[idx], sel, true, min + idx,
                                 min + idx);
                 if (n > 0)
-                    anadir_caso(t.target_block, sel, false, min,
-                                min + n - 1);
+                    anadir_caso(t.target_block, sel, false, min, min + n - 1);
                 else
                     anadir(t.target_block, ir::IR_NO_VALUE, true);
             } else if (t.op == IrOp::MATCH_VARIANT) {
                 /* Marcador: el dispatch de verdad es la cadena de comparaciones
                  * que viene detras, y esa ya la lee la guarda.  Aqui solo hay
                  * que no perder los sucesores si acaba cerrando el bloque. */
-                for (uint32_t d : t.jump_targets) anadir(d, ir::IR_NO_VALUE, true);
+                for (uint32_t d : t.jump_targets)
+                    anadir(d, ir::IR_NO_VALUE, true);
                 anadir(t.target_block, ir::IR_NO_VALUE, true);
             }
         }
@@ -460,18 +482,23 @@ struct Motor : Contexto {
         const LoopFacts lf = compute_loop_facts(fn);
         auto dentro_de = [&](ir::IrBlockId b, uint32_t lid) {
             if (lid == LoopFacts::NO_LOOP) return false;
-            uint32_t l = b < lf.loop_id.size() ? lf.loop_id[b] : LoopFacts::NO_LOOP;
-            while (l != LoopFacts::NO_LOOP) { // sube por los bucles que lo contienen
+            uint32_t l =
+                b < lf.loop_id.size() ? lf.loop_id[b] : LoopFacts::NO_LOOP;
+            while (l !=
+                   LoopFacts::NO_LOOP) { // sube por los bucles que lo contienen
                 if (l == lid) return true;
-                l = l < lf.parent_loop.size() ? lf.parent_loop[l] : LoopFacts::NO_LOOP;
+                l = l < lf.parent_loop.size() ? lf.parent_loop[l]
+                                              : LoopFacts::NO_LOOP;
             }
             return false;
         };
         for (Arista &a : aristas) {
-            if (a.hasta >= lf.is_loop_header.size() || !lf.is_loop_header[a.hasta])
+            if (a.hasta >= lf.is_loop_header.size() ||
+                !lf.is_loop_header[a.hasta])
                 continue;
-            const uint32_t lid =
-                a.hasta < lf.loop_id.size() ? lf.loop_id[a.hasta] : LoopFacts::NO_LOOP;
+            const uint32_t lid = a.hasta < lf.loop_id.size()
+                                     ? lf.loop_id[a.hasta]
+                                     : LoopFacts::NO_LOOP;
             a.retroceso = dentro_de(a.desde, lid);
         }
     }
@@ -502,16 +529,23 @@ struct Motor : Contexto {
          * MISMO: mismos elementos, mismo orden. */
         size_t j = 0;
         for (const auto &p : a.ref) {
-            while (j < b.ref.size() && b.ref[j].first < p.first) ++j;
+            while (j < b.ref.size() && b.ref[j].first < p.first)
+                ++j;
             const bool hay = (j < b.ref.size() && b.ref[j].first == p.first);
-            if (g_medir_coste) ++g_coste.busquedas; // comparable con la version vieja
-            const ValueRange u = p.second.unir(hay ? b.ref[j].second : suelo[p.first]);
-            if (!u.es_top()) { out.ref.push_back({p.first, u}); if (g_medir_coste) ++g_coste.unidos; }
+            if (g_medir_coste)
+                ++g_coste.busquedas; // comparable con la version vieja
+            const ValueRange u =
+                p.second.unir(hay ? b.ref[j].second : suelo[p.first]);
+            if (!u.es_top()) {
+                out.ref.push_back({p.first, u});
+                if (g_medir_coste) ++g_coste.unidos;
+            }
         }
         return out;
     }
 
-    /// Ensanchamiento del ascenso: por valor, soltando solo el extremo que crece.
+    /// Ensanchamiento del ascenso: por valor, soltando solo el extremo que
+    /// crece.
     Estado ensanchar_estado(const Estado &viejo, const Estado &nuevo) const {
         if (!viejo.alcanzable || !nuevo.alcanzable) return nuevo;
         Estado out;
@@ -521,12 +555,17 @@ struct Motor : Contexto {
         // Fusion lineal (ver unir_estados): ambos ordenados por identificador.
         size_t j = 0;
         for (const auto &p : nuevo.ref) {
-            while (j < viejo.ref.size() && viejo.ref[j].first < p.first) ++j;
-            const bool hay = (j < viejo.ref.size() && viejo.ref[j].first == p.first);
+            while (j < viejo.ref.size() && viejo.ref[j].first < p.first)
+                ++j;
+            const bool hay =
+                (j < viejo.ref.size() && viejo.ref[j].first == p.first);
             if (g_medir_coste) ++g_coste.busquedas;
             const ValueRange base = hay ? viejo.ref[j].second : suelo[p.first];
             const ValueRange w = base.ensanchar(p.second);
-            if (!w.es_top()) { out.ref.push_back({p.first, w}); if (g_medir_coste) ++g_coste.unidos; }
+            if (!w.es_top()) {
+                out.ref.push_back({p.first, w});
+                if (g_medir_coste) ++g_coste.unidos;
+            }
         }
         return out;
     }
@@ -548,15 +587,20 @@ struct Motor : Contexto {
         // Fusion lineal (ver unir_estados): ambos ordenados por identificador.
         size_t j = 0;
         for (const auto &p : nuevo.ref) {
-            while (j < viejo.ref.size() && viejo.ref[j].first < p.first) ++j;
-            const bool hay = (j < viejo.ref.size() && viejo.ref[j].first == p.first);
+            while (j < viejo.ref.size() && viejo.ref[j].first < p.first)
+                ++j;
+            const bool hay =
+                (j < viejo.ref.size() && viejo.ref[j].first == p.first);
             if (g_medir_coste) ++g_coste.busquedas;
             ValueRange r = p.second;
             if (hay) {
                 const ValueRange c = r.cortar(viejo.ref[j].second);
                 if (!c.es_bottom()) r = c;
             }
-            if (!r.es_top()) { out.ref.push_back({p.first, r}); if (g_medir_coste) ++g_coste.unidos; }
+            if (!r.es_top()) {
+                out.ref.push_back({p.first, r});
+                if (g_medir_coste) ++g_coste.unidos;
+            }
         }
         return out;
     }
@@ -570,11 +614,11 @@ struct Motor : Contexto {
      * que por esa arista no se pasa, y eso se propaga como estado inalcanzable.
      *
      * La comparacion decide EN QUE DOMINIO se razona, que no tiene por que ser
-     * el del tipo declarado: un `ult` sobre un `i32` compara sin signo.  Los dos
-     * operandos se releen en ese dominio, se restringe alli, y el resultado se
-     * vuelve a leer en el tipo del valor.  Cuando alguna de esas relecturas no
-     * es monotona el dominio responde "todo", y entonces no se afirma nada --
-     * que es exactamente lo que hay que hacer.
+     * el del tipo declarado: un `ult` sobre un `i32` compara sin signo.  Los
+     * dos operandos se releen en ese dominio, se restringe alli, y el resultado
+     * se vuelve a leer en el tipo del valor.  Cuando alguna de esas relecturas
+     * no es monotona el dominio responde "todo", y entonces no se afirma nada
+     * -- que es exactamente lo que hay que hacer.
      */
     void estrechar_por_guarda(Estado &e, ir::IrValueId cond, bool rama) const {
         if (!e.alcanzable) return;
@@ -599,38 +643,51 @@ struct Motor : Contexto {
         }
         const ValueRange ra = valor(e, va), rb = valor(e, vb);
         if (!ra.acotada() || !rb.acotada()) return;
-        if (ra.t.bits != rb.t.bits) return; // el IR no deberia comparar anchos distintos
+        if (ra.t.bits != rb.t.bits)
+            return; // el IR no deberia comparar anchos distintos
 
         const bool sin_signo = (o == IrOp::CMP_ULT || o == IrOp::CMP_ULE ||
                                 o == IrOp::CMP_UGT || o == IrOp::CMP_UGE);
         const RangeType dc = RangeType::de(ra.t.bits, sin_signo);
         const ValueRange ca = ra.reinterpretar(dc), cb = rb.reinterpretar(dc);
 
-        // Devuelve el valor restringido, ya releido en el tipo del propio valor.
+        // Devuelve el valor restringido, ya releido en el tipo del propio
+        // valor.
         auto aplicar = [&](ir::IrValueId v, const ValueRange &orig,
                            const ValueRange &restringido) {
             if (!e.alcanzable) return;
             if (v == ir::IR_NO_VALUE || v >= suelo.size()) return;
-            if (restringido.es_bottom()) { e.inalcanzable(); return; }
-            const ValueRange nuevo = orig.cortar(restringido.reinterpretar(orig.t));
-            if (nuevo.es_bottom()) { e.inalcanzable(); return; }
+            if (restringido.es_bottom()) {
+                e.inalcanzable();
+                return;
+            }
+            const ValueRange nuevo =
+                orig.cortar(restringido.reinterpretar(orig.t));
+            if (nuevo.es_bottom()) {
+                e.inalcanzable();
+                return;
+            }
             if (!nuevo.es_top()) e.poner(v, nuevo);
         };
 
         switch (o) {
-        case IrOp::CMP_LT: case IrOp::CMP_ULT:
+        case IrOp::CMP_LT:
+        case IrOp::CMP_ULT:
             aplicar(va, ra, ca.restringir_menor(cb));
             aplicar(vb, rb, cb.restringir_mayor(ca));
             break;
-        case IrOp::CMP_LE: case IrOp::CMP_ULE:
+        case IrOp::CMP_LE:
+        case IrOp::CMP_ULE:
             aplicar(va, ra, ca.restringir_menor_igual(cb));
             aplicar(vb, rb, cb.restringir_mayor_igual(ca));
             break;
-        case IrOp::CMP_GT: case IrOp::CMP_UGT:
+        case IrOp::CMP_GT:
+        case IrOp::CMP_UGT:
             aplicar(va, ra, ca.restringir_mayor(cb));
             aplicar(vb, rb, cb.restringir_menor(ca));
             break;
-        case IrOp::CMP_GE: case IrOp::CMP_UGE:
+        case IrOp::CMP_GE:
+        case IrOp::CMP_UGE:
             aplicar(va, ra, ca.restringir_mayor_igual(cb));
             aplicar(vb, rb, cb.restringir_menor_igual(ca));
             break;
@@ -642,18 +699,18 @@ struct Motor : Contexto {
             aplicar(va, ra, ca.restringir_distinto(cb));
             aplicar(vb, rb, cb.restringir_distinto(ca));
             break;
-        default:
-            break;
+        default: break;
         }
     }
 
     /**
      * @brief Lo que afirma el BRAZO de un switch sobre su selector.
      *
-     * En un brazo concreto el tag vale exactamente uno; en el brazo por defecto,
-     * cualquier cosa menos los de la tabla.  Lo segundo solo se puede decir con
-     * un intervalo cuando la tabla toca un extremo del tipo -- si la muerde por
-     * en medio quedarian dos trozos --, y el dominio ya sabe distinguirlo.
+     * En un brazo concreto el tag vale exactamente uno; en el brazo por
+     * defecto, cualquier cosa menos los de la tabla.  Lo segundo solo se puede
+     * decir con un intervalo cuando la tabla toca un extremo del tipo -- si la
+     * muerde por en medio quedarian dos trozos --, y el dominio ya sabe
+     * distinguirlo.
      */
     void estrechar_por_caso(Estado &e, const Arista &a) const {
         if (!e.alcanzable) return;
@@ -662,9 +719,12 @@ struct Motor : Contexto {
         if (!orig.acotada()) return;
         const ValueRange caso = ValueRange::crudo(orig.t, a.caso_lo, a.caso_hi);
         if (!caso.acotada()) return; // la tabla no cabe en el tipo del selector
-        const ValueRange nuevo =
-            a.dentro ? orig.restringir_igual(caso) : orig.restringir_fuera(caso);
-        if (nuevo.es_bottom()) { e.inalcanzable(); return; }
+        const ValueRange nuevo = a.dentro ? orig.restringir_igual(caso)
+                                          : orig.restringir_fuera(caso);
+        if (nuevo.es_bottom()) {
+            e.inalcanzable();
+            return;
+        }
         if (!nuevo.es_top()) e.poner(a.sel, nuevo);
     }
 
@@ -688,9 +748,9 @@ struct Motor : Contexto {
      * sin leer el estado DE LA ARISTA, una guarda no puede afectar a la PHI que
      * depende de ella.
      *
-     * Si dos aristas vienen del MISMO bloque (un `switch` con dos casos al mismo
-     * destino), las dos aportan y se unen: el argumento de la PHI identifica el
-     * bloque de origen, no la arista, y unir de mas es correcto.
+     * Si dos aristas vienen del MISMO bloque (un `switch` con dos casos al
+     * mismo destino), las dos aportan y se unen: el argumento de la PHI
+     * identifica el bloque de origen, no la arista, y unir de mas es correcto.
      */
     void resolver_phis(ir::IrBlockId bi, Estado &e) const {
         for (const ir::IrInstr &in : fn.blocks[bi].instrs) {
@@ -699,7 +759,8 @@ struct Motor : Contexto {
             ValueRange acc = ValueRange::bottom(suelo[in.dst].t);
             for (const ir::IrPhiArg &pa : in.phi_args)
                 for (uint32_t ai : entrantes[bi])
-                    if (aristas[ai].desde == pa.block && out_arista[ai].alcanzable)
+                    if (aristas[ai].desde == pa.block &&
+                        out_arista[ai].alcanzable)
                         acc = acc.unir(valor(out_arista[ai], pa.value));
             e.poner(in.dst, encajar_en(acc, suelo[in.dst]));
         }
@@ -722,9 +783,9 @@ struct Motor : Contexto {
      * era eso (276.438 de 354.692 refinamientos).
      *
      * Es correcto porque no se descarta informacion consultable: si el valor no
-     * se vuelve a usar, su rango no puede influir en ningun resultado.  Y reduce
-     * las tres formas de visitar elementos a la vez, que es lo unico que ha
-     * movido el tiempo en este motor.
+     * se vuelve a usar, su rango no puede influir en ningun resultado.  Y
+     * reduce las tres formas de visitar elementos a la vez, que es lo unico que
+     * ha movido el tiempo en este motor.
      */
     void podar_muertos(Estado &e, ir::IrBlockId bi) const {
         if (ultimo_uso.empty() || e.ref.empty()) return;
@@ -807,13 +868,14 @@ struct Motor : Contexto {
      * No es el ascenso con una bandera: aqui no se ensancha nunca y cada IN
      * nuevo se cruza con el anterior, asi que la sucesion es decreciente.  Eso
      * es lo que recupera la precision que el ensanchamiento solto -- en
-     * `for (i = 0; i < 200)` el ascenso deja `[0, max]` y el descenso lo devuelve
-     * a `[0,199]` -- sin arriesgar la terminacion: un presupuesto agotado aqui
-     * cuesta precision, jamas correccion.
+     * `for (i = 0; i < 200)` el ascenso deja `[0, max]` y el descenso lo
+     * devuelve a `[0,199]` -- sin arriesgar la terminacion: un presupuesto
+     * agotado aqui cuesta precision, jamas correccion.
      */
     bool resolver_descenso(int presupuesto) {
         std::deque<ir::IrBlockId> cola;
-        for (uint32_t bi = 0; bi < fn.blocks.size(); ++bi) cola.push_back(bi);
+        for (uint32_t bi = 0; bi < fn.blocks.size(); ++bi)
+            cola.push_back(bi);
         int pasos = 0;
         while (!cola.empty()) {
             if (++pasos > presupuesto) return false;
@@ -821,7 +883,8 @@ struct Motor : Contexto {
             const ir::IrBlockId bi = cola.front();
             cola.pop_front();
 
-            const Estado nuevo_in = estrechar_estado(in_bloque[bi], calcular_in(bi));
+            const Estado nuevo_in =
+                estrechar_estado(in_bloque[bi], calcular_in(bi));
             if (!(nuevo_in == in_bloque[bi])) {
                 in_bloque[bi] = nuevo_in;
                 stats.estrechados++;
@@ -860,68 +923,66 @@ struct Motor : Contexto {
 };
 
 void Contexto::transferir(const ir::IrInstr &in, Estado &e) const {
-        if (!e.alcanzable) return;
-        if (in.dst == ir::IR_NO_VALUE || in.dst >= suelo.size()) return;
-        const ValueRange piso = suelo[in.dst];
-        auto arg = [&](size_t i) {
-            return i < in.operands.size() ? valor(e, in.operands[i])
-                                          : ValueRange::top();
-        };
-        ValueRange nuevo = ValueRange::top(piso.t);
-        switch (in.op) {
-        case IrOp::CONST:
-            nuevo = piso.acotada() ? ValueRange::constante(piso.t, in.imm)
-                                   : ValueRange::top();
-            break;
-        case IrOp::MOV: nuevo = arg(0); break;
-        case IrOp::ADD: nuevo = arg(0).sumar(arg(1)); break;
-        case IrOp::SUB: nuevo = arg(0).restar(arg(1)); break;
-        case IrOp::MUL: nuevo = arg(0).multiplicar(arg(1)); break;
-        case IrOp::NEG: nuevo = arg(0).negar(); break;
-        case IrOp::DIV: nuevo = arg(0).dividir(arg(1)); break;
-        case IrOp::MOD: nuevo = arg(0).resto(arg(1)); break;
-        case IrOp::AND: nuevo = arg(0).conjuncion(arg(1)); break;
-        case IrOp::OR: nuevo = arg(0).disyuncion(arg(1)); break;
-        case IrOp::XOR: nuevo = arg(0).exclusiva(arg(1)); break;
-        case IrOp::NOT: nuevo = arg(0).complemento(); break;
-        case IrOp::SHL: nuevo = arg(0).desplazar_izq(arg(1)); break;
-        case IrOp::SHR: nuevo = arg(0).desplazar_der_logico(arg(1)); break;
-        case IrOp::SAR: nuevo = arg(0).desplazar_der_aritmetico(arg(1)); break;
-        case IrOp::SEXT:
-            if (piso.acotada()) nuevo = arg(0).extender_con_signo(piso.t);
-            break;
-        case IrOp::ZEXT:
-            if (piso.acotada()) nuevo = arg(0).extender_sin_signo(piso.t);
-            break;
-        case IrOp::TRUNC:
-            if (piso.acotada()) nuevo = arg(0).truncar(piso.t);
-            break;
-        /* BITCAST reinterpreta BITS.  Entre un float y un entero el rango del
-         * origen no dice nada del destino; entre dos enteros del mismo ancho los
-         * bits SON el valor -- que es como el IR pasa un indice `u64` a una suma
-         * de punteros, y tirarlo dejaba fuera de comprobacion justo los accesos
-         * indexados.  El dominio decide cual de los dos casos es. */
-        case IrOp::BITCAST:
-            if (piso.acotada()) nuevo = arg(0).reinterpretar(piso.t);
-            break;
-        /* El resultado de una llamada no es desconocido si se puede leer el
-         * cuerpo de quien la atiende: lo que devuelve sale de SU codigo y vale
-         * para cualquier llamante, se conozcan o no los demas. */
-        case IrOp::CALL:
-        case IrOp::CALLIND:
-            if (sum.hay() && piso.acotada()) {
-                const std::string destino =
-                    (in.op == IrOp::CALL)
-                        ? in.func_name
-                        : funcion_apuntada(fn, facts, in.func_ptr);
-                if (const FnRangeSummary *s = sum.buscar(destino))
-                    nuevo = s->ret;
-            }
-            break;
-        default:
-            break; // op sin modelar: lo que diga el tipo
+    if (!e.alcanzable) return;
+    if (in.dst == ir::IR_NO_VALUE || in.dst >= suelo.size()) return;
+    const ValueRange piso = suelo[in.dst];
+    auto arg = [&](size_t i) {
+        return i < in.operands.size() ? valor(e, in.operands[i])
+                                      : ValueRange::top();
+    };
+    ValueRange nuevo = ValueRange::top(piso.t);
+    switch (in.op) {
+    case IrOp::CONST:
+        nuevo = piso.acotada() ? ValueRange::constante(piso.t, in.imm)
+                               : ValueRange::top();
+        break;
+    case IrOp::MOV: nuevo = arg(0); break;
+    case IrOp::ADD: nuevo = arg(0).sumar(arg(1)); break;
+    case IrOp::SUB: nuevo = arg(0).restar(arg(1)); break;
+    case IrOp::MUL: nuevo = arg(0).multiplicar(arg(1)); break;
+    case IrOp::NEG: nuevo = arg(0).negar(); break;
+    case IrOp::DIV: nuevo = arg(0).dividir(arg(1)); break;
+    case IrOp::MOD: nuevo = arg(0).resto(arg(1)); break;
+    case IrOp::AND: nuevo = arg(0).conjuncion(arg(1)); break;
+    case IrOp::OR: nuevo = arg(0).disyuncion(arg(1)); break;
+    case IrOp::XOR: nuevo = arg(0).exclusiva(arg(1)); break;
+    case IrOp::NOT: nuevo = arg(0).complemento(); break;
+    case IrOp::SHL: nuevo = arg(0).desplazar_izq(arg(1)); break;
+    case IrOp::SHR: nuevo = arg(0).desplazar_der_logico(arg(1)); break;
+    case IrOp::SAR: nuevo = arg(0).desplazar_der_aritmetico(arg(1)); break;
+    case IrOp::SEXT:
+        if (piso.acotada()) nuevo = arg(0).extender_con_signo(piso.t);
+        break;
+    case IrOp::ZEXT:
+        if (piso.acotada()) nuevo = arg(0).extender_sin_signo(piso.t);
+        break;
+    case IrOp::TRUNC:
+        if (piso.acotada()) nuevo = arg(0).truncar(piso.t);
+        break;
+    /* BITCAST reinterpreta BITS.  Entre un float y un entero el rango del
+     * origen no dice nada del destino; entre dos enteros del mismo ancho los
+     * bits SON el valor -- que es como el IR pasa un indice `u64` a una suma
+     * de punteros, y tirarlo dejaba fuera de comprobacion justo los accesos
+     * indexados.  El dominio decide cual de los dos casos es. */
+    case IrOp::BITCAST:
+        if (piso.acotada()) nuevo = arg(0).reinterpretar(piso.t);
+        break;
+    /* El resultado de una llamada no es desconocido si se puede leer el
+     * cuerpo de quien la atiende: lo que devuelve sale de SU codigo y vale
+     * para cualquier llamante, se conozcan o no los demas. */
+    case IrOp::CALL:
+    case IrOp::CALLIND:
+        if (sum.hay() && piso.acotada()) {
+            const std::string destino =
+                (in.op == IrOp::CALL)
+                    ? in.func_name
+                    : funcion_apuntada(fn, facts, in.func_ptr);
+            if (const FnRangeSummary *s = sum.buscar(destino)) nuevo = s->ret;
         }
-        e.poner(in.dst, encajar_en(nuevo, piso));
+        break;
+    default: break; // op sin modelar: lo que diga el tipo
+    }
+    e.poner(in.dst, encajar_en(nuevo, piso));
 }
 
 } // namespace
@@ -941,7 +1002,8 @@ uint64_t huella_de_funcion(const ir::IrFunction &fn) {
             h = util::fnv_bytes(h, in.operands.data(),
                                 in.operands.size() * sizeof(ir::IrValueId));
             h = util::fnv_bytes(h, in.func_name.data(), in.func_name.size());
-            h = util::fnv_mix(h, in.func_ptr); // el destino de una llamada INDIRECTA
+            h = util::fnv_mix(
+                h, in.func_ptr); // el destino de una llamada INDIRECTA
             for (const ir::IrPhiArg &pa : in.phi_args) {
                 h = util::fnv_mix(h, pa.value);
                 h = util::fnv_mix(h, pa.block);
@@ -954,7 +1016,8 @@ uint64_t huella_de_funcion(const ir::IrFunction &fn) {
         h = util::fnv_mix(h, v.is_const ? v.const_val : 0);
         h = util::fnv_mix(h, v.is_const ? 1u : 0u);
     }
-    for (const ir::IrValueId p : fn.params) h = util::fnv_mix(h, p);
+    for (const ir::IrValueId p : fn.params)
+        h = util::fnv_mix(h, p);
     return h;
 }
 
@@ -978,9 +1041,11 @@ static uint64_t mezcla_rango(uint64_t h, const ValueRange &r) {
 uint64_t huella_de_resumen(const FnRangeSummary *s) {
     // "No hay resumen" es un estado propio: si manana lo hay, el resultado
     // puede cambiar, asi que no puede colisionar con un resumen vacio.
-    if (s == nullptr) return util::fnv_mix(util::kFnvOffset, 0xFFFFFFFFFFFFFFFFull);
+    if (s == nullptr)
+        return util::fnv_mix(util::kFnvOffset, 0xFFFFFFFFFFFFFFFFull);
     uint64_t h = util::fnv_mix(util::kFnvOffset, s->cerrada ? 1u : 0u);
-    for (const ValueRange &p : s->params) h = mezcla_rango(h, p);
+    for (const ValueRange &p : s->params)
+        h = mezcla_rango(h, p);
     return mezcla_rango(h, s->ret);
 }
 
@@ -1006,11 +1071,14 @@ bool dependencias_vigentes(const DependenciasRango &d, const ir::IrFunction &fn,
 static std::atomic<long long> g_ns_motor{0};
 static std::atomic<long long> g_n_motor{0};
 
-static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn, const IrFacts &facts,
-                                       const RangeOptions &op, const RangeSummaries *sum);
+static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
+                                       const IrFacts &facts,
+                                       const RangeOptions &op,
+                                       const RangeSummaries *sum);
 
-static RangeFacts calcular_rangos(const ir::IrFunction &fn, const IrFacts &facts,
-                                  const RangeOptions &op, const RangeSummaries *sum) {
+static RangeFacts calcular_rangos(const ir::IrFunction &fn,
+                                  const IrFacts &facts, const RangeOptions &op,
+                                  const RangeSummaries *sum) {
     const uint64_t t = util::reloj::ahora();
     RangeFacts r = calcular_rangos_impl(fn, facts, op, sum);
     g_ns_motor += util::reloj::a_ns(util::reloj::ahora() - t);
@@ -1020,19 +1088,22 @@ static RangeFacts calcular_rangos(const ir::IrFunction &fn, const IrFacts &facts
     return r;
 }
 
-static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn, const IrFacts &facts,
-                                       const RangeOptions &op, const RangeSummaries *sum) {
+static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
+                                       const IrFacts &facts,
+                                       const RangeOptions &op,
+                                       const RangeSummaries *sum) {
     /* --------------------------------------------------------------- reuso
      *
-     * Siete sitios distintos piden rangos de la misma funcion, y medido sobre un
-     * programa real el 75 % de las peticiones son REPETICIONES exactas: misma
-     * funcion, mismas opciones, mismos resumenes.  Recalcularlas no cambia nada.
+     * Siete sitios distintos piden rangos de la misma funcion, y medido sobre
+     * un programa real el 75 % de las peticiones son REPETICIONES exactas:
+     * misma funcion, mismas opciones, mismos resumenes.  Recalcularlas no
+     * cambia nada.
      *
      * El indice va por la parte de la clave que se puede calcular SIN correr el
      * analisis (funcion + opciones); lo que solo se sabe despues -- que
-     * resumenes se consultaron -- se comprueba releyendolos, que es justo lo que
-     * hace @c dependencias_vigentes.  Por eso un cajon puede tener mas de una
-     * entrada: mismo codigo, distinto entorno.
+     * resumenes se consultaron -- se comprueba releyendolos, que es justo lo
+     * que hace @c dependencias_vigentes.  Por eso un cajon puede tener mas de
+     * una entrada: mismo codigo, distinto entorno.
      *
      * Es una cache, no un buffer reaprovechado: se indexa por la entrada, no se
      * pisa mientras vale, y varios hilos pueden leer la misma. */
@@ -1043,13 +1114,13 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn, const IrFacts &
         out.r = m.suelo;
         return out;
     }
-    const int presupuesto =
-        static_cast<int>(op.pasos_por_bloque * fn.blocks.size() + op.pasos_extra);
+    const int presupuesto = static_cast<int>(
+        op.pasos_por_bloque * fn.blocks.size() + op.pasos_extra);
 
     const bool ok = m.resolver_ascenso(presupuesto);
     if (ok) {
-        const int tope_descenso =
-            static_cast<int>(op.pasos_descenso * fn.blocks.size() + op.pasos_extra);
+        const int tope_descenso = static_cast<int>(
+            op.pasos_descenso * fn.blocks.size() + op.pasos_extra);
         /* Un descenso a medias sigue siendo correcto: toda la cadena
          * descendente arranca de un post-punto-fijo y solo estrecha, asi que
          * cualquier parada intermedia sigue conteniendo al punto fijo real.
@@ -1078,10 +1149,10 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn, const IrFacts &
      * comprobarla --, porque alli solo se tiene la funcion.  El resultado era
      * una comparacion que no coincidia nunca: la cache no acertaba jamas.
      * Medido en su momento: anadirlos no quitaba ni un caso incoherente. */
-    out.deps.huella_opciones = util::fnv_bytes(util::kFnvOffset, &op, sizeof(op));
+    out.deps.huella_opciones =
+        util::fnv_bytes(util::kFnvOffset, &op, sizeof(op));
     out.deps.resumenes = m.sum.soltar();
     out.deps.registrada = true;
-
 
     // Densidad: cuantos de los valores de la funcion acaban teniendo rango en
     // un estado.  Es lo que decide si conviene guardar el estado DISPERSO (como
@@ -1104,11 +1175,12 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn, const IrFacts &
     if (const char *v = std::getenv("VESTA_RANGE_STATS")) {
         if (v[0] == '1') {
             /* Rehacer un analisis no es lo mismo que hacer trabajo: si el
-             * resultado sale IGUAL que la vez anterior, la vuelta entera sobro y
-             * lo que hay que arreglar es la invalidacion, no la estructura.  Se
-             * compara por huella del resultado, no por tiempo. */
+             * resultado sale IGUAL que la vez anterior, la vuelta entera sobro
+             * y lo que hay que arreglar es la invalidacion, no la estructura.
+             * Se compara por huella del resultado, no por tiempo. */
             uint64_t h = util::kFnvOffset;
-            for (const ValueRange &r : out.r) h = mezcla_rango(h, r);
+            for (const ValueRange &r : out.r)
+                h = mezcla_rango(h, r);
             for (const RangeBlockState &e : out.entrada) {
                 h = util::fnv_mix(h, e.alcanzable ? 1u : 0u);
                 for (const auto &p : e.refinamientos) {
@@ -1120,17 +1192,20 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn, const IrFacts &
              * no habia cambiado, entonces lo que sobra es recalcular, no la
              * estructura.  Se usa el registro que dejo el propio analisis -- no
              * una huella calculada aparte: dos criterios acaban discrepando. */
-            uint64_t hir = util::fnv_mix(out.deps.huella_ir, out.deps.huella_opciones);
+            uint64_t hir =
+                util::fnv_mix(out.deps.huella_ir, out.deps.huella_opciones);
             for (const auto &leida : out.deps.resumenes) {
-                hir = util::fnv_bytes(hir, leida.first.data(), leida.first.size());
+                hir = util::fnv_bytes(hir, leida.first.data(),
+                                      leida.first.size());
                 hir = util::fnv_mix(hir, leida.second);
             }
-            /* La comprobacion va por CLAVE, no "contra la vez anterior": el orden
-             * de las llamadas cambia entre corridas (se compila en paralelo), y
-             * comparar contra la anterior daba numeros distintos cada vez.  Asi
-             * la pregunta es la correcta y no depende del orden: la MISMA clave,
-             * ha dado alguna vez DOS resultados distintos?  Si ocurre una sola
-             * vez, la clave esta incompleta y reusar serviria un valor viejo. */
+            /* La comprobacion va por CLAVE, no "contra la vez anterior": el
+             * orden de las llamadas cambia entre corridas (se compila en
+             * paralelo), y comparar contra la anterior daba numeros distintos
+             * cada vez.  Asi la pregunta es la correcta y no depende del orden:
+             * la MISMA clave, ha dado alguna vez DOS resultados distintos?  Si
+             * ocurre una sola vez, la clave esta incompleta y reusar serviria
+             * un valor viejo. */
             static std::mutex mx;
             static std::unordered_map<uint64_t, uint64_t> por_clave;
             bool visto, incoherente;
@@ -1141,29 +1216,29 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn, const IrFacts &
                 incoherente = (visto && it->second != h);
                 if (!visto) por_clave.emplace(hir, h);
             }
-            std::fprintf(stderr, "[rangos] visto=%d incoherente=%d ", visto ? 1 : 0,
-                         incoherente ? 1 : 0);
-            std::fprintf(stderr,
-                         "%s valores=%u bloques=%zu ref_max=%u "
-                         "ref_media=%.1f altas=%llu reescrituras=%llu copias=%llu "
-                         "busquedas=%llu uniones=%llu unidos=%llu "
-                         "pasos=%u cambios=%u ensanches=%u estrechados=%u "
-                         "muertos=%llu detot=%llu\n",
-                         fn.name.c_str(), out.stats.valores, fn.blocks.size(),
-                         out.stats.ref_max,
-                         out.stats.ref_muestras
-                             ? double(out.stats.ref_suma) / out.stats.ref_muestras
-                             : 0.0,
-                         (unsigned long long)out.stats.inserciones,
-                         (unsigned long long)out.stats.reescrituras,
-                         (unsigned long long)out.stats.copias,
-                         (unsigned long long)out.stats.busquedas,
-                         (unsigned long long)out.stats.uniones,
-                         (unsigned long long)out.stats.unidos, out.stats.pasos,
-                         out.stats.cambios, out.stats.ensanches,
-                         out.stats.estrechados,
-                         (unsigned long long)g_coste.elems_muertos,
-                         (unsigned long long)g_coste.elems_vivos_total);
+            std::fprintf(stderr, "[rangos] visto=%d incoherente=%d ",
+                         visto ? 1 : 0, incoherente ? 1 : 0);
+            std::fprintf(
+                stderr,
+                "%s valores=%u bloques=%zu ref_max=%u "
+                "ref_media=%.1f altas=%llu reescrituras=%llu copias=%llu "
+                "busquedas=%llu uniones=%llu unidos=%llu "
+                "pasos=%u cambios=%u ensanches=%u estrechados=%u "
+                "muertos=%llu detot=%llu\n",
+                fn.name.c_str(), out.stats.valores, fn.blocks.size(),
+                out.stats.ref_max,
+                out.stats.ref_muestras
+                    ? double(out.stats.ref_suma) / out.stats.ref_muestras
+                    : 0.0,
+                (unsigned long long)out.stats.inserciones,
+                (unsigned long long)out.stats.reescrituras,
+                (unsigned long long)out.stats.copias,
+                (unsigned long long)out.stats.busquedas,
+                (unsigned long long)out.stats.uniones,
+                (unsigned long long)out.stats.unidos, out.stats.pasos,
+                out.stats.cambios, out.stats.ensanches, out.stats.estrechados,
+                (unsigned long long)g_coste.elems_muertos,
+                (unsigned long long)g_coste.elems_vivos_total);
         }
     }
     return out;
@@ -1184,18 +1259,20 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn, const IrFacts &
  * Se devuelve un puntero COMPARTIDO, no una referencia al cajon: asi la entrada
  * puede desalojarse sin dejar colgado a quien la estaba mirando.
  */
-static std::shared_ptr<const RangeFacts>
-rangos_de(const ir::IrFunction &fn, const IrFacts &facts, const RangeOptions &op,
-          const RangeSummaries *sum) {
+static std::shared_ptr<const RangeFacts> rangos_de(const ir::IrFunction &fn,
+                                                   const IrFacts &facts,
+                                                   const RangeOptions &op,
+                                                   const RangeSummaries *sum) {
     struct EntradaCache {
-        DependenciasRango                 deps;
+        DependenciasRango deps;
         std::shared_ptr<const RangeFacts> hechos;
     };
     static std::mutex mx_cache;
     static std::unordered_map<uint64_t, std::vector<EntradaCache>> cache;
 
     if (std::getenv("VESTA_NO_RANGE_CACHE") != nullptr)
-        return std::make_shared<const RangeFacts>(calcular_rangos(fn, facts, op, sum));
+        return std::make_shared<const RangeFacts>(
+            calcular_rangos(fn, facts, op, sum));
 
     /* El indice va por la parte de la clave que se puede calcular SIN correr el
      * analisis (funcion + opciones); lo que solo se sabe despues -- que
@@ -1212,28 +1289,29 @@ rangos_de(const ir::IrFunction &fn, const IrFacts &facts, const RangeOptions &op
                 if (dependencias_vigentes(e.deps, fn, op, sum)) return e.hechos;
     }
 
-    auto nuevos = std::make_shared<const RangeFacts>(calcular_rangos(fn, facts, op, sum));
+    auto nuevos =
+        std::make_shared<const RangeFacts>(calcular_rangos(fn, facts, op, sum));
     {
         std::lock_guard<std::mutex> g(mx_cache);
         std::vector<EntradaCache> &cajon = cache[clave];
-        // Tope por cajon: mismo codigo con muchos entornos no puede crecer sin fin.
+        // Tope por cajon: mismo codigo con muchos entornos no puede crecer sin
+        // fin.
         if (cajon.size() >= 8) cajon.erase(cajon.begin());
         cajon.push_back(EntradaCache{nuevos->deps, nuevos});
     }
     return nuevos;
 }
 
-std::shared_ptr<const RangeFacts> compute_ranges_ptr(const ir::IrFunction &fn,
-                                                     const IrFacts &facts,
-                                                     const RangeOptions &op,
-                                                     const RangeSummaries *sum) {
+std::shared_ptr<const RangeFacts>
+compute_ranges_ptr(const ir::IrFunction &fn, const IrFacts &facts,
+                   const RangeOptions &op, const RangeSummaries *sum) {
     return rangos_de(fn, facts, op, sum);
 }
 
 RangeFacts compute_ranges(const ir::IrFunction &fn, const IrFacts &facts,
                           const RangeOptions &op, const RangeSummaries *sum) {
-    // Quien solo va a LEERLOS deberia usar `compute_ranges_ptr` y ahorrarse esta
-    // copia; esta forma se mantiene para quien necesite los suyos propios.
+    // Quien solo va a LEERLOS deberia usar `compute_ranges_ptr` y ahorrarse
+    // esta copia; esta forma se mantiene para quien necesite los suyos propios.
     return *rangos_de(fn, facts, op, sum);
 }
 
@@ -1258,8 +1336,8 @@ struct RangeWalk::Impl {
             estado.ref = rf.entrada[b].refinamientos;
         } else {
             /* Sin estado guardado -- rangos que no convergieron, o un bloque
-             * anadido despues -- no se puede afirmar por punto, pero tampoco hay
-             * que mentir: se responde lo que diga la definicion. */
+             * anadido despues -- no se puede afirmar por punto, pero tampoco
+             * hay que mentir: se responde lo que diga la definicion. */
             estado.alcanzable = true;
         }
     }
@@ -1269,9 +1347,13 @@ RangeWalk::RangeWalk(const ir::IrFunction &fn, const IrFacts &facts,
                      const RangeFacts &rf, ir::IrBlockId b)
     : impl_(new Impl(fn, facts, rf, b)) {}
 
-RangeWalk::RangeWalk(RangeWalk &&o) noexcept : impl_(o.impl_) { o.impl_ = nullptr; }
+RangeWalk::RangeWalk(RangeWalk &&o) noexcept : impl_(o.impl_) {
+    o.impl_ = nullptr;
+}
 
-RangeWalk::~RangeWalk() { delete impl_; }
+RangeWalk::~RangeWalk() {
+    delete impl_;
+}
 
 bool RangeWalk::alcanzable() const {
     return impl_ != nullptr && impl_->estado.alcanzable;

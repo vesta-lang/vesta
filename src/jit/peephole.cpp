@@ -42,10 +42,8 @@ bool mop_reads_flags(MOp op) noexcept {
     switch (op) {
     case MOp::JCC:
     case MOp::SETCC:
-    case MOp::CMOVCC:
-        return true;
-    default:
-        return false;
+    case MOp::CMOVCC: return true;
+    default: return false;
     }
 }
 
@@ -72,8 +70,7 @@ bool mop_kills_all_flags(MOp op) noexcept {
     case MOp::CALL_ABS:
     case MOp::SAFEPOINT: /* expande a cmp byte[rbx],0 + jne -> clobbea flags */
         return true;
-    default:
-        return false;
+    default: return false;
     }
 }
 
@@ -241,7 +238,8 @@ uint32_t peephole_physical(MFunction &pf) {
                         kept.push_back(inv); // j!cc Y
                         ++removed;
                         changed = true;
-                        ++i; // saltar el jmp (i+1); el X: (i+2) se procesa normal
+                        ++i; // saltar el jmp (i+1); el X: (i+2) se procesa
+                             // normal
                         continue;
                     }
                 }

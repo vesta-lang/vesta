@@ -45,7 +45,9 @@ static int g_fail = 0;
 
 // --- helpers de construccion ---
 
-static Type prim(PrimitiveKind k) { return Type{k}; }
+static Type prim(PrimitiveKind k) {
+    return Type{k};
+}
 
 static Type host_ptr(PrimitiveKind pointee = PrimitiveKind::U8) {
     return Type::make_ptr(Type{pointee}, /*virt=*/false);
@@ -85,7 +87,8 @@ static StructFieldInfo field(const std::string &name, Type ty) {
 int main() {
     // Tabla de layouts sinteticos + resolver.
     std::map<std::string, StructLayout> layouts;
-    StructResolver resolver = [&](const std::string &n) -> const StructLayout * {
+    StructResolver resolver =
+        [&](const std::string &n) -> const StructLayout * {
         auto it = layouts.find(n);
         return it == layouts.end() ? nullptr : &it->second;
     };

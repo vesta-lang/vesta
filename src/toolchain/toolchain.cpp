@@ -31,9 +31,9 @@
 #define VESTA_NULLDEV "/dev/null"
 #endif
 
-#include "toolchain/aot_build.h"          // vesta::tc::compile_aot
+#include "toolchain/aot_build.h"         // vesta::tc::compile_aot
 #include "util/assembler_multiprocess.h" // asm_multi_process::run_worker
-#include "vx/compiler.h"                  // vx::compile_vx_source / _project
+#include "vx/compiler.h"                 // vx::compile_vx_source / _project
 
 // Algunos headers arrastrados (windows.h y utilidades vendored) definen ERROR
 // y ERR como macros; colisionan con los enumeradores.  Se limpian aqui, tras
@@ -70,8 +70,7 @@ bool collect_diags(const vx::CompileResult &res, std::vector<Diag> &out) {
         e.column = d.loc.column;
         e.message = d.message;
         e.file = d.loc.file;
-        if (e.level == DiagLevel::Error)
-            had_error = true;
+        if (e.level == DiagLevel::Error) had_error = true;
         out.push_back(std::move(e));
     }
     return had_error;
@@ -86,10 +85,9 @@ bool collect_diags(const vx::CompileResult &res, std::vector<Diag> &out) {
 /// porque hay escrituras via C stdio; por eso se redirige el descriptor de
 /// fichero a bajo nivel (captura cout + printf + fwrite).
 class StdoutSilencer {
-public:
+  public:
     explicit StdoutSilencer(bool active) : active_(active) {
-        if (!active_)
-            return;
+        if (!active_) return;
         std::fflush(stdout);
         saved_ = VESTA_DUP(VESTA_FILENO(stdout));
         null_ = std::fopen(VESTA_NULLDEV, "w");
@@ -97,8 +95,7 @@ public:
             VESTA_DUP2(VESTA_FILENO(null_), VESTA_FILENO(stdout));
     }
     ~StdoutSilencer() {
-        if (!active_)
-            return;
+        if (!active_) return;
         std::fflush(stdout);
         if (saved_ != -1) {
             VESTA_DUP2(saved_, VESTA_FILENO(stdout));
@@ -108,13 +105,12 @@ public:
             close(saved_);
 #endif
         }
-        if (null_)
-            std::fclose(null_);
+        if (null_) std::fclose(null_);
     }
     StdoutSilencer(const StdoutSilencer &) = delete;
     StdoutSilencer &operator=(const StdoutSilencer &) = delete;
 
-private:
+  private:
     bool active_;
     int saved_ = -1;
     std::FILE *null_ = nullptr;
@@ -216,11 +212,11 @@ CompileResponse compile(const CompileRequest &req) {
     {
         std::ofstream ofs(vel_path);
         if (!ofs.is_open()) {
-            resp.message = "no se pudo escribir el .vel intermedio: " + vel_path;
+            resp.message =
+                "no se pudo escribir el .vel intermedio: " + vel_path;
             return resp;
         }
-        if (opts.emit_debug)
-            ofs << "// @file " << req.input << "\n";
+        if (opts.emit_debug) ofs << "// @file " << req.input << "\n";
         ofs << cr.vel_text;
     }
 

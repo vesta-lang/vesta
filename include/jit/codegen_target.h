@@ -11,10 +11,10 @@
 /**
  * @file jit/codegen_target.h
  * @brief Interfaz de un TARGET de codegen (desacople multi-ISA del pipeline
- *        vreg).  El orquestador (@c vreg_compile_native_target) es arch-neutral:
- *        los tres pasos ISA-especificos -- SELECCION (IR->MachineIR), REWRITE
- *        (vreg->fisico + prologo/epilogo/spills) y ENCODE (MachineIR->bytes) --
- *        viven detras de esta interfaz.  El resto del pipeline (build_intervals,
+ *        vreg).  El orquestador (@c vreg_compile_native_target) es
+ * arch-neutral: los tres pasos ISA-especificos -- SELECCION (IR->MachineIR),
+ * REWRITE (vreg->fisico + prologo/epilogo/spills) y ENCODE (MachineIR->bytes)
+ * -- viven detras de esta interfaz.  El resto del pipeline (build_intervals,
  *        linear_scan, ssa_coalesce, scheduler, traduccion de relocs) es comun.
  *
  * Un target se CONSTRUYE con su configuracion (ABI, resolvers, float ISA...) y
@@ -25,11 +25,11 @@
 #ifndef VESTA_JIT_CODEGEN_TARGET_H
 #define VESTA_JIT_CODEGEN_TARGET_H
 
-#include "jit/interval.h"        // IntervalResult
+#include "jit/interval.h" // IntervalResult
 #include "codegen/regalloc.h"
-#include "jit/machine_ir.h"      // MFunction
+#include "jit/machine_ir.h"            // MFunction
 #include "jit/sched/machine_effects.h" // sched::EffIsa
-#include "jit/target_reginfo.h"  // TargetRegInfo
+#include "jit/target_reginfo.h"        // TargetRegInfo
 
 #include <cstdint>
 #include <vector>
@@ -68,8 +68,8 @@ class CodegenTarget {
                               const IntervalResult &ivs) const = 0;
 
     /**
-     * @brief ENCODE: emite los bytes maquina de @p pf (MachineIR fisico).  @p pf
-     *        NO es const: el encoder rellena line_map / relocs / stackmaps /
+     * @brief ENCODE: emite los bytes maquina de @p pf (MachineIR fisico).  @p
+     * pf NO es const: el encoder rellena line_map / relocs / stackmaps /
      *        label_offsets que el orquestador consume despues.
      * @return numero de bytes (0 = fallo).
      */

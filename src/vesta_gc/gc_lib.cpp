@@ -1,12 +1,14 @@
 /**
  * @file vesta_gc/gc_lib.cpp
- * @brief Implementacion de la C-ABI de `libvesta_gc` (GC opt-in de Vesta en AOT).
+ * @brief Implementacion de la C-ABI de `libvesta_gc` (GC opt-in de Vesta en
+ * AOT).
  *
  * Envuelve un `gc::GcHeap` GLOBAL (singleton) sin `ProcessVM`: el mismo motor
- * generacional mark-sweep del interprete/JIT, pero con un unico heap de proceso.
- * Las raices se descubriran via stackmaps precisos sobre frames nativos
- * (Inc 2); en este Inc 0, `owner_proc_` es nullptr -> `major_gc` conserva todos
- * los handles vivos (no colecta todavia), suficiente para validar alloc/deref.
+ * generacional mark-sweep del interprete/JIT, pero con un unico heap de
+ * proceso. Las raices se descubriran via stackmaps precisos sobre frames
+ * nativos (Inc 2); en este Inc 0, `owner_proc_` es nullptr -> `major_gc`
+ * conserva todos los handles vivos (no colecta todavia), suficiente para
+ * validar alloc/deref.
  *
  * NOTA de enlazado (Inc 0b pendiente): `gc_heap.cpp` aun arrastra
  * `proceso_runtime.h` por los caminos guardados por `owner_proc_ != nullptr`
@@ -74,7 +76,8 @@ gc::GcHeap &gc_heap() {
  * @param owner Ignorado (no hay ProcessVM en AOT).
  * @param f     Datos stageados del finalizador (kind + a0 + a1).
  */
-void gc_finalizer_run_native(void * /*owner*/, const gc::GcPendingFinalizer &f) {
+void gc_finalizer_run_native(void * /*owner*/,
+                             const gc::GcPendingFinalizer &f) {
     ++g_vx_gc_fin_count;
     switch (f.kind) {
     case gc::GcFinalizerKind::UNIQUE: {
@@ -110,16 +113,15 @@ void gc_finalizer_run_native(void * /*owner*/, const gc::GcPendingFinalizer &f) 
         break;
     }
     case gc::GcFinalizerKind::NONE:
-    default:
-        break;
+    default: break;
     }
 }
 
 } // namespace
 
-// Captura el frame Vesta LLAMADOR (frontera C<-Vesta) para el WALK POR TAMANO DE
-// FRAME del scan preciso de AOT.  Debe expandirse DENTRO de la runtime-entry que
-// el codigo Vesta llama directamente, para que:
+// Captura el frame Vesta LLAMADOR (frontera C<-Vesta) para el WALK POR TAMANO
+// DE FRAME del scan preciso de AOT.  Debe expandirse DENTRO de la runtime-entry
+// que el codigo Vesta llama directamente, para que:
 //   __builtin_return_address(0) = PC de retorno al frame Vesta (dentro de la
 //                                 funcion Vesta que hizo `call vx_gc_*`).
 //   __builtin_frame_address(0)  = RBP de ESTA entry = RSP_entry - 8, luego el
@@ -127,14 +129,14 @@ void gc_finalizer_run_native(void * /*owner*/, const gc::GcPendingFinalizer &f) 
 //                                 frame_addr + 16 (RSP_entry + 8).
 // La relacion +16 exige que la entry conserve frame pointer -> se marca con el
 // atributo optimize("no-omit-frame-pointer") (ver abajo).  Desde ese par
-// (pc, sp) el walk sube por la pila con frame_size (no cadena RBP), saltando los
-// frames C++ de esta libreria.
+// (pc, sp) el walk sube por la pila con frame_size (no cadena RBP), saltando
+// los frames C++ de esta libreria.
 #if defined(__GNUC__)
 #define VX_GC_FORCE_FP __attribute__((optimize("no-omit-frame-pointer")))
 #else
 #define VX_GC_FORCE_FP
 #endif
-#define VX_GC_CAPTURE_VX_FRAME()                                             \
+#define VX_GC_CAPTURE_VX_FRAME()                                               \
     gc_heap().set_aot_scan_boundary(                                           \
         reinterpret_cast<uint64_t>(__builtin_return_address(0)),               \
         reinterpret_cast<uint64_t>(__builtin_frame_address(0)) + 16u)
@@ -160,8 +162,8 @@ uint32_t vx_gc_alloc(uint64_t size) {
 
 uint8_t *vx_gc_alloc_ptr(uint64_t size) {
     // Aloca + deref en una llamada: devuelve el host_ptr al payload (estable en
-    // v1 no-moving).  Lo usa el helper __new_<X>_gc del frontend (gc<T>): el ptr
-    // se guarda en el slot del var-decl, marcado HOSTPTR en el stackmap ->
+    // v1 no-moving).  Lo usa el helper __new_<X>_gc del frontend (gc<T>): el
+    // ptr se guarda en el slot del var-decl, marcado HOSTPTR en el stackmap ->
     // handle_for_ptr lo resuelve al handle en la coleccion.
     gc::GcHeap &h = gc_heap();
     const gc::GcHandle handle = h.alloc_pinned(static_cast<size_t>(size));
@@ -170,7 +172,8 @@ uint8_t *vx_gc_alloc_ptr(uint64_t size) {
 }
 
 void vx_gc_register_aot_stackmaps(const uint8_t *sec) {
-    // El tamanño total va EMBEBIDO en el header (offset 12) -- no como parametro
+    // El tamanño total va EMBEBIDO en el header (offset 12) -- no como
+    // parametro
     // -- porque section_size seria una reloc SIZE no soportada en .obj/.o.
     if (!sec) return;
     uint32_t total = 0;
@@ -178,17 +181,19 @@ void vx_gc_register_aot_stackmaps(const uint8_t *sec) {
     const uint64_t size = total;
     // Parsea la seccion .vxgc_smap emitida por el driver -m aot y registra cada
     // funcion (rango de codigo + stackmaps) en el JitRegistry global, para que
-    // scan_jit_roots_precise (el mismo walker del JIT) descubra las raices gc<T>
-    // vivas en los frames nativos durante la coleccion.  La llama el arranque
-    // del binario (CALL __vxgc_init al inicio de main) antes del primer alloc.
+    // scan_jit_roots_precise (el mismo walker del JIT) descubra las raices
+    // gc<T> vivas en los frames nativos durante la coleccion.  La llama el
+    // arranque del binario (CALL __vxgc_init al inicio de main) antes del
+    // primer alloc.
     //
     // Formato (LE), version 2:
-    //   header 16B: u32 magic 'VXGM' | u32 version=2 | u32 n_fn | u32 total_size
-    //   por fn: u64 func_addr | u32 code_size | u32 frame_size | u32 n_safepoints
+    //   header 16B: u32 magic 'VXGM' | u32 version=2 | u32 n_fn | u32
+    //   total_size por fn: u64 func_addr | u32 code_size | u32 frame_size | u32
+    //   n_safepoints
     //     por safepoint: u32 pc_offset | u32 n_slots
     //       por slot: i16 rbp_offset | u8 gc_kind | u8 _pad
     // frame_size (v2) = RBP - RSP en un safepoint call; lo consume el WALK POR
-    // TAMANO DE FRAME (scan_aot_frames) para reconstruir RBP sin cadena RBP.  Un
+    // TAMANO DE FRAME (scan_aot_frames) para reconstruir RBP sin cadena RBP. Un
     // .vxgc_smap v1 (sin frame_size) falla el check de version -> recompilar.
     if (!sec || size < 16) return;
     const uint8_t *p = sec;
@@ -280,15 +285,17 @@ void vx_gc_unregister_finalizer(uint8_t *payload) {
 
 VX_GC_FORCE_FP void vx_gc_finalize_all(void) {
     // Capturar el frame Vesta llamador por si finalize_all_live disparara un
-    // scan de raices en el futuro (hoy solo corre finalizadores, sin mark/sweep;
-    // capturar es defensivo y mantiene el boundary fresco).
+    // scan de raices en el futuro (hoy solo corre finalizadores, sin
+    // mark/sweep; capturar es defensivo y mantiene el boundary fresco).
     VX_GC_CAPTURE_VX_FRAME();
     // Shutdown-time: finalizar todo objeto vivo con recurso interno (cubre los
     // escapados que el sweep no colecto todavia).  Cero fuga antes del exit.
     gc_heap().finalize_all_live();
 }
 
-uint64_t vx_gc_fin_count(void) { return g_vx_gc_fin_count; }
+uint64_t vx_gc_fin_count(void) {
+    return g_vx_gc_fin_count;
+}
 
 uint64_t vx_gc_live_count(void) {
     // No hay accesor directo de "handles vivos"; lo contamos sobre la tabla

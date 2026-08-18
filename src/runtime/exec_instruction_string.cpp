@@ -1144,7 +1144,8 @@ gc::GcHandle strconv_public(ProcessVM *vm, gc::GcHandle src_h,
         /* Sin tabla de codepage: se trata como Latin-1, que coincide con
          * CP1252 en el rango bajo.  La conversion FIEL de ANSI necesita la
          * codepage del sistema y no se hace aqui. */
-        for (uint32_t i = 0; i < src_len; ++i) cps.push_back(src_data[i]);
+        for (uint32_t i = 0; i < src_len; ++i)
+            cps.push_back(src_data[i]);
         break;
     default: /* ASCII y UTF8: ASCII es un subconjunto de UTF-8. */
         for (uint32_t i = 0; i < src_len;) {

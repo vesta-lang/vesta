@@ -51,7 +51,8 @@
 
 // CPU dispatch (cimiento): deteccion de features del host via cpuid.  Definida
 // en src/runtime/native_callback.cpp; misma que usa el builtin cpu_features().
-// Bit layout: 0=SSE2 1=SSE4.2 2=POPCNT 3=AVX 4=AVX2 5=BMI1 6=BMI2 7=AVX512F 8=ERMS.
+// Bit layout: 0=SSE2 1=SSE4.2 2=POPCNT 3=AVX 4=AVX2 5=BMI1 6=BMI2 7=AVX512F
+// 8=ERMS.
 extern "C" uint64_t vesta_runtime_cpu_features(void);
 
 namespace cli {
@@ -95,14 +96,17 @@ struct Row {
 };
 
 // Longitud visible = la del texto plano (los codigos ANSI no ocupan columnas).
-size_t visible_len(const Row &r) { return r.plain.size(); }
+size_t visible_len(const Row &r) {
+    return r.plain.size();
+}
 
 // Construye una fila "etiqueta:  valor" con la etiqueta en cyan/bold.
 Row make_row(const std::string &label, const std::string &plain_value,
              const std::string &colored_value) {
     // Etiqueta alineada a 8 columnas para que los valores queden en columna.
     std::string lab = label;
-    while (lab.size() < 8) lab.push_back(' ');
+    while (lab.size() < 8)
+        lab.push_back(' ');
     Row r;
     r.plain = lab + plain_value;
     r.colored = std::string(ui::cyan()) + ui::bold() + lab + ui::reset() +
@@ -119,19 +123,21 @@ std::string mark(bool present) {
 }
 
 // Version plana del mark (para medir ancho): siempre 4 chars.
-std::string mark_plain(bool /*present*/) { return "[--]"; }
+std::string mark_plain(bool /*present*/) {
+    return "[--]";
+}
 
 } // namespace
 
 void print_version_banner(std::ostream &os) {
-    // Salida MACHINE-READABLE cuando stdout no es un terminal (pipe/redireccion,
-    // p.ej. el harness de benchmark que captura `vm --version`): una sola linea
-    // parseable, sin la caja ni codigos ANSI.  El banner bonito solo en TTY.
+    // Salida MACHINE-READABLE cuando stdout no es un terminal
+    // (pipe/redireccion, p.ej. el harness de benchmark que captura `vm
+    // --version`): una sola linea parseable, sin la caja ni codigos ANSI.  El
+    // banner bonito solo en TTY.
     if (!VESTA_ISATTY_STDOUT()) {
         os << "Vesta v" << VX_VM_VERSION_STRING << "-alpha"
            << " (build " << VESTA_BUILD_DATE;
-        if (VESTA_GIT_HASH_KNOWN)
-            os << ", " << VESTA_GIT_HASH;
+        if (VESTA_GIT_HASH_KNOWN) os << ", " << VESTA_GIT_HASH;
         os << ")\n";
         return;
     }
@@ -174,7 +180,8 @@ void print_version_banner(std::ostream &os) {
     // target: SO + arch.
     {
         std::string tgt = std::string(platform_os()) + " " + platform_arch();
-        rows.push_back(make_row("target:", tgt, std::string(ui::reset()) + tgt));
+        rows.push_back(
+            make_row("target:", tgt, std::string(ui::reset()) + tgt));
     }
 
     // modos: interprete . JIT . AOT (los tres siempre compilados).
@@ -220,7 +227,8 @@ void print_version_banner(std::ostream &os) {
 
     // ---- Calcular ancho interior de la caja ----------------------------
     size_t inner = 0;
-    for (const Row &r : rows) inner = std::max(inner, visible_len(r));
+    for (const Row &r : rows)
+        inner = std::max(inner, visible_len(r));
     const size_t pad_left = 1;  // espacio tras el borde izquierdo
     const size_t pad_right = 1; // espacio antes del borde derecho
     const size_t width = inner + pad_left + pad_right;
@@ -230,7 +238,8 @@ void print_version_banner(std::ostream &os) {
 
     // Borde superior: +----...----+
     os << cyan << "+";
-    for (size_t i = 0; i < width; ++i) os << "-";
+    for (size_t i = 0; i < width; ++i)
+        os << "-";
     os << "+" << reset << "\n";
 
     // Filas: | <colored> <padding> |
@@ -246,7 +255,8 @@ void print_version_banner(std::ostream &os) {
 
     // Borde inferior.
     os << cyan << "+";
-    for (size_t i = 0; i < width; ++i) os << "-";
+    for (size_t i = 0; i < width; ++i)
+        os << "-";
     os << "+" << reset << "\n";
 }
 

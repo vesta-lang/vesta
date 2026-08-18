@@ -10,22 +10,25 @@
  * @brief Fase 1 (dominio): la IDENTIDAD del problema de asignacion.
  *
  * Define formalmente cuando dos problemas de asignacion son EL MISMO: conservan
- * la estructura de interferencia + clase + ancho + registros fijados, y eliminan
- * lo ARBITRARIO (value_ids, orden de la lista, offset absoluto de posiciones).
- * Es una relacion de EQUIVALENCIA ESTRUCTURAL; el @c canonical_hash es su testigo.
+ * la estructura de interferencia + clase + ancho + registros fijados, y
+ * eliminan lo ARBITRARIO (value_ids, orden de la lista, offset absoluto de
+ * posiciones). Es una relacion de EQUIVALENCIA ESTRUCTURAL; el @c
+ * canonical_hash es su testigo.
  *
- *     AbstractProblem  --canonicalize-->  CanonicalProblem { canon, hash, mapeos }
+ *     AbstractProblem  --canonicalize-->  CanonicalProblem { canon, hash,
+ * mapeos }
  *
  * Este fichero es el CONCEPTO DEL DOMINIO -- existe aunque nunca se reuse una
  * solucion.  La cache que se APOYA en el (solution_cache.h) es una optimizacion
  * separada.
  *
  * NORMALIZACION:
- *   - posiciones -> coordinate compression a coordenadas densas (0,1,2,...).  El
+ *   - posiciones -> coordinate compression a coordenadas densas (0,1,2,...). El
  *     solapamiento solo depende del ORDEN de los eventos y comp es monotona
- *     (a<b<c<d -> 0<1<2<3), asi que la interferencia NO cambia.  No se introduce
- *     informacion artificial.
- *   - value_id -> renombrado por la CLAVE (start,end,clase,ancho,pin), no por id.
+ *     (a<b<c<d -> 0<1<2<3), asi que la interferencia NO cambia.  No se
+ * introduce informacion artificial.
+ *   - value_id -> renombrado por la CLAVE (start,end,clase,ancho,pin), no por
+ * id.
  *   - orden de la lista -> irrelevante (se ordena por clave).
  * El hash es sobre la DESCRIPCION canonica, NO sobre el grafo de interferencia
  * (que es una consecuencia de la descripcion) -> evita reconstruirlo.
@@ -50,35 +53,41 @@ namespace rbank {
 /**
  * @struct ProblemFingerprint
  * @brief IDENTIDAD ESTRUCTURAL de un problema de asignacion (tipo FUERTE, no un
- *        @c uint64 crudo).  Representa "estos dos problemas son EL MISMO"; el tipo
- *        evita mezclarlo accidentalmente con otras huellas (banco, policy).
+ *        @c uint64 crudo).  Representa "estos dos problemas son EL MISMO"; el
+ * tipo evita mezclarlo accidentalmente con otras huellas (banco, policy).
  */
 struct ProblemFingerprint {
     uint64_t value = 0;
-    bool operator==(const ProblemFingerprint &o) const noexcept { return value == o.value; }
-    bool operator!=(const ProblemFingerprint &o) const noexcept { return value != o.value; }
+    bool operator==(const ProblemFingerprint &o) const noexcept {
+        return value == o.value;
+    }
+    bool operator!=(const ProblemFingerprint &o) const noexcept {
+        return value != o.value;
+    }
 };
 
 /**
  * @struct CanonicalProblem
- * @brief Forma canonica de un @c AbstractProblem + huella + mapeos de traduccion.
+ * @brief Forma canonica de un @c AbstractProblem + huella + mapeos de
+ * traduccion.
  *
  * Es un OBJETO CON SEMANTICA PROPIA (no un helper): representacion normalizada
- * (@c canon) + identidad (@c fingerprint) + traduccion de ida (@c orig_to_canon)
- * y de vuelta (@c canon_to_orig).  @c canon tiene los value_ids renombrados a
- * 0..n-1 (por orden de clave) y las posiciones comprimidas.  Los mapeos permiten
- * llevar una solucion expresada en ids CANONICOS de vuelta a los ids reales.
+ * (@c canon) + identidad (@c fingerprint) + traduccion de ida (@c
+ * orig_to_canon) y de vuelta (@c canon_to_orig).  @c canon tiene los value_ids
+ * renombrados a 0..n-1 (por orden de clave) y las posiciones comprimidas.  Los
+ * mapeos permiten llevar una solucion expresada en ids CANONICOS de vuelta a
+ * los ids reales.
  */
 struct CanonicalProblem {
-    AbstractProblem                        canon;
-    ProblemFingerprint                     fingerprint;
-    std::vector<uint32_t>                  canon_to_orig; ///< canonical_id -> orig.
+    AbstractProblem canon;
+    ProblemFingerprint fingerprint;
+    std::vector<uint32_t> canon_to_orig; ///< canonical_id -> orig.
     std::unordered_map<uint32_t, uint32_t> orig_to_canon;
 };
 
 /**
- * @brief Canonicaliza @p p: comprime posiciones + renombra value_ids por CLAVE +
- *        computa el hash invariante.  Funcion pura.
+ * @brief Canonicaliza @p p: comprime posiciones + renombra value_ids por CLAVE
+ * + computa el hash invariante.  Funcion pura.
  */
 inline CanonicalProblem canonicalize(const AbstractProblem &p) {
     CanonicalProblem cp;
@@ -99,8 +108,8 @@ inline CanonicalProblem canonicalize(const AbstractProblem &p) {
 
     // 2) Clave canonica por valor (SIN el value_id: los ids son arbitrarios).
     struct Keyed {
-        uint32_t          orig_id;
-        uint32_t          s, e;     // posiciones comprimidas.
+        uint32_t orig_id;
+        uint32_t s, e; // posiciones comprimidas.
         ValueRequirements req;
     };
     std::vector<Keyed> ks;
@@ -108,18 +117,20 @@ inline CanonicalProblem canonicalize(const AbstractProblem &p) {
     for (const AbstractValue &v : p.values)
         ks.push_back({v.value_id, compress(v.start), compress(v.end), v.req});
 
-    // Orden canonico por la clave (start, end, clase, ancho, pin).  El orig_id es
-    // solo el DESEMPATE final (determinista); no entra en el hash.
+    // Orden canonico por la clave (start, end, clase, ancho, pin).  El orig_id
+    // es solo el DESEMPATE final (determinista); no entra en el hash.
     std::sort(ks.begin(), ks.end(), [](const Keyed &a, const Keyed &b) {
         if (a.s != b.s) return a.s < b.s;
         if (a.e != b.e) return a.e < b.e;
         if (a.req.cls != b.req.cls) return a.req.cls < b.req.cls;
         if (a.req.width != b.req.width) return a.req.width < b.req.width;
-        if (a.req.fixed_reg != b.req.fixed_reg) return a.req.fixed_reg < b.req.fixed_reg;
+        if (a.req.fixed_reg != b.req.fixed_reg)
+            return a.req.fixed_reg < b.req.fixed_reg;
         return a.orig_id < b.orig_id;
     });
 
-    // 3) Construir el problema canonico + mapeos + hash (sobre las CLAVES, sin id).
+    // 3) Construir el problema canonico + mapeos + hash (sobre las CLAVES, sin
+    // id).
     uint64_t h = kFnvOffset;
     cp.canon_to_orig.reserve(ks.size());
     for (uint32_t cid = 0; cid < ks.size(); ++cid) {
@@ -138,13 +149,15 @@ inline CanonicalProblem canonicalize(const AbstractProblem &p) {
         h = fnv_mix(h, k.e);
         h = fnv_mix(h, static_cast<uint64_t>(k.req.cls));
         h = fnv_mix(h, static_cast<uint64_t>(k.req.width));
-        h = fnv_mix(h, static_cast<uint64_t>(static_cast<int64_t>(k.req.fixed_reg)));
+        h = fnv_mix(
+            h, static_cast<uint64_t>(static_cast<int64_t>(k.req.fixed_reg)));
     }
     cp.fingerprint = ProblemFingerprint{h};
     return cp;
 }
 
-/** @brief Huella canonica de @p p (conveniencia; = canonicalize(p).fingerprint). */
+/** @brief Huella canonica de @p p (conveniencia; =
+ * canonicalize(p).fingerprint). */
 inline ProblemFingerprint canonical_hash(const AbstractProblem &p) {
     return canonicalize(p).fingerprint;
 }

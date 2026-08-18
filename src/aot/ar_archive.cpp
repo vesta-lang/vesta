@@ -19,11 +19,11 @@
 namespace aot {
 namespace {
 
-constexpr size_t AR_MAGIC_LEN = 8;     // "!<arch>\n"
-constexpr size_t AR_HDR_LEN = 60;      // cabecera de miembro
-constexpr size_t AR_NAME_OFF = 0;      // nombre (16 bytes)
+constexpr size_t AR_MAGIC_LEN = 8; // "!<arch>\n"
+constexpr size_t AR_HDR_LEN = 60;  // cabecera de miembro
+constexpr size_t AR_NAME_OFF = 0;  // nombre (16 bytes)
 constexpr size_t AR_NAME_LEN = 16;
-constexpr size_t AR_SIZE_OFF = 48;     // tamano (10 bytes, decimal ASCII)
+constexpr size_t AR_SIZE_OFF = 48; // tamano (10 bytes, decimal ASCII)
 constexpr size_t AR_SIZE_LEN = 10;
 
 /// Lee un campo decimal ASCII (con relleno de espacios) -> size_t.
@@ -46,7 +46,8 @@ uint32_t rd32be(const uint8_t *p) {
 /// Recorta espacios y '/' finales de un nombre corto GNU.
 std::string trim_name(const uint8_t *p, size_t n) {
     size_t end = n;
-    while (end > 0 && (p[end - 1] == ' ' || p[end - 1] == '\n')) --end;
+    while (end > 0 && (p[end - 1] == ' ' || p[end - 1] == '\n'))
+        --end;
     // GNU termina los nombres cortos con '/'.
     if (end > 0 && p[end - 1] == '/') --end;
     return std::string(reinterpret_cast<const char *>(p), end);
@@ -87,8 +88,9 @@ bool ar_parse(const std::vector<uint8_t> &buf, std::vector<ArMember> &members,
         err = "no es un archivo .a (magic '!<arch>'/'!<thin>' ausente)";
         return false;
     }
-    // En un thin archive los miembros no llevan datos inline: la ruta del objeto
-    // (resuelta desde la tabla "//") es el nombre, y el linker lee ese fichero.
+    // En un thin archive los miembros no llevan datos inline: la ruta del
+    // objeto (resuelta desde la tabla "//") es el nombre, y el linker lee ese
+    // fichero.
     const bool thin = ar_is_thin(buf);
 
     // Tabla de nombres largos GNU ("//"): span dentro del buffer.

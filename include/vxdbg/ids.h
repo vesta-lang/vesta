@@ -114,7 +114,6 @@ template <typename Tag> struct NodeId {
     bool operator<(const NodeId &o) const { return hash < o.hash; }
 };
 
-
 /// Etiquetas de genero.  Solo existen para dar identidad a @ref NodeId.
 struct ModuleTag {};
 struct TypeTag {};
@@ -138,8 +137,9 @@ using BlockId = NodeId<BlockTag>;           ///< un bloque basico
 using IrInstrId = NodeId<IrInstrTag>;       ///< una instruccion intermedia
 using CodeId = NodeId<CodeTag>;             ///< un tramo de codigo generado
 using UnitId = NodeId<struct UnitTag>;      ///< una compilacion concreta
-using LanguageEntityId = NodeId<struct LanguageEntityTag>; ///< algo que declaro un frontend
-using FileId = NodeId<struct FileTag>;      ///< un fichero de codigo
+using LanguageEntityId =
+    NodeId<struct LanguageEntityTag>;  ///< algo que declaro un frontend
+using FileId = NodeId<struct FileTag>; ///< un fichero de codigo
 
 } // namespace vxdbg
 

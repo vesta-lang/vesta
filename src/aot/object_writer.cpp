@@ -85,9 +85,9 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
     ccfg.tls_callback_off = cfg_.tls_callback_off;
     ccfg.machine = cfg_.machine;
 
-    // TLS (thread_local): si hay una seccion TLS hace falta el cargador dinamico
-    // (monta el bloque TLS + el thread pointer antes del entry) -> forzar la ruta
-    // ELF dinamica aunque no haya imports de libc.
+    // TLS (thread_local): si hay una seccion TLS hace falta el cargador
+    // dinamico (monta el bloque TLS + el thread pointer antes del entry) ->
+    // forzar la ruta ELF dinamica aunque no haya imports de libc.
     bool has_tls = false;
     for (const AotSection &s : csecs)
         if (s.flags & AOT_SEC_TLS) {
@@ -120,16 +120,16 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
     char errbuf[256] = {0};
     int ok = 0;
 
-    // --aot-debug=1: fija los simbolos de funcion (nombre->VA) para que el emisor
-    // de EXEC (ELF/PE) y de SHARED (.dll) embeban un .symtab ELF / symtab COFF.
-    // Se declara aqui (scope de la funcion) para sobrevivir a TODOS los caminos
-    // de emit (incluidos los early-return de SHARED/OBJECT/FLAT_BIN).  Se llama
-    // SIEMPRE (con nullptr si no aplica) para no arrastrar estado de un emit
-    // anterior.  OBJECT ya lleva symtab por diseno -> no se le fija aqui.
+    // --aot-debug=1: fija los simbolos de funcion (nombre->VA) para que el
+    // emisor de EXEC (ELF/PE) y de SHARED (.dll) embeban un .symtab ELF /
+    // symtab COFF. Se declara aqui (scope de la funcion) para sobrevivir a
+    // TODOS los caminos de emit (incluidos los early-return de
+    // SHARED/OBJECT/FLAT_BIN).  Se llama SIEMPRE (con nullptr si no aplica)
+    // para no arrastrar estado de un emit anterior.  OBJECT ya lleva symtab por
+    // diseno -> no se le fija aqui.
     std::vector<AotSym> dbg_csyms;
     std::vector<std::string> dbg_hold;
-    if (debug_ &&
-        (kind_ == OutputKind::EXEC || kind_ == OutputKind::SHARED) &&
+    if (debug_ && (kind_ == OutputKind::EXEC || kind_ == OutputKind::SHARED) &&
         !symbols_.empty()) {
         dbg_csyms.resize(symbols_.size());
         dbg_hold.resize(symbols_.size());
@@ -161,25 +161,23 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
         const AotSym *sym_ptr = csyms.empty() ? nullptr : csyms.data();
         const int sym_n = static_cast<int>(csyms.size());
         if (fmt_ == ObjFormat::ELF)
-            ok = mode32_
-                     ? aot_emit_elf32_obj(path.c_str(), csecs.data(),
-                                          static_cast<int>(csecs.size()),
-                                          crel_ptr, crel_n, sym_ptr, sym_n,
-                                          errbuf, sizeof(errbuf))
-                     : aot_emit_elf_obj(path.c_str(), csecs.data(),
-                                        static_cast<int>(csecs.size()), crel_ptr,
-                                        crel_n, sym_ptr, sym_n, errbuf,
-                                        sizeof(errbuf));
+            ok = mode32_ ? aot_emit_elf32_obj(path.c_str(), csecs.data(),
+                                              static_cast<int>(csecs.size()),
+                                              crel_ptr, crel_n, sym_ptr, sym_n,
+                                              errbuf, sizeof(errbuf))
+                         : aot_emit_elf_obj(path.c_str(), csecs.data(),
+                                            static_cast<int>(csecs.size()),
+                                            crel_ptr, crel_n, sym_ptr, sym_n,
+                                            errbuf, sizeof(errbuf));
         else /* PE -> COFF .obj (AMD64 o i386 segun mode32) */
-            ok = mode32_
-                     ? aot_emit_coff32_obj(path.c_str(), csecs.data(),
-                                           static_cast<int>(csecs.size()),
-                                           crel_ptr, crel_n, sym_ptr, sym_n,
-                                           errbuf, sizeof(errbuf))
-                     : aot_emit_coff_obj(path.c_str(), csecs.data(),
-                                         static_cast<int>(csecs.size()),
-                                         crel_ptr, crel_n, sym_ptr, sym_n,
-                                         errbuf, sizeof(errbuf));
+            ok = mode32_ ? aot_emit_coff32_obj(path.c_str(), csecs.data(),
+                                               static_cast<int>(csecs.size()),
+                                               crel_ptr, crel_n, sym_ptr, sym_n,
+                                               errbuf, sizeof(errbuf))
+                         : aot_emit_coff_obj(path.c_str(), csecs.data(),
+                                             static_cast<int>(csecs.size()),
+                                             crel_ptr, crel_n, sym_ptr, sym_n,
+                                             errbuf, sizeof(errbuf));
         if (!ok) {
             err = errbuf[0] ? errbuf : "ObjectWriter: error obj";
             return false;

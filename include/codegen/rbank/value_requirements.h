@@ -56,9 +56,9 @@ namespace rbank {
  * @brief Donde debe poder vivir el valor.
  */
 enum class Residency : uint8_t {
-    ANY = 0,   ///< registro o memoria: el allocator elige.
-    REGISTER,  ///< debe estar en registro en sus usos (escalar normal).
-    MEMORY,    ///< debe tener direccion en memoria (address-taken, agregados).
+    ANY = 0,  ///< registro o memoria: el allocator elige.
+    REGISTER, ///< debe estar en registro en sus usos (escalar normal).
+    MEMORY,   ///< debe tener direccion en memoria (address-taken, agregados).
 };
 
 /**
@@ -71,10 +71,10 @@ enum class Residency : uint8_t {
  * Facts, no recomputados aqui.
  */
 struct ValueRequirements {
-    uint32_t      value_id  = 0;                  ///< id del valor SSA.
-    ResourceClass cls       = ResourceClass::GP;  ///< clase de recurso que necesita.
-    ViewWidth     width     = ViewWidth::W8;       ///< ancho que ocupa.
-    Residency     residency = Residency::ANY;      ///< donde puede vivir.
+    uint32_t value_id = 0;                 ///< id del valor SSA.
+    ResourceClass cls = ResourceClass::GP; ///< clase de recurso que necesita.
+    ViewWidth width = ViewWidth::W8;       ///< ancho que ocupa.
+    Residency residency = Residency::ANY;  ///< donde puede vivir.
 
     // --- Hechos estructurales (poblados desde la capa de Facts) ---
     /* DOS preguntas distintas sobre la misma llamada, con criterios OPUESTOS.
@@ -82,46 +82,52 @@ struct ValueRequirements {
      * malo para la otra (medido; ver la nota de @c liveness_adapter).
      *
      * @c crosses_call = VIVO EN la posicion de un CALL (criterio INCLUSIVO,
-     * `def <= p <= end`).  Es lo que necesita el stackmap: una raiz de GC viva en
-     * un safepoint DEBE constar, y estrechar esto deja de marcar raices -- no es
-     * rendimiento, es correccion.
+     * `def <= p <= end`).  Es lo que necesita el stackmap: una raiz de GC viva
+     * en un safepoint DEBE constar, y estrechar esto deja de marcar raices --
+     * no es rendimiento, es correccion.
      *
      * @c needs_preserved = SOBREVIVE a la llamada (criterio ESTRICTO,
      * `def < p < end`).  Es lo que decide si hace falta una lane PRESERVADA: un
-     * valor definido EN `p` es el resultado de `p` y no puede destruirlo quien lo
-     * produce; uno cuyo ultimo uso esta EN `p` lo consume `p` y no necesita
+     * valor definido EN `p` es el resultado de `p` y no puede destruirlo quien
+     * lo produce; uno cuyo ultimo uso esta EN `p` lo consume `p` y no necesita
      * sobrevivirla.  Con el criterio inclusivo, el operando de un bloque asm
      * -- intervalo [p,p] del propio bloque, que cuenta como posicion de llamada
      * porque clobbea -- salia "cruzandose a si mismo", pedia lane preservada, y
      * en el banco vectorial de x86-64 no hay ninguna: 0 admisibles. */
-    bool     crosses_call     = false; ///< vivo EN un CALL (inclusivo) -- GC.
-    bool     needs_preserved  = false; ///< sobrevive a un CALL (estricto) -- lane.
-    bool     is_gc            = false; ///< handle/puntero GC (visible en stackmap).
-    bool     address_taken    = false; ///< se toma su direccion -> implica MEMORY.
-    bool     rematerializable = false; ///< recomputable en vez de spillear (const/lea).
-    uint16_t loop_depth       = 0;     ///< profundidad de loop de su def (hotness estatica).
-    /// Peso de ejecucion MEDIDO (de ProfileFacts).  0 = sin perfil -> el contexto
-    /// usa el estimador estatico @c static_execution_weight(loop_depth).
-    double   execution_weight = 0.0;
+    bool crosses_call = false;    ///< vivo EN un CALL (inclusivo) -- GC.
+    bool needs_preserved = false; ///< sobrevive a un CALL (estricto) -- lane.
+    bool is_gc = false;           ///< handle/puntero GC (visible en stackmap).
+    bool address_taken = false;   ///< se toma su direccion -> implica MEMORY.
+    bool rematerializable =
+        false; ///< recomputable en vez de spillear (const/lea).
+    uint16_t loop_depth =
+        0; ///< profundidad de loop de su def (hotness estatica).
+    /// Peso de ejecucion MEDIDO (de ProfileFacts).  0 = sin perfil -> el
+    /// contexto usa el estimador estatico @c
+    /// static_execution_weight(loop_depth).
+    double execution_weight = 0.0;
 
     /// Pin DURO a un registro fisico (inline asm / arg/ret del ABI): id o -1.
     int16_t fixed_reg = -1;
 
     /// Lanes fisicas PROHIBIDAS para este valor (bitmask por id, 0..63): alguna
-    /// muere en un punto que el valor atraviesa (caller-saved de un CALL, clobbers
-    /// de un INLINE_ASM, de un stub/syscall/trampolin...).  Al allocator le da igual
-    /// QUE lo causo: solo "esta lane no sobrevive".  Es la SEMILLA del futuro
-    /// ClobberPoint/HazardPoint unificado: hoy se PRE-COMPUTA por valor (union de los
-    /// clobbers en su rango); manyana un vector<ClobberPoint> con posiciones lo
-    /// derivara y @c crosses_call se reexpresara como "caller-saved en forbidden".
+    /// muere en un punto que el valor atraviesa (caller-saved de un CALL,
+    /// clobbers de un INLINE_ASM, de un stub/syscall/trampolin...).  Al
+    /// allocator le da igual QUE lo causo: solo "esta lane no sobrevive".  Es
+    /// la SEMILLA del futuro ClobberPoint/HazardPoint unificado: hoy se
+    /// PRE-COMPUTA por valor (union de los clobbers en su rango); manyana un
+    /// vector<ClobberPoint> con posiciones lo derivara y @c crosses_call se
+    /// reexpresara como "caller-saved en forbidden".
     uint64_t forbidden_lanes = 0;
 
     bool has_fixed_reg() const noexcept { return fixed_reg >= 0; }
-    /** @brief True si la lane fisica @p id esta prohibida (algun hazard la mata). */
+    /** @brief True si la lane fisica @p id esta prohibida (algun hazard la
+     * mata). */
     bool lane_forbidden(uint8_t id) const noexcept {
         return id < 64 && (forbidden_lanes & (1ull << id)) != 0;
     }
-    /** @brief True si el valor DEBE residir en memoria (residency o addr-taken). */
+    /** @brief True si el valor DEBE residir en memoria (residency o
+     * addr-taken). */
     bool must_be_memory() const noexcept {
         return residency == Residency::MEMORY || address_taken;
     }
@@ -133,7 +139,8 @@ struct ValueRequirements {
 //  estos helpers para no acoplar este nivel al frontend/IR.
 // ---------------------------------------------------------------------------
 
-/** @brief Clase de recurso segun si el valor es float/vector o entero/puntero. */
+/** @brief Clase de recurso segun si el valor es float/vector o entero/puntero.
+ */
 constexpr ResourceClass resource_class_for(bool is_fp_or_vector) noexcept {
     return is_fp_or_vector ? ResourceClass::FP_VECTOR : ResourceClass::GP;
 }
@@ -141,17 +148,17 @@ constexpr ResourceClass resource_class_for(bool is_fp_or_vector) noexcept {
 /**
  * @brief Ancho de vista que ocupa un valor de @p bytes.
  *
- * CONTRATO (total, sin fallos): redondea SIEMPRE HACIA ARRIBA a la potencia de 2
- * mas cercana >= @p bytes, acotado a [W1, W64].  Nunca asserta ni devuelve error.
- * Casos:  0 -> W1;  3 -> W4 (un valor de 3 B ocupa un slot de 4 B);  5..8 -> W8;
- * >64 -> W64 (saturado).  Redondear ARRIBA es lo seguro: nunca sub-dimensiona el
- * registro/slot que aloja el valor.
+ * CONTRATO (total, sin fallos): redondea SIEMPRE HACIA ARRIBA a la potencia de
+ * 2 mas cercana >= @p bytes, acotado a [W1, W64].  Nunca asserta ni devuelve
+ * error. Casos:  0 -> W1;  3 -> W4 (un valor de 3 B ocupa un slot de 4
+ * B);  5..8 -> W8; >64 -> W64 (saturado).  Redondear ARRIBA es lo seguro: nunca
+ * sub-dimensiona el registro/slot que aloja el valor.
  */
 constexpr ViewWidth view_width_for_bytes(uint32_t bytes) noexcept {
-    if (bytes <= 1)  return ViewWidth::W1;
-    if (bytes <= 2)  return ViewWidth::W2;
-    if (bytes <= 4)  return ViewWidth::W4;
-    if (bytes <= 8)  return ViewWidth::W8;
+    if (bytes <= 1) return ViewWidth::W1;
+    if (bytes <= 2) return ViewWidth::W2;
+    if (bytes <= 4) return ViewWidth::W4;
+    if (bytes <= 8) return ViewWidth::W8;
     if (bytes <= 16) return ViewWidth::W16;
     if (bytes <= 32) return ViewWidth::W32;
     return ViewWidth::W64;
@@ -169,14 +176,14 @@ constexpr ViewWidth view_width_for_bytes(uint32_t bytes) noexcept {
  *        un diagnostico; este enum NO es texto.
  */
 enum class UnsatReason : uint8_t {
-    OK = 0,                       ///< satisfacible.
-    NO_LANE_OF_CLASS,             ///< el banco no tiene lanes de la clase pedida.
-    WIDTH_UNSUPPORTED,            ///< ninguna lane de la clase soporta el ancho.
-    FIXED_REG_MISSING,            ///< el fixed_reg no existe en el banco.
-    FIXED_REG_WRONG_CLASS,        ///< el fixed_reg es de otra clase de recurso.
-    FIXED_REG_WIDTH_UNSUPPORTED,  ///< el fixed_reg no soporta el ancho pedido.
-    FIXED_REG_UNUSABLE,           ///< el fixed_reg no puede alojar un valor
-                                  ///< (scratch/frame/puntero-ABI/plataforma).
+    OK = 0,                ///< satisfacible.
+    NO_LANE_OF_CLASS,      ///< el banco no tiene lanes de la clase pedida.
+    WIDTH_UNSUPPORTED,     ///< ninguna lane de la clase soporta el ancho.
+    FIXED_REG_MISSING,     ///< el fixed_reg no existe en el banco.
+    FIXED_REG_WRONG_CLASS, ///< el fixed_reg es de otra clase de recurso.
+    FIXED_REG_WIDTH_UNSUPPORTED, ///< el fixed_reg no soporta el ancho pedido.
+    FIXED_REG_UNUSABLE,          ///< el fixed_reg no puede alojar un valor
+                                 ///< (scratch/frame/puntero-ABI/plataforma).
 };
 
 /**
@@ -184,9 +191,9 @@ enum class UnsatReason : uint8_t {
  * @brief Resultado de @c requirements_satisfiable: DATOS para el diagnostico.
  */
 struct SatisfiabilityReport {
-    bool        ok            = true;             ///< satisfacible.
-    UnsatReason reason        = UnsatReason::OK;  ///< motivo (dato i18n-ready).
-    uint8_t     offending_reg = 0xFF;            ///< fixed_reg implicado (o 0xFF).
+    bool ok = true;                       ///< satisfacible.
+    UnsatReason reason = UnsatReason::OK; ///< motivo (dato i18n-ready).
+    uint8_t offending_reg = 0xFF;         ///< fixed_reg implicado (o 0xFF).
 };
 
 /**
@@ -195,18 +202,19 @@ struct SatisfiabilityReport {
  *        (mantiene ocupados los VEC_ACC demand-driven).
  *
  * Un valor con residencia en MEMORIA siempre es satisfacible (un slot de pila
- * siempre existe).  Un pin duro (@c fixed_reg) exige que esa lane exista, sea de
- * la clase correcta, soporte el ancho y pueda alojar valores (no scratch/frame).
- * En otro caso, basta con que exista alguna lane asignable de la clase que
- * soporte el ancho.
+ * siempre existe).  Un pin duro (@c fixed_reg) exige que esa lane exista, sea
+ * de la clase correcta, soporte el ancho y pueda alojar valores (no
+ * scratch/frame). En otro caso, basta con que exista alguna lane asignable de
+ * la clase que soporte el ancho.
  */
-inline SatisfiabilityReport requirements_satisfiable(
-    const ValueRequirements &r, const PhysicalRegisterBank &bank,
-    bool vec_reduction_active) {
-
+inline SatisfiabilityReport
+requirements_satisfiable(const ValueRequirements &r,
+                         const PhysicalRegisterBank &bank,
+                         bool vec_reduction_active) {
     SatisfiabilityReport rep;
 
-    // Un valor que reside en memoria no necesita registro: siempre satisfacible.
+    // Un valor que reside en memoria no necesita registro: siempre
+    // satisfacible.
     if (r.must_be_memory() && !r.has_fixed_reg()) return rep;
 
     // Pin duro a un registro fisico concreto.
@@ -215,19 +223,27 @@ inline SatisfiabilityReport requirements_satisfiable(
         rep.offending_reg = id;
         const Lane *l = bank.by_id(id);
         if (!l) {
-            rep.ok = false; rep.reason = UnsatReason::FIXED_REG_MISSING; return rep;
+            rep.ok = false;
+            rep.reason = UnsatReason::FIXED_REG_MISSING;
+            return rep;
         }
         if (l->cls != r.cls) {
-            rep.ok = false; rep.reason = UnsatReason::FIXED_REG_WRONG_CLASS; return rep;
+            rep.ok = false;
+            rep.reason = UnsatReason::FIXED_REG_WRONG_CLASS;
+            return rep;
         }
         if (!l->supports(r.width)) {
-            rep.ok = false; rep.reason = UnsatReason::FIXED_REG_WIDTH_UNSUPPORTED; return rep;
+            rep.ok = false;
+            rep.reason = UnsatReason::FIXED_REG_WIDTH_UNSUPPORTED;
+            return rep;
         }
         // Un scratch, frame, puntero-ABI o plataforma no puede alojar un valor.
         const ReserveReason rr = l->reserve.reason;
         if (rr == ReserveReason::SCRATCH || rr == ReserveReason::ABI ||
             rr == ReserveReason::PLATFORM) {
-            rep.ok = false; rep.reason = UnsatReason::FIXED_REG_UNUSABLE; return rep;
+            rep.ok = false;
+            rep.reason = UnsatReason::FIXED_REG_UNUSABLE;
+            return rep;
         }
         return rep; // pin valido.
     }

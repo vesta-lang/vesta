@@ -745,7 +745,7 @@ VESTA_PLUGIN_EXPORT int64_t vio_parse_int(uint64_t s_host, uint64_t len) {
         else if (c >= 'A' && c <= 'F')
             d = 10u + (unsigned)(c - 'A');
         else
-            return 0; /* caracter no hexadecimal */
+            return 0;            /* caracter no hexadecimal */
         if (d >= base) return 0; /* digito fuera de la base activa */
         /* Overflow de u64: acc*base + d > UINT64_MAX. */
         if (acc > (UINT64_MAX - d) / base) return 0;
@@ -1577,9 +1577,6 @@ VESTA_PLUGIN_EXPORT uint64_t vio_flush(void) {
     vio_flush_public();
     return 0;
 }
-
-
-
 
 /* -----------------------------------------------------------------------
  * Entrada de texto hacia memoria VM (sin cambios respecto a la version

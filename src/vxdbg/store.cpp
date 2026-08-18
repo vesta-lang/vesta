@@ -178,8 +178,7 @@ bool FileNodeStore::get(ContentHash hash, StoredNode &out) const {
     // ademas dentro seria repetir el dato y abrir la puerta a que discrepen.
     out.header.hash = hash;
     out.payload.resize(fh.payload_size);
-    if (fh.payload_size > 0 &&
-        !r.raw(out.payload.data(), fh.payload_size)) {
+    if (fh.payload_size > 0 && !r.raw(out.payload.data(), fh.payload_size)) {
         return false;
     }
     if (!r.ok()) return false;
@@ -189,8 +188,7 @@ bool FileNodeStore::get(ContentHash hash, StoredNode &out) const {
         // -- por un disco que falla o por alguien que lo toco -- se serviria
         // como si fuera el nodo que se pedia, y a partir de ahi todo lo que se
         // explique con el seria falso.
-        const auto real =
-            hash_bytes(out.payload.data(), out.payload.size());
+        const auto real = hash_bytes(out.payload.data(), out.payload.size());
         if (!(real == hash)) return false;
     }
     return true;

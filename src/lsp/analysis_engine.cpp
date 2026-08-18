@@ -67,8 +67,7 @@ namespace {
 uint32_t first_source_line(const ir::IrFunction &fn) {
     for (const auto &blk : fn.blocks) {
         for (const auto &ins : blk.instrs) {
-            if (ins.source_line != 0)
-                return ins.source_line;
+            if (ins.source_line != 0) return ins.source_line;
         }
     }
     return 0;
@@ -101,8 +100,7 @@ uint32_t first_source_line(const ir::IrFunction &fn) {
 void attach_complexity_warnings(vx::CompileResult &result,
                                 const std::string &filename,
                                 analyze::ModuleCost &out_cost) {
-    if (result.ir_module_cache_bytes.empty())
-        return;
+    if (result.ir_module_cache_bytes.empty()) return;
     try {
         ir::IrModule mod;
         if (!ir::parse_ir_module_cache(result.ir_module_cache_bytes, mod))
@@ -115,8 +113,7 @@ void attach_complexity_warnings(vx::CompileResult &result,
         // mc.functions sigue el orden de mod.functions, asi que un recorrido
         // emparejado es O(n) sin construir mapa.
         for (const auto &cr : mc.functions) {
-            if (!cr.contract_mismatch)
-                continue;
+            if (!cr.contract_mismatch) continue;
             // Localizar la IrFunction homonima para extraer la linea.
             uint32_t line = 0;
             for (const auto &fn : mod.functions) {
@@ -125,8 +122,7 @@ void attach_complexity_warnings(vx::CompileResult &result,
                     break;
                 }
             }
-            if (line == 0)
-                continue; // sin linea fiable: no ubicar el warning.
+            if (line == 0) continue; // sin linea fiable: no ubicar el warning.
 
             vx::SourceLoc loc;
             loc.file = filename;
@@ -174,78 +170,64 @@ void extract_declared_names(const std::string &text, const std::string &uri,
     vx::Lexer lex(text, uri, local_diags);
     vx::Parser parser(lex, local_diags);
     std::unique_ptr<vx::ast::ModuleNode> mod = parser.parse_program();
-    if (!mod)
-        return;
+    if (!mod) return;
     // Recorrer SOLO las declaraciones top-level: nombres de tipos y funciones
     // visibles para el resaltado.  Los miembros (campos/metodos) se refinaran
     // en una fase futura (parametros/propiedades por posicion).
     for (const auto &node : mod->decls) {
-        if (!node)
-            continue;
+        if (!node) continue;
         switch (node->kind) {
         case vx::ast::NodeKind::ClassDecl: {
             auto *d = static_cast<const vx::ast::ClassDecl *>(node.get());
-            if (!d->name.empty())
-                out.class_names.insert(d->name);
+            if (!d->name.empty()) out.class_names.insert(d->name);
             // Parametros de plantilla de una clase generica (class Box<T>).
             for (const auto &tp : d->type_params)
-                if (!tp.empty())
-                    out.type_params.insert(tp);
+                if (!tp.empty()) out.type_params.insert(tp);
             break;
         }
         case vx::ast::NodeKind::StructDecl: {
             auto *d = static_cast<const vx::ast::StructDecl *>(node.get());
-            if (!d->name.empty())
-                out.struct_names.insert(d->name);
+            if (!d->name.empty()) out.struct_names.insert(d->name);
             break;
         }
         case vx::ast::NodeKind::EnumDecl: {
             auto *d = static_cast<const vx::ast::EnumDecl *>(node.get());
-            if (!d->name.empty())
-                out.enum_names.insert(d->name);
+            if (!d->name.empty()) out.enum_names.insert(d->name);
             // Parametros de plantilla de un enum generico (enum Maybe<T>).
             for (const auto &tp : d->type_params)
-                if (!tp.empty())
-                    out.type_params.insert(tp);
+                if (!tp.empty()) out.type_params.insert(tp);
             break;
         }
         case vx::ast::NodeKind::TypeAliasDecl: {
             auto *d = static_cast<const vx::ast::TypeAliasDecl *>(node.get());
-            if (!d->name.empty())
-                out.type_names.insert(d->name);
+            if (!d->name.empty()) out.type_names.insert(d->name);
             break;
         }
         case vx::ast::NodeKind::ConceptDecl: {
             auto *d = static_cast<const vx::ast::ConceptDecl *>(node.get());
-            if (!d->name.empty())
-                out.concept_names.insert(d->name);
+            if (!d->name.empty()) out.concept_names.insert(d->name);
             // Parametros de plantilla del concepto (concept N<T>).
             for (const auto &tp : d->type_params)
-                if (!tp.empty())
-                    out.type_params.insert(tp);
+                if (!tp.empty()) out.type_params.insert(tp);
             break;
         }
         case vx::ast::NodeKind::FunctionDecl: {
             auto *d = static_cast<const vx::ast::FunctionDecl *>(node.get());
-            if (!d->name.empty())
-                out.function_names.insert(d->name);
+            if (!d->name.empty()) out.function_names.insert(d->name);
             // Parametros de plantilla de una funcion comptime generica
             // (comptime <T> u32 vec_dim()).
             for (const auto &tp : d->type_params)
-                if (!tp.empty())
-                    out.type_params.insert(tp);
+                if (!tp.empty()) out.type_params.insert(tp);
             break;
         }
         case vx::ast::NodeKind::ExternFnDecl: {
             // Las funciones extern (FFI declarativo) tambien se clasifican
             // como funciones para el resaltado.
             auto *d = static_cast<const vx::ast::ExternFnDecl *>(node.get());
-            if (!d->name.empty())
-                out.function_names.insert(d->name);
+            if (!d->name.empty()) out.function_names.insert(d->name);
             break;
         }
-        default:
-            break;
+        default: break;
         }
     }
 }
@@ -258,8 +240,7 @@ const DocAnalysis &AnalysisEngine::analyze_document(const std::string &uri,
 
     // Cache hit: mismo texto, mismo resultado.  Evita recompilar.
     auto it = cache_.find(uri);
-    if (it != cache_.end() && it->second->text_hash == h)
-        return *it->second;
+    if (it != cache_.end() && it->second->text_hash == h) return *it->second;
 
     // Crear (o reusar el slot de) el analisis para este documento.
     auto analysis = std::make_unique<DocAnalysis>();
@@ -281,12 +262,13 @@ const DocAnalysis &AnalysisEngine::analyze_document(const std::string &uri,
         // programa multi-fichero).  El fs_path se deriva del uri file://.
         const std::string fs_path = uri_to_fs_path(uri);
         // Usar el MISMO detector que el compilador (@c vx_source_has_imports):
-        // reconoce imports con puntos (`import std.comptime only source;`) igual
-        // que los de string (`import "modules/foo";`), ignorando strings y
-        // comentarios.  El check anterior solo miraba `import "` -> un fichero
-        // con imports DOTTED caia al path single-file, que no resuelve el modulo
-        // ni siembra los params `expr` importados (source/inject) -> el parser
-        // reportaba errores FALSOS en `source(...)` (raw-capture no reconocido).
+        // reconoce imports con puntos (`import std.comptime only source;`)
+        // igual que los de string (`import "modules/foo";`), ignorando strings
+        // y comentarios.  El check anterior solo miraba `import "` -> un
+        // fichero con imports DOTTED caia al path single-file, que no resuelve
+        // el modulo ni siembra los params `expr` importados (source/inject) ->
+        // el parser reportaba errores FALSOS en `source(...)` (raw-capture no
+        // reconocido).
         const bool has_imports = vx::vx_source_has_imports(text);
         const bool file_on_disk =
             !fs_path.empty() && std::ifstream(fs_path).good();
@@ -340,7 +322,8 @@ const DocAnalysis &AnalysisEngine::analyze_document(const std::string &uri,
         // NS.4: indice semantico del AST RAW (pre-flatten) -- nombres
         // CUALIFICADOS por namespace, para completado de miembro `ns.simbolo`
         // y resolucion de acceso cualificado.  Parse independiente del compile
-        // (que aplana los namespaces); best-effort (sin indice si el parse peta).
+        // (que aplana los namespaces); best-effort (sin indice si el parse
+        // peta).
         try {
             vx::Diagnostics sidiag;
             vx::Lexer slx(text, uri, sidiag);
@@ -389,6 +372,8 @@ const DocAnalysis *AnalysisEngine::cached(const std::string &uri) const {
     return it == cache_.end() ? nullptr : it->second.get();
 }
 
-void AnalysisEngine::forget(const std::string &uri) { cache_.erase(uri); }
+void AnalysisEngine::forget(const std::string &uri) {
+    cache_.erase(uri);
+}
 
 } // namespace lsp

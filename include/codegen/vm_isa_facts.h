@@ -26,8 +26,8 @@
  * Ese conocimiento existia, pero no estaba DICHO en ningun sitio: vivia en el
  * ORDEN del pool del asignador del interprete --
  *
- *     // r0 al final del pool (lo asignamos ultimo para reservarlo para retorno)
- *     std::rotate(...);   // free_pool = [1, 2, ..., 12, 0]
+ *     // r0 al final del pool (lo asignamos ultimo para reservarlo para
+ * retorno) std::rotate(...);   // free_pool = [1, 2, ..., 12, 0]
  *
  * -- que lo hacia improbable, no imposible.  Una preferencia escondida en como
  * se recorre un vector no se puede describir ni verificar, y un asignador que
@@ -125,10 +125,8 @@ inline bool vm_op_clobbers_ret(ir::IrOp op) noexcept {
     /* Ensamblador embebido: cuerpo opaco -> se asume lo peor. */
     case ir::IrOp::RAW_ASM:
     case ir::IrOp::INLINE_ASM:
-    case ir::IrOp::ASM_MICRO:
-        return true;
-    default:
-        return false;
+    case ir::IrOp::ASM_MICRO: return true;
+    default: return false;
     }
 }
 

@@ -67,10 +67,11 @@ static void traza(const char *fmt, ...) {
  */
 static void barra(const char *titulo, long long hecho, long long total) {
     constexpr int kAncho = 24;
-    const int     lleno =
+    const int lleno =
         total > 0 ? static_cast<int>((hecho * kAncho) / total) : kAncho;
     char buf[kAncho + 1];
-    for (int i = 0; i < kAncho; ++i) buf[i] = (i < lleno) ? '#' : '.';
+    for (int i = 0; i < kAncho; ++i)
+        buf[i] = (i < lleno) ? '#' : '.';
     buf[kAncho] = '\0';
     traza("\r      %-12s [%s] %7lld/%-7lld", titulo, buf, hecho, total);
 }
@@ -115,10 +116,12 @@ static void probar_identidad_del_reloj() {
     const util::reloj::Info &i = util::reloj::info();
     traza("      fuente %s | resolucion %.3f ns | leerlo %lld ns | tsc "
           "invariante: %s\n",
-          i.fuente, i.resolucion_ns, i.coste_ns, i.tsc_invariante ? "si" : "no");
+          i.fuente, i.resolucion_ns, i.coste_ns,
+          i.tsc_invariante ? "si" : "no");
     CHECK(i.resolucion_ns > 0.0, "el reloj declara su resolucion");
     /* Un reloj que no distingue menos de un microsegundo no sirve para lo que
-     * se le pide: tramos de decenas de nanosegundos repetidos cien mil veces. */
+     * se le pide: tramos de decenas de nanosegundos repetidos cien mil veces.
+     */
     CHECK(i.resolucion_ns <= 1000.0,
           "la resolucion basta para tramos de menos de un microsegundo");
     CHECK(i.coste_ns >= 0 && i.coste_ns < 10000,
@@ -136,9 +139,9 @@ static void probar_por_orden_de_magnitud() {
     struct Caso {
         const char *etiqueta;
         const char *titulo;
-        long long   ns;
-        int         repeticiones;
-        double      tolerancia; ///< error relativo admitido POR ARRIBA.
+        long long ns;
+        int repeticiones;
+        double tolerancia; ///< error relativo admitido POR ARRIBA.
     };
     static const Caso kCasos[] = {
         {"  prueba:100ns", "100 ns", 100, 20000, 1.00},
@@ -163,7 +166,7 @@ static void probar_por_orden_de_magnitud() {
             if (i % paso == 0) barra(c.titulo, i, 2 * c.repeticiones);
             esperar_ns(c.ns);
         }
-        const auto      r1 = std::chrono::steady_clock::now();
+        const auto r1 = std::chrono::steady_clock::now();
         const long long real_us =
             std::chrono::duration_cast<std::chrono::microseconds>(r1 - r0)
                 .count();
@@ -178,10 +181,10 @@ static void probar_por_orden_de_magnitud() {
         }
         barra(c.titulo, 2 * c.repeticiones, 2 * c.repeticiones);
         const long long medido_us = leer(c.etiqueta);
-        const double    err = real_us > 0
-                                  ? static_cast<double>(medido_us - real_us) /
-                                        static_cast<double>(real_us)
-                                  : 0.0;
+        const double err = real_us > 0
+                               ? static_cast<double>(medido_us - real_us) /
+                                     static_cast<double>(real_us)
+                               : 0.0;
         traza("  sin medir %8lld us | medido %8lld us | error %+6.1f %%\n",
               real_us, medido_us, err * 100.0);
         ++g_checks;
@@ -193,7 +196,8 @@ static void probar_por_orden_de_magnitud() {
             traza("      [FALLO] %s: %+.1f %% de error (limite +-%.0f %%)\n",
                   c.titulo, err * 100.0, c.tolerancia * 100.0);
         }
-        CHECK(veces(c.etiqueta) == c.repeticiones, "se cuentan todas las tomas");
+        CHECK(veces(c.etiqueta) == c.repeticiones,
+              "se cuentan todas las tomas");
     }
 }
 
@@ -206,7 +210,7 @@ static void probar_acumulacion_de_cortos() {
      * de 1 us y se redondeaba.  Doscientas mil veces cero siguen siendo cero, y
      * asi un tramo que costaba decenas de milisegundos parecia gratis. */
     constexpr int kN = 200000;
-    const auto    t0 = std::chrono::steady_clock::now();
+    const auto t0 = std::chrono::steady_clock::now();
     for (int i = 0; i < kN; ++i) {
         if (i % 2000 == 0) barra("cortos", i, kN);
         util::CronoTramo crono("  prueba:cortos");
@@ -263,8 +267,8 @@ static void probar_no_negativo() {
 // ===========================================================================
 static void probar_hilos() {
     traza("\n[5/5] cuatro hilos anotando la misma etiqueta\n");
-    constexpr int            kHilos = 4;
-    constexpr int            kPorHilo = 10000;
+    constexpr int kHilos = 4;
+    constexpr int kPorHilo = 10000;
     std::vector<std::thread> hilos;
     barra("hilos", 0, kHilos);
     for (int h = 0; h < kHilos; ++h) {

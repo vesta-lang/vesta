@@ -16,8 +16,8 @@
  * define una funcion @c link() que llama a builtins de configuracion.  El
  * linker compila ese @c .vx, lo ejecuta in-process (VM) con los builtins
  * registrados como funciones nativas, y lee la configuracion resultante.  Es
- * intuitivo (es Vesta) y potente (logica/bucles/comptime completos para CALCULAR
- * la disposicion).  Builtins disponibles dentro de @c link():
+ * intuitivo (es Vesta) y potente (logica/bucles/comptime completos para
+ * CALCULAR la disposicion).  Builtins disponibles dentro de @c link():
  *
  *   base(u64 addr)            -- direccion de carga del ejecutable
  *   entry(string sym)         -- simbolo de entrada (sin _start sintetico)
@@ -64,8 +64,8 @@ struct LinkScriptConfig {
  */
 bool aot_run_link_script(
     const std::string &script_path,
-    const std::unordered_map<std::string, uint64_t> &sec_sizes, bool debug_build,
-    LinkScriptConfig &out, std::string &err);
+    const std::unordered_map<std::string, uint64_t> &sec_sizes,
+    bool debug_build, LinkScriptConfig &out, std::string &err);
 
 } // namespace aot
 

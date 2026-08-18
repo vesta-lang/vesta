@@ -56,10 +56,11 @@ struct FrameSpec {
     bool fpo = false;
     /// Hoja sin marco: ni RBP ni reserva de pila.
     bool no_frame = false;
-    uint32_t spill_bytes = 0;      ///< bytes de marco a reservar.
-    uint32_t slot_size = 8;        ///< tamano de un push (8 en 64, 4 en 32).
-    uint32_t total_saved = 0;      ///< cuantos registros se salvan en total.
-    std::vector<uint8_t> callee_saved; ///< los que hay que devolver como estaban.
+    uint32_t spill_bytes = 0; ///< bytes de marco a reservar.
+    uint32_t slot_size = 8;   ///< tamano de un push (8 en 64, 4 en 32).
+    uint32_t total_saved = 0; ///< cuantos registros se salvan en total.
+    std::vector<uint8_t>
+        callee_saved; ///< los que hay que devolver como estaban.
 
     /// El codigo corre BAJO la maquina virtual (JIT), con su runtime debajo.
     /// Un binario nativo NO lo esta: ahi no hay ProcessVM ni pila de la VM que
@@ -67,7 +68,7 @@ struct FrameSpec {
     /// una pieza aparte y no como banderas sueltas justamente para que no se
     /// mezclen los dos mundos.
     bool bajo_vm = false;
-    VmRuntimeFrame vm;             ///< solo se mira si @ref bajo_vm.
+    VmRuntimeFrame vm; ///< solo se mira si @ref bajo_vm.
 };
 
 /**

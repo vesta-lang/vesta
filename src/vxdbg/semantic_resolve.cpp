@@ -55,7 +55,8 @@ class Resolver {
      * @return Los resueltos, en orden de dependencia.
      */
     std::vector<ResolvedNode> run(const std::vector<SemanticNode> &nodes) {
-        for (const auto &n : nodes) resolve(n.key);
+        for (const auto &n : nodes)
+            resolve(n.key);
         return std::move(out_);
     }
 
@@ -71,7 +72,8 @@ class Resolver {
         auto node = by_key_.find(key);
         if (node == by_key_.end()) return {}; // nadie lo declaro
         // Un ciclo no se puede representar: cada identidad dependeria de la
-        // otra.  Se corta devolviendo vacio; quien preguntaba omitira la arista.
+        // otra.  Se corta devolviendo vacio; quien preguntaba omitira la
+        // arista.
         if (!in_progress_.insert(key).second) return {};
 
         const SemanticNode &n = *node->second;
@@ -131,7 +133,8 @@ IdentityFn default_identity() {
     // guardaria, asi que anadir un campo la cambia sin que haya que acordarse
     // de nada en ningun otro sitio.
     return [](const StoredNode &n) {
-        StoredNode copia = n; // sellar escribe la cabecera; la de fuera no se toca
+        StoredNode copia =
+            n; // sellar escribe la cabecera; la de fuera no se toca
         return seal(copia);
     };
 }

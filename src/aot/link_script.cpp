@@ -12,9 +12,9 @@
  * @file aot/link_script.cpp
  * @brief  AOT.5 -- runner del script de enlace Vesta.
  *
- * Construye un programa Vesta completo a partir del script del usuario (que solo
- * define @c fn link()): le antepone los @c extern "vxlink" de los builtins +
- * unos wrappers que pasan los strings via @c str_cstr (host ptr), y le anyade
+ * Construye un programa Vesta completo a partir del script del usuario (que
+ * solo define @c fn link()): le antepone los @c extern "vxlink" de los builtins
+ * + unos wrappers que pasan los strings via @c str_cstr (host ptr), y le anyade
  * un @c main que llama a @c link().  Compila ese programa a @c .velb in-process
  * (frontend Vesta + ensamblador) y lo ejecuta en una VM con los builtins de
  * configuracion registrados via @c ffi::register_virtual_fn.  Los builtins
@@ -84,8 +84,7 @@ uint64_t vxlink_entry_raw(uint64_t p) {
     return 0;
 }
 uint64_t vxlink_section_raw(uint64_t p, uint64_t a) {
-    if (g_cfg && p)
-        g_cfg->sections[reinterpret_cast<const char *>(p)] = a;
+    if (g_cfg && p) g_cfg->sections[reinterpret_cast<const char *>(p)] = a;
     return 0;
 }
 uint64_t vxlink_section_size_raw(uint64_t p) {
@@ -99,7 +98,9 @@ uint64_t vxlink_align_up(uint64_t v, uint64_t a) {
     if (a == 0) return v;
     return ((v + a - 1) / a) * a;
 }
-uint64_t vxlink_debug_build(void) { return g_dbg ? 1u : 0u; }
+uint64_t vxlink_debug_build(void) {
+    return g_dbg ? 1u : 0u;
+}
 
 void register_builtins_once() {
     static std::atomic<bool> done{false};
@@ -162,8 +163,7 @@ bool compile_to_velb(const std::string &src, std::vector<uint8_t> &out,
                      std::string &err) {
     vx::CompileOptions copts;
     copts.module_name = "linkscript";
-    vx::CompileResult cr =
-        vx::compile_vx_source(src, "linkscript.vx", copts);
+    vx::CompileResult cr = vx::compile_vx_source(src, "linkscript.vx", copts);
     if (!cr.ok || cr.diagnostics.has_errors()) {
         err = "link-script: error de compilacion Vesta";
         return false;
@@ -172,9 +172,9 @@ bool compile_to_velb(const std::string &src, std::vector<uint8_t> &out,
     std::string prefix;
     {
         std::ostringstream ss;
-        ss << (std::getenv("TEMP") ? std::getenv("TEMP")
-                                   : (std::getenv("TMP") ? std::getenv("TMP")
-                                                         : "/tmp"))
+        ss << (std::getenv("TEMP")
+                   ? std::getenv("TEMP")
+                   : (std::getenv("TMP") ? std::getenv("TMP") : "/tmp"))
            << "/vxlink_" << (void *)&src;
         prefix = ss.str();
     }
@@ -216,8 +216,8 @@ bool compile_to_velb(const std::string &src, std::vector<uint8_t> &out,
 
 bool aot_run_link_script(
     const std::string &script_path,
-    const std::unordered_map<std::string, uint64_t> &sec_sizes, bool debug_build,
-    LinkScriptConfig &out, std::string &err) {
+    const std::unordered_map<std::string, uint64_t> &sec_sizes,
+    bool debug_build, LinkScriptConfig &out, std::string &err) {
     std::string user_src;
     if (!read_text(script_path, user_src)) {
         err = "link-script: no se puede abrir " + script_path;

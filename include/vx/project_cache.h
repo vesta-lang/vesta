@@ -76,13 +76,13 @@ struct ProjectCacheKey {
      * costaba lo mismo que construirlo por primera vez.
      * @{
      */
-    bool aot = false;        ///< Se pidio codigo NATIVO, no bytecode de la VM.
-    std::string aot_arch;    ///< x86-64 / x86-32 / aarch64.
-    std::string aot_format;  ///< pe / elf.
-    std::string aot_emit;    ///< exe / obj / shared / bin.
-    std::string aot_target;  ///< SO objetivo, si se fijo (@Target / --target).
-    std::string aot_tier;    ///< Nivel de runtime (full / embed / bare).
-    std::string aot_perfil;  ///< Resto de opciones que cambian lo emitido.
+    bool aot = false;       ///< Se pidio codigo NATIVO, no bytecode de la VM.
+    std::string aot_arch;   ///< x86-64 / x86-32 / aarch64.
+    std::string aot_format; ///< pe / elf.
+    std::string aot_emit;   ///< exe / obj / shared / bin.
+    std::string aot_target; ///< SO objetivo, si se fijo (@Target / --target).
+    std::string aot_tier;   ///< Nivel de runtime (full / embed / bare).
+    std::string aot_perfil; ///< Resto de opciones que cambian lo emitido.
     /** @} */
 };
 
@@ -197,10 +197,9 @@ bool project_cache_validate(const std::vector<ProjectCacheDep> &cached_deps,
  *                   se afirma en un sitio algo comprobado en otro.
  * @return @c true si quedo algo escrito.
  */
-bool project_cache_save_diags(const std::string             &cache_path,
-                              uint32_t                       diag_hash,
+bool project_cache_save_diags(const std::string &cache_path, uint32_t diag_hash,
                               const std::vector<Diagnostic> &diags,
-                              const analysis::asa::Ambito   &donde);
+                              const analysis::asa::Ambito &donde);
 
 /**
  * @brief Recupera lo guardado por @ref project_cache_save_diags.
@@ -208,12 +207,12 @@ bool project_cache_save_diags(const std::string             &cache_path,
  * @param cache_path Mismo que al guardar.
  * @param diag_hash  Misma que al guardar.
  * @param out        Donde se depositan (se vacia antes).
- * @param aqui       Donde se esta ahora; se descarta lo que valga en otro sitio.
+ * @param aqui       Donde se esta ahora; se descarta lo que valga en otro
+ * sitio.
  * @return @c true si se recupero algo.
  */
-bool project_cache_load_diags(const std::string           &cache_path,
-                              uint32_t                     diag_hash,
-                              std::vector<Diagnostic>     &out,
+bool project_cache_load_diags(const std::string &cache_path, uint32_t diag_hash,
+                              std::vector<Diagnostic> &out,
                               const analysis::asa::Ambito &aqui);
 
 /// @brief FNV-1a 64 helper (publico para uso en @c compile_vx_project).

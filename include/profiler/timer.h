@@ -113,7 +113,9 @@ typedef struct Timer {
      *
      * @return Tiempo transcurrido desde @c start en nanosegundos (long long).
      */
-    long long ns() const { return util::reloj::a_ns(util::reloj::ahora() - start); }
+    long long ns() const {
+        return util::reloj::a_ns(util::reloj::ahora() - start);
+    }
 } Timer;
 
 #endif // TIMER_H

@@ -40,14 +40,14 @@ namespace effects {
  * obliga a rehacer el razonamiento a mano, y aqui el analisis ya la tiene.
  */
 struct BoundsViolation {
-    std::string function;      ///< Funcion donde ocurre.
-    uint32_t    line = 0;      ///< Linea del fuente.
-    bool        write = false; ///< true = escritura, false = lectura.
-    int32_t     width = 0;     ///< Bytes del acceso.
-    int64_t     off = 0;       ///< Offset desde la raiz.
-    int64_t     limite = 0;    ///< Hueco reservado del objeto.
-    int64_t     objeto = 0;    ///< Tamano logico del objeto.
-    std::string region;        ///< Nombre de la region (`stack#3`, `heap#7`).
+    std::string function; ///< Funcion donde ocurre.
+    uint32_t line = 0;    ///< Linea del fuente.
+    bool write = false;   ///< true = escritura, false = lectura.
+    int32_t width = 0;    ///< Bytes del acceso.
+    int64_t off = 0;      ///< Offset desde la raiz.
+    int64_t limite = 0;   ///< Hueco reservado del objeto.
+    int64_t objeto = 0;   ///< Tamano logico del objeto.
+    std::string region;   ///< Nombre de la region (`stack#3`, `heap#7`).
 };
 
 /**

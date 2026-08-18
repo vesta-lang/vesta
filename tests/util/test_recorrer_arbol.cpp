@@ -90,7 +90,8 @@ int main() {
                   "nunca entrega `.` ni `..`");
         std::sort(dirs.begin(), dirs.end());
         const std::vector<std::string> esperados = {".oculto", "hondo", "sub"};
-        comprobar(dirs == esperados, "distingue los directorios de los ficheros");
+        comprobar(dirs == esperados,
+                  "distingue los directorios de los ficheros");
     }
 
     // -- Caso 2: podar una rama devolviendo false -----------------------------

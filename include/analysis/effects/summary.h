@@ -9,9 +9,9 @@
  * @file analysis/effects/summary.h
  * @brief Resumenes por-funcion y por-modulo del sistema de efectos, y la
  *        generacion DECLARATIVA de contratos.  El @c FunctionSummary es la capa
- *        de analisis compartida (efectos + estructura + interproc) computada UNA
- *        vez, de la que TODO producto (contratos, complejidad, autodoc,
- *        diagramas, API, optimizer) es proyeccion pura.
+ *        de analisis compartida (efectos + estructura + interproc) computada
+ * UNA vez, de la que TODO producto (contratos, complejidad, autodoc, diagramas,
+ * API, optimizer) es proyeccion pura.
  */
 #ifndef ANALYSIS_EFFECTS_SUMMARY_H
 #define ANALYSIS_EFFECTS_SUMMARY_H
@@ -37,26 +37,27 @@ struct StructuralSummary {
     uint32_t block_count = 0;
     uint32_t loop_count = 0;
     uint32_t max_loop_depth = 0;
-    bool     recursive = false;
-    bool     has_unbounded_loop = false; ///< algun bucle sin trip-count acotable.
+    bool recursive = false;
+    bool has_unbounded_loop = false; ///< algun bucle sin trip-count acotable.
 };
 
 /// Faceta INTERPROCEDURAL: agregados numericos del cierre del callgraph.
 struct InterprocSummary {
-    int64_t alloc_total = -1;      ///< sitios de alloc alcanzables (-1 = desconocido).
+    int64_t alloc_total =
+        -1; ///< sitios de alloc alcanzables (-1 = desconocido).
     int64_t stack_peak_total = -1; ///< profundidad de pila peor caso.
-    bool    has_calls = false;          ///< hace alguna llamada (estatica o dinamica).
-    bool    reaches_dynamic_call = false;
+    bool has_calls = false; ///< hace alguna llamada (estatica o dinamica).
+    bool reaches_dynamic_call = false;
 };
 
 /// Resumen COMPLETO por funcion (contenedor de las 3 facetas).
 struct FunctionSummary {
-    SemanticSummary      semantic;
-    StructuralSummary    structural;
-    InterprocSummary     interproc;
+    SemanticSummary semantic;
+    StructuralSummary structural;
+    InterprocSummary interproc;
     AnalysisCompleteness completeness = AnalysisCompleteness::Complete;
-    std::string          symbol;
-    bool                 exported = false;
+    std::string symbol;
+    bool exported = false;
 };
 
 /// Nivel modulo = MAPA symbol -> summary (NO un efecto de modulo).
@@ -73,10 +74,12 @@ struct ModuleSummary {
 /// Separar hechos (objetivos) de opiniones (juicios con politica) permite tener
 /// varias definiciones de `pure`/`nothrow`/... sin tocar el IR ni los efectos.
 enum class ContractProfile {
-    Default,  ///< definiciones estandar.
-    Strict,   ///< exige mas (p.ej. pure => tambien determinista, sin tags).
-    Relaxed,  ///< tolera mas (p.ej. pure aunque pueda atrapar -- traps 'no pasan').
-    Embedded  ///< orientado a Bare/freestanding (sin I/O, sin heap, sin runtime).
+    Default, ///< definiciones estandar.
+    Strict,  ///< exige mas (p.ej. pure => tambien determinista, sin tags).
+    Relaxed, ///< tolera mas (p.ej. pure aunque pueda atrapar -- traps 'no
+             ///< pasan').
+    Embedded ///< orientado a Bare/freestanding (sin I/O, sin heap, sin
+             ///< runtime).
 };
 
 /**
@@ -85,26 +88,26 @@ enum class ContractProfile {
  *        informa decide como se redacta (y en que idioma).
  */
 enum class ContractReason : uint8_t {
-    LeeMemoria,          ///< lee memoria en el cierre.
-    EscribeMemoria,      ///< escribe memoria en el cierre.
-    PuedeAtrapar,        ///< puede provocar un fallo (division por cero, ...).
-    PuedeLanzar,         ///< puede lanzar una excepcion.
+    LeeMemoria,     ///< lee memoria en el cierre.
+    EscribeMemoria, ///< escribe memoria en el cierre.
+    PuedeAtrapar,   ///< puede provocar un fallo (division por cero, ...).
+    PuedeLanzar,    ///< puede lanzar una excepcion.
     /// Puede abortar por `panic`.  Aparte de PuedeLanzar porque no son lo
     /// mismo: en la maquina virtual un panic se puede capturar, y en nativo
     /// llama al hook de panico y no vuelve.  Con un solo motivo, un contrato
     /// de nativo decia "puede lanzar" de algo que no lanza nada.
     PuedeAbortar,
-    Aloca,               ///< pide memoria.
-    Bloquea,             ///< puede quedarse esperando.
-    HaceIO,              ///< entrada/salida observable.
-    TieneEtiquetas,      ///< capacidades declaradas (barreras del usuario...).
-    EsAtomica,           ///< operacion atomica o barrera.
-    NoDeterminista,      ///< el resultado depende de algo externo (reloj...).
-    AnalisisIncompleto,  ///< no se pudo analizar entero: no se afirma nada.
-    Llama,               ///< llama a otra funcion.
-    UsaMonton,           ///< usa el monton.
-    UsaRecolector,       ///< usa el recolector de basura.
-    NecesitaRuntime,     ///< necesita el runtime del lenguaje.
+    Aloca,              ///< pide memoria.
+    Bloquea,            ///< puede quedarse esperando.
+    HaceIO,             ///< entrada/salida observable.
+    TieneEtiquetas,     ///< capacidades declaradas (barreras del usuario...).
+    EsAtomica,          ///< operacion atomica o barrera.
+    NoDeterminista,     ///< el resultado depende de algo externo (reloj...).
+    AnalisisIncompleto, ///< no se pudo analizar entero: no se afirma nada.
+    Llama,              ///< llama a otra funcion.
+    UsaMonton,          ///< usa el monton.
+    UsaRecolector,      ///< usa el recolector de basura.
+    NecesitaRuntime,    ///< necesita el runtime del lenguaje.
 };
 
 /**
@@ -131,8 +134,8 @@ const std::vector<ContractRule> &contract_rules();
 
 /// Contrato evaluado: nombre, si se cumple y -- si no -- por que.
 struct EvaluatedContract {
-    const char                 *name;
-    bool                        holds;
+    const char *name;
+    bool holds;
     std::vector<ContractReason> motivos;
 };
 

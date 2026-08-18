@@ -7,7 +7,8 @@
 
 /**
  * @file loop_metrics.h
- * @brief Metricas NEUTRALES del cuerpo de un bucle (infraestructura reutilizable).
+ * @brief Metricas NEUTRALES del cuerpo de un bucle (infraestructura
+ * reutilizable).
  *
  * SOLO MIDE; no decide ni pondera nada.  El "coste" depende del PASE que la
  * consume (para unroll una call pesa ~10; para vectorizar es prohibitiva; para
@@ -31,21 +32,21 @@ namespace analysis {
  * @brief Conteos CRUDOS del cuerpo de un bucle.  Sin ponderar (neutral).
  */
 struct LoopMetrics {
-    int instructions = 0; ///< instrucciones no-terminadoras, sin PHIs.
-    int loads = 0;        ///< LOAD / GETFIELD / ARRAY_LOAD.
-    int stores = 0;       ///< STORE / SETFIELD / ARRAY_STORE + VEC store-like.
-    int calls = 0;        ///< CALL* (cualquier llamada).
-    int branches = 0;     ///< BR_COND internos del cuerpo.
-    int phis = 0;         ///< PHIs internos (merges de control interno).
-    int vector_ops = 0;   ///< VEC_* (indica cuerpo YA vectorizado).
-    int fp_ops = 0;       ///< aritmetica float (FADD/FSUB/FMUL/...).
+    int instructions = 0;  ///< instrucciones no-terminadoras, sin PHIs.
+    int loads = 0;         ///< LOAD / GETFIELD / ARRAY_LOAD.
+    int stores = 0;        ///< STORE / SETFIELD / ARRAY_STORE + VEC store-like.
+    int calls = 0;         ///< CALL* (cualquier llamada).
+    int branches = 0;      ///< BR_COND internos del cuerpo.
+    int phis = 0;          ///< PHIs internos (merges de control interno).
+    int vector_ops = 0;    ///< VEC_* (indica cuerpo YA vectorizado).
+    int fp_ops = 0;        ///< aritmetica float (FADD/FSUB/FMUL/...).
     int expensive_ops = 0; ///< DIV/MOD/FDIV/FSQRT/... (alta latencia).
     int basic_blocks = 0; ///< bloques del cuerpo (CFG fragmentado -> explota al
                           ///< clonar; no es igual un cuerpo recto que uno con
                           ///< if/else/merge aunque tengan las mismas instr).
     int terminators = 0;  ///< terminadores del cuerpo (BR/BR_COND/RET/...).
-    int live_across = 0;  ///< valores del cuerpo vivos en el back-edge (proxy de
-                          ///< presion de registros).
+    int live_across = 0; ///< valores del cuerpo vivos en el back-edge (proxy de
+                         ///< presion de registros).
     /// Resumen de si el cuerpo tiene algun efecto que impide reordenar/replicar
     /// con libertad (store, call, atomic, asm).  El compilador conoce SIEMPRE
     /// todos sus efectos via IR/SSA; esto solo los agrega en un flag para los

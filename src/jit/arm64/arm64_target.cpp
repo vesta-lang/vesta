@@ -132,9 +132,8 @@ uint8_t cc_index(ir::IrOp op) {
 }
 const char *cc_by_index(uint8_t i) {
     // 0-9: enteros.  10-15: float (fcmp ordered): eq/ne/mi(lt)/gt/ls(le)/ge.
-    static const char *t[] = {"eq", "ne", "lt", "gt", "le", "ge",
-                              "lo", "hi", "ls", "hs", "eq", "ne",
-                              "mi", "gt", "ls", "ge"};
+    static const char *t[] = {"eq", "ne", "lt", "gt", "le", "ge", "lo", "hi",
+                              "ls", "hs", "eq", "ne", "mi", "gt", "ls", "ge"};
     return i < 16 ? t[i] : "al";
 }
 
@@ -153,11 +152,10 @@ uint8_t fcc_index(ir::IrOp op) {
 
 /// vreg de un IrValueId con la clase (FP para floats) y ancho de su tipo.
 MOperand vr(const ir::IrFunction &fn, ir::IrValueId v) {
-    const bool isf =
-        v < fn.values.size() && ir_is_float(fn.values[v].type);
-    const uint8_t w =
-        v < fn.values.size() ? static_cast<uint8_t>(ir_bytes(fn.values[v].type))
-                             : 8;
+    const bool isf = v < fn.values.size() && ir_is_float(fn.values[v].type);
+    const uint8_t w = v < fn.values.size()
+                          ? static_cast<uint8_t>(ir_bytes(fn.values[v].type))
+                          : 8;
     return MOperand::make_vreg(static_cast<uint32_t>(v),
                                isf ? RegClass::FP : RegClass::GP, w);
 }
@@ -195,9 +193,9 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
         // Bloque 0: cargar params desde los arg-regs AAPCS64 (x0-x7).
         if (bi == 0) {
             for (size_t i = 0; i < fn.params.size() && i < 8; ++i)
-                O.push_back(MInstr::make_unary(
-                    MOp::MOV, vr(fn, fn.params[i]),
-                    a64_reg(static_cast<uint8_t>(i))));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, vr(fn, fn.params[i]),
+                                       a64_reg(static_cast<uint8_t>(i))));
         }
 
         for (const ir::IrInstr &in : bb.instrs) {
@@ -256,7 +254,8 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
                 break;
             }
             case ir::IrOp::MOD: {
-                // mod = a - (a/b)*b (sin A64_MSUB, que necesitaria 4 operandos).
+                // mod = a - (a/b)*b (sin A64_MSUB, que necesitaria 4
+                // operandos).
                 if (in.operands.size() != 2) return false;
                 const MOp d =
                     ir_signed(in.type) ? MOp::A64_SDIV : MOp::A64_UDIV;
@@ -294,9 +293,9 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
                 else
                     sign = (in.op == ir::IrOp::SEXT) ||
                            (in.op == ir::IrOp::CAST && ir_signed(st));
-                MInstr m = MInstr::make_unary(
-                    sign ? MOp::MOVSX : MOp::MOVZX, vr(fn, in.dst),
-                    vr(fn, in.operands[0]));
+                MInstr m =
+                    MInstr::make_unary(sign ? MOp::MOVSX : MOp::MOVZX,
+                                       vr(fn, in.dst), vr(fn, in.operands[0]));
                 m.dst.width = static_cast<uint8_t>(db);
                 m.src1.width = static_cast<uint8_t>(sb);
                 O.push_back(m);
@@ -305,14 +304,15 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
             case ir::IrOp::ALLOCA:
                 // Reserva de espacio en el frame; dst = puntero (host).  El
                 // rewrite le asigna el offset y emite `add dst, sp, #off`.
-                O.push_back(MInstr::make_alloca(
-                    vr(fn, in.dst), static_cast<uint32_t>(in.imm)));
+                O.push_back(MInstr::make_alloca(vr(fn, in.dst),
+                                                static_cast<uint32_t>(in.imm)));
                 break;
             case ir::IrOp::LOAD: {
                 // %dst = load %addr  (memoria host; ancho segun el tipo).
                 if (in.operands.size() != 1) return false;
                 const uint8_t w = static_cast<uint8_t>(ir_bytes(in.type));
-                O.push_back(MInstr::make_load(vr(fn, in.dst), vr(fn, in.operands[0]), w,
+                O.push_back(MInstr::make_load(vr(fn, in.dst),
+                                              vr(fn, in.operands[0]), w,
                                               ir_signed(in.type)));
                 break;
             }
@@ -332,9 +332,9 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
             case ir::IrOp::FDIV: {
                 if (in.operands.size() != 2) return false;
                 const MOp m = in.op == ir::IrOp::FADD   ? MOp::A64_FADD
-                              : in.op == ir::IrOp::FSUB  ? MOp::A64_FSUB
-                              : in.op == ir::IrOp::FMUL  ? MOp::A64_FMUL
-                                                         : MOp::A64_FDIV;
+                              : in.op == ir::IrOp::FSUB ? MOp::A64_FSUB
+                              : in.op == ir::IrOp::FMUL ? MOp::A64_FMUL
+                                                        : MOp::A64_FDIV;
                 O.push_back(MInstr::make_binary(m, vr(fn, in.dst),
                                                 vr(fn, in.operands[0]),
                                                 vr(fn, in.operands[1])));
@@ -345,10 +345,10 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
             case ir::IrOp::FSQRT: {
                 if (in.operands.size() != 1) return false;
                 const MOp m = in.op == ir::IrOp::FNEG   ? MOp::A64_FNEG
-                              : in.op == ir::IrOp::FABS  ? MOp::A64_FABS
-                                                         : MOp::A64_FSQRT;
-                O.push_back(
-                    MInstr::make_unary(m, vr(fn, in.dst), vr(fn, in.operands[0])));
+                              : in.op == ir::IrOp::FABS ? MOp::A64_FABS
+                                                        : MOp::A64_FSQRT;
+                O.push_back(MInstr::make_unary(m, vr(fn, in.dst),
+                                               vr(fn, in.operands[0])));
                 break;
             }
             case ir::IrOp::FCMP_EQ:
@@ -372,17 +372,17 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
                 if (in.operands.size() != 1) return false;
                 const MOp m =
                     in.op == ir::IrOp::ITOF ? MOp::A64_SCVTF : MOp::A64_UCVTF;
-                O.push_back(
-                    MInstr::make_unary(m, vr(fn, in.dst), vr(fn, in.operands[0])));
+                O.push_back(MInstr::make_unary(m, vr(fn, in.dst),
+                                               vr(fn, in.operands[0])));
                 break;
             }
             case ir::IrOp::FTOI:
             case ir::IrOp::FTOUI: {
                 if (in.operands.size() != 1) return false;
-                const MOp m = in.op == ir::IrOp::FTOI ? MOp::A64_FCVTZS
-                                                      : MOp::A64_FCVTZU;
-                O.push_back(
-                    MInstr::make_unary(m, vr(fn, in.dst), vr(fn, in.operands[0])));
+                const MOp m =
+                    in.op == ir::IrOp::FTOI ? MOp::A64_FCVTZS : MOp::A64_FCVTZU;
+                O.push_back(MInstr::make_unary(m, vr(fn, in.dst),
+                                               vr(fn, in.operands[0])));
                 break;
             }
             case ir::IrOp::F32TOF64:
@@ -403,13 +403,12 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
             case ir::IrOp::CMP_UGE: {
                 if (in.operands.size() != 2) return false;
                 // cmp a, b (sin dst) + cset dst, cc.
-                MInstr cmp = MInstr::make_binary(
-                    MOp::CMP, MOperand::none(), vr(fn, in.operands[0]),
-                    vr(fn, in.operands[1]));
+                MInstr cmp = MInstr::make_binary(MOp::CMP, MOperand::none(),
+                                                 vr(fn, in.operands[0]),
+                                                 vr(fn, in.operands[1]));
                 O.push_back(cmp);
-                MInstr cset =
-                    MInstr::make_unary(MOp::A64_CSET, vr(fn, in.dst),
-                                       MOperand::none());
+                MInstr cset = MInstr::make_unary(MOp::A64_CSET, vr(fn, in.dst),
+                                                 MOperand::none());
                 cset.flags = cc_index(in.op);
                 O.push_back(cset);
                 break;
@@ -427,9 +426,9 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
                 // .Ls_true:
                 //   <copias PHI del true> ; b true_block
                 const uint32_t ls = syn_lbl++;
-                MInstr cbnz = MInstr::make_unary(MOp::A64_CBNZ,
-                                                 MOperand::make_label(ls),
-                                                 vr(fn, in.operands[0]));
+                MInstr cbnz =
+                    MInstr::make_unary(MOp::A64_CBNZ, MOperand::make_label(ls),
+                                       vr(fn, in.operands[0]));
                 O.push_back(cbnz);
                 emit_phi_copies(O, fn, static_cast<ir::IrBlockId>(bi),
                                 in.false_block);
@@ -474,8 +473,7 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
     // correcto.  Los temporales (>= fn.values.size()) son GP.
     out.vreg_class.assign(out.vreg_count, RegClass::GP);
     for (size_t v = 0; v < fn.values.size() && v < out.vreg_class.size(); ++v)
-        if (ir_is_float(fn.values[v].type))
-            out.vreg_class[v] = RegClass::FP;
+        if (ir_is_float(fn.values[v].type)) out.vreg_class[v] = RegClass::FP;
 
     // CFG de los MBlock (succ_a/succ_b): imprescindible para que el regalloc
     // generico calcule la liveness cross-block (loops).  MBlock index = IR
@@ -523,8 +521,9 @@ MOperand spill_mem(uint32_t slot, int32_t spill_base) {
 MFunction Arm64Target::rewrite(const MFunction &vf, const codegen::RegAlloc &ra,
                                const IntervalResult &ivs) const {
     (void)ivs;
-    MFunction pf = vf;             // copia estructura (imm64_pool, reloc_symbols)
-    for (MBlock &b : pf.blocks) b.instrs.clear();
+    MFunction pf = vf; // copia estructura (imm64_pool, reloc_symbols)
+    for (MBlock &b : pf.blocks)
+        b.instrs.clear();
 
     // ¿Hay CALL? -> hay que salvar x30 (LR).  Registros callee-saved usados.
     bool has_call = false;
@@ -532,7 +531,8 @@ MFunction Arm64Target::rewrite(const MFunction &vf, const codegen::RegAlloc &ra,
         for (const MInstr &mi : b.instrs)
             if (mi.op == MOp::CALL_SYM) has_call = true;
 
-    // Layout del marco: [callee-saved... | x30 | spills].  Todo en 8B, marco 16.
+    // Layout del marco: [callee-saved... | x30 | spills].  Todo en 8B,
+    // marco 16.
     std::vector<uint8_t> saved = ra.callee_saved_used;
     if (has_call) saved.push_back(30); // x30 = LR
     const int32_t saved_bytes = static_cast<int32_t>(saved.size()) * 8;
@@ -620,15 +620,13 @@ MFunction Arm64Target::rewrite(const MFunction &vf, const codegen::RegAlloc &ra,
             // Cargar sources spilled a scratch ANTES.
             MOperand rs1 = n1, rs2 = n2, rd = nd;
             if (s1) {
-                O.push_back(MInstr::make_load(a64_reg(A64_X16),
-                                              spill_mem(slot1, spill_base), 8,
-                                              false));
+                O.push_back(MInstr::make_load(
+                    a64_reg(A64_X16), spill_mem(slot1, spill_base), 8, false));
                 rs1 = a64_reg(A64_X16, mi.src1.width);
             }
             if (s2) {
-                O.push_back(MInstr::make_load(a64_reg(A64_X17),
-                                              spill_mem(slot2, spill_base), 8,
-                                              false));
+                O.push_back(MInstr::make_load(
+                    a64_reg(A64_X17), spill_mem(slot2, spill_base), 8, false));
                 rs2 = a64_reg(A64_X17, mi.src2.width);
             }
             if (sd) rd = a64_reg(A64_X16, mi.dst.width);
@@ -638,9 +636,9 @@ MFunction Arm64Target::rewrite(const MFunction &vf, const codegen::RegAlloc &ra,
             O.push_back(m);
             // Guardar dst spilled DESPUES.
             if (sd)
-                O.push_back(MInstr::make_store(
-                    spill_mem(dslot, spill_base),
-                    a64_reg(A64_X16, mi.dst.width), 8));
+                O.push_back(MInstr::make_store(spill_mem(dslot, spill_base),
+                                               a64_reg(A64_X16, mi.dst.width),
+                                               8));
         }
     }
     (void)B0;
@@ -652,7 +650,8 @@ MFunction Arm64Target::rewrite(const MFunction &vf, const codegen::RegAlloc &ra,
 // ---------------------------------------------------------------------------
 int Arm64Target::encode(MFunction &pf, std::vector<uint8_t> &out) const {
     std::ostringstream os;
-    std::vector<uint32_t> call_syms; // sym_idx por cada `bl` en orden de emision
+    std::vector<uint32_t>
+        call_syms; // sym_idx por cada `bl` en orden de emision
 
     auto rn = [](const MOperand &o) { return a64_name(o.reg, o.width); };
 
@@ -667,25 +666,25 @@ int Arm64Target::encode(MFunction &pf, std::vector<uint8_t> &out) const {
                         pf.imm64_pool[static_cast<size_t>(mi.src1.value)];
                     // Materializa los 64 bits en un GP; si el dst es FP, mueve
                     // los bits al registro d/s con fmov.
-                    const std::string g = dst_fp ? a64_name(A64_X16, 8) : rn(mi.dst);
+                    const std::string g =
+                        dst_fp ? a64_name(A64_X16, 8) : rn(mi.dst);
                     os << "    movz " << g << ", #" << (imm & 0xffff) << "\n";
                     if ((imm >> 16) & 0xffff)
-                        os << "    movk " << g << ", #" << ((imm >> 16) & 0xffff)
-                           << ", lsl #16\n";
+                        os << "    movk " << g << ", #"
+                           << ((imm >> 16) & 0xffff) << ", lsl #16\n";
                     if ((imm >> 32) & 0xffff)
-                        os << "    movk " << g << ", #" << ((imm >> 32) & 0xffff)
-                           << ", lsl #32\n";
+                        os << "    movk " << g << ", #"
+                           << ((imm >> 32) & 0xffff) << ", lsl #32\n";
                     if ((imm >> 48) & 0xffff)
-                        os << "    movk " << g << ", #" << ((imm >> 48) & 0xffff)
-                           << ", lsl #48\n";
+                        os << "    movk " << g << ", #"
+                           << ((imm >> 48) & 0xffff) << ", lsl #48\n";
                     if (dst_fp)
                         os << "    fmov " << rn(mi.dst) << ", " << g << "\n";
                 } else if (mi.src1.kind == MOperandKind::IMM32) {
                     os << "    mov " << rn(mi.dst) << ", #" << mi.src1.value
                        << "\n";
                 } else {
-                    const bool src_fp =
-                        mi.src1.reg >= 32 && mi.src1.reg <= 63;
+                    const bool src_fp = mi.src1.reg >= 32 && mi.src1.reg <= 63;
                     os << "    " << ((dst_fp || src_fp) ? "fmov " : "mov ")
                        << rn(mi.dst) << ", " << rn(mi.src1) << "\n";
                 }
@@ -696,9 +695,9 @@ int Arm64Target::encode(MFunction &pf, std::vector<uint8_t> &out) const {
             case MOp::A64_FMUL:
             case MOp::A64_FDIV: {
                 const char *m = mi.op == MOp::A64_FADD   ? "fadd"
-                                : mi.op == MOp::A64_FSUB  ? "fsub"
-                                : mi.op == MOp::A64_FMUL  ? "fmul"
-                                                          : "fdiv";
+                                : mi.op == MOp::A64_FSUB ? "fsub"
+                                : mi.op == MOp::A64_FMUL ? "fmul"
+                                                         : "fdiv";
                 os << "    " << m << " " << rn(mi.dst) << ", " << rn(mi.src1)
                    << ", " << rn(mi.src2) << "\n";
                 break;
@@ -707,8 +706,8 @@ int Arm64Target::encode(MFunction &pf, std::vector<uint8_t> &out) const {
             case MOp::A64_FABS:
             case MOp::A64_FSQRT: {
                 const char *m = mi.op == MOp::A64_FNEG   ? "fneg"
-                                : mi.op == MOp::A64_FABS  ? "fabs"
-                                                          : "fsqrt";
+                                : mi.op == MOp::A64_FABS ? "fabs"
+                                                         : "fsqrt";
                 os << "    " << m << " " << rn(mi.dst) << ", " << rn(mi.src1)
                    << "\n";
                 break;
@@ -745,15 +744,15 @@ int Arm64Target::encode(MFunction &pf, std::vector<uint8_t> &out) const {
             case MOp::SAR:
             case MOp::A64_UDIV:
             case MOp::A64_SDIV: {
-                const char *mn = mi.op == MOp::ADD       ? "add"
-                                 : mi.op == MOp::SUB     ? "sub"
-                                 : mi.op == MOp::IMUL    ? "mul"
-                                 : mi.op == MOp::AND     ? "and"
-                                 : mi.op == MOp::OR      ? "orr"
-                                 : mi.op == MOp::XOR     ? "eor"
-                                 : mi.op == MOp::SHL     ? "lsl"
-                                 : mi.op == MOp::SHR     ? "lsr"
-                                 : mi.op == MOp::SAR     ? "asr"
+                const char *mn = mi.op == MOp::ADD        ? "add"
+                                 : mi.op == MOp::SUB      ? "sub"
+                                 : mi.op == MOp::IMUL     ? "mul"
+                                 : mi.op == MOp::AND      ? "and"
+                                 : mi.op == MOp::OR       ? "orr"
+                                 : mi.op == MOp::XOR      ? "eor"
+                                 : mi.op == MOp::SHL      ? "lsl"
+                                 : mi.op == MOp::SHR      ? "lsr"
+                                 : mi.op == MOp::SAR      ? "asr"
                                  : mi.op == MOp::A64_UDIV ? "udiv"
                                                           : "sdiv";
                 os << "    " << mn << " " << rn(mi.dst) << ", " << rn(mi.src1)
@@ -798,8 +797,10 @@ int Arm64Target::encode(MFunction &pf, std::vector<uint8_t> &out) const {
                            << s << "\n";
                     else // sb == 4
                         os << "    "
-                           << (sign ? "sxtw " + a64_name(mi.dst.reg, 8) + ", " + s
-                                    : "mov " + a64_name(mi.dst.reg, 4) + ", " + s)
+                           << (sign ? "sxtw " + a64_name(mi.dst.reg, 8) + ", " +
+                                          s
+                                    : "mov " + a64_name(mi.dst.reg, 4) + ", " +
+                                          s)
                            << "\n";
                 } else {
                     os << "    mov " << rn(mi.dst) << ", " << rn(mi.src1)
@@ -822,12 +823,8 @@ int Arm64Target::encode(MFunction &pf, std::vector<uint8_t> &out) const {
                 os << "    cbz " << rn(mi.src1) << ", .Ls" << mi.dst.value
                    << "\n";
                 break;
-            case MOp::LABEL_DEF:
-                os << ".Ls" << mi.src1.value << ":\n";
-                break;
-            case MOp::JMP:
-                os << "    b .Lb" << mi.src1.value << "\n";
-                break;
+            case MOp::LABEL_DEF: os << ".Ls" << mi.src1.value << ":\n"; break;
+            case MOp::JMP: os << "    b .Lb" << mi.src1.value << "\n"; break;
             case MOp::JCC:
                 os << "    b." << cc_by_index(static_cast<uint8_t>(mi.variant))
                    << " .Lb" << mi.src1.value << "\n";
@@ -835,11 +832,8 @@ int Arm64Target::encode(MFunction &pf, std::vector<uint8_t> &out) const {
             case MOp::LOAD: {
                 // dst = [addr].  addr en MEM [base,#disp] (spill) o en un REG.
                 const int w = mi.flags >> 1; // (width<<1)|sgn
-                const char *ld = w == 1   ? "ldrb"
-                                 : w == 2 ? "ldrh"
-                                          : "ldr";
-                const std::string dst =
-                    a64_name(mi.dst.reg, w >= 8 ? 8 : 4);
+                const char *ld = w == 1 ? "ldrb" : w == 2 ? "ldrh" : "ldr";
+                const std::string dst = a64_name(mi.dst.reg, w >= 8 ? 8 : 4);
                 if (mi.src1.kind == MOperandKind::MEM)
                     os << "    " << ld << " " << dst << ", ["
                        << a64_name(mi.src1.reg, 8) << ", #" << mi.src1.value
@@ -852,11 +846,8 @@ int Arm64Target::encode(MFunction &pf, std::vector<uint8_t> &out) const {
             case MOp::STORE: {
                 // [addr] = val.  src1 = addr (MEM o REG), src2 = val.
                 const int w = mi.flags;
-                const char *st = w == 1   ? "strb"
-                                 : w == 2 ? "strh"
-                                          : "str";
-                const std::string val =
-                    a64_name(mi.src2.reg, w >= 8 ? 8 : 4);
+                const char *st = w == 1 ? "strb" : w == 2 ? "strh" : "str";
+                const std::string val = a64_name(mi.src2.reg, w >= 8 ? 8 : 4);
                 if (mi.src1.kind == MOperandKind::MEM)
                     os << "    " << st << " " << val << ", ["
                        << a64_name(mi.src1.reg, 8) << ", #" << mi.src1.value
@@ -870,9 +861,7 @@ int Arm64Target::encode(MFunction &pf, std::vector<uint8_t> &out) const {
                 call_syms.push_back(static_cast<uint32_t>(mi.src1.value));
                 os << "    bl 0\n";
                 break;
-            case MOp::RET:
-                os << "    ret\n";
-                break;
+            case MOp::RET: os << "    ret\n"; break;
             default:
                 if (std::getenv("VESTA_ARM64_DUMP"))
                     std::fprintf(stderr, "[arm64-vreg] ENCODE MOp no sop: %d\n",

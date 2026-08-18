@@ -62,7 +62,8 @@ ComptimeArtifact comptime_artifact_get(const ComptimeUnit &unit,
          * concreto en vez de un "no se pudo": sin el, esto se depura leyendo el
          * codigo en vez del mensaje. */
         out.error = "el conjunto comptime no compila por si solo";
-        if (!resp.message.empty()) out.error += ": " + resp.message;
+        if (!resp.message.empty())
+            out.error += ": " + resp.message;
         else if (!resp.diagnostics.empty())
             out.error += ": " + resp.diagnostics.front().message;
         return out;
@@ -72,15 +73,16 @@ ComptimeArtifact comptime_artifact_get(const ComptimeUnit &unit,
     out.velb.assign(std::istreambuf_iterator<char>(f),
                     std::istreambuf_iterator<char>());
     if (out.velb.empty()) {
-        out.error = "la compilacion del conjunto comptime no dejo bytecode en " +
-                    resp.output_path;
+        out.error =
+            "la compilacion del conjunto comptime no dejo bytecode en " +
+            resp.output_path;
         return out;
     }
 
     /* Guardar es idempotente y atomico (temp + rename), asi que dos procesos
-     * compilando el mismo conjunto a la vez no se pisan.  Un fallo al guardar NO
-     * invalida el artefacto que ya tenemos en la mano: se pierde el ahorro de la
-     * proxima vez, no esta compilacion. */
+     * compilando el mismo conjunto a la vez no se pisan.  Un fallo al guardar
+     * NO invalida el artefacto que ya tenemos en la mano: se pierde el ahorro
+     * de la proxima vez, no esta compilacion. */
     if (key != 0) (void)cas.put(key, out.velb);
 
     out.ok = true;

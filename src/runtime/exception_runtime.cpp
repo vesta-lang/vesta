@@ -28,7 +28,6 @@
 #include <algorithm>
 #include <memory>
 
-
 #include <csetjmp>
 #include <cstdarg>
 #include <cstdio>
@@ -67,7 +66,6 @@ static std::string vxdbg_cache_dir() {
         return std::string(v) + "/vxdbg";
     return ".cache/vxdbg";
 }
-
 
 // ---------------------------------------------------------------------
 // Estado global de la clase FatalError
@@ -278,11 +276,11 @@ static std::string demangle_symbol(const std::string &raw) {
  * @param symbol Simbolo ya resuelto.
  * @return Descripcion breve ("metodo de Lector"), o vacio.
  */
-static std::string entity_note_for_symbol(ProcessVM *vm,
-                                          const std::string &symbol,
-                                          std::string *out_file = nullptr,
-                                          vxdbg::ContentHash *out_sum = nullptr,
-                                          const vxdbg::SpanMap **out_spans = nullptr) {
+static std::string
+entity_note_for_symbol(ProcessVM *vm, const std::string &symbol,
+                       std::string *out_file = nullptr,
+                       vxdbg::ContentHash *out_sum = nullptr,
+                       const vxdbg::SpanMap **out_spans = nullptr) {
     struct Grafo {
         bool intentado = false;
         bool hay = false;
@@ -310,9 +308,8 @@ static std::string entity_note_for_symbol(ProcessVM *vm,
         if (!path.empty()) {
             std::ifstream f(path, std::ios::binary);
             if (f) {
-                const std::string bytes(
-                    (std::istreambuf_iterator<char>(f)),
-                    std::istreambuf_iterator<char>());
+                const std::string bytes((std::istreambuf_iterator<char>(f)),
+                                        std::istreambuf_iterator<char>());
                 if (!bytes.empty()) {
                     const std::string dir = vxdbg_cache_dir();
                     g.store = std::make_unique<vxdbg::FileNodeStore>(dir);
@@ -343,7 +340,8 @@ static std::string entity_note_for_symbol(ProcessVM *vm,
     if (!vxdbg::load_node(*g.store, id.hash, e)) return {};
     // Se dice como lo llama SU lenguaje, no la especie generica: quien lee
     // reconoce "metodo" o "constructor", no "Function".
-    std::string nota = e.lang_kind.empty() ? std::string("declarado") : e.lang_kind;
+    std::string nota =
+        e.lang_kind.empty() ? std::string("declarado") : e.lang_kind;
     nota += " ";
     // Quien lo declara, para poder decir despues QUE es y DONDE vive.
     vxdbg::LanguageEntity duenyo;
@@ -364,15 +362,15 @@ static std::string entity_note_for_symbol(ProcessVM *vm,
             nota += a.text;
             break;
         }
-    /* Y de QUE es miembro, con su genero y su fichero.  Que un metodo pertenezca
-     * a un `struct` y no a una `class` cambia como se pasa, quien lo posee y
-     * donde vive su memoria: al explicar un fallo eso importa tanto como el
-     * nombre.  Es justo lo que el grafo sabe y una tabla de simbolos no. */
+    /* Y de QUE es miembro, con su genero y su fichero.  Que un metodo
+     * pertenezca a un `struct` y no a una `class` cambia como se pasa, quien lo
+     * posee y donde vive su memoria: al explicar un fallo eso importa tanto
+     * como el nombre.  Es justo lo que el grafo sabe y una tabla de simbolos
+     * no. */
     /* Una funcion libre no tiene propietario, pero SI tiene fichero.  Sin esto
      * solo se ensenaba el fuente de lo que pertenecia a un tipo, que es la
      * mitad de los sitios donde puede fallar algo. */
     if (!hay_duenyo && out_file && !e.declared_at.file.hash.empty()) {
-
         vxdbg::FileNode propio;
         if (vxdbg::load_node(*g.store, e.declared_at.file.hash, propio) &&
             !propio.path.empty()) {
@@ -458,7 +456,8 @@ int last_fatal_exit_code() {
     case FATAL_USER_ABORT:
     case FATAL_OUT_OF_MEMORY:
     case FATAL_NATIVE_EXCEPTION: return 128 + 6;
-    /* Lo que no encaja en ninguna senal sale con el fallo generico de siempre. */
+    /* Lo que no encaja en ninguna senal sale con el fallo generico de siempre.
+     */
     default: return 1;
     }
 }
@@ -516,10 +515,9 @@ static vxdbg::SourceExtent span_for(ProcessVM *vm, const std::string &symbol,
     const vxdbg::SpanMap *sp = nullptr;
     (void)entity_note_for_symbol(vm, symbol, nullptr, nullptr, &sp);
     if (!sp) return {};
-    return sp->find(
-        (symbol.rfind("code.", 0) == 0) ? symbol.substr(5) : symbol, line);
+    return sp->find((symbol.rfind("code.", 0) == 0) ? symbol.substr(5) : symbol,
+                    line);
 }
-
 
 /**
  * @brief Las instrucciones INTERMEDIAS de una posicion del fuente.
@@ -528,7 +526,7 @@ static vxdbg::SourceExtent span_for(ProcessVM *vm, const std::string &symbol,
  * tiene parseado: no hay que ir a buscarlo a ningun sitio ni volver a compilar.
  *
  * Se devuelven solo las de ESA linea y columna -- el fragmento responsable -- y
- * no la funcion entera: en un metodo de verdad son cientos y no dicen nada.  Con
+ * no la funcion entera: en un metodo de verdad son cientos y no dicen nada. Con
  * un tope corto, porque esto acompana a un fallo; quien quiera el volcado tiene
  * una herramienta para eso.
  *
@@ -711,7 +709,8 @@ static std::vector<std::string> ir_window_at(ProcessVM *vm,
              * vecindario de una instruccion puede estar en otro bloque. */
             std::vector<const ir::IrInstr *> planas;
             for (const auto &bl : fn.blocks)
-                for (const auto &ins : bl.instrs) planas.push_back(&ins);
+                for (const auto &ins : bl.instrs)
+                    planas.push_back(&ins);
 
             size_t culpable = planas.size();
             for (size_t i = 0; i < planas.size(); ++i) {
@@ -743,7 +742,8 @@ static std::vector<std::string> ir_window_at(ProcessVM *vm,
                     std::string txt = linea_texto.substr(c, n);
                     // Sin espacios en los bordes: el trozo puede traerlos y
                     // como nombre estorban.
-                    while (!txt.empty() && (txt.back() == ' ' || txt.back() == 9))
+                    while (!txt.empty() &&
+                           (txt.back() == ' ' || txt.back() == 9))
                         txt.pop_back();
                     if (txt.empty()) continue;
                     nombre_de[p->dst] = std::move(txt);
@@ -766,13 +766,13 @@ static std::vector<std::string> ir_window_at(ProcessVM *vm,
                     cuerpo.pop_back();
                 // El formateador ya sangra; se le quita para poner la marca.
                 const size_t ini_txt = cuerpo.find_first_not_of(' ');
-                if (ini_txt != std::string::npos) cuerpo = cuerpo.substr(ini_txt);
+                if (ini_txt != std::string::npos)
+                    cuerpo = cuerpo.substr(ini_txt);
 
                 std::string t = (i == culpable) ? "> " : "  ";
                 t += cuerpo;
                 if (planas[i]->source_line > 0) {
-                    t += "   (linea " +
-                         std::to_string(planas[i]->source_line);
+                    t += "   (linea " + std::to_string(planas[i]->source_line);
                     if (planas[i]->source_column > 0)
                         t += ":" + std::to_string(planas[i]->source_column);
                     t += ")";
@@ -805,7 +805,8 @@ static std::vector<std::string> ir_window_at(ProcessVM *vm,
                         ops += "%" + std::to_string(v);
                         if (rg != ir::IR_NO_REG)
                             ops += "=r" + std::to_string((unsigned)rg);
-                        if (it != nombre_de.end()) ops += " (" + it->second + ")";
+                        if (it != nombre_de.end())
+                            ops += " (" + it->second + ")";
                     }
                     if (!ops.empty()) t += "   [" + ops + "]";
                 }
@@ -859,22 +860,48 @@ static std::vector<std::string> ir_window_at(ProcessVM *vm,
  */
 static int indice_de_reg_x86(unsigned r) {
     switch (r) {
-    case X86_REG_RAX: case X86_REG_EAX: case X86_REG_AX: case X86_REG_AL: return 0;
-    case X86_REG_RCX: case X86_REG_ECX: case X86_REG_CX: case X86_REG_CL: return 1;
-    case X86_REG_RDX: case X86_REG_EDX: case X86_REG_DX: case X86_REG_DL: return 2;
-    case X86_REG_RBX: case X86_REG_EBX: case X86_REG_BX: case X86_REG_BL: return 3;
-    case X86_REG_RSP: case X86_REG_ESP: return 4;
-    case X86_REG_RBP: case X86_REG_EBP: return 5;
-    case X86_REG_RSI: case X86_REG_ESI: case X86_REG_SI: return 6;
-    case X86_REG_RDI: case X86_REG_EDI: case X86_REG_DI: return 7;
-    case X86_REG_R8: case X86_REG_R8D: return 8;
-    case X86_REG_R9: case X86_REG_R9D: return 9;
-    case X86_REG_R10: case X86_REG_R10D: return 10;
-    case X86_REG_R11: case X86_REG_R11D: return 11;
-    case X86_REG_R12: case X86_REG_R12D: return 12;
-    case X86_REG_R13: case X86_REG_R13D: return 13;
-    case X86_REG_R14: case X86_REG_R14D: return 14;
-    case X86_REG_R15: case X86_REG_R15D: return 15;
+    case X86_REG_RAX:
+    case X86_REG_EAX:
+    case X86_REG_AX:
+    case X86_REG_AL: return 0;
+    case X86_REG_RCX:
+    case X86_REG_ECX:
+    case X86_REG_CX:
+    case X86_REG_CL: return 1;
+    case X86_REG_RDX:
+    case X86_REG_EDX:
+    case X86_REG_DX:
+    case X86_REG_DL: return 2;
+    case X86_REG_RBX:
+    case X86_REG_EBX:
+    case X86_REG_BX:
+    case X86_REG_BL: return 3;
+    case X86_REG_RSP:
+    case X86_REG_ESP: return 4;
+    case X86_REG_RBP:
+    case X86_REG_EBP: return 5;
+    case X86_REG_RSI:
+    case X86_REG_ESI:
+    case X86_REG_SI: return 6;
+    case X86_REG_RDI:
+    case X86_REG_EDI:
+    case X86_REG_DI: return 7;
+    case X86_REG_R8:
+    case X86_REG_R8D: return 8;
+    case X86_REG_R9:
+    case X86_REG_R9D: return 9;
+    case X86_REG_R10:
+    case X86_REG_R10D: return 10;
+    case X86_REG_R11:
+    case X86_REG_R11D: return 11;
+    case X86_REG_R12:
+    case X86_REG_R12D: return 12;
+    case X86_REG_R13:
+    case X86_REG_R13D: return 13;
+    case X86_REG_R14:
+    case X86_REG_R14D: return 14;
+    case X86_REG_R15:
+    case X86_REG_R15D: return 15;
     default: return -1;
     }
 }
@@ -914,8 +941,8 @@ static std::string mnemonico_nativo_en(uint64_t pc) {
     csh h;
     if (cs_open(CS_ARCH_X86, CS_MODE_64, &h) != CS_ERR_OK) return std::string();
     cs_insn *ins = nullptr;
-    const size_t n = cs_disasm(h, reinterpret_cast<const uint8_t *>(pc), leer,
-                               pc, 1, &ins);
+    const size_t n =
+        cs_disasm(h, reinterpret_cast<const uint8_t *>(pc), leer, pc, 1, &ins);
     std::string m;
     if (n > 0) {
         m = ins[0].mnemonic;
@@ -941,13 +968,13 @@ static std::string rasgos_del_procesador() {
         uint64_t bit;
         const char *nombre;
     } kTabla[] = {
-        {jit::CF_SSE2, "SSE2"},       {jit::CF_SSE42, "SSE42"},
-        {jit::CF_POPCNT, "POPCNT"},   {jit::CF_AVX, "AVX"},
-        {jit::CF_AVX2, "AVX2"},       {jit::CF_BMI1, "BMI1"},
-        {jit::CF_BMI2, "BMI2"},       {jit::CF_AVX512F, "AVX512F"},
-        {jit::CF_ERMS, "ERMS"},       {jit::CF_FMA, "FMA"},
-        {jit::CF_LZCNT, "LZCNT"},     {jit::CF_F16C, "F16C"},
-        {jit::CF_SHA, "SHA"},         {jit::CF_AES, "AES"},
+        {jit::CF_SSE2, "SSE2"},     {jit::CF_SSE42, "SSE42"},
+        {jit::CF_POPCNT, "POPCNT"}, {jit::CF_AVX, "AVX"},
+        {jit::CF_AVX2, "AVX2"},     {jit::CF_BMI1, "BMI1"},
+        {jit::CF_BMI2, "BMI2"},     {jit::CF_AVX512F, "AVX512F"},
+        {jit::CF_ERMS, "ERMS"},     {jit::CF_FMA, "FMA"},
+        {jit::CF_LZCNT, "LZCNT"},   {jit::CF_F16C, "F16C"},
+        {jit::CF_SHA, "SHA"},       {jit::CF_AES, "AES"},
     };
     const uint64_t bits = jit::backend_caps_host_bits();
     std::string out;
@@ -971,9 +998,8 @@ static std::vector<std::string> native_window(ProcessVM *vm, uint64_t pc_fallo,
     // poder decir cuanto valian.
     cs_option(h, CS_OPT_DETAIL, CS_OPT_ON);
     cs_insn *ins = nullptr;
-    const size_t n =
-        cs_disasm(h, reinterpret_cast<const uint8_t *>(inicio), (size_t)tam,
-                  inicio, 0, &ins);
+    const size_t n = cs_disasm(h, reinterpret_cast<const uint8_t *>(inicio),
+                               (size_t)tam, inicio, 0, &ins);
     if (n == 0) {
         cs_close(&h);
         return out;
@@ -1001,7 +1027,8 @@ static std::vector<std::string> native_window(ProcessVM *vm, uint64_t pc_fallo,
         std::string vals;
         /* De la que fallo, QUE VALIAN los registros que lee.  Solo de esa: los
          * de las de al lado ya han cambiado o aun no se han calculado. */
-        if (i == culpable && vm->pending_fault_native_regs_ok && ins[i].detail) {
+        if (i == culpable && vm->pending_fault_native_regs_ok &&
+            ins[i].detail) {
             cs_regs leidos, escritos;
             uint8_t n_l = 0, n_e = 0;
             if (cs_regs_access(h, &ins[i], leidos, &n_l, escritos, &n_e) == 0) {
@@ -1085,17 +1112,16 @@ static std::vector<std::string> bytecode_window(ProcessVM *vm, uint64_t inicio,
                 const uint8_t r1 = dec.data_instruction.reg_data.reg1 & 0xF;
                 const uint8_t r2 = dec.data_instruction.reg_data.reg2 & 0xF;
                 char vb[80];
-                std::snprintf(vb, sizeof(vb), "  r%u=0x%llx r%u=0x%llx",
-                              (unsigned)r1,
-                              (unsigned long long)vm->registers.regs[r1].qword(),
-                              (unsigned)r2,
-                              (unsigned long long)vm->registers.regs[r2].qword());
+                std::snprintf(
+                    vb, sizeof(vb), "  r%u=0x%llx r%u=0x%llx", (unsigned)r1,
+                    (unsigned long long)vm->registers.regs[r1].qword(),
+                    (unsigned)r2,
+                    (unsigned long long)vm->registers.regs[r2].qword());
                 vals = vb;
             }
             std::snprintf(buf, sizeof(buf), "> 0x%llx  %-34s %-8s %-16s%s",
                           (unsigned long long)d.address, d.hex.c_str(),
-                          d.mnemonic.c_str(), d.operands.c_str(),
-                          vals.c_str());
+                          d.mnemonic.c_str(), d.operands.c_str(), vals.c_str());
         } else {
             std::snprintf(buf, sizeof(buf), "  0x%llx  %-34s %-8s %s",
                           (unsigned long long)d.address, d.hex.c_str(),
@@ -1170,19 +1196,19 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
 
     /* Cuando lo que fallo fue una instruccion que este procesador no tiene, se
      * dice QUE instruccion y QUE rasgo exige, antes de la cadena de llamadas.
-     * Todo eso ya se sabe y estaba sin juntar: la direccion la da el sistema, el
-     * mnemonico el desensamblador, el rasgo la base de instrucciones y lo que la
-     * maquina declara, el CPUID que ya se consulta para decidir que emitir.
-     * Decir solo "instruccion invalida" era tirar cuatro datos que estaban a
-     * mano y dejar a quien lee adivinando cual de las variantes reviento. */
+     * Todo eso ya se sabe y estaba sin juntar: la direccion la da el sistema,
+     * el mnemonico el desensamblador, el rasgo la base de instrucciones y lo
+     * que la maquina declara, el CPUID que ya se consulta para decidir que
+     * emitir. Decir solo "instruccion invalida" era tirar cuatro datos que
+     * estaban a mano y dejar a quien lee adivinando cual de las variantes
+     * reviento. */
     if (vm->pending_av_kind == 3 && vm->pending_fault_native_pc != 0) {
-        const std::string mnem = mnemonico_nativo_en(
-            vm->pending_fault_native_pc -
-            (vm->pending_fault_native_is_return ? 1u : 0u));
+        const std::string mnem =
+            mnemonico_nativo_en(vm->pending_fault_native_pc -
+                                (vm->pending_fault_native_is_return ? 1u : 0u));
         if (!mnem.empty()) {
-            const std::string exige =
-                vx::instr_db::requisito_de_mnemonico(vx::instr_db::Isa::X86,
-                                                     mnem);
+            const std::string exige = vx::instr_db::requisito_de_mnemonico(
+                vx::instr_db::Isa::X86, mnem);
             append_str("  ");
             append_str(vx::diag::format("VX7021", {mnem}).c_str());
             append_str("\n");
@@ -1259,13 +1285,13 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
      * muestran los dos. */
     /* Cuanto retroceder para preguntar por la instruccion que interesa.
      *
-     * Una direccion de RETORNO apunta justo despues de la llamada, y el PC de un
-     * fallo normal ya avanzo: en los dos hay que mirar el byte anterior.  Pero
-     * cuando el fallo lo captura el sistema a mitad de instruccion -- un acceso
-     * invalido -- el PC apunta a la que fallo, y restar uno se sale a la
-     * instruccion de antes: si la que fallo era la PRIMERA de una funcion, la de
-     * antes es de OTRA, y la traza acaba enseñando la linea de otro sitio.  Que
-     * fue exactamente lo que pasaba. */
+     * Una direccion de RETORNO apunta justo despues de la llamada, y el PC de
+     * un fallo normal ya avanzo: en los dos hay que mirar el byte anterior.
+     * Pero cuando el fallo lo captura el sistema a mitad de instruccion -- un
+     * acceso invalido -- el PC apunta a la que fallo, y restar uno se sale a la
+     * instruccion de antes: si la que fallo era la PRIMERA de una funcion, la
+     * de antes es de OTRA, y la traza acaba enseñando la linea de otro sitio.
+     * Que fue exactamente lo que pasaba. */
     const uint64_t atras_top = vm->fatal_pc_exact ? 0u : 1u;
 
     /* La linea de fuente de un PC.  Misma correccion de `atras` que
@@ -1322,10 +1348,10 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
     };
 
     /* La linea del FUENTE, debajo del marco.  Un numero de linea obliga a abrir
-     * el fichero para entender el fallo; el texto lo cuenta solo.  No hace falta
-     * nada nuevo: el fichero lo dice el grafo (cada entidad lleva el suyo, sin
-     * la mentira de la seccion de depuracion cross-module) y la linea ya se
-     * resolvia.  Si el fuente no esta o ya no coincide, simplemente no se
+     * el fichero para entender el fallo; el texto lo cuenta solo.  No hace
+     * falta nada nuevo: el fichero lo dice el grafo (cada entidad lleva el
+     * suyo, sin la mentira de la seccion de depuracion cross-module) y la linea
+     * ya se resolvia.  Si el fuente no esta o ya no coincide, simplemente no se
      * ensena. */
     /* Un rotulo con su raya para separar las tres vistas del mismo fallo.
      * Puestas una detras de otra sin nada en medio se leen como un bloque
@@ -1344,11 +1370,10 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
         // caracter, para que este fuente siga siendo ASCII.
         static const char kRaya[] = {(char)0xE2, (char)0x94, (char)0x80, 0};
         const size_t ancho = (t.size() < 40) ? (40 - t.size()) : 4;
-        for (size_t i = 0; i < ancho; ++i) append_str(kRaya);
+        for (size_t i = 0; i < ancho; ++i)
+            append_str(kRaya);
         append_str(kSaltoLinea);
     };
-
-
 
     auto append_source = [&](uint64_t pc, const std::string &archivo,
                              vxdbg::ContentHash resumen,
@@ -1395,9 +1420,9 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
                                std::istreambuf_iterator<char>());
         if (todo.empty()) return;
         /* Si el fichero ya no es el que se compilo, se DICE.  Ensenar una linea
-         * de un fuente que cambio despues manda a mirar donde no toca, y callarse
-         * deja a quien lee pensando que no habia nada.  Las dos cosas son peores
-         * que decirlo. */
+         * de un fuente que cambio despues manda a mirar donde no toca, y
+         * callarse deja a quien lee pensando que no habia nada.  Las dos cosas
+         * son peores que decirlo. */
         if (!resumen.empty() &&
             vxdbg::hash_bytes(todo.data(), todo.size()) != resumen) {
             const std::string aviso = vx::diag::format("VX7014", {});
@@ -1434,14 +1459,17 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
         if (col >= limpio.size()) return;
         const size_t largo = std::min<size_t>(ext.length, limpio.size() - col);
         append_str("      ");
-        for (size_t i = 0; i < col; ++i) append_str(" ");
-        for (size_t i = 0; i < largo; ++i) append_str("^");
+        for (size_t i = 0; i < col; ++i)
+            append_str(" ");
+        for (size_t i = 0; i < largo; ++i)
+            append_str("^");
         append_str("\n");
 
         /* Y el INTERMEDIO de ese mismo tramo.  Entre el fuente y la instruccion
          * de la maquina hay un paso que a veces es el que explica el fallo: lo
          * que se pidio, en que se tradujo, y con que acabo.  Se ensena solo si
-         * consta; si el intermedio no viaja en el artefacto, no se dice nada. */
+         * consta; si el intermedio no viaja en el artefacto, no se dice nada.
+         */
         const std::vector<std::string> ops =
             ir_window_at(vm, sim_ir, linea, ext.column, 3, 4, texto);
         if (ops.empty()) return;
@@ -1548,8 +1576,8 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
              * --, se dice de quien es.  Poner el nombre de la funcion fisica
              * junto a una linea ajena no es perder informacion: es dar una
              * falsa. */
-            const std::vector<EscalonInline> aplanado = inline_chain_at(
-                vm, *sym, linea_de_pc(cur_pc, atras_top), 0);
+            const std::vector<EscalonInline> aplanado =
+                inline_chain_at(vm, *sym, linea_de_pc(cur_pc, atras_top), 0);
             const std::string legible =
                 aplanado.empty() ? demangle_symbol(*sym)
                                  : demangle_symbol(aplanado.front().funcion);
@@ -1561,8 +1589,8 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
                 append_str("]");
             }
             // Que ES lo que fallo, no solo como se llama: si el grafo lo sabe,
-            // se dice ("constructor de Lector") en vez de dejar un nombre suelto
-            // que quien lee tiene que ir a buscar al fuente.
+            // se dice ("constructor de Lector") en vez de dejar un nombre
+            // suelto que quien lee tiene que ir a buscar al fuente.
             std::string archivo_top;
             vxdbg::ContentHash resumen_top;
             // La nota describe a QUIEN pertenece la linea, que si hubo
@@ -1766,7 +1794,8 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size) {
             }
             append_str("\n");
 
-            /* Las llamadas que el inlinado se comio por debajo de este marco. */
+            /* Las llamadas que el inlinado se comio por debajo de este marco.
+             */
             for (size_t k = 1; k < apl_n.size(); ++k) {
                 append_str("  llamada desde ");
                 const std::string nk = demangle_symbol(apl_n[k].funcion);
@@ -2158,11 +2187,12 @@ namespace runtime {
 static std::once_flag g_av_handler_init_flag;
 
 #if defined(_WIN32)
-/// Handle del VEH instalado por ::install_host_av_handler.  Se guarda para poder
-/// retirarlo (::uninstall_host_av_handler) ANTES de que el codigo de la libreria
-/// quede sin mapear: si libvesta se descarga (FreeLibrary) sin retirar el VEH,
-/// la cadena de manejadores conserva un puntero a codigo muerto y el cierre del
-/// proceso (o cualquier excepcion posterior) salta a esa direccion -> segfault.
+/// Handle del VEH instalado por ::install_host_av_handler.  Se guarda para
+/// poder retirarlo (::uninstall_host_av_handler) ANTES de que el codigo de la
+/// libreria quede sin mapear: si libvesta se descarga (FreeLibrary) sin retirar
+/// el VEH, la cadena de manejadores conserva un puntero a codigo muerto y el
+/// cierre del proceso (o cualquier excepcion posterior) salta a esa direccion
+/// -> segfault.
 static void *g_av_veh_handle = nullptr;
 #endif
 
@@ -2221,8 +2251,7 @@ static LONG WINAPI vx_av_veh(EXCEPTION_POINTERS *info) {
     case 0xE06D7363u: // excepcion de C++ (msvc/mingw)
     case 0x406D1388u: // nombre de hilo para el depurador
         return EXCEPTION_CONTINUE_SEARCH;
-    default:
-        break;
+    default: break;
     }
     uint32_t kind_local; // 0=AV 1=div0 2=overflow 3=instr ilegal 4=lo demas
     if (code == EXCEPTION_ACCESS_VIOLATION) {
@@ -2272,11 +2301,11 @@ static LONG WINAPI vx_av_veh(EXCEPTION_POINTERS *info) {
          * sistema lo entrega entero; quedarse solo con el PC obliga despues a
          * ensenar que instruccion revento sin poder decir con que valores. */
         const CONTEXT *c = info->ContextRecord;
-        const uint64_t banco[16] = {c->Rax, c->Rcx, c->Rdx, c->Rbx,
-                                    c->Rsp, c->Rbp, c->Rsi, c->Rdi,
-                                    c->R8,  c->R9,  c->R10, c->R11,
-                                    c->R12, c->R13, c->R14, c->R15};
-        for (int k = 0; k < 16; ++k) proc->pending_fault_native_regs[k] = banco[k];
+        const uint64_t banco[16] = {
+            c->Rax, c->Rcx, c->Rdx, c->Rbx, c->Rsp, c->Rbp, c->Rsi, c->Rdi,
+            c->R8,  c->R9,  c->R10, c->R11, c->R12, c->R13, c->R14, c->R15};
+        for (int k = 0; k < 16; ++k)
+            proc->pending_fault_native_regs[k] = banco[k];
         proc->pending_fault_native_regs_ok = true;
 #elif defined(_M_IX86) || defined(__i386__)
         proc->pending_fault_native_pc = (uint64_t)info->ContextRecord->Eip;
@@ -2331,8 +2360,7 @@ static LONG WINAPI vx_av_veh(EXCEPTION_POINTERS *info) {
         DWORD64 rsp = info->ContextRecord->Rsp;
         rsp &= ~(DWORD64)0xF;
         rsp -= 8;
-        *reinterpret_cast<DWORD64 *>((uintptr_t)rsp) =
-            info->ContextRecord->Rip;
+        *reinterpret_cast<DWORD64 *>((uintptr_t)rsp) = info->ContextRecord->Rip;
         info->ContextRecord->Rsp = rsp;
     }
     info->ContextRecord->Rip = (DWORD64)(uintptr_t)&av_recovery_stub;
@@ -2430,8 +2458,10 @@ static void posix_signal_handler(int sig, siginfo_t *info, void *ctx) {
 #elif defined(__i386__)
     if (ctx != nullptr) {
         const auto *uc = reinterpret_cast<const ucontext_t *>(ctx);
-        proc->pending_fault_native_pc = (uint64_t)uc->uc_mcontext.gregs[REG_EIP];
-        proc->pending_fault_native_sp = (uint64_t)uc->uc_mcontext.gregs[REG_ESP];
+        proc->pending_fault_native_pc =
+            (uint64_t)uc->uc_mcontext.gregs[REG_EIP];
+        proc->pending_fault_native_sp =
+            (uint64_t)uc->uc_mcontext.gregs[REG_ESP];
     }
 #else
     (void)ctx;

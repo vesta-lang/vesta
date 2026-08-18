@@ -36,13 +36,13 @@ namespace vx {
  * @brief Una declaracion top-level indexada.
  */
 struct SymbolEntry {
-    std::string name;   ///< nombre CUALIFICADO con el namespace (punteado).
-    uint8_t kind = 0;   ///< @c ast::NodeKind del simbolo (como u8).
+    std::string name; ///< nombre CUALIFICADO con el namespace (punteado).
+    uint8_t kind = 0; ///< @c ast::NodeKind del simbolo (como u8).
     uint64_t content_hash = 0; ///< FNV-1a 64 del span de fuente del simbolo.
     std::vector<std::string> deps; ///< nombres SIMPLES de simbolos referidos.
     uint32_t src_offset = 0;       ///< offset del span en la fuente original.
     uint32_t src_length = 0;       ///< longitud del span en bytes.
-    bool is_public = true;         ///< @c true si la decl es @c public (importable).
+    bool is_public = true; ///< @c true si la decl es @c public (importable).
 };
 
 /**
@@ -50,8 +50,8 @@ struct SymbolEntry {
  * @brief Indice por-declaracion de un modulo.
  */
 struct SemanticIndex {
-    std::string module_path;   ///< path canonico del modulo (identidad).
-    uint64_t module_hash = 0;  ///< FNV-1a del fuente completo (compat cache).
+    std::string module_path;  ///< path canonico del modulo (identidad).
+    uint64_t module_hash = 0; ///< FNV-1a del fuente completo (compat cache).
     std::vector<SymbolEntry> symbols;
 
     /// @brief Busca un simbolo por nombre cualificado (nullptr si no existe).
@@ -85,7 +85,8 @@ std::vector<uint8_t> serialize_semantic_index(const SemanticIndex &idx);
  * @brief Deserializa un indice desde bytes.  @return false si el formato es
  *        invalido (magic/version).
  */
-bool parse_semantic_index(const std::vector<uint8_t> &bytes, SemanticIndex &out);
+bool parse_semantic_index(const std::vector<uint8_t> &bytes,
+                          SemanticIndex &out);
 
 /**
  * @brief Conjunto de simbolos a RECOMPILAR entre dos versiones del indice:
@@ -101,7 +102,7 @@ bool parse_semantic_index(const std::vector<uint8_t> &bytes, SemanticIndex &out)
  * @return Nombres cualificados de los simbolos a recompilar (orden estable).
  */
 std::vector<std::string> changed_symbols_closure(const SemanticIndex &old_idx,
-                                                  const SemanticIndex &new_idx);
+                                                 const SemanticIndex &new_idx);
 
 /**
  * @brief Volcado JSON del indice (depuracion, flag @c --dump-semantic-index).
@@ -118,7 +119,7 @@ std::string semantic_index_to_json(const SemanticIndex &idx);
  * OTRO fichero, no en el indice del documento actual.
  */
 struct ImportedModuleSemIndex {
-    std::string uri;    ///< file:// del modulo importado (para Location futura).
+    std::string uri; ///< file:// del modulo importado (para Location futura).
     std::string source; ///< fuente cruda del modulo (extraccion de firmas).
     SemanticIndex index;
 };
@@ -137,9 +138,10 @@ struct ImportedModuleSemIndex {
  * @param extra_search_paths Search paths extra (ancestros del root, etc.).
  * @return Un indice por modulo importado alcanzable.
  */
-std::vector<ImportedModuleSemIndex> build_imported_sem_indexes(
-    const std::string &root_file, const std::string &root_overlay_text,
-    const std::vector<std::string> &extra_search_paths);
+std::vector<ImportedModuleSemIndex>
+build_imported_sem_indexes(const std::string &root_file,
+                           const std::string &root_overlay_text,
+                           const std::vector<std::string> &extra_search_paths);
 
 } // namespace vx
 

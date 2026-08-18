@@ -23,9 +23,10 @@
  *   - BUCLE SIN SALIDA: una region alcanzable desde la que no se puede llegar a
  *     ninguna salida (ret o caida al final) -> bucle infinito.
  *
- * NO analiza registros/flags todavia (eso es el dataflow, un paso aparte): estos
- * tres diagnosticos salen solo de la topologia del CFG y por eso son seguros.
- * La cadena de codigos es estable (VXA0xx) para el catalogo de diagnosticos.
+ * NO analiza registros/flags todavia (eso es el dataflow, un paso aparte):
+ * estos tres diagnosticos salen solo de la topologia del CFG y por eso son
+ * seguros. La cadena de codigos es estable (VXA0xx) para el catalogo de
+ * diagnosticos.
  */
 
 #ifndef VX_ASM_DIAG_H
@@ -48,15 +49,17 @@ enum class AsmDiagSeverity : uint8_t { Info, Warning, Error };
 /// vx/diag_catalog.h).  No lleva mensaje pre-formateado.
 struct AsmDiag {
     AsmDiagSeverity severity = AsmDiagSeverity::Warning;
-    uint32_t line_no = 0;    ///< linea fisica dentro del bloque (1-based).
-    std::string code;        ///< codigo estable del catalogo (p.ej. "VXA001").
-    std::vector<std::string> args; ///< valores para los placeholders {0},{1},...
+    uint32_t line_no = 0; ///< linea fisica dentro del bloque (1-based).
+    std::string code;     ///< codigo estable del catalogo (p.ej. "VXA001").
+    std::vector<std::string>
+        args; ///< valores para los placeholders {0},{1},...
 };
 
 /**
  * @brief Diagnostica un CFG de asm ya construido.
  * @param cfg CFG (de @ref build_asm_cfg).
- * @return Lista de diagnosticos (vacia si el bloque es estructuralmente limpio).
+ * @return Lista de diagnosticos (vacia si el bloque es estructuralmente
+ * limpio).
  */
 std::vector<AsmDiag> asm_diagnose_cfg(const AsmCfg &cfg);
 
@@ -87,9 +90,10 @@ std::vector<AsmDiag> asm_diagnose(instr_db::Isa isa, const std::string &body);
  *         sin una comparacion/operacion previa: p.ej. `jz` antes de `cmp`), uno
  *         por (linea, registro/flags).
  *
- * Las flags (RFLAGS / NZCV) se modelan como un unico valor: una rama condicional
- * las LEE, y `cmp`/`add`/`sub`/`test`/... las ESCRIBEN.  Solo se analiza en x86 y
- * arm64 (RISC-V no tiene registro de flags; sus ramas comparan registros).
+ * Las flags (RFLAGS / NZCV) se modelan como un unico valor: una rama
+ * condicional las LEE, y `cmp`/`add`/`sub`/`test`/... las ESCRIBEN.  Solo se
+ * analiza en x86 y arm64 (RISC-V no tiene registro de flags; sus ramas comparan
+ * registros).
  */
 std::vector<AsmDiag>
 asm_diagnose_uninit(const AsmCfg &cfg, instr_db::Isa isa,

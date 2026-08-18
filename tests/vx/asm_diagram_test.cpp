@@ -13,13 +13,13 @@ using namespace vx;
 using vx::instr_db::Isa;
 
 static int g_checks = 0, g_fail = 0;
-#define CHECK(cond, msg)                                                        \
-    do {                                                                        \
-        ++g_checks;                                                             \
-        if (!(cond)) {                                                          \
-            ++g_fail;                                                           \
-            std::printf("  FAIL: %s (linea %d)\n", (msg), __LINE__);            \
-        }                                                                       \
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fail;                                                          \
+            std::printf("  FAIL: %s (linea %d)\n", (msg), __LINE__);           \
+        }                                                                      \
     } while (0)
 
 static bool has(const std::string &s, const std::string &sub) {

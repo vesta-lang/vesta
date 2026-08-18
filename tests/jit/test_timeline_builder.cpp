@@ -7,10 +7,11 @@
 
 /**
  * @file tests/jit/test_timeline_builder.cpp
- * @brief Splitting incremento 1: el @c TimelineBuilder trivial (AssignmentPlan vacio) produce
- *        un @c AllocationTimeline EQUIVALENTE a la @c RegAlloc plana.  Es la garantia que
- *        permitira al Rewrite consumir el timeline sin cambiar el codigo emitido antes de
- *        que exista un split real: en TODA posicion viva, at(pos) == ra.assign[vreg].
+ * @brief Splitting incremento 1: el @c TimelineBuilder trivial (AssignmentPlan
+ * vacio) produce un @c AllocationTimeline EQUIVALENTE a la @c RegAlloc plana.
+ * Es la garantia que permitira al Rewrite consumir el timeline sin cambiar el
+ * codigo emitido antes de que exista un split real: en TODA posicion viva,
+ * at(pos) == ra.assign[vreg].
  */
 
 #include "codegen/timeline_builder.h"
@@ -22,16 +23,17 @@
 using namespace codegen;
 
 static int g_checks = 0, g_fails = 0;
-#define CHECK(c)                                                                 \
-    do {                                                                         \
-        ++g_checks;                                                              \
-        if (!(c)) {                                                              \
-            ++g_fails;                                                           \
-            std::printf("  FALLO L%d: %s\n", __LINE__, #c);                      \
-        }                                                                        \
+#define CHECK(c)                                                               \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(c)) {                                                            \
+            ++g_fails;                                                         \
+            std::printf("  FALLO L%d: %s\n", __LINE__, #c);                    \
+        }                                                                      \
     } while (0)
 
-/// LiveInterval minimo: un vreg con un unico rango [from, to) (o muerto si to<=from).
+/// LiveInterval minimo: un vreg con un unico rango [from, to) (o muerto si
+/// to<=from).
 static jit::LiveInterval mk(uint32_t vreg, uint32_t from, uint32_t to) {
     jit::LiveInterval li;
     li.vreg = vreg;
@@ -60,9 +62,9 @@ int main() {
 
     CHECK(tl.values.size() == 3);
 
-    // El Rewrite usa SOLO tl.lookup(vreg,pos) -> ValueLocation (ni segments ni enum):
-    // vreg 0 en REG r5 [10,20).
-    CHECK(tl.lookup(0, LinearPos{9}).is_none());  // antes del rango.
+    // El Rewrite usa SOLO tl.lookup(vreg,pos) -> ValueLocation (ni segments ni
+    // enum): vreg 0 en REG r5 [10,20).
+    CHECK(tl.lookup(0, LinearPos{9}).is_none()); // antes del rango.
     const ValueLocation l0 = tl.lookup(0, LinearPos{15});
     CHECK(l0.is_register() && l0.register_id() == 5);
     CHECK(tl.lookup(0, LinearPos{20}).is_none()); // 'to' es exclusive.
@@ -80,8 +82,9 @@ int main() {
     CHECK(ar.frame.num_spill_slots == ra.num_spill_slots);
     CHECK(ar.frame.callee_saved_used == ra.callee_saved_used);
 
-    // El timeline trivial es SEMANTICAMENTE equivalente a la asignacion plana: en toda
-    // posicion viva devuelve la misma ubicacion.  Se compara COMPORTAMIENTO, no estructuras.
+    // El timeline trivial es SEMANTICAMENTE equivalente a la asignacion plana:
+    // en toda posicion viva devuelve la misma ubicacion.  Se compara
+    // COMPORTAMIENTO, no estructuras.
     for (uint32_t v = 0; v < ivs.intervals.size(); ++v)
         for (const jit::LiveRange &r : ivs.intervals[v].ranges)
             for (uint32_t p = r.from; p < r.to; ++p) {
@@ -94,17 +97,20 @@ int main() {
             }
 
     /* --- El builder MATERIALIZA las afirmaciones del plan ---
-     * vreg 1 vive en memoria (slot 2) en [4,30); el plan AFIRMA que en [10,20) vive en r7.
-     * Se comprueba el CONTRATO ("que ubicacion da cada posicion"), NUNCA la representacion
-     * interna: cuantos segmentos use el builder es cosa suya (manana podria fusionarlos,
-     * usar un arbol o una tabla y seguir siendo correcto). */
+     * vreg 1 vive en memoria (slot 2) en [4,30); el plan AFIRMA que en [10,20)
+     * vive en r7. Se comprueba el CONTRATO ("que ubicacion da cada posicion"),
+     * NUNCA la representacion interna: cuantos segmentos use el builder es cosa
+     * suya (manana podria fusionarlos, usar un arbol o una tabla y seguir
+     * siendo correcto). */
     AssignmentPlan sp;
-    sp.add(1, LinearPos{10}, LinearPos{20}, ValueLocation{ValueLocation::Register{7}});
+    sp.add(1, LinearPos{10}, LinearPos{20},
+           ValueLocation{ValueLocation::Register{7}});
     const AllocationResult ar2 = build_allocation_result(ra, &ivs, sp);
     const AllocationTimeline &tl2 = ar2.timeline;
 
-    // CONTINUIDAD: barrer TODA la vida, no puntos sueltos.  Un borde corrido (un REG de
-    // mas o de menos en la frontera) se escaparia comprobando solo los extremos.
+    // CONTINUIDAD: barrer TODA la vida, no puntos sueltos.  Un borde corrido
+    // (un REG de mas o de menos en la frontera) se escaparia comprobando solo
+    // los extremos.
     for (uint32_t p = 4; p < 10; ++p)
         CHECK(tl2.lookup(1, LinearPos{p}).is_memory() &&
               tl2.lookup(1, LinearPos{p}).stack_slot() == 2);
@@ -120,23 +126,26 @@ int main() {
     CHECK(tl2.lookup(0, LinearPos{15}).is_register() &&
           tl2.lookup(0, LinearPos{15}).register_id() == 5);
 
-    /* --- Una afirmacion cuyo tramo cae FUERA de la vida del valor no cambia nada ---
-     * (caso barato que caza errores de limites: el intervalo no debe tocar ni inventar). */
+    /* --- Una afirmacion cuyo tramo cae FUERA de la vida del valor no cambia
+     * nada --- (caso barato que caza errores de limites: el intervalo no debe
+     * tocar ni inventar). */
     AssignmentPlan out_of_range;
     out_of_range.add(1, LinearPos{100}, LinearPos{120},
                      ValueLocation{ValueLocation::Register{9}});
-    const AllocationResult ar3 = build_allocation_result(ra, &ivs, out_of_range);
+    const AllocationResult ar3 =
+        build_allocation_result(ra, &ivs, out_of_range);
     const AllocationTimeline &tl3 = ar3.timeline;
     for (uint32_t p = 4; p < 30; ++p) // toda la vida intacta en memoria.
         CHECK(tl3.lookup(1, LinearPos{p}).is_memory() &&
               tl3.lookup(1, LinearPos{p}).stack_slot() == 2);
     CHECK(tl3.lookup(1, LinearPos{110}).is_none()); // el tramo no inventa vida.
 
-    /* --- TransitionPlanner: "¿que movimientos exige este punto del programa?" ---
-     * Se prueba AISLADO (sin ejecutar el Rewrite).  Sobre el timeline MEM|REG|MEM del vreg
-     * 1 debe exigir exactamente DOS movimientos, en program points, no en posiciones:
-     *   antes de la instr 5  (donde empieza el tramo en registro):  MEM  -> REG r7
-     *   antes de la instr 10 (donde vuelve a memoria):              REG  -> MEM slot 2 */
+    /* --- TransitionPlanner: "¿que movimientos exige este punto del programa?"
+     * --- Se prueba AISLADO (sin ejecutar el Rewrite).  Sobre el timeline
+     * MEM|REG|MEM del vreg 1 debe exigir exactamente DOS movimientos, en
+     * program points, no en posiciones: antes de la instr 5  (donde empieza el
+     * tramo en registro):  MEM  -> REG r7 antes de la instr 10 (donde vuelve a
+     * memoria):              REG  -> MEM slot 2 */
     const TransitionPlanner planner(tl2);
     CHECK(!planner.empty());
 
@@ -154,15 +163,16 @@ int main() {
         CHECK(in10[0].from.is_register() && in10[0].from.register_id() == 7);
         CHECK(in10[0].to.is_memory() && in10[0].to.stack_slot() == 2);
     }
-    // En cualquier otro punto NO se exige nada (ni dentro del tramo ni fuera de la vida).
+    // En cualquier otro punto NO se exige nada (ni dentro del tramo ni fuera de
+    // la vida).
     for (uint32_t gi = 0; gi < 20; ++gi) {
         if (gi == 5 || gi == 10) continue;
         CHECK(planner.before_instruction(gi).empty());
         CHECK(planner.after_instruction(gi).empty());
     }
 
-    /* Sin afirmaciones (timeline trivial) NO hay ningun movimiento: por eso el codigo
-     * emitido no cambia mientras nadie produzca planes. */
+    /* Sin afirmaciones (timeline trivial) NO hay ningun movimiento: por eso el
+     * codigo emitido no cambia mientras nadie produzca planes. */
     const TransitionPlanner planner_trivial(tl);
     CHECK(planner_trivial.empty());
     for (uint32_t gi = 0; gi < 20; ++gi)

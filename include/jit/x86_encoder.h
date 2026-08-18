@@ -220,9 +220,9 @@ class X86Encoder {
     /// @p map = mapa de opcode: 1 = 0F, 2 = 0F38, 3 = 0F3A.
     /// @p pp = prefijo: 0 = ninguno (packed-single PS), 1 = 66 (packed-double).
     static void emit_vx3(uint8_t reg, uint8_t rm, uint8_t vvvv, uint8_t w,
-                          bool l256, uint8_t idx, bool has_idx,
-                          std::vector<uint8_t> &out, uint8_t map = 1,
-                          uint8_t pp = 1) {
+                         bool l256, uint8_t idx, bool has_idx,
+                         std::vector<uint8_t> &out, uint8_t map = 1,
+                         uint8_t pp = 1) {
         const uint8_t Rb = (reg & 8) ? 0 : 1;              // ~REX.R
         const uint8_t Bb = (rm & 8) ? 0 : 1;               // ~REX.B
         const uint8_t Xb = (has_idx && (idx & 8)) ? 0 : 1; // ~REX.X
@@ -270,7 +270,8 @@ class X86Encoder {
 
     size_t instr_count_ = 0;
     bool mode32_ = false; ///< x86-32 (sin REX); ver set_mode32().
-    bool vx_scalar_ = false; ///< VX en los moves float escalares; set_vx_scalar.
+    bool vx_scalar_ =
+        false; ///< VX en los moves float escalares; set_vx_scalar.
 };
 
 } // namespace jit

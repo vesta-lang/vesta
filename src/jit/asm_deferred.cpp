@@ -119,7 +119,8 @@ AsmDeferredResult asm_deferred_assemble(const AsmBlob &b,
      * mismo bloque da un resultado en el interprete y otro aqui, la diferencia
      * esta justo en estos dos textos. */
     if (std::getenv("VESTA_JIT_ASM_DUMP") != nullptr) {
-        std::fprintf(stderr, "[asm-jit] plantilla: %s\n", b.deferred_tmpl.c_str());
+        std::fprintf(stderr, "[asm-jit] plantilla: %s\n",
+                     b.deferred_tmpl.c_str());
         std::fprintf(stderr, "[asm-jit] final:\n%s\n", nasm.c_str());
     }
     vx::AsmAssembleResult ar =

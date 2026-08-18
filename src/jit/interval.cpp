@@ -345,29 +345,30 @@ namespace {
  *
  * Un @c INLINE_ASM_RAW se trataba SIEMPRE como posicion de llamada ("clobbea
  * cualquiera"), y ADEMAS sus clobbers reales se registran aparte en
- * @c asm_clobbers, que alimenta @c forbidden_lanes y dice con PRECISION que lanes
- * destruye.  Eran dos mecanismos midiendo el mismo hecho, y el burdo no anadia
- * nada: solo exigia, encima, una lane PRESERVADA.
+ * @c asm_clobbers, que alimenta @c forbidden_lanes y dice con PRECISION que
+ * lanes destruye.  Eran dos mecanismos midiendo el mismo hecho, y el burdo no
+ * anadia nada: solo exigia, encima, una lane PRESERVADA.
  *
  * En el banco vectorial de x86-64 eso es insatisfacible -- NINGUNA xmm es
  * callee-saved en SysV --, asi que un operando vectorial vivo a traves de otro
- * bloque asm se quedaba con 0 lanes admisibles.  Con residencia REGISTER (el uso
- * lo nombra como registro) no hay salida: el bloque se queda sin bytes y una
- * funcion cuyo cuerpo ENTERO es ese asm sale VACIA, devolviendo el residuo del
- * registro de retorno.  Eso rompia `std.memory.x86_64.memset_*_avx2`.
+ * bloque asm se quedaba con 0 lanes admisibles.  Con residencia REGISTER (el
+ * uso lo nombra como registro) no hay salida: el bloque se queda sin bytes y
+ * una funcion cuyo cuerpo ENTERO es ese asm sale VACIA, devolviendo el residuo
+ * del registro de retorno.  Eso rompia `std.memory.x86_64.memset_*_avx2`.
  *
- * Cuando la lista de clobbers esta VACIA no se sabe nada del asm y hay que seguir
- * siendo conservador: entonces si cuenta como posicion de llamada.
+ * Cuando la lista de clobbers esta VACIA no se sabe nada del asm y hay que
+ * seguir siendo conservador: entonces si cuenta como posicion de llamada.
  *
- * @return true si el blob tiene lista de clobbers (el mecanismo preciso aplica).
+ * @return true si el blob tiene lista de clobbers (el mecanismo preciso
+ * aplica).
  */
 inline bool asm_clobbers_conocidos(const MFunction &mf, const MInstr &in) {
     const uint32_t idx = static_cast<uint32_t>(in.src1.value);
-    /* Lo que decide es que la lista sea AUTORITATIVA, no que tenga elementos: una
-     * lista vacia con inferencia hecha significa "no destruye nada mas que sus
-     * operandos", y es justo el caso de los memset AVX2 (`xmm sem`, `ymm v0` son
-     * OPERANDOS declarados, no clobbers).  Confundir "vacia" con "no se sabe" era
-     * lo que dejaba el trato conservador puesto. */
+    /* Lo que decide es que la lista sea AUTORITATIVA, no que tenga elementos:
+     * una lista vacia con inferencia hecha significa "no destruye nada mas que
+     * sus operandos", y es justo el caso de los memset AVX2 (`xmm sem`, `ymm
+     * v0` son OPERANDOS declarados, no clobbers).  Confundir "vacia" con "no se
+     * sabe" era lo que dejaba el trato conservador puesto. */
     return idx < mf.asm_blobs.size() && mf.asm_blobs[idx].clobbers_conocidos;
 }
 
@@ -446,7 +447,8 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
             block_end[b] = 2u * gi;
         }
         out.max_pos = 2u * gi;
-        out.block_starts = block_start; // Fact de estructura (tramos rectilineos).
+        out.block_starts =
+            block_start; // Fact de estructura (tramos rectilineos).
     }
 
     /* Helper: invoca @p fn(vreg_id, role) por cada operando VREG de la
@@ -488,17 +490,17 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
             /* USOS antes que DEFS: un uso es upward-exposed (gen) si NO lo mato
              * una instruccion PREVIA del bloque -- NUNCA el def de la MISMA
              * instruccion (semanticamente el op lee sus srcs y LUEGO escribe el
-             * dst).  each_vreg entrega el dst (DEF) antes que los src (USE), asi
-             * que un solo pase pondria kill[v] antes de chequear el gen del uso
+             * dst).  each_vreg entrega el dst (DEF) antes que los src (USE),
+             * asi que un solo pase pondria kill[v] antes de chequear el gen del
+             * uso
              * -> para `op v, v, ..` (dst==src1, tipico TRAS ssa_coalesce que
              * coalescio el phi loop-carried con su `v+1`) el gen del uso se
              * suprimiria y el vreg perderia su liveness backward (rango
-             * fragmentado -> otro valor reusa su reg -> corrupcion).  DOS pases:
-             * primero todos los USOS (contra el kill de instrs previas), luego
-             * todos los DEFS. */
+             * fragmentado -> otro valor reusa su reg -> corrupcion).  DOS
+             * pases: primero todos los USOS (contra el kill de instrs previas),
+             * luego todos los DEFS. */
             each_vreg(in, [&](uint32_t v, OperandRole role) {
-                if ((role == OperandRole::USE ||
-                     role == OperandRole::USEDEF) &&
+                if ((role == OperandRole::USE || role == OperandRole::USEDEF) &&
                     !kill[b].test(v))
                     gen[b].set(v);
             });
@@ -515,13 +517,14 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
         /* ABI custom en un CALL/CALLIND: los pseudo-ARG con destino FIJO
          * (register() del cfn callee, p.ej. ebx=arg1 de un syscall) colocan su
          * operando en un registro fisico concreto.  El caller los sobreescribe
-         * con el parallel-move ANTES del call -> esos regs son clobbers para los
-         * vregs vivos A TRAVES del call.  crosses_call solo cubre los
+         * con el parallel-move ANTES del call -> esos regs son clobbers para
+         * los vregs vivos A TRAVES del call.  crosses_call solo cubre los
          * caller-saved; un arg-dst CALLEE-SAVED (ebx/esi/edi en x86-32) NO lo
-         * cubre -> un valor vivo (p.ej. la direccion de un buffer reusado en dos
-         * syscalls) se colocaba en ebx y el mov ebx,arg1 lo destruia.  Se
-         * acumulan los arg-dst hasta el CALL y se registran como clobbers de esa
-         * posicion (mismo mecanismo que asm_clobbers -> forbidden_lanes). */
+         * cubre -> un valor vivo (p.ej. la direccion de un buffer reusado en
+         * dos syscalls) se colocaba en ebx y el mov ebx,arg1 lo destruia.  Se
+         * acumulan los arg-dst hasta el CALL y se registran como clobbers de
+         * esa posicion (mismo mecanismo que asm_clobbers -> forbidden_lanes).
+         */
         std::vector<uint8_t> pending_arg_regs;
         for (const MInstr &in : mf.blocks[b].instrs) {
             if (in.op == MOp::ARG && in.dst.is_reg())
@@ -550,7 +553,8 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
                 in.op == MOp::STORE_VM
                 /* Atomicas: el rewrite usa RAX + scratch fijo -> call-position
                  * para que los vregs vivos vayan a callee-saved. */
-                || in.op == MOp::ATOMICCAS_V || in.op == MOp::ATOMICADD_V
+                || in.op == MOp::ATOMICCAS_V ||
+                in.op == MOp::ATOMICADD_V
                 /*  AS inc.5: el inline-asm clobbea caller-saved (en v1
                  * conservador: cualquiera) -> los vregs vivos a traves van a
                  * callee-saved/spill.  Los binding precoloreados son EXENTOS:
@@ -611,7 +615,8 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
              * valores definidos antes del try; sin esta union el regalloc los
              * consideraria muertos y el throw los perderia). */
             for (const MBlockId es : blk.extra_succs)
-                if (es != MBLOCK_INVALID && es != blk.succ_a && es != blk.succ_b)
+                if (es != MBLOCK_INVALID && es != blk.succ_a &&
+                    es != blk.succ_b)
                     tmp_out.union_inplace(live_in[es]);
             if (!tmp_out.equals(live_out[bi])) {
                 live_out[bi].copy_from(tmp_out);
@@ -635,7 +640,10 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
     {
         bool any_extra = false;
         for (size_t b = 0; b < NB; ++b)
-            if (!mf.blocks[b].extra_succs.empty()) { any_extra = true; break; }
+            if (!mf.blocks[b].extra_succs.empty()) {
+                any_extra = true;
+                break;
+            }
         if (any_extra) {
             out.force_spill.assign(NV, 0u);
             for (size_t b = 0; b < NB; ++b) {
@@ -676,13 +684,13 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
                 if (!mi.dst.is_vreg() || !mi.src1.is_vreg()) continue;
                 /* Copia pura reg->reg (`mov d, s`, incluidas las copias de PHI
                  * ya materializadas): tambien es candidata a coalescing.  El
-                 * hint es SOUND por construccion -- el linear_scan solo reusa el
-                 * reg de `s` si `s` muere EXACTO en el def de `d`
+                 * hint es SOUND por construccion -- el linear_scan solo reusa
+                 * el reg de `s` si `s` muere EXACTO en el def de `d`
                  * (partner.end()+1 == dst.start()), asi que nunca fusiona dos
                  * valores que interfieren.  A diferencia de un rewrite FORZADO
                  * de vregs, esto no puede miscompilar. */
-                const bool is_copy = (mi.op == MOp::MOV &&
-                                      mi.src2.kind == MOperandKind::NONE);
+                const bool is_copy =
+                    (mi.op == MOp::MOV && mi.src2.kind == MOperandKind::NONE);
                 if (!is_two_addr(mi.op) && !is_copy) continue;
                 const uint32_t d = mi.dst.vreg_id();
                 const uint32_t s = mi.src1.vreg_id();
@@ -757,25 +765,28 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
             if (!in && !out_ && !appears) continue;
             const uint32_t start =
                 in ? bstart : (appears ? b_first[v] : bstart);
-            /* El intervalo debe cubrir TODO punto donde el valor se toca -- lo lean
-             * o lo escriban.  Ultimo uso y ultima definicion son MAXIMOS, no ramas
-             * excluyentes: un operando @c USEDEF (xadd, CMOVcc, atomicas) hace las
-             * dos cosas en la MISMA instruccion, y la escritura cae DESPUES de la
-             * lectura (@c def_pos = use_pos+1).
+            /* El intervalo debe cubrir TODO punto donde el valor se toca -- lo
+             * lean o lo escriban.  Ultimo uso y ultima definicion son MAXIMOS,
+             * no ramas excluyentes: un operando @c USEDEF (xadd, CMOVcc,
+             * atomicas) hace las dos cosas en la MISMA instruccion, y la
+             * escritura cae DESPUES de la lectura (@c def_pos = use_pos+1).
              *
              * Quedarse con el ultimo uso dejaba fuera esa escritura cuando el
-             * resultado moria en el acto.  Un valor que muere no deja de necesitar un
-             * SITIO donde escribirse: preguntar por su ubicacion en su propia
-             * definicion devolvia "en ningun sitio", y esa respuesta viajaba hasta el
-             * codigo emitido.  Solo se veia en el AOT (el unico que construye el
-             * timeline con rangos); sobre una base plana el fallo era invisible. */
+             * resultado moria en el acto.  Un valor que muere no deja de
+             * necesitar un SITIO donde escribirse: preguntar por su ubicacion
+             * en su propia definicion devolvia "en ningun sitio", y esa
+             * respuesta viajaba hasta el codigo emitido.  Solo se veia en el
+             * AOT (el unico que construye el timeline con rangos); sobre una
+             * base plana el fallo era invisible. */
             uint32_t end;
             if (out_) {
                 end = bend; // vivo al salir
             } else if (b_used[v] || b_def[v]) {
                 end = bstart;
-                if (b_used[v] && b_last_use[v] + 1u > end) end = b_last_use[v] + 1u;
-                if (b_def[v] && b_last_def[v] + 1u > end) end = b_last_def[v] + 1u;
+                if (b_used[v] && b_last_use[v] + 1u > end)
+                    end = b_last_use[v] + 1u;
+                if (b_def[v] && b_last_def[v] + 1u > end)
+                    end = b_last_def[v] + 1u;
             } else {
                 end = bend; // live-in raro: conservador
             }
@@ -788,14 +799,14 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
 /*
  * @brief Produce MachineNextUseFacts: por cada vreg, las posiciones de sus USOS
  *        (uso en 2*gi) en la MISMA numeracion que build_intervals.  Replica el
- *        criterio de operandos de build_intervals::each_vreg (roles USE/USEDEF +
- *        INLINE_ASM_RAW) pero recolecta SOLO los usos (el def no es uso).  Dos
+ *        criterio de operandos de build_intervals::each_vreg (roles USE/USEDEF
+ * + INLINE_ASM_RAW) pero recolecta SOLO los usos (el def no es uso).  Dos
  *        pasadas -> CSR contiguo.  No mira el IR: solo el MachineIR asignado.
  */
 MachineNextUseFacts compute_next_use(const MFunction &mf) {
     MachineNextUseFacts f;
     const uint32_t NV = mf.vreg_count;
-    const size_t   NB = mf.blocks.size();
+    const size_t NB = mf.blocks.size();
 
     uint32_t total = 0;
     for (size_t b = 0; b < NB; ++b)
@@ -807,8 +818,9 @@ MachineNextUseFacts compute_next_use(const MFunction &mf) {
         return f;
     }
 
-    /* Vregs USADOS de una instr -- mismo criterio que build_intervals::each_vreg,
-     * pero solo USE/USEDEF (para next-use el def no cuenta como uso). */
+    /* Vregs USADOS de una instr -- mismo criterio que
+     * build_intervals::each_vreg, pero solo USE/USEDEF (para next-use el def no
+     * cuenta como uso). */
     auto each_use = [&mf](const MInstr &in, auto &&fn) {
         if (in.op == MOp::INLINE_ASM_RAW) {
             const uint32_t idx = static_cast<uint32_t>(in.src1.value);
@@ -830,10 +842,13 @@ MachineNextUseFacts compute_next_use(const MFunction &mf) {
     std::vector<uint32_t> count(NV, 0);
     for (size_t b = 0; b < NB; ++b)
         for (const MInstr &in : mf.blocks[b].instrs)
-            each_use(in, [&](uint32_t v) { if (v < NV) ++count[v]; });
+            each_use(in, [&](uint32_t v) {
+                if (v < NV) ++count[v];
+            });
 
     f.off.resize(NV + 1, 0);
-    for (uint32_t v = 0; v < NV; ++v) f.off[v + 1] = f.off[v] + count[v];
+    for (uint32_t v = 0; v < NV; ++v)
+        f.off[v + 1] = f.off[v] + count[v];
     f.use_pos.resize(f.off[NV]);
 
     /* Pasada 2: llenar (gi global -> pos de uso 2*gi).  El recorrido lineal es
@@ -844,7 +859,9 @@ MachineNextUseFacts compute_next_use(const MFunction &mf) {
     for (size_t b = 0; b < NB; ++b)
         for (const MInstr &in : mf.blocks[b].instrs) {
             const uint32_t pos = 2u * gi;
-            each_use(in, [&](uint32_t v) { if (v < NV) f.use_pos[cur[v]++] = pos; });
+            each_use(in, [&](uint32_t v) {
+                if (v < NV) f.use_pos[cur[v]++] = pos;
+            });
             ++gi;
         }
     return f;

@@ -265,13 +265,15 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                                       const ast::Expr *expr);
 
 /**
- * @brief reconstruye los campos de un @c ComptimeEvalResult (is_struct) a partir
- *        de los bytes crudos de un struct value-type devuelto por la ComptimeVM.
+ * @brief reconstruye los campos de un @c ComptimeEvalResult (is_struct) a
+ * partir de los bytes crudos de un struct value-type devuelto por la
+ * ComptimeVM.
  *
  * Recorre el layout campo a campo leyendo su valor desde @p bytes en el offset
  * correspondiente; los campos struct anidados se reconstruyen recursivamente.
  * Lo usa tanto la rama de retorno-struct de una comptime fn como el constructor
- * @c comptime @c T(expr) (F1b), que comparten el mecanismo de SRET + reificacion.
+ * @c comptime @c T(expr) (F1b), que comparten el mecanismo de SRET +
+ * reificacion.
  *
  * @param tc    TypeChecker (resuelve los layouts de los structs anidados).
  * @param lay   Layout del struct cuyos campos se reconstruyen.

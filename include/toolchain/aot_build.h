@@ -39,13 +39,13 @@ struct AotOptions {
     bool no_io = false;               ///< --no-io.
     bool no_mem = false;              ///< --no-mem (sin slab allocator).
     std::string arch = "x86-64";      ///< --aot-arch: x86-64 | x86-32.
-    std::string float_isa = "sse2";   ///< --float-isa: sse2|x87|avx|avx512f|auto.
-    std::string format;               ///< --format: "" (host) | pe | elf.
-    std::string emit;                 ///< --emit: "" (exe) | obj | shared | bin.
-    bool no_pie = false;              ///< --no-pie (refs absolutas, no PIC).
-    std::string bin_base;             ///< --bin-base (hex; solo .bin).
-    std::string sysroot;              ///< --sysroot (para el auto-link).
-    std::string argv0;                ///< Ruta del ejecutable (localizar stdlib).
+    std::string float_isa = "sse2"; ///< --float-isa: sse2|x87|avx|avx512f|auto.
+    std::string format;             ///< --format: "" (host) | pe | elf.
+    std::string emit;               ///< --emit: "" (exe) | obj | shared | bin.
+    bool no_pie = false;            ///< --no-pie (refs absolutas, no PIC).
+    std::string bin_base;           ///< --bin-base (hex; solo .bin).
+    std::string sysroot;            ///< --sysroot (para el auto-link).
+    std::string argv0;              ///< Ruta del ejecutable (localizar stdlib).
     /// Ruta del `.vx` compilado.  Se anota en el fichero acompanante de
     /// depuracion para poder ensenar despues la linea de fuente.
     std::string source_path;
@@ -55,9 +55,9 @@ struct AotOptions {
     ///       nombres en gdb/WinDbg/lldb.
     ///   2 = + tabla de lineas (fuente<->PC)  [futuro: DWARF .debug_line].
     ///   3 = + variables locales/tipos        [futuro: DWARF .debug_info].
-    /// Los niveles 2-3 se construyen sobre el mismo mapa nombre->VA del nivel 1.
-    /// Eje DWARF de `--debug-info`: symtab y (manana) `.debug_line`.  Lo
-    /// consumen depuradores y desensambladores AJENOS.
+    /// Los niveles 2-3 se construyen sobre el mismo mapa nombre->VA del
+    /// nivel 1. Eje DWARF de `--debug-info`: symtab y (manana) `.debug_line`.
+    /// Lo consumen depuradores y desensambladores AJENOS.
     int debug_level = 0;
     /// Eje del LENGUAJE de `--debug-info` (la parte tras el punto): el fichero
     /// acompanante `.vxdbg`.  Va aparte porque son mecanismos distintos y el

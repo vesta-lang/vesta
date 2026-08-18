@@ -104,7 +104,8 @@ std::vector<VariableId> StoreNodeSource::variables_in(ScopeId scope) const {
     return it->second;
 }
 
-bool StoreNodeSource::position_of(IrInstrId instr, uint32_t &out_position) const {
+bool StoreNodeSource::position_of(IrInstrId instr,
+                                  uint32_t &out_position) const {
     auto it = instr_to_pos_.find(instr);
     if (it == instr_to_pos_.end()) return false;
     out_position = it->second;

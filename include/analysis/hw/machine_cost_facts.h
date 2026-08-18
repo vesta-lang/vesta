@@ -7,7 +7,8 @@
 
 /**
  * @file analysis/hw/machine_cost_facts.h
- * @brief MachineCostFacts: Fact de TIPO C -- describe el HARDWARE, no el programa.
+ * @brief MachineCostFacts: Fact de TIPO C -- describe el HARDWARE, no el
+ * programa.
  *
  * Aparece una tercera categoria de Facts junto a las dos ya existentes:
  *
@@ -15,11 +16,11 @@
  *                                  LoopFacts, DomFacts, Liveness, Alias.
  *      Tipo B (analysis/derived/)  DERIVADOS que combinan productores:
  *                                  ProfileFacts (= Loops + perfil).
- *      Tipo C (analysis/hw/)       describen el HARDWARE (Target):           <-- ESTE
+ *      Tipo C (analysis/hw/)       describen el HARDWARE (Target): <-- ESTE
  *                                  MachineCostFacts (latency/tp/ports/uops).
  *
- * No depende del CFG.  No depende del IR.  Depende del TARGET.  Por eso el flujo
- * de decision tiene DOS fuentes ortogonales:
+ * No depende del CFG.  No depende del IR.  Depende del TARGET.  Por eso el
+ * flujo de decision tiene DOS fuentes ortogonales:
  *
  *      Programa                        Hardware
  *         |                               |
@@ -34,17 +35,19 @@
  *
  *      Decision -> ObjectiveTerms -> MachineCostFacts -> SchedCostModel
  *
- * es decir, "por que elegiste este spill" se responde siguiendo los Facts que lo
- * sostienen (coste del reload/store de ESTA microarquitectura) en vez de recalcular.
+ * es decir, "por que elegiste este spill" se responde siguiendo los Facts que
+ * lo sostienen (coste del reload/store de ESTA microarquitectura) en vez de
+ * recalcular.
  *
  * INDEPENDENCIA DEL BACKEND (regla del usuario): este Fact contiene SOLO la
- * estructura abstracta @c InstrCost (jit/sched/instr_cost.h), nunca un @c MInstr.
- * El UNICO que entiende la ISA es el backend, que PRODUCE estos @c InstrCost
- * (probe_machine_cost_facts, en jit/) preguntando al @c SchedCostModel con las
- * operaciones sinteticas del allocator.  El snapshot/allocator los CONSUME
- * abstractos -> sigue siendo independiente del backend.
+ * estructura abstracta @c InstrCost (jit/sched/instr_cost.h), nunca un @c
+ * MInstr. El UNICO que entiende la ISA es el backend, que PRODUCE estos @c
+ * InstrCost (probe_machine_cost_facts, en jit/) preguntando al @c
+ * SchedCostModel con las operaciones sinteticas del allocator.  El
+ * snapshot/allocator los CONSUME abstractos -> sigue siendo independiente del
+ * backend.
  *
- *      SchedCostModel  --produce-->  InstrCost  --empaqueta-->  MachineCostFacts
+ *      SchedCostModel  --produce-->  InstrCost  --empaqueta--> MachineCostFacts
  *      (backend, ISA)                (abstracto)                (Fact Tipo C)
  */
 
@@ -59,19 +62,21 @@ namespace analysis {
 
 /**
  * @struct MachineCostFacts
- * @brief Coste de las operaciones que le importan al asignador de recursos, en la
- *        microarquitectura objetivo.  DATOS del hardware (Tipo C).
+ * @brief Coste de las operaciones que le importan al asignador de recursos, en
+ * la microarquitectura objetivo.  DATOS del hardware (Tipo C).
  *
  * Cada campo es un @c InstrCost abstracto (latencia + throughput + puertos), NO
  * una instruccion.  Los rellena el backend (unico que traduce a la ISA); los
  * consumidores ISA-neutrales (Objective via CostAdapter) los leen tal cual.
  */
 struct MachineCostFacts {
-    jit::sched::InstrCost load;  ///< reload de un valor derramado (leer de la pila).
+    jit::sched::InstrCost
+        load; ///< reload de un valor derramado (leer de la pila).
     jit::sched::InstrCost store; ///< spill de un valor a la pila (escribir).
-    jit::sched::InstrCost move;  ///< copia registro-registro (coalescing / two-address).
-    bool        from_uarch  = false; ///< true = uarch exacta (--cpu); false = generico.
-    const char *model_name  = "";    ///< nombre del SchedCostModel (trazabilidad).
+    jit::sched::InstrCost
+        move; ///< copia registro-registro (coalescing / two-address).
+    bool from_uarch = false; ///< true = uarch exacta (--cpu); false = generico.
+    const char *model_name = ""; ///< nombre del SchedCostModel (trazabilidad).
 };
 
 /**
@@ -79,10 +84,10 @@ struct MachineCostFacts {
  * @brief Comprobaciones de autocertificacion de @c MachineCostFacts (DATOS).
  */
 enum class MachineCostCheck {
-    LOAD_KIND_WRONG,   ///< load.kind != LOAD.
-    STORE_KIND_WRONG,  ///< store.kind != STORE.
-    LATENCY_NONPOS,    ///< una latencia <= 0 (coste imposible).
-    RECIP_TP_NONPOS,   ///< un throughput reciproco <= 0.
+    LOAD_KIND_WRONG,  ///< load.kind != LOAD.
+    STORE_KIND_WRONG, ///< store.kind != STORE.
+    LATENCY_NONPOS,   ///< una latencia <= 0 (coste imposible).
+    RECIP_TP_NONPOS,  ///< un throughput reciproco <= 0.
 };
 
 /// Hallazgo de la autocertificacion (DATO, no mensaje; i18n aguas arriba).

@@ -2007,9 +2007,9 @@ void emit_instr_atomic_ld(const vm::Instruction *ip, ByteWriter &code,
     if (!dst || !addr)
         throw std::runtime_error("atomicld: requiere (reg_dst, reg_addr)");
     emit_ctrl_byte(code, encode_mode(dst->size_bits), 0, 0, 0);
-    code.emit8(static_cast<uint8_t>(
-        (encode_reg_general(addr->name.c_str()) << 4) |
-        (encode_reg_general(dst->name.c_str()) & 0x0F)));
+    code.emit8(
+        static_cast<uint8_t>((encode_reg_general(addr->name.c_str()) << 4) |
+                             (encode_reg_general(dst->name.c_str()) & 0x0F)));
 }
 
 /// ATOMICST addr, val_sized  ->  [ctrl=mode][regs=(val<<4)|addr].
@@ -2020,9 +2020,9 @@ void emit_instr_atomic_st(const vm::Instruction *ip, ByteWriter &code,
     if (!addr || !val)
         throw std::runtime_error("atomicst: requiere (reg_addr, reg_val)");
     emit_ctrl_byte(code, encode_mode(val->size_bits), 0, 0, 0);
-    code.emit8(static_cast<uint8_t>(
-        (encode_reg_general(val->name.c_str()) << 4) |
-        (encode_reg_general(addr->name.c_str()) & 0x0F)));
+    code.emit8(
+        static_cast<uint8_t>((encode_reg_general(val->name.c_str()) << 4) |
+                             (encode_reg_general(addr->name.c_str()) & 0x0F)));
 }
 
 /// ATOMICADD dst_sized, addr, delta_sized
@@ -2035,9 +2035,9 @@ void emit_instr_atomic_add(const vm::Instruction *ip, ByteWriter &code,
     if (!dst || !addr || !delta)
         throw std::runtime_error("atomicadd: requiere (dst, addr, delta)");
     emit_ctrl_byte(code, encode_mode(dst->size_bits), 0, 0, 0);
-    code.emit8(static_cast<uint8_t>(
-        (encode_reg_general(dst->name.c_str()) << 4) |
-        (encode_reg_general(addr->name.c_str()) & 0x0F)));
+    code.emit8(
+        static_cast<uint8_t>((encode_reg_general(dst->name.c_str()) << 4) |
+                             (encode_reg_general(addr->name.c_str()) & 0x0F)));
     code.emit8(
         static_cast<uint8_t>(encode_reg_general(delta->name.c_str()) << 4));
     code.emit8(0); // pad (FIXED_6)
@@ -2054,12 +2054,12 @@ void emit_instr_atomic_cas(const vm::Instruction *ip, ByteWriter &code,
     if (!dst || !addr || !exp || !des)
         throw std::runtime_error("atomiccas: requiere (dst, addr, exp, des)");
     emit_ctrl_byte(code, encode_mode(dst->size_bits), 0, 0, 0);
-    code.emit8(static_cast<uint8_t>(
-        (encode_reg_general(dst->name.c_str()) << 4) |
-        (encode_reg_general(addr->name.c_str()) & 0x0F)));
-    code.emit8(static_cast<uint8_t>(
-        (encode_reg_general(exp->name.c_str()) << 4) |
-        (encode_reg_general(des->name.c_str()) & 0x0F)));
+    code.emit8(
+        static_cast<uint8_t>((encode_reg_general(dst->name.c_str()) << 4) |
+                             (encode_reg_general(addr->name.c_str()) & 0x0F)));
+    code.emit8(
+        static_cast<uint8_t>((encode_reg_general(exp->name.c_str()) << 4) |
+                             (encode_reg_general(des->name.c_str()) & 0x0F)));
     code.emit8(0); // pad (FIXED_6)
 }
 
@@ -2182,16 +2182,18 @@ void emit_instr_static(const vm::Instruction *instruction_parser,
  *   op1 = reg index (r0 si no se usa)
  *   op2 = ctrlword (imm16) que empaqueta:
  *     bits[4:0]=base(0-17)  bits[7:5]=scale(0-6)  bits[10:8]=width_code(0-6)
- *     bit[11]=host  bit[12]=has_index  bit[13]=idx_sub  bit[14]=sign_ext  bit[15]=bank
- *   op3 = disp16 (imm, ya en complemento a 2 de 16 bits)
- * Emite los 6 bytes de payload: [ctrl][basef][regs][disp16 LE][pad].
+ *     bit[11]=host  bit[12]=has_index  bit[13]=idx_sub  bit[14]=sign_ext
+ * bit[15]=bank op3 = disp16 (imm, ya en complemento a 2 de 16 bits) Emite los 6
+ * bytes de payload: [ctrl][basef][regs][disp16 LE][pad].
  */
 void emit_instr_mem_full(const vm::Instruction *instruction_parser,
-                         ByteWriter &code_final, const InstrInfo * /*now_instr*/,
+                         ByteWriter &code_final,
+                         const InstrInfo * /*now_instr*/,
                          Assembler * /*assembly_ctx*/) {
     if (instruction_parser->operands.size() < 4)
-        throw std::runtime_error(instruction_parser->opcode +
-                                 ": requires (reg, reg_index, ctrlword, disp16)");
+        throw std::runtime_error(
+            instruction_parser->opcode +
+            ": requires (reg, reg_index, ctrlword, disp16)");
     auto *op_dst = dynamic_cast<vm::RegisterOperand *>(
         instruction_parser->operands[0].get());
     auto *op_idx = dynamic_cast<vm::RegisterOperand *>(
@@ -2206,9 +2208,8 @@ void emit_instr_mem_full(const vm::Instruction *instruction_parser,
 
     const uint8_t dst = encode_reg_general(op_dst->name.c_str()) & 0x0F;
     const uint8_t index = encode_reg_general(op_idx->name.c_str()) & 0x0F;
-    const uint32_t cw =
-        static_cast<uint32_t>(vm::parse_number_safe(op_ctrl->value).value_or(0) &
-                              0xFFFFULL);
+    const uint32_t cw = static_cast<uint32_t>(
+        vm::parse_number_safe(op_ctrl->value).value_or(0) & 0xFFFFULL);
     const uint16_t disp = static_cast<uint16_t>(
         vm::parse_number_safe(op_disp->value).value_or(0) & 0xFFFFULL);
 
@@ -2842,15 +2843,17 @@ void emit_instr_fmadd(const vm::Instruction *instruction_parser,
     auto *r3 = dynamic_cast<vm::RegisterOperand *>(
         instruction_parser->operands[2].get()); // fb
     if (!r1 || !r2 || !r3)
-        throw std::runtime_error(instruction_parser->opcode +
-                                 ": se requieren tres operandos de registro ZMM");
+        throw std::runtime_error(
+            instruction_parser->opcode +
+            ": se requieren tres operandos de registro ZMM");
     const uint8_t fd = zmm_reg_index(r1->name);
     const uint8_t fa = zmm_reg_index(r2->name);
     const uint8_t fb = zmm_reg_index(r3->name);
     const bool is_f32 =
         (instruction_parser->opcode.find(".ps") != std::string::npos);
     code_final.emit8(static_cast<uint8_t>((fa << 4) | fd)); // byte2
-    code_final.emit8(static_cast<uint8_t>((fb << 4) | (is_f32 ? 1 : 0))); // byte3
+    code_final.emit8(
+        static_cast<uint8_t>((fb << 4) | (is_f32 ? 1 : 0))); // byte3
 }
 
 /**
@@ -3219,8 +3222,9 @@ void emit_gcfinal(const vm::Instruction *instruction_parser,
                                  ": requiere r_box, kind_literal");
     uint8_t idx1 = encode_reg_general(r1->name.c_str());
     uint8_t kind_val = static_cast<uint8_t>(std::stoull(kind->value) & 0x0F);
-    code_final.emit8(0x00);                                         // b2 ctrl
-    code_final.emit8(static_cast<uint8_t>((kind_val << 4) | (idx1 & 0x0F))); // b3
+    code_final.emit8(0x00); // b2 ctrl
+    code_final.emit8(
+        static_cast<uint8_t>((kind_val << 4) | (idx1 & 0x0F))); // b3
 }
 
 // emit_gcfinalc: gcfinalc r_box, r_dtor.  b2=0, b3=(r_dtor<<4)|r_box.
@@ -3241,7 +3245,7 @@ void emit_gcfinalc(const vm::Instruction *instruction_parser,
                                  ": requiere r_box, r_dtor");
     uint8_t idx1 = encode_reg_general(r1->name.c_str()); // r_box
     uint8_t idx2 = encode_reg_general(r2->name.c_str()); // r_dtor
-    code_final.emit8(0x00);                                        // b2 ctrl
+    code_final.emit8(0x00);                              // b2 ctrl
     code_final.emit8(static_cast<uint8_t>((idx2 << 4) | (idx1 & 0x0F))); // b3
 }
 

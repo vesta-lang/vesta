@@ -77,7 +77,8 @@
 #include <unordered_set>
 
 namespace analysis {
-struct PointsTo; // resolvedor points-to compartido (analysis/memory/points_to.h)
+struct PointsTo; // resolvedor points-to compartido
+                 // (analysis/memory/points_to.h)
 } // namespace analysis
 
 namespace ir {
@@ -138,8 +139,8 @@ inline OptLevel opt_level_from_int(int n) {
  */
 struct TiempoPase {
     const char *nombre = "?";
-    long long   us = 0;    ///< tiempo acumulado.
-    long long   veces = 0; ///< llamadas (el punto fijo repite pasadas).
+    long long us = 0;    ///< tiempo acumulado.
+    long long veces = 0; ///< llamadas (el punto fijo repite pasadas).
 };
 
 /// Vueltas del punto fijo, SUMADAS sobre todos los modulos (tope 8 por
@@ -164,9 +165,9 @@ long long &visitas_a_funcion();
 struct TiempoPaseFuncion {
     const char *pase = "?";
     std::string funcion;
-    long long   us = 0;
-    long long   veces = 0;
-    long long   instrucciones = 0; ///< tamano de la funcion, para ver la curva.
+    long long us = 0;
+    long long veces = 0;
+    long long instrucciones = 0; ///< tamano de la funcion, para ver la curva.
 };
 
 /// Los pares (pase, funcion) mas caros primero.
@@ -232,7 +233,7 @@ struct CacheEfectosDce {
      * misma leccion del fichero de hechos: lo que se guarda tiene que decir
      * DONDE vale, o acaba contestando donde no debe.
      */
-    int         backend = -1;
+    int backend = -1;
     std::string isa;
     /// Por indice lineal: -1 sin preguntar, 0 conservar, 1 se puede quitar.
     std::vector<int8_t> resp;
@@ -415,8 +416,8 @@ bool ir_pass_own_closure_envs(IrModule &mod);
  * `a + b + c` se pliega en dos vueltas del punto fijo).
  *
  * Los STRMAKE de las partes NO se tocan: si nadie mas las usa, quedan muertos y
- * los quita el DCE; si se usan en otro sitio, siguen ahi.  Va a nivel de IR, asi
- * que lo heredan el interprete, el JIT y el AOT.
+ * los quita el DCE; si se usan en otro sitio, siguen ahi.  Va a nivel de IR,
+ * asi que lo heredan el interprete, el JIT y el AOT.
  *
  * @param mod Modulo a transformar in-place (necesita internar la cadena nueva).
  * @return true si plego algun STRCAT.
@@ -640,8 +641,9 @@ bool ir_pass_inline_closures(IrModule &mod);
  *
  * @return true si movio al menos una instr.
  */
-bool ir_pass_licm(IrFunction &fn, const analysis::PointsTo *pt = nullptr,
-                  const std::unordered_set<std::string> *pure_callees = nullptr);
+bool ir_pass_licm(
+    IrFunction &fn, const analysis::PointsTo *pt = nullptr,
+    const std::unordered_set<std::string> *pure_callees = nullptr);
 
 /**
  * @brief Devirtualizacion monomorfica de CALLVIRT a CALL directo.
@@ -804,12 +806,11 @@ bool ir_pass_cse(IrFunction &fn);
  *
  * @param pure_callees (opcional) conjunto de nombres de funciones cuyo efecto
  *        transitivo es TOTALMENTE PURO (sin lecturas/escrituras de memoria, sin
- *        may_trap/throw/allocate/block/io ni tags, Complete), segun el modelo de
- *        efectos.  Una CALL a una de
- *        ellas NO es barrera de memoria (el DSE puede eliminar/forwardear a
- *        traves).  Es conocimiento INTERPROCEDURAL que el DSE por si solo no
- *        tiene; se lo aporta EffectAnalysis.  nullptr = comportamiento clasico
- *        (toda CALL es barrera).
+ *        may_trap/throw/allocate/block/io ni tags, Complete), segun el modelo
+ * de efectos.  Una CALL a una de ellas NO es barrera de memoria (el DSE puede
+ * eliminar/forwardear a traves).  Es conocimiento INTERPROCEDURAL que el DSE
+ * por si solo no tiene; se lo aporta EffectAnalysis.  nullptr = comportamiento
+ * clasico (toda CALL es barrera).
  */
 /**
  * @brief Hechos que el DSE necesita para tratar el asm con precision.
@@ -826,8 +827,8 @@ bool ir_pass_cse(IrFunction &fn);
  */
 struct HechosDeAsmParaDse {
     const analysis::AsmBindingFacts *ligaduras = nullptr;
-    const analysis::IrFacts         *estructura = nullptr;
-    const analysis::RangeFacts      *rangos = nullptr;
+    const analysis::IrFacts *estructura = nullptr;
+    const analysis::RangeFacts *rangos = nullptr;
 };
 
 bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt = nullptr,
@@ -916,8 +917,9 @@ bool ir_pass_load_narrow(IrFunction &fn);
  *
  * @return true si reordeno al menos un basic block.
  */
-bool ir_pass_schedule(IrFunction &fn, const analysis::PointsTo *pt = nullptr,
-                      const std::unordered_set<std::string> *pure_callees = nullptr);
+bool ir_pass_schedule(
+    IrFunction &fn, const analysis::PointsTo *pt = nullptr,
+    const std::unordered_set<std::string> *pure_callees = nullptr);
 
 /**
  * @brief Registra un helper @c __new_<X> como "puro" (sin side effects

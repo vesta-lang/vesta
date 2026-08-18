@@ -20,7 +20,8 @@
  *      LoopFacts.validate()  ProfileFacts.validate()  Liveness check
  *              \                     |                    /
  *               \                    |                   /
- *                +---------> FunctionSnapshot.validate() <----- audit_requirements
+ *                +---------> FunctionSnapshot.validate() <-----
+ * audit_requirements
  *                                    |
  *                              vector<FactIssue>   (vacio = conocimiento sano)
  *
@@ -47,19 +48,19 @@ enum class FactCheck : uint16_t {
     OK = 0,
 
     // --- LoopFacts ---
-    LOOP_HEADER_NOT_IN_LOOP,   ///< un bloque header no esta marcado in_loop.
-    LOOP_DEPTH_INLOOP_MISMATCH,///< loop_depth>0 XOR in_loop (deben coincidir).
-    LOOP_ID_OUT_OF_RANGE,      ///< loop_id de un bloque fuera de [0,loop_count).
-    LOOP_PARENT_OUT_OF_RANGE,  ///< parent_loop fuera de rango.
-    LOOP_PARENT_SELF,          ///< un bucle es su propio padre.
-    LOOP_HEADER_BLOCK_OOR,     ///< header_block de un bucle fuera de rango.
+    LOOP_HEADER_NOT_IN_LOOP,    ///< un bloque header no esta marcado in_loop.
+    LOOP_DEPTH_INLOOP_MISMATCH, ///< loop_depth>0 XOR in_loop (deben coincidir).
+    LOOP_ID_OUT_OF_RANGE,     ///< loop_id de un bloque fuera de [0,loop_count).
+    LOOP_PARENT_OUT_OF_RANGE, ///< parent_loop fuera de rango.
+    LOOP_PARENT_SELF,         ///< un bucle es su propio padre.
+    LOOP_HEADER_BLOCK_OOR,    ///< header_block de un bucle fuera de rango.
 
     // --- ProfileFacts ---
-    PROFILE_NEGATIVE_WEIGHT,   ///< block_weight negativo.
-    PROFILE_NEGATIVE_TRIP,     ///< trip_count negativo.
+    PROFILE_NEGATIVE_WEIGHT, ///< block_weight negativo.
+    PROFILE_NEGATIVE_TRIP,   ///< trip_count negativo.
 
     // --- Liveness ---
-    LIVE_DEF_AFTER_END,        ///< un intervalo con def > end.
+    LIVE_DEF_AFTER_END, ///< un intervalo con def > end.
 };
 
 /**
@@ -68,8 +69,8 @@ enum class FactCheck : uint16_t {
  */
 struct FactIssue {
     FactCheck check = FactCheck::OK;
-    uint64_t  a     = 0; ///< primer id implicado (bloque/bucle/valor).
-    uint64_t  b     = 0; ///< segundo (si aplica).
+    uint64_t a = 0; ///< primer id implicado (bloque/bucle/valor).
+    uint64_t b = 0; ///< segundo (si aplica).
 };
 
 } // namespace analysis

@@ -53,7 +53,8 @@ inline constexpr uint32_t VXI_MAGIC = 0x49584556u;
 /// monomorphizacion cross-module.
 /// v9: ns_path en templates genericas (NS.2 cross-module).
 /// v10: package_id en el header (NS.3, offsets 72/76 del pad v6).
-/// v11: ext_methods (NS.6-ext) -- header crece a 88 (ext_off 80 + ext_count 84).
+/// v11: ext_methods (NS.6-ext) -- header crece a 88 (ext_off 80 + ext_count
+/// 84).
 inline constexpr uint16_t VXI_FORMAT_VERSION = 16; // tipo base del enum
 
 /// Nombre del SO del HOST de compilacion, en el mismo vocabulario que usan los
@@ -276,8 +277,8 @@ struct VxiSymbol {
     /// (STRUCT / CLASS) Tamano total + alineacion.
     uint32_t size_bytes = 0;
     uint32_t align_bytes = 1;
-    /// (STRUCT) @c true si el struct es un `@overlay struct` (vista tipada sobre
-    /// memoria ajena).  Se propaga para que el consumidor reconozca la
+    /// (STRUCT) @c true si el struct es un `@overlay struct` (vista tipada
+    /// sobre memoria ajena).  Se propaga para que el consumidor reconozca la
     /// construccion `Tipo(ptr)` de un overlay importado (solo campos escalares
     /// con @offset fijo; los overlays con offset dinamico/array/resolver usan
     /// punteros al AST no serializables y no cruzan modulo).
@@ -303,14 +304,14 @@ struct VxiSymbol {
     std::vector<std::string> param_types; ///< typenames canonicos en orden
     std::vector<std::string> param_names; ///< paralelo a param_types
     /// ABI custom por-parametro (`register("rax")` en params): registro fisico
-    /// canonico de cada param, paralelo a @c param_types.  Vacio = ABI estandar.
-    /// Sin esto, un CALLIND cross-modulo a traves de un campo cuyo default es
-    /// una funcion con ABI custom (p.ej. `invoke` de std.syscall) no conocia los
-    /// registros y colocaba los args mal.  Se serializa como una lista de
-    /// strings (idx u32 + reg) tras @c param_names.
+    /// canonico de cada param, paralelo a @c param_types.  Vacio = ABI
+    /// estandar. Sin esto, un CALLIND cross-modulo a traves de un campo cuyo
+    /// default es una funcion con ABI custom (p.ej. `invoke` de std.syscall) no
+    /// conocia los registros y colocaba los args mal.  Se serializa como una
+    /// lista de strings (idx u32 + reg) tras @c param_names.
     std::vector<std::string> param_abi_regs;
-    bool is_extern = false;               ///< extern "lib.dll"
-    std::string extern_lib;               ///< si is_extern
+    bool is_extern = false; ///< extern "lib.dll"
+    std::string extern_lib; ///< si is_extern
     ///  M.5: label internal usado en el .vel del modulo origen.
     /// Vacio = mismo que @c name.  Si distinto, el consumidor emite
     /// @c CALLVM al @c mangled_label en lugar de @c name (resuelve
@@ -359,7 +360,8 @@ struct VxiModule {
         std::string name;   ///< nombre del template
         uint8_t kind = 0;   ///< NodeKind del decl (Struct/Class/Function/...)
         std::string source; ///< texto fuente completo del decl
-        std::string ns_path; ///< NS.2 (v9): namespace declarado (vacio = ninguno)
+        std::string
+            ns_path; ///< NS.2 (v9): namespace declarado (vacio = ninguno)
     };
     std::vector<GenericTemplateSource> generic_templates;
     /// NS.6-ext (v11): metodos de @c extension / @c impl que este modulo
@@ -368,11 +370,12 @@ struct VxiModule {
     /// @c obj.metodo() resuelva cross-modulo (dispatch estatico al
     /// @c mangled_label, que vive en el .velb de ESTE modulo).
     struct ExtMethod {
-        std::string target_key;   ///< clave del layout destino (p.ej. shapes__Punto)
-        std::string name;         ///< nombre del metodo
-        std::string return_type;  ///< tipo de retorno canonico
+        std::string
+            target_key;   ///< clave del layout destino (p.ej. shapes__Punto)
+        std::string name; ///< nombre del metodo
+        std::string return_type;              ///< tipo de retorno canonico
         std::vector<std::string> param_types; ///< tipos de los params
-        std::string mangled_label; ///< label real (target_key__name)
+        std::string mangled_label;            ///< label real (target_key__name)
         bool target_is_class = false;
     };
     std::vector<ExtMethod> ext_methods;
@@ -382,9 +385,10 @@ struct VxiModule {
     /// namespaces homonimos de paquetes distintos, (b) frontera de la
     /// visibilidad @c internal (visible solo dentro del mismo package_id).
     std::string package_id;
-    /// v13: objetivo con el que se genero/leyo el artefacto, como "<os>|<arch>".
-    /// VACIO = el modulo no usa @Target, asi que su contenido no depende del
-    /// objetivo y el `.vxi` sirve para todos.  Lo rellena el emisor a partir de
+    /// v13: objetivo con el que se genero/leyo el artefacto, como
+    /// "<os>|<arch>". VACIO = el modulo no usa @Target, asi que su contenido no
+    /// depende del objetivo y el `.vxi` sirve para todos.  Lo rellena el emisor
+    /// a partir de
     /// @c ast::ModuleNode::uses_conditional_target.
     std::string target;
 };
@@ -401,21 +405,21 @@ struct VxiModule {
 /// @param alignment  alineamiento del header (default 8)
 /// @return offset del header dentro del pool
 uint32_t vxi_blob_append(std::vector<uint8_t> &pool, VxiBlobKind kind,
-                          const uint8_t *payload, size_t payload_len,
-                          uint32_t element_size, uint32_t count,
-                          uint32_t alignment = 8);
+                         const uint8_t *payload, size_t payload_len,
+                         uint32_t element_size, uint32_t count,
+                         uint32_t alignment = 8);
 
 /// Helper: leer un BlobHeader del pool en @c offset.  Devuelve nullptr
 /// si @c offset esta fuera de rango o el header esta truncado.  No
 /// valida la integridad del payload (caller debe respetar @c total_bytes).
 const VxiBlobHeader *vxi_blob_read(const std::vector<uint8_t> &pool,
-                                     uint32_t offset) noexcept;
+                                   uint32_t offset) noexcept;
 
 /// Helper: devuelve puntero al payload del blob en @c offset (justo
 /// despues del header).  Caller asume responsabilidad de respetar
 /// @c total_bytes para no leer fuera de rango.
 const uint8_t *vxi_blob_payload(const std::vector<uint8_t> &pool,
-                                 uint32_t offset) noexcept;
+                                uint32_t offset) noexcept;
 
 /**
  * @brief Hash constante del compilador en uso.  Definido por una macro

@@ -163,7 +163,8 @@ static void test_varias_candidatas_conservan_lo_suyo() {
 
     const analysis::AsmBindingFacts f = analysis::compute_asm_bindings(fn);
     const auto cands = f.candidatas("rax");
-    CHECK(cands.size() == 2, "dos variables en el mismo registro: dos candidatas");
+    CHECK(cands.size() == 2,
+          "dos variables en el mismo registro: dos candidatas");
     CHECK(f.unica("rax") == nullptr,
           "no hay UNA: quien necesita identidad no puede afirmar nada");
     bool vio_s1 = false, vio_s2 = false;
@@ -183,7 +184,8 @@ static void test_varias_candidatas_conservan_lo_suyo() {
     CHECK(vio_s1 && vio_s2, "las dos aparecen, sin quedarse con la primera");
 
     // Un nombre que no liga nada sigue sin devolver nada.
-    CHECK(f.candidatas("rbx").empty(), "un registro no ligado no tiene candidatas");
+    CHECK(f.candidatas("rbx").empty(),
+          "un registro no ligado no tiene candidatas");
     CHECK(f.unica("rbx") == nullptr, "ni una unica");
 }
 
@@ -258,8 +260,7 @@ static void test_efecto_localizado_con_dos_candidatas() {
     }
     CHECK(!desconocido,
           "con dos candidatas el bloque NO escribe en 'cualquier sitio'");
-    CHECK(escrituras == 2,
-          "escribe en una de las dos, y se nombran las dos");
+    CHECK(escrituras == 2, "escribe en una de las dos, y se nombran las dos");
 }
 
 // --------------------------------------------------------------------------
@@ -408,8 +409,9 @@ static void test_extension_como_expresion() {
         if (a != nullptr) {
             CHECK(a->extension.indice == "rcx", "y la distancia la pone `rcx`");
             CHECK(a->extension.escala == 8, "escalada por 8");
-            CHECK(!a->extension.cerrada(),
-                  "no queda cerrada: hay que acotar `rcx` para saber donde cae");
+            CHECK(
+                !a->extension.cerrada(),
+                "no queda cerrada: hay que acotar `rcx` para saber donde cae");
         }
     }
     // (d) Repeticion: `rep movsb` recorre tantos bytes como diga su contador, y
@@ -457,9 +459,8 @@ static void test_extension_como_expresion() {
     }
     // (g) Cargarlo de memoria no es perderlo: se dice de DONDE se cargo.
     {
-        const vx::AsmBlockEffects e =
-            vx::asm_analyze_block("mov rdx, [rdi+8]\nmov [rdx], rax\n",
-                                  "x86_64");
+        const vx::AsmBlockEffects e = vx::asm_analyze_block(
+            "mov rdx, [rdi+8]\nmov [rdx], rax\n", "x86_64");
         const auto *a = primer_acceso(e);
         CHECK(a != nullptr, "hay accesos");
         if (a != nullptr) {
@@ -470,10 +471,12 @@ static void test_extension_como_expresion() {
                 if (x.escribe) escritura = &x;
             CHECK(escritura != nullptr, "la escritura aparece");
             if (escritura != nullptr) {
-                CHECK(escritura->base == "rdi",
-                      "y se atribuye a `rdi`, que es de donde salio el puntero");
-                CHECK(escritura->desde_memoria.hay,
-                      "diciendo que la direccion estaba GUARDADA, no que es rdi");
+                CHECK(
+                    escritura->base == "rdi",
+                    "y se atribuye a `rdi`, que es de donde salio el puntero");
+                CHECK(
+                    escritura->desde_memoria.hay,
+                    "diciendo que la direccion estaba GUARDADA, no que es rdi");
                 CHECK(escritura->desde_memoria.off == 8,
                       "y a que distancia estaba guardada");
             }
@@ -549,7 +552,8 @@ static void test_ancho_por_clase() {
 // 6) El universo: de que funciones se puede afirmar algo, y por que.
 // --------------------------------------------------------------------------
 
-/// Construye un modulo: `main` llama a `usada(k)`; `huerfana` no la llama nadie.
+/// Construye un modulo: `main` llama a `usada(k)`; `huerfana` no la llama
+/// nadie.
 static IrModule modulo_con_llamada(bool usada_publica) {
     IrModule mod;
 
@@ -620,7 +624,8 @@ static void test_universo_por_artefacto_y_visibilidad() {
     {
         const IrModule mod = modulo_con_llamada(/*usada_publica=*/true);
         const analysis::AlignmentSummaries s =
-            analysis::compute_alignment_summaries(mod, /*programa_cerrado=*/true);
+            analysis::compute_alignment_summaries(mod,
+                                                  /*programa_cerrado=*/true);
         CHECK(s.universo_de("usada") == analysis::Universo::CerradoConLlamantes,
               "en un ejecutable, una publica con llamantes se resume");
         CHECK(s.universo_de("huerfana") ==

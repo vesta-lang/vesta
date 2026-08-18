@@ -39,9 +39,9 @@ std::string resolve_port_c_dir(const std::string &override_dir) {
     if (!exe.empty()) {
         const std::filesystem::path ed =
             std::filesystem::path(exe).parent_path();
-        const std::filesystem::path exe_cands[] = {
-            ed / "stdlib" / "port" / "c",
-            ed.parent_path() / "stdlib" / "port" / "c"};
+        const std::filesystem::path exe_cands[] = {ed / "stdlib" / "port" / "c",
+                                                   ed.parent_path() / "stdlib" /
+                                                       "port" / "c"};
         for (const auto &c : exe_cands) {
             std::ifstream test((c / "vx_macros.v.c").string());
             if (test.good()) return c.string();

@@ -225,8 +225,8 @@ ResolveResult resolve(const Manifest &root, const std::string &work_dir,
                                               pr.error_msg);
                 }
             } else {
-                result.warnings.push_back(
-                    "dep " + d.name + ": sin vx.toml / vx.json en el repo");
+                result.warnings.push_back("dep " + d.name +
+                                          ": sin vx.toml / vx.json en el repo");
             }
         } else {
             result.warnings.push_back(

@@ -574,7 +574,8 @@ std::unique_ptr<Executable> Loader::parse_velb(std::vector<uint8_t> bytecode) {
         };
         // Validar magic "VSMP" + version.
         if (bc[base] == 'V' && bc[base + 1] == 'S' && bc[base + 2] == 'M' &&
-            bc[base + 3] == 'P' && rd16(base + 4) == loader::INTERP_STACKMAP_VERSION) {
+            bc[base + 3] == 'P' &&
+            rd16(base + 4) == loader::INTERP_STACKMAP_VERSION) {
             const uint32_t entry_count = rd32(base + 8);
             if (entry_count <= 10'000'000u) { /* sanity */
                 size_t cur = base + 12;
@@ -1040,11 +1041,12 @@ Loader::load_executable(runtime::VM &vm,
             // Si algun IR usa el opcode SWAPCTX (fibras via `fiber_swapctx`),
             // (1) materializamos `__vx_swapctx` nativo (deja
             // g_vx_swapctx_native, que el vreg lee para emitir el CALL nativo
-            // del SWAPCTX) y (2) eager-compilamos cada CUERPO de fibra por vreg,
-            // para que `fiber_entry(fn)` (LABEL_ADDR) resuelva a su jit_code
-            // nativo (pieza 1) -- el ctx.r12 de la fibra debe apuntar a codigo
-            // nativo VM_ABI, no a una VA.  Los cuerpos se referencian solo via
-            // LABEL_ADDR (no CALL), asi que el cascade resolver no los tocaria.
+            // del SWAPCTX) y (2) eager-compilamos cada CUERPO de fibra por
+            // vreg, para que `fiber_entry(fn)` (LABEL_ADDR) resuelva a su
+            // jit_code nativo (pieza 1) -- el ctx.r12 de la fibra debe apuntar
+            // a codigo nativo VM_ABI, no a una VA.  Los cuerpos se referencian
+            // solo via LABEL_ADDR (no CALL), asi que el cascade resolver no los
+            // tocaria.
             {
                 auto ir_uses_swapctx = [](const ir::IrFunction &f) {
                     for (const auto &blk : f.blocks)
@@ -1059,8 +1061,7 @@ Loader::load_executable(runtime::VM &vm,
                         break;
                     }
                 if (any_swapctx) {
-                    const uint64_t sc =
-                        jit::ensure_vx_swapctx_native(proccess);
+                    const uint64_t sc = jit::ensure_vx_swapctx_native(proccess);
                     if (sc == 0) {
                         std::fprintf(
                             stderr,
@@ -1102,11 +1103,11 @@ Loader::load_executable(runtime::VM &vm,
             }
             /* El asignador, ANTES que nada.
              *
-             * Si la primera reserva del programa lo encuentra ya compilado, no hay
-             * un tramo inicial en el que el codigo compilado use un asignador y el
-             * resto otro -- y ese tramo es justo lo que corrompe el monton, porque
-             * quien reserva por uno acaba soltando por el otro.  No es una
-             * optimizacion: es lo que hace que no haya dos.
+             * Si la primera reserva del programa lo encuentra ya compilado, no
+             * hay un tramo inicial en el que el codigo compilado use un
+             * asignador y el resto otro -- y ese tramo es justo lo que corrompe
+             * el monton, porque quien reserva por uno acaba soltando por el
+             * otro.  No es una optimizacion: es lo que hace que no haya dos.
              *
              * Se compila el punto de entrada de nombre conocido, que lleva al
              * asignador de ESTE programa (el suyo si lo declaro, el de la
@@ -1122,7 +1123,7 @@ Loader::load_executable(runtime::VM &vm,
              * asignador de ESTE programa: el suyo si lo declaro con
              * @AllocatorOverride, el de la biblioteca si no. */
             static const char *const kPuntos[2] = {"__vx_alloc_entry",
-                                                  "__vx_free_entry"};
+                                                   "__vx_free_entry"};
             const size_t n_puntos =
                 std::getenv("VESTA_ASIGNADOR_MAQUINA") ? 0u : 2u;
             for (size_t ip = 0; ip < n_puntos; ++ip) {
@@ -1164,17 +1165,17 @@ Loader::load_executable(runtime::VM &vm,
                     continue;
                 try {
                     jit::CompileResult ra = jit::eager_compile_function(
-                        last_exe->ir_functions[ita->second], &last_exe->ir_lookup,
-                        &last_exe->ir_functions, &last_exe->symbol_table,
-                        resolve_native, read_vmem_cb, exc_off, exc_free_off,
-                        jit_counter_addr, &hechos_del_modulo);
+                        last_exe->ir_functions[ita->second],
+                        &last_exe->ir_lookup, &last_exe->ir_functions,
+                        &last_exe->symbol_table, resolve_native, read_vmem_cb,
+                        exc_off, exc_free_off, jit_counter_addr,
+                        &hechos_del_modulo);
                     /* Y se le dice a la maquina donde esta, para que su
                      * instruccion reserve en el MISMO monton que el codigo
                      * compilado.  Cada uno llega por su mecanismo; el monton es
                      * uno. */
                     if (ra.fn != nullptr) {
-                        const uint64_t dir =
-                            reinterpret_cast<uint64_t>(ra.fn);
+                        const uint64_t dir = reinterpret_cast<uint64_t>(ra.fn);
                         if (std::strcmp(punto, "__vx_alloc_entry") == 0) {
                             proccess->alloc_del_programa = dir;
                             /* Y que el selector lo sepa: con el monton del
@@ -1187,9 +1188,9 @@ Loader::load_executable(runtime::VM &vm,
                         }
                     }
                 } catch (...) {
-                    // Sin el, el JIT se queda con el asignador de la maquina: mas
-                    // lento y sin compartir camino con el binario nativo, pero
-                    // correcto.
+                    // Sin el, el JIT se queda con el asignador de la maquina:
+                    // mas lento y sin compartir camino con el binario nativo,
+                    // pero correcto.
                 }
             }
             try {
@@ -1276,7 +1277,8 @@ static void materialize_gdata_host(Executable &exe) {
 
     /* Alineado a linea de cache: ver `Executable::gdata_host`.  El tamano se
      * redondea al multiplo, que es lo que exigen las reservas alineadas. */
-    const size_t redondeado = (size + kGdataAlign - 1) & ~(size_t)(kGdataAlign - 1);
+    const size_t redondeado =
+        (size + kGdataAlign - 1) & ~(size_t)(kGdataAlign - 1);
     uint8_t *bloque = nullptr;
 #if defined(_WIN32)
     bloque = static_cast<uint8_t *>(_aligned_malloc(redondeado, kGdataAlign));
@@ -1290,7 +1292,8 @@ static void materialize_gdata_host(Executable &exe) {
     if (posix_memalign(&tmp, kGdataAlign, redondeado) != 0) tmp = nullptr;
     bloque = static_cast<uint8_t *>(tmp);
 #endif
-    if (bloque == nullptr) return; // sin bloque no hay globales que materializar
+    if (bloque == nullptr)
+        return; // sin bloque no hay globales que materializar
     std::memset(bloque, 0, redondeado);
     exe.gdata_host.reset(bloque);
     exe.gdata_size = size;
@@ -1313,9 +1316,10 @@ static void materialize_gdata_host(Executable &exe) {
             continue;
         if (rel.target_value < va || rel.target_value >= end) continue;
         const uint64_t host = host_base + (rel.target_value - va);
-        const size_t site = static_cast<size_t>(exe.offset_real_bytecode +
-                                               rel.bytecode_offset);
-        if (site + sizeof(uint64_t) > exe.bytecode.size()) continue; // defensivo
+        const size_t site =
+            static_cast<size_t>(exe.offset_real_bytecode + rel.bytecode_offset);
+        if (site + sizeof(uint64_t) > exe.bytecode.size())
+            continue; // defensivo
         std::memcpy(&exe.bytecode[site], &host, sizeof(uint64_t));
     }
 

@@ -8,9 +8,10 @@
 /**
  * @file tests/jit/test_remat_facts.cpp
  * @brief RematFacts (Tipo A, IR-driven): recomputabilidad + receta por valor.
- *        Valida el criterio value-only (CONST/aritmetica pura SI; LOAD/CALL/DIV NO)
- *        + la FORMA DE RECETA (op/imm/operands) + el registro en el query system
- *        (query<RematFacts>() == compute_remat_facts).
+ *        Valida el criterio value-only (CONST/aritmetica pura SI; LOAD/CALL/DIV
+ * NO)
+ *        + la FORMA DE RECETA (op/imm/operands) + el registro en el query
+ * system (query<RematFacts>() == compute_remat_facts).
  */
 
 #include "analysis/facts/remat_facts.h"
@@ -25,13 +26,13 @@ using analysis::RematFacts;
 static int g_checks = 0;
 static int g_fail = 0;
 
-#define CHECK(cond, msg)                                                     \
-    do {                                                                     \
-        ++g_checks;                                                          \
-        if (!(cond)) {                                                       \
-            ++g_fail;                                                        \
-            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);        \
-        }                                                                    \
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fail;                                                          \
+            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);          \
+        }                                                                      \
     } while (0)
 
 static IrInstr mk(IrOp op, IrValueId dst, std::vector<IrValueId> ops = {},
@@ -59,10 +60,8 @@ int main() {
     fn.blocks.resize(1);
     fn.blocks[0].id = 0;
     fn.blocks[0].instrs = {
-        mk(IrOp::CONST, 1, {}, 42),
-        mk(IrOp::LOAD, 2, {10}),
-        mk(IrOp::ADD, 3, {1, 2}),
-        mk(IrOp::CALL, 4, {}),
+        mk(IrOp::CONST, 1, {}, 42), mk(IrOp::LOAD, 2, {10}),
+        mk(IrOp::ADD, 3, {1, 2}),   mk(IrOp::CALL, 4, {}),
         mk(IrOp::DIV, 5, {1, 2}),
     };
 
@@ -78,7 +77,8 @@ int main() {
 
     std::printf("\n[forma de receta: op / imm / operands]\n");
     const analysis::RematRecipe &r1 = f.recipe_of(1);
-    CHECK(r1.valid && r1.op == IrOp::CONST && r1.imm == 42 && r1.operands.empty(),
+    CHECK(r1.valid && r1.op == IrOp::CONST && r1.imm == 42 &&
+              r1.operands.empty(),
           "receta del CONST mal (op/imm/operands)");
     const analysis::RematRecipe &r3 = f.recipe_of(3);
     CHECK(r3.valid && r3.op == IrOp::ADD && r3.operands.size() == 2 &&
@@ -98,7 +98,8 @@ int main() {
         CHECK(s.is_computed(codegen::rbank::Fact::Remat),
               "el Fact Remat no quedo materializado tras la query");
         // Segunda consulta = cache hit (no recomputa; mismo objeto).
-        CHECK(&s.remat_facts() == &q, "la celda LazyFact no cacheo el RematFacts");
+        CHECK(&s.remat_facts() == &q,
+              "la celda LazyFact no cacheo el RematFacts");
     }
 
     std::printf("\n=== %d checks, %d fallos ===\n", g_checks, g_fail);

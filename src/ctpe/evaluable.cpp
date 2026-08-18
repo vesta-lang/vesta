@@ -10,9 +10,10 @@
  * @brief Implementacion del analisis de evaluabilidad CTPE (ver evaluable.h).
  *
  * Recordatorio del PRINCIPIO RECTOR: se clasifica por AISLAMIENTO del universo
- * temporal del ComptimeRuntime, NO por pureza.  Mutar globals/heap/GC/objetos es
- * evaluable (ese mundo se destruye al terminar); solo descalifica que un efecto
- * ESCAPE (I/O/entorno/FFI/distribucion) o cambie la ESTRUCTURA del programa.
+ * temporal del ComptimeRuntime, NO por pureza.  Mutar globals/heap/GC/objetos
+ * es evaluable (ese mundo se destruye al terminar); solo descalifica que un
+ * efecto ESCAPE (I/O/entorno/FFI/distribucion) o cambie la ESTRUCTURA del
+ * programa.
  */
 
 #include "ctpe/evaluable.h"
@@ -29,46 +30,46 @@ CtpePolicy ctpe_policy(IrOp op) {
     switch (op) {
     // 🟡 Snapshot: muta el estado global del comptime; se descarta al terminar
     // (o, fase 2, se serializa a .rodata).  Contenido -> evaluable.
-    case IrOp::SETSTATIC:
-        return CtpePolicy::Snapshot;
+    case IrOp::SETSTATIC: return CtpePolicy::Snapshot;
 
     // 🔴 ExternalIO: I/O externo / FFI nativa / carga dinamica / asm opaco.
-    case IrOp::CALLN:      // llamada a funcion nativa (io, syscalls, ...).
+    case IrOp::CALLN: // llamada a funcion nativa (io, syscalls, ...).
     case IrOp::DLOPEN:
     case IrOp::DLSYM:
-    case IrOp::MOD_LOAD:   // carga un .velb externo del filesystem.
+    case IrOp::MOD_LOAD: // carga un .velb externo del filesystem.
     case IrOp::ASM_MICRO:
     case IrOp::INLINE_ASM:
-    case IrOp::RAW_ASM:    // opaco: no se puede garantizar nada.
+    case IrOp::RAW_ASM: // opaco: no se puede garantizar nada.
         return CtpePolicy::ExternalIO;
 
     // 🔴 NeedsHost: depende del ENTORNO/host o de la distribucion remota.
     case IrOp::GETPID:
     case IrOp::GETARGC:
-    case IrOp::GETARG:     // argv: entrada NO constante (depende de la ejecucion).
+    case IrOp::GETARG: // argv: entrada NO constante (depende de la ejecucion).
     case IrOp::GETPROC:
     case IrOp::GETVM:
     case IrOp::GETMGR:
     case IrOp::READ_VM_REG:
-    case IrOp::RSPAWN:        // spawn REMOTO (otro nodo).
+    case IrOp::RSPAWN: // spawn REMOTO (otro nodo).
     case IrOp::RSPAWN_RETURN:
-    case IrOp::SHARED_STAT:   // memoria compartida cross-proceso.
+    case IrOp::SHARED_STAT: // memoria compartida cross-proceso.
     case IrOp::GC_PROMOTE:
     case IrOp::GC_DEMOTE:
-    case IrOp::NEWOBJS:       // alloc en el SharedHeap (cross-proceso).
+    case IrOp::NEWOBJS: // alloc en el SharedHeap (cross-proceso).
         return CtpePolicy::NeedsHost;
 
-    // NOTA (paradigma de aislamiento): DEFCLASS/DEFFIELD/DEFMETHOD/ADDADVICE/
-    // SPECIALIZE/SETMETHDBG NO se bloquean.  Definen clases/metodos en el
-    // registry de la VM de compilacion, que se DESTRUYE al terminar -> CONTENIDO,
-    // no escapa.  Es el arranque NORMAL de un programa OOP (__module_init), no
-    // metaprogramacion que persista: CTPE solo inyecta el RESULTADO escalar y
-    // descarta el registry entero.  Por eso caen en `default -> Always`.  La
-    // categoria MetaMutation queda RESERVADA para el dia que CTPE pueda emitir
-    // ESTRUCTURA al binario (fase de serializacion), donde si seria metaprog.
+        // NOTA (paradigma de aislamiento):
+        // DEFCLASS/DEFFIELD/DEFMETHOD/ADDADVICE/ SPECIALIZE/SETMETHDBG NO se
+        // bloquean.  Definen clases/metodos en el registry de la VM de
+        // compilacion, que se DESTRUYE al terminar -> CONTENIDO, no escapa.  Es
+        // el arranque NORMAL de un programa OOP (__module_init), no
+        // metaprogramacion que persista: CTPE solo inyecta el RESULTADO escalar
+        // y descarta el registry entero.  Por eso caen en `default -> Always`.
+        // La categoria MetaMutation queda RESERVADA para el dia que CTPE pueda
+        // emitir ESTRUCTURA al binario (fase de serializacion), donde si seria
+        // metaprog.
 
-    default:
-        return CtpePolicy::Always;
+    default: return CtpePolicy::Always;
     }
 }
 
@@ -78,7 +79,8 @@ Evaluability compute_evaluability(const ir::IrModule &mod) {
     // Indice nombre -> funcion (para resolver CALL directas).
     std::unordered_map<std::string, const ir::IrFunction *> by_name;
     by_name.reserve(mod.functions.size());
-    for (const auto &fn : mod.functions) by_name[fn.name] = &fn;
+    for (const auto &fn : mod.functions)
+        by_name[fn.name] = &fn;
 
     // Paso 1: razon LOCAL de cada funcion (op no-contenida directa).  Si no la
     // hay, queda como candidata inicial (pendiente del fixpoint transitivo).
@@ -126,16 +128,19 @@ Evaluability compute_evaluability(const ir::IrModule &mod) {
                 const auto &blk = fn->blocks[b];
                 for (size_t i = 0; i < blk.instrs.size(); ++i) {
                     const ir::IrInstr &in = blk.instrs[i];
-                    if (in.op != IrOp::CALL && in.op != IrOp::TAILCALL) continue;
+                    if (in.op != IrOp::CALL && in.op != IrOp::TAILCALL)
+                        continue;
                     if (in.func_name.empty()) continue; // no resoluble.
                     auto cit = by_name.find(in.func_name);
-                    if (cit == by_name.end()) continue; // externa desconocida: la
-                                                        // cubre el trap.
+                    if (cit == by_name.end())
+                        continue; // externa desconocida: la
+                                  // cubre el trap.
                     if (candidate.count(in.func_name)) continue; // callee OK.
                     // callee NO evaluable -> esta funcion tampoco.
                     ok = false;
                     bad.op = in.op;
-                    bad.policy = CtpePolicy::Always; // bloquea por transitividad.
+                    bad.policy =
+                        CtpePolicy::Always; // bloquea por transitividad.
                     bad.block = b;
                     bad.instr_index = i;
                     bad.source_line = in.source_line;
@@ -171,10 +176,8 @@ static bool is_scalar(ir::IrType t) {
     case ir::IrType::U64:
     case ir::IrType::F32:
     case ir::IrType::F64:
-    case ir::IrType::BOOL:
-        return true;
-    default:
-        return false;
+    case ir::IrType::BOOL: return true;
+    default: return false;
     }
 }
 
@@ -184,15 +187,17 @@ std::vector<Candidate> find_candidates(const ir::IrModule &mod,
     // solo universo comptime y plegar SU resultado.  Las funciones auxiliares
     // corren DENTRO de esa ejecucion (mismo universo, efectos correctos entre
     // llamadas) y NUNCA se pliegan por separado -- plegar una funcion aislada
-    // seria CTFE (evaluacion de funcion), no CTPE, y romperia cualquier auxiliar
-    // con estado por-llamada (p.ej. `g_counter += 1; return g_counter;` llamada
-    // en bucle daria siempre el mismo valor).  El unico candidato es el entry.
+    // seria CTFE (evaluacion de funcion), no CTPE, y romperia cualquier
+    // auxiliar con estado por-llamada (p.ej. `g_counter += 1; return
+    // g_counter;` llamada en bucle daria siempre el mismo valor).  El unico
+    // candidato es el entry.
     std::vector<Candidate> out;
     for (const auto &fn : mod.functions) {
-        if (fn.name != "main") continue;         // solo el punto de entrada.
-        if (!ev.is_evaluable(fn.name)) continue; // sin I/O/FFI/host/distribucion.
-        if (!fn.params.empty()) continue;        // main(argv) lee argv -> no const.
-        if (!is_scalar(fn.ret_type)) continue;   // retorno escalar inyectable.
+        if (fn.name != "main") continue; // solo el punto de entrada.
+        if (!ev.is_evaluable(fn.name))
+            continue;                     // sin I/O/FFI/host/distribucion.
+        if (!fn.params.empty()) continue; // main(argv) lee argv -> no const.
+        if (!is_scalar(fn.ret_type)) continue; // retorno escalar inyectable.
         out.push_back({fn.name, fn.ret_type});
     }
     return out;

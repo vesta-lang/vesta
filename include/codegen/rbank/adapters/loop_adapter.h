@@ -11,7 +11,8 @@
  *        @c loop_depth en un @c ValueRequirements.
  *
  * Ejemplo de que un buen productor de Facts deja el adaptador RIDICULAMENTE
- * simple: toda la logica (deteccion de bucles, dominadores, profundidad) vive en
+ * simple: toda la logica (deteccion de bucles, dominadores, profundidad) vive
+ * en
  * @c compute_loop_facts (analysis/facts/loop_facts.h); aqui SOLO se copia la
  * profundidad del bloque donde se define el valor.  Trazabilidad total:
  * "¿por que loop_depth=2?" -> "el LoopAdapter: el bloque de definicion tiene

@@ -322,9 +322,9 @@ struct Type {
     /// APUNTADO vive en @c pointee->is_const).  Asi `const char *` =
     /// PTR{is_const=false, pointee=char{is_const=true}} y `char *const` =
     /// PTR{is_const=true, pointee=char{is_const=false}}.  El enforcement es
-    /// uniforme: escribir a un lvalue es error si @c lvalue.result_type.is_const.
-    /// Ortogonal a @c is_virtual y a la forma del tipo (NO entra en la igualdad
-    /// estructural).
+    /// uniforme: escribir a un lvalue es error si @c
+    /// lvalue.result_type.is_const. Ortogonal a @c is_virtual y a la forma del
+    /// tipo (NO entra en la igualdad estructural).
     bool is_const = false;
 
     /// Tipos de los parametros cuando @c kind == FUNCTION.  Vacio para
@@ -463,18 +463,18 @@ struct Type {
             }
             // La ABI custom por-parametro forma parte de la identidad del tipo:
             // dos cfn con abi_regs distintos son tipos INCOMPATIBLES (asi una
-            // CALLIND conoce la ABI en compile-time desde el tipo del puntero, y
-            // asignar &f_abiA a un campo cfn-de-abiB es un error de tipos).  Se
-            // comparan posicionalmente, normalizando "vector vacio" == "todo ABI
-            // estandar" para que un tipo sin ABI custom (vector vacio) iguale a
-            // uno con la lista de "" explicita.
+            // CALLIND conoce la ABI en compile-time desde el tipo del puntero,
+            // y asignar &f_abiA a un campo cfn-de-abiB es un error de tipos).
+            // Se comparan posicionalmente, normalizando "vector vacio" == "todo
+            // ABI estandar" para que un tipo sin ABI custom (vector vacio)
+            // iguale a uno con la lista de "" explicita.
             for (size_t i = 0; i < fn_params.size(); ++i) {
-                const std::string a =
-                    i < fn_param_abi_regs.size() ? fn_param_abi_regs[i]
-                                                 : std::string();
-                const std::string b =
-                    i < o.fn_param_abi_regs.size() ? o.fn_param_abi_regs[i]
-                                                   : std::string();
+                const std::string a = i < fn_param_abi_regs.size()
+                                          ? fn_param_abi_regs[i]
+                                          : std::string();
+                const std::string b = i < o.fn_param_abi_regs.size()
+                                          ? o.fn_param_abi_regs[i]
+                                          : std::string();
                 if (a != b) return false;
             }
         }
@@ -837,10 +837,11 @@ inline std::string type_to_string(const Type &t) {
                (t.pointee ? type_to_string(*t.pointee) : "?") + ">";
     }
     if (t.kind == PrimitiveKind::FUNCTION) {
-        // cfn/fn(P1, P2, ...) -> R con cada Pi formateado recursivamente.  Si un
-        // parametro declara ABI custom (register("rXX")), se muestra delante del
-        // tipo -> el mensaje de error distingue dos cfn con ABIs distintas (que
-        // de otro modo se veian identicos: "fn(i64) -> i64" en ambos lados).
+        // cfn/fn(P1, P2, ...) -> R con cada Pi formateado recursivamente.  Si
+        // un parametro declara ABI custom (register("rXX")), se muestra delante
+        // del tipo -> el mensaje de error distingue dos cfn con ABIs distintas
+        // (que de otro modo se veian identicos: "fn(i64) -> i64" en ambos
+        // lados).
         std::string s = t.fn_is_raw ? "cfn(" : "fn(";
         for (size_t i = 0; i < t.fn_params.size(); ++i) {
             if (i) s += ", ";
@@ -960,8 +961,8 @@ inline bool types_assignable(const Type &target, const Type &value) noexcept {
     // el TARGET no, la asignacion "lavaria" el const (aliasing a traves de un
     // puntero mutable) -> se rechaza.  Al reves (target const, value no) SI se
     // permite (anadir const es seguro).  Va ANTES del `==` porque este ignora
-    // @c is_const.  Para no-punteros el bucle no corre (no hay laundering: copiar
-    // un valor const a uno mutable es una COPIA, no un alias).
+    // @c is_const.  Para no-punteros el bucle no corre (no hay laundering:
+    // copiar un valor const a uno mutable es una COPIA, no un alias).
     {
         const Type *tt = &target, *vv = &value;
         while (tt->kind == PrimitiveKind::PTR &&

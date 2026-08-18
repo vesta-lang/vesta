@@ -123,7 +123,8 @@ template <typename V> class OAU64Map {
 
       private:
         void skip() {
-            while (i_ < t_->size() && (*t_)[i_].st != FULL) ++i_;
+            while (i_ < t_->size() && (*t_)[i_].st != FULL)
+                ++i_;
         }
         TableT *t_;
         size_t i_;
@@ -134,7 +135,9 @@ template <typename V> class OAU64Map {
     iterator begin() { return iterator(&table_, 0); }
     iterator end() { return iterator(&table_, table_.size()); }
     const_iterator begin() const { return const_iterator(&table_, 0); }
-    const_iterator end() const { return const_iterator(&table_, table_.size()); }
+    const_iterator end() const {
+        return const_iterator(&table_, table_.size());
+    }
 
   private:
     static inline size_t hash(uint64_t k) noexcept {

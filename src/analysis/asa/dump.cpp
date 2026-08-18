@@ -49,7 +49,8 @@ std::string texto_sujeto(const Sujeto &s) {
 std::vector<FactId> ordenar(const FactStore &a) {
     std::vector<FactId> ids;
     ids.reserve(a.size());
-    for (FactId i = 0; i < a.size(); ++i) ids.push_back(i);
+    for (FactId i = 0; i < a.size(); ++i)
+        ids.push_back(i);
     std::stable_sort(ids.begin(), ids.end(), [&a](FactId x, FactId y) {
         const std::string sx = texto_sujeto(a.at(x).de_quien);
         const std::string sy = texto_sujeto(a.at(y).de_quien);
@@ -76,22 +77,22 @@ void escribir_hecho(const FactStore &a, FactId id, FILE *salida) {
         std::fprintf(salida, ", por %s", f.prueba.regla);
     std::fprintf(salida, "]\n");
     if (f.prueba.de.empty()) return;
-    /* La derivacion: de que hechos CONCRETOS se sigue este.  Es lo que convierte
-     * "confia en mi" en algo comprobable. */
+    /* La derivacion: de que hechos CONCRETOS se sigue este.  Es lo que
+     * convierte "confia en mi" en algo comprobable. */
     for (FactId d : a.explicar(id)) {
         if (d == id) continue;
         const Fact &o = a.at(d);
-        std::fprintf(salida, "          <- %s %s %s\n", texto_sujeto(o.de_quien).c_str(),
-                     corto(o.que.codigo),
+        std::fprintf(salida, "          <- %s %s %s\n",
+                     texto_sujeto(o.de_quien).c_str(), corto(o.que.codigo),
                      o.que.detalle != nullptr ? o.que.detalle : "");
     }
 }
 
 } // namespace
 
-void imprimir_volcado(const FactStore                      &almacen,
+void imprimir_volcado(const FactStore &almacen,
                       const std::vector<ResumenProduccion> &resumenes,
-                      FILE                                 *salida) {
+                      FILE *salida) {
     std::fprintf(salida, "Lo que se sabe del programa (ASA)\n");
     std::fprintf(salida,
                  "Cada linea: dominio | que se afirma | detalle | cuanto "
@@ -117,9 +118,9 @@ void imprimir_volcado(const FactStore                      &almacen,
                      "%ld us\n",
                      corto(r.dominio), r.hechos, r.miradas, r.callados,
                      r.micros);
-        /* El POR QUE de lo que no se supo, siempre.  Un dominio que se calla sin
-         * motivo no se puede arreglar: no se distingue "puede valer cualquier
-         * cosa" de "no me dio tiempo" ni de "no lo mire". */
+        /* El POR QUE de lo que no se supo, siempre.  Un dominio que se calla
+         * sin motivo no se puede arreglar: no se distingue "puede valer
+         * cualquier cosa" de "no me dio tiempo" ni de "no lo mire". */
         for (const MotivoIgnorancia &m : r.motivos)
             std::fprintf(salida, "                 no supo %6u por %s\n",
                          m.veces, corto(m.codigo));
@@ -134,8 +135,9 @@ void imprimir_volcado(const FactStore                      &almacen,
             static_cast<uint8_t>(almacen.at(id).sello.origen.fuente);
         if (f < 4) ++por_fuente[f];
     }
-    std::fprintf(salida, "Por fuente: estatico=%u ejecucion=%u perfil=%u "
-                         "declarado=%u\n",
+    std::fprintf(salida,
+                 "Por fuente: estatico=%u ejecucion=%u perfil=%u "
+                 "declarado=%u\n",
                  por_fuente[0], por_fuente[1], por_fuente[2], por_fuente[3]);
 
     const FactStore::Recuento c = almacen.recuento();

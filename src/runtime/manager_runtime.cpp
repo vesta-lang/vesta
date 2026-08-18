@@ -16,7 +16,7 @@
  * VestaVM.                                                                    \
  *                                                                             \
  * Implementa @c ManagerRuntime: creacion, arranque y destruccion de           \
- * instancias VM, enrutamiento de comandos y gestion del ciclo de vida de los               \
+ * instancias VM, enrutamiento de comandos y gestion del ciclo de vida de los  \
  * servidores TCP.                                                             \
  */                                                                            \
 #include "runtime/manager_runtime.h"

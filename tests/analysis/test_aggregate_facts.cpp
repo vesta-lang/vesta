@@ -12,9 +12,9 @@
  * Los casos se montan sobre el IR a mano, no desde `.vx`, y es deliberado: lo
  * que se prueba es que el conocimiento depende de COMO SE USA un valor y no de
  * que tipo tenia en el fuente.  Construyendo el IR directamente, el tipo
- * literalmente no existe -- solo hay una reserva, desplazamientos y llamadas --,
- * asi que si dos casos con el mismo esqueleto dieran respuestas distintas seria
- * imposible echarle la culpa al tipo.
+ * literalmente no existe -- solo hay una reserva, desplazamientos y llamadas
+ * --, asi que si dos casos con el mismo esqueleto dieran respuestas distintas
+ * seria imposible echarle la culpa al tipo.
  *
  * Y no se comprueba solo la forma.  El producto de ASA ya no es `Compuesto`: es
  * "compuesto, demostrado en tal ambito, por estas observaciones, limitado por
@@ -98,8 +98,10 @@ static ir::IrFunction operacion(const std::string &nombre,
     const uint32_t b0 = fn.new_block("entry");
     const ir::IrValueId p = fn.new_value(ir::IrType::PTR);
     fn.params.push_back(p);
-    for (int64_t o : lee_offs) leer(fn, b0, p, o);
-    for (int64_t o : escribe_offs) escribir(fn, b0, p, o, 7);
+    for (int64_t o : lee_offs)
+        leer(fn, b0, p, o);
+    for (int64_t o : escribe_offs)
+        escribir(fn, b0, p, o, 7);
     emitir(fn, b0, ir::IrOp::RET, ir::IR_NO_VALUE, {});
     return fn;
 }
@@ -124,15 +126,18 @@ static Caso montar(const std::vector<int64_t> &toca_en_main,
                    const std::vector<int64_t> &op_escribe,
                    const std::vector<int64_t> &op_lee) {
     Caso c;
-    if (!op.empty()) c.mod.functions.push_back(operacion(op, op_escribe, op_lee));
+    if (!op.empty())
+        c.mod.functions.push_back(operacion(op, op_escribe, op_lee));
     ir::IrFunction fn;
     fn.name = "main";
     const uint32_t b0 = fn.new_block("entry");
     const ir::IrValueId a = fn.new_value(ir::IrType::PTR);
     emitir(fn, b0, ir::IrOp::ALLOCA, a, {}).imm = 16;
     c.ancla = a;
-    if (!op.empty()) emitir(fn, b0, ir::IrOp::CALL, ir::IR_NO_VALUE, {a}).func_name = op;
-    for (int64_t o : toca_en_main) leer(fn, b0, a, o);
+    if (!op.empty())
+        emitir(fn, b0, ir::IrOp::CALL, ir::IR_NO_VALUE, {a}).func_name = op;
+    for (int64_t o : toca_en_main)
+        leer(fn, b0, a, o);
     emitir(fn, b0, ir::IrOp::RET, ir::IR_NO_VALUE, {});
     c.mod.functions.push_back(std::move(fn));
     return c;
@@ -149,7 +154,8 @@ static void caso_a() {
     check(f.sello.certeza == Certeza::Demostrada,
           "A saco: con el universo cerrado, la conclusion esta demostrada");
     check(f.offsets_tocados() == 2, "A saco: se ven los dos desplazamientos");
-    check(f.participaciones.empty(), "A saco: no hay participacion como unidad");
+    check(f.participaciones.empty(),
+          "A saco: no hay participacion como unidad");
 }
 
 // ===========================================================================
@@ -174,9 +180,11 @@ static void caso_c() {
     Caso c = montar({}, "op", {0, 8}, {});
     const AggregateFacts f = c.hechos();
     check(f.forma() == FormaDeValor::Compuesto,
-          "C implementacion: tocar partes DENTRO de la operacion no desmiente la unidad");
+          "C implementacion: tocar partes DENTRO de la operacion no desmiente "
+          "la unidad");
     check(f.accesos_con(RelacionAcceso::EnOperacion) == 2,
-          "C implementacion: los accesos quedan con su relacion, no en un contador");
+          "C implementacion: los accesos quedan con su relacion, no en un "
+          "contador");
     check(f.accesos_con(RelacionAcceso::EnPropietario) == 0,
           "C implementacion: el propietario no toca nada");
 }
@@ -189,7 +197,8 @@ static void caso_d() {
     Caso c = montar({8}, "op", {0}, {});
     const AggregateFacts f = c.hechos();
     check(f.forma() == FormaDeValor::Desconocida,
-          "D conflicto: unidad + una parte que ninguna operacion produce -> se calla");
+          "D conflicto: unidad + una parte que ninguna operacion produce -> se "
+          "calla");
     bool motivo_ok = false;
     for (MotivoForma m : f.motivos_forma())
         if (m == MotivoForma::AccesoIndependienteDeOperacion) motivo_ok = true;
@@ -199,13 +208,15 @@ static void caso_d() {
 }
 
 // ===========================================================================
-//  D' -- el mismo esqueleto, pero la parte que se lee SI la produce la operacion
+//  D' -- el mismo esqueleto, pero la parte que se lee SI la produce la
+//  operacion
 // ===========================================================================
 static void caso_d_ligado() {
     Caso c = montar({8}, "op", {0, 8}, {});
     const AggregateFacts f = c.hechos();
     check(f.forma() == FormaDeValor::Compuesto,
-          "D' consumo: leer lo que la operacion escribio es consumir, no destripar");
+          "D' consumo: leer lo que la operacion escribio es consumir, no "
+          "destripar");
     check(f.accesos_con(RelacionAcceso::EnPropietario) == 1,
           "D' consumo: el acceso sigue observandose, solo cambia su lectura");
 }
@@ -255,7 +266,8 @@ static void caso_universo() {
                   f.universos[fr.hacia].observacion ==
                       EstadoObservacion::NoObservado,
               "universo: y se marca como no observado, que es otro eje");
-        check(fr.desde != fr.hacia, "universo: la frontera va de un ambito a otro");
+        check(fr.desde != fr.hacia,
+              "universo: la frontera va de un ambito a otro");
     }
     // Toda causa emitida tiene que estar localizada: ni silencio ni invento.
     for (const AggregateFacts::EfectoAlcance &e : f.efectos())
@@ -270,6 +282,7 @@ int main() {
     caso_d();
     caso_d_ligado();
     caso_universo();
-    std::printf("=== forma de valor: %d checks, %d fallos ===\n", total, fallos);
+    std::printf("=== forma de valor: %d checks, %d fallos ===\n", total,
+                fallos);
     return fallos == 0 ? 0 : 1;
 }

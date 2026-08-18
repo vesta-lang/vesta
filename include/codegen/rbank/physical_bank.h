@@ -93,16 +93,16 @@ namespace codegen {
 namespace rbank {
 
 // Tipos + factorias de las FUENTES (modulo jit) que el banco CONSUME para
-// construirse.  El banco es de codegen (3 modos); sus insumos (caps/reginfo/ISA)
-// son de jit.  target_traits_from_reginfo es del PROPIO rbank (adaptador, mas
-// abajo), no de jit -> no se importa.
+// construirse.  El banco es de codegen (3 modos); sus insumos
+// (caps/reginfo/ISA) son de jit.  target_traits_from_reginfo es del PROPIO
+// rbank (adaptador, mas abajo), no de jit -> no se importa.
 using jit::BackendCaps;
-using jit::RegClass;
-using jit::MReg;
-using jit::TargetRegInfo;
-using jit::target_x86_64_abi;
-using jit::target_x86_32;
 using jit::build_arm64_target;
+using jit::MReg;
+using jit::RegClass;
+using jit::target_x86_32;
+using jit::target_x86_64_abi;
+using jit::TargetRegInfo;
 
 // ===========================================================================
 //  Clases de recurso.
@@ -122,9 +122,9 @@ using jit::build_arm64_target;
  *       toca ahora; solo se deja la senal de hacia donde crece.
  */
 enum class ResourceClass : uint8_t {
-    GP        = 0, ///< registros enteros de proposito general.
+    GP = 0,        ///< registros enteros de proposito general.
     FP_VECTOR = 1, ///< banco escalar-float + vector (XMM/YMM/ZMM, NEON, ...).
-    MASK      = 2, ///< mascaras de prediccion (k0..k7 AVX-512).
+    MASK = 2,      ///< mascaras de prediccion (k0..k7 AVX-512).
     PREDICATE = 3, ///< predicados escalables (p0..p15 SVE).
     COUNT
 };
@@ -146,18 +146,28 @@ constexpr ResourceClass to_resource_class(RegClass c) noexcept {
  * @brief Ancho en BYTES con el que una lane puede nombrarse (potencia de 2).
  */
 enum class ViewWidth : uint16_t {
-    W1  = 1,   W2  = 2,   W4  = 4,   W8  = 8,
-    W16 = 16,  W32 = 32,  W64 = 64,
+    W1 = 1,
+    W2 = 2,
+    W4 = 4,
+    W8 = 8,
+    W16 = 16,
+    W32 = 32,
+    W64 = 64,
 };
 
 /** @brief log2 del ancho en bytes (1..64 -> 0..6). */
 constexpr uint32_t view_log(ViewWidth w) noexcept {
     uint32_t bytes = static_cast<uint32_t>(w), b = 0;
-    while (bytes > 1) { bytes >>= 1; ++b; }
+    while (bytes > 1) {
+        bytes >>= 1;
+        ++b;
+    }
     return b;
 }
 /** @brief Bit de mascara de un ancho (= 1 << view_log). */
-constexpr uint32_t view_bit(ViewWidth w) noexcept { return 1u << view_log(w); }
+constexpr uint32_t view_bit(ViewWidth w) noexcept {
+    return 1u << view_log(w);
+}
 
 /**
  * @enum ViewIndex
@@ -168,10 +178,7 @@ constexpr uint32_t view_bit(ViewWidth w) noexcept { return 1u << view_log(w); }
  * solo.  Los nombres COINCIDEN 1:1 con @c ViewWidth (W32 = 32 bytes) para dejar
  * la correspondencia explicita.  Internamente sigue siendo un array plano.
  */
-enum class ViewIndex : uint8_t {
-    W1 = 0, W2, W4, W8, W16, W32, W64,
-    COUNT
-};
+enum class ViewIndex : uint8_t { W1 = 0, W2, W4, W8, W16, W32, W64, COUNT };
 static constexpr size_t kMaxViews = static_cast<size_t>(ViewIndex::COUNT);
 
 /** @brief @c ViewWidth -> @c ViewIndex (slot de las tablas por-vista). */
@@ -192,7 +199,7 @@ constexpr uint16_t view_spill_align(ViewWidth w) noexcept {
  */
 struct ViewGeom {
     ViewWidth width;      ///< ancho de la vista.
-    uint16_t  spill_align;///< alineamiento del slot de pila (bytes).
+    uint16_t spill_align; ///< alineamiento del slot de pila (bytes).
 };
 
 // ===========================================================================
@@ -203,18 +210,23 @@ struct ViewGeom {
 
 /**
  * @struct AliasSet
- * @brief Conjunto de INDICES-de-lane (posicion en @c PhysicalRegisterBank::lanes)
- *        que un recurso ocupa al usarse.  Abstrae la representacion (hoy uint64).
+ * @brief Conjunto de INDICES-de-lane (posicion en @c
+ * PhysicalRegisterBank::lanes) que un recurso ocupa al usarse.  Abstrae la
+ * representacion (hoy uint64).
  */
 struct AliasSet {
     uint64_t bits = 0;
 
-    void add(size_t lane_index) noexcept { bits |= (uint64_t{1} << lane_index); }
+    void add(size_t lane_index) noexcept {
+        bits |= (uint64_t{1} << lane_index);
+    }
     bool test(size_t lane_index) const noexcept {
         return (bits & (uint64_t{1} << lane_index)) != 0;
     }
     /** @brief True si comparte alguna lane con @p o (interferencia). */
-    bool overlaps(const AliasSet &o) const noexcept { return (bits & o.bits) != 0; }
+    bool overlaps(const AliasSet &o) const noexcept {
+        return (bits & o.bits) != 0;
+    }
     void merge(const AliasSet &o) noexcept { bits |= o.bits; }
     bool empty() const noexcept { return bits == 0; }
 };
@@ -230,23 +242,23 @@ struct AliasSet {
  *        opcional.
  */
 enum class ReserveReason : uint8_t {
-    NONE = 0,      ///< no reservada: asignable por el allocator general.
-    ABI,           ///< impuesta por el ABI (frame, puntero fijo del ABI).
-    PLATFORM,      ///< portabilidad de plataforma, o reserva IMPLICITA
-                   ///< superficiada por el round-trip (ver @c implicit).
-    OPTIMIZATION,  ///< por una optimizacion (VEC_ACC).  NEGOCIABLE.
-    SCRATCH,       ///< temporal del rewrite (spills / two-address).
-    DEBUG,         ///< reservada para depuracion/instrumentacion.
+    NONE = 0,     ///< no reservada: asignable por el allocator general.
+    ABI,          ///< impuesta por el ABI (frame, puntero fijo del ABI).
+    PLATFORM,     ///< portabilidad de plataforma, o reserva IMPLICITA
+                  ///< superficiada por el round-trip (ver @c implicit).
+    OPTIMIZATION, ///< por una optimizacion (VEC_ACC).  NEGOCIABLE.
+    SCRATCH,      ///< temporal del rewrite (spills / two-address).
+    DEBUG,        ///< reservada para depuracion/instrumentacion.
 };
 
 /** @enum ReserveKind @brief PROVENANCE especifica (dentro de su categoria). */
 enum class ReserveKind : uint8_t {
     NONE = 0,
-    FRAME,      ///< [ABI] RSP/RBP / x29/x30/sp: marco y enlace.
-    ABI_PTR,    ///< [ABI] RBX = ProcessVM* (VM_ABI) u otro puntero fijo.
-    PLATFORM,   ///< [PLATFORM] x18 AArch64 Win/Darwin, o implicita sin nombre.
-    VEC_ACC,    ///< [OPTIMIZATION] acumulador de reduccion/FMA vectorial.
-    SCRATCH,    ///< [SCRATCH] temporal del rewrite.
+    FRAME,    ///< [ABI] RSP/RBP / x29/x30/sp: marco y enlace.
+    ABI_PTR,  ///< [ABI] RBX = ProcessVM* (VM_ABI) u otro puntero fijo.
+    PLATFORM, ///< [PLATFORM] x18 AArch64 Win/Darwin, o implicita sin nombre.
+    VEC_ACC,  ///< [OPTIMIZATION] acumulador de reduccion/FMA vectorial.
+    SCRATCH,  ///< [SCRATCH] temporal del rewrite.
 };
 
 /**
@@ -255,13 +267,15 @@ enum class ReserveKind : uint8_t {
  *        demand-driven (negociable) o implicita.
  */
 struct Reservation {
-    ReserveReason reason        = ReserveReason::NONE;
-    ReserveKind   kind          = ReserveKind::NONE;
-    bool          demand_driven = false; ///< liberable si su path no se usa.
-    bool          implicit      = false; ///< descubierta como ausencia.
+    ReserveReason reason = ReserveReason::NONE;
+    ReserveKind kind = ReserveKind::NONE;
+    bool demand_driven = false; ///< liberable si su path no se usa.
+    bool implicit = false;      ///< descubierta como ausencia.
 
     bool is_free() const noexcept { return reason == ReserveReason::NONE; }
-    bool is_scratch() const noexcept { return reason == ReserveReason::SCRATCH; }
+    bool is_scratch() const noexcept {
+        return reason == ReserveReason::SCRATCH;
+    }
 };
 
 /**
@@ -270,16 +284,16 @@ struct Reservation {
  *        (Lane, ABI, View), NO de la geometria de la vista.
  */
 enum class SavePolicy : uint8_t {
-    VOLATILE  = 0, ///< caller-saved: se pierde al cruzar un CALL.
+    VOLATILE = 0,  ///< caller-saved: se pierde al cruzar un CALL.
     PRESERVED = 1, ///< callee-saved: el callee debe salvarlo.
-    RESERVED  = 2, ///< no participa como valor (frame/ABI-ptr/scratch).
+    RESERVED = 2,  ///< no participa como valor (frame/ABI-ptr/scratch).
 };
 
 /** @brief Roles ABI de una lane (bitset). */
 enum RoleBits : uint8_t {
     ROLE_NONE = 0,
-    ROLE_ARG  = 1u << 0, ///< pasa argumentos.
-    ROLE_RET  = 1u << 1, ///< recibe el valor de retorno.
+    ROLE_ARG = 1u << 0, ///< pasa argumentos.
+    ROLE_RET = 1u << 1, ///< recibe el valor de retorno.
 };
 
 // ===========================================================================
@@ -295,13 +309,13 @@ enum RoleBits : uint8_t {
  * los consumidores usan las consultas del @c PhysicalRegisterBank.
  */
 struct Lane {
-    uint8_t       id  = 0;                        ///< id fisico del target.
-    ResourceClass cls = ResourceClass::GP;        ///< clase de recurso.
+    uint8_t id = 0;                        ///< id fisico del target.
+    ResourceClass cls = ResourceClass::GP; ///< clase de recurso.
 
     // --- Geometria (ISA) ---
-    std::vector<ViewGeom> views;                  ///< vistas soportadas (I4: inmutables).
-    uint32_t              view_mask = 0;          ///< OR de view_bit (fast supports).
-    AliasSet              aliases;                ///< lanes que ocupa (I3: indices).
+    std::vector<ViewGeom> views; ///< vistas soportadas (I4: inmutables).
+    uint32_t view_mask = 0;      ///< OR de view_bit (fast supports).
+    AliasSet aliases;            ///< lanes que ocupa (I3: indices).
 
     // --- ABI ---
     /// Preservacion POR-VISTA (indexada por @c ViewIndex).  Modela el matiz
@@ -309,8 +323,8 @@ struct Lane {
     std::array<SavePolicy, kMaxViews> preservation{};
 
     // --- Reserva / roles ---
-    Reservation reserve;                          ///< por que no esta libre (o NONE).
-    uint8_t     roles = ROLE_NONE;                ///< OR de RoleBits.
+    Reservation reserve;       ///< por que no esta libre (o NONE).
+    uint8_t roles = ROLE_NONE; ///< OR de RoleBits.
 
     Lane() { preservation.fill(SavePolicy::VOLATILE); }
 
@@ -329,11 +343,14 @@ struct Lane {
 /**
  * @struct BankFingerprint
  * @brief Identidad observable de un banco (tipo FUERTE, no un @c uint64 crudo:
- *        no se mezcla accidentalmente con la huella del problema o de una policy).
+ *        no se mezcla accidentalmente con la huella del problema o de una
+ * policy).
  */
 struct BankFingerprint {
     uint64_t value = 0;
-    bool operator==(const BankFingerprint &o) const noexcept { return value == o.value; }
+    bool operator==(const BankFingerprint &o) const noexcept {
+        return value == o.value;
+    }
 };
 
 /**
@@ -343,13 +360,13 @@ struct BankFingerprint {
  *        no el acceso directo a @c lanes.
  */
 struct PhysicalRegisterBank {
-    std::string name;                    ///< identidad ABI-especifica ("x86-64-sysv"...).
-    std::string microarch;               ///< uarch de arch-data alineada (o vacio).
-    uint8_t     pointer_size   = 8;
-    bool        is_two_address = true;
+    std::string name;      ///< identidad ABI-especifica ("x86-64-sysv"...).
+    std::string microarch; ///< uarch de arch-data alineada (o vacio).
+    uint8_t pointer_size = 8;
+    bool is_two_address = true;
 
-    std::vector<Lane> lanes;                      ///< I1: orden INMUTABLE tras build.
-    std::array<int16_t, 64> id_to_index{};        ///< I2: id fisico -> indice (o -1).
+    std::vector<Lane> lanes;               ///< I1: orden INMUTABLE tras build.
+    std::array<int16_t, 64> id_to_index{}; ///< I2: id fisico -> indice (o -1).
 
     PhysicalRegisterBank() { id_to_index.fill(-1); }
 
@@ -363,7 +380,8 @@ struct PhysicalRegisterBank {
     /** @brief Numero de lanes de la clase @p cls. */
     size_t lane_count(ResourceClass cls) const noexcept {
         size_t n = 0;
-        for (const auto &l : lanes) if (l.cls == cls) ++n;
+        for (const auto &l : lanes)
+            if (l.cls == cls) ++n;
         return n;
     }
     /**
@@ -391,7 +409,8 @@ struct PhysicalRegisterBank {
     bool can_hold(ResourceClass cls, ViewWidth w,
                   bool vec_reduction_active) const noexcept {
         for (const auto &l : lanes)
-            if (l.cls == cls && l.allocatable(vec_reduction_active) && l.supports(w))
+            if (l.cls == cls && l.allocatable(vec_reduction_active) &&
+                l.supports(w))
                 return true;
         return false;
     }
@@ -405,7 +424,8 @@ struct PhysicalRegisterBank {
         const Lane *l = by_id(id);
         return l ? l->preservation_of(w) : SavePolicy::RESERVED;
     }
-    /** @brief Alineamiento de spill de la lane @p id en la vista @p w (0 si no soporta). */
+    /** @brief Alineamiento de spill de la lane @p id en la vista @p w (0 si no
+     * soporta). */
     uint16_t spill_align(uint8_t id, ViewWidth w) const noexcept {
         const Lane *l = by_id(id);
         if (!l) return 0;
@@ -430,18 +450,20 @@ struct PhysicalRegisterBank {
     }
 
     /**
-     * @brief IDENTIDAD OBSERVABLE del banco para un algoritmo de asignacion: dos
-     *        bancos que colorearian distinto dan huellas distintas.  Es una
+     * @brief IDENTIDAD OBSERVABLE del banco para un algoritmo de asignacion:
+     * dos bancos que colorearian distinto dan huellas distintas.  Es una
      *        pregunta sobre el BANCO (por eso vive aqui), que la cache de
-     *        soluciones consume para su key.  Incluye el nombre (ABI) + las lanes
-     *        asignables por clase relevante (que cambian con @p vec_active por los
-     *        VEC_ACC demand-driven).
+     *        soluciones consume para su key.  Incluye el nombre (ABI) + las
+     * lanes asignables por clase relevante (que cambian con @p vec_active por
+     * los VEC_ACC demand-driven).
      */
     BankFingerprint fingerprint(bool vec_active) const {
         uint64_t h = kFnvOffset;
-        for (char c : name) h = fnv_mix(h, static_cast<uint64_t>(c));
-        for (ResourceClass cls : {ResourceClass::GP, ResourceClass::FP_VECTOR,
-                                  ResourceClass::MASK, ResourceClass::PREDICATE})
+        for (char c : name)
+            h = fnv_mix(h, static_cast<uint64_t>(c));
+        for (ResourceClass cls :
+             {ResourceClass::GP, ResourceClass::FP_VECTOR, ResourceClass::MASK,
+              ResourceClass::PREDICATE})
             h = fnv_mix(h, allocatable_count(cls, vec_active));
         h = fnv_mix(h, vec_active ? 1u : 0u);
         return BankFingerprint{h};
@@ -458,12 +480,12 @@ struct PhysicalRegisterBank {
  * @brief Descripcion ISA+ABI NEUTRAL de un target (datos puros).  Fuente de la
  *        que se construye el banco.  @c TargetRegInfo es una de sus fuentes
  *        (via @c target_traits_from_reginfo); en el futuro un descriptor nativo
- *        (o deserializado de JSON/YAML) puede producir @c TargetTraits sin pasar
- *        por el tipo legacy.
+ *        (o deserializado de JSON/YAML) puede producir @c TargetTraits sin
+ * pasar por el tipo legacy.
  */
 struct TargetTraits {
-    uint8_t pointer_size   = 8;
-    bool    is_two_address = true;
+    uint8_t pointer_size = 8;
+    bool is_two_address = true;
     std::vector<uint8_t> reserved; ///< frame / punteros fijos del ABI (ids).
 
     /** @brief Roles ABI de una clase (listas de ids). */
@@ -481,17 +503,17 @@ struct TargetTraits {
 /** @brief Adaptador legacy: @c TargetRegInfo -> @c TargetTraits (neutral). */
 inline TargetTraits target_traits_from_reginfo(const TargetRegInfo &t) {
     TargetTraits tr;
-    tr.pointer_size   = t.pointer_size;
+    tr.pointer_size = t.pointer_size;
     tr.is_two_address = t.is_two_address;
-    tr.reserved       = t.reserved;
+    tr.reserved = t.reserved;
     for (size_t ci = 0; ci < TargetRegInfo::NCLASS; ++ci) {
         TargetTraits::ClassAbi &c = tr.classes[ci];
-        c.allocatable  = t.allocatable[ci];
-        c.scratch      = t.scratch[ci];
+        c.allocatable = t.allocatable[ci];
+        c.scratch = t.scratch[ci];
         c.caller_saved = t.caller_saved[ci];
         c.callee_saved = t.callee_saved[ci];
-        c.arg_regs     = t.arg_regs[ci];
-        c.ret_reg      = t.ret_reg[ci];
+        c.arg_regs = t.arg_regs[ci];
+        c.ret_reg = t.ret_reg[ci];
     }
     // MASK/PREDICATE quedan vacias (ningun target legacy las produce).
     return tr;
@@ -507,27 +529,29 @@ inline TargetTraits target_traits_from_reginfo(const TargetRegInfo &t) {
  *        vistas + ids reservados por optimizacion (VEC_ACC).
  */
 struct ClassSpec {
-    uint8_t                first_id = 1; ///< primer id (first>last = vacia).
-    uint8_t                last_id  = 0; ///< ultimo id inclusivo.
-    std::vector<ViewWidth> widths;       ///< vistas de la clase (resueltas por caps).
-    std::vector<uint8_t>   vec_acc;      ///< ids VEC_ACC (demand-driven).
+    uint8_t first_id = 1;          ///< primer id (first>last = vacia).
+    uint8_t last_id = 0;           ///< ultimo id inclusivo.
+    std::vector<ViewWidth> widths; ///< vistas de la clase (resueltas por caps).
+    std::vector<uint8_t> vec_acc;  ///< ids VEC_ACC (demand-driven).
 };
 
 /**
  * @struct TargetDescriptor
- * @brief Descripcion declarativa COMPLETA de un target (DATA pura, serializable):
- *        identidad + @c TargetTraits (ABI neutral) + geometria por clase.
+ * @brief Descripcion declarativa COMPLETA de un target (DATA pura,
+ * serializable): identidad + @c TargetTraits (ABI neutral) + geometria por
+ * clase.
  */
 struct TargetDescriptor {
-    std::string  name;                                   ///< identidad del banco.
-    TargetTraits traits;                                 ///< ISA+ABI neutral.
-    std::array<ClassSpec, kResourceClassCount> classes;  ///< geometria por clase.
+    std::string name;    ///< identidad del banco.
+    TargetTraits traits; ///< ISA+ABI neutral.
+    std::array<ClassSpec, kResourceClassCount>
+        classes; ///< geometria por clase.
 };
 
 /** @brief Vistas de la clase FP x86 segun capacidades (SSE2 baseline). */
 inline std::vector<ViewWidth> x86_fp_widths(const BackendCaps &caps) {
     std::vector<ViewWidth> w = {ViewWidth::W4, ViewWidth::W8, ViewWidth::W16};
-    if (caps.avx)     w.push_back(ViewWidth::W32);
+    if (caps.avx) w.push_back(ViewWidth::W32);
     if (caps.avx512f) w.push_back(ViewWidth::W64);
     return w;
 }
@@ -551,12 +575,13 @@ inline std::vector<ViewWidth> gp_widths(uint8_t pointer_size) {
 inline PhysicalRegisterBank build_physical_bank(const TargetDescriptor &d) {
     const TargetTraits &tr = d.traits;
     PhysicalRegisterBank b;
-    b.name           = d.name;
-    b.pointer_size   = tr.pointer_size;
+    b.name = d.name;
+    b.pointer_size = tr.pointer_size;
     b.is_two_address = tr.is_two_address;
 
     auto contains = [](const std::vector<uint8_t> &v, uint8_t x) {
-        for (uint8_t e : v) if (e == x) return true;
+        for (uint8_t e : v)
+            if (e == x) return true;
         return false;
     };
 
@@ -569,25 +594,30 @@ inline PhysicalRegisterBank build_physical_bank(const TargetDescriptor &d) {
         for (uint32_t idw = spec.first_id; idw <= spec.last_id; ++idw) {
             const uint8_t id = static_cast<uint8_t>(idw);
             Lane l;
-            l.id  = id;
+            l.id = id;
             l.cls = rcls;
 
             const bool caller = contains(abi.caller_saved, id);
             const bool callee = contains(abi.callee_saved, id);
-            if (contains(abi.arg_regs, id))                 l.roles |= ROLE_ARG;
-            if (abi.ret_reg == id && (caller || callee))    l.roles |= ROLE_RET;
+            if (contains(abi.arg_regs, id)) l.roles |= ROLE_ARG;
+            if (abi.ret_reg == id && (caller || callee)) l.roles |= ROLE_RET;
 
             // Clasificacion de la reserva (categoria + provenance).
             if (contains(abi.allocatable, id)) {
-                l.reserve = {ReserveReason::NONE, ReserveKind::NONE, false, false};
+                l.reserve = {ReserveReason::NONE, ReserveKind::NONE, false,
+                             false};
             } else if (contains(abi.scratch, id)) {
-                l.reserve = {ReserveReason::SCRATCH, ReserveKind::SCRATCH, false, false};
+                l.reserve = {ReserveReason::SCRATCH, ReserveKind::SCRATCH,
+                             false, false};
             } else if (contains(tr.reserved, id)) {
-                l.reserve = {ReserveReason::ABI, ReserveKind::FRAME, false, false};
+                l.reserve = {ReserveReason::ABI, ReserveKind::FRAME, false,
+                             false};
             } else if (contains(spec.vec_acc, id)) {
-                l.reserve = {ReserveReason::OPTIMIZATION, ReserveKind::VEC_ACC, true, false};
+                l.reserve = {ReserveReason::OPTIMIZATION, ReserveKind::VEC_ACC,
+                             true, false};
             } else {
-                l.reserve = {ReserveReason::PLATFORM, ReserveKind::PLATFORM, false, true};
+                l.reserve = {ReserveReason::PLATFORM, ReserveKind::PLATFORM,
+                             false, true};
             }
 
             // Preservacion por-vista (ABI, uniforme hoy).
@@ -609,7 +639,8 @@ inline PhysicalRegisterBank build_physical_bank(const TargetDescriptor &d) {
     }
 
     // Alias sets (I3: indices).  Self-alias; mecanismo listo para pares/SVE.
-    for (size_t i = 0; i < b.lanes.size(); ++i) b.lanes[i].aliases.add(i);
+    for (size_t i = 0; i < b.lanes.size(); ++i)
+        b.lanes[i].aliases.add(i);
 
     return b;
 }
@@ -618,9 +649,9 @@ inline PhysicalRegisterBank build_physical_bank(const TargetDescriptor &d) {
 inline std::array<ClassSpec, kResourceClassCount>
 make_class_specs(ClassSpec gp, ClassSpec fp) {
     std::array<ClassSpec, kResourceClassCount> s{};
-    s[static_cast<size_t>(ResourceClass::GP)]        = std::move(gp);
+    s[static_cast<size_t>(ResourceClass::GP)] = std::move(gp);
     s[static_cast<size_t>(ResourceClass::FP_VECTOR)] = std::move(fp);
-    s[static_cast<size_t>(ResourceClass::MASK)]      = ClassSpec{1, 0, {}, {}};
+    s[static_cast<size_t>(ResourceClass::MASK)] = ClassSpec{1, 0, {}, {}};
     s[static_cast<size_t>(ResourceClass::PREDICATE)] = ClassSpec{1, 0, {}, {}};
     return s;
 }
@@ -630,8 +661,8 @@ make_class_specs(ClassSpec gp, ClassSpec fp) {
 /** @brief Descriptor x86-64 (SysV/Win64) con vistas FP de @p caps. */
 inline TargetDescriptor descriptor_x86_64(bool sysv, const BackendCaps &caps) {
     TargetDescriptor d;
-    d.name    = sysv ? "x86-64-sysv" : "x86-64-win64";
-    d.traits  = target_traits_from_reginfo(target_x86_64_abi(sysv));
+    d.name = sysv ? "x86-64-sysv" : "x86-64-win64";
+    d.traits = target_traits_from_reginfo(target_x86_64_abi(sysv));
     d.classes = make_class_specs(
         ClassSpec{0, 15, gp_widths(8), {}},
         ClassSpec{16, 31, x86_fp_widths(caps), {26, 27, 28, 29}}); // XMM10-13.
@@ -640,8 +671,8 @@ inline TargetDescriptor descriptor_x86_64(bool sysv, const BackendCaps &caps) {
 /** @brief Descriptor x86-32 (regparm3).  GP 0-7; FP vacia. */
 inline TargetDescriptor descriptor_x86_32() {
     TargetDescriptor d;
-    d.name    = "x86-32";
-    d.traits  = target_traits_from_reginfo(target_x86_32());
+    d.name = "x86-32";
+    d.traits = target_traits_from_reginfo(target_x86_32());
     d.classes = make_class_specs(ClassSpec{0, 7, gp_widths(4), {}},
                                  ClassSpec{1, 0, {}, {}});
     return d;
@@ -649,47 +680,55 @@ inline TargetDescriptor descriptor_x86_32() {
 /** @brief Descriptor AArch64.  GP 0-30, FP/SIMD 32-63 (sin VEC_ACC). */
 inline TargetDescriptor descriptor_arm64(const BackendCaps & /*caps*/) {
     TargetDescriptor d;
-    d.name    = "arm64";
-    d.traits  = target_traits_from_reginfo(build_arm64_target());
+    d.name = "arm64";
+    d.traits = target_traits_from_reginfo(build_arm64_target());
     d.classes = make_class_specs(
         ClassSpec{0, 30, gp_widths(8), {}},
         ClassSpec{32, 63, {ViewWidth::W4, ViewWidth::W8, ViewWidth::W16}, {}});
     return d;
 }
-/** @brief Descriptor del INTERPRETE (banco ancho de la VM, TargetTraits sintetico). */
+/** @brief Descriptor del INTERPRETE (banco ancho de la VM, TargetTraits
+ * sintetico). */
 inline TargetDescriptor descriptor_interp() {
     TargetDescriptor d;
     d.name = "interp";
     TargetTraits tr;
-    tr.pointer_size   = 8;
+    tr.pointer_size = 8;
     tr.is_two_address = false;
     const size_t GP = static_cast<size_t>(ResourceClass::GP);
     const size_t FP = static_cast<size_t>(ResourceClass::FP_VECTOR);
-    for (uint8_t r = 0; r <= 15; ++r)  tr.classes[GP].allocatable.push_back(r);
-    for (uint8_t r = 16; r <= 31; ++r) tr.classes[FP].allocatable.push_back(r);
+    for (uint8_t r = 0; r <= 15; ++r)
+        tr.classes[GP].allocatable.push_back(r);
+    for (uint8_t r = 16; r <= 31; ++r)
+        tr.classes[FP].allocatable.push_back(r);
     tr.classes[GP].ret_reg = 0;
     tr.classes[FP].ret_reg = 16;
-    d.traits  = std::move(tr);
+    d.traits = std::move(tr);
     d.classes = make_class_specs(
         ClassSpec{0, 15, gp_widths(8), {}},
-        ClassSpec{16, 31,
-                  {ViewWidth::W4, ViewWidth::W8, ViewWidth::W16,
-                   ViewWidth::W32, ViewWidth::W64}, {}});
+        ClassSpec{16,
+                  31,
+                  {ViewWidth::W4, ViewWidth::W8, ViewWidth::W16, ViewWidth::W32,
+                   ViewWidth::W64},
+                  {}});
     return d;
 }
 
 /**
- * @brief Descriptor x86-64 desde un @c TargetRegInfo YA construido (el del PATH real:
+ * @brief Descriptor x86-64 desde un @c TargetRegInfo YA construido (el del PATH
+ * real:
  *        @c target_x86_64_vm_abi del JIT, @c target.reg_info() del AOT...).  El
- *        ClassSpec x86-64 es fijo (GP 0-15, XMM 16-31 con VEC_ACC 26-29); solo las
- *        traits (allocatable / reservas / preservation) vienen del @p tri -> el banco
- *        describe EXACTAMENTE el mismo problema que ve el backend (rewrite) de ese path.
+ *        ClassSpec x86-64 es fijo (GP 0-15, XMM 16-31 con VEC_ACC 26-29); solo
+ * las traits (allocatable / reservas / preservation) vienen del @p tri -> el
+ * banco describe EXACTAMENTE el mismo problema que ve el backend (rewrite) de
+ * ese path.
  */
-inline TargetDescriptor descriptor_x86_64_from_reginfo(const TargetRegInfo &tri,
-                                                       const BackendCaps &caps) {
+inline TargetDescriptor
+descriptor_x86_64_from_reginfo(const TargetRegInfo &tri,
+                               const BackendCaps &caps) {
     TargetDescriptor d;
-    d.name    = "x86-64";
-    d.traits  = target_traits_from_reginfo(tri);
+    d.name = "x86-64";
+    d.traits = target_traits_from_reginfo(tri);
     /* El tope de la clase ancha sale del OBJETIVO, no de un numero fijo: con
      * AVX-512 y una funcion que no emite coma flotante propia son 32 ranuras
      * (ids 16..47) en vez de 16.  Se toma del ultimo asignable que declare. */
@@ -698,17 +737,21 @@ inline TargetDescriptor descriptor_x86_64_from_reginfo(const TargetRegInfo &tri,
         if (r > fp_top) fp_top = r;
     d.classes = make_class_specs(
         ClassSpec{0, 15, gp_widths(8), {}},
-        ClassSpec{16, fp_top, x86_fp_widths(caps), {26, 27, 28, 29}}); // XMM10-13.
+        ClassSpec{
+            16, fp_top, x86_fp_widths(caps), {26, 27, 28, 29}}); // XMM10-13.
     return d;
 }
 
 // --- Wrappers de conveniencia (descriptor + banco) ---
-inline PhysicalRegisterBank physical_bank_x86_64(bool sysv, const BackendCaps &caps) {
+inline PhysicalRegisterBank physical_bank_x86_64(bool sysv,
+                                                 const BackendCaps &caps) {
     return build_physical_bank(descriptor_x86_64(sysv, caps));
 }
-/** @brief Banco x86-64 desde el @c TargetRegInfo del path real (JIT VM_ABI o AOT). */
-inline PhysicalRegisterBank physical_bank_x86_64_from_reginfo(const TargetRegInfo &tri,
-                                                              const BackendCaps &caps) {
+/** @brief Banco x86-64 desde el @c TargetRegInfo del path real (JIT VM_ABI o
+ * AOT). */
+inline PhysicalRegisterBank
+physical_bank_x86_64_from_reginfo(const TargetRegInfo &tri,
+                                  const BackendCaps &caps) {
     return build_physical_bank(descriptor_x86_64_from_reginfo(tri, caps));
 }
 inline PhysicalRegisterBank physical_bank_x86_32() {
@@ -727,18 +770,20 @@ inline PhysicalRegisterBank physical_bank_interp() {
 //  (TargetRegInfo -> TargetTraits -> TargetDescriptor -> banco).
 // ===========================================================================
 
-/** @struct RoundTripReport @brief Resultado de validar un banco vs su target. */
+/** @struct RoundTripReport @brief Resultado de validar un banco vs su target.
+ */
 struct RoundTripReport {
-    bool        ok = true;   ///< true si allocatable/scratch re-derivados coinciden.
-    std::string mismatch;    ///< primer desajuste (si @c !ok).
+    bool ok = true; ///< true si allocatable/scratch re-derivados coinciden.
+    std::string mismatch; ///< primer desajuste (si @c !ok).
     /// Ids con reserva PLATFORM implicita (reservas que el target ocultaba).
     std::vector<uint8_t> unnamed_reserved;
 };
 
-/** @brief Valida que @p b re-deriva exactamente el allocatable/scratch de @p t. */
-inline RoundTripReport physical_bank_roundtrip_check(
-    const PhysicalRegisterBank &b, const TargetRegInfo &t) {
-
+/** @brief Valida que @p b re-deriva exactamente el allocatable/scratch de @p t.
+ */
+inline RoundTripReport
+physical_bank_roundtrip_check(const PhysicalRegisterBank &b,
+                              const TargetRegInfo &t) {
     RoundTripReport rep;
     auto sorted = [](std::vector<uint8_t> v) {
         std::sort(v.begin(), v.end());
@@ -749,9 +794,9 @@ inline RoundTripReport physical_bank_roundtrip_check(
         std::vector<uint8_t> alloc, scratch;
         for (const auto &l : b.lanes) {
             if (l.cls != rcls) continue;
-            if (l.reserve.is_free())    alloc.push_back(l.id);
+            if (l.reserve.is_free()) alloc.push_back(l.id);
             if (l.reserve.is_scratch()) scratch.push_back(l.id);
-            if (l.reserve.implicit)     rep.unnamed_reserved.push_back(l.id);
+            if (l.reserve.implicit) rep.unnamed_reserved.push_back(l.id);
         }
         if (sorted(alloc) != sorted(t.allocatable[ci])) {
             rep.ok = false;

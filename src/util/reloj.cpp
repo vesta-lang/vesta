@@ -78,9 +78,9 @@ inline uint64_t leer_steady() {
 
 /// Estado del modulo: que reloj se usa y a cuanto tiempo equivale un tick.
 struct Estado {
-    bool   usar_tsc = false;
+    bool usar_tsc = false;
     double ns_por_tick = 1.0;
-    Info   info;
+    Info info;
 };
 
 /**
@@ -98,7 +98,7 @@ Estado calibrar() {
     e.info.tsc_invariante = tsc_es_invariante();
     if (e.info.tsc_invariante) {
         const uint64_t t0 = leer_tsc();
-        const auto     w0 = std::chrono::steady_clock::now();
+        const auto w0 = std::chrono::steady_clock::now();
         /* Espera activa corta: dormir devolveria el control al sistema y el
          * intervalo real seria otro.  Cinco milisegundos bastan para que la
          * granularidad del reloj de referencia (100 ns) no pese. */
@@ -113,7 +113,8 @@ Estado calibrar() {
         const uint64_t ticks = t1 - t0;
         if (ticks > 0 && ns > 0) {
             e.usar_tsc = true;
-            e.ns_por_tick = static_cast<double>(ns) / static_cast<double>(ticks);
+            e.ns_por_tick =
+                static_cast<double>(ns) / static_cast<double>(ticks);
             e.info.fuente = "tsc";
         }
     }
@@ -139,7 +140,7 @@ Estado calibrar() {
 #endif
                                       : leer_steady();
         uint64_t b = a;
-        int      giros = 0;
+        int giros = 0;
         while (b == a && giros < 1000000) {
             b = e.usar_tsc ?
 #ifdef VESTA_RELOJ_X86
@@ -163,9 +164,9 @@ Estado calibrar() {
     /* Coste: lo que tarda una lectura, repartido sobre muchas para que la
      * propia granularidad no lo domine. */
     {
-        constexpr int  kN = 20000;
-        const auto     c0 = std::chrono::steady_clock::now();
-        uint64_t       sumidero = 0;
+        constexpr int kN = 20000;
+        const auto c0 = std::chrono::steady_clock::now();
+        uint64_t sumidero = 0;
         /* Se lee el reloj DIRECTAMENTE, no por @ref ahora.  Esa consulta el
          * estado, y el estado es justo lo que se esta construyendo aqui:
          * volver a entrar en la inicializacion de un estatico local se queda
@@ -178,7 +179,7 @@ Estado calibrar() {
             sumidero += leer_steady();
 #endif
         }
-        const auto      c1 = std::chrono::steady_clock::now();
+        const auto c1 = std::chrono::steady_clock::now();
         const long long ns =
             std::chrono::duration_cast<std::chrono::nanoseconds>(c1 - c0)
                 .count();
@@ -212,7 +213,9 @@ long long a_ns(uint64_t ticks) {
     return static_cast<long long>(static_cast<double>(ticks) * e.ns_por_tick);
 }
 
-const Info &info() { return estado().info; }
+const Info &info() {
+    return estado().info;
+}
 
 } // namespace reloj
 } // namespace util

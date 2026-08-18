@@ -10,9 +10,9 @@
  * @brief Fase 0.5: el PROBLEMA abstracto de asignacion (SSA sintetico) + la
  *        abstraccion LiveRanges -> Interference.  SIN codigo real.
  *
- * Objetivo de la Fase 0.5: probar que el MODELO abstracto es FIEL antes de tocar
- * el compilador real.  Se trabaja sobre SSA SINTETICO (rangos de vida definidos a
- * mano o generados) para no depender del IR:
+ * Objetivo de la Fase 0.5: probar que el MODELO abstracto es FIEL antes de
+ * tocar el compilador real.  Se trabaja sobre SSA SINTETICO (rangos de vida
+ * definidos a mano o generados) para no depender del IR:
  *
  *     AbstractProblem (SSA sintetico: LiveRanges + ValueRequirements)
  *              |
@@ -27,7 +27,8 @@
  * (coloring.h) DEBE encontrarlo.  Esa es la propiedad que valida el round-trip.
  *
  * i18n: produce DATOS (grafo/numeros), no diagnosticos -> sin catalogo.
- * Fase 0.5: ADITIVO, funciones puras, sin consumidores (solo el test/prototipo).
+ * Fase 0.5: ADITIVO, funciones puras, sin consumidores (solo el
+ * test/prototipo).
  */
 
 #ifndef VESTA_CODEGEN_RBANK_ABSTRACT_PROBLEM_H
@@ -50,14 +51,15 @@ namespace rbank {
  * @brief Un valor del SSA sintetico: su rango de vida [start,end] + sus Facts.
  *
  * SSA: un valor tiene UN solo punto de definicion (@c start) y vive hasta su
- * ultimo uso (@c end, inclusive, @c end>=start).  @c req son los Facts del valor
- * (clase/ancho/fixed_reg/...) -- los mismos ValueRequirements del modelo real.
+ * ultimo uso (@c end, inclusive, @c end>=start).  @c req son los Facts del
+ * valor (clase/ancho/fixed_reg/...) -- los mismos ValueRequirements del modelo
+ * real.
  */
 struct AbstractValue {
-    uint32_t          value_id = 0;
-    uint32_t          start    = 0; ///< posicion de definicion (SSA: unica).
-    uint32_t          end      = 0; ///< ultima posicion de uso (>= start).
-    ValueRequirements req;          ///< Facts del valor (clase/ancho/pin/...).
+    uint32_t value_id = 0;
+    uint32_t start = 0;    ///< posicion de definicion (SSA: unica).
+    uint32_t end = 0;      ///< ultima posicion de uso (>= start).
+    ValueRequirements req; ///< Facts del valor (clase/ancho/pin/...).
     /// Con quien le CONVIENE compartir lane, o -1.  Es una PREFERENCIA, no una
     /// exigencia: si se cumple, el movimiento que copiaria uno en otro
     /// desaparece; si no se puede, el codigo sigue siendo correcto y solo
@@ -79,15 +81,16 @@ struct AbstractValue {
 
 /**
  * @struct AbstractProblem
- * @brief Conjunto de valores del SSA sintetico (los LiveRanges de una "funcion") +
- *        el grafo de AFINIDAD (@c CopyGraphFacts, Fact de primer nivel que el
- *        coalescing consume).  En aislamiento el grafo es un input sintetico; en
- *        produccion sera @c snapshot.query<AffinityGraphFacts>() (alimentado por
+ * @brief Conjunto de valores del SSA sintetico (los LiveRanges de una
+ * "funcion") + el grafo de AFINIDAD (@c CopyGraphFacts, Fact de primer nivel
+ * que el coalescing consume).  En aislamiento el grafo es un input sintetico;
+ * en produccion sera @c snapshot.query<AffinityGraphFacts>() (alimentado por
  *        ssa_coalesce).  El problema TIRA del Fact -- no lo inventa.
  */
 struct AbstractProblem {
     std::vector<AbstractValue> values;
-    analysis::AffinityGraphFacts affinity; ///< afinidades (Fact; lo consume F3).
+    analysis::AffinityGraphFacts
+        affinity; ///< afinidades (Fact; lo consume F3).
     /// Array plano con los tramos de TODOS los valores; cada uno mira su
     /// ventana via @c tramos_off / @c tramos_n.  Una sola reserva por problema.
     std::vector<std::pair<uint32_t, uint32_t>> tramos;
@@ -117,11 +120,13 @@ struct AbstractProblem {
      * @param b El otro.
      * @return true si comparten algun instante.
      */
-    bool coinciden(const AbstractValue &a, const AbstractValue &b) const noexcept {
+    bool coinciden(const AbstractValue &a,
+                   const AbstractValue &b) const noexcept {
         // Descarte barato: sin solape de envolventes no hay nada que mirar, y
         // es el caso mayoritario.
         if (a.end < b.start || b.end < a.start) return false;
-        if (a.tramos_n == 0 && b.tramos_n == 0) return true; // dos tramos unicos
+        if (a.tramos_n == 0 && b.tramos_n == 0)
+            return true; // dos tramos unicos
         const uint32_t na = n_tramos(a), nb = n_tramos(b);
         for (uint32_t i = 0; i < na; ++i) {
             const std::pair<uint32_t, uint32_t> ra = tramo(a, i);
@@ -145,13 +150,14 @@ struct AbstractProblem {
  * al problema (@c AbstractProblem::coinciden), que si los mira.  Esta version
  * sirve donde solo interesa el envolvente y como descarte barato.
  */
-inline bool ranges_overlap(const AbstractValue &a, const AbstractValue &b) noexcept {
+inline bool ranges_overlap(const AbstractValue &a,
+                           const AbstractValue &b) noexcept {
     return !(a.end < b.start || b.end < a.start);
 }
 
 /**
- * @brief ABSTRACCION: LiveRanges -> Interference.  Emite una arista INTERFERE por
- *        cada par de valores que viven A LA VEZ.  Funcion PURA y determinista
+ * @brief ABSTRACCION: LiveRanges -> Interference.  Emite una arista INTERFERE
+ * por cada par de valores que viven A LA VEZ.  Funcion PURA y determinista
  *        (mismo problema -> mismo grafo) -> la abstraccion es reversible en el
  *        sentido del round-trip: re-abstraer da SIEMPRE lo mismo.
  *
@@ -176,21 +182,25 @@ inline ConstraintSet build_interference(const AbstractProblem &p) {
 /**
  * @brief Extrae los @c ValueRequirements del problema (para el verificador).
  */
-inline std::vector<ValueRequirements> collect_requirements(const AbstractProblem &p) {
+inline std::vector<ValueRequirements>
+collect_requirements(const AbstractProblem &p) {
     std::vector<ValueRequirements> out;
     out.reserve(p.values.size());
-    for (const AbstractValue &av : p.values) out.push_back(av.req);
+    for (const AbstractValue &av : p.values)
+        out.push_back(av.req);
     return out;
 }
 
 /**
  * @brief Numero cromatico teorico de una CLASE: el maximo solapamiento (clique)
- *        entre los valores de esa clase.  En un interval graph = presion maxima.
+ *        entre los valores de esa clase.  En un interval graph = presion
+ * maxima.
  * @param cls  clase de recurso a medir (GP/FP_VECTOR/...).
  *
  * Barrido por eventos: +1 al empezar un rango, -1 al terminar.  El pico es el
  * numero de valores de la clase vivos a la vez = lanes MINIMAS necesarias para
- * colorear sin spill.  (Ignora fixed_reg/aliasing; es la cota del interval graph.)
+ * colorear sin spill.  (Ignora fixed_reg/aliasing; es la cota del interval
+ * graph.)
  */
 inline uint32_t max_overlap(const AbstractProblem &p, ResourceClass cls) {
     // Eventos (pos, delta): +1 en start, -1 en end+1 (rango cerrado).
@@ -204,7 +214,8 @@ inline uint32_t max_overlap(const AbstractProblem &p, ResourceClass cls) {
     // las ALTAS (+1) para no contar como solapados dos rangos que solo se tocan
     // en el borde (a.end+1 == b.start).
     std::sort(ev.begin(), ev.end(),
-              [](const std::pair<uint32_t, int> &x, const std::pair<uint32_t, int> &y) {
+              [](const std::pair<uint32_t, int> &x,
+                 const std::pair<uint32_t, int> &y) {
                   if (x.first != y.first) return x.first < y.first;
                   return x.second < y.second; // -1 antes que +1.
               });

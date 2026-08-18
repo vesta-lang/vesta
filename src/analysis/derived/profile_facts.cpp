@@ -27,11 +27,13 @@ namespace {
 /// Cota superior del trip-count para evitar pesos absurdos con ramas 0.
 constexpr double kMaxTrip = 1.0e6;
 
-/** @brief Linea fuente del branch condicional de la cabecera @p header (0 si no). */
+/** @brief Linea fuente del branch condicional de la cabecera @p header (0 si
+ * no). */
 uint32_t header_branch_line(const IrFunction &fn, IrBlockId header) {
     if (static_cast<size_t>(header) >= fn.blocks.size()) return 0;
     for (const ir::IrInstr &ins : fn.blocks[header].instrs) {
-        // Un branch condicional tiene false_block (dos salidas) -> es la condicion.
+        // Un branch condicional tiene false_block (dos salidas) -> es la
+        // condicion.
         if (ins.false_block != ir::IR_NO_BLOCK && ins.source_line != 0)
             return ins.source_line;
     }
@@ -41,14 +43,16 @@ uint32_t header_branch_line(const IrFunction &fn, IrBlockId header) {
 /**
  * @brief Trip-count APROXIMADO de un branch de cabecera (v1): la rama COMUN es
  *        continuar (mayor conteo), la RARA es salir (menor).  trip ~ max/min.
- *        Ignora multiples exits / switches (los cubrira CFGProfile/LoopProfile).
+ *        Ignora multiples exits / switches (los cubrira
+ * CFGProfile/LoopProfile).
  * @return 0 si no hay perfil de esa linea.
  */
 double trip_from_counts(uint64_t taken, uint64_t not_taken) {
     const uint64_t hi = taken > not_taken ? taken : not_taken;
     const uint64_t lo = taken > not_taken ? not_taken : taken;
-    if (hi == 0) return 0.0;            // sin muestras
-    if (lo == 0) return kMaxTrip;       // rama de salida nunca vista -> muchisimas iters
+    if (hi == 0) return 0.0; // sin muestras
+    if (lo == 0)
+        return kMaxTrip; // rama de salida nunca vista -> muchisimas iters
     double t = static_cast<double>(hi) / static_cast<double>(lo);
     return t > kMaxTrip ? kMaxTrip : t;
 }
@@ -89,7 +93,10 @@ ProfileFacts compute_profile_facts(const IrFunction &fn, const LoopFacts &loops,
         for (uint32_t L = loops.innermost(static_cast<IrBlockId>(b));
              L != LoopFacts::NO_LOOP; L = loops.parent_of(L)) {
             const double tc = pf.trip_of(L);
-            if (tc > 0.0) { w *= tc; known = true; }
+            if (tc > 0.0) {
+                w *= tc;
+                known = true;
+            }
         }
         pf.block_weight[b] = known ? w : 0.0;
     }

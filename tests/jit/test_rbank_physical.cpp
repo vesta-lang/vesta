@@ -7,7 +7,8 @@
 
 /**
  * @file tests/jit/test_rbank_physical.cpp
- * @brief Test del @c PhysicalRegisterBank (Fase 0 del allocator de banco ancho).
+ * @brief Test del @c PhysicalRegisterBank (Fase 0 del allocator de banco
+ * ancho).
  *
  * Valida la CONSOLIDACION de arquitectura: que el banco fisico unico representa
  * FIELMENTE los 4 targets existentes (x86-64 SysV/Win64, x86-32, AArch64) MAS
@@ -27,13 +28,13 @@ using namespace codegen::rbank;
 static int g_checks = 0;
 static int g_fail = 0;
 
-#define CHECK(cond, msg)                                                     \
-    do {                                                                     \
-        ++g_checks;                                                          \
-        if (!(cond)) {                                                       \
-            ++g_fail;                                                        \
-            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);        \
-        }                                                                    \
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fail;                                                          \
+            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);          \
+        }                                                                      \
     } while (0)
 
 /** @brief Cuenta lanes de una clase con una @c ReserveKind (provenance). */
@@ -73,10 +74,12 @@ static void check_roundtrip(const PhysicalRegisterBank &b,
                 b.allocatable_count(ResourceClass::GP, false),
                 b.allocatable_count(ResourceClass::FP_VECTOR, false),
                 rep.unnamed_reserved.size());
-    CHECK(rep.ok, rep.mismatch.empty() ? "round-trip fallo" : rep.mismatch.c_str());
+    CHECK(rep.ok,
+          rep.mismatch.empty() ? "round-trip fallo" : rep.mismatch.c_str());
     if (!rep.unnamed_reserved.empty()) {
         std::printf("    reservas IMPLICITAS superficiadas (ids):");
-        for (uint8_t id : rep.unnamed_reserved) std::printf(" %u", id);
+        for (uint8_t id : rep.unnamed_reserved)
+            std::printf(" %u", id);
         std::printf("\n");
     }
 }
@@ -84,21 +87,21 @@ static void check_roundtrip(const PhysicalRegisterBank &b,
 int main() {
     std::printf("=== test_rbank_physical (Fase 0: banco fisico unico) ===\n");
 
-    const BackendCaps avx2   = caps_with(/*avx=*/true,  /*avx512=*/false);
-    const BackendCaps sse2   = caps_with(/*avx=*/false, /*avx512=*/false);
-    const BackendCaps avx512 = caps_with(/*avx=*/true,  /*avx512=*/true);
+    const BackendCaps avx2 = caps_with(/*avx=*/true, /*avx512=*/false);
+    const BackendCaps sse2 = caps_with(/*avx=*/false, /*avx512=*/false);
+    const BackendCaps avx512 = caps_with(/*avx=*/true, /*avx512=*/true);
 
     // --- Round-trip de los 5 bancos ---
     std::printf("\n[round-trip fidelidad vs TargetRegInfo]\n");
     PhysicalRegisterBank sysv = physical_bank_x86_64(true, avx2);
-    PhysicalRegisterBank win  = physical_bank_x86_64(false, avx2);
-    PhysicalRegisterBank x32  = physical_bank_x86_32();
-    PhysicalRegisterBank a64  = physical_bank_arm64(avx2);
-    PhysicalRegisterBank itp  = physical_bank_interp();
-    check_roundtrip(sysv, target_x86_64_abi(true),  "x86-64-sysv");
-    check_roundtrip(win,  target_x86_64_abi(false), "x86-64-win64");
-    check_roundtrip(x32,  target_x86_32(),          "x86-32");
-    check_roundtrip(a64,  build_arm64_target(),     "arm64");
+    PhysicalRegisterBank win = physical_bank_x86_64(false, avx2);
+    PhysicalRegisterBank x32 = physical_bank_x86_32();
+    PhysicalRegisterBank a64 = physical_bank_arm64(avx2);
+    PhysicalRegisterBank itp = physical_bank_interp();
+    check_roundtrip(sysv, target_x86_64_abi(true), "x86-64-sysv");
+    check_roundtrip(win, target_x86_64_abi(false), "x86-64-win64");
+    check_roundtrip(x32, target_x86_32(), "x86-32");
+    check_roundtrip(a64, build_arm64_target(), "arm64");
     // interp usa un TargetRegInfo sintetico; lo reconstruimos identico.
     {
         RoundTripReport rep;
@@ -115,7 +118,8 @@ int main() {
 
     // --- x86-64: el hallazgo del diagnostico como DATO del modelo ---
     std::printf("\n[x86-64: VEC_ACC demand-driven + views por caps]\n");
-    CHECK(sysv.lane_count(ResourceClass::FP_VECTOR) == 16, "x86-64 FP != 16 lanes");
+    CHECK(sysv.lane_count(ResourceClass::FP_VECTOR) == 16,
+          "x86-64 FP != 16 lanes");
     CHECK(count_kind(sysv, ResourceClass::FP_VECTOR, ReserveKind::VEC_ACC) == 4,
           "x86-64 VEC_ACC != 4 (XMM10-13)");
     CHECK(count_kind(sysv, ResourceClass::FP_VECTOR, ReserveKind::SCRATCH) == 2,
@@ -130,8 +134,10 @@ int main() {
         const Lane *xmm10 = sysv.by_id(26);
         CHECK(xmm10 && xmm10->reserve.reason == ReserveReason::OPTIMIZATION,
               "XMM10 no es reserva de OPTIMIZATION");
-        CHECK(xmm10 && xmm10->reserve.kind == ReserveKind::VEC_ACC, "XMM10 no es VEC_ACC");
-        CHECK(xmm10 && xmm10->reserve.demand_driven, "XMM10 VEC_ACC no es demand-driven");
+        CHECK(xmm10 && xmm10->reserve.kind == ReserveKind::VEC_ACC,
+              "XMM10 no es VEC_ACC");
+        CHECK(xmm10 && xmm10->reserve.demand_driven,
+              "XMM10 VEC_ACC no es demand-driven");
         CHECK(xmm10 && xmm10->allocatable(false) && !xmm10->allocatable(true),
               "XMM10 no se libera cuando no hay reduccion");
     }
@@ -142,15 +148,18 @@ int main() {
         // avx2: XMM0 presenta 8/16/32, NO 64.
         const Lane *x0_avx = sysv.by_id(16);
         CHECK(x0_avx && x0_avx->supports(ViewWidth::W16), "avx2: XMM0 sin W16");
-        CHECK(x0_avx && x0_avx->supports(ViewWidth::W32), "avx2: XMM0 sin W32 (YMM)");
-        CHECK(x0_avx && !x0_avx->supports(ViewWidth::W64), "avx2: XMM0 con W64 sin AVX512");
+        CHECK(x0_avx && x0_avx->supports(ViewWidth::W32),
+              "avx2: XMM0 sin W32 (YMM)");
+        CHECK(x0_avx && !x0_avx->supports(ViewWidth::W64),
+              "avx2: XMM0 con W64 sin AVX512");
     }
     {
         // sse2: XMM0 presenta 16, NO 32.
         PhysicalRegisterBank b = physical_bank_x86_64(true, sse2);
         const Lane *x0 = b.by_id(16);
         CHECK(x0 && x0->supports(ViewWidth::W16), "sse2: XMM0 sin W16");
-        CHECK(x0 && !x0->supports(ViewWidth::W32), "sse2: XMM0 con W32 sin AVX");
+        CHECK(x0 && !x0->supports(ViewWidth::W32),
+              "sse2: XMM0 con W32 sin AVX");
     }
     {
         // avx512: XMM0 presenta 64 (ZMM).
@@ -168,7 +177,8 @@ int main() {
               "sysv XMM0 no VOLATILE");
         // arm64: v8 (id 40) es callee-saved -> PRESERVED.
         const Lane *v8 = a64.by_id(40);
-        CHECK(v8 && v8->preservation_of(ViewWidth::W16) == SavePolicy::PRESERVED,
+        CHECK(v8 &&
+                  v8->preservation_of(ViewWidth::W16) == SavePolicy::PRESERVED,
               "arm64 v8 no PRESERVED en W16");
         CHECK(v8 && v8->preservation_of(ViewWidth::W8) == SavePolicy::PRESERVED,
               "arm64 v8 no PRESERVED en W8");
@@ -194,11 +204,13 @@ int main() {
     CHECK(x32.lane_count(ResourceClass::FP_VECTOR) == 0, "x86-32 FP != 0");
     CHECK(x32.lane_count(ResourceClass::GP) == 8, "x86-32 GP != 8");
     CHECK(a64.lane_count(ResourceClass::GP) == 31, "arm64 GP != 31 (x0-x30)");
-    CHECK(a64.lane_count(ResourceClass::FP_VECTOR) == 32, "arm64 FP != 32 (v0-v31)");
+    CHECK(a64.lane_count(ResourceClass::FP_VECTOR) == 32,
+          "arm64 FP != 32 (v0-v31)");
     {
         const Lane *v0 = a64.by_id(32);
         CHECK(v0 && v0->supports(ViewWidth::W16), "arm64 v0 sin W16 (Q)");
-        CHECK(v0 && !v0->supports(ViewWidth::W32), "arm64 v0 con W32 (sin SVE)");
+        CHECK(v0 && !v0->supports(ViewWidth::W32),
+              "arm64 v0 con W32 (sin SVE)");
         const Lane *f0 = itp.by_id(16);
         CHECK(f0 && f0->supports(ViewWidth::W64), "interp f0 sin W64 (ZMM VM)");
     }

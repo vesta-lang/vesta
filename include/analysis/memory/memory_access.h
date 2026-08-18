@@ -66,16 +66,17 @@ int32_t memory_access_size_bytes(int32_t raw);
 /// - Calls y el resto -> touches=false (no es un acceso a memoria localizable;
 ///   el efecto de un call lo da EffectAnalysis, no este vocabulario).
 struct MemoryAccess {
-    bool touches = false;  ///< accede a memoria (localizable u opaca)
+    bool touches = false; ///< accede a memoria (localizable u opaca)
     bool is_load = false;
     bool is_store = false;
-    bool opaque = false;   ///< toca memoria pero NO se puede localizar (top)
+    bool opaque = false; ///< toca memoria pero NO se puede localizar (top)
     std::vector<effects::AbstractLoc> reads;  ///< localizaciones leidas
     std::vector<effects::AbstractLoc> writes; ///< localizaciones escritas
 };
 
 /// Calcula el @c MemoryAccess de @p ins usando la tabla points-to @p pt.  El
-/// consumidor NO construye pt: lo recibe (Regla 1 -- base de hechos compartida).
+/// consumidor NO construye pt: lo recibe (Regla 1 -- base de hechos
+/// compartida).
 MemoryAccess memory_access(const ir::IrInstr &ins, const PointsTo &pt);
 
 } // namespace analysis

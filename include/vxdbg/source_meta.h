@@ -50,7 +50,6 @@ namespace vxdbg {
 /// Version del esquema de esta capa.
 static constexpr uint32_t SOURCE_SCHEMA_VERSION = 1;
 
-
 /**
  * @brief Un fichero de codigo, una sola vez.
  *
@@ -161,8 +160,8 @@ enum class AttributeKind : uint8_t {
 struct Attribute {
     std::string name;
     AttributeKind kind = AttributeKind::String;
-    std::string text;         ///< si @ref AttributeKind::String
-    int64_t number = 0;       ///< si Integer o Bool
+    std::string text;           ///< si @ref AttributeKind::String
+    int64_t number = 0;         ///< si Integer o Bool
     LanguageEntityId reference; ///< si Reference
 };
 

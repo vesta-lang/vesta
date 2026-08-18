@@ -21,24 +21,19 @@ uint64_t type_size_bytes(ir::IrType t) {
     switch (t) {
     case ir::IrType::I8:
     case ir::IrType::U8:
-    case ir::IrType::BOOL:
-        return 1;
+    case ir::IrType::BOOL: return 1;
     case ir::IrType::I16:
-    case ir::IrType::U16:
-        return 2;
+    case ir::IrType::U16: return 2;
     case ir::IrType::I32:
     case ir::IrType::U32:
     case ir::IrType::F32:
-    case ir::IrType::HANDLE:
-        return 4;
+    case ir::IrType::HANDLE: return 4;
     case ir::IrType::I64:
     case ir::IrType::U64:
     case ir::IrType::F64:
-    case ir::IrType::PTR:
-        return 8;
+    case ir::IrType::PTR: return 8;
     case ir::IrType::VOID:
-    default:
-        return 0;
+    default: return 0;
     }
 }
 
@@ -58,77 +53,172 @@ bool is_alloc_op(ir::IrOp op) {
     case Op::STRCONV:
     case Op::STRFLAT:
     case Op::STRRESERVE:
-    case Op::STRINTERN:
-        return true;
-    default:
-        return false;
+    case Op::STRINTERN: return true;
+    default: return false;
     }
 }
 
 /// @c true si @p op NO tiene efectos de dato observables (whitelist).  Lo que
 /// no esta aqui (ni es CALL/TAILCALL estatico, que se compone) se considera
-/// IMPURO -> soundness: un op nuevo/desconocido bloquea @c @pure hasta anadirlo.
-/// THROW/PANIC son efectos de CONTROL (se rastrean aparte), no de dato -> puros.
-/// Las allocaciones son puras (una funcion pura puede construir su retorno).
+/// IMPURO -> soundness: un op nuevo/desconocido bloquea @c @pure hasta
+/// anadirlo. THROW/PANIC son efectos de CONTROL (se rastrean aparte), no de
+/// dato -> puros. Las allocaciones son puras (una funcion pura puede construir
+/// su retorno).
 bool is_pure_op(ir::IrOp op) {
     using Op = ir::IrOp;
     switch (op) {
     // Constantes / movimientos / direcciones.
-    case Op::CONST: case Op::MOV: case Op::NOP:
-    case Op::STR_LIT_ADDR: case Op::LABEL_ADDR: case Op::SECTION_REF:
+    case Op::CONST:
+    case Op::MOV:
+    case Op::NOP:
+    case Op::STR_LIT_ADDR:
+    case Op::LABEL_ADDR:
+    case Op::SECTION_REF:
     // Aritmetica entera.
-    case Op::ADD: case Op::SUB: case Op::MUL: case Op::DIV: case Op::MOD:
-    case Op::NEG: case Op::IABS: case Op::IMIN: case Op::IMAX:
-    case Op::IMINU: case Op::IMAXU: case Op::ILOG2:
+    case Op::ADD:
+    case Op::SUB:
+    case Op::MUL:
+    case Op::DIV:
+    case Op::MOD:
+    case Op::NEG:
+    case Op::IABS:
+    case Op::IMIN:
+    case Op::IMAX:
+    case Op::IMINU:
+    case Op::IMAXU:
+    case Op::ILOG2:
     // Aritmetica float.
-    case Op::FADD: case Op::FSUB: case Op::FMUL: case Op::FDIV:
-    case Op::FNEG: case Op::FABS: case Op::FSQRT: case Op::FMIN: case Op::FMAX:
-    case Op::FFLOOR: case Op::FCEIL: case Op::FROUND: case Op::FTRUNC:
+    case Op::FADD:
+    case Op::FSUB:
+    case Op::FMUL:
+    case Op::FDIV:
+    case Op::FNEG:
+    case Op::FABS:
+    case Op::FSQRT:
+    case Op::FMIN:
+    case Op::FMAX:
+    case Op::FFLOOR:
+    case Op::FCEIL:
+    case Op::FROUND:
+    case Op::FTRUNC:
     // Vector (compute + reduccion local).
-    case Op::VEC_UNOP: case Op::VEC_BINOP: case Op::VEC_FMA:
-    case Op::VEC_BINOP_S: case Op::VEC_BCAST:
-    case Op::VEC_ACC_ZERO: case Op::VEC_ACC_ADD: case Op::VEC_ACC_FMA:
-    case Op::VEC_ACC_STORE: case Op::VEC_ACC_COMBINE:
+    case Op::VEC_UNOP:
+    case Op::VEC_BINOP:
+    case Op::VEC_FMA:
+    case Op::VEC_BINOP_S:
+    case Op::VEC_BCAST:
+    case Op::VEC_ACC_ZERO:
+    case Op::VEC_ACC_ADD:
+    case Op::VEC_ACC_FMA:
+    case Op::VEC_ACC_STORE:
+    case Op::VEC_ACC_COMBINE:
     // Bitwise.
-    case Op::AND: case Op::OR: case Op::XOR: case Op::NOT:
-    case Op::SHL: case Op::SHR: case Op::SAR:
-    case Op::CLZ: case Op::CTZ: case Op::POPCNT: case Op::BYTESWAP:
-    case Op::ROTL: case Op::ROTR:
+    case Op::AND:
+    case Op::OR:
+    case Op::XOR:
+    case Op::NOT:
+    case Op::SHL:
+    case Op::SHR:
+    case Op::SAR:
+    case Op::CLZ:
+    case Op::CTZ:
+    case Op::POPCNT:
+    case Op::BYTESWAP:
+    case Op::ROTL:
+    case Op::ROTR:
     // Comparaciones.
-    case Op::CMP_EQ: case Op::CMP_NE: case Op::CMP_LT: case Op::CMP_GT:
-    case Op::CMP_LE: case Op::CMP_GE: case Op::CMP_ULT: case Op::CMP_UGT:
-    case Op::CMP_ULE: case Op::CMP_UGE:
-    case Op::FCMP_EQ: case Op::FCMP_NE: case Op::FCMP_LT: case Op::FCMP_GT:
-    case Op::FCMP_LE: case Op::FCMP_GE:
+    case Op::CMP_EQ:
+    case Op::CMP_NE:
+    case Op::CMP_LT:
+    case Op::CMP_GT:
+    case Op::CMP_LE:
+    case Op::CMP_GE:
+    case Op::CMP_ULT:
+    case Op::CMP_UGT:
+    case Op::CMP_ULE:
+    case Op::CMP_UGE:
+    case Op::FCMP_EQ:
+    case Op::FCMP_NE:
+    case Op::FCMP_LT:
+    case Op::FCMP_GT:
+    case Op::FCMP_LE:
+    case Op::FCMP_GE:
     // Casts.
-    case Op::CAST: case Op::ZEXT: case Op::SEXT: case Op::TRUNC:
-    case Op::ITOF: case Op::UITOF: case Op::FTOI: case Op::FTOUI:
-    case Op::F32TOF64: case Op::F64TOF32: case Op::BITCAST:
+    case Op::CAST:
+    case Op::ZEXT:
+    case Op::SEXT:
+    case Op::TRUNC:
+    case Op::ITOF:
+    case Op::UITOF:
+    case Op::FTOI:
+    case Op::FTOUI:
+    case Op::F32TOF64:
+    case Op::F64TOF32:
+    case Op::BITCAST:
     // Control de flujo (los efectos de control se rastrean aparte).
-    case Op::BR: case Op::BR_COND: case Op::RET: case Op::UNREACHABLE:
-    case Op::PHI: case Op::SWITCH_DENSE: case Op::MATCH_VARIANT:
-    case Op::THROW: case Op::RETHROW: case Op::PANIC:
-    case Op::TRYENTER: case Op::TRYLEAVE: case Op::LANDINGPAD:
+    case Op::BR:
+    case Op::BR_COND:
+    case Op::RET:
+    case Op::UNREACHABLE:
+    case Op::PHI:
+    case Op::SWITCH_DENSE:
+    case Op::MATCH_VARIANT:
+    case Op::THROW:
+    case Op::RETHROW:
+    case Op::PANIC:
+    case Op::TRYENTER:
+    case Op::TRYLEAVE:
+    case Op::LANDINGPAD:
     // Lecturas (puras; para determinismo se afinara aparte).
-    case Op::LOAD: case Op::GETFIELD: case Op::ARRAY_LOAD: case Op::ARRAY_LEN:
-    case Op::GETSTATIC: case Op::GEP: case Op::GCDEREF_IR:
-    case Op::GC_DEREF_HOST: case Op::GC_HANDLE_FOR_PTR:
-    case Op::INSTANCEOF: case Op::CHECKCAST: case Op::ISNULL: case Op::UNWRAP:
-    case Op::REFLECT_COUNT: case Op::REFLECT_AT:
-    case Op::FINDCLASS: case Op::FINDMETHOD: case Op::FINDFIELD:
-    case Op::SHARED_STAT: case Op::READ_VM_REG:
-    case Op::GETPROC: case Op::GETVM: case Op::GETMGR:
-    case Op::GETPID: case Op::GETARGC: case Op::GETARG:
+    case Op::LOAD:
+    case Op::GETFIELD:
+    case Op::ARRAY_LOAD:
+    case Op::ARRAY_LEN:
+    case Op::GETSTATIC:
+    case Op::GEP:
+    case Op::GCDEREF_IR:
+    case Op::GC_DEREF_HOST:
+    case Op::GC_HANDLE_FOR_PTR:
+    case Op::INSTANCEOF:
+    case Op::CHECKCAST:
+    case Op::ISNULL:
+    case Op::UNWRAP:
+    case Op::REFLECT_COUNT:
+    case Op::REFLECT_AT:
+    case Op::FINDCLASS:
+    case Op::FINDMETHOD:
+    case Op::FINDFIELD:
+    case Op::SHARED_STAT:
+    case Op::READ_VM_REG:
+    case Op::GETPROC:
+    case Op::GETVM:
+    case Op::GETMGR:
+    case Op::GETPID:
+    case Op::GETARGC:
+    case Op::GETARG:
     // Alloc local + construccion de valores (allocar es puro).
     case Op::ALLOCA:
-    case Op::RAW_ALLOC: case Op::GC_ALLOC: case Op::GC_ALLOCP:
-    case Op::NEWOBJ: case Op::NEWOBJS: case Op::ARRAY_ALLOC:
-    case Op::MAKE_VARIANT: case Op::MAKE_CLOSURE:
-    case Op::STRMAKE: case Op::STRCAT: case Op::STRSLICE: case Op::STRFLAT:
-    case Op::STRHASH: case Op::STRINTERN: case Op::STRRAW: case Op::STRCONV:
-    case Op::STRRESERVE: case Op::STRLEN: case Op::STRCMP: case Op::STRGETBYTES:
-    case Op::SPECIALIZE:
-        return true;
+    case Op::RAW_ALLOC:
+    case Op::GC_ALLOC:
+    case Op::GC_ALLOCP:
+    case Op::NEWOBJ:
+    case Op::NEWOBJS:
+    case Op::ARRAY_ALLOC:
+    case Op::MAKE_VARIANT:
+    case Op::MAKE_CLOSURE:
+    case Op::STRMAKE:
+    case Op::STRCAT:
+    case Op::STRSLICE:
+    case Op::STRFLAT:
+    case Op::STRHASH:
+    case Op::STRINTERN:
+    case Op::STRRAW:
+    case Op::STRCONV:
+    case Op::STRRESERVE:
+    case Op::STRLEN:
+    case Op::STRCMP:
+    case Op::STRGETBYTES:
+    case Op::SPECIALIZE: return true;
     default:
         // STORE/SETFIELD/ARRAY_STORE/SETSTATIC/MEMCPY/*_FREE/ATOMIC_*/CALLN/
         // dinamicas/monitor/spawn/msg/future/DEF*/DL*/asm/... -> IMPURO.
@@ -157,12 +247,8 @@ FunctionFingerprint compute_fingerprint(const ir::IrFunction &fn,
                 fp.stack_bytes += ins.imm * type_size_bytes(ins.type);
                 break;
             case Op::THROW:
-            case Op::RETHROW:
-                fp.throws = true;
-                break;
-            case Op::PANIC:
-                fp.panics = true;
-                break;
+            case Op::RETHROW: fp.throws = true; break;
+            case Op::PANIC: fp.panics = true; break;
             case Op::CALL:
             case Op::TAILCALL:
             case Op::CALLN:
@@ -184,8 +270,9 @@ FunctionFingerprint compute_fingerprint(const ir::IrFunction &fn,
                 fp.pure_local = false; // efecto opaco.
                 break;
             case Op::INLINE_ASM: {
-                // `asm { }` nativo: se ANALIZA el cuerpo (efectos exactos) en vez
-                // de tratarlo como caja negra total.  El cuerpo NASM viaja en
+                // `asm { }` nativo: se ANALIZA el cuerpo (efectos exactos) en
+                // vez de tratarlo como caja negra total.  El cuerpo NASM viaja
+                // en
                 // @c func_name (lo pone el lowering de  AS).
                 /* Sin clases a proposito: de este bloque solo se preguntan
                  * el marco explicito y la pureza, y ninguna de las dos depende
@@ -193,21 +280,23 @@ FunctionFingerprint compute_fingerprint(const ir::IrFunction &fn,
                  * que es una eleccion y no un olvido. */
                 const vx::AsmBlockEffects e =
                     vx::asm_analyze_block_no_classes(ins.func_name, arch);
-                // El marco EXPLICITO (push/pop/sub rsp con inmediato) SI se ve en
-                // el texto -> se cuenta en el parcial medido.
+                // El marco EXPLICITO (push/pop/sub rsp con inmediato) SI se ve
+                // en el texto -> se cuenta en el parcial medido.
                 if (e.explicit_stack_bytes > 0)
                     fp.stack_bytes +=
                         static_cast<uint64_t>(e.explicit_stack_bytes);
                 // Pureza AFINADA: un asm que no toca memoria, no llama y no es
-                // atomico conserva la pureza local (p.ej. popcnt/aritmetica sobre
-                // registros).  Un mnemonico desconocido -> conservador (impuro).
+                // atomico conserva la pureza local (p.ej. popcnt/aritmetica
+                // sobre registros).  Un mnemonico desconocido -> conservador
+                // (impuro).
                 if (e.touches_mem || e.is_call || e.has_atomic || !e.known())
                     fp.pure_local = false;
                 // Un `call` externo dentro del asm hace el efecto no acotable.
                 if (e.is_call) fp.has_dynamic_call = true;
                 // El marco IMPLICITO de los enlaces register() (los spills y el
-                // guardado de callee-saved clobbered que decide el backend) NO es
-                // visible en el texto -> el TOTAL de los callers sigue usando el
+                // guardado de callee-saved clobbered que decide el backend) NO
+                // es visible en el texto -> el TOTAL de los callers sigue
+                // usando el
                 // @stack DECLARADO.  Retirarlo requiere el reporte del backend.
                 fp.frame_opaque = true;
                 break;
@@ -246,7 +335,8 @@ void compose_fingerprints(
     if (n == 0) return;
     std::unordered_map<std::string, uint32_t> idx;
     idx.reserve(n * 2 + 1);
-    for (uint32_t i = 0; i < n; ++i) idx.emplace(fps[i].function, i);
+    for (uint32_t i = 0; i < n; ++i)
+        idx.emplace(fps[i].function, i);
 
     // Marco de pila PROPIO a efectos del TOTAL: normalmente el medido
     // (`stack_bytes`), pero para una fn de marco OPACO (`asm { }`, cuyo frame
@@ -310,7 +400,8 @@ void compose_fingerprints(
                     continue;
                 }
                 const uint32_t j = it->second;
-                if (j == i) recursive = true; // arista de vuelta al inicio -> ciclo.
+                if (j == i)
+                    recursive = true; // arista de vuelta al inicio -> ciclo.
                 if (!visited[j]) stack.push_back(j);
             }
         }
@@ -349,8 +440,11 @@ void compose_fingerprints(
             const uint32_t v = dfs.back().first;
             const uint8_t fase = dfs.back().second;
             if (fase == 0) {
-                if (st[v] == 2) { dfs.pop_back(); continue; }
-                st[v] = 1;            // gris (en pila)
+                if (st[v] == 2) {
+                    dfs.pop_back();
+                    continue;
+                }
+                st[v] = 1;             // gris (en pila)
                 dfs.back().second = 1; // al desapilar, componer
                 for (const auto &callee : fps[v].calls) {
                     auto it = idx.find(callee);
@@ -363,12 +457,17 @@ void compose_fingerprints(
                 uint64_t best = 0; // maximo de los callees
                 for (const auto &callee : fps[v].calls) {
                     auto it = idx.find(callee);
-                    if (it == idx.end()) { best = STACK_UNBOUNDED; break; }
+                    if (it == idx.end()) {
+                        best = STACK_UNBOUNDED;
+                        break;
+                    }
                     const uint32_t j = it->second;
                     // Callee gris = arista de vuelta (ciclo); negro = hecho.
-                    const uint64_t d =
-                        (st[j] == 1) ? STACK_UNBOUNDED : memo[j];
-                    if (d == STACK_UNBOUNDED) { best = STACK_UNBOUNDED; break; }
+                    const uint64_t d = (st[j] == 1) ? STACK_UNBOUNDED : memo[j];
+                    if (d == STACK_UNBOUNDED) {
+                        best = STACK_UNBOUNDED;
+                        break;
+                    }
                     if (d > best) best = d;
                 }
                 memo[v] = (best == STACK_UNBOUNDED)
@@ -378,7 +477,8 @@ void compose_fingerprints(
             }
         }
     }
-    for (uint32_t i = 0; i < n; ++i) fps[i].stack_bytes_total = memo[i];
+    for (uint32_t i = 0; i < n; ++i)
+        fps[i].stack_bytes_total = memo[i];
 }
 
 std::vector<ContractCheck> verify_contracts(
@@ -387,7 +487,8 @@ std::vector<ContractCheck> verify_contracts(
     std::vector<ContractCheck> out;
     if (contracts.empty()) return out;
     // Nombre SIMPLE (ultimo segmento): el IR puede venir mangled por namespace
-    // (ns__f) o cualificado (ns.f); el contrato se declara con el nombre simple.
+    // (ns__f) o cualificado (ns.f); el contrato se declara con el nombre
+    // simple.
     auto simple = [](const std::string &q) -> std::string {
         size_t p = q.rfind("__");
         if (p != std::string::npos) return q.substr(p + 2);
@@ -402,7 +503,8 @@ std::vector<ContractCheck> verify_contracts(
     // cubre ambos.  ANTES solo se indexaba el simple: `simple("S__mal")` da
     // "mal", la clave del contrato es "S__mal", la busqueda fallaba y el
     // `continue` se tragaba el contrato EN SILENCIO -- o sea que ningun
-    // @pure/@alloc/@stack/@nothrow/@nopanic sobre un metodo se verificaba nunca.
+    // @pure/@alloc/@stack/@nothrow/@nopanic sobre un metodo se verificaba
+    // nunca.
     std::unordered_map<std::string, const FunctionFingerprint *> byname;
     byname.reserve(fps.size() * 4 + 1);
     for (const auto &f : fps) {
@@ -441,7 +543,10 @@ std::vector<ContractCheck> verify_contracts(
                 if (f.function.size() > suf.size() &&
                     f.function.compare(f.function.size() - suf.size(),
                                        suf.size(), suf) == 0) {
-                    if (uniq) { uniq = nullptr; break; } // ambiguo
+                    if (uniq) {
+                        uniq = nullptr;
+                        break;
+                    } // ambiguo
                     uniq = &f;
                 }
             }
@@ -450,93 +555,99 @@ std::vector<ContractCheck> verify_contracts(
         if (targets.empty()) continue; // no llego al IR (inline/DCE).
 
         for (const FunctionFingerprint *fpp : targets) {
-        const FunctionFingerprint &fp = *fpp;
+            const FunctionFingerprint &fp = *fpp;
 
-        // Con varias instanciaciones, el informe dice CUAL falla: "atomic__swap"
-        // a secas no distinguiria el i64 del f64.
-        const std::string etiqueta =
-            (targets.size() > 1) ? (name + " [" + fp.function + "]") : name;
-        auto add = [&](const char *cn, St st, std::string detail) {
-            out.push_back({etiqueta, cn, st, std::move(detail)});
-        };
+            // Con varias instanciaciones, el informe dice CUAL falla:
+            // "atomic__swap" a secas no distinguiria el i64 del f64.
+            const std::string etiqueta =
+                (targets.size() > 1) ? (name + " [" + fp.function + "]") : name;
+            auto add = [&](const char *cn, St st, std::string detail) {
+                out.push_back({etiqueta, cn, st, std::move(detail)});
+            };
 
-        // @pure: probado puro -> OK; probado impuro (efectos conocidos) ->
-        // VIOLATED; si no se conocen los efectos -> UNVERIFIABLE.
-        if (c.pure) {
-            if (fp.pure)
-                add("@pure", St::OK, "puro");
-            else if (fp.effects_known)
-                add("@pure", St::VIOLATED, "la funcion tiene efectos de dato");
-            else
-                add("@pure", St::UNVERIFIABLE,
-                    "efectos desconocidos (llamada dinamica/externa)");
-        }
-        // @nothrow.
-        if (c.nothrow) {
-            if (fp.effects_known && !fp.throws_total)
-                add("@nothrow", St::OK, "no lanza");
-            else if (fp.effects_known && fp.throws_total)
-                add("@nothrow", St::VIOLATED, "puede lanzar (throw alcanzable)");
-            else
-                add("@nothrow", St::UNVERIFIABLE, "efectos desconocidos");
-        }
-        // @nopanic.
-        if (c.nopanic) {
-            if (fp.effects_known && !fp.panics_total)
-                add("@nopanic", St::OK, "no hace panic");
-            else if (fp.effects_known && fp.panics_total)
-                add("@nopanic", St::VIOLATED, "puede hacer panic");
-            else
-                add("@nopanic", St::UNVERIFIABLE, "efectos desconocidos");
-        }
-        // @alloc: PARCIAL = sitios PROPIOS (exacto); TOTAL = cierre alcanzable
-        // (conservador si hay efectos desconocidos).  Se declara cualquiera de
-        // las dos (o ambas).  La forma corta `@alloc(N)` fija el TOTAL.
-        if (c.alloc_partial >= 0) {
-            const uint64_t got = fp.alloc_sites;
-            const uint64_t want = static_cast<uint64_t>(c.alloc_partial);
-            std::string d = "parcial: esperado <=" + std::to_string(want) +
-                            ", inferido " + std::to_string(got) + " (propio)";
-            add("@alloc", got > want ? St::VIOLATED : St::OK, std::move(d));
-        }
-        if (c.alloc_total >= 0) {
-            const uint64_t got = fp.alloc_sites_total;
-            const uint64_t want = static_cast<uint64_t>(c.alloc_total);
-            std::string d = "total: esperado <=" + std::to_string(want) +
-                            ", inferido " + std::to_string(got);
-            if (got > want)
-                add("@alloc", St::VIOLATED, std::move(d));
-            else if (fp.effects_known)
-                add("@alloc", St::OK, std::move(d));
-            else
-                add("@alloc", St::UNVERIFIABLE,
-                    d + " (mas posibles: efectos desconocidos)");
-        }
-        // @stack: PARCIAL = frame PROPIO (exacto, siempre verificable); TOTAL =
-        // profundidad de pila peor caso del arbol de llamadas.  Si el total no
-        // es acotable (recursion/callee externo) queda INVERIFICABLE.  Forma
-        // corta `@stack(N)` = TOTAL.
-        if (c.stack_partial >= 0) {
-            const uint64_t got = fp.stack_bytes;
-            const uint64_t want = static_cast<uint64_t>(c.stack_partial);
-            std::string d = "parcial: esperado <=" + std::to_string(want) +
-                            "B, inferido " + std::to_string(got) +
-                            "B (frame propio)";
-            add("@stack", got > want ? St::VIOLATED : St::OK, std::move(d));
-        }
-        if (c.stack_total >= 0) {
-            const uint64_t got = fp.stack_bytes_total;
-            const uint64_t want = static_cast<uint64_t>(c.stack_total);
-            if (got == STACK_UNBOUNDED)
-                add("@stack", St::UNVERIFIABLE,
-                    "total: no acotable (recursion o callee externo)");
-            else {
+            // @pure: probado puro -> OK; probado impuro (efectos conocidos) ->
+            // VIOLATED; si no se conocen los efectos -> UNVERIFIABLE.
+            if (c.pure) {
+                if (fp.pure)
+                    add("@pure", St::OK, "puro");
+                else if (fp.effects_known)
+                    add("@pure", St::VIOLATED,
+                        "la funcion tiene efectos de dato");
+                else
+                    add("@pure", St::UNVERIFIABLE,
+                        "efectos desconocidos (llamada dinamica/externa)");
+            }
+            // @nothrow.
+            if (c.nothrow) {
+                if (fp.effects_known && !fp.throws_total)
+                    add("@nothrow", St::OK, "no lanza");
+                else if (fp.effects_known && fp.throws_total)
+                    add("@nothrow", St::VIOLATED,
+                        "puede lanzar (throw alcanzable)");
+                else
+                    add("@nothrow", St::UNVERIFIABLE, "efectos desconocidos");
+            }
+            // @nopanic.
+            if (c.nopanic) {
+                if (fp.effects_known && !fp.panics_total)
+                    add("@nopanic", St::OK, "no hace panic");
+                else if (fp.effects_known && fp.panics_total)
+                    add("@nopanic", St::VIOLATED, "puede hacer panic");
+                else
+                    add("@nopanic", St::UNVERIFIABLE, "efectos desconocidos");
+            }
+            // @alloc: PARCIAL = sitios PROPIOS (exacto); TOTAL = cierre
+            // alcanzable (conservador si hay efectos desconocidos).  Se declara
+            // cualquiera de las dos (o ambas).  La forma corta `@alloc(N)` fija
+            // el TOTAL.
+            if (c.alloc_partial >= 0) {
+                const uint64_t got = fp.alloc_sites;
+                const uint64_t want = static_cast<uint64_t>(c.alloc_partial);
+                std::string d = "parcial: esperado <=" + std::to_string(want) +
+                                ", inferido " + std::to_string(got) +
+                                " (propio)";
+                add("@alloc", got > want ? St::VIOLATED : St::OK, std::move(d));
+            }
+            if (c.alloc_total >= 0) {
+                const uint64_t got = fp.alloc_sites_total;
+                const uint64_t want = static_cast<uint64_t>(c.alloc_total);
                 std::string d = "total: esperado <=" + std::to_string(want) +
+                                ", inferido " + std::to_string(got);
+                if (got > want)
+                    add("@alloc", St::VIOLATED, std::move(d));
+                else if (fp.effects_known)
+                    add("@alloc", St::OK, std::move(d));
+                else
+                    add("@alloc", St::UNVERIFIABLE,
+                        d + " (mas posibles: efectos desconocidos)");
+            }
+            // @stack: PARCIAL = frame PROPIO (exacto, siempre verificable);
+            // TOTAL = profundidad de pila peor caso del arbol de llamadas.  Si
+            // el total no es acotable (recursion/callee externo) queda
+            // INVERIFICABLE.  Forma corta `@stack(N)` = TOTAL.
+            if (c.stack_partial >= 0) {
+                const uint64_t got = fp.stack_bytes;
+                const uint64_t want = static_cast<uint64_t>(c.stack_partial);
+                std::string d = "parcial: esperado <=" + std::to_string(want) +
                                 "B, inferido " + std::to_string(got) +
-                                "B (peor caso de pila)";
+                                "B (frame propio)";
                 add("@stack", got > want ? St::VIOLATED : St::OK, std::move(d));
             }
-        }
+            if (c.stack_total >= 0) {
+                const uint64_t got = fp.stack_bytes_total;
+                const uint64_t want = static_cast<uint64_t>(c.stack_total);
+                if (got == STACK_UNBOUNDED)
+                    add("@stack", St::UNVERIFIABLE,
+                        "total: no acotable (recursion o callee externo)");
+                else {
+                    std::string d =
+                        "total: esperado <=" + std::to_string(want) +
+                        "B, inferido " + std::to_string(got) +
+                        "B (peor caso de pila)";
+                    add("@stack", got > want ? St::VIOLATED : St::OK,
+                        std::move(d));
+                }
+            }
         } // for targets
     }
     return out;
@@ -547,10 +658,12 @@ std::vector<ContractCheck> verify_type_contracts(
     const std::unordered_map<std::string, TypeContracts> &contracts) {
     std::vector<ContractCheck> out;
     if (contracts.empty()) return out;
-    // Indice por nombre de tipo (el nombre del contrato es el nombre declarado).
+    // Indice por nombre de tipo (el nombre del contrato es el nombre
+    // declarado).
     std::unordered_map<std::string, const TypeFingerprint *> byname;
     byname.reserve(fps.size() * 2 + 1);
-    for (const auto &f : fps) byname.emplace(f.type_name, &f);
+    for (const auto &f : fps)
+        byname.emplace(f.type_name, &f);
 
     using St = ContractCheck::Status;
     for (const auto &kv : contracts) {
@@ -565,8 +678,9 @@ std::vector<ContractCheck> verify_type_contracts(
             out.push_back({name, cn, st, std::move(detail)});
         };
 
-        // @pod: value-type trivialmente copiable (sin dtor ni campos gestionados).
-        // Decidible del layout -> OK / VIOLATED (nunca UNVERIFIABLE).
+        // @pod: value-type trivialmente copiable (sin dtor ni campos
+        // gestionados). Decidible del layout -> OK / VIOLATED (nunca
+        // UNVERIFIABLE).
         if (c.pod) {
             if (fp.is_pod) {
                 add("@pod", St::OK, "value-type trivialmente copiable");
@@ -576,7 +690,8 @@ std::vector<ContractCheck> verify_type_contracts(
                         ? "es un tipo por referencia (clase), no un value-type"
                     : fp.has_destructor
                         ? "tiene destructor (~Tipo) -> carril move-only"
-                        : "tiene algun campo gestionado (heap/GC/smart-pointer)";
+                        : "tiene algun campo gestionado "
+                          "(heap/GC/smart-pointer)";
                 add("@pod", St::VIOLATED, std::move(why));
             }
         }
@@ -590,8 +705,8 @@ std::vector<ContractCheck> verify_type_contracts(
         if (c.size >= 0) {
             const uint64_t got = fp.size_bytes;
             const uint64_t want = static_cast<uint64_t>(c.size);
-            std::string d = "esperado " + std::to_string(want) + "B, inferido " +
-                            std::to_string(got) + "B";
+            std::string d = "esperado " + std::to_string(want) +
+                            "B, inferido " + std::to_string(got) + "B";
             add("@size", got == want ? St::OK : St::VIOLATED, std::move(d));
         }
     }

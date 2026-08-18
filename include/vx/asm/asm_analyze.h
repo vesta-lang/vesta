@@ -15,17 +15,18 @@
  * @brief Resumen de EFECTOS a nivel de BLOQUE de un cuerpo de inline asm.
  *
  * A partir del texto NASM/ARM de un @c asm { } se calcula un modelo de efecto
- * del bloque completo -- si toca memoria, si es atomico, si hace @c call, cuanto
- * marco de pila mueve EXPLICITAMENTE (push/pop/sub rsp) -- para que el compilador
- * sea CONSCIENTE de lo que hace el asm en vez de tratarlo como una caja negra.
- * Lo consume el analizador de huella (para dar @c @stack / @c @alloc /
+ * del bloque completo -- si toca memoria, si es atomico, si hace @c call,
+ * cuanto marco de pila mueve EXPLICITAMENTE (push/pop/sub rsp) -- para que el
+ * compilador sea CONSCIENTE de lo que hace el asm en vez de tratarlo como una
+ * caja negra. Lo consume el analizador de huella (para dar @c @stack / @c
+ * @alloc /
  * @c @nothrow / @c @pure sobre una funcion con asm) y el servidor de lenguaje
  * (LSP): describir al IDE que hace un bloque de asm.
  *
- * Se apoya en la tabla PLANA por-instruccion @c asm_effects_for (asm_effects.h);
- * NO la duplica, solo la agrega a nivel de bloque.  Modular a proposito: este
- * modulo NO toca el path de inferencia de clobbers ni el ensamblado
- * (Keystone/Capstone); es analisis puro sobre el texto.
+ * Se apoya en la tabla PLANA por-instruccion @c asm_effects_for
+ * (asm_effects.h); NO la duplica, solo la agrega a nivel de bloque.  Modular a
+ * proposito: este modulo NO toca el path de inferencia de clobbers ni el
+ * ensamblado (Keystone/Capstone); es analisis puro sobre el texto.
  *
  * Un mnemonico DESCONOCIDO para el arch NO se traga -- se acumula en
  * @c unknown_mnemonics para que el caller emita un ERROR CLARO nombrando cual.
@@ -57,7 +58,7 @@ namespace vx {
  * @c has_unknown queda true y el caller decide (error).
  */
 struct AsmBlockEffects {
-    bool touches_mem = false;   ///< algun operando @c [...] o instr que toca mem.
+    bool touches_mem = false; ///< algun operando @c [...] o instr que toca mem.
     /// El bloque LEE memoria.
     ///
     /// Se separa de @c writes_mem porque no es lo mismo: un `mov rax, [rdi]`
@@ -140,13 +141,13 @@ struct AsmBlockEffects {
      * de verdad sin respuesta cuando el valor entra de fuera en ejecucion.
      */
     struct Indireccion {
-        bool    hay = false; ///< la base se cargo de memoria.
-        int64_t off = 0;     ///< de que distancia del operando se cargo.
+        bool hay = false; ///< la base se cargo de memoria.
+        int64_t off = 0;  ///< de que distancia del operando se cargo.
     };
 
     struct Acceso {
-        std::string base;    ///< registro base, CANONICO (vacio = no se supo).
-        bool        escribe; ///< true si el acceso escribe.
+        std::string base; ///< registro base, CANONICO (vacio = no se supo).
+        bool escribe;     ///< true si el acceso escribe.
         /// Si @c hay, @ref base no es la direccion: es donde estaba GUARDADA.
         Indireccion desde_memoria;
         /**
@@ -164,7 +165,7 @@ struct AsmBlockEffects {
          * objeto entero, que es lo que se hacia siempre.
          */
         Extension extension;
-        bool      valida = false; ///< @ref extension describe algo.
+        bool valida = false; ///< @ref extension describe algo.
     };
     /// Los accesos a memoria, en orden.  Sirven para decir QUE memoria toca el
     /// bloque en vez de "cualquiera": quien tenga las ligaduras puede llevar el
@@ -191,18 +192,18 @@ struct AsmBlockEffects {
      *
      * @c "cr0", @c "gdtr", @c "idtr", @c "msrs", @c "mxcsr", @c "fsbase",
      * @c "st(0)", @c "x87status"...  Un bloque que hace `wrmsr` no es un bloque
-     * que "hace algo raro": es uno que escribe `msrs`, y eso solo estorba a quien
-     * lea o escriba `msrs`.  Sin nombrarlo habria que tratar cualquier
+     * que "hace algo raro": es uno que escribe `msrs`, y eso solo estorba a
+     * quien lea o escriba `msrs`.  Sin nombrarlo habria que tratar cualquier
      * instruccion privilegiada como una valla para todo lo que la rodea.
      * @{
      */
     std::vector<std::string> state_read;
     std::vector<std::string> state_written;
     /// @}
-    bool has_atomic = false;    ///< prefijo @c lock o instr atomica (barrera).
-    bool is_call = false;       ///< @c call / @c syscall alcanzable en el bloque.
-    /// El bloque toca las banderas, en cualquier sentido.  Se mantiene porque es
-    /// lo que pregunta quien solo quiere saber si son suyas o no; los dos
+    bool has_atomic = false; ///< prefijo @c lock o instr atomica (barrera).
+    bool is_call = false;    ///< @c call / @c syscall alcanzable en el bloque.
+    /// El bloque toca las banderas, en cualquier sentido.  Se mantiene porque
+    /// es lo que pregunta quien solo quiere saber si son suyas o no; los dos
     /// sentidos por separado estan debajo.
     bool touches_flags = false;
     /**
@@ -210,29 +211,33 @@ struct AsmBlockEffects {
      *
      * Un bloque que solo las LEE (`setz al`) depende de la comparacion de antes
      * pero no destruye nada; uno que solo las ESCRIBE (`cmp`) destruye pero no
-     * depende.  Con un bit unico los dos salen iguales y hay que suponer lo peor
-     * de los dos, que es no mover nada ni a un lado ni al otro.
+     * depende.  Con un bit unico los dos salen iguales y hay que suponer lo
+     * peor de los dos, que es no mover nada ni a un lado ni al otro.
      * @{
      */
-    bool reads_flags = false;  ///< consume banderas producidas fuera del bloque.
+    bool reads_flags = false; ///< consume banderas producidas fuera del bloque.
     bool writes_flags = false; ///< las modifica: quien las tuviera las pierde.
     /**
      * QUE banderas, por nombre (@c "cf", @c "zf", @c "of"...).
      *
-     * Los booleanos dicen SI toca alguna; esto dice cuales, y es lo que separa un
-     * bloque que hace `inc` -- que no toca el acarreo -- de uno que hace `add`.
-     * Sale de la BASE, que lo sabe por forma, aunque el mnemonico este ademas en
-     * la tabla escrita a mano: la tabla solo tiene el bit grueso, y dejar que
-     * tape al dato mas fino seria quedarse con la peor de las dos respuestas.
+     * Los booleanos dicen SI toca alguna; esto dice cuales, y es lo que separa
+     * un bloque que hace `inc` -- que no toca el acarreo -- de uno que hace
+     * `add`. Sale de la BASE, que lo sabe por forma, aunque el mnemonico este
+     * ademas en la tabla escrita a mano: la tabla solo tiene el bit grueso, y
+     * dejar que tape al dato mas fino seria quedarse con la peor de las dos
+     * respuestas.
      *
-     * Vacio = no se sabe (otra ISA, forma sin dato), que NO es "no toca ninguna".
+     * Vacio = no se sabe (otra ISA, forma sin dato), que NO es "no toca
+     * ninguna".
      */
     std::vector<std::string> flags_read;
     std::vector<std::string> flags_written;
     /// @}
-    bool has_branch = false;    ///< salto/rama dentro del bloque.
-    int64_t explicit_stack_bytes = 0; ///< marco EXPLICITO (push/sub rsp), en bytes.
-    std::vector<std::string> unknown_mnemonics; ///< desconocidos -> error claro.
+    bool has_branch = false; ///< salto/rama dentro del bloque.
+    int64_t explicit_stack_bytes =
+        0; ///< marco EXPLICITO (push/sub rsp), en bytes.
+    std::vector<std::string>
+        unknown_mnemonics; ///< desconocidos -> error claro.
 
     bool known() const { return unknown_mnemonics.empty(); }
 };
@@ -261,7 +266,7 @@ struct AsmBlockEffects {
  * toca; si depende, pasa las clases.
  */
 AsmBlockEffects asm_analyze_block_no_classes(const std::string &nasm_body,
-                                            const std::string &arch);
+                                             const std::string &arch);
 
 /**
  * @brief El analisis COMPLETO: sabiendo de que CLASE es cada operando.

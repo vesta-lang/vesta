@@ -164,8 +164,8 @@ MerkleKeys compute_merkle_keys(const SemanticIndex &idx) {
     if (n == 0) return out;
 
     // 1. Resolucion de deps: nombre SIMPLE -> indices de simbolos que lo tienen
-    //    (varios namespaces pueden compartir un nombre simple -> arista a todos,
-    //    conservador).  Igual criterio que changed_symbols_closure.
+    //    (varios namespaces pueden compartir un nombre simple -> arista a
+    //    todos, conservador).  Igual criterio que changed_symbols_closure.
     std::unordered_map<std::string, std::vector<uint32_t>> by_simple;
     by_simple.reserve(n * 2 + 1);
     for (uint32_t i = 0; i < n; ++i)
@@ -194,7 +194,8 @@ MerkleKeys compute_merkle_keys(const SemanticIndex &idx) {
 
     // Miembros por SCC.
     std::vector<std::vector<uint32_t>> members(n_scc);
-    for (uint32_t i = 0; i < n; ++i) members[comp[i]].push_back(i);
+    for (uint32_t i = 0; i < n; ++i)
+        members[comp[i]].push_back(i);
 
     // 4. Clave de cada SCC (contexto compartido) y de cada simbolo.
     //    scc_ctx = H( sorted(content_hash de los miembros) ++
@@ -207,7 +208,7 @@ MerkleKeys compute_merkle_keys(const SemanticIndex &idx) {
         for (uint32_t m : members[s]) {
             content_hashes.push_back(syms[m].content_hash);
             for (uint32_t w : adj[m]) {
-                if (comp[w] == s) continue; // dep interna a la SCC.
+                if (comp[w] == s) continue;         // dep interna a la SCC.
                 ext_dep_keys.push_back(sym_key[w]); // ya calculada (topo).
             }
         }
@@ -219,9 +220,11 @@ MerkleKeys compute_merkle_keys(const SemanticIndex &idx) {
         std::vector<uint64_t> buf;
         buf.reserve(content_hashes.size() + ext_dep_keys.size() + 1);
         buf.push_back(0xC0FFEEull); // separador de dominio (contexto de SCC).
-        for (uint64_t h : content_hashes) buf.push_back(h);
+        for (uint64_t h : content_hashes)
+            buf.push_back(h);
         buf.push_back(0xDEADBEEFull); // separador contenido | deps.
-        for (uint64_t k : ext_dep_keys) buf.push_back(k);
+        for (uint64_t k : ext_dep_keys)
+            buf.push_back(k);
         const uint64_t ctx = mix64(buf);
         scc_ctx[s] = ctx;
         for (uint32_t m : members[s]) {
@@ -299,9 +302,10 @@ bool CasStore::put(MerkleKey k, const uint8_t *data, size_t n) const {
     // la misma clave en paralelo; el rename resuelve la carrera (el ultimo
     // gana, mismo contenido).
     char suffix[32];
-    std::snprintf(suffix, sizeof(suffix), ".tmp.%llx",
-                  static_cast<unsigned long long>(fnv1a64(&data, sizeof(data)) ^
-                                                  reinterpret_cast<uintptr_t>(data)));
+    std::snprintf(
+        suffix, sizeof(suffix), ".tmp.%llx",
+        static_cast<unsigned long long>(fnv1a64(&data, sizeof(data)) ^
+                                        reinterpret_cast<uintptr_t>(data)));
     const std::string tmp = dst + suffix;
     {
         std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
@@ -345,10 +349,11 @@ RebuildPlan plan_rebuild(const SemanticIndex &idx, const CasStore &cas) {
 namespace {
 
 constexpr uint32_t VXFRAG_MAGIC = 0x47524658u; // 'X''F''R''G' little-endian
-constexpr uint16_t VXFRAG_VERSION = 1;         // alpha: sin compat de versiones.
+constexpr uint16_t VXFRAG_VERSION = 1; // alpha: sin compat de versiones.
 
 /// Reescribe cada substring `code.s_<N>` en @p s aplicando @p mapfn(N).
-void remap_code_s(std::string &s, const std::function<uint64_t(uint64_t)> &mapfn) {
+void remap_code_s(std::string &s,
+                  const std::function<uint64_t(uint64_t)> &mapfn) {
     if (s.find("code.s_") == std::string::npos) return;
     std::string out;
     out.reserve(s.size());
@@ -374,9 +379,9 @@ void remap_code_s(std::string &s, const std::function<uint64_t(uint64_t)> &mapfn
     s = std::move(out);
 }
 
-/// Recolecta los indices de static_data que referencia @p fn: @c STR_LIT_ADDR.imm
-/// mas cada @c code.s_<N> en el texto de un bloque @c RAW_ASM.  Mismo criterio
-/// que el remap cross-module de compiler_project.cpp.
+/// Recolecta los indices de static_data que referencia @p fn: @c
+/// STR_LIT_ADDR.imm mas cada @c code.s_<N> en el texto de un bloque @c RAW_ASM.
+/// Mismo criterio que el remap cross-module de compiler_project.cpp.
 void collect_static_refs(const ir::IrFunction &fn, std::set<uint64_t> &out) {
     for (const auto &bb : fn.blocks) {
         for (const auto &ins : bb.instrs) {
@@ -480,7 +485,8 @@ void merge_ir_fragment(ir::IrModule &target, const IrFragment &frag) {
         local2target[i] = tgt;
     }
 
-    // 2. Reescribir las refs de la funcion de indice LOCAL -> indice del target.
+    // 2. Reescribir las refs de la funcion de indice LOCAL -> indice del
+    // target.
     ir::IrFunction fn = frag.fn;
     auto mapfn = [&](uint64_t n) -> uint64_t {
         return (n < local2target.size()) ? local2target[n] : n;

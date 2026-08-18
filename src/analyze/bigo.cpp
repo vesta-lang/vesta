@@ -43,7 +43,7 @@
 
 #include "ir/ssa_ir.h"
 #include "vx/asm/asm_analyze.h" // un `asm` puede llevar un bucle dentro
-#include "vx/asm/asm_cfg.h"     // ...y su grafo de flujo dice cuantos y anidados
+#include "vx/asm/asm_cfg.h" // ...y su grafo de flujo dice cuantos y anidados
 #include "vx/asm/asm_effects.h" // arquitectura del objetivo (tabla de efectos)
 
 #include <algorithm>
@@ -61,37 +61,25 @@ namespace analyze {
 
 const char *cost_class_str(CostClass c) {
     switch (c) {
-    case CostClass::O_1:
-        return "O(1)";
-    case CostClass::O_LOGN:
-        return "O(log n)";
-    case CostClass::O_N:
-        return "O(n)";
-    case CostClass::O_NLOGN:
-        return "O(n log n)";
-    case CostClass::O_N2:
-        return "O(n^2)";
-    case CostClass::O_N3:
-        return "O(n^3)";
-    case CostClass::O_NK:
-        return "O(n^k)";
-    case CostClass::O_2N:
-        return "O(2^n)";
+    case CostClass::O_1: return "O(1)";
+    case CostClass::O_LOGN: return "O(log n)";
+    case CostClass::O_N: return "O(n)";
+    case CostClass::O_NLOGN: return "O(n log n)";
+    case CostClass::O_N2: return "O(n^2)";
+    case CostClass::O_N3: return "O(n^3)";
+    case CostClass::O_NK: return "O(n^k)";
+    case CostClass::O_2N: return "O(2^n)";
     case CostClass::O_UNKNOWN:
-    default:
-        return "O(?)";
+    default: return "O(?)";
     }
 }
 
 const char *confidence_str(Confidence c) {
     switch (c) {
-    case Confidence::EXACT:
-        return "exacta";
-    case Confidence::HEURISTIC:
-        return "heuristica";
+    case Confidence::EXACT: return "exacta";
+    case Confidence::HEURISTIC: return "heuristica";
     case Confidence::UNKNOWN:
-    default:
-        return "desconocida";
+    default: return "desconocida";
     }
 }
 
@@ -101,8 +89,8 @@ CostClass parse_cost_class(const std::string &expr) {
     s.reserve(expr.size());
     for (char c : expr) {
         if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        s.push_back(static_cast<char>(
-            std::tolower(static_cast<unsigned char>(c))));
+        s.push_back(
+            static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
     }
     // Quitar prefijo "o(" y sufijo ")" si estan presentes.
     if (s.size() >= 3 && s.compare(0, 2, "o(") == 0 && s.back() == ')')
@@ -152,8 +140,8 @@ CostClass parse_cost_class(const std::string &expr) {
  *               inferior, no un hecho.
  * @return Anidamiento maximo (0 = sin bucles).
  */
-static uint32_t asm_loop_depth(const std::string &cuerpo,
-                               vx::instr_db::Isa isa, bool &seguro) {
+static uint32_t asm_loop_depth(const std::string &cuerpo, vx::instr_db::Isa isa,
+                               bool &seguro) {
     const vx::AsmCfg cfg = vx::build_asm_cfg(isa, cuerpo);
     /* La forma solo se sabe si TODO el control se puede seguir.
      *
@@ -172,7 +160,8 @@ static uint32_t asm_loop_depth(const std::string &cuerpo,
             break;
         }
     }
-    // Cada arista hacia atras es un bucle; su cuerpo es el tramo [cabecera, cola].
+    // Cada arista hacia atras es un bucle; su cuerpo es el tramo [cabecera,
+    // cola].
     std::vector<std::pair<uint32_t, uint32_t>> tramos;
     for (uint32_t b = 0; b < cfg.blocks.size(); ++b)
         for (uint32_t s : cfg.blocks[b].succs)
@@ -194,16 +183,11 @@ static uint32_t asm_loop_depth(const std::string &cuerpo,
 
 static CostClass class_from_depth(uint32_t depth) {
     switch (depth) {
-    case 0:
-        return CostClass::O_1;
-    case 1:
-        return CostClass::O_N;
-    case 2:
-        return CostClass::O_N2;
-    case 3:
-        return CostClass::O_N3;
-    default:
-        return CostClass::O_NK;
+    case 0: return CostClass::O_1;
+    case 1: return CostClass::O_N;
+    case 2: return CostClass::O_N2;
+    case 3: return CostClass::O_N3;
+    default: return CostClass::O_NK;
     }
 }
 
@@ -219,15 +203,13 @@ static CostClass class_from_depth(uint32_t depth) {
  * simple arista hacia un bloque anterior de una rama if/else ya cerrada.
  */
 static bool reaches(const ir::IrFunction &fn, ir::IrBlockId from,
-                    ir::IrBlockId to,
-                    std::vector<char> &visited) {
+                    ir::IrBlockId to, std::vector<char> &visited) {
     if (from == to) return true;
     if (from >= fn.blocks.size()) return false;
     if (visited[from]) return false;
     visited[from] = 1;
     for (ir::IrBlockId s : fn.blocks[from].succs) {
-        if (s < fn.blocks.size() && reaches(fn, s, to, visited))
-            return true;
+        if (s < fn.blocks.size() && reaches(fn, s, to, visited)) return true;
     }
     return false;
 }
@@ -238,7 +220,8 @@ static bool reaches(const ir::IrFunction &fn, ir::IrBlockId from,
  * Un back-edge es @c (u -> h) con @c h.id <= u.id y @c h alcanzable desde
  * @c u (ciclo).  El header @c h se anota como cabecera de loop.
  */
-static std::vector<ir::IrBlockId> collect_loop_headers(const ir::IrFunction &fn) {
+static std::vector<ir::IrBlockId>
+collect_loop_headers(const ir::IrFunction &fn) {
     std::vector<ir::IrBlockId> headers;
     for (ir::IrBlockId u = 0; u < fn.blocks.size(); ++u) {
         for (ir::IrBlockId h : fn.blocks[u].succs) {
@@ -282,9 +265,9 @@ struct LoopRange {
 };
 
 /// @brief Calcula los rangos [h, last] de cada header de loop.
-static std::vector<LoopRange> compute_loop_ranges(
-    const ir::IrFunction &fn,
-    const std::vector<ir::IrBlockId> &headers) {
+static std::vector<LoopRange>
+compute_loop_ranges(const ir::IrFunction &fn,
+                    const std::vector<ir::IrBlockId> &headers) {
     std::vector<LoopRange> ranges;
     ranges.reserve(headers.size());
     for (ir::IrBlockId h : headers) {
@@ -318,11 +301,9 @@ static uint32_t block_loop_depth(ir::IrBlockId b,
  * El loop A anida dentro de B si el rango de A esta contenido estrictamente
  * en el de B.  Recibe los rangos ya calculados por @c compute_loop_ranges.
  */
-static uint32_t compute_loop_depths(
-    const ir::IrFunction &fn,
-    const std::vector<LoopRange> &ranges,
-    std::vector<LoopCost> &out_loops) {
-
+static uint32_t compute_loop_depths(const ir::IrFunction &fn,
+                                    const std::vector<LoopRange> &ranges,
+                                    std::vector<LoopCost> &out_loops) {
     using Range = LoopRange;
     uint32_t max_depth = 0;
     for (const Range &r : ranges) {
@@ -456,7 +437,10 @@ CostResult analyze_function(const ir::IrFunction &fn) {
                 const vx::AsmBlockEffects ef = vx::asm_analyze_block_no_classes(
                     cuerpo, vx::asm_arch_actual());
                 for (const vx::AsmBlockEffects::Acceso &a : ef.accesos)
-                    if (!a.extension.una_vez()) { d = 1; break; }
+                    if (!a.extension.una_vez()) {
+                        d = 1;
+                        break;
+                    }
             }
             if (d == 0) continue;
             if (!seguro) asm_forma_segura = false;
@@ -499,8 +483,7 @@ CostResult analyze_function(const ir::IrFunction &fn) {
     }
     // Si hay loops Y recursion, baja la confianza (la composicion exacta no
     // esta modelada) pero mantenemos la cota dominante.
-    if (max_depth > 0 && r.is_recursive)
-        r.confidence = Confidence::HEURISTIC;
+    if (max_depth > 0 && r.is_recursive) r.confidence = Confidence::HEURISTIC;
 
     /* Si la forma del asm no se pudo seguir entera, lo que se cuenta es una
      * cota INFERIOR: puede haber vueltas que el grafo no ve.  Y cuando ademas
@@ -547,13 +530,11 @@ CostResult analyze_function(const ir::IrFunction &fn) {
     {
         bool has_dense = false, has_bst = false, has_linear = false;
         for (const auto &blk : fn.blocks) {
-            if (!has_bst &&
-                (blk.name.rfind("sw_lt", 0) == 0 ||
-                 blk.name.rfind("sw_ge", 0) == 0))
+            if (!has_bst && (blk.name.rfind("sw_lt", 0) == 0 ||
+                             blk.name.rfind("sw_ge", 0) == 0))
                 has_bst = true;
-            if (!has_linear &&
-                (blk.name.rfind("match_arm", 0) == 0 ||
-                 blk.name.rfind("match_next", 0) == 0))
+            if (!has_linear && (blk.name.rfind("match_arm", 0) == 0 ||
+                                blk.name.rfind("match_next", 0) == 0))
                 has_linear = true;
             for (const auto &ins : blk.instrs)
                 if (ins.op == ir::IrOp::SWITCH_DENSE) has_dense = true;
@@ -640,7 +621,7 @@ ModuleCost analyze_module(const ir::IrModule &mod) {
  * conservadoramente a n^2 log n -> aproximado por O(n^k) si k crece).
  */
 struct CostShape {
-    uint32_t degree = 0; ///< grado del termino polinomico (n^degree).
+    uint32_t degree = 0;  ///< grado del termino polinomico (n^degree).
     bool has_log = false; ///< multiplica por log n.
     bool is_exp = false;  ///< O(2^n): domina todo.
     bool unknown = false; ///< O(?): se propaga como desconocido.
@@ -649,36 +630,22 @@ struct CostShape {
 static CostShape shape_of(CostClass c) {
     CostShape s;
     switch (c) {
-    case CostClass::O_1:
-        s.degree = 0;
-        break;
+    case CostClass::O_1: s.degree = 0; break;
     case CostClass::O_LOGN:
         s.degree = 0;
         s.has_log = true;
         break;
-    case CostClass::O_N:
-        s.degree = 1;
-        break;
+    case CostClass::O_N: s.degree = 1; break;
     case CostClass::O_NLOGN:
         s.degree = 1;
         s.has_log = true;
         break;
-    case CostClass::O_N2:
-        s.degree = 2;
-        break;
-    case CostClass::O_N3:
-        s.degree = 3;
-        break;
-    case CostClass::O_NK:
-        s.degree = 4;
-        break;
-    case CostClass::O_2N:
-        s.is_exp = true;
-        break;
+    case CostClass::O_N2: s.degree = 2; break;
+    case CostClass::O_N3: s.degree = 3; break;
+    case CostClass::O_NK: s.degree = 4; break;
+    case CostClass::O_2N: s.is_exp = true; break;
     case CostClass::O_UNKNOWN:
-    default:
-        s.unknown = true;
-        break;
+    default: s.unknown = true; break;
     }
     return s;
 }
@@ -688,16 +655,11 @@ static CostClass class_of(const CostShape &s) {
     if (s.unknown) return CostClass::O_UNKNOWN;
     if (s.is_exp) return CostClass::O_2N;
     switch (s.degree) {
-    case 0:
-        return s.has_log ? CostClass::O_LOGN : CostClass::O_1;
-    case 1:
-        return s.has_log ? CostClass::O_NLOGN : CostClass::O_N;
-    case 2:
-        return CostClass::O_N2;
-    case 3:
-        return CostClass::O_N3;
-    default:
-        return CostClass::O_NK;
+    case 0: return s.has_log ? CostClass::O_LOGN : CostClass::O_1;
+    case 1: return s.has_log ? CostClass::O_NLOGN : CostClass::O_N;
+    case 2: return CostClass::O_N2;
+    case 3: return CostClass::O_N3;
+    default: return CostClass::O_NK;
     }
 }
 
@@ -730,8 +692,7 @@ static CostShape combine_max(const CostShape &a, const CostShape &b) {
         e.is_exp = true;
         return e;
     }
-    if (a.degree != b.degree)
-        return a.degree > b.degree ? a : b;
+    if (a.degree != b.degree) return a.degree > b.degree ? a : b;
     // Mismo grado: el que tenga log domina (n log n > n).
     CostShape r = a;
     r.has_log = a.has_log || b.has_log;
@@ -753,8 +714,7 @@ void compose_interproc(ModuleCost &mc) {
     // Memoizacion del coste TOTAL ya resuelto + set de "en progreso" para
     // cortar ciclos del call-graph (recursion mutua).
     std::vector<CostShape> total_shape(mc.functions.size());
-    std::vector<Confidence> total_conf(mc.functions.size(),
-                                       Confidence::EXACT);
+    std::vector<Confidence> total_conf(mc.functions.size(), Confidence::EXACT);
     std::vector<char> resolved(mc.functions.size(), 0);
     std::vector<char> on_stack(mc.functions.size(), 0);
 
@@ -796,8 +756,8 @@ void compose_interproc(ModuleCost &mc) {
                     resolve(it->second, callee_shape, callee_conf);
                 }
                 // Multiplicar el coste del callee por n^loop_depth del site.
-                CostShape contrib = multiply_by_n_pow(callee_shape,
-                                                      cs.loop_depth);
+                CostShape contrib =
+                    multiply_by_n_pow(callee_shape, cs.loop_depth);
                 // Si el call site esta dentro de un loop, la composicion es
                 // heuristica (no modelamos exactamente cuantas veces se
                 // ejecuta vs el tamano del problema).
@@ -858,23 +818,12 @@ static std::string json_escape(const std::string &s) {
     out.reserve(s.size() + 4);
     for (char c : s) {
         switch (c) {
-        case '"':
-            out += "\\\"";
-            break;
-        case '\\':
-            out += "\\\\";
-            break;
-        case '\n':
-            out += "\\n";
-            break;
-        case '\r':
-            out += "\\r";
-            break;
-        case '\t':
-            out += "\\t";
-            break;
-        default:
-            out.push_back(c);
+        case '"': out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default: out.push_back(c);
         }
     }
     return out;
@@ -894,11 +843,10 @@ std::string cost_result_to_json(const CostResult &r) {
       << "\",";
     o << "\"max_loop_depth\":" << r.max_loop_depth << ",";
     o << "\"is_recursive\":" << (r.is_recursive ? "true" : "false") << ",";
-    o << "\"is_divide_conquer\":"
-      << (r.is_divide_conquer ? "true" : "false") << ",";
+    o << "\"is_divide_conquer\":" << (r.is_divide_conquer ? "true" : "false")
+      << ",";
     o << "\"declared\":\""
-      << json_escape(r.declared_expr.empty() ? std::string()
-                                             : r.declared_expr)
+      << json_escape(r.declared_expr.empty() ? std::string() : r.declared_expr)
       << "\",";
     // Contratos por dimension declarados (vacio => no declarada).
     o << "\"declared_partial_pre\":\"" << json_escape(r.decl_partial_pre)
@@ -908,8 +856,8 @@ std::string cost_result_to_json(const CostResult &r) {
     o << "\"declared_total_pre\":\"" << json_escape(r.decl_total_pre) << "\",";
     o << "\"declared_total_post\":\"" << json_escape(r.decl_total_post)
       << "\",";
-    o << "\"contract_mismatch\":"
-      << (r.contract_mismatch ? "true" : "false") << ",";
+    o << "\"contract_mismatch\":" << (r.contract_mismatch ? "true" : "false")
+      << ",";
     o << "\"detail\":\"" << json_escape(r.detail) << "\",";
     o << "\"total_detail\":\"" << json_escape(r.total_detail) << "\",";
     o << "\"calls\":[";
@@ -924,9 +872,8 @@ std::string cost_result_to_json(const CostResult &r) {
     for (size_t i = 0; i < r.loops.size(); ++i) {
         const LoopCost &l = r.loops[i];
         if (i) o << ",";
-        o << "{\"header_block\":" << l.header_block
-          << ",\"depth\":" << l.depth << ",\"source_line\":" << l.source_line
-          << "}";
+        o << "{\"header_block\":" << l.header_block << ",\"depth\":" << l.depth
+          << ",\"source_line\":" << l.source_line << "}";
     }
     o << "]";
     o << "}";

@@ -12,11 +12,11 @@
  * @file vx/asm/asm_lift_micro.h
  * @brief Lift de instrucciones asm OPACAS (sin op IR tipada equivalente) a
  *        @c IrOp::ASM_MICRO: cada instruccion pasa a ser IR llevando su
- *        identidad en la base de datos (isa + form_id) de donde se consultan sus
- *        efectos.  Cubre el subconjunto SIN operandos de registro
+ *        identidad en la base de datos (isa + form_id) de donde se consultan
+ * sus efectos.  Cubre el subconjunto SIN operandos de registro
  *        (mfence/lfence/sfence/pause/nop...): su unico efecto observable es una
- *        barrera de memoria o ninguno, asi que no necesita enhebrar registros ni
- *        fijarlos en el asignador.
+ *        barrera de memoria o ninguno, asi que no necesita enhebrar registros
+ * ni fijarlos en el asignador.
  *
  * El caso con operandos de registro (SIMD, cpuid...) necesita substitucion de
  * placeholders + pinning en el regalloc y llega en un incremento posterior; el
@@ -40,18 +40,19 @@
 
 namespace ir {
 struct IrFunction;
-using IrValueId = uint32_t; // == ir/ssa_ir.h (typedef, no se puede fwd-declarar)
+using IrValueId =
+    uint32_t; // == ir/ssa_ir.h (typedef, no se puede fwd-declarar)
 } // namespace ir
 
 namespace vx {
 
 /**
  * @brief Lifta el bloque @p body (asm de la ISA @p isa) a una secuencia de
- *        @c IrOp::ASM_MICRO en @p block, UNA por instruccion, SI y solo si TODAS
- *        sus instrucciones son formas conocidas por la DB y sus operandos son
- *        O BIEN inexistentes (barreras / nop / pause), O BIEN registros de
- *        FiSICO FIJO (: popcnt rax, rbx).  Es transaccional: valida el
- *        bloque entero antes de emitir nada.
+ *        @c IrOp::ASM_MICRO en @p block, UNA por instruccion, SI y solo si
+ * TODAS sus instrucciones son formas conocidas por la DB y sus operandos son O
+ * BIEN inexistentes (barreras / nop / pause), O BIEN registros de FiSICO FIJO
+ * (: popcnt rax, rbx).  Es transaccional: valida el bloque entero antes de
+ * emitir nada.
  *
  * @param slot_of mapa REGISTRO-CANoNICO -> slot ALLOCA (SSA) de las variables
  *        Vesta ligadas via @c register() en el scope actual.  Un operando que

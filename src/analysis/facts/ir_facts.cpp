@@ -51,11 +51,8 @@ IrFacts build_ir_facts(const ir::IrFunction &fn) {
             case ir::IrOp::CALLITF:
             case ir::IrOp::CALLCLOSURE:
             case ir::IrOp::CALLIND:
-            case ir::IrOp::CALLN:
-                f.has_dynamic_call = true;
-                break;
-            default:
-                break;
+            case ir::IrOp::CALLN: f.has_dynamic_call = true; break;
+            default: break;
             }
             // back-edges (bucles).
             auto is_back = [&](ir::IrBlockId t) {
@@ -69,7 +66,10 @@ IrFacts build_ir_facts(const ir::IrFunction &fn) {
             } else if (in.op == ir::IrOp::SWITCH_DENSE ||
                        in.op == ir::IrOp::MATCH_VARIANT) {
                 for (uint32_t t : in.jump_targets)
-                    if (is_back(t)) { ++f.loop_count; break; }
+                    if (is_back(t)) {
+                        ++f.loop_count;
+                        break;
+                    }
             }
         }
     }

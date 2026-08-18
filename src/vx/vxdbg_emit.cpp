@@ -11,8 +11,8 @@
  *
  * Aqui SOLO se dice que existe: los tipos del programa, sus miembros y como se
  * relacionan, nombrando a los demas por su clave.  Ordenarlos, resolver esas
- * claves a huellas y guardarlos es trabajo de @ref vxdbg::emit_semantic_graph, que no
- * sabe -- ni debe saber -- que es un `struct`.
+ * claves a huellas y guardarlos es trabajo de @ref vxdbg::emit_semantic_graph,
+ * que no sabe -- ni debe saber -- que es un `struct`.
  *
  * Esa separacion es lo que permite que el subsistema sirva a otro lenguaje: un
  * frontend de C o de Lisp escribe su propio traductor contra sus propias
@@ -35,7 +35,6 @@
 #include "vxdbg/store.h"
 #include "vxdbg/roots.h"
 #include "vxdbg/semantic.h"
-
 
 #include <cstdio>
 #include <cstdlib>
@@ -171,8 +170,7 @@ class Collector {
      * @param type_name Tipo al que se refiere, si tiene uno.
      */
     void add_member(const std::string &name, const KindPair &kp,
-                    const std::string &owner_key,
-                    const std::string &type_name,
+                    const std::string &owner_key, const std::string &type_name,
                     const std::string &signature = std::string());
 
     /**
@@ -224,7 +222,8 @@ const std::string &Collector::display_name(const std::string &key) const {
     return it->second.second;
 }
 
-vxdbg::SemanticNode Collector::begin(const std::string &key, const KindPair &kp) {
+vxdbg::SemanticNode Collector::begin(const std::string &key,
+                                     const KindPair &kp) {
     vxdbg::SemanticNode s;
     s.key = key;
     s.name = display_name(key);
@@ -258,7 +257,8 @@ std::string Collector::ensure_namespace(const std::string &path) {
     return key;
 }
 
-void Collector::relate_namespace(vxdbg::SemanticNode &s, const std::string &key) {
+void Collector::relate_namespace(vxdbg::SemanticNode &s,
+                                 const std::string &key) {
     const auto &decl = tc_.declared_ns_symbols();
     auto it = decl.find(key);
     if (it == decl.end() || it->second.first.empty()) return;
@@ -525,7 +525,8 @@ vxdbg::ArtifactMap link_symbols(
     VxdbgEmitStats &stats) {
     std::unordered_map<std::string, vxdbg::LanguageEntityId> by_key;
     by_key.reserve(ids.size());
-    for (const auto &kv : ids) by_key.emplace(kv.first, kv.second);
+    for (const auto &kv : ids)
+        by_key.emplace(kv.first, kv.second);
 
     vxdbg::ArtifactMap map;
     for (const auto &link : links) {
@@ -558,7 +559,8 @@ bool publish_vxdbg_artifact(const std::string &artifact_path,
     std::string bytes;
     char buf[64 * 1024];
     size_t n;
-    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) bytes.append(buf, n);
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0)
+        bytes.append(buf, n);
     std::fclose(f);
     if (bytes.empty()) return false;
 
@@ -578,18 +580,16 @@ std::string default_vxdbg_dir() {
     return ".cache/vxdbg";
 }
 
-bool emit_vxdbg_source(const TypeChecker &tc,
-                       const std::vector<std::pair<std::string, std::string>>
-                           &symbol_links,
-                       const std::vector<vxdbg::SourceExtent> &spans,
-                       const std::string &source_path,
-                       const std::string &source_text,
-                       const std::string &out_dir, VxdbgEmitStats &stats,
-                       std::string &err) {
+bool emit_vxdbg_source(
+    const TypeChecker &tc,
+    const std::vector<std::pair<std::string, std::string>> &symbol_links,
+    const std::vector<vxdbg::SourceExtent> &spans,
+    const std::string &source_path, const std::string &source_text,
+    const std::string &out_dir, VxdbgEmitStats &stats, std::string &err) {
     (void)err;
     /* EMPAQUETADO.  Esta emision escribe un nodo por entidad del programa --
-     * medido, 2.030 para 2.004 lineas de fuente --, y con un fichero por nodo el
-     * 90 % del tiempo de compilar en frio se iba en metadatos del sistema de
+     * medido, 2.030 para 2.004 lineas de fuente --, y con un fichero por nodo
+     * el 90 % del tiempo de compilar en frio se iba en metadatos del sistema de
      * ficheros.  El almacen empaquetado acumula y publica UN fichero con UN
      * renombrado, reutilizando lo que ya existe.
      *
@@ -603,7 +603,8 @@ bool emit_vxdbg_source(const TypeChecker &tc,
         propietario.reset(new vxdbg::FileNodeStore(dir));
     } else {
         propietario.reset(new vxdbg::PackNodeStore(
-            dir, std::unique_ptr<vxdbg::NodeStore>(new vxdbg::FileNodeStore(dir))));
+            dir,
+            std::unique_ptr<vxdbg::NodeStore>(new vxdbg::FileNodeStore(dir))));
     }
     vxdbg::NodeStore &store = *propietario;
 
@@ -625,7 +626,8 @@ bool emit_vxdbg_source(const TypeChecker &tc,
     // Sin simbolos el grafo queda emitido, pero sin la forma de entrar en el
     // desde una direccion de ejecucion.
     if (!symbol_links.empty()) {
-        const vxdbg::ArtifactMap map = link_symbols(symbol_links, res.ids, stats);
+        const vxdbg::ArtifactMap map =
+            link_symbols(symbol_links, res.ids, stats);
         stats.symbol_links = map.symbols;
         vxdbg::ContentHash h;
         if (vxdbg::store_node(store, map, h)) stats.artifact_map = h;
@@ -635,7 +637,8 @@ bool emit_vxdbg_source(const TypeChecker &tc,
     // reescribir los dos por mover una llave de sitio.
     if (!spans.empty()) {
         vxdbg::SpanMap sm;
-        for (const auto &e : spans) sm.add(e);
+        for (const auto &e : spans)
+            sm.add(e);
         stats.spans = sm.extents;
         vxdbg::ContentHash hs;
         if (vxdbg::store_node(store, sm, hs)) stats.span_map = hs;

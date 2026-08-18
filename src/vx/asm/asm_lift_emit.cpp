@@ -21,11 +21,11 @@ namespace vx {
 
 namespace {
 
-/// Emite un LOAD i64 del slot @p slot y devuelve el valor.  Si @p host, marca el
-/// resultado como host_ptr (una direccion @c [reg] del asm es una direccion del
-/// proceso host, no del espacio VM).
-ir::IrValueId load_slot(ir::IrFunction &fn, uint32_t block,
-                        ir::IrValueId slot, bool host, uint32_t line) {
+/// Emite un LOAD i64 del slot @p slot y devuelve el valor.  Si @p host, marca
+/// el resultado como host_ptr (una direccion @c [reg] del asm es una direccion
+/// del proceso host, no del espacio VM).
+ir::IrValueId load_slot(ir::IrFunction &fn, uint32_t block, ir::IrValueId slot,
+                        bool host, uint32_t line) {
     const ir::IrValueId v = fn.new_value(ir::IrType::I64);
     ir::IrInstr ld{};
     ld.op = ir::IrOp::LOAD;
@@ -34,8 +34,7 @@ ir::IrValueId load_slot(ir::IrFunction &fn, uint32_t block,
     ld.operands = {slot};
     ld.source_line = line;
     fn.append(block, std::move(ld));
-    if (host)
-        fn.values[v].is_host_ptr = true;
+    if (host) fn.values[v].is_host_ptr = true;
     return v;
 }
 
@@ -50,7 +49,8 @@ void store_slot(ir::IrFunction &fn, uint32_t block, ir::IrValueId slot,
     fn.append(block, std::move(st));
 }
 
-/// Emite un op atomico tipado (@p op con @p operands) y devuelve el valor viejo.
+/// Emite un op atomico tipado (@p op con @p operands) y devuelve el valor
+/// viejo.
 ir::IrValueId emit_atomic(ir::IrFunction &fn, uint32_t block, ir::IrOp op,
                           std::vector<ir::IrValueId> operands, uint32_t line) {
     const ir::IrValueId v = fn.new_value(ir::IrType::I64);
@@ -72,8 +72,7 @@ bool asm_lift_emit(
     const std::unordered_map<std::string, ir::IrValueId> &slot_of,
     uint32_t line) {
     const AsmLift lift = asm_lift_detect(isa, body);
-    if (lift.op == AsmLiftOp::None)
-        return false;
+    if (lift.op == AsmLiftOp::None) return false;
 
     // Todos los registros del patron deben estar ligados por register().
     auto slot = [&](const std::string &r) -> const ir::IrValueId * {
@@ -83,24 +82,22 @@ bool asm_lift_emit(
     const ir::IrValueId *addr = slot(lift.addr_reg);
     const ir::IrValueId *des = slot(lift.des_reg);
     const ir::IrValueId *result = slot(lift.result_reg);
-    if (!addr || !des || !result)
-        return false;
+    if (!addr || !des || !result) return false;
 
     // La direccion [reg] es una direccion del host.
     const ir::IrValueId addr_v = load_slot(fn, block, *addr, true, line);
     ir::IrValueId old;
     if (lift.op == AsmLiftOp::AtomicCas) {
         const ir::IrValueId *exp = slot(lift.exp_reg);
-        if (!exp)
-            return false;
+        if (!exp) return false;
         const ir::IrValueId exp_v = load_slot(fn, block, *exp, false, line);
         const ir::IrValueId des_v = load_slot(fn, block, *des, false, line);
         old = emit_atomic(fn, block, ir::IrOp::ATOMIC_CAS,
                           {addr_v, exp_v, des_v}, line);
     } else { // AtomicAdd
         const ir::IrValueId delta_v = load_slot(fn, block, *des, false, line);
-        old = emit_atomic(fn, block, ir::IrOp::ATOMIC_ADD,
-                          {addr_v, delta_v}, line);
+        old = emit_atomic(fn, block, ir::IrOp::ATOMIC_ADD, {addr_v, delta_v},
+                          line);
     }
     store_slot(fn, block, *result, old, line);
     return true;

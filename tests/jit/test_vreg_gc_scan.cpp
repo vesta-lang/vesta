@@ -127,7 +127,11 @@ static void test_gc_root_found_by_scan() {
     codegen::RegAlloc ra =
         codegen::rbank::rbank_allocate(ivs, mf.vreg_count, tri, /*vec=*/false);
     CHECK(ra.spilled(thisp), "this (GC root) spilled");
-    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM, &ivs);
+    MFunction pf =
+        rewrite_to_physical(mf,
+                            codegen::build_allocation_result(
+                                ra, nullptr, codegen::AssignmentPlan{}),
+                            tri, AbiKind::VM, &ivs);
 
     /* 3. Encode -> bytes (rellena pc_offset en pf.stackmaps). */
     X86Encoder enc;
@@ -256,8 +260,7 @@ static void test_aot_host_leaf_stackmap() {
 
 int main() {
     std::setbuf(stdout, nullptr);
-    std::printf(
-        "=== test_vreg_gc_scan ( D.7 commit 6: stackmap <-> GC) ===\n");
+    std::printf("=== test_vreg_gc_scan ( D.7 commit 6: stackmap <-> GC) ===\n");
     test_gc_root_found_by_scan();
     test_aot_host_leaf_stackmap();
     std::printf("--- %d checks, %d fallos ---\n", g_checks, g_fails);

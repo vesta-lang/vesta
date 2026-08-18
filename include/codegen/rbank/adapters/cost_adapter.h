@@ -14,13 +14,14 @@
  * Profile/Const): TRADUCE informacion existente, no inventa logica.  La fuente
  * aqui es un Fact Tipo C (el hardware) en vez del IR:
  *
- *      MachineCostFacts (InstrCost)  --CostAdapter-->  SpillCostCard  --> Objective
- *          (Fact del hardware)                          (parametros ISA-neutrales)
+ *      MachineCostFacts (InstrCost)  --CostAdapter-->  SpillCostCard  -->
+ * Objective (Fact del hardware)                          (parametros
+ * ISA-neutrales)
  *
  * CLAVE (regla del usuario): el adaptador consume UNICAMENTE la estructura
- * abstracta @c InstrCost (dentro de @c MachineCostFacts), NUNCA un @c MInstr.  Asi
- * el backend sigue siendo el unico que entiende la ISA, y el Objective/allocator
- * permanecen independientes del backend.
+ * abstracta @c InstrCost (dentro de @c MachineCostFacts), NUNCA un @c MInstr.
+ * Asi el backend sigue siendo el unico que entiende la ISA, y el
+ * Objective/allocator permanecen independientes del backend.
  *
  * i18n: produce NUMEROS, no diagnosticos -> sin catalogo.
  * Fase 0.25: ADITIVO, funcion pura, sin consumidores (solo el test).
@@ -37,14 +38,16 @@ namespace rbank {
 
 /**
  * @brief Traduce los @c MachineCostFacts del hardware a la @c SpillCostCard que
- *        el Objective consume (reload/store/move en ciclos).  No toca @c MInstr.
+ *        el Objective consume (reload/store/move en ciclos).  No toca @c
+ * MInstr.
  */
-inline SpillCostCard spill_card_from(const analysis::MachineCostFacts &hw) noexcept {
+inline SpillCostCard
+spill_card_from(const analysis::MachineCostFacts &hw) noexcept {
     SpillCostCard c;
     c.reload_latency = static_cast<double>(hw.load.latency);
-    c.store_latency  = static_cast<double>(hw.store.latency);
-    c.move_latency   = static_cast<double>(hw.move.latency);
-    c.from_hw        = true;
+    c.store_latency = static_cast<double>(hw.store.latency);
+    c.move_latency = static_cast<double>(hw.move.latency);
+    c.from_hw = true;
     return c;
 }
 

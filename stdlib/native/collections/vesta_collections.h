@@ -578,7 +578,7 @@ VESTA_PLUGIN_EXPORT void vcol_tset_free_gc(uint64_t proc, uint64_t handle);
 /* =========================================================================
  * String ops nativas
  *
- * Operan sobre buffers crudos (host_ptr + byte_len) que el frontend 
+ * Operan sobre buffers crudos (host_ptr + byte_len) que el frontend
  * obtiene via STRRAW / STRGETBYTES de un StringObject.  No alocan
  * StringObjects nuevos -- devuelven escalares (indices, longitudes, bools)
  * o modifican in-place; el frontend  se encarga de envolver / dividir

@@ -74,7 +74,8 @@ uint32_t SessionMap::new_generation() {
 }
 
 PlacementMap &SessionMap::generation(uint32_t gen) {
-    while (generations_.size() <= gen) generations_.emplace_back();
+    while (generations_.size() <= gen)
+        generations_.emplace_back();
     return generations_[gen];
 }
 

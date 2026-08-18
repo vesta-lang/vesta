@@ -71,7 +71,8 @@ class CodeCache {
      * setea el modo CTPE antes de eager-compilar el programa a precomputar; el
      * codegen vreg emite un poll de safepoint en cada back-edge cuando != 0.
      * Vive en la CodeCache (objeto unico compartido) para no depender de un
-     * global/thread_local -- el compile puede correr en otro hilo que el setter.
+     * global/thread_local -- el compile puede correr en otro hilo que el
+     * setter.
      */
     uint64_t ctpe_safepoint_handler = 0;
 

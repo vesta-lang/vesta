@@ -59,7 +59,8 @@ inline StoredNode make(const DebugNodeHeader &header, ByteWriter &w) {
  * @return @c true si el nodo se puede interpretar como @c T.
  */
 template <typename T> bool expect(const StoredNode &s, NodeKind kind) {
-    return s.header.kind == kind && s.header.schema_version == T::kSchemaVersion;
+    return s.header.kind == kind &&
+           s.header.schema_version == T::kSchemaVersion;
 }
 
 } // namespace codec_detail

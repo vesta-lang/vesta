@@ -87,8 +87,8 @@ uint64_t backend_caps_host_bits();
 
 /**
  * @brief Caps de una microarquitectura @p cpu_name desde la DB de instrucciones
- *        (@c idb::cpu_has_feature).  Para @c --cpu.  Si la microarq no existe en
- *        la DB, devuelve caps baseline (solo sse2).
+ *        (@c idb::cpu_has_feature).  Para @c --cpu.  Si la microarq no existe
+ * en la DB, devuelve caps baseline (solo sse2).
  */
 BackendCaps backend_caps_from_cpu(const std::string &cpu_name);
 
@@ -99,8 +99,9 @@ BackendCaps backend_caps_from_cpu(const std::string &cpu_name);
 BackendCaps backend_caps_from_float_isa(FloatIsa fisa);
 
 /**
- * @brief Resolver central.  Prioridad: @p cpu (DB) > host CPUID (si @p jit_host)
- *        > @p fisa (coarse).  Un solo punto de decision para todo el backend.
+ * @brief Resolver central.  Prioridad: @p cpu (DB) > host CPUID (si @p
+ * jit_host) > @p fisa (coarse).  Un solo punto de decision para todo el
+ * backend.
  */
 BackendCaps resolve_backend_caps(const std::string &cpu, bool jit_host,
                                  FloatIsa fisa);

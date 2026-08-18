@@ -18,15 +18,16 @@
  *
  * OJO con lo que significa: hoy lo rellena el ULTIMO elevado de la cadena, que
  * no es siempre el que mas cerca estuvo.  El elevado general de x86 modela
- * bastante mas -- `lea`, por ejemplo, ya se pasa a aritmetica de puntero -- pero
- * todavia no dice en cual de sus noventa y seis salidas abandono, asi que lo que
- * se cuenta es el motivo del ultimo intento.  Es cierto, pero puede no ser la
- * razon mas util; cuando el elevado general tambien hable, se prefiere la suya.
+ * bastante mas -- `lea`, por ejemplo, ya se pasa a aritmetica de puntero --
+ * pero todavia no dice en cual de sus noventa y seis salidas abandono, asi que
+ * lo que se cuenta es el motivo del ultimo intento.  Es cierto, pero puede no
+ * ser la razon mas util; cuando el elevado general tambien hable, se prefiere
+ * la suya.
  *
  * Por eso el elevado no responde solo "no pude": dice EN QUE se atasco.  Sin
- * ese dato el aviso no se puede atender, y un aviso que no se puede atender solo
- * ensena a ignorar los avisos.  Con el, casi siempre es una sola instruccion y
- * reescribirla convierte el bloque entero en IR normal.
+ * ese dato el aviso no se puede atender, y un aviso que no se puede atender
+ * solo ensena a ignorar los avisos.  Con el, casi siempre es una sola
+ * instruccion y reescribirla convierte el bloque entero en IR normal.
  */
 
 #ifndef VESTA_VX_ASM_ASM_LIFT_REASON_H
@@ -41,8 +42,8 @@ namespace vx {
  * @brief La instruccion que impidio pasar el bloque a IR, y que de ella no se
  *        supo.
  *
- * Se rellena solo cuando el elevado falla.  @ref instruccion vacia significa que
- * el fallo no fue de una instruccion concreta (bloque vacio, por ejemplo).
+ * Se rellena solo cuando el elevado falla.  @ref instruccion vacia significa
+ * que el fallo no fue de una instruccion concreta (bloque vacio, por ejemplo).
  *
  * El motivo se guarda como ENTRADA DEL CATaLOGO (@ref id) con sus parametros,
  * no como una frase ya escrita: el aviso que lo envuelve se sirve en el idioma
@@ -50,8 +51,8 @@ namespace vx {
  * linea en un idioma dentro de una linea en otro.
  */
 struct AsmMotivoOpaco {
-    std::string instruccion;       ///< texto de la instruccion, tal cual se escribio.
-    std::string id;                ///< entrada del catalogo con el motivo.
+    std::string instruccion; ///< texto de la instruccion, tal cual se escribio.
+    std::string id;          ///< entrada del catalogo con el motivo.
     std::vector<std::string> args; ///< parametros de esa entrada.
 
     /// @c true si consta la instruccion culpable.

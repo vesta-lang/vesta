@@ -8,13 +8,13 @@
 /**
  * @file tests/jit/test_jit_facts.cpp
  * @brief La base de hechos del JIT (@c jit/jit_facts.h): que el conocimiento se
- *        calcule UNA vez y se reparta, que caduque cuando el IR cambia, y que la
- *        pregunta que hace el especializador de llamadas conteste lo que dice.
+ *        calcule UNA vez y se reparta, que caduque cuando el IR cambia, y que
+ * la pregunta que hace el especializador de llamadas conteste lo que dice.
  *
- * El test EXIGE que el reparto ocurra de verdad: no basta con que las respuestas
- * sean correctas -- eso tambien pasaria recomputando cada vez, que es justo lo
- * que se venia a quitar.  Por eso se mira el contador de analisis ejecutados, y
- * la identidad del objeto devuelto.
+ * El test EXIGE que el reparto ocurra de verdad: no basta con que las
+ * respuestas sean correctas -- eso tambien pasaria recomputando cada vez, que
+ * es justo lo que se venia a quitar.  Por eso se mira el contador de analisis
+ * ejecutados, y la identidad del objeto devuelto.
  */
 
 #include "ir/ssa_ir.h"
@@ -116,11 +116,12 @@ static void probar_reparto() {
 
     const analysis::RangeFacts &r1 = base.rangos(fn);
     const size_t tras_la_primera = base.computos();
-    CHECK(tras_la_primera == 2,
-          "la primera consulta ejecuta los rangos y la estructura de la que dependen");
+    CHECK(tras_la_primera == 2, "la primera consulta ejecuta los rangos y la "
+                                "estructura de la que dependen");
 
     const analysis::RangeFacts &r2 = base.rangos(fn);
-    CHECK(&r1 == &r2, "la segunda consulta devuelve EL MISMO hecho, no una copia");
+    CHECK(&r1 == &r2,
+          "la segunda consulta devuelve EL MISMO hecho, no una copia");
     CHECK(base.computos() == tras_la_primera,
           "la segunda consulta no ejecuta ningun analisis -- sale de la cache");
 
@@ -176,12 +177,13 @@ static void probar_sello_y_volcado() {
           "un analisis que llega a punto fijo da un hecho demostrado");
     CHECK(s.origen.productor == jit::kProductorRangos,
           "el hecho dice QUIEN lo descubrio");
-    CHECK(std::string(s.origen.funcion) == "sellada",
-          "y mirando que funcion");
-    CHECK(s.apoyos.depende_de(jit::kProductorEstructura),
-          "y sobre que otro hecho se dedujo -- sin eso no hay a quien invalidar");
+    CHECK(std::string(s.origen.funcion) == "sellada", "y mirando que funcion");
+    CHECK(
+        s.apoyos.depende_de(jit::kProductorEstructura),
+        "y sobre que otro hecho se dedujo -- sin eso no hay a quien invalidar");
 
-    // De una funcion que nadie miro no se sabe nada, que NO es saber que no hay.
+    // De una funcion que nadie miro no se sabe nada, que NO es saber que no
+    // hay.
     const ir::IrFunction ajena = hacer_sin_cota("ajena");
     CHECK(base.sello(jit::kProductorRangos, ajena).certeza ==
               analysis::asa::Certeza::Desconocida,
@@ -197,9 +199,10 @@ static void probar_sello_y_volcado() {
           "en orden estable, para que dos volcados se puedan comparar");
 
     base.invalidar(fn);
-    CHECK(base.volcado().empty(),
-          "lo invalidado desaparece del volcado -- no queda afirmando lo que ya "
-          "no se sabe");
+    CHECK(
+        base.volcado().empty(),
+        "lo invalidado desaparece del volcado -- no queda afirmando lo que ya "
+        "no se sabe");
 }
 
 int main() {

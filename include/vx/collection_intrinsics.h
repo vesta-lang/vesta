@@ -74,7 +74,7 @@ struct ColType {
  */
 struct ColMethod {
     PrimitiveKind type;    ///< Tipo del receiver (this).
-    const char *vx_name;  ///< Nombre del metodo en Vesta.
+    const char *vx_name;   ///< Nombre del metodo en Vesta.
     const char *native_fn; ///< Funcion native (no-GC).
     /// Variante GC-aware (recibe @c proc como primer arg adicional);
     /// nullptr si esta operacion no necesita write-barrier.  Las

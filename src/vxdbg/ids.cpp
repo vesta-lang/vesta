@@ -33,7 +33,8 @@ ContentHash hash_bytes(const void *data, size_t size) {
     // serian el mismo nodo para el almacen, y con 64 bits eso empieza a ser
     // probable a partir de unos pocos millones.  Con 128 deja de serlo.
     h.lo = util::fnv_bytes(util::kFnvOffset, data, size);
-    h.hi = util::fnv_bytes(util::kFnvOffset ^ 0x9E3779B97F4A7C15ull, data, size);
+    h.hi =
+        util::fnv_bytes(util::kFnvOffset ^ 0x9E3779B97F4A7C15ull, data, size);
     // La segunda pasada rompe la simetria: sin ella, dos entradas que difieren
     // en un solo byte al final producen huellas cuyas dos mitades varian igual,
     // y la de 128 bits no valdria mucho mas que la de 64.

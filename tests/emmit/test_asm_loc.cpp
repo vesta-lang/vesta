@@ -7,13 +7,14 @@
 
 /**
  * @file tests/emmit/test_asm_loc.cpp
- * @brief Comprueba el empaquetado de la POSICION de un operando de un bloque asm.
+ * @brief Comprueba el empaquetado de la POSICION de un operando de un bloque
+ * asm.
  *
  * Son cuatro campos en dieciseis bits, y viajan en los argumentos de la llamada
  * -- no en una tabla en la pila.  Si el empaquetado y el desempaquetado no
  * coinciden, el runtime mueve el valor equivocado de banco o de registro, y eso
- * no falla: corrompe.  De ahi que se comprueben TODAS las combinaciones y no una
- * muestra.
+ * no falla: corrompe.  De ahi que se comprueben TODAS las combinaciones y no
+ * una muestra.
  */
 
 #include "vx/asm/asm_phys_reg.h"
@@ -29,13 +30,13 @@ int main() {
                 for (uint8_t f = 0; f < 4; ++f) {
                     const uint16_t p = vx::asm_pack_loc(r, ph, b, f);
                     if (vx::asm_loc_vm_reg(p) == r &&
-                        vx::asm_loc_phys(p) == ph &&
-                        vx::asm_loc_bank(p) == b &&
+                        vx::asm_loc_phys(p) == ph && vx::asm_loc_bank(p) == b &&
                         vx::asm_loc_flags(p) == f)
                         continue;
                     if (++fallos <= 3)
-                        std::printf("  FALLA    r=%u ph=%u b=%u f=%u no vuelve\n",
-                                    r, ph, b, f);
+                        std::printf(
+                            "  FALLA    r=%u ph=%u b=%u f=%u no vuelve\n", r,
+                            ph, b, f);
                 }
 
     /* Y que cuatro posiciones caben en un entero sin pisarse: es lo que permite

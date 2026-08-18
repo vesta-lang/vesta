@@ -68,8 +68,8 @@ using StructResolver = std::function<const StructLayout *(const std::string &)>;
  *  - STRUCT -> si TODOS sus campos son C-representables Y no tiene `~Struct()`.
  *  - BORROW/BORROW_MUT -> si (en runtime es un host_ptr T* de 8 bytes).
  *  - OPTIONAL/RESULT -> si sus payloads son C-representables (POD etiquetado).
- *  - CLASS, STRING, colecciones, FUTURE, UNIQUE/SHARED, GC_PTR, TYPE_META -> no.
- *  El @c nominal_id (newtype) no altera la representabilidad (mismos bits).
+ *  - CLASS, STRING, colecciones, FUTURE, UNIQUE/SHARED, GC_PTR, TYPE_META ->
+ * no. El @c nominal_id (newtype) no altera la representabilidad (mismos bits).
  */
 bool is_c_representable(const Type &t, const StructResolver &find_struct);
 

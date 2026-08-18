@@ -13,15 +13,15 @@
  * DISCIPLINA: solo TRADUCE informacion existente.  Un valor marcado como
  * constante literal (@c is_const) es REMATERIALIZABLE: en vez de derramarlo a
  * memoria y recargarlo, se puede RE-EMITIR la constante en cada uso (mas barato
- * que un load).  El @c Objective ya lo usa (@c spill_cost_of abarata el spill de
- * los rematerializables).
+ * que un load).  El @c Objective ya lo usa (@c spill_cost_of abarata el spill
+ * de los rematerializables).
  *
  * ALCANCE (documentado, no heuristica): hoy se traduce EXCLUSIVAMENTE el flag
  * @c is_const (literales) -- la informacion que ya existe.  Otras formas
- * rematerializables (direcciones @c lea, @c STR_LIT_ADDR, ops de solo-constantes)
- * son un subconjunto MAYOR que se anadira cuando exista un analisis que las
- * marque; este adaptador es conservador (un falso-negativo solo pierde una
- * optimizacion, nunca corrompe).
+ * rematerializables (direcciones @c lea, @c STR_LIT_ADDR, ops de
+ * solo-constantes) son un subconjunto MAYOR que se anadira cuando exista un
+ * analisis que las marque; este adaptador es conservador (un falso-negativo
+ * solo pierde una optimizacion, nunca corrompe).
  *
  * Fase 0.25: ADITIVO, sin cambio de comportamiento (solo el test lo consume).
  */

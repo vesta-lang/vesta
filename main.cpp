@@ -27,32 +27,32 @@
 
 #include "cli/cli.h"
 #include "cli/vsh.h"
-#include "cli/version_info.h" // Banner de `vesta --version` / `-v`
-#include "analysis/asa/dump.h" // Volcado del ASA: modo --asa
+#include "cli/version_info.h"   // Banner de `vesta --version` / `-v`
+#include "analysis/asa/dump.h"  // Volcado del ASA: modo --asa
 #include "analyze/asm_report.h" // Informe de bloques asm + su productor del ASA
-#include "analyze/bigo.h"         // Subsistema de coste: modo --analyze (Big-O)
+#include "analyze/bigo.h"       // Subsistema de coste: modo --analyze (Big-O)
 #include "analyze/fingerprint.h" // Huella computacional (recursos + efectos)
 #include "analysis/effects/effects_report.h" // Modelo unico de efectos: --analyze --effects
 #include "vx/contract_when.h" // registro de arquitecturas conocidas
 #include "ir/ir_emitter.h"
 #include "ir/passes/select_policy.h" // PGO: load_branch_profile (if-conversion)
 #include "ir/ssa_ir_serialize.h" //  AOT: parse_ir_section (round-trip del @ir)
-#include "aot/aot_analyze.h" //  analisis de compatibilidad nativa
-#include "aot/aot_lower.h" //  re-bajada RAW_ALLOC/FREE/PANIC -> CALL
-#include "aot/object_writer.h" //  AOT.4: emisor PE/ELF (ObjectWriter)
-#include "aot/aot_native.h"    //   _start arch-portable
-#include "aot/linker.h"        //  linker propio (enlaza .o)
-#include "jit/vreg_pipeline.h" //   vreg_compile_native (HOST_LEAF)
-#include "jit/vec_isa.h" // ancho SIMD del target (--float-isa)
-#include "jit/backend_caps.h" // caps del target para el gate FMA (AOT)
+#include "aot/aot_analyze.h"     //  analisis de compatibilidad nativa
+#include "aot/aot_lower.h"       //  re-bajada RAW_ALLOC/FREE/PANIC -> CALL
+#include "aot/object_writer.h"   //  AOT.4: emisor PE/ELF (ObjectWriter)
+#include "aot/aot_native.h"      //   _start arch-portable
+#include "aot/linker.h"          //  linker propio (enlaza .o)
+#include "jit/vreg_pipeline.h"   //   vreg_compile_native (HOST_LEAF)
+#include "jit/vec_isa.h"         // ancho SIMD del target (--float-isa)
+#include "jit/backend_caps.h"    // caps del target para el gate FMA (AOT)
 #include "jit/auto_jit.h"
 #include "jit/jit_timing.h"
 #include "jit/jit_branch_prof.h"
 #include "jit/sched/cost_model.h" // --cpu: microarquitectura objetivo del scheduler
-#include "jit/keystone_asm_backend.h" //  registrar backend asm
+#include "jit/keystone_asm_backend.h"  //  registrar backend asm
 #include "jit/inline_asm_trampoline.h" //  helper runner inline-asm
 #include "jit/naked_native.h" // Bug 198: dispatcher naked (asm con simbolos propios)
-#include "runtime/profile.h"           // 
+#include "runtime/profile.h" //
 #include "pkg/cli.h"
 #include "runtime/proceso_runtime.h"
 #include "cli/runtime_api_commands.h"
@@ -61,8 +61,8 @@
 #include "vx/compiler.h"
 #include "vx/source_text.h" // un solo fin de linea para todo el pipeline
 #include "runtime/exception_runtime.h" // codigo de salida tras un fallo
-#include "vx/vxdbg_emit.h" // publicar el grafo del artefacto
-#include "vx/type_checker.h" // register_comptime_virtual_fns
+#include "vx/vxdbg_emit.h"             // publicar el grafo del artefacto
+#include "vx/type_checker.h"           // register_comptime_virtual_fns
 #include "vx/diag/diag_format.h" // renderizado de diagnosticos (texto/JSON/SARIF)
 #include "vx/lexer.h"
 #include "vx/parser.h"
@@ -73,13 +73,13 @@ namespace vx {
 void set_aot_condcomp_target(const std::string &os,
                              const std::string &arch) noexcept;
 }
-#include "vx/comptime/comptime_vm.h"    /*  MC.4 probe del ComptimeRuntime */
+#include "vx/comptime/comptime_vm.h" /*  MC.4 probe del ComptimeRuntime */
 #include "analysis/asa/fact.h"
 #include "ir/ir_optimizer.h"
 #include "vx/project_cache.h"
-#include "vx/source_hash.h"  /* project-level cache */
+#include "vx/source_hash.h"            /* project-level cache */
 #include "vx/module/module_resolver.h" // detect_stdlib_vx_dir
-#include "vx/velb_signature.h" /*firmas digitales */
+#include "vx/velb_signature.h"         /*firmas digitales */
 #include "util/sqlite_singleton.h"
 #include "util/crono_tramo.h"
 #include "util/fs_utils.h"
@@ -259,8 +259,8 @@ extern "C" void runtime_ensure_vx_callback_registered(void);
  * normal, la nativa, y el informe.  Al informe le faltaba, y eso no era un
  * detalle: describia los bloques de asm VACIOS -- una funcion que escribe
  * sesenta y cuatro bytes por su parametro salia como si solo tocara el hueco de
- * una variable --, o sea que hablaba de un programa que no es el que se compila.
- * Y el informe es donde se mira si el compilador entendio bien.
+ * una variable --, o sea que hablaba de un programa que no es el que se
+ * compila. Y el informe es donde se mira si el compilador entendio bien.
  *
  * @param cr Resultado de la primera pasada; se SUSTITUYE por el de la segunda.
  * @param vx_path Ruta del fuente.
@@ -294,13 +294,10 @@ extern "C" void runtime_ensure_vx_callback_registered(void);
  * @param artefacto   Bytes del fichero producido.
  * @param verboso     Dejar constancia por stderr.
  */
-static void guardar_cache_de_proyecto(const std::string &pc_path,
-                                      uint32_t opts_hash, uint32_t diag_hash,
-                                      const analysis::asa::Ambito &donde,
-                                      const vx::CompileResult &cr,
-                                      bool con_lineas,
-                                      const std::vector<uint8_t> &artefacto,
-                                      bool verboso) {
+static void guardar_cache_de_proyecto(
+    const std::string &pc_path, uint32_t opts_hash, uint32_t diag_hash,
+    const analysis::asa::Ambito &donde, const vx::CompileResult &cr,
+    bool con_lineas, const std::vector<uint8_t> &artefacto, bool verboso) {
     if (cr.dep_paths.empty() || artefacto.empty()) return;
     std::vector<vx::ProjectCacheDep> deps;
     deps.reserve(cr.dep_paths.size());
@@ -353,8 +350,8 @@ static bool recompilar_con_maquina_de_compilacion(
     copts_vm.emit_debug = true;
     /* Y con el texto `.vel`, siempre: esta intermedia se ENSAMBLA y se ejecuta.
      * Quien la pide puede no querer artefacto para si mismo -- el informe no lo
-     * quiere -- pero eso no se hereda aqui: sin `.vel` no hay nada que ensamblar
-     * y no habria maquina de compilacion que ejecutar. */
+     * quiere -- pero eso no se hereda aqui: sin `.vel` no hay nada que
+     * ensamblar y no habria maquina de compilacion que ejecutar. */
     copts_vm.ir_only = false;
     /* La intermedia es la que se EJECUTA para generar el codigo, asi que se
      * compila como se compila un programa: si se le pide el trato del informe
@@ -406,12 +403,10 @@ static bool recompilar_con_maquina_de_compilacion(
     return true;
 }
 
-static bool
-annotate_write_source(const std::string &path,
-                      const std::vector<std::string> &orden,
-                      const std::map<std::string, std::string> &display,
-                      const std::map<std::string, std::vector<std::string>>
-                          &anot_por_clave) {
+static bool annotate_write_source(
+    const std::string &path, const std::vector<std::string> &orden,
+    const std::map<std::string, std::string> &display,
+    const std::map<std::string, std::vector<std::string>> &anot_por_clave) {
     (void)orden;
     (void)display;
     std::ifstream in(path);
@@ -444,10 +439,10 @@ annotate_write_source(const std::string &path,
     // ellas (partial_/total_/when: sueltos).  @Target/@Override/// NO cuentan.
     auto es_contrato = [&](const std::string &s) {
         const std::string t = trim(s);
-        static const char *pref[] = {"@pure",  "@nothrow",    "@nopanic",
-                                     "@alloc", "@stack",      "@complexity",
-                                     "partial_pre:", "partial_post:",
-                                     "total_pre:",   "total_post:", "when:"};
+        static const char *pref[] = {
+            "@pure",      "@nothrow",    "@nopanic",     "@alloc",
+            "@stack",     "@complexity", "partial_pre:", "partial_post:",
+            "total_pre:", "total_post:", "when:"};
         for (const char *p : pref)
             if (t.rfind(p, 0) == 0) return true;
         return false;
@@ -456,10 +451,11 @@ annotate_write_source(const std::string &path,
     // hace falta ser exhaustivo: basta descartar palabras clave de sentencia.
     auto es_palabra_sentencia = [](const std::string &w) {
         static const std::set<std::string> kw = {
-            "return", "if", "while", "for", "do", "else", "match", "struct",
-            "class", "enum", "import", "namespace", "static_assert", "asm",
-            "break", "continue", "switch", "case", "concept", "using",
-            "typedef", "extern", "comptime"};
+            "return",   "if",        "while",         "for",     "do",
+            "else",     "match",     "struct",        "class",   "enum",
+            "import",   "namespace", "static_assert", "asm",     "break",
+            "continue", "switch",    "case",          "concept", "using",
+            "typedef",  "extern",    "comptime"};
         return kw.count(w) > 0;
     };
 
@@ -474,10 +470,11 @@ annotate_write_source(const std::string &path,
         if (par == std::string::npos) return "";
         // El nombre es el identificador inmediatamente antes del '('.
         size_t e = par;
-        while (e > 0 && (std::isspace((unsigned char)t[e - 1]))) --e;
+        while (e > 0 && (std::isspace((unsigned char)t[e - 1])))
+            --e;
         size_t b = e;
-        while (b > 0 && (std::isalnum((unsigned char)t[b - 1]) ||
-                         t[b - 1] == '_'))
+        while (b > 0 &&
+               (std::isalnum((unsigned char)t[b - 1]) || t[b - 1] == '_'))
             --b;
         if (b == e) return "";
         const std::string nombre = t.substr(b, e - b);
@@ -510,8 +507,7 @@ annotate_write_source(const std::string &path,
         std::string nombre;
         int nivel;
     };
-    auto apply_once =
-        [&](const std::vector<std::string> &src)
+    auto apply_once = [&](const std::vector<std::string> &src)
         -> std::pair<std::vector<std::string>, size_t> {
         std::vector<Ctx> pila;
         int nivel = 0;
@@ -525,14 +521,18 @@ annotate_write_source(const std::string &path,
             // Apertura de struct/class: recordar el nombre hasta ver su `{`.
             {
                 std::string kw;
-                if (t.rfind("struct ", 0) == 0) kw = t.substr(7);
-                else if (t.rfind("class ", 0) == 0) kw = t.substr(6);
-                else if (t.rfind("public struct ", 0) == 0) kw = t.substr(14);
-                else if (t.rfind("public class ", 0) == 0) kw = t.substr(13);
+                if (t.rfind("struct ", 0) == 0)
+                    kw = t.substr(7);
+                else if (t.rfind("class ", 0) == 0)
+                    kw = t.substr(6);
+                else if (t.rfind("public struct ", 0) == 0)
+                    kw = t.substr(14);
+                else if (t.rfind("public class ", 0) == 0)
+                    kw = t.substr(13);
                 if (!kw.empty()) {
                     size_t e = 0;
-                    while (e < kw.size() && (std::isalnum((unsigned char)kw[e]) ||
-                                             kw[e] == '_'))
+                    while (e < kw.size() &&
+                           (std::isalnum((unsigned char)kw[e]) || kw[e] == '_'))
                         ++e;
                     struct_pendiente = kw.substr(0, e);
                 }
@@ -570,7 +570,8 @@ annotate_write_source(const std::string &path,
                     while (!out.empty() && es_contrato(out.back()))
                         out.pop_back();
                     const std::string ind = indent_de(l);
-                    for (const auto &a : it->second) out.push_back(ind + a);
+                    for (const auto &a : it->second)
+                        out.push_back(ind + a);
                     ++reemplazos;
                 }
             }
@@ -622,7 +623,8 @@ annotate_write_source(const std::string &path,
         std::cerr << "[analyze-write] no se puede escribir: " << path << "\n";
         return false;
     }
-    for (const auto &l : out) ofs << l << "\n";
+    for (const auto &l : out)
+        ofs << l << "\n";
     ofs.close();
     std::cout << "[analyze-write] " << path << ": " << reemplazos
               << " funcion(es)/metodo(s) anotados.  Re-ejecuta --analyze para "
@@ -718,7 +720,8 @@ int main(int argc, char *argv[]) {
         cxxopts::value<std::string>()->default_value("vm"))(
         "diag-format",
         "Formato de los diagnosticos: text (legible, default) | json | sarif "
-        "(SARIF 2.1.0 para IDEs/CI). El idioma del texto se elige con VESTA_LANG.",
+        "(SARIF 2.1.0 para IDEs/CI). El idioma del texto se elige con "
+        "VESTA_LANG.",
         cxxopts::value<std::string>()->default_value("text"))(
         "list-arch", "Imprimir arquitecturas soportadas")(
         "asm-file", "Archivo ASM a ensamblar", cxxopts::value<std::string>())(
@@ -749,9 +752,12 @@ int main(int argc, char *argv[]) {
             "jit-disasm", "Volcar hex bytes + disasm (Capstone) de cada "
                           "funcion JIT-compilada a stderr")(
             "cpu",
-            "Microarquitectura objetivo para el scheduler (p.ej. intel-skylake, "
-            "amd-zen3, intel-icelake).  Usa los datos EXACTOS de latencia/puertos "
-            "de la DB.  Sin --cpu: JIT auto-detecta el host; AOT usa el generico.",
+            "Microarquitectura objetivo para el scheduler (p.ej. "
+            "intel-skylake, "
+            "amd-zen3, intel-icelake).  Usa los datos EXACTOS de "
+            "latencia/puertos "
+            "de la DB.  Sin --cpu: JIT auto-detecta el host; AOT usa el "
+            "generico.",
             cxxopts::value<std::string>())
         // ---- opciones de profiling (D.6 PGO) ----
         ("profile",
@@ -822,11 +828,14 @@ int main(int argc, char *argv[]) {
             cxxopts::value<std::string>())(
             "analyze-json",
             "Con --analyze: emite el coste por funcion como JSON (para "
-            "consumir desde un renderer de diagramas) en vez de texto legible.")(
+            "consumir desde un renderer de diagramas) en vez de texto "
+            "legible.")(
             "asa",
             "Vuelca TODO lo que el compilador sabe de un .vx: cada afirmacion "
-            "con su dominio, su certeza, de donde sale y de que otros hechos se "
-            "sigue; y tambien lo que se miro SIN sacar nada, con el motivo.  Sin "
+            "con su dominio, su certeza, de donde sale y de que otros hechos "
+            "se "
+            "sigue; y tambien lo que se miro SIN sacar nada, con el motivo.  "
+            "Sin "
             "variantes: lo vuelca entero y se redirige a un fichero.",
             cxxopts::value<std::string>())(
             "analyze-write",
@@ -896,14 +905,16 @@ int main(int argc, char *argv[]) {
             "float-isa",
             "AOT: backend de punto flotante / ancho SIMD del vectorizador: "
             "sse2 (default, 128b, corre en CUALQUIER x86-64) | x87 (legacy) | "
-            "avx (AVX2 256b, requiere AVX2 en la CPU) | avx512f (512b, requiere "
+            "avx (AVX2 256b, requiere AVX2 en la CPU) | avx512f (512b, "
+            "requiere "
             "AVX-512) | auto (multiversion: emite las 3 variantes y elige la "
             "optima en runtime por CPUID; lo mejor para distribuir un solo "
             "binario). Nota: un binario avx/avx512f FIJO da SIGILL en una CPU "
             "sin ese soporte; usa auto para portabilidad.",
             cxxopts::value<std::string>()->default_value("sse2"))(
             "ffp-contract",
-            "Politica de contraccion de coma flotante: fast (default -- contrae "
+            "Politica de contraccion de coma flotante: fast (default -- "
+            "contrae "
             "a*b+c en FMA, 1 redondeo, como gcc/clang) | off (IEEE estricto, 2 "
             "redondeos, sin FMA).  Global; @fp(strict|fast) lo override por "
             "funcion.",
@@ -1021,12 +1032,14 @@ int main(int argc, char *argv[]) {
             "con el, el proceso solo escucha el socket TCP.")(
             "vx-debug",
             "Emitir comentarios `// @line N` en el .vel intermedio del "
-            "compilador Vesta y, cuando se integre la pipeline completa de debug "
+            "compilador Vesta y, cuando se integre la pipeline completa de "
+            "debug "
             "section ( 2), embeber la tabla bytecode_offset -> (file, "
             "line) en el .velb final.  Sin este flag, el .vel/.velb no "
             "contienen info de debug -> el ejecutable es mas pequeno y el "
             "frontend NO genera datos extra.  Con el flag, el cliente del "
-            "debugger puede setear breakpoints por linea Vesta (`b file.vx:42`) "
+            "debugger puede setear breakpoints por linea Vesta (`b "
+            "file.vx:42`) "
             "en lugar de solo por addr.")(
             "vxdbg-dir",
             "Carpeta donde volcar la base de conocimiento de depuracion: los "
@@ -1094,7 +1107,8 @@ int main(int argc, char *argv[]) {
             "Desactivar atributos agresivos (const/cold/restrict/always_inline "
             "+ __builtin_expect/unreachable).  Default: activado.")(
             "instrument",
-            "Instrumentacion en el IR Vesta (heredada por bytecode VM, JIT, port "
+            "Instrumentacion en el IR Vesta (heredada por bytecode VM, JIT, "
+            "port "
             "C, port futuros): none (default) | trace (calls a "
             "vx_trace:enter/exit por funcion) | profile (timing per-funcion).",
             cxxopts::value<std::string>()->default_value("none"))
@@ -1127,14 +1141,16 @@ int main(int argc, char *argv[]) {
          " AOT.5: enlaza objetos relocatables (ELF64 o COFF AMD64, "
          "auto-detectados; los de --emit obj o de gcc/MSVC) en un ejecutable "
          "nativo SIN ld/gcc. Uso: vm --link a.o b.o [lib.a] [lib.dll] -o prog "
-         "[--format elf|pe] [--entry sym] [--link-base 0xADDR]. Con --entry usa "
+         "[--format elf|pe] [--entry sym] [--link-base 0xADDR]. Con --entry "
+         "usa "
          "ese simbolo como entrada SIN stub (kernel/bootloader); sin el, "
          "sintetiza _start->main (ejecutable hosted).")
         //  AOT.5: archivador propio (crea .a sin el ar del sistema).
         ("ar",
          " AOT.5: crea una libreria estatica .a (formato ar GNU, con "
          "indice de simbolos) a partir de objetos, SIN el ar del sistema. Uso: "
-         "vm --ar libfoo.a a.o b.o ...  El .a lo consume nuestro linker (--link) "
+         "vm --ar libfoo.a a.o b.o ...  El .a lo consume nuestro linker "
+         "(--link) "
          "y tambien ar/ld/gcc.")(
             "entry",
             "Con --link: simbolo de entrada del ejecutable (e.g. _kstart). "
@@ -1147,7 +1163,8 @@ int main(int argc, char *argv[]) {
             "link-script",
             "Con --link: script de enlace ESCRITO EN VESTA (un .vx con 'fn "
             "link()' que llama a builtins base/entry/stack/section/"
-            "section_size/align_up/debug_build). El linker lo compila y ejecuta "
+            "section_size/align_up/debug_build). El linker lo compila y "
+            "ejecuta "
             "para leer la configuracion. Los CLI --link-base/--entry tienen "
             "prioridad sobre el script.",
             cxxopts::value<std::string>()->default_value(""))(
@@ -1156,7 +1173,8 @@ int main(int argc, char *argv[]) {
             "script devuelva true.",
             cxxopts::value<bool>()->default_value("false"))(
             "sysroot",
-            "Con --link / --emit exe (ELF): raiz donde buscar las librerias del "
+            "Con --link / --emit exe (ELF): raiz donde buscar las librerias "
+            "del "
             "sistema (libc.so.6) al cross-compilar ELF desde otro SO. En Linux "
             "nativo no hace falta.",
             cxxopts::value<std::string>()->default_value(""));
@@ -1255,19 +1273,19 @@ int main(int argc, char *argv[]) {
             // Modo AOT: no se ejecuta nada en la VM; el JIT runtime queda off.
             aot_mode = true;
             jit::set_jit_threshold(UINT32_MAX);
-            // FMA en AOT: la contraccion escalar es ORTOGONAL a --float-isa (que
-            // controla el ancho SIMD).  Default = ON (la mayoria de CPUs tienen
-            // FMA3; VFMADD231SD no depende del ancho vectorial).  Solo se
-            // desactiva con -ffp-contract=off, o si --cpu apunta a una microarq
-            // SIN FMA (la DB lo sabe -> evita SIGILL en ese target concreto).
+            // FMA en AOT: la contraccion escalar es ORTOGONAL a --float-isa
+            // (que controla el ancho SIMD).  Default = ON (la mayoria de CPUs
+            // tienen FMA3; VFMADD231SD no depende del ancho vectorial).  Solo
+            // se desactiva con -ffp-contract=off, o si --cpu apunta a una
+            // microarq SIN FMA (la DB lo sabe -> evita SIGILL en ese target
+            // concreto).
             {
                 const bool ffp_off =
                     result.count("ffp-contract") &&
                     result["ffp-contract"].as<std::string>() == "off";
                 bool fma_ok = !ffp_off;
                 if (result.count("cpu")) {
-                    const std::string cpu_s =
-                        result["cpu"].as<std::string>();
+                    const std::string cpu_s = result["cpu"].as<std::string>();
                     if (!cpu_s.empty() && cpu_s != "generic")
                         fma_ok =
                             fma_ok && jit::backend_caps_from_cpu(cpu_s).fma;
@@ -1289,13 +1307,12 @@ int main(int argc, char *argv[]) {
                 fmt_s = "elf";
 #endif
             const std::string arch_s =
-                result.count("aot-arch")
-                    ? result["aot-arch"].as<std::string>()
-                    : std::string("x86-64");
-            const bool is32 = (arch_s == "x86-32" || arch_s == "x86_32" ||
-                               arch_s == "i386");
+                result.count("aot-arch") ? result["aot-arch"].as<std::string>()
+                                         : std::string("x86-64");
+            const bool is32 =
+                (arch_s == "x86-32" || arch_s == "x86_32" || arch_s == "i386");
             vx::set_aot_condcomp_target(fmt_s == "pe" ? "windows" : "linux",
-                                         is32 ? "x86" : "x86_64");
+                                        is32 ? "x86" : "x86_64");
             // Camino de compilacion: lo que hace utilizable
             // @Target("mode:aot") frente a @Target("mode:bytecode").
             vx::set_aot_condcomp_mode("aot");
@@ -1329,11 +1346,11 @@ int main(int argc, char *argv[]) {
         }
     }
     /* Auto-PGO del JIT (default-ON): si el JIT esta habilitado (threshold !=
-     * MAX), activar el profiler LIGERO (lock-free, tabla fija) desde el arranque
-     * para que tier-0 recolecte branches y el JIT re-decida la if-conversion con
-     * el perfil medido -- sin que el usuario pida nada.  Escape VESTA_NO_JIT_PGO
-     * =1.  El profiler ligero tiene coste ~1 ciclo por branch, apto para
-     * always-on.  El pesado D.6 (--profile) es aparte. */
+     * MAX), activar el profiler LIGERO (lock-free, tabla fija) desde el
+     * arranque para que tier-0 recolecte branches y el JIT re-decida la
+     * if-conversion con el perfil medido -- sin que el usuario pida nada.
+     * Escape VESTA_NO_JIT_PGO =1.  El profiler ligero tiene coste ~1 ciclo por
+     * branch, apto para always-on.  El pesado D.6 (--profile) es aparte. */
     {
         const char *no_pgo = std::getenv("VESTA_NO_JIT_PGO");
         const bool jit_on = (jit::g_jit_threshold != UINT32_MAX);
@@ -1422,12 +1439,13 @@ int main(int argc, char *argv[]) {
     //   - `--run x.velb -m aot --emit exe --format exe`: el dispatch de --run
     //     ganaba y ejecutaba el .velb, ignorando -m aot/--emit/--format.
     //   - `--vx x.vx --emit exe` (sin -m aot): --emit se ignoraba en silencio.
-    // Falla cerrado con mensaje claro en vez de hacer algo distinto a lo pedido.
+    // Falla cerrado con mensaje claro en vez de hacer algo distinto a lo
+    // pedido.
     {
         // (1) Acciones primarias mutuamente excluyentes: solo una a la vez.
         static const char *const kPrimaryActions[] = {
-            "run",      "worker",       "driver", "build",
-            "vesta",    "vx",           "asm-file", "disasm-file", "script"};
+            "run", "worker",   "driver",      "build", "vesta",
+            "vx",  "asm-file", "disasm-file", "script"};
         std::vector<std::string> present;
         for (const char *a : kPrimaryActions)
             if (result.count(a)) present.emplace_back(std::string("--") + a);
@@ -1465,7 +1483,8 @@ int main(int argc, char *argv[]) {
                          "(compilacion nativa standalone).\n";
             return EXIT_FAILURE;
         }
-        if (result.count("format") && !aot_mode && !link_mode && !analyze_mode) {
+        if (result.count("format") && !aot_mode && !link_mode &&
+            !analyze_mode) {
             std::cerr << "[cli] --format solo aplica con -m aot, --link o "
                          "--analyze.\n";
             return EXIT_FAILURE;
@@ -1498,7 +1517,7 @@ int main(int argc, char *argv[]) {
         std::vector<uint8_t> signed_bytes;
         std::string err;
         if (!vx::velb_sign(bytes, key_path, vx::VsigAlgo::RSA_SHA256,
-                            signed_bytes, err)) {
+                           signed_bytes, err)) {
             std::cerr << "error: " << err << "\n";
             return EXIT_FAILURE;
         }
@@ -1562,8 +1581,9 @@ int main(int argc, char *argv[]) {
             ar_objs.assign(pos.begin() + 1, pos.end());
         }
         if (ar_out.empty() || ar_objs.empty()) {
-            std::cerr << "error: --ar requiere la libreria de salida y al menos "
-                         "un objeto (vm --ar libfoo.a a.o [b.o ...])\n";
+            std::cerr
+                << "error: --ar requiere la libreria de salida y al menos "
+                   "un objeto (vm --ar libfoo.a a.o [b.o ...])\n";
             return EXIT_FAILURE;
         }
         std::string aerr;
@@ -1659,7 +1679,8 @@ int main(int argc, char *argv[]) {
                 std::filesystem::path(exe_dir).parent_path().string();
             if (!_plib.empty()) {
                 pp.options().import_paths.push_back(_plib + "/include_lib");
-                pp.options().import_paths.push_back(_plib + "/preprocessor/include_lib");
+                pp.options().import_paths.push_back(
+                    _plib + "/preprocessor/include_lib");
             }
         }
         pp.options().import_paths.push_back(source_dir);
@@ -2048,9 +2069,8 @@ int main(int argc, char *argv[]) {
         {
             std::ifstream probe(dfile, std::ios::binary);
             char sig[4] = {0, 0, 0, 0};
-            if (probe.read(sig, 4) &&
-                (std::memcmp(sig, "VELB", 4) == 0 ||
-                 std::memcmp(sig, "BLEV", 4) == 0)) {
+            if (probe.read(sig, 4) && (std::memcmp(sig, "VELB", 4) == 0 ||
+                                       std::memcmp(sig, "BLEV", 4) == 0)) {
                 probe.close();
                 // Volcar el fichero ENTERO: el `hlt` termina una funcion, no
                 // el codigo, y pararse en el primero deja fuera todo lo demas
@@ -2219,17 +2239,19 @@ int main(int argc, char *argv[]) {
         analysis::effects::Backend analyze_backend =
             analysis::effects::Backend::Vm;
         if (result.count("format") || result.count("aot-arch")) {
-            const std::string fmt =
-                result.count("format") ? result["format"].as<std::string>()
-                                       : std::string();
-            const std::string arch =
-                result.count("aot-arch") ? result["aot-arch"].as<std::string>()
+            const std::string fmt = result.count("format")
+                                        ? result["format"].as<std::string>()
+                                        : std::string();
+            const std::string arch = result.count("aot-arch")
+                                         ? result["aot-arch"].as<std::string>()
                                          : std::string("x86-64");
-            const bool es32 = (arch == "x86-32" || arch == "x86_32" ||
-                               arch == "i386");
+            const bool es32 =
+                (arch == "x86-32" || arch == "x86_32" || arch == "i386");
             std::string os_obj;
-            if (fmt == "pe") os_obj = "windows";
-            else if (fmt == "elf") os_obj = "linux";
+            if (fmt == "pe")
+                os_obj = "windows";
+            else if (fmt == "elf")
+                os_obj = "linux";
             else {
 #if defined(_WIN32)
                 os_obj = "windows";
@@ -2268,8 +2290,9 @@ int main(int argc, char *argv[]) {
         copts.ir_only = true;
         // --analyze respeta -ffp-contract=off (el coste/IR reflejado debe
         // coincidir con el binario que se generara).
-        copts.fp_contract = !(result.count("ffp-contract") &&
-                              result["ffp-contract"].as<std::string>() == "off");
+        copts.fp_contract =
+            !(result.count("ffp-contract") &&
+              result["ffp-contract"].as<std::string>() == "off");
         /* Analizar PARA nativo es analizar el programa que va a existir alli,
          * y ese no se parece al de la VM: el frontend baja distinto con POO
          * nativa (sin ClassInfo, sin handles, y con las primitivas de I/O como
@@ -2301,8 +2324,9 @@ int main(int argc, char *argv[]) {
         auto tramo_us = [&marca_an]() -> long {
             const auto ahora = RelojAnalisis::now();
             const long us = static_cast<long>(
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                    ahora - marca_an).count());
+                std::chrono::duration_cast<std::chrono::microseconds>(ahora -
+                                                                      marca_an)
+                    .count());
             marca_an = ahora;
             return us;
         };
@@ -2321,7 +2345,8 @@ int main(int argc, char *argv[]) {
             std::error_code ec;
             const std::string tmp_pref =
                 (std::filesystem::temp_directory_path(ec) /
-                 ("vx_analyze_" + std::filesystem::path(vx_path).stem().string()))
+                 ("vx_analyze_" +
+                  std::filesystem::path(vx_path).stem().string()))
                     .string();
             recompilar_con_maquina_de_compilacion(cr, vx_path, vx_source, copts,
                                                   tmp_pref);
@@ -2359,7 +2384,8 @@ int main(int argc, char *argv[]) {
          * enlazador: dos criterios para lo mismo se separan a la primera. */
         if (analyze_backend == analysis::effects::Backend::Aot) {
             std::unordered_set<std::string> definidas;
-            for (const auto &f : amod_post.functions) definidas.insert(f.name);
+            for (const auto &f : amod_post.functions)
+                definidas.insert(f.name);
             bool falta = false;
             for (const auto &f : amod_post.functions)
                 for (const auto &b : f.blocks)
@@ -2385,7 +2411,8 @@ int main(int argc, char *argv[]) {
                     io_opts.opt_level = copts.opt_level;
                     io_opts.native_poo = true;
                     io_opts.asm_target_bits = copts.asm_target_bits;
-                    vx::CompileResult io_cr = vx::compile_vx_project(c, io_opts);
+                    vx::CompileResult io_cr =
+                        vx::compile_vx_project(c, io_opts);
                     ir::IrModule io_mod;
                     if (io_cr.ok && !io_cr.ir_module_cache_bytes.empty() &&
                         ir::parse_ir_module_cache(io_cr.ir_module_cache_bytes,
@@ -2416,8 +2443,8 @@ int main(int argc, char *argv[]) {
         /* Modelo UNICO de efectos.  Corre sobre el modulo COMO SE COMPILA, que
          * NO es el de arriba: `--analyze` optimiza sin inline a proposito (el
          * coste PARCIAL tiene que ser el del cuerpo escrito, no el del cuerpo
-         * mas lo que le metieron dentro), y eso vale para medir coste pero MIENTE
-         * para el resto.
+         * mas lo que le metieron dentro), y eso vale para medir coste pero
+         * MIENTE para el resto.
          *
          * Se noto midiendo: el comprobador de limites daba CERO avisos aqui y
          * DIECISIETE al compilar los mismos programas.  Una herramienta de
@@ -2457,7 +2484,7 @@ int main(int argc, char *argv[]) {
         // sugerir) el coste POR TIPO -- "O(1) si is_integer<T>, O(n) si
         // is_float<T>" -- en vez de dos lineas sueltas.
         struct GenOrigen {
-            std::string plantilla;             // "atomic"
+            std::string plantilla;              // "atomic"
             std::vector<std::string> type_args; // {"i64"}
             std::string metodo;                 // "fetch_add"
         };
@@ -2468,10 +2495,12 @@ int main(int argc, char *argv[]) {
             g.plantilla = f.generic_template_name;
             g.type_args = f.generic_type_args;
             // El metodo es lo que queda al quitar el prefijo
-            // `<plantilla>_<join(type_args,"_")>__`.  Asi `atomic_i64____deref__`
-            // (prefijo `atomic_i64__`) deja `__deref__`.
+            // `<plantilla>_<join(type_args,"_")>__`.  Asi
+            // `atomic_i64____deref__` (prefijo `atomic_i64__`) deja
+            // `__deref__`.
             std::string pref = f.generic_template_name;
-            for (const auto &t : f.generic_type_args) pref += "_" + t;
+            for (const auto &t : f.generic_type_args)
+                pref += "_" + t;
             pref += "__";
             if (f.name.size() > pref.size() &&
                 f.name.compare(0, pref.size(), pref) == 0)
@@ -2486,14 +2515,15 @@ int main(int argc, char *argv[]) {
                 std::isdigit(static_cast<unsigned char>(t[1])))
                 return "integer";
             if (t == "f32" || t == "f64") return "float";
-            if (!t.empty() && (t.back() == '*' ||
-                               t.find("ptr") != std::string::npos))
+            if (!t.empty() &&
+                (t.back() == '*' || t.find("ptr") != std::string::npos))
                 return "pointer";
             return "otro";
         };
-        // Contratos de huella (@pure/@nothrow/@nopanic/@alloc/@stack) declarados
-        // por el usuario, verificados contra la huella inferida.
-        auto contract_checks = analyze::verify_contracts(fps_post, cr.contracts);
+        // Contratos de huella (@pure/@nothrow/@nopanic/@alloc/@stack)
+        // declarados por el usuario, verificados contra la huella inferida.
+        auto contract_checks =
+            analyze::verify_contracts(fps_post, cr.contracts);
 
         // Deserializar el modulo PRE-opt (complejidad algoritmica del fuente
         // tal como se escribio).  Si por alguna razon no esta disponible,
@@ -2501,9 +2531,8 @@ int main(int argc, char *argv[]) {
         bool have_pre = !cr.ir_module_cache_bytes_preopt.empty();
         ir::IrModule amod_pre;
         analyze::ModuleCost mc_pre;
-        if (have_pre &&
-            ir::parse_ir_module_cache(cr.ir_module_cache_bytes_preopt,
-                                      amod_pre)) {
+        if (have_pre && ir::parse_ir_module_cache(
+                            cr.ir_module_cache_bytes_preopt, amod_pre)) {
             mc_pre = analyze::analyze_module(amod_pre);
             analyze::compose_interproc(mc_pre);
         } else {
@@ -2512,9 +2541,9 @@ int main(int argc, char *argv[]) {
 
         // Helper: localizar el CostResult de una funcion por nombre en un
         // ModuleCost (el orden pre/post puede diferir tras la optimizacion).
-        auto find_fn = [](const analyze::ModuleCost &m,
-                          const std::string &name)
-            -> const analyze::CostResult * {
+        auto find_fn =
+            [](const analyze::ModuleCost &m,
+               const std::string &name) -> const analyze::CostResult * {
             for (const auto &f : m.functions)
                 if (f.function == name) return &f;
             return nullptr;
@@ -2556,14 +2585,15 @@ int main(int argc, char *argv[]) {
             for (size_t i = 0; i < fps_post.size(); ++i) {
                 const auto &f = fps_post[i];
                 if (i) js << ",";
-                js << "{\"function\":\"" << jstr(f.function) << "\",\"allocs\":"
-                   << f.alloc_sites_total << ",\"stack\":" << f.stack_bytes
+                js << "{\"function\":\"" << jstr(f.function)
+                   << "\",\"allocs\":" << f.alloc_sites_total
+                   << ",\"stack\":" << f.stack_bytes
                    << ",\"pure\":" << (f.pure ? "true" : "false")
                    << ",\"throws\":" << (f.throws_total ? "true" : "false")
                    << ",\"panics\":" << (f.panics_total ? "true" : "false")
                    << ",\"recursion\":" << (f.recursive ? "true" : "false")
-                   << ",\"effects_known\":" << (f.effects_known ? "true" : "false")
-                   << "}";
+                   << ",\"effects_known\":"
+                   << (f.effects_known ? "true" : "false") << "}";
             }
             js << "]";
             // Contratos verificados.
@@ -2571,13 +2601,14 @@ int main(int argc, char *argv[]) {
             for (size_t i = 0; i < contract_checks.size(); ++i) {
                 const auto &ck = contract_checks[i];
                 if (i) js << ",";
-                const char *st =
-                    ck.status == analyze::ContractCheck::OK          ? "ok"
-                    : ck.status == analyze::ContractCheck::VIOLATED  ? "violated"
-                                                                     : "unverifiable";
-                js << "{\"function\":\"" << jstr(ck.function) << "\",\"contract\":\""
-                   << jstr(ck.contract) << "\",\"status\":\"" << st
-                   << "\",\"detail\":\"" << jstr(ck.detail) << "\"}";
+                const char *st = ck.status == analyze::ContractCheck::OK ? "ok"
+                                 : ck.status == analyze::ContractCheck::VIOLATED
+                                     ? "violated"
+                                     : "unverifiable";
+                js << "{\"function\":\"" << jstr(ck.function)
+                   << "\",\"contract\":\"" << jstr(ck.contract)
+                   << "\",\"status\":\"" << st << "\",\"detail\":\""
+                   << jstr(ck.detail) << "\"}";
             }
             js << "]";
             // Modelo unico de efectos (mismo que --analyze legible + DCE): los
@@ -2613,23 +2644,20 @@ int main(int argc, char *argv[]) {
                      "(partial_pre/partial_post/total_pre/total_post) se valida"
                      " contra su coste inferido.  @complexity(O(...)) = azucar"
                      " de total_post.\n";
-        std::cout
-            << "=================================================="
-               "===========\n";
+        std::cout << "=================================================="
+                     "===========\n";
         int mismatches = 0;
         for (const auto &rp : mc_post.functions) {
-            const analyze::CostResult *pre = have_pre
-                ? find_fn(mc_pre, rp.function)
-                : nullptr;
+            const analyze::CostResult *pre =
+                have_pre ? find_fn(mc_pre, rp.function) : nullptr;
 
             std::cout << "  " << rp.function << "\n";
             // PRE-opt.
             if (pre) {
                 std::cout << "      PRE-opt : parcial "
-                          << analyze::cost_class_str(pre->big_o)
-                          << "   total "
-                          << analyze::cost_class_str(pre->total_class)
-                          << "   [" << pre->detail << "]\n";
+                          << analyze::cost_class_str(pre->big_o) << "   total "
+                          << analyze::cost_class_str(pre->total_class) << "   ["
+                          << pre->detail << "]\n";
             } else {
                 std::cout << "      PRE-opt : (no disponible)\n";
             }
@@ -2663,7 +2691,8 @@ int main(int argc, char *argv[]) {
                         : std::to_string(fp->stack_bytes_total);
                 std::cout << "      Huella  : allocs=" << fp->alloc_sites << "/"
                           << fp->alloc_sites_total
-                          << " stack=" << fp->stack_bytes << "/" << st_tot << "B"
+                          << " stack=" << fp->stack_bytes << "/" << st_tot
+                          << "B"
                           << " (parcial/total)"
                           << " pure=" << (fp->pure ? "si" : "no")
                           << " throws=" << (fp->throws_total ? "si" : "no")
@@ -2679,9 +2708,9 @@ int main(int argc, char *argv[]) {
             for (const auto &ck : contract_checks) {
                 if (ck.function != rp.function) continue;
                 const char *mark =
-                    ck.status == analyze::ContractCheck::OK          ? "OK  "
-                    : ck.status == analyze::ContractCheck::VIOLATED  ? "FALLA"
-                                                                     : "?   ";
+                    ck.status == analyze::ContractCheck::OK         ? "OK  "
+                    : ck.status == analyze::ContractCheck::VIOLATED ? "FALLA"
+                                                                    : "?   ";
                 std::cout << "      " << mark << " " << ck.contract << " -> "
                           << ck.detail << "\n";
                 if (ck.status == analyze::ContractCheck::VIOLATED) ++mismatches;
@@ -2712,8 +2741,7 @@ int main(int argc, char *argv[]) {
                      rp.confidence, true},
                     {"total_pre   ", &rp.decl_total_pre,
                      pre ? pre->total_class : analyze::CostClass::O_UNKNOWN,
-                     pre ? pre->total_confidence
-                         : analyze::Confidence::UNKNOWN,
+                     pre ? pre->total_confidence : analyze::Confidence::UNKNOWN,
                      pre != nullptr},
                     {"total_post  ", &rp.decl_total_post, rp.total_class,
                      rp.total_confidence, true},
@@ -2742,15 +2770,15 @@ int main(int argc, char *argv[]) {
             }
         }
         // Huella + contratos de TIPO (structs/clases/enums).  El layout de todo
-        // struct es C-compatible por invariante del lenguaje; @pod indica ademas
-        // que es trivialmente copiable (sin dtor ni campos gestionados).
+        // struct es C-compatible por invariante del lenguaje; @pod indica
+        // ademas que es trivialmente copiable (sin dtor ni campos gestionados).
         if (!cr.type_fingerprints.empty()) {
             auto type_checks = analyze::verify_type_contracts(
                 cr.type_fingerprints, cr.type_contracts);
             std::cout << "\n--- Tipos ---\n";
             for (const auto &tf : cr.type_fingerprints) {
                 const char *kind =
-                    tf.kind == analyze::TypeFingerprint::STRUCT ? "struct"
+                    tf.kind == analyze::TypeFingerprint::STRUCT  ? "struct"
                     : tf.kind == analyze::TypeFingerprint::CLASS ? "class"
                                                                  : "enum";
                 std::cout << "  " << kind << " " << tf.type_name
@@ -2801,9 +2829,9 @@ int main(int argc, char *argv[]) {
             // distintos, y la huella cuando el cuerpo si (los `register()` de
             // una variante @Target("arch:arm64") gastan frame que su gemela
             // x86-64 no), asi que las dos hay que reportarlas por arch.
-            // Datos CRUDOS de una funcion en una arquitectura (no solo el string
-            // resumen): --annotate los necesita desglosados para generar cada
-            // anotacion y decidir si difiere entre arch.
+            // Datos CRUDOS de una funcion en una arquitectura (no solo el
+            // string resumen): --annotate los necesita desglosados para generar
+            // cada anotacion y decidir si difiere entre arch.
             struct FnData {
                 bool present = false;
                 std::string partial_pre, partial_post, total_pre, total_post;
@@ -2829,9 +2857,10 @@ int main(int argc, char *argv[]) {
                 o2.module_name = "main";
                 o2.opt_level = 2;
                 // IGUAL que el analisis principal: pedir tambien el IR PRE-opt.
-                // Sin esto, el POST se optimiza CON inline y el `partial` cuenta
-                // el cuerpo inlineado -> mide distinto que verify (que si usa el
-                // no-inline) y la sugerencia contradice la verificacion.
+                // Sin esto, el POST se optimiza CON inline y el `partial`
+                // cuenta el cuerpo inlineado -> mide distinto que verify (que
+                // si usa el no-inline) y la sugerencia contradice la
+                // verificacion.
                 o2.emit_ir_preopt = true;
                 /* Y de aqui tampoco se lee el texto `.vel`: esta tabla mira el
                  * IR de cada arquitectura y nada mas.  Compilar el fuente una
@@ -2871,17 +2900,16 @@ int main(int argc, char *argv[]) {
                 // pre cae al post (mejor mostrar algo que fallar).
                 ir::IrModule m2_pre;
                 analyze::ModuleCost c2_pre;
-                bool tiene_pre =
-                    !r2.ir_module_cache_bytes_preopt.empty() &&
-                    ir::parse_ir_module_cache(r2.ir_module_cache_bytes_preopt,
-                                              m2_pre);
+                bool tiene_pre = !r2.ir_module_cache_bytes_preopt.empty() &&
+                                 ir::parse_ir_module_cache(
+                                     r2.ir_module_cache_bytes_preopt, m2_pre);
                 if (tiene_pre) {
                     c2_pre = analyze::analyze_module(m2_pre);
                     analyze::compose_interproc(c2_pre);
                 }
-                auto find_c2 = [](const analyze::ModuleCost &m,
-                                  const std::string &nm)
-                    -> const analyze::CostResult * {
+                auto find_c2 =
+                    [](const analyze::ModuleCost &m,
+                       const std::string &nm) -> const analyze::CostResult * {
                     for (const auto &f : m.functions)
                         if (f.function == nm) return &f;
                     return nullptr;
@@ -2889,7 +2917,8 @@ int main(int argc, char *argv[]) {
                 auto fp2 = analyze::compute_module_fingerprints(m2);
                 analyze::compose_fingerprints(fp2, &r2.contracts);
                 std::map<std::string, const analyze::FunctionFingerprint *> fpx;
-                for (const auto &f : fp2) fpx[f.function] = &f;
+                for (const auto &f : fp2)
+                    fpx[f.function] = &f;
                 for (const auto &f : c2.functions) {
                     // Las 4 dimensiones, IGUAL que el analisis principal:
                     //   partial_pre  = cuerpo propio, PRE-opt
@@ -2900,8 +2929,8 @@ int main(int argc, char *argv[]) {
                         tiene_pre ? find_c2(c2_pre, f.function) : nullptr;
                     FnData fd;
                     fd.present = true;
-                    fd.partial_pre = analyze::cost_class_str(
-                        pre ? pre->big_o : f.big_o);
+                    fd.partial_pre =
+                        analyze::cost_class_str(pre ? pre->big_o : f.big_o);
                     fd.partial_post = analyze::cost_class_str(f.big_o);
                     fd.total_pre = analyze::cost_class_str(
                         pre ? pre->total_class : f.total_class);
@@ -2921,11 +2950,10 @@ int main(int argc, char *argv[]) {
                             h->stack_bytes_total == analyze::STACK_UNBOUNDED
                                 ? std::string("inf")
                                 : std::to_string(h->stack_bytes_total);
-                        s += "  allocs=" + std::to_string(h->alloc_sites) + "/" +
-                             std::to_string(h->alloc_sites_total) +
+                        s += "  allocs=" + std::to_string(h->alloc_sites) +
+                             "/" + std::to_string(h->alloc_sites_total) +
                              " stack=" + std::to_string(h->stack_bytes) + "/" +
-                             st_tot + "B" +
-                             " pure=" + (h->pure ? "si" : "no") +
+                             st_tot + "B" + " pure=" + (h->pure ? "si" : "no") +
                              " throws=" + (h->throws_total ? "si" : "no") +
                              " panics=" + (h->panics_total ? "si" : "no");
                     }
@@ -2934,7 +2962,8 @@ int main(int argc, char *argv[]) {
                 }
                 tabla.push_back(std::move(pa));
             }
-            vx::set_aot_condcomp_target(host_os, host_arch); // dejarlo como estaba
+            vx::set_aot_condcomp_target(host_os,
+                                        host_arch); // dejarlo como estaba
             if (medir_analisis)
                 std::cerr << "[analyze] tiempos: por-arquitectura ("
                           << vx::cwhen::known_archs().size()
@@ -2960,9 +2989,10 @@ int main(int argc, char *argv[]) {
                     no_compilan.push_back(pa.arch + ": " + pa.fallo);
 
             if (!difieren.empty() || !no_compilan.empty()) {
-                std::cout << "\nCoste y huella por arquitectura (parcial / total"
-                             " POST-opt + allocs/stack/pure/throws/panics).  "
-                             "Solo lo que difiere.\n";
+                std::cout
+                    << "\nCoste y huella por arquitectura (parcial / total"
+                       " POST-opt + allocs/stack/pure/throws/panics).  "
+                       "Solo lo que difiere.\n";
                 std::cout
                     << "=================================================="
                        "===========\n";
@@ -3012,7 +3042,8 @@ int main(int argc, char *argv[]) {
                     auto it = origen.find(f.function);
                     if (it != origen.end()) {
                         clave = it->second.plantilla + "::" + it->second.metodo;
-                        disp = it->second.plantilla + "<T>::" + it->second.metodo;
+                        disp =
+                            it->second.plantilla + "<T>::" + it->second.metodo;
                     } else {
                         clave = f.function;
                         disp = f.function;
@@ -3033,9 +3064,11 @@ int main(int argc, char *argv[]) {
                 // valor, dado el universo de combos del grupo.  Casos, de mas
                 // general a mas especifico:
                 //   - cubre TODAS las combos           -> sin when;
-                //   - todas las arch, un subconjunto de tipos -> solo is_X<T>();
+                //   - todas las arch, un subconjunto de tipos -> solo
+                //   is_X<T>();
                 //   - un subconjunto de arch, todos los tipos -> solo arch:X;
-                //   - resto -> OR de `arch:X && is_Y<T>()` por combo, factorizando
+                //   - resto -> OR de `arch:X && is_Y<T>()` por combo,
+                //   factorizando
                 //     por arch cuando ese arch tiene todos sus tipos.
                 auto pred_tipo = [](const std::string &tc) {
                     return "is_" + tc + "<T>()";
@@ -3044,20 +3077,25 @@ int main(int argc, char *argv[]) {
                     [&](const std::vector<const Combo *> &sel,
                         const std::set<std::string> &all_archs,
                         const std::set<std::string> &all_tcs) -> std::string {
-                    const bool generico = !(all_tcs.size() == 1 &&
-                                            all_tcs.count(""));
+                    const bool generico =
+                        !(all_tcs.size() == 1 && all_tcs.count(""));
                     if (sel.size() == all_archs.size() * all_tcs.size())
                         return std::string(); // cubre todo
                     // Agrupar la seleccion por arch -> tipos.
                     std::map<std::string, std::set<std::string>> por_arch;
-                    for (const auto *c : sel) por_arch[c->arch].insert(c->tc);
-                    // Todas las arch presentes con el MISMO subconjunto de tipos
+                    for (const auto *c : sel)
+                        por_arch[c->arch].insert(c->tc);
+                    // Todas las arch presentes con el MISMO subconjunto de
+                    // tipos
                     // -> el eje arch no distingue; factorizar por tipo.
                     if (generico && por_arch.size() == all_archs.size()) {
                         bool iguales = true;
                         const auto &ref = por_arch.begin()->second;
                         for (const auto &kv : por_arch)
-                            if (kv.second != ref) { iguales = false; break; }
+                            if (kv.second != ref) {
+                                iguales = false;
+                                break;
+                            }
                         if (iguales) {
                             std::string w;
                             bool first = true;
@@ -3083,7 +3121,8 @@ int main(int argc, char *argv[]) {
                         } else {
                             for (const auto &tc : kv.second) {
                                 if (!first) w += " || ";
-                                w += "arch:" + kv.first + " && " + pred_tipo(tc);
+                                w +=
+                                    "arch:" + kv.first + " && " + pred_tipo(tc);
                                 first = false;
                             }
                         }
@@ -3101,7 +3140,8 @@ int main(int argc, char *argv[]) {
                     for (const auto &inst : instancias[clave]) {
                         std::string tc;
                         auto ito = origen.find(inst);
-                        if (ito != origen.end() && !ito->second.type_args.empty())
+                        if (ito != origen.end() &&
+                            !ito->second.type_args.empty())
                             tc = clase_tipo(ito->second.type_args[0]);
                         all_tcs.insert(tc);
                         for (const auto *pa : archs_ok) {
@@ -3114,36 +3154,38 @@ int main(int argc, char *argv[]) {
                     }
                     if (combos.empty()) continue;
 
-                    std::vector<std::string> lineas; // "@nothrow", "@stack(...)"...
+                    std::vector<std::string>
+                        lineas; // "@nothrow", "@stack(...)"...
 
-                    auto emitir =
-                        [&](const std::function<std::string(const FnData &)> &get,
-                            const std::function<std::string(const std::string &,
-                                                            const std::string &)>
-                                &render) {
-                            std::map<std::string, std::vector<const Combo *>> porv;
-                            for (const auto &c : combos)
-                                porv[get(*c.d)].push_back(&c);
-                            for (const auto &kv : porv)
-                                lineas.push_back(render(
-                                    kv.first,
-                                    when_de(kv.second, all_archs, all_tcs)));
-                        };
+                    auto emitir = [&](const std::function<std::string(
+                                          const FnData &)> &get,
+                                      const std::function<std::string(
+                                          const std::string &,
+                                          const std::string &)> &render) {
+                        std::map<std::string, std::vector<const Combo *>> porv;
+                        for (const auto &c : combos)
+                            porv[get(*c.d)].push_back(&c);
+                        for (const auto &kv : porv)
+                            lineas.push_back(
+                                render(kv.first,
+                                       when_de(kv.second, all_archs, all_tcs)));
+                    };
 
                     // Flags (@pure/@nothrow/@nopanic): donde la prop se CUMPLE.
-                    auto flag = [&](const char *nombre,
-                                    const std::function<bool(const FnData &)> &p) {
-                        std::vector<const Combo *> sel;
-                        for (const auto &c : combos)
-                            if (p(*c.d)) sel.push_back(&c);
-                        if (sel.empty()) return;
-                        std::string w = when_de(sel, all_archs, all_tcs);
-                        if (w.empty())
-                            lineas.push_back(std::string("@") + nombre);
-                        else // el flag no lleva N: `, when:` -> `(when:`
-                            lineas.push_back(std::string("@") + nombre + "(" +
-                                             w.substr(2) + ")");
-                    };
+                    auto flag =
+                        [&](const char *nombre,
+                            const std::function<bool(const FnData &)> &p) {
+                            std::vector<const Combo *> sel;
+                            for (const auto &c : combos)
+                                if (p(*c.d)) sel.push_back(&c);
+                            if (sel.empty()) return;
+                            std::string w = when_de(sel, all_archs, all_tcs);
+                            if (w.empty())
+                                lineas.push_back(std::string("@") + nombre);
+                            else // el flag no lleva N: `, when:` -> `(when:`
+                                lineas.push_back(std::string("@") + nombre +
+                                                 "(" + w.substr(2) + ")");
+                        };
                     flag("pure", [](const FnData &d) { return d.pure; });
                     flag("nothrow", [](const FnData &d) { return !d.throws; });
                     flag("nopanic", [](const FnData &d) { return !d.panics; });
@@ -3153,34 +3195,42 @@ int main(int argc, char *argv[]) {
                     // parcial==total (N=total, el peor caso), o nombrada
                     // `@X(partial: P, total: T)` cuando difieren.  Un total no
                     // acotable (pila con recursion) se emite solo con parcial.
-                    auto num = [&](const char *nombre,
-                                   const std::function<uint64_t(const FnData &)> &gp,
-                                   const std::function<uint64_t(const FnData &)> &gt) {
-                        emitir(
-                            [&](const FnData &d) {
-                                return std::to_string(gp(d)) + "|" +
-                                       std::to_string(gt(d));
-                            },
-                            [&](const std::string &v, const std::string &w) {
-                                const size_t bar = v.find('|');
-                                const std::string ps = v.substr(0, bar);
-                                const std::string ts = v.substr(bar + 1);
-                                const uint64_t p = std::stoull(ps);
-                                const uint64_t t = std::stoull(ts);
-                                std::string dims;
-                                if (t == analyze::STACK_UNBOUNDED)
-                                    dims = "partial: " + ps; // total no acotable
-                                else if (p == t)
-                                    dims = ts; // forma corta = total
-                                else
-                                    dims = "partial: " + ps + ", total: " + ts;
-                                return std::string("@") + nombre + "(" + dims + w +
-                                       ")";
-                            });
-                    };
-                    num("alloc", [](const FnData &d) { return d.alloc_partial; },
+                    auto num =
+                        [&](const char *nombre,
+                            const std::function<uint64_t(const FnData &)> &gp,
+                            const std::function<uint64_t(const FnData &)> &gt) {
+                            emitir(
+                                [&](const FnData &d) {
+                                    return std::to_string(gp(d)) + "|" +
+                                           std::to_string(gt(d));
+                                },
+                                [&](const std::string &v,
+                                    const std::string &w) {
+                                    const size_t bar = v.find('|');
+                                    const std::string ps = v.substr(0, bar);
+                                    const std::string ts = v.substr(bar + 1);
+                                    const uint64_t p = std::stoull(ps);
+                                    const uint64_t t = std::stoull(ts);
+                                    std::string dims;
+                                    if (t == analyze::STACK_UNBOUNDED)
+                                        dims = "partial: " +
+                                               ps; // total no acotable
+                                    else if (p == t)
+                                        dims = ts; // forma corta = total
+                                    else
+                                        dims =
+                                            "partial: " + ps + ", total: " + ts;
+                                    return std::string("@") + nombre + "(" +
+                                           dims + w + ")";
+                                });
+                        };
+                    num(
+                        "alloc",
+                        [](const FnData &d) { return d.alloc_partial; },
                         [](const FnData &d) { return d.alloc_total; });
-                    num("stack", [](const FnData &d) { return d.stack_partial; },
+                    num(
+                        "stack",
+                        [](const FnData &d) { return d.stack_partial; },
                         [](const FnData &d) { return d.stack_total; });
 
                     emitir(
@@ -3214,9 +3264,10 @@ int main(int argc, char *argv[]) {
                                                anot_por_clave))
                         return EXIT_FAILURE;
                 } else {
-                    std::cout << "\nAnotaciones sugeridas.  Los contratos medidos"
-                                 " que cada funcion deberia llevar; copialos "
-                                 "delante de la definicion.\n";
+                    std::cout
+                        << "\nAnotaciones sugeridas.  Los contratos medidos"
+                           " que cada funcion deberia llevar; copialos "
+                           "delante de la definicion.\n";
                     std::cout << "==========================================="
                                  "==================\n";
                     for (const auto &clave : orden_grupos) {
@@ -3231,9 +3282,8 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        std::cout
-            << "=================================================="
-               "===========\n";
+        std::cout << "=================================================="
+                     "===========\n";
         std::cout << "Funciones analizadas: " << mc_post.functions.size()
                   << "; contratos con discrepancia: " << mismatches << "\n";
         return EXIT_SUCCESS;
@@ -3358,7 +3408,8 @@ int main(int argc, char *argv[]) {
                     std::filesystem::path(exe_dir).parent_path().string();
                 if (!_plib.empty()) {
                     pp.options().import_paths.push_back(_plib + "/include_lib");
-                    pp.options().import_paths.push_back(_plib + "/preprocessor/include_lib");
+                    pp.options().import_paths.push_back(
+                        _plib + "/preprocessor/include_lib");
                 }
             }
             pp.options().import_paths.push_back(source_dir);
@@ -3408,17 +3459,17 @@ int main(int argc, char *argv[]) {
         // Si el usuario NO lo pasa, AOT mantiene su default O2 (muy testeado);
         // con --ir-opt 0 se compila sin inlining (util para depurar con gdb:
         // las funciones no se funden y los breakpoints enganchan).
-        copts.opt_level = (result.count("ir-opt") > 0)
-                              ? result["ir-opt"].as<int>()
-                              : 2;
+        copts.opt_level =
+            (result.count("ir-opt") > 0) ? result["ir-opt"].as<int>() : 2;
         copts.dump_ir = emit_ir;     // habilita CompileResult::ir_text
         copts.native_poo = aot_mode; //  AOT.2.b: clases nativas en -m aot
         copts.exceptions_enabled = !aot_no_exceptions; // C3: configurable
         // -ffp-contract=off: IEEE estricto (sin contraccion FMA) a nivel de
         // modulo.  Se propaga a IrFunction::fp_contract en el lowering (fiable
         // cross-TU, a diferencia del global mutable).
-        copts.fp_contract = !(result.count("ffp-contract") &&
-                              result["ffp-contract"].as<std::string>() == "off");
+        copts.fp_contract =
+            !(result.count("ffp-contract") &&
+              result["ffp-contract"].as<std::string>() == "off");
         // Bits del target para el inline-asm @Naked (validacion compile-time):
         // --aot-arch x86-32 -> 32 (si no, `jmp ecx` y demas fallan en mode64).
         if (aot_mode) {
@@ -3439,11 +3490,13 @@ int main(int argc, char *argv[]) {
             else if (fi == "avx512")
                 copts.aot_vec_width = 64;
             else if (fi == "auto") {
-                // AUTO: multiversion por cpuid en runtime.  El matcher hornea el
-                // chunk con estrategia dual (element-wise 64, reduccion 16) para
-                // que UN IR compile a las 3 variantes; el driver las compila 3x.
+                // AUTO: multiversion por cpuid en runtime.  El matcher hornea
+                // el chunk con estrategia dual (element-wise 64, reduccion 16)
+                // para que UN IR compile a las 3 variantes; el driver las
+                // compila 3x.
                 copts.aot_auto_vec = true;
-                copts.aot_vec_width = 64; // element-wise max (la reduccion usa 16)
+                copts.aot_vec_width =
+                    64; // element-wise max (la reduccion usa 16)
             } else
                 copts.aot_vec_width = 16; // sse2 / x87
         }
@@ -3453,8 +3506,7 @@ int main(int argc, char *argv[]) {
         if (copts.instrument_mode != "none" &&
             copts.instrument_mode != "trace" &&
             copts.instrument_mode != "profile") {
-            std::cerr << "[vx] --instrument invalido: "
-                      << copts.instrument_mode
+            std::cerr << "[vx] --instrument invalido: " << copts.instrument_mode
                       << " (valores: none|trace|profile)\n";
             return 2;
         }
@@ -3463,14 +3515,15 @@ int main(int argc, char *argv[]) {
         // queda mas pequeno y la compilacion mas rapida.
         //
         // El mapa PC -> linea (seccion DVBG) se emite POR DEFECTO: es barato en
-        // tamano, no cambia el codigo ejecutable, y habilita (a) el auto-PGO del
-        // JIT (mapear los contadores de branches medidos a su linea fuente para
-        // re-decidir la if-conversion) y (b) mejores stack traces.  --no-debug-
-        // info lo desactiva (para .velb minimos).  --vx-debug/--profile lo
-        // fuerzan aunque se pase --no-debug-info por error.
-        copts.emit_debug =
-            (result.count("no-debug-info") == 0) ||
-            (result.count("vx-debug") > 0) || (result.count("profile") > 0);
+        // tamano, no cambia el codigo ejecutable, y habilita (a) el auto-PGO
+        // del JIT (mapear los contadores de branches medidos a su linea fuente
+        // para re-decidir la if-conversion) y (b) mejores stack traces.
+        // --no-debug- info lo desactiva (para .velb minimos).
+        // --vx-debug/--profile lo fuerzan aunque se pase --no-debug-info por
+        // error.
+        copts.emit_debug = (result.count("no-debug-info") == 0) ||
+                           (result.count("vx-debug") > 0) ||
+                           (result.count("profile") > 0);
         // Base de conocimiento de depuracion: solo si se pide una carpeta.  No
         // se activa con --vx-debug porque son cosas distintas -- aquella emite
         // el mapa de lineas DENTRO del ejecutable, esta escribe un grafo
@@ -3571,12 +3624,13 @@ int main(int argc, char *argv[]) {
         /* QUE CONTIENE el artefacto, no solo como se lee.
          *
          * La clave hasta ahora decia de QUE FUENTE se derivo y con QUE FORMATO
-         * se lee, pero no que se metio dentro.  Y eso es una variable: lo que la
-         * ComptimeVM necesita se puede producir compilando el PROGRAMA ENTERO
-         * (lo de hoy) o solo el CONJUNTO COMPTIME (lo que se esta construyendo,
-         * ~350x mas pequeno).  Con la misma clave para las dos cosas, cambiar de
-         * productor deja en el cache un artefacto cuyo contenido no es el que la
-         * clave promete -- y el cache no puede detectarlo: lo carga y MIENTE.
+         * se lee, pero no que se metio dentro.  Y eso es una variable: lo que
+         * la ComptimeVM necesita se puede producir compilando el PROGRAMA
+         * ENTERO (lo de hoy) o solo el CONJUNTO COMPTIME (lo que se esta
+         * construyendo, ~350x mas pequeno).  Con la misma clave para las dos
+         * cosas, cambiar de productor deja en el cache un artefacto cuyo
+         * contenido no es el que la clave promete -- y el cache no puede
+         * detectarlo: lo carga y MIENTE.
          *
          * Ya paso, y costo caro: un artefacto INCOMPLETO persistido durante una
          * prueba enveneno todas las compilaciones siguientes (e2e 919/4 ->
@@ -3677,7 +3731,8 @@ int main(int argc, char *argv[]) {
             };
             /* Triggers: @-anotaciones (siempre body) + `comptime` (body o `;`).
              * `require_word_bound` = true para `comptime` (excluir
-             * `comptime_concat` etc. y evitar match en medio de un identifier). */
+             * `comptime_concat` etc. y evitar match en medio de un identifier).
+             */
             struct Trig {
                 const char *kw;
                 bool require_word_bound;
@@ -3704,7 +3759,8 @@ int main(int argc, char *argv[]) {
                     }
                     const size_t ls = decl_start(pos);
                     /* Fin de la declaracion: primer `{` vs primer `;` tras la
-                     * keyword.  `{` antes -> body; si no -> const/var hasta `;`. */
+                     * keyword.  `{` antes -> body; si no -> const/var hasta
+                     * `;`. */
                     size_t bs = src.find('{', after);
                     size_t sc = src.find(';', after);
                     size_t end;
@@ -3830,8 +3886,8 @@ int main(int argc, char *argv[]) {
              * Un artefacto cacheado tiene que dejar de valer cuando cambia
              * como se lee, no solo cuando cambia lo que se compilo. */
             for (unsigned i = 0; i < 2; ++i) {
-                h ^= static_cast<uint8_t>(
-                    (ir::IR_SECTION_VERSION >> (i * 8)) & 0xFF);
+                h ^= static_cast<uint8_t>((ir::IR_SECTION_VERSION >> (i * 8)) &
+                                          0xFF);
                 h *= FNV_PRIME;
             }
             h ^= cache_format_version;
@@ -3947,8 +4003,9 @@ int main(int argc, char *argv[]) {
             }
             pck.aot_tier = std::to_string(static_cast<int>(aot_tier));
             std::ostringstream perfil;
-            perfil << (aot_freestanding ? "F" : "") << (aot_no_exceptions ? "E" : "")
-                   << (aot_no_io ? "I" : "") << (aot_no_mem ? "M" : "")
+            perfil << (aot_freestanding ? "F" : "")
+                   << (aot_no_exceptions ? "E" : "") << (aot_no_io ? "I" : "")
+                   << (aot_no_mem ? "M" : "")
                    << (result.count("no-pie") ? "P" : "") << ":"
                    << result["float-isa"].as<std::string>() << ":"
                    << (result.count("debug-info")
@@ -4023,7 +4080,7 @@ int main(int argc, char *argv[]) {
             std::vector<vx::ProjectCacheDep> cached_deps;
             std::vector<uint8_t> cached_velb;
             if (vx::project_cache_load(pc_path, cached_opts_hash, cached_deps,
-                                        cached_velb) &&
+                                       cached_velb) &&
                 cached_opts_hash == opts_hash && !cached_deps.empty() &&
                 !cached_velb.empty() &&
                 vx::project_cache_validate(cached_deps, copts.emit_debug)) {
@@ -4120,18 +4177,18 @@ int main(int argc, char *argv[]) {
             std::error_code aec;
             std::filesystem::create_directories(cache_dir, aec);
             /* CRITICO: el prebuilt lo carga y EJECUTA el ComptimeVM, que corre
-             * BYTECODE VM -- no codigo nativo.  Con native_poo el `cr` de arriba
-             * bajo las clases/@Naked a lowering NATIVO, que el ComptimeVM no
-             * ejecuta (el CALLN a vrt:naked_dispatch, p.ej., no se materializa
-             * igual) -> las comptime fn con asm daban 0.  Por eso compilamos una
-             * version VM-lowered (native_poo=false) SOLO para el prebuilt del
-             * ComptimeVM; el binario final AOT lo produce el pass-2 con
-             * native_poo. */
+             * BYTECODE VM -- no codigo nativo.  Con native_poo el `cr` de
+             * arriba bajo las clases/@Naked a lowering NATIVO, que el
+             * ComptimeVM no ejecuta (el CALLN a vrt:naked_dispatch, p.ej., no
+             * se materializa igual) -> las comptime fn con asm daban 0.  Por
+             * eso compilamos una version VM-lowered (native_poo=false) SOLO
+             * para el prebuilt del ComptimeVM; el binario final AOT lo produce
+             * el pass-2 con native_poo. */
             if (recompilar_con_maquina_de_compilacion(cr, vx_path, vx_source,
                                                       copts, cache_prefix)) {
                 if (verbose_mc) {
-                    std::cerr << "[mc-cache] aot two- populated: "
-                              << cache_path << "\n";
+                    std::cerr << "[mc-cache] aot two- populated: " << cache_path
+                              << "\n";
                 }
                 /* Si pass-2 fallo (assert real / error), propagar y abortar. */
                 if (!cr.ok) {
@@ -4153,8 +4210,8 @@ int main(int argc, char *argv[]) {
         // bloque `if (aot_mode)` de abajo RETORNA tras el emit nativo, asi que
         // el punto de escritura de mas abajo nunca se alcanza en AOT.  Ubicarlo
         // aqui cubre TODOS los modos (aot/vm/velb) de forma uniforme y hace que
-        // `--vx-emit-ir` respete el TARGET (los @Target de los deps se resuelven
-        // segun --format/--aot-arch, no segun el host).
+        // `--vx-emit-ir` respete el TARGET (los @Target de los deps se
+        // resuelven segun --format/--aot-arch, no segun el host).
         if (emit_ir) {
             std::string ir_path = out_prefix.empty()
                                       ? (copts.module_name + ".ir")
@@ -4198,13 +4255,12 @@ int main(int argc, char *argv[]) {
                 int eje = 0;
                 while (desde <= niveles.size() && eje < 2) {
                     const size_t punto = niveles.find('.', desde);
-                    const std::string parte =
-                        niveles.substr(desde, punto == std::string::npos
-                                                  ? std::string::npos
-                                                  : punto - desde);
+                    const std::string parte = niveles.substr(
+                        desde, punto == std::string::npos ? std::string::npos
+                                                          : punto - desde);
                     const int v = parte.empty() ? 0 : std::atoi(parte.c_str());
                     if (eje == 0)
-                        aopt.debug_level = v;      // DWARF / symtab
+                        aopt.debug_level = v; // DWARF / symtab
                     else
                         aopt.lang_debug_level = v; // el nuestro
                     ++eje;
@@ -4223,12 +4279,13 @@ int main(int argc, char *argv[]) {
                 aopt.sysroot = result["sysroot"].as<std::string>();
             aopt.argv0 = argv[0];
             aopt.source_path = vx_path;
-            const int rc_aot = vesta::tc::compile_aot(cr, copts, out_prefix, aopt);
+            const int rc_aot =
+                vesta::tc::compile_aot(cr, copts, out_prefix, aopt);
             /* Y se guarda, para que volver a construir sin haber cambiado nada
              * no cueste construirlo otra vez.  Solo si salio bien: cachear un
              * fallo seria servirlo despues como si fuera el artefacto. */
-            if (rc_aot == EXIT_SUCCESS && project_cache_enabled && has_imports &&
-                !wants_pipeline_artifacts) {
+            if (rc_aot == EXIT_SUCCESS && project_cache_enabled &&
+                has_imports && !wants_pipeline_artifacts) {
                 std::ifstream af(out_prefix, std::ios::binary | std::ios::ate);
                 if (af.is_open()) {
                     const std::streamsize asz = af.tellg();
@@ -4239,10 +4296,9 @@ int main(int argc, char *argv[]) {
                         af.read(reinterpret_cast<char *>(abytes.data()), asz);
                     af.close();
                     if (!abytes.empty())
-                        guardar_cache_de_proyecto(pc_path, opts_hash, diag_hash,
-                                                  donde, cr, copts.emit_debug,
-                                                  abytes,
-                                                  project_cache_verbose);
+                        guardar_cache_de_proyecto(
+                            pc_path, opts_hash, diag_hash, donde, cr,
+                            copts.emit_debug, abytes, project_cache_verbose);
                 }
             }
             return rc_aot;
@@ -4331,8 +4387,8 @@ int main(int argc, char *argv[]) {
                         }
                     }
                     std::cerr << "[mc-manifest] total=" << current_hashes.size()
-                              << " cambios=" << changed
-                              << " añadidos=" << added << "\n";
+                              << " cambios=" << changed << " añadidos=" << added
+                              << "\n";
                 }
                 /* Escribir nuevo manifest. */
                 const std::string manifest_path = cache_prefix + ".manifest";
@@ -4396,9 +4452,9 @@ int main(int argc, char *argv[]) {
              * que el artefacto fuese de 704 KB con 182 macros cuando las
              * funciones que de verdad se ejecutan al compilar son ocho.
              *
-             * `cr.comptime_vel_text` es esa misma emision pero FILTRADA sobre el
-             * IR ya bajado, con la clausura del grafo de llamadas incluida para
-             * que sea auto-suficiente.  Si el modulo no tiene conjunto, se
+             * `cr.comptime_vel_text` es esa misma emision pero FILTRADA sobre
+             * el IR ya bajado, con la clausura del grafo de llamadas incluida
+             * para que sea auto-suficiente.  Si el modulo no tiene conjunto, se
              * ensambla el programa como antes. */
             const bool usar_conjunto = !cr.comptime_vel_text.empty();
             const std::string &vel_artefacto =
@@ -4411,7 +4467,8 @@ int main(int argc, char *argv[]) {
             /* Ensamblar DESDE MEMORIA: el texto lo acaba de producir el emisor,
              * asi que escribirlo a un `.vel.tmp` para que la linea siguiente lo
              * relea era un viaje por el disco de ida y vuelta.  Y ademas un
-             * `.vel` que nadie pidio: el fichero es un artefacto que se solicita
+             * `.vel` que nadie pidio: el fichero es un artefacto que se
+             * solicita
              * (`--vx-emit-only`), no un paso obligado del camino.
              *
              * El nombre se conserva porque los diagnosticos lo citan, no porque
@@ -4514,8 +4571,8 @@ int main(int argc, char *argv[]) {
                               static_cast<unsigned long long>(vx_base_addr));
                 cr.vel_text.insert(mod_pos, ipbuf);
                 vesta::scout()
-                    << "[vx] @InitPc(0x" << std::hex << vx_base_addr
-                    << std::dec << ") insertado (start_pc = base address)\n";
+                    << "[vx] @InitPc(0x" << std::hex << vx_base_addr << std::dec
+                    << ") insertado (start_pc = base address)\n";
             } else {
                 std::cerr << "[vx] aviso: no se encontro @Module(...) para "
                              "insertar @InitPc\n";
@@ -4611,7 +4668,8 @@ int main(int argc, char *argv[]) {
                                            : (out_prefix + ".h");
             std::ofstream ofs_h(h_path);
             if (!ofs_h.is_open()) {
-                std::cerr << "[header] No se puede escribir: " << h_path << "\n";
+                std::cerr << "[header] No se puede escribir: " << h_path
+                          << "\n";
                 return EXIT_FAILURE;
             }
             ofs_h << cr.header_text;
@@ -4685,20 +4743,22 @@ int main(int argc, char *argv[]) {
             {
                 auto linea = vesta::scout();
                 if (tf.resolver_us > 0 || tf.modulos_us > 0) {
-                linea << "[vx] frontend: resolver " << tf.resolver_us << " us"
-                      << " | modulos " << tf.modulos_us << " us"
-                      << " | optimizar " << tf.optimizar_us << " us"
-                      << " | emitir " << tf.emitir_us << " us"
-                      << "   (total " << tf.total_us() << " us)\n";
-            } else {
-                linea << "[vx] frontend: analisis " << tf.analisis_us << " us"
-                      << " | tipos " << tf.tipos_us << " us"
-                      << " | bajada " << tf.bajada_us << " us"
-                      << " | optimizar " << tf.optimizar_us << " us"
-                      << " | emitir " << tf.emitir_us << " us"
-                      << "   (comprobar " << tf.comprobar_us() << " us, total "
-                      << tf.total_us() << " us)\n";
-            }
+                    linea << "[vx] frontend: resolver " << tf.resolver_us
+                          << " us"
+                          << " | modulos " << tf.modulos_us << " us"
+                          << " | optimizar " << tf.optimizar_us << " us"
+                          << " | emitir " << tf.emitir_us << " us"
+                          << "   (total " << tf.total_us() << " us)\n";
+                } else {
+                    linea << "[vx] frontend: analisis " << tf.analisis_us
+                          << " us"
+                          << " | tipos " << tf.tipos_us << " us"
+                          << " | bajada " << tf.bajada_us << " us"
+                          << " | optimizar " << tf.optimizar_us << " us"
+                          << " | emitir " << tf.emitir_us << " us"
+                          << "   (comprobar " << tf.comprobar_us()
+                          << " us, total " << tf.total_us() << " us)\n";
+                }
             }
             /* Y el reparto DENTRO de optimizar.  Un solo numero de "optimizar"
              * no deja arreglar nada: un pase que se lleva el 90 % se lee igual
@@ -4707,15 +4767,16 @@ int main(int argc, char *argv[]) {
              * corrio cada uno, que un pase caro por lento y otro caro por
              * repetirse se arreglan de formas distintas. */
             const auto pases = ir::tiempos_de_pases();
-            long long  total_pases = 0;
-            for (const auto &q : pases) total_pases += q.us;
+            long long total_pases = 0;
+            for (const auto &q : pases)
+                total_pases += q.us;
             if (total_pases > 0) {
                 /* La calibracion, a la vista: se descuenta el coste de medir, y
                  * una cifra mas fina que la resolucion del reloj no significa
                  * nada.  Ensenarla evita creerse un numero que el instrumento
                  * no puede dar. */
                 const auto cal = util::calibracion_del_cronometro();
-                auto       lp = vesta::scout();
+                auto lp = vesta::scout();
                 lp << "[vx] optimizar por pase:";
                 int mostrados = 0;
                 for (const auto &q : pases) {
@@ -4789,8 +4850,8 @@ int main(int argc, char *argv[]) {
         // identificador no existe hasta que el fichero existe.
         if (rc == EXIT_SUCCESS && !cr.vxdbg_artifact_map.empty()) {
             vx::publish_vxdbg_artifact(out_prefix + ".velb",
-                                       cr.vxdbg_artifact_map,
-                                       cr.vxdbg_span_map, copts.vxdbg_dir);
+                                       cr.vxdbg_artifact_map, cr.vxdbg_span_map,
+                                       copts.vxdbg_dir);
         }
 
         //  M5.B: persistir el .velb final al project cache si
@@ -4811,9 +4872,9 @@ int main(int argc, char *argv[]) {
                 }
                 vf.close();
                 if (!velb_bytes.empty())
-                    guardar_cache_de_proyecto(pc_path, opts_hash, diag_hash, donde,
-                                              cr, copts.emit_debug, velb_bytes,
-                                              project_cache_verbose);
+                    guardar_cache_de_proyecto(
+                        pc_path, opts_hash, diag_hash, donde, cr,
+                        copts.emit_debug, velb_bytes, project_cache_verbose);
             }
         }
 
@@ -4901,8 +4962,7 @@ int main(int argc, char *argv[]) {
                             ctr.record_expectation(e.macro_name, e.args,
                                                    e.expected_str, e.src_loc);
                         }
-                        std::vector<vx::ComptimeRuntime::ShadowMismatch>
-                            report;
+                        std::vector<vx::ComptimeRuntime::ShadowMismatch> report;
                         const size_t mismatches = ctr.shadow_validate(report);
                         std::cerr << "[mc-shadow] expectations="
                                   << cr.macro_expectations.size()
@@ -5138,9 +5198,9 @@ int main(int argc, char *argv[]) {
             const long long ns_total_run = t_total_run.ns();
 
             // PGO producer: junto al '.vprof', escribir '<path>.lines' (perfil
-            // de branches por linea, consumido al recompilar).  La VM sigue viva
-            // aqui -> el debug_info (seccion DVBG, requiere --vex-debug) mapea
-            // cada PC a su linea fuente.
+            // de branches por linea, consumido al recompilar).  La VM sigue
+            // viva aqui -> el debug_info (seccion DVBG, requiere --vex-debug)
+            // mapea cada PC a su linea fuente.
             if (result.count("profile")) {
                 const std::string bp =
                     result["profile"].as<std::string>() + ".lines";
@@ -5160,25 +5220,28 @@ int main(int argc, char *argv[]) {
                 long long elapsed_ms = elapsed_ns / 1'000'000;
                 long long elapsed_us = elapsed_ns / 1'000;
 
-                /* Tiempo de COMPILACION del JIT.  Se imprime junto al resto porque el
-                 * reloj de pared los mezcla: el JIT compila mientras el programa corre.
-                 * Sin este desglose no se puede distinguir "el codigo generado es mejor"
-                 * de "la compilacion tardo menos", que es justo lo que hace falta para
-                 * juzgar una optimizacion del backend. */
+                /* Tiempo de COMPILACION del JIT.  Se imprime junto al resto
+                 * porque el reloj de pared los mezcla: el JIT compila mientras
+                 * el programa corre. Sin este desglose no se puede distinguir
+                 * "el codigo generado es mejor" de "la compilacion tardo
+                 * menos", que es justo lo que hace falta para juzgar una
+                 * optimizacion del backend. */
                 jit::print_jit_timing(jit::JitTiming::detail_enabled());
                 if (jit::JitTiming::instance().count() && elapsed_ns > 0) {
-                    /* El reparto se hace contra (compilar + ejecutar), NO contra
-                     * @c elapsed_ns: ese reloj mide la EJECUCION, y la compilacion
-                     * queda fuera -- dividir por el daba porcentajes de miles por
-                     * ciento.  Un ratio solo significa algo si numerador y denominador
-                     * miden lo mismo. */
-                    const double comp_ms = jit::JitTiming::instance().total_ns() / 1e6;
+                    /* El reparto se hace contra (compilar + ejecutar), NO
+                     * contra
+                     * @c elapsed_ns: ese reloj mide la EJECUCION, y la
+                     * compilacion queda fuera -- dividir por el daba
+                     * porcentajes de miles por ciento.  Un ratio solo significa
+                     * algo si numerador y denominador miden lo mismo. */
+                    const double comp_ms =
+                        jit::JitTiming::instance().total_ns() / 1e6;
                     const double run_ms = elapsed_ns / 1e6;
                     vesta::scout()
-                        << "[jit] reparto: compilar " << comp_ms << " ms + ejecutar "
-                        << run_ms << " ms  -> compilar = "
-                        << (100.0 * comp_ms / (comp_ms + run_ms)) << "% del trabajo"
-                        << std::endl;
+                        << "[jit] reparto: compilar " << comp_ms
+                        << " ms + ejecutar " << run_ms << " ms  -> compilar = "
+                        << (100.0 * comp_ms / (comp_ms + run_ms))
+                        << "% del trabajo" << std::endl;
                 }
 
                 uint64_t total_instrs = 0;
@@ -5287,8 +5350,8 @@ int main(int argc, char *argv[]) {
         }
         /* Si el programa murio por un fallo que nadie capturo, el proceso sale
          * con el codigo que le corresponde y no con cero.  Salir con cero tras
-         * reventar es mentirle a quien lo llamo -- y quien lo llama suele ser un
-         * guion o una integracion continua que se lo cree. */
+         * reventar es mentirle a quien lo llamo -- y quien lo llama suele ser
+         * un guion o una integracion continua que se lo cree. */
         if (const int fatal_rc = runtime::last_fatal_exit_code())
             return fatal_rc;
         return EXIT_SUCCESS;
@@ -5296,12 +5359,13 @@ int main(int argc, char *argv[]) {
 
     // BUG FIX: flags no reconocidos.  cxxopts corre con
     // allow_unrecognised_options (para pass-through de args a scripts), asi que
-    // un flag mal escrito (`--vx`, `--vex`, combinaciones invalidas) NO abortaba
-    // el parse -> el programa caia SILENCIOSAMENTE al REPL interactivo (que
-    // bloquea en stdin).  Si llegamos aqui es que ningun modo se selecciono; si
-    // el usuario paso algun token que EMPIEZA con `-` (un flag), es un flag
-    // desconocido -> error claro + usage en lugar de abrir el REPL.  El REPL
-    // legitimo sin args (o `--interprete`) no pasa flags -> no se ve afectado.
+    // un flag mal escrito (`--vx`, `--vex`, combinaciones invalidas) NO
+    // abortaba el parse -> el programa caia SILENCIOSAMENTE al REPL interactivo
+    // (que bloquea en stdin).  Si llegamos aqui es que ningun modo se
+    // selecciono; si el usuario paso algun token que EMPIEZA con `-` (un flag),
+    // es un flag desconocido -> error claro + usage en lugar de abrir el REPL.
+    // El REPL legitimo sin args (o `--interprete`) no pasa flags -> no se ve
+    // afectado.
     {
         std::vector<std::string> bad_flags;
         for (const auto &u : result.unmatched()) {
@@ -5309,7 +5373,8 @@ int main(int argc, char *argv[]) {
         }
         if (!bad_flags.empty()) {
             std::cerr << "[error] flag(s) no reconocido(s):";
-            for (const auto &f : bad_flags) std::cerr << " " << f;
+            for (const auto &f : bad_flags)
+                std::cerr << " " << f;
             std::cerr << "\n        usa 'vesta --help' para ver las opciones "
                          "validas.\n";
             return EXIT_FAILURE;

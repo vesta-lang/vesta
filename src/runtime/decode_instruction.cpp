@@ -981,8 +981,8 @@ void decode_instr_static_offset(ProcessVM *vm, DecodedInstr &instr) {
  * @brief Descodificador de @c mld / @c mst (load/store universal, FIXED_8).
  *
  * Layout desde @c rip+2: @c [ctrl][basef][regs][disp16 LE][pad].
- *   ctrl : [7]=host [6:4]=width_code(->1/2/4/8/16/32/64B) [3]=has_index [2:0]=scale
- *   basef: [7]=bank(GP/FP) [6]=idx_sub [5]=sign_ext [4:0]=base(0-17)
+ *   ctrl : [7]=host [6:4]=width_code(->1/2/4/8/16/32/64B) [3]=has_index
+ * [2:0]=scale basef: [7]=bank(GP/FP) [6]=idx_sub [5]=sign_ext [4:0]=base(0-17)
  *   regs : [7:4]=dst/src [3:0]=index
  * Pre-decodifica todo a @c mem_full para que el exec sea minimo (el decode se
  * cachea; el coste real es de ejecucion).
@@ -1172,15 +1172,21 @@ void decode_instr_calln(ProcessVM *vm, DecodedInstr &instr) {
  * descodificar.
  */
 /**
- * @brief Elige los metadatos de una instruccion por sus dos primeros bytes.
+ * @brief Elige los metadatos de una instruccion por sus dos primeros
+ * bytes.
  *
- * Lo comparten la descodificacion normal y la que solo MIRA: sin compartirlo,
- * el dia que se anada una tabla o cambie el prefijo, una de las dos se queda
- * atras -- y seria la de mirar, que es la que casi nadie ejecuta.
+ * Lo comparten la descodificacion normal y la que solo MIRA: sin
+ * compartirlo,
+ * el dia que se anada una tabla o cambie el prefijo, una de las
+ * dos se queda
+ * atras -- y seria la de mirar, que es la que casi nadie
+ * ejecuta.
  *
  * @param b0 Primer byte (0x00 = tabla extendida).
- * @param b1 Segundo byte, solo si el primero es 0x00.
- * @return Los metadatos, o @c nullptr si la instruccion no es utilizable.
+ * @param b1
+ * Segundo byte, solo si el primero es 0x00.
+ * @return Los metadatos, o @c
+ * nullptr si la instruccion no es utilizable.
  */
 static InstrFormat *select_metadata(uint8_t b0, uint8_t b1) {
     InstrFormat *table = decode_table_primary;
@@ -1211,8 +1217,10 @@ bool decode_peek(ProcessVM *process, uint64_t pc, DecodedInstr &out) {
     out.exec_cached = m->exec;
 
     /* Las funciones de descodificacion leen el PC del proceso, no el que se
-     * les pasa.  Se le pone el que interesa y se le devuelve el suyo: es lo
-     * unico que se toca, y queda como estaba pase lo que pase. */
+
+     * * les pasa.  Se le pone el que interesa y se le devuelve el suyo: es lo
+
+     * * unico que se toca, y queda como estaba pase lo que pase. */
     const uint64_t rip_previo = process->registers.rip.raw();
     process->registers.rip.qword(pc);
     m->decode(process, out);

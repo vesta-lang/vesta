@@ -39,7 +39,7 @@
 
 #include "analysis/facts/value_range.h" // acotar lo que no es constante
 #include "ir/ssa_ir.h"
-#include "vx/asm/asm_analyze.h"    // la extension que describe el bloque
+#include "vx/asm/asm_analyze.h" // la extension que describe el bloque
 
 namespace analysis {
 
@@ -68,9 +68,9 @@ struct LigaduraAsm {
  * @brief Las ligaduras de asm de una funcion, resueltas y consultables.
  *
  * Un mismo nombre puede tener VARIAS ligaduras: la lista es de toda la funcion,
- * asi que dos variables de ambitos distintos pueden usar el mismo registro.  Eso
- * NO se resuelve tirando lo que se sabe de cada una -- cada ligadura conserva su
- * hueco y su contenido --, porque hay dos preguntas distintas y solo una
+ * asi que dos variables de ambitos distintos pueden usar el mismo registro. Eso
+ * NO se resuelve tirando lo que se sabe de cada una -- cada ligadura conserva
+ * su hueco y su contenido --, porque hay dos preguntas distintas y solo una
  * necesita saber cual es:
  *
  *   - "de que valor habla este operando" exige identidad: con dos candidatas no
@@ -134,8 +134,8 @@ AsmBindingFacts compute_asm_bindings(const ir::IrFunction &fn);
  * @brief Hasta donde llega un acceso, ya en bytes concretos.
  */
 struct ExtensionResuelta {
-    int64_t desde = 0; ///< primer byte tocado, contando desde la base.
-    int64_t hasta = 0; ///< uno mas alla del ultimo byte tocado.
+    int64_t desde = 0;    ///< primer byte tocado, contando desde la base.
+    int64_t hasta = 0;    ///< uno mas alla del ultimo byte tocado.
     bool acotada = false; ///< se pudo poner un limite a los dos extremos.
 
     int64_t bytes() const { return hasta - desde; }

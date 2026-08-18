@@ -12,16 +12,17 @@
 using namespace analyze;
 
 static int g_checks = 0, g_fail = 0;
-#define CHECK(cond, msg)                                                        \
-    do {                                                                        \
-        ++g_checks;                                                             \
-        if (!(cond)) {                                                          \
-            ++g_fail;                                                           \
-            std::printf("  FAIL: %s (linea %d)\n", (msg), __LINE__);            \
-        }                                                                       \
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fail;                                                          \
+            std::printf("  FAIL: %s (linea %d)\n", (msg), __LINE__);           \
+        }                                                                      \
     } while (0)
 
-// Construye una funcion con un unico bloque conteniendo las instrucciones dadas.
+// Construye una funcion con un unico bloque conteniendo las instrucciones
+// dadas.
 static ir::IrFunction fn_with(const std::string &name,
                               std::vector<ir::IrInstr> instrs) {
     ir::IrFunction f;
@@ -66,8 +67,8 @@ static ir::IrInstr asm_block(const std::string &body) {
     return i;
 }
 
-static const FunctionFingerprint *find(const std::vector<FunctionFingerprint> &v,
-                                       const std::string &n) {
+static const FunctionFingerprint *
+find(const std::vector<FunctionFingerprint> &v, const std::string &n) {
     for (const auto &f : v)
         if (f.function == n) return &f;
     return nullptr;
@@ -82,17 +83,17 @@ int main() {
         fn_with("allocs", {op(ir::IrOp::GC_ALLOC), op(ir::IrOp::RET)}));
     mod.functions.push_back(
         fn_with("thrower", {op(ir::IrOp::THROW), op(ir::IrOp::RET)}));
-    mod.functions.push_back(
-        fn_with("caller", {call("allocs"), call("thrower"), op(ir::IrOp::RET)}));
+    mod.functions.push_back(fn_with(
+        "caller", {call("allocs"), call("thrower"), op(ir::IrOp::RET)}));
     mod.functions.push_back(fn_with("rec", {call("rec"), op(ir::IrOp::RET)}));
     mod.functions.push_back(
         fn_with("dynamic", {op(ir::IrOp::CALLVIRT), op(ir::IrOp::RET)}));
     mod.functions.push_back(fn_with(
         "stackuser", {alloca_of(ir::IrType::I64, 3), op(ir::IrOp::RET)}));
     // pure_math: solo aritmetica -> pura.
-    mod.functions.push_back(fn_with(
-        "pure_math", {binop(ir::IrOp::ADD), binop(ir::IrOp::MUL),
-                      op(ir::IrOp::RET)}));
+    mod.functions.push_back(
+        fn_with("pure_math", {binop(ir::IrOp::ADD), binop(ir::IrOp::MUL),
+                              op(ir::IrOp::RET)}));
     // writer: tiene STORE -> impura local.
     mod.functions.push_back(
         fn_with("writer", {op(ir::IrOp::STORE), op(ir::IrOp::RET)}));
@@ -104,14 +105,14 @@ int main() {
         fn_with("impure_caller", {call("writer"), op(ir::IrOp::RET)}));
     // asm_pure: asm sin memoria/call/atomica -> conserva la pureza local
     // (antes CUALQUIER asm rompia la pureza; ahora se analiza el cuerpo).
-    mod.functions.push_back(fn_with(
-        "asm_pure", {asm_block("popcnt rax, rdi"), op(ir::IrOp::RET)}));
+    mod.functions.push_back(
+        fn_with("asm_pure", {asm_block("popcnt rax, rdi"), op(ir::IrOp::RET)}));
     // asm_mem: asm que toca memoria -> impuro.
-    mod.functions.push_back(fn_with(
-        "asm_mem", {asm_block("mov [rax], rbx"), op(ir::IrOp::RET)}));
+    mod.functions.push_back(
+        fn_with("asm_mem", {asm_block("mov [rax], rbx"), op(ir::IrOp::RET)}));
     // asm_stack: marco EXPLICITO (sub rsp, 32) -> se cuenta en el parcial.
-    mod.functions.push_back(fn_with(
-        "asm_stack", {asm_block("sub rsp, 32"), op(ir::IrOp::RET)}));
+    mod.functions.push_back(
+        fn_with("asm_stack", {asm_block("sub rsp, 32"), op(ir::IrOp::RET)}));
 
     auto fps = compute_module_fingerprints(mod);
     CHECK(fps.size() == 14, "14 huellas");
@@ -151,8 +152,9 @@ int main() {
     const auto *dyn = find(fps, "dynamic");
     CHECK(dyn && !dyn->effects_known,
           "dynamic: effects_known=false (llamada opaca)");
-    CHECK(dyn && dyn->throws_total,
-          "dynamic: throws_total CONSERVADOR=true (no se puede probar ausencia)");
+    CHECK(
+        dyn && dyn->throws_total,
+        "dynamic: throws_total CONSERVADOR=true (no se puede probar ausencia)");
 
     const auto *leaf2 = find(fps, "leaf");
     CHECK(leaf2 && leaf2->alloc_sites_total == 0 && !leaf2->throws_total &&

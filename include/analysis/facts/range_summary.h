@@ -22,16 +22,16 @@
  *               que se puede usar siempre.
  *   PARAMETROS  salen de mirar quien llama, y eso solo se puede afirmar si se
  *               conocen TODOS los llamantes.  Un solo llamante que no se vea --
- *               un puntero a funcion, un `asm` que salta al simbolo, el punto de
- *               entrada del programa -- y el resumen seria mentira, con lo que un
+ *               un puntero a funcion, un `asm` que salta al simbolo, el punto
+ * de entrada del programa -- y el resumen seria mentira, con lo que un
  *               comprobador podria rechazar codigo perfectamente valido.
  *
  * Por eso el mundo cerrado se COMPRUEBA, no se supone, y ante cualquier duda la
  * funcion se declara abierta: sus parametros valen lo que su tipo.
  *
- * La RECURSION sale sola del metodo: es un punto fijo sobre el grafo de llamadas
- * con el mismo ensanchamiento que dentro de una funcion.  Una funcion que se
- * llama a si misma se estabiliza igual que un bucle.
+ * La RECURSION sale sola del metodo: es un punto fijo sobre el grafo de
+ * llamadas con el mismo ensanchamiento que dentro de una funcion.  Una funcion
+ * que se llama a si misma se estabiliza igual que un bucle.
  */
 #ifndef ANALYSIS_FACTS_RANGE_SUMMARY_H
 #define ANALYSIS_FACTS_RANGE_SUMMARY_H
@@ -63,7 +63,7 @@ struct RangeSummaries {
     std::unordered_map<std::string, FnRangeSummary> por_funcion;
     /// Si el punto fijo del grafo de llamadas se alcanzo.  Sin el, no se afirma
     /// nada: los resumenes quedan en "lo que diga el tipo".
-    bool     convergio = true;
+    bool convergio = true;
     uint32_t rondas = 0;
 
     const FnRangeSummary *buscar(const std::string &nombre) const {

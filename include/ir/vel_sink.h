@@ -92,10 +92,19 @@ namespace ir {
  * Son lista cerrada, asi que van como enum.  Los bancos indexados (`r0..r15`,
  * `f0..f15`, `xmm/ymm/zmm`) NO: escribir sus cien nombres a mano seria una
  * tercera copia del mismo conocimiento -- el error que @c instr_list.h advierte
- * --, cuando lo que los define es el patron.  Para esos hay constructores con el
- * indice ACOTADO, que es lo que de verdad impide un `r99`.
+ * --, cuando lo que los define es el patron.  Para esos hay constructores con
+ * el indice ACOTADO, que es lo que de verdad impide un `r99`.
  */
-enum class SpecialReg : uint8_t { RIP, RBP, RSP, RFLAGS, CUR0, CUR1, CUR2, CUR3 };
+enum class SpecialReg : uint8_t {
+    RIP,
+    RBP,
+    RSP,
+    RFLAGS,
+    CUR0,
+    CUR1,
+    CUR2,
+    CUR3
+};
 
 /// El texto de un registro especial, indexado por el enum (no buscado).
 inline const char *text_of(SpecialReg r) {
@@ -136,7 +145,7 @@ struct Reg {
     }
 
     Bank bank = Bank::GP;
-    uint8_t index = 0;  ///< 0..15, o el @ref SpecialReg si @c bank es Special.
+    uint8_t index = 0; ///< 0..15, o el @ref SpecialReg si @c bank es Special.
     Width width = Width::Q;
     /// Solo con @c Bank::Raw: nombre ya calculado.  Puente temporal.
     std::string raw;
@@ -150,7 +159,8 @@ struct Reg {
      * tocar el monton.  Cuando el puente @c Bank::Raw desaparezca, el campo se
      * va con el y esto puede volver a ser `constexpr`.
      */
-    Reg(Bank b, uint8_t i, Width w = Width::Q) noexcept : bank(b), index(i), width(w) {}
+    Reg(Bank b, uint8_t i, Width w = Width::Q) noexcept
+        : bank(b), index(i), width(w) {}
 
     /**
      * @brief Registro de proposito general `r0`..`r15`.
@@ -183,9 +193,9 @@ struct Reg {
      * @brief Desde un nombre ya calculado.  PROVISIONAL.
      *
      * Muchos sitios reciben el registro del asignador como CADENA
-     * (`reg_name(...)`), asi que hoy hace falta.  El paso siguiente es que quien
-     * lo produce devuelva ya un @c Reg: mientras esta puerta exista, un nombre
-     * mal formado sigue siendo posible por aqui.
+     * (`reg_name(...)`), asi que hoy hace falta.  El paso siguiente es que
+     * quien lo produce devuelva ya un @c Reg: mientras esta puerta exista, un
+     * nombre mal formado sigue siendo posible por aqui.
      */
     Reg(std::string n, Width w = Width::Q) noexcept
         : bank(Bank::Raw), width(w), raw(std::move(n)) {}
@@ -197,31 +207,34 @@ struct Reg {
      * salvo en el camino @c Raw, que es el puente que va a desaparecer.
      */
     const std::string &base_name() const {
-        static const std::string kGP[16] = {"r0",  "r1",  "r2",  "r3", "r4",  "r5",
-                                            "r6",  "r7",  "r8",  "r9", "r10", "r11",
-                                            "r12", "r13", "r14", "r15"};
-        static const std::string kFP[16] = {"f0",  "f1",  "f2",  "f3", "f4",  "f5",
-                                            "f6",  "f7",  "f8",  "f9", "f10", "f11",
-                                            "f12", "f13", "f14", "f15"};
+        static const std::string kGP[16] = {
+            "r0", "r1", "r2",  "r3",  "r4",  "r5",  "r6",  "r7",
+            "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"};
+        static const std::string kFP[16] = {
+            "f0", "f1", "f2",  "f3",  "f4",  "f5",  "f6",  "f7",
+            "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15"};
         static const std::string kXMM[16] = {
-            "xmm0", "xmm1", "xmm2",  "xmm3",  "xmm4",  "xmm5",  "xmm6",  "xmm7",
-            "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15"};
+            "xmm0",  "xmm1",  "xmm2",  "xmm3", "xmm4",  "xmm5",
+            "xmm6",  "xmm7",  "xmm8",  "xmm9", "xmm10", "xmm11",
+            "xmm12", "xmm13", "xmm14", "xmm15"};
         static const std::string kYMM[16] = {
-            "ymm0", "ymm1", "ymm2",  "ymm3",  "ymm4",  "ymm5",  "ymm6",  "ymm7",
-            "ymm8", "ymm9", "ymm10", "ymm11", "ymm12", "ymm13", "ymm14", "ymm15"};
+            "ymm0",  "ymm1",  "ymm2",  "ymm3", "ymm4",  "ymm5",
+            "ymm6",  "ymm7",  "ymm8",  "ymm9", "ymm10", "ymm11",
+            "ymm12", "ymm13", "ymm14", "ymm15"};
         static const std::string kZMM[16] = {
-            "zmm0", "zmm1", "zmm2",  "zmm3",  "zmm4",  "zmm5",  "zmm6",  "zmm7",
-            "zmm8", "zmm9", "zmm10", "zmm11", "zmm12", "zmm13", "zmm14", "zmm15"};
-        static const std::string kSpecial[8] = {"rip",  "rbp",  "rsp",  "rflags",
-                                                "cur0", "cur1", "cur2", "cur3"};
+            "zmm0",  "zmm1",  "zmm2",  "zmm3", "zmm4",  "zmm5",
+            "zmm6",  "zmm7",  "zmm8",  "zmm9", "zmm10", "zmm11",
+            "zmm12", "zmm13", "zmm14", "zmm15"};
+        static const std::string kSpecial[8] = {
+            "rip", "rbp", "rsp", "rflags", "cur0", "cur1", "cur2", "cur3"};
         switch (bank) {
-        case Bank::GP:      return kGP[index & 15];
-        case Bank::FP:      return kFP[index & 15];
-        case Bank::XMM:     return kXMM[index & 15];
-        case Bank::YMM:     return kYMM[index & 15];
-        case Bank::ZMM:     return kZMM[index & 15];
+        case Bank::GP: return kGP[index & 15];
+        case Bank::FP: return kFP[index & 15];
+        case Bank::XMM: return kXMM[index & 15];
+        case Bank::YMM: return kYMM[index & 15];
+        case Bank::ZMM: return kZMM[index & 15];
         case Bank::Special: return kSpecial[index & 7];
-        case Bank::Raw:     break;
+        case Bank::Raw: break;
         }
         return raw;
     }
@@ -271,22 +284,32 @@ struct Reg {
  * registro en vistas distintas, y quien pregunta si es r14 -- para invalidar
  * una cache de constante, por ejemplo -- se refiere al registro.
  */
-inline bool operator==(const Reg &r, const char *name) { return r.base_name() == name; }
-inline bool operator!=(const Reg &r, const char *name) { return !(r == name); }
+inline bool operator==(const Reg &r, const char *name) {
+    return r.base_name() == name;
+}
+inline bool operator!=(const Reg &r, const char *name) {
+    return !(r == name);
+}
 /// Igual contra una cadena ya calculada.  Parte del puente temporal: cuando el
 /// emisor trabaje solo con @c Reg, estas dos sobran.
 inline bool operator==(const Reg &r, const std::string &name) {
     return r.base_name() == name;
 }
-inline bool operator!=(const Reg &r, const std::string &name) { return !(r == name); }
+inline bool operator!=(const Reg &r, const std::string &name) {
+    return !(r == name);
+}
 /// Dos registros son el mismo operando si coinciden nombre Y vista.
 inline bool operator==(const Reg &a, const Reg &b) {
     return a.base_name() == b.base_name() && a.width == b.width;
 }
-inline bool operator!=(const Reg &a, const Reg &b) { return !(a == b); }
+inline bool operator!=(const Reg &a, const Reg &b) {
+    return !(a == b);
+}
 
 /// El sufijo que el `.vel` espera para cada ancho.
-inline const char *suffix_of(Reg::Width w) { return Reg::suffix_of_(w); }
+inline const char *suffix_of(Reg::Width w) {
+    return Reg::suffix_of_(w);
+}
 
 /**
  * @brief Un ACCESO A MEMORIA como operando: `[base]`, `[base+8]`, `[b+i*4]`.
@@ -302,7 +325,8 @@ struct Mem {
     long long disp = 0; ///< desplazamiento, con signo.
 
     explicit Mem(std::string b) noexcept : base(std::move(b)) {}
-    Mem(std::string b, long long off) noexcept : base(std::move(b)), disp(off) {}
+    Mem(std::string b, long long off) noexcept
+        : base(std::move(b)), disp(off) {}
     Mem(std::string b, std::string idx, unsigned sc) noexcept
         : base(std::move(b)), index(std::move(idx)), scale(sc) {}
 };
@@ -330,13 +354,17 @@ inline std::ostream &operator<<(std::ostream &os, const Mem &m) {
         os << '+' << m.index;
         if (m.scale != 1) os << '*' << m.scale;
     }
-    if (m.disp > 0) os << '+' << m.disp;
-    else if (m.disp < 0) os << '-' << -m.disp;
+    if (m.disp > 0)
+        os << '+' << m.disp;
+    else if (m.disp < 0)
+        os << '-' << -m.disp;
     return os << ']';
 }
 
 /// Una etiqueta se imprime por su nombre.
-inline std::ostream &operator<<(std::ostream &os, const Lbl &l) { return os << l.name; }
+inline std::ostream &operator<<(std::ostream &os, const Lbl &l) {
+    return os << l.name;
+}
 
 class VelSink {
   public:
@@ -361,8 +389,8 @@ class VelSink {
      * aunque la salida siga siendo texto.  Con `<<` un mnemonico mal escrito
      * (`movv`) compila igual y no falla hasta ensamblar; aqui no existe -- el
      * enum viene de @c emmit/instr_list.h, que es la lista UNICA de la que ya
-     * salen el enum, sus nombres y su categoria, asi que esto no anade una copia
-     * de ese conocimiento.
+     * salen el enum, sus nombres y su categoria, asi que esto no anade una
+     * copia de ese conocimiento.
      *
      * Hoy escribe texto, para que convertir un sitio NO cambie la salida y se
      * pueda migrar de uno en uno con el `.velb` como oraculo.  Cuando el
@@ -379,7 +407,8 @@ class VelSink {
     VelSink &emit(emmit::Mnemonic m, const Ops &...ops) {
         text_ << "    " << emmit::text_of(m);
         int n = 0;
-        // Separador: el primer operando va tras un espacio; el resto, tras coma.
+        // Separador: el primer operando va tras un espacio; el resto, tras
+        // coma.
         (void)std::initializer_list<int>{
             ((text_ << (n++ == 0 ? " " : ", ") << ops), 0)...};
         text_ << "\n";

@@ -1259,7 +1259,8 @@ void exec_instr_fnarrow(ProcessVM *vm, const DecodedInstr &instr) {
  * auto-vectorizacion de dot-products (@c acc += a[i]*b[i]).  Asi el interprete
  * (oraculo) coincide bit-a-bit con el JIT; un mul+add separado daria DOS
  * redondeos y divergiria.  Convention B (decode_instr_raw_bytes): reg1=byte2,
- * reg2=byte3; fd=byte2&0xF, fa=(byte2>>4)&0xF, fb=(byte3>>4)&0xF, isf32=byte3&1.
+ * reg2=byte3; fd=byte2&0xF, fa=(byte2>>4)&0xF, fb=(byte3>>4)&0xF,
+ * isf32=byte3&1.
  */
 void exec_instr_fmadd(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t b2 = instr.data_instruction.reg_data.reg1;

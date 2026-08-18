@@ -19,11 +19,11 @@
  * un proceso.  Como instrucciones se obtienen las dos variantes con la misma
  * semantica y sin intermediarios.
  *
- * MEDIDO (lo que motivo su existencia): antes de esto, el lowering desplegaba el
- * relleno a cero en un STORE por cada 8 bytes SIN LIMITE, asi que
- * `i32[8192] arr;` -- una DECLARACION -- producia 16397 instrucciones, 86 KB de
- * codigo y 1,7 s de compilacion, con un unico bloque basico de 16405
- * instrucciones.  Aqui eso es UNA instruccion.
+ * MEDIDO (lo que motivo su existencia): antes de esto, el lowering desplegaba
+ * el relleno a cero en un STORE por cada 8 bytes SIN LIMITE, asi que `i32[8192]
+ * arr;` -- una DECLARACION -- producia 16397 instrucciones, 86 KB de codigo y
+ * 1,7 s de compilacion, con un unico bloque basico de 16405 instrucciones. Aqui
+ * eso es UNA instruccion.
  *
  * POR QUE NO SE DELEGA EN LA LIBC.  Seria comodo llamar a @c memcpy/@c memset
  * del sistema, pero la premisa "la libc siempre trae la version optima" es
@@ -103,32 +103,50 @@ void copy_sse(uint8_t *d, const uint8_t *s, uint64_t n) noexcept {
         *reinterpret_cast<v16 *>(d + 16) = b;
         *reinterpret_cast<v16 *>(d + 32) = c;
         *reinterpret_cast<v16 *>(d + 48) = e;
-        d += 64; s += 64; n -= 64;
+        d += 64;
+        s += 64;
+        n -= 64;
     }
     while (n >= 16) {
         *reinterpret_cast<v16 *>(d) = *reinterpret_cast<const v16 *>(s);
-        d += 16; s += 16; n -= 16;
+        d += 16;
+        s += 16;
+        n -= 16;
     }
     if (n >= 8) {
         __builtin_memcpy(d, s, 8); // tamano CONSTANTE -> se expande inline
-        d += 8; s += 8; n -= 8;
+        d += 8;
+        s += 8;
+        n -= 8;
     }
-    while (n--) *d++ = *s++;
+    while (n--)
+        *d++ = *s++;
 }
 
 void fill_sse(uint8_t *d, uint8_t v, uint64_t n) noexcept {
     v16 pat;
-    for (unsigned i = 0; i < 16; ++i) pat[i] = v;
+    for (unsigned i = 0; i < 16; ++i)
+        pat[i] = v;
     while (n >= 64) {
         *reinterpret_cast<v16 *>(d) = pat;
         *reinterpret_cast<v16 *>(d + 16) = pat;
         *reinterpret_cast<v16 *>(d + 32) = pat;
         *reinterpret_cast<v16 *>(d + 48) = pat;
-        d += 64; n -= 64;
+        d += 64;
+        n -= 64;
     }
-    while (n >= 16) { *reinterpret_cast<v16 *>(d) = pat; d += 16; n -= 16; }
-    if (n >= 8) { __builtin_memcpy(d, &pat, 8); d += 8; n -= 8; }
-    while (n--) *d++ = v;
+    while (n >= 16) {
+        *reinterpret_cast<v16 *>(d) = pat;
+        d += 16;
+        n -= 16;
+    }
+    if (n >= 8) {
+        __builtin_memcpy(d, &pat, 8);
+        d += 8;
+        n -= 8;
+    }
+    while (n--)
+        *d++ = v;
 }
 
 /* --- Copia: camino AVX2 -------------------------------------------------- */
@@ -151,35 +169,62 @@ __attribute__((target("avx2"))) void copy_avx2(uint8_t *d, const uint8_t *s,
         *reinterpret_cast<v32 *>(d + 32) = b;
         *reinterpret_cast<v32 *>(d + 64) = c;
         *reinterpret_cast<v32 *>(d + 96) = e;
-        d += 128; s += 128; n -= 128;
+        d += 128;
+        s += 128;
+        n -= 128;
     }
     while (n >= 32) {
         *reinterpret_cast<v32 *>(d) = *reinterpret_cast<const v32 *>(s);
-        d += 32; s += 32; n -= 32;
+        d += 32;
+        s += 32;
+        n -= 32;
     }
     if (n >= 16) {
         *reinterpret_cast<v16 *>(d) = *reinterpret_cast<const v16 *>(s);
-        d += 16; s += 16; n -= 16;
+        d += 16;
+        s += 16;
+        n -= 16;
     }
-    if (n >= 8) { __builtin_memcpy(d, s, 8); d += 8; s += 8; n -= 8; }
-    while (n--) *d++ = *s++;
+    if (n >= 8) {
+        __builtin_memcpy(d, s, 8);
+        d += 8;
+        s += 8;
+        n -= 8;
+    }
+    while (n--)
+        *d++ = *s++;
 }
 
 __attribute__((target("avx2"))) void fill_avx2(uint8_t *d, uint8_t v,
                                                uint64_t n) noexcept {
     v32 pat;
-    for (unsigned i = 0; i < 32; ++i) pat[i] = v;
+    for (unsigned i = 0; i < 32; ++i)
+        pat[i] = v;
     while (n >= 128) {
         *reinterpret_cast<v32 *>(d) = pat;
         *reinterpret_cast<v32 *>(d + 32) = pat;
         *reinterpret_cast<v32 *>(d + 64) = pat;
         *reinterpret_cast<v32 *>(d + 96) = pat;
-        d += 128; n -= 128;
+        d += 128;
+        n -= 128;
     }
-    while (n >= 32) { *reinterpret_cast<v32 *>(d) = pat; d += 32; n -= 32; }
-    if (n >= 16) { *reinterpret_cast<v16 *>(d) = *reinterpret_cast<const v16 *>(&pat); d += 16; n -= 16; }
-    if (n >= 8) { __builtin_memcpy(d, &pat, 8); d += 8; n -= 8; }
-    while (n--) *d++ = v;
+    while (n >= 32) {
+        *reinterpret_cast<v32 *>(d) = pat;
+        d += 32;
+        n -= 32;
+    }
+    if (n >= 16) {
+        *reinterpret_cast<v16 *>(d) = *reinterpret_cast<const v16 *>(&pat);
+        d += 16;
+        n -= 16;
+    }
+    if (n >= 8) {
+        __builtin_memcpy(d, &pat, 8);
+        d += 8;
+        n -= 8;
+    }
+    while (n--)
+        *d++ = v;
 }
 
 /// ¿Tiene AVX2 esta CPU?  Se consulta UNA vez (el resultado no cambia).
@@ -196,14 +241,20 @@ bool cpu_has_avx2() noexcept {
 
 inline void copy_fast(uint8_t *d, const uint8_t *s, uint64_t n) noexcept {
 #ifdef VESTA_HAS_X86_DISPATCH
-    if (cpu_has_avx2()) { copy_avx2(d, s, n); return; }
+    if (cpu_has_avx2()) {
+        copy_avx2(d, s, n);
+        return;
+    }
 #endif
     copy_sse(d, s, n);
 }
 
 inline void fill_fast(uint8_t *d, uint8_t v, uint64_t n) noexcept {
 #ifdef VESTA_HAS_X86_DISPATCH
-    if (cpu_has_avx2()) { fill_avx2(d, v, n); return; }
+    if (cpu_has_avx2()) {
+        fill_avx2(d, v, n);
+        return;
+    }
 #endif
     fill_sse(d, v, n);
 }
@@ -217,11 +268,18 @@ inline void fill_fast(uint8_t *d, uint8_t v, uint64_t n) noexcept {
  */
 void move_fast(uint8_t *d, const uint8_t *s, uint64_t n) noexcept {
     if (d == s || n == 0) return;
-    if (d < s || d >= s + n) { copy_fast(d, s, n); return; } // sin solape util
+    if (d < s || d >= s + n) {
+        copy_fast(d, s, n);
+        return;
+    } // sin solape util
     // Solapan con el destino por detras: copiar de atras hacia delante.
     uint64_t i = n;
-    while (i >= 16) { i -= 16; *reinterpret_cast<v16 *>(d + i) = *reinterpret_cast<const v16 *>(s + i); }
-    while (i--) d[i] = s[i];
+    while (i >= 16) {
+        i -= 16;
+        *reinterpret_cast<v16 *>(d + i) = *reinterpret_cast<const v16 *>(s + i);
+    }
+    while (i--)
+        d[i] = s[i];
 }
 
 /**
@@ -262,7 +320,8 @@ inline bool bulk_len(ProcessVM *vm, uint8_t r_len, uint64_t &out) {
         throw_fatalf(vm, FATAL_ILLEGAL_INSTRUCTION,
                      "operacion de memoria masiva con longitud invalida: %llu "
                      "bytes (tope %llu)",
-                     (unsigned long long)out, (unsigned long long)kMaxBulkBytes);
+                     (unsigned long long)out,
+                     (unsigned long long)kMaxBulkBytes);
         return false;
     }
     return out != 0;
@@ -280,7 +339,8 @@ void exec_instr_memseth(ProcessVM *vm, const DecodedInstr &instr) {
     if (!bulk_len(vm, o.c, n)) return;
     auto *dst = reinterpret_cast<uint8_t *>(vm->registers.regs[o.a].qword());
     if (dst == nullptr) return;
-    fill_fast(dst, static_cast<uint8_t>(vm->registers.regs[o.b].qword() & 0xFF), n);
+    fill_fast(dst, static_cast<uint8_t>(vm->registers.regs[o.b].qword() & 0xFF),
+              n);
 }
 
 /** @brief @c memcpyh r_dst, r_src, r_len -- copia en memoria del HOST. */
@@ -289,7 +349,8 @@ void exec_instr_memcpyh(ProcessVM *vm, const DecodedInstr &instr) {
     uint64_t n = 0;
     if (!bulk_len(vm, o.c, n)) return;
     auto *dst = reinterpret_cast<uint8_t *>(vm->registers.regs[o.a].qword());
-    auto *src = reinterpret_cast<const uint8_t *>(vm->registers.regs[o.b].qword());
+    auto *src =
+        reinterpret_cast<const uint8_t *>(vm->registers.regs[o.b].qword());
     if (dst == nullptr || src == nullptr) return;
     move_fast(dst, src, n);
 }
@@ -300,10 +361,12 @@ void exec_instr_memset(ProcessVM *vm, const DecodedInstr &instr) {
     uint64_t n = 0;
     if (!bulk_len(vm, o.c, n)) return;
     uint64_t vaddr = vm->registers.regs[o.a].qword();
-    const uint8_t v = static_cast<uint8_t>(vm->registers.regs[o.b].qword() & 0xFF);
+    const uint8_t v =
+        static_cast<uint8_t>(vm->registers.regs[o.b].qword() & 0xFF);
 
     uint8_t buf[kChunk];
-    fill_fast(buf, v, n < kChunk ? n : kChunk); // el patron se construye UNA vez
+    fill_fast(buf, v,
+              n < kChunk ? n : kChunk); // el patron se construye UNA vez
     while (n > 0) {
         const size_t k = static_cast<size_t>(n < kChunk ? n : kChunk);
         vm->vm_mem.write_bytes(vaddr, buf, k);

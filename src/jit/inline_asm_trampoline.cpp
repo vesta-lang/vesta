@@ -15,13 +15,13 @@
 
 #include "jit/code_cache.h"
 #include "vx/asm/asm_backend.h"
-#include "ffi/virtual_lib_registry.h" // inc.6: registrar el helper runner
+#include "ffi/virtual_lib_registry.h"  // inc.6: registrar el helper runner
 #include "runtime/exception_runtime.h" // parar si el asm no se puede ejecutar
 #include "runtime/proceso_runtime.h" // inc.6: acceso a ProcessVM::asm_ctx + vm_mem
 
 #include <atomic> // emulacion portable del efecto (barrera) sin ensamblador
-#include "ir/ssa_ir.h"               // inc.6: IrFunction/IrInstr/IrOp del batch
-#include "vx/asm/asm_phys_reg.h"     // sustitucion $N -> reg fisico
+#include "ir/ssa_ir.h"           // inc.6: IrFunction/IrInstr/IrOp del batch
+#include "vx/asm/asm_phys_reg.h" // sustitucion $N -> reg fisico
 
 #include <cstdio>
 #include <cstdlib>
@@ -54,13 +54,13 @@ namespace {
  * de un bloque de ensamblador se recoge con un salto largo, y un salto largo en
  * Windows ES un desenrollado: el sistema se ponia a caminar la pila, llegaba al
  * trampoline, no encontraba entrada, lo daba por hoja, leia como direccion de
- * retorno lo que hubiera en la cima -- que en mitad del prologo no lo es -- y se
- * llevaba el proceso por delante.  Como lo que hubiera en la cima depende de
+ * retorno lo que hubiera en la cima -- que en mitad del prologo no lo es -- y
+ * se llevaba el proceso por delante.  Como lo que hubiera en la cima depende de
  * como quedo la pila, el mismo programa moria o no segun donde estuviera el
  * binario: se reproducia cambiando la LONGITUD DE LA RUTA del ejecutable.
  *
- * Aqui se registra esa entrada.  El prologo son nueve `push` de tamano fijo, asi
- * que se describe una vez y vale para todos los trampolines.
+ * Aqui se registra esa entrada.  El prologo son nueve `push` de tamano fijo,
+ * asi que se describe una vez y vale para todos los trampolines.
  *
  * La estructura vive en el propio cache de codigo (vida del proceso) porque el
  * sistema guarda el PUNTERO, no una copia.
@@ -110,7 +110,9 @@ bool registrar_desenrollado(uint8_t *code, size_t n, CodeCache &cc) {
     /* Los codigos van en orden DESCENDENTE de posicion dentro del prologo: el
      * desenrollador los aplica de atras hacia delante.  La posicion de cada uno
      * es la del byte SIGUIENTE a su instruccion. */
-    struct Paso { uint8_t off, op, info; };
+    struct Paso {
+        uint8_t off, op, info;
+    };
     static const Paso kPasos[] = {
         {13, UWOP_ALLOC_SMALL, 0},  // push rcx -> solo devuelve 8 bytes de pila
         {12, UWOP_PUSH_NONVOL, 15}, // push r15
@@ -123,10 +125,10 @@ bool registrar_desenrollado(uint8_t *code, size_t n, CodeCache &cc) {
         {1, UWOP_PUSH_NONVOL, 3},   // push rbx
     };
     const uint8_t n_codigos = (uint8_t)(sizeof(kPasos) / sizeof(kPasos[0]));
-    d->info[0] = 1;                        // version 1, sin banderas
-    d->info[1] = (uint8_t)kPrologoLen;     // tamano del prologo
-    d->info[2] = n_codigos;                // numero de codigos
-    d->info[3] = 0;                        // sin registro de marco
+    d->info[0] = 1;                    // version 1, sin banderas
+    d->info[1] = (uint8_t)kPrologoLen; // tamano del prologo
+    d->info[2] = n_codigos;            // numero de codigos
+    d->info[3] = 0;                    // sin registro de marco
     for (uint8_t i = 0; i < n_codigos; ++i) {
         d->info[4 + i * 2] = kPasos[i].off;
         d->info[4 + i * 2 + 1] =
@@ -138,8 +140,7 @@ bool registrar_desenrollado(uint8_t *code, size_t n, CodeCache &cc) {
     const DWORD64 base = (DWORD64)(uintptr_t)code;
     d->funcion.BeginAddress = 0;
     d->funcion.EndAddress = (DWORD)n;
-    d->funcion.UnwindData =
-        (DWORD)((DWORD64)(uintptr_t)d->info - base);
+    d->funcion.UnwindData = (DWORD)((DWORD64)(uintptr_t)d->info - base);
     return RtlAddFunctionTable(&d->funcion, 1, base) != FALSE;
 }
 
@@ -199,9 +200,10 @@ extern "C" uint64_t vrt_inline_asm_exec(uint64_t proc, uint64_t hash,
         /* El TERCER sitio con el mismo fallo, y lo encontro la prueba del
          * arreglo de los otros dos: se avisaba por la salida de error y se
          * continuaba, asi que un programa cuyo `asm` no se puede ejecutar --
-         * porque la VM corre en otra arquitectura, que es el caso que este camino
-         * existe para cubrir -- seguia con los valores de antes y devolvia un
-         * resultado falso sin que el `catch` del programa llegara a entrar.
+         * porque la VM corre en otra arquitectura, que es el caso que este
+         * camino existe para cubrir -- seguia con los valores de antes y
+         * devolvia un resultado falso sin que el `catch` del programa llegara a
+         * entrar.
          *
          * Aqui no se puede distinguir un bloque que solo ordena la memoria (los
          * efectos no llegan a esta via), asi que se para siempre.  Es lo
@@ -259,9 +261,9 @@ extern "C" uint64_t vrt_inline_asm_exec(uint64_t proc, uint64_t hash,
  *
  * Si existe un trampoline nativo (el loader lo construyo con el ensamblador
  * para el host), se ejecuta la instruccion REAL.  Si NO (host sin ensamblador u
- * otra arch), se EMULA su efecto de forma PORTABLE via los eff bits -> el codigo
- * sigue funcionando en cualquier arch (esta es la ventaja de ASM_MICRO sobre la
- * caja opaca INLINE_ASM, que sin ensamblador no puede hacer NADA). */
+ * otra arch), se EMULA su efecto de forma PORTABLE via los eff bits -> el
+ * codigo sigue funcionando en cualquier arch (esta es la ventaja de ASM_MICRO
+ * sobre la caja opaca INLINE_ASM, que sin ensamblador no puede hacer NADA). */
 extern "C" uint64_t vrt_asm_micro_exec(uint64_t proc, uint64_t hash,
                                        uint64_t eff) {
     AsmTrampolineFn tramp = lookup_inline_asm_trampoline(hash);
@@ -312,8 +314,8 @@ extern "C" uint64_t vrt_asm_micro_exec(uint64_t proc, uint64_t hash,
  * Es la via que sustituye a la tabla.  La otra mueve los valores a la pila para
  * leerlos de ahi y los devuelve al terminar -- dos copias por operando y por
  * bloque -- cuando el valor ya esta en un registro de la VM, y la VM tiene los
- * dos bancos.  Un bloque `asm` no es una frontera que cruzar copiando: es codigo
- * dentro del codigo.
+ * dos bancos.  Un bloque `asm` no es una frontera que cruzar copiando: es
+ * codigo dentro del codigo.
  *
  * @param proc  Proceso (el que devuelve `getproc`).
  * @param hash  FNV-1a del cuerpo ya sustituido: la clave del trampolin.
@@ -339,18 +341,20 @@ extern "C" uint64_t vrt_asm_micro_regs(uint64_t proc, uint64_t hash,
         if (eff & 0x8u) std::atomic_thread_fence(std::memory_order_seq_cst);
         if (n != 0) {
             /* Pero un bloque que CAMBIA valores no se puede saltar.  Antes se
-             * avisaba por la salida de error y se continuaba con los valores sin
-             * tocar: el programa seguia y daba resultados falsos, que es peor que
-             * pararse -- nadie lee un aviso de un programa que "funciona".
+             * avisaba por la salida de error y se continuaba con los valores
+             * sin tocar: el programa seguia y daba resultados falsos, que es
+             * peor que pararse -- nadie lee un aviso de un programa que
+             * "funciona".
              *
-             * Y este caso no es raro ni teorico: la VM tiene que poder correr en
-             * cualquier arquitectura, asi que un `asm` escrito para otra no se
-             * puede ejecutar aqui de ninguna forma.  Lo correcto entonces es
+             * Y este caso no es raro ni teorico: la VM tiene que poder correr
+             * en cualquier arquitectura, asi que un `asm` escrito para otra no
+             * se puede ejecutar aqui de ninguna forma.  Lo correcto entonces es
              * decirlo y parar; el programa portable elige otro camino con
              * `@Target`, que para eso esta.
              *
              * Es capturable (`try { } catch (FatalError e) { }`), asi que quien
-             * quiera seguir puede decidirlo -- explicitamente, no por omision. */
+             * quiera seguir puede decidirlo -- explicitamente, no por omision.
+             */
             char msg[192];
             std::snprintf(msg, sizeof(msg),
                           "bloque de ensamblador no ejecutable en esta maquina "
@@ -425,27 +429,29 @@ extern "C" uint64_t vrt_asm_micro_ops(uint64_t proc, uint64_t hash,
     if (tramp == nullptr) {
         /* Sin ensamblador se emula lo que se pueda de la base -- una barrera es
          * una barrera en cualquier maquina -- pero una instruccion que CAMBIA
-         * valores no se puede emular asi: los devolveria sin tocar y el programa
-         * seguiria con los de antes.  Callarselo es dar por hecho un trabajo que
-         * no se hizo, asi que se dice. */
+         * valores no se puede emular asi: los devolveria sin tocar y el
+         * programa seguiria con los de antes.  Callarselo es dar por hecho un
+         * trabajo que no se hizo, asi que se dice. */
         /* Una barrera SI se puede cumplir sin ensamblador -- es una barrera en
          * cualquier maquina -- asi que un bloque que solo ordena la memoria
          * sigue siendo correcto y se deja pasar. */
         if (eff & 0x8u) std::atomic_thread_fence(std::memory_order_seq_cst);
         if (n != 0) {
             /* Pero un bloque que CAMBIA valores no se puede saltar.  Antes se
-             * avisaba por la salida de error y se continuaba con los valores sin
-             * tocar: el programa seguia y daba resultados falsos, que es peor que
-             * pararse -- nadie lee un aviso de un programa que "funciona".
+             * avisaba por la salida de error y se continuaba con los valores
+             * sin tocar: el programa seguia y daba resultados falsos, que es
+             * peor que pararse -- nadie lee un aviso de un programa que
+             * "funciona".
              *
-             * Y este caso no es raro ni teorico: la VM tiene que poder correr en
-             * cualquier arquitectura, asi que un `asm` escrito para otra no se
-             * puede ejecutar aqui de ninguna forma.  Lo correcto entonces es
+             * Y este caso no es raro ni teorico: la VM tiene que poder correr
+             * en cualquier arquitectura, asi que un `asm` escrito para otra no
+             * se puede ejecutar aqui de ninguna forma.  Lo correcto entonces es
              * decirlo y parar; el programa portable elige otro camino con
              * `@Target`, que para eso esta.
              *
              * Es capturable (`try { } catch (FatalError e) { }`), asi que quien
-             * quiera seguir puede decidirlo -- explicitamente, no por omision. */
+             * quiera seguir puede decidirlo -- explicitamente, no por omision.
+             */
             char msg[192];
             std::snprintf(msg, sizeof(msg),
                           "bloque de ensamblador no ejecutable en esta maquina "
@@ -540,8 +546,9 @@ void build_and_register_inline_asm_trampolines(
                 // Cuerpo asm a registrar como trampoline nativo: INLINE_ASM lo
                 // lleva en func_name; ASM_MICRO (asm opaco liftado, caso sin
                 // operandos de registro) en asm_micros[imm].tmpl.  El interp
-                // ejecuta ambos via el trampoline SOLO si hay ensamblador; si no,
-                // no se registra y vrt_inline_asm_exec hace no-op (sigue corriendo).
+                // ejecuta ambos via el trampoline SOLO si hay ensamblador; si
+                // no, no se registra y vrt_inline_asm_exec hace no-op (sigue
+                // corriendo).
                 const std::string *body = nullptr;
                 std::string subst; // vive hasta el registro (: $N -> reg)
                 if (ins.op == ir::IrOp::INLINE_ASM) {
@@ -557,8 +564,9 @@ void build_and_register_inline_asm_trampolines(
                     if (am.operands.empty()) {
                         body = &am.tmpl; // sin operandos: verbatim
                     } else if (vx::asm_micro_subst_phys(am, subst)) {
-                        body = &subst;   // fisico fijo sustituido
-                    } else if (vx::asm_micro_subst_greedy(am, subst, phys_tmp)) {
+                        body = &subst; // fisico fijo sustituido
+                    } else if (vx::asm_micro_subst_greedy(am, subst,
+                                                          phys_tmp)) {
                         // Operandos que son valores del programa: los registros
                         // los elige la misma funcion que usa el emisor, o el
                         // texto no coincidiria y no se encontrarian.

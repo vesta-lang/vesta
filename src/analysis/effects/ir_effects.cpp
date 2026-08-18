@@ -34,9 +34,9 @@
 namespace analysis {
 namespace effects {
 
-using ir::IrOp;
-using ::aot::AotOpClass;
 using ::aot::aot_classify_op;
+using ::aot::AotOpClass;
+using ir::IrOp;
 
 bool funcion_tiene_asm(const ir::IrFunction &fn) {
     for (const ir::IrBlock &b : fn.blocks)
@@ -52,8 +52,8 @@ bool funcion_tiene_asm(const ir::IrFunction &fn) {
 // este puntero" para efectos Y para el DSE.  Antes habia aqui un classify_rec
 // duplicado; se elimino para tener un solo modelo.
 // --------------------------------------------------------------------------
-AbstractLoc classify_ptr(const ir::IrFunction &fn, const analysis::IrFacts &facts,
-                         ir::IrValueId ptr) {
+AbstractLoc classify_ptr(const ir::IrFunction &fn,
+                         const analysis::IrFacts &facts, ir::IrValueId ptr) {
     // Conveniencia (tests / llamadas sueltas): construye una tabla local.  El
     // camino caliente (por-instr) usa la tabla cacheada via effects_of_instr.
     analysis::PointsTo pt = analysis::compute_points_to(fn, facts);
@@ -69,9 +69,9 @@ static int32_t access_bytes(ir::IrType t) {
 // Efecto local de una instruccion opaca de asm (INLINE_ASM / ASM_MICRO).
 // --------------------------------------------------------------------------
 static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
-                                              const analysis::PointsTo &pt,
-                                              const ir::IrInstr &ins,
-                                              const EffectEnv &env) {
+                                               const analysis::PointsTo &pt,
+                                               const ir::IrInstr &ins,
+                                               const EffectEnv &env) {
     EffectAnalysisResult r;
     // func_name lleva el cuerpo NASM (lo pone el lowering de asm).  El analisis
     // de bloque del asm opaco vive en el modulo asm (namespace vx).
@@ -92,7 +92,7 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
      * un aviso, y lo que hay detras del buffer es la siguiente variable. */
     /* Si quien pregunta ya las tiene, se usan: son un hecho de la FUNCION y
      * rehacerlas por instruccion es el grueso del coste de este analisis. */
-    analysis::AsmBindingFacts        propias;
+    analysis::AsmBindingFacts propias;
     const analysis::AsmBindingFacts *ligp = env.asm_bindings;
     if (ligp == nullptr) {
         propias = analysis::compute_asm_bindings(fn);
@@ -109,11 +109,12 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
     /* EL TEXTO A ANALIZAR, que no siempre esta donde estaba.
      *
      * Un `INLINE_ASM` lleva su cuerpo en `func_name`.  Un `ASM_MICRO` NO: lleva
-     * el indice de su ficha en `imm`, y el texto esta en la ficha.  Se analizaba
-     * `func_name` en los dos casos, asi que para todo bloque ELEVADO se analizaba
-     * la cadena VACiA -- cero accesos, cero efectos de memoria --.  Y eso no da
-     * error: da una funcion que escribe memoria declarada `pure readonly`, y con
-     * ella un llamante que se queda con el valor viejo en un registro.
+     * el indice de su ficha en `imm`, y el texto esta en la ficha.  Se
+     * analizaba `func_name` en los dos casos, asi que para todo bloque ELEVADO
+     * se analizaba la cadena VACiA -- cero accesos, cero efectos de memoria --.
+     * Y eso no da error: da una funcion que escribe memoria declarada `pure
+     * readonly`, y con ella un llamante que se queda con el valor viejo en un
+     * registro.
      *
      * Ademas hay que reponer los CORCHETES.  La plantilla de un micro lleva el
      * operando pelado (`movdqa $0, $1`) porque como se escribe una direccion
@@ -128,13 +129,13 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
         for (size_t k = 0; k < am.operands.size(); ++k) {
             if (am.operands[k].kind != ir::AsmOperandKind::MEM) continue;
             const std::string marcador = "$" + std::to_string(k);
-            /* Se busca el marcador EXACTO: `$1` no debe casar dentro de `$10`. */
+            /* Se busca el marcador EXACTO: `$1` no debe casar dentro de `$10`.
+             */
             size_t p = 0;
             while ((p = texto_asm.find(marcador, p)) != std::string::npos) {
                 const size_t fin = p + marcador.size();
-                const bool solo =
-                    fin >= texto_asm.size() ||
-                    !std::isdigit((unsigned char)texto_asm[fin]);
+                const bool solo = fin >= texto_asm.size() ||
+                                  !std::isdigit((unsigned char)texto_asm[fin]);
                 if (solo) {
                     texto_asm.insert(fin, "]");
                     texto_asm.insert(p, "[");
@@ -174,8 +175,8 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
      *
      * MEDIDO (2026-08-06): con el y sin el, el codigo generado sale IDENTICO en
      * los 48 programas del corpus que llevan asm.  No es que la precision no
-     * valga -- se ve en `--analyze`, donde un bloque pasa de "cualquier sitio" a
-     * `stack#0` --: es que NINGUN consumidor la mira todavia.  El DSE y el
+     * valga -- se ve en `--analyze`, donde un bloque pasa de "cualquier sitio"
+     * a `stack#0` --: es que NINGUN consumidor la mira todavia.  El DSE y el
      * planificador tratan un `INLINE_ASM` como barrera TOTAL, escrito a mano en
      * su propio switch ("mas adelante los eff bits de la DB afinan", dice el
      * comentario de alli desde hace tiempo).
@@ -188,15 +189,16 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
         const char *v = std::getenv("VESTA_ASM_LOC");
         return !(v && v[0] == '0');
     }();
-    bool localizado = loc_activa && !e.accesos.empty() && !e.accesos_incompletos;
+    bool localizado =
+        loc_activa && !e.accesos.empty() && !e.accesos_incompletos;
     /* Que dice el analisis del TEXTO de este bloque, en crudo.
      *
      * Existe porque la cadena que va de aqui a los contratos tiene varios pasos
      * y cada uno puede perder la escritura -- el analisis del texto, la
-     * localizacion, el filtro de lo observable, el cierre --.  Sin ver el primer
-     * eslabon, buscar en los otros es adivinar, y adivinar aqui sale caro:
-     * `readonly` sobre una funcion que escribe hace que su llamante se quede con
-     * el valor viejo. */
+     * localizacion, el filtro de lo observable, el cierre --.  Sin ver el
+     * primer eslabon, buscar en los otros es adivinar, y adivinar aqui sale
+     * caro: `readonly` sobre una funcion que escribe hace que su llamante se
+     * quede con el valor viejo. */
     if (std::getenv("VESTA_ASM_EFF_DEBUG") != nullptr) {
         std::fprintf(stderr,
                      "[asm-eff] %s: accesos=%zu incompletos=%d mem_r=%d "
@@ -205,10 +207,9 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
                      (int)e.accesos_incompletos, (int)e.reads_mem,
                      (int)e.writes_mem, (int)localizado);
         for (const auto &a : e.accesos)
-            std::fprintf(stderr,
-                         "[asm-eff]   base=<%s> escribe=%d desde_memoria=%d\n",
-                         a.base.c_str(), (int)a.escribe,
-                         (int)a.desde_memoria.hay);
+            std::fprintf(
+                stderr, "[asm-eff]   base=<%s> escribe=%d desde_memoria=%d\n",
+                a.base.c_str(), (int)a.escribe, (int)a.desde_memoria.hay);
     }
     std::vector<AbstractLoc> locs_lee, locs_escribe;
     if (localizado) {
@@ -232,7 +233,7 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
          * ligaduras de asm.  El puntero se SUJETA aparte de la referencia para
          * que no quede colgando si hay que calcularlos aqui. */
         std::shared_ptr<const analysis::RangeFacts> rangos_propios;
-        analysis::IrFacts                          hechos_propios;
+        analysis::IrFacts hechos_propios;
         const uint64_t t1 = util::reloj::ahora();
         // Solo valen si son de ESTA funcion; si no, se recalculan.
         const bool tengo = env.rangos != nullptr && env.rangos_de == &fn;
@@ -240,14 +241,17 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
             hechos_propios = analysis::build_ir_facts(fn);
             rangos_propios = analysis::compute_ranges_ptr(fn, hechos_propios);
         }
-        const analysis::RangeFacts &rangos = tengo ? *env.rangos : *rangos_propios;
+        const analysis::RangeFacts &rangos =
+            tengo ? *env.rangos : *rangos_propios;
         const uint64_t t2 = util::reloj::ahora();
         ns_hechos += util::reloj::a_ns(t1 - t0);
         ns_rangos += util::reloj::a_ns(t2 - t1);
         if ((++n_veces % 200) == 0 && std::getenv("VESTA_TIMES"))
-            std::fprintf(stderr, "[asm-efectos] %lld veces | def-use %lld ms | rangos %lld ms\n",
-                         n_veces.load(), ns_hechos.load() / 1000000,
-                         ns_rangos.load() / 1000000);
+            std::fprintf(
+                stderr,
+                "[asm-efectos] %lld veces | def-use %lld ms | rangos %lld ms\n",
+                n_veces.load(), ns_hechos.load() / 1000000,
+                ns_rangos.load() / 1000000);
         for (const vx::AsmBlockEffects::Acceso &a : e.accesos) {
             /* TODAS las que responden a ese nombre.  Aqui no hace falta saber
              * cual de ellas es: nombrar las dos dice que el acceso va por una
@@ -255,7 +259,10 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
              * sitio" -- que es donde caia antes en cuanto dos variables de
              * ambitos distintos compartian registro. */
             const auto cands = lig.candidatas(a.base);
-            if (cands.empty()) { localizado = false; break; }
+            if (cands.empty()) {
+                localizado = false;
+                break;
+            }
             /* Hasta donde llega el acceso.  Con la extension resuelta se dice
              * QUE BYTES toca en vez de dar el objeto entero por tocado, y esa
              * es la diferencia entre que dos accesos al mismo objeto se
@@ -278,30 +285,30 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
                  * se corre al offset donde de verdad cae. */
                 const int32_t ancho =
                     ext.acotada ? (int32_t)ext.bytes() : (int32_t)0;
-                /* Si la base del acceso se CARGo DE MEMORIA, la localizacion del
-                 * valor no es la del acceso: falta una indireccion.  `loc_of`
-                 * responde donde vive el puntero -- el hueco de la pila que lo
-                 * guarda --, y el `asm` escribe A DoNDE APUNTA.
+                /* Si la base del acceso se CARGo DE MEMORIA, la localizacion
+                 * del valor no es la del acceso: falta una indireccion.
+                 * `loc_of` responde donde vive el puntero -- el hueco de la
+                 * pila que lo guarda --, y el `asm` escribe A DoNDE APUNTA.
                  *
-                 * Tomar el hueco por el destino tenia una consecuencia que no se
-                 * ve venir: el cierre de efectos filtra las escrituras a pila
-                 * local porque el llamante no las observa, asi que una funcion
-                 * que escribe la memoria de SU LLAMANTE a traves de un parametro
-                 * salia `readonly` y `pure`.  Y con eso el llamante se queda con
-                 * el valor viejo en un registro: `20_align_demostrada` daba 1 en
-                 * JIT y 42 interpretado.
+                 * Tomar el hueco por el destino tenia una consecuencia que no
+                 * se ve venir: el cierre de efectos filtra las escrituras a
+                 * pila local porque el llamante no las observa, asi que una
+                 * funcion que escribe la memoria de SU LLAMANTE a traves de un
+                 * parametro salia `readonly` y `pure`.  Y con eso el llamante
+                 * se queda con el valor viejo en un registro:
+                 * `20_align_demostrada` daba 1 en JIT y 42 interpretado.
                  *
                  * Hasta que la indireccion se siga -- preguntar que se guardo
                  * ahi, que es otro paso --, lo correcto es no afirmar la
                  * localizacion.  Se cae al efecto generico, que dice "escribe
                  * memoria" sin decir donde: menos preciso, pero cierto.
                  *
-                 * OJO: esta guarda es correcta pero NO es la que arregla el caso
-                 * de `20_align_demostrada` -- comprobado, ahi no dispara, porque
-                 * su base no viene marcada como cargada de memoria.  Ese sigue
-                 * saliendo `readonly` y su causa esta antes: `loc_of` le da una
-                 * localizacion de pila que no escapa a una escritura que va a la
-                 * memoria del llamante. */
+                 * OJO: esta guarda es correcta pero NO es la que arregla el
+                 * caso de `20_align_demostrada` -- comprobado, ahi no dispara,
+                 * porque su base no viene marcada como cargada de memoria.  Ese
+                 * sigue saliendo `readonly` y su causa esta antes: `loc_of` le
+                 * da una localizacion de pila que no escapa a una escritura que
+                 * va a la memoria del llamante. */
                 if (a.desde_memoria.hay) {
                     localizado = false;
                     break;
@@ -315,14 +322,17 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
                  * valor no es exacto; sin offset exacto no se puede correr
                  * nada, asi que la extension solo se aplica si sobrevivio. */
                 if (ext.acotada && l.width > 0) l.off += ext.desde;
-                if (a.escribe) locs_escribe.push_back(l);
-                else locs_lee.push_back(l);
+                if (a.escribe)
+                    locs_escribe.push_back(l);
+                else
+                    locs_lee.push_back(l);
             }
             if (!localizado) break;
         }
     }
     if (localizado) {
-        for (const AbstractLoc &l : locs_lee) r.effects.mem.reads.add(l);
+        for (const AbstractLoc &l : locs_lee)
+            r.effects.mem.reads.add(l);
         for (const AbstractLoc &l : locs_escribe) {
             r.effects.mem.writes.add(l);
             // Escribir por un puntero es tambien leer por el (ver el analisis).
@@ -350,9 +360,10 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
         r.effects.atomic.is_fence = true;
         r.effects.tags.add(CapabilityTag::UserBarrier);
     }
-    // Un asm que no toca mem, no llama y no es atomico es puro (aritmetica sobre
-    // registros): efecto neutro.  Un mnemonico DESCONOCIDO no se puede acotar ->
-    // efecto MAXIMO robusto (podria hacer cualquier cosa) + LAGUNA a reportar.
+    // Un asm que no toca mem, no llama y no es atomico es puro (aritmetica
+    // sobre registros): efecto neutro.  Un mnemonico DESCONOCIDO no se puede
+    // acotar -> efecto MAXIMO robusto (podria hacer cualquier cosa) + LAGUNA a
+    // reportar.
     if (!e.known()) {
         r.effects = SemanticEffects::top();
         r.completeness = AnalysisCompleteness::Unknown;
@@ -386,7 +397,7 @@ const char *backend_name(Backend b) {
 /**
  * @brief Ajusta el efecto de una op a lo que hace en ESE backend.
  *
- * Una op del IR no es una instruccion: es lo que cada backend haga con ella.  En
+ * Una op del IR no es una instruccion: es lo que cada backend haga con ella. En
  * la VM (y en el JIT, que conserva su semantica) casi todas son una instruccion
  * de la maquina; en AOT nativo, las que dependen del runtime -- GC, monitores,
  * strings, dispatch virtual, scheduler -- se materializan como una LLAMADA a
@@ -413,10 +424,12 @@ static void aplicar_backend(SemanticEffects &e, ir::IrOp op, Backend b) {
     if (aot_classify_op(op) != AotOpClass::RUNTIME_DEPENDENT) return;
     /* Solo si no cedia el control ya por si misma (una CALL sigue siendo una
      * CALL, y un RET no se convierte en llamada por pasar por el runtime). */
-    if (e.control.kind == ControlKind::FallThrough) e.control.kind = ControlKind::Call;
+    if (e.control.kind == ControlKind::FallThrough)
+        e.control.kind = ControlKind::Call;
 }
 
-NativeDecls collect_native_decls(const std::vector<const ir::IrModule *> &mods) {
+NativeDecls
+collect_native_decls(const std::vector<const ir::IrModule *> &mods) {
     NativeDecls out;
     for (const ir::IrModule *m : mods) {
         if (!m) continue;
@@ -439,9 +452,9 @@ static const ir::IrNativeEffects *buscar_decl(const NativeDecls &d,
  * @brief Traduce una declaracion a efectos, resolviendo la memoria en el sitio.
  *
  * La declaracion habla de ARGUMENTOS ("escribe el segundo"); aqui se convierte
- * en la localizacion concreta a la que ese argumento apunta en esta llamada, con
- * el mismo resolvedor que usan LOAD y STORE.  Por eso la declaracion se puede
- * escribir una vez y sigue siendo precisa en cada sitio.
+ * en la localizacion concreta a la que ese argumento apunta en esta llamada,
+ * con el mismo resolvedor que usan LOAD y STORE.  Por eso la declaracion se
+ * puede escribir una vez y sigue siendo precisa en cada sitio.
  *
  * El ancho se deja desconocido (objeto entero): una nativa escribe un buffer,
  * no una palabra, y afinar el ancho aqui seria afirmar de mas.
@@ -455,13 +468,15 @@ static void aplicar_decl(SemanticEffects &e, const ir::IrNativeEffects &d,
         if (d.escribe_apuntado & bit) add_write(e, loc(ops[i], 0));
     }
     if (d.lee_global) add_read(e, {AbstractLoc::Kind::Global, LOC_GENERIC});
-    if (d.escribe_global) add_write(e, {AbstractLoc::Kind::Global, LOC_GENERIC});
+    if (d.escribe_global)
+        add_write(e, {AbstractLoc::Kind::Global, LOC_GENERIC});
     if (d.io) {
         e.may_io = true;
         e.determinism.add(DeterminismTag::ExternalObservable);
     }
     if (d.puede_lanzar) e.may_throw = true;
-    if (d.no_determinista) e.determinism.add(DeterminismTag::ExternalObservable);
+    if (d.no_determinista)
+        e.determinism.add(DeterminismTag::ExternalObservable);
 }
 
 /// Traduce UNA localizacion del callee a la memoria del llamante.  Devuelve
@@ -490,8 +505,7 @@ static AbstractLoc instanciar_loc(const AbstractLoc &l,
     case AbstractLoc::Kind::None:
     case AbstractLoc::Kind::Unknown:
         return l; // lo global y lo desconocido significan lo mismo aqui.
-    default:
-        break;
+    default: break;
     }
     /* Pila o monton del CALLEE: sus identificadores son suyos y aqui no
      * nombran nada.  Decir que se toca `stack#3` del llamante seria hablar de
@@ -539,7 +553,7 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
                                       const analysis::PointsTo &pt,
                                       const ir::IrInstr &ins,
                                       const EffectEnv &env) {
-    (void)facts; // el points-to (pt) ya se construyo con los hechos.
+    (void)facts;            // el points-to (pt) ya se construyo con los hechos.
     EffectAnalysisResult r; // neutro Complete por defecto
     SemanticEffects &e = r.effects;
     const auto &ops = ins.operands;
@@ -551,27 +565,77 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
 
     switch (ins.op) {
     // ---- Computacion pura (sin efectos observables) ----
-    case IrOp::CONST: case IrOp::MOV: case IrOp::NOP:
-    case IrOp::ADD: case IrOp::SUB: case IrOp::MUL:
-    case IrOp::NEG: case IrOp::IABS: case IrOp::IMIN: case IrOp::IMAX:
-    case IrOp::IMINU: case IrOp::IMAXU:
-    case IrOp::FADD: case IrOp::FSUB: case IrOp::FMUL: case IrOp::FDIV:
-    case IrOp::FNEG: case IrOp::FABS: case IrOp::FSQRT: case IrOp::FMIN:
-    case IrOp::FMAX: case IrOp::FFLOOR: case IrOp::FCEIL: case IrOp::FROUND:
+    case IrOp::CONST:
+    case IrOp::MOV:
+    case IrOp::NOP:
+    case IrOp::ADD:
+    case IrOp::SUB:
+    case IrOp::MUL:
+    case IrOp::NEG:
+    case IrOp::IABS:
+    case IrOp::IMIN:
+    case IrOp::IMAX:
+    case IrOp::IMINU:
+    case IrOp::IMAXU:
+    case IrOp::FADD:
+    case IrOp::FSUB:
+    case IrOp::FMUL:
+    case IrOp::FDIV:
+    case IrOp::FNEG:
+    case IrOp::FABS:
+    case IrOp::FSQRT:
+    case IrOp::FMIN:
+    case IrOp::FMAX:
+    case IrOp::FFLOOR:
+    case IrOp::FCEIL:
+    case IrOp::FROUND:
     case IrOp::FTRUNC:
-    case IrOp::AND: case IrOp::OR: case IrOp::XOR: case IrOp::NOT:
-    case IrOp::SHL: case IrOp::SHR: case IrOp::SAR: case IrOp::CLZ: case IrOp::CTZ:
-    case IrOp::POPCNT: case IrOp::BYTESWAP: case IrOp::ROTL: case IrOp::ROTR:
-    case IrOp::CMP_EQ: case IrOp::CMP_NE: case IrOp::CMP_LT: case IrOp::CMP_GT:
-    case IrOp::CMP_LE: case IrOp::CMP_GE: case IrOp::CMP_ULT: case IrOp::CMP_UGT:
-    case IrOp::CMP_ULE: case IrOp::CMP_UGE:
-    case IrOp::FCMP_EQ: case IrOp::FCMP_NE: case IrOp::FCMP_LT: case IrOp::FCMP_GT:
-    case IrOp::FCMP_LE: case IrOp::FCMP_GE:
-    case IrOp::CAST: case IrOp::ZEXT: case IrOp::SEXT: case IrOp::TRUNC:
-    case IrOp::ITOF: case IrOp::UITOF: case IrOp::FTOI: case IrOp::FTOUI:
-    case IrOp::BITCAST: case IrOp::PHI: case IrOp::ALLOCA: case IrOp::GEP:
-    case IrOp::STR_LIT_ADDR: case IrOp::LABEL_ADDR: case IrOp::SECTION_REF:
-    case IrOp::ISNULL: case IrOp::INSTANCEOF:
+    case IrOp::AND:
+    case IrOp::OR:
+    case IrOp::XOR:
+    case IrOp::NOT:
+    case IrOp::SHL:
+    case IrOp::SHR:
+    case IrOp::SAR:
+    case IrOp::CLZ:
+    case IrOp::CTZ:
+    case IrOp::POPCNT:
+    case IrOp::BYTESWAP:
+    case IrOp::ROTL:
+    case IrOp::ROTR:
+    case IrOp::CMP_EQ:
+    case IrOp::CMP_NE:
+    case IrOp::CMP_LT:
+    case IrOp::CMP_GT:
+    case IrOp::CMP_LE:
+    case IrOp::CMP_GE:
+    case IrOp::CMP_ULT:
+    case IrOp::CMP_UGT:
+    case IrOp::CMP_ULE:
+    case IrOp::CMP_UGE:
+    case IrOp::FCMP_EQ:
+    case IrOp::FCMP_NE:
+    case IrOp::FCMP_LT:
+    case IrOp::FCMP_GT:
+    case IrOp::FCMP_LE:
+    case IrOp::FCMP_GE:
+    case IrOp::CAST:
+    case IrOp::ZEXT:
+    case IrOp::SEXT:
+    case IrOp::TRUNC:
+    case IrOp::ITOF:
+    case IrOp::UITOF:
+    case IrOp::FTOI:
+    case IrOp::FTOUI:
+    case IrOp::BITCAST:
+    case IrOp::PHI:
+    case IrOp::ALLOCA:
+    case IrOp::GEP:
+    case IrOp::STR_LIT_ADDR:
+    case IrOp::LABEL_ADDR:
+    case IrOp::SECTION_REF:
+    case IrOp::ISNULL:
+    case IrOp::INSTANCEOF:
     /* Elegir entre dos valores ya calculados no hace nada observable.  Estaba
      * sin clasificar, asi que caia al efecto MAXIMO: 12 sitios del kernel
      * quedaban como "puede hacer cualquier cosa" por un simple ternario. */
@@ -580,20 +644,25 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
      * el grafo de valores, no por memoria, asi que aqui no hay efecto que
      * declarar (lo que SI hay es un orden que respetar, y de eso se ocupa el
      * planificador). */
-    case IrOp::FMA: case IrOp::ADDC: case IrOp::SUBB: case IrOp::CARRYOF:
-    // Conversiones de puntero/handle: solo calculan una direccion (el load/store
-    // real es una op aparte); sin efecto observable propio.
-    case IrOp::GCDEREF_IR: case IrOp::GC_DEREF_HOST: case IrOp::GC_HANDLE_FOR_PTR:
+    case IrOp::FMA:
+    case IrOp::ADDC:
+    case IrOp::SUBB:
+    case IrOp::CARRYOF:
+    // Conversiones de puntero/handle: solo calculan una direccion (el
+    // load/store real es una op aparte); sin efecto observable propio.
+    case IrOp::GCDEREF_IR:
+    case IrOp::GC_DEREF_HOST:
+    case IrOp::GC_HANDLE_FOR_PTR:
     // Metadata de depuracion: no afecta la semantica de datos del programa.
     case IrOp::SETMETHDBG:
         break; // efecto neutro
 
     // ---- Division: puede atrapar (div-by-zero) ----
-    case IrOp::DIV: case IrOp::MOD:
-        e.may_trap = true;
-        break;
+    case IrOp::DIV:
+    case IrOp::MOD: e.may_trap = true; break;
 
-    // ---- Memoria (localizacion precisa: raiz + offset + ancho del acceso) ----
+    // ---- Memoria (localizacion precisa: raiz + offset + ancho del acceso)
+    // ----
     case IrOp::LOAD:
         if (!ops.empty()) add_read(e, loc(ops[0], w));
         break;
@@ -619,16 +688,19 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
     case IrOp::SETSTATIC:
         add_write(e, {AbstractLoc::Kind::Global, LOC_GENERIC});
         break;
-    case IrOp::ARRAY_LEN: case IrOp::STRLEN: case IrOp::STRGETBYTES:
+    case IrOp::ARRAY_LEN:
+    case IrOp::STRLEN:
+    case IrOp::STRGETBYTES:
     case IrOp::STRHASH:
     /* Comparar dos cadenas LEE las dos y no escribe nada.  Estaba sin
      * clasificar, asi que caia al efecto maximo: 25 sitios de la stdlib
      * quedaban como "puede hacer cualquier cosa" por un `==` entre cadenas. */
     case IrOp::STRCMP:
-    // STRRAW: devuelve un host_ptr al buffer de datos del StringObject -> LEE el
-    // objeto (cabecera+datos) para calcular el puntero; no escribe/aloca/lanza.
-    // Una escritura POSTERIOR via el puntero devuelto es un STORE aparte
-    // (modelado).  Sin esto, strraw subia a top() (laguna modelable).
+    // STRRAW: devuelve un host_ptr al buffer de datos del StringObject -> LEE
+    // el objeto (cabecera+datos) para calcular el puntero; no
+    // escribe/aloca/lanza. Una escritura POSTERIOR via el puntero devuelto es
+    // un STORE aparte (modelado).  Sin esto, strraw subia a top() (laguna
+    // modelable).
     case IrOp::STRRAW:
         // leen la cabecera del objeto (ancho desconocido = objeto entero).
         if (!ops.empty()) add_read(e, loc(ops[0], 0));
@@ -640,31 +712,50 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
     // relajaciones pure-call).  opaco -> top; VEC_BCAST no toca memoria.
     case IrOp::MEMCPY:
     case IrOp::MEMSET:
-    case IrOp::VEC_UNOP: case IrOp::VEC_BINOP: case IrOp::VEC_BINOP_S:
-    case IrOp::VEC_FMA: case IrOp::VEC_BCAST:
-    case IrOp::VEC_ACC_ZERO: case IrOp::VEC_ACC_ADD: case IrOp::VEC_ACC_FMA:
-    case IrOp::VEC_ACC_STORE: case IrOp::VEC_ACC_COMBINE: {
+    case IrOp::VEC_UNOP:
+    case IrOp::VEC_BINOP:
+    case IrOp::VEC_BINOP_S:
+    case IrOp::VEC_FMA:
+    case IrOp::VEC_BCAST:
+    case IrOp::VEC_ACC_ZERO:
+    case IrOp::VEC_ACC_ADD:
+    case IrOp::VEC_ACC_FMA:
+    case IrOp::VEC_ACC_STORE:
+    case IrOp::VEC_ACC_COMBINE: {
         const analysis::MemoryAccess ma = analysis::memory_access(ins, pt);
         if (ma.touches) {
             if (ma.opaque) {
-                if (ma.is_load) add_read(e, {AbstractLoc::Kind::Unknown, LOC_GENERIC});
-                if (ma.is_store) add_write(e, {AbstractLoc::Kind::Unknown, LOC_GENERIC});
+                if (ma.is_load)
+                    add_read(e, {AbstractLoc::Kind::Unknown, LOC_GENERIC});
+                if (ma.is_store)
+                    add_write(e, {AbstractLoc::Kind::Unknown, LOC_GENERIC});
             } else {
-                for (const auto &r : ma.reads) add_read(e, r);
-                for (const auto &w : ma.writes) add_write(e, w);
+                for (const auto &r : ma.reads)
+                    add_read(e, r);
+                for (const auto &w : ma.writes)
+                    add_write(e, w);
             }
         }
         break;
     }
 
     // ---- Asignacion de memoria (aloca heap) ----
-    case IrOp::RAW_ALLOC: case IrOp::GC_ALLOC: case IrOp::GC_ALLOCP:
-    case IrOp::NEWOBJ: case IrOp::ARRAY_ALLOC: case IrOp::MAKE_CLOSURE:
-    case IrOp::STRMAKE: case IrOp::STRCAT: case IrOp::STRCONV: case IrOp::STRSLICE:
-    case IrOp::STRFLAT: case IrOp::STRINTERN: case IrOp::STRRESERVE:
-    case IrOp::MAKE_VARIANT: case IrOp::SPECIALIZE: case IrOp::FUTURE:
-        e.may_allocate = true;
-        break;
+    case IrOp::RAW_ALLOC:
+    case IrOp::GC_ALLOC:
+    case IrOp::GC_ALLOCP:
+    case IrOp::NEWOBJ:
+    case IrOp::ARRAY_ALLOC:
+    case IrOp::MAKE_CLOSURE:
+    case IrOp::STRMAKE:
+    case IrOp::STRCAT:
+    case IrOp::STRCONV:
+    case IrOp::STRSLICE:
+    case IrOp::STRFLAT:
+    case IrOp::STRINTERN:
+    case IrOp::STRRESERVE:
+    case IrOp::MAKE_VARIANT:
+    case IrOp::SPECIALIZE:
+    case IrOp::FUTURE: e.may_allocate = true; break;
 
     /* ---- Liberacion: invalida LO QUE LIBERA, no toda la memoria ----
      *
@@ -678,16 +769,20 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
      * Que otros punteros al MISMO objeto queden invalidos lo cubre la propia
      * localizacion: comparten raiz, asi que cualquiera que pregunte por ellos
      * ve el conflicto.  Y si no se puede resolver, se vuelve a lo de antes. */
-    case IrOp::RAW_FREE: case IrOp::SMARTPTR_FREE:
-        add_write(e, ops.empty() ? AbstractLoc{AbstractLoc::Kind::Unknown, LOC_GENERIC}
-                                 : loc(ops[0], 0 /*todo el objeto*/));
+    case IrOp::RAW_FREE:
+    case IrOp::SMARTPTR_FREE:
+        add_write(e, ops.empty()
+                         ? AbstractLoc{AbstractLoc::Kind::Unknown, LOC_GENERIC}
+                         : loc(ops[0], 0 /*todo el objeto*/));
         break;
-    case IrOp::GC_COLLECT: case IrOp::GC_FINALIZE_ALL:
+    case IrOp::GC_COLLECT:
+    case IrOp::GC_FINALIZE_ALL:
         add_write(e, {AbstractLoc::Kind::Unknown, LOC_GENERIC});
         break;
 
     // ---- Excepciones ----
-    case IrOp::THROW: case IrOp::RETHROW:
+    case IrOp::THROW:
+    case IrOp::RETHROW:
         e.may_throw = true;
         e.control.kind = ControlKind::Throw;
         break;
@@ -707,23 +802,21 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
         break;
 
     // ---- Control ----
-    case IrOp::RET:
-        e.control.kind = ControlKind::Return;
-        break;
-    case IrOp::BR: case IrOp::BR_COND: case IrOp::SWITCH_DENSE:
-    case IrOp::MATCH_VARIANT:
-        e.control.kind = ControlKind::Branch;
-        break;
-    case IrOp::UNREACHABLE:
-        e.control.kind = ControlKind::NoReturn;
-        break;
+    case IrOp::RET: e.control.kind = ControlKind::Return; break;
+    case IrOp::BR:
+    case IrOp::BR_COND:
+    case IrOp::SWITCH_DENSE:
+    case IrOp::MATCH_VARIANT: e.control.kind = ControlKind::Branch; break;
+    case IrOp::UNREACHABLE: e.control.kind = ControlKind::NoReturn; break;
 
     // ---- Llamadas.  El efecto LOCAL es 'transfiere control'; el efecto del
-    // callee entra por el cierre (Fase 2).  Las dinamicas/nativas son opacas. ----
-    case IrOp::CALL: case IrOp::TAILCALL:
-        e.control.kind = ControlKind::Call;
-        break;
-    case IrOp::CALLVIRT: case IrOp::CALLM: case IrOp::CALLITF:
+    // callee entra por el cierre (Fase 2).  Las dinamicas/nativas son opacas.
+    // ----
+    case IrOp::CALL:
+    case IrOp::TAILCALL: e.control.kind = ControlKind::Call; break;
+    case IrOp::CALLVIRT:
+    case IrOp::CALLM:
+    case IrOp::CALLITF:
     case IrOp::CALLCLOSURE:
         e.control.kind = ControlKind::Call;
         r.completeness = AnalysisCompleteness::Conservative; // callee dinamico
@@ -736,10 +829,10 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
         break;
     case IrOp::CALLN: {
         /* Una llamada NATIVA no es opaca por definicion.  Su efecto LOCAL es el
-         * de cualquier llamada -- ceder el control --; lo que hace el destino lo
-         * pone el cierre interprocedural, que lo busca por nombre y lo ANALIZA
-         * si esta en el programa.  Solo cuando el destino no aparece, el cierre
-         * sube al efecto maximo y lo nombra en el informe.
+         * de cualquier llamada -- ceder el control --; lo que hace el destino
+         * lo pone el cierre interprocedural, que lo busca por nombre y lo
+         * ANALIZA si esta en el programa.  Solo cuando el destino no aparece,
+         * el cierre sube al efecto maximo y lo nombra en el informe.
          *
          * Antes se daba por caja negra aqui mismo, con lo que daba igual que el
          * destino estuviera delante: nadie llegaba a mirarlo. */
@@ -765,31 +858,37 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
     }
 
     // ---- Concurrencia ----
-    case IrOp::AWAIT: case IrOp::MONENTER: case IrOp::MONWAIT: case IrOp::MSGRECV:
-        e.may_block = true;
-        break;
-    case IrOp::MONEXIT:
-        e.atomic.order = MemOrder::Release;
-        break;
-    case IrOp::MSGSEND: case IrOp::FULFILL: case IrOp::REJECT:
+    case IrOp::AWAIT:
+    case IrOp::MONENTER:
+    case IrOp::MONWAIT:
+    case IrOp::MSGRECV: e.may_block = true; break;
+    case IrOp::MONEXIT: e.atomic.order = MemOrder::Release; break;
+    case IrOp::MSGSEND:
+    case IrOp::FULFILL:
+    case IrOp::REJECT:
     case IrOp::FULFILL_HLT:
         e.may_io = true; // comunicacion observable
         break;
-    case IrOp::SPAWN: case IrOp::SPAWN_ARGS: case IrOp::RSPAWN:
+    case IrOp::SPAWN:
+    case IrOp::SPAWN_ARGS:
+    case IrOp::RSPAWN:
         e.may_allocate = true; // crea proceso
         e.may_io = true;
         break;
-    case IrOp::YIELD: case IrOp::RESUME:
-        e.control.kind = ControlKind::Suspend;
-        break;
+    case IrOp::YIELD:
+    case IrOp::RESUME: e.control.kind = ControlKind::Suspend; break;
 
     // ---- Estado del proceso / entorno (no determinista) ----
-    case IrOp::GETPROC: case IrOp::GETVM: case IrOp::READ_VM_REG:
+    case IrOp::GETPROC:
+    case IrOp::GETVM:
+    case IrOp::READ_VM_REG:
         e.determinism.add(DeterminismTag::ExternalObservable);
         break;
 
     // ---- I/O / carga dinamica ----
-    case IrOp::DLOPEN: case IrOp::DLSYM: case IrOp::MOD_LOAD:
+    case IrOp::DLOPEN:
+    case IrOp::DLSYM:
+    case IrOp::MOD_LOAD:
         e.may_io = true;
         r.completeness = AnalysisCompleteness::Conservative;
         break;
@@ -818,18 +917,21 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
         break;
 
     // ---- Reflexion / registro de clases (muta el ClassRegistry) ----
-    case IrOp::DEFCLASS: case IrOp::DEFFIELD: case IrOp::DEFMETHOD:
+    case IrOp::DEFCLASS:
+    case IrOp::DEFFIELD:
+    case IrOp::DEFMETHOD:
     case IrOp::ADDADVICE:
         add_write(e, {AbstractLoc::Kind::Global, LOC_GENERIC});
         e.may_allocate = true;
         break;
-    case IrOp::FINDCLASS: case IrOp::FINDMETHOD:
+    case IrOp::FINDCLASS:
+    case IrOp::FINDMETHOD:
         add_read(e, {AbstractLoc::Kind::Global, LOC_GENERIC});
         break;
 
     // ---- Residuo de asm OPACO ----
-    case IrOp::INLINE_ASM: case IrOp::ASM_MICRO:
-        return opaque_asm_effects(fn, pt, ins, env);
+    case IrOp::INLINE_ASM:
+    case IrOp::ASM_MICRO: return opaque_asm_effects(fn, pt, ins, env);
 
     default:
         // Op no clasificada -> efecto MAXIMO (top): robusto y completo, cubre
@@ -862,11 +964,11 @@ EffectAnalysisResult function_local_effects(const ir::IrFunction &fn,
         bool first_instr = true;
         for (const ir::IrInstr &in : b.instrs) {
             EffectAnalysisResult r = effects_of_instr(fn, facts, pt, in, env);
-            if (uint8_t(r.completeness) > uint8_t(worst)) worst = r.completeness;
+            if (uint8_t(r.completeness) > uint8_t(worst))
+                worst = r.completeness;
             // Registrar la laguna (si la hubo) para el reporte de cobertura.
             if (gaps && r.completeness != AnalysisCompleteness::Complete &&
-                r.unknown_reason != UnknownReason::None)
-            {
+                r.unknown_reason != UnknownReason::None) {
                 gaps->record(static_cast<int>(in.op), r.unknown_reason);
                 for (const std::string &m : r.mnemonicos_desconocidos)
                     gaps->record_mnemonico(m);

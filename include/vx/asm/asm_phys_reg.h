@@ -89,10 +89,10 @@ static constexpr uint32_t kAsmDescBytes = 8;
  * @brief Donde esta el valor de un operando: en un REGISTRO de la VM.
  *
  * La via de la tabla mueve los valores a la pila para que el runtime los lea de
- * ahi, y de vuelta al terminar.  Eso son dos copias por operando y por bloque, y
- * no compran nada: el valor ya esta en un registro de la VM, y la VM tiene los
- * dos bancos -- `regs[16]` y `zmm[16]` -- asi que el runtime puede leerlo donde
- * ya esta.
+ * ahi, y de vuelta al terminar.  Eso son dos copias por operando y por bloque,
+ * y no compran nada: el valor ya esta en un registro de la VM, y la VM tiene
+ * los dos bancos -- `regs[16]` y `zmm[16]` -- asi que el runtime puede leerlo
+ * donde ya esta.
  *
  * Un bloque `asm` no es una frontera que haya que cruzar copiando: es codigo
  * dentro del codigo, y sus operandos son valores como cualquier otro.
@@ -104,8 +104,9 @@ static constexpr uint32_t kAsmDescBytes = 8;
 /**
  * @brief La posicion de un operando, empaquetada en 16 bits.
  *
- * Va en los ARGUMENTOS de la llamada, no en una tabla: cuatro operandos caben en
- * un entero de 64 bits y ocho en dos, que es mas de lo que un bloque `asm` usa.
+ * Va en los ARGUMENTOS de la llamada, no en una tabla: cuatro operandos caben
+ * en un entero de 64 bits y ocho en dos, que es mas de lo que un bloque `asm`
+ * usa.
  *
  * Sin tabla desaparecen la reserva de pila, los almacenamientos y -- lo que de
  * verdad costo -- la necesidad de un registro para direccionarla.  El primer
@@ -124,7 +125,9 @@ inline constexpr uint16_t asm_pack_loc(uint8_t vm_reg, uint8_t phys,
                       ((bank & 1) << 9) | ((flags & 0x3) << 10));
 }
 
-inline constexpr uint8_t asm_loc_vm_reg(uint16_t p) { return (uint8_t)(p & 0xF); }
+inline constexpr uint8_t asm_loc_vm_reg(uint16_t p) {
+    return (uint8_t)(p & 0xF);
+}
 inline constexpr uint8_t asm_loc_phys(uint16_t p) {
     return (uint8_t)((p >> 4) & 0x1F);
 }
@@ -172,9 +175,9 @@ static constexpr uint32_t kAsmMaxOps = 16;
  * cuando entren, esto deja de ser una constante y pasa a salir del objetivo.
  * @{
  */
-static constexpr uint32_t kAsmCtxGpSlots = 32;   ///< ranuras del banco general.
-static constexpr uint32_t kAsmCtxVecSlots = 32;  ///< ranuras del banco ancho.
-static constexpr uint32_t kAsmCtxVecQwords = 8;  ///< 64 bytes por ranura ancha.
+static constexpr uint32_t kAsmCtxGpSlots = 32;  ///< ranuras del banco general.
+static constexpr uint32_t kAsmCtxVecSlots = 32; ///< ranuras del banco ancho.
+static constexpr uint32_t kAsmCtxVecQwords = 8; ///< 64 bytes por ranura ancha.
 
 /// Bits que cabe en una ranura ancha.  512 es lo que miden zmm y los vectores
 /// fijos de arm64, y NO es "el maximo": SVE llega a 2048 y RVV no tiene tope
@@ -193,7 +196,9 @@ static constexpr uint32_t kAsmSlotBits = kAsmCtxVecQwords * 64;
  * Preguntar y quedarse fuera cuesta que ese bloque siga opaco, con su motivo
  * dicho.  No preguntar cuesta medio registro, sin aviso ninguno.
  */
-inline bool asm_cabe_en_ranura(unsigned bits) { return bits <= kAsmSlotBits; }
+inline bool asm_cabe_en_ranura(unsigned bits) {
+    return bits <= kAsmSlotBits;
+}
 /// Qwords totales del contexto.
 static constexpr uint32_t kAsmCtxQwords =
     kAsmCtxGpSlots + kAsmCtxVecSlots * kAsmCtxVecQwords;
@@ -206,11 +211,11 @@ static constexpr uint32_t kAsmCtxQwords =
 /// bytes hay que mover es esto.
 inline unsigned asm_ancho_de_codigo(unsigned codigo) {
     switch (codigo & 0x7u) {
-    case 0: return 8;   // banco general
-    case 1: return 16;  // 128 bits (xmm / NEON)
-    case 2: return 32;  // 256 bits (ymm)
-    case 3: return 64;  // 512 bits (zmm)
-    default: return 8;  // desconocido -> lo estrecho, que nunca pisa de mas
+    case 0: return 8;  // banco general
+    case 1: return 16; // 128 bits (xmm / NEON)
+    case 2: return 32; // 256 bits (ymm)
+    case 3: return 64; // 512 bits (zmm)
+    default: return 8; // desconocido -> lo estrecho, que nunca pisa de mas
     }
 }
 
@@ -297,8 +302,9 @@ inline uint8_t asm_clase_de_banco(uint8_t isa, const std::string &clase) {
         if (c.rfind("xmm", 0) == 0 || c.rfind("ymm", 0) == 0 ||
             c.rfind("zmm", 0) == 0)
             return ASM_RC_VEC;
-        if (c.rfind("st", 0) == 0) return ASM_RC_FP;   // pila x87
-        if (c.rfind("k", 0) == 0 && c.size() <= 2) return ASM_RC_PRED; // AVX-512
+        if (c.rfind("st", 0) == 0) return ASM_RC_FP; // pila x87
+        if (c.rfind("k", 0) == 0 && c.size() <= 2)
+            return ASM_RC_PRED; // AVX-512
         return ASM_RC_GP;
     }
     /* arm64 / arm32: el banco ancho se escribe `v`/`q`/`d`/`s` (NEON, SVE usa
@@ -307,7 +313,6 @@ inline uint8_t asm_clase_de_banco(uint8_t isa, const std::string &clase) {
     if (c[0] == 'p') return ASM_RC_PRED;
     return ASM_RC_GP;
 }
-
 
 /**
  * @brief Nombre del GPR x86 @p phys (0..15, ORDEN DE ENCODING) al ancho
@@ -318,13 +323,13 @@ inline const char *asm_x86_gp_name(int phys, uint16_t width_bits) {
     static const char *k64[16] = {"rax", "rcx", "rdx", "rbx", "rsp", "rbp",
                                   "rsi", "rdi", "r8",  "r9",  "r10", "r11",
                                   "r12", "r13", "r14", "r15"};
-    static const char *k32[16] = {"eax",  "ecx",  "edx",  "ebx", "esp", "ebp",
+    static const char *k32[16] = {"eax",  "ecx",  "edx",  "ebx", "esp",  "ebp",
                                   "esi",  "edi",  "r8d",  "r9d", "r10d", "r11d",
                                   "r12d", "r13d", "r14d", "r15d"};
-    static const char *k16[16] = {"ax",   "cx",   "dx",   "bx",  "sp",  "bp",
+    static const char *k16[16] = {"ax",   "cx",   "dx",   "bx",  "sp",   "bp",
                                   "si",   "di",   "r8w",  "r9w", "r10w", "r11w",
                                   "r12w", "r13w", "r14w", "r15w"};
-    static const char *k8[16] = {"al",   "cl",   "dl",   "bl",  "spl", "bpl",
+    static const char *k8[16] = {"al",   "cl",   "dl",   "bl",  "spl",  "bpl",
                                  "sil",  "dil",  "r8b",  "r9b", "r10b", "r11b",
                                  "r12b", "r13b", "r14b", "r15b"};
     switch (width_bits) {
@@ -352,10 +357,17 @@ inline int asm_x86_vec_index(const std::string &tok, uint16_t *out_width) {
         s += static_cast<char>(std::tolower((unsigned char)c));
     uint16_t w = 0;
     size_t pos = 0;
-    if (s.rfind("xmm", 0) == 0) { w = 128; pos = 3; }
-    else if (s.rfind("ymm", 0) == 0) { w = 256; pos = 3; }
-    else if (s.rfind("zmm", 0) == 0) { w = 512; pos = 3; }
-    else return -1;
+    if (s.rfind("xmm", 0) == 0) {
+        w = 128;
+        pos = 3;
+    } else if (s.rfind("ymm", 0) == 0) {
+        w = 256;
+        pos = 3;
+    } else if (s.rfind("zmm", 0) == 0) {
+        w = 512;
+        pos = 3;
+    } else
+        return -1;
     if (pos >= s.size()) return -1;
     int n = 0;
     for (size_t i = pos; i < s.size(); ++i) {
@@ -464,8 +476,8 @@ inline std::string asm_mem_operando(uint8_t isa, const std::string &base,
 }
 
 /**
- * @brief Un registro CUALQUIERA de esa clase y ancho, para preguntarle a la base
- *        de instrucciones por una linea equivalente.
+ * @brief Un registro CUALQUIERA de esa clase y ancho, para preguntarle a la
+ * base de instrucciones por una linea equivalente.
  *
  * La forma de una instruccion depende de la CLASE del operando, no de que
  * registro concreto sea, asi que para clasificar una linea que todavia lleva
@@ -552,8 +564,8 @@ inline void asm_micro_clobbers(const ir::AsmMicro &am,
 /**
  * @brief Sustituye @c $0,$1,... de @c am.tmpl por el nombre fisico de cada
  *        operando (indexado por posicion en @c am.operands).  Devuelve @c false
- *        si algun @c $N referenciado no es nombrable (operando no fisico o clase
- *        no soportada) -> el llamador hace fallback.
+ *        si algun @c $N referenciado no es nombrable (operando no fisico o
+ * clase no soportada) -> el llamador hace fallback.
  *
  * todos los operandos son de FiSICO FIJO (@c fixed_phys >= 0).  El
  * threading SSA + asignador (@c fixed_phys == -1) llega despues.
@@ -585,12 +597,14 @@ inline bool asm_micro_subst_phys(const ir::AsmMicro &am, std::string &out) {
             i = j;
             continue;
         }
-        if (op.fixed_phys < 0) return false; // lo elige el asignador, aqui no hay
+        if (op.fixed_phys < 0)
+            return false; // lo elige el asignador, aqui no hay
         std::string name =
             asm_phys_reg_name(am.isa, op.regclass, op.fixed_phys, op.width);
         if (name.empty()) return false;
-        /* Una direccion se escribe entera y aqui: la plantilla lleva el marcador
-         * pelado porque como se escribe una direccion depende de la ISA. */
+        /* Una direccion se escribe entera y aqui: la plantilla lleva el
+         * marcador pelado porque como se escribe una direccion depende de la
+         * ISA. */
         if (op.kind == ir::AsmOperandKind::MEM) {
             const std::string dir = asm_mem_operando(am.isa, name, op.imm);
             if (dir.empty()) return false;
@@ -719,7 +733,10 @@ inline bool asm_micro_subst_greedy(const ir::AsmMicro &am, std::string &out,
             }
         }
         for (size_t r = 0; elegido < 0 && r < n_lanes[rc]; ++r)
-            if (!usado[rc][r]) { elegido = (int)r; break; }
+            if (!usado[rc][r]) {
+                elegido = (int)r;
+                break;
+            }
         if (elegido < 0) return false;
         usado[rc][elegido] = true;
         phys[i] = elegido;
@@ -731,9 +748,9 @@ inline bool asm_micro_subst_greedy(const ir::AsmMicro &am, std::string &out,
     return asm_micro_subst_phys(copia, out);
 }
 
-
 /**
- * @brief Sustituye @c $0,$1,... por el registro GREEDY (por defecto) del binding
+ * @brief Sustituye @c $0,$1,... por el registro GREEDY (por defecto) del
+ * binding
  *        @c reg_auto con ese @c ph_index.  Para el INTERP, que no tiene RA: usa
  *        el pick greedy guardado en @c AsmRegBinding::reg (nombre de 64 bits).
  *        Los @c $N sin binding correspondiente quedan verbatim.
@@ -742,26 +759,39 @@ inline bool asm_micro_subst_greedy(const ir::AsmMicro &am, std::string &out,
  * via el ensamblado diferido (@c AsmBlob::deferred).  Este helper mantiene el
  * interp correcto (aunque no optimo) con el MISMO cuerpo $N.
  */
-inline std::string asm_body_subst_greedy(
-    const std::string &body, const std::vector<ir::AsmRegBinding> &binds) {
+inline std::string
+asm_body_subst_greedy(const std::string &body,
+                      const std::vector<ir::AsmRegBinding> &binds) {
     std::string out;
     out.reserve(body.size() + 16);
     for (size_t i = 0; i < body.size();) {
-        if (body[i] != '$') { out += body[i++]; continue; }
+        if (body[i] != '$') {
+            out += body[i++];
+            continue;
+        }
         size_t j = i + 1;
         int idx = 0;
         bool any = false;
-        while (j < body.size() &&
-               std::isdigit((unsigned char)body[j])) {
+        while (j < body.size() && std::isdigit((unsigned char)body[j])) {
             idx = idx * 10 + (body[j] - '0');
             ++j;
             any = true;
         }
-        if (!any) { out += body[i++]; continue; }
+        if (!any) {
+            out += body[i++];
+            continue;
+        }
         std::string reg;
         for (const ir::AsmRegBinding &b : binds)
-            if (b.reg_auto && b.ph_index == idx) { reg = b.reg; break; }
-        if (reg.empty()) { out += body[i]; ++i; continue; } // $N sin binding
+            if (b.reg_auto && b.ph_index == idx) {
+                reg = b.reg;
+                break;
+            }
+        if (reg.empty()) {
+            out += body[i];
+            ++i;
+            continue;
+        } // $N sin binding
         out += reg;
         i = j;
     }

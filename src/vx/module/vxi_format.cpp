@@ -103,15 +103,55 @@ bool es_nombre_del_lenguaje(const std::string &n) {
      * y darlos por propios seria justo el error peligroso -- una interfaz que
      * los usa depende de ese modulo y tiene que enterarse si cambia. */
     static const std::unordered_set<std::string> k = {
-        "void",   "bool",    "char",   "string", "i8",     "i16",    "i32",
-        "i64",    "u8",      "u16",    "u32",    "u64",    "f32",    "f64",
-        "int8_t", "int16_t", "int32_t", "int64_t", "uint8_t", "uint16_t",
-        "uint32_t", "uint64_t", "float", "double", "ptr", "Object", "Any",
+        "void",
+        "bool",
+        "char",
+        "string",
+        "i8",
+        "i16",
+        "i32",
+        "i64",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "f32",
+        "f64",
+        "int8_t",
+        "int16_t",
+        "int32_t",
+        "int64_t",
+        "uint8_t",
+        "uint16_t",
+        "uint32_t",
+        "uint64_t",
+        "float",
+        "double",
+        "ptr",
+        "Object",
+        "Any",
         // Constructores del lenguaje que envuelven a otro tipo.
-        "Optional", "Result", "Array", "unique", "shared", "borrow",
-        "borrow_mut", "gc", "atomic", "fn", "cfn", "VirtualPtr", "Future",
-        "ArrayList", "HashMap", "HashSet", "Queue", "Deque", "TreeMap",
-        "TreeSet", "Stack",
+        "Optional",
+        "Result",
+        "Array",
+        "unique",
+        "shared",
+        "borrow",
+        "borrow_mut",
+        "gc",
+        "atomic",
+        "fn",
+        "cfn",
+        "VirtualPtr",
+        "Future",
+        "ArrayList",
+        "HashMap",
+        "HashSet",
+        "Queue",
+        "Deque",
+        "TreeMap",
+        "TreeSet",
+        "Stack",
     };
     return k.count(n) != 0;
 }
@@ -121,13 +161,17 @@ template <class F> void por_cada_identificador(const std::string &t, F ver) {
     size_t i = 0;
     while (i < t.size()) {
         const char c = t[i];
-        const bool inicio = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-                            c == '_';
-        if (!inicio) { ++i; continue; }
+        const bool inicio =
+            (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
+        if (!inicio) {
+            ++i;
+            continue;
+        }
         size_t j = i;
         while (j < t.size()) {
             const char d = t[j];
-            const bool sigue = (d >= 'A' && d <= 'Z') || (d >= 'a' && d <= 'z') ||
+            const bool sigue = (d >= 'A' && d <= 'Z') ||
+                               (d >= 'a' && d <= 'z') ||
                                (d >= '0' && d <= '9') || d == '_';
             if (!sigue) break;
             ++j;
@@ -153,11 +197,8 @@ bool interfaz_menciona_tipo_ajeno(const VxiModule &mod) {
         case VxiSymbolKind::TYPEDEF_NEW:
         case VxiSymbolKind::STRUCT:
         case VxiSymbolKind::CLASS:
-        case VxiSymbolKind::ENUM:
-            propios.insert(s.name);
-            break;
-        default:
-            break;
+        case VxiSymbolKind::ENUM: propios.insert(s.name); break;
+        default: break;
         }
     }
     bool ajeno = false;
@@ -172,14 +213,18 @@ bool interfaz_menciona_tipo_ajeno(const VxiModule &mod) {
     };
     for (const auto &s : mod.symbols) {
         revisar(s.return_type);
-        for (const auto &p : s.param_types) revisar(p);
-        for (const auto &f : s.fields) revisar(f.type_str);
+        for (const auto &p : s.param_types)
+            revisar(p);
+        for (const auto &f : s.fields)
+            revisar(f.type_str);
         revisar(s.underlying_type);
         revisar(s.super_class);
-        for (const auto &i : s.interfaces) revisar(i);
+        for (const auto &i : s.interfaces)
+            revisar(i);
         for (const auto &m : s.methods) {
             revisar(m.return_type);
-            for (const auto &p : m.param_types) revisar(p);
+            for (const auto &p : m.param_types)
+                revisar(p);
         }
         if (ajeno) break;
     }
@@ -431,9 +476,8 @@ static void emit_payload_for_function(std::vector<uint8_t> &payload,
         const uint32_t n_off = pool.intern(nm);
         write_u32(payload, n_off);
         write_u32(payload, static_cast<uint32_t>(nm.size()));
-        std::string ab =
-            (i < sym.param_abi_regs.size()) ? sym.param_abi_regs[i]
-                                            : std::string();
+        std::string ab = (i < sym.param_abi_regs.size()) ? sym.param_abi_regs[i]
+                                                         : std::string();
         const uint32_t a_off = pool.intern(ab);
         write_u32(payload, a_off);
         write_u32(payload, static_cast<uint32_t>(ab.size()));
@@ -448,7 +492,8 @@ static void emit_payload_for_struct_or_class(std::vector<uint8_t> &payload,
     write_u32(payload, static_cast<uint32_t>(sym.super_class.size()));
     write_u32(payload, sym.size_bytes);
     write_u32(payload, sym.align_bytes);
-    // STRUCT overlay: flag + extension real (para reconocer `Tipo(ptr)` cross-modulo).
+    // STRUCT overlay: flag + extension real (para reconocer `Tipo(ptr)`
+    // cross-modulo).
     write_u8(payload, sym.is_overlay ? 1u : 0u);
     write_u32(payload, sym.overlay_extent);
     write_u32(payload, static_cast<uint32_t>(sym.fields.size()));
@@ -561,8 +606,9 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
         if (sym.is_opaque) so.flags |= 0x01;
         if (sym.is_extern) so.flags |= 0x02;
         if (sym.is_const) so.flags |= 0x04; // L.7: GLOBAL_VAR const
-        if (sym.is_naked) so.flags |= 0x08;    // LIM-A: FUNCTION @Naked
-        if (sym.is_internal) so.flags |= 0x10; // NS.3: internal (package-scoped)
+        if (sym.is_naked) so.flags |= 0x08; // LIM-A: FUNCTION @Naked
+        if (sym.is_internal)
+            so.flags |= 0x10; // NS.3: internal (package-scoped)
         so.align_override = sym.align_override;
 
         switch (sym.kind) {
@@ -637,7 +683,8 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
     // v13: internar el OBJETIVO con el que se genera este .vxi, pero SOLO si el
     // modulo usa @Target.  Vacio -> offset 0 -> artefacto valido para cualquier
     // objetivo, que es el caso de casi todos los modulos.
-    const uint32_t target_off = mod.target.empty() ? 0u : pool.intern(mod.target);
+    const uint32_t target_off =
+        mod.target.empty() ? 0u : pool.intern(mod.target);
     // NS.3 (v10): internar el package_id (vacio = paquete anonimo).
     const uint32_t pkgid_off = pool.intern(mod.package_id);
     const uint32_t pkgid_len = static_cast<uint32_t>(mod.package_id.size());
@@ -785,8 +832,8 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
     /* SALVEDADES, y por eso no es un simple borrado.  Hay dos formas de que lo
      * que un modulo ofrece dependa DE VERDAD de sus deps:
      *
-     *   - Exporta PLANTILLAS genericas.  Una plantilla exporta codigo FUENTE, no
-     *     una firma cerrada: quien la instancia la compila en su propio modulo,
+     *   - Exporta PLANTILLAS genericas.  Una plantilla exporta codigo FUENTE,
+     * no una firma cerrada: quien la instancia la compila en su propio modulo,
      *     asi que lo que la plantilla llame -- que vive en los deps de QUIEN LA
      *     EXPORTA -- le afecta aunque el no lo importe.
      *
@@ -810,10 +857,10 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
             ? vxi_fnv1a(out.data() + HEADER_BYTES, out.size() - HEADER_BYTES)
             : vxi_fnv1a(out.data() + HEADER_BYTES, deps_start - HEADER_BYTES);
     if (!depende_de_sus_deps) {
-        const uint64_t resto =
-            vxi_fnv1a(out.data() + blob_pool_start, out.size() - blob_pool_start);
-        abi_hash ^= resto + 0x9E3779B97F4A7C15ULL + (abi_hash << 6) +
-                    (abi_hash >> 2);
+        const uint64_t resto = vxi_fnv1a(out.data() + blob_pool_start,
+                                         out.size() - blob_pool_start);
+        abi_hash ^=
+            resto + 0x9E3779B97F4A7C15ULL + (abi_hash << 6) + (abi_hash >> 2);
     }
     patch_u64(8, abi_hash);
     patch_u64(16, mod.source_hash);
@@ -905,7 +952,10 @@ uint64_t vxi_hash_de_simbolos(const VxiModule &m,
         mezclar(nombre.data(), nombre.size());
         const VxiSymbol *encontrado = nullptr;
         for (const auto &s : m.symbols) {
-            if (s.name == nombre) { encontrado = &s; break; }
+            if (s.name == nombre) {
+                encontrado = &s;
+                break;
+            }
         }
         if (encontrado == nullptr) {
             h ^= 0xA5A5A5A5A5A5A5A5ULL; // marca de "no esta"
@@ -1138,10 +1188,10 @@ static bool parse_payload_function(const uint8_t *data, size_t size,
 static bool parse_payload_struct_or_class(const uint8_t *data, size_t size,
                                           uint32_t payload_off,
                                           uint32_t payload_len,
-                                          uint32_t pool_start,
-                                          VxiSymbol &out) {
+                                          uint32_t pool_start, VxiSymbol &out) {
     // Header fijo: super(off+len) + size + align + is_overlay(1) +
-    // overlay_extent(4) + field_count + interface_count + method_count = 33 bytes.
+    // overlay_extent(4) + field_count + interface_count + method_count = 33
+    // bytes.
     if (payload_len < 33) return false;
     size_t off = payload_off;
     uint32_t super_off = 0, super_len = 0, fc = 0, ic = 0, mc = 0;
@@ -1334,10 +1384,11 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
     read_u32(data, size, off, blob_pool_size_hdr);     // v4
     read_u8(data, size, off, blob_pool_alignment_hdr); // v4
     off += 3;                                          // pad (offsets 57..59)
-    uint32_t target_off_hdr = 0; // v13 (offset 60, rel al pool; 0 = sin @Target)
+    uint32_t target_off_hdr =
+        0; // v13 (offset 60, rel al pool; 0 = sin @Target)
     read_u32(data, size, off, target_off_hdr);
-    uint32_t gen_offset_hdr = 0;                        // v6
-    uint32_t gen_count_hdr = 0;                         // v6
+    uint32_t gen_offset_hdr = 0; // v6
+    uint32_t gen_count_hdr = 0;  // v6
     read_u32(data, size, off, gen_offset_hdr);
     read_u32(data, size, off, gen_count_hdr);
     uint32_t pkgid_off_hdr = 0; // NS.3 v10 (offset 72, rel al pool)
@@ -1443,7 +1494,7 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
         s.kind = static_cast<VxiSymbolKind>(kind);
         s.is_opaque = (flags & 0x01) != 0;
         s.is_extern = (flags & 0x02) != 0;
-        s.is_const = (flags & 0x04) != 0;  // L.7
+        s.is_const = (flags & 0x04) != 0;    // L.7
         s.is_naked = (flags & 0x08) != 0;    // LIM-A: FUNCTION @Naked
         s.is_internal = (flags & 0x10) != 0; // NS.3: internal (package-scoped)
         s.align_override = align_override;
@@ -1690,8 +1741,7 @@ uint64_t vxi_compiler_version_hash() noexcept {
         "|fmt:2|" __DATE__ "|" __TIME__
 #endif
         ;
-    static const uint64_t cached =
-        vxi_fnv1a(kIdentity, std::strlen(kIdentity));
+    static const uint64_t cached = vxi_fnv1a(kIdentity, std::strlen(kIdentity));
     return cached;
 }
 
@@ -1700,9 +1750,9 @@ uint64_t vxi_compiler_version_hash() noexcept {
 // ===========================================================================
 
 uint32_t vxi_blob_append(std::vector<uint8_t> &pool, VxiBlobKind kind,
-                          const uint8_t *payload, size_t payload_len,
-                          uint32_t element_size, uint32_t count,
-                          uint32_t alignment) {
+                         const uint8_t *payload, size_t payload_len,
+                         uint32_t element_size, uint32_t count,
+                         uint32_t alignment) {
     if (alignment < 8) alignment = 8;
     // Padding al multiplo de alignment.
     while (pool.size() % alignment != 0)
@@ -1725,7 +1775,7 @@ uint32_t vxi_blob_append(std::vector<uint8_t> &pool, VxiBlobKind kind,
 }
 
 const VxiBlobHeader *vxi_blob_read(const std::vector<uint8_t> &pool,
-                                     uint32_t offset) noexcept {
+                                   uint32_t offset) noexcept {
     if (offset + sizeof(VxiBlobHeader) > pool.size()) return nullptr;
     // Bytes little-endian -> volcamos a un objeto local con read manual.
     // Como VxiBlobHeader no tiene endianness fija en memoria, leemos via
@@ -1738,7 +1788,7 @@ const VxiBlobHeader *vxi_blob_read(const std::vector<uint8_t> &pool,
 }
 
 const uint8_t *vxi_blob_payload(const std::vector<uint8_t> &pool,
-                                 uint32_t offset) noexcept {
+                                uint32_t offset) noexcept {
     if (offset + sizeof(VxiBlobHeader) > pool.size()) return nullptr;
     return pool.data() + offset + sizeof(VxiBlobHeader);
 }

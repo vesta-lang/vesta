@@ -41,8 +41,8 @@
 #include "vx/asm/instr_db.h"
 
 /* Relativo a proposito: estos tests se compilan de dos maneras -- por CMake y a
- * mano con un `g++` y unos objetos -- y una ruta que dependa de `-I` funciona en
- * una y falla en la otra.  Con la relativa no hay nada que configurar. */
+ * mano con un `g++` y unos objetos -- y una ruta que dependa de `-I` funciona
+ * en una y falla en la otra.  Con la relativa no hay nada que configurar. */
 #include "../util/test_report.h"
 
 #include <cstdio>
@@ -54,32 +54,32 @@
 
 namespace {
 
-/// Cobertura minima exigida, en tanto por mil.  SUBIRLO al cubrir mas; bajarlo es
-/// admitir un retroceso, y para eso hay que decir por que en el commit.
+/// Cobertura minima exigida, en tanto por mil.  SUBIRLO al cubrir mas; bajarlo
+/// es admitir un retroceso, y para eso hay que decir por que en el commit.
 /* Medido 2026-08-17: las CUATRO ISA al 1000.  El numero de antes (178) medía
- * otra cosa -- solo la tabla escrita a mano --, y con eso parecia que faltaba el
- * 82 % de x86 cuando la base ya contestaba por casi todo.  Ahora se exige el
- * total: bajar de aqui es que alguna instruccion dejo de tener efectos, y eso no
- * puede pasar inadvertido. */
+ * otra cosa -- solo la tabla escrita a mano --, y con eso parecia que faltaba
+ * el 82 % de x86 cuando la base ya contestaba por casi todo.  Ahora se exige el
+ * total: bajar de aqui es que alguna instruccion dejo de tener efectos, y eso
+ * no puede pasar inadvertido. */
 constexpr int kMinCoveragePerMille = 1000;
 
-/* El color y los veredictos son de la utilidad comun (@c tests/util/test_report.h):
- * estaban copiados aqui y en el test de efectos, que es como dos informes del
- * mismo arbol empiezan a leerse distinto. */
-#define DIM   tests::dim()
-#define RED   tests::red()
+/* El color y los veredictos son de la utilidad comun (@c
+ * tests/util/test_report.h): estaban copiados aqui y en el test de efectos, que
+ * es como dos informes del mismo arbol empiezan a leerse distinto. */
+#define DIM tests::dim()
+#define RED tests::red()
 #define GREEN tests::green()
 #define AMBER tests::amber()
-#define CYAN  tests::cyan()
-#define BOLD  tests::bold()
+#define CYAN tests::cyan()
+#define BOLD tests::bold()
 #define RESET tests::reset()
 
 /**
  * @brief Lo que se sabe de una instruccion, para el informe.
  *
- * No solo si esta cubierta: tambien QUE declara y cuanto cuesta.  Un informe que
- * dice "cubierta" y no dice que efectos tiene no permite ver un error como el de
- * `movdqa` -- que estaba "cubierta" y declaraba que no tocaba memoria --.
+ * No solo si esta cubierta: tambien QUE declara y cuanto cuesta.  Un informe
+ * que dice "cubierta" y no dice que efectos tiene no permite ver un error como
+ * el de `movdqa` -- que estaba "cubierta" y declaraba que no tocaba memoria --.
  */
 struct Row {
     std::string mnemonic;
@@ -87,23 +87,23 @@ struct Row {
     /**
      * @brief De donde sale lo que se sabe de esta instruccion.
      *
-     * Contar solo las de la TABLA mide la tabla, no lo que el compilador sabe: el
-     * analisis pregunta primero a la tabla y, cuando no la conoce, a la BASE, que
-     * modela la forma sola.  Sin separarlo, la lista de "lo que falta" mezclaba
-     * trabajo real con instrucciones que ya funcionan, y la unica manera de
-     * repartir el trabajo era ir probandolas una a una.
+     * Contar solo las de la TABLA mide la tabla, no lo que el compilador sabe:
+     * el analisis pregunta primero a la tabla y, cuando no la conoce, a la
+     * BASE, que modela la forma sola.  Sin separarlo, la lista de "lo que
+     * falta" mezclaba trabajo real con instrucciones que ya funcionan, y la
+     * unica manera de repartir el trabajo era ir probandolas una a una.
      *
-     * Lo que de verdad hay que escribir a mano es @ref FUENTE_NINGUNA: las que la
-     * base no puede modelar sola -- porque tienen registros implicitos, que no
-     * aparecen en el texto -- y nadie ha declarado.
+     * Lo que de verdad hay que escribir a mano es @ref FUENTE_NINGUNA: las que
+     * la base no puede modelar sola -- porque tienen registros implicitos, que
+     * no aparecen en el texto -- y nadie ha declarado.
      */
     enum Source { SOURCE_NONE = 0, SOURCE_DB, SOURCE_TABLE };
     Source source = SOURCE_NONE;
-    bool        covered = false; ///< la conoce alguna de las dos fuentes
+    bool covered = false; ///< la conoce alguna de las dos fuentes
 
-    /// Donde esta un operando.  Un inmediato no es un registro, y meterlos en el
-    /// mismo saco es perder justo lo que se estaba intentando ver: `add rax, 8`
-    /// no lee ningun registro ademas de su destino.
+    /// Donde esta un operando.  Un inmediato no es un registro, y meterlos en
+    /// el mismo saco es perder justo lo que se estaba intentando ver: `add rax,
+    /// 8` no lee ningun registro ademas de su destino.
     enum Place { PLACE_REG = 0, PLACE_MEM, PLACE_IMM, PLACE_COUNT };
 
     /**
@@ -111,8 +111,8 @@ struct Row {
      *
      * Una lista plana de banderas -- "mem flags barrera" -- no distingue un
      * `add r0, r1, r2` de un `store [r0], r1`: pueden llevar las mismas y no se
-     * parecen en nada.  Lo que los separa es QUE entra, QUE sale y DE DoNDE, asi
-     * que se guarda asi:
+     * parecen en nada.  Lo que los separa es QUE entra, QUE sale y DE DoNDE,
+     * asi que se guarda asi:
      *
      *     read   reg     op0, op2
      *     write  reg     op1
@@ -140,11 +140,12 @@ struct Row {
      * formas que hacen cosas distintas.
      */
     unsigned forms = 0;
-    unsigned align_req = 0;             ///< bytes de alineacion exigidos
-    /// Latencia en la microarquitectura por defecto, en ciclos.  <=0 = sin dato.
-    float       latency = 0.0f;
+    unsigned align_req = 0; ///< bytes de alineacion exigidos
+    /// Latencia en la microarquitectura por defecto, en ciclos.  <=0 = sin
+    /// dato.
+    float latency = 0.0f;
     /// Cuantos uops.  0 = sin dato.
-    unsigned    uops = 0;
+    unsigned uops = 0;
 
     /// Si no declara NADA: es lo que distingue "no hace nada" de "no se sabe".
     bool no_effects() const {
@@ -159,7 +160,8 @@ struct Row {
 const char *const kPlaceName[Row::PLACE_COUNT] = {"reg", "memory", "imm"};
 
 struct Coverage {
-    /// Por extension ("SSE2", "AVX512EVEX", "BASE"...): TODAS sus instrucciones.
+    /// Por extension ("SSE2", "AVX512EVEX", "BASE"...): TODAS sus
+    /// instrucciones.
     std::map<std::string, std::vector<Row>> by_ext;
     size_t total = 0;
     size_t known = 0;      ///< las que sabe alguna de las dos fuentes
@@ -177,7 +179,8 @@ Coverage measure(vx::instr_db::Isa isa, const vx::instr_db::IsaData &db,
         if (name == nullptr || name[0] == '\0') continue;
         std::string m;
         for (const char *p = name; *p != '\0'; ++p)
-            m += static_cast<char>(*p >= 'A' && *p <= 'Z' ? *p - 'A' + 'a' : *p);
+            m +=
+                static_cast<char>(*p >= 'A' && *p <= 'Z' ? *p - 'A' + 'a' : *p);
         if (!seen.insert(m).second) continue;
         ++r.total;
 
@@ -185,8 +188,8 @@ Coverage measure(vx::instr_db::Isa isa, const vx::instr_db::IsaData &db,
         f.mnemonic = m;
         const vx::AsmEffects e = vx::asm_effects_for(m, arch);
         f.source = e.known ? Row::SOURCE_TABLE : Row::SOURCE_NONE;
-        /* Si la tabla no la conoce, puede conocerla la base: basta con que UNA de
-         * sus formas se pueda modelar sola.  Es exactamente lo que hace el
+        /* Si la tabla no la conoce, puede conocerla la base: basta con que UNA
+         * de sus formas se pueda modelar sola.  Es exactamente lo que hace el
          * analisis cuando la tabla no contesta. */
         if (f.source == Row::SOURCE_NONE)
             for (unsigned nf = 0; nf < db.iclass[i].count; ++nf)
@@ -208,9 +211,10 @@ Coverage measure(vx::instr_db::Isa isa, const vx::instr_db::IsaData &db,
          * preguntarselo daba la misma respuesta para los dos y aqui se doblaba
          * una sola bandera.  La forma si lo sabe: dice cual de sus operandos es
          * el de memoria y en que rol. */
-        /* Las banderas, TAMBIEN por sentido, y de la misma fuente que la memoria:
-         * la forma.  Salian las dos del mismo bit, asi que un `add` -- que las
-         * ESCRIBE -- se imprimia como que las lee, que es justo al reves. */
+        /* Las banderas, TAMBIEN por sentido, y de la misma fuente que la
+         * memoria: la forma.  Salian las dos del mismo bit, asi que un `add` --
+         * que las ESCRIBE -- se imprimia como que las lee, que es justo al
+         * reves. */
         vx::instr_db::flags_of(isa, fid, f.reads_flags, f.writes_flags);
         f.reads_flags = f.reads_flags || e.reads_flags;
         f.writes_flags = f.writes_flags || e.writes_flags;
@@ -219,37 +223,40 @@ Coverage measure(vx::instr_db::Isa isa, const vx::instr_db::IsaData &db,
         f.align_req = e.align_req;
         /* El rol de cada operando EXPLICITO lo dice la base, por indice.  Es lo
          * que permite decir "escribe el operando 0 y lee el 1" en vez de solo
-         * "escribe algo": dos instrucciones que escriben operandos distintos no se
-         * estorban, y con una bandera suelta eso no se puede saber. */
+         * "escribe algo": dos instrucciones que escriben operandos distintos no
+         * se estorban, y con una bandera suelta eso no se puede saber. */
         auto append = [](std::string &dst, const std::string &what) {
-            /* Sin repetir: la union recorre muchas formas y casi todas coinciden
-             * en el rol de sus operandos, asi que sin esto `op0` saldria
-             * doscientas veces en la misma linea. */
-            if (dst == what || dst.compare(0, what.size() + 2, what + ", ") == 0 ||
+            /* Sin repetir: la union recorre muchas formas y casi todas
+             * coinciden en el rol de sus operandos, asi que sin esto `op0`
+             * saldria doscientas veces en la misma linea. */
+            if (dst == what ||
+                dst.compare(0, what.size() + 2, what + ", ") == 0 ||
                 dst.find(", " + what) != std::string::npos)
                 return;
             if (!dst.empty()) dst += ", ";
             dst += what;
         };
-        /* QUE banderas, no solo si toca alguna.  Es lo que separa un `inc` de un
-         * `add`: `inc` no toca el acarreo, y por eso se puede encadenar con un
-         * `adc`.  Con un solo bit de "toca banderas" los dos salian iguales. */
+        /* QUE banderas, no solo si toca alguna.  Es lo que separa un `inc` de
+         * un `add`: `inc` no toca el acarreo, y por eso se puede encadenar con
+         * un `adc`.  Con un solo bit de "toca banderas" los dos salian iguales.
+         */
         {
             std::vector<std::string> lee, escribe;
             if (vx::instr_db::flag_names_of(isa, fid, lee, escribe)) {
-                for (const std::string &n : lee) append(f.reads_flag_names, n);
+                for (const std::string &n : lee)
+                    append(f.reads_flag_names, n);
                 for (const std::string &n : escribe)
                     append(f.writes_flag_names, n);
             }
         }
         /* TODAS las formas del mnemonico, no solo la primera.
          *
-         * Una entrada de la tabla a mano responde por el mnemonico ENTERO, asi que
-         * lo que hay que ensenar a su lado es lo que ese mnemonico puede hacer:
-         * `movdqa` carga con `movdqa xmm0, [rdi]` y guarda con
-         * `movdqa [rdi], xmm0`, y mirando solo la primera forma se veria una de
-         * las dos -- la que la base tenga antes, que es un orden estructural y no
-         * dice nada --.  Cada sentido sigue atribuido a SU operando, asi que la
+         * Una entrada de la tabla a mano responde por el mnemonico ENTERO, asi
+         * que lo que hay que ensenar a su lado es lo que ese mnemonico puede
+         * hacer: `movdqa` carga con `movdqa xmm0, [rdi]` y guarda con `movdqa
+         * [rdi], xmm0`, y mirando solo la primera forma se veria una de las dos
+         * -- la que la base tenga antes, que es un orden estructural y no dice
+         * nada --.  Cada sentido sigue atribuido a SU operando, asi que la
          * union no vuelve a colapsar lo que se acaba de separar. */
         f.forms = db.iclass[i].count;
         for (unsigned nf = 0; nf < f.forms; ++nf) {
@@ -269,25 +276,27 @@ Coverage measure(vx::instr_db::Isa isa, const vx::instr_db::IsaData &db,
                  * inmediato: el informe existe para que eso se vea, no para
                  * repetirlo. */
                 Row::Place place = Row::PLACE_REG;
-                if (kind == vx::instr_db::OP_MEM) place = Row::PLACE_MEM;
-                else if (kind == vx::instr_db::OP_IMM) place = Row::PLACE_IMM;
+                if (kind == vx::instr_db::OP_MEM)
+                    place = Row::PLACE_MEM;
+                else if (kind == vx::instr_db::OP_IMM)
+                    place = Row::PLACE_IMM;
                 char label[8];
                 std::snprintf(label, sizeof(label), "op%zu", k);
                 if (op_reads) append(f.reads[place], label);
                 if (op_writes) append(f.writes[place], label);
             }
         }
-        /* Y los registros IMPLICITOS, con su nombre: `rep stosb` no nombra `rcx`
-         * en el texto y aun asi lo lee, y quien consuma el efecto necesita
-         * saberlo. */
+        /* Y los registros IMPLICITOS, con su nombre: `rep stosb` no nombra
+         * `rcx` en el texto y aun asi lo lee, y quien consuma el efecto
+         * necesita saberlo. */
         for (const std::string &rr : e.implicit_read)
             append(f.reads[Row::PLACE_REG], rr);
         for (const std::string &w : e.implicit_write)
             append(f.writes[Row::PLACE_REG], w);
-        /* Y por donde accede a memoria cuando no lo dice en el texto: una `movsb`
-         * lee por `rsi` y escribe por `rdi` porque lo fija la arquitectura.  Se
-         * nombra el registro; decir solo "toca memoria" seria rendirse teniendo
-         * el dato. */
+        /* Y por donde accede a memoria cuando no lo dice en el texto: una
+         * `movsb` lee por `rsi` y escribe por `rdi` porque lo fija la
+         * arquitectura.  Se nombra el registro; decir solo "toca memoria" seria
+         * rendirse teniendo el dato. */
         for (const std::string &rr : e.implicit_mem_read) {
             append(f.reads[Row::PLACE_MEM], "por " + rr);
             f.reads_mem = true;
@@ -297,9 +306,9 @@ Coverage measure(vx::instr_db::Isa isa, const vx::instr_db::IsaData &db,
             f.writes_mem = true;
         }
 
-        /* Y cuanto cuesta.  La latencia no es un adorno: es lo que el planificador
-         * usa para ordenar, asi que una instruccion cubierta y sin coste conocido
-         * es una que el planificador coloca a ciegas. */
+        /* Y cuanto cuesta.  La latencia no es un adorno: es lo que el
+         * planificador usa para ordenar, asi que una instruccion cubierta y sin
+         * coste conocido es una que el planificador coloca a ciegas. */
         const vx::instr_db::AsmCost cost =
             vx::instr_db::cost(isa, fid, /*ua_id=*/0);
         f.latency = cost.latency;
@@ -329,9 +338,9 @@ int per_mille(const Coverage &r) {
 void print_effect(const char *sense, const char *place, const std::string &who,
                   bool present) {
     if (!present && who.empty()) return;
-    /* Vacio pero presente NO se calla: es el caso de `push`, que toca memoria sin
-     * nombrarla, y decirlo es la diferencia entre "no toca" y "no se sabe por
-     * donde".  Lo segundo es un dato; lo primero seria mentira. */
+    /* Vacio pero presente NO se calla: es el caso de `push`, que toca memoria
+     * sin nombrarla, y decirlo es la diferencia entre "no toca" y "no se sabe
+     * por donde".  Lo segundo es un dato; lo primero seria mentira. */
     std::printf("         %-6s %-7s %s%s%s\n", sense, place, DIM,
                 who.empty() ? "(sin nombrar)" : who.c_str(), RESET);
 }
@@ -341,13 +350,13 @@ void report(const char *what, const Coverage &r) {
     const char *tint = pm >= 800 ? GREEN : (pm >= 400 ? AMBER : RED);
     std::printf("\n%s== %s ==%s  %s%zu de %zu%s con efectos conocidos  "
                 "(%s%d.%d %%%s)  %s%zu a mano, %zu de la base%s\n",
-                BOLD, what, RESET, BOLD, r.known, r.total, RESET, tint,
-                pm / 10, pm % 10, RESET, DIM, r.from_table,
-                r.known - r.from_table, RESET);
+                BOLD, what, RESET, BOLD, r.known, r.total, RESET, tint, pm / 10,
+                pm % 10, RESET, DIM, r.from_table, r.known - r.from_table,
+                RESET);
     /* TODAS, cubiertas y sin cubrir, agrupadas por la extension a la que
-     * pertenecen -- que es la unidad en la que se decide el trabajo: cubrir `AES`
-     * entero son seis instrucciones, cubrir cuarenta nombres elegidos por orden
-     * alfabetico no es ninguna tarea.
+     * pertenecen -- que es la unidad en la que se decide el trabajo: cubrir
+     * `AES` entero son seis instrucciones, cubrir cuarenta nombres elegidos por
+     * orden alfabetico no es ninguna tarea.
      *
      * Y cada una con lo que declara y lo que cuesta.  El detalle solo sale con
      * VESTA_COBERTURA_DETALLE=1, porque son casi dos mil lineas por ISA: util
@@ -357,15 +366,15 @@ void report(const char *what, const Coverage &r) {
         size_t cov = 0;
         for (const Row &f : kv.second)
             if (f.covered) ++cov;
-        const char *t = cov == kv.second.size() ? GREEN
-                                                : (cov == 0 ? RED : AMBER);
-        std::printf("  %s%-18s%s %s%zu de %zu%s\n", CYAN, kv.first.c_str(), RESET,
-                    t, cov, kv.second.size(), RESET);
+        const char *t =
+            cov == kv.second.size() ? GREEN : (cov == 0 ? RED : AMBER);
+        std::printf("  %s%-18s%s %s%zu de %zu%s\n", CYAN, kv.first.c_str(),
+                    RESET, t, cov, kv.second.size(), RESET);
         if (!detail) {
-            /* Sin detalle, al menos los nombres de las que faltan: son el trabajo
-             * pendiente, y una cuenta sin nombres no se puede repartir.  Y son
-             * las que no sabe NADIE -- ni la tabla ni la base --, no las que
-             * simplemente no estan escritas a mano: la mayoria de esas ya
+            /* Sin detalle, al menos los nombres de las que faltan: son el
+             * trabajo pendiente, y una cuenta sin nombres no se puede repartir.
+             * Y son las que no sabe NADIE -- ni la tabla ni la base --, no las
+             * que simplemente no estan escritas a mano: la mayoria de esas ya
              * funcionan. */
             std::string line = "       ";
             for (const Row &f : kv.second) {
@@ -376,7 +385,8 @@ void report(const char *what, const Coverage &r) {
                 }
                 line += f.mnemonic + " ";
             }
-            if (line.size() > 7) std::printf("%s%s%s\n", DIM, line.c_str(), RESET);
+            if (line.size() > 7)
+                std::printf("%s%s%s\n", DIM, line.c_str(), RESET);
             continue;
         }
         for (const Row &f : kv.second) {
@@ -388,8 +398,9 @@ void report(const char *what, const Coverage &r) {
                         BOLD, f.mnemonic.c_str(), RESET, DIM, f.forms, RESET);
             /* Un apartado por sentido y por sitio, y solo los que tienen algo.
              * Un `memory none` en cada instruccion que no toca memoria seria
-             * ruido; el que hace falta ver es el apartado que FALTA donde deberia
-             * haberlo, y para eso basta con que aparezca cuando lo hay. */
+             * ruido; el que hace falta ver es el apartado que FALTA donde
+             * deberia haberlo, y para eso basta con que aparezca cuando lo hay.
+             */
             for (int p = 0; p < Row::PLACE_COUNT; ++p) {
                 const bool mem = p == Row::PLACE_MEM;
                 print_effect("read", kPlaceName[p], f.reads[p],
@@ -398,22 +409,22 @@ void report(const char *what, const Coverage &r) {
                              mem ? f.writes_mem : !f.writes[p].empty());
             }
             /* Las banderas con NOMBRE cuando se sabe cual: `write flags cf, zf`
-             * dice mucho mas que `write flags`, y es la unica forma de ver que un
-             * `inc` no toca el acarreo. */
+             * dice mucho mas que `write flags`, y es la unica forma de ver que
+             * un `inc` no toca el acarreo. */
             print_effect("read", "flags", f.reads_flag_names, f.reads_flags);
             print_effect("write", "flags", f.writes_flag_names, f.writes_flags);
             if (f.barrier)
-                std::printf("         barrier        %snada la cruza%s\n", AMBER,
-                            RESET);
+                std::printf("         barrier        %snada la cruza%s\n",
+                            AMBER, RESET);
             if (f.call)
                 std::printf("         call           %sel control sale%s\n",
                             AMBER, RESET);
             if (f.align_req != 0u) {
-                /* El centinela no es un numero de bytes: dice "tanto como mida su
-                 * operando", que es lo correcto para las formas alineadas -- una
-                 * `movdqa` exige 16 y una `vmovdqa64` exige 64, y la instruccion
-                 * es la misma familia.  Imprimirlo como 65535 bytes lo hacia
-                 * ilegible y de paso parecia un error. */
+                /* El centinela no es un numero de bytes: dice "tanto como mida
+                 * su operando", que es lo correcto para las formas alineadas --
+                 * una `movdqa` exige 16 y una `vmovdqa64` exige 64, y la
+                 * instruccion es la misma familia.  Imprimirlo como 65535 bytes
+                 * lo hacia ilegible y de paso parecia un error. */
                 if (f.align_req == vx::kAlignAnchoOperando)
                     std::printf("         align          %sel ancho de su "
                                 "operando%s\n",
@@ -431,7 +442,8 @@ void report(const char *what, const Coverage &r) {
                 std::printf("         cost           %slat %.1f  uops %u%s\n",
                             DIM, (double)f.latency, f.uops, RESET);
             else
-                std::printf("         cost           %ssin dato%s\n", DIM, RESET);
+                std::printf("         cost           %ssin dato%s\n", DIM,
+                            RESET);
         }
     }
 }
@@ -439,9 +451,10 @@ void report(const char *what, const Coverage &r) {
 } // namespace
 
 int main() {
-    std::printf("%s[cobertura de efectos del asm]%s  instrucciones de la base de "
-                "datos con efectos declarados\n",
-                BOLD, RESET);
+    std::printf(
+        "%s[cobertura de efectos del asm]%s  instrucciones de la base de "
+        "datos con efectos declarados\n",
+        BOLD, RESET);
 
     const Coverage x86 =
         measure(vx::instr_db::Isa::X86, vx::instr_db::db_x86(), "x86_64");
@@ -457,14 +470,15 @@ int main() {
     report("arm32", a32);
     report("riscv", rv);
 
-    /* El criterio de fallo se mide sobre x86, que es la que el compilador usa hoy
-     * para el `asm` de la stdlib.  Las otras se informan para que su hueco se vea
+    /* El criterio de fallo se mide sobre x86, que es la que el compilador usa
+     * hoy para el `asm` de la stdlib.  Las otras se informan para que su hueco
+     * se vea
      * -- y se veia poco cuando no se imprimian --, pero todavia no bloquean. */
     const int pm = per_mille(x86);
     std::printf("\n%s[resumen]%s x86 %s%d por mil%s, minimo exigido %d.  "
                 "arm64 %d, arm32 %d, riscv %d.\n",
-                BOLD, RESET, pm >= kMinCoveragePerMille ? GREEN : RED, pm, RESET,
-                kMinCoveragePerMille, per_mille(a64), per_mille(a32),
+                BOLD, RESET, pm >= kMinCoveragePerMille ? GREEN : RED, pm,
+                RESET, kMinCoveragePerMille, per_mille(a64), per_mille(a32),
                 per_mille(rv));
     if (pm < kMinCoveragePerMille) {
         std::printf("%s[cobertura] FALLA%s: bajo de %d a %d por mil -- alguna "

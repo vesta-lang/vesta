@@ -63,8 +63,7 @@ constexpr uint8_t IRVAL_FLAG_HOST_PTR =
     1 << 2; ///< Puntero a memoria host (no VM)
 constexpr uint8_t IRVAL_FLAG_POINTEE_HOST_PTR =
     1 << 3; ///< Puntero VM cuyo contenido apunta a host
-constexpr uint8_t IRVAL_FLAG_GC_OBJECT = 1
-                                         << 4;
+constexpr uint8_t IRVAL_FLAG_GC_OBJECT = 1 << 4;
 /// v11: el valor lleva el registro fisico donde lo dejo el asignador.  Es un
 /// bit y no un byte fijo porque la mayoria de valores no lo tienen (murieron o
 /// se derramaron) y el intermedio se llevaria un byte por cada uno.
@@ -252,7 +251,8 @@ void write_instr(std::vector<uint8_t> &o, const IrInstr &i) {
     for (size_t k = 0; k < jtc; ++k)
         write_u32(o, i.jump_targets[k]);
     // call_abi_regs: ABI custom del CALLIND (registro por arg desde el tipo del
-    // puntero).  Count 0 = ABI estandar (todas las ops no-CALLIND).  (Formato v7.)
+    // puntero).  Count 0 = ABI estandar (todas las ops no-CALLIND).  (Formato
+    // v7.)
     const size_t abc = i.call_abi_regs.size();
     write_u32(o, static_cast<uint32_t>(abc));
     for (size_t k = 0; k < abc; ++k)
@@ -1066,8 +1066,7 @@ std::vector<uint8_t> emit_ir_module_cache(const IrModule &mod) {
         write_u32(out, fx.escribe_apuntado);
         write_u8(out, uint8_t((fx.lee_global ? 1u : 0u) |
                               (fx.escribe_global ? 2u : 0u) |
-                              (fx.io ? 4u : 0u) |
-                              (fx.puede_lanzar ? 8u : 0u) |
+                              (fx.io ? 4u : 0u) | (fx.puede_lanzar ? 8u : 0u) |
                               (fx.no_determinista ? 16u : 0u) |
                               (fx.comptime ? 32u : 0u)));
     }
@@ -1121,7 +1120,8 @@ bool parse_ir_module_cache(const std::vector<uint8_t> &data, IrModule &out) {
             for (uint32_t v = 0; v < nvals; ++v) {
                 std::string nm;
                 if (!read_str(data, off, nm)) return false;
-                if (f < out.functions.size() && v < out.functions[f].values.size())
+                if (f < out.functions.size() &&
+                    v < out.functions[f].values.size())
                     out.functions[f].values[v].name = std::move(nm);
             }
         }

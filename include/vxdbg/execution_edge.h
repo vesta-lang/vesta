@@ -47,14 +47,14 @@ using InlineSiteId = NodeId<struct InlineSiteTag>;
 
 /// Por que pasa el control.
 enum class EdgeKind : uint8_t {
-    Call = 0,       ///< se invoca algo
-    Return = 1,     ///< se vuelve
-    Throw = 2,      ///< se lanza un fallo
-    Unwind = 3,     ///< se deshace el camino buscando quien lo atienda
-    Resume = 4,     ///< se reanuda algo suspendido (corrutina, tarea)
-    Yield = 5,      ///< se suspende cediendo un valor
-    Cleanup = 6,    ///< limpieza al salir de un ambito (`defer`, destructores)
-    Synthetic = 7,  ///< transferencia que genero el compilador por su cuenta
+    Call = 0,      ///< se invoca algo
+    Return = 1,    ///< se vuelve
+    Throw = 2,     ///< se lanza un fallo
+    Unwind = 3,    ///< se deshace el camino buscando quien lo atienda
+    Resume = 4,    ///< se reanuda algo suspendido (corrutina, tarea)
+    Yield = 5,     ///< se suspende cediendo un valor
+    Cleanup = 6,   ///< limpieza al salir de un ambito (`defer`, destructores)
+    Synthetic = 7, ///< transferencia que genero el compilador por su cuenta
 };
 
 /// Que hay al otro lado de una transferencia.
@@ -75,10 +75,10 @@ enum class DispatchKind : uint8_t {
 
 /// Como acabo materializandose la transferencia.
 enum class TransferForm : uint8_t {
-    Normal = 0,   ///< quedo como transferencia real
-    Tail = 1,     ///< reemplazo al marco que la hacia
-    Inlined = 2,  ///< no llego a haberla: el cuerpo se incorporo
-    Elided = 3,   ///< el optimizador la elimino del todo
+    Normal = 0,  ///< quedo como transferencia real
+    Tail = 1,    ///< reemplazo al marco que la hacia
+    Inlined = 2, ///< no llego a haberla: el cuerpo se incorporo
+    Elided = 3,  ///< el optimizador la elimino del todo
 };
 
 /**
@@ -99,7 +99,7 @@ struct ExecutionEdge {
     /// Suponer que todo destino es una funcion habria dejado sin representar
     /// justo las transferencias que mas cuesta explicar.
     EndpointKind to_kind = EndpointKind::Function;
-    IrFunctionId to;   ///< si @c to_kind es Function
+    IrFunctionId to; ///< si @c to_kind es Function
     /// Si el destino es ajeno, como se llama ("runtime", "kernel32!Sleep").
     std::string to_name;
     EdgeKind kind = EdgeKind::Call;
@@ -126,10 +126,10 @@ struct InlineSite {
     static constexpr uint32_t kSchemaVersion = 1;
     DebugNodeHeader header{NodeKind::InlineSite, kSchemaVersion, {}};
 
-    IrInstrId at;                 ///< instruccion del cuerpo incorporado
-    IrFunctionId inlined_function;///< la funcion que hay que ensenar
-    EdgeId edge;                  ///< la transferencia que lo provoco
-    InlineSiteId parent;          ///< si esta dentro de otra incorporacion
+    IrInstrId at;                  ///< instruccion del cuerpo incorporado
+    IrFunctionId inlined_function; ///< la funcion que hay que ensenar
+    EdgeId edge;                   ///< la transferencia que lo provoco
+    InlineSiteId parent;           ///< si esta dentro de otra incorporacion
 };
 
 /**

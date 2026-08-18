@@ -37,7 +37,7 @@
 
 /* hook JIT en CALLVIRT fast path. */
 #include "jit/interp_jit_bridge.h"
-#include "jit/auto_jit.h"        // auto-PGO tier-2: maybe_tier2_method + threshold
+#include "jit/auto_jit.h" // auto-PGO tier-2: maybe_tier2_method + threshold
 #include "jit/jit_branch_prof.h" // jit_branch_prof_emit_enabled
 
 /* Sprint D.6 (2026-06-03): profile counters runtime. */

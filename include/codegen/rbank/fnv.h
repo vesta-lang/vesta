@@ -7,8 +7,8 @@
 
 /**
  * @file codegen/rbank/fnv.h
- * @brief Util de hashing FNV-1a de 64 bits, compartido por quien computa huellas
- *        (identidad del problema, del banco, ...).  Sin dependencias.
+ * @brief Util de hashing FNV-1a de 64 bits, compartido por quien computa
+ * huellas (identidad del problema, del banco, ...).  Sin dependencias.
  */
 
 #ifndef VESTA_CODEGEN_RBANK_FNV_H
@@ -25,9 +25,9 @@ namespace rbank {
  * depuracion, y ni tenia sentido que dependiera del asignador de registros ni
  * copiar el codigo.  Estos nombres siguen aqui para que nada de lo que ya lo
  * usaba tenga que cambiar. */
+using util::fnv_mix;
 using util::kFnvOffset;
 using util::kFnvPrime;
-using util::fnv_mix;
 
 } // namespace rbank
 } // namespace codegen

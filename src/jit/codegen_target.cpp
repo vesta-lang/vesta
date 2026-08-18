@@ -28,8 +28,8 @@ void CodegenTarget::peephole(MFunction &pf) const {
                 (mi.op == MOp::MOV || mi.op == MOp::A64_FMOV ||
                  mi.op == MOp::MOVSD || mi.op == MOp::MOVSS) &&
                 mi.dst.kind == MOperandKind::REG &&
-                mi.src1.kind == MOperandKind::REG && mi.dst.reg == mi.src1.reg &&
-                mi.src2.kind == MOperandKind::NONE;
+                mi.src1.kind == MOperandKind::REG &&
+                mi.dst.reg == mi.src1.reg && mi.src2.kind == MOperandKind::NONE;
             if (!self_move) keep.push_back(mi);
         }
         blk.instrs = std::move(keep);

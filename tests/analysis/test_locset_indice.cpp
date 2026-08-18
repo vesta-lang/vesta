@@ -7,10 +7,11 @@
 
 /**
  * @file tests/analysis/test_locset_indice.cpp
- * @brief La consulta indexada contesta EXACTAMENTE lo mismo que recorrerlo todo.
+ * @brief La consulta indexada contesta EXACTAMENTE lo mismo que recorrerlo
+ * todo.
  *
- * `LocSet::may_alias_any` dejo de recorrer el conjunto entero para mirar solo el
- * cubo de la raiz preguntada.  Eso es una optimizacion sobre una consulta de
+ * `LocSet::may_alias_any` dejo de recorrer el conjunto entero para mirar solo
+ * el cubo de la raiz preguntada.  Eso es una optimizacion sobre una consulta de
  * ALIASING, y ahi equivocarse no se ve: una respuesta de menos no hace nada mas
  * lento -- deja que el optimizador borre codigo vivo, y el programa hace otra
  * cosa sin que nada falle al compilar.
@@ -61,29 +62,31 @@ static void comparar(const LocSet &s, const AbstractLoc &l, const char *que) {
     const bool obtenido = s.may_alias_any(l);
     if (esperado != obtenido) {
         ++g_fail;
-        std::printf("  [FALLO] %s: lineal=%d indexado=%d (kind=%d id=%u off=%lld"
-                    " w=%d)\n",
-                    que, esperado ? 1 : 0, obtenido ? 1 : 0,
-                    static_cast<int>(l.kind), l.id,
-                    static_cast<long long>(l.off), l.width);
+        std::printf(
+            "  [FALLO] %s: lineal=%d indexado=%d (kind=%d id=%u off=%lld"
+            " w=%d)\n",
+            que, esperado ? 1 : 0, obtenido ? 1 : 0, static_cast<int>(l.kind),
+            l.id, static_cast<long long>(l.off), l.width);
     }
 }
 
 /// Todas las consultas interesantes contra @p s.
 static void barrer_consultas(const LocSet &s, const char *que) {
-    static const K kinds[] = {K::None,       K::Stack,  K::Heap,
-                              K::Global,     K::ArgDerived, K::Unknown};
+    static const K kinds[] = {K::None,   K::Stack,      K::Heap,
+                              K::Global, K::ArgDerived, K::Unknown};
     static const uint32_t ids[] = {0, 1, 2, 7, LOC_GENERIC};
     static const int64_t offs[] = {-8, 0, 4, 8, 64};
     static const int32_t anchos[] = {0, 1, 4, 8};
     for (K k : kinds)
         for (uint32_t id : ids)
             for (int64_t off : offs)
-                for (int32_t w : anchos) comparar(s, loc(k, id, off, w), que);
+                for (int32_t w : anchos)
+                    comparar(s, loc(k, id, off, w), que);
 }
 
 int main() {
-    std::printf("=== LocSet: el indice contesta lo mismo que el recorrido ===\n");
+    std::printf(
+        "=== LocSet: el indice contesta lo mismo que el recorrido ===\n");
 
     /* Vacio: nada aliasa nada. */
     {
@@ -123,7 +126,8 @@ int main() {
     }
     /* Y el indice tiene que seguir al conjunto cuando este CAMBIA: se consulta
      * (que construye el indice), se anade, y se vuelve a consultar.  Un indice
-     * que se quedara con la foto vieja contestaria que no aliasa algo que si. */
+     * que se quedara con la foto vieja contestaria que no aliasa algo que si.
+     */
     {
         LocSet s;
         s.add(loc(K::Stack, 1, 0, 4));

@@ -57,10 +57,10 @@
 #include "util/assembler_multiprocess.h"
 #include "vx/compiler.h"
 #include "vx/diagnostic.h"
-#include "vx/incremental.h"     // CAS + claves Merkle + BuildConfig
-#include "vx/lexer.h"           // parse para el indice semantico
-#include "vx/parser.h"          // set/get_aot_condcomp_target + Parser
-#include "vx/semantic_index.h"  // build_semantic_index
+#include "vx/incremental.h"    // CAS + claves Merkle + BuildConfig
+#include "vx/lexer.h"          // parse para el indice semantico
+#include "vx/parser.h"         // set/get_aot_condcomp_target + Parser
+#include "vx/semantic_index.h" // build_semantic_index
 
 #include "jit/code_cache.h"      // vista JIT
 #include "jit/jit_compiler.h"    // vista JIT
@@ -111,9 +111,12 @@ std::string format_diags(const vx::Diagnostics &diags) {
     // su localizacion en formato gcc-like (fichero:linea:columna).
     for (const auto &d : diags.all()) {
         const char *lvl = "info";
-        if (d.level == vx::DiagLevel::ERR) lvl = "error";
-        else if (d.level == vx::DiagLevel::WARN) lvl = "warning";
-        else if (d.level == vx::DiagLevel::NOTE) lvl = "note";
+        if (d.level == vx::DiagLevel::ERR)
+            lvl = "error";
+        else if (d.level == vx::DiagLevel::WARN)
+            lvl = "warning";
+        else if (d.level == vx::DiagLevel::NOTE)
+            lvl = "note";
         os << d.loc.file << ":" << d.loc.line << ":" << d.loc.column << ": "
            << lvl << ": " << d.message << "\n";
     }
@@ -197,11 +200,12 @@ bool compile_to_velb_bytes(const std::string &src, const std::string &unit_name,
     // 3. Ensamblar + linkar .vel -> .velb (saltando el preprocesador, ya que
     //    el .vel no contiene directivas VPP).  Se pasa el IR pre-serializado
     //    para que el .velb v3 lleve la seccion @ir (habilita auto-JIT).
-    int rc = asm_multi_process::run_worker(vel_path, prefix,
-                                           /*skip_preprocessor=*/true,
-                                           /*keep_labels=*/false,
-                                           /*ir_section_bytes=*/&cr.ir_section_bytes,
-                                           /*emit_map=*/false);
+    int rc =
+        asm_multi_process::run_worker(vel_path, prefix,
+                                      /*skip_preprocessor=*/true,
+                                      /*keep_labels=*/false,
+                                      /*ir_section_bytes=*/&cr.ir_section_bytes,
+                                      /*emit_map=*/false);
 
     if (rc != 0) {
         try_remove(vel_path);
@@ -402,7 +406,8 @@ VESTA_API int vesta_compile(const char *src, const char *unit_name,
         *out_len = bytes.size();
         return 0;
     } catch (const std::exception &e) {
-        set_err(out_err, std::string("excepcion en vesta_compile: ") + e.what());
+        set_err(out_err,
+                std::string("excepcion en vesta_compile: ") + e.what());
         return 2;
     } catch (...) {
         set_err(out_err, "excepcion desconocida en vesta_compile");
@@ -494,11 +499,11 @@ VESTA_API int vesta_compile_to_vel(const char *src, const char *unit_name,
     try {
         vx::CompileOptions copts;
         copts.module_name = unit_name ? unit_name : "main";
-        vx::CompileResult cr = vx::compile_vx_source(
-            src, copts.module_name + ".vx", copts);
+        vx::CompileResult cr =
+            vx::compile_vx_source(src, copts.module_name + ".vx", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
-            set_err(out_err,
-                    "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics));
+            set_err(out_err, "fallo de compilacion Vesta:\n" +
+                                 format_diags(cr.diagnostics));
             return 1;
         }
         *out_vel = dup_cstr(cr.vel_text);
@@ -508,8 +513,8 @@ VESTA_API int vesta_compile_to_vel(const char *src, const char *unit_name,
         }
         return 0;
     } catch (const std::exception &e) {
-        set_err(out_err, std::string("excepcion en vesta_compile_to_vel: ") +
-                             e.what());
+        set_err(out_err,
+                std::string("excepcion en vesta_compile_to_vel: ") + e.what());
         return 2;
     } catch (...) {
         set_err(out_err, "excepcion desconocida en vesta_compile_to_vel");
@@ -529,11 +534,11 @@ VESTA_API int vesta_compile_to_ir(const char *src, const char *unit_name,
         vx::CompileOptions copts;
         copts.module_name = unit_name ? unit_name : "main";
         copts.dump_ir = true; // habilita CompileResult::ir_text
-        vx::CompileResult cr = vx::compile_vx_source(
-            src, copts.module_name + ".vx", copts);
+        vx::CompileResult cr =
+            vx::compile_vx_source(src, copts.module_name + ".vx", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
-            set_err(out_err,
-                    "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics));
+            set_err(out_err, "fallo de compilacion Vesta:\n" +
+                                 format_diags(cr.diagnostics));
             return 1;
         }
         *out_ir = dup_cstr(cr.ir_text);
@@ -558,7 +563,8 @@ VESTA_API int vesta_assemble(const char *vel_text, unsigned char **out_velb,
     if (out_velb) *out_velb = nullptr;
     if (out_len) *out_len = 0;
     if (!vel_text || !out_velb || !out_len) {
-        set_err(out_err, "argumentos invalidos (vel_text/out_velb/out_len NULL)");
+        set_err(out_err,
+                "argumentos invalidos (vel_text/out_velb/out_len NULL)");
         return 1;
     }
     try {
@@ -579,7 +585,8 @@ VESTA_API int vesta_assemble(const char *vel_text, unsigned char **out_velb,
         *out_len = bytes.size();
         return 0;
     } catch (const std::exception &e) {
-        set_err(out_err, std::string("excepcion en vesta_assemble: ") + e.what());
+        set_err(out_err,
+                std::string("excepcion en vesta_assemble: ") + e.what());
         return 2;
     } catch (...) {
         set_err(out_err, "excepcion desconocida en vesta_assemble");
@@ -618,8 +625,8 @@ VESTA_API int vesta_disasm(const unsigned char *bytes, size_t len,
         }
         std::ostringstream os;
         for (size_t i = 0; i < count; ++i) {
-            os << "0x" << std::hex << insn[i].address << ":\t" << insn[i].mnemonic
-               << "\t" << insn[i].op_str << "\n";
+            os << "0x" << std::hex << insn[i].address << ":\t"
+               << insn[i].mnemonic << "\t" << insn[i].op_str << "\n";
         }
         cs_free(insn, count);
         cs_close(&handle);
@@ -651,8 +658,8 @@ VESTA_API int vesta_diagram(const char *src, const char *unit_name,
         const std::string k = kind;
         const std::string f = format;
         if (k != "ast" && k != "ir-pre" && k != "ir-post" && k != "vel") {
-            set_err(out_err, "kind desconocido: " + k +
-                                 " (usa ast|ir-pre|ir-post|vel)");
+            set_err(out_err,
+                    "kind desconocido: " + k + " (usa ast|ir-pre|ir-post|vel)");
             return 1;
         }
         if (f != "mermaid" && f != "graphviz" && f != "html") {
@@ -685,29 +692,31 @@ VESTA_API int vesta_diagram(const char *src, const char *unit_name,
             copts.dump_html_vel = vel;
         }
 
-        vx::CompileResult cr = vx::compile_vx_source(
-            src, copts.module_name + ".vx", copts);
+        vx::CompileResult cr =
+            vx::compile_vx_source(src, copts.module_name + ".vx", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
-            set_err(out_err,
-                    "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics));
+            set_err(out_err, "fallo de compilacion Vesta:\n" +
+                                 format_diags(cr.diagnostics));
             return 1;
         }
 
         // Seleccionar el campo del CompileResult correspondiente.
         const std::string *sel = nullptr;
         if (f == "mermaid") {
-            sel = ast ? &cr.mermaid_ast
-                      : ir_pre ? &cr.mermaid_ir_pre
-                               : ir_post ? &cr.mermaid_ir_post : &cr.mermaid_vel;
+            sel = ast       ? &cr.mermaid_ast
+                  : ir_pre  ? &cr.mermaid_ir_pre
+                  : ir_post ? &cr.mermaid_ir_post
+                            : &cr.mermaid_vel;
         } else if (f == "graphviz") {
-            sel = ast ? &cr.graphviz_ast
-                      : ir_pre ? &cr.graphviz_ir_pre
-                               : ir_post ? &cr.graphviz_ir_post
-                                         : &cr.graphviz_vel;
+            sel = ast       ? &cr.graphviz_ast
+                  : ir_pre  ? &cr.graphviz_ir_pre
+                  : ir_post ? &cr.graphviz_ir_post
+                            : &cr.graphviz_vel;
         } else {
-            sel = ast ? &cr.html_ast
-                      : ir_pre ? &cr.html_ir_pre
-                               : ir_post ? &cr.html_ir_post : &cr.html_vel;
+            sel = ast       ? &cr.html_ast
+                  : ir_pre  ? &cr.html_ir_pre
+                  : ir_post ? &cr.html_ir_post
+                            : &cr.html_vel;
         }
         if (!sel || sel->empty()) {
             set_err(out_err, "diagrama vacio para kind=" + k + " format=" + f);
@@ -720,7 +729,8 @@ VESTA_API int vesta_diagram(const char *src, const char *unit_name,
         }
         return 0;
     } catch (const std::exception &e) {
-        set_err(out_err, std::string("excepcion en vesta_diagram: ") + e.what());
+        set_err(out_err,
+                std::string("excepcion en vesta_diagram: ") + e.what());
         return 2;
     } catch (...) {
         set_err(out_err, "excepcion desconocida en vesta_diagram");
@@ -832,11 +842,11 @@ VESTA_API int vesta_compile_to_ir_t(const char *src, const char *unit_name,
         copts.module_name = unit_name ? unit_name : "main";
         copts.dump_ir = true;
         vt_apply_opts_(target, copts);
-        vx::CompileResult cr = vx::compile_vx_source(
-            src, copts.module_name + ".vx", copts);
+        vx::CompileResult cr =
+            vx::compile_vx_source(src, copts.module_name + ".vx", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
-            set_err(out_err,
-                    "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics));
+            set_err(out_err, "fallo de compilacion Vesta:\n" +
+                                 format_diags(cr.diagnostics));
             return 1;
         }
         *out_ir = dup_cstr(cr.ir_text);
@@ -869,11 +879,11 @@ VESTA_API int vesta_compile_to_vel_t(const char *src, const char *unit_name,
         vx::CompileOptions copts;
         copts.module_name = unit_name ? unit_name : "main";
         vt_apply_opts_(target, copts);
-        vx::CompileResult cr = vx::compile_vx_source(
-            src, copts.module_name + ".vx", copts);
+        vx::CompileResult cr =
+            vx::compile_vx_source(src, copts.module_name + ".vx", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
-            set_err(out_err,
-                    "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics));
+            set_err(out_err, "fallo de compilacion Vesta:\n" +
+                                 format_diags(cr.diagnostics));
             return 1;
         }
         *out_vel = dup_cstr(cr.vel_text);
@@ -883,8 +893,8 @@ VESTA_API int vesta_compile_to_vel_t(const char *src, const char *unit_name,
         }
         return 0;
     } catch (const std::exception &e) {
-        set_err(out_err,
-                std::string("excepcion en vesta_compile_to_vel_t: ") + e.what());
+        set_err(out_err, std::string("excepcion en vesta_compile_to_vel_t: ") +
+                             e.what());
         return 2;
     } catch (...) {
         set_err(out_err, "excepcion desconocida en vesta_compile_to_vel_t");
@@ -930,11 +940,11 @@ VESTA_API int vesta_compile_to_asm_t(const char *src, const char *unit_name,
         vx::CompileOptions copts;
         copts.module_name = unit_name ? unit_name : "main";
         copts.native_poo = true; // la vista asm nativa requiere el lowering AOT
-        vx::CompileResult cr = vx::compile_vx_source(
-            src, copts.module_name + ".vx", copts);
+        vx::CompileResult cr =
+            vx::compile_vx_source(src, copts.module_name + ".vx", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
-            set_err(out_err,
-                    "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics));
+            set_err(out_err, "fallo de compilacion Vesta:\n" +
+                                 format_diags(cr.diagnostics));
             return 1;
         }
         ir::IrModule mod;
@@ -946,17 +956,17 @@ VESTA_API int vesta_compile_to_asm_t(const char *src, const char *unit_name,
         std::string out;
         out += "; asm nativo AOT  target=" +
                (target && target->os && *target->os ? std::string(target->os)
-                                                     : std::string("host")) +
+                                                    : std::string("host")) +
                " " + arch + " " + fmt + "\n";
         for (const auto &fn : mod.functions) {
             std::vector<jit::NativeReloc> relocs;
             std::vector<uint8_t> bytes = jit::vreg_compile_native(
                 fn, {}, {}, {}, {}, &relocs, /*pic=*/false,
-                /*target_sysv=*/sysv, /*mode32=*/mode32,
-                jit::FloatIsa::SSE2);
+                /*target_sysv=*/sysv, /*mode32=*/mode32, jit::FloatIsa::SSE2);
             out += "\n; === " + fn.name + " ===\n";
             if (bytes.empty()) {
-                out += "; (op fuera del subset nativo -> no compilable a asm)\n";
+                out +=
+                    "; (op fuera del subset nativo -> no compilable a asm)\n";
                 continue;
             }
             const std::string dis = vt_disasm_(bytes, mode32);
@@ -969,8 +979,8 @@ VESTA_API int vesta_compile_to_asm_t(const char *src, const char *unit_name,
         }
         return 0;
     } catch (const std::exception &e) {
-        set_err(out_err,
-                std::string("excepcion en vesta_compile_to_asm_t: ") + e.what());
+        set_err(out_err, std::string("excepcion en vesta_compile_to_asm_t: ") +
+                             e.what());
         return 2;
     } catch (...) {
         set_err(out_err, "excepcion desconocida en vesta_compile_to_asm_t");
@@ -992,11 +1002,11 @@ VESTA_API int vesta_compile_to_jit_t(const char *src, const char *unit_name,
         TargetGuard guard(target);
         vx::CompileOptions copts;
         copts.module_name = unit_name ? unit_name : "main";
-        vx::CompileResult cr = vx::compile_vx_source(
-            src, copts.module_name + ".vx", copts);
+        vx::CompileResult cr =
+            vx::compile_vx_source(src, copts.module_name + ".vx", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
-            set_err(out_err,
-                    "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics));
+            set_err(out_err, "fallo de compilacion Vesta:\n" +
+                                 format_diags(cr.diagnostics));
             return 1;
         }
         ir::IrModule mod;
@@ -1015,9 +1025,8 @@ VESTA_API int vesta_compile_to_jit_t(const char *src, const char *unit_name,
             jit::CompileResult res = jc.compile(fn, jit::SelectorMode::VM_ABI);
             out += "\n; === " + fn.name + " ===\n";
             if (!res.code_start || res.code_size == 0) {
-                out += res.unsupported
-                           ? "; (op no soportada por el JIT vreg)\n"
-                           : "; (no compilable)\n";
+                out += res.unsupported ? "; (op no soportada por el JIT vreg)\n"
+                                       : "; (no compilable)\n";
                 continue;
             }
             std::vector<uint8_t> bytes(res.code_start,
@@ -1033,8 +1042,8 @@ VESTA_API int vesta_compile_to_jit_t(const char *src, const char *unit_name,
         }
         return 0;
     } catch (const std::exception &e) {
-        set_err(out_err,
-                std::string("excepcion en vesta_compile_to_jit_t: ") + e.what());
+        set_err(out_err, std::string("excepcion en vesta_compile_to_jit_t: ") +
+                             e.what());
         return 2;
     } catch (...) {
         set_err(out_err, "excepcion desconocida en vesta_compile_to_jit_t");
@@ -1073,7 +1082,8 @@ VESTA_API int vesta_vsh_eval(const char *script, int *out_rc, char **out_err) {
         if (out_rc) *out_rc = 1;
         return 1;
     } catch (const std::exception &e) {
-        set_err(out_err, std::string("excepcion en vesta_vsh_eval: ") + e.what());
+        set_err(out_err,
+                std::string("excepcion en vesta_vsh_eval: ") + e.what());
         return 2;
     } catch (...) {
         set_err(out_err, "excepcion desconocida en vesta_vsh_eval");
@@ -1103,11 +1113,11 @@ VESTA_API int vesta_compile_full(const char *src, const char *unit_name,
         vx::CompileOptions copts;
         copts.module_name = unit_name ? unit_name : "main";
         copts.dump_ir = (out_ir != nullptr);
-        vx::CompileResult cr = vx::compile_vx_source(
-            src, copts.module_name + ".vx", copts);
+        vx::CompileResult cr =
+            vx::compile_vx_source(src, copts.module_name + ".vx", copts);
         if (!cr.ok || cr.diagnostics.has_errors()) {
-            set_err(out_err,
-                    "fallo de compilacion Vesta:\n" + format_diags(cr.diagnostics));
+            set_err(out_err, "fallo de compilacion Vesta:\n" +
+                                 format_diags(cr.diagnostics));
             return 1;
         }
 
@@ -1161,7 +1171,8 @@ VESTA_API int vesta_ir_to_velb(const char *ir_text, unsigned char **out_velb,
     if (out_velb) *out_velb = nullptr;
     if (out_len) *out_len = 0;
     if (!ir_text || !out_velb || !out_len) {
-        set_err(out_err, "argumentos invalidos (ir_text/out_velb/out_len NULL)");
+        set_err(out_err,
+                "argumentos invalidos (ir_text/out_velb/out_len NULL)");
         return 1;
     }
     try {
@@ -1176,11 +1187,13 @@ VESTA_API int vesta_ir_to_velb(const char *ir_text, unsigned char **out_velb,
         // 2. Emitir el texto .vel desde el IR (aplica optimizacion + regalloc).
         ir::EmitResult er = ir::ir_emit_module(mod);
         if (!er.ok) {
-            set_err(out_err, "fallo al emitir el .vel desde el IR: " + er.error);
+            set_err(out_err,
+                    "fallo al emitir el .vel desde el IR: " + er.error);
             return 1;
         }
 
-        // 3. Ensamblar + linkar el .vel a .velb (mismo path que vesta_assemble).
+        // 3. Ensamblar + linkar el .vel a .velb (mismo path que
+        // vesta_assemble).
         std::vector<uint8_t> bytes;
         std::string err;
         if (!assemble_vel_to_velb(er.vel_text, /*ir_bytes=*/nullptr, bytes,
@@ -1288,7 +1301,8 @@ VESTA_API int vesta_sqlite_exec(const char *db_path, const char *sql,
         // Acumulador de las filas del/los SELECT como array de objetos JSON.
         nlohmann::json rows = nlohmann::json::array();
 
-        // Recorrer todas las sentencias del bloque SQL con prepare/step/finalize.
+        // Recorrer todas las sentencias del bloque SQL con
+        // prepare/step/finalize.
         const char *cursor = sql;
         while (cursor && *cursor) {
             sqlite3_stmt *stmt = nullptr;
@@ -1315,7 +1329,8 @@ VESTA_API int vesta_sqlite_exec(const char *db_path, const char *sql,
                 nlohmann::json obj = nlohmann::json::object();
                 for (int c = 0; c < ncols; ++c) {
                     const char *cname = sqlite3_column_name(stmt, c);
-                    const std::string key = cname ? cname : ("col" + std::to_string(c));
+                    const std::string key =
+                        cname ? cname : ("col" + std::to_string(c));
                     // Mapear el tipo nativo de SQLite al tipo JSON adecuado.
                     switch (sqlite3_column_type(stmt, c)) {
                     case SQLITE_INTEGER:
@@ -1325,9 +1340,7 @@ VESTA_API int vesta_sqlite_exec(const char *db_path, const char *sql,
                     case SQLITE_FLOAT:
                         obj[key] = sqlite3_column_double(stmt, c);
                         break;
-                    case SQLITE_NULL:
-                        obj[key] = nullptr;
-                        break;
+                    case SQLITE_NULL: obj[key] = nullptr; break;
                     case SQLITE_BLOB: {
                         // Representar el blob como su longitud en bytes; el
                         // contenido binario crudo no es JSON-serializable.
@@ -1339,7 +1352,8 @@ VESTA_API int vesta_sqlite_exec(const char *db_path, const char *sql,
                     case SQLITE_TEXT:
                     default: {
                         const unsigned char *txt = sqlite3_column_text(stmt, c);
-                        obj[key] = txt ? reinterpret_cast<const char *>(txt) : "";
+                        obj[key] =
+                            txt ? reinterpret_cast<const char *>(txt) : "";
                         break;
                     }
                     }
@@ -1419,7 +1433,9 @@ VESTA_API VestaCas *vesta_cas_open(const char *dir) {
     }
 }
 
-VESTA_API void vesta_cas_close(VestaCas *cas) { delete cas; }
+VESTA_API void vesta_cas_close(VestaCas *cas) {
+    delete cas;
+}
 
 VESTA_API int vesta_cas_has(VestaCas *cas, unsigned long long key) {
     if (!cas) return 0;
@@ -1434,8 +1450,8 @@ VESTA_API int vesta_cas_get(VestaCas *cas, unsigned long long key,
     try {
         std::vector<uint8_t> buf;
         if (!cas->store.get(static_cast<vx::MerkleKey>(key), buf)) return 2;
-        unsigned char *p =
-            static_cast<unsigned char *>(std::malloc(buf.empty() ? 1 : buf.size()));
+        unsigned char *p = static_cast<unsigned char *>(
+            std::malloc(buf.empty() ? 1 : buf.size()));
         if (!p) return 3;
         if (!buf.empty()) std::memcpy(p, buf.data(), buf.size());
         *out_data = p;
@@ -1450,7 +1466,8 @@ VESTA_API int vesta_cas_put(VestaCas *cas, unsigned long long key,
                             const unsigned char *data, size_t len) {
     if (!cas || (len > 0 && !data)) return 1;
     try {
-        return cas->store.put(static_cast<vx::MerkleKey>(key), data, len) ? 0 : 2;
+        return cas->store.put(static_cast<vx::MerkleKey>(key), data, len) ? 0
+                                                                          : 2;
     } catch (...) {
         return 3;
     }
@@ -1496,11 +1513,12 @@ VESTA_API int vesta_merkle_keys_json(const char *src, const char *unit_name,
         for (size_t i = 0; i < idx.symbols.size(); ++i) {
             const auto &s = idx.symbols[i];
             if (i) j << ",";
-            j << "{\"name\":\"" << esc(s.name) << "\",\"kind\":"
-              << static_cast<unsigned>(s.kind) << ",\"content_hash\":\""
-              << hex64(s.content_hash) << "\",\"merkle_key\":\""
-              << hex64(keys.of(s.name)) << "\",\"is_public\":"
-              << (s.is_public ? "true" : "false") << ",\"deps\":[";
+            j << "{\"name\":\"" << esc(s.name)
+              << "\",\"kind\":" << static_cast<unsigned>(s.kind)
+              << ",\"content_hash\":\"" << hex64(s.content_hash)
+              << "\",\"merkle_key\":\"" << hex64(keys.of(s.name))
+              << "\",\"is_public\":" << (s.is_public ? "true" : "false")
+              << ",\"deps\":[";
             for (size_t k = 0; k < s.deps.size(); ++k) {
                 if (k) j << ",";
                 j << "\"" << esc(s.deps[k]) << "\"";

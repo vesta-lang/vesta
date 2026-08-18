@@ -28,11 +28,11 @@ static int g_tests_run = 0;
 static int g_tests_passed = 0;
 static int g_tests_failed = 0;
 
-#define SECTION(name)                                                            \
-    printf("\n\033[1;36m══════════════════════════════════════════════\033[" \
-           "0m\n");                                                              \
-    printf("\033[1;36m  %s\033[0m\n", name);                                     \
-    printf("\033[1;36m══════════════════════════════════════════════\033["   \
+#define SECTION(name)                                                          \
+    printf("\n\033[1;36m══════════════════════════════════════════════\033["   \
+           "0m\n");                                                            \
+    printf("\033[1;36m  %s\033[0m\n", name);                                   \
+    printf("\033[1;36m══════════════════════════════════════════════\033["     \
            "0m\n")
 
 #define ASSERT_MSG(cond, msg)                                                  \

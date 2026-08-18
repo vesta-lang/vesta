@@ -113,8 +113,8 @@ inline int detect_level() {
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((target("sse2")))
 #endif
-inline void
-copy_sse2(uint8_t *__restrict dst, const uint8_t *__restrict src, size_t len) {
+inline void copy_sse2(uint8_t *__restrict dst, const uint8_t *__restrict src,
+                      size_t len) {
 #if defined(__SSE2__) || defined(_M_X64) || defined(_M_AMD64)
     size_t i = 0;
     // bucle principal: bloques de 16 bytes con stores no temporales para
@@ -140,8 +140,8 @@ copy_sse2(uint8_t *__restrict dst, const uint8_t *__restrict src, size_t len) {
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((target("avx2")))
 #endif
-inline void
-copy_avx2(uint8_t *__restrict dst, const uint8_t *__restrict src, size_t len) {
+inline void copy_avx2(uint8_t *__restrict dst, const uint8_t *__restrict src,
+                      size_t len) {
 #if defined(__AVX2__)
     size_t i = 0;
     for (; i + 32 <= len; i += 32) {
@@ -171,9 +171,8 @@ copy_avx2(uint8_t *__restrict dst, const uint8_t *__restrict src, size_t len) {
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((target("avx512f")))
 #endif
-inline void
-copy_avx512(uint8_t *__restrict dst, const uint8_t *__restrict src,
-            size_t len) {
+inline void copy_avx512(uint8_t *__restrict dst, const uint8_t *__restrict src,
+                        size_t len) {
 #if defined(__AVX512F__)
     size_t i = 0;
     for (; i + 64 <= len; i += 64) {

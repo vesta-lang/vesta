@@ -65,8 +65,8 @@ struct EmitOptions {
     std::string module_name; ///< nombre @Module (vacio = usar mod.name)
     /// CTPE (opt-in): si != nullptr, TRAS optimizar se ejecutan los candidatos
     /// de precomputo (fn evaluable zero-param) en este @c vx::ComptimeRuntime
-    /// (opaco aqui) y se inyecta el resultado escalar como CONST.  nullptr = sin
-    /// CTPE (comportamiento normal, cero coste).
+    /// (opaco aqui) y se inyecta el resultado escalar como CONST.  nullptr =
+    /// sin CTPE (comportamiento normal, cero coste).
     void *ctpe_runtime = nullptr;
     /**
      * @brief El modulo que se entrega YA viene optimizado.

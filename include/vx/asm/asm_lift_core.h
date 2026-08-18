@@ -1,12 +1,13 @@
 /* * VestaVM -- core NEUTRO del lift de asm a IR-CFG (compartido por ISAs).
- * Copyright (C) 2026 David Lopez.T (DesmonHak).  GPLv2 + excepcion de runtime. */
+ * Copyright (C) 2026 David Lopez.T (DesmonHak).  GPLv2 + excepcion de runtime.
+ */
 
 /** @file vx/asm/asm_lift_core.h
  *  @brief Capa NEUTRA (independiente del ISA) del lift de asm a IR: emisores de
  *  IR genericos, utilidades de texto, el register-file + driver del CFG del asm
  *  a IR-CFG.  Cada frontend por-ISA (lift_x86, futuro lift_arm64) la reusa; el
- *  IR resultante es el mismo para todas las arquitecturas.  Header-only (inline)
- *  para compartir sin dependencia de enlace. */
+ *  IR resultante es el mismo para todas las arquitecturas.  Header-only
+ * (inline) para compartir sin dependencia de enlace. */
 #ifndef VESTA_VX_ASM_ASM_LIFT_CORE_H
 #define VESTA_VX_ASM_ASM_LIFT_CORE_H
 
@@ -26,21 +27,25 @@ namespace asmlift {
 
 inline std::string trim(const std::string &s) {
     size_t a = 0, b = s.size();
-    while (a < b && std::isspace((unsigned char)s[a])) ++a;
-    while (b > a && std::isspace((unsigned char)s[b - 1])) --b;
+    while (a < b && std::isspace((unsigned char)s[a]))
+        ++a;
+    while (b > a && std::isspace((unsigned char)s[b - 1]))
+        --b;
     return s.substr(a, b - a);
 }
 
 /// Trocea una linea de asm en mnemonico + operandos (por comas).
 inline void split_insn(const std::string &line, std::string &mnem,
-                std::vector<std::string> &ops) {
+                       std::vector<std::string> &ops) {
     mnem.clear();
     ops.clear();
     const std::string s = trim(line);
     size_t i = 0;
-    while (i < s.size() && !std::isspace((unsigned char)s[i])) ++i;
+    while (i < s.size() && !std::isspace((unsigned char)s[i]))
+        ++i;
     mnem = s.substr(0, i);
-    for (char &c : mnem) c = (char)std::tolower((unsigned char)c);
+    for (char &c : mnem)
+        c = (char)std::tolower((unsigned char)c);
     std::string rest = trim(s.substr(i));
     if (rest.empty()) return;
     size_t start = 0;
@@ -82,7 +87,8 @@ inline std::vector<std::string> instructions(const std::string &body) {
 inline bool parse_imm(const std::string &op, int64_t &out) {
     if (op.empty()) return false;
     char c0 = op[0];
-    if (!(std::isdigit((unsigned char)c0) || c0 == '-' || c0 == '+')) return false;
+    if (!(std::isdigit((unsigned char)c0) || c0 == '-' || c0 == '+'))
+        return false;
     char *end = nullptr;
     if (c0 == '-') {
         const long long v = std::strtoll(op.c_str(), &end, 0);
@@ -98,7 +104,7 @@ inline bool parse_imm(const std::string &op, int64_t &out) {
 
 /// Emisores IR minimos.
 inline ir::IrValueId emit_const(ir::IrFunction &fn, uint32_t blk, int64_t v,
-                         uint32_t line) {
+                                uint32_t line) {
     const ir::IrValueId d = fn.new_value(ir::IrType::I64);
     ir::IrInstr in{};
     in.op = ir::IrOp::CONST;
@@ -111,7 +117,7 @@ inline ir::IrValueId emit_const(ir::IrFunction &fn, uint32_t blk, int64_t v,
 }
 
 inline ir::IrValueId emit_bin(ir::IrFunction &fn, uint32_t blk, ir::IrOp op,
-                       ir::IrValueId a, ir::IrValueId b, uint32_t line) {
+                              ir::IrValueId a, ir::IrValueId b, uint32_t line) {
     const ir::IrValueId d = fn.new_value(ir::IrType::I64);
     ir::IrInstr in{};
     in.op = op;
@@ -140,7 +146,7 @@ inline ir::IrValueId emit_bin_ty(ir::IrFunction &fn, uint32_t blk, ir::IrOp op,
 }
 
 inline ir::IrValueId emit_un(ir::IrFunction &fn, uint32_t blk, ir::IrOp op,
-                      ir::IrValueId a, uint32_t line) {
+                             ir::IrValueId a, uint32_t line) {
     const ir::IrValueId d = fn.new_value(ir::IrType::I64);
     ir::IrInstr in{};
     in.op = op;
@@ -166,9 +172,11 @@ inline ir::IrType mem_ty(int w, bool is_load) {
 
 /// LOAD de @p w bits desde @p addr, zero-extendido a I64.  @p host: si la
 /// direccion apunta a memoria HOST (el IR emite @c movh/loadzh); un operando de
-/// memoria de un asm inline es SIEMPRE host, un slot de variable (ALLOCA) es VM.
-inline ir::IrValueId emit_load(ir::IrFunction &fn, uint32_t blk, ir::IrValueId addr,
-                        int w, bool host, uint32_t line) {
+/// memoria de un asm inline es SIEMPRE host, un slot de variable (ALLOCA) es
+/// VM.
+inline ir::IrValueId emit_load(ir::IrFunction &fn, uint32_t blk,
+                               ir::IrValueId addr, int w, bool host,
+                               uint32_t line) {
     if (host) fn.values[addr].is_host_ptr = true; // el emitter mira el operando
     const ir::IrValueId d = fn.new_value(ir::IrType::I64);
     ir::IrInstr in{};
@@ -178,13 +186,15 @@ inline ir::IrValueId emit_load(ir::IrFunction &fn, uint32_t blk, ir::IrValueId a
     in.operands = {addr};
     in.source_line = line;
     fn.append(blk, std::move(in));
-    fn.values[d].is_host_ptr = false; // el valor cargado es un entero, no un ptr
+    fn.values[d].is_host_ptr =
+        false; // el valor cargado es un entero, no un ptr
     return d;
 }
 
-/// STORE de los @p w bits bajos de @p val en @p addr.  @p host: ver @c emit_load.
+/// STORE de los @p w bits bajos de @p val en @p addr.  @p host: ver @c
+/// emit_load.
 inline void emit_store(ir::IrFunction &fn, uint32_t blk, ir::IrValueId val,
-                ir::IrValueId addr, int w, bool host, uint32_t line) {
+                       ir::IrValueId addr, int w, bool host, uint32_t line) {
     if (host) fn.values[addr].is_host_ptr = true;
     ir::IrInstr in{};
     in.op = ir::IrOp::STORE;
@@ -263,18 +273,19 @@ struct CfgHooks {
     std::function<uint32_t(const vx::AsmBasicBlock &)> term_start;
 };
 
-/** @brief NEUTRO.  Baja el CFG del asm a IR-CFG: un bloque IR por bloque basico,
- *  register-file en slots (flush por bloque -> mem2reg hace el SSA+PHI), y los
- *  terminadores como BR/BR_COND.  @p out_exit = bloque de continuacion (donde
- *  sigue el codigo tras el asm).  @return false si algun bloque no lifta. */
-inline bool lift_cfg_neutral(LiftCtx &c, const vx::AsmCfg &cfg, const CfgHooks &hooks,
-                      uint32_t &out_exit) {
+/** @brief NEUTRO.  Baja el CFG del asm a IR-CFG: un bloque IR por bloque
+ * basico, register-file en slots (flush por bloque -> mem2reg hace el SSA+PHI),
+ * y los terminadores como BR/BR_COND.  @p out_exit = bloque de continuacion
+ * (donde sigue el codigo tras el asm).  @return false si algun bloque no lifta.
+ */
+inline bool lift_cfg_neutral(LiftCtx &c, const vx::AsmCfg &cfg,
+                             const CfgHooks &hooks, uint32_t &out_exit) {
     const size_t nb = cfg.blocks.size();
     if (nb == 0) return false;
     // Un bloque IR NUEVO por bloque basico.  El bloque de entrada actual NO se
     // reusa como BB0: si el asm tiene un back-edge al inicio (loop), reusar la
-    // entrada re-ejecutaria el codigo previo (p.ej. la init de las variables) en
-    // cada iteracion -> bucle infinito.  La entrada solo SALTA al primer BB.
+    // entrada re-ejecutaria el codigo previo (p.ej. la init de las variables)
+    // en cada iteracion -> bucle infinito.  La entrada solo SALTA al primer BB.
     std::vector<uint32_t> irb(nb);
     for (size_t i = 0; i < nb; ++i)
         irb[i] = c.fn.new_block("asmbb" + std::to_string(i));
@@ -284,7 +295,7 @@ inline bool lift_cfg_neutral(LiftCtx &c, const vx::AsmCfg &cfg, const CfgHooks &
     for (size_t i = 0; i < nb; ++i) {
         const vx::AsmBasicBlock &bb = cfg.blocks[i];
         c.block = irb[i];
-        c.cur.clear();  // register-file por bloque: cada uno recarga de su slot
+        c.cur.clear(); // register-file por bloque: cada uno recarga de su slot
         c.wrote.clear();
         if (!hooks.lift_range(bb.first, hooks.term_start(bb))) return false;
         switch (bb.term) {
@@ -305,8 +316,7 @@ inline bool lift_cfg_neutral(LiftCtx &c, const vx::AsmCfg &cfg, const CfgHooks &
             cfg_emit_br_cond(c, cond, irb[bb.succs[0]], irb[bb.succs[1]]);
             break;
         }
-        default:
-            return false; // Ret/Call/Indirect/Unknown -> aun no liftable
+        default: return false; // Ret/Call/Indirect/Unknown -> aun no liftable
         }
     }
     c.block = cont;
@@ -317,9 +327,9 @@ inline bool lift_cfg_neutral(LiftCtx &c, const vx::AsmCfg &cfg, const CfgHooks &
      * saltos.  El terminador lo dice todo, pero `succs`/`preds` son lo que
      * camina cualquier analisis del grafo, y sin ellas el bucle que se acaba de
      * elevar queda INVISIBLE: el coste de una funcion cuyo cuerpo entero es ese
-     * bucle salia O(1), sin un error, sin un aviso, solo una respuesta tranquila
-     * y equivocada.  Se derivan de los terminadores en un solo sitio en vez de
-     * escribirlas a mano aqui. */
+     * bucle salia O(1), sin un error, sin un aviso, solo una respuesta
+     * tranquila y equivocada.  Se derivan de los terminadores en un solo sitio
+     * en vez de escribirlas a mano aqui. */
     c.fn.recompute_edges();
     return true;
 }

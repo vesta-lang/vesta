@@ -31,13 +31,13 @@
 using namespace ir;
 
 static int g_checks = 0, g_fails = 0;
-#define CHECK(c)                                                                 \
-    do {                                                                         \
-        ++g_checks;                                                              \
-        if (!(c)) {                                                              \
-            ++g_fails;                                                           \
-            std::printf("  FALLO L%d: %s\n", __LINE__, #c);                      \
-        }                                                                        \
+#define CHECK(c)                                                               \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(c)) {                                                            \
+            ++g_fails;                                                         \
+            std::printf("  FALLO L%d: %s\n", __LINE__, #c);                    \
+        }                                                                      \
     } while (0)
 
 namespace {
@@ -73,7 +73,8 @@ LivenessResult make_live(size_t n,
     l.block_start = {0};
     l.block_end = {static_cast<uint32_t>(n ? n - 1 : 0)};
     IrValueId id = 0;
-    for (const auto &pr : iv) l.intervals.push_back({id++, pr.first, pr.second});
+    for (const auto &pr : iv)
+        l.intervals.push_back({id++, pr.first, pr.second});
     return l;
 }
 
@@ -97,7 +98,8 @@ int main() {
         const auto *a = find(p, 0), *b = find(p, 1), *c = find(p, 2);
         CHECK(a && a->start == 2 && a->end == 7); // tal cual, sin *2 ni +1
         CHECK(b && b->start == 0 && b->end == 3);
-        CHECK(c && c->start == 5 && c->end == 5); // vive UNA posicion (inclusivo)
+        CHECK(c && c->start == 5 &&
+              c->end == 5); // vive UNA posicion (inclusivo)
         // Longitud preservada: end-start+1 es lo que dijo el IR.
         if (a) CHECK(a->end - a->start + 1 == 6);
     }
@@ -112,13 +114,14 @@ int main() {
         const codegen::rbank::AbstractProblem p =
             codegen::liveness_to_problem(fn, live);
 
-        const auto *cross = find(p, 0), *before = find(p, 1), *after = find(p, 2),
-                   *exact = find(p, 3);
+        const auto *cross = find(p, 0), *before = find(p, 1),
+                   *after = find(p, 2), *exact = find(p, 3);
         CHECK(cross && cross->req.crosses_call);
         CHECK(before && !before->req.crosses_call);
         CHECK(after && !after->req.crosses_call);
         // covers(p) es def <= p <= end: el borde CUENTA.  Si se tratara como
-        // semiabierto, un valor definido justo en la llamada se creeria a salvo.
+        // semiabierto, un valor definido justo en la llamada se creeria a
+        // salvo.
         CHECK(exact && exact->req.crosses_call);
     }
 
@@ -128,12 +131,14 @@ int main() {
         const LivenessResult live = make_live(6, {{0, 5}, {1, 2}});
         const codegen::rbank::AbstractProblem p =
             codegen::liveness_to_problem(fn, live);
-        for (const auto &v : p.values) CHECK(!v.req.crosses_call);
+        for (const auto &v : p.values)
+            CHECK(!v.req.crosses_call);
     }
 
     /* --- 4. Adaptador FINO: ni inventa ni reordena ------------------------
      * Los value_id son los IrValueId directamente (el modelo los trata como
-     * opacos), asi que el resultado vuelve al emisor sin tabla de traduccion. */
+     * opacos), asi que el resultado vuelve al emisor sin tabla de traduccion.
+     */
     {
         const IrFunction fn = make_fn(8, SIZE_MAX);
         const LivenessResult live = make_live(8, {{0, 1}, {2, 3}, {4, 5}});
@@ -155,7 +160,8 @@ int main() {
     {
         const IrFunction fn = make_fn(4, SIZE_MAX);
         LivenessResult live = make_live(4, {{1, 2}});
-        live.intervals.push_back({99, 3, 2}); // end < def -> no es un valor vivo
+        live.intervals.push_back(
+            {99, 3, 2}); // end < def -> no es un valor vivo
         const codegen::rbank::AbstractProblem p =
             codegen::liveness_to_problem(fn, live);
         CHECK(p.values.size() == 1);
@@ -187,7 +193,8 @@ int main() {
         CHECK(v && !v->req.must_be_memory());
     }
 
-    /* --- 7. Mas de 12 parametros: los extra son MEMORIA -------------------- */
+    /* --- 7. Mas de 12 parametros: los extra son MEMORIA --------------------
+     */
     {
         IrFunction fn = make_fn(4, SIZE_MAX);
         LivenessResult live = make_live(4, {});
@@ -219,7 +226,8 @@ int main() {
      * cuenta esas posiciones, que es lo que se comprueba aqui.
      *
      * Sin esto el asignador reparte R0 como cualquier otro y el valor se
-     * pierde: paso de verdad, con corrupcion de heap y cuelgues en el corpus. */
+     * pierde: paso de verdad, con corrupcion de heap y cuelgues en el corpus.
+     */
     {
         // Instruccion 3 = DEFFIELD (deja 1/0 en R0), sin ninguna CALL.
         IrFunction fn = make_fn(8, SIZE_MAX);
@@ -231,19 +239,21 @@ int main() {
         const codegen::rbank::AbstractProblem p =
             codegen::liveness_to_problem(fn, live);
 
-        const auto *cross = find(p, 0), *before = find(p, 1), *after = find(p, 2),
-                   *exact = find(p, 3);
+        const auto *cross = find(p, 0), *before = find(p, 1),
+                   *after = find(p, 2), *exact = find(p, 3);
         CHECK(cross && cross->req.crosses_call);
         CHECK(before && !before->req.crosses_call);
         CHECK(after && !after->req.crosses_call);
-        CHECK(exact && exact->req.crosses_call); // el borde CUENTA, como en un call
+        CHECK(exact &&
+              exact->req.crosses_call); // el borde CUENTA, como en un call
 
         // Y una op que NO toca R0 no inventa un clobber donde no lo hay.
         IrFunction limpia = make_fn(8, SIZE_MAX);
         limpia.blocks[0].instrs[3].op = IrOp::ADD;
         const codegen::rbank::AbstractProblem q =
             codegen::liveness_to_problem(limpia, live);
-        for (const auto &v : q.values) CHECK(!v.req.crosses_call);
+        for (const auto &v : q.values)
+            CHECK(!v.req.crosses_call);
     }
 
     std::printf("--- %d checks, %d fallos ---\n", g_checks, g_fails);

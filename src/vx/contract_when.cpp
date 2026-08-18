@@ -46,7 +46,8 @@ struct Parser {
         : s(spec), ev(e), ok(o) {}
 
     void espacios() {
-        while (i < s.size() && (s[i] == ' ' || s[i] == '\t')) ++i;
+        while (i < s.size() && (s[i] == ' ' || s[i] == '\t'))
+            ++i;
     }
 
     bool p_atomo() {
@@ -168,9 +169,8 @@ const std::vector<std::string> &target_vars() {
 }
 
 const std::vector<std::string> &type_preds() {
-    static const std::vector<std::string> k = {"is_float", "is_integer",
-                                               "is_pointer", "is_signed",
-                                               "sizeof"};
+    static const std::vector<std::string> k = {
+        "is_float", "is_integer", "is_pointer", "is_signed", "sizeof"};
     return k;
 }
 
@@ -217,7 +217,8 @@ AtomKind atom_kind(const std::string &atomo, std::string *esperado) {
         const std::string clave = ident_hasta(dp);
         if (es_ident(clave) && en(target_keys(), clave)) {
             if (trim(a.substr(dp + 1)).empty()) {
-                if (esperado) *esperado = "falta el valor tras '" + clave + ":'";
+                if (esperado)
+                    *esperado = "falta el valor tras '" + clave + ":'";
                 return AtomKind::DESCONOCIDO;
             }
             return AtomKind::TARGET;
@@ -239,8 +240,9 @@ AtomKind atom_kind(const std::string &atomo, std::string *esperado) {
         return AtomKind::DESCONOCIDO;
     }
 
-    if (esperado) *esperado = "no es ni `clave:valor`, ni `variable OP version`, "
-                              "ni `predicado<T>()`";
+    if (esperado)
+        *esperado = "no es ni `clave:valor`, ni `variable OP version`, "
+                    "ni `predicado<T>()`";
     return AtomKind::DESCONOCIDO;
 }
 
@@ -317,7 +319,8 @@ void resolve(const std::vector<ast::PendingComplexity> &decls,
                     "); acota uno de los dos para desempatar");
                 continue;
             }
-            if (r == Spec::B_MAS) continue; // el que ya estaba es mas especifico
+            if (r == Spec::B_MAS)
+                continue; // el que ya estaba es mas especifico
             // A_MAS o IGUALES -> escribe el nuevo (entre condiciones
             // equivalentes, la ultima; no hay nada que distinguirlas).
             *c.valor = *nuevos[i];
@@ -390,9 +393,9 @@ void resolve_footprint(const std::vector<ast::PendingFootprint> &decls,
     };
     Campo cpure, cnothrow, cnopanic, calloc, calloc_p, cstack, cstack_p;
 
-    // Aplica un campo de un pending que ha casado: si nadie lo habia escrito con
-    // un `when:`, gana sobre el default; si ya lo escribio otro `when:`, decide
-    // la especificidad.  `nombre` es para el mensaje de ambiguedad.
+    // Aplica un campo de un pending que ha casado: si nadie lo habia escrito
+    // con un `when:`, gana sobre el default; si ya lo escribio otro `when:`,
+    // decide la especificidad.  `nombre` es para el mensaje de ambiguedad.
     auto aplicar = [&](Campo &c, const std::string &when, const char *nombre,
                        const std::function<void()> &set) {
         if (!c.escrito) {
@@ -408,8 +411,10 @@ void resolve_footprint(const std::vector<ast::PendingFootprint> &decls,
                 return w.empty() ? std::string("<sin when>") : ("when: " + w);
             };
             err(std::string("@") + nombre +
-                ": dos contratos lo declaran y ninguno es mas especifico que el "
-                "otro (" + muestra(c.por) + " y " + muestra(when) +
+                ": dos contratos lo declaran y ninguno es mas especifico que "
+                "el "
+                "otro (" +
+                muestra(c.por) + " y " + muestra(when) +
                 "); acota uno de los dos para desempatar");
             return;
         }

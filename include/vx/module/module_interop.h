@@ -33,8 +33,8 @@ struct VxiModule; // fwd decl, definido en vxi_format.h
  * @param out          @c VxiModule destino.  Se sobrescribe.
  */
 void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
-                                VxiModule &out,
-                                const std::string &strip_prefix = "");
+                               VxiModule &out,
+                               const std::string &strip_prefix = "");
 
 /**
  * @brief Inyecta simbolos importados de un @c VxiModule en las tablas
@@ -96,13 +96,12 @@ void register_namespace_for_import(TypeChecker &tc,
  * `<ns>.<Template>` como alias del template para los imports con namespace.
  * @p alias_unqualified: nombres (originales) de comptime/macro fns que deben
  * quedar invocables SIN cualificar (import `only`).  Para cada uno se registra
- * su nombre suelto en comptime_fns_ apuntando al decl mangled -- consistente con
- * como una fn regular via `only` queda en scope sin cualificar.
+ * su nombre suelto en comptime_fns_ apuntando al decl mangled -- consistente
+ * con como una fn regular via `only` queda en scope sin cualificar.
  */
 void inject_generic_templates_from_vxi(
     TypeChecker &tc, const VxiModule &mod,
-    const std::unordered_set<std::string> &wanted,
-    const std::string &ns_prefix,
+    const std::unordered_set<std::string> &wanted, const std::string &ns_prefix,
     const std::unordered_set<std::string> &alias_unqualified = {});
 
 } // namespace vx

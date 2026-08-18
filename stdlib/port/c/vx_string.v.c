@@ -93,8 +93,7 @@ static uint32_t vx_str_count_cp_(const char *buf, uint32_t byte_len) {
     return n;
 }
 
-static VX_UNUSED VxString *vx_str_from_lit(const char *lit,
-                                              uint32_t byte_len) {
+static VX_UNUSED VxString *vx_str_from_lit(const char *lit, uint32_t byte_len) {
     VxString *s = (VxString *)malloc(sizeof(VxString));
     if (!s) return 0;
     s->byte_len = byte_len;

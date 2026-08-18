@@ -22,11 +22,11 @@
  *
  *  - **Dejar fuera un `@Macro`**.  No es una `comptime fn` con otro nombre:
  *    tiene su propia marca y su propio camino de invocacion.  Un recolector que
- *    solo mirase la palabra `comptime` construiria el artefacto sin los macros y
- *    romperia esa feature entera sin que ninguna prueba del `inject` fallara.
+ *    solo mirase la palabra `comptime` construiria el artefacto sin los macros
+ * y romperia esa feature entera sin que ninguna prueba del `inject` fallara.
  *  - **Perder una dependencia**.  Si el codigo comptime llama a una funcion
- *    normal y esa no viaja en el artefacto, el artefacto no es auto-suficiente y
- *    la llamada revienta EN COMPILACION, que es el peor momento.
+ *    normal y esa no viaja en el artefacto, el artefacto no es auto-suficiente
+ * y la llamada revienta EN COMPILACION, que es el peor momento.
  *  - **Un `content_hash` que reacciona a lo que no debe**.  Si cambiar codigo
  *    NO-comptime altera el hash, el cache falla siempre y la separacion no
  *    ahorra nada; si NO cambia al tocar una comptime, se reusa un artefacto
@@ -55,7 +55,7 @@ static int g_fail = 0;
             ++g_pass;                                                          \
         } else {                                                               \
             ++g_fail;                                                          \
-            std::printf("FAIL linea %d: %s\n", __LINE__, #cond);                \
+            std::printf("FAIL linea %d: %s\n", __LINE__, #cond);               \
         }                                                                      \
     } while (0)
 
@@ -102,13 +102,15 @@ static bool tiene(const std::vector<std::string> &v, const std::string &name) {
  */
 static void volcar(const char *etiqueta, const std::vector<std::string> &v) {
     std::printf("  %s (%zu):", etiqueta, v.size());
-    for (const std::string &s : v) std::printf(" %s", s.c_str());
+    for (const std::string &s : v)
+        std::printf(" %s", s.c_str());
     std::printf("\n");
 }
 
 int main() {
     /* CASO 1 -- `comptime` entra, `@Macro` entra Y VAN SEPARADOS, lo normal no.
-     * Que vayan en listas distintas importa: se invocan por caminos distintos. */
+     * Que vayan en listas distintas importa: se invocan por caminos distintos.
+     */
     {
         const std::string src = R"VX(
 comptime string gen_texto(i64 n) { return "x"; }
@@ -184,7 +186,8 @@ i32 main() { return 0; }
 
     /* CASO 4 -- EL HASH REACCIONA A LO QUE DEBE, Y SOLO A ESO.  Es la clave de
      * cache del artefacto separado; de esto depende que la separacion ahorre
-     * algo.  Tocar codigo NO-comptime NO puede moverlo; tocar una comptime SI. */
+     * algo.  Tocar codigo NO-comptime NO puede moverlo; tocar una comptime SI.
+     */
     {
         const std::string base = R"VX(
 comptime i64 doble(i64 n) { return n * 2; }
@@ -220,9 +223,10 @@ i32 main() { return 0; }
             const bool reacciona = ub.content_hash != uc.content_hash;
             CK(reacciona);
             if (!reacciona)
-                std::printf("FAIL [hash]: cambiar una COMPTIME no movio el hash "
-                            "(%llu): se reusaria un artefacto obsoleto\n",
-                            (unsigned long long)ub.content_hash);
+                std::printf(
+                    "FAIL [hash]: cambiar una COMPTIME no movio el hash "
+                    "(%llu): se reusaria un artefacto obsoleto\n",
+                    (unsigned long long)ub.content_hash);
         }
     }
 
@@ -256,10 +260,11 @@ i32 main() { return 0; }
             CK(lleva_import);
             CK(sin_runtime);
             if (!(lleva_comptime && lleva_dep && lleva_import && sin_runtime)) {
-                std::printf("FAIL [texto]: el fuente extraido no es el esperado."
-                            "  comptime=%d dep=%d import=%d sin_runtime=%d\n",
-                            (int)lleva_comptime, (int)lleva_dep,
-                            (int)lleva_import, (int)sin_runtime);
+                std::printf(
+                    "FAIL [texto]: el fuente extraido no es el esperado."
+                    "  comptime=%d dep=%d import=%d sin_runtime=%d\n",
+                    (int)lleva_comptime, (int)lleva_dep, (int)lleva_import,
+                    (int)sin_runtime);
                 std::printf("--- extraido ---\n%s\n---\n",
                             u.unit_source.c_str());
             }
@@ -287,10 +292,11 @@ i32 main() { return 0; }
             const bool estable = a.content_hash == b.content_hash;
             CK(estable);
             if (!estable)
-                std::printf("FAIL [hash-import]: anadir un import movio el hash "
-                            "(0x%llx -> 0x%llx)\n",
-                            (unsigned long long)a.content_hash,
-                            (unsigned long long)b.content_hash);
+                std::printf(
+                    "FAIL [hash-import]: anadir un import movio el hash "
+                    "(0x%llx -> 0x%llx)\n",
+                    (unsigned long long)a.content_hash,
+                    (unsigned long long)b.content_hash);
         }
     }
 

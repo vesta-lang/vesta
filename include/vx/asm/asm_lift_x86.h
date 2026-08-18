@@ -1,5 +1,6 @@
 /* * VestaVM -- core NEUTRO del lift de asm a IR-CFG (compartido por ISAs).
- * Copyright (C) 2026 David Lopez.T (DesmonHak).  GPLv2 + excepcion de runtime. */
+ * Copyright (C) 2026 David Lopez.T (DesmonHak).  GPLv2 + excepcion de runtime.
+ */
 
 /** @file vx/asm/asm_lift_x86.h
  *  @brief Frontend x86/x86-64 del lift de asm: reconoce el subset (mnemonicos,
@@ -14,7 +15,9 @@
 #include <string>
 #include <unordered_map>
 
-namespace ir { struct IrFunction; }
+namespace ir {
+struct IrFunction;
+}
 
 namespace vx {
 /** @brief Lifta el bloque asm x86 @p body a IR (recto o con ramas/bucles).  Ver

@@ -205,7 +205,8 @@ static const std::unordered_map<std::string, InstructionPattern>
         // tiempo de decode.  Encoding FIXED_4 con un opcode extendido por
         // variante (signed/unsigned x 6 ops).
         // Memoria masiva: (r_dst, r_val|r_src, r_len).  Variante sin sufijo =
-        // memoria VIRTUAL; sufijo 'h' = memoria del HOST (igual que loadz/loadzh).
+        // memoria VIRTUAL; sufijo 'h' = memoria del HOST (igual que
+        // loadz/loadzh).
         {"memset", {"memset", OpArity::THREE}},
         {"memseth", {"memseth", OpArity::THREE}},
         {"memcpy", {"memcpy", OpArity::THREE}},
@@ -362,7 +363,7 @@ static const std::unordered_map<std::string, InstructionPattern>
         {"fcvt.ps", {"fcvt.ps", OpArity::TWO}},
         {"fextend", {"fextend", OpArity::TWO}},
         {"fnarrow", {"fnarrow", OpArity::TWO}},
-        {"fmadd", {"fmadd", OpArity::THREE}},       // fd = fma(fa, fb, fd)
+        {"fmadd", {"fmadd", OpArity::THREE}}, // fd = fma(fa, fb, fd)
         {"fmadd.ps", {"fmadd.ps", OpArity::THREE}},
         {"fmin", {"fmin", OpArity::TWO}},
         {"fmin.ps", {"fmin.ps", OpArity::TWO}},
@@ -515,9 +516,9 @@ static const std::unordered_map<std::string, InstructionPattern>
         {"newobjs", {"newobjs", OpArity::ONE}},
         {"gcpromote", {"gcpromote", OpArity::TWO}},
         {"gcdemote", {"gcdemote", OpArity::TWO}},
-        {"atomicld", {"atomicld", OpArity::TWO}},     // dst, addr
-        {"atomicst", {"atomicst", OpArity::TWO}},     // addr, val
-        {"atomiccas", {"atomiccas", OpArity::FOUR}},  // dst, addr, exp, des
+        {"atomicld", {"atomicld", OpArity::TWO}},    // dst, addr
+        {"atomicst", {"atomicst", OpArity::TWO}},    // addr, val
+        {"atomiccas", {"atomiccas", OpArity::FOUR}}, // dst, addr, exp, des
         {"csel", {"csel", OpArity::FOUR}}, // dst, cond, a, b: dst = cond?a:b
         {"mld", {"mld", OpArity::FOUR}},   // dst, index, ctrlword, disp16
         {"mst", {"mst", OpArity::FOUR}},   // src, index, ctrlword, disp16
@@ -916,7 +917,8 @@ std::unique_ptr<ASTNode> Parser::parse_data_directive() {
             }
             std::string sym = current.lexeme;
             advance(); // la cadena
-            expectToken(TokenType::RPAREN, "se esperaba ')' tras @Absolute(...)");
+            expectToken(TokenType::RPAREN,
+                        "se esperaba ')' tras @Absolute(...)");
             advance();
             values.push_back(std::make_unique<AbsRefExpr>(std::move(sym)));
             break;
@@ -958,11 +960,12 @@ std::unique_ptr<ASTNode> Parser::parse_instruction() {
      * y el patron sale de una lectura por indice.  Esto corre por cada
      * instruccion del fuente.
      *
-     * La ruta de recuperacion de abajo -- la que busca el nombre parecido cuando
-     * el usuario se equivoca -- sigue recorriendo la tabla, y esta bien: solo se
-     * paga al fallar, y ahi lo que importa es dar un buen mensaje, no la
-     * velocidad. */
-    static const emmit::MnemonicIndex<InstructionPattern> kIndex(InstructionSet);
+     * La ruta de recuperacion de abajo -- la que busca el nombre parecido
+     * cuando el usuario se equivoca -- sigue recorriendo la tabla, y esta bien:
+     * solo se paga al fallar, y ahi lo que importa es dar un buen mensaje, no
+     * la velocidad. */
+    static const emmit::MnemonicIndex<InstructionPattern> kIndex(
+        InstructionSet);
     const InstructionPattern *patron =
         kIndex.find(emmit::mnemonic_from_text(opcode.c_str()));
     auto it = InstructionSet.end();
@@ -970,7 +973,8 @@ std::unique_ptr<ASTNode> Parser::parse_instruction() {
     if (patron == nullptr) {
         float affinity = 0.0;
         int dist = 0;
-        /* La mejor candidata vista, y las que valen para el mensaje detallado. */
+        /* La mejor candidata vista, y las que valen para el mensaje detallado.
+         */
         std::string mejor;
         int mejor_dist = INT_MAX;
         struct Cercana {
@@ -990,18 +994,19 @@ std::unique_ptr<ASTNode> Parser::parse_instruction() {
          * la comparacion de longitud descarta la mayoria en una resta.
          *
          * El recorte tiene que valer para los DOS filtros de abajo, y no solo
-         * para el de distancia: la afinidad admite distancias mayores cuando las
-         * palabras son largas, asi que recortar solo por `dif > 3` podria tirar
-         * una candidata que si habria pasado por afinidad.  Se exige que la
-         * diferencia haga imposibles las dos cosas -- la distancia nunca es menor
-         * que la diferencia de longitudes --, y entonces descartar no cambia el
-         * resultado, solo lo alcanza antes. */
+         * para el de distancia: la afinidad admite distancias mayores cuando
+         * las palabras son largas, asi que recortar solo por `dif > 3` podria
+         * tirar una candidata que si habria pasado por afinidad.  Se exige que
+         * la diferencia haga imposibles las dos cosas -- la distancia nunca es
+         * menor que la diferencia de longitudes --, y entonces descartar no
+         * cambia el resultado, solo lo alcanza antes. */
         const int len_opcode = static_cast<int>(opcode.size());
         for (auto &option : InstructionSet) {
             const int len_opt = static_cast<int>(option.first.size());
             const int dif = len_opcode > len_opt ? len_opcode - len_opt
                                                  : len_opt - len_opcode;
-            /* Afinidad >= 80% exige distancia <= 20% de la palabra mas larga. */
+            /* Afinidad >= 80% exige distancia <= 20% de la palabra mas larga.
+             */
             const int mayor = len_opcode > len_opt ? len_opcode : len_opt;
             if (dif > 3 && dif * 5 > mayor) continue;
             dist = utils::Levenshtein::distance(opcode, option.first);
@@ -1018,8 +1023,8 @@ std::unique_ptr<ASTNode> Parser::parse_instruction() {
                 /* A igual distancia, la mas CORTA.  `movv` esta a distancia uno
                  * de `mov` y de `movc`, y la primera es la probable: teclear un
                  * caracter de mas es el error mas comun, y sin desempate la
-                 * elegida seria la que cayera antes en el orden del hash -- otra
-                 * vez arbitraria. */
+                 * elegida seria la que cayera antes en el orden del hash --
+                 * otra vez arbitraria. */
                 const bool mejora = dist < mejor_dist ||
                                     (dist == mejor_dist && !mejor.empty() &&
                                      option.first.size() < mejor.size());
@@ -1031,7 +1036,8 @@ std::unique_ptr<ASTNode> Parser::parse_instruction() {
             /* Y de paso las cercanas para el mensaje detallado, en la MISMA
              * pasada: antes se recorria la tabla dos veces midiendo las mismas
              * distancias, una para sugerir y otra para listar. */
-            if (affinity > 30) cercanas.push_back({option.first, dist, affinity});
+            if (affinity > 30)
+                cercanas.push_back({option.first, dist, affinity});
         }
 
         if (!mejor.empty()) {
@@ -1042,12 +1048,11 @@ std::unique_ptr<ASTNode> Parser::parse_instruction() {
             goto exit_error; // nos pudimos recuperar
         }
 
-        /* Nada suficientemente cerca: se enumeran las parecidas, de mas a menos,
-         * para que el mensaje empiece por la candidata mas probable. */
-        std::sort(cercanas.begin(), cercanas.end(),
-                  [](const Cercana &a, const Cercana &b) {
-                      return a.dist < b.dist;
-                  });
+        /* Nada suficientemente cerca: se enumeran las parecidas, de mas a
+         * menos, para que el mensaje empiece por la candidata mas probable. */
+        std::sort(
+            cercanas.begin(), cercanas.end(),
+            [](const Cercana &a, const Cercana &b) { return a.dist < b.dist; });
         std::stringstream ss;
         for (const Cercana &c : cercanas) {
             ss << "Instr: " << c.nombre << "\n"
@@ -1061,9 +1066,9 @@ std::unique_ptr<ASTNode> Parser::parse_instruction() {
         return nullptr;
     }
 exit_error:
-    /* Del indice si acerto a la primera; de la recuperacion si hubo que buscar un
-     * nombre parecido.  En los dos casos hay patron: si no lo hubiera, arriba se
-     * habria dado el error y no se llegaria aqui. */
+    /* Del indice si acerto a la primera; de la recuperacion si hubo que buscar
+     * un nombre parecido.  En los dos casos hay patron: si no lo hubiera,
+     * arriba se habria dado el error y no se llegaria aqui. */
     if (patron == nullptr) patron = &valid_it->second;
     const auto &pattern = *patron;
 

@@ -7,8 +7,8 @@
 
 /**
  * @file test_effects.cpp
- * @brief Tests unitarios del modelo de efectos (Fase 0): reticulo de AbstractLoc
- *        (TOP/BOTTOM, may_alias), LocSet (union, gen/kill, absorbente),
+ * @brief Tests unitarios del modelo de efectos (Fase 0): reticulo de
+ * AbstractLoc (TOP/BOTTOM, may_alias), LocSet (union, gen/kill, absorbente),
  *        combinadores seq/join (leyes: neutro, absorbente, conmutatividad de
  *        join, gen/kill de memoria y registros), y contratos declarativos.
  */
@@ -36,7 +36,9 @@ static void check(bool ok, const char *what) {
     }
 }
 
-static AbstractLoc L(AbstractLoc::Kind k, uint32_t id = 0) { return {k, id}; }
+static AbstractLoc L(AbstractLoc::Kind k, uint32_t id = 0) {
+    return {k, id};
+}
 
 int main() {
     using K = AbstractLoc::Kind;
@@ -48,9 +50,12 @@ int main() {
     check(may_alias(L(K::Unknown), L(K::Heap, 7)), "top aliasa heap");
     check(!may_alias(L(K::Stack), L(K::Heap, 1)), "clases distintas disjuntas");
     check(may_alias(L(K::Heap, 3), L(K::Heap, 3)), "mismo heap id aliasa");
-    check(!may_alias(L(K::Heap, 3), L(K::Heap, 4)), "heap ids distintos no aliasan");
-    check(!may_alias(L(K::Heap, 0), L(K::Heap, 4)), "heap id 0 es sitio concreto (no aliasa 4)");
-    check(may_alias(L(K::Heap, LOC_GENERIC), L(K::Heap, 4)), "heap generico aliasa cualquiera");
+    check(!may_alias(L(K::Heap, 3), L(K::Heap, 4)),
+          "heap ids distintos no aliasan");
+    check(!may_alias(L(K::Heap, 0), L(K::Heap, 4)),
+          "heap id 0 es sitio concreto (no aliasa 4)");
+    check(may_alias(L(K::Heap, LOC_GENERIC), L(K::Heap, 4)),
+          "heap generico aliasa cualquiera");
     check(may_alias(L(K::Global, 9), L(K::Global, 9)), "mismo global aliasa");
 
     // ---- LocSet: union, absorbente, gen/kill ----
@@ -96,8 +101,10 @@ int main() {
         b.mem.reads.add(L(K::Heap, 1));
         b.mem.reads.add(L(K::Heap, 2));
         SemanticEffects r = seq(a, b);
-        check(r.mem.reads.locs.size() == 1 && r.mem.reads.locs[0] == L(K::Heap, 2),
-              "seq mem: la lectura interna (heap1) se mata, la externa (heap2) queda");
+        check(r.mem.reads.locs.size() == 1 &&
+                  r.mem.reads.locs[0] == L(K::Heap, 2),
+              "seq mem: la lectura interna (heap1) se mata, la externa (heap2) "
+              "queda");
         check(r.mem.writes.locs.size() == 1, "seq mem: writes se acumulan");
     }
     {
@@ -119,7 +126,8 @@ int main() {
         x.may_throw = true;
         x.mem.writes.add(L(K::Global, 5));
         SemanticEffects n = SemanticEffects::none();
-        check(seq(n, x).may_throw && seq(x, n).may_throw, "neutro preserva may_throw");
+        check(seq(n, x).may_throw && seq(x, n).may_throw,
+              "neutro preserva may_throw");
     }
 
     // ---- join: conmutativo + union may-effects ----
@@ -149,7 +157,7 @@ int main() {
         a.regs_written = 0x1;
         a.stack_net = 8;
         a.stack_peak = 8;
-        MachineEffects b; // lee reg0 (interno) y reg1 (externo)
+        MachineEffects b;  // lee reg0 (interno) y reg1 (externo)
         b.regs_read = 0x3; // reg0|reg1
         b.stack_net = 16;
         b.stack_peak = 16;
@@ -252,8 +260,8 @@ int main() {
     //   motor IR -> SemanticEffects (construimos IrFunctions a mano).
     // =====================================================================
     auto add_instr = [](ir::IrFunction &fn, uint32_t blk, ir::IrOp op,
-                        ir::IrValueId dst, std::vector<ir::IrValueId> ops)
-        -> ir::IrInstr & {
+                        ir::IrValueId dst,
+                        std::vector<ir::IrValueId> ops) -> ir::IrInstr & {
         ir::IrInstr in{};
         in.op = op;
         in.dst = dst;
@@ -277,7 +285,8 @@ int main() {
                   !r.effects.may_allocate &&
                   r.completeness == AnalysisCompleteness::Complete,
               "IR: const+add+ret es puro");
-        check(r.effects.control.kind == ControlKind::Return, "IR: control Return");
+        check(r.effects.control.kind == ControlKind::Return,
+              "IR: control Return");
     }
     {
         // STORE a un ALLOCA -> escribe Stack.
@@ -293,13 +302,15 @@ int main() {
         analysis::PointsTo defs_pt = analysis::compute_points_to(fn, defs);
         // efecto de la STORE aislada.
         SemanticEffects st =
-            effects_of_instr(fn, defs, defs_pt, fn.blocks[b0].instrs.back()).effects;
+            effects_of_instr(fn, defs, defs_pt, fn.blocks[b0].instrs.back())
+                .effects;
         check(st.mem.writes.locs.size() == 1 &&
                   st.mem.writes.locs[0].kind == AbstractLoc::Kind::Stack,
               "IR: STORE a ALLOCA escribe Stack");
         // La funcion NO escribe memoria OBSERVABLE fuera del marco: el Stack es
         // local, pero el modelo lo reporta como write de Stack (correcto: el
-        // filtrado 'stack local no escapa' es tarea de un contrato/opt superior).
+        // filtrado 'stack local no escapa' es tarea de un contrato/opt
+        // superior).
     }
     {
         // GC_ALLOC -> may_allocate; THROW -> may_throw; CALLN -> conservative.
@@ -339,14 +350,16 @@ int main() {
         add_instr(fp, bp, ir::IrOp::PANIC, ir::IR_NO_VALUE, {});
 
         EffectEnv vm;
-        const SemanticEffects e_vm = function_local_effects(fp, nullptr, vm).effects;
+        const SemanticEffects e_vm =
+            function_local_effects(fp, nullptr, vm).effects;
         check(e_vm.may_throw && e_vm.may_panic &&
                   e_vm.control.kind == ControlKind::Throw,
               "IR: panic en la VM -> lanza (capturable) y aborta");
 
         EffectEnv nat;
         nat.backend = Backend::Aot;
-        const SemanticEffects e_nat = function_local_effects(fp, nullptr, nat).effects;
+        const SemanticEffects e_nat =
+            function_local_effects(fp, nullptr, nat).effects;
         check(!e_nat.may_throw && e_nat.may_panic &&
                   e_nat.control.kind == ControlKind::NoReturn,
               "IR: panic en nativo -> aborta sin lanzar y no vuelve");
@@ -403,7 +416,8 @@ int main() {
     //   punto-fijo del callgraph (cierre interprocedural) + contratos.
     // =====================================================================
     {
-        // callee aloca; caller llama a callee -> el cierre de caller may_allocate.
+        // callee aloca; caller llama a callee -> el cierre de caller
+        // may_allocate.
         ir::IrModule mod;
         {
             ir::IrFunction callee;
@@ -430,7 +444,8 @@ int main() {
         const ModuleSummary &ms = ea.module_summary(mod);
         const FunctionSummary &caller = ms.fns.at("caller");
         const FunctionSummary &callee = ms.fns.at("callee");
-        check(callee.semantic.local.may_allocate, "fixpoint: callee local aloca");
+        check(callee.semantic.local.may_allocate,
+              "fixpoint: callee local aloca");
         check(!caller.semantic.local.may_allocate,
               "fixpoint: caller local NO aloca");
         check(caller.semantic.closure.may_allocate,
@@ -537,7 +552,8 @@ int main() {
             EffectAnalysis ea;
             const ModuleSummary &ms = ea.module_summary(modB);
             check(ms.fns.at("callB").semantic.closure.may_io,
-                  "cross-mod: solo B, allocA externa -> callB closure top (may_io)");
+                  "cross-mod: solo B, allocA externa -> callB closure top "
+                  "(may_io)");
         }
         // A+B: el callgraph cruza el modulo -> allocA resuelto.
         {
@@ -549,7 +565,8 @@ int main() {
             check(cb.semantic.closure.may_allocate,
                   "cross-mod: callB closure aloca (via allocA de otro modulo)");
             check(!cb.semantic.closure.may_io,
-                  "cross-mod: callB closure NO es top (allocA resuelto, no externa)");
+                  "cross-mod: callB closure NO es top (allocA resuelto, no "
+                  "externa)");
         }
     }
 
@@ -590,8 +607,8 @@ int main() {
         const analysis::IrFacts &f1 =
             am.get_or_compute<analysis::IRFactsAnalysis, analysis::IrFacts>(
                 fn.name, factory);
-        am.get_or_compute<analysis::IRFactsAnalysis, analysis::IrFacts>(fn.name,
-                                                                        factory);
+        am.get_or_compute<analysis::IRFactsAnalysis, analysis::IrFacts>(
+            fn.name, factory);
         check(builds == 1 && f1.block_count == 1,
               "IRFacts: manager computa una vez (lazy + cache)");
         am.invalidate<analysis::IRFactsAnalysis>(fn.name);
@@ -603,7 +620,8 @@ int main() {
     // Perfiles de contratos: mismos hechos, distinta opinion.
     // =====================================================================
     {
-        // Funcion sin escrituras/throw/alloc/io PERO no-determinista (lee reloj).
+        // Funcion sin escrituras/throw/alloc/io PERO no-determinista (lee
+        // reloj).
         FunctionSummary s;
         s.completeness = AnalysisCompleteness::Complete;
         s.semantic.closure.determinism.add(DeterminismTag::ReadsClock);

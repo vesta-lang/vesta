@@ -83,8 +83,9 @@ static std::string tinte(bool color, const char *c, const std::string &txt) {
  * @brief El color DICE algo: no es decoracion.
  *
  * Verde lo demostrado, cian lo que se afirma sin cerrar, ambar lo que no se
- * puede elegir, apagado lo que no se ha llegado a observar.  Quien lea en blanco
- * y negro pierde velocidad, no informacion: el texto sigue diciendo lo mismo.
+ * puede elegir, apagado lo que no se ha llegado a observar.  Quien lea en
+ * blanco y negro pierde velocidad, no informacion: el texto sigue diciendo lo
+ * mismo.
  */
 static const char *color_forma(analysis::asa::FormaDeValor f) {
     switch (f) {
@@ -104,17 +105,13 @@ static const char *color_forma(analysis::asa::FormaDeValor f) {
  */
 static std::string barra(uint32_t parte, uint32_t total, int ancho = 24) {
     if (total == 0) return std::string();
-    const int llenos = static_cast<int>((static_cast<double>(parte) / total) *
-                                        ancho + 0.5);
+    const int llenos =
+        static_cast<int>((static_cast<double>(parte) / total) * ancho + 0.5);
     std::string out;
     for (int i = 0; i < ancho; ++i)
-        out += (i < llenos) ? "\xe2\x96\x88"
-                            : "\xe2\x96\x91";
+        out += (i < llenos) ? "\xe2\x96\x88" : "\xe2\x96\x91";
     return out;
 }
-
-
-
 
 static const char *loc_kind_name(AbstractLoc::Kind k) {
     switch (k) {
@@ -192,7 +189,10 @@ static void print_effects(std::ostream &os, const SemanticEffects &e) {
     os << "    control    : " << control_name(e.control.kind) << "\n";
     std::string may;
     auto add = [&](bool b, const char *n) {
-        if (b) { if (!may.empty()) may += " "; may += n; }
+        if (b) {
+            if (!may.empty()) may += " ";
+            may += n;
+        }
     };
     add(e.may_trap, "trap");
     add(e.may_throw, "throw");
@@ -202,17 +202,24 @@ static void print_effects(std::ostream &os, const SemanticEffects &e) {
     os << "    may        : " << (may.empty() ? "-" : may) << "\n";
     std::string det;
     auto addd = [&](DeterminismTag t, const char *n) {
-        if (e.determinism.has(t)) { if (!det.empty()) det += " "; det += n; }
+        if (e.determinism.has(t)) {
+            if (!det.empty()) det += " ";
+            det += n;
+        }
     };
     addd(DeterminismTag::ReadsClock, "clock");
     addd(DeterminismTag::ReadsRandom, "random");
     addd(DeterminismTag::ReadsPID, "pid");
     addd(DeterminismTag::ReadsEnvironment, "env");
     addd(DeterminismTag::ExternalObservable, "external");
-    os << "    nondeterm  : " << (det.empty() ? "- (determinista)" : det) << "\n";
+    os << "    nondeterm  : " << (det.empty() ? "- (determinista)" : det)
+       << "\n";
     std::string tags;
     auto addt = [&](CapabilityTag t, const char *n) {
-        if (e.tags.has(t)) { if (!tags.empty()) tags += " "; tags += n; }
+        if (e.tags.has(t)) {
+            if (!tags.empty()) tags += " ";
+            tags += n;
+        }
     };
     addt(CapabilityTag::MachineState, "machine");
     addt(CapabilityTag::InterruptState, "irq");
@@ -248,8 +255,10 @@ static void print_regiones(std::ostream &os, EffectAnalysis &ea,
         LocSet uno;
         uno.add(AbstractLoc{e.kind, v, 0, 0});
         out += "    " + loc_set_str(uno) + ": ";
-        if (ex.constante()) out += std::to_string(ex.bytes) + " bytes";
-        else out += "tamano en %" + std::to_string(ex.sym) + " (simbolico)";
+        if (ex.constante())
+            out += std::to_string(ex.bytes) + " bytes";
+        else
+            out += "tamano en %" + std::to_string(ex.sym) + " (simbolico)";
         out += "\n";
     }
     if (!out.empty()) os << "  Regiones:\n" << out;
@@ -269,8 +278,8 @@ static void print_fuera_de_region(std::ostream &os, const ir::IrModule &mod,
     if (vs.empty()) return;
     os << "\n=== Accesos fuera de region (demostrados) ===\n";
     for (const BoundsViolation &v : vs) {
-        os << "  " << v.function << " (linea " << v.line << "): "
-           << (v.write ? "escritura" : "lectura") << " de " << v.width
+        os << "  " << v.function << " (linea " << v.line
+           << "): " << (v.write ? "escritura" : "lectura") << " de " << v.width
            << " bytes fuera de " << v.region << "\n";
         os << "    prueba: objeto = " << v.objeto << " bytes, hueco = [0, "
            << v.limite << ") ; acceso = [" << v.off << ", " << (v.off + v.width)
@@ -303,8 +312,8 @@ static void print_prestamos(std::ostream &os, const ir::IrFunction &fn) {
     os << "  Prestamos:\n";
     for (const ir::IrFunction::BorrowFact &b : fn.borrow_facts) {
         os << "    " << (b.mutable_ ? "exclusivo" : "compartido") << " de "
-           << (b.owner_name.empty() ? "?" : b.owner_name) << " (" << nat(b.owner_kind)
-           << ") en linea " << b.line << "\n";
+           << (b.owner_name.empty() ? "?" : b.owner_name) << " ("
+           << nat(b.owner_kind) << ") en linea " << b.line << "\n";
     }
 }
 
@@ -328,8 +337,8 @@ static void print_prestamos(std::ostream &os, const ir::IrFunction &fn) {
 static void print_conflictos(std::ostream &os, EffectAnalysis &ea,
                              const ir::IrFunction &fn) {
     struct Acc {
-        uint32_t    line = 0;
-        bool        escribe = false;
+        uint32_t line = 0;
+        bool escribe = false;
         AbstractLoc loc;
     };
     std::string out;
@@ -362,14 +371,15 @@ static void print_conflictos(std::ostream &os, EffectAnalysis &ea,
                 uno.add(accs[li].loc);
                 out += "    " + loc_set_str(uno) + ": liberada en linea " +
                        std::to_string(accs[li].line) + ", " +
-                       (accs[j].escribe ? "escrita" : "leida") + " despues en " +
-                       std::to_string(accs[j].line) + "\n";
+                       (accs[j].escribe ? "escrita" : "leida") +
+                       " despues en " + std::to_string(accs[j].line) + "\n";
                 ++n;
             }
         }
     }
     if (!out.empty())
-        os << "  Conflictos de memoria (acceso a memoria ya liberada):\n" << out;
+        os << "  Conflictos de memoria (acceso a memoria ya liberada):\n"
+           << out;
 }
 
 /**
@@ -382,15 +392,16 @@ static void print_conflictos(std::ostream &os, EffectAnalysis &ea,
  * Y lo que impide demostrar mas se dice tambien, con su sitio: es lo unico que
  * convierte un "no se" en algo accionable -- dice QUE habria que poder ver.
  */
-static void print_formas_de(std::ostream &os, const analysis::asa::ObservacionModulo &modelo,
+static void print_formas_de(std::ostream &os,
+                            const analysis::asa::ObservacionModulo &modelo,
                             const char *estado) {
     os << "  --- " << estado << " ---\n";
     /* Se ordena por lo que FALTA, no por orden de aparicion.  Un informe que
      * empieza por lo demostrado se lee y se cierra; uno que empieza por lo que
      * no se sabe dirige la atencion a donde hay algo que hacer.  Dentro de cada
      * grupo se conserva el orden del modulo, que es estable. */
-    std::vector<std::pair<analysis::asa::IdentidadValor,
-                          analysis::asa::AggregateFacts>>
+    std::vector<
+        std::pair<analysis::asa::IdentidadValor, analysis::asa::AggregateFacts>>
         todos = modelo.valores;
     auto urgencia = [](const analysis::asa::AggregateFacts &a) {
         // 0 = no se puede elegir, 1 = no se llego a observar, 2 = se sale o no
@@ -416,54 +427,62 @@ static void print_formas_de(std::ostream &os, const analysis::asa::ObservacionMo
             }
             const analysis::asa::AggregateFacts &a = par.second;
             {
-            /* De donde sale el valor: una linea del cuerpo o la firma.  Y su
-             * tamano solo si se sabe -- de un parametro lo sabe quien llama. */
-            if (a.declaracion.linea == 0 && a.declaracion.indice > 0)
-                os << "    parametro " << a.declaracion.indice << "  ";
-            else
-                os << "    linea " << a.declaracion.linea << ":"
-                   << a.declaracion.indice << "  ";
-            if (a.bytes >= 0) os << a.bytes << " bytes, ";
-            else os << "tamano no conocido aqui, ";
-            const bool color = hay_color(os);
-            const analysis::asa::FormaDeValor f = a.forma();
-            os << a.offsets_tocados() << " desplazamientos  -> "
-               << tinte(color, color_forma(f), analysis::asa::nombre_forma(f))
-               << " / "
-               << tinte(color,
-                        a.sello.certeza == analysis::asa::Certeza::Demostrada
-                            ? col::kVerde
-                            : (a.sello.certeza == analysis::asa::Certeza::Inferida
-                                   ? col::kCian
-                                   : col::kApagado),
-                        analysis::asa::nombre_certeza(a.sello.certeza))
-               << "\n";
-            for (analysis::asa::MotivoForma mo : a.motivos_forma())
-                os << "        porque: " << analysis::asa::nombre_motivo(mo)
+                /* De donde sale el valor: una linea del cuerpo o la firma.  Y
+                 * su tamano solo si se sabe -- de un parametro lo sabe quien
+                 * llama. */
+                if (a.declaracion.linea == 0 && a.declaracion.indice > 0)
+                    os << "    parametro " << a.declaracion.indice << "  ";
+                else
+                    os << "    linea " << a.declaracion.linea << ":"
+                       << a.declaracion.indice << "  ";
+                if (a.bytes >= 0)
+                    os << a.bytes << " bytes, ";
+                else
+                    os << "tamano no conocido aqui, ";
+                const bool color = hay_color(os);
+                const analysis::asa::FormaDeValor f = a.forma();
+                os << a.offsets_tocados() << " desplazamientos  -> "
+                   << tinte(color, color_forma(f),
+                            analysis::asa::nombre_forma(f))
+                   << " / "
+                   << tinte(color,
+                            a.sello.certeza ==
+                                    analysis::asa::Certeza::Demostrada
+                                ? col::kVerde
+                                : (a.sello.certeza ==
+                                           analysis::asa::Certeza::Inferida
+                                       ? col::kCian
+                                       : col::kApagado),
+                            analysis::asa::nombre_certeza(a.sello.certeza))
                    << "\n";
-            /* Las verdades LOCALES: un ambito cerrado demuestra lo suyo aunque
-             * el de fuera no.  Sin esto, un "sin evidencia" global esconderia
-             * todo lo que si se sabe por dentro. */
-            for (const analysis::asa::Universo &u : a.universos) {
-                if (!u.cerrado || u.id == 0) continue;
-                const analysis::asa::FormaDeValor f = a.forma_en(u.id);
-                if (f == analysis::asa::FormaDeValor::SinEvidencia) continue;
-                os << "        en " << u.ambito << ": "
-                   << analysis::asa::nombre_forma(f) << " (demostrado ahi)\n";
-            }
-            for (const analysis::asa::Frontera &fr : a.fronteras)
-                os << "        sale por " << analysis::asa::nombre_frontera(fr.codigo)
-                   << " en " << fr.sitio.funcion << ":" << fr.sitio.linea << "\n";
-            for (const analysis::asa::Limitacion &l : a.limitaciones)
-                os << "        no pude seguir: "
-                   << analysis::asa::nombre_limitacion(l.codigo) << " en "
-                   << l.sitio.funcion << ":" << l.sitio.linea
-                   << (l.destino.empty() ? "" : " -> " + l.destino) << "\n";
+                for (analysis::asa::MotivoForma mo : a.motivos_forma())
+                    os << "        porque: " << analysis::asa::nombre_motivo(mo)
+                       << "\n";
+                /* Las verdades LOCALES: un ambito cerrado demuestra lo suyo
+                 * aunque el de fuera no.  Sin esto, un "sin evidencia" global
+                 * esconderia todo lo que si se sabe por dentro. */
+                for (const analysis::asa::Universo &u : a.universos) {
+                    if (!u.cerrado || u.id == 0) continue;
+                    const analysis::asa::FormaDeValor f = a.forma_en(u.id);
+                    if (f == analysis::asa::FormaDeValor::SinEvidencia)
+                        continue;
+                    os << "        en " << u.ambito << ": "
+                       << analysis::asa::nombre_forma(f)
+                       << " (demostrado ahi)\n";
+                }
+                for (const analysis::asa::Frontera &fr : a.fronteras)
+                    os << "        sale por "
+                       << analysis::asa::nombre_frontera(fr.codigo) << " en "
+                       << fr.sitio.funcion << ":" << fr.sitio.linea << "\n";
+                for (const analysis::asa::Limitacion &l : a.limitaciones)
+                    os << "        no pude seguir: "
+                       << analysis::asa::nombre_limitacion(l.codigo) << " en "
+                       << l.sitio.funcion << ":" << l.sitio.linea
+                       << (l.destino.empty() ? "" : " -> " + l.destino) << "\n";
             }
         }
     }
-    if (!alguno)
-        os << "    ninguno en este estado.\n";
+    if (!alguno) os << "    ninguno en este estado.\n";
 }
 
 /**
@@ -488,8 +507,10 @@ static void print_formas_de(std::ostream &os, const analysis::asa::ObservacionMo
  * fronteras por las que el conocimiento se sale.  Es el mapa que dice DONDE
  * habria que mirar para saber mas.
  */
-static void print_cobertura_formas(std::ostream &os, const analysis::asa::ObservacionModulo &modelo,
-                                   const char *estado) {
+static void
+print_cobertura_formas(std::ostream &os,
+                       const analysis::asa::ObservacionModulo &modelo,
+                       const char *estado) {
     uint32_t observados = 0, fronteras = 0, limitaciones = 0;
     uint32_t valores = 0, con_forma = 0, demostrados = 0;
     /* Los ambitos que se saben nombrar y no se han abierto son una LISTA DE
@@ -508,7 +529,8 @@ static void print_cobertura_formas(std::ostream &os, const analysis::asa::Observ
             fronteras += static_cast<uint32_t>(a.fronteras.size());
             limitaciones += static_cast<uint32_t>(a.limitaciones.size());
             for (const analysis::asa::Universo &u : a.universos) {
-                if (u.observacion == analysis::asa::EstadoObservacion::Observado)
+                if (u.observacion ==
+                    analysis::asa::EstadoObservacion::Observado)
                     ++observados;
                 else if (u.identidad ==
                          analysis::asa::IdentidadUniverso::Conocido)
@@ -529,13 +551,15 @@ static void print_cobertura_formas(std::ostream &os, const analysis::asa::Observ
     };
     linea("valores observados             :", valores, 0, col::kFuerte);
     linea("  con forma afirmable          :", con_forma, valores, col::kVerde);
-    linea("  demostrados (ambito cerrado) :", demostrados, valores, col::kVerde);
+    linea("  demostrados (ambito cerrado) :", demostrados, valores,
+          col::kVerde);
     linea("ambitos abiertos y mirados     :", observados, 0, col::kCian);
     linea("fronteras por las que se sale  :", fronteras, 0, col::kAmbar);
     linea("sitios que no se pudieron seguir:", limitaciones, 0, col::kAmbar);
     if (!sin_abrir.empty()) {
         uint32_t n = 0;
-        for (const auto &kv : sin_abrir) n += kv.second;
+        for (const auto &kv : sin_abrir)
+            n += kv.second;
         linea("ambitos que se saben y no se han mirado:", n, 0, col::kAmbar);
         for (const auto &kv : sin_abrir)
             os << "      " << tinte(color, col::kApagado, kv.first) << " x"
@@ -548,12 +572,14 @@ static void print_cobertura_formas(std::ostream &os, const analysis::asa::Observ
  *
  * El emparejamiento NO se hace aqui: es un hecho de ASA (`comparar_estados`), y
  * esta vista solo lo presenta.  Si viviera en el informe, quien quisiera el
- * mismo dato sin pasar por el texto -- una herramienta, un modelo -- tendria que
- * reimplementarlo, y dos implementaciones del mismo hecho acaban discrepando.
+ * mismo dato sin pasar por el texto -- una herramienta, un modelo -- tendria
+ * que reimplementarlo, y dos implementaciones del mismo hecho acaban
+ * discrepando.
  */
-static void print_transiciones(std::ostream &os,
-                               const analysis::asa::ObservacionModulo &antes,
-                               const analysis::asa::ObservacionModulo &despues) {
+static void
+print_transiciones(std::ostream &os,
+                   const analysis::asa::ObservacionModulo &antes,
+                   const analysis::asa::ObservacionModulo &despues) {
     const auto ts = analysis::asa::comparar_estados(antes, despues);
     if (ts.empty()) return;
     const bool color = hay_color(os);
@@ -563,13 +589,12 @@ static void print_transiciones(std::ostream &os,
     for (const analysis::asa::TransicionValor &t : ts) {
         const std::string donde =
             t.valor.funcion +
-            (t.valor.linea > 0 ? " linea " + std::to_string(t.valor.linea)
-                               : " parametro " + std::to_string(t.valor.indice)) +
+            (t.valor.linea > 0
+                 ? " linea " + std::to_string(t.valor.linea)
+                 : " parametro " + std::to_string(t.valor.indice)) +
             (t.valor.orden > 0 ? " #" + std::to_string(t.valor.orden + 1) : "");
         switch (t.tipo) {
-        case analysis::asa::TipoTransicion::Sobrevive:
-            ++n_igual;
-            break;
+        case analysis::asa::TipoTransicion::Sobrevive: ++n_igual; break;
         case analysis::asa::TipoTransicion::Desaparece:
             ++n_ido;
             detalle += "    " + tinte(color, col::kRojo, donde) + ": " +
@@ -578,15 +603,15 @@ static void print_transiciones(std::ostream &os,
             break;
         case analysis::asa::TipoTransicion::CambiaForma:
             ++n_cambia;
-            detalle += "    " + tinte(color, col::kFuerte, donde) + ": " +
-                       tinte(color, color_forma(t.antes),
-                             analysis::asa::nombre_forma(t.antes)) +
-                       " -> " +
-                       tinte(color, color_forma(t.despues),
-                             analysis::asa::nombre_forma(t.despues)) +
-                       tinte(color, col::kAmbar,
-                             "   (cambio semantico: revisar)") +
-                       "\n";
+            detalle +=
+                "    " + tinte(color, col::kFuerte, donde) + ": " +
+                tinte(color, color_forma(t.antes),
+                      analysis::asa::nombre_forma(t.antes)) +
+                " -> " +
+                tinte(color, color_forma(t.despues),
+                      analysis::asa::nombre_forma(t.despues)) +
+                tinte(color, col::kAmbar, "   (cambio semantico: revisar)") +
+                "\n";
             break;
         case analysis::asa::TipoTransicion::NoEmparejable:
             ++n_sin_emparejar;
@@ -617,7 +642,8 @@ static void print_transiciones(std::ostream &os,
     os << detalle;
 }
 
-static void print_formas(std::ostream &os, const analysis::asa::ObservacionModulo &final_m,
+static void print_formas(std::ostream &os,
+                         const analysis::asa::ObservacionModulo &final_m,
                          const analysis::asa::ObservacionModulo *previo_m) {
     os << "=== Forma de los valores con componentes ===\n";
     if (previo_m != nullptr)
@@ -742,14 +768,13 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
             fallidos += "\n";
         }
         os << "  Contratos : " << (contracts.empty() ? "-" : contracts) << "\n";
-        if (!fallidos.empty())
-            os << "    no cumple:\n" << fallidos;
+        if (!fallidos.empty()) os << "    no cumple:\n" << fallidos;
         os << "  Analisis  : " << completeness_name(s.completeness) << "\n";
         /* QUE juegos de instrucciones usa.
          *
          * Una funcion con un `asm` puede exigir del procesador cosas que no se
-         * ven en su firma: AVX-512, AES, ERMS.  Eso decide DONDE puede correr, y
-         * hasta ahora solo se sabia al reventar -- el fallo en ejecucion dice
+         * ven en su firma: AVX-512, AES, ERMS.  Eso decide DONDE puede correr,
+         * y hasta ahora solo se sabia al reventar -- el fallo en ejecucion dice
          * "exige AVX512F" cuando ya es tarde.  Aqui se dice antes, y sale de la
          * misma base de instrucciones, asi que vale para cualquier ISA sin
          * escribir aqui ni un nombre de instruccion. */
@@ -807,7 +832,8 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
     // La FORMA de los valores con componentes: saco de partes o unidad.  Va en
     // el informe y no detras de una variable de entorno porque es conocimiento
     // sobre el programa del usuario, no depuracion del compilador.
-    print_formas(os, modelo_final, mod_previo != nullptr ? &modelo_previo : nullptr);
+    print_formas(os, modelo_final,
+                 mod_previo != nullptr ? &modelo_previo : nullptr);
 
     /* Y lo que el ASA sabe de cada bloque de ensamblador.  Va en el informe
      * porque es conocimiento sobre el programa del usuario -- que exige del
@@ -815,8 +841,9 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
     analyze::print_asm_report(os, analyze::analizar_bloques_asm(mod));
     cerrar(us_formas);
 
-    // Reporte de LAGUNAS: hace visible que falta por modelar (cobertura) y donde
-    // la opacidad es fundamental (oportunidades de opt del lado del usuario).
+    // Reporte de LAGUNAS: hace visible que falta por modelar (cobertura) y
+    // donde la opacidad es fundamental (oportunidades de opt del lado del
+    // usuario).
     print_fuera_de_region(os, mod, ea);
     cerrar(us_limites);
 
@@ -842,7 +869,8 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
         publicar();
         return;
     }
-    os << "  sitios que subieron al efecto maximo (top): " << g.total_top << "\n";
+    os << "  sitios que subieron al efecto maximo (top): " << g.total_top
+       << "\n";
     os << "  por motivo:\n";
     for (const auto &kv : g.by_reason)
         os << "    " << reason_name(kv.first) << " x" << kv.second
@@ -856,8 +884,8 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
                << " x" << kv.second << "\n";
     }
     /* Y CUALES son las instrucciones de asm que no se saben explicar.  Sin el
-     * nombre no se puede cerrar la laguna, y cerrarla -- anadir la instruccion a
-     * la tabla -- es la forma prevista de que el analizador crezca. */
+     * nombre no se puede cerrar la laguna, y cerrarla -- anadir la instruccion
+     * a la tabla -- es la forma prevista de que el analizador crezca. */
     if (!g.nativas_desconocidas.empty()) {
         os << "  Funciones nativas sin efectos declarados (declararlas cierra "
               "la laguna):\n";
@@ -865,7 +893,8 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
             os << "    " << kv.first << " x" << kv.second << "\n";
     }
     if (!g.mnemonicos_desconocidos.empty()) {
-        os << "  Instrucciones de asm sin tabular (anadirlas cierra la laguna):\n";
+        os << "  Instrucciones de asm sin tabular (anadirlas cierra la "
+              "laguna):\n";
         for (const auto &kv : g.mnemonicos_desconocidos)
             os << "    " << kv.first << " x" << kv.second << "\n";
     }
@@ -889,7 +918,10 @@ static void may_json(std::ostream &os, const SemanticEffects &e) {
     const char *sep = "";
     os << "[";
     auto add = [&](bool b, const char *n) {
-        if (b) { os << sep << "\"" << n << "\""; sep = ","; }
+        if (b) {
+            os << sep << "\"" << n << "\"";
+            sep = ",";
+        }
     };
     add(e.may_trap, "trap");
     add(e.may_throw, "throw");
@@ -903,7 +935,10 @@ static void nondeterm_json(std::ostream &os, const SemanticEffects &e) {
     const char *sep = "";
     os << "[";
     auto add = [&](DeterminismTag t, const char *n) {
-        if (e.determinism.has(t)) { os << sep << "\"" << n << "\""; sep = ","; }
+        if (e.determinism.has(t)) {
+            os << sep << "\"" << n << "\"";
+            sep = ",";
+        }
     };
     add(DeterminismTag::ReadsClock, "clock");
     add(DeterminismTag::ReadsRandom, "random");
@@ -917,7 +952,10 @@ static void tags_json(std::ostream &os, const SemanticEffects &e) {
     const char *sep = "";
     os << "[";
     auto add = [&](CapabilityTag t, const char *n) {
-        if (e.tags.has(t)) { os << sep << "\"" << n << "\""; sep = ","; }
+        if (e.tags.has(t)) {
+            os << sep << "\"" << n << "\"";
+            sep = ",";
+        }
     };
     add(CapabilityTag::MachineState, "machine");
     add(CapabilityTag::InterruptState, "irq");
@@ -929,14 +967,18 @@ static void tags_json(std::ostream &os, const SemanticEffects &e) {
     os << "]";
 }
 
-// Serializa un SemanticEffects como objeto JSON (mismos campos que print_effects).
+// Serializa un SemanticEffects como objeto JSON (mismos campos que
+// print_effects).
 static void effects_obj_json(std::ostream &os, const SemanticEffects &e) {
     os << "{\"reads\":\"" << json_escape(loc_set_str(e.mem.reads)) << "\""
        << ",\"writes\":\"" << json_escape(loc_set_str(e.mem.writes)) << "\""
        << ",\"control\":\"" << control_name(e.control.kind) << "\"";
-    os << ",\"may\":"; may_json(os, e);
-    os << ",\"nondeterm\":"; nondeterm_json(os, e);
-    os << ",\"tags\":"; tags_json(os, e);
+    os << ",\"may\":";
+    may_json(os, e);
+    os << ",\"nondeterm\":";
+    nondeterm_json(os, e);
+    os << ",\"tags\":";
+    tags_json(os, e);
     os << "}";
 }
 
@@ -955,15 +997,21 @@ void effects_json(std::ostream &os, const ir::IrModule &mod, Backend backend) {
         first = false;
 
         os << "{\"function\":\"" << json_escape(fn.name) << "\""
-           << ",\"completeness\":\"" << completeness_name(s.completeness) << "\"";
+           << ",\"completeness\":\"" << completeness_name(s.completeness)
+           << "\"";
         // Contratos derivados que se cumplen.
         os << ",\"contracts\":[";
         const char *csep = "";
         for (const EvaluatedContract &c : derive_contracts(s))
-            if (c.holds) { os << csep << "\"" << json_escape(c.name) << "\""; csep = ","; }
+            if (c.holds) {
+                os << csep << "\"" << json_escape(c.name) << "\"";
+                csep = ",";
+            }
         os << "]";
-        os << ",\"local\":"; effects_obj_json(os, s.semantic.local);
-        os << ",\"closure\":"; effects_obj_json(os, s.semantic.closure);
+        os << ",\"local\":";
+        effects_obj_json(os, s.semantic.local);
+        os << ",\"closure\":";
+        effects_obj_json(os, s.semantic.closure);
         os << ",\"structure\":{\"blocks\":" << s.structural.block_count
            << ",\"loops\":" << s.structural.loop_count
            << ",\"recursive\":" << (s.structural.recursive ? "true" : "false")
@@ -971,7 +1019,8 @@ void effects_json(std::ostream &os, const ir::IrModule &mod, Backend backend) {
     }
     os << "]";
 
-    // Lagunas de precision (cobertura + opacidad fundamental) para los diagramas.
+    // Lagunas de precision (cobertura + opacidad fundamental) para los
+    // diagramas.
     const EffectGaps &g = ea.gaps();
     os << ",\"gaps\":{\"total_top\":" << g.total_top << ",\"by_reason\":[";
     bool rfirst = true;
@@ -979,7 +1028,8 @@ void effects_json(std::ostream &os, const ir::IrModule &mod, Backend backend) {
         if (!rfirst) os << ",";
         rfirst = false;
         os << "{\"reason\":\"" << reason_name(kv.first) << "\""
-           << ",\"kind\":\"" << (reason_is_gap(kv.first) ? "gap" : "fundamental") << "\""
+           << ",\"kind\":\""
+           << (reason_is_gap(kv.first) ? "gap" : "fundamental") << "\""
            << ",\"count\":" << kv.second << "}";
     }
     os << "],\"unmodeled_ops\":[";

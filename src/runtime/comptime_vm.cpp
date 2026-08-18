@@ -27,13 +27,13 @@
 #include "runtime/manager_runtime.h"
 #include "runtime/runtime.h"
 #include "runtime/exception_runtime.h" // build_stack_trace del fallo
-#include "runtime/string_runtime.h" /*   : make_string_flat */
+#include "runtime/string_runtime.h"    /*   : make_string_flat */
 #include "loader/loader.h"
 #include "distrib/dist_runtime.h" /* dtor de VM destruye DistRuntime via unique_ptr */
 #include "jit/auto_jit.h"         /*   : eager-compile macros */
 #include "ffi/virtual_lib_registry.h" /* #3: resolver vrt:* en el JIT del CV */
-#include "jit/interp_jit_bridge.h" /* CTPE: enter_jit (invocacion directa) */
-#include "jit/jit_compiler.h" /* CompileResult */
+#include "jit/interp_jit_bridge.h"    /* CTPE: enter_jit (invocacion directa) */
+#include "jit/jit_compiler.h"         /* CompileResult */
 #include "jit/vreg_pipeline.h" /* CTPE: vreg_set_ctpe_safepoint_handler */
 
 #include <atomic>
@@ -54,7 +54,6 @@ std::string comptime_read_vm_string(uint64_t proc_ptr, uint64_t addr,
     proc->vm_mem.read_bytes(addr, buf.data(), len);
     return std::string(buf.data(), len);
 }
-
 
 /**
  * @brief Pimpl interno de @c ComptimeRuntime.  Contiene todo el
@@ -361,7 +360,7 @@ bool ComptimeRuntime::try_invoke_ctpe(const std::string &fn_name,
             if (saved_th == UINT32_MAX) jit::g_jit_threshold = 1;
             // El handler de safepoint (watchdog) lo activa el orquestador CTPE
             // (compiler.cpp) ANTES de load_macros_from_bytes -- porque main se
-            // JIT-compila al cargar el .velb, antes de este eager_compile.  Aqui
+            // JIT-compila al cargar el .velb, antes de este eager_compile. Aqui
             // solo compilamos; el codigo ya lleva los polls.
             try {
                 jit::CompileResult res = jit::eager_compile_function(
@@ -378,22 +377,23 @@ bool ComptimeRuntime::try_invoke_ctpe(const std::string &fn_name,
 
     // 1.5) Requerir JIT: CTPE solo ejecuta el programa si su entry (main)
     //      JIT-compilo.  El watchdog de tiempo vive en el poll de safepoint que
-    //      emite el JIT en cada back-edge; el interprete no lo tiene, asi que un
-    //      main NO-JIT-able podria colgar la compilacion sin abortar.  Si no hay
-    //      codigo nativo -> no plegar (fallback: corre en runtime normal).
+    //      emite el JIT en cada back-edge; el interprete no lo tiene, asi que
+    //      un main NO-JIT-able podria colgar la compilacion sin abortar.  Si no
+    //      hay codigo nativo -> no plegar (fallback: corre en runtime normal).
     auto pcit = macro_entry_pc_.find(fn_name);
     if (pcit == macro_entry_pc_.end()) return false;
     if (!impl_->jit_code_by_pc.count(pcit->second)) return false;
 
     // 2) Sandbox CTPE: DENEGAR las capacidades externas.  Cualquier op que las
-    //    use (CALLN/dlopen/spawn/msgsend-remoto/loadmod/...) trapea -> FatalError
-    //    -> el catch(...) de invoke_simple_macro devuelve false -> fallback.  Se
+    //    use (CALLN/dlopen/spawn/msgsend-remoto/loadmod/...) trapea ->
+    //    FatalError
+    //    -> el catch(...) de invoke_simple_macro devuelve false -> fallback. Se
     //    conserva MEM_HOST (acceso normal a objetos) y CLASSREG (inofensivo: el
     //    pre-filtro ya excluye la metaprogramacion).
-    const uint32_t deny =
-        loader::Caps::FS_READ | loader::Caps::FS_WRITE | loader::Caps::NET |
-        loader::Caps::FFI_CALL | loader::Caps::FFI_OPEN | loader::Caps::SPAWN |
-        loader::Caps::DISTRIB | loader::Caps::LOADMOD;
+    const uint32_t deny = loader::Caps::FS_READ | loader::Caps::FS_WRITE |
+                          loader::Caps::NET | loader::Caps::FFI_CALL |
+                          loader::Caps::FFI_OPEN | loader::Caps::SPAWN |
+                          loader::Caps::DISTRIB | loader::Caps::LOADMOD;
     const uint32_t saved_bits = exe->caps.bits;
     exe->caps.bits = saved_bits & ~deny;
 
@@ -429,14 +429,14 @@ bool ComptimeRuntime::try_invoke_ctpe(const std::string &fn_name,
     // Invocacion DIRECTA del codigo JIT: sin make_ready, sin scheduler y sin el
     // run-loop de la VM.  CTPE es JIT; el interprete solo es fallback.
     //
-    // Hay que replicar la red de recuperacion que el scheduler arma alrededor de
-    // `jit_entry_fn` (scheduler.cpp): sin ella, un throw del propio programa --o
-    // el longjmp con que el watchdog aborta desde el poll de safepoint-- escapa
-    // y se lleva por delante la compilacion entera.  Quitar el envoltorio de VM
-    // no puede significar quitar tambien esa red.
+    // Hay que replicar la red de recuperacion que el scheduler arma alrededor
+    // de `jit_entry_fn` (scheduler.cpp): sin ella, un throw del propio programa
+    // --o el longjmp con que el watchdog aborta desde el poll de safepoint--
+    // escapa y se lleva por delante la compilacion entera.  Quitar el
+    // envoltorio de VM no puede significar quitar tambien esa red.
     //
-    // `ok` es volatile: lo escribe la rama normal y lo lee codigo alcanzable por
-    // longjmp, donde una local no-volatile queda indeterminada.
+    // `ok` es volatile: lo escribe la rama normal y lo lee codigo alcanzable
+    // por longjmp, donde una local no-volatile queda indeterminada.
     volatile bool ok = false;
     out_r0 = 0;
     {
@@ -456,12 +456,13 @@ bool ComptimeRuntime::try_invoke_ctpe(const std::string &fn_name,
         proc->registers.regs[15].qword(args.size());
         proc->jit_entry_fn = nullptr; // no se pasa por el scheduler.
 
-        jit::JitFn jf = reinterpret_cast<jit::JitFn>(
-            impl_->jit_code_by_pc[pcit->second]);
+        jit::JitFn jf =
+            reinterpret_cast<jit::JitFn>(impl_->jit_code_by_pc[pcit->second]);
         proc->state.store(runtime::EXECUTE, std::memory_order_relaxed);
         proc->av_recovery_active = true;
         // setjmp == 0: ejecucion normal.  != 0: hubo longjmp (aborto del
-        // watchdog o fallo recuperado) -> no hay resultado fiable, no se pliega.
+        // watchdog o fallo recuperado) -> no hay resultado fiable, no se
+        // pliega.
         if (setjmp(proc->av_recovery_jmpbuf) == 0) {
             try {
                 (void)jit::enter_jit(jf, reinterpret_cast<vrt_proc *>(proc));
@@ -592,7 +593,7 @@ bool ComptimeRuntime::invoke_string_macro_memoized(
 }
 
 bool ComptimeRuntime::make_vm_string(const std::string &s,
-                                   uint64_t &out_handle) noexcept {
+                                     uint64_t &out_handle) noexcept {
     out_handle = 0;
     ensure_vm_initialized();
     if (impl_ == nullptr || impl_->proc == nullptr) return false;
@@ -621,7 +622,8 @@ bool ComptimeRuntime::make_vm_string(const std::string &s,
         so->length = (uint32_t)n;
         so->byte_len = (uint32_t)n;
         so->str_hash = 0; // 0 = sin calcular; lo cachea quien lo pida
-        if (n != 0) std::memcpy(payload + sizeof(loader::StringObject), s.data(), n);
+        if (n != 0)
+            std::memcpy(payload + sizeof(loader::StringObject), s.data(), n);
         out_handle = (uint64_t)h;
         return true;
     } catch (...) {
@@ -667,7 +669,8 @@ bool ComptimeRuntime::invoke_raw(const std::string &macro_name,
             std::memcpy(out_bytes.data(), src, n_bytes);
         }
 
-        for (int i = 0; i < 16; ++i) impl_->proc->registers.regs[i].qword(0);
+        for (int i = 0; i < 16; ++i)
+            impl_->proc->registers.regs[i].qword(0);
         return true;
     } catch (...) {
         return false;
@@ -700,9 +703,8 @@ bool ComptimeRuntime::invoke_string_macro(const std::string &macro_name,
          * estructura de arbol/vista.  Leerlo como FLAT daria basura (incl. NUL
          * bytes -> "caracter inesperado" al parsear el codigo generado).
          * Materializar a FLAT primero. */
-        gc::GcHandle handle =
-            runtime::flatten_string_public(impl_->proc,
-                                           static_cast<gc::GcHandle>(r0));
+        gc::GcHandle handle = runtime::flatten_string_public(
+            impl_->proc, static_cast<gc::GcHandle>(r0));
         uint8_t *payload = impl_->proc->gc_heap.deref(handle);
         if (!payload) return false;
 
@@ -759,17 +761,16 @@ bool ComptimeRuntime::invoke_string_macro(const std::string &macro_name,
     }
 }
 
-bool ComptimeRuntime::invoke_struct_macro(const std::string &macro_name,
-                                          const std::vector<uint64_t> &args,
-                                          size_t struct_size,
-                                          std::vector<uint8_t> &out_bytes) noexcept {
-    /* Una funcion que devuelve un struct por valor lo hace por SRET: el llamante
-     * aloca el buffer del resultado y lo pasa como primer parametro oculto
-     * (host_ptr), y la funcion lo rellena con `movh`.  Aqui hacemos de llamante:
-     * alocamos el buffer en memoria del proceso (out_bytes), no en la pila de la
-     * funcion -- que se libera al retornar --, lo anteponemos a los argumentos
-     * reales y ejecutamos.  Al ser out_bytes memoria ajena al GcHeap, el barrido
-     * de invoke_simple_macro no la toca. */
+bool ComptimeRuntime::invoke_struct_macro(
+    const std::string &macro_name, const std::vector<uint64_t> &args,
+    size_t struct_size, std::vector<uint8_t> &out_bytes) noexcept {
+    /* Una funcion que devuelve un struct por valor lo hace por SRET: el
+     * llamante aloca el buffer del resultado y lo pasa como primer parametro
+     * oculto (host_ptr), y la funcion lo rellena con `movh`.  Aqui hacemos de
+     * llamante: alocamos el buffer en memoria del proceso (out_bytes), no en la
+     * pila de la funcion -- que se libera al retornar --, lo anteponemos a los
+     * argumentos reales y ejecutamos.  Al ser out_bytes memoria ajena al
+     * GcHeap, el barrido de invoke_simple_macro no la toca. */
     /* El caller puede PRE-SEMBRAR out_bytes con los valores por defecto de los
      * campos: la semantica de un ctor es "defaults primero, cuerpo del ctor
      * encima" (igual que C++), asi que un campo que el ctor no toca debe
@@ -781,8 +782,8 @@ bool ComptimeRuntime::invoke_struct_macro(const std::string &macro_name,
     if (args.size() + 1 > 12) return false;
     std::vector<uint64_t> vm_args;
     vm_args.reserve(args.size() + 1);
-    vm_args.push_back(static_cast<uint64_t>(
-        reinterpret_cast<uintptr_t>(out_bytes.data())));
+    vm_args.push_back(
+        static_cast<uint64_t>(reinterpret_cast<uintptr_t>(out_bytes.data())));
     for (uint64_t a : args) {
         vm_args.push_back(a);
     }

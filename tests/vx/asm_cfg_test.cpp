@@ -12,13 +12,13 @@ using namespace vx;
 using vx::instr_db::Isa;
 
 static int g_checks = 0, g_fail = 0;
-#define CHECK(cond, msg)                                                        \
-    do {                                                                        \
-        ++g_checks;                                                             \
-        if (!(cond)) {                                                          \
-            ++g_fail;                                                           \
-            std::printf("  FAIL: %s (linea %d)\n", (msg), __LINE__);            \
-        }                                                                       \
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fail;                                                          \
+            std::printf("  FAIL: %s (linea %d)\n", (msg), __LINE__);           \
+        }                                                                      \
     } while (0)
 
 /// ¿El bloque @p b tiene a @p s como sucesor?
@@ -32,10 +32,9 @@ int main() {
 
     // --- 1) Bloque lineal (sin saltos): un solo bloque basico. ---
     {
-        AsmCfg c = build_asm_cfg(Isa::X86,
-                                 "mov rax, rdi\n"
-                                 "add rax, rsi\n"
-                                 "imul rax, rax\n");
+        AsmCfg c = build_asm_cfg(Isa::X86, "mov rax, rdi\n"
+                                           "add rax, rsi\n"
+                                           "imul rax, rax\n");
         /* Tres instrucciones MAS el nodo de salida sintetico que el
          * constructor anade a proposito: el bloque asm sale por el final -- por
          * caida de la ultima instruccion o por la rama no tomada de un salto
@@ -51,17 +50,18 @@ int main() {
     // --- 2) Rama condicional hacia adelante (if/else + merge). ---
     {
         AsmCfg c = build_asm_cfg(Isa::X86,
-                                 "cmp rax, rbx\n"     // B0
-                                 "jg .mayor\n"        // B0 termina: cond
-                                 "mov rcx, 0\n"       // B1 (fallthrough)
-                                 "jmp .fin\n"         // B1 termina: uncond
+                                 "cmp rax, rbx\n" // B0
+                                 "jg .mayor\n"    // B0 termina: cond
+                                 "mov rcx, 0\n"   // B1 (fallthrough)
+                                 "jmp .fin\n"     // B1 termina: uncond
                                  ".mayor:\n"
-                                 "mov rcx, 1\n"       // B2 (destino de jg)
+                                 "mov rcx, 1\n" // B2 (destino de jg)
                                  ".fin:\n"
-                                 "mov rax, rcx\n");   // B3 (merge)
+                                 "mov rax, rcx\n"); // B3 (merge)
         CHECK(c.blocks.size() == 4, "if/else: 4 bloques");
         // B0 (cmp+jg) -> B1 (fallthrough) y B2 (.mayor).
-        CHECK(c.blocks[0].term == AsmTerm::CondBranch, "B0 termina en rama cond");
+        CHECK(c.blocks[0].term == AsmTerm::CondBranch,
+              "B0 termina en rama cond");
         CHECK(c.blocks[0].succs.size() == 2, "B0: 2 sucesores");
         CHECK(has_succ(c, 0, 1) && has_succ(c, 0, 2), "B0 -> B1 y B2");
         // B1 (mov+jmp .fin) -> B3, sin fallthrough (jmp incondicional).
@@ -80,10 +80,10 @@ int main() {
     // --- 3) Bucle hacia atras (back-edge). ---
     {
         AsmCfg c = build_asm_cfg(Isa::X86,
-                                 "mov rcx, 10\n"     // B0
+                                 "mov rcx, 10\n" // B0
                                  ".loop:\n"
-                                 "dec rcx\n"          // B1 (destino del back-edge)
-                                 "jnz .loop\n");      // B1 termina: cond -> B1
+                                 "dec rcx\n"     // B1 (destino del back-edge)
+                                 "jnz .loop\n"); // B1 termina: cond -> B1
         // Los dos del bucle mas el bloque de salida (ver arriba): por el sale
         // la rama NO tomada del `jnz`.
         CHECK(c.blocks.size() == 3, "bucle: 2 bloques + la salida");
@@ -110,14 +110,14 @@ int main() {
     {
         AsmCfg c = build_asm_cfg(Isa::X86, "jmp rax\n");
         CHECK(c.has_indirect, "jmp rax: CFG impreciso");
-        CHECK(c.blocks[0].term == AsmTerm::Indirect, "jmp rax: terminador indirecto");
+        CHECK(c.blocks[0].term == AsmTerm::Indirect,
+              "jmp rax: terminador indirecto");
     }
 
     // --- 6) call retorna (fallthrough), no corta el bloque en aristas. ---
     {
-        AsmCfg c = build_asm_cfg(Isa::X86,
-                                 "call foo\n"
-                                 "add rax, 1\n");
+        AsmCfg c = build_asm_cfg(Isa::X86, "call foo\n"
+                                           "add rax, 1\n");
         // call+add pueden estar en el mismo bloque (call retorna).
         CHECK(c.blocks.size() == 1, "call: un solo bloque (retorna)");
         CHECK(!c.has_indirect, "call foo: no es indirecto");
@@ -126,17 +126,19 @@ int main() {
     // --- 7) arm64: cbz condicional + b incondicional. ---
     {
         AsmCfg c = build_asm_cfg(Isa::ARM64,
-                                 "cbz x0, .zero\n"   // B0 cond
-                                 "mov x1, #1\n"       // B1
-                                 "b .fin\n"           // B1 uncond
+                                 "cbz x0, .zero\n" // B0 cond
+                                 "mov x1, #1\n"    // B1
+                                 "b .fin\n"        // B1 uncond
                                  ".zero:\n"
-                                 "mov x1, #0\n"       // B2
+                                 "mov x1, #0\n" // B2
                                  ".fin:\n"
-                                 "ret\n");            // B3
+                                 "ret\n"); // B3
         CHECK(c.blocks.size() == 4, "arm64: 4 bloques");
         CHECK(c.blocks[0].term == AsmTerm::CondBranch, "arm64 cbz: rama cond");
-        CHECK(has_succ(c, 0, 1) && has_succ(c, 0, 2), "arm64 cbz -> fall + .zero");
-        CHECK(c.blocks[1].term == AsmTerm::UncondJump, "arm64 b: incondicional");
+        CHECK(has_succ(c, 0, 1) && has_succ(c, 0, 2),
+              "arm64 cbz -> fall + .zero");
+        CHECK(c.blocks[1].term == AsmTerm::UncondJump,
+              "arm64 b: incondicional");
         CHECK(has_succ(c, 1, 3), "arm64 b .fin -> B3");
         CHECK(c.blocks[3].term == AsmTerm::Ret, "arm64 ret corta el flujo");
     }
@@ -145,7 +147,8 @@ int main() {
     {
         std::string tgt;
         AsmTerm t = asm_classify_term(Isa::ARM64, "b.eq .lbl", tgt);
-        CHECK(t == AsmTerm::CondBranch && tgt == ".lbl", "arm64 b.eq -> cond .lbl");
+        CHECK(t == AsmTerm::CondBranch && tgt == ".lbl",
+              "arm64 b.eq -> cond .lbl");
         AsmTerm bl = asm_classify_term(Isa::ARM64, "bl fn", tgt);
         CHECK(bl == AsmTerm::Call, "arm64 bl -> call");
     }
@@ -157,7 +160,8 @@ int main() {
                       AsmTerm::CondBranch &&
                   tgt == ".eq",
               "riscv beq -> cond .eq");
-        CHECK(asm_classify_term(Isa::RISCV, "j .fin", tgt) == AsmTerm::UncondJump,
+        CHECK(asm_classify_term(Isa::RISCV, "j .fin", tgt) ==
+                  AsmTerm::UncondJump,
               "riscv j -> uncond");
         CHECK(asm_classify_term(Isa::RISCV, "ret", tgt) == AsmTerm::Ret,
               "riscv ret");

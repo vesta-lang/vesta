@@ -76,18 +76,21 @@ int main() {
     {
         vxdbg::PackNodeStore store(raiz, nullptr);
         bool todos = true;
-        for (const auto &n : originales) todos = store.put(n) && todos;
+        for (const auto &n : originales)
+            todos = store.put(n) && todos;
         comprueba(todos, "se aceptan los " + std::to_string(N) + " nodos");
         comprueba(store.pendientes() == N, "quedan pendientes hasta volcar");
         comprueba(store.volcar(), "el volcado escribe el paquete");
-        comprueba(store.pendientes() == 0, "tras volcar no queda nada pendiente");
+        comprueba(store.pendientes() == 0,
+                  "tras volcar no queda nada pendiente");
     }
 
     // Un solo fichero de paquete: esa es toda la razon de ser de esto.
     size_t n_packs = 0;
     for (const auto &e : stdfs::directory_iterator(raiz + "/packs", ec))
         if (e.is_regular_file(ec)) ++n_packs;
-    comprueba(n_packs == 1, "los " + std::to_string(N) + " nodos caben en UN fichero");
+    comprueba(n_packs == 1,
+              "los " + std::to_string(N) + " nodos caben en UN fichero");
 
     // --- releer, con OTRO almacen (proceso distinto en la practica) --------
     {
@@ -110,7 +113,8 @@ int main() {
         vxdbg::ContentHash inventada;
         inventada.lo = 0xDEADBEEF;
         inventada.hi = 0xC0FFEE;
-        comprueba(!lector.get(inventada, fuera), "una huella que no existe no devuelve nada");
+        comprueba(!lector.get(inventada, fuera),
+                  "una huella que no existe no devuelve nada");
     }
 
     // --- lo que ya esta NO se vuelve a escribir ----------------------------
@@ -121,7 +125,8 @@ int main() {
     // poder borrarse porque conservan entradas vivas.
     {
         vxdbg::PackNodeStore otra(raiz, nullptr);
-        for (const auto &n : originales) otra.put(n);
+        for (const auto &n : originales)
+            otra.put(n);
         comprueba(otra.pendientes() == 0,
                   "volver a guardar lo mismo no deja NADA pendiente");
         comprueba(otra.volcar(), "y volcar no falla");
@@ -148,8 +153,9 @@ int main() {
         size_t encontrados = 0;
         for (const auto &orig : originales)
             if (roto.contains(orig.header.hash)) ++encontrados;
-        comprueba(encontrados == 0,
-                  "con el indice alterado NO se sirve nada (se descarta el paquete)");
+        comprueba(
+            encontrados == 0,
+            "con el indice alterado NO se sirve nada (se descarta el paquete)");
     }
 
     stdfs::remove_all(raiz, ec);
@@ -195,7 +201,8 @@ int main() {
         const size_t borrados = store.reclamar(vivas);
         comprueba(borrados == PACKS / 5,
                   "se borran SOLO los " + std::to_string(PACKS / 5) +
-                      " sin nada vivo (borrados: " + std::to_string(borrados) + ")");
+                      " sin nada vivo (borrados: " + std::to_string(borrados) +
+                      ")");
 
         // La comprobacion que de verdad importa: barrer de mas no da error.
         size_t vivos_ok = 0;
@@ -206,10 +213,12 @@ int main() {
                 ++vivos_ok;
         }
         comprueba(vivos_ok == vivas.size(),
-                  "TODO lo vivo sigue ahi tras barrer (" + std::to_string(vivos_ok) +
-                      "/" + std::to_string(vivas.size()) + ")");
+                  "TODO lo vivo sigue ahi tras barrer (" +
+                      std::to_string(vivos_ok) + "/" +
+                      std::to_string(vivas.size()) + ")");
 
-        comprueba(store.reclamar(vivas) == 0, "barrer otra vez no borra nada mas");
+        comprueba(store.reclamar(vivas) == 0,
+                  "barrer otra vez no borra nada mas");
 
         comprueba(store.reclamar({}) == PACKS - PACKS / 5,
                   "sin nada vivo se borran todos los que quedaban");
@@ -220,7 +229,8 @@ int main() {
     }
     stdfs::remove_all(raiz, ec);
 
-    std::printf(fallos == 0 ? "\n[paquetes] TODO OK\n" : "\n[paquetes] %d FALLOS\n",
+    std::printf(fallos == 0 ? "\n[paquetes] TODO OK\n"
+                            : "\n[paquetes] %d FALLOS\n",
                 fallos);
     return fallos == 0 ? 0 : 1;
 }

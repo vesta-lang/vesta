@@ -59,9 +59,9 @@ EntityView DebugResolver::describe_entity(LanguageEntityId id) const {
         primero = false;
         if (base.empty()) break;
         if (!vistos.insert(base).second) {
-            // Ya se paso por aqui: los datos traen un ciclo.  Se deja constancia
-            // en vez de callarlo, porque una jerarquia circular es un fallo de
-            // quien la genero y sin decirlo nadie lo buscaria.
+            // Ya se paso por aqui: los datos traen un ciclo.  Se deja
+            // constancia en vez de callarlo, porque una jerarquia circular es
+            // un fallo de quien la genero y sin decirlo nadie lo buscaria.
             v.cyclic = true;
             break;
         }
@@ -154,9 +154,9 @@ void DebugResolver::resolve_variables(const StatementNode &st,
         vv.is_parameter = vn->is_parameter;
         if (const LanguageEntity *t = nodes_.entity(vn->type))
             vv.type_name = t->name;
-        // Donde vive depende del backend, asi que sale de su mapa y no del nodo.
-        // Se consulta por POSICION dentro de la funcion: los tramos de vida no
-        // se pueden expresar con huellas, que no se ordenan.
+        // Donde vive depende del backend, asi que sale de su mapa y no del
+        // nodo. Se consulta por POSICION dentro de la funcion: los tramos de
+        // vida no se pueden expresar con huellas, que no se ordenan.
         uint32_t pos = 0;
         if (nodes_.position_of(s.ir_instrs.front(), pos)) {
             if (const VariableMap *vm = nodes_.variable_map(vid)) {
@@ -169,7 +169,8 @@ void DebugResolver::resolve_variables(const StatementNode &st,
     }
 }
 
-ResolvedSite DebugResolver::resolve(uint64_t address, bool want_variables) const {
+ResolvedSite DebugResolver::resolve(uint64_t address,
+                                    bool want_variables) const {
     ResolvedSite s;
     s.address = address;
 
@@ -188,8 +189,8 @@ ResolvedSite DebugResolver::resolve(uint64_t address, bool want_variables) const
     return s;
 }
 
-std::vector<ResolvedFrame> DebugResolver::resolve_stack(
-    const std::vector<uint64_t> &addresses) const {
+std::vector<ResolvedFrame>
+DebugResolver::resolve_stack(const std::vector<uint64_t> &addresses) const {
     std::vector<ResolvedFrame> out;
     out.reserve(addresses.size());
     for (uint64_t a : addresses) {

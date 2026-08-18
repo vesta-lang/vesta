@@ -22,13 +22,13 @@ using namespace codegen::rbank;
 static int g_checks = 0;
 static int g_fail = 0;
 
-#define CHECK(cond, msg)                                                     \
-    do {                                                                     \
-        ++g_checks;                                                          \
-        if (!(cond)) {                                                       \
-            ++g_fail;                                                        \
-            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);        \
-        }                                                                    \
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fail;                                                          \
+            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);          \
+        }                                                                      \
     } while (0)
 
 int main() {
@@ -36,13 +36,19 @@ int main() {
 
     std::printf("\n[is_const -> rematerializable]\n");
     {
-        ir::IrValue v; v.id = 0; v.type = ir::IrType::I64; v.is_const = true;
+        ir::IrValue v;
+        v.id = 0;
+        v.type = ir::IrType::I64;
+        v.is_const = true;
         ValueRequirements r;
         populate_const_requirements(r, v);
         CHECK(r.rematerializable, "const no marca rematerializable");
     }
     {
-        ir::IrValue v; v.id = 1; v.type = ir::IrType::I64; v.is_const = false;
+        ir::IrValue v;
+        v.id = 1;
+        v.type = ir::IrType::I64;
+        v.is_const = false;
         ValueRequirements r;
         populate_const_requirements(r, v);
         CHECK(!r.rematerializable, "no-const marca rematerializable");
@@ -50,14 +56,20 @@ int main() {
 
     std::printf("\n[solo toca rematerializable]\n");
     {
-        ir::IrValue v; v.is_const = true;
+        ir::IrValue v;
+        v.is_const = true;
         ValueRequirements r;
-        r.value_id = 9; r.crosses_call = true; r.is_gc = true; r.loop_depth = 3;
-        r.cls = ResourceClass::FP_VECTOR; r.width = ViewWidth::W8;
+        r.value_id = 9;
+        r.crosses_call = true;
+        r.is_gc = true;
+        r.loop_depth = 3;
+        r.cls = ResourceClass::FP_VECTOR;
+        r.width = ViewWidth::W8;
         populate_const_requirements(r, v);
         CHECK(r.rematerializable, "no actualizo rematerializable");
-        CHECK(r.value_id == 9 && r.crosses_call && r.is_gc && r.loop_depth == 3 &&
-              r.cls == ResourceClass::FP_VECTOR && r.width == ViewWidth::W8,
+        CHECK(r.value_id == 9 && r.crosses_call && r.is_gc &&
+                  r.loop_depth == 3 && r.cls == ResourceClass::FP_VECTOR &&
+                  r.width == ViewWidth::W8,
               "el ConstAdapter toco campos ajenos");
     }
 

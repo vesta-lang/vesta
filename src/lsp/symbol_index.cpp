@@ -72,8 +72,7 @@ const char *symbol_kind_name(SymbolKind k) {
     case SymbolKind::EnumVariant: return "variante de enum";
     case SymbolKind::Concept: return "concepto";
     case SymbolKind::Unknown:
-    default:
-        return "simbolo";
+    default: return "simbolo";
     }
 }
 
@@ -117,10 +116,8 @@ std::vector<LexTok> lex_all(const std::string &text,
         size_t produced = 0;
         for (;;) {
             vx::Token tok = lex.next();
-            if (tok.kind == vx::TokenKind::END_OF_FILE)
-                break;
-            if (++produced > kMaxTokens)
-                break;
+            if (tok.kind == vx::TokenKind::END_OF_FILE) break;
+            if (++produced > kMaxTokens) break;
             LexTok t;
             t.kind = tok.kind;
             t.lexeme = std::move(tok.lexeme);
@@ -142,16 +139,14 @@ std::vector<LexTok> lex_all(const std::string &text,
  * y los tipos de los parametros se omiten para mantenerlo compacto y robusto
  * frente a TypeNode complejos.
  */
-std::string make_signature(
-    const std::string &name,
-    const std::vector<std::unique_ptr<vx::ast::ParamDecl>> &params) {
+std::string
+make_signature(const std::string &name,
+               const std::vector<std::unique_ptr<vx::ast::ParamDecl>> &params) {
     std::string sig = name;
     sig += "(";
     for (size_t i = 0; i < params.size(); ++i) {
-        if (i)
-            sig += ", ";
-        if (params[i])
-            sig += params[i]->name;
+        if (i) sig += ", ";
+        if (params[i]) sig += params[i]->name;
     }
     sig += ")";
     return sig;
@@ -179,31 +174,27 @@ void collect_decl_names(const vx::ast::ModuleNode &mod,
     using namespace vx::ast;
 
     // Helper: registrar parametros de una lista.
-    auto add_params =
-        [&](const std::vector<std::unique_ptr<ParamDecl>> &params,
-            const std::string &owner) {
-            for (const auto &p : params) {
-                if (!p || p->name.empty())
-                    continue;
-                DeclName d;
-                d.name = p->name;
-                d.kind = SymbolKind::Parameter;
-                d.line = p->loc.line;
-                d.container = owner;
-                out.push_back(std::move(d));
-            }
-        };
+    auto add_params = [&](const std::vector<std::unique_ptr<ParamDecl>> &params,
+                          const std::string &owner) {
+        for (const auto &p : params) {
+            if (!p || p->name.empty()) continue;
+            DeclName d;
+            d.name = p->name;
+            d.kind = SymbolKind::Parameter;
+            d.line = p->loc.line;
+            d.container = owner;
+            out.push_back(std::move(d));
+        }
+    };
 
     for (const auto &node : mod.decls) {
-        if (!node)
-            continue;
+        if (!node) continue;
         switch (node->kind) {
         case NodeKind::FunctionDecl: {
             // ClassMethodDecl tambien usa NodeKind::FunctionDecl, pero a nivel
             // top-level solo aparecen FunctionDecl reales.
             auto *d = static_cast<const FunctionDecl *>(node.get());
-            if (d->name.empty())
-                break;
+            if (d->name.empty()) break;
             DeclName dn;
             dn.name = d->name;
             dn.kind = SymbolKind::Function;
@@ -215,8 +206,7 @@ void collect_decl_names(const vx::ast::ModuleNode &mod,
         }
         case NodeKind::ExternFnDecl: {
             auto *d = static_cast<const ExternFnDecl *>(node.get());
-            if (d->name.empty())
-                break;
+            if (d->name.empty()) break;
             DeclName dn;
             dn.name = d->name;
             dn.kind = SymbolKind::Function;
@@ -229,8 +219,7 @@ void collect_decl_names(const vx::ast::ModuleNode &mod,
         }
         case NodeKind::GlobalVarDecl: {
             auto *d = static_cast<const GlobalVarDecl *>(node.get());
-            if (d->name.empty())
-                break;
+            if (d->name.empty()) break;
             DeclName dn;
             dn.name = d->name;
             dn.kind = SymbolKind::Variable;
@@ -240,8 +229,7 @@ void collect_decl_names(const vx::ast::ModuleNode &mod,
         }
         case NodeKind::TypeAliasDecl: {
             auto *d = static_cast<const TypeAliasDecl *>(node.get());
-            if (d->name.empty())
-                break;
+            if (d->name.empty()) break;
             DeclName dn;
             dn.name = d->name;
             dn.kind = SymbolKind::TypeAlias;
@@ -260,8 +248,7 @@ void collect_decl_names(const vx::ast::ModuleNode &mod,
             }
             // Campos del struct.
             for (const auto &f : d->fields) {
-                if (f.name.empty())
-                    continue;
+                if (f.name.empty()) continue;
                 DeclName dn;
                 dn.name = f.name;
                 dn.kind = SymbolKind::Field;
@@ -271,8 +258,7 @@ void collect_decl_names(const vx::ast::ModuleNode &mod,
             }
             // Metodos del struct.
             for (const auto &m : d->methods) {
-                if (!m || m->name.empty())
-                    continue;
+                if (!m || m->name.empty()) continue;
                 DeclName dn;
                 dn.name = m->name;
                 dn.kind = SymbolKind::Method;
@@ -294,8 +280,7 @@ void collect_decl_names(const vx::ast::ModuleNode &mod,
                 out.push_back(std::move(dn));
             }
             for (const auto &v : d->variants) {
-                if (v.name.empty())
-                    continue;
+                if (v.name.empty()) continue;
                 DeclName dn;
                 dn.name = v.name;
                 dn.kind = SymbolKind::EnumVariant;
@@ -315,8 +300,7 @@ void collect_decl_names(const vx::ast::ModuleNode &mod,
                 out.push_back(std::move(dn));
             }
             for (const auto &f : d->fields) {
-                if (f.name.empty())
-                    continue;
+                if (f.name.empty()) continue;
                 DeclName dn;
                 dn.name = f.name;
                 dn.kind = SymbolKind::Field;
@@ -325,8 +309,7 @@ void collect_decl_names(const vx::ast::ModuleNode &mod,
                 out.push_back(std::move(dn));
             }
             for (const auto &m : d->methods) {
-                if (!m || m->name.empty())
-                    continue;
+                if (!m || m->name.empty()) continue;
                 DeclName dn;
                 dn.name = m->name;
                 dn.kind = SymbolKind::Method;
@@ -350,8 +333,7 @@ void collect_decl_names(const vx::ast::ModuleNode &mod,
                 if (!d->type_params.empty()) {
                     sig += "<";
                     for (size_t i = 0; i < d->type_params.size(); ++i) {
-                        if (i)
-                            sig += ", ";
+                        if (i) sig += ", ";
                         sig += d->type_params[i];
                     }
                     sig += ">";
@@ -361,8 +343,7 @@ void collect_decl_names(const vx::ast::ModuleNode &mod,
             }
             break;
         }
-        default:
-            break;
+        default: break;
         }
     }
 }
@@ -392,8 +373,7 @@ DocSymbols build_doc_symbols(const std::string &text,
         vx::Lexer lex(text, filename, diags);
         vx::Parser parser(lex, diags);
         std::unique_ptr<vx::ast::ModuleNode> mod = parser.parse_program();
-        if (mod)
-            collect_decl_names(*mod, names);
+        if (mod) collect_decl_names(*mod, names);
     } catch (...) {
         // AST parcial: seguimos solo con lo recolectado (posiblemente nada).
     }
@@ -409,15 +389,12 @@ DocSymbols build_doc_symbols(const std::string &text,
         size_t best = toks.size();
         uint32_t best_dist = 0xffffffffu;
         for (size_t i = 0; i < toks.size(); ++i) {
-            if (used[i])
-                continue;
+            if (used[i]) continue;
             const LexTok &t = toks[i];
-            if (t.kind != vx::TokenKind::IDENTIFIER)
-                continue;
-            if (t.lexeme != dn.name)
-                continue;
-            uint32_t dist = (t.line >= dn.line) ? (t.line - dn.line)
-                                                : (dn.line - t.line);
+            if (t.kind != vx::TokenKind::IDENTIFIER) continue;
+            if (t.lexeme != dn.name) continue;
+            uint32_t dist =
+                (t.line >= dn.line) ? (t.line - dn.line) : (dn.line - t.line);
             if (dist < best_dist) {
                 best_dist = dist;
                 best = i;
@@ -447,12 +424,9 @@ namespace {
 
 /// Decodifica un nibble hexadecimal (0..15) o -1 si no es valido.
 int hex_nibble(char c) {
-    if (c >= '0' && c <= '9')
-        return c - '0';
-    if (c >= 'a' && c <= 'f')
-        return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F')
-        return c - 'A' + 10;
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
     return -1;
 }
 
@@ -495,8 +469,7 @@ std::string fs_path_to_uri(const std::string &fs_path) {
     // Normalizar barras invertidas a barras.
     std::string p = fs_path;
     for (char &c : p) {
-        if (c == '\\')
-            c = '/';
+        if (c == '\\') c = '/';
     }
     // Percent-encoding minimo: codificar espacios y unos pocos caracteres
     // problematicos; el resto se deja (suficiente para rutas locales).
@@ -517,8 +490,7 @@ std::string fs_path_to_uri(const std::string &fs_path) {
     }
     // En Windows la ruta empieza por la letra de unidad (C:/...): anteponer
     // la barra para formar file:///C:/...  En POSIX la ruta ya empieza por /.
-    if (!enc.empty() && enc[0] == '/')
-        return "file://" + enc;
+    if (!enc.empty() && enc[0] == '/') return "file://" + enc;
     return "file:///" + enc;
 }
 
@@ -545,8 +517,7 @@ bool is_skipped_dir(const std::string &name) {
 bool has_vx_ext(const std::string &name) {
     const char *ext = ".vx";
     const size_t el = std::strlen(ext);
-    return name.size() > el &&
-           name.compare(name.size() - el, el, ext) == 0;
+    return name.size() > el && name.compare(name.size() - el, el, ext) == 0;
 }
 
 /**
@@ -554,52 +525,42 @@ bool has_vx_ext(const std::string &name) {
  *        @p out, saltando directorios de build/cache y respetando el cap.
  */
 void collect_vx_files(const std::string &dir, std::vector<std::string> &out) {
-    if (out.size() >= kMaxIndexedFiles)
-        return;
+    if (out.size() >= kMaxIndexedFiles) return;
 #if defined(_WIN32)
     std::string pattern = dir + "\\*";
     WIN32_FIND_DATAA fd;
     HANDLE h = FindFirstFileA(pattern.c_str(), &fd);
-    if (h == INVALID_HANDLE_VALUE)
-        return;
+    if (h == INVALID_HANDLE_VALUE) return;
     do {
         std::string name = fd.cFileName;
-        if (name == "." || name == "..")
-            continue;
+        if (name == "." || name == "..") continue;
         std::string full = dir + "\\" + name;
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            if (is_skipped_dir(name))
-                continue;
+            if (is_skipped_dir(name)) continue;
             collect_vx_files(full, out);
         } else if (has_vx_ext(name)) {
             out.push_back(full);
         }
-        if (out.size() >= kMaxIndexedFiles)
-            break;
+        if (out.size() >= kMaxIndexedFiles) break;
     } while (FindNextFileA(h, &fd));
     FindClose(h);
 #else
     DIR *d = opendir(dir.c_str());
-    if (!d)
-        return;
+    if (!d) return;
     struct dirent *ent;
     while ((ent = readdir(d)) != nullptr) {
         std::string name = ent->d_name;
-        if (name == "." || name == "..")
-            continue;
+        if (name == "." || name == "..") continue;
         std::string full = dir + "/" + name;
         struct stat st;
-        if (stat(full.c_str(), &st) != 0)
-            continue;
+        if (stat(full.c_str(), &st) != 0) continue;
         if (S_ISDIR(st.st_mode)) {
-            if (is_skipped_dir(name))
-                continue;
+            if (is_skipped_dir(name)) continue;
             collect_vx_files(full, out);
         } else if (S_ISREG(st.st_mode) && has_vx_ext(name)) {
             out.push_back(full);
         }
-        if (out.size() >= kMaxIndexedFiles)
-            break;
+        if (out.size() >= kMaxIndexedFiles) break;
     }
     closedir(d);
 #endif
@@ -627,18 +588,16 @@ void WorkspaceIndex::erase_uri_entries(const std::string &uri) {
     // Quitar de defs_ y refs_ todas las entradas cuyo uri coincida.
     for (auto &kv : defs_) {
         auto &v = kv.second;
-        v.erase(std::remove_if(v.begin(), v.end(),
-                               [&](const WorkspaceLocation &l) {
-                                   return l.uri == uri;
-                               }),
+        v.erase(std::remove_if(
+                    v.begin(), v.end(),
+                    [&](const WorkspaceLocation &l) { return l.uri == uri; }),
                 v.end());
     }
     for (auto &kv : refs_) {
         auto &v = kv.second;
-        v.erase(std::remove_if(v.begin(), v.end(),
-                               [&](const WorkspaceLocation &l) {
-                                   return l.uri == uri;
-                               }),
+        v.erase(std::remove_if(
+                    v.begin(), v.end(),
+                    [&](const WorkspaceLocation &l) { return l.uri == uri; }),
                 v.end());
     }
 }
@@ -674,25 +633,21 @@ void WorkspaceIndex::index_content(const std::string &uri,
 
 void WorkspaceIndex::index_path(const std::string &fs_path) {
     std::string text;
-    if (!read_file(fs_path, text))
-        return; // fichero ilegible: saltarlo.
+    if (!read_file(fs_path, text)) return; // fichero ilegible: saltarlo.
     const std::string uri = fs_path_to_uri(fs_path);
     index_content(uri, fs_path, text);
 }
 
 void WorkspaceIndex::ensure_built() {
-    if (built_)
-        return;
+    if (built_) return;
     built_ = true; // marcar antes para que un fallo no reintente en bucle.
     std::vector<std::string> files;
     for (const auto &root : roots_) {
-        if (root.empty())
-            continue;
+        if (root.empty()) continue;
         collect_vx_files(root, files);
     }
     for (const auto &f : files) {
-        if (defs_.size() + refs_.size() > 0 && f.empty())
-            continue;
+        if (defs_.size() + refs_.size() > 0 && f.empty()) continue;
         try {
             index_path(f);
         } catch (...) {
@@ -720,16 +675,14 @@ void WorkspaceIndex::remove_file(const std::string &uri) {
 std::vector<WorkspaceLocation>
 WorkspaceIndex::defs_for(const std::string &name) const {
     auto it = defs_.find(name);
-    if (it == defs_.end())
-        return {};
+    if (it == defs_.end()) return {};
     return it->second;
 }
 
 std::vector<WorkspaceLocation>
 WorkspaceIndex::refs_for(const std::string &name) const {
     auto it = refs_.find(name);
-    if (it == refs_.end())
-        return {};
+    if (it == refs_.end()) return {};
     return it->second;
 }
 
@@ -740,8 +693,7 @@ void WorkspaceIndex::for_each_def_name(
     // definicion de cada nombre (kind + firma).  El kind de un nombre puede
     // variar entre ficheros homonimos; para el completado basta el primero.
     for (const auto &kv : defs_) {
-        if (kv.second.empty())
-            continue;
+        if (kv.second.empty()) continue;
         const WorkspaceLocation &first = kv.second.front();
         fn(kv.first, first.kind, first.signature);
     }

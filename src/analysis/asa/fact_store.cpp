@@ -7,7 +7,8 @@
 
 /**
  * @file analysis/asa/fact_store.cpp
- * @brief Implementacion del almacen de hechos (ver @c analysis/asa/fact_store.h).
+ * @brief Implementacion del almacen de hechos (ver @c
+ * analysis/asa/fact_store.h).
  */
 
 #include "analysis/asa/fact_store.h"

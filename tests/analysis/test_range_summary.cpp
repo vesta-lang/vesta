@@ -10,9 +10,9 @@
  * @brief Pruebas de los rangos que cruzan la frontera de una funcion.
  *
  * Cada prueba EXIGE que el resumen haga algo.  Un test que pasa igual con el
- * analisis apagado no prueba el analisis: prueba que no estorba, y con el tiempo
- * se pudre sin que nadie se entere.  Por eso casi todas comparan contra el
- * mismo programa analizado SIN resumenes, y piden que la respuesta sea
+ * analisis apagado no prueba el analisis: prueba que no estorba, y con el
+ * tiempo se pudre sin que nadie se entere.  Por eso casi todas comparan contra
+ * el mismo programa analizado SIN resumenes, y piden que la respuesta sea
  * estrictamente mejor.
  *
  * Y el reves tambien se prueba: cuando de verdad falta informacion -- la
@@ -111,7 +111,8 @@ static void probar_llamadas_directas() {
     }
 
     const RangeSummaries s = compute_range_summaries(mod);
-    check(s.convergio, "directas: el punto fijo del grafo de llamadas converge");
+    check(s.convergio,
+          "directas: el punto fijo del grafo de llamadas converge");
     check(s.buscar("destino") != nullptr && s.buscar("destino")->cerrada,
           "directas: 'destino' es cerrada -- se ven todos sus llamantes");
     check(es(param_de(s, "destino", 0), kI32, 3, 7),
@@ -124,7 +125,8 @@ static void probar_llamadas_directas() {
     const IrFacts h = build_ir_facts(d);
     const RangeFacts sin = compute_ranges(d, h);
     check(es(sin.at(d.params[0]), kI32, INT32_MIN, INT32_MAX),
-          "directas: SIN resumen el parametro es todo el tipo (el analisis hace falta)");
+          "directas: SIN resumen el parametro es todo el tipo (el analisis "
+          "hace falta)");
     const RangeFacts con = compute_ranges(d, h, RangeOptions{}, &s);
     check(es(con.at(d.params[0]), kI32, 3, 7),
           "directas: CON resumen el motor ya lo ve acotado");
@@ -157,7 +159,8 @@ static void probar_mundo_abierto() {
     check(s.buscar("destino") != nullptr && !s.buscar("destino")->cerrada,
           "abierto: guardar la direccion en memoria abre la funcion");
     check(es(param_de(s, "destino", 0), kI32, INT32_MIN, INT32_MAX),
-          "abierto: su parametro vale lo que su tipo, aunque la unica llamada VISIBLE pase 3");
+          "abierto: su parametro vale lo que su tipo, aunque la unica llamada "
+          "VISIBLE pase 3");
 
     // Un punto de entrada tampoco se estrecha: le llaman desde fuera.
     check(s.buscar("main") != nullptr && !s.buscar("main")->cerrada,
@@ -197,13 +200,16 @@ static void probar_indirecta_resuelta() {
 
     const DireccionTomada d = seguir_direccion(mod, "destino");
     check(d.tomada && d.todas_se_ven && d.indirectas.size() == 1,
-          "indirecta: la direccion se toma, pero TODOS sus usos son llamadas visibles");
+          "indirecta: la direccion se toma, pero TODOS sus usos son llamadas "
+          "visibles");
 
     const RangeSummaries s = compute_range_summaries(mod);
     check(s.buscar("destino") != nullptr && s.buscar("destino")->cerrada,
-          "indirecta: tomar la direccion NO abre la funcion si se ve donde se llama");
-    check(es(param_de(s, "destino", 0), kI32, 5, 5),
-          "indirecta: y el argumento de la llamada indirecta llega al parametro");
+          "indirecta: tomar la direccion NO abre la funcion si se ve donde se "
+          "llama");
+    check(
+        es(param_de(s, "destino", 0), kI32, 5, 5),
+        "indirecta: y el argumento de la llamada indirecta llega al parametro");
     check(es(s.buscar("destino")->ret, kI32, 5, 5),
           "indirecta: el retorno se sigue igual");
 }
@@ -228,7 +234,8 @@ static void probar_recursion() {
         const ir::IrValueId c = fn.new_value(ir::IrType::BOOL);
         emitir(fn, b0, ir::IrOp::CMP_LE, c, {n, cero});
         {
-            ir::IrInstr &br = emitir(fn, b0, ir::IrOp::BR_COND, ir::IR_NO_VALUE, {c});
+            ir::IrInstr &br =
+                emitir(fn, b0, ir::IrOp::BR_COND, ir::IR_NO_VALUE, {c});
             br.target_block = bfin;
             br.false_block = bsig;
         }
@@ -256,13 +263,15 @@ static void probar_recursion() {
     const RangeSummaries s = compute_range_summaries(mod);
     check(s.convergio, "recursion: el punto fijo TERMINA");
     const FnRangeSummary *f = s.buscar("baja");
-    check(f != nullptr && f->cerrada, "recursion: llamarse a si misma no la abre");
+    check(f != nullptr && f->cerrada,
+          "recursion: llamarse a si misma no la abre");
     /* Lo que se exige no es un intervalo concreto -- el ensanchamiento puede
      * soltar la cota inferior -- sino que el resultado siga siendo CIERTO: el
      * 10 de la llamada de fuera esta dentro, y el retorno contiene al 0. */
     const ValueRange p = param_de(s, "baja", 0);
     check(p.acotada() && p.lo() <= 10 && p.hi() >= 10,
-          "recursion: el parametro contiene el valor con el que se llama de fuera");
+          "recursion: el parametro contiene el valor con el que se llama de "
+          "fuera");
     check(f->ret.acotada() && f->ret.lo() <= 0 && f->ret.hi() >= 0,
           "recursion: el retorno contiene el 0 del caso base");
 }

@@ -30,13 +30,16 @@ bool may_alias(const AbstractLoc &a, const AbstractLoc &b) {
     if (a.kind != b.kind) return false;
     // Misma clase: el id GENERICO aliasa cualquier sitio de la clase.
     if (a.id == LOC_GENERIC || b.id == LOC_GENERIC) return true;
-    // Raices concretas distintas -> disjuntas (dos ALLOCAs, dos alloc-sites...).
+    // Raices concretas distintas -> disjuntas (dos ALLOCAs, dos
+    // alloc-sites...).
     if (a.id != b.id) return false;
     // MISMA raiz concreta: aliasan solo si sus rangos de bytes se SOLAPAN.  Con
-    // width==0 (ancho desconocido = objeto entero) no se puede probar disyuncion
+    // width==0 (ancho desconocido = objeto entero) no se puede probar
+    // disyuncion
     // -> conservador (solapan).  Refinamiento sobre el modelo base-only.
     if (a.width <= 0 || b.width <= 0) return true;
-    // Solapamiento de [off, off+width): a.off < b.off+b.width && b.off < a.off+a.width.
+    // Solapamiento de [off, off+width): a.off < b.off+b.width && b.off <
+    // a.off+a.width.
     return a.off < b.off + b.width && b.off < a.off + a.width;
 }
 
@@ -45,11 +48,13 @@ bool must_alias(const AbstractLoc &a, const AbstractLoc &b) {
     // width > 0.  (width==0 = objeto entero -> no se puede afirmar "exactamente
     // los mismos bytes").
     if (!a.concrete() || !b.concrete()) return false;
-    return a.kind == b.kind && a.id == b.id && a.off == b.off &&
-           a.width > 0 && a.width == b.width;
+    return a.kind == b.kind && a.id == b.id && a.off == b.off && a.width > 0 &&
+           a.width == b.width;
 }
 
-bool no_alias(const AbstractLoc &a, const AbstractLoc &b) { return !may_alias(a, b); }
+bool no_alias(const AbstractLoc &a, const AbstractLoc &b) {
+    return !may_alias(a, b);
+}
 
 // --------------------------------------------------------------------------
 // LocSet
@@ -76,7 +81,8 @@ void LocSet::unite(const LocSet &other) {
         locs.clear();
         return;
     }
-    for (const AbstractLoc &l : other.locs) add(l);
+    for (const AbstractLoc &l : other.locs)
+        add(l);
 }
 
 /// Clave del cubo: clase y raiz juntas en un entero.
@@ -141,7 +147,10 @@ void LocSet::subtract_concrete(const LocSet &other) {
     for (const AbstractLoc &l : locs) {
         bool killed = false;
         for (const AbstractLoc &w : other.locs)
-            if (w == l) { killed = true; break; } // solo mata el loc EXACTO
+            if (w == l) {
+                killed = true;
+                break;
+            } // solo mata el loc EXACTO
         if (!killed) keep.push_back(l);
     }
     locs.swap(keep);
@@ -155,7 +164,10 @@ bool LocSet::operator==(const LocSet &o) const {
     for (const AbstractLoc &l : locs) {
         bool found = false;
         for (const AbstractLoc &r : o.locs)
-            if (l == r) { found = true; break; }
+            if (l == r) {
+                found = true;
+                break;
+            }
         if (!found) return false;
     }
     return true;
@@ -169,17 +181,17 @@ bool control_is_terminator(ControlKind k) {
     case ControlKind::Return:
     case ControlKind::Throw:
     case ControlKind::NoReturn:
-    case ControlKind::Indirect:
-        return true;
+    case ControlKind::Indirect: return true;
     default:
-        return false; // FallThrough/Branch/Call/Suspend/Resume no terminan la seq
+        return false; // FallThrough/Branch/Call/Suspend/Resume no terminan la
+                      // seq
     }
 }
 
 CapabilityClass class_of(CapabilityTag t) {
     switch (t) {
-    case CapabilityTag::PortIO:          return CapabilityClass::Observable;
-    case CapabilityTag::UserBarrier:     return CapabilityClass::Synchronization;
+    case CapabilityTag::PortIO: return CapabilityClass::Observable;
+    case CapabilityTag::UserBarrier: return CapabilityClass::Synchronization;
     case CapabilityTag::MachineState:
     case CapabilityTag::InterruptState:
     case CapabilityTag::MSR:
@@ -187,9 +199,9 @@ CapabilityClass class_of(CapabilityTag t) {
     case CapabilityTag::Privileged:
     case CapabilityTag::TLBFlush:
     case CapabilityTag::SegmentChange:
-    case CapabilityTag::SelfModifying:   return CapabilityClass::Machine;
+    case CapabilityTag::SelfModifying: return CapabilityClass::Machine;
     case CapabilityTag::SecretDependent: return CapabilityClass::Security;
-    default:                             return CapabilityClass::Runtime;
+    default: return CapabilityClass::Runtime;
     }
 }
 
@@ -199,12 +211,14 @@ CapabilityClass class_of(CapabilityTag t) {
 bool SemanticEffects::operator==(const SemanticEffects &o) const {
     return mem == o.mem && control == o.control && atomic == o.atomic &&
            may_trap == o.may_trap && may_throw == o.may_throw &&
-           may_panic == o.may_panic &&
-           may_allocate == o.may_allocate && may_block == o.may_block &&
-           may_io == o.may_io && determinism == o.determinism && tags == o.tags;
+           may_panic == o.may_panic && may_allocate == o.may_allocate &&
+           may_block == o.may_block && may_io == o.may_io &&
+           determinism == o.determinism && tags == o.tags;
 }
 
-SemanticEffects SemanticEffects::none() { return SemanticEffects{}; }
+SemanticEffects SemanticEffects::none() {
+    return SemanticEffects{};
+}
 
 SemanticEffects SemanticEffects::top() {
     SemanticEffects e;
@@ -253,14 +267,16 @@ static MemOrder stronger(MemOrder a, MemOrder b) {
 
 SemanticEffects seq(const SemanticEffects &a, const SemanticEffects &b) {
     SemanticEffects r;
-    // Memoria: reads(a;b) = a.reads U (b.reads \ a.writes-concretos); writes = union.
+    // Memoria: reads(a;b) = a.reads U (b.reads \ a.writes-concretos); writes =
+    // union.
     r.mem.reads = a.mem.reads;
     LocSet bkr = b.mem.reads;
     bkr.subtract_concrete(a.mem.writes); // gen/kill sound
     r.mem.reads.unite(bkr);
     r.mem.writes = a.mem.writes;
     r.mem.writes.unite(b.mem.writes);
-    // Control: si 'a' termina el flujo, 'b' no se alcanza en secuencia -> el de 'a'.
+    // Control: si 'a' termina el flujo, 'b' no se alcanza en secuencia -> el de
+    // 'a'.
     r.control = control_is_terminator(a.control.kind) ? a.control : b.control;
     // Atomic: el orden mas fuerte; fence si alguno.
     r.atomic.order = stronger(a.atomic.order, b.atomic.order);
@@ -286,9 +302,11 @@ SemanticEffects join(const SemanticEffects &a, const SemanticEffects &b) {
     r.mem.reads.unite(b.mem.reads);
     r.mem.writes = a.mem.writes;
     r.mem.writes.unite(b.mem.writes);
-    // Control en un merge: si coinciden, ese; si no, Branch (ambas salidas vivas).
-    r.control = (a.control == b.control) ? a.control
-                                         : ControlEffect{ControlKind::Branch, -1};
+    // Control en un merge: si coinciden, ese; si no, Branch (ambas salidas
+    // vivas).
+    r.control = (a.control == b.control)
+                    ? a.control
+                    : ControlEffect{ControlKind::Branch, -1};
     r.atomic.order = stronger(a.atomic.order, b.atomic.order);
     r.atomic.is_fence = a.atomic.is_fence || b.atomic.is_fence;
     r.may_trap = a.may_trap || b.may_trap;
@@ -309,7 +327,8 @@ SemanticEffects join(const SemanticEffects &a, const SemanticEffects &b) {
 // --------------------------------------------------------------------------
 MachineEffects seq(const MachineEffects &a, const MachineEffects &b) {
     MachineEffects r;
-    // Registros: reads = a.reads U (b.reads \ a.writes); writes = union (clobber).
+    // Registros: reads = a.reads U (b.reads \ a.writes); writes = union
+    // (clobber).
     r.regs_read = a.regs_read | (b.regs_read & ~a.regs_written);
     r.regs_written = a.regs_written | b.regs_written;
     r.flags_read = a.flags_read | (b.flags_read & ~a.flags_written);
@@ -324,7 +343,7 @@ MachineEffects seq(const MachineEffects &a, const MachineEffects &b) {
 
 MachineEffects join(const MachineEffects &a, const MachineEffects &b) {
     MachineEffects r;
-    r.regs_read = a.regs_read | b.regs_read;         // may-read
+    r.regs_read = a.regs_read | b.regs_read;          // may-read
     r.regs_written = a.regs_written | b.regs_written; // may-clobber
     r.flags_read = a.flags_read | b.flags_read;
     r.flags_written = a.flags_written | b.flags_written;

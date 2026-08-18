@@ -212,7 +212,8 @@ typedef struct DecodedInstr {
             uint8_t index; ///< registro indice (0-15); valido si has_index
             uint8_t scale; ///< shift 0..6 (x1/2/4/8/16/32/64)
             uint8_t width; ///< bytes de acceso: 1/2/4/8/16/32/64
-            uint8_t flags; ///< b0=host b1=has_index b2=idx_sub b3=sign_ext b4=bank(FP)
+            uint8_t flags; ///< b0=host b1=has_index b2=idx_sub b3=sign_ext
+                           ///< b4=bank(FP)
             int16_t disp;  ///< desplazamiento con signo (+/- 32KB)
         } mem_full;
 
@@ -435,8 +436,9 @@ class ProcessVM {
     /// evitar el problema de globales duplicados cross-modulo (vm/DLL/vmcore).
     uint8_t ctpe_abort = 0;
     /// Watchdog CTPE (resultado): 1 = el safepoint hizo longjmp para abortar
-    /// la ejecucion precomputada.  Lo lee try_invoke_ctpe: si es 1, NO se pliega
-    /// (el resultado seria parcial/incorrecto).  Distinto de ctpe_abort (peticion).
+    /// la ejecucion precomputada.  Lo lee try_invoke_ctpe: si es 1, NO se
+    /// pliega (el resultado seria parcial/incorrecto).  Distinto de ctpe_abort
+    /// (peticion).
     uint8_t ctpe_did_abort = 0;
     uint8_t _safepoint_pad[5] = {0}; ///< Alineacion a 8 bytes
 
@@ -494,8 +496,6 @@ class ProcessVM {
      * compila correctamente.
      */
     void *jit_entry_fn = nullptr;
-
-
 
     /**
      * @brief Puntero cacheado a la @c HandleTable del @c gc_heap, para el JIT.
@@ -655,7 +655,7 @@ class ProcessVM {
     /// Proveedor de raices del GC sobre este proceso (lo conecta el ctor via
     /// gc_heap.set_root_provider).  Solo guarda `this`; seguro en member-init.
     ProcessVMRootProvider gc_root_provider_{this};
-    gc::RawAllocator raw_alloc{};        ///< Asignador raw sin GC
+    gc::RawAllocator raw_alloc{}; ///< Asignador raw sin GC
 
     // --- Sistema de objetos (OOP) ---
     loader::FrameHeader *frame_stack =
@@ -783,27 +783,27 @@ class ProcessVM {
         uint64_t saved_rsp;      ///< RSP al momento del tryenter.
                                  ///< @c do_throw lo restaura antes de saltar
                                  ///< al handler para descartar los push del
-                            ///< regalloc que no llegaron a pop por el throw.
-        uint64_t saved_rbp;          ///< Idem para RBP (frame pointer).
-        uint64_t saved_frame_stack;  ///< Puntero al @c frame_stack al
-                                     ///< momento del tryenter; @c do_throw
-                                     ///< unwindea hasta este punto antes de
-                                     ///< saltar al handler (descarta frames
-                                     ///< de calls dentro del try-body que no
-                                     ///< retornaron normalmente).
-        uint64_t saved_regs[16];     ///< Snapshot de R0..R15 al
-                                     ///< momento del tryenter.
-                                     ///< @c do_throw los restaura antes de
-                                     ///< saltar al handler para que el catch
-                                     ///< vea exactamente el mismo estado que
-                                     ///< el try entry (igual que C/C++ exc).
-                                     ///< Resuelve la limitacion clasica de
-                                     ///< que las vars vivas a traves del try
-                                     ///< quedaban con valores stale tras
-                                     ///< el throw (regalloc no preservaba
-                                     ///< los regs en el unwind).
-                                     ///< R0 se preserva PERO el catch lo
-                                     ///< sobreescribe con la excepcion.
+        ///< regalloc que no llegaron a pop por el throw.
+        uint64_t saved_rbp;         ///< Idem para RBP (frame pointer).
+        uint64_t saved_frame_stack; ///< Puntero al @c frame_stack al
+                                    ///< momento del tryenter; @c do_throw
+                                    ///< unwindea hasta este punto antes de
+                                    ///< saltar al handler (descarta frames
+                                    ///< de calls dentro del try-body que no
+                                    ///< retornaron normalmente).
+        uint64_t saved_regs[16];    ///< Snapshot de R0..R15 al
+                                    ///< momento del tryenter.
+                                    ///< @c do_throw los restaura antes de
+                                    ///< saltar al handler para que el catch
+                                    ///< vea exactamente el mismo estado que
+                                    ///< el try entry (igual que C/C++ exc).
+                                    ///< Resuelve la limitacion clasica de
+                                    ///< que las vars vivas a traves del try
+                                    ///< quedaban con valores stale tras
+                                    ///< el throw (regalloc no preservaba
+                                    ///< los regs en el unwind).
+                                    ///< R0 se preserva PERO el catch lo
+                                    ///< sobreescribe con la excepcion.
         /// Excepciones in-JIT (Opcion B).  Si != 0, el handler vive en codigo
         /// JIT-eado (no bytecode): @c do_throw resume via @c vrt_resume_jit
         /// (restaura @c native_rsp/@c native_rbp del frame host y salta a
@@ -812,7 +812,7 @@ class ProcessVM {
         uint64_t native_catch_addr = 0; ///< direccion nativa del bloque catch
         uint64_t native_rsp = 0;        ///< RSP host del frame del try
         uint64_t native_rbp = 0;        ///< RBP host del frame del try
-        struct ExceptionFrame *prev; ///< Frame anterior en la pila
+        struct ExceptionFrame *prev;    ///< Frame anterior en la pila
     };
 
     ExceptionFrame *exc_frame_stack =
@@ -877,7 +877,8 @@ class ProcessVM {
     uint64_t pending_av_addr = 0; ///< direccion bruta del AV (informativa)
     /// Codigo de fallo que dio el sistema.  Viaja para poder NOMBRAR lo que
     /// paso cuando no es uno de los conocidos: sin el, un fallo fuera de la
-    /// lista se cuenta pero no se puede identificar, y quien lee se queda igual.
+    /// lista se cuenta pero no se puede identificar, y quien lee se queda
+    /// igual.
     uint64_t pending_av_os_code = 0;
     /// Tipo de excepcion host que disparo el recovery:
     ///   0 = AV (segfault, default), 1 = DIVIDE_BY_ZERO, 2 = INT_OVERFLOW.
@@ -1012,7 +1013,6 @@ class ProcessVM {
     [[nodiscard]] std::string to_string() const;
 
   private:
-
 };
 
 /**

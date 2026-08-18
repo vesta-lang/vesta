@@ -390,8 +390,8 @@ void exec_instr_gcfinal(ProcessVM *vm, const DecodedInstr &instr) {
         // Desregistrar (anti-doble-free desde el cleanup determinista).
         vm->gc_heap.unregister_finalizer(payload);
     } else {
-        vm->gc_heap.register_finalizer(
-            payload, static_cast<gc::GcFinalizerKind>(kind));
+        vm->gc_heap.register_finalizer(payload,
+                                       static_cast<gc::GcFinalizerKind>(kind));
     }
 }
 
@@ -463,7 +463,8 @@ void exec_instr_gcfinall(ProcessVM *vm, const DecodedInstr &instr) {
     // seguro aqui: gcfinall es ZERO (sin operandos que preservar) y
     // gc_finalizer_call_bytecode salva/restaura TODO el estado del proceso +
     // invalida el icache al volver (mismo mecanismo probado del drenado del
-    // scheduler).  El avance del PC de gcfinall lo hace el caller tras retornar.
+    // scheduler).  El avance del PC de gcfinall lo hace el caller tras
+    // retornar.
     vm->gc_heap.run_pending_finalizers();
 }
 
@@ -968,12 +969,14 @@ void exec_instr_atomicadd(ProcessVM *vm, const DecodedInstr &instr) {
                                  static_cast<uint8_t>(delta), __ATOMIC_SEQ_CST);
         break;
     case 1:
-        old = __atomic_fetch_add(reinterpret_cast<uint16_t *>(addr),
-                                 static_cast<uint16_t>(delta), __ATOMIC_SEQ_CST);
+        old =
+            __atomic_fetch_add(reinterpret_cast<uint16_t *>(addr),
+                               static_cast<uint16_t>(delta), __ATOMIC_SEQ_CST);
         break;
     case 2:
-        old = __atomic_fetch_add(reinterpret_cast<uint32_t *>(addr),
-                                 static_cast<uint32_t>(delta), __ATOMIC_SEQ_CST);
+        old =
+            __atomic_fetch_add(reinterpret_cast<uint32_t *>(addr),
+                               static_cast<uint32_t>(delta), __ATOMIC_SEQ_CST);
         break;
     default:
         old = __atomic_fetch_add(reinterpret_cast<uint64_t *>(addr), delta,

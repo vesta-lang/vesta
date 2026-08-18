@@ -7,18 +7,19 @@
 
 /**
  * @file codegen/allocation_result.h
- * @brief @c AllocationResult: lo que el Rewrite consume.  NO es un God Object -- son las
- *        DOS cosas que el Rewrite necesita, cada una respondiendo su propia pregunta y
- *        sin invadir la del otro:
+ * @brief @c AllocationResult: lo que el Rewrite consume.  NO es un God Object
+ * -- son las DOS cosas que el Rewrite necesita, cada una respondiendo su propia
+ * pregunta y sin invadir la del otro:
  *
  *     AllocationResult
  *       ├── FrameLayout        ¿como queda el frame?          (no temporal)
  *       └── AllocationTimeline ¿donde vive cada valor cuando? (temporal, puro)
  *
- * El Rewrite conoce SOLO dos conceptos: @c result.frame y @c result.timeline.lookup(
- * vreg, pos).  Nada mas.  Lugar del pipeline:
+ * El Rewrite conoce SOLO dos conceptos: @c result.frame y @c
+ * result.timeline.lookup( vreg, pos).  Nada mas.  Lugar del pipeline:
  *
- *     LaneAssignment -> FragmentationRecovery -> AssignmentPlan -> TimelineBuilder
+ *     LaneAssignment -> FragmentationRecovery -> AssignmentPlan ->
+ * TimelineBuilder
  *                                                                 |
  *                                                          AllocationResult
  *                                                          (frame + timeline)
@@ -39,7 +40,7 @@ namespace codegen {
  * @brief Frame + timeline: la asignacion completa que consume el Rewrite.
  */
 struct AllocationResult {
-    FrameLayout        frame;    ///< estado fisico del stack (no temporal).
+    FrameLayout frame;           ///< estado fisico del stack (no temporal).
     AllocationTimeline timeline; ///< ubicacion de cada valor en el tiempo.
 };
 

@@ -11,11 +11,11 @@
  *
  * Decide, para un diamante candidato, si conviene la forma SELECT (sin salto,
  * cmov) o mantener el BRANCH.  NO es un clasificador que decide por reglas: es
- * un MODELO DE COSTE alimentado por PREDICTORES ESPECIALIZADOS, cada uno experto
- * en un dominio, que INFORMAN la probabilidad de fallo de prediccion.  Los
- * predictores que no reconocen el patron no tocan la puntuacion (Unknown).  Asi
- * el sistema es extensible: anadir un predictor nuevo (uarch, PGO, ...) no toca
- * el resto.
+ * un MODELO DE COSTE alimentado por PREDICTORES ESPECIALIZADOS, cada uno
+ * experto en un dominio, que INFORMAN la probabilidad de fallo de prediccion.
+ * Los predictores que no reconocen el patron no tocan la puntuacion (Unknown).
+ * Asi el sistema es extensible: anadir un predictor nuevo (uarch, PGO, ...) no
+ * toca el resto.
  *
  * Modelo (para un select cuyo resultado realimenta una recurrencia de loop, el
  * caso que decide): el cmov queda en el camino critico CADA iteracion con
@@ -52,7 +52,7 @@ enum class BranchClass {
 
 /// @brief Resultado de un predictor especializado.
 struct PredictorResult {
-    bool known = false;         ///< false = Unknown, no aporta informacion
+    bool known = false; ///< false = Unknown, no aporta informacion
     BranchClass cls = BranchClass::Unknown;
     double p_mispredict = 0.25; ///< estimacion de P(fallo de prediccion)
     double confidence = 0.0;    ///< 0..1; se elige el predictor mas confiado
@@ -93,7 +93,7 @@ enum class TargetIsa {
     Generic, ///< x86-64 generico (default)
     X86_64,  ///< cmov ~2c, con dependencia de flags
     ARM64,   ///< csel ~1c, sin flag-hazard -> select mas favorable
-    RISCV    ///< sin cmov nativo -> secuencia mas cara -> select menos favorable
+    RISCV ///< sin cmov nativo -> secuencia mas cara -> select menos favorable
 };
 
 /**

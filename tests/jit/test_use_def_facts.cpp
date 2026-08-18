@@ -7,12 +7,12 @@
 
 /**
  * @file tests/jit/test_use_def_facts.cpp
- * @brief UseDefFacts (Tipo A, IR-driven): posiciones de uso -> next-use por valor,
- *        en el dominio IR (@c ir::LinearPos).  Valida (1) el next-use lineal +
+ * @brief UseDefFacts (Tipo A, IR-driven): posiciones de uso -> next-use por
+ * valor, en el dominio IR (@c ir::LinearPos).  Valida (1) el next-use lineal +
  *        sentinela de valor muerto, (2) la COHERENCIA CON EL LIVENESS IR en
- *        PHI/back-edge (el arg cuenta en block_end del predecesor, no en la instr
- *        PHI), (3) el func_ptr de CALLIND como uso, y (4) el registro en el query
- *        system (query<UseDefFacts>() == compute).
+ *        PHI/back-edge (el arg cuenta en block_end del predecesor, no en la
+ * instr PHI), (3) el func_ptr de CALLIND como uso, y (4) el registro en el
+ * query system (query<UseDefFacts>() == compute).
  */
 
 #include "analysis/facts/use_def_facts.h"
@@ -28,19 +28,22 @@ using analysis::UseDefFacts;
 static int g_checks = 0;
 static int g_fail = 0;
 
-#define CHECK(cond, msg)                                                     \
-    do {                                                                     \
-        ++g_checks;                                                          \
-        if (!(cond)) {                                                       \
-            ++g_fail;                                                        \
-            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);        \
-        }                                                                    \
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fail;                                                          \
+            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);          \
+        }                                                                      \
     } while (0)
 
-/// Azucar: envuelve un uint32_t crudo como posicion del dominio IR.  @c ir::LinearPos,
-/// NO @c codegen::LinearPos: @c UseDefFacts es un Fact del IR y mezclar dominios es
-/// justo el error que el tipo fuerte existe para rechazar en compilacion.
-static constexpr ir::LinearPos P(uint32_t v) { return ir::LinearPos{v}; }
+/// Azucar: envuelve un uint32_t crudo como posicion del dominio IR.  @c
+/// ir::LinearPos, NO @c codegen::LinearPos: @c UseDefFacts es un Fact del IR y
+/// mezclar dominios es justo el error que el tipo fuerte existe para rechazar
+/// en compilacion.
+static constexpr ir::LinearPos P(uint32_t v) {
+    return ir::LinearPos{v};
+}
 
 static IrInstr mk(IrOp op, IrValueId dst, std::vector<IrValueId> ops = {},
                   uint64_t imm = 0) {
@@ -72,10 +75,8 @@ int main() {
         fn.blocks.resize(1);
         fn.blocks[0].id = 0;
         fn.blocks[0].instrs = {
-            mk(IrOp::CONST, 1, {}, 5),
-            mk(IrOp::CONST, 2, {}, 7),
-            mk(IrOp::ADD, 3, {1, 2}),
-            mk(IrOp::ADD, 4, {3, 1}),
+            mk(IrOp::CONST, 1, {}, 5),       mk(IrOp::CONST, 2, {}, 7),
+            mk(IrOp::ADD, 3, {1, 2}),        mk(IrOp::ADD, 4, {3, 1}),
             mk(IrOp::RET, IR_NO_VALUE, {4}),
         };
 
@@ -84,11 +85,14 @@ int main() {
         CHECK(f.num_values() == 5, "num_values deberia ser 5");
 
         // v1 se usa en 2 y 3.
-        CHECK(f.next_use_after(1, P(0)) == P(2), "next_use(v1,0) deberia ser 2");
-        CHECK(f.next_use_after(1, P(2)) == P(3), "next_use(v1,2) deberia ser 3");
+        CHECK(f.next_use_after(1, P(0)) == P(2),
+              "next_use(v1,0) deberia ser 2");
+        CHECK(f.next_use_after(1, P(2)) == P(3),
+              "next_use(v1,2) deberia ser 3");
         CHECK(f.next_use_after(1, P(3)) == UseDefFacts::NO_NEXT_USE,
               "next_use(v1,3) deberia ser NO_NEXT_USE (ya no se usa)");
-        CHECK(f.distance_to_next_use(1, P(0)) == 2u, "distancia(v1,0) deberia ser 2");
+        CHECK(f.distance_to_next_use(1, P(0)) == 2u,
+              "distancia(v1,0) deberia ser 2");
 
         // v2 muere en 2: mejor victima que v1 en el punto 2.
         CHECK(f.next_use_after(2, P(2)) == UseDefFacts::NO_NEXT_USE,
@@ -98,7 +102,8 @@ int main() {
         CHECK(f.distance_to_next_use(1, P(2)) == 1u,
               "v1 se reusa en 3 -> distancia 1 (peor victima que v2)");
 
-        // Sin usos: valor 0 (nunca definido ni usado) y consultas fuera de rango.
+        // Sin usos: valor 0 (nunca definido ni usado) y consultas fuera de
+        // rango.
         CHECK(!f.has_uses(0), "v0 no tiene usos");
         CHECK(f.has_uses(1), "v1 tiene usos");
         CHECK(f.next_use_after(0, P(0)) == UseDefFacts::NO_NEXT_USE,
@@ -139,7 +144,8 @@ int main() {
         // v1 llega como arg PHI desde block0 -> uso en block_end[0] = 0.
         CHECK(f.off[2] - f.off[1] == 1 && f.use_pos[f.off[1]] == 0,
               "el arg PHI v1 debe contar en block_end[pred]=0, no en la PHI@1");
-        // v3 llega como arg PHI (back-edge) desde block1 -> uso en block_end[1] = 2.
+        // v3 llega como arg PHI (back-edge) desde block1 -> uso en block_end[1]
+        // = 2.
         CHECK(f.off[4] - f.off[3] == 1 && f.use_pos[f.off[3]] == 2,
               "el arg PHI v3 (back-edge) debe contar en block_end[b1]=2");
         // v2 se usa como operando del ADD en la posicion 2.
@@ -163,7 +169,8 @@ int main() {
 
         const UseDefFacts f = analysis::compute_use_def(fn);
         CHECK(f.has_uses(1), "v1 (func_ptr) deberia contar como usado");
-        CHECK(f.next_use_after(1, P(0)) == P(1), "el func_ptr v1 se usa en el CALLIND @1");
+        CHECK(f.next_use_after(1, P(0)) == P(1),
+              "el func_ptr v1 se usa en el CALLIND @1");
     }
 
     // -----------------------------------------------------------------------
@@ -183,13 +190,16 @@ int main() {
 
         codegen::rbank::FunctionSnapshot s;
         s.fn = &fn;
-        const UseDefFacts &q = s.use_def_facts(); // azucar de query<UseDefFacts>()
-        CHECK(q.next_use_after(1, P(0)) == P(2) && q.next_use_after(2, P(0)) == P(2),
+        const UseDefFacts &q =
+            s.use_def_facts(); // azucar de query<UseDefFacts>()
+        CHECK(q.next_use_after(1, P(0)) == P(2) &&
+                  q.next_use_after(2, P(0)) == P(2),
               "query<UseDefFacts> no coincide con compute_use_def");
         CHECK(s.is_computed(codegen::rbank::Fact::UseDef),
               "el Fact UseDef no quedo materializado tras la query");
         // Segunda consulta = cache hit (mismo objeto).
-        CHECK(&s.use_def_facts() == &q, "la celda LazyFact no cacheo el UseDefFacts");
+        CHECK(&s.use_def_facts() == &q,
+              "la celda LazyFact no cacheo el UseDefFacts");
     }
 
     std::printf("\n=== %d checks, %d fallos ===\n", g_checks, g_fail);

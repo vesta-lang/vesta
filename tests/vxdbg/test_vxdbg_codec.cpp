@@ -85,11 +85,9 @@ static void probar_entidad() {
     auto s = vxdbg::encode(e);
     vxdbg::LanguageEntity v;
     comprobar(vxdbg::decode(s, v), "se lee lo que se escribio");
-    comprobar(v.name == e.name && v.key == e.key,
-              "conserva los nombres");
+    comprobar(v.name == e.name && v.key == e.key, "conserva los nombres");
     comprobar(v.kind == vxdbg::EntityKind::Function, "conserva la especie");
-    comprobar(v.lang_kind == "method",
-              "y el genero que puso el frontend");
+    comprobar(v.lang_kind == "method", "y el genero que puso el frontend");
     comprobar(v.relations.size() == 2, "conserva las relaciones");
     comprobar(v.relations[0].kind == vxdbg::RelationKind::Derives &&
                   v.relations[0].target == rel.target &&
@@ -214,8 +212,10 @@ static void probar_transferencias() {
     auto s = vxdbg::encode(e);
     vxdbg::ExecutionEdge v;
     comprobar(vxdbg::decode(s, v), "una transferencia se lee");
-    comprobar(v.kind == vxdbg::EdgeKind::Throw, "conserva por que pasa el control");
-    comprobar(v.to_kind == vxdbg::EndpointKind::Runtime && v.to_name == "runtime",
+    comprobar(v.kind == vxdbg::EdgeKind::Throw,
+              "conserva por que pasa el control");
+    comprobar(v.to_kind == vxdbg::EndpointKind::Runtime &&
+                  v.to_name == "runtime",
               "y que el destino no era una funcion");
 
     // Los dos ejes son independientes: virtual y ademas incorporada.
@@ -224,10 +224,11 @@ static void probar_transferencias() {
     dv.form = vxdbg::TransferForm::Inlined;
     auto sdv = vxdbg::encode(dv);
     vxdbg::ExecutionEdge vdv;
-    comprobar(vxdbg::decode(sdv, vdv) &&
-                  vdv.dispatch == vxdbg::DispatchKind::Virtual &&
-                  vdv.form == vxdbg::TransferForm::Inlined,
-              "virtual e incorporada a la vez, que es lo normal tras devirtualizar");
+    comprobar(
+        vxdbg::decode(sdv, vdv) &&
+            vdv.dispatch == vxdbg::DispatchKind::Virtual &&
+            vdv.form == vxdbg::TransferForm::Inlined,
+        "virtual e incorporada a la vez, que es lo normal tras devirtualizar");
 }
 
 /// Guardar y recuperar pasando por el almacen.
@@ -309,7 +310,8 @@ static void grafo_semantico() {
 
     const auto rep = vxdbg::emit_semantic_graph(store, nodos);
     comprobar(rep.emitted == 2, "se emite un nodo por clave distinta");
-    comprobar(rep.duplicates == 1, "y la clave repetida se cuenta, no se calla");
+    comprobar(rep.duplicates == 1,
+              "y la clave repetida se cuenta, no se calla");
     comprobar(rep.unresolved == 1, "igual que la arista sin destino");
 
     // La base tiene que estar ANTES que el derivado: su identidad forma parte
@@ -319,7 +321,8 @@ static void grafo_semantico() {
         if (rep.ids[i].first == "mod__Flujo") pos_base = i;
         if (rep.ids[i].first == "mod__Lector") pos_der = i;
     }
-    comprobar(pos_base < pos_der, "lo referenciado sale antes que quien lo usa");
+    comprobar(pos_base < pos_der,
+              "lo referenciado sale antes que quien lo usa");
 
     vxdbg::LanguageEntity leido;
     vxdbg::LanguageEntityId id_der, id_base;
@@ -327,7 +330,8 @@ static void grafo_semantico() {
         if (kv.first == "mod__Lector") id_der = kv.second;
         if (kv.first == "mod__Flujo") id_base = kv.second;
     }
-    comprobar(vxdbg::load_node(store, id_der.hash, leido), "el derivado se lee");
+    comprobar(vxdbg::load_node(store, id_der.hash, leido),
+              "el derivado se lee");
     comprobar(leido.relations.size() == 1,
               "  con la arista buena y sin la rota");
     comprobar(leido.relations[0].target == id_base,

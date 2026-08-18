@@ -135,8 +135,13 @@ static bool jit_vm(const ir::IrFunction &fn, Proxy &px,
                      resolve_symbol))
         return false;
     const TargetRegInfo &tri = target_x86_64_vm_abi();
-    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(build_intervals(mf, tri), mf.vreg_count, tri, false);
-    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM);
+    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(
+        build_intervals(mf, tri), mf.vreg_count, tri, false);
+    MFunction pf =
+        rewrite_to_physical(mf,
+                            codegen::build_allocation_result(
+                                ra, nullptr, codegen::AssignmentPlan{}),
+                            tri, AbiKind::VM);
     X86Encoder enc;
     std::vector<uint8_t> bytes;
     if (enc.encode(pf, bytes) == 0 || bytes.empty()) return false;
@@ -156,8 +161,13 @@ static bool jit_vm_ent(const ir::IrFunction &fn, Proxy &px,
     MFunction mf;
     if (!vreg_select(fn, mf, AbiKind::VM, {}, ent, {}, {})) return false;
     const TargetRegInfo &tri = target_x86_64_vm_abi();
-    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(build_intervals(mf, tri), mf.vreg_count, tri, false);
-    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM);
+    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(
+        build_intervals(mf, tri), mf.vreg_count, tri, false);
+    MFunction pf =
+        rewrite_to_physical(mf,
+                            codegen::build_allocation_result(
+                                ra, nullptr, codegen::AssignmentPlan{}),
+                            tri, AbiKind::VM);
     X86Encoder enc;
     std::vector<uint8_t> bytes;
     if (enc.encode(pf, bytes) == 0 || bytes.empty()) return false;
@@ -402,7 +412,8 @@ static void test_vm_callvirt() {
      * todavia -- que es la ultima comprobacion --, asi que el despacho recorre
      * los cuatro filtros y acaba en el camino lento, que es justo lo que este
      * test mide. */
-    alignas(8) unsigned char metodo[VESTA_METHODINFO_ADVICE_CHAIN_OFFSET + 8] = {};
+    alignas(
+        8) unsigned char metodo[VESTA_METHODINFO_ADVICE_CHAIN_OFFSET + 8] = {};
     alignas(8) unsigned char clase[VESTA_CLASSINFO_VTABLE_OFFSET + 8] = {};
     uint64_t vtabla[8] = {};
     vtabla[5] = reinterpret_cast<uint64_t>(metodo); // el indice que pide el IR
@@ -465,8 +476,13 @@ static void test_vm_strmake() {
     CHECK(ok, "vreg_select strmake ok");
     if (!ok) return;
     const TargetRegInfo &tri = target_x86_64_vm_abi();
-    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(build_intervals(mf, tri), mf.vreg_count, tri, false);
-    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM);
+    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(
+        build_intervals(mf, tri), mf.vreg_count, tri, false);
+    MFunction pf =
+        rewrite_to_physical(mf,
+                            codegen::build_allocation_result(
+                                ra, nullptr, codegen::AssignmentPlan{}),
+                            tri, AbiKind::VM);
     X86Encoder enc;
     std::vector<uint8_t> bytes;
     CHECK(enc.encode(pf, bytes) != 0 && !bytes.empty(), "encode strmake");
@@ -850,8 +866,13 @@ static bool jit_vm_mem(const ir::IrFunction &fn, void *proc, VregEntries &ent) {
     MFunction mf;
     if (!vreg_select(fn, mf, AbiKind::VM, {}, ent, {}, {})) return false;
     const TargetRegInfo &tri = target_x86_64_vm_abi();
-    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(build_intervals(mf, tri), mf.vreg_count, tri, false);
-    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM);
+    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(
+        build_intervals(mf, tri), mf.vreg_count, tri, false);
+    MFunction pf =
+        rewrite_to_physical(mf,
+                            codegen::build_allocation_result(
+                                ra, nullptr, codegen::AssignmentPlan{}),
+                            tri, AbiKind::VM);
     X86Encoder enc;
     std::vector<uint8_t> bytes;
     if (enc.encode(pf, bytes) == 0 || bytes.empty()) return false;
@@ -1146,7 +1167,11 @@ static void test_vm_gc_stackmap() {
     codegen::RegAlloc ra =
         codegen::rbank::rbank_allocate(ivs, mf.vreg_count, tri, /*vec=*/false);
     CHECK(ra.spilled(thisp), "this (GC root vivo a traves) spilled a slot");
-    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM, &ivs);
+    MFunction pf =
+        rewrite_to_physical(mf,
+                            codegen::build_allocation_result(
+                                ra, nullptr, codegen::AssignmentPlan{}),
+                            tri, AbiKind::VM, &ivs);
     CHECK(pf.stackmaps.size() == 1, "1 stackmap (1 call)");
     if (pf.stackmaps.size() == 1) {
         CHECK(pf.stackmaps[0].slots.size() == 1, "stackmap describe 1 GC root");
@@ -1536,8 +1561,13 @@ static uint64_t run_gc_deref(ProcGc &px, uint32_t handle) {
     ent.gc_deref = 0x1000; // !=0 (path shared nunca se ejecuta aqui)
     if (!vreg_select(fn, mf, AbiKind::VM, {}, ent, {})) return UINT64_MAX;
     const TargetRegInfo &tri = target_x86_64_vm_abi();
-    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(build_intervals(mf, tri), mf.vreg_count, tri, false);
-    MFunction pf = rewrite_to_physical(mf, codegen::build_allocation_result(ra, nullptr, codegen::AssignmentPlan{}), tri, AbiKind::VM);
+    codegen::RegAlloc ra = codegen::rbank::rbank_allocate(
+        build_intervals(mf, tri), mf.vreg_count, tri, false);
+    MFunction pf =
+        rewrite_to_physical(mf,
+                            codegen::build_allocation_result(
+                                ra, nullptr, codegen::AssignmentPlan{}),
+                            tri, AbiKind::VM);
     X86Encoder enc;
     std::vector<uint8_t> bytes;
     if (enc.encode(pf, bytes) == 0 || bytes.empty()) return UINT64_MAX;

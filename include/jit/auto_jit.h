@@ -154,10 +154,11 @@ extern uint64_t g_free_del_programa;
  *        NATIVO y deja su direccion en @c g_vx_swapctx_native (idempotente).
  *
  * Es el primer paso del force-eager del grafo de fibra: compila el primitivo de
- * fiber-switch por la via naked (@c compile_naked_native, HOST_LEAF) para que el
- * vreg pueda emitir un CALL nativo directo a el en @c IrOp::SWAPCTX (pieza 3).
- * Arch-guard x86-64: fuera de esa arquitectura no hay asm valido -> devuelve 0
- * (el llamante deja el grafo de fibra en el interprete con un aviso claro).
+ * fiber-switch por la via naked (@c compile_naked_native, HOST_LEAF) para que
+ * el vreg pueda emitir un CALL nativo directo a el en @c IrOp::SWAPCTX (pieza
+ * 3). Arch-guard x86-64: fuera de esa arquitectura no hay asm valido ->
+ * devuelve 0 (el llamante deja el grafo de fibra en el interprete con un aviso
+ * claro).
  *
  * @param vm  ProcessVM del proceso principal (acceso al Loader/executables).
  * @return la direccion nativa de __vx_swapctx, o 0 si no se pudo compilar.
@@ -217,10 +218,10 @@ void maybe_compile_method(runtime::ProcessVM *vm,
  * @brief Auto-PGO tier-2: recompila un metodo ya JIT-eado (tier-1) usando el
  *        perfil de branches MEDIDO en runtime por el propio codigo nativo
  *        (contadores por source_line en @c g_jit_line_ctrs).  Re-decide la
- *        if-conversion con datos reales y hace swap de @c jit_code.  Idempotente
+ *        if-conversion con datos reales y hace swap de @c jit_code. Idempotente
  *        (una vez por metodo).  Seguro: ambas versiones son correctas, el swap
- *        solo cambia el layout de branches; las llamadas en curso terminan en el
- *        codigo viejo.
+ *        solo cambia el layout de branches; las llamadas en curso terminan en
+ * el codigo viejo.
  */
 void maybe_tier2_method(runtime::ProcessVM *vm,
                         loader::MethodInfo *method) noexcept;
@@ -230,21 +231,22 @@ void maybe_tier2_method(runtime::ProcessVM *vm,
 extern loader::MethodInfo *g_vreg_compiling_method;
 
 /// @brief Entry del prologo tier-2 (lo llama el codigo JIT-eado).
-extern "C" void jit_tier2_request_entry(void *proc, uint64_t method_ptr) noexcept;
+extern "C" void jit_tier2_request_entry(void *proc,
+                                        uint64_t method_ptr) noexcept;
 
 /// @brief Tick del auto-PGO tier-2: cuenta la invocacion de un metodo ya
 ///        JIT-eado y dispara @c maybe_tier2_method al cruzar el delta.  Vive en
-///        su propia TU (no inline en exec_instr_callvirt: hacerlo alli hace caer
-///        el linker del DLL por el tamano de esa funcion).
+///        su propia TU (no inline en exec_instr_callvirt: hacerlo alli hace
+///        caer el linker del DLL por el tamano de esa funcion).
 void tier2_tick(runtime::ProcessVM *vm, loader::MethodInfo *method) noexcept;
 
 /* Forward decl de CompileResult (definido en jit_compiler.h). */
 struct CompileResult;
 
 /* La base de hechos del ASA (@c analysis/asa/base_hechos.h).  Aqui solo se pasa
- * por puntero, asi que basta declararla: no hace falta arrastrar los dominios de
- * analisis a todo el que incluya esta cabecera.  El nombre corto es el que usan
- * los consumidores del JIT (@c jit/jit_facts.h); no es otro tipo. */
+ * por puntero, asi que basta declararla: no hace falta arrastrar los dominios
+ * de analisis a todo el que incluya esta cabecera.  El nombre corto es el que
+ * usan los consumidores del JIT (@c jit/jit_facts.h); no es otro tipo. */
 } // namespace jit
 namespace analysis {
 namespace asa {
@@ -325,9 +327,9 @@ extern bool g_pc_jit_active;
  * @param fn    Puntero al codigo nativo (calling convention
  *              @c JitFn(vrt_proc*) -> uint64_t).
  */
-void register_jit_code_at_pc(uint64_t vaddr, void *fn, size_t code_size = 0,
-                             const std::vector<LineMapEntry> *line_map =
-                                 nullptr) noexcept;
+void register_jit_code_at_pc(
+    uint64_t vaddr, void *fn, size_t code_size = 0,
+    const std::vector<LineMapEntry> *line_map = nullptr) noexcept;
 
 /**
  * @brief Lookup O(1) amortizado: devuelve el ptr nativo si la funcion
@@ -370,8 +372,9 @@ bool lookup_vaddr_by_native_pc(uint64_t native_pc,
  * @param fn Inicio de su codigo nativo.
  * @param code_size Cuanto ocupa.
  */
-void register_jit_region(uint64_t vaddr, void *fn, size_t code_size,
-                         const std::vector<LineMapEntry> *line_map = nullptr) noexcept;
+void register_jit_region(
+    uint64_t vaddr, void *fn, size_t code_size,
+    const std::vector<LineMapEntry> *line_map = nullptr) noexcept;
 
 /**
  * @brief En que linea del fuente estaba el codigo NATIVO que fallo.

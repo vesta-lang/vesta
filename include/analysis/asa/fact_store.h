@@ -7,8 +7,8 @@
 
 /**
  * @file analysis/asa/fact_store.h
- * @brief Donde viven los hechos: se depositan y se consultan.  UNA representacion
- *        para todo el conocimiento del programa.
+ * @brief Donde viven los hechos: se depositan y se consultan.  UNA
+ * representacion para todo el conocimiento del programa.
  *
  * Es la frontera del dibujo:
  *
@@ -28,8 +28,8 @@
  * @c Inferido, y de ahi sale la guarda; uno demostrado deja quitar la
  * comprobacion.  Ninguna de esas dos decisiones se toma consultando el origen.
  *
- * QUE NO ES: no es una cache de analisis.  Los resultados crudos de cada dominio
- * (rangos, points-to, ...) se cachean en @c BaseDeHechos; aqui vive el
+ * QUE NO ES: no es una cache de analisis.  Los resultados crudos de cada
+ * dominio (rangos, points-to, ...) se cachean en @c BaseDeHechos; aqui vive el
  * CONOCIMIENTO ya afirmado, con su certeza y su prueba.  Son dos capas y hacen
  * falta las dos: una evita recomputar, la otra permite razonar y explicar.
  */
@@ -77,7 +77,7 @@ class FactStore {
     FactId anadir(Fact f);
 
     const Fact &at(FactId id) const { return hechos_[id]; }
-    size_t      size() const { return hechos_.size(); }
+    size_t size() const { return hechos_.size(); }
     const std::vector<Fact> &todos() const { return hechos_; }
 
     /**
@@ -126,8 +126,9 @@ class FactStore {
     Recuento recuento() const;
 
   private:
-    std::vector<Fact>       hechos_;
-    std::deque<std::string> nombres_; ///< arena: no invalida punteros al crecer.
+    std::vector<Fact> hechos_;
+    std::deque<std::string>
+        nombres_; ///< arena: no invalida punteros al crecer.
     std::unordered_map<std::string, const char *> internados_;
     std::unordered_map<std::string, std::vector<FactId>> por_funcion_;
     std::unordered_map<const char *, std::vector<FactId>> por_dominio_;

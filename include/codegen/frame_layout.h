@@ -7,14 +7,15 @@
 
 /**
  * @file codegen/frame_layout.h
- * @brief @c FrameLayout: describe el ESTADO FISICO del stack que implica una asignacion.
- *        Responde UNA pregunta -- ¿como queda el frame? (que callee-saved preservar,
- *        cuantos spill slots).  NO depende del tiempo: NO es un timeline.
+ * @brief @c FrameLayout: describe el ESTADO FISICO del stack que implica una
+ * asignacion. Responde UNA pregunta -- ¿como queda el frame? (que callee-saved
+ * preservar, cuantos spill slots).  NO depende del tiempo: NO es un timeline.
  *
- * Separado de @c AllocationTimeline a proposito: "donde vive el valor en cada instante"
- * y "como es el frame" son preguntas distintas.  La separacion permite, ademas, generar
- * el MISMO timeline con frames distintos (SysV vs Win64, compactado vs alineado) sin
- * tocar la ubicacion temporal.  El @c TimelineBuilder deriva ambos de la @c RegAlloc.
+ * Separado de @c AllocationTimeline a proposito: "donde vive el valor en cada
+ * instante" y "como es el frame" son preguntas distintas.  La separacion
+ * permite, ademas, generar el MISMO timeline con frames distintos (SysV vs
+ * Win64, compactado vs alineado) sin tocar la ubicacion temporal.  El @c
+ * TimelineBuilder deriva ambos de la @c RegAlloc.
  */
 
 #ifndef VESTA_CODEGEN_FRAME_LAYOUT_H

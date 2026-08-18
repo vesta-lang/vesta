@@ -140,22 +140,22 @@ class PackNodeStore : public NodeStore {
   private:
     /// Donde vive un nodo dentro de un paquete ya escrito.
     struct Sitio {
-        std::string ruta;   ///< fichero de paquete
-        uint64_t    offset; ///< desplazamiento del cuerpo
-        uint32_t    tam;    ///< bytes del cuerpo
+        std::string ruta; ///< fichero de paquete
+        uint64_t offset;  ///< desplazamiento del cuerpo
+        uint32_t tam;     ///< bytes del cuerpo
     };
 
     void cargar_indices_() const; ///< lee los indices de los paquetes, una vez
 
-    std::string                root_;
+    std::string root_;
     std::unique_ptr<NodeStore> suelto_;
-    size_t                     tope_;
+    size_t tope_;
 
-    mutable std::mutex                mx_;
+    mutable std::mutex mx_;
     std::map<ContentHash, StoredNode> pendientes_; ///< aun sin escribir
     mutable std::map<ContentHash, Sitio> indice_;  ///< ya en algun paquete
-    mutable bool                      indices_leidos_ = false;
-    uint32_t                          n_volcados_ = 0;
+    mutable bool indices_leidos_ = false;
+    uint32_t n_volcados_ = 0;
 };
 
 } // namespace vxdbg

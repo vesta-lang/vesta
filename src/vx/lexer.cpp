@@ -218,7 +218,7 @@ const char *token_kind_name(TokenKind k) noexcept {
 
 // Comprobar coincidencia exacta del lexema con una cadena literal estatica.
 // sizeof(LIT) - 1 elimina el nul terminador del literal (constexpr).
-#define VX_KW_EXACT(LIT, KIND)                                                \
+#define VX_KW_EXACT(LIT, KIND)                                                 \
     do {                                                                       \
         if (n == sizeof(LIT) - 1 && std::memcmp(p, LIT, n) == 0)               \
             return (KIND);                                                     \
@@ -372,8 +372,8 @@ TokenKind classify_identifier(const std::string &lexeme) noexcept {
 
 Lexer::Lexer(std::string source, std::string filename, Diagnostics &diags,
              const ExpansionInfo *expansion)
-    : source_(std::move(source)), filename_(std::move(filename)),
-      diags_(diags), expansion_(expansion) {
+    : source_(std::move(source)), filename_(std::move(filename)), diags_(diags),
+      expansion_(expansion) {
     // Reservar capacidad del lexema cacheado para evitar relocaciones
     // tipicas (la mayoria de los identificadores caben en SSO).
     peeked_.lexeme.reserve(16);
@@ -506,10 +506,9 @@ Token Lexer::lex_number() {
     auto eat_suffix = [&](bool floaty) {
         while (pos_ < source_.size()) {
             const char c = source_[pos_];
-            const bool ok = floaty ? (c == 'f' || c == 'F' || c == 'l' ||
-                                      c == 'L')
-                                   : (c == 'u' || c == 'U' || c == 'l' ||
-                                      c == 'L');
+            const bool ok =
+                floaty ? (c == 'f' || c == 'F' || c == 'l' || c == 'L')
+                       : (c == 'u' || c == 'U' || c == 'l' || c == 'L');
             if (!ok) break;
             ++pos_;
             ++column_;

@@ -25,12 +25,10 @@ uint32_t byte_column_to_utf16(const std::string &line_text,
     // La columna 1-based en bytes apunta al byte donde empieza el span; el
     // offset 0-based correspondiente es uno menos.  Una columna 0 o 1 cae
     // al inicio de la linea (caracter 0).
-    if (byte_column_1based <= 1)
-        return 0;
+    if (byte_column_1based <= 1) return 0;
     size_t target_byte = static_cast<size_t>(byte_column_1based - 1);
     // No leer mas alla del final de la linea.
-    if (target_byte > line_text.size())
-        target_byte = line_text.size();
+    if (target_byte > line_text.size()) target_byte = line_text.size();
 
     uint32_t utf16_units = 0; // unidades UTF-16 acumuladas hasta target_byte.
     size_t i = 0;             // indice de byte actual dentro de line_text.
@@ -74,8 +72,7 @@ uint32_t byte_column_to_utf16(const std::string &line_text,
                     }
                     code_point = (code_point << 6) | (cb & 0x3F);
                 }
-                if (!valid)
-                    seq_len = 1;
+                if (!valid) seq_len = 1;
             }
         }
 
@@ -109,13 +106,12 @@ uint32_t lsp_position_to_byte_offset(const std::string &text, uint32_t line,
         ++i;
     }
     // Si la linea pedida esta mas alla del final, devolver el final del texto.
-    if (cur < line)
-        return static_cast<uint32_t>(n);
+    if (cur < line) return static_cast<uint32_t>(n);
 
     // 2) Avanzar dentro de la linea decodificando UTF-8 hasta acumular
     //    @p character unidades UTF-16 (o hasta el fin de la linea).
-    size_t j = line_start;          // offset de byte dentro de la linea.
-    uint32_t utf16_seen = 0;        // unidades UTF-16 ya consumidas.
+    size_t j = line_start;   // offset de byte dentro de la linea.
+    uint32_t utf16_seen = 0; // unidades UTF-16 ya consumidas.
     while (j < n && text[j] != '\n' && utf16_seen < character) {
         const unsigned char b = static_cast<unsigned char>(text[j]);
         // Longitud de la secuencia UTF-8 segun el byte lider.
@@ -150,8 +146,7 @@ uint32_t lsp_position_to_byte_offset(const std::string &text, uint32_t line,
                     }
                     cp = (cp << 6) | (cb & 0x3F);
                 }
-                if (!ok)
-                    seq = 1;
+                if (!ok) seq = 1;
             }
         }
         // Unidades UTF-16 del code point: 2 si es plano astral.
@@ -165,8 +160,7 @@ uint32_t lsp_position_to_byte_offset(const std::string &text, uint32_t line,
 void byte_offset_to_lsp_position(const std::string &text, size_t byte_offset,
                                  uint32_t &out_line, uint32_t &out_char) {
     const size_t n = text.size();
-    if (byte_offset > n)
-        byte_offset = n;
+    if (byte_offset > n) byte_offset = n;
     uint32_t line = 0; // linea 0-based.
     uint32_t col = 0;  // caracter 0-based en UTF-16.
     size_t i = 0;
@@ -203,8 +197,7 @@ void byte_offset_to_lsp_position(const std::string &text, size_t byte_offset,
                     }
                     cp = (cp << 6) | (cb & 0x3F);
                 }
-                if (!ok)
-                    seq = 1;
+                if (!ok) seq = 1;
             }
         }
         if (seq == 1 && b == '\n') {
@@ -228,7 +221,9 @@ void DocumentStore::update(const std::string &uri, std::string text) {
     docs_[uri] = std::move(text);
 }
 
-void DocumentStore::close(const std::string &uri) { docs_.erase(uri); }
+void DocumentStore::close(const std::string &uri) {
+    docs_.erase(uri);
+}
 
 bool DocumentStore::has(const std::string &uri) const {
     return docs_.find(uri) != docs_.end();
@@ -244,21 +239,19 @@ const std::string &DocumentStore::text(const std::string &uri) const {
 std::string DocumentStore::line(const std::string &uri,
                                 uint32_t line_0based) const {
     auto it = docs_.find(uri);
-    if (it == docs_.end())
-        return std::string();
+    if (it == docs_.end()) return std::string();
     const std::string &txt = it->second;
     // Recorrer el texto contando saltos de linea hasta llegar a la linea
     // pedida; luego copiar hasta el siguiente salto.
-    uint32_t cur = 0;        // numero de linea actual.
-    size_t start = 0;        // inicio de la linea actual.
+    uint32_t cur = 0; // numero de linea actual.
+    size_t start = 0; // inicio de la linea actual.
     const size_t n = txt.size();
     for (size_t i = 0; i <= n; ++i) {
         if (i == n || txt[i] == '\n') {
             if (cur == line_0based) {
                 size_t end = i;
                 // Recortar un posible CR final (CRLF) para no incluirlo.
-                if (end > start && txt[end - 1] == '\r')
-                    --end;
+                if (end > start && txt[end - 1] == '\r') --end;
                 return txt.substr(start, end - start);
             }
             ++cur;

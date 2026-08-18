@@ -55,8 +55,7 @@ std::string find_project_manifest(std::string &out_format) {
     bool has_toml = paths::is_file(toml_p);
     bool has_json = paths::is_file(json_p);
     if (has_toml && has_json) {
-        ui::error(
-            "ambos vx.toml y vx.json existen; elige uno y borra el otro");
+        ui::error("ambos vx.toml y vx.json existen; elige uno y borra el otro");
         return std::string();
     }
     if (has_toml) {
@@ -506,7 +505,7 @@ static int cmd_inspect(const std::vector<std::string> &args) {
     ss << in.rdbuf();
     std::string raw = ss.str();
     auto pr = vx::vxi_parse(reinterpret_cast<const uint8_t *>(raw.data()),
-                              raw.size());
+                            raw.size());
     if (!pr.ok) {
         ui::error("parse fallo: " + pr.error_message);
         return 1;

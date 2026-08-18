@@ -64,10 +64,10 @@ static constexpr int kSpilled = -1;
  * @brief Tipo de restriccion DURA.
  */
 enum class ConstraintKind : uint8_t {
-    INTERFERE,       ///< @c a y @c b vivos a la vez: no comparten lane (ni alias).
-    DIFFERENT_LANE,  ///< @c a y @c b deben estar en lanes distintas (encoding).
-    SAME_LANE,       ///< @c a y @c b DEBEN compartir lane (operando tied duro).
-    FIXED_LANE,      ///< @c a fijado a la lane @c lane (shift->CL, div->RAX, pin).
+    INTERFERE, ///< @c a y @c b vivos a la vez: no comparten lane (ni alias).
+    DIFFERENT_LANE, ///< @c a y @c b deben estar en lanes distintas (encoding).
+    SAME_LANE,      ///< @c a y @c b DEBEN compartir lane (operando tied duro).
+    FIXED_LANE, ///< @c a fijado a la lane @c lane (shift->CL, div->RAX, pin).
 };
 
 /**
@@ -76,9 +76,9 @@ enum class ConstraintKind : uint8_t {
  */
 struct Constraint {
     ConstraintKind kind;
-    uint32_t       a    = 0;   ///< primer valor implicado.
-    uint32_t       b    = 0;   ///< segundo valor (INTERFERE/DIFFERENT/SAME).
-    uint8_t        lane = 0;   ///< lane fisica (solo FIXED_LANE).
+    uint32_t a = 0;   ///< primer valor implicado.
+    uint32_t b = 0;   ///< segundo valor (INTERFERE/DIFFERENT/SAME).
+    uint8_t lane = 0; ///< lane fisica (solo FIXED_LANE).
 };
 
 /**
@@ -123,7 +123,8 @@ struct ConstraintSet {
         return false;
     }
 
-    /** @brief True si @p a y @p b tienen una arista INTERFERE (lineal, Fase 0). */
+    /** @brief True si @p a y @p b tienen una arista INTERFERE (lineal, Fase 0).
+     */
     bool interferes(uint32_t a, uint32_t b) const {
         for (const Constraint &c : items)
             if (c.kind == ConstraintKind::INTERFERE &&
@@ -138,11 +139,13 @@ struct ConstraintSet {
  * @brief Asignacion valor -> lane fisica (o @c kSpilled si en memoria).
  */
 struct LaneAssignment {
-    std::unordered_map<uint32_t, int> lane; ///< value_id -> lane id, o kSpilled.
+    std::unordered_map<uint32_t, int>
+        lane; ///< value_id -> lane id, o kSpilled.
 
     void assign(uint32_t value_id, int lane_id) { lane[value_id] = lane_id; }
     void spill(uint32_t value_id) { lane[value_id] = kSpilled; }
-    /** @brief Lane asignada a @p value_id, o @c kSpilled si no esta o spilled. */
+    /** @brief Lane asignada a @p value_id, o @c kSpilled si no esta o spilled.
+     */
     int lane_of(uint32_t value_id) const {
         auto it = lane.find(value_id);
         return it == lane.end() ? kSpilled : it->second;
@@ -155,12 +158,13 @@ struct LaneAssignment {
  *        mapea a un codigo @c VXNNNN del catalogo i18n al EMITIR; no es texto.
  */
 enum class ViolationKind : uint8_t {
-    NONE = 0,                 ///< asignacion valida.
-    INTERFERENCE_OVERLAP,     ///< @c a y @c b interfieren y sus lanes aliasan.
-    DIFFERENT_LANE_VIOLATED,  ///< @c a y @c b comparten lane pero deben diferir.
-    SAME_LANE_VIOLATED,       ///< @c a y @c b en lanes distintas pero deben coincidir.
-    FIXED_LANE_VIOLATED,      ///< @c a no esta en la lane fijada.
-    REQUIREMENT_UNSAT,        ///< la lane asignada no satisface el ValueRequirements.
+    NONE = 0,                ///< asignacion valida.
+    INTERFERENCE_OVERLAP,    ///< @c a y @c b interfieren y sus lanes aliasan.
+    DIFFERENT_LANE_VIOLATED, ///< @c a y @c b comparten lane pero deben diferir.
+    SAME_LANE_VIOLATED,      ///< @c a y @c b en lanes distintas pero deben
+                             ///< coincidir.
+    FIXED_LANE_VIOLATED,     ///< @c a no esta en la lane fijada.
+    REQUIREMENT_UNSAT, ///< la lane asignada no satisface el ValueRequirements.
 };
 
 /**
@@ -168,13 +172,13 @@ enum class ViolationKind : uint8_t {
  * @brief Resultado de @c validate_assignment: DATOS para el diagnostico i18n.
  */
 struct ConstraintViolation {
-    bool          ok     = true;                 ///< asignacion valida.
-    ViolationKind kind   = ViolationKind::NONE;  ///< motivo (dato).
-    uint32_t      a      = 0;                    ///< valor implicado.
-    uint32_t      b      = 0;                    ///< segundo valor (si aplica).
-    int           lane   = kSpilled;             ///< lane implicada (si aplica).
+    bool ok = true;                           ///< asignacion valida.
+    ViolationKind kind = ViolationKind::NONE; ///< motivo (dato).
+    uint32_t a = 0;                           ///< valor implicado.
+    uint32_t b = 0;                           ///< segundo valor (si aplica).
+    int lane = kSpilled;                      ///< lane implicada (si aplica).
     /// Si @c kind == REQUIREMENT_UNSAT, el motivo especifico del requisito.
-    UnsatReason   unsat  = UnsatReason::OK;
+    UnsatReason unsat = UnsatReason::OK;
 };
 
 /**
@@ -189,11 +193,11 @@ struct ConstraintViolation {
  * lanes ALIASAN (via @c AliasSet -> captura sub-registro), violan.  Un valor
  * spilled (@c kSpilled) no ocupa lane y nunca interfiere.
  */
-inline ConstraintViolation validate_assignment(
-    const ConstraintSet &cs, const LaneAssignment &assign,
-    const std::vector<ValueRequirements> &reqs,
-    const PhysicalRegisterBank &bank, bool vec_reduction_active) {
-
+inline ConstraintViolation
+validate_assignment(const ConstraintSet &cs, const LaneAssignment &assign,
+                    const std::vector<ValueRequirements> &reqs,
+                    const PhysicalRegisterBank &bank,
+                    bool vec_reduction_active) {
     ConstraintViolation v;
 
     // 1) Restricciones entre valores / valor-lane.
@@ -202,11 +206,14 @@ inline ConstraintViolation validate_assignment(
         switch (c.kind) {
         case ConstraintKind::INTERFERE: {
             const int lb = assign.lane_of(c.b);
-            if (la == kSpilled || lb == kSpilled) break; // spilled no interfiere.
+            if (la == kSpilled || lb == kSpilled)
+                break; // spilled no interfiere.
             const AliasSet *aa = bank.aliases_of(static_cast<uint8_t>(la));
             const AliasSet *ab = bank.aliases_of(static_cast<uint8_t>(lb));
             if (aa && ab && aa->overlaps(*ab)) {
-                v = {false, ViolationKind::INTERFERENCE_OVERLAP, c.a, c.b, la, UnsatReason::OK};
+                v = {false, ViolationKind::INTERFERENCE_OVERLAP,
+                     c.a,   c.b,
+                     la,    UnsatReason::OK};
                 return v;
             }
             break;
@@ -214,7 +221,9 @@ inline ConstraintViolation validate_assignment(
         case ConstraintKind::DIFFERENT_LANE: {
             const int lb = assign.lane_of(c.b);
             if (la != kSpilled && la == lb) {
-                v = {false, ViolationKind::DIFFERENT_LANE_VIOLATED, c.a, c.b, la, UnsatReason::OK};
+                v = {false, ViolationKind::DIFFERENT_LANE_VIOLATED,
+                     c.a,   c.b,
+                     la,    UnsatReason::OK};
                 return v;
             }
             break;
@@ -222,14 +231,18 @@ inline ConstraintViolation validate_assignment(
         case ConstraintKind::SAME_LANE: {
             const int lb = assign.lane_of(c.b);
             if (la != lb) {
-                v = {false, ViolationKind::SAME_LANE_VIOLATED, c.a, c.b, la, UnsatReason::OK};
+                v = {false, ViolationKind::SAME_LANE_VIOLATED,
+                     c.a,   c.b,
+                     la,    UnsatReason::OK};
                 return v;
             }
             break;
         }
         case ConstraintKind::FIXED_LANE: {
             if (la != kSpilled && la != static_cast<int>(c.lane)) {
-                v = {false, ViolationKind::FIXED_LANE_VIOLATED, c.a, 0, la, UnsatReason::OK};
+                v = {false, ViolationKind::FIXED_LANE_VIOLATED,
+                     c.a,   0,
+                     la,    UnsatReason::OK};
                 return v;
             }
             break;
@@ -246,7 +259,8 @@ inline ConstraintViolation validate_assignment(
         SatisfiabilityReport sat =
             requirements_satisfiable(probe, bank, vec_reduction_active);
         if (!sat.ok) {
-            v = {false, ViolationKind::REQUIREMENT_UNSAT, r.value_id, 0, l, sat.reason};
+            v = {false,     ViolationKind::REQUIREMENT_UNSAT, r.value_id, 0, l,
+                 sat.reason};
             return v;
         }
     }

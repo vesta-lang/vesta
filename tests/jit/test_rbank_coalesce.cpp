@@ -8,8 +8,8 @@
 /**
  * @file tests/jit/test_rbank_coalesce.cpp
  * @brief Fase 3: coalescing conservador sobre el problema abstracto.  Funde los
- *        valores AFINES (AffinityGraphFacts) que pueden compartir lane sin subir la
- *        presion.  Property-based: nunca REINTRODUCE spill + coloreo propio.
+ *        valores AFINES (AffinityGraphFacts) que pueden compartir lane sin
+ * subir la presion.  Property-based: nunca REINTRODUCE spill + coloreo propio.
  */
 
 #include "codegen/rbank/coalesce.h"
@@ -26,13 +26,13 @@ using namespace codegen::rbank; // el modelo.
 static int g_checks = 0;
 static int g_fail = 0;
 
-#define CHECK(cond, msg)                                                     \
-    do {                                                                     \
-        ++g_checks;                                                          \
-        if (!(cond)) {                                                       \
-            ++g_fail;                                                        \
-            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);        \
-        }                                                                    \
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fail;                                                          \
+            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);          \
+        }                                                                      \
     } while (0)
 
 static AbstractValue mkval(uint32_t id, uint32_t start, uint32_t end,
@@ -48,9 +48,14 @@ static AbstractValue mkval(uint32_t id, uint32_t start, uint32_t end,
 }
 
 int main() {
-    std::printf("=== test_rbank_coalesce (Fase 3: coalescing conservador) ===\n");
+    std::printf(
+        "=== test_rbank_coalesce (Fase 3: coalescing conservador) ===\n");
 
-    const BackendCaps caps = [] { BackendCaps c{}; c.sse2 = true; return c; }();
+    const BackendCaps caps = [] {
+        BackendCaps c{};
+        c.sse2 = true;
+        return c;
+    }();
     PhysicalRegisterBank bank = physical_bank_x86_64(true, caps);
 
     // --- Unit: afines contiguos no-interferentes -> se funden ---
@@ -63,7 +68,8 @@ int main() {
         CoalesceResult c = coalesce_conservative(p);
         CHECK(c.copies_eliminated == 1, "no fundio afines disjuntos");
         CHECK(c.problem.values.size() == 1, "no colapso en 1 grupo");
-        CHECK(c.rep[1] == c.rep[2], "afines fundidos no comparten representante");
+        CHECK(c.rep[1] == c.rep[2],
+              "afines fundidos no comparten representante");
     }
 
     // --- Unit: afines que INTERFIEREN -> NO se funden ---
@@ -77,7 +83,8 @@ int main() {
         CHECK(c.copies_eliminated == 0, "fundio dos valores vivos a la vez");
     }
 
-    // --- Unit: el caso del HUECO (envolvente crearia interferencia) -> rechazado ---
+    // --- Unit: el caso del HUECO (envolvente crearia interferencia) ->
+    // rechazado ---
     std::printf("\n[afines A,B con C entre medias -> punto (3) lo RECHAZA]\n");
     {
         AbstractProblem p;
@@ -87,8 +94,9 @@ int main() {
                     mkval(3, 5, 8, ResourceClass::GP, ViewWidth::W8)};
         p.affinity.edges = {{1, 2, 1.0f}};
         CoalesceResult c = coalesce_conservative(p);
-        CHECK(c.copies_eliminated == 0,
-              "fundio A-B: el envolvente [0,12] interfiere con C (bug del hull)");
+        CHECK(
+            c.copies_eliminated == 0,
+            "fundio A-B: el envolvente [0,12] interfiere con C (bug del hull)");
     }
 
     // --- Unit: clase/ancho distintos -> NO se funden ---
@@ -106,7 +114,8 @@ int main() {
     std::printf("\n[property-based: 1000 problemas + afinidades aleatorias]\n");
     {
         std::mt19937 rng(0xC0A1E5Cu);
-        int proper_ok = 0, no_new_spill = 0, no_new_spill_cases = 0, did_fuse = 0;
+        int proper_ok = 0, no_new_spill = 0, no_new_spill_cases = 0,
+            did_fuse = 0;
         const int TRIALS = 1000;
         for (int t = 0; t < TRIALS; ++t) {
             std::uniform_int_distribution<uint32_t> nvals(2, 16);
@@ -120,13 +129,15 @@ int main() {
                 const uint32_t s = pos(rng);
                 const uint32_t e = s + dur(rng);
                 const bool fp = coin(rng) != 0;
-                p.values.push_back(mkval(i + 1, s, e,
-                                         fp ? ResourceClass::FP_VECTOR : ResourceClass::GP,
-                                         fp ? ViewWidth::W16 : ViewWidth::W8));
+                p.values.push_back(
+                    mkval(i + 1, s, e,
+                          fp ? ResourceClass::FP_VECTOR : ResourceClass::GP,
+                          fp ? ViewWidth::W16 : ViewWidth::W8));
             }
             // Afinidades aleatorias entre pares de valores.
             std::uniform_int_distribution<uint32_t> pick(1, n);
-            const uint32_t nedges = std::uniform_int_distribution<uint32_t>(0, n)(rng);
+            const uint32_t nedges =
+                std::uniform_int_distribution<uint32_t>(0, n)(rng);
             for (uint32_t k = 0; k < nedges; ++k) {
                 uint32_t a = pick(rng), b = pick(rng);
                 if (a != b) p.affinity.edges.push_back({a, b, 1.0f});
@@ -147,12 +158,15 @@ int main() {
                 if (spill_count(c.problem, col) == 0) ++no_new_spill;
             }
         }
-        CHECK(proper_ok == TRIALS, "algun coloreado del coalescido fue invalido");
+        CHECK(proper_ok == TRIALS,
+              "algun coloreado del coalescido fue invalido");
         CHECK(no_new_spill == no_new_spill_cases,
               "el coalescing REINTRODUJO spill (punto 3 fallo)");
-        CHECK(did_fuse > 0, "el coalescing no fundio NADA en 1000 problemas (no-op?)");
+        CHECK(did_fuse > 0,
+              "el coalescing no fundio NADA en 1000 problemas (no-op?)");
         std::printf("  propio=%d/%d  sin_spill_nuevo=%d/%d  fundieron=%d/%d\n",
-                    proper_ok, TRIALS, no_new_spill, no_new_spill_cases, did_fuse, TRIALS);
+                    proper_ok, TRIALS, no_new_spill, no_new_spill_cases,
+                    did_fuse, TRIALS);
     }
 
     std::printf("\n=== %d checks, %d fallos ===\n", g_checks, g_fail);

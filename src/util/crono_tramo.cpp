@@ -48,11 +48,11 @@ std::vector<Acumulador *> &registro() {
 }
 
 Acumulador &mio() {
-    /* Se reserva y NO se libera a proposito: vive lo que el proceso, y liberarlo
-     * al morir el hilo dejaria al registro con un puntero colgando justo cuando
-     * alguien podria estar sumando. */
+    /* Se reserva y NO se libera a proposito: vive lo que el proceso, y
+     * liberarlo al morir el hilo dejaria al registro con un puntero colgando
+     * justo cuando alguien podria estar sumando. */
     static thread_local Acumulador *a = [] {
-        auto                       *p = new Acumulador();
+        auto *p = new Acumulador();
         std::lock_guard<std::mutex> lk(registro_mutex());
         registro().push_back(p);
         return p;
@@ -81,7 +81,7 @@ namespace {
  * fino que eso significa nada, y conviene que se vea en vez de creerselo.
  */
 struct Calibracion {
-    long long coste_ns = 0;    ///< lo que cuesta una toma completa.
+    long long coste_ns = 0;      ///< lo que cuesta una toma completa.
     long long resolucion_ns = 0; ///< salto minimo observable del reloj.
 };
 
@@ -92,7 +92,7 @@ Calibracion medir_calibracion() {
      * acumulador del hilo y anotacion -- para no medir una version mas barata
      * que la que se paga. */
     constexpr int kN = 20000;
-    const auto    t0 = std::chrono::steady_clock::now();
+    const auto t0 = std::chrono::steady_clock::now();
     for (int i = 0; i < kN; ++i) {
         const auto a = std::chrono::steady_clock::now();
         acumular_tramo_ns("  <calibracion>",
@@ -135,7 +135,7 @@ Calibracion_ calibracion_del_cronometro() {
 }
 
 std::vector<Tramo> tramos_medidos() {
-    std::lock_guard<std::mutex>                                       lk(registro_mutex());
+    std::lock_guard<std::mutex> lk(registro_mutex());
     std::unordered_map<const char *, std::pair<long long, long long>> total;
     for (const Acumulador *a : registro())
         for (const auto &kv : a->t) {
@@ -143,7 +143,7 @@ std::vector<Tramo> tramos_medidos() {
             e.first += kv.second.first;
             e.second += kv.second.second;
         }
-    const long long   coste = calibracion().coste_ns;
+    const long long coste = calibracion().coste_ns;
     std::vector<Tramo> v;
     v.reserve(total.size());
     for (const auto &kv : total) {
@@ -167,7 +167,8 @@ std::vector<Tramo> tramos_medidos() {
 
 void reiniciar_tramos() {
     std::lock_guard<std::mutex> lk(registro_mutex());
-    for (Acumulador *a : registro()) a->t.clear();
+    for (Acumulador *a : registro())
+        a->t.clear();
 }
 
 } // namespace util

@@ -84,7 +84,8 @@ int run_worker_from_source(std::string code, const std::string &file_name,
                 std::filesystem::path(exe_dir).parent_path().string();
             if (!_plib.empty()) {
                 pp.options().import_paths.push_back(_plib + "/include_lib");
-                pp.options().import_paths.push_back(_plib + "/preprocessor/include_lib");
+                pp.options().import_paths.push_back(
+                    _plib + "/preprocessor/include_lib");
             }
         }
         pp.options().import_paths.push_back(source_dir);

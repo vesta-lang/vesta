@@ -42,9 +42,9 @@ namespace runtime {
  * recuperacion.  Duplicado asi, arreglar uno y olvidar el otro es cuestion de
  * tiempo -- y el segundo solo se nota cuando alguien falla por ese camino.
  *
- * El mensaje no se escribe aqui: el TIPO de fallo ya lo cuenta el catalogo en el
- * idioma de quien lee.  Lo unico que se anade es la direccion del acceso, que si
- * aporta, y tambien por catalogo.
+ * El mensaje no se escribe aqui: el TIPO de fallo ya lo cuenta el catalogo en
+ * el idioma de quien lee.  Lo unico que se anade es la direccion del acceso,
+ * que si aporta, y tambien por catalogo.
  *
  * Devuelve si un `catch` del programa se hizo cargo.  Sin esto, quien recupera
  * daba el proceso por muerto SIEMPRE, asi que un fallo del sistema rodeado de
@@ -73,9 +73,9 @@ static bool lanzar_fallo_del_sistema(runtime::ProcessVM *p) {
                   (unsigned long long)p->pending_av_addr);
     /* Los fallos que NO son un acceso invalido se cuentan con la misma calidad
      * que los demas: por catalogo, con su sitio, y por la misma via -- asi
-     * heredan la cadena de llamadas y el `fichero:linea` que arma `throw_fatal`.
-     * Contar unos bien y otros con un silencio es peor que no contar ninguno:
-     * el que calla parece que no ocurrio. */
+     * heredan la cadena de llamadas y el `fichero:linea` que arma
+     * `throw_fatal`. Contar unos bien y otros con un silencio es peor que no
+     * contar ninguno: el que calla parece que no ocurrio. */
     if (p->pending_av_kind == 3) {
         // Una instruccion que este procesador no sabe ejecutar.
         const std::string detalle = vx::diag::format("VX7019", {dir});
@@ -100,7 +100,6 @@ static bool lanzar_fallo_del_sistema(runtime::ProcessVM *p) {
     runtime::throw_fatal(p, runtime::FATAL_SEGMENTATION_FAULT, detalle.c_str());
     return atrapado();
 }
-
 
 /**
  * @brief Construye el scheduler, lo asocia a la VM indicada e inicializa la
@@ -442,12 +441,13 @@ void Scheduler::run_loop() {
              * El JIT-eated main puede invocar metodos via CALLVIRT
              * (que en el selector baja a vrt_callvirt -> enter_jit). */
             jit::JitFn jf = reinterpret_cast<jit::JitFn>(fn_ptr);
-            /* Armar el setjmp de recuperacion tambien alrededor del jit_entry_fn
-             * (no solo del batch interp de mas abajo): asi el watchdog CTPE puede
-             * abortar main via longjmp desde el poll de safepoint, y ademas un
-             * SIGSEGV dentro de main compilado se recupera igual que en el batch.
-             * setjmp==0: ejecucion normal; !=0: se hizo longjmp (aborto) -> saltar
-             * la ejecucion y dejar el proceso HALT. */
+            /* Armar el setjmp de recuperacion tambien alrededor del
+             * jit_entry_fn (no solo del batch interp de mas abajo): asi el
+             * watchdog CTPE puede abortar main via longjmp desde el poll de
+             * safepoint, y ademas un SIGSEGV dentro de main compilado se
+             * recupera igual que en el batch. setjmp==0: ejecucion normal; !=0:
+             * se hizo longjmp (aborto) -> saltar la ejecucion y dejar el
+             * proceso HALT. */
             instance->pending_av_kind = 0xFFFFFFFFu;
             instance->av_recovery_active = true;
             bool atrapado_por_el_programa = false;
@@ -467,10 +467,10 @@ void Scheduler::run_loop() {
                  * de dos maneras distintas segun como se ejecute es peor que
                  * cualquiera de las dos. */
                 /* Por el MISMO sitio que el batch del interprete: el fallo se
-                 * cuenta una sola vez, escrito una sola vez.  Antes esto era una
-                 * copia palabra por palabra del otro camino, y solo cubria dos
-                 * de los fallos -- una instruccion que el procesador no tiene
-                 * moria aqui sin decir nada. */
+                 * cuenta una sola vez, escrito una sola vez.  Antes esto era
+                 * una copia palabra por palabra del otro camino, y solo cubria
+                 * dos de los fallos -- una instruccion que el procesador no
+                 * tiene moria aqui sin decir nada. */
                 atrapado_por_el_programa = lanzar_fallo_del_sistema(instance);
             }
             instance->av_recovery_active = false;
@@ -583,11 +583,11 @@ void Scheduler::run_loop() {
                          * que se armo el salto -- valen lo que valgan: seguir
                          * hacia el bucle de despacho es entrar en el con
                          * `instance`, el contador de vivos y la tabla en un
-                         * estado que nadie garantiza, y eso terminaba llevandose
-                         * la maquina entera justo despues de contar el fallo.
-                         * Se deja el proceso listo y se vuelve a entrar limpio
-                         * por el camino de siempre, que es el unico que arma sus
-                         * locales desde cero. */
+                         * estado que nadie garantiza, y eso terminaba
+                         * llevandose la maquina entera justo despues de contar
+                         * el fallo. Se deja el proceso listo y se vuelve a
+                         * entrar limpio por el camino de siempre, que es el
+                         * unico que arma sus locales desde cero. */
                         instance->av_recovery_active = false;
                         instance->state.store(READY, std::memory_order_release);
                         instance->tsc = 1;
@@ -601,22 +601,25 @@ void Scheduler::run_loop() {
                         }
                         continue; /* se retoma en el handler, con marco nuevo */
                     } else {
-                    /* Y se cierra el proceso AQUI, con el mismo cierre que usa
-                     * la entrada al codigo compilado.
-                     *
-                     * Sin `try`, `throw_fatal` deja el proceso muerto y RETORNA
-                     * -- no salta a ningun sitio --, asi que seguir el lote
-                     * significaba volver a ejecutar la instruccion que acaba de
-                     * reventar y repetirlo sin fin.  Pero cortar el lote a secas
-                     * tampoco vale: el descuento de procesos vivos esta DENTRO
-                     * del despacho, asi que saltarselo deja el contador en alto,
-                     * los planificadores esperando a alguien que ya no existe y
-                     * la maquina colgada.  Hay que marcar HALT y soltarlo. */
-                    instance->av_recovery_active = false;
-                    instance->state.store(HALT, std::memory_order_release);
-                    instance->tsc = 1;
-                    alive_count--;
-                    continue; /* a por otro proceso */
+                        /* Y se cierra el proceso AQUI, con el mismo cierre que
+                         * usa la entrada al codigo compilado.
+                         *
+                         * Sin `try`, `throw_fatal` deja el proceso muerto y
+                         * RETORNA
+                         * -- no salta a ningun sitio --, asi que seguir el lote
+                         * significaba volver a ejecutar la instruccion que
+                         * acaba de reventar y repetirlo sin fin.  Pero cortar
+                         * el lote a secas tampoco vale: el descuento de
+                         * procesos vivos esta DENTRO del despacho, asi que
+                         * saltarselo deja el contador en alto, los
+                         * planificadores esperando a alguien que ya no existe y
+                         * la maquina colgada.  Hay que marcar HALT y soltarlo.
+                         */
+                        instance->av_recovery_active = false;
+                        instance->state.store(HALT, std::memory_order_release);
+                        instance->tsc = 1;
+                        alive_count--;
+                        continue; /* a por otro proceso */
                     }
                 }
             }
@@ -939,9 +942,10 @@ void Scheduler::run_loop() {
                 {
                     const uint64_t bpc = instance->registers.rip.raw();
                     runtime::profile::lite_profile_branch(bpc, taken);
-                    if (__builtin_expect(runtime::profile::g_profile.active.load(
-                                             std::memory_order_relaxed),
-                                         0)) {
+                    if (__builtin_expect(
+                            runtime::profile::g_profile.active.load(
+                                std::memory_order_relaxed),
+                            0)) {
                         runtime::profile::profile_branch(bpc, taken);
                     }
                 }
@@ -983,9 +987,10 @@ void Scheduler::run_loop() {
                 if (cond < 0x0E) {
                     const uint64_t bpc = instance->registers.rip.raw();
                     runtime::profile::lite_profile_branch(bpc, taken);
-                    if (__builtin_expect(runtime::profile::g_profile.active.load(
-                                             std::memory_order_relaxed),
-                                         0)) {
+                    if (__builtin_expect(
+                            runtime::profile::g_profile.active.load(
+                                std::memory_order_relaxed),
+                            0)) {
                         runtime::profile::profile_branch(bpc, taken);
                     }
                 }
@@ -1106,7 +1111,8 @@ void Scheduler::run_loop() {
             /* SHL/SHR/SAR reg,reg (mode=3, 64-bit): compute inline + flags
              * IDENTICAS al path generico (ShlOp/ShrOp/SarOp): solo CF/OF, ZF/SF
              * quedan intactos.  Modos parciales caen a L_SLOW.  Ataca los loops
-             * FNV/hash/shift-heavy (hash_lookup: 5 shifts/iter iban a L_SLOW). */
+             * FNV/hash/shift-heavy (hash_lookup: 5 shifts/iter iban a L_SLOW).
+             */
             L_SHL: {
                 if (fl_inl.mode != 3) goto L_SLOW;
                 auto &regs = instance->registers.regs;
@@ -1114,7 +1120,8 @@ void Scheduler::run_loop() {
                 const uint8_t rdst = d->data_instruction.reg_data.reg1;
                 const uint8_t rsrc = d->data_instruction.reg_data.reg2;
                 const uint64_t a = regs[rdst].qword();
-                const uint32_t sh = static_cast<uint32_t>(regs[rsrc].qword()) & 63u;
+                const uint32_t sh =
+                    static_cast<uint32_t>(regs[rsrc].qword()) & 63u;
                 const uint64_t res = a << sh;
                 regs[rdst].qword(res);
                 if (sh == 0) {
@@ -1138,7 +1145,8 @@ void Scheduler::run_loop() {
                 const uint8_t rdst = d->data_instruction.reg_data.reg1;
                 const uint8_t rsrc = d->data_instruction.reg_data.reg2;
                 const uint64_t a = regs[rdst].qword();
-                const uint32_t sh = static_cast<uint32_t>(regs[rsrc].qword()) & 63u;
+                const uint32_t sh =
+                    static_cast<uint32_t>(regs[rsrc].qword()) & 63u;
                 regs[rdst].qword(a >> sh);
                 if (sh == 0) {
                     fl.CF = 0;
@@ -1159,7 +1167,8 @@ void Scheduler::run_loop() {
                 const uint8_t rdst = d->data_instruction.reg_data.reg1;
                 const uint8_t rsrc = d->data_instruction.reg_data.reg2;
                 const uint64_t a = regs[rdst].qword();
-                const uint32_t sh = static_cast<uint32_t>(regs[rsrc].qword()) & 63u;
+                const uint32_t sh =
+                    static_cast<uint32_t>(regs[rsrc].qword()) & 63u;
                 regs[rdst].qword(
                     static_cast<uint64_t>(static_cast<int64_t>(a) >> sh));
                 if (sh == 0) {
@@ -1174,8 +1183,9 @@ void Scheduler::run_loop() {
                 NEXT_DISPATCH();
             }
 
-            /* SETCC r_dst, cond: escribe 0/1 segun la condicion.  reg1 empaqueta
-             * (cond<<4)|dst.  No toca flags (identico a exec_instr_setcc). */
+            /* SETCC r_dst, cond: escribe 0/1 segun la condicion.  reg1
+             * empaqueta (cond<<4)|dst.  No toca flags (identico a
+             * exec_instr_setcc). */
             L_SETCC: {
                 auto &regs = instance->registers.regs;
                 const auto &fl = instance->registers.flags.bits;
@@ -1214,8 +1224,7 @@ void Scheduler::run_loop() {
              * (loop counters `(u64)i`, etc.); replica exec_instr_sext. */
             L_SEXT: {
                 auto &regs = instance->registers.regs;
-                const uint8_t rdst =
-                    d->data_instruction.reg_data.reg1 & 0xF;
+                const uint8_t rdst = d->data_instruction.reg_data.reg1 & 0xF;
                 const uint8_t width = d->data_instruction.reg_data.reg2;
                 const uint64_t v = regs[rdst].qword();
                 uint64_t res;
@@ -1235,8 +1244,8 @@ void Scheduler::run_loop() {
                 default: {
                     const uint32_t sh =
                         (64u - (static_cast<uint32_t>(width) & 63u)) & 63u;
-                    res = static_cast<uint64_t>(
-                        static_cast<int64_t>(v << sh) >> sh);
+                    res = static_cast<uint64_t>(static_cast<int64_t>(v << sh) >>
+                                                sh);
                     break;
                 }
                 }
@@ -1251,22 +1260,26 @@ void Scheduler::run_loop() {
              * las instrucciones de memoria mas frecuentes del hot loop; iban a
              * L_SLOW (decode + call por puntero) aunque el acceso interno ya
              * usaba el page-cache.  Handler inline: replica exec_instr_mld/mst
-             * (base +/- index*scale +/- disp, host/VM, sign-ext, anchos 1/2/4/8).
-             * El banco FP (flags b4) y anchos >8 (SIMD) caen a L_SLOW (raros en
-             * codigo entero). */
+             * (base +/- index*scale +/- disp, host/VM, sign-ext, anchos
+             * 1/2/4/8). El banco FP (flags b4) y anchos >8 (SIMD) caen a L_SLOW
+             * (raros en codigo entero). */
             L_MLD: {
                 const auto &m = d->data_instruction.mem_full;
                 if ((m.flags & 0x10) || m.width > 8) goto L_SLOW;
                 auto &regs = instance->registers.regs;
-                uint64_t addr = m.base < 16
-                                    ? regs[m.base].qword()
-                                    : (m.base == 16
-                                           ? instance->registers.base_pointer.raw()
-                                           : instance->registers.stack_pointer.raw());
+                uint64_t addr =
+                    m.base < 16
+                        ? regs[m.base].qword()
+                        : (m.base == 16
+                               ? instance->registers.base_pointer.raw()
+                               : instance->registers.stack_pointer.raw());
                 addr += static_cast<uint64_t>(static_cast<int64_t>(m.disp));
                 if (m.flags & 0x02) {
                     const uint64_t idx = regs[m.index].qword() << m.scale;
-                    if (m.flags & 0x04) addr -= idx; else addr += idx;
+                    if (m.flags & 0x04)
+                        addr -= idx;
+                    else
+                        addr += idx;
                 }
                 uint64_t val;
                 if (m.flags & 0x01) { // host
@@ -1283,12 +1296,18 @@ void Scheduler::run_loop() {
                 }
                 if (m.flags & 0x08) { // sign-extend anchos < 8
                     switch (m.width) {
-                    case 1: val = static_cast<uint64_t>(
-                                static_cast<int64_t>(static_cast<int8_t>(val))); break;
-                    case 2: val = static_cast<uint64_t>(
-                                static_cast<int64_t>(static_cast<int16_t>(val))); break;
-                    case 4: val = static_cast<uint64_t>(
-                                static_cast<int64_t>(static_cast<int32_t>(val))); break;
+                    case 1:
+                        val = static_cast<uint64_t>(
+                            static_cast<int64_t>(static_cast<int8_t>(val)));
+                        break;
+                    case 2:
+                        val = static_cast<uint64_t>(
+                            static_cast<int64_t>(static_cast<int16_t>(val)));
+                        break;
+                    case 4:
+                        val = static_cast<uint64_t>(
+                            static_cast<int64_t>(static_cast<int32_t>(val)));
+                        break;
                     default: break;
                     }
                 }
@@ -1303,24 +1322,37 @@ void Scheduler::run_loop() {
                 const auto &m = d->data_instruction.mem_full;
                 if ((m.flags & 0x10) || m.width > 8) goto L_SLOW;
                 auto &regs = instance->registers.regs;
-                uint64_t addr = m.base < 16
-                                    ? regs[m.base].qword()
-                                    : (m.base == 16
-                                           ? instance->registers.base_pointer.raw()
-                                           : instance->registers.stack_pointer.raw());
+                uint64_t addr =
+                    m.base < 16
+                        ? regs[m.base].qword()
+                        : (m.base == 16
+                               ? instance->registers.base_pointer.raw()
+                               : instance->registers.stack_pointer.raw());
                 addr += static_cast<uint64_t>(static_cast<int64_t>(m.disp));
                 if (m.flags & 0x02) {
                     const uint64_t idx = regs[m.index].qword() << m.scale;
-                    if (m.flags & 0x04) addr -= idx; else addr += idx;
+                    if (m.flags & 0x04)
+                        addr -= idx;
+                    else
+                        addr += idx;
                 }
                 const uint64_t val = regs[m.reg].qword();
                 if (m.flags & 0x01) { // host
                     std::memcpy(reinterpret_cast<void *>(addr), &val, m.width);
                 } else {
                     switch (m.width) {
-                    case 1: instance->vm_mem.write_u8(addr, static_cast<uint8_t>(val)); break;
-                    case 2: instance->vm_mem.write_u16(addr, static_cast<uint16_t>(val)); break;
-                    case 4: instance->vm_mem.write_u32(addr, static_cast<uint32_t>(val)); break;
+                    case 1:
+                        instance->vm_mem.write_u8(addr,
+                                                  static_cast<uint8_t>(val));
+                        break;
+                    case 2:
+                        instance->vm_mem.write_u16(addr,
+                                                   static_cast<uint16_t>(val));
+                        break;
+                    case 4:
+                        instance->vm_mem.write_u32(addr,
+                                                   static_cast<uint32_t>(val));
+                        break;
                     default: instance->vm_mem.write_u64_fast(addr, val); break;
                     }
                 }
@@ -1453,16 +1485,18 @@ void Scheduler::run_loop() {
 
             BATCH_END:;
 #undef NEXT_DISPATCH
-            // FINALIZADORES GC: safe point de fin de batch.  Ninguna instruccion
-            // esta en vuelo; los regs/stack del proceso estan commiteados y la
-            // instruccion decodificada ya no se usa.  Si un GC disparado durante
-            // el batch stageo finalizadores (objetos con recurso interno
-            // escapados y muertos), drenarlos AHORA reentrando al interprete
-            // para correr sus deleters -- seguro fuera de cualquier handler.
-            // Fast path: 1 branch predicho-no-tomado cuando no hay pendientes.
-            if (instance != nullptr &&
-                __builtin_expect(instance->gc_heap.has_pending_finalizers(), 0))
-                instance->gc_heap.run_pending_finalizers();
+                // FINALIZADORES GC: safe point de fin de batch.  Ninguna
+                // instruccion esta en vuelo; los regs/stack del proceso estan
+                // commiteados y la instruccion decodificada ya no se usa.  Si
+                // un GC disparado durante el batch stageo finalizadores
+                // (objetos con recurso interno escapados y muertos), drenarlos
+                // AHORA reentrando al interprete para correr sus deleters --
+                // seguro fuera de cualquier handler. Fast path: 1 branch
+                // predicho-no-tomado cuando no hay pendientes.
+                if (instance != nullptr &&
+                    __builtin_expect(instance->gc_heap.has_pending_finalizers(),
+                                     0))
+                    instance->gc_heap.run_pending_finalizers();
             }
             /* DEAD CODE STUB BELOW: el codigo entre aqui y `} else {`
              * (slow path FSM hooks) son los restos del while+switch viejo

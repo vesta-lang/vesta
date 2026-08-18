@@ -55,7 +55,7 @@ extern "C" {
  *
  * Ejemplos:
  *   - Ver el IR/asm que se genera para Linux x86-64: {"linux","x86-64","elf",1}
- *   - Ver el asm que se genera para Windows x86-32:  {"windows","x86-32","pe",1}
+ *   - Ver el asm que se genera para Windows x86-32: {"windows","x86-32","pe",1}
  */
 typedef struct {
     const char *os;   /**< "windows" | "linux" | "macos"; NULL/"" = host. */
@@ -384,16 +384,16 @@ VESTA_API int vesta_sqlite_exec(const char *db_path, const char *sql,
  * @c 0 / defaults lo no usado.
  */
 typedef struct VestaBuildConfig {
-    unsigned char asm_target_bits;   /**< 64/32/16: lowering de inline-asm. */
-    int native_poo;                  /**< clases AOT (calloc/dtor) vs VM (GC). */
-    int exceptions_enabled;          /**< lowering de try/catch en AOT. */
-    const char *instrument_mode;     /**< "none"/"trace"/"profile" (NULL = ""). */
-    const char *tgt_os;              /**< @Target OS (NULL = ""). */
-    const char *tgt_arch;            /**< @Target arch (NULL = ""). */
-    int opt_level;                   /**< 0..3 (solo artefacto final). */
-    int emit_debug;                  /**< info de debug (solo artefacto final). */
-    unsigned char aot_vec_width;     /**< 16/32/64 SSE2/AVX/AVX512 (post-opt). */
-    const char *profile_id;          /**< PGO / perfil (NULL = ""). */
+    unsigned char asm_target_bits; /**< 64/32/16: lowering de inline-asm. */
+    int native_poo;                /**< clases AOT (calloc/dtor) vs VM (GC). */
+    int exceptions_enabled;        /**< lowering de try/catch en AOT. */
+    const char *instrument_mode;   /**< "none"/"trace"/"profile" (NULL = ""). */
+    const char *tgt_os;            /**< @Target OS (NULL = ""). */
+    const char *tgt_arch;          /**< @Target arch (NULL = ""). */
+    int opt_level;                 /**< 0..3 (solo artefacto final). */
+    int emit_debug;                /**< info de debug (solo artefacto final). */
+    unsigned char aot_vec_width;   /**< 16/32/64 SSE2/AVX/AVX512 (post-opt). */
+    const char *profile_id;        /**< PGO / perfil (NULL = ""). */
 } VestaBuildConfig;
 
 /**

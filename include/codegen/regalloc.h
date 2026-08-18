@@ -7,20 +7,22 @@
 
 /**
  * @file codegen/regalloc.h
- * @brief RESULTADO de la asignacion de registros -- estructura GENERAL del codegen,
- *        NO del JIT.  La consumen los tres consumidores del backend (interp/JIT via
- *        rewrite, AOT via sus targets) y la produce el allocator central @c rbank
- *        (regalloc_from_lanes) ademas del @c linear_scan legacy.  Por eso vive en
+ * @brief RESULTADO de la asignacion de registros -- estructura GENERAL del
+ * codegen, NO del JIT.  La consumen los tres consumidores del backend
+ * (interp/JIT via rewrite, AOT via sus targets) y la produce el allocator
+ * central @c rbank (regalloc_from_lanes) ademas del @c linear_scan legacy.  Por
+ * eso vive en
  *        @c codegen:: y no en @c jit::.
  *
- * POD puro: por cada vreg denso una ubicacion (REG fisico / SPILL slot / NONE muerto),
- * mas los callee-saved usados (push/pop del prologue/epilogue) y el numero de spill
- * slots (tamano extra del frame).  Sin dependencias de jit/ -> reutilizable desde
- * cualquier capa del codegen.
+ * POD puro: por cada vreg denso una ubicacion (REG fisico / SPILL slot / NONE
+ * muerto), mas los callee-saved usados (push/pop del prologue/epilogue) y el
+ * numero de spill slots (tamano extra del frame).  Sin dependencias de jit/ ->
+ * reutilizable desde cualquier capa del codegen.
  *
- * MODELO DE ASIGNACION (decision de arquitectura, en diseno).  El backend tendra DOS
- * modelos distintos porque responden a PREGUNTAS distintas -- no una estructura vieja con
- * mas campos.  Cada capa responde UNA pregunta (y NINGUNA existente cambia de significado):
+ * MODELO DE ASIGNACION (decision de arquitectura, en diseno).  El backend
+ * tendra DOS modelos distintos porque responden a PREGUNTAS distintas -- no una
+ * estructura vieja con mas campos.  Cada capa responde UNA pregunta (y NINGUNA
+ * existente cambia de significado):
  *
  *     LaneAssignment      ¿que lane recibe el valor?
  *     AssignmentPlan           ¿que parte del valor merece vivir en registro?
@@ -28,25 +30,29 @@
  *
  * Filosofia del proyecto -- Conocimiento -> Plan -> Transformacion:
  *
- *     Conocimiento:   AllocatorDiagnostics + SpillTaxonomy + execution_weight / hw_cost.
- *     Plan:           AssignmentPlan  (lo que producen las transformaciones de asignacion).
- *     Transformacion: TimelineBuilder (materializa un AllocationTimeline) + Rewrite.
+ *     Conocimiento:   AllocatorDiagnostics + SpillTaxonomy + execution_weight /
+ * hw_cost. Plan:           AssignmentPlan  (lo que producen las
+ * transformaciones de asignacion). Transformacion: TimelineBuilder (materializa
+ * un AllocationTimeline) + Rewrite.
  *
- * La transformacion de asignacion produce un @c AssignmentPlan; @c TimelineBuilder materializa
- * un @c AllocationTimeline, que constituye el formato TEMPORAL consumido por el Rewrite.
- * La Recovery encaja: produce un AssignmentPlan de 1 tramo (MEM->REG cubriendo toda la vida);
- * el Splitting produce MEM->REG->MEM; el Timeline no sabe cual lo creo (recovered_area lo
+ * La transformacion de asignacion produce un @c AssignmentPlan; @c
+ * TimelineBuilder materializa un @c AllocationTimeline, que constituye el
+ * formato TEMPORAL consumido por el Rewrite. La Recovery encaja: produce un
+ * AssignmentPlan de 1 tramo (MEM->REG cubriendo toda la vida); el Splitting
+ * produce MEM->REG->MEM; el Timeline no sabe cual lo creo (recovered_area lo
  * mide la transformacion, no el Timeline).
  *
- * RegAlloc permanece INMUTABLE: representa una asignacion PLANA (una ubicacion por vreg),
- * el formato que producen los allocators actuales.  TimelineBuilder puede convertirla
- * trivialmente en un AllocationTimeline.  Los modelos TEMPORALES pertenecen EXCLUSIVAMENTE
- * a @c AllocationTimeline -- nunca a esta estructura.  (Contrato arquitectonico.)
+ * RegAlloc permanece INMUTABLE: representa una asignacion PLANA (una ubicacion
+ * por vreg), el formato que producen los allocators actuales.  TimelineBuilder
+ * puede convertirla trivialmente en un AllocationTimeline.  Los modelos
+ * TEMPORALES pertenecen EXCLUSIVAMENTE a @c AllocationTimeline -- nunca a esta
+ * estructura.  (Contrato arquitectonico.)
  *
- * AllocationTimeline responde una pregunta FUNDAMENTAL -- "¿donde vive el valor en el
- * tiempo?" -- asi que probablemente deje de ser "la estructura del splitting" y se
- * convierta en el IR DE ASIGNACION del backend: el nivel donde convergen Recovery,
- * Splitting, rematerializacion parcial y futuras optimizaciones.
+ * AllocationTimeline responde una pregunta FUNDAMENTAL -- "¿donde vive el valor
+ * en el tiempo?" -- asi que probablemente deje de ser "la estructura del
+ * splitting" y se convierta en el IR DE ASIGNACION del backend: el nivel donde
+ * convergen Recovery, Splitting, rematerializacion parcial y futuras
+ * optimizaciones.
  */
 
 #ifndef VESTA_CODEGEN_REGALLOC_H
@@ -102,7 +108,8 @@ struct RegAlloc {
      *       registro y derramado.  En la representacion dispersa anterior eran
      *       dos mapas independientes y ese estado SI era representable -- fue
      *       un bug real (leia del registro ya reasignado).  Aqui deja de ser
-     *       expresable: asignar una ubicacion borra la otra por construccion. */
+     *       expresable: asignar una ubicacion borra la otra por construccion.
+     */
     void ensure(uint32_t vid) {
         if (vid >= assign.size()) assign.resize(static_cast<size_t>(vid) + 1);
     }

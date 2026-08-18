@@ -113,7 +113,7 @@ uint64_t ArenaManager::create_arena(size_t size, MemPerm perms) {
     void *mem = allocate_memory(size, perms); // reservar memoria del SO
     if (!mem) {
         VGC_CERR << "[ArenaManager] Error al asignar memoria\n"; // informar
-                                                                  // del fallo
+                                                                 // del fallo
         return 0; // ID 0 indica error
     }
 

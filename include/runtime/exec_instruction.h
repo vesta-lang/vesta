@@ -424,7 +424,8 @@ void exec_instr_mod_imm(ProcessVM *vm, const DecodedInstr &instr);
 void exec_instr_setcc(ProcessVM *vm, const DecodedInstr &instr);
 
 /**
- * @brief Ejecuta SEXT r_dst, N: sign-extiende r_dst desde N bits (8/16/32) a 64.
+ * @brief Ejecuta SEXT r_dst, N: sign-extiende r_dst desde N bits (8/16/32)
+ * a 64.
  */
 void exec_instr_sext(ProcessVM *vm, const DecodedInstr &instr);
 
@@ -1821,7 +1822,8 @@ void exec_instr_fastpop(ProcessVM *vm, const DecodedInstr &instr);
 void exec_instr_setstatic(ProcessVM *vm, const DecodedInstr &instr);
 
 /**
- * @brief mld r_dst, [base +/- index*scale +/- disp] : load universal (1 despacho).
+ * @brief mld r_dst, [base +/- index*scale +/- disp] : load universal (1
+ * despacho).
  * @brief mst [base +/- index*scale +/- disp], r_src : store universal.
  *
  * Resuelven la codificacion que faltaba (rbp/rsp como base, que el SIB no

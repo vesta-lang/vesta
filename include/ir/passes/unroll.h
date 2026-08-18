@@ -22,17 +22,17 @@
  * antes, no aqui):
  *
  *      preheader -> H
- *      H:  phi_k(init desde preheader, next_k desde el latch); cond=cmp.OP(iv,N);
- *          br.cond cond, body_entry, exit   // OP in {lt,le,ult,ule}, iv crece
- *      body: 1 o VARIOS bloques con control de flujo INTERNO arbitrario (ifs,
- *            merges) que convergen en un unico LATCH; iv_next = iv + S (S const
- *            > 0); latch: br H
- *      exit: usa valores loop-closed (las phi de H)
+ *      H:  phi_k(init desde preheader, next_k desde el latch);
+ * cond=cmp.OP(iv,N); br.cond cond, body_entry, exit   // OP in {lt,le,ult,ule},
+ * iv crece body: 1 o VARIOS bloques con control de flujo INTERNO arbitrario
+ * (ifs, merges) que convergen en un unico LATCH; iv_next = iv + S (S const >
+ * 0); latch: br H exit: usa valores loop-closed (las phi de H)
  *
- * Transformacion: clona el CUERPO COMPLETO (todos los bloques del bucle salvo H)
- * U veces, encadenando los valores loop-carried (el latch de la copia k salta a
- * la entrada de la copia k+1; el de la ultima vuelve al header unrollado UH);
- * guard `iv + (U-1)*S {<,<=} N` en UH; el bucle ORIGINAL queda como REMAINDER.
+ * Transformacion: clona el CUERPO COMPLETO (todos los bloques del bucle salvo
+ * H) U veces, encadenando los valores loop-carried (el latch de la copia k
+ * salta a la entrada de la copia k+1; el de la ultima vuelve al header
+ * unrollado UH); guard `iv + (U-1)*S {<,<=} N` en UH; el bucle ORIGINAL queda
+ * como REMAINDER.
  *
  * Usa @c analysis::LoopFacts (conocimiento centralizado de bucles).  Modular:
  * vive en su propio TU (ir_optimizer.cpp ya es monolitico).

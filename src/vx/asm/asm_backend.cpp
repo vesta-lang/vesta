@@ -46,4 +46,4 @@ AsmArch asm_arch_for_target(int bits) {
     if (bits == 32) return AsmArch::X86_32;
     return AsmArch::X86_64;
 }
-}
+} // namespace vx

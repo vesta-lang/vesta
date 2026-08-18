@@ -27,37 +27,55 @@ using ir::IrType;
 static int g_checks = 0;
 static int g_fail = 0;
 
-#define CHECK(cond, msg)                                                     \
-    do {                                                                     \
-        ++g_checks;                                                          \
-        if (!(cond)) {                                                       \
-            ++g_fail;                                                        \
-            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);        \
-        }                                                                    \
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fail;                                                          \
+            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);          \
+        }                                                                      \
     } while (0)
 
 static IrInstr br(IrBlockId t) {
-    IrInstr i; i.op = IrOp::BR; i.type = IrType::VOID; i.dst = ir::IR_NO_VALUE;
-    i.target_block = t; return i;
+    IrInstr i;
+    i.op = IrOp::BR;
+    i.type = IrType::VOID;
+    i.dst = ir::IR_NO_VALUE;
+    i.target_block = t;
+    return i;
 }
 static IrInstr brcond(IrBlockId tt, IrBlockId ff, uint32_t line) {
-    IrInstr i; i.op = IrOp::BR_COND; i.type = IrType::VOID; i.dst = ir::IR_NO_VALUE;
-    i.operands = {0}; i.target_block = tt; i.false_block = ff; i.source_line = line;
+    IrInstr i;
+    i.op = IrOp::BR_COND;
+    i.type = IrType::VOID;
+    i.dst = ir::IR_NO_VALUE;
+    i.operands = {0};
+    i.target_block = tt;
+    i.false_block = ff;
+    i.source_line = line;
     return i;
 }
 static IrInstr ret() {
-    IrInstr i; i.op = IrOp::RET; i.type = IrType::VOID; i.dst = ir::IR_NO_VALUE;
+    IrInstr i;
+    i.op = IrOp::RET;
+    i.type = IrType::VOID;
+    i.dst = ir::IR_NO_VALUE;
     return i;
 }
 static IrBlock block(IrBlockId id, const char *name, IrInstr term) {
-    IrBlock b; b.id = id; b.name = name; b.instrs.push_back(term); return b;
+    IrBlock b;
+    b.id = id;
+    b.name = name;
+    b.instrs.push_back(term);
+    return b;
 }
 
 int main() {
     std::printf("=== test_profile_facts (profiler centralizado, Tipo B) ===\n");
 
     // CFG anidado (mismo que LoopFacts) con lineas en los branches de cabecera.
-    ir::IrFunction fn; fn.name = "nested";
+    ir::IrFunction fn;
+    fn.name = "nested";
     fn.blocks.push_back(block(0, "entry", br(1)));
     fn.blocks.push_back(block(1, "outer_h", brcond(2, 5, /*line=*/100)));
     fn.blocks.push_back(block(2, "inner_h", brcond(3, 4, /*line=*/200)));
@@ -72,7 +90,8 @@ int main() {
         BranchProfile empty;
         ProfileFacts pf = compute_profile_facts(fn, loops, empty);
         CHECK(!pf.has_profile, "has_profile true sin perfil");
-        CHECK(pf.weight_of(3) == 0.0, "peso != 0 sin perfil (deberia caer al estatico)");
+        CHECK(pf.weight_of(3) == 0.0,
+              "peso != 0 sin perfil (deberia caer al estatico)");
     }
 
     // --- Con perfil: outer trip 10 (1000/100), inner trip 5 (5000/1000) ---
@@ -107,7 +126,8 @@ int main() {
         prof.set(200, 3, 1);
         ProfileFacts pf = compute_profile_facts(fn, loops, prof);
         const uint32_t outer_id = loops.innermost(1);
-        CHECK(pf.trip_of(outer_id) > 1000.0, "trip con salida-0 no saturo alto");
+        CHECK(pf.trip_of(outer_id) > 1000.0,
+              "trip con salida-0 no saturo alto");
     }
 
     std::printf("\n=== %d checks, %d fallos ===\n", g_checks, g_fail);

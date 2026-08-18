@@ -47,7 +47,7 @@
  */
 
 #include "port/c/c_backend.h"
-#include "util/fs_utils.h"   // fs::get_executable_path()
+#include "util/fs_utils.h" // fs::get_executable_path()
 
 #include <cctype>
 #include <cstdint>
@@ -968,8 +968,7 @@ static bool module_uses_instrument(const ir::IrModule &mod) {
         for (const auto &bb : fn.blocks) {
             for (const auto &ins : bb.instrs) {
                 if (ins.op != ir::IrOp::CALLN) continue;
-                if (ins.func_name.find("vx_trace:enter") !=
-                        std::string::npos ||
+                if (ins.func_name.find("vx_trace:enter") != std::string::npos ||
                     ins.func_name.find("vx_trace:leave") != std::string::npos)
                     return true;
             }
@@ -1704,8 +1703,7 @@ void CBackend::emit_native_call(EmitContext &ctx, ir::IrValueId dst,
         // args: (proc_ptr, name_ptr).  Ignoramos proc_ptr en port C
         // (no hay VM-proc; el nombre es ya un host_ptr a .rodata).
         ctx.indent();
-        ctx.out << "vx_trace_enter((const char*)(intptr_t)" << src(1)
-                << ");\n";
+        ctx.out << "vx_trace_enter((const char*)(intptr_t)" << src(1) << ");\n";
         return;
     }
     if (sym == "leave" && basename_eq(lib, "vx_trace")) {
@@ -2067,8 +2065,7 @@ void CBackend::emit_prelude(EmitContext &ctx, const ir::IrModule &mod) {
     } else if (opts_.exc == ExcMode::SetJmp) {
         emit_snippet(ctx, "vx_throw_hosted");
     } else if (opts_.exc == ExcMode::None) {
-        ctx.out
-            << "static VX_UNUSED VX_NORETURN void vx_throw(int code) {\n";
+        ctx.out << "static VX_UNUSED VX_NORETURN void vx_throw(int code) {\n";
         ctx.out << "    (void)code; abort();\n";
         ctx.out << "}\n\n";
     }

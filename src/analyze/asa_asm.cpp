@@ -14,17 +14,18 @@
  *   - QUE se elevo a IR y por tanto lo ve el optimizador como cualquier otra
  *     operacion (y lo ejecuta el interprete).
  *   - QUE se quedo como MICRO ASM: una instruccion que no tiene forma tipada en
- *     el IR -- `cpuid`, `mfence`, SIMD -- pero que NO es una caja negra: lleva su
- *     identidad en la base de datos de instrucciones, de donde salen sus efectos.
+ *     el IR -- `cpuid`, `mfence`, SIMD -- pero que NO es una caja negra: lleva
+ * su identidad en la base de datos de instrucciones, de donde salen sus
+ * efectos.
  *   - QUE bloque no se elevo en absoluto y sigue siendo opaco, con cuanto de el
  *     se entiende y que rasgos del procesador exige.
  *   - QUE EFECTOS tiene cada cosa: memoria, banderas, barreras, control.
  *
  * Vive en @c src/analyze y no en la capa de analisis porque usa el informe de
- * bloques asm (@c analyze::analizar_bloques_asm), que conoce la base de datos de
- * instrucciones.  Se da de alta con @c registrar_productor desde quien lo tenga
- * disponible: el registro existe justamente para que un dominio pueda vivir en
- * su capa y aun asi aparecer en el almacen y en el volcado.
+ * bloques asm (@c analyze::analizar_bloques_asm), que conoce la base de datos
+ * de instrucciones.  Se da de alta con @c registrar_productor desde quien lo
+ * tenga disponible: el registro existe justamente para que un dominio pueda
+ * vivir en su capa y aun asi aparecer en el almacen y en el volcado.
  */
 
 #include "analyze/asm_report.h"
@@ -44,8 +45,8 @@ namespace {
 
 using analysis::asa::Certeza;
 using analysis::asa::Fact;
-using analysis::asa::Produccion;
 using analysis::asa::FactId;
+using analysis::asa::Produccion;
 using analysis::asa::Sujeto;
 
 const char *const kProductorAsm = "asa.asm";
@@ -53,9 +54,11 @@ const char *const kProductorAsm = "asa.asm";
 /// El mnemonico de una micro-instruccion: la primera palabra de su plantilla.
 std::string mnemonico(const std::string &tmpl) {
     size_t i = 0;
-    while (i < tmpl.size() && (tmpl[i] == ' ' || tmpl[i] == '\t')) ++i;
+    while (i < tmpl.size() && (tmpl[i] == ' ' || tmpl[i] == '\t'))
+        ++i;
     const size_t ini = i;
-    while (i < tmpl.size() && tmpl[i] != ' ' && tmpl[i] != '\t') ++i;
+    while (i < tmpl.size() && tmpl[i] != ' ' && tmpl[i] != '\t')
+        ++i;
     return tmpl.substr(ini, i - ini);
 }
 
@@ -80,7 +83,7 @@ const vx::instr_db::IsaData *datos_isa(uint8_t isa) {
 /// unico que lo hace visible sin abrir el generador de codigo.
 struct EfectosMicro {
     std::string texto;
-    bool        discrepa = false;
+    bool discrepa = false;
     std::string discrepancia;
 };
 
@@ -89,7 +92,7 @@ EfectosMicro efectos_de(const ir::AsmMicro &m) {
     std::ostringstream o;
 
     const vx::instr_db::IsaData *d = datos_isa(m.isa);
-    const vx::instr_db::DbForm  *forma =
+    const vx::instr_db::DbForm *forma =
         (d != nullptr && m.form_id < d->form_count) ? &d->forms[m.form_id]
                                                     : nullptr;
     auto cadena = [d](uint32_t idx) -> const char * {
@@ -103,9 +106,9 @@ EfectosMicro efectos_de(const ir::AsmMicro &m) {
             o << " (" << conjunto << ")";
         /* Se nombra lo que se esta leyendo: la DB marca memoria y banderas, NO
          * barreras ni llamadas.  Decir "DB: sin efectos" de un `mfence` seria
-         * falso -- la DB no dice que no sea barrera, dice que no toca memoria ni
-         * banderas --, y ese matiz es justo el que hay que ver para saber si el
-         * modelado es bueno. */
+         * falso -- la DB no dice que no sea barrera, dice que no toca memoria
+         * ni banderas --, y ese matiz es justo el que hay que ver para saber si
+         * el modelado es bueno. */
         o << " | DB(memoria/banderas):";
         const bool db_mem = (forma->memflags & 0x01) != 0;
         const bool db_wf = (forma->memflags & 0x04) != 0;
@@ -135,9 +138,12 @@ EfectosMicro efectos_de(const ir::AsmMicro &m) {
         const bool ir_rf = (m.eff & 0x02) != 0;
         const bool ir_wf = (m.eff & 0x04) != 0;
         std::ostringstream dif;
-        if (ir_mem != db_mem) dif << " memoria(IR=" << ir_mem << ",DB=" << db_mem << ")";
-        if (ir_rf != db_rf) dif << " lee-banderas(IR=" << ir_rf << ",DB=" << db_rf << ")";
-        if (ir_wf != db_wf) dif << " escribe-banderas(IR=" << ir_wf << ",DB=" << db_wf << ")";
+        if (ir_mem != db_mem)
+            dif << " memoria(IR=" << ir_mem << ",DB=" << db_mem << ")";
+        if (ir_rf != db_rf)
+            dif << " lee-banderas(IR=" << ir_rf << ",DB=" << db_rf << ")";
+        if (ir_wf != db_wf)
+            dif << " escribe-banderas(IR=" << ir_wf << ",DB=" << db_wf << ")";
         if (!dif.str().empty()) {
             r.discrepa = true;
             r.discrepancia = dif.str();
@@ -202,8 +208,8 @@ void producir_asm(Produccion &p) {
                 const FactId id_micro = p.afirmar(std::move(f));
 
                 /* Si el atajo cacheado en el IR no dice lo mismo que la DB, eso
-                 * es un fallo de modelado NUESTRO, y hay que verlo: el resto del
-                 * compilador razona con el atajo.  Es el ASA comprobando al
+                 * es un fallo de modelado NUESTRO, y hay que verlo: el resto
+                 * del compilador razona con el atajo.  Es el ASA comprobando al
                  * propio compilador. */
                 if (!ef.discrepa) continue;
                 Fact g;
@@ -226,8 +232,8 @@ void producir_asm(Produccion &p) {
         micros_por_funcion[fn.name] = n;
     }
 
-    /* 2. El DETALLE de los bloques asm que siguen en el IR -- opacos o micro --:
-     *    cuanto de ellos entiende la base, que tocan y que exigen del
+    /* 2. El DETALLE de los bloques asm que siguen en el IR -- opacos o micro
+     * --: cuanto de ellos entiende la base, que tocan y que exigen del
      *    procesador.  OJO: esto NO dice si se elevaron; el informe ve lo que
      *    queda, y lo que queda incluye las micro.  El destino lo dice quien
      *    elevo (punto 3), que es el unico que lo sabe. */
@@ -242,8 +248,8 @@ void producir_asm(Produccion &p) {
         f.que.a = b.instrucciones;
         f.que.b = b.desconocidas;
         std::ostringstream o;
-        o << "linea " << b.linea << ": " << b.instrucciones << " instrucciones, "
-          << b.conocidas << " entendidas";
+        o << "linea " << b.linea << ": " << b.instrucciones
+          << " instrucciones, " << b.conocidas << " entendidas";
         if (b.desconocidas != 0) o << ", " << b.desconocidas << " sin entender";
         if (b.lee_mem || b.escribe_mem)
             o << " | memoria lee=" << b.lee_mem << " escribe=" << b.escribe_mem;
@@ -252,14 +258,16 @@ void producir_asm(Produccion &p) {
         if (b.barrera) o << " | barrera";
         if (!b.rasgos.empty()) {
             o << " | exige";
-            for (const std::string &r : b.rasgos) o << " " << r;
+            for (const std::string &r : b.rasgos)
+                o << " " << r;
         }
         f.que.detalle = p.almacen.internar(o.str());
         f.de_quien.clase = Sujeto::Clase::Funcion;
         f.de_quien.funcion = p.almacen.internar(b.funcion);
         /* Si la base entiende TODAS sus instrucciones, lo que se dice de sus
-         * efectos esta visto entero.  Si queda alguna sin entender, la evidencia
-         * apunta pero pudo quedarse algo fuera: eso es inferido, no demostrado. */
+         * efectos esta visto entero.  Si queda alguna sin entender, la
+         * evidencia apunta pero pudo quedarse algo fuera: eso es inferido, no
+         * demostrado. */
         f.sello.certeza =
             b.desconocidas == 0 ? Certeza::Demostrada : Certeza::Inferida;
         f.sello.origen.productor = kProductorAsm;
@@ -269,8 +277,8 @@ void producir_asm(Produccion &p) {
     }
 
     /* 3. LO QUE SE ELEVO A IR.  No se puede sacar del IR -- una instruccion
-     *    elevada es una suma o un almacenamiento como cualquier otro --, asi que
-     *    lo dice quien lo elevo, que es el unico que lo sabe.  Sin esto, un
+     *    elevada es una suma o un almacenamiento como cualquier otro --, asi
+     * que lo dice quien lo elevo, que es el unico que lo sabe.  Sin esto, un
      *    programa cuyo asm se elevo entero salia igual que uno sin asm. */
     std::unordered_map<std::string, uint32_t> elevadas_por_funcion;
     std::unordered_map<std::string, uint32_t> sin_elevar_por_funcion;
@@ -281,7 +289,10 @@ void producir_asm(Produccion &p) {
              * que no esta en este IR): no se afirma de lo que no se mira. */
             bool aqui = false;
             for (const ir::IrFunction &fn : p.mod.functions)
-                if (fn.name == b.funcion) { aqui = true; break; }
+                if (fn.name == b.funcion) {
+                    aqui = true;
+                    break;
+                }
             if (!aqui) continue;
         }
         ++bloques_por_funcion[b.funcion];
@@ -292,13 +303,14 @@ void producir_asm(Produccion &p) {
         Fact f;
         f.que.dominio = kProductorAsm;
         f.que.codigo = b.destino == vx::DestinoAsm::ElevadoAIr ? "asm.elevado"
-                     : b.destino == vx::DestinoAsm::MicroAsm   ? "asm.a_micro"
+                       : b.destino == vx::DestinoAsm::MicroAsm ? "asm.a_micro"
                                                                : "asm.opaco";
         f.que.a = b.instrucciones;
         f.que.b = b.linea;
         std::ostringstream o;
         o << "linea " << b.linea << ": " << b.instrucciones
-          << " instrucciones del fuente -> " << vx::nombre_destino_asm(b.destino);
+          << " instrucciones del fuente -> "
+          << vx::nombre_destino_asm(b.destino);
         f.que.detalle = p.almacen.internar(o.str());
         f.de_quien.clase = Sujeto::Clase::Funcion;
         f.de_quien.funcion = p.almacen.internar(b.funcion);
@@ -319,8 +331,8 @@ void producir_asm(Produccion &p) {
         const uint32_t opacos =
             it == sin_elevar_por_funcion.end() ? 0u : it->second;
         auto ite = elevadas_por_funcion.find(fn.name);
-        const uint32_t elevadas = ite == elevadas_por_funcion.end() ? 0u
-                                                                    : ite->second;
+        const uint32_t elevadas =
+            ite == elevadas_por_funcion.end() ? 0u : ite->second;
         const bool hubo_asm = bloques_por_funcion.count(fn.name) != 0;
         if (micros == 0 && !hubo_asm &&
             bloques_en_ir_por_funcion.count(fn.name) == 0) {
@@ -349,10 +361,11 @@ void producir_asm(Produccion &p) {
          * elevado no corrio y no hay nada anotado.  Se dice: "no consta" no es
          * "no hubo". */
         if (!hubo_asm)
-            p.callar({Sujeto::Clase::Funcion, f.de_quien.funcion, 0},
-                     "asm.elevado_no_consta", kProductorAsm,
-                     "su IR vino de cache: el elevado no corrio en este proceso "
-                     "y no consta que hizo (purga la cache para verlo)");
+            p.callar(
+                {Sujeto::Clase::Funcion, f.de_quien.funcion, 0},
+                "asm.elevado_no_consta", kProductorAsm,
+                "su IR vino de cache: el elevado no corrio en este proceso "
+                "y no consta que hizo (purga la cache para verlo)");
     }
 }
 

@@ -15,10 +15,10 @@
  * @brief Abstraccion de BACKEND DE CODEGEN NATIVO por arquitectura ( H.5).
  *
  * Desacopla el driver AOT del codegen concreto: en vez de llamar directamente a
- * @c jit::vreg_compile_native (x86-only), el driver obtiene un @ref NativeBackend
- * segun el @ref aot::AotArch del target y le pide compilar cada @c ir::IrFunction
- * a bytes maquina + relocaciones.  Anadir una arquitectura = implementar esta
- * interfaz, sin tocar el driver.
+ * @c jit::vreg_compile_native (x86-only), el driver obtiene un @ref
+ * NativeBackend segun el @ref aot::AotArch del target y le pide compilar cada
+ * @c ir::IrFunction a bytes maquina + relocaciones.  Anadir una arquitectura =
+ * implementar esta interfaz, sin tocar el driver.
  *
  *   - x86 (@ref make_native_backend con X86_64/X86_32): envuelve
  *     @c vreg_compile_native (mismo comportamiento que antes).
@@ -33,10 +33,10 @@
 #include <memory>
 #include <vector>
 
-#include "aot/aot_native.h"      // AotArch
-#include "ir/ssa_ir.h"           // IrFunction
-#include "jit/jit_registry.h"    // Stackmap
-#include "jit/vreg_pipeline.h"   // NativeReloc, FloatIsa
+#include "aot/aot_native.h"    // AotArch
+#include "ir/ssa_ir.h"         // IrFunction
+#include "jit/jit_registry.h"  // Stackmap
+#include "jit/vreg_pipeline.h" // NativeReloc, FloatIsa
 
 namespace aot {
 

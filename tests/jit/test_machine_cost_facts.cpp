@@ -30,13 +30,13 @@ using namespace codegen::rbank;
 static int g_checks = 0;
 static int g_fail = 0;
 
-#define CHECK(cond, msg)                                                     \
-    do {                                                                     \
-        ++g_checks;                                                          \
-        if (!(cond)) {                                                       \
-            ++g_fail;                                                        \
-            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);        \
-        }                                                                    \
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fail;                                                          \
+            std::printf("  [FAIL] %s (linea %d)\n", (msg), __LINE__);          \
+        }                                                                      \
     } while (0)
 
 /**
@@ -50,11 +50,17 @@ struct MockCostModel final : jit::sched::SchedCostModel {
     jit::sched::InstrCost cost(const MInstr &mi) const override {
         jit::sched::InstrCost c;
         if (mi.op == MOp::LOAD) {
-            c.kind = jit::sched::ExecKind::LOAD;  c.latency = 4.0f; c.recip_tp = 0.5f;
+            c.kind = jit::sched::ExecKind::LOAD;
+            c.latency = 4.0f;
+            c.recip_tp = 0.5f;
         } else if (mi.op == MOp::STORE) {
-            c.kind = jit::sched::ExecKind::STORE; c.latency = 1.0f; c.recip_tp = 1.0f;
+            c.kind = jit::sched::ExecKind::STORE;
+            c.latency = 1.0f;
+            c.recip_tp = 1.0f;
         } else { // MOV
-            c.kind = jit::sched::ExecKind::ALU;   c.latency = 1.0f; c.recip_tp = 1.0f;
+            c.kind = jit::sched::ExecKind::ALU;
+            c.latency = 1.0f;
+            c.recip_tp = 1.0f;
         }
         return c;
     }
@@ -66,20 +72,26 @@ struct MockCostModel final : jit::sched::SchedCostModel {
 };
 
 int main() {
-    std::printf("=== test_machine_cost_facts (el backend PUBLICA coste HW) ===\n");
+    std::printf(
+        "=== test_machine_cost_facts (el backend PUBLICA coste HW) ===\n");
 
     // 1. El backend PUBLICA los Facts del hardware desde el modelo de coste.
-    //    (Mock: fija LOAD=4/STORE=1/MOV=1 para verificar el CONTRATO, no la uarch.)
+    //    (Mock: fija LOAD=4/STORE=1/MOV=1 para verificar el CONTRATO, no la
+    //    uarch.)
     std::printf("\n[probe: SchedCostModel -> InstrCost -> MachineCostFacts]\n");
     MockCostModel cm;
     analysis::MachineCostFacts hw = jit::sched::probe_machine_cost_facts(cm);
-    CHECK(hw.load.kind == jit::sched::ExecKind::LOAD, "load no clasifico como LOAD");
-    CHECK(hw.store.kind == jit::sched::ExecKind::STORE, "store no clasifico como STORE");
+    CHECK(hw.load.kind == jit::sched::ExecKind::LOAD,
+          "load no clasifico como LOAD");
+    CHECK(hw.store.kind == jit::sched::ExecKind::STORE,
+          "store no clasifico como STORE");
     CHECK(hw.load.latency == 4.0f, "el probe no empaqueto la latencia de LOAD");
-    CHECK(hw.store.latency == 1.0f, "el probe no empaqueto la latencia de STORE");
+    CHECK(hw.store.latency == 1.0f,
+          "el probe no empaqueto la latencia de STORE");
     CHECK(hw.move.latency == 1.0f, "el probe no empaqueto la latencia de MOV");
     CHECK(hw.from_uarch, "un modelo no-generico debe marcar from_uarch");
-    CHECK(std::string(hw.model_name) == "mock-uarch", "model_name mal (trazabilidad)");
+    CHECK(std::string(hw.model_name) == "mock-uarch",
+          "model_name mal (trazabilidad)");
 
     // 2. Autocertificacion: los Facts sanos no reportan; un coste imposible SI.
     std::printf("\n[autocertificacion del Fact de HW]\n");
@@ -89,7 +101,8 @@ int main() {
         bad.load.latency = 0.0f; // una op nunca es gratis.
         bool caught = false;
         for (const analysis::MachineCostIssue &i : analysis::validate(bad))
-            if (i.check == analysis::MachineCostCheck::LATENCY_NONPOS) caught = true;
+            if (i.check == analysis::MachineCostCheck::LATENCY_NONPOS)
+                caught = true;
         CHECK(caught, "no cazo una latencia <= 0");
     }
 
@@ -100,16 +113,22 @@ int main() {
               card.move_latency == 1.0 && card.from_hw,
           "card mal traducida del HW");
 
-    // 4. El Objective con card usa el coste REAL del HW; SIN card queda identico.
-    std::printf("\n[Objective: HW real (card) vs heuristica (sin card, intacta)]\n");
-    ValueRequirements r; r.value_id = 1; r.rematerializable = false;
-    const double sin_card = spill_cost_of(r, 1.0);        // fallback heuristico: 3.0
-    const double con_card = spill_cost_of(r, 1.0, card);  // HW real: reload 4.0
+    // 4. El Objective con card usa el coste REAL del HW; SIN card queda
+    // identico.
+    std::printf(
+        "\n[Objective: HW real (card) vs heuristica (sin card, intacta)]\n");
+    ValueRequirements r;
+    r.value_id = 1;
+    r.rematerializable = false;
+    const double sin_card = spill_cost_of(r, 1.0); // fallback heuristico: 3.0
+    const double con_card = spill_cost_of(r, 1.0, card); // HW real: reload 4.0
     CHECK(sin_card == 3.0, "el path SIN card cambio de conducta");
     CHECK(con_card == 4.0, "el path CON card no uso el reload real del HW");
 
     // 5. Rematerializable con card: recomputar (~1) < recargar.
-    ValueRequirements rr; rr.value_id = 2; rr.rematerializable = true;
+    ValueRequirements rr;
+    rr.value_id = 2;
+    rr.rematerializable = true;
     CHECK(spill_cost_of(rr, 1.0, card) == 1.0, "remat con card mal");
 
     // 6. spill_terms con card: spill = reloads*peso; latency = store una vez.

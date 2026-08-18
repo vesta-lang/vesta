@@ -12,7 +12,8 @@
  * @file jit/arm64/arm64_target.h
  * @brief @ref CodegenTarget para AArch64: enchufa arm64 al pipeline vreg
  *        (MachineIR + regalloc generico + scheduler), sustituyendo al template
- *        slot-por-valor.  select (IR->MachineIR AAPCS64) + rewrite (vreg->fisico
+ *        slot-por-valor.  select (IR->MachineIR AAPCS64) + rewrite
+ * (vreg->fisico
  *        + prologo/epilogo/spills) + encode (MachineIR->AArch64 via Keystone).
  */
 

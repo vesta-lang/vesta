@@ -24,8 +24,9 @@ analysis::MachineCostFacts probe_machine_cost_facts(const SchedCostModel &cm) {
     analysis::MachineCostFacts f;
 
     // Operando GP sintetico (RAX, qword): sirve de dst/addr/val de las probes.
-    // El coste del reload/spill/move NO depende del registro concreto -- solo de
-    // la familia de la operacion + ancho, que es lo que el cost model clasifica.
+    // El coste del reload/spill/move NO depende del registro concreto -- solo
+    // de la familia de la operacion + ancho, que es lo que el cost model
+    // clasifica.
     const MOperand r = MOperand::make_reg(MReg::RAX, /*w=*/8);
 
     // Reload de un valor derramado:  dst = [addr]
@@ -35,9 +36,9 @@ analysis::MachineCostFacts probe_machine_cost_facts(const SchedCostModel &cm) {
     // Copia registro-registro (coalescing / two-address roto).
     const MInstr mv = MInstr::make_unary(MOp::MOV, r, r);
 
-    f.load  = cm.cost(ld);
+    f.load = cm.cost(ld);
     f.store = cm.cost(st);
-    f.move  = cm.cost(mv);
+    f.move = cm.cost(mv);
 
     // Trazabilidad (ANAMNESIS): que modelo respondio.  El generico se llama
     // "generic"; cualquier otro nombre proviene de una uarch concreta (--cpu).

@@ -50,15 +50,17 @@ uint32_t inicio_real_de_decl(const std::string &src, uint32_t off) {
     if (off > src.size()) return static_cast<uint32_t>(src.size());
     // Principio de la linea de `off`.
     uint32_t ini = off;
-    while (ini > 0 && src[ini - 1] != '\n') --ini;
+    while (ini > 0 && src[ini - 1] != '\n')
+        --ini;
 
     /// @brief Contenido de la linea que TERMINA en @p fin (exclusivo), sin
     ///        espacios de los extremos.
     auto linea_previa = [&src](uint32_t fin, uint32_t &ini_out) -> std::string {
         if (fin == 0) return {};
-        uint32_t f = fin - 1;              // saltar el '\n' que la cierra
+        uint32_t f = fin - 1; // saltar el '\n' que la cierra
         uint32_t i = f;
-        while (i > 0 && src[i - 1] != '\n') --i;
+        while (i > 0 && src[i - 1] != '\n')
+            --i;
         ini_out = i;
         std::string s = src.substr(i, f - i);
         size_t a = s.find_first_not_of(" \t\r");
@@ -90,7 +92,8 @@ uint32_t inicio_real_de_decl(const std::string &src, uint32_t off) {
 /// Acumula en @p out los nombres de funcion invocados (callee IdentExpr) dentro
 /// de una expresion, recursivamente.  Solo nos interesan las llamadas directas
 /// por nombre; las indirectas (punteros a fn) no arrastran una decl concreta.
-void collect_calls_expr(const ast::Expr *e, std::unordered_set<std::string> &out) {
+void collect_calls_expr(const ast::Expr *e,
+                        std::unordered_set<std::string> &out) {
     if (!e) return;
     switch (e->kind) {
     case ast::NodeKind::CallExpr: {
@@ -111,8 +114,8 @@ void collect_calls_expr(const ast::Expr *e, std::unordered_set<std::string> &out
         break;
     }
     case ast::NodeKind::UnaryExpr:
-        collect_calls_expr(static_cast<const ast::UnaryExpr *>(e)->operand.get(),
-                           out);
+        collect_calls_expr(
+            static_cast<const ast::UnaryExpr *>(e)->operand.get(), out);
         break;
     case ast::NodeKind::TernaryExpr: {
         const auto *t = static_cast<const ast::TernaryExpr *>(e);
@@ -131,8 +134,7 @@ void collect_calls_expr(const ast::Expr *e, std::unordered_set<std::string> &out
         collect_calls_expr(i->index.get(), out);
         break;
     }
-    default:
-        break;
+    default: break;
     }
 }
 
@@ -193,8 +195,7 @@ void collect_calls_stmt(const ast::Stmt *s,
         collect_calls_stmt(f->body.get(), out);
         break;
     }
-    default:
-        break;
+    default: break;
     }
 }
 
@@ -243,8 +244,10 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
     // arrastra como dependencia (debe viajar en el artefacto) y se explora su
     // cuerpo tambien.  Las comptime fn/macro ya estan en sus listas.
     std::unordered_set<std::string> is_comptime_name;
-    for (const auto &n : u.comptime_fns) is_comptime_name.insert(n);
-    for (const auto &n : u.macros) is_comptime_name.insert(n);
+    for (const auto &n : u.comptime_fns)
+        is_comptime_name.insert(n);
+    for (const auto &n : u.macros)
+        is_comptime_name.insert(n);
 
     std::unordered_set<std::string> visited;
     std::vector<std::string> work(seed_calls.begin(), seed_calls.end());
@@ -275,10 +278,14 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
     // independiente del codigo no-comptime del modulo.
     if (!source.empty() && !u.empty()) {
         std::unordered_set<std::string> unit_names;
-        for (const auto &n : u.comptime_fns) unit_names.insert(n);
-        for (const auto &n : u.macros) unit_names.insert(n);
-        for (const auto &n : u.comptime_consts) unit_names.insert(n);
-        for (const auto &n : u.helper_deps) unit_names.insert(n);
+        for (const auto &n : u.comptime_fns)
+            unit_names.insert(n);
+        for (const auto &n : u.macros)
+            unit_names.insert(n);
+        for (const auto &n : u.comptime_consts)
+            unit_names.insert(n);
+        for (const auto &n : u.helper_deps)
+            unit_names.insert(n);
 
         struct Span {
             uint32_t off;
@@ -291,9 +298,10 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
             if (!d) continue;
             bool in = false;
             if (d->kind == ast::NodeKind::FunctionDecl)
-                in = unit_names.count(
-                         static_cast<const ast::FunctionDecl *>(d.get())->name) >
-                     0;
+                in =
+                    unit_names.count(
+                        static_cast<const ast::FunctionDecl *>(d.get())->name) >
+                    0;
             else if (d->kind == ast::NodeKind::GlobalVarDecl)
                 in = unit_names.count(
                          static_cast<const ast::GlobalVarDecl *>(d.get())
@@ -304,7 +312,7 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
                 /* Los `import` NO son parte del conjunto -- no se ejecutan al
                  * compilar -- pero SI hacen falta para que el texto extraido
                  * compile por si solo: una comptime que usa `string` o llama a
-                 * la stdlib necesita las mismas importaciones que su modulo.  Se
+                 * la stdlib necesita las mismas importaciones que su modulo. Se
                  * marcan aparte para no ensuciar el hash: si entrasen en el,
                  * anadir un import que el codigo comptime no usa invalidaria el
                  * cache sin que nada comptime hubiera cambiado. */
@@ -328,9 +336,9 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
             if (start > src_len) start = src_len;
             if (end > src_len) end = src_len;
             /* El TEXTO del conjunto, recogido en el MISMO recorrido que ya
-             * calculaba el hash: los spans se computaban, se usaban para hashear
-             * y se tiraban, y son justo lo que la fase siguiente necesita para
-             * poder compilar el conjunto POR SEPARADO. */
+             * calculaba el hash: los spans se computaban, se usaban para
+             * hashear y se tiraban, y son justo lo que la fase siguiente
+             * necesita para poder compilar el conjunto POR SEPARADO. */
             u.unit_source.append(source, start, end - start);
             if (!spans[i].in_unit) continue; // un import viaja, pero no hashea.
             for (uint32_t j = start; j < end; ++j) {
@@ -346,13 +354,17 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
 void dump_comptime_unit(const ComptimeUnit &u, std::ostream &os) {
     os << "[comptime-unit] resumen del conjunto comptime del modulo:\n";
     os << "  comptime fns   (" << u.comptime_fns.size() << "):";
-    for (const auto &n : u.comptime_fns) os << " " << n;
+    for (const auto &n : u.comptime_fns)
+        os << " " << n;
     os << "\n  @Macro         (" << u.macros.size() << "):";
-    for (const auto &n : u.macros) os << " " << n;
+    for (const auto &n : u.macros)
+        os << " " << n;
     os << "\n  comptime const (" << u.comptime_consts.size() << "):";
-    for (const auto &n : u.comptime_consts) os << " " << n;
+    for (const auto &n : u.comptime_consts)
+        os << " " << n;
     os << "\n  helper deps    (" << u.helper_deps.size() << "):";
-    for (const auto &n : u.helper_deps) os << " " << n;
+    for (const auto &n : u.helper_deps)
+        os << " " << n;
     os << "\n  content_hash   : 0x" << std::hex << u.content_hash << std::dec
        << "  (clave de cache del artefacto comptime)\n";
 }

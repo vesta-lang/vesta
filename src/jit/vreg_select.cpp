@@ -32,10 +32,10 @@
 
 #include "ir/ssa_ir.h"
 #include "vesta_rt/abi.h"
-#include "jit/target_reginfo.h" //  AOT.3 2b: arg_regs del ABI host (HOST_LEAF)
-#include "jit/vec_isa.h"        // ancho SIMD (SSE2/AVX2/AVX512) del VEC_BINOP
-#include "jit/backend_caps.h"   // caps.fma para emitir VFMADD231 escalar
-#include "gc/raw_allocator.h" //  D.7 perf: inline slab fast-path
+#include "jit/target_reginfo.h"  //  AOT.3 2b: arg_regs del ABI host (HOST_LEAF)
+#include "jit/vec_isa.h"         // ancho SIMD (SSE2/AVX2/AVX512) del VEC_BINOP
+#include "jit/backend_caps.h"    // caps.fma para emitir VFMADD231 escalar
+#include "gc/raw_allocator.h"    //  D.7 perf: inline slab fast-path
 #include "vx/asm/asm_backend.h"  //  AS inc.5: ensamblar inline-asm -> bytes
 #include "vx/asm/asm_effects.h"  //  AS inc.5: asm_canonical_reg
 #include "vx/asm/asm_phys_reg.h" // sustitucion $N -> reg fisico
@@ -60,10 +60,11 @@ namespace jit {
 // Gate del emit VFMADD231 escalar.  -1 = no fijado por el driver -> usa las
 // caps del HOST (JIT).  El AOT lo fija a target.caps.fma.
 static int g_vreg_fma = -1;
-void set_vreg_fma(bool ok) { g_vreg_fma = ok ? 1 : 0; }
+void set_vreg_fma(bool ok) {
+    g_vreg_fma = ok ? 1 : 0;
+}
 static bool vreg_fma_ok() {
-    if (g_vreg_fma >= 0)
-        return g_vreg_fma != 0;
+    if (g_vreg_fma >= 0) return g_vreg_fma != 0;
     static const bool host = backend_caps_host().fma;
     return host;
 }
@@ -324,7 +325,10 @@ inline bool split_critical_edges(ir::IrFunction &fn) {
         ir::IrInstr *term = nullptr;
         for (auto it = fn.blocks[b].instrs.rbegin();
              it != fn.blocks[b].instrs.rend(); ++it) {
-            if (it->op == ir::IrOp::BR_COND) { term = &*it; break; }
+            if (it->op == ir::IrOp::BR_COND) {
+                term = &*it;
+                break;
+            }
             if (it->op == ir::IrOp::BR || it->op == ir::IrOp::RET ||
                 it->op == ir::IrOp::THROW || it->op == ir::IrOp::TAILCALL)
                 break;
@@ -396,16 +400,20 @@ inline bool split_critical_edges(ir::IrFunction &fn) {
     };
     for (ir::IrBlock &blk : laid) {
         blk.id = rm(blk.id);
-        for (ir::IrBlockId &p : blk.preds) p = rm(p);
-        for (ir::IrBlockId &s : blk.succs) s = rm(s);
+        for (ir::IrBlockId &p : blk.preds)
+            p = rm(p);
+        for (ir::IrBlockId &s : blk.succs)
+            s = rm(s);
         for (ir::IrInstr &in : blk.instrs) {
             if (in.target_block != ir::IR_NO_BLOCK)
                 in.target_block = rm(in.target_block);
             if (in.false_block != ir::IR_NO_BLOCK)
                 in.false_block = rm(in.false_block);
-            for (ir::IrPhiArg &a : in.phi_args) a.block = rm(a.block);
+            for (ir::IrPhiArg &a : in.phi_args)
+                a.block = rm(a.block);
             // SWITCH_DENSE: remapear la tabla de bloques destino.
-            for (uint32_t &t : in.jump_targets) t = rm(t);
+            for (uint32_t &t : in.jump_targets)
+                t = rm(t);
         }
     }
     fn.blocks = std::move(laid);
@@ -449,7 +457,8 @@ inline bool has_critical_edge_to_phi(const ir::IrFunction &fn) {
  * en el regalloc v1).  El selector cae a fallback si recibe -1.
  */
 /**
- * @brief Nombre canonico de un registro VECTORIAL -> @c MReg (XMM0=16..XMM15=31).
+ * @brief Nombre canonico de un registro VECTORIAL -> @c MReg
+ * (XMM0=16..XMM15=31).
  *
  * @c canon_gp_to_mreg devuelve -1 para los vectoriales, y en el manejo de
  * CLOBBERS ese -1 se interpretaba como "no es envolvible" y el clobber se
@@ -469,15 +478,15 @@ inline bool has_critical_edge_to_phi(const ir::IrFunction &fn) {
  */
 inline int canon_vec_to_mreg(const std::string &c) {
     if (c.size() < 4) return -1;
-    const bool es_vec = (c.compare(0, 3, "xmm") == 0 ||
-                         c.compare(0, 3, "ymm") == 0 ||
-                         c.compare(0, 3, "zmm") == 0);
+    const bool es_vec =
+        (c.compare(0, 3, "xmm") == 0 || c.compare(0, 3, "ymm") == 0 ||
+         c.compare(0, 3, "zmm") == 0);
     if (!es_vec) return -1;
     unsigned n = 0;
     for (size_t i = 3; i < c.size(); ++i) {
-        if (c[i] < '0' || c[i] > '9') return -1;   // sufijo raro: no arriesgar
+        if (c[i] < '0' || c[i] > '9') return -1; // sufijo raro: no arriesgar
         n = n * 10u + static_cast<unsigned>(c[i] - '0');
-        if (n > 15u) return -1;                     // xmm16+ (AVX-512) aun no
+        if (n > 15u) return -1; // xmm16+ (AVX-512) aun no
     }
     return static_cast<int>(static_cast<uint8_t>(MReg::XMM0)) +
            static_cast<int>(n);
@@ -496,15 +505,15 @@ inline int canon_gp_to_mreg(const std::string &c, bool for_pin = false) {
     for (const auto &e : T)
         if (c == e.n) return e.r;
     /* rbx(3)/rsp(4)/rbp(5): reservados para el uso GENERAL del regalloc (rbx =
-     * ProcessVM* en VM_ABI / callee-saved; rsp = pila; rbp = frame pointer), por
-     * eso canon_gp_to_mreg los rechaza en el manejo de CLOBBERS (donde -1
-     * dispara el save/restore push/pop alrededor del asm, p.ej. cpuid pisa ebx).
-     * Pero una ABI a medida (register en params, p.ej. el `int 0x80` de x86-32
-     * que recibe arg1 en EBX y arg6 en EBP) SI necesita pinear un vreg a ese
-     * fisico: @p for_pin los expone SOLO en ese camino.  SIN red de seguridad:
-     * pinear a rsp/rbp puede corromper la pila/el frame -- es responsabilidad
-     * del programador (mismo contrato que el asm crudo: si pides EBP, sabes que
-     * pisas el frame pointer). */
+     * ProcessVM* en VM_ABI / callee-saved; rsp = pila; rbp = frame pointer),
+     * por eso canon_gp_to_mreg los rechaza en el manejo de CLOBBERS (donde -1
+     * dispara el save/restore push/pop alrededor del asm, p.ej. cpuid pisa
+     * ebx). Pero una ABI a medida (register en params, p.ej. el `int 0x80` de
+     * x86-32 que recibe arg1 en EBX y arg6 en EBP) SI necesita pinear un vreg a
+     * ese fisico: @p for_pin los expone SOLO en ese camino.  SIN red de
+     * seguridad: pinear a rsp/rbp puede corromper la pila/el frame -- es
+     * responsabilidad del programador (mismo contrato que el asm crudo: si
+     * pides EBP, sabes que pisas el frame pointer). */
     if (for_pin) {
         if (c == "rbx") return 3;
         if (c == "rsp") return 4;
@@ -552,9 +561,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
      * escribe proc->registers[1..N] (+ argc) y el RET escribe regs[0]; si el
      * callback se invoca desde un contexto donde proc->registers es el banco de
      * registros VIVO del caller (el INTERPRETE, o una re-entrada), eso lo
-     * corromperia.  No podemos saber el contexto del caller en compile-time, asi
-     * que salvamos/restauramos regs[0..15] incondicionalmente (CB_SAVE_REGS en
-     * el prologo, CB_RESTORE_REGS en cada RET; el rewrite reserva 128B).  En
+     * corromperia.  No podemos saber el contexto del caller en compile-time,
+     * asi que salvamos/restauramos regs[0..15] incondicionalmente (CB_SAVE_REGS
+     * en el prologo, CB_RESTORE_REGS en cada RET; el rewrite reserva 128B).  En
      * codigo JIT-eado el caller no usa proc->registers a traves del call, pero
      * el coste (32 mem-ops) es la garantia de correctness pedida. */
     const bool cb_save_set = cb_entry;
@@ -616,7 +625,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
         }
     }
     /* Callback save-set: propagar tras el reset de out (arriba lo borra un
-     * MFunction{}); el rewrite reserva 128B para CB_SAVE_REGS/CB_RESTORE_REGS. */
+     * MFunction{}); el rewrite reserva 128B para CB_SAVE_REGS/CB_RESTORE_REGS.
+     */
     out.cb_save_regs = cb_save_set;
     /* Solo-LSP (vista "Godbolt"): activar la captura de source_line en el
      * codegen vreg (AOT).  OFF por defecto -> sin efecto en produccion. */
@@ -647,11 +657,10 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                        (fisa != FloatIsa::X87) && !mode32;
     /* Emitir las binarias escalares en VX 3-operandos no-destructivo (sin el
      * `mov` de coalescing) cuando el target es AVX/AVX512. */
-    const bool vx_scalar =
-        (fisa == FloatIsa::AVX || fisa == FloatIsa::AVX512F);
+    const bool vx_scalar = (fisa == FloatIsa::AVX || fisa == FloatIsa::AVX512F);
     /* Ancho del chunk SIMD a emitir en las ops VEC_* (vectorizacion).  AOT
-     * (HOST_LEAF): lo fija el TARGET via --float-isa (cross-compile correcto: no
-     * emitir AVX2 si el target es solo-SSE2; ancho SELECCIONABLE sse2->128/
+     * (HOST_LEAF): lo fija el TARGET via --float-isa (cross-compile correcto:
+     * no emitir AVX2 si el target es solo-SSE2; ancho SELECCIONABLE sse2->128/
      * avx->256/avx512->512).  Debe COINCIDIR con el chunk que horneo el matcher
      * (CompileOptions::aot_vec_width, mismo mapeo de --float-isa) -> chunk==
      * host_w en AOT -> la reduccion (acc de 1 reg, no splittea) cabe.  JIT
@@ -765,9 +774,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
      * operando.  Un `register("reg")` cuyo(s) bloque(s) asm TODOS lifteron a IR
      * normal ya no aparece en ningun INLINE_ASM: su var es una var corriente en
      * su slot (el lift la modela leyendo/escribiendo el slot), asi que NO hay
-     * que fijarla a su registro fisico.  Esto es lo que permite `register("rbx")`
-     * (o rsp/rbp, reservados por el backend) cuando el asm se liftea: la
-     * restriccion del registro reservado desaparece con el pin. */
+     * que fijarla a su registro fisico.  Esto es lo que permite
+     * `register("rbx")` (o rsp/rbp, reservados por el backend) cuando el asm se
+     * liftea: la restriccion del registro reservado desaparece con el pin. */
     std::vector<uint8_t> alloca_in_real_asm(fn.values.size(), 0);
     if (has_inline_asm)
         for (const auto &blk : fn.blocks)
@@ -787,10 +796,10 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 vreg_dbg(fn.name.c_str(), "inline-asm(binding-oob)");
                 return false;
             }
-            /* Binding cuyo asm TODO lifto -> var normal, sin pin (deja el alloca
-             * como host-slot corriente; el lift ya emitio sus LOAD/STORE). */
-            if (!alloca_in_real_asm[b.alloca_value])
-                continue;
+            /* Binding cuyo asm TODO lifto -> var normal, sin pin (deja el
+             * alloca como host-slot corriente; el lift ya emitio sus
+             * LOAD/STORE). */
+            if (!alloca_in_real_asm[b.alloca_value]) continue;
             if (b.is_vector) {
                 /* Operando del banco ancho.  Se trata igual que uno entero,
                  * solo que su valor vive en la otra clase de registro: el
@@ -826,7 +835,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 // post-regalloc; marcamos binding_phys con un sentinel >=0 para
                 // que la clasificacion in/out lo incluya (su intervalo cubre el
                 // asm).  El $N se rellena en el rewrite con ra.reg_of.
-                binding_phys[b.alloca_value] = 0; // sentinel "es binding" (no pin)
+                binding_phys[b.alloca_value] =
+                    0; // sentinel "es binding" (no pin)
                 out.set_vreg_reg_required(
                     static_cast<uint32_t>(b.alloca_value));
                 continue;
@@ -878,11 +888,10 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
      * float al MOVSD/MOVSS.  Para vids fuera del rango de values (temporales
      * nuevos) usa la clase ya registrada en @c out.vreg_class. */
     auto vrt = [&](ir::IrValueId v) -> MOperand {
-        RegClass cls = (v < out.vreg_class.size()) ? out.vreg_class[v]
-                                                   : RegClass::GP;
+        RegClass cls =
+            (v < out.vreg_class.size()) ? out.vreg_class[v] : RegClass::GP;
         uint8_t w = 8;
-        if (v < fn.values.size() && fn.values[v].type == ir::IrType::F32)
-            w = 4;
+        if (v < fn.values.size() && fn.values[v].type == ir::IrType::F32) w = 4;
         return MOperand::make_vreg(static_cast<uint32_t>(v), cls, w);
     };
     /* Crea un vreg temporal FP nuevo (XMM) para secuencias float (p.ej. el
@@ -901,10 +910,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
      * operando float lleva clase FP (vrt) -> el rewrite lo manda a un XMM
      * arg_reg via MOVSD.  Devuelve false si algun arg excede los arg_regs de
      * su clase (paso por pila no soportado en v1). */
-    auto emit_host_args = [&](const std::vector<ir::IrValueId> &operands,
-                              std::vector<MInstr> &OO,
-                              const std::vector<std::string> *abi_regs =
-                                  nullptr) -> bool {
+    auto emit_host_args =
+        [&](const std::vector<ir::IrValueId> &operands, std::vector<MInstr> &OO,
+            const std::vector<std::string> *abi_regs = nullptr) -> bool {
         const size_t gmax =
             tri_sel.arg_regs[static_cast<size_t>(RegClass::GP)].size();
         const size_t fmax =
@@ -915,12 +923,14 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             const ir::IrValueId av = operands[a];
             const bool is_f = fp_ok && av < fn.values.size() &&
                               ir_type_is_float(fn.values[av].type);
-            // ABI custom (register() en el param/cfn): si el a-esimo arg declara
-            // un registro fisico, se coloca ahi (via MInstr::dst del pseudo-ARG)
-            // en vez del i-esimo arg-reg del ABI estandar.  Solo GP en v1.
+            // ABI custom (register() en el param/cfn): si el a-esimo arg
+            // declara un registro fisico, se coloca ahi (via MInstr::dst del
+            // pseudo-ARG) en vez del i-esimo arg-reg del ABI estandar.  Solo GP
+            // en v1.
             int custom_phys = -1;
             if (abi_regs && a < abi_regs->size() && !(*abi_regs)[a].empty())
-                custom_phys = canon_gp_to_mreg((*abi_regs)[a], /*for_pin=*/true);
+                custom_phys =
+                    canon_gp_to_mreg((*abi_regs)[a], /*for_pin=*/true);
             if (is_f) {
                 /* FP: overflow permitido -> stack arg.  El rewrite lo coloca
                  * tras los GP-stack en [rsp+base+(G+(fi-fmax))*8] (convencion
@@ -933,10 +943,11 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 /* GP: overflow permitido -> stack arg (args ilimitados).
                  * El rewrite lo coloca en [rsp+base+(idx-gmax)*8]. */
                 (void)gmax;
-                MInstr arg = MInstr::make_arg(static_cast<uint8_t>(gi_a), vr(av));
+                MInstr arg =
+                    MInstr::make_arg(static_cast<uint8_t>(gi_a), vr(av));
                 if (custom_phys >= 0)
-                    arg.dst = MOperand::make_reg(static_cast<MReg>(custom_phys),
-                                                 8);
+                    arg.dst =
+                        MOperand::make_reg(static_cast<MReg>(custom_phys), 8);
                 OO.push_back(arg);
                 ++gi_a;
             }
@@ -982,7 +993,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
         /* La auto-vectorizacion (VEC_*) y MEMCPY usan valores sinteticos y
          * addressing complejo (offsets en el imm, punteros scratch) que el
          * fold no modela bien -> conservador: NO fusionar en funciones que
-         * los usan.  El disp-fold de field-access (no vectorizado) se conserva. */
+         * los usan.  El disp-fold de field-access (no vectorizado) se conserva.
+         */
         bool has_complex_mem = false;
         for (const auto &blk : fn.blocks) {
             for (const ir::IrInstr &in : blk.instrs) {
@@ -1012,7 +1024,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 for (const ir::IrInstr &in : blk.instrs)
                     if (in.op == ir::IrOp::CONST && in.dst != ir::IR_NO_VALUE)
                         const_val[in.dst] = static_cast<int64_t>(in.imm);
-            /* 2) candidatos ptr = ADD(base, const)  (const en cualquier lado). */
+            /* 2) candidatos ptr = ADD(base, const)  (const en cualquier lado).
+             */
             std::unordered_map<uint32_t, std::pair<uint32_t, int64_t>> cand;
             for (const auto &blk : fn.blocks) {
                 for (const ir::IrInstr &in : blk.instrs) {
@@ -1062,8 +1075,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 return v && v[0] != '\0' && v[0] != '0';
             }();
             if (sdbg)
-                std::fprintf(stderr,
-                             "[sib] %s: const=%zu cand=%zu fold=%zu\n",
+                std::fprintf(stderr, "[sib] %s: const=%zu cand=%zu fold=%zu\n",
                              fn.name.c_str(), const_val.size(), cand.size(),
                              fold_disp.size());
         }
@@ -1132,20 +1144,18 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
          * emitir el incremento del contador de su linea al ENTRY (flags
          * muertos). */
         if (emit_branch_ctrs && b < block_ctr.size() && block_ctr[b].valid) {
-            const uint64_t addr = jit::jit_line_ctr_addr(block_ctr[b].line,
-                                                         block_ctr[b].taken);
+            const uint64_t addr =
+                jit::jit_line_ctr_addr(block_ctr[b].line, block_ctr[b].taken);
             const uint32_t aidx = out.intern_imm64(static_cast<int64_t>(addr));
             O.push_back(MInstr::make_unary(MOp::PUSH, MOperand::none(),
                                            MOperand::make_reg(MReg::RAX, 8)));
             O.push_back(MInstr::make_unary(MOp::MOV,
                                            MOperand::make_reg(MReg::RAX, 8),
                                            MOperand::make_imm64_idx(aidx)));
-            O.push_back(MInstr::make_unary(MOp::INC,
-                                           MOperand::make_mem(MReg::RAX, 0),
-                                           MOperand::none()));
-            O.push_back(MInstr::make_unary(MOp::POP,
-                                           MOperand::make_reg(MReg::RAX, 8),
-                                           MOperand::none()));
+            O.push_back(MInstr::make_unary(
+                MOp::INC, MOperand::make_mem(MReg::RAX, 0), MOperand::none()));
+            O.push_back(MInstr::make_unary(
+                MOp::POP, MOperand::make_reg(MReg::RAX, 8), MOperand::none()));
         }
 
         /* ===== callback-ABI (jubilacion de slots): prologo nativo =====
@@ -1160,8 +1170,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
          * slots (seguro).  El RET escribe el retorno en regs[0] Y en RAX. */
         if (cb_entry && b == 0) {
             const size_t np = fn.params.size();
-            /* Call-fallback (tls_gs_disp == -1, p.ej. Linux/ELF donde el proc no
-             * es gs-direct): LOAD_PROC carga proc via un CALL al stub que
+            /* Call-fallback (tls_gs_disp == -1, p.ej. Linux/ELF donde el proc
+             * no es gs-direct): LOAD_PROC carga proc via un CALL al stub que
              * PRESERVA los arg-regs (get_proc_addr = cb_preserving_get_proc).
              * Ya soportado -> no baila.  El marshalling (abajo) lee los args
              * intactos tras el LOAD_PROC. */
@@ -1198,26 +1208,26 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 }
             }
-            /* Cargar proc -> RBX via TLS-direct (gs:[disp]); no toca arg-regs. */
+            /* Cargar proc -> RBX via TLS-direct (gs:[disp]); no toca arg-regs.
+             */
             const uint32_t proc_pool_idx = out.intern_imm64(cb.get_proc_addr);
             O.push_back(MInstr::make_load_proc(MReg::RBX, cb.tls_gs_disp,
                                                proc_pool_idx));
             /* Save-set (cuerpo no-hoja): salvar proc->registers[0..15] del
              * caller VM a la work-area del frame ANTES de marshalear (que pisa
              * regs[1..N]).  RBX ya = proc.  El rewrite reserva los 128B. */
-            if (cb_save_set)
-                O.push_back(MInstr::make_cb_save());
-            /* Marshalear args nativos -> proc->regs[1..N].  Cada arg viene en un
-             * reg (GP/XMM) o en la PILA del caller segun el ABI:
-             *   Win64: posicion ordinal compartida; args 0..3 en reg, 4+ en
-             *          [rbp + 48 + 8*(i-4)]  (rbp+8=retaddr, rbp+16..47=shadow).
-             *   SysV : bancos separados (6 GP / 8 XMM); el overflow de cualquier
-             *          banco va a [rbp + 16 + 8*j]  (j = orden de aparicion en
-             *          pila; rbp+8=retaddr, sin shadow).
-             * Float (f64): reg -> MOVQ (XMM->RAX); pila -> load 8 bytes.  En
-             * ambos casos el valor termina en regs[i+1] como bit-pattern i64
-             * (la VM_ABI lo relee via MOVSD).  RAX es scratch (no arg-reg).
-             * RBP estable: has_stack_params (>arg_regs) fuerza el frame. */
+            if (cb_save_set) O.push_back(MInstr::make_cb_save());
+            /* Marshalear args nativos -> proc->regs[1..N].  Cada arg viene en
+             * un reg (GP/XMM) o en la PILA del caller segun el ABI: Win64:
+             * posicion ordinal compartida; args 0..3 en reg, 4+ en [rbp + 48 +
+             * 8*(i-4)]  (rbp+8=retaddr, rbp+16..47=shadow). SysV : bancos
+             * separados (6 GP / 8 XMM); el overflow de cualquier banco va a
+             * [rbp + 16 + 8*j]  (j = orden de aparicion en pila; rbp+8=retaddr,
+             * sin shadow). Float (f64): reg -> MOVQ (XMM->RAX); pila -> load 8
+             * bytes.  En ambos casos el valor termina en regs[i+1] como
+             * bit-pattern i64 (la VM_ABI lo relee via MOVSD).  RAX es scratch
+             * (no arg-reg). RBP estable: has_stack_params (>arg_regs) fuerza el
+             * frame. */
             {
                 size_t gpn = 0, fpn = 0, stk = 0;
                 for (size_t i = 0; i < np; ++i) {
@@ -1270,9 +1280,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 }
             }
             /* argc -> regs[15]. */
-            O.push_back(MInstr::make_unary(MOp::MOV, vm_reg_mem(15),
-                                           MOperand::make_imm32(
-                                               static_cast<int32_t>(np))));
+            O.push_back(MInstr::make_unary(
+                MOp::MOV, vm_reg_mem(15),
+                MOperand::make_imm32(static_cast<int32_t>(np))));
         }
 
         /* VM_ABI: al entrar, cargar cada parametro desde
@@ -1284,33 +1294,35 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
          * register que ademas pisaba otro param (p.ej. el puntero p en RAX) ->
          * direccion basura en el loop -> SEGFAULT. */
         if (vm && b == 0) {
-            /* Auto-PGO tier-2: contador de invocaciones en el PROLOGO (corre sea
-             * cual sea el llamante: interp, vrt_callvirt o dispatch inline
+            /* Auto-PGO tier-2: contador de invocaciones en el PROLOGO (corre
+             * sea cual sea el llamante: interp, vrt_callvirt o dispatch inline
              * nativo).  Al cruzar el umbral llama al entry-point tier2_request
              * (proc, method) que dispara la recompilacion con el perfil medido.
              * RBX (=proc) es callee-saved -> la llamada C lo preserva; ningun
              * vreg esta vivo aun (los params se cargan despues) -> rax/rcx son
              * scratch libres.  Solo en tier-1 (no en la recompilacion tier-2:
              * ent.tier2_request=0 alli). */
-            if (ent.tier2_request && ent.tier2_ctr_addr && ent.tier2_threshold) {
+            if (ent.tier2_request && ent.tier2_ctr_addr &&
+                ent.tier2_threshold) {
                 const uint32_t skipL = out.new_label();
-                const uint32_t ci = out.intern_imm64(
-                    static_cast<int64_t>(ent.tier2_ctr_addr));
+                const uint32_t ci =
+                    out.intern_imm64(static_cast<int64_t>(ent.tier2_ctr_addr));
                 // rax = &invocation_count
-                O.push_back(MInstr::make_unary(
-                    MOp::MOV, MOperand::make_reg(MReg::RAX, 8),
-                    MOperand::make_imm64_idx(ci)));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(MReg::RAX, 8),
+                                               MOperand::make_imm64_idx(ci)));
                 // inc dword [rax]  (32-bit)
-                O.push_back(MInstr::make_unary(
-                    MOp::INC, MOperand::make_mem(MReg::RAX, 0),
-                    MOperand::none()));
+                O.push_back(MInstr::make_unary(MOp::INC,
+                                               MOperand::make_mem(MReg::RAX, 0),
+                                               MOperand::none()));
                 // ecx = [rax]  (32-bit load para el cmp)
                 O.push_back(MInstr::make_load(MOperand::make_reg(MReg::RCX, 4),
                                               MOperand::make_reg(MReg::RAX, 8),
                                               4, false));
                 // cmp ecx, threshold
                 O.push_back(MInstr::make_binary(
-                    MOp::CMP, MOperand::none(), MOperand::make_reg(MReg::RCX, 4),
+                    MOp::CMP, MOperand::none(),
+                    MOperand::make_reg(MReg::RCX, 4),
                     MOperand::make_imm32(
                         static_cast<int32_t>(ent.tier2_threshold))));
                 // jb skip  (count < threshold -> no disparar)
@@ -1318,16 +1330,16 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 // trigger: arg0 = proc (RBX), arg1 = method_ptr
                 const MReg a0 = target_sysv ? MReg::RDI : MReg::RCX;
                 const MReg a1 = target_sysv ? MReg::RSI : MReg::RDX;
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(a0, 8),
-                                               MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(a0, 8),
+                                       MOperand::make_reg(MReg::RBX, 8)));
                 const uint32_t mi_ = out.intern_imm64(
                     static_cast<int64_t>(ent.tier2_method_ptr));
                 O.push_back(MInstr::make_unary(MOp::MOV,
                                                MOperand::make_reg(a1, 8),
                                                MOperand::make_imm64_idx(mi_)));
-                O.push_back(MInstr::make_call_abs(out.intern_imm64(
-                    static_cast<int64_t>(ent.tier2_request))));
+                O.push_back(MInstr::make_call_abs(
+                    out.intern_imm64(static_cast<int64_t>(ent.tier2_request))));
                 O.push_back(MInstr::make_label_def(skipL));
             }
             for (size_t i = 0; i < fn.params.size(); ++i)
@@ -1374,7 +1386,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             auto param_custom_reg = [&](size_t i) -> int {
                 if (i < fn.param_abi_regs.size() &&
                     !fn.param_abi_regs[i].empty())
-                    return canon_gp_to_mreg(fn.param_abi_regs[i], /*for_pin=*/true);
+                    return canon_gp_to_mreg(fn.param_abi_regs[i],
+                                            /*for_pin=*/true);
                 return -1;
             };
             // G = nº de GP-stack params (los FP-stack van DESPUES en la pila).
@@ -1395,16 +1408,16 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     if (fi_p < fmax_p)
                         O.push_back(MInstr::make_unary(
                             MOp::MOV, vrt(pv),
-                            MOperand::make_reg(
-                                static_cast<MReg>(fareg[fi_p]), 8)));
+                            MOperand::make_reg(static_cast<MReg>(fareg[fi_p]),
+                                               8)));
                     ++fi_p;
                 } else {
                     const int custom = param_custom_reg(i);
                     if (custom >= 0) {
                         // ABI custom: el param llega en su registro declarado
                         // (register()).  MOV lider vreg<-reg fisico -> el
-                        // parallel-move de emit_host_param_loads lo resuelve.  NO
-                        // consume un arg-reg estandar (gi_p intacto).
+                        // parallel-move de emit_host_param_loads lo resuelve.
+                        // NO consume un arg-reg estandar (gi_p intacto).
                         O.push_back(MInstr::make_unary(
                             MOp::MOV, vrt(pv),
                             MOperand::make_reg(static_cast<MReg>(custom), 8)));
@@ -1437,8 +1450,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     }
                     ++fi_p;
                 } else {
-                    // ABI custom: ya se cargo en el PASO 1 desde su registro; no
-                    // consume un slot de pila ni un indice de arg-reg.
+                    // ABI custom: ya se cargo en el PASO 1 desde su registro;
+                    // no consume un slot de pila ni un indice de arg-reg.
                     if (param_custom_reg(i) >= 0) continue;
                     if (gi_p >= gmax_p) {
                         const int32_t off =
@@ -1468,12 +1481,13 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         //
                         // MARCA variant=PHI_COPY_MARK (0xFD): estas copias de
                         // una MISMA arista son un PARALLEL MOVE (todos los args
-                        // se leen "a la vez" en la arista).  El regalloc_rewrite
-                        // las agrupa y resuelve con emit_parallel_moves (rompe
-                        // ciclos con scratch).  Emitidas secuencialmente
-                        // corrompen cuando el regalloc (p.ej. tras ssa_coalesce)
-                        // asigna phi_dst_i y arg_j al MISMO fisico -> ciclo de
-                        // permutacion que la copia secuencial pisa.
+                        // se leen "a la vez" en la arista).  El
+                        // regalloc_rewrite las agrupa y resuelve con
+                        // emit_parallel_moves (rompe ciclos con scratch).
+                        // Emitidas secuencialmente corrompen cuando el regalloc
+                        // (p.ej. tras ssa_coalesce) asigna phi_dst_i y arg_j al
+                        // MISMO fisico -> ciclo de permutacion que la copia
+                        // secuencial pisa.
                         MInstr mv = MInstr::make_unary(MOp::MOV, vrt(p.dst),
                                                        vrt(a.value));
                         mv.variant = 0xFD; // PHI_COPY_MARK
@@ -1539,9 +1553,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * exacta, que es mas util.
              *
              * Sin esto, quien compila solo podia decir "op fuera del subset" --
-             * sin la op --, y cada investigacion empezaba por recompilar con una
-             * variable de entorno puesta para averiguar lo que el compilador ya
-             * sabia. */
+             * sin la op --, y cada investigacion empezaba por recompilar con
+             * una variable de entorno puesta para averiguar lo que el
+             * compilador ya sabia. */
             vreg_ultimo_motivo() =
                 std::string(ir::ir_op_name(in.op)) + " (sin motivo apuntado)";
             MOp mop;
@@ -1567,7 +1581,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
 
             if (cmp_cond(in.op, cc)) {
                 flush_pending();
-                if (in.operands.size() != 2) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (in.operands.size() != 2)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 /* Diferir: quiza se fusione con el BR_COND siguiente. */
                 has_pend = true;
                 pend_cc = cc;
@@ -1590,16 +1605,17 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::MAKE_VARIANT: break;
             case ir::IrOp::MATCH_VARIANT: break;
 
-            /* SWITCH_DENSE: jump table densa O(1) (computed-goto, lo mas optimo).
-             * Dispatch: idx = tag - min; if idx u>= N -> default; else cargar la
-             * direccion del brazo de la tabla y saltar (1 solo salto indirecto):
-             *   mov  R10, tag ; sub R10, min ; cmp R10, N ; jae default
-             *   lea  R11, [rip+table] ; mov R11, [R11 + R10*8] ; jmp R11
+            /* SWITCH_DENSE: jump table densa O(1) (computed-goto, lo mas
+             * optimo). Dispatch: idx = tag - min; if idx u>= N -> default; else
+             * cargar la direccion del brazo de la tabla y saltar (1 solo salto
+             * indirecto): mov  R10, tag ; sub R10, min ; cmp R10, N ; jae
+             * default lea  R11, [rip+table] ; mov R11, [R11 + R10*8] ; jmp R11
              *   table: dq arm0, arm1, ... (8B c/u, parchadas post-memcpy con la
              *          direccion nativa = base + label_offset del brazo).
              * El BST que el frontend emite tras este marker es el path del
              * interp + fallback; en JIT es dead code (saltamos el resto del
-             * bloque via sw_dense_term).  Si falta algo, no-op -> corre el BST. */
+             * bloque via sw_dense_term).  Si falta algo, no-op -> corre el BST.
+             */
             case ir::IrOp::SWITCH_DENSE: {
                 flush_pending();
                 const ir::IrBlockId def_blk = in.target_block;
@@ -1619,9 +1635,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const size_t range = in.jump_targets.size();
                 const MReg RI = MReg::R10, RB = MReg::R11; // scratch reservados
                 // idx = tag - min en RI.
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(RI, 8),
-                                               vr(in.operands[0])));
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_reg(RI, 8), vr(in.operands[0])));
                 if (min_v != 0)
                     O.push_back(MInstr::make_binary(
                         MOp::SUB, MOperand::make_reg(RI, 8),
@@ -1634,8 +1649,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     MInstr c{};
                     c.op = MOp::CMP;
                     c.src1 = MOperand::make_reg(RI, 8);
-                    c.src2 =
-                        MOperand::make_imm32(static_cast<int32_t>(range));
+                    c.src2 = MOperand::make_imm32(static_cast<int32_t>(range));
                     O.push_back(c);
                     O.push_back(MInstr::make_jcc(MCond::AE, blbl[def_blk]));
                 }
@@ -1653,7 +1667,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     // offset[arm]); (4) jmp RB.
                     MInstr ld{};
                     ld.op = MOp::MOV;
-                    ld.dst = MOperand::make_reg(RI, 4); // 32-bit -> zero-extiende
+                    ld.dst =
+                        MOperand::make_reg(RI, 4); // 32-bit -> zero-extiende
                     ld.src1 = MOperand::make_mem(RB, 0, RI, 4);
                     O.push_back(ld);
                     MInstr sx{};
@@ -1774,7 +1789,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::OR:
             case ir::IrOp::XOR: {
                 flush_pending();
-                if (in.operands.size() != 2) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (in.operands.size() != 2)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 (void)bin_mop(in.op, mop);
                 /* P3 imm-forms: operando CONST (i32) -> forma inmediata,
                  * evita materializar el const en un registro (y para IMUL
@@ -1845,9 +1861,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     case ir::IrOp::FMUL:
                         fop = is_f32 ? MOp::VMULSS : MOp::VMULSD;
                         break;
-                    default:
-                        fop = is_f32 ? MOp::VDIVSS : MOp::VDIVSD;
-                        break;
+                    default: fop = is_f32 ? MOp::VDIVSS : MOp::VDIVSD; break;
                     }
                 } else {
                     switch (in.op) {
@@ -1860,9 +1874,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     case ir::IrOp::FMUL:
                         fop = is_f32 ? MOp::MULSS : MOp::MULSD;
                         break;
-                    default:
-                        fop = is_f32 ? MOp::DIVSS : MOp::DIVSD;
-                        break;
+                    default: fop = is_f32 ? MOp::DIVSS : MOp::DIVSD; break;
                     }
                 }
                 O.push_back(MInstr::make_binary(fop, vrt(in.dst),
@@ -1904,8 +1916,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return vreg_bail(fn.name.c_str(), __LINE__);
                 const MOp fop =
                     (in.type == ir::IrType::F32) ? MOp::SQRTSS : MOp::SQRTSD;
-                O.push_back(MInstr::make_unary(fop, vrt(in.dst),
-                                               vrt(in.operands[0])));
+                O.push_back(
+                    MInstr::make_unary(fop, vrt(in.dst), vrt(in.operands[0])));
                 if (vx_scalar) O.back().flags |= MI_FLAG_VX_SCALAR;
                 break;
             }
@@ -1947,7 +1959,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 if (in.operands.size() != 1 || in.dst == ir::IR_NO_VALUE)
                     return vreg_bail(fn.name.c_str(), __LINE__);
                 const bool is_f32 = (in.type == ir::IrType::F32);
-                const uint8_t mode = (in.op == ir::IrOp::FROUND)  ? 0u
+                const uint8_t mode = (in.op == ir::IrOp::FROUND)   ? 0u
                                      : (in.op == ir::IrOp::FFLOOR) ? 1u
                                      : (in.op == ir::IrOp::FCEIL)  ? 2u
                                                                    : 3u;
@@ -1991,11 +2003,12 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const ir::IrValueId xm = new_ftmp();
                 O.push_back(
                     MInstr::make_unary(MOp::MOVQ_GP_XMM, vrt(xm), vr(gpm)));
-                /* dst = src (XOR|AND) mask (forma 3-op; el rewrite legaliza). */
+                /* dst = src (XOR|AND) mask (forma 3-op; el rewrite legaliza).
+                 */
                 // avx: VX 3-op (VXORPS/VANDPS) -> sin legacy SSE mezclado.
-                const MOp maskop =
-                    vx_scalar ? (is_abs ? MOp::VANDPS : MOp::VXORPS)
-                               : (is_abs ? MOp::ANDPS : MOp::XORPS);
+                const MOp maskop = vx_scalar
+                                       ? (is_abs ? MOp::VANDPS : MOp::VXORPS)
+                                       : (is_abs ? MOp::ANDPS : MOp::XORPS);
                 O.push_back(MInstr::make_binary(maskop, vrt(in.dst),
                                                 vrt(in.operands[0]), vrt(xm)));
                 break;
@@ -2015,10 +2028,10 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 }
                 if (in.operands.size() != 1 || in.dst == ir::IR_NO_VALUE)
                     return vreg_bail(fn.name.c_str(), __LINE__);
-                const MOp cop =
-                    (in.type == ir::IrType::F32) ? MOp::CVTSI2SS : MOp::CVTSI2SD;
-                O.push_back(MInstr::make_unary(cop, vrt(in.dst),
-                                               vr(in.operands[0])));
+                const MOp cop = (in.type == ir::IrType::F32) ? MOp::CVTSI2SS
+                                                             : MOp::CVTSI2SD;
+                O.push_back(
+                    MInstr::make_unary(cop, vrt(in.dst), vr(in.operands[0])));
                 if (vx_scalar) O.back().flags |= MI_FLAG_VX_SCALAR;
                 break;
             }
@@ -2034,8 +2047,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const ir::IrType st = fn.values[in.operands[0]].type;
                 const MOp cop =
                     (st == ir::IrType::F32) ? MOp::CVTTSS2SI : MOp::CVTTSD2SI;
-                O.push_back(MInstr::make_unary(cop, vr(in.dst),
-                                               vrt(in.operands[0])));
+                O.push_back(
+                    MInstr::make_unary(cop, vr(in.dst), vrt(in.operands[0])));
                 if (vx_scalar) O.back().flags |= MI_FLAG_VX_SCALAR;
                 break;
             }
@@ -2173,11 +2186,13 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::SHR:
             case ir::IrOp::SAR: {
                 flush_pending();
-                if (in.operands.size() != 2) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (in.operands.size() != 2)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const ir::IrValueId amt_v = in.operands[1];
                 if (amt_v < v_is_const.size() && v_is_const[amt_v]) {
                     /* Cuenta INMEDIATA (caso comun): shift dst, imm8. */
-                    const int32_t amt = static_cast<int32_t>(v_const[amt_v] & 63);
+                    const int32_t amt =
+                        static_cast<int32_t>(v_const[amt_v] & 63);
                     const MOp mop = (in.op == ir::IrOp::SHL)   ? MOp::SHL
                                     : (in.op == ir::IrOp::SHR) ? MOp::SHR
                                                                : MOp::SAR;
@@ -2190,10 +2205,11 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * cuenta en un tmp de vida corta pineado a RCX y emitimos el
                  * pseudo SHIFT_V (el rewrite lo expande con R11 como reg de
                  * trabajo -> sin clobbear vivos).  NUNCA cae al interprete. */
-                if (in.dst == ir::IR_NO_VALUE) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (in.dst == ir::IR_NO_VALUE)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const ir::IrValueId cnt = new_tmp();
-                O.push_back(MInstr::make_unary(MOp::MOV, vr(cnt),
-                                               vr(in.operands[1])));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, vr(cnt), vr(in.operands[1])));
                 out.set_vreg_fixed(static_cast<uint32_t>(cnt),
                                    static_cast<uint8_t>(MReg::RCX));
                 MInstr sv{};
@@ -2315,8 +2331,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::ROTR: {
                 /* count CONSTANTE -> rol/ror dst, imm.  Variable (en registro)
                  * -> pseudo SHIFT_V (variant 3=ROL, 4=ROR): cuenta a CL via un
-                 * tmp pineado a RCX, expandido con R11 en el rewrite.  NUNCA cae
-                 * al interprete. */
+                 * tmp pineado a RCX, expandido con R11 en el rewrite.  NUNCA
+                 * cae al interprete. */
                 flush_pending();
                 if (in.dst == ir::IR_NO_VALUE || in.operands.size() != 2)
                     return vreg_bail(fn.name.c_str(), __LINE__);
@@ -2331,8 +2347,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     break;
                 }
                 const ir::IrValueId rc = new_tmp();
-                O.push_back(MInstr::make_unary(MOp::MOV, vr(rc),
-                                               vr(in.operands[1])));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, vr(rc), vr(in.operands[1])));
                 out.set_vreg_fixed(static_cast<uint32_t>(rc),
                                    static_cast<uint8_t>(MReg::RCX));
                 MInstr rv{};
@@ -2385,9 +2401,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
 #else
                     const MReg ca0 = MReg::RDI;
 #endif
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOV, MOperand::make_reg(ca0, 8),
-                        MOperand::make_reg(MReg::RBX, 8)));
+                    O.push_back(
+                        MInstr::make_unary(MOp::MOV, MOperand::make_reg(ca0, 8),
+                                           MOperand::make_reg(MReg::RBX, 8)));
                     O.push_back(MInstr::make_call_abs(
                         out.intern_imm64(ent.unwrap_throw)));
                 }
@@ -2403,8 +2419,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * queda inalcanzable (inofensivo). */
                 O.push_back(MInstr::make_ret());
                 O.push_back(MInstr::make_label_def(Lok));
-                O.push_back(
-                    MInstr::make_unary(MOp::MOV, vr(in.dst), vr(v)));
+                O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst), vr(v)));
                 break;
             }
             /* ISNULL: dst = (src == 0) ? 1 : 0.  Inline puro, cero runtime:
@@ -2420,7 +2435,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 if (in.dst == ir::IR_NO_VALUE || in.operands.empty())
                     return vreg_bail(fn.name.c_str(), __LINE__);
                 auto it_cs = carry_src.find(in.operands[0]);
-                if (it_cs == carry_src.end()) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (it_cs == carry_src.end())
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 // Suma: desbordo si el resultado quedo por debajo del primer
                 // sumando.  Resta: pidio prestado si el minuendo era menor que
                 // el resultado.  En ambos casos, `setb` tras la comparacion.
@@ -2467,13 +2483,13 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
 #else
                 const MReg ca0 = MReg::RDI;
 #endif
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(ca0, 8),
-                                               MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(ca0, 8),
+                                       MOperand::make_reg(MReg::RBX, 8)));
                 O.push_back(
                     MInstr::make_call_abs(out.intern_imm64(ent.proc_pid)));
-                O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
-                                               MOperand::make_reg(MReg::RAX, 8)));
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, vr(in.dst), MOperand::make_reg(MReg::RAX, 8)));
                 break;
             }
             /* MVTAKE_IR: move-and-zero (ownership de smart pointers).
@@ -2490,13 +2506,14 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 if (in.operands.size() != 1 || in.dst == ir::IR_NO_VALUE)
                     return vreg_bail(fn.name.c_str(), __LINE__);
                 /* mov dst, [addr] (load 64-bit alineado = atomico en x86). */
-                O.push_back(
-                    MInstr::make_load(vr(in.dst), vr(in.operands[0]), 8, false));
+                O.push_back(MInstr::make_load(vr(in.dst), vr(in.operands[0]), 8,
+                                              false));
                 break;
             }
             case ir::IrOp::ATOMIC_ST: {
                 flush_pending();
-                if (in.operands.size() != 2) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (in.operands.size() != 2)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 /* mov [addr], val (store alineado; release en x86-TSO). */
                 O.push_back(MInstr::make_store(vr(in.operands[0]),
                                                vr(in.operands[1]), 8));
@@ -2529,12 +2546,12 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                                vr(in.operands[1])));
                 MInstr cx{};
                 cx.op = MOp::ATOMICCAS_V;
-                cx.dst = vr(rax_v);           /* in/out: expected -> old (RAX) */
+                cx.dst = vr(rax_v); /* in/out: expected -> old (RAX) */
                 cx.src1 = vr(in.operands[0]); /* addr */
                 cx.src2 = vr(in.operands[2]); /* desired */
                 O.push_back(cx);
-                O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
-                                               vr(rax_v)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, vr(in.dst), vr(rax_v)));
                 break;
             }
             case ir::IrOp::MVTAKE_IR: {
@@ -2559,7 +2576,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     O.push_back(MInstr::make_store(vr(mv_src), vr(mv_z), 8));
                 } else {
                     /* VM-addr (slots de smart pointers en VM-stack): page-cache
-                     * inline via LOAD_VM/STORE_VM (runtime solo en page-miss). */
+                     * inline via LOAD_VM/STORE_VM (runtime solo en page-miss).
+                     */
                     if (ent.vm_read_u64 == 0 || ent.vm_write_u64 == 0) {
                         vreg_dbg(fn.name.c_str(), "mvtake(no-vm-rt)");
                         return false;
@@ -2596,12 +2614,13 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 O.push_back(MInstr::make_unary(MOp::MOV,
                                                MOperand::make_reg(ns_cls, 8),
                                                vr(in.operands[0])));
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(ns_pr, 8),
-                                               MOperand::make_reg(MReg::RBX, 8)));
-                O.push_back(MInstr::make_call_abs(out.intern_imm64(ent.newobjs)));
-                O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
-                                               MOperand::make_reg(MReg::RAX, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(ns_pr, 8),
+                                       MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(
+                    MInstr::make_call_abs(out.intern_imm64(ent.newobjs)));
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, vr(in.dst), MOperand::make_reg(MReg::RAX, 8)));
                 break;
             }
             /* DLOPEN: carga libreria (syscall del SO).  vrt_dlopen(proc,
@@ -2620,29 +2639,31 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const MReg dl_pr = MReg::RDI, dl_a1 = MReg::RSI,
                            dl_a2 = MReg::RDX;
 #endif
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(MReg::R10, 8),
+                                               vr(in.operands[0])));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(MReg::R11, 8),
+                                               vr(in.operands[1])));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(dl_a1, 8),
+                                       MOperand::make_reg(MReg::R10, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(dl_a2, 8),
+                                       MOperand::make_reg(MReg::R11, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(dl_pr, 8),
+                                       MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(
+                    MInstr::make_call_abs(out.intern_imm64(ent.dlopen)));
                 O.push_back(MInstr::make_unary(
-                    MOp::MOV, MOperand::make_reg(MReg::R10, 8),
-                    vr(in.operands[0])));
-                O.push_back(MInstr::make_unary(
-                    MOp::MOV, MOperand::make_reg(MReg::R11, 8),
-                    vr(in.operands[1])));
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(dl_a1, 8),
-                                               MOperand::make_reg(MReg::R10, 8)));
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(dl_a2, 8),
-                                               MOperand::make_reg(MReg::R11, 8)));
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(dl_pr, 8),
-                                               MOperand::make_reg(MReg::RBX, 8)));
-                O.push_back(MInstr::make_call_abs(out.intern_imm64(ent.dlopen)));
-                O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
-                                               MOperand::make_reg(MReg::RAX, 8)));
+                    MOp::MOV, vr(in.dst), MOperand::make_reg(MReg::RAX, 8)));
                 break;
             }
             /* PANIC: FatalError USER_ABORT (terminal -- no retorna).
              * vrt_panic_str(proc, msg_addr, msg_len).  Frio por definicion;
-             * CALL directo es lo optimo (inlinear codigo terminal no aporta). */
+             * CALL directo es lo optimo (inlinear codigo terminal no aporta).
+             */
             case ir::IrOp::PANIC: {
                 flush_pending();
                 if (!vm || ent.panic_str == 0 || in.operands.size() < 2) {
@@ -2656,21 +2677,21 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const MReg pa_pr = MReg::RDI, pa_a1 = MReg::RSI,
                            pa_a2 = MReg::RDX;
 #endif
-                O.push_back(MInstr::make_unary(
-                    MOp::MOV, MOperand::make_reg(MReg::R10, 8),
-                    vr(in.operands[0])));
-                O.push_back(MInstr::make_unary(
-                    MOp::MOV, MOperand::make_reg(MReg::R11, 8),
-                    vr(in.operands[1])));
                 O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(pa_a1, 8),
-                                               MOperand::make_reg(MReg::R10, 8)));
+                                               MOperand::make_reg(MReg::R10, 8),
+                                               vr(in.operands[0])));
                 O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(pa_a2, 8),
-                                               MOperand::make_reg(MReg::R11, 8)));
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(pa_pr, 8),
-                                               MOperand::make_reg(MReg::RBX, 8)));
+                                               MOperand::make_reg(MReg::R11, 8),
+                                               vr(in.operands[1])));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(pa_a1, 8),
+                                       MOperand::make_reg(MReg::R10, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(pa_a2, 8),
+                                       MOperand::make_reg(MReg::R11, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(pa_pr, 8),
+                                       MOperand::make_reg(MReg::RBX, 8)));
                 O.push_back(
                     MInstr::make_call_abs(out.intern_imm64(ent.panic_str)));
                 /* `panic` no vuelve: o lo captura un `try` (y el helper salta
@@ -2743,15 +2764,15 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 O.push_back(MInstr::make_unary(MOp::MOV,
                                                MOperand::make_reg(MReg::R11, 8),
                                                vr(in.operands[1])));
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(te_a1, 8),
-                                               MOperand::make_reg(MReg::R11, 8)));
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(te_a2, 8),
-                                               MOperand::make_reg(MReg::R10, 8)));
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(te_a0, 8),
-                                               MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(te_a1, 8),
+                                       MOperand::make_reg(MReg::R11, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(te_a2, 8),
+                                       MOperand::make_reg(MReg::R10, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(te_a0, 8),
+                                       MOperand::make_reg(MReg::RBX, 8)));
                 O.push_back(
                     MInstr::make_call_abs(out.intern_imm64(ent.tryenter_jit)));
                 /* Edge abnormal: el catch es sucesor (via runtime) del bloque
@@ -2772,17 +2793,18 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
 #else
                 const MReg tl_a0 = MReg::RDI;
 #endif
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(tl_a0, 8),
-                                               MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(tl_a0, 8),
+                                       MOperand::make_reg(MReg::RBX, 8)));
                 O.push_back(
                     MInstr::make_call_abs(out.intern_imm64(ent.tryleave)));
                 break;
             }
             /* THROW: lanza una excepcion user-defined.  CALL vrt_throw_user;
-             * do_throw resume el catch (in-JIT via vrt_resume_jit -> no retorna;
-             * o cross-function/uncaught -> retorna y el make_ret devuelve limpio
-             * a enter_jit).  No escribe regs[0] (do_throw lo pone). */
+             * do_throw resume el catch (in-JIT via vrt_resume_jit -> no
+             * retorna; o cross-function/uncaught -> retorna y el make_ret
+             * devuelve limpio a enter_jit).  No escribe regs[0] (do_throw lo
+             * pone). */
             case ir::IrOp::THROW: {
                 flush_pending();
                 /* AOT/Embed (HOST_LEAF, sin VM): el throw baja a CALL al
@@ -2820,12 +2842,12 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 O.push_back(MInstr::make_unary(MOp::MOV,
                                                MOperand::make_reg(MReg::R10, 8),
                                                vr(in.operands[0])));
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(tw_a1, 8),
-                                               MOperand::make_reg(MReg::R10, 8)));
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(tw_a0, 8),
-                                               MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(tw_a1, 8),
+                                       MOperand::make_reg(MReg::R10, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(tw_a0, 8),
+                                       MOperand::make_reg(MReg::RBX, 8)));
                 O.push_back(
                     MInstr::make_call_abs(out.intern_imm64(ent.throw_user)));
                 O.push_back(MInstr::make_ret());
@@ -2833,7 +2855,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             }
             /* STRCONV: convierte StringObject a otra codificacion.
              * vrt_str_conv(proc, str, enc).  operands[0]=str, imm=enc.
-             * Conversion compleja (UTF-8/16/32) -> CALL directo es lo optimo. */
+             * Conversion compleja (UTF-8/16/32) -> CALL directo es lo optimo.
+             */
             case ir::IrOp::STRCONV: {
                 flush_pending();
                 if (!vm || ent.str_conv == 0 || in.operands.empty() ||
@@ -2842,30 +2865,29 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 }
 #if defined(_WIN32)
-                const MReg sc_pr = MReg::RCX, sc_s = MReg::RDX,
-                           sc_e = MReg::R8;
+                const MReg sc_pr = MReg::RCX, sc_s = MReg::RDX, sc_e = MReg::R8;
 #else
                 const MReg sc_pr = MReg::RDI, sc_s = MReg::RSI,
                            sc_e = MReg::RDX;
 #endif
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(sc_s, 8),
-                                               vr(in.operands[0])));
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_reg(sc_s, 8), vr(in.operands[0])));
                 O.push_back(MInstr::make_unary(
                     MOp::MOV, MOperand::make_reg(sc_e, 8),
                     MOperand::make_imm32(static_cast<int32_t>(in.imm))));
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(sc_pr, 8),
-                                               MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(sc_pr, 8),
+                                       MOperand::make_reg(MReg::RBX, 8)));
                 O.push_back(
                     MInstr::make_call_abs(out.intern_imm64(ent.str_conv)));
-                O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
-                                               MOperand::make_reg(MReg::RAX, 8)));
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, vr(in.dst), MOperand::make_reg(MReg::RAX, 8)));
                 break;
             }
             case ir::IrOp::BITCAST: {
                 flush_pending();
-                if (in.operands.size() != 1) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (in.operands.size() != 1)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 /* BITCAST reinterpreta bits sin convertir.  Entre el banco GP
                  * y el XMM hay que MOVER los bits con MOVQ (no un MOV GP->GP).
                  * Caso clave: enum/optional con payload f64 -> el payload se
@@ -2887,14 +2909,14 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     O.push_back(MInstr::make_unary(MOp::MOVQ_GP_XMM,
                                                    vrt(in.dst), vr(src)));
                 } else if (!dst_f && src_f) {
-                    O.push_back(MInstr::make_unary(MOp::MOVQ_XMM_GP,
-                                                   vr(in.dst), vrt(src)));
-                } else if (dst_f && src_f) {
-                    O.push_back(MInstr::make_unary(MOp::MOV, vrt(in.dst),
+                    O.push_back(MInstr::make_unary(MOp::MOVQ_XMM_GP, vr(in.dst),
                                                    vrt(src)));
+                } else if (dst_f && src_f) {
+                    O.push_back(
+                        MInstr::make_unary(MOp::MOV, vrt(in.dst), vrt(src)));
                 } else {
-                    O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
-                                                   vr(src)));
+                    O.push_back(
+                        MInstr::make_unary(MOp::MOV, vr(in.dst), vr(src)));
                 }
                 break;
             }
@@ -2903,7 +2925,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::CAST:
             case ir::IrOp::TRUNC: {
                 flush_pending();
-                if (in.operands.size() != 1) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (in.operands.size() != 1)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const ir::IrType st = fn.values[in.operands[0]].type;
                 const ir::IrType dt = in.type;
                 if (ir_type_is_float(st) || ir_type_is_float(dt)) {
@@ -2963,12 +2986,12 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 // Watchdog CTPE: poll de safepoint antes de un back-edge (salto
                 // hacia atras = loop) para poder abortar el precomputo.
                 if (sp_idx >= 0 && t <= b) {
-                    O.push_back(MInstr::make_safepoint(
-                        static_cast<uint32_t>(sp_idx)));
+                    O.push_back(
+                        MInstr::make_safepoint(static_cast<uint32_t>(sp_idx)));
                 }
-                // Fall-through: los bloques se emiten en orden 0..NB, asi que un
-                // BR al bloque SIGUIENTE (b+1) es un `jmp` a la instruccion que
-                // le sigue -> redundante.  Se omite (cae por fall-through).
+                // Fall-through: los bloques se emiten en orden 0..NB, asi que
+                // un BR al bloque SIGUIENTE (b+1) es un `jmp` a la instruccion
+                // que le sigue -> redundante.  Se omite (cae por fall-through).
                 if (t != b + 1) {
                     O.push_back(MInstr::make_jmp(blbl[t]));
                 }
@@ -2977,7 +3000,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             }
 
             case ir::IrOp::BR_COND: {
-                if (in.operands.size() != 1) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (in.operands.size() != 1)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const ir::IrBlockId tt = in.target_block; // true
                 const ir::IrBlockId tf = in.false_block;  // false
                 /* Tras el critical-edge splitting, ningun target de un
@@ -2992,10 +3016,11 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const ir::IrValueId cond = in.operands[0];
 
                 // Watchdog CTPE: poll de safepoint si alguna rama es un
-                // back-edge (do-while: la condicion salta hacia atras al cuerpo).
+                // back-edge (do-while: la condicion salta hacia atras al
+                // cuerpo).
                 if (sp_idx >= 0 && (tt <= b || tf <= b)) {
-                    O.push_back(MInstr::make_safepoint(
-                        static_cast<uint32_t>(sp_idx)));
+                    O.push_back(
+                        MInstr::make_safepoint(static_cast<uint32_t>(sp_idx)));
                 }
 
                 // La rama FALSE cae por fall-through si su target es el bloque
@@ -3032,8 +3057,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     const bool rv_fp = fp_ok && rv < fn.values.size() &&
                                        ir_type_is_float(fn.values[rv].type);
                     /* Float return HOST_LEAF ( AOT C1): el valor va a XMM0
-                     * (ret_reg[FP]).  El MOV XMM0 <- vreg_fp lo enruta el rewrite
-                     * a MOVSD (is_fp_operand). */
+                     * (ret_reg[FP]).  El MOV XMM0 <- vreg_fp lo enruta el
+                     * rewrite a MOVSD (is_fp_operand). */
                     if (!vm && rv_fp) {
                         O.push_back(MInstr::make_unary(
                             MOp::MOV, MOperand::make_reg(MReg::XMM0, 8),
@@ -3044,11 +3069,11 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         break;
                     }
                     /* Float return VM_ABI: proc->registers.regs[0] guarda el
-                     * bit-pattern i64 del f64 (convencion del interp).  El valor
-                     * vive en un XMM -> MOVQ_XMM_GP mueve los bits a un GP temp y
-                     * luego se escribe a regs[0].  Sin esto, vr(rv) trataba el
-                     * valor float como GP y movia un registro stale (basura) a
-                     * regs[0] -> retorno incorrecto (p.ej. 0). */
+                     * bit-pattern i64 del f64 (convencion del interp).  El
+                     * valor vive en un XMM -> MOVQ_XMM_GP mueve los bits a un
+                     * GP temp y luego se escribe a regs[0].  Sin esto, vr(rv)
+                     * trataba el valor float como GP y movia un registro stale
+                     * (basura) a regs[0] -> retorno incorrecto (p.ej. 0). */
                     if (vm && rv_fp) {
                         const ir::IrValueId gpb = new_tmp();
                         O.push_back(MInstr::make_unary(MOp::MOVQ_XMM_GP,
@@ -3101,9 +3126,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 if (cb_save_set) O.push_back(MInstr::make_cb_restore());
                 O.push_back(MInstr::make_ret());
                 /* @Naked: marcar el RET si proviene de un `return` explicito
-                 * (no del fallthrough sintetico) -> el rewrite lo materializa. */
-                if (!in.ret_implicit)
-                    O.back().flags |= MI_FLAG_RET_EXPLICIT;
+                 * (no del fallthrough sintetico) -> el rewrite lo materializa.
+                 */
+                if (!in.ret_implicit) O.back().flags |= MI_FLAG_RET_EXPLICIT;
                 break;
             }
 
@@ -3134,7 +3159,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             }
             case ir::IrOp::SETSTATIC: {
                 flush_pending();
-                if (in.operands.size() < 2) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (in.operands.size() < 2)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const int32_t off = static_cast<int32_t>(in.imm);
                 const ir::IrValueId t_cls = new_tmp();
                 O.push_back(MInstr::make_unary(MOp::MOV, vr(t_cls),
@@ -3187,7 +3213,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * (is_host_ptr=false) cae a fallback (necesita traduccion). */
             case ir::IrOp::LOAD: {
                 flush_pending();
-                if (in.operands.size() != 1) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (in.operands.size() != 1)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 /*  AS inc.5: LOAD desde el alloca de un binding ->
                  * leer el output del inline-asm: MOV dst <- vbind. */
                 if (in.dst != ir::IR_NO_VALUE &&
@@ -3242,9 +3269,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * rewrite lo usa en make_mem).  Si no, LOAD normal [ptr]. */
                 auto fd = fold_disp.find(in.operands[0]);
                 if (fd != fold_disp.end()) {
-                    MInstr ld = MInstr::make_load(vrt(in.dst),
-                                                  vr(fd->second.first),
-                                                  static_cast<uint8_t>(w), sgn);
+                    MInstr ld =
+                        MInstr::make_load(vrt(in.dst), vr(fd->second.first),
+                                          static_cast<uint8_t>(w), sgn);
                     ld.src2 = MOperand::make_imm32(
                         static_cast<int32_t>(fd->second.second));
                     O.push_back(ld);
@@ -3270,7 +3297,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * (ver nota en LOAD).  Solo VM_ABI usa STORE_VM. */
                 if (vm && !fn.values[in.operands[1]].is_host_ptr) {
                     /* float a memoria VM (vaddr): STORE_VM no soporta XMM aun
-                     * -> bail.  El caso HOST si (make_store + rewrite MOVSD). */
+                     * -> bail.  El caso HOST si (make_store + rewrite MOVSD).
+                     */
                     if (ir_type_is_float(in.type)) {
                         vreg_dbg(fn.name.c_str(), "store-float-vm");
                         return false;
@@ -3324,7 +3352,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * los vregs operandos es ANTES de clobear RSI/RDI/RCX. */
             case ir::IrOp::MEMCPY: {
                 flush_pending();
-                if (in.operands.size() != 3) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (in.operands.size() != 3)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 /* 1. dst/src a los scratch reservados (R10/R11): el rewrite
                  *    resuelve cada vr() a su fisico/spill; como el DESTINO es
                  *    un reg fisico, emite MOV reg,reg o MOV reg,[rbp-off]
@@ -3336,15 +3365,15 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                                MOperand::make_reg(MReg::R11, 8),
                                                vr(in.operands[1]))); // src
                 /* 2. Salvar los fijos (pueden tener vregs vivos a traves). */
-                O.push_back(MInstr::make_unary(
-                    MOp::PUSH, MOperand::none(),
-                    MOperand::make_reg(MReg::RDI, 8)));
-                O.push_back(MInstr::make_unary(
-                    MOp::PUSH, MOperand::none(),
-                    MOperand::make_reg(MReg::RSI, 8)));
-                O.push_back(MInstr::make_unary(
-                    MOp::PUSH, MOperand::none(),
-                    MOperand::make_reg(MReg::RCX, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::PUSH, MOperand::none(),
+                                       MOperand::make_reg(MReg::RDI, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::PUSH, MOperand::none(),
+                                       MOperand::make_reg(MReg::RSI, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::PUSH, MOperand::none(),
+                                       MOperand::make_reg(MReg::RCX, 8)));
                 /* 3. len -> RCX (leido de su fisico ANTES de clobear los
                  *    fijos; RSI/RDI/RCX aun intactos en este punto). */
                 O.push_back(MInstr::make_unary(MOp::MOV,
@@ -3360,15 +3389,15 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 /* 5. La copia. */
                 O.push_back(MInstr::make_rep_movsb());
                 /* 6. Restaurar los fijos (orden inverso). */
-                O.push_back(MInstr::make_unary(
-                    MOp::POP, MOperand::make_reg(MReg::RCX, 8),
-                    MOperand::none()));
-                O.push_back(MInstr::make_unary(
-                    MOp::POP, MOperand::make_reg(MReg::RSI, 8),
-                    MOperand::none()));
-                O.push_back(MInstr::make_unary(
-                    MOp::POP, MOperand::make_reg(MReg::RDI, 8),
-                    MOperand::none()));
+                O.push_back(MInstr::make_unary(MOp::POP,
+                                               MOperand::make_reg(MReg::RCX, 8),
+                                               MOperand::none()));
+                O.push_back(MInstr::make_unary(MOp::POP,
+                                               MOperand::make_reg(MReg::RSI, 8),
+                                               MOperand::none()));
+                O.push_back(MInstr::make_unary(MOp::POP,
+                                               MOperand::make_reg(MReg::RDI, 8),
+                                               MOperand::none()));
                 break;
             }
 
@@ -3390,22 +3419,23 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              *   POP RAX ; POP RCX ; POP RDI */
             case ir::IrOp::MEMSET: {
                 flush_pending();
-                if (in.operands.size() != 3) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (in.operands.size() != 3)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 O.push_back(MInstr::make_unary(MOp::MOV,
                                                MOperand::make_reg(MReg::R10, 8),
                                                vr(in.operands[0]))); // dst
                 O.push_back(MInstr::make_unary(MOp::MOV,
                                                MOperand::make_reg(MReg::R11, 8),
                                                vr(in.operands[1]))); // val
-                O.push_back(MInstr::make_unary(
-                    MOp::PUSH, MOperand::none(),
-                    MOperand::make_reg(MReg::RDI, 8)));
-                O.push_back(MInstr::make_unary(
-                    MOp::PUSH, MOperand::none(),
-                    MOperand::make_reg(MReg::RCX, 8)));
-                O.push_back(MInstr::make_unary(
-                    MOp::PUSH, MOperand::none(),
-                    MOperand::make_reg(MReg::RAX, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::PUSH, MOperand::none(),
+                                       MOperand::make_reg(MReg::RDI, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::PUSH, MOperand::none(),
+                                       MOperand::make_reg(MReg::RCX, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::PUSH, MOperand::none(),
+                                       MOperand::make_reg(MReg::RAX, 8)));
                 O.push_back(MInstr::make_unary(MOp::MOV,
                                                MOperand::make_reg(MReg::RCX, 8),
                                                vr(in.operands[2]))); // len
@@ -3416,29 +3446,30 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     MOp::MOV, MOperand::make_reg(MReg::RAX, 8),
                     MOperand::make_reg(MReg::R11, 8))); // AL = byte de relleno
                 O.push_back(MInstr::make_rep_stosb());
-                O.push_back(MInstr::make_unary(
-                    MOp::POP, MOperand::make_reg(MReg::RAX, 8),
-                    MOperand::none()));
-                O.push_back(MInstr::make_unary(
-                    MOp::POP, MOperand::make_reg(MReg::RCX, 8),
-                    MOperand::none()));
-                O.push_back(MInstr::make_unary(
-                    MOp::POP, MOperand::make_reg(MReg::RDI, 8),
-                    MOperand::none()));
+                O.push_back(MInstr::make_unary(MOp::POP,
+                                               MOperand::make_reg(MReg::RAX, 8),
+                                               MOperand::none()));
+                O.push_back(MInstr::make_unary(MOp::POP,
+                                               MOperand::make_reg(MReg::RCX, 8),
+                                               MOperand::none()));
+                O.push_back(MInstr::make_unary(MOp::POP,
+                                               MOperand::make_reg(MReg::RDI, 8),
+                                               MOperand::none()));
                 break;
             }
 
             /* VEC_UNOP dst[i] = OP a[i] (auto-vectorizacion unaria).  SIMD
              * packed 128b (W=2 f64): MOVUPD x0,[a]; <op> x0; MOVUPD [dst],x0.
              *   copy(0) -> sin op; sqrt(3) -> SQRTPD x0,x0;
-             *   fneg(1) -> XORPD x0,mask(0x8000..);  fabs(2) -> ANDPD x0,mask(0x7fff..).
-             * La mascara de signo de 16B se construye desde un imm64 -> GP ->
-             * MOVQ_GP_XMM x1 -> UNPCKLPD x1,x1 (difunde el lane bajo a ambos),
-             * sin constante en memoria.  Scratch del target (gp0/gp1, fp0/fp1),
-             * igual que VEC_BINOP (clobber set formal). */
+             *   fneg(1) -> XORPD x0,mask(0x8000..);  fabs(2) -> ANDPD
+             * x0,mask(0x7fff..). La mascara de signo de 16B se construye desde
+             * un imm64 -> GP -> MOVQ_GP_XMM x1 -> UNPCKLPD x1,x1 (difunde el
+             * lane bajo a ambos), sin constante en memoria.  Scratch del target
+             * (gp0/gp1, fp0/fp1), igual que VEC_BINOP (clobber set formal). */
             case ir::IrOp::VEC_UNOP: {
                 flush_pending();
-                if (in.operands.size() != 2) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (in.operands.size() != 2)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const uint64_t chunk_w = in.imm & 0xFF; // 16/32/64
                 const uint64_t subop = (in.imm >> 8) & 0xFF;
                 if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
@@ -3446,15 +3477,15 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 if (!fp_ok || in.type != ir::IrType::F64) return false; // f64
                 /* mismo chunk/descompone que VEC_BINOP: emite al ancho del host
                  * (eff_w), descomponiendo el chunk en n_pieces. */
-                const uint64_t host_w =
-                    vec_host_w();
+                const uint64_t host_w = vec_host_w();
                 const uint64_t eff_w = (chunk_w < host_w) ? chunk_w : host_w;
                 const uint64_t n_pieces = chunk_w / eff_w;
                 const auto &gpsc =
                     tri_sel.scratch[static_cast<size_t>(RegClass::GP)];
                 const auto &fpsc =
                     tri_sel.scratch[static_cast<size_t>(RegClass::FP)];
-                if (gpsc.size() < 2 || fpsc.size() < 2) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (gpsc.size() < 2 || fpsc.size() < 2)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const MReg gp0 = static_cast<MReg>(gpsc[0]);
                 const MReg gp1 = static_cast<MReg>(gpsc[1]);
                 const MReg fp0 = static_cast<MReg>(fpsc[0]);
@@ -3471,20 +3502,20 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     const uint64_t mask = (subop == 1) ? 0x8000000000000000ULL
                                                        : 0x7fffffffffffffffULL;
                     const uint32_t idx = out.intern_imm64(mask);
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOV, MOperand::make_reg(gp1, 8),
-                        MOperand::make_imm64_idx(idx)));
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOVQ_GP_XMM, MOperand::make_reg(fp1, 16),
-                        MOperand::make_reg(gp1, 8)));
+                    O.push_back(
+                        MInstr::make_unary(MOp::MOV, MOperand::make_reg(gp1, 8),
+                                           MOperand::make_imm64_idx(idx)));
+                    O.push_back(MInstr::make_unary(MOp::MOVQ_GP_XMM,
+                                                   MOperand::make_reg(fp1, 16),
+                                                   MOperand::make_reg(gp1, 8)));
                     if (eff_w <= 16)
                         O.push_back(MInstr::make_unary(
                             MOp::UNPCKLPD, MOperand::make_reg(fp1, 16),
                             MOperand::make_reg(fp1, 16)));
                     else
-                        O.push_back(MInstr::make_unary(
-                            MOp::VBROADCASTSD, x1,
-                            MOperand::make_reg(fp1, 16)));
+                        O.push_back(
+                            MInstr::make_unary(MOp::VBROADCASTSD, x1,
+                                               MOperand::make_reg(fp1, 16)));
                 }
                 for (uint64_t pc = 0; pc < n_pieces; ++pc) {
                     const int32_t off = static_cast<int32_t>(pc * eff_w);
@@ -3523,7 +3554,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * tiene vivos) y dst/a/b a R10/R11 (scratch GP no asignable). */
             case ir::IrOp::VEC_BINOP: {
                 flush_pending();
-                if (in.operands.size() != 3) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (in.operands.size() != 3)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const uint64_t chunk_w = in.imm & 0xFF; // 16/32/64 (matcher)
                 const uint64_t subop = (in.imm >> 8) & 0xFF;
                 if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
@@ -3534,13 +3566,13 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * Asi el `.velb` es portable (corre en cualquier x86-64) y
                  * AUTO-cpuid.  VESTA_JIT_VEC_ISA fuerza el ancho (validar
                  * AVX512 por disasm en CPU sin avx512). */
-                const uint64_t host_w =
-                    vec_host_w();
+                const uint64_t host_w = vec_host_w();
                 const uint64_t eff_w = (chunk_w < host_w) ? chunk_w : host_w;
                 const uint64_t n_pieces = chunk_w / eff_w;
                 /* op packed segun el tipo de elemento: float (ADDPD/...) o
                  * entero (PADDD/PSUBD i32, PADDQ/PSUBQ i64).  No hay mul/div
-                 * entero packed en SSE2 -> bail (la cola/loop escalar lo hace). */
+                 * entero packed en SSE2 -> bail (la cola/loop escalar lo hace).
+                 */
                 MOp pop;
                 if (in.type == ir::IrType::F64) {
                     pop = (subop == 0)   ? MOp::ADDPD
@@ -3554,46 +3586,62 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                          : MOp::DIVPS;
                 } else if (in.type == ir::IrType::I64 ||
                            in.type == ir::IrType::U64) {
-                    if (subop == 0) pop = MOp::PADDQ;
-                    else if (subop == 1) pop = MOp::PSUBQ;
-                    else return false; // mul/div i64 no packed en SSE2
+                    if (subop == 0)
+                        pop = MOp::PADDQ;
+                    else if (subop == 1)
+                        pop = MOp::PSUBQ;
+                    else
+                        return false; // mul/div i64 no packed en SSE2
                 } else if (in.type == ir::IrType::I32 ||
                            in.type == ir::IrType::U32) {
-                    if (subop == 0) pop = MOp::PADDD;
-                    else if (subop == 1) pop = MOp::PSUBD;
-                    else if (subop == 2) pop = MOp::PMULLD; // SSE4.1/AVX2
-                    else return false; // div i32 no packed
+                    if (subop == 0)
+                        pop = MOp::PADDD;
+                    else if (subop == 1)
+                        pop = MOp::PSUBD;
+                    else if (subop == 2)
+                        pop = MOp::PMULLD; // SSE4.1/AVX2
+                    else
+                        return false; // div i32 no packed
                 } else if (in.type == ir::IrType::I16 ||
                            in.type == ir::IrType::U16) {
-                    if (subop == 0) pop = MOp::PADDW;
-                    else if (subop == 1) pop = MOp::PSUBW;
-                    else if (subop == 2) pop = MOp::PMULLW; // SSE2 word mul (low)
-                    else return false; // div i16 no packed
+                    if (subop == 0)
+                        pop = MOp::PADDW;
+                    else if (subop == 1)
+                        pop = MOp::PSUBW;
+                    else if (subop == 2)
+                        pop = MOp::PMULLW; // SSE2 word mul (low)
+                    else
+                        return false; // div i16 no packed
                 } else if (in.type == ir::IrType::I8 ||
                            in.type == ir::IrType::U8) {
-                    if (subop == 0) pop = MOp::PADDB;
-                    else if (subop == 1) pop = MOp::PSUBB;
-                    else return false; // no hay mul/div byte packed en SSE2
+                    if (subop == 0)
+                        pop = MOp::PADDB;
+                    else if (subop == 1)
+                        pop = MOp::PSUBB;
+                    else
+                        return false; // no hay mul/div byte packed en SSE2
                 } else {
                     return false; // tipo no soportado
                 }
                 // ROBUSTEZ (clobber set formal): los scratch los DERIVAMOS del
                 // TargetRegInfo (tri_sel.scratch[GP]/[FP]) en vez de hardcodear
                 // R10/R11/XMM14/XMM15.  Estos registros estan RESERVADOS por el
-                // allocator (no son asignables -> nunca contienen un valor vivo)
-                // y son los MISMOS que el rewrite usa como scratch GP (scr0/scr1)
-                // y FP (fscr0/fscr1).  Invariante de seguridad: el vector vive en
-                // los 2 XMM scratch (fp0/fp1) a traves del `MOV gp0, c_ptr`
-                // intermedio; ese MOV solo materializa un operando GP (puntero) ->
-                // usa scratch GP, NUNCA toca el scratch FP -> el vector sobrevive.
-                // Si el target NO reserva >=2 GP + >=2 FP scratch, bail (cola
-                // escalar).  Asi un cambio de scratch del target no corrompe en
-                // silencio: el VEC_BINOP sigue automaticamente al target.
+                // allocator (no son asignables -> nunca contienen un valor
+                // vivo) y son los MISMOS que el rewrite usa como scratch GP
+                // (scr0/scr1) y FP (fscr0/fscr1).  Invariante de seguridad: el
+                // vector vive en los 2 XMM scratch (fp0/fp1) a traves del `MOV
+                // gp0, c_ptr` intermedio; ese MOV solo materializa un operando
+                // GP (puntero) -> usa scratch GP, NUNCA toca el scratch FP ->
+                // el vector sobrevive. Si el target NO reserva >=2 GP + >=2 FP
+                // scratch, bail (cola escalar).  Asi un cambio de scratch del
+                // target no corrompe en silencio: el VEC_BINOP sigue
+                // automaticamente al target.
                 const auto &gpsc =
                     tri_sel.scratch[static_cast<size_t>(RegClass::GP)];
                 const auto &fpsc =
                     tri_sel.scratch[static_cast<size_t>(RegClass::FP)];
-                if (gpsc.size() < 2 || fpsc.size() < 2) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (gpsc.size() < 2 || fpsc.size() < 2)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const MReg gp0 = static_cast<MReg>(gpsc[0]);
                 const MReg gp1 = static_cast<MReg>(gpsc[1]);
                 const MReg fp0 = static_cast<MReg>(fpsc[0]);
@@ -3609,12 +3657,10 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const MOperand r1 = MOperand::make_reg(gp1, 8);
                 // Cadena register-resident: c (=x0=fp0) vive en el reg ENTRE
                 // pasos.  Solo con n_pieces==1 (chunk == host width, el caso
-                // comun).  bit 20 = c ya en reg (salta la carga de src0); bit 21
-                // = deja c en reg (salta el store).
-                const bool src0_reg =
-                    (n_pieces == 1) && ((in.imm >> 20) & 1);
-                const bool dst_reg =
-                    (n_pieces == 1) && ((in.imm >> 21) & 1);
+                // comun).  bit 20 = c ya en reg (salta la carga de src0); bit
+                // 21 = deja c en reg (salta el store).
+                const bool src0_reg = (n_pieces == 1) && ((in.imm >> 20) & 1);
+                const bool dst_reg = (n_pieces == 1) && ((in.imm >> 21) & 1);
                 for (uint64_t pc = 0; pc < n_pieces; ++pc) {
                     // offset de la pieza dentro del chunk (0 cuando n_pieces=1,
                     // que es el unico caso que llega a EVEX -> sin disp).
@@ -3627,8 +3673,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                             MOp::MOVUPD, x0, MOperand::make_mem(gp0, off)));
                     }
                     // load b -> x1
-                    O.push_back(MInstr::make_unary(MOp::MOV, r1,
-                                                   vr(in.operands[2])));
+                    O.push_back(
+                        MInstr::make_unary(MOp::MOV, r1, vr(in.operands[2])));
                     O.push_back(MInstr::make_unary(
                         MOp::MOVUPD, x1, MOperand::make_mem(gp1, off)));
                     O.push_back(MInstr::make_unary(pop, x0, x1)); // x0 OP= x1
@@ -3643,24 +3689,25 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 break;
             }
 
-            /* VEC_BINOP_S dst[i] = a[i] OP escalar (escalado/offset).  El escalar
-             * (f64, vreg FP) se DIFUNDE a todos los lanes en x1 UNA vez
+            /* VEC_BINOP_S dst[i] = a[i] OP escalar (escalado/offset).  El
+             * escalar (f64, vreg FP) se DIFUNDE a todos los lanes en x1 UNA vez
              * (MOVSD x1,scalar + UNPCKLPD/VBROADCASTSD); luego por chunk MOVUPD
              * x0,[a]; <op> x0,x1; MOVUPD [dst],x0.  Solo f64 por ahora. */
             case ir::IrOp::VEC_BINOP_S: {
                 flush_pending();
-                if (in.operands.size() != 3) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (in.operands.size() != 3)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 if (!fp_ok) return vreg_bail(fn.name.c_str(), __LINE__);
                 const uint64_t chunk_w = in.imm & 0xFF;
                 const uint64_t subop = (in.imm >> 8) & 0xFF;
                 if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
                     return vreg_bail(fn.name.c_str(), __LINE__);
                 // op packed segun el tipo de elemento.  El escalar ya viene
-                // REPLICADO a 64 bits (matcher) para los enteros -> un broadcast
-                // de lane de 64 bits (UNPCKLPD/VBROADCASTSD) llena todos los
-                // sub-lanes con el escalar.
-                const bool is_fp = (in.type == ir::IrType::F64 ||
-                                    in.type == ir::IrType::F32);
+                // REPLICADO a 64 bits (matcher) para los enteros -> un
+                // broadcast de lane de 64 bits (UNPCKLPD/VBROADCASTSD) llena
+                // todos los sub-lanes con el escalar.
+                const bool is_fp =
+                    (in.type == ir::IrType::F64 || in.type == ir::IrType::F32);
                 const bool is_f32s = (in.type == ir::IrType::F32);
                 MOp pop;
                 if (in.type == ir::IrType::F64) {
@@ -3675,47 +3722,63 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                          : MOp::DIVPS;
                 } else if (in.type == ir::IrType::I64 ||
                            in.type == ir::IrType::U64) {
-                    if (subop == 0) pop = MOp::PADDQ;
-                    else if (subop == 1) pop = MOp::PSUBQ;
-                    else return vreg_bail(fn.name.c_str(), __LINE__);
+                    if (subop == 0)
+                        pop = MOp::PADDQ;
+                    else if (subop == 1)
+                        pop = MOp::PSUBQ;
+                    else
+                        return vreg_bail(fn.name.c_str(), __LINE__);
                 } else if (in.type == ir::IrType::I32 ||
                            in.type == ir::IrType::U32) {
-                    if (subop == 0) pop = MOp::PADDD;
-                    else if (subop == 1) pop = MOp::PSUBD;
-                    else if (subop == 2) pop = MOp::PMULLD;
-                    else return vreg_bail(fn.name.c_str(), __LINE__);
+                    if (subop == 0)
+                        pop = MOp::PADDD;
+                    else if (subop == 1)
+                        pop = MOp::PSUBD;
+                    else if (subop == 2)
+                        pop = MOp::PMULLD;
+                    else
+                        return vreg_bail(fn.name.c_str(), __LINE__);
                 } else if (in.type == ir::IrType::I16 ||
                            in.type == ir::IrType::U16) {
-                    if (subop == 0) pop = MOp::PADDW;
-                    else if (subop == 1) pop = MOp::PSUBW;
-                    else if (subop == 2) pop = MOp::PMULLW;
-                    else return vreg_bail(fn.name.c_str(), __LINE__);
+                    if (subop == 0)
+                        pop = MOp::PADDW;
+                    else if (subop == 1)
+                        pop = MOp::PSUBW;
+                    else if (subop == 2)
+                        pop = MOp::PMULLW;
+                    else
+                        return vreg_bail(fn.name.c_str(), __LINE__);
                 } else if (in.type == ir::IrType::I8 ||
                            in.type == ir::IrType::U8) {
-                    if (subop == 0) pop = MOp::PADDB;
-                    else if (subop == 1) pop = MOp::PSUBB;
-                    else return vreg_bail(fn.name.c_str(), __LINE__);
+                    if (subop == 0)
+                        pop = MOp::PADDB;
+                    else if (subop == 1)
+                        pop = MOp::PSUBB;
+                    else
+                        return vreg_bail(fn.name.c_str(), __LINE__);
                 } else {
                     return vreg_bail(fn.name.c_str(), __LINE__);
                 }
                 // HOIST: el escalar ya esta DIFUNDIDO en XMM13 por un VEC_BCAST
-                // del preheader (imm bit 16).  Asi el cuerpo del loop es VX PURO
-                // (vmovupd ymm + vop ymm leyendo XMM13) -> ancho AVX/AVX512 sin
-                // re-broadcast ni transicion AVX<->SSE.  XMM13 = acc0 reservado;
-                // scalar-bcast y reduccion no coexisten en un matcher de 1 stmt.
+                // del preheader (imm bit 16).  Asi el cuerpo del loop es VX
+                // PURO (vmovupd ymm + vop ymm leyendo XMM13) -> ancho
+                // AVX/AVX512 sin re-broadcast ni transicion AVX<->SSE.  XMM13 =
+                // acc0 reservado; scalar-bcast y reduccion no coexisten en un
+                // matcher de 1 stmt.
                 const bool hoisted = (in.imm >> 16) & 1;
                 const uint64_t host_w = vec_host_w();
-                // sin hoist (no deberia pasar desde el matcher actual): fallback
-                // a SSE2 128b (legacy, sin transicion) con auto-broadcast.
-                const uint64_t eff_w = hoisted
-                                           ? (chunk_w < host_w ? chunk_w : host_w)
-                                           : 16;
+                // sin hoist (no deberia pasar desde el matcher actual):
+                // fallback a SSE2 128b (legacy, sin transicion) con
+                // auto-broadcast.
+                const uint64_t eff_w =
+                    hoisted ? (chunk_w < host_w ? chunk_w : host_w) : 16;
                 const uint64_t n_pieces = chunk_w / eff_w;
                 const auto &gpsc =
                     tri_sel.scratch[static_cast<size_t>(RegClass::GP)];
                 const auto &fpsc =
                     tri_sel.scratch[static_cast<size_t>(RegClass::FP)];
-                if (gpsc.empty() || fpsc.size() < 2) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (gpsc.empty() || fpsc.size() < 2)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const MReg gp0 = static_cast<MReg>(gpsc[0]);
                 const MReg fp0 = static_cast<MReg>(fpsc[0]);
                 const MReg fp1 = static_cast<MReg>(fpsc[1]);
@@ -3726,9 +3789,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 // multiples escalares en XMM10-13 sin colision); si no, fp1.
                 const uint64_t sidx = (in.imm >> 17) & 0x7;
                 const MReg scalreg =
-                    hoisted
-                        ? static_cast<MReg>(reg_id(MReg::XMM13) - sidx)
-                        : fp1;
+                    hoisted ? static_cast<MReg>(reg_id(MReg::XMM13) - sidx)
+                            : fp1;
                 const MOperand x1 = MOperand::make_reg(scalreg, ew);
                 if (!hoisted) {
                     // difundir el escalar a fp1 (una vez).  Solo SSE2 128b.
@@ -3760,10 +3822,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     }
                 }
                 // Register-resident (n_pieces==1): c=x0=fp0 vive entre pasos.
-                const bool src0_reg_s =
-                    (n_pieces == 1) && ((in.imm >> 20) & 1);
-                const bool dst_reg_s =
-                    (n_pieces == 1) && ((in.imm >> 21) & 1);
+                const bool src0_reg_s = (n_pieces == 1) && ((in.imm >> 20) & 1);
+                const bool dst_reg_s = (n_pieces == 1) && ((in.imm >> 21) & 1);
                 for (uint64_t pc = 0; pc < n_pieces; ++pc) {
                     const int32_t off = static_cast<int32_t>(pc * eff_w);
                     if (!src0_reg_s) {
@@ -3787,12 +3847,13 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
 
             /* VEC_FMA_S: dst[i] += a[i] * escalar (element-wise, escalar
              * difundido en XMM(13-sidx) por un VEC_BCAST hoisted).  Paso "array
-             * escalado" del compound a[i]*k1 + b[i]*k2.  Por chunk: MOVUPD xa,[a];
-             * MOVUPD xc,[dst]; VFMADD231 xc,xa,scal; MOVUPD [dst],xc.  1 redondeo.
-             * Requiere AVX (VFMADD); sin el, bail -> interp. */
+             * escalado" del compound a[i]*k1 + b[i]*k2.  Por chunk: MOVUPD
+             * xa,[a]; MOVUPD xc,[dst]; VFMADD231 xc,xa,scal; MOVUPD [dst],xc.
+             * 1 redondeo. Requiere AVX (VFMADD); sin el, bail -> interp. */
             case ir::IrOp::VEC_FMA_S: {
                 flush_pending();
-                if (in.operands.size() != 3) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (in.operands.size() != 3)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 if (!fp_ok) return vreg_bail(fn.name.c_str(), __LINE__);
                 const uint64_t chunk_w = in.imm & 0xFF;
                 if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
@@ -3800,8 +3861,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const bool is_f32 = (in.type == ir::IrType::F32);
                 if (in.type != ir::IrType::F32 && in.type != ir::IrType::F64)
                     return vreg_bail(fn.name.c_str(), __LINE__);
-                const MOp fma =
-                    is_f32 ? MOp::VFMADD231PS : MOp::VFMADD231PD;
+                const MOp fma = is_f32 ? MOp::VFMADD231PS : MOp::VFMADD231PD;
                 const uint64_t host_w = vec_host_w();
                 if (host_w < 32) return false; // sin AVX no hay VFMADD
                 const uint64_t eff_w = (chunk_w < host_w) ? chunk_w : host_w;
@@ -3816,7 +3876,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     tri_sel.scratch[static_cast<size_t>(RegClass::GP)];
                 const auto &fpsc =
                     tri_sel.scratch[static_cast<size_t>(RegClass::FP)];
-                if (gpsc.empty() || fpsc.size() < 2) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (gpsc.empty() || fpsc.size() < 2)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const MReg gp0 = static_cast<MReg>(gpsc[0]);
                 // c=fp0 (consistente con VEC_BINOP/BINOP_S para la cadena
                 // register-resident); a=fp1.
@@ -3826,10 +3887,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const MOperand xc = MOperand::make_reg(fp0, ew);
                 const MOperand xa = MOperand::make_reg(fp1, ew);
                 const MOperand xs = MOperand::make_reg(scalreg, ew);
-                const bool src0_reg_f =
-                    (n_pieces == 1) && ((in.imm >> 20) & 1);
-                const bool dst_reg_f =
-                    (n_pieces == 1) && ((in.imm >> 21) & 1);
+                const bool src0_reg_f = (n_pieces == 1) && ((in.imm >> 20) & 1);
+                const bool dst_reg_f = (n_pieces == 1) && ((in.imm >> 21) & 1);
                 for (uint64_t pc = 0; pc < n_pieces; ++pc) {
                     const int32_t off = static_cast<int32_t>(pc * eff_w);
                     // xc = c[off] (dst=operands[0], leido por la FMA) salvo reg
@@ -3841,9 +3900,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                             MOp::MOVUPD, xc, MOperand::make_mem(gp0, off)));
                     }
                     // xa = a[off]
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOV, MOperand::make_reg(gp0, 8),
-                        vr(in.operands[1])));
+                    O.push_back(MInstr::make_unary(MOp::MOV,
+                                                   MOperand::make_reg(gp0, 8),
+                                                   vr(in.operands[1])));
                     O.push_back(MInstr::make_unary(
                         MOp::MOVUPD, xa, MOperand::make_mem(gp0, off)));
                     // xc = xa*scal + xc  (c += a*scal)
@@ -3866,7 +3925,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * AVX<->SSE aqui (fuera del loop) es despreciable. */
             case ir::IrOp::VEC_BCAST: {
                 flush_pending();
-                if (in.operands.empty()) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (in.operands.empty())
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 if (!fp_ok) return vreg_bail(fn.name.c_str(), __LINE__);
                 const uint64_t chunk_w = in.imm & 0xFF;
                 if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
@@ -3882,9 +3942,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 if (is_f32) {
                     // f32: cargar el escalar al lane 0 y difundir a 32b.  SSE2
                     // 128b via SHUFPS(0); AVX/AVX512 via VBROADCASTSS.
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOVSS, MOperand::make_reg(B, 4),
-                        vrt(in.operands[0])));
+                    O.push_back(MInstr::make_unary(MOp::MOVSS,
+                                                   MOperand::make_reg(B, 4),
+                                                   vrt(in.operands[0])));
                     if (eff_w <= 16) {
                         MInstr sh = MInstr::make_binary(
                             MOp::SHUFPS, MOperand::make_reg(B, 16),
@@ -3902,42 +3962,43 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 // cargar el escalar al low de XMM13: f64 via MOVSD; entero via
                 // MOVQ_GP_XMM del valor ya replicado a 64b.
                 if (is_f64)
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOVSD, MOperand::make_reg(B, 8),
-                        vrt(in.operands[0])));
+                    O.push_back(MInstr::make_unary(MOp::MOVSD,
+                                                   MOperand::make_reg(B, 8),
+                                                   vrt(in.operands[0])));
                 else
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOVQ_GP_XMM, MOperand::make_reg(B, 16),
-                        vr(in.operands[0])));
+                    O.push_back(MInstr::make_unary(MOp::MOVQ_GP_XMM,
+                                                   MOperand::make_reg(B, 16),
+                                                   vr(in.operands[0])));
                 // difundir el lane de 64b a todo el ancho eff_w.
                 if (eff_w <= 16)
-                    O.push_back(MInstr::make_unary(
-                        MOp::UNPCKLPD, MOperand::make_reg(B, 16),
-                        MOperand::make_reg(B, 16)));
+                    O.push_back(MInstr::make_unary(MOp::UNPCKLPD,
+                                                   MOperand::make_reg(B, 16),
+                                                   MOperand::make_reg(B, 16)));
                 else
-                    O.push_back(MInstr::make_unary(
-                        MOp::VBROADCASTSD, MOperand::make_reg(B, eff_w),
-                        MOperand::make_reg(B, 16)));
+                    O.push_back(MInstr::make_unary(MOp::VBROADCASTSD,
+                                                   MOperand::make_reg(B, eff_w),
+                                                   MOperand::make_reg(B, 16)));
                 break;
             }
 
             /* VEC_FMA fusionado (1 redondeo).  Dos formas segun #operandos:
-             *  - 3 ops {acc,a,b}: reduccion acc[i] += a[i]*b[i] (acc es a la vez
-             *    sumando y destino).
+             *  - 3 ops {acc,a,b}: reduccion acc[i] += a[i]*b[i] (acc es a la
+             * vez sumando y destino).
              *  - 4 ops {c,d,a,b}: element-wise c[i] = a[i]*b[i] + d[i] (el
              *    sumando d es un array DISTINTO del destino c).
-             * Por chunk: MOVUPD x0,[sumando]; MOVUPD x1,[a]; VFMADD231 x0,x1,[b]
-             * (x0 = a*b + sumando); MOVUPD [dst],x0.  Mismo chunk/descompone y
-             * scratch (gp0/gp1, fp0/fp1) que VEC_BINOP; b de memoria -> 2 XMM. */
+             * Por chunk: MOVUPD x0,[sumando]; MOVUPD x1,[a]; VFMADD231
+             * x0,x1,[b] (x0 = a*b + sumando); MOVUPD [dst],x0.  Mismo
+             * chunk/descompone y scratch (gp0/gp1, fp0/fp1) que VEC_BINOP; b de
+             * memoria -> 2 XMM. */
             case ir::IrOp::VEC_FMA: {
                 flush_pending();
                 if (in.operands.size() != 3 && in.operands.size() != 4)
                     return vreg_bail(fn.name.c_str(), __LINE__);
                 const bool fma3 = (in.operands.size() == 4); // element-wise
-                const int o_dst = 0;                  // destino (c o acc)
-                const int o_add = fma3 ? 1 : 0;       // sumando (d o acc)
-                const int o_a = fma3 ? 2 : 1;         // multiplicando a
-                const int o_b = fma3 ? 3 : 2;         // multiplicando b (memoria)
+                const int o_dst = 0;            // destino (c o acc)
+                const int o_add = fma3 ? 1 : 0; // sumando (d o acc)
+                const int o_a = fma3 ? 2 : 1;   // multiplicando a
+                const int o_b = fma3 ? 3 : 2;   // multiplicando b (memoria)
                 const uint64_t chunk_w = in.imm & 0xFF;
                 if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
                     return vreg_bail(fn.name.c_str(), __LINE__);
@@ -3951,9 +4012,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     fma = fma_sub ? MOp::VFMSUB231PD : MOp::VFMADD231PD;
                 else if (in.type == ir::IrType::F32)
                     fma = fma_sub ? MOp::VFMSUB231PS : MOp::VFMADD231PS;
-                else return vreg_bail(fn.name.c_str(), __LINE__);
-                const uint64_t host_w =
-                    vec_host_w();
+                else
+                    return vreg_bail(fn.name.c_str(), __LINE__);
+                const uint64_t host_w = vec_host_w();
                 // FMA requiere AVX (>=256); con host SSE2 solo, bail (el
                 // interp/loop escalar lo hace).  256/512 -> ymm/zmm.
                 uint64_t emit_w = host_w;
@@ -3965,7 +4026,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     tri_sel.scratch[static_cast<size_t>(RegClass::GP)];
                 const auto &fpsc =
                     tri_sel.scratch[static_cast<size_t>(RegClass::FP)];
-                if (gpsc.size() < 2 || fpsc.size() < 2) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (gpsc.size() < 2 || fpsc.size() < 2)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const MReg gp0 = static_cast<MReg>(gpsc[0]);
                 const MReg gp1 = static_cast<MReg>(gpsc[1]);
                 const MReg fp0 = static_cast<MReg>(fpsc[0]);
@@ -3983,13 +4045,13 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     O.push_back(MInstr::make_unary(
                         MOp::MOVUPD, x0, MOperand::make_mem(gp0, off)));
                     // x1 = a[off]
-                    O.push_back(MInstr::make_unary(MOp::MOV, r1,
-                                                   vr(in.operands[o_a])));
+                    O.push_back(
+                        MInstr::make_unary(MOp::MOV, r1, vr(in.operands[o_a])));
                     O.push_back(MInstr::make_unary(
                         MOp::MOVUPD, x1, MOperand::make_mem(gp1, off)));
                     // x0 = x1 * [b+off] + x0
-                    O.push_back(MInstr::make_unary(MOp::MOV, r0,
-                                                   vr(in.operands[o_b])));
+                    O.push_back(
+                        MInstr::make_unary(MOp::MOV, r0, vr(in.operands[o_b])));
                     O.push_back(MInstr::make_binary(
                         fma, x0, x1, MOperand::make_mem(gp0, off)));
                     // dst[off] = x0 (c en element-wise, acc en reduccion)
@@ -4022,7 +4084,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * rechaza la funcion y la ejecuta el interprete, que si sabe
                  * leer las dos memorias. */
                 for (const ir::IrValueId opv : in.operands) {
-                    if (opv >= fn.values.size() || !fn.values[opv].is_host_ptr) {
+                    if (opv >= fn.values.size() ||
+                        !fn.values[opv].is_host_ptr) {
                         vreg_dbg(fn.name.c_str(), "vec(puntero-no-host)");
                         return false;
                     }
@@ -4030,16 +4093,16 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const uint64_t chunk_w = in.imm & 0xFF;
                 if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
                     return vreg_bail(fn.name.c_str(), __LINE__);
-                const uint64_t host_w =
-                    vec_host_w();
+                const uint64_t host_w = vec_host_w();
                 if (chunk_w > host_w) return false; // acc de 1 reg, sin split
                 const bool is_f32 = (in.type == ir::IrType::F32);
                 const bool is_f64 = (in.type == ir::IrType::F64);
-                const bool is_i64 = (in.type == ir::IrType::I64 ||
-                                     in.type == ir::IrType::U64);
-                const bool is_i32 = (in.type == ir::IrType::I32 ||
-                                     in.type == ir::IrType::U32);
-                if (!is_f32 && !is_f64 && !is_i64 && !is_i32) return vreg_bail(fn.name.c_str(), __LINE__);
+                const bool is_i64 =
+                    (in.type == ir::IrType::I64 || in.type == ir::IrType::U64);
+                const bool is_i32 =
+                    (in.type == ir::IrType::I32 || in.type == ir::IrType::U32);
+                if (!is_f32 && !is_f64 && !is_i64 && !is_i32)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 // FMA solo float (no hay multiplica-acumula entero packed).
                 if (in.op == ir::IrOp::VEC_ACC_FMA && !is_f32 && !is_f64)
                     return vreg_bail(fn.name.c_str(), __LINE__);
@@ -4047,7 +4110,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     tri_sel.scratch[static_cast<size_t>(RegClass::GP)];
                 const auto &fpsc =
                     tri_sel.scratch[static_cast<size_t>(RegClass::FP)];
-                if (gpsc.empty() || fpsc.empty()) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (gpsc.empty() || fpsc.empty())
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const MReg gp0 = static_cast<MReg>(gpsc[0]);
                 const MReg gp1 =
                     (gpsc.size() >= 2) ? static_cast<MReg>(gpsc[1]) : gp0;
@@ -4055,15 +4119,17 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 // acc_idx (bits 8-11) -> XMM(13-idx): acc0=XMM13 .. acc3=XMM10.
                 const uint8_t acc_idx = (in.imm >> 8) & 0xF;
                 const uint8_t src_idx = (in.imm >> 12) & 0xF; // COMBINE
-                if (acc_idx > 3 || src_idx > 3) return false; // solo 4 reservados
+                if (acc_idx > 3 || src_idx > 3)
+                    return false; // solo 4 reservados
                 // disp de array (bits 16-31): displacement constante de la
-                // pieza del unroll para ADD/FMA -> `movupd disp(base)` en vez de
-                // recalcular el puntero.  ZERO/COMBINE/STORE lo ignoran.
+                // pieza del unroll para ADD/FMA -> `movupd disp(base)` en vez
+                // de recalcular el puntero.  ZERO/COMBINE/STORE lo ignoran.
                 const int32_t arr_disp =
                     static_cast<int32_t>((in.imm >> 16) & 0xFFFF);
                 const MReg ACC =
                     static_cast<MReg>(reg_id(MReg::XMM13) - acc_idx);
-                const MReg SCR = static_cast<MReg>(fpsc[0]); // XMM14 scratch a/b
+                const MReg SCR =
+                    static_cast<MReg>(fpsc[0]); // XMM14 scratch a/b
                 const MOperand xacc = MOperand::make_reg(ACC, ew);
                 const MOperand xscr = MOperand::make_reg(SCR, ew);
                 if (in.op == ir::IrOp::VEC_ACC_ZERO) {
@@ -4141,10 +4207,14 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 // si hay operandos `reg` AUTO, el cuerpo lleva $N y el
                 // fisico de cada uno lo elige el RA -> DIFERIR el ensamblado a
                 // post-regalloc (regalloc_rewrite).  @c ar queda vacio (los
-                // sym_refs/labels/bytes se rellenan al ensamblar en el rewrite).
+                // sym_refs/labels/bytes se rellenan al ensamblar en el
+                // rewrite).
                 bool asm_has_auto = false;
                 for (const ir::AsmRegBinding &b : fn.asm_reg_bindings)
-                    if (b.reg_auto) { asm_has_auto = true; break; }
+                    if (b.reg_auto) {
+                        asm_has_auto = true;
+                        break;
+                    }
                 // El inline-asm de @Naked/asm{} se ensambla en el modo del
                 // TARGET (no del host): x86-32 -> KS_MODE_32 (si no, `jmp ecx`
                 // y demas codificaciones de 32 bits fallan en KS_MODE_64).
@@ -4152,9 +4222,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  *
                  * Con alguna ligadura automatica el cuerpo no se ensambla aqui:
                  * se aplaza al rewrite, cuando ya hay registros.  Las dos rutas
-                 * de `ASM_MICRO` ya se volcaban y esta no, asi que un bloque que
-                 * viene por aqui no aparecia en ningun volcado -- y eso se leia
-                 * como "no pasa por el JIT". */
+                 * de `ASM_MICRO` ya se volcaban y esta no, asi que un bloque
+                 * que viene por aqui no aparecia en ningun volcado -- y eso se
+                 * leia como "no pasa por el JIT". */
                 if (std::getenv("VESTA_JIT_ASM_DUMP") != nullptr)
                     std::fprintf(stderr,
                                  "[asm-jit inline] %s: auto=%d cuerpo=<%s>\n",
@@ -4180,8 +4250,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 AsmBlob blob;
                 //  AS inc.6: simbolos PROPIOS referenciados desde el asm
                 // (`jmp [global]`, `mov rax, fn`).  El backend ya localizo el
-                // campo (offset relativo al blob) + tipo; el encoder los reubica
-                // y emite los MReloc.  Cero coste si el asm no usa simbolos.
+                // campo (offset relativo al blob) + tipo; el encoder los
+                // reubica y emite los MReloc.  Cero coste si el asm no usa
+                // simbolos.
                 for (const auto &sr : ar.sym_refs) {
                     AsmBlob::AsmSymRef br;
                     br.offset = sr.offset;
@@ -4220,9 +4291,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         if (cc != std::string::npos) ln.resize(cc);
                         size_t b0 = ln.find_first_not_of(" \t");
                         size_t b1 = ln.find_last_not_of(" \t");
-                        std::string t =
-                            (b0 == std::string::npos) ? std::string()
-                                                      : ln.substr(b0, b1 - b0 + 1);
+                        std::string t = (b0 == std::string::npos)
+                                            ? std::string()
+                                            : ln.substr(b0, b1 - b0 + 1);
                         // etiqueta inicial "name:" (posible "name: instr")
                         if (!t.empty()) {
                             size_t colon = t.find(':');
@@ -4230,13 +4301,12 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                             if (colon != std::string::npos &&
                                 (sp == std::string::npos || colon < sp)) {
                                 std::string name = t.substr(0, colon);
-                                if (instr_idx <
-                                    (int)ar.insn_offsets.size())
+                                if (instr_idx < (int)ar.insn_offsets.size())
                                     blob.labels.push_back(
                                         {ar.insn_offsets[instr_idx], name});
                                 // resto tras "name:" puede ser una instruccion
-                                size_t rest = t.find_first_not_of(
-                                    " \t", colon + 1);
+                                size_t rest =
+                                    t.find_first_not_of(" \t", colon + 1);
                                 t = (rest == std::string::npos)
                                         ? std::string()
                                         : t.substr(rest);
@@ -4281,9 +4351,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 }
                 blob.clobbers_mem = ((in.imm >> 4) & 1u) != 0;
                 blob.clobbers_flags = ((in.imm >> 5) & 1u) != 0;
-                /* bit 32: la inferencia corrio -> la lista es autoritativa y una
-                 * lista vacia significa "nada mas que sus operandos".  (Los bits
-                 * 6-7 son el nivel del asm y los 8-31 el asm-id.) */
+                /* bit 32: la inferencia corrio -> la lista es autoritativa y
+                 * una lista vacia significa "nada mas que sus operandos".  (Los
+                 * bits 6-7 son el nivel del asm y los 8-31 el asm-id.) */
                 blob.clobbers_conocidos = ((in.imm >> 32) & 1ull) != 0;
                 //  AS inc.5e: registros fisicos clobbered (explicitos
                 // del usuario + inferidos; asm_clobber_lists YA excluye los
@@ -4306,12 +4376,12 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         for (const auto &cn : fn.asm_clobber_lists[asm_id]) {
                             const std::string c = vx::asm_canonical_reg(cn);
                             int phys = canon_gp_to_mreg(c);
-                            /* Los vectoriales viven en el MISMO espacio de lanes
-                             * (XMM0=16..XMM15=31), asi que su clobber se registra
-                             * igual de preciso que el de un GP.  Antes caian al
-                             * -1 y se perdian, dejando ciego al mecanismo
-                             * preciso justo en el banco donde el burdo es
-                             * insatisfacible. */
+                            /* Los vectoriales viven en el MISMO espacio de
+                             * lanes (XMM0=16..XMM15=31), asi que su clobber se
+                             * registra igual de preciso que el de un GP.  Antes
+                             * caian al -1 y se perdian, dejando ciego al
+                             * mecanismo preciso justo en el banco donde el
+                             * burdo es insatisfacible. */
                             if (phys < 0) phys = canon_vec_to_mreg(c);
                             if (phys >= 0) {
                                 blob.clobbers.push_back(
@@ -4325,8 +4395,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                 // corrutinas/fibras) se compila nativamente en
                                 // ambos casos: NO cae al interp.  En @Naked el
                                 // usuario es dueno de la pila.  En una funcion
-                                // NORMAL su epilogue gestiona rsp; el frontend ya
-                                // avisa (warning) de que un cambio de pila
+                                // NORMAL su epilogue gestiona rsp; el frontend
+                                // ya avisa (warning) de que un cambio de pila
                                 // persistente exige @Naked.  rsp no se registra
                                 // como clobber (no es asignable por el RA); el
                                 // asm lo maneja verbatim.
@@ -4337,19 +4407,20 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 // blob DIFERIDO -> plantilla ($N) + descriptor por
                 // operando `reg` auto (su alloca vreg; el rewrite pone
                 // ra.reg_of(vreg) en $ph_index).  Los operandos concretos ya
-                // quedaron horneados en la plantilla por el ph_subst del lowering.
+                // quedaron horneados en la plantilla por el ph_subst del
+                // lowering.
                 if (asm_has_auto) {
                     blob.deferred = true;
                     blob.deferred_isa = 0; // instr_db::Isa::X86
                     blob.deferred_tmpl = in.func_name;
                     int maxph = -1;
                     for (const ir::AsmRegBinding &b : fn.asm_reg_bindings)
-                        if (b.reg_auto && b.ph_index > maxph) maxph = b.ph_index;
+                        if (b.reg_auto && b.ph_index > maxph)
+                            maxph = b.ph_index;
                     blob.deferred_ops.resize(maxph + 1);
                     for (const ir::AsmRegBinding &b : fn.asm_reg_bindings) {
                         if (!b.reg_auto || b.ph_index < 0) continue;
-                        AsmBlob::DeferredOp &d =
-                            blob.deferred_ops[b.ph_index];
+                        AsmBlob::DeferredOp &d = blob.deferred_ops[b.ph_index];
                         d.vreg = static_cast<uint32_t>(b.alloca_value);
                         d.fixed_phys = -1; // lo elige el RA
                         if (b.is_vector) {
@@ -4420,8 +4491,10 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 if (in.imm >= fn.asm_micros.size()) {
                     /* La ficha del micro asm vive en la funcion, y al inlinar
                      * hay que traersela: el indice apunta a la tabla del
-                     * CALLEE.  Si no se remapeo, aqui no hay ficha que mirar. */
-                    vreg_dbg(fn.name.c_str(), "asm_micro(ficha fuera de rango)");
+                     * CALLEE.  Si no se remapeo, aqui no hay ficha que mirar.
+                     */
+                    vreg_dbg(fn.name.c_str(),
+                             "asm_micro(ficha fuera de rango)");
                     return false;
                 }
                 const ir::AsmMicro &am = fn.asm_micros[in.imm];
@@ -4448,12 +4521,12 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                      * La ficha describe la FORMA -- que operandos hay, de que
                      * clase, quien lee y quien escribe -- y eso no cambia.  El
                      * valor si: los pases lo reescriben (propagacion de copias,
-                     * por ejemplo) y actualizan los operandos de la instruccion,
-                     * que es donde los buscan.  Guardarlo tambien en la ficha
-                     * era tenerlo en dos sitios, y el segundo se quedaba viejo:
-                     * la ficha decia `%6` cuando ya era `%base`.  Van en el
-                     * mismo orden, asi que el i-esimo operando con valor es el
-                     * i-esimo de la instruccion. */
+                     * por ejemplo) y actualizan los operandos de la
+                     * instruccion, que es donde los buscan.  Guardarlo tambien
+                     * en la ficha era tenerlo en dos sitios, y el segundo se
+                     * quedaba viejo: la ficha decia `%6` cuando ya era `%base`.
+                     * Van en el mismo orden, asi que el i-esimo operando con
+                     * valor es el i-esimo de la instruccion. */
                     size_t nval = 0;
                     for (size_t oi = 0; oi < am.operands.size(); ++oi) {
                         const ir::AsmMicroOperand &op = am.operands[oi];
@@ -4473,19 +4546,21 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         }
                         if (op.value == ir::IR_NO_VALUE) continue;
                         if (nval >= in.operands.size()) {
-                            vreg_dbg(fn.name.c_str(),
-                                     "asm_micro(la ficha pide mas valores de los "
-                                     "que trae la instruccion)");
+                            vreg_dbg(
+                                fn.name.c_str(),
+                                "asm_micro(la ficha pide mas valores de los "
+                                "que trae la instruccion)");
                             return false;
                         }
                         d.vreg = (uint32_t)in.operands[nval++];
                         /* Y de que BANCO es.  La ficha del operando lo dice,
                          * pero el asignador no la mira: mira la clase del vreg,
-                         * y sin decirsela le daba un registro general a un valor
-                         * del banco ancho.  Luego, al escribir el nombre, se
-                         * descuenta la base del banco y salia una ranura
+                         * y sin decirsela le daba un registro general a un
+                         * valor del banco ancho.  Luego, al escribir el nombre,
+                         * se descuenta la base del banco y salia una ranura
                          * NEGATIVA -- que es justo lo que el propio codigo
-                         * estaba avisando ("la ranura -9 no se puede nombrar"). */
+                         * estaba avisando ("la ranura -9 no se puede nombrar").
+                         */
                         if (d.regclass == vx::ASM_RC_VEC ||
                             d.regclass == vx::ASM_RC_FP) {
                             if (d.vreg < out.vreg_class.size())
@@ -4523,10 +4598,10 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 }
                 /* El texto que de verdad se ensambla por ESTA ruta.
                  *
-                 * `VESTA_JIT_ASM_DUMP` cubria solo la ruta diferida, asi que para
-                 * un bloque que va por aqui no imprimia nada -- y eso se leia
-                 * como "no pasa por el JIT" cuando lo que pasaba era que el
-                 * volcado estaba en el camino contrario.  Un diagnostico que
+                 * `VESTA_JIT_ASM_DUMP` cubria solo la ruta diferida, asi que
+                 * para un bloque que va por aqui no imprimia nada -- y eso se
+                 * leia como "no pasa por el JIT" cuando lo que pasaba era que
+                 * el volcado estaba en el camino contrario.  Un diagnostico que
                  * calla donde hace falta es peor que no tenerlo: manda a buscar
                  * a otro sitio. */
                 if (std::getenv("VESTA_JIT_ASM_DUMP") != nullptr) {
@@ -4550,11 +4625,12 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 /* Y los REGISTROS que destruye.
                  *
                  * La ficha dice de cada operando si se lee o se escribe, pero
-                 * eso no llegaba hasta aqui: el asm se emitia como bytes sueltos
-                 * y el asignador lo trataba como si no tocara ningun registro.
-                 * Un `movdqa xmm1, xmm0` destruye xmm1 -- si el asignador tenia
-                 * ahi un valor vivo, se pierde sin que nadie lo note.  El campo
-                 * estaba desde el principio; solo faltaba llenarlo. */
+                 * eso no llegaba hasta aqui: el asm se emitia como bytes
+                 * sueltos y el asignador lo trataba como si no tocara ningun
+                 * registro. Un `movdqa xmm1, xmm0` destruye xmm1 -- si el
+                 * asignador tenia ahi un valor vivo, se pierde sin que nadie lo
+                 * note.  El campo estaba desde el principio; solo faltaba
+                 * llenarlo. */
                 bool salvar_rbx = false, salvar_rbp = false;
                 {
                     std::vector<std::pair<uint8_t, int>> cl;
@@ -4566,10 +4642,11 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                             /* rbx y rbp no son del programa: el envoltorio del
                              * JIT guarda ahi el proceso y el marco.  El camino
                              * opaco ya los salvaba alrededor del bloque y este
-                             * no, asi que un `mov rbx, rsp` pisaba el puntero al
-                             * proceso y a partir de ahi todo iba mal -- el mismo
-                             * programa daba 42 sin elevar y basura elevado.
-                             * rsp no se puede envolver (salvarlo usa rsp). */
+                             * no, asi que un `mov rbx, rsp` pisaba el puntero
+                             * al proceso y a partir de ahi todo iba mal -- el
+                             * mismo programa daba 42 sin elevar y basura
+                             * elevado. rsp no se puede envolver (salvarlo usa
+                             * rsp). */
                             if (c.second == (int)MReg::RBX) {
                                 salvar_rbx = true;
                             } else if (c.second == (int)MReg::RBP) {
@@ -4638,7 +4715,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * slot contiene null (root ignorado), nunca basura. */
             case ir::IrOp::GC_DEREF_HOST: {
                 flush_pending();
-                if (in.operands.size() != 1) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (in.operands.size() != 1)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 if (in.dst == ir::IR_NO_VALUE) break; // lookup sin uso: no-op
                 if (!vm) {
                     // HOST_LEAF (AOT native, sin handle table): el "handle"
@@ -4793,11 +4871,12 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             /* GCWB_IR: write-barrier generacional old->young.
              *   vrt_gc_write_barrier(proc, container_handle) -> void.
              * write_barrier() filtra por generacion (skip si el contenedor es
-             * YOUNG) y solo inserta en el remembered_set (host malloc, NO dispara
-             * GC) -> no es safepoint.  En HOST_LEAF (AOT native, sin nursery /
-             * sin runtime) es NO-OP: el GC del AOT usa alloc_pinned (todo OldGen)
-             * y el major escanea preciso via field-maps -> el barrier no aporta;
-             * se omite.  Marshalling 1-arg (proc=A0, handle=A1). */
+             * YOUNG) y solo inserta en el remembered_set (host malloc, NO
+             * dispara GC) -> no es safepoint.  En HOST_LEAF (AOT native, sin
+             * nursery / sin runtime) es NO-OP: el GC del AOT usa alloc_pinned
+             * (todo OldGen) y el major escanea preciso via field-maps -> el
+             * barrier no aporta; se omite.  Marshalling 1-arg (proc=A0,
+             * handle=A1). */
             case ir::IrOp::GCWB_IR: {
                 if (!vm || ent.gc_write_barrier == 0 || in.operands.size() != 1)
                     break; // AOT / sin runtime: no-op
@@ -4846,8 +4925,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::RAW_ALLOC: {
                 flush_pending();
                 if (in.op == ir::IrOp::GC_HANDLE_FOR_PTR && !vm) {
-                    // HOST_LEAF (AOT native, sin handle table): el GcHandle de un
-                    // ptr ES el propio host_ptr (objetos = ptr crudo) ->
+                    // HOST_LEAF (AOT native, sin handle table): el GcHandle de
+                    // un ptr ES el propio host_ptr (objetos = ptr crudo) ->
                     // passthrough MOV dst, src.
                     if (in.dst != ir::IR_NO_VALUE && in.operands.size() == 1)
                         O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
@@ -4889,9 +4968,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
 #else
                     const MReg pr = MReg::RDI;
 #endif
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOV, MOperand::make_reg(pr, 8),
-                        MOperand::make_reg(MReg::RBX, 8)));
+                    O.push_back(
+                        MInstr::make_unary(MOp::MOV, MOperand::make_reg(pr, 8),
+                                           MOperand::make_reg(MReg::RBX, 8)));
                     O.push_back(MInstr::make_call_abs(
                         out.intern_imm64(ent.alloc_del_programa)));
                     O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
@@ -4902,9 +4981,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * vale cuando ese es el monton: con el del programa delante
                  * repartiria del equivocado. */
                 if (in.op == ir::IrOp::RAW_ALLOC && vm && ent.raw_alloc != 0 &&
-                    ent.alloc_del_programa == 0 &&
-                    in.dst != ir::IR_NO_VALUE && in.operands.size() == 1 &&
-                    !jit_no_inline_alloc()) {
+                    ent.alloc_del_programa == 0 && in.dst != ir::IR_NO_VALUE &&
+                    in.operands.size() == 1 && !jit_no_inline_alloc()) {
                     const ir::IrValueId szv = in.operands[0];
                     if (szv < v_is_const.size() && v_is_const[szv]) {
                         const uint64_t size =
@@ -5083,9 +5161,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 // interp).  Sin esto, el path vreg caia a slots que emitia
                 // `strmake` (VM mem) sobre un buffer host -> bytes NUL en los
                 // fragmentos interpolados de `return "${expr}..."`.
-                const bool sm_buf_host =
-                    in.operands[0] < fn.values.size() &&
-                    fn.values[in.operands[0]].is_host_ptr;
+                const bool sm_buf_host = in.operands[0] < fn.values.size() &&
+                                         fn.values[in.operands[0]].is_host_ptr;
                 const uint64_t sm_entry =
                     sm_buf_host ? ent.str_make_h : ent.str_make;
                 if (sm_buf_host && ent.str_make_h == 0) {
@@ -5112,8 +5189,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 O.push_back(
                     MInstr::make_unary(MOp::MOV, MOperand::make_reg(sm0, 8),
                                        MOperand::make_reg(MReg::RBX, 8)));
-                O.push_back(
-                    MInstr::make_call_abs(out.intern_imm64(sm_entry)));
+                O.push_back(MInstr::make_call_abs(out.intern_imm64(sm_entry)));
                 if (in.dst != ir::IR_NO_VALUE)
                     O.push_back(
                         MInstr::make_unary(MOp::MOV, vr(in.dst),
@@ -5326,7 +5402,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              *    que gc_handle_for_ptr); se queda como CALL. */
             case ir::IrOp::RAW_FREE: {
                 flush_pending();
-                if (in.operands.size() != 1) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (in.operands.size() != 1)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 const ir::IrValueId p = in.operands[0];
                 if (p < v_is_host_alloca.size() && v_is_host_alloca[p])
                     break; // host-stack: no-op
@@ -5341,9 +5418,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
 #else
                     const MReg pf = MReg::RDI;
 #endif
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOV, MOperand::make_reg(pf, 8),
-                        MOperand::make_reg(MReg::RBX, 8)));
+                    O.push_back(
+                        MInstr::make_unary(MOp::MOV, MOperand::make_reg(pf, 8),
+                                           MOperand::make_reg(MReg::RBX, 8)));
                     O.push_back(MInstr::make_call_abs(
                         out.intern_imm64(ent.free_del_programa)));
                     break;
@@ -5384,9 +5461,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     /* Args enteros y flotantes cuentan arg_regs SEPARADOS
                      * (ABI SysV/Win64): emit_host_args reparte por clase.  ABI
                      * custom: el resolver da los param_abi_regs del callee (por
-                     * nombre, desde su firma register()) -> cada arg va directo a
-                     * su registro (cero shift).  in.call_abi_regs (si viene ya
-                     * puesto) tiene prioridad. */
+                     * nombre, desde su firma register()) -> cada arg va directo
+                     * a su registro (cero shift).  in.call_abi_regs (si viene
+                     * ya puesto) tiene prioridad. */
                     const std::vector<std::string> *cabi =
                         in.call_abi_regs.empty() ? nullptr : &in.call_abi_regs;
                     if (!cabi && g_abi_resolver) {
@@ -5407,8 +5484,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                             fp_ok && in.dst < fn.values.size() &&
                             ir_type_is_float(fn.values[in.dst].type);
                         O.push_back(MInstr::make_unary(
-                            MOp::MOV,
-                            dst_f ? vrt(in.dst) : vr(in.dst),
+                            MOp::MOV, dst_f ? vrt(in.dst) : vr(in.dst),
                             MOperand::make_reg(dst_f ? MReg::XMM0 : MReg::RAX,
                                                8)));
                     }
@@ -5518,10 +5594,10 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                             return false;
                         }
                     }
-                    // ABI custom: el tipo del puntero (cfn) fija los abi_regs en
-                    // la instruccion (in.call_abi_regs).  Cero shift: cada arg va
-                    // directo a su registro (la ABI la conoce el tipo, no el
-                    // valor runtime del puntero).
+                    // ABI custom: el tipo del puntero (cfn) fija los abi_regs
+                    // en la instruccion (in.call_abi_regs).  Cero shift: cada
+                    // arg va directo a su registro (la ABI la conoce el tipo,
+                    // no el valor runtime del puntero).
                     if (!emit_host_args(in.operands, O,
                                         in.call_abi_regs.empty()
                                             ? nullptr
@@ -5552,16 +5628,17 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 /* FN.3 pieza 2: CALLIND en VM_ABI (JIT).  En runtime el
                  * func_ptr puede ser (a) un puntero nativo naked (HOST_LEAF,
                  * de `(cfn)fn`), (b) un jit_code VM_ABI (de `&fn` con la pieza
-                 * 1) o (c) una VA de bytecode (fn no compilada aun).  Replicamos
-                 * EXACTAMENTE la semantica del interp `exec_instr_callvmr` via el
-                 * helper de runtime `vrt_callind`: marshalling de los args a
+                 * 1) o (c) una VA de bytecode (fn no compilada aun). Replicamos
+                 * EXACTAMENTE la semantica del interp `exec_instr_callvmr` via
+                 * el helper de runtime `vrt_callind`: marshalling de los args a
                  * proc->registers.regs[1..N] + regs[15]=nargs (la MISMA
-                 * convencion que el bytecode CALLIND emite), luego CALL nativo a
-                 * vrt_callind(proc, func_ptr) que dispatcha por rango (naked ->
-                 * ABI host via invoke_native_unchecked; jit/VA -> VM_ABI, con
-                 * compile-on-demand para la VA).  El resultado queda en regs[0].
-                 * El caller es JIT y el callee corre nativo -> ni caller ni
-                 * callee caen a interp (para el corpus la VA compila siempre). */
+                 * convencion que el bytecode CALLIND emite), luego CALL nativo
+                 * a vrt_callind(proc, func_ptr) que dispatcha por rango (naked
+                 * -> ABI host via invoke_native_unchecked; jit/VA -> VM_ABI,
+                 * con compile-on-demand para la VA).  El resultado queda en
+                 * regs[0]. El caller es JIT y el callee corre nativo -> ni
+                 * caller ni callee caen a interp (para el corpus la VA compila
+                 * siempre). */
                 if (ent.callind == 0 || in.func_ptr == ir::IR_NO_VALUE) {
                     vreg_dbg(fn.name.c_str(), "callind(no-entry)");
                     return false;
@@ -5582,15 +5659,15 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
 #else
                 const MReg ci_a0 = MReg::RDI, ci_a1 = MReg::RSI;
 #endif
-                O.push_back(MInstr::make_unary(
-                    MOp::MOV, MOperand::make_reg(MReg::R10, 8),
-                    vr(in.func_ptr)));
-                O.push_back(MInstr::make_unary(
-                    MOp::MOV, MOperand::make_reg(ci_a1, 8),
-                    MOperand::make_reg(MReg::R10, 8)));
-                O.push_back(MInstr::make_unary(
-                    MOp::MOV, MOperand::make_reg(ci_a0, 8),
-                    MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(MReg::R10, 8),
+                                               vr(in.func_ptr)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(ci_a1, 8),
+                                       MOperand::make_reg(MReg::R10, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(ci_a0, 8),
+                                       MOperand::make_reg(MReg::RBX, 8)));
                 O.push_back(
                     MInstr::make_call_abs(out.intern_imm64(ent.callind)));
                 /* 4. Resultado desde regs[0]. */
@@ -5793,7 +5870,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * hay vtable walk (a diferencia de CALLVIRT): inline directo del
              * method->jit_code (cero runtime en el fast path; vrt_callm ~150ns
              * solo en el frio).  operands[0]=obj, operands[1]=method,
-             * operands[2..]=args.  Espejo del inline de slots (selector.cpp). */
+             * operands[2..]=args.  Espejo del inline de slots (selector.cpp).
+             */
             case ir::IrOp::CALLM: {
                 flush_pending();
                 if (!vm || ent.callm == 0) {
@@ -5834,9 +5912,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         const ir::IrValueId addr = new_tmp();
                         O.push_back(
                             MInstr::make_unary(MOp::MOV, vr(addr), vr(base)));
-                        O.push_back(MInstr::make_binary(
-                            MOp::ADD, vr(addr), vr(addr),
-                            MOperand::make_imm32(off)));
+                        O.push_back(
+                            MInstr::make_binary(MOp::ADD, vr(addr), vr(addr),
+                                                MOperand::make_imm32(off)));
                         O.push_back(
                             MInstr::make_load(vr(d), vr(addr), 8, false));
                     }
@@ -5847,8 +5925,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 /* INLINE: method no-null; sin advice; jit_code presente. */
                 O.push_back(mk_test(method, method));
                 O.push_back(MInstr::make_jcc(MCond::E, Lcm_fb));
-                const ir::IrValueId cm_adv = cm_load_field(
-                    method, VESTA_METHODINFO_ADVICE_CHAIN_OFFSET);
+                const ir::IrValueId cm_adv =
+                    cm_load_field(method, VESTA_METHODINFO_ADVICE_CHAIN_OFFSET);
                 O.push_back(mk_test(cm_adv, cm_adv));
                 O.push_back(MInstr::make_jcc(MCond::NE, Lcm_fb));
                 const ir::IrValueId cm_code =
@@ -5859,9 +5937,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * proc en arg0; call indirecto R10. */
                 O.push_back(MInstr::make_unary(
                     MOp::MOV, MOperand::make_reg(MReg::R10, 8), vr(cm_code)));
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(cm_pr, 8),
-                                               MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(cm_pr, 8),
+                                       MOperand::make_reg(MReg::RBX, 8)));
                 {
                     MInstr ic;
                     ic.op = MOp::CALL;
@@ -5876,15 +5954,15 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     MOp::MOV, MOperand::make_reg(MReg::R10, 8), vr(obj)));
                 O.push_back(MInstr::make_unary(
                     MOp::MOV, MOperand::make_reg(MReg::R11, 8), vr(method)));
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(cm_obj, 8),
-                                               MOperand::make_reg(MReg::R10, 8)));
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(cm_m, 8),
-                                               MOperand::make_reg(MReg::R11, 8)));
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(cm_pr, 8),
-                                               MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(cm_obj, 8),
+                                       MOperand::make_reg(MReg::R10, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(cm_m, 8),
+                                       MOperand::make_reg(MReg::R11, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(cm_pr, 8),
+                                       MOperand::make_reg(MReg::RBX, 8)));
                 O.push_back(MInstr::make_call_abs(out.intern_imm64(ent.callm)));
                 O.push_back(MInstr::make_label_def(Lcm_done));
                 if (in.dst != ir::IR_NO_VALUE)
@@ -5934,19 +6012,20 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     MOp::MOV, MOperand::make_reg(MReg::R10, 8), vr(ci_obj)));
                 O.push_back(MInstr::make_unary(
                     MOp::MOV, MOperand::make_reg(MReg::R11, 8), vr(ci_params)));
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(cif_obj, 8),
-                                               MOperand::make_reg(MReg::R10, 8)));
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(cif_par, 8),
-                                               MOperand::make_reg(MReg::R11, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(cif_obj, 8),
+                                       MOperand::make_reg(MReg::R10, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(cif_par, 8),
+                                       MOperand::make_reg(MReg::R11, 8)));
                 O.push_back(MInstr::make_unary(MOp::MOV,
                                                MOperand::make_reg(cif_ic, 8),
                                                MOperand::make_imm32(0)));
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(cif_pr, 8),
-                                               MOperand::make_reg(MReg::RBX, 8)));
-                O.push_back(MInstr::make_call_abs(out.intern_imm64(ent.callitf)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(cif_pr, 8),
+                                       MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(
+                    MInstr::make_call_abs(out.intern_imm64(ent.callitf)));
                 if (in.dst != ir::IR_NO_VALUE)
                     O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
                                                    vm_reg_mem(0)));
@@ -5995,9 +6074,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         const ir::IrValueId addr = new_tmp();
                         O.push_back(
                             MInstr::make_unary(MOp::MOV, vr(addr), vr(base)));
-                        O.push_back(MInstr::make_binary(
-                            MOp::ADD, vr(addr), vr(addr),
-                            MOperand::make_imm32(off)));
+                        O.push_back(
+                            MInstr::make_binary(MOp::ADD, vr(addr), vr(addr),
+                                                MOperand::make_imm32(off)));
                         O.push_back(
                             MInstr::make_load(vr(d), vr(addr), 8, false));
                     }
@@ -6019,15 +6098,15 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     MOp::MOV, MOperand::make_reg(MReg::R10, 8), vr(su_this)));
                 O.push_back(MInstr::make_unary(
                     MOp::MOV, MOperand::make_reg(MReg::R11, 8), vr(su_method)));
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(su_obj, 8),
-                                               MOperand::make_reg(MReg::R10, 8)));
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(su_m, 8),
-                                               MOperand::make_reg(MReg::R11, 8)));
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(su_pr, 8),
-                                               MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(su_obj, 8),
+                                       MOperand::make_reg(MReg::R10, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(su_m, 8),
+                                       MOperand::make_reg(MReg::R11, 8)));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(su_pr, 8),
+                                       MOperand::make_reg(MReg::RBX, 8)));
                 O.push_back(MInstr::make_call_abs(out.intern_imm64(ent.callm)));
                 if (in.dst != ir::IR_NO_VALUE)
                     O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
@@ -6072,7 +6151,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     if (!in.operands.empty())
                         cargs.push_back(in.operands[0]); // env al final
                     if (!emit_host_args(cargs, O)) {
-                        vreg_dbg(fn.name.c_str(), "callclosure(host-leaf-args)");
+                        vreg_dbg(fn.name.c_str(),
+                                 "callclosure(host-leaf-args)");
                         return false;
                     }
                     // Devirtualizacion: si el fn_addr proviene de un LABEL_ADDR
@@ -6322,7 +6402,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                             vreg_dbg(fn.name.c_str(), "calln(host-leaf-fp)");
                             return false;
                         }
-                        for (auto &mi : hl_args) O.push_back(mi);
+                        for (auto &mi : hl_args)
+                            O.push_back(mi);
                     }
                     O.push_back(
                         MInstr::make_call_sym(out.intern_reloc_symbol(sym)));
@@ -6347,10 +6428,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * aqui no existe.  FP overflow (raro en FFI) -> bail. */
                 const size_t calln_nargs = in.operands.size();
                 const size_t calln_fmax =
-                    fp_ok
-                        ? tri_sel.arg_regs[static_cast<size_t>(RegClass::FP)]
-                              .size()
-                        : 0;
+                    fp_ok ? tri_sel.arg_regs[static_cast<size_t>(RegClass::FP)]
+                                .size()
+                          : 0;
                 size_t cn_gi = 0, cn_fi = 0;
                 bool calln_fp_ovf = false;
                 std::vector<MInstr> calln_args;
@@ -6377,7 +6457,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     vreg_dbg(fn.name.c_str(), "calln-fp-stack");
                     return false;
                 }
-                for (auto &mi : calln_args) O.push_back(mi);
+                for (auto &mi : calln_args)
+                    O.push_back(mi);
                 O.push_back(MInstr::make_call_abs(out.intern_imm64(fn_addr)));
                 if (in.dst != ir::IR_NO_VALUE)
                     O.push_back(
@@ -6425,7 +6506,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                      * Retira de slots los unique<T> con deleter dinamico. */
                     if (!vm || in.operands.size() < 2 ||
                         ent.call_bc_function == 0 || ent.raw_free == 0) {
-                        vreg_dbg(fn.name.c_str(), "smartptr_free(kind0-no-entry)");
+                        vreg_dbg(fn.name.c_str(),
+                                 "smartptr_free(kind0-no-entry)");
                         return false;
                     }
                     const ir::IrValueId deleter = in.operands[1];
@@ -6447,7 +6529,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     O.push_back(MInstr::make_jcc(MCond::E, Lsp_raw));
                     /* vrt_call_bc_function(proc, deleter).  R10 temporal. */
                     O.push_back(MInstr::make_unary(
-                        MOp::MOV, MOperand::make_reg(MReg::R10, 8), vr(deleter)));
+                        MOp::MOV, MOperand::make_reg(MReg::R10, 8),
+                        vr(deleter)));
                     O.push_back(MInstr::make_unary(
                         MOp::MOV, MOperand::make_reg(sp_a1, 8),
                         MOperand::make_reg(MReg::R10, 8)));
@@ -6515,7 +6598,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * vreg solo soporta LOAD/STORE host).  No marcamos
                  * host-ness aqui: solo emitimos el inmediato. */
                 flush_pending();
-                if (in.dst == ir::IR_NO_VALUE) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (in.dst == ir::IR_NO_VALUE)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 /* AOT (HOST_LEAF): el literal vive en .rodata, NO en vm_mem.
                  * Emitimos una referencia por NOMBRE ("rodata.<imm>") que el
                  * driver resuelve contra el offset de la entry en el pool de
@@ -6527,19 +6611,21 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 if (abi == AbiKind::HOST_LEAF && in.is_tls) {
                     /* thread_local: la direccion por-hilo se computa via el
                      * thread pointer.  ELF (local-exec): `mov dst,%fs:0` + `lea
-                     * dst,[dst+sym@tpoff]` (reloc TPOFF32).  PE (TLS directory):
-                     * carga el bloque TLS del TEB con `__vx_tls_index` y suma
-                     * el offset del var (SECREL32).  El reloc apunta a
-                     * `tdata.<imm>`; el driver/emisor lo resuelven. */
+                     * dst,[dst+sym@tpoff]` (reloc TPOFF32).  PE (TLS
+                     * directory): carga el bloque TLS del TEB con
+                     * `__vx_tls_index` y suma el offset del var (SECREL32).  El
+                     * reloc apunta a `tdata.<imm>`; el driver/emisor lo
+                     * resuelven. */
                     const uint32_t vsidx = out.intern_reloc_symbol(
                         "tdata." + std::to_string(in.imm));
                     if (target_sysv) {
-                        O.push_back(MInstr::make_tls_le_addr(vr(in.dst), vsidx));
+                        O.push_back(
+                            MInstr::make_tls_le_addr(vr(in.dst), vsidx));
                     } else {
                         const uint32_t isidx =
                             out.intern_reloc_symbol("__vx_tls_index");
-                        O.push_back(MInstr::make_tls_pe_addr(vr(in.dst), vsidx,
-                                                             isidx));
+                        O.push_back(
+                            MInstr::make_tls_pe_addr(vr(in.dst), vsidx, isidx));
                     }
                     break;
                 }
@@ -6549,7 +6635,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     /* x86-32 NO tiene lea [rip+disp32]: el mismo encoding es un
                      * lea ABSOLUTO y el reloc RIP-relativo daria direcciones
                      * distintas por instruccion para el MISMO slot.  En mode32
-                     * usamos SIEMPRE mov r32, imm32 (ABS32/R_386_32), no-PIE. */
+                     * usamos SIEMPRE mov r32, imm32 (ABS32/R_386_32), no-PIE.
+                     */
                     if (pic && !mode32)
                         O.push_back(MInstr::make_lea_rip_sym(vr(in.dst), sidx));
                     else
@@ -6609,9 +6696,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     const uint32_t sidx =
                         out.intern_reloc_symbol("fnsym:" + in.func_name);
                     /* x86-32: mov r32,imm32 (ABS32) -- x86-32 no tiene lea[rip]
-                     * (ver STR_LIT_ADDR).  El label_addr de una FUNCION guardado
-                     * en memoria (campo cfn de un static ctx) exige direcciones
-                     * absolutas consistentes. */
+                     * (ver STR_LIT_ADDR).  El label_addr de una FUNCION
+                     * guardado en memoria (campo cfn de un static ctx) exige
+                     * direcciones absolutas consistentes. */
                     if (pic && !mode32)
                         O.push_back(MInstr::make_lea_rip_sym(vr(in.dst), sidx));
                     else
@@ -6637,7 +6724,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * VM_ABI (el trampolin salta a el); un cfn `&fn` ya compilado
                  * se llama directo por CALLIND.  Si aun no esta compilada, se
                  * emite la VA como hasta ahora (CALLIND la resuelve a nativo
-                 * on-demand; para fibras el force-eager garantiza el native). */
+                 * on-demand; para fibras el force-eager garantiza el native).
+                 */
                 if (void *jc = lookup_jit_code_at_pc(addr))
                     addr = reinterpret_cast<uint64_t>(jc);
                 const uint32_t idx = out.intern_imm64(addr);
@@ -6656,7 +6744,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * En VM_ABI (JIT) no hay secciones nativas -> 0. */
             case ir::IrOp::SECTION_REF: {
                 flush_pending();
-                if (in.dst == ir::IR_NO_VALUE) return vreg_bail(fn.name.c_str(), __LINE__);
+                if (in.dst == ir::IR_NO_VALUE)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 if (abi != AbiKind::HOST_LEAF) {
                     O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
                                                    MOperand::make_imm32(0)));
@@ -6712,7 +6801,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 }
                 O.push_back(MInstr::make_arg(0, vr(in.operands[0]))); // to_ctx
-                O.push_back(MInstr::make_arg(1, vr(in.operands[1]))); // from_ctx
+                O.push_back(
+                    MInstr::make_arg(1, vr(in.operands[1]))); // from_ctx
                 O.push_back(
                     MInstr::make_call_abs(out.intern_imm64(ent.swapctx)));
                 break;
@@ -6724,7 +6814,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             }
         }
         flush_pending(); // por si el bloque termina sin terminador explicito
-        lm_flush();       // solo-LSP: estampar la ultima op del bloque
+        lm_flush();      // solo-LSP: estampar la ultima op del bloque
         out.blocks.push_back(std::move(mb));
     }
     return true;

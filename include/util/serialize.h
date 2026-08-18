@@ -7,7 +7,8 @@
 
 /**
  * @file util/serialize.h
- * @brief Escribir y leer bytes: lo minimo para pasar algo a disco y recuperarlo.
+ * @brief Escribir y leer bytes: lo minimo para pasar algo a disco y
+ * recuperarlo.
  *
  * Vivia dentro del subsistema de depuracion, que fue quien lo necesito primero.
  * Al hacerle falta tambien al fichero de hechos del ASA habia dos salidas malas
@@ -15,8 +16,8 @@
  * buena: subirlo a un sitio comun.  Quien lo usaba antes lo sigue viendo donde
  * estaba (@c vxdbg/serialize.h), con sus primitivos propios encima.
  *
- * **Leer nunca desborda.**  Los bytes pueden venir de un fichero truncado, de un
- * cache de otra version o de un disco con un sector malo, asi que el lector
+ * **Leer nunca desborda.**  Los bytes pueden venir de un fichero truncado, de
+ * un cache de otra version o de un disco con un sector malo, asi que el lector
  * comprueba el limite en CADA lectura y, al primer fallo, se marca como roto y
  * devuelve ceros en vez de seguir leyendo memoria ajena.  Quien lee comprueba
  * @ref ByteReader::ok una vez al final en lugar de en cada campo, que es lo que
@@ -64,10 +65,10 @@ class ByteWriter {
      * @brief Reescribe un @c u32 ya escrito en @p pos.
      *
      * Hace falta para los campos que no se conocen hasta despues -- la longitud
-     * de un bloque, un desplazamiento a algo que va detras --: se deja un hueco,
-     * se escribe el contenido y se vuelve a rellenar.  Es eso o armar el bloque
-     * en un buffer aparte y copiarlo entero, que es justo la copia que esto
-     * ahorra.
+     * de un bloque, un desplazamiento a algo que va detras --: se deja un
+     * hueco, se escribe el contenido y se vuelve a rellenar.  Es eso o armar el
+     * bloque en un buffer aparte y copiarlo entero, que es justo la copia que
+     * esto ahorra.
      *
      * @param pos Donde empieza el entero (el que devolvio @ref size antes).
      * @param v   Valor definitivo.

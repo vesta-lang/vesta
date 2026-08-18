@@ -71,9 +71,9 @@ static const char *mode_sfx[] = {"b", "w", "d", "q"};
 // (ver exec_instr_setcc).  Interpretar una con la otra hace que el volcado
 // atribuya a cada comparacion una condicion que no es la suya -- basta para
 // dar por bueno un bug que no existe.
-static const char *cc_setcc[] = {"jo", "jno", "jb",  "jae", "je",  "jne",
-                                 "jbe", "ja", "js",  "jns", "jp",  "jne",
-                                 "jl", "jge", "jle", "jg"};
+static const char *cc_setcc[] = {"jo",  "jno", "jb",  "jae", "je", "jne",
+                                 "jbe", "ja",  "js",  "jns", "jp", "jne",
+                                 "jl",  "jge", "jle", "jg"};
 
 static const char *cc[] = {"je",  "jne", "jcs", "jcc", "jmi", "jpl",
                            "jvs", "jvc", "jhi", "jls", "jge", "jlt",
@@ -214,8 +214,7 @@ static std::string fmt_ext_operands(uint8_t opc,
             // fastpush/fastpop <mask16>: se listan los registros marcados, que
             // es lo que hace falta para seguir un valor a traves de una
             // llamada.  Sin esto la instruccion salia sin operando alguno.
-            const uint16_t mask =
-                static_cast<uint16_t>(raw[2] | (raw[3] << 8));
+            const uint16_t mask = static_cast<uint16_t>(raw[2] | (raw[3] << 8));
             char regs[96];
             size_t n = 0;
             regs[0] = '\0';
@@ -273,8 +272,7 @@ static std::string fmt_ext_operands(uint8_t opc,
             const uint8_t ctrl = raw[2];
             const uint8_t basef = raw[3];
             const uint8_t regs = raw[4];
-            const int16_t disp =
-                static_cast<int16_t>(raw[5] | (raw[6] << 8));
+            const int16_t disp = static_cast<int16_t>(raw[5] | (raw[6] << 8));
             const unsigned width = 1u << ((ctrl >> 4) & 0x07);
             const unsigned scale = ctrl & 0x07;
             const unsigned base = basef & 0x1F;
@@ -284,9 +282,12 @@ static std::string fmt_ext_operands(uint8_t opc,
             const bool has_index = (ctrl & 0x08) != 0;
             const bool sign_ext = (basef & 0x20) != 0;
             char bs[8];
-            if (base == 16) snprintf(bs, sizeof(bs), "rbp");
-            else if (base == 17) snprintf(bs, sizeof(bs), "rsp");
-            else snprintf(bs, sizeof(bs), "r%u", base);
+            if (base == 16)
+                snprintf(bs, sizeof(bs), "rbp");
+            else if (base == 17)
+                snprintf(bs, sizeof(bs), "rsp");
+            else
+                snprintf(bs, sizeof(bs), "r%u", base);
             char addr[64];
             int n = snprintf(addr, sizeof(addr), "%s", bs);
             if (has_index)
@@ -301,8 +302,8 @@ static std::string fmt_ext_operands(uint8_t opc,
                 snprintf(buf, sizeof(buf), "r%u, %s[%s] (%u bytes%s)", reg,
                          mark, addr, width, sign_ext ? ", con signo" : "");
             else
-                snprintf(buf, sizeof(buf), "%s[%s], r%u (%u bytes)", mark,
-                         addr, reg, width);
+                snprintf(buf, sizeof(buf), "%s[%s], r%u (%u bytes)", mark, addr,
+                         reg, width);
         } else if (opc == 0x1F || opc == 0x1E) {
             // MOVC/MOVCH: ctrl[2], datos[3]
             uint8_t ctrl = raw[2], b4 = raw[3];
@@ -500,16 +501,14 @@ static std::string fmt_primary_operands(uint8_t opc,
         } else if (opc == 0x70 || opc == 0x71) {
             // fastpush/fastpop <mask16>: los registros marcados, uno a uno,
             // que es lo que interesa al seguir un valor entre llamadas.
-            const uint16_t mask =
-                static_cast<uint16_t>(raw[2] | (raw[3] << 8));
+            const uint16_t mask = static_cast<uint16_t>(raw[2] | (raw[3] << 8));
             char regs[96];
             size_t n = 0;
             regs[0] = '\0';
             for (int r = 0; r < 16; ++r) {
                 if (!(mask & (1u << r))) continue;
-                n += static_cast<size_t>(
-                    snprintf(regs + n, sizeof(regs) - n, "%sr%d",
-                             (n ? " " : ""), r));
+                n += static_cast<size_t>(snprintf(regs + n, sizeof(regs) - n,
+                                                  "%sr%d", (n ? " " : ""), r));
                 if (n >= sizeof(regs) - 8) break;
             }
             snprintf(buf, sizeof(buf), "0x%04x {%s}", mask, regs);

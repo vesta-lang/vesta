@@ -127,7 +127,7 @@ struct CodeNode {
 enum class RangeKind : uint8_t {
     Generated = 0,     ///< el intermedio produjo este codigo
     OptimizedAway = 1, ///< el intermedio existio y no produjo ninguno
-    Synthetic = 2,     ///< codigo sin origen en el intermedio (prologos, saltos)
+    Synthetic = 2, ///< codigo sin origen en el intermedio (prologos, saltos)
 };
 
 /**
@@ -269,11 +269,12 @@ class SessionMap {
 // -------------------------------------------------------------------------
 /// Donde vive un valor durante un tramo.
 enum class LocationKind : uint8_t {
-    Register = 0,     ///< en un registro de la maquina
-    StackSlot = 1,    ///< a un desplazamiento del marco
-    Global = 2,       ///< en una direccion fija
-    Constant = 3,     ///< el valor es conocido, no esta en ningun sitio
-    OptimizedOut = 4, ///< el optimizador lo elimino; decirlo es mejor que callarlo
+    Register = 0,  ///< en un registro de la maquina
+    StackSlot = 1, ///< a un desplazamiento del marco
+    Global = 2,    ///< en una direccion fija
+    Constant = 3,  ///< el valor es conocido, no esta en ningun sitio
+    OptimizedOut =
+        4, ///< el optimizador lo elimino; decirlo es mejor que callarlo
 };
 
 /**

@@ -23,8 +23,8 @@
 #ifndef ANALYSIS_MEMORY_POINTS_TO_H
 #define ANALYSIS_MEMORY_POINTS_TO_H
 
-#include "analysis/effects/effects.h" // AbstractLoc
-#include "analysis/facts/ir_facts.h"  // IrFacts (def_of, param_of)
+#include "analysis/effects/effects.h"   // AbstractLoc
+#include "analysis/facts/ir_facts.h"    // IrFacts (def_of, param_of)
 #include "analysis/facts/value_range.h" // acotar el desplazamiento variable
 
 #include <cstdint>
@@ -36,20 +36,22 @@ struct IrFunction;
 
 namespace analysis {
 
-/// Resultado de resolver un valor SSA a su localizacion.  Interno al resolvedor;
-/// los consumidores usan @c AbstractLoc via @c loc_of.
+/// Resultado de resolver un valor SSA a su localizacion.  Interno al
+/// resolvedor; los consumidores usan @c AbstractLoc via @c loc_of.
 struct PointsToEntry {
     effects::AbstractLoc::Kind kind = effects::AbstractLoc::Kind::Unknown;
-    uint32_t root = effects::LOC_GENERIC; ///< value-id de la raiz (o indice de param).
-    int64_t  off = 0;                     ///< offset const desde la raiz.
-    bool     off_exact = false;           ///< false = offset no probado (whole-root).
+    uint32_t root =
+        effects::LOC_GENERIC; ///< value-id de la raiz (o indice de param).
+    int64_t off = 0;          ///< offset const desde la raiz.
+    bool off_exact = false;   ///< false = offset no probado (whole-root).
     /**
      * @brief Valor que aporta la parte NO CONSTANTE del desplazamiento.
      *
      * Un `buf[i]` no tiene offset constante, pero eso no es lo mismo que no
      * saber nada: se sabe QUE valor lo decide.
      *
-     * @c IR_NO_VALUE (0xFFFFFFFF) = el desplazamiento no viene de un solo valor.
+     * @c IR_NO_VALUE (0xFFFFFFFF) = el desplazamiento no viene de un solo
+     * valor.
      */
     ir::IrValueId off_sym = 0xFFFFFFFFu;
     /**
@@ -65,7 +67,7 @@ struct PointsToEntry {
      */
     int64_t off_lo = 0;
     int64_t off_hi = 0;
-    bool    off_rango = false; ///< true = @c off_lo/off_hi valen.
+    bool off_rango = false; ///< true = @c off_lo/off_hi valen.
     /**
      * @brief La parte CONSTANTE del desplazamiento, sin el simbolo.
      *
@@ -91,7 +93,7 @@ struct PointsToEntry {
  * con un rango se puede acotar) y desconocido (no se afirma nada).
  */
 struct RegionExtent {
-    int64_t       bytes = -1;            ///< >= 0: tamano LOGICO del objeto.
+    int64_t bytes = -1; ///< >= 0: tamano LOGICO del objeto.
     /**
      * @brief Bytes realmente RESERVADOS para el objeto (>= @c bytes).
      *
@@ -105,8 +107,9 @@ struct RegionExtent {
      * 453 programas del corpus).  Con ella, lo que se sale del HUECO sigue
      * siendo un fallo real en cualquier caso.
      */
-    int64_t       reservado = -1;
-    ir::IrValueId sym = 0xFFFFFFFFu;     ///< value-id que da el tamano (IR_NO_VALUE si no).
+    int64_t reservado = -1;
+    ir::IrValueId sym =
+        0xFFFFFFFFu; ///< value-id que da el tamano (IR_NO_VALUE si no).
     bool constante() const { return bytes >= 0; }
     bool simbolica() const { return bytes < 0 && sym != 0xFFFFFFFFu; }
     bool conocida() const { return constante() || simbolica(); }
@@ -133,10 +136,10 @@ struct PointsTo {
 /// Construye la tabla points-to de @p fn usando los hechos @p facts (def-use +
 /// param-of).  Resolucion recursiva con memoizacion y guardia de ciclos (PHI).
 ///
-/// @p rangos (opcional) permite ACOTAR el desplazamiento cuando no es constante:
-/// sin ellos un `buf[i]` solo puede decir "en algun sitio de buf"; con ellos
-/// dice entre que dos posiciones.  Es informacion, no otra politica: sin rangos
-/// la tabla sale exactamente igual que antes.
+/// @p rangos (opcional) permite ACOTAR el desplazamiento cuando no es
+/// constante: sin ellos un `buf[i]` solo puede decir "en algun sitio de buf";
+/// con ellos dice entre que dos posiciones.  Es informacion, no otra politica:
+/// sin rangos la tabla sale exactamente igual que antes.
 PointsTo compute_points_to(const ir::IrFunction &fn, const IrFacts &facts,
                            const RangeFacts *rangos = nullptr);
 
@@ -151,7 +154,8 @@ struct PointsToAnalysis {
 /// Proyecta el valor SSA @p ptr a un @c AbstractLoc con el ancho de acceso
 /// @p width (bytes; 0 = desconocido).  Si el offset no es exacto, degrada a
 /// whole-root (width 0) para no afirmar bytes concretos que no se probaron.
-effects::AbstractLoc loc_of(const PointsTo &pt, ir::IrValueId ptr, int32_t width);
+effects::AbstractLoc loc_of(const PointsTo &pt, ir::IrValueId ptr,
+                            int32_t width);
 
 /**
  * @brief Valor que contiene el hueco @p slot, si se puede afirmar cual es.

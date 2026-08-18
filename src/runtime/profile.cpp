@@ -1,6 +1,7 @@
 /*
  * VestaVM - Maquina Virtual Distribuida
- * Copyright (C) 2026 David Lopez.T (DesmonHak); Licencia: GPLv2 + excepcion de runtime (ver LICENSE)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak); Licencia: GPLv2 + excepcion de
+ * runtime (ver LICENSE)
  */
 /**
  * @file src/runtime/profile.cpp
@@ -222,7 +223,8 @@ int profile_write_branch_lines(
             << '\n';
         ++n;
     }
-    std::fprintf(stderr, "[profile] perfil de branches por linea: %s (%d lineas)\n",
+    std::fprintf(stderr,
+                 "[profile] perfil de branches por linea: %s (%d lineas)\n",
                  path.c_str(), n);
     return n;
 }
@@ -236,13 +238,15 @@ int profile_apply_branch_lines(
     std::unordered_map<uint32_t, std::pair<uint64_t, uint64_t>> by_line;
     // Fuente 1: profiler ligero (tabla fija lock-free).
     for (size_t i = 0; i < kLiteBranchSlots; ++i) {
-        const uint64_t pc = g_lite_branches[i].pc.load(std::memory_order_relaxed);
+        const uint64_t pc =
+            g_lite_branches[i].pc.load(std::memory_order_relaxed);
         if (pc == 0) continue;
         const uint32_t line = pc_to_line(pc);
         if (line == 0) continue;
         auto &e = by_line[line];
         e.first += g_lite_branches[i].taken.load(std::memory_order_relaxed);
-        e.second += g_lite_branches[i].not_taken.load(std::memory_order_relaxed);
+        e.second +=
+            g_lite_branches[i].not_taken.load(std::memory_order_relaxed);
     }
     // Fuente 2: profiler pesado D.6 (si estaba activo con --profile).
     {
@@ -263,7 +267,8 @@ int profile_apply_branch_lines(
         if (total == 0) continue;
         // P(mispredict) = fraccion de la rama minoritaria.
         const uint64_t minor = taken < nt ? taken : nt;
-        const double p = static_cast<double>(minor) / static_cast<double>(total);
+        const double p =
+            static_cast<double>(minor) / static_cast<double>(total);
         ir::set_branch_profile_entry(kv.first, p);
         ++n;
     }

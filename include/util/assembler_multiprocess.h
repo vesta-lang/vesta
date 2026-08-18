@@ -195,11 +195,11 @@ int run_driver(const std::string &folder, int threads,
  * @param file_name Nombre con el que referirse a el en diagnosticos y para
  *        resolver los `#include` relativos.  No hace falta que exista en disco.
  */
-int run_worker_from_source(std::string code, const std::string &file_name,
-                          const std::string &output_prefix,
-                          bool skip_preprocessor, bool keep_labels,
-                          const std::vector<uint8_t> *ir_section_bytes = nullptr,
-                          bool emit_map = false);
+int run_worker_from_source(
+    std::string code, const std::string &file_name,
+    const std::string &output_prefix, bool skip_preprocessor, bool keep_labels,
+    const std::vector<uint8_t> *ir_section_bytes = nullptr,
+    bool emit_map = false);
 
 int run_worker(const std::string &file_name, const std::string &output_prefix,
                bool skip_preprocessor = false, bool keep_labels = false,

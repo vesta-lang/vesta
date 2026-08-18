@@ -112,7 +112,8 @@ static std::optional<uint64_t> emit_assemble_run(const ir::IrModule &mod) {
 
     runtime::ManageVM manager(nullptr, 0);
     runtime::VM *vm = manager.loader.create_vm_instance(1);
-    runtime::ProcessVM *proc = manager.loader.load_executable(*vm, lo.output_path);
+    runtime::ProcessVM *proc =
+        manager.loader.load_executable(*vm, lo.output_path);
     if (!proc) return std::nullopt;
     vm->make_ready(proc->pid);
     vm->start();
@@ -489,9 +490,9 @@ static void test_emit_add() {
     /* La prueba que importa: EJECUTAR.  Un `main` que suma 20 + 22 y retorna
      * debe dar 42 -- si el emisor produce una suma ejecutable, sale; si no,
      * falla, sin depender de como se escriba el `.vel`.  Esto sustituye a los
-     * checks de forma ("enter presente", "adds presente"): aquellos daban falsos
-     * fallos cuando el emisor mejoraba (add es una hoja sin spills, no lleva
-     * frame) y no probaban que el resultado fuera correcto. */
+     * checks de forma ("enter presente", "adds presente"): aquellos daban
+     * falsos fallos cuando el emisor mejoraba (add es una hoja sin spills, no
+     * lleva frame) y no probaban que el resultado fuera correcto. */
     ir::IrModule prog;
     prog.name = "test_add_run";
     {
@@ -1193,7 +1194,8 @@ entry:
     // ARRAY_STORE con handle debe emitir el write barrier del GC.
     check(contains(er.vel_text, "gcwb"),
           "array_store.handle emit: gcwb write barrier");
-    // La longitud vive en la cabecera del array: un load, sin escalar el indice.
+    // La longitud vive en la cabecera del array: un load, sin escalar el
+    // indice.
     check(contains(er.vel_text, "array_ops:"),
           "array_len emit: funcion emitida");
 }

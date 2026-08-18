@@ -195,8 +195,7 @@ static void vt_profile_report_(void) {
         vt_unlock_();
         return;
     }
-    VxProfileEntry **arr =
-        (VxProfileEntry **)malloc(sizeof(*arr) * (size_t)n);
+    VxProfileEntry **arr = (VxProfileEntry **)malloc(sizeof(*arr) * (size_t)n);
     if (!arr) {
         vt_unlock_();
         return;
@@ -266,15 +265,15 @@ static void vt_print_indent_(FILE *f, int depth, int is_leaf_marker,
  * Las versiones default son no-op.
  * ----- */
 __attribute__((weak)) void vx_user_on_enter(const char *fn_name, int depth,
-                                             int pid) {
+                                            int pid) {
     (void)fn_name;
     (void)depth;
     (void)pid;
 }
 
 __attribute__((weak)) void vx_user_on_leave(const char *fn_name, int64_t value,
-                                             uint64_t elapsed_ns, int depth,
-                                             int pid) {
+                                            uint64_t elapsed_ns, int depth,
+                                            int pid) {
     (void)fn_name;
     (void)value;
     (void)elapsed_ns;

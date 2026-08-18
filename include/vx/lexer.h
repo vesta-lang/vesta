@@ -219,7 +219,7 @@ class Lexer {
     std::string filename_; ///< Nombre logico para diagnosticos.
     Diagnostics &diags_;   ///< Sumidero de diagnosticos (no-owner).
 
-    size_t pos_ = 0;      ///< Indice de byte en source_.
+    size_t pos_ = 0; ///< Indice de byte en source_.
     /// De que expansion viene lo que se esta leyendo, o @c nullptr si es
     /// codigo que alguien escribio.  No propietario.
     const ExpansionInfo *expansion_ = nullptr;

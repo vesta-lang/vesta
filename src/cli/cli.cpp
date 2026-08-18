@@ -825,7 +825,8 @@ static void command_vpp(const std::string &args) {
     // Relativo al PADRE del exe: instalacion con vesta.exe en <prefix>/bin y el
     // include_lib (fuente VPP, no binario) en <prefix>/include_lib.
     {
-        std::string parent = std::filesystem::path(exe_dir).parent_path().string();
+        std::string parent =
+            std::filesystem::path(exe_dir).parent_path().string();
         if (!parent.empty()) {
             pp.options().import_paths.push_back(parent + "/include_lib");
             pp.options().import_paths.push_back(parent +

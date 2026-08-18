@@ -20,7 +20,9 @@ namespace util {
 //  Escritura
 // ---------------------------------------------------------------------------
 
-void ByteWriter::u8(uint8_t v) { buf_.push_back(v); }
+void ByteWriter::u8(uint8_t v) {
+    buf_.push_back(v);
+}
 
 void ByteWriter::u16(uint16_t v) {
     buf_.push_back(static_cast<uint8_t>(v & 0xFF));
@@ -37,7 +39,9 @@ void ByteWriter::u64(uint64_t v) {
         buf_.push_back(static_cast<uint8_t>((v >> (8 * i)) & 0xFF));
 }
 
-void ByteWriter::i64(int64_t v) { u64(static_cast<uint64_t>(v)); }
+void ByteWriter::i64(int64_t v) {
+    u64(static_cast<uint64_t>(v));
+}
 
 void ByteWriter::f64(double v) {
     // Por los bits, no por su forma decimal: un texto perderia precision y
@@ -47,7 +51,9 @@ void ByteWriter::f64(double v) {
     u64(bits);
 }
 
-void ByteWriter::boolean(bool v) { u8(v ? 1u : 0u); }
+void ByteWriter::boolean(bool v) {
+    u8(v ? 1u : 0u);
+}
 
 void ByteWriter::str(const std::string &s) {
     u32(static_cast<uint32_t>(s.size()));
@@ -120,7 +126,9 @@ uint64_t ByteReader::u64() {
     return v;
 }
 
-int64_t ByteReader::i64() { return static_cast<int64_t>(u64()); }
+int64_t ByteReader::i64() {
+    return static_cast<int64_t>(u64());
+}
 
 double ByteReader::f64() {
     const uint64_t bits = u64();
@@ -129,7 +137,9 @@ double ByteReader::f64() {
     return v;
 }
 
-bool ByteReader::boolean() { return u8() != 0; }
+bool ByteReader::boolean() {
+    return u8() != 0;
+}
 
 std::string ByteReader::str() {
     const uint32_t n = u32();

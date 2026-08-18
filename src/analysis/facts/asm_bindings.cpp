@@ -24,20 +24,25 @@ namespace {
 /// El nombre por el que se ordena y se busca.  Las dos formas existen para que
 /// el mismo comparador sirva a los dos lados de una busqueda por rango, que es
 /// lo que pide @c std::equal_range.
-inline const std::string &clave(const LigaduraAsm &l) { return l.marcador; }
-inline const std::string &clave(const std::string &s) { return s; }
+inline const std::string &clave(const LigaduraAsm &l) {
+    return l.marcador;
+}
+inline const std::string &clave(const std::string &s) {
+    return s;
+}
 
 } // namespace
 
 AsmBindingFacts::Candidatas
 AsmBindingFacts::candidatas(const std::string &marcador) const noexcept {
-    const auto rango = std::equal_range(
-        ligaduras.begin(), ligaduras.end(), marcador,
-        [](const auto &a, const auto &b) {
-            // Comparador heterogeneo: sirve para (LigaduraAsm, string) y para
-            // (string, LigaduraAsm), que es lo que equal_range necesita.
-            return clave(a) < clave(b);
-        });
+    const auto rango =
+        std::equal_range(ligaduras.begin(), ligaduras.end(), marcador,
+                         [](const auto &a, const auto &b) {
+                             // Comparador heterogeneo: sirve para (LigaduraAsm,
+                             // string) y para (string, LigaduraAsm), que es lo
+                             // que equal_range necesita.
+                             return clave(a) < clave(b);
+                         });
     Candidatas c;
     c.n = static_cast<size_t>(rango.second - rango.first);
     if (c.n != 0) c.datos = &*rango.first;
@@ -86,7 +91,8 @@ ExtensionResuelta resolver_extension(const AsmBindingFacts &lig,
     if (!ex.una_vez()) {
         /* Repetido: el ultimo paso empieza (N-1) anchos mas alla.  Se toma el
          * MAXIMO de la cuenta, que es lo que hay que poder afirmar para decir
-         * que no se sale: si el mayor numero de vueltas cabe, ninguna se pasa. */
+         * que no se sale: si el mayor numero de vueltas cabe, ninguna se pasa.
+         */
         int64_t nlo = 0, nhi = 0;
         if (!rango_de(ex.repeticion, nlo, nhi)) return r;
         if (nhi < 0) return r; // una cuenta negativa no describe nada.
@@ -123,7 +129,8 @@ AsmBindingFacts compute_asm_bindings(const ir::IrFunction &fn) {
          * sintetica que no la anoto -- se cae al registro, que en los fijos ES
          * la clase.  Preferir el campo y no al reves: el registro de un
          * operando automatico es el que se eligio a la primera para que el
-         * interprete tenga algo que sustituir, no lo que dijo el programador. */
+         * interprete tenga algo que sustituir, no lo que dijo el programador.
+         */
         l.clase = !b.reg_class.empty() ? b.reg_class : b.reg;
         l.hueco = b.alloca_value;
         f.ligaduras.push_back(std::move(l));
@@ -147,10 +154,12 @@ AsmBindingFacts compute_asm_bindings(const ir::IrFunction &fn) {
      * costaba un recorrido de la funcion por cada uno, y esto se consulta una
      * vez por bloque de asm: el trabajo se multiplicaba por dos sitios sin que
      * se vea.  Reescribir aqui la regla del "valor unico" habria sido peor
-     * todavia: dos versiones de cuando se puede afirmar lo que hay en un hueco. */
+     * todavia: dos versiones de cuando se puede afirmar lo que hay en un hueco.
+     */
     std::vector<ir::IrValueId> huecos;
     huecos.reserve(f.ligaduras.size());
-    for (const LigaduraAsm &l : f.ligaduras) huecos.push_back(l.hueco);
+    for (const LigaduraAsm &l : f.ligaduras)
+        huecos.push_back(l.hueco);
     const std::vector<ir::IrValueId> vals =
         valores_unicos_de_huecos(fn, huecos);
     for (size_t k = 0; k < f.ligaduras.size(); ++k)

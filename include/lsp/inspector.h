@@ -73,8 +73,8 @@ struct InspectTarget {
     std::string arch; ///< "x86-64"|"x86-32"; vacio = "x86-64".
     /// @return true si hay un override real (no es el host por defecto).
     bool active() const {
-        return !os.empty() || (!arch.empty() && arch != "x86-64" &&
-                               arch != "x86_64");
+        return !os.empty() ||
+               (!arch.empty() && arch != "x86-64" && arch != "x86_64");
     }
     /// @return clave estable para el cache de vistas ("" si host).
     std::string cache_key() const {
@@ -221,7 +221,8 @@ class Inspector {
      * muestre en paralelo.  Si se pide un @p mode concreto, devuelve solo ese.
      *
      * - @c interp: diagnosticos del frontend con semantica de VM (runtime
-     *   completo).  Es el analisis siempre-activo (mismo que publishDiagnostics).
+     *   completo).  Es el analisis siempre-activo (mismo que
+     * publishDiagnostics).
      * - @c jit: reusa el IR del interprete y clasifica cada funcion en
      *   compilable por el backend vreg vs con fallback al interprete.
      * - @c aot: recompila con POO nativa (native_poo) y ejecuta el analisis de
@@ -277,11 +278,11 @@ class Inspector {
     /// inicializacion fallo.  Idempotente.
     JitState *jit_state();
 
-    AnalysisEngine &engine_;  ///< Motor de analisis (cache CompileResult).
-    DocumentStore &docs_;     ///< Almacen de documentos abiertos.
+    AnalysisEngine &engine_; ///< Motor de analisis (cache CompileResult).
+    DocumentStore &docs_;    ///< Almacen de documentos abiertos.
 
-    std::unique_ptr<JitState> jit_;       ///< Subsistema JIT (lazy).
-    bool jit_init_failed_ = false;        ///< true si la init del JIT fallo.
+    std::unique_ptr<JitState> jit_; ///< Subsistema JIT (lazy).
+    bool jit_init_failed_ = false;  ///< true si la init del JIT fallo.
 
     /// Cache propia de vistas caras (diagramas + ir-pre) por clave compuesta
     /// "<uri>|<hash>|<vista>".  Evita recompilar peticiones identicas.

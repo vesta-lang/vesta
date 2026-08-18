@@ -7,49 +7,53 @@
 
 /**
  * @file codegen/rbank/smart_spill.h
- * @brief Fase 5 (nucleo): coloreado con SPILL INTELIGENTE -- elige la victima por
- *        COSTE en vez del spill NAIVE (que derrama el valor actual sin criterio).
+ * @brief Fase 5 (nucleo): coloreado con SPILL INTELIGENTE -- elige la victima
+ * por COSTE en vez del spill NAIVE (que derrama el valor actual sin criterio).
  *
- *     AbstractProblem + OptimizationContext  --color_smart_spill-->  LaneAssignment
- *                                                                    (menor coste de spill)
+ *     AbstractProblem + OptimizationContext  --color_smart_spill-->
+ * LaneAssignment (menor coste de spill)
  *
- * DISCIPLINA (dato != mecanismo -- misma que FunctionSnapshot).  El @c Objective
- * DESCRIBE el coste de derramar cada valor (@c spill_cost_of: weight-aware, barato
- * lo frio/rematerializable, caro lo caliente).  Es DATO/preferencia y no sabe nada
- * de "victimas" ni de "Belady".  Este fichero es el ALGORITMO que EXPLOTA ese coste;
- * la ESTRATEGIA de eleccion de victima vive AQUI, desacoplada.  Cambiar de politica
- * de spill = otro algoritmo (u otra DecisionPolicy), NUNCA meter la politica en el
- * Objective.  Asi el Objective no se convierte en el vertedero de toda la
- * inteligencia (spill/move/affinity/sched/remat).
+ * DISCIPLINA (dato != mecanismo -- misma que FunctionSnapshot).  El @c
+ * Objective DESCRIBE el coste de derramar cada valor (@c spill_cost_of:
+ * weight-aware, barato lo frio/rematerializable, caro lo caliente).  Es
+ * DATO/preferencia y no sabe nada de "victimas" ni de "Belady".  Este fichero
+ * es el ALGORITMO que EXPLOTA ese coste; la ESTRATEGIA de eleccion de victima
+ * vive AQUI, desacoplada.  Cambiar de politica de spill = otro algoritmo (u
+ * otra DecisionPolicy), NUNCA meter la politica en el Objective.  Asi el
+ * Objective no se convierte en el vertedero de toda la inteligencia
+ * (spill/move/affinity/sched/remat).
  *
- * ESTRATEGIA (heuristica COST-AWARE de DURACION RESTANTE -- NO es Belady).  Cuando
- * no cabe un valor, la victima MAXIMIZA  duracion_restante / coste_de_spill.  Dos
- * factores ortogonales:
+ * ESTRATEGIA (heuristica COST-AWARE de DURACION RESTANTE -- NO es Belady).
+ * Cuando no cabe un valor, la victima MAXIMIZA  duracion_restante /
+ * coste_de_spill.  Dos factores ortogonales:
  *   - duracion_restante = end - punto_actual  (ESTRUCTURA, el LiveRange).
  *   - coste_de_spill    = @c Objective (weight/remat).
- * Preferir derramar lo que ocupa la lane MUCHO tiempo y cuesta POCO.  El coste lo
- * pone el Objective; la COMBINACION es del algoritmo.
+ * Preferir derramar lo que ocupa la lane MUCHO tiempo y cuesta POCO.  El coste
+ * lo pone el Objective; la COMBINACION es del algoritmo.
  *
- * POR QUE NO ES BELADY (importante).  Belady elige por NEXT-USE DISTANCE (el uso mas
- * lejano en el FUTURO); esto usa la DURACION RESTANTE (@c end - @c now), que NO es lo
- * mismo: un valor que vive hasta @c end=200 pero se USA en 100,101,102 es MALA
- * victima para Belady (se reusa enseguida) aunque su duracion sea larga.  El Belady
- * REAL necesita @c next_use(v), que hoy NO existe -- llegara con @c UseDefFacts (la
- * evolucion natural: F5 -> UseDefFacts -> next-use -> Belady real).  Hasta entonces
- * la duracion restante es una APROXIMACION razonable.
+ * POR QUE NO ES BELADY (importante).  Belady elige por NEXT-USE DISTANCE (el
+ * uso mas lejano en el FUTURO); esto usa la DURACION RESTANTE (@c end - @c
+ * now), que NO es lo mismo: un valor que vive hasta @c end=200 pero se USA en
+ * 100,101,102 es MALA victima para Belady (se reusa enseguida) aunque su
+ * duracion sea larga.  El Belady REAL necesita @c next_use(v), que hoy NO
+ * existe -- llegara con @c UseDefFacts (la evolucion natural: F5 -> UseDefFacts
+ * -> next-use -> Belady real).  Hasta entonces la duracion restante es una
+ * APROXIMACION razonable.
  *
  * LIMITES (honestos):
- *   - GREEDY: al derramar una victima no reconsidera decisiones anteriores -> optimo
- *     LOCAL, no global (el optimo global es el solver de Pareto de F5 avanzado).
- *   - Es una DecisionPolicy EMBRIONARIA: @c spill_score ES @c choose_spill_victim.
- *     Manana seran @c CostPolicy / @c BeladyPolicy / @c ParetoPolicy intercambiables
- *     sin tocar el resto del allocator (P8/P16).
- *   - CONTEXTO como FACHADA (vigilar): el @c OptimizationContext no debe volverse un
- *     God Context; a medida que lleguen next_use/loop-profile/alias, mejor que sea
- *     una fachada a Facts (ctx.usedef()/profile()/hw()/objective()) que un almacen.
+ *   - GREEDY: al derramar una victima no reconsidera decisiones anteriores ->
+ * optimo LOCAL, no global (el optimo global es el solver de Pareto de F5
+ * avanzado).
+ *   - Es una DecisionPolicy EMBRIONARIA: @c spill_score ES @c
+ * choose_spill_victim. Manana seran @c CostPolicy / @c BeladyPolicy / @c
+ * ParetoPolicy intercambiables sin tocar el resto del allocator (P8/P16).
+ *   - CONTEXTO como FACHADA (vigilar): el @c OptimizationContext no debe
+ * volverse un God Context; a medida que lleguen next_use/loop-profile/alias,
+ * mejor que sea una fachada a Facts (ctx.usedef()/profile()/hw()/objective())
+ * que un almacen.
  *
- * i18n: produce DATOS.  Fase 5 (nucleo): ADITIVO, sin consumidores de produccion
- * (solo el prototipo/test).
+ * i18n: produce DATOS.  Fase 5 (nucleo): ADITIVO, sin consumidores de
+ * produccion (solo el prototipo/test).
  */
 
 #ifndef VESTA_CODEGEN_RBANK_SMART_SPILL_H
@@ -72,8 +76,8 @@ namespace codegen {
 namespace rbank {
 
 /**
- * @brief Coste de derramar el valor @p r -- lo aporta el @c Objective (dato).  El
- *        algoritmo de spill NO lo define, solo lo consulta.
+ * @brief Coste de derramar el valor @p r -- lo aporta el @c Objective (dato).
+ * El algoritmo de spill NO lo define, solo lo consulta.
  */
 inline double spill_cost_via_objective(const ValueRequirements &r,
                                        const OptimizationContext &ctx) {
@@ -82,9 +86,9 @@ inline double spill_cost_via_objective(const ValueRequirements &r,
 
 /**
  * @brief Colorea el problema con SPILL INTELIGENTE (heuristica cost-aware de
- *        duracion restante; NO Belady -- ese necesita next-use/UseDefFacts).  El
- *        coste de cada candidato lo da el Objective (via @p ctx); la eleccion de
- *        victima es la estrategia de este algoritmo.
+ *        duracion restante; NO Belady -- ese necesita next-use/UseDefFacts). El
+ *        coste de cada candidato lo da el Objective (via @p ctx); la eleccion
+ * de victima es la estrategia de este algoritmo.
  */
 inline LaneAssignment color_smart_spill(const AbstractProblem &p,
                                         const OptimizationContext &ctx,
@@ -95,27 +99,35 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
     // Barrido por punto de definicion (desempate por value_id, determinista).
     std::vector<const AbstractValue *> order;
     order.reserve(p.values.size());
-    for (const AbstractValue &v : p.values) order.push_back(&v);
+    for (const AbstractValue &v : p.values)
+        order.push_back(&v);
     std::sort(order.begin(), order.end(),
               [](const AbstractValue *a, const AbstractValue *b) {
                   if (a->start != b->start) return a->start < b->start;
                   return a->value_id < b->value_id;
               });
 
-    // FIXED INTERVALS (linear-scan clasico): un valor con @c fixed_reg reserva ESA
-    // lane durante todo su rango.  El barrido es por @c start, asi que un valor SIN
-    // pin definido ANTES podria robar una lane que un pin definido DESPUES (aun no
-    // activo) necesita -> el pin, al llegar, no la encuentra y spillea/se desvia
-    // (rompe register("rXX") con varios bindings, p.ej. syscalls).  Se pre-computa
-    // aqui la reserva de cada pin para que @c first_free_lane la respete SIEMPRE.
-    struct FixedIval { uint8_t fid; uint32_t start; uint32_t end; uint32_t vid; };
+    // FIXED INTERVALS (linear-scan clasico): un valor con @c fixed_reg reserva
+    // ESA lane durante todo su rango.  El barrido es por @c start, asi que un
+    // valor SIN pin definido ANTES podria robar una lane que un pin definido
+    // DESPUES (aun no activo) necesita -> el pin, al llegar, no la encuentra y
+    // spillea/se desvia (rompe register("rXX") con varios bindings, p.ej.
+    // syscalls).  Se pre-computa aqui la reserva de cada pin para que @c
+    // first_free_lane la respete SIEMPRE.
+    struct FixedIval {
+        uint8_t fid;
+        uint32_t start;
+        uint32_t end;
+        uint32_t vid;
+    };
     std::vector<FixedIval> fixed_ivals;
     for (const AbstractValue &v : p.values)
         if (v.req.fixed_reg >= 0)
-            fixed_ivals.push_back({static_cast<uint8_t>(v.req.fixed_reg), v.start,
-                                   v.end, v.value_id});
+            fixed_ivals.push_back({static_cast<uint8_t>(v.req.fixed_reg),
+                                   v.start, v.end, v.value_id});
     // ¿La lane @p id la reserva ALGUN pin (distinto de @p self) cuyo rango se
-    // solapa con [@p vs, @p ve]?  El aliasing sub-registro se captura via AliasSet.
+    // solapa con [@p vs, @p ve]?  El aliasing sub-registro se captura via
+    // AliasSet.
     auto lane_pinned_by_other = [&](uint8_t id, uint32_t vs, uint32_t ve,
                                     uint32_t self) -> bool {
         const AliasSet *ca = bank.aliases_of(id);
@@ -124,13 +136,17 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
             if (fi.vid == self) continue;
             const AliasSet *fa = bank.aliases_of(fi.fid);
             if (!fa || !ca->overlaps(*fa)) continue;
-            if (vs <= fi.end && fi.start <= ve) return true; // rangos se solapan
+            if (vs <= fi.end && fi.start <= ve)
+                return true; // rangos se solapan
         }
         return false;
     };
 
     // Activos: valor EN REGISTRO cuyo rango no ha terminado.
-    struct Active { const AbstractValue *v; int lane; };
+    struct Active {
+        const AbstractValue *v;
+        int lane;
+    };
     std::vector<Active> active;
 
     /* ¿Esta libre la lane @p id PARA @p v?  Un activo la ocupa de verdad solo
@@ -167,9 +183,9 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
             if (c.kind != ConstraintKind::DIFFERENT_LANE &&
                 c.kind != ConstraintKind::INTERFERE)
                 continue;
-            const uint32_t otro = (c.a == value) ? c.b
-                                : (c.b == value) ? c.a
-                                                 : UINT32_MAX;
+            const uint32_t otro = (c.a == value)   ? c.b
+                                  : (c.b == value) ? c.a
+                                                   : UINT32_MAX;
             if (otro == UINT32_MAX) continue;
             if (out.lane_of(otro) == lane) return true;
         }
@@ -184,12 +200,13 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
             // El pin NO exige @c is_allocatable: un @c register("rXX") es una
             // constraint de NIVEL SUPERIOR (ABI/asm que el usuario fijo, p.ej.
             // r10 = arg4 de un syscall).  Prevalece sobre la reserva de scratch
-            // (r10/r11 los reserva el rewrite para DIVMOD/atomic/LOAD_VM, pero un
-            // binding explicito los reclama).  Solo respeta las restricciones
-            // duras: debe-memoria, lane prohibida (clobber que el valor atraviesa),
-            // clase, ancho y que la lane este libre.
-            if (!r.must_be_memory() && !r.lane_forbidden(fid) && l && l->cls == r.cls &&
-                bank.supports(fid, r.width) && lane_free_para(fid, v))
+            // (r10/r11 los reserva el rewrite para DIVMOD/atomic/LOAD_VM, pero
+            // un binding explicito los reclama).  Solo respeta las
+            // restricciones duras: debe-memoria, lane prohibida (clobber que el
+            // valor atraviesa), clase, ancho y que la lane este libre.
+            if (!r.must_be_memory() && !r.lane_forbidden(fid) && l &&
+                l->cls == r.cls && bank.supports(fid, r.width) &&
+                lane_free_para(fid, v))
                 return fid;
             return kSpilled;
         }
@@ -203,8 +220,7 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
             const int lp = out.lane_of(static_cast<uint32_t>(v->afinidad));
             if (lp != kSpilled && lp >= 0 && lp < 256) {
                 const uint8_t id = static_cast<uint8_t>(lp);
-                if (lane_admissible(r, id, bank, vec_active) &&
-                    lane_free(id) &&
+                if (lane_admissible(r, id, bank, vec_active) && lane_free(id) &&
                     !prohibida_por_forma(v->value_id, id) &&
                     !lane_pinned_by_other(id, v->start, v->end, v->value_id))
                     return id;
@@ -216,31 +232,37 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
          * para el valor que coincide con todos.  Compartir cuando la
          * alternativa es derramar no le quita el sitio a nadie. */
         for (int ronda = 0; ronda < 2; ++ronda) {
-        const bool compartir = (ronda == 1);
-        for (const Lane &l : bank.lanes) {
-            if (!lane_admissible(r, l, vec_active)) continue; // correctitud dura (cero by_id).
-            if (!lane_free_para(l.id, compartir ? v : nullptr)) continue;
-            /* Lane que la FORMA de una instruccion prohibe compartir, aunque
-             * los dos valores no coincidan en el tiempo.  Sin esto el
-             * asignador los junta -- es legitimo por vidas -- y luego hay que
-             * deshacerlo con dos movimientos y un temporal.  Barato de mirar:
-             * el conjunto esta vacio salvo en las funciones que lo pidan. */
-            if (prohibida_por_forma(v->value_id, l.id)) continue;
-            // Un valor SIN pin no roba una lane RESERVADA por un pin que se solapa
-            // (aunque ese pin aun no este activo): el pin la necesitara al llegar.
-            if (lane_pinned_by_other(l.id, v->start, v->end, v->value_id)) continue;
-            return l.id;
-        }
+            const bool compartir = (ronda == 1);
+            for (const Lane &l : bank.lanes) {
+                if (!lane_admissible(r, l, vec_active))
+                    continue; // correctitud dura (cero by_id).
+                if (!lane_free_para(l.id, compartir ? v : nullptr)) continue;
+                /* Lane que la FORMA de una instruccion prohibe compartir,
+                 * aunque los dos valores no coincidan en el tiempo.  Sin esto
+                 * el asignador los junta -- es legitimo por vidas -- y luego
+                 * hay que deshacerlo con dos movimientos y un temporal.  Barato
+                 * de mirar: el conjunto esta vacio salvo en las funciones que
+                 * lo pidan. */
+                if (prohibida_por_forma(v->value_id, l.id)) continue;
+                // Un valor SIN pin no roba una lane RESERVADA por un pin que se
+                // solapa (aunque ese pin aun no este activo): el pin la
+                // necesitara al llegar.
+                if (lane_pinned_by_other(l.id, v->start, v->end, v->value_id))
+                    continue;
+                return l.id;
+            }
         }
         return kSpilled;
     };
     // "Conveniencia de derramar" c en el punto @p now: mas HORIZONTE hasta el
-    // proximo uso y menos coste -> mejor victima.  Fase A (transicion a Belady):
-    // se calculan AMBAS metricas -- remaining_life (duracion restante, heuristica
-    // vieja) y next_use_distance (Belady) -- pero la DECISION usa el next-use si el
-    // Fact esta cableado (@c ctx.has_next_use()); remaining_life queda de fallback y
-    // para instrumentacion.  El coste sale del Objective; la fusion es del algoritmo.
-    constexpr double kDeadHorizon = 1e18; // horizonte "infinito": victima muerta ideal.
+    // proximo uso y menos coste -> mejor victima.  Fase A (transicion a
+    // Belady): se calculan AMBAS metricas -- remaining_life (duracion restante,
+    // heuristica vieja) y next_use_distance (Belady) -- pero la DECISION usa el
+    // next-use si el Fact esta cableado (@c ctx.has_next_use()); remaining_life
+    // queda de fallback y para instrumentacion.  El coste sale del Objective;
+    // la fusion es del algoritmo.
+    constexpr double kDeadHorizon =
+        1e18; // horizonte "infinito": victima muerta ideal.
     auto spill_score = [&](const AbstractValue *c, uint32_t now) -> double {
         /* Un valor que TIENE que estar en registro no es candidato a nada: su
          * uso lo nombra como registro y en memoria no existe.  Es el caso de
@@ -259,8 +281,8 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
                 ctx.next_use_distance(c->value_id, codegen::LinearPos{now});
             // d == UINT32_MAX (muerto) -> horizonte infinito (victima ideal);
             // si no, distancia real al proximo uso (Belady).
-            horizon = (d == UINT32_MAX) ? kDeadHorizon
-                                        : static_cast<double>(d) + 1.0;
+            horizon =
+                (d == UINT32_MAX) ? kDeadHorizon : static_cast<double>(d) + 1.0;
         }
         return horizon / (cost > 0.0 ? cost : 1e-9); // grande = mejor victima.
     };
@@ -271,14 +293,17 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
         if (!ctx.has_next_use()) return;
         const uint32_t d =
             ctx.next_use_distance(victim->value_id, codegen::LinearPos{now});
-        if (d == UINT32_MAX) ++ctx.spill_trace->victims_dead;  // muerta (Belady trivial).
-        else                 ++ctx.spill_trace->victims_alive; // uso lejano (Belady real).
+        if (d == UINT32_MAX)
+            ++ctx.spill_trace->victims_dead; // muerta (Belady trivial).
+        else
+            ++ctx.spill_trace->victims_alive; // uso lejano (Belady real).
     };
 
     for (const AbstractValue *v : order) {
         // Expirar activos muertos.
-        active.erase(std::remove_if(active.begin(), active.end(),
-                                    [&](const Active &a) { return a.v->end < v->start; }),
+        active.erase(std::remove_if(
+                         active.begin(), active.end(),
+                         [&](const Active &a) { return a.v->end < v->start; }),
                      active.end());
 
         const int lane = first_free_lane(v);
@@ -310,13 +335,14 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
         int lane_elegida = kSpilled;
         for (const Active &a : active) {
             // La lane que robariamos debe ser ADMISIBLE para v: misma clase,
-            // soporta el ancho y -- si v cruza un CALL -- ser callee-saved.  Asi
-            // un cross-call nunca roba una lane volatil.  Si v esta PINADO, el pin
-            // (restriccion de nivel superior: ABI/asm) manda: solo su lane sirve.
+            // soporta el ancho y -- si v cruza un CALL -- ser callee-saved. Asi
+            // un cross-call nunca roba una lane volatil.  Si v esta PINADO, el
+            // pin (restriccion de nivel superior: ABI/asm) manda: solo su lane
+            // sirve.
             if (v->req.fixed_reg >= 0) {
                 if (a.lane != v->req.fixed_reg) continue;
-            } else if (!lane_admissible(v->req, static_cast<uint8_t>(a.lane), bank,
-                                        vec_active)) {
+            } else if (!lane_admissible(v->req, static_cast<uint8_t>(a.lane),
+                                        bank, vec_active)) {
                 continue;
             }
             ocupantes_de(a.lane);
@@ -328,8 +354,11 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
                 const double s2 = spill_score(active[ocupantes[k]].v, v->start);
                 if (s2 < sc) sc = s2;
             }
-            if (sc > best) { best = sc; lane_elegida = a.lane;
-                             mejores_ocupantes = ocupantes; }
+            if (sc > best) {
+                best = sc;
+                lane_elegida = a.lane;
+                mejores_ocupantes = ocupantes;
+            }
         }
 
         if (lane_elegida == kSpilled) {
@@ -342,7 +371,8 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
                 LaneHazard razon = LaneHazard::NONE;
                 unsigned de_su_clase = 0, admisibles = 0, libres = 0;
                 for (const Lane &l : bank.lanes) {
-                    if (l.cls != v->req.cls) continue; // otra clase: no dice nada
+                    if (l.cls != v->req.cls)
+                        continue; // otra clase: no dice nada
                     ++de_su_clase;
                     const LaneHazard h = lane_hazard(v->req, l, vec_active);
                     if (h != LaneHazard::NONE) {
@@ -364,13 +394,15 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
                              "debe-memoria=%d)\n",
                              v->value_id, de_su_clase, admisibles, libres,
                              lane_hazard_name(razon), (unsigned)v->req.cls,
-                             (unsigned)v->req.width, v->req.crosses_call ? 1 : 0,
-                             v->req.fixed_reg, v->req.must_be_memory() ? 1 : 0);
+                             (unsigned)v->req.width,
+                             v->req.crosses_call ? 1 : 0, v->req.fixed_reg,
+                             v->req.must_be_memory() ? 1 : 0);
             }
             out.spill(v->value_id); // v es la peor de mantener -> derramar v.
         } else {
             /* Desalojar a TODOS los que coinciden con v en esa lane y darsela.
-             * Se borra de atras adelante para que los indices sigan valiendo. */
+             * Se borra de atras adelante para que los indices sigan valiendo.
+             */
             for (size_t k = mejores_ocupantes.size(); k-- > 0;) {
                 const size_t i = mejores_ocupantes[k];
                 record_victim(active[i].v, v->start);
@@ -385,10 +417,12 @@ inline LaneAssignment color_smart_spill(const AbstractProblem &p,
 }
 
 /**
- * @brief Coste TOTAL de spill de una asignacion (suma del coste -- del Objective --
- *        de los valores derramados).  Metrica para comparar estrategias de spill.
+ * @brief Coste TOTAL de spill de una asignacion (suma del coste -- del
+ * Objective -- de los valores derramados).  Metrica para comparar estrategias
+ * de spill.
  */
-inline double total_spill_cost(const AbstractProblem &p, const LaneAssignment &a,
+inline double total_spill_cost(const AbstractProblem &p,
+                               const LaneAssignment &a,
                                const OptimizationContext &ctx) {
     double sum = 0.0;
     for (const AbstractValue &v : p.values)

@@ -10,10 +10,10 @@
  * @brief Implementacion de la politica de desenrollado (la INTELIGENCIA).
  *
  * La funcion de coste del UNROLL vive aqui (no en las metricas, que son
- * neutrales): pondera la call (~10), el load/store (~2), la rama (~3), el cuerpo
- * ya vectorizado (~2/op) y la presion de registros @c live_across de forma NO
- * lineal.  Otras optimizaciones (vectorizar, peel, unswitch) reutilizan las
- * MISMAS metricas con OTRA funcion de coste.
+ * neutrales): pondera la call (~10), el load/store (~2), la rama (~3), el
+ * cuerpo ya vectorizado (~2/op) y la presion de registros @c live_across de
+ * forma NO lineal.  Otras optimizaciones (vectorizar, peel, unswitch)
+ * reutilizan las MISMAS metricas con OTRA funcion de coste.
  */
 
 #include "ir/passes/unroll_policy.h"
@@ -26,15 +26,16 @@ namespace ir {
 
 namespace {
 
-// Iteraciones a partir de las cuales un trip constante se replica ENTERO (full).
+// Iteraciones a partir de las cuales un trip constante se replica ENTERO
+// (full).
 constexpr int64_t FULL_UNROLL_LIMIT = 16;
 
 // FUNCION DE COSTE DEL UNROLL (propia del pase) = coste aproximado de una
 // iteracion.  La presion de registros crece NO linealmente: desenrollar xN
 // multiplica los vivos y pasado cierto punto dispara spills -> termino
-// cuadratico suave (live*(live-1)/16).  NO se penaliza el cuerpo vectorizado: ya
-// tiene menos instrucciones y es justo donde el unroll (romper la dependencia
-// del acumulador) mas ayuda.
+// cuadratico suave (live*(live-1)/16).  NO se penaliza el cuerpo vectorizado:
+// ya tiene menos instrucciones y es justo donde el unroll (romper la
+// dependencia del acumulador) mas ayuda.
 int unroll_cost(const analysis::LoopMetrics &m) {
     int c = m.instructions + 2 * m.loads + 2 * m.stores + 10 * m.calls +
             3 * m.branches + 4 * m.expensive_ops;
@@ -53,7 +54,8 @@ int base_factor(int cost) {
 
 int floor_pow2(int x) {
     int p = 1;
-    while ((p << 1) <= x) p <<= 1;
+    while ((p << 1) <= x)
+        p <<= 1;
     return p;
 }
 
@@ -64,8 +66,7 @@ int floor_pow2(int x) {
 // triviales en funciones grandes.
 int effective_budget(const UnrollTargetInfo &t) {
     int b = t.code_budget;
-    if (t.code_size > 256)
-        b = (int)((int64_t)b * 256 / t.code_size);
+    if (t.code_size > 256) b = (int)((int64_t)b * 256 / t.code_size);
     if (b < 24) b = 24;
     return b;
 }
@@ -90,8 +91,8 @@ UnrollDecision choose_unroll_factor(const analysis::LoopMetrics &m,
     const int cost = unroll_cost(m);
     // Presupuesto de crecimiento de codigo (en unidades de COSTE, la misma que
     // usa unroll_cost), recortado por el tamano de la funcion (I-cache) y
-    // escalado por el peso de ejecucion.  El target ya trae la base adecuada; la
-    // politica no sabe de que backend viene.
+    // escalado por el peso de ejecucion.  El target ya trae la base adecuada;
+    // la politica no sabe de que backend viene.
     int budget = effective_budget(target);
     if (target.hotness > 0.0 && target.hotness != 1.0)
         budget = (int)((double)budget * target.hotness);
@@ -123,18 +124,21 @@ UnrollDecision choose_unroll_factor(const analysis::LoopMetrics &m,
     if (m.expensive_ops > 2 && f > 2) f = 2;
 
     // Presupuesto de crecimiento de codigo (misma unidad de COSTE que el full).
-    while (f >= 2 && (int64_t)cost * f > budget) f >>= 1;
+    while (f >= 2 && (int64_t)cost * f > budget)
+        f >>= 1;
     if (f < 2) return reject(UnrollReject::CodeGrowth);
 
     // UNICO filtro de presion de registros: recortar el factor (no rechazar de
-    // golpe).  Un cuerpo con live alto aun puede acabar en factor 2 en vez de 1.
+    // golpe).  Un cuerpo con live alto aun puede acabar en factor 2 en vez
+    // de 1.
     //
-    // Modelo: el unroll CONCATENA copias (cadena serial), no las paraleliza; los
-    // loop-carried (live_across) se enhebran y NO coexisten x factor.  Solo
-    // coexisten hasta `ilp_width` copias si el scheduler las interleava.  Por eso
-    // la presion es  live_across * min(factor, ilp_width), no  live_across *
-    // factor: un bucle de dependencia serial (poco live) puede desenrollar mucho
-    // sin spills; uno con muchos carried se acota.  (El interprete no interleava
+    // Modelo: el unroll CONCATENA copias (cadena serial), no las paraleliza;
+    // los loop-carried (live_across) se enhebran y NO coexisten x factor.  Solo
+    // coexisten hasta `ilp_width` copias si el scheduler las interleava.  Por
+    // eso la presion es  live_across * min(factor, ilp_width), no  live_across
+    // * factor: un bucle de dependencia serial (poco live) puede desenrollar
+    // mucho sin spills; uno con muchos carried se acota.  (El interprete no
+    // interleava
     // -> ilp_width 1 -> practicamente sin tope de presion.)
     if (m.live_across > 0) {
         const int ilp = target.ilp_width < 1 ? 1 : target.ilp_width;
@@ -146,7 +150,8 @@ UnrollDecision choose_unroll_factor(const analysis::LoopMetrics &m,
         if (f < 2) return reject(UnrollReject::RegisterPressure);
     }
 
-    // --- Trip conocido: nunca mas que el trip; partial si lo divide exacto. ---
+    // --- Trip conocido: nunca mas que el trip; partial si lo divide exacto.
+    // ---
     if (trip_count > 0) {
         if ((int64_t)f > trip_count) f = floor_pow2((int)trip_count);
         if (f < 2) return reject(UnrollReject::CostTooHigh);
@@ -185,11 +190,12 @@ void UnrollStats::account(const UnrollDecision &d) {
 
 void UnrollStats::dump() const {
     if (loops_seen == 0) return;
-    std::fprintf(stderr,
-                 "== UNROLL == seen:%d full:%d partial:%d remainder:%d | "
-                 "rej calls:%d pressure:%d growth:%d cost:%d cold:%d trivial:%d\n",
-                 loops_seen, full, partial, remainder, rej_calls, rej_pressure,
-                 rej_growth, rej_cost, rej_cold, rej_trivial);
+    std::fprintf(
+        stderr,
+        "== UNROLL == seen:%d full:%d partial:%d remainder:%d | "
+        "rej calls:%d pressure:%d growth:%d cost:%d cold:%d trivial:%d\n",
+        loops_seen, full, partial, remainder, rej_calls, rej_pressure,
+        rej_growth, rej_cost, rej_cold, rej_trivial);
 }
 
 } // namespace ir

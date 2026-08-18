@@ -21,21 +21,22 @@ C2       -> certeza posiblemente inválida
 PGO      -> conocimiento observado
 
 
-En un diseño convencional, es frecuente encontrar algo conceptualmente más parecido a:
+En un diseño convencional, es frecuente encontrar algo conceptualmente más
+parecido a:
 
 range analysis ─────► optimizador ──► criterio propio
 points-to ──────────► optimizador ──► criterio propio
 profile ────────────► JIT ──────────► criterio propio
 type analysis ──────► codegen ──────► criterio propio
 
-Aunque existen sistemas que comparten análisis, la idea fuerte de que el 
-conocimiento sea un recurso arquitectónico explícito, 
-con certeza/procedencia/prueba, y que los consumidores sean 
+Aunque existen sistemas que comparten análisis, la idea fuerte de que el
+conocimiento sea un recurso arquitectónico explícito,
+con certeza/procedencia/prueba, y que los consumidores sean
 deliberadamente agnósticos respecto al productor, es otra cosa.
 
 "Vesta introduce una arquitectura de conocimiento unificada basada en ASA,
-donde análisis estático, runtime/JIT y PGO actúan como productores de hechos 
-con certeza y procedencia, mientras los consumidores consultan ese conocimiento 
+donde análisis estático, runtime/JIT y PGO actúan como productores de hechos
+con certeza y procedencia, mientras los consumidores consultan ese conocimiento
 sin mantener criterios paralelos."
 
 */
@@ -47,8 +48,8 @@ sin mantener criterios paralelos."
  * Aqui NO se decide que es un hecho ni si algo merece afirmarse -- eso es del
  * productor de cada dominio (@c analysis/asa/productores.h).  Esto solo ordena,
  * filtra y escribe.  La separacion importa: si la vista decidiera, tendriamos
- * otra vez un criterio propio en un consumidor, que es exactamente lo que el ASA
- * existe para quitar.
+ * otra vez un criterio propio en un consumidor, que es exactamente lo que el
+ * ASA existe para quitar.
  *
  * Un conocimiento que no se puede mirar no se puede ni auditar ni ampliar: no
  * hay forma de saber si un consumidor renuncia porque no hay nada que saber o
@@ -74,18 +75,18 @@ namespace asa {
  *        que no se supo y por que, y el resumen por dominio y por fuente.
  *
  * Sin variantes ni combinaciones a proposito.  Un volcado que hay que pedir por
- * partes obliga a saber que se busca ANTES de mirarlo, que es justo lo contrario
- * de para lo que sirve; y cada variante es una forma mas de que dos personas
- * miren cosas distintas creyendo mirar lo mismo.  Sale por la salida que se le
- * de: para quedarse con un trozo estan las herramientas de siempre.
+ * partes obliga a saber que se busca ANTES de mirarlo, que es justo lo
+ * contrario de para lo que sirve; y cada variante es una forma mas de que dos
+ * personas miren cosas distintas creyendo mirar lo mismo.  Sale por la salida
+ * que se le de: para quedarse con un trozo estan las herramientas de siempre.
  *
  * @param almacen   Los hechos.
  * @param resumenes Lo que produjo cada dominio.
  * @param salida    Fichero abierto donde escribir.
  */
-void imprimir_volcado(const FactStore                      &almacen,
+void imprimir_volcado(const FactStore &almacen,
                       const std::vector<ResumenProduccion> &resumenes,
-                      FILE                                 *salida);
+                      FILE *salida);
 
 } // namespace asa
 } // namespace analysis

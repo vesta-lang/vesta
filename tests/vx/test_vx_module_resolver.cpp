@@ -49,9 +49,8 @@ int g_checks_failed = 0;
 /// Crea un directorio temporal unico para esta corrida.  Lo devuelve
 /// como ruta absoluta normalizada (forward slash).
 std::string make_temp_dir(const std::string &suffix) {
-    fs::path base =
-        fs::temp_directory_path() /
-        ("vx_modtest_" + std::to_string(::getpid()) + "_" + suffix);
+    fs::path base = fs::temp_directory_path() /
+                    ("vx_modtest_" + std::to_string(::getpid()) + "_" + suffix);
     fs::remove_all(base); // limpia si quedo de una corrida anterior
     fs::create_directories(base);
     std::string s = base.string();
@@ -76,9 +75,9 @@ void test_simple_chain() {
     std::string root = make_temp_dir("chain");
     write_file(root + "/c.vx", "i32 main() { return 1; }\n");
     write_file(root + "/b.vx", "import \"c\";\n"
-                                "i32 fn_b() { return 2; }\n");
+                               "i32 fn_b() { return 2; }\n");
     write_file(root + "/a.vx", "import \"b\";\n"
-                                "i32 main() { return 3; }\n");
+                               "i32 main() { return 3; }\n");
 
     vx::Diagnostics diags;
     vx::ModuleGraph graph(diags);
@@ -113,12 +112,12 @@ void test_diamond() {
     std::string root = make_temp_dir("diamond");
     write_file(root + "/d.vx", "i32 fn_d() { return 4; }\n");
     write_file(root + "/c.vx", "import \"d\";\n"
-                                "i32 fn_c() { return 3; }\n");
+                               "i32 fn_c() { return 3; }\n");
     write_file(root + "/b.vx", "import \"d\";\n"
-                                "i32 fn_b() { return 2; }\n");
+                               "i32 fn_b() { return 2; }\n");
     write_file(root + "/a.vx", "import \"b\";\n"
-                                "import \"c\";\n"
-                                "i32 main() { return 1; }\n");
+                               "import \"c\";\n"
+                               "i32 main() { return 1; }\n");
 
     vx::Diagnostics diags;
     vx::ModuleGraph graph(diags);
@@ -162,9 +161,9 @@ void test_cycle() {
 
     std::string root = make_temp_dir("cycle");
     write_file(root + "/a.vx", "import \"b\";\n"
-                                "i32 fn_a() { return 1; }\n");
+                               "i32 fn_a() { return 1; }\n");
     write_file(root + "/b.vx", "import \"a\";\n"
-                                "i32 fn_b() { return 2; }\n");
+                               "i32 fn_b() { return 2; }\n");
 
     vx::Diagnostics diags;
     vx::ModuleGraph graph(diags);
@@ -191,7 +190,7 @@ void test_not_found() {
 
     std::string root = make_temp_dir("missing");
     write_file(root + "/a.vx", "import \"no_existe\";\n"
-                                "i32 main() { return 0; }\n");
+                               "i32 main() { return 0; }\n");
 
     vx::Diagnostics diags;
     vx::ModuleGraph graph(diags);
@@ -254,10 +253,10 @@ void test_import_alias_and_only() {
     // de simbolos publicos cross-module.  Por eso lib.vx no usa public.
     std::string root = make_temp_dir("alias");
     write_file(root + "/lib.vx", "i32 fn_a() { return 1; }\n"
-                                  "i32 fn_b() { return 2; }\n");
+                                 "i32 fn_b() { return 2; }\n");
     write_file(root + "/main.vx", "import \"lib\" as core;\n"
-                                   "import \"lib\" only fn_a, fn_b as bee;\n"
-                                   "i32 main() { return 0; }\n");
+                                  "import \"lib\" only fn_a, fn_b as bee;\n"
+                                  "i32 main() { return 0; }\n");
 
     vx::Diagnostics diags;
     vx::ModuleGraph graph(diags);

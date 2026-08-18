@@ -50,8 +50,8 @@ bool const_val_of(const ir::IrFunction &fn, ir::IrValueId id, int64_t &out) {
  * Indexar con una constante -- `xs[0]`, `xs[1]` -- no baja a un literal: baja a
  * `base + i*8` con `i` constante.  Mirando solo el literal, el desplazamiento
  * mas comun que existe se daba por VARIABLE, y con el se perdia la posicion
- * exacta del acceso: el comprobador de limites veia "en algun sitio de xs" donde
- * el programa dice "el primero".
+ * exacta del acceso: el comprobador de limites veia "en algun sitio de xs"
+ * donde el programa dice "el primero".
  *
  * Se pliega el arbol de la expresion mientras sea aritmetica entre constantes.
  * Profundidad acotada: una cadena mas larga es un patron no previsto, y ahi se
@@ -68,27 +68,23 @@ bool const_expr_of(const ir::IrFunction &fn, const IrFacts &facts,
         !const_expr_of(fn, facts, d->operands[1], b, hondura + 1))
         return false;
     switch (d->op) {
-    case ir::IrOp::ADD:
-        return !__builtin_add_overflow(a, b, &out);
-    case ir::IrOp::SUB:
-        return !__builtin_sub_overflow(a, b, &out);
-    case ir::IrOp::MUL:
-        return !__builtin_mul_overflow(a, b, &out);
+    case ir::IrOp::ADD: return !__builtin_add_overflow(a, b, &out);
+    case ir::IrOp::SUB: return !__builtin_sub_overflow(a, b, &out);
+    case ir::IrOp::MUL: return !__builtin_mul_overflow(a, b, &out);
     case ir::IrOp::SHL:
         if (b < 0 || b > 62) return false;
         return !__builtin_mul_overflow(a, int64_t(1) << b, &out);
-    default:
-        return false;
+    default: return false;
     }
 }
 
 // Estado de la resolucion (memoizacion + guardia de ciclos por PHI).
 struct Resolver {
     const ir::IrFunction &fn;
-    const IrFacts        &facts;
-    const RangeFacts     *rangos = nullptr;
+    const IrFacts &facts;
+    const RangeFacts *rangos = nullptr;
     std::vector<PointsToEntry> memo;
-    std::vector<uint8_t>       state; // 0=nuevo, 1=en-curso, 2=hecho
+    std::vector<uint8_t> state; // 0=nuevo, 1=en-curso, 2=hecho
 
     Resolver(const ir::IrFunction &f, const IrFacts &fc, const RangeFacts *rg)
         : fn(f), facts(fc), rangos(rg) {
@@ -109,7 +105,8 @@ struct Resolver {
     static PointsToEntry with_offset(PointsToEntry base, int64_t delta) {
         if (base.kind == K::Unknown) return base;
         base.off += delta;
-        return base; // off_exact heredado (se degrada abajo si el delta no era const)
+        return base; // off_exact heredado (se degrada abajo si el delta no era
+                     // const)
     }
 
     // Degrada una entrada concreta a "raiz conocida, offset inexacto".
@@ -188,9 +185,9 @@ struct Resolver {
     ir::IrValueId phi_en_curso = ir::IR_NO_VALUE;
 
     // --- Hechos de bucle, calculados SOLO si aparece un puntero inducido ---
-    bool                 bucles_listos = false;
-    LoopFacts            lf;
-    std::vector<int>     def_block;
+    bool bucles_listos = false;
+    LoopFacts lf;
+    std::vector<int> def_block;
 
     void preparar_bucles() {
         if (bucles_listos) return;
@@ -223,7 +220,8 @@ struct Resolver {
         preparar_bucles();
         if (phi >= def_block.size() || def_block[phi] < 0) return false;
         const uint32_t bh = static_cast<uint32_t>(def_block[phi]);
-        if (bh >= lf.is_loop_header.size() || !lf.is_loop_header[bh]) return false;
+        if (bh >= lf.is_loop_header.size() || !lf.is_loop_header[bh])
+            return false;
         const uint32_t lid = lf.loop_id[bh];
         if (lid == LoopFacts::NO_LOOP) return false;
         const LoopStructure ls = detect_loop_structure(fn, lf, lid);
@@ -236,18 +234,25 @@ struct Resolver {
             const ir::IrInstr *da = facts.def(a);
             if (!da || da->op != Op_ADD() || da->operands.size() != 2) continue;
             int64_t c;
-            if (da->operands[0] == phi && const_val_of(fn, da->operands[1], c)) {
-                paso = c; hay_paso = true; break;
+            if (da->operands[0] == phi &&
+                const_val_of(fn, da->operands[1], c)) {
+                paso = c;
+                hay_paso = true;
+                break;
             }
-            if (da->operands[1] == phi && const_val_of(fn, da->operands[0], c)) {
-                paso = c; hay_paso = true; break;
+            if (da->operands[1] == phi &&
+                const_val_of(fn, da->operands[0], c)) {
+                paso = c;
+                hay_paso = true;
+                break;
             }
         }
         if (!hay_paso || paso == 0) return false;
 
         // Las vueltas: del IV entero del mismo bucle.
         LoopIV iv;
-        if (!detect_loop_iv(fn, def_block, ls.header, ls.preheader, ls.latch, iv))
+        if (!detect_loop_iv(fn, def_block, ls.header, ls.preheader, ls.latch,
+                            iv))
             return false;
         const LoopTripInfo tc = compute_trip_count(fn, def_block, iv);
         if (!tc.known() || tc.trip <= 0) return false;
@@ -258,7 +263,8 @@ struct Resolver {
         const int64_t ini_hi = base.off_exact ? ini : base.off_hi;
         const int64_t avance = paso * (tc.trip - 1);
         // Freno ante desbordamiento: mejor no afirmar que afirmar de mas.
-        if (tc.trip > 1 && paso != 0 && avance / (tc.trip - 1) != paso) return false;
+        if (tc.trip > 1 && paso != 0 && avance / (tc.trip - 1) != paso)
+            return false;
         lo = paso > 0 ? ini_lo : ini_lo + avance;
         hi = paso > 0 ? ini_hi + avance : ini_hi;
         return true;
@@ -282,8 +288,8 @@ struct Resolver {
              * posibilidad de comprobar el acceso.  Un bucle indexado es justo
              * donde se desborda un buffer. */
             if (v == phi_en_curso) {
-                static const PointsToEntry kNoAporta{K::None, effects::LOC_GENERIC,
-                                                     0, false};
+                static const PointsToEntry kNoAporta{
+                    K::None, effects::LOC_GENERIC, 0, false};
                 return kNoAporta;
             }
             memo[v] = unknown();
@@ -300,7 +306,8 @@ struct Resolver {
         // Parametro: memoria alcanzable desde el arg (points-to grueso).
         const int32_t pidx = facts.param_index(v);
         if (pidx >= 0)
-            return PointsToEntry{K::ArgDerived, static_cast<uint32_t>(pidx), 0, true};
+            return PointsToEntry{K::ArgDerived, static_cast<uint32_t>(pidx), 0,
+                                 true};
 
         const ir::IrInstr *d = facts.def(v);
         if (!d) return unknown();
@@ -308,8 +315,7 @@ struct Resolver {
         using Op = ir::IrOp;
         switch (d->op) {
         // --- Raices ---
-        case Op::ALLOCA:
-            return root_loc(K::Stack, v);
+        case Op::ALLOCA: return root_loc(K::Stack, v);
         case Op::RAW_ALLOC:
         case Op::GC_ALLOC:
         case Op::GC_ALLOCP:
@@ -317,13 +323,11 @@ struct Resolver {
         case Op::NEWOBJS:
         case Op::ARRAY_ALLOC:
         case Op::STRMAKE:
-        case Op::STRRESERVE:
-            return root_loc(K::Heap, v);
+        case Op::STRRESERVE: return root_loc(K::Heap, v);
         case Op::GETSTATIC:
         case Op::STR_LIT_ADDR:
         case Op::LABEL_ADDR:
-        case Op::SECTION_REF:
-            return root_loc(K::Global, v);
+        case Op::SECTION_REF: return root_loc(K::Global, v);
 
         // --- Derivaciones que preservan raiz Y offset (misma direccion) ---
         case Op::MOV:
@@ -430,8 +434,8 @@ struct Resolver {
 
         /* PHI: si todos los caminos que APORTAN traen la misma raiz, la raiz se
          * conserva.  El desplazamiento no -- por eso queda inexacto --, pero la
-         * raiz es lo que permite saber DE QUE objeto se habla, y sin ella no hay
-         * nada que comprobar.
+         * raiz es lo que permite saber DE QUE objeto se habla, y sin ella no
+         * hay nada que comprobar.
          *
          * Es el caso de un puntero inducido: `q = buf` al entrar y `q = q + 1`
          * al volver.  El segundo camino vuelve a la propia PHI y no aporta; el
@@ -448,9 +452,16 @@ struct Resolver {
             bool primero = true, discrepan = false;
             for (ir::IrValueId a : d->operands) {
                 const PointsToEntry e = resolve(a);
-                if (e.kind == K::None) continue;      // el propio bucle
-                if (e.kind == K::Unknown) { discrepan = true; break; }
-                if (primero) { acc = e; primero = false; continue; }
+                if (e.kind == K::None) continue; // el propio bucle
+                if (e.kind == K::Unknown) {
+                    discrepan = true;
+                    break;
+                }
+                if (primero) {
+                    acc = e;
+                    primero = false;
+                    continue;
+                }
                 if (e.kind != acc.kind || e.root != acc.root) {
                     discrepan = true;
                     break;
@@ -511,7 +522,8 @@ static RegionExtent extension_de(const ir::IrInstr &d, const IrFacts &facts) {
         }
         return ex;
     }
-    if (d.op == Op::RAW_ALLOC || d.op == Op::GC_ALLOC || d.op == Op::GC_ALLOCP) {
+    if (d.op == Op::RAW_ALLOC || d.op == Op::GC_ALLOC ||
+        d.op == Op::GC_ALLOCP) {
         if (d.operands.empty()) return ex;
         const ir::IrValueId vs = d.operands[0];
         const ir::IrInstr *ds = facts.def(vs);
@@ -546,8 +558,9 @@ AbstractLoc loc_of(const PointsTo &pt, ir::IrValueId ptr, int32_t width) {
     if (e.kind == K::Unknown)
         return AbstractLoc{K::Unknown, effects::LOC_GENERIC, 0, 0};
     if (!e.off_exact) {
-        // Raiz conocida pero offset no probado -> objeto entero (width 0): puede
-        // solapar cualquier acceso a la misma raiz, disjunto de otras raices.
+        // Raiz conocida pero offset no probado -> objeto entero (width 0):
+        // puede solapar cualquier acceso a la misma raiz, disjunto de otras
+        // raices.
         return AbstractLoc{e.kind, e.root, 0, 0};
     }
     return AbstractLoc{e.kind, e.root, e.off, width};
@@ -580,8 +593,8 @@ valores_unicos_de_huecos(const ir::IrFunction &fn,
             for (; it != indice.end() && it->first == slot; ++it) {
                 const size_t k = it->second;
                 // Una segunda escritura: el contenido ya depende del camino.
-                out[k] = (++escrituras[k] == 1) ? in.operands[0]
-                                                : ir::IR_NO_VALUE;
+                out[k] =
+                    (++escrituras[k] == 1) ? in.operands[0] : ir::IR_NO_VALUE;
             }
         }
     }

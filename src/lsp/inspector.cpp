@@ -61,8 +61,10 @@ namespace {
 
 /// Normaliza el arch del inspector al que espera el parser/codegen.
 inline std::string norm_arch(const std::string &a) {
-    if (a.empty() || a == "x86-64" || a == "x86_64" || a == "x64") return "x86_64";
-    if (a == "x86-32" || a == "x86_32" || a == "x86" || a == "i386") return "x86";
+    if (a.empty() || a == "x86-64" || a == "x86_64" || a == "x64")
+        return "x86_64";
+    if (a == "x86-32" || a == "x86_32" || a == "x86" || a == "i386")
+        return "x86";
     return a;
 }
 
@@ -113,8 +115,7 @@ inline bool target_is_mode32(const InspectTarget &t) {
 uint32_t first_source_line(const ir::IrFunction &fn) {
     for (const auto &blk : fn.blocks) {
         for (const auto &ins : blk.instrs) {
-            if (ins.source_line != 0)
-                return ins.source_line;
+            if (ins.source_line != 0) return ins.source_line;
         }
     }
     return 0;
@@ -129,8 +130,7 @@ uint32_t first_source_line(const ir::IrFunction &fn) {
  *         funciones; false en otro caso.
  */
 bool parse_post_opt_module(const vx::CompileResult &result, ir::IrModule &out) {
-    if (result.ir_module_cache_bytes.empty())
-        return false;
+    if (result.ir_module_cache_bytes.empty()) return false;
     return ir::parse_ir_module_cache(result.ir_module_cache_bytes, out);
 }
 
@@ -149,27 +149,22 @@ const ir::IrFunction *pick_function(const ir::IrModule &mod,
                                     const std::string &wanted) {
     if (!wanted.empty()) {
         for (const auto &fn : mod.functions) {
-            if (fn.name == wanted)
-                return &fn;
+            if (fn.name == wanted) return &fn;
         }
         // Funciones comptime: el frontend las baja como @c __macro_<nombre>.
         // Si el hover pidio @c M_foo, probar @c __macro_M_foo.
         const std::string macro = "__macro_" + wanted;
         for (const auto &fn : mod.functions) {
-            if (fn.name == macro)
-                return &fn;
+            if (fn.name == macro) return &fn;
         }
         return nullptr;
     }
     // Auto: preferir main (nombre exacto o sufijo "main").
     const ir::IrFunction *first_user = nullptr;
     for (const auto &fn : mod.functions) {
-        if (fn.is_native || fn.is_macro_compiled)
-            continue;
-        if (!first_user)
-            first_user = &fn;
-        if (fn.name == "main")
-            return &fn;
+        if (fn.is_native || fn.is_macro_compiled) continue;
+        if (!first_user) first_user = &fn;
+        if (fn.name == "main") return &fn;
     }
     return first_user;
 }
@@ -186,10 +181,9 @@ const ir::IrFunction *pick_function(const ir::IrModule &mod,
  * @param base      Direccion base mostrada (offset relativo si 0).
  * @return Texto del desensamblado (multilinea).
  */
-std::string disasm_x86_64(const uint8_t *code, size_t code_size,
-                          uint64_t base, bool mode32 = false) {
-    if (!code || code_size == 0)
-        return "(codigo vacio)";
+std::string disasm_x86_64(const uint8_t *code, size_t code_size, uint64_t base,
+                          bool mode32 = false) {
+    if (!code || code_size == 0) return "(codigo vacio)";
     csh handle;
     if (cs_open(CS_ARCH_X86, mode32 ? CS_MODE_32 : CS_MODE_64, &handle) !=
         CS_ERR_OK)
@@ -206,8 +200,7 @@ std::string disasm_x86_64(const uint8_t *code, size_t code_size,
             std::snprintf(buf, sizeof(buf), "%04llx",
                           static_cast<unsigned long long>(off));
             oss << buf << "  " << insn[i].mnemonic;
-            if (insn[i].op_str[0] != '\0')
-                oss << ' ' << insn[i].op_str;
+            if (insn[i].op_str[0] != '\0') oss << ' ' << insn[i].op_str;
             oss << '\n';
         }
         cs_free(insn, count);
@@ -248,11 +241,9 @@ std::string disasm_x86_64(const uint8_t *code, size_t code_size,
  * @return Cadena canonica ("rax".."r15") o "" si no es un GPR rastreable.
  */
 std::string canon_reg(csh handle, unsigned reg) {
-    if (reg == X86_REG_INVALID)
-        return "";
+    if (reg == X86_REG_INVALID) return "";
     const char *nm = cs_reg_name(handle, reg);
-    if (!nm)
-        return "";
+    if (!nm) return "";
     std::string s = nm;
     static const std::unordered_map<std::string, std::string> kFam = {
         {"rax", "rax"}, {"eax", "rax"},  {"ax", "rax"},   {"al", "rax"},
@@ -289,21 +280,19 @@ std::string frame_label(int64_t disp) {
     return b;
 }
 
-nlohmann::json
-disasm_x86_64_correlated(const uint8_t *code, size_t code_size,
-                         const std::vector<jit::LineMapEntry> &lm,
-                         const std::vector<jit::NativeReloc> &relocs,
-                         const std::vector<std::pair<std::string, std::string>>
-                             &arg_seed,
-                         nlohmann::json *frame_out) {
+nlohmann::json disasm_x86_64_correlated(
+    const uint8_t *code, size_t code_size,
+    const std::vector<jit::LineMapEntry> &lm,
+    const std::vector<jit::NativeReloc> &relocs,
+    const std::vector<std::pair<std::string, std::string>> &arg_seed,
+    nlohmann::json *frame_out) {
     nlohmann::json arr = nlohmann::json::array();
-    if (!code || code_size == 0)
-        return arr;
+    if (!code || code_size == 0) return arr;
     csh handle;
-    if (cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK)
-        return arr;
+    if (cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK) return arr;
     // DETAIL ON: necesitamos los operandos estructurados (reg/mem/imm + acceso)
-    // para rastrear que valor con nombre vive en cada registro / slot del frame.
+    // para rastrear que valor con nombre vive en cada registro / slot del
+    // frame.
     cs_option(handle, CS_OPT_DETAIL, CS_OPT_ON);
     cs_insn *insn = nullptr;
     const size_t count = cs_disasm(handle, code, code_size, 0, 0, &insn);
@@ -322,14 +311,13 @@ disasm_x86_64_correlated(const uint8_t *code, size_t code_size,
     std::map<int64_t, FSlot> framemap;
     // Seed: la convencion de llamada coloca cada argumento en su registro.
     for (const auto &pr : arg_seed)
-        if (!pr.first.empty())
-            regmap[pr.first] = pr.second;
+        if (!pr.first.empty()) regmap[pr.first] = pr.second;
 
     // Layout del prologo (registros guardados + area reservada).  Tras
     // `mov rbp, rsp`, [rbp+0]=rbp guardado, [rbp+8]=direccion de retorno, y
     // cada `push reg` posterior baja 8 bytes ([rbp-8], [rbp-16], ...).
     bool have_rbp = false;
-    int64_t push_off = 0;     // offset (rel. rbp) del ultimo push tras rbp
+    int64_t push_off = 0; // offset (rel. rbp) del ultimo push tras rbp
     int64_t reserved_bytes = 0;
     bool reserved_done = false;
     std::vector<nlohmann::json> saved_regs; // {offset,size,kind,name}
@@ -358,8 +346,7 @@ disasm_x86_64_correlated(const uint8_t *code, size_t code_size,
         std::vector<std::string> ann; // partes del comentario de valores
         auto add_ann = [&](const std::string &s) {
             for (const auto &e : ann)
-                if (e == s)
-                    return; // dedup
+                if (e == s) return; // dedup
             ann.push_back(s);
         };
         cs_detail *det = insn[i].detail;
@@ -385,8 +372,7 @@ disasm_x86_64_correlated(const uint8_t *code, size_t code_size,
                 js["name"] = rn ? rn : "?";
                 saved_regs.push_back(std::move(js));
             } else if (id == X86_INS_SUB && have_rbp && !reserved_done &&
-                       x.op_count == 2 &&
-                       x.operands[0].type == X86_OP_REG &&
+                       x.op_count == 2 && x.operands[0].type == X86_OP_REG &&
                        canon_reg(handle, x.operands[0].reg) == "rsp" &&
                        x.operands[1].type == X86_OP_IMM) {
                 reserved_bytes = x.operands[1].imm;
@@ -401,8 +387,7 @@ disasm_x86_64_correlated(const uint8_t *code, size_t code_size,
             // ese mismo registro callee-saved sigue alojando el valor (p.ej.
             // el parametro durante toda la funcion).  Lo tratamos como
             // no-invalidante para no perder el nombre en bloques posteriores.
-            if (id == X86_INS_POP)
-                handled = true;
+            if (id == X86_INS_POP) handled = true;
             if (is_mov && x.op_count == 2) {
                 const cs_x86_op &d = x.operands[0];
                 const cs_x86_op &s = x.operands[1];
@@ -457,8 +442,7 @@ disasm_x86_64_correlated(const uint8_t *code, size_t code_size,
                     // mov reg, imm : el registro deja de tener un valor con
                     // nombre.
                     std::string dc = canon_reg(handle, d.reg);
-                    if (!dc.empty())
-                        regmap.erase(dc);
+                    if (!dc.empty()) regmap.erase(dc);
                     handled = true;
                 }
             }
@@ -483,8 +467,7 @@ disasm_x86_64_correlated(const uint8_t *code, size_t code_size,
                     const cs_x86_op &op = x.operands[oi];
                     if (op.type == X86_OP_REG && (op.access & CS_AC_WRITE)) {
                         std::string c = canon_reg(handle, op.reg);
-                        if (!c.empty())
-                            regmap.erase(c);
+                        if (!c.empty()) regmap.erase(c);
                     }
                 }
             }
@@ -492,12 +475,13 @@ disasm_x86_64_correlated(const uint8_t *code, size_t code_size,
 
         // Comentario combinado: simbolo de relocation (call/lea) + valores.
         std::vector<std::string> comments;
-        // Buscar la relocation que cubre esta instruccion (call/jmp/lea/movabs a
-        // un simbolo propio).  El backend de asm enruta `mov r64, simbolo` a un
-        // literal PLACEHOLDER de 64 bits (Keystone no hace fixups de 64 bits);
-        // ese placeholder aparece crudo en el desensamblado (`0xc0ffee...`).
-        // Aqui lo SUSTITUIMOS por el nombre legible del simbolo (estilo Godbolt:
-        // `movabs rax, add`), igual que hace el fix del ensamblado.
+        // Buscar la relocation que cubre esta instruccion (call/jmp/lea/movabs
+        // a un simbolo propio).  El backend de asm enruta `mov r64, simbolo` a
+        // un literal PLACEHOLDER de 64 bits (Keystone no hace fixups de 64
+        // bits); ese placeholder aparece crudo en el desensamblado
+        // (`0xc0ffee...`). Aqui lo SUSTITUIMOS por el nombre legible del
+        // simbolo (estilo Godbolt: `movabs rax, add`), igual que hace el fix
+        // del ensamblado.
         const jit::NativeReloc *rrel = nullptr;
         for (const auto &rc : relocs) {
             if (rc.offset >= off && rc.offset < end && !rc.symbol.empty()) {
@@ -514,8 +498,7 @@ disasm_x86_64_correlated(const uint8_t *code, size_t code_size,
             else if (sym.rfind("rodata.", 0) == 0)
                 sym = "rodata[" + sym.substr(7) + "]";
             std::string disp_sym = sym;
-            if (rrel->addend)
-                disp_sym += "+" + std::to_string(rrel->addend);
+            if (rrel->addend) disp_sym += "+" + std::to_string(rrel->addend);
             // Reescribir el operando relocado: sustituir el literal hex por el
             // simbolo.  Caso RIP-relativo (`[rip + 0x..]` / `[rip - 0x..]`) y
             // caso inmediato/branch (`movabs rax, 0x..`, `call 0x..`).
@@ -531,27 +514,23 @@ disasm_x86_64_correlated(const uint8_t *code, size_t code_size,
                 }
             };
             size_t rip = text.find("rip + 0x");
-            if (rip == std::string::npos)
-                rip = text.find("rip - 0x");
+            if (rip == std::string::npos) rip = text.find("rip - 0x");
             if (rip != std::string::npos) {
                 repl_hex_at(text.find("0x", rip));
             } else {
                 size_t hexs = text.rfind("0x");
-                if (hexs != std::string::npos)
-                    repl_hex_at(hexs);
+                if (hexs != std::string::npos) repl_hex_at(hexs);
             }
             // Si no se pudo reescribir inline, dejar el simbolo como comentario
             // (fallback) para no perder la informacion.
-            if (!rewrote)
-                comments.push_back(disp_sym);
+            if (!rewrote) comments.push_back(disp_sym);
         }
         for (const auto &a : ann)
             comments.push_back(a);
         if (!comments.empty()) {
             text += "  ; ";
             for (size_t c = 0; c < comments.size(); ++c) {
-                if (c)
-                    text += ", ";
+                if (c) text += ", ";
                 text += comments[c];
             }
         }
@@ -563,8 +542,7 @@ disasm_x86_64_correlated(const uint8_t *code, size_t code_size,
         ji["ir_id"] = ir_id; // correlacion exacta op-IR <-> asm (solo-LSP)
         arr.push_back(std::move(ji));
     }
-    if (count > 0)
-        cs_free(insn, count);
+    if (count > 0) cs_free(insn, count);
     cs_close(&handle);
 
     // Volcar el frame completo, ordenado de la cima (mas cercano a rbp+) hacia
@@ -636,15 +614,13 @@ nlohmann::json function_source_lines(const std::string &doc,
     uint32_t lo = UINT32_MAX, hi = 0;
     for (const auto &blk : fn.blocks) {
         for (const auto &ins : blk.instrs) {
-            if (ins.source_line == 0)
-                continue;
+            if (ins.source_line == 0) continue;
             lo = std::min(lo, ins.source_line);
             hi = std::max(hi, ins.source_line);
         }
     }
     nlohmann::json arr = nlohmann::json::array();
-    if (lo == UINT32_MAX || hi < lo)
-        return arr;
+    if (lo == UINT32_MAX || hi < lo) return arr;
     // Trocear el documento en lineas (1-based) y extraer [lo,hi].
     uint32_t cur = 1;
     size_t start = 0;
@@ -652,8 +628,7 @@ nlohmann::json function_source_lines(const std::string &doc,
         if (i == doc.size() || doc[i] == '\n') {
             if (cur >= lo && cur <= hi) {
                 std::string ln = doc.substr(start, i - start);
-                if (!ln.empty() && ln.back() == '\r')
-                    ln.pop_back();
+                if (!ln.empty() && ln.back() == '\r') ln.pop_back();
                 nlohmann::json jl;
                 jl["line"] = cur;
                 jl["text"] = std::move(ln);
@@ -661,8 +636,7 @@ nlohmann::json function_source_lines(const std::string &doc,
             }
             start = i + 1;
             ++cur;
-            if (cur > hi)
-                break;
+            if (cur > hi) break;
         }
     }
     return arr;
@@ -685,13 +659,10 @@ nlohmann::json function_args(const ir::IrFunction &fn,
     for (size_t i = 0; i < fn.params.size() && i < arg_regs.size(); ++i) {
         const ir::IrValueId pid = fn.params[i];
         std::string nm;
-        if (pid < fn.values.size())
-            nm = fn.values[pid].name;
+        if (pid < fn.values.size()) nm = fn.values[pid].name;
         // Quitar el '%' inicial de los nombres SSA ("%n" -> "n").
-        if (!nm.empty() && nm[0] == '%')
-            nm = nm.substr(1);
-        if (nm.empty())
-            nm = "arg" + std::to_string(i);
+        if (!nm.empty() && nm[0] == '%') nm = nm.substr(1);
+        if (nm.empty()) nm = "arg" + std::to_string(i);
         nlohmann::json ji;
         ji["name"] = nm;
         ji["reg"] = arg_regs[i];
@@ -709,8 +680,7 @@ nlohmann::json function_args(const ir::IrFunction &fn,
  */
 std::string ir_short(const ir::IrFunction &fn, const ir::IrInstr &in) {
     auto vn = [&](ir::IrValueId v) -> std::string {
-        if (v == ir::IR_NO_VALUE)
-            return "?";
+        if (v == ir::IR_NO_VALUE) return "?";
         return v < fn.values.size() ? fn.values[v].name
                                     : ("%" + std::to_string(v));
     };
@@ -736,8 +706,7 @@ std::string ir_short(const ir::IrFunction &fn, const ir::IrInstr &in) {
         return "inline_asm { " + std::to_string(ninstr) + " lineas }";
     }
     std::string s;
-    if (in.dst != ir::IR_NO_VALUE)
-        s += vn(in.dst) + " = ";
+    if (in.dst != ir::IR_NO_VALUE) s += vn(in.dst) + " = ";
     s += ir::ir_op_name(in.op);
     if (!in.func_name.empty()) {
         s += " ";
@@ -763,10 +732,8 @@ nlohmann::json ir_by_line(const ir::IrFunction &fn) {
     nlohmann::json o = nlohmann::json::object();
     for (const auto &blk : fn.blocks) {
         for (const auto &in : blk.instrs) {
-            if (in.source_line == 0)
-                continue;
-            if (in.op == ir::IrOp::NOP || in.op == ir::IrOp::PHI)
-                continue;
+            if (in.source_line == 0) continue;
+            if (in.op == ir::IrOp::NOP || in.op == ir::IrOp::PHI) continue;
             o[std::to_string(in.source_line)].push_back(ir_short(fn, in));
         }
     }
@@ -787,8 +754,7 @@ nlohmann::json ir_by_id(const ir::IrFunction &fn) {
         const auto &instrs = fn.blocks[b].instrs;
         for (size_t p = 0; p < instrs.size(); ++p) {
             const auto &in = instrs[p];
-            if (in.op == ir::IrOp::NOP || in.op == ir::IrOp::PHI)
-                continue;
+            if (in.op == ir::IrOp::NOP || in.op == ir::IrOp::PHI) continue;
             uint32_t id = static_cast<uint32_t>(b * 65536u + p);
             o[std::to_string(id)] = ir_short(fn, in);
         }
@@ -812,8 +778,7 @@ nlohmann::json ir_listing(const ir::IrFunction &fn) {
         jl["text"] = blk.name;
         arr.push_back(std::move(jl));
         for (const auto &in : blk.instrs) {
-            if (in.op == ir::IrOp::NOP || in.op == ir::IrOp::PHI)
-                continue;
+            if (in.op == ir::IrOp::NOP || in.op == ir::IrOp::PHI) continue;
             if (in.op == ir::IrOp::INLINE_ASM) {
                 // Expandir el cuerpo asm: una fila por linea (legible), con su
                 // linea .vx real (base+1+k); las etiquetas como "label".
@@ -827,20 +792,21 @@ nlohmann::json ir_listing(const ir::IrFunction &fn) {
                 const std::string &body = in.func_name;
                 while (pos <= body.size()) {
                     size_t nl = body.find('\n', pos);
-                    std::string ln = body.substr(
-                        pos, nl == std::string::npos ? std::string::npos
-                                                     : nl - pos);
+                    std::string ln = body.substr(pos, nl == std::string::npos
+                                                          ? std::string::npos
+                                                          : nl - pos);
                     size_t b0 = ln.find_first_not_of(" \t");
                     if (b0 != std::string::npos) {
                         std::string t = ln.substr(b0);
-                        while (!t.empty() && (t.back() == ' ' || t.back() == '\t'))
+                        while (!t.empty() &&
+                               (t.back() == ' ' || t.back() == '\t'))
                             t.pop_back();
                         bool is_lbl = !t.empty() && t.back() == ':';
                         nlohmann::json jo;
                         jo["kind"] = is_lbl ? "label" : "op";
                         jo["line"] = in.source_line + 1 + k;
-                        jo["text"] = is_lbl ? t.substr(0, t.size() - 1)
-                                            : ("  " + t);
+                        jo["text"] =
+                            is_lbl ? t.substr(0, t.size() - 1) : ("  " + t);
                         arr.push_back(std::move(jo));
                     }
                     ++k;
@@ -861,8 +827,8 @@ nlohmann::json ir_listing(const ir::IrFunction &fn) {
 
 /// Convierte las etiquetas de inline-asm (offset->nombre) a JSON {offset(hex
 /// "%04x"), name}, con el mismo formato de offset que las filas asm.
-nlohmann::json asm_labels_json(
-    const std::vector<std::pair<uint32_t, std::string>> &labels) {
+nlohmann::json
+asm_labels_json(const std::vector<std::pair<uint32_t, std::string>> &labels) {
     nlohmann::json arr = nlohmann::json::array();
     for (const auto &p : labels) {
         char b[16];
@@ -891,7 +857,10 @@ void annotate_vel(std::string &line,
     std::string cur;
     for (char c : line) {
         if (c == ' ' || c == '\t' || c == ',') {
-            if (!cur.empty()) { toks.push_back(cur); cur.clear(); }
+            if (!cur.empty()) {
+                toks.push_back(cur);
+                cur.clear();
+            }
         } else
             cur.push_back(c);
     }
@@ -929,16 +898,22 @@ void annotate_vel(std::string &line,
         if (!vstack.empty()) {
             std::string nm = vstack.back();
             vstack.pop_back();
-            if (!nm.empty()) { vr[regs[0]] = nm; add(regs[0] + " = " + nm); }
-            else vr.erase(regs[0]);
+            if (!nm.empty()) {
+                vr[regs[0]] = nm;
+                add(regs[0] + " = " + nm);
+            } else
+                vr.erase(regs[0]);
         } else
             vr.erase(regs[0]);
     } else if (is_mov && regs.size() >= 1) {
         const std::string dst = regs[0];
         if (regs.size() >= 2) { // mov rD, rS -> propaga
             auto it = vr.find(regs[1]);
-            if (it != vr.end()) { vr[dst] = it->second; add(dst + " = " + it->second); }
-            else vr.erase(dst);
+            if (it != vr.end()) {
+                vr[dst] = it->second;
+                add(dst + " = " + it->second);
+            } else
+                vr.erase(dst);
         } else
             vr.erase(dst); // mov rD, imm / @Absolute(...)
     } else if (is_branch) {
@@ -975,10 +950,8 @@ void annotate_vel(std::string &line,
  * @return Tier correspondiente (BARE por defecto).
  */
 aot::Tier tier_from_str(const std::string &tier) {
-    if (tier == "full")
-        return aot::Tier::FULL;
-    if (tier == "embed")
-        return aot::Tier::EMBED;
+    if (tier == "full") return aot::Tier::FULL;
+    if (tier == "embed") return aot::Tier::EMBED;
     return aot::Tier::BARE;
 }
 
@@ -1023,10 +996,8 @@ Inspector::Inspector(AnalysisEngine &engine, DocumentStore &docs) noexcept
 Inspector::~Inspector() = default;
 
 Inspector::JitState *Inspector::jit_state() {
-    if (jit_)
-        return jit_.get();
-    if (jit_init_failed_)
-        return nullptr;
+    if (jit_) return jit_.get();
+    if (jit_init_failed_) return nullptr;
     try {
         jit_ = std::make_unique<JitState>();
     } catch (...) {
@@ -1048,8 +1019,7 @@ std::string vel_extract_fn(const std::string &vel, const std::string &fn);
 nlohmann::json Inspector::bytecode(const std::string &uri,
                                    const std::string &function,
                                    const InspectTarget &target) {
-    if (!docs_.has(uri))
-        return {{"error", "documento no abierto"}};
+    if (!docs_.has(uri)) return {{"error", "documento no abierto"}};
     // El bytecode VM es arch-agnostico; el @c target->os solo selecciona las
     // ramas @Target.  Con target activo recompilamos fresco bajo el guard.
     InspectTargetGuard tguard(target);
@@ -1071,17 +1041,15 @@ nlohmann::json Inspector::bytecode(const std::string &uri,
     // marcadores `// @line N` y atribuir cada instruccion .vel a su linea.
     // Cache por (uri, hash, fn) -- recompilar es barato pero no en cada frame.
     const uint64_t hsh = fnv1a_hash(text);
-    const std::string key =
-        uri + "|" + std::to_string(hsh) + "|bc-gb:" + function +
-        target.cache_key();
+    const std::string key = uri + "|" + std::to_string(hsh) +
+                            "|bc-gb:" + function + target.cache_key();
     auto it = view_cache_.find(key);
-    if (it != view_cache_.end())
-        return nlohmann::json::parse(it->second);
+    if (it != view_cache_.end()) return nlohmann::json::parse(it->second);
 
     vx::CompileOptions opts;
     opts.module_name = "main";
-    opts.emit_debug = true;         // emite `// @line N` en el .vel
-    opts.emit_comptime_fns = true;  // incluir comptime fns (inspeccion)
+    opts.emit_debug = true;        // emite `// @line N` en el .vel
+    opts.emit_comptime_fns = true; // incluir comptime fns (inspeccion)
     vx::CompileResult res = vx::compile_vx_source(text, uri, opts);
     const std::string block = vel_extract_fn(res.vel_text, function);
 
@@ -1098,9 +1066,8 @@ nlohmann::json Inspector::bytecode(const std::string &uri,
         const ir::IrFunction *fn = pick_function(mod, function);
         if (fn) {
             src = function_source_lines(text, *fn);
-            args = function_args(
-                *fn, {"R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9",
-                      "R10", "R11", "R12"});
+            args = function_args(*fn, {"R1", "R2", "R3", "R4", "R5", "R6", "R7",
+                                       "R8", "R9", "R10", "R11", "R12"});
             irbl = ir_by_line(*fn);
             irlst = ir_listing(*fn);
             for (size_t i = 0; i < args.size(); ++i)
@@ -1116,8 +1083,7 @@ nlohmann::json Inspector::bytecode(const std::string &uri,
     int cur_line = 0;
     for (const auto &raw : ir_split_lines(block)) {
         size_t s = raw.find_first_not_of(" \t");
-        if (s == std::string::npos)
-            continue; // linea en blanco
+        if (s == std::string::npos) continue; // linea en blanco
         std::string t = raw.substr(s);
         if (t.rfind("// @line ", 0) == 0) {
             cur_line = std::atoi(t.c_str() + 9);
@@ -1143,20 +1109,24 @@ nlohmann::json Inspector::bytecode(const std::string &uri,
     {
         int n = static_cast<int>(asm_lines.size());
         for (int i = 0; i < n; ++i) {
-            if (asm_lines[i]["line"].get<int>() != 0)
-                continue;
+            if (asm_lines[i]["line"].get<int>() != 0) continue;
             int fill = 0;
             for (int j = i + 1; j < n; ++j) {
                 int lj = asm_lines[j]["line"].get<int>();
-                if (lj != 0) { fill = lj; break; }
+                if (lj != 0) {
+                    fill = lj;
+                    break;
+                }
             }
             if (fill == 0) // no hay siguiente; usar la previa
                 for (int j = i - 1; j >= 0; --j) {
                     int lj = asm_lines[j]["line"].get<int>();
-                    if (lj != 0) { fill = lj; break; }
+                    if (lj != 0) {
+                        fill = lj;
+                        break;
+                    }
                 }
-            if (fill != 0)
-                asm_lines[i]["line"] = fill;
+            if (fill != 0) asm_lines[i]["line"] = fill;
         }
     }
 
@@ -1174,22 +1144,20 @@ nlohmann::json Inspector::bytecode(const std::string &uri,
 
 nlohmann::json Inspector::ir(const std::string &uri, const std::string &phase,
                              const InspectTarget &target) {
-    if (!docs_.has(uri))
-        return {{"error", "documento no abierto"}};
+    if (!docs_.has(uri)) return {{"error", "documento no abierto"}};
     // @Target(os) del target: recompilamos fresco bajo el guard para que las
     // ramas por-OS se seleccionen segun el target (el arch no afecta al IR).
     InspectTargetGuard tguard(target);
     const std::string &text = docs_.text(uri);
 
-    if ( phase == "pre") {
+    if (phase == "pre") {
         // El IR pre-opt NO esta en el CompileResult cacheado por defecto:
         // exige recompilar con emit_ir_preopt.  Cachear por (uri, hash).
         const uint64_t h = fnv1a_hash(text);
         const std::string key =
             uri + "|" + std::to_string(h) + "|ir-pre" + target.cache_key();
         auto it = view_cache_.find(key);
-        if (it != view_cache_.end())
-            return {{"text", it->second}};
+        if (it != view_cache_.end()) return {{"text", it->second}};
 
         vx::CompileOptions opts;
         opts.module_name = "main";
@@ -1199,7 +1167,8 @@ nlohmann::json Inspector::ir(const std::string &uri, const std::string &phase,
             return {{"error", "no se pudo generar el IR pre-optimizacion"}};
         ir::IrModule mod;
         if (!ir::parse_ir_module_cache(res.ir_module_cache_bytes_preopt, mod))
-            return {{"error", "no se pudo deserializar el IR pre-optimizacion"}};
+            return {
+                {"error", "no se pudo deserializar el IR pre-optimizacion"}};
         std::ostringstream oss;
         ir::ir_print(mod, oss);
         std::string rendered = oss.str();
@@ -1254,7 +1223,10 @@ std::string ir_extract_fn(const std::string &dump, const std::string &fn) {
     const std::string want = "@function " + fn + "(";
     int found = -1;
     for (int i = 0; i < (int)lines.size(); ++i)
-        if (lines[i].rfind(want, 0) == 0) { found = i; break; }
+        if (lines[i].rfind(want, 0) == 0) {
+            found = i;
+            break;
+        }
     if (found < 0) return dump;
     int start = found;
     while (start > 0 && (lines[start - 1].rfind("@template_of", 0) == 0 ||
@@ -1262,7 +1234,10 @@ std::string ir_extract_fn(const std::string &dump, const std::string &fn) {
         --start;
     int end = (int)lines.size();
     for (int i = found + 1; i < (int)lines.size(); ++i)
-        if (lines[i].rfind("@function ", 0) == 0) { end = i; break; }
+        if (lines[i].rfind("@function ", 0) == 0) {
+            end = i;
+            break;
+        }
     std::string out;
     for (int i = start; i < end; ++i) {
         out += lines[i];
@@ -1341,38 +1316,50 @@ std::vector<DiffRow> ir_diff_rows(const std::string &a, const std::string &b) {
     // Secuencia bruta de operaciones (same/del/add).
     std::vector<DiffRow> ops;
     if ((long long)n * m > 4000000LL) {
-        for (int i = 0; i < n; ++i) ops.push_back({"del", A[i], ""});
-        for (int j = 0; j < m; ++j) ops.push_back({"add", "", B[j]});
+        for (int i = 0; i < n; ++i)
+            ops.push_back({"del", A[i], ""});
+        for (int j = 0; j < m; ++j)
+            ops.push_back({"add", "", B[j]});
     } else {
         std::vector<std::vector<int>> L(n + 1, std::vector<int>(m + 1, 0));
         for (int i = n - 1; i >= 0; --i)
             for (int j = m - 1; j >= 0; --j)
-                L[i][j] = (A[i] == B[j])
-                              ? L[i + 1][j + 1] + 1
-                              : std::max(L[i + 1][j], L[i][j + 1]);
+                L[i][j] = (A[i] == B[j]) ? L[i + 1][j + 1] + 1
+                                         : std::max(L[i + 1][j], L[i][j + 1]);
         int i = 0, j = 0;
         while (i < n && j < m) {
             if (A[i] == B[j]) {
                 ops.push_back({"same", A[i], B[i >= 0 ? j : j]});
                 ops.back().r = B[j];
-                ++i; ++j;
+                ++i;
+                ++j;
             } else if (L[i + 1][j] >= L[i][j + 1]) {
-                ops.push_back({"del", A[i], ""}); ++i;
+                ops.push_back({"del", A[i], ""});
+                ++i;
             } else {
-                ops.push_back({"add", "", B[j]}); ++j;
+                ops.push_back({"add", "", B[j]});
+                ++j;
             }
         }
-        while (i < n) { ops.push_back({"del", A[i], ""}); ++i; }
-        while (j < m) { ops.push_back({"add", "", B[j]}); ++j; }
+        while (i < n) {
+            ops.push_back({"del", A[i], ""});
+            ++i;
+        }
+        while (j < m) {
+            ops.push_back({"add", "", B[j]});
+            ++j;
+        }
     }
     // Emparejar rachas del+add consecutivas en filas "chg".
     std::vector<DiffRow> rows;
     for (size_t k = 0; k < ops.size();) {
         if (ops[k].kind == "del") {
             size_t d0 = k;
-            while (k < ops.size() && ops[k].kind == "del") ++k;
+            while (k < ops.size() && ops[k].kind == "del")
+                ++k;
             size_t a0 = k;
-            while (k < ops.size() && ops[k].kind == "add") ++k;
+            while (k < ops.size() && ops[k].kind == "add")
+                ++k;
             size_t nd = a0 - d0, na = k - a0;
             size_t paired = nd < na ? nd : na;
             for (size_t p = 0; p < paired; ++p)
@@ -1412,8 +1399,7 @@ nlohmann::json Inspector::ir_diff(const std::string &uri,
 }
 
 nlohmann::json Inspector::complexity(const std::string &uri) {
-    if (!docs_.has(uri))
-        return {{"error", "documento no abierto"}};
+    if (!docs_.has(uri)) return {{"error", "documento no abierto"}};
     const DocAnalysis &an = engine_.analyze_document(uri, docs_.text(uri));
     ir::IrModule mod;
     if (!parse_post_opt_module(an.result, mod))
@@ -1448,13 +1434,13 @@ namespace {
 
 /// @brief Una instruccion desensamblada con su rol en el flujo de control.
 struct AsmInsn {
-    uint64_t off = 0;     ///< offset relativo al inicio del codigo.
-    std::string text;     ///< "mnemonico operandos".
-    bool is_cond_jmp = false;  ///< salto condicional (je, jne, jl, ...).
-    bool is_uncond_jmp = false;///< salto incondicional (jmp).
-    bool is_ret = false;       ///< retorno (ret / iret).
-    bool has_target = false;   ///< el salto tiene destino inmediato resuelto.
-    uint64_t target = 0;       ///< offset destino del salto (si has_target).
+    uint64_t off = 0;           ///< offset relativo al inicio del codigo.
+    std::string text;           ///< "mnemonico operandos".
+    bool is_cond_jmp = false;   ///< salto condicional (je, jne, jl, ...).
+    bool is_uncond_jmp = false; ///< salto incondicional (jmp).
+    bool is_ret = false;        ///< retorno (ret / iret).
+    bool has_target = false;    ///< el salto tiene destino inmediato resuelto.
+    uint64_t target = 0;        ///< offset destino del salto (si has_target).
 };
 
 /// @brief Escapa un texto para un nodo mermaid entre comillas (["..."]).
@@ -1479,8 +1465,7 @@ std::string graphviz_escape(const std::string &s) {
     std::string o;
     o.reserve(s.size());
     for (char c : s) {
-        if (c == '"' || c == '\\')
-            o += '\\';
+        if (c == '"' || c == '\\') o += '\\';
         o += c;
     }
     return o;
@@ -1497,8 +1482,7 @@ std::string graphviz_escape(const std::string &s) {
 std::vector<AsmInsn> disasm_for_cfg(const uint8_t *code, size_t code_size,
                                     bool mode32) {
     std::vector<AsmInsn> out;
-    if (!code || code_size == 0)
-        return out;
+    if (!code || code_size == 0) return out;
     csh handle;
     if (cs_open(CS_ARCH_X86, mode32 ? CS_MODE_32 : CS_MODE_64, &handle) !=
         CS_ERR_OK)
@@ -1540,8 +1524,7 @@ std::vector<AsmInsn> disasm_for_cfg(const uint8_t *code, size_t code_size,
         }
         out.push_back(std::move(a));
     }
-    if (count > 0)
-        cs_free(insn, count);
+    if (count > 0) cs_free(insn, count);
     cs_close(&handle);
     return out;
 }
@@ -1556,12 +1539,11 @@ std::vector<AsmInsn> disasm_for_cfg(const uint8_t *code, size_t code_size,
  * incondicional -> destino; condicional -> destino (T) + caida (F); ret ->
  * sin aristas; resto -> caida al siguiente bloque.
  */
-std::string native_cfg_diagram(
-    const std::vector<AsmInsn> &ins,
-    const std::vector<std::pair<uint32_t, std::string>> &labels,
-    const std::string &fn_name, const std::string &format) {
-    if (ins.empty())
-        return std::string();
+std::string
+native_cfg_diagram(const std::vector<AsmInsn> &ins,
+                   const std::vector<std::pair<uint32_t, std::string>> &labels,
+                   const std::string &fn_name, const std::string &format) {
+    if (ins.empty()) return std::string();
 
     // Mapa offset -> etiqueta del backend (nombre de bloque IR).
     std::map<uint64_t, std::string> lbl;
@@ -1583,8 +1565,7 @@ std::string native_cfg_diagram(
             a.target < code_end)
             leaders.insert(a.target);
         if (a.is_cond_jmp || a.is_uncond_jmp || a.is_ret) {
-            if (i + 1 < ins.size())
-                leaders.insert(ins[i + 1].off);
+            if (i + 1 < ins.size()) leaders.insert(ins[i + 1].off);
         }
     }
 
@@ -1613,8 +1594,7 @@ std::string native_cfg_diagram(
         blocks[i].start = ord[i];
     for (const AsmInsn &a : ins) {
         int id = block_id(a.off);
-        if (id >= 0)
-            blocks[id].body.push_back(&a);
+        if (id >= 0) blocks[id].body.push_back(&a);
     }
 
     auto node_name = [&](size_t i) {
@@ -1644,20 +1624,16 @@ std::string native_cfg_diagram(
         }
         // Aristas.
         for (size_t i = 0; i < blocks.size(); ++i) {
-            if (blocks[i].body.empty())
-                continue;
+            if (blocks[i].body.empty()) continue;
             const AsmInsn *term = blocks[i].body.back();
             auto edge = [&](uint64_t tgt, const char *lab) {
                 // Destino fuera del codigo de la funcion (tail-call / salto
                 // externo resuelto por reloc): no es una arista del CFG local.
-                if (tgt >= code_end)
-                    return;
+                if (tgt >= code_end) return;
                 int id = block_id(tgt);
-                if (id < 0)
-                    return;
+                if (id < 0) return;
                 out << "  " << node_name(i) << " -> " << node_name(id);
-                if (lab && lab[0])
-                    out << " [label=\"" << lab << "\"]";
+                if (lab && lab[0]) out << " [label=\"" << lab << "\"]";
                 out << ";\n";
             };
             if (term->is_ret) {
@@ -1666,8 +1642,7 @@ std::string native_cfg_diagram(
                 edge(term->target, "");
             } else if (term->is_cond_jmp && term->has_target) {
                 edge(term->target, "T");
-                if (i + 1 < blocks.size())
-                    edge(blocks[i + 1].start, "F");
+                if (i + 1 < blocks.size()) edge(blocks[i + 1].start, "F");
             } else if (i + 1 < blocks.size()) {
                 edge(blocks[i + 1].start, "");
             }
@@ -1685,20 +1660,16 @@ std::string native_cfg_diagram(
         out << "  " << node_name(i) << "[\"" << body << "\"]\n";
     }
     for (size_t i = 0; i < blocks.size(); ++i) {
-        if (blocks[i].body.empty())
-            continue;
+        if (blocks[i].body.empty()) continue;
         const AsmInsn *term = blocks[i].body.back();
         auto edge = [&](uint64_t tgt, const char *lab) {
             // Destino fuera del codigo de la funcion (tail-call / salto externo
             // resuelto por reloc): no es una arista del CFG local.
-            if (tgt >= code_end)
-                return;
+            if (tgt >= code_end) return;
             int id = block_id(tgt);
-            if (id < 0)
-                return;
+            if (id < 0) return;
             out << "  " << node_name(i) << " -->";
-            if (lab && lab[0])
-                out << "|" << lab << "|";
+            if (lab && lab[0]) out << "|" << lab << "|";
             out << ' ' << node_name(id) << "\n";
         };
         if (term->is_ret) {
@@ -1707,8 +1678,7 @@ std::string native_cfg_diagram(
             edge(term->target, "");
         } else if (term->is_cond_jmp && term->has_target) {
             edge(term->target, "T");
-            if (i + 1 < blocks.size())
-                edge(blocks[i + 1].start, "F");
+            if (i + 1 < blocks.size()) edge(blocks[i + 1].start, "F");
         } else if (i + 1 < blocks.size()) {
             edge(blocks[i + 1].start, "");
         }
@@ -1723,20 +1693,19 @@ nlohmann::json Inspector::diagram(const std::string &uri,
                                   const std::string &format, bool cost,
                                   const InspectTarget &target,
                                   const std::string &function) {
-    if (!docs_.has(uri))
-        return {{"error", "documento no abierto"}};
+    if (!docs_.has(uri)) return {{"error", "documento no abierto"}};
     // El @c target->os selecciona las ramas @Target en las fases IR/vel del
     // diagrama.  El guard se aplica a la recompilacion que hace la generacion.
     InspectTargetGuard tguard(target);
     const std::string &text = docs_.text(uri);
 
     // Validar kind y format antes de recompilar.
-    const bool kind_ok = (kind == "ast" || kind == "ir-pre" ||
-                          kind == "ir-post" || kind == "vel" || kind == "asm" ||
-                          kind == "types");
+    const bool kind_ok =
+        (kind == "ast" || kind == "ir-pre" || kind == "ir-post" ||
+         kind == "vel" || kind == "asm" || kind == "types");
     if (!kind_ok)
-        return {{"error",
-                 "kind invalido (use ast|ir-pre|ir-post|vel|asm|types)"}};
+        return {
+            {"error", "kind invalido (use ast|ir-pre|ir-post|vel|asm|types)"}};
     const bool fmt_ok =
         (format == "mermaid" || format == "graphviz" || format == "html");
     if (!fmt_ok)
@@ -1751,8 +1720,7 @@ nlohmann::json Inspector::diagram(const std::string &uri,
                                  "|diagasm:" + format + ":" + function +
                                  target.cache_key();
         auto ait = view_cache_.find(akey);
-        if (ait != view_cache_.end())
-            return {{"text", ait->second}};
+        if (ait != view_cache_.end()) return {{"text", ait->second}};
 
         ir::IrModule mod;
         bool got_ir = false;
@@ -1766,8 +1734,8 @@ nlohmann::json Inspector::diagram(const std::string &uri,
             got_ir = parse_post_opt_module(an.result, mod);
         }
         if (!got_ir)
-            return {{"error",
-                     "el modulo no produjo IR (revisa los diagnosticos)"}};
+            return {
+                {"error", "el modulo no produjo IR (revisa los diagnosticos)"}};
 
         const ir::IrFunction *fn = pick_function(mod, function);
         if (!fn && !function.empty()) {
@@ -1799,9 +1767,8 @@ nlohmann::json Inspector::diagram(const std::string &uri,
                 /*mode32=*/false, jit::FloatIsa::SSE2,
                 /*emit_line_map=*/false, nullptr, &asm_labels);
         } catch (...) {
-            return {{"error",
-                     "el codegen vreg lanzo una excepcion para '" + fn->name +
-                         "'"}};
+            return {{"error", "el codegen vreg lanzo una excepcion para '" +
+                                  fn->name + "'"}};
         }
         if (bytes.empty())
             return {{"unsupported", true},
@@ -1816,8 +1783,7 @@ nlohmann::json Inspector::diagram(const std::string &uri,
         std::string body =
             native_cfg_diagram(ins, asm_labels, fn->name,
                                format == "graphviz" ? "graphviz" : "mermaid");
-        if (body.empty())
-            return {{"error", "el CFG nativo salio vacio"}};
+        if (body.empty()) return {{"error", "el CFG nativo salio vacio"}};
         // Para HTML envolvemos el mermaid en una pagina minima con el runtime.
         std::string out_text;
         if (format == "html") {
@@ -1843,8 +1809,7 @@ nlohmann::json Inspector::diagram(const std::string &uri,
                             ":" + format + ":" + (cost ? "1" : "0") +
                             target.cache_key();
     auto it = view_cache_.find(key);
-    if (it != view_cache_.end())
-        return {{"text", it->second}};
+    if (it != view_cache_.end()) return {{"text", it->second}};
 
     // Activar SOLO el flag de la vista pedida (uno por kind x format).
     vx::CompileOptions opts;
@@ -1853,58 +1818,88 @@ nlohmann::json Inspector::diagram(const std::string &uri,
     // se conserva en la clave de cache por compatibilidad de la peticion LSP).
     (void)cost;
     if (format == "mermaid") {
-        if (kind == "ast") opts.dump_mermaid_ast = true;
-        else if (kind == "ir-pre") opts.dump_mermaid_ir_pre = true;
-        else if (kind == "ir-post") opts.dump_mermaid_ir_post = true;
-        else if (kind == "types") opts.dump_mermaid_types = true;
-        else opts.dump_mermaid_vel = true;
+        if (kind == "ast")
+            opts.dump_mermaid_ast = true;
+        else if (kind == "ir-pre")
+            opts.dump_mermaid_ir_pre = true;
+        else if (kind == "ir-post")
+            opts.dump_mermaid_ir_post = true;
+        else if (kind == "types")
+            opts.dump_mermaid_types = true;
+        else
+            opts.dump_mermaid_vel = true;
     } else if (format == "graphviz") {
-        if (kind == "ast") opts.dump_graphviz_ast = true;
-        else if (kind == "ir-pre") opts.dump_graphviz_ir_pre = true;
-        else if (kind == "ir-post") opts.dump_graphviz_ir_post = true;
-        else if (kind == "types") opts.dump_graphviz_types = true;
-        else opts.dump_graphviz_vel = true;
+        if (kind == "ast")
+            opts.dump_graphviz_ast = true;
+        else if (kind == "ir-pre")
+            opts.dump_graphviz_ir_pre = true;
+        else if (kind == "ir-post")
+            opts.dump_graphviz_ir_post = true;
+        else if (kind == "types")
+            opts.dump_graphviz_types = true;
+        else
+            opts.dump_graphviz_vel = true;
     } else { // html
-        if (kind == "ast") opts.dump_html_ast = true;
-        else if (kind == "ir-pre") opts.dump_html_ir_pre = true;
-        else if (kind == "ir-post") opts.dump_html_ir_post = true;
-        else if (kind == "types") opts.dump_html_types = true;
-        else opts.dump_html_vel = true;
+        if (kind == "ast")
+            opts.dump_html_ast = true;
+        else if (kind == "ir-pre")
+            opts.dump_html_ir_pre = true;
+        else if (kind == "ir-post")
+            opts.dump_html_ir_post = true;
+        else if (kind == "types")
+            opts.dump_html_types = true;
+        else
+            opts.dump_html_vel = true;
     }
 
     vx::CompileResult res = vx::compile_vx_source(text, uri, opts);
     // Seleccionar el campo del CompileResult que corresponde a la vista.
     std::string out_text;
     if (format == "mermaid") {
-        if (kind == "ast") out_text = res.mermaid_ast;
-        else if (kind == "ir-pre") out_text = res.mermaid_ir_pre;
-        else if (kind == "ir-post") out_text = res.mermaid_ir_post;
-        else if (kind == "types") out_text = res.mermaid_types;
-        else out_text = res.mermaid_vel;
+        if (kind == "ast")
+            out_text = res.mermaid_ast;
+        else if (kind == "ir-pre")
+            out_text = res.mermaid_ir_pre;
+        else if (kind == "ir-post")
+            out_text = res.mermaid_ir_post;
+        else if (kind == "types")
+            out_text = res.mermaid_types;
+        else
+            out_text = res.mermaid_vel;
     } else if (format == "graphviz") {
-        if (kind == "ast") out_text = res.graphviz_ast;
-        else if (kind == "ir-pre") out_text = res.graphviz_ir_pre;
-        else if (kind == "ir-post") out_text = res.graphviz_ir_post;
-        else if (kind == "types") out_text = res.graphviz_types;
-        else out_text = res.graphviz_vel;
+        if (kind == "ast")
+            out_text = res.graphviz_ast;
+        else if (kind == "ir-pre")
+            out_text = res.graphviz_ir_pre;
+        else if (kind == "ir-post")
+            out_text = res.graphviz_ir_post;
+        else if (kind == "types")
+            out_text = res.graphviz_types;
+        else
+            out_text = res.graphviz_vel;
     } else {
-        if (kind == "ast") out_text = res.html_ast;
-        else if (kind == "ir-pre") out_text = res.html_ir_pre;
-        else if (kind == "ir-post") out_text = res.html_ir_post;
-        else if (kind == "types") out_text = res.html_types;
-        else out_text = res.html_vel;
+        if (kind == "ast")
+            out_text = res.html_ast;
+        else if (kind == "ir-pre")
+            out_text = res.html_ir_pre;
+        else if (kind == "ir-post")
+            out_text = res.html_ir_post;
+        else if (kind == "types")
+            out_text = res.html_types;
+        else
+            out_text = res.html_vel;
     }
 
     if (out_text.empty())
-        return {{"error",
-                 "el diagrama salio vacio (revisa los diagnosticos del fuente)"}};
+        return {
+            {"error",
+             "el diagrama salio vacio (revisa los diagnosticos del fuente)"}};
     view_cache_[key] = out_text;
     return {{"text", std::move(out_text)}};
 }
 
 nlohmann::json Inspector::functions(const std::string &uri) {
-    if (!docs_.has(uri))
-        return {{"error", "documento no abierto"}};
+    if (!docs_.has(uri)) return {{"error", "documento no abierto"}};
     const DocAnalysis &an = engine_.analyze_document(uri, docs_.text(uri));
     ir::IrModule mod;
     if (!parse_post_opt_module(an.result, mod))
@@ -1914,8 +1909,7 @@ nlohmann::json Inspector::functions(const std::string &uri) {
     for (const auto &fn : mod.functions) {
         // Saltar stubs nativos y funciones macro-compiladas (no son del
         // codigo del usuario en el sentido habitual).
-        if (fn.is_native || fn.is_macro_compiled)
-            continue;
+        if (fn.is_native || fn.is_macro_compiled) continue;
         nlohmann::json jf;
         jf["name"] = fn.name;
         jf["line"] = first_source_line(fn);
@@ -1928,8 +1922,7 @@ nlohmann::json Inspector::functions(const std::string &uri) {
 
 nlohmann::json Inspector::aot_compat(const std::string &uri,
                                      const std::string &tier) {
-    if (!docs_.has(uri))
-        return {{"error", "documento no abierto"}};
+    if (!docs_.has(uri)) return {{"error", "documento no abierto"}};
     const DocAnalysis &an = engine_.analyze_document(uri, docs_.text(uri));
     ir::IrModule mod;
     if (!parse_post_opt_module(an.result, mod))
@@ -1963,8 +1956,7 @@ nlohmann::json Inspector::aot_compat(const std::string &uri,
 nlohmann::json Inspector::jit_asm(const std::string &uri,
                                   const std::string &function,
                                   const InspectTarget &target) {
-    if (!docs_.has(uri))
-        return {{"error", "documento no abierto"}};
+    if (!docs_.has(uri)) return {{"error", "documento no abierto"}};
     // El JIT es x86-64 host; el @c target->os solo selecciona las ramas
     // @Target y la ABI mostrada.  Con un target activo recompilamos fresco
     // bajo el guard para que la seleccion @Target sea la del target.
@@ -2032,18 +2024,18 @@ nlohmann::json Inspector::jit_asm(const std::string &uri,
                               fn->name + "'"}};
     }
     if (bytes.empty())
-        return {{"unsupported", true},
-                {"reason", "la funcion '" + fn->name +
-                               "' usa operaciones IR aun no soportadas por el "
-                               "backend vreg (float/strings/algunos builtins)"}};
+        return {
+            {"unsupported", true},
+            {"reason", "la funcion '" + fn->name +
+                           "' usa operaciones IR aun no soportadas por el "
+                           "backend vreg (float/strings/algunos builtins)"}};
 
     std::string text = disasm_x86_64(bytes.data(), bytes.size(), 0);
-    nlohmann::json args =
-        function_args(*fn, target_is_sysv(target)
-                               ? std::vector<const char *>{"rdi", "rsi", "rdx",
-                                                           "rcx", "r8", "r9"}
-                               : std::vector<const char *>{"rcx", "rdx", "r8",
-                                                           "r9"});
+    nlohmann::json args = function_args(
+        *fn,
+        target_is_sysv(target)
+            ? std::vector<const char *>{"rdi", "rsi", "rdx", "rcx", "r8", "r9"}
+            : std::vector<const char *>{"rcx", "rdx", "r8", "r9"});
     std::vector<std::pair<std::string, std::string>> seed;
     for (const auto &a : args)
         seed.emplace_back(a["reg"].get<std::string>(),
@@ -2065,7 +2057,8 @@ nlohmann::json Inspector::jit_asm(const std::string &uri,
     out["ir_by_id"] = ir_by_id(*fn);
     {
         nlohmann::json bn = nlohmann::json::array();
-        for (const auto &blk : fn->blocks) bn.push_back(blk.name);
+        for (const auto &blk : fn->blocks)
+            bn.push_back(blk.name);
         out["block_names"] = std::move(bn);
     }
     out["ir_listing"] = ir_listing(*fn);
@@ -2077,8 +2070,7 @@ nlohmann::json Inspector::jit_asm(const std::string &uri,
 nlohmann::json Inspector::aot_asm(const std::string &uri,
                                   const std::string &function,
                                   const InspectTarget &target) {
-    if (!docs_.has(uri))
-        return {{"error", "documento no abierto"}};
+    if (!docs_.has(uri)) return {{"error", "documento no abierto"}};
     // La vista AOT por target: aplicar @Target(os) + ABI SysV/Win64 (fmt) +
     // codegen x86-64/x86-32 (arch).  Con target activo recompilamos con el
     // lowering AOT nativo (native_poo) bajo el guard para reflejar el target.
@@ -2135,8 +2127,8 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
     aot_tgt.tier = aot::Tier::BARE;
     std::vector<aot::AotIncompat> issues;
     if (!aot::aot_analyze_function(*fn, aot_tgt, issues)) {
-        std::string reason = "la funcion '" + fn->name +
-                             "' no es compatible con AOT bare";
+        std::string reason =
+            "la funcion '" + fn->name + "' no es compatible con AOT bare";
         if (!issues.empty()) {
             reason += ": ";
             reason += ir::ir_op_name(issues.front().op);
@@ -2161,8 +2153,8 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
             /*target_sysv=*/sysv, /*mode32=*/mode32, jit::FloatIsa::SSE2,
             /*emit_line_map=*/true, &line_map, &asm_labels);
     } catch (...) {
-        return {{"error", "el codegen AOT lanzo una excepcion para '" +
-                              fn->name + "'"}};
+        return {{"error",
+                 "el codegen AOT lanzo una excepcion para '" + fn->name + "'"}};
     }
     if (bytes.empty())
         return {{"incompatible", true},
@@ -2170,12 +2162,10 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
                                "' no esta soportada por el selector vreg AOT"}};
 
     std::string text = disasm_x86_64(bytes.data(), bytes.size(), 0, mode32);
-    nlohmann::json args =
-        function_args(*fn, sysv
-                               ? std::vector<const char *>{"rdi", "rsi", "rdx",
-                                                           "rcx", "r8", "r9"}
-                               : std::vector<const char *>{"rcx", "rdx", "r8",
-                                                           "r9"});
+    nlohmann::json args = function_args(
+        *fn,
+        sysv ? std::vector<const char *>{"rdi", "rsi", "rdx", "rcx", "r8", "r9"}
+             : std::vector<const char *>{"rcx", "rdx", "r8", "r9"});
     std::vector<std::pair<std::string, std::string>> seed;
     for (const auto &a : args)
         seed.emplace_back(a["reg"].get<std::string>(),
@@ -2214,7 +2204,8 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
     out["ir_by_id"] = ir_by_id(*fn);
     {
         nlohmann::json bn = nlohmann::json::array();
-        for (const auto &blk : fn->blocks) bn.push_back(blk.name);
+        for (const auto &blk : fn->blocks)
+            bn.push_back(blk.name);
         out["block_names"] = std::move(bn);
     }
     out["ir_listing"] = ir_listing(*fn);
@@ -2242,8 +2233,7 @@ std::pair<size_t, size_t> count_diags(const vx::CompileResult &res) {
 
 nlohmann::json Inspector::modes(const std::string &uri, const std::string &mode,
                                 const std::string &tier) {
-    if (!docs_.has(uri))
-        return {{"error", "documento no abierto"}};
+    if (!docs_.has(uri)) return {{"error", "documento no abierto"}};
     const std::string &text = docs_.text(uri);
     const bool all = mode.empty();
     nlohmann::json arr = nlohmann::json::array();
@@ -2340,8 +2330,8 @@ nlohmann::json Inspector::modes(const std::string &uri, const std::string &mode,
             m["compatible"] = report.compatible;
             m["issues"] = std::move(issues);
             m["ok_functions"] = std::move(okfns);
-            m["note"] = "compilacion nativa standalone (POO nativa, tier " + t +
-                        ")";
+            m["note"] =
+                "compilacion nativa standalone (POO nativa, tier " + t + ")";
         }
         arr.push_back(std::move(m));
     }
@@ -2354,8 +2344,7 @@ nlohmann::json Inspector::modes(const std::string &uri, const std::string &mode,
 }
 
 nlohmann::json Inspector::macro_expand(const std::string &uri) {
-    if (!docs_.has(uri))
-        return {{"error", "documento no abierto"}};
+    if (!docs_.has(uri)) return {{"error", "documento no abierto"}};
     // Las expectaciones de @Macro y las razones de skip se pueblan en la
     // compilacion normal: reutilizar el CompileResult cacheado por el motor.
     const DocAnalysis &an = engine_.analyze_document(uri, docs_.text(uri));
@@ -2389,8 +2378,7 @@ nlohmann::json Inspector::macro_expand(const std::string &uri) {
 }
 
 nlohmann::json Inspector::comptime_values(const std::string &uri) {
-    if (!docs_.has(uri))
-        return {{"error", "documento no abierto"}};
+    if (!docs_.has(uri)) return {{"error", "documento no abierto"}};
     const std::string &text = docs_.text(uri);
 
     // El snapshot de valores comptime exige recompilar con el flag
@@ -2399,8 +2387,7 @@ nlohmann::json Inspector::comptime_values(const std::string &uri) {
     const uint64_t h = fnv1a_hash(text);
     const std::string key = uri + "|" + std::to_string(h) + "|comptime-values";
     auto it = view_cache_.find(key);
-    if (it != view_cache_.end())
-        return nlohmann::json::parse(it->second);
+    if (it != view_cache_.end()) return nlohmann::json::parse(it->second);
 
     vx::CompileOptions opts;
     opts.module_name = "main";

@@ -39,8 +39,8 @@
  * que son ISA-neutrales.
  *
  * i18n: el objetivo produce NUMEROS (scores), no diagnosticos -> sin catalogo.
- * El @c explain() de la @c DecisionPolicy (nivel siguiente) SI usara el catalogo
- * i18n para justificar una decision al usuario.
+ * El @c explain() de la @c DecisionPolicy (nivel siguiente) SI usara el
+ * catalogo i18n para justificar una decision al usuario.
  *
  * Fase 0: ADITIVO, funciones puras, sin consumidores (solo el test).
  */
@@ -63,19 +63,20 @@ namespace rbank {
  *        presupuesto, y un Predictor (MLGO futuro) aprenderlos.
  */
 struct ObjectiveWeights {
-    double latency           = 1.0;  ///< coste de latencia (ciclos ruta critica).
-    double throughput        = 1.0;  ///< coste de throughput (uops/ciclo).
-    double code_size         = 0.5;  ///< bytes de codigo emitidos.
-    double energy            = 0.0;  ///< energia (off por defecto).
-    double cache_pressure    = 0.5;  ///< presion de cache de datos (spills en pila).
+    double latency = 1.0;    ///< coste de latencia (ciclos ruta critica).
+    double throughput = 1.0; ///< coste de throughput (uops/ciclo).
+    double code_size = 0.5;  ///< bytes de codigo emitidos.
+    double energy = 0.0;     ///< energia (off por defecto).
+    double cache_pressure =
+        0.5; ///< presion de cache de datos (spills en pila).
     double register_pressure = 0.25; ///< presion de registros (lanes ocupadas).
-    double spill             = 4.0;  ///< un spill (load/store extra por uso).
-    double move              = 1.0;  ///< un mov (tie de two-address roto).
-    double callsave          = 2.0;  ///< salvar/restaurar alrededor de un CALL.
+    double spill = 4.0;              ///< un spill (load/store extra por uso).
+    double move = 1.0;               ///< un mov (tie de two-address roto).
+    double callsave = 2.0;           ///< salvar/restaurar alrededor de un CALL.
     // Dimensiones del scheduler (arch-data las afinara; comparten Objective):
-    double dependency        = 1.0;  ///< stalls por cadena de dependencias.
-    double port_pressure     = 0.5;  ///< contencion de puertos de ejecucion.
-    double scheduler         = 0.0;  ///< dificultad de scheduling (meta; off).
+    double dependency = 1.0;    ///< stalls por cadena de dependencias.
+    double port_pressure = 0.5; ///< contencion de puertos de ejecucion.
+    double scheduler = 0.0;     ///< dificultad de scheduling (meta; off).
 };
 
 /**
@@ -84,27 +85,32 @@ struct ObjectiveWeights {
  *        rellenan los estimadores + arch-data.  @c objective_score los agrega.
  */
 struct ObjectiveTerms {
-    double latency           = 0.0;
-    double throughput        = 0.0;
-    double code_size         = 0.0;
-    double energy            = 0.0;
-    double cache_pressure    = 0.0;
+    double latency = 0.0;
+    double throughput = 0.0;
+    double code_size = 0.0;
+    double energy = 0.0;
+    double cache_pressure = 0.0;
     double register_pressure = 0.0;
-    double spill             = 0.0;
-    double move              = 0.0;
-    double callsave          = 0.0;
-    double dependency        = 0.0;  ///< stalls por dependencias (scheduler).
-    double port_pressure     = 0.0;  ///< contencion de puertos (scheduler).
-    double scheduler         = 0.0;  ///< dificultad de scheduling (meta).
+    double spill = 0.0;
+    double move = 0.0;
+    double callsave = 0.0;
+    double dependency = 0.0;    ///< stalls por dependencias (scheduler).
+    double port_pressure = 0.0; ///< contencion de puertos (scheduler).
+    double scheduler = 0.0;     ///< dificultad de scheduling (meta).
 
     /** @brief Suma componente a componente (agregar candidatos parciales). */
     ObjectiveTerms &operator+=(const ObjectiveTerms &o) noexcept {
-        latency += o.latency;       throughput += o.throughput;
-        code_size += o.code_size;   energy += o.energy;
+        latency += o.latency;
+        throughput += o.throughput;
+        code_size += o.code_size;
+        energy += o.energy;
         cache_pressure += o.cache_pressure;
         register_pressure += o.register_pressure;
-        spill += o.spill;           move += o.move;   callsave += o.callsave;
-        dependency += o.dependency; port_pressure += o.port_pressure;
+        spill += o.spill;
+        move += o.move;
+        callsave += o.callsave;
+        dependency += o.dependency;
+        port_pressure += o.port_pressure;
         scheduler += o.scheduler;
         return *this;
     }
@@ -118,8 +124,8 @@ inline double objective_score(const ObjectiveTerms &t,
     return w.latency * t.latency + w.throughput * t.throughput +
            w.code_size * t.code_size + w.energy * t.energy +
            w.cache_pressure * t.cache_pressure +
-           w.register_pressure * t.register_pressure +
-           w.spill * t.spill + w.move * t.move + w.callsave * t.callsave +
+           w.register_pressure * t.register_pressure + w.spill * t.spill +
+           w.move * t.move + w.callsave * t.callsave +
            w.dependency * t.dependency + w.port_pressure * t.port_pressure +
            w.scheduler * t.scheduler;
 }
@@ -141,7 +147,8 @@ inline double objective_score(const ObjectiveTerms &t,
 inline double static_execution_weight(uint16_t loop_depth) noexcept {
     const uint16_t d = loop_depth > 9 ? 9 : loop_depth; // cota 10^9.
     double f = 1.0;
-    for (uint16_t i = 0; i < d; ++i) f *= 10.0;
+    for (uint16_t i = 0; i < d; ++i)
+        f *= 10.0;
     return f;
 }
 
@@ -171,14 +178,16 @@ inline double spill_cost_of(const ValueRequirements &r,
  * valor no cruza calls, cero (preferencia neutra).
  */
 inline double callsave_cost_of(const ValueRequirements &r, SavePolicy sp,
-                              uint32_t n_calls) noexcept {
+                               uint32_t n_calls) noexcept {
     if (!r.crosses_call) return 0.0;
-    if (sp == SavePolicy::PRESERVED) return 2.0;      // una vez.
-    return 2.0 * static_cast<double>(n_calls);        // alrededor de cada call.
+    if (sp == SavePolicy::PRESERVED) return 2.0; // una vez.
+    return 2.0 * static_cast<double>(n_calls);   // alrededor de cada call.
 }
 
 /** @brief Coste de un mov (tie de two-address roto: dst != src1). */
-inline double move_cost() noexcept { return 1.0; }
+inline double move_cost() noexcept {
+    return 1.0;
+}
 
 /**
  * @brief Terminos de objetivo de ASIGNAR el valor @p r a la lane @p lane.
@@ -218,10 +227,10 @@ inline ObjectiveTerms spill_terms(const ValueRequirements &r,
 //  El coste real de un reload/spill/move lo aporta el Target (MachineCostFacts,
 //  producido por el backend desde el SchedCostModel).  Para NO acoplar el
 //  Objective a la ISA, el CostAdapter (codegen/rbank/adapters/cost_adapter.h)
-//  traduce esos InstrCost a esta tarjeta de NUMEROS; los estimadores de abajo la
-//  consumen.  Las sobrecargas CON card son ADITIVAS: las de arriba (sin card)
-//  siguen dando la heuristica generica identica -> cero cambio de conducta hasta
-//  que un consumidor pase una card.
+//  traduce esos InstrCost a esta tarjeta de NUMEROS; los estimadores de abajo
+//  la consumen.  Las sobrecargas CON card son ADITIVAS: las de arriba (sin
+//  card) siguen dando la heuristica generica identica -> cero cambio de
+//  conducta hasta que un consumidor pase una card.
 //
 //      Decision -> spill_terms(card) -> SpillCostCard -> MachineCostFacts ->
 //                                                        SchedCostModel
@@ -235,10 +244,10 @@ inline ObjectiveTerms spill_terms(const ValueRequirements &r,
  *        generico (por si se usa sin card).
  */
 struct SpillCostCard {
-    double reload_latency = 4.0;  ///< recargar un valor derramado (load).
-    double store_latency  = 1.0;  ///< derramar un valor a la pila (store).
-    double move_latency   = 1.0;  ///< copia registro-registro (coalescing).
-    bool   from_hw        = false;///< true = de MachineCostFacts; false = fallback.
+    double reload_latency = 4.0; ///< recargar un valor derramado (load).
+    double store_latency = 1.0;  ///< derramar un valor a la pila (store).
+    double move_latency = 1.0;   ///< copia registro-registro (coalescing).
+    bool from_hw = false; ///< true = de MachineCostFacts; false = fallback.
 };
 
 /**
@@ -253,14 +262,15 @@ inline double spill_cost_of(const ValueRequirements &r, double exec_weight,
 
 /**
  * @brief Terminos de derrame con coste de HW real.  @c spill = reloads por uso;
- *        @c latency = el store del spill (una vez en el def); @c cache_pressure =
- *        un slot de pila.
+ *        @c latency = el store del spill (una vez en el def); @c cache_pressure
+ * = un slot de pila.
  */
-inline ObjectiveTerms spill_terms(const ValueRequirements &r, double exec_weight,
+inline ObjectiveTerms spill_terms(const ValueRequirements &r,
+                                  double exec_weight,
                                   const SpillCostCard &hw) noexcept {
     ObjectiveTerms t;
-    t.spill          = spill_cost_of(r, exec_weight, hw);
-    t.latency        = hw.store_latency;
+    t.spill = spill_cost_of(r, exec_weight, hw);
+    t.latency = hw.store_latency;
     t.cache_pressure = 1.0;
     return t;
 }

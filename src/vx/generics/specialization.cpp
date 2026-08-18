@@ -91,8 +91,7 @@ bool match_spec_pattern(TypeChecker &tc, const ast::TypeNode *pat,
         return match_spec_pattern(tc, a->element_type.get(), *arg.pointee,
                                   fresh, bindings);
     }
-    default:
-        return false; // fn, etc.: no soportado como patron
+    default: return false; // fn, etc.: no soportado como patron
     }
 }
 
@@ -101,12 +100,11 @@ bool match_spec_pattern(TypeChecker &tc, const ast::TypeNode *pat,
 /// especializacion mas especifica que matchee @p args.  TOTAL (sin params
 /// frescos) gana a PARCIAL; entre iguales, la primera declarada.
 template <class DeclT>
-const DeclT *select_spec_generic(TypeChecker &tc,
-                                 const std::vector<size_t> &candidate_indices,
-                                 const std::vector<std::unique_ptr<ast::Node>> &decls,
-                                 const std::vector<Type> &args,
-                                 std::vector<std::string> &out_params,
-                                 std::vector<Type> &out_args) {
+const DeclT *select_spec_generic(
+    TypeChecker &tc, const std::vector<size_t> &candidate_indices,
+    const std::vector<std::unique_ptr<ast::Node>> &decls,
+    const std::vector<Type> &args, std::vector<std::string> &out_params,
+    std::vector<Type> &out_args) {
     const DeclT *best = nullptr;
     int best_score = -1;
     std::unordered_map<std::string, Type> best_bindings;

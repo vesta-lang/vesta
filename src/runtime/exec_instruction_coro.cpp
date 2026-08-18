@@ -376,9 +376,9 @@ void exec_instr_swapctx(ProcessVM *vm, const DecodedInstr &instr) {
 
     // PC guardado = PC de la instruccion siguiente (instr.pc + size_instr)
     const uint64_t next_pc = instr.pc + instr.flags_info.size_instr;
-    src_ctx[0] = next_pc;                                 // PC
-    src_ctx[1] = vm->registers.stack_pointer.qword();     // SP
-    src_ctx[2] = vm->registers.base_pointer.qword();      // BP
+    src_ctx[0] = next_pc;                             // PC
+    src_ctx[1] = vm->registers.stack_pointer.qword(); // SP
+    src_ctx[2] = vm->registers.base_pointer.qword();  // BP
 
     // guardar R0..R15 en offsets 24..151 (indices 3..18 del qword array)
     for (int i = 0; i < 16; ++i)

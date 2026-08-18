@@ -27,14 +27,16 @@ int main() {
 
     // 1) alloc da handles distintos con punteros de payload distintos.
     //    En modo AOT los objetos NO rooteados se colectan; el frame C++ de este
-    //    test no se escanea (sin stackmaps) -> pinnar lo que queramos conservar.
+    //    test no se escanea (sin stackmaps) -> pinnar lo que queramos
+    //    conservar.
     uint32_t h1 = vx_gc_alloc(16);
     uint32_t h2 = vx_gc_alloc(32);
     vx_gc_pin(h1);
     vx_gc_pin(h2);
     uint8_t *p1 = vx_gc_deref(h1);
     uint8_t *p2 = vx_gc_deref(h2);
-    check(p1 != nullptr && p2 != nullptr, "deref de handle recien alocado es NULL");
+    check(p1 != nullptr && p2 != nullptr,
+          "deref de handle recien alocado es NULL");
     check(p1 != p2, "dos allocs distintos comparten payload");
 
     // 2) el payload es escribible y deref es estable (sin GC entre medias).
@@ -47,7 +49,8 @@ int main() {
     // 3) live_count refleja al menos los 2 vivos.
     check(vx_gc_live_count() >= 2, "live_count < 2 tras 2 allocs");
 
-    // 4) collect no crashea y (Inc 0, sin raices precisas) conserva los objetos.
+    // 4) collect no crashea y (Inc 0, sin raices precisas) conserva los
+    // objetos.
     vx_gc_collect();
     check(vx_gc_deref(h1) != nullptr, "objeto colectado por error en Inc 0");
 
@@ -57,7 +60,8 @@ int main() {
         uint8_t *p = vx_gc_deref(h);
         if (p) p[0] = static_cast<uint8_t>(i);
     }
-    check(true, "alloc masivo (placeholder, llegar aqui sin crash ya es exito)");
+    check(true,
+          "alloc masivo (placeholder, llegar aqui sin crash ya es exito)");
 
     // 6) Inc 2: el modo AOT COLECTA de verdad.  Aloca N objetos, pinna 1 como
     //    raiz externa, colecta -> SOLO el pinnado (+ los 2 iniciales pinnados?

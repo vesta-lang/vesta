@@ -13,19 +13,20 @@
  * DISCIPLINA DE LOS ADAPTADORES (Fase 0.25): un adaptador SOLO TRADUCE
  * informacion que YA existe; NO inventa logica.  El @c TypeAdapter mira el tipo
  * del valor y rellena EXCLUSIVAMENTE @c cls y @c width.  NO decide si cruza
- * llamadas, si es rematerializable, si conviene derramarlo -- esos hechos vienen
- * de OTROS adaptadores (Liveness, Const, Loop, Alias, Profile), cada uno en su
- * fichero, pequeno y testeable.  Asi, cuando algo salga mal, la pregunta "¿por
- * que este valor tiene X?" tiene una respuesta de UN adaptador, no de un bloque
- * de 500 lineas.
+ * llamadas, si es rematerializable, si conviene derramarlo -- esos hechos
+ * vienen de OTROS adaptadores (Liveness, Const, Loop, Alias, Profile), cada uno
+ * en su fichero, pequeno y testeable.  Asi, cuando algo salga mal, la pregunta
+ * "¿por que este valor tiene X?" tiene una respuesta de UN adaptador, no de un
+ * bloque de 500 lineas.
  *
  * SNAPSHOT: los adaptadores rellenan UN mismo @c ValueRequirements durante su
  * construccion; despues es INMUTABLE.  El resto del modelo (Constraints,
  * Objective, DecisionEngine) trabaja siempre sobre ese estado congelado, nunca
  * consultando el IR de nuevo.
  *
- * CENTRALIZACION: el ancho se toma de @c analysis::memory_access_size (la fuente
- * de la capa de Facts), NO de una tabla propia -> una sola verdad IrType->bytes.
+ * CENTRALIZACION: el ancho se toma de @c analysis::memory_access_size (la
+ * fuente de la capa de Facts), NO de una tabla propia -> una sola verdad
+ * IrType->bytes.
  *
  * Fase 0.25: ADITIVO, sin cambio de comportamiento (nadie lo consume aun salvo
  * el test; el wiring al codegen es de fases posteriores).
@@ -59,11 +60,10 @@ inline bool type_has_value(ir::IrType t) noexcept {
 inline ResourceClass type_adapter_class(ir::IrType t) noexcept {
     switch (t) {
     case ir::IrType::F32:
-    case ir::IrType::F64:
-        return ResourceClass::FP_VECTOR;
-    // Futuro: vector<N>/SIMD -> FP_VECTOR; mascara -> MASK; predicado -> PREDICATE.
-    default:
-        return ResourceClass::GP;
+    case ir::IrType::F64: return ResourceClass::FP_VECTOR;
+    // Futuro: vector<N>/SIMD -> FP_VECTOR; mascara -> MASK; predicado ->
+    // PREDICATE.
+    default: return ResourceClass::GP;
     }
 }
 
@@ -83,8 +83,9 @@ inline ViewWidth type_adapter_width(ir::IrType t) noexcept {
  * rematerializable, fixed_reg) -- eso es de otros adaptadores.  El nombre
  * @c populate_* es el verbo comun de todos los adaptadores de Fase 0.25.
  */
-inline void populate_type_requirements(ValueRequirements &r, ir::IrType t) noexcept {
-    r.cls   = type_adapter_class(t);
+inline void populate_type_requirements(ValueRequirements &r,
+                                       ir::IrType t) noexcept {
+    r.cls = type_adapter_class(t);
     r.width = type_adapter_width(t);
 }
 

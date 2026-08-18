@@ -34,13 +34,13 @@
 using namespace codegen::rbank;
 
 static int g_checks = 0, g_fails = 0;
-#define CHECK(c)                                                                 \
-    do {                                                                         \
-        ++g_checks;                                                              \
-        if (!(c)) {                                                              \
-            ++g_fails;                                                           \
-            std::printf("  FALLO L%d: %s\n", __LINE__, #c);                      \
-        }                                                                        \
+#define CHECK(c)                                                               \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(c)) {                                                            \
+            ++g_fails;                                                         \
+            std::printf("  FALLO L%d: %s\n", __LINE__, #c);                    \
+        }                                                                      \
     } while (0)
 
 static bool has(const std::vector<uint8_t> &v, uint8_t x) {
@@ -58,7 +58,8 @@ int main() {
 
         // Asignables = r0..r12, es decir EXACTAMENTE ir::ALLOC_REGS registros.
         CHECK(t.allocatable[GP].size() == static_cast<size_t>(ir::ALLOC_REGS));
-        for (uint8_t r = 0; r < ir::ALLOC_REGS; ++r) CHECK(has(t.allocatable[GP], r));
+        for (uint8_t r = 0; r < ir::ALLOC_REGS; ++r)
+            CHECK(has(t.allocatable[GP], r));
 
         // Los scratch del emisor NO son asignables (si lo fueran, el allocator
         // daria a un valor SSA el registro que el emisor usa para materializar
@@ -92,21 +93,25 @@ int main() {
         CHECK(!has(t.callee_saved[GP], 0));
         CHECK(t.callee_saved[GP].size() + t.caller_saved[GP].size() ==
               t.allocatable[GP].size()); // la particion cubre el pool entero
-        for (uint8_t r = 1; r <= 12; ++r) CHECK(has(t.callee_saved[GP], r));
+        for (uint8_t r = 1; r <= 12; ++r)
+            CHECK(has(t.callee_saved[GP], r));
 
         CHECK(t.pointer_size == 8);
     }
 
     /* --- 2. Reserva POR DEMANDA: sin scratch el pool crece a los 16 ------- */
     {
-        const jit::TargetRegInfo &t = codegen::target_vm(/*reserve_scratch=*/false);
+        const jit::TargetRegInfo &t =
+            codegen::target_vm(/*reserve_scratch=*/false);
         CHECK(t.allocatable[GP].size() == 16);
         CHECK(has(t.allocatable[GP], static_cast<uint8_t>(ir::SCRATCH_REG)));
         CHECK(has(t.allocatable[GP], static_cast<uint8_t>(ir::ARGC_REG)));
         CHECK(t.scratch[GP].empty());
         CHECK(t.reserved.empty());
         // Reservar siempre cuesta 3 de 16 registros: eso es lo que mide esto.
-        CHECK(t.allocatable[GP].size() - codegen::target_vm().allocatable[GP].size() == 3);
+        CHECK(t.allocatable[GP].size() -
+                  codegen::target_vm().allocatable[GP].size() ==
+              3);
     }
 
     /* --- 3. El banco fisico se construye desde el descriptor -------------- */

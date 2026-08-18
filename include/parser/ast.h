@@ -234,11 +234,12 @@ struct LabelExpr : ExprNode {
 
 /**
  * @struct AbsRefExpr
- * @brief Referencia absoluta a un simbolo (`@Absolute("code.<sym>")`) usada como
- * VALOR de una directiva de datos (`dq @Absolute("code.Tipo__m")`).  A diferencia
- * de @c LabelExpr (que @c eval_expr resuelve al offset local sin reloc), esta
- * registra una relocacion @c Absolute64 que el linker rebasa a la direccion VM
- * final del simbolo.  La usa la vtable de los structs @Virtual (reloc datos->codigo).
+ * @brief Referencia absoluta a un simbolo (`@Absolute("code.<sym>")`) usada
+ * como VALOR de una directiva de datos (`dq @Absolute("code.Tipo__m")`).  A
+ * diferencia de @c LabelExpr (que @c eval_expr resuelve al offset local sin
+ * reloc), esta registra una relocacion @c Absolute64 que el linker rebasa a la
+ * direccion VM final del simbolo.  La usa la vtable de los structs @Virtual
+ * (reloc datos->codigo).
  */
 struct AbsRefExpr : ExprNode {
     std::string symbol; ///< nombre completo del simbolo, p.ej. "code.Tipo__m".

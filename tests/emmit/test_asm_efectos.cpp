@@ -7,7 +7,8 @@
 
 /**
  * @file tests/emmit/test_asm_efectos.cpp
- * @brief Que EFECTOS declara el analisis de cada instruccion de un bloque `asm`.
+ * @brief Que EFECTOS declara el analisis de cada instruccion de un bloque
+ * `asm`.
  *
  * Lo que un bloque `asm` dice de si mismo alimenta al compilador entero: los
  * contratos (`pure`, `readonly`), la eliminacion de codigo muerto, el
@@ -22,28 +23,28 @@
  *
  * ## Que se comprueba de cada instruccion
  *
- * El efecto COMPLETO, no solo si toca memoria: que operandos escribe, si escribe
- * registros que no nombra, si lee o escribe memoria, si lee o escribe las
- * banderas, si se va del bloque.  Un informe que solo mirara memoria diria que un
- * `mov rax, rbx` no tiene ningun efecto, y un `mov` que no escribe nada es
- * exactamente el error que hace que su destino se de por invariante.
+ * El efecto COMPLETO, no solo si toca memoria: que operandos escribe, si
+ * escribe registros que no nombra, si lee o escribe memoria, si lee o escribe
+ * las banderas, si se va del bloque.  Un informe que solo mirara memoria diria
+ * que un `mov rax, rbx` no tiene ningun efecto, y un `mov` que no escribe nada
+ * es exactamente el error que hace que su destino se de por invariante.
  *
- * Los sentidos van SEPARADOS a proposito -- leer no es escribir, ni en memoria ni
- * en banderas --.  Un bloque que solo LEE las banderas (`setz al`) depende de la
- * comparacion de antes pero no destruye nada; uno que solo las ESCRIBE (`cmp`)
- * destruye pero no depende.  Con un bit unico los dos salen iguales y hay que
- * suponer lo peor de ambos, que es no mover nada en ninguna direccion.
+ * Los sentidos van SEPARADOS a proposito -- leer no es escribir, ni en memoria
+ * ni en banderas --.  Un bloque que solo LEE las banderas (`setz al`) depende
+ * de la comparacion de antes pero no destruye nada; uno que solo las ESCRIBE
+ * (`cmp`) destruye pero no depende.  Con un bit unico los dos salen iguales y
+ * hay que suponer lo peor de ambos, que es no mover nada en ninguna direccion.
  *
  * ## Como se lee un caso
  *
  * Se declaran los efectos que la instruccion DEBE tener, por nombre.  Lo que no
  * se nombra tiene que estar AUSENTE -- eso es lo que convierte el test en algo
- * util: un efecto de mas convierte un `asm` inocente en una barrera para todo lo
- * que le rodea, y uno de menos deja pasar una optimizacion que rompe.
+ * util: un efecto de mas convierte un `asm` inocente en una barrera para todo
+ * lo que le rodea, y uno de menos deja pasar una optimizacion que rompe.
  *
  * Cuando de verdad no se puede afirmar un campo, se dice con @ref UNCHECKED en
- * vez de poner el valor que salga.  Un test que se ajusta a lo que el codigo hace
- * hoy no comprueba nada.
+ * vez de poner el valor que salga.  Un test que se ajusta a lo que el codigo
+ * hace hoy no comprueba nada.
  */
 
 #include "vx/asm/asm_analyze.h"
@@ -61,29 +62,30 @@ namespace {
 
 /// Los efectos que una instruccion puede declarar, por nombre.
 enum Effect : uint32_t {
-    NONE         = 0,
-    WRITES_OP0   = 1u << 0, ///< deja su resultado en el 1er operando
-    WRITES_OP1   = 1u << 1, ///< y en el 2o (xchg escribe los dos)
-    WRITES_REG   = 1u << 2, ///< escribe un registro que NO nombra (rdtsc: rax:rdx)
-    READS_MEM    = 1u << 3, ///< lee memoria
-    WRITES_MEM   = 1u << 4, ///< la escribe
-    READS_FLAGS  = 1u << 5, ///< CONSUME las banderas (adc, setcc, cmovcc)
+    NONE = 0,
+    WRITES_OP0 = 1u << 0, ///< deja su resultado en el 1er operando
+    WRITES_OP1 = 1u << 1, ///< y en el 2o (xchg escribe los dos)
+    WRITES_REG =
+        1u << 2,         ///< escribe un registro que NO nombra (rdtsc: rax:rdx)
+    READS_MEM = 1u << 3, ///< lee memoria
+    WRITES_MEM = 1u << 4,   ///< la escribe
+    READS_FLAGS = 1u << 5,  ///< CONSUME las banderas (adc, setcc, cmovcc)
     WRITES_FLAGS = 1u << 6, ///< las modifica: quien las tuviera las pierde
-    CALL         = 1u << 7, ///< transfiere el control fuera del bloque
+    CALL = 1u << 7,         ///< transfiere el control fuera del bloque
     /// ORDENA lo de alrededor.  Lo ponen las barreras (`mfence`, `dmb`) y
     /// tambien los accesos ATOMICOS (`lock inc`, `ldar`, `casal`): la
     /// consecuencia es la misma -- nada los cruza -- y por eso es un solo
     /// efecto.  Que ademas toquen memoria se dice aparte.
-    ORDERS       = 1u << 8,
-    PORT_IO      = 1u << 9, ///< entrada/salida por puerto: se ve desde fuera
+    ORDERS = 1u << 8,
+    PORT_IO = 1u << 9, ///< entrada/salida por puerto: se ve desde fuera
 };
 
 /// Un caso: la instruccion y los efectos que tiene que declarar.
 struct Case {
-    const char *text;      ///< la instruccion, con marcadores `$N`
-    uint32_t    has;       ///< efectos que DEBE declarar
-    uint32_t    unchecked; ///< los que no se comprueban, y por que en @ref why
-    const char *why;       ///< sale en el mensaje de fallo
+    const char *text;   ///< la instruccion, con marcadores `$N`
+    uint32_t has;       ///< efectos que DEBE declarar
+    uint32_t unchecked; ///< los que no se comprueban, y por que en @ref why
+    const char *why;    ///< sale en el mensaje de fallo
 };
 
 /// Atajo para el campo que casi siempre esta vacio.
@@ -93,13 +95,21 @@ tests::Tally tally;
 
 /// Nombres de los efectos presentes en @p e, para el mensaje de fallo.
 std::string names_of(uint32_t e) {
-    struct N { uint32_t bit; const char *name; };
+    struct N {
+        uint32_t bit;
+        const char *name;
+    };
     static const N kNames[] = {
-        {WRITES_OP0, "write op0"},   {WRITES_OP1, "write op1"},
-        {WRITES_REG, "write reg"},   {READS_MEM, "read mem"},
-        {WRITES_MEM, "write mem"},   {READS_FLAGS, "read flags"},
-        {WRITES_FLAGS, "write flags"}, {CALL, "call"},
-        {ORDERS, "orders"},          {PORT_IO, "port io"},
+        {WRITES_OP0, "write op0"},
+        {WRITES_OP1, "write op1"},
+        {WRITES_REG, "write reg"},
+        {READS_MEM, "read mem"},
+        {WRITES_MEM, "write mem"},
+        {READS_FLAGS, "read flags"},
+        {WRITES_FLAGS, "write flags"},
+        {CALL, "call"},
+        {ORDERS, "orders"},
+        {PORT_IO, "port io"},
     };
     std::string s;
     for (const N &n : kNames)
@@ -129,8 +139,8 @@ std::string describe(const vx::AsmBlockEffects &r) {
         s += t;
     };
     /* Los operandos que escribe y los registros que escribe SIN nombrarlos van
-     * separados: el primero es una variable del programa que cambia de valor, el
-     * segundo un registro que quien llame no puede suponer intacto. */
+     * separados: el primero es una variable del programa que cambia de valor,
+     * el segundo un registro que quien llame no puede suponer intacto. */
     std::string ops, regs;
     for (const std::string &w : r.escritos) {
         std::string &dst = (!w.empty() && w[0] == '$') ? ops : regs;
@@ -149,8 +159,7 @@ std::string describe(const vx::AsmBlockEffects &r) {
         if (!dst.empty()) dst += ", ";
         dst += a.base;
     }
-    if (r.reads_mem)
-        add(mem_r.empty() ? "read mem" : "read mem por " + mem_r);
+    if (r.reads_mem) add(mem_r.empty() ? "read mem" : "read mem por " + mem_r);
     if (r.writes_mem)
         add(mem_w.empty() ? "write mem" : "write mem por " + mem_w);
     if (r.accesos_incompletos) add("mem sin atribuir");
@@ -164,7 +173,8 @@ std::string describe(const vx::AsmBlockEffects &r) {
 
 /// Clases de los marcadores.  Sin ellas, un operando que el compilador nombro
 /// `$1` no tiene ancho y el analisis no puede acotar cuantos bytes toca.
-std::vector<std::pair<std::string, std::string>> operand_classes(const char *c1) {
+std::vector<std::pair<std::string, std::string>>
+operand_classes(const char *c1) {
     /* `$0` es siempre un registro general: es el que lleva la DIRECCION en los
      * casos de memoria (`[$0]`), y una direccion no vive en el banco ancho. */
     return {{"$0", "reg"}, {"$1", c1}, {"$2", c1}};
@@ -193,14 +203,17 @@ void check(const Case &c, const char *operand_class, const char *arch) {
     }
     uint32_t actual = NONE;
     /* Que operandos escribe.  Un marcador `$N` sale tal cual en `escritos`; un
-     * nombre de registro es un efecto IMPLICITO -- la instruccion lo escribe sin
-     * nombrarlo, como el rax:rdx de una `rdtsc` --, y son cosas distintas: el
-     * primero es una variable del programa que cambia de valor, el segundo un
-     * registro que quien llame no puede suponer intacto. */
+     * nombre de registro es un efecto IMPLICITO -- la instruccion lo escribe
+     * sin nombrarlo, como el rax:rdx de una `rdtsc` --, y son cosas distintas:
+     * el primero es una variable del programa que cambia de valor, el segundo
+     * un registro que quien llame no puede suponer intacto. */
     for (const std::string &w : r.escritos) {
-        if (w == "$0") actual |= WRITES_OP0;
-        else if (w == "$1") actual |= WRITES_OP1;
-        else if (!w.empty() && w[0] != '$') actual |= WRITES_REG;
+        if (w == "$0")
+            actual |= WRITES_OP0;
+        else if (w == "$1")
+            actual |= WRITES_OP1;
+        else if (!w.empty() && w[0] != '$')
+            actual |= WRITES_REG;
     }
     if (r.reads_mem) actual |= READS_MEM;
     if (r.writes_mem) actual |= WRITES_MEM;
@@ -212,17 +225,18 @@ void check(const Case &c, const char *operand_class, const char *arch) {
 
     /* Una escritura a memoria se cuenta TAMBIEN como lectura, y es deliberado:
      * `add [rdi], rax` acumula, y el analisis prefiere no distinguir el destino
-     * puro -- el `mov` -- porque equivocarse ahi deja pasar una optimizacion que
-     * rompe.  Asi que un caso que espera escritura no exige que NO se lea. */
+     * puro -- el `mov` -- porque equivocarse ahi deja pasar una optimizacion
+     * que rompe.  Asi que un caso que espera escritura no exige que NO se lea.
+     */
     uint32_t unchecked = c.unchecked;
     if ((c.has & WRITES_MEM) != 0u) unchecked |= READS_MEM;
     const uint32_t checked = ~unchecked;
 
     if ((actual & checked) == (c.has & checked)) {
-        /* Se imprime TAMBIEN lo que esta bien, y con TODOS sus efectos -- no solo
-         * los comprobados --.  Un informe que solo ensena los fallos no dice que
-         * se comprobo, y entonces no se puede distinguir "todo correcto" de "no se
-         * miro". */
+        /* Se imprime TAMBIEN lo que esta bien, y con TODOS sus efectos -- no
+         * solo los comprobados --.  Un informe que solo ensena los fallos no
+         * dice que se comprobo, y entonces no se puede distinguir "todo
+         * correcto" de "no se miro". */
         tests::pass(tally, c.text, describe(r).c_str());
         return;
     }
@@ -237,13 +251,18 @@ int main() {
     const Case gp[] = {
         // Mover y copiar sin tocar memoria.  Ninguna es "sin efectos": todas
         // dejan su resultado en algun sitio, y ese sitio es el efecto.
-        {"mov $0, $1", WRITES_OP0, UNCHECKED, "mover deja el valor en su destino"},
-        {"movzx $0, $1", WRITES_OP0, UNCHECKED, "extender con ceros, en el destino"},
-        {"movsx $0, $1", WRITES_OP0, UNCHECKED, "ni extender con signo toca memoria"},
+        {"mov $0, $1", WRITES_OP0, UNCHECKED,
+         "mover deja el valor en su destino"},
+        {"movzx $0, $1", WRITES_OP0, UNCHECKED,
+         "extender con ceros, en el destino"},
+        {"movsx $0, $1", WRITES_OP0, UNCHECKED,
+         "ni extender con signo toca memoria"},
         {"lea $0, [$1]", WRITES_OP0, UNCHECKED,
-         "calcula una direccion, NO la sigue: escribe su destino y no lee memoria"},
+         "calcula una direccion, NO la sigue: escribe su destino y no lee "
+         "memoria"},
         {"xchg $0, $1", WRITES_OP0 | WRITES_OP1, UNCHECKED,
-         "intercambiar escribe LOS DOS operandos: con un solo bit de destino, el "
+         "intercambiar escribe LOS DOS operandos: con un solo bit de destino, "
+         "el "
          "segundo se da por intacto"},
         {"bswap $0", WRITES_OP0, UNCHECKED, "invertir bytes de un registro"},
 
@@ -251,26 +270,31 @@ int main() {
         {"add $0, $1", WRITES_OP0 | WRITES_FLAGS, UNCHECKED,
          "la suma deja acarreo y cero, y el resultado en su destino"},
         {"sub $0, $1", WRITES_OP0 | WRITES_FLAGS, UNCHECKED, "la resta igual"},
-        {"and $0, $1", WRITES_OP0 | WRITES_FLAGS, UNCHECKED, "la logica tambien"},
+        {"and $0, $1", WRITES_OP0 | WRITES_FLAGS, UNCHECKED,
+         "la logica tambien"},
         {"or $0, $1", WRITES_OP0 | WRITES_FLAGS, UNCHECKED, "idem"},
         {"xor $0, $0", WRITES_OP0 | WRITES_FLAGS, UNCHECKED,
          "el idioma de poner a cero"},
         {"not $0", WRITES_OP0, UNCHECKED,
          "complemento: es la que NO toca banderas"},
         {"neg $0", WRITES_OP0 | WRITES_FLAGS, UNCHECKED, "negar si las toca"},
-        {"inc $0", WRITES_OP0 | WRITES_FLAGS, UNCHECKED, "incrementar deja cero"},
+        {"inc $0", WRITES_OP0 | WRITES_FLAGS, UNCHECKED,
+         "incrementar deja cero"},
         {"dec $0", WRITES_OP0 | WRITES_FLAGS, UNCHECKED, "decrementar igual"},
         {"shl $0, 3", WRITES_OP0 | WRITES_FLAGS, UNCHECKED,
          "desplazar deja el bit que sale"},
-        {"shr $0, 3", WRITES_OP0 | WRITES_FLAGS, UNCHECKED, "idem a la derecha"},
+        {"shr $0, 3", WRITES_OP0 | WRITES_FLAGS, UNCHECKED,
+         "idem a la derecha"},
         {"sar $0, 3", WRITES_OP0 | WRITES_FLAGS, UNCHECKED, "idem con signo"},
-        {"rol $0, 3", WRITES_OP0 | WRITES_FLAGS, UNCHECKED, "rotar deja acarreo"},
+        {"rol $0, 3", WRITES_OP0 | WRITES_FLAGS, UNCHECKED,
+         "rotar deja acarreo"},
         /* Las DOS formas de `imul`, que es el caso donde el mnemonico no basta:
          * con dos operandos deja el producto en su destino y nada mas; con uno
          * multiplica contra el acumulador y lo deja en `rdx:rax`, sin nombrar
-         * ninguno de los dos.  Si las dos se tabulan igual, una de las dos miente:
-         * o `imul rax, rbx` sale destruyendo `rdx` -- y se pierde lo que hubiera
-         * ahi --, o `imul rbx` sale sin tocarlo y se pierde el producto. */
+         * ninguno de los dos.  Si las dos se tabulan igual, una de las dos
+         * miente: o `imul rax, rbx` sale destruyendo `rdx` -- y se pierde lo
+         * que hubiera ahi --, o `imul rbx` sale sin tocarlo y se pierde el
+         * producto. */
         {"imul $0, $1", WRITES_OP0 | WRITES_FLAGS, UNCHECKED,
          "la forma de dos operandos deja el producto SOLO en su destino"},
         {"imul $0", WRITES_REG | WRITES_FLAGS, UNCHECKED,
@@ -286,7 +310,7 @@ int main() {
         {"popcnt $0, $1", WRITES_OP0 | WRITES_FLAGS, UNCHECKED,
          "contar unos deja cero"},
 
-        /* Las que existen PARA dejar banderas y no escriben ningun operando.  Es
+        /* Las que existen PARA dejar banderas y no escriben ningun operando. Es
          * la prueba de que el destino y las banderas son efectos separados: si
          * `cmp` saliera escribiendo su primer operando, el valor que compara se
          * daria por destruido. */
@@ -297,16 +321,19 @@ int main() {
          "probar un bit lo deja en el acarreo sin tocar el operando"},
 
         /* Las que CONSUMEN banderas.  Aqui se ve por que los dos sentidos no se
-         * pueden colapsar: un `setz` LEE lo que un `cmp` de antes produjo, asi que
-         * no se pueden separar; pero no destruye nada, asi que lo que venga
+         * pueden colapsar: un `setz` LEE lo que un `cmp` de antes produjo, asi
+         * que no se pueden separar; pero no destruye nada, asi que lo que venga
          * despues si puede pasar por encima. */
         {"setz $0", WRITES_OP0 | READS_FLAGS, UNCHECKED,
-         "poner segun bandera LEE las banderas y escribe su operando; declararla "
-         "como que las escribe la hace pasar por destruir un valor que no toca"},
+         "poner segun bandera LEE las banderas y escribe su operando; "
+         "declararla "
+         "como que las escribe la hace pasar por destruir un valor que no "
+         "toca"},
         {"cmovz $0, $1", WRITES_OP0 | READS_FLAGS, UNCHECKED,
          "mover condicional las lee para decidir"},
         {"adc $0, $1", WRITES_OP0 | READS_FLAGS | WRITES_FLAGS, UNCHECKED,
-         "sumar con acarreo lee el acarreo Y lo vuelve a escribir: sin la lectura, "
+         "sumar con acarreo lee el acarreo Y lo vuelve a escribir: sin la "
+         "lectura, "
          "la suma que lo produjo se puede mover por debajo"},
         {"sbb $0, $1", WRITES_OP0 | READS_FLAGS | WRITES_FLAGS, UNCHECKED,
          "restar con prestamo, igual"},
@@ -347,18 +374,18 @@ int main() {
         // Atomicas: el prefijo no cambia QUE se toca.
         {"lock inc [$0]", READS_MEM | WRITES_MEM | WRITES_FLAGS | ORDERS,
          UNCHECKED, "`lock` da atomicidad y ordena; no cambia que se toca"},
-        {"lock xadd [$0], $1",
-         READS_MEM | WRITES_MEM | WRITES_FLAGS | ORDERS, UNCHECKED,
-         "sumar e intercambiar atomico"},
+        {"lock xadd [$0], $1", READS_MEM | WRITES_MEM | WRITES_FLAGS | ORDERS,
+         UNCHECKED, "sumar e intercambiar atomico"},
         {"lock cmpxchg [$0], $1",
          READS_MEM | WRITES_MEM | WRITES_FLAGS | WRITES_REG | ORDERS, UNCHECKED,
-         "comparar e intercambiar: la base de todo lo atomico.  Y escribe `rax` "
+         "comparar e intercambiar: la base de todo lo atomico.  Y escribe "
+         "`rax` "
          "sin nombrarlo -- ahi deja lo que encontro cuando falla --, que es "
          "justo el dato con el que se decide si reintentar"},
 
         /* Pila: tocan memoria SIN corchetes a la vista, y ademas mueven `rsp`.
-         * Las dos cosas hay que decirlas: quien crea que `rsp` sigue donde estaba
-         * calcula mal cualquier direccion que salga de el. */
+         * Las dos cosas hay que decirlas: quien crea que `rsp` sigue donde
+         * estaba calcula mal cualquier direccion que salga de el. */
         {"push $0", WRITES_MEM | WRITES_REG, READS_MEM,
          "apilar escribe memoria aunque no lleve corchetes, y mueve `rsp`; si "
          "ademas se cuenta como lectura no es lo que se comprueba aqui"},
@@ -366,12 +393,12 @@ int main() {
          "desapilar lee memoria, escribe su destino y mueve `rsp`"},
         {"pushf", WRITES_MEM | WRITES_REG | READS_FLAGS, READS_MEM,
          "apilar las banderas las LEE: es la unica forma de guardarlas"},
-        {"popf", WRITES_FLAGS | WRITES_REG | READS_MEM | READS_FLAGS, WRITES_MEM,
-         "y recuperarlas las escribe"},
+        {"popf", WRITES_FLAGS | WRITES_REG | READS_MEM | READS_FLAGS,
+         WRITES_MEM, "y recuperarlas las escribe"},
 
         // Control: se va del bloque.
-        {"call $0", CALL, READS_MEM | WRITES_MEM | READS_FLAGS | WRITES_FLAGS |
-                              WRITES_REG,
+        {"call $0", CALL,
+         READS_MEM | WRITES_MEM | READS_FLAGS | WRITES_FLAGS | WRITES_REG,
          "una llamada puede hacer cualquier cosa; lo que importa es que se "
          "declare COMO llamada"},
         {"syscall", CALL | WRITES_REG,
@@ -395,9 +422,9 @@ int main() {
         {"out 96, $0", PORT_IO, READS_FLAGS, "y escribirlo tampoco es memoria"},
 
         /* Ramas.  Un salto CONDICIONAL lee las banderas y es de lo que depende;
-         * uno incondicional no mira nada.  Y `loop` mira un REGISTRO -- `rcx` --,
-         * que es un dato distinto: confundirlos deja la comparacion que decide sin
-         * nadie que la use, o sea eliminable. */
+         * uno incondicional no mira nada.  Y `loop` mira un REGISTRO -- `rcx`
+         * --, que es un dato distinto: confundirlos deja la comparacion que
+         * decide sin nadie que la use, o sea eliminable. */
         {"jmp destino", NONE, UNCHECKED, "un salto incondicional no mira nada"},
         {"je destino", READS_FLAGS, UNCHECKED,
          "el salto por igualdad LEE las banderas"},
@@ -414,11 +441,12 @@ int main() {
          "buscar el primer bit deja cero si no habia ninguno"},
         {"lzcnt $0, $1", WRITES_OP0 | WRITES_FLAGS, UNCHECKED,
          "contar ceros a la izquierda"},
-        {"tzcnt $0, $1", WRITES_OP0 | WRITES_FLAGS, UNCHECKED, "y a la derecha"},
+        {"tzcnt $0, $1", WRITES_OP0 | WRITES_FLAGS, UNCHECKED,
+         "y a la derecha"},
 
         /* Manipulacion de bits sin banderas (BMI2).  Es su rasgo distintivo
-         * frente a la aritmetica: NO tocan las banderas, y eso permite mover una
-         * comparacion a traves de ellas. */
+         * frente a la aritmetica: NO tocan las banderas, y eso permite mover
+         * una comparacion a traves de ellas. */
         {"pext $0, $1, $2", WRITES_OP0, UNCHECKED,
          "extraer bits por mascara NO toca banderas"},
         {"pdep $0, $1, $2", WRITES_OP0, UNCHECKED, "ni depositarlos"},
@@ -443,7 +471,8 @@ int main() {
         {"bts [$0], 3", READS_MEM | WRITES_MEM | WRITES_FLAGS, UNCHECKED,
          "poner un bit en memoria"},
         {"mov [$0], 5", WRITES_MEM, UNCHECKED,
-         "guardar un inmediato escribe memoria y no lee ningun registro fuente"},
+         "guardar un inmediato escribe memoria y no lee ningun registro "
+         "fuente"},
         {"lea $0, [$1 + $2*8 + 16]", WRITES_OP0, UNCHECKED,
          "una direccion COMPUESTA sigue siendo aritmetica: no lee memoria por "
          "muchos terminos que tenga"},
@@ -454,7 +483,8 @@ int main() {
 
         /* Trampas y parada.  No mueven datos, pero ceden el control: tratarlas
          * como que no hacen nada permite borrarlas. */
-        {"int3", NONE, READS_FLAGS | WRITES_FLAGS, "una trampa de depuracion no toca datos"},
+        {"int3", NONE, READS_FLAGS | WRITES_FLAGS,
+         "una trampa de depuracion no toca datos"},
         {"ud2", NONE, UNCHECKED, "ni una instruccion invalida deliberada"},
         {"hlt", NONE, UNCHECKED, "ni parar el procesador"},
 
@@ -468,7 +498,8 @@ int main() {
 
         // Lectura de estado del procesador: escriben registros que no nombran.
         {"rdtsc", WRITES_REG, UNCHECKED,
-         "leer el contador escribe rax:rdx sin nombrarlos; quien crea que siguen "
+         "leer el contador escribe rax:rdx sin nombrarlos; quien crea que "
+         "siguen "
          "intactos se equivoca"},
         {"cpuid", WRITES_REG, UNCHECKED,
          "consultar el procesador escribe los cuatro"},
@@ -481,24 +512,29 @@ int main() {
          "entre registros anchos no hay memoria"},
         {"vpxor $1, $1, $2", WRITES_OP1, UNCHECKED, "la forma AVX tampoco"},
         {"paddd $1, $2", WRITES_OP1, UNCHECKED,
-         "sumar empaquetado escribe su destino y NO toca banderas: eso es lo que "
+         "sumar empaquetado escribe su destino y NO toca banderas: eso es lo "
+         "que "
          "permite mover una comparacion a traves de el"},
         {"pand $1, $2", WRITES_OP1, UNCHECKED, "logica empaquetada"},
-        {"punpcklqdq $1, $2", WRITES_OP1, UNCHECKED, "reordenar dentro del banco"},
-        {"pshufd $1, $2, 0", WRITES_OP1, UNCHECKED, "permutar tampoco toca memoria"},
+        {"punpcklqdq $1, $2", WRITES_OP1, UNCHECKED,
+         "reordenar dentro del banco"},
+        {"pshufd $1, $2, 0", WRITES_OP1, UNCHECKED,
+         "permutar tampoco toca memoria"},
         {"vzeroupper", NONE, UNCHECKED,
          "limpiar la parte alta no escribe ningun operando ni toca memoria"},
 
-        /* ALINEADAS.  El efecto es el mismo que en la forma no alineada -- lo que
-         * las distingue es lo que EXIGEN --, y ahi estuvo el error contrario:
-         * declararlas como que tocan memoria SIEMPRE hacia que un `movdqa
-         * xmm0, xmm1`, una copia entre registros, saliera leyendo y escribiendo
-         * memoria, o sea que cada movimiento vectorial era una barrera. */
+        /* ALINEADAS.  El efecto es el mismo que en la forma no alineada -- lo
+         * que las distingue es lo que EXIGEN --, y ahi estuvo el error
+         * contrario: declararlas como que tocan memoria SIEMPRE hacia que un
+         * `movdqa xmm0, xmm1`, una copia entre registros, saliera leyendo y
+         * escribiendo memoria, o sea que cada movimiento vectorial era una
+         * barrera. */
         {"movdqa $1, $2", WRITES_OP1, UNCHECKED,
          "entre registros NO toca memoria: no hay un corchete a la vista"},
         {"movdqa [$0], $1", WRITES_MEM, UNCHECKED,
          "la forma ALINEADA de guardar SI toca memoria, por su operando"},
-        {"movdqa $1, [$0]", WRITES_OP1 | READS_MEM, UNCHECKED, "y su lectura, lee"},
+        {"movdqa $1, [$0]", WRITES_OP1 | READS_MEM, UNCHECKED,
+         "y su lectura, lee"},
         {"movaps [$0], $1", WRITES_MEM, UNCHECKED, "igual con flotantes"},
         {"movapd [$0], $1", WRITES_MEM, UNCHECKED, "igual en doble precision"},
         {"vmovdqa [$0], $1", WRITES_MEM, UNCHECKED, "igual la forma AVX"},
@@ -513,7 +549,8 @@ int main() {
          "su lectura, lee"},
 
         // SIN exigencia de alineacion: mismos efectos, otra exigencia.
-        {"movdqu [$0], $1", WRITES_MEM, UNCHECKED, "la no alineada escribe igual"},
+        {"movdqu [$0], $1", WRITES_MEM, UNCHECKED,
+         "la no alineada escribe igual"},
         {"movdqu $1, [$0]", WRITES_OP1 | READS_MEM, UNCHECKED, "y lee igual"},
         {"vmovdqu [$0], $1", WRITES_MEM, UNCHECKED, "idem en AVX"},
         {"vmovdqu $1, [$0]", WRITES_OP1 | READS_MEM, UNCHECKED, "idem"},
@@ -537,7 +574,8 @@ int main() {
 
         // Aritmetica empaquetada CON memoria.
         {"paddd $1, [$0]", WRITES_OP1 | READS_MEM, UNCHECKED,
-         "sumar contra memoria lee: sin declararlo, una escritura ajena se puede "
+         "sumar contra memoria lee: sin declararlo, una escritura ajena se "
+         "puede "
          "mover por encima"},
         {"vaddps $1, $1, [$0]", WRITES_OP1 | READS_MEM, UNCHECKED,
          "idem en AVX flotante"},
@@ -546,23 +584,26 @@ int main() {
     /* --- arm64 ------------------------------------------------------------
      *
      * La otra arquitectura no es un extra: es lo que impide que el modelo se
-     * escriba a la medida de x86.  Y tiene sus propias preguntas -- las banderas
-     * las pone el sufijo `s` y no el mnemonico, el destino de un almacen es su
-     * operando de memoria y no el primero, la direccion de retorno vive en un
-     * REGISTRO y no en la pila --, asi que un efecto copiado del otro lado sale
-     * mal por motivos distintos.
+     * escriba a la medida de x86.  Y tiene sus propias preguntas -- las
+     * banderas las pone el sufijo `s` y no el mnemonico, el destino de un
+     * almacen es su operando de memoria y no el primero, la direccion de
+     * retorno vive en un REGISTRO y no en la pila --, asi que un efecto copiado
+     * del otro lado sale mal por motivos distintos.
      *
      * Los operandos van en la sintaxis de arm: `[$0]`, `[$0, #8]`. */
     const Case a64[] = {
         // Mover y aritmetica: el sufijo `s` es lo que decide las banderas.
-        {"mov $0, $1", WRITES_OP0, UNCHECKED, "mover deja el valor en su destino"},
+        {"mov $0, $1", WRITES_OP0, UNCHECKED,
+         "mover deja el valor en su destino"},
         {"add $0, $0, $1", WRITES_OP0, UNCHECKED,
          "sumar NO toca banderas en arm: hace falta pedirlo con el sufijo"},
         {"adds $0, $0, $1", WRITES_OP0 | WRITES_FLAGS, UNCHECKED,
-         "y con el sufijo `s` si: una letra separa las dos, y confundirlas deja "
+         "y con el sufijo `s` si: una letra separa las dos, y confundirlas "
+         "deja "
          "una comparacion decidiendo con banderas de otra operacion"},
         {"sub $0, $0, $1", WRITES_OP0, UNCHECKED, "restar tampoco"},
-        {"subs $0, $0, $1", WRITES_OP0 | WRITES_FLAGS, UNCHECKED, "su forma con `s`"},
+        {"subs $0, $0, $1", WRITES_OP0 | WRITES_FLAGS, UNCHECKED,
+         "su forma con `s`"},
         {"mul $0, $1, $2", WRITES_OP0, UNCHECKED,
          "multiplicar en arm deja el producto en su destino: no hay acumulador "
          "implicito que destruir, al contrario que en x86"},
@@ -574,7 +615,8 @@ int main() {
         {"sxtw $0, $1", WRITES_OP0, UNCHECKED, "extender el signo de 32 a 64"},
         {"clz $0, $1", WRITES_OP0, UNCHECKED, "contar ceros a la izquierda"},
         {"rbit $0, $1", WRITES_OP0, UNCHECKED, "invertir el orden de los bits"},
-        {"ubfx $0, $1, 4, 8", WRITES_OP0, UNCHECKED, "extraer un campo de bits"},
+        {"ubfx $0, $1, 4, 8", WRITES_OP0, UNCHECKED,
+         "extraer un campo de bits"},
         {"adr $0, etiqueta", WRITES_OP0, UNCHECKED,
          "calcular una direccion NO es leerla, igual que el `lea` de x86"},
 
@@ -595,7 +637,8 @@ int main() {
         {"csinc $0, $1, $2, ne", WRITES_OP0 | READS_FLAGS, UNCHECKED, "idem"},
         {"cinc $0, $1, lt", WRITES_OP0 | READS_FLAGS, UNCHECKED, "idem"},
         {"ccmp $0, $1, 0, eq", READS_FLAGS | WRITES_FLAGS, UNCHECKED,
-         "comparar CONDICIONALMENTE las lee para decidir si compara y las escribe "
+         "comparar CONDICIONALMENTE las lee para decidir si compara y las "
+         "escribe "
          "con el resultado: es el unico caso que hace las dos cosas"},
 
         // Cargas y almacenes: la memoria SIEMPRE lleva sus corchetes en arm.
@@ -607,13 +650,16 @@ int main() {
         {"ldrsw $0, [$1]", WRITES_OP0 | READS_MEM, UNCHECKED,
          "cuatro bytes con signo"},
         {"str $0, [$1]", WRITES_MEM, UNCHECKED,
-         "guardar escribe MEMORIA y no el registro que guarda: el operando escrito "
+         "guardar escribe MEMORIA y no el registro que guarda: el operando "
+         "escrito "
          "es el de los corchetes, que en arm nunca es el primero"},
         {"strb $0, [$1]", WRITES_MEM, UNCHECKED, "un byte"},
         {"ldp $0, $1, [$2]", WRITES_OP0 | WRITES_OP1 | READS_MEM, UNCHECKED,
-         "cargar un PAR escribe los dos destinos: con una sola marca de destino, "
+         "cargar un PAR escribe los dos destinos: con una sola marca de "
+         "destino, "
          "el segundo se da por intacto"},
-        {"stp $0, $1, [$2]", WRITES_MEM, UNCHECKED, "y guardar un par escribe memoria"},
+        {"stp $0, $1, [$2]", WRITES_MEM, UNCHECKED,
+         "y guardar un par escribe memoria"},
 
         // Atomicas: carga con reserva, almacen condicional, y las CAS.
         {"ldxr $0, [$1]", WRITES_OP0 | READS_MEM | ORDERS, UNCHECKED,
@@ -624,31 +670,31 @@ int main() {
          "el almacen CONDICIONAL escribe memoria y ademas deja en su primer "
          "operando si lo consiguio -- ese es el dato con el que se reintenta"},
         {"stlr $0, [$1]", WRITES_MEM | ORDERS, UNCHECKED,
-         "el almacen con LIBERACION no tiene registro de estado: escribe memoria "
-         "y nada mas.  Tabularlo igual que `stlxr` le atribuia una escritura al "
+         "el almacen con LIBERACION no tiene registro de estado: escribe "
+         "memoria "
+         "y nada mas.  Tabularlo igual que `stlxr` le atribuia una escritura "
+         "al "
          "registro que guarda"},
         {"casal $0, $1, [$2]", WRITES_OP0 | READS_MEM | WRITES_MEM | ORDERS,
          UNCHECKED,
          "comparar e intercambiar atomico lee, escribe y deja lo que encontro"},
         {"swpal $0, $1, [$2]", WRITES_OP0 | READS_MEM | WRITES_MEM | ORDERS,
-         UNCHECKED,
-         "intercambiar atomico, igual"},
+         UNCHECKED, "intercambiar atomico, igual"},
         {"ldaddal $0, $1, [$2]", WRITES_OP0 | READS_MEM | WRITES_MEM | ORDERS,
-         UNCHECKED,
-         "sumar atomico devuelve el valor anterior"},
+         UNCHECKED, "sumar atomico devuelve el valor anterior"},
 
         /* Barreras: ORDENAN, no mueven datos.  Estaban tabuladas como que tocan
          * memoria, y como no nombran por donde, el bloque entero quedaba con
-         * memoria sin atribuir -- o sea suponiendo lo peor de toda --.  Ordenar y
-         * acceder son cosas distintas, y en x86 ya se distinguian. */
+         * memoria sin atribuir -- o sea suponiendo lo peor de toda --.  Ordenar
+         * y acceder son cosas distintas, y en x86 ya se distinguian. */
         {"dmb ish", ORDERS, UNCHECKED,
          "una barrera de datos ordena, no lee ni escribe"},
         {"dsb sy", ORDERS, UNCHECKED, "la de sistema, igual"},
         {"isb", ORDERS, UNCHECKED, "y la de instrucciones"},
 
-        /* Control.  En arm la direccion de retorno va en un REGISTRO (`x30`), no
-         * en la pila: una llamada lo escribe y `ret` lo lee, y ninguna de las dos
-         * toca memoria por eso.  Estaban declaradas como que si. */
+        /* Control.  En arm la direccion de retorno va en un REGISTRO (`x30`),
+         * no en la pila: una llamada lo escribe y `ret` lo lee, y ninguna de
+         * las dos toca memoria por eso.  Estaban declaradas como que si. */
         {"bl destino", CALL | WRITES_REG, UNCHECKED,
          "llamar escribe el registro de enlace; no apila nada"},
         {"blr $0", CALL | WRITES_REG, UNCHECKED, "la llamada indirecta, igual"},
@@ -659,9 +705,11 @@ int main() {
         {"b.eq destino", READS_FLAGS, UNCHECKED,
          "el salto CONDICIONAL lee las banderas: es de lo que depende"},
         {"cbz $0, destino", NONE, UNCHECKED,
-         "saltar si un registro es cero mira el REGISTRO, no las banderas: es la "
+         "saltar si un registro es cero mira el REGISTRO, no las banderas: es "
+         "la "
          "diferencia con `b.eq`"},
-        {"tbnz $0, 3, destino", NONE, UNCHECKED, "y saltar si un bit esta puesto"},
+        {"tbnz $0, 3, destino", NONE, UNCHECKED,
+         "y saltar si un bit esta puesto"},
 
         // Sin efecto observable, y la llamada al sistema.
         {"nop", NONE, UNCHECKED, "no hacer nada hay que poder decirlo"},
@@ -673,14 +721,16 @@ int main() {
 
     /* --- arm32 (A32) ------------------------------------------------------
      *
-     * No es "arm64 con otros nombres".  Las banderas las pide el sufijo `s` igual
-     * que en A64, pero ademas CASI TODA instruccion A32 lleva condicion, asi que
-     * leer las banderas es lo normal y no la excepcion.  Y no tiene tabla escrita
-     * a mano: lo que se sepa sale de la base, por la ISA correcta.  Hasta hace un
-     * momento se contestaba con la tabla de arm64, que es peor que no contestar.
+     * No es "arm64 con otros nombres".  Las banderas las pide el sufijo `s`
+     * igual que en A64, pero ademas CASI TODA instruccion A32 lleva condicion,
+     * asi que leer las banderas es lo normal y no la excepcion.  Y no tiene
+     * tabla escrita a mano: lo que se sepa sale de la base, por la ISA
+     * correcta.  Hasta hace un momento se contestaba con la tabla de arm64, que
+     * es peor que no contestar.
      */
     const Case a32[] = {
-        {"mov $0, $1", WRITES_OP0, UNCHECKED, "mover deja el valor en su destino"},
+        {"mov $0, $1", WRITES_OP0, UNCHECKED,
+         "mover deja el valor en su destino"},
         {"add $0, $1, $2", WRITES_OP0, UNCHECKED,
          "sumar sin sufijo no deja banderas"},
         {"adds $0, $1, $2", WRITES_OP0 | WRITES_FLAGS, UNCHECKED,
@@ -688,10 +738,12 @@ int main() {
         {"sub $0, $1, $2", WRITES_OP0, UNCHECKED, "restar"},
         {"cmp $0, $1", WRITES_FLAGS, UNCHECKED,
          "comparar existe PARA dejar banderas"},
-        {"ldr $0, [$1]", WRITES_OP0 | READS_MEM, UNCHECKED, "cargar lee memoria"},
+        {"ldr $0, [$1]", WRITES_OP0 | READS_MEM, UNCHECKED,
+         "cargar lee memoria"},
         {"str $0, [$1]", WRITES_MEM, UNCHECKED, "guardar la escribe"},
         {"bl destino", CALL | WRITES_REG, UNCHECKED,
-         "llamar escribe el registro de enlace, igual que en A64: la direccion de "
+         "llamar escribe el registro de enlace, igual que en A64: la direccion "
+         "de "
          "retorno va a un REGISTRO y no a la pila, asi que no toca memoria"},
         {"bx $0", NONE, UNCHECKED, "saltar a un registro no mira banderas"},
         {"dmb", ORDERS, UNCHECKED, "la barrera ordena y no mueve datos"},
@@ -699,11 +751,11 @@ int main() {
 
     /* --- RISC-V -----------------------------------------------------------
      *
-     * La que mas separa el modelo de x86, y por eso es la que mejor comprueba que
-     * no se le ha escrito encima: RISC-V NO TIENE registro de banderas.  Un `beq`
-     * compara dos registros y salta; no hay nada que leer ni que destruir.  Un
-     * modelo que diera por hecho que una rama condicional lee banderas se
-     * inventaria aqui una dependencia que no existe.
+     * La que mas separa el modelo de x86, y por eso es la que mejor comprueba
+     * que no se le ha escrito encima: RISC-V NO TIENE registro de banderas.  Un
+     * `beq` compara dos registros y salta; no hay nada que leer ni que
+     * destruir.  Un modelo que diera por hecho que una rama condicional lee
+     * banderas se inventaria aqui una dependencia que no existe.
      *
      * Y la memoria se escribe `0(a1)`, sin corchetes: quien busque un `[` para
      * saber si hay acceso no encuentra ninguno.
@@ -727,16 +779,25 @@ int main() {
     };
 
     tests::title("asm-efectos");
-    tests::section("x86: clase general", "enteros, memoria, banderas y control");
-    for (const Case &c : gp) check(c, "reg", "x86_64");
-    tests::section("x86: banco ancho", "SIMD, con y sin exigencia de alineacion");
-    for (const Case &c : vec) check(c, "xmm", "x86_64");
+    tests::section("x86: clase general",
+                   "enteros, memoria, banderas y control");
+    for (const Case &c : gp)
+        check(c, "reg", "x86_64");
+    tests::section("x86: banco ancho",
+                   "SIMD, con y sin exigencia de alineacion");
+    for (const Case &c : vec)
+        check(c, "xmm", "x86_64");
     tests::section("arm64", "otra arquitectura, otras preguntas");
-    for (const Case &c : a64) check(c, "reg", "arm64");
-    tests::section("arm32", "el sufijo `s` escribe banderas; la condicion las lee");
-    for (const Case &c : a32) check(c, "reg", "arm32");
-    tests::section("riscv", "sin banderas en absoluto: la rama compara registros");
-    for (const Case &c : rv) check(c, "reg", "riscv");
+    for (const Case &c : a64)
+        check(c, "reg", "arm64");
+    tests::section("arm32",
+                   "el sufijo `s` escribe banderas; la condicion las lee");
+    for (const Case &c : a32)
+        check(c, "reg", "arm32");
+    tests::section("riscv",
+                   "sin banderas en absoluto: la rama compara registros");
+    for (const Case &c : rv)
+        check(c, "reg", "riscv");
 
     tests::summary("asm-efectos", tally);
     return tally.exit_code();

@@ -40,8 +40,8 @@ namespace osr {
  *        del recolector.  El valor viaja en @c osr_buffer[vid].
  */
 struct Captura {
-    uint32_t vid;    ///< identificador del valor en el IR (indice del buffer).
-    uint8_t  es_gc;  ///< 1 si apunta a un objeto del recolector.
+    uint32_t vid;  ///< identificador del valor en el IR (indice del buffer).
+    uint8_t es_gc; ///< 1 si apunta a un objeto del recolector.
 };
 
 /**

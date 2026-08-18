@@ -18,8 +18,8 @@
  * que invalidar.  Esa propiedad, que se eligio por el cache incremental, sale
  * gratis aqui.
  *
- * Las relaciones inversas (que variables hay en un ambito, de que funcion es una
- * instruccion) tampoco se guardan en los nodos: se construyen aqui segun se
+ * Las relaciones inversas (que variables hay en un ambito, de que funcion es
+ * una instruccion) tampoco se guardan en los nodos: se construyen aqui segun se
  * necesitan, como el resto de indices del subsistema.
  */
 
@@ -61,9 +61,9 @@ class StoreNodeSource : public NodeSource {
     /**
      * @brief Declara a que funcion pertenece una instruccion intermedia.
      *
-     * Lo sabe quien produjo el intermedio, no el almacen: la capa de codigo solo
-     * conoce instrucciones, y preguntarle por funciones seria pedirle algo que
-     * deliberadamente no sabe.
+     * Lo sabe quien produjo el intermedio, no el almacen: la capa de codigo
+     * solo conoce instrucciones, y preguntarle por funciones seria pedirle algo
+     * que deliberadamente no sabe.
      *
      * @param instr Instruccion.
      * @param fn Funcion a la que pertenece.
@@ -133,12 +133,17 @@ class StoreNodeSource : public NodeSource {
     // da lo mismo, y quien pregunta no tiene por que saber si se releyo.
     mutable std::unordered_map<ContentHash, std::unique_ptr<CodeNode>> codes_;
     mutable std::unordered_map<ContentHash, std::unique_ptr<CodeDebug>> debugs_;
-    mutable std::unordered_map<ContentHash, std::unique_ptr<LoweringMap>> lowerings_;
-    mutable std::unordered_map<ContentHash, std::unique_ptr<StatementNode>> stmts_;
-    mutable std::unordered_map<ContentHash, std::unique_ptr<LanguageEntity>> entities_;
+    mutable std::unordered_map<ContentHash, std::unique_ptr<LoweringMap>>
+        lowerings_;
+    mutable std::unordered_map<ContentHash, std::unique_ptr<StatementNode>>
+        stmts_;
+    mutable std::unordered_map<ContentHash, std::unique_ptr<LanguageEntity>>
+        entities_;
     mutable std::unordered_map<ContentHash, std::unique_ptr<ScopeNode>> scopes_;
-    mutable std::unordered_map<ContentHash, std::unique_ptr<VariableNode>> vars_;
-    mutable std::unordered_map<ContentHash, std::unique_ptr<VariableMap>> varmaps_;
+    mutable std::unordered_map<ContentHash, std::unique_ptr<VariableNode>>
+        vars_;
+    mutable std::unordered_map<ContentHash, std::unique_ptr<VariableMap>>
+        varmaps_;
     mutable std::unordered_map<ContentHash, std::unique_ptr<FileNode>> files_;
 
     // Relaciones que no viven en los nodos: las declara quien las conoce.

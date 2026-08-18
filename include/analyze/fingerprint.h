@@ -4,7 +4,8 @@
  *        que el compilador INFIERE del IR y compone interprocedural.
  *
  * Es el "resumen por funcion" del modelo de codegen dirigido por resumenes
- * (ThinLTO-style) Y, a la vez, la base de las anotaciones comprobables (`@pure`,
+ * (ThinLTO-style) Y, a la vez, la base de las anotaciones comprobables
+ * (`@pure`,
  * `@alloc(0)`, `@nothrow`, `@stack(N)`, ...): la huella es la VERDAD inferida
  * contra la que se verifica el contrato del usuario.
  *
@@ -48,29 +49,37 @@ struct FunctionFingerprint {
     std::string function; ///< nombre de la funcion.
 
     // -- Locales (solo esta funcion, sin componer) --------------------------
-    uint32_t alloc_sites = 0;      ///< sitios de alloc en heap (GC/raw/newobj/closure-GC).
-    uint64_t stack_bytes = 0;      ///< bytes reservados por ALLOCA (count * sizeof T).
-    bool throws = false;           ///< THROW/RETHROW propio.
-    bool panics = false;           ///< PANIC propio.
-    bool self_recursive = false;   ///< se llama a si misma directamente.
-    bool frame_opaque = false;     ///< tiene `asm { }` (INLINE_ASM): su marco de
-                                   ///< pila REAL no se ve en el IR (los register()
-                                   ///< + asm no son ALLOCAs).  Para el TOTAL de sus
-                                   ///< callers se usa su @stack declarado, no el 0
-                                   ///< medido.
-    bool has_dynamic_call = false; ///< CALLVIRT/CALLM/CALLCLOSURE/CALLIND (efecto opaco).
-    bool pure_local = true;        ///< sin efectos de dato observables PROPIOS.
-    std::vector<std::string> calls; ///< callees ESTATICOS (CALL/TAILCALL/CALLN).
+    uint32_t alloc_sites =
+        0; ///< sitios de alloc en heap (GC/raw/newobj/closure-GC).
+    uint64_t stack_bytes =
+        0;               ///< bytes reservados por ALLOCA (count * sizeof T).
+    bool throws = false; ///< THROW/RETHROW propio.
+    bool panics = false; ///< PANIC propio.
+    bool self_recursive = false; ///< se llama a si misma directamente.
+    bool frame_opaque = false;   ///< tiene `asm { }` (INLINE_ASM): su marco de
+                               ///< pila REAL no se ve en el IR (los register()
+                               ///< + asm no son ALLOCAs).  Para el TOTAL de sus
+                               ///< callers se usa su @stack declarado, no el 0
+                               ///< medido.
+    bool has_dynamic_call =
+        false; ///< CALLVIRT/CALLM/CALLCLOSURE/CALLIND (efecto opaco).
+    bool pure_local = true; ///< sin efectos de dato observables PROPIOS.
+    std::vector<std::string>
+        calls; ///< callees ESTATICOS (CALL/TAILCALL/CALLN).
 
     // -- Compuestas (transitivas, tras compose_fingerprints) ----------------
-    uint32_t alloc_sites_total = 0; ///< sitios de alloc alcanzables (SUMA del cierre).
-    uint64_t stack_bytes_total = 0; ///< profundidad de pila peor caso = frame propio
-                                    ///< + MAX de callees; STACK_UNBOUNDED si no acotable.
-    bool throws_total = false;      ///< la funcion o alguna alcanzable lanza.
-    bool panics_total = false;      ///< idem panic.
-    bool recursive = false;         ///< en un ciclo del callgraph (o self).
-    bool effects_known = true;      ///< false => hay dinamica/externa -> totales conservadores.
-    bool pure = false;              ///< @pure: sin efectos de dato en TODO el cierre (sound).
+    uint32_t alloc_sites_total =
+        0; ///< sitios de alloc alcanzables (SUMA del cierre).
+    uint64_t stack_bytes_total =
+        0; ///< profundidad de pila peor caso = frame propio
+           ///< + MAX de callees; STACK_UNBOUNDED si no acotable.
+    bool throws_total = false; ///< la funcion o alguna alcanzable lanza.
+    bool panics_total = false; ///< idem panic.
+    bool recursive = false;    ///< en un ciclo del callgraph (o self).
+    bool effects_known =
+        true; ///< false => hay dinamica/externa -> totales conservadores.
+    bool pure =
+        false; ///< @pure: sin efectos de dato en TODO el cierre (sound).
 };
 
 /**
@@ -143,13 +152,15 @@ struct FunctionContracts {
 /**
  * @struct ContractCheck
  * @brief Resultado de verificar UN contrato de huella declarado por el usuario
- *        (@pure/@nothrow/@nopanic/@alloc(N)/@stack(N)) contra la huella inferida.
+ *        (@pure/@nothrow/@nopanic/@alloc(N)/@stack(N)) contra la huella
+ * inferida.
  */
 struct ContractCheck {
     enum Status {
-        OK,           ///< probado que se cumple (verde).
-        VIOLATED,     ///< probado que NO se cumple (rojo, error de compilacion).
-        UNVERIFIABLE, ///< no se pudo decidir (efectos desconocidos) -> ni si ni no.
+        OK,       ///< probado que se cumple (verde).
+        VIOLATED, ///< probado que NO se cumple (rojo, error de compilacion).
+        UNVERIFIABLE, ///< no se pudo decidir (efectos desconocidos) -> ni si ni
+                      ///< no.
     };
     std::string function;
     std::string contract; ///< "@pure", "@nothrow", "@alloc", ...
@@ -191,13 +202,17 @@ std::vector<ContractCheck> verify_contracts(
 struct TypeFingerprint {
     std::string type_name;
     enum Kind { STRUCT, CLASS, ENUM } kind = STRUCT;
-    uint64_t size_bytes = 0;    ///< tamano total del tipo (con padding).
-    uint32_t align_bytes = 1;   ///< alineamiento requerido.
-    uint32_t field_count = 0;   ///< numero de campos de instancia.
-    bool is_pod = false;        ///< value-type C-representable, sin dtor ni campos gestionados.
-    bool no_heap = false;       ///< ningun campo referencia el heap gestionado (GC/string/smart-ptr).
-    bool has_destructor = false; ///< declara `~Tipo()` (o algun campo destructible).
-    bool is_reference = false;  ///< tipo por referencia (clase): vive en el heap por naturaleza.
+    uint64_t size_bytes = 0;  ///< tamano total del tipo (con padding).
+    uint32_t align_bytes = 1; ///< alineamiento requerido.
+    uint32_t field_count = 0; ///< numero de campos de instancia.
+    bool is_pod =
+        false; ///< value-type C-representable, sin dtor ni campos gestionados.
+    bool no_heap = false; ///< ningun campo referencia el heap gestionado
+                          ///< (GC/string/smart-ptr).
+    bool has_destructor =
+        false; ///< declara `~Tipo()` (o algun campo destructible).
+    bool is_reference =
+        false; ///< tipo por referencia (clase): vive en el heap por naturaleza.
 };
 
 /**
@@ -207,9 +222,9 @@ struct TypeFingerprint {
  *        (compile-time, sin serializar) y se verifican por NOMBRE de tipo.
  */
 struct TypeContracts {
-    bool pod = false;     ///< @pod: value-type sin recursos gestionados ni dtor.
+    bool pod = false; ///< @pod: value-type sin recursos gestionados ni dtor.
     bool no_heap = false; ///< @no_heap: ningun campo apunta al heap gestionado.
-    int64_t size = -1;    ///< @size(N): tamano exacto en bytes; -1 = no declarado.
+    int64_t size = -1; ///< @size(N): tamano exacto en bytes; -1 = no declarado.
     bool any() const { return pod || no_heap || size >= 0; }
 };
 

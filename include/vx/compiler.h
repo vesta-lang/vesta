@@ -50,7 +50,7 @@ namespace vx {
 struct CompileOptions {
     std::string module_name; ///< Nombre logico del modulo (por defecto "main").
     bool emit_debug =
-        false;         ///< Emitir comentarios @line N en el .vel generado.
+        false; ///< Emitir comentarios @line N en el .vel generado.
     /// Carpeta donde volcar la base de conocimiento de depuracion (@c vxdbg).
     /// Vacia = la de por defecto, dentro del cache del compilador.
     ///
@@ -219,9 +219,9 @@ struct CompileOptions {
      * @brief Convertir en ERROR los accesos demostrablemente fuera de region.
      *
      * Al CONSTRUIR, si.  Al ANALIZAR, no: `--analyze` los enseña en su propia
-     * seccion con la prueba delante, y abortar ahi dejaria sin analisis justo al
-     * programa que mas falta le hace.  Mismo comprobador en los dos casos; lo
-     * que cambia es que se hace con el veredicto.
+     * seccion con la prueba delante, y abortar ahi dejaria sin analisis justo
+     * al programa que mas falta le hace.  Mismo comprobador en los dos casos;
+     * lo que cambia es que se hace con el veredicto.
      */
     bool report_bounds = true;
 
@@ -230,7 +230,8 @@ struct CompileOptions {
     /// (--no-exceptions) para kernels/freestanding donde no se quiere ningun
     /// runtime de excepciones; entonces un try/catch/throw da error claro.
     /// Default true.  Coste cero si el programa no usa excepciones (el runtime
-    /// solo se emite si hay try/catch/throw).  Solo afecta a @c native_poo (AOT).
+    /// solo se emite si hay try/catch/throw).  Solo afecta a @c native_poo
+    /// (AOT).
     bool exceptions_enabled = true;
 
     /// Bits del target para el ensamblado del inline-asm (@Naked / asm{}): 64
@@ -242,16 +243,18 @@ struct CompileOptions {
     /// Ancho del chunk SIMD (bytes) que el matcher del vectorizador hornea en
     /// AOT (native_poo): 16 (SSE2/defecto), 32 (AVX), 64 (AVX512).  En AOT lo
     /// fija el TARGET (--float-isa), no el host de build -> cross-compile
-    /// correcto (no emitir AVX2 si el target es solo-SSE2) y ancho seleccionable.
-    /// El codegen (vreg) deriva el mismo ancho de @c FloatIsa.  Fuera de AOT el
-    /// matcher sigue usando el host (vec_chunk_isa) para portabilidad del .velb.
+    /// correcto (no emitir AVX2 si el target es solo-SSE2) y ancho
+    /// seleccionable. El codegen (vreg) deriva el mismo ancho de @c FloatIsa.
+    /// Fuera de AOT el matcher sigue usando el host (vec_chunk_isa) para
+    /// portabilidad del .velb.
     uint8_t aot_vec_width = 16;
 
     /// --float-isa auto: el binario multiversiona las funciones vectorizadas y
     /// elige sse2/avx2/avx512 en runtime por cpuid.  El matcher hornea el chunk
     /// con estrategia DUAL para que UN IR compile a las 3 variantes: element-
-    /// wise/unary/scalar-bcast a 64 (cada variante decompone 4x128/2x256/1x512),
-    /// reduccion/FMA a 16 (el acumulador no splittea -> 128b en todas).
+    /// wise/unary/scalar-bcast a 64 (cada variante decompone
+    /// 4x128/2x256/1x512), reduccion/FMA a 16 (el acumulador no splittea ->
+    /// 128b en todas).
     bool aot_auto_vec = false;
 
     /// Fase 3.5 LSP: cuando true, @c compile_vx_source vuelca un snapshot
@@ -263,22 +266,25 @@ struct CompileOptions {
     bool dump_comptime_values = false;
 
     /// LSP "notebook" (valores runtime): cuando true, el lowering instrumenta
-    /// cada declaracion/asignacion de variable ESCALAR (int/bool/char) emitiendo
-    /// un CALLN a @c vesta_io:vio_lsp_value(source_line, valor) que vuelca
-    /// @c __LSPVAL__:linea:valor a stderr.  El LSP compila con este flag, ejecuta
-    /// el @c .velb en un subproceso con timeout y parsea esos marcadores para
-    /// mostrar los valores reales de las variables inline.  Estrictamente
-    /// ADITIVO y gateado: con el default false el codegen es EXACTAMENTE el
-    /// historico (cero coste).  NUNCA se activa en compilacion normal.
+    /// cada declaracion/asignacion de variable ESCALAR (int/bool/char)
+    /// emitiendo un CALLN a @c vesta_io:vio_lsp_value(source_line, valor) que
+    /// vuelca
+    /// @c __LSPVAL__:linea:valor a stderr.  El LSP compila con este flag,
+    /// ejecuta el @c .velb en un subproceso con timeout y parsea esos
+    /// marcadores para mostrar los valores reales de las variables inline.
+    /// Estrictamente ADITIVO y gateado: con el default false el codegen es
+    /// EXACTAMENTE el historico (cero coste).  NUNCA se activa en compilacion
+    /// normal.
     bool lsp_value_trace = false;
 
     /// Politica de contraccion de coma flotante a nivel de MODULO (CLI
     /// -ffp-contract).  true (default) = fast: se permite contraer a*b+c en
     /// FMA (1 redondeo).  false = off (IEEE estricto, 2 redondeos).  Se AND-ea
     /// con el @c fp_contract por-funcion (@fp(strict) pone la funcion a false)
-    /// -> off global fuerza TODO a false.  Se aplica a @c IrFunction::fp_contract
-    /// en el lowering (misma unidad de traduccion que el optimizer), en vez de
-    /// depender de un global mutable que se duplica entre vm.exe/DLL/vmcore.
+    /// -> off global fuerza TODO a false.  Se aplica a @c
+    /// IrFunction::fp_contract en el lowering (misma unidad de traduccion que
+    /// el optimizer), en vez de depender de un global mutable que se duplica
+    /// entre vm.exe/DLL/vmcore.
     bool fp_contract = true;
 };
 
@@ -307,7 +313,7 @@ void traer_asignador_del_lenguaje(ir::IrModule &mod, const CompileOptions &opts,
  * estar vacio o ser parcial.
  */
 struct CompileResult {
-    bool ok = false;      ///< Exito global.
+    bool ok = false; ///< Exito global.
     /// Huella del mapa que liga los simbolos del artefacto con las entidades
     /// del grafo de depuracion.  Quien produzca el artefacto final la publica
     /// bajo su identificador de construccion: es lo que permite, desde una
@@ -369,7 +375,7 @@ struct CompileResult {
     std::string html_ir_pre;
     std::string html_ir_post;
     std::string html_vel;
-    std::string html_types; ///< HTML del diagrama de tipos.
+    std::string html_types;  ///< HTML del diagrama de tipos.
     Diagnostics diagnostics; ///< Errores y warnings acumulados.
 
     /**
@@ -388,11 +394,11 @@ struct CompileResult {
      * hasta el final del analisis de tipos.
      */
     struct TiemposFrontend {
-        long analisis_us = 0;   ///< Lexico + sintaxis: fuente -> AST.
-        long tipos_us = 0;      ///< Comprobacion de tipos sobre el AST.
-        long bajada_us = 0;     ///< AST -> IR.
-        long optimizar_us = 0;  ///< Pases sobre el IR.
-        long emitir_us = 0;     ///< IR -> texto .vel.
+        long analisis_us = 0;  ///< Lexico + sintaxis: fuente -> AST.
+        long tipos_us = 0;     ///< Comprobacion de tipos sobre el AST.
+        long bajada_us = 0;    ///< AST -> IR.
+        long optimizar_us = 0; ///< Pases sobre el IR.
+        long emitir_us = 0;    ///< IR -> texto .vel.
 
         /** Resolver el grafo de dependencias: averiguar QUE modulos entran en
          *  la compilacion.  Solo se llena al compilar un proyecto (varios
@@ -410,8 +416,8 @@ struct CompileResult {
         /// esperaria quien solo quiere saber si su codigo esta bien.
         long comprobar_us() const { return analisis_us + tipos_us; }
         long total_us() const {
-            return analisis_us + tipos_us + bajada_us + optimizar_us
-                   + emitir_us + resolver_us + modulos_us;
+            return analisis_us + tipos_us + bajada_us + optimizar_us +
+                   emitir_us + resolver_us + modulos_us;
         }
     };
     TiemposFrontend tiempos; ///< Reparto del coste del frontend.
@@ -462,7 +468,8 @@ struct CompileResult {
     std::unordered_map<std::string, analyze::TypeContracts> type_contracts;
 
     /// Huella de cada TIPO agregado (layout + propiedades de recurso) inferida
-    /// de los layouts del type checker.  La consume --analyze (reporte + checks).
+    /// de los layouts del type checker.  La consume --analyze (reporte +
+    /// checks).
     std::vector<analyze::TypeFingerprint> type_fingerprints;
 
     /**
@@ -549,10 +556,10 @@ struct CompileResult {
      * Lo que alimenta hoy a la ComptimeVM se obtiene compilando el PROYECTO
      * ENTERO -- 704 KB, 182 macros, ~800 ms, el 43% de una compilacion en frio
      * --, cuando las raices comptime reales de ese mismo programa son ocho
-     * funciones.  Devolviendo aqui su fuente, quien orquesta puede compilar SOLO
-     * eso, que ademas debe hacerse desde FUERA: construir el artefacto dentro de
-     * la compilacion que lo necesita RECURSA (`inject` es un `@Macro`, asi que
-     * el conjunto se contiene a si mismo).
+     * funciones.  Devolviendo aqui su fuente, quien orquesta puede compilar
+     * SOLO eso, que ademas debe hacerse desde FUERA: construir el artefacto
+     * dentro de la compilacion que lo necesita RECURSA (`inject` es un
+     * `@Macro`, asi que el conjunto se contiene a si mismo).
      *
      * Vacio si el modulo no tiene nada comptime.
      */
@@ -570,10 +577,10 @@ struct CompileResult {
     std::string comptime_vel_text;
     /// Seccion `@ir` que acompana a @c comptime_vel_text.
     std::vector<uint8_t> comptime_ir_section_bytes;
-    /// Clave de contenido de @c comptime_unit_source: cambia si y solo si cambia
-    /// una decl comptime o una de sus dependencias.  Tocar codigo de runtime NO
-    /// la mueve, que es lo que permite reusar el artefacto entre compilaciones.
-    /// 0 si no hay conjunto.
+    /// Clave de contenido de @c comptime_unit_source: cambia si y solo si
+    /// cambia una decl comptime o una de sus dependencias.  Tocar codigo de
+    /// runtime NO la mueve, que es lo que permite reusar el artefacto entre
+    /// compilaciones. 0 si no hay conjunto.
     uint64_t comptime_unit_hash = 0;
     /// true si el modulo tiene candidatos de precomputo CTPE (fn evaluable
     /// zero-param con retorno escalar).  Informativo; el plegado ocurre dentro
@@ -614,12 +621,12 @@ struct CompileResult {
      * compilador resolvio en tiempo de compilacion.
      */
     struct ComptimeValueSnapshot {
-        std::string name;      ///< Nombre de la constante comptime.
-        std::string scope;     ///< Ambito (best-effort; "" = global/desconocido).
-        std::string type_kind; ///< "int"|"string"|"array"|"struct"|"type".
-        std::string value_str; ///< Representacion legible del valor.
-        SourceLoc loc;         ///< Ubicacion de la expresion (para hover);
-                               ///< line==0 si no aplica (consts top-level).
+        std::string name;  ///< Nombre de la constante comptime.
+        std::string scope; ///< Ambito (best-effort; "" = global/desconocido).
+        std::string type_kind;    ///< "int"|"string"|"array"|"struct"|"type".
+        std::string value_str;    ///< Representacion legible del valor.
+        SourceLoc loc;            ///< Ubicacion de la expresion (para hover);
+                                  ///< line==0 si no aplica (consts top-level).
         std::string builtin_kind; ///< "sizeof"/"alignof"/"kind"/"type_id"/
                                   ///< "typename" si proviene de un builtin; ""
                                   ///< para constantes comptime normales.
@@ -648,8 +655,8 @@ struct CompileResult {
  * @return CompileResult con el .vel y el set de diagnosticos.
  */
 CompileResult compile_vx_source(const std::string &source,
-                                 const std::string &filename,
-                                 const CompileOptions &opts = {});
+                                const std::string &filename,
+                                const CompileOptions &opts = {});
 
 /**
  * @brief Compila un proyecto multi-modulo ( M.2.e).
@@ -708,7 +715,8 @@ bool vx_source_has_imports(const std::string &source);
  * el analisis.
  *
  * @param source Texto Vesta.
- * @return true si aparece la palabra `namespace` fuera de comentarios y cadenas.
+ * @return true si aparece la palabra `namespace` fuera de comentarios y
+ * cadenas.
  */
 bool vx_source_declara_namespace(const std::string &source);
 
@@ -718,10 +726,11 @@ bool vx_source_declara_namespace(const std::string &source);
  *
  * Los fallos que el analisis puede demostrar no pueden vivir solo en
  * `--analyze`: tienen que salir AL COMPILAR, que es cuando se leen.  Consume el
- * mismo comprobador que usa el informe (`analysis::effects::check_region_bounds`)
- * para que no haya dos criterios.
+ * mismo comprobador que usa el informe
+ * (`analysis::effects::check_region_bounds`) para que no haya dos criterios.
  *
- * @param mod   Modulo IR ya optimizado (el codigo que de verdad se va a emitir).
+ * @param mod   Modulo IR ya optimizado (el codigo que de verdad se va a
+ * emitir).
  * @param diags Bolsa donde se acumulan.
  */
 /**
@@ -747,10 +756,8 @@ bool vx_source_declara_namespace(const std::string &source);
  * @param file Fichero al que atribuir la posicion.
  */
 void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
-                                 const std::string &file,
-                                 bool programa_cerrado,
-                                 bool decir_lo_no_acotado,
-                                 const char *backend);
+                                 const std::string &file, bool programa_cerrado,
+                                 bool decir_lo_no_acotado, const char *backend);
 
 void vx_report_bounds(const ir::IrModule &mod, Diagnostics &diags,
                       const std::string &file);

@@ -17,8 +17,8 @@
  * **Sobre el genero.**  Los identificadores siguen siendo tipados
  * (@ref CodeId, @ref VariableId ...) y cruzarlos sigue sin compilar: esa
  * proteccion no se pierde.  El genero reaparece aqui para lo contrario -- para
- * poder referirse a un nodo CUALQUIERA sin saber cual es --, que es justo lo que
- * necesita un diagnostico para citar lo que le convenga, o el almacen para
+ * poder referirse a un nodo CUALQUIERA sin saber cual es --, que es justo lo
+ * que necesita un diagnostico para citar lo que le convenga, o el almacen para
  * volcar lo que le den.  Son dos necesidades opuestas y cada una tiene su
  * mecanismo: el tipo protege en la interfaz, el genero permite lo generico.
  */
@@ -42,21 +42,21 @@ namespace vxdbg {
 enum class NodeKind : uint16_t {
     Unknown = 0,
     Module = 1,
-    Entity = 2,     ///< lo que un frontend declare (ver source_meta.h)
+    Entity = 2, ///< lo que un frontend declare (ver source_meta.h)
     Scope = 3,
     Variable = 4,
     Statement = 5,
     File = 6,
-    Lowering = 7,   ///< correspondencia sentencia <-> intermedio
+    Lowering = 7, ///< correspondencia sentencia <-> intermedio
     IrFunction = 8,
     Block = 9,
     IrInstr = 10,
-    Code = 11,        ///< un cuerpo de codigo generado
-    CodeDebug = 12,   ///< su correspondencia con el intermedio
-    VariableMap = 13, ///< donde vive una variable, por backend
+    Code = 11,          ///< un cuerpo de codigo generado
+    CodeDebug = 12,     ///< su correspondencia con el intermedio
+    VariableMap = 13,   ///< donde vive una variable, por backend
     ExecutionEdge = 14, ///< una transferencia de control
-    InlineSite = 15,  ///< un marco que el optimizador se llevo
-    Diagnostic = 16,  ///< la explicacion de un fallo
+    InlineSite = 15,    ///< un marco que el optimizador se llevo
+    Diagnostic = 16,    ///< la explicacion de un fallo
     RuntimeObject = 17, ///< un valor del runtime citado por un diagnostico
     /// Por donde se ENTRA al grafo: que simbolos de un artefacto corresponden
     /// a que entidades.  Un almacen direccionado por contenido no se puede
@@ -177,8 +177,7 @@ namespace std {
 /// Permite usar una referencia generica como clave de un mapa.
 template <> struct hash<vxdbg::NodeRef> {
     size_t operator()(const vxdbg::NodeRef &r) const noexcept {
-        return hash<vxdbg::ContentHash>{}(r.hash) ^
-               static_cast<size_t>(r.kind);
+        return hash<vxdbg::ContentHash>{}(r.hash) ^ static_cast<size_t>(r.kind);
     }
 };
 } // namespace std

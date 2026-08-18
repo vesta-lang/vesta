@@ -23,7 +23,7 @@ namespace {
 /// dos modulos pueden estar bajando asm a la vez.  Anotar es raro (una vez por
 /// bloque `asm` de todo el programa), asi que un cerrojo simple sobra: aqui no
 /// hay nada caliente que proteger.
-std::mutex                   &cerrojo() {
+std::mutex &cerrojo() {
     static std::mutex m;
     return m;
 }
@@ -41,18 +41,19 @@ std::vector<BloqueAsmBajado> &registro() {
  */
 uint32_t contar_instrucciones(const std::string &cuerpo) {
     uint32_t n = 0;
-    size_t   i = 0;
+    size_t i = 0;
     while (i <= cuerpo.size()) {
         const size_t fin = cuerpo.find('\n', i);
-        const std::string linea =
-            cuerpo.substr(i, (fin == std::string::npos ? cuerpo.size() : fin) - i);
+        const std::string linea = cuerpo.substr(
+            i, (fin == std::string::npos ? cuerpo.size() : fin) - i);
         i = (fin == std::string::npos) ? cuerpo.size() + 1 : fin + 1;
 
         size_t a = 0;
-        while (a < linea.size() && (linea[a] == ' ' || linea[a] == '\t')) ++a;
-        if (a >= linea.size()) continue;                       // vacia
-        if (linea[a] == ';' || linea[a] == '#') continue;      // comentario
-        if (linea.compare(a, 2, "//") == 0) continue;          // comentario
+        while (a < linea.size() && (linea[a] == ' ' || linea[a] == '\t'))
+            ++a;
+        if (a >= linea.size()) continue;                  // vacia
+        if (linea[a] == ';' || linea[a] == '#') continue; // comentario
+        if (linea.compare(a, 2, "//") == 0) continue;     // comentario
         size_t b = linea.size();
         while (b > a && (linea[b - 1] == ' ' || linea[b - 1] == '\t' ||
                          linea[b - 1] == '\r'))

@@ -16,7 +16,7 @@
  */
 
 #include "vx/compiler.h"
-#include "vx/source_text.h" // un solo fin de linea para todo el pipeline
+#include "vx/source_text.h"  // un solo fin de linea para todo el pipeline
 #include "vx/c_header_gen.h" // Fase 4 interop C: vx --emit-header
 #include "vx/vxdbg_emit.h"   // base de conocimiento de depuracion
 
@@ -47,14 +47,14 @@
 // que no esta en el include path del frontend).  Firma exacta del header.
 namespace asm_multi_process {
 int run_worker(const std::string &file_name, const std::string &output_prefix,
-                bool skip_preprocessor, bool keep_labels,
-                const std::vector<uint8_t> *ir_section_bytes, bool emit_map);
+               bool skip_preprocessor, bool keep_labels,
+               const std::vector<uint8_t> *ir_section_bytes, bool emit_map);
 int run_worker_from_source(std::string code, const std::string &file_name,
                            const std::string &output_prefix,
                            bool skip_preprocessor, bool keep_labels,
                            const std::vector<uint8_t> *ir_section_bytes,
                            bool emit_map);
-}
+} // namespace asm_multi_process
 #include <chrono>
 #include "vx/type_checker.h"
 
@@ -78,7 +78,8 @@ namespace vx {
  */
 // Recolecta los contratos de huella declarados en el AST (recorriendo los
 // NamespaceDecl) a un mapa por nombre de funcion.  Se lleva APARTE del IR por
-// diseno: son metadata compile-time (modo --analyze) que el codegen no necesita.
+// diseno: son metadata compile-time (modo --analyze) que el codegen no
+// necesita.
 static void collect_contracts_(
     const std::vector<std::unique_ptr<ast::Node>> &decls,
     std::unordered_map<std::string, analyze::FunctionContracts> &out) {
@@ -263,8 +264,8 @@ static ir::OptLevel opt_level_from_int(int n) noexcept {
 }
 
 CompileResult compile_vx_source(const std::string &source,
-                                 const std::string &filename,
-                                 const CompileOptions &opts) {
+                                const std::string &filename,
+                                const CompileOptions &opts) {
     CompileResult res;
     // Reloj de fase.  Se mide SIEMPRE: son cinco lecturas por compilacion, y
     // una medida que hay que pedir con una opcion es una medida que nadie
@@ -275,8 +276,8 @@ CompileResult compile_vx_source(const std::string &source,
     auto cerrar_fase = [&marca]() -> long {
         const auto ahora = RelojFase::now();
         const long us = static_cast<long>(
-            std::chrono::duration_cast<std::chrono::microseconds>(
-                ahora - marca).count());
+            std::chrono::duration_cast<std::chrono::microseconds>(ahora - marca)
+                .count());
         marca = ahora;
         return us;
     };
@@ -320,7 +321,8 @@ CompileResult compile_vx_source(const std::string &source,
         const ComptimeUnit cu = collect_comptime_unit(*mod, source);
         res.comptime_unit_source = cu.unit_source;
         res.comptime_unit_hash = cu.content_hash;
-        if (std::getenv("VESTA_DUMP_COMPTIME_UNIT")) dump_comptime_unit(cu, std::cerr);
+        if (std::getenv("VESTA_DUMP_COMPTIME_UNIT"))
+            dump_comptime_unit(cu, std::cerr);
     }
 
     // P1: eliminar el tree-walker tambien para los `comptime { }` de modulo.
@@ -347,7 +349,8 @@ CompileResult compile_vx_source(const std::string &source,
                 rt->prim = PrimitiveKind::I64;
                 fn->return_type = std::move(rt);
                 auto body = std::make_unique<ast::BlockStmt>();
-                for (auto &st : cb->stmts) body->body.push_back(std::move(st));
+                for (auto &st : cb->stmts)
+                    body->body.push_back(std::move(st));
                 auto ret = std::make_unique<ast::ReturnStmt>();
                 auto zero = std::make_unique<ast::IntLitExpr>();
                 zero->value = 0;
@@ -377,7 +380,8 @@ CompileResult compile_vx_source(const std::string &source,
         }
         // Reasignar SIEMPRE: el loop ya movio cada decl a `kept`, dejando
         // `mod->decls` con punteros moved-from aunque no hubiera bloques.
-        for (auto &s : synth) kept.push_back(std::move(s));
+        for (auto &s : synth)
+            kept.push_back(std::move(s));
         mod->decls = std::move(kept);
     }
 
@@ -555,8 +559,9 @@ CompileResult compile_vx_source(const std::string &source,
     }
     lo.set_native_poo(opts.native_poo); //  AOT.2.b: POO nativa (-m aot)
     lo.set_asm_target_bits(opts.asm_target_bits); // arch del inline-asm @Naked
-    lo.set_aot_vec_width(opts.aot_vec_width); // ancho SIMD del target (--float-isa)
-    lo.set_aot_auto_vec(opts.aot_auto_vec);   // --float-isa auto: chunk dual
+    lo.set_aot_vec_width(
+        opts.aot_vec_width); // ancho SIMD del target (--float-isa)
+    lo.set_aot_auto_vec(opts.aot_auto_vec); // --float-isa auto: chunk dual
     lo.set_emit_comptime_fns(opts.emit_comptime_fns); // solo-LSP: inspeccion
     // C-3: detectar @StringConcat / @StringEq ANTES del lowering.  A
     // diferencia de @AllocatorOverride (que reescribe IR post-lowering),
@@ -569,10 +574,10 @@ CompileResult compile_vx_source(const std::string &source,
         if (fd->is_string_concat_override) {
             if (!res.string_concat_override.empty()) {
                 res.ok = false;
-                res.diagnostics.error(
-                    SourceLoc{opts.module_name, 0, 0},
-                    "multiples @StringConcat: '" + res.string_concat_override +
-                        "' y '" + fd->name + "'");
+                res.diagnostics.error(SourceLoc{opts.module_name, 0, 0},
+                                      "multiples @StringConcat: '" +
+                                          res.string_concat_override + "' y '" +
+                                          fd->name + "'");
                 return res;
             }
             res.string_concat_override = fd->name;
@@ -580,10 +585,10 @@ CompileResult compile_vx_source(const std::string &source,
         if (fd->is_string_eq_override) {
             if (!res.string_eq_override.empty()) {
                 res.ok = false;
-                res.diagnostics.error(
-                    SourceLoc{opts.module_name, 0, 0},
-                    "multiples @StringEq: '" + res.string_eq_override + "' y '" +
-                        fd->name + "'");
+                res.diagnostics.error(SourceLoc{opts.module_name, 0, 0},
+                                      "multiples @StringEq: '" +
+                                          res.string_eq_override + "' y '" +
+                                          fd->name + "'");
                 return res;
             }
             res.string_eq_override = fd->name;
@@ -661,10 +666,9 @@ CompileResult compile_vx_source(const std::string &source,
                 if (res.aot_helper_override_syms.count(tgt)) {
                     res.ok = false;
                     res.diagnostics.error(
-                        fd->loc,
-                        "multiples @HelperOverride(" + tgt + "): '" +
-                            res.aot_helper_override_syms[tgt] + "' y '" +
-                            fd->name + "'");
+                        fd->loc, "multiples @HelperOverride(" + tgt + "): '" +
+                                     res.aot_helper_override_syms[tgt] +
+                                     "' y '" + fd->name + "'");
                     return res;
                 }
                 // Validacion de firma compatible por helper.  No es fatal (el
@@ -673,12 +677,11 @@ CompileResult compile_vx_source(const std::string &source,
                 //   strcmp -> i64(u8*, i64, u8*, i64)
                 //   strlen -> i64(u8*)
                 bool ret_void =
-                    !fd->return_type ||
-                    (fd->return_type->kind ==
-                         ast::NodeKind::PrimitiveTypeNode &&
-                     static_cast<ast::PrimitiveTypeNode *>(
-                         fd->return_type.get())
-                             ->prim == PrimitiveKind::VOID);
+                    !fd->return_type || (fd->return_type->kind ==
+                                             ast::NodeKind::PrimitiveTypeNode &&
+                                         static_cast<ast::PrimitiveTypeNode *>(
+                                             fd->return_type.get())
+                                                 ->prim == PrimitiveKind::VOID);
                 bool sig_ok = true;
                 std::string expected;
                 if (tgt == "memcpy") {
@@ -760,20 +763,21 @@ CompileResult compile_vx_source(const std::string &source,
         spans.reserve(lo.emitted_spans().size());
         for (const auto &e : lo.emitted_spans())
             spans.push_back({e.symbol, e.line, e.column, e.length});
-        if (!emit_vxdbg_source(tc, lo.emitted_symbols(), spans, filename, source,
-                               opts.vxdbg_dir, st, dbg_err)) {
+        if (!emit_vxdbg_source(tc, lo.emitted_symbols(), spans, filename,
+                               source, opts.vxdbg_dir, st, dbg_err)) {
             std::cerr << "[vxdbg] no se pudo emitir: " << dbg_err << "\n";
         }
         res.vxdbg_artifact_map = st.artifact_map;
         res.vxdbg_span_map = st.span_map;
     }
 
-    // -ffp-contract=off (CLI, per-modulo): fuerza IEEE estricto (sin contraccion
-    // FMA) AND-eando la politica del modulo con el fp_contract por-funcion que ya
-    // puso el lowering (@fp(strict) -> false).  Se aplica aqui, en la misma unidad
-    // de traduccion que el optimizer/emitter que consumen irmod, para no depender
-    // del global mutable ir_set_fma_contract_allowed (se duplica entre vm.exe, el
-    // DLL y vmcore -> el setter de main.cpp puede tocar una copia distinta).
+    // -ffp-contract=off (CLI, per-modulo): fuerza IEEE estricto (sin
+    // contraccion FMA) AND-eando la politica del modulo con el fp_contract
+    // por-funcion que ya puso el lowering (@fp(strict) -> false).  Se aplica
+    // aqui, en la misma unidad de traduccion que el optimizer/emitter que
+    // consumen irmod, para no depender del global mutable
+    // ir_set_fma_contract_allowed (se duplica entre vm.exe, el DLL y vmcore ->
+    // el setter de main.cpp puede tocar una copia distinta).
     if (!opts.fp_contract) {
         for (auto &fn : irmod.functions)
             fn.fp_contract = false;
@@ -851,13 +855,15 @@ CompileResult compile_vx_source(const std::string &source,
                         if (have.count(fn.name)) continue;
                         irmod.functions.push_back(std::move(fn));
                     }
-                    // Las funciones @Naked emiten un CALLN a `vrt:inline_asm_exec`
-                    // (ejecutor de inline-asm del interp) en su bytecode; el
-                    // linker necesita el native_import para resolverlo aunque en
-                    // interp ese bytecode nunca se ejecute (la fibra corre por el
-                    // opcode SWAPCTX / el JIT las materializa nativas).
+                    // Las funciones @Naked emiten un CALLN a
+                    // `vrt:inline_asm_exec` (ejecutor de inline-asm del interp)
+                    // en su bytecode; el linker necesita el native_import para
+                    // resolverlo aunque en interp ese bytecode nunca se ejecute
+                    // (la fibra corre por el opcode SWAPCTX / el JIT las
+                    // materializa nativas).
                     for (const auto &ni : vf_mod.native_imports)
-                        irmod.register_native_import(ni.lib, ni.name, ni.efectos);
+                        irmod.register_native_import(ni.lib, ni.name,
+                                                     ni.efectos);
                 }
             }
         }
@@ -965,8 +971,8 @@ CompileResult compile_vx_source(const std::string &source,
     if (need_post_opt) {
         ir::IrModule irmod_opt = irmod;
         /* ASA observa ANTES de optimizar: la forma del programa tal como se
-         * escribio.  Es otra verdad, no una peor -- medido: la escalarizacion se
-         * lleva parte de los agregados antes de que nadie los mire, asi que
+         * escribio.  Es otra verdad, no una peor -- medido: la escalarizacion
+         * se lleva parte de los agregados antes de que nadie los mire, asi que
          * observar solo despues hace creer que el programa no los tenia. */
         analysis::asa::volcar_formas(irmod_opt, "pre-opt");
         ir::ir_optimize(irmod_opt, opt_level_from_int(opts.opt_level));
@@ -1143,8 +1149,8 @@ CompileResult compile_vx_source(const std::string &source,
             auto fps = analyze::compute_module_fingerprints(irmod, fp_arch);
             analyze::compose_fingerprints(fps, &res.contracts);
             // En --analyze (`emit_ir_preopt`) NO se emite el error ni se aborta
-            // (ver la nota en compiler_project.cpp): analyze mide, el build real
-            // enforza.
+            // (ver la nota en compiler_project.cpp): analyze mide, el build
+            // real enforza.
             if (!opts.emit_ir_preopt) {
                 auto checks = analyze::verify_contracts(fps, res.contracts);
                 bool violated = false;
@@ -1167,7 +1173,8 @@ CompileResult compile_vx_source(const std::string &source,
         // Contratos de TIPO (@pod/@no_heap/@size): recoger + computar la huella
         // de los tipos (desde los layouts del type checker) + verificar.  La
         // huella se calcula SIEMPRE (para el reporte de --analyze); los checks
-        // solo si hay contratos.  Decidibles del layout -> un VIOLATED es error.
+        // solo si hay contratos.  Decidibles del layout -> un VIOLATED es
+        // error.
         collect_type_contracts_(mod->decls, res.type_contracts);
         res.type_fingerprints = compute_type_fingerprints_(tc);
         if (!res.type_contracts.empty()) {
@@ -1218,7 +1225,8 @@ CompileResult compile_vx_source(const std::string &source,
                         /*allow_inline=*/!opts.emit_ir_preopt);
         res.tiempos.optimizar_us += static_cast<long>(
             std::chrono::duration_cast<std::chrono::microseconds>(
-                RelojFase::now() - marca_opt).count());
+                RelojFase::now() - marca_opt)
+                .count());
         /* No se serializa todavia: falta saber en que registro dejo el
          * asignador cada valor, y eso solo se sabe tras emitir.  Se guarda y
          * se serializa mas abajo, ya con esa informacion dentro. */
@@ -1237,28 +1245,31 @@ CompileResult compile_vx_source(const std::string &source,
          * otra segun se compilara solo o con el resto -- justo lo que no puede
          * pasar cuando los modulos se cachean por separado.  Quien SI ve el
          * programa entero es el camino de proyecto, y alli se dice. */
-        vx_report_asm_preconditions(irmod_for_section, res.diagnostics, filename,
-                                    /*programa_cerrado=*/false,
-                                    opts.emit_ir_preopt, opts.native_poo ? "aot" : "vm");
+        vx_report_asm_preconditions(
+            irmod_for_section, res.diagnostics, filename,
+            /*programa_cerrado=*/false, opts.emit_ir_preopt,
+            opts.native_poo ? "aot" : "vm");
         mod_para_seccion = std::move(irmod_for_section);
         hay_seccion = true;
     }
 
     // --- CTPE (on por defecto; VESTA_NO_CTPE desactiva): precomputo del
     //     programa completo. ---
-    // Si el modulo tiene candidatos (fn evaluable zero-param con retorno escalar,
-    // p.ej. un `main` puro), se construye un ComptimeRuntime a partir del .velb
-    // del modulo y el emisor pliega el resultado como CONST.  Es un dos-fases
-    // AUTOCONTENIDO: emit sin plegar -> ensamblar a .velb temporal -> cargar el
-    // runtime -> re-emitir con el runtime activo (el fold vive dentro del emisor).
-    // Solo actua si hay candidato (main puro): el 99% de programas con I/O no lo
-    // son -> sin coste.  Watchdog de 3s (VESTA_CTPE_MS) evita colgar el compile.
+    // Si el modulo tiene candidatos (fn evaluable zero-param con retorno
+    // escalar, p.ej. un `main` puro), se construye un ComptimeRuntime a partir
+    // del .velb del modulo y el emisor pliega el resultado como CONST.  Es un
+    // dos-fases AUTOCONTENIDO: emit sin plegar -> ensamblar a .velb temporal ->
+    // cargar el runtime -> re-emitir con el runtime activo (el fold vive dentro
+    // del emisor). Solo actua si hay candidato (main puro): el 99% de programas
+    // con I/O no lo son -> sin coste.  Watchdog de 3s (VESTA_CTPE_MS) evita
+    // colgar el compile.
     std::unique_ptr<vx::ComptimeRuntime> ctpe_rt;
-    // No en modulos con @Macro: el precomputo ya lo hace la maquinaria de macros
-    // (comptime) y su two-phase (VESTA_MC_PREBUILT) choca con el two-phase de
-    // CTPE.  Ademas los macros dejan un runtime comptime propio que conflictua.
-    // Tampoco cuando solo se pide el IR: el precomputo existe para que el
-    // artefacto lleve el resultado ya calculado, y aqui no hay artefacto.
+    // No en modulos con @Macro: el precomputo ya lo hace la maquinaria de
+    // macros (comptime) y su two-phase (VESTA_MC_PREBUILT) choca con el
+    // two-phase de CTPE.  Ademas los macros dejan un runtime comptime propio
+    // que conflictua. Tampoco cuando solo se pide el IR: el precomputo existe
+    // para que el artefacto lleve el resultado ya calculado, y aqui no hay
+    // artefacto.
     if (!std::getenv("VESTA_NO_CTPE") && opts.opt_level >= 2 && !opts.ir_only &&
         !res.ir_section_bytes.empty() && !res.has_lowerable_macros) {
         ctpe::Evaluability ev = ctpe::compute_evaluability(irmod);
@@ -1273,8 +1284,8 @@ CompileResult compile_vx_source(const std::string &source,
                 std::string base =
                     ".cache/ctpe/tmp/ctpe_" +
                     std::to_string(std::hash<std::string>{}(e1.vel_text));
-                /* Ensamblar a un `.velb` con su seccion @ir (para que el runtime
-                 * pueda compilar main en JIT y ejecutarlo).
+                /* Ensamblar a un `.velb` con su seccion @ir (para que el
+                 * runtime pueda compilar main en JIT y ejecutarlo).
                  *
                  * Desde la fuente EN MEMORIA: el texto lo acaba de producir la
                  * linea de arriba, asi que escribirlo a un fichero para que la
@@ -1295,8 +1306,10 @@ CompileResult compile_vx_source(const std::string &source,
                         // handler de safepoint se activa AQUI (no en
                         // try_invoke_ctpe) porque main se JIT-compila durante
                         // load_macros_from_bytes -- antes de invocarlo.  Asi su
-                        // codigo lleva los polls del watchdog.  Reset tras el emit.
-                        jit::jit_set_ctpe_safepoint(jit::jit_safepoint_handler_addr());
+                        // codigo lleva los polls del watchdog.  Reset tras el
+                        // emit.
+                        jit::jit_set_ctpe_safepoint(
+                            jit::jit_safepoint_handler_addr());
                         ctpe_rt = std::make_unique<vx::ComptimeRuntime>();
                         if (ctpe_rt->load_macros_from_bytes(std::move(velb)))
                             emit_opts.ctpe_runtime = ctpe_rt.get();
@@ -1338,15 +1351,15 @@ CompileResult compile_vx_source(const std::string &source,
          * optimizado: quedarse con unas funciones es copiar el modulo y filtrar
          * un vector.
          *
-         * Y de paso desaparecen tres problemas del enfoque por texto: no hay que
-         * preguntarse si el conjunto compila solo (sus ayudantes ya estan
+         * Y de paso desaparecen tres problemas del enfoque por texto: no hay
+         * que preguntarse si el conjunto compila solo (sus ayudantes ya estan
          * bajados aqui, para eso existe el pre-pase force-lower), no hay que
          * arrastrar `import`, y no hay recursion -- esto corre DESPUES del type
          * check, no dentro. */
         if (std::getenv("VESTA_PRUEBA_IR_COMPTIME")) {
             const ir::IrModule &fuente =
                 emitir_desde_optimizado ? mod_para_seccion : irmod;
-            ir::IrModule solo_ct = fuente;   // cabecera: imports/globals/libs
+            ir::IrModule solo_ct = fuente; // cabecera: imports/globals/libs
             solo_ct.functions.clear();
             for (const ir::IrFunction &f : fuente.functions) {
                 /* Un `@Macro` baja como `__macro_<X>`; una comptime fn conserva
@@ -1362,10 +1375,9 @@ CompileResult compile_vx_source(const std::string &source,
                       << " funciones, " << eres.vel_text.size()
                       << " bytes de .vel\n"
                       << "[prueba-ir] comptime: " << solo_ct.functions.size()
-                      << " funciones, "
-                      << (e_ct.ok ? e_ct.vel_text.size() : 0)
-                      << " bytes de .vel" << (e_ct.ok ? "" : "  (EMISION FALLO)")
-                      << "\n";
+                      << " funciones, " << (e_ct.ok ? e_ct.vel_text.size() : 0)
+                      << " bytes de .vel"
+                      << (e_ct.ok ? "" : "  (EMISION FALLO)") << "\n";
             if (!e_ct.ok)
                 std::cerr << "[prueba-ir] motivo: " << e_ct.error << "\n";
         }
@@ -1376,8 +1388,8 @@ CompileResult compile_vx_source(const std::string &source,
             // Volcar el error del emisor al sumidero unificado.
             SourceLoc loc;
             loc.file = filename;
-            res.diagnostics.error(std::move(loc),
-                                  std::string("emisor IR fallo: ") + eres.error);
+            res.diagnostics.error(
+                std::move(loc), std::string("emisor IR fallo: ") + eres.error);
             res.ok = false;
             return res;
         }
@@ -1393,11 +1405,13 @@ CompileResult compile_vx_source(const std::string &source,
             auto it = eres.value_regs.find(fn.name);
             if (it == eres.value_regs.end()) continue;
             const size_t n = std::min(fn.values.size(), it->second.size());
-            for (size_t v = 0; v < n; ++v) fn.values[v].reg = it->second[v];
+            for (size_t v = 0; v < n; ++v)
+                fn.values[v].reg = it->second[v];
         }
         // El intermedio que viaja dentro del artefacto: sin artefacto, sobra.
         if (!opts.ir_only)
-            res.ir_section_bytes = ir::emit_ir_section(mod_para_seccion.functions);
+            res.ir_section_bytes =
+                ir::emit_ir_section(mod_para_seccion.functions);
         /*  AOT: modulo completo (functions + static_data + globals) para
          * que el driver -m aot materialice los literales en .rodata. */
         res.ir_module_cache_bytes = ir::emit_ir_module_cache(mod_para_seccion);

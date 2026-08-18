@@ -100,7 +100,8 @@ struct Programa {
         LanguageEntity lector;
         lector.name = "Lector";
         lector.kind = EntityKind::Type;
-        lector.lang_kind = "class"; // lo pone el frontend; el formato no lo juzga
+        lector.lang_kind =
+            "class"; // lo pone el frontend; el formato no lo juzga
         {
             Relation d;
             d.kind = RelationKind::Derives;
@@ -170,7 +171,8 @@ struct Programa {
         store_node(store, lm, h);
         nodes.note_lowering(funcion_ir, h);
         nodes.note_function_of(instruccion, funcion_ir);
-        nodes.note_position_of(instruccion, 4); // cuarta instruccion de la funcion
+        nodes.note_position_of(instruccion,
+                               4); // cuarta instruccion de la funcion
         nodes.note_variable_in(ambito, variable);
 
         // --- Backend ---
@@ -221,7 +223,8 @@ int main() {
     prog.construir();
     vxdbg::DebugResolver resolver(prog.nodes, prog.session);
 
-    // La direccion cae dentro del tramo [16, 32) del cuerpo colocado en 0x400000.
+    // La direccion cae dentro del tramo [16, 32) del cuerpo colocado en
+    // 0x400000.
     std::printf("Recorrido completo\n");
     const auto s = resolver.resolve(0x400000 + 20);
 
@@ -238,7 +241,8 @@ int main() {
               "   y es la que genero ese tramo");
 
     comprobar(s.has_statement, "3. se sube a la sentencia del fuente");
-    comprobar(s.statement_kind == "call", "   sabiendo que clase de sentencia es");
+    comprobar(s.statement_kind == "call",
+              "   sabiendo que clase de sentencia es");
     comprobar(s.origin == vxdbg::OriginKind::Written,
               "   y que la escribio una persona, no el compilador");
     comprobar(s.span.begin_line == 33 && s.span.begin_column == 9,
@@ -251,7 +255,8 @@ int main() {
               "   de que especie es, sin conocer el lenguaje");
     comprobar(s.entity.lang_kind == "method",
               "   y con el genero que le puso su lenguaje");
-    comprobar(s.entity.declared_in == "Lector", "   y la clase que lo contiene");
+    comprobar(s.entity.declared_in == "Lector",
+              "   y la clase que lo contiene");
 
     // La jerarquia de la CLASE, que es lo que pedia el usuario ver en un fallo.
     const auto vista = resolver.describe_entity(prog.clase);

@@ -40,8 +40,9 @@ namespace lsp {
  * @brief Posicion LSP: linea 0-based + caracter 0-based en unidades UTF-16.
  */
 struct Position {
-    uint32_t line = 0;      ///< Linea, 0-based.
-    uint32_t character = 0; ///< Caracter dentro de la linea, en UTF-16, 0-based.
+    uint32_t line = 0; ///< Linea, 0-based.
+    uint32_t character =
+        0; ///< Caracter dentro de la linea, en UTF-16, 0-based.
 };
 
 /**

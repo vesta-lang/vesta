@@ -52,11 +52,11 @@ namespace {
 /// Representacion intermedia de un token ya resuelto a coordenadas LSP
 /// (lineas/caracteres UTF-16 absolutos), antes de codificar a deltas.
 struct AbsToken {
-    uint32_t line = 0;       ///< Linea 0-based.
-    uint32_t start = 0;      ///< Caracter inicial 0-based en UTF-16.
-    uint32_t length = 0;     ///< Longitud en unidades UTF-16.
-    uint32_t type = 0;       ///< Indice en la leyenda de tokenTypes.
-    uint32_t modifiers = 0;  ///< Mascara de modificadores.
+    uint32_t line = 0;      ///< Linea 0-based.
+    uint32_t start = 0;     ///< Caracter inicial 0-based en UTF-16.
+    uint32_t length = 0;    ///< Longitud en unidades UTF-16.
+    uint32_t type = 0;      ///< Indice en la leyenda de tokenTypes.
+    uint32_t modifiers = 0; ///< Mascara de modificadores.
 };
 
 /**
@@ -96,8 +96,8 @@ class PositionIndex {
         const size_t n = src.size();
         line_.assign(n, 0);
         col_.assign(n, 0);
-        uint32_t line = 0;       // linea 0-based.
-        uint32_t col = 0;        // columna 0-based en UTF-16.
+        uint32_t line = 0; // linea 0-based.
+        uint32_t col = 0;  // columna 0-based en UTF-16.
         size_t i = 0;
         while (i < n) {
             const unsigned char b = static_cast<unsigned char>(src[i]);
@@ -133,8 +133,7 @@ class PositionIndex {
                         }
                         cp = (cp << 6) | (cb & 0x3F);
                     }
-                    if (!ok)
-                        seq = 1;
+                    if (!ok) seq = 1;
                 }
             }
             // Anotar la posicion de inicio del code point en TODOS sus bytes
@@ -209,10 +208,8 @@ bool is_primitive_type_kw(vx::TokenKind k) {
     case TK::KW_UNIQUE:
     case TK::KW_SHARED:
     case TK::KW_BORROW:
-    case TK::KW_BORROW_MUT:
-        return true;
-    default:
-        return false;
+    case TK::KW_BORROW_MUT: return true;
+    default: return false;
     }
 }
 
@@ -275,10 +272,8 @@ bool is_operator(vx::TokenKind k) {
     case TK::MINUS_MINUS:
     case TK::ARROW:
     case TK::FAT_ARROW:
-    case TK::QUESTION:
-        return true;
-    default:
-        return false;
+    case TK::QUESTION: return true;
+    default: return false;
     }
 }
 
@@ -301,17 +296,25 @@ bool is_operator(vx::TokenKind k) {
 bool is_contextual_keyword(const std::string &name) {
     static const std::unordered_set<std::string> kContextualKw = {
         // Declaracion / inferencia de tipo.
-        "comptime", "auto", "var",
+        "comptime",
+        "auto",
+        "var",
         // Construcciones comptime / metaprogramacion.
-        "foreach", "lazy",
+        "foreach",
+        "lazy",
         // Inline asm.
-        "register", "clobbers",
+        "register",
+        "clobbers",
         // Imports selectivos y typedef explicit.
-        "as", "only", "from",
+        "as",
+        "only",
+        "from",
         // Concurrencia (hints de spawn).
-        "here", "on",
+        "here",
+        "on",
         // Datos crudos estilo NASM en bloques bytes.
-        "times", "bits",
+        "times",
+        "bits",
         // Captura raw de expresion en macros.
         "expr",
     };
@@ -331,59 +334,172 @@ bool is_contextual_keyword(const std::string &name) {
 bool is_builtin_name(const std::string &name) {
     static const std::unordered_set<std::string> kBuiltins = {
         // --- I/O (vesta_io) ---
-        "print", "println", "echo", "flush", "print_int", "print_uint",
-        "print_hex", "print_float", "print_bool", "print_char", "print_color",
-        "print_cstr", "print_bin", "print_oct", "print_ptr", "print_gchandle",
-        "print_pad", "fopen", "fwrite", "fclose",
+        "print",
+        "println",
+        "echo",
+        "flush",
+        "print_int",
+        "print_uint",
+        "print_hex",
+        "print_float",
+        "print_bool",
+        "print_char",
+        "print_color",
+        "print_cstr",
+        "print_bin",
+        "print_oct",
+        "print_ptr",
+        "print_gchandle",
+        "print_pad",
+        "fopen",
+        "fwrite",
+        "fclose",
         // --- Memoria cruda ---
-        "malloc", "free",
+        "malloc",
+        "free",
         // --- CPU dispatch ---
         "cpu_features",
         // --- Strings (StringObject) ---
-        "str_length", "str_bytes", "str_cstr", "str_wstr", "str_hash",
-        "str_intern", "str_concat", "str_equals", "str_make", "str_convert",
+        "str_length",
+        "str_bytes",
+        "str_cstr",
+        "str_wstr",
+        "str_hash",
+        "str_intern",
+        "str_concat",
+        "str_equals",
+        "str_make",
+        "str_convert",
         // --- Excepciones / secciones / RAII ---
-        "panic", "section_start", "section_end", "section_size", "dispose",
+        "panic",
+        "section_start",
+        "section_end",
+        "section_size",
+        "dispose",
         // --- FFI runtime dinamico ---
-        "ffi_open", "ffi_sym", "ffi_call",
+        "ffi_open",
+        "ffi_sym",
+        "ffi_call",
         // --- Math (vesta_math) ---
-        "sqrt", "pow", "fabs", "floor", "ceil", "round", "fmin", "fmax", "log",
-        "log2", "log10", "sin", "cos", "tan", "abs", "imin", "imax", "clamp",
-        "trunc", "iminu", "imaxu", "ilog2", "popcount", "clz", "ctz", "bswap",
-        "rotl", "rotr",
+        "sqrt",
+        "pow",
+        "fabs",
+        "floor",
+        "ceil",
+        "round",
+        "fmin",
+        "fmax",
+        "log",
+        "log2",
+        "log10",
+        "sin",
+        "cos",
+        "tan",
+        "abs",
+        "imin",
+        "imax",
+        "clamp",
+        "trunc",
+        "iminu",
+        "imaxu",
+        "ilog2",
+        "popcount",
+        "clz",
+        "ctz",
+        "bswap",
+        "rotl",
+        "rotr",
         // --- Callbacks nativos ---
         "as_native_callback",
         // --- Reflexion runtime ---
-        "forName", "getClass", "getField", "getMethod", "newInstance",
-        "getMethods", "invoke",
+        "forName",
+        "getClass",
+        "getField",
+        "getMethod",
+        "newInstance",
+        "getMethods",
+        "invoke",
         // --- Introspeccion comptime ---
-        "static_assert", "sizeof", "alignof", "typename", "type_id", "kind",
-        "field_count", "method_count", "is_class", "is_struct", "is_primitive",
-        "is_newtype", "offsetof", "has_field", "has_method", "is_subtype",
-        "is_same", "comptime_type", "parent_class", "element_type",
-        "error_type", "method_name", "method_return_type", "field_name",
-        "field_type", "field_type_at", "is_enum", "is_opaque", "is_shared",
+        "static_assert",
+        "sizeof",
+        "alignof",
+        "typename",
+        "type_id",
+        "kind",
+        "field_count",
+        "method_count",
+        "is_class",
+        "is_struct",
+        "is_primitive",
+        "is_newtype",
+        "offsetof",
+        "has_field",
+        "has_method",
+        "is_subtype",
+        "is_same",
+        "comptime_type",
+        "parent_class",
+        "element_type",
+        "error_type",
+        "method_name",
+        "method_return_type",
+        "field_name",
+        "field_type",
+        "field_type_at",
+        "is_enum",
+        "is_opaque",
+        "is_shared",
         "underlying_of",
         // --- Overlay (vistas tipadas sobre memoria) ---
-        "in_bounds", "extent",
+        "in_bounds",
+        "extent",
         // --- Builtins comptime de string + utilidades ---
-        "comptime_concat", "comptime_streq", "comptime_strlen", "comptime_chr",
-        "comptime_ord", "comptime_substr", "comptime_repeat",
-        "comptime_replace", "comptime_contains", "gensym", "comptime_compile",
-        "comptime_to_str", "comptime_print",
+        "comptime_concat",
+        "comptime_streq",
+        "comptime_strlen",
+        "comptime_chr",
+        "comptime_ord",
+        "comptime_substr",
+        "comptime_repeat",
+        "comptime_replace",
+        "comptime_contains",
+        "gensym",
+        "comptime_compile",
+        "comptime_to_str",
+        "comptime_print",
         // --- Smart pointers / borrow ---
-        "unique_box", "shared_box", "unique_with", "shared_with", "move",
-        "ptr_of", "use_count", "lend", "lend_mut", "read_borrow",
+        "unique_box",
+        "shared_box",
+        "unique_with",
+        "shared_with",
+        "move",
+        "ptr_of",
+        "use_count",
+        "lend",
+        "lend_mut",
+        "read_borrow",
         "write_borrow",
         // --- Memoria compartida ( Z) ---
-        "share", "unshare", "is_shared", "shared_malloc", "shared_free",
-        "atomic_load_i64", "atomic_store_i64", "atomic_cas_i64",
+        "share",
+        "unshare",
+        "is_shared",
+        "shared_malloc",
+        "shared_free",
+        "atomic_load_i64",
+        "atomic_store_i64",
+        "atomic_cas_i64",
         "atomic_add_i64",
         // --- Colecciones constructoras ---
-        "arraylist", "hashmap", "hashset", "queue", "deque", "treemap",
+        "arraylist",
+        "hashmap",
+        "hashset",
+        "queue",
+        "deque",
+        "treemap",
         "treeset",
         // --- Carga dinamica de modulos ---
-        "loadmodule", "unloadmodule",
+        "loadmodule",
+        "unloadmodule",
     };
     return kBuiltins.count(name) != 0;
 }
@@ -398,11 +514,12 @@ bool is_builtin_name(const std::string &name) {
  */
 bool is_builtin_concept_name(const std::string &name) {
     static const std::unordered_set<std::string> kConcepts = {
-        "Number", "Numeric", "Integer", "Int", "Float", "Signed", "Unsigned",
-        "Bool", "Char", "Pointer", "String", "Comparable", "Ordered", "Eq",
-        "Sized", "Copyable", "Hashable", "Stringable", "Default", "Primitive",
-        "Class", "Struct", "Callable", "Destructible", "Iterable", "Shareable",
-        "Enum", "ValuedEnum"};
+        "Number",    "Numeric",    "Integer",    "Int",          "Float",
+        "Signed",    "Unsigned",   "Bool",       "Char",         "Pointer",
+        "String",    "Comparable", "Ordered",    "Eq",           "Sized",
+        "Copyable",  "Hashable",   "Stringable", "Default",      "Primitive",
+        "Class",     "Struct",     "Callable",   "Destructible", "Iterable",
+        "Shareable", "Enum",       "ValuedEnum"};
     return kConcepts.count(name) != 0;
 }
 
@@ -423,31 +540,21 @@ bool is_builtin_concept_name(const std::string &name) {
 SemTokenType classify_identifier(const std::string &name,
                                  const DocAnalysis *an) {
     // 1) Keywords contextuales (lista fija, no depende del analisis).
-    if (is_contextual_keyword(name))
-        return SemTokenType::Keyword;
+    if (is_contextual_keyword(name)) return SemTokenType::Keyword;
     // 2) Builtins/intrinsecos (lista fija, no depende del analisis).
-    if (is_builtin_name(name))
-        return SemTokenType::Function;
+    if (is_builtin_name(name)) return SemTokenType::Function;
     // 2b) Conceptos integrados (comptime): bound o predicado -> interface.
-    if (is_builtin_concept_name(name))
-        return SemTokenType::Interface;
+    if (is_builtin_concept_name(name)) return SemTokenType::Interface;
     if (an != nullptr) {
         // 3) Nombres declarados top-level en el documento.
-        if (an->concept_names.count(name))
-            return SemTokenType::Interface;
-        if (an->class_names.count(name))
-            return SemTokenType::Class;
-        if (an->struct_names.count(name))
-            return SemTokenType::Struct;
-        if (an->enum_names.count(name))
-            return SemTokenType::Enum;
-        if (an->type_names.count(name))
-            return SemTokenType::Type;
-        if (an->function_names.count(name))
-            return SemTokenType::Function;
+        if (an->concept_names.count(name)) return SemTokenType::Interface;
+        if (an->class_names.count(name)) return SemTokenType::Class;
+        if (an->struct_names.count(name)) return SemTokenType::Struct;
+        if (an->enum_names.count(name)) return SemTokenType::Enum;
+        if (an->type_names.count(name)) return SemTokenType::Type;
+        if (an->function_names.count(name)) return SemTokenType::Function;
         // 4) Parametros de plantilla genericos.
-        if (an->type_params.count(name))
-            return SemTokenType::TypeParameter;
+        if (an->type_params.count(name)) return SemTokenType::TypeParameter;
     }
     return SemTokenType::Variable;
 }
@@ -456,12 +563,12 @@ SemTokenType classify_identifier(const std::string &name,
 // Resaltado de bloques de ensamblador (asm { ... }).
 // ---------------------------------------------------------------------------
 
-/// Pasa @p s a minusculas ASCII (los mnemonicos/registros son case-insensitive).
+/// Pasa @p s a minusculas ASCII (los mnemonicos/registros son
+/// case-insensitive).
 std::string to_lower_ascii(const std::string &s) {
     std::string r = s;
     for (char &c : r)
-        if (c >= 'A' && c <= 'Z')
-            c = static_cast<char>(c - 'A' + 'a');
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
     return r;
 }
 
@@ -469,16 +576,54 @@ std::string to_lower_ascii(const std::string &s) {
 bool is_asm_register(const std::string &lc) {
     static const std::unordered_set<std::string> kRegs = {
         // 64/32/16/8-bit de proposito general.
-        "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp", "rip",
-        "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp",
-        "ax", "bx", "cx", "dx", "si", "di", "bp", "sp",
-        "al", "bl", "cl", "dl", "ah", "bh", "ch", "dh", "sil", "dil", "bpl",
+        "rax",
+        "rbx",
+        "rcx",
+        "rdx",
+        "rsi",
+        "rdi",
+        "rbp",
+        "rsp",
+        "rip",
+        "eax",
+        "ebx",
+        "ecx",
+        "edx",
+        "esi",
+        "edi",
+        "ebp",
+        "esp",
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di",
+        "bp",
+        "sp",
+        "al",
+        "bl",
+        "cl",
+        "dl",
+        "ah",
+        "bh",
+        "ch",
+        "dh",
+        "sil",
+        "dil",
+        "bpl",
         "spl",
         // Segmento / flags / control.
-        "cs", "ds", "es", "fs", "gs", "ss", "eflags", "rflags",
+        "cs",
+        "ds",
+        "es",
+        "fs",
+        "gs",
+        "ss",
+        "eflags",
+        "rflags",
     };
-    if (kRegs.count(lc))
-        return true;
+    if (kRegs.count(lc)) return true;
     // r8..r15 y sus sufijos d/w/b (r8d, r10w, r15b).
     if (lc.size() >= 2 && lc[0] == 'r' && lc[1] >= '0' && lc[1] <= '9') {
         size_t i = 1;
@@ -486,8 +631,7 @@ bool is_asm_register(const std::string &lc) {
             ++i;
         int num = std::atoi(lc.c_str() + 1);
         if (num >= 8 && num <= 15) {
-            if (i == lc.size())
-                return true; // r8..r15
+            if (i == lc.size()) return true; // r8..r15
             if (i + 1 == lc.size() &&
                 (lc[i] == 'd' || lc[i] == 'w' || lc[i] == 'b'))
                 return true; // r8d / r10w / r15b
@@ -495,11 +639,9 @@ bool is_asm_register(const std::string &lc) {
     }
     // xmm0..31, ymm0..31, zmm0..31, mm0..7, st0..7, k0..7 (mascaras AVX-512).
     auto vec_reg = [&](const char *pfx, size_t pl, int maxn) -> bool {
-        if (lc.size() <= pl || lc.compare(0, pl, pfx) != 0)
-            return false;
+        if (lc.size() <= pl || lc.compare(0, pl, pfx) != 0) return false;
         for (size_t i = pl; i < lc.size(); ++i)
-            if (lc[i] < '0' || lc[i] > '9')
-                return false;
+            if (lc[i] < '0' || lc[i] > '9') return false;
         int n = std::atoi(lc.c_str() + pl);
         return n >= 0 && n <= maxn;
     };
@@ -518,73 +660,78 @@ bool is_asm_register(const std::string &lc) {
  */
 SemTokenType classify_asm_ident(const std::string &name) {
     const std::string lc = to_lower_ascii(name);
-    if (is_asm_register(lc))
-        return SemTokenType::Register;
+    if (is_asm_register(lc)) return SemTokenType::Register;
 
     // Aritmeticas (enteras + SIMD + x87).
     static const std::unordered_set<std::string> kArith = {
-        "add", "adc", "sub", "sbb", "mul", "imul", "div", "idiv", "inc", "dec",
-        "neg", "abs", "lea", // lea es aritmetica de direcciones
-        "paddb", "paddw", "paddd", "paddq", "psubb", "psubw", "psubd", "psubq",
-        "pmulld", "pmullw", "pmuldq", "pmuludq", "pmaddwd",
-        "addps", "addpd", "addss", "addsd", "subps", "subpd", "subss", "subsd",
-        "mulps", "mulpd", "mulss", "mulsd", "divps", "divpd", "divss", "divsd",
-        "sqrtps", "sqrtpd", "sqrtss", "sqrtsd", "fadd", "fsub", "fmul", "fdiv",
-        "vaddps", "vaddpd", "vsubps", "vmulps", "vdivps", "vpaddd", "vpsubd",
-        "vpmulld", "vfmadd231ps", "vfmadd231pd",
+        "add",     "adc",    "sub",     "sbb",         "mul",         "imul",
+        "div",     "idiv",   "inc",     "dec",         "neg",         "abs",
+        "lea", // lea es aritmetica de direcciones
+        "paddb",   "paddw",  "paddd",   "paddq",       "psubb",       "psubw",
+        "psubd",   "psubq",  "pmulld",  "pmullw",      "pmuldq",      "pmuludq",
+        "pmaddwd", "addps",  "addpd",   "addss",       "addsd",       "subps",
+        "subpd",   "subss",  "subsd",   "mulps",       "mulpd",       "mulss",
+        "mulsd",   "divps",  "divpd",   "divss",       "divsd",       "sqrtps",
+        "sqrtpd",  "sqrtss", "sqrtsd",  "fadd",        "fsub",        "fmul",
+        "fdiv",    "vaddps", "vaddpd",  "vsubps",      "vmulps",      "vdivps",
+        "vpaddd",  "vpsubd", "vpmulld", "vfmadd231ps", "vfmadd231pd",
     };
-    if (kArith.count(lc))
-        return SemTokenType::Function;
+    if (kArith.count(lc)) return SemTokenType::Function;
 
     // Logicas / desplazamiento / bit.
     static const std::unordered_set<std::string> kLogic = {
-        "and", "or", "xor", "not", "shl", "shr", "sar", "sal", "rol", "ror",
-        "rcl", "rcr", "test", "bt", "bts", "btr", "btc", "bsf", "bsr", "popcnt",
-        "lzcnt", "tzcnt", "andn", "bextr", "blsi", "blsr",
-        "pand", "pandn", "por", "pxor", "psllw", "pslld", "psllq", "psrlw",
-        "psrld", "psrlq", "psraw", "psrad", "andps", "andpd", "orps", "orpd",
-        "xorps", "xorpd", "andnps", "vpand", "vpor", "vpxor",
+        "and",   "or",    "xor",    "not",   "shl",   "shr",    "sar",
+        "sal",   "rol",   "ror",    "rcl",   "rcr",   "test",   "bt",
+        "bts",   "btr",   "btc",    "bsf",   "bsr",   "popcnt", "lzcnt",
+        "tzcnt", "andn",  "bextr",  "blsi",  "blsr",  "pand",   "pandn",
+        "por",   "pxor",  "psllw",  "pslld", "psllq", "psrlw",  "psrld",
+        "psrlq", "psraw", "psrad",  "andps", "andpd", "orps",   "orpd",
+        "xorps", "xorpd", "andnps", "vpand", "vpor",  "vpxor",
     };
-    if (kLogic.count(lc))
-        return SemTokenType::Macro;
+    if (kLogic.count(lc)) return SemTokenType::Macro;
 
     // Control de flujo + comparaciones.
     static const std::unordered_set<std::string> kControl = {
-        "jmp", "je", "jne", "jz", "jnz", "jg", "jge", "jl", "jle", "ja", "jae",
-        "jb", "jbe", "jc", "jnc", "jo", "jno", "js", "jns", "jp", "jnp", "jcxz",
-        "jecxz", "jrcxz", "call", "ret", "retn", "retf", "iret", "iretq",
-        "loop", "loope", "loopne", "loopz", "loopnz", "cmp", "cmpps", "cmppd",
-        "ucomiss", "ucomisd", "comiss", "comisd", "syscall", "sysret", "int",
-        "int3", "into", "enter", "leave", "hlt", "nop", "pause", "cpuid",
-        "rdtsc", "rdtscp", "cmovz", "cmovnz", "cmove", "cmovne", "cmovg",
-        "cmovl", "sete", "setne", "setg", "setl", "setz", "setnz",
+        "jmp",     "je",     "jne",    "jz",      "jnz",     "jg",     "jge",
+        "jl",      "jle",    "ja",     "jae",     "jb",      "jbe",    "jc",
+        "jnc",     "jo",     "jno",    "js",      "jns",     "jp",     "jnp",
+        "jcxz",    "jecxz",  "jrcxz",  "call",    "ret",     "retn",   "retf",
+        "iret",    "iretq",  "loop",   "loope",   "loopne",  "loopz",  "loopnz",
+        "cmp",     "cmpps",  "cmppd",  "ucomiss", "ucomisd", "comiss", "comisd",
+        "syscall", "sysret", "int",    "int3",    "into",    "enter",  "leave",
+        "hlt",     "nop",    "pause",  "cpuid",   "rdtsc",   "rdtscp", "cmovz",
+        "cmovnz",  "cmove",  "cmovne", "cmovg",   "cmovl",   "sete",   "setne",
+        "setg",    "setl",   "setz",   "setnz",
     };
-    if (kControl.count(lc))
-        return SemTokenType::Keyword;
+    if (kControl.count(lc)) return SemTokenType::Keyword;
 
     // Movimiento / carga / almacenamiento / conversion de datos.
     static const std::unordered_set<std::string> kMov = {
-        "mov", "movzx", "movsx", "movsxd", "movabs", "xchg", "cmpxchg", "xadd",
-        "push", "pop", "pushf", "popf", "pushfq", "popfq", "cwd", "cdq", "cqo",
-        "cbw", "cwde", "cdqe", "bswap",
-        "movd", "movq", "movdqu", "movdqa", "movaps", "movapd", "movups",
-        "movupd", "movss", "movsd", "movhps", "movlps", "movhlps", "movlhps",
-        "movntdq", "lddqu", "vmovdqu", "vmovdqa", "vmovaps", "vmovups",
-        "pextrb", "pextrw", "pextrd", "pextrq", "pinsrb", "pinsrw", "pinsrd",
-        "pinsrq", "pshufd", "pshufb", "shufps", "punpckldq", "punpckhdq",
-        "cvtsi2ss", "cvtsi2sd", "cvtss2si", "cvtsd2si", "cvttss2si",
-        "cvttsd2si", "cvtss2sd", "cvtsd2ss", "cvtdq2ps", "cvtps2dq",
-        "stos", "lods", "movs", "scas", "rep", "repe", "repne", "lock",
+        "mov",      "movzx",    "movsx",     "movsxd",    "movabs",
+        "xchg",     "cmpxchg",  "xadd",      "push",      "pop",
+        "pushf",    "popf",     "pushfq",    "popfq",     "cwd",
+        "cdq",      "cqo",      "cbw",       "cwde",      "cdqe",
+        "bswap",    "movd",     "movq",      "movdqu",    "movdqa",
+        "movaps",   "movapd",   "movups",    "movupd",    "movss",
+        "movsd",    "movhps",   "movlps",    "movhlps",   "movlhps",
+        "movntdq",  "lddqu",    "vmovdqu",   "vmovdqa",   "vmovaps",
+        "vmovups",  "pextrb",   "pextrw",    "pextrd",    "pextrq",
+        "pinsrb",   "pinsrw",   "pinsrd",    "pinsrq",    "pshufd",
+        "pshufb",   "shufps",   "punpckldq", "punpckhdq", "cvtsi2ss",
+        "cvtsi2sd", "cvtss2si", "cvtsd2si",  "cvttss2si", "cvttsd2si",
+        "cvtss2sd", "cvtsd2ss", "cvtdq2ps",  "cvtps2dq",  "stos",
+        "lods",     "movs",     "scas",      "rep",       "repe",
+        "repne",    "lock",
     };
-    if (kMov.count(lc))
-        return SemTokenType::Type;
+    if (kMov.count(lc)) return SemTokenType::Type;
 
     // No reconocido: label, simbolo o directiva -> texto normal.
     return SemTokenType::Variable;
 }
 
 /**
- * @brief Localiza los rangos de bytes ocupados por el CUERPO de cada bloque asm.
+ * @brief Localiza los rangos de bytes ocupados por el CUERPO de cada bloque
+ * asm.
  *
  * Reconoce @c asm [cualificadores] { ... }: tras un @c KW_ASM salta los
  * identificadores cualificadores (volatile, nomem, ...), exige una @c {, y
@@ -600,14 +747,12 @@ find_asm_ranges(const std::vector<vx::Token> &toks) {
     using TK = vx::TokenKind;
     const int n = static_cast<int>(toks.size());
     for (int i = 0; i < n; ++i) {
-        if (toks[i].kind != TK::KW_ASM)
-            continue;
+        if (toks[i].kind != TK::KW_ASM) continue;
         int j = i + 1;
         // Saltar cualificadores (identificadores: volatile, nomem, pure, ...).
         while (j < n && toks[j].kind == TK::IDENTIFIER)
             ++j;
-        if (j >= n || toks[j].kind != TK::LBRACE)
-            continue;
+        if (j >= n || toks[j].kind != TK::LBRACE) continue;
         // Contenido: desde tras la '{' hasta la '}' que la cierra.
         size_t open = toks[j].loc.offset + toks[j].loc.length;
         int depth = 1;
@@ -624,18 +769,17 @@ find_asm_ranges(const std::vector<vx::Token> &toks) {
                 }
             }
         }
-        if (close > open)
-            ranges.push_back({open, close});
+        if (close > open) ranges.push_back({open, close});
         i = (k > i) ? k : i; // continuar tras el bloque
     }
     return ranges;
 }
 
 /// @c true si el offset @p off cae dentro de algun rango asm.
-bool offset_in_asm(size_t off, const std::vector<std::pair<size_t, size_t>> &r) {
+bool offset_in_asm(size_t off,
+                   const std::vector<std::pair<size_t, size_t>> &r) {
     for (const auto &p : r)
-        if (off >= p.first && off < p.second)
-            return true;
+        if (off >= p.first && off < p.second) return true;
     return false;
 }
 
@@ -658,10 +802,8 @@ void emit_span_by_lines(const std::string &src, const PositionIndex &idx,
                         size_t b0, size_t b1, SemTokenType type,
                         std::vector<AbsToken> &out) {
     const size_t n = src.size();
-    if (b1 > n)
-        b1 = n;
-    if (b0 >= b1)
-        return;
+    if (b1 > n) b1 = n;
+    if (b0 >= b1) return;
     // Recorrer el span byte a byte agrupando por linea: cuando cambia la
     // linea (o termina el span) cerramos el segmento actual.
     size_t seg_start = b0;
@@ -681,8 +823,7 @@ void emit_span_by_lines(const std::string &src, const PositionIndex &idx,
                 t.start = c0;
                 t.length = (lEnd == l0 && cEnd >= c0) ? (cEnd - c0) : 0;
                 t.type = static_cast<uint32_t>(type);
-                if (t.length > 0)
-                    out.push_back(t);
+                if (t.length > 0) out.push_back(t);
             }
             // El siguiente segmento empieza despues del salto.
             seg_start = i + 1;
@@ -699,11 +840,10 @@ void emit_span_by_lines(const std::string &src, const PositionIndex &idx,
         // Si b1 cae en otra linea (no deberia, ya cortamos por '\n'),
         // usar el final de la linea via end_col seria mas complejo; aqui
         // b1 esta en la misma linea por construccion.
-        t.length = (lEnd == l0 && cEnd >= c0) ? (cEnd - c0)
-                                              : (idx.end_col() - c0);
+        t.length =
+            (lEnd == l0 && cEnd >= c0) ? (cEnd - c0) : (idx.end_col() - c0);
         t.type = static_cast<uint32_t>(type);
-        if (t.length > 0)
-            out.push_back(t);
+        if (t.length > 0) out.push_back(t);
     }
 }
 
@@ -768,7 +908,8 @@ void scan_comments(const std::string &src, const PositionIndex &idx,
                 ++i;
             // Avanzar tras el cierre si existe; si no, hasta el final.
             size_t end = (i + 1 < n) ? (i + 2) : n;
-            emit_span_by_lines(src, idx, start, end, SemTokenType::Comment, out);
+            emit_span_by_lines(src, idx, start, end, SemTokenType::Comment,
+                               out);
             i = end;
             continue;
         }
@@ -798,8 +939,7 @@ inline bool is_ident_byte(char c) {
  */
 size_t escape_seq_len(const std::string &src, size_t i) {
     const size_t n = src.size();
-    if (i + 1 >= n)
-        return 1; // barra suelta al final.
+    if (i + 1 >= n) return 1; // barra suelta al final.
     const char e = src[i + 1];
     if (e == 'x' || e == 'X') {
         // \xHH: hasta 2 digitos hex.
@@ -817,8 +957,7 @@ size_t escape_seq_len(const std::string &src, size_t i) {
             size_t k = i + 3;
             while (k < n && src[k] != '}' && src[k] != '"' && src[k] != '\n')
                 ++k;
-            if (k < n && src[k] == '}')
-                ++k; // incluir el '}'.
+            if (k < n && src[k] == '}') ++k; // incluir el '}'.
             return k - i;
         }
         // \uHHHH / \UHHHHHHHH: hasta 4 (u) digitos hex (conservador).
@@ -842,18 +981,14 @@ size_t escape_seq_len(const std::string &src, size_t i) {
  * byte producido o -1 si no es un escape de un solo byte conocido.
  */
 int escape_byte_value(const std::string &src, size_t i, size_t seq_len) {
-    if (i + 1 >= src.size())
-        return -1;
+    if (i + 1 >= src.size()) return -1;
     const char e = src[i + 1];
-    if (e == 'e' || e == 'E')
-        return 0x1B; // extension comun \e = ESC.
+    if (e == 'e' || e == 'E') return 0x1B; // extension comun \e = ESC.
     if ((e == 'x' || e == 'X') && seq_len == 4) {
         // \xHH con 2 digitos.
         auto hexv = [](char c) -> int {
-            if (c >= '0' && c <= '9')
-                return c - '0';
-            if (c >= 'a' && c <= 'f')
-                return c - 'a' + 10;
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
             return c - 'A' + 10;
         };
         return (hexv(src[i + 2]) << 4) | hexv(src[i + 3]);
@@ -862,8 +997,7 @@ int escape_byte_value(const std::string &src, size_t i, size_t seq_len) {
         // \033 octal -> ESC si los digitos lo dan.
         int v = 0;
         for (size_t k = i + 1; k < i + 4; ++k) {
-            if (src[k] < '0' || src[k] > '7')
-                return -1;
+            if (src[k] < '0' || src[k] > '7') return -1;
             v = v * 8 + (src[k] - '0');
         }
         return v;
@@ -986,14 +1120,12 @@ void scan_strings(const std::string &src, const PositionIndex &idx,
                         ++depth;
                     } else if (ic == '}') {
                         --depth;
-                        if (depth == 0)
-                            break;
+                        if (depth == 0) break;
                     } else if (ic == '"' || ic == '\'') {
                         const char q2 = ic;
                         ++k;
                         while (k < n && src[k] != q2) {
-                            if (src[k] == '\\')
-                                ++k;
+                            if (src[k] == '\\') ++k;
                             ++k;
                         }
                     }
@@ -1030,19 +1162,19 @@ void scan_strings(const std::string &src, const PositionIndex &idx,
 const std::vector<std::string> &semantic_token_types() {
     // Orden ESTABLE: cada indice debe corresponder al valor de SemTokenType.
     static const std::vector<std::string> kTypes = {
-        "namespace", "type",       "class",    "enum",     "interface",
-        "struct",    "typeParameter", "parameter", "variable", "property",
-        "enumMember", "function",  "method",   "keyword",  "modifier",
-        "comment",   "string",     "number",   "operator", "macro",
+        "namespace",      "type",          "class",     "enum",     "interface",
+        "struct",         "typeParameter", "parameter", "variable", "property",
+        "enumMember",     "function",      "method",    "keyword",  "modifier",
+        "comment",        "string",        "number",    "operator", "macro",
         "escapeSequence", "interpolation", "register"};
     return kTypes;
 }
 
 const std::vector<std::string> &semantic_token_modifiers() {
     // El indice de cada modificador = su numero de bit en SemTokenModifier.
-    static const std::vector<std::string> kMods = {
-        "declaration", "definition", "readonly",
-        "static",      "abstract",   "deprecated"};
+    static const std::vector<std::string> kMods = {"declaration", "definition",
+                                                   "readonly",    "static",
+                                                   "abstract",    "deprecated"};
     return kMods;
 }
 
@@ -1063,11 +1195,9 @@ std::vector<uint32_t> compute_semantic_tokens(const std::string &text,
         std::vector<vx::Token> toks;
         for (;;) {
             vx::Token tok = lex.next();
-            if (tok.kind == vx::TokenKind::END_OF_FILE)
-                break;
+            if (tok.kind == vx::TokenKind::END_OF_FILE) break;
             toks.push_back(tok);
-            if (toks.size() > kMaxTokens)
-                break;
+            if (toks.size() > kMaxTokens) break;
         }
         // Rangos de byte ocupados por el cuerpo de cada bloque asm.
         const std::vector<std::pair<size_t, size_t>> asm_ranges =
@@ -1076,8 +1206,8 @@ std::vector<uint32_t> compute_semantic_tokens(const std::string &text,
         // 2) Clasificar cada token.
         using TK = vx::TokenKind;
         for (const vx::Token &tok : toks) {
-            const bool in_asm =
-                !asm_ranges.empty() && offset_in_asm(tok.loc.offset, asm_ranges);
+            const bool in_asm = !asm_ranges.empty() &&
+                                offset_in_asm(tok.loc.offset, asm_ranges);
 
             SemTokenType type;
             if (in_asm) {
@@ -1089,9 +1219,7 @@ std::vector<uint32_t> compute_semantic_tokens(const std::string &text,
                     type = classify_asm_ident(tok.lexeme);
                     break;
                 case TK::INT_LIT:
-                case TK::FLOAT_LIT:
-                    type = SemTokenType::Number;
-                    break;
+                case TK::FLOAT_LIT: type = SemTokenType::Number; break;
                 default:
                     if (is_operator(tok.kind)) {
                         type = SemTokenType::Operator;
@@ -1118,14 +1246,10 @@ std::vector<uint32_t> compute_semantic_tokens(const std::string &text,
                     // Los strings los maneja scan_strings (texto/escapes/${}).
                     continue;
                 case TK::INT_LIT:
-                case TK::FLOAT_LIT:
-                    type = SemTokenType::Number;
-                    break;
+                case TK::FLOAT_LIT: type = SemTokenType::Number; break;
                 case TK::TRUE_KW:
                 case TK::FALSE_KW:
-                case TK::NULL_KW:
-                    type = SemTokenType::Keyword;
-                    break;
+                case TK::NULL_KW: type = SemTokenType::Keyword; break;
                 case TK::IDENTIFIER:
                     type = classify_identifier(tok.lexeme, analysis);
                     break;
@@ -1166,8 +1290,7 @@ std::vector<uint32_t> compute_semantic_tokens(const std::string &text,
     // 3) Ordenar por (linea, caracter).  Estable para deterministico.
     std::stable_sort(abs.begin(), abs.end(),
                      [](const AbsToken &a, const AbsToken &b) {
-                         if (a.line != b.line)
-                             return a.line < b.line;
+                         if (a.line != b.line) return a.line < b.line;
                          return a.start < b.start;
                      });
 

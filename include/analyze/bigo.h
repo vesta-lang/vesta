@@ -49,9 +49,9 @@ namespace analyze {
  * analizador esta seguro de la cota).  Con @c UNKNOWN nunca se avisa.
  */
 enum class Confidence : uint8_t {
-    EXACT = 0,   ///< cota cerrada, alta confianza (e.g. 2 loops -> O(n^2)).
-    HEURISTIC,   ///< inferida por heuristica (e.g. recursion -> O(n)).
-    UNKNOWN      ///< no se pudo determinar (O(?)); nunca genera warning.
+    EXACT = 0, ///< cota cerrada, alta confianza (e.g. 2 loops -> O(n^2)).
+    HEURISTIC, ///< inferida por heuristica (e.g. recursion -> O(n)).
+    UNKNOWN    ///< no se pudo determinar (O(?)); nunca genera warning.
 };
 
 /**
@@ -61,15 +61,15 @@ enum class Confidence : uint8_t {
  * la cota inferida contra la declarada en @c @complexity.
  */
 enum class CostClass : uint8_t {
-    O_1 = 0,    ///< O(1) constante
-    O_LOGN,     ///< O(log n)
-    O_N,        ///< O(n) lineal
-    O_NLOGN,    ///< O(n log n)
-    O_N2,       ///< O(n^2)
-    O_N3,       ///< O(n^3)
-    O_NK,       ///< O(n^k) polinomico, k > 3
-    O_2N,       ///< O(2^n) exponencial
-    O_UNKNOWN   ///< desconocida (O(?))
+    O_1 = 0,  ///< O(1) constante
+    O_LOGN,   ///< O(log n)
+    O_N,      ///< O(n) lineal
+    O_NLOGN,  ///< O(n log n)
+    O_N2,     ///< O(n^2)
+    O_N3,     ///< O(n^3)
+    O_NK,     ///< O(n^k) polinomico, k > 3
+    O_2N,     ///< O(2^n) exponencial
+    O_UNKNOWN ///< desconocida (O(?))
 };
 
 /// @brief Devuelve la forma legible canonica de una clase (e.g. "O(n^2)").
@@ -94,8 +94,8 @@ CostClass parse_cost_class(const std::string &expr);
  */
 struct LoopCost {
     uint32_t header_block = 0; ///< id del bloque cabecera del loop (back-edge).
-    uint32_t depth = 1;        ///< profundidad de anidamiento (1 = mas externo).
-    uint32_t source_line = 0;  ///< linea fuente aproximada (0 = desconocida).
+    uint32_t depth = 1;       ///< profundidad de anidamiento (1 = mas externo).
+    uint32_t source_line = 0; ///< linea fuente aproximada (0 = desconocida).
 };
 
 /**
@@ -126,20 +126,21 @@ struct CallSite {
  *     tras @c analyze_module_interproc; antes vale igual que el parcial.
  */
 struct CostResult {
-    std::string function;     ///< nombre de la funcion analizada.
-    CostClass big_o = CostClass::O_1;       ///< clase PARCIAL (cuerpo, calls=O(1)).
-    Confidence confidence = Confidence::EXACT; ///< confianza en la cota parcial.
-    uint32_t max_loop_depth = 0;            ///< maxima profundidad de loop.
-    bool is_recursive = false;              ///< la fn se llama a si misma.
-    bool is_divide_conquer = false;         ///< patron divide-y-venceras.
-    std::vector<LoopCost> loops;            ///< coste por loop (diagramas).
-    std::string detail;                     ///< explicacion legible breve.
+    std::string function;             ///< nombre de la funcion analizada.
+    CostClass big_o = CostClass::O_1; ///< clase PARCIAL (cuerpo, calls=O(1)).
+    Confidence confidence =
+        Confidence::EXACT;          ///< confianza en la cota parcial.
+    uint32_t max_loop_depth = 0;    ///< maxima profundidad de loop.
+    bool is_recursive = false;      ///< la fn se llama a si misma.
+    bool is_divide_conquer = false; ///< patron divide-y-venceras.
+    std::vector<LoopCost> loops;    ///< coste por loop (diagramas).
+    std::string detail;             ///< explicacion legible breve.
 
     /// Coste TOTAL (interprocedural): el cuerpo compuesto con el coste TOTAL
     /// de los callees.  Igual al parcial hasta que corre la composicion.
     CostClass total_class = CostClass::O_1;
     Confidence total_confidence = Confidence::EXACT; ///< confianza del total.
-    std::string total_detail;               ///< explicacion legible del total.
+    std::string total_detail; ///< explicacion legible del total.
 
     /// Call sites del cuerpo (callee + profundidad de loop), para que la
     /// composicion interprocedural sepa que coste multiplicar por que factor.
@@ -150,8 +151,9 @@ struct CostResult {
     /// este @c CostResult representa (PARCIAL o TOTAL del modulo PRE o POST
     /// que se analizo).  Para los 4 contratos crudos (independientes del
     /// nivel) ver los campos @c decl_* de abajo.
-    std::string declared_expr;              ///< vacio => sin contrato.
-    CostClass declared_class = CostClass::O_UNKNOWN; ///< parseado de declared_expr.
+    std::string declared_expr; ///< vacio => sin contrato.
+    CostClass declared_class =
+        CostClass::O_UNKNOWN; ///< parseado de declared_expr.
     /// true si HAY contrato Y el analizador esta CONFIADO de que la cota
     /// real difiere de la declarada.  Validacion conservadora: solo se
     /// pone a true con @c confidence == EXACT y clases distintas.  Se

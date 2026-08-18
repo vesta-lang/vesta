@@ -68,7 +68,9 @@ static inline void wr32le(uint8_t *p, uint32_t v) {
     p[3] = (uint8_t)(v >> 24);
 }
 /* Alias historico de wr32le (mismo comportamiento; ambos nombres en uso). */
-static inline void wr32(uint8_t *p, uint32_t v) { wr32le(p, v); }
+static inline void wr32(uint8_t *p, uint32_t v) {
+    wr32le(p, v);
+}
 static inline void wr64le(uint8_t *p, uint64_t v) {
     for (int i = 0; i < 8; ++i)
         p[i] = (uint8_t)(v >> (i * 8));

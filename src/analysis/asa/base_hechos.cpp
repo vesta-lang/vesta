@@ -7,7 +7,8 @@
 
 /**
  * @file analysis/asa/base_hechos.cpp
- * @brief Implementacion de la base de hechos (ver @c analysis/asa/base_hechos.h).
+ * @brief Implementacion de la base de hechos (ver @c
+ * analysis/asa/base_hechos.h).
  */
 
 #include "analysis/asa/base_hechos.h"
@@ -69,10 +70,13 @@ char BuclesAnalysis::ID = 0;
 char FronteraAnalysis::ID = 0;
 } // namespace
 
-BaseDeHechos::BaseDeHechos() { register_asa_canonical_names(); }
+BaseDeHechos::BaseDeHechos() {
+    register_asa_canonical_names();
+}
 
 BaseDeHechos::~BaseDeHechos() {
-    static const bool loguear = std::getenv("VESTA_ASA_HECHOS_DEBUG") != nullptr;
+    static const bool loguear =
+        std::getenv("VESTA_ASA_HECHOS_DEBUG") != nullptr;
     if (!loguear || consultas_ == 0) return;
     volcar_hechos(volcado(), stderr);
     std::fprintf(stderr,
@@ -132,9 +136,9 @@ const RangeFacts &BaseDeHechos::rangos(const ir::IrFunction &fn) {
         clave, [this, &fn]() { return compute_ranges(fn, estructura(fn)); });
     if (recien) {
         /* La certeza sale del propio analisis, no de quien pregunta: llegar a
-         * punto fijo es haber visto todo lo que podia contradecirlo; pararse por
-         * presupuesto es "hasta aqui he llegado", que sostiene una decision con
-         * red pero no permite quitar una comprobacion. */
+         * punto fijo es haber visto todo lo que podia contradecirlo; pararse
+         * por presupuesto es "hasta aqui he llegado", que sostiene una decision
+         * con red pero no permite quitar una comprobacion. */
         sellar(kProductorRangos, clave,
                rf.convergio ? Certeza::Demostrada : Certeza::Inferida,
                kProductorEstructura);
@@ -198,7 +202,8 @@ void BaseDeHechos::invalidar(const ir::IrFunction &fn) {
     gestor_.invalidate<BuclesAnalysis>(clave);
     /* Y su sello con ellos: un hecho muerto que deja su procedencia atras hace
      * que el volcado afirme lo que ya no se sabe. */
-    for (auto &dominio : sellos_) dominio.second.erase(clave);
+    for (auto &dominio : sellos_)
+        dominio.second.erase(clave);
 }
 
 Sello BaseDeHechos::sello(const char *productor,

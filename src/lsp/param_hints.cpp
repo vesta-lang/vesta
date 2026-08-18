@@ -94,8 +94,7 @@ class PosIndex {
                         }
                         cp = (cp << 6) | (cb & 0x3F);
                     }
-                    if (!ok)
-                        seq = 1;
+                    if (!ok) seq = 1;
                 }
             }
             for (size_t k = 0; k < seq && (i + k) < n; ++k) {
@@ -123,7 +122,8 @@ class PosIndex {
 /// Clave compacta (linea<<32 | columna) de una posicion fuente, para el set de
 /// posiciones de los parametros de las declaraciones.
 inline uint64_t loc_key(const vx::SourceLoc &l) {
-    return (static_cast<uint64_t>(l.line) << 32) | static_cast<uint64_t>(l.column);
+    return (static_cast<uint64_t>(l.line) << 32) |
+           static_cast<uint64_t>(l.column);
 }
 
 /// Recoleccion del modulo: nombres de parametros de funciones libres, de
@@ -132,8 +132,9 @@ inline uint64_t loc_key(const vx::SourceLoc &l) {
 struct DeclInfo {
     std::unordered_map<std::string, std::vector<std::string>> fn_params;
     std::unordered_map<std::string, std::vector<std::string>> method_params;
-    std::unordered_set<std::string> ambiguous_methods; ///< mismo nombre, params != .
-    std::unordered_set<uint64_t> param_decl_locs;      ///< loc_key de cada param.
+    std::unordered_set<std::string>
+        ambiguous_methods;                        ///< mismo nombre, params != .
+    std::unordered_set<uint64_t> param_decl_locs; ///< loc_key de cada param.
 };
 
 /// Anota los nombres de @p params (en @p names) y registra sus posiciones en
@@ -143,8 +144,7 @@ void take_params(const std::vector<std::unique_ptr<vx::ast::ParamDecl>> &params,
                  std::unordered_set<uint64_t> &locs) {
     names.reserve(params.size());
     for (const auto &p : params) {
-        if (!p)
-            continue;
+        if (!p) continue;
         names.push_back(p->name);
         locs.insert(loc_key(p->loc));
     }
@@ -155,8 +155,7 @@ void take_params(const std::vector<std::unique_ptr<vx::ast::ParamDecl>> &params,
 /// pertenece el receptor sin resolver tipos).
 void register_method(DeclInfo &di, const std::string &name,
                      std::vector<std::string> names) {
-    if (name.empty())
-        return;
+    if (name.empty()) return;
     auto it = di.method_params.find(name);
     if (it == di.method_params.end()) {
         di.method_params.emplace(name, std::move(names));
@@ -166,33 +165,28 @@ void register_method(DeclInfo &di, const std::string &name,
 }
 
 void collect_decls(const vx::ast::ModuleNode *mod, DeclInfo &di) {
-    if (!mod)
-        return;
+    if (!mod) return;
     for (const auto &node : mod->decls) {
-        if (!node)
-            continue;
+        if (!node) continue;
         switch (node->kind) {
         case vx::ast::NodeKind::FunctionDecl: {
             auto *d = static_cast<const vx::ast::FunctionDecl *>(node.get());
             std::vector<std::string> names;
             take_params(d->params, names, di.param_decl_locs);
-            if (!d->name.empty())
-                di.fn_params[d->name] = std::move(names);
+            if (!d->name.empty()) di.fn_params[d->name] = std::move(names);
             break;
         }
         case vx::ast::NodeKind::ExternFnDecl: {
             auto *d = static_cast<const vx::ast::ExternFnDecl *>(node.get());
             std::vector<std::string> names;
             take_params(d->params, names, di.param_decl_locs);
-            if (!d->name.empty())
-                di.fn_params[d->name] = std::move(names);
+            if (!d->name.empty()) di.fn_params[d->name] = std::move(names);
             break;
         }
         case vx::ast::NodeKind::ClassDecl: {
             auto *d = static_cast<const vx::ast::ClassDecl *>(node.get());
             for (const auto &m : d->methods) {
-                if (!m)
-                    continue;
+                if (!m) continue;
                 std::vector<std::string> names;
                 take_params(m->params, names, di.param_decl_locs);
                 register_method(di, m->name, std::move(names));
@@ -202,16 +196,14 @@ void collect_decls(const vx::ast::ModuleNode *mod, DeclInfo &di) {
         case vx::ast::NodeKind::StructDecl: {
             auto *d = static_cast<const vx::ast::StructDecl *>(node.get());
             for (const auto &m : d->methods) {
-                if (!m)
-                    continue;
+                if (!m) continue;
                 std::vector<std::string> names;
                 take_params(m->params, names, di.param_decl_locs);
                 register_method(di, m->name, std::move(names));
             }
             break;
         }
-        default:
-            break;
+        default: break;
         }
     }
 }
@@ -223,8 +215,8 @@ std::vector<ParamHint> compute_param_hints(const std::string &text,
     std::vector<ParamHint> hints;
     try {
         // 1) Recolectar declaraciones: params de funciones/metodos + posiciones
-        //    de los parametros declarados (para no confundir una DECLARACION con
-        //    una llamada).
+        //    de los parametros declarados (para no confundir una DECLARACION
+        //    con una llamada).
         DeclInfo di;
         {
             vx::Diagnostics diags;
@@ -233,8 +225,7 @@ std::vector<ParamHint> compute_param_hints(const std::string &text,
             std::unique_ptr<vx::ast::ModuleNode> mod = parser.parse_program();
             collect_decls(mod.get(), di);
         }
-        if (di.fn_params.empty() && di.method_params.empty())
-            return hints;
+        if (di.fn_params.empty() && di.method_params.empty()) return hints;
 
         // 2) Lexar a un vector de tokens (necesitamos mirar adelante/atras).
         std::vector<vx::Token> toks;
@@ -244,11 +235,9 @@ std::vector<ParamHint> compute_param_hints(const std::string &text,
             const size_t kMaxTokens = text.size() + 1024;
             for (;;) {
                 vx::Token t = lex.next();
-                if (t.kind == vx::TokenKind::END_OF_FILE)
-                    break;
+                if (t.kind == vx::TokenKind::END_OF_FILE) break;
                 toks.push_back(t);
-                if (toks.size() > kMaxTokens)
-                    break;
+                if (toks.size() > kMaxTokens) break;
             }
         }
 
@@ -258,15 +247,11 @@ std::vector<ParamHint> compute_param_hints(const std::string &text,
 
         // 3) Buscar el patron IDENT( y resolver sus parametros.
         for (int i = 0; i + 1 < n; ++i) {
-            if (toks[i].kind != TK::IDENTIFIER)
-                continue;
-            if (toks[i + 1].kind != TK::LPAREN)
-                continue;
+            if (toks[i].kind != TK::IDENTIFIER) continue;
+            if (toks[i + 1].kind != TK::LPAREN) continue;
 
-            const bool is_method =
-                (i > 0 && toks[i - 1].kind == TK::DOT);
-            const bool is_new =
-                (i > 0 && toks[i - 1].kind == TK::KW_NEW);
+            const bool is_method = (i > 0 && toks[i - 1].kind == TK::DOT);
+            const bool is_new = (i > 0 && toks[i - 1].kind == TK::KW_NEW);
             if (is_new)
                 continue; // construccion new T(): los params del ctor en v2.
 
@@ -274,11 +259,9 @@ std::vector<ParamHint> compute_param_hints(const std::string &text,
             if (is_method) {
                 // Llamada a metodo obj.m(): resolver por nombre (sin tipo del
                 // receptor); si el nombre es ambiguo entre clases, omitir.
-                if (di.ambiguous_methods.count(toks[i].lexeme))
-                    continue;
+                if (di.ambiguous_methods.count(toks[i].lexeme)) continue;
                 auto it = di.method_params.find(toks[i].lexeme);
-                if (it == di.method_params.end())
-                    continue;
+                if (it == di.method_params.end()) continue;
                 pnames = &it->second;
             } else {
                 // Llamada a funcion libre.  Si el '(' es el de una DECLARACION
@@ -290,23 +273,22 @@ std::vector<ParamHint> compute_param_hints(const std::string &text,
                 auto it = di.fn_params.find(toks[i].lexeme);
                 if (it != di.fn_params.end()) {
                     pnames = &it->second;
-                } else if (const BuiltinDoc *b = lookup_builtin(toks[i].lexeme)) {
+                } else if (const BuiltinDoc *b =
+                               lookup_builtin(toks[i].lexeme)) {
                     // Builtin del lenguaje: usar los nombres de parametro de la
                     // tabla central para los ghost args (print, str_*, ...).
-                    if (b->params.empty())
-                        continue;
+                    if (b->params.empty()) continue;
                     pnames = &b->params;
                 } else {
                     continue;
                 }
             }
-            if (!pnames || pnames->empty())
-                continue;
+            if (!pnames || pnames->empty()) continue;
             const std::vector<std::string> &names = *pnames;
 
             // Recorrer los argumentos balanceando parentesis/corchetes/llaves.
-            int depth = 1;       // ya consumimos el '(' de la llamada
-            int arg_index = 0;   // indice del argumento actual (nivel 1)
+            int depth = 1;        // ya consumimos el '(' de la llamada
+            int arg_index = 0;    // indice del argumento actual (nivel 1)
             bool at_start = true; // estamos al inicio de un argumento
             for (int j = i + 2; j < n; ++j) {
                 const TK k = toks[j].kind;
@@ -319,8 +301,7 @@ std::vector<ParamHint> compute_param_hints(const std::string &text,
                 }
                 if (k == TK::RPAREN || k == TK::RBRACKET || k == TK::RBRACE) {
                     --depth;
-                    if (depth == 0)
-                        break; // cerro la llamada
+                    if (depth == 0) break; // cerro la llamada
                     at_start = false;
                     continue;
                 }
@@ -335,14 +316,14 @@ std::vector<ParamHint> compute_param_hints(const std::string &text,
                     if (arg_index < static_cast<int>(names.size())) {
                         const std::string &pname = names[arg_index];
                         if (!pname.empty()) {
-                            // Omitir el hint redundante: el argumento es un solo
-                            // identificador igual al nombre del parametro
+                            // Omitir el hint redundante: el argumento es un
+                            // solo identificador igual al nombre del parametro
                             // (p.ej. open(path: path)).
-                            bool redundant =
-                                toks[j].kind == TK::IDENTIFIER &&
-                                toks[j].lexeme == pname && j + 1 < n &&
-                                (toks[j + 1].kind == TK::COMMA ||
-                                 toks[j + 1].kind == TK::RPAREN);
+                            bool redundant = toks[j].kind == TK::IDENTIFIER &&
+                                             toks[j].lexeme == pname &&
+                                             j + 1 < n &&
+                                             (toks[j + 1].kind == TK::COMMA ||
+                                              toks[j + 1].kind == TK::RPAREN);
                             if (!redundant) {
                                 ParamHint h;
                                 idx.at(toks[j].loc.offset, h.line, h.character);

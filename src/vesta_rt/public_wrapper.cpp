@@ -128,12 +128,12 @@ struct JitBoundaryGuard {
 #endif
 
 /* Declara un @c JitBoundaryGuard local que captura el frame JIT llamador.  Los
- * builtins se evaluan en el contexto de la entry (retorno + RBP de la entry). */
+ * builtins se evaluan en el contexto de la entry (retorno + RBP de la entry).
+ */
 #if defined(__GNUC__)
-#define VRT_CAPTURE_JIT_FRAME(p)                                                \
-    JitBoundaryGuard _jit_bnd(                                                  \
-        (p)->gc_heap,                                                           \
-        reinterpret_cast<uint64_t>(__builtin_return_address(0)),                \
+#define VRT_CAPTURE_JIT_FRAME(p)                                               \
+    JitBoundaryGuard _jit_bnd(                                                 \
+        (p)->gc_heap, reinterpret_cast<uint64_t>(__builtin_return_address(0)), \
         reinterpret_cast<uint64_t>(__builtin_frame_address(0)) + 16u)
 #else
 #define VRT_CAPTURE_JIT_FRAME(p) ((void)0)
@@ -186,7 +186,8 @@ uint8_t *vrt_raw_alloc(vrt_proc *proc, size_t size) {
         auto fn = reinterpret_cast<uint64_t (*)(void *)>(
             static_cast<uintptr_t>(p->alloc_del_programa));
         fn(p);
-        return reinterpret_cast<uint8_t *>(p->registers.regs[runtime::R00].qword());
+        return reinterpret_cast<uint8_t *>(
+            p->registers.regs[runtime::R00].qword());
     }
     uint64_t ptr = p->raw_alloc.alloc(size);
     return reinterpret_cast<uint8_t *>(ptr);
@@ -1083,9 +1084,8 @@ uint64_t vrt_calln(vrt_proc *proc, const char *lib_name, const char *fn_name) {
     (void)lib_name;
     (void)fn_name;
     if (proc) {
-        runtime::throw_fatal(
-            as_proc(proc), VESTA_FATAL_ILLEGAL_INSTRUCTION,
-            "calln desde JIT no implementado en v1 ( D.3-G+)");
+        runtime::throw_fatal(as_proc(proc), VESTA_FATAL_ILLEGAL_INSTRUCTION,
+                             "calln desde JIT no implementado en v1 ( D.3-G+)");
     }
     return 0;
 }
@@ -1127,13 +1127,15 @@ void vrt_safepoint_handler(vrt_proc *proc) {
      * El throw_fatal hace longjmp al scheduler -> el proceso muere ->
      * invoke_simple_macro devuelve false -> el pase de plegado NO pliega
      * (fallback: la funcion corre en runtime).  El flag vive en el ProcessVM
-     * (una instancia) -> sin el problema de globales duplicados cross-modulo. */
-    // Watchdog CTPE: si el presupuesto vencio, ABORTAR la ejecucion del programa
-    // precomputado via longjmp al setjmp que el scheduler armo alrededor del
-    // jit_entry_fn (mismo mecanismo que la recuperacion de SIGSEGV).  throw_fatal
-    // NO sirve aqui: solo marca err_thread y RETORNA -> el codigo JIT de main
-    // continuaria hasta terminar.  El longjmp desenrolla el frame JIT y devuelve
-    // el control al scheduler, que marca el proceso HALT sin ejecutar main.
+     * (una instancia) -> sin el problema de globales duplicados cross-modulo.
+     */
+    // Watchdog CTPE: si el presupuesto vencio, ABORTAR la ejecucion del
+    // programa precomputado via longjmp al setjmp que el scheduler armo
+    // alrededor del jit_entry_fn (mismo mecanismo que la recuperacion de
+    // SIGSEGV).  throw_fatal NO sirve aqui: solo marca err_thread y RETORNA ->
+    // el codigo JIT de main continuaria hasta terminar.  El longjmp desenrolla
+    // el frame JIT y devuelve el control al scheduler, que marca el proceso
+    // HALT sin ejecutar main.
     if (p->ctpe_abort && p->av_recovery_active) {
         p->ctpe_did_abort = 1;
         std::longjmp(p->av_recovery_jmpbuf, 2); // 2 = aborto CTPE (1 = AV/div0)
@@ -1712,7 +1714,8 @@ VRT_FORCE_FP vrt_handle vrt_str_make(vrt_proc *proc, uint64_t vm_addr,
                                      uint32_t byte_len) {
     if (!proc) return VRT_NULL_HANDLE;
     runtime::ProcessVM *p = as_proc(proc);
-    /* La alocacion del StringObject puede disparar GC; capturar el frame JIT. */
+    /* La alocacion del StringObject puede disparar GC; capturar el frame JIT.
+     */
     VRT_CAPTURE_JIT_FRAME(p);
     if (byte_len > (1u << 24)) return VRT_NULL_HANDLE; /* sanity: 16 MB cap */
     /* Sprint string-perf-4 (2026-06-02): bypass del path antiguo
@@ -1732,7 +1735,8 @@ VRT_FORCE_FP vrt_handle vrt_str_make_h(vrt_proc *proc, uint64_t host_addr,
                                        uint32_t byte_len) {
     if (!proc) return VRT_NULL_HANDLE;
     runtime::ProcessVM *p = as_proc(proc);
-    /* La alocacion del StringObject puede disparar GC; capturar el frame JIT. */
+    /* La alocacion del StringObject puede disparar GC; capturar el frame JIT.
+     */
     VRT_CAPTURE_JIT_FRAME(p);
     if (byte_len > (1u << 24)) return VRT_NULL_HANDLE; /* sanity: 16 MB cap */
     return static_cast<vrt_handle>(
@@ -1774,10 +1778,12 @@ uint64_t vrt_str_raw(vrt_proc *proc, vrt_handle h) {
 }
 
 /* STRCAT: %dst = strcat.handle a, b.  Crea un ROPE O(1) (lazy concat). */
-VRT_FORCE_FP vrt_handle vrt_str_cat(vrt_proc *proc, vrt_handle a, vrt_handle b) {
+VRT_FORCE_FP vrt_handle vrt_str_cat(vrt_proc *proc, vrt_handle a,
+                                    vrt_handle b) {
     if (!proc) return VRT_NULL_HANDLE;
     runtime::ProcessVM *p = as_proc(proc);
-    /* El nuevo StringObject concatenado se aloca en el GC; capturar el frame. */
+    /* El nuevo StringObject concatenado se aloca en el GC; capturar el frame.
+     */
     VRT_CAPTURE_JIT_FRAME(p);
     return static_cast<vrt_handle>(runtime::strcat_public(
         p, static_cast<gc::GcHandle>(a), static_cast<gc::GcHandle>(b)));

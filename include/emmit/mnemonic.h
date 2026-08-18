@@ -12,22 +12,22 @@
  * @file emmit/mnemonic.h
  * @brief El mnemonico de una instruccion `.vel` como TIPO, no como cadena.
  *
- * Sale de @c emmit/instr_list.h, que es la lista unica.  Nadie escribe este enum
- * a mano: seria una tercera copia de la misma lista y se separaria de las otras
- * dos igual que ellas ya se separaron entre si.
+ * Sale de @c emmit/instr_list.h, que es la lista unica.  Nadie escribe este
+ * enum a mano: seria una tercera copia de la misma lista y se separaria de las
+ * otras dos igual que ellas ya se separaron entre si.
  *
  * Para que sirve: que el emisor del IR diga QUE instruccion emite en vez de
  * escribir su nombre en una cadena.  Un mnemonico que no existe deja de
- * compilar, en lugar de descubrirse al ensamblar -- el final de la cadena, lejos
- * de donde se escribio.
+ * compilar, en lugar de descubrirse al ensamblar -- el final de la cadena,
+ * lejos de donde se escribio.
  *
  * ## Nada se busca
  *
  * El mnemonico ES un indice, asi que su nombre y su categoria salen de tablas
- * planas, no de hashear una cadena.  Y como la lista va agrupada, cada categoria
- * es un rango contiguo: preguntar si algo es un salto son dos comparaciones.
- * Todo @c constexpr, asi que cuando el mnemonico se conoce al compilar la
- * pregunta no llega a ejecutarse.
+ * planas, no de hashear una cadena.  Y como la lista va agrupada, cada
+ * categoria es un rango contiguo: preguntar si algo es un salto son dos
+ * comparaciones. Todo @c constexpr, asi que cuando el mnemonico se conoce al
+ * compilar la pregunta no llega a ejecutarse.
  */
 #ifndef EMMIT_MNEMONIC_H
 #define EMMIT_MNEMONIC_H
@@ -44,15 +44,15 @@ namespace emmit {
  * @enum Category
  * @brief Que clase de trabajo hace una instruccion.
  *
- * Sale de las secciones en las que YA estaba dividida la tabla del emisor: no se
- * invento aqui una taxonomia nueva.
+ * Sale de las secciones en las que YA estaba dividida la tabla del emisor: no
+ * se invento aqui una taxonomia nueva.
  */
 enum class Category : uint8_t {
-    Arithmetic,  ///< suma, resta, producto, division, modulo, ALU de 3 operandos
-    Bitwise,     ///< logica bit a bit y desplazamientos
-    Branch,      ///< saltos, tablas de salto, cambio de tipo
-    Call,        ///< llamadas, closures, tailcall
-    Compare,     ///< comparacion con y sin signo
+    Arithmetic, ///< suma, resta, producto, division, modulo, ALU de 3 operandos
+    Bitwise,    ///< logica bit a bit y desplazamientos
+    Branch,     ///< saltos, tablas de salto, cambio de tipo
+    Call,       ///< llamadas, closures, tailcall
+    Compare,    ///< comparacion con y sin signo
     Concurrency, ///< procesos, monitores, futuros, corrutinas, distribuido
     Exception,   ///< frames de excepcion
     Float,       ///< coma flotante y banco ancho
@@ -131,7 +131,7 @@ inline constexpr Category category_of(Mnemonic m) {
  */
 struct CategoryRange {
     uint16_t first = 0;
-    uint16_t last = 0;   ///< incluido
+    uint16_t last = 0; ///< incluido
     bool empty = true;
 };
 
@@ -169,12 +169,12 @@ inline constexpr bool is_in(Mnemonic m, Category c) {
  *
  * Es la FRONTERA: el unico sitio donde una cadena se convierte en mnemonico.
  * Del lado de dentro ya nadie compara texto -- se compara el enum, que es un
- * entero --, y por eso esta conversion ocurre UNA vez por token en el lexer y no
- * en cada consulta como pasaba con las tablas indexadas por cadena.
+ * entero --, y por eso esta conversion ocurre UNA vez por token en el lexer y
+ * no en cada consulta como pasaba con las tablas indexadas por cadena.
  *
- * Devolver @c kCount y no lanzar es a proposito: "esto no es una instruccion" es
- * una respuesta que el lexer necesita para poder decir DoNDE estaba el nombre
- * mal escrito.
+ * Devolver @c kCount y no lanzar es a proposito: "esto no es una instruccion"
+ * es una respuesta que el lexer necesita para poder decir DoNDE estaba el
+ * nombre mal escrito.
  *
  * La tabla se ordena por texto la primera vez y luego es busqueda binaria.  No
  * puede aprovecharse el orden del enum porque ese es por categoria, y las dos
@@ -203,8 +203,10 @@ inline Mnemonic mnemonic_from_text(const char *text) {
         const size_t mid = lo + (hi - lo) / 2;
         const int c = std::strcmp(kSorted[mid].text, text);
         if (c == 0) return kSorted[mid].m;
-        if (c < 0) lo = mid + 1;
-        else hi = mid;
+        if (c < 0)
+            lo = mid + 1;
+        else
+            hi = mid;
     }
     return Mnemonic::kCount;
 }
@@ -217,8 +219,8 @@ inline constexpr bool is_valid(Mnemonic m) {
 /**
  * @brief Indice plano por mnemonico sobre una tabla ajena indexada por cadena.
  *
- * El problema que resuelve: una tabla `nombre -> lo que sea` obliga a hashear la
- * cadena en CADA consulta, y las consultas de este tipo ocurren una vez por
+ * El problema que resuelve: una tabla `nombre -> lo que sea` obliga a hashear
+ * la cadena en CADA consulta, y las consultas de este tipo ocurren una vez por
  * instruccion emitida.  Convertir esa tabla entera a indexada por enum son
  * cientos de entradas que tocar; esto da el mismo resultado sin tocar ninguna:
  * se recorre UNA vez al arrancar y de ahi en adelante la busqueda es un indice.
@@ -236,8 +238,8 @@ template <typename V> class MnemonicIndex {
      *
      * Lo que la tabla tenga y la lista no -- o al reves -- se puede consultar
      * despues (@ref unknown_names, @ref missing).  No se calla: una entrada que
-     * no casa es una instruccion que existe en un lado y no en el otro, y eso es
-     * precisamente el fallo mudo que este trabajo persigue.
+     * no casa es una instruccion que existe en un lado y no en el otro, y eso
+     * es precisamente el fallo mudo que este trabajo persigue.
      */
     template <typename Table> explicit MnemonicIndex(const Table &table) {
         slots_.assign(mnemonic_count(), nullptr);
@@ -278,22 +280,22 @@ template <typename V> class MnemonicIndex {
 /// Nombre de la categoria, para diagnosticos y volcados.
 inline constexpr const char *category_name(Category c) {
     switch (c) {
-    case Category::Arithmetic:  return "arithmetic";
-    case Category::Bitwise:     return "bitwise";
-    case Category::Branch:      return "branch";
-    case Category::Call:        return "call";
-    case Category::Compare:     return "compare";
+    case Category::Arithmetic: return "arithmetic";
+    case Category::Bitwise: return "bitwise";
+    case Category::Branch: return "branch";
+    case Category::Call: return "call";
+    case Category::Compare: return "compare";
     case Category::Concurrency: return "concurrency";
-    case Category::Exception:   return "exception";
-    case Category::Float:       return "float";
-    case Category::Gc:          return "gc";
-    case Category::Memory:      return "memory";
-    case Category::Object:      return "object";
-    case Category::Other:       return "other";
-    case Category::Stack:       return "stack";
-    case Category::String:      return "string";
-    case Category::System:      return "system";
-    default:                    return "?";
+    case Category::Exception: return "exception";
+    case Category::Float: return "float";
+    case Category::Gc: return "gc";
+    case Category::Memory: return "memory";
+    case Category::Object: return "object";
+    case Category::Other: return "other";
+    case Category::Stack: return "stack";
+    case Category::String: return "string";
+    case Category::System: return "system";
+    default: return "?";
     }
 }
 

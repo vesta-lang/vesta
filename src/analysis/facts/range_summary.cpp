@@ -28,9 +28,8 @@ using ir::IrOp;
 /// Nombres que el programa usa como PUNTO DE ENTRADA: alguien los llama desde
 /// fuera del modulo, asi que sus parametros no se pueden estrechar.
 bool es_entrada(const std::string &n) {
-    return n == "main" || n == "__module_init" || n.size() >= 5 &&
-                                                      n.compare(n.size() - 5, 5,
-                                                                ".main") == 0;
+    return n == "main" || n == "__module_init" ||
+           n.size() >= 5 && n.compare(n.size() - 5, 5, ".main") == 0;
 }
 
 /**
@@ -43,9 +42,9 @@ bool es_entrada(const std::string &n) {
  * tres lineas mas abajo) y rendirse ahi obliga a suponer lo peor sobre codigo
  * que se puede leer entero.
  *
- * Solo cuando la direccion se escapa de verdad -- se guarda donde se escribe mas
- * de una vez, se pasa a otro, la registra una tabla de metodos, la nombra un
- * bloque de ensamblador -- la funcion se declara abierta.
+ * Solo cuando la direccion se escapa de verdad -- se guarda donde se escribe
+ * mas de una vez, se pasa a otro, la registra una tabla de metodos, la nombra
+ * un bloque de ensamblador -- la funcion se declara abierta.
  */
 struct UsosDeNombre {
     /// Llamadas visibles a cada funcion (directas + indirectas resueltas).
@@ -101,13 +100,14 @@ RangeSummaries compute_range_summaries(const ir::IrModule &mod,
     // Hechos por funcion: un recorrido, y no se repite en cada visita.
     std::vector<IrFacts> hechos;
     hechos.reserve(mod.functions.size());
-    for (const ir::IrFunction &fn : mod.functions) hechos.push_back(build_ir_facts(fn));
+    for (const ir::IrFunction &fn : mod.functions)
+        hechos.push_back(build_ir_facts(fn));
 
     /* Arranque optimista: nadie llama a nadie todavia.  Es lo que hace que la
      * recursion converja al MENOR punto fijo en vez de quedarse en "no se".  El
-     * suelo de un parametro sale de su TIPO, sin analizar la funcion: pedirle al
-     * motor un pase entero solo para eso seria pagar un analisis por un dato que
-     * ya esta en la declaracion. */
+     * suelo de un parametro sale de su TIPO, sin analizar la funcion: pedirle
+     * al motor un pase entero solo para eso seria pagar un analisis por un dato
+     * que ya esta en la declaracion. */
     std::unordered_map<std::string, size_t> indice_de;
     for (size_t i = 0; i < mod.functions.size(); ++i) {
         const ir::IrFunction &fn = mod.functions[i];
@@ -116,9 +116,9 @@ RangeSummaries compute_range_summaries(const ir::IrModule &mod,
         s.cerrada = usos.cerrada(fn.name);
         s.params.reserve(fn.params.size());
         for (ir::IrValueId p : fn.params) {
-            const ValueRange piso =
-                p < fn.values.size() ? rango_del_tipo(fn.values[p].type)
-                                     : ValueRange::top();
+            const ValueRange piso = p < fn.values.size()
+                                        ? rango_del_tipo(fn.values[p].type)
+                                        : ValueRange::top();
             s.params.push_back(s.cerrada ? ValueRange::bottom(piso.t) : piso);
         }
         s.ret = ValueRange::bottom();
@@ -126,8 +126,9 @@ RangeSummaries compute_range_summaries(const ir::IrModule &mod,
     }
 
     /* Quien llama a quien: cuando el resumen de G cambia, hay que rehacer a los
-     * que dependen de el, y solo a esos.  Rehacer el modulo entero en cada vuelta
-     * cuesta funciones x rondas para volver a calcular lo que ya estaba. */
+     * que dependen de el, y solo a esos.  Rehacer el modulo entero en cada
+     * vuelta cuesta funciones x rondas para volver a calcular lo que ya estaba.
+     */
     std::vector<std::unordered_set<size_t>> llamantes(mod.functions.size());
     for (size_t i = 0; i < mod.functions.size(); ++i)
         for (const ir::IrBlock &b : mod.functions[i].blocks)
@@ -140,7 +141,8 @@ RangeSummaries compute_range_summaries(const ir::IrModule &mod,
     std::deque<size_t> cola;
     std::vector<uint8_t> en_cola(mod.functions.size(), 1);
     std::vector<uint32_t> visitas(mod.functions.size(), 0);
-    for (size_t i = 0; i < mod.functions.size(); ++i) cola.push_back(i);
+    for (size_t i = 0; i < mod.functions.size(); ++i)
+        cola.push_back(i);
     auto encolar = [&](size_t i) {
         if (i < en_cola.size() && !en_cola[i]) {
             en_cola[i] = 1;
@@ -148,12 +150,16 @@ RangeSummaries compute_range_summaries(const ir::IrModule &mod,
         }
     };
 
-    const uint32_t tope =
-        static_cast<uint32_t>(mod.functions.size()) * (op.retardo_ensanche + 8) + 16;
+    const uint32_t tope = static_cast<uint32_t>(mod.functions.size()) *
+                              (op.retardo_ensanche + 8) +
+                          16;
     bool estable = true;
     uint32_t pasos = 0;
     while (!cola.empty()) {
-        if (++pasos > tope) { estable = false; break; }
+        if (++pasos > tope) {
+            estable = false;
+            break;
+        }
         const size_t i = cola.front();
         cola.pop_front();
         en_cola[i] = 0;
@@ -167,7 +173,8 @@ RangeSummaries compute_range_summaries(const ir::IrModule &mod,
             const bool ensanchando = (visitas[i]++ >= op.retardo_ensanche);
             const RangeFacts rf = compute_ranges(fn, hechos[i], op, &out);
 
-            // Actualiza un rango del resumen creciendo (y ensanchando al final).
+            // Actualiza un rango del resumen creciendo (y ensanchando al
+            // final).
             auto subir = [&](ValueRange &destino, const ValueRange &aporte,
                              size_t dueno) {
                 ValueRange nuevo = destino.unir(aporte);
@@ -178,7 +185,8 @@ RangeSummaries compute_range_summaries(const ir::IrModule &mod,
                 // dependa de lo que devuelve.
                 encolar(dueno);
                 if (dueno < llamantes.size())
-                    for (size_t c : llamantes[dueno]) encolar(c);
+                    for (size_t c : llamantes[dueno])
+                        encolar(c);
             };
 
             for (const ir::IrBlock &b : fn.blocks) {
@@ -205,17 +213,19 @@ RangeSummaries compute_range_summaries(const ir::IrModule &mod,
                     if (it == out.por_funcion.end()) continue;
                     FnRangeSummary &suyo = it->second;
                     const auto id = indice_de.find(destino);
-                    const size_t suyo_idx =
-                        id == indice_de.end() ? mod.functions.size() : id->second;
+                    const size_t suyo_idx = id == indice_de.end()
+                                                ? mod.functions.size()
+                                                : id->second;
                     /* Lo que entra: cada argumento aporta al parametro que le
                      * toca.  Solo tiene sentido si se conocen todos los
                      * llamantes; si no, el parametro ya vale lo que su tipo y
                      * sumarle esto no cambiaria nada. */
                     if (suyo.cerrada)
-                        for (size_t a = 0; a < in.operands.size() &&
-                                           a < suyo.params.size();
+                        for (size_t a = 0;
+                             a < in.operands.size() && a < suyo.params.size();
                              ++a)
-                            subir(suyo.params[a], rf.at(in.operands[a]), suyo_idx);
+                            subir(suyo.params[a], rf.at(in.operands[a]),
+                                  suyo_idx);
                     /* Una llamada de cola devuelve lo que devuelva el llamado:
                      * su resumen de retorno es tambien el nuestro. */
                     if (in.op == IrOp::TAILCALL)
@@ -234,7 +244,8 @@ RangeSummaries compute_range_summaries(const ir::IrModule &mod,
             const ir::IrFunction &fn = mod.functions[i];
             FnRangeSummary &s = out.por_funcion[fn.name];
             s.cerrada = false;
-            for (size_t a = 0; a < fn.params.size() && a < s.params.size(); ++a) {
+            for (size_t a = 0; a < fn.params.size() && a < s.params.size();
+                 ++a) {
                 const ir::IrValueId p = fn.params[a];
                 s.params[a] = p < fn.values.size()
                                   ? rango_del_tipo(fn.values[p].type)

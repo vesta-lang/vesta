@@ -197,7 +197,8 @@ inline bool is_gp(MReg r) noexcept {
     return reg_id(r) < 16;
 }
 
-/** @brief True si @p r es del banco ancho (16..47: xmm0-15 y los de AVX-512). */
+/** @brief True si @p r es del banco ancho (16..47: xmm0-15 y los de AVX-512).
+ */
 inline bool is_xmm(MReg r) noexcept {
     const uint8_t id = reg_id(r);
     return id >= 16 && id < 48;
@@ -248,8 +249,7 @@ enum class MOperandKind : uint8_t {
     MEM = 4,       ///< memoria: base + index*scale + disp32
     LABEL = 5,     ///< label_id (para JMP/JCC/CALL relativos)
     REL_RT = 6,    ///< runtime entry slot (puntero resuelto en link)
-    VREG =
-        7 ///< registro VIRTUAL ( D.7): id en @c value, clase en @c flags
+    VREG = 7 ///< registro VIRTUAL ( D.7): id en @c value, clase en @c flags
 };
 
 /**
@@ -410,9 +410,10 @@ enum class MOp : uint8_t {
     SAR = 18,
     NEG = 19,
     NOT = 20,
-    IDIV = 21,  ///< IDIV src (RDX:RAX / src -> RAX, RDX = rem) -- SIGNED
-    CQO = 22,   ///< sign-extend RAX into RDX:RAX (CDQ for 32-bit)
-    DIV_U = 202, ///< DIV src (RDX:RAX / src -> RAX, RDX = rem) -- UNSIGNED (F7 /6)
+    IDIV = 21, ///< IDIV src (RDX:RAX / src -> RAX, RDX = rem) -- SIGNED
+    CQO = 22,  ///< sign-extend RAX into RDX:RAX (CDQ for 32-bit)
+    DIV_U =
+        202, ///< DIV src (RDX:RAX / src -> RAX, RDX = rem) -- UNSIGNED (F7 /6)
     MOVZX = 23, ///< MOVZX dst, src (zero-extend u8/u16 -> u64)
     MOVSX = 24, ///< MOVSX dst, src (sign-extend i8/i16/i32 -> i64)
     INC = 25,   ///< INC dst (++dst, mas compacto que ADD dst, 1)
@@ -475,10 +476,11 @@ enum class MOp : uint8_t {
     ROUNDSD = 68, ///< ROUNDSD xmm_dst, xmm_src, imm8 (66 0F 3A 0B /r ib)
     MINSS = 208,  ///< MINSS  xmm_dst, xmm_src (F3 0F 5D /r) -- variante f32
     MAXSS = 209,  ///< MAXSS  xmm_dst, xmm_src (F3 0F 5F /r) -- variante f32
-    ROUNDSS = 237, ///< ROUNDSS xmm_dst, xmm_src, imm8 (66 0F 3A 0A /r ib) -- f32
-                  ///<   imm8 modes: 0=round-to-nearest, 1=floor, 2=ceil,
-                  ///<   3=trunc. variant field carga el mode.  Requiere SSE4.1
-                  ///<   (universal x86-64).
+    ROUNDSS =
+        237, ///< ROUNDSS xmm_dst, xmm_src, imm8 (66 0F 3A 0A /r ib) -- f32
+             ///<   imm8 modes: 0=round-to-nearest, 1=floor, 2=ceil,
+             ///<   3=trunc. variant field carga el mode.  Requiere SSE4.1
+             ///<   (universal x86-64).
     MOVQ_XMM_GP = 69, ///< MOVQ rGP, xmm (66 REX.W 0F 7E /r) -- XMM -> GP
 
     /* FP arith scalar (Math-IR-promote v2.2b cont). */
@@ -509,14 +511,15 @@ enum class MOp : uint8_t {
      * la @b direccion y RAX para el valor viejo/esperado; se marcan
      * call-position (clobber caller-saved -> vregs vivos van a callee-saved).
      *   ATOMICCAS_V: dst es IN/OUT (entra=expected, sale=old); src1=addr,
-     *                src2=desired.  -> mov rax,dst; lock cmpxchg [addr],desired;
-     *                mov dst,rax.
-     *   ATOMICADD_V: dst=old; src1=addr, src2=delta. -> lock xadd. */
+     *                src2=desired.  -> mov rax,dst; lock cmpxchg
+     * [addr],desired; mov dst,rax. ATOMICADD_V: dst=old; src1=addr, src2=delta.
+     * -> lock xadd. */
     ATOMICCAS_V = 203,
     ATOMICADD_V = 204,
     /* Instrucciones x86 atomicas que emite el rewrite (operandos fisicos):
      *   LOCK_CMPXCHG: dst=mem [addr], src1=reg (desired).  F0 REX.W 0F B1 /r.
-     *   LOCK_XADD:    dst=mem [addr], src1=reg (valor).    F0 REX.W 0F C1 /r. */
+     *   LOCK_XADD:    dst=mem [addr], src1=reg (valor).    F0 REX.W 0F C1 /r.
+     */
     LOCK_CMPXCHG = 205,
     LOCK_XADD = 206,
 
@@ -621,15 +624,15 @@ enum class MOp : uint8_t {
 
     TLS_LE_ADDR =
         159, ///< dst = direccion por-hilo de un `thread_local` (TLS local-exec,
-            ///< ELF).  src1 = IMM32(sym_idx) del simbolo TLS.  El encoder emite
-            ///< `mov dst, %fs:0` (64 REX.W 8B + SIB disp32=0) + `lea dst,
-            ///< [dst+disp32]` con una @c MReloc{TPOFF32} sobre el disp32 del
-            ///< lea.  El resultado es un host_ptr (TP + tpoff).
+             ///< ELF).  src1 = IMM32(sym_idx) del simbolo TLS.  El encoder
+             ///< emite `mov dst, %fs:0` (64 REX.W 8B + SIB disp32=0) + `lea
+             ///< dst, [dst+disp32]` con una @c MReloc{TPOFF32} sobre el disp32
+             ///< del lea.  El resultado es un host_ptr (TP + tpoff).
 
     TLS_PE_ADDR =
-        160, ///< dst = direccion por-hilo de un `thread_local` (TLS PE/Windows).
-             ///< src1 = IMM32(var_sym_idx) del simbolo .tls; src2 =
-             ///< IMM32(index_sym_idx) del `__vx_tls_index`.  El encoder emite
+        160, ///< dst = direccion por-hilo de un `thread_local` (TLS
+             ///< PE/Windows). src1 = IMM32(var_sym_idx) del simbolo .tls; src2
+             ///< = IMM32(index_sym_idx) del `__vx_tls_index`.  El encoder emite
              ///< `mov r10,gs:[0x58]` + `mov r11d,[rip+_tls_index]` (DATA_REL32)
              ///< + `mov r10,[r10+r11*8]` + `lea dst,[r10+var@secrel]`
              ///< (SECREL32).  Usa r10/r11 (scratch reservados) -> dst libre.
@@ -647,17 +650,16 @@ enum class MOp : uint8_t {
     /* FP arith scalar f32 (SSE, prefijo F3).  Mismo patron 2-address que
      * sus contrapartes f64 (ADDSD/...): el selector emite forma 3-op y el
      * rewrite la legaliza.  Reg-reg only (igual que ADDSD). */
-    ADDSS = 94,     ///< ADDSS xmm,xmm (F3 0F 58)
-    SUBSS = 95,     ///< SUBSS xmm,xmm (F3 0F 5C)
-    MULSS = 96,     ///< MULSS xmm,xmm (F3 0F 59)
-    DIVSS = 97,     ///< DIVSS xmm,xmm (F3 0F 5E)
-    SQRTSS = 98,    ///< SQRTSS xmm,xmm (F3 0F 51)
-    UCOMISS = 99,   ///< UCOMISS xmm,xmm (0F 2E) -- f32 compare (sin 66)
-    CVTSI2SS = 100, ///< CVTSI2SS xmm,r64 (F3 REX.W 0F 2A) -- int -> f32
-    CVTTSS2SI =
-        101,      ///< CVTTSS2SI r64,xmm (F3 REX.W 0F 2C) -- f32 -> int trunc
-    XORPS = 102,  ///< XORPS xmm,xmm (0F 57) -- clear / neg-mask de f32/f64
-    ANDPS = 103,  ///< ANDPS xmm,xmm (0F 54) -- abs-mask de f32/f64 (FABS)
+    ADDSS = 94,      ///< ADDSS xmm,xmm (F3 0F 58)
+    SUBSS = 95,      ///< SUBSS xmm,xmm (F3 0F 5C)
+    MULSS = 96,      ///< MULSS xmm,xmm (F3 0F 59)
+    DIVSS = 97,      ///< DIVSS xmm,xmm (F3 0F 5E)
+    SQRTSS = 98,     ///< SQRTSS xmm,xmm (F3 0F 51)
+    UCOMISS = 99,    ///< UCOMISS xmm,xmm (0F 2E) -- f32 compare (sin 66)
+    CVTSI2SS = 100,  ///< CVTSI2SS xmm,r64 (F3 REX.W 0F 2A) -- int -> f32
+    CVTTSS2SI = 101, ///< CVTTSS2SI r64,xmm (F3 REX.W 0F 2C) -- f32 -> int trunc
+    XORPS = 102,     ///< XORPS xmm,xmm (0F 57) -- clear / neg-mask de f32/f64
+    ANDPS = 103,     ///< ANDPS xmm,xmm (0F 54) -- abs-mask de f32/f64 (FABS)
 
     /* memcpy x86 nativo (perf strings 2026-06-18).  REP MOVSB copia RCX
      * bytes desde [RSI] a [RDI] incrementando ambos (DF=0 asumido por la
@@ -681,12 +683,14 @@ enum class MOp : uint8_t {
      * de los tipos anchos N=potencia-de-2 (i128 -> XMM completo).  AVX (VX,
      * 4x f64) y AVX512 (EVEX, 8x f64) son slices posteriores con el mismo
      * patron pero distinto encoding. */
-    ADDPD = 106,  ///< ADDPD xmm,xmm (66 0F 58) -- 2x f64 add
-    SUBPD = 107,  ///< SUBPD xmm,xmm (66 0F 5C) -- 2x f64 sub
-    MULPD = 108,  ///< MULPD xmm,xmm (66 0F 59) -- 2x f64 mul
-    DIVPD = 109,  ///< DIVPD xmm,xmm (66 0F 5E) -- 2x f64 div
-    MOVUPD = 110, ///< MOVUPD dst,src (66 0F 10 load / 66 0F 11 store) 16B unaligned
-    MOVAPD = 111, ///< MOVAPD dst,src (66 0F 28 load / 66 0F 29 store) 16B aligned
+    ADDPD = 106, ///< ADDPD xmm,xmm (66 0F 58) -- 2x f64 add
+    SUBPD = 107, ///< SUBPD xmm,xmm (66 0F 5C) -- 2x f64 sub
+    MULPD = 108, ///< MULPD xmm,xmm (66 0F 59) -- 2x f64 mul
+    DIVPD = 109, ///< DIVPD xmm,xmm (66 0F 5E) -- 2x f64 div
+    MOVUPD =
+        110, ///< MOVUPD dst,src (66 0F 10 load / 66 0F 11 store) 16B unaligned
+    MOVAPD =
+        111, ///< MOVAPD dst,src (66 0F 28 load / 66 0F 29 store) 16B aligned
 
     /* Packed ENTEROS SSE2 (auto-vectorizacion de loops int).  Mismo patron que
      * los packed float (66 0F xx, reg-reg) pero suma/resta entera por lane.
@@ -704,13 +708,14 @@ enum class MOp : uint8_t {
     PADDB = 146,  ///< PADDB xmm,xmm  (66 0F FC) -- 16x i8 add
     PSUBB = 147,  ///< PSUBB xmm,xmm  (66 0F F8) -- 16x i8 sub
     /* Packed 32-bit mul (low): SSE4.1 / AVX2.  Mapa 0F38 (no 0F).  Permite
-     * vectorizar `c[i]=a[i]*b[i]` para i32/u32 (PADDD/PSUBD ya cubren add/sub). */
+     * vectorizar `c[i]=a[i]*b[i]` para i32/u32 (PADDD/PSUBD ya cubren add/sub).
+     */
     PMULLD = 148, ///< PMULLD xmm,xmm (66 0F38 40) -- 4x i32 mul (low 32b)
 
     /* AVX escalar 3-OPERANDOS no-destructivo (VX.LIG.F2/F3.0F): VADDSD dst,
-     * src1, src2 -> dst = src1 OP src2 (dst != src1 permitido).  A diferencia de
-     * ADDSD (2-address destructivo, el rewrite mete un `mov dst,src1`), estas
-     * NO necesitan ese mov -> el regalloc/scheduler las explota como 3-op
+     * src1, src2 -> dst = src1 OP src2 (dst != src1 permitido).  A diferencia
+     * de ADDSD (2-address destructivo, el rewrite mete un `mov dst,src1`),
+     * estas NO necesitan ese mov -> el regalloc/scheduler las explota como 3-op
      * first-class.  Las emite el selector cuando --float-isa >= AVX; el src2
      * puede ser MEM (VX reg-reg-mem).  SD = F2 (double), SS = F3 (single). */
     VADDSD = 149, ///< VADDSD dst,src1,src2/mem (VX.LIG.F2.0F 58) -- f64 add
@@ -729,11 +734,12 @@ enum class MOp : uint8_t {
 
     /* Pseudo (callback-ABI save-set, jubilacion de slots): un callback NO
      * hoja-puro puede ser invocado desde un contexto con proc->registers vivo
-     * (el interp, o una re-entrada nativa).  El cuerpo, al hacer un CALL VM_ABI,
-     * pisaria proc->registers[1..N] del caller.  CB_SAVE_REGS salva regs[0..15]
-     * a una work-area de 128B del frame (reservada por el rewrite si
-     * MFunction::cb_save_regs); CB_RESTORE_REGS los restaura antes del RET.  El
-     * rewrite los expande con R11 (scratch) sabiendo el offset RBP del area. */
+     * (el interp, o una re-entrada nativa).  El cuerpo, al hacer un CALL
+     * VM_ABI, pisaria proc->registers[1..N] del caller.  CB_SAVE_REGS salva
+     * regs[0..15] a una work-area de 128B del frame (reservada por el rewrite
+     * si MFunction::cb_save_regs); CB_RESTORE_REGS los restaura antes del RET.
+     * El rewrite los expande con R11 (scratch) sabiendo el offset RBP del area.
+     */
     CB_SAVE_REGS = 200,    ///< salva proc->regs[0..15] a la work-area del frame
     CB_RESTORE_REGS = 201, ///< restaura proc->regs[0..15] desde la work-area
 
@@ -742,10 +748,11 @@ enum class MOp : uint8_t {
      * UNPCKLPD (difunde el lane bajo a ambos -> construye la mascara de signo
      * de 16B desde un MOVQ_GP_XMM, sin constante en memoria).  Mismo form
      * simple 66 0F xx /r reg-reg que los demas packed. */
-    SQRTPD = 128,   ///< SQRTPD xmm,xmm   (66 0F 51) -- 2x f64 sqrt
-    XORPD = 129,    ///< XORPD xmm,xmm    (66 0F 57) -- xor 128b (fneg via mask)
-    ANDPD = 130,    ///< ANDPD xmm,xmm    (66 0F 54) -- and 128b (fabs via mask)
-    UNPCKLPD = 131, ///< UNPCKLPD xmm,xmm (66 0F 14) -- dst.hi = src.lo (broadcast)
+    SQRTPD = 128, ///< SQRTPD xmm,xmm   (66 0F 51) -- 2x f64 sqrt
+    XORPD = 129,  ///< XORPD xmm,xmm    (66 0F 57) -- xor 128b (fneg via mask)
+    ANDPD = 130,  ///< ANDPD xmm,xmm    (66 0F 54) -- and 128b (fabs via mask)
+    UNPCKLPD =
+        131, ///< UNPCKLPD xmm,xmm (66 0F 14) -- dst.hi = src.lo (broadcast)
     /* Broadcast de un f64 (xmm.lo) a TODOS los lanes de un YMM/ZMM (mapa 0F38).
      * Solo AVX (VX.256.66.0F38.W0 19 / EVEX.512.66.0F38.W1 19); para 128b se
      * usa UNPCKLPD.  Construye la mascara de signo wide de fneg/fabs. */
@@ -758,20 +765,20 @@ enum class MOp : uint8_t {
      * pero SIN el prefijo 66 (pp=00 en VX/EVEX; EVEX W0).  4x f32 (XMM),
      * 8x (YMM), 16x (ZMM).  Para mover bytes se reusa MOVUPD (da igual el
      * prefijo en un move crudo). */
-    ADDPS = 133,        ///< ADDPS xmm,xmm  (0F 58) -- f32 add
-    SUBPS = 134,        ///< SUBPS xmm,xmm  (0F 5C)
-    MULPS = 135,        ///< MULPS xmm,xmm  (0F 59)
-    DIVPS = 136,        ///< DIVPS xmm,xmm  (0F 5E)
+    ADDPS = 133, ///< ADDPS xmm,xmm  (0F 58) -- f32 add
+    SUBPS = 134, ///< SUBPS xmm,xmm  (0F 5C)
+    MULPS = 135, ///< MULPS xmm,xmm  (0F 59)
+    DIVPS = 136, ///< DIVPS xmm,xmm  (0F 5E)
     /* FMA fusionado (dot-product): dst = src1*src2 + dst (1 redondeo).  src2
      * (rm) puede ser memoria.  VFMADD231PD (66 0F38 W1 B8) -> f64; VFMADD231PS
      * (66 0F38 W0 B8) -> f32.  Solo AVX/AVX512 (no hay FMA en SSE2 base). */
-    VFMADD231PD = 141,  ///< VFMADD231PD dst, src1, src2/mem (f64)
-    VFMADD231PS = 142,  ///< VFMADD231PS dst, src1, src2/mem (f32)
+    VFMADD231PD = 141, ///< VFMADD231PD dst, src1, src2/mem (f64)
+    VFMADD231PS = 142, ///< VFMADD231PS dst, src1, src2/mem (f32)
     /* VFMSUB231P{D,S} dst = src1*src2 - dst (1 redondeo).  66 0F38 BA; W1=PD,
      * W0=PS.  Baja el patron element-wise c[i]=a[i]*b[i]-d[i] (VEC_FMA con el
      * bit sub).  Mismo encoding que VFMADD231 pero opcode BA en vez de B8. */
-    VFMSUB231PD = 240,  ///< VFMSUB231PD dst, src1, src2/mem (f64)
-    VFMSUB231PS = 241,  ///< VFMSUB231PS dst, src1, src2/mem (f32)
+    VFMSUB231PD = 240, ///< VFMSUB231PD dst, src1, src2/mem (f64)
+    VFMSUB231PS = 241, ///< VFMSUB231PS dst, src1, src2/mem (f32)
     /* FMA ESCALAR (round(a*b+c), 1 redondeo): dst = src1*src2 + dst.  Baja el
      * IrOp::FMA.  VFMADD231SD (66 0F38 W1 B9) -> f64; VFMADD231SS (66 0F38 W0
      * B9) -> f32.  Requiere FMA3 (caps.fma); si no, el vreg cae a interp. */
@@ -785,13 +792,14 @@ enum class MOp : uint8_t {
                           ///< No es codigo ejecutable (se salta); el dispatch
                           ///< lo lee via `mov rT, [rbase + idx*8]`.
 
-    DATA_REL32_LABEL = 113, ///< Entrada de 4 bytes de jump table SELF-RELATIVE
-                            ///< (AOT/HOST_LEAF, PIC-safe, SIN reloc): emite 4
-                            ///< zeros + MFixup{label=src1(block),
-                            ///< instr_end=offset[src2(table)]} -> resolve_fixups
-                            ///< escribe offset[block]-offset[table].  El
-                            ///< dispatch suma la base: lea RB,[rip+table];
-                            ///< movsxd RI,[RB+idx*4]; add RB,RI; jmp RB.
+    DATA_REL32_LABEL =
+        113, ///< Entrada de 4 bytes de jump table SELF-RELATIVE
+             ///< (AOT/HOST_LEAF, PIC-safe, SIN reloc): emite 4
+             ///< zeros + MFixup{label=src1(block),
+             ///< instr_end=offset[src2(table)]} -> resolve_fixups
+             ///< escribe offset[block]-offset[table].  El
+             ///< dispatch suma la base: lea RB,[rip+table];
+             ///< movsxd RI,[RB+idx*4]; add RB,RI; jmp RB.
 
     /* ===== MOps especificos de AArch64 (arm64 vreg backend, opcion A) =====
      * Los MOp ALU/mem/control ABSTRACTOS (MOV/ADD/SUB/IMUL/AND/OR/XOR/SHL/SHR/
@@ -800,17 +808,18 @@ enum class MOp : uint8_t {
      * 3-operandos y el encoder arm64 la traduce (add/sub/mul/and/... rd,rn,rm).
      * Solo se anaden aqui las ops SIN equivalente abstracto.  El encoder x86 no
      * las emite; el arm64 si. */
-    A64_UDIV = 210,   ///< udiv rd, rn, rm (division sin signo; sin CQO/rax:rdx)
-    A64_SDIV = 211,   ///< sdiv rd, rn, rm (division con signo)
-    A64_MADD = 212,   ///< madd rd, rn, rm, ra (rd = ra + rn*rm)
-    A64_MSUB = 213,   ///< msub rd, rn, rm, ra (rd = ra - rn*rm); modulo = a-(a/b)*b
-    A64_MOVZ = 214,   ///< movz rd, #imm16, lsl #s (materializar constante: base)
-    A64_MOVK = 215,   ///< movk rd, #imm16, lsl #s (rellenar 16 bits sin borrar)
-    A64_MVN = 216,    ///< mvn rd, rm (NOT bitwise = orn rd, xzr, rm)
-    A64_CSEL = 217,   ///< csel rd, rn, rm, cond (select condicional)
-    A64_CSET = 218,   ///< cset rd, cond (rd = cond ? 1 : 0; = SETcc)
-    A64_CBZ = 219,    ///< cbz rn, label (branch si rn == 0)
-    A64_CBNZ = 220,   ///< cbnz rn, label (branch si rn != 0)
+    A64_UDIV = 210, ///< udiv rd, rn, rm (division sin signo; sin CQO/rax:rdx)
+    A64_SDIV = 211, ///< sdiv rd, rn, rm (division con signo)
+    A64_MADD = 212, ///< madd rd, rn, rm, ra (rd = ra + rn*rm)
+    A64_MSUB =
+        213, ///< msub rd, rn, rm, ra (rd = ra - rn*rm); modulo = a-(a/b)*b
+    A64_MOVZ = 214, ///< movz rd, #imm16, lsl #s (materializar constante: base)
+    A64_MOVK = 215, ///< movk rd, #imm16, lsl #s (rellenar 16 bits sin borrar)
+    A64_MVN = 216,  ///< mvn rd, rm (NOT bitwise = orn rd, xzr, rm)
+    A64_CSEL = 217, ///< csel rd, rn, rm, cond (select condicional)
+    A64_CSET = 218, ///< cset rd, cond (rd = cond ? 1 : 0; = SETcc)
+    A64_CBZ = 219,  ///< cbz rn, label (branch si rn == 0)
+    A64_CBNZ = 220, ///< cbnz rn, label (branch si rn != 0)
     /* Float/SIMD escalar AArch64 (3-operandos, banco v0-v31). */
     A64_FMOV = 221,   ///< fmov (reg-reg, o gp<->fp, o imm)
     A64_FADD = 222,   ///< fadd rd, rn, rm
@@ -850,24 +859,25 @@ enum class MOp : uint8_t {
  *   +24 [8]  src2         MOperand (para 3-operand ALU)
  */
 /* Bit de @c MInstr::flags: emitir la op escalar float en VX (avx+) en vez de
- * legacy SSE.  Lo pone el selector en cvt/cmp/sqrt cuando --float-isa>=AVX, para
- * NO mezclar legacy-SSE con las binarias VX (penalizacion de transicion).  Para
- * las binarias arith hay MOps VX dedicadas (VADDSD...); estas ops 1-fuente no
- * ganan nada de 3-op, asi que el flag es lo economico (no se inventa una MOp por
- * cada una).  Bit alto -> no colisiona con el stackmap-idx que CALL/SAFEPOINT
- * guardan en flags (esas no son ops float). */
+ * legacy SSE.  Lo pone el selector en cvt/cmp/sqrt cuando --float-isa>=AVX,
+ * para NO mezclar legacy-SSE con las binarias VX (penalizacion de transicion).
+ * Para las binarias arith hay MOps VX dedicadas (VADDSD...); estas ops 1-fuente
+ * no ganan nada de 3-op, asi que el flag es lo economico (no se inventa una MOp
+ * por cada una).  Bit alto -> no colisiona con el stackmap-idx que
+ * CALL/SAFEPOINT guardan en flags (esas no son ops float). */
 static constexpr uint16_t MI_FLAG_VX_SCALAR = 0x8000u;
 
 /* Bit de @c MInstr::flags para @c MOp::RET: marca un RET que proviene de un
- * `return` EXPLICITO del usuario, a diferencia del RET sintetico de caida-al-final
- * (fallthrough) que el lowering inserta.  NO basta con mirar si el RET porta un
- * operando: el RET implicito de una funcion con tipo de retorno no-void tambien
- * lleva un valor (un `0` sintetico), asi que "tiene operando" clasificaria mal un
- * implicito.  El origen fiable es el lowering (`IrInstr::ret_implicit`).  Lo usa
- * el rewrite en @Naked: una @Naked NO emite el `ret` implicito (para no pisar el
- * `iretq`/`ret` que el propio asm provee en un ISR/bootloader), pero un `return`
- * explicito SI se materializa (read-back a RAX + `ret`) sin el epilogo de frame.
- * Bit alto -> no colisiona con el stackmap-idx que CALL/SAFEPOINT guardan. */
+ * `return` EXPLICITO del usuario, a diferencia del RET sintetico de
+ * caida-al-final (fallthrough) que el lowering inserta.  NO basta con mirar si
+ * el RET porta un operando: el RET implicito de una funcion con tipo de retorno
+ * no-void tambien lleva un valor (un `0` sintetico), asi que "tiene operando"
+ * clasificaria mal un implicito.  El origen fiable es el lowering
+ * (`IrInstr::ret_implicit`).  Lo usa el rewrite en @Naked: una @Naked NO emite
+ * el `ret` implicito (para no pisar el `iretq`/`ret` que el propio asm provee
+ * en un ISR/bootloader), pero un `return` explicito SI se materializa
+ * (read-back a RAX + `ret`) sin el epilogo de frame. Bit alto -> no colisiona
+ * con el stackmap-idx que CALL/SAFEPOINT guardan. */
 static constexpr uint16_t MI_FLAG_RET_EXPLICIT = 0x4000u;
 
 struct MInstr {
@@ -877,7 +887,8 @@ struct MInstr {
     uint32_t source_pc = 0;
     /* Solo-LSP (correlacion IR<->asm exacta): identidad estable de la op IR
      * origen = block_index*65536 + instr_pos (UINT32_MAX = sintetica, p.ej.
-     * copias de PHI).  El inspector la decodifica a fn.blocks[bi].instrs[pos]. */
+     * copias de PHI).  El inspector la decodifica a fn.blocks[bi].instrs[pos].
+     */
     uint32_t ir_id = 0xFFFFFFFFu;
     MOperand dst;
     MOperand src1;
@@ -1185,7 +1196,8 @@ struct MInstr {
 
     /** @brief TLS_LE_ADDR: @p dst = direccion por-hilo del `thread_local`
      *  @p sym_idx (TLS local-exec, ELF).  El encoder emite
-     *  `mov dst, %fs:0` + `lea dst, [dst + sym@tpoff]` con @c MReloc{TPOFF32}. */
+     *  `mov dst, %fs:0` + `lea dst, [dst + sym@tpoff]` con @c MReloc{TPOFF32}.
+     */
     static MInstr make_tls_le_addr(MOperand dst, uint32_t sym_idx) noexcept {
         MInstr i;
         i.op = MOp::TLS_LE_ADDR;
@@ -1339,21 +1351,19 @@ enum class MRelocKind : uint8_t {
            ///< respecto al thread pointer (TP-relativo, NEGATIVO en la
            ///< variante II).  El driver lo traduce a R_X86_64_TPOFF32 (23)
            ///< sobre un simbolo STT_TLS; el `--link` resuelve el TPOFF.
-    SECREL32 =
-        4, ///< TLS PE (Windows): *(int32*)@ = offset del simbolo DENTRO de su
-           ///< seccion (.tls), NO la VA.  El acceso suma este offset a la base
-           ///< del bloque TLS del modulo (cargada desde el TEB).  El emisor PE
-           ///< escribe target_off directamente.
+    SECREL32 = 4, ///< TLS PE (Windows): *(int32*)@ = offset del simbolo DENTRO
+                  ///< de su seccion (.tls), NO la VA.  El acceso suma este
+                  ///< offset a la base del bloque TLS del modulo (cargada desde
+                  ///< el TEB).  El emisor PE escribe target_off directamente.
     ARM64_CALL26 =
         5, ///< AArch64 bl/b a una FUNCION (R_AARCH64_CALL26): el campo imm26
            ///< del bl = (sym - site) >> 2.  El driver lo encola como callee.
-    ABS32 =
-        6, ///< direccion absoluta 32-bit (mov r32,imm32): *(u32*)@ = sym +
-           ///< addend.  x86-32 no-PIE: la VA cabe en 32 bits (base fija).
-           ///< Equivalente 32-bit de ABS64; el emisor ELF32 lo traduce a
-           ///< R_386_32.  x86-32 NO tiene RIP-relative -> DATA_REL32 daria
-           ///< direcciones inconsistentes; esta es la ref correcta a DATO/
-           ///< FUNCION en 32-bit.
+    ABS32 = 6, ///< direccion absoluta 32-bit (mov r32,imm32): *(u32*)@ = sym +
+               ///< addend.  x86-32 no-PIE: la VA cabe en 32 bits (base fija).
+               ///< Equivalente 32-bit de ABS64; el emisor ELF32 lo traduce a
+               ///< R_386_32.  x86-32 NO tiene RIP-relative -> DATA_REL32 daria
+               ///< direcciones inconsistentes; esta es la ref correcta a DATO/
+               ///< FUNCION en 32-bit.
 };
 
 /**
@@ -1390,8 +1400,8 @@ struct MReloc {
  * desensamblado de Capstone para resaltar fuente <-> asm.
  */
 struct LineMapEntry {
-    uint32_t byte_offset = 0;  ///< Offset del primer byte de la instr (rel. fn).
-    uint32_t source_line = 0;  ///< Linea .vx (1-based; 0 = sin atribucion).
+    uint32_t byte_offset = 0; ///< Offset del primer byte de la instr (rel. fn).
+    uint32_t source_line = 0; ///< Linea .vx (1-based; 0 = sin atribucion).
     uint32_t ir_id = 0xFFFFFFFFu; ///< Identidad de la op IR origen (solo-LSP).
 };
 
@@ -1449,12 +1459,12 @@ struct Stackmap {
     uint32_t pc_offset = 0; ///< byte offset en code cache
     /// Tamano del frame en un safepoint call: RBP - RSP =
     /// pointer_size*callee_saved + spill_bytes.  Lo usa el WALK POR TAMANO DE
-    /// FRAME del scan preciso (@c scan_aot_frames) para reconstruir RBP a partir
-    /// del RSP del llamador SIN leer la cadena RBP -> robusto ante
+    /// FRAME del scan preciso (@c scan_aot_frames) para reconstruir RBP a
+    /// partir del RSP del llamador SIN leer la cadena RBP -> robusto ante
     /// -fomit-frame-pointer / inlining de frames intermedios (modelo LLVM
-    /// statepoint).  Es CONSTANTE por funcion; se replica en cada stackmap de la
-    /// misma.  Lo emite @c rewrite_to_physical para AOT Y JIT; vreg_pipeline lo
-    /// propaga a @c register_function para que el mismo walk sirva al scan
+    /// statepoint).  Es CONSTANTE por funcion; se replica en cada stackmap de
+    /// la misma.  Lo emite @c rewrite_to_physical para AOT Y JIT; vreg_pipeline
+    /// lo propaga a @c register_function para que el mismo walk sirva al scan
     /// preciso del GC en modo interp+JIT (frontera capturada por las
     /// runtime-entries @c vrt_*).
     uint32_t frame_size = 0;
@@ -1493,14 +1503,14 @@ struct AsmBlob {
      * Distingue "no destruye nada mas que sus operandos" de "no se sabe que
      * destruye", que son dos cosas y compartian representacion: la lista VACIA.
      * Es @c true cuando la inferencia de clobbers corrio sobre el cuerpo (lo
-     * normal; @c noinfer la desactiva).  Con la lista vacia y esto a @c true, el
-     * asm NO necesita el trato conservador de "posicion de llamada": sus
+     * normal; @c noinfer la desactiva).  Con la lista vacia y esto a @c true,
+     * el asm NO necesita el trato conservador de "posicion de llamada": sus
      * operandos declarados ya se le asignan y no toca nada mas.
      *
      * Sin esta distincion, un `asm` que solo usa sus propios operandos -- p.ej.
-     * `asm (reg d = dst, xmm sem, ymm v0) { ... }` de los memset AVX2 -- caia en
-     * el trato conservador, sus operandos VECTORIALES salian exigiendo una lane
-     * PRESERVADA, y en x86-64 ninguna xmm lo es: 0 lanes admisibles.
+     * `asm (reg d = dst, xmm sem, ymm v0) { ... }` de los memset AVX2 -- caia
+     * en el trato conservador, sus operandos VECTORIALES salian exigiendo una
+     * lane PRESERVADA, y en x86-64 ninguna xmm lo es: 0 lanes admisibles.
      */
     bool clobbers_conocidos = false;
     bool clobbers_flags = false;
@@ -1562,14 +1572,15 @@ struct AsmBlob {
         bool es_inmediato = false;
         int64_t inmediato = 0; ///< su valor (solo si @ref es_inmediato)
         /// El operando es una DIRECCION formada con este registro como base: al
-        /// resolverlo se escribe la direccion entera, con la sintaxis de la ISA.
-        /// 0 y @c es_direccion false = operando de registro normal.
+        /// resolverlo se escribe la direccion entera, con la sintaxis de la
+        /// ISA. 0 y @c es_direccion false = operando de registro normal.
         bool es_direccion = false;
-        int64_t desplazamiento = 0; ///< sumado a la base (solo si @ref es_direccion)
+        int64_t desplazamiento =
+            0; ///< sumado a la base (solo si @ref es_direccion)
     };
-    bool deferred = false;              ///< true -> ensamblar en el rewrite
-    uint8_t deferred_isa = 0;           ///< ISA (== instr_db::Isa) para el backend
-    std::string deferred_tmpl;          ///< plantilla NASM con $0,$1,... por operando
+    bool deferred = false;     ///< true -> ensamblar en el rewrite
+    uint8_t deferred_isa = 0;  ///< ISA (== instr_db::Isa) para el backend
+    std::string deferred_tmpl; ///< plantilla NASM con $0,$1,... por operando
     std::vector<DeferredOp> deferred_ops; ///< por indice de placeholder ($idx)
 };
 
@@ -1606,8 +1617,8 @@ struct MFunction {
     /// *(u64*)(base + patch_at) = base + label_offsets[label].  Es una
     /// direccion ABSOLUTA -> no se resuelve en resolve_fixups (que es rel32).
     struct AddrTableFixup {
-        uint32_t patch_at;  ///< offset en el codigo de la entrada de 8 bytes
-        MLabelId label;     ///< label del bloque destino (brazo o default)
+        uint32_t patch_at; ///< offset en el codigo de la entrada de 8 bytes
+        MLabelId label;    ///< label del bloque destino (brazo o default)
     };
     std::vector<AddrTableFixup> addr_table_fixups;
     /// Tamano del frame stack (bytes) reservado por enter (sub rsp, N).
@@ -1640,7 +1651,8 @@ struct MFunction {
     /// va en EBP).  Ese registro NO puede ser a la vez el frame pointer -> el
     /// prologo NO emite `mov rbp,rsp` y el frame se direcciona por RSP.  Se
     /// preserva `push rbp`/`pop rbp` (callee-saved) alrededor del cuerpo.  Solo
-    /// para funciones hoja (sin CALLs): con RSP variable no habria base estable.
+    /// para funciones hoja (sin CALLs): con RSP variable no habria base
+    /// estable.
     bool binds_frame_reg = false;
     /// Callback-ABI (jubilacion de slots): si true, el rewrite reserva 128B
     /// en el frame (save-area de proc->registers[0..15]) para que las
