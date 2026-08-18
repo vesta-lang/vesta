@@ -484,11 +484,58 @@ target_compile_options(vesta_vm_flags INTERFACE
 # ---------------------------------------------------------------------------
 set(VM_CORE_SOURCES ${VM_SOURCES})
 list(REMOVE_ITEM VM_CORE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp)
+
+# Lo que ya compila `vx_lib` no se vuelve a compilar aqui.
+#
+# Once ficheros de `src/analysis/` estaban en las dos listas: en la de `vx_lib`,
+# escrita a mano, y en el comodin de `src/` de la maquina.  Se compilaban dos
+# veces y ademas definian el mismo simbolo dos veces -- lo que no reventaba solo
+# porque el enlazador se quedaba con la copia que venia suelta en la linea y no
+# llegaba a abrir el archivo.
+#
+# Se descuenta preguntandole al propio target en vez de manteniendo una segunda
+# lista: dos listas escritas a mano acaban separandose, y el sintoma seria otra
+# vez un simbolo duplicado en un enlace que hoy funciona.
+get_target_property(_vx_lib_srcs vx_lib SOURCES)
+if (_vx_lib_srcs)
+    foreach (_s IN LISTS _vx_lib_srcs)
+        if (IS_ABSOLUTE "${_s}")
+            list(REMOVE_ITEM VM_CORE_SOURCES "${_s}")
+        endif()
+    endforeach()
+endif()
 add_library(vmcore STATIC ${VM_CORE_SOURCES})
 target_link_libraries(vmcore PUBLIC vesta_vm_flags)
 
+# NO hay cabeceras precompiladas, y es una decision MEDIDA, no un olvido.
+#
+# Se probaron y salieron PEOR: `vmcore` paso de 378,8 s a 408,0 s de CPU (+7,7%)
+# con el precompilado puesto.  La razon la da `-ftime-report` sobre una de las
+# unidades mas caras del proyecto (`lowering.cpp`, ~32 s):
+#
+#     parsing               1,49 s    5%
+#     plantillas diferidas  0,92 s    3%
+#     optimizar y generar  29,20 s   92%
+#
+# Un precompilado solo puede tocar ese 5-8%, y a cambio obliga a CADA unidad a
+# cargar cabeceras que muchas no usaban -- lo que en las unidades pequenas, que
+# son mayoria, cuesta mas de lo que ahorra.  A `-O3` el tiempo esta en el
+# optimizador, no en leer cabeceras.
+#
+# Lo que si mueve la aguja aqui es no compilar dos veces lo mismo (ver arriba).
+
 add_executable(vm ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp)
-target_link_libraries(vm PRIVATE vmcore)
+# ARCHIVO COMPLETO, no el archivo a secas.
+#
+# De un archivo el enlazador solo saca los objetos cuyos simbolos alguien pidio,
+# y en este codigo hay unidades que no exportan nada que se llame por su nombre:
+# se registran solas al arrancar (productores del ASA, contratos de efectos,
+# trampolines del runtime).  Nadie las referencia, asi que un enlace normal las
+# dejaria fuera y el programa arrancaria SIN ellas -- sin un solo error.
+#
+# Con los objetos sueltos en la linea de enlace eso no podia pasar; al pasar a
+# compilar el nucleo una vez, hay que pedirlo explicitamente.
+target_link_libraries(vm PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,vmcore>)
 
 # Fecha/hora del build + hash de git para `vesta --version`.  Un target ALL
 # que corre SIEMPRE (out-of-date por diseno) regenera el header con el
@@ -519,9 +566,11 @@ set_source_files_properties(
     PROPERTIES COMPILE_FLAGS "-fno-fast-math -fno-finite-math-only"
 )
 
+# `capstone` NO va aqui: es una libreria de OBJETOS, y CMake mete sus objetos
+# DENTRO de `libvmcore.a` al enlazarla contra el.  Ponerla ademas suelta los
+# duplicaba (304 simbolos definidos dos veces).
 target_link_libraries(vm
         PRIVATE sqlite3
-        PRIVATE capstone   # de objetos: enlace directo o no entra su codigo
         PRIVATE keystone
         PRIVATE vx_lib
         PRIVATE vesta_toolchain
@@ -1563,11 +1612,13 @@ option(VESTA_BUILD_FFI "Construir libvesta (DLL/.so con C-ABI)" ON)
 if (VESTA_BUILD_FFI)
     # Lista de fuentes = VM_SOURCES menos main.cpp (no queremos un entry
     # point en la libreria compartida).
-    set(VESTA_FFI_SOURCES ${VM_SOURCES})
-    list(REMOVE_ITEM VESTA_FFI_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp)
-
+    # La DLL es la API C sobre el MISMO nucleo, no otra copia de el.
+    #
+    # Antes se declaraba con todas las fuentes de la maquina dentro, o sea que
+    # las compilaba enteras por tercera vez (el 18,5% del build).  Y compilaba
+    # exactamente lo mismo: `VESTA_BUILD_DLL` solo lo mira la cabecera publica de
+    # `src/capi/`, que es la unica fuente que queda aqui.
     add_library(vesta_ffi SHARED
-            ${VESTA_FFI_SOURCES}
             ${CMAKE_CURRENT_SOURCE_DIR}/src/capi/vesta_capi.cpp
     )
 
@@ -1577,19 +1628,17 @@ if (VESTA_BUILD_FFI)
     # VESTA_BUILD_DLL activa __declspec(dllexport) en la cabecera publica.
     target_compile_definitions(vesta_ffi PRIVATE VESTA_BUILD_DLL)
 
-    # exec_instruction_float.cpp tambien aqui necesita IEEE estricto (igual
-    # que en el target `vm`).
-    set_source_files_properties(
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_float.cpp
-            PROPERTIES COMPILE_FLAGS "-fno-fast-math -fno-finite-math-only"
-    )
+    # (exec_instruction_float.cpp ya no se compila aqui: viene de `vmcore`, que
+    # es donde esta el override de IEEE estricto.)
 
     target_include_directories(vesta_ffi PRIVATE ${VM_INCLUDES})
 
     target_link_libraries(vesta_ffi
+            # Archivo COMPLETO, por lo mismo que en `vm`: hay unidades que solo
+            # se registran solas al arrancar y a las que nadie llama por nombre.
+            PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,vmcore>
             PRIVATE sqlite3
-            PRIVATE capstone
-            PRIVATE keystone
+            PRIVATE keystone   # capstone llega dentro de vmcore (ver `vm`)
             PRIVATE vx_lib
             PRIVATE aot_emit
     )
