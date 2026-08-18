@@ -216,12 +216,20 @@ struct EmitCtx {
         return fn_lbl + "_bb" + std::to_string(bid);
     }
 
-    // Nombre de registro para un valor (o r14 como fallback — sin efecto de
-    // lado)
-    std::string reg_of(IrValueId vid) const {
-        if (vid == IR_NO_VALUE) return "r0";
-        if (alloc.in_reg(vid)) return reg_name(alloc.reg_of(vid));
-        return reg_name(SCRATCH_REG);
+    /**
+     * @brief El REGISTRO de un valor (o el scratch como respaldo, sin efecto de
+     *        lado).
+     *
+     * Devuelve un @c Reg y no su nombre: mientras esto diera una cadena, cada
+     * sitio que lo usaba tenia que coser la sintaxis a mano -- corchetes de
+     * memoria, sufijos de ancho -- y ahi es donde se cuelan los errores que el
+     * texto no puede ver.  El asignador ya trabaja con INDICES, asi que
+     * construir el registro aqui no traduce nada: deja de destruir el tipo.
+     */
+    Reg reg_of(IrValueId vid) const {
+        if (vid == IR_NO_VALUE) return Reg::gp(0);
+        if (alloc.in_reg(vid)) return Reg::gp(alloc.reg_of(vid));
+        return Reg::gp(SCRATCH_REG);
     }
 
     /// Como @c reg_of, pero indicando QUE scratch se uso al recargar el valor
@@ -376,10 +384,13 @@ struct EmitCtx {
 
     // Devuelve el registro DESTINO de vid: si esta derramado retorna r14
     // sin emitir codigo (el llamante debe invocar store_spilled despues).
-    std::string dst_of(IrValueId vid) {
-        if (vid == IR_NO_VALUE) return "r0";
-        if (alloc.in_reg(vid)) return reg_name(alloc.reg_of(vid));
-        return reg_name(SCRATCH_REG);
+    /// El registro DESTINO de un valor.  Devuelve @c Reg por lo mismo que
+    /// @ref reg_of: el asignador razona con indices, y convertirlo a texto aqui
+    /// obligaba a cada sitio a coser la sintaxis a mano.
+    Reg dst_of(IrValueId vid) {
+        if (vid == IR_NO_VALUE) return Reg::gp(0);
+        if (alloc.in_reg(vid)) return Reg::gp(alloc.reg_of(vid));
+        return Reg::gp(SCRATCH_REG);
     }
 
     // Si vid esta derramado, persiste el valor en su slot de pila.
@@ -501,15 +512,16 @@ static int gp_phys_of_canon(const std::string &canon) {
 }
 
 // Emite "mov r_dst, r_src" si son distintos (evita mov rx, rx)
-static void emit_mov_if_needed(EmitCtx &ctx, const std::string &dst,
-                               const std::string &src) {
-    if (dst != src) {
-        ctx.out.emit(emmit::Mnemonic::MOV, dst, src);
-        // Si el dst es r14 o r13, invalidamos su cache de constante:
-        // ahora contiene el VALOR del reg origen, no una constante conocida.
-        if (dst == "r14") ctx.r14_cache = -1;
-        if (dst == "r13") ctx.r13_cache = -1;
-    }
+static void emit_mov_if_needed(EmitCtx &ctx, const Reg &dst, const Reg &src) {
+    /* Mismo registro Y misma vista: mover un registro sobre si mismo no hace
+     * nada, pero `r0` y `r0b` NO son el mismo operando, asi que comparar solo
+     * el nombre se saltaria una conversion de ancho que si hace falta. */
+    if (dst.nombre == src.nombre && dst.ancho == src.ancho) return;
+    ctx.out.emit(emmit::Mnemonic::MOV, dst, src);
+    // Si el dst es r14 o r13, invalidamos su cache de constante: ahora
+    // contiene el VALOR del reg origen, no una constante conocida.
+    if (dst.nombre == "r14") ctx.r14_cache = -1;
+    if (dst.nombre == "r13") ctx.r13_cache = -1;
 }
 
 /**
@@ -1372,7 +1384,7 @@ static void emit_binop(EmitCtx &ctx, const std::string &mnemonic, IrValueId dst,
                        IrValueId src1, IrValueId src2) {
     std::string rs1 = ctx.load_src(src1, 0); // r14 si derramado
     std::string rs2 = ctx.load_src(src2, 1); // r13 si derramado
-    std::string rd = ctx.dst_of(dst);
+    Reg rd = ctx.dst_of(dst);
 
     /* Super-instruccion alu3 si:
      *   (a) existe variante 3-op para el mnemonic,
@@ -1403,7 +1415,7 @@ static void emit_binop(EmitCtx &ctx, const std::string &mnemonic, IrValueId dst,
 static void emit_unop(EmitCtx &ctx, const std::string &mnemonic, IrValueId dst,
                       IrValueId src) {
     std::string rs = ctx.load_src(src, 0);
-    std::string rd = ctx.dst_of(dst);
+    Reg rd = ctx.dst_of(dst);
     emit_mov_if_needed(ctx, rd, rs);
     ctx.out << "    " << mnemonic << " " << rd << "\n";
     ctx.store_spilled(dst);
@@ -1459,7 +1471,7 @@ static void emit_select(EmitCtx &ctx, IrValueId dst, IrValueId cond,
     const std::string rc = op_reg(cond);
     const std::string ra = op_reg(a);
     const std::string rb = op_reg(b);
-    const std::string rd = ctx.dst_of(dst); // reg asignado o r14 (si derramado)
+    const Reg rd = ctx.dst_of(dst); // reg asignado o r14 (si derramado)
     ctx.out << "    csel " << rd << ", " << rc << ", " << ra << ", " << rb
             << "\n";
     ctx.r13_cache = -1;
@@ -1536,7 +1548,7 @@ static void emit_float_binop(EmitCtx &ctx, const std::string &mnemonic,
             (ctx.last_f0 != IR_NO_VALUE && ctx.last_f0 == src1);
         std::string rs1 = f0_has_src1 ? std::string() : ctx.load_src(src1, 0);
         std::string rs2 = ctx.load_src(src2, 1);
-        std::string rd = ctx.dst_of(dst);
+        Reg rd = ctx.dst_of(dst);
         if (!f0_has_src1)
             emit_gp_to_zmm_bits(ctx, rs1, "f0");
         emit_gp_to_zmm_bits(ctx, rs2, "f1");
@@ -1605,7 +1617,7 @@ static void emit_float_unop(EmitCtx &ctx, const std::string &mnemonic,
         const bool f0_has_src =
             (ctx.last_f0 != IR_NO_VALUE && ctx.last_f0 == src);
         std::string rs = f0_has_src ? std::string() : ctx.load_src(src, 0);
-        std::string rd = ctx.dst_of(dst);
+        Reg rd = ctx.dst_of(dst);
         if (!f0_has_src)
             emit_gp_to_zmm_bits(ctx, rs, "f0");
         ctx.out << "    " << mnemonic << suffix << " f0, f0\n";
@@ -1943,7 +1955,7 @@ static bool phi_copies_flag_safe(EmitCtx &ctx, IrBlockId pred_id,
 // __end:
 static void emit_cmp_standalone(EmitCtx &ctx, const IrInstr &ins) {
     if (ins.operands.size() < 2) return;
-    std::string rd = ctx.dst_of(ins.dst);
+    Reg rd = ctx.dst_of(ins.dst);
     std::string ra = ctx.load_src(ins.operands[0], 0);
     std::string rb = ctx.load_src(ins.operands[1], 1);
     std::string lbl_true = ctx.unique_lbl("ctrue");
@@ -2336,7 +2348,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             ctx.out << "    fmowi f" << zd << ", " << ins.imm << "\n";
             break;
         }
-        std::string rd = ctx.dst_of(ins.dst);
+        Reg rd = ctx.dst_of(ins.dst);
         ctx.out.emit(emmit::Mnemonic::MOV, rd, ins.imm);
         ctx.store_spilled(ins.dst);
         break;
@@ -2351,7 +2363,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     // al binario final).  Por tanto se referencian via
     // @Absolute("code.s_N").
     case IrOp::STR_LIT_ADDR: {
-        std::string rd = ctx.dst_of(ins.dst);
+        Reg rd = ctx.dst_of(ins.dst);
         // El storage de una variable global vive en la seccion `gdata`
         // (memoria host); el resto de slots -- literales que alimentan a
         // STRMAKE, params de los opcodes meta -- en `code`, que es memoria de
@@ -2370,7 +2382,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     // (donde el writer lo resuelve via reloc).  En la VM/interp no hay
     // secciones nativas -> se emite 0 (consulta no aplicable).
     case IrOp::SECTION_REF: {
-        std::string rd = ctx.dst_of(ins.dst);
+        Reg rd = ctx.dst_of(ins.dst);
         ctx.out << "    mov " << rd << ", 0\n";
         ctx.store_spilled(ins.dst);
         break;
@@ -2380,7 +2392,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     case IrOp::MOV:
         if (!ins.operands.empty()) {
             std::string rs = ctx.load_src(ins.operands[0], 0);
-            std::string rd = ctx.dst_of(ins.dst);
+            Reg rd = ctx.dst_of(ins.dst);
             emit_mov_if_needed(ctx, rd, rs);
             ctx.store_spilled(ins.dst);
         }
@@ -2486,7 +2498,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // cuando coinciden.
         if (ins.operands.empty()) break;
         {
-            std::string rd = ctx.dst_of(ins.dst);
+            Reg rd = ctx.dst_of(ins.dst);
             std::string rs = ctx.load_src(ins.operands[0], 0);
             if (rd == rs) {
                 ctx.out << "    mov r14, " << rs << "\n";
@@ -2541,7 +2553,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     case IrOp::TRUNC: {
         if (!ins.operands.empty()) {
             const std::string rs = ctx.load_src(ins.operands[0], 0);
-            const std::string rd = ctx.dst_of(ins.dst);
+            const Reg rd = ctx.dst_of(ins.dst);
             const IrType src_t = ctx.fn.values[ins.operands[0]].type;
             const IrType dst_t = ins.type;
             const uint64_t src_bytes = ir_type_size(src_t);
@@ -2653,7 +2665,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                         << "\n";
                 break; // vive en ZMM
             }
-            std::string rd = ctx.dst_of(ins.dst);
+            Reg rd = ctx.dst_of(ins.dst);
             ctx.out << "    fcvt" << suffix << " " << rs << ", f0\n";
             emit_zmm_to_gp_bits(ctx, "f0", rd);
             ctx.store_spilled(ins.dst);
@@ -2665,7 +2677,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // bits IEEE 754 -> int VALOR truncado (en GP).  Si la fuente reside en
         // el banco, se lee DIRECTO: fcvt f_src, gp_dst (sin bitg2z).
         if (!ins.operands.empty()) {
-            std::string rd = ctx.dst_of(ins.dst);
+            Reg rd = ctx.dst_of(ins.dst);
             const IrType ot = ctx.fn.values[ins.operands[0]].type;
             const std::string suffix = (ot == IrType::F32) ? ".ps" : "";
             const int zs = ctx.zmm_of(ins.operands[0]);
@@ -2685,7 +2697,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // de bits sin re-interpretacion.  emit_mov_if_needed basta.
         if (!ins.operands.empty()) {
             std::string rs = ctx.load_src(ins.operands[0], 0);
-            std::string rd = ctx.dst_of(ins.dst);
+            Reg rd = ctx.dst_of(ins.dst);
             emit_mov_if_needed(ctx, rd, rs);
             ctx.store_spilled(ins.dst);
         }
@@ -3094,7 +3106,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     case IrOp::RET: {
         if (!ins.operands.empty()) {
             std::string rs = ctx.load_src(ins.operands[0], 0);
-            emit_mov_if_needed(ctx, "r0", rs);
+            emit_mov_if_needed(ctx, Reg::gp(0), rs);
         }
         ctx.out << "    jmp @Absolute(\""
                 << EmitCtx::abs_lbl(ctx.fn_lbl + "_ret") << "\")\n";
@@ -3198,8 +3210,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // pop, porque despues de los pops r0 podria haber sido modificado
             // por el restore (no, push/pop no tocan r0, pero por orden).
             if (ins.dst != IR_NO_VALUE) {
-                std::string rd = ctx.dst_of(ins.dst);
-                emit_mov_if_needed(ctx, rd, "r0");
+                Reg rd = ctx.dst_of(ins.dst);
+                emit_mov_if_needed(ctx, rd, Reg::gp(0));
                 ctx.store_spilled(ins.dst);
             }
             // 6. Restore en orden inverso.  Para slots que llevaban un host_ptr
@@ -3259,8 +3271,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // 10 bytes que espera una direccion absoluta literal).
         ctx.out.emit(emmit::Mnemonic::CALLVMR, rfn);
         if (ins.dst != IR_NO_VALUE) {
-            std::string rd = ctx.dst_of(ins.dst);
-            emit_mov_if_needed(ctx, rd, "r0");
+            Reg rd = ctx.dst_of(ins.dst);
+            emit_mov_if_needed(ctx, rd, Reg::gp(0));
             ctx.store_spilled(ins.dst);
         }
         emit_restore_all_gc_aware(ctx, call_pos, regs_to_save);
@@ -3375,7 +3387,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (env_pushed) {
             ctx.out.emit(emmit::Mnemonic::POP, "r14");
         } else if (!renv.empty()) {
-            emit_mov_if_needed(ctx, "r14", renv);
+            emit_mov_if_needed(ctx, Reg::gp(14), renv);
         } else {
             ctx.out << "    mov r14, 0\n";
         }
@@ -3383,8 +3395,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         ctx.out << "    mov r15, " << nargs_decl << "\n";
         ctx.out.emit(emmit::Mnemonic::CALLVMR, rfn);
         if (ins.dst != IR_NO_VALUE) {
-            std::string rd = ctx.dst_of(ins.dst);
-            emit_mov_if_needed(ctx, rd, "r0");
+            Reg rd = ctx.dst_of(ins.dst);
+            emit_mov_if_needed(ctx, rd, Reg::gp(0));
             ctx.store_spilled(ins.dst);
         }
         emit_restore_all_gc_aware(ctx, call_pos, regs_to_save);
@@ -3444,8 +3456,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // spill vivas a traves del callvirt, keyed al return_pc.
         emit_return_site_stackmap(ctx, bb, idx);
         if (ins.dst != IR_NO_VALUE) {
-            std::string rd = ctx.dst_of(ins.dst);
-            emit_mov_if_needed(ctx, rd, "r0");
+            Reg rd = ctx.dst_of(ins.dst);
+            emit_mov_if_needed(ctx, rd, Reg::gp(0));
             ctx.store_spilled(ins.dst);
         }
         emit_restore_all_gc_aware(ctx, call_pos, regs_to_save);
@@ -3507,8 +3519,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         ctx.out << "    mov r15, " << (nargs + 1) << "\n";
         ctx.out << "    callm r1, r13\n";
         if (ins.dst != IR_NO_VALUE) {
-            std::string rd = ctx.dst_of(ins.dst);
-            emit_mov_if_needed(ctx, rd, "r0");
+            Reg rd = ctx.dst_of(ins.dst);
+            emit_mov_if_needed(ctx, rd, Reg::gp(0));
             ctx.store_spilled(ins.dst);
         }
         emit_restore_all_gc_aware(ctx, call_pos, regs_to_save);
@@ -3564,8 +3576,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         ctx.out << "    mov r15, " << (nargs + 1) << "\n";
         ctx.out << "    callitf r1, r13\n";
         if (ins.dst != IR_NO_VALUE) {
-            std::string rd = ctx.dst_of(ins.dst);
-            emit_mov_if_needed(ctx, rd, "r0");
+            Reg rd = ctx.dst_of(ins.dst);
+            emit_mov_if_needed(ctx, rd, Reg::gp(0));
             ctx.store_spilled(ins.dst);
         }
         emit_restore_all_gc_aware(ctx, call_pos, regs_to_save);
@@ -3641,8 +3653,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             ctx.out << "    calln @Method(\"" << ins.func_name << "\")\n";
         }
         if (ins.dst != IR_NO_VALUE) {
-            std::string rd = ctx.dst_of(ins.dst);
-            emit_mov_if_needed(ctx, rd, "r0");
+            Reg rd = ctx.dst_of(ins.dst);
+            emit_mov_if_needed(ctx, rd, Reg::gp(0));
             ctx.store_spilled(ins.dst);
         }
         emit_restore_all_gc_aware(ctx, call_pos, regs_to_save);
@@ -3676,7 +3688,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             emit_save_live_regs(ctx, call_pos, regs_to_save);
             ctx.out << "    mov r0, " << bytes << "\n";
             ctx.out << "    alloc r0\n";
-            emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), "r0");
+            emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), Reg::gp(0));
             ctx.store_spilled(ins.dst);
             // Sprint MMM-ext leak-fix: registrar el ptr en el frame
             // actual via `htrack`.  RET / do_throw / TAILCALL liberan
@@ -3691,7 +3703,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // Bottleneck antes: 5M iter de malloc(96)+free -> 20s
             // por acumular 5M ptrs tracked sin liberar hasta RET.
             if (!ins.host_alloca_explicit_free) {
-                std::string rd_track = ctx.dst_of(ins.dst);
+                Reg rd_track = ctx.dst_of(ins.dst);
                 ctx.out.emit(emmit::Mnemonic::HTRACK, rd_track);
             }
             emit_restore_live_regs(ctx, call_pos, regs_to_save);
@@ -3700,7 +3712,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
 
         ctx.out << "    subsp rsp, " << bytes << "\n";
         if (ins.dst != IR_NO_VALUE) {
-            std::string rd = ctx.dst_of(ins.dst);
+            Reg rd = ctx.dst_of(ins.dst);
             // Capturar la direccion base de la zona reservada.  Tras
             // subsp, rsp apunta justo al inicio del nuevo bloque
             // (la pila crece "hacia abajo").  Hacemos `mov rd, rsp`
@@ -3777,7 +3789,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // asume 64 bits y leeria mas alla del campo destino,
         // leyendo basura o causando segfault al tocar memoria no
         // mapeada.
-        std::string rd_full = ctx.dst_of(ins.dst);
+        Reg rd_full = ctx.dst_of(ins.dst);
         // El registro destino del load tiene que llevar SIEMPRE el sufijo de
         // tamano.  ANTES, si el valor estaba DERRAMADO, esta rama caia a
         // `rd_full` -- el registro entero, sin sufijo -- y el ensamblador
@@ -3792,7 +3804,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // Es el mismo arreglo que STORE ya tenia desde `59_arraylist.vx`.
         std::string rd_sz =
             (ins.dst == IR_NO_VALUE)
-                ? rd_full
+                ? std::string(rd_full)
                 : reg_name_sized(ctx.reg_num(ins.dst), ins.type);
         // La VM NO hace zero-extend en `mov rXd/w/b, [src]` (a
         // diferencia de x86-64 con la mitad inferior).  Los bits
@@ -3958,7 +3970,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         emit_save_live_regs(ctx, call_pos, regs_to_save);
         ctx.out.emit(emmit::Mnemonic::ALLOC, r_size);
         if (ins.dst != IR_NO_VALUE) {
-            emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), "r0");
+            emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), Reg::gp(0));
             ctx.store_spilled(ins.dst);
         }
         emit_restore_live_regs(ctx, call_pos, regs_to_save);
@@ -3998,7 +4010,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // E.1: stackmap justo antes del opcode gcallocp (safepoint).
         emit_stackmap_marker(ctx, bb, idx);
         if (ins.dst != IR_NO_VALUE) {
-            std::string r_dst = ctx.dst_of(ins.dst);
+            Reg r_dst = ctx.dst_of(ins.dst);
             ctx.out.emit(emmit::Mnemonic::GCALLOCP, r_dst, r_size);
             ctx.store_spilled(ins.dst);
         } else {
@@ -4534,7 +4546,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         emit_stackmap_marker(ctx, bb, idx);
         ctx.out << "    newobj r1\n";
         if (ins.dst != IR_NO_VALUE)
-            emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), "r0");
+            emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), Reg::gp(0));
         emit_restore_live_regs(ctx, call_pos, regs_to_save);
         break;
     }
@@ -4556,7 +4568,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         emit_stackmap_marker(ctx, bb, idx);
         ctx.out << "    newobjs r1\n";
         if (ins.dst != IR_NO_VALUE)
-            emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), "r0");
+            emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), Reg::gp(0));
         emit_restore_live_regs(ctx, call_pos, regs_to_save);
         break;
     }
@@ -4568,7 +4580,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // memoria host (movh) sin cur0.  Por tanto este case sigue
         // funcionando para handles tipicos.
         if (ins.operands.empty()) break;
-        std::string rd = ctx.dst_of(ins.dst);
+        Reg rd = ctx.dst_of(ins.dst);
         std::string r_obj = ctx.load_src(ins.operands[0], 0);
         ctx.out << "    gcderef cur0, " << r_obj << "\n";
         if (ins.imm) ctx.out << "    addcur cur0, " << ins.imm << "\n";
@@ -4593,7 +4605,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
 
     case IrOp::INSTANCEOF: {
         if (ins.operands.size() < 2) break;
-        std::string rd = ctx.reg_of(ins.dst);
+        Reg rd = ctx.reg_of(ins.dst);
         std::string r_obj = ctx.load_src(ins.operands[0], 0);
         std::string r_cls = ctx.load_src(ins.operands[1], 1);
         ctx.out << "    instanceof " << rd << ", " << r_obj << ", " << r_cls
@@ -4626,7 +4638,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     case IrOp::UNWRAP: {
         if (!ins.operands.empty()) {
             std::string rs = ctx.load_src(ins.operands[0], 0);
-            std::string rd = ctx.dst_of(ins.dst);
+            Reg rd = ctx.dst_of(ins.dst);
             ctx.out.emit(emmit::Mnemonic::UNWRAP, rd, rs);
             ctx.store_spilled(ins.dst);
         }
@@ -4695,7 +4707,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // emitan @c movh en lugar de @c mov (memoria host vs VM).
         if (ins.dst != IR_NO_VALUE && !ins.operands.empty()) {
             std::string rs = ctx.load_src(ins.operands[0], 0);
-            std::string rd = ctx.dst_of(ins.dst);
+            Reg rd = ctx.dst_of(ins.dst);
             ctx.out << "    gcderef cur0, " << rs << "\n";
             ctx.out << "    xchg cur0, " << rd << "\n";
             ctx.store_spilled(ins.dst);
@@ -4713,13 +4725,13 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         uint64_t esize = ir_type_size(ins.type);
         ctx.out << "    getproc r1\n";
         ctx.out << "    mov r2, " << esize << "\n";
-        emit_mov_if_needed(ctx, "r3", r_len);
+        emit_mov_if_needed(ctx, Reg::gp(3), r_len);
         ctx.out << "    mov r15, 3\n";
         ctx.out << "    calln "
                    "@Method(\"stdlib/native/array/vesta_array:va_alloc\")\n";
         if (ins.dst != IR_NO_VALUE) {
-            std::string rd = ctx.dst_of(ins.dst);
-            emit_mov_if_needed(ctx, rd, "r0");
+            Reg rd = ctx.dst_of(ins.dst);
+            emit_mov_if_needed(ctx, rd, Reg::gp(0));
             ctx.store_spilled(ins.dst);
         }
         break;
@@ -4729,7 +4741,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // longitud del array: offset 0 contiene el campo length (u64)
         if (ins.operands.empty()) break;
         std::string r_arr = ctx.load_src(ins.operands[0], 0);
-        std::string rd = ctx.dst_of(ins.dst);
+        Reg rd = ctx.dst_of(ins.dst);
         ctx.out << "    mov " << rd << ", [" << r_arr << "]\n";
         ctx.store_spilled(ins.dst);
         break;
@@ -4741,7 +4753,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (ins.operands.size() < 2) break;
         std::string r_arr = ctx.load_src(ins.operands[0], 0);
         std::string r_idx = ctx.load_src(ins.operands[1], 1);
-        std::string rd = ctx.dst_of(ins.dst);
+        Reg rd = ctx.dst_of(ins.dst);
         uint64_t stride = ir_type_size(ins.type);
         ctx.out << "    mov r13, " << r_idx << "\n";
         if (stride > 1) ctx.out << "    mulu r13, " << stride << "\n";
@@ -4797,7 +4809,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         emit_save_all_gc_aware(ctx, call_pos, regs_to_save);
         std::string r_buf = ctx.load_src(ins.operands[0], 0);
         std::string r_len = ctx.load_src(ins.operands[1], 1);
-        std::string rd = ctx.dst_of(ins.dst);
+        Reg rd = ctx.dst_of(ins.dst);
         ctx.out << "    " << opcode << " " << rd << ", " << r_buf << ", "
                 << r_len << "\n";
         ctx.store_spilled(ins.dst);
@@ -4807,7 +4819,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
 
     case IrOp::STRLEN: {
         if (ins.operands.empty()) break;
-        std::string rd = ctx.dst_of(ins.dst);
+        Reg rd = ctx.dst_of(ins.dst);
         std::string r_str = ctx.load_src(ins.operands[0], 0);
         ctx.out.emit(emmit::Mnemonic::STRLEN, rd, r_str);
         ctx.store_spilled(ins.dst);
@@ -4825,7 +4837,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         emit_save_all_gc_aware(ctx, call_pos, regs_to_save);
         std::string ra = ctx.load_src(ins.operands[0], 0);
         std::string rb = ctx.load_src(ins.operands[1], 1);
-        std::string rd = ctx.dst_of(ins.dst);
+        Reg rd = ctx.dst_of(ins.dst);
         ctx.out << "    strcat " << rd << ", " << ra << ", " << rb << "\n";
         ctx.store_spilled(ins.dst);
         emit_restore_all_gc_aware(ctx, call_pos, regs_to_save);
@@ -4834,7 +4846,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
 
     case IrOp::STRCMP: {
         if (ins.operands.size() < 2) break;
-        std::string rd = ctx.dst_of(ins.dst);
+        Reg rd = ctx.dst_of(ins.dst);
         std::string ra = ctx.load_src(ins.operands[0], 0);
         std::string rb = ctx.load_src(ins.operands[1], 1);
         ctx.out << "    strcmp " << rd << ", " << ra << ", " << rb << "\n";
@@ -4852,7 +4864,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         emit_save_all_gc_aware(ctx, call_pos, regs_to_save);
         std::string r_str = ctx.load_src(ins.operands[0], 0);
         std::string r_rng = ctx.load_src(ins.operands[1], 1);
-        std::string rd = ctx.dst_of(ins.dst);
+        Reg rd = ctx.dst_of(ins.dst);
         ctx.out << "    strslice " << rd << ", " << r_str << ", " << r_rng
                 << "\n";
         ctx.store_spilled(ins.dst);
@@ -4862,7 +4874,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
 
     case IrOp::STRFLAT: {
         if (ins.operands.empty()) break;
-        std::string rd = ctx.dst_of(ins.dst);
+        Reg rd = ctx.dst_of(ins.dst);
         std::string r_str = ctx.load_src(ins.operands[0], 0);
         ctx.out.emit(emmit::Mnemonic::STRFLAT, rd, r_str);
         ctx.store_spilled(ins.dst);
@@ -4871,7 +4883,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
 
     case IrOp::STRHASH: {
         if (ins.operands.empty()) break;
-        std::string rd = ctx.dst_of(ins.dst);
+        Reg rd = ctx.dst_of(ins.dst);
         std::string r_str = ctx.load_src(ins.operands[0], 0);
         ctx.out.emit(emmit::Mnemonic::STRHASH, rd, r_str);
         ctx.store_spilled(ins.dst);
@@ -4886,7 +4898,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             live_regs_through_call(ctx, call_pos, ins.dst);
         emit_save_all_gc_aware(ctx, call_pos, regs_to_save);
         std::string r_str = ctx.load_src(ins.operands[0], 0);
-        std::string rd = ctx.dst_of(ins.dst);
+        Reg rd = ctx.dst_of(ins.dst);
         ctx.out.emit(emmit::Mnemonic::STRINTERN, rd, r_str);
         ctx.store_spilled(ins.dst);
         emit_restore_all_gc_aware(ctx, call_pos, regs_to_save);
@@ -4895,7 +4907,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
 
     case IrOp::STRRAW: {
         if (ins.operands.empty()) break;
-        std::string rd = ctx.dst_of(ins.dst);
+        Reg rd = ctx.dst_of(ins.dst);
         std::string r_str = ctx.load_src(ins.operands[0], 0);
         ctx.out.emit(emmit::Mnemonic::STRRAW, rd, r_str);
         ctx.store_spilled(ins.dst);
@@ -4914,7 +4926,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (ins.operands.size() >= 2) {
             r_enc_or_empty = ctx.load_src(ins.operands[1], 1);
         }
-        std::string rd = ctx.dst_of(ins.dst);
+        Reg rd = ctx.dst_of(ins.dst);
         if (!r_enc_or_empty.empty()) {
             ctx.out << "    strconv " << rd << ", " << r_str << ", "
                     << r_enc_or_empty << "\n";
@@ -4935,7 +4947,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             live_regs_through_call(ctx, call_pos, ins.dst);
         emit_save_all_gc_aware(ctx, call_pos, regs_to_save);
         std::string r_cap = ctx.load_src(ins.operands[0], 0);
-        std::string rd = ctx.dst_of(ins.dst);
+        Reg rd = ctx.dst_of(ins.dst);
         ctx.out.emit(emmit::Mnemonic::STRRESERVE, rd, r_cap);
         ctx.store_spilled(ins.dst);
         emit_restore_all_gc_aware(ctx, call_pos, regs_to_save);
@@ -4983,7 +4995,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     case IrOp::FUTURE: {
         ctx.out.emit(emmit::Mnemonic::FUTURE); // resultado en r0
         if (ins.dst != IR_NO_VALUE)
-            emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), "r0");
+            emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), Reg::gp(0));
         break;
     }
 
@@ -4998,7 +5010,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             (void)ctx.load_src(ins.operands[0], 0);
             ctx.out.emit(emmit::Mnemonic::AWAIT, ctx.reg_of(ins.operands[0])); // bloquea; resultado en r0
             if (ins.dst != IR_NO_VALUE)
-                emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), "r0");
+                emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), Reg::gp(0));
         }
         break;
     }
@@ -5039,7 +5051,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             const std::string u0 = ctx.reg_of(ins.operands[0]);
             const std::string u1 = ctx.reg_of(ins.operands[1]);
             r_len = (u0 == "r0" || u1 == "r0") && ins.dst != IR_NO_VALUE
-                        ? ctx.dst_of(ins.dst)
+                        ? std::string(ctx.dst_of(ins.dst))
                         : std::string("r0");
             ctx.emit_load_spilled_into(ins.operands[2], r_len);
         }
@@ -5048,7 +5060,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         ctx.out << "    msgsend " << r_pid << ", " << r_addr << ", "
                 << r_len << "\n";
         if (ins.dst != IR_NO_VALUE)
-            emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), "r0");
+            emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), Reg::gp(0));
         break;
     }
 
@@ -5062,7 +5074,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         ctx.out << "    msgrecv " << ctx.reg_at(ins.operands[0], 0) << ", "
                 << ctx.reg_at(ins.operands[1], 1) << "\n";
         if (ins.dst != IR_NO_VALUE)
-            emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), "r0");
+            emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), Reg::gp(0));
         break;
     }
 
@@ -5076,7 +5088,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         ctx.out << "    rspawn " << ctx.reg_at(ins.operands[0], 0) << ", "
                 << ctx.reg_at(ins.operands[1], 1) << "\n";
         if (ins.dst != IR_NO_VALUE)
-            emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), "r0");
+            emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), Reg::gp(0));
         break;
     }
 
@@ -5145,7 +5157,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             (void)ctx.load_src(ins.operands[0], 0);
             ctx.out.emit(emmit::Mnemonic::SPAWN, ctx.reg_of(ins.operands[0]));
             if (ins.dst != IR_NO_VALUE)
-                emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), "r0");
+                emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), Reg::gp(0));
         }
         break;
     }
@@ -5236,8 +5248,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
 
         // PID encoded del child queda en R0; moverlo al destino SSA.
         if (ins.dst != IR_NO_VALUE) {
-            std::string rd = ctx.dst_of(ins.dst);
-            emit_mov_if_needed(ctx, rd, "r0");
+            Reg rd = ctx.dst_of(ins.dst);
+            emit_mov_if_needed(ctx, rd, Reg::gp(0));
             ctx.store_spilled(ins.dst);
         }
         emit_restore_all_gc_aware(ctx, call_pos, regs_to_save);
@@ -5292,7 +5304,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         ctx.out << "    spawnon " << ctx.reg_at(ins.operands[0], 0) << ", "
                 << ctx.reg_at(ins.operands[1], 1) << "\n";
         if (ins.dst != IR_NO_VALUE)
-            emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), "r0");
+            emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), Reg::gp(0));
         break;
     }
 
@@ -5486,7 +5498,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (ins.operands.empty()) break;
         std::string r_op = ctx.load_src(ins.operands[0], 0);
         std::string r_dst =
-            (ins.dst != IR_NO_VALUE) ? ctx.dst_of(ins.dst) : std::string("r14");
+            (ins.dst != IR_NO_VALUE) ? ctx.dst_of(ins.dst) : Reg::gp(14);
         ctx.out.emit(emmit::Mnemonic::SHAREDSTAT, r_dst, r_op);
         if (ins.dst != IR_NO_VALUE) ctx.store_spilled(ins.dst);
         break;
@@ -5535,7 +5547,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             std::string r_path = ctx.load_src(ins.operands[0], 0);
             std::string r_len = ctx.load_src(ins.operands[1], 1);
             ctx.out.emit(emmit::Mnemonic::LOADMOD, r_path, r_len);
-            std::string r_dst = ctx.dst_of(ins.dst);
+            Reg r_dst = ctx.dst_of(ins.dst);
             if (r_dst != "r0") ctx.out << "    mov " << r_dst << ", r0\n";
             ctx.store_spilled(ins.dst);
             emit_restore_all_gc_aware(ctx, call_pos, regs_to_save);
@@ -5544,7 +5556,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // clobbea registros VM; basta el patron simple.
             std::string r_path = ctx.load_src(ins.operands[0], 0);
             std::string r_len = ctx.load_src(ins.operands[1], 1);
-            std::string r_dst = ctx.dst_of(ins.dst);
+            Reg r_dst = ctx.dst_of(ins.dst);
             ctx.out.emit(emmit::Mnemonic::UNLOADMOD, r_path, r_len);
             if (r_dst != "r0") ctx.out << "    mov " << r_dst << ", r0\n";
             ctx.store_spilled(ins.dst);
@@ -5557,7 +5569,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (ins.operands.size() < 2 || ins.dst == IR_NO_VALUE) break;
         std::string r_path = ctx.load_src(ins.operands[0], 0);
         std::string r_len = ctx.load_src(ins.operands[1], 1);
-        std::string r_dst = ctx.dst_of(ins.dst);
+        Reg r_dst = ctx.dst_of(ins.dst);
         ctx.out << "    dlopen " << r_dst << ", " << r_path << ", " << r_len
                 << "\n";
         ctx.store_spilled(ins.dst);
@@ -5570,7 +5582,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         std::string r_handle = ctx.load_src(ins.operands[0], 0);
         std::string r_name = ctx.load_src(ins.operands[1], 1);
         std::string r_len = ctx.load_src(ins.operands[2], 2);
-        std::string r_dst = ctx.dst_of(ins.dst);
+        Reg r_dst = ctx.dst_of(ins.dst);
         ctx.out << "    dlsym " << r_dst << ", " << r_handle << ", " << r_name
                 << ", " << r_len << "\n";
         ctx.store_spilled(ins.dst);
@@ -5584,7 +5596,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (ins.operands.empty() || ins.dst == IR_NO_VALUE) break;
         const char *mnem = (ins.imm == 0) ? "methodcount" : "fieldcount";
         std::string r_cls = ctx.load_src(ins.operands[0], 0);
-        std::string r_dst = ctx.dst_of(ins.dst);
+        Reg r_dst = ctx.dst_of(ins.dst);
         ctx.out << "    " << mnem << " " << r_cls << "\n";
         // Si r_dst ya es r0 (regalloc lucky), evita mov r0, r0.
         if (r_dst != "r0") ctx.out << "    mov " << r_dst << ", r0\n";
@@ -5598,7 +5610,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const char *mnem = (ins.imm == 0) ? "getmethat" : "getfldat";
         std::string r_cls = ctx.load_src(ins.operands[0], 0);
         std::string r_idx = ctx.load_src(ins.operands[1], 1);
-        std::string r_dst = ctx.dst_of(ins.dst);
+        Reg r_dst = ctx.dst_of(ins.dst);
         ctx.out << "    " << mnem << " " << r_cls << ", " << r_idx << "\n";
         if (r_dst != "r0") ctx.out << "    mov " << r_dst << ", r0\n";
         ctx.store_spilled(ins.dst);
@@ -5831,8 +5843,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         ctx.out.emit(emmit::Mnemonic::CALLSUPER, r_cls, ins.imm);
 
         if (ins.dst != IR_NO_VALUE) {
-            std::string rd = ctx.dst_of(ins.dst);
-            emit_mov_if_needed(ctx, rd, "r0");
+            Reg rd = ctx.dst_of(ins.dst);
+            emit_mov_if_needed(ctx, rd, Reg::gp(0));
             ctx.store_spilled(ins.dst);
         }
         emit_restore_all_gc_aware(ctx, call_pos, regs_to_save);
@@ -5841,7 +5853,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     case IrOp::PROCEED:
         ctx.out.emit(emmit::Mnemonic::PROCEED);
         if (ins.dst != IR_NO_VALUE) {
-            emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), "r0");
+            emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), Reg::gp(0));
             ctx.store_spilled(ins.dst);
         }
         break;
@@ -6206,7 +6218,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             for (size_t i = 0; i < conv.size(); ++i) {
                 const auto &opf = am.operands[conv[i].first];
                 if (!opf.writes() || opf.kind == AsmOperandKind::MEM) continue;
-                const std::string rd = ctx.dst_of(conv[i].second);
+                const Reg rd = ctx.dst_of(conv[i].second);
                 ctx.out << "    mov r13, " << (i * vx::kAsmSlotBytes) << "\n";
                 ctx.out << "    mov " << rd << ", [r15 + r13]\n";
                 ctx.store_spilled(conv[i].second);

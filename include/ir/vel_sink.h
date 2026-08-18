@@ -108,6 +108,18 @@ struct Reg {
     /// Ancho de la vista: el `.vel` lo escribe como sufijo del nombre.
     enum class Ancho : uint8_t { Q, D, W, B };
 
+    /// El sufijo del `.vel` para cada ancho.  Interno: la version publica es
+    /// @ref sufijo_de, que no puede declararse antes que este tipo.
+    static const char *sufijo_de_(Ancho a) {
+        switch (a) {
+        case Ancho::B: return "b";
+        case Ancho::W: return "w";
+        case Ancho::D: return "d";
+        case Ancho::Q: break;
+        }
+        return "";
+    }
+
     std::string nombre; ///< `r0`, `rbp`, `f3`, `ymm2`...
     Ancho ancho = Ancho::Q;
 
@@ -136,8 +148,22 @@ struct Reg {
      * lo produce devuelva ya un @c Reg: mientras esta puerta exista, un nombre
      * mal formado sigue siendo posible por aqui.
      */
-    explicit Reg(std::string n, Ancho a = Ancho::Q) noexcept
+    Reg(std::string n, Ancho a = Ancho::Q) noexcept
         : nombre(std::move(n)), ancho(a) {}
+
+    /**
+     * @brief PUENTE TEMPORAL: el registro como texto.
+     *
+     * Existe para poder migrar por tandas.  Muchas funciones del emisor aun
+     * reciben `const std::string&`, y sin esto habria que convertirlas TODAS de
+     * golpe -- unas sesenta -- en el mismo cambio, que es justo la clase de
+     * salto que sale mal.
+     *
+     * Mientras exista, un @c Reg se degrada a cadena sin que nadie lo note, o
+     * sea que la garantia de tipo se pierde por aqui.  Se quita cuando esas
+     * funciones tomen @c Reg, y el compilador dira exactamente cuales quedan.
+     */
+    operator std::string() const { return nombre + sufijo_de_(ancho); }
 
     /// El mismo registro visto a 8 bits.
     static Reg b(std::string n) { return Reg(std::move(n), Ancho::B); }
@@ -146,6 +172,33 @@ struct Reg {
     /// A 32 bits.
     static Reg d(std::string n) { return Reg(std::move(n), Ancho::D); }
 };
+
+/**
+ * @brief ¿Es @p r ese registro concreto?
+ *
+ * Comparar con el NOMBRE, no con el texto emitido: `r14` y `r14b` son el mismo
+ * registro en vistas distintas, y quien pregunta "¿es r14?" -- para invalidar
+ * una cache de constante, por ejemplo -- se refiere al registro.
+ */
+inline bool operator==(const Reg &r, const char *nombre) {
+    return r.nombre == nombre;
+}
+inline bool operator!=(const Reg &r, const char *nombre) {
+    return !(r == nombre);
+}
+/// Igual contra una cadena ya calculada.  Parte del puente temporal: cuando el
+/// emisor trabaje solo con @c Reg, estas dos sobran.
+inline bool operator==(const Reg &r, const std::string &nombre) {
+    return r.nombre == nombre;
+}
+inline bool operator!=(const Reg &r, const std::string &nombre) {
+    return !(r == nombre);
+}
+/// Dos registros son el mismo operando si coinciden nombre Y vista.
+inline bool operator==(const Reg &a, const Reg &b) {
+    return a.nombre == b.nombre && a.ancho == b.ancho;
+}
+inline bool operator!=(const Reg &a, const Reg &b) { return !(a == b); }
 
 /// El sufijo que el `.vel` espera para cada ancho.
 inline const char *sufijo_de(Reg::Ancho a) {
