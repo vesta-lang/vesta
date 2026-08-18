@@ -3653,6 +3653,34 @@ CompileResult compile_vx_project(
     ir::EmitResult eres;
     if (!opts.ir_only) {
         eres = ir::ir_emit_module(merged, emit_opts);
+
+        /* PRUEBA: el artefacto comptime, FILTRANDO EL IR en vez de recortar el
+         * fuente.  Aqui `merged` ya esta parseado, chequeado, bajado, fusionado
+         * y optimizado, con los nombres resueltos: quedarse con unas funciones
+         * es copiar el modulo y filtrar un vector.  El enfoque por texto tenia
+         * que RECONSTRUIR eso, y el AST ni siquiera guarda el tramo de cada
+         * decl (`SourceLoc::length` es la del token). */
+        if (std::getenv("VESTA_PRUEBA_IR_COMPTIME")) {
+            ir::IrModule solo_ct = merged; // cabecera: imports/globals/libs
+            solo_ct.functions.clear();
+            for (const ir::IrFunction &f : merged.functions) {
+                const bool es_macro = f.name.rfind("__macro_", 0) == 0;
+                const bool es_comptime =
+                    !res.comptime_unit_source.empty() &&
+                    res.comptime_unit_source.find(f.name) != std::string::npos;
+                if (es_macro || es_comptime) solo_ct.functions.push_back(f);
+            }
+            ir::EmitOptions eo_ct = emit_opts;
+            const ir::EmitResult e_ct = ir::ir_emit_module(solo_ct, eo_ct);
+            std::cerr << "[prueba-ir] programa : " << merged.functions.size()
+                      << " funciones, " << eres.vel_text.size() << " bytes .vel\n"
+                      << "[prueba-ir] comptime : " << solo_ct.functions.size()
+                      << " funciones, " << (e_ct.ok ? e_ct.vel_text.size() : 0)
+                      << " bytes .vel" << (e_ct.ok ? "" : "  (EMISION FALLO)")
+                      << "\n";
+            if (!e_ct.ok)
+                std::cerr << "[prueba-ir] motivo: " << e_ct.error << "\n";
+        }
         if (!eres.ok) {
             SourceLoc loc;
             loc.file = root_path;

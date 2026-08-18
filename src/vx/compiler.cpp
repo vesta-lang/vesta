@@ -1326,6 +1326,49 @@ CompileResult compile_vx_source(const std::string &source,
     if (!opts.ir_only) {
         eres = ir::ir_emit_module(
             emitir_desde_optimizado ? mod_para_seccion : irmod, emit_opts);
+
+        /* PRUEBA: el artefacto comptime, FILTRANDO EL IR en vez de recortar el
+         * fuente.
+         *
+         * Extraer el conjunto comptime como TEXTO obliga a reconstruir algo que
+         * el compilador ya tiene, y encima el AST no lo guarda: `SourceLoc`
+         * lleva la longitud del TOKEN, no la de la declaracion, asi que el
+         * recorte se hace a ojo y se rompe (se vio cortando funciones por la
+         * mitad).  Aqui el modulo ya esta parseado, chequeado, bajado y
+         * optimizado: quedarse con unas funciones es copiar el modulo y filtrar
+         * un vector.
+         *
+         * Y de paso desaparecen tres problemas del enfoque por texto: no hay que
+         * preguntarse si el conjunto compila solo (sus ayudantes ya estan
+         * bajados aqui, para eso existe el pre-pase force-lower), no hay que
+         * arrastrar `import`, y no hay recursion -- esto corre DESPUES del type
+         * check, no dentro. */
+        if (std::getenv("VESTA_PRUEBA_IR_COMPTIME")) {
+            const ir::IrModule &fuente =
+                emitir_desde_optimizado ? mod_para_seccion : irmod;
+            ir::IrModule solo_ct = fuente;   // cabecera: imports/globals/libs
+            solo_ct.functions.clear();
+            for (const ir::IrFunction &f : fuente.functions) {
+                /* Un `@Macro` baja como `__macro_<X>`; una comptime fn conserva
+                 * su nombre mangled, que es el que da el recolector. */
+                const bool es_macro = f.name.rfind("__macro_", 0) == 0;
+                const bool es_comptime =
+                    res.comptime_unit_source.find(f.name) != std::string::npos;
+                if (es_macro || es_comptime) solo_ct.functions.push_back(f);
+            }
+            ir::EmitOptions eo_ct = emit_opts;
+            const ir::EmitResult e_ct = ir::ir_emit_module(solo_ct, eo_ct);
+            std::cerr << "[prueba-ir] modulo: " << fuente.functions.size()
+                      << " funciones, " << eres.vel_text.size()
+                      << " bytes de .vel\n"
+                      << "[prueba-ir] comptime: " << solo_ct.functions.size()
+                      << " funciones, "
+                      << (e_ct.ok ? e_ct.vel_text.size() : 0)
+                      << " bytes de .vel" << (e_ct.ok ? "" : "  (EMISION FALLO)")
+                      << "\n";
+            if (!e_ct.ok)
+                std::cerr << "[prueba-ir] motivo: " << e_ct.error << "\n";
+        }
         // Fin del modo CTPE: apagar los polls de safepoint para no afectar a
         // los compiles del JIT en runtime ni a los @Macro del lenguaje.
         jit::jit_set_ctpe_safepoint(0);
