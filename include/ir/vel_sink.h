@@ -177,7 +177,7 @@ struct Reg {
  * @brief Comprueba si @p r es ese registro concreto.
  *
  * Comparar con el NOMBRE, no con el texto emitido: `r14` y `r14b` son el mismo
- * registro en vistas distintas, y quien pregunta "¿es r14?" -- para invalidar
+ * registro en vistas distintas, y quien pregunta si es r14 -- para invalidar
  * una cache de constante, por ejemplo -- se refiere al registro.
  */
 inline bool operator==(const Reg &r, const char *nombre) {
