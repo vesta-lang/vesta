@@ -463,8 +463,14 @@ target_compile_options(vesta_vm_flags INTERFACE
         -pedantic-errors
 )
 target_compile_options(vesta_vm_flags INTERFACE
+        # En Debug entran tambien las comprobaciones internas y el volcado de la
+        # emision.  Las tenian solo los tests, y eso significaba que el codigo
+        # que probaban no era el mismo que se compilaba aqui: si alguna de esas
+        # macros cambiara el tamano de una estructura, las dos mitades del
+        # enlace no coincidirian y el fallo saldria en ejecucion.
         $<$<CONFIG:Debug>:
         -g -O0 -Wall -Wextra -fno-omit-frame-pointer -DMODE_DEBUG_ENABLE
+        -DVM_DEBUG_CHECKS -DDEBUG_EMIT
         >
         $<$<CONFIG:Release>:${VESTA_OPTS_CODIGO_RELEASE};-fomit-frame-pointer>
         # Mismo codigo que Release; solo se anade con que atribuir el tiempo.
@@ -496,14 +502,20 @@ list(REMOVE_ITEM VM_CORE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp)
 # Se descuenta preguntandole al propio target en vez de manteniendo una segunda
 # lista: dos listas escritas a mano acaban separandose, y el sintoma seria otra
 # vez un simbolo duplicado en un enlace que hoy funciona.
-get_target_property(_vx_lib_srcs vx_lib SOURCES)
-if (_vx_lib_srcs)
-    foreach (_s IN LISTS _vx_lib_srcs)
-        if (IS_ABSOLUTE "${_s}")
-            list(REMOVE_ITEM VM_CORE_SOURCES "${_s}")
+foreach (_lib vx_lib vxdbg_lib diag_lib)
+    get_target_property(_lib_srcs ${_lib} SOURCES)
+    get_target_property(_lib_dir  ${_lib} SOURCE_DIR)
+    if (NOT _lib_srcs)
+        continue()
+    endif()
+    foreach (_s IN LISTS _lib_srcs)
+        # Las rutas relativas de un target son relativas a SU directorio.
+        if (NOT IS_ABSOLUTE "${_s}")
+            set(_s "${_lib_dir}/${_s}")
         endif()
+        list(REMOVE_ITEM VM_CORE_SOURCES "${_s}")
     endforeach()
-endif()
+endforeach()
 add_library(vmcore STATIC ${VM_CORE_SOURCES})
 target_link_libraries(vmcore PUBLIC vesta_vm_flags)
 

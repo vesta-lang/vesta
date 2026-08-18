@@ -26,19 +26,21 @@ endif ()
 # Fuentes del nucleo.
 # ---------------------------------------------------------------------------
 
-# Todos los sources de src/
+# Lo unico que compila este directorio es lo que NINGUNA libreria del proyecto
+# ofrece ya.
+#
+# Antes compilaba `src/` ENTERO -- ~275 unidades --, o sea una tercera copia de
+# la maquina (`vmcore`) y del frontend (`vx_lib`) junto a la del ejecutable y la
+# de la DLL.  Medido con .ninja_log, esa copia sola era el 23,9% del build.
+#
+# Los tres directorios que quedan aqui son los que no tienen libreria propia:
+# el modo analisis, el portador a C y el servidor LSP.  Cuando la tengan, esta
+# lista se queda vacia.
 file(GLOB_RECURSE ALL_PROJECT_SOURCES
-        ${CMAKE_SOURCE_DIR}/src/*.cpp
-        ${CMAKE_SOURCE_DIR}/libs/SourceCode/DistanciaLevenshtein/Levenshtein_c.c
-        ${CMAKE_SOURCE_DIR}/libs/SourceCode/DistanciaLevenshtein/Levenshtein.cpp
+        ${CMAKE_SOURCE_DIR}/src/analyze/*.cpp
+        ${CMAKE_SOURCE_DIR}/src/port/*.cpp
+        ${CMAKE_SOURCE_DIR}/src/lsp/*.cpp
 )
-list(APPEND ALL_PROJECT_SOURCES ${CMAKE_SOURCE_DIR}/src/runtime/exec_instruction_closure.cpp)
-
-# La API C embebible (src/capi/) solo forma parte de la libreria compartida
-# vesta_ffi (compilada con VESTA_BUILD_DLL).  Sin ese define, sus funciones
-# quedan marcadas dllimport y fallan al compilarse como definicion.  Excluirla
-# de los binarios de test.
-list(FILTER ALL_PROJECT_SOURCES EXCLUDE REGEX "/src/capi/")
 
 # Del servidor LSP se excluye SOLO su main().
 #
@@ -48,26 +50,6 @@ list(FILTER ALL_PROJECT_SOURCES EXCLUDE REGEX "/src/capi/")
 # o sea que estaban muertos sin que nada lo dijera.  Lo que colisiona con el
 # main() de cada test es un unico fichero, asi que es lo unico que se quita.
 list(FILTER ALL_PROJECT_SOURCES EXCLUDE REGEX "/src/lsp/lsp_main\\.cpp$")
-
-# El banner de `vesta --version` incluye build_info_generated.h, que un target
-# ALL reescribe con la fecha del momento en CADA build -- por diseno, para que
-# la version muestre cuando se compilo.  Eso deja esa TU permanentemente sucia,
-# y si formara parte del nucleo arrastraria a los ~150 ejecutables de test a
-# re-enlazarse en cada build, aunque no se hubiera tocado una linea: enlaces
-# estaticos completos que hacian que construir la carpeta no terminara nunca.
-#
-# Solo lo usa main.cpp (el binario `vm`), asi que fuera.  Un test que necesitara
-# el banner fallaria al enlazar, que es como debe enterarse.
-list(FILTER ALL_PROJECT_SOURCES EXCLUDE REGEX "/src/cli/version_info\\.cpp$")
-
-# Fuentes del modulo distribuido (agregadas explicitamente porque GLOB_RECURSE
-# puede estar cacheado desde antes de que existiera el directorio src/distrib/)
-list(APPEND ALL_PROJECT_SOURCES ${CMAKE_SOURCE_DIR}/src/distrib/mailbox.cpp)
-list(APPEND ALL_PROJECT_SOURCES ${CMAKE_SOURCE_DIR}/src/distrib/dirty_tracker.cpp)
-list(APPEND ALL_PROJECT_SOURCES ${CMAKE_SOURCE_DIR}/src/distrib/node_registry.cpp)
-list(APPEND ALL_PROJECT_SOURCES ${CMAKE_SOURCE_DIR}/src/distrib/vdp_session.cpp)
-list(APPEND ALL_PROJECT_SOURCES ${CMAKE_SOURCE_DIR}/src/distrib/dist_runtime.cpp)
-list(APPEND ALL_PROJECT_SOURCES ${CMAKE_SOURCE_DIR}/src/runtime/exec_instruction_distrib.cpp)
 
 # ---------------------------------------------------------------------------
 # Lo que comparten el nucleo y cada test: includes, macros, opciones y enlace.
@@ -180,18 +162,15 @@ target_link_options(vesta_test_link INTERFACE
 # ---------------------------------------------------------------------------
 if (NOT ASM_INTEL)
     add_library(vesta_test_core STATIC ${ALL_PROJECT_SOURCES})
-    target_link_libraries(vesta_test_core PUBLIC vesta_test_flags)
-
-    # Misma excepcion que en el CMakeLists principal: exec_instruction_float.cpp
-    # implementa semantica IEEE 754 estricta (NaN, Inf), y -ffast-math asume que
-    # no los hay -- con lo que folda isnan(x) a false y rompe FCMP con NaN.
-    # Faltaba aqui: los tests compilaban ese fichero con la semantica relajada,
-    # o sea probando algo distinto de lo que se entrega.
-    set_source_files_properties(
-            ${CMAKE_SOURCE_DIR}/src/runtime/exec_instruction_float.cpp
-            TARGET_DIRECTORY vesta_test_core
-            PROPERTIES COMPILE_FLAGS "-fno-fast-math -fno-finite-math-only"
-    )
+    # El nucleo y el frontend se ENLAZAN, no se recompilan.  `vesta_vm_flags`
+    # llega por `vmcore`, asi que estas unidades se compilan exactamente con las
+    # mismas macros que el codigo que se entrega -- que es la unica forma de que
+    # un test pruebe el mismo programa.
+    target_link_libraries(vesta_test_core
+            PUBLIC vesta_test_flags
+            PUBLIC vmcore
+            PUBLIC vx_lib
+            PUBLIC vesta_toolchain)
 endif ()
 
 # ---------------------------------------------------------------------------
@@ -222,9 +201,13 @@ function(add_single_test PREFIX TEST_FILE ALL_SOURCES)
     endif ()
 
     add_executable(${FINAL_NAME} ${TEST_FILE})
+    # Archivo COMPLETO del nucleo: hay unidades que solo se registran solas al
+    # arrancar y a las que nadie llama por su nombre; de un archivo normal el
+    # enlazador no las saca.  (`capstone` ya viene dentro de `vmcore`.)
     target_link_libraries(${FINAL_NAME}
-            PRIVATE vesta_test_core vesta_test_link
-            PRIVATE capstone)  # de objetos: tiene que ser enlace directo
+            PRIVATE vesta_test_core
+            PRIVATE $<LINK_LIBRARY:WHOLE_ARCHIVE,vmcore>
+            PRIVATE vesta_test_link)
 endfunction()
 
 # Buscar todos los archivos .cpp dentro de tests/ y subcarpetas
