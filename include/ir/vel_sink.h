@@ -35,6 +35,7 @@
 #include "emmit/mnemonic.h"
 
 #include <initializer_list>
+#include <ostream>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -71,6 +72,145 @@ namespace ir {
  * Mientras eso no este, `<<` sigue siendo lo que hay -- pero como lo que hay,
  * no como el diseno.
  */
+// ---------------------------------------------------------------------------
+// Los OPERANDOS, tipados.  Cada uno sabe imprimirse como lo espera el `.vel`,
+// asi que quien emite no cose corchetes, comas ni sufijos: dice QUE es cada
+// cosa.  Un corchete que falta o un sufijo de ancho en el sitio equivocado
+// dejan de ser posibles, en vez de descubrirse al ensamblar.
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Un REGISTRO como operando.
+ *
+ * El ancho es parte del operando, no un sufijo que se pega a la cadena.  Antes
+ * se escribia `out << scratch << "b, "`, y esa `"b"` suelta se podia olvidar, o
+ * poner donde no iba, sin que nada lo notara hasta ensamblar.
+ */
+/**
+ * @brief Los registros con nombre PROPIO: los que no siguen ningun patron.
+ *
+ * Son lista cerrada, asi que van como enum.  Los bancos indexados (`r0..r15`,
+ * `f0..f15`, `xmm/ymm/zmm`) NO: escribir sus cien nombres a mano seria una
+ * tercera copia del mismo conocimiento -- el error que @c instr_list.h advierte
+ * --, cuando lo que los define es el patron.  Para esos hay constructores con el
+ * indice ACOTADO, que es lo que de verdad impide un `r99`.
+ */
+enum class RegEspecial : uint8_t { RIP, RBP, RSP, RFLAGS, CUR0, CUR1, CUR2, CUR3 };
+
+/// El texto de un registro especial, indexado por el enum (no buscado).
+inline const char *text_of(RegEspecial r) {
+    constexpr const char *kNombres[] = {"rip",  "rbp",  "rsp",  "rflags",
+                                        "cur0", "cur1", "cur2", "cur3"};
+    return kNombres[static_cast<uint8_t>(r)];
+}
+
+struct Reg {
+    /// Ancho de la vista: el `.vel` lo escribe como sufijo del nombre.
+    enum class Ancho : uint8_t { Q, D, W, B };
+
+    std::string nombre; ///< `r0`, `rbp`, `f3`, `ymm2`...
+    Ancho ancho = Ancho::Q;
+
+    /**
+     * @brief Registro de proposito general `r0`..`r15`.
+     * @param n Indice; fuera de 0..15 no es un registro y se ACOTA en vez de
+     *          producir un nombre que no existe.
+     */
+    static Reg gp(unsigned n, Ancho a = Ancho::Q) {
+        return Reg("r" + std::to_string(n > 15 ? 15 : n), a);
+    }
+    /// Registro escalar de coma flotante `f0`..`f15`.
+    static Reg fp(unsigned n) { return Reg("f" + std::to_string(n > 15 ? 15 : n)); }
+    /// Vectorial: `xmm`/`ymm`/`zmm` `0`..`15`.
+    static Reg xmm(unsigned n) { return Reg("xmm" + std::to_string(n > 15 ? 15 : n)); }
+    static Reg ymm(unsigned n) { return Reg("ymm" + std::to_string(n > 15 ? 15 : n)); }
+    static Reg zmm(unsigned n) { return Reg("zmm" + std::to_string(n > 15 ? 15 : n)); }
+    /// Uno de los que tienen nombre propio.
+    static Reg esp(RegEspecial e) { return Reg(text_of(e)); }
+
+    /**
+     * @brief Desde un nombre ya calculado.  PROVISIONAL.
+     *
+     * Muchos sitios reciben el registro del asignador como CADENA
+     * (`reg_name(...)`), asi que hoy hace falta.  El paso siguiente es que quien
+     * lo produce devuelva ya un @c Reg: mientras esta puerta exista, un nombre
+     * mal formado sigue siendo posible por aqui.
+     */
+    explicit Reg(std::string n, Ancho a = Ancho::Q) noexcept
+        : nombre(std::move(n)), ancho(a) {}
+
+    /// El mismo registro visto a 8 bits.
+    static Reg b(std::string n) { return Reg(std::move(n), Ancho::B); }
+    /// A 16 bits.
+    static Reg w(std::string n) { return Reg(std::move(n), Ancho::W); }
+    /// A 32 bits.
+    static Reg d(std::string n) { return Reg(std::move(n), Ancho::D); }
+};
+
+/// El sufijo que el `.vel` espera para cada ancho.
+inline const char *sufijo_de(Reg::Ancho a) {
+    switch (a) {
+    case Reg::Ancho::B: return "b";
+    case Reg::Ancho::W: return "w";
+    case Reg::Ancho::D: return "d";
+    case Reg::Ancho::Q: break;
+    }
+    return "";
+}
+
+/**
+ * @brief Un ACCESO A MEMORIA como operando: `[base]`, `[base+8]`, `[b+i*4]`.
+ *
+ * Los corchetes los pone el operando, no quien lo escribe.  Cosidos a mano
+ * (`<< ", [" << reg << "]"`) es facil dejarse uno, o abrirlo donde el `.vel`
+ * espera un registro -- y eso no falla hasta el ensamblador.
+ */
+struct Mem {
+    std::string base;           ///< registro base.
+    std::string indice;         ///< registro indice, o vacio.
+    unsigned escala = 1;        ///< 1/2/4/8; solo cuenta con @c indice.
+    long long desplazamiento = 0;
+
+    explicit Mem(std::string b) noexcept : base(std::move(b)) {}
+    Mem(std::string b, long long off) noexcept
+        : base(std::move(b)), desplazamiento(off) {}
+    Mem(std::string b, std::string idx, unsigned esc) noexcept
+        : base(std::move(b)), indice(std::move(idx)), escala(esc) {}
+};
+
+/**
+ * @brief Una ETIQUETA como operando (destino de salto o de llamada).
+ *
+ * Distinta de un registro a proposito: `jmp r0` y `jmp fin` no son lo mismo, y
+ * con cadenas los dos se escriben igual.
+ */
+struct Lbl {
+    std::string nombre;
+    explicit Lbl(std::string n) noexcept : nombre(std::move(n)) {}
+};
+
+/// Un registro se imprime con su ancho pegado, que es como lo espera el `.vel`.
+inline std::ostream &operator<<(std::ostream &os, const Reg &r) {
+    return os << r.nombre << sufijo_de(r.ancho);
+}
+
+/// La memoria se imprime con sus corchetes y solo con las partes que tiene.
+inline std::ostream &operator<<(std::ostream &os, const Mem &m) {
+    os << '[' << m.base;
+    if (!m.indice.empty()) {
+        os << '+' << m.indice;
+        if (m.escala != 1) os << '*' << m.escala;
+    }
+    if (m.desplazamiento > 0) os << '+' << m.desplazamiento;
+    else if (m.desplazamiento < 0) os << '-' << -m.desplazamiento;
+    return os << ']';
+}
+
+/// Una etiqueta se imprime por su nombre.
+inline std::ostream &operator<<(std::ostream &os, const Lbl &l) {
+    return os << l.nombre;
+}
+
 class VelSink {
   public:
     VelSink() = default;

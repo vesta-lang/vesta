@@ -87,12 +87,12 @@ static inline void emit_spill_access(VelSink &out,
         return;
     }
     // Fallback (offset > 32KB, funcion enorme): secuencia de 3 instrucciones.
-    out << "    mov r13, rbp\n";
+    out.emit(emmit::Mnemonic::MOV, Reg::gp(13), Reg::esp(RegEspecial::RBP));
     out << "    subu r13, " << off << "\n";
     if (is_load)
-        out << "    mov " << reg << ", [r13]\n";
+        out.emit(emmit::Mnemonic::MOV, Reg(reg), Mem("r13"));
     else
-        out << "    mov [r13], " << reg << "\n";
+        out.emit(emmit::Mnemonic::MOV, Mem("r13"), Reg(reg));
 }
 
 // =========================================================================
@@ -593,7 +593,7 @@ static void emit_mov_scratch_imm(EmitCtx &ctx, const std::string &scratch,
 static void emit_mov_scratch_shift_imm(EmitCtx &ctx, const std::string &scratch,
                                        int64_t k) {
     if (k >= 0 && k < 256) {
-        ctx.out << "    mov " << scratch << "b, " << k << "\n";
+        ctx.out.emit(emmit::Mnemonic::MOV, Reg::b(scratch), k);
         // Invalidar el cache: los bytes altos no se modifican, asi que el
         // valor completo del registro no es K.  Mejor olvidar.
         if (scratch == "r14")
