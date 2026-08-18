@@ -174,7 +174,7 @@ struct Reg {
 };
 
 /**
- * @brief ¿Es @p r ese registro concreto?
+ * @brief Comprueba si @p r es ese registro concreto.
  *
  * Comparar con el NOMBRE, no con el texto emitido: `r14` y `r14b` son el mismo
  * registro en vistas distintas, y quien pregunta "¿es r14?" -- para invalidar
