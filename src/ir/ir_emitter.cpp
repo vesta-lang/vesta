@@ -87,7 +87,7 @@ static inline void emit_spill_access(VelSink &out,
         return;
     }
     // Fallback (offset > 32KB, funcion enorme): secuencia de 3 instrucciones.
-    out.emit(emmit::Mnemonic::MOV, Reg::gp(13), Reg::esp(RegEspecial::RBP));
+    out.emit(emmit::Mnemonic::MOV, Reg::gp(13), Reg::special(SpecialReg::RBP));
     out << "    subu r13, " << off << "\n";
     if (is_load)
         out.emit(emmit::Mnemonic::MOV, Reg(reg), Mem("r13"));
@@ -516,12 +516,12 @@ static void emit_mov_if_needed(EmitCtx &ctx, const Reg &dst, const Reg &src) {
     /* Mismo registro Y misma vista: mover un registro sobre si mismo no hace
      * nada, pero `r0` y `r0b` NO son el mismo operando, asi que comparar solo
      * el nombre se saltaria una conversion de ancho que si hace falta. */
-    if (dst.nombre == src.nombre && dst.ancho == src.ancho) return;
+    if (dst == src) return;
     ctx.out.emit(emmit::Mnemonic::MOV, dst, src);
     // Si el dst es r14 o r13, invalidamos su cache de constante: ahora
     // contiene el VALOR del reg origen, no una constante conocida.
-    if (dst.nombre == "r14") ctx.r14_cache = -1;
-    if (dst.nombre == "r13") ctx.r13_cache = -1;
+    if (dst.is_gp(14)) ctx.r14_cache = -1;
+    if (dst.is_gp(13)) ctx.r13_cache = -1;
 }
 
 /**
@@ -3056,7 +3056,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // CLOBREAN los flags entre el @c cmpu y el @c jmp.je.  Antes,
         // patrones como @c if (it == 0) nlen = 1; emitian:
         //   cmpu r10, r14            ; setear ZF en base a it == 0
-        //   <phi copies con subu r13,K>  ; ¡clobrea ZF/SF/CF/OF!
+        //   <phi copies con subu r13,K>  ; clobrea ZF/SF/CF/OF!
         //   jmp.je if_merge          ; lee flags equivocados
         // Sintoma: la rama then no se tomaba aunque it == 0.
         // Fix: emitir las phi copies de AMBOS sucesores ANTES del
@@ -7589,7 +7589,7 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
         out << "\n";
     }
 
-    result.vel_text = out.tomar_texto();
+    result.vel_text = out.take_text();
     return result;
 }
 

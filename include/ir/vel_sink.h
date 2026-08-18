@@ -95,50 +95,89 @@ namespace ir {
  * --, cuando lo que los define es el patron.  Para esos hay constructores con el
  * indice ACOTADO, que es lo que de verdad impide un `r99`.
  */
-enum class RegEspecial : uint8_t { RIP, RBP, RSP, RFLAGS, CUR0, CUR1, CUR2, CUR3 };
+enum class SpecialReg : uint8_t { RIP, RBP, RSP, RFLAGS, CUR0, CUR1, CUR2, CUR3 };
 
 /// El texto de un registro especial, indexado por el enum (no buscado).
-inline const char *text_of(RegEspecial r) {
-    constexpr const char *kNombres[] = {"rip",  "rbp",  "rsp",  "rflags",
-                                        "cur0", "cur1", "cur2", "cur3"};
-    return kNombres[static_cast<uint8_t>(r)];
+inline const char *text_of(SpecialReg r) {
+    constexpr const char *kNames[] = {"rip",  "rbp",  "rsp",  "rflags",
+                                      "cur0", "cur1", "cur2", "cur3"};
+    return kNames[static_cast<uint8_t>(r)];
 }
 
 struct Reg {
     /// Ancho de la vista: el `.vel` lo escribe como sufijo del nombre.
-    enum class Ancho : uint8_t { Q, D, W, B };
+    enum class Width : uint8_t { Q, D, W, B };
+
+    /**
+     * @brief De que banco es el registro.
+     *
+     * Guardar el BANCO y el INDICE, y no el nombre, es lo que quita las
+     * asignaciones de memoria: `Reg::gp(13)` construia antes `"r" +
+     * std::to_string(13)`, o sea un `std::string` en el monton POR REGISTRO Y
+     * POR EMISION, y el emisor emite cientos de miles.  El nombre sale de una
+     * tabla indexada cuando hace falta escribirlo, que es una sola vez y sin
+     * copiar nada.
+     *
+     * Cachear los nombres repetidos habria aliviado el sintoma; no crearlos lo
+     * quita.
+     */
+    enum class Bank : uint8_t { GP, FP, XMM, YMM, ZMM, Special, Raw };
 
     /// El sufijo del `.vel` para cada ancho.  Interno: la version publica es
-    /// @ref sufijo_de, que no puede declararse antes que este tipo.
-    static const char *sufijo_de_(Ancho a) {
-        switch (a) {
-        case Ancho::B: return "b";
-        case Ancho::W: return "w";
-        case Ancho::D: return "d";
-        case Ancho::Q: break;
+    /// @ref suffix_of, que no puede declararse antes que este tipo.
+    static const char *suffix_of_(Width w) {
+        switch (w) {
+        case Width::B: return "b";
+        case Width::W: return "w";
+        case Width::D: return "d";
+        case Width::Q: break;
         }
         return "";
     }
 
-    std::string nombre; ///< `r0`, `rbp`, `f3`, `ymm2`...
-    Ancho ancho = Ancho::Q;
+    Bank bank = Bank::GP;
+    uint8_t index = 0;  ///< 0..15, o el @ref SpecialReg si @c bank es Special.
+    Width width = Width::Q;
+    /// Solo con @c Bank::Raw: nombre ya calculado.  Puente temporal.
+    std::string raw;
+
+    /**
+     * @brief Construye desde banco e indice.  Sin monton: son tres bytes.
+     *
+     * No es `constexpr` porque @c raw es un `std::string`, que hace el tipo
+     * no-literal.  Da igual para lo que se buscaba: un `std::string` vacio no
+     * pide memoria, asi que construir un `Reg` de un banco indexado sigue sin
+     * tocar el monton.  Cuando el puente @c Bank::Raw desaparezca, el campo se
+     * va con el y esto puede volver a ser `constexpr`.
+     */
+    Reg(Bank b, uint8_t i, Width w = Width::Q) noexcept : bank(b), index(i), width(w) {}
 
     /**
      * @brief Registro de proposito general `r0`..`r15`.
      * @param n Indice; fuera de 0..15 no es un registro y se ACOTA en vez de
      *          producir un nombre que no existe.
      */
-    static Reg gp(unsigned n, Ancho a = Ancho::Q) {
-        return Reg("r" + std::to_string(n > 15 ? 15 : n), a);
+    static Reg gp(unsigned n, Width w = Width::Q) noexcept {
+        return Reg(Bank::GP, static_cast<uint8_t>(n > 15 ? 15 : n), w);
     }
     /// Registro escalar de coma flotante `f0`..`f15`.
-    static Reg fp(unsigned n) { return Reg("f" + std::to_string(n > 15 ? 15 : n)); }
+    static Reg fp(unsigned n) noexcept {
+        return Reg(Bank::FP, static_cast<uint8_t>(n > 15 ? 15 : n));
+    }
     /// Vectorial: `xmm`/`ymm`/`zmm` `0`..`15`.
-    static Reg xmm(unsigned n) { return Reg("xmm" + std::to_string(n > 15 ? 15 : n)); }
-    static Reg ymm(unsigned n) { return Reg("ymm" + std::to_string(n > 15 ? 15 : n)); }
-    static Reg zmm(unsigned n) { return Reg("zmm" + std::to_string(n > 15 ? 15 : n)); }
+    static Reg xmm(unsigned n) noexcept {
+        return Reg(Bank::XMM, static_cast<uint8_t>(n > 15 ? 15 : n));
+    }
+    static Reg ymm(unsigned n) noexcept {
+        return Reg(Bank::YMM, static_cast<uint8_t>(n > 15 ? 15 : n));
+    }
+    static Reg zmm(unsigned n) noexcept {
+        return Reg(Bank::ZMM, static_cast<uint8_t>(n > 15 ? 15 : n));
+    }
     /// Uno de los que tienen nombre propio.
-    static Reg esp(RegEspecial e) { return Reg(text_of(e)); }
+    static Reg special(SpecialReg s) noexcept {
+        return Reg(Bank::Special, static_cast<uint8_t>(s));
+    }
 
     /**
      * @brief Desde un nombre ya calculado.  PROVISIONAL.
@@ -148,8 +187,60 @@ struct Reg {
      * lo produce devuelva ya un @c Reg: mientras esta puerta exista, un nombre
      * mal formado sigue siendo posible por aqui.
      */
-    Reg(std::string n, Ancho a = Ancho::Q) noexcept
-        : nombre(std::move(n)), ancho(a) {}
+    Reg(std::string n, Width w = Width::Q) noexcept
+        : bank(Bank::Raw), width(w), raw(std::move(n)) {}
+
+    /**
+     * @brief El nombre del registro, SIN el sufijo de ancho.
+     *
+     * Sale de tablas indexadas por el numero: no se construye ninguna cadena
+     * salvo en el camino @c Raw, que es el puente que va a desaparecer.
+     */
+    const std::string &base_name() const {
+        static const std::string kGP[16] = {"r0",  "r1",  "r2",  "r3", "r4",  "r5",
+                                            "r6",  "r7",  "r8",  "r9", "r10", "r11",
+                                            "r12", "r13", "r14", "r15"};
+        static const std::string kFP[16] = {"f0",  "f1",  "f2",  "f3", "f4",  "f5",
+                                            "f6",  "f7",  "f8",  "f9", "f10", "f11",
+                                            "f12", "f13", "f14", "f15"};
+        static const std::string kXMM[16] = {
+            "xmm0", "xmm1", "xmm2",  "xmm3",  "xmm4",  "xmm5",  "xmm6",  "xmm7",
+            "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15"};
+        static const std::string kYMM[16] = {
+            "ymm0", "ymm1", "ymm2",  "ymm3",  "ymm4",  "ymm5",  "ymm6",  "ymm7",
+            "ymm8", "ymm9", "ymm10", "ymm11", "ymm12", "ymm13", "ymm14", "ymm15"};
+        static const std::string kZMM[16] = {
+            "zmm0", "zmm1", "zmm2",  "zmm3",  "zmm4",  "zmm5",  "zmm6",  "zmm7",
+            "zmm8", "zmm9", "zmm10", "zmm11", "zmm12", "zmm13", "zmm14", "zmm15"};
+        static const std::string kSpecial[8] = {"rip",  "rbp",  "rsp",  "rflags",
+                                                "cur0", "cur1", "cur2", "cur3"};
+        switch (bank) {
+        case Bank::GP:      return kGP[index & 15];
+        case Bank::FP:      return kFP[index & 15];
+        case Bank::XMM:     return kXMM[index & 15];
+        case Bank::YMM:     return kYMM[index & 15];
+        case Bank::ZMM:     return kZMM[index & 15];
+        case Bank::Special: return kSpecial[index & 7];
+        case Bank::Raw:     break;
+        }
+        return raw;
+    }
+
+    /**
+     * @brief El registro es el general numero @p n.
+     *
+     * Pregunta por el REGISTRO, no por la vista: `r14` y `r14b` son el mismo, y
+     * quien esto pregunta -- para invalidar una cache de constante, por ejemplo
+     * -- se refiere al registro, no al ancho con el que se escribe.
+     *
+     * Compara banco e indice; solo mira el texto cuando el @c Reg vino del
+     * puente @c Raw, donde no hay otra cosa que mirar.
+     */
+    bool is_gp(unsigned n) const {
+        if (bank == Bank::GP) return index == n;
+        if (bank != Bank::Raw) return false;
+        return n < 16 && raw == Reg::gp(n).base_name();
+    }
 
     /**
      * @brief PUENTE TEMPORAL: el registro como texto.
@@ -163,14 +254,14 @@ struct Reg {
      * sea que la garantia de tipo se pierde por aqui.  Se quita cuando esas
      * funciones tomen @c Reg, y el compilador dira exactamente cuales quedan.
      */
-    operator std::string() const { return nombre + sufijo_de_(ancho); }
+    operator std::string() const { return base_name() + suffix_of_(width); }
 
     /// El mismo registro visto a 8 bits.
-    static Reg b(std::string n) { return Reg(std::move(n), Ancho::B); }
+    static Reg b(std::string n) { return Reg(std::move(n), Width::B); }
     /// A 16 bits.
-    static Reg w(std::string n) { return Reg(std::move(n), Ancho::W); }
+    static Reg w(std::string n) { return Reg(std::move(n), Width::W); }
     /// A 32 bits.
-    static Reg d(std::string n) { return Reg(std::move(n), Ancho::D); }
+    static Reg d(std::string n) { return Reg(std::move(n), Width::D); }
 };
 
 /**
@@ -180,36 +271,22 @@ struct Reg {
  * registro en vistas distintas, y quien pregunta si es r14 -- para invalidar
  * una cache de constante, por ejemplo -- se refiere al registro.
  */
-inline bool operator==(const Reg &r, const char *nombre) {
-    return r.nombre == nombre;
-}
-inline bool operator!=(const Reg &r, const char *nombre) {
-    return !(r == nombre);
-}
+inline bool operator==(const Reg &r, const char *name) { return r.base_name() == name; }
+inline bool operator!=(const Reg &r, const char *name) { return !(r == name); }
 /// Igual contra una cadena ya calculada.  Parte del puente temporal: cuando el
 /// emisor trabaje solo con @c Reg, estas dos sobran.
-inline bool operator==(const Reg &r, const std::string &nombre) {
-    return r.nombre == nombre;
+inline bool operator==(const Reg &r, const std::string &name) {
+    return r.base_name() == name;
 }
-inline bool operator!=(const Reg &r, const std::string &nombre) {
-    return !(r == nombre);
-}
+inline bool operator!=(const Reg &r, const std::string &name) { return !(r == name); }
 /// Dos registros son el mismo operando si coinciden nombre Y vista.
 inline bool operator==(const Reg &a, const Reg &b) {
-    return a.nombre == b.nombre && a.ancho == b.ancho;
+    return a.base_name() == b.base_name() && a.width == b.width;
 }
 inline bool operator!=(const Reg &a, const Reg &b) { return !(a == b); }
 
 /// El sufijo que el `.vel` espera para cada ancho.
-inline const char *sufijo_de(Reg::Ancho a) {
-    switch (a) {
-    case Reg::Ancho::B: return "b";
-    case Reg::Ancho::W: return "w";
-    case Reg::Ancho::D: return "d";
-    case Reg::Ancho::Q: break;
-    }
-    return "";
-}
+inline const char *suffix_of(Reg::Width w) { return Reg::suffix_of_(w); }
 
 /**
  * @brief Un ACCESO A MEMORIA como operando: `[base]`, `[base+8]`, `[b+i*4]`.
@@ -219,16 +296,15 @@ inline const char *sufijo_de(Reg::Ancho a) {
  * espera un registro -- y eso no falla hasta el ensamblador.
  */
 struct Mem {
-    std::string base;           ///< registro base.
-    std::string indice;         ///< registro indice, o vacio.
-    unsigned escala = 1;        ///< 1/2/4/8; solo cuenta con @c indice.
-    long long desplazamiento = 0;
+    std::string base;   ///< registro base.
+    std::string index;  ///< registro indice, o vacio.
+    unsigned scale = 1; ///< 1/2/4/8; solo cuenta con @c index.
+    long long disp = 0; ///< desplazamiento, con signo.
 
     explicit Mem(std::string b) noexcept : base(std::move(b)) {}
-    Mem(std::string b, long long off) noexcept
-        : base(std::move(b)), desplazamiento(off) {}
-    Mem(std::string b, std::string idx, unsigned esc) noexcept
-        : base(std::move(b)), indice(std::move(idx)), escala(esc) {}
+    Mem(std::string b, long long off) noexcept : base(std::move(b)), disp(off) {}
+    Mem(std::string b, std::string idx, unsigned sc) noexcept
+        : base(std::move(b)), index(std::move(idx)), scale(sc) {}
 };
 
 /**
@@ -238,31 +314,29 @@ struct Mem {
  * con cadenas los dos se escriben igual.
  */
 struct Lbl {
-    std::string nombre;
-    explicit Lbl(std::string n) noexcept : nombre(std::move(n)) {}
+    std::string name;
+    explicit Lbl(std::string n) noexcept : name(std::move(n)) {}
 };
 
 /// Un registro se imprime con su ancho pegado, que es como lo espera el `.vel`.
 inline std::ostream &operator<<(std::ostream &os, const Reg &r) {
-    return os << r.nombre << sufijo_de(r.ancho);
+    return os << r.base_name() << suffix_of(r.width);
 }
 
 /// La memoria se imprime con sus corchetes y solo con las partes que tiene.
 inline std::ostream &operator<<(std::ostream &os, const Mem &m) {
     os << '[' << m.base;
-    if (!m.indice.empty()) {
-        os << '+' << m.indice;
-        if (m.escala != 1) os << '*' << m.escala;
+    if (!m.index.empty()) {
+        os << '+' << m.index;
+        if (m.scale != 1) os << '*' << m.scale;
     }
-    if (m.desplazamiento > 0) os << '+' << m.desplazamiento;
-    else if (m.desplazamiento < 0) os << '-' << -m.desplazamiento;
+    if (m.disp > 0) os << '+' << m.disp;
+    else if (m.disp < 0) os << '-' << -m.disp;
     return os << ']';
 }
 
 /// Una etiqueta se imprime por su nombre.
-inline std::ostream &operator<<(std::ostream &os, const Lbl &l) {
-    return os << l.nombre;
-}
+inline std::ostream &operator<<(std::ostream &os, const Lbl &l) { return os << l.name; }
 
 class VelSink {
   public:
@@ -276,7 +350,7 @@ class VelSink {
      * que ampliar cada vez que el emisor manda algo nuevo.
      */
     template <typename T> VelSink &operator<<(const T &v) {
-        texto_ << v;
+        text_ << v;
         return *this;
     }
 
@@ -303,36 +377,36 @@ class VelSink {
      */
     template <typename... Ops>
     VelSink &emit(emmit::Mnemonic m, const Ops &...ops) {
-        texto_ << "    " << emmit::text_of(m);
+        text_ << "    " << emmit::text_of(m);
         int n = 0;
         // Separador: el primer operando va tras un espacio; el resto, tras coma.
         (void)std::initializer_list<int>{
-            ((texto_ << (n++ == 0 ? " " : ", ") << ops), 0)...};
-        texto_ << "\n";
+            ((text_ << (n++ == 0 ? " " : ", ") << ops), 0)...};
+        text_ << "\n";
         return *this;
     }
 
     /// Instruccion tipada SIN operandos (`ret`, `leave`, ...).
     VelSink &emit(emmit::Mnemonic m) {
-        texto_ << "    " << emmit::text_of(m) << "\n";
+        text_ << "    " << emmit::text_of(m) << "\n";
         return *this;
     }
 
     /// El `.vel` acumulado.  Sigue haciendo falta: es lo que se vuelca con
     /// `--vx-emit-only` y lo que se lee para depurar.
-    std::string texto() const { return texto_.str(); }
+    std::string text() const { return text_.str(); }
 
     /// El `.vel` acumulado, vaciando el sumidero.  Evita copiar un texto que
     /// para un programa grande son megabytes.
-    std::string tomar_texto() { return std::move(texto_).str(); }
+    std::string take_text() { return std::move(text_).str(); }
 
     /// Si no se ha emitido nada.  No es `const` porque preguntar la posicion de
     /// escritura de un stream no lo es -- y falsear la constancia con un cast
     /// seria mentir sobre lo que hace.
-    bool vacio() { return texto_.tellp() == std::streampos(0); }
+    bool empty() { return text_.tellp() == std::streampos(0); }
 
   private:
-    std::ostringstream texto_;
+    std::ostringstream text_;
 };
 
 } // namespace ir
