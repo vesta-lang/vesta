@@ -3593,7 +3593,7 @@ int main(int argc, char *argv[]) {
             ConjuntoComptime = 2, ///< solo lo que se ejecuta al compilar.
         };
         const uint8_t clase_artefacto =
-            static_cast<uint8_t>(ClaseArtefactoComptime::ProgramaEntero);
+            static_cast<uint8_t>(ClaseArtefactoComptime::ConjuntoComptime);
 
         /*  MC.14: macro-scoped cache key.  Hashea SOLO los rangos
          * source que contienen declaraciones `@Macro` (incluyendo
@@ -4390,20 +4390,38 @@ int main(int argc, char *argv[]) {
                 }
             }
 
+            /* Lo que la ComptimeVM necesita es el bytecode de lo que se EJECUTA
+             * al compilar, no el del programa entero.  Aqui se ensamblaba
+             * `cr.vel_text` -- el programa completo --, y eso es lo que hacia
+             * que el artefacto fuese de 704 KB con 182 macros cuando las
+             * funciones que de verdad se ejecutan al compilar son ocho.
+             *
+             * `cr.comptime_vel_text` es esa misma emision pero FILTRADA sobre el
+             * IR ya bajado, con la clausura del grafo de llamadas incluida para
+             * que sea auto-suficiente.  Si el modulo no tiene conjunto, se
+             * ensambla el programa como antes. */
+            const bool usar_conjunto = !cr.comptime_vel_text.empty();
+            const std::string &vel_artefacto =
+                usar_conjunto ? cr.comptime_vel_text : cr.vel_text;
+            if (verbose_mc)
+                std::cerr << "[mc-cache] artefacto desde "
+                          << (usar_conjunto ? "el CONJUNTO comptime"
+                                            : "el programa entero")
+                          << ": " << vel_artefacto.size() << " bytes de .vel\n";
+            /* Ensamblar DESDE MEMORIA: el texto lo acaba de producir el emisor,
+             * asi que escribirlo a un `.vel.tmp` para que la linea siguiente lo
+             * relea era un viaje por el disco de ida y vuelta.  Y ademas un
+             * `.vel` que nadie pidio: el fichero es un artefacto que se solicita
+             * (`--vx-emit-only`), no un paso obligado del camino.
+             *
+             * El nombre se conserva porque los diagnosticos lo citan, no porque
+             * se abra nada. */
+            std::string vel_en_memoria;
+            if (copts.emit_debug) vel_en_memoria = "// @file " + vx_path + "\n";
+            vel_en_memoria += vel_artefacto;
             const std::string tmp_vel_path = cache_prefix + ".vel.tmp";
-            {
-                std::ofstream tmp(tmp_vel_path, std::ios::binary);
-                if (tmp) {
-                    if (copts.emit_debug) {
-                        tmp << "// @file " << vx_path << "\n";
-                    }
-                    tmp << cr.vel_text;
-                }
-            }
-            /* Linker -> .velb persistente en .cache/vx/.  Reusa el
-             * mismo @c run_worker que produce el .velb final. */
-            const int tmp_rc = asm_multi_process::run_worker(
-                tmp_vel_path, cache_prefix,
+            const int tmp_rc = asm_multi_process::run_worker_from_source(
+                std::move(vel_en_memoria), tmp_vel_path, cache_prefix,
                 /*skip_preprocessor=*/true,
                 /*keep_labels=*/false,
                 /*ir_section_bytes=*/&cr.ir_section_bytes,

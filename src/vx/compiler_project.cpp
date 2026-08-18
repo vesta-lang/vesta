@@ -2119,6 +2119,15 @@ CompileResult compile_vx_project(
                  * y ademas cada compilacion paga un suelo fijo (~8.5 ms) que se
                  * multiplicaria por el numero de artefactos. */
                 res.comptime_unit_source += cu.unit_source;
+                /* Los NOMBRES, que son el criterio de pertenencia al emitir el
+                 * artefacto.  Deducirlo del texto seria adivinar: una busqueda
+                 * de subcadena acierta por accidente (un nombre mencionado en un
+                 * comentario, o uno que es prefijo de otro). */
+                for (const auto *lista :
+                     {&cu.comptime_fns, &cu.macros, &cu.helper_deps})
+                    res.comptime_unit_names.insert(
+                        res.comptime_unit_names.end(), lista->begin(),
+                        lista->end());
                 /* Clave combinada: mezclar los hashes por modulo, no rehashear
                  * el texto -- asi el orden de los modulos no cambia la clave
                  * mientras el conjunto sea el mismo. */
@@ -3660,26 +3669,127 @@ CompileResult compile_vx_project(
          * es copiar el modulo y filtrar un vector.  El enfoque por texto tenia
          * que RECONSTRUIR eso, y el AST ni siquiera guarda el tramo de cada
          * decl (`SourceLoc::length` es la del token). */
-        if (std::getenv("VESTA_PRUEBA_IR_COMPTIME")) {
+        /* Valvula: `VESTA_NO_FILTRO_COMPTIME=1` vuelve al artefacto del programa
+         * entero.  Sirve para separar en un fallo si la causa es el filtro o
+         * cualquier otra cosa, sin recompilar el compilador. */
+        if (!res.comptime_unit_names.empty() &&
+            !std::getenv("VESTA_NO_FILTRO_COMPTIME")) {
+            std::unordered_set<std::string> del_conjunto(
+                res.comptime_unit_names.begin(), res.comptime_unit_names.end());
+            /* Indice por nombre para no recorrer el modulo por cada callee. */
+            std::unordered_map<std::string, const ir::IrFunction *> por_nombre;
+            por_nombre.reserve(merged.functions.size());
+            for (const ir::IrFunction &f : merged.functions)
+                por_nombre.emplace(f.name, &f);
+
+            /* RAICES: lo que la ComptimeVM tiene que poder invocar.
+             *
+             * No basta con lo que el recolector nombra.  Hay dos familias
+             * SINTETICAS que nadie declara y que se ejecutan al compilar igual:
+             * los `__macro_<X>` (incluidos los constructores `comptime T(expr)`,
+             * que bajan a `__macro_<T>__ctor_N`) y los `__ctblock_N` de un
+             * bloque `comptime { }`.  Dejarlas fuera rompio
+             * `comptime_literal_import` y `bfc311`. */
+            std::vector<std::string> pendientes;
+            std::unordered_set<std::string> dentro;
+            for (const ir::IrFunction &f : merged.functions) {
+                /* `__module_init` es raiz aunque nadie lo nombre: es lo que
+                 * registra clases y macros al cargar el artefacto.  Sin el, la
+                 * carga deja simbolos sin resolver y el comptime no se entera --
+                 * el programa compilaba y daba otro resultado. */
+                const bool sintetica = f.name.rfind("__macro_", 0) == 0 ||
+                                       f.name.rfind("__ctblock_", 0) == 0 ||
+                                       f.name == "__module_init";
+                const std::string desnudo = f.name.rfind("__macro_", 0) == 0
+                                                ? f.name.substr(8)
+                                                : f.name;
+                if (sintetica || del_conjunto.count(f.name) ||
+                    del_conjunto.count(desnudo)) {
+                    if (dentro.insert(f.name).second)
+                        pendientes.push_back(f.name);
+                }
+            }
+            /* CLAUSURA sobre el grafo de llamadas del IR: lo que una raiz llama
+             * tiene que viajar con ella o el artefacto no es auto-suficiente y
+             * la invocacion falla EN COMPILACION.  Hacerlo aqui -- y no sobre el
+             * fuente -- es lo que lo vuelve cerrado POR CONSTRUCCION: los
+             * nombres ya estan resueltos y no hay que adivinar nada. */
+            while (!pendientes.empty()) {
+                const std::string actual = std::move(pendientes.back());
+                pendientes.pop_back();
+                const auto it = por_nombre.find(actual);
+                if (it == por_nombre.end()) continue;
+                for (const ir::IrBlock &b : it->second->blocks)
+                    for (const ir::IrInstr &in : b.instrs) {
+                        if (in.op != ir::IrOp::CALL &&
+                            in.op != ir::IrOp::TAILCALL)
+                            continue;
+                        if (in.func_name.empty()) continue; // indirecta
+                        if (dentro.insert(in.func_name).second)
+                            pendientes.push_back(in.func_name);
+                    }
+            }
+
+            /* `main` NO viaja.  Se probo incluirlo -- el artefacto se carga como
+             * ejecutable y parecia necesitar punto de entrada -- pero sus
+             * llamadas quedaban COLGANDO y el enlazado fallaba con "simbolo no
+             * resuelto: code.copy_ok".  Cerrar sobre `main` traeria el programa
+             * entero, que es justo lo que se evita.  Lo que de verdad faltaba
+             * era `__module_init`, que si es raiz. */
             ir::IrModule solo_ct = merged; // cabecera: imports/globals/libs
             solo_ct.functions.clear();
-            for (const ir::IrFunction &f : merged.functions) {
-                const bool es_macro = f.name.rfind("__macro_", 0) == 0;
-                const bool es_comptime =
-                    !res.comptime_unit_source.empty() &&
-                    res.comptime_unit_source.find(f.name) != std::string::npos;
-                if (es_macro || es_comptime) solo_ct.functions.push_back(f);
+            for (const ir::IrFunction &f : merged.functions)
+                if (dentro.count(f.name)) solo_ct.functions.push_back(f);
+            if (!solo_ct.functions.empty()) {
+                ir::EmitOptions eo_ct = emit_opts;
+                ir::EmitResult e_ct = ir::ir_emit_module(solo_ct, eo_ct);
+                if (e_ct.ok) {
+                    res.comptime_vel_text = std::move(e_ct.vel_text);
+                    /* PUNTO DE ENTRADA: `__module_init`, no `main`.
+                     *
+                     * El artefacto comptime NO es un programa: es una biblioteca
+                     * de funciones que la ComptimeVM invoca por su PC, resuelto
+                     * desde la tabla de simbolos.  Nunca se entra por `main`.
+                     * Pero se carga con `load_executable`, y un ejecutable tiene
+                     * entrada: sin ninguna, el enlazador deja `start_pc = 0` --
+                     * avisa con "PC(0) por defecto" -- y usarlo salta a la
+                     * direccion 0 (segfault).
+                     *
+                     * Incluir `main` para taparlo no vale: arrastra sus llamadas
+                     * y el enlazado falla con simbolos sin resolver
+                     * (`code.copy_ok`), y cerrar sobre el traeria el programa
+                     * entero, que es lo que se esta evitando.
+                     *
+                     * La entrada correcta es `__module_init`, que es justo lo
+                     * que debe ejecutarse al cargar el artefacto: registra las
+                     * clases y los macros. */
+                    bool tiene_init = false;
+                    for (const ir::IrFunction &f : solo_ct.functions)
+                        if (f.name == "__module_init") { tiene_init = true; break; }
+                    if (tiene_init)
+                        res.comptime_vel_text =
+                            "@InitPc(code.__module_init)\n" +
+                            res.comptime_vel_text;
+                    /* La seccion @ir del conjunto: la del programa entero no
+                     * vale, describe otras funciones. */
+                    res.comptime_ir_section_bytes.clear();
+                }
+                if (std::getenv("VESTA_PRUEBA_IR_COMPTIME")) {
+                    /* QUE se queda fuera: es lo que hay que mirar cuando el
+                     * artefacto filtrado se comporta distinto del entero. */
+                    std::cerr << "[comptime-ir] fuera:";
+                    for (const ir::IrFunction &f : merged.functions)
+                        if (!dentro.count(f.name))
+                            std::cerr << " " << f.name;
+                    std::cerr << "\n";
+                }
+                if (std::getenv("VESTA_PRUEBA_IR_COMPTIME"))
+                    std::cerr << "[comptime-ir] programa " << merged.functions.size()
+                              << " fns / " << eres.vel_text.size() << " B .vel"
+                              << "  ->  conjunto " << solo_ct.functions.size()
+                              << " fns / " << res.comptime_vel_text.size()
+                              << " B .vel" << (e_ct.ok ? "" : "  (FALLO)") << "\n";
             }
-            ir::EmitOptions eo_ct = emit_opts;
-            const ir::EmitResult e_ct = ir::ir_emit_module(solo_ct, eo_ct);
-            std::cerr << "[prueba-ir] programa : " << merged.functions.size()
-                      << " funciones, " << eres.vel_text.size() << " bytes .vel\n"
-                      << "[prueba-ir] comptime : " << solo_ct.functions.size()
-                      << " funciones, " << (e_ct.ok ? e_ct.vel_text.size() : 0)
-                      << " bytes .vel" << (e_ct.ok ? "" : "  (EMISION FALLO)")
-                      << "\n";
-            if (!e_ct.ok)
-                std::cerr << "[prueba-ir] motivo: " << e_ct.error << "\n";
         }
         if (!eres.ok) {
             SourceLoc loc;

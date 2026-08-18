@@ -32,6 +32,9 @@
 #ifndef IR_VEL_SINK_H
 #define IR_VEL_SINK_H
 
+#include "emmit/mnemonic.h"
+
+#include <initializer_list>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -81,6 +84,44 @@ class VelSink {
      */
     template <typename T> VelSink &operator<<(const T &v) {
         texto_ << v;
+        return *this;
+    }
+
+    /**
+     * @brief Emite una instruccion con el mnemonico TIPADO.
+     *
+     * Primer paso de "una emision, dos destinos": la ENTRADA pasa a ser tipada
+     * aunque la salida siga siendo texto.  Con `<<` un mnemonico mal escrito
+     * (`movv`) compila igual y no falla hasta ensamblar; aqui no existe -- el
+     * enum viene de @c emmit/instr_list.h, que es la lista UNICA de la que ya
+     * salen el enum, sus nombres y su categoria, asi que esto no anade una copia
+     * de ese conocimiento.
+     *
+     * Hoy escribe texto, para que convertir un sitio NO cambie la salida y se
+     * pueda migrar de uno en uno con el `.velb` como oraculo.  Cuando el
+     * sumidero pase a construir `vm::Instruction`, se cambia AQUI y los sitios
+     * ya convertidos no se tocan: ese es todo el objetivo de la bisagra.
+     *
+     * @param m Mnemonico.
+     * @param ops Operandos ya formateados, en el orden de la instruccion.  Que
+     *        tambien sean tipados es el paso siguiente; hacerlo ahora obligaria
+     *        a describir la forma de cada instruccion antes de tener un solo
+     *        sitio convertido.
+     */
+    template <typename... Ops>
+    VelSink &emit(emmit::Mnemonic m, const Ops &...ops) {
+        texto_ << "    " << emmit::text_of(m);
+        int n = 0;
+        // Separador: el primer operando va tras un espacio; el resto, tras coma.
+        (void)std::initializer_list<int>{
+            ((texto_ << (n++ == 0 ? " " : ", ") << ops), 0)...};
+        texto_ << "\n";
+        return *this;
+    }
+
+    /// Instruccion tipada SIN operandos (`ret`, `leave`, ...).
+    VelSink &emit(emmit::Mnemonic m) {
+        texto_ << "    " << emmit::text_of(m) << "\n";
         return *this;
     }
 

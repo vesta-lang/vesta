@@ -557,6 +557,19 @@ struct CompileResult {
      * Vacio si el modulo no tiene nada comptime.
      */
     std::string comptime_unit_source;
+    /// Nombres de las funciones del conjunto comptime, tal como los da el
+    /// recolector (comptime + `@Macro` + sus dependencias).  Es el criterio de
+    /// pertenencia: sin el habria que adivinarlo del texto, y una busqueda de
+    /// subcadena acierta por accidente.
+    std::vector<std::string> comptime_unit_names;
+    /// Texto `.vel` de SOLO el conjunto comptime, emitido filtrando el IR ya
+    /// bajado y optimizado del modulo.  Es lo que hay que ensamblar para la
+    /// ComptimeVM, en vez del programa entero: medido sobre
+    /// `367_std_memory_variantes`, 8 funciones y 245 KB frente a 61 y 543 KB.
+    /// Vacio si el modulo no tiene nada comptime.
+    std::string comptime_vel_text;
+    /// Seccion `@ir` que acompana a @c comptime_vel_text.
+    std::vector<uint8_t> comptime_ir_section_bytes;
     /// Clave de contenido de @c comptime_unit_source: cambia si y solo si cambia
     /// una decl comptime o una de sus dependencias.  Tocar codigo de runtime NO
     /// la mueve, que es lo que permite reusar el artefacto entre compilaciones.

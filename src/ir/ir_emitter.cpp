@@ -3099,7 +3099,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         break;
     }
 
-    case IrOp::UNREACHABLE: ctx.out << "    hlt\n"; break;
+    case IrOp::UNREACHABLE: ctx.out.emit(emmit::Mnemonic::HLT); break;
 
     // --- PHI: ya se manejo en emit_phi_copies; aqui es un no-op ---
     case IrOp::PHI:
@@ -3167,7 +3167,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             emit_zmm_callee_restore(ctx);
             // solo emitir leave si se emitio enter (has_frame).
             if (ctx.has_frame) {
-                ctx.out << "    leave\n";
+                ctx.out.emit(emmit::Mnemonic::LEAVE);
             }
             // Cargar direccion en r0 y usar tailcall de registro (unica forma
             // soportada).
@@ -5214,7 +5214,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     // Bajada directa a las mnemonicas .vel; los registros usan la
     // convencion habitual: operandos via @c reg_of, destino via @c dst_of.
     // -----------------------------------------------------------------
-    case IrOp::HLT: ctx.out << "    hlt\n"; break;
+    case IrOp::HLT: ctx.out.emit(emmit::Mnemonic::HLT); break;
     case IrOp::GETPID:
         if (ins.dst != IR_NO_VALUE) {
             ctx.out << "    getpid " << ctx.dst_of(ins.dst) << "\n";
@@ -5476,7 +5476,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (r_payload != "r0") {
             ctx.out << "    mov r0, " << r_payload << "\n";
         }
-        ctx.out << "    hlt\n";
+        ctx.out.emit(emmit::Mnemonic::HLT);
         break;
     }
 
@@ -5936,7 +5936,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             ctx.comment("inline_asm: un operando del banco ancho no puede "
                         "pasar por esta via (sus valores no entran ni salen) "
                         "-> trap en vez de resultado falso");
-            ctx.out << "    hlt\n";
+            ctx.out.emit(emmit::Mnemonic::HLT);
             break;
         }
         if (binds.size() > 8) {
@@ -5944,7 +5944,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // slots).  Caso patologico: trap ruidoso en vez de truncar.
             ctx.comment("inline_asm: >8 register bindings no soportado en "
                         "interp -> trap");
-            ctx.out << "    hlt\n";
+            ctx.out.emit(emmit::Mnemonic::HLT);
             break;
         }
 
@@ -6021,7 +6021,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // operandos (marshalling/pinning) llega en un incremento posterior.
         if (ins.imm >= ctx.fn.asm_micros.size()) {
             ctx.comment("asm_micro: indice fuera de rango -> trap");
-            ctx.out << "    hlt\n";
+            ctx.out.emit(emmit::Mnemonic::HLT);
             break;
         }
         const AsmMicro &am = ctx.fn.asm_micros[ins.imm];
@@ -6042,7 +6042,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             if (!vx::asm_micro_subst_greedy(am, nasm, phys)) {
                 ctx.comment("asm_micro: no se pudo dar registro a sus operandos "
                             "-> trap");
-                ctx.out << "    hlt\n";
+                ctx.out.emit(emmit::Mnemonic::HLT);
                 break;
             }
             // Los valores llegan en los operandos de la instruccion, en el mismo
@@ -6056,7 +6056,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             }
             if (conv.size() > 8) {
                 ctx.comment("asm_micro: mas de 8 operandos con valor -> trap");
-                ctx.out << "    hlt\n";
+                ctx.out.emit(emmit::Mnemonic::HLT);
                 break;
             }
             const uint64_t hash2 = jit::fnv1a64_asm(nasm);
@@ -6103,7 +6103,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             }
             if (n_devueltos > 1) {
                 ctx.comment("asm_micro: mas de un valor devuelto -> trap");
-                ctx.out << "    hlt\n";
+                ctx.out.emit(emmit::Mnemonic::HLT);
                 break;
             }
             const uint32_t cpos = lin_pos_of(ctx, bb.id, idx);
