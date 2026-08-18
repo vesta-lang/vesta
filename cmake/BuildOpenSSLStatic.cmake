@@ -28,28 +28,196 @@
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-#  vesta_ensure_perl(<out_var>)
+#  Ruta en el estilo que entiende un perl de MSYS: `C:/x` -> `/c/x`.
+#
+#  Hace falta porque PERL5LIB se separa por `:` en un perl UNIX, asi que una
+#  ruta con letra de unidad se partiria en dos entradas rotas (`C` y `/x`).
 # -----------------------------------------------------------------------------
-#  Deja en <out_var> la ruta a un perl APTO para configurar OpenSSL-mingw.  El
-#  target `mingw64` de OpenSSL usa el esquema de build UNIX (Makefile GNU), asi
-#  que su `Configurations/unix-checker.pm` EXIGE que `rel2abs('.')` devuelva
-#  rutas con barra `/`.  Consecuencias:
+function(vesta_msys_path _win _out)
+    set(_p "${_win}")
+    string(REGEX REPLACE "^([A-Za-z]):" "/\\1" _p "${_p}")
+    string(SUBSTRING "${_p}" 0 2 _head)
+    string(TOLOWER "${_head}" _head_low)
+    string(SUBSTRING "${_p}" 2 -1 _tail)
+    set(${_out} "${_head_low}${_tail}" PARENT_SCOPE)
+endfunction()
+
+# -----------------------------------------------------------------------------
+#  vesta_ensure_perl(<out_perl> <out_shim>)
+# -----------------------------------------------------------------------------
+#  Deja en <out_perl> la ruta a un perl APTO para configurar OpenSSL-mingw, y en
+#  <out_shim> el directorio de modulos que hay que anadirle (vacio si no hace
+#  falta ninguno).  El target `mingw64` de OpenSSL usa el esquema de build UNIX
+#  (Makefile GNU), asi que su `Configurations/unix-checker.pm` EXIGE que
+#  `rel2abs('.')` devuelva rutas con barra `/`.  Consecuencias:
 #    - un perl NATIVO Windows (Strawberry, ActiveState) SIEMPRE falla ese check
 #      (File::Spec::Win32 -> barras invertidas), por muy completo que sea.
-#    - hace falta un perl estilo UNIX (MSYS2 / Cygwin), que ademas traiga
-#      IPC::Cmd (que Configure requiere).  El de Git-for-Windows suele venir
-#      MINIMO (sin Locale::Maketext::Simple -> IPC::Cmd roto).
+#    - hace falta un perl estilo UNIX (MSYS2 / Cygwin / Git-for-Windows), que
+#      ademas traiga IPC::Cmd (que Configure requiere).
 #
-#  Por eso NO se descarga Strawberry: no serviria.  Se busca un perl que pase
-#  AMBAS condiciones (rutas `/` + IPC::Cmd) entre los candidatos habituales.  El
-#  perl solo corre Configure (un script); NO se enlaza en OpenSSL -- eso lo
-#  compila el toolchain del build (CC + mingw32-make) -- asi que su CRT es
+#  ESTO NO PUEDE PEDIRLE NADA AL USUARIO.  Antes, si el unico perl de la maquina
+#  era el de Git-for-Windows, esto abortaba el configure entero diciendo "instala
+#  MSYS2" -- o sea, el build dependia de que alguien montara herramientas a mano.
+#  Ahora se resuelve solo, en tres pasos de coste creciente:
+#
+#    1. Un perl del sistema que YA sirva.  Gratis.
+#    2. Un perl del sistema con rutas UNIX pero desnudo de modulos.  Es el caso
+#       de Git-for-Windows: trae `IPC::Cmd` y `Params::Check`, pero NO
+#       `Locale::Maketext::Simple`, que los dos requieren -- y sin el, los tres
+#       fallan a la vez.  Ese modulo son nueve kilobytes de Perl puro, asi que se
+#       BAJA (SHA-256 fijado, como el tarball de OpenSSL) y se le anade por
+#       PERL5LIB.  No se toca la instalacion del sistema: el modulo vive en el
+#       cache del proyecto.
+#    3. Ningun perl con rutas UNIX.  Entonces se baja uno entero (el `perl` de
+#       MSYS2, que se extrae y funciona sin instalar nada).
+#
+#  El perl solo corre Configure y genera cabeceras; NO se enlaza en OpenSSL --
+#  eso lo compila el toolchain del build (CC + mingw32-make) -- asi que su CRT es
 #  irrelevante para la ABI final.
 #
 #  Condicion de aptitud, en un solo test (RESULT 0 = apto):
 #    perl -MIPC::Cmd -MFile::Spec::Functions=rel2abs -e "exit(rel2abs('.')=~m{/}?0:1)"
 # -----------------------------------------------------------------------------
-function(vesta_ensure_perl _out)
+
+##
+# @brief Comprueba si un perl sirve, opcionalmente con un directorio de modulos.
+# @param _perl Ejecutable a probar.
+# @param _shim Directorio extra de modulos, o cadena vacia.
+# @param _out  Recibe TRUE/FALSE.
+#
+# La prueba EJECUTA `can_run`, no se limita a cargar IPC::Cmd.  Cargarlo no
+# bastaba: el modulo entra bien y revienta luego, dentro de `can_run`, porque le
+# falta ExtUtils::MakeMaker -- y entonces el fallo aparecia a mitad del Configure
+# de OpenSSL, donde no hay quien lo relacione con el perl.  Aqui se prueba lo
+# mismo que Configure va a hacer, asi que un perl a medias se descarta ANTES.
+function(vesta_perl_apto _perl _shim _out)
+    set(_args "")
+    if (_shim)
+        list(APPEND _args -I "${_shim}")
+    endif()
+    execute_process(
+        COMMAND "${_perl}" ${_args} -MIPC::Cmd -MPod::Usage
+                -MFile::Spec::Functions=rel2abs
+                -e "IPC::Cmd::can_run(q{perl}); exit(rel2abs('.') =~ m{/} ? 0 : 1)"
+        RESULT_VARIABLE _apt OUTPUT_QUIET ERROR_QUIET)
+    if (_apt EQUAL 0)
+        set(${_out} TRUE PARENT_SCOPE)
+    else()
+        set(${_out} FALSE PARENT_SCOPE)
+    endif()
+endfunction()
+
+##
+# @brief Baja los modulos de Perl puro que le faltan a un perl desnudo.
+# @param _dir Directorio donde dejarlos (se crea).
+# @param _out Recibe TRUE si estan disponibles.
+#
+# Lo que le falta al perl de Git-for-Windows para configurar OpenSSL.  Cada uno
+# se descubrio porque el anterior dejaba de ser el que faltaba:
+#
+#   - `Locale::Maketext::Simple`, del que dependen `Params::Check` e `IPC::Cmd`.
+#     Los dos ESTAN instalados, pero sin el no cargan, asi que el sintoma es que
+#     falta IPC::Cmd cuando lo que falta es esto.
+#   - `ExtUtils::MakeMaker`, que es lo que usa `IPC::Cmd::can_run` para decidir
+#     si un programa es ejecutable.  Sin el, IPC::Cmd carga pero revienta en
+#     cuanto Configure busca el compilador.
+#   - `Pod::Usage` y su cadena (`Pod::Simple` -> `Pod::Escapes`, y `Pod::Text`
+#     de podlators), que carga el `configdata.pm` que Configure deja escrito.
+#     Ese se paga al final, cuando ya parecia que habia salido bien.
+#
+# Todos son Perl puro: se copian y funcionan, no hay nada que compilar.  Y se
+# dejan en el cache del proyecto, no en la instalacion del sistema.
+function(vesta_fetch_perl_shim _dir _out)
+    # Campos separados por `|`, NO por `;`: una lista de CMake ya se separa por
+    # `;`, asi que un elemento que lo contenga se parte en varios y lo que llega
+    # al bucle son los campos sueltos, no las entradas.
+    #
+    # El orden es el de dependencia, para que un fallo se lea de arriba abajo.
+    #
+    # (nombre del dist | version | SHA-256 | ruta del autor en CPAN | .pm testigo)
+    set(_mods
+        "Locale-Maketext-Simple|0.21|b009ff51f4fb108d19961a523e99b4373ccf958d37ca35bf1583215908dca9a9|J/JE/JESSE|Locale/Maketext/Simple.pm"
+        "ExtUtils-MakeMaker|7.70|f108bd46420d2f00d242825f865b0f68851084924924f92261d684c49e3e7a74|B/BI/BINGOS|ExtUtils/MakeMaker.pm"
+        "Pod-Escapes|1.07|dbf7c827984951fb248907f940fd8f19f2696bc5545c0a15287e0fbe56a52308|N/NE/NEILB|Pod/Escapes.pm"
+        "Pod-Simple|3.45|8483bb95cd3e4307d66def092a3779f843af772482bfdc024e3e00d0c4db0cfa|K/KH/KHW|Pod/Simple.pm"
+        "podlators|5.01|ccfd1df9f1a47f095bce6d718fad5af40f78ce2491f2c7239626e15b7020bc71|R/RR/RRA|Pod/Text.pm"
+        "Pod-Usage|2.03|7d8fdc7dce60087b6cf9e493b8d6ae84a5ab4c0608a806a6d395cc6557460744|M/MA/MAREKR|Pod/Usage.pm")
+
+    foreach (_mod IN LISTS _mods)
+        string(REPLACE "|" ";" _f "${_mod}")
+        list(GET _f 0 _name)
+        list(GET _f 1 _ver)
+        list(GET _f 2 _sha)
+        list(GET _f 3 _author)
+        list(GET _f 4 _witness)
+
+        if (EXISTS "${_dir}/${_witness}")
+            continue()
+        endif()
+
+        set(_tgz "${_dir}/${_name}-${_ver}.tar.gz")
+        set(_url "https://cpan.metacpan.org/authors/id/${_author}/${_name}-${_ver}.tar.gz")
+        file(MAKE_DIRECTORY "${_dir}")
+        message(STATUS "[OpenSSL] al perl le falta ${_name}; descargandolo...")
+        file(DOWNLOAD "${_url}" "${_tgz}" EXPECTED_HASH SHA256=${_sha} STATUS _st)
+        list(GET _st 0 _code)
+        if (NOT _code EQUAL 0)
+            list(GET _st 1 _msg)
+            file(REMOVE "${_tgz}")
+            message(STATUS "[OpenSSL] no se pudo descargar ${_name} (${_code}): ${_msg}")
+            set(${_out} FALSE PARENT_SCOPE)
+            return()
+        endif()
+
+        file(ARCHIVE_EXTRACT INPUT "${_tgz}" DESTINATION "${_dir}/_unpack")
+        # Cada dist trae su arbol en `lib/`, ya con la jerarquia que espera el
+        # nombre del modulo; se copia tal cual sobre el directorio comun.
+        file(GLOB _libdirs "${_dir}/_unpack/${_name}-*/lib")
+        foreach (_lib IN LISTS _libdirs)
+            file(COPY "${_lib}/" DESTINATION "${_dir}")
+        endforeach()
+        file(REMOVE_RECURSE "${_dir}/_unpack")
+
+        if (NOT EXISTS "${_dir}/${_witness}")
+            message(STATUS "[OpenSSL] ${_name} se bajo pero no trajo ${_witness}")
+            set(${_out} FALSE PARENT_SCOPE)
+            return()
+        endif()
+    endforeach()
+
+    set(${_out} TRUE PARENT_SCOPE)
+endfunction()
+
+##
+# @brief Deja una ruta que se pueda pasar SIN comillas, si Windows lo permite.
+# @param _path Ruta original.
+# @param _out  Recibe la version 8.3 si la hay, o la original.
+#
+# El makefile de OpenSSL usa `$(PERL)` sin comillas.  Con el perl de
+# Git-for-Windows, que vive en `C:/Program Files/...`, make parte el comando por
+# el espacio e intenta ejecutar `C:/Program`: el sintoma es un error 127 a mitad
+# de la compilacion, que no se parece en nada a su causa.  El nombre corto de
+# Windows (`C:/PROGRA~1/...`) no tiene espacios y apunta al mismo fichero.
+function(vesta_short_path _path _out)
+    set(${_out} "${_path}" PARENT_SCOPE)
+    if (NOT "${_path}" MATCHES " ")
+        return()  # sin espacios no hay nada que arreglar
+    endif()
+    file(TO_NATIVE_PATH "${_path}" _native)
+    execute_process(COMMAND cmd /c for %I in ("${_native}") do @echo %~sI
+                    OUTPUT_VARIABLE _short OUTPUT_STRIP_TRAILING_WHITESPACE
+                    RESULT_VARIABLE _rc ERROR_QUIET)
+    #  El nombre corto puede estar desactivado en el volumen; entonces esto
+    #  devuelve la ruta larga y hay que dejarla como estaba.
+    if (_rc EQUAL 0 AND _short AND NOT "${_short}" MATCHES " ")
+        string(REPLACE "\\" "/" _short "${_short}")
+        set(${_out} "${_short}" PARENT_SCOPE)
+    endif()
+endfunction()
+
+function(vesta_ensure_perl _out_perl _out_shim)
+    set(${_out_shim} "" PARENT_SCOPE)
+
     # -- Reunir candidatos --------------------------------------------------
     set(_cands "")
     #  (a) el del PATH.
@@ -63,11 +231,15 @@ function(vesta_ensure_perl _out)
     get_filename_component(_cc_bin  "${CMAKE_C_COMPILER}" DIRECTORY)
     get_filename_component(_cc_env  "${_cc_bin}"          DIRECTORY)  # <root>/<env>
     get_filename_component(_cc_root "${_cc_env}"          DIRECTORY)  # <root>
-    #  (c) raices tipicas de MSYS2 / Cygwin.
+    #  (c) raices tipicas de MSYS2 / Cygwin / Git-for-Windows.  El de Git faltaba
+    #      y es el que hay en la mayoria de maquinas de desarrollo Windows.
     foreach (_root
              "${_cc_root}" "${_cc_env}"
              "F:/msys" "C:/msys64" "C:/msys" "D:/msys64"
-             "C:/cygwin64" "C:/cygwin")
+             "C:/cygwin64" "C:/cygwin"
+             "C:/Program Files/Git" "C:/Program Files (x86)/Git"
+             "$ENV{LOCALAPPDATA}/Programs/Git"
+             "${VESTA_OSSL_STATIC_ROOT}/perl")
         foreach (_sub "usr/bin" "usr/local/bin" "bin")
             if (EXISTS "${_root}/${_sub}/perl.exe")
                 list(APPEND _cands "${_root}/${_sub}/perl.exe")
@@ -76,30 +248,125 @@ function(vesta_ensure_perl _out)
     endforeach()
     list(REMOVE_DUPLICATES _cands)
 
-    # -- Probar cada candidato: rutas UNIX (`/`) + IPC::Cmd ------------------
+    # -- Paso 1: alguno sirve tal cual --------------------------------------
     foreach (_p ${_cands})
-        execute_process(
-            COMMAND "${_p}" -MIPC::Cmd -MFile::Spec::Functions=rel2abs
-                    -e "exit(rel2abs('.') =~ m{/} ? 0 : 1)"
-            RESULT_VARIABLE _apt OUTPUT_QUIET ERROR_QUIET)
-        if (_apt EQUAL 0)
+        vesta_perl_apto("${_p}" "" _ok)
+        if (_ok)
             message(STATUS "[OpenSSL] perl apto (rutas UNIX + IPC::Cmd): ${_p}")
-            set(${_out} "${_p}" PARENT_SCOPE)
+            vesta_short_path("${_p}" _p_ok)
+            set(${_out_perl} "${_p_ok}" PARENT_SCOPE)
             return()
         endif()
     endforeach()
 
-    # -- Ninguno sirve: error CLARO y accionable ----------------------------
+    # -- Paso 2: alguno tiene rutas UNIX y solo le faltan modulos -----------
+    set(_shim_dir "${VESTA_OSSL_STATIC_ROOT}/perl-shim")
+    foreach (_p ${_cands})
+        # Rutas UNIX SIN exigir IPC::Cmd: separa "es del tipo correcto pero esta
+        # desnudo" de "es un perl nativo Windows", que no tiene arreglo.
+        execute_process(
+            COMMAND "${_p}" -MFile::Spec::Functions=rel2abs
+                    -e "exit(rel2abs('.') =~ m{/} ? 0 : 1)"
+            RESULT_VARIABLE _unix OUTPUT_QUIET ERROR_QUIET)
+        if (NOT _unix EQUAL 0)
+            continue()
+        endif()
+        vesta_fetch_perl_shim("${_shim_dir}" _got)
+        if (NOT _got)
+            break()  # sin red no hay nada que probar con el resto
+        endif()
+        vesta_perl_apto("${_p}" "${_shim_dir}" _ok)
+        if (_ok)
+            message(STATUS "[OpenSSL] perl apto con modulos del proyecto: ${_p}")
+            vesta_short_path("${_p}" _p_ok)
+            set(${_out_perl} "${_p_ok}" PARENT_SCOPE)
+            set(${_out_shim} "${_shim_dir}" PARENT_SCOPE)
+            return()
+        endif()
+    endforeach()
+
+    # -- Paso 3: no hay ninguno; bajar un perl entero -----------------------
+    vesta_download_perl("${VESTA_OSSL_STATIC_ROOT}/perl" _dl_perl)
+    if (_dl_perl)
+        vesta_perl_apto("${_dl_perl}" "" _ok)
+        if (NOT _ok)
+            vesta_fetch_perl_shim("${_shim_dir}" _got)
+            if (_got)
+                vesta_perl_apto("${_dl_perl}" "${_shim_dir}" _ok)
+                if (_ok)
+                    set(${_out_shim} "${_shim_dir}" PARENT_SCOPE)
+                endif()
+            endif()
+        endif()
+        if (_ok)
+            message(STATUS "[OpenSSL] usando el perl descargado: ${_dl_perl}")
+            set(${_out_perl} "${_dl_perl}" PARENT_SCOPE)
+            return()
+        endif()
+    endif()
+
+    # -- Nada funciono: error CLARO -----------------------------------------
     string(REPLACE ";" "\n    " _cand_list "${_cands}")
     message(FATAL_ERROR
-        "[OpenSSL] no se encontro un perl apto para compilar OpenSSL-mingw.\n"
+        "[OpenSSL] no se consiguio un perl apto para compilar OpenSSL-mingw.\n"
         "  El target mingw64 usa el esquema UNIX y exige un perl que:\n"
-        "    (1) devuelva rutas con barra '/' (estilo MSYS2/Cygwin), y\n"
+        "    (1) devuelva rutas con barra '/' (estilo MSYS2/Cygwin/Git), y\n"
         "    (2) traiga el modulo IPC::Cmd.\n"
-        "  Un perl NATIVO Windows (Strawberry/ActiveState) NO sirve (rutas '\\').\n"
-        "  El de Git-for-Windows suele venir minimo (sin IPC::Cmd).\n"
-        "  Solucion: instala MSYS2 y su perl (pacman -S perl) o Cygwin, o pon un\n"
-        "  perl estilo UNIX en el PATH.  Candidatos probados:\n    ${_cand_list}")
+        "  Se probaron los del sistema, se intento completarlos con los modulos\n"
+        "  que les faltan, y se intento descargar uno entero; nada funciono.\n"
+        "  Lo mas probable es que no haya salida a internet.  Candidatos:\n"
+        "    ${_cand_list}")
+endfunction()
+
+##
+# @brief Descarga un perl con rutas UNIX que funcione sin instalar nada.
+# @param _dir  Donde extraerlo.
+# @param _out  Recibe la ruta al perl.exe, o vacio si no se pudo.
+#
+# Se usa el paquete `perl` de MSYS2 (formato pacman, un `.tar.zst`): es un
+# tarball que se extrae y ya corre -- no hay instalador que ejecutar ni registro
+# que tocar --, y su perl es el completo, con los modulos del core.  Necesita
+# ademas el runtime de MSYS2 (`msys2-runtime`), que es de donde sale el
+# `msys-2.0.dll` contra el que enlaza.
+function(vesta_download_perl _dir _out)
+    set(${_out} "" PARENT_SCOPE)
+    set(_perl_exe "${_dir}/usr/bin/perl.exe")
+    if (EXISTS "${_perl_exe}")
+        set(${_out} "${_perl_exe}" PARENT_SCOPE)
+        return()
+    endif()
+
+    # Paquetes de MSYS2 con su SHA-256 fijado.  Van juntos porque el perl enlaza
+    # contra el runtime: bajar uno sin el otro da un ejecutable que no arranca.
+    #  Campos separados por `|` por lo mismo que en vesta_fetch_perl_shim.
+    set(_pkgs
+        "perl-5.38.4-1-x86_64.pkg.tar.zst|https://repo.msys2.org/msys/x86_64/perl-5.38.4-1-x86_64.pkg.tar.zst"
+        "msys2-runtime-3.6.4-2-x86_64.pkg.tar.zst|https://repo.msys2.org/msys/x86_64/msys2-runtime-3.6.4-2-x86_64.pkg.tar.zst")
+
+    message(STATUS "[OpenSSL] no hay ningun perl utilizable; descargando uno...")
+    file(MAKE_DIRECTORY "${_dir}")
+    foreach (_pkg IN LISTS _pkgs)
+        string(REPLACE "|" ";" _f "${_pkg}")
+        list(GET _f 0 _name)
+        list(GET _f 1 _url)
+        set(_dst "${_dir}/${_name}")
+        if (NOT EXISTS "${_dst}")
+            file(DOWNLOAD "${_url}" "${_dst}" STATUS _st)
+            list(GET _st 0 _code)
+            if (NOT _code EQUAL 0)
+                list(GET _st 1 _msg)
+                file(REMOVE "${_dst}")
+                message(STATUS "[OpenSSL] descarga de ${_name} fallo (${_code}): ${_msg}")
+                return()
+            endif()
+        endif()
+        # Los .tar.zst los abre libarchive, que CMake trae dentro.
+        file(ARCHIVE_EXTRACT INPUT "${_dst}" DESTINATION "${_dir}")
+    endforeach()
+
+    if (EXISTS "${_perl_exe}")
+        set(${_out} "${_perl_exe}" PARENT_SCOPE)
+    endif()
 endfunction()
 
 function(vesta_build_openssl_static)
@@ -149,9 +416,27 @@ function(vesta_build_openssl_static)
     set(_inc      "${_root}/out/include")
 
     # -- Herramientas: perl (completo) + make -------------------------------
-    #  perl: helper que prefiere uno del sistema que sirva y, si no, baja
-    #  Strawberry portable.  make: el del toolchain (mingw32-make).
-    vesta_ensure_perl(_ossl_perl)
+    #  perl: helper que usa uno del sistema si sirve, lo completa con los modulos
+    #  que le falten si hace falta, y si no hay ninguno se baja uno entero.  Los
+    #  modulos que devuelva se copian al arbol de OpenSSL mas abajo, cuando ya
+    #  esta extraido.  make: el del toolchain (mingw32-make).
+    vesta_ensure_perl(_ossl_perl _ossl_perl_shim)
+    #  Los modulos completados llegan al perl por DOS vias, porque ninguna cubre
+    #  las dos fases:
+    #
+    #    - PERL5LIB, para Configure.  Aqui lo lanza CMake directamente y el
+    #      `configdata.pm` que Configure ejecuta al final lo hereda; entre dos
+    #      procesos MSYS la variable viaja intacta.  Hace falta porque
+    #      configdata.pm corre con un @INC que no incluye ni `.` ni `util/perl`.
+    #    - una COPIA dentro del arbol, para el make (ver mas abajo).  Ahi PERL5LIB
+    #      no sirve: al pasar por mingw32-make, que es nativo, la emulacion de
+    #      MSYS2 reescribe `/f/...` como `F:/...`, y como PERL5LIB se separa por
+    #      `:` la letra de unidad lo parte en dos entradas rotas.
+    set(_ossl_env "")
+    if (_ossl_perl_shim)
+        vesta_msys_path("${_ossl_perl_shim}" _shim_msys)
+        set(_ossl_env ${CMAKE_COMMAND} -E env "PERL5LIB=${_shim_msys}")
+    endif()
     find_program(_ossl_make NAMES mingw32-make make gmake)
     if (NOT _ossl_make)
         message(FATAL_ERROR
@@ -192,6 +477,26 @@ function(vesta_build_openssl_static)
         file(TOUCH "${_extract_ok}")
     endif()
 
+    #  Si al perl hubo que completarle modulos, se COPIAN dentro del arbol de
+    #  OpenSSL en vez de senalarlos con PERL5LIB.
+    #
+    #  PERL5LIB no sirve aqui: el makefile llama a perl a traves de mingw32-make,
+    #  que es un programa NATIVO, y al cruzar esa frontera la emulacion de MSYS2
+    #  reescribe las variables que parecen rutas -- `/f/...` se convierte en
+    #  `F:/...`.  Como PERL5LIB se separa por `:`, la letra de unidad la parte en
+    #  dos entradas rotas (`F` y `/C/...`) y perl deja de encontrar los modulos a
+    #  mitad de la compilacion.
+    #
+    #  Los dos destinos son los dos sitios donde perl YA mira: `util/perl`, que
+    #  Configure anade a @INC, y la raiz del arbol, que el makefile pasa como
+    #  `-I.`.  Asi no hay ninguna variable de entorno de por medio.
+    if (_ossl_perl_shim)
+        foreach (_dest "${_src}" "${_src}/util/perl")
+            file(COPY "${_ossl_perl_shim}/" DESTINATION "${_dest}"
+                 FILES_MATCHING PATTERN "*.pm")
+        endforeach()
+    endif()
+
     # -- Configure (mingw64, ESTATICO) --------------------------------------
     #  no-shared  = sin DLLs (estatico).      no-tests/no-apps = solo las libs.
     #  no-docs    = sin manpages.             CC=<compilador del build> para que
@@ -210,8 +515,8 @@ function(vesta_build_openssl_static)
     if (NOT EXISTS "${_src}/makefile" AND NOT EXISTS "${_src}/Makefile")
         message(STATUS "[OpenSSL] Configure mingw64 no-shared no-asm (CC=${CMAKE_C_COMPILER})...")
         execute_process(
-            COMMAND "${_ossl_perl}" Configure mingw64 no-shared no-asm no-tests
-                    no-apps no-docs "CC=${CMAKE_C_COMPILER}"
+            COMMAND ${_ossl_env} "${_ossl_perl}" Configure mingw64 no-shared
+                    no-asm no-tests no-apps no-docs "CC=${CMAKE_C_COMPILER}"
             WORKING_DIRECTORY "${_src}"
             RESULT_VARIABLE _cfg
             OUTPUT_VARIABLE _cfg_out ERROR_VARIABLE _cfg_out)
@@ -249,7 +554,8 @@ function(vesta_build_openssl_static)
             set(_jflag "-j1")
         endif()
         execute_process(
-            COMMAND "${_ossl_make}" "${_jflag}" "PERL=${_ossl_perl}" build_libs
+            COMMAND "${_ossl_make}" "${_jflag}"
+                    "PERL=${_ossl_perl}" build_libs
             WORKING_DIRECTORY "${_src}"
             RESULT_VARIABLE _mk
             OUTPUT_VARIABLE _mk_out ERROR_VARIABLE _mk_out)

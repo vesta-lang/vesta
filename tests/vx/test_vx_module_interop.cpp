@@ -113,7 +113,7 @@ void test_typedef_roundtrip() {
     std::vector<vx::TypeChecker::VxiOnlyEntry> only;
     only.push_back({"user_id", ""});
     only.push_back({"fn_lib", ""});
-    vx::import_vxi_into_typechecker(*mainmod->tc, parsed.module_, only);
+    vx::import_vxi_into_typechecker(*mainmod->tc, parsed.module_, only, "lib");
 
     // 5. Verificar que main ahora conoce user_id pero NO port_num.
     {
@@ -164,7 +164,7 @@ void test_struct_roundtrip() {
     auto mainmod =
         compile_to_typechecker("i32 main() { return 0; }\n", "main2.vx");
     std::vector<vx::TypeChecker::VxiOnlyEntry> only = {{"Point", ""}};
-    vx::import_vxi_into_typechecker(*mainmod->tc, parsed.module_, only);
+    vx::import_vxi_into_typechecker(*mainmod->tc, parsed.module_, only, "lib2");
 
     const auto &structs = mainmod->tc->struct_layouts();
     auto it = structs.find("Point");
@@ -199,7 +199,7 @@ void test_only_rename() {
     auto mainmod =
         compile_to_typechecker("i32 main() { return 0; }\n", "main3.vx");
     std::vector<vx::TypeChecker::VxiOnlyEntry> only = {{"fd", "FileDesc"}};
-    vx::import_vxi_into_typechecker(*mainmod->tc, parsed.module_, only);
+    vx::import_vxi_into_typechecker(*mainmod->tc, parsed.module_, only, "lib3");
 
     const auto &aliases = mainmod->tc->type_aliases();
     CHECK(aliases.find("fd") == aliases.end(),
@@ -230,7 +230,7 @@ void test_empty_only_no_inject() {
 
     // only vacio.
     std::vector<vx::TypeChecker::VxiOnlyEntry> only;
-    vx::import_vxi_into_typechecker(*mainmod->tc, parsed.module_, only);
+    vx::import_vxi_into_typechecker(*mainmod->tc, parsed.module_, only, "lib4");
 
     const size_t after = mainmod->tc->type_aliases().size();
     CHECK(before == after, "only vacio no cambio nada");

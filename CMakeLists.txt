@@ -596,6 +596,13 @@ target_include_directories(vmcore PRIVATE ${VM_INCLUDES})
 target_link_libraries(vmcore
         PUBLIC vxdbg_lib
         PUBLIC diag_lib
+        # El productor de hechos del ASA lee bloques de asm (isa_actual,
+        # build_asm_cfg), y eso vive en vx_lib.  La dependencia existia en el
+        # codigo pero no estaba declarada, asi que quien enlazaba vmcore ponia
+        # vx_lib donde le parecia -- normalmente ANTES, que con archivos
+        # estaticos significa que sus simbolos ya no estan disponibles cuando se
+        # descubre que hacen falta.  Declararla deja que CMake ordene.
+        PUBLIC vx_lib
         PRIVATE sqlite3
         PRIVATE capstone
         PRIVATE keystone

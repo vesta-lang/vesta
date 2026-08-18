@@ -30,6 +30,27 @@
 
 using namespace ir;
 
+/**
+ * @brief Analiza un cuerpo que NO tiene operandos elegidos por el compilador.
+ *
+ * El analisis completo pide el mapa de clases porque el ancho de un `$N` solo
+ * lo sabe la clase con la que se declaro.  Los cuerpos de este fichero nombran
+ * registros de verdad (`rdi`, `x0`, ...), asi que ahi el mapa correcto es el
+ * VACIO, y pasarlo dice eso mismo.
+ *
+ * Se hace asi, y no llamando a @c asm_analyze_block_no_classes, porque esa
+ * variante renuncia al ancho de los accesos -- que es lo que estas pruebas
+ * miden --, y porque el camino que interesa probar es el que usa el compilador.
+ *
+ * @param nasm_body Cuerpo verbatim del bloque.
+ * @param arch      Arquitectura con cuya tabla leerlo.
+ * @return Los efectos del bloque.
+ */
+static vx::AsmBlockEffects analizar(const std::string &nasm_body,
+                                    const std::string &arch) {
+    return vx::asm_analyze_block(nasm_body, arch, {});
+}
+
 static int g_checks = 0, g_fail = 0;
 #define CHECK(cond, msg)                                                       \
     do {                                                                       \
@@ -361,7 +382,7 @@ static void test_efecto_usa_el_arch_del_objetivo() {
     /* El contraste, para que lo de arriba no pase por casualidad: ESA MISMA
      * instruccion, leida con la tabla de x86, no se entiende.  Es exactamente
      * lo que ocurria cuando la arquitectura iba escrita a mano. */
-    CHECK(!vx::asm_analyze_block("str x0, [x1]\n", "x86_64").known(),
+    CHECK(!analizar("str x0, [x1]\n", "x86_64").known(),
           "con la tabla equivocada, la misma instruccion es un desconocido");
 }
 
@@ -381,8 +402,7 @@ primer_acceso(const vx::AsmBlockEffects &e) {
 static void test_extension_como_expresion() {
     // (a) Constante: distancia y ancho salen del texto y de la instruccion.
     {
-        const vx::AsmBlockEffects e =
-            vx::asm_analyze_block("mov [rdi+8], rax\n", "x86_64");
+        const vx::AsmBlockEffects e = analizar("mov [rdi+8], rax\n", "x86_64");
         const auto *a = primer_acceso(e);
         CHECK(a != nullptr && a->valida, "el acceso se describe");
         if (a != nullptr) {
@@ -394,8 +414,7 @@ static void test_extension_como_expresion() {
     }
     // (b) El ancho lo manda la pista de tamano cuando se escribe.
     {
-        const vx::AsmBlockEffects e =
-            vx::asm_analyze_block("mov byte [rdi], 1\n", "x86_64");
+        const vx::AsmBlockEffects e = analizar("mov byte [rdi], 1\n", "x86_64");
         const auto *a = primer_acceso(e);
         CHECK(a != nullptr && a->extension.bytes == 1,
               "`byte [rdi]` toca un byte, lo diga quien lo diga");
@@ -403,7 +422,7 @@ static void test_extension_como_expresion() {
     // (c) Indice escalado: NO es un acceso sin distancia, es uno a `rcx*8`.
     {
         const vx::AsmBlockEffects e =
-            vx::asm_analyze_block("mov [rbx+rcx*8], rax\n", "x86_64");
+            analizar("mov [rbx+rcx*8], rax\n", "x86_64");
         const auto *a = primer_acceso(e);
         CHECK(a != nullptr && a->base == "rbx", "se llega por `rbx`");
         if (a != nullptr) {
@@ -417,8 +436,7 @@ static void test_extension_como_expresion() {
     // (d) Repeticion: `rep movsb` recorre tantos bytes como diga su contador, y
     //     ese contador tiene NOMBRE.
     {
-        const vx::AsmBlockEffects e =
-            vx::asm_analyze_block("rep movsb\n", "x86_64");
+        const vx::AsmBlockEffects e = analizar("rep movsb\n", "x86_64");
         bool visto_destino = false;
         for (const auto &a : e.accesos) {
             if (!a.escribe) continue;
@@ -434,7 +452,7 @@ static void test_extension_como_expresion() {
     // (e) Un puntero que el bloque MUEVE no se pierde: se sigue.
     {
         const vx::AsmBlockEffects e =
-            vx::asm_analyze_block("add rdi, 16\nmov [rdi], rax\n", "x86_64");
+            analizar("add rdi, 16\nmov [rdi], rax\n", "x86_64");
         const auto *a = primer_acceso(e);
         CHECK(a != nullptr && a->base == "rdi",
               "sigue siendo el mismo puntero de partida");
@@ -448,7 +466,7 @@ static void test_extension_como_expresion() {
     // (f) Copiar el puntero a otro registro tampoco lo pierde.
     {
         const vx::AsmBlockEffects e =
-            vx::asm_analyze_block("mov rdx, rdi\nmov [rdx+4], eax\n", "x86_64");
+            analizar("mov rdx, rdi\nmov [rdx+4], eax\n", "x86_64");
         const auto *a = primer_acceso(e);
         CHECK(a != nullptr && a->base == "rdi",
               "el acceso se atribuye a de donde venia el valor");
@@ -459,8 +477,8 @@ static void test_extension_como_expresion() {
     }
     // (g) Cargarlo de memoria no es perderlo: se dice de DONDE se cargo.
     {
-        const vx::AsmBlockEffects e = vx::asm_analyze_block(
-            "mov rdx, [rdi+8]\nmov [rdx], rax\n", "x86_64");
+        const vx::AsmBlockEffects e =
+            analizar("mov rdx, [rdi+8]\nmov [rdx], rax\n", "x86_64");
         const auto *a = primer_acceso(e);
         CHECK(a != nullptr, "hay accesos");
         if (a != nullptr) {
@@ -485,7 +503,7 @@ static void test_extension_como_expresion() {
     // (h) arm64: el mismo modelo, sin una linea de x86 en el analisis.
     {
         const vx::AsmBlockEffects e =
-            vx::asm_analyze_block("add x0, x0, #32\nstr x1, [x0]\n", "arm64");
+            analizar("add x0, x0, #32\nstr x1, [x0]\n", "arm64");
         const auto *a = primer_acceso(e);
         CHECK(a != nullptr && a->base == "x0", "se llega por `x0`");
         if (a != nullptr)
@@ -494,7 +512,7 @@ static void test_extension_como_expresion() {
     }
     {
         const vx::AsmBlockEffects e =
-            vx::asm_analyze_block("str x1, [x0, x2, lsl #3]\n", "arm64");
+            analizar("str x1, [x0, x2, lsl #3]\n", "arm64");
         const auto *a = primer_acceso(e);
         CHECK(a != nullptr && a->extension.indice == "x2",
               "el indice de arm64 se lee igual");
