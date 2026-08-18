@@ -424,7 +424,71 @@ target_include_directories(aot_emit PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(aot_emit PUBLIC LibPEparse)
 
 
-add_executable(vm ${VM_SOURCES})
+# ---------------------------------------------------------------------------
+# Opciones de codigo de Release, en UNA lista.
+#
+# Esta suelta a proposito: Release y Profile tienen que compilar EXACTAMENTE el
+# mismo codigo, y la unica forma de garantizarlo es que compartan la lista en
+# vez de tener cada uno su copia (dos copias acaban divergiendo, y entonces el
+# perfil describe un programa que no es el que se ejecuta).  Lo unico que
+# cambia entre ambas es el marco de pila y los simbolos.
+set(VESTA_OPTS_CODIGO_RELEASE
+        -O3
+        -march=x86-64
+        -mtune=native
+        -ffast-math
+        -fstrict-aliasing
+        -fno-plt
+        -fvisibility=hidden
+        -ffunction-sections
+        -fdata-sections
+        -DNDEBUG
+)
+
+# ---------------------------------------------------------------------------
+# Con que se compila el codigo de la maquina.  UN sitio, no uno por target.
+#
+# Estas opciones vivian solo en `vm`, y `vmcore` -- las MISMAS fuentes -- se
+# compilaba sin ellas: sin `-pedantic-errors`, sin los flags de Release y, en
+# Debug, sin `MODE_DEBUG_ENABLE`.  O sea que no eran dos copias del mismo
+# trabajo, eran dos programas distintos, y el de los tests no era el que se
+# entrega.  Compartir la lista es lo que permite que UNA compilacion sirva a
+# los dos.
+# ---------------------------------------------------------------------------
+add_library(vesta_vm_flags INTERFACE)
+target_include_directories(vesta_vm_flags INTERFACE ${VM_INCLUDES})
+target_compile_options(vesta_vm_flags INTERFACE
+        -D__STDC_LIMIT_MACROS
+        -D__STDC_CONSTANT_MACROS
+        -pedantic-errors
+)
+target_compile_options(vesta_vm_flags INTERFACE
+        $<$<CONFIG:Debug>:
+        -g -O0 -Wall -Wextra -fno-omit-frame-pointer -DMODE_DEBUG_ENABLE
+        >
+        $<$<CONFIG:Release>:${VESTA_OPTS_CODIGO_RELEASE};-fomit-frame-pointer>
+        # Mismo codigo que Release; solo se anade con que atribuir el tiempo.
+        $<$<CONFIG:Profile>:${VESTA_OPTS_CODIGO_RELEASE};-g;-fno-omit-frame-pointer>
+        $<$<CONFIG:RelWithDebInfo>:-fpermissive -g -O1 -fno-omit-frame-pointer>
+)
+
+# ---------------------------------------------------------------------------
+# El codigo de la maquina, compilado UNA vez.
+#
+# Antes `vm` se declaraba con todas las fuentes dentro y `vmcore` volvia a
+# declararlas: dos compilaciones completas de lo mismo, ~185 objetos cada una.
+# Ahora se compila aqui y `vm` solo aporta su `main.cpp`.
+#
+# `main.cpp` se queda FUERA del archivo: si estuviera dentro, su objeto
+# chocaria con el del ejecutable al enlazar.
+# ---------------------------------------------------------------------------
+set(VM_CORE_SOURCES ${VM_SOURCES})
+list(REMOVE_ITEM VM_CORE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp)
+add_library(vmcore STATIC ${VM_CORE_SOURCES})
+target_link_libraries(vmcore PUBLIC vesta_vm_flags)
+
+add_executable(vm ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp)
+target_link_libraries(vm PRIVATE vmcore)
 
 # Fecha/hora del build + hash de git para `vesta --version`.  Un target ALL
 # que corre SIEMPRE (out-of-date por diseno) regenera el header con el
@@ -440,7 +504,11 @@ add_custom_target(vm_build_info ALL
     BYPRODUCTS ${VESTA_BUILD_INFO_HEADER}
     COMMENT "Generando build_info_generated.h (fecha de build + git hash)"
     VERBATIM)
-add_dependencies(vm vm_build_info)
+# La dependencia va sobre `vmcore`, que es quien compila version_info.cpp.
+# Puesta sobre `vm` no ordenaba nada: el nucleo podia compilar esa unidad ANTES
+# de que el header existiera, y entonces `--version` decia "desconocida" -- que
+# es un fallo que no rompe el build, solo miente en la salida.
+add_dependencies(vmcore vm_build_info)
 
 # Sprint edge-bugs (2026-06-02): exec_instruction_float.cpp implementa
 # semantica IEEE 754 estricta (NaN, Inf).  -ffast-math global asume no
@@ -451,12 +519,9 @@ set_source_files_properties(
     PROPERTIES COMPILE_FLAGS "-fno-fast-math -fno-finite-math-only"
 )
 
-target_include_directories(vm
-        PRIVATE ${VM_INCLUDES}
-)
 target_link_libraries(vm
         PRIVATE sqlite3
-        PRIVATE capstone
+        PRIVATE capstone   # de objetos: enlace directo o no entra su codigo
         PRIVATE keystone
         PRIVATE vx_lib
         PRIVATE vesta_toolchain
@@ -464,7 +529,6 @@ target_link_libraries(vm
 )
 if(VESTA_BUILD_PREPROCESSOR)
     target_link_libraries(vm PRIVATE vpp_lib)
-    target_compile_definitions(vm PRIVATE VESTA_HAS_PREPROCESSOR=1)
 
     # copiar include_lib junto al ejecutable para que #import <vesta/...> funcione
     # sin necesidad de instalar ni configurar rutas manualmente
@@ -488,13 +552,6 @@ if (WIN32)
 else ()
     target_link_libraries(vm PRIVATE vesta_openssl dl)
 endif ()
-
-# Opciones globales para todos los builds
-target_compile_options(vm PRIVATE
-        -D__STDC_LIMIT_MACROS
-        -D__STDC_CONSTANT_MACROS
-        -pedantic-errors
-)
 
 # LTO (Link Time Optimization)
 #set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
@@ -559,40 +616,6 @@ target_link_options(vm PRIVATE
         >
 )
 
-# Opciones de codigo de Release, en UNA lista.
-#
-# Esta suelta a proposito: Release y Profile tienen que compilar EXACTAMENTE el
-# mismo codigo, y la unica forma de garantizarlo es que compartan la lista en
-# vez de tener cada uno su copia (dos copias acaban divergiendo, y entonces el
-# perfil describe un programa que no es el que se ejecuta).  Lo unico que
-# cambia entre ambas es el marco de pila y los simbolos.
-set(VESTA_OPTS_CODIGO_RELEASE
-        -O3
-        -march=x86-64
-        -mtune=native
-        -ffast-math
-        -fstrict-aliasing
-        -fno-plt
-        -fvisibility=hidden
-        -ffunction-sections
-        -fdata-sections
-        -DNDEBUG
-)
-
-# Opciones por configuracion
-target_compile_options(vm PRIVATE
-        $<$<CONFIG:Debug>:
-        -g -O0 -Wall -Wextra -fno-omit-frame-pointer -DMODE_DEBUG_ENABLE
-        >
-        $<$<CONFIG:Release>:${VESTA_OPTS_CODIGO_RELEASE};-fomit-frame-pointer>
-        # Mismo codigo que Release; solo se anade con que atribuir el tiempo.
-        $<$<CONFIG:Profile>:${VESTA_OPTS_CODIGO_RELEASE};-g;-fno-omit-frame-pointer>
-        $<$<CONFIG:RelWithDebInfo>:-fpermissive -g -O1 -fno-omit-frame-pointer>
-)
-
-
-add_library(vmcore STATIC ${VM_SOURCES})
-target_include_directories(vmcore PRIVATE ${VM_INCLUDES})
 target_link_libraries(vmcore
         PUBLIC vxdbg_lib
         PUBLIC diag_lib
@@ -610,7 +633,10 @@ target_link_libraries(vmcore
 )
 if(VESTA_BUILD_PREPROCESSOR)
     target_link_libraries(vmcore PRIVATE vpp_lib)
-    target_compile_definitions(vmcore PRIVATE VESTA_HAS_PREPROCESSOR=1)
+    # PUBLIC: `main.cpp` tambien compila contra esto, y ahora se compila en el
+    # ejecutable, no aqui.  Como PRIVATE, main.cpp veria una version del
+    # programa sin preprocesador y el resto del codigo otra con el.
+    target_compile_definitions(vmcore PUBLIC VESTA_HAS_PREPROCESSOR=1)
 endif()
 
 if (WIN32)
@@ -637,6 +663,23 @@ add_library(vesta_toolchain STATIC
         src/toolchain/native_backend.cpp)
 target_include_directories(vesta_toolchain PRIVATE ${VM_INCLUDES})
 target_compile_features(vesta_toolchain PUBLIC cxx_std_17)
+
+# ---------------------------------------------------------------------------
+# Las tres se necesitan ENTRE SI, y hay que decirlo.
+#
+# `vmcore` llama al lector de asm de `vx_lib`; `vx_lib` llama al almacen de
+# hechos que vive en `vmcore`; `vesta_toolchain` llama al backend nativo, que
+# tambien esta en `vmcore`.  Mientras `vm` se declaraba con todos los objetos
+# sueltos en la linea de enlace daba igual: estaban todos disponibles todo el
+# rato.  Compilando el nucleo UNA vez, lo que se enlaza son archivos, y un
+# archivo solo aporta lo que hiciera falta cuando el enlazador paso por el.
+#
+# Declarar el ciclo es lo que permite a CMake repetir los archivos hasta que no
+# quede nada por resolver.  La alternativa -- volver a poner los objetos sueltos
+# -- es lo que costaba compilarlo todo dos veces.
+# ---------------------------------------------------------------------------
+target_link_libraries(vx_lib PUBLIC vmcore)
+target_link_libraries(vesta_toolchain PUBLIC vmcore)
 
 # ---------------------------------------------------------------------------
 # vesta_lsp: servidor Language Server Protocol para Vex (Fase 1).
