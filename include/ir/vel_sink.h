@@ -32,9 +32,11 @@
 #ifndef IR_VEL_SINK_H
 #define IR_VEL_SINK_H
 
+#include "emmit/directive.h"
 #include "emmit/mnemonic.h"
 
 #include <initializer_list>
+#include <iomanip>
 #include <ostream>
 #include <sstream>
 #include <string>
@@ -130,7 +132,7 @@ struct Reg {
      * Cachear los nombres repetidos habria aliviado el sintoma; no crearlos lo
      * quita.
      */
-    enum class Bank : uint8_t { GP, FP, XMM, YMM, ZMM, Special, Raw };
+    enum class Bank : uint8_t { GP, FP, XMM, YMM, ZMM, Special };
 
     /// El sufijo del `.vel` para cada ancho.  Interno: la version publica es
     /// @ref suffix_of, que no puede declararse antes que este tipo.
@@ -147,19 +149,17 @@ struct Reg {
     Bank bank = Bank::GP;
     uint8_t index = 0; ///< 0..15, o el @ref SpecialReg si @c bank es Special.
     Width width = Width::Q;
-    /// Solo con @c Bank::Raw: nombre ya calculado.  Puente temporal.
-    std::string raw;
 
     /**
-     * @brief Construye desde banco e indice.  Sin monton: son tres bytes.
+     * @brief Construye desde banco e indice.
      *
-     * No es `constexpr` porque @c raw es un `std::string`, que hace el tipo
-     * no-literal.  Da igual para lo que se buscaba: un `std::string` vacio no
-     * pide memoria, asi que construir un `Reg` de un banco indexado sigue sin
-     * tocar el monton.  Cuando el puente @c Bank::Raw desaparezca, el campo se
-     * va con el y esto puede volver a ser `constexpr`.
+     * TRES BYTES y `constexpr`: un registro ES un banco, un numero y un ancho.
+     * Tuvo dentro un `std::string` mientras hizo falta el puente desde los
+     * nombres que el emisor calculaba a mano; al quedarse ese puente sin
+     * usuarios, el campo se fue con el.  Ahora el tipo es trivial y pasarlo por
+     * valor no copia nada.
      */
-    Reg(Bank b, uint8_t i, Width w = Width::Q) noexcept
+    constexpr Reg(Bank b, uint8_t i, Width w = Width::Q) noexcept
         : bank(b), index(i), width(w) {}
 
     /**
@@ -167,76 +167,67 @@ struct Reg {
      * @param n Indice; fuera de 0..15 no es un registro y se ACOTA en vez de
      *          producir un nombre que no existe.
      */
-    static Reg gp(unsigned n, Width w = Width::Q) noexcept {
+    static constexpr Reg gp(unsigned n, Width w = Width::Q) noexcept {
         return Reg(Bank::GP, static_cast<uint8_t>(n > 15 ? 15 : n), w);
     }
     /// Registro escalar de coma flotante `f0`..`f15`.
-    static Reg fp(unsigned n) noexcept {
+    static constexpr Reg fp(unsigned n) noexcept {
         return Reg(Bank::FP, static_cast<uint8_t>(n > 15 ? 15 : n));
     }
     /// Vectorial: `xmm`/`ymm`/`zmm` `0`..`15`.
-    static Reg xmm(unsigned n) noexcept {
+    static constexpr Reg xmm(unsigned n) noexcept {
         return Reg(Bank::XMM, static_cast<uint8_t>(n > 15 ? 15 : n));
     }
-    static Reg ymm(unsigned n) noexcept {
+    static constexpr Reg ymm(unsigned n) noexcept {
         return Reg(Bank::YMM, static_cast<uint8_t>(n > 15 ? 15 : n));
     }
-    static Reg zmm(unsigned n) noexcept {
+    static constexpr Reg zmm(unsigned n) noexcept {
         return Reg(Bank::ZMM, static_cast<uint8_t>(n > 15 ? 15 : n));
     }
     /// Uno de los que tienen nombre propio.
-    static Reg special(SpecialReg s) noexcept {
+    static constexpr Reg special(SpecialReg s) noexcept {
         return Reg(Bank::Special, static_cast<uint8_t>(s));
     }
 
     /**
-     * @brief Desde un nombre ya calculado.  PROVISIONAL.
-     *
-     * Muchos sitios reciben el registro del asignador como CADENA
-     * (`reg_name(...)`), asi que hoy hace falta.  El paso siguiente es que
-     * quien lo produce devuelva ya un @c Reg: mientras esta puerta exista, un
-     * nombre mal formado sigue siendo posible por aqui.
-     */
-    Reg(std::string n, Width w = Width::Q) noexcept
-        : bank(Bank::Raw), width(w), raw(std::move(n)) {}
-
-    /**
      * @brief El nombre del registro, SIN el sufijo de ancho.
      *
-     * Sale de tablas indexadas por el numero: no se construye ninguna cadena
-     * salvo en el camino @c Raw, que es el puente que va a desaparecer.
+     * Devuelve `const char *` y las tablas son `constexpr`: no hay ni una
+     * cadena que construir ni que alojar.  Tuvo tablas de `std::string`
+     * mientras existio el puente desde nombres calculados a mano -- y esas se
+     * alojan en el monton al arrancar el programa, una vez por tabla, sin que
+     * nadie las pida.  Al no haber ya puente, sobran.
      */
-    const std::string &base_name() const {
-        static const std::string kGP[16] = {
+    constexpr const char *name() const {
+        constexpr const char *kGP[16] = {
             "r0", "r1", "r2",  "r3",  "r4",  "r5",  "r6",  "r7",
             "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"};
-        static const std::string kFP[16] = {
+        constexpr const char *kFP[16] = {
             "f0", "f1", "f2",  "f3",  "f4",  "f5",  "f6",  "f7",
             "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15"};
-        static const std::string kXMM[16] = {
-            "xmm0",  "xmm1",  "xmm2",  "xmm3", "xmm4",  "xmm5",
-            "xmm6",  "xmm7",  "xmm8",  "xmm9", "xmm10", "xmm11",
-            "xmm12", "xmm13", "xmm14", "xmm15"};
-        static const std::string kYMM[16] = {
-            "ymm0",  "ymm1",  "ymm2",  "ymm3", "ymm4",  "ymm5",
-            "ymm6",  "ymm7",  "ymm8",  "ymm9", "ymm10", "ymm11",
-            "ymm12", "ymm13", "ymm14", "ymm15"};
-        static const std::string kZMM[16] = {
-            "zmm0",  "zmm1",  "zmm2",  "zmm3", "zmm4",  "zmm5",
-            "zmm6",  "zmm7",  "zmm8",  "zmm9", "zmm10", "zmm11",
-            "zmm12", "zmm13", "zmm14", "zmm15"};
-        static const std::string kSpecial[8] = {
-            "rip", "rbp", "rsp", "rflags", "cur0", "cur1", "cur2", "cur3"};
+        constexpr const char *kXMM[16] = {"xmm0",  "xmm1",  "xmm2",  "xmm3",
+                                          "xmm4",  "xmm5",  "xmm6",  "xmm7",
+                                          "xmm8",  "xmm9",  "xmm10", "xmm11",
+                                          "xmm12", "xmm13", "xmm14", "xmm15"};
+        constexpr const char *kYMM[16] = {"ymm0",  "ymm1",  "ymm2",  "ymm3",
+                                          "ymm4",  "ymm5",  "ymm6",  "ymm7",
+                                          "ymm8",  "ymm9",  "ymm10", "ymm11",
+                                          "ymm12", "ymm13", "ymm14", "ymm15"};
+        constexpr const char *kZMM[16] = {"zmm0",  "zmm1",  "zmm2",  "zmm3",
+                                          "zmm4",  "zmm5",  "zmm6",  "zmm7",
+                                          "zmm8",  "zmm9",  "zmm10", "zmm11",
+                                          "zmm12", "zmm13", "zmm14", "zmm15"};
+        constexpr const char *kSpecial[8] = {"rip",  "rbp",  "rsp",  "rflags",
+                                             "cur0", "cur1", "cur2", "cur3"};
         switch (bank) {
         case Bank::GP: return kGP[index & 15];
         case Bank::FP: return kFP[index & 15];
         case Bank::XMM: return kXMM[index & 15];
         case Bank::YMM: return kYMM[index & 15];
         case Bank::ZMM: return kZMM[index & 15];
-        case Bank::Special: return kSpecial[index & 7];
-        case Bank::Raw: break;
+        case Bank::Special: break;
         }
-        return raw;
+        return kSpecial[index & 7];
     }
 
     /**
@@ -245,64 +236,25 @@ struct Reg {
      * Pregunta por el REGISTRO, no por la vista: `r14` y `r14b` son el mismo, y
      * quien esto pregunta -- para invalidar una cache de constante, por ejemplo
      * -- se refiere al registro, no al ancho con el que se escribe.
-     *
-     * Compara banco e indice; solo mira el texto cuando el @c Reg vino del
-     * puente @c Raw, donde no hay otra cosa que mirar.
      */
-    bool is_gp(unsigned n) const {
-        if (bank == Bank::GP) return index == n;
-        if (bank != Bank::Raw) return false;
-        return n < 16 && raw == Reg::gp(n).base_name();
+    constexpr bool is_gp(unsigned n) const {
+        return bank == Bank::GP && index == n;
     }
-
-    /**
-     * @brief PUENTE TEMPORAL: el registro como texto.
-     *
-     * Existe para poder migrar por tandas.  Muchas funciones del emisor aun
-     * reciben `const std::string&`, y sin esto habria que convertirlas TODAS de
-     * golpe -- unas sesenta -- en el mismo cambio, que es justo la clase de
-     * salto que sale mal.
-     *
-     * Mientras exista, un @c Reg se degrada a cadena sin que nadie lo note, o
-     * sea que la garantia de tipo se pierde por aqui.  Se quita cuando esas
-     * funciones tomen @c Reg, y el compilador dira exactamente cuales quedan.
-     */
-    operator std::string() const { return base_name() + suffix_of_(width); }
-
-    /// El mismo registro visto a 8 bits.
-    static Reg b(std::string n) { return Reg(std::move(n), Width::B); }
-    /// A 16 bits.
-    static Reg w(std::string n) { return Reg(std::move(n), Width::W); }
-    /// A 32 bits.
-    static Reg d(std::string n) { return Reg(std::move(n), Width::D); }
 };
 
 /**
- * @brief Comprueba si @p r es ese registro concreto.
+ * @brief Dos registros son el mismo operando si coinciden banco, numero y
+ * vista.
  *
- * Comparar con el NOMBRE, no con el texto emitido: `r14` y `r14b` son el mismo
- * registro en vistas distintas, y quien pregunta si es r14 -- para invalidar
- * una cache de constante, por ejemplo -- se refiere al registro.
+ * Comparaba los NOMBRES, y eso era comparar cadenas para responder a una
+ * pregunta que son tres bytes.  Hubo ademas comparaciones contra literales
+ * (`r == "r14"`), que es preguntar por como se escribe en vez de por cual es:
+ * para eso esta @ref Reg::is_gp, y esas comparaciones ya no existen.
  */
-inline bool operator==(const Reg &r, const char *name) {
-    return r.base_name() == name;
+constexpr bool operator==(const Reg &a, const Reg &b) {
+    return a.bank == b.bank && a.index == b.index && a.width == b.width;
 }
-inline bool operator!=(const Reg &r, const char *name) {
-    return !(r == name);
-}
-/// Igual contra una cadena ya calculada.  Parte del puente temporal: cuando el
-/// emisor trabaje solo con @c Reg, estas dos sobran.
-inline bool operator==(const Reg &r, const std::string &name) {
-    return r.base_name() == name;
-}
-inline bool operator!=(const Reg &r, const std::string &name) {
-    return !(r == name);
-}
-/// Dos registros son el mismo operando si coinciden nombre Y vista.
-inline bool operator==(const Reg &a, const Reg &b) {
-    return a.base_name() == b.base_name() && a.width == b.width;
-}
-inline bool operator!=(const Reg &a, const Reg &b) {
+constexpr bool operator!=(const Reg &a, const Reg &b) {
     return !(a == b);
 }
 
@@ -369,47 +321,39 @@ struct Lbl {
  * -- la arroba, el nombre de la clase, los parentesis y las comillas -- que hay
  * que acertar en orden.  Una comilla que falta no la ve nadie hasta ensamblar.
  *
- * La CLASE va en un enum y no en la cadena porque es lista cerrada: un
- * `@Absolut` mal escrito deja de ser posible, en vez de descubrirse al final.
+ * La clase sale de @c emmit::Directive, que es la lista UNICA de anotaciones
+ * del `.vel`.  Tuvo aqui su propio enum durante una tanda, y eso era empezar la
+ * quinta copia de la misma lista -- el error que este refactor viene a cerrar.
  */
-enum class AnnKind : uint8_t {
-    Absolute, ///< direccion absoluta de un simbolo (`@Absolute("code.x")`).
-    Method,   ///< metodo de un modulo nativo (`@Method("lib:fn")`).
-    Name,     ///< nombre a resolver por el enlazador (`@Name("x")`).
-};
-
-/// El texto de cada clase, indexado por el enum (no buscado).
-inline const char *text_of(AnnKind k) {
-    constexpr const char *kNames[] = {"Absolute", "Method", "Name"};
-    return kNames[static_cast<uint8_t>(k)];
-}
-
 struct Ann {
-    AnnKind kind;
+    emmit::Directive kind;
     std::string value;
 
-    Ann(AnnKind k, std::string v) noexcept : kind(k), value(std::move(v)) {}
+    Ann(emmit::Directive k, std::string v) noexcept
+        : kind(k), value(std::move(v)) {}
 
     /// `@Absolute("<v>")`.
     static Ann absolute(std::string v) {
-        return Ann(AnnKind::Absolute, std::move(v));
+        return Ann(emmit::Directive::ABSOLUTE, std::move(v));
     }
     /// `@Method("<v>")`.
     static Ann method(std::string v) {
-        return Ann(AnnKind::Method, std::move(v));
+        return Ann(emmit::Directive::METHOD, std::move(v));
     }
     /// `@Name("<v>")`.
-    static Ann name(std::string v) { return Ann(AnnKind::Name, std::move(v)); }
+    static Ann name(std::string v) {
+        return Ann(emmit::Directive::NAME, std::move(v));
+    }
 };
 
 /// Una referencia se imprime con su clase, sus parentesis y sus comillas.
 inline std::ostream &operator<<(std::ostream &os, const Ann &a) {
-    return os << '@' << text_of(a.kind) << "(\"" << a.value << "\")";
+    return os << '@' << emmit::text_of(a.kind) << "(\"" << a.value << "\")";
 }
 
 /// Un registro se imprime con su ancho pegado, que es como lo espera el `.vel`.
 inline std::ostream &operator<<(std::ostream &os, const Reg &r) {
-    return os << r.base_name() << suffix_of(r.width);
+    return os << r.name() << suffix_of(r.width);
 }
 
 /// La memoria se imprime con sus corchetes y solo con las partes que tiene.
@@ -490,6 +434,128 @@ class VelSink {
         text_ << "    " << emmit::text_of(m) << "\n";
         return *this;
     }
+
+    // -- Lo que NO es una instruccion ------------------------------------
+    //
+    // El `.vel` no es solo instrucciones: lleva secciones, etiquetas, bloques
+    // de datos y comentarios.  Todo eso se escribia igual que se escribian las
+    // instrucciones antes de esta tanda -- cosiendo trozos de texto --, con los
+    // mismos fallos posibles: el nombre de una anotacion mal escrito, unas
+    // comillas de mas o de menos, o una llave de cierre que se queda por el
+    // camino.  Aqui cada cosa tiene su entrada y su forma.
+
+    /**
+     * @brief Un comentario.  No es codigo: el ensamblador lo descarta.
+     * @param texto Sin el `//`, que lo pone esto.
+     */
+    VelSink &comment(const std::string &texto) {
+        text_ << "    // " << texto << "\n";
+        return *this;
+    }
+
+    /// Un comentario SIN sangrar, de los que separan secciones del fichero.
+    VelSink &comment_top(const std::string &texto) {
+        text_ << "// " << texto << "\n";
+        return *this;
+    }
+
+    /**
+     * @brief Una etiqueta: `nombre:`.
+     *
+     * Va sin sangrar y con los dos puntos puestos aqui, que es la parte que se
+     * olvida.  Distinta de un comentario a proposito: una etiqueta SI es
+     * codigo, el enlazador la resuelve.
+     */
+    VelSink &label(const std::string &nombre) {
+        text_ << nombre << ":\n";
+        return *this;
+    }
+
+    /// Una linea en blanco, para separar bloques del fichero.
+    VelSink &blank() {
+        text_ << "\n";
+        return *this;
+    }
+
+    /**
+     * @brief Una anotacion suelta con argumento: `@Format("elf")`.
+     *
+     * Las comillas las decide la LISTA (@ref emmit::form_of), no quien llama:
+     * `@Module(x)` va sin ellas y `@Format("x")` con ellas, y equivocarse es un
+     * fichero que no ensambla.  Aqui esa decision esta en un solo sitio.
+     *
+     * @param d   Que anotacion.
+     * @param arg Su argumento, sin comillas ni parentesis.
+     */
+    VelSink &directive(emmit::Directive d, const std::string &arg) {
+        text_ << '@' << emmit::text_of(d);
+        if (emmit::form_of(d) == emmit::ArgForm::Quoted)
+            text_ << "(\"" << arg << "\")";
+        else
+            text_ << '(' << arg << ')';
+        text_ << "\n";
+        return *this;
+    }
+
+    /// Anotacion con argumento NUMERICO: `@Align(0x1000)`.  Siempre en hex,
+    /// que es como la escribe el `.vel`.
+    VelSink &directive(emmit::Directive d, uint64_t valor, int digitos = 0) {
+        text_ << '@' << emmit::text_of(d) << "(0x" << std::hex;
+        if (digitos > 0) text_ << std::setw(digitos) << std::setfill('0');
+        text_ << valor << std::dec << std::setfill(' ') << ")\n";
+        return *this;
+    }
+
+    /**
+     * @class Block
+     * @brief Un bloque de anotacion abierto: `@Section { ... }`.
+     *
+     * La llave de cierre la pone el DESTRUCTOR.  Antes era un `out << "}\n\n"`
+     * suelto, a varias lineas del que abria, y nada obligaba a que estuvieran
+     * los dos: un bloque sin cerrar produce un fichero que el ensamblador ya no
+     * entiende, y el error aparece donde empieza lo siguiente.
+     */
+    class Block {
+      public:
+        Block(VelSink &s, emmit::Directive d) : sink_(&s) {
+            sink_->text_ << '@' << emmit::text_of(d) << " {\n";
+        }
+        Block(Block &&o) noexcept : sink_(o.sink_) { o.sink_ = nullptr; }
+        Block(const Block &) = delete;
+        Block &operator=(const Block &) = delete;
+        ~Block() {
+            if (sink_ != nullptr) sink_->text_ << "}\n\n";
+        }
+
+        /// Una entrada del bloque: `    @Name("code"),`.
+        Block &entry(emmit::Directive d, const std::string &arg) {
+            sink_->text_ << "    @" << emmit::text_of(d);
+            if (emmit::form_of(d) == emmit::ArgForm::Quoted)
+                sink_->text_ << "(\"" << arg << "\")";
+            else
+                sink_->text_ << '(' << arg << ')';
+            sink_->text_ << ",\n";
+            return *this;
+        }
+
+        /// Entrada con argumento numerico: `    @Align(0x1000),`.
+        Block &entry(emmit::Directive d, uint64_t valor, int digitos = 0) {
+            sink_->text_ << "    @" << emmit::text_of(d) << "(0x" << std::hex;
+            if (digitos > 0)
+                sink_->text_ << std::setw(digitos) << std::setfill('0');
+            sink_->text_ << valor << std::dec << std::setfill(' ') << ",\n";
+            return *this;
+        }
+
+        /// El sumidero, para las entradas que aun no tienen forma propia.
+        VelSink &raw() { return *sink_; }
+
+      private:
+        VelSink *sink_;
+    };
+
+    /// Abre un bloque de anotacion.  Se cierra solo al salir del ambito.
+    Block block(emmit::Directive d) { return Block(*this, d); }
 
     /// El `.vel` acumulado.  Sigue haciendo falta: es lo que se vuelca con
     /// `--vx-emit-only` y lo que se lee para depurar.

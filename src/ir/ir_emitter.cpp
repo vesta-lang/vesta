@@ -76,7 +76,7 @@ namespace ir {
 //  width=8B).  Fallback a la secuencia de 3 si off excede int16 (+/-32KB).
 //  Libre (no toca caches del EmitCtx; el llamante los invalida si procede).
 // =========================================================================
-static inline void emit_spill_access(VelSink &out, const std::string &reg,
+static inline void emit_spill_access(VelSink &out, const Reg &reg,
                                      long long slot, bool is_load) {
     const long long off = (slot + 1) * 8;
     if (off <= 32768) {
@@ -261,22 +261,22 @@ struct EmitCtx {
     // que antes eran 3 instrucciones (mov r13,rbp; subu; mov [r13]).  NO
     // clobbea r13.  Fallback a la secuencia de 3 si el offset excede int16
     // (+/-32KB).
-    void emit_spill_load(const std::string &dst_reg, int slot) {
+    void emit_spill_load(const Reg &dst_reg, int slot) {
         const bool fallback = ((long long)(slot + 1) * 8) > 32768;
         emit_spill_access(out, dst_reg, slot, /*is_load=*/true);
         // El mld NO clobbea r13/r14 (a diferencia del fallback); solo invalidar
         // el cache si escribimos ese scratch o si el fallback usa r13.
-        if (fallback || dst_reg == "r13") r13_cache = -1;
-        if (dst_reg == "r14") r14_cache = -1;
+        if (fallback || dst_reg.is_gp(13)) r13_cache = -1;
+        if (dst_reg.is_gp(14)) r14_cache = -1;
     }
 
-    void emit_spill_store(const std::string &src_reg, int slot) {
+    void emit_spill_store(const Reg &src_reg, int slot) {
         const bool fallback = ((long long)(slot + 1) * 8) > 32768;
         emit_spill_access(out, src_reg, slot, /*is_load=*/false);
         if (fallback) r13_cache = -1; // el fallback usa r13 como temp
     }
 
-    void emit_load_spilled_into(IrValueId vid, const std::string &dst_reg) {
+    void emit_load_spilled_into(IrValueId vid, const Reg &dst_reg) {
         if (!alloc.spilled(vid)) return; // no derramado: nada que hacer
         emit_spill_load(dst_reg, alloc.slot_of(vid));
     }
@@ -367,7 +367,7 @@ struct EmitCtx {
                 // rsp, frame_size), que es local al frame y nadie mas
                 // toca.  Combinado con el fix de enter (allocacion en
                 // bytes = spill_count*8), los locals viven seguros.
-                emit_spill_load(reg_name(sr), alloc.slot_of(vid));
+                emit_spill_load(Reg::gp(sr), alloc.slot_of(vid));
                 if (is_gc_value(vid)) {
                     // El slot contiene el GcHandle.  Convertir a host_ptr
                     // fresco (gcderef indexa la HandleTable, que el GC
@@ -485,13 +485,10 @@ static uint64_t ir_type_size(IrType t) {
 // emisor de bytecode lee ese sufijo y codifica el mode (8/16/32/64) en el
 // ctrl-byte.  8 bytes -> sin sufijo (registro completo).  Mismo formato que
 // @c reg_name_sized pero operando sobre el string ya resuelto por el regalloc.
-static std::string atomic_sized(const std::string &reg, IrType t) {
-    switch (ir_type_size(t)) {
-    case 1: return reg + "b";
-    case 2: return reg + "w";
-    case 4: return reg + "d";
-    default: return reg; // 8 bytes: registro completo, sin sufijo
-    }
+static Reg atomic_sized(Reg reg, IrType t) {
+    // El ancho es parte del operando, no un sufijo que se le pega al nombre.
+    reg.width = width_for_bytes(static_cast<unsigned>(ir_type_size(t)));
+    return reg;
 }
 
 // =========================================================================
@@ -1107,12 +1104,12 @@ static void emit_save_live_regs(EmitCtx &ctx, uint32_t call_pos,
         if (r == 14) r14_live = true;
         if (r == 13) r13_live = true;
     }
-    auto pick_scratch = [&]() -> std::string {
-        if (!r14_live) return "r14";
-        if (!r13_live) return "r13";
-        return "r0";
+    auto pick_scratch = [&]() -> Reg {
+        if (!r14_live) return Reg::gp(14);
+        if (!r13_live) return Reg::gp(13);
+        return Reg::gp(0);
     };
-    const std::string sc = pick_scratch();
+    const Reg sc = pick_scratch();
 
     bool gc_first_ordered = true;
     bool saw_nongc = false;
@@ -1134,7 +1131,7 @@ static void emit_save_live_regs(EmitCtx &ctx, uint32_t call_pos,
             if (reg_holds_gc_object(ctx, call_pos, r)) {
                 ctx.out.emit(emmit::Mnemonic::GCHANDLE, sc, reg_name(r));
                 ctx.out.emit(emmit::Mnemonic::PUSH, sc);
-                if (sc == "r14") ctx.r14_cache = -1;
+                if (sc.is_gp(14)) ctx.r14_cache = -1;
             } else {
                 if (r >= 0 && r < 16) mask |= (1u << r);
             }
@@ -1152,7 +1149,7 @@ static void emit_save_live_regs(EmitCtx &ctx, uint32_t call_pos,
         if (reg_holds_gc_object(ctx, call_pos, r)) {
             ctx.out.emit(emmit::Mnemonic::GCHANDLE, sc, reg_name(r));
             ctx.out.emit(emmit::Mnemonic::PUSH, sc);
-            if (sc == "r14") ctx.r14_cache = -1;
+            if (sc.is_gp(14)) ctx.r14_cache = -1;
         } else {
             ctx.out.emit(emmit::Mnemonic::PUSH, reg_name(r));
         }
@@ -1314,12 +1311,11 @@ static void emit_load_spilled_arg(EmitCtx &ctx, int target_reg,
     }
 }
 
-static void
-emit_parallel_arg_moves(EmitCtx &ctx,
-                        std::vector<std::pair<int, std::string>> moves) {
+static void emit_parallel_arg_moves(EmitCtx &ctx,
+                                    std::vector<std::pair<int, Reg>> moves) {
     auto reg_str_of = [](int r) { return std::string(reg_name(r)); };
 
-    auto someone_uses_as_source = [&](const std::string &target_reg_str) {
+    auto someone_uses_as_source = [&](const Reg &target_reg_str) {
         for (const auto &m : moves) {
             if (m.second == target_reg_str) return true;
         }
@@ -1331,7 +1327,7 @@ emit_parallel_arg_moves(EmitCtx &ctx,
         // Paso a: eliminar triviales.
         bool removed_trivial = false;
         for (size_t i = 0; i < moves.size();) {
-            if (moves[i].second == reg_str_of(moves[i].first)) {
+            if (moves[i].second == Reg::gp(moves[i].first)) {
                 moves.erase(moves.begin() + (long)i);
                 removed_trivial = true;
             } else {
@@ -1343,7 +1339,7 @@ emit_parallel_arg_moves(EmitCtx &ctx,
         // Paso b: buscar un move "seguro" (target no es source de nadie).
         bool emitted = false;
         for (size_t i = 0; i < moves.size(); ++i) {
-            const std::string target_str = reg_str_of(moves[i].first);
+            const Reg target_str = Reg::gp(moves[i].first);
             if (!someone_uses_as_source(target_str)) {
                 ctx.out.emit(emmit::Mnemonic::MOV, target_str, moves[i].second);
                 moves.erase(moves.begin() + (long)i);
@@ -1359,7 +1355,7 @@ emit_parallel_arg_moves(EmitCtx &ctx,
         // move que use s como source para que use r14, y emitimos al final
         // d <- r14 cuando llegue su turno.
         const int target_reg = moves.front().first;
-        const std::string old_src = moves.front().second;
+        const Reg old_src = moves.front().second;
         const Reg scratch = Reg::gp(SCRATCH_REG);
         ctx.out.emit(emmit::Mnemonic::MOV, scratch, old_src);
         for (auto &m : moves) {
@@ -1405,8 +1401,8 @@ static void emit_binop(EmitCtx &ctx, emmit::Mnemonic mnemonic, IrValueId dst,
         ctx.out.emit(m3, rd, Reg(rs1), Reg(rs2));
         /* Si rd es r14 / r13 (caso destino spilled), invalidar cache de
          * constante igual que emit_mov_if_needed haria. */
-        if (rd == "r14") ctx.r14_cache = -1;
-        if (rd == "r13") ctx.r13_cache = -1;
+        if (rd.is_gp(14)) ctx.r14_cache = -1;
+        if (rd.is_gp(13)) ctx.r13_cache = -1;
         ctx.store_spilled(dst);
         return;
     }
@@ -1464,21 +1460,21 @@ static void emit_select(EmitCtx &ctx, IrValueId dst, IrValueId cond,
     // ULTIMO: asi ninguna carga posterior destruye un valor ya cargado (r13
     // solo se usa como HOLDER cuando es el ultimo derramado, y su carga es la
     // ultima).  Los operandos en registro usan su reg asignado (0 movs).
-    const char *spill_scratch[3] = {"r15", "r14", "r13"};
+    const Reg spill_scratch[3] = {Reg::gp(15), Reg::gp(14), Reg::gp(13)};
     int nspill = 0;
-    auto op_reg = [&](IrValueId v) -> std::string {
+    auto op_reg = [&](IrValueId v) -> Reg {
         if (ctx.alloc.in_reg(v))
-            return reg_name(ctx.alloc.reg_of(v)); // reg asignado: sin mov
-        const char *s = spill_scratch[nspill < 2 ? nspill : 2];
+            return Reg::gp(ctx.alloc.reg_of(v)); // reg asignado: sin mov
+        const Reg s = spill_scratch[nspill < 2 ? nspill : 2];
         ++nspill;
         ctx.emit_load_spilled_into(v, s); // derramado: 1 carga
         return s;
     };
-    const std::string rc = op_reg(cond);
-    const std::string ra = op_reg(a);
-    const std::string rb = op_reg(b);
+    const Reg rc = op_reg(cond);
+    const Reg ra = op_reg(a);
+    const Reg rb = op_reg(b);
     const Reg rd = ctx.dst_of(dst); // reg asignado o r14 (si derramado)
-    ctx.out.emit(emmit::Mnemonic::CSEL, Reg(rd), Reg(rc), Reg(ra), Reg(rb));
+    ctx.out.emit(emmit::Mnemonic::CSEL, rd, rc, ra, rb);
     ctx.r13_cache = -1;
     ctx.r14_cache = -1;
     ctx.store_spilled(dst);
@@ -1506,16 +1502,16 @@ static void emit_select(EmitCtx &ctx, IrValueId dst, IrValueId cond,
 // fijo de 5 instrucciones VM por bitcast hasta que se anada un asignador
 // paralelo de ZMM (planificado para  D / MachineIR).
 // =========================================================================
-static void emit_gp_to_zmm_bits(EmitCtx &ctx, const std::string &gp_reg,
-                                const std::string &zmm_reg) {
+static void emit_gp_to_zmm_bits(EmitCtx &ctx, const Reg &gp_reg,
+                                const Reg &zmm_reg) {
     // Sprint string-perf-5 (2026-06-02): bitcast directo via opcode bitg2z.
     // Antes: 5 instrucciones VM (subsp + mov r15,rsp + mov [r15],gp +
     // fload + addsp).  Ahora: 1 instruccion -> ~5x speedup en FP-heavy.
     ctx.out.emit(emmit::Mnemonic::BITG2Z, zmm_reg, gp_reg);
 }
 
-static void emit_zmm_to_gp_bits(EmitCtx &ctx, const std::string &zmm_reg,
-                                const std::string &gp_reg) {
+static void emit_zmm_to_gp_bits(EmitCtx &ctx, const Reg &zmm_reg,
+                                const Reg &gp_reg) {
     // Sprint string-perf-5: bitcast directo via opcode bitz2g (1 instr VM).
     ctx.out.emit(emmit::Mnemonic::BITZ2G, gp_reg, zmm_reg);
 }
@@ -1524,11 +1520,10 @@ static void emit_zmm_to_gp_bits(EmitCtx &ctx, const std::string &zmm_reg,
 // si reside en el banco ancho, un `fmov` desde su registro; si esta en GP, el
 // bitcast bitg2z desde `gp_reg` (nombre GP ya cargado por load_src).
 static void emit_load_float_to(EmitCtx &ctx, IrValueId operand,
-                               const std::string &gp_reg,
-                               const std::string &dst_zmm) {
+                               const Reg &gp_reg, const Reg &dst_zmm) {
     const int z = ctx.zmm_of(operand);
     if (z >= 0)
-        ctx.out.emit(emmit::Mnemonic::FMOV, Reg(dst_zmm),
+        ctx.out.emit(emmit::Mnemonic::FMOV, dst_zmm,
                      Reg::fp(static_cast<unsigned>(z)));
     else
         emit_gp_to_zmm_bits(ctx, gp_reg, dst_zmm);
@@ -1555,10 +1550,10 @@ static void emit_float_binop(EmitCtx &ctx, emmit::Mnemonic mnemonic,
         Reg rs1 = f0_has_src1 ? Reg::gp(0) : ctx.load_src(src1, 0);
         Reg rs2 = ctx.load_src(src2, 1);
         Reg rd = ctx.dst_of(dst);
-        if (!f0_has_src1) emit_gp_to_zmm_bits(ctx, rs1, "f0");
-        emit_gp_to_zmm_bits(ctx, rs2, "f1");
+        if (!f0_has_src1) emit_gp_to_zmm_bits(ctx, rs1, Reg::fp(0));
+        emit_gp_to_zmm_bits(ctx, rs2, Reg::fp(1));
         ctx.out.emit(emmit::packed_if(mnemonic, es_ps), Reg::fp(0), Reg::fp(1));
-        emit_zmm_to_gp_bits(ctx, "f0", rd);
+        emit_zmm_to_gp_bits(ctx, Reg::fp(0), rd);
         ctx.store_spilled(dst);
         ctx.last_f0 = dst;
         return;
@@ -1567,18 +1562,16 @@ static void emit_float_binop(EmitCtx &ctx, emmit::Mnemonic mnemonic,
     // Path ZMM-aware.  Operandos: su registro del banco si estan alocados; si
     // no, se cargan a scratch f0/f1 via bitg2z desde GP.  El resultado va a su
     // registro del banco (si alocado) o a f0 -> bitz2g GP.
-    std::string ra, rb;
+    Reg ra = Reg::fp(0), rb = Reg::fp(1);
     if (z1 >= 0) {
-        ra = "f" + std::to_string(z1);
+        ra = Reg::fp(static_cast<unsigned>(z1));
     } else {
-        emit_gp_to_zmm_bits(ctx, ctx.load_src(src1, 0), "f0");
-        ra = "f0";
+        emit_gp_to_zmm_bits(ctx, ctx.load_src(src1, 0), Reg::fp(0));
     }
     if (z2 >= 0) {
-        rb = "f" + std::to_string(z2);
+        rb = Reg::fp(static_cast<unsigned>(z2));
     } else {
-        emit_gp_to_zmm_bits(ctx, ctx.load_src(src2, 1), "f1");
-        rb = "f1";
+        emit_gp_to_zmm_bits(ctx, ctx.load_src(src2, 1), Reg::fp(1));
     }
     const Reg rd = (zd >= 0) ? Reg::fp(static_cast<unsigned>(zd)) : Reg::fp(0);
     const bool comm = (mnemonic == emmit::Mnemonic::FADD ||
@@ -1589,19 +1582,19 @@ static void emit_float_binop(EmitCtx &ctx, emmit::Mnemonic mnemonic,
     // que rd == ra (o rd == rb) solo si ese operando murio -> seguro
     // sobrescribir.
     if (rd == ra) {
-        ctx.out.emit(emmit::packed_if(mnemonic, es_ps), Reg(rd), Reg(rb));
+        ctx.out.emit(emmit::packed_if(mnemonic, es_ps), rd, rb);
     } else if (rd == rb && comm) {
-        ctx.out.emit(emmit::packed_if(mnemonic, es_ps), Reg(rd), Reg(ra));
+        ctx.out.emit(emmit::packed_if(mnemonic, es_ps), rd, ra);
     } else if (rd == rb) { // no conmutativa y rd == rb: temp en f2
         ctx.out.emit(emmit::Mnemonic::FMOV, Reg::fp(2), ra);
-        ctx.out.emit(emmit::packed_if(mnemonic, es_ps), Reg::fp(2), Reg(rb));
+        ctx.out.emit(emmit::packed_if(mnemonic, es_ps), Reg::fp(2), rb);
         ctx.out.emit(emmit::Mnemonic::FMOV, rd, Reg::fp(2));
     } else {
         ctx.out.emit(emmit::Mnemonic::FMOV, rd, ra);
-        ctx.out.emit(emmit::packed_if(mnemonic, es_ps), Reg(rd), Reg(rb));
+        ctx.out.emit(emmit::packed_if(mnemonic, es_ps), rd, rb);
     }
     if (zd < 0) {
-        emit_zmm_to_gp_bits(ctx, "f0", ctx.dst_of(dst));
+        emit_zmm_to_gp_bits(ctx, Reg::fp(0), ctx.dst_of(dst));
         ctx.store_spilled(dst);
     }
     // Este path pudo tocar f0/f1/f2 scratch -> la opt GP last_f0 ya no es
@@ -1624,25 +1617,24 @@ static void emit_float_unop(EmitCtx &ctx, emmit::Mnemonic mnemonic, IrType type,
             (ctx.last_f0 != IR_NO_VALUE && ctx.last_f0 == src);
         Reg rs = f0_has_src ? Reg::gp(0) : ctx.load_src(src, 0);
         Reg rd = ctx.dst_of(dst);
-        if (!f0_has_src) emit_gp_to_zmm_bits(ctx, rs, "f0");
+        if (!f0_has_src) emit_gp_to_zmm_bits(ctx, rs, Reg::fp(0));
         ctx.out.emit(emmit::packed_if(mnemonic, es_ps), Reg::fp(0), Reg::fp(0));
-        emit_zmm_to_gp_bits(ctx, "f0", rd);
+        emit_zmm_to_gp_bits(ctx, Reg::fp(0), rd);
         ctx.store_spilled(dst);
         ctx.last_f0 = dst;
         return;
     }
     // Path ZMM: `op rd, rs` (los unarios freg toman dst, src distintos).
-    std::string rs;
+    Reg rs = Reg::fp(0);
     if (zs >= 0) {
-        rs = "f" + std::to_string(zs);
+        rs = Reg::fp(static_cast<unsigned>(zs));
     } else {
-        emit_gp_to_zmm_bits(ctx, ctx.load_src(src, 0), "f0");
-        rs = "f0";
+        emit_gp_to_zmm_bits(ctx, ctx.load_src(src, 0), Reg::fp(0));
     }
     const Reg rd = (zd >= 0) ? Reg::fp(static_cast<unsigned>(zd)) : Reg::fp(0);
-    ctx.out.emit(emmit::packed_if(mnemonic, es_ps), Reg(rd), Reg(rs));
+    ctx.out.emit(emmit::packed_if(mnemonic, es_ps), rd, rs);
     if (zd < 0) {
-        emit_zmm_to_gp_bits(ctx, "f0", ctx.dst_of(dst));
+        emit_zmm_to_gp_bits(ctx, Reg::fp(0), ctx.dst_of(dst));
         ctx.store_spilled(dst);
     }
     ctx.last_f0 = IR_NO_VALUE;
@@ -1659,31 +1651,28 @@ static void emit_float_fma(EmitCtx &ctx, IrType type, IrValueId dst,
     const bool es_ps = (type == IrType::F32);
     const int za = ctx.zmm_of(a), zb = ctx.zmm_of(b), zc = ctx.zmm_of(c);
     const int zd = ctx.zmm_of(dst);
-    std::string ra, rb;
+    Reg ra = Reg::fp(0), rb = Reg::fp(1);
     if (za >= 0) {
-        ra = "f" + std::to_string(za);
+        ra = Reg::fp(static_cast<unsigned>(za));
     } else {
-        emit_gp_to_zmm_bits(ctx, ctx.load_src(a, 0), "f0");
-        ra = "f0";
+        emit_gp_to_zmm_bits(ctx, ctx.load_src(a, 0), Reg::fp(0));
     }
     if (zb >= 0) {
-        rb = "f" + std::to_string(zb);
+        rb = Reg::fp(static_cast<unsigned>(zb));
     } else {
-        emit_gp_to_zmm_bits(ctx, ctx.load_src(b, 1), "f1");
-        rb = "f1";
+        emit_gp_to_zmm_bits(ctx, ctx.load_src(b, 1), Reg::fp(1));
     }
-    const std::string rd = (zd >= 0) ? ("f" + std::to_string(zd)) : "f2";
+    const Reg rd = (zd >= 0) ? Reg::fp(static_cast<unsigned>(zd)) : Reg::fp(2);
     // El acumulador NO puede aliasar ra/rb (fmadd corromperia el operando).
-    const std::string acc = (rd == ra || rd == rb) ? "f2" : rd;
+    const Reg acc = (rd == ra || rd == rb) ? Reg::fp(2) : rd;
     // Cargar c en el acumulador.
     if (zc >= 0) {
-        const std::string rc = "f" + std::to_string(zc);
+        const Reg rc = Reg::fp(static_cast<unsigned>(zc));
         if (acc != rc) ctx.out.emit(emmit::Mnemonic::FMOV, acc, rc);
     } else {
         emit_gp_to_zmm_bits(ctx, ctx.load_src(c, 2), acc);
     }
-    ctx.out.emit(emmit::packed_if(emmit::Mnemonic::FMADD, es_ps), Reg(acc),
-                 Reg(ra), Reg(rb));
+    ctx.out.emit(emmit::packed_if(emmit::Mnemonic::FMADD, es_ps), acc, ra, rb);
     if (acc != rd) ctx.out.emit(emmit::Mnemonic::FMOV, rd, acc);
     if (zd < 0) {
         emit_zmm_to_gp_bits(ctx, rd, ctx.dst_of(dst));
@@ -2028,8 +2017,8 @@ static void emit_cmp_standalone(EmitCtx &ctx, const IrInstr &ins) {
         // resultado de FCMP es BOOL, asi que miramos la fuente).
         const IrType ot = ctx.fn.values[ins.operands[0]].type;
         const bool es_ps = (ot == IrType::F32);
-        emit_load_float_to(ctx, ins.operands[0], ra, "f0");
-        emit_load_float_to(ctx, ins.operands[1], rb, "f1");
+        emit_load_float_to(ctx, ins.operands[0], ra, Reg::fp(0));
+        emit_load_float_to(ctx, ins.operands[1], rb, Reg::fp(1));
         ctx.out.emit(emmit::packed_if(emmit::Mnemonic::FCMP, es_ps), Reg::fp(0),
                      Reg::fp(1));
     } else {
@@ -2193,7 +2182,7 @@ static void emit_phi_copies(EmitCtx &ctx, IrBlockId pred_id,
             // dst spilled: load src y store al slot.  Si src es reg, el
             // valor que leemos es el OLD pre-phi.
             Reg r_src = ctx.load_src(c.src, 0);
-            std::string r_dst = reg_name(SCRATCH_REG);
+            Reg r_dst = Reg::gp(SCRATCH_REG);
             emit_mov_if_needed(ctx, r_dst, r_src);
             ctx.store_spilled(c.dst);
         } else {
@@ -2229,7 +2218,7 @@ static void emit_phi_copies(EmitCtx &ctx, IrBlockId pred_id,
     for (const auto &c : spilled_src_reg_dst) {
         if (!ctx.alloc.spilled(c.src)) continue;
         int d_reg = ctx.alloc.reg_of(c.dst);
-        std::string rd = reg_name(d_reg);
+        Reg rd = Reg::gp(d_reg);
         ctx.emit_spill_load(rd, ctx.alloc.slot_of(c.src));
         if (ctx.is_gc_value(c.src)) {
             ctx.out.emit(emmit::Mnemonic::GCDEREF,
@@ -2701,7 +2690,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             Reg rd = ctx.dst_of(ins.dst);
             ctx.out.emit(emmit::packed_if(emmit::Mnemonic::FCVT, es_ps),
                          Reg(rs), Reg::fp(0));
-            emit_zmm_to_gp_bits(ctx, "f0", rd);
+            emit_zmm_to_gp_bits(ctx, Reg::fp(0), rd);
             ctx.store_spilled(ins.dst);
             ctx.last_f0 = ins.dst; // f0 conserva el valor float convertido
         }
@@ -2720,7 +2709,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                              Reg::fp(static_cast<unsigned>(zs)), Reg(rd));
             } else {
                 Reg rs = ctx.load_src(ins.operands[0], 0);
-                emit_gp_to_zmm_bits(ctx, rs, "f0");
+                emit_gp_to_zmm_bits(ctx, rs, Reg::fp(0));
                 ctx.out.emit(emmit::packed_if(emmit::Mnemonic::FCVT, es_ps),
                              Reg::fp(0), Reg(rd));
             }
@@ -2748,19 +2737,19 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (!ins.operands.empty()) {
             const int zs = ctx.zmm_of(ins.operands[0]);
             const int zd = ctx.zmm_of(ins.dst);
-            std::string fs;
+            Reg fs = Reg::fp(0);
             if (zs >= 0) {
-                fs = "f" + std::to_string(zs);
+                fs = Reg::fp(static_cast<unsigned>(zs));
             } else {
                 emit_gp_to_zmm_bits(ctx, ctx.load_src(ins.operands[0], 0),
-                                    "f0");
-                fs = "f0";
+                                    Reg::fp(0));
+                fs = Reg::fp(0);
             }
             const std::string fd =
                 (zd >= 0) ? ("f" + std::to_string(zd)) : "f1";
             ctx.out.emit(emmit::Mnemonic::FEXTEND, fd, fs);
             if (zd < 0) {
-                emit_zmm_to_gp_bits(ctx, "f1", ctx.dst_of(ins.dst));
+                emit_zmm_to_gp_bits(ctx, Reg::fp(1), ctx.dst_of(ins.dst));
                 ctx.store_spilled(ins.dst);
             }
         }
@@ -2776,19 +2765,19 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (!ins.operands.empty()) {
             const int zs = ctx.zmm_of(ins.operands[0]);
             const int zd = ctx.zmm_of(ins.dst);
-            std::string fs;
+            Reg fs = Reg::fp(0);
             if (zs >= 0) {
-                fs = "f" + std::to_string(zs);
+                fs = Reg::fp(static_cast<unsigned>(zs));
             } else {
                 emit_gp_to_zmm_bits(ctx, ctx.load_src(ins.operands[0], 0),
-                                    "f0");
-                fs = "f0";
+                                    Reg::fp(0));
+                fs = Reg::fp(0);
             }
             const std::string fd =
                 (zd >= 0) ? ("f" + std::to_string(zd)) : "f1";
             ctx.out.emit(emmit::Mnemonic::FNARROW, fd, fs);
             if (zd < 0) {
-                emit_zmm_to_gp_bits(ctx, "f1", ctx.dst_of(ins.dst));
+                emit_zmm_to_gp_bits(ctx, Reg::fp(1), ctx.dst_of(ins.dst));
                 ctx.store_spilled(ins.dst);
             }
         }
@@ -2895,8 +2884,10 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                         // de comparar.  Selecciona ".ps" si operandos F32.
                         const IrType ot = ctx.fn.values[ins.operands[0]].type;
                         const bool es_ps = (ot == IrType::F32);
-                        emit_load_float_to(ctx, ins.operands[0], ra, "f0");
-                        emit_load_float_to(ctx, ins.operands[1], rb, "f1");
+                        emit_load_float_to(ctx, ins.operands[0], ra,
+                                           Reg::fp(0));
+                        emit_load_float_to(ctx, ins.operands[1], rb,
+                                           Reg::fp(1));
                         ctx.out.emit(
                             emmit::packed_if(emmit::Mnemonic::FCMP, es_ps),
                             Reg::fp(0), Reg::fp(1));
@@ -3127,7 +3118,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // viejo codigo emitia @c emit_mov_r14_imm(0) inmediatamente
         // despues, sobrescribiendo @c rc con 0 antes del @c cmpu.
         // Fix: si @c rc esta en r14, usar r13 para el inmediato.
-        if (rc == "r14") {
+        if (rc.is_gp(14)) {
             emit_mov_r13_imm(ctx, 0);
             ctx.out.emit(emmit::Mnemonic::CMPU, rc, Reg::gp(13));
         } else {
@@ -3196,7 +3187,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // Fix: spilled args se cargan DESPUES del parallel-move
         // directamente a su reg destino (evita clobber de r14).
         const size_t nargs = std::min(ins.operands.size(), (size_t)12);
-        std::vector<std::pair<int, std::string>> moves;
+        std::vector<std::pair<int, Reg>> moves;
         std::vector<std::pair<int, ir::IrValueId>> spilled_args;
         moves.reserve(nargs);
         for (size_t ai = 0; ai < nargs; ++ai) {
@@ -3288,7 +3279,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         }
 
         const size_t nargs = std::min(ins.operands.size(), (size_t)12);
-        std::vector<std::pair<int, std::string>> moves;
+        std::vector<std::pair<int, Reg>> moves;
         std::vector<std::pair<int, ir::IrValueId>> spilled_args;
         moves.reserve(nargs);
         for (size_t ai = 0; ai < nargs; ++ai) {
@@ -3342,9 +3333,15 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // Materializar fn_addr y env_addr a registros antes de los pushes
         // y de los moves de argumentos para evitar conflictos.
         Reg rfn = ctx.load_src(ins.func_ptr, 0);
-        std::string renv;
+        // Hay entorno o no lo hay, y eso es una BANDERA.  Cuando renv era una
+        // cadena, "no hay" se decia con la cadena vacia -- un estado que un
+        // registro no tiene, y que obligaba a preguntar `.empty()` sobre algo
+        // que ya no es texto.
+        bool hay_env = false;
+        Reg renv = Reg::gp(0);
         if (!ins.operands.empty() && ins.operands[0] != IR_NO_VALUE) {
             renv = ctx.load_src(ins.operands[0], 1);
+            hay_env = true;
         }
 
         // CRITICO: si el regalloc puso fn_addr en r14, NUESTRO
@@ -3390,14 +3387,13 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // callvmr (despues del parallel-move) para que sea el TOP
         // del stack en ese momento.
         bool env_pushed = false;
-        if (!renv.empty() && renv != "r13" && renv != "r14") {
-            if (renv.size() >= 2 && renv[0] == 'r') {
-                int rn = std::atoi(renv.c_str() + 1);
-                if (rn >= 1 && rn <= 12) {
-                    ctx.out.emit(emmit::Mnemonic::PUSH, renv);
-                    env_pushed = true;
-                }
-            }
+        // r1..r12: los que la convencion de llamada va a pisar.  r13 y r14 son
+        // scratch y quedan fuera del rango, asi que no hace falta excluirlos
+        // aparte como cuando esto se preguntaba por el nombre.
+        if (hay_env && renv.bank == Reg::Bank::GP && renv.index >= 1 &&
+            renv.index <= 12) {
+            ctx.out.emit(emmit::Mnemonic::PUSH, renv);
+            env_pushed = true;
         }
 
         // Args declarados: comienzan en operands[1] porque operands[0]
@@ -3405,7 +3401,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const size_t total = ins.operands.size();
         const size_t nargs_decl =
             total > 0 ? std::min(total - 1, (size_t)12) : 0;
-        std::vector<std::pair<int, std::string>> moves;
+        std::vector<std::pair<int, Reg>> moves;
         std::vector<std::pair<int, ir::IrValueId>> spilled_args;
         moves.reserve(nargs_decl);
         for (size_t ai = 0; ai < nargs_decl; ++ai) {
@@ -3426,7 +3422,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // (env si env_pushed) que es el TOP correcto.
         if (env_pushed) {
             ctx.out.emit(emmit::Mnemonic::POP, "r14");
-        } else if (!renv.empty()) {
+        } else if (hay_env) {
             emit_mov_if_needed(ctx, Reg::gp(14), renv);
         } else {
             ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(14), 0);
@@ -3468,7 +3464,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const size_t nargs = ins.operands.size() > 1
                                  ? std::min(ins.operands.size() - 1, (size_t)12)
                                  : 0;
-        std::vector<std::pair<int, std::string>> moves;
+        std::vector<std::pair<int, Reg>> moves;
         std::vector<std::pair<int, ir::IrValueId>> spilled_args;
         moves.reserve(nargs + 1);
         // r1 = this (r_obj ya esta en reg via load_src arriba; no es spilled)
@@ -3538,7 +3534,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const size_t nargs = ins.operands.size() > 2
                                  ? std::min(ins.operands.size() - 2, (size_t)11)
                                  : 0;
-        std::vector<std::pair<int, std::string>> moves;
+        std::vector<std::pair<int, Reg>> moves;
         std::vector<std::pair<int, ir::IrValueId>> spilled_args;
         moves.reserve(nargs + 1);
         moves.emplace_back(1, r_obj);
@@ -3595,7 +3591,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const size_t nargs = ins.operands.size() > 2
                                  ? std::min(ins.operands.size() - 2, (size_t)11)
                                  : 0;
-        std::vector<std::pair<int, std::string>> moves;
+        std::vector<std::pair<int, Reg>> moves;
         std::vector<std::pair<int, ir::IrValueId>> spilled_args;
         moves.reserve(nargs + 1);
         moves.emplace_back(1, r_obj);
@@ -3669,7 +3665,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // fix: regs con is_gc_object usan gchandle antes del push.
         emit_save_all_gc_aware(ctx, call_pos, regs_to_save);
 
-        std::vector<std::pair<int, std::string>> moves;
+        std::vector<std::pair<int, Reg>> moves;
         std::vector<std::pair<int, ir::IrValueId>> spilled_args;
         moves.reserve(nargs);
         for (size_t ai = 0; ai < nargs; ++ai) {
@@ -3844,10 +3840,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // -- exactamente el mismo registro que devuelve `dst_of()` --, asi
         // que sirve para los dos casos y lo unico que cambia es el sufijo.
         // Es el mismo arreglo que STORE ya tenia desde `59_arraylist.vx`.
-        std::string rd_sz =
-            (ins.dst == IR_NO_VALUE)
-                ? rd_full
-                : reg_name_sized(ctx.reg_num(ins.dst), ins.type);
+        Reg rd_sz = (ins.dst == IR_NO_VALUE)
+                        ? rd_full
+                        : reg_name_sized(ctx.reg_num(ins.dst), ins.type);
         // La VM NO hace zero-extend en `mov rXd/w/b, [src]` (a
         // diferencia de x86-64 con la mitad inferior).  Los bits
         // altos del registro destino conservan su valor previo,
@@ -3867,11 +3862,11 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (tsz < 8) {
             const emmit::Mnemonic opc_z =
                 host_ptr ? emmit::Mnemonic::LOADZH : emmit::Mnemonic::LOADZ;
-            ctx.out.emit(opc_z, Reg(rd_sz), Reg(rp));
+            ctx.out.emit(opc_z, rd_sz, rp);
         } else {
             const emmit::Mnemonic opcode =
                 host_ptr ? emmit::Mnemonic::MOVH : emmit::Mnemonic::MOV;
-            ctx.out.emit(opcode, Reg(rd_sz), Mem(rp));
+            ctx.out.emit(opcode, rd_sz, Mem(rp.name()));
         }
         // Sign-extension manual para tipos signed < 64 bits.  Sin esto
         // los i8/i16/i32 con valores negativos se cargan con bits
@@ -3972,7 +3967,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // Fix: SIEMPRE aplicar sufijo segun ins.type, incluso cuando
         // el reg es scratch del spill (r14/r13).  La VM ya soporta
         // las variantes sized del `mov`/`movh` (b/w/d/q).
-        std::string rv_sized = rv;
+        Reg rv_sized = rv;
         if (ctx.is_in_reg(ins.operands[0])) {
             rv_sized = reg_name_sized(ctx.reg_num(ins.operands[0]), ins.type);
         } else {
@@ -3980,7 +3975,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // de tamano segun ins.type.  reg_num_for_name retorna el
             // indice 13/14 para construir el nombre sized.
             int reg_idx = -1;
-            if (rv == "r13")
+            if (rv.is_gp(13))
                 reg_idx = 13;
             else if (rv.is_gp(14))
                 reg_idx = 14;
@@ -3996,7 +3991,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                               ctx.fn.values[ins.operands[1]].is_host_ptr;
         const emmit::Mnemonic opcode =
             host_ptr ? emmit::Mnemonic::MOVH : emmit::Mnemonic::MOV;
-        ctx.out.emit(opcode, Mem(rp), Reg(rv_sized));
+        ctx.out.emit(opcode, Mem(rp.name()), rv_sized);
         break;
     }
 
@@ -4407,8 +4402,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         ctx.out.emit(emmit::Mnemonic::PUSH, "r11");
         ctx.out.emit(emmit::Mnemonic::PUSH, "r12");
         {
-            const std::string p =
-                ctx.load_src(ins.operands[o_add], 0); // sumando
+            const Reg p = ctx.load_src(ins.operands[o_add], 0); // sumando
             ctx.out.emit(emmit::Mnemonic::PUSH, p);
         }
         {
@@ -4885,7 +4879,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (ins.operands.empty()) break;
         Reg r_arr = ctx.load_src(ins.operands[0], 0);
         Reg rd = ctx.dst_of(ins.dst);
-        ctx.out.emit(emmit::Mnemonic::MOV, Reg(rd), Mem(r_arr));
+        ctx.out.emit(emmit::Mnemonic::MOV, rd, Mem(r_arr.name()));
         ctx.store_spilled(ins.dst);
         break;
     }
@@ -5068,17 +5062,19 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             live_regs_through_call(ctx, call_pos, ins.dst);
         emit_save_all_gc_aware(ctx, call_pos, regs_to_save);
         Reg r_str = ctx.load_src(ins.operands[0], 0);
-        std::string r_enc_or_empty;
+        // Igual que con el entorno de la closure: "no hay codificacion" es una
+        // bandera, no una cadena vacia.
+        bool hay_enc = false;
+        Reg r_enc = Reg::gp(0);
         if (ins.operands.size() >= 2) {
-            r_enc_or_empty = ctx.load_src(ins.operands[1], 1);
+            r_enc = ctx.load_src(ins.operands[1], 1);
+            hay_enc = true;
         }
         Reg rd = ctx.dst_of(ins.dst);
-        if (!r_enc_or_empty.empty()) {
-            ctx.out.emit(emmit::Mnemonic::STRCONV, Reg(rd), Reg(r_str),
-                         Reg(r_enc_or_empty));
+        if (hay_enc) {
+            ctx.out.emit(emmit::Mnemonic::STRCONV, rd, r_str, r_enc);
         } else {
-            ctx.out.emit(emmit::Mnemonic::STRCONV, Reg(rd), Reg(r_str),
-                         ins.imm);
+            ctx.out.emit(emmit::Mnemonic::STRCONV, rd, r_str, ins.imm);
         }
         ctx.store_spilled(ins.dst);
         emit_restore_all_gc_aware(ctx, call_pos, regs_to_save);
@@ -5192,21 +5188,20 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // instruccion lo sobreescribe con su resultado, asi que no puede
         // llevar nada vivo.  Si algun otro operando ya vive en r0 se recurre
         // al registro del dst (libre: aun no se ha escrito).
-        std::string r_len;
+        Reg r_len = Reg::gp(0);
         if (ctx.is_in_reg(ins.operands[2])) {
             r_len = ctx.reg_of(ins.operands[2]);
         } else {
             const Reg u0 = ctx.reg_of(ins.operands[0]);
             const Reg u1 = ctx.reg_of(ins.operands[1]);
-            r_len = (u0 == "r0" || u1 == "r0") && ins.dst != IR_NO_VALUE
-                        ? std::string(ctx.dst_of(ins.dst))
-                        : std::string("r0");
+            r_len = (u0.is_gp(0) || u1.is_gp(0)) && ins.dst != IR_NO_VALUE
+                        ? ctx.dst_of(ins.dst)
+                        : Reg::gp(0);
             ctx.emit_load_spilled_into(ins.operands[2], r_len);
         }
         const Reg r_pid = ctx.load_src(ins.operands[0], 0);
         const Reg r_addr = ctx.load_src(ins.operands[1], 1);
-        ctx.out.emit(emmit::Mnemonic::MSGSEND, Reg(r_pid), Reg(r_addr),
-                     Reg(r_len));
+        ctx.out.emit(emmit::Mnemonic::MSGSEND, r_pid, r_addr, r_len);
         if (ins.dst != IR_NO_VALUE)
             emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), Reg::gp(0));
         break;
@@ -5369,7 +5364,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         emit_save_all_gc_aware(ctx, call_pos, regs_to_save);
 
         // Args van en R1..R[N], donde N = operands.size() - 1.
-        std::vector<std::pair<int, std::string>> moves;
+        std::vector<std::pair<int, Reg>> moves;
         std::vector<std::pair<int, ir::IrValueId>> spilled_args;
         moves.reserve(nargs);
         for (size_t ai = 0; ai < nargs; ++ai) {
@@ -5595,7 +5590,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // que se usa justo despues, asi que siempre tiene registro).
             // El tercero PRIMERO: `emit_load_spilled_into` usa r13 para la
             // direccion, y r13 es donde acaba el segundo `load_src`.
-            std::string d;
+            Reg d = Reg::gp(0);
             if (ctx.is_in_reg(ins.operands[2])) {
                 d = ctx.reg_of(ins.operands[2]);
             } else {
@@ -5649,7 +5644,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // op=2 (gc_collect) es void: usamos r14 dummy como dst.
         if (ins.operands.empty()) break;
         Reg r_op = ctx.load_src(ins.operands[0], 0);
-        std::string r_dst =
+        Reg r_dst =
             (ins.dst != IR_NO_VALUE) ? ctx.dst_of(ins.dst) : Reg::gp(14);
         ctx.out.emit(emmit::Mnemonic::SHAREDSTAT, r_dst, r_op);
         if (ins.dst != IR_NO_VALUE) ctx.store_spilled(ins.dst);
@@ -5669,7 +5664,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (ins.operands.empty()) break;
         Reg r_payload = ctx.load_src(ins.operands[0], 0);
         // emit_mov_if_needed para evitar mov r0, r0 redundante.
-        if (r_payload != "r0") {
+        if (r_payload.is_gp(0) == false) {
             ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(0), r_payload);
         }
         ctx.out.emit(emmit::Mnemonic::HLT);
@@ -5700,7 +5695,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             Reg r_len = ctx.load_src(ins.operands[1], 1);
             ctx.out.emit(emmit::Mnemonic::LOADMOD, r_path, r_len);
             Reg r_dst = ctx.dst_of(ins.dst);
-            if (r_dst != "r0")
+            if (r_dst.is_gp(0) == false)
                 ctx.out.emit(emmit::Mnemonic::MOV, r_dst, Reg::gp(0));
             ctx.store_spilled(ins.dst);
             emit_restore_all_gc_aware(ctx, call_pos, regs_to_save);
@@ -5711,7 +5706,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             Reg r_len = ctx.load_src(ins.operands[1], 1);
             Reg r_dst = ctx.dst_of(ins.dst);
             ctx.out.emit(emmit::Mnemonic::UNLOADMOD, r_path, r_len);
-            if (r_dst != "r0")
+            if (r_dst.is_gp(0) == false)
                 ctx.out.emit(emmit::Mnemonic::MOV, r_dst, Reg::gp(0));
             ctx.store_spilled(ins.dst);
         }
@@ -5753,7 +5748,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         Reg r_dst = ctx.dst_of(ins.dst);
         ctx.out << "    " << mnem << " " << r_cls << "\n";
         // Si r_dst ya es r0 (regalloc lucky), evita mov r0, r0.
-        if (r_dst != "r0")
+        if (r_dst.is_gp(0) == false)
             ctx.out.emit(emmit::Mnemonic::MOV, r_dst, Reg::gp(0));
         ctx.store_spilled(ins.dst);
         break;
@@ -5767,7 +5762,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         Reg r_idx = ctx.load_src(ins.operands[1], 1);
         Reg r_dst = ctx.dst_of(ins.dst);
         ctx.out << "    " << mnem << " " << r_cls << ", " << r_idx << "\n";
-        if (r_dst != "r0")
+        if (r_dst.is_gp(0) == false)
             ctx.out.emit(emmit::Mnemonic::MOV, r_dst, Reg::gp(0));
         ctx.store_spilled(ins.dst);
         break;
@@ -5813,13 +5808,13 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             ctx.out.emit(emmit::Mnemonic::JMP_JE, default_lbl);
             ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(14),
                          r_del); // staging deleter
-            if (r_ptr != "r1")
+            if (r_ptr.is_gp(1) == false)
                 ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(1), r_ptr);
             ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15), 1);
             ctx.out.emit(emmit::Mnemonic::CALLVMR, Reg::gp(14));
             ctx.out.emit(emmit::Mnemonic::JMP, done_lbl);
             ctx.out << default_lbl << ":\n";
-            if (r_ptr != "r1")
+            if (r_ptr.is_gp(1) == false)
                 ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(1), r_ptr);
             ctx.out.emit(emmit::Mnemonic::FREE, Reg::gp(1));
             ctx.out << done_lbl << ":\n";
@@ -5828,7 +5823,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             const std::string skip_lbl = "__sp_skip_" + std::to_string(lbl);
             ctx.out.emit(emmit::Mnemonic::CMPU, r_ptr, 0);
             ctx.out.emit(emmit::Mnemonic::JMP_JE, skip_lbl);
-            if (r_ptr != "r1")
+            if (r_ptr.is_gp(1) == false)
                 ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(1), r_ptr);
             ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15), 1);
             if (ins.imm == 1) {
@@ -5991,7 +5986,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // Args marshalling: r1 = this, r2..rN = args.
         const size_t nargs_user =
             ins.operands.size() > 2 ? ins.operands.size() - 2 : 0;
-        std::vector<std::pair<int, std::string>> moves;
+        std::vector<std::pair<int, Reg>> moves;
         moves.emplace_back(1, ctx.load_src(ins.operands[1], 0));
         for (size_t ai = 0; ai < nargs_user && ai < 11; ++ai)
             moves.emplace_back(static_cast<int>(ai + 2),
@@ -6043,9 +6038,12 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             emit_save_all_gc_aware(ctx, call_pos_raw, regs_to_save_raw);
         }
 
+        // Aqui el texto SI es lo que toca: esto sustituye marcadores dentro del
+        // asm que escribio el usuario.  Lo que cambia es de donde sale el
+        // nombre -- del registro tipado, no de una cadena que ande suelta.
         std::string dst_reg;
         if (ins.dst != IR_NO_VALUE) {
-            dst_reg = ctx.dst_of(ins.dst);
+            dst_reg = ctx.dst_of(ins.dst).name();
         }
         // Resolver los registros de cada operando antes de emitir.  Si
         // un operando esta spilled, load_src genera el codigo necesario
@@ -6057,7 +6055,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 src_regs.emplace_back();
             } else {
                 src_regs.push_back(
-                    ctx.load_src(ins.operands[k], static_cast<int>(k % 2)));
+                    ctx.load_src(ins.operands[k], static_cast<int>(k % 2))
+                        .name());
             }
         }
         std::istringstream iss(ins.func_name);
@@ -6182,7 +6181,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
 
         // Slots -> r5..r(4+n) via parallel-move (resuelve dependencias entre
         // args). Los slots son las direcciones VM de los allocas register().
-        std::vector<std::pair<int, std::string>> moves;
+        std::vector<std::pair<int, Reg>> moves;
         moves.reserve(binds.size());
         for (size_t i = 0; i < binds.size(); ++i)
             moves.emplace_back(static_cast<int>(5 + i),
@@ -7006,11 +7005,11 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
         const bool is_gc = static_cast<size_t>(pid) < fn.values.size() &&
                            fn.values[pid].is_gc_object;
         if (is_gc) {
-            out.emit(emmit::Mnemonic::GCHANDLE, Reg::gp(14), reg_name(preg));
-            emit_spill_access(out, "r14", alloc.slot_of(pid),
+            out.emit(emmit::Mnemonic::GCHANDLE, Reg::gp(14), Reg::gp(preg));
+            emit_spill_access(out, Reg::gp(14), alloc.slot_of(pid),
                               /*is_load=*/false);
         } else {
-            emit_spill_access(out, reg_name(preg), alloc.slot_of(pid),
+            emit_spill_access(out, Reg::gp(preg), alloc.slot_of(pid),
                               /*is_load=*/false);
         }
     }
