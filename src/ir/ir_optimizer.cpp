@@ -2551,7 +2551,16 @@ std::vector<GcAllocSite> analyze_gc_escape(const IrFunction &fn) {
     return sites;
 }
 
-/** @brief true si la env var @p name esta activa (presente y != "0"/""). */
+/**
+ * @brief true si la env var @p name esta activa (presente y != "0"/"").
+ *
+ * Consultar el entorno NO es gratis: recorre el bloque de variables del proceso
+ * entero, asi que en un pase que corre por funcion se paga por funcion.  Quien
+ * la llame desde un sitio que se repita debe guardar el resultado en un
+ * `static const` local -- se lee una vez y despues no cuesta nada --, que es lo
+ * que hacen todos los sitios de este fichero.  Son banderas de diagnostico: se
+ * fijan al arrancar el proceso y no cambian durante una compilacion.
+ */
 bool env_flag_on(const char *name) {
     const char *v = std::getenv(name);
     return v && v[0] != '\0' && v[0] != '0';
@@ -2567,7 +2576,8 @@ bool env_flag_on(const char *name) {
  * riesgo antes de habilitar la transformacion (scalar replacement).
  */
 bool ir_pass_escape_detect_gc(IrFunction &fn) {
-    if (!env_flag_on("VESTA_ESCAPE_DEBUG")) return false;
+    static const bool dbg_det = env_flag_on("VESTA_ESCAPE_DEBUG");
+    if (!dbg_det) return false;
     auto sites = analyze_gc_escape(fn);
     if (sites.empty()) return false;
     for (const auto &s : sites) {
@@ -3382,7 +3392,7 @@ bool sr_mem2reg_object(
     };
     /* COST-MODEL (default-on): permitir VESTA_ESCAPE_MEM2REG_FORCE para
      * saltarlo y promover siempre (util para medir / casos JIT-only). */
-    const bool force = env_flag_on("VESTA_ESCAPE_MEM2REG_FORCE");
+    static const bool force = env_flag_on("VESTA_ESCAPE_MEM2REG_FORCE");
     for (uint32_t off : offsets) {
         std::vector<IrBlockId> worklist;
         std::unordered_set<IrBlockId> on_work, has_phi;
@@ -3698,7 +3708,7 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
     auto sites = analyze_gc_escape(fn);
     if (sites.empty()) return false;
 
-    const bool dbg = env_flag_on("VESTA_ESCAPE_DEBUG");
+    static const bool dbg = env_flag_on("VESTA_ESCAPE_DEBUG");
     auto diag = [&](const GcAllocSite &s, const std::string &why) {
         if (dbg)
             std::fprintf(
@@ -4246,7 +4256,8 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
 // =========================================================================
 bool ir_pass_sroa_stack_structs(IrFunction &fn) {
     if (fn.is_native || fn.values.empty()) return false;
-    if (env_flag_on("VESTA_NO_SROA_STACK")) return false;
+    static const bool sroa_off = env_flag_on("VESTA_NO_SROA_STACK");
+    if (sroa_off) return false;
 
     // GUARD SOUND: si la funcion tiene control de excepcion LOCAL
     // (TRYENTER/LANDINGPAD -> catch handler), el CFG de sr_compute_dom NO
@@ -4262,7 +4273,7 @@ bool ir_pass_sroa_stack_structs(IrFunction &fn) {
                 in.op == IrOp::RETHROW)
                 return false;
 
-    const bool dbg = env_flag_on("VESTA_ESCAPE_DEBUG");
+    static const bool dbg = env_flag_on("VESTA_ESCAPE_DEBUG");
     bool changed = false;
 
     // Recolectar ALLOCAs candidatos (dst valido, no ya host_alloca -- esos van
@@ -10725,7 +10736,8 @@ static void reorder_blocks_rpo(IrFunction &fn) {
     std::vector<IrBlockId> remap(N, IR_NO_BLOCK);
     for (size_t i = 0; i < order.size(); ++i)
         remap[order[i]] = static_cast<IrBlockId>(i);
-    if (std::getenv("VESTA_RPO_DUMP"))
+    static const bool rpo_dump = std::getenv("VESTA_RPO_DUMP") != nullptr;
+    if (rpo_dump)
         std::fprintf(stderr, "[rpo] %s: N=%zu inalcanzables=%zu entry->%u\n",
                      fn.name.c_str(), N, unreachable,
                      static_cast<unsigned>(remap[0]));
@@ -12305,8 +12317,13 @@ static Pattern carry_idiom_pattern() {
 }
 
 bool ir_pass_carry_idiom(IrFunction &fn) {
-    // Valvula para aislar el pase al depurar.
-    if (std::getenv("VESTA_NO_CARRY_IDIOM")) return false;
+    /* Valvula para aislar el pase al depurar.  Se lee UNA vez: esto corre una
+     * vez por funcion y por ronda del punto fijo -- decenas de miles de veces
+     * en un modulo grande --, y consultar el entorno recorre el bloque entero
+     * de variables en cada consulta.  Medido, era el 45% de lo que costaba
+     * este pase, todo el gasto en preguntar si estaba apagado. */
+    static const bool apagado = std::getenv("VESTA_NO_CARRY_IDIOM") != nullptr;
+    if (apagado) return false;
     static const std::vector<Pattern> pats = {carry_idiom_pattern()};
     return ir_apply_patterns(fn, pats);
 }

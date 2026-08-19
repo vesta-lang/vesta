@@ -655,6 +655,22 @@ class RangeWalk {
     RangeWalk(RangeWalk &&) noexcept;
     ~RangeWalk();
 
+    /**
+     * @brief Recoloca el recorrido al principio de @p b, en la MISMA funcion.
+     *
+     * Existe porque el consumidor natural recorre TODOS los bloques de una
+     * funcion, y montar un recorrido nuevo por bloque rehacia un trabajo que no
+     * depende del bloque: el suelo de cada valor -- lo que impone su tipo, mas
+     * lo que fije si es constante -- se deriva de la funcion, y se estaba
+     * calculando una vez por bloque.  Eso convierte un coste de "un valor, una
+     * vez" en "un valor por cada bloque", que es lo que hacia que comprobar los
+     * limites dominara el tiempo de compilar.
+     *
+     * Lo unico que cambia entre bloques es donde se empieza y con que estado,
+     * asi que es lo unico que se rehace.
+     */
+    void situar(ir::IrBlockId b);
+
     /// Si se llega a ejecutar el punto en curso.
     bool alcanzable() const;
     /// Rango de @p v JUSTO ANTES de la instruccion en curso.

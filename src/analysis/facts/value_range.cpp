@@ -811,6 +811,22 @@ struct Motor : Contexto {
                     ++g_coste.elems_muertos;
         }
         for (uint32_t ai : salientes[bi]) {
+            /* Una arista sin guarda ni caso no estrecha nada, asi que lo que
+             * viajaria por ella es EXACTAMENTE el estado de salida del bloque.
+             * Copiarlo para luego compararlo es copiar para tirar: se compara
+             * el original, y solo se copia si de verdad cambia algo -- que en
+             * un encadenado recto deja de pasar en cuanto converge.  Es la
+             * mayoria de las aristas: solo las de un salto condicional o un
+             * `switch` llevan refinamiento. */
+            const bool refina = aristas[ai].cond != ir::IR_NO_VALUE ||
+                                aristas[ai].sel != ir::IR_NO_VALUE;
+            if (!refina) {
+                if (!(out == out_arista[ai])) {
+                    out_arista[ai] = out;
+                    cola.push_back(aristas[ai].hasta);
+                }
+                continue;
+            }
             Estado se = out;
             if (aristas[ai].cond != ir::IR_NO_VALUE)
                 estrechar_por_guarda(se, aristas[ai].cond, aristas[ai].rama);
@@ -1329,8 +1345,19 @@ struct RangeWalk::Impl {
     Impl(const ir::IrFunction &fn, const IrFacts &facts, const RangeFacts &r,
          ir::IrBlockId b)
         : ctx(fn, facts, nullptr), rf(r) {
-        if (b >= fn.blocks.size()) return;
-        bloque = &fn.blocks[b];
+        situar(b);
+    }
+
+    /* Lo UNICO que depende del bloque.  El contexto -- el suelo de cada valor,
+     * que sale de su tipo y de si es constante -- es de la funcion, y por eso
+     * se queda fuera de aqui: rehacerlo por bloque era recorrer todos los
+     * valores de la funcion tantas veces como bloques tuviera. */
+    void situar(ir::IrBlockId b) {
+        idx = 0;
+        estado = Estado{};
+        bloque = nullptr;
+        if (b >= ctx.fn.blocks.size()) return;
+        bloque = &ctx.fn.blocks[b];
         if (b < rf.entrada.size()) {
             estado.alcanzable = rf.entrada[b].alcanzable;
             estado.ref = rf.entrada[b].refinamientos;
@@ -1353,6 +1380,10 @@ RangeWalk::RangeWalk(RangeWalk &&o) noexcept : impl_(o.impl_) {
 
 RangeWalk::~RangeWalk() {
     delete impl_;
+}
+
+void RangeWalk::situar(ir::IrBlockId b) {
+    if (impl_ != nullptr) impl_->situar(b);
 }
 
 bool RangeWalk::alcanzable() const {
