@@ -334,7 +334,7 @@ struct Ann {
 
     /// `@Absolute("<v>")`.
     static Ann absolute(std::string v) {
-        return Ann(emmit::Directive::ABSOLUTE, std::move(v));
+        return Ann(emmit::Directive::ABS_REF, std::move(v));
     }
     /// `@Method("<v>")`.
     static Ann method(std::string v) {

@@ -65,8 +65,13 @@ VX_DIRECTIVE(SPACE_ADDRESS, "SpaceAddress", Quoted)
 VX_DIRECTIVE(NAME,          "Name",         Quoted)
 VX_DIRECTIVE(FORMAT,        "Format",       Quoted)
 VX_DIRECTIVE(LIB,           "Lib",          Quoted)
-VX_DIRECTIVE(ABSOLUTE,      "Absolute",     Quoted)
-VX_DIRECTIVE(RELATIVE,      "Relative",     Quoted)
+/* ABS_REF / REL_REF y no ABSOLUTE / RELATIVE: los dos nombres obvios son
+ * MACROS de `windows.h` (wingdi.h los define para los modos de relleno), y una
+ * macro no respeta el ambito de un `enum class` -- el preprocesador sustituye
+ * antes de que exista el enum.  El sintoma es un error de sintaxis dentro de
+ * esta lista, en la linea de la entrada, sin nada que apunte a windows.h. */
+VX_DIRECTIVE(ABS_REF,       "Absolute",     Quoted)
+VX_DIRECTIVE(REL_REF,       "Relative",     Quoted)
 VX_DIRECTIVE(METHOD,        "Method",       Quoted)
 
 /* --- Argumento identificador, sin comillas ------------------------------- */

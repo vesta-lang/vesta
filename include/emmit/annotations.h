@@ -21,7 +21,7 @@
  * Define:
  *   - AnnotationHandler: tipo alias de la funcion manejadora de cada anotacion.
  *   - apply_*(): funciones que procesan cada tipo de anotacion concreta.
- *   - annotation_handlers: tabla de despacho nombre -> manejador.
+ *   - handler_of: despacho de anotacion ( emmit::Directive) -> manejador.
  *   - annotation_allow_doc: conjunto de anotaciones permitidas en bloques de
  * documentacion.
  *   - print_context(): imprime el contexto del ensamblador en stdout.
@@ -32,6 +32,7 @@
 #ifndef ANNOTATIONS_H
 #define ANNOTATIONS_H
 
+#include "emmit/directive.h"
 #include <cstring>
 #include <functional>
 #include <string>
@@ -60,8 +61,12 @@ class Assembler; ///< Declaracion adelantada del ensamblador
  * ensamblador, y aplica el efecto de la anotacion sobre el contexto (por
  * ejemplo, crear una seccion o registrar un punto de inicio).
  */
-using AnnotationHandler =
-    std::function<void(const vm::AnnotationNode *, Assembler &)>;
+using AnnotationHandler = void (*)(const vm::AnnotationNode *, Assembler &);
+
+/// Anotacion reconocida cuyo efecto aun no esta implementado.  Existe como
+/// funcion con nombre, y no como lambda vacia dentro de una tabla, para que se
+/// vea en el despacho que esta RECONOCIDA y no simplemente ausente.
+inline void apply_pendiente(const vm::AnnotationNode *, Assembler &) {}
 
 /**
  * @brief Procesa la anotacion \@SpaceAddress para definir un espacio de
@@ -222,33 +227,57 @@ void apply_export(const vm::AnnotationNode *node, Assembler &assembler);
 void apply_generic(const vm::AnnotationNode *node, Assembler &assembler);
 
 /**
- * @brief Tabla de despacho de anotaciones: nombre -> funcion manejadora.
+ * @brief El manejador de una anotacion, o nullptr si el ensamblador no la
+ * trata.
  *
- * Mapea el nombre de cada anotacion reconocida por el ensamblador a su funcion
- * de procesamiento correspondiente.  Las entradas con lambdas vacias estan
- * reservadas para futura implementacion.
+ * Era un `std::unordered_map<std::string, ...>` DECLARADO EN ESTA CABECERA, lo
+ * que tiene dos problemas y ninguno es el hash:
+ *
+ *   - `static` en una cabecera significa UNA COPIA POR UNIDAD DE TRADUCCION.
+ *     Cada `.cpp` que la incluyera construia su propio mapa al arrancar el
+ *     programa -- alojando sus trece cadenas y sus trece `std::function` --
+ *     aunque no lo usara.
+ *   - la clave era el NOMBRE, o sea otra copia de la lista de anotaciones, y
+ *     nada obligaba a que coincidiera con las demas.
+ *
+ * Ahora es un `switch` sobre @ref emmit::Directive: sin tabla que construir,
+ * sin cadena que hashear, y -- lo que importa mas -- si alguien anade una
+ * anotacion a la lista y se olvida de aqui, el compilador lo dice.
+ *
+ * Devolver `nullptr` NO es lo mismo que no reconocerla: las que abren bloque o
+ * van dentro de uno (`@Align`, `@Lib`, `@Method`) las lee quien procesa el
+ * bloque, no este despacho.
+ *
+ * @param d Anotacion.
+ * @return Su manejador, o nullptr.
  */
-static std::unordered_map<std::string, AnnotationHandler> annotation_handlers =
-    {
-        {"SpaceAddress",
-         apply_space_address},      ///< Define un espacio de direcciones
-        {"Format", apply_format},   ///< Establece el formato de salida
-        {"Section", apply_section}, ///< Crea una seccion dentro de un espacio
-        {"InitPc", apply_init_pc},  ///< Establece el punto de entrada
-        {"IniAddress",
-         [](const vm::AnnotationNode *a, Assembler &ctx) { /* pendiente */ }},
-        {"EndAddress",
-         [](const vm::AnnotationNode *a, Assembler &ctx) { /* pendiente */ }},
-        {"Name",
-         [](const vm::AnnotationNode *a, Assembler &ctx) { /* pendiente */ }},
-        {"Import", apply_import}, ///< Registra una importacion para el linker
-        {"Relative", apply_relative}, ///< Relocalizacion relativa (PIC)
-        {"Absolute", apply_absolute}, ///< Relocalizacion absoluta
-        {"Module", apply_module},     ///< Declara el modulo del fichero fuente
-        {"Export", apply_export}, ///< Marca un simbolo como publico del modulo
-        {"Generic",
-         apply_generic}, ///< Declara parametros de tipo (monomorphization)
-};
+inline AnnotationHandler handler_of(emmit::Directive d) {
+    using emmit::Directive;
+    switch (d) {
+    case Directive::SPACE_ADDRESS: return apply_space_address;
+    case Directive::SECTION: return apply_section;
+    case Directive::FORMAT: return apply_format;
+    case Directive::INIT_PC: return apply_init_pc;
+    case Directive::IMPORT_BLOCK: return apply_import;
+    case Directive::REL_REF: return apply_relative;
+    case Directive::ABS_REF: return apply_absolute;
+    case Directive::MODULE: return apply_module;
+    case Directive::EXPORT: return apply_export;
+    case Directive::GENERIC: return apply_generic;
+    // Reconocidas y sin efecto todavia.  Van con manejador propio y no con
+    // nullptr para conservar el comportamiento: el despacho las da por
+    // tratadas y NO sigue buscandolas entre las de documentacion.
+    case Directive::INI_ADDRESS:
+    case Directive::END_ADDRESS:
+    case Directive::NAME: return apply_pendiente;
+    // Las lee quien procesa el bloque que las contiene, no este despacho.
+    case Directive::ALIGN:
+    case Directive::LIB:
+    case Directive::METHOD: break;
+    case Directive::kCount: break;
+    }
+    return nullptr;
+}
 
 /**
  * @brief Conjunto de nombres de anotacion permitidos en bloques de
