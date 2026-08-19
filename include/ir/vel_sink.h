@@ -196,6 +196,34 @@ class VelSink {
         return *this;
     }
 
+    /**
+     * @brief Un bloque de DATOS: `s_0 dq ...`, `s_1 db "texto"`, `end_data db
+     * 0`.
+     *
+     * El `.vel` los escribe estilo NASM -- etiqueta, directiva y valores EN LA
+     * MISMA LINEA --, y esa forma es obligatoria: partirla en dos lineas hace
+     * que el ensamblador trate la etiqueta como una vacia.  Por eso un bloque
+     * de datos no es "una etiqueta y luego unos valores": es una cosa sola.
+     */
+    struct Datos {
+        std::string nombre;    ///< `s_0`, `end_data`.
+        bool ancho_q = false;  ///< true = `dq` (8 bytes); false = `db`.
+        bool es_texto = false; ///< true = los valores son una cadena literal.
+        std::string texto;     ///< solo si @c es_texto.
+        std::vector<emmit::Operand> valores; ///< inmediatos o referencias.
+    };
+
+    /// Empieza un bloque de datos.  Devuelve una referencia para irlo llenando.
+    Datos &data(const std::string &nombre, bool ancho_q) {
+        cerrar_crudo();
+        orden_.push_back(
+            {TipoItem::Datos, static_cast<uint32_t>(datos_.size())});
+        datos_.emplace_back();
+        datos_.back().nombre = nombre;
+        datos_.back().ancho_q = ancho_q;
+        return datos_.back();
+    }
+
     /// Una linea en blanco, para separar bloques del fichero.
     VelSink &blank() {
         escribir("\n");
@@ -302,6 +330,7 @@ class VelSink {
             case TipoItem::Etiqueta: os << etiquetas_[r.idx] << ":\n"; break;
             case TipoItem::Instr: render_instr(os, instrs_[r.idx]); break;
             case TipoItem::Marca: render_marca(os, marcas_[r.idx]); break;
+            case TipoItem::Datos: render_datos(os, datos_[r.idx]); break;
             }
         }
         os << crudo_.str();
@@ -329,7 +358,7 @@ class VelSink {
     // vector de una estructura que valga para las dos cosas: asi un item de
     // texto ocupa lo que ocupa su cadena, y no lo que ocupa la instruccion mas
     // grande.
-    enum class TipoItem : uint8_t { Crudo, Instr, Etiqueta, Marca };
+    enum class TipoItem : uint8_t { Crudo, Instr, Etiqueta, Marca, Datos };
 
     /// Un marcador de depuracion: la linea Vesta o el stackmap del safepoint.
     ///
@@ -354,6 +383,7 @@ class VelSink {
     std::vector<emmit::Instr> instrs_;
     std::vector<std::string> etiquetas_;
     std::vector<Marca> marcas_;
+    std::vector<Datos> datos_;
 
     /// Anade una instruccion al final.
     void anadir_instr(emmit::Instr in) {
@@ -449,6 +479,20 @@ class VelSink {
             return;
         case emmit::OperandKind::None: return;
         }
+    }
+
+    /// Escribe un bloque de datos como lo espera el `.vel`.
+    static void render_datos(std::ostream &os, const Datos &d) {
+        os << "    " << d.nombre << (d.ancho_q ? " dq " : " db ");
+        if (d.es_texto) {
+            os << '"' << d.texto << '"' << "\n";
+            return;
+        }
+        for (size_t i = 0; i < d.valores.size(); ++i) {
+            if (i > 0) os << ", ";
+            render_operando(os, d.valores[i]);
+        }
+        os << "\n";
     }
 
     /// Escribe un marcador de depuracion como el comentario que era.

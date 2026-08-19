@@ -7649,18 +7649,16 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
                 std::map<uint32_t, std::string> at;
                 for (const auto &sr : meta_i.sym_refs)
                     at[sr.offset] = sr.sym;
-                out << "    s_" << i << " dq ";
-                bool first = true;
+                auto &d = out.data("s_" + std::to_string(i), /*ancho_q=*/true);
                 for (uint32_t off = 0; off + 8u <= bn; off += 8u) {
-                    if (!first) out << ", ";
-                    first = false;
                     auto its = at.find(off);
                     if (its != at.end())
-                        out << "@Absolute(\"code." << its->second << "\")";
+                        d.valores.push_back(emmit::Operand::of(
+                            Ann::absolute("code." + its->second)));
                     else
-                        out << "0"; // hueco sin metodo
+                        d.valores.push_back(
+                            emmit::Operand::of_imm(INT64_C(0))); // hueco
                 }
-                out.blank();
                 continue;
             }
             // El parser .vel espera el patron "etiqueta directiva valores"
@@ -7675,30 +7673,25 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
                     break;
                 }
             }
+            auto &d = out.data("s_" + std::to_string(i), /*ancho_q=*/false);
             if (printable) {
-                out << "    s_" << i << " db \"";
-                for (size_t k = 0; k < bn; ++k)
-                    out << static_cast<char>(bp[k]);
-                out << "\"\n";
+                d.es_texto = true;
+                d.texto.assign(reinterpret_cast<const char *>(bp), bn);
             } else {
-                out << "    s_" << i << " db ";
-                for (size_t b = 0; b < bn; ++b) {
-                    if (b > 0) out << ", ";
-                    out << "0x" << std::hex << std::setw(2) << std::setfill('0')
-                        << static_cast<unsigned>(bp[b]) << std::dec
-                        << std::setfill(' ');
-                }
-                if (bn != 0)
-                    out << ", 0x00";
-                else
-                    out << "0x00";
-                out.blank();
+                for (size_t b = 0; b < bn; ++b)
+                    d.valores.push_back(emmit::Operand::of_imm_hex(bp[b], 2));
+                // El nul de cierre: siempre hay uno, tambien cuando el bloque
+                // esta vacio.
+                d.valores.push_back(emmit::Operand::of_imm_hex(0, 2));
             }
         }
         // Etiqueta marker que extiende el rango ejecutable hasta despues
         // de los ultimos bytes; sin ella el linker calcula el tamano del
         // bloque como VA(s_N) y los bytes db quedan truncados.
-        out << "    end_data db 0x00\n";
+        {
+            auto &d = out.data("end_data", /*ancho_q=*/false);
+            d.valores.push_back(emmit::Operand::of_imm_hex(0, 2));
+        }
         out.blank();
     }
 
@@ -7726,20 +7719,20 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
             auto [bp, bn] = mod.static_data.bytes_at(i);
             const uint16_t a = mod.static_data.meta_at(i).alignment;
             if (a > 1) out << "align " << a << "\n";
-            out << "    s_" << i << " db ";
-            for (size_t b = 0; b < bn; ++b) {
-                if (b > 0) out << ", ";
-                out << "0x" << std::hex << std::setw(2) << std::setfill('0')
-                    << static_cast<unsigned>(bp[b]) << std::dec
-                    << std::setfill(' ');
-            }
-            if (bn == 0) out << "0x00";
-            out.blank();
+            auto &d = out.data("s_" + std::to_string(i), /*ancho_q=*/false);
+            for (size_t b = 0; b < bn; ++b)
+                d.valores.push_back(emmit::Operand::of_imm_hex(bp[b], 2));
+            // Aqui el nul SOLO se anade cuando el bloque esta vacio: es lo que
+            // hacia el codigo anterior, y cambiarlo moveria las direcciones.
+            if (bn == 0) d.valores.push_back(emmit::Operand::of_imm_hex(0, 2));
         }
         // Mismo motivo que `end_data`: sin una etiqueta detras, el rango de la
         // seccion se calcularia hasta VA(ultimo slot) y sus bytes quedarian
         // fuera.
-        out << "    end_gdata db 0x00\n";
+        {
+            auto &d = out.data("end_gdata", /*ancho_q=*/false);
+            d.valores.push_back(emmit::Operand::of_imm_hex(0, 2));
+        }
         out.blank();
     }
 
