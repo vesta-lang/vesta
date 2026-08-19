@@ -1530,7 +1530,8 @@ static void emit_load_float_to(EmitCtx &ctx, IrValueId operand,
                                const std::string &dst_zmm) {
     const int z = ctx.zmm_of(operand);
     if (z >= 0)
-        ctx.out << "    fmov " << dst_zmm << ", f" << z << "\n";
+        ctx.out.emit(emmit::Mnemonic::FMOV, Reg(dst_zmm),
+                     Reg::fp(static_cast<unsigned>(z)));
     else
         emit_gp_to_zmm_bits(ctx, gp_reg, dst_zmm);
 }
@@ -2132,7 +2133,9 @@ static void emit_phi_copies(EmitCtx &ctx, IrBlockId pred_id,
                         break;
                     }
                 if (!d_is_src) {
-                    ctx.out << "    fmov f" << d << ", f" << it->second << "\n";
+                    ctx.out.emit(emmit::Mnemonic::FMOV,
+                                 Reg::fp(static_cast<unsigned>(d)),
+                                 Reg::fp(static_cast<unsigned>(it->second)));
                     it = zpend.erase(it);
                     zch = true;
                 } else {
@@ -2144,16 +2147,21 @@ static void emit_phi_copies(EmitCtx &ctx, IrBlockId pred_id,
         while (!zpend.empty()) {
             auto it = zpend.begin();
             const int start = it->first;
-            ctx.out << "    fmov f2, f" << start << "\n";
+            ctx.out.emit(emmit::Mnemonic::FMOV, Reg::fp(2),
+                         Reg::fp(static_cast<unsigned>(start)));
             int cur = start;
             for (;;) {
                 const int nxt = zpend.at(cur);
                 zpend.erase(cur);
                 if (nxt == start) {
-                    ctx.out << "    fmov f" << cur << ", f2\n";
+                    ctx.out.emit(emmit::Mnemonic::FMOV,
+                                 Reg::fp(static_cast<unsigned>(cur)),
+                                 Reg::fp(2));
                     break;
                 }
-                ctx.out << "    fmov f" << cur << ", f" << nxt << "\n";
+                ctx.out.emit(emmit::Mnemonic::FMOV,
+                             Reg::fp(static_cast<unsigned>(cur)),
+                             Reg::fp(static_cast<unsigned>(nxt)));
                 cur = nxt;
             }
         }
@@ -2362,7 +2370,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // (fmowi), sin pasar por GP.
         const int zd = ctx.zmm_of(ins.dst);
         if (zd >= 0) {
-            ctx.out << "    fmowi f" << zd << ", " << ins.imm << "\n";
+            ctx.out.emit(emmit::Mnemonic::FMOWI,
+                         Reg::fp(static_cast<unsigned>(zd)), ins.imm);
             break;
         }
         Reg rd = ctx.dst_of(ins.dst);
@@ -6180,7 +6189,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
 
         // Pad de slots no usados (r(5+n)..r12) = 0.
         for (size_t i = binds.size(); i < 8; ++i)
-            ctx.out << "    mov r" << (5 + i) << ", 0\n";
+            ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(5 + i), 0);
 
         // Args fijos: r1..r4 (escritos DESPUES del parallel-move; sus valores
         // previos como fuentes de slots ya fueron consumidos).
