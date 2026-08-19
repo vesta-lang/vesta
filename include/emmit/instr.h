@@ -96,6 +96,15 @@ struct Operand {
     ir::Reg reg{ir::Reg::Bank::GP, 0};
     ir::Mem mem{ir::Reg::gp(0)};
     int64_t imm = 0;
+    /// En que BASE se escribio.  El `.vel` admite las dos y el ensamblador las
+    /// lee igual, pero es parte de como se escribio: el emisor formatea a mano
+    /// algunos valores en hex (`0x%016llx`) y renderizarlos en decimal
+    /// cambiaria el fichero.
+    uint8_t imm_digitos_hex = 0; ///< 0 = decimal; >0 = hex con esos digitos.
+    /// Si el inmediato se escribio SIN signo.  No es cosmetica: `ins.imm` es
+    /// `uint64_t`, y guardar 0xFFFFFFFFFFFFFFFF como `int64_t` lo escribiria
+    /// como `-1` -- otro numero, sin que nada avise.
+    bool imm_sin_signo = false;
     std::string name;                        ///< solo con Label o SymRef.
     Directive sym_kind = Directive::ABS_REF; ///< solo con SymRef.
 
@@ -117,6 +126,21 @@ struct Operand {
         Operand o;
         o.kind = OperandKind::Imm;
         o.imm = v;
+        return o;
+    }
+    /// Inmediato SIN signo.  Sobrecarga aparte y no un `static_cast` en el
+    /// llamante: el que llama no tiene por que acordarse de cual de los dos es.
+    static Operand of_imm(uint64_t v) {
+        Operand o;
+        o.kind = OperandKind::Imm;
+        o.imm = static_cast<int64_t>(v);
+        o.imm_sin_signo = true;
+        return o;
+    }
+    /// Inmediato escrito en HEXADECIMAL, con  digitos rellenados con ceros.
+    static Operand of_imm_hex(uint64_t v, int digitos) {
+        Operand o = of_imm(v);
+        o.imm_digitos_hex = static_cast<uint8_t>(digitos > 0 ? digitos : 1);
         return o;
     }
     static Operand of(const ir::Lbl &l) {

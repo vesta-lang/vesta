@@ -33,6 +33,7 @@
 #define IR_VEL_SINK_H
 
 #include "emmit/directive.h"
+#include "emmit/instr.h"
 #include "emmit/operand.h"
 #include "emmit/mnemonic.h"
 
@@ -40,6 +41,8 @@
 #include <iomanip>
 #include <ostream>
 #include <sstream>
+#include <type_traits>
+#include <vector>
 #include <string>
 #include <utility>
 
@@ -88,46 +91,36 @@ class VelSink {
      * que ampliar cada vez que el emisor manda algo nuevo.
      */
     template <typename T> VelSink &operator<<(const T &v) {
-        text_ << v;
+        escribir(v);
         return *this;
     }
 
     /**
-     * @brief Emite una instruccion con el mnemonico TIPADO.
+     * @brief Emite una instruccion con el mnemonico y los operandos TIPADOS.
      *
-     * Primer paso de "una emision, dos destinos": la ENTRADA pasa a ser tipada
-     * aunque la salida siga siendo texto.  Con `<<` un mnemonico mal escrito
-     * (`movv`) compila igual y no falla hasta ensamblar; aqui no existe -- el
-     * enum viene de @c emmit/instr_list.h, que es la lista UNICA de la que ya
-     * salen el enum, sus nombres y su categoria, asi que esto no anade una
-     * copia de ese conocimiento.
+     * Construye una @ref emmit::Instr y la guarda.  El texto ya no se escribe
+     * aqui: sale de renderizar lo guardado (@ref text).  Es la diferencia entre
+     * tener UNA fuente con dos vistas y tener dos cosas que se pueden separar
+     * -- que es como acaban siempre los sitios donde se escribe lo mismo dos
+     * veces, y este refactor existe justamente por eso.
      *
-     * Hoy escribe texto, para que convertir un sitio NO cambie la salida y se
-     * pueda migrar de uno en uno con el `.velb` como oraculo.  Cuando el
-     * sumidero pase a construir `vm::Instruction`, se cambia AQUI y los sitios
-     * ya convertidos no se tocan: ese es todo el objetivo de la bisagra.
-     *
-     * @param m Mnemonico.
-     * @param ops Operandos ya formateados, en el orden de la instruccion.  Que
-     *        tambien sean tipados es el paso siguiente; hacerlo ahora obligaria
-     *        a describir la forma de cada instruccion antes de tener un solo
-     *        sitio convertido.
+     * @param m   Mnemonico.
+     * @param ops Operandos, en el orden de la instruccion.
      */
     template <typename... Ops>
     VelSink &emit(emmit::Mnemonic m, const Ops &...ops) {
-        text_ << "    " << emmit::text_of(m);
-        int n = 0;
-        // Separador: el primer operando va tras un espacio; el resto, tras
-        // coma.
-        (void)std::initializer_list<int>{
-            ((text_ << (n++ == 0 ? " " : ", ") << ops), 0)...};
-        text_ << "\n";
+        emmit::Instr in;
+        in.mnem = m;
+        (void)std::initializer_list<int>{(in.add(hacer_operando(ops)), 0)...};
+        anadir_instr(std::move(in));
         return *this;
     }
 
     /// Instruccion tipada SIN operandos (`ret`, `leave`, ...).
     VelSink &emit(emmit::Mnemonic m) {
-        text_ << "    " << emmit::text_of(m) << "\n";
+        emmit::Instr in;
+        in.mnem = m;
+        anadir_instr(std::move(in));
         return *this;
     }
 
@@ -145,13 +138,17 @@ class VelSink {
      * @param texto Sin el `//`, que lo pone esto.
      */
     VelSink &comment(const std::string &texto) {
-        text_ << "    // " << texto << "\n";
+        escribir("    // ");
+        escribir(texto);
+        escribir("\n");
         return *this;
     }
 
     /// Un comentario SIN sangrar, de los que separan secciones del fichero.
     VelSink &comment_top(const std::string &texto) {
-        text_ << "// " << texto << "\n";
+        escribir("// ");
+        escribir(texto);
+        escribir("\n");
         return *this;
     }
 
@@ -163,13 +160,14 @@ class VelSink {
      * codigo, el enlazador la resuelve.
      */
     VelSink &label(const std::string &nombre) {
-        text_ << nombre << ":\n";
+        escribir(nombre);
+        escribir(":\n");
         return *this;
     }
 
     /// Una linea en blanco, para separar bloques del fichero.
     VelSink &blank() {
-        text_ << "\n";
+        escribir("\n");
         return *this;
     }
 
@@ -184,21 +182,25 @@ class VelSink {
      * @param arg Su argumento, sin comillas ni parentesis.
      */
     VelSink &directive(emmit::Directive d, const std::string &arg) {
-        text_ << '@' << emmit::text_of(d);
+        std::ostringstream os;
+        os << '@' << emmit::text_of(d);
         if (emmit::form_of(d) == emmit::ArgForm::Quoted)
-            text_ << "(\"" << arg << "\")";
+            os << "(\"" << arg << "\")";
         else
-            text_ << '(' << arg << ')';
-        text_ << "\n";
+            os << '(' << arg << ')';
+        os << "\n";
+        escribir(os.str());
         return *this;
     }
 
     /// Anotacion con argumento NUMERICO: `@Align(0x1000)`.  Siempre en hex,
     /// que es como la escribe el `.vel`.
     VelSink &directive(emmit::Directive d, uint64_t valor, int digitos = 0) {
-        text_ << '@' << emmit::text_of(d) << "(0x" << std::hex;
-        if (digitos > 0) text_ << std::setw(digitos) << std::setfill('0');
-        text_ << valor << std::dec << std::setfill(' ') << ")\n";
+        std::ostringstream os;
+        os << '@' << emmit::text_of(d) << "(0x" << std::hex;
+        if (digitos > 0) os << std::setw(digitos) << std::setfill('0');
+        os << valor << std::dec << ")\n";
+        escribir(os.str());
         return *this;
     }
 
@@ -214,32 +216,37 @@ class VelSink {
     class Block {
       public:
         Block(VelSink &s, emmit::Directive d) : sink_(&s) {
-            sink_->text_ << '@' << emmit::text_of(d) << " {\n";
+            std::ostringstream os;
+            os << '@' << emmit::text_of(d) << " {\n";
+            sink_->escribir(os.str());
         }
         Block(Block &&o) noexcept : sink_(o.sink_) { o.sink_ = nullptr; }
         Block(const Block &) = delete;
         Block &operator=(const Block &) = delete;
         ~Block() {
-            if (sink_ != nullptr) sink_->text_ << "}\n\n";
+            if (sink_ != nullptr) sink_->escribir("}\n\n");
         }
 
         /// Una entrada del bloque: `    @Name("code"),`.
         Block &entry(emmit::Directive d, const std::string &arg) {
-            sink_->text_ << "    @" << emmit::text_of(d);
+            std::ostringstream os;
+            os << "    @" << emmit::text_of(d);
             if (emmit::form_of(d) == emmit::ArgForm::Quoted)
-                sink_->text_ << "(\"" << arg << "\")";
+                os << "(\"" << arg << "\")";
             else
-                sink_->text_ << '(' << arg << ')';
-            sink_->text_ << ",\n";
+                os << '(' << arg << ')';
+            os << ",\n";
+            sink_->escribir(os.str());
             return *this;
         }
 
         /// Entrada con argumento numerico: `    @Align(0x1000),`.
         Block &entry(emmit::Directive d, uint64_t valor, int digitos = 0) {
-            sink_->text_ << "    @" << emmit::text_of(d) << "(0x" << std::hex;
-            if (digitos > 0)
-                sink_->text_ << std::setw(digitos) << std::setfill('0');
-            sink_->text_ << valor << std::dec << std::setfill(' ') << "),\n";
+            std::ostringstream os;
+            os << "    @" << emmit::text_of(d) << "(0x" << std::hex;
+            if (digitos > 0) os << std::setw(digitos) << std::setfill('0');
+            os << valor << std::dec << "),\n";
+            sink_->escribir(os.str());
             return *this;
         }
 
@@ -255,19 +262,147 @@ class VelSink {
 
     /// El `.vel` acumulado.  Sigue haciendo falta: es lo que se vuelca con
     /// `--vx-emit-only` y lo que se lee para depurar.
-    std::string text() const { return text_.str(); }
+    std::string text() const {
+        // El item en curso puede tener algo sin cerrar; se renderiza detras.
+        std::ostringstream os;
+        for (const Ref &r : orden_) {
+            if (r.tipo == TipoItem::Crudo)
+                os << crudos_[r.idx];
+            else
+                render_instr(os, instrs_[r.idx]);
+        }
+        os << crudo_.str();
+        return os.str();
+    }
 
     /// El `.vel` acumulado, vaciando el sumidero.  Evita copiar un texto que
     /// para un programa grande son megabytes.
-    std::string take_text() { return std::move(text_).str(); }
+    std::string take_text() { return text(); }
 
     /// Si no se ha emitido nada.  No es `const` porque preguntar la posicion de
     /// escritura de un stream no lo es -- y falsear la constancia con un cast
     /// seria mentir sobre lo que hace.
-    bool empty() { return text_.tellp() == std::streampos(0); }
+    bool empty() { return orden_.empty(); }
 
   private:
-    std::ostringstream text_;
+    // -- El modelo: UNA fuente, dos vistas ---------------------------------
+    //
+    // Lo emitido se guarda como una secuencia de ITEMS: instrucciones tipadas
+    // y trozos de texto crudo (secciones, etiquetas, datos, comentarios, y lo
+    // que aun no tiene forma propia).  El `.vel` es el resultado de
+    // RENDERIZAR esa secuencia, no algo que se escriba en paralelo.
+    //
+    // Se guardan en vectores separados y un indice de orden, en vez de un
+    // vector de una estructura que valga para las dos cosas: asi un item de
+    // texto ocupa lo que ocupa su cadena, y no lo que ocupa la instruccion mas
+    // grande.
+    enum class TipoItem : uint8_t { Crudo, Instr };
+    struct Ref {
+        TipoItem tipo;
+        uint32_t idx;
+    };
+
+    std::vector<Ref> orden_;
+    std::vector<std::string> crudos_;
+    std::vector<emmit::Instr> instrs_;
+
+    /// Anade una instruccion al final.
+    void anadir_instr(emmit::Instr in) {
+        cerrar_crudo();
+        orden_.push_back(
+            {TipoItem::Instr, static_cast<uint32_t>(instrs_.size())});
+        instrs_.push_back(std::move(in));
+    }
+
+    /// El buffer del item de texto en curso.
+    ///
+    /// Es UN stream reutilizado y no uno por llamada, y eso NO es un detalle:
+    /// el emisor deja manipuladores pegados al stream entre un `<<` y el
+    /// siguiente -- los bloques de datos hacen `<< std::hex` una vez y escriben
+    /// muchos bytes despues --, asi que un stream nuevo por llamada perderia el
+    /// estado y `0xff` saldria como `0x255`.  Pasa exactamente eso si se
+    /// intenta.
+    std::ostringstream crudo_;
+    bool crudo_abierto_ = false;
+
+    /// Cierra el item de texto en curso, si lo hay.
+    void cerrar_crudo() {
+        if (!crudo_abierto_) return;
+        orden_.push_back(
+            {TipoItem::Crudo, static_cast<uint32_t>(crudos_.size())});
+        crudos_.push_back(crudo_.str());
+        crudo_.str(std::string()); // vacia el contenido; los manipuladores
+                                   // siguen puestos, igual que antes
+        crudo_abierto_ = false;
+    }
+
+    /// Escribe texto crudo en el item en curso.
+    template <typename T> void escribir(const T &v) {
+        crudo_ << v;
+        crudo_abierto_ = true;
+    }
+
+    // -- De lo que recibe `emit` a un operando tipado -----------------------
+    //
+    // Sobrecargas y no una plantilla con `if constexpr`: asi un tipo que no sea
+    // un operando valido no compila, en vez de acabar como texto.
+    static emmit::Operand hacer_operando(const Reg &r) {
+        return emmit::Operand::of(r);
+    }
+    static emmit::Operand hacer_operando(const Mem &m) {
+        return emmit::Operand::of(m);
+    }
+    static emmit::Operand hacer_operando(const Lbl &l) {
+        return emmit::Operand::of(l);
+    }
+    static emmit::Operand hacer_operando(const Ann &a) {
+        return emmit::Operand::of(a);
+    }
+    /// Un operando ya construido pasa tal cual.
+    static emmit::Operand hacer_operando(emmit::Operand o) { return o; }
+    /// Cualquier entero.  El SIGNO se conserva: `ins.imm` es `uint64_t`, y
+    /// tratarlo como con signo escribiria 0xFFFFFFFFFFFFFFFF como `-1`.
+    template <typename T, typename = typename std::enable_if<
+                              std::is_integral<T>::value>::type>
+    static emmit::Operand hacer_operando(T v) {
+        if (std::is_unsigned<T>::value)
+            return emmit::Operand::of_imm(static_cast<uint64_t>(v));
+        return emmit::Operand::of_imm(static_cast<int64_t>(v));
+    }
+
+    /// Escribe un operando como lo espera el `.vel`.
+    static void render_operando(std::ostream &os, const emmit::Operand &o) {
+        switch (o.kind) {
+        case emmit::OperandKind::Reg: os << o.reg; return;
+        case emmit::OperandKind::Mem: os << o.mem; return;
+        case emmit::OperandKind::Label: os << o.name; return;
+        case emmit::OperandKind::SymRef:
+            os << '@' << emmit::text_of(o.sym_kind) << "(\"" << o.name << "\")";
+            return;
+        case emmit::OperandKind::Imm:
+            if (o.imm_digitos_hex > 0) {
+                os << "0x" << std::hex << std::setw(o.imm_digitos_hex)
+                   << std::setfill('0') << static_cast<uint64_t>(o.imm)
+                   << std::dec << std::setfill(' ');
+            } else if (o.imm_sin_signo) {
+                os << static_cast<uint64_t>(o.imm);
+            } else {
+                os << o.imm;
+            }
+            return;
+        case emmit::OperandKind::None: return;
+        }
+    }
+
+    /// Escribe una instruccion como la espera el `.vel`.
+    static void render_instr(std::ostream &os, const emmit::Instr &in) {
+        os << "    " << emmit::text_of(in.mnem);
+        for (int i = 0; i < in.n_ops; ++i) {
+            os << (i == 0 ? " " : ", ");
+            render_operando(os, in.ops[i]);
+        }
+        os << "\n";
+    }
 };
 
 } // namespace ir

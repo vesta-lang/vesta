@@ -373,9 +373,11 @@ struct EmitCtx {
                     // fresco (gcderef indexa la HandleTable, que el GC
                     // mantiene actualizada tras moves -- transparent).
                     out.emit(emmit::Mnemonic::GCDEREF,
-                             Reg::special(SpecialReg::CUR0), reg_name(sr));
+                             Reg::special(SpecialReg::CUR0),
+                             Reg::gp(static_cast<unsigned>(sr)));
                     out.emit(emmit::Mnemonic::XCHG,
-                             Reg::special(SpecialReg::CUR0), reg_name(sr));
+                             Reg::special(SpecialReg::CUR0),
+                             Reg::gp(static_cast<unsigned>(sr)));
                 }
                 return Reg::gp(sr);
             }
@@ -549,9 +551,9 @@ static void emit_three_reg_op(EmitCtx &ctx, emmit::Mnemonic mnem, IrValueId a,
     // Alguno derramado: r10/r11/r12 como portadores.  Se salvan antes (pueden
     // tener SSA vivos) y los VALORES se empujan segun se cargan, porque
     // @c load_src emite codigo como efecto colateral y reusa los scratch.
-    ctx.out.emit(emmit::Mnemonic::PUSH, "r10");
-    ctx.out.emit(emmit::Mnemonic::PUSH, "r11");
-    ctx.out.emit(emmit::Mnemonic::PUSH, "r12");
+    ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(10));
+    ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(11));
+    ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(12));
     {
         const Reg p = ctx.load_src(a, 0);
         ctx.out.emit(emmit::Mnemonic::PUSH, p);
@@ -564,13 +566,13 @@ static void emit_three_reg_op(EmitCtx &ctx, emmit::Mnemonic mnem, IrValueId a,
         const Reg p = ctx.load_src(c, 0);
         ctx.out.emit(emmit::Mnemonic::PUSH, p);
     }
-    ctx.out.emit(emmit::Mnemonic::POP, "r12");
-    ctx.out.emit(emmit::Mnemonic::POP, "r11");
-    ctx.out.emit(emmit::Mnemonic::POP, "r10");
+    ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(12));
+    ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(11));
+    ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(10));
     ctx.out.emit(mnem, Reg::gp(10), Reg::gp(11), Reg::gp(12));
-    ctx.out.emit(emmit::Mnemonic::POP, "r12");
-    ctx.out.emit(emmit::Mnemonic::POP, "r11");
-    ctx.out.emit(emmit::Mnemonic::POP, "r10");
+    ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(12));
+    ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(11));
+    ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(10));
     ctx.r13_cache = -1;
     ctx.r14_cache = -1;
 }
@@ -1129,7 +1131,8 @@ static void emit_save_live_regs(EmitCtx &ctx, uint32_t call_pos,
         uint32_t mask = 0;
         for (int r : regs_to_save) {
             if (reg_holds_gc_object(ctx, call_pos, r)) {
-                ctx.out.emit(emmit::Mnemonic::GCHANDLE, sc, reg_name(r));
+                ctx.out.emit(emmit::Mnemonic::GCHANDLE, sc,
+                             Reg::gp(static_cast<unsigned>(r)));
                 ctx.out.emit(emmit::Mnemonic::PUSH, sc);
                 if (sc.is_gp(14)) ctx.r14_cache = -1;
             } else {
@@ -1147,11 +1150,13 @@ static void emit_save_live_regs(EmitCtx &ctx, uint32_t call_pos,
     // empujados).
     for (int r : regs_to_save) {
         if (reg_holds_gc_object(ctx, call_pos, r)) {
-            ctx.out.emit(emmit::Mnemonic::GCHANDLE, sc, reg_name(r));
+            ctx.out.emit(emmit::Mnemonic::GCHANDLE, sc,
+                         Reg::gp(static_cast<unsigned>(r)));
             ctx.out.emit(emmit::Mnemonic::PUSH, sc);
             if (sc.is_gp(14)) ctx.r14_cache = -1;
         } else {
-            ctx.out.emit(emmit::Mnemonic::PUSH, reg_name(r));
+            ctx.out.emit(emmit::Mnemonic::PUSH,
+                         Reg::gp(static_cast<unsigned>(r)));
         }
     }
 }
@@ -1228,11 +1233,14 @@ static void emit_restore_live_regs(EmitCtx &ctx, uint32_t call_pos,
         for (auto it = regs_to_save.rbegin(); it != regs_to_save.rend(); ++it) {
             const int r = *it;
             if (reg_holds_gc_object(ctx, call_pos, r)) {
-                ctx.out.emit(emmit::Mnemonic::POP, reg_name(r));
+                ctx.out.emit(emmit::Mnemonic::POP,
+                             Reg::gp(static_cast<unsigned>(r)));
                 ctx.out.emit(emmit::Mnemonic::GCDEREF,
-                             Reg::special(SpecialReg::CUR0), reg_name(r));
+                             Reg::special(SpecialReg::CUR0),
+                             Reg::gp(static_cast<unsigned>(r)));
                 ctx.out.emit(emmit::Mnemonic::XCHG,
-                             Reg::special(SpecialReg::CUR0), reg_name(r));
+                             Reg::special(SpecialReg::CUR0),
+                             Reg::gp(static_cast<unsigned>(r)));
             }
         }
         return;
@@ -1241,12 +1249,13 @@ static void emit_restore_live_regs(EmitCtx &ctx, uint32_t call_pos,
     // Fallback: secuencia tradicional pop + (gcderef + xchg si GC).
     for (auto it = regs_to_save.rbegin(); it != regs_to_save.rend(); ++it) {
         const int r = *it;
-        ctx.out.emit(emmit::Mnemonic::POP, reg_name(r));
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(static_cast<unsigned>(r)));
         if (reg_holds_gc_object(ctx, call_pos, r)) {
             ctx.out.emit(emmit::Mnemonic::GCDEREF,
-                         Reg::special(SpecialReg::CUR0), reg_name(r));
+                         Reg::special(SpecialReg::CUR0),
+                         Reg::gp(static_cast<unsigned>(r)));
             ctx.out.emit(emmit::Mnemonic::XCHG, Reg::special(SpecialReg::CUR0),
-                         reg_name(r));
+                         Reg::gp(static_cast<unsigned>(r)));
         }
     }
 }
@@ -2745,8 +2754,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                                     Reg::fp(0));
                 fs = Reg::fp(0);
             }
-            const std::string fd =
-                (zd >= 0) ? ("f" + std::to_string(zd)) : "f1";
+            const Reg fd =
+                (zd >= 0) ? Reg::fp(static_cast<unsigned>(zd)) : Reg::fp(1);
             ctx.out.emit(emmit::Mnemonic::FEXTEND, fd, fs);
             if (zd < 0) {
                 emit_zmm_to_gp_bits(ctx, Reg::fp(1), ctx.dst_of(ins.dst));
@@ -2773,8 +2782,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                                     Reg::fp(0));
                 fs = Reg::fp(0);
             }
-            const std::string fd =
-                (zd >= 0) ? ("f" + std::to_string(zd)) : "f1";
+            const Reg fd =
+                (zd >= 0) ? Reg::fp(static_cast<unsigned>(zd)) : Reg::fp(1);
             ctx.out.emit(emmit::Mnemonic::FNARROW, fd, fs);
             if (zd < 0) {
                 emit_zmm_to_gp_bits(ctx, Reg::fp(1), ctx.dst_of(ins.dst));
@@ -3043,10 +3052,10 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                         // y restaurarlo DESPUES.  +2 instrs VM (push/
                         // pop) cuando hay phi copies; cero overhead
                         // cuando no las hay (path cmpjmp fusionado).
-                        ctx.out.emit(emmit::Mnemonic::PUSH, "r14");
+                        ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(14));
                         emit_phi_copies(ctx, bid, next.false_block);
                         emit_phi_copies(ctx, bid, next.target_block);
-                        ctx.out.emit(emmit::Mnemonic::POP, "r14");
+                        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(14));
                         ctx.r14_cache = -1;
                         // Test r14 contra 0 con flags FRESCOS del cmpu.
                         // El @c je salta a @c false_block si r14==0
@@ -3421,7 +3430,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // Colocar el env_ptr en r14.  El pop saca el ultimo push
         // (env si env_pushed) que es el TOP correcto.
         if (env_pushed) {
-            ctx.out.emit(emmit::Mnemonic::POP, "r14");
+            ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(14));
         } else if (hay_env) {
             emit_mov_if_needed(ctx, Reg::gp(14), renv);
         } else {
@@ -4123,8 +4132,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             : (subop == 2) ? emmit::Mnemonic::FABS
             : (subop == 3) ? emmit::Mnemonic::FSQRT
                            : emmit::Mnemonic::kCount; // 0=copy (sin op)
-        ctx.out.emit(emmit::Mnemonic::PUSH, "r10");
-        ctx.out.emit(emmit::Mnemonic::PUSH, "r11");
+        ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(10));
+        ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(11));
         {
             const Reg p = ctx.load_src(ins.operands[0], 0); // dst
             ctx.out.emit(emmit::Mnemonic::PUSH, p);
@@ -4133,8 +4142,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             const Reg p = ctx.load_src(ins.operands[1], 0); // a
             ctx.out.emit(emmit::Mnemonic::PUSH, p);
         }
-        ctx.out.emit(emmit::Mnemonic::POP, "r11");
-        ctx.out.emit(emmit::Mnemonic::POP, "r10"); // a, dst
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(11));
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(10)); // a, dst
         for (uint64_t k = 0; k < W; ++k) {
             if (k > 0) {
                 ctx.out.emit(emmit::Mnemonic::ADDU, Reg::gp(10), esz);
@@ -4150,8 +4159,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             ctx.out.emit(vec_mv(ctx, ins, 0), Mem(Reg::gp(10)),
                          Reg::gp(14)); // dst[k]
         }
-        ctx.out.emit(emmit::Mnemonic::POP, "r11");
-        ctx.out.emit(emmit::Mnemonic::POP, "r10");
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(11));
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(10));
         ctx.r13_cache = -1;
         ctx.r14_cache = -1;
         break;
@@ -4185,9 +4194,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const Reg::Width rsz = width_for_bytes(static_cast<unsigned>(esz));
         // Cargar los 3 punteros (dst/a/b) en r10/r11/r12 via push del VALOR
         // (sin hazard de parallel-move).
-        ctx.out.emit(emmit::Mnemonic::PUSH, "r10");
-        ctx.out.emit(emmit::Mnemonic::PUSH, "r11");
-        ctx.out.emit(emmit::Mnemonic::PUSH, "r12");
+        ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(10));
+        ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(11));
+        ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(12));
         // load_src emite codigo (spill) -> capturar en var ANTES del push.
         {
             const Reg p = ctx.load_src(ins.operands[0], 0); // dst
@@ -4201,9 +4210,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             const Reg p = ctx.load_src(ins.operands[2], 0); // b
             ctx.out.emit(emmit::Mnemonic::PUSH, p);
         }
-        ctx.out.emit(emmit::Mnemonic::POP, "r12");
-        ctx.out.emit(emmit::Mnemonic::POP, "r11");
-        ctx.out.emit(emmit::Mnemonic::POP, "r10"); // b, a, dst
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(12));
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(11));
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(10)); // b, a, dst
         for (uint64_t k = 0; k < W; ++k) {
             if (k > 0) {
                 ctx.out.emit(emmit::Mnemonic::ADDU, Reg::gp(10), esz);
@@ -4239,9 +4248,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                              Reg::gp(14, rsz)); // dst[k]
             }
         }
-        ctx.out.emit(emmit::Mnemonic::POP, "r12");
-        ctx.out.emit(emmit::Mnemonic::POP, "r11");
-        ctx.out.emit(emmit::Mnemonic::POP, "r10");
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(12));
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(11));
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(10));
         ctx.r13_cache = -1;
         ctx.r14_cache = -1;
         break;
@@ -4269,8 +4278,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // .ps para f32 (opera el low 32 del banco ZMM); vacio para f64.
         const bool es_ps = (ins.type == IrType::F32);
         const Reg::Width rsz = width_for_bytes(static_cast<unsigned>(esz));
-        ctx.out.emit(emmit::Mnemonic::PUSH, "r10");
-        ctx.out.emit(emmit::Mnemonic::PUSH, "r11");
+        ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(10));
+        ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(11));
         {
             const Reg p = ctx.load_src(ins.operands[0], 0); // dst
             ctx.out.emit(emmit::Mnemonic::PUSH, p);
@@ -4286,8 +4295,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             else
                 ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(13), p);
         }
-        ctx.out.emit(emmit::Mnemonic::POP, "r11");
-        ctx.out.emit(emmit::Mnemonic::POP, "r10"); // a, dst
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(11));
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(10)); // a, dst
         for (uint64_t k = 0; k < W; ++k) {
             if (k > 0) {
                 ctx.out.emit(emmit::Mnemonic::ADDU, Reg::gp(10), esz);
@@ -4311,8 +4320,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                              Reg::gp(14, rsz)); // dst[k]
             }
         }
-        ctx.out.emit(emmit::Mnemonic::POP, "r11");
-        ctx.out.emit(emmit::Mnemonic::POP, "r10");
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(11));
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(10));
         ctx.r13_cache = -1;
         ctx.r14_cache = -1;
         break;
@@ -4330,8 +4339,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const uint64_t W = width / esz;
         const bool es_ps = (ins.type == IrType::F32);
         const Reg::Width rsz = width_for_bytes(static_cast<unsigned>(esz));
-        ctx.out.emit(emmit::Mnemonic::PUSH, "r10");
-        ctx.out.emit(emmit::Mnemonic::PUSH, "r11");
+        ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(10));
+        ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(11));
         {
             const Reg p = ctx.load_src(ins.operands[0], 0); // dst
             ctx.out.emit(emmit::Mnemonic::PUSH, p);
@@ -4344,8 +4353,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             const Reg p = ctx.load_src(ins.operands[2], 0); // escalar
             ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(2), p);
         }
-        ctx.out.emit(emmit::Mnemonic::POP, "r11");
-        ctx.out.emit(emmit::Mnemonic::POP, "r10"); // a, dst
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(11));
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(10)); // a, dst
         for (uint64_t k = 0; k < W; ++k) {
             if (k > 0) {
                 ctx.out.emit(emmit::Mnemonic::ADDU, Reg::gp(10), esz);
@@ -4363,8 +4372,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             ctx.out.emit(vec_mv(ctx, ins, 0), Mem(Reg::gp(10)),
                          Reg::gp(14, rsz)); // c[k]
         }
-        ctx.out.emit(emmit::Mnemonic::POP, "r11");
-        ctx.out.emit(emmit::Mnemonic::POP, "r10");
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(11));
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(10));
         ctx.r13_cache = -1;
         ctx.r14_cache = -1;
         break;
@@ -4397,10 +4406,10 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const uint64_t W = width / esz;
         const bool es_ps = (ins.type == IrType::F32);
         const Reg::Width rsz = width_for_bytes(static_cast<unsigned>(esz));
-        ctx.out.emit(emmit::Mnemonic::PUSH, "r9");
-        ctx.out.emit(emmit::Mnemonic::PUSH, "r10");
-        ctx.out.emit(emmit::Mnemonic::PUSH, "r11");
-        ctx.out.emit(emmit::Mnemonic::PUSH, "r12");
+        ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(9));
+        ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(10));
+        ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(11));
+        ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(12));
         {
             const Reg p = ctx.load_src(ins.operands[o_add], 0); // sumando
             ctx.out.emit(emmit::Mnemonic::PUSH, p);
@@ -4417,10 +4426,10 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             const Reg p = ctx.load_src(ins.operands[o_b], 0); // b
             ctx.out.emit(emmit::Mnemonic::PUSH, p);
         }
-        ctx.out.emit(emmit::Mnemonic::POP, "r12");
-        ctx.out.emit(emmit::Mnemonic::POP, "r11");
-        ctx.out.emit(emmit::Mnemonic::POP, "r10");
-        ctx.out.emit(emmit::Mnemonic::POP, "r9");
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(12));
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(11));
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(10));
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(9));
         for (uint64_t k = 0; k < W; ++k) {
             if (k > 0) {
                 ctx.out.emit(emmit::Mnemonic::ADDU, Reg::gp(9), esz);
@@ -4447,10 +4456,10 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             ctx.out.emit(vec_mv(ctx, ins, 0), Mem(Reg::gp(10)),
                          Reg::gp(14, rsz)); // dst[k]
         }
-        ctx.out.emit(emmit::Mnemonic::POP, "r12");
-        ctx.out.emit(emmit::Mnemonic::POP, "r11");
-        ctx.out.emit(emmit::Mnemonic::POP, "r10");
-        ctx.out.emit(emmit::Mnemonic::POP, "r9");
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(12));
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(11));
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(10));
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(9));
         ctx.r13_cache = -1;
         ctx.r14_cache = -1;
         break;
@@ -4465,19 +4474,19 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (ins.operands.empty()) break;
         const uint64_t width = ins.imm & 0xFF;
         const uint64_t acc_off = ((ins.imm >> 8) & 0xF) * width; // sub-slot idx
-        ctx.out.emit(emmit::Mnemonic::PUSH, "r10");
+        ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(10));
         {
             const Reg p = ctx.load_src(ins.operands[0], 0);
             ctx.out.emit(emmit::Mnemonic::PUSH, p);
         }
-        ctx.out.emit(emmit::Mnemonic::POP, "r10");
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(10));
         if (acc_off) ctx.out.emit(emmit::Mnemonic::ADDU, Reg::gp(10), acc_off);
         ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(14), 0);
         for (uint64_t q = 0; q < width; q += 8) {
             if (q > 0) ctx.out.emit(emmit::Mnemonic::ADDU, Reg::gp(10), 8);
             ctx.out.emit(vec_mv(ctx, ins, 0), Mem(Reg::gp(10)), Reg::gp(14));
         }
-        ctx.out.emit(emmit::Mnemonic::POP, "r10");
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(10));
         ctx.r14_cache = -1;
         break;
     }
@@ -4493,9 +4502,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const bool es_ps = (ins.type == IrType::F32);
         const Reg::Width rsz = width_for_bytes(static_cast<unsigned>(esz));
         const bool is_fp = (ins.type == IrType::F64 || ins.type == IrType::F32);
-        ctx.out.emit(emmit::Mnemonic::PUSH, "r10");
-        ctx.out.emit(emmit::Mnemonic::PUSH, "r11");
-        ctx.out.emit(emmit::Mnemonic::PUSH, "r12");
+        ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(10));
+        ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(11));
+        ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(12));
         {
             const Reg p = ctx.load_src(ins.operands[0], 0); // acc slot
             ctx.out.emit(emmit::Mnemonic::PUSH, p);
@@ -4507,10 +4516,10 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (is_fma) {
             const Reg p = ctx.load_src(ins.operands[2], 0); // b
             ctx.out.emit(emmit::Mnemonic::PUSH, p);
-            ctx.out.emit(emmit::Mnemonic::POP, "r12");
+            ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(12));
         }
-        ctx.out.emit(emmit::Mnemonic::POP, "r11");
-        ctx.out.emit(emmit::Mnemonic::POP, "r10"); // a, acc
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(11));
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(10)); // a, acc
         {
             const uint64_t acc_off = ((ins.imm >> 8) & 0xF) * width;
             if (acc_off)
@@ -4568,9 +4577,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                              Reg::gp(14, rsz)); // acc[k]
             }
         }
-        ctx.out.emit(emmit::Mnemonic::POP, "r12");
-        ctx.out.emit(emmit::Mnemonic::POP, "r11");
-        ctx.out.emit(emmit::Mnemonic::POP, "r10");
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(12));
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(11));
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(10));
         ctx.r13_cache = -1;
         ctx.r14_cache = -1;
         break;
@@ -4587,16 +4596,16 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const Reg::Width rsz = width_for_bytes(static_cast<unsigned>(esz));
         const uint64_t dst_off = ((ins.imm >> 8) & 0xF) * width;
         const uint64_t src_off = ((ins.imm >> 12) & 0xF) * width;
-        ctx.out.emit(emmit::Mnemonic::PUSH, "r10");
-        ctx.out.emit(emmit::Mnemonic::PUSH, "r11");
+        ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(10));
+        ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(11));
         {
             const Reg p = ctx.load_src(ins.operands[0], 0);
             ctx.out.emit(emmit::Mnemonic::PUSH, p);
             ctx.out.emit(emmit::Mnemonic::PUSH, p);
         }
         // ambos = slot base
-        ctx.out.emit(emmit::Mnemonic::POP, "r10");
-        ctx.out.emit(emmit::Mnemonic::POP, "r11");
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(10));
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(11));
         if (dst_off)
             ctx.out.emit(emmit::Mnemonic::ADDU, Reg::gp(10), dst_off); // dst
         if (src_off)
@@ -4628,8 +4637,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                              Reg::gp(14, rsz));
             }
         }
-        ctx.out.emit(emmit::Mnemonic::POP, "r11");
-        ctx.out.emit(emmit::Mnemonic::POP, "r10");
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(11));
+        ctx.out.emit(emmit::Mnemonic::POP, Reg::gp(10));
         ctx.r13_cache = -1;
         ctx.r14_cache = -1;
         break;
@@ -5809,16 +5818,16 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 "__sp_default_" + std::to_string(lbl);
             Reg r_del = ctx.load_src(ins.operands[1], 0);
             ctx.out.emit(emmit::Mnemonic::CMPU, r_ptr, 0);
-            ctx.out.emit(emmit::Mnemonic::JMP_JE, done_lbl);
+            ctx.out.emit(emmit::Mnemonic::JMP_JE, Lbl(done_lbl));
             ctx.out.emit(emmit::Mnemonic::CMPU, r_del, 0);
-            ctx.out.emit(emmit::Mnemonic::JMP_JE, default_lbl);
+            ctx.out.emit(emmit::Mnemonic::JMP_JE, Lbl(default_lbl));
             ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(14),
                          r_del); // staging deleter
             if (r_ptr.is_gp(1) == false)
                 ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(1), r_ptr);
             ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15), 1);
             ctx.out.emit(emmit::Mnemonic::CALLVMR, Reg::gp(14));
-            ctx.out.emit(emmit::Mnemonic::JMP, done_lbl);
+            ctx.out.emit(emmit::Mnemonic::JMP, Lbl(done_lbl));
             ctx.out.label(default_lbl);
             if (r_ptr.is_gp(1) == false)
                 ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(1), r_ptr);
@@ -5828,7 +5837,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             /* EXTERN_CALLN (1) o VESTA_CALLVM (2). */
             const std::string skip_lbl = "__sp_skip_" + std::to_string(lbl);
             ctx.out.emit(emmit::Mnemonic::CMPU, r_ptr, 0);
-            ctx.out.emit(emmit::Mnemonic::JMP_JE, skip_lbl);
+            ctx.out.emit(emmit::Mnemonic::JMP_JE, Lbl(skip_lbl));
             if (r_ptr.is_gp(1) == false)
                 ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(1), r_ptr);
             ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15), 1);
@@ -6201,13 +6210,10 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // Args fijos: r1..r4 (escritos DESPUES del parallel-move; sus valores
         // previos como fuentes de slots ya fueron consumidos).
         ctx.out.emit(emmit::Mnemonic::GETPROC, Reg::gp(1));
-        char hbuf[32];
-        std::snprintf(hbuf, sizeof(hbuf), "0x%016llx",
-                      static_cast<unsigned long long>(hash));
-        ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(2), hbuf);
-        std::snprintf(hbuf, sizeof(hbuf), "0x%llx",
-                      static_cast<unsigned long long>(desc));
-        ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(3), hbuf);
+        ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(2),
+                     emmit::Operand::of_imm_hex(hash, 16));
+        ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(3),
+                     emmit::Operand::of_imm_hex(desc, 1));
         ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(4), binds.size());
         ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15), 12);
         ctx.out.emit(emmit::Mnemonic::CALLN,
@@ -6354,9 +6360,6 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                     (uint64_t)(unsigned)opd.regclass |
                     ((uint64_t)(unsigned)(phys[conv[i].first] & 0xFFFF) << 16) |
                     ((uint64_t)(bytes & 0xFFFFu) << 32);
-                char cb[32];
-                std::snprintf(cb, sizeof(cb), "0x%llx",
-                              (unsigned long long)campos);
                 /* r13 y r14, que son los scratch que este emisor ya usa para
                  * direccionar la tabla.  Coger otro cualquiera -- r12, por
                  * ejemplo -- pisaria un valor vivo: aqui no hay asignador, asi
@@ -6364,15 +6367,14 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                  * esta. */
                 ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(13),
                              bytes_valores + i * vx::kAsmDescBytes);
-                ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(14), cb);
+                ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(14),
+                             emmit::Operand::of_imm_hex(campos, 1));
                 ctx.out.emit(emmit::Mnemonic::MOV,
                              Mem(Reg::gp(15), Reg::gp(13), 1), Reg::gp(14));
             }
             ctx.out.emit(emmit::Mnemonic::GETPROC, Reg::gp(1));
-            char hb2[32];
-            std::snprintf(hb2, sizeof(hb2), "0x%016llx",
-                          (unsigned long long)hash2);
-            ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(2), hb2);
+            ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(2),
+                         emmit::Operand::of_imm_hex(hash2, 16));
             ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(3), (unsigned)am.eff);
             ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(4), Reg::gp(15));
             /* r5 deja de ser el descriptor empaquetado y pasa a ser DONDE estan
@@ -6417,10 +6419,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         emit_save_all_gc_aware(ctx, call_pos, regs_to_save);
         // r1=proc, r2=hash(plantilla), r3=eff (efectos DB para la emulacion).
         ctx.out.emit(emmit::Mnemonic::GETPROC, Reg::gp(1));
-        char hbuf[32];
-        std::snprintf(hbuf, sizeof(hbuf), "0x%016llx",
-                      static_cast<unsigned long long>(hash));
-        ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(2), hbuf);
+        ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(2),
+                     emmit::Operand::of_imm_hex(hash, 16));
         ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(3), (unsigned)am.eff);
         ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15), 3);
         ctx.out.emit(emmit::Mnemonic::CALLN, Ann::method("vrt:asm_micro_exec"));
