@@ -5927,9 +5927,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // mismo registro para los dos.
             (void)ctx.load_src(ins.operands[0], 0);
             (void)ctx.load_src(ins.operands[1], 1);
-            ctx.out << "    addadvice " << ctx.reg_at(ins.operands[0], 0)
-                    << ", " << ctx.reg_at(ins.operands[1], 1) << ", " << ins.imm
-                    << "\n";
+            ctx.out.emit(emmit::Mnemonic::ADDADVICE,
+                         Reg(ctx.reg_at(ins.operands[0], 0)),
+                         Reg(ctx.reg_at(ins.operands[1], 1)), ins.imm);
         }
         break;
     case IrOp::FINDMETHOD:
