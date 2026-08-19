@@ -157,11 +157,42 @@ class VelSink {
      *
      * Va sin sangrar y con los dos puntos puestos aqui, que es la parte que se
      * olvida.  Distinta de un comentario a proposito: una etiqueta SI es
-     * codigo, el enlazador la resuelve.
+     * codigo, el enlazador la resuelve -- y en el arbol que consume el
+     * ensamblador, ademas, POSEE todo lo que viene debajo hasta la siguiente.
      */
     VelSink &label(const std::string &nombre) {
-        escribir(nombre);
-        escribir(":\n");
+        cerrar_crudo();
+        orden_.push_back(
+            {TipoItem::Etiqueta, static_cast<uint32_t>(etiquetas_.size())});
+        etiquetas_.push_back(nombre);
+        return *this;
+    }
+
+    /**
+     * @brief La linea Vesta que origina la SIGUIENTE instruccion.
+     *
+     * Viajaba como un comentario `// @line N` en el texto, que el lexer volvia
+     * a leer y el parser colgaba del nodo: un rodeo por texto para acabar donde
+     * ya estaba.  Ahora es un campo de la instruccion, y el comentario lo
+     * escribe el renderizador a partir de el.
+     *
+     * @param linea   Linea, o 0 para no marcar nada.
+     * @param columna Columna, o 0 si no consta.
+     */
+    VelSink &debug_line(int linea, int columna = 0) {
+        Marca m;
+        m.linea = linea;
+        m.columna = columna;
+        anadir_marca(std::move(m));
+        return *this;
+    }
+
+    /// El stackmap preciso del SIGUIENTE safepoint.  Mismo caso que
+    /// @ref debug_line: era el comentario `// @sm <hex>`.
+    VelSink &stackmap(const std::string &hex) {
+        Marca m;
+        m.stackmap = hex;
+        anadir_marca(std::move(m));
         return *this;
     }
 
@@ -266,10 +297,12 @@ class VelSink {
         // El item en curso puede tener algo sin cerrar; se renderiza detras.
         std::ostringstream os;
         for (const Ref &r : orden_) {
-            if (r.tipo == TipoItem::Crudo)
-                os << crudos_[r.idx];
-            else
-                render_instr(os, instrs_[r.idx]);
+            switch (r.tipo) {
+            case TipoItem::Crudo: os << crudos_[r.idx]; break;
+            case TipoItem::Etiqueta: os << etiquetas_[r.idx] << ":\n"; break;
+            case TipoItem::Instr: render_instr(os, instrs_[r.idx]); break;
+            case TipoItem::Marca: render_marca(os, marcas_[r.idx]); break;
+            }
         }
         os << crudo_.str();
         return os.str();
@@ -296,7 +329,21 @@ class VelSink {
     // vector de una estructura que valga para las dos cosas: asi un item de
     // texto ocupa lo que ocupa su cadena, y no lo que ocupa la instruccion mas
     // grande.
-    enum class TipoItem : uint8_t { Crudo, Instr };
+    enum class TipoItem : uint8_t { Crudo, Instr, Etiqueta, Marca };
+
+    /// Un marcador de depuracion: la linea Vesta o el stackmap del safepoint.
+    ///
+    /// Es un ITEM y no un campo de la instruccion siguiente porque su POSICION
+    /// es un dato: hay instrucciones del IR que no producen bytecode propio --
+    /// una comparacion que se fusiona con el salto -- y entonces la marca cae
+    /// entre dos instrucciones emitidas.  Aplicarla "a la siguiente" la mueve
+    /// de sitio.  Quien construya el arbol la aplica igual que hace hoy el
+    /// parser: a la instruccion que venga despues.
+    struct Marca {
+        int linea = 0;
+        int columna = 0;
+        std::string stackmap;
+    };
     struct Ref {
         TipoItem tipo;
         uint32_t idx;
@@ -305,6 +352,8 @@ class VelSink {
     std::vector<Ref> orden_;
     std::vector<std::string> crudos_;
     std::vector<emmit::Instr> instrs_;
+    std::vector<std::string> etiquetas_;
+    std::vector<Marca> marcas_;
 
     /// Anade una instruccion al final.
     void anadir_instr(emmit::Instr in) {
@@ -312,6 +361,14 @@ class VelSink {
         orden_.push_back(
             {TipoItem::Instr, static_cast<uint32_t>(instrs_.size())});
         instrs_.push_back(std::move(in));
+    }
+
+    /// Anade un marcador de depuracion en la posicion actual.
+    void anadir_marca(Marca m) {
+        cerrar_crudo();
+        orden_.push_back(
+            {TipoItem::Marca, static_cast<uint32_t>(marcas_.size())});
+        marcas_.push_back(std::move(m));
     }
 
     /// El buffer del item de texto en curso.
@@ -392,6 +449,17 @@ class VelSink {
             return;
         case emmit::OperandKind::None: return;
         }
+    }
+
+    /// Escribe un marcador de depuracion como el comentario que era.
+    static void render_marca(std::ostream &os, const Marca &m) {
+        if (!m.stackmap.empty()) {
+            os << "    // @sm " << m.stackmap << "\n";
+            return;
+        }
+        os << "    // @line " << m.linea;
+        if (m.columna > 0) os << " " << m.columna;
+        os << "\n";
     }
 
     /// Escribe una instruccion como la espera el `.vel`.

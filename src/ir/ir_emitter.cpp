@@ -826,7 +826,7 @@ static void emit_sm_locs(EmitCtx &ctx, std::vector<SmLoc> &locs) {
         append_hex_byte(hex, l.location);
         append_hex_byte(hex, l.kind);
     }
-    ctx.out << "    // @sm " << hex << "\n";
+    ctx.out.stackmap(hex);
 }
 
 // Marcador para un safepoint de ALOCACION DIRECTA (frame TOP): materializa
@@ -2291,13 +2291,10 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     skip_count = 0;
     const IrInstr &ins = bb.instrs[idx];
 
-    if (ctx.emit_debug && ins.source_line > 0) {
-        ctx.out << "    // @line " << ins.source_line;
-        // La columna va detras, y solo si se sabe: sin ella el marcador queda
-        // igual que antes y quien lo lea no nota diferencia.
-        if (ins.source_column > 0) ctx.out << " " << ins.source_column;
-        ctx.out.blank();
-    }
+    // La linea Vesta va como CAMPO de la instruccion; el comentario `// @line`
+    // lo escribe el renderizador a partir de el.  La columna solo si se sabe.
+    if (ctx.emit_debug && ins.source_line > 0)
+        ctx.out.debug_line(ins.source_line, ins.source_column);
 
     //  E.1: el marcador `// @sm <hex>` se emite DENTRO de cada case de
     // safepoint (NEWOBJ/NEWOBJS/GC_ALLOC/GC_ALLOCP) justo antes del opcode de
