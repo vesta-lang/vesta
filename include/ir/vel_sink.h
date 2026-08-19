@@ -289,18 +289,25 @@ inline Reg::Width width_for_bytes(unsigned bytes) {
  * Los corchetes los pone el operando, no quien lo escribe.  Cosidos a mano
  * (`<< ", [" << reg << "]"`) es facil dejarse uno, o abrirlo donde el `.vel`
  * espera un registro -- y eso no falla hasta el ensamblador.
+ *
+ * Base e indice son REGISTROS, no cadenas.  Lo fueron mientras un registro era
+ * texto; ahora son tres bytes cada uno, asi que guardarlos como `std::string`
+ * era pedir memoria para escribir "r10".  Y "no hay indice" es una bandera: un
+ * registro no tiene estado vacio que sirva de centinela.
  */
 struct Mem {
-    std::string base;   ///< registro base.
-    std::string index;  ///< registro indice, o vacio.
-    unsigned scale = 1; ///< 1/2/4/8; solo cuenta con @c index.
-    long long disp = 0; ///< desplazamiento, con signo.
+    Reg base;       ///< registro base.
+    Reg index;      ///< registro indice; solo cuenta si @c hay_index.
+    bool hay_index; ///< si el acceso lleva indice.
+    unsigned scale; ///< 1/2/4/8; solo cuenta con @c hay_index.
+    long long disp; ///< desplazamiento, con signo.
 
-    explicit Mem(std::string b) noexcept : base(std::move(b)) {}
-    Mem(std::string b, long long off) noexcept
-        : base(std::move(b)), disp(off) {}
-    Mem(std::string b, std::string idx, unsigned sc) noexcept
-        : base(std::move(b)), index(std::move(idx)), scale(sc) {}
+    constexpr explicit Mem(Reg b) noexcept
+        : base(b), index(Reg::gp(0)), hay_index(false), scale(1), disp(0) {}
+    constexpr Mem(Reg b, long long off) noexcept
+        : base(b), index(Reg::gp(0)), hay_index(false), scale(1), disp(off) {}
+    constexpr Mem(Reg b, Reg idx, unsigned sc) noexcept
+        : base(b), index(idx), hay_index(true), scale(sc), disp(0) {}
 };
 
 /**
@@ -364,7 +371,7 @@ inline std::ostream &operator<<(std::ostream &os, const Reg &r) {
 /// tiene que poder descartar para saber que no ha roto nada.
 inline std::ostream &operator<<(std::ostream &os, const Mem &m) {
     os << '[' << m.base;
-    if (!m.index.empty()) {
+    if (m.hay_index) {
         os << " + " << m.index;
         if (m.scale != 1) os << " * " << m.scale;
     }
