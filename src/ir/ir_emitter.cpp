@@ -1739,8 +1739,8 @@ static void emit_zmm_callee_restore(EmitCtx &ctx) {
         const uint32_t cw = 16u | (3u << 8) | (1u << 15);
         // El disp del mld/mst es int16; se emite como su patron de bits uint16
         // (el parser no acepta literales negativos como operando).
-        ctx.out << "    mld " << reg_name(freg) << ", r0, " << cw << ", "
-                << static_cast<uint16_t>(static_cast<int16_t>(disp)) << "\n";
+        ctx.out.emit(emmit::Mnemonic::MLD, Reg(reg_name(freg)), Reg::gp(0), cw,
+                     static_cast<uint16_t>(static_cast<int16_t>(disp)));
     }
 }
 
@@ -2395,8 +2395,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // la VM porque es la que esos consumidores exigen.
         const char *sec =
             (ctx.mod && slot_is_gdata(*ctx.mod, ins.imm)) ? "gdata" : "code";
-        ctx.out << "    mov " << rd << ", @Absolute(\"" << sec << ".s_"
-                << ins.imm << "\")\n";
+        ctx.out.emit(
+            emmit::Mnemonic::MOV, Reg(rd),
+            Ann::absolute(std::string(sec) + ".s_" + std::to_string(ins.imm)));
         ctx.store_spilled(ins.dst);
         break;
     }
@@ -3222,9 +3223,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             }
             // Cargar direccion en r0 y usar tailcall de registro (unica forma
             // soportada).
-            ctx.out << "    mov r0, @Absolute(\""
-                    << EmitCtx::abs_lbl(EmitCtx::sanitize(ins.func_name))
-                    << "\")\n";
+            ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(0),
+                         Ann::absolute(EmitCtx::abs_lbl(
+                             EmitCtx::sanitize(ins.func_name))));
             ctx.out.emit(emmit::Mnemonic::TAILCALL, Reg::gp(0));
             // En tailcall no hay codigo posterior; los push previos los
             // heredara el callee, lo que rompe la pila.  Por seguridad, NO
@@ -4479,7 +4480,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (acc_off) ctx.out.emit(emmit::Mnemonic::ADDU, Reg::gp(10), acc_off);
         ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(14), 0);
         for (uint64_t q = 0; q < width; q += 8) {
-            if (q > 0) ctx.out << "    addu r10, 8\n";
+            if (q > 0) ctx.out.emit(emmit::Mnemonic::ADDU, Reg::gp(10), 8);
             ctx.out.emit(vec_mv(ctx, ins, 0), Mem("r10"), Reg::gp(14));
         }
         ctx.out.emit(emmit::Mnemonic::POP, "r10");
@@ -4825,8 +4826,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // Este opcode es util solo cuando seguido de readcur/writecur via
         // RAW_ASM.
         if (!ins.operands.empty())
-            ctx.out << "    gcderef cur0, " << ctx.load_src(ins.operands[0], 0)
-                    << "\n";
+            ctx.out.emit(emmit::Mnemonic::GCDEREF,
+                         Reg::special(SpecialReg::CUR0),
+                         Reg(ctx.load_src(ins.operands[0], 0)));
         break;
     }
 
@@ -4869,8 +4871,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(2), esize);
         emit_mov_if_needed(ctx, Reg::gp(3), r_len);
         ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15), 3);
-        ctx.out << "    calln "
-                   "@Method(\"stdlib/native/array/vesta_array:va_alloc\")\n";
+        ctx.out.emit(emmit::Mnemonic::CALLN,
+                     Ann::method("stdlib/native/array/vesta_array:va_alloc"));
         if (ins.dst != IR_NO_VALUE) {
             Reg rd = ctx.dst_of(ins.dst);
             emit_mov_if_needed(ctx, rd, Reg::gp(0));
@@ -4884,7 +4886,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (ins.operands.empty()) break;
         std::string r_arr = ctx.load_src(ins.operands[0], 0);
         Reg rd = ctx.dst_of(ins.dst);
-        ctx.out << "    mov " << rd << ", [" << r_arr << "]\n";
+        ctx.out.emit(emmit::Mnemonic::MOV, Reg(rd), Mem(r_arr));
         ctx.store_spilled(ins.dst);
         break;
     }
@@ -4902,7 +4904,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             ctx.out.emit(emmit::Mnemonic::MULU, Reg::gp(13), stride);
         ctx.out.emit(emmit::Mnemonic::ADDU, Reg::gp(13), 8);
         ctx.out.emit(emmit::Mnemonic::ADDU, Reg::gp(13), r_arr);
-        ctx.out << "    mov " << rd << ", [r13]\n";
+        ctx.out.emit(emmit::Mnemonic::MOV, Reg(rd), Mem("r13"));
         ctx.store_spilled(ins.dst);
         break;
     }
@@ -4919,7 +4921,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             ctx.out.emit(emmit::Mnemonic::MULU, Reg::gp(13), stride);
         ctx.out.emit(emmit::Mnemonic::ADDU, Reg::gp(13), 8);
         ctx.out.emit(emmit::Mnemonic::ADDU, Reg::gp(13), r_arr);
-        ctx.out << "    mov [r13], " << r_val << "\n";
+        ctx.out.emit(emmit::Mnemonic::MOV, Mem("r13"), Reg(r_val));
         // write barrier si el tipo de elemento es HANDLE
         if (ins.type == IrType::HANDLE)
             ctx.out.emit(emmit::Mnemonic::GCWB, r_arr);
@@ -5465,8 +5467,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     // --- direccion absoluta de un label resuelta por el linker ---
     case IrOp::LABEL_ADDR:
         if (ins.dst != IR_NO_VALUE) {
-            ctx.out << "    mov " << ctx.dst_of(ins.dst)
-                    << ", @Absolute(\"code." << ins.func_name << "\")\n";
+            ctx.out.emit(emmit::Mnemonic::MOV, ctx.dst_of(ins.dst),
+                         Ann::absolute("code." + ins.func_name));
             ctx.store_spilled(ins.dst);
         }
         break;
@@ -5667,8 +5669,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // mov {dst}, rN  (N = ins.imm).
         if (ins.dst == IR_NO_VALUE) break;
         if (ins.imm > 15) break; // sanity check
-        ctx.out << "    mov " << ctx.dst_of(ins.dst) << ", r" << ins.imm
-                << "\n";
+        ctx.out.emit(emmit::Mnemonic::MOV, ctx.dst_of(ins.dst),
+                     Reg::gp(static_cast<unsigned>(ins.imm)));
         ctx.store_spilled(ins.dst);
         break;
     }
@@ -6345,7 +6347,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 const std::string src = ctx.load_src(conv[i].second, 0);
                 ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(13),
                              (i * vx::kAsmSlotBytes));
-                ctx.out << "    mov [r15 + r13], " << src << "\n";
+                ctx.out.emit(emmit::Mnemonic::MOV, Mem("r15", "r13", 1),
+                             Reg(src));
             }
             /* Y los descriptores, que aqui son constantes conocidas. */
             for (size_t i = 0; i < conv.size(); ++i) {
@@ -6366,8 +6369,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                  * ejemplo -- pisaria un valor vivo: aqui no hay asignador, asi
                  * que un registro solo esta libre si la convencion dice que lo
                  * esta. */
-                ctx.out << "    mov r13, "
-                        << (bytes_valores + i * vx::kAsmDescBytes) << "\n";
+                ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(13),
+                             bytes_valores + i * vx::kAsmDescBytes);
                 ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(14), cb);
                 ctx.out.emit(emmit::Mnemonic::MOV, Mem("r15", "r13", 1),
                              Reg::gp(14));
@@ -6385,7 +6388,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
              * operando, y menos segun entren ISAs y extensiones. */
             ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(5), Reg::gp(15));
             ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(13), bytes_valores);
-            ctx.out << "    addu r5, r13\n"; // sin signo: es una direccion
+            ctx.out.emit(emmit::Mnemonic::ADDU, Reg::gp(5),
+                         Reg::gp(13)); // sin signo: es una direccion
             ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(6), conv.size());
             ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15), 6);
             ctx.out.emit(emmit::Mnemonic::CALLN,
@@ -6404,7 +6408,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 const Reg rd = ctx.dst_of(conv[i].second);
                 ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(13),
                              (i * vx::kAsmSlotBytes));
-                ctx.out << "    mov " << rd << ", [r15 + r13]\n";
+                ctx.out.emit(emmit::Mnemonic::MOV, Reg(rd),
+                             Mem("r15", "r13", 1));
                 ctx.store_spilled(conv[i].second);
             }
             ctx.out.emit(emmit::Mnemonic::ADDSP, Reg::special(SpecialReg::RSP),
@@ -6981,8 +6986,8 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
             -static_cast<int32_t>((ctx.zmm_save_slot_base + k + 1) * 8);
         // base = rbp(16), wcode=3 (8 B f64), host=0 (VM stack), bank=1.
         const uint32_t cw = 16u | (3u << 8) | (1u << 15);
-        out << "    mst " << reg_name(freg) << ", r0, " << cw << ", "
-            << static_cast<uint16_t>(static_cast<int16_t>(disp)) << "\n";
+        out.emit(emmit::Mnemonic::MST, Reg(reg_name(freg)), Reg::gp(0), cw,
+                 static_cast<uint16_t>(static_cast<int16_t>(disp)));
     }
 
     if (opts.emit_comments && !fn.params.empty()) {
