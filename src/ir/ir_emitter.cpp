@@ -4737,8 +4737,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         Reg rd = ctx.reg_of(ins.dst);
         std::string r_obj = ctx.load_src(ins.operands[0], 0);
         std::string r_cls = ctx.load_src(ins.operands[1], 1);
-        ctx.out << "    instanceof " << rd << ", " << r_obj << ", " << r_cls
-                << "\n";
+        ctx.out.emit(emmit::Mnemonic::INSTANCEOF, Reg(rd), Reg(r_obj),
+                     Reg(r_cls));
         break;
     }
 
@@ -4976,7 +4976,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         std::string ra = ctx.load_src(ins.operands[0], 0);
         std::string rb = ctx.load_src(ins.operands[1], 1);
         Reg rd = ctx.dst_of(ins.dst);
-        ctx.out << "    strcat " << rd << ", " << ra << ", " << rb << "\n";
+        ctx.out.emit(emmit::Mnemonic::STRCAT, Reg(rd), Reg(ra), Reg(rb));
         ctx.store_spilled(ins.dst);
         emit_restore_all_gc_aware(ctx, call_pos, regs_to_save);
         break;
@@ -4987,7 +4987,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         Reg rd = ctx.dst_of(ins.dst);
         std::string ra = ctx.load_src(ins.operands[0], 0);
         std::string rb = ctx.load_src(ins.operands[1], 1);
-        ctx.out << "    strcmp " << rd << ", " << ra << ", " << rb << "\n";
+        ctx.out.emit(emmit::Mnemonic::STRCMP, Reg(rd), Reg(ra), Reg(rb));
         ctx.store_spilled(ins.dst);
         break;
     }
@@ -5003,8 +5003,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         std::string r_str = ctx.load_src(ins.operands[0], 0);
         std::string r_rng = ctx.load_src(ins.operands[1], 1);
         Reg rd = ctx.dst_of(ins.dst);
-        ctx.out << "    strslice " << rd << ", " << r_str << ", " << r_rng
-                << "\n";
+        ctx.out.emit(emmit::Mnemonic::STRSLICE, Reg(rd), Reg(r_str),
+                     Reg(r_rng));
         ctx.store_spilled(ins.dst);
         emit_restore_all_gc_aware(ctx, call_pos, regs_to_save);
         break;
@@ -5066,11 +5066,11 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         }
         Reg rd = ctx.dst_of(ins.dst);
         if (!r_enc_or_empty.empty()) {
-            ctx.out << "    strconv " << rd << ", " << r_str << ", "
-                    << r_enc_or_empty << "\n";
+            ctx.out.emit(emmit::Mnemonic::STRCONV, Reg(rd), Reg(r_str),
+                         Reg(r_enc_or_empty));
         } else {
-            ctx.out << "    strconv " << rd << ", " << r_str << ", " << ins.imm
-                    << "\n";
+            ctx.out.emit(emmit::Mnemonic::STRCONV, Reg(rd), Reg(r_str),
+                         ins.imm);
         }
         ctx.store_spilled(ins.dst);
         emit_restore_all_gc_aware(ctx, call_pos, regs_to_save);
@@ -5197,8 +5197,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         }
         const std::string r_pid = ctx.load_src(ins.operands[0], 0);
         const std::string r_addr = ctx.load_src(ins.operands[1], 1);
-        ctx.out << "    msgsend " << r_pid << ", " << r_addr << ", " << r_len
-                << "\n";
+        ctx.out.emit(emmit::Mnemonic::MSGSEND, Reg(r_pid), Reg(r_addr),
+                     Reg(r_len));
         if (ins.dst != IR_NO_VALUE)
             emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), Reg::gp(0));
         break;
@@ -5715,8 +5715,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         std::string r_path = ctx.load_src(ins.operands[0], 0);
         std::string r_len = ctx.load_src(ins.operands[1], 1);
         Reg r_dst = ctx.dst_of(ins.dst);
-        ctx.out << "    dlopen " << r_dst << ", " << r_path << ", " << r_len
-                << "\n";
+        ctx.out.emit(emmit::Mnemonic::DLOPEN, Reg(r_dst), Reg(r_path),
+                     Reg(r_len));
         ctx.store_spilled(ins.dst);
         break;
     }
