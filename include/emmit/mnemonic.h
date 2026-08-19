@@ -35,6 +35,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -215,35 +217,52 @@ inline constexpr bool is_valid(Mnemonic m) {
 }
 
 /**
- * @brief La variante EMPAQUETADA (`.ps`) de un mnemonico escalar.
+ * @brief La variante de un mnemonico que se llama igual con @p sufijo detras.
  *
- * El emisor construia el nombre pegando el sufijo: `fadd` + `".ps"`.  Escrito
- * asi, el nombre resultante no lo comprueba nadie -- una operacion que NO
- * tenga variante empaquetada produce un mnemonico inexistente que solo falla
- * al ensamblar --, y el sufijo se puede olvidar en uno de los sitios sin que
- * se note.
+ * La maquina tiene familias enteras de instrucciones que son la misma
+ * operacion con una terminacion: `fadd` / `fadd.ps` (empaquetada), `adds` /
+ * `adds3` (tres operandos).  El emisor las construia CONCATENANDO el sufijo
+ * al nombre, o con una cadena de `if (mnem == "adds") return "adds3";`.
  *
- * La correspondencia NO se escribe a mano, que seria otra copia de la lista y
- * se separaria de ella: se deriva de @c instr_list.h buscando, para cada
- * mnemonico, el que se llama igual con `.ps` detras.  La tabla se construye
- * una sola vez.
+ * Las dos formas tienen el mismo problema: el nombre que sale no lo comprueba
+ * nadie.  Una operacion sin esa variante produce un mnemonico inexistente que
+ * solo falla al ensamblar, y la cadena de `if` es una copia de la lista que se
+ * separa de ella en cuanto alguien anade una instruccion.
  *
- * @param m Mnemonico escalar.
- * @return Su variante `.ps`, o el mismo @p m si no tiene ninguna.
+ * Aqui la correspondencia se DERIVA de @c instr_list.h: para cada mnemonico se
+ * busca el que se llama igual con el sufijo detras.  La tabla se construye una
+ * vez por sufijo.
+ *
+ * @param m      Mnemonico base.
+ * @param sufijo Terminacion de la familia (`".ps"`, `"3"`).
+ * @return La variante, o @c Mnemonic::kCount si no existe.
  */
-inline Mnemonic packed_of(Mnemonic m) {
-    static const std::vector<Mnemonic> kPacked = [] {
-        std::vector<Mnemonic> v(mnemonic_count(), Mnemonic::kCount);
-        for (uint16_t i = 0; i < mnemonic_count(); ++i) {
-            const std::string buscado =
-                std::string(text_of(static_cast<Mnemonic>(i))) + ".ps";
-            const Mnemonic p = mnemonic_from_text(buscado.c_str());
-            v[i] = is_valid(p) ? p : static_cast<Mnemonic>(i);
+inline Mnemonic variant_of(Mnemonic m, const char *sufijo) {
+    static std::vector<std::pair<std::string, std::vector<Mnemonic>>> kCache;
+    static std::mutex kMutex;
+    std::lock_guard<std::mutex> lock(kMutex);
+    for (const auto &e : kCache) {
+        if (e.first == sufijo) {
+            const uint16_t i = static_cast<uint16_t>(m);
+            return i < e.second.size() ? e.second[i] : Mnemonic::kCount;
         }
-        return v;
-    }();
+    }
+    std::vector<Mnemonic> tabla(mnemonic_count(), Mnemonic::kCount);
+    for (uint16_t i = 0; i < mnemonic_count(); ++i) {
+        const std::string buscado =
+            std::string(text_of(static_cast<Mnemonic>(i))) + sufijo;
+        tabla[i] = mnemonic_from_text(buscado.c_str());
+    }
+    kCache.emplace_back(sufijo, std::move(tabla));
     const uint16_t i = static_cast<uint16_t>(m);
-    return i < kPacked.size() ? kPacked[i] : m;
+    return i < kCache.back().second.size() ? kCache.back().second[i]
+                                           : Mnemonic::kCount;
+}
+
+/// La variante EMPAQUETADA (`.ps`), o el mismo @p m si no tiene.
+inline Mnemonic packed_of(Mnemonic m) {
+    const Mnemonic p = variant_of(m, ".ps");
+    return is_valid(p) ? p : m;
 }
 
 /**
@@ -254,8 +273,11 @@ inline Mnemonic packed_of(Mnemonic m) {
 inline Mnemonic packed_if(Mnemonic m, bool es_f32) {
     return es_f32 ? packed_of(m) : m;
 }
-/// Si @p m es una instruccion de verdad y no el centinela del final.
 
+/// La super-instruccion de TRES operandos (`adds` -> `adds3`), o kCount.
+inline Mnemonic alu3_of(Mnemonic m) {
+    return variant_of(m, "3");
+}
 /**
  * @brief Indice plano por mnemonico sobre una tabla ajena indexada por cadena.
  *

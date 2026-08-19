@@ -1381,21 +1381,6 @@ emit_parallel_arg_moves(EmitCtx &ctx,
 //   "op r_dst, r_src2"
 // Carga operandos derramados desde pila (src1->r14, src2->r13) si es necesario.
 // Almacena el resultado en pila si dst esta derramado.
-// Mapea mnemonic 2-operandos a su variante alu3 (3-op super-instr) si existe.
-// Devuelve nullptr si no hay alu3 para el opcode (caso
-// DIV/MOD/SHL/SHR/SAR/CMP).
-static const char *alu3_mnemonic_for(const std::string &mnem) {
-    if (mnem == "adds") return "adds3";
-    if (mnem == "subs") return "subs3";
-    if (mnem == "muls") return "muls3";
-    if (mnem == "addu") return "addu3";
-    if (mnem == "subu") return "subu3";
-    if (mnem == "mulu") return "mulu3";
-    if (mnem == "and") return "and3";
-    if (mnem == "or") return "or3";
-    if (mnem == "xor") return "xor3";
-    return nullptr;
-}
 
 // Emite operacion binaria de dos-direcciones:
 //   "mov r_dst, r_src1"
@@ -1405,7 +1390,7 @@ static const char *alu3_mnemonic_for(const std::string &mnem) {
 //
 // Carga operandos derramados desde pila (src1->r14, src2->r13) si es necesario.
 // Almacena el resultado en pila si dst esta derramado.
-static void emit_binop(EmitCtx &ctx, const std::string &mnemonic, IrValueId dst,
+static void emit_binop(EmitCtx &ctx, emmit::Mnemonic mnemonic, IrValueId dst,
                        IrValueId src1, IrValueId src2) {
     std::string rs1 = ctx.load_src(src1, 0); // r14 si derramado
     std::string rs2 = ctx.load_src(src2, 1); // r13 si derramado
@@ -1417,10 +1402,9 @@ static void emit_binop(EmitCtx &ctx, const std::string &mnemonic, IrValueId dst,
      *       es 1 instruccion -- igual coste, sin necesidad de cambio).
      * Cuando rs1 / rs2 estan derramados (r14 / r13), alu3 los lee igual
      * que la version 2-op: no hay restriccion en quien provee el operando. */
-    const char *m3 = alu3_mnemonic_for(mnemonic);
-    if (m3 != nullptr && rd != rs1) {
-        ctx.out << "    " << m3 << " " << rd << ", " << rs1 << ", " << rs2
-                << "\n";
+    const emmit::Mnemonic m3 = emmit::alu3_of(mnemonic);
+    if (emmit::is_valid(m3) && rd != rs1) {
+        ctx.out.emit(m3, rd, Reg(rs1), Reg(rs2));
         /* Si rd es r14 / r13 (caso destino spilled), invalidar cache de
          * constante igual que emit_mov_if_needed haria. */
         if (rd == "r14") ctx.r14_cache = -1;
@@ -1430,7 +1414,7 @@ static void emit_binop(EmitCtx &ctx, const std::string &mnemonic, IrValueId dst,
     }
 
     emit_mov_if_needed(ctx, rd, rs1);
-    ctx.out << "    " << mnemonic << " " << rd << ", " << rs2 << "\n";
+    ctx.out.emit(mnemonic, rd, Reg(rs2));
     ctx.store_spilled(dst);
 }
 
@@ -1557,13 +1541,13 @@ static void emit_load_float_to(EmitCtx &ctx, IrValueId operand,
 // como bits IEEE 754 al GP destino.  El sufijo ".ps" se anade
 // automaticamente cuando @c type es F32 para que el runtime use la ruta
 // de aritmetica float-32 (read_f32 + write_f32 con zeroing del tope).
-static void emit_float_binop(EmitCtx &ctx, const std::string &mnemonic,
+static void emit_float_binop(EmitCtx &ctx, emmit::Mnemonic mnemonic,
                              IrType type, IrValueId dst, IrValueId src1,
                              IrValueId src2) {
     const int zd = ctx.zmm_of(dst);
     const int z1 = ctx.zmm_of(src1);
     const int z2 = ctx.zmm_of(src2);
-    const std::string suffix = (type == IrType::F32) ? ".ps" : "";
+    const bool es_ps = (type == IrType::F32);
 
     // Fast path historico: nada del banco ZMM implicado -> optimizacion last_f0
     // (evita recargar src1 si f0 ya lo tiene de la op float anterior).
@@ -1575,7 +1559,7 @@ static void emit_float_binop(EmitCtx &ctx, const std::string &mnemonic,
         Reg rd = ctx.dst_of(dst);
         if (!f0_has_src1) emit_gp_to_zmm_bits(ctx, rs1, "f0");
         emit_gp_to_zmm_bits(ctx, rs2, "f1");
-        ctx.out << "    " << mnemonic << suffix << " f0, f1\n";
+        ctx.out.emit(emmit::packed_if(mnemonic, es_ps), Reg::fp(0), Reg::fp(1));
         emit_zmm_to_gp_bits(ctx, "f0", rd);
         ctx.store_spilled(dst);
         ctx.last_f0 = dst;
@@ -1599,25 +1583,24 @@ static void emit_float_binop(EmitCtx &ctx, const std::string &mnemonic,
         rb = "f1";
     }
     const std::string rd = (zd >= 0) ? ("f" + std::to_string(zd)) : "f0";
-    const bool comm = (mnemonic == "fadd" || mnemonic == "fmul" ||
-                       mnemonic == "fmin" || mnemonic == "fmax");
+    const bool comm = (mnemonic == emmit::Mnemonic::FADD ||
+                       mnemonic == emmit::Mnemonic::FMUL ||
+                       mnemonic == emmit::Mnemonic::FMIN ||
+                       mnemonic == emmit::Mnemonic::FMAX);
     // 2-address: rd = ra OP rb.  El reuso de registro del regalloc garantiza
     // que rd == ra (o rd == rb) solo si ese operando murio -> seguro
     // sobrescribir.
     if (rd == ra) {
-        ctx.out << "    " << mnemonic << suffix << " " << rd << ", " << rb
-                << "\n";
+        ctx.out.emit(emmit::packed_if(mnemonic, es_ps), Reg(rd), Reg(rb));
     } else if (rd == rb && comm) {
-        ctx.out << "    " << mnemonic << suffix << " " << rd << ", " << ra
-                << "\n";
+        ctx.out.emit(emmit::packed_if(mnemonic, es_ps), Reg(rd), Reg(ra));
     } else if (rd == rb) { // no conmutativa y rd == rb: temp en f2
         ctx.out.emit(emmit::Mnemonic::FMOV, Reg::fp(2), ra);
-        ctx.out << "    " << mnemonic << suffix << " f2, " << rb << "\n";
+        ctx.out.emit(emmit::packed_if(mnemonic, es_ps), Reg::fp(2), Reg(rb));
         ctx.out.emit(emmit::Mnemonic::FMOV, rd, Reg::fp(2));
     } else {
         ctx.out.emit(emmit::Mnemonic::FMOV, rd, ra);
-        ctx.out << "    " << mnemonic << suffix << " " << rd << ", " << rb
-                << "\n";
+        ctx.out.emit(emmit::packed_if(mnemonic, es_ps), Reg(rd), Reg(rb));
     }
     if (zd < 0) {
         emit_zmm_to_gp_bits(ctx, "f0", ctx.dst_of(dst));
@@ -1633,18 +1616,18 @@ static void emit_float_binop(EmitCtx &ctx, const std::string &mnemonic,
 // el mismo registro como destino y fuente segun emit_instr_freg), y
 // devuelve f0 como bits IEEE 754 al GP destino.  El sufijo ".ps" se
 // anade cuando @c type es F32.
-static void emit_float_unop(EmitCtx &ctx, const std::string &mnemonic,
-                            IrType type, IrValueId dst, IrValueId src) {
+static void emit_float_unop(EmitCtx &ctx, emmit::Mnemonic mnemonic, IrType type,
+                            IrValueId dst, IrValueId src) {
     const int zd = ctx.zmm_of(dst);
     const int zs = ctx.zmm_of(src);
-    const std::string suffix = (type == IrType::F32) ? ".ps" : "";
+    const bool es_ps = (type == IrType::F32);
     if (zd < 0 && zs < 0) {
         const bool f0_has_src =
             (ctx.last_f0 != IR_NO_VALUE && ctx.last_f0 == src);
         std::string rs = f0_has_src ? std::string() : ctx.load_src(src, 0);
         Reg rd = ctx.dst_of(dst);
         if (!f0_has_src) emit_gp_to_zmm_bits(ctx, rs, "f0");
-        ctx.out << "    " << mnemonic << suffix << " f0, f0\n";
+        ctx.out.emit(emmit::packed_if(mnemonic, es_ps), Reg::fp(0), Reg::fp(0));
         emit_zmm_to_gp_bits(ctx, "f0", rd);
         ctx.store_spilled(dst);
         ctx.last_f0 = dst;
@@ -1659,7 +1642,7 @@ static void emit_float_unop(EmitCtx &ctx, const std::string &mnemonic,
         rs = "f0";
     }
     const std::string rd = (zd >= 0) ? ("f" + std::to_string(zd)) : "f0";
-    ctx.out << "    " << mnemonic << suffix << " " << rd << ", " << rs << "\n";
+    ctx.out.emit(emmit::packed_if(mnemonic, es_ps), Reg(rd), Reg(rs));
     if (zd < 0) {
         emit_zmm_to_gp_bits(ctx, "f0", ctx.dst_of(dst));
         ctx.store_spilled(dst);
@@ -1675,7 +1658,7 @@ static void emit_float_unop(EmitCtx &ctx, const std::string &mnemonic,
 // luego escribe fd, asi que fd no puede ser ra ni rb).
 static void emit_float_fma(EmitCtx &ctx, IrType type, IrValueId dst,
                            IrValueId a, IrValueId b, IrValueId c) {
-    const std::string suffix = (type == IrType::F32) ? ".ps" : "";
+    const bool es_ps = (type == IrType::F32);
     const int za = ctx.zmm_of(a), zb = ctx.zmm_of(b), zc = ctx.zmm_of(c);
     const int zd = ctx.zmm_of(dst);
     std::string ra, rb;
@@ -1701,8 +1684,8 @@ static void emit_float_fma(EmitCtx &ctx, IrType type, IrValueId dst,
     } else {
         emit_gp_to_zmm_bits(ctx, ctx.load_src(c, 2), acc);
     }
-    ctx.out << "    fmadd" << suffix << " " << acc << ", " << ra << ", " << rb
-            << "\n";
+    ctx.out.emit(emmit::packed_if(emmit::Mnemonic::FMADD, es_ps), Reg(acc),
+                 Reg(ra), Reg(rb));
     if (acc != rd) ctx.out.emit(emmit::Mnemonic::FMOV, rd, acc);
     if (zd < 0) {
         emit_zmm_to_gp_bits(ctx, rd, ctx.dst_of(dst));
@@ -1803,33 +1786,40 @@ static inline bool is_tracked_float_op(IrOp op) {
 }
 
 // Mnemonic de dos-direcciones para operaciones aritmeticas/logicas segun tipo.
-static const char *arith_mnemonic(IrOp op, IrType type) {
+static emmit::Mnemonic arith_mnemonic(IrOp op, IrType type) {
+    using emmit::Mnemonic;
     bool is_signed = (type == IrType::I8 || type == IrType::I16 ||
                       type == IrType::I32 || type == IrType::I64);
     switch (op) {
-    case IrOp::ADD: return is_signed ? "adds" : "addu";
+    case IrOp::ADD: return is_signed ? Mnemonic::ADDS : Mnemonic::ADDU;
     // Multiprecision: siempre SIN signo -- el acarreo es un hecho
     // sobre los bits, no sobre el valor.
-    case IrOp::ADDC: return "addu";
-    case IrOp::SUBB: return "subu";
-    case IrOp::SUB: return is_signed ? "subs" : "subu";
-    case IrOp::MUL: return is_signed ? "muls" : "mulu";
-    case IrOp::DIV: return is_signed ? "divs" : "divu";
-    case IrOp::MOD: return is_signed ? "mods" : "modu";
-    case IrOp::AND: return "and";
-    case IrOp::OR: return "or";
-    case IrOp::XOR: return "xor";
-    case IrOp::SHL: return "shl";
-    case IrOp::SHR: return "shr";
-    case IrOp::SAR: return "sar";
+    case IrOp::ADDC: return Mnemonic::ADDU;
+    case IrOp::SUBB: return Mnemonic::SUBU;
+    case IrOp::SUB: return is_signed ? Mnemonic::SUBS : Mnemonic::SUBU;
+    case IrOp::MUL: return is_signed ? Mnemonic::MULS : Mnemonic::MULU;
+    case IrOp::DIV: return is_signed ? Mnemonic::DIVS : Mnemonic::DIVU;
+    case IrOp::MOD: return is_signed ? Mnemonic::MODS : Mnemonic::MODU;
+    case IrOp::AND: return Mnemonic::AND;
+    case IrOp::OR: return Mnemonic::OR;
+    case IrOp::XOR: return Mnemonic::XOR;
+    case IrOp::SHL: return Mnemonic::SHL;
+    case IrOp::SHR: return Mnemonic::SHR;
+    case IrOp::SAR: return Mnemonic::SAR;
     // flotante
-    case IrOp::FADD: return "fadd";
-    case IrOp::FSUB: return "fsub";
-    case IrOp::FMUL: return "fmul";
-    case IrOp::FDIV: return "fdiv";
-    case IrOp::FMIN: return "fmin";
-    case IrOp::FMAX: return "fmax";
-    default: return "add";
+    case IrOp::FADD: return Mnemonic::FADD;
+    case IrOp::FSUB: return Mnemonic::FSUB;
+    case IrOp::FMUL: return Mnemonic::FMUL;
+    case IrOp::FDIV: return Mnemonic::FDIV;
+    case IrOp::FMIN: return Mnemonic::FMIN;
+    case IrOp::FMAX: return Mnemonic::FMAX;
+    // Cualquier operacion que no este arriba.  Antes devolvia "add", que NO
+    // ES UN MNEMONICO de la maquina: si este caso llegara a dispararse, el
+    // `.vel` saldria con una instruccion inexistente y el fallo aparecia al
+    // ensamblar, sin nada que lo relacionara con aqui.  Escrito con el enum
+    // eso deja de poder ocurrir -- este es exactamente el tipo de error que
+    // el refactor viene a quitar.
+    default: return Mnemonic::ADDS;
     }
 }
 
@@ -2038,10 +2028,11 @@ static void emit_cmp_standalone(EmitCtx &ctx, const IrInstr &ins) {
         // El sufijo ".ps" se anade si los operandos son F32 (el tipo del
         // resultado de FCMP es BOOL, asi que miramos la fuente).
         const IrType ot = ctx.fn.values[ins.operands[0]].type;
-        const std::string suffix = (ot == IrType::F32) ? ".ps" : "";
+        const bool es_ps = (ot == IrType::F32);
         emit_load_float_to(ctx, ins.operands[0], ra, "f0");
         emit_load_float_to(ctx, ins.operands[1], rb, "f1");
-        ctx.out << "    fcmp" << suffix << " f0, f1\n";
+        ctx.out.emit(emmit::packed_if(emmit::Mnemonic::FCMP, es_ps), Reg::fp(0),
+                     Reg::fp(1));
     } else {
         ctx.out.emit(cmp_mn, Reg(ra), Reg(rb));
     }
@@ -2543,32 +2534,39 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         break;
     case IrOp::FNEG:
         if (!ins.operands.empty())
-            emit_float_unop(ctx, "fneg", ins.type, ins.dst, ins.operands[0]);
+            emit_float_unop(ctx, emmit::Mnemonic::FNEG, ins.type, ins.dst,
+                            ins.operands[0]);
         break;
     case IrOp::FABS:
         if (!ins.operands.empty())
-            emit_float_unop(ctx, "fabs", ins.type, ins.dst, ins.operands[0]);
+            emit_float_unop(ctx, emmit::Mnemonic::FABS, ins.type, ins.dst,
+                            ins.operands[0]);
         break;
     case IrOp::FSQRT:
         if (!ins.operands.empty())
-            emit_float_unop(ctx, "fsqrt", ins.type, ins.dst, ins.operands[0]);
+            emit_float_unop(ctx, emmit::Mnemonic::FSQRT, ins.type, ins.dst,
+                            ins.operands[0]);
         break;
     // Sprint string-perf-5: FP unarios nativos (opcodes 0x82-0x85).
     case IrOp::FFLOOR:
         if (!ins.operands.empty())
-            emit_float_unop(ctx, "ffloor", ins.type, ins.dst, ins.operands[0]);
+            emit_float_unop(ctx, emmit::Mnemonic::FFLOOR, ins.type, ins.dst,
+                            ins.operands[0]);
         break;
     case IrOp::FCEIL:
         if (!ins.operands.empty())
-            emit_float_unop(ctx, "fceil", ins.type, ins.dst, ins.operands[0]);
+            emit_float_unop(ctx, emmit::Mnemonic::FCEIL, ins.type, ins.dst,
+                            ins.operands[0]);
         break;
     case IrOp::FROUND:
         if (!ins.operands.empty())
-            emit_float_unop(ctx, "fround", ins.type, ins.dst, ins.operands[0]);
+            emit_float_unop(ctx, emmit::Mnemonic::FROUND, ins.type, ins.dst,
+                            ins.operands[0]);
         break;
     case IrOp::FTRUNC:
         if (!ins.operands.empty())
-            emit_float_unop(ctx, "ftrunc", ins.type, ins.dst, ins.operands[0]);
+            emit_float_unop(ctx, emmit::Mnemonic::FTRUNC, ins.type, ins.dst,
+                            ins.operands[0]);
         break;
     // --- Conversion de tipos ---
     case IrOp::CAST:
@@ -2681,16 +2679,17 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         //   r1=ZMM -> direction=1 (zmm->gp), r1=GP -> direction=0 (gp->zmm).
         if (!ins.operands.empty()) {
             std::string rs = ctx.load_src(ins.operands[0], 0);
-            const std::string suffix = (ins.type == IrType::F32) ? ".ps" : "";
+            const bool es_ps = (ins.type == IrType::F32);
             const int zd = ctx.zmm_of(ins.dst);
             if (zd >= 0) {
                 // int (GP) -> float DIRECTO al banco: fcvt gp_src, f_dst.
-                ctx.out << "    fcvt" << suffix << " " << rs << ", f" << zd
-                        << "\n";
+                ctx.out.emit(emmit::packed_if(emmit::Mnemonic::FCVT, es_ps),
+                             Reg(rs), Reg::fp(static_cast<unsigned>(zd)));
                 break; // vive en ZMM
             }
             Reg rd = ctx.dst_of(ins.dst);
-            ctx.out << "    fcvt" << suffix << " " << rs << ", f0\n";
+            ctx.out.emit(emmit::packed_if(emmit::Mnemonic::FCVT, es_ps),
+                         Reg(rs), Reg::fp(0));
             emit_zmm_to_gp_bits(ctx, "f0", rd);
             ctx.store_spilled(ins.dst);
             ctx.last_f0 = ins.dst; // f0 conserva el valor float convertido
@@ -2703,15 +2702,16 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (!ins.operands.empty()) {
             Reg rd = ctx.dst_of(ins.dst);
             const IrType ot = ctx.fn.values[ins.operands[0]].type;
-            const std::string suffix = (ot == IrType::F32) ? ".ps" : "";
+            const bool es_ps = (ot == IrType::F32);
             const int zs = ctx.zmm_of(ins.operands[0]);
             if (zs >= 0) {
-                ctx.out << "    fcvt" << suffix << " f" << zs << ", " << rd
-                        << "\n";
+                ctx.out.emit(emmit::packed_if(emmit::Mnemonic::FCVT, es_ps),
+                             Reg::fp(static_cast<unsigned>(zs)), Reg(rd));
             } else {
                 std::string rs = ctx.load_src(ins.operands[0], 0);
                 emit_gp_to_zmm_bits(ctx, rs, "f0");
-                ctx.out << "    fcvt" << suffix << " f0, " << rd << "\n";
+                ctx.out.emit(emmit::packed_if(emmit::Mnemonic::FCVT, es_ps),
+                             Reg::fp(0), Reg(rd));
             }
             ctx.store_spilled(ins.dst);
         }
@@ -2883,11 +2883,12 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                         // FCMP fusionado con BR_COND: bitcast a ZMM antes
                         // de comparar.  Selecciona ".ps" si operandos F32.
                         const IrType ot = ctx.fn.values[ins.operands[0]].type;
-                        const std::string suffix =
-                            (ot == IrType::F32) ? ".ps" : "";
+                        const bool es_ps = (ot == IrType::F32);
                         emit_load_float_to(ctx, ins.operands[0], ra, "f0");
                         emit_load_float_to(ctx, ins.operands[1], rb, "f1");
-                        ctx.out << "    fcmp" << suffix << " f0, f1\n";
+                        ctx.out.emit(
+                            emmit::packed_if(emmit::Mnemonic::FCMP, es_ps),
+                            Reg::fp(0), Reg::fp(1));
                         emit_phi_copies(ctx, bid, next.false_block);
                         emit_cond_branch(ctx, ins.op,
                                          ctx.block_label(next.false_block));
