@@ -171,19 +171,40 @@ RangeSummaries compute_range_summaries(const ir::IrModule &mod,
              * mismo que pasa dentro de un bucle: la recursion es un ciclo en el
              * grafo de llamadas y sin soltar un extremo no pararia. */
             const bool ensanchando = (visitas[i]++ >= op.retardo_ensanche);
-            const RangeFacts rf = compute_ranges(fn, hechos[i], op, &out);
+            /* Por PUNTERO: aqui solo se LEEN, y pedirlos por valor copia un
+             * rango por cada valor SSA mas el estado de entrada de cada bloque.
+             * Esto esta dentro del bucle, asi que la copia se pagaba en CADA
+             * vuelta del punto fijo, no una vez por funcion. */
+            const std::shared_ptr<const RangeFacts> rf_ptr =
+                compute_ranges_ptr(fn, hechos[i], op, &out);
+            const RangeFacts &rf = *rf_ptr;
 
-            // Actualiza un rango del resumen creciendo (y ensanchando al
-            // final).
+            /* A quien afecta que un rango del resumen crezca.  Son dos cosas
+             * distintas y hasta ahora se hacian las dos siempre, que es lo que
+             * llevaba a recalcular cada funcion 2,6 veces de media:
+             *
+             *  - Cambia lo que una funcion DEVUELVE.  Lo notan sus llamantes,
+             *    que ven otro valor al llamarla.  Ella misma no: sus rangos
+             *    salen de sus parametros y de lo que devuelven SUS llamadas, no
+             *    de lo que devuelve ella.  Y si es recursiva, esta entre sus
+             *    propios llamantes, asi que tampoco hace falta nombrarla.
+             *
+             *  - Cambia lo que una funcion RECIBE.  Lo nota ella, porque sus
+             *    rangos arrancan de los parametros.  Sus llamantes no: leen lo
+             *    que devuelve, no con que se la llamo.  Si estrechar la entrada
+             *    acaba estrechando la salida, eso ya lo propaga el otro caso.
+             */
+            enum class Afecta { Llamantes, Ella };
             auto subir = [&](ValueRange &destino, const ValueRange &aporte,
-                             size_t dueno) {
+                             size_t dueno, Afecta a) {
                 ValueRange nuevo = destino.unir(aporte);
                 if (ensanchando) nuevo = destino.ensanchar(nuevo);
                 if (nuevo == destino) return;
                 destino = nuevo;
-                // Cambio el resumen de `dueno`: hay que rehacerlo, y a quien
-                // dependa de lo que devuelve.
-                encolar(dueno);
+                if (a == Afecta::Ella) {
+                    encolar(dueno);
+                    return;
+                }
                 if (dueno < llamantes.size())
                     for (size_t c : llamantes[dueno])
                         encolar(c);
@@ -195,9 +216,11 @@ RangeSummaries compute_range_summaries(const ir::IrModule &mod,
                     if (in.op == IrOp::RET) {
                         FnRangeSummary &mio = out.por_funcion[fn.name];
                         if (in.operands.empty())
-                            subir(mio.ret, ValueRange::top(), i);
+                            subir(mio.ret, ValueRange::top(), i,
+                                  Afecta::Llamantes);
                         else
-                            subir(mio.ret, rf.at(in.operands[0]), i);
+                            subir(mio.ret, rf.at(in.operands[0]), i,
+                                  Afecta::Llamantes);
                         continue;
                     }
                     /* El destino de una llamada indirecta se resuelve cuando se
@@ -225,11 +248,12 @@ RangeSummaries compute_range_summaries(const ir::IrModule &mod,
                              a < in.operands.size() && a < suyo.params.size();
                              ++a)
                             subir(suyo.params[a], rf.at(in.operands[a]),
-                                  suyo_idx);
+                                  suyo_idx, Afecta::Ella);
                     /* Una llamada de cola devuelve lo que devuelva el llamado:
                      * su resumen de retorno es tambien el nuestro. */
                     if (in.op == IrOp::TAILCALL)
-                        subir(out.por_funcion[fn.name].ret, suyo.ret, i);
+                        subir(out.por_funcion[fn.name].ret, suyo.ret, i,
+                              Afecta::Llamantes);
                 }
             }
         }

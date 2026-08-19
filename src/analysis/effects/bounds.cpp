@@ -53,6 +53,30 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
      * que acaba de hacer el informe para las secciones de arriba. */
     EffectAnalysis propio;
     EffectAnalysis &ea = ea_dado != nullptr ? *ea_dado : propio;
+
+    /* Resumenes de frontera del modulo: lo que entra y sale de cada funcion.
+     * Sin ellos, un parametro vale lo que su tipo y el resultado de una llamada
+     * es desconocido, con lo que nada que cruce una funcion se puede comprobar.
+     * Se calculan UNA vez para todo el modulo.
+     *
+     * Van ANTES de tocar el motor, y se le dan.  Antes se calculaban despues, y
+     * la consecuencia era que el mismo analisis de rangos corria dos veces
+     * sobre cada funcion: el motor los calculaba sin resumenes para points-to,
+     * y aqui se volvian a calcular con ellos para juzgar.  Dos respuestas
+     * distintas a la misma pregunta, y ninguna razon para querer la peor. */
+    const analysis::RangeSummaries resumenes =
+        analysis::compute_range_summaries(mod);
+    ea.usar_resumenes(&resumenes);
+    /* Y se los quitamos al salir.  El motor puede venir de fuera y vivir mas
+     * que esta funcion, mientras que los resumenes son locales: dejarselos
+     * puestos seria dejarle un puntero a algo que ya no existe.  Va como
+     * destructor y no al final para que un `return` por el camino -- o una
+     * excepcion -- tampoco pueda saltarselo. */
+    struct RetirarResumenes {
+        analysis::effects::EffectAnalysis &ea;
+        ~RetirarResumenes() { ea.usar_resumenes(nullptr); }
+    } retirar_resumenes{ea};
+
     ea.module_summary(mod); // deja el motor con sus tablas listas
 
     /* Reparto del coste.  Hizo falta: la sospecha era el def-use y no lo era,
@@ -78,12 +102,6 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
         marca = ahora;
     };
 
-    /* Resumenes de frontera del modulo: lo que entra y sale de cada funcion.
-     * Sin ellos, un parametro vale lo que su tipo y el resultado de una llamada
-     * es desconocido, con lo que nada que cruce una funcion se puede comprobar.
-     * Se calculan UNA vez para todo el modulo. */
-    const analysis::RangeSummaries resumenes =
-        analysis::compute_range_summaries(mod);
     cerrar(us_resumenes);
     for (const ir::IrFunction &fn : mod.functions) {
         if (fn.blocks.empty()) continue;
@@ -102,15 +120,12 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
         // segunda vez, porque el resumen del modulo ya lo pidio.
         const analysis::IrFacts &hechos = ea.facts_publico(fn);
         const auto t_calc = RelojLim::now();
-        /* Por PUNTERO, no por valor.  Aqui solo se LEEN, y devolverlos por
-         * valor copia entero lo que llevan dentro: un rango por cada valor SSA
-         * mas el estado de entrada de cada bloque.  Ademas el motor ya los
-         * cachea, asi que la copia era de un objeto que ya existia y seguia
-         * vivo.  Es lo que avisa la cabecera de @c compute_ranges_ptr. */
-        const std::shared_ptr<const analysis::RangeFacts> rangos_ptr =
-            analysis::compute_ranges_ptr(fn, hechos, analysis::RangeOptions{},
-                                         &resumenes);
-        const analysis::RangeFacts &rangos = *rangos_ptr;
+        /* Del MOTOR, no por nuestra cuenta.  Ya lleva los resumenes puestos
+         * (se los dimos arriba), asi que son exactamente los mismos rangos que
+         * usa points-to -- una sola ejecucion del analisis por funcion, no dos
+         * respondiendo lo mismo con distinta informacion.  Y viene por
+         * referencia desde su cache: ni se recalcula ni se copia. */
+        const analysis::RangeFacts &rangos = ea.ranges_publico(fn);
         ns_calcular += std::chrono::duration_cast<std::chrono::nanoseconds>(
                            RelojLim::now() - t_calc)
                            .count();

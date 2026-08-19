@@ -34,6 +34,7 @@
 #include "analysis/effects/ir_effects.h"
 #include "analysis/effects/summary.h"
 #include "analysis/facts/ir_facts.h"
+#include "analysis/facts/range_summary.h"
 #include "analysis/facts/value_range.h"
 #include "analysis/manager/analysis_manager.h"
 
@@ -80,6 +81,25 @@ class EffectAnalysis {
         env_.rangos = rangos;
         env_.rangos_de = fn;
     }
+
+    /**
+     * @brief Los resumenes de frontera que debe usar al calcular rangos.
+     *
+     * Sin ellos, un parametro vale lo que su tipo y el resultado de una llamada
+     * es desconocido: todo lo que cruza una funcion queda sin acotar.  Quien
+     * los tenga calculados hace bien en darlos, y por dos motivos.
+     *
+     * El primero es PRECISION: los rangos salen mas estrechos, y de ellos vive
+     * points-to.
+     *
+     * El segundo es que asi hay UN productor de rangos y no dos.  El
+     * comprobador de limites los pedia por su cuenta con los resumenes puestos
+     * mientras el motor los calculaba sin ellos, o sea que el mismo analisis
+     * corria dos veces sobre cada funcion respondiendo a preguntas distintas.
+     *
+     * Deben seguir vivos mientras el motor los use.  Nulo vuelve a no usarlos.
+     */
+    void usar_resumenes(const analysis::RangeSummaries *r) { resumenes_ = r; }
 
     /**
      * @brief Que memoria DEL LLAMANTE toca un sitio de llamada concreto.
@@ -154,6 +174,14 @@ class EffectAnalysis {
         return facts_of(fn);
     }
 
+    /// Y los rangos, por lo mismo: son el hecho del que viven points-to y el
+    /// comprobador de limites, y calcularlos es lo mas caro que hace el motor.
+    /// Salen de la misma cache y con los mismos resumenes, de modo que los dos
+    /// juzgan sobre exactamente la misma informacion.
+    const RangeFacts &ranges_publico(const ir::IrFunction &fn) {
+        return ranges_of(fn);
+    }
+
     // ---- Invalidacion ----
     /// Un nodo muto: borra su cache local + marca su funcion sucia.
     void invalidate_node(const ir::IrFunction &fn, const ir::IrInstr &ins);
@@ -167,6 +195,9 @@ class EffectAnalysis {
     // Clave de nodo: (funcion, indice-de-instruccion estable).  En Fase 0
     // usamos la direccion del IrInstr como clave provisional; Fase 1 fija una
     // clave estable (id de instruccion) cuando el IR lo exponga.
+    /// Resumenes de frontera con los que calcular rangos, si alguien los dio.
+    /// Nulo = se calculan sin ellos, que es lo que valia antes de tenerlos.
+    const analysis::RangeSummaries *resumenes_ = nullptr;
     std::unordered_map<const void *, EffectAnalysisResult> local_cache_;
     std::unordered_map<std::string, FunctionSummary> summary_cache_;
     std::unordered_map<std::string, bool> dirty_; // fn -> sucio
