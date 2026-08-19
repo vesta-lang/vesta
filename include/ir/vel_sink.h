@@ -342,22 +342,72 @@ struct Lbl {
     explicit Lbl(std::string n) noexcept : name(std::move(n)) {}
 };
 
+/**
+ * @brief Una REFERENCIA A SIMBOLO como operando: `@Absolute("code.fin")`.
+ *
+ * El `.vel` las escribe como anotaciones, y cosidas a mano son cuatro trozos
+ * -- la arroba, el nombre de la clase, los parentesis y las comillas -- que hay
+ * que acertar en orden.  Una comilla que falta no la ve nadie hasta ensamblar.
+ *
+ * La CLASE va en un enum y no en la cadena porque es lista cerrada: un
+ * `@Absolut` mal escrito deja de ser posible, en vez de descubrirse al final.
+ */
+enum class AnnKind : uint8_t {
+    Absolute, ///< direccion absoluta de un simbolo (`@Absolute("code.x")`).
+    Method,   ///< metodo de un modulo nativo (`@Method("lib:fn")`).
+    Name,     ///< nombre a resolver por el enlazador (`@Name("x")`).
+};
+
+/// El texto de cada clase, indexado por el enum (no buscado).
+inline const char *text_of(AnnKind k) {
+    constexpr const char *kNames[] = {"Absolute", "Method", "Name"};
+    return kNames[static_cast<uint8_t>(k)];
+}
+
+struct Ann {
+    AnnKind kind;
+    std::string value;
+
+    Ann(AnnKind k, std::string v) noexcept : kind(k), value(std::move(v)) {}
+
+    /// `@Absolute("<v>")`.
+    static Ann absolute(std::string v) {
+        return Ann(AnnKind::Absolute, std::move(v));
+    }
+    /// `@Method("<v>")`.
+    static Ann method(std::string v) {
+        return Ann(AnnKind::Method, std::move(v));
+    }
+    /// `@Name("<v>")`.
+    static Ann name(std::string v) { return Ann(AnnKind::Name, std::move(v)); }
+};
+
+/// Una referencia se imprime con su clase, sus parentesis y sus comillas.
+inline std::ostream &operator<<(std::ostream &os, const Ann &a) {
+    return os << '@' << text_of(a.kind) << "(\"" << a.value << "\")";
+}
+
 /// Un registro se imprime con su ancho pegado, que es como lo espera el `.vel`.
 inline std::ostream &operator<<(std::ostream &os, const Reg &r) {
     return os << r.base_name() << suffix_of(r.width);
 }
 
 /// La memoria se imprime con sus corchetes y solo con las partes que tiene.
+///
+/// Los espacios alrededor del signo NO son cosmetica: es la forma que ya
+/// escribia el emisor a mano (`[r15 + r13]`), y cambiarla haria que la misma
+/// entrada produjera un `.vel` distinto -- que es justo lo que este refactor
+/// tiene que poder descartar para saber que no ha roto nada.
 inline std::ostream &operator<<(std::ostream &os, const Mem &m) {
     os << '[' << m.base;
     if (!m.index.empty()) {
-        os << '+' << m.index;
-        if (m.scale != 1) os << '*' << m.scale;
+        os << " + " << m.index;
+        if (m.scale != 1) os << " * " << m.scale;
     }
     if (m.disp > 0)
-        os << '+' << m.disp;
+        os << " + " << m.disp;
     else if (m.disp < 0)
-        os << '-' << -m.disp;
+        os << " - " << -m.disp;
     return os << ']';
 }
 

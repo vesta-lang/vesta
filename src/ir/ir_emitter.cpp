@@ -3039,9 +3039,10 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                         // Test r14 contra 0 con flags FRESCOS del cmpu.
                         // El @c je salta a @c false_block si r14==0
                         // (cond ORIGINAL era false).
-                        ctx.out << "    mov r13, 0\n";
+                        ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(13), 0);
                         ctx.r13_cache = -1;
-                        ctx.out << "    cmpu r14, r13\n";
+                        ctx.out.emit(emmit::Mnemonic::CMPU, Reg::gp(14),
+                                     Reg::gp(13));
                         ctx.out << "    jmp.je @Absolute(\""
                                 << EmitCtx::abs_lbl(
                                        ctx.block_label(next.false_block))
@@ -3207,7 +3208,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             ctx.out << "    mov r0, @Absolute(\""
                     << EmitCtx::abs_lbl(EmitCtx::sanitize(ins.func_name))
                     << "\")\n";
-            ctx.out << "    tailcall r0\n";
+            ctx.out.emit(emmit::Mnemonic::TAILCALL, Reg::gp(0));
             // En tailcall no hay codigo posterior; los push previos los
             // heredara el callee, lo que rompe la pila.  Por seguridad, NO
             // emitimos push antes de un TAILCALL: en SSA clasico un tailcall
@@ -3408,7 +3409,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         } else if (!renv.empty()) {
             emit_mov_if_needed(ctx, Reg::gp(14), renv);
         } else {
-            ctx.out << "    mov r14, 0\n";
+            ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(14), 0);
         }
 
         ctx.out << "    mov r15, " << nargs_decl << "\n";
@@ -3536,7 +3537,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         }
 
         ctx.out << "    mov r15, " << (nargs + 1) << "\n";
-        ctx.out << "    callm r1, r13\n";
+        ctx.out.emit(emmit::Mnemonic::CALLM, Reg::gp(1), Reg::gp(13));
         if (ins.dst != IR_NO_VALUE) {
             Reg rd = ctx.dst_of(ins.dst);
             emit_mov_if_needed(ctx, rd, Reg::gp(0));
@@ -3593,7 +3594,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         }
 
         ctx.out << "    mov r15, " << (nargs + 1) << "\n";
-        ctx.out << "    callitf r1, r13\n";
+        ctx.out.emit(emmit::Mnemonic::CALLITF, Reg::gp(1), Reg::gp(13));
         if (ins.dst != IR_NO_VALUE) {
             Reg rd = ctx.dst_of(ins.dst);
             emit_mov_if_needed(ctx, rd, Reg::gp(0));
@@ -3706,7 +3707,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 live_regs_through_call(ctx, call_pos, ins.dst);
             emit_save_live_regs(ctx, call_pos, regs_to_save);
             ctx.out << "    mov r0, " << bytes << "\n";
-            ctx.out << "    alloc r0\n";
+            ctx.out.emit(emmit::Mnemonic::ALLOC, Reg::gp(0));
             emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), Reg::gp(0));
             ctx.store_spilled(ins.dst);
             // Sprint MMM-ext leak-fix: registrar el ptr en el frame
@@ -4123,9 +4124,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             ctx.out << "    " << vec_mv(ctx, ins, 1)
                     << " r14, [r11]\n"; // a[k] bits
             if (uop) {
-                ctx.out << "    bitg2z f0, r14\n";
+                ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(0), Reg::gp(14));
                 ctx.out << "    " << uop << " f0, f0\n";
-                ctx.out << "    bitz2g r14, f0\n";
+                ctx.out.emit(emmit::Mnemonic::BITZ2G, Reg::gp(14), Reg::fp(0));
             }
             ctx.out << "    " << vec_mv(ctx, ins, 0)
                     << " [r10], r14\n"; // dst[k]
@@ -4200,10 +4201,10 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                         << ", [r11]\n"; // a[k] bits
                 ctx.out << "    " << vec_mv(ctx, ins, 2) << " r13" << rsz
                         << ", [r12]\n"; // b[k] bits
-                ctx.out << "    bitg2z f0, r14\n";
-                ctx.out << "    bitg2z f1, r13\n";
+                ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(0), Reg::gp(14));
+                ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(1), Reg::gp(13));
                 ctx.out << "    " << fop << suf << " f0, f1\n";
-                ctx.out << "    bitz2g r14, f0\n";
+                ctx.out.emit(emmit::Mnemonic::BITZ2G, Reg::gp(14), Reg::fp(0));
                 ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz
                         << "\n"; // dst[k]
             } else {
@@ -4280,9 +4281,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 // f64=8 bytes -> r14; f32=4 -> r14d; op con sufijo .ps si f32.
                 ctx.out << "    " << vec_mv(ctx, ins, 1) << " r14" << rsz
                         << ", [r11]\n"; // a[k]
-                ctx.out << "    bitg2z f0, r14\n";
+                ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(0), Reg::gp(14));
                 ctx.out << "    " << fop << suf << " f0, f2\n";
-                ctx.out << "    bitz2g r14, f0\n";
+                ctx.out.emit(emmit::Mnemonic::BITZ2G, Reg::gp(14), Reg::fp(0));
                 ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz
                         << "\n"; // dst[k]
             } else {
@@ -4334,12 +4335,12 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             }
             ctx.out << "    " << vec_mv(ctx, ins, 1) << " r14" << rsz
                     << ", [r11]\n"; // a[k]
-            ctx.out << "    bitg2z f0, r14\n";
+            ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(0), Reg::gp(14));
             ctx.out << "    " << vec_mv(ctx, ins, 0) << " r14" << rsz
                     << ", [r10]\n"; // c[k]
-            ctx.out << "    bitg2z f1, r14\n";
+            ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(1), Reg::gp(14));
             ctx.out << "    fmadd" << suf << " f1, f0, f2\n"; // f1 = a*esc + c
-            ctx.out << "    bitz2g r14, f1\n";
+            ctx.out.emit(emmit::Mnemonic::BITZ2G, Reg::gp(14), Reg::fp(1));
             ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz
                     << "\n"; // c[k]
         }
@@ -4411,17 +4412,17 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             }
             ctx.out << "    " << vec_mv(ctx, ins, 0) << " r14" << rsz
                     << ", [r9]\n"; // sumando[k]
-            ctx.out << "    bitg2z f0, r14\n";
+            ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(0), Reg::gp(14));
             if (fma_sub) ctx.out << "    fneg" << suf << " f0, f0\n"; // -d
             ctx.out << "    " << vec_mv(ctx, ins, 1) << " r13" << rsz
                     << ", [r11]\n"; // a[k]
-            ctx.out << "    bitg2z f1, r13\n";
+            ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(1), Reg::gp(13));
             ctx.out << "    " << vec_mv(ctx, ins, 2) << " r14" << rsz
                     << ", [r12]\n"; // b[k]
-            ctx.out << "    bitg2z f2, r14\n";
+            ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(2), Reg::gp(14));
             ctx.out << "    fmadd" << suf
                     << " f0, f1, f2\n"; // f0 = a*b + sumando
-            ctx.out << "    bitz2g r14, f0\n";
+            ctx.out.emit(emmit::Mnemonic::BITZ2G, Reg::gp(14), Reg::fp(0));
             ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz
                     << "\n"; // dst[k]
         }
@@ -4450,7 +4451,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         }
         ctx.out.emit(emmit::Mnemonic::POP, "r10");
         if (acc_off) ctx.out << "    addu r10, " << acc_off << "\n";
-        ctx.out << "    mov r14, 0\n";
+        ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(14), 0);
         for (uint64_t q = 0; q < width; q += 8) {
             if (q > 0) ctx.out << "    addu r10, 8\n";
             ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14\n";
@@ -4512,19 +4513,20 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             if (is_fp) {
                 ctx.out << "    " << vec_mv(ctx, ins, 0) << " r14" << rsz
                         << ", [r10]\n"; // acc[k]
-                ctx.out << "    bitg2z f0, r14\n";
+                ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(0), Reg::gp(14));
                 ctx.out << "    " << vec_mv(ctx, ins, 1) << " r13" << rsz
                         << ", [r11]\n"; // a[k]
-                ctx.out << "    bitg2z f1, r13\n";
+                ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(1), Reg::gp(13));
                 if (is_fma) {
                     ctx.out << "    " << vec_mv(ctx, ins, 2) << " r14" << rsz
                             << ", [r12]\n"; // b[k]
-                    ctx.out << "    bitg2z f2, r14\n";
+                    ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(2),
+                                 Reg::gp(14));
                     ctx.out << "    fmadd" << suf << " f0, f1, f2\n"; // += a*b
                 } else {
                     ctx.out << "    fadd" << suf << " f0, f1\n"; // += a
                 }
-                ctx.out << "    bitz2g r14, f0\n";
+                ctx.out.emit(emmit::Mnemonic::BITZ2G, Reg::gp(14), Reg::fp(0));
                 ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz
                         << "\n"; // acc[k]
             } else {
@@ -4532,8 +4534,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 ctx.out << "    " << vec_mv(ctx, ins, 0) << " r14" << rsz
                         << ", [r10]\n"; // acc[k]
                 ctx.out << "    " << vec_mv(ctx, ins, 1) << " r13" << rsz
-                        << ", [r11]\n";           // a[k]
-                ctx.out << "    adds r14, r13\n"; // 64b add
+                        << ", [r11]\n"; // a[k]
+                ctx.out.emit(emmit::Mnemonic::ADDS, Reg::gp(14),
+                             Reg::gp(13)); // 64b add
                 ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz
                         << "\n"; // acc[k]
             }
@@ -4577,12 +4580,12 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             if (is_fp) {
                 ctx.out << "    " << vec_mv(ctx, ins, 0) << " r14" << rsz
                         << ", [r10]\n";
-                ctx.out << "    bitg2z f0, r14\n";
+                ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(0), Reg::gp(14));
                 ctx.out << "    " << vec_mv(ctx, ins, 1) << " r13" << rsz
                         << ", [r11]\n";
-                ctx.out << "    bitg2z f1, r13\n";
+                ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(1), Reg::gp(13));
                 ctx.out << "    fadd" << suf << " f0, f1\n";
-                ctx.out << "    bitz2g r14, f0\n";
+                ctx.out.emit(emmit::Mnemonic::BITZ2G, Reg::gp(14), Reg::fp(0));
                 ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz
                         << "\n";
             } else {
@@ -4590,7 +4593,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                         << ", [r10]\n";
                 ctx.out << "    " << vec_mv(ctx, ins, 1) << " r13" << rsz
                         << ", [r11]\n";
-                ctx.out << "    adds r14, r13\n";
+                ctx.out.emit(emmit::Mnemonic::ADDS, Reg::gp(14), Reg::gp(13));
                 ctx.out << "    " << vec_mv(ctx, ins, 0) << " [r10], r14" << rsz
                         << "\n";
             }
@@ -4635,10 +4638,10 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         emit_save_live_regs(ctx, call_pos, regs_to_save);
         std::string r_cls = ctx.load_src(ins.operands[0], 0);
         ctx.out << "    mov r1, " << r_cls << "\n";
-        ctx.out << "    mov r15, 1\n";
+        ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15), 1);
         // E.1: stackmap justo antes del opcode que puede disparar GC.
         emit_stackmap_marker(ctx, bb, idx);
-        ctx.out << "    newobj r1\n";
+        ctx.out.emit(emmit::Mnemonic::NEWOBJ, Reg::gp(1));
         if (ins.dst != IR_NO_VALUE)
             emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), Reg::gp(0));
         emit_restore_live_regs(ctx, call_pos, regs_to_save);
@@ -4657,10 +4660,10 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         emit_save_live_regs(ctx, call_pos, regs_to_save);
         std::string r_cls = ctx.load_src(ins.operands[0], 0);
         ctx.out << "    mov r1, " << r_cls << "\n";
-        ctx.out << "    mov r15, 1\n";
+        ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15), 1);
         // E.1: stackmap justo antes del opcode que puede disparar GC.
         emit_stackmap_marker(ctx, bb, idx);
-        ctx.out << "    newobjs r1\n";
+        ctx.out.emit(emmit::Mnemonic::NEWOBJS, Reg::gp(1));
         if (ins.dst != IR_NO_VALUE)
             emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), Reg::gp(0));
         emit_restore_live_regs(ctx, call_pos, regs_to_save);
@@ -4819,10 +4822,10 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         std::string r_len =
             ins.operands.empty() ? "r0" : ctx.load_src(ins.operands[0], 0);
         uint64_t esize = ir_type_size(ins.type);
-        ctx.out << "    getproc r1\n";
+        ctx.out.emit(emmit::Mnemonic::GETPROC, Reg::gp(1));
         ctx.out << "    mov r2, " << esize << "\n";
         emit_mov_if_needed(ctx, Reg::gp(3), r_len);
-        ctx.out << "    mov r15, 3\n";
+        ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15), 3);
         ctx.out << "    calln "
                    "@Method(\"stdlib/native/array/vesta_array:va_alloc\")\n";
         if (ins.dst != IR_NO_VALUE) {
@@ -4853,7 +4856,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         uint64_t stride = ir_type_size(ins.type);
         ctx.out << "    mov r13, " << r_idx << "\n";
         if (stride > 1) ctx.out << "    mulu r13, " << stride << "\n";
-        ctx.out << "    addu r13, 8\n";
+        ctx.out.emit(emmit::Mnemonic::ADDU, Reg::gp(13), 8);
         ctx.out << "    addu r13, " << r_arr << "\n";
         ctx.out << "    mov " << rd << ", [r13]\n";
         ctx.store_spilled(ins.dst);
@@ -4869,7 +4872,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         uint64_t stride = ir_type_size(ins.type);
         ctx.out << "    mov r13, " << r_idx << "\n";
         if (stride > 1) ctx.out << "    mulu r13, " << stride << "\n";
-        ctx.out << "    addu r13, 8\n";
+        ctx.out.emit(emmit::Mnemonic::ADDU, Reg::gp(13), 8);
         ctx.out << "    addu r13, " << r_arr << "\n";
         ctx.out << "    mov [r13], " << r_val << "\n";
         // write barrier si el tipo de elemento es HANDLE
@@ -5759,12 +5762,12 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             ctx.out.emit(emmit::Mnemonic::JMP_JE, default_lbl);
             ctx.out << "    mov r14, " << r_del << "\n"; // staging deleter
             if (r_ptr != "r1") ctx.out << "    mov r1, " << r_ptr << "\n";
-            ctx.out << "    mov r15, 1\n";
-            ctx.out << "    callvmr r14\n";
+            ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15), 1);
+            ctx.out.emit(emmit::Mnemonic::CALLVMR, Reg::gp(14));
             ctx.out.emit(emmit::Mnemonic::JMP, done_lbl);
             ctx.out << default_lbl << ":\n";
             if (r_ptr != "r1") ctx.out << "    mov r1, " << r_ptr << "\n";
-            ctx.out << "    free r1\n";
+            ctx.out.emit(emmit::Mnemonic::FREE, Reg::gp(1));
             ctx.out << done_lbl << ":\n";
         } else if (ins.imm == 1 || ins.imm == 2) {
             /* EXTERN_CALLN (1) o VESTA_CALLVM (2). */
@@ -5772,7 +5775,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             ctx.out << "    cmpu " << r_ptr << ", 0\n";
             ctx.out.emit(emmit::Mnemonic::JMP_JE, skip_lbl);
             if (r_ptr != "r1") ctx.out << "    mov r1, " << r_ptr << "\n";
-            ctx.out << "    mov r15, 1\n";
+            ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15), 1);
             if (ins.imm == 1) {
                 ctx.out << "    calln @Method(\"" << ins.func_name << "\")\n";
             } else {
@@ -6135,7 +6138,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
 
         // Args fijos: r1..r4 (escritos DESPUES del parallel-move; sus valores
         // previos como fuentes de slots ya fueron consumidos).
-        ctx.out << "    getproc r1\n";
+        ctx.out.emit(emmit::Mnemonic::GETPROC, Reg::gp(1));
         char hbuf[32];
         std::snprintf(hbuf, sizeof(hbuf), "0x%016llx",
                       static_cast<unsigned long long>(hash));
@@ -6144,7 +6147,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                       static_cast<unsigned long long>(desc));
         ctx.out << "    mov r3, " << hbuf << "\n";
         ctx.out << "    mov r4, " << binds.size() << "\n";
-        ctx.out << "    mov r15, 12\n";
+        ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15), 12);
         ctx.out << "    calln @Method(\"vrt:inline_asm_exec\")\n";
 
         emit_restore_all_gc_aware(ctx, call_pos, regs_to_save);
@@ -6267,7 +6270,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
              * ensamblador: no hay desplazamiento inmediato en esa codificacion,
              * el desplazamiento va en un registro. */
             ctx.out << "    subsp rsp, " << bytes_tabla << "\n";
-            ctx.out << "    mov r15, rsp\n";
+            ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15),
+                         Reg::special(SpecialReg::RSP));
             for (size_t i = 0; i < conv.size(); ++i) {
                 const std::string src = ctx.load_src(conv[i].second, 0);
                 ctx.out << "    mov r13, " << (i * vx::kAsmSlotBytes) << "\n";
@@ -6295,24 +6299,25 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 ctx.out << "    mov r13, "
                         << (bytes_valores + i * vx::kAsmDescBytes) << "\n";
                 ctx.out << "    mov r14, " << cb << "\n";
-                ctx.out << "    mov [r15 + r13], r14\n";
+                ctx.out.emit(emmit::Mnemonic::MOV, Mem("r15", "r13", 1),
+                             Reg::gp(14));
             }
-            ctx.out << "    getproc r1\n";
+            ctx.out.emit(emmit::Mnemonic::GETPROC, Reg::gp(1));
             char hb2[32];
             std::snprintf(hb2, sizeof(hb2), "0x%016llx",
                           (unsigned long long)hash2);
             ctx.out << "    mov r2, " << hb2 << "\n";
             ctx.out << "    mov r3, " << (unsigned)am.eff << "\n";
-            ctx.out << "    mov r4, r15\n";
+            ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(4), Reg::gp(15));
             /* r5 deja de ser el descriptor empaquetado y pasa a ser DONDE estan
              * los descriptores: detras de los valores, en el mismo bloque.  Un
              * entero no daba para describir clase, ranura y ancho de cada
              * operando, y menos segun entren ISAs y extensiones. */
-            ctx.out << "    mov r5, r15\n";
+            ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(5), Reg::gp(15));
             ctx.out << "    mov r13, " << bytes_valores << "\n";
             ctx.out << "    addu r5, r13\n"; // sin signo: es una direccion
             ctx.out << "    mov r6, " << conv.size() << "\n";
-            ctx.out << "    mov r15, 6\n";
+            ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15), 6);
             ctx.out << "    calln @Method(\"vrt:asm_micro_ops\")\n";
             /* Y de vuelta lo que el bloque haya cambiado, DESPUES de restaurar
              * los registros que se salvaron para la llamada.  Recogerlo antes
@@ -6320,7 +6325,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
              * restauracion lo devuelve a lo que era, asi que `add a, 2` sobre
              * 40 seguia dando 40.  La tabla vive en la pila hasta el addsp, que
              * por eso va el ultimo. */
-            ctx.out << "    mov r15, rsp\n";
+            ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15),
+                         Reg::special(SpecialReg::RSP));
             for (size_t i = 0; i < conv.size(); ++i) {
                 const auto &opf = am.operands[conv[i].first];
                 if (!opf.writes() || opf.kind == AsmOperandKind::MEM) continue;
@@ -6339,13 +6345,13 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             live_regs_through_call(ctx, call_pos, IR_NO_VALUE);
         emit_save_all_gc_aware(ctx, call_pos, regs_to_save);
         // r1=proc, r2=hash(plantilla), r3=eff (efectos DB para la emulacion).
-        ctx.out << "    getproc r1\n";
+        ctx.out.emit(emmit::Mnemonic::GETPROC, Reg::gp(1));
         char hbuf[32];
         std::snprintf(hbuf, sizeof(hbuf), "0x%016llx",
                       static_cast<unsigned long long>(hash));
         ctx.out << "    mov r2, " << hbuf << "\n";
         ctx.out << "    mov r3, " << (unsigned)am.eff << "\n";
-        ctx.out << "    mov r15, 3\n";
+        ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15), 3);
         ctx.out << "    calln @Method(\"vrt:asm_micro_exec\")\n";
         emit_restore_all_gc_aware(ctx, call_pos, regs_to_save);
         break;
