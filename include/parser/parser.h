@@ -467,6 +467,17 @@ class Parser {
      */
     std::unique_ptr<ASTNode> parse_statement();
 };
+
+/**
+ * @brief Los mnemonicos que el parser sabe leer.
+ *
+ * Existe para poder COMPARAR esta tabla con la del codificador y con la lista
+ * unica: son tres sitios que tienen que decir lo mismo, y cuando no lo dicen el
+ * fallo no se parece a su causa (ver tests/emmit/test_instr_tablas.cpp).
+ *
+ * @return Nombres, sin orden garantizado.
+ */
+std::vector<std::string> instruction_set_names();
 } // namespace vm
 
 #endif // PARSER_H

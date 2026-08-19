@@ -1190,3 +1190,13 @@ std::unique_ptr<ASTNode> Parser::parse_statement() {
     return nullptr;
 }
 } // namespace vm
+
+namespace vm {
+std::vector<std::string> instruction_set_names() {
+    std::vector<std::string> v;
+    v.reserve(InstructionSet.size());
+    for (const auto &e : InstructionSet)
+        v.push_back(e.first);
+    return v;
+}
+} // namespace vm

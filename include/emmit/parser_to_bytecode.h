@@ -1844,6 +1844,21 @@ static void resolve_imports(std::vector<std::unique_ptr<vm::ASTNode>> &ast,
     ast = std::move(result);
 }
 
+/**
+ * @brief Los mnemonicos que el codificador sabe convertir a bytes.
+ *
+ * Existe para lo mismo que @ref vm::instruction_set_names: poder comparar las
+ * tres listas que tienen que decir lo mismo.
+ *
+ * @return Nombres, sin orden garantizado.
+ */
+inline std::vector<std::string> instr_table_names() {
+    std::vector<std::string> v;
+    v.reserve(InstrTable.size());
+    for (const auto &e : InstrTable)
+        v.push_back(e.first);
+    return v;
+}
 } // namespace Assembly::Bytecode
 
 #endif // PARSER_TO_BYTECODE_H
