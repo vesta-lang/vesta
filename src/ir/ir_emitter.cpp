@@ -643,8 +643,8 @@ static void emit_jmp_or_fallthrough(EmitCtx &ctx, IrBlockId from_bid,
     // es redundante.  Para el ultimo bloque (from_bid+1 == fn.blocks.size())
     // siempre emitimos el jmp por seguridad.
     if (target_id == from_bid + 1) return;
-    ctx.out << "    jmp @Absolute(\""
-            << EmitCtx::abs_lbl(ctx.block_label(target_id)) << "\")\n";
+    ctx.out.emit(emmit::Mnemonic::JMP,
+                 Ann::absolute(EmitCtx::abs_lbl(ctx.block_label(target_id))));
 }
 
 // =========================================================================
@@ -3053,10 +3053,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                         ctx.r13_cache = -1;
                         ctx.out.emit(emmit::Mnemonic::CMPU, Reg::gp(14),
                                      Reg::gp(13));
-                        ctx.out << "    jmp.je @Absolute(\""
-                                << EmitCtx::abs_lbl(
-                                       ctx.block_label(next.false_block))
-                                << "\")\n";
+                        ctx.out.emit(emmit::Mnemonic::JMP_JE,
+                                     Ann::absolute(EmitCtx::abs_lbl(
+                                         ctx.block_label(next.false_block))));
                         emit_jmp_or_fallthrough(ctx, bid, next.target_block);
                     }
                 }
@@ -3124,9 +3123,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             emit_mov_r14_imm(ctx, 0);
             ctx.out.emit(emmit::Mnemonic::CMPU, rc, Reg::gp(14));
         }
-        ctx.out << "    jmp.je @Absolute(\""
-                << EmitCtx::abs_lbl(ctx.block_label(ins.false_block))
-                << "\")\n";
+        ctx.out.emit(
+            emmit::Mnemonic::JMP_JE,
+            Ann::absolute(EmitCtx::abs_lbl(ctx.block_label(ins.false_block))));
         // 4) Fallthrough o salto al target.
         emit_jmp_or_fallthrough(ctx, bid, ins.target_block);
         break;
@@ -3137,8 +3136,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             std::string rs = ctx.load_src(ins.operands[0], 0);
             emit_mov_if_needed(ctx, Reg::gp(0), rs);
         }
-        ctx.out << "    jmp @Absolute(\""
-                << EmitCtx::abs_lbl(ctx.fn_lbl + "_ret") << "\")\n";
+        ctx.out.emit(emmit::Mnemonic::JMP,
+                     Ann::absolute(EmitCtx::abs_lbl(ctx.fn_lbl + "_ret")));
         break;
     }
 
@@ -3230,9 +3229,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // promociona CALL+RET a TAILCALL cuando esta condicion se cumple
             // por construccion.
         } else {
-            ctx.out << "    callvm @Absolute(\""
-                    << EmitCtx::abs_lbl(EmitCtx::sanitize(ins.func_name))
-                    << "\")\n";
+            ctx.out.emit(emmit::Mnemonic::CALLVM,
+                         Ann::absolute(EmitCtx::abs_lbl(
+                             EmitCtx::sanitize(ins.func_name))));
             // Stackmap del sitio de retorno: el GC puede correr en el callee;
             // el return_pc de este frame es la siguiente instruccion emitida.
             emit_return_site_stackmap(ctx, bb, idx);
@@ -3680,7 +3679,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (is_indirect) {
             ctx.out.emit(emmit::Mnemonic::CALLNI, rfn);
         } else {
-            ctx.out << "    calln @Method(\"" << ins.func_name << "\")\n";
+            ctx.out.emit(emmit::Mnemonic::CALLN, Ann::method(ins.func_name));
         }
         if (ins.dst != IR_NO_VALUE) {
             Reg rd = ctx.dst_of(ins.dst);
@@ -5823,10 +5822,11 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(1), r_ptr);
             ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15), 1);
             if (ins.imm == 1) {
-                ctx.out << "    calln @Method(\"" << ins.func_name << "\")\n";
+                ctx.out.emit(emmit::Mnemonic::CALLN,
+                             Ann::method(ins.func_name));
             } else {
-                ctx.out << "    callvm @Absolute(\"code." << ins.func_name
-                        << "\")\n";
+                ctx.out.emit(emmit::Mnemonic::CALLVM,
+                             Ann::absolute("code." + ins.func_name));
             }
             ctx.out << skip_lbl << ":\n";
         }
@@ -6194,7 +6194,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(3), hbuf);
         ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(4), binds.size());
         ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15), 12);
-        ctx.out << "    calln @Method(\"vrt:inline_asm_exec\")\n";
+        ctx.out.emit(emmit::Mnemonic::CALLN,
+                     Ann::method("vrt:inline_asm_exec"));
 
         emit_restore_all_gc_aware(ctx, call_pos, regs_to_save);
         break;
@@ -6366,7 +6367,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             ctx.out << "    addu r5, r13\n"; // sin signo: es una direccion
             ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(6), conv.size());
             ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15), 6);
-            ctx.out << "    calln @Method(\"vrt:asm_micro_ops\")\n";
+            ctx.out.emit(emmit::Mnemonic::CALLN,
+                         Ann::method("vrt:asm_micro_ops"));
             /* Y de vuelta lo que el bloque haya cambiado, DESPUES de restaurar
              * los registros que se salvaron para la llamada.  Recogerlo antes
              * era tirarlo: el valor recien traido se queda en un registro y la
@@ -6402,7 +6404,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(2), hbuf);
         ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(3), (unsigned)am.eff);
         ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15), 3);
-        ctx.out << "    calln @Method(\"vrt:asm_micro_exec\")\n";
+        ctx.out.emit(emmit::Mnemonic::CALLN, Ann::method("vrt:asm_micro_exec"));
         emit_restore_all_gc_aware(ctx, call_pos, regs_to_save);
         break;
     }
