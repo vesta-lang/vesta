@@ -188,6 +188,14 @@ struct Estado {
     Estado(Estado &&) = default;
     Estado &operator=(Estado &&) = default;
 
+    /// Intercambia contenidos sin tocar el asignador.  Se usa para guardar un
+    /// estado recien calculado quedandose con el bufer del que sustituye, de
+    /// modo que el de trabajo conserve su capacidad para la siguiente vuelta.
+    void swap(Estado &o) noexcept {
+        std::swap(alcanzable, o.alcanzable);
+        ref.swap(o.ref);
+    }
+
     const ValueRange *buscar(ir::IrValueId v) const {
         if (g_medir_coste) ++g_coste.busquedas;
         auto it =
@@ -357,6 +365,17 @@ struct Motor : Contexto {
     std::vector<Arista> aristas;
     std::vector<Estado> out_arista;
     std::vector<Estado> in_bloque;
+
+    /* Buferes de trabajo del punto fijo.  Existen para NO pedir memoria en cada
+     * vuelta: el estado se calculaba nuevo por bloque, por predecesor y por
+     * arista, y el ir y venir al asignador acabo siendo el mayor gasto de toda
+     * la compilacion.  Reutilizarlos conserva su capacidad, asi que tras las
+     * primeras vueltas no hay una sola peticion mas.  Son `mutable` porque el
+     * calculo es conceptualmente const: no cambian ninguna respuesta. */
+    mutable Estado union_scratch_;  ///< destino de cada fusion de predecesores
+    mutable Estado out_scratch_;    ///< salida del bloque en curso
+    mutable Estado arista_scratch_; ///< lo que viaja por la arista en curso
+    mutable Estado in_scratch_;     ///< entrada recien calculada de un bloque
     std::vector<std::vector<uint32_t>> entrantes, salientes;
     std::vector<uint32_t>
         vueltas_ciclo; ///< veces que el IN de un bloque cambio
@@ -504,10 +523,42 @@ struct Motor : Contexto {
     }
 
     // --- confluencia --------------------------------------------------------
+    /**
+     * @brief Fusiona @p a y @p b DEJANDO el resultado en @p out.
+     *
+     * Escribe sobre un destino que da el llamante en vez de devolver uno nuevo
+     * porque esto corre por bloque, por predecesor y por vuelta del punto fijo:
+     * un destino reutilizado conserva su capacidad y deja de pedir memoria tras
+     * las primeras vueltas.  Pedir y devolver en cada fusion era el mayor
+     * alojador de la compilacion.
+     *
+     * @p out puede ser el mismo objeto que @p a o @p b sin problema: los casos
+     * en que eso pasa se resuelven antes de tocarlo.
+     */
+    void unir_en(const Estado &a, const Estado &b, Estado &out) const {
+        if (!a.alcanzable) {
+            if (&out != &b) out = b;
+            return;
+        }
+        if (!b.alcanzable) {
+            if (&out != &a) out = a;
+            return;
+        }
+        Estado tmp;
+        Estado &dst = (&out == &a || &out == &b) ? tmp : out;
+        dst.ref.clear();
+        unir_cuerpo(a, b, dst);
+        if (&dst != &out) out = std::move(dst);
+    }
+
     Estado unir_estados(const Estado &a, const Estado &b) const {
-        if (!a.alcanzable) return b;
-        if (!b.alcanzable) return a;
         Estado out;
+        unir_en(a, b, out);
+        return out;
+    }
+
+    /// El cuerpo de la fusion, con @p out ya vacio y distinto de las fuentes.
+    void unir_cuerpo(const Estado &a, const Estado &b, Estado &out) const {
         if (g_medir_coste) ++g_coste.uniones;
         out.alcanzable = true;
         /* Se reserva la cota superior: el resultado nunca es mayor que el
@@ -541,7 +592,6 @@ struct Motor : Contexto {
                 if (g_medir_coste) ++g_coste.unidos;
             }
         }
-        return out;
     }
 
     /// Ensanchamiento del ascenso: por valor, soltando solo el extremo que
@@ -731,13 +781,29 @@ struct Motor : Contexto {
     // --- transferencia: la pone Contexto, compartida con la consulta --------
 
     // --- ecuaciones ---------------------------------------------------------
+    /**
+     * @brief Estado a la ENTRADA de @p bi, dejado en @p dst.
+     *
+     * @p dst es un bufer del llamante que se reutiliza entre vueltas: fusionar
+     * pedia un estado nuevo por cada predecesor, y esto corre por bloque y por
+     * vuelta del punto fijo.
+     */
+    void calcular_in(ir::IrBlockId bi, Estado &dst) const {
+        dst.ref.clear();
+        dst.alcanzable = false;
+        for (uint32_t ai : entrantes[bi])
+            if (out_arista[ai].alcanzable) {
+                unir_en(dst, out_arista[ai], union_scratch_);
+                dst.swap(union_scratch_);
+            }
+        if (bi == 0) dst.alcanzable = true; // a la entrada siempre se llega
+        if (!dst.alcanzable) return;
+        resolver_phis(bi, dst);
+    }
+
     Estado calcular_in(ir::IrBlockId bi) const {
         Estado e;
-        for (uint32_t ai : entrantes[bi])
-            if (out_arista[ai].alcanzable) e = unir_estados(e, out_arista[ai]);
-        if (bi == 0) e.alcanzable = true; // a la entrada siempre se llega
-        if (!e.alcanzable) return e;
-        resolver_phis(bi, e);
+        calcular_in(bi, e);
         return e;
     }
 
@@ -766,12 +832,13 @@ struct Motor : Contexto {
         }
     }
 
-    Estado calcular_out(ir::IrBlockId bi, const Estado &in) const {
-        Estado e = in;
+    /// Estado a la SALIDA de @p bi, dejado en @p dst (bufer reutilizado: la
+    /// asignacion conserva su capacidad, asi que deja de pedir memoria).
+    void calcular_out(ir::IrBlockId bi, const Estado &in, Estado &dst) const {
+        dst = in;
         for (const ir::IrInstr &instr : fn.blocks[bi].instrs)
-            if (instr.op != IrOp::PHI) transferir(instr, e);
-        podar_muertos(e, bi);
-        return e;
+            if (instr.op != IrOp::PHI) transferir(instr, dst);
+        podar_muertos(dst, bi);
     }
 
     /**
@@ -803,7 +870,8 @@ struct Motor : Contexto {
 
     /// Recalcula las aristas de salida y encola los destinos que cambiaron.
     void propagar(ir::IrBlockId bi, std::deque<ir::IrBlockId> &cola) {
-        const Estado out = calcular_out(bi, in_bloque[bi]);
+        calcular_out(bi, in_bloque[bi], out_scratch_);
+        const Estado &out = out_scratch_;
         if (g_medir_coste && !ultimo_uso.empty()) {
             g_coste.elems_vivos_total += out.ref.size();
             for (const auto &p : out.ref)
@@ -827,13 +895,18 @@ struct Motor : Contexto {
                 }
                 continue;
             }
-            Estado se = out;
+            /* Sobre un bufer reutilizado, no uno nuevo: esto corre por arista
+             * de cada bloque en cada vuelta.  Se intercambia en vez de mover
+             * para que el bufer se quede con la capacidad del que sustituye y
+             * la siguiente arista tampoco tenga que pedir memoria. */
+            Estado &se = arista_scratch_;
+            se = out;
             if (aristas[ai].cond != ir::IR_NO_VALUE)
                 estrechar_por_guarda(se, aristas[ai].cond, aristas[ai].rama);
             if (aristas[ai].sel != ir::IR_NO_VALUE)
                 estrechar_por_caso(se, aristas[ai]);
             if (!(se == out_arista[ai])) {
-                out_arista[ai] = std::move(se);
+                out_arista[ai].swap(se);
                 cola.push_back(aristas[ai].hasta);
             }
         }
@@ -862,13 +935,16 @@ struct Motor : Contexto {
             const ir::IrBlockId bi = cola.front();
             cola.pop_front();
 
-            Estado nuevo_in = calcular_in(bi);
+            calcular_in(bi, in_scratch_);
+            Estado &nuevo_in = in_scratch_;
             if (cierra_ciclo(bi) && vueltas_ciclo[bi] >= op.retardo_ensanche) {
                 nuevo_in = ensanchar_estado(in_bloque[bi], nuevo_in);
                 stats.ensanches++;
             }
             if (!(nuevo_in == in_bloque[bi])) {
-                in_bloque[bi] = std::move(nuevo_in);
+                // Intercambiar, no mover: el bufer se queda con la capacidad
+                // del estado que sustituye y sirve para la siguiente vuelta.
+                in_bloque[bi].swap(nuevo_in);
                 vueltas_ciclo[bi]++;
                 stats.cambios++;
             }

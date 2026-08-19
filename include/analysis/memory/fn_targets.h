@@ -34,6 +34,8 @@
 #include "analysis/facts/ir_facts.h"
 
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -77,6 +79,27 @@ struct DireccionTomada {
  */
 DireccionTomada seguir_direccion(const ir::IrModule &mod,
                                  const std::string &nombre);
+
+/**
+ * @brief Lo mismo para VARIOS nombres a la vez, recorriendo el modulo UNA vez.
+ *
+ * Preguntar de uno en uno recorre el modulo entero por cada nombre, con una
+ * comparacion de cadena en cada instruccion.  Quien pregunta suele tener ya la
+ * lista completa -- los resumenes de frontera la tienen --, y entonces el coste
+ * pasa de "nombres por instrucciones" a "instrucciones", porque cada
+ * instruccion se resuelve con una consulta a tabla en vez de con una
+ * comparacion por nombre.
+ *
+ * Los bloques de ensamblador siguen mirandose nombre a nombre: ahi no hay
+ * simbolo que consultar, solo texto donde buscar.  Pero son pocos, y el coste
+ * pasa a ser "nombres por bloques de asm" en lugar de por el modulo entero.
+ *
+ * @return Una entrada por cada nombre pedido, con el mismo contenido que daria
+ *         @c seguir_direccion llamada por separado.
+ */
+std::unordered_map<std::string, DireccionTomada>
+seguir_direcciones(const ir::IrModule &mod,
+                   const std::unordered_set<std::string> &nombres);
 
 } // namespace analysis
 

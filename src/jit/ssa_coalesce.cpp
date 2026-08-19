@@ -107,12 +107,17 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
      * live_in[b]  = gen[b] U (live_out[b] - kill[b]). */
     std::vector<char> live_in(size_t(NB) * NV, 0), live_out(size_t(NB) * NV, 0);
     bool changed = true;
+    /* Fuera de los dos bucles: se reutiliza y se limpia, en vez de pedir y
+     * devolver memoria por cada bloque de cada vuelta.  El contenido se
+     * construye desde cero igual que antes -- se limpia al entrar --, asi que
+     * lo unico que desaparece es el ir y venir al asignador. */
+    std::vector<char> nout(NV, 0);
     while (changed) {
         changed = false;
         for (uint32_t bi = NB; bi-- > 0;) {
             const ir::IrBlock &blk = fn.blocks[bi];
             /* new_out */
-            std::vector<char> nout(NV, 0);
+            std::fill(nout.begin(), nout.end(), 0);
             for (ir::IrBlockId s : blk.succs) {
                 if (s >= NB) continue;
                 const ir::IrBlock &sb = fn.blocks[s];

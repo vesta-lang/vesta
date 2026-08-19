@@ -103,6 +103,82 @@ std::string funcion_apuntada(const ir::IrFunction &fn, const IrFacts &facts,
     return seguir(fn, facts, v, 0);
 }
 
+namespace {
+
+/// Lo que hay que saber de un nombre mientras se recorre el modulo: su
+/// resultado, y si todavia se pueden censar todos sus usos.
+struct EnCurso {
+    DireccionTomada out;
+    bool todas = true;
+};
+
+/**
+ * @brief Aplica a @p e lo que la instruccion @p in dice del nombre que sigue.
+ *
+ * Es el cuerpo que comparten la version de un nombre y la de muchos.  Va aparte
+ * para que no puedan responder cosas distintas: una sola definicion de que
+ * significa que una direccion "se vea".
+ */
+void mirar_instr(const ir::IrFunction &fn, const ir::IrInstr &in,
+                 const std::string &nombre, EnCurso &e) {
+    if (in.op == IrOp::CALL || in.op == IrOp::TAILCALL)
+        return; // llamada directa: se ve sin seguir nada
+    e.out.tomada = true;
+    if (in.op != IrOp::LABEL_ADDR || in.dst == ir::IR_NO_VALUE) {
+        // Registrada como metodo, usada de deleter, nombrada por una
+        // nativa...: son puertas de entrada que no se pueden censar.
+        e.todas = false;
+        return;
+    }
+    (void)nombre;
+    if (!usos_solo_en_llamadas(fn, in.dst, e.out.indirectas)) e.todas = false;
+}
+
+} // namespace
+
+std::unordered_map<std::string, DireccionTomada>
+seguir_direcciones(const ir::IrModule &mod,
+                   const std::unordered_set<std::string> &nombres) {
+    std::unordered_map<std::string, EnCurso> curso;
+    curso.reserve(nombres.size() * 2);
+    for (const std::string &n : nombres)
+        if (!n.empty()) curso.emplace(n, EnCurso{});
+
+    /* UNA pasada.  Cada instruccion se resuelve consultando su propio nombre en
+     * la tabla, en vez de compararlo contra cada uno de los que se siguen. */
+    for (const ir::IrFunction &fn : mod.functions) {
+        for (const ir::IrBlock &b : fn.blocks) {
+            for (const ir::IrInstr &in : b.instrs) {
+                if (in.op == IrOp::RAW_ASM || in.op == IrOp::INLINE_ASM) {
+                    /* Aqui no hay simbolo que consultar, solo texto donde
+                     * buscar, asi que toca mirar nombre a nombre.  Son pocos
+                     * bloques: el coste es nombres x bloques de asm, no
+                     * nombres x modulo. */
+                    if (in.func_name.empty()) continue;
+                    for (auto &kv : curso)
+                        if (in.func_name.find(kv.first) != std::string::npos) {
+                            kv.second.out.tomada = true;
+                            kv.second.todas = false;
+                        }
+                    continue;
+                }
+                if (in.func_name.empty()) continue;
+                auto it = curso.find(in.func_name);
+                if (it == curso.end()) continue;
+                mirar_instr(fn, in, it->first, it->second);
+            }
+        }
+    }
+
+    std::unordered_map<std::string, DireccionTomada> res;
+    res.reserve(curso.size());
+    for (auto &kv : curso) {
+        kv.second.out.todas_se_ven = kv.second.out.tomada && kv.second.todas;
+        res.emplace(kv.first, std::move(kv.second.out));
+    }
+    return res;
+}
+
 DireccionTomada seguir_direccion(const ir::IrModule &mod,
                                  const std::string &nombre) {
     DireccionTomada out;
