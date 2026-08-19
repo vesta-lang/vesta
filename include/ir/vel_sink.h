@@ -312,6 +312,26 @@ inline const char *suffix_of(Reg::Width w) {
 }
 
 /**
+ * @brief El ancho de vista que corresponde a un tamano en BYTES.
+ *
+ * El emisor calculaba el sufijo a mano en cada sitio (`(n == 4) ? "d" : ...`)
+ * y lo pegaba al nombre del registro.  Escrito asi, el ancho es una cadena
+ * suelta que se puede olvidar, duplicar o poner donde no va; aqui es el mismo
+ * valor que el operando ya lleva dentro.
+ *
+ * @param bytes Tamano del elemento (1, 2, 4 o cualquier otro = palabra).
+ * @return El ancho correspondiente.
+ */
+inline Reg::Width width_for_bytes(unsigned bytes) {
+    switch (bytes) {
+    case 1: return Reg::Width::B;
+    case 2: return Reg::Width::W;
+    case 4: return Reg::Width::D;
+    default: return Reg::Width::Q;
+    }
+}
+
+/**
  * @brief Un ACCESO A MEMORIA como operando: `[base]`, `[base+8]`, `[b+i*4]`.
  *
  * Los corchetes los pone el operando, no quien lo escribe.  Cosidos a mano
