@@ -2050,9 +2050,9 @@ static void emit_cmp_standalone(EmitCtx &ctx, const IrInstr &ins) {
     ctx.out.emit(emmit::Mnemonic::MOV, rd, 0);
     ctx.out.emit(emmit::Mnemonic::JMP,
                  Ann::absolute(EmitCtx::abs_lbl(lbl_end)));
-    ctx.out << lbl_true << ":\n";
+    ctx.out.label(lbl_true);
     ctx.out.emit(emmit::Mnemonic::MOV, rd, 1);
-    ctx.out << lbl_end << ":\n";
+    ctx.out.label(lbl_end);
     ctx.store_spilled(ins.dst);
 }
 
@@ -2287,7 +2287,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // La columna va detras, y solo si se sabe: sin ella el marcador queda
         // igual que antes y quien lo lea no nota diferencia.
         if (ins.source_column > 0) ctx.out << " " << ins.source_column;
-        ctx.out << "\n";
+        ctx.out.blank();
     }
 
     //  E.1: el marcador `// @sm <hex>` se emite DENTRO de cada case de
@@ -5813,11 +5813,11 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15), 1);
             ctx.out.emit(emmit::Mnemonic::CALLVMR, Reg::gp(14));
             ctx.out.emit(emmit::Mnemonic::JMP, done_lbl);
-            ctx.out << default_lbl << ":\n";
+            ctx.out.label(default_lbl);
             if (r_ptr.is_gp(1) == false)
                 ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(1), r_ptr);
             ctx.out.emit(emmit::Mnemonic::FREE, Reg::gp(1));
-            ctx.out << done_lbl << ":\n";
+            ctx.out.label(done_lbl);
         } else if (ins.imm == 1 || ins.imm == 2) {
             /* EXTERN_CALLN (1) o VESTA_CALLVM (2). */
             const std::string skip_lbl = "__sp_skip_" + std::to_string(lbl);
@@ -5833,7 +5833,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 ctx.out.emit(emmit::Mnemonic::CALLVM,
                              Ann::absolute("code." + ins.func_name));
             }
-            ctx.out << skip_lbl << ":\n";
+            ctx.out.label(skip_lbl);
         }
         emit_restore_live_regs(ctx, sp_call_pos, sp_save);
         break;
@@ -6926,19 +6926,21 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
      * pueda quedar a medias. */
     if (mod != nullptr && !mod->alloc_sym.empty() &&
         fn.name == mod->alloc_sym) {
-        if (opts.export_all) out << "@Export(__vx_alloc_entry)\n";
-        out << "__vx_alloc_entry:\n";
+        if (opts.export_all)
+            out.directive(emmit::Directive::EXPORT, "__vx_alloc_entry");
+        out.label("__vx_alloc_entry");
     }
     if (mod != nullptr && !mod->free_sym.empty() && fn.name == mod->free_sym) {
-        if (opts.export_all) out << "@Export(__vx_free_entry)\n";
-        out << "__vx_free_entry:\n";
+        if (opts.export_all)
+            out.directive(emmit::Directive::EXPORT, "__vx_free_entry");
+        out.label("__vx_free_entry");
     }
 
     // Etiqueta de funcion (exportada si corresponde)
     if (opts.export_all) {
-        out << "@Export(" << ctx.fn_lbl << ")\n";
+        out.directive(emmit::Directive::EXPORT, ctx.fn_lbl);
     }
-    out << ctx.fn_lbl << ":\n";
+    out.label(ctx.fn_lbl);
 
     // Prologo (omitido solo cuando spill_count == 0 Y no hay ALLOCA en el
     // cuerpo).
@@ -6989,7 +6991,7 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
             else
                 out << fn.values[pid].name << "=[spill]";
         }
-        out << "\n";
+        out.blank();
     }
 
     // Bug fix CRITICO: si un parametro fue evictado por el regalloc, llega al
@@ -7442,7 +7444,7 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
     VelSink out;
 
     // Cabecera del modulo
-    out << "// Emitido por ir_emitter - VestaVM\n";
+    out.comment_top("Emitido por ir_emitter - VestaVM");
     out << "// Nivel de optimizacion: O" << static_cast<int>(opts.opt_level)
         << "\n\n";
 
@@ -7454,20 +7456,16 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
 
     if (mod.spaces.empty()) {
         // espacio de direcciones anonimo por defecto
-        out << "@SpaceAddress {\n";
-        out << "    @Name(\"anonymous\"),\n";
-        out << "    @IniAddress(0x0000000000000000),\n";
-        out << "    @EndAddress(0xFFFFFFFFFFFFFFFF)\n";
-        out << "}\n\n";
+        auto b = out.block(emmit::Directive::SPACE_ADDRESS);
+        b.entry(emmit::Directive::NAME, "anonymous");
+        b.entry(emmit::Directive::INI_ADDRESS, UINT64_C(0), 16);
+        b.entry(emmit::Directive::END_ADDRESS, UINT64_MAX, 16);
     } else {
         for (const auto &sp : mod.spaces) {
-            out << "@SpaceAddress {\n";
-            out << "    @Name(\"" << sp.name << "\"),\n";
-            out << "    @IniAddress(0x" << std::hex << std::setw(16)
-                << std::setfill('0') << sp.ini_address << std::dec << "),\n";
-            out << "    @EndAddress(0x" << std::hex << std::setw(16)
-                << std::setfill('0') << sp.end_address << std::dec << ")\n";
-            out << "}\n\n";
+            auto b = out.block(emmit::Directive::SPACE_ADDRESS);
+            b.entry(emmit::Directive::NAME, sp.name);
+            b.entry(emmit::Directive::INI_ADDRESS, sp.ini_address, 16);
+            b.entry(emmit::Directive::END_ADDRESS, sp.end_address, 16);
         }
     }
 
@@ -7477,19 +7475,16 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
         // se emita una nueva @Section.  La seccion "data" para los
         // literales se declara DESPUES de las funciones, justo antes
         // de los datos.
-        out << "@Section {\n";
-        out << "    @Name(\"code\"),\n";
-        out << "    @SpaceAddress(\"anonymous\")\n";
-        out << "    @Align(0x1000)\n";
-        out << "}\n\n";
+        auto b = out.block(emmit::Directive::SECTION);
+        b.entry(emmit::Directive::NAME, "code");
+        b.entry(emmit::Directive::SPACE_ADDRESS, "anonymous");
+        b.entry(emmit::Directive::ALIGN, UINT64_C(0x1000));
     } else {
         for (const auto &sec : mod.sections) {
-            out << "@Section {\n";
-            out << "    @Name(\"" << sec.name << "\"),\n";
-            out << "    @SpaceAddress(\"" << sec.space_name << "\")\n";
-            out << "    @Align(0x" << std::hex << sec.align << std::dec
-                << ")\n";
-            out << "}\n\n";
+            auto b = out.block(emmit::Directive::SECTION);
+            b.entry(emmit::Directive::NAME, sec.name);
+            b.entry(emmit::Directive::SPACE_ADDRESS, sec.space_name);
+            b.entry(emmit::Directive::ALIGN, sec.align);
         }
     }
 
@@ -7498,7 +7493,8 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
         opts.module_name.empty() ? mod.name : opts.module_name;
     if (mod_name.empty() && opts.export_all) mod_name = "ir_output";
     if (!mod_name.empty()) {
-        out << "@Module(" << EmitCtx::sanitize(mod_name) << ")\n\n";
+        out.directive(emmit::Directive::MODULE, EmitCtx::sanitize(mod_name))
+            .blank();
     }
 
     /* Los cuerpos comptime (`__macro_*`) no pintan nada en el binario del
@@ -7535,13 +7531,13 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
         if (omit_comptime_bodies && lib == "vesta_comptime") continue;
         out << "@Lib(\"" << lib << "\")\n";
     }
-    if (!mod.native_libs.empty()) out << "\n";
+    if (!mod.native_libs.empty()) out.blank();
 
     // Importaciones
     for (const auto &imp : mod.imports) {
         out << "@import " << imp << "\n";
     }
-    if (!mod.imports.empty()) out << "\n";
+    if (!mod.imports.empty()) out.blank();
 
     // Bloque @Import { @Method { @Lib(...) @Name(...) } } para CALLN.
     // El ensamblador .vel exige esta declaracion antes del primer uso de
@@ -7661,7 +7657,7 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
                     else
                         out << "0"; // hueco sin metodo
                 }
-                out << "\n";
+                out.blank();
                 continue;
             }
             // El parser .vel espera el patron "etiqueta directiva valores"
@@ -7693,14 +7689,14 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
                     out << ", 0x00";
                 else
                     out << "0x00";
-                out << "\n";
+                out.blank();
             }
         }
         // Etiqueta marker que extiende el rango ejecutable hasta despues
         // de los ultimos bytes; sin ella el linker calcula el tamano del
         // bloque como VA(s_N) y los bytes db quedan truncados.
         out << "    end_data db 0x00\n";
-        out << "\n";
+        out.blank();
     }
 
     // --- seccion `gdata`: storage de las variables globales ---
@@ -7721,7 +7717,7 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
         out << "    @SpaceAddress(\"anonymous\")\n";
         out << "    @Align(0x1000)\n";
         out << "}\n";
-        out << "// --- storage de variables globales (memoria host) ---\n";
+        out.comment_top("--- storage de variables globales (memoria host) ---");
         for (size_t i = 0; i < mod.static_data.size(); ++i) {
             if (!slot_is_gdata(mod, i)) continue;
             auto [bp, bn] = mod.static_data.bytes_at(i);
@@ -7735,13 +7731,13 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
                     << std::setfill(' ');
             }
             if (bn == 0) out << "0x00";
-            out << "\n";
+            out.blank();
         }
         // Mismo motivo que `end_data`: sin una etiqueta detras, el rango de la
         // seccion se calcularia hasta VA(ultimo slot) y sus bytes quedarian
         // fuera.
         out << "    end_gdata db 0x00\n";
-        out << "\n";
+        out.blank();
     }
 
     result.vel_text = out.take_text();

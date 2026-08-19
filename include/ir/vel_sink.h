@@ -543,7 +543,7 @@ class VelSink {
             sink_->text_ << "    @" << emmit::text_of(d) << "(0x" << std::hex;
             if (digitos > 0)
                 sink_->text_ << std::setw(digitos) << std::setfill('0');
-            sink_->text_ << valor << std::dec << std::setfill(' ') << ",\n";
+            sink_->text_ << valor << std::dec << std::setfill(' ') << "),\n";
             return *this;
         }
 
