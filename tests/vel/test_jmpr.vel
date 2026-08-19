@@ -1,0 +1,52 @@
+/*
+ * VestaVM - Maquina Virtual Distribuida
+ *
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
+ * Licencia: GPLv2 + excepcion de runtime (ver LICENSE).
+ */
+
+// Prueba de `jmpr`: salto a la direccion contenida en un registro.
+//
+// La instruccion estaba en el codificador y en la VM pero NO en el parser, asi
+// que era inalcanzable: no habia forma de escribirla.  Esto comprueba que ya
+// se puede, y que hace lo que dice.
+//
+// Lo que la distingue de las demas: salta CONSERVANDO el marco.  `callvmr`
+// empuja direccion de retorno, `tailcall` se come el marco, y `jumptable`
+// necesita una tabla y un indice acotado.
+//
+// Se espera R00 = 7.  Si el salto NO ocurriera, la instruccion siguiente
+// pondria 0 y el resultado seria 0.
+
+@Format("velb")
+
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+@Section {
+    @Name("code"),
+    @SpaceAddress("anonymous"),
+    @Align(0x1000)
+}
+
+@Module(test_jmpr)
+@Export(main)
+
+code:
+main:
+    enter 0
+
+    // r1 = direccion del destino, y saltamos a el.
+    mov r1, @Absolute("code.destino")
+    mov r0, 7
+    jmpr r1
+
+    // Si `jmpr` no saltara, esto pisaria el 7 con un 0.
+    mov r0, 0
+
+destino:
+    leave
+    hlt

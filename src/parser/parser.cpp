@@ -403,6 +403,15 @@ static const std::unordered_map<std::string, InstructionPattern>
         {"import", {"import", OpArity::ONE}},
 
         {"jmp", {"jmp", OpArity::ONE}},
+        // Salto por REGISTRO: salta a la direccion que contiene, conservando el
+        // marco.  Estaba en el codificador y en la VM (`exec_instr_jmpr`
+        // escribe RIP desde el registro) pero NO aqui, asi que no habia forma
+        // de escribirlo: existia y era inalcanzable.
+        //
+        // No lo cubre ninguna otra: `callvmr` empuja direccion de retorno,
+        // `tailcall` salta por registro pero se COME el marco, y `jumptable`
+        // necesita una tabla en memoria y un indice acotado.
+        {"jmpr", {"jmpr", OpArity::ONE}},
         {"jmp.je", {"jmp.je", OpArity::ONE}},
         {"jmp.jz", {"jmp.jz", OpArity::ONE}},
         {"jmp.jne", {"jmp.jne", OpArity::ONE}},

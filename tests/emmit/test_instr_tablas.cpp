@@ -77,18 +77,14 @@ static bool es_directiva(const std::string &m) {
  *                      codifican su opcode, asi que funcionarian tal cual.
  *   loop, callnr       sin funcion de emision: hoy imprimirian "no esta
  *                      implementada" aunque el parser las aceptara.
- *   jmpr               la UNICA con valor real, y esta ENTERA: tabla de
- *                      decodificacion, `exec_instr_jmpr` que escribe RIP desde
- *                      un registro, y emision (emit_pop_push).  Le falta solo
- *                      el parser.  No tiene reemplazo: `callvmr` empuja
- *                      direccion de retorno, `tailcall` salta por registro pero
- *                      se come el marco, y `jumptable` necesita tabla e indice
- *                      acotado.  Un "salta a este registro conservando el
- *                      marco" no existe hoy.
+ *
+ * `jmpr` estuvo aqui y YA NO: era la unica con valor real -- salta a la
+ * direccion de un registro CONSERVANDO el marco, que no lo hace ninguna otra --
+ * y estaba entera salvo la entrada del parser.  Se anadio.
  */
 static bool es_legacy(const std::string &m) {
     return m == "callnr" || m == "edm" || m == "edmw4" || m == "edmw6" ||
-           m == "jmpr" || m == "loop";
+           m == "loop";
 }
 
 int main() {
