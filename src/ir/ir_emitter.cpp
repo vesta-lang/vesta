@@ -592,12 +592,11 @@ static void emit_mov_r13_imm(EmitCtx &ctx, int64_t k) {
     ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(13), k);
     ctx.r13_cache = k;
 }
-// Wrapper generico: usa el cache correcto segun el nombre del scratch.
-static void emit_mov_scratch_imm(EmitCtx &ctx, const std::string &scratch,
-                                 int64_t k) {
-    if (scratch == "r14")
+// Wrapper generico: usa el cache correcto segun CUAL sea el scratch.
+static void emit_mov_scratch_imm(EmitCtx &ctx, const Reg &scratch, int64_t k) {
+    if (scratch.is_gp(14))
         emit_mov_r14_imm(ctx, k);
-    else if (scratch == "r13")
+    else if (scratch.is_gp(13))
         emit_mov_r13_imm(ctx, k);
     else {
         ctx.out.emit(emmit::Mnemonic::MOV, scratch, k);
@@ -609,15 +608,16 @@ static void emit_mov_scratch_imm(EmitCtx &ctx, const std::string &scratch,
 // count con (bits-1), asi que los bytes superiores de @p scratch son ignorados.
 // Invalida el cache full-qword de scratch porque sus bytes altos quedan con un
 // valor potencialmente distinto al esperado (no son tocados por el byte_lo).
-static void emit_mov_scratch_shift_imm(EmitCtx &ctx, const std::string &scratch,
+static void emit_mov_scratch_shift_imm(EmitCtx &ctx, const Reg &scratch,
                                        int64_t k) {
     if (k >= 0 && k < 256) {
-        ctx.out.emit(emmit::Mnemonic::MOV, Reg::b(scratch), k);
+        ctx.out.emit(emmit::Mnemonic::MOV,
+                     Reg::gp(scratch.index, Reg::Width::B), k);
         // Invalidar el cache: los bytes altos no se modifican, asi que el
         // valor completo del registro no es K.  Mejor olvidar.
-        if (scratch == "r14")
+        if (scratch.is_gp(14))
             ctx.r14_cache = -1;
-        else if (scratch == "r13")
+        else if (scratch.is_gp(13))
             ctx.r13_cache = -1;
     } else {
         // K no cabe en 1 byte: fallback al mov i64 cacheado normal.
@@ -1360,7 +1360,7 @@ emit_parallel_arg_moves(EmitCtx &ctx,
         // d <- r14 cuando llegue su turno.
         const int target_reg = moves.front().first;
         const std::string old_src = moves.front().second;
-        const std::string scratch = reg_str_of(SCRATCH_REG);
+        const Reg scratch = Reg::gp(SCRATCH_REG);
         ctx.out.emit(emmit::Mnemonic::MOV, scratch, old_src);
         for (auto &m : moves) {
             if (m.second == old_src) m.second = scratch;
@@ -1738,7 +1738,8 @@ static void emit_zmm_callee_restore(EmitCtx &ctx) {
         const uint32_t cw = 16u | (3u << 8) | (1u << 15);
         // El disp del mld/mst es int16; se emite como su patron de bits uint16
         // (el parser no acepta literales negativos como operando).
-        ctx.out.emit(emmit::Mnemonic::MLD, Reg(reg_name(freg)), Reg::gp(0), cw,
+        ctx.out.emit(emmit::Mnemonic::MLD, Reg::gp(static_cast<unsigned>(freg)),
+                     Reg::gp(0), cw,
                      static_cast<uint16_t>(static_cast<int16_t>(disp)));
     }
 }
@@ -2217,8 +2218,9 @@ static void emit_phi_copies(EmitCtx &ctx, IrBlockId pred_id,
                 {ctx.alloc.reg_of(c.dst), ctx.alloc.reg_of(c.src)});
         for (const auto &step :
              codegen::sequence_parallel_moves(std::move(pmoves), SCRATCH_REG))
-            ctx.out.emit(emmit::Mnemonic::MOV, Reg(reg_name(step.dst)),
-                         Reg(reg_name(step.src)));
+            ctx.out.emit(emmit::Mnemonic::MOV,
+                         Reg::gp(static_cast<unsigned>(step.dst)),
+                         Reg::gp(static_cast<unsigned>(step.src)));
     }
 
     // Paso 5 ( c): spilled-src reg-dst.  Carga directa del slot al
@@ -2625,7 +2627,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // boundary.  La fix: si rd == r14 usamos r13 como
             // scratch (sin reservar nada extra: r13/r14 son ambos
             // scratch del runtime y solo uno se usa por sequence).
-            const char *scratch = (rd == std::string("r14")) ? "r13" : "r14";
+            // Cual de los dos scratch queda libre: el que NO es el destino.
+            const Reg scratch = rd.is_gp(14) ? Reg::gp(13) : Reg::gp(14);
             // Optimizacion: si vamos a seguir con `shl K; sar K` para
             // sign-extender, el AND mask previo es REDUNDANTE: el shl
             // ya descarta los bits altos al desplazar a la izquierda.
@@ -3813,8 +3816,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                     ((has_index ? 1u : 0u) << 12) |
                     ((sign_ext ? 1u : 0u) << 14);
                 ctx.out.emit(
-                    emmit::Mnemonic::MLD, Reg(reg_name(dst_reg)),
-                    Reg(reg_name(idx_reg)), cw,
+                    emmit::Mnemonic::MLD,
+                    Reg::gp(static_cast<unsigned>(dst_reg)),
+                    Reg::gp(static_cast<unsigned>(idx_reg)), cw,
                     static_cast<uint16_t>(static_cast<int16_t>(fa.disp)));
                 if (dst_reg == SCRATCH_REG) ctx.r14_cache = -1;
                 if (dst_reg == SCRATCH2_REG) ctx.r13_cache = -1;
@@ -3892,9 +3896,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // Bug fix: si rd_full == r14 (SCRATCH_REG), el mov
             // clobreaba el valor cargado; usamos r13 (SCRATCH2) en
             // ese caso.  Mismo patron que el CAST/SEXT.
-            const std::string scratch = (rd_full == reg_name(SCRATCH_REG))
-                                            ? reg_name(SCRATCH2_REG)
-                                            : reg_name(SCRATCH_REG);
+            const Reg scratch = (rd_full == Reg::gp(SCRATCH_REG))
+                                    ? Reg::gp(SCRATCH2_REG)
+                                    : Reg::gp(SCRATCH_REG);
             emit_mov_scratch_shift_imm(ctx, scratch,
                                        static_cast<int64_t>(shift_bits));
             ctx.out.emit(emmit::Mnemonic::SHL, rd_full, scratch);
@@ -3943,7 +3947,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                     (wcode << 8) | ((host ? 1u : 0u) << 11) |
                     ((has_index ? 1u : 0u) << 12);
                 ctx.out.emit(
-                    emmit::Mnemonic::MST, Reg(rv), Reg(reg_name(idx_reg)), cw,
+                    emmit::Mnemonic::MST, Reg(rv),
+                    Reg::gp(static_cast<unsigned>(idx_reg)), cw,
                     static_cast<uint16_t>(static_cast<int16_t>(fa.disp)));
                 break;
             }
@@ -4231,9 +4236,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 // signo no importa: los esz bytes bajos del resultado dependen
                 // solo de los esz bytes bajos de los operandos (add/sub/mul).
                 ctx.out.emit(emmit::Mnemonic::LOADZH, Reg::gp(14, rsz),
-                             Reg("r11")); // a[k]
+                             Reg::gp(11)); // a[k]
                 ctx.out.emit(emmit::Mnemonic::LOADZH, Reg::gp(13, rsz),
-                             Reg("r12"));                    // b[k]
+                             Reg::gp(12));                   // b[k]
                 ctx.out.emit(iop, Reg::gp(14), Reg::gp(13)); // a OP b (64b)
                 ctx.out.emit(vec_mv(ctx, ins, 0), Mem("r10"),
                              Reg::gp(14, rsz)); // dst[k]
@@ -4305,7 +4310,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                              Reg::gp(14, rsz)); // dst[k]
             } else {
                 ctx.out.emit(emmit::Mnemonic::LOADZH, Reg::gp(14, rsz),
-                             Reg("r11"));                    // a[k]
+                             Reg::gp(11));                   // a[k]
                 ctx.out.emit(iop, Reg::gp(14), Reg::gp(13)); // a OP scalar
                 ctx.out.emit(vec_mv(ctx, ins, 0), Mem("r10"),
                              Reg::gp(14, rsz)); // dst[k]
@@ -6969,7 +6974,8 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
             -static_cast<int32_t>((ctx.zmm_save_slot_base + k + 1) * 8);
         // base = rbp(16), wcode=3 (8 B f64), host=0 (VM stack), bank=1.
         const uint32_t cw = 16u | (3u << 8) | (1u << 15);
-        out.emit(emmit::Mnemonic::MST, Reg(reg_name(freg)), Reg::gp(0), cw,
+        out.emit(emmit::Mnemonic::MST, Reg::gp(static_cast<unsigned>(freg)),
+                 Reg::gp(0), cw,
                  static_cast<uint16_t>(static_cast<int16_t>(disp)));
     }
 
