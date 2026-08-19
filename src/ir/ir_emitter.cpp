@@ -538,7 +538,7 @@ static void emit_mov_if_needed(EmitCtx &ctx, const Reg &dst, const Reg &src) {
  * pasa por la pila, que es el unico modo de materializar tres valores con dos
  * scratch.  Asi el coste se paga exclusivamente cuando no hay alternativa.
  */
-static void emit_three_reg_op(EmitCtx &ctx, const char *mnem, IrValueId a,
+static void emit_three_reg_op(EmitCtx &ctx, emmit::Mnemonic mnem, IrValueId a,
                               IrValueId b, IrValueId c) {
     auto in_reg = [&](IrValueId v) {
         return v != IR_NO_VALUE && ctx.alloc.in_reg(v);
@@ -547,8 +547,7 @@ static void emit_three_reg_op(EmitCtx &ctx, const char *mnem, IrValueId a,
         const std::string ra = ctx.load_src(a, 0);
         const std::string rb = ctx.load_src(b, 0);
         const std::string rc = ctx.load_src(c, 0);
-        ctx.out << "    " << mnem << " " << ra << ", " << rb << ", " << rc
-                << "\n";
+        ctx.out.emit(mnem, Reg(ra), Reg(rb), Reg(rc));
         return;
     }
     // Alguno derramado: r10/r11/r12 como portadores.  Se salvan antes (pueden
@@ -572,7 +571,7 @@ static void emit_three_reg_op(EmitCtx &ctx, const char *mnem, IrValueId a,
     ctx.out.emit(emmit::Mnemonic::POP, "r12");
     ctx.out.emit(emmit::Mnemonic::POP, "r11");
     ctx.out.emit(emmit::Mnemonic::POP, "r10");
-    ctx.out << "    " << mnem << " r10, r11, r12\n";
+    ctx.out.emit(mnem, Reg::gp(10), Reg::gp(11), Reg::gp(12));
     ctx.out.emit(emmit::Mnemonic::POP, "r12");
     ctx.out.emit(emmit::Mnemonic::POP, "r11");
     ctx.out.emit(emmit::Mnemonic::POP, "r10");
@@ -1421,12 +1420,12 @@ static void emit_binop(EmitCtx &ctx, emmit::Mnemonic mnemonic, IrValueId dst,
 // Emite una operacion unaria en dos-direcciones:
 //   "op r_dst"
 // Carga operando derramado (->r14) y almacena resultado si dst esta derramado.
-static void emit_unop(EmitCtx &ctx, const std::string &mnemonic, IrValueId dst,
+static void emit_unop(EmitCtx &ctx, emmit::Mnemonic mnemonic, IrValueId dst,
                       IrValueId src) {
     std::string rs = ctx.load_src(src, 0);
     Reg rd = ctx.dst_of(dst);
     emit_mov_if_needed(ctx, rd, rs);
-    ctx.out << "    " << mnemonic << " " << rd << "\n";
+    ctx.out.emit(mnemonic, rd);
     ctx.store_spilled(dst);
 }
 
@@ -1844,28 +1843,28 @@ static emmit::Mnemonic cmp_mnemonic(IrOp op) {
 // Emite "jmp.<cond_invertida> @Absolute(false_lbl)"
 static void emit_cond_branch(EmitCtx &ctx, IrOp cmp_op,
                              const std::string &false_lbl) {
-    const char *jmp = nullptr;
+    using emmit::Mnemonic;
+    Mnemonic jmp = Mnemonic::JMP_JE;
     switch (cmp_op) {
     case IrOp::CMP_EQ:
-    case IrOp::FCMP_EQ: jmp = "jmp.jne"; break;
+    case IrOp::FCMP_EQ: jmp = Mnemonic::JMP_JNE; break;
     case IrOp::CMP_NE:
-    case IrOp::FCMP_NE: jmp = "jmp.je"; break;
+    case IrOp::FCMP_NE: jmp = Mnemonic::JMP_JE; break;
     case IrOp::CMP_LT:
-    case IrOp::FCMP_LT: jmp = "jmp.jge"; break;
+    case IrOp::FCMP_LT: jmp = Mnemonic::JMP_JGE; break;
     case IrOp::CMP_GT:
-    case IrOp::FCMP_GT: jmp = "jmp.jle"; break;
+    case IrOp::FCMP_GT: jmp = Mnemonic::JMP_JLE; break;
     case IrOp::CMP_LE:
-    case IrOp::FCMP_LE: jmp = "jmp.jgt"; break;
+    case IrOp::FCMP_LE: jmp = Mnemonic::JMP_JGT; break;
     case IrOp::CMP_GE:
-    case IrOp::FCMP_GE: jmp = "jmp.jlt"; break;
-    case IrOp::CMP_ULT: jmp = "jmp.jae"; break;
-    case IrOp::CMP_UGT: jmp = "jmp.jls"; break;
-    case IrOp::CMP_ULE: jmp = "jmp.jhi"; break;
-    case IrOp::CMP_UGE: jmp = "jmp.jb"; break;
-    default: jmp = "jmp.je"; break; // cond==0 -> false
+    case IrOp::FCMP_GE: jmp = Mnemonic::JMP_JLT; break;
+    case IrOp::CMP_ULT: jmp = Mnemonic::JMP_JAE; break;
+    case IrOp::CMP_UGT: jmp = Mnemonic::JMP_JLS; break;
+    case IrOp::CMP_ULE: jmp = Mnemonic::JMP_JHI; break;
+    case IrOp::CMP_UGE: jmp = Mnemonic::JMP_JB; break;
+    default: jmp = Mnemonic::JMP_JE; break; // cond==0 -> false
     }
-    ctx.out << "    " << jmp << " @Absolute(\"" << EmitCtx::abs_lbl(false_lbl)
-            << "\")\n";
+    ctx.out.emit(jmp, Ann::absolute(EmitCtx::abs_lbl(false_lbl)));
 }
 
 // =========================================================================
@@ -2037,30 +2036,31 @@ static void emit_cmp_standalone(EmitCtx &ctx, const IrInstr &ins) {
         ctx.out.emit(cmp_mn, Reg(ra), Reg(rb));
     }
     // saltar a true si condicion se cumple (condicion directa)
-    const char *jmp_direct = nullptr;
+    using emmit::Mnemonic;
+    Mnemonic jmp_direct = Mnemonic::JMP_JE;
     switch (ins.op) {
     case IrOp::CMP_EQ:
-    case IrOp::FCMP_EQ: jmp_direct = "jmp.je"; break;
+    case IrOp::FCMP_EQ: jmp_direct = Mnemonic::JMP_JE; break;
     case IrOp::CMP_NE:
-    case IrOp::FCMP_NE: jmp_direct = "jmp.jne"; break;
+    case IrOp::FCMP_NE: jmp_direct = Mnemonic::JMP_JNE; break;
     case IrOp::CMP_LT:
-    case IrOp::FCMP_LT: jmp_direct = "jmp.jlt"; break;
+    case IrOp::FCMP_LT: jmp_direct = Mnemonic::JMP_JLT; break;
     case IrOp::CMP_GT:
-    case IrOp::FCMP_GT: jmp_direct = "jmp.jgt"; break;
+    case IrOp::FCMP_GT: jmp_direct = Mnemonic::JMP_JGT; break;
     case IrOp::CMP_LE:
-    case IrOp::FCMP_LE: jmp_direct = "jmp.jle"; break;
+    case IrOp::FCMP_LE: jmp_direct = Mnemonic::JMP_JLE; break;
     case IrOp::CMP_GE:
-    case IrOp::FCMP_GE: jmp_direct = "jmp.jge"; break;
-    case IrOp::CMP_ULT: jmp_direct = "jmp.jb"; break;
-    case IrOp::CMP_UGT: jmp_direct = "jmp.jhi"; break;
-    case IrOp::CMP_ULE: jmp_direct = "jmp.jls"; break;
-    case IrOp::CMP_UGE: jmp_direct = "jmp.jae"; break;
-    default: jmp_direct = "jmp.je"; break;
+    case IrOp::FCMP_GE: jmp_direct = Mnemonic::JMP_JGE; break;
+    case IrOp::CMP_ULT: jmp_direct = Mnemonic::JMP_JB; break;
+    case IrOp::CMP_UGT: jmp_direct = Mnemonic::JMP_JHI; break;
+    case IrOp::CMP_ULE: jmp_direct = Mnemonic::JMP_JLS; break;
+    case IrOp::CMP_UGE: jmp_direct = Mnemonic::JMP_JAE; break;
+    default: jmp_direct = Mnemonic::JMP_JE; break;
     }
-    ctx.out << "    " << jmp_direct << " @Absolute(\""
-            << EmitCtx::abs_lbl(lbl_true) << "\")\n";
+    ctx.out.emit(jmp_direct, Ann::absolute(EmitCtx::abs_lbl(lbl_true)));
     ctx.out.emit(emmit::Mnemonic::MOV, rd, 0);
-    ctx.out << "    jmp @Absolute(\"" << EmitCtx::abs_lbl(lbl_end) << "\")\n";
+    ctx.out.emit(emmit::Mnemonic::JMP,
+                 Ann::absolute(EmitCtx::abs_lbl(lbl_end)));
     ctx.out << lbl_true << ":\n";
     ctx.out.emit(emmit::Mnemonic::MOV, rd, 1);
     ctx.out << lbl_end << ":\n";
@@ -2530,7 +2530,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     // --- Operaciones unarias bitwise/float ---
     case IrOp::NOT:
         if (!ins.operands.empty())
-            emit_unop(ctx, "not", ins.dst, ins.operands[0]);
+            emit_unop(ctx, emmit::Mnemonic::NOT, ins.dst, ins.operands[0]);
         break;
     case IrOp::FNEG:
         if (!ins.operands.empty())
@@ -3854,11 +3854,13 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const bool host_ptr = ins.operands[0] != IR_NO_VALUE &&
                               ctx.fn.values[ins.operands[0]].is_host_ptr;
         if (tsz < 8) {
-            const char *opc_z = host_ptr ? "loadzh" : "loadz";
-            ctx.out << "    " << opc_z << " " << rd_sz << ", " << rp << "\n";
+            const emmit::Mnemonic opc_z =
+                host_ptr ? emmit::Mnemonic::LOADZH : emmit::Mnemonic::LOADZ;
+            ctx.out.emit(opc_z, Reg(rd_sz), Reg(rp));
         } else {
-            const char *opcode = host_ptr ? "movh" : "mov";
-            ctx.out << "    " << opcode << " " << rd_sz << ", [" << rp << "]\n";
+            const emmit::Mnemonic opcode =
+                host_ptr ? emmit::Mnemonic::MOVH : emmit::Mnemonic::MOV;
+            ctx.out.emit(opcode, Reg(rd_sz), Mem(rp));
         }
         // Sign-extension manual para tipos signed < 64 bits.  Sin esto
         // los i8/i16/i32 con valores negativos se cargan con bits
@@ -3985,8 +3987,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         }
         const bool host_ptr = ins.operands[1] != IR_NO_VALUE &&
                               ctx.fn.values[ins.operands[1]].is_host_ptr;
-        const char *opcode = host_ptr ? "movh" : "mov";
-        ctx.out << "    " << opcode << " [" << rp << "], " << rv_sized << "\n";
+        const emmit::Mnemonic opcode =
+            host_ptr ? emmit::Mnemonic::MOVH : emmit::Mnemonic::MOV;
+        ctx.out.emit(opcode, Mem(rp), Reg(rv_sized));
         break;
     }
 
@@ -4070,8 +4073,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
          * registros DONDE YA VIVEN los operandos -- forzarlos a unos fijos solo
          * anyadiria movimientos y trafico de registros. */
         if (ins.operands.size() < 3) break;
-        emit_three_reg_op(ctx, "memcpyh", ins.operands[0], ins.operands[1],
-                          ins.operands[2]);
+        emit_three_reg_op(ctx, emmit::Mnemonic::MEMCPYH, ins.operands[0],
+                          ins.operands[1], ins.operands[2]);
         ctx.r13_cache = -1;
         ctx.r14_cache = -1;
         break;
@@ -4094,8 +4097,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
          * anyadiria tres `mov` y trafico de registros que no hace falta.  El
          * emisor solo tiene DOS scratch, asi que con tres operandos derramados
          * el tercero pisaria al segundo -- de eso se encarga el helper. */
-        emit_three_reg_op(ctx, host ? "memseth" : "memset", ins.operands[0],
-                          ins.operands[1], ins.operands[2]);
+        emit_three_reg_op(
+            ctx, host ? emmit::Mnemonic::MEMSETH : emmit::Mnemonic::MEMSET,
+            ins.operands[0], ins.operands[1], ins.operands[2]);
         ctx.r13_cache = -1;
         ctx.r14_cache = -1;
         break;
@@ -4112,10 +4116,11 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const size_t esz = ir_type_size(ins.type); // F64=8
         if (esz == 0) break;
         const uint64_t W = width / esz;
-        const char *uop = (subop == 1)   ? "fneg"
-                          : (subop == 2) ? "fabs"
-                          : (subop == 3) ? "fsqrt"
-                                         : nullptr; // 0=copy (sin op)
+        const emmit::Mnemonic uop =
+            (subop == 1)   ? emmit::Mnemonic::FNEG
+            : (subop == 2) ? emmit::Mnemonic::FABS
+            : (subop == 3) ? emmit::Mnemonic::FSQRT
+                           : emmit::Mnemonic::kCount; // 0=copy (sin op)
         ctx.out.emit(emmit::Mnemonic::PUSH, "r10");
         ctx.out.emit(emmit::Mnemonic::PUSH, "r11");
         {
@@ -4135,9 +4140,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             }
             ctx.out.emit(vec_mv(ctx, ins, 1), Reg::gp(14),
                          Mem("r11")); // a[k] bits
-            if (uop) {
+            if (emmit::is_valid(uop)) {
                 ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(0), Reg::gp(14));
-                ctx.out << "    " << uop << " f0, f0\n";
+                ctx.out.emit(uop, Reg::fp(0), Reg::fp(0));
                 ctx.out.emit(emmit::Mnemonic::BITZ2G, Reg::gp(14), Reg::fp(0));
             }
             ctx.out.emit(vec_mv(ctx, ins, 0), Mem("r10"),
