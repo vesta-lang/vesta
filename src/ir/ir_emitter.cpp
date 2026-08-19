@@ -235,10 +235,10 @@ struct EmitCtx {
     /// lee DOS operandos derramados: cada uno vive en un scratch distinto y
     /// @c reg_of, que siempre devuelve el primero, los confundiria.
     /// Se usa junto a @c load_src(vid, idx), que es quien emite la carga.
-    std::string reg_at(IrValueId vid, int scratch_idx) const {
-        if (vid == IR_NO_VALUE) return "r0";
-        if (alloc.in_reg(vid)) return reg_name(alloc.reg_of(vid));
-        return reg_name(scratch_idx == 0 ? SCRATCH_REG : SCRATCH2_REG);
+    Reg reg_at(IrValueId vid, int scratch_idx) const {
+        if (vid == IR_NO_VALUE) return Reg::gp(0);
+        if (alloc.in_reg(vid)) return Reg::gp(alloc.reg_of(vid));
+        return Reg::gp(scratch_idx == 0 ? SCRATCH_REG : SCRATCH2_REG);
     }
 
     // True si el valor vid tiene un registro asignado (no derramado)
@@ -339,9 +339,9 @@ struct EmitCtx {
         return (scratch_idx == 0) ? SCRATCH_REG : SCRATCH2_REG;
     }
 
-    std::string load_src(IrValueId vid, int scratch_idx = 0) {
-        if (vid == IR_NO_VALUE) return "r0";
-        if (alloc.in_reg(vid)) return reg_name(alloc.reg_of(vid));
+    Reg load_src(IrValueId vid, int scratch_idx = 0) {
+        if (vid == IR_NO_VALUE) return Reg::gp(0);
+        if (alloc.in_reg(vid)) return Reg::gp(alloc.reg_of(vid));
         {
             if (alloc.spilled(vid)) {
                 int sr = (scratch_idx == 0) ? SCRATCH_REG : SCRATCH2_REG;
@@ -377,10 +377,10 @@ struct EmitCtx {
                     out.emit(emmit::Mnemonic::XCHG,
                              Reg::special(SpecialReg::CUR0), reg_name(sr));
                 }
-                return reg_name(sr);
+                return Reg::gp(sr);
             }
         }
-        return reg_name(SCRATCH_REG);
+        return Reg::gp(SCRATCH_REG);
     }
 
     // Devuelve el registro DESTINO de vid: si esta derramado retorna r14
@@ -451,18 +451,17 @@ static bool slot_is_gdata(const IrModule &mod, size_t idx) {
 // Devuelve el sufijo de tamano de registro VM segun el ancho del IrType.
 // Mapeo:  1 byte -> "b"  | 2 bytes -> "w"  | 4 bytes -> "d"  | 8 bytes -> ""
 // Ejemplo: para r3 con tipo I32, devuelve "r3d" (32 bits low de r3).
-static std::string reg_name_sized(int reg, IrType t) {
-    std::string base = reg_name(reg);
+static Reg reg_name_sized(int reg, IrType t) {
     switch (t) {
     case IrType::I8:
     case IrType::U8:
-    case IrType::BOOL: return base + "b";
+    case IrType::BOOL: return Reg::gp(reg, Reg::Width::B);
     case IrType::I16:
-    case IrType::U16: return base + "w";
+    case IrType::U16: return Reg::gp(reg, Reg::Width::W);
     case IrType::I32:
     case IrType::U32:
-    case IrType::F32: return base + "d";
-    default: return base; // 64-bit
+    case IrType::F32: return Reg::gp(reg, Reg::Width::D);
+    default: return Reg::gp(reg); // 64-bit
     }
 }
 
@@ -1392,7 +1391,7 @@ emit_parallel_arg_moves(EmitCtx &ctx,
 static void emit_binop(EmitCtx &ctx, emmit::Mnemonic mnemonic, IrValueId dst,
                        IrValueId src1, IrValueId src2) {
     std::string rs1 = ctx.load_src(src1, 0); // r14 si derramado
-    std::string rs2 = ctx.load_src(src2, 1); // r13 si derramado
+    Reg rs2 = ctx.load_src(src2, 1);         // r13 si derramado
     Reg rd = ctx.dst_of(dst);
 
     /* Super-instruccion alu3 si:
@@ -1553,8 +1552,8 @@ static void emit_float_binop(EmitCtx &ctx, emmit::Mnemonic mnemonic,
     if (zd < 0 && z1 < 0 && z2 < 0) {
         const bool f0_has_src1 =
             (ctx.last_f0 != IR_NO_VALUE && ctx.last_f0 == src1);
-        std::string rs1 = f0_has_src1 ? std::string() : ctx.load_src(src1, 0);
-        std::string rs2 = ctx.load_src(src2, 1);
+        Reg rs1 = f0_has_src1 ? Reg::gp(0) : ctx.load_src(src1, 0);
+        Reg rs2 = ctx.load_src(src2, 1);
         Reg rd = ctx.dst_of(dst);
         if (!f0_has_src1) emit_gp_to_zmm_bits(ctx, rs1, "f0");
         emit_gp_to_zmm_bits(ctx, rs2, "f1");
@@ -1623,7 +1622,7 @@ static void emit_float_unop(EmitCtx &ctx, emmit::Mnemonic mnemonic, IrType type,
     if (zd < 0 && zs < 0) {
         const bool f0_has_src =
             (ctx.last_f0 != IR_NO_VALUE && ctx.last_f0 == src);
-        std::string rs = f0_has_src ? std::string() : ctx.load_src(src, 0);
+        Reg rs = f0_has_src ? Reg::gp(0) : ctx.load_src(src, 0);
         Reg rd = ctx.dst_of(dst);
         if (!f0_has_src) emit_gp_to_zmm_bits(ctx, rs, "f0");
         ctx.out.emit(emmit::packed_if(mnemonic, es_ps), Reg::fp(0), Reg::fp(0));
@@ -3843,7 +3842,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // Es el mismo arreglo que STORE ya tenia desde `59_arraylist.vx`.
         std::string rd_sz =
             (ins.dst == IR_NO_VALUE)
-                ? std::string(rd_full)
+                ? rd_full
                 : reg_name_sized(ctx.reg_num(ins.dst), ins.type);
         // La VM NO hace zero-extend en `mov rXd/w/b, [src]` (a
         // diferencia de x86-64 con la mitad inferior).  Los bits
@@ -4864,8 +4863,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // Layout en memoria VM: [u64 length][data[len * sizeof(T)]]
         // Delega a helper nativo stdlib/native/array/vesta_array:va_alloc(proc,
         // esize, count)
-        std::string r_len =
-            ins.operands.empty() ? "r0" : ctx.load_src(ins.operands[0], 0);
+        Reg r_len = ins.operands.empty() ? Reg::gp(0)
+                                         : ctx.load_src(ins.operands[0], 0);
         uint64_t esize = ir_type_size(ins.type);
         ctx.out.emit(emmit::Mnemonic::GETPROC, Reg::gp(1));
         ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(2), esize);
