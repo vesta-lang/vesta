@@ -210,11 +210,51 @@ inline Mnemonic mnemonic_from_text(const char *text) {
     }
     return Mnemonic::kCount;
 }
-
-/// Si @p m es una instruccion de verdad y no el centinela del final.
 inline constexpr bool is_valid(Mnemonic m) {
     return static_cast<uint16_t>(m) < mnemonic_count();
 }
+
+/**
+ * @brief La variante EMPAQUETADA (`.ps`) de un mnemonico escalar.
+ *
+ * El emisor construia el nombre pegando el sufijo: `fadd` + `".ps"`.  Escrito
+ * asi, el nombre resultante no lo comprueba nadie -- una operacion que NO
+ * tenga variante empaquetada produce un mnemonico inexistente que solo falla
+ * al ensamblar --, y el sufijo se puede olvidar en uno de los sitios sin que
+ * se note.
+ *
+ * La correspondencia NO se escribe a mano, que seria otra copia de la lista y
+ * se separaria de ella: se deriva de @c instr_list.h buscando, para cada
+ * mnemonico, el que se llama igual con `.ps` detras.  La tabla se construye
+ * una sola vez.
+ *
+ * @param m Mnemonico escalar.
+ * @return Su variante `.ps`, o el mismo @p m si no tiene ninguna.
+ */
+inline Mnemonic packed_of(Mnemonic m) {
+    static const std::vector<Mnemonic> kPacked = [] {
+        std::vector<Mnemonic> v(mnemonic_count(), Mnemonic::kCount);
+        for (uint16_t i = 0; i < mnemonic_count(); ++i) {
+            const std::string buscado =
+                std::string(text_of(static_cast<Mnemonic>(i))) + ".ps";
+            const Mnemonic p = mnemonic_from_text(buscado.c_str());
+            v[i] = is_valid(p) ? p : static_cast<Mnemonic>(i);
+        }
+        return v;
+    }();
+    const uint16_t i = static_cast<uint16_t>(m);
+    return i < kPacked.size() ? kPacked[i] : m;
+}
+
+/**
+ * @brief La variante escalar o la empaquetada, segun el ancho del dato.
+ * @param m       Mnemonico escalar.
+ * @param es_f32  true para operar sobre f32 empaquetado.
+ */
+inline Mnemonic packed_if(Mnemonic m, bool es_f32) {
+    return es_f32 ? packed_of(m) : m;
+}
+/// Si @p m es una instruccion de verdad y no el centinela del final.
 
 /**
  * @brief Indice plano por mnemonico sobre una tabla ajena indexada por cadena.

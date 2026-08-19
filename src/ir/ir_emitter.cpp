@@ -1834,19 +1834,19 @@ static const char *arith_mnemonic(IrOp op, IrType type) {
 }
 
 // Mnemonic de comparacion segun tipo
-static const char *cmp_mnemonic(IrOp op) {
+static emmit::Mnemonic cmp_mnemonic(IrOp op) {
     switch (op) {
     case IrOp::CMP_ULT:
     case IrOp::CMP_UGT:
     case IrOp::CMP_ULE:
-    case IrOp::CMP_UGE: return "cmpu";
+    case IrOp::CMP_UGE: return emmit::Mnemonic::CMPU;
     case IrOp::FCMP_EQ:
     case IrOp::FCMP_NE:
     case IrOp::FCMP_LT:
     case IrOp::FCMP_GT:
     case IrOp::FCMP_LE:
-    case IrOp::FCMP_GE: return "fcmp";
-    default: return "cmps";
+    case IrOp::FCMP_GE: return emmit::Mnemonic::FCMP;
+    default: return emmit::Mnemonic::CMPS;
     }
 }
 
@@ -1979,7 +1979,7 @@ static void emit_cmp_standalone(EmitCtx &ctx, const IrInstr &ins) {
     std::string rb = ctx.load_src(ins.operands[1], 1);
     std::string lbl_true = ctx.unique_lbl("ctrue");
     std::string lbl_end = ctx.unique_lbl("cend");
-    const char *cmp_mn = cmp_mnemonic(ins.op);
+    const emmit::Mnemonic cmp_mn = cmp_mnemonic(ins.op);
 
     const bool is_fcmp = (ins.op == IrOp::FCMP_EQ || ins.op == IrOp::FCMP_NE ||
                           ins.op == IrOp::FCMP_LT || ins.op == IrOp::FCMP_GT ||
@@ -2024,9 +2024,9 @@ static void emit_cmp_standalone(EmitCtx &ctx, const IrInstr &ins) {
         }
         if (setcc_cond >= 0) {
             if (swap)
-                ctx.out << "    " << cmp_mn << " " << rb << ", " << ra << "\n";
+                ctx.out.emit(cmp_mn, Reg(rb), Reg(ra));
             else
-                ctx.out << "    " << cmp_mn << " " << ra << ", " << rb << "\n";
+                ctx.out.emit(cmp_mn, Reg(ra), Reg(rb));
             ctx.out.emit(emmit::Mnemonic::SETCC, rd, setcc_cond);
             ctx.store_spilled(ins.dst);
             return;
@@ -2043,7 +2043,7 @@ static void emit_cmp_standalone(EmitCtx &ctx, const IrInstr &ins) {
         emit_load_float_to(ctx, ins.operands[1], rb, "f1");
         ctx.out << "    fcmp" << suffix << " f0, f1\n";
     } else {
-        ctx.out << "    " << cmp_mn << " " << ra << ", " << rb << "\n";
+        ctx.out.emit(cmp_mn, Reg(ra), Reg(rb));
     }
     // saltar a true si condicion se cumple (condicion directa)
     const char *jmp_direct = nullptr;
@@ -2912,9 +2912,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                         // un merge que copia un acumulador loop-carried (p.ej.
                         // hash_lookup: `if ((seed&7)==0) acc++`) pasan de 9
                         // ops a 3 en la region del branch.
-                        const char *cmp_mn = cmp_mnemonic(ins.op);
-                        ctx.out << "    " << cmp_mn << " " << ra << ", " << rb
-                                << "\n";
+                        const emmit::Mnemonic cmp_mn = cmp_mnemonic(ins.op);
+                        ctx.out.emit(cmp_mn, Reg(ra), Reg(rb));
                         emit_phi_copies(ctx, bid, next.false_block);
                         emit_cond_branch(ctx, ins.op,
                                          ctx.block_label(next.false_block));
@@ -2965,9 +2964,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                         // Coste: 1 instr extra (setcc) + cmpu inline.
                         // Cero overhead cuando no hay phi copies (path
                         // cmpjmp fusionado se usa).
-                        const char *cmp_mn = cmp_mnemonic(ins.op);
-                        ctx.out << "    " << cmp_mn << " " << ra << ", " << rb
-                                << "\n";
+                        const emmit::Mnemonic cmp_mn = cmp_mnemonic(ins.op);
+                        ctx.out.emit(cmp_mn, Reg(ra), Reg(rb));
                         // setcc cond, r14: r14 = (cond ? 1 : 0).
                         // El cond code corresponde a la condicion
                         // ORIGINAL del cmp_op (no invertida).
@@ -4164,16 +4162,16 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (esz == 0) break;
         const uint64_t W = width / esz;
         const bool is_fp = (ins.type == IrType::F64 || ins.type == IrType::F32);
-        const char *fop = (subop == 0)   ? "fadd"
-                          : (subop == 1) ? "fsub"
-                          : (subop == 2) ? "fmul"
-                                         : "fdiv";
+        const emmit::Mnemonic fop = (subop == 0)   ? emmit::Mnemonic::FADD
+                                    : (subop == 1) ? emmit::Mnemonic::FSUB
+                                    : (subop == 2) ? emmit::Mnemonic::FMUL
+                                                   : emmit::Mnemonic::FDIV;
         // int: add/sub/mul.  El low de un producto signed==unsigned -> "muls"
         // sirve para i/u (solo guardamos los esz bytes bajos).
-        const char *iop = (subop == 0)   ? "adds"
-                          : (subop == 1) ? "subs"
-                                         : "muls";
-        const std::string suf = (ins.type == IrType::F32) ? ".ps" : "";
+        const emmit::Mnemonic iop = (subop == 0)   ? emmit::Mnemonic::ADDS
+                                    : (subop == 1) ? emmit::Mnemonic::SUBS
+                                                   : emmit::Mnemonic::MULS;
+        const bool es_ps = (ins.type == IrType::F32);
         // sufijo de tamano del reg para load/store entero
         // (8b->"", 4b->"d", 2b->"w", 1b->"b").
         const Reg::Width rsz = width_for_bytes(static_cast<unsigned>(esz));
@@ -4213,7 +4211,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                              Mem("r12")); // b[k] bits
                 ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(0), Reg::gp(14));
                 ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(1), Reg::gp(13));
-                ctx.out << "    " << fop << suf << " f0, f1\n";
+                ctx.out.emit(emmit::packed_if(fop, es_ps), Reg::fp(0),
+                             Reg::fp(1));
                 ctx.out.emit(emmit::Mnemonic::BITZ2G, Reg::gp(14), Reg::fp(0));
                 ctx.out.emit(vec_mv(ctx, ins, 0), Mem("r10"),
                              Reg::gp(14, rsz)); // dst[k]
@@ -4226,8 +4225,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 ctx.out.emit(emmit::Mnemonic::LOADZH, Reg::gp(14, rsz),
                              Reg("r11")); // a[k]
                 ctx.out.emit(emmit::Mnemonic::LOADZH, Reg::gp(13, rsz),
-                             Reg("r12"));                  // b[k]
-                ctx.out << "    " << iop << " r14, r13\n"; // a OP b (64b)
+                             Reg("r12"));                    // b[k]
+                ctx.out.emit(iop, Reg::gp(14), Reg::gp(13)); // a OP b (64b)
                 ctx.out.emit(vec_mv(ctx, ins, 0), Mem("r10"),
                              Reg::gp(14, rsz)); // dst[k]
             }
@@ -4252,15 +4251,15 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (esz == 0) break;
         const uint64_t W = width / esz;
         const bool is_fp = (ins.type == IrType::F64 || ins.type == IrType::F32);
-        const char *fop = (subop == 0)   ? "fadd"
-                          : (subop == 1) ? "fsub"
-                          : (subop == 2) ? "fmul"
-                                         : "fdiv";
-        const char *iop = (subop == 0)   ? "adds"
-                          : (subop == 1) ? "subs"
-                                         : "muls";
+        const emmit::Mnemonic fop = (subop == 0)   ? emmit::Mnemonic::FADD
+                                    : (subop == 1) ? emmit::Mnemonic::FSUB
+                                    : (subop == 2) ? emmit::Mnemonic::FMUL
+                                                   : emmit::Mnemonic::FDIV;
+        const emmit::Mnemonic iop = (subop == 0)   ? emmit::Mnemonic::ADDS
+                                    : (subop == 1) ? emmit::Mnemonic::SUBS
+                                                   : emmit::Mnemonic::MULS;
         // .ps para f32 (opera el low 32 del banco ZMM); vacio para f64.
-        const std::string suf = (ins.type == IrType::F32) ? ".ps" : "";
+        const bool es_ps = (ins.type == IrType::F32);
         const Reg::Width rsz = width_for_bytes(static_cast<unsigned>(esz));
         ctx.out.emit(emmit::Mnemonic::PUSH, "r10");
         ctx.out.emit(emmit::Mnemonic::PUSH, "r11");
@@ -4291,14 +4290,15 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 ctx.out.emit(vec_mv(ctx, ins, 1), Reg::gp(14, rsz),
                              Mem("r11")); // a[k]
                 ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(0), Reg::gp(14));
-                ctx.out << "    " << fop << suf << " f0, f2\n";
+                ctx.out.emit(emmit::packed_if(fop, es_ps), Reg::fp(0),
+                             Reg::fp(2));
                 ctx.out.emit(emmit::Mnemonic::BITZ2G, Reg::gp(14), Reg::fp(0));
                 ctx.out.emit(vec_mv(ctx, ins, 0), Mem("r10"),
                              Reg::gp(14, rsz)); // dst[k]
             } else {
                 ctx.out.emit(emmit::Mnemonic::LOADZH, Reg::gp(14, rsz),
-                             Reg("r11"));                  // a[k]
-                ctx.out << "    " << iop << " r14, r13\n"; // a OP scalar
+                             Reg("r11"));                    // a[k]
+                ctx.out.emit(iop, Reg::gp(14), Reg::gp(13)); // a OP scalar
                 ctx.out.emit(vec_mv(ctx, ins, 0), Mem("r10"),
                              Reg::gp(14, rsz)); // dst[k]
             }
@@ -4320,7 +4320,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const size_t esz = ir_type_size(ins.type);
         if (esz == 0) break;
         const uint64_t W = width / esz;
-        const std::string suf = (ins.type == IrType::F32) ? ".ps" : "";
+        const bool es_ps = (ins.type == IrType::F32);
         const Reg::Width rsz = width_for_bytes(static_cast<unsigned>(esz));
         ctx.out.emit(emmit::Mnemonic::PUSH, "r10");
         ctx.out.emit(emmit::Mnemonic::PUSH, "r11");
@@ -4349,7 +4349,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             ctx.out.emit(vec_mv(ctx, ins, 0), Reg::gp(14, rsz),
                          Mem("r10")); // c[k]
             ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(1), Reg::gp(14));
-            ctx.out << "    fmadd" << suf << " f1, f0, f2\n"; // f1 = a*esc + c
+            ctx.out.emit(emmit::packed_if(emmit::Mnemonic::FMADD, es_ps),
+                         Reg::fp(1), Reg::fp(0), Reg::fp(2)); // f1 = a*esc + c
             ctx.out.emit(emmit::Mnemonic::BITZ2G, Reg::gp(14), Reg::fp(1));
             ctx.out.emit(vec_mv(ctx, ins, 0), Mem("r10"),
                          Reg::gp(14, rsz)); // c[k]
@@ -4386,7 +4387,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const size_t esz = ir_type_size(ins.type);
         if (esz == 0) break;
         const uint64_t W = width / esz;
-        const std::string suf = (ins.type == IrType::F32) ? ".ps" : "";
+        const bool es_ps = (ins.type == IrType::F32);
         const Reg::Width rsz = width_for_bytes(static_cast<unsigned>(esz));
         ctx.out.emit(emmit::Mnemonic::PUSH, "r9");
         ctx.out.emit(emmit::Mnemonic::PUSH, "r10");
@@ -4423,15 +4424,18 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             ctx.out.emit(vec_mv(ctx, ins, 0), Reg::gp(14, rsz),
                          Mem("r9")); // sumando[k]
             ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(0), Reg::gp(14));
-            if (fma_sub) ctx.out << "    fneg" << suf << " f0, f0\n"; // -d
+            if (fma_sub)
+                ctx.out.emit(emmit::packed_if(emmit::Mnemonic::FNEG, es_ps),
+                             Reg::fp(0), Reg::fp(0)); // -d
             ctx.out.emit(vec_mv(ctx, ins, 1), Reg::gp(13, rsz),
                          Mem("r11")); // a[k]
             ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(1), Reg::gp(13));
             ctx.out.emit(vec_mv(ctx, ins, 2), Reg::gp(14, rsz),
                          Mem("r12")); // b[k]
             ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(2), Reg::gp(14));
-            ctx.out << "    fmadd" << suf
-                    << " f0, f1, f2\n"; // f0 = a*b + sumando
+            ctx.out.emit(emmit::packed_if(emmit::Mnemonic::FMADD, es_ps),
+                         Reg::fp(0), Reg::fp(1),
+                         Reg::fp(2)); // f0 = a*b + sumando
             ctx.out.emit(emmit::Mnemonic::BITZ2G, Reg::gp(14), Reg::fp(0));
             ctx.out.emit(vec_mv(ctx, ins, 0), Mem("r10"),
                          Reg::gp(14, rsz)); // dst[k]
@@ -4479,7 +4483,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const size_t esz = ir_type_size(ins.type);
         if (esz == 0) break;
         const uint64_t W = width / esz;
-        const std::string suf = (ins.type == IrType::F32) ? ".ps" : "";
+        const bool es_ps = (ins.type == IrType::F32);
         const Reg::Width rsz = width_for_bytes(static_cast<unsigned>(esz));
         const bool is_fp = (ins.type == IrType::F64 || ins.type == IrType::F32);
         ctx.out.emit(emmit::Mnemonic::PUSH, "r10");
@@ -4535,9 +4539,12 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                                  Mem("r12")); // b[k]
                     ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(2),
                                  Reg::gp(14));
-                    ctx.out << "    fmadd" << suf << " f0, f1, f2\n"; // += a*b
+                    ctx.out.emit(
+                        emmit::packed_if(emmit::Mnemonic::FMADD, es_ps),
+                        Reg::fp(0), Reg::fp(1), Reg::fp(2)); // += a*b
                 } else {
-                    ctx.out << "    fadd" << suf << " f0, f1\n"; // += a
+                    ctx.out.emit(emmit::packed_if(emmit::Mnemonic::FADD, es_ps),
+                                 Reg::fp(0), Reg::fp(1)); // 1
                 }
                 ctx.out.emit(emmit::Mnemonic::BITZ2G, Reg::gp(14), Reg::fp(0));
                 ctx.out.emit(vec_mv(ctx, ins, 0), Mem("r10"),
@@ -4569,7 +4576,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (esz == 0) break;
         const uint64_t W = width / esz;
         const bool is_fp = (ins.type == IrType::F64 || ins.type == IrType::F32);
-        const std::string suf = (ins.type == IrType::F32) ? ".ps" : "";
+        const bool es_ps = (ins.type == IrType::F32);
         const Reg::Width rsz = width_for_bytes(static_cast<unsigned>(esz));
         const uint64_t dst_off = ((ins.imm >> 8) & 0xF) * width;
         const uint64_t src_off = ((ins.imm >> 12) & 0xF) * width;
@@ -4597,7 +4604,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(0), Reg::gp(14));
                 ctx.out.emit(vec_mv(ctx, ins, 1), Reg::gp(13, rsz), Mem("r11"));
                 ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(1), Reg::gp(13));
-                ctx.out << "    fadd" << suf << " f0, f1\n";
+                ctx.out.emit(emmit::packed_if(emmit::Mnemonic::FADD, es_ps),
+                             Reg::fp(0), Reg::fp(1));
                 ctx.out.emit(emmit::Mnemonic::BITZ2G, Reg::gp(14), Reg::fp(0));
                 ctx.out.emit(vec_mv(ctx, ins, 0), Mem("r10"), Reg::gp(14, rsz));
             } else {
