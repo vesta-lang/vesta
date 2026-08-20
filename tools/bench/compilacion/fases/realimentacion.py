@@ -49,5 +49,5 @@ def fase(ctx: Ctx) -> None:
             "comprobar separado de compilar, asi que no salen: compararlos "
             "contra su compilacion completa no compararia lo mismo.")
         resultados["realimentacion"] = [
-            {"lang": ln, "etiqueta": et, "stats": s} for ln, et, s in filas_chk]
+            {"lang": ln, "fase": "3", "etiqueta": et, "stats": s} for ln, et, s in filas_chk]
 

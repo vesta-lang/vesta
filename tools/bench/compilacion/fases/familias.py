@@ -62,7 +62,7 @@ def fase(ctx: Ctx) -> None:
             if not ok:
                 print(f"  {C.RED}[no compila]{C.RESET} {etiqueta}: {motivo}")
                 resultados["casos"].append({
-                    "lang": ln, "familia": familia, "error": motivo})
+                    "lang": ln, "fase": "2d", "familia": familia, "error": motivo})
                 continue
             tanteo = una_medida(cmd, env, args.timeout, d)
             s = medir_caliente(cmd, env, d,
@@ -70,7 +70,7 @@ def fase(ctx: Ctx) -> None:
                                args.timeout)
             filas_fam.append((ln, etiqueta, s))
             resultados["casos"].append({
-                "lang": ln, "familia": familia, "cuenta": cuenta,
+                "lang": ln, "fase": "2d", "familia": familia, "cuenta": cuenta,
                 "lineas": n_lineas, "stats": s})
     if filas_fam:
         imprimir_tabla(

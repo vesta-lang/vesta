@@ -101,13 +101,14 @@ def fase(ctx: Ctx) -> None:
                     if t >= 0:
                         serie.append(t)
                 s_i = _stats_summary(serie) if serie else {}
-                filas_inc.append((ln, "%s  %s" % (ln, nombre_caso), s_i))
+                filas_inc.append((ln, "%s  %s, %dk lineas" % (
+                    ln, nombre_caso, max(1, round(n / 1000))), s_i))
                 resultados["casos"].append({
-                    "lang": ln, "funciones": n, "ficheros": len(ficheros),
+                    "lang": ln, "fase": "2b", "funciones": n, "ficheros": len(ficheros),
                     "regimen": nombre_caso, "stats": s_i,
                 })
             resultados["casos"].append({
-                "lang": ln, "funciones": n, "ficheros": len(ficheros),
+                "lang": ln, "fase": "2b", "funciones": n, "ficheros": len(ficheros),
                 "regimen": "de cero", "stats": s_cero,
             })
     if filas_multi:

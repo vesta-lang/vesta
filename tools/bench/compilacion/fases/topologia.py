@@ -84,7 +84,7 @@ def fase(ctx: Ctx) -> None:
                 if cuenta is not None:
                     filas_cuenta.append((forma, ln, titulo, cuenta))
                 resultados["casos"].append({
-                    "lang": ln, "topologia": forma, "cambio": clase,
+                    "lang": ln, "fase": "2c", "topologia": forma, "cambio": clase,
                     "ficheros": len(ficheros), "stats": s_t,
                     "artefactos": ({"rehechos": cuenta[0],
                                     "reutilizados": cuenta[1],

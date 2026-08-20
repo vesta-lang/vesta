@@ -92,7 +92,12 @@ def fase(ctx: Ctx) -> None:
                 cal_por_lang[ln] = s_cal
                 frio_por_lang[ln] = s_frio
             resultados["casos"].append({
-                "lang": ln, "fase": "2", "funciones": n, "lineas": lineas,
+                # `objetivo` es el tamano PEDIDO y `lineas` el conseguido.
+                # Hacen falta los dos: la normalizacion se acerca pero no
+                # clava -- 1183, 1194 y 1195 lineas para el mismo objetivo --,
+                # asi que agrupar por el conseguido crea un grupo por lenguaje
+                # y deja de comparar nada.
+                "lang": ln, "fase": "2", "objetivo": n, "lineas": lineas,
                 "caliente": s_cal, "frio": s_frio,
             })
 

@@ -78,7 +78,7 @@ def fase(ctx: Ctx) -> None:
                 filas_fr.append((ln, "%-12s %-10s %s"
                                  % (familia, ln, nombre_caso), s_r))
                 resultados["casos"].append({
-                    "lang": ln, "familia": familia, "regimen": nombre_caso,
+                    "lang": ln, "fase": "2e", "familia": familia, "regimen": nombre_caso,
                     "cuenta": cuenta, "stats": s_r})
     _spin_fr.__exit__()
     if filas_fr:
