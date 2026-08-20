@@ -1053,11 +1053,20 @@ struct Motor : Contexto {
 
     /// El estado de entrada de cada bloque, para que se pueda preguntar por un
     /// PUNTO despues de que el motor haya terminado.
-    std::vector<RangeBlockState> estados_de_entrada() const {
+    /**
+     * @brief El estado de entrada de cada bloque, para quien pregunte por un
+     *        punto concreto.
+     *
+     * Se MUEVE, no se copia, y por eso no es `const`: es lo ULTIMO que se le
+     * pide al motor -- despues ya no se vuelve a tocar y muere --, asi que
+     * copiar el estado de cada bloque seria copiarlo para tirar el original
+     * acto seguido.  Se llama despues de @c en_definicion, que si los lee.
+     */
+    std::vector<RangeBlockState> estados_de_entrada() {
         std::vector<RangeBlockState> out(fn.blocks.size());
         for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
             out[bi].alcanzable = in_bloque[bi].alcanzable;
-            out[bi].refinamientos = in_bloque[bi].ref;
+            out[bi].refinamientos = std::move(in_bloque[bi].ref);
         }
         return out;
     }
