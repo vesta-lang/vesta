@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from ..contexto import Fase
 from . import (completa, crecimiento, escalado, familias, proyecto,
-               realimentacion, regimen, suelo, topologia)
+               realimentacion, regimen, rendimiento, suelo, topologia)
 
 FASES = [
     Fase("1", "Suelo del compilador", suelo.fase),
@@ -25,6 +25,7 @@ FASES = [
     # fuera hacia que una tanda normal no la enseñara y pareciera que no existe.
     Fase("crecimiento", "Crecimiento contra el tamano del codigo",
          crecimiento.fase),
+    Fase("caudal", "Lineas por segundo", rendimiento.fase),
     Fase("2bis", "Escalado (tamano y numero de modulos)", escalado.fase),
     Fase("2c", "Topologia de dependencias", topologia.fase),
     Fase("2d", "Familias de codigo", familias.fase),

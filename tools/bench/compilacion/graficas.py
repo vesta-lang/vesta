@@ -519,6 +519,70 @@ def fase_realimentacion(datos: dict, destino: Path, hechas: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+#  Fase caudal -- lineas por segundo.
+# ---------------------------------------------------------------------------
+
+def fase_caudal(datos: dict, destino: Path, hechas: dict) -> None:
+    plt = _mpl()
+    casos = _casos_de(datos, "caudal")
+    if not plt or not casos:
+        return
+    langs = sorted({c["lang"] for c in casos})
+
+    # (a) el caudal contra el tamano.  Lo que se mira es si BAJA: un caudal que
+    # cae al crecer el programa es la misma noticia que un exponente por encima
+    # de 1, dicha en las unidades en las que se piensa.
+    fig, ax = plt.subplots(figsize=(10, 6))
+    hay = False
+    for ln in langs:
+        for clave, estilo, alfa in (("bruto_frio", "o-", 1.0),
+                                    ("bruto_caliente", "s--", 0.55)):
+            pts = sorted((c["lineas"], c.get(clave)) for c in casos
+                         if c["lang"] == ln)
+            pts = [(x, y) for x, y in pts if y]
+            if len(pts) < 2:
+                continue
+            hay = True
+            ax.plot([p[0] for p in pts], [p[1] for p in pts], estilo,
+                    linewidth=2, color=_col(ln), alpha=alfa,
+                    label="%s (%s)" % (
+                        _lab(ln),
+                        "frio" if clave.endswith("frio") else "caliente"))
+    if hay:
+        ax.set_xscale("log")
+        ax.set_xlabel("lineas del programa (log)")
+        ax.set_ylabel("lineas compiladas por segundo")
+        ax.set_title("Caudal de cada compilador\n"
+                     "(plano = escala bien; si BAJA al crecer, hay algo "
+                     "superlineal)", fontsize=11, fontweight="bold")
+        ax.grid(alpha=0.3, which="both")
+        ax.legend(fontsize=8, ncol=2)
+        _guardar(plt, fig, destino, "fq_caudal", hechas)
+    else:
+        plt.close(fig)
+
+    # (b) el mejor de cada uno, que es la cifra con la que se estima un
+    # proyecto futuro.
+    mejor = datos.get("caudal") or []
+    if mejor:
+        mejor = sorted(mejor, key=lambda r: r["lineas_por_segundo"])
+        fig, ax = plt.subplots(figsize=(9, max(3, 0.5 * len(mejor) + 2)))
+        ax.barh([_lab(r["lang"]) for r in mejor],
+                [r["lineas_por_segundo"] for r in mejor],
+                color=[_col(r["lang"]) for r in mejor])
+        for i, r in enumerate(mejor):
+            ax.text(r["lineas_por_segundo"], i,
+                    "  100k lineas en %.1f s" % (100000.0 / r["lineas_por_segundo"]),
+                    va="center", fontsize=8, color="#444")
+        ax.set_xlabel("lineas por segundo (neto, en frio)")
+        ax.set_title("Cuanto codigo digiere cada compilador\n"
+                     "(con esto se estima lo que costara un proyecto que aun "
+                     "no existe)", fontsize=11, fontweight="bold")
+        ax.grid(axis="x", alpha=0.3)
+        _guardar(plt, fig, destino, "fq_mejor_caudal", hechas)
+
+
+# ---------------------------------------------------------------------------
 #  Registro: que dibuja cada fase.  Anadir una es poner su funcion aqui.
 # ---------------------------------------------------------------------------
 
@@ -531,6 +595,7 @@ POR_FASE = [
     ("2e", fase_regimen),
     ("3", fase_realimentacion),
     ("crecimiento", fase_crecimiento),
+    ("caudal", fase_caudal),
 ]
 
 
