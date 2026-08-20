@@ -13048,6 +13048,26 @@ struct AsmBindingsAnalysis {
 };
 
 char AsmBindingsAnalysis::ID = 0;
+/**
+ * @brief Lee una bandera de "no hagas esto" del entorno.
+ *
+ * Se usa SOLO para inicializar las de abajo, una vez por proceso.  Preguntar
+ * por una variable de entorno recorre su bloque entero, y estas banderas
+ * estaban dentro de `ir_optimize`, que corre muchisimas veces: en el perfil,
+ * `getenv` salia a 0,078 s de 7,75 -- un 1% de compilar para decidir algo que
+ * no cambia nunca.  Dos de ellas ademas estaban DENTRO del punto fijo.
+ */
+bool env_disables(const char *name) {
+    const char *v = std::getenv(name);
+    return v != nullptr && v[0] != '\0' && v[0] != '0';
+}
+
+const bool g_no_promote_local_allocas =
+    env_disables("VESTA_NO_PROMOTE_LOCAL_ALLOCAS");
+const bool g_no_promote_raw_alloc = env_disables("VESTA_NO_PROMOTE_RAW_ALLOC");
+const bool g_no_spec_devirt = env_disables("VESTA_NO_SPEC_DEVIRT");
+const bool g_no_escape_scalar = env_disables("VESTA_NO_ESCAPE_SCALAR");
+
 } // namespace
 
 void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
@@ -13121,8 +13141,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
      * consumidor host de uno VM), sino en el lowering, que si conoce el tipo:
      * ver @c mark_addr_taken_local_as_host en src/vx/lowering.cpp. */
     if (level >= OptLevel::O1) {
-        const char *skip = std::getenv("VESTA_NO_PROMOTE_LOCAL_ALLOCAS");
-        if (!skip || skip[0] == '\0' || skip[0] == '0') {
+        if (!g_no_promote_local_allocas) {
             for_each_function(mod, [](IrFunction &fn) {
                 if (!fn.is_native) ir_pass_promote_local_allocas(fn);
             });
@@ -13134,9 +13153,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
      * loops a ~1 ns (sub/add rsp del host stack).  UNA pasada.
      * Skippable via VESTA_NO_PROMOTE_RAW_ALLOC=1 para A/B testing. */
     if (level >= OptLevel::O1) {
-        const char *skip = std::getenv("VESTA_NO_PROMOTE_RAW_ALLOC");
-        const bool do_promote = !(skip && skip[0] != '\0' && skip[0] != '0');
-        if (do_promote) {
+        if (!g_no_promote_raw_alloc) {
             for_each_function(mod, [](IrFunction &fn) {
                 if (!fn.is_native) ir_pass_promote_local_raw_alloc(fn);
             });
@@ -13458,9 +13475,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
              * que el lowering registro en fn.spec_devirt_sites.
              * Skippable via VESTA_NO_SPEC_DEVIRT=1 para A/B testing. */
             {
-                const char *skip = std::getenv("VESTA_NO_SPEC_DEVIRT");
-                const bool do_sd = !(skip && skip[0] != '\0' && skip[0] != '0');
-                if (do_sd) {
+                if (!g_no_spec_devirt) {
                     for (auto &fn : mod.functions) {
                         if (fn.is_native) continue;
                         if (ir_pass_spec_devirt(fn)) any = true;
@@ -13491,9 +13506,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
              * fix-point; el alloc GC desaparece por completo.
              * Skippable via VESTA_NO_ESCAPE_SCALAR=1 para A/B testing. */
             {
-                const char *skip = std::getenv("VESTA_NO_ESCAPE_SCALAR");
-                const bool do_sr = !(skip && skip[0] != '\0' && skip[0] != '0');
-                if (do_sr) {
+                if (!g_no_escape_scalar) {
                     for (auto &fn : mod.functions) {
                         if (fn.is_native) continue;
                         if (ir_pass_scalar_replace_gc(fn, mod)) any = true;
@@ -13534,9 +13547,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
      * "slot local muerto" dispara, convirtiendo el malloc en `sub rsp, N`.
      * Skippable con el mismo VESTA_NO_PROMOTE_RAW_ALLOC. */
     if (level >= OptLevel::O1) {
-        const char *skip = std::getenv("VESTA_NO_PROMOTE_RAW_ALLOC");
-        const bool do_promote = !(skip && skip[0] != '\0' && skip[0] != '0');
-        if (do_promote) {
+        if (!g_no_promote_raw_alloc) {
             bool any2 = false;
             for (auto &fn : mod.functions) {
                 if (!fn.is_native) any2 |= ir_pass_promote_local_raw_alloc(fn);
