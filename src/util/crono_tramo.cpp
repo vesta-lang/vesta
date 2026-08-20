@@ -51,12 +51,21 @@ Acumulador &mio() {
     /* Se reserva y NO se libera a proposito: vive lo que el proceso, y
      * liberarlo al morir el hilo dejaria al registro con un puntero colgando
      * justo cuando alguien podria estar sumando. */
-    static thread_local Acumulador *a = [] {
-        auto *p = new Acumulador();
+    /* Puntero a nulo y alta perezosa, y NO un `thread_local` con inicializador
+     * dinamico.  Este ultimo genera una variable de GUARDA, y en MinGW esa
+     * guarda cuelga: con hilos que nacen y mueren -- justo lo que hace el
+     * reparto del compilador -- el hilo principal se queda esperandola para
+     * siempre.  Visto en una pila: bloqueado en `pthread_mutex_lock` dentro de
+     * esta misma funcion.
+     *
+     * Un puntero inicializado a `nullptr` es de inicializacion CONSTANTE: no
+     * hay guarda que generar, y el alta se hace a mano la primera vez. */
+    static thread_local Acumulador *a = nullptr;
+    if (a == nullptr) {
+        a = new Acumulador();
         std::lock_guard<std::mutex> lk(registro_mutex());
-        registro().push_back(p);
-        return p;
-    }();
+        registro().push_back(a);
+    }
     return *a;
 }
 } // namespace

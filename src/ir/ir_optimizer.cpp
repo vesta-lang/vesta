@@ -12828,14 +12828,23 @@ PassTimeRegistry &pass_time_registry() {
 /// El acumulador de ESTE hilo.  Se da de alta la primera vez y ya no vuelve a
 /// tocar el cerrojo.
 AcumuladorPases &acumulador_pases() {
-    thread_local AcumuladorPases *mio = [] {
+    /* Puntero a nulo y alta perezosa, y NO un `thread_local` con inicializador
+     * dinamico.  Este ultimo genera una variable de GUARDA, y en MinGW esa
+     * guarda cuelga: con hilos que nacen y mueren -- justo lo que hace el
+     * reparto del compilador -- el hilo principal se queda esperandola para
+     * siempre.  Visto en una pila: bloqueado en `pthread_mutex_lock` dentro de
+     * esta misma funcion.
+     *
+     * Un puntero inicializado a `nullptr` es de inicializacion CONSTANTE: no
+     * hay guarda que generar, y el alta se hace a mano la primera vez. */
+    thread_local AcumuladorPases *mio = nullptr;
+    if (mio == nullptr) {
         auto nuevo = std::make_unique<AcumuladorPases>();
-        AcumuladorPases *crudo = nuevo.get();
+        mio = nuevo.get();
         PassTimeRegistry &r = pass_time_registry();
         std::lock_guard<std::mutex> lk(r.m);
         r.todos.push_back(std::move(nuevo));
-        return crudo;
-    }();
+    }
     return *mio;
 }
 
@@ -13272,8 +13281,13 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
         // vea al cerrar la vuelta, y ahi hay una barrera de por medio.
         std::atomic<bool> any{false};
 
-        for (auto &fn : mod.functions) {
-            if (fn.is_native) continue; // no optimizar stubs nativos
+        /* Repartido entre hilos.  Cada funcion se optimiza sola: las tres
+         * tablas estan pre-llenadas -- ninguna insercion durante el bucle --
+         * y el gestor de analisis protege las suyas sin tener el cerrojo
+         * puesto mientras calcula.  `VESTA_PARALELO=0` vuelve a fila de uno,
+         * que es con lo que se comprueba que el `.velb` sale identico. */
+        for_each_function(mod, [&](IrFunction &fn) {
+            if (fn.is_native) return; // no optimizar stubs nativos
 
             /* Referencia, no copia: la marca tiene que sobrevivir a la vuelta.
              * La primera vez se inserta en true (no hay nada calculado aun). */
@@ -13416,7 +13430,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
             if (level >= OptLevel::O3) {
                 // O3: pasadas mas costosas (GVN, scheduling, etc.) -- TBD.
             }
-        }
+        });
 
         /* Devirt + inline @ O2 al final de cada iteracion del fix-point.
          * Importante hacerlo despues de las per-function passes para que

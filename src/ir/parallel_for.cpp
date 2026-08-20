@@ -27,8 +27,17 @@ unsigned compile_threads() {
     // Se lee UNA vez: consultar el entorno recorre su bloque entero, y esto se
     // pregunta en cada pase.
     static const unsigned n = [] {
+        /* OPT-IN, no opt-out.  El reparto funciona -- el `.velb` sale identico
+         * y el optimizador baja un 24% -- pero todavia cuelga en programas tan
+         * pequenos como `15_herencia_basica.vx` (50 lineas), o sea que queda
+         * estado compartido sin localizar en algun pase.
+         *
+         * Mientras eso no este cerrado, quien compile no puede pagarlo: un
+         * camino nuevo entra activandose a mano y pasa a por defecto CUANDO
+         * pasa el corpus entero, no antes.  Al reves es como se entrega un
+         * compilador que se cuelga. */
         const char *e = std::getenv("VESTA_PARALELO");
-        if (e && e[0] == '0') return 1u;
+        if (!e || e[0] == '0') return 1u;
         unsigned h = std::thread::hardware_concurrency();
         if (h <= 1) return 1u;
         // Uno menos que los nucleos: dejar la maquina sin margen hace que el
