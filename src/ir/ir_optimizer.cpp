@@ -12,6 +12,8 @@
 
 #include "ir/ir_optimizer.h"
 
+#include "ir/parallel_for.h"
+
 #include "util/crono_tramo.h"
 
 #include "util/reloj.h"
@@ -13021,14 +13023,14 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
      * en TODOS sus derivados (`&p.campo` con offset != 0).  Se corre en todos
      * los niveles de opt (tambien O0): no es una optimizacion, es correctness
      * del emit -- de este flag depende que se elija movh (host) o mov (VM). */
-    for (auto &fn : mod.functions) {
+    for_each_function(mod, [](IrFunction &fn) {
         if (!fn.is_native) ir_pass_propagate_host_ptr(fn);
-    }
+    });
 
     if (level >= OptLevel::O1) {
-        for (auto &fn : mod.functions) {
+        for_each_function(mod, [](IrFunction &fn) {
             if (!fn.is_native) ir_pass_promote_callned_allocas(fn);
-        }
+        });
     }
 
     /* Sprint string-perf-8 (2026-06-02): promueve ALLOCAs LOCALES (no
@@ -13052,9 +13054,9 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
     if (level >= OptLevel::O1) {
         const char *skip = std::getenv("VESTA_NO_PROMOTE_LOCAL_ALLOCAS");
         if (!skip || skip[0] == '\0' || skip[0] == '0') {
-            for (auto &fn : mod.functions) {
+            for_each_function(mod, [](IrFunction &fn) {
                 if (!fn.is_native) ir_pass_promote_local_allocas(fn);
-            }
+            });
         }
     }
 
@@ -13066,9 +13068,9 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
         const char *skip = std::getenv("VESTA_NO_PROMOTE_RAW_ALLOC");
         const bool do_promote = !(skip && skip[0] != '\0' && skip[0] != '0');
         if (do_promote) {
-            for (auto &fn : mod.functions) {
+            for_each_function(mod, [](IrFunction &fn) {
                 if (!fn.is_native) ir_pass_promote_local_raw_alloc(fn);
-            }
+            });
         }
     }
 

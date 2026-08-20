@@ -27,31 +27,68 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+# Los avisos y errores que interesa comparar.  Se filtran aqui y no fuera para
+# que el barrido devuelva ya lo comparable: el resto de la salida lleva rutas
+# temporales que cambian en cada vuelta.
+_DIAG = re.compile(r"(VX\d{4}|VXA\d{3})")
 
-def compilar(vm: Path, fuente: Path, salida: Path, timeout: float) -> int:
-    """Codigo de salida de compilar @p fuente.  -1 si se paso del tiempo."""
+
+def compilar(vm: Path, fuente: Path, salida: Path, timeout: float) -> tuple:
+    """(codigo, diagnosticos) de compilar @p fuente.  -1 si se paso del tiempo.
+
+    Se devuelven las dos cosas de UNA pasada.  Antes eran dos barridos -- uno
+    para codigos y otro para diagnosticos -- o sea el doble de compilaciones
+    para responder a dos preguntas sobre el mismo trabajo.
+    """
     try:
         r = subprocess.run([str(vm), "--vesta", str(fuente), "-o", str(salida)],
                            capture_output=True, timeout=timeout)
-        return r.returncode
     except subprocess.TimeoutExpired:
-        return -1
+        return (-1, [])
+    txt = (r.stderr or b"").decode("utf-8", "replace") +           (r.stdout or b"").decode("utf-8", "replace")
+    diags = sorted(l.strip() for l in txt.splitlines() if _DIAG.search(l))
+    return (r.returncode, diags)
 
 
-def barrer(vm: Path, fuentes: list, timeout: float) -> dict:
-    """{nombre: codigo} de compilar cada fuente."""
-    out = {}
+def barrer(vm: Path, fuentes: list, timeout: float, jobs: int) -> dict:
+    """{nombre: (codigo, diagnosticos)} de compilar cada fuente, EN PARALELO.
+
+    Compilar cada fuente es un proceso independiente, asi que repartirlas no
+    cambia ningun resultado -- al contrario que MEDIR, que jamas se paraleliza
+    porque entonces se mide la carga de la maquina.  Aqui no se cronometra
+    nada: se comprueba.  Y secuencial, un barrido de 469 son varios minutos --
+    una comprobacion que cuesta minutos es una comprobacion que se salta, que
+    es exactamente como se colaron dos cambios malos en un solo dia.
+
+    Cada trabajo escribe en SU directorio: con uno compartido, dos
+    compilaciones a la vez se pisan el artefacto y el veredicto seria del
+    ultimo en llegar.
+    """
+    out: dict = {}
+    hechas = [0]
     with tempfile.TemporaryDirectory() as tmp:
-        for i, f in enumerate(fuentes):
-            print("\r  %d/%d  %-40.40s" % (i + 1, len(fuentes), f.name),
-                  end="", file=sys.stderr, flush=True)
-            out[f.name] = compilar(vm, f, Path(tmp) / "out", timeout)
-    print("\r" + " " * 60 + "\r", end="", file=sys.stderr)
+        def uno(par):
+            i, f = par
+            d = Path(tmp) / ("j%d" % i)
+            d.mkdir(parents=True, exist_ok=True)
+            return (f.name, compilar(vm, f, d / "out", timeout))
+
+        with ThreadPoolExecutor(max_workers=jobs) as ex:
+            for fut in as_completed([ex.submit(uno, x)
+                                     for x in enumerate(fuentes)]):
+                nombre, res = fut.result()
+                out[nombre] = res
+                hechas[0] += 1
+                print("\r  %d/%d" % (hechas[0], len(fuentes)),
+                      end="", file=sys.stderr, flush=True)
+    print("\r" + " " * 30 + "\r", end="", file=sys.stderr)
     return out
 
 
@@ -89,6 +126,10 @@ def main() -> int:
                         "tocar el compilador.")
     p.add_argument("--corpus", default="examples_codes_vx")
     p.add_argument("--timeout", type=float, default=120.0)
+    p.add_argument("-j", "--jobs", type=int, default=0,
+                   help="compilaciones en paralelo (default: nucleos - 2).  "
+                        "Se puede porque aqui no se cronometra nada: se "
+                        "comprueba, y cada compilacion es un proceso aparte.")
     args = p.parse_args()
 
     vm = Path(args.vm)
@@ -100,29 +141,46 @@ def main() -> int:
         print("[error] no hay fuentes en %s" % args.corpus)
         return 2
 
-    print("compilando %d ejemplos con %s" % (len(fuentes), vm))
-    ahora = barrer(vm, fuentes, args.timeout)
+    jobs = args.jobs if args.jobs > 0 else max(1, (os.cpu_count() or 4) - 2)
+    print("compilando %d ejemplos con %s (%d a la vez)"
+          % (len(fuentes), vm, jobs))
+    ahora = barrer(vm, fuentes, args.timeout, jobs)
 
     if args.antes:
-        antes = barrer(Path(args.antes), fuentes, args.timeout)
-        cambios = [(n, antes.get(n), ahora[n]) for n in ahora
-                   if antes.get(n) != ahora[n]]
-        if not cambios:
-            print("[ok] ningun ejemplo cambia de veredicto (%d comprobados)"
-                  % len(fuentes))
+        antes = barrer(Path(args.antes), fuentes, args.timeout, jobs)
+        # DOS comparaciones, y en este orden.  Que el compilador no se caiga es
+        # la primera puerta, pero NO basta: un cambio la paso limpiamente
+        # mientras silenciaba 29 avisos en `255_mutex` -- de 29 a 0.  Un
+        # compilador que enmudece pasa cualquier puerta que solo mire si
+        # termino bien.
+        rc_dist = sorted(n for n in ahora
+                         if antes.get(n, (None, None))[0] != ahora[n][0])
+        dg_dist = sorted(n for n in ahora
+                         if n not in rc_dist
+                         and antes.get(n, (None, None))[1] != ahora[n][1])
+        if not rc_dist and not dg_dist:
+            print("[ok] ni un veredicto ni un diagnostico cambian "
+                  "(%d comprobados)" % len(fuentes))
             return 0
-        print("[CAMBIAN] %d ejemplos:" % len(cambios))
-        for n, a, b in sorted(cambios):
-            print("  %-42s %s -> %s" % (n, clasificar(a), clasificar(b)))
+        if rc_dist:
+            print("[CAMBIA COMO TERMINA] %d:" % len(rc_dist))
+            for n in rc_dist:
+                print("  %-42s %s -> %s" % (n, clasificar(antes[n][0]),
+                                            clasificar(ahora[n][0])))
+        if dg_dist:
+            print("[CAMBIAN LOS DIAGNOSTICOS] %d:" % len(dg_dist))
+            for n in dg_dist:
+                print("  %-42s %d -> %d avisos"
+                      % (n, len(antes[n][1]), len(ahora[n][1])))
         return 1
 
     # Sin comparacion: lo que importa es que NADIE se caiga.  Rechazar un
     # programa es trabajo hecho; caerse es un fallo del compilador.
-    caidas = {n: rc for n, rc in ahora.items()
-              if rc not in (0, 1) or rc == -1}
-    rechazos = sum(1 for rc in ahora.values() if rc == 1)
+    caidas = {n: v[0] for n, v in ahora.items()
+              if v[0] not in (0, 1) or v[0] == -1}
+    rechazos = sum(1 for v in ahora.values() if v[0] == 1)
     print("  %d compilan, %d rechazados (esperable en los negativos), "
-          "%d se CAEN" % (sum(1 for r in ahora.values() if r == 0),
+          "%d se CAEN" % (sum(1 for v in ahora.values() if v[0] == 0),
                           rechazos, len(caidas)))
     for n, rc in sorted(caidas.items()):
         print("  %-42s %s" % (n, clasificar(rc)))
